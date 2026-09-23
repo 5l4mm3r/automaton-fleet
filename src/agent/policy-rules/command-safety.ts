@@ -88,6 +88,10 @@ const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   // Phase 5: operator-only lifecycle/treasury decisions and custody tables
   { pattern: /\bfleet_(capital_allocations|sweep_reductions|treasury_\w+|wallet_custody|custody_transfers|owner_distributions|orphans|agent_sessions)\b/i, description: "Touch fleet treasury/custody/session tables" },
   { pattern: /\b(GRANT|REVOKE)\s+(ALL|SELECT|INSERT|UPDATE|DELETE|EXECUTE|USAGE|CREATE|TEMP\w*|CONNECT|TRUNCATE|TRIGGER|REFERENCES|fleet_\w+)\b/i, description: "Database privilege change" },
+  // Phase 6: dry-run child, provisioning reconciliation, remote exposure, firewall
+  { pattern: /\bfleet:(dry-run-child|verify|verify-runtime|migrate-check)\b|fleet\/dry-run\/|scripts\/fleet-verify-deployment|deploy\/firewall|\bufw\s|\bnft\s/, description: "Operator-only fleet deployment command" },
+  { pattern: /\b(FLEET_DRY_RUN_CHILD|FLEET_REMOTE_LISTEN_ENABLED|FLEET_PUBLIC_(HOSTNAME|LISTEN|URL)|FLEET_TLS_\w+|FLEET_ALLOWED_ORIGINS|REAL_(PAYMENTS|REPLICATION)_ENABLED|OWNER_SWEEP_ENABLED|FLEET_MAX_AGENTS)\s*=/, description: "Override fleet safety or exposure configuration" },
+  { pattern: /\bfleet_(provisioning|reservations|sandbox_terminations)\b|svc_provision_reconcile|fleet_reserve_dry_run/i, description: "Touch fleet provisioning records" },
 ];
 
 export function getForbiddenCommandMatch(command: string): { description: string; pattern: string } | null {

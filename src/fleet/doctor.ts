@@ -15,9 +15,19 @@
  *                     remains. Any blocker => UNSAFE and exit code 1.
  * `--deployment-only` exits 0 when the deployment verdict is OK even though
  * real replication is (correctly) still unsafe — for monitoring.
+ *
+ * Phase 6 adds the operator checklist (`pnpm fleet:verify`) and three
+ * INDEPENDENT readiness levels, each with its own blocker list:
+ *   SAFE FOR DRY RUN            the first remote child may be provisioned with zero authority
+ *   SAFE FOR REAL REPLICATION   REAL_REPLICATION_ENABLED may be turned on
+ *   SAFE FOR REAL PAYMENTS      REAL_PAYMENTS_ENABLED may be turned on
+ * None of them ever enables anything.
  */
 
+import { execFile } from "child_process";
+import crypto from "crypto";
 import fs from "fs";
+import net from "net";
 import path from "path";
 import { FLEET_PG_SCHEMA_VERSION } from "./postgres/migrations.js";
 import type { PgFleetStore } from "./postgres/store.js";
@@ -40,9 +50,24 @@ export interface DoctorCheck {
   detail: string;
 }
 
+export interface ReadinessLevel {
+  safe: boolean;
+  blockers: string[];
+}
+
+export interface ChecklistItem {
+  item: string;
+  ok: boolean;
+  detail: string;
+}
+
 export interface DoctorReport {
   deploymentOk: boolean;
   replicationSafe: boolean;
+  /** Phase 6: independent readiness levels. */
+  readiness: { dryRun: ReadinessLevel; realReplication: ReadinessLevel; realPayments: ReadinessLevel };
+  /** Phase 6: operator verification checklist. */
+  checklist: ChecklistItem[];
   checks: DoctorCheck[];
   blockers: string[];
   securityWarnings: string[];
@@ -68,6 +93,90 @@ export interface DoctorDeps {
   };
   /** Sandbox termination is guaranteed by the deployed terminator (default false: Conway cannot stop sandboxes). */
   sandboxTerminationGuaranteed?: boolean;
+  /** `systemctl is-active` of the fleet unit (default: runs systemctl; null = unknown). */
+  serviceActive?: () => Promise<string | null>;
+  /** A controller custody signer exists for live payments (default false: none is implemented). */
+  custodySignerAvailable?: boolean;
+}
+
+/** Can OS user `user` read `file`, judged from its mode bits and /etc/passwd + /etc/group? */
+export function osUserCanRead(file: string, user: string, passwdFile = "/etc/passwd", groupFile = "/etc/group"): boolean | null {
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(file);
+  } catch {
+    return null;
+  }
+  let uid: number | null = null;
+  let gid: number | null = null;
+  try {
+    for (const line of fs.readFileSync(passwdFile, "utf8").split("\n")) {
+      const f = line.split(":");
+      if (f[0] === user) {
+        uid = Number(f[2]);
+        gid = Number(f[3]);
+      }
+    }
+  } catch {
+    return null;
+  }
+  if (uid === null) return false;
+  if (uid === 0) return true;
+  const gids = new Set<number>([gid!]);
+  try {
+    for (const line of fs.readFileSync(groupFile, "utf8").split("\n")) {
+      const f = line.split(":");
+      if (f.length >= 4 && f[3].split(",").includes(user)) gids.add(Number(f[2]));
+    }
+  } catch {
+    // primary group only
+  }
+  const m = st.mode;
+  if (st.uid === uid) return (m & 0o400) !== 0;
+  if (gids.has(st.gid)) return (m & 0o040) !== 0;
+  return (m & 0o004) !== 0;
+}
+
+/** Certificate problems for the public hostname (the key may be unreadable to the operator; it is checked at service start). */
+export function certificateProblems(certFile: string, hostname: string, now = Date.now()): string[] {
+  let x509: crypto.X509Certificate;
+  try {
+    x509 = new crypto.X509Certificate(fs.readFileSync(certFile));
+  } catch (err) {
+    return [`certificate ${certFile} unreadable (${err instanceof Error ? err.message : String(err)})`];
+  }
+  const problems: string[] = [];
+  if (!(net.isIP(hostname) ? x509.checkIP(hostname) : x509.checkHost(hostname))) problems.push(`certificate does not cover ${hostname}`);
+  if (Date.parse(x509.validFrom) > now) problems.push(`certificate not yet valid (${x509.validFrom})`);
+  if (Date.parse(x509.validTo) < now + 86_400_000) problems.push(`certificate expires ${x509.validTo}`);
+  return problems;
+}
+
+function defaultServiceActive(): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile("systemctl", ["is-active", "automaton-fleet.service"], { timeout: 5000 }, (_err, stdout) => resolve(stdout?.trim() || null));
+  });
+}
+
+/** Unauthenticated probes that must be refused: long-lived bearer outside /v1/session, stale signed request. */
+async function replayProbes(apiUrl: string, fetchImpl: typeof fetch): Promise<{ sessionOnly: boolean; staleRefused: boolean; detail: string }> {
+  const post = (headers: Record<string, string>) =>
+    fetchImpl(`${apiUrl}/v1/heartbeat`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: "{}", signal: AbortSignal.timeout(3000) })
+      .then(async (r) => ({ status: r.status, code: ((await r.json().catch(() => ({}))) as { code?: string }).code ?? "" }))
+      .catch(() => ({ status: 0, code: "unreachable" }));
+  const probeId = "01" + "0".repeat(24);
+  const bearer = await post({ authorization: `Bearer fa1.${probeId}.${"A".repeat(43)}` });
+  const stale = await post({
+    authorization: `FleetSession fs1.${probeId}.${"A".repeat(43)}`,
+    "x-fleet-timestamp": String(Date.now() - 3_600_000),
+    "x-fleet-nonce": "doctor-probe-" + crypto.randomBytes(8).toString("hex"),
+    "x-fleet-signature": "0".repeat(64),
+  });
+  return {
+    sessionOnly: bearer.status === 401 && bearer.code === "FLEET_SESSION_REQUIRED",
+    staleRefused: stale.status === 401 && stale.code === "FLEET_REQUEST_STALE",
+    detail: `bearer -> ${bearer.status} ${bearer.code}; stale signed request -> ${stale.status} ${stale.code}`,
+  };
 }
 
 export const FLEET_SERVICE_USER = "automaton-fleet-service";
@@ -166,6 +275,9 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         quarantinedAgents: stale.quarantined,
         terminatingAgents: stale.terminating,
         quarantinedSlots: st.quarantinedSlots ?? 0,
+        uncertainProvisioning: stale.uncertainProvisioning,
+        dryRunChildren: stale.dryRunChildren,
+        dryRunProven: stale.dryRunProven,
         timeouts,
       });
       add("fleet population", "pass", `${st.livingAgents} living + ${st.reservedSlots} reserved / max ${st.maxAgents} (mode ${st.operatingMode})`);
@@ -181,6 +293,9 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       add("orphaned infrastructure", stale.openOrphans ? "warn" : "pass",
         `${stale.openOrphans} unresolved orphan(s); ${stale.quarantined} agent(s) holding quarantine slots; ${stale.provisioningNeedingCleanup} provisioning record(s) awaiting cleanup`);
       if (stale.openOrphans) blockers.push(`${stale.openOrphans} orphaned sandbox(es) unresolved (fleet:admin orphans / resolve-orphan).`);
+      add("uncertain provisioning", stale.uncertainProvisioning ? "warn" : "pass",
+        `${stale.uncertainProvisioning} attempt(s) whose sandbox may exist but was never identified (fleet:admin reconcile-provisioning)`);
+      if (stale.uncertainProvisioning) blockers.push(`${stale.uncertainProvisioning} provisioning attempt(s) with an unreconciled sandbox outcome.`);
     } catch (err) {
       add("registry state", "fail", err instanceof Error ? err.message : String(err));
     }
@@ -292,8 +407,121 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
 
   facts.securityWarnings = securityWarnings;
   const deploymentOk = !checks.some((c) => c.status === "fail");
-  const replicationSafe = deploymentOk && blockers.length === 0;
-  return { deploymentOk, replicationSafe, checks, blockers: [...new Set(blockers)], securityWarnings, facts };
+
+  // ── Phase 6: operator checklist
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const checklist: ChecklistItem[] = [];
+  const item = (name: string, ok: boolean, detail: string) => checklist.push({ item: name, ok, detail });
+  const privOk = Array.isArray(facts.privilegeProblems) && (facts.privilegeProblems as string[]).length === 0;
+  item("PostgreSQL roles correct", dbOk && privOk, privOk ? "agent/service roles least-privilege" : "privilege audit failed or not run");
+  item(`schema v${FLEET_PG_SCHEMA_VERSION}`, facts.schemaVersion === FLEET_PG_SCHEMA_VERSION, `v${facts.schemaVersion ?? "none"}`);
+
+  const unitState = await (deps.serviceActive ?? defaultServiceActive)().catch(() => null);
+  facts.systemdState = unitState;
+  item("controller service active", unitState === "active" && facts.serviceState === "ready",
+    `systemd ${unitState ?? "unknown"}, /readyz ${String(facts.serviceState ?? "unknown")}`);
+
+  const passwd = p.passwd ?? "/etc/passwd";
+  const group = p.group ?? "/etc/group";
+  const tlsKey = env.FLEET_TLS_KEY_FILE?.trim() || path.join(etc, "tls", "fleet.key");
+  const exposures: string[] = [];
+  for (const [file, users] of [
+    [adminEnv, [FLEET_AGENT_USER, FLEET_SERVICE_USER]],
+    [serviceEnv, [FLEET_AGENT_USER, FLEET_SERVICE_USER]],
+    [tlsKey, [FLEET_AGENT_USER, FLEET_SERVICE_USER]],
+  ] as const) {
+    for (const u of users) if (osUserCanRead(file, u, passwd, group) === true) exposures.push(`${u} can read ${file}`);
+  }
+  facts.secretExposures = exposures;
+  const secretFilesOk = fs.existsSync(etc) && !checks.some((c) => c.name.startsWith("secret file") && c.status !== "pass");
+  item("privileged secrets protected", secretFilesOk && exposures.length === 0 && leaked.length === 0,
+    [!secretFilesOk ? "secret files missing or mis-permissioned" : "", ...exposures, leaked.length ? "controller secrets in repository .env.fleet" : ""]
+      .filter(Boolean).join("; ") || "admin.env/service.env/TLS key unreadable to agent and service users; none in the repository");
+
+  const pinnedOk = !relProblem;
+  const matches = (k: "repo" | "commit" | "buildId") => pinnedOk && !!approved && release![k] === approved[k];
+  item("runtime repo pinned", matches("repo"), `${env.FLEET_RUNTIME_REPO || "unset"}${approved ? ` (approved ${approved.repo})` : ""}`);
+  item("runtime commit pinned", matches("commit"), `${env.FLEET_RUNTIME_COMMIT || "unset"}`);
+  item("build ID pinned", matches("buildId") && release!.lockfileSha256 === approved!.lockfileSha256, `${env.FLEET_RUNTIME_BUILD_ID || "unset"}`);
+
+  const hostname = env.FLEET_PUBLIC_HOSTNAME?.trim() || "";
+  const certFile = env.FLEET_TLS_CERT_FILE?.trim() || "";
+  const certProblems = !hostname || !certFile ? ["FLEET_PUBLIC_HOSTNAME / FLEET_TLS_CERT_FILE not configured"] : certificateProblems(certFile, hostname);
+  facts.publicHostname = hostname || null;
+  item("HTTPS valid", certProblems.length === 0 && remote, certProblems.join("; ") || (remote ? `certificate valid for ${hostname}` : "remote listener disabled"));
+
+  const publicUrl = (env.FLEET_PUBLIC_URL?.trim() || (hostname ? `https://${hostname}${env.FLEET_PUBLIC_PORT ? `:${env.FLEET_PUBLIC_PORT}` : ""}` : "")).replace(/\/+$/, "");
+  let remoteOk = false;
+  let remoteDetail = "no public URL configured";
+  if (publicUrl.startsWith("https://")) {
+    try {
+      const r = await fetchImpl(`${publicUrl}/healthz`, { signal: AbortSignal.timeout(5000) });
+      const b = (await r.json().catch(() => ({}))) as { ok?: boolean };
+      remoteOk = r.ok && b.ok === true;
+      remoteDetail = `${publicUrl}/healthz -> ${r.status}`;
+    } catch (err) {
+      remoteDetail = `${publicUrl} unreachable (${err instanceof Error ? err.message : String(err)})`;
+    }
+  }
+  facts.publicUrl = publicUrl || null;
+  item("remote controller reachable", remoteOk, remoteDetail);
+
+  const probes = facts.serviceState === "ready" ? await replayProbes(apiUrl, fetchImpl) : null;
+  item("replay protection working", !!probes?.staleRefused && (facts.schemaVersion as number) >= 4,
+    probes ? `${probes.detail}; nonce ledger fleet_request_nonces (schema v${facts.schemaVersion})` : "service not ready; not probed");
+  item("agent credentials scoped", privOk && !!probes?.sessionOnly,
+    `agent role: api_* only (${privOk ? "audit pass" : "audit fail"}); long-lived credential ${probes?.sessionOnly ? "only opens sessions" : "not verified"}`);
+  item("payments disabled", !flags.REAL_PAYMENTS_ENABLED, flags.REAL_PAYMENTS_ENABLED ? "REAL_PAYMENTS_ENABLED=true" : "REAL_PAYMENTS_ENABLED=false");
+  item("owner sweeps disabled", !flags.OWNER_SWEEP_ENABLED, flags.OWNER_SWEEP_ENABLED ? "OWNER_SWEEP_ENABLED=true" : "OWNER_SWEEP_ENABLED=false");
+  item("fleet cap = 2", facts.fleetMaximum === 2, `max ${facts.fleetMaximum ?? "unknown"}`);
+  item("no unresolved orphan", dbOk && facts.openOrphans === 0, `${facts.openOrphans ?? "unknown"} open`);
+  const stuck = (facts.staleReservations as number | undefined) ?? null;
+  const uncertain = (facts.uncertainProvisioning as number | undefined) ?? null;
+  item("no stuck reservation", dbOk && stuck === 0 && uncertain === 0, `${stuck ?? "unknown"} expired-unreaped, ${uncertain ?? "unknown"} uncertain provisioning`);
+
+  // ── Phase 6: independent readiness levels
+  const failing = checks.filter((c) => c.status === "fail").map((c) => `${c.name}: ${c.detail}`);
+  const dryRun = [
+    ...failing,
+    ...checklist.filter((c) => !c.ok).map((c) => `${c.item}: ${c.detail}`),
+    ...(flags.REAL_REPLICATION_ENABLED ? ["REAL_REPLICATION_ENABLED must stay false until the dry run passes"] : []),
+    ...((facts.dryRunChildren as number) > 0 ? ["a dry-run child already exists"] : []),
+  ];
+  const realReplication = [
+    ...dryRun.filter((b) => !b.startsWith("a dry-run child already exists")),
+    ...(((facts.dryRunProven as number) ?? 0) > 0 ? [] : ["No dry-run child has yet reached ACTIVE and passed a controller challenge (pnpm fleet:dry-run-child)."]),
+    ...blockers,
+  ];
+  const realPayments = [
+    ...failing,
+    ...checklist.filter((c) => !c.ok && /PostgreSQL|schema|secrets|owner sweeps/.test(c.item)).map((c) => `${c.item}: ${c.detail}`),
+    ...(deps.custodySignerAvailable ? [] : ["No controller custody signer exists; approved spends cannot be executed safely (executeApprovedSpend refuses)."]),
+    "Agent wallet keys are still generated and held by the agent runtime; payments need controller-held custody first.",
+    ...(flags.OWNER_SWEEP_ENABLED ? ["OWNER_SWEEP_ENABLED must stay false until owner distributions are separately approved."] : []),
+  ];
+  const level = (b: string[]): ReadinessLevel => ({ safe: b.length === 0, blockers: [...new Set(b)] });
+  const readiness = { dryRun: level(dryRun), realReplication: level(realReplication), realPayments: level(realPayments) };
+  const replicationSafe = deploymentOk && readiness.realReplication.safe;
+  return { deploymentOk, replicationSafe, readiness, checklist, checks, blockers: [...new Set(blockers)], securityWarnings, facts };
+}
+
+export function formatChecklist(r: DoctorReport): string {
+  const lines = ["Automaton Fleet — operator verification", ""];
+  for (const c of r.checklist) lines.push(`  [${c.ok ? "PASS" : "FAIL"}] ${c.item.padEnd(30)} ${c.detail}`);
+  lines.push("", ...formatReadiness(r));
+  return lines.join("\n");
+}
+
+function formatReadiness(r: DoctorReport): string[] {
+  const lines: string[] = [];
+  const show = (label: string, l: ReadinessLevel) => {
+    lines.push(`${label.padEnd(27)} ${l.safe ? "YES" : `NO (${l.blockers.length} blocker${l.blockers.length === 1 ? "" : "s"})`}`);
+    for (const b of l.blockers) lines.push(`  - ${b}`);
+  };
+  show("SAFE FOR DRY RUN:", r.readiness.dryRun);
+  show("SAFE FOR REAL REPLICATION:", r.readiness.realReplication);
+  show("SAFE FOR REAL PAYMENTS:", r.readiness.realPayments);
+  return lines;
 }
 
 export function formatDoctorReport(r: DoctorReport): string {
@@ -320,8 +548,10 @@ export function formatDoctorReport(r: DoctorReport): string {
     lines.push("", "Security warnings:");
     for (const w of r.securityWarnings) lines.push(`  - ${w}`);
   }
+  lines.push("", "Operator checklist:");
+  for (const c of r.checklist) lines.push(`  [${c.ok ? "PASS" : "FAIL"}] ${c.item.padEnd(30)} ${c.detail}`);
   lines.push("", `DEPLOYMENT:        ${r.deploymentOk ? "OK" : "FAIL"}`);
   lines.push(`REAL REPLICATION:  ${r.replicationSafe ? "SAFE" : `UNSAFE — FAIL (${r.blockers.length} blocker${r.blockers.length === 1 ? "" : "s"})`}`);
-  for (const b of r.blockers) lines.push(`  - ${b}`);
+  lines.push("", ...formatReadiness(r));
   return lines.join("\n");
 }

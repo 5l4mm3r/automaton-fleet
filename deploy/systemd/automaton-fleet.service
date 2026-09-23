@@ -1,4 +1,4 @@
-# Automaton Fleet control service — Phase 4 (loopback only).
+# Automaton Fleet control service — Phase 4/6 (loopback only unless the remote drop-in is installed).
 #
 # Install (after approval): scripts/fleet-os-setup.sh --apply, then
 #   systemctl daemon-reload && systemctl enable --now automaton-fleet.service
@@ -27,12 +27,13 @@ Group=automaton-fleet-service
 WorkingDirectory=/opt/automaton-fleet/current
 ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/service/main.js
 LoadCredential=service.env:/etc/automaton-fleet/service.env
-# Phase 5 HTTPS (NOT enabled): uncomment after a certificate is issued and the
-# firewall/DNS for remote children is approved. Remote listening also requires
-# FLEET_REMOTE_LISTEN_ENABLED=true AND lifting IPAddressDeny below.
-#LoadCredential=tls.key:/etc/automaton-fleet/tls/fleet.key
-#Environment=FLEET_TLS_CERT_FILE=/etc/automaton-fleet/tls/fleet.crt
+# Remote HTTPS (Phase 6) is NOT enabled here. It is a separate drop-in,
+# deploy/systemd/automaton-fleet.service.d/remote.conf.example, installed only
+# after DNS, certificate and firewall are approved; it also needs
+# FLEET_REMOTE_LISTEN_ENABLED=true + FLEET_PUBLIC_* in runtime.env.
 Environment=NODE_ENV=production
+# The service refuses to start as root or as any other user.
+Environment=FLEET_SERVICE_EXPECTED_USER=automaton-fleet-service
 Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/runtime.env
 Environment=FLEET_AUDIT_LOG=/var/log/automaton-fleet/audit.jsonl
 Environment=FLEET_API_LISTEN=127.0.0.1:8787

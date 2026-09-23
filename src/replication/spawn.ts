@@ -56,6 +56,98 @@ function selectSandboxTier(requestedMemoryMb: number) {
   return SANDBOX_TIERS.find((t) => t.memoryMb >= requestedMemoryMb) ?? SANDBOX_TIERS[SANDBOX_TIERS.length - 1];
 }
 
+/**
+ * Phase 6: a provisioning attempt whose sandbox may or may not exist. The
+ * controller holds the intent record (and a quarantine slot once the attempt
+ * fails); nothing may create another sandbox for it until it is reconciled.
+ */
+export class FleetProvisioningUncertainError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FleetProvisioningUncertainError";
+  }
+}
+
+/** Deterministic sandbox name for a provisioning key (reservation ULID). */
+export function sandboxNameFor(provisioningKey: string): string {
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(provisioningKey)) throw new Error("invalid provisioning key");
+  return `fleet-${provisioningKey.toLowerCase()}`;
+}
+
+/**
+ * Look a sandbox up by its deterministic name. "unknown" when the provider
+ * cannot be listed or does not report names — then absence is NOT proven.
+ */
+export async function findSandboxByName(conway: ConwayClient, name: string): Promise<{ id: string } | null | "unknown"> {
+  let list;
+  try {
+    list = await conway.listSandboxes();
+  } catch {
+    return "unknown";
+  }
+  const match = list.filter((s) => s.name === name);
+  if (match.length === 1) return { id: match[0].id };
+  if (match.length > 1) return "unknown";
+  if (list.some((s) => s.name === undefined)) return "unknown";
+  return null;
+}
+
+/**
+ * Create the child's sandbox exactly once per provisioning key:
+ *   1. record the durable intent at the controller (fails -> nothing is created);
+ *   2. if the controller already knows the sandbox, reuse it;
+ *   3. on a retry, look the sandbox up by name before creating again — if
+ *      absence cannot be proven, stop (uncertain) instead of risking a second;
+ *   4. create it under the deterministic name, then report its id.
+ * A lost create response or a lost report leaves the intent record, which
+ * names the sandbox, so reconciliation can still find it.
+ */
+export async function createTrackedSandbox(
+  conway: ConwayClient,
+  claimed: ClaimedGrant,
+  spec: { vcpu: number; memoryMb: number; diskGb: number },
+  opts: { maxAttempts?: number } = {},
+): Promise<{ id: string }> {
+  if (!claimed.recordSandboxIntent || !claimed.provisioningKey) {
+    throw new FleetProvisioningUncertainError("Shared fleet grant carries no provisioning key; refusing to create an untracked sandbox.");
+  }
+  const name = sandboxNameFor(claimed.provisioningKey);
+  const report = async (id: string) => {
+    await claimed.reportProvisioning?.("sandbox_created", id);
+  };
+  let lastErr: unknown = null;
+  for (let i = 0; i < (opts.maxAttempts ?? 2); i++) {
+    const intent = await claimed.recordSandboxIntent(name);
+    if (intent.sandboxId) return { id: intent.sandboxId };
+    if (intent.attempts > 1) {
+      const found = await findSandboxByName(conway, name);
+      if (found === "unknown") {
+        await claimed.reconcileProvisioning?.("unknown").catch(() => {});
+        throw new FleetProvisioningUncertainError(
+          `Sandbox ${name} may already exist but cannot be confirmed; refusing to create a second one (reconcile first).`,
+        );
+      }
+      if (found) {
+        await report(found.id);
+        return found;
+      }
+    }
+    let sandbox: { id: string };
+    try {
+      sandbox = await conway.createSandbox({ name, ...spec });
+    } catch (err) {
+      lastErr = err; // outcome unknown: the next attempt looks it up by name first
+      continue;
+    }
+    await report(sandbox.id);
+    return sandbox;
+  }
+  await claimed.reconcileProvisioning?.("unknown").catch(() => {});
+  throw new FleetProvisioningUncertainError(
+    `Sandbox creation for ${name} did not complete: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`,
+  );
+}
+
 import { isValidAddress } from "../identity/chain.js";
 import type { ChainType } from "../identity/chain.js";
 
@@ -139,27 +231,33 @@ export async function spawnChild(
     // Get child sandbox memory from config (default 1024MB)
     const childMemoryMb = (db as any).config?.childSandboxMemoryMb ?? 1024;
 
-    // Try to reuse an existing sandbox whose DB record is 'failed' but
-    // is still running remotely, before creating a new one.
-    reusedSandbox = await findReusableSandbox(conway, db);
-
     const tier = selectSandboxTier(childMemoryMb);
 
     let sandbox: { id: string };
-    if (reusedSandbox) {
-      sandbox = reusedSandbox;
+    if (claimed.recordSandboxIntent) {
+      // Phase 6 (shared registry): intent recorded before creation, one
+      // sandbox per provisioning key. Never reuse another child's sandbox —
+      // it may belong to a quarantined orphan.
+      sandbox = await createTrackedSandbox(conway, claimed, tier);
     } else {
-      sandbox = await conway.createSandbox({
-        name: `automaton-child-${genesis.name.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`,
-        vcpu: tier.vcpu,
-        memoryMb: tier.memoryMb,
-        diskGb: tier.diskGb,
-      });
+      // Try to reuse an existing sandbox whose DB record is 'failed' but
+      // is still running remotely, before creating a new one.
+      reusedSandbox = await findReusableSandbox(conway, db);
+      if (reusedSandbox) {
+        sandbox = reusedSandbox;
+      } else {
+        sandbox = await conway.createSandbox({
+          name: `automaton-child-${genesis.name.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`,
+          vcpu: tier.vcpu,
+          memoryMb: tier.memoryMb,
+          diskGb: tier.diskGb,
+        });
+      }
+      // Phase 5: the controller learns about the sandbox the moment it exists,
+      // so a failed provisioning stays visible for cleanup.
+      await claimed.reportProvisioning?.("sandbox_created", sandbox.id);
     }
     sandboxId = sandbox.id;
-    // Phase 5: the controller learns about the sandbox the moment it exists,
-    // so a failed provisioning stays visible for cleanup.
-    await claimed.reportProvisioning?.("sandbox_created", sandbox.id);
 
     // Create a scoped client so all exec/writeFile calls target the CHILD sandbox
     const childConway = conway.createScopedClient(sandbox.id);
@@ -307,16 +405,18 @@ async function spawnChildLegacy(
   const legacyTier = selectSandboxTier(childMemoryMb);
 
   try {
-    const sandbox = await conway.createSandbox({
-      name: `automaton-child-${genesis.name.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`,
-      vcpu: legacyTier.vcpu,
-      memoryMb: legacyTier.memoryMb,
-      diskGb: legacyTier.diskGb,
-    });
+    const sandbox = claimed.recordSandboxIntent
+      ? await createTrackedSandbox(conway, claimed, legacyTier)
+      : await conway.createSandbox({
+          name: `automaton-child-${genesis.name.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`,
+          vcpu: legacyTier.vcpu,
+          memoryMb: legacyTier.memoryMb,
+          diskGb: legacyTier.diskGb,
+        });
     sandboxId = sandbox.id;
-    // Phase 5: the controller learns about the sandbox the moment it exists,
-    // so a failed provisioning stays visible for cleanup.
-    await claimed.reportProvisioning?.("sandbox_created", sandbox.id);
+    // Phase 5: the controller learns about the sandbox the moment it exists
+    // (the tracked path reports it itself).
+    if (!claimed.recordSandboxIntent) await claimed.reportProvisioning?.("sandbox_created", sandbox.id);
 
     // Create a scoped client so all exec/writeFile calls target the CHILD sandbox
     const childConway = conway.createScopedClient(sandbox.id);
@@ -391,7 +491,7 @@ async function spawnChildLegacy(
   }
 }
 
-interface PinnedExpectation {
+export interface PinnedExpectation {
   runtime: RuntimePin;
   build: RuntimeBuild;
   nonce: string;
@@ -404,7 +504,7 @@ interface PinnedExpectation {
  * nonce. Throws FleetRuntimeError on any mismatch. The controller re-checks
  * the attestation before activation; this early check just fails fast.
  */
-async function installPinnedRuntime(childConway: ConwayClient, expected: PinnedExpectation): Promise<RuntimeAttestation> {
+export async function installPinnedRuntime(childConway: ConwayClient, expected: PinnedExpectation): Promise<RuntimeAttestation> {
   const { runtime, build, nonce } = expected;
   await childConway.exec("apt-get update -qq && apt-get install -y -qq nodejs npm git curl", 120_000);
   const install = await childConway.exec(buildRuntimeInstallCommand(runtime, build), 600_000);
@@ -447,6 +547,7 @@ async function writeRuntimeManifest(
     commit: runtime.commit,
     buildId: build.buildId,
     lockfileSha256: build.lockfileSha256,
+    ...(claimed.provisioningKey ? { provisioningKey: claimed.provisioningKey } : {}),
   };
   await childConway.writeFile(CHILD_RUNTIME_MANIFEST, JSON.stringify(manifest, null, 2));
 }

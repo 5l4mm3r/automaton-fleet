@@ -37,6 +37,20 @@ export interface ClaimedGrant {
    * cleanup. Absent for the local (SQLite) path.
    */
   reportProvisioning?: (phase: "sandbox_created" | "verifying", sandboxId?: string) => Promise<void>;
+  /**
+   * Phase 6: the provisioning key (= reservation id). Carried through sandbox
+   * creation (deterministic sandbox name), the child's runtime manifest, the
+   * provisioning callbacks and activation.
+   */
+  provisioningKey?: string | null;
+  /**
+   * Phase 6: record the durable external-resource intent BEFORE creating the
+   * sandbox. Returns the attempt number and the sandbox id if the controller
+   * already knows it (then it must be reused).
+   */
+  recordSandboxIntent?: (sandboxName: string) => Promise<{ sandboxId: string | null; attempts: number; sandboxName: string }>;
+  /** Phase 6: report the outcome of looking up an uncertain sandbox by name. */
+  reconcileProvisioning?: (outcome: "found" | "absent" | "unknown", sandboxId?: string) => Promise<void>;
 }
 
 type Claimer = (localChildId: string) => Promise<ClaimedGrant>;

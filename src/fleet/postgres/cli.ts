@@ -17,6 +17,13 @@
  *   pnpm fleet:admin grant-service-role [role]
  *   pnpm fleet:audit-privileges               (fails if agent/service roles are too broad)
  *   pnpm fleet:doctor [--json] [--deployment-only]
+ *   pnpm fleet:verify                          (operator checklist + SAFE FOR DRY RUN / REAL REPLICATION / REAL PAYMENTS)
+ *   pnpm fleet:admin migrate-check            (apply pending migrations in ONE transaction, then roll back)
+ *   pnpm fleet:verify-runtime [dir] [--json]   (pinned runtime identity; exit 1 on any mismatch)
+ *   pnpm fleet:admin reconcile-provisioning     (uncertain sandbox outcomes; looks them up by name when
+ *                                               CONWAY_API_KEY is set, else lists them)
+ *   pnpm fleet:admin reconcile <provisioningKey> found <sandboxId> | absent | unknown
+ *   pnpm fleet:dry-run-child --root <agentId> --api-url https://… [--confirm-real-sandbox]
  *   pnpm fleet:admin terminations             (sandbox termination queue)
  *   pnpm fleet:admin quarantine <agentId> [reason]        revoke everything now; terminate / orphan its sandbox
  *   pnpm fleet:admin resolve-orphan <agentId> <resolution> (after external cleanup is confirmed)
@@ -42,12 +49,30 @@ import path from "path";
 import { isFleetState } from "../config.js";
 import { validateRuntimePin } from "../runtime.js";
 import { computeBuildIdentity, loadRuntimeBuild } from "../attestation.js";
-import { formatDoctorReport, runDoctor } from "../doctor.js";
+import { formatChecklist, formatDoctorReport, runDoctor } from "../doctor.js";
 import { loadAdminEnv, readEnvFile, type LoadedEnv } from "../secret-files.js";
 import { PgTreasuryStore } from "../treasury/store.js";
 import { TREASURY_COMMANDS, runTreasuryCommand } from "../treasury/cli.js";
 import type { FleetCredential } from "../types.js";
 import { PgFleetStore } from "./store.js";
+import { FLEET_PG_SCHEMA_VERSION } from "./migrations.js";
+import { formatRuntimeIdentity, treeIdentity, verifyRuntimeIdentity } from "../runtime-verify.js";
+import { dryRunPreflight, performDryRunChild } from "../dry-run/operator.js";
+import { findSandboxByName } from "../../replication/spawn.js";
+import { createConwayClient } from "../../conway/client.js";
+import type { ConwayClient } from "../../types.js";
+
+/** Operator Conway client (CONWAY_API_KEY / CONWAY_API_URL); null when not configured. */
+function operatorConway(e: Record<string, string | undefined>): ConwayClient | null {
+  const apiKey = e.CONWAY_API_KEY?.trim();
+  if (!apiKey) return null;
+  return createConwayClient({ apiUrl: e.CONWAY_API_URL?.trim() || "https://api.conway.tech", apiKey, sandboxId: "" });
+}
+
+function argValue(rest: string[], flag: string): string | undefined {
+  const i = rest.indexOf(flag);
+  return i >= 0 ? rest[i + 1] : undefined;
+}
 
 const DEFAULT_CREDENTIAL_FILE = path.join(os.homedir(), ".automaton", "fleet-credentials.json");
 
@@ -88,8 +113,26 @@ async function main(argv: string[]): Promise<number> {
     const store = PgFleetStore.fromEnv(e);
     try {
       const report = await runDoctor({ env: e, store });
+      if (rest.includes("--checklist")) {
+        // pnpm fleet:verify — the single operator verification; exit 0 only when SAFE FOR DRY RUN.
+        console.log(rest.includes("--json") ? JSON.stringify({ checklist: report.checklist, readiness: report.readiness }, null, 2) : formatChecklist(report));
+        return report.readiness.dryRun.safe ? 0 : 1;
+      }
       console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : formatDoctorReport(report));
       return rest.includes("--deployment-only") ? (report.deploymentOk ? 0 : 1) : report.replicationSafe ? 0 : 1;
+    } finally {
+      await store?.close();
+    }
+  }
+  if (cmd === "verify-runtime") {
+    const store = PgFleetStore.fromEnv(e);
+    try {
+      const st = store ? await store.getState().catch(() => null) : null;
+      const approved = st?.runtime && st.build ? { ...st.runtime, ...st.build } : null;
+      const dir = rest.find((a) => !a.startsWith("--"));
+      const report = verifyRuntimeIdentity({ env: e, approved, tree: dir ? treeIdentity(dir) : null });
+      console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : formatRuntimeIdentity(report));
+      return report.ok ? 0 : 1;
     } finally {
       await store?.close();
     }
@@ -153,6 +196,63 @@ async function main(argv: string[]): Promise<number> {
         }
         console.log(JSON.stringify(await store.setLifecyclePolicy(patch, actor), null, 2));
         return 0;
+      }
+      case "migrate-check": {
+        const r = await store.migrateCheck();
+        console.log(JSON.stringify({ ...r, requiredVersion: FLEET_PG_SCHEMA_VERSION, rolledBack: true }));
+        return r.resultingVersion === FLEET_PG_SCHEMA_VERSION ? 0 : 1;
+      }
+      case "reconcile": {
+        const [key, outcome, sandboxId] = rest;
+        if (!key || !["found", "absent", "unknown"].includes(outcome ?? "") || (outcome === "found" && !sandboxId)) {
+          throw new Error("usage: reconcile <provisioningKey> found <sandboxId> | absent | unknown");
+        }
+        console.log(JSON.stringify(await store.reconcileProvisioning(key, outcome as "found" | "absent" | "unknown", sandboxId ?? null, actor)));
+        return 0;
+      }
+      case "reconcile-provisioning": {
+        const pending = await store.listUncertainProvisioning();
+        const conway = operatorConway(e);
+        const out: Array<Record<string, unknown>> = [];
+        for (const p of pending) {
+          const key = String(p.provisioning_key);
+          const name = String(p.sandbox_name ?? "");
+          if (!conway || !name) {
+            out.push({ provisioningKey: key, sandboxName: name || null, agentStatus: p.agent_status, action: "listed (set CONWAY_API_KEY to look it up)" });
+            continue;
+          }
+          const found = await findSandboxByName(conway, name);
+          const outcome = found === "unknown" ? "unknown" : found ? "found" : "absent";
+          const r = await store
+            .reconcileProvisioning(key, outcome, found && found !== "unknown" ? found.id : null, actor)
+            .catch((err: Error) => ({ ok: false, reason: err.message }));
+          out.push({ provisioningKey: key, sandboxName: name, outcome, result: r });
+        }
+        console.log(JSON.stringify(out, null, 2));
+        return 0;
+      }
+      case "dry-run-child": {
+        const root = argValue(rest, "--root");
+        const apiUrl = argValue(rest, "--api-url") ?? (e.FLEET_PUBLIC_URL?.trim() || "");
+        if (!root || !apiUrl) throw new Error("usage: dry-run-child --root <agentId> --api-url https://<controller> [--confirm-real-sandbox]");
+        const deps = {
+          admin: store,
+          env: e,
+          rootAgentId: root,
+          apiUrl,
+          name: argValue(rest, "--name"),
+          log: (step: string, d?: Record<string, unknown>) => console.error(`[dry-run] ${step} ${d ? JSON.stringify(d) : ""}`),
+        };
+        if (!rest.includes("--confirm-real-sandbox")) {
+          const pre = await dryRunPreflight(deps);
+          console.log(JSON.stringify({ mode: "preflight-only (add --confirm-real-sandbox to create ONE real sandbox)", ...pre }, null, 2));
+          return pre.ok ? 0 : 1;
+        }
+        const conway = operatorConway(e);
+        if (!conway) throw new Error("CONWAY_API_KEY is required for the real dry run (it creates one remote sandbox).");
+        const report = await performDryRunChild({ ...deps, conway });
+        console.log(JSON.stringify(report, null, 2));
+        return report.ok ? 0 : 1;
       }
       case "migrate": {
         const applied = await store.migrate();

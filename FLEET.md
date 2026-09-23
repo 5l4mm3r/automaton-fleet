@@ -545,3 +545,125 @@ Approved expansion needs reduce the rate by being protected capital, which lower
 - **`src/__tests__/fleet/fleet-phase5.test.ts`** (43 tests, `pnpm test:phase5`), part of `test:fleet`, `test:security` and `test:financial`.
 - **Mutation-checked:** removing the policy canary check, letting heartbeats restore health, skipping the nonce ledger, or not protecting growth capital each makes tests fail.
 - **Earlier phases:** their tests share `fixtures/wipe.js` for resets. Phase 3's direct-service tests opt into `allowLegacyBearer`. The Phase 4 production-mode test now uses the session client.
+
+# Phase 6 — Real control plane deployment and the first remote child dry run
+
+Real replication, real payments and owner sweeps remain **disabled** (`REAL_REPLICATION_ENABLED=false`, `REAL_PAYMENTS_ENABLED=false`, `OWNER_SWEEP_ENABLED=false`). Nothing in this phase enables them. Schema is now **v6**.
+
+## Untracked sandbox window (schema v6)
+
+The Phase 5 gap: `createSandbox` could succeed while the callback reporting it was lost. The controller then had a provisioning record with no sandbox, and a failed attempt freed its slot.
+
+- **Provisioning key:** the reservation ID is the provisioning key. It is carried through the reservation, sandbox creation (deterministic sandbox name `fleet-<lower(key)>`), the child's runtime manifest (`provisioningKey`), every provisioning callback and activation. A mismatched key is refused by the service and by `PgFleetStore.activate`.
+- **Durable intent before creation:** `svc_provision_update('sandbox_intent')` records the sandbox name, `external_state = intent` and the attempt count *before* `createSandbox` is called. If the intent can't be recorded, nothing is created.
+- **Idempotent creation** (`createTrackedSandbox`):
+  - If the controller already knows the sandbox, it is reused.
+  - On a retry, the sandbox is looked up by name first.
+  - If absence can't be proven (listing fails, or the provider doesn't report names), creation stops with `FleetProvisioningUncertainError` rather than risk a second sandbox.
+  - The database caps attempts at 3.
+  - Shared-registry grants never reuse another child's sandbox.
+- **Uncertain outcome → ORPHANED, not FAILED:** a provisioning attempt that fails (lease expiry, verification failure, parent report) while its sandbox may exist becomes ORPHANED. This happens through a `BEFORE` trigger, so no code path can skip it.
+  - Every capability is revoked (lifecycle trigger).
+  - An orphan record is kept (`sandbox_name`, `holds_slot = true`).
+  - The provisioning record stays `cleanup_status = pending`.
+  - A **quarantine slot** counts against the cap until reconciliation or the orphan hold.
+- **Known sandbox:** a failed attempt whose sandbox *is* known keeps the Phase 5 policy (FAILED_PROVISIONING, termination queued, no slot).
+- **Reconciliation** (`svc_provision_reconcile`, `pnpm fleet:admin reconcile-provisioning`, `reconcile <key> found <id>|absent|unknown`):
+  - `found` records the sandbox and queues it for termination.
+  - `absent` is accepted only after the activation deadline, so no create can still be in flight. It resolves the orphan and frees the slot.
+  - `unknown` keeps the slot held.
+  - A sandbox reported late, even after `absent`, is still captured and queued for cleanup.
+
+## HTTPS controller
+
+| Setting (`runtime.env`, non-secret) | Meaning |
+|---|---|
+| `FLEET_REMOTE_LISTEN_ENABLED` | `false` (shipped). `true` requires everything below |
+| `FLEET_PUBLIC_HOSTNAME` | DNS name children use; the certificate must cover it |
+| `FLEET_PUBLIC_LISTEN` | HTTPS bind, e.g. `0.0.0.0:443`. `FLEET_API_LISTEN` then stays the **loopback plain-HTTP admin** listener |
+| `FLEET_PUBLIC_URL` | `https://<hostname>` (doctor / dry run) |
+| `FLEET_TLS_CERT_FILE` | `/etc/automaton-fleet/tls/fleet.crt` |
+| TLS key | `/etc/automaton-fleet/tls/fleet.key` (root 0600), delivered only by `LoadCredential=tls.key` |
+| `FLEET_ALLOWED_ORIGINS` | Browser origins (https only). Default: none; any request carrying another `Origin` gets 403 |
+
+- **Startup refusals:**
+  - remote exposure without TLS or a hostname;
+  - a certificate that doesn't cover the hostname, isn't yet valid, expires within a day, or doesn't match the key;
+  - `FLEET_PUBLIC_LISTEN` without `FLEET_REMOTE_LISTEN_ENABLED`;
+  - any plain-HTTP listener off loopback (`FleetService.bind`, `listenAdmin`);
+  - running as root, or as anyone other than `FLEET_SERVICE_EXPECTED_USER` (the unit sets `automaton-fleet-service`).
+- **Endpoints:** `/healthz` returns only `{ok, status, uptimeS}`. `/readyz` (detailed) answers loopback peers only. Responses carry `cache-control: no-store`, `nosniff`, and HSTS over TLS.
+- **No database path:** PostgreSQL and Redis are never proxied. There is no DB route and no `CONNECT` tunnelling, and a PG protocol packet gets an HTTP 400 (tested).
+- **Remote drop-in:** `deploy/systemd/automaton-fleet.service.d/remote.conf.example` (not installed) adds `LoadCredential=tls.key`, lifts `IPAddressDeny` and grants only `CAP_NET_BIND_SERVICE`.
+- **Firewall:** `deploy/firewall/fleet-firewall.sh` (dry run by default) denies all inbound traffic except SSH and 443/tcp, and explicitly denies 5432, 6379 and 8787. nftables equivalent:
+  ```
+  table inet fleet { chain input { type filter hook input priority 0; policy drop;
+    ct state established,related accept; iif lo accept; tcp dport { 22, 443 } accept; } }
+  ```
+
+## Pinned runtime
+
+- **Release definition:** `FLEET_RUNTIME_REPO/_COMMIT/_BUILD_ID/_LOCKFILE_SHA256` in `runtime.env`, produced from a clean clone with `pnpm install --frozen-lockfile` (`scripts/fleet-build-runtime.sh`).
+- **Before the fork is published:** `scripts/fleet-deploy-release.sh build --source <local clone>` fetches the pinned commit locally and verifies it identically.
+- **`pnpm fleet:verify-runtime [dir]`:** reports the pinned identity, the registry-approved runtime and an installed tree's actual commit, origin, lockfile hash and build ID. It exits 1 if the repository, commit, build ID or lockfile differs. The same comparison refuses service startup and child activation (`svc_activate`).
+
+## DRY_RUN_CHILD
+
+`pnpm fleet:dry-run-child --root <agentId> --api-url https://<host>` runs the preflight only. The real run additionally needs `FLEET_DRY_RUN_CHILD=true`, `--confirm-real-sandbox` and `CONWAY_API_KEY`, and creates **one** real sandbox.
+
+- **Preflight:** payment, owner-sweep and replication flags all false; cap = 2 with a free slot; approved runtime equals the pinned release; no orphan, stuck reservation, uncertain provisioning or existing dry-run child; the https controller is reachable and not loopback.
+- **Run:**
+  1. `fleet_reserve_dry_run` (operator-only; `dry_run` stored in the DB).
+  2. Claim.
+  3. Tracked sandbox.
+  4. The child fetches the pinned fork, verifies the exact commit and lockfile hash, runs `pnpm install --frozen-lockfile` and `pnpm build`.
+  5. Attestation (parent verifier + nonce + build ID).
+  6. Activation (double-checked).
+  7. Credential (0600) and dry-run manifest delivered.
+  8. The sandbox runs `dist/fleet/dry-run/child-main.js`: session over HTTPS, heartbeat, controller challenge.
+  9. The operator waits for a **passed challenge**; only the child can produce one.
+- **The child cannot:**
+  - **Transfer money or sign:** it has no wallet key. Its registered address is keyless (`sha256`-derived; no private key exists). Custody is forced frozen with a zero limit by a DB trigger, even against the owner, and capital allocations are refused.
+  - **Create a child:** DB insert guard (`FLEET_DRY_RUN_NO_REPLICATION`), frozen-parent refusal, service replication switch.
+  - **Change fleet configuration or sweep rules:** admin-only; there is no agent API for either.
+  - **Reach controller secrets or PostgreSQL:** it holds only `{agentId, token, apiUrl}`. `child-main` refuses to run if any DB/controller credential, wallet key or `REAL_*`/`OWNER_SWEEP` switch is present.
+- **Quarantine:** `fleet:admin quarantine <id>` revokes everything. The child's next heartbeat is refused and its slot becomes a quarantine slot within the cap.
+
+## Operator verification
+
+- **`pnpm fleet:verify`** (doctor `--checklist`; exit 0 only when SAFE FOR DRY RUN) checks:
+  - PostgreSQL roles, schema v6;
+  - controller service active (systemd + `/readyz`);
+  - privileged secrets protected (modes plus a per-OS-user readability check for the agent and service users; nothing in `.env.fleet`);
+  - runtime repo, commit and build ID pinned and matching the approved runtime;
+  - HTTPS certificate valid for the hostname; remote controller reachable;
+  - replay protection (stale signed request refused, long-lived credential refused outside `/v1/session`, nonce ledger);
+  - agent credentials scoped;
+  - payments and owner sweeps disabled;
+  - fleet cap = 2;
+  - no unresolved orphan; no stuck reservation or uncertain provisioning.
+- **Three independent readiness levels**, each with its own blockers:
+  - **SAFE FOR DRY RUN**
+  - **SAFE FOR REAL REPLICATION:** additionally needs a dry-run child that reached ACTIVE with a passed challenge, plus the structural blockers below.
+  - **SAFE FOR REAL PAYMENTS:** needs a controller custody signer and controller-held wallet keys; independent of the dry run.
+- **`sudo scripts/fleet-verify-deployment.sh`** (read-only) checks the same things as the real OS identities:
+  - `runuser -u automaton-agent -- test -r` for every secret;
+  - the service process user;
+  - no DSN in `/proc/<pid>/environ`;
+  - 5432, 6379 and 8787 loopback-only.
+
+## Tests
+
+`src/__tests__/fleet/fleet-phase6.test.ts` (29 tests, `pnpm test:phase6`; part of `test:fleet` and `test:security`, with the spend tests in `test:financial`) covers:
+- migration v1 → v6 (transactional check rolled back, then applied); migrations refused for the agent and service roles;
+- dedicated service user; agent and service users can't read secrets;
+- pin, build ID and frozen-lockfile mismatches refused;
+- lost create response → one sandbox and one child; providers without names → no second create;
+- callback loss → ORPHANED quarantine slot → found or absent reconciliation;
+- HTTPS required; HTTP remote binding refused; no PostgreSQL path through the service;
+- the end-to-end dry run over TLS (attest, heartbeat, challenge, ACTIVE);
+- zero spend authority, no replication, quarantine;
+- population never above 2;
+- the three doctor levels.
+
+Mutation checks: removing the uncertain→ORPHANED rewrite or the custody freeze each make tests fail.

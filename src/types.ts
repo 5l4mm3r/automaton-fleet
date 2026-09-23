@@ -422,6 +422,8 @@ export interface CreateSandboxOptions {
 
 export interface SandboxInfo {
   id: string;
+  /** Name given at creation, when the provider reports it (fleet provisioning reconciliation). */
+  name?: string;
   status: string;
   region: string;
   vcpu: number;

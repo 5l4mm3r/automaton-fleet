@@ -50,7 +50,7 @@ import type {
   SharedAgentStatus,
   SharedFleetState,
 } from "../types.js";
-import {
+import { migrateCheck,
   AGENT_API_FUNCTIONS,
   FLEET_PG_HARD_MAX_AGENTS,
   FLEET_PG_SCHEMA_VERSION,
@@ -130,6 +130,17 @@ export interface LifecyclePolicy {
   orphanSlotHoldS: number;
   maxOpenOrphans: number;
   sessionTtlS: number;
+}
+
+/** Phase 6: the durable record of an intended (possibly created) sandbox. */
+export interface SandboxIntent {
+  provisioningKey: string;
+  /** Deterministic sandbox name: fleet-<lower(provisioningKey)>. */
+  sandboxName: string;
+  /** Set when the controller already knows the sandbox: reuse it, never create another. */
+  sandboxId: string | null;
+  /** Create attempts recorded so far, including this one. */
+  attempts: number;
 }
 
 export interface HealthChallenge {
@@ -562,6 +573,17 @@ export class PgFleetStore {
     return applied;
   }
 
+  /** Phase 6: apply pending migrations in one transaction and roll back (verification only). */
+  async migrateCheck(): Promise<{ currentVersion: number | null; resultingVersion: number; wouldApply: number[] }> {
+    const client = await this.connect();
+    try {
+      await this.assertAdminConnection(client);
+      return await migrateCheck(client, this.schema);
+    } finally {
+      client.release();
+    }
+  }
+
   /** Throws unless the connection holds the privileged admin (schema owner) role. */
   private async assertAdminConnection(c: PoolClient): Promise<void> {
     const r = await c.query<{ u: string; owner: string | null; can_create: boolean }>(
@@ -956,6 +978,27 @@ export class PgFleetStore {
   }
 
   /**
+   * Operator-only (admin credential): reserve the single DRY_RUN_CHILD slot
+   * under a living root. Independent of the replication switch; the child
+   * can never replicate or spend (enforced by the database).
+   */
+  async reserveDryRunSlot(params: { parentAgentId: string; requestedBy: string; name: string }): Promise<SharedReserveResult> {
+    return this.tx(async (c): Promise<SharedReserveResult> => {
+      const r = await c.query<{ res: ReserveJson }>("SELECT fleet_reserve_dry_run($1, $2, $3, $4, $5, $6) AS res", [
+        params.parentAgentId, params.requestedBy, params.name, ulid(), ulid(), this.reservationTtlMs,
+      ]);
+      const res = r.rows[0].res;
+      if (!res.ok) {
+        return { ok: false, code: res.code as FleetDecisionCode, reason: res.reason, living: res.living, reserved: res.reserved, max: res.max };
+      }
+      const agent = await c.query<AgentRow>("SELECT * FROM fleet_agents WHERE agent_id = $1", [res.agentId]);
+      const agentId = res.agentId;
+      const grant = createBoundGrant(res.reservationId, (localChildId) => this.claimGrant(agentId, localChildId));
+      return { ok: true, grant, agent: toAgent(agent.rows[0]), lease: leaseFromReserve(res) };
+    });
+  }
+
+  /**
    * reserved -> provisioning, exactly once, before any sandbox exists. Moves
    * the lease to the provisioning TTL and issues the attestation nonce.
    * `parentAgentId` (API path) must equal the lease's parent. Runs
@@ -985,19 +1028,106 @@ export class PgFleetStore {
       expectedBuild: { buildId: res.buildId!, lockfileSha256: res.lockfileSha256! },
       nonce,
       reservationId: res.reservationId!,
+      provisioningKey: res.reservationId!,
       backend: "postgres",
-      reportProvisioning: (phase, sandboxId) => this.reportProvisioning(agentId, phase, sandboxId ?? null, parent),
+      reportProvisioning: async (phase, sandboxId) => {
+        await this.reportProvisioning(agentId, phase, sandboxId ?? null, parent);
+      },
+      recordSandboxIntent: (sandboxName) => this.recordSandboxIntent(agentId, sandboxName, parent),
+      reconcileProvisioning: (outcome, sandboxId) =>
+        this.reconcileProvisioning(res.reservationId!, outcome, sandboxId ?? null, parent ?? "controller").then(() => undefined),
     };
   }
 
   // ─── Phase 5: provisioning, health, sessions, termination ──────
 
   /** Record provisioning progress (svc_provision_update). Throws if refused. */
-  async reportProvisioning(agentId: string, phase: "sandbox_created" | "verifying", sandboxId: string | null, parentAgentId: string | null): Promise<void> {
+  async reportProvisioning(
+    agentId: string,
+    phase: "sandbox_intent" | "sandbox_created" | "verifying",
+    sandboxId: string | null,
+    parentAgentId: string | null,
+  ): Promise<Record<string, unknown>> {
     const r = await this.tx(async (c) =>
       (await c.query("SELECT svc_provision_update($1, $2, $3, $4) AS r", [agentId, parentAgentId, phase, sandboxId])).rows[0].r,
     );
-    if (!r.ok) throw new FleetBypassError(`Provisioning update refused: ${r.code}`);
+    if (!r.ok) throw new FleetBypassError(`Provisioning update refused: ${r.code}${r.reason ? ` (${r.reason})` : ""}`);
+    return r;
+  }
+
+  /**
+   * Phase 6: durable external-resource intent, recorded BEFORE the sandbox is
+   * created. Returns the attempt number and, when the controller already
+   * knows the sandbox, its id (the caller must reuse it, never create another).
+   */
+  async recordSandboxIntent(agentId: string, sandboxName: string, parentAgentId: string | null): Promise<SandboxIntent> {
+    const r = await this.reportProvisioning(agentId, "sandbox_intent", sandboxName, parentAgentId);
+    return {
+      provisioningKey: String(r.provisioningKey),
+      sandboxName: String(r.sandboxName),
+      sandboxId: typeof r.sandboxId === "string" ? r.sandboxId : null,
+      attempts: Number(r.attempts),
+    };
+  }
+
+  /** Phase 6: record the outcome of looking up an uncertain sandbox (svc_provision_reconcile). */
+  async reconcileProvisioning(
+    provisioningKey: string,
+    outcome: "found" | "absent" | "unknown",
+    sandboxId: string | null,
+    actor: string,
+  ): Promise<{ ok: boolean; code?: string; reason?: string; agentStatus?: string }> {
+    const r = await this.tx(async (c) =>
+      (await c.query("SELECT svc_provision_reconcile($1, $2, $3, $4) AS r", [provisioningKey, outcome, sandboxId, actor])).rows[0].r,
+    );
+    if (!r.ok) throw new FleetBypassError(`Provisioning reconciliation refused: ${r.code}${r.reason ? ` (${r.reason})` : ""}`);
+    return r;
+  }
+
+  /** Phase 6: liveness, health and spend authority of one agent (dry-run verification, doctor). */
+  async agentAuthority(agentId: string): Promise<{
+    status: string;
+    dryRun: boolean;
+    lastHeartbeat: string | null;
+    lastChallengeOkAt: string | null;
+    spendingFrozen: boolean | null;
+    dailyLimitCents: number | null;
+    credentialLive: boolean;
+    sandboxId: string | null;
+  } | null> {
+    return this.read(async (c) => {
+      const r = await c.query(
+        `SELECT a.status, a.dry_run, a.last_heartbeat, a.last_challenge_ok_at, a.sandbox_id,
+                w.spending_frozen, w.daily_limit_cents,
+                EXISTS (SELECT 1 FROM fleet_agent_credentials k WHERE k.agent_id = a.agent_id AND k.revoked_at IS NULL) AS cred
+           FROM fleet_agents a LEFT JOIN fleet_wallet_custody w ON w.agent_id = a.agent_id WHERE a.agent_id = $1`,
+        [agentId],
+      );
+      const x = r.rows[0];
+      if (!x) return null;
+      return {
+        status: x.status,
+        dryRun: x.dry_run,
+        lastHeartbeat: iso(x.last_heartbeat),
+        lastChallengeOkAt: iso(x.last_challenge_ok_at),
+        spendingFrozen: x.spending_frozen ?? null,
+        dailyLimitCents: x.daily_limit_cents === null || x.daily_limit_cents === undefined ? null : Number(x.daily_limit_cents),
+        credentialLive: x.cred,
+        sandboxId: x.sandbox_id,
+      };
+    });
+  }
+
+  /** Provisioning attempts whose sandbox may exist but was never identified. */
+  async listUncertainProvisioning(): Promise<Array<Record<string, unknown>>> {
+    return this.read(async (c) =>
+      (await c.query(
+        `SELECT p.*, a.status AS agent_status FROM fleet_provisioning p JOIN fleet_agents a ON a.agent_id = p.expected_agent_id
+          WHERE p.sandbox_id IS NULL AND p.external_state IN ('intent','uncertain')
+            AND (a.status NOT IN ('reserved','provisioning') OR p.activation_deadline <= now())
+          ORDER BY p.created_at`,
+      )).rows,
+    );
   }
 
   async listProvisioning(filter: { needsCleanup?: boolean } = {}): Promise<Array<Record<string, unknown>>> {
@@ -1130,6 +1260,8 @@ export class PgFleetStore {
       attestation?: RuntimeAttestation | null;
       parentAgentId?: string;
       actor?: string | null;
+      /** Phase 6: must equal the lease's provisioning key (reservation id) when given. */
+      provisioningKey?: string | null;
     },
   ): Promise<ActivationResult> {
     const pre = await this.read(async (c) => {
@@ -1146,6 +1278,9 @@ export class PgFleetStore {
     }
     if (params.parentAgentId !== undefined && lease.parent_agent_id !== params.parentAgentId) {
       throw new FleetBypassError(`Activation denied: reservation ${lease.reservation_id} belongs to another parent.`);
+    }
+    if (params.provisioningKey != null && params.provisioningKey !== lease.reservation_id) {
+      throw new FleetBypassError(`Activation denied: provisioning key does not match reservation ${lease.reservation_id}.`);
     }
     if (lease.expires_at.getTime() <= pre.now) {
       throw new FleetBypassError(`Activation denied: provisioning lease ${lease.reservation_id} has expired.`);
@@ -1325,6 +1460,9 @@ export class PgFleetStore {
     provisioningNeedingCleanup: number;
     quarantined: number;
     terminating: number;
+    uncertainProvisioning: number;
+    dryRunChildren: number;
+    dryRunProven: number;
   }> {
     return this.read(async (c) => {
       const r = await c.query(
@@ -1339,6 +1477,10 @@ export class PgFleetStore {
            (SELECT count(*) FROM fleet_provisioning WHERE cleanup_status IN ('pending','unsupported','failed'))::int AS prov_cleanup,
            (SELECT count(*) FROM fleet_agents WHERE status = 'orphaned')::int AS quarantined,
            (SELECT count(*) FROM fleet_agents WHERE status = 'terminating')::int AS terminating,
+           (SELECT count(*) FROM fleet_provisioning WHERE sandbox_id IS NULL AND external_state IN ('intent','uncertain')
+               AND status <> 'active' AND (status <> 'provisioning' OR activation_deadline <= now()))::int AS uncertain,
+           (SELECT count(*) FROM fleet_agents WHERE dry_run AND status IN ('reserved','provisioning','active','unresponsive','terminating','orphaned'))::int AS dry_run,
+           (SELECT count(*) FROM fleet_agents WHERE dry_run AND activated_at IS NOT NULL AND last_challenge_ok_at IS NOT NULL)::int AS dry_run_proven,
            s.reaper_last_run_at
          FROM fleet_state s WHERE s.id = 1`,
       );
@@ -1354,6 +1496,9 @@ export class PgFleetStore {
         provisioningNeedingCleanup: x.prov_cleanup,
         quarantined: x.quarantined,
         terminating: x.terminating,
+        uncertainProvisioning: x.uncertain,
+        dryRunChildren: x.dry_run,
+        dryRunProven: x.dry_run_proven,
       };
     });
   }

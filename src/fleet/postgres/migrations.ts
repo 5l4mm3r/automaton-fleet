@@ -13,8 +13,9 @@
 
 import type { PoolClient } from "pg";
 import { V5_SQL, v4Sql } from "./migrations-phase5.js";
+import { V6_SQL } from "./migrations-phase6.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 5;
+export const FLEET_PG_SCHEMA_VERSION = 6;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1114,6 +1115,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 3, name: "service_role_runtime_immutability_terminations", sql: V3 },
   { version: 4, name: "lifecycle_health_sessions_provisioning_orphans_custody", sql: v4Sql(FLEET_PG_HARD_MAX_AGENTS) },
   { version: 5, name: "treasury_economics", sql: V5_SQL },
+  { version: 6, name: "provisioning_intents_dry_run_child", sql: V6_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1131,6 +1133,7 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_termination_result(text, text, text, text)",
   "svc_consume_nonce(text, text, integer)",
   "svc_provision_update(text, text, text, text)",
+  "svc_provision_reconcile(text, text, text, text)",
   "svc_issue_challenge(text, text, text, text)",
   "svc_answer_challenge(text, text, text, text, text, boolean)",
 ]);
@@ -1206,4 +1209,40 @@ export async function migrate(client: PoolClient, schema: string): Promise<numbe
     }
   }
   return applied;
+}
+
+/**
+ * Transactional verification of the pending migrations: applies every
+ * pending version inside ONE transaction, reads the resulting schema
+ * version, then ROLLS BACK. Nothing changes; a failing migration surfaces
+ * here before `migrate` touches the database.
+ */
+export async function migrateCheck(
+  client: PoolClient,
+  schema: string,
+): Promise<{ currentVersion: number | null; resultingVersion: number; wouldApply: number[] }> {
+  const s = quoteIdent(schema);
+  await client.query("BEGIN");
+  try {
+    await client.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
+    await client.query(`CREATE SCHEMA IF NOT EXISTS ${s}`);
+    await client.query(
+      `CREATE TABLE IF NOT EXISTS ${s}.fleet_schema_migrations (
+         version integer PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`,
+    );
+    const cur = await client.query<{ v: number | null }>(`SELECT max(version) AS v FROM ${s}.fleet_schema_migrations`);
+    const wouldApply: number[] = [];
+    for (const m of PG_MIGRATIONS) {
+      const done = await client.query(`SELECT 1 FROM ${s}.fleet_schema_migrations WHERE version = $1`, [m.version]);
+      if (done.rowCount) continue;
+      await client.query(`SET LOCAL search_path TO ${s}`);
+      await client.query(m.sql.replaceAll("@@SCHEMA@@", s));
+      await client.query(`INSERT INTO ${s}.fleet_schema_migrations (version, name) VALUES ($1, $2)`, [m.version, m.name]);
+      wouldApply.push(m.version);
+    }
+    const after = await client.query<{ v: number }>(`SELECT max(version) AS v FROM ${s}.fleet_schema_migrations`);
+    return { currentVersion: cur.rows[0].v, resultingVersion: after.rows[0].v, wouldApply };
+  } finally {
+    await client.query("ROLLBACK").catch(() => {});
+  }
 }

@@ -97,6 +97,11 @@ export interface FleetServiceOptions {
   rateLimits?: { perAgent?: RateLimit; sessions?: RateLimit; authFailuresPerIp?: RateLimit };
   /** TLS material; when set, listen() serves HTTPS. */
   tls?: { cert: string | Buffer; key: string | Buffer };
+  /**
+   * Browser origins allowed to call the API (Phase 6). Requests carrying any
+   * other Origin header are refused; agents send none. Default: none.
+   */
+  allowedOrigins?: string[];
   now?: () => number;
 }
 
@@ -140,8 +145,15 @@ function isPgPermissionError(err: unknown): boolean {
   return code === "42501" || code === "42883"; // insufficient_privilege / undefined_function (no EXECUTE path)
 }
 
+const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+/** True for a loopback bind address (local administration only). */
+export function isLoopbackHost(host: string): boolean {
+  return LOOPBACK_PEERS.has(host.replace(/^\[|\]$/g, "")) || host === "localhost";
+}
+
 export class FleetService {
-  private server: http.Server | null = null;
+  private servers: http.Server[] = [];
   private reaperTimer: ReturnType<typeof setInterval> | null = null;
   private reaping: Promise<void> | null = null;
   private lastReapOkAt: number | null = null;
@@ -233,37 +245,49 @@ export class FleetService {
   // ─── HTTP ───────────────────────────────────────────────────────
 
   async listen(port = 0, host = "127.0.0.1"): Promise<{ host: string; port: number; url: string }> {
-    const handler = (req: http.IncomingMessage, res: http.ServerResponse) => void this.handle(req, res);
-    this.server = this.opts.tls
-      ? https.createServer({ cert: this.opts.tls.cert, key: this.opts.tls.key, minVersion: "TLSv1.2" }, handler)
-      : http.createServer(handler);
-    await new Promise<void>((resolve, reject) => {
-      this.server!.once("error", reject);
-      this.server!.listen(port, host, () => resolve());
-    });
-    const addr = this.server.address() as AddressInfo;
-    const h = addr.family === "IPv6" ? `[${addr.address}]` : addr.address;
-    return { host: addr.address, port: addr.port, url: `${this.opts.tls ? "https" : "http"}://${h}:${addr.port}` };
+    return this.bind(port, host, !!this.opts.tls);
   }
 
   /**
-   * Graceful shutdown: stop accepting connections, refuse new requests with
-   * 503, wait (up to drainMs) for in-flight requests and any running reaper
-   * pass, then drop remaining connections.
+   * Phase 6: plain-HTTP listener for local administration only. Refuses any
+   * non-loopback address; remote access is HTTPS-only (listen() with TLS).
    */
+  async listenAdmin(port = 0, host = "127.0.0.1"): Promise<{ host: string; port: number; url: string }> {
+    if (!isLoopbackHost(host)) throw new Error(`The plain-HTTP admin listener must bind to loopback (got ${host}).`);
+    return this.bind(port, host, false);
+  }
+
+  private async bind(port: number, host: string, tls: boolean): Promise<{ host: string; port: number; url: string }> {
+    if (!tls && !isLoopbackHost(host)) {
+      throw new Error(`Refusing plain-HTTP binding on non-loopback address ${host}: remote access requires TLS.`);
+    }
+    const handler = (req: http.IncomingMessage, res: http.ServerResponse) => void this.handle(req, res, tls);
+    const server: http.Server = tls
+      ? https.createServer({ cert: this.opts.tls!.cert, key: this.opts.tls!.key, minVersion: "TLSv1.2" }, handler)
+      : http.createServer(handler);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, host, () => resolve());
+    });
+    this.servers.push(server);
+    const addr = server.address() as AddressInfo;
+    const h = addr.family === "IPv6" ? `[${addr.address}]` : addr.address;
+    return { host: addr.address, port: addr.port, url: `${tls ? "https" : "http"}://${h}:${addr.port}` };
+  }
+
   async close(): Promise<void> {
     this.draining = true;
     this.stopReaper();
-    const s = this.server;
-    this.server = null;
-    if (!s) return;
-    const closed = new Promise<void>((r) => s.close(() => r()));
-    s.closeIdleConnections?.();
+    const servers = this.servers;
+    this.servers = [];
+    if (!servers.length) return;
+    const closed = Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
+    for (const s of servers) s.closeIdleConnections?.();
     const deadline = Date.now() + (this.opts.drainMs ?? 10_000);
     while ((this.inFlight > 0 || this.reaping) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 25));
     }
-    s.closeAllConnections?.();
+    for (const s of servers) s.closeAllConnections?.();
     await closed;
   }
 
@@ -433,8 +457,28 @@ export class FleetService {
     return { ...cred, agent: who.agent, dead: false };
   }
 
-  private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handle(req: http.IncomingMessage, res: http.ServerResponse, tls = false): Promise<void> {
     const path = (req.url ?? "/").split("?")[0];
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-content-type-options", "nosniff");
+    if (tls) res.setHeader("strict-transport-security", "max-age=31536000");
+    // Phase 6: browsers may only call from explicitly allowed origins; agents send no Origin.
+    const origin = req.headers.origin;
+    if (origin !== undefined) {
+      if (!(this.opts.allowedOrigins ?? []).includes(origin)) {
+        this.audit("api_origin_denied", null, { path, ip: req.socket.remoteAddress ?? "unknown" });
+        this.send(res, 403, { ok: false, code: "FLEET_ORIGIN_DENIED", reason: "origin not allowed" });
+        return;
+      }
+      res.setHeader("access-control-allow-origin", origin);
+      res.setHeader("vary", "origin");
+      if (req.method === "OPTIONS") {
+        res.setHeader("access-control-allow-methods", "GET, POST");
+        res.setHeader("access-control-allow-headers", `authorization, content-type, ${SIG_HEADERS.ts}, ${SIG_HEADERS.nonce}, ${SIG_HEADERS.sig}`);
+        res.writeHead(204).end();
+        return;
+      }
+    }
     if (req.method === "GET" && path === "/healthz") {
       this.send(res, this.draining ? 503 : 200, {
         ok: !this.draining,
@@ -458,6 +502,11 @@ export class FleetService {
 
   private async handleInner(req: http.IncomingMessage, res: http.ServerResponse, path: string): Promise<void> {
     if (req.method === "GET" && path === "/readyz") {
+      // Detailed readiness is for local administration only.
+      if (!LOOPBACK_PEERS.has(req.socket.remoteAddress ?? "")) {
+        this.send(res, 404, { ok: false, code: "FLEET_NOT_FOUND", reason: "no such endpoint" });
+        return;
+      }
       const r = await this.readiness();
       this.send(res, r.ready ? 200 : 503, { ok: r.ready, ...r });
       return;
@@ -514,6 +563,17 @@ export class FleetService {
         });
       }
     }
+  }
+
+  /** The caller's own reservation; the provisioning key, when sent, must be that reservation's. */
+  private async ownLease(reservationId: string, body: Record<string, unknown>, callerId: string, action: string) {
+    const key = str(body, "provisioningKey", 26, false);
+    const lease = await this.opts.admin.getReservation(reservationId);
+    if (!lease || lease.reservationId !== reservationId || lease.parentAgentId !== callerId || (key && key !== reservationId)) {
+      await this.recordDb("authorization_denied", null, { action, caller: callerId, reservationId });
+      throw new HttpError(403, "FLEET_NOT_AUTHORIZED", "not your reservation");
+    }
+    return lease;
   }
 
   private async route(method: string, path: string, req: http.IncomingMessage, ctx: RequestCtx): Promise<Record<string, unknown>> {
@@ -573,14 +633,28 @@ export class FleetService {
         const caller = await this.authenticate(req, path, ctx);
         const reservationId = str(body, "reservationId", 26);
         const phase = str(body, "phase", 32);
-        if (phase !== "sandbox_created" && phase !== "verifying") throw new HttpError(400, "FLEET_BAD_REQUEST", "unknown phase");
-        const lease = await admin.getReservation(reservationId);
-        if (!lease || lease.reservationId !== reservationId || lease.parentAgentId !== caller.agentId) {
-          await this.recordDb("authorization_denied", null, { action: "provisioning", caller: caller.agentId, reservationId });
-          throw new HttpError(403, "FLEET_NOT_AUTHORIZED", "not your reservation");
+        if (phase !== "sandbox_intent" && phase !== "sandbox_created" && phase !== "verifying") {
+          throw new HttpError(400, "FLEET_BAD_REQUEST", "unknown phase");
+        }
+        const lease = await this.ownLease(reservationId, body, caller.agentId, "provisioning");
+        if (phase === "sandbox_intent") {
+          const intent = await admin.recordSandboxIntent(lease.agentId, str(body, "sandboxName", 64), caller.agentId);
+          return { recorded: true, intent: { sandboxName: intent.sandboxName, sandboxId: intent.sandboxId, attempts: intent.attempts } };
         }
         await admin.reportProvisioning(lease.agentId, phase, str(body, "sandboxId", 128, false) || null, caller.agentId);
         return { recorded: true };
+      }
+
+      case "/v1/replication/reconcile": {
+        // Phase 6: the parent reports what it found when it looked up an
+        // uncertain sandbox by its deterministic name.
+        const caller = await this.authenticate(req, path, ctx);
+        const reservationId = str(body, "reservationId", 26);
+        const outcome = str(body, "outcome", 16);
+        if (outcome !== "found" && outcome !== "absent" && outcome !== "unknown") throw new HttpError(400, "FLEET_BAD_REQUEST", "unknown outcome");
+        await this.ownLease(reservationId, body, caller.agentId, "reconcile");
+        const r = await admin.reconcileProvisioning(reservationId, outcome, str(body, "sandboxId", 128, false) || null, caller.agentId);
+        return { reconciled: true, agentStatus: r.agentStatus ?? null };
       }
 
       case "/v1/capital/propose": {
@@ -682,7 +756,10 @@ export class FleetService {
         const lease = await admin.getReservation(reservationId);
         if (!lease || lease.reservationId !== reservationId) throw new HttpError(404, "FLEET_NOT_FOUND", "unknown reservation");
         if (lease.parentAgentId === caller.agentId) await this.enforceRelease(lease, caller.agentId);
+        const provisioningKey = str(body, "provisioningKey", 26, false);
+        if (provisioningKey && provisioningKey !== reservationId) throw new HttpError(403, "FLEET_NOT_AUTHORIZED", "provisioning key mismatch");
         const result = await admin.activate(lease.agentId, {
+          provisioningKey: provisioningKey || null,
           walletAddress: str(body, "walletAddress", 64),
           sandboxId: str(body, "sandboxId", 128, false) || null,
           runtimeCommit: str(body, "runtimeCommit", 40, false) || null,

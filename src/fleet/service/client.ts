@@ -369,28 +369,44 @@ export class FleetApiClient implements FleetBackend {
   private async claim(reservationId: string, localChildId: string): Promise<ClaimedGrant> {
     try {
       const r = await this.call<{ claimed: ClaimedGrant }>("POST", "/v1/replication/claim", { reservationId, localChildId });
+      const provisioningKey = r.claimed.provisioningKey ?? r.claimed.reservationId ?? reservationId;
       return {
         ...r.claimed,
+        provisioningKey,
         reportProvisioning: async (phase, sandboxId) => {
           // Retried: a sandbox that exists must not go unrecorded.
-          let last: unknown;
-          for (let i = 0; i < 3; i++) {
-            try {
-              await this.call("POST", "/v1/replication/provisioning", { reservationId, phase, sandboxId });
-              return;
-            } catch (err) {
-              last = err;
-              if (err instanceof ApiError && err.status < 500) break;
-              await new Promise((res) => setTimeout(res, 250 * (i + 1)));
-            }
-          }
-          throw last;
+          await this.postRetried("/v1/replication/provisioning", { reservationId, provisioningKey, phase, sandboxId });
+        },
+        recordSandboxIntent: async (sandboxName) => {
+          const out = await this.postRetried<{ intent: { sandboxId: string | null; attempts: number; sandboxName: string } }>(
+            "/v1/replication/provisioning",
+            { reservationId, provisioningKey, phase: "sandbox_intent", sandboxName },
+          );
+          return out.intent;
+        },
+        reconcileProvisioning: async (outcome, sandboxId) => {
+          await this.postRetried("/v1/replication/reconcile", { reservationId, provisioningKey, outcome, sandboxId });
         },
       };
     } catch (err) {
       if (err instanceof ApiError) throw new FleetBypassError(`Replication denied: ${err.message}`);
       throw err;
     }
+  }
+
+  /** POST with up to 3 attempts on network/5xx errors (each attempt is a fresh signed request). */
+  private async postRetried<T = unknown>(path: string, body: Record<string, unknown>): Promise<T> {
+    let last: unknown;
+    for (let i = 0; i < 3; i++) {
+      try {
+        return await this.call<T>("POST", path, body);
+      } catch (err) {
+        last = err;
+        if (err instanceof ApiError && err.status < 500) break;
+        await new Promise((res) => setTimeout(res, 250 * (i + 1)));
+      }
+    }
+    throw last;
   }
 
   private reservationOf(agentId: string): string {
@@ -426,8 +442,10 @@ export class FleetApiClient implements FleetBackend {
     },
   ): Promise<ActivationResult> {
     try {
+      const reservationId = this.reservationOf(agentId);
       return await this.call<ActivationResult>("POST", "/v1/replication/activate", {
-        reservationId: this.reservationOf(agentId),
+        reservationId,
+        provisioningKey: reservationId,
         walletAddress: params.walletAddress,
         sandboxId: params.sandboxId ?? undefined,
         runtimeCommit: params.runtimeCommit ?? undefined,

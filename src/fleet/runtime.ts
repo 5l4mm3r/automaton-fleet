@@ -221,6 +221,10 @@ export interface ChildRuntimeManifest {
   /** Approved build identifier and lockfile hash (Phase 3); required for children. */
   buildId?: string;
   lockfileSha256?: string;
+  /** Phase 6: provisioning key (= reservation id) this child was provisioned under. */
+  provisioningKey?: string;
+  /** Phase 6: DRY_RUN_CHILD — no agent loop, no wallet, no spend authority. */
+  dryRun?: boolean;
 }
 
 // ─── Child-side startup self-check ───────────────────────────────

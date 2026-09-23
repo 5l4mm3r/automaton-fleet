@@ -264,6 +264,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
     });
     return {
       id: result.id || result.sandbox_id,
+      name: typeof result.name === "string" ? result.name : options.name,
       status: result.status || "running",
       region: result.region || "",
       vcpu: result.vcpu || options.vcpu || 1,
@@ -284,6 +285,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
     const sandboxes = Array.isArray(result) ? result : result.sandboxes || [];
     return sandboxes.map((s: any) => ({
       id: s.id || s.sandbox_id,
+      name: typeof s.name === "string" ? s.name : undefined,
       status: s.status || "unknown",
       region: s.region || "",
       vcpu: s.vcpu || 0,

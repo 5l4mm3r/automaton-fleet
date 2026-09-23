@@ -51,8 +51,13 @@
     "fleet:service": "tsx src/fleet/service/main.ts",
     "fleet:doctor": "tsx src/fleet/postgres/cli.ts doctor",
     "fleet:audit-privileges": "tsx src/fleet/postgres/cli.ts audit-privileges",
+    "fleet:migrate-check": "tsx src/fleet/postgres/cli.ts migrate-check",
+    "fleet:verify-runtime": "tsx src/fleet/postgres/cli.ts verify-runtime",
+    "fleet:verify": "tsx src/fleet/postgres/cli.ts doctor --checklist",
+    "fleet:dry-run-child": "tsx src/fleet/postgres/cli.ts dry-run-child",
     "test:deploy": "vitest run src/__tests__/fleet/fleet-phase4.test.ts",
     "test:phase5": "vitest run src/__tests__/fleet/fleet-phase5.test.ts",
+    "test:phase6": "vitest run src/__tests__/fleet/fleet-phase6.test.ts",
     "test:ci": "vitest run --reporter=verbose",
     "clean": "rm -rf dist && pnpm -r clean"
   },

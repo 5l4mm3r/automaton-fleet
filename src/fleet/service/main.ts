@@ -14,6 +14,13 @@
  *                                  FLEET_REMOTE_LISTEN_ENABLED=true AND TLS is configured
  *   FLEET_TLS_CERT_FILE / FLEET_TLS_KEY_FILE   PEM certificate / key (key: 0600, e.g. via
  *                                  LoadCredential=tls.key -> $CREDENTIALS_DIRECTORY/tls.key)
+ *   Phase 6 remote controller (all required together; remote exposure stays OFF by default):
+ *   FLEET_REMOTE_LISTEN_ENABLED    "true" to serve remote children
+ *   FLEET_PUBLIC_HOSTNAME          DNS name children connect to; the certificate must cover it
+ *   FLEET_PUBLIC_LISTEN            HTTPS bind address, e.g. 0.0.0.0:8443. FLEET_API_LISTEN then
+ *                                  stays a loopback plain-HTTP listener for local administration
+ *   FLEET_ALLOWED_ORIGINS          comma-separated browser origins (default: none)
+ *   FLEET_SERVICE_EXPECTED_USER    OS user the service must run as (systemd: automaton-fleet-service)
  *   FLEET_REAPER_INTERVAL_MS       reaper period (default 15000; 0 = off)
  *   FLEET_AUDIT_LOG                optional JSONL audit file (0600)
  *   FLEET_SHUTDOWN_DRAIN_MS        graceful drain window (default 10000)
@@ -27,7 +34,10 @@
  * registry-approved runtime.
  */
 
+import crypto from "crypto";
 import fs from "fs";
+import net from "net";
+import os from "os";
 import { PgFleetStore } from "../postgres/store.js";
 import { PgAgentGateway } from "../postgres/agent-gateway.js";
 import { problemsFor } from "../postgres/privileges.js";
@@ -76,18 +86,87 @@ export function loadTls(e: Record<string, string | undefined>): { cert: Buffer; 
   return { cert: fs.readFileSync(certFile), key: fs.readFileSync(keyFile) };
 }
 
+/**
+ * Phase 6: the certificate must be usable for the public hostname right
+ * now: it covers the hostname, is inside its validity window (with at least
+ * a day left) and matches the private key.
+ */
+export function tlsProblemsForHost(tls: { cert: Buffer | string; key: Buffer | string }, hostname: string, now = Date.now()): string[] {
+  const problems: string[] = [];
+  let x509: crypto.X509Certificate;
+  try {
+    x509 = new crypto.X509Certificate(tls.cert);
+  } catch (err) {
+    return [`certificate unreadable: ${err instanceof Error ? err.message : String(err)}`];
+  }
+  if (!(net.isIP(hostname) ? x509.checkIP(hostname) : x509.checkHost(hostname))) problems.push(`certificate does not cover ${hostname}`);
+  if (Date.parse(x509.validFrom) > now) problems.push(`certificate not valid before ${x509.validFrom}`);
+  if (Date.parse(x509.validTo) < now + 86_400_000) problems.push(`certificate expires ${x509.validTo}`);
+  try {
+    if (!x509.checkPrivateKey(crypto.createPrivateKey(tls.key))) problems.push("private key does not match the certificate");
+  } catch {
+    problems.push("private key unreadable");
+  }
+  return problems;
+}
+
+const HOSTNAME_RE = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+
+export interface RemoteConfig {
+  hostname: string;
+  publicListen: { host: string; port: number } | null;
+  allowedOrigins: string[];
+}
+
+/** Phase 6 remote-controller configuration; throws on any unsafe combination. */
+export function loadRemoteConfig(e: Record<string, string | undefined>, tls: { cert: Buffer | string; key: Buffer | string } | null): RemoteConfig | null {
+  const remote = e.FLEET_REMOTE_LISTEN_ENABLED?.trim().toLowerCase() === "true";
+  const publicListenRaw = e.FLEET_PUBLIC_LISTEN?.trim();
+  const origins = (e.FLEET_ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim()).filter(Boolean);
+  for (const o of origins) {
+    if (!/^https:\/\/[^/\s]+$/.test(o)) throw new Error(`FLEET_ALLOWED_ORIGINS entries must be https origins (got ${o}).`);
+  }
+  if (!remote) {
+    if (publicListenRaw) throw new Error("FLEET_PUBLIC_LISTEN requires FLEET_REMOTE_LISTEN_ENABLED=true.");
+    return null;
+  }
+  if (!tls) throw new Error("FLEET_REMOTE_LISTEN_ENABLED=true requires FLEET_TLS_CERT_FILE and FLEET_TLS_KEY_FILE.");
+  const hostname = e.FLEET_PUBLIC_HOSTNAME?.trim() ?? "";
+  if (!HOSTNAME_RE.test(hostname)) throw new Error("FLEET_REMOTE_LISTEN_ENABLED=true requires FLEET_PUBLIC_HOSTNAME (a DNS name).");
+  const problems = tlsProblemsForHost(tls, hostname);
+  if (problems.length) throw new Error(`Refusing remote listener: ${problems.join("; ")}`);
+  return { hostname, publicListen: publicListenRaw ? parseListen(publicListenRaw, { remoteAllowed: true }) : null, allowedOrigins: origins };
+}
+
+/** Refuse to run as root, or as anyone but the expected dedicated service user. */
+export function serviceUserProblem(e: Record<string, string | undefined>, who: { uid: number; username: string } = currentUser()): string | null {
+  if (who.uid === 0) return "The fleet service must not run as root.";
+  const expected = e.FLEET_SERVICE_EXPECTED_USER?.trim();
+  if (expected && who.username !== expected) return `The fleet service must run as ${expected} (running as ${who.username}).`;
+  return null;
+}
+
+function currentUser(): { uid: number; username: string } {
+  const u = os.userInfo();
+  return { uid: u.uid, username: u.username };
+}
+
 export interface StartedFleetService {
   service: FleetService;
   url: string;
+  /** Phase 6: https://<FLEET_PUBLIC_HOSTNAME>:<port> when the remote listener is enabled. */
+  publicUrl?: string | null;
   /** Graceful stop: drain, stop reaper, close pools. Idempotent. */
   stop(): Promise<void>;
 }
 
 export async function startFleetServiceFromEnv(
   e: Record<string, string | undefined>,
-  opts: { log?: Logger; installSignalHandlers?: boolean } = {},
+  opts: { log?: Logger; installSignalHandlers?: boolean; user?: { uid: number; username: string } } = {},
 ): Promise<StartedFleetService> {
   const log = opts.log ?? createJsonLogger();
+  const userProblem = serviceUserProblem(e, opts.user);
+  if (userProblem) throw new Error(userProblem);
   if (e.FLEET_ADMIN_DATABASE_URL?.trim()) {
     throw new Error("The fleet service must not hold FLEET_ADMIN_DATABASE_URL (admin credentials are for the operator CLI only).");
   }
@@ -101,7 +180,9 @@ export async function startFleetServiceFromEnv(
   const tls = loadTls(e);
   const remoteRequested = e.FLEET_REMOTE_LISTEN_ENABLED?.trim().toLowerCase() === "true";
   if (remoteRequested && !tls) throw new Error("FLEET_REMOTE_LISTEN_ENABLED=true requires FLEET_TLS_CERT_FILE and FLEET_TLS_KEY_FILE.");
-  const listen = parseListen(e.FLEET_API_LISTEN, { remoteAllowed: remoteRequested && !!tls });
+  const remote = loadRemoteConfig(e, tls);
+  // With a separate public HTTPS listener, FLEET_API_LISTEN is the loopback plain-HTTP admin listener.
+  const listen = parseListen(e.FLEET_API_LISTEN, { remoteAllowed: remoteRequested && !!tls && !remote?.publicListen });
   const releaseProblem = runtimeReleaseProblem(e);
   const release = loadRuntimeRelease(e);
 
@@ -158,6 +239,7 @@ export async function startFleetServiceFromEnv(
       audit: auditSink,
       release,
       tls: tls ?? undefined,
+      allowedOrigins: remote?.allowedOrigins ?? [],
       readinessChecks: async (): Promise<Record<string, ReadinessCheck>> => {
         if (Date.now() - privCache.at > 60_000) {
           const a = await controller.auditPrivileges({ agentRoles: [agentRole, userOf(agentUrl)!], serviceRoles: [serviceRole, who.user] });
@@ -166,10 +248,19 @@ export async function startFleetServiceFromEnv(
         return { privileges: privCache.problems.length ? { ok: false, detail: privCache.problems.join("; ") } : { ok: true } };
       },
     });
-    const { url } = await service.listen(listen.port, listen.host);
+    let url: string;
+    let publicUrl: string | null = null;
+    if (remote?.publicListen) {
+      url = (await service.listenAdmin(listen.port, listen.host)).url;
+      const pub = await service.listen(remote.publicListen.port, remote.publicListen.host);
+      publicUrl = `https://${remote.hostname}:${pub.port}`;
+    } else {
+      url = (await service.listen(listen.port, listen.host)).url;
+    }
     service.startReaper();
     log("info", "service_started", {
       url,
+      publicUrl,
       dbUser: who.user,
       realReplicationEnabled,
       runtimeRelease: release ? `${release.repo}@${release.commit}` : null,
@@ -204,7 +295,7 @@ export async function startFleetServiceFromEnv(
       process.on("SIGTERM", () => onSignal("SIGTERM"));
       process.on("SIGINT", () => onSignal("SIGINT"));
     }
-    return { service, url, stop };
+    return { service, url, publicUrl, stop };
   } catch (err) {
     await closePools();
     throw err;

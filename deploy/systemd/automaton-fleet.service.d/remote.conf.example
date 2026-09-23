@@ -1,0 +1,19 @@
+# /etc/systemd/system/automaton-fleet.service.d/remote.conf — Phase 6 remote HTTPS.
+# NOT installed by any script. Install only after:
+#   - DNS for FLEET_PUBLIC_HOSTNAME points at this host
+#   - /etc/automaton-fleet/tls/fleet.crt (0644) and fleet.key (root:root 0600) exist
+#     and cover the hostname (pnpm fleet:verify checks this)
+#   - the firewall allows ONLY 443/tcp inbound (deploy/firewall/fleet-firewall.sh)
+#   - runtime.env sets FLEET_REMOTE_LISTEN_ENABLED=true, FLEET_PUBLIC_HOSTNAME,
+#     FLEET_PUBLIC_LISTEN=0.0.0.0:443, FLEET_PUBLIC_URL, FLEET_TLS_CERT_FILE
+# The service then serves HTTPS on 443 and keeps plain HTTP on 127.0.0.1:8787
+# for local administration only; plain HTTP off loopback is refused in code.
+[Service]
+LoadCredential=tls.key:/etc/automaton-fleet/tls/fleet.key
+# Inbound HTTPS from anywhere (the firewall narrows it to 443/tcp);
+# PostgreSQL/Redis stay loopback-only and are never proxied.
+IPAddressDeny=
+IPAddressAllow=any
+# Bind 443 without root: only this one capability.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE

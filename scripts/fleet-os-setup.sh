@@ -9,6 +9,7 @@
 #   user   automaton-fleet-service        system, nologin; runs the fleet service
 #   user   automaton-agent                runs local agent runtimes; in NO fleet group
 #   /etc/automaton-fleet/                 root:root 0755
+#     tls/         root:root 0700                    Phase 6 certificate + key (empty; remote stays disabled)
 #     admin.env    root:automaton-fleet-admin 0640   FLEET_ADMIN_DATABASE_URL (moved from repo .env.fleet)
 #     service.env  root:root 0600                    FLEET_SERVICE_DATABASE_URL, FLEET_AGENT_DATABASE_URL
 #                                                    (fresh hex passwords; read by systemd LoadCredential only)
@@ -62,8 +63,9 @@ id automaton-agent >/dev/null 2>&1 || run useradd --user-group --create-home --h
   --shell /usr/sbin/nologin --comment "Automaton agent runtime" automaton-agent
 run chmod 0700 /home/automaton-agent
 
-say "2. Secret directory"
+say "2. Secret directory (+ tls/ for the Phase 6 certificate; key delivered by LoadCredential only)"
 run install -d -m 0755 -o root -g root "$ETC"
+run install -d -m 0700 -o root -g root "$ETC/tls"
 
 say "3. admin.env (operator credential, moved from repo .env.fleet)"
 if [[ -f "$ETC/admin.env" ]]; then

@@ -3,6 +3,10 @@
 #
 #   scripts/fleet-deploy-release.sh build            # as the operator (no sudo): clean frozen build of the
 #                                                    # pinned commit, verified against runtime.env
+#   scripts/fleet-deploy-release.sh build --source <git dir>
+#                                                    # same, but fetch the pinned commit from a local
+#                                                    # clone (before the fork is published); the commit,
+#                                                    # lockfile hash and build id are verified identically
 #   sudo scripts/fleet-deploy-release.sh install     # copies the verified build to
 #                                                    # /opt/automaton-fleet/releases/<commit> (root-owned,
 #                                                    # read-only), re-verifies, switches `current`
@@ -12,14 +16,19 @@
 # immutable runtime children are provisioned with. Dependency install
 # scripts never run as root (build happens as the operator).
 set -euo pipefail
-MODE="${1:?usage: fleet-deploy-release.sh build|install}"
+MODE="${1:?usage: fleet-deploy-release.sh build [--source DIR]|install}"
+SOURCE=""
+[[ "${2:-}" == "--source" ]] && SOURCE="$(cd "${3:?--source needs a directory}" && pwd)"
 RUNTIME_ENV="${FLEET_RUNTIME_ENV_FILE:-/etc/automaton-fleet/runtime.env}"
 OPT=/opt/automaton-fleet
 get() { sed -n "s/^$1=//p" "$RUNTIME_ENV" | tail -1; }
 REPO_URL="$(get FLEET_RUNTIME_REPO)"; COMMIT="$(get FLEET_RUNTIME_COMMIT)"
 BUILD_ID="$(get FLEET_RUNTIME_BUILD_ID)"; LOCK="$(get FLEET_RUNTIME_LOCKFILE_SHA256)"
-[[ "$COMMIT" =~ ^[0-9a-f]{40}$ && "$BUILD_ID" =~ ^[0-9a-f]{64}$ && "$LOCK" =~ ^[0-9a-f]{64}$ && "$REPO_URL" == https://* ]] ||
-  { echo "runtime.env does not pin a complete release (repo/commit/build id/lockfile)" >&2; exit 1; }
+[[ "$COMMIT" =~ ^[0-9a-f]{40}$ && "$BUILD_ID" =~ ^[0-9a-f]{64}$ && "$LOCK" =~ ^[0-9a-f]{64}$ ]] ||
+  { echo "runtime.env does not pin a complete release (commit/build id/lockfile)" >&2; exit 1; }
+# The repository must be pinned too, except for a local-source build made before the fork is published.
+[[ "$REPO_URL" == https://* || ( "$MODE" == build && -n "$SOURCE" ) || "$MODE" == install ]] ||
+  { echo "runtime.env does not pin FLEET_RUNTIME_REPO (https); use 'build --source <clone>' until the fork is published" >&2; exit 1; }
 
 identity() { # <dir> -> "buildId lockfileSha256" computed by the tree's own compiled CLI
   (cd "$1" && node dist/fleet/postgres/cli.js build-identity .) |
@@ -32,8 +41,12 @@ case "$MODE" in
     STAGE="${XDG_CACHE_HOME:-$HOME/.cache}/automaton-fleet/stage/$COMMIT"
     rm -rf "$STAGE"; mkdir -p "$STAGE"
     git init -q "$STAGE"; cd "$STAGE"
-    git remote add origin "$REPO_URL"
-    git fetch -q --depth 1 origin "$COMMIT"
+    [[ -n "$REPO_URL" ]] && git remote add origin "$REPO_URL"
+    if [[ -n "$SOURCE" ]]; then
+      git fetch -q "$SOURCE" "$COMMIT"   # objects from the local clone; origin still names the pinned repo
+    else
+      git fetch -q --depth 1 origin "$COMMIT"
+    fi
     git checkout -q --detach "$COMMIT"
     test "$(git rev-parse HEAD)" = "$COMMIT"
     echo "$LOCK  pnpm-lock.yaml" | sha256sum -c --quiet -
