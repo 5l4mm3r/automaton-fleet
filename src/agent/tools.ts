@@ -83,6 +83,11 @@ const FORBIDDEN_COMMAND_PATTERNS = [
   /(DISABLE\s+TRIGGER|session_replication_role|ALTER\s+TABLE\s+(["'`]?\w+["'`]?\.)?["'`]?fleet_|DROP\s+(SCHEMA|FUNCTION))/i,
   /\bfleet:(admin|migrate)\b|fleet\/postgres\/cli/,
   /\b(FLEET_RUNTIME_REPO|FLEET_RUNTIME_COMMIT|FLEET_PG_SCHEMA|DATABASE_URL)\s*=/,
+  // Phase 3: privileged fleet secrets, service internals, DB role changes
+  /\.env\.fleet|fleet-credentials\.json|\/proc\/[^\s]*\/environ/,
+  /\b(FLEET_API_URL|FLEET_CREDENTIALS_FILE|FLEET_[A-Z_]*DATABASE_URL|FLEET_AGENT_ROLE)\s*=/,
+  /\bfleet:service\b|fleet\/service\/(main|server)/,
+  /\b(CREATE|ALTER|DROP)\s+ROLE\b|\bSET\s+(SESSION\s+AUTHORIZATION|ROLE)\b|\bSECURITY\s+DEFINER\b/i,
   // Safety infrastructure modification via shell
   /sed\s+.*injection-defense/,
   /sed\s+.*self-mod\/code/,
@@ -1648,17 +1653,24 @@ Model: ${ctx.inference.getDefaultModel()}
         // fleet registry, which enforces FleetPolicy and the global
         // living-agent cap and issues the single-use grant spawnChild()
         // requires. No shared registry => replication fails closed.
-        const { requestSharedReplication } = await import("../fleet/shared.js");
+        const { requestSharedReplication, activeFleetServiceUrl } = await import("../fleet/shared.js");
+        const { deliverChildCredential } = await import("../replication/spawn.js");
         const requestSpawn = () =>
-          requestSharedReplication(ctx, { name: genesis.name }, (grant) =>
-            spawnChild(
-              ctx.conway,
-              ctx.identity,
-              ctx.db,
-              genesis,
-              new ChildLifecycle(ctx.db.raw),
-              grant,
-            ),
+          requestSharedReplication(
+            ctx,
+            { name: genesis.name },
+            (grant) =>
+              spawnChild(
+                ctx.conway,
+                ctx.identity,
+                ctx.db,
+                genesis,
+                new ChildLifecycle(ctx.db.raw),
+                grant,
+              ),
+            undefined,
+            (child, credential) =>
+              deliverChildCredential(ctx.conway, child.sandboxId, credential, activeFleetServiceUrl()),
           );
 
         let outcome;

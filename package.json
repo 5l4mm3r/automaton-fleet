@@ -48,6 +48,7 @@
     "test:fleet": "vitest run src/__tests__/fleet",
     "fleet:migrate": "tsx src/fleet/postgres/cli.ts migrate",
     "fleet:admin": "tsx src/fleet/postgres/cli.ts",
+    "fleet:service": "tsx src/fleet/service/main.ts",
     "test:ci": "vitest run --reporter=verbose",
     "clean": "rm -rf dist && pnpm -r clean"
   },

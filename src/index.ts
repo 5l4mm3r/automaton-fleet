@@ -32,6 +32,7 @@ import { createDefaultRules } from "./agent/policy-rules/index.js";
 import { loadFleetConfig } from "./fleet/index.js";
 import { closeActiveSharedFleet, getSharedFleetForContext } from "./fleet/shared.js";
 import { readOwnCommit, readOwnVersion, runningRuntimeDir, verifyOwnRuntime } from "./fleet/runtime.js";
+import { findPrivilegedEnv, scrubPrivilegedEnv } from "./fleet/secrets.js";
 import type { AutomatonIdentity, AgentState, Skill, SocialClientInterface } from "./types.js";
 import { DEFAULT_TREASURY_POLICY } from "./types.js";
 import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observability/logger.js";
@@ -45,6 +46,23 @@ const VERSION = "0.2.1";
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+
+  // ─── Privileged secret isolation (fleet Phase 3) ────────────
+  // An automaton must never hold fleet-controller DB credentials, owner
+  // wallet credentials, controller signing secrets or privileged API keys.
+  // Its shell tools inherit its environment, and /proc/<pid>/environ keeps
+  // the original environment even after scrubbing — so a running agent
+  // refuses to start with them; other commands scrub them.
+  const privileged = findPrivilegedEnv(process.env);
+  if (privileged.length > 0 && args.includes("--run")) {
+    logger.error(
+      `Refusing to start: privileged fleet/owner secrets are present in the agent environment (${privileged.join(", ")}). ` +
+        "Agents reach the fleet registry only through FLEET_API_URL and their own credential file. " +
+        "Start the automaton without these variables (do not source .env.fleet).",
+    );
+    process.exit(1);
+  }
+  scrubPrivilegedEnv(process.env);
 
   // ─── CLI Commands ────────────────────────────────────────────
 
@@ -326,13 +344,23 @@ async function run(): Promise<void> {
     process.exit(1);
   }
 
-  // Shared (PostgreSQL) fleet registry: register/attach, heartbeat. If it is
-  // unreachable the agent keeps running; replication fails closed.
+  // Shared fleet registry, reached only through the fleet service with this
+  // agent's own credential (never DB credentials): attach, heartbeat. If it
+  // is unreachable the agent keeps running; replication fails closed. If the
+  // registry reports this agent dead (reaped after missed heartbeats, or
+  // marked by the operator) its slot is already released, so it shuts down.
   const sharedFleet = await getSharedFleetForContext({ identity, config, conway }, fleetConfig, {
     selfAgentId: selfCheck.manifest?.agentId ?? null,
     runtimeVersion: readOwnVersion(runtimeDir),
     runtimeCommit: selfCheck.manifest?.commit ?? readOwnCommit(runtimeDir),
-  }).catch(() => null);
+    onDead: (status) => {
+      logger.error(`[${new Date().toISOString()}] Fleet registry marked this automaton ${status}; shutting down.`);
+      process.kill(process.pid, "SIGTERM");
+    },
+  }).catch((err) => {
+    logger.warn(`Fleet service not usable: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  });
   const fleetSnap = sharedFleet?.snapshot();
   sharedFleet?.startHeartbeat();
   logger.info(

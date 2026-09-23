@@ -15,6 +15,7 @@
 import type { Database as DatabaseType } from "better-sqlite3";
 import { FleetBypassError, FleetRegistry } from "./registry.js";
 import { loadRuntimePin, type RuntimePin } from "./runtime.js";
+import { loadRuntimeBuild, newAttestationNonce, type RuntimeBuild } from "./attestation.js";
 import type { FleetSpawnGrant } from "./types.js";
 
 export interface ClaimedGrant {
@@ -23,6 +24,11 @@ export interface ClaimedGrant {
   generation: number;
   /** Runtime the child must run, as approved for this reservation. */
   runtime: RuntimePin | null;
+  /** Build identity the child must prove before activation (Phase 3). */
+  expectedBuild: RuntimeBuild | null;
+  /** Single-use attestation nonce issued at claim time (Phase 3). */
+  nonce: string | null;
+  reservationId: string | null;
   backend: "postgres" | "sqlite";
 }
 
@@ -62,6 +68,9 @@ export async function claimFleetGrant(
     parentAgentId: agent.parentAgentId,
     generation: agent.generation,
     runtime: loadRuntimePin(),
+    expectedBuild: loadRuntimeBuild(),
+    nonce: newAttestationNonce(),
+    reservationId: agent.id,
     backend: "sqlite",
   };
 }

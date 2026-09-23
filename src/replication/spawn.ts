@@ -20,14 +20,27 @@ import { propagateConstitution } from "./constitution.js";
 import { claimFleetGrant, type ClaimedGrant } from "../fleet/grants.js";
 import type { FleetSpawnGrant } from "../fleet/types.js";
 import {
+  CHILD_RUNTIME_DIR,
   CHILD_RUNTIME_MANIFEST,
+  FleetRuntimeError,
   buildRuntimeInstallCommand,
   resolveChildRuntime,
   verifyChildRuntime,
   type ChildRuntimeManifest,
   type RuntimePin,
-  type RuntimeVerification,
 } from "../fleet/runtime.js";
+import {
+  ATTEST_SCRIPT,
+  checkAttestation,
+  parseAttestation,
+  validateRuntimeBuild,
+  type RuntimeAttestation,
+  type RuntimeBuild,
+} from "../fleet/attestation.js";
+import type { FleetCredential } from "../fleet/types.js";
+
+/** Where a child finds its own fleet registry credential (mode 0600, no other secrets). */
+export const CHILD_FLEET_CREDENTIALS = "/root/.automaton/fleet-credentials.json";
 
 /** Valid Conway sandbox pricing tiers. */
 const SANDBOX_TIERS = [
@@ -68,9 +81,11 @@ export function isValidWalletAddress(address: string, chainType?: ChainType): bo
  * unused grant throws FleetBypassError.
  *
  * The child runs the pinned fleet runtime carried by the grant (never the
- * upstream repository, never a caller-chosen repo/commit). The installed
- * commit is verified in the child sandbox before the child is given a
- * genesis config or wallet; any mismatch throws FleetRuntimeError.
+ * upstream repository, never a caller-chosen repo/commit), built with
+ * `pnpm install --frozen-lockfile` after its lockfile hash is checked. The
+ * installed tree is attested (parent-supplied verifier, reservation nonce,
+ * expected build identifier) before the child is given a genesis config or
+ * wallet; any mismatch throws FleetRuntimeError.
  */
 export async function spawnChild(
   conway: ConwayClient,
@@ -103,12 +118,17 @@ export async function spawnChild(
   // Fleet gate: consume the controller-issued slot reservation. Must happen
   // before any external side effect (sandbox creation, lifecycle rows).
   const claimed = await claimFleetGrant(fleetGrant, childId, db.raw);
-  // Pinned runtime from the reservation; refuses before any sandbox exists.
+  // Pinned runtime and approved build from the reservation; refuses before any sandbox exists.
   const runtime = resolveChildRuntime(claimed.runtime);
+  const build = validateRuntimeBuild(claimed.expectedBuild?.buildId, claimed.expectedBuild?.lockfileSha256);
+  if (!build || !claimed.nonce) {
+    throw new FleetRuntimeError("No approved runtime build identity for this reservation; refusing to provision child.");
+  }
+  const expected = { runtime, build, nonce: claimed.nonce };
 
   // If no lifecycle provided, use legacy path
   if (!lifecycle) {
-    return spawnChildLegacy(conway, identity, db, genesis, childId, claimed, runtime);
+    return spawnChildLegacy(conway, identity, db, genesis, childId, claimed, expected);
   }
 
   try {
@@ -153,12 +173,12 @@ export async function spawnChild(
       `sandbox ${sandbox.id} created`,
     );
 
-    // Install and verify the pinned fleet runtime (on the CHILD sandbox)
-    const verified = await installPinnedRuntime(childConway, runtime);
+    // Install, verify and attest the pinned fleet runtime (on the CHILD sandbox)
+    const verified = await installPinnedRuntime(childConway, expected);
 
     // Write genesis configuration (on the CHILD sandbox)
     await childConway.exec("mkdir -p /root/.automaton", 10_000);
-    await writeRuntimeManifest(childConway, claimed, runtime);
+    await writeRuntimeManifest(childConway, claimed, runtime, build);
     const genesisJson = JSON.stringify(
       {
         name: genesis.name,
@@ -239,6 +259,7 @@ export async function spawnChild(
       createdAt: new Date().toISOString(),
       runtimeCommit: verified.commit,
       runtimeVersion: verified.version,
+      attestation: verified,
     };
 
     return child;
@@ -271,8 +292,9 @@ async function spawnChildLegacy(
   genesis: GenesisConfig,
   childId: string,
   claimed: ClaimedGrant,
-  runtime: RuntimePin,
+  expected: PinnedExpectation,
 ): Promise<ChildAutomaton> {
+  const { runtime, build } = expected;
   let sandboxId: string | undefined;
 
   // Get child sandbox memory from config (default 1024MB)
@@ -292,9 +314,9 @@ async function spawnChildLegacy(
     // Create a scoped client so all exec/writeFile calls target the CHILD sandbox
     const childConway = conway.createScopedClient(sandbox.id);
 
-    const verified = await installPinnedRuntime(childConway, runtime);
+    const verified = await installPinnedRuntime(childConway, expected);
     await childConway.exec("mkdir -p /root/.automaton", 10_000);
-    await writeRuntimeManifest(childConway, claimed, runtime);
+    await writeRuntimeManifest(childConway, claimed, runtime, build);
 
     const legacyGenesisJson = JSON.stringify(
       {
@@ -341,6 +363,7 @@ async function spawnChildLegacy(
       chainType: legacyParentChainType as any,
       runtimeCommit: verified.commit,
       runtimeVersion: verified.version,
+      attestation: verified,
     };
 
     db.insertChild(child);
@@ -360,26 +383,84 @@ async function spawnChildLegacy(
   }
 }
 
-/**
- * Install exactly the pinned fleet runtime in the child sandbox and verify
- * HEAD, origin and pristine sources. Throws FleetRuntimeError on mismatch.
- */
-async function installPinnedRuntime(childConway: ConwayClient, runtime: RuntimePin): Promise<RuntimeVerification> {
-  await childConway.exec("apt-get update -qq && apt-get install -y -qq nodejs npm git curl", 120_000);
-  await childConway.exec(buildRuntimeInstallCommand(runtime), 300_000);
-  return verifyChildRuntime((cmd, timeout) => childConway.exec(cmd, timeout), runtime);
+interface PinnedExpectation {
+  runtime: RuntimePin;
+  build: RuntimeBuild;
+  nonce: string;
 }
 
-/** Tell the child which fleet identity and runtime it was provisioned with. No secrets. */
-async function writeRuntimeManifest(childConway: ConwayClient, claimed: ClaimedGrant, runtime: RuntimePin): Promise<void> {
+/**
+ * Install exactly the pinned fleet runtime in the child sandbox (frozen
+ * pnpm lockfile), verify HEAD/origin/pristine sources, then attest the
+ * installed tree with the parent-supplied verifier and the reservation's
+ * nonce. Throws FleetRuntimeError on any mismatch. The controller re-checks
+ * the attestation before activation; this early check just fails fast.
+ */
+async function installPinnedRuntime(childConway: ConwayClient, expected: PinnedExpectation): Promise<RuntimeAttestation> {
+  const { runtime, build, nonce } = expected;
+  await childConway.exec("apt-get update -qq && apt-get install -y -qq nodejs npm git curl", 120_000);
+  const install = await childConway.exec(buildRuntimeInstallCommand(runtime, build), 600_000);
+  if (typeof install?.exitCode === "number" && install.exitCode !== 0) {
+    throw new FleetRuntimeError(
+      `Child runtime install failed (exit ${install.exitCode}); lockfile integrity or frozen install could not be verified.`,
+    );
+  }
+  const git = await verifyChildRuntime((cmd, timeout) => childConway.exec(cmd, timeout), runtime);
+  const attestation = await attestChildRuntime(childConway, nonce);
+  checkAttestation(attestation, { ...runtime, ...build, nonce });
+  return { ...attestation, version: attestation.version ?? git.version };
+}
+
+/** Run the parent's verifier in the child sandbox. Nothing from the child's build is executed. */
+export async function attestChildRuntime(childConway: ConwayClient, nonce: string): Promise<RuntimeAttestation> {
+  const script = `/tmp/fleet-attest-${nonce.slice(0, 16)}.cjs`;
+  let stdout: string;
+  try {
+    await childConway.writeFile(script, ATTEST_SCRIPT);
+    stdout = (await childConway.exec(`node ${script} ${CHILD_RUNTIME_DIR} ${nonce}; rm -f ${script}`, 120_000)).stdout || "";
+  } catch (err) {
+    throw new FleetRuntimeError(`Child runtime could not be attested: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return parseAttestation(stdout);
+}
+
+/** Tell the child which fleet identity, runtime and build it was provisioned with. No secrets. */
+async function writeRuntimeManifest(
+  childConway: ConwayClient,
+  claimed: ClaimedGrant,
+  runtime: RuntimePin,
+  build: RuntimeBuild,
+): Promise<void> {
   const manifest: ChildRuntimeManifest = {
     agentId: claimed.agentId,
     parentAgentId: claimed.parentAgentId,
     generation: claimed.generation,
     repo: runtime.repo,
     commit: runtime.commit,
+    buildId: build.buildId,
+    lockfileSha256: build.lockfileSha256,
   };
   await childConway.writeFile(CHILD_RUNTIME_MANIFEST, JSON.stringify(manifest, null, 2));
+}
+
+/**
+ * Deliver a child's own registry credential into its sandbox (0600). The
+ * child uses it to heartbeat and to call the fleet API; it grants nothing
+ * beyond acting as that child.
+ */
+export async function deliverChildCredential(
+  conway: ConwayClient,
+  sandboxId: string,
+  credential: FleetCredential,
+  apiUrl: string | null = null,
+): Promise<void> {
+  const childConway = conway.createScopedClient(sandboxId);
+  await childConway.exec("mkdir -p /root/.automaton && umask 077 && : > " + CHILD_FLEET_CREDENTIALS, 10_000);
+  await childConway.writeFile(
+    CHILD_FLEET_CREDENTIALS,
+    JSON.stringify({ agentId: credential.agentId, token: credential.token, apiUrl }, null, 2),
+  );
+  await childConway.exec(`chmod 600 ${CHILD_FLEET_CREDENTIALS}`, 10_000);
 }
 
 /**

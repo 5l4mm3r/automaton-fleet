@@ -7,6 +7,7 @@
  */
 
 import { execSync } from "child_process";
+import { agentChildEnv } from "../fleet/secrets.js";
 import fs from "fs";
 import nodePath from "path";
 import type {
@@ -115,6 +116,8 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024,
         cwd: process.env.HOME || "/root",
+        // Never hand privileged fleet/owner secrets to agent shell commands.
+        env: agentChildEnv(),
       });
       return { stdout: stdout || "", stderr: "", exitCode: 0 };
     } catch (err: any) {

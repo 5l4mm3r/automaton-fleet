@@ -16,6 +16,7 @@
 import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import { computeBuildIdentity, validateRuntimeBuild, type BuildIdentity, type RuntimeBuild } from "./attestation.js";
 
 export const CHILD_RUNTIME_DIR = "/root/automaton";
 export const CHILD_RUNTIME_MANIFEST = "/root/.automaton/fleet-runtime.json";
@@ -119,12 +120,21 @@ function sq(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/** pnpm version children build with; must equal package.json "packageManager" (tested). */
+export const CHILD_PNPM_VERSION = "10.28.1";
+
 /**
- * Shell command that installs exactly `pin` in the child sandbox. Fetches the
- * single commit (no branch/tag resolution) and checks out a detached HEAD.
+ * Shell command that installs exactly `pin` in the child sandbox and builds
+ * it reproducibly. Fetches the single commit (no branch/tag resolution),
+ * checks out a detached HEAD, verifies pnpm-lock.yaml against the approved
+ * lockfile hash BEFORE installing anything, then runs
+ * `pnpm install --frozen-lockfile` with the pinned pnpm version. Any
+ * mismatch aborts the chain (&&), so nothing unverified gets built.
  */
-export function buildRuntimeInstallCommand(pin: RuntimePin): string {
+export function buildRuntimeInstallCommand(pin: RuntimePin, build: RuntimeBuild): string {
   const safe = resolveChildRuntime(pin);
+  const b = validateRuntimeBuild(build?.buildId, build?.lockfileSha256);
+  if (!b) throw new FleetRuntimeError("No approved runtime build identity; refusing to install child runtime.");
   const dir = CHILD_RUNTIME_DIR;
   return [
     `rm -rf ${dir}`,
@@ -134,8 +144,12 @@ export function buildRuntimeInstallCommand(pin: RuntimePin): string {
     `git fetch -q --depth 1 origin ${safe.commit}`,
     `git checkout -q --detach ${safe.commit}`,
     `test "$(git rev-parse HEAD)" = ${sq(safe.commit)}`,
-    `npm install --no-audit --no-fund`,
-    `npm run build`,
+    `test -f pnpm-lock.yaml`,
+    `echo ${sq(`${b.lockfileSha256}  pnpm-lock.yaml`)} | sha256sum -c --quiet -`,
+    `(corepack enable pnpm >/dev/null 2>&1 && corepack prepare pnpm@${CHILD_PNPM_VERSION} --activate >/dev/null 2>&1 || npm install -g --no-audit --no-fund pnpm@${CHILD_PNPM_VERSION})`,
+    `test "$(pnpm --version)" = ${sq(CHILD_PNPM_VERSION)}`,
+    `CI=true pnpm install --frozen-lockfile`,
+    `pnpm build`,
   ].join(" && ");
 }
 
@@ -204,6 +218,9 @@ export interface ChildRuntimeManifest {
   generation: number;
   repo: string;
   commit: string;
+  /** Approved build identifier and lockfile hash (Phase 3); required for children. */
+  buildId?: string;
+  lockfileSha256?: string;
 }
 
 // ─── Child-side startup self-check ───────────────────────────────
@@ -222,6 +239,7 @@ export function verifyOwnRuntime(opts: {
   manifestPath: string;
   runtimeDir: string;
   git?: (args: string[]) => string;
+  computeIdentity?: (dir: string) => BuildIdentity;
 }): SelfCheckResult {
   const git = opts.git ?? ((args: string[]) =>
     execFileSync("git", ["-C", opts.runtimeDir, ...args], { encoding: "utf8", timeout: 10_000 }).trim());
@@ -247,9 +265,30 @@ export function verifyOwnRuntime(opts: {
     const origin = normalizeRepoUrl(git(["remote", "get-url", "origin"]));
     if (head !== pin.pin.commit) return { ok: false, reason: `Running commit ${head} does not match pinned ${pin.pin.commit}.` };
     if (origin !== pin.pin.repo) return { ok: false, reason: "Running runtime origin does not match the pinned fleet repo." };
-    git(["diff", "--quiet", "HEAD", "--", "src", "package.json", "constitution.md"]);
+    git(["diff", "--quiet", "HEAD", "--", "src", "package.json", "constitution.md", "pnpm-lock.yaml"]);
   } catch (err) {
     return { ok: false, reason: `Runtime cannot be verified: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}` };
+  }
+
+  // Lockfile integrity and build identity: the running tree must be exactly
+  // the approved build. A child without these expectations cannot prove it.
+  const expected = validateRuntimeBuild(manifest.buildId, manifest.lockfileSha256);
+  if (!expected) {
+    return opts.isChild
+      ? { ok: false, reason: "Fleet runtime manifest has no approved build identity; lockfile integrity cannot be verified." }
+      : { ok: true, manifest };
+  }
+  let actual: BuildIdentity;
+  try {
+    actual = (opts.computeIdentity ?? computeBuildIdentity)(opts.runtimeDir);
+  } catch (err) {
+    return { ok: false, reason: `Lockfile integrity cannot be verified: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (actual.lockfileSha256 !== expected.lockfileSha256) {
+    return { ok: false, reason: "pnpm-lock.yaml does not match the approved lockfile." };
+  }
+  if (actual.buildId !== expected.buildId) {
+    return { ok: false, reason: `Runtime build ${actual.buildId} does not match approved build ${expected.buildId}.` };
   }
   return { ok: true, manifest };
 }

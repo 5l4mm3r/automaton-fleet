@@ -191,3 +191,113 @@ Child provisioning (`src/replication/spawn.ts`, both paths): `git init` → `fet
 5. **Stale `provisioning` slots and dead-agent detection.** `last_heartbeat` is recorded but nothing yet marks silent agents dead. That's deliberate for now, because an automatic reaper could free a slot while the agent is still running.
 6. **Shell access** (Phase 1 risk 3) still applies: an agent with `exec` could read `DATABASE_URL` from its environment. Pattern blocking isn't a boundary.
 7. Sandbox-side verification trusts the sandbox's own `git` output. A compromised sandbox could lie. Real attestation (e.g. an image digest) would be stronger.
+
+---
+
+# Phase 3 — Replication hardening and operational safety
+
+Real replication, real payments and owner sweeps remain **disabled** (`.env.fleet`: `REAL_REPLICATION_ENABLED=false`, `REAL_PAYMENTS_ENABLED=false`, `OWNER_SWEEP_ENABLED=false`). Replication now needs **four** independent switches: the agent's env flag, the fleet service's env flag, the DB-level `fleet_state.replication_enabled` (operator: `fleet:admin set-replication on`), and `operating_mode = EXPANSION`.
+
+## Database role model (schema v2)
+
+| Role | Kind | Privileges | Who holds the credential |
+|---|---|---|---|
+| `fleetadmin` (owner) | LOGIN | Owns schema `fleet` and every object in it | Operator CLI and the fleet service's controller pool only |
+| `fleet_agent` | NOLOGIN group | `USAGE` on schema `fleet` + `EXECUTE` on the seven `fleet.api_*` functions. No table, sequence or internal-function privileges | — |
+| `fleet_agent_login` | LOGIN, member of `fleet_agent` | Nothing else. No TEMP, no CREATE, not superuser/createrole/createdb | The fleet service's agent pool only |
+
+Agents (root and children) get **no database credential at all**. They hold a per-agent bearer token (`fa1.<agentId>.<secret>`). The registry stores only its SHA-256 hash (`fleet_agent_credentials`), and the token is revoked on death.
+
+The restricted API (`SECURITY DEFINER`, `search_path = fleet, pg_temp`) is:
+`api_fleet_state()`, `api_member_addresses()`, `api_whoami`, `api_heartbeat`, `api_request_replication`, `api_release_reservation` (own reservations only), `api_set_own_status` (`dead` to retire, `active`). Each one authenticates `(agent_id, token)` and acts only on the caller's own row, or on reservations the caller parents. On failure it returns JSON rather than raising, so the audit row commits. Because every mutation goes through these functions, the restricted role cannot:
+alter the cap or mode, alter another agent, disable or drop triggers (it doesn't own the tables, and `session_replication_role` is superuser-only), create roles, change schema, create temp shadows, or reserve slots except through `api_request_replication` with every gate applied.
+
+Setup (one-time, superuser, because `fleetadmin` cannot create roles):
+
+```
+sudo -u postgres psql -v ON_ERROR_STOP=1 -v dbname=automaton_fleet -v owner=fleetadmin \
+  -v agent_password="$(openssl rand -base64 32)" -f scripts/fleet-db-roles.sql
+pnpm fleet:migrate            # schema v2; grants the agent API to fleet_agent if the role exists
+```
+
+## Service architecture
+
+```
+automaton (root/child) ──HTTPS + own token──► fleet service (pnpm fleet:service)
+   no DB creds                                   ├─ agent pool  (fleet_agent_login) → api_* only
+   FLEET_API_URL                                 │     heartbeat, state, request, release, own status
+   ~/.automaton/fleet-credentials.json (0600)    ├─ admin pool  (fleetadmin)
+                                                 │     claim lease, verify attestation + activate,
+                                                 │     record verification failure, reaper
+                                                 └─ audit: fleet_events + JSONL (FLEET_AUDIT_LOG)
+```
+
+- `src/fleet/service/server.ts` `FleetService` exposes `/v1/health`, `/v1/state`, `/v1/members`, `/v1/self`, `/v1/heartbeat`, `/v1/status`, `/v1/replication/{request,claim,activate,fail,release}` and `/v1/children/terminal` (audit only: an agent never changes another agent's state).
+- `src/fleet/service/client.ts` `FleetApiClient` is the agent's `FleetBackend`. `SharedFleetController` accepts either it or the admin `PgFleetStore` (service/tests) through `src/fleet/backend.ts`.
+- At startup the service refuses if the agent DSN uses the admin user, or if `PgAgentGateway.selfCheck()` finds any table privilege, schema ownership, CREATE, superuser/createrole/createdb.
+- Roots are enrolled by the operator: `pnpm fleet:admin enroll-root <wallet> <name>` registers the root and writes its credential file (0600, never printed). Children receive their credential from the parent after activation (`deliverChildCredential` writes `/root/.automaton/fleet-credentials.json` and runs `chmod 600`).
+
+Env: `FLEET_CONTROLLER_DATABASE_URL` (legacy `DATABASE_URL`), `FLEET_AGENT_DATABASE_URL`, `FLEET_API_LISTEN` (default `127.0.0.1:8787`), `FLEET_REAPER_INTERVAL_MS` (15000), `FLEET_AUDIT_LOG`, `REAL_REPLICATION_ENABLED`.
+
+## Heartbeat and reaper
+
+- Agents heartbeat every 30 s (`api_heartbeat`). A heartbeat takes only the agent's row lock, never the fleet-wide lock.
+- `fleet_reap()` runs every 15 s in the service (also `pnpm fleet:admin reap`). It is idempotent, and it serialises on the `fleet_state` row lock (the same lock order as reservations), so concurrent reapers are harmless. Each pass:
+  1. Expires leases past `expires_at`: agent → `failed`, lease → `expired`, slot released.
+  2. `UNRESPONSIVE` → `DEAD` when the last heartbeat is older than `heartbeat_dead_s` (default 600). This check runs before step 3, so reaching DEAD needs at least two passes.
+  3. `ACTIVE` → `UNRESPONSIVE` when the last heartbeat is older than `heartbeat_unresponsive_s` (default 120). Unresponsive agents keep their slot; a heartbeat restores them to `ACTIVE`.
+- Death revokes the credential, closes any open lease and releases the slot. The agent's next heartbeat returns `FLEET_AGENT_DEAD`, its `onDead` fires, and the automaton shuts itself down.
+- **Outage grace:** if the reaper hasn't run for longer than the unresponsive timeout (because the service or DB was down), heartbeat ages are measured from when it resumed. An outage therefore can't mass-kill agents that couldn't report.
+- Timeouts are configured with `pnpm fleet:admin set-timeouts reservation=S provisioning=S unresponsive=S dead=S`, stored in `fleet_state` with CHECK `dead > unresponsive`.
+
+## Reservation leases
+
+`fleet_reservations`: `reservation_id`, `agent_id`, `parent_agent_id`, `status` (`reserved → provisioning → completed`, or `expired` / `released` / `failed`), `created_at`, `expires_at`, `claimed_at`, `completed_at`, `ended_at`, `end_reason`, `expected_repo`, `expected_commit`, `expected_build_id`, `expected_lockfile_sha256`, `attestation_nonce`, `attested_at`, `attestation`. A guard trigger enforces forward-only transitions, immutable expectations and immutable terminal states; deletes are refused.
+
+- Reserve: a lease with `reservation_ttl_s` (30 min). Claim: `provisioning`, TTL reset to `provisioning_ttl_s` (45 min), single-use nonce issued. **Provisioning slots now expire too.** Activation of an expired lease is refused even before the reaper runs.
+- All slot allocation goes through the single SQL allocator `fleet_reserve_slot()`, used by both the admin store and the agent API.
+- Release (`fleet_release`) and death (`fleet_mark_dead`) are conditional and idempotent. A second call returns `false` and writes no event.
+- Phase 2 reservations/provisioning rows (none existed) are failed by migration v2, because they have no lease and could never attest.
+
+## Runtime verification
+
+The parent/controller records the expected repository, commit and **build identifier** on every lease, copied from the operator-approved runtime (`approve-runtime` now requires `FLEET_RUNTIME_BUILD_ID` and `FLEET_RUNTIME_LOCKFILE_SHA256`).
+
+- **Build identifier:** SHA-256 over sorted `path\0sha256(file)\n` for `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `constitution.md`, `dist/**` and `src/**`. Symlinks are rejected.
+- **Proof:** after install, the parent writes its *own* verifier (`ATTEST_SCRIPT`, node builtins only; nothing from the child's build runs) into the child sandbox and runs it with the lease nonce. The verifier hashes the installed tree and reports commit, origin, cleanliness, build ID and lockfile hash.
+- **Check:** `spawnChild` checks the proof first to fail fast. `PgFleetStore.activate` then re-checks it authoritatively against the lease: nonce (defeats replay across reservations), commit, repo, lockfile, build ID, clean tree and proof consistency. The child's self-reported commit alone is never accepted.
+- **Failure:** activation stops, the reservation is released, the lease is `failed`, the agent is `failed`, events `runtime_verification_failed`, `provisioning_failed` and `slot_released` are written, and no credential is issued.
+- **At startup** the child re-hashes its tree against the manifest (`buildId`, `lockfileSha256`). It refuses to run if the lockfile or build doesn't match, or if the manifest has no build identity.
+
+## Child build process
+
+`package-lock.json` is removed; pnpm is the only package manager. In the sandbox: fetch the pinned SHA → verify `pnpm-lock.yaml` with `sha256sum -c` against the approved hash **before** installing → install pnpm `10.28.1` (the `packageManager` version; asserted) → `CI=true pnpm install --frozen-lockfile` → `pnpm build`. Any failure aborts the `&&` chain, and a non-zero exit refuses the child.
+
+The operator produces the approved values with `scripts/fleet-build-runtime.sh <repo> <sha>`, which does the same frozen build in a fresh clone. Verified: two clean clones of `d6302c3` built this way produce byte-identical `dist/`. Opt-in test: `FLEET_REPRO_TEST=1`.
+
+## Secret isolation / shell hardening
+
+- `automaton --run` **refuses to start** if privileged variables are in its environment (`DATABASE_URL`, `FLEET_*DATABASE_URL`, `PG*`, `REDIS_URL`, `OWNER_*` wallet keys, `*SIGNING_*`, `*PRIVATE_KEY`, `*ADMIN_TOKEN` and similar; see `src/fleet/secrets.ts`). Scrubbing isn't enough because `/proc/<pid>/environ` keeps the original environment. Other commands scrub.
+- Every agent shell (local `exec`, harness `exec`) runs with `agentChildEnv()`, which strips the same set. The agent keeps its own `CONWAY_API_KEY`, `FLEET_API_URL` and non-secret fleet flags, so allowed tools still work.
+- The shell guard blocks: `.env.fleet`, `fleet-credentials.json`, `/proc/*/environ`, overrides of `FLEET_API_URL` / `FLEET_*DATABASE_URL`, `fleet:service`, `CREATE/ALTER/DROP ROLE`, `SET ROLE`, `SECURITY DEFINER`. `.env.fleet` and `fleet-credentials.json` are sensitive reads, and all new fleet files are protected from self-modification.
+
+## Audit log
+
+`fleet_events` (append-only) plus the service JSONL. Event types: `replication_requested`, `replication_granted`, `replication_rejected`, `reservation_denied`, `slot_reserved`, `slot_claimed`, `claim_denied`, `reservation_expired`, `runtime_verified`, `runtime_verification_failed`, `provisioning_failed`, `agent_activated`, `credential_issued`, `agent_unresponsive`, `agent_recovered`, `agent_died`, `slot_released`, `reaper_resumed`, `db_auth_failed`, `api_auth_failed`, `authorization_denied`, `db_authorization_failed`, `child_terminal_reported`, and the operator `*_set` events.
+
+## Tests
+
+`src/__tests__/fleet/fleet-phase3.test.ts` (43 tests, plus 1 opt-in). It runs against a throwaway PostgreSQL cluster that the test itself initialises (`fixtures/ephemeral-pg.ts`), with a non-superuser owner and the real `scripts/fleet-db-roles.sql`, so role restrictions are tested with real roles. Mutation-checked: over-granting the agent role or skipping attestation makes 6 tests fail. Phase 1/2 tests were adapted to the stronger rules: runtime approval now carries a build identity, and spawns must attest.
+
+Known upstream issue: `src/__tests__/context-hardening.test.ts` hangs (no test completes in 120 s) identically on clean `d6302c3` and on Phase 3. It's excluded when running the full suite.
+
+## Remaining blockers before the first real child
+
+1. **Create the roles and migrate the live DB.** `scripts/fleet-db-roles.sql` needs a superuser, then `pnpm fleet:migrate` (the live `fleet` schema is still v1), then `fleet:admin enroll-root`.
+2. **Remove `DATABASE_URL` from anything that starts an agent.** Don't source `.env.fleet` before `automaton --run` (it will refuse). Run the fleet service as a **separate OS user**. Today `.env.fleet` is readable by the same user an agent's shell runs as, so the pattern guard is the only thing in the way.
+3. **Publish the fork and approve a build.** `origin` is still upstream, so there's no valid `FLEET_RUNTIME_REPO`. Push the fork, run `scripts/fleet-build-runtime.sh`, then `approve-runtime`.
+4. **TLS / reachability.** The service listens on loopback HTTP. Remote Conway sandboxes need it behind HTTPS with a public name (the client refuses plain HTTP off loopback). There is no API rate limiting yet.
+5. **Sandbox trust.** The verifier runs inside the child sandbox, so a compromised node/kernel there could lie. The nonce proves freshness, not integrity. Strong attestation needs image digests or TEE quotes. Node itself (apt `nodejs`) isn't pinned; only the pnpm and lockfile toolchain is.
+6. **Zombie containment.** A reaped child that can't reach the service keeps running; it just can't heartbeat, replicate or authenticate. Stopping its sandbox automatically isn't implemented, because Conway sandbox deletion is disabled upstream.
+7. **Parent-reported child deaths are audit-only** in the API path; the slot frees after the heartbeat timeout (≤ ~12 min by default).
+8. Phase 1 risks 6–7 (local workers uncounted, non-fleet transfers governed only by treasury rules) are unchanged.

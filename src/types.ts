@@ -829,6 +829,8 @@ export interface ChildAutomaton {
   /** Fleet runtime commit verified in the child sandbox. */
   runtimeCommit?: string;
   runtimeVersion?: string | null;
+  /** Runtime attestation produced by the parent-supplied verifier (Phase 3). */
+  attestation?: import("./fleet/attestation.js").RuntimeAttestation;
 }
 
 export type ChildStatus =

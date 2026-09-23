@@ -2,6 +2,7 @@
  * Mock infrastructure for deterministic automaton tests.
  */
 
+import { createHash } from "crypto";
 import { createDatabase } from "../state/database.js";
 import type {
   InferenceClient,
@@ -369,21 +370,60 @@ export const TEST_RUNTIME_PIN = Object.freeze({
   commit: "0123456789abcdef0123456789abcdef01234567",
 });
 
-/** stdout of the child-sandbox runtime verification command for a given state. */
-export function runtimeVerifyStdout(
-  state: { commit?: string; repo?: string; clean?: boolean; version?: string } = {},
-): string {
+/** Approved build identity used by tests (any 64-hex values; tests never build a real tree). */
+export const TEST_RUNTIME_BUILD = Object.freeze({
+  buildId: "b".repeat(64),
+  lockfileSha256: "1".repeat(64),
+});
+
+export interface SandboxRuntimeState {
+  commit?: string;
+  repo?: string;
+  clean?: boolean;
+  version?: string;
+  buildId?: string;
+  lockfileSha256?: string;
+  /** Override the nonce echoed by the verifier (replay simulation). */
+  nonce?: string;
+}
+
+/** True for the child-sandbox git verification or attestation commands. */
+export function isFleetSandboxCheck(command: string): boolean {
+  return command.includes("FLEET_RUNTIME_VERIFY") || /fleet-attest-[0-9a-f]+\.cjs/.test(command);
+}
+
+/**
+ * stdout of the child-sandbox runtime verification command (git checks) or,
+ * when `command` is the attestation command, of the parent-supplied verifier
+ * for a given sandbox state.
+ */
+export function runtimeVerifyStdout(state: SandboxRuntimeState = {}, command?: string): string {
+  const commit = state.commit ?? TEST_RUNTIME_PIN.commit;
+  const repo = state.repo ?? TEST_RUNTIME_PIN.repo;
+  const m = command ? /fleet-attest-[0-9a-f]+\.cjs \S+ ([0-9a-f]{64})/.exec(command) : null;
+  if (m) {
+    const nonce = state.nonce ?? m[1];
+    const buildId = state.buildId ?? TEST_RUNTIME_BUILD.buildId;
+    const lockfileSha256 = state.lockfileSha256 ?? TEST_RUNTIME_BUILD.lockfileSha256;
+    const proof = createHash("sha256").update(`${nonce}:${commit}:${buildId}:${lockfileSha256}`).digest("hex");
+    return "FLEET_ATTESTATION " + JSON.stringify({
+      nonce, commit, repo: repo + ".git", buildId, lockfileSha256, clean: state.clean !== false,
+      fileCount: 42, version: state.version ?? "0.2.1", proof,
+    });
+  }
   return [
     "FLEET_RUNTIME_VERIFY",
-    `HEAD=${state.commit ?? TEST_RUNTIME_PIN.commit}`,
-    `ORIGIN=${state.repo ?? TEST_RUNTIME_PIN.repo}`,
+    `HEAD=${commit}`,
+    `ORIGIN=${repo}`,
     `VERSION=${state.version ?? "0.2.1"}`,
     `SRC_CLEAN=${state.clean === false ? 0 : 1}`,
   ].join("\n");
 }
 
-/** Stub FLEET_RUNTIME_REPO / FLEET_RUNTIME_COMMIT for spawn paths that read the env pin. */
-export function stubRuntimePinEnv(stub: (k: string, v: string) => unknown, pin = TEST_RUNTIME_PIN): void {
+/** Stub FLEET_RUNTIME_* (pin + approved build) for spawn paths that read the env pin. */
+export function stubRuntimePinEnv(stub: (k: string, v: string) => unknown, pin = TEST_RUNTIME_PIN, build = TEST_RUNTIME_BUILD): void {
   stub("FLEET_RUNTIME_REPO", pin.repo);
   stub("FLEET_RUNTIME_COMMIT", pin.commit);
+  stub("FLEET_RUNTIME_BUILD_ID", build.buildId);
+  stub("FLEET_RUNTIME_LOCKFILE_SHA256", build.lockfileSha256);
 }

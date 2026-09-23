@@ -24,8 +24,26 @@ export {
   PgFleetStore,
   FleetRegistryUnavailableError,
   FleetDuplicateRegistrationError,
+  agentIdFromToken,
+  hashAgentToken,
 } from "./postgres/store.js";
-export { FLEET_PG_SCHEMA_VERSION, PG_MIGRATIONS } from "./postgres/migrations.js";
+export type { FleetTimeouts } from "./postgres/store.js";
+export { FLEET_PG_SCHEMA_VERSION, PG_MIGRATIONS, AGENT_API_FUNCTIONS } from "./postgres/migrations.js";
+export { PgAgentGateway } from "./postgres/agent-gateway.js";
+export type { FleetBackend } from "./backend.js";
+export { FleetService } from "./service/server.js";
+export { FleetApiClient, validateServiceUrl, readCredentialFile } from "./service/client.js";
+export {
+  ATTEST_SCRIPT,
+  computeBuildIdentity,
+  checkAttestation,
+  parseAttestation,
+  attestationProof,
+  loadRuntimeBuild,
+  validateRuntimeBuild,
+} from "./attestation.js";
+export type { RuntimeAttestation, RuntimeBuild, BuildIdentity } from "./attestation.js";
+export { findPrivilegedEnv, scrubPrivilegedEnv, agentChildEnv, isPrivilegedEnvName } from "./secrets.js";
 export {
   FleetRuntimeError,
   validateRuntimePin,

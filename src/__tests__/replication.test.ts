@@ -18,6 +18,7 @@ import {
   createTestDb,
   createTestIdentity,
   runtimeVerifyStdout,
+  isFleetSandboxCheck,
   stubRuntimePinEnv,
 } from "./mocks.js";
 import type { AutomatonDatabase, GenesisConfig } from "../types.js";
@@ -130,8 +131,8 @@ describe("spawnChild", () => {
   it("validates wallet address before creating child record", async () => {
     // Mock exec to return valid wallet address on init
     vi.spyOn(conway, "exec").mockImplementation(async (command: string) => {
-      if (command.includes("FLEET_RUNTIME_VERIFY")) {
-        return { stdout: runtimeVerifyStdout(), stderr: "", exitCode: 0 };
+      if (isFleetSandboxCheck(command)) {
+        return { stdout: runtimeVerifyStdout({}, command), stderr: "", exitCode: 0 };
       }
       if (command.includes("--init")) {
         return { stdout: `Wallet initialized: ${validAddress}`, stderr: "", exitCode: 0 };
@@ -147,8 +148,8 @@ describe("spawnChild", () => {
 
   it("throws on zero address from init", async () => {
     vi.spyOn(conway, "exec").mockImplementation(async (command: string) => {
-      if (command.includes("FLEET_RUNTIME_VERIFY")) {
-        return { stdout: runtimeVerifyStdout(), stderr: "", exitCode: 0 };
+      if (isFleetSandboxCheck(command)) {
+        return { stdout: runtimeVerifyStdout({}, command), stderr: "", exitCode: 0 };
       }
       if (command.includes("--init")) {
         return { stdout: `Wallet: ${zeroAddress}`, stderr: "", exitCode: 0 };
@@ -162,8 +163,8 @@ describe("spawnChild", () => {
 
   it("throws when init returns no wallet address", async () => {
     vi.spyOn(conway, "exec").mockImplementation(async (command: string) => {
-      if (command.includes("FLEET_RUNTIME_VERIFY")) {
-        return { stdout: runtimeVerifyStdout(), stderr: "", exitCode: 0 };
+      if (isFleetSandboxCheck(command)) {
+        return { stdout: runtimeVerifyStdout({}, command), stderr: "", exitCode: 0 };
       }
       if (command.includes("--init")) {
         return { stdout: "initialization complete, no wallet", stderr: "", exitCode: 0 };
@@ -192,8 +193,8 @@ describe("spawnChild", () => {
     const deleteSpy = vi.spyOn(conway, "deleteSandbox");
 
     vi.spyOn(conway, "exec").mockImplementation(async (command: string) => {
-      if (command.includes("FLEET_RUNTIME_VERIFY")) {
-        return { stdout: runtimeVerifyStdout(), stderr: "", exitCode: 0 };
+      if (isFleetSandboxCheck(command)) {
+        return { stdout: runtimeVerifyStdout({}, command), stderr: "", exitCode: 0 };
       }
       if (command.includes("--init")) {
         return { stdout: `Wallet: ${zeroAddress}`, stderr: "", exitCode: 0 };

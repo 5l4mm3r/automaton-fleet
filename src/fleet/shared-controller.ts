@@ -9,19 +9,26 @@
  *      check, financial eligibility,
  *   2. PgFleetStore.reserveSlot() — atomic, under the fleet_state row lock,
  *   3. spawn(grant) — spawnChild() claims the grant before any side effect,
- *      installs the pinned runtime and verifies it,
- *   4. activate (requires the verified commit) or release on any failure.
+ *      installs the pinned runtime and attests it,
+ *   4. activate (the registry checks the attestation against the
+ *      reservation's recorded expectations) or release on any failure,
+ *   5. deliver the child's own registry credential into its sandbox.
  *
- * If PostgreSQL is unreachable every replication request is denied with
+ * Phase 3: the backend is either the admin PgFleetStore (fleet service,
+ * tests) or FleetApiClient (agents), so agents never hold DB credentials.
+ * If the registry is unreachable every replication request is denied with
  * FLEET_REGISTRY_UNAVAILABLE; nothing else about the agent is affected.
  */
 
 import { ulid } from "ulid";
 import { strictestMode } from "./config.js";
 import { computeFleetState, evaluateFinancialEligibility, evaluateReplication } from "./policy.js";
-import type { PgFleetStore } from "./postgres/store.js";
+import type { FleetBackend } from "./backend.js";
 import { FleetRuntimeError, resolveChildRuntime, samePin } from "./runtime.js";
 import type {
+  FleetCredential,
+  SharedAgentStatus,
+  SharedSpawnedChildReport,
   FinancialSnapshot,
   FleetConfig,
   FleetDecision,
@@ -34,7 +41,7 @@ import type {
 } from "./types.js";
 
 export interface SharedFleetControllerOptions {
-  store: PgFleetStore;
+  store: FleetBackend;
   config: FleetConfig;
   self: { address: string; name: string };
   /** False for children; they identify via selfAgentId from their runtime manifest. */
@@ -46,14 +53,14 @@ export interface SharedFleetControllerOptions {
   /** Snapshots older than this are treated as unhealthy by the policy rule. */
   snapshotStaleMs?: number;
   log?: (level: "info" | "warn" | "error", msg: string) => void;
+  /** Called once when the registry reports this agent dead/failed (e.g. reaped). */
+  onDead?: (status: SharedAgentStatus) => void;
 }
 
-export interface SharedSpawnedChild {
-  address?: string;
-  sandboxId?: string;
-  runtimeCommit?: string;
-  runtimeVersion?: string | null;
-}
+export type SharedSpawnedChild = SharedSpawnedChildReport;
+
+/** Puts the child's own credential into its sandbox (never the parent's, never DB credentials). */
+export type CredentialDelivery<TChild> = (child: TChild, credential: FleetCredential) => Promise<void>;
 
 export interface SharedFleetStatus {
   state: FleetState;
@@ -76,7 +83,7 @@ export class SharedFleetController {
     this.last = { healthy: false, checkedAt: 0, state: null, selfAgentId: null, memberAddresses: new Set(), error: "not yet checked" };
   }
 
-  get store(): PgFleetStore {
+  get store(): FleetBackend {
     return this.opts.store;
   }
 
@@ -153,17 +160,41 @@ export class SharedFleetController {
     return stale && this.last.healthy ? { ...this.last, healthy: false, error: "fleet snapshot stale" } : this.last;
   }
 
-  /** Heartbeat this agent (UPDATE only; never inserts) and refresh the snapshot. */
+  /**
+   * Heartbeat this agent (UPDATE only; never inserts) and refresh the
+   * snapshot. If the registry says this agent is dead (reaped, or marked by
+   * the operator) the agent stops being registered and onDead fires once.
+   */
   async heartbeat(): Promise<boolean> {
     let ok = false;
     try {
-      if (!this.registered) await this.init();
-      if (this.registered && this.selfAgentId) ok = await this.opts.store.heartbeat(this.selfAgentId);
+      if (!this.registered && !this.dead) await this.init();
+      if (this.registered && this.selfAgentId) {
+        ok = await this.opts.store.heartbeat(this.selfAgentId);
+        if (!ok) {
+          const status = await this.opts.store.selfStatus(this.selfAgentId).catch(() => null);
+          if (status === "dead" || status === "failed") this.handleDeath(status);
+        }
+      }
     } catch (err) {
       this.log("warn", `Fleet heartbeat failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     await this.refresh();
     return ok;
+  }
+
+  private dead = false;
+
+  private handleDeath(status: SharedAgentStatus): void {
+    if (this.dead) return;
+    this.dead = true;
+    this.registered = false;
+    this.log("error", `Fleet registry reports this agent ${this.selfAgentId} as ${status}; its slot has been released.`);
+    try {
+      this.opts.onDead?.(status);
+    } catch {
+      // onDead must not break the heartbeat loop
+    }
   }
 
   startHeartbeat(intervalMs = 30_000): void {
@@ -258,6 +289,7 @@ export class SharedFleetController {
   async requestReplication<TChild extends SharedSpawnedChild>(
     request: { name: string; requestedBy?: string; requestKey?: string; runtime?: { repo?: unknown; commit?: unknown } },
     spawn: (grant: FleetSpawnGrant) => Promise<TChild>,
+    deliverCredential?: CredentialDelivery<TChild>,
   ): Promise<ReplicationOutcome<TChild>> {
     const requestedBy = request.requestedBy ?? this.opts.self.address;
     const decision = await this.evaluateReplication(request.runtime);
@@ -302,21 +334,39 @@ export class SharedFleetController {
     try {
       child = await spawn(reservation.grant);
     } catch (err) {
-      await release(`spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof FleetRuntimeError) {
+        // Runtime verification failed: stop, release, mark provisioning failed.
+        await this.opts.store.recordVerificationFailure(agentId, msg).catch(() => release(`runtime verification failed: ${msg}`));
+      } else {
+        await release(`spawn failed: ${msg}`);
+      }
       throw err;
     }
 
+    let credential: FleetCredential;
     try {
       if (!child.address) throw new Error("spawned child has no wallet address");
-      await this.opts.store.activate(agentId, {
+      ({ credential } = await this.opts.store.activate(agentId, {
         walletAddress: child.address,
         sandboxId: child.sandboxId ?? null,
         runtimeCommit: child.runtimeCommit ?? null,
         runtimeVersion: child.runtimeVersion ?? null,
-      });
+        attestation: child.attestation ?? null,
+      }));
     } catch (err) {
       await release(`activation failed: ${err instanceof Error ? err.message : String(err)}`);
       throw err;
+    }
+
+    if (deliverCredential) {
+      try {
+        await deliverCredential(child, credential);
+      } catch (err) {
+        // Without its credential the child cannot heartbeat; the reaper will
+        // mark it unresponsive and then dead, releasing the slot.
+        this.log("error", `Could not deliver fleet credential to child ${agentId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
 
     await this.refresh();

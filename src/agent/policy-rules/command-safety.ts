@@ -77,6 +77,11 @@ const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   { pattern: /(DISABLE\s+TRIGGER|session_replication_role|ALTER\s+TABLE\s+(["'`]?\w+["'`]?\.)?["'`]?fleet_|DROP\s+(SCHEMA|FUNCTION))/i, description: "Disable fleet registry guards" },
   { pattern: /\bfleet:(admin|migrate)\b|fleet\/postgres\/cli/, description: "Operator-only fleet registry command" },
   { pattern: /\b(FLEET_RUNTIME_REPO|FLEET_RUNTIME_COMMIT|FLEET_PG_SCHEMA|DATABASE_URL)\s*=/, description: "Override fleet registry/runtime configuration" },
+  // Phase 3: privileged fleet secrets, service internals, DB role changes
+  { pattern: /\.env\.fleet|fleet-credentials\.json|\/proc\/[^\s]*\/environ/, description: "Read privileged fleet secrets or another process's environment" },
+  { pattern: /\b(FLEET_API_URL|FLEET_CREDENTIALS_FILE|FLEET_[A-Z_]*DATABASE_URL|FLEET_AGENT_ROLE)\s*=/, description: "Override fleet service/credential configuration" },
+  { pattern: /\bfleet:service\b|fleet\/service\/(main|server)/, description: "Operator-only fleet service command" },
+  { pattern: /\b(CREATE|ALTER|DROP)\s+ROLE\b|\bSET\s+(SESSION\s+AUTHORIZATION|ROLE)\b|\bSECURITY\s+DEFINER\b/i, description: "Database role/privilege change" },
 ];
 
 export function getForbiddenCommandMatch(command: string): { description: string; pattern: string } | null {

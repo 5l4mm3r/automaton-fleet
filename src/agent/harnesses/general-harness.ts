@@ -1,4 +1,5 @@
 import { exec as execCb } from "node:child_process";
+import { agentChildEnv } from "../../fleet/secrets.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { AutomatonTool, SpendTrackerInterface } from "../../types.js";
@@ -399,7 +400,7 @@ function formatExecResult(stdout: string, stderr: string): string {
 
 function localExec(command: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve) => {
-    execCb(command, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+    execCb(command, { timeout: timeoutMs, maxBuffer: 1024 * 1024, env: agentChildEnv() }, (error, stdout, stderr) => {
       if (error && !stdout && !stderr) {
         resolve(`exec error: ${error.message}`);
         return;

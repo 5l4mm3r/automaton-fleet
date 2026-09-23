@@ -37,6 +37,9 @@ import { claimFleetGrant } from "../../fleet/grants.js";
 import { FleetRegistry } from "../../fleet/registry.js";
 import { buildRuntimeInstallCommand, checkRuntimeVerification } from "../../fleet/runtime.js";
 import { scrubDetail } from "../../fleet/postgres/store.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
+import { attestationProof, computeBuildIdentity, type RuntimeAttestation } from "../../fleet/attestation.js";
+import type { ClaimedGrant } from "../../fleet/grants.js";
 import { readEnvFile } from "../../fleet/postgres/cli.js";
 import { spawnChild } from "../../replication/spawn.js";
 import { ChildLifecycle } from "../../replication/lifecycle.js";
@@ -50,11 +53,13 @@ import type { AutomatonDatabase, GenesisConfig, ToolContext } from "../../types.
 import {
   MockConwayClient,
   MockInferenceClient,
+  TEST_RUNTIME_BUILD,
   TEST_RUNTIME_PIN,
   createTestConfig,
   createTestDb,
   createTestIdentity,
   runtimeVerifyStdout,
+  isFleetSandboxCheck,
   stubRuntimePinEnv,
 } from "../mocks.js";
 
@@ -99,13 +104,36 @@ const genesis: GenesisConfig = {
   parentAddress: identity.address,
 };
 
-/** Stand-in for spawnChild against the shared registry: claim, yield, report verified runtime. */
+/** The attestation an honest child sandbox would produce for this claim (Phase 3). */
+function fakeAttestation(claimed: ClaimedGrant, overrides: Partial<RuntimeAttestation> = {}): RuntimeAttestation {
+  const a = {
+    nonce: claimed.nonce!,
+    commit: claimed.runtime!.commit,
+    repo: claimed.runtime!.repo,
+    buildId: claimed.expectedBuild!.buildId,
+    lockfileSha256: claimed.expectedBuild!.lockfileSha256,
+    clean: true,
+    fileCount: 42,
+    version: "0.2.1",
+    proof: "",
+    ...overrides,
+  };
+  return { ...a, proof: overrides.proof ?? attestationProof(a) };
+}
+
+/** Stand-in for spawnChild against the shared registry: claim, yield, report attested runtime. */
 function fakeSharedSpawn(localDb: AutomatonDatabase, calls: { n: number } = { n: 0 }) {
   return async (grant: FleetSpawnGrant) => {
     calls.n++;
     const claimed = await claimFleetGrant(grant, ulid(), localDb.raw);
     await new Promise((r) => setTimeout(r, 5));
-    return { address: wallet(), sandboxId: `sbx-${ulid()}`, runtimeCommit: claimed.runtime!.commit, runtimeVersion: "0.2.1" };
+    return {
+      address: wallet(),
+      sandboxId: `sbx-${ulid()}`,
+      runtimeCommit: claimed.runtime!.commit,
+      runtimeVersion: "0.2.1",
+      attestation: fakeAttestation(claimed),
+    };
   };
 }
 
@@ -115,8 +143,8 @@ function mockConwayForPinnedSpawn(
   const conway = new MockConwayClient();
   const w = opts.wallet ?? wallet();
   vi.spyOn(conway, "exec").mockImplementation(async (command: string) => {
-    if (command.includes("FLEET_RUNTIME_VERIFY")) {
-      return { stdout: runtimeVerifyStdout(opts.verify), stderr: "", exitCode: 0 };
+    if (isFleetSandboxCheck(command)) {
+      return { stdout: runtimeVerifyStdout(opts.verify, command), stderr: "", exitCode: 0 };
     }
     if (command.includes("--init")) return { stdout: `Wallet initialized: ${w}`, stderr: "", exitCode: 0 };
     return { stdout: "ok", stderr: "", exitCode: 0 };
@@ -170,7 +198,7 @@ describe("Fleet security: pinned child runtime validation", () => {
   });
 
   it("install command fetches exactly the pinned commit of the fleet fork", () => {
-    const cmd = buildRuntimeInstallCommand(PIN);
+    const cmd = buildRuntimeInstallCommand(PIN, TEST_RUNTIME_BUILD);
     expect(cmd).toContain(`git remote add origin '${PIN.repo}'`);
     expect(cmd).toContain(`git fetch -q --depth 1 origin ${PIN.commit}`);
     expect(cmd).toContain(`git checkout -q --detach ${PIN.commit}`);
@@ -284,6 +312,9 @@ describe("Fleet security: child refuses startup on unverifiable runtime", () => 
     fs.mkdirSync(path.join(dir, "src"));
     fs.writeFileSync(path.join(dir, "src", "a.ts"), "export {};\n");
     fs.writeFileSync(path.join(dir, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    fs.mkdirSync(path.join(dir, "dist"));
+    fs.writeFileSync(path.join(dir, "dist", "a.js"), "export {};\n");
     git("add", ".");
     git("commit", "-qm", "init");
     git("remote", "add", "origin", PIN.repo + ".git");
@@ -293,7 +324,8 @@ describe("Fleet security: child refuses startup on unverifiable runtime", () => 
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   function writeManifest(commit: string, repo = PIN.repo) {
-    fs.writeFileSync(manifestPath, JSON.stringify({ agentId: ulid(), parentAgentId: ulid(), generation: 1, repo, commit }));
+    const { buildId, lockfileSha256 } = computeBuildIdentity(dir);
+    fs.writeFileSync(manifestPath, JSON.stringify({ agentId: ulid(), parentAgentId: ulid(), generation: 1, repo, commit, buildId, lockfileSha256 }));
   }
 
   it("accepts the correct pinned commit", () => {
@@ -501,12 +533,15 @@ describe.skipIf(!PG_URL)("Fleet policy: shared PostgreSQL registry", () => {
     try {
       await c.query("BEGIN");
       // Same lock order as reservations (fleet_state first) to avoid deadlocks.
-      await c.query(`LOCK TABLE ${schema}.fleet_state, ${schema}.fleet_agents, ${schema}.fleet_events IN ACCESS EXCLUSIVE MODE`);
-      for (const t of ["fleet_agents", "fleet_events", "fleet_state"]) await c.query(`ALTER TABLE ${schema}.${t} DISABLE TRIGGER USER`);
+      const tables = ["fleet_state", "fleet_agents", "fleet_events", "fleet_reservations", "fleet_agent_credentials"];
+      await c.query(`LOCK TABLE ${tables.map((t) => `${schema}.${t}`).join(", ")} IN ACCESS EXCLUSIVE MODE`);
+      for (const t of tables) await c.query(`ALTER TABLE ${schema}.${t} DISABLE TRIGGER USER`);
+      await c.query(`DELETE FROM ${schema}.fleet_agent_credentials`);
+      await c.query(`DELETE FROM ${schema}.fleet_reservations`);
       await c.query(`DELETE FROM ${schema}.fleet_agents`);
       await c.query(`DELETE FROM ${schema}.fleet_events`);
       await c.query(`UPDATE ${schema}.fleet_state SET living_agents = 0, reserved_slots = 0`);
-      for (const t of ["fleet_agents", "fleet_events", "fleet_state"]) await c.query(`ALTER TABLE ${schema}.${t} ENABLE TRIGGER USER`);
+      for (const t of tables) await c.query(`ALTER TABLE ${schema}.${t} ENABLE TRIGGER USER`);
       await c.query("COMMIT");
     } catch (err) {
       await c.query("ROLLBACK");
@@ -516,7 +551,8 @@ describe.skipIf(!PG_URL)("Fleet policy: shared PostgreSQL registry", () => {
     }
     await admin.setMaxAgents(max, "test");
     await admin.setOperatingMode(mode, "test", "test");
-    await admin.setApprovedRuntime(PIN, "test");
+    await admin.setApprovedRuntime(PIN, "test", TEST_RUNTIME_BUILD);
+    await admin.setReplicationEnabled(true, "test");
   }
 
   beforeAll(async () => {
@@ -549,7 +585,7 @@ describe.skipIf(!PG_URL)("Fleet policy: shared PostgreSQL registry", () => {
     const results = await Promise.all([newStore().migrate(), newStore().migrate(), newStore().migrate()]);
     expect(results.flat()).toEqual([]);
     const h = await admin.health();
-    expect(h).toMatchObject({ ok: true, schemaVersion: 1, countersConsistent: true });
+    expect(h).toMatchObject({ ok: true, schemaVersion: FLEET_PG_SCHEMA_VERSION, countersConsistent: true });
   });
 
   it("schema holds the required columns and no secret columns", async () => {
@@ -825,14 +861,14 @@ describe.skipIf(!PG_URL)("Fleet policy: shared PostgreSQL registry", () => {
 
     const first = await root.requestReplication({ name: "a" }, async (grant) => {
       const c = await claimFleetGrant(grant, ulid(), db.raw);
-      return { address: shared, sandboxId: "s1", runtimeCommit: c.runtime!.commit };
+      return { address: shared, sandboxId: "s1", runtimeCommit: c.runtime!.commit, attestation: fakeAttestation(c) };
     });
     expect(first.ok).toBe(true);
 
     await expect(
       root.requestReplication({ name: "b" }, async (grant) => {
         const c = await claimFleetGrant(grant, ulid(), db.raw);
-        return { address: shared.toUpperCase().replace("0X", "0x"), sandboxId: "s2", runtimeCommit: c.runtime!.commit };
+        return { address: shared.toUpperCase().replace("0X", "0x"), sandboxId: "s2", runtimeCommit: c.runtime!.commit, attestation: fakeAttestation(c) };
       }),
     ).rejects.toThrow(FleetDuplicateRegistrationError);
 

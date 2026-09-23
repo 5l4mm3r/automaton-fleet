@@ -3,18 +3,22 @@
  *
  * One SharedFleetController per automaton process. index.ts creates it at
  * boot; the spawn_child tool, the orchestrator and the PolicyEngine rule
- * all use the same instance. When DATABASE_URL is not configured there is
- * no controller and every replication path fails closed.
+ * all use the same instance.
+ *
+ * Phase 3: agents reach the registry only through the fleet service
+ * (FLEET_API_URL + their own credential file). DATABASE_URL is never read
+ * here. Without a service URL or credential there is no controller and
+ * every replication path fails closed.
  */
 
 import type { ToolContext } from "../types.js";
 import { getSurvivalTier } from "../conway/credits.js";
 import { onChildTerminal } from "../replication/lifecycle.js";
 import { loadFleetConfig, strictestMode } from "./config.js";
-import { PgFleetStore } from "./postgres/store.js";
+import { FleetApiClient } from "./service/client.js";
 import { computeFleetState, evaluateReplication } from "./policy.js";
-import { SharedFleetController, type SharedSpawnedChild } from "./shared-controller.js";
-import type { FleetConfig, FleetDecision, FleetSpawnGrant, ReplicationOutcome } from "./types.js";
+import { SharedFleetController, type CredentialDelivery, type SharedSpawnedChild } from "./shared-controller.js";
+import type { FleetConfig, FleetDecision, FleetSpawnGrant, ReplicationOutcome, SharedAgentStatus } from "./types.js";
 
 let active: SharedFleetController | null = null;
 let unsubscribeLifecycle: (() => void) | null = null;
@@ -39,6 +43,12 @@ export function setActiveSharedFleet(controller: SharedFleetController | null): 
   }
 }
 
+/** Service URL children should use (the parent's own), or null. Never a DB URL. */
+export function activeFleetServiceUrl(): string | null {
+  const store = active?.store;
+  return store && store.kind === "api" ? (store as FleetApiClient).baseUrl : process.env.FLEET_API_URL?.trim() || null;
+}
+
 export function registryUnavailableDecision(config: FleetConfig, detail: string): FleetDecision {
   return {
     allowed: false,
@@ -50,16 +60,22 @@ export function registryUnavailableDecision(config: FleetConfig, detail: string)
 
 /**
  * The controller replication must go through. Uses the active controller,
- * or builds one from DATABASE_URL. Returns null when no shared registry is
- * configured — callers must treat that as a denial.
+ * or builds one from FLEET_API_URL and the agent's credential file. Returns
+ * null when no fleet service is configured — callers must treat that as a
+ * denial.
  */
 export async function getSharedFleetForContext(
   ctx: Pick<ToolContext, "identity" | "config" | "conway">,
   fleetConfig: FleetConfig = loadFleetConfig(),
-  opts: { selfAgentId?: string | null; runtimeVersion?: string | null; runtimeCommit?: string | null } = {},
+  opts: {
+    selfAgentId?: string | null;
+    runtimeVersion?: string | null;
+    runtimeCommit?: string | null;
+    onDead?: (status: SharedAgentStatus) => void;
+  } = {},
 ): Promise<SharedFleetController | null> {
   if (active) return active;
-  const store = PgFleetStore.fromEnv();
+  const store = FleetApiClient.fromEnv();
   if (!store) return null;
   const controller = new SharedFleetController({
     store,
@@ -69,6 +85,7 @@ export async function getSharedFleetForContext(
     selfAgentId: opts.selfAgentId ?? null,
     runtimeVersion: opts.runtimeVersion ?? null,
     runtimeCommit: opts.runtimeCommit ?? null,
+    onDead: opts.onDead,
     getFinancialSnapshot: async () => {
       const creditsCents = await ctx.conway.getCreditsBalance();
       return { creditsCents, survivalTier: getSurvivalTier(creditsCents) };
@@ -103,6 +120,7 @@ export async function requestSharedReplication<TChild extends SharedSpawnedChild
   request: { name: string; requestedBy?: string },
   spawn: (grant: FleetSpawnGrant) => Promise<TChild>,
   fleetConfig: FleetConfig = loadFleetConfig(),
+  deliverCredential?: CredentialDelivery<TChild>,
 ): Promise<ReplicationOutcome<TChild>> {
   const pre = localReplicationPreflight(fleetConfig, !ctx.config.parentAddress);
   if (!pre.allowed) return { ok: false, decision: pre };
@@ -112,6 +130,8 @@ export async function requestSharedReplication<TChild extends SharedSpawnedChild
   } catch (err) {
     return { ok: false, decision: registryUnavailableDecision(fleetConfig, err instanceof Error ? err.message : String(err)) };
   }
-  if (!fleet) return { ok: false, decision: registryUnavailableDecision(fleetConfig, "DATABASE_URL not configured") };
-  return fleet.requestReplication(request, spawn);
+  if (!fleet) {
+    return { ok: false, decision: registryUnavailableDecision(fleetConfig, "fleet service (FLEET_API_URL + credential) not configured") };
+  }
+  return fleet.requestReplication(request, spawn, deliverCredential);
 }

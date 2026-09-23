@@ -7,6 +7,7 @@
 
 import type { SurvivalTier } from "../types.js";
 import type { RuntimePin } from "./runtime.js";
+import type { RuntimeAttestation, RuntimeBuild } from "./attestation.js";
 
 export type FleetState = "DEVELOPMENT" | "EXPANSION" | "HARVEST" | "EMERGENCY";
 
@@ -98,7 +99,10 @@ export type FleetDecisionCode =
   | "FLEET_RUNTIME_UNVERIFIED"
   | "FLEET_NOT_REGISTERED"
   | "FLEET_PARENT_NOT_LIVING"
-  | "FLEET_DUPLICATE_REQUEST";
+  | "FLEET_DUPLICATE_REQUEST"
+  | "FLEET_AUTH_FAILED"
+  | "FLEET_NOT_AUTHORIZED"
+  | "FLEET_AGENT_DEAD";
 
 export interface FleetDecision {
   allowed: boolean;
@@ -122,8 +126,11 @@ export type ReplicationOutcome<TChild> =
 
 // ─── Shared (PostgreSQL) registry — Phase 2 ─────────────────────
 
-/** reserved/provisioning hold a reserved slot; active is living; dead/failed are history. */
-export type SharedAgentStatus = "reserved" | "provisioning" | "active" | "dead" | "failed";
+/**
+ * reserved/provisioning hold a reserved slot; active and unresponsive (missed
+ * heartbeats, Phase 3) are living; dead/failed are history.
+ */
+export type SharedAgentStatus = "reserved" | "provisioning" | "active" | "unresponsive" | "dead" | "failed";
 
 export interface SharedFleetState {
   livingAgents: number;
@@ -132,6 +139,55 @@ export interface SharedFleetState {
   operatingMode: FleetState;
   runtime: RuntimePin | null;
   updatedAt: string;
+  /** DB-level replication switch (Phase 3). Absent = unknown = off. */
+  replicationEnabled?: boolean;
+  /** Operator-approved build identity of the runtime (Phase 3). */
+  build?: RuntimeBuild | null;
+}
+
+/** Reservation lease (Phase 3): a reserved slot with an expiry. */
+export type ReservationLeaseStatus = "reserved" | "provisioning" | "completed" | "expired" | "released" | "failed";
+
+export interface ReservationLease {
+  reservationId: string;
+  agentId: string;
+  parentAgentId: string;
+  status: ReservationLeaseStatus;
+  createdAt: string;
+  expiresAt: string;
+  claimedAt: string | null;
+  completedAt: string | null;
+  endedAt: string | null;
+  endReason: string | null;
+  expected: { repo: string; commit: string; buildId: string; lockfileSha256: string };
+  attestedAt: string | null;
+}
+
+/** Per-agent bearer credential. Only its SHA-256 is stored by the registry. */
+export interface FleetCredential {
+  agentId: string;
+  token: string;
+}
+
+export interface ActivationResult {
+  agent: SharedAgentRecord;
+  credential: FleetCredential;
+}
+
+/** What a spawned child reports back to the controller (verified, never trusted as-is). */
+export interface SharedSpawnedChildReport {
+  address?: string;
+  sandboxId?: string;
+  runtimeCommit?: string;
+  runtimeVersion?: string | null;
+  attestation?: RuntimeAttestation;
+}
+
+export interface ReapResult {
+  expired: number;
+  unresponsive: number;
+  dead: number;
+  graceFrom: string | null;
 }
 
 export interface SharedAgentRecord {

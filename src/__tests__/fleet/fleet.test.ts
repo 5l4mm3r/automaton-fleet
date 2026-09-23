@@ -44,6 +44,7 @@ import {
   createTestDb,
   createTestIdentity,
   runtimeVerifyStdout,
+  isFleetSandboxCheck,
   stubRuntimePinEnv,
 } from "../mocks.js";
 
@@ -101,8 +102,8 @@ function mockConwayForSpawn(): MockConwayClient {
   const conway = new MockConwayClient();
   vi.spyOn(conway, "exec").mockImplementation(async (command: string) => {
     // Phase 2: spawnChild verifies the pinned fleet runtime in the sandbox.
-    if (command.includes("FLEET_RUNTIME_VERIFY")) {
-      return { stdout: runtimeVerifyStdout(), stderr: "", exitCode: 0 };
+    if (isFleetSandboxCheck(command)) {
+      return { stdout: runtimeVerifyStdout({}, command), stderr: "", exitCode: 0 };
     }
     if (command.includes("--init")) {
       return { stdout: `Wallet initialized: ${CHILD_WALLET}`, stderr: "", exitCode: 0 };
