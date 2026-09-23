@@ -13,6 +13,9 @@ import { createPathProtectionRules } from "./path-protection.js";
 import { createFinancialRules } from "./financial.js";
 import { createAuthorityRules } from "./authority.js";
 import { createRateLimitRules } from "./rate-limits.js";
+import { createFleetRules } from "./fleet.js";
+import type { FleetConfig } from "../../fleet/types.js";
+import { loadFleetConfig } from "../../fleet/config.js";
 
 /**
  * Create the default set of policy rules.
@@ -20,6 +23,7 @@ import { createRateLimitRules } from "./rate-limits.js";
  */
 export function createDefaultRules(
   treasuryPolicy: TreasuryPolicy = DEFAULT_TREASURY_POLICY,
+  fleetConfig: FleetConfig = loadFleetConfig(),
 ): PolicyRule[] {
   return [
     ...createValidationRules(),
@@ -28,5 +32,6 @@ export function createDefaultRules(
     ...createFinancialRules(treasuryPolicy),
     ...createAuthorityRules(),
     ...createRateLimitRules(),
+    ...createFleetRules(fleetConfig),
   ];
 }

@@ -5,7 +5,7 @@
  * The database IS the automaton's memory.
  */
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 export const CREATE_TABLES = `
   -- Schema version tracking
@@ -678,4 +678,116 @@ export const MIGRATION_V10 = `
 
   CREATE INDEX idx_knowledge_category ON knowledge_store(category);
   CREATE INDEX idx_knowledge_key ON knowledge_store(key);
+`;
+
+// === Fleet Layer (Phase 1): Global living-agent registry ===
+//
+// The fleet cap is enforced in three places (see FLEET.md):
+//   1. FleetPolicy / FleetController (application layer)
+//   2. FleetRegistry.reserveSlot() inside a BEGIN IMMEDIATE transaction
+//   3. The fleet_agents_cap_insert trigger below (database backstop)
+// "Living" statuses are: reserved, spawning, active.
+// Terminal statuses (dead, failed) are immutable and rows are never deleted.
+
+export const FLEET_LIVING_STATUSES = ["reserved", "spawning", "active"] as const;
+export const FLEET_HARD_MAX_AGENTS = 50;
+
+export const MIGRATION_V12 = `
+  CREATE TABLE IF NOT EXISTS fleet_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS fleet_agents (
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL CHECK(role IN ('root','child')),
+    parent_agent_id TEXT,
+    requested_by TEXT NOT NULL,
+    name TEXT NOT NULL,
+    address TEXT,
+    child_id TEXT UNIQUE,
+    sandbox_id TEXT,
+    status TEXT NOT NULL CHECK(status IN ('reserved','spawning','active','dead','failed')),
+    status_reason TEXT,
+    generation INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    died_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_fleet_agents_status ON fleet_agents(status);
+  CREATE INDEX IF NOT EXISTS idx_fleet_agents_address ON fleet_agents(address);
+
+  CREATE TABLE IF NOT EXISTS fleet_events (
+    id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    agent_id TEXT,
+    actor TEXT,
+    detail TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_fleet_events_agent ON fleet_events(agent_id, created_at);
+
+  -- Database-level backstop: no insert of a living row may exceed the cap.
+  -- A missing or non-numeric cap is treated as 0 (fail closed); the cap is
+  -- additionally clamped to the hard ceiling of 50.
+  CREATE TRIGGER IF NOT EXISTS fleet_agents_cap_insert
+  BEFORE INSERT ON fleet_agents
+  WHEN NEW.status IN ('reserved','spawning','active')
+  BEGIN
+    SELECT RAISE(ABORT, 'FLEET_CAP_EXCEEDED')
+    WHERE (SELECT COUNT(*) FROM fleet_agents WHERE status IN ('reserved','spawning','active'))
+      >= MIN(
+        COALESCE((SELECT CAST(value AS INTEGER) FROM fleet_meta WHERE key = 'max_agents'), 0),
+        ${FLEET_HARD_MAX_AGENTS}
+      );
+  END;
+
+  -- Dead/failed agents can never be revived (a revived row would bypass the insert cap).
+  CREATE TRIGGER IF NOT EXISTS fleet_agents_terminal_immutable
+  BEFORE UPDATE OF status ON fleet_agents
+  WHEN OLD.status IN ('dead','failed') AND NEW.status <> OLD.status
+  BEGIN
+    SELECT RAISE(ABORT, 'FLEET_TERMINAL_STATE_IMMUTABLE');
+  END;
+
+  -- Historical records are permanent.
+  CREATE TRIGGER IF NOT EXISTS fleet_agents_no_delete
+  BEFORE DELETE ON fleet_agents
+  BEGIN
+    SELECT RAISE(ABORT, 'FLEET_HISTORY_IMMUTABLE');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS fleet_events_no_delete
+  BEFORE DELETE ON fleet_events
+  BEGIN
+    SELECT RAISE(ABORT, 'FLEET_HISTORY_IMMUTABLE');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS fleet_events_no_update
+  BEFORE UPDATE ON fleet_events
+  BEGIN
+    SELECT RAISE(ABORT, 'FLEET_HISTORY_IMMUTABLE');
+  END;
+`;
+
+// Requires the children table; applied separately so FleetRegistry can also
+// initialise on databases that do not carry the full Automaton schema.
+// When a child reaches a terminal lifecycle state its fleet slot is released:
+// an active agent becomes 'dead', a not-yet-active one becomes 'failed'.
+export const MIGRATION_V12_CHILDREN_SYNC = `
+  CREATE TRIGGER IF NOT EXISTS fleet_sync_child_terminal
+  AFTER UPDATE OF status ON children
+  WHEN NEW.status IN ('dead','stopped','failed','cleaned_up')
+  BEGIN
+    UPDATE fleet_agents
+       SET status = CASE WHEN status = 'active' THEN 'dead' ELSE 'failed' END,
+           status_reason = 'child lifecycle: ' || NEW.status,
+           died_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE child_id = NEW.id
+       AND status IN ('reserved','spawning','active');
+  END;
 `;

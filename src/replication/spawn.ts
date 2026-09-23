@@ -17,6 +17,8 @@ import type {
 import type { ChildLifecycle } from "./lifecycle.js";
 import { ulid } from "ulid";
 import { propagateConstitution } from "./constitution.js";
+import { FleetRegistry } from "../fleet/registry.js";
+import type { FleetSpawnGrant } from "../fleet/types.js";
 
 /** Valid Conway sandbox pricing tiers. */
 const SANDBOX_TIERS = [
@@ -51,6 +53,10 @@ export function isValidWalletAddress(address: string, chainType?: ChainType): bo
 
 /**
  * Spawn a child automaton in a new Conway sandbox using lifecycle state machine.
+ *
+ * Requires a FleetSpawnGrant issued by FleetController.requestReplication().
+ * The grant is consumed before any sandbox is created; calling this without
+ * a valid, unused grant throws FleetBypassError.
  */
 export async function spawnChild(
   conway: ConwayClient,
@@ -58,6 +64,7 @@ export async function spawnChild(
   db: AutomatonDatabase,
   genesis: GenesisConfig,
   lifecycle?: ChildLifecycle,
+  fleetGrant?: FleetSpawnGrant,
 ): Promise<ChildAutomaton> {
   // Check child limit from config
   const existing = db
@@ -78,6 +85,10 @@ export async function spawnChild(
   const childId = ulid();
   let sandboxId: string | undefined;
   let reusedSandbox: { id: string } | null = null;
+
+  // Fleet gate: consume the controller-issued slot reservation. Must happen
+  // before any external side effect (sandbox creation, lifecycle rows).
+  new FleetRegistry(db.raw).claimGrant(fleetGrant, childId);
 
   // If no lifecycle provided, use legacy path
   if (!lifecycle) {

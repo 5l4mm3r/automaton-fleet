@@ -20,6 +20,18 @@ import {
 } from "./mocks.js";
 import type { AutomatonDatabase, GenesisConfig } from "../types.js";
 import { MIGRATION_V7 } from "../state/schema.js";
+import { FleetRegistry } from "../fleet/registry.js";
+import type { FleetSpawnGrant } from "../fleet/types.js";
+
+/** spawnChild now requires a FleetController slot reservation. */
+function fleetGrant(db: AutomatonDatabase): FleetSpawnGrant {
+  const registry = new FleetRegistry(db.raw);
+  registry.setMaxAgents(2);
+  const root = registry.ensureRootAgent({ address: createTestIdentity().address, name: "root" });
+  const res = registry.reserveSlot({ parentAgentId: root.id, requestedBy: root.address!, name: "test-child" });
+  if (!res.ok) throw new Error(res.reason);
+  return res.grant;
+}
 
 // Mock fs for constitution propagation
 vi.mock("fs", async (importOriginal) => {
@@ -119,7 +131,7 @@ describe("spawnChild", () => {
       return { stdout: "ok", stderr: "", exitCode: 0 };
     });
 
-    const child = await spawnChild(conway, identity, db, genesis);
+    const child = await spawnChild(conway, identity, db, genesis, undefined, fleetGrant(db));
 
     expect(child.address).toBe(validAddress);
     expect(child.status).toBe("spawning");
@@ -133,7 +145,7 @@ describe("spawnChild", () => {
       return { stdout: "ok", stderr: "", exitCode: 0 };
     });
 
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, fleetGrant(db)))
       .rejects.toThrow("Child wallet address invalid");
   });
 
@@ -145,7 +157,7 @@ describe("spawnChild", () => {
       return { stdout: "ok", stderr: "", exitCode: 0 };
     });
 
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, fleetGrant(db)))
       .rejects.toThrow("Child wallet address invalid");
   });
 
@@ -155,7 +167,7 @@ describe("spawnChild", () => {
     // Make the first exec (apt-get install) fail
     vi.spyOn(conway, "exec").mockRejectedValue(new Error("Install failed"));
 
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, fleetGrant(db)))
       .rejects.toThrow();
 
     // Sandbox deletion is disabled — should not attempt cleanup
@@ -172,7 +184,7 @@ describe("spawnChild", () => {
       return { stdout: "ok", stderr: "", exitCode: 0 };
     });
 
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, fleetGrant(db)))
       .rejects.toThrow("Child wallet address invalid");
 
     // Sandbox deletion is disabled — should not attempt cleanup
@@ -186,7 +198,7 @@ describe("spawnChild", () => {
     vi.spyOn(conway, "exec").mockRejectedValue(new Error("Install failed"));
 
     // Original error should propagate, not the deleteSandbox error
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, fleetGrant(db)))
       .rejects.toThrow(/Install failed/);
   });
 
@@ -194,7 +206,7 @@ describe("spawnChild", () => {
     const deleteSpy = vi.spyOn(conway, "deleteSandbox");
     vi.spyOn(conway, "createSandbox").mockRejectedValue(new Error("Sandbox creation failed"));
 
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, fleetGrant(db)))
       .rejects.toThrow("Sandbox creation failed");
 
     expect(deleteSpy).not.toHaveBeenCalled();

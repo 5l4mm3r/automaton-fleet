@@ -29,6 +29,7 @@ import { createSocialClient } from "./social/client.js";
 import { PolicyEngine } from "./agent/policy-engine.js";
 import { SpendTracker } from "./agent/spend-tracker.js";
 import { createDefaultRules } from "./agent/policy-rules/index.js";
+import { createFleetControllerForContext, loadFleetConfig } from "./fleet/index.js";
 import type { AutomatonIdentity, AgentState, Skill, SocialClientInterface } from "./types.js";
 import { DEFAULT_TREASURY_POLICY } from "./types.js";
 import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observability/logger.js";
@@ -309,7 +310,17 @@ async function run(): Promise<void> {
 
   // Initialize PolicyEngine + SpendTracker (Phase 1.4)
   const treasuryPolicy = config.treasuryPolicy ?? DEFAULT_TREASURY_POLICY;
-  const rules = createDefaultRules(treasuryPolicy);
+  // Fleet layer: register this automaton, persist the global cap, report state.
+  const fleetConfig = loadFleetConfig();
+  const fleetStatus = createFleetControllerForContext({ db, identity, config, conway }, fleetConfig).getStatus();
+  logger.info(
+    `[${new Date().toISOString()}] Fleet: state=${fleetStatus.state} living=${fleetStatus.livingAgents}/${fleetStatus.maxAgents} ` +
+      `realReplication=${fleetConfig.realReplicationEnabled} realPayments=${fleetConfig.realPaymentsEnabled}`,
+  );
+  if (fleetConfig.ownerSweepEnabled) {
+    logger.warn("OWNER_SWEEP_ENABLED is set but owner sweeps are not implemented; ignoring.");
+  }
+  const rules = createDefaultRules(treasuryPolicy, fleetConfig);
   const policyEngine = new PolicyEngine(db.raw, rules);
   const spendTracker = new SpendTracker(db.raw);
 

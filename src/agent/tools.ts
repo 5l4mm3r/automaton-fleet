@@ -77,6 +77,8 @@ const FORBIDDEN_COMMAND_PATTERNS = [
   /DROP\s+TABLE/i,
   /DELETE\s+FROM\s+(turns|identity|kv|schema_version|skills|children|registry)/i,
   /TRUNCATE/i,
+  /(UPDATE|INSERT\s+(OR\s+\w+\s+)?INTO|REPLACE\s+INTO|DELETE\s+FROM)\s+["'`]?fleet_(agents|meta|events)/i,
+  /DROP\s+TRIGGER/i,
   // Safety infrastructure modification via shell
   /sed\s+.*injection-defense/,
   /sed\s+.*self-mod\/code/,
@@ -1638,17 +1640,26 @@ Model: ${ctx.inference.getDefaultModel()}
           message: args.message as string | undefined,
         });
 
-        const lifecycle = new ChildLifecycle(ctx.db.raw);
-
-        let child;
-        try {
-          child = await spawnChild(
-            ctx.conway,
-            ctx.identity,
-            ctx.db,
-            genesis,
-            lifecycle,
+        // Every reproduction request goes through the FleetController, which
+        // enforces FleetPolicy and the global living-agent cap and issues the
+        // single-use grant that spawnChild() requires.
+        const { createFleetControllerForContext } = await import("../fleet/index.js");
+        const fleet = createFleetControllerForContext(ctx);
+        const requestSpawn = () =>
+          fleet.requestReplication({ name: genesis.name }, (grant) =>
+            spawnChild(
+              ctx.conway,
+              ctx.identity,
+              ctx.db,
+              genesis,
+              new ChildLifecycle(ctx.db.raw),
+              grant,
+            ),
           );
+
+        let outcome;
+        try {
+          outcome = await requestSpawn();
         } catch (err: any) {
           // Auto-topup on 402 insufficient credits and retry once
           const is402 = err?.status === 402 ||
@@ -1669,24 +1680,19 @@ Model: ${ctx.inference.getDefaultModel()}
                 chainType: ctx.config.chainType || ctx.identity.chainType || "evm",
               });
               if (topup?.success) {
-                const retryLifecycle = new ChildLifecycle(ctx.db.raw);
-                const retryGenesis = generateGenesisConfig(ctx.identity, ctx.config, {
-                  name: args.name as string,
-                  specialization: args.specialization as string | undefined,
-                  message: args.message as string | undefined,
-                });
-                child = await spawnChild(
-                  ctx.conway,
-                  ctx.identity,
-                  ctx.db,
-                  retryGenesis,
-                  retryLifecycle,
-                );
+                // The failed attempt released its slot; the retry re-enters
+                // the controller and reserves a fresh one.
+                outcome = await requestSpawn();
               }
             }
           }
-          if (!child) throw err;
+          if (!outcome) throw err;
         }
+
+        if (!outcome.ok) {
+          return `Blocked: ${outcome.decision.code} — ${outcome.decision.reason} (fleet state: ${outcome.decision.state})`;
+        }
+        const child = outcome.child;
 
         return `Child spawned: ${child.name} in sandbox ${child.sandboxId} (status: ${child.status})`;
       },

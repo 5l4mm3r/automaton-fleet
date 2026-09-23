@@ -67,6 +67,11 @@ const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   { pattern: /sed\s+.*policy-rules/, description: "Modify policy rules via sed" },
   { pattern: />\s*.*policy-engine/, description: "Overwrite policy engine" },
   { pattern: />\s*.*policy-rules/, description: "Overwrite policy rules" },
+  // Fleet registry / guardrail tampering via shell
+  { pattern: /(UPDATE|INSERT\s+(OR\s+\w+\s+)?INTO|REPLACE\s+INTO|DELETE\s+FROM)\s+["'`]?fleet_(agents|meta|events)/i, description: "Modify fleet registry tables" },
+  { pattern: /DROP\s+TRIGGER/i, description: "Drop database trigger" },
+  { pattern: /sed\s+.*\bfleet\//, description: "Modify fleet layer via sed" },
+  { pattern: />\s*.*\bfleet\//, description: "Overwrite fleet layer" },
 ];
 
 export function getForbiddenCommandMatch(command: string): { description: string; pattern: string } | null {

@@ -221,11 +221,13 @@ export async function runAgentLoop(
         config: {
           ...config,
           spawnAgent: async (task: any) => {
-            // Try Conway sandbox spawn first (production)
-            try {
+            // Conway sandbox children are reproduction: they must go through
+            // the FleetController (policy + global cap + single-use grant).
+            const spawnViaFleet = async () => {
               const { generateGenesisConfig } = await import("../replication/genesis.js");
               const { spawnChild } = await import("../replication/spawn.js");
               const { ChildLifecycle } = await import("../replication/lifecycle.js");
+              const { createFleetControllerForContext } = await import("../fleet/index.js");
 
               const role = task.agentRole ?? "generalist";
               const genesis = generateGenesisConfig(identity, config, {
@@ -233,8 +235,19 @@ export async function runAgentLoop(
                 specialization: `${role}: ${task.title}`,
               });
 
-              const lifecycle = new ChildLifecycle(db.raw);
-              const child = await spawnChild(conway, identity, db, genesis, lifecycle);
+              const outcome = await createFleetControllerForContext({ db, identity, config, conway })
+                .requestReplication({ name: genesis.name }, (grant) =>
+                  spawnChild(conway, identity, db, genesis, new ChildLifecycle(db.raw), grant),
+                );
+              if (!outcome.ok) {
+                throw new Error(`Fleet denied replication: ${outcome.decision.code} — ${outcome.decision.reason}`);
+              }
+              return outcome.child;
+            };
+
+            // Try Conway sandbox spawn first (production)
+            try {
+              const child = await spawnViaFleet();
 
               return {
                 address: child.address,
@@ -269,17 +282,7 @@ export async function runAgentLoop(
                       });
                       // Retry spawn once after successful topup
                       try {
-                        const { generateGenesisConfig: genGenesis } = await import("../replication/genesis.js");
-                        const { spawnChild: retrySpawn } = await import("../replication/spawn.js");
-                        const { ChildLifecycle: RetryLifecycle } = await import("../replication/lifecycle.js");
-
-                        const retryRole = task.agentRole ?? "generalist";
-                        const retryGenesis = genGenesis(identity, config, {
-                          name: `worker-${retryRole}-${Date.now().toString(36)}`,
-                          specialization: `${retryRole}: ${task.title}`,
-                        });
-                        const retryLifecycle = new RetryLifecycle(db.raw);
-                        const child = await retrySpawn(conway, identity, db, retryGenesis, retryLifecycle);
+                        const child = await spawnViaFleet();
                         return {
                           address: child.address,
                           name: child.name,

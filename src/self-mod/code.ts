@@ -76,6 +76,25 @@ const PROTECTED_FILES: readonly string[] = Object.freeze([
   "agent/policy-engine.js",
   "agent/policy-rules/index.ts",
   "agent/policy-rules/index.js",
+  "agent/policy-rules/fleet.ts",
+  "agent/policy-rules/fleet.js",
+  // Fleet layer (global agent cap and replication gate)
+  "fleet/config.ts",
+  "fleet/config.js",
+  "fleet/controller.ts",
+  "fleet/controller.js",
+  "fleet/index.ts",
+  "fleet/index.js",
+  "fleet/policy.ts",
+  "fleet/policy.js",
+  "fleet/registry.ts",
+  "fleet/registry.js",
+  "fleet/types.ts",
+  "fleet/types.js",
+  "replication/spawn.ts",
+  "replication/spawn.js",
+  "state/schema.ts",
+  "state/schema.js",
 ]);
 
 /**
