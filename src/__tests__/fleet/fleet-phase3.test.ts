@@ -66,6 +66,7 @@ import {
   runtimeVerifyStdout,
   type SandboxRuntimeState,
 } from "../mocks.js";
+import { wipeRegistry } from "./fixtures/wipe.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 
 vi.mock("../../registry/erc8004.js", () => ({
@@ -451,14 +452,7 @@ describe.skipIf(!PG_BIN)("Fleet security policy: restricted PostgreSQL agent rol
     const c = await ownerRaw.connect();
     try {
       await c.query("BEGIN");
-      const tables = ["fleet_state", "fleet_agents", "fleet_events", "fleet_reservations", "fleet_agent_credentials"];
-      await c.query(`LOCK TABLE ${tables.map((t) => `fleet.${t}`).join(", ")} IN ACCESS EXCLUSIVE MODE`);
-      for (const t of tables) await c.query(`ALTER TABLE fleet.${t} DISABLE TRIGGER USER`);
-      for (const t of ["fleet_agent_credentials", "fleet_reservations", "fleet_agents", "fleet_events"]) await c.query(`DELETE FROM fleet.${t}`);
-      await c.query(
-        "UPDATE fleet.fleet_state SET living_agents = 0, reserved_slots = 0, reaper_last_run_at = NULL, reaper_grace_from = NULL",
-      );
-      for (const t of tables) await c.query(`ALTER TABLE fleet.${t} ENABLE TRIGGER USER`);
+      await wipeRegistry(c, "fleet");
       await c.query("COMMIT");
     } catch (err) {
       await c.query("ROLLBACK");
@@ -883,7 +877,7 @@ describe.skipIf(!PG_BIN)("Fleet security policy: restricted PostgreSQL agent rol
     async function startService(realReplicationEnabled = true) {
       gateway = new PgAgentGateway({ connectionString: pgc.agentUrl });
       opened.push(gateway);
-      service = new FleetService({ admin, agent: gateway, realReplicationEnabled, reaperIntervalMs: 0, audit: (e) => audit.push(e) });
+      service = new FleetService({ admin, agent: gateway, realReplicationEnabled, reaperIntervalMs: 0, audit: (e) => audit.push(e), release: { ...PIN, ...BUILD }, allowLegacyBearer: true });
       url = (await service.listen(0, "127.0.0.1")).url;
     }
 

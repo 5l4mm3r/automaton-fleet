@@ -222,7 +222,7 @@ export class SharedFleetController {
   async getStatus(): Promise<SharedFleetStatus> {
     const shared = await this.opts.store.getState();
     const effectiveMaxAgents = Math.min(shared.maxAgents, this.opts.config.maxAgents);
-    const occupied = shared.livingAgents + shared.reservedSlots;
+    const occupied = shared.livingAgents + shared.reservedSlots + (shared.quarantinedSlots ?? 0);
     const state = computeFleetState({
       configuredMode: strictestMode(this.opts.config.configuredMode, shared.operatingMode),
       emergency: false,

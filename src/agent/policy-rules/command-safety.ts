@@ -82,6 +82,12 @@ const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   { pattern: /\b(FLEET_API_URL|FLEET_CREDENTIALS_FILE|FLEET_[A-Z_]*DATABASE_URL|FLEET_AGENT_ROLE)\s*=/, description: "Override fleet service/credential configuration" },
   { pattern: /\bfleet:service\b|fleet\/service\/(main|server)/, description: "Operator-only fleet service command" },
   { pattern: /\b(CREATE|ALTER|DROP)\s+ROLE\b|\bSET\s+(SESSION\s+AUTHORIZATION|ROLE)\b|\bSECURITY\s+DEFINER\b/i, description: "Database role/privilege change" },
+  // Phase 4: controller secret files, deployment scripts and units
+  { pattern: /\/etc\/automaton-fleet|CREDENTIALS_DIRECTORY|\b(admin|service)\.env\b/, description: "Read fleet controller secret files" },
+  { pattern: /\bfleet:(doctor|audit-privileges)\b|scripts\/fleet-(os|db)-setup|fleet-deploy-release|systemctl\s+\S+\s+automaton-fleet/, description: "Operator-only fleet deployment command" },
+  // Phase 5: operator-only lifecycle/treasury decisions and custody tables
+  { pattern: /\bfleet_(capital_allocations|sweep_reductions|treasury_\w+|wallet_custody|custody_transfers|owner_distributions|orphans|agent_sessions)\b/i, description: "Touch fleet treasury/custody/session tables" },
+  { pattern: /\b(GRANT|REVOKE)\s+(ALL|SELECT|INSERT|UPDATE|DELETE|EXECUTE|USAGE|CREATE|TEMP\w*|CONNECT|TRUNCATE|TRIGGER|REFERENCES|fleet_\w+)\b/i, description: "Database privilege change" },
 ];
 
 export function getForbiddenCommandMatch(command: string): { description: string; pattern: string } | null {

@@ -30,6 +30,13 @@ export interface ClaimedGrant {
   nonce: string | null;
   reservationId: string | null;
   backend: "postgres" | "sqlite";
+  /**
+   * Phase 5: report provisioning progress to the controller. Called the
+   * moment a sandbox exists ("sandbox_created") and before runtime
+   * verification ("verifying"), so a failed provisioning stays visible for
+   * cleanup. Absent for the local (SQLite) path.
+   */
+  reportProvisioning?: (phase: "sandbox_created" | "verifying", sandboxId?: string) => Promise<void>;
 }
 
 type Claimer = (localChildId: string) => Promise<ClaimedGrant>;

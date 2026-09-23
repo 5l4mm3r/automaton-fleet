@@ -301,3 +301,247 @@ Known upstream issue: `src/__tests__/context-hardening.test.ts` hangs (no test c
 6. **Zombie containment.** A reaped child that can't reach the service keeps running; it just can't heartbeat, replicate or authenticate. Stopping its sandbox automatically isn't implemented, because Conway sandbox deletion is disabled upstream.
 7. **Parent-reported child deaths are audit-only** in the API path; the slot frees after the heartbeat timeout (≤ ~12 min by default).
 8. Phase 1 risks 6–7 (local workers uncounted, non-fleet transfers governed only by treasury rules) are unchanged.
+
+# Phase 4 — Deployment readiness and first-child preparation
+
+Real replication, real payments and owner sweeps remain **disabled**. No child has been spawned. Nothing privileged has been applied: the database roles, the v3 migration, the OS users and the systemd units all wait for operator approval (see "Commands awaiting approval").
+
+## Database roles (schema v3)
+
+| Role | Kind | Effective privileges | Credential holder |
+|---|---|---|---|
+| `fleetadmin` (= fleet_admin) | LOGIN, schema owner | Owns `fleet` and every object in it. Migrations, cap/mode/runtime/replication switch, enroll/rotate credentials | Operator CLI only (`FLEET_ADMIN_DATABASE_URL` in `/etc/automaton-fleet/admin.env`) |
+| `fleet_service` | NOLOGIN group | `USAGE` on `fleet`; `SELECT` on `fleet_schema_migrations`, `fleet_state`, `fleet_agents`, `fleet_reservations`, `fleet_events`, `fleet_sandbox_terminations` (**not** `fleet_agent_credentials`); `EXECUTE` on the 11 `svc_*` functions only | — |
+| `fleet_service_login` | LOGIN, member of `fleet_service` | Nothing else. No TEMP or CREATE, not a member of the owner | Fleet service only (`FLEET_SERVICE_DATABASE_URL`) |
+| `fleet_agent` | NOLOGIN group | `USAGE` + `EXECUTE` on the 7 `api_*` functions only | — |
+| `fleet_agent_login` | LOGIN, member of `fleet_agent` | Nothing else | Fleet service only (`FLEET_AGENT_DATABASE_URL`) |
+| PUBLIC | — | No CONNECT/TEMP/CREATE on the DB, nothing in `fleet` | — |
+
+Agents hold **no database credential**, only their own `fa1.` bearer token.
+
+- **Everything the controller writes goes through a `SECURITY DEFINER` `svc_*` function:** `svc_claim`, `svc_activate`, `svc_verification_failed`, `svc_release`, `svc_mark_dead`, `svc_heartbeat`, `svc_reap`, `svc_record_event`, `svc_child_terminal`, `svc_terminations_due`, `svc_termination_result`. Each one pins `search_path`.
+- **What the service therefore cannot do:** change the cap, mode, approved runtime, replication switch or timeouts; insert agents; reserve slots directly; issue credentials outside activation; read token hashes; alter tables or triggers; create roles.
+- **`svc_activate` re-checks the child's runtime proof itself.** It checks the nonce, reported and attested commit, repo, lockfile, build ID, clean flag and proof hash against the lease under the fleet lock. A bug in, or bypass of, the service's TypeScript check still can't activate an unverified child. A mismatch releases the slot as failed.
+- **Migrations are admin-only.** `pnpm fleet:migrate` refuses any credential that doesn't own the schema. It re-grants both restricted roles.
+- **`scripts/fleet-db-roles.sql` is idempotent.** It creates missing roles and re-asserts their attributes. It (re)sets passwords from the secret files, strips stray memberships, and revokes PUBLIC's CONNECT/TEMP.
+
+`pnpm fleet:audit-privileges` checks **effective** privileges (`has_*_privilege`, so inherited and column-level grants count). It exits 1 if:
+- an agent or service role is superuser, createrole, createdb, replication or bypassrls;
+- it owns anything, or is a member of the owner or of the other restricted role;
+- it has CREATE or TEMP;
+- it has any table privilege beyond the allowlist (agent: none);
+- it can execute any function beyond its API;
+- an API function isn't `SECURITY DEFINER` with a pinned `search_path`;
+- PUBLIC holds anything.
+
+The fleet service runs the same audit at startup (refusing to start on any problem) and re-runs it every 60 s in `/readyz`.
+
+## OS users and secret files
+
+| Account | Purpose | Can read |
+|---|---|---|
+| `automaton-fleet-service` (system, nologin) | Runs the fleet service | `service.env`, only via systemd `LoadCredential=` (`$CREDENTIALS_DIRECTORY/service.env`) |
+| `automaton-agent` (nologin, home 0700) | Runs local agent runtimes | Its own `~/.automaton/fleet-credentials.json` (0600). `/etc/automaton-fleet` is `InaccessiblePaths`, and `ProtectProc=invisible` hides other processes' `/proc/*/environ` |
+| group `automaton-fleet-admin` | The operator (`sl4mm3r`) | `admin.env` |
+
+| File | Owner / mode | Contents |
+|---|---|---|
+| `/etc/automaton-fleet/` | root:root 0755 | — |
+| `admin.env` | root:automaton-fleet-admin 0640 | `FLEET_ADMIN_DATABASE_URL` (moved out of the repo `.env.fleet`) |
+| `service.env` | root:root 0600 | `FLEET_SERVICE_DATABASE_URL`, `FLEET_AGENT_DATABASE_URL` (fresh 64-hex passwords) |
+| `runtime.env` | root:root 0644 | Non-secret: `FLEET_RUNTIME_*`, `REAL_*_ENABLED=false`, listen address |
+| `/var/log/automaton-fleet/` | service user 0700 (systemd `LogsDirectory`) | `audit.jsonl` (0600) |
+
+`src/fleet/secret-files.ts` refuses symlinks, non-regular files, world-accessible files, and group-accessible files (except `admin.env`, which may be group-read). An unreadable file is a clear error, never a silent fallback.
+
+- The **service loader never reads `admin.env`**, and the service refuses to start if `FLEET_ADMIN_DATABASE_URL` is visible to it.
+- The CLI warns when a controller secret still comes from the repository `.env.fleet`, and the doctor treats that as a blocker.
+- Secrets never go through `Environment=` or `EnvironmentFile=`.
+
+## Fleet service deployment
+
+```
+automaton-agent ─HTTP(loopback)+own token─► automaton-fleet.service (User=automaton-fleet-service)
+                                              ├─ fleet_service_login → svc_* + SELECT (controller)
+                                              ├─ fleet_agent_login   → api_*          (agent-scoped calls)
+                                              └─ reaper (15 s) → leases, heartbeats, parent reports, sandbox terminations
+```
+
+- **Code:** `/opt/automaton-fleet/releases/<commit>` (root-owned, read-only), with `current` pointing to the active release. Node is a root-owned pinned copy at `/opt/automaton-fleet/node/bin/node`.
+- **Unit** (`deploy/systemd/automaton-fleet.service`):
+  - `Restart=on-failure`, `RestartSec=5s`, `StartLimitBurst=5` per `StartLimitIntervalSec=300`.
+  - Shutdown: `KillSignal=SIGTERM`, `TimeoutStopSec=30s`.
+  - Network: `IPAddressDeny=any` + `IPAddressAllow=localhost`.
+  - Sandboxing: `ProtectSystem=strict`, `ProtectHome`, `NoNewPrivileges`, empty capability set, `SystemCallFilter=@system-service`, `InaccessiblePaths` covering `admin.env` and the agent's home.
+- **Loopback only:** `FLEET_API_LISTEN` must be 127.0.0.1 or ::1, enforced in code as well as by systemd.
+- **Health:** `GET /healthz` is liveness (no DB). `GET /readyz` checks the database, agent API, privilege audit, runtime release versus the approved runtime, and reaper freshness. It reports sandbox termination as a warning. It returns 503 when not ready or draining.
+- **Graceful shutdown:** SIGTERM → stop accepting → new requests get 503 → in-flight requests and any running reaper pass finish (up to `FLEET_SHUTDOWN_DRAIN_MS`, 10 s) → pools close → exit 0. A second signal forces exit 1.
+- **Structured logs:** JSON lines (`ts`, `level`, `service`, `event`, …) with credentials scrubbed, on stdout → journald. Audit events also go to `audit.jsonl`.
+- **Startup refusals:**
+  - the service DSN is the schema owner or a superuser;
+  - the agent DSN isn't the restricted agent role;
+  - the privilege audit fails;
+  - the listen address isn't loopback;
+  - `FLEET_ADMIN_DATABASE_URL` is present;
+  - the runtime release ≠ the registry-approved runtime.
+- `deploy/systemd/automaton-agent.service` is the matching isolation boundary for a local agent runtime. It is installed but **not enabled**.
+
+## Runtime pinning
+
+- **Release definition:** a fleet release is `FLEET_RUNTIME_REPO` + `FLEET_RUNTIME_COMMIT` + `FLEET_RUNTIME_BUILD_ID` + `FLEET_RUNTIME_LOCKFILE_SHA256` in `runtime.env`.
+- **Values:** `scripts/fleet-build-runtime.sh` produces them from a clean clone, using `pnpm install --frozen-lockfile`.
+- **Approval:** `fleet:admin approve-runtime` copies them into the registry.
+- **Immutable while running (DB trigger `fleet_state_runtime_guard`):** the approved runtime can't change while any lease is open or any child is living. Clearing it is always allowed, and blocks replication.
+- **Service pin:** the service pins the release at startup, refuses to start if it differs from the approved runtime, and refuses `claim` and `activate` for leases that expect a different release. It releases those slots as failed and records `runtime_release_mismatch`.
+- **Fail closed at activation:** a child can't choose its repo or commit (`resolveChildRuntime`, lease expectations). A wrong repo, commit or build ID is refused twice: by the service and by `svc_activate`. No credential is issued.
+- **Service code:** `scripts/fleet-deploy-release.sh build` (operator; frozen build; verified against `runtime.env`), then `sudo … install` (root copy, re-verified, immutable directory, atomic `current` switch).
+
+## Heartbeats, leases, deaths, zombies
+
+- States are ACTIVE → UNRESPONSIVE (`unresponsive=` s) → DEAD (`dead=` s), set with `fleet:admin set-timeouts reservation= provisioning= unresponsive= dead= parent-quiet=`.
+- Reserved and provisioning leases expire and are reaped (`reservation_expired`, `slot_released`).
+- **Parent-reported deaths are now effective** (`svc_child_terminal`, only for the caller's own children):
+  - unclaimed or provisioning children are released at once;
+  - a living child that has been quiet for `parent_report_quiet_s` (60 s) dies at once;
+  - otherwise the child is flagged and the reaper retires it once it has been quiet that long, instead of waiting for `heartbeat_dead_s`;
+  - a child that keeps heartbeating is never killed on its parent's word.
+- **Sandbox termination queue:** every death with a known sandbox enqueues a row in `fleet_sandbox_terminations`, and the service works the queue through a `SandboxTerminator`. **Conway has no stop or delete API**, so the default terminator records `unsupported` (`sandbox_termination_unsupported`). This stays a **blocker**: the zombie can't authenticate, heartbeat or replicate, but its sandbox may keep running.
+- Release, death, reap and termination results are all conditional and idempotent. Each writes its event exactly once.
+
+## Readiness doctor
+
+`pnpm fleet:doctor [--json] [--deployment-only]` reports:
+- database connectivity, schema version and privilege audit;
+- fleet service readiness (`/readyz`);
+- runtime repo, commit and build ID, and whether they match the approved runtime;
+- the replication, payments and owner-sweep flags (any `true` fails);
+- fleet maximum, living agents, reserved slots, stale agents, stale reservations and unterminated sandboxes;
+- OS users and groups, secret-file modes, the systemd unit, and legacy secrets in `.env.fleet`.
+
+It gives two verdicts: **DEPLOYMENT** OK/FAIL and **REAL REPLICATION** SAFE/UNSAFE. The exit code is 1 while any blocker remains. Today it reports DEPLOYMENT FAIL and REAL REPLICATION UNSAFE with 11 blockers.
+
+## Tests
+
+`src/__tests__/fleet/fleet-phase4.test.ts` (38 tests, `pnpm test:deploy`) runs on a throwaway cluster that is set up exactly like production (roles script fed on stdin). It covers:
+- privilege boundaries, plus an audit that fails for 11 over-grant mutations, and role-script drift repair;
+- migrations refused for the service and agent logins;
+- wrong DB role; missing DB; unreadable, world-readable or symlinked secret files;
+- wrong repo, commit or build ID, both through the store and by calling `svc_activate` directly with a self-consistent forged proof;
+- replayed nonce;
+- runtime immutability;
+- stale heartbeat, stale reservation, idempotent cleanup, and parent-reported deaths;
+- the termination queue;
+- the service: refusals, loopback, `/healthz` and `/readyz`, replication still disabled, structured logs, drain;
+- service unavailable;
+- the doctor verdicts;
+- unit and script invariants;
+- shell-guard and self-modification protection for the new files.
+
+# Phase 5 — Production control plane, lifecycle enforcement, treasury economics
+
+Real replication, real payments and owner sweeps remain **disabled**. No live transfer happens anywhere in this phase. Sweeps, owner distributions, custody transfers and approved spends are recorded as plans only (`planned_not_executed` / `blocked_payments_disabled` / `approved_not_executed`). Schema is now **v5**: v4 covers lifecycle and the remote control plane, v5 covers the treasury.
+
+## Lifecycle
+
+```
+RESERVED ─claim─► PROVISIONING ─sandbox reported─► VERIFYING ─attested─► ACTIVE ⇄ UNRESPONSIVE ─► TERMINATING ─► DEAD
+      └────────────── any failure ──────────────► FAILED_PROVISIONING (sandbox queued for cleanup)          └─► ORPHANED ─► DEAD
+```
+
+- **Provisioning records** (`fleet_provisioning`) are created at claim time, before any sandbox exists. Each has `provisioning_id`, `reservation_id`, `parent_agent_id`, `sandbox_id`, `expected_agent_id`, `expected_runtime_commit`, `created_at`, `activation_deadline`, `status`, `cleanup_status` and `failure_reason`.
+  - `spawnChild` reports the sandbox the moment `createSandbox` returns, with 3 retries; a failed report aborts the spawn. It reports `verifying` before the runtime install and attestation.
+  - Activation must use the recorded sandbox (`FLEET_SANDBOX_MISMATCH` otherwise).
+  - A failed attempt stays visible: `failed_provisioning` with cleanup `pending`, then `terminated` or `unsupported` (orphaned).
+- **Capability revocation is a trigger.** Any move into TERMINATING, ORPHANED, DEAD or FAILED revokes the fleet credential and every session, freezes wallet spending, and voids pending challenges. No code path can skip it.
+- **Health is not a heartbeat.** The controller issues challenges (short-lived nonce, hash stored, single-use) in heartbeat responses. The agent must answer with its runtime identity (commit, plus build ID for children, checked against its lease) and prove its shell guard refuses a canary command (policy responsiveness). Registration and credential validity are checked on every call.
+  - An agent becomes UNRESPONSIVE on any of:
+    - a stale heartbeat (`unresponsive_s`);
+    - no passed challenge within `health_grace_s` (300);
+    - `max_challenge_failures` (3) failed or expired challenges.
+  - Heartbeats never restore health. Only a passed challenge does.
+  - **Termination eligibility:** an agent UNRESPONSIVE for longer than `termination_grace_s` (480), or with no heartbeat for `heartbeat_dead_s`, moves to TERMINATING. The clock runs from when it *became* unresponsive, so a heartbeat-only zombie can't hold its slot.
+- **When the provider can't stop a sandbox** (Conway has no API for it; the terminator reports `unsupported`, or 5 attempts fail), the agent becomes **ORPHANED**:
+  - Every capability is already revoked: fleet credential, sessions, wallet spending, replication (parent must be ACTIVE and unfrozen), controller access (`FLEET_AGENT_QUARANTINED`).
+  - It is recorded in `fleet_orphans`, the append-only audit of external infrastructure.
+  - **Slot policy:**
+    - A health-terminated or quarantined orphan keeps a *quarantine slot* (`fleet_state.quarantined_slots`, counted against the cap) until one of: the operator confirms cleanup (`fleet:admin resolve-orphan`), the terminator confirms, or `orphan_slot_hold_s` (72 h; 0 = hold until resolved) elapses.
+    - After the hold, the slot is released but the orphan record **stays open**.
+    - Replication is blocked fleet-wide (`FLEET_ORPHANS_UNRESOLVED`) while more than `max_open_orphans` (1) remain unresolved.
+    - Orphans of failed provisioning and of voluntary deaths are audited but hold no slot: they never held credentials, or they confirmed their own shutdown.
+- **Settings:** `fleet:admin lifecycle-policy interval= challengeTtl= healthGrace= maxFailures= terminationGrace= orphanHold= maxOrphans= sessionTtl=`. Operator actions: `quarantine`, `resolve-orphan`, `orphans`, `provisioning [cleanup]`.
+
+## Remote control plane
+
+```
+child sandbox ──HTTPS──► fleet service ──► PostgreSQL (loopback only; never exposed)
+  fa1 credential ─POST /v1/session─► fs1 session (TTL 600 s, hash in DB, per agent)
+  every other request: FleetSession fs1 + x-fleet-timestamp (±60 s) + x-fleet-nonce (single use, DB ledger)
+                       + x-fleet-signature = HMAC-SHA256(session, METHOD\nPATH\nTS\nNONCE\nsha256(body))
+```
+
+- **Identity:** a session token embeds exactly one agent ID. The database checks each session on every agent-scoped call: it must exist for that agent, be unexpired and unrevoked, belong to a living, non-quarantined agent, and the agent's credential must be valid.
+  - Sessions can't mint sessions.
+  - Rotating a credential or leaving the living population revokes every session.
+  - The long-lived credential is accepted **only** by `POST /v1/session`. `allowLegacyBearer` exists only for the Phase 3 tests.
+- **Replay protection:** nonces are recorded in `fleet_request_nonces`, which is shared across service instances and restarts. Stale timestamps are refused, and a tampered body breaks the signature.
+- **Rate limits** (in memory, per instance): 60-request burst / 5 per s per agent; 10 sessions/min per agent; 20 auth failures/min per address → 429 with `Retry-After`.
+- **Audit:** every request is logged as `api_request` with request ID, agent, method, path, status, latency and IP (no bodies or tokens). Security events go to `fleet_events`.
+- **HTTPS:** set `FLEET_TLS_CERT_FILE` plus the key via `FLEET_TLS_KEY_FILE` or `LoadCredential=tls.key` (the key must be 0600). The service listens off-loopback only when `FLEET_REMOTE_LISTEN_ENABLED=true` **and** TLS is configured. The shipped unit stays loopback-only with `IPAddressDeny=any`; the TLS lines are commented out. The client refuses plain HTTP off loopback.
+
+## Treasury economics
+
+**Waterfall per agent** (integer cents):
+
+| Concept | Rule |
+|---|---|
+| GROSS_REVENUE / DIRECT_COSTS / NET_PROFIT | From the agent ledger. **Owner funding (and fleet funding) is never revenue or profit** |
+| OPERATING_OBLIGATIONS | Approved, unsettled obligations |
+| PROTECTED_RUNWAY | `runway_days` (30) × average daily direct-cost burn (30-day lookback) |
+| APPROVED_GROWTH_CAPITAL | Unspent approved allocations that are **current** (start ≤ now < expiry). Expired, proposed or rejected ones protect nothing |
+| CONTINGENCY_RESERVE | `max(min_contingency_cents, contingency_pct × 30 days of burn)` |
+| EXCESS_CAPITAL | `max(0, cash − all of the above)` |
+| FLEET_SWEEP | `floor(min(EXCESS_CAPITAL, undistributed NET_PROFIT) × effective rate)` |
+| AGENT_RETAINED_CAPITAL | `cash − FLEET_SWEEP`, which by construction is ≥ everything protected (also asserted at runtime) |
+
+**Dynamic sweep rate** (`src/fleet/treasury/engine.ts`, `computeSweepRate`):
+
+```
+base      = population band: 1–10: 10% · 11–20: 12.5% · 21–30: 15% · 31–40: 17.5% · 41–49: 20% · 50: mature_fleet_rate (45%)
+maturity  = min(1, age / 180 d) × (0.5 + 0.5 × revenue consistency)
+surplus   = clamp((excess / protected − 1) / 3)                 (4× protected ⇒ fully surplus)
+uplift    = (max − base) × maturity × surplus                   highly capitalised mature agents
+          + 0.05 × treasury reserve shortfall                    fleet treasury needs reserves
+          + 0.05 × recent loss ratio                             recent capital losses
+          − 0.10 × clamp(ROI / 50%) × forecast accuracy          credible productive use keeps capital
+policy    = min(max_sweep_rate (≤ 70%), base + max(0, uplift))
+rate      = policy × (1 − combined active temporary reductions)
+```
+
+Approved expansion needs reduce the rate by being protected capital, which lowers `excess`, and through temporary reductions.
+
+**Capital allocations** (`fleet_capital_allocations`): `allocation_id`, `agent_id`, `purpose`, requested and approved amounts, `start_date`, `expiry_date`, expected return and duration, `status`, actual return, deployed amount, and who proposed and decided.
+- Agents may only **propose**, via `POST /v1/capital/propose`.
+- Approve, reject, change, complete, reduce sweep, freeze, quarantine and custody transfer are FleetAdmin-only, through the admin credential and CLI.
+- The database refuses **any fleet agent ID or agent wallet** as an approver (`fleet_require_operator_approver`).
+- Approvals above the performance-scaled discretionary limit need an explicit override.
+
+**Capital performance profile** (internal, never exposed to agents, no single score): capital deployed and returned, ROI, forecast accuracy, failed and profitable allocations, consecutive failures, revenue consistency, capital efficiency, recent loss ratio.
+- It drives the discretionary multiplier: strong agents get up to 2× the base allocation; each consecutive failure and recent losses shrink it toward 0.
+- Emergency rescue is advice only (`rescue-advice`) and always needs an operator decision.
+
+**Fleet bank:**
+- The treasury ledger is separate from the owner's withdrawal address. The database refuses equal addresses.
+- Permitted uses: infrastructure, inference, maintenance, emergency rescue, replacement agents, approved growth, compliance, contingency.
+- Reserve target = `reserve_target_months` (3) × monthly operating expense (last 90 days of recorded operating spend).
+- Owner distributions are planned only from `balance − reserve target − treasury obligations`; a DB check constraint enforces this. Owner sweeps stay disabled.
+
+**Custody:** a custody record is created for every agent wallet (`fleet_wallet_custody`, supervisor `fleetadmin`).
+- Agents request spends from **their own** custody wallet only (`POST /v1/wallet/spend-request`). The request is checked against agent health, the freeze flag, a current approved allocation, or the daily limit.
+- Approved spends are **never executed**. `executeApprovedSpend` requires `REAL_PAYMENTS_ENABLED=true` **and** a controller signer, and neither exists.
+- Owner and treasury keys never reach agents.
+
+## Tests
+
+- **`src/__tests__/fleet/fleet-phase5.test.ts`** (43 tests, `pnpm test:phase5`), part of `test:fleet`, `test:security` and `test:financial`.
+- **Mutation-checked:** removing the policy canary check, letting heartbeats restore health, skipping the nonce ledger, or not protecting growth capital each makes tests fail.
+- **Earlier phases:** their tests share `fixtures/wipe.js` for resets. Phase 3's direct-service tests opt into `allowLegacyBearer`. The Phase 4 production-mode test now uses the session client.

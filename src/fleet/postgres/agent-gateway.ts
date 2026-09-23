@@ -29,6 +29,7 @@ export type ApiResult<T = Record<string, unknown>> = ({ ok: true } & T) | { ok: 
 export interface StateJson {
   livingAgents: number;
   reservedSlots: number;
+  quarantinedSlots?: number;
   maxAgents: number;
   operatingMode: string;
   replicationEnabled: boolean;
@@ -41,6 +42,7 @@ export function stateFromJson(j: StateJson): SharedFleetState {
   return {
     livingAgents: j.livingAgents,
     reservedSlots: j.reservedSlots,
+    quarantinedSlots: j.quarantinedSlots ?? 0,
     maxAgents: Math.min(j.maxAgents, FLEET_PG_HARD_MAX_AGENTS),
     operatingMode: isFleetState(j.operatingMode) ? j.operatingMode : "EMERGENCY",
     runtime: j.runtime,
@@ -181,5 +183,30 @@ export class PgAgentGateway {
 
   async setOwnStatus(agentId: string, token: string, status: string, reason: string): Promise<ApiResult<{ changed: boolean }>> {
     return this.call("api_set_own_status", [agentId, token, status, reason]);
+  }
+
+  /** Exchange the long-lived credential for a short-lived session (only the hash is stored). */
+  async openSession(agentId: string, token: string, sessionHash: string): Promise<ApiResult<{ expiresAt: string; ttlS: number }>> {
+    return this.call("api_open_session", [agentId, token, sessionHash]);
+  }
+
+  async proposeAllocation(
+    agentId: string,
+    token: string,
+    p: { allocationId: string; purpose: string; requestedCents: number; expectedReturnCents: number; expectedDurationDays: number },
+  ): Promise<ApiResult<{ allocationId: string; status: string }>> {
+    return this.call("api_propose_allocation", [
+      agentId, token, p.allocationId, p.purpose, p.requestedCents, p.expectedReturnCents, p.expectedDurationDays,
+    ]);
+  }
+
+  async requestSpend(
+    agentId: string,
+    token: string,
+    r: { requestId: string; fromWallet: string; toAddress: string; amountCents: number; purpose: string; allocationId: string | null },
+  ): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_request_spend", [
+      agentId, token, r.requestId, r.fromWallet, r.toAddress, r.amountCents, r.purpose, r.allocationId,
+    ]);
   }
 }

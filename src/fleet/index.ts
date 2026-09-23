@@ -28,7 +28,21 @@ export {
   hashAgentToken,
 } from "./postgres/store.js";
 export type { FleetTimeouts } from "./postgres/store.js";
-export { FLEET_PG_SCHEMA_VERSION, PG_MIGRATIONS, AGENT_API_FUNCTIONS } from "./postgres/migrations.js";
+export { FLEET_PG_SCHEMA_VERSION, PG_MIGRATIONS, AGENT_API_FUNCTIONS, SERVICE_API_FUNCTIONS, SERVICE_READ_TABLES } from "./postgres/migrations.js";
+export { auditPrivileges } from "./postgres/privileges.js";
+export type { PrivilegeAuditResult } from "./postgres/privileges.js";
+export { runDoctor, formatDoctorReport } from "./doctor.js";
+export type { DoctorReport, DoctorCheck } from "./doctor.js";
+export { readSecretEnvFile, loadAdminEnv, loadServiceEnv, SecretFileError } from "./secret-files.js";
+export { UnsupportedSandboxTerminator } from "./service/terminator.js";
+export * as treasury from "./treasury/engine.js";
+export { PgTreasuryStore } from "./treasury/store.js";
+export { executeApprovedSpend } from "./treasury/custody.js";
+export { RateLimiter } from "./service/rate-limit.js";
+export { signRequest, canonicalRequest, SIG_HEADERS } from "./service/server-signing.js";
+export { defaultHealthResponder } from "./service/client.js";
+export type { HealthResponder } from "./service/client.js";
+export type { SandboxTerminator } from "./service/terminator.js";
 export { PgAgentGateway } from "./postgres/agent-gateway.js";
 export type { FleetBackend } from "./backend.js";
 export { FleetService } from "./service/server.js";

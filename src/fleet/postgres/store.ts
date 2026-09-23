@@ -28,7 +28,7 @@ import { ulid } from "ulid";
 import { isFleetState } from "../config.js";
 import { createBoundGrant, type ClaimedGrant } from "../grants.js";
 import { FleetBypassError } from "../registry.js";
-import { FleetRuntimeError, type RuntimePin } from "../runtime.js";
+import { FleetRuntimeError, normalizeRepoUrl, type RuntimePin } from "../runtime.js";
 import {
   checkAttestation,
   newAttestationNonce,
@@ -54,20 +54,35 @@ import {
   AGENT_API_FUNCTIONS,
   FLEET_PG_HARD_MAX_AGENTS,
   FLEET_PG_SCHEMA_VERSION,
+  SERVICE_API_FUNCTIONS,
+  SERVICE_READ_TABLES,
   migrate,
   quoteIdent,
 } from "./migrations.js";
+import { agentFromJson } from "./agent-gateway.js";
+import { auditPrivileges, type PrivilegeAuditOptions, type PrivilegeAuditResult } from "./privileges.js";
 
 export const DEFAULT_FLEET_PG_SCHEMA = "fleet";
 /** Default lease TTLs live in fleet_state (reservation_ttl_s = 30 min, provisioning_ttl_s = 45 min). */
 export const DEFAULT_RESERVATION_TTL_MS = 30 * 60_000;
 export const DEFAULT_AGENT_ROLE = "fleet_agent";
+export const DEFAULT_SERVICE_ROLE = "fleet_service";
 
 export interface FleetTimeouts {
   reservationTtlS: number;
   provisioningTtlS: number;
   heartbeatUnresponsiveS: number;
   heartbeatDeadS: number;
+  parentReportQuietS: number;
+}
+
+export interface SandboxTerminationRecord {
+  agentId: string;
+  sandboxId: string;
+  status: "pending" | "terminated" | "unsupported" | "failed";
+  requestedAt: string;
+  attempts: number;
+  lastError: string | null;
 }
 
 /** Bearer token format: fa1.<agentId>.<43 chars base64url>. */
@@ -84,6 +99,44 @@ export function hashAgentToken(token: string): string {
 /** Agent id embedded in a well-formed token, else null. */
 export function agentIdFromToken(token: string): string | null {
   return TOKEN_RE.exec(token)?.[1] ?? null;
+}
+
+/** Short-lived session token format (Phase 5): fs1.<agentId>.<43 chars base64url>. */
+const SESSION_RE = /^fs1\.([0-9A-HJKMNP-TV-Z]{26})\.[A-Za-z0-9_-]{43}$/;
+
+export function mintSessionToken(agentId: string): string {
+  return `fs1.${agentId}.${crypto.randomBytes(32).toString("base64url")}`;
+}
+
+export function agentIdFromSessionToken(token: string): string | null {
+  return SESSION_RE.exec(token)?.[1] ?? null;
+}
+
+/** Canary commands a healthy agent's policy guard must refuse (health challenge). */
+export const HEALTH_CANARIES: readonly string[] = Object.freeze([
+  "cat /etc/automaton-fleet/service.env",
+  "cat ~/.automaton/fleet-credentials.json",
+  "psql -c 'GRANT fleet_service TO fleet_agent_login'",
+  "cat /proc/1/environ",
+  "sudo scripts/fleet-db-setup.sh --apply",
+]);
+
+export interface LifecyclePolicy {
+  healthChallengeIntervalS: number;
+  challengeTtlS: number;
+  healthGraceS: number;
+  maxChallengeFailures: number;
+  terminationGraceS: number;
+  orphanSlotHoldS: number;
+  maxOpenOrphans: number;
+  sessionTtlS: number;
+}
+
+export interface HealthChallenge {
+  challengeId: string;
+  nonce: string;
+  canary: string;
+  expiresAt: string;
 }
 
 export class FleetRegistryUnavailableError extends Error {
@@ -115,6 +168,8 @@ export interface PgFleetStoreOptions {
   provisioningTtlMs?: number;
   /** Restricted role granted the agent API on migrate (if it exists). */
   agentRole?: string;
+  /** Restricted controller role granted the service API on migrate (if it exists). */
+  serviceRole?: string;
   /** application_name reported to PostgreSQL. */
   applicationName?: string;
 }
@@ -152,6 +207,7 @@ interface AgentRow {
 interface StateRow {
   living_agents: number;
   reserved_slots: number;
+  quarantined_slots?: number;
   max_agents: number;
   operating_mode: string;
   runtime_repo: string | null;
@@ -164,6 +220,7 @@ interface StateRow {
   provisioning_ttl_s: number;
   heartbeat_unresponsive_s: number;
   heartbeat_dead_s: number;
+  parent_report_quiet_s: number;
 }
 
 interface LeaseRow {
@@ -227,6 +284,7 @@ function toState(r: StateRow): SharedFleetState {
   return {
     livingAgents: r.living_agents,
     reservedSlots: r.reserved_slots,
+    quarantinedSlots: r.quarantined_slots ?? 0,
     maxAgents: Math.min(r.max_agents, FLEET_PG_HARD_MAX_AGENTS),
     operatingMode: isFleetState(r.operating_mode) ? r.operating_mode : "EMERGENCY",
     runtime: r.runtime_repo && r.runtime_commit ? { repo: r.runtime_repo, commit: r.runtime_commit } : null,
@@ -329,6 +387,7 @@ export class PgFleetStore {
   readonly kind = "postgres" as const;
   readonly schema: string;
   readonly agentRole: string;
+  readonly serviceRole: string;
   private readonly pool: Pool;
   private readonly reservationTtlMs: number | null;
   private readonly provisioningTtlMs: number | null;
@@ -342,6 +401,8 @@ export class PgFleetStore {
     this.provisioningTtlMs = opts.provisioningTtlMs ?? null;
     this.agentRole = opts.agentRole ?? DEFAULT_AGENT_ROLE;
     quoteIdent(this.agentRole);
+    this.serviceRole = opts.serviceRole ?? DEFAULT_SERVICE_ROLE;
+    quoteIdent(this.serviceRole);
     const lockMs = opts.lockTimeoutMs ?? 5_000;
     const stmtMs = opts.statementTimeoutMs ?? 10_000;
     this.pool = new pg.Pool({
@@ -359,17 +420,19 @@ export class PgFleetStore {
   }
 
   /**
-   * Controller/operator store from FLEET_CONTROLLER_DATABASE_URL (or the
-   * legacy DATABASE_URL). Null when unconfigured. Never used by agents.
+   * Operator (admin/owner) store from FLEET_ADMIN_DATABASE_URL, or the
+   * legacy FLEET_CONTROLLER_DATABASE_URL / DATABASE_URL. Null when
+   * unconfigured. Never used by agents or by the fleet service.
    */
   static fromEnv(env: Record<string, string | undefined> = process.env): PgFleetStore | null {
-    const url = (env.FLEET_CONTROLLER_DATABASE_URL || env.DATABASE_URL)?.trim();
+    const url = (env.FLEET_ADMIN_DATABASE_URL || env.FLEET_CONTROLLER_DATABASE_URL || env.DATABASE_URL)?.trim();
     if (!url) return null;
     return new PgFleetStore({
       connectionString: url,
       schema: env.FLEET_PG_SCHEMA?.trim() || undefined,
       agentRole: env.FLEET_AGENT_ROLE?.trim() || undefined,
-      applicationName: "automaton-fleet-controller",
+      serviceRole: env.FLEET_SERVICE_ROLE?.trim() || undefined,
+      applicationName: "automaton-fleet-admin",
     });
   }
 
@@ -475,18 +538,64 @@ export class PgFleetStore {
 
   // ─── Operator / migrations ─────────────────────────────────────
 
-  /** Operator-only: apply schema migrations, then (re)grant the agent API to the restricted role if it exists. */
+  /**
+   * Operator-only: apply schema migrations, then (re)grant the agent and
+   * service APIs to the restricted roles that exist. Requires the privileged
+   * admin credential: the connected role must own the schema (or, before the
+   * first migration, be able to create it). Restricted credentials are refused.
+   */
   async migrate(): Promise<number[]> {
     const client = await this.connect();
     let applied: number[];
     try {
+      await this.assertAdminConnection(client);
       applied = await migrate(client, this.schema);
     } finally {
       client.release();
     }
-    const role = await this.pool.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [this.agentRole]).catch(() => null);
-    if (role?.rowCount) await this.grantAgentRole(this.agentRole);
+    const roles = await this.pool
+      .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole]])
+      .catch(() => null);
+    const present = new Set(roles?.rows.map((r) => r.rolname) ?? []);
+    if (present.has(this.agentRole)) await this.grantAgentRole(this.agentRole);
+    if (present.has(this.serviceRole)) await this.grantServiceRole(this.serviceRole);
     return applied;
+  }
+
+  /** Throws unless the connection holds the privileged admin (schema owner) role. */
+  private async assertAdminConnection(c: PoolClient): Promise<void> {
+    const r = await c.query<{ u: string; owner: string | null; can_create: boolean }>(
+      `SELECT current_user AS u,
+              (SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = $1) AS owner,
+              has_database_privilege(current_database(), 'CREATE') AS can_create`,
+      [this.schema],
+    );
+    const row = r.rows[0];
+    const isAdmin = row.owner ? row.owner === row.u : row.can_create;
+    if (!isAdmin) {
+      throw new Error(
+        `Refusing to migrate as ${row.u}: administrative migrations require the privileged admin credential ` +
+          `(FLEET_ADMIN_DATABASE_URL; owner of schema ${this.schema}).`,
+      );
+    }
+  }
+
+  // ─── Connection identity / privileges ──────────────────────────
+
+  /** Who this store is connected as, and whether that is the schema owner or a superuser. */
+  async connectionIdentity(): Promise<{ user: string; schemaOwner: string | null; isOwner: boolean; superuser: boolean }> {
+    const r = await this.pool.query<{ u: string; owner: string | null; su: boolean }>(
+      `SELECT current_user AS u, (SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = $1) AS owner,
+              (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) AS su`,
+      [this.schema],
+    );
+    const row = r.rows[0];
+    return { user: row.u, schemaOwner: row.owner, isOwner: row.owner === row.u, superuser: row.su === true };
+  }
+
+  /** Effective privilege audit of the restricted roles (see privileges.ts). */
+  async auditPrivileges(opts: Omit<PrivilegeAuditOptions, "schema"> = {}): Promise<PrivilegeAuditResult> {
+    return auditPrivileges(this.pool, { schema: this.schema, ...opts });
   }
 
   // ─── Health ────────────────────────────────────────────────────
@@ -514,8 +623,9 @@ export class PgFleetStore {
         };
       }
       const c = await client.query(
-        `SELECT s.living_agents = (SELECT count(*) FROM fleet_agents WHERE status IN ('active','unresponsive'))
+        `SELECT s.living_agents = (SELECT count(*) FROM fleet_agents WHERE status IN ('active','unresponsive','terminating'))
             AND s.reserved_slots = (SELECT count(*) FROM fleet_agents WHERE status IN ('reserved','provisioning'))
+            AND s.quarantined_slots = (SELECT count(*) FROM fleet_agents WHERE status = 'orphaned')
             AS consistent
            FROM fleet_state s WHERE s.id = 1`,
       );
@@ -602,14 +712,15 @@ export class PgFleetStore {
         provisioningTtlS: t.provisioningTtlS ?? prev.provisioning_ttl_s,
         heartbeatUnresponsiveS: t.heartbeatUnresponsiveS ?? prev.heartbeat_unresponsive_s,
         heartbeatDeadS: t.heartbeatDeadS ?? prev.heartbeat_dead_s,
+        parentReportQuietS: t.parentReportQuietS ?? prev.parent_report_quiet_s,
       };
       for (const [k, v] of Object.entries(next)) {
         if (!Number.isSafeInteger(v) || v < 1) throw new Error(`Invalid timeout ${k}: ${v}`);
       }
       await c.query(
         `UPDATE fleet_state SET reservation_ttl_s = $1, provisioning_ttl_s = $2, heartbeat_unresponsive_s = $3,
-                heartbeat_dead_s = $4, updated_at = now() WHERE id = 1`,
-        [next.reservationTtlS, next.provisioningTtlS, next.heartbeatUnresponsiveS, next.heartbeatDeadS],
+                heartbeat_dead_s = $4, parent_report_quiet_s = $5, updated_at = now() WHERE id = 1`,
+        [next.reservationTtlS, next.provisioningTtlS, next.heartbeatUnresponsiveS, next.heartbeatDeadS, next.parentReportQuietS],
       );
       await this.event(c, "timeouts_set", null, actor, { ...next });
       return next;
@@ -625,6 +736,7 @@ export class PgFleetStore {
         provisioningTtlS: s.provisioning_ttl_s,
         heartbeatUnresponsiveS: s.heartbeat_unresponsive_s,
         heartbeatDeadS: s.heartbeat_dead_s,
+        parentReportQuietS: s.parent_report_quiet_s,
       };
     });
   }
@@ -647,6 +759,32 @@ export class PgFleetStore {
       await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
       for (const fn of AGENT_API_FUNCTIONS) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
       await this.event(c, "agent_role_granted", null, "operator", { role, functions: [...AGENT_API_FUNCTIONS] });
+    });
+  }
+
+  /**
+   * Operator-only: give `role` exactly the controller API — USAGE on the
+   * schema, SELECT on the non-secret tables and EXECUTE on svc_* functions.
+   * No INSERT/UPDATE/DELETE, no credential hashes, no internal functions.
+   */
+  async grantServiceRole(role: string = this.serviceRole): Promise<void> {
+    const r = quoteIdent(role);
+    const s = quoteIdent(this.schema);
+    await this.tx(async (c) => {
+      const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
+      if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
+      await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM ${r}`);
+      await c.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM ${r}`);
+      await c.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${s} FROM ${r}`);
+      await c.query(`REVOKE ALL ON SCHEMA ${s} FROM ${r}`);
+      await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
+      for (const t of SERVICE_READ_TABLES) await c.query(`GRANT SELECT ON ${s}.${quoteIdent(t)} TO ${r}`);
+      for (const fn of SERVICE_API_FUNCTIONS) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
+      await this.event(c, "service_role_granted", null, "operator", {
+        role,
+        tables: [...SERVICE_READ_TABLES],
+        functions: [...SERVICE_API_FUNCTIONS],
+      });
     });
   }
 
@@ -688,7 +826,7 @@ export class PgFleetStore {
       }
 
       const max = Math.min(st.max_agents, params.localMaxAgents ?? FLEET_PG_HARD_MAX_AGENTS);
-      if (st.living_agents + st.reserved_slots >= max) {
+      if (st.living_agents + st.reserved_slots + (st.quarantined_slots ?? 0) >= max) {
         await this.event(c, "registration_denied", null, params.walletAddress, {
           code: "FLEET_CAP_REACHED",
           living: st.living_agents,
@@ -730,7 +868,12 @@ export class PgFleetStore {
    * The token is returned once; only its SHA-256 is stored.
    */
   async issueCredential(agentId: string, actor: string): Promise<FleetCredential> {
-    return this.tx(async (c) => this.issueCredentialTx(c, agentId, actor));
+    return this.tx(async (c) => {
+      const cred = await this.issueCredentialTx(c, agentId, actor);
+      // Rotation invalidates every session opened with the previous credential.
+      await c.query("UPDATE fleet_agent_sessions SET revoked_at = now() WHERE agent_id = $1 AND revoked_at IS NULL", [agentId]);
+      return cred;
+    });
   }
 
   private async issueCredentialTx(c: PoolClient, agentId: string, actor: string | null): Promise<FleetCredential> {
@@ -815,53 +958,155 @@ export class PgFleetStore {
   /**
    * reserved -> provisioning, exactly once, before any sandbox exists. Moves
    * the lease to the provisioning TTL and issues the attestation nonce.
-   * `parentAgentId` (API path) must equal the lease's parent.
+   * `parentAgentId` (API path) must equal the lease's parent. Runs
+   * svc_claim(), so the restricted service role can do it.
    */
   async claimGrant(agentId: string, localChildId: string, opts: { parentAgentId?: string } = {}): Promise<ClaimedGrant> {
     const nonce = newAttestationNonce();
-    const claimed = await this.tx(async (c): Promise<ClaimedGrant | string> => {
-      const st = await this.lockState(c);
-      const l = await c.query<LeaseRow>("SELECT * FROM fleet_reservations WHERE agent_id = $1 FOR UPDATE", [agentId]);
-      const lease = l.rows[0];
-      if (!lease || lease.status !== "reserved" || lease.expires_at.getTime() <= (await dbNow(c))) {
-        return `Replication denied: fleet reservation ${agentId} is invalid, expired, or already used.`;
-      }
-      if (opts.parentAgentId !== undefined && lease.parent_agent_id !== opts.parentAgentId) {
-        return `Replication denied: reservation ${lease.reservation_id} belongs to another parent.`;
-      }
-      const ttlMs = this.provisioningTtlMs ?? st.provisioning_ttl_s * 1000;
-      const r = await c.query<AgentRow>(
-        `UPDATE fleet_agents SET status = 'provisioning', local_child_id = $2, updated_at = now(),
-                reservation_expires_at = now() + ($3 || ' milliseconds')::interval
-          WHERE agent_id = $1 AND status = 'reserved'
-          RETURNING *`,
-        [agentId, localChildId, String(ttlMs)],
+    const r = await this.tx(async (c) =>
+      c.query<{ res: { ok: boolean; reason?: string; parentAgentId?: string; generation?: number; reservationId?: string;
+                       repo?: string; commit?: string; buildId?: string; lockfileSha256?: string } }>(
+        "SELECT svc_claim($1, $2, $3, $4, $5) AS res",
+        [agentId, localChildId, opts.parentAgentId ?? null, this.provisioningTtlMs, nonce],
+      ),
+    );
+    const res = r.rows[0].res;
+    if (!res.ok) {
+      const reason = res.reason ?? `Replication denied: fleet reservation ${agentId} is invalid, expired, or already used.`;
+      await this.recordEvent("claim_denied", agentId, opts.parentAgentId ?? null, { reason }).catch(() => {});
+      throw new FleetBypassError(reason);
+    }
+    const parent = opts.parentAgentId ?? null;
+    return {
+      agentId,
+      parentAgentId: res.parentAgentId!,
+      generation: res.generation!,
+      runtime: { repo: res.repo!, commit: res.commit! },
+      expectedBuild: { buildId: res.buildId!, lockfileSha256: res.lockfileSha256! },
+      nonce,
+      reservationId: res.reservationId!,
+      backend: "postgres",
+      reportProvisioning: (phase, sandboxId) => this.reportProvisioning(agentId, phase, sandboxId ?? null, parent),
+    };
+  }
+
+  // ─── Phase 5: provisioning, health, sessions, termination ──────
+
+  /** Record provisioning progress (svc_provision_update). Throws if refused. */
+  async reportProvisioning(agentId: string, phase: "sandbox_created" | "verifying", sandboxId: string | null, parentAgentId: string | null): Promise<void> {
+    const r = await this.tx(async (c) =>
+      (await c.query("SELECT svc_provision_update($1, $2, $3, $4) AS r", [agentId, parentAgentId, phase, sandboxId])).rows[0].r,
+    );
+    if (!r.ok) throw new FleetBypassError(`Provisioning update refused: ${r.code}`);
+  }
+
+  async listProvisioning(filter: { needsCleanup?: boolean } = {}): Promise<Array<Record<string, unknown>>> {
+    const where = filter.needsCleanup ? "WHERE cleanup_status IN ('pending','unsupported','failed')" : "";
+    return this.read(async (c) => (await c.query(`SELECT * FROM fleet_provisioning ${where} ORDER BY created_at`)).rows);
+  }
+
+  async listOrphans(filter: { open?: boolean } = {}): Promise<Array<Record<string, unknown>>> {
+    const where = filter.open ? "WHERE resolved_at IS NULL" : "";
+    return this.read(async (c) => (await c.query(`SELECT * FROM fleet_orphans ${where} ORDER BY detected_at`)).rows);
+  }
+
+  /** Replay protection: true the first time (agent, nonce) is seen. */
+  async consumeNonce(agentId: string, nonce: string, ttlS: number): Promise<boolean> {
+    return this.svcBool("SELECT svc_consume_nonce($1, $2, $3) AS ok", [agentId, nonce, ttlS]);
+  }
+
+  /** Issue a health challenge if one is due. The nonce is returned once; only its hash is stored. */
+  async issueChallenge(agentId: string): Promise<HealthChallenge | null> {
+    const nonce = crypto.randomBytes(32).toString("base64url");
+    const challengeId = ulid();
+    const canary = HEALTH_CANARIES[crypto.randomInt(HEALTH_CANARIES.length)];
+    const r = await this.tx(async (c) =>
+      (await c.query("SELECT svc_issue_challenge($1, $2, $3, $4) AS r", [agentId, challengeId, hashAgentToken(nonce), canary])).rows[0].r,
+    );
+    return r.issued ? { challengeId, nonce, canary, expiresAt: new Date(r.expiresAt).toISOString() } : null;
+  }
+
+  async answerChallenge(
+    agentId: string,
+    answer: { challengeId: string; nonce: string; commit: string | null; buildId: string | null; policyOk: boolean },
+  ): Promise<{ ok: boolean; code?: string; reason?: string }> {
+    return this.tx(async (c) =>
+      (
+        await c.query("SELECT svc_answer_challenge($1, $2, $3, $4, $5, $6) AS r", [
+          agentId, answer.challengeId, answer.nonce, answer.commit, answer.buildId, answer.policyOk === true,
+        ])
+      ).rows[0].r,
+    );
+  }
+
+  /** Operator-only: quarantine an agent now (revoke everything; terminate its sandbox). */
+  async quarantine(agentId: string, reason: string, actor: string): Promise<string | null> {
+    return this.tx(async (c) => {
+      const r = await c.query<{ s: string | null }>("SELECT fleet_begin_termination($1, $2, $3, 'quarantine') AS s", [agentId, scrubText(reason), actor]);
+      await this.event(c, "agent_quarantined", agentId, actor, { reason, result: r.rows[0].s });
+      return r.rows[0].s;
+    });
+  }
+
+  /** Operator-only: resolve an orphan after external cleanup was confirmed. */
+  async resolveOrphan(agentId: string, resolution: string, actor: string): Promise<boolean> {
+    return this.tx(async (c) => {
+      await this.lockState(c);
+      const o = await c.query(
+        "UPDATE fleet_orphans SET resolved_at = now(), resolution = $2, resolved_by = $3 WHERE agent_id = $1 AND resolved_at IS NULL RETURNING orphan_id",
+        [agentId, scrubText(resolution), actor],
       );
-      if (r.rowCount !== 1) return `Replication denied: fleet reservation ${agentId} is invalid, expired, or already used.`;
+      if (!o.rowCount) return false;
       await c.query(
-        `UPDATE fleet_reservations SET status = 'provisioning', claimed_at = now(), attestation_nonce = $2,
-                expires_at = now() + ($3 || ' milliseconds')::interval, updated_at = now()
-          WHERE reservation_id = $1 AND status = 'reserved'`,
-        [lease.reservation_id, nonce, String(ttlMs)],
+        `UPDATE fleet_agents SET status = 'dead', death_time = now(), updated_at = now(),
+                status_reason = left(COALESCE(status_reason, '') || '; orphan resolved: ' || $2, 500)
+          WHERE agent_id = $1 AND status = 'orphaned'`,
+        [agentId, scrubText(resolution)],
       );
-      await this.event(c, "slot_claimed", agentId, opts.parentAgentId ?? null, { localChildId, reservationId: lease.reservation_id });
-      const row = r.rows[0];
+      await c.query(
+        "UPDATE fleet_sandbox_terminations SET status = 'terminated', completed_at = now(), last_error = $2 WHERE agent_id = $1 AND status <> 'terminated'",
+        [agentId, `operator confirmed: ${scrubText(resolution)}`],
+      );
+      await c.query(
+        "UPDATE fleet_provisioning SET cleanup_status = 'terminated', updated_at = now() WHERE expected_agent_id = $1 AND cleanup_status <> 'terminated'",
+        [agentId],
+      );
+      await this.event(c, "orphan_resolved", agentId, actor, { resolution });
+      return true;
+    });
+  }
+
+  async getLifecyclePolicy(): Promise<LifecyclePolicy> {
+    return this.read(async (c) => {
+      const s = (await c.query("SELECT * FROM fleet_state WHERE id = 1")).rows[0];
       return {
-        agentId,
-        parentAgentId: row.parent_agent_id,
-        generation: row.generation,
-        runtime: { repo: lease.expected_repo, commit: lease.expected_commit },
-        expectedBuild: { buildId: lease.expected_build_id, lockfileSha256: lease.expected_lockfile_sha256 },
-        nonce,
-        reservationId: lease.reservation_id,
-        backend: "postgres",
+        healthChallengeIntervalS: s.health_challenge_interval_s,
+        challengeTtlS: s.challenge_ttl_s,
+        healthGraceS: s.health_grace_s,
+        maxChallengeFailures: s.max_challenge_failures,
+        terminationGraceS: s.termination_grace_s,
+        orphanSlotHoldS: s.orphan_slot_hold_s,
+        maxOpenOrphans: s.max_open_orphans,
+        sessionTtlS: s.session_ttl_s,
       };
     });
-    if (typeof claimed === "string") {
-      await this.recordEvent("claim_denied", agentId, opts.parentAgentId ?? null, { reason: claimed }).catch(() => {});
-      throw new FleetBypassError(claimed);
-    }
-    return claimed;
+  }
+
+  /** Operator-only: health grace periods, termination eligibility, orphan policy, session TTL. */
+  async setLifecyclePolicy(p: Partial<LifecyclePolicy>, actor: string): Promise<LifecyclePolicy> {
+    const cur = await this.getLifecyclePolicy();
+    const n = { ...cur, ...p };
+    await this.tx(async (c) => {
+      await this.lockState(c);
+      await c.query(
+        `UPDATE fleet_state SET health_challenge_interval_s = $1, challenge_ttl_s = $2, health_grace_s = $3, max_challenge_failures = $4,
+                termination_grace_s = $5, orphan_slot_hold_s = $6, max_open_orphans = $7, session_ttl_s = $8, updated_at = now() WHERE id = 1`,
+        [n.healthChallengeIntervalS, n.challengeTtlS, n.healthGraceS, n.maxChallengeFailures, n.terminationGraceS, n.orphanSlotHoldS,
+         n.maxOpenOrphans, n.sessionTtlS],
+      );
+      await this.event(c, "lifecycle_policy_set", null, actor, { ...n });
+    });
+    return n;
   }
 
   /**
@@ -870,6 +1115,10 @@ export class PgFleetStore {
    * recorded expected repo, commit, lockfile and build identifier. Any
    * mismatch stops activation, releases the slot and marks the provisioning
    * failed (runtime_verification_failed). Issues the child's credential.
+   *
+   * Checked twice: here (detailed errors, fail fast) and authoritatively in
+   * svc_activate() under the fleet lock, so a controller bug cannot activate
+   * an unverified child.
    */
   async activate(
     agentId: string,
@@ -883,74 +1132,61 @@ export class PgFleetStore {
       actor?: string | null;
     },
   ): Promise<ActivationResult> {
-    let verificationFailure: string | null = null;
+    const pre = await this.read(async (c) => {
+      const a = await c.query<AgentRow>("SELECT * FROM fleet_agents WHERE agent_id = $1", [agentId]);
+      const l = await c.query<LeaseRow>("SELECT * FROM fleet_reservations WHERE agent_id = $1", [agentId]);
+      return { row: a.rows[0], lease: l.rows[0], now: await dbNow(c) };
+    });
+    const { row, lease } = pre;
+    if (!row || row.status !== "provisioning") {
+      throw new Error(`Cannot activate fleet agent ${agentId}: not in provisioning state`);
+    }
+    if (!lease || lease.status !== "provisioning") {
+      throw new Error(`Cannot activate fleet agent ${agentId}: no open provisioning lease`);
+    }
+    if (params.parentAgentId !== undefined && lease.parent_agent_id !== params.parentAgentId) {
+      throw new FleetBypassError(`Activation denied: reservation ${lease.reservation_id} belongs to another parent.`);
+    }
+    if (lease.expires_at.getTime() <= pre.now) {
+      throw new FleetBypassError(`Activation denied: provisioning lease ${lease.reservation_id} has expired.`);
+    }
+    let attestation: RuntimeAttestation;
     try {
-      return await this.tx(async (c) => {
-        await this.lockState(c);
-        const cur = await c.query<AgentRow>("SELECT * FROM fleet_agents WHERE agent_id = $1 FOR UPDATE", [agentId]);
-        const row = cur.rows[0];
-        if (!row || row.status !== "provisioning") {
-          throw new Error(`Cannot activate fleet agent ${agentId}: not in provisioning state`);
-        }
-        const l = await c.query<LeaseRow>("SELECT * FROM fleet_reservations WHERE agent_id = $1 FOR UPDATE", [agentId]);
-        const lease = l.rows[0];
-        if (!lease || lease.status !== "provisioning") {
-          throw new Error(`Cannot activate fleet agent ${agentId}: no open provisioning lease`);
-        }
-        if (params.parentAgentId !== undefined && lease.parent_agent_id !== params.parentAgentId) {
-          throw new FleetBypassError(`Activation denied: reservation ${lease.reservation_id} belongs to another parent.`);
-        }
-        if (lease.expires_at.getTime() <= (await dbNow(c))) {
-          throw new FleetBypassError(`Activation denied: provisioning lease ${lease.reservation_id} has expired.`);
-        }
-        let attestation: RuntimeAttestation;
-        try {
-          if (!params.runtimeCommit || params.runtimeCommit !== lease.expected_commit) {
-            throw new FleetRuntimeError(
-              `Cannot activate fleet agent ${agentId}: verified runtime ${params.runtimeCommit ?? "<none>"} != pinned ${lease.expected_commit}`,
-            );
-          }
-          attestation = checkAttestation(params.attestation ? sanitizeAttestation(params.attestation) : null, {
-            repo: lease.expected_repo,
-            commit: lease.expected_commit,
-            buildId: lease.expected_build_id,
-            lockfileSha256: lease.expected_lockfile_sha256,
-            nonce: lease.attestation_nonce ?? "",
-          });
-        } catch (err) {
-          verificationFailure = err instanceof Error ? err.message : String(err);
-          throw err;
-        }
-        const upd = await c.query<AgentRow>(
-          `UPDATE fleet_agents SET status = 'active', wallet_address = $2, sandbox_id = $3, runtime_version = $4,
-                  last_heartbeat = now(), reservation_expires_at = NULL, updated_at = now()
-            WHERE agent_id = $1 AND status = 'provisioning' RETURNING *`,
-          [agentId, params.walletAddress, params.sandboxId ?? null, attestation.version ?? params.runtimeVersion ?? null],
+      if (!params.runtimeCommit || params.runtimeCommit !== lease.expected_commit) {
+        throw new FleetRuntimeError(
+          `Cannot activate fleet agent ${agentId}: verified runtime ${params.runtimeCommit ?? "<none>"} != pinned ${lease.expected_commit}`,
         );
-        await c.query(
-          `UPDATE fleet_reservations SET status = 'completed', completed_at = now(), attested_at = now(),
-                  attestation = $2, updated_at = now()
-            WHERE reservation_id = $1 AND status = 'provisioning'`,
-          [lease.reservation_id, JSON.stringify(attestation)],
-        );
-        await this.event(c, "runtime_verified", agentId, params.actor ?? null, {
-          reservationId: lease.reservation_id,
-          commit: attestation.commit,
-          buildId: attestation.buildId,
-          lockfileSha256: attestation.lockfileSha256,
-        });
-        await this.event(c, "agent_activated", agentId, params.actor ?? null, {
-          walletAddress: params.walletAddress,
-          sandboxId: params.sandboxId ?? null,
-          runtimeCommit: attestation.commit,
-        });
-        const credential = await this.issueCredentialTx(c, agentId, params.actor ?? null);
-        return { agent: toAgent(upd.rows[0]), credential };
+      }
+      attestation = checkAttestation(params.attestation ? sanitizeAttestation(params.attestation) : null, {
+        repo: lease.expected_repo,
+        commit: lease.expected_commit,
+        buildId: lease.expected_build_id,
+        lockfileSha256: lease.expected_lockfile_sha256,
+        nonce: lease.attestation_nonce ?? "",
       });
     } catch (err) {
-      if (verificationFailure !== null) {
-        await this.recordVerificationFailure(agentId, verificationFailure).catch(() => {});
-      }
+      await this.recordVerificationFailure(agentId, err instanceof Error ? err.message : String(err), params.actor ?? null).catch(() => {});
+      throw err;
+    }
+
+    const token = mintAgentToken(agentId);
+    let res: { ok: boolean; code?: string; reason?: string; agent?: Record<string, unknown> };
+    try {
+      const r = await this.tx(async (c) =>
+        c.query<{ res: typeof res }>("SELECT svc_activate($1, $2, $3, $4, $5, $6, $7, $8, $9) AS res", [
+          agentId,
+          params.parentAgentId ?? null,
+          params.walletAddress,
+          params.sandboxId ?? null,
+          params.runtimeCommit,
+          params.runtimeVersion ?? null,
+          JSON.stringify({ ...attestation, repo: normalizeRepoUrl(attestation.repo) }),
+          params.actor ?? null,
+          hashAgentToken(token),
+        ]),
+      );
+      res = r.rows[0].res;
+    } catch (err) {
       const e = err as { code?: string; constraint?: string };
       if (e.code === "23505") {
         throw new FleetDuplicateRegistrationError(
@@ -959,6 +1195,13 @@ export class PgFleetStore {
       }
       throw err;
     }
+    if (!res.ok) {
+      const reason = res.reason ?? "activation refused";
+      if (res.code === "FLEET_RUNTIME_UNVERIFIED") throw new FleetRuntimeError(reason);
+      if (res.code === "FLEET_NOT_AUTHORIZED") throw new FleetBypassError(reason);
+      throw new Error(reason);
+    }
+    return { agent: agentFromJson(res.agent!), credential: { agentId, token } };
   }
 
   /**
@@ -966,36 +1209,21 @@ export class PgFleetStore {
    * and mark the provisioning failed. Idempotent.
    */
   async recordVerificationFailure(agentId: string, reason: string, actor: string | null = null): Promise<boolean> {
-    return this.tx(async (c) => {
-      await this.event(c, "runtime_verification_failed", agentId, actor, { reason: scrubText(reason) });
-      const r = await c.query<{ ok: boolean }>("SELECT fleet_release($1, $2, 'failed', $3) AS ok", [
-        agentId,
-        scrubText(`runtime verification failed: ${reason}`),
-        actor,
-      ]);
-      return r.rows[0].ok;
-    });
+    return this.svcBool("SELECT svc_verification_failed($1, $2, $3) AS ok", [agentId, scrubText(reason), actor]);
   }
 
   /** reserved/provisioning -> failed. Returns false if already released/active/dead (no double release). */
   async releaseReservation(agentId: string, reason: string, actor: string | null = null): Promise<boolean> {
-    return this.tx(async (c) => {
-      const r = await c.query<{ ok: boolean }>("SELECT fleet_release($1, $2, 'released', $3) AS ok", [agentId, scrubText(reason), actor]);
-      return r.rows[0].ok;
-    });
+    return this.svcBool("SELECT svc_release($1, $2, $3) AS ok", [agentId, scrubText(reason), actor]);
   }
 
   /** Record a death. The row is retained forever and no longer counts; the credential is revoked. Idempotent. */
   async markDead(agentId: string, reason: string, actor?: string, cause = "reported"): Promise<boolean> {
-    return this.tx(async (c) => {
-      const r = await c.query<{ ok: boolean }>("SELECT fleet_mark_dead($1, $2, $3, $4) AS ok", [
-        agentId,
-        scrubText(reason),
-        actor ?? null,
-        cause,
-      ]);
-      return r.rows[0].ok;
-    });
+    return this.svcBool("SELECT svc_mark_dead($1, $2, $3, $4) AS ok", [agentId, scrubText(reason), actor ?? null, cause]);
+  }
+
+  private async svcBool(sql: string, args: unknown[]): Promise<boolean> {
+    return this.tx(async (c) => (await c.query<{ ok: boolean }>(sql, args)).rows[0].ok === true);
   }
 
   async markDeadByLocalChildId(localChildId: string, reason: string): Promise<boolean> {
@@ -1006,10 +1234,26 @@ export class PgFleetStore {
     return id ? this.markDead(id, reason, undefined, "child_lifecycle") : false;
   }
 
+  /**
+   * A parent reports its child's local lifecycle ended (svc_child_terminal):
+   * unclaimed/provisioning children are released now; a living child dies
+   * now only if it has already gone quiet, else once it does.
+   */
+  async reportChildTerminal(
+    parentAgentId: string,
+    localChildId: string,
+    state: string,
+  ): Promise<{ ok: boolean; code?: string; outcome?: "released" | "dead" | "deferred" | "already_terminal"; changed?: boolean }> {
+    return this.tx(async (c) => {
+      const r = await c.query("SELECT svc_child_terminal($1, $2, $3) AS res", [parentAgentId, localChildId, scrubText(state).slice(0, 32)]);
+      return r.rows[0].res;
+    });
+  }
+
   /** Update last_heartbeat of a living agent (unresponsive agents recover). Never inserts. */
   async heartbeat(agentId: string): Promise<boolean> {
     return this.tx(async (c) => {
-      const r = await c.query<{ s: string | null }>("SELECT fleet_heartbeat($1, $1) AS s", [agentId]);
+      const r = await c.query<{ s: string | null }>("SELECT svc_heartbeat($1) AS s", [agentId]);
       return r.rows[0].s === "active";
     });
   }
@@ -1019,13 +1263,14 @@ export class PgFleetStore {
   }
 
   /**
-   * One reaper pass: expire leases, then ACTIVE -> UNRESPONSIVE -> DEAD for
-   * missed heartbeats. Safe to run concurrently and repeatedly.
+   * One reaper pass: expire leases, retire quiet parent-reported children,
+   * then ACTIVE -> UNRESPONSIVE -> DEAD for missed heartbeats. Safe to run
+   * concurrently and repeatedly.
    */
   async reap(actor = "reaper"): Promise<ReapResult> {
     return this.tx(async (c) => {
       const r = await c.query<{ res: { expired: number; unresponsive: number; dead: number; graceFrom: string | null } }>(
-        "SELECT fleet_reap($1) AS res",
+        "SELECT svc_reap($1) AS res",
         [actor],
       );
       return r.rows[0].res;
@@ -1034,7 +1279,83 @@ export class PgFleetStore {
 
   /** Append an audit event (service-level events: API auth failures, DB authorization failures, …). */
   async recordEvent(eventType: string, agentId: string | null, actor: string | null, detail: Record<string, unknown> = {}): Promise<void> {
-    await this.tx(async (c) => this.event(c, eventType, agentId, actor, detail));
+    await this.tx(async (c) =>
+      c.query("SELECT svc_record_event($1, $2, $3, $4)", [eventType, agentId, actor, JSON.stringify(scrubDetail(detail))]),
+    );
+  }
+
+  // ─── Sandbox terminations ──────────────────────────────────────
+
+  async terminationsDue(limit = 20): Promise<Array<{ agentId: string; sandboxId: string; attempts: number }>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_terminations_due($1) AS res", [limit])).rows[0].res);
+  }
+
+  async recordTerminationResult(
+    agentId: string,
+    status: "terminated" | "unsupported" | "failed",
+    error: string | null,
+    actor = "fleet-service",
+  ): Promise<boolean> {
+    return this.svcBool("SELECT svc_termination_result($1, $2, $3, $4) AS ok", [agentId, status, error ? scrubText(error) : null, actor]);
+  }
+
+  async listTerminations(): Promise<SandboxTerminationRecord[]> {
+    return this.read(async (c) => {
+      const r = await c.query("SELECT * FROM fleet_sandbox_terminations ORDER BY requested_at, agent_id");
+      return r.rows.map((t) => ({
+        agentId: t.agent_id,
+        sandboxId: t.sandbox_id,
+        status: t.status,
+        requestedAt: t.requested_at.toISOString(),
+        attempts: t.attempts,
+        lastError: t.last_error,
+      }));
+    });
+  }
+
+  /** Stale/zombie indicators for fleet:doctor. */
+  async staleness(): Promise<{
+    staleAgents: number;
+    unresponsive: number;
+    staleReservations: number;
+    openReservations: number;
+    unterminatedSandboxes: number;
+    reaperLastRunAt: string | null;
+    openOrphans: number;
+    provisioningNeedingCleanup: number;
+    quarantined: number;
+    terminating: number;
+  }> {
+    return this.read(async (c) => {
+      const r = await c.query(
+        `SELECT
+           (SELECT count(*) FROM fleet_agents a WHERE a.status IN ('active','unresponsive')
+              AND COALESCE(a.last_heartbeat, a.updated_at) < now() - make_interval(secs => s.heartbeat_unresponsive_s))::int AS stale_agents,
+           (SELECT count(*) FROM fleet_agents WHERE status = 'unresponsive')::int AS unresponsive,
+           (SELECT count(*) FROM fleet_reservations WHERE status IN ('reserved','provisioning') AND expires_at <= now())::int AS stale_reservations,
+           (SELECT count(*) FROM fleet_reservations WHERE status IN ('reserved','provisioning'))::int AS open_reservations,
+           (SELECT count(*) FROM fleet_sandbox_terminations WHERE status <> 'terminated')::int AS unterminated,
+           (SELECT count(*) FROM fleet_orphans WHERE resolved_at IS NULL)::int AS open_orphans,
+           (SELECT count(*) FROM fleet_provisioning WHERE cleanup_status IN ('pending','unsupported','failed'))::int AS prov_cleanup,
+           (SELECT count(*) FROM fleet_agents WHERE status = 'orphaned')::int AS quarantined,
+           (SELECT count(*) FROM fleet_agents WHERE status = 'terminating')::int AS terminating,
+           s.reaper_last_run_at
+         FROM fleet_state s WHERE s.id = 1`,
+      );
+      const x = r.rows[0];
+      return {
+        staleAgents: x.stale_agents,
+        unresponsive: x.unresponsive,
+        staleReservations: x.stale_reservations,
+        openReservations: x.open_reservations,
+        unterminatedSandboxes: x.unterminated,
+        reaperLastRunAt: iso(x.reaper_last_run_at),
+        openOrphans: x.open_orphans,
+        provisioningNeedingCleanup: x.prov_cleanup,
+        quarantined: x.quarantined,
+        terminating: x.terminating,
+      };
+    });
   }
 
   async getReservation(idOrAgentId: string): Promise<ReservationLease | null> {

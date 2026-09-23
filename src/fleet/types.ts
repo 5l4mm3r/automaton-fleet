@@ -130,7 +130,15 @@ export type ReplicationOutcome<TChild> =
  * reserved/provisioning hold a reserved slot; active and unresponsive (missed
  * heartbeats, Phase 3) are living; dead/failed are history.
  */
-export type SharedAgentStatus = "reserved" | "provisioning" | "active" | "unresponsive" | "dead" | "failed";
+export type SharedAgentStatus =
+  | "reserved"
+  | "provisioning"
+  | "active"
+  | "unresponsive"
+  | "terminating"
+  | "orphaned"
+  | "dead"
+  | "failed";
 
 export interface SharedFleetState {
   livingAgents: number;
@@ -143,6 +151,8 @@ export interface SharedFleetState {
   replicationEnabled?: boolean;
   /** Operator-approved build identity of the runtime (Phase 3). */
   build?: RuntimeBuild | null;
+  /** Slots held by ORPHANED agents (Phase 5 orphan policy); they count against the cap. */
+  quarantinedSlots?: number;
 }
 
 /** Reservation lease (Phase 3): a reserved slot with an expiry. */

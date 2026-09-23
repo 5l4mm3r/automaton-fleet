@@ -1,0 +1,92 @@
+# Automaton Fleet control service — Phase 4 (loopback only).
+#
+# Install (after approval): scripts/fleet-os-setup.sh --apply, then
+#   systemctl daemon-reload && systemctl enable --now automaton-fleet.service
+#
+# Code:     /opt/automaton-fleet/current -> releases/<commit>  (root-owned, read-only)
+# Node:     /opt/automaton-fleet/node/bin/node                   (root-owned, pinned copy)
+# Secrets:  /etc/automaton-fleet/service.env (root:root 0600) delivered ONLY via
+#           LoadCredential= to $CREDENTIALS_DIRECTORY/service.env — never via
+#           Environment=/EnvironmentFile= (which would expose it in /proc/<pid>/environ
+#           and `systemctl show`).
+# Runtime:  /etc/automaton-fleet/runtime.env (non-secret pinned release + flags)
+
+[Unit]
+Description=Automaton Fleet control service (loopback only)
+Documentation=file:///opt/automaton-fleet/current/FLEET.md
+Wants=network-online.target postgresql.service
+After=network-online.target postgresql.service
+# Restart rate limit: at most 5 starts per 5 minutes, then stay failed for an operator.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-service
+Group=automaton-fleet-service
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/service/main.js
+LoadCredential=service.env:/etc/automaton-fleet/service.env
+# Phase 5 HTTPS (NOT enabled): uncomment after a certificate is issued and the
+# firewall/DNS for remote children is approved. Remote listening also requires
+# FLEET_REMOTE_LISTEN_ENABLED=true AND lifting IPAddressDeny below.
+#LoadCredential=tls.key:/etc/automaton-fleet/tls/fleet.key
+#Environment=FLEET_TLS_CERT_FILE=/etc/automaton-fleet/tls/fleet.crt
+Environment=NODE_ENV=production
+Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/runtime.env
+Environment=FLEET_AUDIT_LOG=/var/log/automaton-fleet/audit.jsonl
+Environment=FLEET_API_LISTEN=127.0.0.1:8787
+Environment=FLEET_SHUTDOWN_DRAIN_MS=10000
+
+Restart=on-failure
+RestartSec=5s
+# Graceful shutdown: SIGTERM -> drain (10 s) -> exit 0; SIGKILL after 30 s.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=30s
+TimeoutStartSec=60s
+
+# Logs: structured JSON lines on stdout -> journald.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet
+LogsDirectory=automaton-fleet
+LogsDirectoryMode=0700
+StateDirectory=automaton-fleet
+StateDirectoryMode=0700
+UMask=0077
+
+# Network: loopback only (also enforced in code). PostgreSQL is on localhost.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Sandboxing
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# Agents' homes and the admin credential are never visible to the service.
+InaccessiblePaths=-/home/automaton-agent -/etc/automaton-fleet/admin.env
+
+[Install]
+WantedBy=multi-user.target

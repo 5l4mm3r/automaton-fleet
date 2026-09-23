@@ -1,30 +1,62 @@
--- Fleet Phase 3 — database role bootstrap. Run ONCE as a PostgreSQL superuser
--- (the fleet owner role, e.g. fleetadmin, cannot create roles):
+-- Fleet database role bootstrap (Phase 4). Idempotent: safe to re-run.
+-- Run as a PostgreSQL superuser. The fleet owner (e.g. fleetadmin) cannot
+-- create roles. Normally invoked by scripts/fleet-db-setup.sh, which feeds
+-- the passwords on stdin so they never appear in a process command line:
 --
---   sudo -u postgres psql -v ON_ERROR_STOP=1 \
---     -v dbname=automaton_fleet -v owner=fleetadmin \
---     -v agent_password="$(openssl rand -base64 32)" \
---     -f scripts/fleet-db-roles.sql
+--   { printf '\set agent_password %s\n\set service_password %s\n' "$AGENT_PW" "$SERVICE_PW"
+--     cat scripts/fleet-db-roles.sql; } |
+--   sudo -u postgres psql -X -v ON_ERROR_STOP=1 -v dbname=automaton_fleet -v owner=fleetadmin -f -
 --
--- Then put the agent DSN in the fleet service's environment only:
---   FLEET_AGENT_DATABASE_URL=postgresql://fleet_agent_login:<password>@localhost:5432/automaton_fleet
--- and run `pnpm fleet:migrate` (or `pnpm fleet:admin grant-agent-role`) as the owner.
+-- Passwords must be hex (openssl rand -hex 32). Each run (re)sets them to
+-- the values supplied, so the secret files stay the source of truth.
 --
 -- Role model
---   :owner              owns schema "fleet" and every object in it (controller/operator only)
---   fleet_agent         NOLOGIN group: USAGE on schema fleet + EXECUTE on fleet.api_* (granted by migrate)
---   fleet_agent_login   LOGIN member of fleet_agent; no other privileges. Used by the fleet
---                       service for agent-scoped calls. Agents themselves get no DB credentials.
+--   :owner               fleet_admin: owns schema "fleet" and every object in it.
+--                        Migrations and operator CLI only (FLEET_ADMIN_DATABASE_URL).
+--   fleet_service        NOLOGIN group: USAGE on fleet, SELECT on non-secret tables,
+--                        EXECUTE on fleet.svc_* (granted by `pnpm fleet:migrate`).
+--   fleet_service_login  LOGIN member of fleet_service. Held by the fleet service only
+--                        (FLEET_SERVICE_DATABASE_URL).
+--   fleet_agent          NOLOGIN group: USAGE on fleet + EXECUTE on fleet.api_* (granted by migrate).
+--   fleet_agent_login    LOGIN member of fleet_agent. Held by the fleet service only, for
+--                        agent-scoped calls (FLEET_AGENT_DATABASE_URL). Agents get no DB credential.
 
-CREATE ROLE fleet_agent NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
-CREATE ROLE fleet_agent_login LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS
-  CONNECTION LIMIT 32 PASSWORD :'agent_password';
+\set ON_ERROR_STOP on
+
+SELECT 'CREATE ROLE fleet_agent NOLOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_agent') \gexec
+SELECT 'CREATE ROLE fleet_agent_login LOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_agent_login') \gexec
+SELECT 'CREATE ROLE fleet_service NOLOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_service') \gexec
+SELECT 'CREATE ROLE fleet_service_login LOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_service_login') \gexec
+
+-- (Re)assert attributes every run, so a drifted role is corrected.
+ALTER ROLE fleet_agent         NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+ALTER ROLE fleet_service       NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+ALTER ROLE fleet_agent_login   LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 32;
+ALTER ROLE fleet_service_login LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 16;
+SELECT format('ALTER ROLE fleet_agent_login PASSWORD %L', :'agent_password') \gexec
+SELECT format('ALTER ROLE fleet_service_login PASSWORD %L', :'service_password') \gexec
+
 GRANT fleet_agent TO fleet_agent_login;
+GRANT fleet_service TO fleet_service_login;
 
--- Only the owner and the agent login may connect; nobody else gets TEMP (no
--- temporary objects that could shadow names) or CREATE on the database.
+-- The restricted logins must never be members of the owner or of each other.
+SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname)
+  FROM pg_auth_members am
+  JOIN pg_roles r ON r.oid = am.roleid
+  JOIN pg_roles m ON m.oid = am.member
+ WHERE m.rolname IN ('fleet_agent_login', 'fleet_service_login', 'fleet_agent', 'fleet_service')
+   AND NOT (m.rolname = 'fleet_agent_login' AND r.rolname = 'fleet_agent')
+   AND NOT (m.rolname = 'fleet_service_login' AND r.rolname = 'fleet_service') \gexec
+
+-- Only the owner and the two logins may connect; only the owner gets TEMP
+-- (no temporary objects that could shadow names) and nobody else gets CREATE.
 REVOKE ALL ON DATABASE :"dbname" FROM PUBLIC;
-GRANT CONNECT ON DATABASE :"dbname" TO :"owner", fleet_agent_login;
+REVOKE ALL ON DATABASE :"dbname" FROM fleet_agent, fleet_agent_login, fleet_service, fleet_service_login;
+GRANT CONNECT ON DATABASE :"dbname" TO fleet_agent_login, fleet_service_login;
 GRANT CONNECT, TEMPORARY ON DATABASE :"dbname" TO :"owner";
 
 \connect :"dbname"
@@ -32,3 +64,6 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ALTER ROLE fleet_agent_login IN DATABASE :"dbname" SET statement_timeout = '10s';
 ALTER ROLE fleet_agent_login IN DATABASE :"dbname" SET lock_timeout = '5s';
 ALTER ROLE fleet_agent_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '30s';
+ALTER ROLE fleet_service_login IN DATABASE :"dbname" SET statement_timeout = '15s';
+ALTER ROLE fleet_service_login IN DATABASE :"dbname" SET lock_timeout = '5s';
+ALTER ROLE fleet_service_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '30s';

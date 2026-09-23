@@ -1,18 +1,28 @@
 /**
- * FleetApiClient (Phase 3) — the agent's view of the fleet registry.
+ * FleetApiClient (Phase 3/5) — the agent's view of the fleet registry.
  *
- * Holds only this agent's own bearer credential (from
+ * Holds only this agent's own long-lived credential (from
  * ~/.automaton/fleet-credentials.json, mode 0600) and the service URL. It
  * has no database credentials and cannot do anything the fleet service's
  * restricted API does not allow for this agent.
+ *
+ * Phase 5: the long-lived credential is used ONLY to open a short-lived
+ * session (POST /v1/session). Every other request carries the session token
+ * and is signed (timestamp + single-use nonce + HMAC over method, path and
+ * body), so captured requests cannot be replayed. Heartbeat responses may
+ * carry a controller health challenge, which is answered automatically with
+ * the runtime identity and a policy-guard canary result.
  */
 
+import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
 import { createBoundGrant, type ClaimedGrant } from "../grants.js";
 import { FleetBypassError } from "../registry.js";
-import { FleetRuntimeError } from "../runtime.js";
+import { CHILD_RUNTIME_MANIFEST, FleetRuntimeError, readOwnCommit, runningRuntimeDir } from "../runtime.js";
+import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
+import { SIG_HEADERS, signRequest } from "./server-signing.js";
 import type { FleetBackend } from "../backend.js";
 import type { RuntimeAttestation } from "../attestation.js";
 import { FleetDuplicateRegistrationError, FleetRegistryUnavailableError, agentIdFromToken } from "../postgres/store.js";
@@ -28,12 +38,43 @@ import type {
 
 export const DEFAULT_CREDENTIALS_FILE = path.join(os.homedir() || "/root", ".automaton", "fleet-credentials.json");
 
+export interface HealthChallengeView {
+  challengeId: string;
+  nonce: string;
+  canary: string;
+  expiresAt: string;
+}
+
+export type HealthResponder = (c: HealthChallengeView) => Promise<{ commit: string | null; buildId: string | null; policyOk: boolean }>;
+
+/**
+ * Default answer: runtime identity from the child's fleet manifest (children)
+ * or the running checkout (roots), and whether this agent's own shell guard
+ * refuses the canary command (policy responsiveness).
+ */
+export function defaultHealthResponder(opts: { manifestPath?: string; runtimeDir?: string } = {}): HealthResponder {
+  return async (c) => {
+    let commit: string | null = null;
+    let buildId: string | null = null;
+    try {
+      const m = JSON.parse(fs.readFileSync(opts.manifestPath ?? CHILD_RUNTIME_MANIFEST, "utf8"));
+      commit = typeof m.commit === "string" ? m.commit : null;
+      buildId = typeof m.buildId === "string" ? m.buildId : null;
+    } catch {
+      commit = readOwnCommit(opts.runtimeDir ?? runningRuntimeDir(import.meta.url));
+    }
+    return { commit, buildId, policyOk: getForbiddenCommandMatch(c.canary) !== null };
+  };
+}
+
 export interface FleetApiClientOptions {
   baseUrl: string;
   agentId: string;
   token: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  healthResponder?: HealthResponder;
+  now?: () => number;
 }
 
 class ApiError extends Error {
@@ -89,6 +130,11 @@ export class FleetApiClient implements FleetBackend {
   private readonly fetchImpl: typeof fetch;
   /** child agentId -> reservationId for leases this client holds. */
   private readonly leases = new Map<string, string>();
+  private session: { token: string; expiresAt: number } | null = null;
+  private readonly responder: HealthResponder;
+  private readonly now: () => number;
+  /** Last health challenge outcome (diagnostics). */
+  lastChallenge: { at: string; passed: boolean; code?: string } | null = null;
 
   constructor(opts: FleetApiClientOptions) {
     this.baseUrl = validateServiceUrl(opts.baseUrl);
@@ -97,6 +143,8 @@ export class FleetApiClient implements FleetBackend {
     this.token = opts.token;
     this.timeoutMs = opts.timeoutMs ?? 15_000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.responder = opts.healthResponder ?? defaultHealthResponder();
+    this.now = opts.now ?? Date.now;
   }
 
   /**
@@ -110,13 +158,43 @@ export class FleetApiClient implements FleetBackend {
     return new FleetApiClient({ baseUrl: url, agentId: cred.agentId, token: cred.token });
   }
 
-  private async call<T>(method: "GET" | "POST", p: string, body?: unknown): Promise<T> {
+  /** Open (or reuse) a short-lived session with the long-lived credential. */
+  private async ensureSession(force = false): Promise<string> {
+    if (!force && this.session && this.session.expiresAt - this.now() > 30_000) return this.session.token;
+    const r = await this.raw<{ sessionToken: string; expiresAt: string }>("POST", "/v1/session", {}, { authorization: `Bearer ${this.token}` });
+    this.session = { token: r.sessionToken, expiresAt: Date.parse(r.expiresAt) };
+    return r.sessionToken;
+  }
+
+  private async call<T>(method: "GET" | "POST", p: string, body?: unknown, retried = false): Promise<T> {
+    if (p === "/v1/health") return this.raw<T>(method, p, body, {});
+    const session = await this.ensureSession();
+    const payload = body === undefined ? "" : JSON.stringify(body);
+    const ts = String(this.now());
+    const nonce = crypto.randomBytes(24).toString("base64url");
+    try {
+      return await this.raw<T>(method, p, body, {
+        authorization: `FleetSession ${session}`,
+        [SIG_HEADERS.ts]: ts,
+        [SIG_HEADERS.nonce]: nonce,
+        [SIG_HEADERS.sig]: signRequest(session, method, p, ts, nonce, payload),
+      });
+    } catch (err) {
+      if (!retried && err instanceof ApiError && err.status === 401 && ["FLEET_SESSION_EXPIRED", "FLEET_AUTH_FAILED", "FLEET_SESSION_REQUIRED"].includes(err.code)) {
+        this.session = null;
+        return this.call<T>(method, p, body, true);
+      }
+      throw err;
+    }
+  }
+
+  private async raw<T>(method: "GET" | "POST", p: string, body: unknown, headers: Record<string, string>): Promise<T> {
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.baseUrl}${p}`, {
         method,
-        headers: { authorization: `Bearer ${this.token}`, ...(body ? { "content-type": "application/json" } : {}) },
-        body: body ? JSON.stringify(body) : undefined,
+        headers: { ...headers, ...(body !== undefined ? { "content-type": "application/json" } : {}) },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(this.timeoutMs),
         redirect: "error",
       });
@@ -190,11 +268,35 @@ export class FleetApiClient implements FleetBackend {
 
   async heartbeat(agentId: string): Promise<boolean> {
     if (agentId !== this.agentId) return false;
-    const r = await this.call<{ alive: boolean }>("POST", "/v1/heartbeat", {}).catch((err) => {
-      if (err instanceof ApiError) return { alive: false };
+    const r = await this.call<{ alive: boolean; challenge?: HealthChallengeView | null }>("POST", "/v1/heartbeat", {}).catch((err) => {
+      if (err instanceof ApiError) return { alive: false, challenge: null };
       throw err;
     });
+    if (r.alive && r.challenge) await this.answerChallenge(r.challenge);
     return r.alive === true;
+  }
+
+  /** Answer a controller health challenge (runtime identity + policy canary). Failures are recorded by the controller. */
+  async answerChallenge(c: HealthChallengeView): Promise<boolean> {
+    try {
+      const a = await this.responder(c);
+      await this.call("POST", "/v1/health/challenge", { challengeId: c.challengeId, nonce: c.nonce, commit: a.commit ?? undefined, buildId: a.buildId ?? undefined, policyOk: a.policyOk });
+      this.lastChallenge = { at: new Date(this.now()).toISOString(), passed: true };
+      return true;
+    } catch (err) {
+      this.lastChallenge = { at: new Date(this.now()).toISOString(), passed: false, code: err instanceof ApiError ? err.code : String(err) };
+      return false;
+    }
+  }
+
+  /** Propose a capital allocation. Approval is FleetAdmin-only. */
+  async proposeCapital(p: { purpose: string; requestedCents: number; expectedReturnCents: number; expectedDurationDays: number }) {
+    return (await this.call<{ allocation: { allocationId: string; status: string } }>("POST", "/v1/capital/propose", p)).allocation;
+  }
+
+  /** Request a spend from this agent's own custody wallet. Decision only; nothing is signed by the agent. */
+  async requestSpend(r: { fromWallet: string; toAddress: string; amountCents: number; purpose: string; allocationId?: string }) {
+    return this.call<{ decision: string; reason: string | null; executed: boolean }>("POST", "/v1/wallet/spend-request", r);
   }
 
   async selfStatus(agentId: string): Promise<SharedAgentStatus | null> {
@@ -267,7 +369,24 @@ export class FleetApiClient implements FleetBackend {
   private async claim(reservationId: string, localChildId: string): Promise<ClaimedGrant> {
     try {
       const r = await this.call<{ claimed: ClaimedGrant }>("POST", "/v1/replication/claim", { reservationId, localChildId });
-      return r.claimed;
+      return {
+        ...r.claimed,
+        reportProvisioning: async (phase, sandboxId) => {
+          // Retried: a sandbox that exists must not go unrecorded.
+          let last: unknown;
+          for (let i = 0; i < 3; i++) {
+            try {
+              await this.call("POST", "/v1/replication/provisioning", { reservationId, phase, sandboxId });
+              return;
+            } catch (err) {
+              last = err;
+              if (err instanceof ApiError && err.status < 500) break;
+              await new Promise((res) => setTimeout(res, 250 * (i + 1)));
+            }
+          }
+          throw last;
+        },
+      };
     } catch (err) {
       if (err instanceof ApiError) throw new FleetBypassError(`Replication denied: ${err.message}`);
       throw err;
@@ -326,10 +445,16 @@ export class FleetApiClient implements FleetBackend {
     }
   }
 
-  /** Recorded for audit only; an agent never changes another agent's state (the reaper does). */
+  /**
+   * Report that one of this agent's children ended locally. The controller
+   * releases an unactivated child at once and retires a living child only
+   * once it has stopped heartbeating; never another parent's child.
+   */
   async markDeadByLocalChildId(localChildId: string, reason: string): Promise<boolean> {
-    await this.call("POST", "/v1/children/terminal", { localChildId, state: reason.slice(0, 32) }).catch(() => {});
-    return false;
+    const r = await this.call<{ changed?: boolean }>("POST", "/v1/children/terminal", { localChildId, state: reason.slice(0, 32) }).catch(
+      () => null,
+    );
+    return r?.changed === true;
   }
 
   /** Voluntary retirement: marks this agent dead and releases its slot. */

@@ -18,6 +18,8 @@ const SENSITIVE_READ_PATTERNS: string[] = [
   "automaton.json",
   ".env.fleet",
   "fleet-credentials.json",
+  "admin.env",
+  "service.env",
 ];
 
 /** Glob-like suffix patterns that block reads */

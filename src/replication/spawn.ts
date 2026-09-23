@@ -157,6 +157,9 @@ export async function spawnChild(
       });
     }
     sandboxId = sandbox.id;
+    // Phase 5: the controller learns about the sandbox the moment it exists,
+    // so a failed provisioning stays visible for cleanup.
+    await claimed.reportProvisioning?.("sandbox_created", sandbox.id);
 
     // Create a scoped client so all exec/writeFile calls target the CHILD sandbox
     const childConway = conway.createScopedClient(sandbox.id);
@@ -174,6 +177,7 @@ export async function spawnChild(
     );
 
     // Install, verify and attest the pinned fleet runtime (on the CHILD sandbox)
+    await claimed.reportProvisioning?.("verifying");
     const verified = await installPinnedRuntime(childConway, expected);
 
     // Write genesis configuration (on the CHILD sandbox)
@@ -310,10 +314,14 @@ async function spawnChildLegacy(
       diskGb: legacyTier.diskGb,
     });
     sandboxId = sandbox.id;
+    // Phase 5: the controller learns about the sandbox the moment it exists,
+    // so a failed provisioning stays visible for cleanup.
+    await claimed.reportProvisioning?.("sandbox_created", sandbox.id);
 
     // Create a scoped client so all exec/writeFile calls target the CHILD sandbox
     const childConway = conway.createScopedClient(sandbox.id);
 
+    await claimed.reportProvisioning?.("verifying");
     const verified = await installPinnedRuntime(childConway, expected);
     await childConway.exec("mkdir -p /root/.automaton", 10_000);
     await writeRuntimeManifest(childConway, claimed, runtime, build);

@@ -41,6 +41,8 @@ import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 import { attestationProof, computeBuildIdentity, type RuntimeAttestation } from "../../fleet/attestation.js";
 import type { ClaimedGrant } from "../../fleet/grants.js";
 import { readEnvFile } from "../../fleet/postgres/cli.js";
+import { wipeRegistry } from "./fixtures/wipe.js";
+import { loadAdminEnv } from "../../fleet/secret-files.js";
 import { spawnChild } from "../../replication/spawn.js";
 import { ChildLifecycle } from "../../replication/lifecycle.js";
 import { createBuiltinTools } from "../../agent/tools.js";
@@ -80,7 +82,17 @@ const PG_URL =
   process.env.FLEET_TEST_DATABASE_URL ||
   process.env.DATABASE_URL ||
   readEnvFile(path.resolve(".env.fleet")).DATABASE_URL ||
+  adminDatabaseUrl() ||
   "";
+
+/** Phase 4 moved the operator DSN to /etc/automaton-fleet/admin.env (readable by the operator group). */
+function adminDatabaseUrl(): string | undefined {
+  try {
+    return loadAdminEnv({}).env.FLEET_ADMIN_DATABASE_URL;
+  } catch {
+    return undefined;
+  }
+}
 
 function wallet(): string {
   return `0x${randomBytes(20).toString("hex")}`;
@@ -533,15 +545,7 @@ describe.skipIf(!PG_URL)("Fleet policy: shared PostgreSQL registry", () => {
     try {
       await c.query("BEGIN");
       // Same lock order as reservations (fleet_state first) to avoid deadlocks.
-      const tables = ["fleet_state", "fleet_agents", "fleet_events", "fleet_reservations", "fleet_agent_credentials"];
-      await c.query(`LOCK TABLE ${tables.map((t) => `${schema}.${t}`).join(", ")} IN ACCESS EXCLUSIVE MODE`);
-      for (const t of tables) await c.query(`ALTER TABLE ${schema}.${t} DISABLE TRIGGER USER`);
-      await c.query(`DELETE FROM ${schema}.fleet_agent_credentials`);
-      await c.query(`DELETE FROM ${schema}.fleet_reservations`);
-      await c.query(`DELETE FROM ${schema}.fleet_agents`);
-      await c.query(`DELETE FROM ${schema}.fleet_events`);
-      await c.query(`UPDATE ${schema}.fleet_state SET living_agents = 0, reserved_slots = 0`);
-      for (const t of tables) await c.query(`ALTER TABLE ${schema}.${t} ENABLE TRIGGER USER`);
+      await wipeRegistry(c, schema);
       await c.query("COMMIT");
     } catch (err) {
       await c.query("ROLLBACK");

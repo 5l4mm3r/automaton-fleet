@@ -1,0 +1,48 @@
+# Local automaton (root agent) runtime — Phase 4 isolation boundary.
+# NOT enabled by setup. Real replication/payments/owner sweep stay disabled.
+#
+# Runs as automaton-agent, which is in no fleet group. It gets no controller
+# credential: only its own fleet token file (~automaton-agent/.automaton/
+# fleet-credentials.json, 0600) and FLEET_API_URL. The fleet secret
+# directory, the service's logs and the operator's home are made
+# inaccessible regardless of file modes; `automaton --run` also refuses to
+# start if a privileged variable is present in its environment.
+
+[Unit]
+Description=Automaton agent runtime (isolated from fleet controller secrets)
+Wants=automaton-fleet.service
+After=automaton-fleet.service
+
+[Service]
+Type=exec
+User=automaton-agent
+Group=automaton-agent
+WorkingDirectory=/home/automaton-agent
+ExecStart=/opt/automaton-fleet/node/bin/node /opt/automaton-fleet/current/dist/index.js --run
+Environment=HOME=/home/automaton-agent
+Environment=FLEET_API_URL=http://127.0.0.1:8787
+Environment=REAL_REPLICATION_ENABLED=false
+Environment=REAL_PAYMENTS_ENABLED=false
+Environment=OWNER_SWEEP_ENABLED=false
+Restart=on-failure
+RestartSec=10s
+UMask=0077
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/home/automaton-agent
+ProtectHome=tmpfs
+BindPaths=/home/automaton-agent
+InaccessiblePaths=/etc/automaton-fleet -/var/log/automaton-fleet -/var/lib/automaton-fleet
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# Hide other users' processes (so /proc/<service pid>/environ is unreachable).
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

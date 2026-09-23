@@ -12,8 +12,9 @@
  */
 
 import type { PoolClient } from "pg";
+import { V5_SQL, v4Sql } from "./migrations-phase5.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 2;
+export const FLEET_PG_SCHEMA_VERSION = 5;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -741,9 +742,411 @@ REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA @@SCHEMA@@ FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 `;
 
+/**
+ * V3 — Phase 4: least-privilege controller role, runtime immutability,
+ * parent-reported deaths, sandbox termination queue.
+ *
+ * The fleet service no longer holds the owner credential. It connects as a
+ * restricted service role that can SELECT the non-secret tables and EXECUTE
+ * the svc_* SECURITY DEFINER functions below — nothing else. Every write the
+ * controller performs (claim, attested activation, verification failure,
+ * release, death, reaper, audit events, terminations) is one of these
+ * functions, so the service role cannot change the cap, mode, approved
+ * runtime or replication switch, cannot insert agents, cannot read
+ * credential hashes and cannot skip the attestation check: svc_activate
+ * re-checks the child's proof against the lease itself.
+ */
+const V3 = `
+-- ── Settings
+ALTER TABLE fleet_state
+  ADD COLUMN parent_report_quiet_s integer NOT NULL DEFAULT 60 CHECK (parent_report_quiet_s BETWEEN 1 AND 86400);
+ALTER TABLE fleet_agents ADD COLUMN terminal_reported_at timestamptz;
+
+-- ── The approved runtime is immutable while a release is running: it cannot
+-- change while any lease is open or any child is living. Clearing it (which
+-- blocks all replication) is always allowed.
+CREATE FUNCTION fleet_state_runtime_guard() RETURNS trigger LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+BEGIN
+  IF (OLD.runtime_repo, OLD.runtime_commit, OLD.runtime_build_id, OLD.runtime_lockfile_sha256)
+       IS DISTINCT FROM (NEW.runtime_repo, NEW.runtime_commit, NEW.runtime_build_id, NEW.runtime_lockfile_sha256)
+     AND NEW.runtime_repo IS NOT NULL
+     AND (EXISTS (SELECT 1 FROM fleet_reservations WHERE status IN ('reserved','provisioning'))
+          OR EXISTS (SELECT 1 FROM fleet_agents WHERE role = 'child' AND status IN ('reserved','provisioning','active','unresponsive'))) THEN
+    RAISE EXCEPTION 'FLEET_RUNTIME_IMMUTABLE: the approved runtime cannot change while leases are open or children are living (clear it, drain, then approve)';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER fleet_state_runtime_guard BEFORE UPDATE ON fleet_state
+  FOR EACH ROW EXECUTE FUNCTION fleet_state_runtime_guard();
+
+-- ── Sandbox termination queue. A death with a known sandbox enqueues a
+-- termination; the controller works the queue. 'unsupported' means the
+-- provider cannot stop it (a deployment blocker, surfaced by fleet:doctor).
+CREATE TABLE fleet_sandbox_terminations (
+  agent_id        text        PRIMARY KEY REFERENCES fleet_agents(agent_id),
+  sandbox_id      text        NOT NULL,
+  status          text        NOT NULL CHECK (status IN ('pending','terminated','unsupported','failed')),
+  requested_at    timestamptz NOT NULL DEFAULT now(),
+  attempts        integer     NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  last_attempt_at timestamptz,
+  completed_at    timestamptz,
+  last_error      text,
+  CHECK ((status IN ('terminated','unsupported')) = (completed_at IS NOT NULL))
+);
+CREATE TRIGGER fleet_sandbox_terminations_no_delete BEFORE DELETE ON fleet_sandbox_terminations
+  FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+CREATE TRIGGER fleet_sandbox_terminations_no_truncate BEFORE TRUNCATE ON fleet_sandbox_terminations
+  FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
+
+CREATE FUNCTION fleet_agent_json(a fleet_agents) RETURNS jsonb LANGUAGE sql STABLE AS $$
+  SELECT jsonb_build_object(
+    'agentId', a.agent_id, 'parentAgentId', a.parent_agent_id, 'role', a.role, 'generation', a.generation,
+    'name', a.name, 'walletAddress', a.wallet_address, 'runtimeVersion', a.runtime_version,
+    'runtimeRepo', a.runtime_repo, 'runtimeCommit', a.runtime_commit, 'sandboxId', a.sandbox_id,
+    'localChildId', a.local_child_id, 'status', a.status, 'statusReason', a.status_reason,
+    'requestedBy', a.requested_by, 'createdAt', a.created_at, 'updatedAt', a.updated_at,
+    'lastHeartbeat', a.last_heartbeat, 'deathTime', a.death_time)
+$$;
+
+-- Death now also enqueues termination of the agent's sandbox (idempotent).
+CREATE OR REPLACE FUNCTION fleet_mark_dead(p_agent text, p_reason text, p_actor text, p_cause text) RETURNS boolean LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_status text; v_sandbox text; v_reason text := fleet_scrub(p_reason);
+BEGIN
+  PERFORM fleet_lock_state();
+  UPDATE fleet_agents
+     SET status = CASE WHEN status IN ('active','unresponsive') THEN 'dead' ELSE 'failed' END,
+         status_reason = v_reason, death_time = now(), updated_at = now()
+   WHERE agent_id = p_agent AND status IN ('reserved','provisioning','active','unresponsive')
+   RETURNING status, sandbox_id INTO v_status, v_sandbox;
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+  UPDATE fleet_reservations SET status = 'released', ended_at = now(), end_reason = v_reason, updated_at = now()
+   WHERE agent_id = p_agent AND status IN ('reserved','provisioning');
+  UPDATE fleet_agent_credentials SET revoked_at = now() WHERE agent_id = p_agent AND revoked_at IS NULL;
+  PERFORM fleet_event('agent_died', p_agent, p_actor, jsonb_build_object('reason', v_reason, 'cause', p_cause, 'status', v_status));
+  PERFORM fleet_event('slot_released', p_agent, p_actor, jsonb_build_object('reason', v_reason));
+  IF v_sandbox IS NOT NULL THEN
+    INSERT INTO fleet_sandbox_terminations (agent_id, sandbox_id, status) VALUES (p_agent, v_sandbox, 'pending')
+      ON CONFLICT (agent_id) DO NOTHING;
+    IF FOUND THEN
+      PERFORM fleet_event('sandbox_termination_requested', p_agent, p_actor, jsonb_build_object('sandboxId', v_sandbox));
+    END IF;
+  END IF;
+  RETURN true;
+END $$;
+
+-- Reaper: as V2, plus parent-reported children that have stayed quiet for
+-- parent_report_quiet_s die without waiting for the full heartbeat timeout.
+CREATE OR REPLACE FUNCTION fleet_reap(p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE st fleet_state; v_grace timestamptz; v_expired integer; v_unresp integer := 0; v_dead integer := 0; r record;
+BEGIN
+  st := fleet_lock_state();
+  IF st.reaper_last_run_at IS NULL OR st.reaper_grace_from IS NULL
+     OR now() - st.reaper_last_run_at > make_interval(secs => st.heartbeat_unresponsive_s) THEN
+    v_grace := now();
+    PERFORM fleet_event('reaper_resumed', NULL, p_actor, jsonb_build_object('lastRunAt', st.reaper_last_run_at));
+  ELSE
+    v_grace := st.reaper_grace_from;
+  END IF;
+  UPDATE fleet_state SET reaper_last_run_at = now(), reaper_grace_from = v_grace WHERE id = 1;
+
+  v_expired := fleet_expire_leases(p_actor);
+
+  FOR r IN SELECT agent_id FROM fleet_agents
+            WHERE status IN ('active','unresponsive') AND terminal_reported_at IS NOT NULL
+              AND GREATEST(COALESCE(last_heartbeat, updated_at), v_grace) < now() - make_interval(secs => st.parent_report_quiet_s)
+            ORDER BY agent_id LOOP
+    IF fleet_mark_dead(r.agent_id, format('parent reported terminal; no heartbeat for more than %s s', st.parent_report_quiet_s),
+                       p_actor, 'parent_reported') THEN
+      v_dead := v_dead + 1;
+    END IF;
+  END LOOP;
+
+  FOR r IN SELECT agent_id FROM fleet_agents
+            WHERE status = 'unresponsive'
+              AND GREATEST(COALESCE(last_heartbeat, updated_at), v_grace) < now() - make_interval(secs => st.heartbeat_dead_s)
+            ORDER BY agent_id LOOP
+    IF fleet_mark_dead(r.agent_id, format('no heartbeat for more than %s s', st.heartbeat_dead_s), p_actor, 'heartbeat_timeout') THEN
+      v_dead := v_dead + 1;
+    END IF;
+  END LOOP;
+
+  FOR r IN SELECT agent_id, last_heartbeat FROM fleet_agents
+            WHERE status = 'active'
+              AND GREATEST(COALESCE(last_heartbeat, updated_at), v_grace) < now() - make_interval(secs => st.heartbeat_unresponsive_s)
+            ORDER BY agent_id FOR UPDATE LOOP
+    UPDATE fleet_agents SET status = 'unresponsive', updated_at = now() WHERE agent_id = r.agent_id AND status = 'active';
+    PERFORM fleet_event('agent_unresponsive', r.agent_id, p_actor,
+      jsonb_build_object('lastHeartbeat', r.last_heartbeat, 'timeoutS', st.heartbeat_unresponsive_s));
+    v_unresp := v_unresp + 1;
+  END LOOP;
+
+  RETURN jsonb_build_object('expired', v_expired, 'unresponsive', v_unresp, 'dead', v_dead, 'graceFrom', v_grace);
+END $$;
+
+-- ── Controller API (SECURITY DEFINER; the only functions granted to the service role)
+
+-- reserved -> provisioning, exactly once; issues the attestation nonce.
+CREATE FUNCTION svc_claim(p_agent text, p_local_child text, p_parent text, p_ttl_ms bigint, p_nonce text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE st fleet_state; l fleet_reservations; a fleet_agents; v_ttl double precision;
+BEGIN
+  IF p_nonce IS NULL OR p_nonce !~ '^[0-9a-f]{64}$' OR p_local_child IS NULL OR length(p_local_child) > 64 THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'Replication denied: malformed claim.');
+  END IF;
+  st := fleet_lock_state();
+  SELECT * INTO l FROM fleet_reservations WHERE agent_id = p_agent FOR UPDATE;
+  IF NOT FOUND OR l.status <> 'reserved' OR l.expires_at <= now() THEN
+    RETURN jsonb_build_object('ok', false,
+      'reason', format('Replication denied: fleet reservation %s is invalid, expired, or already used.', p_agent));
+  END IF;
+  IF p_parent IS NOT NULL AND l.parent_agent_id <> p_parent THEN
+    RETURN jsonb_build_object('ok', false,
+      'reason', format('Replication denied: reservation %s belongs to another parent.', l.reservation_id));
+  END IF;
+  v_ttl := COALESCE(p_ttl_ms, st.provisioning_ttl_s::bigint * 1000)::double precision / 1000;
+  UPDATE fleet_agents SET status = 'provisioning', local_child_id = p_local_child, updated_at = now(),
+         reservation_expires_at = now() + make_interval(secs => v_ttl)
+   WHERE agent_id = p_agent AND status = 'reserved'
+   RETURNING * INTO a;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', false,
+      'reason', format('Replication denied: fleet reservation %s is invalid, expired, or already used.', p_agent));
+  END IF;
+  UPDATE fleet_reservations SET status = 'provisioning', claimed_at = now(), attestation_nonce = p_nonce,
+         expires_at = now() + make_interval(secs => v_ttl), updated_at = now()
+   WHERE reservation_id = l.reservation_id AND status = 'reserved';
+  PERFORM fleet_event('slot_claimed', p_agent, p_parent,
+    jsonb_build_object('localChildId', p_local_child, 'reservationId', l.reservation_id));
+  RETURN jsonb_build_object('ok', true, 'agentId', p_agent, 'parentAgentId', a.parent_agent_id, 'generation', a.generation,
+    'reservationId', l.reservation_id, 'repo', l.expected_repo, 'commit', l.expected_commit,
+    'buildId', l.expected_build_id, 'lockfileSha256', l.expected_lockfile_sha256);
+END $$;
+
+-- provisioning -> active, only with a runtime proof matching the lease. The
+-- check here is authoritative and independent of the service's own check:
+-- nonce, commit (reported and attested), repository, lockfile, build id,
+-- clean tree and proof hash. A mismatch releases the slot as failed.
+CREATE FUNCTION svc_activate(p_agent text, p_parent text, p_wallet text, p_sandbox text, p_runtime_commit text,
+                             p_runtime_version text, p_attestation jsonb, p_actor text, p_token_hash text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE a fleet_agents; l fleet_reservations; v_fail text; att jsonb := COALESCE(p_attestation, 'null'::jsonb);
+BEGIN
+  IF p_token_hash IS NULL OR p_token_hash !~ '^[0-9a-f]{64}$' THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'credential hash malformed');
+  END IF;
+  PERFORM fleet_lock_state();
+  SELECT * INTO a FROM fleet_agents WHERE agent_id = p_agent FOR UPDATE;
+  IF NOT FOUND OR a.status <> 'provisioning' THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_INVALID_STATE',
+      'reason', format('Cannot activate fleet agent %s: not in provisioning state', p_agent));
+  END IF;
+  SELECT * INTO l FROM fleet_reservations WHERE agent_id = p_agent FOR UPDATE;
+  IF NOT FOUND OR l.status <> 'provisioning' THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_INVALID_STATE',
+      'reason', format('Cannot activate fleet agent %s: no open provisioning lease', p_agent));
+  END IF;
+  IF p_parent IS NOT NULL AND l.parent_agent_id <> p_parent THEN
+    PERFORM fleet_event('authorization_denied', NULL, p_actor,
+      jsonb_build_object('action', 'activate', 'reservationId', l.reservation_id));
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_AUTHORIZED',
+      'reason', format('Activation denied: reservation %s belongs to another parent.', l.reservation_id));
+  END IF;
+  IF l.expires_at <= now() THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_AUTHORIZED',
+      'reason', format('Activation denied: provisioning lease %s has expired.', l.reservation_id));
+  END IF;
+
+  IF jsonb_typeof(att) IS DISTINCT FROM 'object' THEN v_fail := 'no attestation';
+  ELSIF p_runtime_commit IS DISTINCT FROM l.expected_commit THEN v_fail := 'reported commit does not match the lease';
+  ELSIF l.attestation_nonce IS NULL OR att->>'nonce' IS DISTINCT FROM l.attestation_nonce THEN v_fail := 'nonce does not match the lease';
+  ELSIF att->>'commit' IS DISTINCT FROM l.expected_commit THEN v_fail := 'attested commit does not match the lease';
+  ELSIF att->>'repo' IS DISTINCT FROM l.expected_repo THEN v_fail := 'attested repository does not match the lease';
+  ELSIF att->>'lockfileSha256' IS DISTINCT FROM l.expected_lockfile_sha256 THEN v_fail := 'attested lockfile does not match the lease';
+  ELSIF att->>'buildId' IS DISTINCT FROM l.expected_build_id THEN v_fail := 'attested build id does not match the lease';
+  ELSIF att->'clean' IS DISTINCT FROM 'true'::jsonb THEN v_fail := 'attested runtime tree is not clean';
+  ELSIF att->>'proof' IS DISTINCT FROM encode(sha256(convert_to(
+          (att->>'nonce') || ':' || (att->>'commit') || ':' || (att->>'buildId') || ':' || (att->>'lockfileSha256'), 'UTF8')), 'hex') THEN
+    v_fail := 'attestation proof is inconsistent';
+  END IF;
+  IF v_fail IS NOT NULL THEN
+    PERFORM fleet_event('runtime_verification_failed', p_agent, p_actor,
+      jsonb_build_object('reason', 'controller check: ' || v_fail, 'reservationId', l.reservation_id));
+    PERFORM fleet_release(p_agent, 'runtime verification failed: ' || v_fail, 'failed', p_actor);
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_RUNTIME_UNVERIFIED', 'reason', 'Runtime verification failed: ' || v_fail);
+  END IF;
+
+  UPDATE fleet_agents SET status = 'active', wallet_address = p_wallet, sandbox_id = p_sandbox,
+         runtime_version = COALESCE(att->>'version', p_runtime_version),
+         last_heartbeat = now(), reservation_expires_at = NULL, updated_at = now()
+   WHERE agent_id = p_agent AND status = 'provisioning'
+   RETURNING * INTO a;
+  UPDATE fleet_reservations SET status = 'completed', completed_at = now(), attested_at = now(),
+         attestation = att, updated_at = now()
+   WHERE reservation_id = l.reservation_id AND status = 'provisioning';
+  PERFORM fleet_event('runtime_verified', p_agent, p_actor, jsonb_build_object('reservationId', l.reservation_id,
+    'commit', att->>'commit', 'buildId', att->>'buildId', 'lockfileSha256', att->>'lockfileSha256'));
+  PERFORM fleet_event('agent_activated', p_agent, p_actor, jsonb_build_object('walletAddress', p_wallet,
+    'sandboxId', p_sandbox, 'runtimeCommit', att->>'commit'));
+  INSERT INTO fleet_agent_credentials (agent_id, token_hash) VALUES (p_agent, p_token_hash)
+    ON CONFLICT (agent_id) DO UPDATE SET token_hash = EXCLUDED.token_hash, created_at = now(), revoked_at = NULL;
+  PERFORM fleet_event('credential_issued', p_agent, p_actor, '{}'::jsonb);
+  RETURN jsonb_build_object('ok', true, 'agent', fleet_agent_json(a));
+END $$;
+
+CREATE FUNCTION svc_verification_failed(p_agent text, p_reason text, p_actor text) RETURNS boolean LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = @@SCHEMA@@, pg_temp AS $$
+BEGIN
+  PERFORM fleet_event('runtime_verification_failed', p_agent, p_actor, jsonb_build_object('reason', fleet_scrub(p_reason)));
+  RETURN fleet_release(p_agent, 'runtime verification failed: ' || COALESCE(p_reason, ''), 'failed', p_actor);
+END $$;
+
+CREATE FUNCTION svc_release(p_agent text, p_reason text, p_actor text) RETURNS boolean LANGUAGE sql
+SECURITY DEFINER SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT fleet_release(p_agent, p_reason, 'released', p_actor)
+$$;
+
+CREATE FUNCTION svc_mark_dead(p_agent text, p_reason text, p_actor text, p_cause text) RETURNS boolean LANGUAGE sql
+SECURITY DEFINER SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT fleet_mark_dead(p_agent, p_reason, p_actor, left(COALESCE(p_cause, 'reported'), 32))
+$$;
+
+CREATE FUNCTION svc_heartbeat(p_agent text) RETURNS text LANGUAGE sql
+SECURITY DEFINER SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT fleet_heartbeat(p_agent, p_agent)
+$$;
+
+CREATE FUNCTION svc_reap(p_actor text) RETURNS jsonb LANGUAGE sql
+SECURITY DEFINER SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT fleet_reap(p_actor)
+$$;
+
+CREATE FUNCTION svc_record_event(p_type text, p_agent text, p_actor text, p_detail jsonb) RETURNS void LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = @@SCHEMA@@, pg_temp AS $$
+BEGIN
+  IF p_type IS NULL OR p_type !~ '^[a-z][a-z0-9_]{0,63}$' THEN
+    RAISE EXCEPTION 'FLEET_BAD_EVENT: invalid event type';
+  END IF;
+  PERFORM fleet_event(p_type, left(p_agent, 64), p_actor, p_detail);
+END $$;
+
+-- A parent reports that its child's local lifecycle ended. Unclaimed or
+-- provisioning children are released at once; a living child that has been
+-- quiet for parent_report_quiet_s dies now, otherwise it is flagged so the
+-- reaper retires it once it goes quiet. A child that keeps heartbeating is
+-- never killed on its parent's word.
+CREATE FUNCTION svc_child_terminal(p_parent text, p_local_child text, p_state text) RETURNS jsonb LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE a fleet_agents; st fleet_state; v_outcome text; v_changed boolean := false;
+        v_state text := left(COALESCE(p_state, ''), 32);
+BEGIN
+  SELECT * INTO a FROM fleet_agents WHERE local_child_id = p_local_child;
+  IF NOT FOUND OR a.parent_agent_id IS DISTINCT FROM p_parent THEN
+    PERFORM fleet_event('authorization_denied', NULL, p_parent,
+      jsonb_build_object('action', 'child_terminal', 'localChildId', left(p_local_child, 64)));
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_AUTHORIZED');
+  END IF;
+  SELECT * INTO st FROM fleet_state WHERE id = 1;
+  IF a.status IN ('reserved','provisioning') THEN
+    v_changed := fleet_release(a.agent_id, 'parent reported child terminal: ' || v_state, 'failed', p_parent);
+    v_outcome := 'released';
+  ELSIF a.status IN ('active','unresponsive') THEN
+    UPDATE fleet_agents SET terminal_reported_at = COALESCE(terminal_reported_at, now()) WHERE agent_id = a.agent_id;
+    IF COALESCE(a.last_heartbeat, a.updated_at) < now() - make_interval(secs => st.parent_report_quiet_s) THEN
+      v_changed := fleet_mark_dead(a.agent_id,
+        format('parent reported terminal (%s); no heartbeat for more than %s s', v_state, st.parent_report_quiet_s),
+        p_parent, 'parent_reported');
+      v_outcome := 'dead';
+    ELSE
+      v_outcome := 'deferred';
+    END IF;
+  ELSE
+    v_outcome := 'already_terminal';
+  END IF;
+  PERFORM fleet_event('child_terminal_reported', a.agent_id, p_parent,
+    jsonb_build_object('localChildId', p_local_child, 'state', v_state, 'outcome', v_outcome));
+  RETURN jsonb_build_object('ok', true, 'outcome', v_outcome, 'changed', v_changed);
+END $$;
+
+-- Terminations due: pending, or failed with attempts left and not tried in the last minute.
+CREATE FUNCTION svc_terminations_due(p_limit integer) RETURNS jsonb LANGUAGE sql STABLE
+SECURITY DEFINER SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('agentId', agent_id, 'sandboxId', sandbox_id, 'attempts', attempts)), '[]'::jsonb)
+    FROM (SELECT * FROM fleet_sandbox_terminations
+           WHERE status = 'pending'
+              OR (status = 'failed' AND attempts < 5 AND last_attempt_at < now() - interval '60 seconds')
+           ORDER BY requested_at LIMIT LEAST(GREATEST(p_limit, 1), 100)) t
+$$;
+
+CREATE FUNCTION svc_termination_result(p_agent text, p_status text, p_error text, p_actor text) RETURNS boolean LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_sandbox text;
+BEGIN
+  IF p_status NOT IN ('terminated','unsupported','failed') THEN
+    RAISE EXCEPTION 'FLEET_INVALID_TRANSITION: termination status %', p_status;
+  END IF;
+  UPDATE fleet_sandbox_terminations
+     SET status = p_status, attempts = attempts + 1, last_attempt_at = now(), last_error = fleet_scrub(p_error),
+         completed_at = CASE WHEN p_status IN ('terminated','unsupported') THEN now() END
+   WHERE agent_id = p_agent AND status IN ('pending','failed')
+   RETURNING sandbox_id INTO v_sandbox;
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+  PERFORM fleet_event(CASE p_status WHEN 'terminated' THEN 'sandbox_terminated'
+                                    WHEN 'unsupported' THEN 'sandbox_termination_unsupported'
+                                    ELSE 'sandbox_termination_failed' END,
+                      p_agent, p_actor, jsonb_build_object('sandboxId', v_sandbox, 'error', fleet_scrub(p_error)));
+  RETURN true;
+END $$;
+
+REVOKE ALL ON ALL TABLES IN SCHEMA @@SCHEMA@@ FROM PUBLIC;
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA @@SCHEMA@@ FROM PUBLIC;
+`;
+
 export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 1, name: "shared_fleet_registry", sql: V1 },
   { version: 2, name: "leases_heartbeat_expiry_restricted_api", sql: V2 },
+  { version: 3, name: "service_role_runtime_immutability_terminations", sql: V3 },
+  { version: 4, name: "lifecycle_health_sessions_provisioning_orphans_custody", sql: v4Sql(FLEET_PG_HARD_MAX_AGENTS) },
+  { version: 5, name: "treasury_economics", sql: V5_SQL },
+]);
+
+/** The only functions the restricted service role may execute (name + signature). */
+export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "svc_claim(text, text, text, bigint, text)",
+  "svc_activate(text, text, text, text, text, text, jsonb, text, text)",
+  "svc_verification_failed(text, text, text)",
+  "svc_release(text, text, text)",
+  "svc_mark_dead(text, text, text, text)",
+  "svc_heartbeat(text)",
+  "svc_reap(text)",
+  "svc_record_event(text, text, text, jsonb)",
+  "svc_child_terminal(text, text, text)",
+  "svc_terminations_due(integer)",
+  "svc_termination_result(text, text, text, text)",
+  "svc_consume_nonce(text, text, integer)",
+  "svc_provision_update(text, text, text, text)",
+  "svc_issue_challenge(text, text, text, text)",
+  "svc_answer_challenge(text, text, text, text, text, boolean)",
+]);
+
+/** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */
+export const SERVICE_READ_TABLES: readonly string[] = Object.freeze([
+  "fleet_schema_migrations",
+  "fleet_state",
+  "fleet_agents",
+  "fleet_reservations",
+  "fleet_events",
+  "fleet_sandbox_terminations",
+  "fleet_provisioning",
+  "fleet_orphans",
+  "fleet_wallet_custody",
+  "fleet_health_challenges",
 ]);
 
 /** The only functions the restricted agent role may execute (name + signature). */
@@ -755,6 +1158,9 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_request_replication(text, text, text, text, text, text)",
   "api_release_reservation(text, text, text, text)",
   "api_set_own_status(text, text, text, text)",
+  "api_open_session(text, text, text)",
+  "api_propose_allocation(text, text, text, text, bigint, bigint, integer)",
+  "api_request_spend(text, text, text, text, text, bigint, text, text)",
 ]);
 
 export function quoteIdent(ident: string): string {

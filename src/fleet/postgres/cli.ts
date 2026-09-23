@@ -14,13 +14,26 @@
  *   pnpm fleet:admin enroll-root <wallet> <name> [credentialFile]
  *   pnpm fleet:admin rotate-credential <agentId> [credentialFile]
  *   pnpm fleet:admin grant-agent-role [role]
+ *   pnpm fleet:admin grant-service-role [role]
+ *   pnpm fleet:audit-privileges               (fails if agent/service roles are too broad)
+ *   pnpm fleet:doctor [--json] [--deployment-only]
+ *   pnpm fleet:admin terminations             (sandbox termination queue)
+ *   pnpm fleet:admin quarantine <agentId> [reason]        revoke everything now; terminate / orphan its sandbox
+ *   pnpm fleet:admin resolve-orphan <agentId> <resolution> (after external cleanup is confirmed)
+ *   pnpm fleet:admin orphans [all] | provisioning [cleanup]
+ *   pnpm fleet:admin lifecycle-policy [interval=S] [challengeTtl=S] [healthGrace=S] [maxFailures=N]
+ *                                     [terminationGrace=S] [orphanHold=S] [maxOrphans=N] [sessionTtl=S]
+ *   pnpm fleet:admin <treasury command>        see src/fleet/treasury/cli.ts
  *   pnpm fleet:admin reap | reservations
  *   pnpm fleet:admin release <agentId> [reason]
  *   pnpm fleet:admin mark-dead <agentId> [reason]
  *
- * FLEET_CONTROLLER_DATABASE_URL (or DATABASE_URL) is read from the
- * environment, else from .env.fleet. It is never printed; agent tokens are
- * written to a 0600 file, never to stdout.
+ * The privileged admin credential FLEET_ADMIN_DATABASE_URL is read from the
+ * environment, else /etc/automaton-fleet/admin.env (0640, group
+ * automaton-fleet-admin), else — legacy, with a warning — .env.fleet
+ * (FLEET_CONTROLLER_DATABASE_URL / DATABASE_URL). It is never printed; agent
+ * tokens are written to a 0600 file, never to stdout. Migrations refuse any
+ * credential that does not own the fleet schema.
  */
 
 import fs from "fs";
@@ -29,6 +42,10 @@ import path from "path";
 import { isFleetState } from "../config.js";
 import { validateRuntimePin } from "../runtime.js";
 import { computeBuildIdentity, loadRuntimeBuild } from "../attestation.js";
+import { formatDoctorReport, runDoctor } from "../doctor.js";
+import { loadAdminEnv, readEnvFile, type LoadedEnv } from "../secret-files.js";
+import { PgTreasuryStore } from "../treasury/store.js";
+import { TREASURY_COMMANDS, runTreasuryCommand } from "../treasury/cli.js";
 import type { FleetCredential } from "../types.js";
 import { PgFleetStore } from "./store.js";
 
@@ -43,36 +60,100 @@ export function writeCredentialFile(file: string, cred: FleetCredential, apiUrl:
   fs.chmodSync(file, 0o600);
 }
 
-export function readEnvFile(file: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!fs.existsSync(file)) return out;
-  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
-    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
-    if (m && !line.trimStart().startsWith("#")) out[m[1]] = m[2].replace(/^(['"])(.*)\1$/, "$2");
-  }
-  return out;
-}
-
-function env(): Record<string, string | undefined> {
-  return { ...readEnvFile(path.resolve(".env.fleet")), ...process.env };
-}
+export { readEnvFile };
 
 async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
-  const e = env();
   if (cmd === "build-identity") {
+    // Needs no credentials; must work before any secret file exists.
     const dir = path.resolve(rest[0] ?? ".");
     console.log(JSON.stringify({ dir, ...computeBuildIdentity(dir) }));
     return 0;
   }
+  let loaded: LoadedEnv;
+  try {
+    loaded = loadAdminEnv();
+  } catch (err) {
+    if (cmd === "doctor") {
+      const report = await runDoctor({ env: process.env, store: null, configError: err instanceof Error ? err.message : String(err) });
+      console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : formatDoctorReport(report));
+      return 1;
+    }
+    console.error(err instanceof Error ? err.message : String(err));
+    return 2;
+  }
+  const e = loaded.env;
+  for (const w of loaded.warnings) console.error(`warning: ${w}`);
+  if (cmd === "doctor") {
+    const store = PgFleetStore.fromEnv(e);
+    try {
+      const report = await runDoctor({ env: e, store });
+      console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : formatDoctorReport(report));
+      return rest.includes("--deployment-only") ? (report.deploymentOk ? 0 : 1) : report.replicationSafe ? 0 : 1;
+    } finally {
+      await store?.close();
+    }
+  }
   const store = PgFleetStore.fromEnv(e);
   if (!store) {
-    console.error("FLEET_CONTROLLER_DATABASE_URL / DATABASE_URL is not configured (environment or .env.fleet).");
+    console.error("FLEET_ADMIN_DATABASE_URL is not configured (environment, /etc/automaton-fleet/admin.env, or legacy .env.fleet).");
     return 2;
   }
   const actor = `operator:${os.userInfo().username}`;
+  if (TREASURY_COMMANDS.has(cmd)) {
+    const ts = new PgTreasuryStore({
+      connectionString: (e.FLEET_ADMIN_DATABASE_URL || e.FLEET_CONTROLLER_DATABASE_URL || e.DATABASE_URL)!.trim(),
+      schema: e.FLEET_PG_SCHEMA?.trim() || undefined,
+    });
+    try {
+      console.log(JSON.stringify(await runTreasuryCommand(cmd, rest, ts, actor), null, 2));
+      return 0;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    } finally {
+      await ts.close();
+      await store.close();
+    }
+  }
   try {
     switch (cmd) {
+      case "quarantine": {
+        if (!rest[0]) throw new Error("usage: quarantine <agentId> [reason]");
+        console.log(JSON.stringify({ agentId: rest[0], result: await store.quarantine(rest[0], rest.slice(1).join(" ") || "operator quarantine", actor) }));
+        return 0;
+      }
+      case "resolve-orphan": {
+        if (!rest[0] || !rest[1]) throw new Error("usage: resolve-orphan <agentId> <resolution…>");
+        console.log(JSON.stringify({ resolved: await store.resolveOrphan(rest[0], rest.slice(1).join(" "), actor) }));
+        return 0;
+      }
+      case "orphans": {
+        console.log(JSON.stringify(await store.listOrphans({ open: rest[0] !== "all" }), null, 2));
+        return 0;
+      }
+      case "provisioning": {
+        console.log(JSON.stringify(await store.listProvisioning({ needsCleanup: rest[0] === "cleanup" }), null, 2));
+        return 0;
+      }
+      case "lifecycle-policy": {
+        const keys: Record<string, string> = {
+          interval: "healthChallengeIntervalS", challengeTtl: "challengeTtlS", healthGrace: "healthGraceS", maxFailures: "maxChallengeFailures",
+          terminationGrace: "terminationGraceS", orphanHold: "orphanSlotHoldS", maxOrphans: "maxOpenOrphans", sessionTtl: "sessionTtlS",
+        };
+        if (!rest.length) {
+          console.log(JSON.stringify(await store.getLifecyclePolicy(), null, 2));
+          return 0;
+        }
+        const patch: Record<string, number> = {};
+        for (const kvp of rest) {
+          const [k, v] = kvp.split("=");
+          if (!keys[k] || !/^\d+$/.test(v ?? "")) throw new Error(`bad setting ${kvp}`);
+          patch[keys[k]] = Number(v);
+        }
+        console.log(JSON.stringify(await store.setLifecyclePolicy(patch, actor), null, 2));
+        return 0;
+      }
       case "migrate": {
         const applied = await store.migrate();
         console.log(applied.length ? `Applied migrations: ${applied.join(", ")}` : "Schema up to date.");
@@ -121,11 +202,12 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       }
       case "set-timeouts": {
-        const keys: Record<string, "reservationTtlS" | "provisioningTtlS" | "heartbeatUnresponsiveS" | "heartbeatDeadS"> = {
+        const keys: Record<string, "reservationTtlS" | "provisioningTtlS" | "heartbeatUnresponsiveS" | "heartbeatDeadS" | "parentReportQuietS"> = {
           reservation: "reservationTtlS",
           provisioning: "provisioningTtlS",
           unresponsive: "heartbeatUnresponsiveS",
           dead: "heartbeatDeadS",
+          "parent-quiet": "parentReportQuietS",
         };
         const t: Record<string, number> = {};
         for (const kv of rest) {
@@ -161,6 +243,22 @@ async function main(argv: string[]): Promise<number> {
         console.log(`granted restricted agent API to ${rest[0] || store.agentRole}`);
         return 0;
       }
+      case "grant-service-role": {
+        await store.grantServiceRole(rest[0] || store.serviceRole);
+        console.log(`granted controller API to ${rest[0] || store.serviceRole}`);
+        return 0;
+      }
+      case "audit-privileges": {
+        const r = await store.auditPrivileges();
+        console.log(JSON.stringify(r, null, 2));
+        if (!r.ok) console.error(`FAIL: ${r.problems.length} privilege problem(s):\n  - ${r.problems.join("\n  - ")}`);
+        else console.error("PASS: agent and service roles are least-privilege.");
+        return r.ok ? 0 : 1;
+      }
+      case "terminations": {
+        console.log(JSON.stringify(await store.listTerminations(), null, 2));
+        return 0;
+      }
       case "reap": {
         console.log(JSON.stringify(await store.reap(actor)));
         return 0;
@@ -185,7 +283,8 @@ async function main(argv: string[]): Promise<number> {
       default:
         console.error(
           "usage: fleet:admin migrate|health|status|set-cap N|set-mode MODE|approve-runtime|clear-runtime|build-identity DIR|" +
-            "set-replication on|off|set-timeouts k=S…|enroll-root WALLET NAME|rotate-credential ID|grant-agent-role|reap|reservations|release ID|mark-dead ID",
+            "set-replication on|off|set-timeouts k=S…|enroll-root WALLET NAME|rotate-credential ID|grant-agent-role|grant-service-role|" +
+            "audit-privileges|doctor|terminations|reap|reservations|release ID|mark-dead ID",
         );
         return 2;
     }

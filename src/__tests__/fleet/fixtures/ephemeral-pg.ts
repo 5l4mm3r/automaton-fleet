@@ -20,7 +20,10 @@ export interface EphemeralPg {
   dbname: string;
   ownerUrl: string;
   agentUrl: string;
+  serviceUrl: string;
   superUrl: string;
+  /** Re-run scripts/fleet-db-roles.sql (idempotency tests). */
+  applyRoles(): void;
   stop(): void;
 }
 
@@ -61,6 +64,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
   const superPw = randomBytes(12).toString("hex");
   const ownerPw = randomBytes(12).toString("hex");
   const agentPw = randomBytes(12).toString("hex");
+  const servicePw = randomBytes(12).toString("hex");
   const pwfile = path.join(dir, "pw");
   fs.writeFileSync(pwfile, superPw + "\n", { mode: 0o600 });
   execFileSync(path.join(bin, "initdb"), ["-D", data, "-U", "postgres", "--pwfile", pwfile, "--auth=scram-sha-256", "-E", "UTF8"], {
@@ -83,26 +87,32 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
   try {
     const dbname = "fleet_t";
     const superUrl = `postgresql://postgres:${superPw}@127.0.0.1:${port}/postgres`;
-    const psql = (url: string, args: string[]) =>
-      execFileSync(path.join(bin, "psql"), [url, "-v", "ON_ERROR_STOP=1", "-q", ...args], {
-        stdio: ["ignore", "ignore", "pipe"],
+    const psql = (url: string, args: string[], input?: string) =>
+      execFileSync(path.join(bin, "psql"), [url, "-X", "-v", "ON_ERROR_STOP=1", "-q", ...args], {
+        stdio: [input === undefined ? "ignore" : "pipe", "ignore", "pipe"],
+        input,
         env: { ...process.env, PGPASSWORD: superPw }, // for \connect inside the role script
       });
+    // Same invocation as scripts/fleet-db-setup.sh: passwords on stdin, never argv.
+    const applyRoles = () =>
+      psql(
+        superUrl,
+        ["-v", `dbname=${dbname}`, "-v", "owner=fleet_owner", "-f", "-"],
+        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n` +
+          fs.readFileSync(path.resolve("scripts/fleet-db-roles.sql"), "utf8"),
+      );
     // Owner: like production fleetadmin — not a superuser, cannot create roles.
     psql(superUrl, ["-c", `CREATE ROLE fleet_owner LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB PASSWORD '${ownerPw}'`]);
     psql(superUrl, ["-c", `CREATE DATABASE ${dbname} OWNER fleet_owner`]);
-    psql(superUrl, [
-      "-v", `dbname=${dbname}`,
-      "-v", "owner=fleet_owner",
-      "-v", `agent_password=${agentPw}`,
-      "-f", path.resolve("scripts/fleet-db-roles.sql"),
-    ]);
+    applyRoles();
     return {
       port,
       dbname,
       superUrl,
       ownerUrl: `postgresql://fleet_owner:${ownerPw}@127.0.0.1:${port}/${dbname}`,
       agentUrl: `postgresql://fleet_agent_login:${agentPw}@127.0.0.1:${port}/${dbname}`,
+      serviceUrl: `postgresql://fleet_service_login:${servicePw}@127.0.0.1:${port}/${dbname}`,
+      applyRoles,
       stop,
     };
   } catch (err) {

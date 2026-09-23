@@ -331,3 +331,37 @@ export function readOwnVersion(runtimeDir: string): string | null {
     return null;
   }
 }
+
+// ─── Runtime release (Phase 4) ───────────────────────────────────
+
+/**
+ * The runtime a fleet release runs: repo + commit + build identity. It is
+ * set once per deployment (FLEET_RUNTIME_REPO / _COMMIT / _BUILD_ID /
+ * _LOCKFILE_SHA256 in /etc/automaton-fleet/runtime.env) and must equal the
+ * operator-approved runtime in the registry; the fleet service refuses to
+ * claim or activate a lease that expects anything else.
+ */
+export interface RuntimeRelease extends RuntimePin, RuntimeBuild {}
+
+export function loadRuntimeRelease(env: Record<string, string | undefined> = process.env): RuntimeRelease | null {
+  const pin = loadRuntimePin(env);
+  const build = validateRuntimeBuild(env.FLEET_RUNTIME_BUILD_ID, env.FLEET_RUNTIME_LOCKFILE_SHA256);
+  return pin && build ? Object.freeze({ ...pin, ...build }) : null;
+}
+
+/** Why the runtime env is not a complete release (for doctor/readiness), or null if it is. */
+export function runtimeReleaseProblem(env: Record<string, string | undefined>): string | null {
+  const v = validateRuntimePin(env.FLEET_RUNTIME_REPO, env.FLEET_RUNTIME_COMMIT);
+  if (!v.ok) return v.reason;
+  if (!validateRuntimeBuild(env.FLEET_RUNTIME_BUILD_ID, env.FLEET_RUNTIME_LOCKFILE_SHA256)) {
+    return "FLEET_RUNTIME_BUILD_ID / FLEET_RUNTIME_LOCKFILE_SHA256 are missing or not 64-hex.";
+  }
+  return null;
+}
+
+export function sameRelease(
+  a: { repo: string; commit: string; buildId: string; lockfileSha256: string } | null | undefined,
+  b: { repo: string; commit: string; buildId: string; lockfileSha256: string } | null | undefined,
+): boolean {
+  return !!a && !!b && a.repo === b.repo && a.commit === b.commit && a.buildId === b.buildId && a.lockfileSha256 === b.lockfileSha256;
+}
