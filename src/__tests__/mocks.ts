@@ -360,3 +360,30 @@ export function createTestConfig(
     ...overrides,
   };
 }
+
+// ─── Pinned fleet runtime (Phase 2) ─────────────────────────────
+
+/** A valid, non-upstream pin used by tests. */
+export const TEST_RUNTIME_PIN = Object.freeze({
+  repo: "https://github.com/example-fleet/automaton-fleet",
+  commit: "0123456789abcdef0123456789abcdef01234567",
+});
+
+/** stdout of the child-sandbox runtime verification command for a given state. */
+export function runtimeVerifyStdout(
+  state: { commit?: string; repo?: string; clean?: boolean; version?: string } = {},
+): string {
+  return [
+    "FLEET_RUNTIME_VERIFY",
+    `HEAD=${state.commit ?? TEST_RUNTIME_PIN.commit}`,
+    `ORIGIN=${state.repo ?? TEST_RUNTIME_PIN.repo}`,
+    `VERSION=${state.version ?? "0.2.1"}`,
+    `SRC_CLEAN=${state.clean === false ? 0 : 1}`,
+  ].join("\n");
+}
+
+/** Stub FLEET_RUNTIME_REPO / FLEET_RUNTIME_COMMIT for spawn paths that read the env pin. */
+export function stubRuntimePinEnv(stub: (k: string, v: string) => unknown, pin = TEST_RUNTIME_PIN): void {
+  stub("FLEET_RUNTIME_REPO", pin.repo);
+  stub("FLEET_RUNTIME_COMMIT", pin.commit);
+}

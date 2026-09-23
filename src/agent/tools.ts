@@ -79,6 +79,10 @@ const FORBIDDEN_COMMAND_PATTERNS = [
   /TRUNCATE/i,
   /(UPDATE|INSERT\s+(OR\s+\w+\s+)?INTO|REPLACE\s+INTO|DELETE\s+FROM)\s+["'`]?fleet_(agents|meta|events)/i,
   /DROP\s+TRIGGER/i,
+  /(UPDATE|INSERT\s+INTO|DELETE\s+FROM|TRUNCATE)\s+(["'`]?\w+["'`]?\.)?["'`]?fleet_(state|schema_migrations|agents|events)/i,
+  /(DISABLE\s+TRIGGER|session_replication_role|ALTER\s+TABLE\s+(["'`]?\w+["'`]?\.)?["'`]?fleet_|DROP\s+(SCHEMA|FUNCTION))/i,
+  /\bfleet:(admin|migrate)\b|fleet\/postgres\/cli/,
+  /\b(FLEET_RUNTIME_REPO|FLEET_RUNTIME_COMMIT|FLEET_PG_SCHEMA|DATABASE_URL)\s*=/,
   // Safety infrastructure modification via shell
   /sed\s+.*injection-defense/,
   /sed\s+.*self-mod\/code/,
@@ -1640,13 +1644,13 @@ Model: ${ctx.inference.getDefaultModel()}
           message: args.message as string | undefined,
         });
 
-        // Every reproduction request goes through the FleetController, which
-        // enforces FleetPolicy and the global living-agent cap and issues the
-        // single-use grant that spawnChild() requires.
-        const { createFleetControllerForContext } = await import("../fleet/index.js");
-        const fleet = createFleetControllerForContext(ctx);
+        // Every reproduction request goes through the shared (PostgreSQL)
+        // fleet registry, which enforces FleetPolicy and the global
+        // living-agent cap and issues the single-use grant spawnChild()
+        // requires. No shared registry => replication fails closed.
+        const { requestSharedReplication } = await import("../fleet/shared.js");
         const requestSpawn = () =>
-          fleet.requestReplication({ name: genesis.name }, (grant) =>
+          requestSharedReplication(ctx, { name: genesis.name }, (grant) =>
             spawnChild(
               ctx.conway,
               ctx.identity,
@@ -1859,10 +1863,24 @@ Model: ${ctx.inference.getDefaultModel()}
         const { ChildLifecycle } = await import("../replication/lifecycle.js");
         const lifecycle = new ChildLifecycle(ctx.db.raw);
 
-        lifecycle.transition(child.id, "starting", "start requested by parent");
-
-        // Create a scoped client targeting the CHILD's sandbox
+        // Refuse to start a child whose runtime is not the pinned fleet runtime.
+        const { loadFleetConfig } = await import("../fleet/config.js");
+        const { verifyChildRuntime, resolveChildRuntime } = await import("../fleet/runtime.js");
+        const { getActiveSharedFleet } = await import("../fleet/shared.js");
         const childConway = ctx.conway.createScopedClient(child.sandboxId);
+        try {
+          const pin = resolveChildRuntime(loadFleetConfig().runtime);
+          const approved = getActiveSharedFleet()?.snapshot().state?.runtime;
+          if (!approved || approved.repo !== pin.repo || approved.commit !== pin.commit) {
+            throw new Error("fleet-approved runtime unavailable or different from local pin");
+          }
+          await verifyChildRuntime((cmd, timeout) => childConway.exec(cmd, timeout), pin);
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return `Blocked: FLEET_RUNTIME_UNVERIFIED — child ${child.name} not started: ${msg}`;
+        }
+
+        lifecycle.transition(child.id, "starting", "start requested by parent");
 
         try {
           // Start the child process with nohup so it survives exec session end

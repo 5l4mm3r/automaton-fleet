@@ -227,7 +227,7 @@ export async function runAgentLoop(
               const { generateGenesisConfig } = await import("../replication/genesis.js");
               const { spawnChild } = await import("../replication/spawn.js");
               const { ChildLifecycle } = await import("../replication/lifecycle.js");
-              const { createFleetControllerForContext } = await import("../fleet/index.js");
+              const { requestSharedReplication } = await import("../fleet/shared.js");
 
               const role = task.agentRole ?? "generalist";
               const genesis = generateGenesisConfig(identity, config, {
@@ -235,10 +235,9 @@ export async function runAgentLoop(
                 specialization: `${role}: ${task.title}`,
               });
 
-              const outcome = await createFleetControllerForContext({ db, identity, config, conway })
-                .requestReplication({ name: genesis.name }, (grant) =>
-                  spawnChild(conway, identity, db, genesis, new ChildLifecycle(db.raw), grant),
-                );
+              const outcome = await requestSharedReplication({ identity, config, conway }, { name: genesis.name }, (grant) =>
+                spawnChild(conway, identity, db, genesis, new ChildLifecycle(db.raw), grant),
+              );
               if (!outcome.ok) {
                 throw new Error(`Fleet denied replication: ${outcome.decision.code} — ${outcome.decision.reason}`);
               }

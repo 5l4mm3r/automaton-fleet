@@ -5,14 +5,27 @@
  * child funding gates per fleet state, EMERGENCY expenditure blocking,
  * and transfers to fleet members while real payments are disabled.
  * Fails closed when the fleet registry is not accessible.
+ *
+ * Phase 2: counts, mode and cap come from the shared (PostgreSQL) registry
+ * snapshot kept fresh by the fleet heartbeat. PolicyEngine is synchronous, so
+ * the rule reads that cached snapshot; if it is missing, stale or unhealthy,
+ * replication tools are denied (FLEET_REGISTRY_UNAVAILABLE) while all other
+ * tools keep working. The authoritative cap check is still the locked
+ * reservation transaction in PostgreSQL.
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";
 import type { PolicyRule, PolicyRequest, PolicyRuleResult } from "../../types.js";
 import type { FleetConfig } from "../../fleet/types.js";
-import { loadFleetConfig } from "../../fleet/config.js";
+import { loadFleetConfig, strictestMode } from "../../fleet/config.js";
 import { FleetRegistry } from "../../fleet/registry.js";
-import { computeFleetState, evaluateToolCall, EMERGENCY_BLOCKED_TOOLS } from "../../fleet/policy.js";
+import {
+  computeFleetState,
+  evaluateToolCall,
+  EMERGENCY_BLOCKED_TOOLS,
+  REPLICATION_TOOLS,
+} from "../../fleet/policy.js";
+import { getActiveSharedFleet } from "../../fleet/shared.js";
 
 const registries = new WeakMap<DatabaseType, FleetRegistry>();
 
@@ -47,10 +60,13 @@ function createFleetGateRule(config: FleetConfig): PolicyRule {
         };
       }
 
-      const livingAgents = registry.countLiving();
-      const maxAgents = config.maxAgents;
+      const snap = getActiveSharedFleet()?.snapshot() ?? null;
+      const shared = snap?.healthy && snap.state ? snap.state : null;
+
+      const livingAgents = shared ? shared.livingAgents + shared.reservedSlots : registry.countLiving();
+      const maxAgents = shared ? Math.min(shared.maxAgents, config.maxAgents) : config.maxAgents;
       const state = computeFleetState({
-        configuredMode: config.configuredMode,
+        configuredMode: shared ? strictestMode(config.configuredMode, shared.operatingMode) : config.configuredMode,
         emergency: registry.isEmergency(),
         livingAgents,
         maxAgents,
@@ -64,9 +80,21 @@ function createFleetGateRule(config: FleetConfig): PolicyRule {
         livingAgents,
         maxAgents,
         isRootAgent: !request.context.config?.parentAddress,
-        isFleetMemberAddress: (a) => registry.isFleetMemberAddress(a),
+        sharedRegistry: !!shared,
+        isFleetMemberAddress: (a) =>
+          registry.isFleetMemberAddress(a) || !!snap?.memberAddresses.has(a.trim().toLowerCase()),
       });
-      if (!decision) return null;
+      if (!decision) {
+        if (!shared && REPLICATION_TOOLS.has(request.tool.name)) {
+          return {
+            rule: "fleet.policy_gate",
+            action: "deny",
+            reasonCode: "FLEET_REGISTRY_UNAVAILABLE",
+            humanMessage: `Shared fleet registry unavailable (${snap?.error ?? "not configured"}); replication fails closed`,
+          };
+        }
+        return null;
+      }
 
       return {
         rule: "fleet.policy_gate",

@@ -12,6 +12,30 @@ export * from "./types.js";
 export { loadFleetConfig, DEFAULT_FLEET_CONFIG, FLEET_HARD_MAX_AGENTS } from "./config.js";
 export { FleetRegistry, FleetBypassError } from "./registry.js";
 export { FleetController } from "./controller.js";
+export { SharedFleetController } from "./shared-controller.js";
+export {
+  getActiveSharedFleet,
+  setActiveSharedFleet,
+  getSharedFleetForContext,
+  requestSharedReplication,
+  closeActiveSharedFleet,
+} from "./shared.js";
+export {
+  PgFleetStore,
+  FleetRegistryUnavailableError,
+  FleetDuplicateRegistrationError,
+} from "./postgres/store.js";
+export { FLEET_PG_SCHEMA_VERSION, PG_MIGRATIONS } from "./postgres/migrations.js";
+export {
+  FleetRuntimeError,
+  validateRuntimePin,
+  loadRuntimePin,
+  resolveChildRuntime,
+  verifyChildRuntime,
+  verifyOwnRuntime,
+  isUpstreamRepo,
+} from "./runtime.js";
+export type { RuntimePin } from "./runtime.js";
 export {
   computeFleetState,
   evaluateReplication,
@@ -20,7 +44,11 @@ export {
   EMERGENCY_BLOCKED_TOOLS,
 } from "./policy.js";
 
-/** Build a controller bound to the running automaton's tool context. */
+/**
+ * Build a Phase 1 local (SQLite) controller. Local-only: it cannot see other
+ * sandboxes, so no production replication path uses it — spawn_child and the
+ * orchestrator go through requestSharedReplication().
+ */
 export function createFleetControllerForContext(
   ctx: Pick<ToolContext, "db" | "identity" | "config" | "conway">,
   fleetConfig: FleetConfig = loadFleetConfig(),

@@ -17,8 +17,17 @@ import type {
 import type { ChildLifecycle } from "./lifecycle.js";
 import { ulid } from "ulid";
 import { propagateConstitution } from "./constitution.js";
-import { FleetRegistry } from "../fleet/registry.js";
+import { claimFleetGrant, type ClaimedGrant } from "../fleet/grants.js";
 import type { FleetSpawnGrant } from "../fleet/types.js";
+import {
+  CHILD_RUNTIME_MANIFEST,
+  buildRuntimeInstallCommand,
+  resolveChildRuntime,
+  verifyChildRuntime,
+  type ChildRuntimeManifest,
+  type RuntimePin,
+  type RuntimeVerification,
+} from "../fleet/runtime.js";
 
 /** Valid Conway sandbox pricing tiers. */
 const SANDBOX_TIERS = [
@@ -54,9 +63,14 @@ export function isValidWalletAddress(address: string, chainType?: ChainType): bo
 /**
  * Spawn a child automaton in a new Conway sandbox using lifecycle state machine.
  *
- * Requires a FleetSpawnGrant issued by FleetController.requestReplication().
- * The grant is consumed before any sandbox is created; calling this without
- * a valid, unused grant throws FleetBypassError.
+ * Requires a FleetSpawnGrant issued by the fleet controller. The grant is
+ * consumed before any sandbox is created; calling this without a valid,
+ * unused grant throws FleetBypassError.
+ *
+ * The child runs the pinned fleet runtime carried by the grant (never the
+ * upstream repository, never a caller-chosen repo/commit). The installed
+ * commit is verified in the child sandbox before the child is given a
+ * genesis config or wallet; any mismatch throws FleetRuntimeError.
  */
 export async function spawnChild(
   conway: ConwayClient,
@@ -88,11 +102,13 @@ export async function spawnChild(
 
   // Fleet gate: consume the controller-issued slot reservation. Must happen
   // before any external side effect (sandbox creation, lifecycle rows).
-  new FleetRegistry(db.raw).claimGrant(fleetGrant, childId);
+  const claimed = await claimFleetGrant(fleetGrant, childId, db.raw);
+  // Pinned runtime from the reservation; refuses before any sandbox exists.
+  const runtime = resolveChildRuntime(claimed.runtime);
 
   // If no lifecycle provided, use legacy path
   if (!lifecycle) {
-    return spawnChildLegacy(conway, identity, db, genesis, childId);
+    return spawnChildLegacy(conway, identity, db, genesis, childId, claimed, runtime);
   }
 
   try {
@@ -137,15 +153,12 @@ export async function spawnChild(
       `sandbox ${sandbox.id} created`,
     );
 
-    // Install runtime (on the CHILD sandbox)
-    await childConway.exec("apt-get update -qq && apt-get install -y -qq nodejs npm git curl", 120_000);
-    await childConway.exec(
-      "git clone https://github.com/Conway-Research/automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
-      180_000,
-    );
+    // Install and verify the pinned fleet runtime (on the CHILD sandbox)
+    const verified = await installPinnedRuntime(childConway, runtime);
 
     // Write genesis configuration (on the CHILD sandbox)
     await childConway.exec("mkdir -p /root/.automaton", 10_000);
+    await writeRuntimeManifest(childConway, claimed, runtime);
     const genesisJson = JSON.stringify(
       {
         name: genesis.name,
@@ -168,7 +181,7 @@ export async function spawnChild(
     }
 
     // State: runtime_ready
-    lifecycle.transition(childId, "runtime_ready", "runtime installed");
+    lifecycle.transition(childId, "runtime_ready", `pinned runtime ${verified.commit} verified`);
 
     // Initialize child wallet (on the CHILD sandbox)
     const initResult = await childConway.exec("node /root/automaton/dist/index.js --init 2>&1", 60_000);
@@ -224,6 +237,8 @@ export async function spawnChild(
       fundedAmountCents: 0,
       status: "wallet_verified" as any,
       createdAt: new Date().toISOString(),
+      runtimeCommit: verified.commit,
+      runtimeVersion: verified.version,
     };
 
     return child;
@@ -255,6 +270,8 @@ async function spawnChildLegacy(
   db: AutomatonDatabase,
   genesis: GenesisConfig,
   childId: string,
+  claimed: ClaimedGrant,
+  runtime: RuntimePin,
 ): Promise<ChildAutomaton> {
   let sandboxId: string | undefined;
 
@@ -275,15 +292,9 @@ async function spawnChildLegacy(
     // Create a scoped client so all exec/writeFile calls target the CHILD sandbox
     const childConway = conway.createScopedClient(sandbox.id);
 
-    await childConway.exec(
-      "apt-get update -qq && apt-get install -y -qq nodejs npm git curl",
-      120_000,
-    );
-    await childConway.exec(
-      "git clone https://github.com/Conway-Research/automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
-      180_000,
-    );
+    const verified = await installPinnedRuntime(childConway, runtime);
     await childConway.exec("mkdir -p /root/.automaton", 10_000);
+    await writeRuntimeManifest(childConway, claimed, runtime);
 
     const legacyGenesisJson = JSON.stringify(
       {
@@ -328,6 +339,8 @@ async function spawnChildLegacy(
       status: "spawning",
       createdAt: new Date().toISOString(),
       chainType: legacyParentChainType as any,
+      runtimeCommit: verified.commit,
+      runtimeVersion: verified.version,
     };
 
     db.insertChild(child);
@@ -345,6 +358,28 @@ async function spawnChildLegacy(
     // Sandbox deletion disabled — failed sandboxes left for potential reuse.
     throw error;
   }
+}
+
+/**
+ * Install exactly the pinned fleet runtime in the child sandbox and verify
+ * HEAD, origin and pristine sources. Throws FleetRuntimeError on mismatch.
+ */
+async function installPinnedRuntime(childConway: ConwayClient, runtime: RuntimePin): Promise<RuntimeVerification> {
+  await childConway.exec("apt-get update -qq && apt-get install -y -qq nodejs npm git curl", 120_000);
+  await childConway.exec(buildRuntimeInstallCommand(runtime), 300_000);
+  return verifyChildRuntime((cmd, timeout) => childConway.exec(cmd, timeout), runtime);
+}
+
+/** Tell the child which fleet identity and runtime it was provisioned with. No secrets. */
+async function writeRuntimeManifest(childConway: ConwayClient, claimed: ClaimedGrant, runtime: RuntimePin): Promise<void> {
+  const manifest: ChildRuntimeManifest = {
+    agentId: claimed.agentId,
+    parentAgentId: claimed.parentAgentId,
+    generation: claimed.generation,
+    repo: runtime.repo,
+    commit: runtime.commit,
+  };
+  await childConway.writeFile(CHILD_RUNTIME_MANIFEST, JSON.stringify(manifest, null, 2));
 }
 
 /**

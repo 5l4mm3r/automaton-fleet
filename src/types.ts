@@ -826,6 +826,9 @@ export interface ChildAutomaton {
   lastChecked?: string;
   /** Chain type of the child's wallet. */
   chainType?: ChainType;
+  /** Fleet runtime commit verified in the child sandbox. */
+  runtimeCommit?: string;
+  runtimeVersion?: string | null;
 }
 
 export type ChildStatus =

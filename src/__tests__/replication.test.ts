@@ -17,6 +17,8 @@ import {
   MockConwayClient,
   createTestDb,
   createTestIdentity,
+  runtimeVerifyStdout,
+  stubRuntimePinEnv,
 } from "./mocks.js";
 import type { AutomatonDatabase, GenesisConfig } from "../types.js";
 import { MIGRATION_V7 } from "../state/schema.js";
@@ -116,15 +118,21 @@ describe("spawnChild", () => {
   beforeEach(() => {
     conway = new MockConwayClient();
     db = createTestDb();
+    // Phase 2: children install the pinned fleet runtime, never upstream.
+    stubRuntimePinEnv(vi.stubEnv);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("validates wallet address before creating child record", async () => {
     // Mock exec to return valid wallet address on init
     vi.spyOn(conway, "exec").mockImplementation(async (command: string) => {
+      if (command.includes("FLEET_RUNTIME_VERIFY")) {
+        return { stdout: runtimeVerifyStdout(), stderr: "", exitCode: 0 };
+      }
       if (command.includes("--init")) {
         return { stdout: `Wallet initialized: ${validAddress}`, stderr: "", exitCode: 0 };
       }
@@ -139,6 +147,9 @@ describe("spawnChild", () => {
 
   it("throws on zero address from init", async () => {
     vi.spyOn(conway, "exec").mockImplementation(async (command: string) => {
+      if (command.includes("FLEET_RUNTIME_VERIFY")) {
+        return { stdout: runtimeVerifyStdout(), stderr: "", exitCode: 0 };
+      }
       if (command.includes("--init")) {
         return { stdout: `Wallet: ${zeroAddress}`, stderr: "", exitCode: 0 };
       }
@@ -151,6 +162,9 @@ describe("spawnChild", () => {
 
   it("throws when init returns no wallet address", async () => {
     vi.spyOn(conway, "exec").mockImplementation(async (command: string) => {
+      if (command.includes("FLEET_RUNTIME_VERIFY")) {
+        return { stdout: runtimeVerifyStdout(), stderr: "", exitCode: 0 };
+      }
       if (command.includes("--init")) {
         return { stdout: "initialization complete, no wallet", stderr: "", exitCode: 0 };
       }
@@ -178,6 +192,9 @@ describe("spawnChild", () => {
     const deleteSpy = vi.spyOn(conway, "deleteSandbox");
 
     vi.spyOn(conway, "exec").mockImplementation(async (command: string) => {
+      if (command.includes("FLEET_RUNTIME_VERIFY")) {
+        return { stdout: runtimeVerifyStdout(), stderr: "", exitCode: 0 };
+      }
       if (command.includes("--init")) {
         return { stdout: `Wallet: ${zeroAddress}`, stderr: "", exitCode: 0 };
       }

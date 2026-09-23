@@ -6,6 +6,7 @@
  */
 
 import type { SurvivalTier } from "../types.js";
+import type { RuntimePin } from "./runtime.js";
 
 export type FleetState = "DEVELOPMENT" | "EXPANSION" | "HARVEST" | "EMERGENCY";
 
@@ -38,6 +39,8 @@ export interface FleetConfig {
   ownerSweepEnabled: boolean;
   /** Minimum parent credit balance (cents) required before replication. */
   minParentReserveCents: number;
+  /** Pinned child runtime (FLEET_RUNTIME_REPO / FLEET_RUNTIME_COMMIT); null if unset or invalid. */
+  runtime?: RuntimePin | null;
 }
 
 export interface FleetAgentRecord {
@@ -91,7 +94,11 @@ export type FleetDecisionCode =
   | "NOT_FLEET_ROOT"
   | "FINANCIALLY_INELIGIBLE"
   | "FLEET_CHILD_FUNDING_BYPASS"
-  | "FLEET_REGISTRY_UNAVAILABLE";
+  | "FLEET_REGISTRY_UNAVAILABLE"
+  | "FLEET_RUNTIME_UNVERIFIED"
+  | "FLEET_NOT_REGISTERED"
+  | "FLEET_PARENT_NOT_LIVING"
+  | "FLEET_DUPLICATE_REQUEST";
 
 export interface FleetDecision {
   allowed: boolean;
@@ -112,3 +119,57 @@ export interface FleetStatus {
 export type ReplicationOutcome<TChild> =
   | { ok: true; agentId: string; child: TChild; state: FleetState }
   | { ok: false; decision: FleetDecision };
+
+// ─── Shared (PostgreSQL) registry — Phase 2 ─────────────────────
+
+/** reserved/provisioning hold a reserved slot; active is living; dead/failed are history. */
+export type SharedAgentStatus = "reserved" | "provisioning" | "active" | "dead" | "failed";
+
+export interface SharedFleetState {
+  livingAgents: number;
+  reservedSlots: number;
+  maxAgents: number;
+  operatingMode: FleetState;
+  runtime: RuntimePin | null;
+  updatedAt: string;
+}
+
+export interface SharedAgentRecord {
+  agentId: string;
+  parentAgentId: string | null;
+  role: FleetAgentRole;
+  generation: number;
+  name: string;
+  walletAddress: string | null;
+  runtimeVersion: string | null;
+  runtimeRepo: string | null;
+  runtimeCommit: string | null;
+  sandboxId: string | null;
+  localChildId: string | null;
+  status: SharedAgentStatus;
+  statusReason: string | null;
+  requestedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastHeartbeat: string | null;
+  deathTime: string | null;
+}
+
+export interface FleetHealth {
+  ok: boolean;
+  latencyMs: number | null;
+  schemaVersion: number | null;
+  /** Stored counters equal the live row counts. */
+  countersConsistent: boolean | null;
+  error?: string;
+}
+
+/** Cached view used by the (synchronous) PolicyEngine rule. */
+export interface SharedFleetSnapshot {
+  healthy: boolean;
+  checkedAt: number;
+  state: SharedFleetState | null;
+  selfAgentId: string | null;
+  memberAddresses: ReadonlySet<string>;
+  error?: string;
+}

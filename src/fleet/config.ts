@@ -10,11 +10,14 @@
  *   REAL_PAYMENTS_ENABLED     "true" to enable (default false)
  *   OWNER_SWEEP_ENABLED       "true" to enable (default false; no-op in Phase 1)
  *   MIN_AGENT_RESERVE_USD     parent reserve before replication (default 10)
+ *   FLEET_RUNTIME_REPO        https URL of the fleet fork children run (no default)
+ *   FLEET_RUNTIME_COMMIT      full 40-hex commit children run (no default)
  */
 
 import { FLEET_HARD_MAX_AGENTS } from "../state/schema.js";
 import type { FleetConfig, FleetState } from "./types.js";
 import { FLEET_STATES } from "./types.js";
+import { loadRuntimePin } from "./runtime.js";
 
 export { FLEET_HARD_MAX_AGENTS };
 
@@ -25,6 +28,7 @@ export const DEFAULT_FLEET_CONFIG: Readonly<FleetConfig> = Object.freeze({
   realPaymentsEnabled: false,
   ownerSweepEnabled: false,
   minParentReserveCents: 1000,
+  runtime: null,
 });
 
 type Env = Record<string, string | undefined>;
@@ -70,5 +74,18 @@ export function loadFleetConfig(env: Env = process.env): FleetConfig {
       env.MIN_AGENT_RESERVE_USD,
       DEFAULT_FLEET_CONFIG.minParentReserveCents,
     ),
+    runtime: loadRuntimePin(env),
   });
+}
+
+/** Strictness order: EMERGENCY > DEVELOPMENT > HARVEST > EXPANSION. */
+const MODE_STRICTNESS: Record<FleetState, number> = { EXPANSION: 0, HARVEST: 1, DEVELOPMENT: 2, EMERGENCY: 3 };
+
+/** The more restrictive of two modes (local env can only tighten the shared mode). */
+export function strictestMode(a: FleetState, b: FleetState): FleetState {
+  return MODE_STRICTNESS[a] >= MODE_STRICTNESS[b] ? a : b;
+}
+
+export function isFleetState(value: unknown): value is FleetState {
+  return typeof value === "string" && FLEET_STATES.includes(value as FleetState);
 }

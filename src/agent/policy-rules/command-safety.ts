@@ -72,6 +72,11 @@ const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   { pattern: /DROP\s+TRIGGER/i, description: "Drop database trigger" },
   { pattern: /sed\s+.*\bfleet\//, description: "Modify fleet layer via sed" },
   { pattern: />\s*.*\bfleet\//, description: "Overwrite fleet layer" },
+  // Shared (PostgreSQL) fleet registry tampering
+  { pattern: /(UPDATE|INSERT\s+INTO|DELETE\s+FROM|TRUNCATE)\s+(["'`]?\w+["'`]?\.)?["'`]?fleet_(state|schema_migrations|agents|events)/i, description: "Modify shared fleet state" },
+  { pattern: /(DISABLE\s+TRIGGER|session_replication_role|ALTER\s+TABLE\s+(["'`]?\w+["'`]?\.)?["'`]?fleet_|DROP\s+(SCHEMA|FUNCTION))/i, description: "Disable fleet registry guards" },
+  { pattern: /\bfleet:(admin|migrate)\b|fleet\/postgres\/cli/, description: "Operator-only fleet registry command" },
+  { pattern: /\b(FLEET_RUNTIME_REPO|FLEET_RUNTIME_COMMIT|FLEET_PG_SCHEMA|DATABASE_URL)\s*=/, description: "Override fleet registry/runtime configuration" },
 ];
 
 export function getForbiddenCommandMatch(command: string): { description: string; pattern: string } | null {

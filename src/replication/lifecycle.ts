@@ -17,6 +17,18 @@ import {
   updateChildStatus as dbUpdateChildStatus,
 } from "../state/database.js";
 
+/** Lifecycle states after which a child no longer occupies a fleet slot. */
+const TERMINAL_FOR_FLEET: ReadonlySet<ChildLifecycleState> = new Set(["failed", "stopped", "cleaned_up"]);
+
+type TerminalListener = (childId: string, state: ChildLifecycleState) => void;
+const terminalListeners = new Set<TerminalListener>();
+
+/** Subscribe to children entering a terminal state (used by the shared fleet registry). */
+export function onChildTerminal(listener: TerminalListener): () => void {
+  terminalListeners.add(listener);
+  return () => terminalListeners.delete(listener);
+}
+
 export class ChildLifecycle {
   constructor(private db: DatabaseType) {}
 
@@ -70,6 +82,16 @@ export class ChildLifecycle {
 
     // Update children table
     dbUpdateChildStatus(this.db, childId, toState);
+
+    if (TERMINAL_FOR_FLEET.has(toState)) {
+      for (const listener of terminalListeners) {
+        try {
+          listener(childId, toState);
+        } catch {
+          // Listeners must not break local lifecycle bookkeeping.
+        }
+      }
+    }
   }
 
   /**

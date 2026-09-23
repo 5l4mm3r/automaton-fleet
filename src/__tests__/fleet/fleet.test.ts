@@ -43,6 +43,8 @@ import {
   createTestConfig,
   createTestDb,
   createTestIdentity,
+  runtimeVerifyStdout,
+  stubRuntimePinEnv,
 } from "../mocks.js";
 
 vi.mock("../../registry/erc8004.js", () => ({
@@ -53,6 +55,10 @@ vi.mock("../../registry/erc8004.js", () => ({
 }));
 
 // ─── Helpers ────────────────────────────────────────────────────
+
+// Phase 2: spawnChild needs a pinned fleet runtime (local-registry grants read it from env).
+beforeEach(() => stubRuntimePinEnv(vi.stubEnv));
+afterEach(() => vi.unstubAllEnvs());
 
 const identity = createTestIdentity();
 const CHILD_WALLET = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
@@ -94,6 +100,10 @@ function fakeSpawn(db: AutomatonDatabase, calls: { n: number } = { n: 0 }) {
 function mockConwayForSpawn(): MockConwayClient {
   const conway = new MockConwayClient();
   vi.spyOn(conway, "exec").mockImplementation(async (command: string) => {
+    // Phase 2: spawnChild verifies the pinned fleet runtime in the sandbox.
+    if (command.includes("FLEET_RUNTIME_VERIFY")) {
+      return { stdout: runtimeVerifyStdout(), stderr: "", exitCode: 0 };
+    }
     if (command.includes("--init")) {
       return { stdout: `Wallet initialized: ${CHILD_WALLET}`, stderr: "", exitCode: 0 };
     }
@@ -561,12 +571,19 @@ describe("Fleet security: replication bypass prevention", () => {
     expect(db.getChildren()).toHaveLength(0);
   });
 
-  it("spawn_child tool succeeds only through the controller when fleet allows it", async () => {
+  it("spawn_child tool never falls back to the local registry (Phase 2: shared registry required)", async () => {
+    // Phase 1 asserted success here against the local SQLite registry. Phase 2
+    // enforces the global cap only in the shared PostgreSQL registry, so with
+    // no DATABASE_URL the tool must fail closed even though the local registry
+    // has room. The success/cap path is covered against PostgreSQL in
+    // fleet-phase2.test.ts.
     vi.stubEnv("FLEET_MAX_AGENTS", "2");
     vi.stubEnv("FLEET_MODE", "EXPANSION");
     vi.stubEnv("REAL_REPLICATION_ENABLED", "true");
     vi.stubEnv("MIN_AGENT_RESERVE_USD", "1");
+    vi.stubEnv("DATABASE_URL", "");
     conway.creditsCents = 10_000;
+    const createSpy = vi.spyOn(conway, "createSandbox");
     const tool = createBuiltinTools("test-sandbox-id").find((t) => t.name === "spawn_child")!;
     const ctx: ToolContext = {
       identity,
@@ -575,9 +592,10 @@ describe("Fleet security: replication bypass prevention", () => {
       conway,
       inference: new MockInferenceClient(),
     };
-    expect(await tool.execute({ name: "child-one" }, ctx)).toContain("Child spawned");
-    expect(await tool.execute({ name: "child-two" }, ctx)).toContain("Blocked: FLEET_CAP_REACHED");
-    expect(new FleetRegistry(db.raw).countLiving()).toBe(2);
+    expect(await tool.execute({ name: "child-one" }, ctx)).toContain("Blocked: FLEET_REGISTRY_UNAVAILABLE");
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(db.getChildren()).toHaveLength(0);
+    expect(new FleetRegistry(db.raw).countLiving()).toBe(0);
   });
 
   it("a child automaton cannot replicate against its own local registry", async () => {

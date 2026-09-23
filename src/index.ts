@@ -29,7 +29,9 @@ import { createSocialClient } from "./social/client.js";
 import { PolicyEngine } from "./agent/policy-engine.js";
 import { SpendTracker } from "./agent/spend-tracker.js";
 import { createDefaultRules } from "./agent/policy-rules/index.js";
-import { createFleetControllerForContext, loadFleetConfig } from "./fleet/index.js";
+import { loadFleetConfig } from "./fleet/index.js";
+import { closeActiveSharedFleet, getSharedFleetForContext } from "./fleet/shared.js";
+import { readOwnCommit, readOwnVersion, runningRuntimeDir, verifyOwnRuntime } from "./fleet/runtime.js";
 import type { AutomatonIdentity, AgentState, Skill, SocialClientInterface } from "./types.js";
 import { DEFAULT_TREASURY_POLICY } from "./types.js";
 import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observability/logger.js";
@@ -310,11 +312,35 @@ async function run(): Promise<void> {
 
   // Initialize PolicyEngine + SpendTracker (Phase 1.4)
   const treasuryPolicy = config.treasuryPolicy ?? DEFAULT_TREASURY_POLICY;
-  // Fleet layer: register this automaton, persist the global cap, report state.
+  // Fleet layer. A child refuses to start unless it runs exactly the pinned
+  // fleet runtime its parent provisioned.
   const fleetConfig = loadFleetConfig();
-  const fleetStatus = createFleetControllerForContext({ db, identity, config, conway }, fleetConfig).getStatus();
+  const runtimeDir = runningRuntimeDir(import.meta.url);
+  const selfCheck = verifyOwnRuntime({
+    isChild: !!config.parentAddress,
+    manifestPath: path.join(process.env.HOME || "/root", ".automaton", "fleet-runtime.json"),
+    runtimeDir,
+  });
+  if (!selfCheck.ok) {
+    logger.error(`[${new Date().toISOString()}] Fleet runtime verification failed: ${selfCheck.reason} Refusing to start.`);
+    process.exit(1);
+  }
+
+  // Shared (PostgreSQL) fleet registry: register/attach, heartbeat. If it is
+  // unreachable the agent keeps running; replication fails closed.
+  const sharedFleet = await getSharedFleetForContext({ identity, config, conway }, fleetConfig, {
+    selfAgentId: selfCheck.manifest?.agentId ?? null,
+    runtimeVersion: readOwnVersion(runtimeDir),
+    runtimeCommit: selfCheck.manifest?.commit ?? readOwnCommit(runtimeDir),
+  }).catch(() => null);
+  const fleetSnap = sharedFleet?.snapshot();
+  sharedFleet?.startHeartbeat();
   logger.info(
-    `[${new Date().toISOString()}] Fleet: state=${fleetStatus.state} living=${fleetStatus.livingAgents}/${fleetStatus.maxAgents} ` +
+    `[${new Date().toISOString()}] Fleet: registry=${sharedFleet ? (fleetSnap?.healthy ? "shared:healthy" : `shared:unavailable (${fleetSnap?.error})`) : "not configured (replication disabled)"} ` +
+      `agent=${sharedFleet?.agentId ?? "-"} ` +
+      (fleetSnap?.state
+        ? `mode=${fleetSnap.state.operatingMode} living=${fleetSnap.state.livingAgents} reserved=${fleetSnap.state.reservedSlots} max=${fleetSnap.state.maxAgents} `
+        : "") +
       `realReplication=${fleetConfig.realReplicationEnabled} realPayments=${fleetConfig.realPaymentsEnabled}`,
   );
   if (fleetConfig.ownerSweepEnabled) {
@@ -402,6 +428,7 @@ async function run(): Promise<void> {
   const shutdown = () => {
     logger.info(`[${new Date().toISOString()}] Shutting down...`);
     heartbeat.stop();
+    void closeActiveSharedFleet();
     db.setAgentState("sleeping");
     db.close();
     process.exit(0);

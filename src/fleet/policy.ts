@@ -25,6 +25,13 @@ export const EMERGENCY_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
   "register_domain",
 ]);
 
+/**
+ * Tools that create or bring up fleet agents. They require a healthy shared
+ * registry; when PostgreSQL is unreachable they fail closed while every other
+ * tool keeps working.
+ */
+export const REPLICATION_TOOLS: ReadonlySet<string> = new Set(["spawn_child", "start_child", "fund_child"]);
+
 const ELIGIBLE_TIERS = new Set(["normal", "high"]);
 
 function decision(
@@ -92,6 +99,8 @@ export function evaluateReplication(input: {
   livingAgents: number;
   maxAgents: number;
   isRootAgent: boolean;
+  /** True when counts come from the shared (PostgreSQL) registry. */
+  sharedRegistry?: boolean;
 }): FleetDecision {
   const { config, state } = input;
   switch (state) {
@@ -112,9 +121,9 @@ export function evaluateReplication(input: {
   if (!config.realReplicationEnabled) {
     return decision(false, "REAL_REPLICATION_DISABLED", "REAL_REPLICATION_ENABLED is false.", state);
   }
-  if (!input.isRootAgent) {
-    // A child's local registry cannot see the global lineage, so only the
-    // fleet root (which owns the registry) may replicate in Phase 1.
+  if (!input.isRootAgent && !input.sharedRegistry) {
+    // A child's local registry cannot see the global lineage, so without the
+    // shared registry only the fleet root may replicate.
     return decision(false, "NOT_FLEET_ROOT", "Only the fleet root may request replication.", state);
   }
   if (input.livingAgents >= input.maxAgents) {
@@ -135,6 +144,7 @@ export function evaluateToolCall(input: {
   livingAgents: number;
   maxAgents: number;
   isRootAgent: boolean;
+  sharedRegistry?: boolean;
   isFleetMemberAddress: (address: string) => boolean;
 }): FleetDecision | null {
   const { toolName, config, state } = input;
