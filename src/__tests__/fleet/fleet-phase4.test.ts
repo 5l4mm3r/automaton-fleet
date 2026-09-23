@@ -39,6 +39,7 @@ import {
 } from "../../fleet/index.js";
 import { attestationProof, type RuntimeAttestation } from "../../fleet/attestation.js";
 import type { ClaimedGrant } from "../../fleet/grants.js";
+import { currentSystemdUnit, type SystemdCredentialHost } from "../../fleet/secret-files.js";
 import { buildRuntimeInstallCommand, loadRuntimeRelease, resolveChildRuntime } from "../../fleet/runtime.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 import { parseListen, startFleetServiceFromEnv } from "../../fleet/service/main.js";
@@ -136,6 +137,131 @@ describe("Fleet security: secret files", () => {
     expect(loaded.env.FLEET_ADMIN_DATABASE_URL).toBeUndefined();
     expect(loaded.warnings.join(" ")).toMatch(/DATABASE_URL is read from the repository \.env\.fleet/);
     expect(JSON.stringify(loaded.secretSources)).not.toMatch(/postgresql:/);
+  });
+});
+
+describe("Fleet security: systemd credential exception for service.env", () => {
+  const UNIT = "automaton-fleet.service";
+  const uid = process.getuid?.() ?? 0;
+  let dir: string;
+  let credRoot: string;
+  let credDir: string;
+  let cred: string;
+  let source: string;
+  let host: SystemdCredentialHost;
+  const load = (env: Record<string, string | undefined>, h: SystemdCredentialHost = host) =>
+    loadServiceEnv({ FLEET_RUNTIME_ENV_FILE: path.join(dir, "none"), ...env }, dir, { host: h, sourceFile: source });
+
+  beforeEach(() => {
+    dir = tmpDir();
+    credRoot = path.join(dir, "run-credentials");
+    credDir = path.join(credRoot, UNIT);
+    fs.mkdirSync(credDir, { recursive: true, mode: 0o700 }); // owner-writable so the test can edit it; not group/world-writable
+    cred = path.join(credDir, "service.env");
+    fs.writeFileSync(cred, "FLEET_SERVICE_DATABASE_URL=postgresql://s:p@h/d\n", { mode: 0o600 });
+    fs.chmodSync(cred, 0o440); // what LoadCredential= yields on this host (0400 + ACL mask r)
+    source = path.join(dir, "etc-service.env");
+    fs.writeFileSync(source, "FLEET_SERVICE_DATABASE_URL=postgresql://s:p@h/d\n", { mode: 0o600 });
+    // Tests run unprivileged, so "root" is the test user here; production uses uid 0.
+    host = { credentialsRoot: credRoot, unitName: UNIT, expectedUnit: UNIT, rootUid: uid, uid };
+  });
+  afterEach(() => {
+    fs.chmodSync(credDir, 0o700);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("accepts the systemd credential at 0440 and stricter modes", () => {
+    expect(load({ CREDENTIALS_DIRECTORY: credDir }).env.FLEET_SERVICE_DATABASE_URL).toBe("postgresql://s:p@h/d");
+    for (const mode of [0o400, 0o600, 0o640]) {
+      fs.chmodSync(cred, mode);
+      expect(load({ CREDENTIALS_DIRECTORY: credDir }).env.FLEET_SERVICE_DATABASE_URL).toBe("postgresql://s:p@h/d");
+    }
+  });
+
+  it("an ordinary secret file at 0440 is still rejected", () => {
+    const f = path.join(dir, "service.env");
+    fs.writeFileSync(f, "X=1\n", { mode: 0o600 });
+    fs.chmodSync(f, 0o440);
+    expect(() => readSecretEnvFile(f)).toThrow(/group-accessible \(mode 440\)/);
+    expect(() => loadServiceEnv({ FLEET_SERVICE_ENV_FILE: f }, dir)).toThrow(/group-accessible/);
+    // Even the credential path itself gets no exception when named explicitly.
+    expect(() => load({ CREDENTIALS_DIRECTORY: credDir, FLEET_SERVICE_ENV_FILE: cred })).toThrow(/group-accessible/);
+  });
+
+  it("rejects world-readable, group-writable and group-executable credentials", () => {
+    for (const [mode, msg] of [
+      [0o444, /world-accessible/],
+      [0o442, /world-accessible/],
+      [0o460, /group-writable/],
+      [0o660, /group-writable/],
+      [0o450, /group-writable\/executable/],
+    ] as const) {
+      fs.chmodSync(cred, mode);
+      expect(() => load({ CREDENTIALS_DIRECTORY: credDir }), mode.toString(8)).toThrow(msg);
+    }
+  });
+
+  it("rejects symlink and path escapes", () => {
+    const outside = path.join(dir, "outside.env");
+    fs.writeFileSync(outside, "X=1\n", { mode: 0o400 });
+    fs.rmSync(cred);
+    fs.symlinkSync(outside, cred);
+    expect(() => load({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/symlink/);
+    fs.rmSync(cred);
+    // Hard link to a file elsewhere.
+    fs.linkSync(outside, cred);
+    expect(() => load({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/hard links/);
+    fs.rmSync(cred);
+    fs.writeFileSync(cred, "X=1\n", { mode: 0o440 });
+    // Non-normalised directory that points at the right place.
+    expect(() => load({ CREDENTIALS_DIRECTORY: path.join(credRoot, "x") + "/../" + UNIT })).toThrow(/not the systemd credential directory/);
+    // The expected directory path is itself a symlink to somewhere else.
+    const elsewhere = path.join(dir, "elsewhere");
+    fs.renameSync(credDir, elsewhere);
+    fs.symlinkSync(elsewhere, credDir);
+    expect(() => load({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/resolves through a symlink/);
+    fs.rmSync(credDir);
+    fs.renameSync(elsewhere, credDir);
+  });
+
+  it("a fake CREDENTIALS_DIRECTORY cannot bypass validation", () => {
+    const fake = path.join(dir, "fake");
+    fs.mkdirSync(fake, { mode: 0o700 });
+    fs.writeFileSync(path.join(fake, "service.env"), "X=1\n", { mode: 0o440 });
+    fs.chmodSync(path.join(fake, "service.env"), 0o440);
+    // Real host detection: this test process is not automaton-fleet.service.
+    expect(() => loadServiceEnv({ CREDENTIALS_DIRECTORY: fake }, dir)).toThrow(/Refusing insecure secret file/);
+    // A directory other than <credentials root>/<unit>.
+    expect(() => load({ CREDENTIALS_DIRECTORY: fake })).toThrow(/not the systemd credential directory/);
+    // The right directory, but the process is some other unit or no unit.
+    expect(() => load({ CREDENTIALS_DIRECTORY: credDir }, { ...host, unitName: "other.service" })).toThrow(/not automaton-fleet\.service/);
+    expect(() => load({ CREDENTIALS_DIRECTORY: credDir }, { ...host, unitName: null })).toThrow(/not running as a systemd service/);
+    // A directory or file owned by an untrusted user.
+    expect(() => load({ CREDENTIALS_DIRECTORY: credDir }, { ...host, rootUid: uid + 1, uid: uid + 2 })).toThrow(/owned by uid/);
+    // A group/world-writable credentials directory.
+    fs.chmodSync(credDir, 0o770);
+    expect(() => load({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/group\/world-writable/);
+  });
+
+  it("requires the source secret to stay root-owned 0600", () => {
+    fs.chmodSync(source, 0o640);
+    expect(() => load({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/source .* group\/world-accessible/);
+    fs.chmodSync(source, 0o600);
+    // Source not owned by root (the credential copy itself may be owned by the service user).
+    expect(() => load({ CREDENTIALS_DIRECTORY: credDir }, { ...host, rootUid: uid + 1 })).toThrow(/source .* not root/);
+    fs.rmSync(source);
+    expect(() => load({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/source .* cannot be inspected \(ENOENT\)/);
+  });
+
+  it("reads the unit name from the process cgroup", () => {
+    const f = path.join(dir, "cgroup");
+    fs.writeFileSync(f, "0::/system.slice/automaton-fleet.service\n");
+    expect(currentSystemdUnit(f)).toBe(UNIT);
+    fs.writeFileSync(f, "12:cpu:/\n1:name=systemd:/system.slice/automaton-fleet.service\n");
+    expect(currentSystemdUnit(f)).toBe(UNIT);
+    fs.writeFileSync(f, "0::/user.slice/user-1000.slice/session-3.scope\n");
+    expect(currentSystemdUnit(f)).toBeNull();
+    expect(currentSystemdUnit(path.join(dir, "missing"))).toBeNull();
   });
 });
 

@@ -12,12 +12,21 @@
  * readSecretEnvFile refuses symlinks, non-regular files, world-accessible
  * files, and (unless allowGroupRead) group-accessible files, and reports an
  * unreadable file clearly instead of silently continuing without it.
+ *
+ * The one exception is the systemd credential copy of service.env: systemd
+ * LoadCredential= materialises it as root-owned 0400 plus a read ACL for the
+ * service user, which stat reports as 0440. systemdCredentialProblems accepts
+ * that mode only for $CREDENTIALS_DIRECTORY/service.env when the directory is
+ * exactly the one systemd provides to automaton-fleet.service.
  */
 
 import fs from "fs";
 import path from "path";
 
 export const FLEET_ETC_DIR = "/etc/automaton-fleet";
+export const FLEET_SYSTEMD_UNIT = "automaton-fleet.service";
+export const SYSTEMD_CREDENTIALS_ROOT = "/run/credentials";
+export const SERVICE_ENV_CREDENTIAL = "service.env";
 export const DEFAULT_ADMIN_ENV_FILE = path.join(FLEET_ETC_DIR, "admin.env");
 export const DEFAULT_SERVICE_ENV_FILE = path.join(FLEET_ETC_DIR, "service.env");
 export const DEFAULT_RUNTIME_ENV_FILE = path.join(FLEET_ETC_DIR, "runtime.env");
@@ -59,6 +68,11 @@ export function readEnvFile(file: string): Record<string, string> {
 export interface SecretFileOptions {
   /** Allow group read (admin.env is shared with the operator group). Default false. */
   allowGroupRead?: boolean;
+  /**
+   * Validate as a systemd credential instead (see systemdCredentialProblems).
+   * Only loadServiceEnv sets this, for $CREDENTIALS_DIRECTORY/service.env.
+   */
+  systemdCredential?: { name: string; credentialsDirectory: string | undefined; sourceFile: string; host?: SystemdCredentialHost };
   /** Throw if the file does not exist. Default false (returns null). */
   required?: boolean;
 }
@@ -88,7 +102,10 @@ export function readSecretEnvFile(file: string, opts: SecretFileOptions = {}): R
     if (opts.required) throw new SecretFileError(`Secret file ${file} does not exist.`);
     return null;
   }
-  const problems = secretFileProblems(file, opts);
+  const cred = opts.systemdCredential;
+  const problems = cred
+    ? systemdCredentialProblems(file, cred.name, cred.credentialsDirectory, cred.sourceFile, cred.host)
+    : secretFileProblems(file, opts);
   if (problems.length) throw new SecretFileError(`Refusing insecure secret file: ${problems.join("; ")}.`);
   let text: string;
   try {
@@ -102,6 +119,114 @@ export function readSecretEnvFile(file: string, opts: SecretFileOptions = {}): R
     );
   }
   return parseEnv(text);
+}
+
+/** Facts about the host systemd context; injectable for tests. */
+export interface SystemdCredentialHost {
+  /** Parent of per-unit credential directories. Default /run/credentials. */
+  credentialsRoot: string;
+  /** Unit this process runs in, from /proc/self/cgroup (null = not a systemd service). */
+  unitName: string | null;
+  /** Unit the credential exception is granted to. Default automaton-fleet.service. */
+  expectedUnit: string;
+  /** Owner systemd uses for credential directories/files and the source secret. Default 0 (root). */
+  rootUid: number;
+  /** Uid of this process (systemd chowns credentials to it when ACLs are unavailable). */
+  uid: number;
+}
+
+/** The systemd unit this process belongs to, from its cgroup path (unforgeable by an unprivileged process). */
+export function currentSystemdUnit(cgroupFile = "/proc/self/cgroup"): string | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(cgroupFile, "utf8");
+  } catch {
+    return null;
+  }
+  // cgroup v2: "0::/system.slice/x.service"; v1/hybrid: "1:name=systemd:/system.slice/x.service".
+  const lines = text.split("\n");
+  const line = lines.find((l) => l.startsWith("0::")) ?? lines.find((l) => l.includes(":name=systemd:"));
+  const leaf = line?.slice(line.lastIndexOf("/") + 1).trim();
+  return leaf && /^[A-Za-z0-9:_.@\\-]+\.service$/.test(leaf) ? leaf : null;
+}
+
+export function defaultSystemdCredentialHost(): SystemdCredentialHost {
+  return {
+    credentialsRoot: SYSTEMD_CREDENTIALS_ROOT,
+    unitName: currentSystemdUnit(),
+    expectedUnit: FLEET_SYSTEMD_UNIT,
+    rootUid: 0,
+    uid: process.getuid?.() ?? -1,
+  };
+}
+
+/**
+ * Problems with treating `file` as the systemd credential `name` delivered
+ * from `sourceFile`, or [] if acceptable. Every condition must hold:
+ *  - this process runs as the expected unit, and CREDENTIALS_DIRECTORY is
+ *    exactly <credentialsRoot>/<unit>, absolute, with no symlink in its path;
+ *  - that directory is owned by root (or this process) and not group/world-writable;
+ *  - `file` is exactly <CREDENTIALS_DIRECTORY>/<name> and resolves there (no
+ *    symlink/.. escape), a regular single-link file owned by root (or this process);
+ *  - mode: no world bits, group at most read (0440, 0400, 0600 ok; 0444, 0460, 0660, 0450 refused);
+ *  - the source secret is still root-owned 0600 (or hidden from this process).
+ */
+export function systemdCredentialProblems(
+  file: string,
+  name: string,
+  credentialsDirectory: string | undefined,
+  sourceFile: string,
+  host: SystemdCredentialHost = defaultSystemdCredentialHost(),
+): string[] {
+  const credDir = credentialsDirectory?.trim();
+  if (!credDir) return ["CREDENTIALS_DIRECTORY is not set"];
+  if (!host.unitName) return ["process is not running as a systemd service"];
+  if (host.unitName !== host.expectedUnit) return [`process runs as ${host.unitName}, not ${host.expectedUnit}`];
+  const expectedDir = path.join(host.credentialsRoot, host.unitName);
+  if (!path.isAbsolute(credDir) || path.normalize(credDir) !== credDir || credDir !== expectedDir) {
+    return [`CREDENTIALS_DIRECTORY ${credDir} is not the systemd credential directory ${expectedDir}`];
+  }
+  if (name !== path.basename(name) || name === "." || name === "..") return [`invalid credential name ${name}`];
+  const expectedFile = path.join(credDir, name);
+  if (file !== expectedFile) return [`${file} is not the expected credential ${expectedFile}`];
+
+  const problems: string[] = [];
+  const trusted = (uid: number) => uid === host.rootUid || uid === host.uid;
+  try {
+    if (fs.realpathSync(credDir) !== credDir) problems.push(`${credDir} resolves through a symlink`);
+    const d = fs.lstatSync(credDir);
+    if (!d.isDirectory()) problems.push(`${credDir} is not a directory`);
+    if (!trusted(d.uid)) problems.push(`${credDir} is owned by uid ${d.uid}`);
+    if (d.mode & 0o022) problems.push(`${credDir} is group/world-writable (mode ${(d.mode & 0o777).toString(8)})`);
+  } catch (err) {
+    return [`${credDir} cannot be inspected (${(err as NodeJS.ErrnoException).code})`];
+  }
+  try {
+    const st = fs.lstatSync(file);
+    if (st.isSymbolicLink()) problems.push(`${file} is a symlink`);
+    else if (!st.isFile()) problems.push(`${file} is not a regular file`);
+    else if (fs.realpathSync(file) !== expectedFile) problems.push(`${file} resolves outside ${credDir}`);
+    if (st.nlink !== 1) problems.push(`${file} has ${st.nlink} hard links`);
+    if (!trusted(st.uid)) problems.push(`${file} is owned by uid ${st.uid}`);
+    const mode = st.mode & 0o777;
+    if (mode & 0o007) problems.push(`${file} is world-accessible (mode ${mode.toString(8)})`);
+    if (mode & 0o030) problems.push(`${file} is group-writable/executable (mode ${mode.toString(8)})`);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return [code === "ENOENT" ? `${file} does not exist` : `${file} cannot be inspected (${code})`];
+  }
+  // The source must stay root:root 0600. /etc/automaton-fleet is 0755, so the service can stat
+  // (but not read) it; if a sandbox hides it entirely (EACCES) it is protected by that.
+  try {
+    const src = fs.lstatSync(sourceFile);
+    if (!src.isFile() || src.isSymbolicLink()) problems.push(`source ${sourceFile} is not a regular file`);
+    if (src.uid !== host.rootUid) problems.push(`source ${sourceFile} is owned by uid ${src.uid}, not root`);
+    if (src.mode & 0o077) problems.push(`source ${sourceFile} is group/world-accessible (mode ${(src.mode & 0o777).toString(8)})`);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "EACCES") problems.push(`source ${sourceFile} cannot be inspected (${code})`);
+  }
+  return problems;
 }
 
 function isDanglingLink(file: string): boolean {
@@ -167,17 +292,26 @@ export function loadAdminEnv(processEnv: Record<string, string | undefined> = pr
  * systemd LoadCredential=, else /etc/automaton-fleet/service.env) >
  * runtime.env > legacy .env.fleet. Never reads admin.env.
  */
-export function loadServiceEnv(processEnv: Record<string, string | undefined> = process.env, cwd = process.cwd()): LoadedEnv {
+export function loadServiceEnv(
+  processEnv: Record<string, string | undefined> = process.env,
+  cwd = process.cwd(),
+  systemd: { host?: SystemdCredentialHost; sourceFile?: string } = {},
+): LoadedEnv {
   const explicit = processEnv.FLEET_SERVICE_ENV_FILE?.trim();
   const credDir = processEnv.CREDENTIALS_DIRECTORY?.trim();
-  const serviceFile = explicit || (credDir ? path.join(credDir, "service.env") : DEFAULT_SERVICE_ENV_FILE);
+  const serviceFile = explicit || (credDir ? path.join(credDir, SERVICE_ENV_CREDENTIAL) : DEFAULT_SERVICE_ENV_FILE);
+  // systemd credential semantics apply only to the credential itself, never to an explicit file.
+  const systemdCredential =
+    !explicit && credDir
+      ? { name: SERVICE_ENV_CREDENTIAL, credentialsDirectory: credDir, sourceFile: systemd.sourceFile ?? DEFAULT_SERVICE_ENV_FILE, host: systemd.host }
+      : undefined;
   const runtimeFile = processEnv.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE;
   const legacy = path.resolve(cwd, LEGACY_ENV_FILE);
   const loaded = merge(
     [
       [legacy, readEnvFile(legacy)],
       [runtimeFile, readEnvFile(runtimeFile)],
-      [serviceFile, readSecretEnvFile(serviceFile, { required: !!(explicit || credDir) })],
+      [serviceFile, readSecretEnvFile(serviceFile, { required: !!(explicit || credDir), systemdCredential })],
     ],
     processEnv,
   );

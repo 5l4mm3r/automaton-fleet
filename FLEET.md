@@ -354,6 +354,8 @@ The fleet service runs the same audit at startup (refusing to start on any probl
 
 `src/fleet/secret-files.ts` refuses symlinks, non-regular files, world-accessible files, and group-accessible files (except `admin.env`, which may be group-read). An unreadable file is a clear error, never a silent fallback.
 
+The only other exception is the systemd credential copy `$CREDENTIALS_DIRECTORY/service.env`, which `LoadCredential=` creates as root-owned 0400 plus a read ACL for the service user (reported as mode 0440). It is accepted only when the process runs in `automaton-fleet.service` (per `/proc/self/cgroup`), `CREDENTIALS_DIRECTORY` is exactly `/run/credentials/automaton-fleet.service` (no symlinks, root-owned, not group/world-writable), the file is a single-link regular file at exactly that path owned by root or the service user, it has no world bits and at most group read, and `/etc/automaton-fleet/service.env` is still root-owned 0600. An explicit `FLEET_SERVICE_ENV_FILE` never gets the exception.
+
 - The **service loader never reads `admin.env`**, and the service refuses to start if `FLEET_ADMIN_DATABASE_URL` is visible to it.
 - The CLI warns when a controller secret still comes from the repository `.env.fleet`, and the doctor treats that as a blocker.
 - Secrets never go through `Environment=` or `EnvironmentFile=`.
