@@ -37,7 +37,10 @@ import {
   DEFAULT_ADMIN_ENV_FILE,
   DEFAULT_SERVICE_ENV_FILE,
   FLEET_ETC_DIR,
+  FLEET_SYSTEMD_UNIT,
   LEGACY_ENV_FILE,
+  SYSTEMD_CREDENTIALS_ROOT,
+  TLS_CERT_CREDENTIAL,
   readEnvFile,
   secretFileProblems,
 } from "./secret-files.js";
@@ -392,7 +395,10 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     add("sandbox termination", "warn", "not supported by the Conway API; dead agents' sandboxes may keep running");
     blockers.push("Sandbox termination cannot be guaranteed (Conway API has no stop/delete); zombie children are contained but not stopped.");
   }
-  const tlsConfigured = !!(env.FLEET_TLS_CERT_FILE && (env.FLEET_TLS_KEY_FILE || env.CREDENTIALS_DIRECTORY));
+  // In production the cert is the systemd credential copy (tls.crt) and the key comes from LoadCredential=tls.key.
+  const tlsCertCredential = path.join(SYSTEMD_CREDENTIALS_ROOT, FLEET_SYSTEMD_UNIT, TLS_CERT_CREDENTIAL);
+  const certViaCredential = env.FLEET_TLS_CERT_FILE?.trim() === tlsCertCredential;
+  const tlsConfigured = !!(env.FLEET_TLS_CERT_FILE && (env.FLEET_TLS_KEY_FILE || env.CREDENTIALS_DIRECTORY || certViaCredential));
   const remote = env.FLEET_REMOTE_LISTEN_ENABLED?.trim().toLowerCase() === "true";
   facts.tlsConfigured = tlsConfigured;
   facts.remoteListenEnabled = remote;
@@ -445,7 +451,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   item("build ID pinned", matches("buildId") && release!.lockfileSha256 === approved!.lockfileSha256, `${env.FLEET_RUNTIME_BUILD_ID || "unset"}`);
 
   const hostname = env.FLEET_PUBLIC_HOSTNAME?.trim() || "";
-  const certFile = env.FLEET_TLS_CERT_FILE?.trim() || "";
+  // The operator cannot read /run/credentials; check the LoadCredential=tls.crt source instead.
+  const certFile = certViaCredential ? path.join(etc, "tls", "fleet.crt") : env.FLEET_TLS_CERT_FILE?.trim() || "";
   const certProblems = !hostname || !certFile ? ["FLEET_PUBLIC_HOSTNAME / FLEET_TLS_CERT_FILE not configured"] : certificateProblems(certFile, hostname);
   facts.publicHostname = hostname || null;
   item("HTTPS valid", certProblems.length === 0 && remote, certProblems.join("; ") || (remote ? `certificate valid for ${hostname}` : "remote listener disabled"));

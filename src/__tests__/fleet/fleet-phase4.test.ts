@@ -39,10 +39,16 @@ import {
 } from "../../fleet/index.js";
 import { attestationProof, type RuntimeAttestation } from "../../fleet/attestation.js";
 import type { ClaimedGrant } from "../../fleet/grants.js";
-import { currentSystemdUnit, type SystemdCredentialHost } from "../../fleet/secret-files.js";
+import {
+  SYSTEMD_SECRET_CREDENTIALS,
+  currentSystemdUnit,
+  secretFileProblems,
+  systemdCredentialProblems,
+  type SystemdCredentialHost,
+} from "../../fleet/secret-files.js";
 import { buildRuntimeInstallCommand, loadRuntimeRelease, resolveChildRuntime } from "../../fleet/runtime.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
-import { parseListen, startFleetServiceFromEnv } from "../../fleet/service/main.js";
+import { loadTls, parseListen, startFleetServiceFromEnv } from "../../fleet/service/main.js";
 import { createJsonLogger } from "../../fleet/service/log.js";
 import { loadFleetConfig } from "../../fleet/config.js";
 import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
@@ -265,6 +271,170 @@ describe("Fleet security: systemd credential exception for service.env", () => {
   });
 });
 
+describe("Fleet security: systemd credential exception for tls.key", () => {
+  const UNIT = "automaton-fleet.service";
+  const uid = process.getuid?.() ?? 0;
+  let dir: string;
+  let credRoot: string;
+  let credDir: string;
+  let key: string;
+  let cert: string;
+  let source: string;
+  let host: SystemdCredentialHost;
+  const tls = (env: Record<string, string | undefined>, h: SystemdCredentialHost = host) =>
+    loadTls({ FLEET_TLS_CERT_FILE: cert, ...env }, { host: h, sourceFile: source });
+
+  beforeEach(() => {
+    dir = tmpDir();
+    credRoot = path.join(dir, "run-credentials");
+    credDir = path.join(credRoot, UNIT);
+    fs.mkdirSync(credDir, { recursive: true, mode: 0o700 });
+    key = path.join(credDir, "tls.key");
+    fs.writeFileSync(key, "TEST-KEY\n", { mode: 0o600 });
+    fs.chmodSync(key, 0o440); // LoadCredential= copy: 0400 + ACL mask r
+    cert = path.join(credDir, "tls.crt");
+    fs.writeFileSync(cert, "TEST-CERT\n", { mode: 0o644 });
+    fs.writeFileSync(path.join(credDir, "service.env"), "FLEET_SERVICE_DATABASE_URL=postgresql://s:p@h/d\n", { mode: 0o400 });
+    source = path.join(dir, "etc-tls-fleet.key");
+    fs.writeFileSync(source, "TEST-KEY\n", { mode: 0o600 });
+    host = { credentialsRoot: credRoot, unitName: UNIT, expectedUnit: UNIT, rootUid: uid, uid };
+  });
+  afterEach(() => {
+    fs.chmodSync(credDir, 0o700);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("accepts the implicit tls.key credential at 0440 and stricter modes", () => {
+    for (const mode of [0o440, 0o400, 0o600, 0o640]) {
+      fs.chmodSync(key, mode);
+      const loaded = tls({ CREDENTIALS_DIRECTORY: credDir });
+      expect(loaded?.key.toString(), mode.toString(8)).toBe("TEST-KEY\n");
+      expect(loaded?.cert.toString()).toBe("TEST-CERT\n");
+    }
+  });
+
+  it("an explicit FLEET_TLS_KEY_FILE always gets the strict check, even inside CREDENTIALS_DIRECTORY", () => {
+    // secretFileProblems itself is unchanged: 0440 is refused.
+    expect(secretFileProblems(key).join(" ")).toMatch(/group-accessible \(mode 440\)/);
+    // Explicitly naming the credential path gets no exception.
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir, FLEET_TLS_KEY_FILE: key })).toThrow(/Refusing TLS key: .*group-accessible \(mode 440\)/);
+    const outside = path.join(dir, "fleet.key");
+    fs.writeFileSync(outside, "OTHER-KEY\n", { mode: 0o600 });
+    fs.chmodSync(outside, 0o440);
+    expect(() => tls({ FLEET_TLS_KEY_FILE: outside })).toThrow(/group-accessible/);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir, FLEET_TLS_KEY_FILE: outside })).toThrow(/group-accessible/);
+    // A strict 0600 explicit key is accepted and takes precedence over the credential.
+    fs.chmodSync(outside, 0o600);
+    expect(tls({ CREDENTIALS_DIRECTORY: credDir, FLEET_TLS_KEY_FILE: outside })?.key.toString()).toBe("OTHER-KEY\n");
+    // Without a valid unit, the implicit credential is not accepted either.
+    expect(() => loadTls({ FLEET_TLS_CERT_FILE: cert, CREDENTIALS_DIRECTORY: credDir })).toThrow(/Refusing TLS key/);
+  });
+
+  it("mode matrix: rejects world bits and group write/execute", () => {
+    for (const [mode, msg] of [
+      [0o444, /world-accessible/],
+      [0o442, /world-accessible/],
+      [0o404, /world-accessible/],
+      [0o401, /world-accessible/],
+      [0o460, /group-writable/],
+      [0o660, /group-writable/],
+      [0o450, /group-writable\/executable/],
+      [0o410, /group-writable\/executable/],
+    ] as const) {
+      fs.chmodSync(key, mode);
+      expect(() => tls({ CREDENTIALS_DIRECTORY: credDir }), mode.toString(8)).toThrow(msg);
+    }
+  });
+
+  it("rejects symlinks, hard links, non-regular files and path traversal", () => {
+    const outside = path.join(dir, "outside.key");
+    fs.writeFileSync(outside, "X\n", { mode: 0o400 });
+    fs.rmSync(key);
+    fs.symlinkSync(outside, key);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/symlink/);
+    fs.rmSync(key);
+    fs.linkSync(outside, key);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/hard links/);
+    fs.rmSync(key);
+    fs.mkdirSync(key);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/not a regular file/);
+    fs.rmdirSync(key);
+    fs.writeFileSync(key, "X\n", { mode: 0o440 });
+    expect(() => tls({ CREDENTIALS_DIRECTORY: path.join(credRoot, "x") + "/../" + UNIT })).toThrow(/not the systemd credential directory/);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir + "/" })).toThrow(/not the systemd credential directory/);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: path.relative(process.cwd(), credDir) })).toThrow(/not the systemd credential directory/);
+    const elsewhere = path.join(dir, "elsewhere");
+    fs.renameSync(credDir, elsewhere);
+    fs.symlinkSync(elsewhere, credDir);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir, FLEET_TLS_CERT_FILE: path.join(elsewhere, "tls.crt") })).toThrow(/resolves through a symlink/);
+    fs.rmSync(credDir);
+    fs.renameSync(elsewhere, credDir);
+    fs.rmSync(key);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/tls\.key does not exist/);
+  });
+
+  it("requires the automaton-fleet.service identity and trusted ownership", () => {
+    const fake = path.join(dir, "fake");
+    fs.mkdirSync(fake, { mode: 0o700 });
+    fs.writeFileSync(path.join(fake, "tls.key"), "X\n", { mode: 0o400 });
+    // Real host detection: this test process is not automaton-fleet.service.
+    expect(() => loadTls({ FLEET_TLS_CERT_FILE: cert, CREDENTIALS_DIRECTORY: fake })).toThrow(/Refusing TLS key/);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: fake })).toThrow(/not the systemd credential directory/);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir }, { ...host, unitName: "other.service" })).toThrow(/not automaton-fleet\.service/);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir }, { ...host, unitName: null })).toThrow(/not running as a systemd service/);
+    // Same directory name under a different unit's identity.
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir }, { ...host, unitName: "automaton-agent.service" })).toThrow(/not automaton-fleet\.service/);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir }, { ...host, rootUid: uid + 1, uid: uid + 2 })).toThrow(/owned by uid/);
+    fs.chmodSync(credDir, 0o770);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/group\/world-writable/);
+    fs.chmodSync(credDir, 0o700);
+    // Source /etc/automaton-fleet/tls/fleet.key must stay root-owned 0600.
+    fs.chmodSync(source, 0o640);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/source .* group\/world-accessible/);
+    fs.chmodSync(source, 0o600);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir }, { ...host, rootUid: uid + 1 })).toThrow(/source .* not root/);
+    fs.rmSync(source);
+    fs.symlinkSync(path.join(dir, "nowhere"), source);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/source .* not a regular file/);
+    fs.rmSync(source);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/source .* cannot be inspected \(ENOENT\)/);
+  });
+
+  it("credential-name isolation: only service.env and tls.key get the exception, each only at its own path", () => {
+    expect(Object.keys(SYSTEMD_SECRET_CREDENTIALS).sort()).toEqual(["service.env", "tls.key"]);
+    expect(SYSTEMD_SECRET_CREDENTIALS["tls.key"]).toBe("/etc/automaton-fleet/tls/fleet.key");
+    const check = (file: string, name: string) => systemdCredentialProblems(file, name, credDir, source, host).join(" ");
+    expect(check(key, "tls.key")).toBe("");
+    fs.chmodSync(cert, 0o440);
+    expect(check(cert, "tls.crt")).toMatch(/tls\.crt is not a known secret credential/);
+    fs.writeFileSync(path.join(credDir, "other.key"), "X\n", { mode: 0o440 });
+    expect(check(path.join(credDir, "other.key"), "other.key")).toMatch(/not a known secret credential/);
+    expect(check(key, "../tls.key")).toMatch(/invalid credential name/);
+    expect(check(key, "..")).toMatch(/invalid credential name/);
+    // The tls.key exception never validates another credential's file, and vice versa.
+    expect(check(path.join(credDir, "service.env"), "tls.key")).toMatch(/not the expected credential/);
+    expect(check(key, "service.env")).toMatch(/not the expected credential/);
+    // loadTls only ever reads <CREDENTIALS_DIRECTORY>/tls.key, never service.env.
+    fs.rmSync(key);
+    expect(() => tls({ CREDENTIALS_DIRECTORY: credDir })).toThrow(/tls\.key does not exist/);
+    fs.writeFileSync(key, "TEST-KEY\n", { mode: 0o440 });
+    // The public certificate path may not name a secret.
+    for (const bad of [key, path.join(credDir, "service.env"), path.join(credDir, ".", "tls.key")]) {
+      expect(() => tls({ CREDENTIALS_DIRECTORY: credDir, FLEET_TLS_CERT_FILE: bad }), bad).toThrow(/is a secret credential/);
+    }
+    for (const bad of ["/etc/automaton-fleet/service.env", "/etc/automaton-fleet/tls/fleet.key", "/etc/automaton-fleet/tls/../tls/fleet.key"]) {
+      expect(() => tls({ CREDENTIALS_DIRECTORY: credDir, FLEET_TLS_CERT_FILE: bad }), bad).toThrow(/is a secret file/);
+    }
+  });
+
+  it("TLS stays off unless a certificate is configured; a key alone is refused", () => {
+    expect(loadTls({})).toBeNull();
+    expect(loadTls({ CREDENTIALS_DIRECTORY: credDir })).toBeNull(); // service.env credential alone never enables TLS
+    expect(() => loadTls({ FLEET_TLS_KEY_FILE: key })).toThrow(/Both FLEET_TLS_CERT_FILE and FLEET_TLS_KEY_FILE/);
+    expect(() => loadTls({ FLEET_TLS_CERT_FILE: cert })).toThrow(/Both FLEET_TLS_CERT_FILE and FLEET_TLS_KEY_FILE/);
+  });
+});
+
 // ─── Deployment artifacts ────────────────────────────────────────
 
 describe("Fleet security: deployment artifacts (systemd, scripts, flags)", () => {
@@ -295,6 +465,50 @@ describe("Fleet security: deployment artifacts (systemd, scripts, flags)", () =>
     for (const k of ["REAL_REPLICATION_ENABLED", "REAL_PAYMENTS_ENABLED", "OWNER_SWEEP_ENABLED"]) {
       expect(agentUnit).toMatch(new RegExp(`^Environment=${k}=false$`, "m"));
     }
+  });
+
+  it("TLS credentials: explicit LoadCredential mappings, source permissions, remote still disabled", () => {
+    // The shipped unit has no TLS credential and stays loopback-only.
+    expect(unit).not.toMatch(/tls\.(key|crt)/);
+    expect(unit).toMatch(/^IPAddressDeny=any$/m);
+    // The (uninstalled) remote drop-in maps exactly tls.key and tls.crt from their sources.
+    const dropIn = fs.readFileSync("deploy/systemd/automaton-fleet.service.d/remote.conf.example", "utf8");
+    const creds = dropIn.split("\n").filter((l) => /^\s*LoadCredential/.test(l)).sort();
+    expect(creds).toEqual([
+      "LoadCredential=tls.crt:/etc/automaton-fleet/tls/fleet.crt",
+      "LoadCredential=tls.key:/etc/automaton-fleet/tls/fleet.key",
+    ]);
+    expect(dropIn).not.toMatch(/^\s*Environment=FLEET_TLS_KEY_FILE/m);
+    expect(dropIn).toMatch(/FLEET_TLS_CERT_FILE=\/run\/credentials\/automaton-fleet\.service\/tls\.crt/);
+    // runtime.env keeps remote off and never names the key file.
+    const rt = fs.readFileSync("deploy/etc/runtime.env.example", "utf8");
+    expect(rt).toMatch(/^FLEET_REMOTE_LISTEN_ENABLED=false$/m);
+    expect(rt).not.toMatch(/^\s*FLEET_TLS_(KEY|CERT)_FILE=/m);
+    expect(rt).not.toMatch(/FLEET_TLS_KEY_FILE=/);
+    expect(rt).toMatch(/^#FLEET_TLS_CERT_FILE=\/run\/credentials\/automaton-fleet\.service\/tls\.crt$/m);
+    // OS setup: tls/ root:automaton-fleet-admin 0750, key root:root 0600, cert root:root 0644; never creates them.
+    const setup = fs.readFileSync("scripts/fleet-os-setup.sh", "utf8");
+    expect(setup).toMatch(/^run install -d -m 0750 -o root -g automaton-fleet-admin "\$ETC\/tls"$/m);
+    expect(setup).not.toMatch(/install -d -m 0700 -o root -g root "\$ETC\/tls"/);
+    expect(setup).toMatch(/for spec in fleet\.key:0600 fleet\.crt:0644; do/);
+    expect(setup).toMatch(/run chown root:root "\$f"; run chmod "\$mode" "\$f"/);
+    expect(setup).toMatch(/stat -c %h/); // refuses hard-linked TLS files
+    expect(setup).toMatch(/is a symlink; refusing/);
+    expect(setup).not.toMatch(/openssl req|certbot|acme|remote\.conf|systemctl (enable|start)/);
+    // Verification checks the same permissions and the exact mappings.
+    const verify = fs.readFileSync("scripts/fleet-verify-deployment.sh", "utf8");
+    expect(verify).toMatch(/^expect "\$ETC\/tls" root:automaton-fleet-admin 750 d$/m);
+    expect(verify).toMatch(/^expect "\$ETC\/tls\/fleet\.key" root:root 600 f$/m);
+    expect(verify).toMatch(/^expect "\$ETC\/tls\/fleet\.crt" root:root 644 f$/m);
+    expect(verify).toMatch(/'LoadCredential=tls\.crt:\/etc\/automaton-fleet\/tls\/fleet\.crt' 'LoadCredential=tls\.key:\/etc\/automaton-fleet\/tls\/fleet\.key'/);
+    expect(verify).toMatch(/runtime\.env sets FLEET_TLS_KEY_FILE/);
+    expect(verify).toMatch(/"\$ETC\/tls\/fleet\.key"/);
+    // Agents are refused the key paths.
+    for (const cmd of ["cat $CREDENTIALS_DIRECTORY/tls.key", "cat /etc/automaton-fleet/tls/fleet.key"]) {
+      expect(getForbiddenCommandMatch(cmd), cmd).not.toBeNull();
+    }
+    expect(isSensitiveFile("/run/credentials/automaton-fleet.service/tls.key")).toBe(true);
+    expect(isSensitiveFile("/etc/automaton-fleet/tls/fleet.key")).toBe(true);
   });
 
   it("setup scripts are dry-run by default and pass DB passwords on stdin, never argv", () => {

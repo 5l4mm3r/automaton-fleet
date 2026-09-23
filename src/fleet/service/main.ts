@@ -12,8 +12,10 @@
  *   FLEET_AGENT_DATABASE_URL       restricted agent role (fleet_agent_login) — required
  *   FLEET_API_LISTEN               host:port (default 127.0.0.1:8787). Loopback only, unless
  *                                  FLEET_REMOTE_LISTEN_ENABLED=true AND TLS is configured
- *   FLEET_TLS_CERT_FILE / FLEET_TLS_KEY_FILE   PEM certificate / key (key: 0600, e.g. via
- *                                  LoadCredential=tls.key -> $CREDENTIALS_DIRECTORY/tls.key)
+ *   FLEET_TLS_CERT_FILE / FLEET_TLS_KEY_FILE   PEM certificate / key. Production sets only the
+ *                                  cert (/run/credentials/automaton-fleet.service/tls.crt) and the
+ *                                  key comes from LoadCredential=tls.key (verified systemd credential,
+ *                                  0440 allowed). An explicit FLEET_TLS_KEY_FILE must be strictly 0600.
  *   Phase 6 remote controller (all required together; remote exposure stays OFF by default):
  *   FLEET_REMOTE_LISTEN_ENABLED    "true" to serve remote children
  *   FLEET_PUBLIC_HOSTNAME          DNS name children connect to; the certificate must cover it
@@ -38,10 +40,19 @@ import crypto from "crypto";
 import fs from "fs";
 import net from "net";
 import os from "os";
+import path from "path";
 import { PgFleetStore } from "../postgres/store.js";
 import { PgAgentGateway } from "../postgres/agent-gateway.js";
 import { problemsFor } from "../postgres/privileges.js";
-import { loadServiceEnv, secretFileProblems } from "../secret-files.js";
+import {
+  DEFAULT_TLS_KEY_FILE,
+  SYSTEMD_SECRET_CREDENTIALS,
+  TLS_KEY_CREDENTIAL,
+  loadServiceEnv,
+  secretFileProblems,
+  systemdCredentialProblems,
+  type SystemdCredentialHost,
+} from "../secret-files.js";
 import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "../runtime.js";
 import { FleetService, type AuditEntry, type ReadinessCheck } from "./server.js";
 import { createJsonLogger, type Logger } from "./log.js";
@@ -75,13 +86,33 @@ export function parseListen(value: string | undefined, opts: { remoteAllowed?: b
   return { host: host.replace(/^\[|\]$/g, "") === "localhost" ? "127.0.0.1" : host.replace(/^\[|\]$/g, ""), port };
 }
 
-/** TLS material from FLEET_TLS_CERT_FILE / FLEET_TLS_KEY_FILE; the key must be a private (0600) regular file. */
-export function loadTls(e: Record<string, string | undefined>): { cert: Buffer; key: Buffer } | null {
+/**
+ * TLS material from FLEET_TLS_CERT_FILE and the key. The key is either an
+ * explicit FLEET_TLS_KEY_FILE (strict secretFileProblems: 0600, even inside
+ * CREDENTIALS_DIRECTORY) or, when that is unset, the systemd credential
+ * $CREDENTIALS_DIRECTORY/tls.key, validated by systemdCredentialProblems
+ * (exact path and unit, no symlink/hard link, 0440 at most, source root 0600).
+ */
+export function loadTls(
+  e: Record<string, string | undefined>,
+  systemd: { host?: SystemdCredentialHost; sourceFile?: string } = {},
+): { cert: Buffer; key: Buffer } | null {
   const certFile = e.FLEET_TLS_CERT_FILE?.trim();
-  const keyFile = e.FLEET_TLS_KEY_FILE?.trim() || (e.CREDENTIALS_DIRECTORY && certFile ? `${e.CREDENTIALS_DIRECTORY}/tls.key` : "");
+  const explicitKey = e.FLEET_TLS_KEY_FILE?.trim();
+  const credDir = e.CREDENTIALS_DIRECTORY?.trim();
+  const keyFile = explicitKey || (credDir && certFile ? path.join(credDir, TLS_KEY_CREDENTIAL) : "");
   if (!certFile && !keyFile) return null;
   if (!certFile || !keyFile) throw new Error("Both FLEET_TLS_CERT_FILE and FLEET_TLS_KEY_FILE are required for TLS.");
-  const problems = secretFileProblems(keyFile);
+  // The certificate is public; it must never name a secret (credential copy or its source).
+  if (credDir && Object.keys(SYSTEMD_SECRET_CREDENTIALS).some((n) => path.resolve(certFile) === path.resolve(credDir, n))) {
+    throw new Error(`Refusing TLS certificate: ${certFile} is a secret credential.`);
+  }
+  if (Object.values(SYSTEMD_SECRET_CREDENTIALS).includes(path.resolve(certFile))) {
+    throw new Error(`Refusing TLS certificate: ${certFile} is a secret file.`);
+  }
+  const problems = explicitKey
+    ? secretFileProblems(keyFile)
+    : systemdCredentialProblems(keyFile, TLS_KEY_CREDENTIAL, credDir, systemd.sourceFile ?? DEFAULT_TLS_KEY_FILE, systemd.host);
   if (problems.length) throw new Error(`Refusing TLS key: ${problems.join("; ")}`);
   return { cert: fs.readFileSync(certFile), key: fs.readFileSync(keyFile) };
 }

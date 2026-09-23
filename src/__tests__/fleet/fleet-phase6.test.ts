@@ -296,7 +296,8 @@ describe("Fleet security: Phase 6 HTTPS controller configuration", () => {
     for (const p of ["5432", "6379", "8787"]) expect(fw).toMatch(new RegExp(`ufw deny ${p}/tcp`));
     expect(fw).not.toMatch(/ufw allow (5432|6379|8787)/);
     const dropIn = fs.readFileSync(path.join(REPO_ROOT, "deploy/systemd/automaton-fleet.service.d/remote.conf.example"), "utf8");
-    expect(dropIn).toMatch(/LoadCredential=tls\.key/);
+    expect(dropIn).toMatch(/^LoadCredential=tls\.key:\/etc\/automaton-fleet\/tls\/fleet\.key$/m);
+    expect(dropIn).toMatch(/^LoadCredential=tls\.crt:\/etc\/automaton-fleet\/tls\/fleet\.crt$/m);
     expect(dropIn).not.toMatch(/5432|6379/);
     const rt = fs.readFileSync(path.join(REPO_ROOT, "deploy/etc/runtime.env.example"), "utf8");
     expect(rt).toMatch(/^FLEET_REMOTE_LISTEN_ENABLED=false$/m);

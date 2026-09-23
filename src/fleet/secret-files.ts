@@ -16,8 +16,14 @@
  * The one exception is the systemd credential copy of service.env: systemd
  * LoadCredential= materialises it as root-owned 0400 plus a read ACL for the
  * service user, which stat reports as 0440. systemdCredentialProblems accepts
- * that mode only for $CREDENTIALS_DIRECTORY/service.env when the directory is
- * exactly the one systemd provides to automaton-fleet.service.
+ * that mode only for the known secret credentials (service.env, tls.key) at
+ * exactly $CREDENTIALS_DIRECTORY/<name>, when the directory is exactly the one
+ * systemd provides to automaton-fleet.service. An explicitly configured path
+ * (FLEET_SERVICE_ENV_FILE, FLEET_TLS_KEY_FILE) always gets the strict checks.
+ *
+ *   /etc/automaton-fleet/tls/         root:automaton-fleet-admin 0750
+ *     fleet.key  root:root 0600   LoadCredential=tls.key -> $CREDENTIALS_DIRECTORY/tls.key
+ *     fleet.crt  root:root 0644   LoadCredential=tls.crt -> $CREDENTIALS_DIRECTORY/tls.crt (public)
  */
 
 import fs from "fs";
@@ -27,10 +33,24 @@ export const FLEET_ETC_DIR = "/etc/automaton-fleet";
 export const FLEET_SYSTEMD_UNIT = "automaton-fleet.service";
 export const SYSTEMD_CREDENTIALS_ROOT = "/run/credentials";
 export const SERVICE_ENV_CREDENTIAL = "service.env";
+export const TLS_KEY_CREDENTIAL = "tls.key";
+export const TLS_CERT_CREDENTIAL = "tls.crt";
 export const DEFAULT_ADMIN_ENV_FILE = path.join(FLEET_ETC_DIR, "admin.env");
 export const DEFAULT_SERVICE_ENV_FILE = path.join(FLEET_ETC_DIR, "service.env");
 export const DEFAULT_RUNTIME_ENV_FILE = path.join(FLEET_ETC_DIR, "runtime.env");
+export const FLEET_TLS_DIR = path.join(FLEET_ETC_DIR, "tls");
+export const DEFAULT_TLS_KEY_FILE = path.join(FLEET_TLS_DIR, "fleet.key");
+export const DEFAULT_TLS_CERT_FILE = path.join(FLEET_TLS_DIR, "fleet.crt");
 export const LEGACY_ENV_FILE = ".env.fleet";
+
+/**
+ * The only credential names that get the systemd-credential exception, with
+ * their LoadCredential= sources. tls.crt is public and never needs it.
+ */
+export const SYSTEMD_SECRET_CREDENTIALS: Readonly<Record<string, string>> = Object.freeze({
+  [SERVICE_ENV_CREDENTIAL]: DEFAULT_SERVICE_ENV_FILE,
+  [TLS_KEY_CREDENTIAL]: DEFAULT_TLS_KEY_FILE,
+});
 
 /** Keys that are controller secrets (must come from a secret file, never from .env.fleet in production). */
 export const CONTROLLER_SECRET_KEYS: readonly string[] = Object.freeze([
@@ -70,7 +90,8 @@ export interface SecretFileOptions {
   allowGroupRead?: boolean;
   /**
    * Validate as a systemd credential instead (see systemdCredentialProblems).
-   * Only loadServiceEnv sets this, for $CREDENTIALS_DIRECTORY/service.env.
+   * Only loadServiceEnv sets this, for $CREDENTIALS_DIRECTORY/service.env
+   * (loadTls validates $CREDENTIALS_DIRECTORY/tls.key the same way).
    */
   systemdCredential?: { name: string; credentialsDirectory: string | undefined; sourceFile: string; host?: SystemdCredentialHost };
   /** Throw if the file does not exist. Default false (returns null). */
@@ -163,6 +184,7 @@ export function defaultSystemdCredentialHost(): SystemdCredentialHost {
 /**
  * Problems with treating `file` as the systemd credential `name` delivered
  * from `sourceFile`, or [] if acceptable. Every condition must hold:
+ *  - `name` is one of SYSTEMD_SECRET_CREDENTIALS (service.env, tls.key);
  *  - this process runs as the expected unit, and CREDENTIALS_DIRECTORY is
  *    exactly <credentialsRoot>/<unit>, absolute, with no symlink in its path;
  *  - that directory is owned by root (or this process) and not group/world-writable;
@@ -187,6 +209,7 @@ export function systemdCredentialProblems(
     return [`CREDENTIALS_DIRECTORY ${credDir} is not the systemd credential directory ${expectedDir}`];
   }
   if (name !== path.basename(name) || name === "." || name === "..") return [`invalid credential name ${name}`];
+  if (!Object.hasOwn(SYSTEMD_SECRET_CREDENTIALS, name)) return [`${name} is not a known secret credential`];
   const expectedFile = path.join(credDir, name);
   if (file !== expectedFile) return [`${file} is not the expected credential ${expectedFile}`];
 

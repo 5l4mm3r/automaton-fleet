@@ -6,6 +6,9 @@
 # Checks, as the real OS identities, what `pnpm fleet:verify` can only infer
 # from file modes:
 #   - the agent user and the service user cannot read controller secrets
+#   - TLS material: tls/ root:automaton-fleet-admin 0750, fleet.key root:root 0600,
+#     fleet.crt root:root 0644 (single-link regular files); the remote drop-in, if
+#     installed, maps exactly tls.key/tls.crt and runtime.env sets no FLEET_TLS_KEY_FILE
 #   - the fleet service runs as automaton-fleet-service (never root)
 #   - PostgreSQL and Redis listen on loopback only; the fleet admin HTTP port
 #     is loopback-only; only the HTTPS port (if enabled) is public
@@ -25,6 +28,39 @@ for u in automaton-agent automaton-fleet-service; do
     if runuser -u "$u" -- test -r "$f" 2>/dev/null; then bad "$u CAN read $f"; else ok "$u cannot read $f"; fi
   done
 done
+
+echo "TLS material (LoadCredential sources)"
+# expect <path> <owner:group> <octal mode> <kind: d|f>
+expect() {
+  local f="$1" want="$2 $3" got
+  if [[ ! -e "$f" && ! -L "$f" ]]; then ok "$f absent (remote HTTPS disabled)"; return; fi
+  if [[ -L "$f" ]]; then bad "$f is a symlink"; return; fi
+  if [[ "$4" == d && ! -d "$f" ]] || [[ "$4" == f && ! -f "$f" ]]; then bad "$f has the wrong file type"; return; fi
+  if [[ "$4" == f && "$(stat -c %h "$f")" != 1 ]]; then bad "$f has $(stat -c %h "$f") hard links"; return; fi
+  got="$(stat -c '%U:%G %a' "$f")"
+  [[ "$got" == "$want" ]] && ok "$f is $got" || bad "$f is $got (expected $want)"
+}
+expect "$ETC/tls" root:automaton-fleet-admin 750 d
+expect "$ETC/tls/fleet.key" root:root 600 f
+expect "$ETC/tls/fleet.crt" root:root 644 f
+DROPIN=/etc/systemd/system/automaton-fleet.service.d/remote.conf
+if [[ -e "$DROPIN" ]]; then
+  creds="$(grep -E '^[[:space:]]*LoadCredential' "$DROPIN" | tr -d ' ' | sort)"
+  want="$(printf '%s\n' 'LoadCredential=tls.crt:/etc/automaton-fleet/tls/fleet.crt' 'LoadCredential=tls.key:/etc/automaton-fleet/tls/fleet.key')"
+  [[ "$creds" == "$want" ]] && ok "remote drop-in maps exactly tls.key and tls.crt" || bad "remote drop-in LoadCredential lines are not exactly tls.key/tls.crt"
+else
+  ok "remote drop-in not installed"
+fi
+if grep -qE '^[[:space:]]*FLEET_TLS_KEY_FILE[[:space:]]*=' "$ETC/runtime.env" 2>/dev/null; then
+  bad "runtime.env sets FLEET_TLS_KEY_FILE (use LoadCredential=tls.key; leave it unset)"
+else
+  ok "runtime.env leaves FLEET_TLS_KEY_FILE unset"
+fi
+if grep -qE '^[[:space:]]*FLEET_TLS_CERT_FILE[[:space:]]*=' "$ETC/runtime.env" 2>/dev/null &&
+   ! grep -qx 'FLEET_TLS_CERT_FILE=/run/credentials/automaton-fleet.service/tls.crt' "$ETC/runtime.env"; then
+  bad "runtime.env FLEET_TLS_CERT_FILE is not /run/credentials/automaton-fleet.service/tls.crt"
+fi
+
 op="${SUDO_USER:-}"
 if [[ -n "$op" ]] && grep -qE '^[[:space:]]*(DATABASE_URL|FLEET_ADMIN_DATABASE_URL|FLEET_CONTROLLER_DATABASE_URL|REDIS_URL)[[:space:]]*=' "$(dirname "$0")/../.env.fleet" 2>/dev/null; then
   bad "repository .env.fleet still holds controller secrets"

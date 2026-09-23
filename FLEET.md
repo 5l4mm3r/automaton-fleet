@@ -354,7 +354,7 @@ The fleet service runs the same audit at startup (refusing to start on any probl
 
 `src/fleet/secret-files.ts` refuses symlinks, non-regular files, world-accessible files, and group-accessible files (except `admin.env`, which may be group-read). An unreadable file is a clear error, never a silent fallback.
 
-The only other exception is the systemd credential copy `$CREDENTIALS_DIRECTORY/service.env`, which `LoadCredential=` creates as root-owned 0400 plus a read ACL for the service user (reported as mode 0440). It is accepted only when the process runs in `automaton-fleet.service` (per `/proc/self/cgroup`), `CREDENTIALS_DIRECTORY` is exactly `/run/credentials/automaton-fleet.service` (no symlinks, root-owned, not group/world-writable), the file is a single-link regular file at exactly that path owned by root or the service user, it has no world bits and at most group read, and `/etc/automaton-fleet/service.env` is still root-owned 0600. An explicit `FLEET_SERVICE_ENV_FILE` never gets the exception. The TLS key (`LoadCredential=tls.key`) does not have this exception yet and must get the same verified handling before remote HTTPS is enabled. See [docs/fleet-known-issues.md](docs/fleet-known-issues.md) (FLEET-KI-3).
+The only other exception is the systemd credential copy `$CREDENTIALS_DIRECTORY/service.env`, which `LoadCredential=` creates as root-owned 0400 plus a read ACL for the service user (reported as mode 0440). It is accepted only when the process runs in `automaton-fleet.service` (per `/proc/self/cgroup`), `CREDENTIALS_DIRECTORY` is exactly `/run/credentials/automaton-fleet.service` (no symlinks, root-owned, not group/world-writable), the file is a single-link regular file at exactly that path owned by root or the service user, it has no world bits and at most group read, and `/etc/automaton-fleet/service.env` is still root-owned 0600. An explicit `FLEET_SERVICE_ENV_FILE` never gets the exception. The TLS key gets the same verified handling: `$CREDENTIALS_DIRECTORY/tls.key` (from `LoadCredential=tls.key:/etc/automaton-fleet/tls/fleet.key`) is accepted at 0440 only when `FLEET_TLS_KEY_FILE` is unset, under exactly the same unit/directory/file/ownership/mode checks, with `/etc/automaton-fleet/tls/fleet.key` still root-owned 0600 (or hidden from the service). An explicit `FLEET_TLS_KEY_FILE` always gets the strict 0600 check, even when it points into `CREDENTIALS_DIRECTORY`. Only the credential names `service.env` and `tls.key` get the exception; `tls.crt` is public and needs none, and the certificate path may not name a secret.
 
 - The **service loader never reads `admin.env`**, and the service refuses to start if `FLEET_ADMIN_DATABASE_URL` is visible to it.
 - The CLI warns when a controller secret still comes from the repository `.env.fleet`, and the doctor treats that as a blocker.
@@ -488,7 +488,7 @@ child sandbox ──HTTPS──► fleet service ──► PostgreSQL (loopback 
 - **Replay protection:** nonces are recorded in `fleet_request_nonces`, which is shared across service instances and restarts. Stale timestamps are refused, and a tampered body breaks the signature.
 - **Rate limits** (in memory, per instance): 60-request burst / 5 per s per agent; 10 sessions/min per agent; 20 auth failures/min per address → 429 with `Retry-After`.
 - **Audit:** every request is logged as `api_request` with request ID, agent, method, path, status, latency and IP (no bodies or tokens). Security events go to `fleet_events`.
-- **HTTPS:** set `FLEET_TLS_CERT_FILE` plus the key via `FLEET_TLS_KEY_FILE` or `LoadCredential=tls.key` (the key must be 0600). The service listens off-loopback only when `FLEET_REMOTE_LISTEN_ENABLED=true` **and** TLS is configured. The shipped unit stays loopback-only with `IPAddressDeny=any`; the TLS lines are commented out. The client refuses plain HTTP off loopback.
+- **HTTPS:** production sets `FLEET_TLS_CERT_FILE=/run/credentials/automaton-fleet.service/tls.crt` and leaves `FLEET_TLS_KEY_FILE` unset; the remote drop-in delivers `LoadCredential=tls.key:/etc/automaton-fleet/tls/fleet.key` and `LoadCredential=tls.crt:/etc/automaton-fleet/tls/fleet.crt`. An explicit `FLEET_TLS_KEY_FILE` must be a strict 0600 file. The service listens off-loopback only when `FLEET_REMOTE_LISTEN_ENABLED=true` **and** TLS is configured. The shipped unit stays loopback-only with `IPAddressDeny=any`; the TLS lines are commented out. The client refuses plain HTTP off loopback.
 
 ## Treasury economics
 
@@ -584,8 +584,9 @@ The Phase 5 gap: `createSandbox` could succeed while the callback reporting it w
 | `FLEET_PUBLIC_HOSTNAME` | DNS name children use; the certificate must cover it |
 | `FLEET_PUBLIC_LISTEN` | HTTPS bind, e.g. `0.0.0.0:443`. `FLEET_API_LISTEN` then stays the **loopback plain-HTTP admin** listener |
 | `FLEET_PUBLIC_URL` | `https://<hostname>` (doctor / dry run) |
-| `FLEET_TLS_CERT_FILE` | `/etc/automaton-fleet/tls/fleet.crt` |
-| TLS key | `/etc/automaton-fleet/tls/fleet.key` (root 0600), delivered only by `LoadCredential=tls.key` |
+| TLS directory | `/etc/automaton-fleet/tls` (root:automaton-fleet-admin 0750) |
+| `FLEET_TLS_CERT_FILE` | `/run/credentials/automaton-fleet.service/tls.crt`, from `/etc/automaton-fleet/tls/fleet.crt` (root:root 0644) via `LoadCredential=tls.crt` |
+| TLS key | `/run/credentials/automaton-fleet.service/tls.key`, from `/etc/automaton-fleet/tls/fleet.key` (root:root 0600) via `LoadCredential=tls.key`; `FLEET_TLS_KEY_FILE` unset |
 | `FLEET_ALLOWED_ORIGINS` | Browser origins (https only). Default: none; any request carrying another `Origin` gets 403 |
 
 - **Startup refusals:**
@@ -596,7 +597,7 @@ The Phase 5 gap: `createSandbox` could succeed while the callback reporting it w
   - running as root, or as anyone other than `FLEET_SERVICE_EXPECTED_USER` (the unit sets `automaton-fleet-service`).
 - **Endpoints:** `/healthz` returns only `{ok, status, uptimeS}`. `/readyz` (detailed) answers loopback peers only. Responses carry `cache-control: no-store`, `nosniff`, and HSTS over TLS.
 - **No database path:** PostgreSQL and Redis are never proxied. There is no DB route and no `CONNECT` tunnelling, and a PG protocol packet gets an HTTP 400 (tested).
-- **Remote drop-in:** `deploy/systemd/automaton-fleet.service.d/remote.conf.example` (not installed) adds `LoadCredential=tls.key`, lifts `IPAddressDeny` and grants only `CAP_NET_BIND_SERVICE`.
+- **Remote drop-in:** `deploy/systemd/automaton-fleet.service.d/remote.conf.example` (not installed) adds `LoadCredential=tls.key` and `LoadCredential=tls.crt`, lifts `IPAddressDeny` and grants only `CAP_NET_BIND_SERVICE`.
 - **Firewall:** `deploy/firewall/fleet-firewall.sh` (dry run by default) denies all inbound traffic except SSH and 443/tcp, and explicitly denies 5432, 6379 and 8787. nftables equivalent:
   ```
   table inet fleet { chain input { type filter hook input priority 0; policy drop;

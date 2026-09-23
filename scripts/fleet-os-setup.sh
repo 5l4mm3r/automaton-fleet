@@ -9,7 +9,9 @@
 #   user   automaton-fleet-service        system, nologin; runs the fleet service
 #   user   automaton-agent                runs local agent runtimes; in NO fleet group
 #   /etc/automaton-fleet/                 root:root 0755
-#     tls/         root:root 0700                    Phase 6 certificate + key (empty; remote stays disabled)
+#     tls/         root:automaton-fleet-admin 0750   Phase 6 certificate + key (not created here; remote stays disabled)
+#       fleet.key  root:root 0600                    LoadCredential=tls.key (only if present; never generated here)
+#       fleet.crt  root:root 0644                    LoadCredential=tls.crt (only if present; never obtained here)
 #     admin.env    root:automaton-fleet-admin 0640   FLEET_ADMIN_DATABASE_URL (moved from repo .env.fleet)
 #     service.env  root:root 0600                    FLEET_SERVICE_DATABASE_URL, FLEET_AGENT_DATABASE_URL
 #                                                    (fresh hex passwords; read by systemd LoadCredential only)
@@ -63,9 +65,19 @@ id automaton-agent >/dev/null 2>&1 || run useradd --user-group --create-home --h
   --shell /usr/sbin/nologin --comment "Automaton agent runtime" automaton-agent
 run chmod 0700 /home/automaton-agent
 
-say "2. Secret directory (+ tls/ for the Phase 6 certificate; key delivered by LoadCredential only)"
+say "2. Secret directory (+ tls/ for the Phase 6 certificate; key and cert delivered by LoadCredential only)"
 run install -d -m 0755 -o root -g root "$ETC"
-run install -d -m 0700 -o root -g root "$ETC/tls"
+[[ -L "$ETC/tls" ]] && { echo "  $ETC/tls is a symlink; refusing" >&2; exit 1; }
+run install -d -m 0750 -o root -g automaton-fleet-admin "$ETC/tls"
+# Existing TLS files are only re-permissioned; this script never creates, fetches or prints them.
+for spec in fleet.key:0600 fleet.crt:0644; do
+  f="$ETC/tls/${spec%%:*}"; mode="${spec##*:}"
+  [[ -e "$f" || -L "$f" ]] || { echo "  ($f absent — remote HTTPS stays disabled)"; continue; }
+  if [[ -L "$f" || ! -f "$f" || "$(stat -c %h "$f")" != 1 ]]; then
+    echo "  $f is not a single-link regular file; refusing" >&2; exit 1
+  fi
+  run chown root:root "$f"; run chmod "$mode" "$f"
+done
 
 say "3. admin.env (operator credential, moved from repo .env.fleet)"
 if [[ -f "$ETC/admin.env" ]]; then

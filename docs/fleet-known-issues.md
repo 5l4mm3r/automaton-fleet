@@ -36,7 +36,10 @@ where it was first confirmed so it is not mistaken for a new regression.
 
 ## FLEET-KI-3: TLS key via LoadCredential needs the systemd-credential exception
 
-- **Status:** open. Blocks enabling remote HTTPS (Phase 6 remote drop-in).
+- **Status:** fixed in the working tree (uncommitted, pending review): `loadTls()`
+  validates the implicit `$CREDENTIALS_DIRECTORY/tls.key` with
+  `systemdCredentialProblems()`; an explicit `FLEET_TLS_KEY_FILE` stays strict.
+  The remote drop-in is still not installed.
 - **Symptom (expected):** with `LoadCredential=tls.key`, systemd presents
   `$CREDENTIALS_DIRECTORY/tls.key` as mode 0440 (0400 + ACL mask), and
   `loadTls()` in `src/fleet/service/main.ts` refuses it via the strict

@@ -1,15 +1,22 @@
 # /etc/systemd/system/automaton-fleet.service.d/remote.conf — Phase 6 remote HTTPS.
 # NOT installed by any script. Install only after:
 #   - DNS for FLEET_PUBLIC_HOSTNAME points at this host
-#   - /etc/automaton-fleet/tls/fleet.crt (0644) and fleet.key (root:root 0600) exist
-#     and cover the hostname (pnpm fleet:verify checks this)
+#   - /etc/automaton-fleet/tls (root:automaton-fleet-admin 0750) holds
+#     fleet.key (root:root 0600) and fleet.crt (root:root 0644) covering the
+#     hostname (pnpm fleet:verify and scripts/fleet-verify-deployment.sh check this)
 #   - the firewall allows ONLY 443/tcp inbound (deploy/firewall/fleet-firewall.sh)
 #   - runtime.env sets FLEET_REMOTE_LISTEN_ENABLED=true, FLEET_PUBLIC_HOSTNAME,
-#     FLEET_PUBLIC_LISTEN=0.0.0.0:443, FLEET_PUBLIC_URL, FLEET_TLS_CERT_FILE
-# The service then serves HTTPS on 443 and keeps plain HTTP on 127.0.0.1:8787
+#     FLEET_PUBLIC_LISTEN=0.0.0.0:443, FLEET_PUBLIC_URL and
+#     FLEET_TLS_CERT_FILE=/run/credentials/automaton-fleet.service/tls.crt,
+#     and does NOT set FLEET_TLS_KEY_FILE (an explicit key file gets no
+#     systemd-credential exception and must be 0600 readable by the service).
+# The service reads the key only as /run/credentials/automaton-fleet.service/tls.key,
+# verified as the systemd credential of this unit (see src/fleet/secret-files.ts).
+# It then serves HTTPS on 443 and keeps plain HTTP on 127.0.0.1:8787
 # for local administration only; plain HTTP off loopback is refused in code.
 [Service]
 LoadCredential=tls.key:/etc/automaton-fleet/tls/fleet.key
+LoadCredential=tls.crt:/etc/automaton-fleet/tls/fleet.crt
 # Inbound HTTPS from anywhere (the firewall narrows it to 443/tcp);
 # PostgreSQL/Redis stay loopback-only and are never proxied.
 IPAddressDeny=
