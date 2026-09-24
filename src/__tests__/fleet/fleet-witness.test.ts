@@ -422,10 +422,11 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
        VALUES ($1, 'root', 0, 'pre-v7-root', $2, 'active', 'test', now())`,
       [ulid(), `0x${randomBytes(20).toString("hex")}`],
     );
-    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 7, wouldApply: [7] });
-    expect(await store.migrate()).toEqual([7]);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(7);
-    expect((await store.health()).schemaVersion).toBe(7);
+    // v8 (Operator API, additive) now follows v7 in the same migration run.
+    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 8, wouldApply: [7, 8] });
+    expect(await store.migrate()).toEqual([7, 8]);
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(8);
+    expect((await store.health()).schemaVersion).toBe(8);
     const scopes = await ownerRaw.query(`SELECT capability_scope FROM ${schema}.fleet_agents`);
     expect(scopes.rows.map((r) => r.capability_scope)).toEqual(["full"]);
     expect((await store.auditPrivileges()).problems).toEqual([]);

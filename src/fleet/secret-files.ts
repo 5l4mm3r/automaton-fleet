@@ -38,6 +38,14 @@ export const TLS_CERT_CREDENTIAL = "tls.crt";
 export const DEFAULT_ADMIN_ENV_FILE = path.join(FLEET_ETC_DIR, "admin.env");
 export const DEFAULT_SERVICE_ENV_FILE = path.join(FLEET_ETC_DIR, "service.env");
 export const DEFAULT_RUNTIME_ENV_FILE = path.join(FLEET_ETC_DIR, "runtime.env");
+/**
+ * Schema v8 Operator API secret: FLEET_OPERATOR_DATABASE_URL only.
+ * root:automaton-fleet-operator-api 0640, read directly by the operator
+ * process under the strict secret-file rules (group read allowed, as for
+ * admin.env). It deliberately does NOT use LoadCredential, so the verified
+ * systemd-credential 0440 exception stays limited to automaton-fleet.service.
+ */
+export const DEFAULT_OPERATOR_ENV_FILE = path.join(FLEET_ETC_DIR, "operator.env");
 export const FLEET_TLS_DIR = path.join(FLEET_ETC_DIR, "tls");
 export const DEFAULT_TLS_KEY_FILE = path.join(FLEET_TLS_DIR, "fleet.key");
 export const DEFAULT_TLS_CERT_FILE = path.join(FLEET_TLS_DIR, "fleet.crt");
@@ -55,6 +63,7 @@ export const SYSTEMD_SECRET_CREDENTIALS: Readonly<Record<string, string>> = Obje
 /** Keys that are controller secrets (must come from a secret file, never from .env.fleet in production). */
 export const CONTROLLER_SECRET_KEYS: readonly string[] = Object.freeze([
   "FLEET_ADMIN_DATABASE_URL",
+  "FLEET_OPERATOR_DATABASE_URL",
   "FLEET_SERVICE_DATABASE_URL",
   "FLEET_AGENT_DATABASE_URL",
   "FLEET_CONTROLLER_DATABASE_URL",
@@ -342,4 +351,69 @@ export function loadServiceEnv(
     loaded.warnings.push("FLEET_ADMIN_DATABASE_URL is visible to the fleet service; the service must not hold the admin credential.");
   }
   return loaded;
+}
+
+/** Credentials the Operator API process must never see (startup refuses if present). */
+export const OPERATOR_FORBIDDEN_ENV: readonly string[] = Object.freeze([
+  "FLEET_ADMIN_DATABASE_URL",
+  "FLEET_SERVICE_DATABASE_URL",
+  "FLEET_AGENT_DATABASE_URL",
+  "FLEET_CONTROLLER_DATABASE_URL",
+  "DATABASE_URL",
+  "PGPASSWORD",
+  "REDIS_URL",
+  "CONWAY_API_KEY",
+  "WALLET_PRIVATE_KEY",
+  "PRIVATE_KEY",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "FLEET_CREDENTIALS_FILE",
+  "CREDENTIALS_DIRECTORY",
+]);
+
+/**
+ * operator.env is the only group-readable secret file, and only under these
+ * exact conditions: owned by root (so the Operator API cannot rewrite its own
+ * credential), group = the Operator API's own primary group, exactly one link,
+ * no symlink anywhere in its path. This is NOT the systemd-credential
+ * exception and relaxes nothing for any other file.
+ */
+export function operatorEnvFileProblems(file: string, opts: { ownerUid?: number; groupGid?: number | null } = {}): string[] {
+  const problems = secretFileProblems(file, { allowGroupRead: true });
+  if (problems.length) return problems;
+  const st = fs.lstatSync(file);
+  const ownerUid = opts.ownerUid ?? 0;
+  if (st.uid !== ownerUid) problems.push(`${file} must be owned by uid ${ownerUid} (is ${st.uid})`);
+  const gid = opts.groupGid === undefined ? (typeof process.getgid === "function" ? process.getgid() : null) : opts.groupGid;
+  if (st.mode & 0o040 && st.gid !== gid) problems.push(`${file} is readable by group ${st.gid}, not this service's own group`);
+  if (st.nlink !== 1) problems.push(`${file} has ${st.nlink} hard links`);
+  try {
+    if (fs.realpathSync(file) !== path.resolve(file)) problems.push(`${file} resolves through a symlink`);
+  } catch {
+    problems.push(`${file} cannot be resolved`);
+  }
+  return problems;
+}
+
+/**
+ * Operator API environment: process env > operator.env (strict, group-read)
+ * > runtime.env (non-secret). Never reads admin.env, service.env or the
+ * repository .env.fleet.
+ */
+export function loadOperatorEnv(
+  processEnv: Record<string, string | undefined> = process.env,
+  fileOpts: { ownerUid?: number; groupGid?: number | null } = {},
+): LoadedEnv {
+  const operatorFile = processEnv.FLEET_OPERATOR_ENV_FILE?.trim() || DEFAULT_OPERATOR_ENV_FILE;
+  const runtimeFile = processEnv.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE;
+  if (!fs.existsSync(operatorFile) && !isDanglingLink(operatorFile)) throw new SecretFileError(`Secret file ${operatorFile} does not exist.`);
+  const problems = operatorEnvFileProblems(operatorFile, fileOpts);
+  if (problems.length) throw new SecretFileError(`Refusing insecure secret file: ${problems.join("; ")}.`);
+  return merge(
+    [
+      [runtimeFile, readEnvFile(runtimeFile)],
+      [operatorFile, readSecretEnvFile(operatorFile, { allowGroupRead: true, required: true })],
+    ],
+    processEnv,
+  );
 }

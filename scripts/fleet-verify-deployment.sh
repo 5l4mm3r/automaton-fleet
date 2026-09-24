@@ -12,6 +12,10 @@
 #   - the fleet service runs as automaton-fleet-service (never root)
 #   - PostgreSQL and Redis listen on loopback only; the fleet admin HTTP port
 #     is loopback-only; only the HTTPS port (if enabled) is public
+#   - Operator API (schema v8, when installed): its user cannot read controller
+#     secrets and is in no other group; no other fleet user can read
+#     operator.env (root:automaton-fleet-operator-api 0640); port 8788 is
+#     loopback-only; the host clock is NTP-synchronized
 # Exit 1 on any failure. Never prints secret contents.
 set -uo pipefail
 [[ $EUID -eq 0 ]] || { echo "run with sudo (read-only checks)" >&2; exit 2; }
@@ -21,9 +25,10 @@ ok()  { printf '  [PASS] %s\n' "$*"; }
 bad() { printf '  [FAIL] %s\n' "$*"; fail=1; }
 
 echo "Secrets vs OS identities"
-for u in automaton-agent automaton-fleet-service automaton-fleet-witness; do
+for u in automaton-agent automaton-fleet-service automaton-fleet-witness automaton-fleet-operator-api; do
   if ! id "$u" >/dev/null 2>&1; then
     [[ "$u" == automaton-fleet-witness ]] && { ok "user $u not created (root witness not installed)"; continue; }
+    [[ "$u" == automaton-fleet-operator-api ]] && { ok "user $u not created (Operator API not installed)"; continue; }
     bad "user $u missing"; continue
   fi
   for f in "$ETC/admin.env" "$ETC/service.env" "$ETC/tls/fleet.key" "$ETC/legacy-env-fleet.bak"; do
@@ -35,6 +40,44 @@ done
 if id automaton-fleet-witness >/dev/null 2>&1; then
   groups_of="$(id -nG automaton-fleet-witness)"
   [[ "$groups_of" == automaton-fleet-witness ]] && ok "automaton-fleet-witness is in no other group" || bad "automaton-fleet-witness groups: $groups_of"
+fi
+
+echo "Operator API isolation (schema v8)"
+if id automaton-fleet-operator-api >/dev/null 2>&1; then
+  groups_of="$(id -nG automaton-fleet-operator-api)"
+  [[ "$groups_of" == automaton-fleet-operator-api ]] && ok "automaton-fleet-operator-api is in no other group" || bad "automaton-fleet-operator-api groups: $groups_of"
+  OPENV="$ETC/operator.env"
+  if [[ -L "$OPENV" ]]; then bad "$OPENV is a symlink"
+  elif [[ -f "$OPENV" ]]; then
+    got="$(stat -c '%U:%G %a %h' "$OPENV")"
+    [[ "$got" == "root:automaton-fleet-operator-api 640 1" ]] && ok "$OPENV is root:automaton-fleet-operator-api 640 (single link)" || bad "$OPENV is $got (expected root:automaton-fleet-operator-api 640 1)"
+    for u in automaton-agent automaton-fleet-service automaton-fleet-witness "${SUDO_USER:-}"; do
+      [[ -n "$u" ]] && id "$u" >/dev/null 2>&1 || continue
+      if runuser -u "$u" -- test -r "$OPENV" 2>/dev/null; then bad "$u CAN read $OPENV"; else ok "$u cannot read $OPENV"; fi
+    done
+    # Same list as OPERATOR_FORBIDDEN_ENV (src/fleet/secret-files.ts).
+    if grep -qE '^[[:space:]]*(export[[:space:]]+)?(FLEET_ADMIN_DATABASE_URL|FLEET_SERVICE_DATABASE_URL|FLEET_AGENT_DATABASE_URL|FLEET_CONTROLLER_DATABASE_URL|DATABASE_URL|PGPASSWORD|REDIS_URL|CONWAY_API_KEY|WALLET_PRIVATE_KEY|PRIVATE_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|FLEET_CREDENTIALS_FILE|CREDENTIALS_DIRECTORY)[[:space:]]*=' "$OPENV"; then
+      bad "$OPENV holds a non-operator credential"
+    else
+      ok "$OPENV holds only the operator credential"
+    fi
+  else
+    bad "$OPENV missing"
+  fi
+  if [[ "$(systemctl is-active automaton-fleet-operator-api.service 2>/dev/null)" == active ]]; then
+    if ss -ltnH | awk '{print $4}' | grep -E ':8788$' | grep -qvE '^(127\.0\.0\.1|\[::1\]):8788$'; then
+      bad "Operator API port 8788 is bound beyond loopback"
+    else
+      ok "Operator API port 8788 is loopback-only"
+    fi
+  else
+    ok "Operator API unit not active"
+  fi
+  # Signed operator requests use a ±30 s window; readiness also needs the timesyncd marker.
+  if [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == yes ]]; then ok "host clock is NTP-synchronized"; else bad "host clock is not NTP-synchronized (signed operator requests use a ±30 s window)"; fi
+  if [[ -e /run/systemd/timesync/synchronized ]]; then ok "systemd-timesyncd synchronized marker present"; else bad "no /run/systemd/timesync/synchronized (Operator API readiness requires it; set FLEET_OPERATOR_TIMESYNC_MARKER for another NTP daemon)"; fi
+else
+  ok "Operator API not installed"
 fi
 
 echo "TLS material (LoadCredential sources)"

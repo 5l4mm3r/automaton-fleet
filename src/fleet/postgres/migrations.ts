@@ -15,8 +15,9 @@ import type { PoolClient } from "pg";
 import { V5_SQL, v4Sql } from "./migrations-phase5.js";
 import { V6_SQL } from "./migrations-phase6.js";
 import { v7Sql } from "./migrations-phase7.js";
+import { V8_SQL } from "./migrations-phase8.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 7;
+export const FLEET_PG_SCHEMA_VERSION = 8;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1118,6 +1119,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 5, name: "treasury_economics", sql: V5_SQL },
   { version: 6, name: "provisioning_intents_dry_run_child", sql: V6_SQL },
   { version: 7, name: "capability_scope_witness", sql: v7Sql(FLEET_PG_HARD_MAX_AGENTS) },
+  { version: 8, name: "operator_api_read_only", sql: V8_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1166,6 +1168,43 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_open_session(text, text, text)",
   "api_propose_allocation(text, text, text, text, bigint, bigint, integer)",
   "api_request_spend(text, text, text, text, text, bigint, text, text)",
+]);
+
+/**
+ * The ONLY functions the operator role may execute (schema v8, Phase B2).
+ * Signature-termination invariant: every one of them is STABLE except
+ * op_begin_request, whose writes are limited to OPERATOR_BOOKKEEPING_TABLES
+ * (plus denial events via fleet_event). A mutating operator capability must
+ * not be added here; it needs a separate security-design gate.
+ */
+export const OPERATOR_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "op_begin_request(text, text, text, bigint, text, text)",
+  "op_key_material(text, text)",
+  "op_ping()",
+  "op_whoami(uuid)",
+  "op_fleet_status(uuid)",
+  "op_list_agents(uuid, text, integer)",
+  "op_get_agent(uuid, text)",
+  "op_list_events(uuid, bigint, integer, text)",
+]);
+
+/** The single volatile operator function (security/audit bookkeeping only). */
+export const OPERATOR_VOLATILE_FUNCTIONS: readonly string[] = Object.freeze(["op_begin_request(text, text, text, bigint, text, text)"]);
+
+/** The read functions a route may map to (mirrors the fleet_operator_routes CHECK). */
+export const OPERATOR_READ_FUNCTIONS: readonly string[] = Object.freeze([
+  "op_whoami",
+  "op_fleet_status",
+  "op_list_agents",
+  "op_get_agent",
+  "op_list_events",
+]);
+
+/** Tables op_begin_request may write (Amendment 3); fleet_events via fleet_event() for denials. */
+export const OPERATOR_BOOKKEEPING_TABLES: readonly string[] = Object.freeze([
+  "fleet_operator_nonces",
+  "fleet_operator_requests",
+  "fleet_operator_state",
 ]);
 
 export function quoteIdent(ident: string): string {

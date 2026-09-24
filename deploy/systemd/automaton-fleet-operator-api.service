@@ -1,0 +1,86 @@
+# Automaton Fleet Operator API — Phase B2 (read-only, loopback-only).
+#
+# NOT enabled or started by any script. Installed by scripts/fleet-os-setup.sh;
+# started only in its own approved deployment gate:
+#   systemctl start automaton-fleet-operator-api.service
+#
+# Runs dist/fleet/operator/main.js from the pinned release as its own system
+# user (in no other group). It holds only FLEET_OPERATOR_DATABASE_URL, read
+# from /etc/automaton-fleet/operator.env (root:automaton-fleet-operator-api 0640)
+# under the strict secret-file rules. It deliberately does NOT use
+# LoadCredential: the verified systemd-credential exception stays limited to
+# automaton-fleet.service. It never sees admin.env, service.env or TLS keys,
+# listens on 127.0.0.1:8788 only, and its database role can execute only the
+# read-only op_* functions. Bridges reach it through a restricted SSH tunnel.
+
+[Unit]
+Description=Automaton Fleet Operator API (read-only, loopback, signed requests)
+Documentation=file:///opt/automaton-fleet/current/docs/design/phase-b-operator-api.md
+Wants=postgresql.service
+After=postgresql.service network-online.target automaton-fleet.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-operator-api
+Group=automaton-fleet-operator-api
+SupplementaryGroups=
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/operator/main.js
+# Non-secret configuration only; the credential is operator.env (see above).
+Environment=NODE_ENV=production
+Environment=FLEET_OPERATOR_EXPECTED_USER=automaton-fleet-operator-api
+Environment=FLEET_OPERATOR_LISTEN=127.0.0.1:8788
+Environment=FLEET_OPERATOR_ENV_FILE=/etc/automaton-fleet/operator.env
+Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/runtime.env
+Environment=FLEET_OPERATOR_AUDIT_LOG=/var/log/automaton-fleet-operator/audit.jsonl
+Environment=FLEET_OPERATOR_REQUIRE_TIMESYNC=true
+LogsDirectory=automaton-fleet-operator
+LogsDirectoryMode=0700
+UMask=0077
+
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-operator-api
+
+# Network: loopback only (PostgreSQL on 127.0.0.1; clients via SSH tunnel).
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Sandboxing
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# Controller secrets, TLS sources, other services' state/logs and homes are never visible.
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak
+InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/log/automaton-fleet -/run/credentials
+
+[Install]
+WantedBy=multi-user.target

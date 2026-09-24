@@ -86,3 +86,33 @@ where it was first confirmed so it is not mistaken for a new regression.
   chooses (a 0700 temporary directory). The operator then installs it into
   `/var/lib/automaton-fleet-witness/` with `sudo install -m 0600 -o automaton-fleet-witness`.
   The token is never printed.
+
+## FLEET-KI-5: operator signatures end at the Operator API process
+
+- **Status:** accepted design limitation (Phase B, B2-1 Amendment 2). Implemented
+  locally in B2-2, not deployed.
+- **Fact:** PostgreSQL cannot verify the Ed25519 request signature. It trusts the
+  operator database login to have verified it. Someone who controls the Operator
+  API process or `fleet_operator_login` can call the `op_*` read functions
+  without a valid signature, within the principal, key, scope, kill-switch,
+  nonce and audit-cap checks that `op_begin_request` still enforces against
+  real enrolled rows.
+- **Containment:** the operator role and the `op_*` surface are read-only with
+  respect to fleet and business state. This is enforced by the route CHECK, the
+  privilege audit (`operatorSurfaceProblems`) and the mutation tests in
+  `operator-pg.test.ts`. Design doc §6.4 and §18.2.
+- **Rule:** no mutating operator scope (for example `ops.propose`) may be added
+  by extending the scope or route tables. It needs its own security-design gate.
+- **Runtime barrier:** every read runs in a READ ONLY transaction, so even a
+  tampered read function cannot write.
+- **Also accepted (B2-3 review):**
+  - A request ID can be reused for its own read function for 30 s, and route
+    parameters are not bound at the database layer. This gives nothing beyond
+    what the login itself already allows.
+  - Pre-existing for all fleet logins (agent, service, operator): a login can
+    take advisory locks (including the migration lock key), call `lo_create`,
+    override its per-role `statement_timeout` / `idle_in_transaction_session_timeout`,
+    and has CONNECT on other databases unless `pg_hba` restricts it. A fix is a
+    database-wide change (REVOKE on `lo_*`/advisory functions from PUBLIC,
+    `REVOKE CONNECT ON DATABASE postgres`, `pg_hba` per-login rules) and needs
+    its own gate.

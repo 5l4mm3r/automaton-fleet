@@ -1107,6 +1107,66 @@ vps$ pnpm fleet:admin quarantine <childAgentId> "dry run complete"   # revokes e
 
 ---
 
+## Stage B2 — Operator API, schema v8 (DRAFT, not approved)
+
+Draft from B2-2. Each gate below needs its own explicit approval. Nothing in this
+stage has been run. Design and reconciliation:
+`docs/design/phase-b-operator-api.md` §15 and §18.
+
+Invariants for the whole stage:
+- The safety flags, fleet cap and mode do not change.
+- The Operator API stays loopback-only (127.0.0.1:8788) and is reached through an
+  SSH tunnel. No firewall change.
+- Every database secret is generated on the VPS and never printed or copied off it.
+- The operator kill switch stays **off** until B2-12.
+
+| Gate | Action | Production change | sudo |
+|---|---|---|---|
+| B2-3 | Local review of the B2-2 diff; fix findings; local commit (no push) | no | no |
+| B2-4 | Push the reviewed commit to `fleet-origin` (never `origin`) | no (GitHub) | no |
+| B2-5 | VPS reproducible build of the commit; record commit, build ID, lockfile SHA | no | no |
+| B2-6 | `runtime.env` pin update (backup, `sudoedit`, 2-line diff); stage and install the release; move the tooling checkout | yes | yes |
+| B2-7 | **Planned outage:** stop the controller; verified 0600 pre-v8 dump; `migrate-check` (exactly v7→v8) → `migrate` → `audit-privileges` | yes, **database** | yes |
+| B2-8 | `approve-runtime` → `verify-runtime` → start the controller → post-start verification (16/16) and the B0 canary | yes | yes |
+| B2-9 | `fleet-os-setup.sh` (user `automaton-fleet-operator-api`, `operator.env` root:automaton-fleet-operator-api 0640 with a fresh password, unit installed **not enabled**, logrotate); then `fleet-db-setup.sh` (creates `fleet_operator` / `fleet_operator_login`); then `grant-operator-role` and `audit-privileges`; `fleet-verify-deployment.sh` | yes, **new database secret** | yes |
+| B2-10 | Start `automaton-fleet-operator-api.service`; `/readyz` must say `disabled`; doctor shows the operator checks; the audit file is 0600 | yes | yes |
+| B2-11 | Tunnel account `fleet-op-tunnel`, restricted `authorized_keys` (permitopen=127.0.0.1:8788 only), `sshd -t` | yes (SSH configuration) | yes |
+| B2-12 | Key generated on the dev VM (`fleet:operator-keygen`, private key never leaves it); `operator-enroll bridge-claude` with the public key; fingerprint checked out of band; `operator-api enable`; `whoami` / `status` smoke test through the tunnel; audit rows checked | **database** | no |
+
+Order notes:
+- The v8 build refuses a v7 registry and the v7 build refuses v8, so B2-6 to B2-8
+  are one coordinated cutover with the same rollback shape as S9b (restore the
+  pre-v8 dump and the previous `current` release).
+- `fleet-db-setup.sh` now requires `/etc/automaton-fleet/operator.env`. Run
+  `fleet-os-setup.sh` first (B2-9).
+- `migrate` grants the operator role only if it exists. After the roles are
+  created in B2-9, run `fleet:admin grant-operator-role`.
+- The Operator API refuses to start if it can read `admin.env`, `service.env` or
+  TLS files, if its DSN is the owner or service login, if the schema is not 8, or
+  if its pins differ from the approved runtime.
+
+Retention (Amendment 1): doctor warns at 50% (early warning) and 75% (ELEVATED)
+of the 2,000,000-row request cap and fails at 100%, where requests fail closed
+with `FLEET_OP_AUDIT_FULL`. Nothing is deleted automatically. The only removal
+is `fleet:admin operator-archive --before <ts> --out <new file> [--max-rows N]`.
+It handles at most 100,000 of the oldest rows per call. It writes a 0600 export
+into a private directory, reads it back to verify it, and deletes the rows only
+if the database recomputes the same row count and SHA-256. On any failure, no
+rows are deleted. Repeat the command, with a new `--out` each time, until the
+`operator_requests_archived` event reports `remaining: 0`. It needs its own
+approval.
+
+Clock: readiness needs `/run/systemd/timesync/synchronized` (systemd-timesyncd).
+If the VPS uses another NTP daemon, decide in B2-10 whether to set
+`FLEET_OPERATOR_TIMESYNC_MARKER` (a drop-in, approved separately). The
+logrotate file installed in B2-9 also starts rotating the controller's existing
+`/var/log/automaton-fleet/audit.jsonl` (50 MB × 14, by rename, which is safe
+because the sink reopens the file on every append).
+
+Emergency controls (no restart needed; the database checks every request):
+`operator-revoke-key`, `operator-revoke`, `operator-revoke-all` (which also turns
+the kill switch off), and `operator-api disable`.
+
 ## Certificate renewal requires a service restart
 
 `LoadCredential=` copies `fleet.key` and `fleet.crt` into

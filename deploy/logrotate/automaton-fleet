@@ -1,0 +1,29 @@
+# /etc/logrotate.d/automaton-fleet (root 0644) — D-9 bounded audit retention (Phase B2).
+#
+# Bounds each JSONL audit file to about 14 x 50 MB (compressed after the first
+# rotation). Rotation is by rename: both sinks open the path on every append,
+# so the next line lands in the fresh file — no copytruncate, no data loss.
+# Rotated files keep the owner and 0600 mode. Nothing here touches the
+# database audit (fleet_operator_requests is capped and archived separately).
+
+/var/log/automaton-fleet/audit.jsonl {
+    size 50M
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0600 automaton-fleet-service automaton-fleet-service
+    su automaton-fleet-service automaton-fleet-service
+}
+
+/var/log/automaton-fleet-operator/audit.jsonl {
+    size 50M
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0600 automaton-fleet-operator-api automaton-fleet-operator-api
+    su automaton-fleet-operator-api automaton-fleet-operator-api
+}

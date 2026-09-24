@@ -12,10 +12,13 @@ export type LogLevel = "debug" | "info" | "warn" | "error" | "fatal";
 
 export type Logger = (level: LogLevel, event: string, fields?: Record<string, unknown>) => void;
 
-export function createJsonLogger(write: (line: string) => void = (l) => process.stdout.write(l + "\n")): Logger {
+export function createJsonLogger(
+  write: (line: string) => void = (l) => process.stdout.write(l + "\n"),
+  service = "automaton-fleet",
+): Logger {
   return (level, event, fields = {}) => {
     try {
-      write(redactLogLine({ ts: new Date().toISOString(), level, service: "automaton-fleet", event }, fields));
+      write(redactLogLine({ ts: new Date().toISOString(), level, service, event }, fields));
     } catch {
       // logging must never take the service down
     }

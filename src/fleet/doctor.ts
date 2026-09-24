@@ -32,6 +32,7 @@ import path from "path";
 import { FLEET_PG_SCHEMA_VERSION } from "./postgres/migrations.js";
 import type { PgFleetStore } from "./postgres/store.js";
 import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "./runtime.js";
+import { auditLevel } from "./operator/responses.js";
 import {
   CONTROLLER_SECRET_KEYS,
   DEFAULT_ADMIN_ENV_FILE,
@@ -93,6 +94,8 @@ export interface DoctorDeps {
     passwd?: string;
     group?: string;
     systemdUnit?: string;
+    /** Filesystem holding the audit logs (disk-usage check). */
+    logDir?: string;
   };
   /** Sandbox termination is guaranteed by the deployed terminator (default false: Conway cannot stop sandboxes). */
   sandboxTerminationGuaranteed?: boolean;
@@ -254,7 +257,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       facts.doctorDbUser = who.user;
       const audit = await store.auditPrivileges();
       facts.privilegeProblems = audit.problems;
-      add("database privileges", audit.ok ? "pass" : "fail", audit.ok ? "agent/service roles least-privilege; PUBLIC has nothing" : audit.problems.join("; "));
+      add("database privileges", audit.ok ? "pass" : "fail", audit.ok ? "agent/service/operator roles least-privilege; operator surface read-only; PUBLIC has nothing" : audit.problems.join("; "));
       if (!audit.ok) blockers.push("Database privileges are too broad or roles are missing (pnpm fleet:audit-privileges).");
 
       const st = await store.getState();
@@ -302,6 +305,40 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     } catch (err) {
       add("registry state", "fail", err instanceof Error ? err.message : String(err));
     }
+
+    // ── Operator API (schema v8). Detailed checks only: the 16-item operator
+    // checklist (and its 16/16 meaning) is deliberately unchanged (B2 F10).
+    const ov = await store.operatorOverview();
+    facts.operatorApi = ov;
+    if (ov) {
+      const lvl = auditLevel(ov.requestCount, ov.requestCap);
+      const pct = ov.requestCap > 0 ? ((ov.requestCount / ov.requestCap) * 100).toFixed(1) : "?";
+      add(
+        "operator audit capacity",
+        lvl === "full" ? "fail" : lvl === "ok" ? "pass" : "warn",
+        `${ov.requestCount}/${ov.requestCap} request rows (${pct}%)` +
+          (lvl === "info" ? " — early warning (>= 50%): plan an archive (fleet:admin operator-archive)"
+            : lvl === "elevated" ? " — ELEVATED (>= 75%): archive soon"
+            : lvl === "full" ? " — FULL: the Operator API fails closed (FLEET_OP_AUDIT_FULL); archive required" : ""),
+      );
+      add("operator kill switch", "pass", ov.enabled ? `enabled (generation ${ov.generation})` : `disabled (generation ${ov.generation}); the Operator API refuses every request`);
+      add(
+        "operator principals",
+        ov.keysExpiringSoon ? "warn" : "pass",
+        `${ov.activePrincipals} active principal(s), ${ov.activeKeys} active key(s)` + (ov.keysExpiringSoon ? `; ${ov.keysExpiringSoon} key(s) expire within 14 days` : ""),
+      );
+      add("operator denials", ov.recentDenials > 20 ? "warn" : "pass", `${ov.recentDenials} denied operator request(s) in the last 10 minutes`);
+    }
+  }
+
+  // ── Log/audit disk usage (D-9): warn at 80% used, fail at 95%.
+  try {
+    const sf = fs.statfsSync(deps.paths?.logDir ?? "/var/log");
+    const usedPct = sf.blocks > 0 ? (1 - sf.bavail / sf.blocks) * 100 : 0;
+    facts.logDiskUsedPct = Math.round(usedPct * 10) / 10;
+    add("log disk usage", usedPct >= 95 ? "fail" : usedPct >= 80 ? "warn" : "pass", `${usedPct.toFixed(1)}% used on the filesystem holding ${deps.paths?.logDir ?? "/var/log"}`);
+  } catch {
+    add("log disk usage", "warn", "could not inspect the log filesystem");
   }
 
   // ── Runtime release
@@ -419,7 +456,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   const checklist: ChecklistItem[] = [];
   const item = (name: string, ok: boolean, detail: string) => checklist.push({ item: name, ok, detail });
   const privOk = Array.isArray(facts.privilegeProblems) && (facts.privilegeProblems as string[]).length === 0;
-  item("PostgreSQL roles correct", dbOk && privOk, privOk ? "agent/service roles least-privilege" : "privilege audit failed or not run");
+  item("PostgreSQL roles correct", dbOk && privOk, privOk ? "agent/service/operator roles least-privilege" : "privilege audit failed or not run");
   item(`schema v${FLEET_PG_SCHEMA_VERSION}`, facts.schemaVersion === FLEET_PG_SCHEMA_VERSION, `v${facts.schemaVersion ?? "none"}`);
 
   const unitState = await (deps.serviceActive ?? defaultServiceActive)().catch(() => null);

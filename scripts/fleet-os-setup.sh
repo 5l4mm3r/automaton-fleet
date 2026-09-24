@@ -10,6 +10,8 @@
 #   user   automaton-agent                runs local agent runtimes; in NO fleet group
 #   user   automaton-fleet-witness        system, nologin, in NO group; runs the FLEET-KI-4 root witness
 #                                         (state: /var/lib/automaton-fleet-witness 0700 via systemd StateDirectory)
+#   user   automaton-fleet-operator-api   system, nologin, in NO other group; runs the read-only Operator API
+#                                         (Phase B2; logs: /var/log/automaton-fleet-operator 0700 via LogsDirectory)
 #   /etc/automaton-fleet/                 root:root 0755
 #     tls/         root:automaton-fleet-admin 0750   Phase 6 certificate + key (not created here; remote stays disabled)
 #       fleet.key  root:root 0600                    LoadCredential=tls.key (only if present; never generated here)
@@ -18,9 +20,12 @@
 #     service.env  root:root 0600                    FLEET_SERVICE_DATABASE_URL, FLEET_AGENT_DATABASE_URL
 #                                                    (fresh hex passwords; read by systemd LoadCredential only)
 #     runtime.env  root:root 0644                    non-secret: pinned runtime + safety flags (all false)
+#     operator.env root:automaton-fleet-operator-api 0640   FLEET_OPERATOR_DATABASE_URL (fresh hex password;
+#                                                    read by the Operator API directly — no LoadCredential)
 #   /opt/automaton-fleet/{releases,node/bin}         root-owned; pinned node binary copied in
 #   /etc/systemd/system/automaton-fleet.service, automaton-agent.service,
-#     automaton-fleet-witness.service                (installed, NOT enabled/started)
+#     automaton-fleet-witness.service, automaton-fleet-operator-api.service  (installed, NOT enabled/started)
+#   /etc/logrotate.d/automaton-fleet                 root 0644 (D-9 bounded JSONL audit retention)
 # and moves controller secrets out of the repository .env.fleet (backup kept root-only).
 #
 # It never prints secret values, never starts anything and never touches PostgreSQL
@@ -69,6 +74,8 @@ id automaton-agent >/dev/null 2>&1 || run useradd --user-group --create-home --h
 run chmod 0700 /home/automaton-agent
 id automaton-fleet-witness >/dev/null 2>&1 || run useradd --system --user-group --home-dir /var/lib/automaton-fleet-witness \
   --no-create-home --shell /usr/sbin/nologin --comment "Automaton fleet root witness" automaton-fleet-witness
+id automaton-fleet-operator-api >/dev/null 2>&1 || run useradd --system --user-group --home-dir /var/lib/automaton-fleet-operator-api \
+  --no-create-home --shell /usr/sbin/nologin --comment "Automaton fleet Operator API" automaton-fleet-operator-api
 
 say "2. Secret directory (+ tls/ for the Phase 6 certificate; key and cert delivered by LoadCredential only)"
 run install -d -m 0755 -o root -g root "$ETC"
@@ -105,6 +112,19 @@ else
   unset svc_pw agent_pw
 fi
 
+say "4b. operator.env (schema v8 Operator API login; fresh password, applied to PostgreSQL by fleet-db-setup.sh)"
+if [[ -L "$ETC/operator.env" ]]; then
+  echo "  $ETC/operator.env is a symlink; refusing" >&2; exit 1
+elif [[ -f "$ETC/operator.env" ]]; then
+  echo "  (exists — left unchanged)"; run chown root:automaton-fleet-operator-api "$ETC/operator.env"; run chmod 0640 "$ETC/operator.env"
+else
+  op_pw="$(openssl rand -hex 32)"
+  printf '# Operator API DB credential (restricted, read-only op_* role). Never give this to the service, agents or bridges.\nFLEET_OPERATOR_DATABASE_URL=postgresql://fleet_operator_login:%s@%s:%s/%s\n' \
+    "$op_pw" "$DB_HOST" "$DB_PORT" "$DB_NAME" |
+    put 0640 root:automaton-fleet-operator-api "$ETC/operator.env"
+  unset op_pw
+fi
+
 say "5. runtime.env (non-secret; fill FLEET_RUNTIME_* after the fork is published and built)"
 if [[ -f "$ETC/runtime.env" ]]; then
   echo "  (exists — left unchanged)"
@@ -120,7 +140,11 @@ say "7. systemd units (installed, NOT enabled or started)"
 run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-fleet.service" /etc/systemd/system/automaton-fleet.service
 run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-agent.service" /etc/systemd/system/automaton-agent.service
 run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-fleet-witness.service" /etc/systemd/system/automaton-fleet-witness.service
+run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-fleet-operator-api.service" /etc/systemd/system/automaton-fleet-operator-api.service
 run systemctl daemon-reload
+
+say "7b. logrotate (D-9 bounded JSONL audit retention)"
+run install -m 0644 -o root -g root "$REPO/deploy/logrotate/automaton-fleet" /etc/logrotate.d/automaton-fleet
 
 say "8. Remove controller secrets from the repository .env.fleet (root-only backup kept)"
 if grep -qE '^[[:space:]]*(DATABASE_URL|FLEET_CONTROLLER_DATABASE_URL|FLEET_ADMIN_DATABASE_URL|REDIS_URL)[[:space:]]*=' "$REPO/.env.fleet" 2>/dev/null; then

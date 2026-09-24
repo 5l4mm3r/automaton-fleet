@@ -500,7 +500,7 @@ describe.skipIf(!PG_BIN)("Fleet security policy: Phase 6 control plane, provisio
 
   // ── Part A: migrations
 
-  it("migration v1 -> v5 -> v6 -> v7: verified transactionally (rolled back), then applied; data preserved; privileges still least", async () => {
+  it("migration v1 -> v5 -> v6 -> v7 -> v8: verified transactionally (rolled back), then applied; data preserved; privileges still least", async () => {
     const schema = "fleet_mig_v1";
     const c = await ownerRaw.connect();
     try {
@@ -519,15 +519,15 @@ describe.skipIf(!PG_BIN)("Fleet security policy: Phase 6 control plane, provisio
     const store = track(new PgFleetStore({ connectionString: pgc.ownerUrl, schema }));
     expect((await store.health()).schemaVersion).toBe(1);
     const check = await store.migrateCheck();
-    expect(check).toEqual({ currentVersion: 1, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: [2, 3, 4, 5, 6, 7] });
+    expect(check).toEqual({ currentVersion: 1, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: [2, 3, 4, 5, 6, 7, 8] });
     expect((await store.health()).schemaVersion).toBe(1); // rolled back
-    expect(await store.migrate()).toEqual([2, 3, 4, 5, 6, 7]);
+    expect(await store.migrate()).toEqual([2, 3, 4, 5, 6, 7, 8]);
     const h = await store.health();
-    expect(h.schemaVersion).toBe(7);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(7);
+    expect(h.schemaVersion).toBe(8);
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(8);
     expect((await store.getState()).maxAgents).toBe(2);
     const v5 = await ownerRaw.query(`SELECT version FROM ${schema}.fleet_schema_migrations ORDER BY version`);
-    expect(v5.rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(v5.rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect((await store.auditPrivileges()).problems).toEqual([]);
     expect(await store.migrate()).toEqual([]); // idempotent
     await ownerRaw.query(`DROP SCHEMA ${schema} CASCADE`);
@@ -996,7 +996,7 @@ describe.skipIf(!PG_BIN)("Fleet security policy: Phase 6 control plane, provisio
       const r = await doctor(env);
       expect(r.checklist.filter((c) => !c.ok), formatChecklist(r)).toEqual([]);
       expect(r.checklist.map((c) => c.item)).toEqual([
-        "PostgreSQL roles correct", "schema v7", "controller service active", "privileged secrets protected", "runtime repo pinned",
+        "PostgreSQL roles correct", "schema v8", "controller service active", "privileged secrets protected", "runtime repo pinned",
         "runtime commit pinned", "build ID pinned", "HTTPS valid", "remote controller reachable", "replay protection working",
         "agent credentials scoped", "payments disabled", "owner sweeps disabled", "fleet cap = 2", "no unresolved orphan", "no stuck reservation",
       ]);

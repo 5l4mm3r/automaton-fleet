@@ -34,6 +34,15 @@
  *   pnpm fleet:admin reap | reservations
  *   pnpm fleet:admin release <agentId> [reason]
  *   pnpm fleet:admin mark-dead <agentId> [reason]
+ *   pnpm fleet:admin grant-operator-role [role]       (schema v8; normally done by migrate)
+ *   pnpm fleet:admin operator-enroll <name> <bridge_claude|bridge_chatgpt> --scopes a,b --public-key <b64url> --expires-days N
+ *   pnpm fleet:admin operator-add-key <principalId> --public-key <b64url> --expires-days N
+ *   pnpm fleet:admin operator-revoke-key <keyId> <reason…>
+ *   pnpm fleet:admin operator-revoke <principalId> <reason…>
+ *   pnpm fleet:admin operator-revoke-all <reason…>   (revokes everything AND disables the API)
+ *   pnpm fleet:admin operator-api enable|disable <reason…>
+ *   pnpm fleet:admin operator-list
+ *   pnpm fleet:admin operator-archive --before <ISO time> --out <new file> [--max-rows N<=100000]
  *   pnpm fleet:admin enroll-witness-root <name> <credentialFile>
  *                                     root with capability scope 'witness' (FLEET-KI-4): keyless address,
  *                                     approved runtime commit, custody frozen; refuses an existing file
@@ -67,6 +76,8 @@ import { createConwayClient } from "../../conway/client.js";
 import type { ConwayClient } from "../../types.js";
 import { redactDetail, redactText } from "../redact.js";
 import { scanAuditFile } from "../redact-scan.js";
+import { PgOperatorAdmin } from "../operator/admin.js";
+import type { OperatorKind, OperatorScope } from "../operator/route-policy.js";
 
 /** Operator Conway client (CONWAY_API_KEY / CONWAY_API_URL); null when not configured. */
 function operatorConway(e: Record<string, string | undefined>): ConwayClient | null {
@@ -163,6 +174,66 @@ export async function enrollWitnessRoot(
 
 export { readEnvFile };
 
+const OPERATOR_COMMANDS = new Set([
+  "operator-enroll",
+  "operator-add-key",
+  "operator-revoke-key",
+  "operator-revoke",
+  "operator-revoke-all",
+  "operator-api",
+  "operator-list",
+  "operator-archive",
+]);
+
+/** Operator principal lifecycle (schema v8). Public keys only; private keys stay on the bridge host. */
+export async function runOperatorCommand(cmd: string, rest: string[], admin: PgOperatorAdmin, actor: string): Promise<unknown> {
+  const positional = rest.filter((a, i) => !a.startsWith("--") && !(i > 0 && rest[i - 1].startsWith("--")));
+  const days = (v: string | undefined) => {
+    const n = Number(v);
+    if (!Number.isInteger(n)) throw new Error("--expires-days N (1..90) is required");
+    return n;
+  };
+  const reason = (from: number) => positional.slice(from).join(" ").trim() || "operator decision";
+  switch (cmd) {
+    case "operator-enroll": {
+      const [name, kind] = positional;
+      const scopes = (argValue(rest, "--scopes") ?? "").split(",").map((s) => s.trim()).filter(Boolean) as OperatorScope[];
+      const publicKey = argValue(rest, "--public-key");
+      if (!name || !kind || !publicKey) throw new Error("usage: operator-enroll <name> <bridge_claude|bridge_chatgpt> --scopes a,b --public-key <b64url> --expires-days N");
+      return admin.enroll({ name, kind: kind as OperatorKind, scopes, publicKey, expiresDays: days(argValue(rest, "--expires-days")), actor });
+    }
+    case "operator-add-key": {
+      const publicKey = argValue(rest, "--public-key");
+      if (!positional[0] || !publicKey) throw new Error("usage: operator-add-key <principalId> --public-key <b64url> --expires-days N");
+      return admin.addKey({ principalId: positional[0], publicKey, expiresDays: days(argValue(rest, "--expires-days")), actor });
+    }
+    case "operator-revoke-key":
+      if (!positional[0]) throw new Error("usage: operator-revoke-key <keyId> <reason…>");
+      return admin.revokeKey({ keyId: positional[0], reason: reason(1), actor });
+    case "operator-revoke":
+      if (!positional[0]) throw new Error("usage: operator-revoke <principalId> <reason…>");
+      return admin.revokePrincipal({ principalId: positional[0], reason: reason(1), actor });
+    case "operator-revoke-all":
+      return admin.revokeAll({ reason: reason(0), actor });
+    case "operator-api": {
+      const mode = positional[0];
+      if (mode !== "enable" && mode !== "disable") throw new Error("usage: operator-api enable|disable <reason…>");
+      return admin.setEnabled({ enabled: mode === "enable", reason: reason(1), actor });
+    }
+    case "operator-list":
+      return admin.list();
+    case "operator-archive": {
+      const before = argValue(rest, "--before");
+      const out = argValue(rest, "--out");
+      const maxRows = argValue(rest, "--max-rows");
+      if (!before || !out || !Number.isFinite(Date.parse(before))) throw new Error("usage: operator-archive --before <ISO time> --out <new file> [--max-rows N]");
+      return admin.archive({ before: new Date(before), outFile: out, actor, maxRows: maxRows === undefined ? undefined : Number(maxRows) });
+    }
+    default:
+      throw new Error(`unknown operator command ${cmd}`);
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
   if (cmd === "build-identity") {
@@ -239,6 +310,22 @@ async function main(argv: string[]): Promise<number> {
     return 2;
   }
   const actor = `operator:${os.userInfo().username}`;
+  if (OPERATOR_COMMANDS.has(cmd)) {
+    const admin = new PgOperatorAdmin({
+      connectionString: (e.FLEET_ADMIN_DATABASE_URL || e.FLEET_CONTROLLER_DATABASE_URL || e.DATABASE_URL)!.trim(),
+      schema: e.FLEET_PG_SCHEMA?.trim() || undefined,
+    });
+    try {
+      console.log(JSON.stringify(await runOperatorCommand(cmd, rest, admin, actor), null, 2));
+      return 0;
+    } catch (err) {
+      console.error(redactText(err instanceof Error ? err.message : String(err)));
+      return 1;
+    } finally {
+      await admin.close();
+      await store.close();
+    }
+  }
   if (TREASURY_COMMANDS.has(cmd)) {
     const ts = new PgTreasuryStore({
       connectionString: (e.FLEET_ADMIN_DATABASE_URL || e.FLEET_CONTROLLER_DATABASE_URL || e.DATABASE_URL)!.trim(),
@@ -451,11 +538,16 @@ async function main(argv: string[]): Promise<number> {
         console.log(`granted controller API to ${rest[0] || store.serviceRole}`);
         return 0;
       }
+      case "grant-operator-role": {
+        await store.grantOperatorRole(rest[0] || store.operatorRole);
+        console.log(`granted the read-only Operator API to ${rest[0] || store.operatorRole}`);
+        return 0;
+      }
       case "audit-privileges": {
         const r = await store.auditPrivileges();
         console.log(JSON.stringify(r, null, 2));
         if (!r.ok) console.error(`FAIL: ${r.problems.length} privilege problem(s):\n  - ${r.problems.join("\n  - ")}`);
-        else console.error("PASS: agent and service roles are least-privilege.");
+        else console.error("PASS: agent, service and operator roles are least-privilege.");
         return r.ok ? 0 : 1;
       }
       case "terminations": {
@@ -487,7 +579,8 @@ async function main(argv: string[]): Promise<number> {
         console.error(
           "usage: fleet:admin migrate|health|status|set-cap N|set-mode MODE|approve-runtime|clear-runtime|build-identity DIR|" +
             "set-replication on|off|set-timeouts k=S…|enroll-root WALLET NAME|rotate-credential ID|grant-agent-role|grant-service-role|" +
-            "audit-privileges|doctor|terminations|reap|reservations|release ID|mark-dead ID|audit-scan FILE…",
+            "audit-privileges|doctor|terminations|reap|reservations|release ID|mark-dead ID|audit-scan FILE…|" +
+            "grant-operator-role|operator-enroll|operator-add-key|operator-revoke-key|operator-revoke|operator-revoke-all|operator-api|operator-list|operator-archive",
         );
         return 2;
     }

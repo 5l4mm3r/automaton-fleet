@@ -1,6 +1,6 @@
 # Phase B — FleetController Operator API (design)
 
-Status: **Provisionally accepted (2026-09-24). Not implemented.** Nothing here is deployed.
+Status: **Accepted with B2-1 amendments (2026-09-24). Implemented locally in B2-2 (uncommitted, not deployed).** See §18 for how the implementation reconciles with this design.
 Locked decisions: D-1, D-2, D-3, D-5, D-6, D-7, D-9, D-15, D-16 (see §16.0).
 Baseline: repository `fleet-development` at `9c85e90` (runtime `cdfd70c`, schema v7).
 Scope: design and documentation only. Every schema, role, route, credential and
@@ -264,7 +264,7 @@ so that failures don't reveal which part was wrong.
 | 2 | `METHOD path` is in `OPERATOR_ROUTE_POLICY` | 404 `FLEET_OP_NOT_FOUND` |
 | 3 | Header presence, uniqueness, formats; `Authorization`/`Cookie` absent; body empty | 400 `FLEET_OP_BAD_REQUEST` |
 | 4 | Path and query canonical; parameters allowed | 400 `FLEET_OP_NONCANONICAL` / `FLEET_OP_BAD_PARAM` |
-| 5 | Per-IP auth-failure bucket not exhausted (existing limiter) | 429 `FLEET_OP_RATE_LIMITED` |
+| 5 | (Superseded in B2-3, §18.6: no per-peer bucket; unknown principal/key lookups share one global budget) | 429 `FLEET_OP_RATE_LIMITED` |
 | 6 | `abs(now_ms − timestamp) ≤ 30 000` (D-6) | 401 `FLEET_OP_STALE` |
 | 7 | Principal and key lookup (in-process cache ≤ 30 s, invalidated on revoke through the kill-switch generation, §10.5): principal exists and isn't revoked; key belongs to the principal, isn't revoked, `not_before ≤ now < expires_at`; principal kind allowed for the route | 401 `FLEET_OP_AUTH_FAILED` (the same code for unknown principal, unknown key, revoked, expired or wrong kind; the specific reason goes to audit only) |
 | 8 | Ed25519 verify(public_key, canonical_string, signature) | 401 `FLEET_OP_AUTH_FAILED` |
@@ -1238,3 +1238,211 @@ The table below is the original analysis. Where it differs from §16.0, **§16.0
 - **Default deny:** An unknown route, scope, kind, principal, key, parameter or event
   type always fails closed. The kill switch defaults to off after every migration that
   creates it.
+
+---
+
+## 18. B2-2 implementation reconciliation (2026-09-24)
+
+Local implementation only. Nothing is committed, pinned or deployed. Production
+still runs B0 (`03f8760`, schema v7).
+
+### 18.1 Where the code lives
+
+| Concern | File |
+|---|---|
+| Schema v8 (tables, guards, `op_*`, archival) | `src/fleet/postgres/migrations-phase8.ts` |
+| Version, allow-lists (`OPERATOR_API_FUNCTIONS`, `OPERATOR_READ_FUNCTIONS`, `OPERATOR_BOOKKEEPING_TABLES`) | `src/fleet/postgres/migrations.ts` |
+| Role grant (`grantOperatorRole`) and `operatorOverview` | `src/fleet/postgres/store.ts` |
+| Operator privilege audit (`operatorSurfaceProblems`, `writeTargets`) | `src/fleet/postgres/privileges.ts` |
+| Canonical request, signatures, key IDs | `src/fleet/operator/canonical.ts` |
+| Route, scope and function policy | `src/fleet/operator/route-policy.ts` |
+| Typed responses, `untrusted_text`, per-item redaction | `src/fleet/operator/responses.ts` |
+| HTTP service (verification order, limits, audit) | `src/fleet/operator/server.ts` |
+| Process entry (environment isolation, startup refusals, readiness) | `src/fleet/operator/main.ts` |
+| Operator database login gateway | `src/fleet/operator/gateway.ts` |
+| Owner-side administration (enroll, keys, revoke, kill switch, archive) | `src/fleet/operator/admin.ts`, `src/fleet/postgres/cli.ts` |
+| Bridge key generation | `src/fleet/operator/keygen.ts` |
+| Roles and passwords | `scripts/fleet-db-roles.sql`, `scripts/fleet-db-setup.sh` |
+| OS user, unit, logrotate | `scripts/fleet-os-setup.sh`, `deploy/systemd/automaton-fleet-operator-api.service`, `deploy/logrotate/automaton-fleet`, `deploy/etc/operator.env.example` |
+| Deployment and doctor checks | `scripts/fleet-verify-deployment.sh`, `src/fleet/doctor.ts` |
+| Tests | `src/__tests__/fleet/operator-{canonical,pg,server}.test.ts` (`pnpm test:operator`) |
+
+### 18.2 Signature-termination invariant (Amendment 2, normative)
+
+PostgreSQL cannot independently authenticate a signed operator request: the
+Ed25519 signature ends in the Operator API process (§6.4). While that is true,
+the operator database role and the `op_*` surface MUST remain observational
+(read-only) with respect to fleet and business state. A future mutating scope
+(for example `ops.propose`) MUST NOT be added merely by extending the scope or
+route tables. Introducing any mutating operator capability requires a separate
+security-design gate that first moves verification (or an equivalent
+independent check) to where the mutation is authorised.
+
+It is enforced by construction and by tests:
+
+- `fleet_operator_routes.fn` has a CHECK limited to the five read functions, and
+  the route table is immutable (trigger), so route metadata cannot name an
+  arbitrary function.
+- `verifyRoutePolicy` (application) rejects any function outside
+  `OPERATOR_READ_FUNCTIONS`, any non-GET or non-`/v1/operator` route, unknown
+  scopes and ChatGPT access to events. The service fails closed if the function
+  returned by `op_begin_request` differs from the matched route's function.
+- The operator role has EXECUTE only on the eight `OPERATOR_API_FUNCTIONS`, no
+  table privileges and no membership in another fleet role.
+- `operatorSurfaceProblems` (run by `audit-privileges`, doctor and Operator API
+  startup/readiness) fails if a read-side `op_*` function is VOLATILE, contains a
+  write statement or calls a volatile function; if `op_begin_request` writes any
+  table outside `OPERATOR_BOOKKEEPING_TABLES` or calls a volatile function other
+  than `fleet_event`; if an unexpected `op_*` function exists; or if a route maps
+  to a non-read function.
+- Tests (`operator-pg.test.ts`) apply deliberate catalog mutations (a VOLATILE
+  read function, a write inside a read function, an extra `op_*` function, a
+  grant on an admin/service function, a route to an unknown or mutating
+  function) and require the audit or the constraint to reject each one.
+
+### 18.3 Amendment 3: what an accepted request may write
+
+`op_begin_request` writes only: the nonce row, the request audit row, the
+bounded request counter in `fleet_operator_state`, a purge of at most 1000
+expired nonces, and (on denial) one `fleet_events` row. The PostgreSQL test
+snapshots every table in the fleet schema before and after an accepted read and
+requires that only those tables changed.
+
+### 18.4 Amendment 1: request-audit retention
+
+- Hard cap `OPERATOR_REQUEST_CAP = 2,000,000` rows (CHECK on
+  `fleet_operator_state.request_cap`).
+- Doctor reports 50% as an informational early warning, 75% as ELEVATED, 100%
+  as FULL (fail). `/v1/operator/status` reports the same level.
+- At 100% `op_begin_request` fails closed with `FLEET_OP_AUDIT_FULL` (HTTP 503).
+- Nothing deletes request rows automatically. Plain DELETE and TRUNCATE are
+  refused even for the owner. The DELETE guard allows removal only inside
+  `fleet_operator_archive_requests`. No other fleet role (operator, service,
+  agent) can execute the archival functions or has DML on the request or state
+  tables, so setting the bypass flag gains them nothing.
+- Archival (`fleet:admin operator-archive --before <ts> --out <file>
+  [--max-rows N]`) handles at most 100,000 rows per call, oldest first, and
+  fails closed:
+  1. `fleet_operator_archive_export` returns canonical JSON lines (UTC
+     microsecond timestamps) for the batch.
+  2. The CLI writes them to a new file (O_EXCL, O_NOFOLLOW, mode 0600) in a
+     private directory (real, not group- or world-writable), then fsyncs it.
+     If the write fails, the partial file is removed.
+  3. The CLI reads the file back and checks that it is a regular file, mode
+     0600, owned by the operator, with one link, and has the expected size,
+     line count and SHA-256.
+  4. `fleet_operator_archive_requests` locks and re-selects the same rows and
+     recomputes the SHA-256 of their canonical lines. It deletes them only if
+     both the row count and the digest equal the export. It requires an
+     `operator:` actor and a cutoff at least one minute in the past, then
+     decrements the counter and writes `operator_requests_archived` (cutoff,
+     rows, remaining, export digest; no row contents).
+  Any error, mismatch or change to the file or rows between the steps raises.
+  The transaction then leaves every row intact. A failure after the export
+  exists also writes `operator_requests_archive_failed` (stage, rows, cutoff).
+  Tests cover each failure mode, and mutation runs confirm each check is needed
+  (`operator-pg.test.ts`, "archival is owner-only…").
+
+### 18.5 Deviations from the design and B2-1
+
+1. **No `LoadCredential` for the Operator API.** The design assumed a systemd
+   credential. Using one would need the verified 0440 credential exception to
+   cover a second unit, which the charter forbids. Instead
+   `/etc/automaton-fleet/operator.env` is `root:automaton-fleet-operator-api 0640`
+   and read by `loadOperatorEnv` under the strict secret-file rules, with group
+   read accepted only for that file and group. §15 B-9 ("root 0600") is
+   superseded: `fleet-os-setup.sh` step 4b creates the file and
+   `fleet-db-setup.sh` feeds its password to `fleet-db-roles.sql` on stdin.
+2. **Event detail is nested, not dotted.** B0's redactor exempts public
+   identities (`buildId`, `lockfileSha256`) only under their exact key names, so
+   `eventItem` rebuilds allow-listed paths as nested objects.
+3. **Agent IDs on the wire are lowercase ULIDs** (`wireId` / `dbId`), and
+   `after=` must be lowercase.
+4. **Denials split by layer.** Process-layer denials (malformed, non-canonical,
+   bad signature, rate-limited) go to the operator audit JSONL only. Denials
+   decided in `op_begin_request` also write a `fleet_events` row with
+   `layer: 'database'`.
+5. **Doctor severities.** Operator checks are detailed checks. The 16-item
+   `fleet-verify` checklist is unchanged (F10).
+6. **Redaction is layered.** `untrusted()` applies `redactText`, and every
+   finished item also passes through `redactDetail`. Mutation runs show that
+   removing either one alone is masked by the other, while removing both makes
+   the leak test fail (40 leaks).
+
+### 18.6 B2-3 security review: changes
+
+A review of the whole B2-2 diff led to these changes. Each has a test, and
+mutation runs show each test fails without its fix.
+
+- **Runtime read-only barrier.** Every `op_*` read (and `op_ping`,
+  `op_key_material`) runs in its own `BEGIN TRANSACTION READ ONLY`. STABLE does
+  not stop writes made through a volatile callee or dynamic SQL; the READ ONLY
+  transaction does. Only `op_begin_request` runs read-write.
+- **Static audit hardened** (`operatorSurfaceProblems`). It now rejects:
+  dynamic SQL (`EXECUTE`), quoted identifiers, side-effecting built-ins
+  (`nextval`, `set_config`, `pg_notify`, advisory locks, `lo_*`, `dblink*`, …),
+  calls to functions in other user schemas, and read-side calls to fleet
+  functions outside the read helpers. `writeTargets` also sees quoted names,
+  `MERGE`, `TRUNCATE` and `COPY`, and ignores string literals and `FOR UPDATE` /
+  `DO UPDATE`.
+- **Archival** is verified before deletion (§18.4).
+- **Key guard** locks the principal row before it tests revocation, so a
+  concurrent revocation cannot be missed.
+- **Denial events** from `op_begin_request` are capped at 60 per rolling minute.
+  The denials themselves always stand.
+- **Rate limits.** The per-peer auth-failure bucket is gone: every tunnel client
+  shares 127.0.0.1, so one client could lock out all principals. Lookups of
+  principal/key pairs never seen valid now share one global budget
+  (`unknownKeyLookups`). Pairs already known valid skip it, and bad signatures
+  cost no database work. Denied-request audit lines are budgeted, and the
+  excess is summarised as `operator_request_denied_suppressed`.
+- **`/healthz` and `/readyz`** require a loopback `Host` header (DNS rebinding).
+  Readiness is computed at most once per poll interval and shared.
+- **`operator.env`** must be root-owned, group = the service's own primary
+  group, one link, no symlink in its path (`operatorEnvFileProblems`). Other
+  secret files still refuse group read, and the systemd-credential exception is
+  unchanged.
+- **Startup.** The DSN must be exactly `fleet_operator_login` (override
+  `FLEET_OPERATOR_DB_LOGIN`), and the connected login is included in the
+  privilege audit. `FLEET_OPERATOR_EXPECTED_USER` is required when
+  `NODE_ENV=production`. More credentials are forbidden in the environment
+  (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `FLEET_CREDENTIALS_FILE`,
+  `CREDENTIALS_DIRECTORY`), and more controller and witness secret paths must be
+  unreadable.
+- **Safety flags in `/status`** are `null` (unknown) when `runtime.env` cannot
+  be read. They are never reported as "off", and the source is labelled.
+- **Keys.** `requirePrivateDirectory` requires the directory to be owned by the
+  current user. `loadOperatorPrivateKey` opens with `O_NOFOLLOW`, then checks
+  and reads the same descriptor (owner, mode, one link).
+- **Roles script.** `fleet-db-roles.sql` stops its password statements reaching
+  the server log (`log_statement`, `log_min_error_statement`,
+  `log_min_duration_statement` for that session).
+- **Command safety.** The pattern no longer matches unrelated `*-operator-*`
+  names. It now also covers `:8788` and `/v1/operator/`.
+- **`fleet-verify-deployment.sh`.** The NTP and timesync-marker checks run only
+  when the Operator API user exists, so a host without the Operator API sees no
+  change. `operator.env` is checked against the full forbidden-credential list.
+
+### 18.7 Remaining limitations (accepted for v1)
+
+- §6.4 still applies. Holding the `fleet_operator_login` password gives read
+  access to what the enrolled principals' scopes expose, without any signature:
+  principal and key IDs are not secret, and a request ID can be reused for its
+  own function for 30 s with any parameters. It never gives write access to
+  fleet state (§18.2, and the READ ONLY barrier above). FLEET-KI-5.
+- Pre-existing for every fleet login, and not changed here (a database-wide
+  change that needs its own gate): a login can take advisory locks (including
+  the migration lock key), create large objects, override its per-role
+  timeouts, and connect to other databases unless `pg_hba` restricts it.
+  FLEET-KI-5.
+- While junk identities have exhausted the unknown-lookup budget, the first
+  request from a principal this process has never seen valid gets 429 until
+  the budget refills (20 per minute).
+- Rate limiters and the known-pair set are in process memory and reset on
+  restart.
+- Clock readiness needs the systemd-timesyncd marker
+  (`/run/systemd/timesync/synchronized`) plus a 5 s database skew check. A host
+  using another NTP daemon must set `FLEET_OPERATOR_TIMESYNC_MARKER`, and
+  `fleet-verify-deployment.sh` reports whether the marker exists.
+- The password statements can still reach `pg_stat_statements`, if that
+  extension is installed.

@@ -21,6 +21,8 @@ export interface EphemeralPg {
   ownerUrl: string;
   agentUrl: string;
   serviceUrl: string;
+  /** Schema v8 read-only Operator API login. */
+  operatorUrl: string;
   superUrl: string;
   /** Re-run scripts/fleet-db-roles.sql (idempotency tests). */
   applyRoles(): void;
@@ -65,6 +67,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
   const ownerPw = randomBytes(12).toString("hex");
   const agentPw = randomBytes(12).toString("hex");
   const servicePw = randomBytes(12).toString("hex");
+  const operatorPw = randomBytes(12).toString("hex");
   const pwfile = path.join(dir, "pw");
   fs.writeFileSync(pwfile, superPw + "\n", { mode: 0o600 });
   execFileSync(path.join(bin, "initdb"), ["-D", data, "-U", "postgres", "--pwfile", pwfile, "--auth=scram-sha-256", "-E", "UTF8"], {
@@ -98,7 +101,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       psql(
         superUrl,
         ["-v", `dbname=${dbname}`, "-v", "owner=fleet_owner", "-f", "-"],
-        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n` +
+        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n` +
           fs.readFileSync(path.resolve("scripts/fleet-db-roles.sql"), "utf8"),
       );
     // Owner: like production fleetadmin — not a superuser, cannot create roles.
@@ -112,6 +115,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       ownerUrl: `postgresql://fleet_owner:${ownerPw}@127.0.0.1:${port}/${dbname}`,
       agentUrl: `postgresql://fleet_agent_login:${agentPw}@127.0.0.1:${port}/${dbname}`,
       serviceUrl: `postgresql://fleet_service_login:${servicePw}@127.0.0.1:${port}/${dbname}`,
+      operatorUrl: `postgresql://fleet_operator_login:${operatorPw}@127.0.0.1:${port}/${dbname}`,
       applyRoles,
       stop,
     };

@@ -56,6 +56,7 @@ import { migrateCheck,
   AGENT_API_FUNCTIONS,
   FLEET_PG_HARD_MAX_AGENTS,
   FLEET_PG_SCHEMA_VERSION,
+  OPERATOR_API_FUNCTIONS,
   SERVICE_API_FUNCTIONS,
   SERVICE_READ_TABLES,
   migrate,
@@ -69,6 +70,8 @@ export const DEFAULT_FLEET_PG_SCHEMA = "fleet";
 export const DEFAULT_RESERVATION_TTL_MS = 30 * 60_000;
 export const DEFAULT_AGENT_ROLE = "fleet_agent";
 export const DEFAULT_SERVICE_ROLE = "fleet_service";
+/** Schema v8: read-only Operator API role (granted op_* only). */
+export const DEFAULT_OPERATOR_ROLE = "fleet_operator";
 
 export interface FleetTimeouts {
   reservationTtlS: number;
@@ -183,6 +186,8 @@ export interface PgFleetStoreOptions {
   agentRole?: string;
   /** Restricted controller role granted the service API on migrate (if it exists). */
   serviceRole?: string;
+  /** Read-only Operator API role granted op_* on migrate (if it exists). */
+  operatorRole?: string;
   /** application_name reported to PostgreSQL. */
   applicationName?: string;
 }
@@ -390,6 +395,7 @@ export class PgFleetStore {
   readonly schema: string;
   readonly agentRole: string;
   readonly serviceRole: string;
+  readonly operatorRole: string;
   private readonly pool: Pool;
   private readonly reservationTtlMs: number | null;
   private readonly provisioningTtlMs: number | null;
@@ -405,6 +411,8 @@ export class PgFleetStore {
     quoteIdent(this.agentRole);
     this.serviceRole = opts.serviceRole ?? DEFAULT_SERVICE_ROLE;
     quoteIdent(this.serviceRole);
+    this.operatorRole = opts.operatorRole ?? DEFAULT_OPERATOR_ROLE;
+    quoteIdent(this.operatorRole);
     const lockMs = opts.lockTimeoutMs ?? 5_000;
     const stmtMs = opts.statementTimeoutMs ?? 10_000;
     this.pool = new pg.Pool({
@@ -434,6 +442,7 @@ export class PgFleetStore {
       schema: env.FLEET_PG_SCHEMA?.trim() || undefined,
       agentRole: env.FLEET_AGENT_ROLE?.trim() || undefined,
       serviceRole: env.FLEET_SERVICE_ROLE?.trim() || undefined,
+      operatorRole: env.FLEET_OPERATOR_ROLE?.trim() || undefined,
       applicationName: "automaton-fleet-admin",
     });
   }
@@ -556,11 +565,12 @@ export class PgFleetStore {
       client.release();
     }
     const roles = await this.pool
-      .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole]])
+      .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole]])
       .catch(() => null);
     const present = new Set(roles?.rows.map((r) => r.rolname) ?? []);
     if (present.has(this.agentRole)) await this.grantAgentRole(this.agentRole);
     if (present.has(this.serviceRole)) await this.grantServiceRole(this.serviceRole);
+    if (present.has(this.operatorRole)) await this.grantOperatorRole(this.operatorRole);
     return applied;
   }
 
@@ -799,6 +809,77 @@ export class PgFleetStore {
         functions: [...SERVICE_API_FUNCTIONS],
       });
     });
+  }
+
+  /**
+   * Operator-only (schema v8): give `role` exactly the read-only Operator API —
+   * USAGE on the schema and EXECUTE on OPERATOR_API_FUNCTIONS. No table,
+   * sequence or other function privilege. Re-running is harmless.
+   */
+  async grantOperatorRole(role: string = this.operatorRole): Promise<void> {
+    const r = quoteIdent(role);
+    const s = quoteIdent(this.schema);
+    await this.tx(async (c) => {
+      const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
+      if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
+      await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
+      for (const fn of OPERATOR_API_FUNCTIONS) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
+      await this.event(c, "operator_role_granted", null, "operator", { role, functions: [...OPERATOR_API_FUNCTIONS] });
+    });
+  }
+
+  /**
+   * Operator API overview for doctor (schema v8). Needs the admin (owner)
+   * credential; returns null when the tables are not visible (e.g. doctor
+   * runs with the service credential).
+   */
+  async operatorOverview(): Promise<{
+    enabled: boolean;
+    generation: number;
+    requestCount: number;
+    requestCap: number;
+    activePrincipals: number;
+    activeKeys: number;
+    keysExpiringSoon: number;
+    recentDenials: number;
+  } | null> {
+    try {
+      return await this.read(async (c) => {
+        const r = await c.query<{
+          enabled: boolean; generation: string; request_count: string; request_cap: string;
+          principals: string; keys: string; expiring: string; denials: string;
+        }>(
+          `SELECT s.operator_api_enabled AS enabled, s.generation, s.request_count, s.request_cap,
+                  (SELECT count(*) FROM fleet_operator_principals WHERE revoked_at IS NULL) AS principals,
+                  (SELECT count(*) FROM fleet_operator_keys k JOIN fleet_operator_principals p USING (principal_id)
+                    WHERE k.revoked_at IS NULL AND p.revoked_at IS NULL AND now() < k.expires_at) AS keys,
+                  (SELECT count(*) FROM fleet_operator_keys k JOIN fleet_operator_principals p USING (principal_id)
+                    WHERE k.revoked_at IS NULL AND p.revoked_at IS NULL AND now() < k.expires_at
+                      AND k.expires_at < now() + interval '14 days') AS expiring,
+                  (SELECT count(*) FROM fleet_events WHERE event_type IN ('operator_auth_failed','operator_scope_denied','operator_replay_blocked','operator_stale')
+                    AND created_at > now() - interval '10 minutes') AS denials
+             FROM fleet_operator_state s WHERE s.id = 1`,
+        );
+        const row = r.rows[0];
+        if (!row) return null;
+        return {
+          enabled: row.enabled,
+          generation: Number(row.generation),
+          requestCount: Number(row.request_count),
+          requestCap: Number(row.request_cap),
+          activePrincipals: Number(row.principals),
+          activeKeys: Number(row.keys),
+          keysExpiringSoon: Number(row.expiring),
+          recentDenials: Number(row.denials),
+        };
+      });
+    } catch {
+      return null;
+    }
   }
 
   // ─── Registration ──────────────────────────────────────────────
