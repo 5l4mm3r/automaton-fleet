@@ -146,7 +146,7 @@ export class PgOperatorGateway implements OperatorGateway {
     // The connected login is audited too, whatever its name.
     const who = (await this.pool.query<{ u: string }>("SELECT current_user AS u")).rows[0].u;
     const roles = [...new Set([...DEFAULT_OPERATOR_ROLES, who])];
-    return auditPrivileges(this.pool, { schema, agentRoles: [], serviceRoles: [], operatorRoles: roles });
+    return auditPrivileges(this.pool, { schema, agentRoles: [], serviceRoles: [], operatorRoles: roles, requireOperatorRoles: true });
   }
 
   async close(): Promise<void> {

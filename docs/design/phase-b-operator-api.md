@@ -1423,6 +1423,18 @@ mutation runs show each test fails without its fix.
   when the Operator API user exists, so a host without the Operator API sees no
   change. `operator.env` is checked against the full forbidden-credential list.
 
+- **Operator roles are optional until provisioned** (found at the B2-7
+  preflight). Production gets schema v8 before the operator roles exist
+  (runbook B2-9). When *neither* `fleet_operator` nor `fleet_operator_login`
+  exists, `auditPrivileges` reports `operatorRoles: "not_provisioned"` and no
+  problem: a role that does not exist holds no privilege. `audit-privileges`,
+  doctor and the "PostgreSQL roles correct" checklist item say
+  "operator roles: not provisioned". If either role exists, both are required
+  and every operator check applies. The Operator API's own self-check
+  (`requireOperatorRoles`) always requires them. The operator function
+  surface (`operatorSurfaceProblems`) is audited in either state. Agent and
+  service checks are unchanged.
+
 ### 18.7 Remaining limitations (accepted for v1)
 
 - §6.4 still applies. Holding the `fleet_operator_login` password gives read

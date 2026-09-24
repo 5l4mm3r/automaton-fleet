@@ -730,3 +730,119 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
     expect(n).toBeLessThanOrEqual(60);
   });
 });
+
+describe.skipIf(!PG_BIN)("B2 operator roles: not provisioned vs provisioned (own cluster)", () => {
+  let pgc: EphemeralPg;
+  let su: pg.Pool;
+  let store: PgFleetStore;
+
+  const dropOperatorRoles = async () => {
+    for (const r of ["fleet_operator_login", "fleet_operator"]) {
+      const exists = (await su.query(`SELECT 1 FROM pg_roles WHERE rolname = $1`, [r])).rowCount;
+      if (!exists) continue;
+      await su.query(`DROP OWNED BY ${r} CASCADE`);
+      await su.query(`DROP ROLE ${r}`);
+    }
+  };
+  const audit = () => store.auditPrivileges();
+  const doctor = () =>
+    runDoctor({ env: {}, store, fetchImpl: (async () => { throw new Error("offline"); }) as unknown as typeof fetch, serviceActive: async () => null });
+
+  beforeAll(async () => {
+    pgc = await startEphemeralPg(PG_BIN!);
+    const u = new URL(pgc.superUrl);
+    u.pathname = `/${pgc.dbname}`;
+    su = new pg.Pool({ connectionString: u.toString(), max: 2 }); // superuser, in the fleet database
+    store = new PgFleetStore({ connectionString: pgc.ownerUrl });
+    await dropOperatorRoles(); // the production state before B2-9: v8 schema, no operator roles
+    await store.migrate();
+    await store.setApprovedRuntime(PIN, "test", BUILD);
+  }, 90_000);
+
+  afterAll(async () => {
+    await store?.close();
+    await su?.end();
+    pgc?.stop();
+  });
+
+  it("neither role exists: a valid not-provisioned state across audit, doctor and the 16-item checklist", async () => {
+    const a = await audit();
+    expect(a.problems).toEqual([]);
+    expect(a.ok).toBe(true);
+    expect(a.operatorRoles).toBe("not_provisioned");
+    expect(a.roles.filter((r) => r.kind === "operator").map((r) => [r.role, r.exists])).toEqual([["fleet_operator", false], ["fleet_operator_login", false]]);
+    // Agent/service checks are unchanged and still run.
+    expect(a.roles.filter((r) => r.kind !== "operator" && r.exists).map((r) => r.role).sort()).toEqual(["fleet_agent", "fleet_agent_login", "fleet_service", "fleet_service_login"]);
+    const d = await doctor();
+    expect(d.checks.find((c) => c.name === "database privileges")).toMatchObject({ status: "pass", detail: expect.stringMatching(/operator roles: not provisioned/) });
+    expect(d.checklist.find((c) => c.item === "PostgreSQL roles correct")).toMatchObject({ ok: true, detail: expect.stringMatching(/operator roles: not provisioned/) });
+    // The Operator API's own self-check still demands its roles.
+    const strict = await store.auditPrivileges({ requireOperatorRoles: true });
+    expect(strict.ok).toBe(false);
+    expect(strict.operatorRoles).toBe("incomplete");
+    expect(strict.problems.join("\n")).toMatch(/role fleet_operator does not exist/);
+    // The operator function surface is still audited while the roles are absent.
+    const c = await su.connect();
+    try {
+      await c.query("BEGIN");
+      await c.query(`ALTER FUNCTION fleet.op_fleet_status(uuid) VOLATILE`);
+      const { auditPrivileges } = await import("../../fleet/postgres/privileges.js");
+      expect((await auditPrivileges(c, { schema: "fleet" })).problems.join("\n")).toMatch(/op_fleet_status is volatile/);
+    } finally {
+      await c.query("ROLLBACK");
+      c.release();
+    }
+  });
+
+  it("only fleet_operator exists: FAIL", async () => {
+    await su.query(`CREATE ROLE fleet_operator NOLOGIN`);
+    try {
+      const a = await audit();
+      expect(a.ok).toBe(false);
+      expect(a.operatorRoles).toBe("incomplete");
+      expect(a.problems).toContain("role fleet_operator_login does not exist (run scripts/fleet-db-roles.sql)");
+      expect((await doctor()).checklist.find((c) => c.item === "PostgreSQL roles correct")?.ok).toBe(false);
+    } finally {
+      await dropOperatorRoles();
+    }
+  });
+
+  it("only fleet_operator_login exists: FAIL", async () => {
+    await su.query(`CREATE ROLE fleet_operator_login LOGIN`);
+    try {
+      const a = await audit();
+      expect(a.ok).toBe(false);
+      expect(a.operatorRoles).toBe("incomplete");
+      expect(a.problems).toContain("role fleet_operator does not exist (run scripts/fleet-db-roles.sql)");
+    } finally {
+      await dropOperatorRoles();
+    }
+  });
+
+  it("both exist and are correct: PASS (provisioned); wrong privileges or attributes: FAIL", async () => {
+    pgc.applyRoles();
+    await store.migrate(); // grants the operator surface now that the role exists
+    const ok = await audit();
+    expect(ok.problems).toEqual([]);
+    expect(ok.operatorRoles).toBe("provisioned");
+    expect((await doctor()).checks.find((c) => c.name === "database privileges")?.detail).toMatch(/agent\/service\/operator roles least-privilege/);
+
+    await su.query(`GRANT EXECUTE ON FUNCTION fleet.svc_mark_dead(text, text, text, text) TO fleet_operator`);
+    expect((await audit()).problems.join("\n")).toMatch(/fleet_operator can EXECUTE fleet\.svc_mark_dead/);
+    await su.query(`REVOKE EXECUTE ON FUNCTION fleet.svc_mark_dead(text, text, text, text) FROM fleet_operator`);
+
+    await su.query(`ALTER ROLE fleet_operator_login CREATEROLE`);
+    expect((await audit()).problems.join("\n")).toMatch(/fleet_operator_login can create roles/);
+    await su.query(`ALTER ROLE fleet_operator_login NOCREATEROLE`);
+
+    await su.query(`GRANT SELECT ON fleet.fleet_operator_requests TO fleet_operator`);
+    expect((await audit()).ok).toBe(false);
+    await su.query(`REVOKE SELECT ON fleet.fleet_operator_requests FROM fleet_operator`);
+
+    await su.query(`GRANT fleet_service TO fleet_operator_login`);
+    expect((await audit()).problems.join("\n")).toMatch(/fleet_operator_login is a member of fleet_service/);
+    await su.query(`REVOKE fleet_service FROM fleet_operator_login`);
+
+    expect((await audit()).ok).toBe(true);
+  });
+});

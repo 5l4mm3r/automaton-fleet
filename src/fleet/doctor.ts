@@ -257,7 +257,9 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       facts.doctorDbUser = who.user;
       const audit = await store.auditPrivileges();
       facts.privilegeProblems = audit.problems;
-      add("database privileges", audit.ok ? "pass" : "fail", audit.ok ? "agent/service/operator roles least-privilege; operator surface read-only; PUBLIC has nothing" : audit.problems.join("; "));
+      facts.operatorRoles = audit.operatorRoles;
+      const roleText = audit.operatorRoles === "not_provisioned" ? "agent/service roles least-privilege; operator roles: not provisioned" : "agent/service/operator roles least-privilege";
+      add("database privileges", audit.ok ? "pass" : "fail", audit.ok ? `${roleText}; operator surface read-only; PUBLIC has nothing` : audit.problems.join("; "));
       if (!audit.ok) blockers.push("Database privileges are too broad or roles are missing (pnpm fleet:audit-privileges).");
 
       const st = await store.getState();
@@ -456,7 +458,15 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   const checklist: ChecklistItem[] = [];
   const item = (name: string, ok: boolean, detail: string) => checklist.push({ item: name, ok, detail });
   const privOk = Array.isArray(facts.privilegeProblems) && (facts.privilegeProblems as string[]).length === 0;
-  item("PostgreSQL roles correct", dbOk && privOk, privOk ? "agent/service/operator roles least-privilege" : "privilege audit failed or not run");
+  item(
+    "PostgreSQL roles correct",
+    dbOk && privOk,
+    privOk
+      ? facts.operatorRoles === "not_provisioned"
+        ? "agent/service roles least-privilege; operator roles: not provisioned"
+        : "agent/service/operator roles least-privilege"
+      : "privilege audit failed or not run",
+  );
   item(`schema v${FLEET_PG_SCHEMA_VERSION}`, facts.schemaVersion === FLEET_PG_SCHEMA_VERSION, `v${facts.schemaVersion ?? "none"}`);
 
   const unitState = await (deps.serviceActive ?? defaultServiceActive)().catch(() => null);

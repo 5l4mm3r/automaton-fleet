@@ -547,6 +547,7 @@ async function main(argv: string[]): Promise<number> {
         const r = await store.auditPrivileges();
         console.log(JSON.stringify(r, null, 2));
         if (!r.ok) console.error(`FAIL: ${r.problems.length} privilege problem(s):\n  - ${r.problems.join("\n  - ")}`);
+        else if (r.operatorRoles === "not_provisioned") console.error("PASS: agent and service roles are least-privilege; operator roles: not provisioned (Operator API database roles absent; no privileges).");
         else console.error("PASS: agent, service and operator roles are least-privilege.");
         return r.ok ? 0 : 1;
       }

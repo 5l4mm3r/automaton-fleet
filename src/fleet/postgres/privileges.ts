@@ -41,7 +41,18 @@ export interface PrivilegeAuditOptions {
   serviceRoles?: string[];
   /** Schema v8 read-only Operator API roles (default fleet_operator + fleet_operator_login). */
   operatorRoles?: string[];
+  /**
+   * Require the operator roles to exist (the Operator API's own self-check).
+   * Otherwise, when NONE of them exists, the Operator API is simply not
+   * provisioned: a role that does not exist holds no privilege, so this is
+   * not a problem. As soon as any one exists, all must exist and pass every
+   * operator check.
+   */
+  requireOperatorRoles?: boolean;
 }
+
+/** "provisioned": every operator role exists; "not_provisioned": none exists (and not required); "incomplete": some are missing. */
+export type OperatorRoleState = "provisioned" | "not_provisioned" | "incomplete";
 
 export interface PrivilegeAuditResult {
   ok: boolean;
@@ -50,6 +61,7 @@ export interface PrivilegeAuditResult {
   database: string;
   problems: string[];
   roles: Array<{ role: string; kind: RoleKind; exists: boolean; functions: string[]; tables: string[] }>;
+  operatorRoles: OperatorRoleState;
 }
 
 export const DEFAULT_AGENT_ROLES = ["fleet_agent", "fleet_agent_login"];
@@ -76,7 +88,15 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   if (!owner) problems.push(`schema ${schema} does not exist (run fleet:migrate)`);
 
   const roles: PrivilegeAuditResult["roles"] = [];
-  const operatorRoles = opts.operatorRoles ?? DEFAULT_OPERATOR_ROLES;
+  const configuredOperatorRoles = opts.operatorRoles ?? DEFAULT_OPERATOR_ROLES;
+  const presentOperator = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = ANY($1)`, [configuredOperatorRoles]);
+  const operatorPresent = presentOperator.rows[0].n;
+  const operatorState: OperatorRoleState =
+    operatorPresent === configuredOperatorRoles.length ? "provisioned" : operatorPresent === 0 && !opts.requireOperatorRoles ? "not_provisioned" : "incomplete";
+  const operatorRoles = operatorState === "not_provisioned" ? [] : configuredOperatorRoles;
+  if (operatorState === "not_provisioned") {
+    for (const r of configuredOperatorRoles) roles.push({ role: r, kind: "operator", exists: false, functions: [], tables: [] });
+  }
   const allRestricted = [...(opts.agentRoles ?? DEFAULT_AGENT_ROLES), ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES), ...operatorRoles];
   const plan: Array<[string, RoleKind]> = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES).map((r) => [r, "agent"] as [string, RoleKind]),
@@ -226,7 +246,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
 
   if (owner) problems.push(...(await operatorSurfaceProblems(db, schema)));
 
-  return { ok: problems.length === 0, schema, owner, database, problems, roles };
+  return { ok: problems.length === 0, schema, owner, database, problems, roles, operatorRoles: operatorState };
 }
 
 /** A PL/pgSQL/SQL body without comments or string literals (so quotes inside literals don't count). */

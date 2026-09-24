@@ -1134,6 +1134,9 @@ Invariants for the whole stage:
 | B2-12 | Key generated on the dev VM (`fleet:operator-keygen`, private key never leaves it); `operator-enroll bridge-claude` with the public key; fingerprint checked out of band; `operator-api enable`; `whoami` / `status` smoke test through the tunnel; audit rows checked | **database** | no |
 
 Order notes:
+- From B2-7 until B2-9, `audit-privileges` and doctor report "operator roles:
+  not provisioned". That is the expected PASS state. If only one operator role
+  exists, the audit fails.
 - The v8 build refuses a v7 registry and the v7 build refuses v8, so B2-6 to B2-8
   are one coordinated cutover with the same rollback shape as S9b (restore the
   pre-v8 dump and the previous `current` release).
