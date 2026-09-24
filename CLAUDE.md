@@ -126,25 +126,25 @@ Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
 ## Current production deployment
 
-State after S9b (2026-09-24), per docs/fleet-production-runbook.md.
+State after Phase B2 (2026-09-24), per docs/fleet-production-runbook.md.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
 
 Runtime commit:
-cdfd70c842f43c8e3b8576ac07ebcd80cc3d4633
+4d6a0befb97ee64e4ebc6daffe4baa64d6a4b790
 
 Runtime build ID:
-6d0eee3427415918d91d5a88b4fa8814cf1574c141226fb15bc6c7d41ac70d0c
+54beb10104a11888446ed1d09a85f236d87b977558a88514de7600d7dcc83ced
 
 Runtime lockfile SHA256:
 eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811
 
-Previous release kept for rollback:
-11c0c7c02592d43a2c1350b779eaa795a237f3b7 (build e388571a…)
+Previous releases kept for rollback:
+5a5469e, 03f8760 (B0), cdfd70c, 11c0c7c (v7 requires restoring the pre-v8 dump)
 
 Database schema:
-v7
+v8
 
 Controller domain:
 https://api.agentfleet.vip
@@ -153,12 +153,17 @@ Current live topology:
 - production: OVH VPS (ssh alias agentfleet-vps), the only live controller
 - FleetController public HTTPS on 0.0.0.0:443 (Let's Encrypt certificate)
 - FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
+- Operator API (read-only, signed requests) on 127.0.0.1:8788 only, enabled at boot,
+  kill switch on; reached only through the restricted SSH account fleet-op-tunnel
+- one operator principal: bridge-claude (ops.read.status, ops.read.agents,
+  ops.read.events); its signing key and the tunnel key live only on the dev VM
+- SSH: key-only authentication (password logins disabled globally)
 - local Ubuntu development VM: controller stopped and disabled; not a live registry
 - registry: cap 2, DEVELOPMENT mode, replication off
 - 0 living, 0 reserved, 0 quarantined; zero agents
 - root witness OS user and unit installed; witness not enrolled, activated or started
 - fleet:doctor DEPLOYMENT OK; fleet:verify 16/16 PASS, SAFE FOR DRY RUN YES;
-  fleet:verify-runtime VERIFIED; privilege audit PASS
+  fleet:verify-runtime VERIFIED; privilege audit PASS (agent, service, operator)
 
 ## Known architecture
 

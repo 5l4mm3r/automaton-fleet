@@ -1,6 +1,6 @@
 # Phase B — FleetController Operator API (design)
 
-Status: **Accepted with B2-1 amendments (2026-09-24). Implemented locally in B2-2 (uncommitted, not deployed).** See §18 for how the implementation reconciles with this design.
+Status: **Accepted with B2-1 amendments (2026-09-24). Implemented (`5a5469e`, fix `4d6a0be`) and deployed to production on 2026-09-24** (schema v8; `bridge-claude` read-only). See §18 for how the implementation reconciles with this design, and the runbook's Stage B2 record for the deployment.
 Locked decisions: D-1, D-2, D-3, D-5, D-6, D-7, D-9, D-15, D-16 (see §16.0).
 Baseline: repository `fleet-development` at `9c85e90` (runtime `cdfd70c`, schema v7).
 Scope: design and documentation only. Every schema, role, route, credential and

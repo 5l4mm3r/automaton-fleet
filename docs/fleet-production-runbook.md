@@ -63,11 +63,11 @@ was run, the deviations the operator accepted, and the [live state after S9b](#s
 | Item | Value |
 |---|---|
 | VPS | OVH, `51.195.148.111` (public IPv4 /32), IPv6 `2001:41d0:801:2000::7bd1` present but unused; hostname `agentfleet-vps` |
-| Login | `ubuntu`, key only (`PasswordAuthentication no`, `KbdInteractiveAuthentication no`); SSH alias `agentfleet-vps` |
+| Login | `ubuntu`, key only; SSH alias `agentfleet-vps`. **Correction (B2 closeout):** until 2026-09-24 ~23:55 UTC the *effective* setting was `PasswordAuthentication yes`, because sshd keeps the first value it reads and `50-cloud-init.conf` (`yes`) sorts before `60-cloudimg-settings.conf` (`no`). `/etc/ssh/sshd_config.d/10-fleet-no-passwords.conf` now sets `PasswordAuthentication no` / `KbdInteractiveAuthentication no` first; `sshd -T` confirms both are `no` |
 | Host keys | ED25519 `SHA256:HUuqOfrwidWq3SagFJD3rEavFX29u89cy1vIqun0tRg`, ECDSA `SHA256:Rm5H28vhzH9/hoc82EJ/Gk3jRfCo58prkwzOmfg6NjA`, RSA `SHA256:8wKSAe0hWQVxBhpDQNGGN4xCs6geOz/8jJ5pvfLBmpU` |
 | Platform | Ubuntu 24.04.4 LTS, kernel 6.8.0-136, x86_64, systemd 255.4; 4 vCPU, 7.6 GiB, 72 GB disk |
 | Toolchain | Node **v22.23.3** (apt, `/usr/bin/node`), global pnpm 10.34.5 (the repo workflow uses 10.28.1 via `packageManager`), PostgreSQL 16.15, Redis 7.0.15 |
-| Build clone | `~ubuntu/automaton-fleet-build`, clean; at `11c0c7c` for stages 0–21, detached at `cdfd70c` since stage 21b (it is also the operator tooling checkout) |
+| Build clone | `~ubuntu/automaton-fleet-build`, clean; at `11c0c7c` for stages 0–21, `cdfd70c` from stage 21b, `03f8760` from B0, and detached at `4d6a0be` since B2 (it is also the operator tooling checkout) |
 
 ### Stages completed
 | Stage | Done by | Result |
@@ -1107,11 +1107,11 @@ vps$ pnpm fleet:admin quarantine <childAgentId> "dry run complete"   # revokes e
 
 ---
 
-## Stage B2 — Operator API, schema v8 (DRAFT, not approved)
+## Stage B2 — Operator API, schema v8 (completed 2026-09-24)
 
-Draft from B2-2. Each gate below needs its own explicit approval. Nothing in this
-stage has been run. Design and reconciliation:
-`docs/design/phase-b-operator-api.md` §15 and §18.
+Each gate below was approved separately and has been run; the completion record
+and the resulting production state follow the procedure. Design and
+reconciliation: `docs/design/phase-b-operator-api.md` §15 and §18.
 
 Invariants for the whole stage:
 - The safety flags, fleet cap and mode do not change.
@@ -1134,9 +1134,14 @@ Invariants for the whole stage:
 | B2-12 | Key generated on the dev VM (`fleet:operator-keygen`, private key never leaves it); `operator-enroll bridge-claude` with the public key; fingerprint checked out of band; `operator-api enable`; `whoami` / `status` smoke test through the tunnel; audit rows checked | **database** | no |
 
 Order notes:
-- From B2-7 until B2-9, `audit-privileges` and doctor report "operator roles:
-  not provisioned". That is the expected PASS state. If only one operator role
-  exists, the audit fails.
+- **Operator-role sequencing rule (found at the B2-7 preflight, fixed in `4d6a0be`).**
+  Schema v8 reaches production before the operator roles exist.
+  - *Neither* `fleet_operator` nor `fleet_operator_login` existing is the valid
+    **not provisioned** state: `audit-privileges`, doctor and the "PostgreSQL
+    roles correct" checklist item PASS and say "operator roles: not provisioned".
+  - A *partial* state (only one of the two roles) **fails** the audit.
+  - Once both exist (B2-9 onward), every strict operator check applies. The
+    Operator API's own startup check always requires both roles.
 - The v8 build refuses a v7 registry and the v7 build refuses v8, so B2-6 to B2-8
   are one coordinated cutover with the same rollback shape as S9b (restore the
   pre-v8 dump and the previous `current` release).
@@ -1169,6 +1174,34 @@ because the sink reopens the file on every append).
 Emergency controls (no restart needed; the database checks every request):
 `operator-revoke-key`, `operator-revoke`, `operator-revoke-all` (which also turns
 the kill switch off), and `operator-api disable`.
+
+### B2 completion record (2026-09-24, times UTC)
+
+| Gate | Result |
+|---|---|
+| B2-2/B2-3 | Operator API implemented and security-reviewed locally. Reviewed commit `5a5469e` ("feat: read-only Operator API with schema v8") |
+| B2-4 | `fleet-development` fast-forwarded `03f8760..5a5469e` on fleet-origin (never `origin`) |
+| B2-5 | `5a5469e` reproduced locally (Node 22.23.2) and on the VPS (22.23.3): build `1c6b985f…1b74`, lockfile `eee9dc2f…a811` |
+| B2-6 | `runtime.env.pre-b2` backup (`ce306628…`, the B0 pins). Pins moved to `5a5469e`; release staged, verified and installed at `releases/5a5469e…`; tooling moved. The controller kept running B0 from memory |
+| B2-7 preflight **STOP** | Before the outage: the `5a5469e` privilege audit reported the not-yet-created operator roles as failures, so after the cutover `audit-privileges` would have FAILED and verify would have been 15/16. The fix is commit `4d6a0be` ("fix: treat absent Operator API roles as not provisioned in the privilege audit"; see the sequencing rule above), pushed `5a5469e..4d6a0be`. It reproduced locally and on the VPS: build `54beb10104a11888446ed1d09a85f236d87b977558a88514de7600d7dcc83ced`, lockfile unchanged. The pins were moved to `4d6a0be` (backup `runtime.env.pre-b2-fix` = `12f3fc6e…`), then staged, installed and moved into tooling. `runtime.env` is now `c3d872ea…` |
+| B2-7 | **Outage start 23:33:09**: controller stopped. Pre-v8 dump `~ubuntu/automaton_fleet-v7-pre-v8.dump`: 459277 bytes, 0600, SHA-256 `e76f50c9b22193b061048ee005448aa25f810d18167e8380642cde01418b96dd` (plus `.sha256`). `pg_restore -l` lists 25 tables with data. Row counts are in `~ubuntu/fleet-rowcounts-pre-v8.txt` (0 agents, 71 events, 7 migrations). `migrate-check` gave exactly `{"currentVersion":7,"resultingVersion":8,"wouldApply":[8],"rolledBack":true}`. v8 (`operator_api_read_only`) applied at 23:33:26. `audit-privileges` PASS with "operator roles: not provisioned"; events 72/73 are the role re-grants |
+| B2-8 | `approve-runtime` wrote event 74 (`4d6a0be` / `54beb101…` / `eee9dc2f…`); `verify-runtime` VERIFIED. **Outage end 23:33:57** (~48 s): controller PID 40569, running from `releases/4d6a0be…` (checked via the process's cwd). Doctor DEPLOYMENT OK, `fleet:verify` 16/16, `fleet-verify-deployment.sh` clean; public `/healthz` 200, `/readyz` 404, unauthenticated POST 401, foreign Origin 403 |
+| B2-9 | `fleet-os-setup.sh --apply` (the existing units and node binary were byte-identical): user `automaton-fleet-operator-api` (uid 994 / gid 984, nologin, own group only); `operator.env` root:automaton-fleet-operator-api 0640 with one DSN and a fresh password generated on the VPS, never displayed; unit installed (disabled); `/etc/logrotate.d/automaton-fleet`. `fleet-db-setup.sh --apply` created `fleet_operator` (NOLOGIN) and `fleet_operator_login` (LOGIN, limit 8, 5 s / 2 s / 10 s timeouts); agent/service passwords were re-set to their existing values. `grant-operator-role` wrote event 82 (EXECUTE on the 8 `op_*` functions, no tables). Strict audit PASS with operator roles provisioned. Probes as the login: no table access, no `svc_*` / `fleet_event` / archival functions, no CREATE or TEMP |
+| B2-10 | Operator API started at 23:40:04 as PID 42287. It listens on `127.0.0.1:8788` only; `/readyz` 503 `disabled`; requests fail closed. Audit log `/var/log/automaton-fleet-operator/audit.jsonl` is 0600 (directory 0700). Inside the service's mount namespace, as its uid, `admin.env`, `service.env`, TLS, the witness and the controller logs are denied or hidden. No capabilities, `NoNewPrivs`, seccomp; systemd exposure score 1.1 |
+| B2-11 | Tunnel account `fleet-op-tunnel` (uid 993 / gid 983, nologin, locked password). Root-owned `/var/lib/fleet-op-tunnel/.ssh/authorized_keys` holds `restrict,port-forwarding,permitopen="127.0.0.1:8788",command="/usr/sbin/nologin"`. `/etc/ssh/sshd_config.d/70-fleet-op-tunnel.conf` is a per-user `Match` block ending in `Match all`. Staged `sshd -T` showed no change for other users; `sshd -t` passed; SSH reloaded, not restarted. Tunnel transport key (dev VM) `SHA256:wP56E+ziLw3JwnkylaE/AbYX37akdauAcuchUIpK6Ns`. Forwarding works only to `127.0.0.1:8788`; 8787, 5432, 6379, 22, other loopback and external destinations, `-R`, Unix sockets, tun, shell, command, PTY, X11, sftp and scp are all refused |
+| B2-12 | `bridge-claude` signing key generated on the dev VM (never on the VPS). Enrolled principal `op_01M3AX56W25JNMQCTBM8HYH474`, kind `bridge_claude`, scopes `ops.read.status`, `ops.read.agents`, `ops.read.events`, key `ec4f06982ae9135fd2b28e928f5a4a61`, expires 2026-10-24 (event 96). The key ID was verified three ways (keygen, openssl on the dev VM, PostgreSQL SHA-256 of the stored key). `operator-api enable` wrote event 97 (generation 2); `/readyz` 200 `ready`; no restart. Signed smoke tests through the tunnel passed: whoami, status, agents (0), events (allow-listed shape; text typed `untrusted_text`). Unsigned, bad-signature, stale, future, replayed (409; events 98/99), unknown-key/principal, non-GET and unknown-route requests all failed closed. The audit log holds no signatures, nonces or key material |
+| Closeout | `automaton-fleet-operator-api.service` enabled for boot (`multi-user.target.wants` symlink) without a restart. Global SSH hardened (see Host above): staged `sshd -T` showed that `passwordauthentication yes→no` was the only effective change and that the tunnel block was identical; live `sshd -t` passed, then a reload; a fresh public-key admin login plus sudo worked; password attempts for `ubuntu` and `root` now return `Permission denied (publickey)` |
+
+### State after B2 (2026-09-24 ~23:58 UTC)
+- Runtime `4d6a0befb97ee64e4ebc6daffe4baa64d6a4b790` / build `54beb10104a11888446ed1d09a85f236d87b977558a88514de7600d7dcc83ced` /
+  lockfile `eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811`. `runtime.env`, the registry approval, the installed tree and the running processes all match. Schema **v8**.
+- Releases kept for rollback: `5a5469e`, `03f8760` (B0), `cdfd70c`, `11c0c7c`. Returning to v7 requires restoring the pre-v8 dump (destructive; needs its own approval).
+- `automaton-fleet.service`: PID 40569, running from `releases/4d6a0be…`, 0 restarts. `fleet:verify` 16/16; DEPLOYMENT OK; SAFE FOR DRY RUN YES; `fleet-verify-deployment.sh` 36 PASS.
+- `automaton-fleet-operator-api.service`: enabled and active, PID 42287, `127.0.0.1:8788` only, kill switch **on** (generation 2), `/readyz` 200.
+- Operator principals: exactly one (`bridge-claude`, read-only scopes above) with one active key. **Rotate the key (`operator-add-key`, then `operator-revoke-key`) before 2026-10-24.**
+- Registry: cap 2, DEVELOPMENT, replication off; 0 agents. Witness user and unit are installed, disabled and inactive.
+- Safety flags: replication, payments, owner sweep and dry-run child are false; remote listen is true.
+- Bridge-side material on the dev VM (never on the VPS): `~/.config/automaton-fleet/operator/bridge-claude.key` (0600) and the tunnel transport key `~/.ssh/fleet_op_tunnel` (0600).
 
 ## Certificate renewal requires a service restart
 

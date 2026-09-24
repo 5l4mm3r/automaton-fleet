@@ -89,8 +89,8 @@ where it was first confirmed so it is not mistaken for a new regression.
 
 ## FLEET-KI-5: operator signatures end at the Operator API process
 
-- **Status:** accepted design limitation (Phase B, B2-1 Amendment 2). Implemented
-  locally in B2-2, not deployed.
+- **Status:** accepted design limitation (Phase B, B2-1 Amendment 2). Deployed to
+  production on 2026-09-24 (`4d6a0be`, schema v8).
 - **Fact:** PostgreSQL cannot verify the Ed25519 request signature. It trusts the
   operator database login to have verified it. Someone who controls the Operator
   API process or `fleet_operator_login` can call the `op_*` read functions
