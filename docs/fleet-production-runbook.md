@@ -4,8 +4,11 @@ Target: one OVH VPS running Ubuntu 24.04 LTS, which becomes the fleet control
 plane (FleetController, PostgreSQL, Redis) behind `https://api.agentfleet.vip`.
 Source: the local Ubuntu development VM, which runs the same release loopback-only.
 
-**Status:** not started. The VPS is being provisioned; IP and login are not known yet.
-Nothing in this runbook has been run against the VPS.
+**Status (2026-09-24):** stages 0–21 are complete. Public HTTPS has been live at
+`https://api.agentfleet.vip` since 18:25:59 UTC, and the fleet cap has been 2 since
+18:45:13 UTC. `fleet:doctor` reports DEPLOYMENT OK and **SAFE FOR DRY RUN: YES**.
+Stage 21b (witness release) and stage 22 (dry-run child) have not started. See [Deployment record](#deployment-record-2026-09-24) for what
+was run, the deviations the operator accepted, and the live state at the end of STOP S5.
 
 ## Conventions
 
@@ -49,6 +52,69 @@ Nothing in this runbook has been run against the VPS.
   controllers on diverging copies of the registry would each accept tokens, allocate
   slots and reap agents independently.
 - PostgreSQL (5432), Redis (6379) and the admin HTTP port (8787) are never publicly reachable.
+
+## Deployment record (2026-09-24)
+
+### Host
+| Item | Value |
+|---|---|
+| VPS | OVH, `51.195.148.111` (public IPv4 /32), IPv6 `2001:41d0:801:2000::7bd1` present but unused; hostname `agentfleet-vps` |
+| Login | `ubuntu`, key only (`PasswordAuthentication no`, `KbdInteractiveAuthentication no`); SSH alias `agentfleet-vps` |
+| Host keys | ED25519 `SHA256:HUuqOfrwidWq3SagFJD3rEavFX29u89cy1vIqun0tRg`, ECDSA `SHA256:Rm5H28vhzH9/hoc82EJ/Gk3jRfCo58prkwzOmfg6NjA`, RSA `SHA256:8wKSAe0hWQVxBhpDQNGGN4xCs6geOz/8jJ5pvfLBmpU` |
+| Platform | Ubuntu 24.04.4 LTS, kernel 6.8.0-136, x86_64, systemd 255.4; 4 vCPU, 7.6 GiB, 72 GB disk |
+| Toolchain | Node **v22.23.3** (apt, `/usr/bin/node`), global pnpm 10.34.5 (the repo workflow uses 10.28.1 via `packageManager`), PostgreSQL 16.15, Redis 7.0.15 |
+| Build clone | `~ubuntu/automaton-fleet-build` at `11c0c7c`, clean |
+
+### Stages completed
+| Stage | Done by | Result |
+|---|---|---|
+| 0 | Operator | Local controller stopped and disabled. The final frozen dump was taken after shutdown, SHA-256 verified (`7473a22f…e06b`), transferred and restored. After the restore: 0 agents, 0 reservations, 0 orphans |
+| 1–2 | Operator | SSH access and key-only authentication; ufw active. The ufw rules have not been reviewed, and 130 package upgrades are pending |
+| 3 | Operator | `automaton-fleet-admin` (member: `ubuntu`), `automaton-fleet-service`, `automaton-agent` |
+| 4 | Operator | Node v22.23.3 from apt (see the deviations below) |
+| 5 | Operator | PostgreSQL on `127.0.0.1:5432`, Redis on `127.0.0.1`/`::1:6379` |
+| 6, 10, 11 | Operator | The build reproduced build ID `e388571a…`, and the lockfile hash matches. The release is installed read-only at `/opt/automaton-fleet/releases/11c0c7c…`, with `current` pointing to it |
+| 7 | Claude (approved) | `runtime.env` installed byte-for-byte from the local VM (SHA-256 `010d31439cdfa7d53d092e015e8318b8beba9e49856f222c3bae952fdf14ad6e`; it adds `FLEET_API_LISTEN` and `FLEET_REAPER_INTERVAL_MS` to the hand-made file). `admin.env` was freshly generated. `fleet-os-setup.sh --apply` created `service.env`, made `/opt/automaton-fleet` root-owned, installed the Node pin `/opt/automaton-fleet/node/bin/node` (a copy of `/usr/bin/node`) and installed both units without enabling them |
+| 8 | Claude (approved) | The `fleetadmin` password was rotated to the `admin.env` value, without the `CREATE ROLE`/`CREATE DATABASE` branches. `fleet-db-setup.sh --apply` corrected drift in the hand-created roles: PUBLIC had CONNECT and TEMP on the database; `fleet_agent` and `fleet_service` were INHERIT; the logins had no timeouts |
+| 9 | Operator | The restore was done at stage 0, so no dump was taken or restored again |
+| 12–13 (S5) | Claude (approved) | `migrate-check` showed v6 with `wouldApply=[]`; `migrate` reported "Schema up to date"; `audit-privileges` PASS. Then `systemctl enable --now automaton-fleet.service` |
+
+### State at the end of STOP S5 (2026-09-24 16:51 UTC)
+- `automaton-fleet.service` is enabled and active, running as `automaton-fleet-service` with 0 restarts. `automaton-agent.service` is disabled and inactive.
+- `/healthz` and `/readyz` both return 200. The reaper runs every 15 s.
+- `sudo scripts/fleet-verify-deployment.sh`: 17/17 PASS.
+- `pnpm fleet:verify-runtime /opt/automaton-fleet/current`: VERIFIED. The registry approves `11c0c7c` / `e388571a…` / `eee9dc2f…`.
+- `pnpm fleet:doctor`: DEPLOYMENT OK. The only SAFE FOR DRY RUN blockers are HTTPS valid, remote controller reachable, and fleet cap = 2.
+- Registry: schema v6 (6 migration rows), `maxAgents=1`, 0 living, 0 reserved, 0 quarantined, mode DEVELOPMENT, replication off.
+- Listeners: `0.0.0.0:22` and `[::]:22` public. `127.0.0.1:8787`, `127.0.0.1:5432`, `127.0.0.1:6379` and `[::1]:6379` on loopback. From outside, 80, 443, 5432, 6379 and 8787 are all closed or filtered.
+- All five safety flags are `false`.
+
+### Stages 14–21 (2026-09-24)
+| Stage | Result |
+|---|---|
+| 14 (S6) | The operator deleted the `api` CNAME to parking and added `api A 51.195.148.111`, TTL 600. There is no AAAA and no CAA. All four Porkbun nameservers and 1.1.1.1, 8.8.8.8 and 9.9.9.9 return only the A record |
+| Firewall | OVH Edge Network Firewall (IPv4): allow TCP 22, 80 and 443, ESTABLISHED and ICMP; deny everything else. Host ufw: default deny incoming; allows 22/tcp and 443/tcp for IPv4 and IPv6. **80/tcp is opened only during renewal** (see below) |
+| 15 (S7) | The operator issued an ECDSA P-256 certificate with certbot 2.9.0 (standalone HTTP-01): Let's Encrypt `YE2`, SHA-256 `82:5D:77:7E:…:EA:32`, valid 2026-09-24 → 2026-12-23 |
+| Renewal port 80 | `/usr/local/sbin/fleet-certbot-port80 open\|close` (root 0755) is called by `renewal-hooks/pre/10-fleet-open-port80` and `post/90-fleet-close-port80`. Port 80 is also closed by an `ExecStopPost=` drop-in on `certbot.service`, a 15-minute fail-safe timer armed before opening, and `fleet-certbot-port80-boot.service` (enabled). `certbot renew --dry-run` passed, with port 80 open for 9 s |
+| Deploy hook | `renewal-hooks/deploy/automaton-fleet.sh` (root 0755) is the version in "Certificate renewal requires a service restart", SHA-256 `197dfe74…1a5f`. **It has not been tested by hand yet** |
+| 16 | `tls/fleet.key` (root:root 0600) and `tls/fleet.crt` (root:root 0644), each a single-link regular file |
+| 17 | The `remote.conf` drop-in is byte-identical to the `11c0c7c` example. `runtime.env` is now SHA-256 `66e55b23ce1e7374a9a2db9ac2a8e8b9a6a0b281bad6612f95ac7860c2b8a557`; the backup `runtime.env.pre-remote` is `010d3143…` |
+| 19 (S8) | Restarted at 18:25:59 UTC with 0 restarts. `0.0.0.0:443` is public and `127.0.0.1:8787` is loopback. From outside: `/healthz` 200, `/readyz` 404, unauthenticated POST 401, foreign Origin 403, TLS 1.2 and 1.3 accepted, TLS 1.1 refused. 80, 5432, 6379 and 8787 are filtered |
+| 20 | `fleet-verify-deployment.sh` 19/19 PASS. `fleet:doctor`: HTTPS valid and remote controller reachable |
+| 21 (S9) | `pnpm fleet:admin set-cap 2` at 18:45:13 UTC wrote event 26, `cap_set {"previous":1,"max":2}`. 0 living, 0 reserved, 0 quarantined; mode DEVELOPMENT. `SAFE FOR DRY RUN: YES` |
+
+### Deviations accepted by the operator
+- **Node v22.23.3 instead of v22.23.2.** The approved build ID reproduced exactly with it. Do not downgrade Node just to match stage 4.
+- **Global pnpm 10.34.5.** It is left alone, because the pinned workflow ran with 10.28.1 and reproduced the build.
+- **Stages 3–6 and 10–11 were done by hand, not with the scripts.** The scripts were then run over the result and made it consistent (the drift is listed at stage 7 and stage 8 above).
+
+### Open items
+- **`ubuntu` has broad passwordless sudo** (`sudo -n` succeeds). Every sudo is still approval-gated by policy. See [Cleanup](#cleanup-after-cutover).
+- **Two dumps are still in `~ubuntu`** (`automaton-fleet-final-frozen.dump`, `automaton-fleet-pre-vps.dump`), mode 0664. See [Cleanup](#cleanup-after-cutover).
+- **`ubuntu` can't read the journal** (it isn't in `adm` or `systemd-journal`), so `journalctl -u automaton-fleet` needs sudo.
+- **130 package upgrades pending.** Unattended-upgrades is active.
+- **`/etc/automaton-fleet/runtime.env.pre-remote`** (the loopback-only config) is kept for rollback.
+- **Doctor's repository check:** the registry records the runtime repository without `.git`, and `runtime.env` has it with `.git`. The two are normalized and match.
 
 ## Stop points (summary)
 
@@ -287,6 +353,10 @@ Optional but recommended: verify `SHASUMS256.txt.sig` against the Node.js releas
 
 Check pnpm after cloning (stage 6): `pnpm --version` inside the repository must print `10.28.1`.
 
+> **Production deviation (accepted 2026-09-24):** the VPS runs Node v22.23.3 from apt
+> (`/usr/bin/node`), which reproduced build ID `e388571a…` exactly. That Node is the pinned
+> copy at `/opt/automaton-fleet/node/bin/node`.
+
 **Rollback:** remove `/usr/local/lib/nodejs/node-$V-$A` and the four `/usr/local/bin` symlinks.
 
 ## Stage 5 — PostgreSQL and Redis
@@ -400,7 +470,7 @@ leaves existing files unchanged, and it would otherwise:
    640, `service.env` root:root 600, `runtime.env` root:root 644, `tls` root:automaton-fleet-admin 750.
 
    ```bash
-   vps$ /opt/automaton-fleet/node/bin/node --version      # v22.23.2
+   vps$ /opt/automaton-fleet/node/bin/node --version      # v22.23.2 (production VPS: v22.23.3, accepted)
    vps$ systemctl is-enabled automaton-fleet.service automaton-agent.service   # both "disabled"
    ```
 
@@ -590,57 +660,118 @@ Do not continue to DNS until all of the above hold.
 
 ## Stage 14 — DNS for `api.agentfleet.vip`
 
-**STOP S6.**
+**STOP S6.** The operator makes this change in the Porkbun DNS panel. Nothing on the VPS changes.
 
-| Record | Value | Notes |
-|---|---|---|
-| `api.agentfleet.vip. A` | `<VPS_IP>` | TTL 300 during cutover; raise it later |
-| `api.agentfleet.vip. AAAA` | **none** | The service binds `0.0.0.0:443` (IPv4 only). An AAAA record would send IPv6-preferring clients to an address where nothing listens |
-| `agentfleet.vip. CAA` | `0 issue "letsencrypt.org"` | Recommended. It also covers `api.` |
+### Current state (read 2026-09-24 from authoritative `curitiba.ns.porkbun.com`)
+| Name | Record | TTL | Meaning |
+|---|---|---|---|
+| `agentfleet.vip` | NS `curitiba`/`fortaleza`/`maceio`/`salvador.ns.porkbun.com` | — | Porkbun hosts the zone |
+| `agentfleet.vip` | A `207.207.210.107`, `207.207.210.229` | — | Porkbun parking (the apex resolves to `pixie.porkbun.com`) |
+| **`api.agentfleet.vip`** | **CNAME `pixie.porkbun.com.`** | 600 | Parking. **Conflicts:** a CNAME cannot coexist with an A record at the same name |
+| `*.agentfleet.vip` | CNAME `pixie.porkbun.com.` | 600 | Wildcard parking. Once `api` has its own record, the wildcard no longer applies to it |
+| `agentfleet.vip` | CAA | — | none (any CA may issue) |
+| `api.agentfleet.vip` | AAAA | — | none of its own. The CNAME target has no AAAA either |
 
-Verify from outside, against more than one resolver:
+The SOA minimum (negative-caching TTL) is 1800 s.
 
+### Required change
+1. **Delete** `api.agentfleet.vip CNAME pixie.porkbun.com`. This is required. Also delete
+   any Porkbun "URL forwarding" entry for `api` if the panel shows one, because it creates hidden records.
+2. **Create** `api.agentfleet.vip A 51.195.148.111`, TTL 600 (Porkbun's minimum).
+3. **Do not create** an AAAA for `api`. The service binds `0.0.0.0:443` (IPv4 only), and
+   Let's Encrypt prefers IPv6 when an AAAA exists, so an AAAA would break HTTP-01 validation.
+4. **Recommended:** `agentfleet.vip CAA 0 issue "letsencrypt.org"`. It also covers `api`.
+   Optionally add `0 iodef "mailto:<ops-email>"`.
+5. **Leave** the apex A records and the `*` wildcard alone. They don't conflict with an
+   explicit `api` record. Removing parking is a separate, optional clean-up.
+
+Deleting the CNAME and adding the A can happen in either order. While `api` has no record,
+it matches the wildcard and still resolves to parking; it never becomes NXDOMAIN.
+
+### Propagation
+- Porkbun's authoritative servers normally serve the change within a minute or two.
+- Recursive resolvers that cached the old CNAME keep it for up to its **600 s TTL**.
+  After that, every resolver returns the A record.
+- Let's Encrypt validates through its own recursive resolvers, which respect the TTL.
+  **Wait at least 10 minutes after all four authoritative servers return the A record
+  before stage 15**, otherwise validation may reach parking.
+- Nothing listens on 80 or 443 yet, so publishing the record exposes nothing.
+
+### Read-only verification (from the local VM or a workstation)
 ```bash
-ws$ dig +short A api.agentfleet.vip @1.1.1.1; dig +short A api.agentfleet.vip @8.8.8.8   # <VPS_IP>
-ws$ dig +short AAAA api.agentfleet.vip @1.1.1.1                                          # empty
-ws$ dig +short CAA agentfleet.vip @1.1.1.1
+ws$ for ns in curitiba fortaleza maceio salvador; do echo "$ns: $(dig +norec +short A api.agentfleet.vip @$ns.ns.porkbun.com) / cname=$(dig +norec +short CNAME api.agentfleet.vip @$ns.ns.porkbun.com)"; done
+     # each: 51.195.148.111 / cname=  (empty)
+ws$ for r in 1.1.1.1 8.8.8.8 9.9.9.9; do echo "$r: $(dig +short A api.agentfleet.vip @$r)"; done   # 51.195.148.111 only (after <=600 s)
+ws$ dig +short AAAA api.agentfleet.vip @1.1.1.1          # empty
+ws$ dig +short CNAME api.agentfleet.vip @1.1.1.1         # empty
+ws$ dig +short CAA agentfleet.vip @1.1.1.1               # 0 issue "letsencrypt.org" (if added)
+ws$ dig +noall +answer A api.agentfleet.vip @curitiba.ns.porkbun.com   # shows TTL 600
+vps$ getent ahostsv4 api.agentfleet.vip | head -1         # 51.195.148.111 (the VPS's own resolver)
+ws$ for p in 80 443; do timeout 5 bash -c "</dev/tcp/api.agentfleet.vip/$p" && echo "$p OPEN (unexpected)" || echo "$p closed"; done
 ```
 
-**Rollback:** delete the A record.
+**Rollback:** delete the A record, and recreate `api CNAME pixie.porkbun.com` if parking is wanted back.
 
 ## Stage 15 — TLS certificate acquisition
 
-**STOP S7.**
+**STOP S7.** Approve it in three separate steps: S7a (install certbot), S7b (staging dry run),
+S7c (real issuance).
 
+### Challenge choice: HTTP-01 standalone
+- Ubuntu 24.04 packages no certbot DNS plugin for Porkbun (checked with `apt-cache search certbot-dns`).
+- Porkbun API keys are **account-wide**, not scoped to one zone. DNS-01 would put a
+  credential for the whole account on the VPS, which fails least privilege.
+- HTTP-01 needs port 80 **only while certbot runs**. The ufw hooks open and close it.
+- Port 443 can't be used for the challenge: `certbot --standalone` supports no TLS-ALPN,
+  and 443 belongs to the fleet service.
+
+### Preconditions (read-only)
+1. Stage 14 verification is green on all four Porkbun servers and three public resolvers,
+   and has been for at least 10 minutes. `api` has no AAAA.
+2. `sudo ufw status verbose` shows default incoming `deny`, 22/tcp allowed, and nothing on 80 or 443.
+   (Needs a read-only sudo, which must be approved.)
+3. The OVH Edge Network Firewall is off for `51.195.148.111`, or it allows 80/tcp during issuance.
+   Check this in the OVH panel.
+4. Nothing listens on :80 (`ss -Hltn | grep ':80 '` shows nothing).
+5. `<ops-email>` has been chosen for the Let's Encrypt account.
+
+### S7a: install certbot
 ```bash
-vps$ sudo apt install -y certbot
+vps$ sudo apt-get install -y certbot            # candidate 2.9.0-1 (Ubuntu noble)
+vps$ certbot --version
+vps$ systemctl list-timers certbot.timer        # the package enables a renewal timer. Renewal reuses the hooks,
+                                                # but also needs the stage 16 copy and a restart (see "Certificate renewal")
 ```
 
-Choose one challenge type:
+### S7b: staging dry run (port 80 opens for about a minute)
+```bash
+vps$ sudo certbot certonly --standalone --preferred-challenges http \
+       -d api.agentfleet.vip -m <ops-email> --agree-tos --no-eff-email \
+       --key-type ecdsa --elliptic-curve secp256r1 \
+       --pre-hook  "ufw allow 80/tcp comment 'certbot http-01 (temporary)'" \
+       --post-hook "ufw delete allow 80/tcp" \
+       --dry-run
+vps$ sudo ufw status | grep -w 80 || echo "port 80 closed again (correct)"
+ws$  timeout 5 bash -c '</dev/tcp/51.195.148.111/80' && echo "80 OPEN (stop)" || echo "80 closed"
+```
+The dry run uses Let's Encrypt staging, so it doesn't count against production rate limits.
 
-- **DNS-01 (preferred if the DNS host has a certbot plugin)** needs no inbound port.
-  With OVH DNS, for example: `sudo apt install -y python3-certbot-dns-ovh`, plus an API
-  credential scoped to the zone in a root-only 0600 file under `/etc/letsencrypt/`.
-  ```bash
-  vps$ sudo certbot certonly --dns-ovh --dns-ovh-credentials /etc/letsencrypt/ovh.ini \
-         -d api.agentfleet.vip -m <ops-email> --agree-tos --no-eff-email --dry-run   # then again without --dry-run
-  ```
-- **HTTP-01 standalone (fallback).** Port 80 is opened only while certbot runs. The hooks
-  are saved in the renewal configuration, so renewals do the same.
-  ```bash
-  vps$ sudo certbot certonly --standalone --preferred-challenges http -d api.agentfleet.vip \
-         -m <ops-email> --agree-tos --no-eff-email \
-         --pre-hook  "ufw allow 80/tcp comment 'certbot http-01 (temporary)'" \
-         --post-hook "ufw delete allow 80/tcp" \
-         --dry-run                                   # then again without --dry-run
-  vps$ sudo ufw status | grep -w 80 || echo "port 80 closed again (correct)"
-  ```
+### S7c: real issuance
+Run the same command without `--dry-run`, then:
+```bash
+vps$ sudo certbot certificates                  # api.agentfleet.vip, ECDSA, expiry about 90 days
+vps$ sudo openssl x509 -in /etc/letsencrypt/live/api.agentfleet.vip/fullchain.pem -noout -subject -issuer -dates -ext subjectAltName
+vps$ sudo ufw status | grep -w 80 || echo "port 80 closed again (correct)"
+vps$ sudo grep -E 'pre_hook|post_hook|authenticator' /etc/letsencrypt/renewal/api.agentfleet.vip.conf
+```
+The private key stays under `/etc/letsencrypt` (root 0700) and is never printed or copied off the VPS.
+Stage 16 (copying it into `tls/`) is a separate step.
 
-Port 443 cannot be used for the challenge: `certbot --standalone` supports no TLS-ALPN
-challenge, and 443 belongs to the fleet service.
+**What S7 does not do:** it doesn't change `runtime.env`, install the drop-in, open 443,
+restart the service or change the cap.
 
-**Rollback:** `sudo certbot delete --cert-name api.agentfleet.vip`. Remove the DNS
-credential file if you created one.
+**Rollback:** `sudo certbot delete --cert-name api.agentfleet.vip`, then confirm with
+`sudo ufw status` that 80 isn't open. Optionally `sudo apt-get remove certbot`.
 
 ## Stage 16 — `tls.key` / `tls.crt` source permissions
 
@@ -969,12 +1100,13 @@ T=/etc/automaton-fleet/tls; umask 077
 key="$RENEWED_LINEAGE/privkey.pem"; crt="$RENEWED_LINEAGE/fullchain.pem"
 cmp -s <(openssl pkey -in "$key" -pubout) <(openssl x509 -in "$crt" -noout -pubkey) || { echo "renewed key/cert mismatch" >&2; exit 1; }
 openssl x509 -in "$crt" -noout -checkend 172800 >/dev/null || { echo "renewed cert expires within 2 days" >&2; exit 1; }
-openssl x509 -in "$crt" -noout -ext subjectAltName | grep -q 'DNS:api.agentfleet.vip' || { echo "renewed cert lacks hostname" >&2; exit 1; }
+openssl x509 -in "$crt" -noout -ext subjectAltName | grep -qE '(^|[[:space:],])DNS:api\.agentfleet\.vip([[:space:],]|$)' || { echo "renewed cert lacks hostname" >&2; exit 1; }
 install -m 0600 -o root -g root "$T/fleet.key" "$T/fleet.key.prev"
 install -m 0644 -o root -g root "$T/fleet.crt" "$T/fleet.crt.prev"
 install -m 0600 -o root -g root "$key" "$T/fleet.key.new" && mv -f "$T/fleet.key.new" "$T/fleet.key"
 install -m 0644 -o root -g root "$crt" "$T/fleet.crt.new" && mv -f "$T/fleet.crt.new" "$T/fleet.crt"
-systemctl restart automaton-fleet.service
+# A failed restart must not abort the script before the health check / rollback below.
+systemctl restart automaton-fleet.service || true
 for _ in $(seq 1 30); do
   curl -fsS -m 3 http://127.0.0.1:8787/healthz >/dev/null 2>&1 && curl -fsS -m 3 https://api.agentfleet.vip/healthz >/dev/null 2>&1 \
     && { rm -f "$T/fleet.key.prev" "$T/fleet.crt.prev"; echo "fleet TLS renewed and serving"; exit 0; }
@@ -982,6 +1114,8 @@ for _ in $(seq 1 30); do
 done
 echo "service not healthy after renewal; restoring previous certificate" >&2
 mv -f "$T/fleet.key.prev" "$T/fleet.key"; mv -f "$T/fleet.crt.prev" "$T/fleet.crt"
+# A crash loop on the bad pair may have hit StartLimitBurst; clear it so the restore can start.
+systemctl reset-failed automaton-fleet.service || true
 systemctl restart automaton-fleet.service
 exit 1
 ```
@@ -1001,6 +1135,44 @@ exit 1
 - After any renewal, `sudo scripts/fleet-verify-deployment.sh` must still pass. `.prev`
   files exist only during the hook.
 
+## Cleanup after cutover
+
+### Database dumps
+| Copy | SHA-256 | Mode | Recommendation |
+|---|---|---|---|
+| VPS `~ubuntu/automaton-fleet-final-frozen.dump` | `7473a22f…e06b` | 0664 | **Delete.** The restore is verified, and an identical copy exists on the local VM |
+| VPS `~ubuntu/automaton-fleet-pre-vps.dump` | `9e479159…0b0c` | 0664 | **Delete.** The final frozen dump supersedes it |
+| Local `~/backups/automaton-fleet/automaton-fleet-final-frozen.dump` | `7473a22f…e06b` | 0664 | Keep as the cutover backup. `chmod 0600` it now. Keep an encrypted off-host copy (for example `age` or `gpg -c`), then delete the plaintext once public HTTPS is proven |
+| Local `~/backups/automaton-fleet/automaton-fleet-pre-vps.dump`, `pre-v6-*.dump` | — | 0664 | Superseded: delete, or encrypt and archive |
+
+The dumps contain registry state, the audit history and token and session **hashes**.
+Treat them as confidential. The VPS copies belong to `ubuntu`, so deleting them needs no sudo:
+```bash
+vps$ sha256sum ~/automaton-fleet-*.dump                  # re-confirm they match the local copies first
+vps$ rm -f ~/automaton-fleet-final-frozen.dump ~/automaton-fleet-final-frozen.dump.sha256 \
+           ~/automaton-fleet-pre-vps.dump ~/automaton-fleet-pre-vps.dump.sha256
+```
+(`shred` gives no guarantee on journaled ext4 or virtual disks, so a plain `rm` is used.)
+
+### Passwordless sudo for `ubuntu`
+`sudo -n true` currently succeeds. The cloud image's default is normally
+`/etc/sudoers.d/90-cloud-init-users` with `ubuntu ALL=(ALL) NOPASSWD:ALL`. Anyone holding
+the `ubuntu` SSH key therefore has root without a second factor.
+
+Plan (operator-run, approval-gated). Do it after S8 has been verified, or earlier if preferred.
+Keep a second SSH session open, and have the OVH KVM console ready as the recovery path.
+1. `sudo passwd ubuntu`. Set a strong password, or create the named operator account from
+   stage 1 and move the `automaton-fleet-admin` membership to it.
+2. `sudo grep -rn NOPASSWD /etc/sudoers /etc/sudoers.d/`. Find the exact source.
+3. Replace it with a password-requiring rule:
+   `echo 'ubuntu ALL=(ALL:ALL) ALL' | sudo install -m 0440 -o root -g root /dev/stdin /etc/sudoers.d/90-cloud-init-users.new`,
+   then `sudo visudo -cf /etc/sudoers.d/90-cloud-init-users.new`, then `sudo mv` it over the original.
+4. Check it from the **second** session: `sudo -k; sudo -n true` must fail, and `sudo -v` must succeed with the password.
+5. Check that cloud-init won't write it back on a new instance ID: look at `/etc/cloud/cloud.cfg`,
+   `default_user.sudo`, or set it in `/etc/cloud/cloud.cfg.d/99-fleet-sudo.cfg`.
+
+After this, privileged steps go back to the operator typing sudo, as on the local VM.
+
 ## Full cutover rollback
 
 1. `vps$ sudo systemctl disable --now automaton-fleet.service` (and `sudo ufw delete allow 443/tcp`).
@@ -1019,7 +1191,7 @@ exit 1
 - OVH's default login (`ubuntu`), the cloud-init sshd drop-in, and whether an OVH network
   firewall or anti-DDoS profile sits in front of the IP.
 - The VPS has a public IPv4 address (IPv6-only is not supported by the current `FLEET_PUBLIC_LISTEN`).
-- Who hosts DNS for `agentfleet.vip`, and whether it offers an API usable for DNS-01.
+- ~~Who hosts DNS for `agentfleet.vip`~~ Porkbun (2026-09-24). Its API keys are account-wide, so the plan uses HTTP-01 (stage 15).
 - Ubuntu's PostgreSQL 16 package defaults (`listen_addresses=localhost`, scram `pg_hba`)
   and Redis defaults (`bind 127.0.0.1 -::1`, `protected-mode yes`).
 - Whether Redis should be installed at all while no fleet code uses it.
@@ -1028,7 +1200,7 @@ exit 1
   extensions or objects outside that schema.
 - GitHub is reachable from the VPS, and `11c0c7c` is still on the published
   `fleet-development` branch of the fork.
-- The build ID reproduces on the VPS with Node v22.23.2 and pnpm 10.28.1.
+- ~~The build ID reproduces on the VPS~~ Confirmed 2026-09-24 with Node v22.23.3 and the repository's pnpm 10.28.1.
 - `certbot` from Ubuntu 24.04 issues ECDSA keys by default. The service's key/certificate
   checks accept them; this is expected but still to be confirmed at stage 19.
 - The operator account can run `pnpm fleet:*` with `admin.env` group access, and
