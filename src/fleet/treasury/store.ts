@@ -16,6 +16,7 @@ import pg from "pg";
 import type { Pool, PoolClient } from "pg";
 import { ulid } from "ulid";
 import { quoteIdent } from "../postgres/migrations.js";
+import { redactDetail } from "../redact.js";
 import {
   DEFAULT_TREASURY_POLICY,
   TREASURY_USES,
@@ -111,7 +112,7 @@ export class PgTreasuryStore {
       type,
       agentId,
       actor,
-      JSON.stringify(detail),
+      JSON.stringify(redactDetail(detail)),
     ]);
   }
 

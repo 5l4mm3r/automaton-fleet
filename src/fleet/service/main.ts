@@ -55,7 +55,7 @@ import {
 } from "../secret-files.js";
 import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "../runtime.js";
 import { FleetService, type AuditEntry, type ReadinessCheck } from "./server.js";
-import { createJsonLogger, type Logger } from "./log.js";
+import { createAuditSink, createJsonLogger, type Logger } from "./log.js";
 
 function userOf(dsn: string): string | null {
   try {
@@ -252,12 +252,7 @@ export async function startFleetServiceFromEnv(
     }
     if (!release) log("warn", "runtime_release_unpinned", { reason: releaseProblem, effect: "claims and activations are refused" });
 
-    const auditFile = e.FLEET_AUDIT_LOG?.trim();
-    if (auditFile) fs.closeSync(fs.openSync(auditFile, "a", 0o600));
-    const auditSink = (entry: AuditEntry) => {
-      log("info", entry.event, { agentId: entry.agentId ?? null, ...entry.detail, audit: true });
-      if (auditFile) fs.appendFileSync(auditFile, JSON.stringify(entry) + "\n", { mode: 0o600 });
-    };
+    const auditSink: (entry: AuditEntry) => void = createAuditSink(log, e.FLEET_AUDIT_LOG?.trim() || undefined);
 
     let privCache: { at: number; problems: string[] } = { at: Date.now(), problems: [] };
     const realReplicationEnabled = e.REAL_REPLICATION_ENABLED?.trim().toLowerCase() === "true";

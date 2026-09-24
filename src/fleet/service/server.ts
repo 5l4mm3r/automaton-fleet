@@ -34,6 +34,7 @@ import { ulid } from "ulid";
 import { FleetBypassError } from "../registry.js";
 import { FleetRuntimeError, sameRelease, type RuntimeRelease } from "../runtime.js";
 import { sanitizeAttestation } from "../attestation.js";
+import { redactDetail } from "../redact.js";
 import {
   FleetDuplicateRegistrationError,
   FleetRegistryUnavailableError,
@@ -231,18 +232,23 @@ export class FleetService {
     this.authFailures = new RateLimiter(opts.rateLimits?.authFailuresPerIp ?? { capacity: 20, refillPerSec: 20 / 60 }, this.now);
   }
 
+  /** Audit sink (service log + JSONL). The detail is redacted here, before any sink sees it. */
   private audit(event: string, agentId: string | null, detail: Record<string, unknown> = {}): void {
     try {
-      this.opts.audit?.({ ts: new Date().toISOString(), event, agentId, detail });
+      this.opts.audit?.({ ts: new Date().toISOString(), event, agentId, detail: redactDetail(detail) });
     } catch {
       // audit sink failures must not break request handling
     }
   }
 
-  /** Durable audit (fleet_events) + service log. Never throws. */
+  /**
+   * Durable audit (fleet_events) + service log. Never throws. Redacted once;
+   * the audit sink and the database receive the same redacted detail.
+   */
   private async recordDb(event: string, agentId: string | null, detail: Record<string, unknown>): Promise<void> {
-    this.audit(event, agentId, detail);
-    await this.opts.admin.recordEvent(event, agentId, "fleet-service", detail).catch(() => {});
+    const safe = redactDetail(detail);
+    this.audit(event, agentId, safe);
+    await this.opts.admin.recordEvent(event, agentId, "fleet-service", safe).catch(() => {});
   }
 
   // ─── Reaper ─────────────────────────────────────────────────────

@@ -1,13 +1,13 @@
 /**
  * DRY_RUN_CHILD entrypoint, started inside the child sandbox by the operator
  * dry run (`node dist/fleet/dry-run/child-main.js`). Heartbeats until the
- * controller stops accepting it. Logs JSON lines without secrets.
+ * controller stops accepting it. Logs JSON lines through the canonical redactor.
  */
 
+import { createRedactedLineLogger } from "../redact.js";
 import { runDryRunChild } from "./child.js";
 
-const log = (event: string, detail: Record<string, unknown> = {}) =>
-  process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), service: "fleet-dry-run-child", event, ...detail }) + "\n");
+const log = createRedactedLineLogger("fleet-dry-run-child");
 
 const ac = new AbortController();
 process.on("SIGTERM", () => ac.abort());

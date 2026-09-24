@@ -65,6 +65,8 @@ import { dryRunPreflight, keylessAddress, performDryRunChild } from "../dry-run/
 import { findSandboxByName } from "../../replication/spawn.js";
 import { createConwayClient } from "../../conway/client.js";
 import type { ConwayClient } from "../../types.js";
+import { redactDetail, redactText } from "../redact.js";
+import { scanAuditFile } from "../redact-scan.js";
 
 /** Operator Conway client (CONWAY_API_KEY / CONWAY_API_URL); null when not configured. */
 function operatorConway(e: Record<string, string | undefined>): ConwayClient | null {
@@ -169,6 +171,26 @@ async function main(argv: string[]): Promise<number> {
     console.log(JSON.stringify({ dir, ...computeBuildIdentity(dir) }));
     return 0;
   }
+  if (cmd === "audit-scan") {
+    // Count-only scan of audit/log files with the canonical detection rules. Needs no credentials.
+    // Prints metadata and per-class counts only, never matched text. Exit 1 when anything is detected.
+    if (!rest.length) {
+      console.error("usage: fleet:admin audit-scan <file> [file…]");
+      return 2;
+    }
+    let found = false;
+    for (const f of rest) {
+      try {
+        const r = await scanAuditFile(f);
+        found ||= r.total > 0;
+        console.log(JSON.stringify(r));
+      } catch (err) {
+        console.error(redactText(`audit-scan ${f}: ${err instanceof Error ? err.message : String(err)}`));
+        return 2;
+      }
+    }
+    return found ? 1 : 0;
+  }
   let loaded: LoadedEnv;
   try {
     loaded = loadAdminEnv();
@@ -178,11 +200,11 @@ async function main(argv: string[]): Promise<number> {
       console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : formatDoctorReport(report));
       return 1;
     }
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(redactText(err instanceof Error ? err.message : String(err)));
     return 2;
   }
   const e = loaded.env;
-  for (const w of loaded.warnings) console.error(`warning: ${w}`);
+  for (const w of loaded.warnings) console.error(redactText(`warning: ${w}`));
   if (cmd === "doctor") {
     const store = PgFleetStore.fromEnv(e);
     try {
@@ -226,7 +248,7 @@ async function main(argv: string[]): Promise<number> {
       console.log(JSON.stringify(await runTreasuryCommand(cmd, rest, ts, actor), null, 2));
       return 0;
     } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
+      console.error(redactText(err instanceof Error ? err.message : String(err)));
       return 1;
     } finally {
       await ts.close();
@@ -315,7 +337,7 @@ async function main(argv: string[]): Promise<number> {
           rootAgentId: root,
           apiUrl,
           name: argValue(rest, "--name"),
-          log: (step: string, d?: Record<string, unknown>) => console.error(`[dry-run] ${step} ${d ? JSON.stringify(d) : ""}`),
+          log: (step: string, d?: Record<string, unknown>) => console.error(redactText(`[dry-run] ${step}`) + (d ? ` ${JSON.stringify(redactDetail(d))}` : "")),
         };
         if (!rest.includes("--confirm-real-sandbox")) {
           const pre = await dryRunPreflight(deps);
@@ -465,12 +487,12 @@ async function main(argv: string[]): Promise<number> {
         console.error(
           "usage: fleet:admin migrate|health|status|set-cap N|set-mode MODE|approve-runtime|clear-runtime|build-identity DIR|" +
             "set-replication on|off|set-timeouts k=S…|enroll-root WALLET NAME|rotate-credential ID|grant-agent-role|grant-service-role|" +
-            "audit-privileges|doctor|terminations|reap|reservations|release ID|mark-dead ID",
+            "audit-privileges|doctor|terminations|reap|reservations|release ID|mark-dead ID|audit-scan FILE…",
         );
         return 2;
     }
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(redactText(err instanceof Error ? err.message : String(err)));
     return 1;
   } finally {
     await store.close();

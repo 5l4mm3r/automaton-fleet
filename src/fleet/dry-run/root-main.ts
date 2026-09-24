@@ -1,17 +1,17 @@
 /**
  * Root witness entrypoint (FLEET-KI-4): `node dist/fleet/dry-run/root-main.js`,
  * run by deploy/systemd/automaton-fleet-witness.service. Logs JSON lines
- * without credentials or session tokens.
+ * through the canonical redactor (no credentials or session tokens).
  *
  * Exit codes: 0 stopped (SIGTERM/SIGINT); 3 the controller no longer accepts
  * this witness; 4 startup refusal; 1 anything else. The unit sets
  * RestartPreventExitStatus=3 4 so a retired or misconfigured witness is not restarted.
  */
 
+import { createRedactedLineLogger } from "../redact.js";
 import { runRootWitness } from "./root-witness.js";
 
-const log = (event: string, detail: Record<string, unknown> = {}) =>
-  process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), service: "fleet-root-witness", event, ...detail }) + "\n");
+const log = createRedactedLineLogger("fleet-root-witness");
 
 const ac = new AbortController();
 process.on("SIGTERM", () => ac.abort());

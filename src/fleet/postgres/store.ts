@@ -28,6 +28,7 @@ import { ulid } from "ulid";
 import { isFleetState } from "../config.js";
 import { createBoundGrant, type ClaimedGrant } from "../grants.js";
 import { FleetBypassError } from "../registry.js";
+import { redactDetail, redactText } from "../redact.js";
 import { FleetRuntimeError, normalizeRepoUrl, type RuntimePin } from "../runtime.js";
 import {
   checkAttestation,
@@ -356,28 +357,15 @@ async function dbNow(c: PoolClient): Promise<number> {
 }
 
 // ─── Secret hygiene for the audit log ────────────────────────────
-
-const SECRET_KEY_RE = /(private|secret|mnemonic|seed|passw|api[_-]?key|token|credential|database_url)/i;
-const SECRET_VALUE_RES = [/0x[0-9a-fA-F]{64}/g, /[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:[^\s@/]+@/gi];
+// Thin wrappers over the canonical redactor (src/fleet/redact.ts), kept for
+// existing call sites.
 
 export function scrubText(s: string): string {
-  return SECRET_VALUE_RES.reduce((acc, re) => acc.replace(re, "[redacted]"), s).slice(0, 500);
+  return redactText(s);
 }
 
 export function scrubDetail(detail: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(detail)) {
-    if (SECRET_KEY_RE.test(k)) {
-      out[k] = "[redacted]";
-    } else if (typeof v === "string") {
-      out[k] = SECRET_VALUE_RES.reduce((s, re) => s.replace(re, "[redacted]"), v);
-    } else if (v && typeof v === "object" && !Array.isArray(v)) {
-      out[k] = scrubDetail(v as Record<string, unknown>);
-    } else {
-      out[k] = v;
-    }
-  }
-  return out;
+  return redactDetail(detail);
 }
 
 function isConnectionError(err: unknown): boolean {
