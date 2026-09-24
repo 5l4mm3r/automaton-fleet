@@ -244,6 +244,11 @@ export class FleetApiClient implements FleetBackend {
     }
   }
 
+  /** This agent's own registry record (GET /v1/self); null when the credential is rejected. */
+  async describeSelf(): Promise<{ agent: SharedAgentRecord; dead: boolean } | null> {
+    return this.self();
+  }
+
   /** Roots are enrolled by the operator (fleet:admin enroll-root); this only confirms the credential. */
   async registerRoot(params: { walletAddress: string }): Promise<RegisterResult> {
     return this.confirm(this.agentId, params.walletAddress, "root");

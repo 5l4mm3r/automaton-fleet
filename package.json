@@ -58,6 +58,7 @@
     "test:deploy": "vitest run src/__tests__/fleet/fleet-phase4.test.ts",
     "test:phase5": "vitest run src/__tests__/fleet/fleet-phase5.test.ts",
     "test:phase6": "vitest run src/__tests__/fleet/fleet-phase6.test.ts",
+    "test:witness": "vitest run src/__tests__/fleet/fleet-witness.test.ts src/__tests__/fleet/fleet-witness-imports.test.ts",
     "test:ci": "vitest run --reporter=verbose",
     "clean": "rm -rf dist && pnpm -r clean"
   },

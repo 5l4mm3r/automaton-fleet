@@ -38,6 +38,7 @@ import {
 } from "../attestation.js";
 import type {
   ActivationResult,
+  FleetCapabilityScope,
   FleetCredential,
   FleetDecisionCode,
   FleetHealth,
@@ -213,6 +214,7 @@ interface AgentRow {
   last_heartbeat: Date | null;
   reservation_expires_at: Date | null;
   death_time: Date | null;
+  capability_scope?: FleetCapabilityScope;
 }
 
 interface StateRow {
@@ -288,6 +290,7 @@ function toAgent(r: AgentRow): SharedAgentRecord {
     updatedAt: r.updated_at.toISOString(),
     lastHeartbeat: iso(r.last_heartbeat),
     deathTime: iso(r.death_time),
+    ...(r.capability_scope ? { capabilityScope: r.capability_scope } : {}),
   };
 }
 
@@ -823,7 +826,10 @@ export class PgFleetStore {
     runtimeVersion?: string | null;
     runtimeCommit?: string | null;
     localMaxAgents?: number;
+    /** Schema v7 identity scope; default 'full'. Fixed at insert, never changed. */
+    capabilityScope?: FleetCapabilityScope;
   }): Promise<RegisterResult> {
+    const scope: FleetCapabilityScope = params.capabilityScope ?? "full";
     return this.tx(async (c): Promise<RegisterResult> => {
       const st = await this.lockState(c);
       const existing = await c.query<AgentRow>("SELECT * FROM fleet_agents WHERE lower(wallet_address) = lower($1)", [
@@ -833,6 +839,9 @@ export class PgFleetStore {
         const row = existing.rows[0];
         if (row.role !== "root") {
           return { ok: false, code: "FLEET_IDENTITY_MISMATCH", reason: "Wallet is registered as a child, not a root." };
+        }
+        if ((row.capability_scope ?? "full") !== scope) {
+          return { ok: false, code: "FLEET_IDENTITY_MISMATCH", reason: `Wallet is registered with capability scope ${row.capability_scope ?? "full"}, not ${scope}.` };
         }
         if (row.status !== "active" && row.status !== "unresponsive") {
           return { ok: false, code: "FLEET_AGENT_DEAD", reason: `Agent ${row.agent_id} is ${row.status}; the dead are not revived.` };
@@ -860,11 +869,11 @@ export class PgFleetStore {
       const id = ulid();
       const ins = await c.query<AgentRow>(
         `INSERT INTO fleet_agents (agent_id, role, generation, name, wallet_address, runtime_version, runtime_commit,
-                                   status, requested_by, last_heartbeat)
-         VALUES ($1, 'root', 0, $2, $3, $4, $5, 'active', $3, now()) RETURNING *`,
-        [id, params.name, params.walletAddress, params.runtimeVersion ?? null, params.runtimeCommit ?? null],
+                                   status, requested_by, last_heartbeat, capability_scope)
+         VALUES ($1, 'root', 0, $2, $3, $4, $5, 'active', $3, now(), $6) RETURNING *`,
+        [id, params.name, params.walletAddress, params.runtimeVersion ?? null, params.runtimeCommit ?? null, scope],
       );
-      await this.event(c, "root_registered", id, params.walletAddress, { name: params.name });
+      await this.event(c, "root_registered", id, params.walletAddress, { name: params.name, capabilityScope: scope });
       return { ok: true, agent: toAgent(ins.rows[0]), created: true };
     });
   }
@@ -1522,6 +1531,18 @@ export class PgFleetStore {
   }
 
   // ─── Queries ───────────────────────────────────────────────────
+
+  /**
+   * Capability scope of an agent identity (schema v7), read by agent id with
+   * the controller's own role. null when no such agent exists. Used by the
+   * fleet service's route policy before any route handler runs.
+   */
+  async capabilityScope(agentId: string): Promise<FleetCapabilityScope | string | null> {
+    return this.read(async (c) => {
+      const r = await c.query<{ s: string }>("SELECT capability_scope AS s FROM fleet_agents WHERE agent_id = $1", [agentId]);
+      return r.rows[0]?.s ?? null;
+    });
+  }
 
   async getAgent(agentId: string): Promise<SharedAgentRecord | null> {
     return this.read(async (c) => {

@@ -1,0 +1,85 @@
+# Automaton Fleet root witness — FLEET-KI-4 (temporary dry-run root parent).
+#
+# NOT enabled or started by any script. The operator starts it only for the
+# dry run (docs/fleet-production-runbook.md, stage 22) and stops it afterwards:
+#   systemctl start automaton-fleet-witness.service
+#
+# Runs dist/fleet/dry-run/root-main.js from the pinned release as its own
+# system user (in no group with any fleet secret). It holds only its own
+# witness credential (0600, in its 0700 state directory), talks only to the
+# fleet service on loopback, and cannot read admin.env, service.env or TLS
+# material. Its authority is limited server-side by capability scope 'witness'
+# (session, heartbeat, health challenge, self), not by this unit.
+
+[Unit]
+Description=Automaton Fleet root witness (dry-run parent; heartbeat/challenge only)
+Documentation=file:///opt/automaton-fleet/current/FLEET.md
+Wants=automaton-fleet.service
+After=automaton-fleet.service network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-witness
+Group=automaton-fleet-witness
+SupplementaryGroups=
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/dry-run/root-main.js
+# Non-secret configuration only; the credential is a 0600 file in the state directory.
+Environment=NODE_ENV=production
+Environment=HOME=/var/lib/automaton-fleet-witness
+Environment=FLEET_API_URL=http://127.0.0.1:8787
+Environment=FLEET_CREDENTIALS_FILE=/var/lib/automaton-fleet-witness/fleet-credentials.json
+Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/runtime.env
+Environment=FLEET_WITNESS_INTERVAL_MS=30000
+StateDirectory=automaton-fleet-witness
+StateDirectoryMode=0700
+UMask=0077
+
+# 3 = the controller no longer accepts this witness; 4 = startup refusal. Never restart those.
+Restart=on-failure
+RestartSec=5s
+RestartPreventExitStatus=3 4
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-witness
+
+# Network: the fleet service on loopback only.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Sandboxing
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# Controller secrets, TLS sources, other services' state and the agent's home are never visible.
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak
+InaccessiblePaths=-/home/automaton-agent -/var/lib/automaton-fleet -/var/log/automaton-fleet -/run/credentials
+
+[Install]
+WantedBy=multi-user.target

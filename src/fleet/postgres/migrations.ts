@@ -14,8 +14,9 @@
 import type { PoolClient } from "pg";
 import { V5_SQL, v4Sql } from "./migrations-phase5.js";
 import { V6_SQL } from "./migrations-phase6.js";
+import { v7Sql } from "./migrations-phase7.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 6;
+export const FLEET_PG_SCHEMA_VERSION = 7;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1116,6 +1117,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 4, name: "lifecycle_health_sessions_provisioning_orphans_custody", sql: v4Sql(FLEET_PG_HARD_MAX_AGENTS) },
   { version: 5, name: "treasury_economics", sql: V5_SQL },
   { version: 6, name: "provisioning_intents_dry_run_child", sql: V6_SQL },
+  { version: 7, name: "capability_scope_witness", sql: v7Sql(FLEET_PG_HARD_MAX_AGENTS) },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

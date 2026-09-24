@@ -92,6 +92,8 @@ const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   { pattern: /\bfleet:(dry-run-child|verify|verify-runtime|migrate-check)\b|fleet\/dry-run\/|scripts\/fleet-verify-deployment|deploy\/firewall|\bufw\s|\bnft\s/, description: "Operator-only fleet deployment command" },
   { pattern: /\b(FLEET_DRY_RUN_CHILD|FLEET_REMOTE_LISTEN_ENABLED|FLEET_PUBLIC_(HOSTNAME|LISTEN|URL)|FLEET_TLS_\w+|FLEET_ALLOWED_ORIGINS|REAL_(PAYMENTS|REPLICATION)_ENABLED|OWNER_SWEEP_ENABLED|FLEET_MAX_AGENTS)\s*=/, description: "Override fleet safety or exposure configuration" },
   { pattern: /\bfleet_(provisioning|reservations|sandbox_terminations)\b|svc_provision_reconcile|fleet_reserve_dry_run/i, description: "Touch fleet provisioning records" },
+  // FLEET-KI-4: root witness identity, its credential and capability scopes
+  { pattern: /automaton-fleet-witness|\bFLEET_WITNESS_\w+\s*=|\bcapability_scope\b/i, description: "Touch the fleet root witness or capability scopes" },
 ];
 
 export function getForbiddenCommandMatch(command: string): { description: string; pattern: string } | null {

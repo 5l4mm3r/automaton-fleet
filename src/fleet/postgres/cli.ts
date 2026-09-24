@@ -34,6 +34,9 @@
  *   pnpm fleet:admin reap | reservations
  *   pnpm fleet:admin release <agentId> [reason]
  *   pnpm fleet:admin mark-dead <agentId> [reason]
+ *   pnpm fleet:admin enroll-witness-root <name> <credentialFile>
+ *                                     root with capability scope 'witness' (FLEET-KI-4): keyless address,
+ *                                     approved runtime commit, custody frozen; refuses an existing file
  *
  * The privileged admin credential FLEET_ADMIN_DATABASE_URL is read from the
  * environment, else /etc/automaton-fleet/admin.env (0640, group
@@ -43,6 +46,7 @@
  * credential that does not own the fleet schema.
  */
 
+import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -57,7 +61,7 @@ import type { FleetCredential } from "../types.js";
 import { PgFleetStore } from "./store.js";
 import { FLEET_PG_SCHEMA_VERSION } from "./migrations.js";
 import { formatRuntimeIdentity, treeIdentity, verifyRuntimeIdentity } from "../runtime-verify.js";
-import { dryRunPreflight, performDryRunChild } from "../dry-run/operator.js";
+import { dryRunPreflight, keylessAddress, performDryRunChild } from "../dry-run/operator.js";
 import { findSandboxByName } from "../../replication/spawn.js";
 import { createConwayClient } from "../../conway/client.js";
 import type { ConwayClient } from "../../types.js";
@@ -83,6 +87,76 @@ export function writeCredentialFile(file: string, cred: FleetCredential, apiUrl:
   fs.writeFileSync(tmp, JSON.stringify({ agentId: cred.agentId, token: cred.token, apiUrl }, null, 2), { mode: 0o600, flag: "wx" });
   fs.renameSync(tmp, file);
   fs.chmodSync(file, 0o600);
+}
+
+/**
+ * Write a credential file that must not exist yet: 0600, created through a
+ * hard link so an existing file (or one created concurrently) is never replaced.
+ */
+export function writeCredentialFileExclusive(file: string, cred: FleetCredential, apiUrl: string | null): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ agentId: cred.agentId, token: cred.token, apiUrl }, null, 2), { mode: 0o600, flag: "wx" });
+  try {
+    fs.linkSync(tmp, file);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") throw new Error(`${file} already exists; refusing to overwrite a credential file.`);
+    throw err;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+  fs.chmodSync(file, 0o600);
+}
+
+export interface WitnessEnrollment {
+  agentId: string;
+  role: "root";
+  capabilityScope: "witness";
+  runtimeCommit: string;
+  custodyFrozen: boolean;
+  credentialFile: string;
+}
+
+/**
+ * FLEET-KI-4: enroll a root with capability scope 'witness' for the dry run.
+ * Keyless wallet address (no private key exists), runtime commit = the
+ * registry-approved commit, custody frozen with a zero limit (enforced by the
+ * database), credential written 0600 to a file that must not exist. The
+ * token is never printed or returned. Normal enroll-root is unchanged.
+ */
+export async function enrollWitnessRoot(
+  store: PgFleetStore,
+  p: { name: string; credentialFile: string; apiUrl: string | null; actor: string },
+): Promise<WitnessEnrollment> {
+  const file = path.resolve(p.credentialFile);
+  let exists = true;
+  try {
+    fs.lstatSync(file);
+  } catch {
+    exists = false;
+  }
+  if (exists) throw new Error(`${file} already exists; refusing to overwrite a credential file.`);
+  const st = await store.getState();
+  if (!st.runtime?.commit || !st.build) throw new Error("No runtime is approved in the registry; approve the pinned release first.");
+  const reg = await store.registerRoot({
+    walletAddress: keylessAddress(`automaton-fleet:witness-root:no-key:${crypto.randomBytes(32).toString("hex")}`),
+    name: p.name,
+    runtimeCommit: st.runtime.commit,
+    capabilityScope: "witness",
+  });
+  if (!reg.ok) throw new Error(`${reg.code}: ${reg.reason}`);
+  const agentId = reg.agent.agentId;
+  try {
+    const auth = await store.agentAuthority(agentId);
+    if (!auth || auth.spendingFrozen !== true || auth.dailyLimitCents !== 0) throw new Error("witness custody is not frozen with a zero limit");
+    const cred = await store.issueCredential(agentId, p.actor);
+    writeCredentialFileExclusive(file, cred, p.apiUrl);
+    return { agentId, role: "root", capabilityScope: "witness", runtimeCommit: st.runtime.commit, custodyFrozen: true, credentialFile: file };
+  } catch (err) {
+    // Never leave a living witness without its credential: retire it (revokes everything).
+    await store.markDead(agentId, "witness enrollment failed", p.actor).catch(() => {});
+    throw err;
+  }
 }
 
 export { readEnvFile };
@@ -327,6 +401,13 @@ async function main(argv: string[]): Promise<number> {
         const file = path.resolve(out ?? DEFAULT_CREDENTIAL_FILE);
         writeCredentialFile(file, cred, e.FLEET_API_URL?.trim() || null);
         console.log(JSON.stringify({ agentId: reg.agent.agentId, created: reg.created, credentialFile: file }));
+        return 0;
+      }
+      case "enroll-witness-root": {
+        const [name, out] = rest;
+        if (!name || !out) throw new Error("usage: enroll-witness-root <name> <credentialFile>");
+        const r = await enrollWitnessRoot(store, { name, credentialFile: out, apiUrl: e.FLEET_API_URL?.trim() || "http://127.0.0.1:8787", actor });
+        console.log(JSON.stringify(r));
         return 0;
       }
       case "rotate-credential": {

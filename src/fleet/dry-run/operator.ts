@@ -67,9 +67,17 @@ export interface DryRunPreflight {
 
 const flagOn = (v: string | undefined) => v?.trim().toLowerCase() === "true";
 
+/**
+ * Keyless wallet address: a public-address-shaped digest of `seed`. No
+ * private key exists for it, so nothing can ever sign for it.
+ */
+export function keylessAddress(seed: string): string {
+  return "0x" + crypto.createHash("sha256").update(seed).digest("hex").slice(0, 40);
+}
+
 /** Deterministic, keyless wallet address for a dry-run child: nobody holds its private key. */
 export function keylessDryRunAddress(agentId: string): string {
-  return "0x" + crypto.createHash("sha256").update(`automaton-fleet:dry-run:no-key:${agentId}`).digest("hex").slice(0, 40);
+  return keylessAddress(`automaton-fleet:dry-run:no-key:${agentId}`);
 }
 
 export async function dryRunPreflight(deps: DryRunDeps): Promise<DryRunPreflight> {

@@ -21,13 +21,21 @@ ok()  { printf '  [PASS] %s\n' "$*"; }
 bad() { printf '  [FAIL] %s\n' "$*"; fail=1; }
 
 echo "Secrets vs OS identities"
-for u in automaton-agent automaton-fleet-service; do
-  id "$u" >/dev/null 2>&1 || { bad "user $u missing"; continue; }
+for u in automaton-agent automaton-fleet-service automaton-fleet-witness; do
+  if ! id "$u" >/dev/null 2>&1; then
+    [[ "$u" == automaton-fleet-witness ]] && { ok "user $u not created (root witness not installed)"; continue; }
+    bad "user $u missing"; continue
+  fi
   for f in "$ETC/admin.env" "$ETC/service.env" "$ETC/tls/fleet.key" "$ETC/legacy-env-fleet.bak"; do
     [[ -e "$f" ]] || continue
     if runuser -u "$u" -- test -r "$f" 2>/dev/null; then bad "$u CAN read $f"; else ok "$u cannot read $f"; fi
   done
 done
+
+if id automaton-fleet-witness >/dev/null 2>&1; then
+  groups_of="$(id -nG automaton-fleet-witness)"
+  [[ "$groups_of" == automaton-fleet-witness ]] && ok "automaton-fleet-witness is in no other group" || bad "automaton-fleet-witness groups: $groups_of"
+fi
 
 echo "TLS material (LoadCredential sources)"
 # expect <path> <owner:group> <octal mode> <kind: d|f>

@@ -34,19 +34,55 @@ where it was first confirmed so it is not mistaken for a new regression.
   `lock_timeout` + retry). Recheck after FLEET-KI-1 is fixed.
 - **Impact:** test-only.
 
-## FLEET-KI-3: TLS key via LoadCredential needs the systemd-credential exception
+## FLEET-KI-3 (resolved): TLS key via LoadCredential needs the systemd-credential exception
 
-- **Status:** fixed in the working tree (uncommitted, pending review): `loadTls()`
-  validates the implicit `$CREDENTIALS_DIRECTORY/tls.key` with
-  `systemdCredentialProblems()`; an explicit `FLEET_TLS_KEY_FILE` stays strict.
-  The remote drop-in is still not installed.
-- **Symptom (expected):** with `LoadCredential=tls.key`, systemd presents
+- **Status:** fixed and deployed. Committed in `11c0c7c` (the current pinned
+  runtime); installed on the local VM, where `scripts/fleet-verify-deployment.sh`
+  passes. `loadTls()` validates the implicit `$CREDENTIALS_DIRECTORY/tls.key`
+  with `systemdCredentialProblems()`; an explicit `FLEET_TLS_KEY_FILE` stays
+  strict. Not yet exercised with a real certificate: remote HTTPS is still
+  disabled, no key or certificate exists, and the remote drop-in is not
+  installed (production runbook stages 15–19).
+- **Symptom (before the fix):** with `LoadCredential=tls.key`, systemd presents
   `$CREDENTIALS_DIRECTORY/tls.key` as mode 0440 (0400 + ACL mask), and
   `loadTls()` in `src/fleet/service/main.ts` refuses it via the strict
   `secretFileProblems()`. This is the same failure `241dcf9` fixed for `service.env`.
-- **Direction:** route the credential-derived key path (not an explicit
+- **Fix:** route the credential-derived key path (not an explicit
   `FLEET_TLS_KEY_FILE`) through `systemdCredentialProblems(file, "tls.key", …)`
   with source `/etc/automaton-fleet/tls/fleet.key`. Keep all the same checks:
   exact unit and directory, no symlink or hard-link escape, no world bits, group at
-  most read, source root 0600 (or hidden from the service). Add the same test matrix.
-- **Must be done before** installing `automaton-fleet.service.d/remote.conf`.
+  most read, source root 0600 (or hidden from the service). The same test matrix was added.
+- **Was required before** installing `automaton-fleet.service.d/remote.conf`;
+  that precondition is now met.
+
+## FLEET-KI-4: the dry run needs a living root, and no zero-authority root runtime exists
+
+- **Status:** implemented in the working tree, pending review (not committed, not
+  pinned, not deployed). Design: option B, a root witness plus the first-class
+  capability scope `witness` (schema v7). See FLEET.md, "FLEET-KI-4 — Witness
+  capability scope and the root witness".
+- **Facts that drove it:** `dryRunPreflight` (`src/fleet/dry-run/operator.ts`) and
+  `fleet_reserve_dry_run` (`migrations-phase6.ts`) require `--root` to be an
+  ACTIVE root. A root stays ACTIVE only while it heartbeats **and** passes
+  controller challenges. The only runtime that did that was the full agent
+  (agent loop, inference, wallet).
+- **Solution:**
+  - `dist/fleet/dry-run/root-main.js` heartbeats and answers challenges only. It
+    loads no wallet, inference or replication code.
+  - It runs as the dedicated `automaton-fleet-witness` user.
+  - The root is enrolled with `fleet:admin enroll-witness-root`: keyless address,
+    scope `witness`, approved commit, frozen custody, 0600 credential.
+  - The scope is enforced server-side by the route policy (default deny) and by
+    `fleet_authenticate` (action allow-list), so a stolen witness credential
+    can only open sessions, heartbeat, answer challenges and read itself.
+- **Before it can be used:**
+  1. operator review;
+  2. a new runtime pin containing it;
+  3. the live v6 → v7 migration;
+  4. installing the witness user and unit on the production host.
+
+  All four need operator approval (`docs/fleet-production-runbook.md`, stage 22).
+- **Credential placement:** `enroll-witness-root` writes to a path the operator
+  chooses (a 0700 temporary directory). The operator then installs it into
+  `/var/lib/automaton-fleet-witness/` with `sudo install -m 0600 -o automaton-fleet-witness`.
+  The token is never printed.

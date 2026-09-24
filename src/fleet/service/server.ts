@@ -56,6 +56,62 @@ interface RequestCtx {
   requestId: string;
   agentId: string | null;
   status: number;
+  /** Memoised per request: a signed request's nonce is consumed exactly once. */
+  cred?: { agentId: string; token: string };
+  bearerCred?: { agentId: string; token: string };
+}
+
+/**
+ * Central route authorization policy (FLEET-KI-4, default deny).
+ *
+ * Every /v1 route FleetService.route() serves has exactly one entry, keyed
+ * "METHOD /path". route() consults it BEFORE dispatching, so a route added to
+ * the handler without a policy entry is unreachable (404), and the test
+ * "route-policy completeness" fails. `auth` names how the caller is
+ * identified; `witness: true` is the explicit opt-in for identities with the
+ * restricted capability scope 'witness'. Any other scope is denied every
+ * authenticated route. Public routes identify nobody and grant no authority.
+ */
+export type RouteAuth = "public" | "bearer" | "session";
+export interface RoutePolicy {
+  auth: RouteAuth;
+  /** Opt-in for capability scope 'witness'. Irrelevant for public routes. */
+  witness: boolean;
+}
+
+export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Object.freeze({
+  "GET /v1/health": { auth: "public", witness: false },
+  "GET /v1/state": { auth: "session", witness: false },
+  "GET /v1/members": { auth: "session", witness: false },
+  "GET /v1/self": { auth: "session", witness: true },
+  "POST /v1/session": { auth: "bearer", witness: true },
+  "POST /v1/heartbeat": { auth: "session", witness: true },
+  "POST /v1/health/challenge": { auth: "session", witness: true },
+  "POST /v1/status": { auth: "session", witness: false },
+  "POST /v1/replication/request": { auth: "session", witness: false },
+  "POST /v1/replication/claim": { auth: "session", witness: false },
+  "POST /v1/replication/provisioning": { auth: "session", witness: false },
+  "POST /v1/replication/activate": { auth: "session", witness: false },
+  "POST /v1/replication/fail": { auth: "session", witness: false },
+  "POST /v1/replication/reconcile": { auth: "session", witness: false },
+  "POST /v1/replication/release": { auth: "session", witness: false },
+  "POST /v1/children/terminal": { auth: "session", witness: false },
+  "POST /v1/capital/propose": { auth: "session", witness: false },
+  "POST /v1/wallet/spend-request": { auth: "session", witness: false },
+});
+
+/**
+ * Pure policy decision. "unknown": no policy entry (never dispatched).
+ * "deny": the scope may not use this route. Unknown scopes are denied every
+ * authenticated route; 'full' keeps the pre-v7 behaviour.
+ */
+export function routeDecision(method: string, path: string, scope: string | null): "allow" | "deny" | "unknown" {
+  const policy = ROUTE_POLICY[`${method} ${path}`];
+  if (!policy) return "unknown";
+  if (policy.auth === "public") return "allow";
+  if (scope === "full") return "allow";
+  if (scope === "witness") return policy.witness ? "allow" : "deny";
+  return "deny";
 }
 
 export interface AuditEntry {
@@ -393,12 +449,14 @@ export class FleetService {
 
   /** Long-lived fa1 bearer. Only POST /v1/session accepts it (unless allowLegacyBearer). */
   private async bearer(req: http.IncomingMessage, path: string, ctx: RequestCtx): Promise<{ agentId: string; token: string }> {
+    if (ctx.bearerCred) return ctx.bearerCred;
     const h = req.headers.authorization ?? "";
     const m = /^Bearer (\S{1,256})$/.exec(h);
     const agentId = m ? agentIdFromToken(m[1]) : null;
     if (!m || !agentId) return this.authFailure(ctx, path, m ? "malformed token" : "missing bearer token");
     ctx.agentId = agentId;
-    return { agentId, token: m[1] };
+    ctx.bearerCred = { agentId, token: m[1] };
+    return ctx.bearerCred;
   }
 
   /**
@@ -410,12 +468,14 @@ export class FleetService {
    * session itself (unexpired, unrevoked, agent living, credential valid).
    */
   private async credentials(req: http.IncomingMessage, path: string, ctx: RequestCtx): Promise<{ agentId: string; token: string }> {
+    if (ctx.cred) return ctx.cred;
     const h = req.headers.authorization ?? "";
     const m = /^FleetSession (\S{1,256})$/.exec(h);
     if (!m) {
       if (/^Bearer /.test(h) && this.opts.allowLegacyBearer) {
         const cred = await this.bearer(req, path, ctx);
         this.rateLimit(this.perAgent, cred.agentId);
+        ctx.cred = cred;
         return cred;
       }
       return this.authFailure(ctx, path, /^Bearer /.test(h) ? "session required (long-lived credential only opens sessions)" : "missing session", "FLEET_SESSION_REQUIRED");
@@ -441,7 +501,36 @@ export class FleetService {
       await this.recordDb("request_replay_blocked", agentId, { path, ip: ctx.ip });
       throw new HttpError(409, "FLEET_REQUEST_REPLAYED", "request nonce already used");
     }
-    return { agentId, token };
+    ctx.cred = { agentId, token };
+    return ctx.cred;
+  }
+
+  /**
+   * Route authorization (default deny), run by route() before any handler.
+   * The caller is identified exactly as the handler would identify it (the
+   * memoised bearer or signed-session check). Its capability scope is read
+   * by agent id; 'full' proceeds unchanged. A restricted identity on a route
+   * it has not been granted is authenticated for real (api_whoami) before the
+   * denial is recorded, so an invented token cannot forge scope_denied events;
+   * either way the handler never runs.
+   */
+  private async authorize(method: string, path: string, req: http.IncomingMessage, ctx: RequestCtx): Promise<void> {
+    const policy = ROUTE_POLICY[`${method} ${path}`];
+    if (!policy) throw new HttpError(404, "FLEET_NOT_FOUND", "no such endpoint");
+    if (policy.auth === "public") return;
+    const cred = policy.auth === "bearer" ? await this.bearer(req, path, ctx) : await this.credentials(req, path, ctx);
+    const scope = await this.opts.admin.capabilityScope(cred.agentId);
+    // No such agent: the handler's own authentication rejects it (unchanged behaviour).
+    if (scope === null) return;
+    if (routeDecision(method, path, scope) === "allow") return;
+    const who = await this.opts.agent.whoami(cred.agentId, cred.token);
+    if (!who.ok) {
+      const gone = who.code === "FLEET_AGENT_DEAD" || who.code === "FLEET_AGENT_QUARANTINED";
+      if (!gone) this.audit("api_auth_failed", null, { path, code: who.code });
+      throw new HttpError(gone ? 410 : 401, who.code, "agent credential rejected");
+    }
+    await this.recordDb("scope_denied", cred.agentId, { method, path, scope, layer: "service", ip: ctx.ip });
+    throw new HttpError(403, "FLEET_SCOPE_DENIED", "this identity's capability scope does not allow this endpoint");
   }
 
   /** Full authentication through the restricted role; the agent must be living (not quarantined). */
@@ -578,6 +667,8 @@ export class FleetService {
 
   private async route(method: string, path: string, req: http.IncomingMessage, ctx: RequestCtx): Promise<Record<string, unknown>> {
     const { admin, agent } = this.opts;
+    // Default deny: no policy entry, or a scope not granted this route, never reaches a handler.
+    await this.authorize(method, path, req, ctx);
 
     if (method === "GET" && path === "/v1/health") {
       return { health: await admin.health() };

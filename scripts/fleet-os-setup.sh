@@ -8,6 +8,8 @@
 #   group  automaton-fleet-admin          operator group; may read admin.env (the operator is added)
 #   user   automaton-fleet-service        system, nologin; runs the fleet service
 #   user   automaton-agent                runs local agent runtimes; in NO fleet group
+#   user   automaton-fleet-witness        system, nologin, in NO group; runs the FLEET-KI-4 root witness
+#                                         (state: /var/lib/automaton-fleet-witness 0700 via systemd StateDirectory)
 #   /etc/automaton-fleet/                 root:root 0755
 #     tls/         root:automaton-fleet-admin 0750   Phase 6 certificate + key (not created here; remote stays disabled)
 #       fleet.key  root:root 0600                    LoadCredential=tls.key (only if present; never generated here)
@@ -17,7 +19,8 @@
 #                                                    (fresh hex passwords; read by systemd LoadCredential only)
 #     runtime.env  root:root 0644                    non-secret: pinned runtime + safety flags (all false)
 #   /opt/automaton-fleet/{releases,node/bin}         root-owned; pinned node binary copied in
-#   /etc/systemd/system/automaton-fleet.service, automaton-agent.service (installed, NOT enabled/started)
+#   /etc/systemd/system/automaton-fleet.service, automaton-agent.service,
+#     automaton-fleet-witness.service                (installed, NOT enabled/started)
 # and moves controller secrets out of the repository .env.fleet (backup kept root-only).
 #
 # It never prints secret values, never starts anything and never touches PostgreSQL
@@ -64,6 +67,8 @@ id automaton-fleet-service >/dev/null 2>&1 || run useradd --system --user-group 
 id automaton-agent >/dev/null 2>&1 || run useradd --user-group --create-home --home-dir /home/automaton-agent \
   --shell /usr/sbin/nologin --comment "Automaton agent runtime" automaton-agent
 run chmod 0700 /home/automaton-agent
+id automaton-fleet-witness >/dev/null 2>&1 || run useradd --system --user-group --home-dir /var/lib/automaton-fleet-witness \
+  --no-create-home --shell /usr/sbin/nologin --comment "Automaton fleet root witness" automaton-fleet-witness
 
 say "2. Secret directory (+ tls/ for the Phase 6 certificate; key and cert delivered by LoadCredential only)"
 run install -d -m 0755 -o root -g root "$ETC"
@@ -114,6 +119,7 @@ run install -m 0755 -o root -g root "$NODE_SRC" "$OPT/node/bin/node"
 say "7. systemd units (installed, NOT enabled or started)"
 run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-fleet.service" /etc/systemd/system/automaton-fleet.service
 run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-agent.service" /etc/systemd/system/automaton-agent.service
+run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-fleet-witness.service" /etc/systemd/system/automaton-fleet-witness.service
 run systemctl daemon-reload
 
 say "8. Remove controller secrets from the repository .env.fleet (root-only backup kept)"

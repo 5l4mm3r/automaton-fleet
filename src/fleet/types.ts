@@ -200,6 +200,13 @@ export interface ReapResult {
   graceFrom: string | null;
 }
 
+/**
+ * Capability scope of an agent identity (schema v7). 'full' is every normal
+ * agent. 'witness' is a root that may only open sessions, heartbeat, answer
+ * health challenges and read itself (FLEET-KI-4). Immutable after enrollment.
+ */
+export type FleetCapabilityScope = "full" | "witness";
+
 export interface SharedAgentRecord {
   agentId: string;
   parentAgentId: string | null;
@@ -219,6 +226,8 @@ export interface SharedAgentRecord {
   updatedAt: string;
   lastHeartbeat: string | null;
   deathTime: string | null;
+  /** Schema v7; absent from older records. */
+  capabilityScope?: FleetCapabilityScope;
 }
 
 export interface FleetHealth {

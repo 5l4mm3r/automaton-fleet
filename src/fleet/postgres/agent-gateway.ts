@@ -76,6 +76,7 @@ export function agentFromJson(a: Record<string, unknown>): SharedAgentRecord {
     updatedAt: new Date(a.updatedAt as string).toISOString(),
     lastHeartbeat: isoOrNull(a.lastHeartbeat),
     deathTime: isoOrNull(a.deathTime),
+    ...(a.capabilityScope === "full" || a.capabilityScope === "witness" ? { capabilityScope: a.capabilityScope } : {}),
   };
 }
 

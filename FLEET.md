@@ -1,4 +1,47 @@
-# Fleet Layer — Phase 1
+# Automaton Fleet
+
+This file records the fleet layer phase by phase (Phases 1–6 below). The phase
+sections describe what each phase built, and their "blockers" lists reflect the time
+they were written. **Current state is only in the next section.**
+
+## Current deployment state (2026-09-24)
+
+| Item | State |
+|---|---|
+| Pinned runtime | `https://github.com/5l4mm3r/automaton-fleet.git` @ `11c0c7c02592d43a2c1350b779eaa795a237f3b7`, build ID `e388571a140f7cb20e289e1e64d152571adea5f207c2290c09888f80f6e3c624`, lockfile `eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811`. Published on the fork, approved in the registry, installed at `/opt/automaton-fleet/releases/11c0c7c…` |
+| Database | Schema v6, local PostgreSQL (loopback only); restricted roles in place |
+| Controller | `automaton-fleet.service` on the local Ubuntu VM, loopback only (`127.0.0.1:8787`); `/readyz` 200 |
+| Remote HTTPS | Disabled (`FLEET_REMOTE_LISTEN_ENABLED=false`). No certificate or key exists; `/etc/automaton-fleet/tls` is root:automaton-fleet-admin 0750. The remote drop-in and firewall are not installed |
+| Fleet cap / mode | Cap **1** (registry `maxAgents=1`). It stays 1 until public HTTPS is proven healthy. Mode DEVELOPMENT |
+| Agents | None living, none reserved |
+| Safety flags | `REAL_REPLICATION_ENABLED`, `REAL_PAYMENTS_ENABLED`, `OWNER_SWEEP_ENABLED`, `FLEET_DRY_RUN_CHILD`: all `false` |
+| `fleet:doctor` | DEPLOYMENT: OK (runtime repo, commit, build ID, controller service, approved runtime: PASS) |
+| `scripts/fleet-verify-deployment.sh` | Passes, including the TLS systemd-credential checks (FLEET-KI-3, fixed in `11c0c7c`) |
+| Production host | OVH VPS (Ubuntu 24.04 LTS) being provisioned; controller hostname `api.agentfleet.vip` |
+| In development (not deployed) | FLEET-KI-4 root witness + capability scope, schema **v7** (working tree, pending review). Deploying it needs a new approved runtime pin and the live v6 → v7 migration |
+
+**Remaining SAFE FOR DRY RUN blockers** (`pnpm fleet:verify`), exactly:
+1. HTTPS valid
+2. remote controller reachable
+3. fleet cap = 2
+
+**Further prerequisite for the dry run:** a living root agent (FLEET-KI-4). The root witness that provides it is implemented but not yet deployed (see the FLEET-KI-4 section at the end).
+
+**Still blocking SAFE FOR REAL REPLICATION / REAL PAYMENTS** (structural, unchanged):
+- no completed dry-run child;
+- Conway has no sandbox stop/delete API (zombie containment);
+- sandbox-side attestation trusts the sandbox, and child Node is not pinned;
+- no controller custody signer or controller-held wallet keys (payments).
+
+**Documents:**
+- Production cutover procedure: [`docs/fleet-production-runbook.md`](docs/fleet-production-runbook.md).
+- Open issues: [`docs/fleet-known-issues.md`](docs/fleet-known-issues.md). FLEET-KI-1 and
+  KI-2 are pre-existing PostgreSQL concurrency failures in the Phase 2 tests; KI-4 is the
+  dry-run root.
+
+---
+
+# Phase 1 — Fleet layer
 
 A bounded fleet layer above Automaton's existing replication system. Phase 1 adds
 FleetRegistry, FleetPolicy, FleetController, fleet operating states and a global
@@ -184,6 +227,8 @@ Child provisioning (`src/replication/spawn.ts`, both paths): `git init` → `fet
 
 ## Remaining blockers before real replication
 
+*Historical (end of Phase 2). Items 1–6 were resolved in Phases 3–6. Item 7 (sandbox trust) remains open; see "Current deployment state".*
+
 1. **DB privilege separation.** The DSN owner can disable triggers and rewrite `fleet_state`. Agents need a role limited to SECURITY DEFINER functions (or row-level GRANTs). `fleetadmin` cannot create roles.
 2. **Child DB access.** Children aren't given credentials (the admin DSN must never be forwarded), so they can't heartbeat or replicate yet. That needs (1) and a credential delivery mechanism.
 3. **No published fork.** This repo's `origin` is upstream, so there's no valid `FLEET_RUNTIME_REPO` and no approved pin. Replication is blocked until the fork is pushed and a commit approved.
@@ -293,6 +338,8 @@ Known upstream issue: `src/__tests__/context-hardening.test.ts` hangs (no test c
 
 ## Remaining blockers before the first real child
 
+*Historical (end of Phase 3). Items 1–3 are done: roles created, schema migrated (now v6), fork published and runtime approved. Item 4 is covered by the production runbook (rate limiting was added in Phase 5). Item 7 was resolved in Phase 4 (parent-reported deaths are effective). Items 5, 6 and 8 remain open; see "Current deployment state".*
+
 1. **Create the roles and migrate the live DB.** `scripts/fleet-db-roles.sql` needs a superuser, then `pnpm fleet:migrate` (the live `fleet` schema is still v1), then `fleet:admin enroll-root`.
 2. **Remove `DATABASE_URL` from anything that starts an agent.** Don't source `.env.fleet` before `automaton --run` (it will refuse). Run the fleet service as a **separate OS user**. Today `.env.fleet` is readable by the same user an agent's shell runs as, so the pattern guard is the only thing in the way.
 3. **Publish the fork and approve a build.** `origin` is still upstream, so there's no valid `FLEET_RUNTIME_REPO`. Push the fork, run `scripts/fleet-build-runtime.sh`, then `approve-runtime`.
@@ -304,7 +351,7 @@ Known upstream issue: `src/__tests__/context-hardening.test.ts` hangs (no test c
 
 # Phase 4 — Deployment readiness and first-child preparation
 
-Real replication, real payments and owner sweeps remain **disabled**. No child has been spawned. Nothing privileged has been applied: the database roles, the v3 migration, the OS users and the systemd units all wait for operator approval (see "Commands awaiting approval").
+Real replication, real payments and owner sweeps remain **disabled**. No child has been spawned. *At the time of Phase 4* nothing privileged had been applied. The database roles, the migration, the OS users and the systemd units have since been applied on the local VM (see "Current deployment state").
 
 ## Database roles (schema v3)
 
@@ -420,7 +467,7 @@ automaton-agent ─HTTP(loopback)+own token─► automaton-fleet.service (User=
 - fleet maximum, living agents, reserved slots, stale agents, stale reservations and unterminated sandboxes;
 - OS users and groups, secret-file modes, the systemd unit, and legacy secrets in `.env.fleet`.
 
-It gives two verdicts: **DEPLOYMENT** OK/FAIL and **REAL REPLICATION** SAFE/UNSAFE. The exit code is 1 while any blocker remains. Today it reports DEPLOYMENT FAIL and REAL REPLICATION UNSAFE with 11 blockers.
+It gives two verdicts: **DEPLOYMENT** OK/FAIL and **REAL REPLICATION** SAFE/UNSAFE. The exit code is 1 while any blocker remains. At the end of Phase 4 it reported DEPLOYMENT FAIL and REAL REPLICATION UNSAFE with 11 blockers. It now reports DEPLOYMENT OK; Phase 6 added the readiness levels (see "Current deployment state").
 
 ## Tests
 
@@ -597,6 +644,7 @@ The Phase 5 gap: `createSandbox` could succeed while the callback reporting it w
   - running as root, or as anyone other than `FLEET_SERVICE_EXPECTED_USER` (the unit sets `automaton-fleet-service`).
 - **Endpoints:** `/healthz` returns only `{ok, status, uptimeS}`. `/readyz` (detailed) answers loopback peers only. Responses carry `cache-control: no-store`, `nosniff`, and HSTS over TLS.
 - **No database path:** PostgreSQL and Redis are never proxied. There is no DB route and no `CONNECT` tunnelling, and a PG protocol packet gets an HTTP 400 (tested).
+- **Certificate renewal needs a restart:** `LoadCredential=` copies `tls.key` and `tls.crt` only when the service starts. A renewed certificate must be copied into `/etc/automaton-fleet/tls/` (single-link, root:root 0600/0644) and the service restarted. Otherwise it keeps serving the old certificate, and once that is within a day of expiry the service refuses to start. The certbot deploy hook and monitoring are in `docs/fleet-production-runbook.md` ("Certificate renewal requires a service restart").
 - **Remote drop-in:** `deploy/systemd/automaton-fleet.service.d/remote.conf.example` (not installed) adds `LoadCredential=tls.key` and `LoadCredential=tls.crt`, lifts `IPAddressDeny` and grants only `CAP_NET_BIND_SERVICE`.
 - **Firewall:** `deploy/firewall/fleet-firewall.sh` (dry run by default) denies all inbound traffic except SSH and 443/tcp, and explicitly denies 5432, 6379 and 8787. nftables equivalent:
   ```
@@ -670,3 +718,87 @@ The Phase 5 gap: `createSandbox` could succeed while the callback reporting it w
 - the three doctor levels.
 
 Mutation checks: removing the uncertain→ORPHANED rewrite or the custody freeze each make tests fail.
+
+# FLEET-KI-4 — Witness capability scope and the root witness (schema v7)
+
+**Status:** implemented in the working tree, not yet reviewed, committed, pinned or deployed. The live registry stays at v6 and the approved runtime stays `11c0c7c` until the operator approves a new release and the v7 migration. Real replication, real payments and owner sweeps remain **disabled**, and nothing here changes a safety switch, the cap or the approved runtime.
+
+The operator dry run needs a living root parent (`fleet_reserve_dry_run`), and a root stays ACTIVE only while it heartbeats and passes health challenges. The **root witness** is the smallest process that does that. Its security does not depend on the witness program: a stolen witness credential can do nothing but open a session, heartbeat, answer a challenge and read itself.
+
+## Capability scope (schema v7, `src/fleet/postgres/migrations-phase7.ts`)
+
+- `fleet_agents.capability_scope text NOT NULL DEFAULT 'full' CHECK IN ('full','witness')`. Every existing agent becomes `full` and behaves exactly as before.
+- It belongs to the agent identity, not to a credential or session. `fleet_authenticate` reads the agent row for both `fa1` credentials and `fs1` sessions, so every session inherits it, and credential rotation cannot escape it.
+- **Immutable** after insert (trigger `fleet_agents_zz_scope_immutable`, even for the owner). CHECK `fleet_agents_witness_is_root`: a witness is always a parentless, non-dry-run root. No new role.
+- Set only by `registerRoot(..., capabilityScope)`, called by the operator's `enroll-witness-root`. Normal `enroll-root` is unchanged (`full`).
+
+## Enforcement
+
+| Layer | Mechanism | Covers |
+|---|---|---|
+| Fleet service | `ROUTE_POLICY` + `routeDecision()` in `src/fleet/service/server.ts`. `route()` calls `authorize()` before dispatching anything | Every `/v1` route. No policy entry → never dispatched (404). Scope `witness` → only routes marked `witness: true`. Any other non-`full` scope → no authenticated route. A restricted identity on a denied route is authenticated for real (`api_whoami`) first, then gets `403 FLEET_SCOPE_DENIED` and a `scope_denied` event (fleet_events + audit JSONL, no tokens). An invented token gets 401 and records nothing |
+| Database | `fleet_authenticate(p_agent, p_token, p_action)` | Every `api_*` function. For `witness` only the actions `open_session`, `heartbeat`, `whoami` pass; any other action, including unknown or future ones, returns `FLEET_SCOPE_DENIED`. `full` is unchanged |
+| Allocator | `fleet_reserve_slot` returns `FLEET_PARENT_SCOPE`; BEFORE INSERT guard `fleet_agents_scope_parent_guard` | A witness can never parent a normal child, whatever path inserts it. `fleet_reserve_dry_run` (operator-only) still accepts it |
+| Treasury | `fleet_custody_dry_run_guard` (extended), `fleet_allocations_dry_run_guard` (extended) | Custody always frozen with a zero limit, even if the owner unfreezes it. No capital allocation can be written |
+
+`svc_*` functions are unchanged. The operator's dry run (`performDryRunChild`) passes the witness root as `parentAgentId` to `svc_claim`, `svc_activate` and the provisioning callbacks, so a database-level parent check there would break it. The agent-facing lease routes are denied by the route policy instead.
+
+### Witness authorization matrix
+
+| Route | Witness |
+|---|---|
+| `POST /v1/session` (`fa1` only) | allow |
+| `POST /v1/heartbeat` | allow |
+| `POST /v1/health/challenge` | allow (ownership, single use, expiry, nonce, commit and canary checks unchanged) |
+| `GET /v1/self` | allow |
+| `GET /v1/health` | public (no identity, no authority) |
+| `GET /v1/state`, `GET /v1/members` | deny |
+| `POST /v1/status` | deny |
+| `POST /v1/replication/{request,claim,provisioning,activate,fail,reconcile,release}` | deny |
+| `POST /v1/children/terminal` | deny |
+| `POST /v1/capital/propose` | deny |
+| `POST /v1/wallet/spend-request` | deny |
+| any route without a policy entry | never dispatched (404) |
+
+Policy, cap, mode, runtime approval and treasury decisions have no agent route at all; they exist only in the admin CLI with the schema-owner credential.
+
+## Root witness process
+
+`dist/fleet/dry-run/root-main.js` (`src/fleet/dry-run/root-witness.ts`) reuses `FleetApiClient`: `fa1` → `fs1`, signed heartbeats, automatic challenge answers.
+
+- **Before any network access** it refuses: uid 0; `REAL_PAYMENTS_ENABLED`, `REAL_REPLICATION_ENABLED` or `OWNER_SWEEP_ENABLED` true (process env or runtime.env); privileged or forbidden variables (database URLs, `PG*`, `REDIS_URL`, wallet keys, `CONWAY_API_KEY`, …); any `~/.automaton/wallet*`; a readable `admin.env`, `service.env`, TLS key or legacy backup; an installed tree whose build ID or lockfile differs from the pinned release.
+- **After the first session** it refuses unless `/v1/self` says role `root`, scope `witness`, and the pinned runtime commit.
+- **Challenge answer:** the verified pinned commit and build ID, and whether the bundled shell guard blocks the canary. The canary is pattern-matched, never executed.
+- **Loads** no wallet, inference, agent-loop, Conway or replication module (static import-graph test plus a runtime test with throwing mocks). It holds no database credential and logs no token.
+- **Exit codes:** 0 stopped; 3 rejected by the controller (dead, quarantined, revoked); 4 startup refusal. The unit never restarts 3 or 4.
+- **When it stops:** the root becomes UNRESPONSIVE once its heartbeat is older than `unresponsive_s`, and `fleet_reserve_dry_run` then refuses it (`FLEET_PARENT_NOT_LIVING`). It moves to TERMINATING/DEAD after `termination_grace_s`.
+
+**OS identity:** `automaton-fleet-witness` (system, nologin, no supplementary group). Unit `deploy/systemd/automaton-fleet-witness.service` (installed by `fleet-os-setup.sh`, never enabled):
+- 0700 `StateDirectory`, holding the 0600 credential;
+- `NoNewPrivileges`, empty capability set, `ProtectSystem=strict`, `ProtectHome`;
+- loopback-only network;
+- `InaccessiblePaths` for `admin.env`, `service.env`, `tls/`, the legacy backup, the agent's home and the service's state/logs.
+
+**Enrollment:** `pnpm fleet:admin enroll-witness-root <name> <credentialFile>`:
+- a keyless address (no private key exists);
+- role root, scope `witness`;
+- `runtime_commit` = the registry-approved commit;
+- custody frozen (verified);
+- credential written 0600 through a hard link, so an existing file is never replaced;
+- prints only the agent ID, scope, commit and path.
+
+If writing the credential fails, the new root is marked dead immediately. Retire it after the dry run with `fleet:admin mark-dead`, which revokes the credential and all sessions.
+
+## Tests
+
+`src/__tests__/fleet/fleet-witness.test.ts` (26 tests, `pnpm test:witness`) and `fleet-witness-imports.test.ts` (2) cover:
+- migration v6 → v7, and existing agents becoming `full`;
+- scope immutability;
+- session, heartbeat, challenge and self allowed; every other route denied with no side effect and an audit event without secrets;
+- unknown routes and actions fail closed; replay and stale timestamps still refused;
+- rotation keeps the scope; `full` agents unchanged;
+- allocator refusal and dry-run acceptance; spend and capital denied;
+- no wallet, inference or replication modules; clean shutdown; UNRESPONSIVE after stop;
+- route-policy completeness.
+
+Mutation-checked: removing the service's `authorize()` or the database scope check each makes a test fail.
