@@ -120,38 +120,45 @@ REAL_REPLICATION_ENABLED=false
 REAL_PAYMENTS_ENABLED=false
 OWNER_SWEEP_ENABLED=false
 FLEET_DRY_RUN_CHILD=false
-FLEET_REMOTE_LISTEN_ENABLED=false
+FLEET_REMOTE_LISTEN_ENABLED=true (production VPS only; operator-approved at stage 17-19 / S8)
 
-Fleet cap = 1 until explicitly changed.
+Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
-## Current production candidate
+## Current production deployment
+
+State after S9b (2026-09-24), per docs/fleet-production-runbook.md.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
 
 Runtime commit:
-11c0c7c02592d43a2c1350b779eaa795a237f3b7
+cdfd70c842f43c8e3b8576ac07ebcd80cc3d4633
 
 Runtime build ID:
-e388571a140f7cb20e289e1e64d152571adea5f207c2290c09888f80f6e3c624
+6d0eee3427415918d91d5a88b4fa8814cf1574c141226fb15bc6c7d41ac70d0c
 
 Runtime lockfile SHA256:
 eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811
 
-Database schema:
-v6
+Previous release kept for rollback:
+11c0c7c02592d43a2c1350b779eaa795a237f3b7 (build e388571a…)
 
-Controller domain planned:
-api.agentfleet.vip
+Database schema:
+v7
+
+Controller domain:
+https://api.agentfleet.vip
 
 Current live topology:
-- local Ubuntu development VM
-- PostgreSQL local only
-- Redis local only
-- FleetController loopback only
-- remote HTTPS disabled
-- no living agents
-- no reserved agents
+- production: OVH VPS (ssh alias agentfleet-vps), the only live controller
+- FleetController public HTTPS on 0.0.0.0:443 (Let's Encrypt certificate)
+- FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
+- local Ubuntu development VM: controller stopped and disabled; not a live registry
+- registry: cap 2, DEVELOPMENT mode, replication off
+- 0 living, 0 reserved, 0 quarantined; zero agents
+- root witness OS user and unit installed; witness not enrolled, activated or started
+- fleet:doctor DEPLOYMENT OK; fleet:verify 16/16 PASS, SAFE FOR DRY RUN YES;
+  fleet:verify-runtime VERIFIED; privilege audit PASS
 
 ## Known architecture
 

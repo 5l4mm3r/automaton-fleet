@@ -4,11 +4,13 @@ Target: one OVH VPS running Ubuntu 24.04 LTS, which becomes the fleet control
 plane (FleetController, PostgreSQL, Redis) behind `https://api.agentfleet.vip`.
 Source: the local Ubuntu development VM, which runs the same release loopback-only.
 
-**Status (2026-09-24):** stages 0–21 are complete. Public HTTPS has been live at
+**Status (2026-09-24):** stages 0–21 and stage 21b (S9b) are complete. Public HTTPS has been live at
 `https://api.agentfleet.vip` since 18:25:59 UTC, and the fleet cap has been 2 since
-18:45:13 UTC. `fleet:doctor` reports DEPLOYMENT OK and **SAFE FOR DRY RUN: YES**.
-Stage 21b (witness release) and stage 22 (dry-run child) have not started. See [Deployment record](#deployment-record-2026-09-24) for what
-was run, the deviations the operator accepted, and the live state at the end of STOP S5.
+18:45:13 UTC. Since S9b the runtime is `cdfd70c` (build `6d0eee34…`) on schema v7, after a
+planned outage of about 19:57–20:10 UTC. The witness OS user and unit are installed, but
+no witness is enrolled or started. `fleet:doctor` reports DEPLOYMENT OK and **SAFE FOR DRY RUN: YES**.
+Stage 22 (dry-run child) has not started. See [Deployment record](#deployment-record-2026-09-24) for what
+was run, the deviations the operator accepted, and the [live state after S9b](#state-after-s9b-2026-09-24-2020-utc).
 
 ## Conventions
 
@@ -29,10 +31,12 @@ was run, the deviations the operator accepted, and the live state at the end of 
 | Item | Value |
 |---|---|
 | Runtime repository | `https://github.com/5l4mm3r/automaton-fleet.git` |
-| Runtime commit | `11c0c7c02592d43a2c1350b779eaa795a237f3b7` |
-| Build ID | `e388571a140f7cb20e289e1e64d152571adea5f207c2290c09888f80f6e3c624` |
-| Lockfile SHA-256 | `eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811` |
-| Database schema | v6 |
+| Runtime commit (cutover, stages 0–21) | `11c0c7c02592d43a2c1350b779eaa795a237f3b7` |
+| Build ID (cutover, stages 0–21) | `e388571a140f7cb20e289e1e64d152571adea5f207c2290c09888f80f6e3c624` |
+| Runtime commit (current, since stage 21b) | `cdfd70c842f43c8e3b8576ac07ebcd80cc3d4633` |
+| Build ID (current, since stage 21b) | `6d0eee3427415918d91d5a88b4fa8814cf1574c141226fb15bc6c7d41ac70d0c` |
+| Lockfile SHA-256 (both) | `eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811` |
+| Database schema | v6 for the cutover; **v7** since stage 21b |
 | Database / owner | `automaton_fleet` / `fleetadmin` |
 | Controller hostname | `api.agentfleet.vip` (domain `agentfleet.vip`) |
 | Toolchain on the local VM (match it) | Ubuntu 24.04.5, Node v22.23.2, pnpm 10.28.1 (from `packageManager`), PostgreSQL 16.15, Redis 7.0.15 |
@@ -63,7 +67,7 @@ was run, the deviations the operator accepted, and the live state at the end of 
 | Host keys | ED25519 `SHA256:HUuqOfrwidWq3SagFJD3rEavFX29u89cy1vIqun0tRg`, ECDSA `SHA256:Rm5H28vhzH9/hoc82EJ/Gk3jRfCo58prkwzOmfg6NjA`, RSA `SHA256:8wKSAe0hWQVxBhpDQNGGN4xCs6geOz/8jJ5pvfLBmpU` |
 | Platform | Ubuntu 24.04.4 LTS, kernel 6.8.0-136, x86_64, systemd 255.4; 4 vCPU, 7.6 GiB, 72 GB disk |
 | Toolchain | Node **v22.23.3** (apt, `/usr/bin/node`), global pnpm 10.34.5 (the repo workflow uses 10.28.1 via `packageManager`), PostgreSQL 16.15, Redis 7.0.15 |
-| Build clone | `~ubuntu/automaton-fleet-build` at `11c0c7c`, clean |
+| Build clone | `~ubuntu/automaton-fleet-build`, clean; at `11c0c7c` for stages 0–21, detached at `cdfd70c` since stage 21b (it is also the operator tooling checkout) |
 
 ### Stages completed
 | Stage | Done by | Result |
@@ -103,6 +107,33 @@ was run, the deviations the operator accepted, and the live state at the end of 
 | 20 | `fleet-verify-deployment.sh` 19/19 PASS. `fleet:doctor`: HTTPS valid and remote controller reachable |
 | 21 (S9) | `pnpm fleet:admin set-cap 2` at 18:45:13 UTC wrote event 26, `cap_set {"previous":1,"max":2}`. 0 living, 0 reserved, 0 quarantined; mode DEVELOPMENT. `SAFE FOR DRY RUN: YES` |
 
+### Stage 21b (S9b): witness release and schema v7 (2026-09-24)
+Each gate was approved separately. The operator chose a planned outage: the controller was stopped
+before the backup and started only once the release, pins, registry approval and schema all agreed.
+
+| Gate | Result |
+|---|---|
+| 1 | Runbook edits committed as `eadb842` (docs only). `fleet-development` fast-forwarded `11c0c7c..eadb842` on fleet-origin. The runtime pin is `cdfd70c`, not the docs commit |
+| 2 | `scripts/fleet-build-runtime.sh … cdfd70c…` on the VPS: build `6d0eee34…0d0c`, lockfile `eee9dc2f…` (the same as a local preview build) |
+| 3 | `runtime.env.pre-witness` = `66e55b23…` (backup). `sudoedit` changed exactly two lines (`FLEET_RUNTIME_COMMIT`, `FLEET_RUNTIME_BUILD_ID`). `runtime.env` is now SHA-256 `447b5929a6503f2ff9f780cf8897eed32c352df60e954b22d0ca2b9966883f3c`, root:root 0644 |
+| 4a | `fleet-deploy-release.sh build`: verified build staged at `~/.cache/automaton-fleet/stage/cdfd70c…` |
+| 4b | `sudo fleet-deploy-release.sh install`: `current` → `releases/cdfd70c…` (887 files, root-owned, read-only). `releases/11c0c7c…` is kept for rollback. The running controller was not restarted |
+| 5 | The tooling checkout was moved to `cdfd70c`; `pnpm install --frozen-lockfile`; clean |
+| 6 | **Outage start 19:57 UTC:** `systemctl stop automaton-fleet`. Pre-v7 backup `~ubuntu/automaton_fleet-v6-pre-v7.dump`: 450857 bytes, SHA-256 `ccde45b5d05bf0973cb35b2b56a0275c59d8b993df104f6d8cd70c3c0c069e10`, 0600. `pg_restore -l` shows 25 tables with data, 65 functions, 42 triggers. Row counts are in `~ubuntu/fleet-rowcounts-pre-v7.txt` (52 rows) |
+| 7 | `migrate-check` gave exactly `{"currentVersion":6,"resultingVersion":7,"wouldApply":[7]}`. `fleet:migrate` applied v7 (`capability_scope_witness`, 20:00:47 UTC). `audit-privileges` PASS. The ACL diff against the dump is only 2 new `REVOKE … FROM PUBLIC`. Row-count changes: migrations 6 → 7, events +2 (role re-grants) |
+| 8 | `approve-runtime` wrote event 47, `runtime_approved` (previous: `11c0c7c`/`e388571a…`). `verify-runtime` VERIFIED and schema v7 healthy before the start. **Outage end 20:10:24 UTC:** `systemctl start automaton-fleet` |
+| 9 | `fleet-os-setup.sh` (dry run, then `--apply`): created `automaton-fleet-witness` (uid 995 / gid 985, nologin, no other groups) and installed `automaton-fleet-witness.service` (root 0644, **disabled, inactive**). All other steps re-applied values that were already in place. `fleet-verify-deployment.sh` 23/23 PASS; the witness user cannot read `admin.env`, `service.env` or `tls/fleet.key` |
+
+### State after S9b (2026-09-24 ~20:20 UTC)
+- `automaton-fleet.service` is active from `releases/cdfd70c…`, started 20:10:24 UTC, 0 restarts.
+- Runtime `cdfd70c842f43c8e3b8576ac07ebcd80cc3d4633` / build `6d0eee3427415918d91d5a88b4fa8814cf1574c141226fb15bc6c7d41ac70d0c` /
+  lockfile `eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811`, which `runtime.env`, the registry approval and the installed tree all match.
+- Schema v7 (7 migration rows). Registry: `maxAgents=2`, mode DEVELOPMENT, replication off, 0 living / 0 reserved / 0 quarantined, zero agents.
+- Listeners: `0.0.0.0:443` (FleetController HTTPS) and 22 public; `127.0.0.1:8787`, `127.0.0.1:5432`, `127.0.0.1:6379`, `[::1]:6379` loopback. From outside, 80, 5432, 6379 and 8787 are unreachable, and `/healthz` returns 200.
+- Root witness: OS user and unit installed. **Not enrolled, activated or started**, and no witness credential exists.
+- `REAL_REPLICATION_ENABLED`, `REAL_PAYMENTS_ENABLED`, `OWNER_SWEEP_ENABLED` and `FLEET_DRY_RUN_CHILD` are `false`. `FLEET_REMOTE_LISTEN_ENABLED=true`.
+- `fleet:doctor` DEPLOYMENT OK (warnings only: sandbox termination, wallet custody). `fleet:verify` 16/16 PASS, SAFE FOR DRY RUN: YES. `fleet:verify-runtime` VERIFIED. `audit-privileges` PASS.
+
 ### Deviations accepted by the operator
 - **Node v22.23.3 instead of v22.23.2.** The approved build ID reproduced exactly with it. Do not downgrade Node just to match stage 4.
 - **Global pnpm 10.34.5.** It is left alone, because the pinned workflow ran with 10.28.1 and reproduced the build.
@@ -114,6 +145,11 @@ was run, the deviations the operator accepted, and the live state at the end of 
 - **`ubuntu` can't read the journal** (it isn't in `adm` or `systemd-journal`), so `journalctl -u automaton-fleet` needs sudo.
 - **130 package upgrades pending.** Unattended-upgrades is active.
 - **`/etc/automaton-fleet/runtime.env.pre-remote`** (the loopback-only config) is kept for rollback.
+- **S9b rollback material:** `/etc/automaton-fleet/runtime.env.pre-witness` (`66e55b23…`),
+  `/opt/automaton-fleet/releases/11c0c7c…`, and the pre-v7 dump `~ubuntu/automaton_fleet-v6-pre-v7.dump`
+  (0600, with `.sha256` and `fleet-rowcounts-pre-v7.txt`). Returning to v6 needs that dump restored (destructive, separate approval).
+- **S9b working files in `~ubuntu`** (`s9b-cdfd70c-pins.txt`, `s9b-cdfd70c-build.log`, `s9b-gate4a-build.log`, `s9b-gate5-install.log`) are mode 0664. They hold no secrets.
+- **The JSONL audit file is written without `scrubDetail`** (`src/fleet/service/main.ts:258`); only the stdout and database copies are scrubbed. Found during the post-S9b design review; not fixed yet.
 - **Doctor's repository check:** the registry records the runtime repository without `.git`, and `runtime.env` has it with `.git`. The two are normalized and match.
 
 ## Stop points (summary)
