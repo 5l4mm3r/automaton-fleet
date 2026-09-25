@@ -1,6 +1,6 @@
 # Phase F.1 — Founder runtime provisioning and real-runtime attestation (schema v12)
 
-Status: implemented; deployment record in `docs/fleet-production-runbook.md` (Stage F.1).
+Status: **DEPLOYED 2026-09-25** (runtime `ffd29fa`, build `aed0ebca…014b`, schema v12); record in `docs/fleet-production-runbook.md` (Stage F.1).
 Genesis stays **disabled**, production population **0**. No real founder was
 created or activated. The real-runtime rehearsal uses synthetic founders and a
 throwaway registry.
@@ -147,4 +147,4 @@ reporting, missing, mismatched or duplicate evidence, expiry):
   - the full rehearsal on the process host.
 - **`fleet-genesis.test.ts`** (+1): runtime evidence that is missing, stale, carries a wrong nonce,
   is re-issued after evidence, or describes a different process than the host evidence.
-- **Mutation campaign:** see the runbook record.
+- **Mutation campaign:** 22 mutants against v12, the runtime, the host observer, the provisioner and the controller route. **21 killed.** Five initial survivors exposed test gaps, which are now covered. The remaining survivor (T08, the provisioner not rolling back on a dead runtime) is a redundant layer: the database attest rolls back on missing host evidence anyway.

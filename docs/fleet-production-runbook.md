@@ -1361,6 +1361,47 @@ The owner Genesis gate (not executed; see the design §F3/F4):
 5. `genesis-attest` per founder → `genesis-fund`;
 6. `genesis-activate … --credential-dir`.
 
+## Stage F.1 — Founder runtime provisioning and real-runtime attestation, schema v12 (DEPLOYED 2026-09-25, times UTC)
+
+Design: `docs/design/phase-f1-founder-runtime.md`. No real founder was created. Genesis is **disabled** and population **0**.
+
+### Stage F.1 record (2026-09-25)
+
+| Gate | Result |
+|---|---|
+| F1-1 | Commit `de8a7bf` pushed. The local and VPS builds matched: `75e51658…90d3`. `runtime.env.pre-f1` kept (sha `d9abf6c8…`, 99dc941 pins) |
+| F1-2 | Outage 19:19:11–19:19:29 (about 18 s). Dump `~/automaton_fleet-v11-pre-v12-20260925T191911Z.dump` (1337978 B, sha `8763bbaf…2b4c`, 0600, 61 table-data entries). `migrate-check` gave exactly `{11→12, wouldApply:[12]}`; `migrate`; `audit-privileges` PASS. `fleet-os-setup.sh --apply` installed only the new `automaton-fleet-founder@.service` (every other unit identical) |
+| Rehearsal 1 | **FAIL, correctly.** Both founders ran under the SAME dynamic uid (61431): for template units systemd names the DynamicUser after the template. Fixed in `c6cd159` (`User=fnd-%i`; deploy-only, build unchanged). Unit reinstalled, then **PASS** with uids 64423/63894 |
+| Custody | Latent Phase E defect: the inert custody executor exited with status 0 about 10 s after every start (unref'd poll timer; `Restart=on-failure` does not restart a clean exit). Fixed in `ffd29fa` (build `aed0ebca…014b`; the local and VPS builds matched). `runtime.env.pre-f1b` kept. Restart 19:27:01–19:27:07; custody active afterwards. Doctor and `fleet-verify-deployment.sh` now fail when the unit is enabled but not running |
+| Verify | Runtime VERIFIED `ffd29fa`/`aed0ebca…`; doctor DEPLOYMENT OK (founder runtimes 0 = living founders 0; custody executor active); `fleet:verify` 16/16; `fleet-verify-deployment.sh` 89 PASS / 0 FAIL; audit PASS; Operator API ready (schema 12); ChatGPT adapter (still `99dc941`) ready, 4 tools, status schema 12 |
+| Dry runs | Database dry run 20/20 PASS (rolled back). **Real-runtime rehearsal PASS 15/15.** Founders `…5G9APZ` (uid 65102) and `…5QD9TK` (uid 61512): 3 heartbeats and 3 challenges each. Production snapshot before = after `{population 0, cap 2, genesis_records 0, genesis_enabled false, agents 0, ledger_head 0}`. Host clean (no founder unit or state, throwaway registry deleted) |
+
+State after F.1:
+- runtime `ffd29fa` / `aed0ebca…014b`, schema v12;
+- population 0, cap 2, DEVELOPMENT; Genesis disabled, 0 authorizations;
+- reproduction and reseeding pinned off;
+- custody executor running and inert;
+- operator actions OFF (generation 12);
+- no founder unit or state on the host.
+
+Rollback:
+- **Runtime only (no migration):** restore `runtime.env.pre-f1b`, point `current` back to `releases/de8a7bf…`, approve and restart.
+- **Full:** stop the services; restore the pre-v12 dump; restore `runtime.env.pre-f1`; point `current` back to `releases/99dc941…`; start in order.
+- `99dc941` refuses a v12 registry (exact schema check).
+- The founder template and the custody fix are safe to keep.
+
+Owner Genesis path, **not executed** (each step is an owner decision):
+1. Record the treasury funding (`ledger-record-funding`, from a real external reference), if an allocation will be given.
+2. `genesis-enable`.
+3. `genesis-propose 2 <allocationCents>`.
+4. `genesis-approve <id> <authSha256>`.
+5. `sudo scripts/fleet-founders.sh provision <id>`.
+6. `sudo scripts/fleet-founders.sh attest <id>`.
+7. `genesis-fund <id>`.
+8. `sudo scripts/fleet-founders.sh activate <id> <authSha256>`.
+
+Founders then run the supervisor. The autonomous agent loop stays off until the owner provides an inference provider credential and approves a founder egress policy.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
