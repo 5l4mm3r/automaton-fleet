@@ -68,8 +68,17 @@ main() {
 
   umask 077
   set +x
-  local raw K why
-  IFS= read -rs -p "OpenAI runtime API key (input hidden): " raw </dev/tty
+  local raw K why tty_state junk
+  # Echo off at once, and drop anything typed/pasted before the prompt: such
+  # typeahead would already have been echoed by the terminal (and could be
+  # in its scrollback), so it is never used. Terminal state is always restored.
+  exec 3</dev/tty
+  tty_state="$(stty -g <&3)"
+  trap 'stty "$tty_state" <&3 2>/dev/null || true' EXIT
+  stty -echo <&3
+  while IFS= read -r -t 0.2 -u 3 junk; do :; done
+  unset junk
+  IFS= read -rs -u 3 -p "OpenAI runtime API key (input hidden; paste AFTER this prompt): " raw
   echo
   K="$(normalize_key "$raw")"
   unset raw
