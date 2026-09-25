@@ -974,6 +974,60 @@ export class PgFleetStore {
     }
   }
 
+  /** Schema v11 Genesis / capability / reproduction / vault / knowledge overview for doctor (admin credential; null otherwise). */
+  async genesisOverview(): Promise<{
+    genesisEnabled: boolean;
+    inFlight: number;
+    activated: number;
+    founders: number;
+    livingFounders: number;
+    reproductionExecutionEnabled: boolean;
+    founderManifestSha256: string | null;
+    identityFacts: number;
+    identityClaimsPending: number;
+    knowledgePending: number;
+    knowledgeEntries: number;
+    openEstates: number;
+  } | null> {
+    try {
+      return await this.read(async (c) => {
+        const r = await c.query(
+          `SELECT p.genesis_enabled,
+                  (SELECT count(*) FROM fleet_genesis WHERE status IN ('approved','provisioning','attesting','funding_virtual','ready')) AS in_flight,
+                  (SELECT count(*) FROM fleet_genesis WHERE status = 'activated') AS activated,
+                  (SELECT count(*) FROM fleet_agents WHERE origin IN ('genesis_founder','reseed_founder')) AS founders,
+                  (SELECT count(*) FROM fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive')) AS living_founders,
+                  (SELECT execution_enabled FROM fleet_reproduction_policy WHERE id = 1) AS repro,
+                  (SELECT manifest_sha256 FROM fleet_capability_manifests WHERE manifest_id = 'founder-v1') AS manifest,
+                  (SELECT count(*) FROM fleet_org_identity_facts) AS facts,
+                  (SELECT count(*) FROM fleet_org_identity_claims WHERE status = 'requested') AS claims,
+                  (SELECT count(*) FROM fleet_knowledge_proposals WHERE status = 'proposed') AS kpending,
+                  (SELECT count(*) FROM fleet_knowledge_entries) AS kentries,
+                  (SELECT count(*) FROM fleet_estates WHERE status = 'open') AS estates
+             FROM fleet_genesis_policy p WHERE p.id = 1`,
+        );
+        const x = r.rows[0];
+        if (!x) return null;
+        return {
+          genesisEnabled: x.genesis_enabled === true,
+          inFlight: Number(x.in_flight),
+          activated: Number(x.activated),
+          founders: Number(x.founders),
+          livingFounders: Number(x.living_founders),
+          reproductionExecutionEnabled: x.repro === true,
+          founderManifestSha256: x.manifest ?? null,
+          identityFacts: Number(x.facts),
+          identityClaimsPending: Number(x.claims),
+          knowledgePending: Number(x.kpending),
+          knowledgeEntries: Number(x.kentries),
+          openEstates: Number(x.estates),
+        };
+      });
+    } catch {
+      return null;
+    }
+  }
+
   // ─── Registration ──────────────────────────────────────────────
 
   /**
@@ -1580,6 +1634,16 @@ export class PgFleetStore {
       );
       return r.rows[0].res;
     });
+  }
+
+  /** Schema v11: expire / roll back Genesis authorizations past their expiry. Returns the count. */
+  async expireGenesis(limit = 10): Promise<number> {
+    return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_genesis_expire($1) AS n", [limit])).rows[0].n));
+  }
+
+  /** Schema v11: settle open estates of economically dead agents with nothing in flight. Returns the count. */
+  async settleEstates(limit = 10): Promise<number> {
+    return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_settle_estates($1) AS n", [limit])).rows[0].n));
   }
 
   /** Schema v10: expire payment orders past their TTL (releases their reservations). Returns the count. */

@@ -38,6 +38,11 @@ export interface AgentEconomics {
   expensePurchasingCapacity: number;
   purchasingCapacity: number;
   reservedRecoverable: number;
+  externalCustomerRevenue: number;
+  realizedInvestmentPnl: number;
+  genesisAllocation: number;
+  treasuryAllocation: number;
+  internalTransfersNet: number;
   realizedNetProfit: number;
   lifetimeContribution: number;
   uncontributedProfit: number;
@@ -232,8 +237,34 @@ export class PgLedgerAdmin {
     return this.one(`SELECT fleet_admin_record_owner_funding($1, $2, $3, $4) AS r`, [cents(amountCents, "amount"), externalRef, actor, idem(key)]);
   }
 
-  async recordRevenue(agentId: string, amountCents: number, externalRef: string, actor: string, key = idempotencyKey("revenue")): Promise<string> {
-    return this.one(`SELECT fleet_admin_record_revenue($1, $2, $3, $4, $5) AS r`, [agentId, cents(amountCents, "amount"), externalRef, actor, idem(key)]);
+  /**
+   * Record an external economic fact for an agent (schema v11 provenance): realized
+   * customer revenue, a refund, or realized investment P&L. `counterparty` is the
+   * external party's reference (hashed here, never stored); value from a
+   * fleet-controlled counterparty is refused (FLEET_INTERNAL_TRANSFER_NOT_REVENUE).
+   */
+  async recordExternal(
+    kind: "external_revenue" | "external_refund" | "investment_realized_gain" | "investment_realized_loss",
+    agentId: string,
+    amountCents: number,
+    externalRef: string,
+    counterparty: string,
+    actor: string,
+    key = idempotencyKey(kind.replace(/_/g, "-")),
+  ): Promise<string> {
+    if (!counterparty) throw new Error("an external counterparty reference is required");
+    return this.one(`SELECT fleet_admin_record_external($1, $2, $3, $4, $5, $6, $7) AS r`, [
+      kind, agentId, cents(amountCents, "amount"), externalRef, sha256Hex(counterparty.trim().toLowerCase()), actor, idem(key),
+    ]);
+  }
+
+  async recordRevenue(agentId: string, amountCents: number, externalRef: string, counterparty: string, actor: string, key = idempotencyKey("revenue")): Promise<string> {
+    return this.recordExternal("external_revenue", agentId, amountCents, externalRef, counterparty, actor, key);
+  }
+
+  /** Owner-only: mark a reference (e.g. a treasury account) as fleet-controlled, so value from it is never revenue. */
+  async addControlledReference(reference: string, label: string, actor: string): Promise<void> {
+    await this.pool.query(`SELECT fleet_controlled_reference_add($1, $2, $3)`, [sha256Hex(reference.trim().toLowerCase()), label, actor]);
   }
 
   async reverse(journalId: string, reason: string, actor: string, key = idempotencyKey("reversal")): Promise<string> {

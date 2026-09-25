@@ -72,7 +72,7 @@ RemoveIPC=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
-InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak -/etc/automaton-fleet/chatgpt-tunnel
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak -/etc/automaton-fleet/chatgpt-tunnel -/etc/automaton-fleet/custody.env -/var/lib/automaton-fleet-custody
 InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-chatgpt-tunnel -/var/log/automaton-fleet -/var/log/automaton-fleet-operator -/run/credentials
 
 [Install]

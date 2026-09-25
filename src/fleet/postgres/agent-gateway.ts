@@ -233,4 +233,25 @@ export class PgAgentGateway {
   async ledgerSummary(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.call("api_ledger_summary", [agentId, token]);
   }
+
+  /** Schema v11: the agent's capability manifest. */
+  async capabilities(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_capabilities", [agentId, token]);
+  }
+
+  async knowledgePropose(agentId: string, token: string, category: string, title: string, content: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_knowledge_propose", [agentId, token, category, title, content]);
+  }
+
+  async knowledgeList(agentId: string, token: string, after: number, limit: number): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_knowledge_list", [agentId, token, after, limit]);
+  }
+
+  async identityRequest(agentId: string, token: string, factKey: string, purpose: string, workflow: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_identity_request", [agentId, token, factKey, purpose, workflow]);
+  }
+
+  async identityFact(agentId: string, token: string, claimId: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_identity_fact", [agentId, token, claimId]);
+  }
 }

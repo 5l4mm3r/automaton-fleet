@@ -78,7 +78,7 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 # Controller secrets, TLS sources, other services' state and the agent's home are never visible.
-InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak -/etc/automaton-fleet/custody.env -/var/lib/automaton-fleet-custody
 InaccessiblePaths=-/home/automaton-agent -/var/lib/automaton-fleet -/var/log/automaton-fleet -/run/credentials
 
 [Install]

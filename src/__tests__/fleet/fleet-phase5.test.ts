@@ -882,7 +882,8 @@ describe.skipIf(!PG_BIN)("Fleet security policy: lifecycle, remote auth, custody
     await expect(order(1)).rejects.toMatchObject({ code: "FLEET_DESTINATION_NOT_ALLOWED" });
     await expect(ca.spendOrder({ idempotencyKey: "short", amountCents: 1, category: "expense", destinationId: dst, purpose: "x" })).rejects.toMatchObject({ status: 400 });
     await expect(ca.spendOrder({ idempotencyKey: `t:${ulid()}`, amountCents: 1, category: "expense", destinationId: "0xabc", purpose: "x" })).rejects.toMatchObject({ status: 400 });
-    expect(await ca.ledger()).toMatchObject({ cash: 0, reserved: 0, protectedPrincipal: 0, lifetimeContribution: 0 }); // nothing allocated
+    // Schema v11: a reproduction child has no capability manifest, so fleet-mediated capabilities fail closed.
+    await expect(ca.ledger()).rejects.toMatchObject({ code: "FLEET_CAPABILITY_DENIED" });
     await treasury.freezeSpending(a.agentId, true, "operator review", "operator:alice");
     await expect(order(1)).rejects.toMatchObject({ code: expect.stringMatching(/^FLEET_/) });
     // A dead agent cannot use either path.

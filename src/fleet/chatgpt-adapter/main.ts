@@ -24,7 +24,7 @@
 import fs from "fs";
 import os from "os";
 import type http from "http";
-import { DEFAULT_ADMIN_ENV_FILE, DEFAULT_OPERATOR_ENV_FILE, DEFAULT_SERVICE_ENV_FILE, DEFAULT_TLS_KEY_FILE, OPERATOR_FORBIDDEN_ENV } from "../secret-files.js";
+import { DEFAULT_ADMIN_ENV_FILE, DEFAULT_CUSTODY_ENV_FILE, DEFAULT_OPERATOR_ENV_FILE, DEFAULT_SERVICE_ENV_FILE, DEFAULT_TLS_KEY_FILE, OPERATOR_FORBIDDEN_ENV } from "../secret-files.js";
 import { redactDetail } from "../redact.js";
 import { BridgeError } from "../bridge/errors.js";
 import { loadSigner, type SignerIdentity } from "../bridge/client.js";
@@ -46,6 +46,7 @@ export const ADAPTER_UNREADABLE_FILES: readonly string[] = Object.freeze([
   DEFAULT_ADMIN_ENV_FILE,
   DEFAULT_SERVICE_ENV_FILE,
   DEFAULT_OPERATOR_ENV_FILE,
+  DEFAULT_CUSTODY_ENV_FILE,
   DEFAULT_TLS_KEY_FILE,
   "/etc/automaton-fleet/legacy-env-fleet.bak",
   "/etc/automaton-fleet/chatgpt-tunnel/openai-api-key",

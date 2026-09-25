@@ -33,6 +33,8 @@ import {
   AGENT_API_FUNCTIONS,
   CUSTODY_API_FUNCTIONS,
   CUSTODY_WRITES,
+  GENESIS_GUARDS,
+  GENESIS_OPERATORS,
   LEDGER_TABLES,
   LEDGER_WRITERS,
   OPERATOR_ACTION_FUNCTIONS,
@@ -282,6 +284,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
 
   if (owner) problems.push(...(await operatorSurfaceProblems(db, schema)));
   if (owner) problems.push(...(await ledgerSurfaceProblems(db, schema)));
+  if (owner) problems.push(...(await genesisSurfaceProblems(db, schema)));
 
   return { ok: problems.length === 0, schema, owner, database, problems, roles, operatorRoles: operatorState, custodyRoles: custodyState };
 }
@@ -537,6 +540,69 @@ export async function ledgerSurfaceProblems(db: Queryable, schema: string): Prom
     "fleet_payment_destinations:fleet_destinations_guard",
   ]) {
     if (!have.has(need)) problems.push(`ledger surface: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  return [...new Set(problems)];
+}
+
+/**
+ * Schema v11 Genesis / capability / reproduction invariants (only once v11 exists):
+ *  - only the Genesis operator helpers and guards mention the fleet.genesis_op
+ *    guard, so nothing else can create or advance a founder or edit a Genesis;
+ *  - reproduction execution and reseeding are pinned off by CHECK constraints;
+ *  - the Genesis, founder, origin, capability, knowledge and death-freeze
+ *    triggers exist and are enabled;
+ *  - the constitutional capability exclusions are not grantable (when readable).
+ */
+export async function genesisSurfaceProblems(db: Queryable, schema: string): Promise<string[]> {
+  const problems: string[] = [];
+  const present = await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = 'fleet_genesis'`,
+    [schema],
+  );
+  if (!present.rows[0]?.n) return problems;
+  const fns = await db.query<{ name: string; src: string }>(
+    `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`,
+    [schema],
+  );
+  const allowed = new Set([...GENESIS_OPERATORS, ...GENESIS_GUARDS]);
+  for (const f of fns.rows) {
+    if (/fleet\.genesis_op/.test(f.src) && !allowed.has(f.name)) problems.push(`genesis surface: ${f.name} references the Genesis operation guard`);
+  }
+  const pins = await db.query<{ t: string }>(
+    `SELECT c.relname || ':' || pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND k.contype = 'c'
+        AND c.relname IN ('fleet_reproduction_policy','fleet_genesis_policy')`,
+    [schema],
+  );
+  const pinText = pins.rows.map((r) => r.t).join("\n");
+  if (!/fleet_reproduction_policy:CHECK \(\(NOT execution_enabled\)\)/.test(pinText)) problems.push("genesis surface: reproduction execution is not pinned off by a CHECK constraint");
+  if (!/fleet_genesis_policy:CHECK \(\(NOT refounding_enabled\)\)/.test(pinText)) problems.push("genesis surface: reseeding is not pinned off by a CHECK constraint");
+  const trig = await db.query<{ t: string }>(
+    `SELECT c.relname || ':' || tg.tgname AS t FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1 AND NOT tg.tgisinternal AND tg.tgenabled <> 'D'`,
+    [schema],
+  );
+  const have = new Set(trig.rows.map((r) => r.t));
+  for (const need of [
+    "fleet_agents:fleet_agents_origin_guard",
+    "fleet_agents:fleet_agents_death_freeze",
+    "fleet_genesis:fleet_genesis_guard",
+    "fleet_genesis_founders:fleet_genesis_founders_guard",
+    "fleet_capability_manifests:fleet_capability_manifests_guard",
+    "fleet_capability_classes:fleet_capability_classes_no_change",
+    "fleet_payment_orders:fleet_orders_capability_gate",
+    "fleet_knowledge_entries:fleet_knowledge_entries_guard",
+    "fleet_knowledge_proposals:fleet_knowledge_proposals_guard",
+  ]) {
+    if (!have.has(need)) problems.push(`genesis surface: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  const canRead = await db.query<{ ok: boolean }>(`SELECT has_table_privilege(current_user, $1, 'SELECT') AS ok`, [`${schemaIdent(schema)}.fleet_capability_classes`]);
+  if (canRead.rows[0]?.ok) {
+    const cls = await db.query<{ class: string; grantable: boolean }>(`SELECT class, grantable FROM ${schemaIdent(schema)}.fleet_capability_classes`);
+    for (const c of ["reproduction", "custody.payment_execution", "self_modification", "tool.discovery", "compute.provisioning"]) {
+      const row = cls.rows.find((r) => r.class === c);
+      if (!row || row.grantable) problems.push(`genesis surface: capability ${c} must exist and not be grantable`);
+    }
   }
   return [...new Set(problems)];
 }

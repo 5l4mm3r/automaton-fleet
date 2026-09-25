@@ -32,6 +32,7 @@
  *                                     [terminationGrace=S] [orphanHold=S] [maxOrphans=N] [sessionTtl=S]
  *   pnpm fleet:admin <treasury command>        see src/fleet/treasury/cli.ts (v5 money records are superseded by v10)
  *   pnpm fleet:admin <ledger command>          schema v10 central ledger; see src/fleet/treasury/ledger-cli.ts
+ *   pnpm fleet:admin <genesis command>         schema v11 Genesis (owner gates); see src/fleet/genesis/cli.ts
  *   pnpm fleet:admin reap | reservations
  *   pnpm fleet:admin release <agentId> [reason]
  *   pnpm fleet:admin mark-dead <agentId> [reason]
@@ -75,6 +76,8 @@ import { PgTreasuryStore } from "../treasury/store.js";
 import { TREASURY_COMMANDS, runTreasuryCommand } from "../treasury/cli.js";
 import { PgLedgerAdmin } from "../treasury/ledger.js";
 import { LEDGER_COMMANDS, runLedgerCommand } from "../treasury/ledger-cli.js";
+import { PgGenesisAdmin } from "../genesis/admin.js";
+import { GENESIS_COMMANDS, runGenesisCommand } from "../genesis/cli.js";
 import type { FleetCredential } from "../types.js";
 import { PgFleetStore } from "./store.js";
 import { FLEET_PG_SCHEMA_VERSION } from "./migrations.js";
@@ -360,6 +363,22 @@ async function main(argv: string[]): Promise<number> {
       await store.close();
     }
   }
+  if (GENESIS_COMMANDS.has(cmd)) {
+    const connectionString = (e.FLEET_ADMIN_DATABASE_URL || e.FLEET_CONTROLLER_DATABASE_URL || e.DATABASE_URL)!.trim();
+    const schema = e.FLEET_PG_SCHEMA?.trim() || undefined;
+    const genesis = new PgGenesisAdmin({ connectionString, schema });
+    try {
+      const r = await runGenesisCommand(cmd, rest, genesis, actor, { connectionString, schema, apiUrl: e.FLEET_API_URL?.trim() || null });
+      console.log(JSON.stringify(r.output, null, 2));
+      return r.exitCode;
+    } catch (err) {
+      console.error(redactText(err instanceof Error ? err.message : String(err)));
+      return 1;
+    } finally {
+      await genesis.close();
+      await store.close();
+    }
+  }
   if (LEDGER_COMMANDS.has(cmd)) {
     const ledger = new PgLedgerAdmin({
       connectionString: (e.FLEET_ADMIN_DATABASE_URL || e.FLEET_CONTROLLER_DATABASE_URL || e.DATABASE_URL)!.trim(),
@@ -597,8 +616,11 @@ async function main(argv: string[]): Promise<number> {
         const r = await store.auditPrivileges();
         console.log(JSON.stringify(r, null, 2));
         if (!r.ok) console.error(`FAIL: ${r.problems.length} privilege problem(s):\n  - ${r.problems.join("\n  - ")}`);
-        else if (r.operatorRoles === "not_provisioned") console.error("PASS: agent and service roles are least-privilege; operator roles: not provisioned (Operator API database roles absent; no privileges).");
-        else console.error("PASS: agent, service and operator roles are least-privilege.");
+        else {
+          const custody = r.custodyRoles === "not_provisioned" ? "custody roles: not provisioned" : "custody roles (fleet_custody, fleet_custody_login: cx_* only, no table privilege)";
+          if (r.operatorRoles === "not_provisioned") console.error(redactText(`PASS: agent and service roles are least-privilege; operator roles: not provisioned (Operator API database roles absent; no privileges); ${custody}.`));
+          else console.error(redactText(`PASS: agent, service, operator and ${custody} are least-privilege; ledger, custody and Genesis surfaces verified.`));
+        }
         return r.ok ? 0 : 1;
       }
       case "terminations": {

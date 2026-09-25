@@ -16,6 +16,7 @@ import { createRateLimitRules } from "./rate-limits.js";
 import { createFleetRules } from "./fleet.js";
 import type { FleetConfig } from "../../fleet/types.js";
 import { loadFleetConfig } from "../../fleet/config.js";
+import { createCapabilityManifestRule } from "../../fleet/capabilities.js";
 
 /**
  * Create the default set of policy rules.
@@ -33,5 +34,7 @@ export function createDefaultRules(
     ...createAuthorityRules(),
     ...createRateLimitRules(),
     ...createFleetRules(fleetConfig),
+    // Phase F: Genesis founders run under a versioned capability manifest (inactive unless configured).
+    ...[createCapabilityManifestRule()].filter((r): r is PolicyRule => r !== null),
   ];
 }

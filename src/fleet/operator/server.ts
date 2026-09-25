@@ -76,9 +76,10 @@ import {
   type RuntimeIdentityView,
 } from "./responses.js";
 import { redactDetail, redactText } from "../redact.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../postgres/migrations.js";
 
-/** The registry schema this Operator API serves (v10 adds the ledger; the operator surface is unchanged since v9). */
-export const OPERATOR_SCHEMA_VERSION = 10;
+/** The registry schema this Operator API serves: exactly the schema this release migrates to (operator surface unchanged since v9). */
+export const OPERATOR_SCHEMA_VERSION = FLEET_PG_SCHEMA_VERSION;
 
 /** D3 action bodies: at most this many bytes. */
 export const MAX_ACTION_BODY_BYTES = 4096;

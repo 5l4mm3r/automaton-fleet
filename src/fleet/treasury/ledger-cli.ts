@@ -10,7 +10,7 @@
  *   ledger-lfc                                     Lifetime Fleet Contribution
  *   ledger-orders [status] [agentId]
  *   ledger-record-funding <cents> <externalRef>    owner capital already received into custody
- *   ledger-record-revenue <agentId> <cents> <externalRef>
+ *   ledger-record-revenue <agentId> <cents> <externalRef> [refund|gain|loss]   counterparty reference on stdin (hashed)
  *   ledger-reverse <journalId> <reason…>
  *   ledger-capital <agentId> <cents> grant|principal [--ack] [reason…]
  *   ledger-spend-decision <orderId> approve|reject [--ack] [note…]
@@ -101,10 +101,15 @@ export async function runLedgerCommand(
       return l.orders({ status: args[0] || undefined, agentId: args[1] || undefined });
     case "ledger-record-funding":
       return { journalId: await l.recordOwnerFunding(cents(args[0]), need(args[1], "ledger-record-funding <cents> <externalRef>"), actor) };
-    case "ledger-record-revenue":
-      return {
-        journalId: await l.recordRevenue(need(args[0], "ledger-record-revenue <agentId> <cents> <externalRef>"), cents(args[1]), need(args[2], "ledger-record-revenue <agentId> <cents> <externalRef>"), actor),
-      };
+    case "ledger-record-revenue": {
+      const usage = "ledger-record-revenue <agentId> <cents> <externalRef> [revenue|refund|gain|loss]  (external counterparty reference on stdin)";
+      const kinds = { revenue: "external_revenue", refund: "external_refund", gain: "investment_realized_gain", loss: "investment_realized_loss" } as const;
+      const which = (args[3] ?? "revenue") as keyof typeof kinds;
+      if (!Object.prototype.hasOwnProperty.call(kinds, which)) throw new Error(`usage: ${usage}`);
+      const kind = kinds[which];
+      const counterparty = await readSecret();
+      return { journalId: await l.recordExternal(kind, need(args[0], usage), cents(args[1]), need(args[2], usage), counterparty, actor) };
+    }
     case "ledger-reverse":
       return { journalId: await l.reverse(need(args[0], "ledger-reverse <journalId> <reason…>"), need(args.slice(1).join(" "), "ledger-reverse <journalId> <reason…>"), actor) };
     case "ledger-capital": {

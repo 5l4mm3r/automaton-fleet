@@ -30,6 +30,7 @@ import { DEFAULT_CONFIG_FILE, loadBridgeConfig } from "./config.js";
 import { withClient } from "./cli.js";
 import type { TunnelOptions } from "./tunnel.js";
 import { FleetMcpServer as CoreServer, TOOLS, UNTRUSTED_NOTICE, type Executor, type McpServerOptions as CoreOptions } from "./mcp-core.js";
+import { BridgeError } from "./errors.js";
 
 export { TOOLS, validateArguments, SUPPORTED_PROTOCOL_VERSIONS, MCP_SERVER_VERSION, type ToolDef } from "./mcp-core.js";
 
@@ -40,11 +41,29 @@ export const CLAUDE_INSTRUCTIONS =
   "when the owner has enabled them for this principal. Irreversible actions can only be proposed; the owner decides. " +
   UNTRUSTED_NOTICE;
 
-/** Claude's executor: Phase D config + (reused or ephemeral) SSH tunnel + signed client. */
-export function tunnelExecutor(configFile?: string, tunnel: TunnelOptions = {}): Executor {
+/**
+ * Claude's executor: Phase D config + (reused or ephemeral) SSH tunnel + signed client.
+ *
+ * Phase F (identity pinning): with `expectPrincipal`, the first call in a
+ * process confirms through the Operator API that the configured key belongs
+ * to that principal NAME before any tool runs; a mismatch (e.g. a stale
+ * registration pointing at another principal's config) fails every call with
+ * IDENTITY_MISMATCH. The check is re-run after any failure.
+ */
+export function tunnelExecutor(configFile?: string, tunnel: TunnelOptions = {}, expectPrincipal?: string): Executor {
+  let confirmed = false;
   return async (tool, args) => {
     const cfg = loadBridgeConfig(configFile ?? DEFAULT_CONFIG_FILE);
-    return withClient(cfg, cfg.key, (c) => tool.run(c, args), tunnel);
+    return withClient(cfg, cfg.key, async (c) => {
+      if (expectPrincipal && !confirmed) {
+        const w = await c.whoami();
+        if (w.data.principal.name !== expectPrincipal) {
+          throw new BridgeError("IDENTITY_MISMATCH", `this bridge is pinned to principal ${expectPrincipal}, but its key belongs to ${w.data.principal.name}`);
+        }
+        confirmed = true;
+      }
+      return tool.run(c, args);
+    }, tunnel);
   };
 }
 
@@ -52,23 +71,23 @@ export function tunnelExecutor(configFile?: string, tunnel: TunnelOptions = {}):
 type Json = Record<string, unknown>;
 
 export class FleetMcpServer extends CoreServer {
-  constructor(opts: Partial<CoreOptions> & { send: CoreOptions["send"]; configFile?: string; tunnel?: TunnelOptions }) {
+  constructor(opts: Partial<CoreOptions> & { send: CoreOptions["send"]; configFile?: string; tunnel?: TunnelOptions; expectPrincipal?: string }) {
     super({
       serverName: MCP_SERVER_NAME,
       instructions: CLAUDE_INSTRUCTIONS,
       ...opts,
-      execute: opts.execute ?? tunnelExecutor(opts.configFile, opts.tunnel),
+      execute: opts.execute ?? tunnelExecutor(opts.configFile, opts.tunnel, opts.expectPrincipal),
     });
   }
 }
 
 /** Run on stdio. Everything except protocol output is forced to stderr. */
-export function runStdio(opts: { configFile?: string } = {}): void {
+export function runStdio(opts: { configFile?: string; expectPrincipal?: string } = {}): void {
   const out = process.stdout;
   const err = (line: Json) => process.stderr.write(`${JSON.stringify({ ts: new Date().toISOString(), server: MCP_SERVER_NAME, ...line })}\n`);
   // Nothing but protocol messages may reach stdout.
   console.log = console.info = console.debug = (...a: unknown[]) => process.stderr.write(`${a.map(String).join(" ")}\n`);
-  const server = new FleetMcpServer({ send: (m) => out.write(`${JSON.stringify(m)}\n`), log: err, configFile: opts.configFile });
+  const server = new FleetMcpServer({ send: (m) => out.write(`${JSON.stringify(m)}\n`), log: err, configFile: opts.configFile, expectPrincipal: opts.expectPrincipal });
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   rl.on("line", (l) => server.handleLine(l));
   // Finish in-flight calls (their tunnels close in withClient), but never hang on
@@ -80,10 +99,20 @@ export function runStdio(opts: { configFile?: string } = {}): void {
   rl.on("close", shutdown);
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
-  err({ event: "started", config: opts.configFile ?? DEFAULT_CONFIG_FILE, tools: TOOLS.map((t) => t.name) });
+  let principalId: string | null = null;
+  try {
+    principalId = loadBridgeConfig(opts.configFile ?? DEFAULT_CONFIG_FILE).principalId;
+  } catch {
+    principalId = null; // reported as CONFIG_INVALID on the first call
+  }
+  err({ event: "started", config: opts.configFile ?? DEFAULT_CONFIG_FILE, principalId, expectPrincipal: opts.expectPrincipal ?? null, tools: TOOLS.map((t) => t.name) });
 }
 
 if (process.argv[1] && /fleet[\\/]bridge[\\/]mcp\.(ts|js)$/.test(process.argv[1])) {
   const i = process.argv.indexOf("--config");
-  runStdio({ configFile: i > 0 ? process.argv[i + 1] : process.env.FLEET_BRIDGE_CONFIG || undefined });
+  const j = process.argv.indexOf("--expect-principal");
+  runStdio({
+    configFile: i > 0 ? process.argv[i + 1] : process.env.FLEET_BRIDGE_CONFIG || undefined,
+    expectPrincipal: j > 0 ? process.argv[j + 1] : process.env.FLEET_BRIDGE_EXPECT_PRINCIPAL || undefined,
+  });
 }

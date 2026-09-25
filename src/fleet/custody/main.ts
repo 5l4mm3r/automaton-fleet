@@ -18,7 +18,7 @@
  *  - the pinned release is incomplete or differs from the registry approval;
  *  - the database login is the schema owner, a superuser, or a member of
  *    anything but fleet_custody;
- *  - the schema is not v10, custody execution is enabled, or the custody
+ *  - the schema is not this release's schema, custody execution is enabled, or the custody
  *    privilege audit reports anything.
  */
 
@@ -37,8 +37,10 @@ import { loadRuntimeRelease, normalizeRepoUrl } from "../runtime.js";
 import { redactText } from "../redact.js";
 import { CustodyExecutor, providersFromEnv } from "./executor.js";
 import { PgCustodyGateway } from "./gateway.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../postgres/migrations.js";
 
-export const CUSTODY_SCHEMA_VERSION = 10;
+/** Exactly the schema this release migrates to (the custody protocol is unchanged since v10). */
+export const CUSTODY_SCHEMA_VERSION = FLEET_PG_SCHEMA_VERSION;
 const SAFETY_SWITCHES = ["REAL_REPLICATION_ENABLED", "REAL_PAYMENTS_ENABLED", "OWNER_SWEEP_ENABLED"];
 const on = (v: string | undefined) => v?.trim().toLowerCase() === "true";
 

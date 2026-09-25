@@ -317,6 +317,29 @@ export class FleetApiClient implements FleetBackend {
     return (await this.call<{ order: Record<string, unknown> }>("POST", "/v1/spend/cancel", { orderId })).order;
   }
 
+  /** Schema v11: this agent's capability manifest (origin, allowed classes, digest). */
+  async capabilities() {
+    return (await this.call<{ capabilities: Record<string, unknown> }>("GET", "/v1/capabilities")).capabilities;
+  }
+
+  /** Propose institutional knowledge (the owner decides whether it is promoted). */
+  async proposeKnowledge(p: { category: string; title: string; content: string }) {
+    return this.call<{ proposalId: string; status: string }>("POST", "/v1/knowledge/propose", p);
+  }
+
+  async knowledge(after = 0) {
+    return (await this.call<{ entries: Array<Record<string, unknown>> }>("POST", "/v1/knowledge/list", { after })).entries;
+  }
+
+  /** Request one Organisation Identity fact for a named workflow; released only after owner approval. */
+  async requestIdentityFact(p: { factKey: string; purpose: string; workflow: string }) {
+    return this.call<{ claimId: string; status: string }>("POST", "/v1/identity/request", p);
+  }
+
+  async identityFact(claimId: string) {
+    return this.call<{ factKey: string; value: string }>("POST", "/v1/identity/fact", { claimId });
+  }
+
   /** This agent's own ledger position (allocation, reserved, protected principal, survival equity, LFC). */
   async ledger() {
     return (await this.call<{ economics: Record<string, unknown> | null }>("GET", "/v1/ledger")).economics;

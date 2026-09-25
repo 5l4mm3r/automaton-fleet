@@ -87,7 +87,7 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 # Agents' homes and the admin credential are never visible to the service.
-InaccessiblePaths=-/home/automaton-agent -/etc/automaton-fleet/admin.env
+InaccessiblePaths=-/home/automaton-agent -/etc/automaton-fleet/admin.env -/etc/automaton-fleet/custody.env -/var/lib/automaton-fleet-custody
 
 [Install]
 WantedBy=multi-user.target

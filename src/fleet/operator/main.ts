@@ -13,7 +13,7 @@
  *  - the pinned release is incomplete or differs from the registry approval;
  *  - the database login is the schema owner, a superuser, or a member of
  *    anything but fleet_operator;
- *  - the schema is not v10, or the operator privilege audit reports anything.
+ *  - the schema is not this release's schema, or the operator privilege audit reports anything.
  *
  * Phase D3: the runtime-verification route reports this process's own
  * installed release identity (build id over its working directory, no git, no

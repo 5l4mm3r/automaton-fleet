@@ -5,7 +5,7 @@ import type { PoolClient } from "pg";
  * throwaway schema/cluster). Singleton config rows (fleet_state,
  * fleet_treasury_policy) are kept; counters and reaper bookkeeping reset.
  * Schema v10: the economic model, chart of accounts grammar and legacy
- * digests are kept; the fleet-scope ledger accounts are restored and the
+ * digests (and, v11, the capability catalogue, Genesis and reproduction policies) are kept; the fleet-scope ledger accounts are restored and the
  * ledger head reset (journals, postings and agent accounts are emptied).
  * Must run inside the caller's transaction.
  */
@@ -13,6 +13,8 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   const keep = new Set([
     "fleet_state", "fleet_schema_migrations", "fleet_treasury_policy",
     "fleet_economic_model", "fleet_ledger_classes", "fleet_ledger_kinds", "fleet_ledger_rules", "fleet_ledger_head", "fleet_legacy_economics",
+    "fleet_capability_classes", "fleet_capability_manifests", "fleet_genesis_policy", "fleet_reproduction_policy",
+    "fleet_operator_state", "fleet_operator_routes",
   ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",

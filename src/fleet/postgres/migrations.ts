@@ -18,8 +18,9 @@ import { v7Sql } from "./migrations-phase7.js";
 import { V8_SQL } from "./migrations-phase8.js";
 import { V9_SQL } from "./migrations-phase9.js";
 import { V10_SQL } from "./migrations-phase10.js";
+import { V11_SQL } from "./migrations-phase11.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 10;
+export const FLEET_PG_SCHEMA_VERSION = 11;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1124,6 +1125,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 8, name: "operator_api_read_only", sql: V8_SQL },
   { version: 9, name: "operator_actions_controlled", sql: V9_SQL },
   { version: 10, name: "treasury_ledger_custody_boundary", sql: V10_SQL },
+  { version: 11, name: "genesis_pre_genesis_integration", sql: V11_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1146,6 +1148,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_answer_challenge(text, text, text, text, text, boolean)",
   "svc_expire_payment_orders(integer)",
   "svc_issue_payment_instruction(uuid)",
+  "svc_genesis_expire(integer)",
+  "svc_settle_estates(integer)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */
@@ -1177,6 +1181,11 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_spend_request(text, text, text, bigint, text, text, text, bigint)",
   "api_spend_cancel(text, text, uuid)",
   "api_ledger_summary(text, text)",
+  "api_capabilities(text, text)",
+  "api_knowledge_propose(text, text, text, text, text)",
+  "api_knowledge_list(text, text, bigint, integer)",
+  "api_identity_request(text, text, text, text, text)",
+  "api_identity_fact(text, text, uuid)",
 ]);
 
 /**
@@ -1204,6 +1213,21 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
 /** Schema v10: the only functions whose bodies may write the ledger tables (append-only double entry). */
 export const LEDGER_TABLES: readonly string[] = Object.freeze(["fleet_ledger_journal", "fleet_ledger_postings", "fleet_ledger_head"]);
 export const LEDGER_WRITERS: readonly string[] = Object.freeze(["fleet_ledger_post"]);
+
+/**
+ * Schema v11: the only functions that may open a Genesis operation (set the
+ * fleet.genesis_op guard that lets founders be created/advanced and Genesis
+ * records change). All are owner-only except svc_genesis_expire (reaper).
+ */
+export const GENESIS_OPERATORS: readonly string[] = Object.freeze([
+  "fleet_genesis_begin",
+  "fleet_genesis_end",
+]);
+export const GENESIS_GUARDS: readonly string[] = Object.freeze([
+  "fleet_agents_origin_guard",
+  "fleet_genesis_guard",
+  "fleet_genesis_founders_guard",
+]);
 
 /**
  * The ONLY functions the operator role may execute (schema v8 Phase B2 + schema v9 Phase D3).

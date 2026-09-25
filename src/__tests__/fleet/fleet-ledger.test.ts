@@ -143,7 +143,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
   // ── Schema, model and privileges ─────────────────────────────
 
   it("migrates to v10 with custody execution constitutionally pinned off and a clean privilege audit", async () => {
-    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(10);
+    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(11);
     const m = await ledger.model();
     expect(m).toMatchObject({ ledgerAuthoritative: true, custodyExecutionEnabled: false, ownerApprovalThresholdCents: 10000, strongAuthThresholdCents: 50000 });
     // Not an ordinary economic setting: even the owner cannot turn it on without a migration.
@@ -553,7 +553,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(order(r).status).toBe("reserved");
     expect((await svc.query(`SELECT fleet.svc_issue_payment_instruction($1) AS r`, [order(r).orderId])).rows[0].r).toEqual({ ok: false, code: "FLEET_CUSTODY_EXECUTION_DISABLED" });
     expect((await custody.query(`SELECT fleet.cx_claim_instruction('executor', $1) AS r`, [sha256Hex("lease")])).rows[0].r).toEqual({ ok: false, code: "FLEET_CUSTODY_EXECUTION_DISABLED" });
-    expect((await custody.query(`SELECT fleet.cx_ping() AS r`)).rows[0].r).toMatchObject({ schemaVersion: 10, executionEnabled: false, issued: 0, claimed: 0 });
+    expect((await custody.query(`SELECT fleet.cx_ping() AS r`)).rows[0].r).toMatchObject({ schemaVersion: 11, executionEnabled: false, issued: 0, claimed: 0 });
     expect(await pgCode(owner.query(
       `INSERT INTO fleet.fleet_payment_instructions (instruction_id, order_id, amount_cents, destination_id, rail, instruction_sha256, issued_by)
        VALUES (gen_random_uuid(), $1, 50, $2, 'evm_usdc', repeat('a',64), 'owner')`, [order(r).orderId, payee],
@@ -613,7 +613,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       expect((await owner.query(`SELECT count(*)::int AS n FROM ${X}.fleet_assets`)).rows[0].n).toBe(0); // the failed purchase created no asset
       expect((await xl.verify()).ok).toBe(true);
       // Revenue, LFC and the realized-profit cap.
-      await xl.recordRevenue(a.agentId, 2000, "stripe:po_1", OWNER);
+      await xl.recordRevenue(a.agentId, 2000, "stripe:po_1", "customer:one", OWNER);
       expect((await xl.economics(a.agentId)).uncontributedProfit).toBe(1300);
       expect(await pgCode(xl.contribute(a.agentId, 1301, OWNER))).toBe("FLEET_LFC_EXCEEDS_REALIZED_PROFIT");
       await xl.contribute(a.agentId, 1300, OWNER);
@@ -638,7 +638,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(await ledger.lifetimeFleetContribution()).toBe(lfc0);
     // Capital is not profit: nothing to contribute.
     expect(await pgCode(ledger.contribute(a.agentId, 1, OWNER))).toBe("FLEET_LFC_EXCEEDS_REALIZED_PROFIT");
-    await ledger.recordRevenue(a.agentId, 400, `pay:${crypto.randomUUID()}`, OWNER);
+    await ledger.recordRevenue(a.agentId, 400, `pay:${crypto.randomUUID()}`, "customer:two", OWNER);
     await ledger.contribute(a.agentId, 400, OWNER);
     expect(await ledger.lifetimeFleetContribution()).toBe(lfc0 + 400);
     expect(await bal(agentAcct(a, "contributions"))).toBe(400);
@@ -649,7 +649,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     if (!reg.ok) throw new Error(reg.reason);
     const id = reg.agent.agentId;
     await ledger.agentCapital({ agentId: id, amountCents: 1000, mode: "principal", actor: OWNER });
-    await ledger.recordRevenue(id, 300, `pay:${crypto.randomUUID()}`, OWNER);
+    await ledger.recordRevenue(id, 300, `pay:${crypto.randomUUID()}`, "customer:three", OWNER);
     // Realized profit 300, survival equity 300: the full 300 may go, not more.
     await ledger.contribute(id, 300, OWNER);
     expect((await ledger.economics(id)).survivalEquity).toBe(0);
@@ -732,8 +732,10 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(await pgCode(q(`DELETE FROM fleet.fleet_assets WHERE asset_id = $1`, [assetId]))).toBe("FLEET_HISTORY_IMMUTABLE");
     await store.markDead(a.agentId, "test death", "test", "reported");
     expect((await ledger.estateAttention()).assetsUnderDeadAgents).toBeGreaterThanOrEqual(1);
+    // Schema v11: economic death froze the estate in the same transaction (orders cancelled by the lifecycle).
+    expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_payment_orders WHERE agent_id = $1 AND status = 'cancelled' AND decision_code = 'FLEET_ESTATE_FREEZE'`, [a.agentId]))[0].n).toBe(2);
     const opened = await ledger.estateOpen(a.agentId, OWNER);
-    expect(opened.ordersCancelled).toBe(2);
+    expect(opened.ordersCancelled).toBe(0);
     expect(await bal(agentAcct(a, "reserved"))).toBe(0);
     const treasury0 = await bal("fleet:treasury:unallocated");
     const s = await ledger.estateSettle(a.agentId, OWNER);
@@ -862,9 +864,9 @@ describe.skipIf(!PG_BIN)("schema v9 -> v10 on a production-shaped v9 registry", 
       await owner.query(`INSERT INTO fleet.fleet_treasury_ledger (kind, amount_cents, status, recorded_by) VALUES ('owner_funding_in', 1000, 'recorded', 'operator:x')`);
       const legacyBefore = (await owner.query(`SELECT string_agg(row_to_json(x)::text, E'\\n' ORDER BY x.entry_id) AS s, count(*)::int AS n FROM fleet.fleet_agent_ledger x`)).rows[0];
       const eventsBefore = (await owner.query(`SELECT count(*)::int AS n FROM fleet.fleet_events`)).rows[0].n;
-      expect(await store.migrateCheck()).toEqual({ currentVersion: 9, resultingVersion: 10, wouldApply: [10] });
+      expect(await store.migrateCheck()).toEqual({ currentVersion: 9, resultingVersion: 11, wouldApply: [10, 11] });
       expect((await owner.query(`SELECT to_regclass('fleet.fleet_ledger_journal') AS r`)).rows[0].r).toBeNull(); // rolled back
-      expect(await store.migrate()).toEqual([10]);
+      expect(await store.migrate()).toEqual([10, 11]);
       expect(await store.migrate()).toEqual([]);
       const digest = (await owner.query(`SELECT row_count, rows_sha256 FROM fleet.fleet_legacy_economics WHERE table_name = 'fleet_agent_ledger'`)).rows[0];
       expect(Number(digest.row_count)).toBe(legacyBefore.n);

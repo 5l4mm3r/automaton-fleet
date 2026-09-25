@@ -30,6 +30,7 @@ import fs from "fs";
 import net from "net";
 import path from "path";
 import { FLEET_PG_SCHEMA_VERSION } from "./postgres/migrations.js";
+import { FOUNDER_MANIFEST_V1, manifestSha256 } from "./capabilities.js";
 import type { PgFleetStore } from "./postgres/store.js";
 import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "./runtime.js";
 import { auditLevel } from "./operator/responses.js";
@@ -259,7 +260,9 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       facts.privilegeProblems = audit.problems;
       facts.operatorRoles = audit.operatorRoles;
       const roleText = audit.operatorRoles === "not_provisioned" ? "agent/service roles least-privilege; operator roles: not provisioned" : "agent/service/operator roles least-privilege";
-      add("database privileges", audit.ok ? "pass" : "fail", audit.ok ? `${roleText}; operator surface: reads STABLE/read-only, actions allow-listed; PUBLIC has nothing` : audit.problems.join("; "));
+      const custodyText = audit.custodyRoles === "not_provisioned" ? "custody roles: not provisioned" : "custody roles cx_* only";
+      facts.custodyRoles = audit.custodyRoles;
+      add("database privileges", audit.ok ? "pass" : "fail", audit.ok ? `${roleText}; ${custodyText}; operator surface: reads STABLE/read-only, actions allow-listed; ledger/custody/Genesis surfaces verified; PUBLIC has nothing` : audit.problems.join("; "));
       if (!audit.ok) blockers.push("Database privileges are too broad or roles are missing (pnpm fleet:audit-privileges).");
 
       const st = await store.getState();
@@ -337,6 +340,32 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         (ov.actionsEnabled ? `ENABLED (controlled operator actions are accepted for principals holding ops.act.* / ops.propose.*)` : "disabled (default; operator principals are read-only)") +
           `; ${ov.pendingProposals} proposal(s) awaiting the owner (fleet:admin proposal-list)`,
       );
+    }
+
+    // ── Genesis, capabilities, reproduction, identity vault, knowledge (schema v11). Detailed checks only.
+    const gv = await store.genesisOverview();
+    facts.genesis = gv;
+    if (gv) {
+      add(
+        "genesis",
+        gv.inFlight ? "warn" : "pass",
+        `${gv.genesisEnabled ? "ENABLED by the owner" : "disabled (owner gate)"}; ${gv.inFlight} in flight, ${gv.activated} activated; ` +
+          `${gv.founders} founder record(s), ${gv.livingFounders} living`,
+      );
+      const want = manifestSha256(FOUNDER_MANIFEST_V1);
+      add(
+        "capability manifest",
+        gv.founderManifestSha256 === want ? "pass" : "fail",
+        gv.founderManifestSha256 === want ? `founder-v1 ${want.slice(0, 12)}… matches this runtime` : `founder-v1 in the registry (${gv.founderManifestSha256 ?? "missing"}) differs from this runtime (${want})`,
+      );
+      if (gv.founderManifestSha256 !== want) blockers.push("The registry capability manifest differs from the runtime's compiled manifest.");
+      add(
+        "reproduction",
+        gv.reproductionExecutionEnabled ? "fail" : "pass",
+        gv.reproductionExecutionEnabled ? "EXECUTION ENABLED — must be pinned off" : "execution constitutionally disabled; eligibility is assessment only",
+      );
+      add("identity vault", "pass", `${gv.identityFacts} fact(s) stored, ${gv.identityClaimsPending} claim(s) awaiting the owner; facts are released only per approved claim`);
+      add("institutional knowledge", "pass", `${gv.knowledgeEntries} promoted entr(ies), ${gv.knowledgePending} proposal(s) awaiting the owner; ${gv.openEstates} open estate(s)`);
     }
 
     // ── Central ledger and custody boundary (schema v10). Detailed checks only; the

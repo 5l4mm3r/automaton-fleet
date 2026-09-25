@@ -112,6 +112,11 @@ export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Obj
   "POST /v1/spend/request": { auth: "session", witness: false },
   "POST /v1/spend/cancel": { auth: "session", witness: false },
   "GET /v1/ledger": { auth: "session", witness: false },
+  "GET /v1/capabilities": { auth: "session", witness: false },
+  "POST /v1/knowledge/propose": { auth: "session", witness: false },
+  "POST /v1/knowledge/list": { auth: "session", witness: false },
+  "POST /v1/identity/request": { auth: "session", witness: false },
+  "POST /v1/identity/fact": { auth: "session", witness: false },
 });
 
 /**
@@ -334,6 +339,10 @@ export class FleetService {
         if (r.expired || r.unresponsive || r.dead) this.audit("reaper_pass", null, { ...r });
         const orders = await this.opts.admin.expirePaymentOrders(100);
         if (orders) this.audit("payment_orders_expired", null, { count: orders });
+        const genesis = await this.opts.admin.expireGenesis(10);
+        if (genesis) this.audit("genesis_expired", null, { count: genesis });
+        const estates = await this.opts.admin.settleEstates(10);
+        if (estates) this.audit("estates_settled", null, { count: estates });
         await this.processTerminations();
         this.lastReapOkAt = Date.now();
         this.lastReapError = null;
@@ -820,6 +829,14 @@ export class FleetService {
       return { agent: who.agent, dead: who.dead };
     }
 
+    if (method === "GET" && path === "/v1/capabilities") {
+      // Schema v11: this agent's capability manifest (authoritative copy in the database).
+      const { agentId, token } = await this.credentials(req, path, ctx);
+      const r = await agent.capabilities(agentId, token);
+      if (!r.ok) throw FleetService.refusal(r, "capabilities refused");
+      return { capabilities: r };
+    }
+
     if (method === "GET" && path === "/v1/ledger") {
       // Schema v10: the agent's own ledger position (read from the ledger, never agent-reported).
       const { agentId, token } = await this.credentials(req, path, ctx);
@@ -954,6 +971,41 @@ export class FleetService {
         });
         if (!r.ok && !r.order) throw FleetService.refusal(r, "spend refused");
         return { ok: r.ok, code: r.code ?? null, order: r.order ?? null, replay: r.replay === true, executed: false };
+      }
+
+      case "/v1/knowledge/propose": {
+        // Schema v11: a proposal only; the owner promotes deliberately (provenance recorded by the database).
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const r = await agent.knowledgePropose(agentId, token, str(body, "category", 20), str(body, "title", 200), str(body, "content", 8000));
+        if (!r.ok) throw FleetService.refusal(r, "proposal refused");
+        return { proposalId: r.proposalId, status: r.status };
+      }
+
+      case "/v1/knowledge/list": {
+        // Parameters travel in the signed body (the request signature covers the path, not a query string).
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const after = body.after === undefined ? 0 : Number(body.after);
+        if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, "FLEET_BAD_REQUEST", "after must be a non-negative integer");
+        const r = await agent.knowledgeList(agentId, token, after, 50);
+        if (!r.ok) throw FleetService.refusal(r, "knowledge refused");
+        return { entries: r.entries };
+      }
+
+      case "/v1/identity/request": {
+        // Schema v11: request ONE Organisation Identity fact for a named workflow; the owner decides.
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const r = await agent.identityRequest(agentId, token, str(body, "factKey", 40), str(body, "purpose", 300), str(body, "workflow", 64));
+        if (!r.ok) throw FleetService.refusal(r, "identity request refused");
+        return { claimId: r.claimId, status: r.status };
+      }
+
+      case "/v1/identity/fact": {
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const claimId = str(body, "claimId", 36);
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(claimId)) throw new HttpError(400, "FLEET_BAD_REQUEST", "claimId must be a uuid");
+        const r = await agent.identityFact(agentId, token, claimId);
+        if (!r.ok) throw FleetService.refusal(r, "identity fact refused");
+        return { factKey: r.factKey, value: r.value };
       }
 
       case "/v1/spend/cancel": {
