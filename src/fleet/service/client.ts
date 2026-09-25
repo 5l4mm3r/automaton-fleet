@@ -304,6 +304,24 @@ export class FleetApiClient implements FleetBackend {
     return this.call<{ decision: string; reason: string | null; executed: boolean }>("POST", "/v1/wallet/spend-request", r);
   }
 
+  /**
+   * Schema v10: submit a structured spend order against this agent's own ledger
+   * allocation, to an owner-enrolled destination id. The controller decides
+   * (reserved / awaiting_owner / rejected); nothing is executed by this call.
+   */
+  async spendOrder(r: { idempotencyKey: string; amountCents: number; category: "expense" | "fee" | "asset_acquisition" | "conway_credits"; destinationId: string; purpose: string; recoverableCents?: number }) {
+    return this.call<{ ok: boolean; code: string | null; order: Record<string, unknown> | null; replay: boolean; executed: false }>("POST", "/v1/spend/request", r);
+  }
+
+  async cancelSpendOrder(orderId: string) {
+    return (await this.call<{ order: Record<string, unknown> }>("POST", "/v1/spend/cancel", { orderId })).order;
+  }
+
+  /** This agent's own ledger position (allocation, reserved, protected principal, survival equity, LFC). */
+  async ledger() {
+    return (await this.call<{ economics: Record<string, unknown> | null }>("GET", "/v1/ledger")).economics;
+  }
+
   async selfStatus(agentId: string): Promise<SharedAgentStatus | null> {
     if (agentId !== this.agentId) return null;
     return (await this.self())?.agent.status ?? null;

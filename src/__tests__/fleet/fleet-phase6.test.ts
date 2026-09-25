@@ -500,7 +500,7 @@ describe.skipIf(!PG_BIN)("Fleet security policy: Phase 6 control plane, provisio
 
   // ── Part A: migrations
 
-  it("migration v1 -> v5 -> v6 -> v7 -> v8 -> v9: verified transactionally (rolled back), then applied; data preserved; privileges still least", async () => {
+  it("migration v1 -> v5 -> v6 -> v7 -> v8 -> v9 -> v10: verified transactionally (rolled back), then applied; data preserved; privileges still least", async () => {
     const schema = "fleet_mig_v1";
     const c = await ownerRaw.connect();
     try {
@@ -519,15 +519,15 @@ describe.skipIf(!PG_BIN)("Fleet security policy: Phase 6 control plane, provisio
     const store = track(new PgFleetStore({ connectionString: pgc.ownerUrl, schema }));
     expect((await store.health()).schemaVersion).toBe(1);
     const check = await store.migrateCheck();
-    expect(check).toEqual({ currentVersion: 1, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: [2, 3, 4, 5, 6, 7, 8, 9] });
+    expect(check).toEqual({ currentVersion: 1, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: [2, 3, 4, 5, 6, 7, 8, 9, 10] });
     expect((await store.health()).schemaVersion).toBe(1); // rolled back
-    expect(await store.migrate()).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(await store.migrate()).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
     const h = await store.health();
-    expect(h.schemaVersion).toBe(9);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(9);
+    expect(h.schemaVersion).toBe(10);
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(10);
     expect((await store.getState()).maxAgents).toBe(2);
     const v5 = await ownerRaw.query(`SELECT version FROM ${schema}.fleet_schema_migrations ORDER BY version`);
-    expect(v5.rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(v5.rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect((await store.auditPrivileges()).problems).toEqual([]);
     expect(await store.migrate()).toEqual([]); // idempotent
     await ownerRaw.query(`DROP SCHEMA ${schema} CASCADE`);
@@ -863,9 +863,11 @@ describe.skipIf(!PG_BIN)("Fleet security policy: Phase 6 control plane, provisio
       const cred = JSON.parse(fs.readFileSync(path.join(dir, "fleet-credentials.json"), "utf8"));
       const c = new FleetApiClient({ baseUrl: url, agentId, token: cred.token, fetchImpl: caFetch(tls.cert) });
       const spend = await c.requestSpend({ fromWallet: a.walletAddress!, toAddress: wallet(), amountCents: 1, purpose: "test" }).catch((e: Error) => e);
-      if (spend instanceof Error) expect(spend.message).toMatch(/frozen|refused|FLEET/i);
+      if (spend instanceof Error) expect(spend.message).toMatch(/frozen|refused|superseded|FLEET/i);
       else expect(spend).toMatchObject({ executed: false }), expect(spend.decision).not.toBe("approved");
       await expect(c.proposeCapital({ purpose: "grow", requestedCents: 100, expectedReturnCents: 200, expectedDurationDays: 5 })).rejects.toThrow();
+      // Schema v10: the ledger spend path refuses it too (no allocation, custody frozen, no enrolled destination).
+      await expect(c.spendOrder({ idempotencyKey: "dryrun:12345678", amountCents: 1, category: "expense", destinationId: `dst_${"0".repeat(26)}`, purpose: "x" })).rejects.toThrow();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -996,7 +998,7 @@ describe.skipIf(!PG_BIN)("Fleet security policy: Phase 6 control plane, provisio
       const r = await doctor(env);
       expect(r.checklist.filter((c) => !c.ok), formatChecklist(r)).toEqual([]);
       expect(r.checklist.map((c) => c.item)).toEqual([
-        "PostgreSQL roles correct", "schema v9", "controller service active", "privileged secrets protected", "runtime repo pinned",
+        "PostgreSQL roles correct", "schema v10", "controller service active", "privileged secrets protected", "runtime repo pinned",
         "runtime commit pinned", "build ID pinned", "HTTPS valid", "remote controller reachable", "replay protection working",
         "agent credentials scoped", "payments disabled", "owner sweeps disabled", "fleet cap = 2", "no unresolved orphan", "no stuck reservation",
       ]);

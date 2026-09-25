@@ -30,7 +30,8 @@
  *   pnpm fleet:admin orphans [all] | provisioning [cleanup]
  *   pnpm fleet:admin lifecycle-policy [interval=S] [challengeTtl=S] [healthGrace=S] [maxFailures=N]
  *                                     [terminationGrace=S] [orphanHold=S] [maxOrphans=N] [sessionTtl=S]
- *   pnpm fleet:admin <treasury command>        see src/fleet/treasury/cli.ts
+ *   pnpm fleet:admin <treasury command>        see src/fleet/treasury/cli.ts (v5 money records are superseded by v10)
+ *   pnpm fleet:admin <ledger command>          schema v10 central ledger; see src/fleet/treasury/ledger-cli.ts
  *   pnpm fleet:admin reap | reservations
  *   pnpm fleet:admin release <agentId> [reason]
  *   pnpm fleet:admin mark-dead <agentId> [reason]
@@ -72,6 +73,8 @@ import { formatChecklist, formatDoctorReport, runDoctor } from "../doctor.js";
 import { loadAdminEnv, readEnvFile, type LoadedEnv } from "../secret-files.js";
 import { PgTreasuryStore } from "../treasury/store.js";
 import { TREASURY_COMMANDS, runTreasuryCommand } from "../treasury/cli.js";
+import { PgLedgerAdmin } from "../treasury/ledger.js";
+import { LEDGER_COMMANDS, runLedgerCommand } from "../treasury/ledger-cli.js";
 import type { FleetCredential } from "../types.js";
 import { PgFleetStore } from "./store.js";
 import { FLEET_PG_SCHEMA_VERSION } from "./migrations.js";
@@ -354,6 +357,22 @@ async function main(argv: string[]): Promise<number> {
       return 1;
     } finally {
       await admin.close();
+      await store.close();
+    }
+  }
+  if (LEDGER_COMMANDS.has(cmd)) {
+    const ledger = new PgLedgerAdmin({
+      connectionString: (e.FLEET_ADMIN_DATABASE_URL || e.FLEET_CONTROLLER_DATABASE_URL || e.DATABASE_URL)!.trim(),
+      schema: e.FLEET_PG_SCHEMA?.trim() || undefined,
+    });
+    try {
+      console.log(JSON.stringify(await runLedgerCommand(cmd, rest, ledger, actor), null, 2));
+      return 0;
+    } catch (err) {
+      console.error(redactText(err instanceof Error ? err.message : String(err)));
+      return 1;
+    } finally {
+      await ledger.close();
       await store.close();
     }
   }

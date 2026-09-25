@@ -210,4 +210,27 @@ export class PgAgentGateway {
       agentId, token, r.requestId, r.fromWallet, r.toAddress, r.amountCents, r.purpose, r.allocationId,
     ]);
   }
+
+  /**
+   * Schema v10: submit a structured spend order against the agent's own
+   * ledger allocation. The database decides (reserved / awaiting_owner /
+   * rejected); nothing is executed by this call.
+   */
+  async spendRequest(
+    agentId: string,
+    token: string,
+    r: { idempotencyKey: string; amountCents: number; category: string; destinationId: string; purpose: string; recoverableCents?: number },
+  ): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_spend_request", [
+      agentId, token, r.idempotencyKey, r.amountCents, r.category, r.destinationId, r.purpose, r.recoverableCents ?? 0,
+    ]);
+  }
+
+  async spendCancel(agentId: string, token: string, orderId: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_spend_cancel", [agentId, token, orderId]);
+  }
+
+  async ledgerSummary(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_ledger_summary", [agentId, token]);
+  }
 }

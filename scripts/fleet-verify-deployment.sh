@@ -16,6 +16,10 @@
 #     secrets and is in no other group; no other fleet user can read
 #     operator.env (root:automaton-fleet-operator-api 0640); port 8788 is
 #     loopback-only; the host clock is NTP-synchronized
+#   - custody executor (schema v10, when installed): its user reads no other
+#     secret and is in no other group; custody.env (root:automaton-fleet-custody
+#     0640) is readable by no other fleet user and holds only the custody DB
+#     login; the executor holds no TCP listener
 # Exit 1 on any failure. Never prints secret contents.
 set -uo pipefail
 [[ $EUID -eq 0 ]] || { echo "run with sudo (read-only checks)" >&2; exit 2; }
@@ -78,6 +82,35 @@ if id automaton-fleet-operator-api >/dev/null 2>&1; then
   if [[ -e /run/systemd/timesync/synchronized ]]; then ok "systemd-timesyncd synchronized marker present"; else bad "no /run/systemd/timesync/synchronized (Operator API readiness requires it; set FLEET_OPERATOR_TIMESYNC_MARKER for another NTP daemon)"; fi
 else
   ok "Operator API not installed"
+fi
+
+echo "Custody executor isolation (Phase E, schema v10; inert)"
+CX=automaton-fleet-custody
+if id "$CX" >/dev/null 2>&1; then
+  [[ "$(id -nG "$CX")" == "$CX" ]] && ok "$CX is in no other group" || bad "$CX groups: $(id -nG "$CX")"
+  for f in "$ETC/admin.env" "$ETC/service.env" "$ETC/operator.env" "$ETC/tls/fleet.key" "$ETC/legacy-env-fleet.bak"; do
+    [[ -e "$f" ]] || continue
+    if runuser -u "$CX" -- test -r "$f" 2>/dev/null; then bad "$CX CAN read $f"; else ok "$CX cannot read $f"; fi
+  done
+  CXENV="$ETC/custody.env"
+  if [[ -L "$CXENV" ]]; then bad "$CXENV is a symlink"
+  elif [[ -f "$CXENV" ]]; then
+    got="$(stat -c '%U:%G %a %h' "$CXENV")"
+    [[ "$got" == "root:$CX 640 1" ]] && ok "$CXENV is root:$CX 640 (single link)" || bad "$CXENV is $got (expected root:$CX 640 1)"
+    for u in automaton-agent automaton-fleet-service automaton-fleet-witness automaton-fleet-operator-api automaton-fleet-chatgpt-adapter automaton-fleet-chatgpt-tunnel "${SUDO_USER:-}"; do
+      [[ -n "$u" ]] && id "$u" >/dev/null 2>&1 || continue
+      if runuser -u "$u" -- test -r "$CXENV" 2>/dev/null; then bad "$u CAN read $CXENV"; else ok "$u cannot read $CXENV"; fi
+    done
+    # v10 is inert: exactly one key, the restricted DB login; never a custody/provider credential.
+    keys="$(grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=' "$CXENV" | sed -E 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*).*/\2/' | sort -u | tr '\n' ' ')"
+    [[ "$keys" == "FLEET_CUSTODY_DATABASE_URL " ]] && ok "$CXENV holds only the custody DB login (no custody credential)" || bad "$CXENV holds unexpected keys: $keys"
+  else
+    bad "$CXENV missing"
+  fi
+  uidn="$(id -u "$CX")"
+  if ss -ltneH 2>/dev/null | grep -qE "uid:$uidn( |$)"; then bad "$CX holds a TCP listener"; else ok "$CX holds no TCP listener"; fi
+else
+  ok "custody executor not installed"
 fi
 
 echo "ChatGPT adapter isolation (Phase C)"

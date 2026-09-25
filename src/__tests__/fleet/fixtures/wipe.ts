@@ -4,10 +4,16 @@ import type { PoolClient } from "pg";
  * Test-only: empty every fleet registry table in `schema` (owner connection,
  * throwaway schema/cluster). Singleton config rows (fleet_state,
  * fleet_treasury_policy) are kept; counters and reaper bookkeeping reset.
+ * Schema v10: the economic model, chart of accounts grammar and legacy
+ * digests are kept; the fleet-scope ledger accounts are restored and the
+ * ledger head reset (journals, postings and agent accounts are emptied).
  * Must run inside the caller's transaction.
  */
 export async function wipeRegistry(c: PoolClient, schema: string): Promise<void> {
-  const keep = new Set(["fleet_state", "fleet_schema_migrations", "fleet_treasury_policy"]);
+  const keep = new Set([
+    "fleet_state", "fleet_schema_migrations", "fleet_treasury_policy",
+    "fleet_economic_model", "fleet_ledger_classes", "fleet_ledger_kinds", "fleet_ledger_rules", "fleet_ledger_head", "fleet_legacy_economics",
+  ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
     [schema],
@@ -16,7 +22,18 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   const wipe = r.rows.filter((x) => !keep.has(x.t)).map((x) => `"${schema}"."${x.t}"`);
   await c.query(`LOCK TABLE ${all.join(", ")} IN ACCESS EXCLUSIVE MODE`);
   for (const t of all) await c.query(`ALTER TABLE ${t} DISABLE TRIGGER USER`);
+  const hasLedger = r.rows.some((x) => x.t === "fleet_ledger_accounts");
+  const fleetAccounts = hasLedger ? (await c.query(`SELECT * FROM "${schema}".fleet_ledger_accounts WHERE agent_id IS NULL`)).rows : [];
   await c.query(`TRUNCATE ${wipe.join(", ")} RESTART IDENTITY CASCADE`);
+  if (hasLedger) {
+    for (const a of fleetAccounts) {
+      await c.query(
+        `INSERT INTO "${schema}".fleet_ledger_accounts (account_id, class, agent_id, currency, description, created_at, created_by) VALUES ($1, $2, NULL, $3, $4, $5, $6)`,
+        [a.account_id, a.class, a.currency, a.description, a.created_at, a.created_by],
+      );
+    }
+    await c.query(`UPDATE "${schema}".fleet_ledger_head SET head_seq = 0, head_hash = repeat('0', 64)`);
+  }
   const cols = await c.query<{ c: string }>(
     "SELECT column_name AS c FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_state'",
     [schema],

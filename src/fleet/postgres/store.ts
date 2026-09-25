@@ -54,6 +54,7 @@ import type {
 } from "../types.js";
 import { migrateCheck,
   AGENT_API_FUNCTIONS,
+  CUSTODY_API_FUNCTIONS,
   FLEET_PG_HARD_MAX_AGENTS,
   FLEET_PG_SCHEMA_VERSION,
   OPERATOR_API_FUNCTIONS,
@@ -72,6 +73,8 @@ export const DEFAULT_AGENT_ROLE = "fleet_agent";
 export const DEFAULT_SERVICE_ROLE = "fleet_service";
 /** Schema v8: read-only Operator API role (granted op_* only). */
 export const DEFAULT_OPERATOR_ROLE = "fleet_operator";
+/** Schema v10: inert custody executor role (granted cx_* only). */
+export const DEFAULT_CUSTODY_ROLE = "fleet_custody";
 
 export interface FleetTimeouts {
   reservationTtlS: number;
@@ -565,12 +568,13 @@ export class PgFleetStore {
       client.release();
     }
     const roles = await this.pool
-      .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole]])
+      .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole, DEFAULT_CUSTODY_ROLE]])
       .catch(() => null);
     const present = new Set(roles?.rows.map((r) => r.rolname) ?? []);
     if (present.has(this.agentRole)) await this.grantAgentRole(this.agentRole);
     if (present.has(this.serviceRole)) await this.grantServiceRole(this.serviceRole);
     if (present.has(this.operatorRole)) await this.grantOperatorRole(this.operatorRole);
+    if (present.has(DEFAULT_CUSTODY_ROLE)) await this.grantCustodyRole(DEFAULT_CUSTODY_ROLE);
     return applied;
   }
 
@@ -833,6 +837,27 @@ export class PgFleetStore {
   }
 
   /**
+   * Operator-only (schema v10): give `role` exactly the custody executor
+   * protocol — USAGE on the schema and EXECUTE on CUSTODY_API_FUNCTIONS. No
+   * table, sequence or other function privilege. Re-running is harmless.
+   */
+  async grantCustodyRole(role: string = DEFAULT_CUSTODY_ROLE): Promise<void> {
+    const r = quoteIdent(role);
+    const s = quoteIdent(this.schema);
+    await this.tx(async (c) => {
+      const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
+      if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
+      await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
+      for (const fn of CUSTODY_API_FUNCTIONS) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
+      await this.event(c, "custody_role_granted", null, "operator", { role, functions: [...CUSTODY_API_FUNCTIONS] });
+    });
+  }
+
+  /**
    * Operator API overview for doctor (schema v8). Needs the admin (owner)
    * credential; returns null when the tables are not visible (e.g. doctor
    * runs with the service credential).
@@ -883,6 +908,65 @@ export class PgFleetStore {
           recentDenials: Number(row.denials),
           actionsEnabled: row.actions === true,
           pendingProposals: Number(row.proposals),
+        };
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Schema v10 ledger / custody overview for doctor. Needs the admin (owner)
+   * credential; null when the ledger is not visible (service credential or
+   * pre-v10 schema).
+   */
+  async ledgerOverview(): Promise<{
+    verify: { ok: boolean; journals: number; unbalanced?: number; firstBadSeq?: number };
+    custodyExecutionEnabled: boolean;
+    ledgerAuthoritative: boolean;
+    awaitingOwner: number;
+    reserved: number;
+    executing: number;
+    pendingDestinations: number;
+    activeDestinations: number;
+    pendingConfirmations: number;
+    instructions: number;
+    estate: { assetsUnderDeadAgents: number; deadAgentsWithBalances: number; assetsWithoutOwner: number };
+    treasuryUnallocatedCents: number;
+    lifetimeFleetContributionCents: number;
+  } | null> {
+    try {
+      return await this.read(async (c) => {
+        const r = await c.query(
+          `SELECT fleet_ledger_verify() AS verify, m.custody_execution_enabled, m.ledger_authoritative,
+                  (SELECT count(*) FROM fleet_payment_orders WHERE status = 'awaiting_owner') AS awaiting,
+                  (SELECT count(*) FROM fleet_payment_orders WHERE status = 'reserved') AS reserved,
+                  (SELECT count(*) FROM fleet_payment_orders WHERE status = 'executing') AS executing,
+                  (SELECT count(*) FROM fleet_payment_destinations WHERE status = 'pending') AS dst_pending,
+                  (SELECT count(*) FROM fleet_payment_destinations WHERE status = 'active') AS dst_active,
+                  (SELECT count(*) FROM fleet_admin_instructions WHERE status = 'pending_confirmation') AS confirmations,
+                  (SELECT count(*) FROM fleet_payment_instructions) AS instructions,
+                  fleet_estate_attention() AS estate,
+                  fleet_ledger_balance('fleet:treasury:unallocated') AS unallocated,
+                  fleet_ledger_balance('fleet:profit') AS lfc
+             FROM fleet_economic_model m WHERE m.id = 1`,
+        );
+        const x = r.rows[0];
+        if (!x) return null;
+        return {
+          verify: x.verify,
+          custodyExecutionEnabled: x.custody_execution_enabled === true,
+          ledgerAuthoritative: x.ledger_authoritative === true,
+          awaitingOwner: Number(x.awaiting),
+          reserved: Number(x.reserved),
+          executing: Number(x.executing),
+          pendingDestinations: Number(x.dst_pending),
+          activeDestinations: Number(x.dst_active),
+          pendingConfirmations: Number(x.confirmations),
+          instructions: Number(x.instructions),
+          estate: x.estate,
+          treasuryUnallocatedCents: Number(x.unallocated),
+          lifetimeFleetContributionCents: Number(x.lfc),
         };
       });
     } catch {
@@ -1496,6 +1580,11 @@ export class PgFleetStore {
       );
       return r.rows[0].res;
     });
+  }
+
+  /** Schema v10: expire payment orders past their TTL (releases their reservations). Returns the count. */
+  async expirePaymentOrders(limit = 100): Promise<number> {
+    return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_expire_payment_orders($1) AS n", [limit])).rows[0].n));
   }
 
   /** Append an audit event (service-level events: API auth failures, DB authorization failures, …). */

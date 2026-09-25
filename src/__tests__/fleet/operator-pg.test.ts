@@ -129,7 +129,7 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
 
   // ── Migration ─────────────────────────────────────────────────
 
-  it("v7 -> v8 -> v9 on a production-shaped empty registry: exact check (rolled back), apply, idempotent; v9 code refuses v7", async () => {
+  it("v7 -> v8 -> v9 -> v10 on a production-shaped empty registry: exact check (rolled back), apply, idempotent; v10 code refuses v7", async () => {
     const schema = "mig_v8";
     await toV7(schema);
     const store = new PgFleetStore({ connectionString: pgc.ownerUrl, schema });
@@ -137,17 +137,18 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
       const h7 = await store.health();
       expect(h7.ok).toBe(false); // a v9 build refuses a v7 registry (exact version check)
       expect(h7.schemaVersion).toBe(7);
-      expect(await store.migrateCheck()).toEqual({ currentVersion: 7, resultingVersion: 9, wouldApply: [8, 9] });
+      expect(await store.migrateCheck()).toEqual({ currentVersion: 7, resultingVersion: 10, wouldApply: [8, 9, 10] });
       expect(await reg(schema, "fleet_operator_state")).toBeNull(); // rolled back
       const before = await owner.query(`SELECT max_agents, operating_mode, runtime_commit, runtime_build_id, replication_enabled FROM ${schema}.fleet_state`);
-      expect(await store.migrate()).toEqual([8, 9]);
-      expect(FLEET_PG_SCHEMA_VERSION).toBe(9);
+      expect(await store.migrate()).toEqual([8, 9, 10]);
+      expect(FLEET_PG_SCHEMA_VERSION).toBe(10);
       const h9 = await store.health();
-      expect(h9).toMatchObject({ ok: true, schemaVersion: 9, countersConsistent: true });
+      expect(h9).toMatchObject({ ok: true, schemaVersion: 10, countersConsistent: true });
       const rows = await owner.query(`SELECT version, name FROM ${schema}.fleet_schema_migrations ORDER BY version`);
-      expect(rows.rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      expect(rows.rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
       expect(rows.rows[7].name).toBe("operator_api_read_only");
       expect(rows.rows[8].name).toBe("operator_actions_controlled");
+      expect(rows.rows[9].name).toBe("treasury_ledger_custody_boundary");
       const after = await owner.query(`SELECT max_agents, operating_mode, runtime_commit, runtime_build_id, replication_enabled FROM ${schema}.fleet_state`);
       expect(after.rows).toEqual(before.rows); // business state untouched
       const st = await owner.query(`SELECT operator_api_enabled, operator_actions_enabled, generation, request_count, request_cap FROM ${schema}.fleet_operator_state`);
@@ -174,7 +175,7 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
       expect(await reg(schema, "fleet_operator_state")).toBeNull();
       expect(await reg(schema, "fleet_operator_principals")).toBeNull();
       await owner.query(`DROP TABLE ${schema}.fleet_operator_nonces`);
-      expect(await store.migrate()).toEqual([8, 9]);
+      expect(await store.migrate()).toEqual([8, 9, 10]);
     } finally {
       await store.close();
       await owner.query(`DROP SCHEMA ${schema} CASCADE`);
@@ -419,7 +420,7 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
     const ok = await begin(c, "GET /v1/operator/status");
     expect(ok).toMatchObject({ ok: true, fn: "op_fleet_status" });
     const rid = (ok as { requestId: string }).requestId;
-    expect(await gw.fleetStatus(rid)).toMatchObject({ fleet: { maxAgents: 2, mode: "DEVELOPMENT" }, schema: { version: 9 } });
+    expect(await gw.fleetStatus(rid)).toMatchObject({ fleet: { maxAgents: 2, mode: "DEVELOPMENT" }, schema: { version: 10 } });
     await expect(gw.whoami(rid)).rejects.toThrow(/FLEET_OP_REQUEST_INVALID/); // request id bound to its route's function
     await expect(gw.whoami(crypto.randomUUID())).rejects.toThrow(/FLEET_OP_REQUEST_INVALID/);
 
@@ -785,7 +786,7 @@ describe.skipIf(!PG_BIN)("B2 operator roles: not provisioned vs provisioned (own
     expect(a.operatorRoles).toBe("not_provisioned");
     expect(a.roles.filter((r) => r.kind === "operator").map((r) => [r.role, r.exists])).toEqual([["fleet_operator", false], ["fleet_operator_login", false]]);
     // Agent/service checks are unchanged and still run.
-    expect(a.roles.filter((r) => r.kind !== "operator" && r.exists).map((r) => r.role).sort()).toEqual(["fleet_agent", "fleet_agent_login", "fleet_service", "fleet_service_login"]);
+    expect(a.roles.filter((r) => (r.kind === "agent" || r.kind === "service") && r.exists).map((r) => r.role).sort()).toEqual(["fleet_agent", "fleet_agent_login", "fleet_service", "fleet_service_login"]);
     const d = await doctor();
     expect(d.checks.find((c) => c.name === "database privileges")).toMatchObject({ status: "pass", detail: expect.stringMatching(/operator roles: not provisioned/) });
     expect(d.checklist.find((c) => c.item === "PostgreSQL roles correct")).toMatchObject({ ok: true, detail: expect.stringMatching(/operator roles: not provisioned/) });

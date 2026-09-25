@@ -5,7 +5,8 @@
 #   sudo scripts/fleet-db-setup.sh --apply    # runs scripts/fleet-db-roles.sql as postgres
 #
 # Passwords are taken from /etc/automaton-fleet/service.env and (schema v8)
-# /etc/automaton-fleet/operator.env (both written by fleet-os-setup.sh) and
+# /etc/automaton-fleet/operator.env and (schema v10) /etc/automaton-fleet/custody.env
+# (all written by fleet-os-setup.sh) and
 # fed to psql on STDIN via \set, so they never appear
 # in any process command line or in shell history. After this, the operator
 # (not root) runs the admin-credential steps:
@@ -21,10 +22,12 @@ APPLY=0
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SERVICE_ENV=/etc/automaton-fleet/service.env
 OPERATOR_ENV=/etc/automaton-fleet/operator.env
+CUSTODY_ENV=/etc/automaton-fleet/custody.env
 DB_NAME="${FLEET_DB_NAME:-automaton_fleet}"
 DB_OWNER="${FLEET_DB_OWNER:-fleetadmin}"
 [[ -f "$SERVICE_ENV" ]] || { echo "$SERVICE_ENV missing — run scripts/fleet-os-setup.sh --apply first" >&2; exit 1; }
 [[ -f "$OPERATOR_ENV" && ! -L "$OPERATOR_ENV" ]] || { echo "$OPERATOR_ENV missing — run scripts/fleet-os-setup.sh --apply first (schema v8 Operator API role)" >&2; exit 1; }
+[[ -f "$CUSTODY_ENV" && ! -L "$CUSTODY_ENV" ]] || { echo "$CUSTODY_ENV missing — run scripts/fleet-os-setup.sh --apply first (schema v10 custody executor role)" >&2; exit 1; }
 
 pw_of() { # pw_of <KEY> <file>: the password of a login role from its DSN
   sed -n "s#^$1=postgresql://[^:]*:\([0-9a-f]\{64\}\)@.*#\1#p" "$2" | head -1
@@ -32,17 +35,19 @@ pw_of() { # pw_of <KEY> <file>: the password of a login role from its DSN
 SERVICE_PW="$(pw_of FLEET_SERVICE_DATABASE_URL "$SERVICE_ENV")"
 AGENT_PW="$(pw_of FLEET_AGENT_DATABASE_URL "$SERVICE_ENV")"
 OPERATOR_PW="$(pw_of FLEET_OPERATOR_DATABASE_URL "$OPERATOR_ENV")"
+CUSTODY_PW="$(pw_of FLEET_CUSTODY_DATABASE_URL "$CUSTODY_ENV")"
 [[ -n "$SERVICE_PW" && -n "$AGENT_PW" ]] || { echo "service.env must hold 64-hex passwords for both DSNs" >&2; exit 1; }
 [[ -n "$OPERATOR_PW" ]] || { echo "operator.env must hold a 64-hex password for FLEET_OPERATOR_DATABASE_URL" >&2; exit 1; }
+[[ -n "$CUSTODY_PW" ]] || { echo "custody.env must hold a 64-hex password for FLEET_CUSTODY_DATABASE_URL" >&2; exit 1; }
 
 echo "Will run as the postgres superuser (passwords via stdin, not shown):"
-echo "  { printf '\\set agent_password <hex>\\n\\set service_password <hex>\\n\\set operator_password <hex>\\n'; cat $REPO/scripts/fleet-db-roles.sql; } |"
+echo "  { printf '\\set agent_password <hex>\\n\\set service_password <hex>\\n\\set operator_password <hex>\\n\\set custody_password <hex>\\n'; cat $REPO/scripts/fleet-db-roles.sql; } |"
 echo "    runuser -u postgres -- psql -X -v ON_ERROR_STOP=1 -v dbname=$DB_NAME -v owner=$DB_OWNER -d postgres -f -"
 if (( APPLY )); then
-  { printf '\\set agent_password %s\n\\set service_password %s\n\\set operator_password %s\n' "$AGENT_PW" "$SERVICE_PW" "$OPERATOR_PW"; cat "$REPO/scripts/fleet-db-roles.sql"; } |
+  { printf '\\set agent_password %s\n\\set service_password %s\n\\set operator_password %s\n\\set custody_password %s\n' "$AGENT_PW" "$SERVICE_PW" "$OPERATOR_PW" "$CUSTODY_PW"; cat "$REPO/scripts/fleet-db-roles.sql"; } |
     runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -v dbname="$DB_NAME" -v owner="$DB_OWNER" -d postgres -f -
   echo "Roles applied. Next (as $DB_OWNER operator, not root): pnpm fleet:migrate && pnpm fleet:audit-privileges && pnpm fleet:doctor"
 else
   echo "DRY RUN — nothing changed. Re-run with --apply after approval."
 fi
-unset SERVICE_PW AGENT_PW OPERATOR_PW
+unset SERVICE_PW AGENT_PW OPERATOR_PW CUSTODY_PW

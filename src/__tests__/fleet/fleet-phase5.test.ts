@@ -843,7 +843,7 @@ describe.skipIf(!PG_BIN)("Fleet security policy: lifecycle, remote auth, custody
     expect((await treasury.listAllocations(kid.agentId))[0]).toMatchObject({ status: "approved", approvedAmountCents: 40_000, decidedBy: "operator:alice" });
   });
 
-  it("FleetAdmin controls: approve, reject, change, reduce sweep, freeze, custody transfer (recorded, never executed)", async () => {
+  it("FleetAdmin controls: approve, reject, change, reduce sweep, freeze; legacy custody transfers are superseded by the v10 ledger", async () => {
     const root = await enrollRoot();
     const kid = await activeChild(root.agent.agentId);
     const a1 = await treasury.proposeAllocation({ agentId: kid.agentId, purpose: "p1", requestedCents: 10_000, expectedReturnCents: 12_000, expectedDurationDays: 10 }, "operator:bob");
@@ -855,76 +855,65 @@ describe.skipIf(!PG_BIN)("Fleet security policy: lifecycle, remote auth, custody
     const rid = await treasury.reduceSweep({ agentId: kid.agentId, reductionPct: 0.4, reason: "high-value launch", expiresAt: new Date(Date.now() + 7 * DAY), allocationId: a1 }, "operator:alice");
     expect(rid).toMatch(/^[0-9A-Z]{26}$/);
     await treasury.freezeSpending(kid.agentId, true, "audit", "operator:alice");
-    const tid = await treasury.planCustodyTransfer({ fromAgentId: kid.agentId, destination: "fleet_treasury", amountCents: 500, policy: "quarantine_recovery", reason: "test" }, "operator:alice");
-    const tr = (await ownerRaw.query("SELECT status FROM fleet.fleet_custody_transfers WHERE transfer_id = $1", [tid])).rows[0];
-    expect(tr.status).toBe("blocked_payments_disabled");
-    expect(await events("custody_transfer_planned", kid.agentId)).toBe(1);
+    // Schema v10: value moves only through the central ledger; the v5 transfer register is frozen.
+    await expect(
+      treasury.planCustodyTransfer({ fromAgentId: kid.agentId, destination: "fleet_treasury", amountCents: 500, policy: "quarantine_recovery", reason: "test" }, "operator:alice"),
+    ).rejects.toThrow(/FLEET_LEGACY_SUPERSEDED/);
+    expect((await ownerRaw.query("SELECT count(*)::int AS n FROM fleet.fleet_custody_transfers")).rows[0].n).toBe(0);
+    expect(await events("custody_transfer_planned", kid.agentId)).toBe(0);
   });
 
-  it("an agent cannot access another agent's wallet; frozen, unhealthy or revoked agents cannot spend; approved spends are never executed", async () => {
+  it("the legacy wallet spend path is superseded; the v10 spend order path refuses other agents' destinations, frozen, unfunded and dead agents; nothing executes", async () => {
     const root = await enrollRoot();
     const a = await activeChild(root.agent.agentId);
     const b = await activeChild(root.agent.agentId);
     await treasury.setDailySpendLimit(a.agentId, 1_000, "operator:alice");
     const ca = client(a.cred);
-    const other = await ca.requestSpend({ fromWallet: b.wallet, toAddress: wallet(), amountCents: 10, purpose: "steal" }).catch((e) => e);
-    expect(other).toBeInstanceOf(Error);
-    expect(String(other.message)).toMatch(/custody wallet|FLEET_NOT_AUTHORIZED/);
-    expect(await events("authorization_denied")).toBeGreaterThanOrEqual(1);
-    const ok = await ca.requestSpend({ fromWallet: a.wallet, toAddress: wallet(), amountCents: 500, purpose: "hosting" });
-    expect(ok).toMatchObject({ decision: "approved_not_executed", executed: false });
-    const over = await ca.requestSpend({ fromWallet: a.wallet, toAddress: wallet(), amountCents: 600, purpose: "hosting" }).catch((e) => e);
-    expect(String(over.message ?? over.reason)).toMatch(/daily limit/);
+    // v5 path: refused for everyone, own wallet or not, with the explicit supersession code.
+    for (const fromWallet of [b.wallet, a.wallet]) {
+      const r = await ca.requestSpend({ fromWallet, toAddress: wallet(), amountCents: 10, purpose: "x" }).catch((e) => e);
+      expect(r).toBeInstanceOf(Error);
+      expect((r as { code?: string }).code).toBe("FLEET_LEGACY_SUPERSEDED");
+    }
+    expect((await ownerRaw.query("SELECT count(*)::int AS n FROM fleet.fleet_spend_requests")).rows[0].n).toBe(0);
+    // v10 path over HTTP: no allocation -> refused; the agent names only a destination id, never an address.
+    const dst = `dst_${"0".repeat(26)}`;
+    const order = (amountCents: number) => ca.spendOrder({ idempotencyKey: `t:${ulid()}`, amountCents, category: "expense", destinationId: dst, purpose: "hosting" });
+    await expect(order(1)).rejects.toMatchObject({ code: "FLEET_DESTINATION_NOT_ALLOWED" });
+    await expect(ca.spendOrder({ idempotencyKey: "short", amountCents: 1, category: "expense", destinationId: dst, purpose: "x" })).rejects.toMatchObject({ status: 400 });
+    await expect(ca.spendOrder({ idempotencyKey: `t:${ulid()}`, amountCents: 1, category: "expense", destinationId: "0xabc", purpose: "x" })).rejects.toMatchObject({ status: 400 });
+    expect(await ca.ledger()).toMatchObject({ cash: 0, reserved: 0, protectedPrincipal: 0, lifetimeContribution: 0 }); // nothing allocated
     await treasury.freezeSpending(a.agentId, true, "operator review", "operator:alice");
-    const frozen = await ca.requestSpend({ fromWallet: a.wallet, toAddress: wallet(), amountCents: 1, purpose: "x" }).catch((e) => e);
-    expect(String(frozen.message ?? frozen.reason)).toMatch(/frozen/);
-    // Revoked (dead) agent cannot request spend at all.
+    await expect(order(1)).rejects.toMatchObject({ code: expect.stringMatching(/^FLEET_/) });
+    // A dead agent cannot use either path.
     const cb = client(b.cred);
     await cb.heartbeat(b.agentId);
     await admin.markDead(b.agentId, "retired", "t");
     await expect(cb.requestSpend({ fromWallet: b.wallet, toAddress: wallet(), amountCents: 1, purpose: "x" })).rejects.toThrow();
-    const rows = (await ownerRaw.query("SELECT decision FROM fleet.fleet_spend_requests")).rows.map((r) => r.decision);
-    expect(rows).not.toContain("executed");
+    await expect(cb.spendOrder({ idempotencyKey: `t:${ulid()}`, amountCents: 1, category: "expense", destinationId: dst, purpose: "x" })).rejects.toThrow();
+    expect((await ownerRaw.query("SELECT count(*)::int AS n FROM fleet.fleet_payment_orders WHERE status IN ('executing','settled')")).rows[0].n).toBe(0);
   });
 
-  it("treasury: separate destinations, reserve target in months, owner distribution only from surplus (planned, never executed)", async () => {
+  it("treasury policy and obligations stay registers; v5 treasury money records and owner distributions are superseded by the v10 ledger", async () => {
     await expect(treasury.setPolicy({ treasuryAddress: "0x" + "1".repeat(40), ownerWithdrawalAddress: "0x" + "1".repeat(40) }, "operator:alice")).rejects.toThrow();
     await treasury.setPolicy({ treasuryAddress: "0x" + "1".repeat(40), ownerWithdrawalAddress: "0x" + "2".repeat(40), reserveTargetMonths: 3 }, "operator:alice");
-    await treasury.recordTreasury({ kind: "sweep_in", amountCents: 300_000 }, "operator:alice");
-    await treasury.recordTreasury({ kind: "infrastructure", amountCents: 90_000, occurredAt: new Date(Date.now() - 10 * DAY) }, "operator:alice");
-    const pos = await treasury.treasuryPosition();
-    expect(pos).toMatchObject({ balanceCents: 210_000, monthlyExpenseCents: 30_000, reserveTargetCents: 90_000 });
-    await expect(treasury.recordTreasury({ kind: "owner_distribution", amountCents: 1 }, "operator:alice")).rejects.toThrow(/planned/);
+    await expect(treasury.recordTreasury({ kind: "sweep_in", amountCents: 300_000 }, "operator:alice")).rejects.toThrow(/FLEET_LEGACY_SUPERSEDED/);
     await treasury.addTreasuryObligation({ category: "inference", description: "Q3 inference", amountCents: 100_000, dueAt: new Date(Date.now() + 30 * DAY) }, "operator:alice");
-    const partial = await treasury.planOwnerDistribution(50_000, "operator:alice");
-    expect(partial).toMatchObject({ status: "planned_not_executed", approvedCents: 20_000 });
-    await treasury.addTreasuryObligation({ category: "compliance", description: "audit", amountCents: 20_000, dueAt: new Date() }, "operator:alice");
-    const blocked = await treasury.planOwnerDistribution(1_000, "operator:alice");
-    expect(blocked).toMatchObject({ status: "rejected", approvedCents: 0 });
-    // Plans do not reduce the recorded balance; nothing was executed.
-    expect((await treasury.treasuryPosition()).balanceCents).toBe(210_000);
-    await expect(ownerRaw.query("INSERT INTO fleet.fleet_owner_distributions (distribution_id, requested_cents, approved_cents, treasury_balance_cents, reserve_target_cents, obligations_cents, status, reason, decided_by) VALUES ($1, 10, 10, 100, 100, 0, 'planned_not_executed', 'x', 'operator:x')", [ulid()])).rejects.toThrow(/check constraint/);
+    await expect(treasury.planOwnerDistribution(50_000, "operator:alice")).rejects.toThrow(/FLEET_LEGACY_SUPERSEDED/);
+    expect((await treasury.treasuryPosition()).balanceCents).toBe(0);
+    await expect(ownerRaw.query("INSERT INTO fleet.fleet_owner_distributions (distribution_id, requested_cents, approved_cents, treasury_balance_cents, reserve_target_cents, obligations_cents, status, reason, decided_by) VALUES ($1, 10, 10, 100, 100, 0, 'planned_not_executed', 'x', 'operator:x')", [ulid()])).rejects.toThrow(/check constraint|FLEET_LEGACY_SUPERSEDED/);
   });
 
-  it("sweep plans from registry data respect the waterfall and are recorded as not executed", async () => {
+  it("v5 agent ledger, balance observations and sweep plans are superseded; obligations remain a register", async () => {
     const root = await enrollRoot();
     const kid = await activeChild(root.agent.agentId);
-    await treasury.recordAgentLedger({ agentId: kid.agentId, kind: "revenue", amountCents: 200_000 }, "operator:alice");
-    await treasury.recordAgentLedger({ agentId: kid.agentId, kind: "owner_funding", amountCents: 1_000_000 }, "operator:alice");
-    await treasury.recordAgentLedger({ agentId: kid.agentId, kind: "direct_cost", amountCents: 3_000 }, "operator:alice");
+    await expect(treasury.recordAgentLedger({ agentId: kid.agentId, kind: "revenue", amountCents: 200_000 }, "operator:alice")).rejects.toThrow(/FLEET_LEGACY_SUPERSEDED/);
+    await expect(treasury.recordBalance(kid.agentId, 1_197_000)).rejects.toThrow(/FLEET_LEGACY_SUPERSEDED/);
     await treasury.addObligation({ agentId: kid.agentId, description: "domain renewal", amountCents: 50_000, dueAt: new Date(Date.now() + 10 * DAY) }, "operator:alice");
-    await treasury.recordBalance(kid.agentId, 1_197_000);
-    const plan = await treasury.planSweep(kid.agentId, "operator:alice");
-    expect(plan.OWNER_FUNDING).toBe(1_000_000);
-    expect(plan.NET_PROFIT).toBe(197_000);
-    expect(plan.SWEEP_BASE).toBe(197_000);
-    expect(plan.rate.base).toBe(0.1);
-    expect(plan.FLEET_SWEEP).toBe(Math.floor(197_000 * plan.rate.rate));
-    expect(plan.AGENT_RETAINED_CAPITAL).toBeGreaterThanOrEqual(plan.OPERATING_OBLIGATIONS + plan.PROTECTED_RUNWAY + plan.CONTINGENCY_RESERVE);
-    const row = (await ownerRaw.query("SELECT status, amount_cents FROM fleet.fleet_sweep_plans WHERE plan_id = $1", [plan.planId])).rows[0];
-    expect(row).toMatchObject({ status: "planned_not_executed" });
+    await expect(treasury.planSweep(kid.agentId, "operator:alice", { cashCents: 1_197_000 })).rejects.toThrow(/FLEET_LEGACY_SUPERSEDED/);
+    expect((await ownerRaw.query("SELECT count(*)::int AS n FROM fleet.fleet_sweep_plans")).rows[0].n).toBe(0);
     await admin.quarantine(kid.agentId, "q", "operator:alice");
-    await expect(treasury.planSweep(kid.agentId, "operator:alice")).rejects.toThrow(/only for active agents/);
+    await expect(treasury.planSweep(kid.agentId, "operator:alice")).rejects.toThrow(/only for active agents|FLEET_LEGACY_SUPERSEDED/);
   });
 
   it("discretionary limits are enforced on approval unless explicitly overridden", async () => {

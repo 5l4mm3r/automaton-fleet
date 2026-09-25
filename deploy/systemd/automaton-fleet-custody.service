@@ -1,0 +1,83 @@
+# Automaton Fleet custody executor — Phase E (schema v10), INERT.
+#
+# Installed by scripts/fleet-os-setup.sh. Runs dist/fleet/custody/main.js from
+# the pinned release as its own system user (automaton-fleet-custody, in no
+# other group). It holds only FLEET_CUSTODY_DATABASE_URL, read from
+# /etc/automaton-fleet/custody.env (root:automaton-fleet-custody 0640) under
+# the strict secret-file rules; no LoadCredential (the verified
+# systemd-credential exception stays limited to automaton-fleet.service).
+#
+# v10: no custody provider integration and no custody credential exist; the
+# database pins custody execution off, so the executor only pings. It opens no
+# listening socket; its only network use is PostgreSQL on loopback. Its
+# database role can execute only cx_ping / cx_claim_instruction /
+# cx_report_result. Never reachable by agents, Claude, ChatGPT or the
+# Operator API.
+
+[Unit]
+Description=Automaton Fleet custody executor (inert in schema v10; no listener, no custody credential)
+Documentation=file:///opt/automaton-fleet/current/docs/design/phase-e-treasury-ledger.md
+Wants=postgresql.service
+After=postgresql.service automaton-fleet.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-custody
+Group=automaton-fleet-custody
+SupplementaryGroups=
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/custody/main.js
+# Non-secret configuration only; the credential is custody.env (see above).
+Environment=NODE_ENV=production
+Environment=FLEET_CUSTODY_EXPECTED_USER=automaton-fleet-custody
+Environment=FLEET_CUSTODY_ENV_FILE=/etc/automaton-fleet/custody.env
+Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/runtime.env
+UMask=0077
+
+Restart=on-failure
+RestartSec=10s
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-custody
+
+# Network: loopback only (PostgreSQL on 127.0.0.1). No egress until a provider
+# integration is designed, reviewed and approved in its own phase.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Sandboxing
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# Controller / operator secrets, TLS sources, other services' state/logs and homes are never visible.
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak
+InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-chatgpt -/var/log/automaton-fleet -/var/log/automaton-fleet-operator -/run/credentials
+
+[Install]
+WantedBy=multi-user.target

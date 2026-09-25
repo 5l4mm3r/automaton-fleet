@@ -12,6 +12,7 @@
  *                  nothing, no CREATE/TEMP, not members of the owner or of
  *                  each other
  *   PUBLIC         nothing in the schema
+ *   custody roles  (schema v10) USAGE + EXECUTE on cx_* only, no table privilege
  *   operator roles (schema v8/v9) USAGE + EXECUTE on op_* only, no table privilege,
  *                  every function STABLE except the admission functions and
  *                  the named D3 action functions (OPERATOR_VOLATILE_FUNCTIONS)
@@ -22,10 +23,18 @@
  * function; each D3 action function writes and calls only what
  * OPERATOR_ACTION_WRITES allows it; GET routes point only at read functions
  * and POST routes only at action functions. See migrations-phase8/9.ts.
+ *
+ * Ledger / custody surface (schema v10): only LEDGER_WRITERS write the ledger
+ * tables; the cx_* functions write and call only what CUSTODY_WRITES allows;
+ * custody execution is pinned off by a CHECK constraint. See migrations-phase10.ts.
  */
 
 import {
   AGENT_API_FUNCTIONS,
+  CUSTODY_API_FUNCTIONS,
+  CUSTODY_WRITES,
+  LEDGER_TABLES,
+  LEDGER_WRITERS,
   OPERATOR_ACTION_FUNCTIONS,
   OPERATOR_ACTION_HELPERS,
   OPERATOR_ACTION_WRITES,
@@ -55,6 +64,9 @@ export interface PrivilegeAuditOptions {
    * operator check.
    */
   requireOperatorRoles?: boolean;
+  /** Schema v10 custody executor roles (default fleet_custody + fleet_custody_login); same provisioning rule as the operator roles. */
+  custodyRoles?: string[];
+  requireCustodyRoles?: boolean;
 }
 
 /** "provisioned": every operator role exists; "not_provisioned": none exists (and not required); "incomplete": some are missing. */
@@ -68,13 +80,15 @@ export interface PrivilegeAuditResult {
   problems: string[];
   roles: Array<{ role: string; kind: RoleKind; exists: boolean; functions: string[]; tables: string[] }>;
   operatorRoles: OperatorRoleState;
+  custodyRoles: OperatorRoleState;
 }
 
 export const DEFAULT_AGENT_ROLES = ["fleet_agent", "fleet_agent_login"];
 export const DEFAULT_SERVICE_ROLES = ["fleet_service", "fleet_service_login"];
 export const DEFAULT_OPERATOR_ROLES = ["fleet_operator", "fleet_operator_login"];
+export const DEFAULT_CUSTODY_ROLES = ["fleet_custody", "fleet_custody_login"];
 
-type RoleKind = "agent" | "service" | "operator";
+type RoleKind = "agent" | "service" | "operator" | "custody";
 
 const TABLE_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
@@ -103,16 +117,32 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   if (operatorState === "not_provisioned") {
     for (const r of configuredOperatorRoles) roles.push({ role: r, kind: "operator", exists: false, functions: [], tables: [] });
   }
-  const allRestricted = [...(opts.agentRoles ?? DEFAULT_AGENT_ROLES), ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES), ...operatorRoles];
+  const configuredCustodyRoles = opts.custodyRoles ?? DEFAULT_CUSTODY_ROLES;
+  const presentCustody = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = ANY($1)`, [configuredCustodyRoles]);
+  const custodyPresent = presentCustody.rows[0].n;
+  const custodyState: OperatorRoleState =
+    custodyPresent === configuredCustodyRoles.length ? "provisioned" : custodyPresent === 0 && !opts.requireCustodyRoles ? "not_provisioned" : "incomplete";
+  const custodyRoles = custodyState === "not_provisioned" ? [] : configuredCustodyRoles;
+  if (custodyState === "not_provisioned") {
+    for (const r of configuredCustodyRoles) roles.push({ role: r, kind: "custody", exists: false, functions: [], tables: [] });
+  }
+  const allRestricted = [
+    ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES),
+    ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES),
+    ...operatorRoles,
+    ...custodyRoles,
+  ];
   const plan: Array<[string, RoleKind]> = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES).map((r) => [r, "agent"] as [string, RoleKind]),
     ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES).map((r) => [r, "service"] as [string, RoleKind]),
     ...operatorRoles.map((r) => [r, "operator"] as [string, RoleKind]),
+    ...custodyRoles.map((r) => [r, "custody"] as [string, RoleKind]),
   ];
 
   const agentFns = new Set(AGENT_API_FUNCTIONS.map(normSig));
   const serviceFns = new Set(SERVICE_API_FUNCTIONS.map(normSig));
   const operatorFns = new Set(OPERATOR_API_FUNCTIONS.map(normSig));
+  const custodyFns = new Set(CUSTODY_API_FUNCTIONS.map(normSig));
   const operatorVolatile = new Set(OPERATOR_VOLATILE_FUNCTIONS.map(normSig));
   const serviceTables = new Set(SERVICE_READ_TABLES);
 
@@ -207,7 +237,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
         ORDER BY 1`,
       [role, schema],
     );
-    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : operatorFns;
+    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : operatorFns;
     const executable: string[] = [];
     for (const f of fns.rows) {
       const sig = normSig(f.sig);
@@ -251,8 +281,9 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   if (pubDb.rows[0].t) problems.push(`PUBLIC can create TEMPORARY objects in ${database}`);
 
   if (owner) problems.push(...(await operatorSurfaceProblems(db, schema)));
+  if (owner) problems.push(...(await ledgerSurfaceProblems(db, schema)));
 
-  return { ok: problems.length === 0, schema, owner, database, problems, roles, operatorRoles: operatorState };
+  return { ok: problems.length === 0, schema, owner, database, problems, roles, operatorRoles: operatorState, custodyRoles: custodyState };
 }
 
 /** A PL/pgSQL/SQL body without comments or string literals (so quotes inside literals don't count). */
@@ -413,6 +444,99 @@ export async function operatorSurfaceProblems(db: Queryable, schema: string): Pr
       if (!actionFns.has(r.fn)) problems.push(`operator surface: route ${r.route} maps to non-action function ${r.fn}`);
       if (!f) problems.push(`operator surface: route ${r.route} maps to missing function ${r.fn}`);
     } else problems.push(`operator surface: route ${r.route} has an unsupported method`);
+  }
+  return [...new Set(problems)];
+}
+
+/**
+ * Schema v10 ledger / custody invariants, checked against the live catalog
+ * (only once the ledger exists):
+ *  - only LEDGER_WRITERS contain a write to a ledger table, and only they
+ *    (plus the ledger's own guard triggers) mention the fleet.ledger_* write
+ *    guards, so no other function can open the ledger;
+ *  - cx_* functions use no dynamic SQL, write only their CUSTODY_WRITES tables
+ *    and call only their allowed volatile functions; no unexpected cx_* exists;
+ *  - custody execution is off and pinned off by a CHECK constraint;
+ *  - the ledger tables and the economic model have their immutability triggers.
+ */
+export async function ledgerSurfaceProblems(db: Queryable, schema: string): Promise<string[]> {
+  const problems: string[] = [];
+  const present = await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1 AND c.relname = 'fleet_ledger_journal'`,
+    [schema],
+  );
+  if (!present.rows[0]?.n) return problems;
+  const fns = await db.query<{ name: string; sig: string; vol: string; src: string }>(
+    `SELECT p.proname AS name, p.oid::regprocedure::text AS sig, p.provolatile AS vol, p.prosrc AS src
+       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`,
+    [schema],
+  );
+  const fleetNames = new Set(fns.rows.map((f) => f.name));
+  const volatileNames = new Set(fns.rows.filter((f) => f.vol === "v").map((f) => f.name));
+  const ledgerTables = new Set(LEDGER_TABLES);
+  const writers = new Set(LEDGER_WRITERS);
+  const guardNames = new Set(["fleet_ledger_write_guard", "fleet_ledger_journal_guard", "fleet_ledger_head_guard"]);
+  const callsOf = (src: string) => new Set([...codeOf(src).matchAll(/\b([a-z_][a-z0-9_$]*)\s*\(/gi)].map((m) => m[1].toLowerCase()));
+  const cxNames = new Set(CUSTODY_API_FUNCTIONS.map((f) => f.replace(/\(.*$/, "")));
+  for (const f of fns.rows) {
+    for (const t of writeTargets(f.src)) {
+      if (ledgerTables.has(t) && !writers.has(f.name)) problems.push(`ledger surface: ${f.name} writes ${t} (only ${[...writers].join(", ")} may)`);
+    }
+    if (/fleet\.ledger_(post|hash)/.test(f.src) && !writers.has(f.name) && !guardNames.has(f.name)) {
+      problems.push(`ledger surface: ${f.name} references a ledger write guard`);
+    }
+    if (f.name.startsWith("cx_")) {
+      const rule = Object.prototype.hasOwnProperty.call(CUSTODY_WRITES, f.name) ? CUSTODY_WRITES[f.name] : undefined;
+      if (!cxNames.has(f.name) || !rule) {
+        problems.push(`custody surface: unexpected function ${schema}.${normSig(f.sig)}`);
+        continue;
+      }
+      const code = codeOf(f.src);
+      if (/\bEXECUTE\b/i.test(code)) problems.push(`custody surface: ${f.name} uses dynamic SQL (EXECUTE)`);
+      if (code.includes('"')) problems.push(`custody surface: ${f.name} uses a quoted identifier`);
+      const allowedW = new Set(rule.writes);
+      for (const t of writeTargets(f.src)) if (!allowedW.has(t)) problems.push(`custody surface: ${f.name} writes ${t} (not in its allow-list)`);
+      const allowedC = new Set(rule.calls);
+      for (const c of callsOf(f.src)) {
+        if (c === f.name || !fleetNames.has(c)) {
+          if (SIDE_EFFECT_BUILTINS.test(c)) problems.push(`custody surface: ${f.name} calls side-effecting ${c}`);
+          continue;
+        }
+        if (volatileNames.has(c) && !allowedC.has(c)) problems.push(`custody surface: ${f.name} calls volatile ${c} (not in its allow-list)`);
+      }
+    }
+  }
+  const model = await db.query<{ ok: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+                     WHERE n.nspname = $1 AND c.relname = 'fleet_economic_model' AND k.contype = 'c'
+                       AND pg_get_constraintdef(k.oid) ~ 'NOT custody_execution_enabled') AS ok`,
+    [schema],
+  );
+  if (!model.rows[0]?.ok) problems.push("custody surface: custody execution is not pinned off by a CHECK constraint (constitutional invariant)");
+  const trig = await db.query<{ t: string }>(
+    `SELECT c.relname || ':' || tg.tgname AS t FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1 AND NOT tg.tgisinternal AND tg.tgenabled <> 'D'`,
+    [schema],
+  );
+  const have = new Set(trig.rows.map((r) => r.t));
+  for (const need of [
+    "fleet_ledger_journal:fleet_ledger_journal_no_change",
+    "fleet_ledger_journal:fleet_ledger_journal_no_truncate",
+    "fleet_ledger_journal:fleet_ledger_journal_write_guard",
+    "fleet_ledger_journal:fleet_ledger_journal_balanced",
+    "fleet_ledger_postings:fleet_ledger_postings_no_change",
+    "fleet_ledger_postings:fleet_ledger_postings_no_truncate",
+    "fleet_ledger_postings:fleet_ledger_postings_write_guard",
+    "fleet_ledger_postings:fleet_ledger_postings_rules",
+    "fleet_ledger_postings:fleet_ledger_postings_balanced",
+    "fleet_ledger_postings:fleet_ledger_postings_nonnegative",
+    "fleet_ledger_head:fleet_ledger_head_guard",
+    "fleet_payment_instructions:fleet_instructions_guard",
+    "fleet_payment_orders:fleet_orders_guard",
+    "fleet_payment_destinations:fleet_destinations_guard",
+  ]) {
+    if (!have.has(need)) problems.push(`ledger surface: trigger ${need.replace(":", ".")} is missing or disabled`);
   }
   return [...new Set(problems)];
 }

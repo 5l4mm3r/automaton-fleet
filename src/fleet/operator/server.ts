@@ -77,7 +77,8 @@ import {
 } from "./responses.js";
 import { redactDetail, redactText } from "../redact.js";
 
-export const OPERATOR_SCHEMA_VERSION = 9;
+/** The registry schema this Operator API serves (v10 adds the ledger; the operator surface is unchanged since v9). */
+export const OPERATOR_SCHEMA_VERSION = 10;
 
 /** D3 action bodies: at most this many bytes. */
 export const MAX_ACTION_BODY_BYTES = 4096;

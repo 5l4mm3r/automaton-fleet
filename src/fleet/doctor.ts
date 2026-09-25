@@ -338,6 +338,40 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
           `; ${ov.pendingProposals} proposal(s) awaiting the owner (fleet:admin proposal-list)`,
       );
     }
+
+    // ── Central ledger and custody boundary (schema v10). Detailed checks only; the
+    // 16-item operator checklist is unchanged.
+    const lg = await store.ledgerOverview();
+    facts.ledger = lg;
+    if (lg) {
+      add(
+        "ledger integrity",
+        lg.verify.ok ? "pass" : "fail",
+        lg.verify.ok
+          ? `hash chain and double entry verified (${lg.verify.journals} journal(s)); ledger authoritative`
+          : `LEDGER VERIFICATION FAILED (first bad seq ${lg.verify.firstBadSeq ?? "?"}, unbalanced ${lg.verify.unbalanced ?? "?"}) — stop and investigate`,
+      );
+      if (!lg.verify.ok) blockers.push("Central ledger verification failed (fleet:admin ledger-verify).");
+      add(
+        "custody execution",
+        lg.custodyExecutionEnabled || lg.instructions > 0 || lg.executing > 0 ? "fail" : "pass",
+        lg.custodyExecutionEnabled
+          ? "ENABLED in the registry — v10 has no provider integration; this must not happen"
+          : `disabled (constitutional pin); ${lg.instructions} instruction(s), ${lg.executing} executing order(s)`,
+      );
+      add(
+        "payment orders",
+        "pass",
+        `${lg.awaitingOwner} awaiting the owner, ${lg.reserved} reserved (unexecuted), ${lg.pendingConfirmations} owner confirmation(s) pending; ` +
+          `destinations: ${lg.activeDestinations} active, ${lg.pendingDestinations} pending`,
+      );
+      const est = lg.estate;
+      add(
+        "estates and assets",
+        est.assetsUnderDeadAgents || est.deadAgentsWithBalances || est.assetsWithoutOwner ? "warn" : "pass",
+        `${est.assetsUnderDeadAgents} asset(s) under dead agents, ${est.deadAgentsWithBalances} dead agent(s) with balances, ${est.assetsWithoutOwner} ownerless asset(s)`,
+      );
+    }
   }
 
   // ── Log/audit disk usage (D-9): warn at 80% used, fail at 95%.

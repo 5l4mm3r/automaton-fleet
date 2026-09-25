@@ -267,7 +267,11 @@ export class PgTreasuryStore {
     });
   }
 
-  /** Record deployment of approved capital (reduces the protected unspent amount). */
+  /**
+   * Record deployment of approved capital (reduces the protected unspent amount).
+   * Schema v10: the allocation register only; money itself moves and is booked
+   * in the central ledger (fleet_ledger_*), never in the frozen v5 agent ledger.
+   */
   async recordDeployment(allocationId: string, amountCents: number, actor: string): Promise<void> {
     await this.tx(async (c) => {
       const r = await c.query(
@@ -276,14 +280,11 @@ export class PgTreasuryStore {
         [allocationId, amountCents],
       );
       if (!r.rowCount) throw new Error(`deployment refused for ${allocationId} (not approved or exceeds approved amount)`);
-      await c.query(
-        "INSERT INTO fleet_agent_ledger (agent_id, kind, amount_cents, allocation_id, source, recorded_by) VALUES ($1, 'allocation_deployed', $2, $3, 'operator', $4)",
-        [r.rows[0].agent_id, amountCents, allocationId, actor],
-      );
+      await this.event(c, "capital_deployed", r.rows[0].agent_id, actor, { allocationId, amountCents });
     });
   }
 
-  /** Close an allocation with its actual return (feeds the capital-performance profile). */
+  /** Close an allocation with its actual return (feeds the capital-performance profile; register only). */
   async completeAllocation(allocationId: string, actualReturnCents: number, approver: string): Promise<void> {
     await this.tx(async (c) => {
       const r = await c.query(
@@ -292,12 +293,7 @@ export class PgTreasuryStore {
         [allocationId, actualReturnCents, approver],
       );
       if (!r.rowCount) throw new Error(`allocation ${allocationId} is not approved`);
-      if (actualReturnCents > 0) {
-        await c.query(
-          "INSERT INTO fleet_agent_ledger (agent_id, kind, amount_cents, allocation_id, source, recorded_by) VALUES ($1, 'allocation_returned', $2, $3, 'operator', $4)",
-          [r.rows[0].agent_id, actualReturnCents, allocationId, approver],
-        );
-      }
+      // Schema v10: the return is booked in the central ledger (external revenue); this is the register only.
       await this.event(c, "capital_completed", r.rows[0].agent_id, approver, { allocationId, actualReturnCents });
     });
   }

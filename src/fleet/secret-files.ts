@@ -46,6 +46,12 @@ export const DEFAULT_RUNTIME_ENV_FILE = path.join(FLEET_ETC_DIR, "runtime.env");
  * systemd-credential 0440 exception stays limited to automaton-fleet.service.
  */
 export const DEFAULT_OPERATOR_ENV_FILE = path.join(FLEET_ETC_DIR, "operator.env");
+/**
+ * Schema v10 custody executor secret: FLEET_CUSTODY_DATABASE_URL only (no
+ * custody provider credential exists in v10). root:automaton-fleet-custody
+ * 0640, read directly by the executor under the same rules as operator.env.
+ */
+export const DEFAULT_CUSTODY_ENV_FILE = path.join(FLEET_ETC_DIR, "custody.env");
 export const FLEET_TLS_DIR = path.join(FLEET_ETC_DIR, "tls");
 export const DEFAULT_TLS_KEY_FILE = path.join(FLEET_TLS_DIR, "fleet.key");
 export const DEFAULT_TLS_CERT_FILE = path.join(FLEET_TLS_DIR, "fleet.crt");
@@ -64,6 +70,7 @@ export const SYSTEMD_SECRET_CREDENTIALS: Readonly<Record<string, string>> = Obje
 export const CONTROLLER_SECRET_KEYS: readonly string[] = Object.freeze([
   "FLEET_ADMIN_DATABASE_URL",
   "FLEET_OPERATOR_DATABASE_URL",
+  "FLEET_CUSTODY_DATABASE_URL",
   "FLEET_SERVICE_DATABASE_URL",
   "FLEET_AGENT_DATABASE_URL",
   "FLEET_CONTROLLER_DATABASE_URL",
@@ -356,6 +363,7 @@ export function loadServiceEnv(
 /** Credentials the Operator API process must never see (startup refuses if present). */
 export const OPERATOR_FORBIDDEN_ENV: readonly string[] = Object.freeze([
   "FLEET_ADMIN_DATABASE_URL",
+  "FLEET_CUSTODY_DATABASE_URL",
   "FLEET_SERVICE_DATABASE_URL",
   "FLEET_AGENT_DATABASE_URL",
   "FLEET_CONTROLLER_DATABASE_URL",
@@ -413,6 +421,47 @@ export function loadOperatorEnv(
     [
       [runtimeFile, readEnvFile(runtimeFile)],
       [operatorFile, readSecretEnvFile(operatorFile, { allowGroupRead: true, required: true })],
+    ],
+    processEnv,
+  );
+}
+
+/** Credentials the custody executor process must never see (startup refuses if present). */
+export const CUSTODY_FORBIDDEN_ENV: readonly string[] = Object.freeze([
+  "FLEET_ADMIN_DATABASE_URL",
+  "FLEET_SERVICE_DATABASE_URL",
+  "FLEET_AGENT_DATABASE_URL",
+  "FLEET_OPERATOR_DATABASE_URL",
+  "FLEET_CONTROLLER_DATABASE_URL",
+  "DATABASE_URL",
+  "PGPASSWORD",
+  "REDIS_URL",
+  "CONWAY_API_KEY",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "FLEET_CREDENTIALS_FILE",
+  "CREDENTIALS_DIRECTORY",
+]);
+
+/**
+ * Custody executor environment: process env > custody.env (strict,
+ * group-read by the executor's own group only, root-owned, single link, no
+ * symlink) > runtime.env (non-secret). Never reads admin.env, service.env,
+ * operator.env or the repository .env.fleet.
+ */
+export function loadCustodyEnv(
+  processEnv: Record<string, string | undefined> = process.env,
+  fileOpts: { ownerUid?: number; groupGid?: number | null } = {},
+): LoadedEnv {
+  const custodyFile = processEnv.FLEET_CUSTODY_ENV_FILE?.trim() || DEFAULT_CUSTODY_ENV_FILE;
+  const runtimeFile = processEnv.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE;
+  if (!fs.existsSync(custodyFile) && !isDanglingLink(custodyFile)) throw new SecretFileError(`Secret file ${custodyFile} does not exist.`);
+  const problems = operatorEnvFileProblems(custodyFile, fileOpts);
+  if (problems.length) throw new SecretFileError(`Refusing insecure secret file: ${problems.join("; ")}.`);
+  return merge(
+    [
+      [runtimeFile, readEnvFile(runtimeFile)],
+      [custodyFile, readSecretEnvFile(custodyFile, { allowGroupRead: true, required: true })],
     ],
     processEnv,
   );

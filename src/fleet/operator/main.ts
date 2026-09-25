@@ -13,7 +13,7 @@
  *  - the pinned release is incomplete or differs from the registry approval;
  *  - the database login is the schema owner, a superuser, or a member of
  *    anything but fleet_operator;
- *  - the schema is not v9, or the operator privilege audit reports anything.
+ *  - the schema is not v10, or the operator privilege audit reports anything.
  *
  * Phase D3: the runtime-verification route reports this process's own
  * installed release identity (build id over its working directory, no git, no
@@ -25,6 +25,7 @@ import os from "os";
 import { createAuditSink, createJsonLogger, type Logger } from "../service/log.js";
 import {
   DEFAULT_ADMIN_ENV_FILE,
+  DEFAULT_CUSTODY_ENV_FILE,
   DEFAULT_RUNTIME_ENV_FILE,
   DEFAULT_SERVICE_ENV_FILE,
   DEFAULT_TLS_KEY_FILE,
@@ -71,6 +72,7 @@ export const OPERATOR_UNREADABLE_FILES: readonly string[] = [
   DEFAULT_ADMIN_ENV_FILE,
   DEFAULT_SERVICE_ENV_FILE,
   DEFAULT_TLS_KEY_FILE,
+  DEFAULT_CUSTODY_ENV_FILE,
   "/etc/automaton-fleet/legacy-env-fleet.bak",
   "/run/credentials/automaton-fleet.service/service.env",
   "/run/credentials/automaton-fleet.service/tls.key",

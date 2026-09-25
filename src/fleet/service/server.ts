@@ -109,6 +109,9 @@ export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Obj
   "POST /v1/children/terminal": { auth: "session", witness: false },
   "POST /v1/capital/propose": { auth: "session", witness: false },
   "POST /v1/wallet/spend-request": { auth: "session", witness: false },
+  "POST /v1/spend/request": { auth: "session", witness: false },
+  "POST /v1/spend/cancel": { auth: "session", witness: false },
+  "GET /v1/ledger": { auth: "session", witness: false },
 });
 
 /**
@@ -329,6 +332,8 @@ export class FleetService {
       try {
         const r = await this.opts.admin.reap("reaper");
         if (r.expired || r.unresponsive || r.dead) this.audit("reaper_pass", null, { ...r });
+        const orders = await this.opts.admin.expirePaymentOrders(100);
+        if (orders) this.audit("payment_orders_expired", null, { count: orders });
         await this.processTerminations();
         this.lastReapOkAt = Date.now();
         this.lastReapError = null;
@@ -562,6 +567,18 @@ export class FleetService {
    * method, path, timestamp, nonce and body. The database then checks the
    * session itself (unexpired, unrevoked, agent living, credential valid).
    */
+  /** Map a refused api_* result to an HTTP error (401 auth, 410 not living, 404 unknown order, 400 bad request, 403 otherwise). */
+  private static refusal(r: Record<string, unknown>, what: string): HttpError {
+    const code = String(r.code ?? "FLEET_REFUSED");
+    const status =
+      code === "FLEET_AUTH_FAILED" || code === "FLEET_SESSION_EXPIRED" ? 401
+      : code === "FLEET_AGENT_DEAD" || code === "FLEET_AGENT_QUARANTINED" ? 410
+      : code === "FLEET_NOT_FOUND" ? 404
+      : code === "FLEET_BAD_REQUEST" ? 400
+      : 403;
+    return new HttpError(status, code, what);
+  }
+
   private async credentials(req: http.IncomingMessage, path: string, ctx: RequestCtx): Promise<{ agentId: string; token: string }> {
     if (ctx.cred) return ctx.cred;
     const h = req.headers.authorization ?? "";
@@ -803,6 +820,14 @@ export class FleetService {
       return { agent: who.agent, dead: who.dead };
     }
 
+    if (method === "GET" && path === "/v1/ledger") {
+      // Schema v10: the agent's own ledger position (read from the ledger, never agent-reported).
+      const { agentId, token } = await this.credentials(req, path, ctx);
+      const r = await agent.ledgerSummary(agentId, token);
+      if (!r.ok) throw FleetService.refusal(r, "ledger summary refused");
+      return { economics: r.economics ?? null };
+    }
+
     if (method !== "POST") throw new HttpError(404, "FLEET_NOT_FOUND", "no such endpoint");
     const body = this.parseBody(ctx.raw);
 
@@ -902,6 +927,42 @@ export class FleetService {
         }
         // Never executed here: the controller signer runs only with REAL_PAYMENTS_ENABLED=true (it is not).
         return { decision: r.decision, reason: r.reason ?? null, executed: false };
+      }
+
+      case "/v1/spend/request": {
+        // Schema v10: a structured spend order against the agent's own ledger allocation. The
+        // database decides (reserved / awaiting_owner / rejected); nothing is executed here: the
+        // agent never names an address, only an owner-enrolled destination id.
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const amount = Number(body.amountCents);
+        const recoverable = body.recoverableCents === undefined ? 0 : Number(body.recoverableCents);
+        if (!Number.isSafeInteger(amount) || amount <= 0 || !Number.isSafeInteger(recoverable) || recoverable < 0) {
+          throw new HttpError(400, "FLEET_BAD_REQUEST", "amountCents and recoverableCents must be non-negative integers");
+        }
+        const idempotencyKey = str(body, "idempotencyKey", 128);
+        const destinationId = str(body, "destinationId", 30);
+        if (!/^[A-Za-z0-9:_.-]{8,128}$/.test(idempotencyKey) || !/^dst_[0-9A-HJKMNP-TV-Z]{26}$/.test(destinationId)) {
+          throw new HttpError(400, "FLEET_BAD_REQUEST", "idempotencyKey or destinationId is malformed");
+        }
+        const r = await agent.spendRequest(agentId, token, {
+          idempotencyKey,
+          amountCents: amount,
+          category: str(body, "category", 32),
+          destinationId,
+          purpose: str(body, "purpose", 300),
+          recoverableCents: recoverable,
+        });
+        if (!r.ok && !r.order) throw FleetService.refusal(r, "spend refused");
+        return { ok: r.ok, code: r.code ?? null, order: r.order ?? null, replay: r.replay === true, executed: false };
+      }
+
+      case "/v1/spend/cancel": {
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const orderId = str(body, "orderId", 36);
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(orderId)) throw new HttpError(400, "FLEET_BAD_REQUEST", "orderId must be a uuid");
+        const r = await agent.spendCancel(agentId, token, orderId);
+        if (!r.ok) throw FleetService.refusal(r, "cancel refused");
+        return { order: r.order };
       }
 
       case "/v1/heartbeat": {

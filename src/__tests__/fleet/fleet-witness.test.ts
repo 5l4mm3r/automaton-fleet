@@ -422,11 +422,11 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
        VALUES ($1, 'root', 0, 'pre-v7-root', $2, 'active', 'test', now())`,
       [ulid(), `0x${randomBytes(20).toString("hex")}`],
     );
-    // v8 (Operator API) and v9 (D3 actions), both additive, now follow v7 in the same migration run.
-    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 9, wouldApply: [7, 8, 9] });
-    expect(await store.migrate()).toEqual([7, 8, 9]);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(9);
-    expect((await store.health()).schemaVersion).toBe(9);
+    // v8 (Operator API), v9 (D3 actions) and v10 (Phase E ledger), all additive, now follow v7 in the same migration run.
+    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 10, wouldApply: [7, 8, 9, 10] });
+    expect(await store.migrate()).toEqual([7, 8, 9, 10]);
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(10);
+    expect((await store.health()).schemaVersion).toBe(10);
     const scopes = await ownerRaw.query(`SELECT capability_scope FROM ${schema}.fleet_agents`);
     expect(scopes.rows.map((r) => r.capability_scope)).toEqual(["full"]);
     expect((await store.auditPrivileges()).problems).toEqual([]);
@@ -547,6 +547,9 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       "POST /v1/children/terminal": { localChildId: "c1", state: "dead" },
       "POST /v1/capital/propose": { purpose: "x", requestedCents: 100, expectedReturnCents: 0, expectedDurationDays: 1 },
       "POST /v1/wallet/spend-request": { fromWallet: `0x${"2".repeat(40)}`, toAddress: `0x${"3".repeat(40)}`, amountCents: 100, purpose: "x" },
+      "GET /v1/ledger": undefined,
+      "POST /v1/spend/request": { idempotencyKey: "witness:12345678", amountCents: 100, category: "expense", destinationId: `dst_${"0".repeat(26)}`, purpose: "x" },
+      "POST /v1/spend/cancel": { orderId: "00000000-0000-4000-8000-000000000000" },
     };
     const denied = Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth !== "public" && !p.witness).map(([k]) => k).sort();
     expect(denied).toEqual(Object.keys(bodies).sort());

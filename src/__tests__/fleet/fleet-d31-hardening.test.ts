@@ -39,6 +39,7 @@ import { SIG_HEADERS, signRequest } from "../../fleet/service/server-signing.js"
 import { PgFleetStore } from "../../fleet/postgres/store.js";
 import { PgTreasuryStore } from "../../fleet/treasury/store.js";
 import { findPgBin, startEphemeralPg } from "./fixtures/ephemeral-pg.js";
+import { migrateUpTo } from "./fixtures/migrate-to.js";
 
 const PG_BIN = findPgBin();
 
@@ -466,16 +467,22 @@ describe("D3.1 sweep planning reserves profit already planned", () => {
 });
 
 describe.skipIf(!PG_BIN)("D3.1 sweep planning in PostgreSQL: repeated and concurrent plans never re-allocate profit", () => {
-  it("sequential and concurrent planSweep calls reserve what earlier plans claimed", async () => {
+  // v5 sweep plans are legacy since schema v10 (the central ledger is authoritative): the D3.1
+  // property is proven on the v9 registry, then the v10 upgrade must freeze those plans intact.
+  it("sequential and concurrent planSweep calls reserve what earlier plans claimed (v9), and v10 freezes them with a digest", async () => {
     const pgc = await startEphemeralPg(PG_BIN!);
     const store = new PgFleetStore({ connectionString: pgc.ownerUrl });
     const treasury = new PgTreasuryStore({ connectionString: pgc.ownerUrl });
     try {
-      await store.migrate();
-      await store.setMaxAgents(2, "test");
-      const reg = await store.registerRoot({ walletAddress: `0x${crypto.randomBytes(20).toString("hex")}`, name: "root" });
-      if (!reg.ok) throw new Error(reg.reason);
-      const id = reg.agent.agentId;
+      await migrateUpTo(pgc.ownerUrl, "fleet", 9);
+      // A v10 store refuses a v9 registry, so the v9 agent is written directly (as the v9 code did).
+      const id = "01" + crypto.randomBytes(12).toString("hex").toUpperCase().replace(/[ILOU]/g, "A").slice(0, 24);
+      await treasury["pool"].query("UPDATE fleet_state SET max_agents = 2");
+      await treasury["pool"].query(
+        `INSERT INTO fleet_agents (agent_id, role, generation, name, wallet_address, status, requested_by, last_heartbeat)
+         VALUES ($1, 'root', 0, 'root', $2, 'active', 'test', now())`,
+        [id, `0x${crypto.randomBytes(20).toString("hex")}`],
+      );
       await treasury.recordAgentLedger({ agentId: id, kind: "revenue", amountCents: 500_000 }, "operator:alice");
       await treasury.recordAgentLedger({ agentId: id, kind: "owner_funding", amountCents: 2_000_000 }, "operator:alice");
       await treasury.recordBalance(id, 2_500_000);
@@ -497,6 +504,12 @@ describe.skipIf(!PG_BIN)("D3.1 sweep planning in PostgreSQL: repeated and concur
         expect(Number(r.waterfall.PLANNED_SWEEPS_RESERVED)).toBe(before);
         before += Number(r.amount_cents);
       }
+      // v9 -> v10: the plans stay (history is never deleted), are digested, and nothing new can be planned.
+      expect(await store.migrate()).toEqual([10]);
+      const d = (await treasury["pool"].query("SELECT row_count FROM fleet_legacy_economics WHERE table_name = 'fleet_sweep_plans'")).rows[0];
+      expect(Number(d.row_count)).toBe(plans.rows.length);
+      expect((await treasury["pool"].query("SELECT count(*)::int AS n FROM fleet_sweep_plans")).rows[0].n).toBe(plans.rows.length);
+      await expect(treasury.planSweep(id, "operator:alice")).rejects.toThrow(/FLEET_LEGACY_SUPERSEDED/);
     } finally {
       await treasury.close();
       await store.close();
