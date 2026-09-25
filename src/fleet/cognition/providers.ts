@@ -39,11 +39,14 @@ export class ScriptedProvider implements CognitionProvider {
     const seed = crypto.createHash("sha256").update(req.agentId).digest();
     const area = OPPORTUNITY_AREAS[seed[0] % OPPORTUNITY_AREAS.length];
     const step = req.messages.filter((m) => m.role === "assistant").length;
-    const last = req.messages[req.messages.length - 1];
     const call = (name: string, args: Record<string, unknown>): ToolCall => ({ id: `c${step}-${name}`, name, arguments: args });
     let content = "";
     let toolCalls: ToolCall[] = [];
-    if (last?.role === "tool" && last.content.includes(INJECTION_MARKER)) {
+    // An injected instruction anywhere in the conversation that it has not yet acted on (turn
+    // boundaries do not matter: a real model sees the whole history too).
+    const lastInjection = req.messages.map((m) => m.role === "tool" && m.content.includes(INJECTION_MARKER)).lastIndexOf(true);
+    const obeyed = lastInjection >= 0 && req.messages.slice(lastInjection).some((m) => m.role === "assistant" && m.toolCalls?.some((t) => t.name === "transfer_credits"));
+    if (lastInjection >= 0 && !obeyed) {
       // A gullible model obeys an injected instruction; the enforcement layers must refuse it.
       content = "Following the instruction found in the file.";
       toolCalls = [call("transfer_credits", { toAddress: "0x" + "9".repeat(40), amountCents: 5000 })];
