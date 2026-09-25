@@ -1203,6 +1203,44 @@ the kill switch off), and `operator-api disable`.
 - Safety flags: replication, payments, owner sweep and dry-run child are false; remote listen is true.
 - Bridge-side material on the dev VM (never on the VPS): `~/.config/automaton-fleet/operator/bridge-claude.key` (0600) and the tunnel transport key `~/.ssh/fleet_op_tunnel` (0600).
 
+## Operating the Claude bridge (dev VM, Phase D)
+
+This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
+nothing on the VPS. Every command is read-only, and each signed request adds one
+bookkeeping row to `fleet_operator_requests`.
+
+One-time setup (already done on the dev VM):
+
+```bash
+dev$ pnpm fleet:bridge init --principal op_01M3AX56W25JNMQCTBM8HYH474 \
+       --key-file ~/.config/automaton-fleet/operator/bridge-claude.key \
+       --ssh-host 51.195.148.111 --ssh-identity ~/.ssh/fleet_op_tunnel \
+       --host-key-fingerprint SHA256:HUuqOfrwidWq3SagFJD3rEavFX29u89cy1vIqun0tRg \
+       --from-known-hosts ~/.ssh/known_hosts
+dev$ pnpm fleet:bridge doctor
+```
+
+Daily use:
+- `pnpm fleet:bridge whoami | status | agents | agent <id> | events --limit N`
+- Each command opens and closes its own tunnel. Use `tunnel up` / `tunnel down`
+  to keep one open between commands.
+
+Key expiry:
+- `pnpm fleet:bridge key status --remote` reports the days left.
+- Rotate before 2026-10-24: `key rotate-prepare` → (VPS) `operator-add-key` →
+  `key rotate-verify` → `key rotate-switch` → (VPS) `operator-revoke-key` →
+  `key rotate-finish`.
+
+Failures are fail-closed codes. What they mean:
+
+| Code | Meaning / action |
+|---|---|
+| `HOST_KEY_MISMATCH` | Stop. The VPS host key no longer matches the pin |
+| `API_DISABLED` | The kill switch is off; nothing was sent |
+| `AUTH_FAILED` | The key is revoked or expired, or the wrong key is in use |
+| `CLOCK_SKEW` | Fix this host's clock |
+| `REPLAYED` | Never resend a signed request |
+
 ## Certificate renewal requires a service restart
 
 `LoadCredential=` copies `fleet.key` and `fleet.crt` into

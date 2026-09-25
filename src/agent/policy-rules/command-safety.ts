@@ -96,6 +96,8 @@ const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   { pattern: /automaton-fleet-witness|\bFLEET_WITNESS_\w+\s*=|\bcapability_scope\b/i, description: "Touch the fleet root witness or capability scopes" },
   // Phase B2: the Operator API, its credential, keys, database surface and tooling
   { pattern: /automaton-fleet-operator|operator\.env\b|\bFLEET_OPERATOR_\w+\s*=|fleet\/operator\/|\bfleet:operator|(?<![\w-])operator-(enroll|add-key|revoke|revoke-key|revoke-all|api|list|archive)(?![\w-])|:8788\b|\/v1\/operator\/|\bop_(begin_request|key_material|ping|whoami|fleet_status|list_agents|get_agent|list_events)\b|\bfleet_operator_\w+|x-fleet-op-/i, description: "Touch the fleet Operator API, its credentials or principals" },
+  // Phase D: the dev-VM Claude bridge (config, signing keys, tunnel key and tooling)
+  { pattern: /\bfleet:bridge\b|fleet\/bridge\/|\bfleet_op_tunnel\b|\bfleet-op-tunnel\b|bridge-claude[\w.-]*\.(key|json)\b/i, description: "Touch the fleet Claude bridge, its keys or its tunnel" },
 ];
 
 export function getForbiddenCommandMatch(command: string): { description: string; pattern: string } | null {
