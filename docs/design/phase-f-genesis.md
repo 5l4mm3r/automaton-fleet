@@ -1,6 +1,6 @@
 # Phase F — Genesis architecture and pre-Genesis integration (schema v11)
 
-Status: implemented; deployment record in `docs/fleet-production-runbook.md` (Stage F).
+Status: **DEPLOYED 2026-09-25** (runtime `99dc941`, build `dfb66b52…eaf1f`, schema v11); record in `docs/fleet-production-runbook.md` (Stage F).
 The founders are **not** created. Genesis is disabled (`fleet_genesis_policy.genesis_enabled = false`)
 and production population stays 0. Activating Genesis is a separate owner gate.
 

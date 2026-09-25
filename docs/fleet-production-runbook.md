@@ -1321,6 +1321,46 @@ Operating the ledger (owner CLI, admin credential; `docs/design/phase-e-treasury
 - Instructions that recommend against a policy need `--ack`. Constitutional refusals cannot be acknowledged.
 - **Do not** record owner funding, grant capital or enroll destinations until Genesis is designed and approved.
 
+## Stage F — Genesis architecture and pre-Genesis integration, schema v11 (DEPLOYED 2026-09-25, times UTC)
+
+Design: `docs/design/phase-f-genesis.md`. The founders are **not** created. Genesis is disabled and population is 0.
+
+### Stage F record (2026-09-25)
+
+| Gate | Result |
+|---|---|
+| F-1 | Commit `99dc941`, pushed to `fleet-origin` |
+| F-2 | The local and VPS reproducible builds matched: build `dfb66b522d4a71a911ab26c5bedf12915e7993b58410d97f63ac8ce65beeaf1f`, lockfile `eee9dc2f…`. Phase E pins read back from `runtime.env`: `f48f9128408aeab40342521cd8e2d280b96d8e46` / `e14720c42f2ef4cddcbc0c315320e09e4563861899c857c3617e4d00e82ff429` |
+| F-3 | `runtime.env.pre-f` kept (sha `87dca25c…`). The runtime release was staged and installed. The ChatGPT adapter artifact was built and verified at the same commit/build |
+| F-4 | Outage from 18:25:58. Dump `~/automaton_fleet-v10-pre-v11-20260925T182558Z.dump` (1068378 B, sha `96c81347…cf2e`, 0600, 48 table-data entries). `migrate-check` gave exactly `{10→11, wouldApply:[11]}`, rolled back. `migrate` applied v11 at 18:26:03. `audit-privileges` PASS (new explicit custody wording). The units were installed with `custody.env` and `/var/lib/automaton-fleet-custody` hidden (controller, Operator API, witness, adapter, tunnel); only those lines changed. The adapter was re-pinned from `6691b4c`/`62336fee…` to `99dc941`/`dfb66b52…` |
+| F-5 | `approve-runtime`; controller, Operator API, custody (inert on v11), adapter socket; tunnel restarted on its new unit. The outage ended at 18:26:30 (about 32 s) |
+| Verify | Runtime VERIFIED; doctor DEPLOYMENT OK (new PASS lines: genesis disabled, capability manifest `founder-v1 9b4ac43e…` matches the runtime, reproduction pinned off, identity vault 0 facts, institutional knowledge 0); `fleet:verify` 16/16, SAFE FOR DRY RUN YES; `fleet-verify-deployment.sh` 76/0; Operator API ready (schema 11); adapter ready |
+| Dry run | `fleet:admin genesis-dry-run` in production: **PASS**, 20/20 checks (two synthetic founders, synthetic 123.45 each, one rolled-back transaction). Afterwards: population 0, Genesis records 0, agents 0, ledger head 0, `genesis_enabled` false |
+| Adapter | 4 tools; whoami `bridge-chatgpt` {ops.read.agents, ops.read.status}; status schema 11; `fleet_list_events` refused as unknown; no token gives 401. Inside its namespace, `custody.env` is an empty mode-000 placeholder, unreadable as the adapter user |
+| MCP | Registration pinned with `--expect-principal claude-operator`. A fresh Claude session reports `claude-operator` `op_01M3CKG338G2KDJ19FYEKT2T40`. A mismatched config fails with `IDENTITY_MISMATCH`. The long-running session that started before D3-7 must reconnect (`/mcp`) to drop its stale `bridge-claude` process |
+| Probes | Custody login: `cx_ping` only (v11, execution false); everything else is denied. The new agent routes return 401 without a session |
+
+State after F:
+- registry v11, cap 2, DEVELOPMENT, replication off;
+- population 0; Genesis disabled, 0 authorizations;
+- operator actions OFF (generation 12);
+- ledger 0 journals;
+- identity vault empty;
+- custody inert.
+
+Rollback:
+- **Full:** stop the adapter socket and service, custody, Operator API and controller; restore the pre-v11 dump; restore `runtime.env.pre-f`; point `current` back to `releases/f48f912…`; point the adapter's `current` back to `releases/6691b4c…` and restore its `pins.env`; start in order; verify.
+- `f48f912` refuses a v11 registry (exact schema check).
+- The unit changes (`custody.env` hidden) are safe to keep.
+
+The owner Genesis gate (not executed; see the design §F3/F4):
+1. `ledger-record-funding`;
+2. `genesis-enable`;
+3. `genesis-propose` → `genesis-approve <id> <authSha256>`;
+4. provision the founder runtimes;
+5. `genesis-attest` per founder → `genesis-fund`;
+6. `genesis-activate … --credential-dir`.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
