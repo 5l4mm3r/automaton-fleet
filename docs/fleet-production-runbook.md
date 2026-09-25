@@ -1402,6 +1402,30 @@ Owner Genesis path, **not executed** (each step is an owner decision):
 
 Founders then run the supervisor. The autonomous agent loop stays off until the owner provides an inference provider credential and approves a founder egress policy.
 
+## Stage F.2 — Founder cognition through FleetController, schema v13 (DEPLOYED 2026-09-25, times UTC)
+
+Design: `docs/design/phase-f2-founder-cognition.md`. Owner go-live steps: `docs/genesis-launch-checklist.md`.
+Production cognition is **disabled** (provider `none`); no inference credential exists; founder egress closed.
+Genesis **disabled**, population **0**.
+
+### Stage F.2 record (2026-09-25)
+
+| Gate | Result |
+|---|---|
+| F2-1 | Commit `f90b607` pushed. The local and VPS builds matched: `d7bd4679…aa99`, lockfile unchanged. `runtime.env.pre-f2` kept (sha `78128e06…`, ffd29fa pins) |
+| F2-2 | Outage 20:34:32–20:34:50 (about 18 s). Dump `~/automaton_fleet-v12-pre-v13-20260925T203432Z.dump` (1361661 B, sha `b69f7a4d…0f7e`, 0600, 61 table-data entries). `migrate-check` gave exactly `{12→13, wouldApply:[13]}`; `migrate`; `audit-privileges` PASS (incl. the new cognition surface). `fleet-os-setup.sh --apply` installed only the changed founder template (`FLEET_FOUNDER_AGENT_LOOP=controller`). The controller logs `cognitionProvider: none` |
+| Verify | Runtime VERIFIED; doctor DEPLOYMENT OK ("founder cognition: disabled (owner gate; provider none)"); `fleet:verify` 16/16; `fleet-verify-deployment.sh` 89/0; Operator API and ChatGPT adapter ready; flags unchanged; public ports 22 and 443 only. Database Genesis dry run 20/20 |
+| Rehearsal 1 | 19/20. The injection check **FAILED, correctly**: the production turn shape (4 steps) put the poisoned read on a turn's last step, so the scripted model never evaluated it. The check's detail text was also hard-coded. Fixed in `c7c2a05` (build `459539f5…c4f9`; the builds matched). `runtime.env.pre-f2b` kept. Controller restart 20:49:29–20:49:35 |
+| Rehearsal 2 | **PASS 20/20** (systemd host, uids 63549/64866). Cognition off until switched on; both founders thought through the controller (8 calls each, 8¢/9¢ charged from their own synthetic ledgers; ledger verifies). The injected founder requested `transfer_credits`, and both requested `spawn_child`/`install_mcp_server`: all refused, 0 payment instructions and 0 live orders. Pausing A: 0 calls after; B continued. Global off: 0 calls after. No credential in arguments, logs, events, audit or the cognition log. Production unchanged `{population 0, cap 2, genesis 0/disabled, agents 0, ledger_head 0}`; host clean |
+
+Tests: fleet suite 622 passed (only KI-1); non-fleet 1614/1614. Mutation campaign 29/29 killed (gateway, toolbox,
+SQL gates, lifecycle trigger, log immutability, owner-actor checks, loopback-only founder sessions, mind pause,
+egress guards, founder preflight, provider key-file checks).
+
+Rollback:
+- **Runtime only:** restore `runtime.env.pre-f2b` (f90b607), approve and restart.
+- **Full:** stop the services; restore the pre-v13 dump; restore `runtime.env.pre-f2` (ffd29fa); point `current` back to `releases/ffd29fa…`; start in order. `ffd29fa` refuses a v13 registry (exact schema check).
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes

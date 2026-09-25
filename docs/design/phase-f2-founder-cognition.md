@@ -1,6 +1,6 @@
 # Phase F.2 — Founder cognition through FleetController (schema v13)
 
-Status: **BUILT AND REHEARSED; production cognition DISABLED** (provider `none`). Deployment record: `docs/fleet-production-runbook.md` (Stage F.2).
+Status: **DEPLOYED 2026-09-25** (runtime `c7c2a05`, build `459539f5…c4f9`, schema v13); production rehearsal 20/20. Production cognition **DISABLED** (provider `none`). Deployment record: `docs/fleet-production-runbook.md` (Stage F.2).
 Genesis stays **disabled**, production population **0**. No real inference credential exists. Egress stays
 **closed** (founder units are loopback-only). The owner's go-live steps are in `docs/genesis-launch-checklist.md`.
 
