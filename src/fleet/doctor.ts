@@ -31,6 +31,7 @@ import net from "net";
 import path from "path";
 import { FLEET_PG_SCHEMA_VERSION } from "./postgres/migrations.js";
 import { FOUNDER_MANIFEST_V1, manifestSha256 } from "./capabilities.js";
+import { FOUNDER_TOOLS } from "./cognition/types.js";
 import { execFileSync } from "child_process";
 
 /** automaton-fleet-custody.service state on this host (null when systemd or the unit is not available). */
@@ -394,14 +395,21 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         gv.reproductionExecutionEnabled ? "EXECUTION ENABLED — must be pinned off" : "execution constitutionally disabled; eligibility is assessment only",
       );
       // Phase F.2 (schema v13): founders think only through the controller gateway, under owner switches.
-      const cv = await store.cognitionOverview();
+      const cv = await store.cognitionOverview(FOUNDER_TOOLS.map((t) => t.name));
       facts.cognition = cv;
       if (cv) {
         add(
           "founder cognition",
-          "pass",
+          cv.foundersNearBudget > 0 ? "warn" : "pass",
           `${cv.enabled ? `ENABLED by the owner (provider ${cv.provider}, model ${cv.model})` : `disabled (owner gate; provider ${cv.provider})`}; ` +
-            `${cv.foundersEnabled} founder(s) enabled, ${cv.foundersPaused} paused; ${cv.callsToday} inference call(s) in 24 h, ${cv.chargedTodayCents}¢ charged`,
+            `${cv.foundersEnabled} founder(s) enabled, ${cv.foundersPaused} paused; ${cv.callsToday} inference call(s) in 24 h, ${cv.chargedTodayCents}¢ charged` +
+            (cv.foundersNearBudget ? `; ${cv.foundersNearBudget} founder(s) at or near their daily inference budget` : ""),
+        );
+        // Refused, but worth the owner's attention: what the models tried (fleet:admin founders-report).
+        add(
+          "founder forbidden-tool requests",
+          cv.forbiddenRequests24h > 0 ? "warn" : "pass",
+          cv.forbiddenRequests24h > 0 ? `${cv.forbiddenRequests24h} request(s) for tools outside the founder toolbox in 24 h (all refused; see founders-report)` : "none in 24 h",
         );
       }
       // Phase F.1: founder runtime instances on this host must match the living founders in the registry.

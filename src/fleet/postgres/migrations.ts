@@ -21,8 +21,9 @@ import { V10_SQL } from "./migrations-phase10.js";
 import { V11_SQL } from "./migrations-phase11.js";
 import { V12_SQL } from "./migrations-phase12.js";
 import { V13_SQL } from "./migrations-phase13.js";
+import { V14_SQL } from "./migrations-phase14.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 13;
+export const FLEET_PG_SCHEMA_VERSION = 14;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1130,6 +1131,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 11, name: "genesis_pre_genesis_integration", sql: V11_SQL },
   { version: 12, name: "founder_runtime_attestation", sql: V12_SQL },
   { version: 13, name: "founder_cognition_gateway", sql: V13_SQL },
+  { version: 14, name: "owner_credits_purchase_record", sql: V14_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

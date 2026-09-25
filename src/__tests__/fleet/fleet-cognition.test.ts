@@ -34,6 +34,7 @@ import { UnsupportedSandboxTerminator } from "../../fleet/service/terminator.js"
 import { FOUNDER_MANIFEST_V1 } from "../../fleet/capabilities.js";
 import { FounderToolbox, type ToolboxPorts } from "../../fleet/founder/toolbox.js";
 import { FounderMind } from "../../fleet/founder/mind.js";
+import { sandboxSelfTest } from "../../fleet/founder/exec-sandbox.js";
 import { CognitionError, containsSecretShape, infer, toolsFor, validateMessages, type CognitionPorts } from "../../fleet/cognition/gateway.js";
 import { INJECTION_MARKER, OpenAICompatibleProvider, ScriptedProvider } from "../../fleet/cognition/providers.js";
 import { FOUNDER_TOOLS } from "../../fleet/cognition/types.js";
@@ -122,6 +123,43 @@ describe("founder toolbox (unit)", () => {
     expect(JSON.parse((await call("recall_facts", {})).output)).toEqual({ k: "v" });
     expect(fs.statSync(path.join(mem, "facts.json")).mode & 0o077).toBe(0);
     expect(fs.existsSync(path.join(ws, "facts.json"))).toBe(false);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("founder shell sandbox (Landlock)", () => {
+  it("a command sees only the workspace: no state/credential, no memory, no writes outside, no TCP", async () => {
+    const { root, ws, mem } = sandbox();
+    fs.writeFileSync(path.join(root, "fleet-credentials.json"), JSON.stringify({ token: FAKE_TOKEN }), { mode: 0o600 });
+    fs.writeFileSync(path.join(mem, "facts.json"), "{\"secret\":\"memory\"}");
+    const tb = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V1, workspaceDir: ws, memoryDir: mem, ports: noPorts });
+    const exec = async (command: string) => (await tb.execute({ id: "x", name: "exec", arguments: { command } })).output;
+    expect(await exec("echo hi > a.txt && cat a.txt && mkdir -p d && ls")).toMatch(/hi\na.txt\nd/);
+    // Layer 1: the shell guard refuses the obvious form; layer 2: an obfuscated path passes the guard but not Landlock.
+    expect(await exec(`cat ${root}/fleet-credentials.json`)).toMatch(/REFUSED FLEET_COMMAND_FORBIDDEN/);
+    const hidden = await exec(`f=${root}/fleet-cre; cat "\${f}dentials.json"; echo rc=$?`);
+    expect(hidden).toMatch(/Permission denied[\s\S]*rc=1/);
+    expect(hidden).not.toContain("fa1.");
+    expect(await exec(`cat ${mem}/facts.json; echo rc=$?`)).toMatch(/Permission denied[\s\S]*rc=1/);
+    expect(await exec(`echo x > ${root}/pwn.txt; echo rc=$?`)).toMatch(/rc=[12]/);
+    expect(fs.existsSync(path.join(root, "pwn.txt"))).toBe(false);
+    expect(await exec("echo t > /tmp/fleet-sandbox-probe; echo rc=$?")).toMatch(/rc=[12]/);
+    expect(await exec("echo scratch > $TMPDIR/s && cat $TMPDIR/s")).toContain("scratch");
+    expect(await exec("python3 -I -S -c \"import socket; socket.create_connection(('127.0.0.1', 22), 2)\"; echo rc=$?")).toMatch(/PermissionError|rc=1/);
+    const t = await sandboxSelfTest(fs.realpathSync(ws), path.join(root, "fleet-credentials.json"), 22);
+    expect(t).toEqual({ ok: true, available: true, workspaceWritable: true, stateReadable: false, outsideWritable: false, networkDenied: true });
+    // The self-test is not a rubber stamp: a readable "state" file fails it.
+    expect(await sandboxSelfTest(fs.realpathSync(ws), "/etc/hostname", 22)).toMatchObject({ ok: false, stateReadable: true, outsideWritable: false });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("fails closed: without a Landlock domain the command does not run", async () => {
+    const { root, ws, mem } = sandbox();
+    const fake = path.join(root, "no-landlock.sh");
+    fs.writeFileSync(fake, "#!/bin/sh\necho 'FLEET_EXEC_SANDBOX_UNAVAILABLE: landlock unavailable' >&2\nexit 97\n", { mode: 0o755 });
+    const tb = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V1, workspaceDir: ws, memoryDir: mem, ports: noPorts, sandboxPython: fake });
+    expect(await tb.execute({ id: "x", name: "exec", arguments: { command: "touch ran" } })).toMatchObject({ ok: false, refused: "FLEET_EXEC_SANDBOX_UNAVAILABLE" });
+    expect(fs.existsSync(path.join(ws, "ran"))).toBe(false);
     fs.rmSync(root, { recursive: true, force: true });
   });
 });
@@ -386,10 +424,7 @@ describe.skipIf(!PG_BIN)("Phase F.2 founder cognition (schema v13, HTTP + Postgr
   }
 
   async function buyCredits(cents: number) {
-    await q(`SELECT fleet.fleet_ledger_post('conway_credits_purchase', $1, $2, 'synthetic credits (test)', 'owner', NULL, NULL, NULL, $3, NULL, now(),
-      jsonb_build_array(jsonb_build_object('account', 'fleet:conway_credits', 'side', 'D', 'amount', $4::bigint),
-                        jsonb_build_object('account', 'fleet:treasury:unallocated', 'side', 'C', 'amount', $4::bigint)))`,
-      [key("credits"), OWNER, `synthetic:${crypto.randomUUID()}`, cents]);
+    await ledger.recordCreditsPurchase(cents, `invoice:${crypto.randomUUID()}`, OWNER);
   }
 
   const inferCode = async (c: FleetApiClient) => {
@@ -610,6 +645,55 @@ describe.skipIf(!PG_BIN)("Phase F.2 founder cognition (schema v13, HTTP + Postgr
     // Global off: everyone stops.
     await genesis.setCognitionPolicy({ enabled: false, actor: OWNER });
     expect(await mb.mind.turn("Heartbeat 10.")).toMatchObject({ ran: false, reason: "cognition disabled by the owner" });
+  });
+
+  it("schema v14: the owner records prepaid credits from unallocated treasury only; AI principals cannot; idempotent; audited", async () => {
+    await reset();
+    await founders(5_000); // 20_000 funded: 10_000 allocated to the two founders, 10_000 unallocated
+    const unallocated = async () => Number((await q(`SELECT fleet.fleet_ledger_balance('fleet:treasury:unallocated') AS b`))[0].b);
+    const credits = async () => Number((await q(`SELECT fleet.fleet_ledger_balance('fleet:conway_credits') AS b`))[0].b);
+    const before = { u: await unallocated(), c: await credits() };
+    await expect(ledger.recordCreditsPurchase(100, "invoice:abcd", "claude")).rejects.toThrow(/FLEET_APPROVAL_REQUIRED/);
+    await expect(ledger.recordCreditsPurchase(100, "invoice:abcd", "operator:op_claude")).rejects.toThrow(/FLEET_SELF_APPROVAL/);
+    await expect(ledger.recordCreditsPurchase(100, "x", OWNER)).rejects.toThrow(/reference is required/);
+    for (const amt of [0, -5]) {
+      await expect(q(`SELECT fleet.fleet_admin_record_credits_purchase($1, 'invoice:zero', 'operator:owner', $2)`, [amt, key("credits")])).rejects.toThrow(/amount must be positive/);
+    }
+    await expect(ledger.recordCreditsPurchase(before.u + 1, "invoice:toomuch", OWNER)).rejects.toThrow(/FLEET_INSUFFICIENT_TREASURY/);
+    await expect(agentRaw.query(`SELECT fleet.fleet_admin_record_credits_purchase(100, 'invoice:x', 'operator:owner', 'k:12345678')`)).rejects.toThrow(/permission denied/);
+    await expect(svcRaw.query(`SELECT fleet.fleet_admin_record_credits_purchase(100, 'invoice:x', 'operator:owner', 'k:12345678')`)).rejects.toThrow(/permission denied/);
+    const j1 = await ledger.recordCreditsPurchase(2_500, "invoice:inv-001", OWNER, "credits:inv-001");
+    const j2 = await ledger.recordCreditsPurchase(2_500, "invoice:inv-001", OWNER, "credits:inv-001");
+    expect(j2).toBe(j1);
+    expect({ u: await unallocated(), c: await credits() }).toEqual({ u: before.u - 2_500, c: before.c + 2_500 });
+    const [row] = await q(`SELECT kind, source, external_ref FROM fleet.fleet_ledger_journal WHERE journal_id = $1`, [j1]);
+    expect(row).toMatchObject({ kind: "conway_credits_purchase", source: "owner" });
+    expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_admin_instructions WHERE kind = 'credits_purchase_record'`))[0].n).toBe(1);
+    // Founder allocations are untouched.
+    const f = await q(`SELECT agent_id FROM fleet.fleet_agents WHERE origin = 'genesis_founder'`);
+    for (const x of f) expect(Number((await ledger.economics(x.agent_id)).cash)).toBe(5_000);
+    expect((await ledger.verify()).ok).toBe(true);
+  });
+
+  it("owner monitoring: founders-report and the doctor overview surface usage, budget pressure and refused forbidden requests", async () => {
+    await reset();
+    const [a, b] = await founders();
+    await buyCredits(5_000);
+    await genesis.setCognitionPolicy({ enabled: true, provider: "scripted", model: "fleet-scripted-v1", inputMicrocents: 1_000, outputMicrocents: 4_000, actor: OWNER });
+    await genesis.setFounderCognition(a.agentId, { enabled: true, maxTurnsPerHour: 500, dailyBudgetCents: 10, reason: "t", actor: OWNER });
+    const m = mindFor(a);
+    for (let i = 0; i < 4; i++) await m.mind.turn(`hb ${i}`);
+    const names = FOUNDER_TOOLS.map((t) => t.name);
+    const rep = await genesis.foundersReport(names);
+    const ra = rep.find((r) => r.agentId === a.agentId)!;
+    const rb = rep.find((r) => r.agentId === b.agentId)!;
+    expect(ra).toMatchObject({ status: "active", cognition: { enabled: true, paused: false, dailyBudgetCents: 10 } });
+    expect(ra.calls24h as number).toBeGreaterThan(0);
+    expect(Object.keys(ra.forbiddenRequests24h as object)).toEqual(expect.arrayContaining(["spawn_child", "install_mcp_server"]));
+    expect(rb).toMatchObject({ calls24h: 0, charged24hCents: 0, forbiddenRequests24h: {}, cognition: { enabled: false } });
+    const ov = (await store.cognitionOverview(names))!;
+    expect(ov.forbiddenRequests24h).toBeGreaterThanOrEqual(2);
+    expect(ov.foundersNearBudget, JSON.stringify(ra.cognition)).toBe(1); // a spent its 10¢ budget
   });
 
   it("founder credentials open sessions only from the controller host (a leaked token is useless remotely)", async () => {

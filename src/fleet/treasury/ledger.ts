@@ -238,6 +238,15 @@ export class PgLedgerAdmin {
   }
 
   /**
+   * Schema v14: the owner bought prepaid inference (Conway) credits outside the
+   * fleet; moves unallocated treasury cash into the credit asset. External
+   * reference (the provider's invoice/receipt id) required.
+   */
+  async recordCreditsPurchase(amountCents: number, externalRef: string, actor: string, key = idempotencyKey("credits")): Promise<string> {
+    return this.one(`SELECT fleet_admin_record_credits_purchase($1, $2, $3, $4) AS r`, [cents(amountCents, "amount"), externalRef, actor, idem(key)]);
+  }
+
+  /**
    * Record an external economic fact for an agent (schema v11 provenance): realized
    * customer revenue, a refund, or realized investment P&L. `counterparty` is the
    * external party's reference (hashed here, never stored); value from a

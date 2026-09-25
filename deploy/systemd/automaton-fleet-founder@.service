@@ -88,6 +88,8 @@ LockPersonality=yes
 RemoveIPC=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
+# Phase F.3: the founder's shell sandbox applies Landlock to itself (landlock_*; seccomp can only restrict further).
+SystemCallFilter=@sandbox
 SystemCallFilter=~@privileged @resources
 # Every fleet secret, bridge key and other service's state/logs.
 InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak -/etc/automaton-fleet/chatgpt-adapter.json -/etc/automaton-fleet/chatgpt-tunnel

@@ -10,6 +10,7 @@
  *   ledger-lfc                                     Lifetime Fleet Contribution
  *   ledger-orders [status] [agentId]
  *   ledger-record-funding <cents> <externalRef>    owner capital already received into custody
+ *   ledger-record-credits <cents> <externalRef>    schema v14: prepaid inference credits the owner bought (provider invoice/receipt id)
  *   ledger-record-revenue <agentId> <cents> <externalRef> [refund|gain|loss]   counterparty reference on stdin (hashed)
  *   ledger-reverse <journalId> <reason…>
  *   ledger-capital <agentId> <cents> grant|principal [--ack] [reason…]
@@ -32,7 +33,7 @@ import type { DestinationKind, DestinationRail, PgLedgerAdmin } from "./ledger.j
 
 export const LEDGER_COMMANDS = new Set([
   "ledger-model", "ledger-verify", "ledger-balances", "ledger-journal", "ledger-legacy", "ledger-economics", "ledger-lfc",
-  "ledger-orders", "ledger-record-funding", "ledger-record-revenue", "ledger-reverse", "ledger-capital",
+  "ledger-orders", "ledger-record-funding", "ledger-record-credits", "ledger-record-revenue", "ledger-reverse", "ledger-capital",
   "ledger-spend-decision", "ledger-withdraw", "ledger-confirm", "ledger-contribute",
   "ledger-destination-enroll", "ledger-destination-activate", "ledger-destination-revoke",
   "ledger-estate-open", "ledger-estate-settle", "ledger-estate-attention",
@@ -101,6 +102,8 @@ export async function runLedgerCommand(
       return l.orders({ status: args[0] || undefined, agentId: args[1] || undefined });
     case "ledger-record-funding":
       return { journalId: await l.recordOwnerFunding(cents(args[0]), need(args[1], "ledger-record-funding <cents> <externalRef>"), actor) };
+    case "ledger-record-credits":
+      return { journalId: await l.recordCreditsPurchase(cents(args[0]), need(args[1], "ledger-record-credits <cents> <externalRef>"), actor) };
     case "ledger-record-revenue": {
       const usage = "ledger-record-revenue <agentId> <cents> <externalRef> [revenue|refund|gain|loss]  (external counterparty reference on stdin)";
       const kinds = { revenue: "external_revenue", refund: "external_refund", gain: "investment_realized_gain", loss: "investment_realized_loss" } as const;

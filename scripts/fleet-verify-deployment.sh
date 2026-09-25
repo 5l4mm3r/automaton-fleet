@@ -119,7 +119,7 @@ fi
 echo "Genesis founder runtimes (Phase F.1)"
 FT=/etc/systemd/system/automaton-fleet-founder@.service
 if [[ -f "$FT" ]]; then
-  for prop in "DynamicUser=yes" "User=fnd-%i" "IPAddressDeny=any" "IPAddressAllow=localhost" "NoNewPrivileges=true" "ProtectSystem=strict" "StateDirectoryMode=0700" "Environment=FLEET_CAPABILITY_MANIFEST=founder-v1" "Environment=FLEET_FOUNDER_AGENT_LOOP=controller"; do
+  for prop in "DynamicUser=yes" "User=fnd-%i" "IPAddressDeny=any" "IPAddressAllow=localhost" "NoNewPrivileges=true" "ProtectSystem=strict" "StateDirectoryMode=0700" "Environment=FLEET_CAPABILITY_MANIFEST=founder-v1" "Environment=FLEET_FOUNDER_AGENT_LOOP=controller" "SystemCallFilter=@sandbox"; do
     grep -qx "$prop" "$FT" && ok "founder template: $prop" || bad "founder template lacks $prop"
   done
   grep -q -- "-/etc/automaton-fleet/custody.env" "$FT" && grep -q -- "-/etc/automaton-fleet/admin.env" "$FT" && ok "founder template hides fleet secrets" || bad "founder template does not hide fleet secrets"

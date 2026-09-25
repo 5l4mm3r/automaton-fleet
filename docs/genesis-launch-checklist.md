@@ -5,7 +5,7 @@ item says who acts, what is needed and how it is verified. Nothing here is perfo
 ChatGPT or any agent. Every step marked **OWNER GATE** is refused by the database unless an owner
 principal performs it.
 
-State at the end of F.2: schema v13; Genesis **disabled**; population 0; cap 2; cognition **disabled**
+State at the end of F.3: schema v14; Genesis **disabled**; population 0; cap 2; cognition **disabled**
 (provider `none`); egress **closed**; real payments, replication and owner sweep **off**.
 
 ## A. Money (Phase E surface)
@@ -14,7 +14,7 @@ State at the end of F.2: schema v13; Genesis **disabled**; population 0; cap 2; 
 |---|---|---|---|
 | A1 | Founder capital per founder (starting allocation, virtual until custody execution is enabled) | Decide the amount; it is recorded at `genesis-propose <2> <allocationCents>` | `genesis-status` shows it in the authorization hash |
 | A2 | Record the real owner funding that backs it | `fleet:admin ledger-record-funding <cents> <bankRef>` (**OWNER GATE**; external reference required) | `ledger-verify` OK; treasury unallocated ≥ 2 × allocation |
-| A3 | Prepaid inference credits (the fleet buys; founders reimburse from their own cash) | **Open engineering item.** Today a `conway_credits_purchase` is posted only by custody execution (disabled). Before launch, add a reviewed owner-only recorder (`fleet_admin_record_credits_purchase`, external reference required, owner source), or approve credits through the custody path | `fleet:conway_credits` balance; `ledger-verify` OK |
+| A3 | Prepaid inference credits (the fleet buys; founders reimburse from their own cash) | Buy credit at the provider, then `fleet:admin ledger-record-credits <cents> <invoiceRef>` (**OWNER GATE**, schema v14; from unallocated treasury only) | `fleet:conway_credits` balance; `ledger-verify` OK |
 | A4 | Inference prices (microcents per input/output token), matching the provider's price list | Set on `cognition-enable` (`--in-microcents`, `--out-microcents`) | `cognition-policy` |
 | A5 | Per-founder daily inference budget and hourly call limit | `founder-cognition <id> enable --daily-budget N --turns-per-hour N` | `cognition-status <id>` |
 
@@ -26,14 +26,14 @@ State at the end of F.2: schema v13; Genesis **disabled**; population 0; cap 2; 
 | B2 | Create a **dedicated, spend-capped** API key for the fleet only (provider-side hard limit) | At the provider | Provider dashboard |
 | B3 | Install the key on the VPS: `/etc/automaton-fleet/cognition.key`, root:fleet 0600 → delivered to the controller only | Owner, over SSH (never in a chat, repository or ticket) | `fleet:doctor` founder cognition line; the key never appears in logs |
 | B4 | Service configuration: `FLEET_COGNITION_PROVIDER=openai_compatible`, `FLEET_COGNITION_BASE_URL`, `FLEET_COGNITION_MODEL`, `FLEET_COGNITION_API_KEY_FILE` | Owner edits `service.env`, then restarts the controller | `service_started` log shows `cognitionProvider: openai_compatible:<model>` |
-| B5 | Recommended hardening before B3: a per-exec sub-sandbox so a founder's shell cannot read its own credential file (see F.2 design §4, residual risks) | Engineering change + review | Tests |
+| B5 | ~~Per-exec sandbox~~ **Done in F.3**: every founder shell command runs in a Landlock domain (workspace only; credential/state unreadable; no TCP; fail closed) | — | Rehearsal check "each founder's shell runs in its Landlock sandbox" |
 
 ## C. Egress (internet access for founders)
 
 | # | Decision | How | Verify |
 |---|---|---|---|
 | C1 | Whether founders may reach the internet at all, and which hosts (exact names or `*.suffix`, 443 only) | Owner allow-list | — |
-| C2 | Deploy the egress proxy (built in F.2, not deployed) as its own unit on loopback; widen the founder unit's `IPAddressAllow` **only** to the proxy; pass per-founder proxy credentials | Engineering change + owner approval (it changes network exposure) | Verify script; rehearsal probes: an allowed host works, a denied host, IP literal and metadata address are refused |
+| C2 | Build a fleet-mediated `web_fetch` tool (new capability class) whose only path is the egress proxy (F.2 module); founder shells stay network-less (F.3 Landlock). See `docs/design/phase-f3-launch-hardening.md` §4 | Engineering change + owner approval (new founder authority and network exposure) | Tests; rehearsal probes: an allowed host works, a denied host, IP literal and metadata address are refused |
 | C3 | Without C2 the founders can still think, plan, write and propose, but cannot research or sell online | — | — |
 
 ## D. Genesis (Phase F / F.1 surface)
@@ -50,7 +50,7 @@ State at the end of F.2: schema v13; Genesis **disabled**; population 0; cap 2; 
 
 | What | How |
 |---|---|
-| Is each founder thinking, and what does it cost? | `fleet:admin cognition-status <id>`, `cognition-log <id>`, `ledger-economics <id>` |
+| Is each founder thinking, and what does it cost? | `fleet:admin founders-report` (all founders: cash, cognition, 24 h usage, refused forbidden requests, orders awaiting you); `cognition-status <id>`, `cognition-log <id>`, `ledger-economics <id>`; doctor warns on budget pressure and forbidden-tool requests |
 | Stop one founder thinking now | `fleet:admin founder-cognition <id> pause <reason>` (next call refused) |
 | Stop all thinking now | `fleet:admin cognition-disable` |
 | Stop a founder entirely | `agent-hold <id> <reason>` (owner hold) or `mark-dead` (runtimes exit when refused) |

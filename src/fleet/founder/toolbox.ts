@@ -9,19 +9,21 @@
  *      does not conjure a tool);
  *   3. per-tool guards: paths confined to the founder's own workspace (no
  *      absolute paths, no .., no symlink escape), shell commands through the
- *      fleet shell guard, bounded sizes and a 30 s time limit;
+ *      fleet shell guard and then a Landlock sandbox (workspace only, no state
+ *      directory or credential, no TCP; fail closed), bounded sizes and a 30 s
+ *      time limit;
  *   4. fleet-mediated tools go through FleetController with the founder's own
  *      session, where the database enforces again (spend orders, ledger,
  *      knowledge, identity claims).
  * Outputs are returned as UNTRUSTED data.
  */
 
-import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { decideTool, type CapabilityManifest } from "../capabilities.js";
 import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
 import type { ToolCall } from "../cognition/types.js";
+import { runSandboxed } from "./exec-sandbox.js";
 
 export interface ToolboxPorts {
   ledger(): Promise<unknown>;
@@ -56,7 +58,7 @@ export class FounderToolbox {
   private readonly workspace: string;
   private readonly memory: string;
 
-  constructor(private readonly o: { manifest: CapabilityManifest; workspaceDir: string; memoryDir: string; ports: ToolboxPorts; execTimeoutMs?: number }) {
+  constructor(private readonly o: { manifest: CapabilityManifest; workspaceDir: string; memoryDir: string; ports: ToolboxPorts; execTimeoutMs?: number; /** tests only */ sandboxPython?: string }) {
     this.workspace = fs.realpathSync(o.workspaceDir);
     this.memory = fs.realpathSync(o.memoryDir);
   }
@@ -90,37 +92,9 @@ export class FounderToolbox {
     fs.renameSync(`${f}.tmp`, f);
   }
 
-  private exec(command: string): Promise<string> {
-    return new Promise((resolve) => {
-      const child = spawn("/bin/sh", ["-c", command], {
-        cwd: this.workspace,
-        env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: this.workspace, LANG: "C.UTF-8" },
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: true,
-      });
-      let out = "";
-      const add = (d: Buffer) => {
-        if (out.length < MAX_OUTPUT * 2) out += d.toString();
-      };
-      child.stdout.on("data", add);
-      child.stderr.on("data", add);
-      const timer = setTimeout(() => {
-        try {
-          process.kill(-child.pid!, "SIGKILL");
-        } catch {
-          // already gone
-        }
-        out += "\n[killed: time limit]";
-      }, this.o.execTimeoutMs ?? 30_000);
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        resolve(`exit ${code}\n${out}`);
-      });
-      child.on("error", (err) => {
-        clearTimeout(timer);
-        resolve(`error ${err.message}`);
-      });
-    });
+  private async exec(command: string): Promise<{ output: string; unavailable: boolean }> {
+    const r = await runSandboxed(this.workspace, command, { timeoutMs: this.o.execTimeoutMs ?? 30_000, maxOutput: MAX_OUTPUT * 2, python: this.o.sandboxPython });
+    return { output: `exit ${r.code}\n${r.output}${r.timedOut ? "\n[killed: time limit]" : ""}`, unavailable: r.sandboxUnavailable };
   }
 
   async execute(call: ToolCall): Promise<ToolOutcome> {
@@ -155,7 +129,10 @@ export class FounderToolbox {
           if (!command) return refuse("FLEET_BAD_REQUEST", "command required");
           const m = getForbiddenCommandMatch(command);
           if (m) return refuse("FLEET_COMMAND_FORBIDDEN", m.description);
-          return { name: call.name, ok: true, output: clip(await this.exec(command)) };
+          const r = await this.exec(command);
+          // Fail closed: no Landlock domain, no command.
+          if (r.unavailable) return refuse("FLEET_EXEC_SANDBOX_UNAVAILABLE", "the shell sandbox is unavailable on this host; the command did not run");
+          return { name: call.name, ok: true, output: clip(r.output) };
         }
         case "remember_fact": {
           const key = str(a.key, 100);

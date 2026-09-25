@@ -49,6 +49,7 @@ import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safet
 import { DRY_RUN_FORBIDDEN_ENV } from "../dry-run/child.js";
 import { FounderToolbox } from "./toolbox.js";
 import { FounderMind } from "./mind.js";
+import { sandboxSelfTest, type SandboxSelfTest } from "./exec-sandbox.js";
 import {
   FOUNDER_ATTEST_FILE,
   FOUNDER_ATTEST_SCHEME,
@@ -399,6 +400,13 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
       : null;
   const thinkEvery = Math.max(1, opts.thinkEvery ?? (Number(ctx.env.FLEET_FOUNDER_THINK_EVERY) || 1));
   let lastMind: Record<string, unknown> | null = null;
+  // Phase F.3: prove the shell sandbox before the mind may use it (the identity file sits next to the credential).
+  let execSandbox: SandboxSelfTest | null = null;
+  if (mind) {
+    const api = new URL(ctx.identity.apiUrl);
+    execSandbox = await sandboxSelfTest(workspaceDir, path.join(ctx.stateDir, FOUNDER_IDENTITY_FILE), Number(api.port) || (api.protocol === "https:" ? 443 : 80));
+    log(execSandbox.ok ? "founder_exec_sandbox_ok" : "founder_exec_sandbox_failed", { ...execSandbox });
+  }
   const interval = Math.min(60_000, Math.max(1_000, Number(ctx.env.FLEET_FOUNDER_INTERVAL_MS) || 30_000));
   const target = opts.heartbeats ?? 0;
   log("founder_started", { agentId: ctx.agentId, instanceId: ctx.instanceId, commit: ctx.release.commit, manifest: ctx.manifest.manifestId });
@@ -432,7 +440,7 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
       challengesPassed: result.challengesPassed,
       capabilities: { manifestSha256: caps.manifestSha256, matchesCompiled: true, reproductionExecutable: caps.reproductionExecutable, paymentExecutable: caps.paymentExecutable },
       ledger: ledger ? { cash: ledger.cash, genesisAllocation: ledger.genesisAllocation, externalCustomerRevenue: ledger.externalCustomerRevenue, lifetimeContribution: ledger.lifetimeContribution } : null,
-      agentLoop: mind ? { mode: "controller", turns: result.mindTurns, refusals: result.mindRefusals, last: lastMind } : "disabled",
+      agentLoop: mind ? { mode: "controller", turns: result.mindTurns, refusals: result.mindRefusals, last: lastMind, execSandbox } : "disabled",
       home: os.homedir() === ctx.stateDir,
     });
     if (target === 0 || result.heartbeats < target) await pause(interval, opts.signal);

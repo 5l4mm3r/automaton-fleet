@@ -86,7 +86,7 @@ actor that is not `operator:<name>`, and `fleet_require_operator_approver` refus
 | One founder affects another | Separate switches, ledgers, logs, workspaces, memory and uids. Rehearsal: pausing A does not stop B |
 | Internet access | None in F.2: the units are loopback-only. The egress proxy (deny-all default, allow-list, 443 only, no IP literals, DNS-rebinding guard against private/metadata addresses, per-founder authentication, audit, CONNECT only) is built and tested **but not deployed** |
 
-Residual risks (documented; owner decisions before a real provider):
+Residual risks (documented; owner decisions before a real provider). **Update F.3:** the first is closed: founder shell commands now run in a Landlock domain (`docs/design/phase-f3-launch-hardening.md`).
 - The shell runs as the founder's uid, so it can read the founder's own credential file. Mitigated by
   redaction, the gateway secret check and the loopback-only founder credential. Transformed encodings are
   caught only by the loopback restriction. A per-exec sub-sandbox (separate uid or mount namespace) is a

@@ -506,6 +506,7 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
       expect(r.founders).toHaveLength(2);
       expect(r.founders.every((f) => f.heartbeats >= 3 && f.challengesPassed >= 1)).toBe(true);
       expect(r.checks.map((c) => c.name)).toEqual(expect.arrayContaining([
+        "each founder's shell runs in its Landlock sandbox (own state and credential unreadable, no TCP)",
         "founder cognition is off until the owner switches it on",
         "both founders think through the controller and pay from their own ledger",
         "forbidden tools and a planted prompt injection are refused mid-loop",

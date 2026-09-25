@@ -1029,7 +1029,10 @@ export class PgFleetStore {
   }
 
   /** Schema v13: founder cognition switches and today's inference usage (null before v13). */
-  async cognitionOverview(): Promise<{ enabled: boolean; provider: string; model: string; foundersEnabled: number; foundersPaused: number; callsToday: number; chargedTodayCents: number; inFlight: number } | null> {
+  async cognitionOverview(founderToolNames: readonly string[] = []): Promise<{
+    enabled: boolean; provider: string; model: string; foundersEnabled: number; foundersPaused: number; callsToday: number; chargedTodayCents: number; inFlight: number;
+    forbiddenRequests24h: number; foundersNearBudget: number;
+  } | null> {
     try {
       return await this.read(async (c) => {
         const r = await c.query(
@@ -1038,8 +1041,17 @@ export class PgFleetStore {
                   (SELECT count(*) FROM fleet_founder_cognition WHERE paused) AS fpaused,
                   (SELECT count(*) FROM fleet_cognition_log WHERE at > now() - interval '1 day') AS calls,
                   (SELECT COALESCE(sum(charged_cents), 0) FROM fleet_cognition_log WHERE at > now() - interval '1 day') AS charged,
-                  (SELECT count(*) FROM fleet_cognition_inflight) AS inflight
+                  (SELECT count(*) FROM fleet_cognition_inflight) AS inflight,
+                  (SELECT count(*) FROM fleet_cognition_log l, jsonb_array_elements(l.tool_calls) t
+                    WHERE l.at > now() - interval '1 day' AND NOT ((t ->> 'name') = ANY($1::text[]))) AS forbidden,
+                  (SELECT count(*) FROM fleet_agents a WHERE a.origin IN ('genesis_founder','reseed_founder') AND a.status IN ('active','unresponsive')
+                      AND (fleet_cognition_state(a.agent_id) ->> 'founderEnabled')::boolean
+                      -- at ≥80% of the daily budget, or unable to afford one more maximum-length call (the estimate is reserved up front)
+                      AND ((fleet_cognition_state(a.agent_id) ->> 'spentTodayCents')::bigint * 10 >= (fleet_cognition_state(a.agent_id) ->> 'dailyBudgetCents')::bigint * 8
+                        OR (fleet_cognition_state(a.agent_id) ->> 'spentTodayCents')::bigint + ceil(p.max_output_tokens * p.output_microcents_per_token / 1000000.0)::bigint
+                           > (fleet_cognition_state(a.agent_id) ->> 'dailyBudgetCents')::bigint)) AS near_budget
              FROM fleet_cognition_policy p WHERE p.id = 1`,
+          [founderToolNames],
         );
         const x = r.rows[0];
         if (!x) return null;
@@ -1052,6 +1064,8 @@ export class PgFleetStore {
           callsToday: Number(x.calls),
           chargedTodayCents: Number(x.charged),
           inFlight: Number(x.inflight),
+          forbiddenRequests24h: Number(x.forbidden),
+          foundersNearBudget: Number(x.near_budget),
         };
       });
     } catch {

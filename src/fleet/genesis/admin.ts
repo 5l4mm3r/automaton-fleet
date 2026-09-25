@@ -102,6 +102,46 @@ export class GenesisOps {
     return this.one<Record<string, unknown>>(`SELECT fleet_cognition_state($1) AS r`, [agentId]);
   }
 
+  /**
+   * Phase F.3 owner monitoring: one row per founder — lifecycle, own economics,
+   * cognition switches and usage, forbidden tool requests the model made (all
+   * refused by the runtime) and spend orders awaiting a decision.
+   */
+  async foundersReport(founderToolNames: readonly string[]): Promise<Array<Record<string, unknown>>> {
+    const r = await this.db.query(
+      `SELECT a.agent_id, a.status, a.origin, a.operator_hold_at IS NOT NULL AS held,
+              fleet_agent_economics(a.agent_id) AS economics,
+              fleet_cognition_state(a.agent_id) AS cognition,
+              (SELECT count(*) FROM fleet_cognition_log l WHERE l.agent_id = a.agent_id AND l.at > now() - interval '1 day')::int AS calls_24h,
+              (SELECT COALESCE(sum(charged_cents), 0) FROM fleet_cognition_log l WHERE l.agent_id = a.agent_id AND l.at > now() - interval '1 day')::bigint AS charged_24h,
+              (SELECT COALESCE(jsonb_object_agg(n, c), '{}'::jsonb) FROM (
+                 SELECT t ->> 'name' AS n, count(*) AS c FROM fleet_cognition_log l, jsonb_array_elements(l.tool_calls) t
+                  WHERE l.agent_id = a.agent_id AND l.at > now() - interval '1 day' AND NOT ((t ->> 'name') = ANY($1::text[]))
+                  GROUP BY 1) x) AS forbidden_24h,
+              (SELECT count(*) FROM fleet_payment_orders o WHERE o.agent_id = a.agent_id AND o.status IN ('requested','awaiting_owner'))::int AS orders_awaiting
+         FROM fleet_agents a WHERE a.origin IN ('genesis_founder','reseed_founder') ORDER BY a.agent_id`,
+      [founderToolNames],
+    );
+    return r.rows.map((x) => ({
+      agentId: x.agent_id,
+      status: x.status,
+      held: x.held,
+      cash: x.economics?.cash ?? null,
+      survivalEquity: x.economics?.survivalEquity ?? null,
+      cognition: {
+        enabled: x.cognition?.policyEnabled === true && x.cognition?.founderEnabled === true,
+        paused: x.cognition?.paused === true,
+        dailyBudgetCents: x.cognition?.dailyBudgetCents,
+        spentTodayCents: x.cognition?.spentTodayCents,
+        turnsLastHour: x.cognition?.turnsLastHour,
+      },
+      calls24h: x.calls_24h,
+      charged24hCents: Number(x.charged_24h),
+      forbiddenRequests24h: x.forbidden_24h,
+      ordersAwaitingDecision: x.orders_awaiting,
+    }));
+  }
+
   async cognitionLog(agentId: string | null, limit = 50): Promise<Array<Record<string, unknown>>> {
     const r = await this.db.query(
       `SELECT to_jsonb(l) AS r FROM fleet_cognition_log l WHERE ($1::text IS NULL OR agent_id = $1) ORDER BY seq DESC LIMIT $2`,

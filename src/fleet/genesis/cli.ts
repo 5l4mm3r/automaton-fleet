@@ -27,18 +27,21 @@
  *   founder-cognition <agentId> enable|disable|pause|resume [--daily-budget N] [--turns-per-hour N] <reason…>
  *   cognition-status <agentId>                                        limits and today's usage
  *   cognition-log [agentId] [--limit N]                               the trusted inference log
+ *   founders-report                                                   per founder: status, cash, cognition, 24 h usage,
+ *                                                                     forbidden tool requests (refused), orders awaiting you
  */
 
 import crypto from "crypto";
 import fs from "fs";
 import { runGenesisDryRun } from "./dry-run.js";
+import { FOUNDER_TOOLS } from "../cognition/types.js";
 import type { AttestationEvidence, PgGenesisAdmin } from "./admin.js";
 
 export const GENESIS_COMMANDS = new Set([
   "genesis-policy", "genesis-list", "genesis-status", "genesis-dry-run", "genesis-enable", "genesis-disable", "genesis-propose",
   "genesis-approve", "genesis-provision", "genesis-attest", "genesis-fail", "genesis-fund", "genesis-activate", "genesis-abort",
   "reproduction-eligibility", "knowledge-review", "identity-claim-decide",
-  "cognition-policy", "cognition-enable", "cognition-disable", "founder-cognition", "cognition-status", "cognition-log",
+  "cognition-policy", "cognition-enable", "cognition-disable", "founder-cognition", "cognition-status", "cognition-log", "founders-report",
 ]);
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -131,6 +134,8 @@ export async function runGenesisCommand(
     case "cognition-status":
       if (!p[0] || !ULID.test(p[0])) throw new Error("usage: cognition-status <agentId>");
       return ok(await g.cognitionState(p[0]));
+    case "founders-report":
+      return ok(await g.foundersReport(FOUNDER_TOOLS.map((t) => t.name)));
     case "cognition-log":
       if (p[0] !== undefined && !ULID.test(p[0])) throw new Error("usage: cognition-log [agentId] [--limit N]");
       return ok(await g.cognitionLog(p[0] ?? null, optInt("--limit", 1) ?? 50));
