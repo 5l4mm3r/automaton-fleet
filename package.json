@@ -65,7 +65,7 @@
     "test:redact": "vitest run src/__tests__/fleet/redact.test.ts src/__tests__/fleet/redact-sinks.test.ts",
     "test:operator": "vitest run src/__tests__/fleet/operator-canonical.test.ts src/__tests__/fleet/operator-pg.test.ts src/__tests__/fleet/operator-server.test.ts",
     "test:bridge": "vitest run src/__tests__/fleet/bridge-unit.test.ts src/__tests__/fleet/bridge-tunnel.test.ts src/__tests__/fleet/bridge-integration.test.ts src/__tests__/fleet/bridge-mcp.test.ts",
-    "test:chatgpt": "vitest run src/__tests__/fleet/chatgpt-adapter.test.ts src/__tests__/fleet/chatgpt-adapter-imports.test.ts",
+    "test:chatgpt": "vitest run src/__tests__/fleet/chatgpt-adapter.test.ts src/__tests__/fleet/chatgpt-adapter-imports.test.ts src/__tests__/fleet/chatgpt-tunnel-key.test.ts",
     "test:ci": "vitest run --reporter=verbose",
     "clean": "rm -rf dist && pnpm -r clean"
   },
