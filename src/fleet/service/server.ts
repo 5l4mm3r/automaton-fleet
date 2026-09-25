@@ -51,6 +51,8 @@ import { RateLimiter, type RateLimit } from "./rate-limit.js";
 export { SIG_HEADERS, canonicalRequest, signRequest } from "./server-signing.js";
 import { SIG_HEADERS, signRequest } from "./server-signing.js";
 import { parseFounderAttestHeader } from "../founder/evidence.js";
+import { CognitionError, infer as inferCognition } from "../cognition/gateway.js";
+import type { CognitionProvider } from "../cognition/types.js";
 
 interface RequestCtx {
   raw: Buffer;
@@ -120,6 +122,8 @@ export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Obj
   "POST /v1/identity/request": { auth: "session", witness: false },
   "POST /v1/identity/fact": { auth: "session", witness: false },
   "POST /v1/genesis/runtime-evidence": { auth: "genesis_attest", witness: false },
+  "POST /v1/cognition/infer": { auth: "session", witness: false },
+  "GET /v1/cognition/status": { auth: "session", witness: false },
 });
 
 /**
@@ -185,6 +189,8 @@ export interface FleetServiceOptions {
     unverifiedPerIp?: RateLimit;
     unverifiedGlobal?: RateLimit;
   };
+  /** Phase F.2: the inference provider behind POST /v1/cognition/infer (null = none configured; founders cannot think). */
+  cognitionProvider?: CognitionProvider | null;
   /** TLS material; when set, listen() serves HTTPS. */
   tls?: { cert: string | Buffer; key: string | Buffer };
   /**
@@ -834,6 +840,14 @@ export class FleetService {
       return { agent: who.agent, dead: who.dead };
     }
 
+    if (method === "GET" && path === "/v1/cognition/status") {
+      const { agentId, token } = await this.credentials(req, path, ctx);
+      const r = await agent.cognitionStatus(agentId, token);
+      if (!r.ok) throw FleetService.refusal(r, "cognition status refused");
+      const { ok: _ok, ...status } = r;
+      return { cognition: status };
+    }
+
     if (method === "GET" && path === "/v1/capabilities") {
       // Schema v11: this agent's capability manifest (authoritative copy in the database).
       const { agentId, token } = await this.credentials(req, path, ctx);
@@ -861,6 +875,16 @@ export class FleetService {
         // agent's session budget; an unproven one pays the pre-database budgets instead.
         if (ctx.credHash && this.isKnownCred(ctx.credHash)) this.rateLimit(this.sessions, agentId);
         else this.spendUnverified(ctx);
+        // Phase F.2: founders run on the controller host, so a founder credential is honoured
+        // only from a loopback peer. A founder token that leaked (e.g. through a model
+        // provider) cannot open a session over the public listener.
+        if (!LOOPBACK_PEERS.has(req.socket.remoteAddress ?? "")) {
+          const caps = await agent.capabilities(agentId, token);
+          if (caps.ok && (caps.origin === "genesis_founder" || caps.origin === "reseed_founder")) {
+            await this.recordDb("founder_remote_session_refused", agentId, { ip: ctx.ip });
+            throw new HttpError(403, "FLEET_FOUNDER_LOOPBACK_ONLY", "founder credentials are accepted only on the controller host");
+          }
+        }
         const sessionToken = mintSessionToken(agentId);
         const r = await agent.openSession(agentId, token, hashAgentToken(sessionToken));
         if (!r.ok) {
@@ -999,6 +1023,30 @@ export class FleetService {
         }
         this.audit("genesis_runtime_evidence", cred.agentId, { replay: r.replay === true });
         return { ok: true, replay: r.replay === true };
+      }
+
+      case "/v1/cognition/infer": {
+        // Phase F.2: the founder's only way to think. The controller holds the provider credential, meters and records.
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        try {
+          const r = await inferCognition(
+            {
+              capabilities: (a, t) => agent.capabilities(a, t),
+              cognitionStatus: (a, t) => agent.cognitionStatus(a, t),
+              authorize: (a, e) => admin.cognitionAuthorize(a, e),
+              record: (a, id, x) => admin.cognitionRecord(a, id, x),
+            },
+            this.opts.cognitionProvider ?? null,
+            agentId,
+            token,
+            body,
+          );
+          this.audit("cognition_inference", agentId, { requestId: r.requestId, chargedCents: r.chargedCents, tools: r.toolCalls.length });
+          return r;
+        } catch (err) {
+          if (err instanceof CognitionError) throw new HttpError(err.status, err.code, err.message);
+          throw err;
+        }
       }
 
       case "/v1/knowledge/list": {

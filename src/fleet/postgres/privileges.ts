@@ -285,6 +285,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   if (owner) problems.push(...(await operatorSurfaceProblems(db, schema)));
   if (owner) problems.push(...(await ledgerSurfaceProblems(db, schema)));
   if (owner) problems.push(...(await genesisSurfaceProblems(db, schema)));
+  if (owner) problems.push(...(await cognitionSurfaceProblems(db, schema)));
 
   return { ok: problems.length === 0, schema, owner, database, problems, roles, operatorRoles: operatorState, custodyRoles: custodyState };
 }
@@ -602,6 +603,63 @@ export async function genesisSurfaceProblems(db: Queryable, schema: string): Pro
     for (const c of ["reproduction", "custody.payment_execution", "self_modification", "tool.discovery", "compute.provisioning"]) {
       const row = cls.rows.find((r) => r.class === c);
       if (!row || row.grantable) problems.push(`genesis surface: capability ${c} must exist and not be grantable`);
+    }
+  }
+  return [...new Set(problems)];
+}
+
+/**
+ * Schema v13 founder-cognition invariants (only once v13 exists):
+ *  - cognition cannot be enabled without a provider (CHECK constraint);
+ *  - the trusted inference log is append-only (row and TRUNCATE triggers), the
+ *    policy/switch rows cannot be deleted, and death/quarantine stops cognition;
+ *  - only svc_cognition_record writes the log and only the owner functions (and
+ *    the lifecycle trigger) write the switches.
+ */
+export async function cognitionSurfaceProblems(db: Queryable, schema: string): Promise<string[]> {
+  const problems: string[] = [];
+  const present = await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = 'fleet_cognition_log'`,
+    [schema],
+  );
+  if (!present.rows[0]?.n) return problems;
+  const checks = await db.query<{ t: string }>(
+    `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1 AND c.relname = 'fleet_cognition_policy' AND k.contype = 'c'`,
+    [schema],
+  );
+  if (!checks.rows.some((r) => /NOT cognition_enabled\) OR \(provider <> 'none'/.test(r.t))) problems.push("cognition surface: cognition can be enabled without a provider (CHECK missing)");
+  const trig = await db.query<{ t: string }>(
+    `SELECT c.relname || ':' || tg.tgname AS t FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1 AND NOT tg.tgisinternal AND tg.tgenabled <> 'D'`,
+    [schema],
+  );
+  const have = new Set(trig.rows.map((r) => r.t));
+  for (const need of [
+    "fleet_cognition_log:fleet_cognition_log_no_change",
+    "fleet_cognition_log:fleet_cognition_log_no_truncate",
+    "fleet_cognition_policy:fleet_cognition_policy_no_delete",
+    "fleet_founder_cognition:fleet_founder_cognition_no_delete",
+    "fleet_agents:fleet_agents_cognition_stop",
+  ]) {
+    if (!have.has(need)) problems.push(`cognition surface: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  const fns = await db.query<{ name: string; src: string }>(
+    `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`,
+    [schema],
+  );
+  const writers: Record<string, Set<string>> = {
+    fleet_cognition_log: new Set(["svc_cognition_record"]),
+    fleet_cognition_policy: new Set(["fleet_cognition_set_policy"]),
+    fleet_founder_cognition: new Set(["fleet_founder_cognition_set", "fleet_agents_cognition_stop"]),
+  };
+  for (const f of fns.rows) {
+    for (const t of writeTargets(f.src)) {
+      if (writers[t] && !writers[t].has(f.name)) problems.push(`cognition surface: ${f.name} writes a cognition control table`);
+    }
+    // Dynamic SQL naming a cognition table would hide its writes from the check above.
+    if (/\bEXECUTE\b/i.test(codeOf(f.src)) && /fleet_(cognition_log|cognition_policy|founder_cognition)\b/i.test(f.src)) {
+      problems.push(`cognition surface: ${f.name} uses dynamic SQL near a cognition control table`);
     }
   }
   return [...new Set(problems)];

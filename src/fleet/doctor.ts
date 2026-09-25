@@ -393,6 +393,17 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         gv.reproductionExecutionEnabled ? "fail" : "pass",
         gv.reproductionExecutionEnabled ? "EXECUTION ENABLED — must be pinned off" : "execution constitutionally disabled; eligibility is assessment only",
       );
+      // Phase F.2 (schema v13): founders think only through the controller gateway, under owner switches.
+      const cv = await store.cognitionOverview();
+      facts.cognition = cv;
+      if (cv) {
+        add(
+          "founder cognition",
+          "pass",
+          `${cv.enabled ? `ENABLED by the owner (provider ${cv.provider}, model ${cv.model})` : `disabled (owner gate; provider ${cv.provider})`}; ` +
+            `${cv.foundersEnabled} founder(s) enabled, ${cv.foundersPaused} paused; ${cv.callsToday} inference call(s) in 24 h, ${cv.chargedTodayCents}¢ charged`,
+        );
+      }
       // Phase F.1: founder runtime instances on this host must match the living founders in the registry.
       const running = founderRuntimeUnits();
       if (running !== null) {

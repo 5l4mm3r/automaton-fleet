@@ -65,7 +65,11 @@ describe("founder runtime preflight (unit)", () => {
     expect(fail({}, [secret])).toMatch(/admin\.env is readable by this founder/);
     expect(fail({ FLEET_CAPABILITY_MANIFEST: "" })).toMatch(/not a compiled manifest/);
     expect(fail({ FLEET_CAPABILITY_MANIFEST: "founder-v2" })).toMatch(/not a compiled manifest/);
-    expect(fail({ FLEET_FOUNDER_AGENT_LOOP: "enabled" })).toMatch(/agent loop is not enabled/);
+    expect(fail({ FLEET_FOUNDER_AGENT_LOOP: "enabled" })).toMatch(/only 'disabled' or 'controller'/);
+    expect(fail({ FLEET_FOUNDER_AGENT_LOOP: "local" })).toMatch(/only 'disabled' or 'controller'/);
+    expect(fail({ FLEET_FOUNDER_AGENT_LOOP: "controller" })).not.toMatch(/AGENT_LOOP|inference provider/);
+    expect(fail({ FLEET_COGNITION_API_KEY_FILE: "/x" })).toMatch(/inference provider configuration/);
+    expect(fail({ OPENAI_API_KEY: "sk-x" })).toMatch(/inference provider configuration/);
     expect(fail({ CONWAY_API_KEY: "x" })).toMatch(/CONWAY_API_KEY present/);
     expect(fail({ FLEET_ADMIN_DATABASE_URL: "postgresql://x" })).toMatch(/FLEET_ADMIN_DATABASE_URL present/);
     expect(fail({ REAL_PAYMENTS_ENABLED: "true" })).toMatch(/REAL_PAYMENTS_ENABLED=true/);
@@ -241,7 +245,7 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
         agentId: [a, b][i],
         capabilities: { matchesCompiled: true, reproductionExecutable: false, paymentExecutable: false },
         ledger: { cash: 2_500, genesisAllocation: 2_500, externalCustomerRevenue: 0, lifetimeContribution: 0 },
-        agentLoop: "not started (Phase F.1)",
+        agentLoop: "disabled",
       });
     }
     expect(await population()).toBe(2);
@@ -484,11 +488,12 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
     await reset();
   }, 240_000);
 
-  it("the real-runtime rehearsal (throwaway registry, process host) passes and leaves the main registry untouched", async () => {
+  it("the real-runtime rehearsal (throwaway registry, process host, founder cognition) passes and leaves the main registry untouched", async () => {
     const reg = await startEphemeralPg(PG_BIN!);
     const before = await population();
     try {
-      const host = newHost();
+      // As the shipped unit: the founder thinks only through the controller.
+      const host = newHost({ FLEET_FOUNDER_AGENT_LOOP: "controller" });
       const r = await runFounderRehearsal({
         registry: { ownerUrl: reg.ownerUrl, serviceUrl: reg.serviceUrl, agentUrl: reg.agentUrl },
         host,
@@ -500,11 +505,18 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
       expect(r.pass).toBe(true);
       expect(r.founders).toHaveLength(2);
       expect(r.founders.every((f) => f.heartbeats >= 3 && f.challengesPassed >= 1)).toBe(true);
+      expect(r.checks.map((c) => c.name)).toEqual(expect.arrayContaining([
+        "founder cognition is off until the owner switches it on",
+        "both founders think through the controller and pay from their own ledger",
+        "forbidden tools and a planted prompt injection are refused mid-loop",
+        "pausing one founder stops it at once; the other continues",
+        "switching cognition off stops every founder",
+      ]));
     } finally {
       reg.stop();
     }
     expect(await population()).toBe(before);
-  }, 240_000);
+  }, 360_000);
 });
 
 void hashAgentToken;

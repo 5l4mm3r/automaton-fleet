@@ -143,7 +143,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
   // ── Schema, model and privileges ─────────────────────────────
 
   it("migrates to v10 with custody execution constitutionally pinned off and a clean privilege audit", async () => {
-    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(12);
+    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(13);
     const m = await ledger.model();
     expect(m).toMatchObject({ ledgerAuthoritative: true, custodyExecutionEnabled: false, ownerApprovalThresholdCents: 10000, strongAuthThresholdCents: 50000 });
     // Not an ordinary economic setting: even the owner cannot turn it on without a migration.
@@ -553,7 +553,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(order(r).status).toBe("reserved");
     expect((await svc.query(`SELECT fleet.svc_issue_payment_instruction($1) AS r`, [order(r).orderId])).rows[0].r).toEqual({ ok: false, code: "FLEET_CUSTODY_EXECUTION_DISABLED" });
     expect((await custody.query(`SELECT fleet.cx_claim_instruction('executor', $1) AS r`, [sha256Hex("lease")])).rows[0].r).toEqual({ ok: false, code: "FLEET_CUSTODY_EXECUTION_DISABLED" });
-    expect((await custody.query(`SELECT fleet.cx_ping() AS r`)).rows[0].r).toMatchObject({ schemaVersion: 12, executionEnabled: false, issued: 0, claimed: 0 });
+    expect((await custody.query(`SELECT fleet.cx_ping() AS r`)).rows[0].r).toMatchObject({ schemaVersion: 13, executionEnabled: false, issued: 0, claimed: 0 });
     expect(await pgCode(owner.query(
       `INSERT INTO fleet.fleet_payment_instructions (instruction_id, order_id, amount_cents, destination_id, rail, instruction_sha256, issued_by)
        VALUES (gen_random_uuid(), $1, 50, $2, 'evm_usdc', repeat('a',64), 'owner')`, [order(r).orderId, payee],
@@ -864,9 +864,9 @@ describe.skipIf(!PG_BIN)("schema v9 -> v10 on a production-shaped v9 registry", 
       await owner.query(`INSERT INTO fleet.fleet_treasury_ledger (kind, amount_cents, status, recorded_by) VALUES ('owner_funding_in', 1000, 'recorded', 'operator:x')`);
       const legacyBefore = (await owner.query(`SELECT string_agg(row_to_json(x)::text, E'\\n' ORDER BY x.entry_id) AS s, count(*)::int AS n FROM fleet.fleet_agent_ledger x`)).rows[0];
       const eventsBefore = (await owner.query(`SELECT count(*)::int AS n FROM fleet.fleet_events`)).rows[0].n;
-      expect(await store.migrateCheck()).toEqual({ currentVersion: 9, resultingVersion: 12, wouldApply: [10, 11, 12] });
+      expect(await store.migrateCheck()).toEqual({ currentVersion: 9, resultingVersion: 13, wouldApply: [10, 11, 12, 13] });
       expect((await owner.query(`SELECT to_regclass('fleet.fleet_ledger_journal') AS r`)).rows[0].r).toBeNull(); // rolled back
-      expect(await store.migrate()).toEqual([10, 11, 12]);
+      expect(await store.migrate()).toEqual([10, 11, 12, 13]);
       expect(await store.migrate()).toEqual([]);
       const digest = (await owner.query(`SELECT row_count, rows_sha256 FROM fleet.fleet_legacy_economics WHERE table_name = 'fleet_agent_ledger'`)).rows[0];
       expect(Number(digest.row_count)).toBe(legacyBefore.n);

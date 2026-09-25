@@ -112,6 +112,13 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   manage_dns: "website.domain",
   git_push: "external.publish",
   update_agent_card: "external.publish",
+  // Phase F.2 founder toolbox (fleet-mediated)
+  list_files: "research.read",
+  check_ledger: "ledger.read",
+  request_spend: "spend.request",
+  propose_knowledge: "knowledge.propose",
+  read_knowledge: "knowledge.read",
+  request_identity_fact: "identity.claim_request",
   // constitutional exclusions
   edit_own_file: "self_modification",
   update_soul: "self_modification",

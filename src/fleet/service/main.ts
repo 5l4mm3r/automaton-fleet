@@ -55,6 +55,8 @@ import {
 } from "../secret-files.js";
 import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "../runtime.js";
 import { FleetService, type AuditEntry, type ReadinessCheck } from "./server.js";
+import { OpenAICompatibleProvider, ScriptedProvider } from "../cognition/providers.js";
+import type { CognitionProvider } from "../cognition/types.js";
 import { createAuditSink, createJsonLogger, type Logger } from "./log.js";
 
 function userOf(dsn: string): string | null {
@@ -169,6 +171,29 @@ export function loadRemoteConfig(e: Record<string, string | undefined>, tls: { c
   return { hostname, publicListen: publicListenRaw ? parseListen(publicListenRaw, { remoteAllowed: true }) : null, allowedOrigins: origins };
 }
 
+/**
+ * Phase F.2: the controller's inference provider (founders never hold one).
+ * Unset / "none" (the production default) → no provider: every inference is
+ * refused. "scripted" is the deterministic, credential-free rehearsal model.
+ * "openai_compatible" needs FLEET_COGNITION_BASE_URL, FLEET_COGNITION_MODEL and
+ * FLEET_COGNITION_API_KEY_FILE (strict secret-file checks; the key is never
+ * logged). The registry's owner switch must also name the same provider.
+ */
+export function loadCognitionProvider(e: Record<string, string | undefined>): CognitionProvider | null {
+  const id = e.FLEET_COGNITION_PROVIDER?.trim() || "none";
+  if (id === "none") return null;
+  if (id === "scripted") return new ScriptedProvider(e.FLEET_COGNITION_MODEL?.trim() || undefined);
+  if (id !== "openai_compatible") throw new Error(`FLEET_COGNITION_PROVIDER must be none, scripted or openai_compatible (got ${id}).`);
+  const baseUrl = e.FLEET_COGNITION_BASE_URL?.trim() ?? "";
+  const model = e.FLEET_COGNITION_MODEL?.trim() ?? "";
+  const keyFile = e.FLEET_COGNITION_API_KEY_FILE?.trim() ?? "";
+  if (!baseUrl || !model || !keyFile) throw new Error("FLEET_COGNITION_PROVIDER=openai_compatible requires FLEET_COGNITION_BASE_URL, FLEET_COGNITION_MODEL and FLEET_COGNITION_API_KEY_FILE.");
+  const problems = secretFileProblems(keyFile);
+  if (problems.length) throw new Error(`Refusing the inference credential: ${problems.join("; ")}`);
+  const apiKey = fs.readFileSync(keyFile, "utf8").trim();
+  return new OpenAICompatibleProvider({ baseUrl, apiKey, model });
+}
+
 /** Refuse to run as root, or as anyone but the expected dedicated service user. */
 export function serviceUserProblem(e: Record<string, string | undefined>, who: { uid: number; username: string } = currentUser()): string | null {
   if (who.uid === 0) return "The fleet service must not run as root.";
@@ -256,7 +281,9 @@ export async function startFleetServiceFromEnv(
 
     let privCache: { at: number; problems: string[] } = { at: Date.now(), problems: [] };
     const realReplicationEnabled = e.REAL_REPLICATION_ENABLED?.trim().toLowerCase() === "true";
+    const cognitionProvider = loadCognitionProvider(e);
     const service = new FleetService({
+      cognitionProvider,
       admin: controller,
       agent,
       realReplicationEnabled,
@@ -289,6 +316,7 @@ export async function startFleetServiceFromEnv(
       publicUrl,
       dbUser: who.user,
       realReplicationEnabled,
+      cognitionProvider: cognitionProvider ? `${cognitionProvider.id}:${cognitionProvider.model}` : "none",
       runtimeRelease: release ? `${release.repo}@${release.commit}` : null,
       pid: process.pid,
     });

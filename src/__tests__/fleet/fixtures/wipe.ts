@@ -5,7 +5,8 @@ import type { PoolClient } from "pg";
  * throwaway schema/cluster). Singleton config rows (fleet_state,
  * fleet_treasury_policy) are kept; counters and reaper bookkeeping reset.
  * Schema v10: the economic model, chart of accounts grammar and legacy
- * digests (and, v11, the capability catalogue, Genesis and reproduction policies) are kept; the fleet-scope ledger accounts are restored and the
+ * digests (and, v11, the capability catalogue, Genesis and reproduction policies; v13, the
+ * cognition policy row, reset to its disabled default) are kept; the fleet-scope ledger accounts are restored and the
  * ledger head reset (journals, postings and agent accounts are emptied).
  * Must run inside the caller's transaction.
  */
@@ -14,7 +15,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_state", "fleet_schema_migrations", "fleet_treasury_policy",
     "fleet_economic_model", "fleet_ledger_classes", "fleet_ledger_kinds", "fleet_ledger_rules", "fleet_ledger_head", "fleet_legacy_economics",
     "fleet_capability_classes", "fleet_capability_manifests", "fleet_genesis_policy", "fleet_reproduction_policy",
-    "fleet_operator_state", "fleet_operator_routes",
+    "fleet_operator_state", "fleet_operator_routes", "fleet_cognition_policy",
   ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
@@ -45,5 +46,9 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   if (has.has("quarantined_slots")) sets.push("quarantined_slots = 0");
   if (has.has("reaper_last_run_at")) sets.push("reaper_last_run_at = NULL", "reaper_grace_from = NULL");
   await c.query(`UPDATE "${schema}".fleet_state SET ${sets.join(", ")}`);
+  if (r.rows.some((x) => x.t === "fleet_cognition_policy")) {
+    await c.query(`UPDATE "${schema}".fleet_cognition_policy SET cognition_enabled = false, provider = 'none', model = 'none', max_output_tokens = 1024,
+      input_microcents_per_token = 0, output_microcents_per_token = 0, default_daily_budget_cents = 100, default_max_turns_per_hour = 30, updated_by = 'migration'`);
+  }
   for (const t of all) await c.query(`ALTER TABLE ${t} ENABLE TRIGGER USER`);
 }

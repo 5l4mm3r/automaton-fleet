@@ -1028,6 +1028,37 @@ export class PgFleetStore {
     }
   }
 
+  /** Schema v13: founder cognition switches and today's inference usage (null before v13). */
+  async cognitionOverview(): Promise<{ enabled: boolean; provider: string; model: string; foundersEnabled: number; foundersPaused: number; callsToday: number; chargedTodayCents: number; inFlight: number } | null> {
+    try {
+      return await this.read(async (c) => {
+        const r = await c.query(
+          `SELECT p.cognition_enabled, p.provider, p.model,
+                  (SELECT count(*) FROM fleet_founder_cognition WHERE enabled) AS fen,
+                  (SELECT count(*) FROM fleet_founder_cognition WHERE paused) AS fpaused,
+                  (SELECT count(*) FROM fleet_cognition_log WHERE at > now() - interval '1 day') AS calls,
+                  (SELECT COALESCE(sum(charged_cents), 0) FROM fleet_cognition_log WHERE at > now() - interval '1 day') AS charged,
+                  (SELECT count(*) FROM fleet_cognition_inflight) AS inflight
+             FROM fleet_cognition_policy p WHERE p.id = 1`,
+        );
+        const x = r.rows[0];
+        if (!x) return null;
+        return {
+          enabled: x.cognition_enabled === true,
+          provider: String(x.provider),
+          model: String(x.model),
+          foundersEnabled: Number(x.fen),
+          foundersPaused: Number(x.fpaused),
+          callsToday: Number(x.calls),
+          chargedTodayCents: Number(x.charged),
+          inFlight: Number(x.inflight),
+        };
+      });
+    } catch {
+      return null;
+    }
+  }
+
   // ─── Registration ──────────────────────────────────────────────
 
   /**
@@ -1634,6 +1665,24 @@ export class PgFleetStore {
       );
       return r.rows[0].res;
     });
+  }
+
+  /** Schema v13: authorize one founder inference call (switches, limits, budget, cash, survival, credits). */
+  async cognitionAuthorize(agentId: string, estimateCents: number): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_cognition_authorize($1, $2) AS r", [agentId, estimateCents])).rows[0].r);
+  }
+
+  /** Schema v13: record an inference outcome, charge the founder's ledger, append the trusted cognition log. */
+  async cognitionRecord(
+    agentId: string,
+    requestId: string,
+    r: { outcome: "ok" | "error"; inputTokens: number; outputTokens: number; promptSha256: string; responseSha256: string; toolCalls: unknown[]; errorCode: string | null },
+  ): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) =>
+      (await c.query("SELECT svc_cognition_record($1, $2, $3, $4, $5, $6, $7, $8, $9) AS r", [
+        agentId, requestId, r.outcome, r.inputTokens, r.outputTokens, r.promptSha256, r.responseSha256, JSON.stringify(r.toolCalls), r.errorCode,
+      ])).rows[0].r,
+    );
   }
 
   /** Schema v12: record a provisioned founder process's own attestation evidence (token-bound, set once). */

@@ -18,6 +18,15 @@
  *   reproduction-eligibility <agentId>                             inert assessment (never executable)
  *   knowledge-review <proposalId> promote|reject [note…]
  *   identity-claim-decide <claimId> approve|reject [--ttl S] [--max-reads N]
+ *
+ * Schema v13 founder cognition (owner controls; never run by an AI operator):
+ *   cognition-policy                                                  show the global policy
+ *   cognition-enable <scripted|openai_compatible> <model> [--max-output N] [--in-microcents N] [--out-microcents N]
+ *                    [--daily-budget N] [--turns-per-hour N]           OWNER GATE
+ *   cognition-disable                                                 global kill switch (immediate)
+ *   founder-cognition <agentId> enable|disable|pause|resume [--daily-budget N] [--turns-per-hour N] <reason…>
+ *   cognition-status <agentId>                                        limits and today's usage
+ *   cognition-log [agentId] [--limit N]                               the trusted inference log
  */
 
 import crypto from "crypto";
@@ -29,7 +38,10 @@ export const GENESIS_COMMANDS = new Set([
   "genesis-policy", "genesis-list", "genesis-status", "genesis-dry-run", "genesis-enable", "genesis-disable", "genesis-propose",
   "genesis-approve", "genesis-provision", "genesis-attest", "genesis-fail", "genesis-fund", "genesis-activate", "genesis-abort",
   "reproduction-eligibility", "knowledge-review", "identity-claim-decide",
+  "cognition-policy", "cognition-enable", "cognition-disable", "founder-cognition", "cognition-status", "cognition-log",
 ]);
+
+const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -67,7 +79,11 @@ export async function runGenesisCommand(
   actor: string,
   ctx: { connectionString: string; schema?: string; apiUrl: string | null },
 ): Promise<{ output: unknown; exitCode: number }> {
-  const flags = ["--founders", "--synthetic-cents", "--ttl", "--manifest", "--key", "--evidence-file", "--credential-dir", "--max-reads"];
+  const flags = [
+    "--founders", "--synthetic-cents", "--ttl", "--manifest", "--key", "--evidence-file", "--credential-dir", "--max-reads",
+    "--max-output", "--in-microcents", "--out-microcents", "--daily-budget", "--turns-per-hour", "--limit",
+  ];
+  const optInt = (name: string, min = 0) => (flag(a, name) === undefined ? null : int(flag(a, name), name, min));
   const p = positional(a, flags);
   const ok = (output: unknown) => ({ output, exitCode: 0 });
   switch (cmd) {
@@ -87,6 +103,37 @@ export async function runGenesisCommand(
       });
       return { output: r, exitCode: r.pass ? 0 : 1 };
     }
+    case "cognition-policy":
+      return ok(await g.cognitionPolicy());
+    case "cognition-enable": {
+      if (p[0] !== "scripted" && p[0] !== "openai_compatible") throw new Error("usage: cognition-enable <scripted|openai_compatible> <model> [...]");
+      if (!p[1]) throw new Error("usage: cognition-enable <provider> <model> [...]");
+      return ok(await g.setCognitionPolicy({
+        enabled: true, provider: p[0], model: p[1], maxOutputTokens: optInt("--max-output", 16), inputMicrocents: optInt("--in-microcents"),
+        outputMicrocents: optInt("--out-microcents"), dailyBudgetCents: optInt("--daily-budget"), maxTurnsPerHour: optInt("--turns-per-hour", 1), actor,
+      }));
+    }
+    case "cognition-disable":
+      return ok(await g.setCognitionPolicy({ enabled: false, actor }));
+    case "founder-cognition": {
+      const agentId = p[0];
+      const action = p[1];
+      const reason = p.slice(2).join(" ");
+      if (!agentId || !ULID.test(agentId) || !["enable", "disable", "pause", "resume"].includes(action ?? "") || !reason) {
+        throw new Error("usage: founder-cognition <agentId> enable|disable|pause|resume [--daily-budget N] [--turns-per-hour N] <reason…>");
+      }
+      return ok(await g.setFounderCognition(agentId, {
+        enabled: action === "enable" ? true : action === "disable" ? false : null,
+        paused: action === "pause" ? true : action === "resume" ? false : null,
+        dailyBudgetCents: optInt("--daily-budget"), maxTurnsPerHour: optInt("--turns-per-hour", 1), reason, actor,
+      }));
+    }
+    case "cognition-status":
+      if (!p[0] || !ULID.test(p[0])) throw new Error("usage: cognition-status <agentId>");
+      return ok(await g.cognitionState(p[0]));
+    case "cognition-log":
+      if (p[0] !== undefined && !ULID.test(p[0])) throw new Error("usage: cognition-log [agentId] [--limit N]");
+      return ok(await g.cognitionLog(p[0] ?? null, optInt("--limit", 1) ?? 50));
     case "genesis-enable":
     case "genesis-disable": {
       const reason = p.join(" ");

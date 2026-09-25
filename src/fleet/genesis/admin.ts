@@ -80,6 +80,36 @@ export class GenesisOps {
     return (await this.db.query(sql, params)).rows[0]?.r as T;
   }
 
+  // ─── Schema v13: founder cognition (owner controls) ─────────────────
+  async cognitionPolicy(): Promise<Record<string, unknown>> {
+    return (await this.db.query(`SELECT to_jsonb(p) AS r FROM fleet_cognition_policy p WHERE id = 1`)).rows[0].r;
+  }
+
+  setCognitionPolicy(p: { enabled: boolean; provider?: string | null; model?: string | null; maxOutputTokens?: number | null; inputMicrocents?: number | null; outputMicrocents?: number | null; dailyBudgetCents?: number | null; maxTurnsPerHour?: number | null; actor: string }) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_set_policy($1, $2, $3, $4, $5, $6, $7, $8, $9) AS r`, [
+      p.enabled, p.provider ?? null, p.model ?? null, p.maxOutputTokens ?? null, p.inputMicrocents ?? null, p.outputMicrocents ?? null,
+      p.dailyBudgetCents ?? null, p.maxTurnsPerHour ?? null, p.actor,
+    ]);
+  }
+
+  setFounderCognition(agentId: string, p: { enabled?: boolean | null; paused?: boolean | null; dailyBudgetCents?: number | null; maxTurnsPerHour?: number | null; reason: string; actor: string }) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_founder_cognition_set($1, $2, $3, $4, $5, $6, $7) AS r`, [
+      agentId, p.enabled ?? null, p.paused ?? null, p.dailyBudgetCents ?? null, p.maxTurnsPerHour ?? null, p.reason, p.actor,
+    ]);
+  }
+
+  cognitionState(agentId: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_state($1) AS r`, [agentId]);
+  }
+
+  async cognitionLog(agentId: string | null, limit = 50): Promise<Array<Record<string, unknown>>> {
+    const r = await this.db.query(
+      `SELECT to_jsonb(l) AS r FROM fleet_cognition_log l WHERE ($1::text IS NULL OR agent_id = $1) ORDER BY seq DESC LIMIT $2`,
+      [agentId, Math.min(Math.max(1, limit), 500)],
+    );
+    return r.rows.map((x) => x.r);
+  }
+
   setEnabled(enabled: boolean, actor: string, reason: string) {
     return this.one<{ genesisEnabled: boolean }>(`SELECT fleet_genesis_set_enabled($1, $2, $3) AS r`, [enabled, actor, reason]);
   }

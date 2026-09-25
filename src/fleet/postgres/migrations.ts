@@ -20,8 +20,9 @@ import { V9_SQL } from "./migrations-phase9.js";
 import { V10_SQL } from "./migrations-phase10.js";
 import { V11_SQL } from "./migrations-phase11.js";
 import { V12_SQL } from "./migrations-phase12.js";
+import { V13_SQL } from "./migrations-phase13.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 12;
+export const FLEET_PG_SCHEMA_VERSION = 13;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1128,6 +1129,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 10, name: "treasury_ledger_custody_boundary", sql: V10_SQL },
   { version: 11, name: "genesis_pre_genesis_integration", sql: V11_SQL },
   { version: 12, name: "founder_runtime_attestation", sql: V12_SQL },
+  { version: 13, name: "founder_cognition_gateway", sql: V13_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1153,6 +1155,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_genesis_expire(integer)",
   "svc_settle_estates(integer)",
   "svc_genesis_runtime_evidence(text, text, jsonb)",
+  "svc_cognition_authorize(text, bigint)",
+  "svc_cognition_record(text, uuid, text, integer, integer, text, text, jsonb, text)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */
@@ -1189,6 +1193,7 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_knowledge_list(text, text, bigint, integer)",
   "api_identity_request(text, text, text, text, text)",
   "api_identity_fact(text, text, uuid)",
+  "api_cognition_status(text, text)",
 ]);
 
 /**

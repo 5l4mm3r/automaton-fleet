@@ -41,7 +41,9 @@ Environment=FLEET_CAPABILITY_MANIFEST=founder-v1
 Environment=FLEET_FOUNDER_STATE_DIR=/var/lib/automaton-founders/%i
 Environment=HOME=/var/lib/automaton-founders/%i
 Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/runtime.env
-Environment=FLEET_FOUNDER_AGENT_LOOP=disabled
+# Phase F.2: the founder thinks only through FleetController's gateway, and only while the
+# owner's registry switches (cognition policy, per-founder enable/pause) allow it.
+Environment=FLEET_FOUNDER_AGENT_LOOP=controller
 StateDirectory=automaton-founders/%i
 StateDirectoryMode=0700
 UMask=0077

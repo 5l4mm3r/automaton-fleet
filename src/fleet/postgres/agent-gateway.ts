@@ -239,6 +239,11 @@ export class PgAgentGateway {
     return this.call("api_capabilities", [agentId, token]);
   }
 
+  /** Schema v13: this founder's cognition switches, limits and usage. */
+  async cognitionStatus(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_cognition_status", [agentId, token]);
+  }
+
   async knowledgePropose(agentId: string, token: string, category: string, title: string, content: string): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.call("api_knowledge_propose", [agentId, token, category, title, content]);
   }

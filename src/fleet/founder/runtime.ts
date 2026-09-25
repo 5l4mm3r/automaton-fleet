@@ -47,6 +47,8 @@ import { FleetRegistryUnavailableError } from "../postgres/store.js";
 import { MANIFESTS, NON_GRANTABLE, TOOL_CAPABILITIES, createCapabilityManifestRule, decideTool, manifestSha256, type CapabilityManifest } from "../capabilities.js";
 import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
 import { DRY_RUN_FORBIDDEN_ENV } from "../dry-run/child.js";
+import { FounderToolbox } from "./toolbox.js";
+import { FounderMind } from "./mind.js";
 import {
   FOUNDER_ATTEST_FILE,
   FOUNDER_ATTEST_SCHEME,
@@ -99,6 +101,8 @@ export interface FounderRuntimeOptions {
   signal?: AbortSignal;
   /** Active mode: heartbeats to send (0 = until stopped). */
   heartbeats?: number;
+  /** Active mode: think on every Nth heartbeat (default FLEET_FOUNDER_THINK_EVERY or 1). */
+  thinkEvery?: number;
 }
 
 export interface FounderRuntimeResult {
@@ -107,6 +111,9 @@ export interface FounderRuntimeResult {
   instanceId: string;
   heartbeats: number;
   challengesPassed: number;
+  /** Mind turns that actually ran (controller cognition). */
+  mindTurns?: number;
+  mindRefusals?: number;
 }
 
 interface Context {
@@ -172,9 +179,15 @@ export function founderPreflight(opts: FounderRuntimeOptions = {}): Context {
   const manifest = Object.prototype.hasOwnProperty.call(MANIFESTS, manifestId) ? MANIFESTS[manifestId] : null;
   if (!manifest) problems.push(`FLEET_CAPABILITY_MANIFEST ${manifestId || "(missing)"} is not a compiled manifest`);
   if (!createCapabilityManifestRule(env)) problems.push("the capability manifest policy rule is not active");
-  if (env.FLEET_FOUNDER_AGENT_LOOP && env.FLEET_FOUNDER_AGENT_LOOP !== "disabled") {
-    problems.push("FLEET_FOUNDER_AGENT_LOOP: the autonomous agent loop is not enabled in this phase (inference provider and egress are owner decisions)");
+  // "controller": the founder may think, but only through FleetController's
+  // gateway, and only while the owner's registry switches allow it.
+  if (env.FLEET_FOUNDER_AGENT_LOOP && env.FLEET_FOUNDER_AGENT_LOOP !== "disabled" && env.FLEET_FOUNDER_AGENT_LOOP !== "controller") {
+    problems.push("FLEET_FOUNDER_AGENT_LOOP: only 'disabled' or 'controller' (cognition mediated by FleetController) are valid");
   }
+
+  // Founders never hold an inference provider or its credential: the controller does.
+  const providerEnv = Object.keys(env).filter((k) => env[k] && (/^FLEET_COGNITION_/.test(k) || /^(OPENAI|ANTHROPIC|CONWAY|OPENROUTER|GROQ|MISTRAL|GEMINI|GOOGLE)_API_KEY$/.test(k)));
+  if (providerEnv.length) problems.push(`inference provider configuration present in a founder environment (${providerEnv.join(", ")})`);
 
   let rt: Record<string, string | undefined> = {};
   try {
@@ -374,7 +387,18 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
   if (caps.origin !== "genesis_founder" || caps.manifestId !== ctx.manifest.manifestId || caps.manifestSha256 !== manifestSha256(ctx.manifest)) {
     throw new FounderRejectedError("The registry capability manifest differs from this runtime's compiled manifest.");
   }
-  const result: FounderRuntimeResult = { mode: "active", agentId: ctx.agentId, instanceId: ctx.instanceId, heartbeats: 0, challengesPassed: 0 };
+  const result: FounderRuntimeResult = { mode: "active", agentId: ctx.agentId, instanceId: ctx.instanceId, heartbeats: 0, challengesPassed: 0, mindTurns: 0, mindRefusals: 0 };
+  const mind =
+    ctx.env.FLEET_FOUNDER_AGENT_LOOP === "controller"
+      ? new FounderMind({
+          ports: client,
+          stateDir: stateNsDir,
+          log,
+          toolbox: new FounderToolbox({ manifest: ctx.manifest, workspaceDir, memoryDir: path.join(stateNsDir, "memory"), ports: client }),
+        })
+      : null;
+  const thinkEvery = Math.max(1, opts.thinkEvery ?? (Number(ctx.env.FLEET_FOUNDER_THINK_EVERY) || 1));
+  let lastMind: Record<string, unknown> | null = null;
   const interval = Math.min(60_000, Math.max(1_000, Number(ctx.env.FLEET_FOUNDER_INTERVAL_MS) || 30_000));
   const target = opts.heartbeats ?? 0;
   log("founder_started", { agentId: ctx.agentId, instanceId: ctx.instanceId, commit: ctx.release.commit, manifest: ctx.manifest.manifestId });
@@ -395,6 +419,12 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
     }
     result.heartbeats++;
     if (client.lastChallenge && client.lastChallenge !== before && client.lastChallenge.passed) result.challengesPassed++;
+    if (mind && result.heartbeats % thinkEvery === 0) {
+      const t = await mind.turn(`Heartbeat ${result.heartbeats} at ${new Date().toISOString()}. Decide your next step.`);
+      if (t.ran) result.mindTurns!++;
+      result.mindRefusals! += t.refusals.length;
+      lastMind = { ran: t.ran, reason: t.reason ?? null, steps: t.steps, tools: t.toolCalls, refusals: t.refusals, chargedCents: t.chargedCents };
+    }
     const ledger = (await client.ledger().catch(() => null)) as Record<string, unknown> | null;
     report({
       mode: "active",
@@ -402,7 +432,7 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
       challengesPassed: result.challengesPassed,
       capabilities: { manifestSha256: caps.manifestSha256, matchesCompiled: true, reproductionExecutable: caps.reproductionExecutable, paymentExecutable: caps.paymentExecutable },
       ledger: ledger ? { cash: ledger.cash, genesisAllocation: ledger.genesisAllocation, externalCustomerRevenue: ledger.externalCustomerRevenue, lifetimeContribution: ledger.lifetimeContribution } : null,
-      agentLoop: "not started (Phase F.1)",
+      agentLoop: mind ? { mode: "controller", turns: result.mindTurns, refusals: result.mindRefusals, last: lastMind } : "disabled",
       home: os.homedir() === ctx.stateDir,
     });
     if (target === 0 || result.heartbeats < target) await pause(interval, opts.signal);

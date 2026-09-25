@@ -317,6 +317,18 @@ export class FleetApiClient implements FleetBackend {
     return (await this.call<{ order: Record<string, unknown> }>("POST", "/v1/spend/cancel", { orderId })).order;
   }
 
+  /** Schema v13: this founder's cognition switches, limits and usage. */
+  async cognitionStatus() {
+    return (await this.call<{ cognition: Record<string, unknown> }>("GET", "/v1/cognition/status")).cognition;
+  }
+
+  /** Schema v13: think once through FleetController (charged to this founder's ledger). */
+  async infer(messages: unknown[]) {
+    return this.call<{ content: string; toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>; usage: { inputTokens: number; outputTokens: number }; chargedCents: number; requestId: string }>(
+      "POST", "/v1/cognition/infer", { messages },
+    );
+  }
+
   /** Schema v11: this agent's capability manifest (origin, allowed classes, digest). */
   async capabilities() {
     return (await this.call<{ capabilities: Record<string, unknown> }>("GET", "/v1/capabilities")).capabilities;
