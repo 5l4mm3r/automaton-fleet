@@ -133,6 +133,8 @@ const PROTECTED_FILES: readonly string[] = Object.freeze([
   "fleet/redact-scan.js",
   "fleet/postgres/migrations-phase8.ts",
   "fleet/postgres/migrations-phase8.js",
+  "fleet/postgres/migrations-phase9.ts",
+  "fleet/postgres/migrations-phase9.js",
   "fleet/bridge/errors.ts",
   "fleet/bridge/errors.js",
   "fleet/bridge/config.ts",

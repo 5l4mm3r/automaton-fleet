@@ -18,7 +18,7 @@ import path from "path";
 import pg from "pg";
 import { ulid } from "ulid";
 import { PgFleetStore } from "../../fleet/postgres/store.js";
-import { FLEET_PG_SCHEMA_VERSION, OPERATOR_API_FUNCTIONS, OPERATOR_READ_FUNCTIONS, PG_MIGRATIONS } from "../../fleet/postgres/migrations.js";
+import { FLEET_PG_SCHEMA_VERSION, OPERATOR_API_FUNCTIONS, OPERATOR_READ_FUNCTIONS, OPERATOR_VOLATILE_FUNCTIONS, PG_MIGRATIONS } from "../../fleet/postgres/migrations.js";
 import { OPERATOR_REQUEST_CAP } from "../../fleet/postgres/migrations-phase8.js";
 import { PgOperatorGateway } from "../../fleet/operator/gateway.js";
 import { PgOperatorAdmin } from "../../fleet/operator/admin.js";
@@ -129,29 +129,30 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
 
   // ── Migration ─────────────────────────────────────────────────
 
-  it("v7 -> v8 on a production-shaped empty registry: exact check (rolled back), apply, idempotent; v8 code refuses v7", async () => {
+  it("v7 -> v8 -> v9 on a production-shaped empty registry: exact check (rolled back), apply, idempotent; v9 code refuses v7", async () => {
     const schema = "mig_v8";
     await toV7(schema);
     const store = new PgFleetStore({ connectionString: pgc.ownerUrl, schema });
     try {
       const h7 = await store.health();
-      expect(h7.ok).toBe(false); // a v8 build refuses a v7 registry (exact version check)
+      expect(h7.ok).toBe(false); // a v9 build refuses a v7 registry (exact version check)
       expect(h7.schemaVersion).toBe(7);
-      expect(await store.migrateCheck()).toEqual({ currentVersion: 7, resultingVersion: 8, wouldApply: [8] });
+      expect(await store.migrateCheck()).toEqual({ currentVersion: 7, resultingVersion: 9, wouldApply: [8, 9] });
       expect(await reg(schema, "fleet_operator_state")).toBeNull(); // rolled back
       const before = await owner.query(`SELECT max_agents, operating_mode, runtime_commit, runtime_build_id, replication_enabled FROM ${schema}.fleet_state`);
-      expect(await store.migrate()).toEqual([8]);
-      expect(FLEET_PG_SCHEMA_VERSION).toBe(8);
-      const h8 = await store.health();
-      expect(h8).toMatchObject({ ok: true, schemaVersion: 8, countersConsistent: true });
+      expect(await store.migrate()).toEqual([8, 9]);
+      expect(FLEET_PG_SCHEMA_VERSION).toBe(9);
+      const h9 = await store.health();
+      expect(h9).toMatchObject({ ok: true, schemaVersion: 9, countersConsistent: true });
       const rows = await owner.query(`SELECT version, name FROM ${schema}.fleet_schema_migrations ORDER BY version`);
-      expect(rows.rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(rows.rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
       expect(rows.rows[7].name).toBe("operator_api_read_only");
+      expect(rows.rows[8].name).toBe("operator_actions_controlled");
       const after = await owner.query(`SELECT max_agents, operating_mode, runtime_commit, runtime_build_id, replication_enabled FROM ${schema}.fleet_state`);
       expect(after.rows).toEqual(before.rows); // business state untouched
-      const st = await owner.query(`SELECT operator_api_enabled, generation, request_count, request_cap FROM ${schema}.fleet_operator_state`);
-      expect(st.rows[0]).toEqual({ operator_api_enabled: false, generation: "0", request_count: "0", request_cap: String(OPERATOR_REQUEST_CAP) });
-      const routes = await owner.query(`SELECT fn FROM ${schema}.fleet_operator_routes ORDER BY fn`);
+      const st = await owner.query(`SELECT operator_api_enabled, operator_actions_enabled, generation, request_count, request_cap FROM ${schema}.fleet_operator_state`);
+      expect(st.rows[0]).toEqual({ operator_api_enabled: false, operator_actions_enabled: false, generation: "0", request_count: "0", request_cap: String(OPERATOR_REQUEST_CAP) });
+      const routes = await owner.query(`SELECT fn FROM ${schema}.fleet_operator_routes WHERE route LIKE 'GET %' ORDER BY fn`);
       expect(routes.rows.map((r) => r.fn)).toEqual([...OPERATOR_READ_FUNCTIONS].sort());
       expect((await store.auditPrivileges()).problems).toEqual([]);
       expect(await store.migrate()).toEqual([]); // idempotent
@@ -173,7 +174,7 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
       expect(await reg(schema, "fleet_operator_state")).toBeNull();
       expect(await reg(schema, "fleet_operator_principals")).toBeNull();
       await owner.query(`DROP TABLE ${schema}.fleet_operator_nonces`);
-      expect(await store.migrate()).toEqual([8]);
+      expect(await store.migrate()).toEqual([8, 9]);
     } finally {
       await store.close();
       await owner.query(`DROP SCHEMA ${schema} CASCADE`);
@@ -188,8 +189,9 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
         WHERE n.nspname = 'fleet' AND has_function_privilege('fleet_operator_login', p.oid, 'EXECUTE')`,
     );
     expect(fns.rows.map((r) => norm(r.sig)).sort()).toEqual(OPERATOR_API_FUNCTIONS.map(norm).sort());
+    const volatile = new Set(OPERATOR_VOLATILE_FUNCTIONS.map(norm));
     for (const r of fns.rows) {
-      if (!r.sig.includes("op_begin_request")) expect(r.vol, r.sig).toBe("s");
+      if (!volatile.has(norm(r.sig))) expect(r.vol, r.sig).toBe("s");
     }
     const tables = await owner.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -260,11 +262,17 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
       expect(p).toMatch(/op_fleet_status\(uuid\) is not STABLE/);
       expect(p).toMatch(/op_fleet_status is volatile/);
 
-      // op_begin_request writing business state is reported.
-      const src = (await owner.query(`SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 AND proname = 'op_begin_request'`, [schema])).rows[0].prosrc as string;
+      // The admission logic (v9: fleet_operator_begin, called by op_begin_request / op_begin_action) writing business state is reported.
+      const src = (await owner.query(`SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 AND proname = 'fleet_operator_begin'`, [schema])).rows[0].prosrc as string;
       const evil = src.replace("RETURN jsonb_build_object('ok', true,", "UPDATE fleet_state SET max_agents = 50;\n  RETURN jsonb_build_object('ok', true,");
+      expect(evil).not.toBe(src);
+      await owner.query(`CREATE OR REPLACE FUNCTION ${schema}.fleet_operator_begin(p_mode text, p_principal text, p_key text, p_route text, p_client_ts_ms bigint, p_nonce text, p_body_sha256 text)
+        RETURNS jsonb LANGUAGE plpgsql SET search_path = ${schema}, pg_temp AS $body$${evil}$body$`);
+      expect(await problems()).toMatch(/fleet_operator_begin writes fleet_state/);
+      // ...and so is the wrapper itself writing business state.
       await owner.query(`CREATE OR REPLACE FUNCTION ${schema}.op_begin_request(p_principal text, p_key text, p_route text, p_client_ts_ms bigint, p_nonce text, p_body_sha256 text)
-        RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = ${schema}, pg_temp AS $body$${evil}$body$`);
+        RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = ${schema}, pg_temp AS $w$ BEGIN UPDATE fleet_state SET max_agents = 50;
+        RETURN fleet_operator_begin('read', p_principal, p_key, p_route, p_client_ts_ms, p_nonce, p_body_sha256); END $w$`);
       expect(await problems()).toMatch(/op_begin_request writes fleet_state/);
     } finally {
       await store.close();
@@ -283,10 +291,10 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
       const whoami = (body: string) =>
         `CREATE OR REPLACE FUNCTION ${schema}.op_whoami(p_request uuid) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
          SET search_path = ${schema}, pg_temp AS $f$ BEGIN ${body}; RETURN '{}'::jsonb; END $f$`;
-      const beginSrc = (await owner.query(`SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 AND proname = 'op_begin_request'`, [schema])).rows[0].prosrc as string;
+      const beginSrc = (await owner.query(`SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 AND proname = 'fleet_operator_begin'`, [schema])).rows[0].prosrc as string;
       const begin = (stmt: string) =>
-        `CREATE OR REPLACE FUNCTION ${schema}.op_begin_request(p_principal text, p_key text, p_route text, p_client_ts_ms bigint, p_nonce text, p_body_sha256 text)
-         RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = ${schema}, pg_temp AS $body$${beginSrc.replace("RETURN jsonb_build_object('ok', true,", `${stmt};\n  RETURN jsonb_build_object('ok', true,`)}$body$`;
+        `CREATE OR REPLACE FUNCTION ${schema}.fleet_operator_begin(p_mode text, p_principal text, p_key text, p_route text, p_client_ts_ms bigint, p_nonce text, p_body_sha256 text)
+         RETURNS jsonb LANGUAGE plpgsql SET search_path = ${schema}, pg_temp AS $body$${beginSrc.replace("RETURN jsonb_build_object('ok', true,", `${stmt};\n  RETURN jsonb_build_object('ok', true,`)}$body$`;
       const cases: Array<[string, string[], RegExp]> = [
         ["read side: dynamic SQL", [whoami(`EXECUTE 'SELECT fleet_' || 'event(''x'', NULL, NULL, ''{}''::jsonb)'`)], /op_whoami uses dynamic SQL/],
         ["read side: quoted call", [whoami(`PERFORM "fleet_event"('x', NULL, NULL, '{}'::jsonb)`)], /op_whoami uses a quoted identifier/],
@@ -307,9 +315,10 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
           [`CREATE SCHEMA zz_other`, `CREATE FUNCTION zz_other.zz_w() RETURNS void LANGUAGE sql AS $w$ SELECT 1 $w$`, whoami(`PERFORM zz_other.zz_w()`)],
           /op_whoami calls zz_w from another schema/,
         ],
-        ["begin: quoted UPDATE target", [begin(`UPDATE "fleet_state" SET max_agents = 50`)], /op_begin_request writes fleet_state/],
-        ["begin: dynamic UPDATE", [begin(`EXECUTE format('UPDATE %I SET max_agents = 50', 'fleet_state')`)], /op_begin_request uses dynamic SQL/],
-        ["begin: MERGE", [begin(`MERGE INTO fleet_state t USING (SELECT 1 AS id) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET max_agents = 50`)], /op_begin_request writes fleet_state/],
+        ["begin: quoted UPDATE target", [begin(`UPDATE "fleet_state" SET max_agents = 50`)], /fleet_operator_begin writes fleet_state/],
+        ["begin: dynamic UPDATE", [begin(`EXECUTE format('UPDATE %I SET max_agents = 50', 'fleet_state')`)], /fleet_operator_begin uses dynamic SQL/],
+        ["begin: MERGE", [begin(`MERGE INTO fleet_state t USING (SELECT 1 AS id) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET max_agents = 50`)], /fleet_operator_begin writes fleet_state/],
+        ["begin: volatile call", [begin(`PERFORM fleet_reap('x')`)], /fleet_operator_begin calls volatile fleet_reap/],
       ];
       for (const [label, stmts, re] of cases) {
         const c = await owner.connect();
@@ -360,7 +369,11 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
     expect(c.principalId).toMatch(/^op_[0-9A-HJKMNP-TV-Z]{26}$/);
     const ev = await owner.query(`SELECT detail::text AS d FROM fleet.fleet_events WHERE event_type = 'operator_principal_enrolled' ORDER BY id DESC LIMIT 1`);
     expect(ev.rows[0].d).not.toContain(c.publicKey); // only the fingerprint is logged
-    await expect(enroll("bridge-chatgpt-x", "bridge_chatgpt", ["ops.read.events"])).rejects.toThrow(/chatgpt_no_events/);
+    // ChatGPT can never hold events (or any D3 scope): refused by the CLI and, independently, by the database.
+    await expect(enroll("bridge-chatgpt-x", "bridge_chatgpt", ["ops.read.events"])).rejects.toThrow(/bridge_chatgpt principal may only hold/);
+    await expect(
+      owner.query(`INSERT INTO fleet.fleet_operator_principals (principal_id, name, kind, scopes, created_by) VALUES ($1, 'bridge-chatgpt-y', 'bridge_chatgpt', ARRAY['ops.read.events'], 'x')`, [`op_${ulid()}`]),
+    ).rejects.toThrow(/chatgpt_no_events|chatgpt_read_only/);
     await expect(enroll("bridge-claude-a", "bridge_claude", ["ops.read.status"])).rejects.toThrow(/duplicate key/);
     await expect(owner.query(`INSERT INTO fleet.fleet_operator_principals (principal_id, name, kind, scopes, created_by) VALUES ($1, 'dup-scopes', 'bridge_claude', ARRAY['ops.read.status','ops.read.status'], 'x')`, [`op_${ulid()}`])).rejects.toThrow(/duplicate scopes/);
     await expect(owner.query(`INSERT INTO fleet.fleet_operator_principals (principal_id, name, kind, scopes, created_by) VALUES ($1, 'treasury-x', 'bridge_claude', ARRAY['ops.read.treasury'], 'x')`, [`op_${ulid()}`])).rejects.toThrow(/check constraint/);
@@ -406,7 +419,7 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
     const ok = await begin(c, "GET /v1/operator/status");
     expect(ok).toMatchObject({ ok: true, fn: "op_fleet_status" });
     const rid = (ok as { requestId: string }).requestId;
-    expect(await gw.fleetStatus(rid)).toMatchObject({ fleet: { maxAgents: 2, mode: "DEVELOPMENT" }, schema: { version: 8 } });
+    expect(await gw.fleetStatus(rid)).toMatchObject({ fleet: { maxAgents: 2, mode: "DEVELOPMENT" }, schema: { version: 9 } });
     await expect(gw.whoami(rid)).rejects.toThrow(/FLEET_OP_REQUEST_INVALID/); // request id bound to its route's function
     await expect(gw.whoami(crypto.randomUUID())).rejects.toThrow(/FLEET_OP_REQUEST_INVALID/);
 

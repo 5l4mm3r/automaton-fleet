@@ -1,8 +1,14 @@
 /**
- * Operator API database gateway (Phase B2). Connects ONLY as the restricted
- * fleet_operator_login role (FLEET_OPERATOR_DATABASE_URL) and calls ONLY the
- * op_* functions; it never issues table SQL. The admin, service and agent
- * credentials are never available to this process.
+ * Operator API database gateway (Phase B2, extended by Phase D3). Connects
+ * ONLY as the restricted fleet_operator_login role
+ * (FLEET_OPERATOR_DATABASE_URL) and calls ONLY the op_* functions; it never
+ * issues table SQL. The admin, service and agent credentials are never
+ * available to this process.
+ *
+ * Reads run in READ ONLY transactions (unchanged). The only read-write calls
+ * are the two admission functions and the six named D3 action functions,
+ * each called with its fixed function name (ACTION_FN) - never a name taken
+ * from a request.
  */
 
 import pg from "pg";
@@ -33,6 +39,26 @@ export interface KeyMaterial {
 
 export type BeginResult = { ok: true; requestId: string; fn: string; requestCount: number; requestCap: number } | { ok: false; code: string };
 
+export type Page = { items: Record<string, unknown>[]; limit: number };
+
+/** The D3 action functions, by action name (the only volatile calls besides admission). */
+export const ACTION_FN = Object.freeze({
+  hold_agent: "op_act_hold_agent",
+  release_agent_hold: "op_act_release_agent_hold",
+  request_health_challenge: "op_act_request_health_challenge",
+  revoke_agent_sessions: "op_act_revoke_agent_sessions",
+  reconcile_lifecycle: "op_act_reconcile_lifecycle",
+  propose_agent_action: "op_propose_agent_action",
+} as const);
+export type ActionName = keyof typeof ACTION_FN;
+
+/** A database refusal of an action body/request (raised inside the action function; nothing was changed). */
+export class ActionRefused extends Error {
+  constructor(readonly code: "FLEET_OP_BAD_PARAM" | "FLEET_OP_REQUEST_INVALID") {
+    super(code);
+  }
+}
+
 /** What the Operator API server needs from the database (a fake implements it in tests). */
 export interface OperatorGateway {
   ping(): Promise<PingResult>;
@@ -43,6 +69,16 @@ export interface OperatorGateway {
   listAgents(requestId: string, after: string | null, limit: number): Promise<{ items: Record<string, unknown>[]; limit: number }>;
   getAgent(requestId: string, agentId: string): Promise<{ found: boolean; item?: Record<string, unknown> }>;
   listEvents(requestId: string, after: string | null, limit: number, type: string | null): Promise<{ items: Record<string, unknown>[]; limit: number }>;
+  // ── D3
+  beginAction(a: { principal: string; key: string; route: string; clientTsMs: number; nonce: string; bodySha256: string }): Promise<BeginResult>;
+  lifecycleHealth(requestId: string): Promise<Record<string, unknown>>;
+  runtimeStatus(requestId: string): Promise<Record<string, unknown>>;
+  listReservations(requestId: string, after: string | null, limit: number): Promise<Page>;
+  listOrphans(requestId: string, after: string | null, limit: number): Promise<Page>;
+  listProposals(requestId: string, after: string | null, limit: number): Promise<Page>;
+  listActions(requestId: string, after: string | null, limit: number): Promise<Page>;
+  /** Run one named action with the exact signed body; throws ActionRefused on a database refusal. */
+  act(action: ActionName, requestId: string, body: string): Promise<Record<string, unknown>>;
   close(): Promise<void>;
 }
 
@@ -128,6 +164,66 @@ export class PgOperatorGateway implements OperatorGateway {
 
   async listEvents(requestId: string, after: string | null, limit: number, type: string | null): Promise<{ items: Record<string, unknown>[]; limit: number }> {
     return this.ro(`SELECT ${this.s}.op_list_events($1, $2, $3, $4) AS r`, [requestId, after, limit, type]);
+  }
+
+  async beginAction(a: { principal: string; key: string; route: string; clientTsMs: number; nonce: string; bodySha256: string }): Promise<BeginResult> {
+    return this.fn<BeginResult>(`SELECT ${this.s}.op_begin_action($1, $2, $3, $4, $5, $6) AS r`, [
+      a.principal,
+      a.key,
+      a.route,
+      a.clientTsMs,
+      a.nonce,
+      a.bodySha256,
+    ]);
+  }
+
+  async lifecycleHealth(requestId: string): Promise<Record<string, unknown>> {
+    return this.ro(`SELECT ${this.s}.op_lifecycle_health($1) AS r`, [requestId]);
+  }
+
+  async runtimeStatus(requestId: string): Promise<Record<string, unknown>> {
+    return this.ro(`SELECT ${this.s}.op_runtime_status($1) AS r`, [requestId]);
+  }
+
+  async listReservations(requestId: string, after: string | null, limit: number): Promise<Page> {
+    return this.ro(`SELECT ${this.s}.op_list_reservations($1, $2, $3) AS r`, [requestId, after, limit]);
+  }
+
+  async listOrphans(requestId: string, after: string | null, limit: number): Promise<Page> {
+    return this.ro(`SELECT ${this.s}.op_list_orphans($1, $2, $3) AS r`, [requestId, after, limit]);
+  }
+
+  async listProposals(requestId: string, after: string | null, limit: number): Promise<Page> {
+    return this.ro(`SELECT ${this.s}.op_list_proposals($1, $2, $3) AS r`, [requestId, after, limit]);
+  }
+
+  async listActions(requestId: string, after: string | null, limit: number): Promise<Page> {
+    return this.ro(`SELECT ${this.s}.op_list_actions($1, $2, $3) AS r`, [requestId, after, limit]);
+  }
+
+  /**
+   * One D3 action, in its own read-write transaction (the action function
+   * re-validates everything and records its ledger row atomically with its
+   * effect). The function name comes from the fixed ACTION_FN table.
+   */
+  async act(action: ActionName, requestId: string, body: string): Promise<Record<string, unknown>> {
+    if (!Object.prototype.hasOwnProperty.call(ACTION_FN, action)) throw new Error("unknown action");
+    const fn = ACTION_FN[action];
+    const c = await this.pool.connect();
+    try {
+      await c.query("BEGIN");
+      const r = await c.query<{ r: Record<string, unknown> }>(`SELECT ${this.s}.${fn}($1, $2) AS r`, [requestId, body]);
+      await c.query("COMMIT");
+      return r.rows[0].r;
+    } catch (err) {
+      await c.query("ROLLBACK").catch(() => {});
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.startsWith("FLEET_OP_BAD_PARAM")) throw new ActionRefused("FLEET_OP_BAD_PARAM");
+      if (msg.startsWith("FLEET_OP_REQUEST_INVALID")) throw new ActionRefused("FLEET_OP_REQUEST_INVALID");
+      throw err;
+    } finally {
+      c.release();
+    }
   }
 
   /** Who this connection is, and whether it is anything more than the operator role. */

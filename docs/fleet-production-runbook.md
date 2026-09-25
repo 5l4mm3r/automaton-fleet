@@ -1236,6 +1236,40 @@ pinned artifact. The FleetController / Operator API runtime pin, its approval an
 
 Nothing else was changed.
 
+## Stage D3 — Controlled operator actions, schema v9 (DRAFT — not executed, needs approval)
+
+D3 is implemented and tested locally only. Production is unchanged: runtime `4d6a0be`,
+schema v8, read-only. Design: `docs/design/phase-d3-operator-actions.md`. Every row
+below needs the owner's approval, one gate at a time.
+
+| Gate | Action | Privileged | Outage |
+|---|---|---|---|
+| D3-1 | Review, then a local commit of the D3 work; push to `fleet-origin` | no | no |
+| D3-2 | VPS reproducible build of the D3 commit (`fleet-build-runtime.sh`); record the build ID; the lockfile must stay `eee9dc2f…` | no | no |
+| D3-3 | `runtime.env`: new commit/build pins (sudoedit; keep `runtime.env.pre-d3`); stage and install `releases/<commit>`; tooling checkout to the commit | yes | no |
+| D3-4 | **Planned outage:** stop the Operator API, the ChatGPT adapter, then the controller; take a verified 0600 pre-v9 dump; `migrate-check` must be exactly `{"currentVersion":8,"resultingVersion":9,"wouldApply":[9]}`; `migrate` (re-grants agent/service/operator roles); `audit-privileges` PASS | yes, **database** | yes |
+| D3-5 | `approve-runtime` (new commit/build/lockfile); start the controller, then the Operator API, then the adapter socket; doctor DEPLOYMENT OK; `fleet:verify` 16/16; `fleet-verify-deployment.sh`; `/readyz` ready | yes | ends |
+| D3-6 | Regression through production: `bridge-claude` (read) whoami/status/agents/events; ChatGPT adapter unchanged (4 tools); new doctor line "operator actions: disabled" | no | no |
+| D3-7 | Dev VM: `fleet:operator-keygen` for `claude-operator`; owner `operator-enroll claude-operator bridge_claude --scopes ops.read.status,ops.read.agents,ops.read.events,ops.read.lifecycle,ops.act.agents,ops.propose.agents --expires-days 30`; fingerprint check; point the bridge config at the new principal | yes (owner CLI) | no |
+| D3-8 | Owner decision: `operator-actions enable <reason>`; smoke: lifecycle/runtime reads, `reconcile_lifecycle`, a `hold_agent` on an unknown ULID (recorded as `FLEET_OP_TARGET_NOT_FOUND`), ledger via `fleet_list_operator_actions`; then optionally `operator-actions disable` until needed | yes (owner CLI) | no |
+
+Ordering constraints:
+- The v9 admin CLI (`operator-api`, `operator-actions`) expects schema v9. Run
+  `migrate` (D3-4) before using the new CLI's kill-switch commands. Until then, use the
+  `4d6a0be` tooling.
+- The deployed ChatGPT adapter (`6691b4c`) stays compatible: GET only, the B2 status and
+  agent shapes are unchanged, and ChatGPT principals can never hold D3 scopes.
+- Never allow-list the six D3 action tools in Claude Code's permissions. Claude Code
+  should ask the human before each action.
+
+Rollback:
+- **Immediate, no outage:** `operator-actions disable`, or `operator-api disable`
+  (which also clears actions), or `operator-revoke <claude-operator>`.
+- **Full:** stop all three services; restore the pre-v9 dump; restore
+  `runtime.env.pre-d3`; point `current` back to `releases/4d6a0be…`; start in order;
+  verify. There is no down migration. `4d6a0be` refuses a v9 registry (exact schema
+  check).
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes

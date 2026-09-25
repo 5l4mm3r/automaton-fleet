@@ -16,8 +16,9 @@ import { V5_SQL, v4Sql } from "./migrations-phase5.js";
 import { V6_SQL } from "./migrations-phase6.js";
 import { v7Sql } from "./migrations-phase7.js";
 import { V8_SQL } from "./migrations-phase8.js";
+import { V9_SQL } from "./migrations-phase9.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 8;
+export const FLEET_PG_SCHEMA_VERSION = 9;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1120,6 +1121,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 6, name: "provisioning_intents_dry_run_child", sql: V6_SQL },
   { version: 7, name: "capability_scope_witness", sql: v7Sql(FLEET_PG_HARD_MAX_AGENTS) },
   { version: 8, name: "operator_api_read_only", sql: V8_SQL },
+  { version: 9, name: "operator_actions_controlled", sql: V9_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1171,14 +1173,17 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
 ]);
 
 /**
- * The ONLY functions the operator role may execute (schema v8, Phase B2).
- * Signature-termination invariant: every one of them is STABLE except
- * op_begin_request, whose writes are limited to OPERATOR_BOOKKEEPING_TABLES
- * (plus denial events via fleet_event). A mutating operator capability must
- * not be added here; it needs a separate security-design gate.
+ * The ONLY functions the operator role may execute (schema v8 Phase B2 + schema v9 Phase D3).
+ * Read side (signature-termination invariant, unchanged): every read function
+ * is STABLE and runs in a READ ONLY transaction. Write side: exactly the
+ * OPERATOR_VOLATILE_FUNCTIONS below - the two admission functions (operator
+ * bookkeeping only) and the named D3 action functions, whose permitted writes
+ * and calls are fixed per function by OPERATOR_ACTION_WRITES and checked
+ * against the live catalog by the privilege audit.
  */
 export const OPERATOR_API_FUNCTIONS: readonly string[] = Object.freeze([
   "op_begin_request(text, text, text, bigint, text, text)",
+  "op_begin_action(text, text, text, bigint, text, text)",
   "op_key_material(text, text)",
   "op_ping()",
   "op_whoami(uuid)",
@@ -1186,18 +1191,82 @@ export const OPERATOR_API_FUNCTIONS: readonly string[] = Object.freeze([
   "op_list_agents(uuid, text, integer)",
   "op_get_agent(uuid, text)",
   "op_list_events(uuid, bigint, integer, text)",
+  "op_lifecycle_health(uuid)",
+  "op_runtime_status(uuid)",
+  "op_list_reservations(uuid, text, integer)",
+  "op_list_orphans(uuid, bigint, integer)",
+  "op_list_proposals(uuid, bigint, integer)",
+  "op_list_actions(uuid, bigint, integer)",
+  "op_act_hold_agent(uuid, text)",
+  "op_act_release_agent_hold(uuid, text)",
+  "op_act_request_health_challenge(uuid, text)",
+  "op_act_revoke_agent_sessions(uuid, text)",
+  "op_act_reconcile_lifecycle(uuid, text)",
+  "op_propose_agent_action(uuid, text)",
 ]);
 
-/** The single volatile operator function (security/audit bookkeeping only). */
-export const OPERATOR_VOLATILE_FUNCTIONS: readonly string[] = Object.freeze(["op_begin_request(text, text, text, bigint, text, text)"]);
+/** The D3 action functions a POST route may map to (mirrors the fleet_operator_routes CHECK). */
+export const OPERATOR_ACTION_FUNCTIONS: readonly string[] = Object.freeze([
+  "op_act_hold_agent",
+  "op_act_release_agent_hold",
+  "op_act_request_health_challenge",
+  "op_act_revoke_agent_sessions",
+  "op_act_reconcile_lifecycle",
+  "op_propose_agent_action",
+]);
 
-/** The read functions a route may map to (mirrors the fleet_operator_routes CHECK). */
+/** Volatile operator functions: the two admission functions and the D3 action functions. */
+export const OPERATOR_VOLATILE_FUNCTIONS: readonly string[] = Object.freeze([
+  "op_begin_request(text, text, text, bigint, text, text)",
+  "op_begin_action(text, text, text, bigint, text, text)",
+  "op_act_hold_agent(uuid, text)",
+  "op_act_release_agent_hold(uuid, text)",
+  "op_act_request_health_challenge(uuid, text)",
+  "op_act_revoke_agent_sessions(uuid, text)",
+  "op_act_reconcile_lifecycle(uuid, text)",
+  "op_propose_agent_action(uuid, text)",
+]);
+
+/** The read functions a GET route may map to (mirrors the fleet_operator_routes CHECK). */
 export const OPERATOR_READ_FUNCTIONS: readonly string[] = Object.freeze([
   "op_whoami",
   "op_fleet_status",
   "op_list_agents",
   "op_get_agent",
   "op_list_events",
+  "op_lifecycle_health",
+  "op_runtime_status",
+  "op_list_reservations",
+  "op_list_orphans",
+  "op_list_proposals",
+  "op_list_actions",
+]);
+
+/**
+ * Per action function: the only tables it (with its helpers) may write and the
+ * only volatile fleet functions it may call. Never: fleet_begin_termination,
+ * fleet_mark_dead, credential revocation, proposal decisions, owner holds,
+ * cap/mode/runtime/replication/treasury functions.
+ */
+export const OPERATOR_ACTION_WRITES: Readonly<Record<string, { writes: readonly string[]; calls: readonly string[] }>> = Object.freeze({
+  op_act_hold_agent: { writes: ["fleet_agents", "fleet_agent_sessions"], calls: ["fleet_event", "fleet_operator_record_action", "fleet_operator_conflict"] },
+  op_act_release_agent_hold: { writes: ["fleet_agents"], calls: ["fleet_event", "fleet_operator_record_action", "fleet_operator_conflict"] },
+  op_act_request_health_challenge: { writes: ["fleet_agents"], calls: ["fleet_event", "fleet_operator_record_action", "fleet_operator_conflict"] },
+  op_act_revoke_agent_sessions: { writes: ["fleet_agent_sessions"], calls: ["fleet_event", "fleet_operator_record_action", "fleet_operator_conflict"] },
+  op_act_reconcile_lifecycle: { writes: [], calls: ["fleet_lock_state", "fleet_reap", "fleet_operator_record_action", "fleet_operator_conflict"] },
+  op_propose_agent_action: { writes: ["fleet_operator_proposals"], calls: ["fleet_event", "fleet_operator_record_action", "fleet_operator_conflict"] },
+  fleet_operator_record_action: { writes: ["fleet_operator_actions"], calls: ["fleet_event"] },
+  fleet_operator_conflict: { writes: [], calls: ["fleet_event"] },
+});
+
+/** Stable/immutable helpers the action functions may call. */
+export const OPERATOR_ACTION_HELPERS: readonly string[] = Object.freeze([
+  "fleet_operator_action_ok",
+  "fleet_operator_body",
+  "fleet_operator_params",
+  "fleet_operator_idempotent",
+  "fleet_operator_agent_state",
+  "fleet_scrub",
 ]);
 
 /** Tables op_begin_request may write (Amendment 3); fleet_events via fleet_event() for denials. */

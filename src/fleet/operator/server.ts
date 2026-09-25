@@ -1,14 +1,23 @@
 /**
- * Operator API server (Phase B2). A separate process from FleetController:
- * loopback-only HTTP listener (127.0.0.1:8788), read-only v1 routes, every
+ * Operator API server (Phase B2, extended by Phase D3). A separate process
+ * from FleetController: loopback-only HTTP listener (127.0.0.1:8788), every
  * request individually Ed25519-signed (canonical.ts) and re-checked by the
- * database (op_begin_request) before exactly one STABLE read function runs.
+ * database before exactly one function runs:
+ *  - GET (read): op_begin_request, then one STABLE read function in a READ
+ *    ONLY transaction (B2, unchanged);
+ *  - POST (D3 action): a closed, canonical JSON body validated here before
+ *    any database contact; op_begin_action (needs the separate actions kill
+ *    switch); then the route's one named action function, which re-validates
+ *    the request, the signed body digest and every field in SQL.
  *
  * Verification order (fail closed; unauthenticated input never causes a
  * database write):
  *   1  canonical request target, route in OPERATOR_ROUTE_POLICY   (404 / 400)
  *   2  headers: exactly one of each X-Fleet-Op-*, no Authorization/Cookie
- *   3  empty body (no Content-Length > 0, no Transfer-Encoding)
+ *   3  GET: empty body (no Content-Length > 0, no Transfer-Encoding);
+ *     POST: application/json, 1..4096 bytes, valid UTF-8, a flat object of
+ *     string fields exactly matching the route's body schema, in the one
+ *     canonical serialization (canonicalActionBody)
  *   4  query parameters allow-listed per route with exact formats
  *   5  (unused; auth failures never lock out other principals)
  *   6  ±30 s timestamp window (process clock)
@@ -38,6 +47,8 @@ import {
   EMPTY_BODY_SHA256,
   OP_LIMITS,
   PRINCIPAL_RE,
+  bodyDigest,
+  canonicalActionBody,
   canonicalString,
   decodeSignature,
   parseTarget,
@@ -47,11 +58,33 @@ import {
   type OpErrorCode,
 } from "./canonical.js";
 import { matchRoute, verifyRoutePolicy, type RouteMatch } from "./route-policy.js";
-import type { KeyMaterial, OperatorGateway } from "./gateway.js";
-import { agentItem, dbId, eventItem, statusBody, untrusted, type RuntimeFlagsView } from "./responses.js";
+import { ActionRefused, ACTION_FN, type ActionName, type KeyMaterial, type OperatorGateway } from "./gateway.js";
+import {
+  actionItem,
+  actionResult,
+  agentItem,
+  dbId,
+  eventItem,
+  lifecycleBody,
+  orphanItem,
+  proposalItem,
+  reservationItem,
+  runtimeBody,
+  statusBody,
+  untrusted,
+  type RuntimeFlagsView,
+  type RuntimeIdentityView,
+} from "./responses.js";
 import { redactDetail, redactText } from "../redact.js";
 
-export const OPERATOR_SCHEMA_VERSION = 8;
+export const OPERATOR_SCHEMA_VERSION = 9;
+
+/** D3 action bodies: at most this many bytes. */
+export const MAX_ACTION_BODY_BYTES = 4096;
+
+const ACTION_OF_FN: Readonly<Record<string, ActionName>> = Object.freeze(
+  Object.fromEntries(Object.entries(ACTION_FN).map(([a, fn]) => [fn, a as ActionName])),
+);
 
 export interface OperatorLimits {
   perPrincipal: RateLimit;
@@ -96,6 +129,8 @@ export interface OperatorServiceOptions {
   runtimeFlags?: () => RuntimeFlagsView;
   /** Extra readiness checks (privilege audit, clock). */
   readinessChecks?: () => Promise<Record<string, { ok: boolean; warn?: boolean }>>;
+  /** D3 runtime verification: pinned runtime and this process's installed release identity. */
+  runtimeIdentity?: () => Promise<RuntimeIdentityView>;
   limits?: Partial<OperatorLimits>;
 }
 
@@ -111,6 +146,7 @@ const STATUS_OF: Record<string, number> = {
   FLEET_OP_RATE_LIMITED: 429,
   FLEET_OP_INTERNAL: 500,
   FLEET_OP_DISABLED: 503,
+  FLEET_OP_ACTIONS_DISABLED: 503,
   FLEET_OP_AUDIT_FULL: 503,
 };
 
@@ -133,6 +169,48 @@ type ReadinessResult = { ready: boolean; state: string; checks: Record<string, {
 
 function isLoopbackHost(host: string): boolean {
   return host === "127.0.0.1" || host === "::1" || host === "localhost";
+}
+
+/** Exactly `length` bytes (Content-Length), or null when the body is shorter, longer or broken. */
+function readBody(req: http.IncomingMessage, length: number): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let over = false;
+    req.on("data", (d: Buffer) => {
+      size += d.length;
+      if (size > length) over = true;
+      else chunks.push(d);
+    });
+    req.on("end", () => resolve(!over && size === length ? Buffer.concat(chunks) : null));
+    req.on("error", () => resolve(null));
+  });
+}
+
+/**
+ * The closed D3 body: valid UTF-8, a flat JSON object of string fields that
+ * exactly match the route's schema, in canonical serialization. Returns the
+ * canonical text, or an error code (never a partial result).
+ */
+export function checkActionBody(raw: Buffer, schema: Readonly<Record<string, { re: RegExp; required: boolean }>>): { ok: true; text: string } | { ok: false; code: OpErrorCode } {
+  const text = raw.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(raw)) return { ok: false, code: "FLEET_OP_BAD_REQUEST" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, code: "FLEET_OP_BAD_REQUEST" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Object.getPrototypeOf(parsed) !== Object.prototype) return { ok: false, code: "FLEET_OP_BAD_PARAM" };
+  const fields: Record<string, string> = {};
+  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+    const f = Object.prototype.hasOwnProperty.call(schema, k) ? schema[k] : undefined;
+    if (!f || typeof v !== "string" || !f.re.test(v)) return { ok: false, code: "FLEET_OP_BAD_PARAM" };
+    fields[k] = v;
+  }
+  for (const [k, f] of Object.entries(schema)) if (f.required && !(k in fields)) return { ok: false, code: "FLEET_OP_BAD_PARAM" };
+  if (canonicalActionBody(fields) !== text) return { ok: false, code: "FLEET_OP_NONCANONICAL" };
+  return { ok: true, text };
 }
 
 function emptyBody(req: http.IncomingMessage): Promise<boolean> {
@@ -300,6 +378,8 @@ export class OperatorService {
     let routeKey = "unknown";
     let principal = "none";
     let items: number | undefined;
+    let action: string | undefined;
+    let decision: string | undefined;
     let counted = false;
 
     const send = (st: number, body: Record<string, unknown>) => {
@@ -348,8 +428,24 @@ export class OperatorService {
       if (!h.ok) throw new OpFailure("FLEET_OP_BAD_REQUEST", "headers");
       if (PRINCIPAL_RE.test(h.values.principal)) principal = h.values.principal;
       const cl = req.headers["content-length"];
-      if ((cl !== undefined && cl !== "0") || req.headers["transfer-encoding"] !== undefined) throw new OpFailure("FLEET_OP_BAD_REQUEST", "body");
-      if (!(await emptyBody(req))) throw new OpFailure("FLEET_OP_BAD_REQUEST", "body");
+      let bodySha256 = EMPTY_BODY_SHA256;
+      let bodyText: string | null = null;
+      if (match.route.body) {
+        // D3 action: closed canonical JSON body, validated before any database contact.
+        if (target.query !== "") throw new OpFailure("FLEET_OP_BAD_PARAM", "action routes take no query");
+        if (req.headers["content-type"] !== "application/json" || req.headers["transfer-encoding"] !== undefined) throw new OpFailure("FLEET_OP_BAD_REQUEST", "body framing");
+        if (typeof cl !== "string" || !/^[1-9][0-9]{0,3}$/.test(cl) || Number(cl) > MAX_ACTION_BODY_BYTES) throw new OpFailure("FLEET_OP_BAD_REQUEST", "body length");
+        const raw = await readBody(req, Number(cl));
+        if (!raw) throw new OpFailure("FLEET_OP_BAD_REQUEST", "body length");
+        const checkedBody = checkActionBody(raw, match.route.body);
+        if (!checkedBody.ok) throw new OpFailure(checkedBody.code, "body schema");
+        bodyText = checkedBody.text;
+        bodySha256 = bodyDigest(raw);
+        action = ACTION_OF_FN[match.route.fn];
+      } else {
+        if ((cl !== undefined && cl !== "0") || req.headers["transfer-encoding"] !== undefined) throw new OpFailure("FLEET_OP_BAD_REQUEST", "body");
+        if (!(await emptyBody(req))) throw new OpFailure("FLEET_OP_BAD_REQUEST", "body");
+      }
       for (const [k, v] of Object.entries(target.params)) {
         const re = match.route.params[k];
         if (!re || !re.test(v)) throw new OpFailure("FLEET_OP_BAD_PARAM", "param");
@@ -372,27 +468,37 @@ export class OperatorService {
         query: target.query,
         timestamp: h.values.timestamp,
         nonce: h.values.nonce,
-        bodySha256: EMPTY_BODY_SHA256,
+        bodySha256,
       });
       if (!sig || !verifySignature(key!.pub, canonical, sig)) authFail("FLEET_OP_AUTH_FAILED", "signature");
       if (match.route.scope !== null && !(key!.km.scopes ?? []).includes(match.route.scope)) throw new OpFailure("FLEET_OP_SCOPE_DENIED", "scope");
       if (!this.perPrincipal.take(h.values.principal)) throw new OpFailure("FLEET_OP_RATE_LIMITED", "principal rate");
 
-      const begun = await this.opts.gateway.beginRequest({
+      const admission = {
         principal: h.values.principal,
         key: h.values.key,
         route: match.key,
         clientTsMs: ts,
         nonce: h.values.nonce,
-        bodySha256: EMPTY_BODY_SHA256,
-      });
+        bodySha256,
+      };
+      const begun = match.route.body ? await this.opts.gateway.beginAction(admission) : await this.opts.gateway.beginRequest(admission);
       if (!begun.ok) {
         const c = (Object.prototype.hasOwnProperty.call(STATUS_OF, begun.code) ? begun.code : "FLEET_OP_INTERNAL") as OpErrorCode;
         throw new OpFailure(c, "database");
       }
       if (begun.fn !== match.route.fn) throw new OpFailure("FLEET_OP_INTERNAL", "route/function mismatch between process and database");
 
-      const data = await this.dispatch(match, target.params, begun.requestId);
+      let data: Record<string, unknown> | null;
+      if (match.route.body) {
+        try {
+          data = actionResult(await this.opts.gateway.act(ACTION_OF_FN[match.route.fn], begun.requestId, bodyText as string));
+        } catch (err) {
+          if (err instanceof ActionRefused) throw new OpFailure(err.code === "FLEET_OP_BAD_PARAM" ? "FLEET_OP_BAD_PARAM" : "FLEET_OP_INTERNAL", `database refused: ${err.code}`);
+          throw err;
+        }
+        decision = typeof data.decision === "string" ? data.decision : undefined;
+      } else data = await this.dispatch(match, target.params, begun.requestId);
       if (data === null) throw new OpFailure("FLEET_OP_NOT_FOUND", "agent not found");
       items = Array.isArray((data as { items?: unknown[] }).items) ? (data as { items: unknown[] }).items.length : undefined;
       send(200, { ok: true, requestId, serverTime: new Date(this.now()).toISOString(), data });
@@ -414,6 +520,7 @@ export class OperatorService {
         status,
         ...(code ? { code, reason } : {}),
         ...(items !== undefined ? { items } : {}),
+        ...(action ? { action, ...(decision ? { decision } : {}) } : {}),
         ms: this.now() - started,
         peer: peer === "127.0.0.1" || peer === "::1" || peer === "::ffff:127.0.0.1" ? "loopback" : "other",
       });
@@ -458,6 +565,33 @@ export class OperatorService {
         const limit = params.limit ? Number(params.limit) : 50;
         const r = await g.listEvents(requestId, params.after ?? null, limit, params.type ?? null);
         return this.page(r.items, limit, (e) => eventItem(e), (it) => (it.id as string | null) ?? null);
+      }
+      case "op_lifecycle_health":
+        return lifecycleBody(await g.lifecycleHealth(requestId));
+      case "op_runtime_status": {
+        const db = await g.runtimeStatus(requestId);
+        const local = this.opts.runtimeIdentity ? await this.opts.runtimeIdentity().catch(() => ({ pinned: null, release: null })) : { pinned: null, release: null };
+        return runtimeBody(db, local);
+      }
+      case "op_list_reservations": {
+        const limit = params.limit ? Number(params.limit) : 50;
+        const r = await g.listReservations(requestId, params.after ?? null, limit);
+        return this.page(r.items, limit, (x) => reservationItem(x), (it) => (it.reservationId as string | null) ?? null);
+      }
+      case "op_list_orphans": {
+        const limit = params.limit ? Number(params.limit) : 50;
+        const r = await g.listOrphans(requestId, params.after ?? null, limit);
+        return this.page(r.items, limit, (x) => orphanItem(x), (it) => (it.orphanId as string | null) ?? null);
+      }
+      case "op_list_proposals": {
+        const limit = params.limit ? Number(params.limit) : 50;
+        const r = await g.listProposals(requestId, params.after ?? null, limit);
+        return this.page(r.items, limit, (x) => proposalItem(x), (it) => (it.seq as string | null) ?? null);
+      }
+      case "op_list_actions": {
+        const limit = params.limit ? Number(params.limit) : 50;
+        const r = await g.listActions(requestId, params.after ?? null, limit);
+        return this.page(r.items, limit, (x) => actionItem(x), (it) => (it.seq as string | null) ?? null);
       }
       default:
         throw new OpFailure("FLEET_OP_INTERNAL", `unmapped function ${untrusted(match.route.fn).value}`);

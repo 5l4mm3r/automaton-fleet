@@ -111,7 +111,8 @@ export function routeDecision(method: string, path: string, scope: string | null
   if (!policy) return "unknown";
   if (policy.auth === "public") return "allow";
   if (scope === "full") return "allow";
-  if (scope === "witness") return policy.witness ? "allow" : "deny";
+  // A held agent (Phase D3 operator/owner hold) keeps exactly the witness allow-list: liveness only.
+  if (scope === "witness" || scope === "held") return policy.witness ? "allow" : "deny";
   return "deny";
 }
 

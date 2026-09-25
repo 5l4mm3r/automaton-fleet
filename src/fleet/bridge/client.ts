@@ -1,5 +1,5 @@
 /**
- * Claude bridge (Phase D) — signed, read-only Operator API client.
+ * Claude bridge (Phase D, extended by Phase D3) — signed Operator API client.
  *
  * Signing is exactly B2's FLEET-OP-SIG-V1 (canonical.ts signedHeaders: same
  * canonical string, millisecond timestamp, 144-bit nonce, empty-body SHA-256,
@@ -7,8 +7,11 @@
  *  - only builds targets the B2 route policy accepts (parseTarget +
  *    matchRoute + per-route parameter formats); anything else is
  *    UNSUPPORTED_REQUEST before a byte is sent;
- *  - sends nothing but GET with the five signing headers (no Authorization,
- *    no cookies, no body) to 127.0.0.1:<tunnel port>;
+ *  - sends GET with the five signing headers (no Authorization, no cookies,
+ *    no body) to 127.0.0.1:<tunnel port>; D3 actions are POST with exactly
+ *    the route's closed body schema in canonical serialization
+ *    (canonicalActionBody), whose SHA-256 is part of the signed string;
+ *  - has one typed method per operation; there is no generic request method;
  *  - never retries a signed request (a resend would be a replay);
  *  - bounds time and response size, requires JSON, validates the envelope,
  *    the code/HTTP-status pairing and the exact data shape (validate.ts);
@@ -18,15 +21,22 @@
  */
 
 import http from "http";
-import type { KeyObject } from "crypto";
-import { keyIdOf, parseTarget, rawPublicKey, signedHeaders } from "../operator/canonical.js";
+import { randomBytes, type KeyObject } from "crypto";
+import { canonicalActionBody, keyIdOf, parseTarget, rawPublicKey, signedHeaders } from "../operator/canonical.js";
 import { matchRoute } from "../operator/route-policy.js";
 import { loadOperatorPrivateKey } from "../operator/keygen.js";
 import { BridgeError, OP_CODE_MAP } from "./errors.js";
 import type { KeyRef } from "./config.js";
 import {
   checked,
+  validateActionPage,
+  validateActionResult,
   validateAgentOne,
+  validateLifecycle,
+  validateOrphanPage,
+  validateProposalPage,
+  validateReservationPage,
+  validateRuntime,
   validateAgentPage,
   validateEnvelope,
   validateEventPage,
@@ -113,6 +123,102 @@ export class OperatorBridgeClient {
     return this.call(target("/v1/operator/events", { after: q.after, limit: q.limit, type: q.type }), (d) => validateEventPage(d, limit));
   }
 
+  // ── D3 Tier 2 reads
+
+  async lifecycleHealth(): Promise<Result<Record<string, unknown>>> {
+    return this.call("/v1/operator/lifecycle", validateLifecycle);
+  }
+
+  async runtimeVerification(): Promise<Result<Record<string, unknown>>> {
+    return this.call("/v1/operator/runtime", validateRuntime);
+  }
+
+  async listReservations(q: { after?: string; limit?: number } = {}) {
+    const limit = q.limit ?? 50;
+    return this.call(target("/v1/operator/reservations", { after: q.after, limit: q.limit }), (d) => validateReservationPage(d, limit));
+  }
+
+  async listOrphans(q: { after?: string; limit?: number } = {}) {
+    const limit = q.limit ?? 50;
+    return this.call(target("/v1/operator/orphans", { after: q.after, limit: q.limit }), (d) => validateOrphanPage(d, limit));
+  }
+
+  async listProposals(q: { after?: string; limit?: number } = {}) {
+    const limit = q.limit ?? 50;
+    return this.call(target("/v1/operator/proposals", { after: q.after, limit: q.limit }), (d) => validateProposalPage(d, limit));
+  }
+
+  async listActions(q: { after?: string; limit?: number } = {}) {
+    const limit = q.limit ?? 50;
+    return this.call(target("/v1/operator/actions", { after: q.after, limit: q.limit }), (d) => validateActionPage(d, limit));
+  }
+
+  // ── D3 Tier 3 actions (one typed method each; never retried)
+
+  async holdAgent(a: { agentId: string; reason: string; idempotencyKey?: string }) {
+    return this.act("/v1/operator/actions/hold-agent", "hold_agent", { agentId: agentIdUpper(a.agentId), reason: a.reason, idempotencyKey: a.idempotencyKey ?? newIdempotencyKey() });
+  }
+
+  async releaseAgentHold(a: { agentId: string; reason: string; idempotencyKey?: string }) {
+    return this.act("/v1/operator/actions/release-agent-hold", "release_agent_hold", {
+      agentId: agentIdUpper(a.agentId),
+      reason: a.reason,
+      idempotencyKey: a.idempotencyKey ?? newIdempotencyKey(),
+    });
+  }
+
+  async requestHealthChallenge(a: { agentId: string; reason?: string; idempotencyKey?: string }) {
+    return this.act("/v1/operator/actions/request-health-challenge", "request_health_challenge", {
+      agentId: agentIdUpper(a.agentId),
+      ...(a.reason !== undefined ? { reason: a.reason } : {}),
+      idempotencyKey: a.idempotencyKey ?? newIdempotencyKey(),
+    });
+  }
+
+  async revokeAgentSessions(a: { agentId: string; reason: string; idempotencyKey?: string }) {
+    return this.act("/v1/operator/actions/revoke-agent-sessions", "revoke_agent_sessions", {
+      agentId: agentIdUpper(a.agentId),
+      reason: a.reason,
+      idempotencyKey: a.idempotencyKey ?? newIdempotencyKey(),
+    });
+  }
+
+  async reconcileLifecycle(a: { reason?: string; idempotencyKey?: string } = {}) {
+    return this.act("/v1/operator/actions/reconcile-lifecycle", "reconcile_lifecycle", {
+      ...(a.reason !== undefined ? { reason: a.reason } : {}),
+      idempotencyKey: a.idempotencyKey ?? newIdempotencyKey(),
+    });
+  }
+
+  async proposeAgentAction(a: { kind: string; agentId: string; reason: string; idempotencyKey?: string }) {
+    return this.act("/v1/operator/proposals", "propose_agent_action", {
+      kind: a.kind,
+      agentId: agentIdUpper(a.agentId),
+      reason: a.reason,
+      idempotencyKey: a.idempotencyKey ?? newIdempotencyKey(),
+    });
+  }
+
+  private async act(path: string, action: string, fields: Record<string, string>): Promise<Result<Record<string, unknown>>> {
+    const match = matchRoute("POST", path);
+    if (!match || !match.route.body) throw new BridgeError("UNSUPPORTED_REQUEST", `not a supported Operator API action: ${path.slice(0, 80)}`);
+    const schema = match.route.body;
+    for (const [k, v] of Object.entries(fields)) {
+      const f = Object.prototype.hasOwnProperty.call(schema, k) ? schema[k] : undefined;
+      if (!f || typeof v !== "string" || !f.re.test(v)) throw new BridgeError("UNSUPPORTED_REQUEST", `unsupported value for field ${k}`);
+    }
+    for (const [k, f] of Object.entries(schema)) if (f.required && !(k in fields)) throw new BridgeError("UNSUPPORTED_REQUEST", `missing field ${k}`);
+    const body = Buffer.from(canonicalActionBody(fields), "utf8");
+    const now = this.opts.now ?? Date.now;
+    const headers = signedHeaders(this.opts.signer.key, this.opts.signer.principalId, path, {
+      method: "POST",
+      body,
+      now: now(),
+      ...(this.opts.nonce ? { nonce: this.opts.nonce() } : {}),
+    });
+    return this.finish(await this.send(path, headers, body), (d) => validateActionResult(d, action));
+  }
+
   private async call<T>(tgt: string, validate: (d: unknown) => T): Promise<Result<T>> {
     const parsed = parseTarget(tgt);
     const match = parsed.ok ? matchRoute("GET", parsed.path) : null;
@@ -126,7 +232,10 @@ export class OperatorBridgeClient {
       now: now(),
       ...(this.opts.nonce ? { nonce: this.opts.nonce() } : {}),
     });
-    const res = await this.send(tgt, headers);
+    return this.finish(await this.send(tgt, headers), validate);
+  }
+
+  private finish<T>(res: { status: number; json: unknown }, validate: (d: unknown) => T): Result<T> {
     const env = checked(() => validateEnvelope(res.json));
     if (!env.ok) {
       const m = OP_CODE_MAP[env.code];
@@ -138,7 +247,7 @@ export class OperatorBridgeClient {
     return { requestId: env.requestId, serverTime: env.serverTime, data: checked(() => validate(env.data), env.requestId) };
   }
 
-  private send(path: string, signed: Record<string, string>): Promise<{ status: number; json: unknown }> {
+  private send(path: string, signed: Record<string, string>, body?: Buffer): Promise<{ status: number; json: unknown }> {
     const port = this.opts.port;
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -154,8 +263,14 @@ export class OperatorBridgeClient {
           host: "127.0.0.1",
           port,
           path,
-          method: "GET",
-          headers: { ...signed, host: `127.0.0.1:${port}`, accept: "application/json", connection: "close" },
+          method: body ? "POST" : "GET",
+          headers: {
+            ...signed,
+            host: `127.0.0.1:${port}`,
+            accept: "application/json",
+            connection: "close",
+            ...(body ? { "content-type": "application/json", "content-length": String(body.length) } : {}),
+          },
           agent: false,
         },
         (res) => {
@@ -188,9 +303,20 @@ export class OperatorBridgeClient {
         req.destroy();
       }, this.timeoutMs);
       req.on("error", (e) => done(() => reject(new BridgeError("NETWORK", `request failed: ${(e as NodeJS.ErrnoException).code ?? e.message}`))));
-      req.end();
+      req.end(body);
     });
   }
+}
+
+/** Action bodies carry agent ids in the registry's upper-case form. */
+function agentIdUpper(id: string): string {
+  if (typeof id !== "string" || !/^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/.test(id)) throw new BridgeError("UNSUPPORTED_REQUEST", "agent id must be a 26-character ULID");
+  return id.toUpperCase();
+}
+
+/** A fresh idempotency key when the caller supplied none (144 random bits). */
+export function newIdempotencyKey(): string {
+  return randomBytes(18).toString("base64url");
 }
 
 function target(path: string, q: Record<string, string | number | undefined>): string {

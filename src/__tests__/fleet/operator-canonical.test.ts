@@ -28,7 +28,7 @@ import { OPERATOR_ROUTE_POLICY, matchRoute, verifyRoutePolicy, type OperatorRout
 import { EVENT_SCHEMAS, actorClass, agentItem, auditLevel, eventItem, statusBody, untrusted } from "../../fleet/operator/responses.js";
 import { generateOperatorKey, loadOperatorPrivateKey } from "../../fleet/operator/keygen.js";
 import { operatorEnvProblems, parseOperatorListen } from "../../fleet/operator/main.js";
-import { OPERATOR_API_FUNCTIONS, OPERATOR_READ_FUNCTIONS, OPERATOR_VOLATILE_FUNCTIONS } from "../../fleet/postgres/migrations.js";
+import { OPERATOR_ACTION_FUNCTIONS, OPERATOR_API_FUNCTIONS, OPERATOR_READ_FUNCTIONS, OPERATOR_VOLATILE_FUNCTIONS } from "../../fleet/postgres/migrations.js";
 import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
 import { loadOperatorEnv, operatorEnvFileProblems, readSecretEnvFile } from "../../fleet/secret-files.js";
 import { isProtectedFile } from "../../self-mod/code.js";
@@ -168,12 +168,20 @@ describe("B2 header rules", () => {
 });
 
 describe("B2 route policy and the signature-termination invariant", () => {
-  it("the shipped policy is exactly the v1 read surface", () => {
+  it("the shipped policy is exactly the read surface (GET) plus the named D3 action surface (POST)", () => {
     expect(verifyRoutePolicy()).toEqual([]);
-    expect(Object.values(OPERATOR_ROUTE_POLICY).map((r) => r.fn).sort()).toEqual([...OPERATOR_READ_FUNCTIONS].sort());
-    for (const key of Object.keys(OPERATOR_ROUTE_POLICY)) expect(key.startsWith("GET /v1/operator/")).toBe(true);
-    // Every allow-listed function except op_begin_request is read-side; only one volatile function exists.
-    expect(OPERATOR_VOLATILE_FUNCTIONS).toEqual(["op_begin_request(text, text, text, bigint, text, text)"]);
+    const entries = Object.entries(OPERATOR_ROUTE_POLICY);
+    expect(entries.filter(([k]) => k.startsWith("GET ")).map(([, r]) => r.fn).sort()).toEqual([...OPERATOR_READ_FUNCTIONS].sort());
+    expect(entries.filter(([k]) => k.startsWith("POST ")).map(([, r]) => r.fn).sort()).toEqual([...OPERATOR_ACTION_FUNCTIONS].sort());
+    for (const key of Object.keys(OPERATOR_ROUTE_POLICY)) expect(/^(GET|POST) \/v1\/operator\//.test(key)).toBe(true);
+    // Volatile = the two admission functions + the six named action functions; nothing else.
+    expect([...OPERATOR_VOLATILE_FUNCTIONS].sort()).toEqual(
+      [
+        "op_begin_request(text, text, text, bigint, text, text)",
+        "op_begin_action(text, text, text, bigint, text, text)",
+        ...OPERATOR_ACTION_FUNCTIONS.map((f) => `${f}(uuid, text)`),
+      ].sort(),
+    );
     expect(OPERATOR_API_FUNCTIONS.filter((f) => f.startsWith("op_begin_request"))).toHaveLength(1);
   });
 

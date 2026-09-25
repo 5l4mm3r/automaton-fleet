@@ -24,6 +24,7 @@ export type BridgeErrorCode =
   | "HOST_KEY_MISMATCH"
   // Operator API answers (FLEET_OP_* mapped 1:1)
   | "API_DISABLED"
+  | "ACTIONS_DISABLED"
   | "API_NOT_READY"
   | "AUDIT_FULL"
   | "AUTH_FAILED"
@@ -55,7 +56,7 @@ export class BridgeError extends Error {
 export const OP_CODE_MAP: Readonly<Record<string, { code: BridgeErrorCode; status: number; hint: string }>> = Object.freeze({
   FLEET_OP_BAD_REQUEST: { code: "BAD_REQUEST", status: 400, hint: "the request was rejected as malformed" },
   FLEET_OP_NONCANONICAL: { code: "BAD_REQUEST", status: 400, hint: "the request target was not canonical" },
-  FLEET_OP_BAD_PARAM: { code: "BAD_REQUEST", status: 400, hint: "a query parameter was rejected" },
+  FLEET_OP_BAD_PARAM: { code: "BAD_REQUEST", status: 400, hint: "a query parameter or action field was rejected" },
   FLEET_OP_STALE: { code: "CLOCK_SKEW", status: 401, hint: "request timestamp outside ±30 s; check this host's clock" },
   FLEET_OP_AUTH_FAILED: {
     code: "AUTH_FAILED",
@@ -68,5 +69,6 @@ export const OP_CODE_MAP: Readonly<Record<string, { code: BridgeErrorCode; statu
   FLEET_OP_RATE_LIMITED: { code: "RATE_LIMITED", status: 429, hint: "rate limited; retry later" },
   FLEET_OP_INTERNAL: { code: "SERVER_ERROR", status: 500, hint: "Operator API internal error" },
   FLEET_OP_DISABLED: { code: "API_DISABLED", status: 503, hint: "the Operator API kill switch is off" },
+  FLEET_OP_ACTIONS_DISABLED: { code: "ACTIONS_DISABLED", status: 503, hint: "the operator-actions kill switch is off (owner: fleet:admin operator-actions on)" },
   FLEET_OP_AUDIT_FULL: { code: "AUDIT_FULL", status: 503, hint: "the operator request audit is full; archival required" },
 });

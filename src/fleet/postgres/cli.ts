@@ -43,6 +43,12 @@
  *   pnpm fleet:admin operator-api enable|disable <reason…>
  *   pnpm fleet:admin operator-list
  *   pnpm fleet:admin operator-archive --before <ISO time> --out <new file> [--max-rows N<=100000]
+ *   pnpm fleet:admin operator-actions enable|disable <reason…>   (schema v9, Phase D3 mutation kill switch; default off)
+ *   pnpm fleet:admin proposal-list [all]
+ *   pnpm fleet:admin proposal-approve <proposalId> [note…]      (executes the proposal; owner only)
+ *   pnpm fleet:admin proposal-reject <proposalId> [note…]
+ *   pnpm fleet:admin agent-hold <agentId> <reason…>             (owner hold; operators cannot release it)
+ *   pnpm fleet:admin agent-release-hold <agentId>
  *   pnpm fleet:admin enroll-witness-root <name> <credentialFile>
  *                                     root with capability scope 'witness' (FLEET-KI-4): keyless address,
  *                                     approved runtime commit, custody frozen; refuses an existing file
@@ -183,6 +189,12 @@ const OPERATOR_COMMANDS = new Set([
   "operator-api",
   "operator-list",
   "operator-archive",
+  "operator-actions",
+  "proposal-list",
+  "proposal-approve",
+  "proposal-reject",
+  "agent-hold",
+  "agent-release-hold",
 ]);
 
 /** Operator principal lifecycle (schema v8). Public keys only; private keys stay on the bridge host. */
@@ -220,6 +232,23 @@ export async function runOperatorCommand(cmd: string, rest: string[], admin: PgO
       if (mode !== "enable" && mode !== "disable") throw new Error("usage: operator-api enable|disable <reason…>");
       return admin.setEnabled({ enabled: mode === "enable", reason: reason(1), actor });
     }
+    case "operator-actions": {
+      const mode = positional[0];
+      if (mode !== "enable" && mode !== "disable") throw new Error("usage: operator-actions enable|disable <reason…>");
+      return admin.setActionsEnabled({ enabled: mode === "enable", reason: reason(1), actor });
+    }
+    case "proposal-list":
+      return admin.listProposals({ all: positional[0] === "all" });
+    case "proposal-approve":
+    case "proposal-reject":
+      if (!positional[0]) throw new Error(`usage: ${cmd} <proposalId> [note…]`);
+      return admin.decideProposal({ proposalId: positional[0], decision: cmd === "proposal-approve" ? "approve" : "reject", note: reason(1), actor });
+    case "agent-hold":
+      if (!positional[0]) throw new Error("usage: agent-hold <agentId> <reason…>");
+      return { agentId: positional[0], result: await admin.holdAgent({ agentId: positional[0], reason: reason(1), actor }) };
+    case "agent-release-hold":
+      if (!positional[0]) throw new Error("usage: agent-release-hold <agentId>");
+      return { agentId: positional[0], result: await admin.releaseHold({ agentId: positional[0], actor }) };
     case "operator-list":
       return admin.list();
     case "operator-archive": {
@@ -581,7 +610,7 @@ async function main(argv: string[]): Promise<number> {
           "usage: fleet:admin migrate|health|status|set-cap N|set-mode MODE|approve-runtime|clear-runtime|build-identity DIR|" +
             "set-replication on|off|set-timeouts k=S…|enroll-root WALLET NAME|rotate-credential ID|grant-agent-role|grant-service-role|" +
             "audit-privileges|doctor|terminations|reap|reservations|release ID|mark-dead ID|audit-scan FILE…|" +
-            "grant-operator-role|operator-enroll|operator-add-key|operator-revoke-key|operator-revoke|operator-revoke-all|operator-api|operator-list|operator-archive",
+            "grant-operator-role|operator-enroll|operator-add-key|operator-revoke-key|operator-revoke|operator-revoke-all|operator-api|operator-list|operator-archive|operator-actions|proposal-list|proposal-approve|proposal-reject|agent-hold|agent-release-hold",
         );
         return 2;
     }

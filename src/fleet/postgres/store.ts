@@ -846,21 +846,27 @@ export class PgFleetStore {
     activeKeys: number;
     keysExpiringSoon: number;
     recentDenials: number;
+    /** Schema v9 (Phase D3): the mutation kill switch and proposals awaiting the owner. */
+    actionsEnabled: boolean;
+    pendingProposals: number;
   } | null> {
     try {
       return await this.read(async (c) => {
         const r = await c.query<{
           enabled: boolean; generation: string; request_count: string; request_cap: string;
-          principals: string; keys: string; expiring: string; denials: string;
+          principals: string; keys: string; expiring: string; denials: string; actions: boolean; proposals: string;
         }>(
           `SELECT s.operator_api_enabled AS enabled, s.generation, s.request_count, s.request_cap,
+                  s.operator_actions_enabled AS actions,
+                  (SELECT count(*) FROM fleet_operator_proposals WHERE status = 'pending' AND expires_at > now()) AS proposals,
                   (SELECT count(*) FROM fleet_operator_principals WHERE revoked_at IS NULL) AS principals,
                   (SELECT count(*) FROM fleet_operator_keys k JOIN fleet_operator_principals p USING (principal_id)
                     WHERE k.revoked_at IS NULL AND p.revoked_at IS NULL AND now() < k.expires_at) AS keys,
                   (SELECT count(*) FROM fleet_operator_keys k JOIN fleet_operator_principals p USING (principal_id)
                     WHERE k.revoked_at IS NULL AND p.revoked_at IS NULL AND now() < k.expires_at
                       AND k.expires_at < now() + interval '14 days') AS expiring,
-                  (SELECT count(*) FROM fleet_events WHERE event_type IN ('operator_auth_failed','operator_scope_denied','operator_replay_blocked','operator_stale')
+                  (SELECT count(*) FROM fleet_events WHERE event_type IN ('operator_auth_failed','operator_scope_denied','operator_replay_blocked','operator_stale',
+                                                                          'operator_actions_disabled','operator_action_rate_limited')
                     AND created_at > now() - interval '10 minutes') AS denials
              FROM fleet_operator_state s WHERE s.id = 1`,
         );
@@ -875,6 +881,8 @@ export class PgFleetStore {
           activeKeys: Number(row.keys),
           keysExpiringSoon: Number(row.expiring),
           recentDenials: Number(row.denials),
+          actionsEnabled: row.actions === true,
+          pendingProposals: Number(row.proposals),
         };
       });
     } catch {
@@ -1606,9 +1614,17 @@ export class PgFleetStore {
    * the controller's own role. null when no such agent exists. Used by the
    * fleet service's route policy before any route handler runs.
    */
+  /**
+   * The identity's effective route scope: its capability scope, or "held"
+   * while an operator/owner hold (schema v9, Phase D3) is in place. A held
+   * agent gets the witness allow-list (liveness only) from routeDecision.
+   */
   async capabilityScope(agentId: string): Promise<FleetCapabilityScope | string | null> {
     return this.read(async (c) => {
-      const r = await c.query<{ s: string }>("SELECT capability_scope AS s FROM fleet_agents WHERE agent_id = $1", [agentId]);
+      const r = await c.query<{ s: string }>(
+        "SELECT CASE WHEN operator_hold_at IS NOT NULL THEN 'held' ELSE capability_scope END AS s FROM fleet_agents WHERE agent_id = $1",
+        [agentId],
+      );
       return r.rows[0]?.s ?? null;
     });
   }

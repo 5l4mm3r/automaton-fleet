@@ -12,17 +12,23 @@
  *                  nothing, no CREATE/TEMP, not members of the owner or of
  *                  each other
  *   PUBLIC         nothing in the schema
- *   operator roles (schema v8) USAGE + EXECUTE on op_* only, no table privilege,
- *                  every function STABLE except op_begin_request
+ *   operator roles (schema v8/v9) USAGE + EXECUTE on op_* only, no table privilege,
+ *                  every function STABLE except the admission functions and
+ *                  the named D3 action functions (OPERATOR_VOLATILE_FUNCTIONS)
  *
- * Operator surface (schema v8, signature-termination invariant): op_begin_request
- * writes only the operator bookkeeping tables (+ denial events via fleet_event),
- * no read-side operator function calls a volatile function, and routes point
- * only at the read functions. See migrations-phase8.ts.
+ * Operator surface (schema v8 signature-termination invariant, extended in v9):
+ * the admission functions write only the operator bookkeeping tables (+ denial
+ * events via fleet_event); no read-side operator function calls a volatile
+ * function; each D3 action function writes and calls only what
+ * OPERATOR_ACTION_WRITES allows it; GET routes point only at read functions
+ * and POST routes only at action functions. See migrations-phase8/9.ts.
  */
 
 import {
   AGENT_API_FUNCTIONS,
+  OPERATOR_ACTION_FUNCTIONS,
+  OPERATOR_ACTION_HELPERS,
+  OPERATOR_ACTION_WRITES,
   OPERATOR_API_FUNCTIONS,
   OPERATOR_BOOKKEEPING_TABLES,
   OPERATOR_READ_FUNCTIONS,
@@ -324,16 +330,56 @@ export async function operatorSurfaceProblems(db: Queryable, schema: string): Pr
       if (foreignNames.has(c) && !fleetNames.has(c)) problems.push(`operator surface: ${name} calls ${c} from another schema`);
     }
   };
+  const admission = new Set(["op_begin_request", "op_begin_action"]);
+  const volatileOps = new Set(OPERATOR_VOLATILE_FUNCTIONS.map((f) => f.replace(/\(.*$/, "")));
+  for (const n of volatileOps) readSide.delete(n);
+  const actionHelpers = new Set(OPERATOR_ACTION_HELPERS);
   for (const f of fns.rows) {
-    if (f.name === "op_begin_request") {
+    if (admission.has(f.name)) {
+      // v8: op_begin_request held the admission logic itself; v9: both wrappers call fleet_operator_begin only.
       hygiene(f.name, f.src);
       for (const t of writeTargets(f.src)) {
-        if (!allowedWrites.has(t)) problems.push(`operator surface: op_begin_request writes ${t} (only operator bookkeeping is allowed)`);
+        if (!allowedWrites.has(t)) problems.push(`operator surface: ${f.name} writes ${t} (only operator bookkeeping is allowed)`);
       }
       for (const c of callsOf(f.src)) {
-        if (volatileNames.has(c) && c !== "fleet_event" && c !== "op_begin_request") {
-          problems.push(`operator surface: op_begin_request calls volatile ${c}`);
+        if (volatileNames.has(c) && c !== "fleet_event" && c !== "fleet_operator_begin" && c !== f.name) {
+          problems.push(`operator surface: ${f.name} calls volatile ${c}`);
         }
+      }
+      continue;
+    }
+    if (f.name === "fleet_operator_begin") {
+      hygiene(f.name, f.src);
+      for (const t of writeTargets(f.src)) {
+        if (!allowedWrites.has(t)) problems.push(`operator surface: fleet_operator_begin writes ${t} (only operator bookkeeping is allowed)`);
+      }
+      for (const c of callsOf(f.src)) {
+        if (volatileNames.has(c) && c !== "fleet_event" && c !== f.name) problems.push(`operator surface: fleet_operator_begin calls volatile ${c}`);
+      }
+      continue;
+    }
+    const rule = Object.prototype.hasOwnProperty.call(OPERATOR_ACTION_WRITES, f.name) ? OPERATOR_ACTION_WRITES[f.name] : undefined;
+    if (rule) {
+      hygiene(f.name, f.src);
+      if (/fleet\.proposal_decision/.test(f.src)) problems.push(`operator surface: ${f.name} references the owner proposal-decision guard`);
+      const allowedW = new Set(rule.writes);
+      for (const t of writeTargets(f.src)) {
+        if (!allowedW.has(t)) problems.push(`operator surface: ${f.name} writes ${t} (not in its D3 allow-list)`);
+      }
+      const allowedC = new Set(rule.calls);
+      for (const c of callsOf(f.src)) {
+        if (c === f.name || !fleetNames.has(c)) continue;
+        if (volatileNames.has(c) && !allowedC.has(c)) problems.push(`operator surface: ${f.name} calls volatile ${c} (not in its D3 allow-list)`);
+        else if (!volatileNames.has(c) && !allowedC.has(c) && !actionHelpers.has(c)) problems.push(`operator surface: ${f.name} calls ${c}, which is not a D3 action helper`);
+      }
+      continue;
+    }
+    if (actionHelpers.has(f.name) && f.name !== "fleet_scrub") {
+      hygiene(f.name, f.src);
+      if (f.vol === "v") problems.push(`operator surface: action helper ${f.name} is volatile`);
+      if (writeTargets(f.src).length) problems.push(`operator surface: action helper ${f.name} contains a write statement`);
+      for (const c of callsOf(f.src)) {
+        if (c !== f.name && fleetNames.has(c) && !actionHelpers.has(c)) problems.push(`operator surface: action helper ${f.name} calls ${c}`);
       }
       continue;
     }
@@ -356,11 +402,17 @@ export async function operatorSurfaceProblems(db: Queryable, schema: string): Pr
   if (!canRead.rows[0]?.ok) return [...new Set(problems)];
   const routes = await db.query<{ route: string; fn: string }>(`SELECT route, fn FROM ${schemaIdent(schema)}.fleet_operator_routes ORDER BY route`);
   const readFns = new Set(OPERATOR_READ_FUNCTIONS);
+  const actionFns = new Set(OPERATOR_ACTION_FUNCTIONS);
   for (const r of routes.rows) {
-    if (!readFns.has(r.fn)) problems.push(`operator surface: route ${r.route} maps to non-read function ${r.fn}`);
     const f = fns.rows.find((x) => x.name === r.fn);
-    if (!f) problems.push(`operator surface: route ${r.route} maps to missing function ${r.fn}`);
-    else if (f.vol === "v") problems.push(`operator surface: route ${r.route} maps to volatile ${r.fn}`);
+    if (r.route.startsWith("GET ")) {
+      if (!readFns.has(r.fn)) problems.push(`operator surface: route ${r.route} maps to non-read function ${r.fn}`);
+      if (!f) problems.push(`operator surface: route ${r.route} maps to missing function ${r.fn}`);
+      else if (f.vol === "v") problems.push(`operator surface: route ${r.route} maps to volatile ${r.fn}`);
+    } else if (r.route.startsWith("POST ")) {
+      if (!actionFns.has(r.fn)) problems.push(`operator surface: route ${r.route} maps to non-action function ${r.fn}`);
+      if (!f) problems.push(`operator surface: route ${r.route} maps to missing function ${r.fn}`);
+    } else problems.push(`operator surface: route ${r.route} has an unsupported method`);
   }
   return [...new Set(problems)];
 }

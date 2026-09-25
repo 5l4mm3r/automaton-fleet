@@ -11,12 +11,13 @@
  *   FLEET-OP-SIG-V1
  *   <principal_id>        op_<ULID>
  *   <key_id>              32 lowercase hex = first half of sha256(raw public key)
- *   <METHOD>              exactly as received ("GET" in v1)
+ *   <METHOD>              exactly as received ("GET" reads; "POST" D3 actions)
  *   <path>                raw path, /v1/operator(/segment)+, lowercase, no %, no empty/dot segments
  *   <query>               raw query without "?", already canonical ("" when absent)
  *   <timestamp>           epoch milliseconds, 13 digits
  *   <nonce>               base64url, 22-64 chars (>= 128 bits)
- *   <body_sha256_hex>     sha256 of the raw body bytes (empty body in v1)
+ *   <body_sha256_hex>     sha256 of the raw body bytes (empty for GET; the exact
+ *                         canonical JSON body bytes for D3 POST actions)
  *
  * Only Node's built-in crypto is used (Ed25519, RFC 8032, no prehash).
  */
@@ -62,6 +63,7 @@ export type OpErrorCode =
   | "FLEET_OP_RATE_LIMITED"
   | "FLEET_OP_INTERNAL"
   | "FLEET_OP_DISABLED"
+  | "FLEET_OP_ACTIONS_DISABLED"
   | "FLEET_OP_AUDIT_FULL";
 
 export type TargetResult =
@@ -187,20 +189,34 @@ export function signCanonical(privateKey: KeyObject, canonical: string): string 
   return crypto.sign(null, Buffer.from(canonical, "utf8"), privateKey).toString("base64url");
 }
 
+/**
+ * The one accepted serialization of a D3 action body: a flat object of string
+ * fields, keys sorted, no whitespace (JSON.stringify of the sorted object).
+ * The server refuses any other byte sequence, so signer and verifier can
+ * never disagree about duplicates, ordering, escapes or spacing.
+ */
+export function canonicalActionBody(fields: Record<string, string>): string {
+  const sorted: Record<string, string> = {};
+  for (const k of Object.keys(fields).sort()) sorted[k] = fields[k];
+  return JSON.stringify(sorted);
+}
+
 /** Client side: fresh nonce (144 random bits, base64url). */
 export function newNonce(): string {
   return crypto.randomBytes(18).toString("base64url");
 }
 
 /**
- * Client side: headers for one signed GET request to `target` (path+query,
- * already canonical). The private key never leaves the caller.
+ * Client side: headers for one signed request to `target` (path+query,
+ * already canonical). GET by default with an empty body; a D3 action passes
+ * method "POST" and the exact body bytes it will send. The private key never
+ * leaves the caller.
  */
 export function signedHeaders(
   privateKey: KeyObject,
   principal: string,
   target: string,
-  opts: { method?: string; now?: number; nonce?: string; keyId?: string } = {},
+  opts: { method?: string; now?: number; nonce?: string; keyId?: string; body?: Buffer | string } = {},
 ): Record<string, string> {
   const q = target.indexOf("?");
   const fields: SignedFields = {
@@ -211,7 +227,7 @@ export function signedHeaders(
     query: q < 0 ? "" : target.slice(q + 1),
     timestamp: String(opts.now ?? Date.now()),
     nonce: opts.nonce ?? newNonce(),
-    bodySha256: EMPTY_BODY_SHA256,
+    bodySha256: opts.body === undefined ? EMPTY_BODY_SHA256 : bodyDigest(opts.body),
   };
   return {
     [OP_HEADERS.principal]: fields.principal,

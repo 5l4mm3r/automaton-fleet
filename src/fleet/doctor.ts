@@ -259,7 +259,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       facts.privilegeProblems = audit.problems;
       facts.operatorRoles = audit.operatorRoles;
       const roleText = audit.operatorRoles === "not_provisioned" ? "agent/service roles least-privilege; operator roles: not provisioned" : "agent/service/operator roles least-privilege";
-      add("database privileges", audit.ok ? "pass" : "fail", audit.ok ? `${roleText}; operator surface read-only; PUBLIC has nothing` : audit.problems.join("; "));
+      add("database privileges", audit.ok ? "pass" : "fail", audit.ok ? `${roleText}; operator surface: reads STABLE/read-only, actions allow-listed; PUBLIC has nothing` : audit.problems.join("; "));
       if (!audit.ok) blockers.push("Database privileges are too broad or roles are missing (pnpm fleet:audit-privileges).");
 
       const st = await store.getState();
@@ -308,7 +308,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       add("registry state", "fail", err instanceof Error ? err.message : String(err));
     }
 
-    // ── Operator API (schema v8). Detailed checks only: the 16-item operator
+    // ── Operator API (schema v8/v9). Detailed checks only: the 16-item operator
     // checklist (and its 16/16 meaning) is deliberately unchanged (B2 F10).
     const ov = await store.operatorOverview();
     facts.operatorApi = ov;
@@ -330,6 +330,13 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         `${ov.activePrincipals} active principal(s), ${ov.activeKeys} active key(s)` + (ov.keysExpiringSoon ? `; ${ov.keysExpiringSoon} key(s) expire within 14 days` : ""),
       );
       add("operator denials", ov.recentDenials > 20 ? "warn" : "pass", `${ov.recentDenials} denied operator request(s) in the last 10 minutes`);
+      // Phase D3 (schema v9): the separate mutation kill switch and the owner's proposal queue.
+      add(
+        "operator actions",
+        "pass",
+        (ov.actionsEnabled ? `ENABLED (controlled operator actions are accepted for principals holding ops.act.* / ops.propose.*)` : "disabled (default; operator principals are read-only)") +
+          `; ${ov.pendingProposals} proposal(s) awaiting the owner (fleet:admin proposal-list)`,
+      );
     }
   }
 

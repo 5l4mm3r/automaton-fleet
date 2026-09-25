@@ -13,7 +13,11 @@
  *  - the pinned release is incomplete or differs from the registry approval;
  *  - the database login is the schema owner, a superuser, or a member of
  *    anything but fleet_operator;
- *  - the schema is not v8, or the operator privilege audit reports anything.
+ *  - the schema is not v9, or the operator privilege audit reports anything.
+ *
+ * Phase D3: the runtime-verification route reports this process's own
+ * installed release identity (build id over its working directory, no git, no
+ * child process), cached for RELEASE_IDENTITY_TTL_MS.
  */
 
 import fs from "fs";
@@ -29,13 +33,15 @@ import {
   readEnvFile,
 } from "../secret-files.js";
 import { loadRuntimeRelease, normalizeRepoUrl } from "../runtime.js";
+import { treeIdentity } from "../runtime-verify.js";
 import { PgOperatorGateway } from "./gateway.js";
 import { OPERATOR_SCHEMA_VERSION, OperatorService } from "./server.js";
-import type { RuntimeFlagsView } from "./responses.js";
+import type { RuntimeFlagsView, RuntimeIdentityView } from "./responses.js";
 import { redactText } from "../redact.js";
 
 export const DEFAULT_OPERATOR_LISTEN = "127.0.0.1:8788";
 export const DEFAULT_TIMESYNC_MARKER = "/run/systemd/timesync/synchronized";
+export const RELEASE_IDENTITY_TTL_MS = 10 * 60_000;
 const SAFETY_SWITCHES = ["REAL_REPLICATION_ENABLED", "REAL_PAYMENTS_ENABLED", "OWNER_SWEEP_ENABLED", "FLEET_DRY_RUN_CHILD"];
 const on = (v: string | undefined) => v?.trim().toLowerCase() === "true";
 
@@ -159,10 +165,22 @@ export async function startOperatorApiFromEnv(
   const timesync = opts.timesyncMarker ?? e.FLEET_OPERATOR_TIMESYNC_MARKER?.trim() ?? DEFAULT_TIMESYNC_MARKER;
   const requireTimesync = e.FLEET_OPERATOR_REQUIRE_TIMESYNC?.trim().toLowerCase() !== "false";
   let privCache: { at: number; ok: boolean } = { at: 0, ok: false };
+  const pinned = loadRuntimeRelease(e)!;
+  const releaseDir = e.FLEET_OPERATOR_RELEASE_DIR?.trim() || process.cwd();
+  let releaseCache: { at: number; value: RuntimeIdentityView["release"] } | null = null;
+  const runtimeIdentity = async (): Promise<RuntimeIdentityView> => {
+    if (!releaseCache || Date.now() - releaseCache.at > RELEASE_IDENTITY_TTL_MS) {
+      // Never spawns git: an installed release has no .git; its commit is its directory name.
+      const id = treeIdentity(releaseDir, () => null);
+      releaseCache = { at: Date.now(), value: { commit: id.commit, buildId: id.buildId, lockfileSha256: id.lockfileSha256, error: id.error ?? null } };
+    }
+    return { pinned: { repo: pinned.repo, commit: pinned.commit, buildId: pinned.buildId, lockfileSha256: pinned.lockfileSha256 }, release: releaseCache.value };
+  };
   const service = new OperatorService({
     gateway,
     audit: createAuditSink(log, e.FLEET_OPERATOR_AUDIT_LOG?.trim() || undefined),
     runtimeFlags: () => flagsFrom(e.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE),
+    runtimeIdentity,
     readinessChecks: async () => {
       if (Date.now() - privCache.at > 60_000) privCache = { at: Date.now(), ok: (await gateway.auditOperator(schema)).ok };
       const p = await gateway.ping();

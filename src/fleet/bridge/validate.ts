@@ -85,7 +85,7 @@ const UNTRUSTED_MAX = 200;
 const AGENT_STATUSES = ["reserved", "provisioning", "active", "unresponsive", "terminating", "orphaned", "dead", "failed", "unknown"];
 const MODES = ["DEVELOPMENT", "EXPANSION", "HARVEST", "EMERGENCY", "unknown"];
 const ACTOR_CLASSES = ["operator", "operator_api", "service", "agent", "database", "unknown"];
-const SCOPES = ["ops.read.status", "ops.read.agents", "ops.read.events"];
+const SCOPES = ["ops.read.status", "ops.read.agents", "ops.read.events", "ops.read.lifecycle", "ops.act.agents", "ops.propose.agents"];
 
 class Bad extends Error {}
 const bad = (where: string, what: string): never => {
@@ -119,7 +119,7 @@ export function validateWhoami(d: unknown): WhoamiData {
   const o = obj(d, ["principal", "key"], "whoami");
   const p = obj(o.principal, ["id", "name", "kind", "scopes"], "whoami.principal");
   const k = obj(o.key, ["id", "expiresAt"], "whoami.key");
-  if (!Array.isArray(p.scopes) || p.scopes.length > 3 || p.scopes.some((s) => !SCOPES.includes(s as string)) || new Set(p.scopes).size !== p.scopes.length) {
+  if (!Array.isArray(p.scopes) || p.scopes.length > SCOPES.length || p.scopes.some((s) => !SCOPES.includes(s as string)) || new Set(p.scopes).size !== p.scopes.length) {
     bad("whoami.principal.scopes", "unexpected scopes");
   }
   return {
@@ -294,6 +294,216 @@ export function validateEventPage(d: unknown, limit: number): Page<EventItem> {
   return { items: (o.items as unknown[]).map((it, i) => validateEvent(it, `events.items[${i}]`)), next: nextOf(o.next, EVENT_ID, "events.next") };
 }
 
+// ─── D3 validators ──────────────────────────────────────────────
+
+const ULID_UPPER = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+const SEQ = /^[1-9][0-9]{0,17}$/;
+const ACTIONS = ["hold_agent", "release_agent_hold", "request_health_challenge", "revoke_agent_sessions", "reconcile_lifecycle", "propose_agent_action", "unknown"];
+const DECISIONS = ["executed", "noop", "rejected", "unknown"];
+const ACTION_CODES = [
+  "FLEET_OP_TARGET_NOT_FOUND", "FLEET_OP_INVALID_STATE", "FLEET_OP_HOLD_NOT_OWNED", "FLEET_OP_OWNER_GATED",
+  "FLEET_OP_TOO_MANY_PROPOSALS", "FLEET_OP_IDEMPOTENCY_CONFLICT", "unknown",
+];
+const PROPOSAL_KINDS = ["quarantine_agent", "terminate_agent", "revoke_agent_credential", "unknown"];
+const REQUESTED = ["held", "not_held", "challenge_due", "sessions_revoked", "reconciled", "proposal_pending", "unknown"];
+const nIso = (v: unknown, w: string) => nullable(v, fmt(ISO, w));
+const nInt = (v: unknown, w: string) => nullable(v, intOf(w));
+const nBool = (v: unknown, w: string) => nullable(v, boolOf(w));
+
+function pageOf<T>(d: unknown, limit: number, where: string, item: (x: unknown, w: string) => T, cursor: RegExp): Page<T> {
+  const o = obj(d, ["items", "next"], where);
+  if (!Array.isArray(o.items) || o.items.length > limit) bad(`${where}.items`, "expected an array within the requested limit");
+  return { items: (o.items as unknown[]).map((it, i) => item(it, `${where}.items[${i}]`)), next: nextOf(o.next, cursor, `${where}.next`) };
+}
+
+function agentStateOf(v: unknown, w: string): Record<string, unknown> | null {
+  if (v === null) return null;
+  const s = obj(v, ["status", "held", "holdBy"], w);
+  return {
+    status: oneOf(AGENT_STATUSES, `${w}.status`)(s.status),
+    held: boolOf(`${w}.held`)(s.held),
+    holdBy: nullable(s.holdBy, oneOf(["operator_principal", "owner", "unknown"], `${w}.holdBy`)),
+  };
+}
+
+export function validateLifecycle(d: unknown): Record<string, unknown> {
+  const counts = ["held", "staleHeartbeats", "pendingChallenges", "overdueChallenges", "openReservations", "expiredOpenReservations",
+    "openOrphans", "orphansHoldingSlots", "pendingTerminations", "provisioningNeedingCleanup", "pendingProposals"];
+  const o = obj(d, ["fleet", "agentsByStatus", ...counts, "reaper", "policy", "operatorApi", "dbTime"], "lifecycle");
+  const f = obj(o.fleet, ["maxAgents", "living", "reserved", "quarantined", "mode", "replicationEnabled"], "lifecycle.fleet");
+  const by = obj(o.agentsByStatus, AGENT_STATUSES.filter((s) => s !== "unknown"), "lifecycle.agentsByStatus");
+  const polKeys = ["heartbeatUnresponsiveS", "healthChallengeIntervalS", "challengeTtlS", "healthGraceS", "maxChallengeFailures",
+    "terminationGraceS", "orphanSlotHoldS", "maxOpenOrphans", "sessionTtlS"];
+  const pol = obj(o.policy, polKeys, "lifecycle.policy");
+  const r = obj(o.reaper, ["lastRunAt", "overdue"], "lifecycle.reaper");
+  const op = obj(o.operatorApi, ["enabled", "actionsEnabled", "generation"], "lifecycle.operatorApi");
+  const out: Record<string, unknown> = {
+    fleet: {
+      maxAgents: nInt(f.maxAgents, "lifecycle.fleet.maxAgents"), living: nInt(f.living, "lifecycle.fleet.living"),
+      reserved: nInt(f.reserved, "lifecycle.fleet.reserved"), quarantined: nInt(f.quarantined, "lifecycle.fleet.quarantined"),
+      mode: oneOf(MODES, "lifecycle.fleet.mode")(f.mode), replicationEnabled: nBool(f.replicationEnabled, "lifecycle.fleet.replicationEnabled"),
+    },
+    agentsByStatus: Object.fromEntries(Object.entries(by).map(([k, v]) => [k, intOf(`lifecycle.agentsByStatus.${k}`)(v)])),
+    reaper: { lastRunAt: nIso(r.lastRunAt, "lifecycle.reaper.lastRunAt"), overdue: nBool(r.overdue, "lifecycle.reaper.overdue") },
+    policy: Object.fromEntries(polKeys.map((k) => [k, nInt(pol[k], `lifecycle.policy.${k}`)])),
+    operatorApi: {
+      enabled: boolOf("lifecycle.operatorApi.enabled")(op.enabled),
+      actionsEnabled: boolOf("lifecycle.operatorApi.actionsEnabled")(op.actionsEnabled),
+      generation: nInt(op.generation, "lifecycle.operatorApi.generation"),
+    },
+    dbTime: nIso(o.dbTime, "lifecycle.dbTime"),
+  };
+  for (const k of counts) out[k] = nInt(o[k], `lifecycle.${k}`);
+  return out;
+}
+
+export function validateRuntime(d: unknown): Record<string, unknown> {
+  const o = obj(d, ["approved", "pinned", "operatorApiRelease", "schemaVersion", "checks", "scope", "dbTime"], "runtime");
+  const REPO = /^https:\/\/[A-Za-z0-9./_-]{1,200}$/;
+  const ident = (v: unknown, w: string, keys: string[]) => {
+    const x = obj(v, keys, w);
+    const out: Record<string, unknown> = {};
+    for (const k of keys) {
+      if (k === "repo") out[k] = nullable(x[k], fmt(REPO, `${w}.repo`));
+      else if (k === "commit") out[k] = nullable(x[k], fmt(HEX40, `${w}.commit`));
+      else if (k === "error") out[k] = nullable(x[k], (e) => untrustedText(e, `${w}.error`));
+      else out[k] = nullable(x[k], fmt(HEX64, `${w}.${k}`));
+    }
+    return out;
+  };
+  const c = obj(o.checks, ["pinnedMatchesApproved", "operatorReleaseMatchesApproved"], "runtime.checks");
+  if (typeof o.scope !== "string" || o.scope.length > 200) bad("runtime.scope", "expected a short string");
+  return {
+    approved: ident(o.approved, "runtime.approved", ["repo", "commit", "buildId", "lockfileSha256"]),
+    pinned: nullable(o.pinned, (v) => ident(v, "runtime.pinned", ["repo", "commit", "buildId", "lockfileSha256"])),
+    operatorApiRelease: nullable(o.operatorApiRelease, (v) => ident(v, "runtime.operatorApiRelease", ["commit", "buildId", "lockfileSha256", "error"])),
+    schemaVersion: nInt(o.schemaVersion, "runtime.schemaVersion"),
+    checks: {
+      pinnedMatchesApproved: nBool(c.pinnedMatchesApproved, "runtime.checks.pinnedMatchesApproved"),
+      operatorReleaseMatchesApproved: nBool(c.operatorReleaseMatchesApproved, "runtime.checks.operatorReleaseMatchesApproved"),
+    },
+    scope: o.scope,
+    dbTime: nIso(o.dbTime, "runtime.dbTime"),
+  };
+}
+
+function reservationOf(v: unknown, w: string): Record<string, unknown> {
+  const x = obj(v, ["reservationId", "agentId", "parentAgentId", "status", "dryRun", "createdAt", "expiresAt", "claimedAt", "completedAt", "endedAt", "endReason", "expectedCommit"], w);
+  return {
+    reservationId: nullable(x.reservationId, fmt(ULID_UPPER, `${w}.reservationId`)),
+    agentId: nullable(x.agentId, fmt(ULID_LOWER, `${w}.agentId`)),
+    parentAgentId: nullable(x.parentAgentId, fmt(ULID_LOWER, `${w}.parentAgentId`)),
+    status: oneOf(["reserved", "provisioning", "completed", "expired", "released", "failed", "unknown"], `${w}.status`)(x.status),
+    dryRun: boolOf(`${w}.dryRun`)(x.dryRun),
+    createdAt: nIso(x.createdAt, `${w}.createdAt`), expiresAt: nIso(x.expiresAt, `${w}.expiresAt`), claimedAt: nIso(x.claimedAt, `${w}.claimedAt`),
+    completedAt: nIso(x.completedAt, `${w}.completedAt`), endedAt: nIso(x.endedAt, `${w}.endedAt`),
+    endReason: nullable(x.endReason, (e) => untrustedText(e, `${w}.endReason`)),
+    expectedCommit: nullable(x.expectedCommit, fmt(HEX40, `${w}.expectedCommit`)),
+  };
+}
+
+function orphanOf(v: unknown, w: string): Record<string, unknown> {
+  const x = obj(v, ["orphanId", "agentId", "reason", "holdsSlot", "detectedAt", "slotReleasedAt", "resolvedAt"], w);
+  return {
+    orphanId: nullable(x.orphanId, fmt(SEQ, `${w}.orphanId`)),
+    agentId: nullable(x.agentId, fmt(ULID_LOWER, `${w}.agentId`)),
+    reason: untrustedText(x.reason, `${w}.reason`),
+    holdsSlot: boolOf(`${w}.holdsSlot`)(x.holdsSlot),
+    detectedAt: nIso(x.detectedAt, `${w}.detectedAt`), slotReleasedAt: nIso(x.slotReleasedAt, `${w}.slotReleasedAt`), resolvedAt: nIso(x.resolvedAt, `${w}.resolvedAt`),
+  };
+}
+
+function proposalOf(v: unknown, w: string): Record<string, unknown> {
+  const x = obj(v, ["seq", "proposalId", "principalId", "kind", "targetAgentId", "reason", "status", "createdAt", "expiresAt", "decidedAt", "decidedBy", "applied"], w);
+  return {
+    seq: nullable(x.seq, fmt(SEQ, `${w}.seq`)),
+    proposalId: nullable(x.proposalId, fmt(UUID, `${w}.proposalId`)),
+    principalId: nullable(x.principalId, fmt(PRINCIPAL, `${w}.principalId`)),
+    kind: oneOf(PROPOSAL_KINDS, `${w}.kind`)(x.kind),
+    targetAgentId: nullable(x.targetAgentId, fmt(ULID_LOWER, `${w}.targetAgentId`)),
+    reason: untrustedText(x.reason, `${w}.reason`),
+    status: oneOf(["pending", "approved", "rejected", "expired", "unknown"], `${w}.status`)(x.status),
+    createdAt: nIso(x.createdAt, `${w}.createdAt`), expiresAt: nIso(x.expiresAt, `${w}.expiresAt`), decidedAt: nIso(x.decidedAt, `${w}.decidedAt`),
+    decidedBy: nullable(x.decidedBy, oneOf(["owner", "system:expiry", "unknown"], `${w}.decidedBy`)),
+    applied: nBool(x.applied, `${w}.applied`),
+  };
+}
+
+function actionOf(v: unknown, w: string): Record<string, unknown> {
+  const x = obj(v, ["seq", "actionId", "principalId", "principalKind", "action", "scope", "targetAgentId", "decision", "code", "requestedState", "previousState", "reason", "proposalId", "createdAt"], w);
+  return {
+    seq: nullable(x.seq, fmt(SEQ, `${w}.seq`)),
+    actionId: nullable(x.actionId, fmt(UUID, `${w}.actionId`)),
+    principalId: nullable(x.principalId, fmt(PRINCIPAL, `${w}.principalId`)),
+    principalKind: oneOf(["bridge_claude", "bridge_chatgpt", "unknown"], `${w}.principalKind`)(x.principalKind),
+    action: oneOf(ACTIONS, `${w}.action`)(x.action),
+    scope: oneOf(["ops.act.agents", "ops.propose.agents", "unknown"], `${w}.scope`)(x.scope),
+    targetAgentId: nullable(x.targetAgentId, fmt(ULID_LOWER, `${w}.targetAgentId`)),
+    decision: oneOf(DECISIONS, `${w}.decision`)(x.decision),
+    code: nullable(x.code, oneOf(ACTION_CODES, `${w}.code`)),
+    requestedState: nullable(x.requestedState, oneOf(REQUESTED, `${w}.requestedState`)),
+    previousState: agentStateOf(x.previousState, `${w}.previousState`),
+    reason: nullable(x.reason, (e) => untrustedText(e, `${w}.reason`)),
+    proposalId: nullable(x.proposalId, fmt(UUID, `${w}.proposalId`)),
+    createdAt: nIso(x.createdAt, `${w}.createdAt`),
+  };
+}
+
+export const validateReservationPage = (d: unknown, limit: number) => pageOf(d, limit, "reservations", reservationOf, ULID_UPPER);
+export const validateOrphanPage = (d: unknown, limit: number) => pageOf(d, limit, "orphans", orphanOf, SEQ);
+export const validateProposalPage = (d: unknown, limit: number) => pageOf(d, limit, "proposals", proposalOf, SEQ);
+export const validateActionPage = (d: unknown, limit: number) => pageOf(d, limit, "actions", actionOf, SEQ);
+
+/** A D3 action result; `expected` is the action the client asked for (a different one is MALFORMED). */
+export function validateActionResult(d: unknown, expected: string): Record<string, unknown> {
+  const w = "action";
+  const x = obj(d, ["actionId", "action", "decision", "code", "targetAgentId", "previousState", "requestedState", "result", "proposalId", "idempotentReplay"], w);
+  if (x.action !== expected) bad(`${w}.action`, "the server answered for a different action");
+  const decision = oneOf(DECISIONS.filter((s) => s !== "unknown"), `${w}.decision`)(x.decision);
+  const code = nullable(x.code, oneOf(ACTION_CODES, `${w}.code`));
+  if ((decision === "rejected") !== (code !== null)) bad(`${w}.code`, "a code accompanies exactly the rejected decisions");
+  const r = obj(x.result, ["held", "status", "sessionsRevoked", "challengeDue", "kind", "expiresAt", "existingProposalId", "priorActionId", "reap", "note"], `${w}.result`);
+  let prev: unknown = null;
+  if (x.previousState !== null) {
+    const p = x.previousState as Record<string, unknown>;
+    prev = p && typeof p === "object" && "reaperLastRunAt" in p
+      ? { reaperLastRunAt: nIso(obj(p, ["reaperLastRunAt"], `${w}.previousState`).reaperLastRunAt, `${w}.previousState.reaperLastRunAt`) }
+      : agentStateOf(p, `${w}.previousState`);
+  }
+  let reap: Record<string, number | null> | null = null;
+  if (r.reap !== null) {
+    if (!r.reap || typeof r.reap !== "object" || Array.isArray(r.reap) || Object.keys(r.reap).length > 16) bad(`${w}.result.reap`, "expected a small object");
+    reap = {};
+    for (const [k, v] of Object.entries(r.reap as Record<string, unknown>)) {
+      if (!/^[a-zA-Z]{1,32}$/.test(k)) bad(`${w}.result.reap`, "unexpected key");
+      reap[k] = nInt(v, `${w}.result.reap.${k}`);
+    }
+  }
+  return {
+    actionId: fmt(UUID, `${w}.actionId`)(x.actionId),
+    action: x.action,
+    decision,
+    code,
+    targetAgentId: nullable(x.targetAgentId, fmt(ULID_LOWER, `${w}.targetAgentId`)),
+    previousState: prev,
+    requestedState: nullable(x.requestedState, oneOf(REQUESTED, `${w}.requestedState`)),
+    result: {
+      held: nBool(r.held, `${w}.result.held`),
+      status: nullable(r.status, oneOf([...AGENT_STATUSES, "pending"], `${w}.result.status`)),
+      sessionsRevoked: nInt(r.sessionsRevoked, `${w}.result.sessionsRevoked`),
+      challengeDue: nBool(r.challengeDue, `${w}.result.challengeDue`),
+      kind: nullable(r.kind, oneOf(PROPOSAL_KINDS, `${w}.result.kind`)),
+      expiresAt: nIso(r.expiresAt, `${w}.result.expiresAt`),
+      existingProposalId: nullable(r.existingProposalId, fmt(UUID, `${w}.result.existingProposalId`)),
+      priorActionId: nullable(r.priorActionId, fmt(UUID, `${w}.result.priorActionId`)),
+      reap,
+      note: nullable(r.note, (e) => untrustedText(e, `${w}.result.note`)),
+    },
+    proposalId: nullable(x.proposalId, fmt(UUID, `${w}.proposalId`)),
+    idempotentReplay: boolOf(`${w}.idempotentReplay`)(x.idempotentReplay),
+  };
+}
+
 /** The response envelope: success or failure, exact keys, request id, and code/status agreement is checked by the client. */
 export function validateEnvelope(j: unknown): { ok: true; requestId: string; serverTime: string; data: unknown } | { ok: false; requestId: string; code: string } {
   if (j && typeof j === "object" && (j as { ok?: unknown }).ok === true) {
@@ -363,7 +573,18 @@ function mapUntrusted(v: unknown): unknown {
   return v;
 }
 
+/** Operations that change fleet state (Phase D3); everything else is read-only. */
+export const ACTION_OPERATIONS: readonly string[] = Object.freeze([
+  "hold_agent",
+  "release_agent_hold",
+  "request_health_challenge",
+  "revoke_agent_sessions",
+  "reconcile_lifecycle",
+  "propose_agent_action",
+]);
+
 /** What Claude-facing tooling emits: provenance, the notice, then data with untrusted text made visible. */
 export function modelView(operation: string, requestId: string | null, data: unknown): Record<string, unknown> {
-  return { source: "fleet-operator-api (read-only)", operation, requestId, notice: UNTRUSTED_NOTICE, data: mapUntrusted(data) };
+  const source = ACTION_OPERATIONS.includes(operation) ? "fleet-operator-api (controlled operator action)" : "fleet-operator-api (read-only)";
+  return { source, operation, requestId, notice: UNTRUSTED_NOTICE, data: mapUntrusted(data) };
 }

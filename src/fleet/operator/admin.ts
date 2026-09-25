@@ -4,6 +4,9 @@
  *
  *   enroll / add-key / revoke-key / revoke / revoke-all / api enable|disable /
  *   list / archive (audited, exported, never automatic)
+ *   Phase D3: actions enable|disable (the mutation kill switch), proposal
+ *   list / approve / reject (the ONLY way a proposal executes), owner hold /
+ *   release (owner holds cannot be lifted by an operator principal).
  *
  * Every action writes a fleet_events row with actor operator:<os user> and
  * bumps the kill-switch generation where it changes who may authenticate, so
@@ -21,7 +24,7 @@ import { quoteIdent } from "../postgres/migrations.js";
 import { redactDetail } from "../redact.js";
 import { keyIdOf } from "./canonical.js";
 import { requirePrivateDirectory } from "./keygen.js";
-import { OPERATOR_KINDS, OPERATOR_SCOPES, type OperatorKind, type OperatorScope } from "./route-policy.js";
+import { CHATGPT_SCOPES, OPERATOR_KINDS, OPERATOR_SCOPES, type OperatorKind, type OperatorScope } from "./route-policy.js";
 
 /** Rows per archival call (also enforced by fleet_operator_archive_check). */
 export const OPERATOR_ARCHIVE_MAX_ROWS = 100_000;
@@ -91,6 +94,7 @@ export class PgOperatorAdmin {
     PgOperatorAdmin.requireActor(p.actor);
     if (!OPERATOR_KINDS.includes(p.kind)) throw new Error(`kind must be one of ${OPERATOR_KINDS.join(", ")}`);
     if (!p.scopes.length || p.scopes.some((s) => !OPERATOR_SCOPES.includes(s))) throw new Error(`scopes must be from ${OPERATOR_SCOPES.join(", ")}`);
+    if (p.kind === "bridge_chatgpt" && p.scopes.some((s) => !CHATGPT_SCOPES.includes(s))) throw new Error(`a bridge_chatgpt principal may only hold ${CHATGPT_SCOPES.join(", ")}`);
     if (!(Number.isInteger(p.expiresDays) && p.expiresDays >= 1 && p.expiresDays <= 90)) throw new Error("expires-days must be 1..90");
     const raw = PgOperatorAdmin.publicKey(p.publicKey);
     const keyId = keyIdOf(raw);
@@ -177,27 +181,79 @@ export class PgOperatorAdmin {
         p.actor,
         p.reason,
       ]);
-      await c.query("UPDATE fleet_operator_state SET operator_api_enabled = false, updated_at = now(), updated_by = $1 WHERE id = 1", [p.actor.slice(0, 128)]);
+      await c.query("UPDATE fleet_operator_state SET operator_api_enabled = false, operator_actions_enabled = false, updated_at = now(), updated_by = $1 WHERE id = 1", [
+        p.actor.slice(0, 128),
+      ]);
       const generation = await this.bumpGeneration(c, p.actor);
       await this.event(c, "operator_revoke_all", p.actor, { principals: pr.rowCount ?? 0, keys: k.rowCount ?? 0 });
       return { principalsRevoked: pr.rowCount ?? 0, keysRevoked: k.rowCount ?? 0, enabled: false, generation };
     });
   }
 
+  /** The API kill switch. Disabling it also disables operator actions (re-enabling reads never re-enables mutations). */
   async setEnabled(p: { enabled: boolean; reason: string; actor: string }) {
     PgOperatorAdmin.requireActor(p.actor);
     return this.tx(async (c) => {
-      await c.query("UPDATE fleet_operator_state SET operator_api_enabled = $1, updated_at = now(), updated_by = $2 WHERE id = 1", [p.enabled, p.actor.slice(0, 128)]);
+      await c.query(
+        `UPDATE fleet_operator_state SET operator_api_enabled = $1, operator_actions_enabled = operator_actions_enabled AND $1,
+                updated_at = now(), updated_by = $2 WHERE id = 1`,
+        [p.enabled, p.actor.slice(0, 128)],
+      );
       const generation = await this.bumpGeneration(c, p.actor);
       await this.event(c, "operator_api_enabled_set", p.actor, { enabled: p.enabled, generation, reason: p.reason });
       return { enabled: p.enabled, generation };
     });
   }
 
+  /** Phase D3 mutation kill switch (default off). Enabling requires the API to be enabled. */
+  async setActionsEnabled(p: { enabled: boolean; reason: string; actor: string }) {
+    PgOperatorAdmin.requireActor(p.actor);
+    return this.tx(async (c) => {
+      const s = await c.query<{ api: boolean }>("SELECT operator_api_enabled AS api FROM fleet_operator_state WHERE id = 1 FOR UPDATE");
+      if (p.enabled && !s.rows[0]?.api) throw new Error("enable the Operator API first (operator-api enable)");
+      await c.query("UPDATE fleet_operator_state SET operator_actions_enabled = $1, updated_at = now(), updated_by = $2 WHERE id = 1", [p.enabled, p.actor.slice(0, 128)]);
+      const generation = await this.bumpGeneration(c, p.actor);
+      await this.event(c, "operator_actions_enabled_set", p.actor, { enabled: p.enabled, generation, reason: p.reason });
+      return { actionsEnabled: p.enabled, generation };
+    });
+  }
+
+  /** Proposals (owner view; reasons are operator-written text). */
+  async listProposals(p: { all?: boolean } = {}) {
+    const r = await this.pool.query(
+      `SELECT proposal_id AS "proposalId", principal_id AS "principalId", kind, target_agent_id AS "targetAgentId", reason,
+              CASE WHEN status = 'pending' AND expires_at <= now() THEN 'expired' ELSE status END AS status,
+              created_at AS "createdAt", expires_at AS "expiresAt", decided_at AS "decidedAt", decided_by AS "decidedBy", execution
+         FROM fleet_operator_proposals ${p.all ? "" : "WHERE status = 'pending'"} ORDER BY seq`,
+    );
+    return r.rows;
+  }
+
+  /** The ONLY path that executes a proposal: owner credential + fleet_operator_proposal_decide (never granted to operators). */
+  async decideProposal(p: { proposalId: string; decision: "approve" | "reject"; note: string; actor: string }) {
+    PgOperatorAdmin.requireActor(p.actor);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(p.proposalId)) throw new Error("proposal id must be a UUID");
+    return this.tx(async (c) => {
+      const r = await c.query<{ r: Record<string, unknown> }>("SELECT fleet_operator_proposal_decide($1, $2, $3, $4) AS r", [p.proposalId, p.decision, p.actor, p.note]);
+      return r.rows[0].r;
+    });
+  }
+
+  /** Owner hold: an operator principal can never release it. */
+  async holdAgent(p: { agentId: string; reason: string; actor: string }) {
+    PgOperatorAdmin.requireActor(p.actor);
+    return this.tx(async (c) => (await c.query<{ r: string }>("SELECT fleet_agent_hold_set($1, $2, $3) AS r", [p.agentId, p.reason, p.actor])).rows[0].r);
+  }
+
+  async releaseHold(p: { agentId: string; actor: string }) {
+    PgOperatorAdmin.requireActor(p.actor);
+    return this.tx(async (c) => (await c.query<{ r: string }>("SELECT fleet_agent_hold_release($1, $2) AS r", [p.agentId, p.actor])).rows[0].r);
+  }
+
   /** Public metadata only (no public keys). */
   async list() {
     const s = await this.pool.query(
-      "SELECT operator_api_enabled AS enabled, generation::int, request_count::int AS \"requestCount\", request_cap::int AS \"requestCap\" FROM fleet_operator_state WHERE id = 1",
+      "SELECT operator_api_enabled AS enabled, operator_actions_enabled AS \"actionsEnabled\", generation::int, request_count::int AS \"requestCount\", request_cap::int AS \"requestCap\" FROM fleet_operator_state WHERE id = 1",
     );
     const principals = await this.pool.query(
       `SELECT p.principal_id AS "principalId", p.name, p.kind, p.scopes, p.created_at AS "createdAt", p.revoked_at AS "revokedAt",

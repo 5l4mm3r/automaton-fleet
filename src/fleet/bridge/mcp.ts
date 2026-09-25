@@ -2,7 +2,8 @@
  * Claude bridge (Phase D2) — local stdio MCP server.
  *
  *   Claude -> this MCP server (stdio) -> Phase D client -> restricted SSH
- *   tunnel -> Operator API (127.0.0.1:8788) -> read-only FleetController data
+ *   tunnel -> Operator API (127.0.0.1:8788) -> FleetController data and,
+ *   from Phase D3, named controlled operator actions
  *
  * A thin adapter: signing, tunnel, authentication, response validation and
  * key handling are the Phase D modules (withClient / OperatorBridgeClient /
@@ -10,9 +11,10 @@
  *  - speaks MCP over stdio (newline-delimited JSON-RPC 2.0): initialize,
  *    ping, tools/list, tools/call. No resources, prompts, sampling or
  *    batching; any other method is "method not found".
- *  - exposes exactly five read tools with strict, bounded argument schemas
- *    (additionalProperties: false; ULID / event id / event type / 1..200
- *    limit), validated again here before anything runs;
+ *  - exposes the fixed mcp-core catalogue: the five B2 read tools, six D3
+ *    Tier 2 read tools and six D3 Tier 3 action tools (one named operation
+ *    each), all with strict, bounded argument schemas (additionalProperties:
+ *    false), validated again here before anything runs;
  *  - returns the Phase D model view verbatim (provenance + untrusted notice +
  *    typed untrusted_text), or a structured fail-closed error.
  *
@@ -33,7 +35,10 @@ export { TOOLS, validateArguments, SUPPORTED_PROTOCOL_VERSIONS, MCP_SERVER_VERSI
 
 export const MCP_SERVER_NAME = "fleet-operator-bridge";
 
-export const CLAUDE_INSTRUCTIONS = "Read-only access to the Automaton fleet through the signed Operator API (bridge-claude). " + UNTRUSTED_NOTICE;
+export const CLAUDE_INSTRUCTIONS =
+  "Access to the Automaton fleet through the signed Operator API: read tools, plus controlled operator actions that FleetController executes only " +
+  "when the owner has enabled them for this principal. Irreversible actions can only be proposed; the owner decides. " +
+  UNTRUSTED_NOTICE;
 
 /** Claude's executor: Phase D config + (reused or ephemeral) SSH tunnel + signed client. */
 export function tunnelExecutor(configFile?: string, tunnel: TunnelOptions = {}): Executor {
@@ -43,7 +48,7 @@ export function tunnelExecutor(configFile?: string, tunnel: TunnelOptions = {}):
   };
 }
 
-/** The Claude stdio server (all five tools). Tests may inject `execute`. */
+/** The Claude stdio server (the full catalogue). Tests may inject `execute`. */
 type Json = Record<string, unknown>;
 
 export class FleetMcpServer extends CoreServer {
