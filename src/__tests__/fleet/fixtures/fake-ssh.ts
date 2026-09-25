@@ -26,10 +26,11 @@ const net = require("net");
 const fs = require("fs");
 const args = process.argv.slice(2);
 if (process.env.FAKE_SSH_ARGV_FILE) fs.writeFileSync(process.env.FAKE_SSH_ARGV_FILE, JSON.stringify(args));
-const mode = process.env.FAKE_SSH_MODE || "ok";
+const BAKED = __BAKED__;
+const mode = process.env.FAKE_SSH_MODE || BAKED.mode || "ok";
 const spec = args[args.indexOf("-L") + 1] || "";
 const port = Number(spec.split(":")[1]);
-const target = Number(process.env.FAKE_SSH_TARGET_PORT || 0);
+const target = Number(process.env.FAKE_SSH_TARGET_PORT || BAKED.target || 0);
 if (mode === "hostkey") { process.stderr.write("@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\\nHost key verification failed.\\n"); process.exit(255); }
 if (mode === "auth") { process.stderr.write("fleet-op-tunnel@203.0.113.5: Permission denied (publickey).\\n"); process.exit(255); }
 if (mode === "hang") { setInterval(() => {}, 1000); return; }
@@ -47,9 +48,10 @@ server.listen(port, "127.0.0.1");
 setInterval(() => {}, 1000);
 `;
 
-export function writeFakeSsh(dir: string): string {
-  const file = path.join(dir, "fake-ssh");
-  fs.writeFileSync(file, `#!${process.execPath}\n${FAKE_SSH_SOURCE}`, { mode: 0o755 });
+/** `baked` supplies defaults for processes that cannot pass FAKE_SSH_* through (the tunnel gives ssh a minimal env). */
+export function writeFakeSsh(dir: string, baked: { mode?: string; target?: number } = {}, name = "fake-ssh"): string {
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, `#!${process.execPath}\n${FAKE_SSH_SOURCE.replace("__BAKED__", JSON.stringify(baked))}`, { mode: 0o755 });
   return file;
 }
 

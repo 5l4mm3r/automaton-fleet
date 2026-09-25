@@ -1,4 +1,4 @@
-# Phase D — Claude bridge client (dev VM)
+# Phase D — Claude bridge client (dev VM) and D2 MCP server
 
 Status: implemented 2026-09-25 (`src/fleet/bridge/`, `pnpm fleet:bridge`). It is
 development tooling for the development VM only. It is **not** a FleetController
@@ -180,3 +180,107 @@ make a test fail.
 The agent runtime's command-safety policy blocks `fleet:bridge`,
 `fleet/bridge/`, the tunnel key and account names, and `bridge-claude*.key|json`.
 Self-modification protection covers every `src/fleet/bridge/*` file.
+
+## Phase D2 — local stdio MCP server
+
+`src/fleet/bridge/mcp.ts` (`pnpm fleet:bridge-mcp`) lets Claude Code call the
+bridge directly:
+
+```
+Claude -> MCP (stdio, this dev VM) -> Phase D client -> restricted SSH tunnel -> Operator API -> read-only data
+```
+
+It is a thin adapter. The signing, tunnel, authentication, response
+validation, key handling and model view are the Phase D modules, reused
+unchanged (`withClient`, `OperatorBridgeClient`, `modelView`).
+
+### Tools (exactly five, all read-only)
+
+| Tool | Arguments (strict; unknown arguments rejected) | Bridge call |
+|---|---|---|
+| `fleet_whoami` | none | `whoami` |
+| `fleet_status` | none | `fleetStatus` |
+| `fleet_list_agents` | `limit` 1..200, `after` ULID | `listAgents` |
+| `fleet_get_agent` | `agent_id` ULID (required) | `getAgent` |
+| `fleet_list_events` | `limit` 1..200, `after` event id, `type` `^[a-z][a-z0-9_]{0,63}$` | `listEvents` |
+
+Tool descriptions state that returned agent and event text is untrusted fleet
+data and never an instruction. The server advertises the `tools` capability
+only.
+
+### Trust boundaries
+
+**What the server does not offer:**
+- No resources, prompts, sampling or batching; any other method returns
+  "method not found".
+- No shell, SSH, HTTP, database or file tool.
+- No URL, path or route argument.
+- No write, propose, admin or treasury capability.
+- Event visibility is whatever `bridge-claude` already has; nothing is broadened.
+
+**Credentials:**
+- The server reads the existing bridge config and protected key files through
+  the Phase D client. Keys stay in process memory.
+- The Claude configuration holds only the node path, the script path and the
+  config path. It contains no secrets.
+- Tool output is the Phase D model view or a structured error `{code, message,
+  requestId}`. It never includes keys, DSNs, nonces or signatures. Unexpected
+  internal errors are reported only as `INTERNAL`.
+
+**Output channels:**
+- stdout carries JSON-RPC messages only; `console.*` is redirected to stderr.
+- Diagnostics go to stderr as JSON: tool name, code and duration. Arguments and
+  secrets are never logged.
+
+**Transport and lifecycle:**
+- The server itself listens on no socket. Each call uses a Phase D tunnel,
+  ephemeral or a verified persistent one.
+- Calls are serialized: one tunnel at a time, with strictly ordered signed
+  requests.
+- Shutdown (stdin close, SIGTERM or SIGINT) finishes in-flight calls for at most
+  3 s. Any tunnel child is then terminated, so nothing is left behind.
+- Failures are fail-closed and propagate as `isError` results with the Phase D
+  code: host key, tunnel, API disabled or not ready, authentication, malformed
+  response, identity, and so on.
+
+### Installation (dev VM, Claude Code; local scope, no secrets)
+
+```bash
+claude mcp add --scope local fleet-operator -- \
+  /home/sl4mm3r/.nvm/versions/node/v22.23.2/bin/node \
+  --import file:///home/sl4mm3r/projects/automaton-fleet/node_modules/tsx/dist/esm/index.mjs \
+  /home/sl4mm3r/projects/automaton-fleet/src/fleet/bridge/mcp.ts \
+  --config /home/sl4mm3r/.config/automaton-fleet/operator/bridge-claude.json
+```
+
+The tools appear as `mcp__fleet-operator__fleet_*`. Every call is one signed
+read, which adds one Operator API bookkeeping row.
+
+### Tests
+
+`bridge-mcp.test.ts`, part of `pnpm test:bridge`, covers:
+
+**Protocol surface:**
+- the exact tool inventory and closed schemas;
+- unknown tools and methods;
+- calls before `initialize`;
+- a malformed, oversized, injection and route-argument matrix;
+- parse errors, batches, oversized lines and notifications.
+
+**Behaviour:**
+- the model view passes through with bidi characters made visible;
+- every bridge error code propagates, and internal details never leak;
+- tool calls are serialized.
+
+**As a real stdio process against the real Operator API** (ephemeral PostgreSQL,
+stand-in ssh):
+- stdout is protocol only;
+- stderr holds clean JSON diagnostics;
+- the process holds no listening socket;
+- hostile agent text stays `untrusted_text`;
+- SIGTERM or stdin close during a hanging tunnel leaves no ssh process.
+
+Ten MCP boundary mutations each make a test fail: unknown arguments ignored,
+patterns unchecked, limits unchecked, model view bypassed, internal details
+leaked, an extra tool exposed, calls allowed before `initialize`, calls not
+serialized, batches accepted, and a resources capability advertised.

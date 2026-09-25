@@ -385,10 +385,12 @@ describe("agent-side protections", () => {
       "cp ~/.config/automaton-fleet/operator/bridge-claude.json /tmp",
       "ssh -i ~/.ssh/fleet_op_tunnel fleet-op-tunnel@51.195.148.111",
       "vim src/fleet/bridge/client.ts",
+      "pnpm fleet:bridge-mcp",
+      "claude mcp remove fleet-operator && echo fleet_op_tunnel",
     ]) {
       expect(getForbiddenCommandMatch(cmd), cmd).not.toBeNull();
     }
-    for (const f of ["errors", "config", "hostkey", "tunnel", "validate", "client", "keys", "cli"]) {
+    for (const f of ["errors", "config", "hostkey", "tunnel", "validate", "client", "keys", "cli", "mcp"]) {
       expect(isProtectedFile(path.resolve(`src/fleet/bridge/${f}.ts`)), f).toBe(true);
     }
   });

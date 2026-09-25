@@ -56,6 +56,7 @@
     "fleet:verify": "tsx src/fleet/postgres/cli.ts doctor --checklist",
     "fleet:operator-keygen": "tsx src/fleet/operator/keygen.ts",
     "fleet:bridge": "tsx src/fleet/bridge/cli.ts",
+    "fleet:bridge-mcp": "tsx src/fleet/bridge/mcp.ts",
     "fleet:dry-run-child": "tsx src/fleet/postgres/cli.ts dry-run-child",
     "test:deploy": "vitest run src/__tests__/fleet/fleet-phase4.test.ts",
     "test:phase5": "vitest run src/__tests__/fleet/fleet-phase5.test.ts",
@@ -63,7 +64,7 @@
     "test:witness": "vitest run src/__tests__/fleet/fleet-witness.test.ts src/__tests__/fleet/fleet-witness-imports.test.ts",
     "test:redact": "vitest run src/__tests__/fleet/redact.test.ts src/__tests__/fleet/redact-sinks.test.ts",
     "test:operator": "vitest run src/__tests__/fleet/operator-canonical.test.ts src/__tests__/fleet/operator-pg.test.ts src/__tests__/fleet/operator-server.test.ts",
-    "test:bridge": "vitest run src/__tests__/fleet/bridge-unit.test.ts src/__tests__/fleet/bridge-tunnel.test.ts src/__tests__/fleet/bridge-integration.test.ts",
+    "test:bridge": "vitest run src/__tests__/fleet/bridge-unit.test.ts src/__tests__/fleet/bridge-tunnel.test.ts src/__tests__/fleet/bridge-integration.test.ts src/__tests__/fleet/bridge-mcp.test.ts",
     "test:ci": "vitest run --reporter=verbose",
     "clean": "rm -rf dist && pnpm -r clean"
   },

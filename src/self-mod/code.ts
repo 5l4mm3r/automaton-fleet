@@ -149,6 +149,8 @@ const PROTECTED_FILES: readonly string[] = Object.freeze([
   "fleet/bridge/keys.js",
   "fleet/bridge/cli.ts",
   "fleet/bridge/cli.js",
+  "fleet/bridge/mcp.ts",
+  "fleet/bridge/mcp.js",
   "fleet/operator/canonical.ts",
   "fleet/operator/canonical.js",
   "fleet/operator/route-policy.ts",

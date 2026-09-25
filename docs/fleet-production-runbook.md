@@ -1231,6 +1231,13 @@ Key expiry:
   `key rotate-verify` → `key rotate-switch` → (VPS) `operator-revoke-key` →
   `key rotate-finish`.
 
+Claude Code access (Phase D2): the local stdio MCP server `fleet-operator` is
+registered with `claude mcp add --scope local` (see
+`docs/design/phase-d-claude-bridge.md`). It exposes `fleet_whoami`,
+`fleet_status`, `fleet_list_agents`, `fleet_get_agent` and `fleet_list_events`,
+and nothing else. It goes through the same bridge and tunnel.
+- Remove it: `claude mcp remove fleet-operator --scope local`.
+
 Failures are fail-closed codes. What they mean:
 
 | Code | Meaning / action |
