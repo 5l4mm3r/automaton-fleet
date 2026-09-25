@@ -196,6 +196,12 @@ describe.skipIf(!PG_BIN)("D3 controlled operator actions (schema v9, PostgreSQL 
 
   // ── Scope / kind separation ───────────────────────────────────
 
+  it("whoami reports every scope a principal holds (D3 scopes included)", async () => {
+    const w = await client(op).whoami();
+    expect([...w.data.principal.scopes].sort()).toEqual([...ALL_SCOPES].sort());
+    expect((await client(readOnly).whoami()).data.principal.scopes.sort()).toEqual(["ops.read.agents", "ops.read.events", "ops.read.status"]);
+  });
+
   it("read-only, ChatGPT and act-only principals cannot reach what their scopes/kind do not allow", async () => {
     const a = agents[0].agentId;
     expect(await code(() => client(readOnly).holdAgent({ agentId: a, reason: "x" }))).toBe("SCOPE_DENIED");

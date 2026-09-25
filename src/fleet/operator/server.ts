@@ -57,7 +57,7 @@ import {
   verifySignature,
   type OpErrorCode,
 } from "./canonical.js";
-import { matchRoute, verifyRoutePolicy, type RouteMatch } from "./route-policy.js";
+import { OPERATOR_SCOPES, matchRoute, verifyRoutePolicy, type RouteMatch } from "./route-policy.js";
 import { ActionRefused, ACTION_FN, type ActionName, type KeyMaterial, type OperatorGateway } from "./gateway.js";
 import {
   actionItem,
@@ -539,7 +539,7 @@ export class OperatorService {
             id: typeof p.id === "string" && PRINCIPAL_RE.test(p.id) ? p.id : null,
             name: typeof p.name === "string" && /^[a-z][a-z0-9-]{2,40}$/.test(p.name) ? p.name : null,
             kind: p.kind === "bridge_claude" || p.kind === "bridge_chatgpt" ? p.kind : "unknown",
-            scopes: Array.isArray(p.scopes) ? p.scopes.filter((s) => s === "ops.read.status" || s === "ops.read.agents" || s === "ops.read.events") : [],
+            scopes: Array.isArray(p.scopes) ? p.scopes.filter((s): s is string => typeof s === "string" && (OPERATOR_SCOPES as readonly string[]).includes(s)) : [],
           },
           key: {
             id: typeof k.id === "string" && /^[0-9a-f]{32}$/.test(k.id) ? k.id : null,
