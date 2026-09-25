@@ -50,6 +50,7 @@ import { RateLimiter, type RateLimit } from "./rate-limit.js";
 
 export { SIG_HEADERS, canonicalRequest, signRequest } from "./server-signing.js";
 import { SIG_HEADERS, signRequest } from "./server-signing.js";
+import { parseFounderAttestHeader } from "../founder/evidence.js";
 
 interface RequestCtx {
   raw: Buffer;
@@ -83,7 +84,8 @@ const PUBLIC_HEALTH_CACHE_MS = 2_000;
  * restricted capability scope 'witness'. Any other scope is denied every
  * authenticated route. Public routes identify nobody and grant no authority.
  */
-export type RouteAuth = "public" | "bearer" | "session";
+/** genesis_attest (schema v12): the single founder-runtime attestation route, authenticated by its one-time token in the database. */
+export type RouteAuth = "public" | "bearer" | "session" | "genesis_attest";
 export interface RoutePolicy {
   auth: RouteAuth;
   /** Opt-in for capability scope 'witness'. Irrelevant for public routes. */
@@ -117,6 +119,7 @@ export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Obj
   "POST /v1/knowledge/list": { auth: "session", witness: false },
   "POST /v1/identity/request": { auth: "session", witness: false },
   "POST /v1/identity/fact": { auth: "session", witness: false },
+  "POST /v1/genesis/runtime-evidence": { auth: "genesis_attest", witness: false },
 });
 
 /**
@@ -128,6 +131,8 @@ export function routeDecision(method: string, path: string, scope: string | null
   const policy = ROUTE_POLICY[`${method} ${path}`];
   if (!policy) return "unknown";
   if (policy.auth === "public") return "allow";
+  // The attestation token authenticates exactly one route, in the database; no agent scope applies.
+  if (policy.auth === "genesis_attest") return "allow";
   if (scope === "full") return "allow";
   // A held agent (Phase D3 operator/owner hold) keeps exactly the witness allow-list: liveness only.
   if (scope === "witness" || scope === "held") return policy.witness ? "allow" : "deny";
@@ -644,7 +649,7 @@ export class FleetService {
   private async authorize(method: string, path: string, req: http.IncomingMessage, ctx: RequestCtx): Promise<void> {
     const policy = ROUTE_POLICY[`${method} ${path}`];
     if (!policy) throw new HttpError(404, "FLEET_NOT_FOUND", "no such endpoint");
-    if (policy.auth === "public") return;
+    if (policy.auth === "public" || policy.auth === "genesis_attest") return;
     const cred = policy.auth === "bearer" ? await this.bearer(req, path, ctx) : await this.credentials(req, path, ctx);
     const scope = await this.opts.admin.capabilityScope(cred.agentId);
     // No such agent: the handler's own authentication rejects it (unchanged behaviour).
@@ -979,6 +984,21 @@ export class FleetService {
         const r = await agent.knowledgePropose(agentId, token, str(body, "category", 20), str(body, "title", 200), str(body, "content", 8000));
         if (!r.ok) throw FleetService.refusal(r, "proposal refused");
         return { proposalId: r.proposalId, status: r.status };
+      }
+
+      case "/v1/genesis/runtime-evidence": {
+        // Schema v12: a provisioned (not yet activated) founder process reports its own identity. Only the
+        // one-time attestation token for exactly that founder works here, and nothing else accepts it.
+        const cred = parseFounderAttestHeader(req.headers.authorization);
+        this.spendUnverified(ctx);
+        if (!cred) return this.authFailure(ctx, path, "missing or malformed founder attestation token");
+        const r = await admin.recordFounderRuntimeEvidence(cred.agentId, cred.token, body);
+        if (!r.ok) {
+          if (r.code === "FLEET_AUTH_FAILED") return this.authFailure(ctx, path, "founder attestation token rejected");
+          throw new HttpError(r.code === "FLEET_BAD_REQUEST" ? 400 : 409, String(r.code), "runtime evidence refused");
+        }
+        this.audit("genesis_runtime_evidence", cred.agentId, { replay: r.replay === true });
+        return { ok: true, replay: r.replay === true };
       }
 
       case "/v1/knowledge/list": {

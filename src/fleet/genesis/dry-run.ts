@@ -27,6 +27,7 @@ import { quoteIdent } from "../postgres/migrations.js";
 import { hashAgentToken, mintAgentToken } from "../postgres/store.js";
 import { FOUNDER_MANIFEST_V1, manifestSha256 } from "../capabilities.js";
 import { GenesisOps, type GenesisView } from "./admin.js";
+import { simulateRuntimeAttestation } from "./simulate.js";
 
 export interface DryRunCheck {
   name: string;
@@ -119,9 +120,11 @@ export async function runGenesisDryRun(opts: {
     check("A: founders provisioned without authority", aIds.length === n
       && (await c.query(`SELECT count(*)::int AS k FROM fleet_agent_credentials WHERE agent_id = ANY($1)`, [aIds])).rows[0].k === 0,
       `${aIds.length} founder(s) reserved, 0 credentials`);
-    await ops.attest(a.genesisId, aIds[0], await ops.expectedEvidence(a.genesisId, aIds[0]), opts.actor);
-    const bad = { ...(await ops.expectedEvidence(a.genesisId, aIds[1])), buildId: "0".repeat(64) };
-    const failed = await ops.attest(a.genesisId, aIds[1], bad, opts.actor);
+    const okA = await simulateRuntimeAttestation(c, ops, a.genesisId, aIds[0], opts.actor);
+    await ops.attest(a.genesisId, aIds[0], okA.host, opts.actor);
+    // Founder 2's running process reports a different build: its own evidence disagrees with the authorization.
+    const badA = await simulateRuntimeAttestation(c, ops, a.genesisId, aIds[1], opts.actor, { runtime: { buildId: "0".repeat(64) } });
+    const failed = await ops.attest(a.genesisId, aIds[1], badA.host, opts.actor);
     const aRows = (await c.query(`SELECT status FROM fleet_agents WHERE agent_id = ANY($1)`, [aIds])).rows.map((r) => r.status);
     const popA = (await c.query(`SELECT living_agents + reserved_slots + quarantined_slots AS p FROM fleet_state WHERE id = 1`)).rows[0].p;
     check("A: attestation failure rolls the whole Genesis back", failed.ok === false && failed.code === "FLEET_GENESIS_ATTESTATION_FAILED"
@@ -141,7 +144,7 @@ export async function runGenesisDryRun(opts: {
     await ops.approve(b.genesisId, b.authSha256, opts.actor);
     const pb = await ops.provision(b.genesisId, opts.actor);
     const ids = pb.founderIds ?? [];
-    for (const id of ids) await ops.attest(b.genesisId, id, await ops.expectedEvidence(b.genesisId, id), opts.actor);
+    for (const id of ids) await ops.attest(b.genesisId, id, (await simulateRuntimeAttestation(c, ops, b.genesisId, id, opts.actor)).host, opts.actor);
     await ops.fund(b.genesisId, opts.actor);
     const tokens = ids.map((id) => mintAgentToken(id)); // synthetic; never written anywhere
     const act: GenesisView = await ops.activateWithHashes(b.genesisId, b.authSha256, tokens.map(hashAgentToken), opts.actor);

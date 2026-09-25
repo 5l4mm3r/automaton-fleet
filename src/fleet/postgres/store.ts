@@ -1636,6 +1636,11 @@ export class PgFleetStore {
     });
   }
 
+  /** Schema v12: record a provisioned founder process's own attestation evidence (token-bound, set once). */
+  async recordFounderRuntimeEvidence(agentId: string, token: string, evidence: Record<string, unknown>): Promise<{ ok: boolean; code?: string; replay?: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_genesis_runtime_evidence($1, $2, $3) AS r", [agentId, token, JSON.stringify(evidence)])).rows[0].r);
+  }
+
   /** Schema v11: expire / roll back Genesis authorizations past their expiry. Returns the count. */
   async expireGenesis(limit = 10): Promise<number> {
     return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_genesis_expire($1) AS n", [limit])).rows[0].n));

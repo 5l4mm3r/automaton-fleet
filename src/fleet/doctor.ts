@@ -31,6 +31,17 @@ import net from "net";
 import path from "path";
 import { FLEET_PG_SCHEMA_VERSION } from "./postgres/migrations.js";
 import { FOUNDER_MANIFEST_V1, manifestSha256 } from "./capabilities.js";
+import { execFileSync } from "child_process";
+
+/** Active automaton-fleet-founder@ instances on this host (null when systemd is not available). */
+function founderRuntimeUnits(): string[] | null {
+  try {
+    return execFileSync("systemctl", ["list-units", "--all", "--plain", "--no-legend", "automaton-fleet-founder@*"], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] })
+      .split("\n").map((l) => l.trim().split(/\s+/)).filter((c) => c[0] && c[2] && c[2] !== "inactive").map((c) => c[0]);
+  } catch {
+    return null;
+  }
+}
 import type { PgFleetStore } from "./postgres/store.js";
 import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "./runtime.js";
 import { auditLevel } from "./operator/responses.js";
@@ -364,6 +375,17 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         gv.reproductionExecutionEnabled ? "fail" : "pass",
         gv.reproductionExecutionEnabled ? "EXECUTION ENABLED — must be pinned off" : "execution constitutionally disabled; eligibility is assessment only",
       );
+      // Phase F.1: founder runtime instances on this host must match the living founders in the registry.
+      const running = founderRuntimeUnits();
+      if (running !== null) {
+        const ok = running.length === gv.livingFounders || (gv.inFlight > 0 && running.length <= gv.founders);
+        add(
+          "founder runtimes",
+          ok ? "pass" : "fail",
+          `${running.length} founder runtime unit(s) active on this host; ${gv.livingFounders} living founder(s), ${gv.inFlight} Genesis in flight`,
+        );
+        if (!ok) blockers.push("Founder runtime units on this host do not match the registry (sudo scripts/fleet-founders.sh status).");
+      }
       add("identity vault", "pass", `${gv.identityFacts} fact(s) stored, ${gv.identityClaimsPending} claim(s) awaiting the owner; facts are released only per approved claim`);
       add("institutional knowledge", "pass", `${gv.knowledgeEntries} promoted entr(ies), ${gv.knowledgePending} proposal(s) awaiting the owner; ${gv.openEstates} open estate(s)`);
     }

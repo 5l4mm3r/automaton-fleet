@@ -102,11 +102,25 @@ export class GenesisOps {
     return this.one<GenesisView & { code?: string }>(`SELECT fleet_genesis_provision($1, $2) AS r`, [genesisId, actor]);
   }
 
-  attest(genesisId: string, agentId: string, evidence: AttestationEvidence, actor: string) {
+  /** v12: `evidence` is the HOST evidence; the runtime's own evidence must already be recorded. */
+  attest(genesisId: string, agentId: string, evidence: AttestationEvidence | Record<string, unknown>, actor: string) {
     return this.one<{ ok: boolean; code?: string; why?: string; status?: string; genesis?: GenesisView }>(
       `SELECT fleet_genesis_attest($1, $2, $3, $4) AS r`,
       [genesisId, agentId, JSON.stringify(evidence), actor],
     );
+  }
+
+  /** Schema v12: issue (or re-issue before evidence) one founder's runtime attestation token digest + nonce. */
+  issueRuntime(genesisId: string, agentId: string, tokenSha256: string, nonce: string, actor: string) {
+    return this.one<{ genesisId: string; agentId: string; workspaceId: string; stateNamespace: string; manifestId: string; manifestSha256: string;
+      runtime: { repo: string; commit: string; buildId: string; lockfileSha256: string } }>(
+      `SELECT fleet_genesis_issue_runtime($1, $2, $3, $4, $5) AS r`, [genesisId, agentId, tokenSha256, nonce, actor]);
+  }
+
+  /** Runtime evidence recorded by the controller for a founder (null until the process submitted it). */
+  async runtimeEvidence(genesisId: string, agentId: string): Promise<{ evidence: Record<string, unknown> | null; at: string | null }> {
+    const r = await this.db.query(`SELECT runtime_evidence, runtime_evidence_at FROM fleet_genesis_founders WHERE genesis_id = $1 AND agent_id = $2`, [genesisId, agentId]);
+    return { evidence: r.rows[0]?.runtime_evidence ?? null, at: r.rows[0]?.runtime_evidence_at ?? null };
   }
 
   fail(genesisId: string, agentId: string | null, reason: string, actor: string) {
@@ -200,6 +214,11 @@ export class PgGenesisAdmin extends GenesisOps {
       for (const f of files) fs.rmSync(f, { force: true });
       throw err;
     }
+  }
+
+  /** The owner connection (search_path = the fleet schema), for helpers that take a GenesisDb. */
+  query(sql: string, params?: unknown[]): Promise<{ rows: any[] }> {
+    return this.pool.query(sql, params);
   }
 
   async withClient<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {

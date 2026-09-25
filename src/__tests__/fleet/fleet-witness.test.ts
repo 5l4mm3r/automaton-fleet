@@ -108,8 +108,10 @@ describe("Fleet security: witness route policy (default deny)", () => {
     for (const k of Object.keys(ROUTE_POLICY)) {
       const [m, p] = k.split(" ");
       expect(routeDecision(m, p, "full"), k).toBe("allow");
-      expect(routeDecision(m, p, "observer"), k).toBe(ROUTE_POLICY[k].auth === "public" ? "allow" : "deny");
-      expect(routeDecision(m, p, "witness"), k).toBe(ROUTE_POLICY[k].auth === "public" || ROUTE_POLICY[k].witness ? "allow" : "deny");
+      // genesis_attest is authenticated by its own one-time token in the database, never by an agent scope.
+      const open = ROUTE_POLICY[k].auth === "public" || ROUTE_POLICY[k].auth === "genesis_attest";
+      expect(routeDecision(m, p, "observer"), k).toBe(open ? "allow" : "deny");
+      expect(routeDecision(m, p, "witness"), k).toBe(open || ROUTE_POLICY[k].witness ? "allow" : "deny");
     }
   });
 });
@@ -422,11 +424,11 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
        VALUES ($1, 'root', 0, 'pre-v7-root', $2, 'active', 'test', now())`,
       [ulid(), `0x${randomBytes(20).toString("hex")}`],
     );
-    // v8 (Operator API), v9 (D3 actions) v10 (Phase E ledger) and v11 (Phase F Genesis), all additive, now follow v7 in the same migration run.
-    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 11, wouldApply: [7, 8, 9, 10, 11] });
-    expect(await store.migrate()).toEqual([7, 8, 9, 10, 11]);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(11);
-    expect((await store.health()).schemaVersion).toBe(11);
+    // v8 (Operator API), v9 (D3 actions) v10 (Phase E ledger), v11 (Phase F Genesis) and v12 (F.1 founder runtimes), all additive, now follow v7 in the same migration run.
+    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 12, wouldApply: [7, 8, 9, 10, 11, 12] });
+    expect(await store.migrate()).toEqual([7, 8, 9, 10, 11, 12]);
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(12);
+    expect((await store.health()).schemaVersion).toBe(12);
     const scopes = await ownerRaw.query(`SELECT capability_scope FROM ${schema}.fleet_agents`);
     expect(scopes.rows.map((r) => r.capability_scope)).toEqual(["full"]);
     expect((await store.auditPrivileges()).problems).toEqual([]);
@@ -556,7 +558,10 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       "POST /v1/identity/request": { factKey: "trading_name", purpose: "x", workflow: "x" },
       "POST /v1/identity/fact": { claimId: "00000000-0000-4000-8000-000000000000" },
     };
-    const denied = Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth !== "public" && !p.witness).map(([k]) => k).sort();
+    const denied = Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth !== "public" && p.auth !== "genesis_attest" && !p.witness).map(([k]) => k).sort();
+    // The founder attestation route accepts no session at all (the witness's signed session is simply unauthenticated there).
+    const ga = await call(s, "POST", "/v1/genesis/runtime-evidence", {});
+    expect(ga.status).toBe(401);
     expect(denied).toEqual(Object.keys(bodies).sort());
     const before = await fingerprint();
     for (const k of denied) {

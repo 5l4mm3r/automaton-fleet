@@ -1,0 +1,90 @@
+# Automaton Fleet Genesis founder runtime — Phase F.1 (schema v12). One instance per founder:
+#   automaton-fleet-founder@<founderAgentId>.service
+#
+# NEVER started by any script except the owner's founder provisioner
+# (scripts/fleet-founders.sh), for an owner-approved Genesis or for the
+# real-runtime rehearsal (synthetic founders against a throwaway registry).
+#
+# Isolation:
+#  - DynamicUser: a unique uid per founder, allocated by systemd; no
+#    persistent OS user, no group with any fleet secret.
+#  - StateDirectory automaton-founders/<id> (0700): the founder's identity,
+#    one-time attestation token or fleet credential (0600, owner = the
+#    founder), workspace/<workspaceId>, state/<stateNamespace>, memory,
+#    reports. Inside the unit /var/lib/private is a private view holding ONLY
+#    this founder's directory: another founder's state is not even visible.
+#  - Loopback-only network (FleetController on 127.0.0.1); every fleet
+#    secret, bridge key and other service's state is inaccessible.
+#  - The capability manifest is bound here (FLEET_CAPABILITY_MANIFEST) and
+#    compiled into the pinned release; the founder cannot change either.
+# The autonomous agent loop is not started in Phase F.1 (no inference
+# provider credential, no egress policy: owner decisions).
+
+[Unit]
+Description=Automaton Fleet Genesis founder runtime %i
+Documentation=file:///opt/automaton-fleet/current/docs/design/phase-f1-founder-runtime.md
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+DynamicUser=yes
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/founder/main.js
+Environment=NODE_ENV=production
+Environment=FLEET_FOUNDER_ID=%i
+Environment=FLEET_CAPABILITY_MANIFEST=founder-v1
+Environment=FLEET_FOUNDER_STATE_DIR=/var/lib/automaton-founders/%i
+Environment=HOME=/var/lib/automaton-founders/%i
+Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/runtime.env
+Environment=FLEET_FOUNDER_AGENT_LOOP=disabled
+StateDirectory=automaton-founders/%i
+StateDirectoryMode=0700
+UMask=0077
+
+# 3 = the controller refused this founder; 4 = startup refusal. Never restart those.
+Restart=on-failure
+RestartSec=5s
+RestartPreventExitStatus=3 4
+KillSignal=SIGTERM
+TimeoutStopSec=20s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-founder
+
+# Network: FleetController on loopback only.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Sandboxing
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# Every fleet secret, bridge key and other service's state/logs.
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak -/etc/automaton-fleet/chatgpt-adapter.json -/etc/automaton-fleet/chatgpt-tunnel
+InaccessiblePaths=-/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-chatgpt-adapter -/var/lib/automaton-fleet-chatgpt-tunnel -/var/lib/automaton-fleet-operator-api
+InaccessiblePaths=-/var/log/automaton-fleet -/var/log/automaton-fleet-operator -/var/log/automaton-fleet-chatgpt-adapter -/run/credentials -/opt/automaton-fleet/chatgpt-adapter -/opt/automaton-fleet/tunnel-client -/var/lib/postgresql -/etc/postgresql -/etc/ssh -/root

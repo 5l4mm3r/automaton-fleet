@@ -29,7 +29,8 @@
 #   /opt/automaton-fleet/{releases,node/bin}         root-owned; pinned node binary copied in
 #   /etc/systemd/system/automaton-fleet.service, automaton-agent.service,
 #     automaton-fleet-witness.service, automaton-fleet-operator-api.service,
-#     automaton-fleet-custody.service  (installed, NOT enabled/started)
+#     automaton-fleet-custody.service, automaton-fleet-founder@.service (template; instances only via
+#     scripts/fleet-founders.sh)  (installed, NOT enabled/started)
 #   /etc/logrotate.d/automaton-fleet                 root 0644 (D-9 bounded JSONL audit retention)
 # and moves controller secrets out of the repository .env.fleet (backup kept root-only).
 #
@@ -162,6 +163,7 @@ run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-agent.servic
 run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-fleet-witness.service" /etc/systemd/system/automaton-fleet-witness.service
 run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-fleet-operator-api.service" /etc/systemd/system/automaton-fleet-operator-api.service
 run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-fleet-custody.service" /etc/systemd/system/automaton-fleet-custody.service
+run install -m 0644 -o root -g root "$REPO/deploy/systemd/automaton-fleet-founder@.service" "/etc/systemd/system/automaton-fleet-founder@.service"
 run systemctl daemon-reload
 
 say "7b. logrotate (D-9 bounded JSONL audit retention)"

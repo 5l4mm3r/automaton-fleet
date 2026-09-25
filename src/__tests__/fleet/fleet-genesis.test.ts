@@ -27,6 +27,7 @@ import { auditPrivileges, genesisSurfaceProblems } from "../../fleet/postgres/pr
 import { PgLedgerAdmin, sha256Hex } from "../../fleet/treasury/ledger.js";
 import { GenesisOps, PgGenesisAdmin } from "../../fleet/genesis/admin.js";
 import { runGenesisDryRun } from "../../fleet/genesis/dry-run.js";
+import { simulateRuntimeAttestation } from "../../fleet/genesis/simulate.js";
 import { PgOperatorAdmin } from "../../fleet/operator/admin.js";
 import { rawPublicKey } from "../../fleet/operator/canonical.js";
 import { FOUNDER_MANIFEST_V1, TOOL_CAPABILITIES, createCapabilityManifestRule, decideTool, manifestSha256 } from "../../fleet/capabilities.js";
@@ -133,7 +134,7 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
     const g = await genesis.propose({ idempotencyKey: key(), founderCount: n, allocationCents: alloc, ttlS: 3600, actor: OWNER });
     await genesis.approve(g.genesisId, g.authSha256, OWNER);
     const p = await genesis.provision(g.genesisId, OWNER);
-    for (const id of p.founderIds!) await genesis.attest(g.genesisId, id, await genesis.expectedEvidence(g.genesisId, id), OWNER);
+    for (const id of p.founderIds!) await genesis.attest(g.genesisId, id, (await simulateRuntimeAttestation(genesis, genesis, g.genesisId, id, OWNER)).host, OWNER);
     await genesis.fund(g.genesisId, OWNER);
     return { ...g, founderIds: p.founderIds! };
   }
@@ -173,7 +174,7 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
   });
 
   it("migrates to v11 with a clean privilege audit and the constitutional pins in place", async () => {
-    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(11);
+    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(12);
     const a = await auditPrivileges(owner);
     expect(a.problems).toEqual([]);
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_reproduction_policy SET execution_enabled = true`))).toMatch(/ERR:.*check constraint/);
@@ -348,7 +349,7 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
     await genesis.approve(g.genesisId, g.authSha256, OWNER);
     const p = await genesis.provision(g.genesisId, OWNER);
     const ids = p.founderIds!;
-    await genesis.attest(g.genesisId, ids[0], await genesis.expectedEvidence(g.genesisId, ids[0]), OWNER);
+    await genesis.attest(g.genesisId, ids[0], (await simulateRuntimeAttestation(genesis, genesis, g.genesisId, ids[0], OWNER)).host, OWNER);
     for (const bad of [
       { commit: "f".repeat(40) },
       { manifestSha256: "0".repeat(64) },
@@ -360,9 +361,10 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
       await genesis.approve(gx.genesisId, gx.authSha256, OWNER);
       const px = await genesis.provision(gx.genesisId, OWNER);
       const [x, y] = px.founderIds!;
-      await genesis.attest(gx.genesisId, x, await genesis.expectedEvidence(gx.genesisId, x), OWNER);
-      const ev = { ...(await genesis.expectedEvidence(gx.genesisId, y)), ...("workspaceId" in bad ? { workspaceId: (await genesis.expectedEvidence(gx.genesisId, x)).workspaceId } : bad) };
-      const r = await genesis.attest(gx.genesisId, y, ev, OWNER);
+      await genesis.attest(gx.genesisId, x, (await simulateRuntimeAttestation(genesis, genesis, gx.genesisId, x, OWNER)).host, OWNER);
+      const override = "workspaceId" in bad ? { workspaceId: (await genesis.expectedEvidence(gx.genesisId, x)).workspaceId } : bad;
+      const sim = await simulateRuntimeAttestation(genesis, genesis, gx.genesisId, y, OWNER, { runtime: override, host: override });
+      const r = await genesis.attest(gx.genesisId, y, sim.host, OWNER);
       expect(r, JSON.stringify(bad)).toMatchObject({ ok: false, code: "FLEET_GENESIS_ATTESTATION_FAILED", status: "rolled_back" });
       expect(await population()).toBe(0);
     }
@@ -394,7 +396,7 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
     const g = await genesis.propose({ idempotencyKey: key(), founderCount: 2, allocationCents: 1_000, ttlS: 3600, actor: OWNER });
     await genesis.approve(g.genesisId, g.authSha256, OWNER);
     const p = await genesis.provision(g.genesisId, OWNER);
-    for (const id of p.founderIds!) await genesis.attest(g.genesisId, id, await genesis.expectedEvidence(g.genesisId, id), OWNER);
+    for (const id of p.founderIds!) await genesis.attest(g.genesisId, id, (await simulateRuntimeAttestation(genesis, genesis, g.genesisId, id, OWNER)).host, OWNER);
     await owner.query(`UPDATE fleet.fleet_economic_model SET agent_daily_spend_cents = agent_daily_spend_cents + 1`);
     expect(await pgCode(genesis.fund(g.genesisId, OWNER))).toBe("FLEET_POLICY_CHANGED");
     await owner.query(`UPDATE fleet.fleet_economic_model SET agent_daily_spend_cents = agent_daily_spend_cents - 1`);
@@ -410,6 +412,60 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
     await genesis.setEnabled(true, OWNER, "t");
     expect((await genesis.activateWithHashes(g.genesisId, g.authSha256, hashes, OWNER)).status).toBe("activated");
     expect(await population()).toBe(2);
+    await reset();
+  });
+
+  it("v12 runtime attestation: missing, stale, token-less, nonce-mismatched or re-issued-after-evidence runtime evidence fails closed", async () => {
+    const g = await genesis.propose({ idempotencyKey: key(), founderCount: 2, allocationCents: 0, ttlS: 3600, actor: OWNER });
+    await genesis.approve(g.genesisId, g.authSha256, OWNER);
+    const p = await genesis.provision(g.genesisId, OWNER);
+    const [a, b] = p.founderIds!;
+    const okA = await simulateRuntimeAttestation(genesis, genesis, g.genesisId, a, OWNER);
+    // A re-issue after evidence exists is refused (the evidence is bound to its token).
+    expect(await pgCode(genesis.issueRuntime(g.genesisId, a, sha256Hex("x"), "n".repeat(24), OWNER))).toBe("FLEET_INVALID_STATE");
+    // A wrong nonce is refused and nothing is recorded.
+    const bad = await simulateRuntimeAttestation(genesis, genesis, g.genesisId, b, OWNER, { runtime: { nonce: "z".repeat(32) } });
+    expect(bad.submitted).toMatchObject({ ok: false, code: "FLEET_GENESIS_NONCE_MISMATCH" });
+    expect((await genesis.runtimeEvidence(g.genesisId, b)).evidence).toBeNull();
+    // Stale runtime evidence (older than 30 minutes) is not attestation.
+    const s = await su.connect();
+    try {
+      await s.query("SET session_replication_role = replica");
+      await s.query(`UPDATE fleet.fleet_genesis_founders SET runtime_evidence_at = now() - interval '31 minutes' WHERE agent_id = $1`, [a]);
+    } finally {
+      await s.query("RESET session_replication_role");
+      s.release();
+    }
+    expect(await genesis.attest(g.genesisId, a, okA.host, OWNER)).toMatchObject({ ok: false, why: "runtime evidence is stale", status: "rolled_back" });
+    // No evidence at all from the running process → rollback (fresh Genesis).
+    await reset();
+    const g2 = await genesis.propose({ idempotencyKey: key(), founderCount: 1, allocationCents: 0, ttlS: 3600, actor: OWNER });
+    await genesis.approve(g2.genesisId, g2.authSha256, OWNER);
+    const p2 = await genesis.provision(g2.genesisId, OWNER);
+    const sim = await simulateRuntimeAttestation(genesis, genesis, g2.genesisId, p2.founderIds![0], OWNER, { submit: false });
+    expect(await genesis.attest(g2.genesisId, p2.founderIds![0], sim.host, OWNER)).toMatchObject({ ok: false, why: "no evidence from the running founder process", status: "rolled_back" });
+    // Host evidence naming a different process than the runtime's own evidence → rollback.
+    await reset();
+    const g3 = await genesis.propose({ idempotencyKey: key(), founderCount: 1, allocationCents: 0, ttlS: 3600, actor: OWNER });
+    await genesis.approve(g3.genesisId, g3.authSha256, OWNER);
+    const p3 = await genesis.provision(g3.genesisId, OWNER);
+    const sim3 = await simulateRuntimeAttestation(genesis, genesis, g3.genesisId, p3.founderIds![0], OWNER, { host: { pid: 99999 } });
+    expect(await genesis.attest(g3.genesisId, p3.founderIds![0], sim3.host, OWNER)).toMatchObject({ ok: false, why: "host and runtime evidence describe different processes" });
+    await reset();
+    // Host observation disagreeing with the authorization (the runtime's own claim being fine) → rollback.
+    const g4 = await genesis.propose({ idempotencyKey: key(), founderCount: 1, allocationCents: 0, ttlS: 3600, actor: OWNER });
+    await genesis.approve(g4.genesisId, g4.authSha256, OWNER);
+    const p4 = await genesis.provision(g4.genesisId, OWNER);
+    const sim4 = await simulateRuntimeAttestation(genesis, genesis, g4.genesisId, p4.founderIds![0], OWNER, { host: { buildId: "9".repeat(64) } });
+    expect(await genesis.attest(g4.genesisId, p4.founderIds![0], sim4.host, OWNER)).toMatchObject({ ok: false, why: "host: runtime build id differs", status: "rolled_back" });
+    await reset();
+    // A runtime that claims ANOTHER founder's identity with its own token is not attestation.
+    const g5 = await genesis.propose({ idempotencyKey: key(), founderCount: 2, allocationCents: 0, ttlS: 3600, actor: OWNER });
+    await genesis.approve(g5.genesisId, g5.authSha256, OWNER);
+    const p5 = await genesis.provision(g5.genesisId, OWNER);
+    const [f1, f2] = p5.founderIds!;
+    const sim5 = await simulateRuntimeAttestation(genesis, genesis, g5.genesisId, f1, OWNER, { runtime: { agentId: f2 }, host: {} });
+    expect(await genesis.attest(g5.genesisId, f1, sim5.host, OWNER)).toMatchObject({ ok: false, why: "runtime: founder identity differs" });
     await reset();
   });
 

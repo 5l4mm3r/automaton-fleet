@@ -113,6 +113,22 @@ else
   ok "custody executor not installed"
 fi
 
+echo "Genesis founder runtimes (Phase F.1)"
+FT=/etc/systemd/system/automaton-fleet-founder@.service
+if [[ -f "$FT" ]]; then
+  for prop in "DynamicUser=yes" "IPAddressDeny=any" "IPAddressAllow=localhost" "NoNewPrivileges=true" "ProtectSystem=strict" "StateDirectoryMode=0700" "Environment=FLEET_CAPABILITY_MANIFEST=founder-v1" "Environment=FLEET_FOUNDER_AGENT_LOOP=disabled"; do
+    grep -qx "$prop" "$FT" && ok "founder template: $prop" || bad "founder template lacks $prop"
+  done
+  grep -q -- "-/etc/automaton-fleet/custody.env" "$FT" && grep -q -- "-/etc/automaton-fleet/admin.env" "$FT" && ok "founder template hides fleet secrets" || bad "founder template does not hide fleet secrets"
+  active="$(systemctl list-units --all --plain --no-legend 'automaton-fleet-founder@*' 2>/dev/null | awk '$3 != "inactive" {print $1}' | wc -l)"
+  living="$(runuser -u postgres -- psql -X -At -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT count(*) FROM fleet.fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive')" 2>/dev/null || echo "?")"
+  [[ "$active" == "$living" ]] && ok "founder runtime units active: $active (living founders: $living)" || bad "founder runtime units active: $active, living founders: $living"
+  left="$(ls -A /var/lib/private/automaton-founders 2>/dev/null | wc -l)"
+  [[ "$left" -le "$living" || "$living" == "?" ]] && ok "founder state directories: $left" || bad "founder state directories: $left (living founders: $living)"
+else
+  ok "founder runtime template not installed"
+fi
+
 echo "ChatGPT adapter isolation (Phase C)"
 CA=automaton-fleet-chatgpt-adapter; CT=automaton-fleet-chatgpt-tunnel
 if id "$CA" >/dev/null 2>&1 || id "$CT" >/dev/null 2>&1; then
