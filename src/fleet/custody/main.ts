@@ -133,7 +133,9 @@ export async function startCustodyFromEnv(
     pollMs: opts.pollMs ?? 60_000,
     log: (level, event, detail) => log(level as never, event, detail),
   });
-  executor.start();
+  // The service must stay up on its poll timer (an idle database pool alone would let Node exit 0 and
+  // systemd's Restart=on-failure would not bring it back).
+  executor.start({ keepAlive: true });
   log("info", "custody_executor_started", { schemaVersion: CUSTODY_SCHEMA_VERSION, providers: [], executionEnabled: false, inert: true });
   const close = async () => {
     await executor.stop();

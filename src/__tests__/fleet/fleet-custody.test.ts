@@ -163,11 +163,13 @@ describe.skipIf(!PG_BIN)("custody executor startup against PostgreSQL (schema v1
   const env = (url: string, extra: Record<string, string> = {}) => ({ ...RELEASE_ENV, FLEET_CUSTODY_DATABASE_URL: url, ...extra });
   const opts = { uid: 1000, username: "u", secretFiles: [] as string[], log: quiet, pollMs: 1_000 };
 
-  it("starts inert with the restricted login: pings, never claims", async () => {
+  it("starts inert with the restricted login: pings, never claims, and keeps the service process alive", async () => {
     const r = await startCustodyFromEnv(env(pgc.custodyUrl), opts);
     try {
       await new Promise((res) => setTimeout(res, 200));
       expect(r.executor.status()).toMatchObject({ providers: [], executionEnabled: false, claims: 0, lastError: null });
+      // Regression (found in production, Phase F.1): an unref'd poll timer let the service exit 0 once the pool went idle.
+      expect(r.executor.keepsProcessAlive()).toBe(true);
     } finally {
       await r.close();
     }

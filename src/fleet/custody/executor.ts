@@ -165,7 +165,11 @@ export class CustodyExecutor {
     }
   }
 
-  start(): void {
+  /**
+   * Start polling. `keepAlive` (the service) keeps the process running on the poll timer; without it
+   * (tests) the timer does not hold the event loop open.
+   */
+  start(opts: { keepAlive?: boolean } = {}): void {
     if (this.timer) return;
     const ms = Math.max(1_000, this.opts.pollMs ?? 30_000);
     const run = () => {
@@ -177,7 +181,12 @@ export class CustodyExecutor {
     };
     run();
     this.timer = setInterval(run, ms);
-    this.timer.unref?.();
+    if (!opts.keepAlive) this.timer.unref?.();
+  }
+
+  /** True while the poll timer keeps the process alive. */
+  keepsProcessAlive(): boolean {
+    return this.timer?.hasRef?.() === true;
   }
 
   async stop(): Promise<void> {

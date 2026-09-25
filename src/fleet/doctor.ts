@@ -33,6 +33,24 @@ import { FLEET_PG_SCHEMA_VERSION } from "./postgres/migrations.js";
 import { FOUNDER_MANIFEST_V1, manifestSha256 } from "./capabilities.js";
 import { execFileSync } from "child_process";
 
+/** automaton-fleet-custody.service state on this host (null when systemd or the unit is not available). */
+function custodyUnitState(): { enabled: boolean; active: boolean } | null {
+  try {
+    const q = (verb: string) => {
+      try {
+        return execFileSync("systemctl", [verb, "automaton-fleet-custody.service"], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+      } catch (err) {
+        return String((err as { stdout?: string }).stdout ?? "").trim();
+      }
+    };
+    const enabled = q("is-enabled");
+    if (!enabled || enabled === "not-found") return null;
+    return { enabled: enabled === "enabled", active: q("is-active") === "active" };
+  } catch {
+    return null;
+  }
+}
+
 /** Active automaton-fleet-founder@ instances on this host (null when systemd is not available). */
 function founderRuntimeUnits(): string[] | null {
   try {
@@ -403,6 +421,12 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
           : `LEDGER VERIFICATION FAILED (first bad seq ${lg.verify.firstBadSeq ?? "?"}, unbalanced ${lg.verify.unbalanced ?? "?"}) — stop and investigate`,
       );
       if (!lg.verify.ok) blockers.push("Central ledger verification failed (fleet:admin ledger-verify).");
+      const cx = custodyUnitState();
+      if (cx) {
+        add("custody executor service", cx.enabled && !cx.active ? "fail" : "pass",
+          cx.active ? "active (inert)" : cx.enabled ? "ENABLED BUT NOT RUNNING — the inert custody boundary is down" : "not enabled on this host");
+        if (cx.enabled && !cx.active) blockers.push("automaton-fleet-custody.service is enabled but not running.");
+      }
       add(
         "custody execution",
         lg.custodyExecutionEnabled || lg.instructions > 0 || lg.executing > 0 ? "fail" : "pass",

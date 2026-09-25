@@ -109,6 +109,9 @@ if id "$CX" >/dev/null 2>&1; then
   fi
   uidn="$(id -u "$CX")"
   if ss -ltneH 2>/dev/null | grep -qE "uid:$uidn( |$)"; then bad "$CX holds a TCP listener"; else ok "$CX holds no TCP listener"; fi
+  if [[ "$(systemctl is-enabled automaton-fleet-custody.service 2>/dev/null)" == enabled ]]; then
+    [[ "$(systemctl is-active automaton-fleet-custody.service 2>/dev/null)" == active ]] && ok "custody executor is running (inert)" || bad "custody executor is enabled but not running"
+  fi
 else
   ok "custody executor not installed"
 fi
