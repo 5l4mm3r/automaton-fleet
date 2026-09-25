@@ -1,6 +1,6 @@
 # Phase F.3 — Pre-launch hardening (schema v14)
 
-Status: built and tested; deployment record in `docs/fleet-production-runbook.md` (Stage F.3).
+Status: **DEPLOYED 2026-09-25** (runtime `90ba6d0`, build `d0d7cf4b…cfb5`, schema v14); production rehearsal 21/21. Record: `docs/fleet-production-runbook.md` (Stage F.3).
 Genesis stays **disabled**, cognition **disabled** (provider `none`), population **0**.
 
 F.3 closes the two engineering gaps F.2 left before a real model credential exists. It also adds owner-side

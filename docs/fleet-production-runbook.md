@@ -1426,6 +1426,25 @@ Rollback:
 - **Runtime only:** restore `runtime.env.pre-f2b` (f90b607), approve and restart.
 - **Full:** stop the services; restore the pre-v13 dump; restore `runtime.env.pre-f2` (ffd29fa); point `current` back to `releases/ffd29fa…`; start in order. `ffd29fa` refuses a v13 registry (exact schema check).
 
+## Stage F.3 — Pre-launch hardening, schema v14 (DEPLOYED 2026-09-25, times UTC)
+
+Design: `docs/design/phase-f3-launch-hardening.md`. Cognition still **disabled** (provider `none`); Genesis **disabled**; population **0**.
+
+### Stage F.3 record (2026-09-25)
+
+| Gate | Result |
+|---|---|
+| F3-1 | Commit `90ba6d0` pushed. The local and VPS builds matched: `d0d7cf4b…cfb5`, lockfile unchanged. `runtime.env.pre-f3` kept (sha `e6378221…`, c7c2a05 pins) |
+| F3-2 | Outage 21:08:53–21:09:12 (about 19 s). Dump `~/automaton_fleet-v13-pre-v14-20260925T210853Z.dump` (1423345 B, sha `29f705e9…0338`, 0600, 65 table-data entries). `migrate-check` gave exactly `{13→14, wouldApply:[14]}`; `migrate`; audit PASS. `fleet-os-setup.sh --apply` installed only the changed founder template (`SystemCallFilter=@sandbox`) |
+| Verify | Runtime VERIFIED; doctor DEPLOYMENT OK (new line "founder forbidden-tool requests: none in 24 h"); `fleet:verify` 16/16; `fleet-verify-deployment.sh` 90/0 (new: founder template `@sandbox`); Operator API and ChatGPT adapter ready; `founders-report` `[]`; flags unchanged; public ports 22 and 443 only. Database Genesis dry run 20/20 |
+| Rehearsal | **PASS 21/21** (systemd host, uids 63138/61252). New: "each founder's shell runs in its Landlock sandbox". Inside the real founder units: workspace rw, state (credential/identity) unreadable, nothing outside writable, TCP to the controller denied, for both founders. Credits recorded through the new owner recorder. Injection and forbidden tools refused; pause and global-off stop cognition; production unchanged; host clean |
+
+Tests: fleet suite 625 passed (only the known phase2 KI-1 and the wipe deadlock flake, which passes alone). F.3 mutation campaign F01–F13: 12 killed; F09 (credits recorder without its approver call) is a redundant layer, because the admin-instruction guard trigger re-checks the approver.
+
+Rollback:
+- **Runtime only** (v14 is additive): restore `runtime.env.pre-f3` (c7c2a05) and approve. Note: c7c2a05 refuses a v14 registry (exact schema check), so a runtime-only rollback also needs the database rollback.
+- **Full:** stop the services; restore the pre-v14 dump; restore `runtime.env.pre-f3`; point `current` back to `releases/c7c2a05…`; start in order.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
