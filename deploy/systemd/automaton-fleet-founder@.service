@@ -6,8 +6,8 @@
 # real-runtime rehearsal (synthetic founders against a throwaway registry).
 #
 # Isolation:
-#  - DynamicUser: a unique uid per founder, allocated by systemd; no
-#    persistent OS user, no group with any fleet secret.
+#  - DynamicUser with User=fnd-<id>: a distinct uid per founder, allocated by
+#    systemd; no persistent OS user, no group with any fleet secret.
 #  - StateDirectory automaton-founders/<id> (0700): the founder's identity,
 #    one-time attestation token or fleet credential (0600, owner = the
 #    founder), workspace/<workspaceId>, state/<stateNamespace>, memory,
@@ -30,6 +30,9 @@ StartLimitBurst=5
 [Service]
 Type=exec
 DynamicUser=yes
+# The dynamic user is named per INSTANCE: without this, systemd derives one user from the template name
+# and every founder would share a uid (found by the real-runtime rehearsal, 2026-09-25).
+User=fnd-%i
 WorkingDirectory=/opt/automaton-fleet/current
 ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/founder/main.js
 Environment=NODE_ENV=production

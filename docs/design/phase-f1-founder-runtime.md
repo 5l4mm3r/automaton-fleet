@@ -31,7 +31,7 @@ The capability rule `fleet.capability_manifest` is already active in any process
 
 | Resource | How it is private | Proof |
 |---|---|---|
-| OS identity | `DynamicUser=yes`: systemd allocates a distinct uid per founder; no persistent user or group | Rehearsal: distinct uids |
+| OS identity | `DynamicUser=yes` with `User=fnd-%i`: systemd allocates a distinct uid per founder; no persistent user or group. Without the per-instance name, systemd derives one user from the template name. The first production rehearsal caught exactly that (both founders on uid 61431), and the unit was fixed | Rehearsal: distinct uids |
 | Workspace, state, memory | `StateDirectory=automaton-founders/<id>` (0700); `workspace/<workspaceId>`, `state/<stateNamespace>/memory`. Inside the unit, `/var/lib/private` is a private tmpfs view holding **only** this founder's directory | VPS probe; rehearsal: a peer's credential and state are unreadable from inside each founder's own namespace and uid |
 | Credentials | 0600 files in the founder's own state directory, owned by its dynamic uid (systemd hands root-placed files to that uid). **No `LoadCredential`**: the 0440 systemd-credential exception stays limited to `automaton-fleet.service` | Rehearsal and tests |
 | Network | `IPAddressDeny=any`, `IPAddressAllow=localhost` | Unit and `fleet-verify-deployment.sh` |
