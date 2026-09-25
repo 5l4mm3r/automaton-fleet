@@ -126,7 +126,7 @@ Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
 ## Current production deployment
 
-State after Phase B2 (2026-09-24), per docs/fleet-production-runbook.md.
+State after Phase C (2026-09-25), per docs/fleet-production-runbook.md.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
@@ -155,8 +155,14 @@ Current live topology:
 - FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
 - Operator API (read-only, signed requests) on 127.0.0.1:8788 only, enabled at boot,
   kill switch on; reached only through the restricted SSH account fleet-op-tunnel
-- one operator principal: bridge-claude (ops.read.status, ops.read.agents,
-  ops.read.events); its signing key and the tunnel key live only on the dev VM
+- two operator principals: bridge-claude (ops.read.status, ops.read.agents,
+  ops.read.events; its signing key and SSH tunnel key live only on the dev VM)
+  and bridge-chatgpt (ops.read.status, ops.read.agents; its key lives only in
+  the ChatGPT adapter's state directory on the VPS)
+- ChatGPT adapter (Phase C): automaton-fleet-chatgpt-adapter on a private Unix
+  socket, separately pinned artifact 6691b4c (build 62336fee…); reached only via
+  the OpenAI Secure MCP Tunnel client (automaton-fleet-chatgpt-tunnel, outbound
+  only, awaiting the owner's OpenAI tunnel credentials); no new public listener
 - SSH: key-only authentication (password logins disabled globally)
 - local Ubuntu development VM: controller stopped and disabled; not a live registry
 - registry: cap 2, DEVELOPMENT mode, replication off

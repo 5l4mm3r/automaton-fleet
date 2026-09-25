@@ -1203,6 +1203,39 @@ the kill switch off), and `operator-api disable`.
 - Safety flags: replication, payments, owner sweep and dry-run child are false; remote listen is true.
 - Bridge-side material on the dev VM (never on the VPS): `~/.config/automaton-fleet/operator/bridge-claude.key` (0600) and the tunnel transport key `~/.ssh/fleet_op_tunnel` (0600).
 
+## Stage C — ChatGPT read-only adapter (deployed 2026-09-25, times UTC)
+
+Design: `docs/design/phase-c-chatgpt-adapter.md`. The adapter ships as a separately
+pinned artifact. The FleetController / Operator API runtime pin, its approval and
+`current` are unchanged (`4d6a0be` / `54beb101…`).
+
+| Step | Result |
+|---|---|
+| Code | `6691b4c` ("feat: read-only ChatGPT adapter over OpenAI Secure MCP Tunnel (Phase C)"), pushed `cb42f87..6691b4c` |
+| Reproducible build | Local and VPS builds are identical: build `62336fee32671ea04de3bb18c1552273cd80bc02c1d2bd5f219f1dee3b018057`, lockfile `eee9dc2f…` |
+| Backup | Before any change: `~ubuntu/automaton_fleet-v8-pre-chatgpt-20260925T005947Z.dump` (0600, 567517 bytes, SHA-256 `4bd240fbd24d06acf05eb8f64603f4af1e762a7e8967dd4d4d5574b947212634`, 31 tables with data) |
+| Artifact | `fleet-deploy-chatgpt-adapter.sh build` + `install`: `/opt/automaton-fleet/chatgpt-adapter/releases/6691b4c…` (root 555, no `.git`), `current` points to it, pins in `/opt/automaton-fleet/chatgpt-adapter/pins.env` |
+| tunnel-client | OpenAI `tunnel-client-runtime` v0.0.14. Zip SHA-256 `29d29cf8…505b` matches the release `SHA256SUMS.txt`; binary SHA-256 `94ae9d0c…5c77`. Installed at `/opt/automaton-fleet/tunnel-client/v0.0.14/` (root) |
+| `prepare --apply` | Users `automaton-fleet-chatgpt-adapter` (uid 992) and `automaton-fleet-chatgpt-tunnel` (uid 988), nologin, own group only. `/etc/automaton-fleet/chatgpt-tunnel` root 0700; adapter token root 0600 (never printed). Signing key generated **on the VPS as the adapter user**: `/var/lib/automaton-fleet-chatgpt-adapter/bridge-chatgpt.key` 0600, key id `fe22d91c08f0a0676b4c155ce0d618d3` (verified independently from the public key). Units installed |
+| Enrolment | `fleet:admin operator-enroll bridge-chatgpt bridge_chatgpt --scopes ops.read.status,ops.read.agents` gave principal `op_01M3B18TXVP33S6NQC909DXD57` (event 112; key expires 2026-10-25). `bridge-claude` is unchanged |
+| `configure --apply` | `/etc/automaton-fleet/chatgpt-adapter.json` root:adapter 0640. Adapter socket and service enabled and started (PID 51151); tunnel unit enabled but **inactive** until the owner provides OpenAI credentials |
+| Proof (MCP over the adapter socket, as `tunnel-client` sends it) | initialize; exactly 4 read-only tools; whoami gives `bridge_chatgpt` with scopes {agents, status}; status and agents (0) work. Events, path injection, unknown tools and `resources/list` are refused. No token or a wrong token gives 401; OAuth discovery gives 404. The rate limit gives 10 calls, then `RATE_LIMITED`. Only the tunnel user can connect to the socket |
+| Isolation | Inside the adapter's namespace only its config, key and `/proc/self/net` are readable. The tunnel sandbox policy blocks 127.0.0.1:{8788, 8787, 5432, 6379, 22} (each reachable without the policy) and allows `api.openai.com`. Neither new user holds a TCP listener. systemd exposure 1.1 / 1.3 |
+| Verification | `fleet-verify-deployment.sh` (from the adapter tree): 60 PASS / 0 FAIL. `fleet:verify` 16/16; doctor DEPLOYMENT OK; audit PASS with 2 principals / 2 keys. From outside, 8788, 8787, 5432, 6379 and 8080 are closed. Controller PID 40569 and Operator API PID 42287, both 0 restarts. A fresh Claude MCP session still works as `bridge-claude` |
+
+**Owner actions to finish** (design §8):
+1. Create an OpenAI Secure MCP tunnel tied to the ChatGPT workspace, and a runtime key.
+2. Put the key and `CONTROL_PLANE_TUNNEL_ID` in `/etc/automaton-fleet/chatgpt-tunnel/`.
+3. `systemctl start automaton-fleet-chatgpt-tunnel`.
+4. In ChatGPT: create a developer-mode app, Connection → Tunnel, No authentication.
+
+**Rollback:**
+- Stop and disable `automaton-fleet-chatgpt-{tunnel,adapter}.service` and `automaton-fleet-chatgpt-adapter.socket`.
+- `fleet:admin operator-revoke op_01M3B18TXVP33S6NQC909DXD57`.
+- Optionally remove `/opt/automaton-fleet/chatgpt-adapter`, `/opt/automaton-fleet/tunnel-client`, the units and the two users.
+
+Nothing else was changed.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
