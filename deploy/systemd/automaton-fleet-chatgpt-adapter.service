@@ -1,0 +1,79 @@
+# Automaton Fleet ChatGPT adapter — read-only MCP tools for ChatGPT (Phase C).
+#
+#   OpenAI Secure MCP Tunnel -> automaton-fleet-chatgpt-tunnel (outbound only)
+#     -> /run/automaton-fleet-chatgpt/adapter.sock (+ static token)
+#     -> THIS service -> signed requests -> Operator API 127.0.0.1:8788
+#
+# Runs as its own user (no other group) from a separately pinned artifact
+# (/opt/automaton-fleet/chatgpt-adapter/current); it does not change the
+# FleetController runtime. It holds only the bridge-chatgpt Ed25519 key
+# (StateDirectory, 0600) and reads the root-owned 0640 config. It can reach
+# nothing but loopback (the Operator API) and never sees admin/service/
+# operator/TLS/tunnel/witness secrets. Four read-only tools; no events.
+
+[Unit]
+Description=Automaton Fleet ChatGPT adapter (read-only, bridge-chatgpt)
+Documentation=file:///opt/automaton-fleet/chatgpt-adapter/current/docs/design/phase-c-chatgpt-adapter.md
+Requires=automaton-fleet-chatgpt-adapter.socket
+After=automaton-fleet-chatgpt-adapter.socket automaton-fleet-operator-api.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-chatgpt-adapter
+Group=automaton-fleet-chatgpt-adapter
+SupplementaryGroups=
+WorkingDirectory=/opt/automaton-fleet/chatgpt-adapter/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/chatgpt-adapter/main.js
+Environment=NODE_ENV=production
+Environment=FLEET_CHATGPT_ADAPTER_EXPECTED_USER=automaton-fleet-chatgpt-adapter
+Environment=FLEET_CHATGPT_ADAPTER_CONFIG=/etc/automaton-fleet/chatgpt-adapter.json
+Environment=FLEET_CHATGPT_ADAPTER_AUDIT_LOG=/var/log/automaton-fleet-chatgpt-adapter/audit.jsonl
+StateDirectory=automaton-fleet-chatgpt-adapter
+StateDirectoryMode=0700
+LogsDirectory=automaton-fleet-chatgpt-adapter
+LogsDirectoryMode=0700
+UMask=0077
+
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-chatgpt-adapter
+
+# Network: loopback only (the Operator API); the listener is the systemd Unix socket.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_UNIX
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak -/etc/automaton-fleet/chatgpt-tunnel
+InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-chatgpt-tunnel -/var/log/automaton-fleet -/var/log/automaton-fleet-operator -/run/credentials
+
+[Install]
+WantedBy=multi-user.target

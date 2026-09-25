@@ -80,6 +80,44 @@ else
   ok "Operator API not installed"
 fi
 
+echo "ChatGPT adapter isolation (Phase C)"
+CA=automaton-fleet-chatgpt-adapter; CT=automaton-fleet-chatgpt-tunnel
+if id "$CA" >/dev/null 2>&1 || id "$CT" >/dev/null 2>&1; then
+  for u in "$CA" "$CT"; do
+    if id "$u" >/dev/null 2>&1; then
+      [[ "$(id -nG "$u")" == "$u" ]] && ok "$u is in no other group" || bad "$u groups: $(id -nG "$u")"
+    else bad "$u missing"; fi
+  done
+  chk() { # <path> <expected "owner:group mode links">
+    if [[ -L "$1" ]]; then bad "$1 is a symlink"; elif [[ -e "$1" ]]; then
+      got="$(stat -c '%U:%G %a %h' "$1")"; [[ "$got" == "$2" ]] && ok "$1 is $2" || bad "$1 is $got (expected $2)"
+    else bad "$1 missing"; fi
+  }
+  chk "$ETC/chatgpt-adapter.json" "root:$CA 640 1"
+  chk "$ETC/chatgpt-tunnel/adapter-token" "root:root 600 1"
+  [[ "$(stat -c '%U:%G %a' "$ETC/chatgpt-tunnel")" == "root:root 700" ]] && ok "$ETC/chatgpt-tunnel is root:root 700" || bad "$ETC/chatgpt-tunnel is $(stat -c '%U:%G %a' "$ETC/chatgpt-tunnel")"
+  [[ -e "$ETC/chatgpt-tunnel/openai-api-key" ]] && chk "$ETC/chatgpt-tunnel/openai-api-key" "root:root 600 1" || ok "OpenAI tunnel key not yet provided (tunnel stays off)"
+  chk "/var/lib/$CA/bridge-chatgpt.key" "$CA:$CA 600 1"
+  SOCK=/run/automaton-fleet-chatgpt/adapter.sock
+  if [[ -S "$SOCK" ]]; then
+    [[ "$(stat -c '%U:%G %a' "$SOCK")" == "$CA:$CT 660" ]] && ok "$SOCK is $CA:$CT 660" || bad "$SOCK is $(stat -c '%U:%G %a' "$SOCK")"
+    for u in automaton-agent automaton-fleet-service automaton-fleet-witness automaton-fleet-operator-api "${SUDO_USER:-}"; do
+      [[ -n "$u" ]] && id "$u" >/dev/null 2>&1 || continue
+      if runuser -u "$u" -- test -w "$SOCK" 2>/dev/null; then bad "$u CAN connect to $SOCK"; else ok "$u cannot connect to $SOCK"; fi
+    done
+  else ok "adapter socket not active"; fi
+  for pair in "$CT:/var/lib/$CA/bridge-chatgpt.key" "$CT:$ETC/chatgpt-adapter.json" "$CA:$ETC/chatgpt-tunnel/adapter-token" "$CA:$ETC/chatgpt-tunnel/openai-api-key" "$CA:$ETC/operator.env" "$CT:$ETC/operator.env" "$CA:$ETC/admin.env" "$CT:$ETC/admin.env" "$CA:$ETC/service.env" "$CT:$ETC/service.env"; do
+    u="${pair%%:*}"; f="${pair#*:}"; [[ -e "$f" ]] || continue
+    if runuser -u "$u" -- test -r "$f" 2>/dev/null; then bad "$u CAN read $f"; else ok "$u cannot read $f"; fi
+  done
+  for u in "$CA" "$CT"; do
+    uidn="$(id -u "$u" 2>/dev/null || echo x)"
+    if ss -ltneH 2>/dev/null | grep -qE "uid:$uidn( |$)"; then bad "$u holds a TCP listener"; else ok "$u holds no TCP listener"; fi
+  done
+else
+  ok "ChatGPT adapter not installed"
+fi
+
 echo "TLS material (LoadCredential sources)"
 # expect <path> <owner:group> <octal mode> <kind: d|f>
 expect() {

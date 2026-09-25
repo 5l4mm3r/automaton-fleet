@@ -98,6 +98,8 @@ const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   { pattern: /automaton-fleet-operator|operator\.env\b|\bFLEET_OPERATOR_\w+\s*=|fleet\/operator\/|\bfleet:operator|(?<![\w-])operator-(enroll|add-key|revoke|revoke-key|revoke-all|api|list|archive)(?![\w-])|:8788\b|\/v1\/operator\/|\bop_(begin_request|key_material|ping|whoami|fleet_status|list_agents|get_agent|list_events)\b|\bfleet_operator_\w+|x-fleet-op-/i, description: "Touch the fleet Operator API, its credentials or principals" },
   // Phase D: the dev-VM Claude bridge (config, signing keys, tunnel key and tooling)
   { pattern: /\bfleet:bridge\b|fleet\/bridge\/|\bfleet_op_tunnel\b|\bfleet-op-tunnel\b|bridge-claude[\w.-]*\.(key|json)\b/i, description: "Touch the fleet Claude bridge, its keys or its tunnel" },
+  // Phase C: the ChatGPT adapter, its tunnel client, keys, token and socket
+  { pattern: /automaton-fleet-chatgpt|chatgpt-adapter|chatgpt-tunnel|fleet\/chatgpt-adapter\/|tunnel-client|bridge-chatgpt|x-fleet-adapter-token|CONTROL_PLANE_(API_KEY|TUNNEL_ID)/i, description: "Touch the fleet ChatGPT adapter, its tunnel or credentials" },
 ];
 
 export function getForbiddenCommandMatch(command: string): { description: string; pattern: string } | null {

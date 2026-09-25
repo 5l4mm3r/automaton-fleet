@@ -1,0 +1,22 @@
+# Automaton Fleet ChatGPT adapter — private Unix socket (Phase C).
+#
+# The adapter's ONLY listener. It is not a TCP port: systemd (root) creates the
+# socket owned by the adapter user and the tunnel group, mode 0660, so only the
+# OpenAI tunnel-client (automaton-fleet-chatgpt-tunnel) and the adapter itself
+# can connect. Nothing on the network can reach it.
+
+[Unit]
+Description=Automaton Fleet ChatGPT adapter socket (tunnel-client only)
+Documentation=file:///opt/automaton-fleet/chatgpt-adapter/current/docs/design/phase-c-chatgpt-adapter.md
+
+[Socket]
+ListenStream=/run/automaton-fleet-chatgpt/adapter.sock
+SocketUser=automaton-fleet-chatgpt-adapter
+SocketGroup=automaton-fleet-chatgpt-tunnel
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+Accept=no
+
+[Install]
+WantedBy=sockets.target

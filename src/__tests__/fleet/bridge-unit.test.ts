@@ -386,12 +386,19 @@ describe("agent-side protections", () => {
       "ssh -i ~/.ssh/fleet_op_tunnel fleet-op-tunnel@51.195.148.111",
       "vim src/fleet/bridge/client.ts",
       "pnpm fleet:bridge-mcp",
+      "sudo cat /etc/automaton-fleet/chatgpt-tunnel/openai-api-key",
+      "cat /var/lib/automaton-fleet-chatgpt-adapter/bridge-chatgpt.key",
+      "curl --unix-socket /run/automaton-fleet-chatgpt/adapter.sock -H 'X-Fleet-Adapter-Token: x' http://localhost/mcp",
+      "CONTROL_PLANE_API_KEY=sk-x ./tunnel-client-runtime run",
       "claude mcp remove fleet-operator && echo fleet_op_tunnel",
     ]) {
       expect(getForbiddenCommandMatch(cmd), cmd).not.toBeNull();
     }
-    for (const f of ["errors", "config", "hostkey", "tunnel", "validate", "client", "keys", "cli", "mcp"]) {
+    for (const f of ["errors", "config", "hostkey", "tunnel", "validate", "client", "keys", "cli", "mcp", "mcp-core", "direct", "endpoint"]) {
       expect(isProtectedFile(path.resolve(`src/fleet/bridge/${f}.ts`)), f).toBe(true);
+    }
+    for (const f of ["config", "http", "main"]) {
+      expect(isProtectedFile(path.resolve(`src/fleet/chatgpt-adapter/${f}.ts`)), f).toBe(true);
     }
   });
 });

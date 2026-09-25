@@ -1,0 +1,90 @@
+# Automaton Fleet ChatGPT tunnel — OpenAI Secure MCP Tunnel client (Phase C).
+#
+# Outbound-only: long-polls api.openai.com:443 for the owner's ChatGPT tool
+# calls and forwards them to the adapter's Unix socket. No inbound listener
+# (health is served on a private Unix socket, not TCP). Runs the pinned,
+# checksum-verified OpenAI tunnel-client-runtime as its own user. It holds only:
+#   - the OpenAI runtime API key (Tunnels Read + Use)      LoadCredential
+#   - the adapter token (static header to the adapter)     LoadCredential
+# It cannot reach loopback or private networks (except the local DNS stub),
+# so tunnel traffic can never be pointed at 8787/8788/5432/6379, and it never
+# sees any fleet key or database credential.
+#
+# Starts only once the owner has placed the tunnel id and API key (see
+# docs/design/phase-c-chatgpt-adapter.md, "Owner actions").
+
+[Unit]
+Description=Automaton Fleet ChatGPT tunnel (OpenAI Secure MCP Tunnel client, outbound only)
+Documentation=https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
+Wants=network-online.target
+After=network-online.target automaton-fleet-chatgpt-adapter.socket
+ConditionPathExists=/etc/automaton-fleet/chatgpt-tunnel/openai-api-key
+ConditionPathExists=/etc/automaton-fleet/chatgpt-tunnel/tunnel.env
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-chatgpt-tunnel
+Group=automaton-fleet-chatgpt-tunnel
+SupplementaryGroups=
+# Non-secret: CONTROL_PLANE_TUNNEL_ID=tunnel_<32 hex>
+EnvironmentFile=/etc/automaton-fleet/chatgpt-tunnel/tunnel.env
+LoadCredential=openai-api-key:/etc/automaton-fleet/chatgpt-tunnel/openai-api-key
+LoadCredential=adapter-token:/etc/automaton-fleet/chatgpt-tunnel/adapter-token
+Environment=HOME=/var/lib/automaton-fleet-chatgpt-tunnel
+StateDirectory=automaton-fleet-chatgpt-tunnel
+StateDirectoryMode=0700
+RuntimeDirectory=automaton-fleet-chatgpt-tunnel
+RuntimeDirectoryMode=0700
+ExecStart=/opt/automaton-fleet/tunnel-client/v0.0.14/tunnel-client-runtime run \
+  --control-plane.api-key=file:%d/openai-api-key \
+  "--mcp.server-url=url=http://localhost/mcp,unix-socket=/run/automaton-fleet-chatgpt/adapter.sock" \
+  "--mcp.extra-headers=X-Fleet-Adapter-Token: file:%d/adapter-token" \
+  --health.unix-socket=/run/automaton-fleet-chatgpt-tunnel/health.sock \
+  --log.format=json --log.level=info
+UMask=0077
+
+Restart=on-failure
+RestartSec=10s
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-chatgpt-tunnel
+
+# Egress: public internet only (api.openai.com). Loopback and private ranges are
+# denied except the systemd-resolved stub, so no local service is reachable.
+IPAddressDeny=localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7
+IPAddressAllow=127.0.0.53/32 127.0.0.54/32
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak -/etc/automaton-fleet/chatgpt-adapter.json
+InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-chatgpt-adapter -/var/log/automaton-fleet -/var/log/automaton-fleet-operator -/var/log/automaton-fleet-chatgpt-adapter -/opt/automaton-fleet/releases -/opt/automaton-fleet/chatgpt-adapter
+
+[Install]
+WantedBy=multi-user.target
