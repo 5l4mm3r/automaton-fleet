@@ -1,6 +1,6 @@
 # Phase E — Central treasury, double-entry ledger and custody boundary (schema v10)
 
-Status: implemented; deployment record in `docs/fleet-production-runbook.md` (Stage E).
+Status: **DEPLOYED 2026-09-25** (runtime `f48f912`, build `e14720c4…f429`, schema v10); record in `docs/fleet-production-runbook.md` (Stage E).
 Everything is **inert**:
 - no real custody credential exists;
 - no provider integration exists;

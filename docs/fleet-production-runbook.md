@@ -1283,6 +1283,44 @@ Rollback:
 | D3-8 | Actions were enabled only while each probe ran. Probes: Tier 2 reads, actions on a non-existent agent (recorded refusals), idempotent replay and conflict, throttled reconcile, and a fresh `claude -p` end-to-end session. Actions were left **OFF** (generation 12) |
 | Fix | Commit `52be40f` (whoami reported only the B2 scopes), build `304532c8…d947`, `runtime.env.pre-d3-fix` kept. Approve plus restart took 15:42:54–15:43:02; no migration |
 
+## Stage E — Central treasury ledger and inert custody boundary, schema v10 (DEPLOYED 2026-09-25, times UTC)
+
+Design and invariants: `docs/design/phase-e-treasury-ledger.md`. Everything stays inert:
+- no custody credential and no provider integration;
+- custody execution is pinned off by a CHECK constraint;
+- `REAL_PAYMENTS_ENABLED`, replication and owner sweeps stay false;
+- Genesis has not started and the population is 0.
+
+### Stage E record (2026-09-25)
+
+| Gate | Result |
+|---|---|
+| E-1 | Commit `f48f912`, pushed to `fleet-origin` |
+| E-2 | The local and VPS reproducible builds matched: build `e14720c42f2ef4cddcbc0c315320e09e4563861899c857c3617e4d00e82ff429`, lockfile `eee9dc2f…` unchanged |
+| E-3 | `runtime.env.pre-e` kept (sha `ceaeb19c…`, cc75c87 pins); only the COMMIT/BUILD_ID lines changed. The release was staged and installed (root 555); the tooling checkout moved to `f48f912` |
+| E-OS | The `fleet-os-setup.sh --apply` dry run showed every existing item identical (node, units, logrotate). It added only: user `automaton-fleet-custody` (uid 987, no other group); `custody.env` (root:automaton-fleet-custody 0640, one key `FLEET_CUSTODY_DATABASE_URL`, fresh 64-hex password); the unit |
+| E-4 | Outage from 17:15:34. Dump `~/automaton_fleet-v9-pre-v10-20260925T171535Z.dump` (718130 B, sha `0be2394f…efbc3`, 0600, 33 table-data entries). `fleet-db-setup.sh --apply` created the roles `fleet_custody` (NOLOGIN) and `fleet_custody_login` (connection limit 4). `migrate-check` gave exactly `{9→10, wouldApply:[10]}`, rolled back. `migrate` applied v10 at 17:15:55. `audit-privileges` PASS (operator and custody roles provisioned) |
+| E-5 | `approve-runtime`, then the services started: controller, Operator API, adapter socket, and `automaton-fleet-custody` (enabled; logs `custody_executor_started` with providers [], executionEnabled false, inert true). The outage ended at 17:16:20 (about 46 s) |
+| Verify | Runtime VERIFIED; doctor DEPLOYMENT OK (new: ledger integrity, custody execution, payment orders, estates and assets all PASS); `fleet:verify` 16/16, SAFE FOR DRY RUN YES, SAFE FOR REAL PAYMENTS NO; `fleet-verify-deployment.sh` 76 PASS / 0 FAIL (new custody isolation section); Operator API `/readyz` ready, schema 10; ChatGPT adapter ready; public listeners only 22/443; the custody executor has no listener |
+| Probes | As `automaton-fleet-custody` from the installed release: `cx_ping` OK (v10, execution false); `cx_claim_instruction` returns `FLEET_CUSTODY_EXECUTION_DISABLED`. Everything else is permission denied: reading the journal or destinations, `fleet_ledger_post`, `svc_issue_payment_instruction`, `api_spend_request`, updating the economic model. Unauthenticated `/v1/spend/request`, `/v1/spend/cancel`, `/v1/ledger` and `/v1/wallet/spend-request` return 401. `ledger-verify` is ok (0 journals), LFC 0, and the legacy digests show 7 tables × 0 rows |
+
+State after E:
+- registry: cap 2, DEVELOPMENT, replication off, 0 agents;
+- operator actions: OFF;
+- ledger: 0 journals, 13 fleet accounts, no destinations;
+- custody: execution disabled (constitutional), no instruction.
+
+Rollback:
+- **Full:** stop the custody executor, adapter socket, Operator API and controller; restore the pre-v10 dump; restore `runtime.env.pre-e`; point `current` back to `releases/cc75c87…`; start in order; verify.
+- There is no down migration. `cc75c87` refuses a v10 registry (exact schema check).
+- The custody user, `custody.env`, roles and unit can stay: they are inert and hold no privilege on a v9 schema.
+
+Operating the ledger (owner CLI, admin credential; `docs/design/phase-e-treasury-ledger.md` §E7–E9):
+- `pnpm fleet:admin ledger-verify | ledger-balances | ledger-orders | ledger-economics <agentId> | ledger-lfc`
+- `ledger-destination-enroll` / `ledger-destination-activate` read the reference and the one-time code from stdin. Never put them on the command line.
+- Instructions that recommend against a policy need `--ack`. Constitutional refusals cannot be acknowledged.
+- **Do not** record owner funding, grant capital or enroll destinations until Genesis is designed and approved.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
