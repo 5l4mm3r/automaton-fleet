@@ -17,7 +17,7 @@
 import type { Database as DatabaseType } from "better-sqlite3";
 import type { PolicyRule, PolicyRequest, PolicyRuleResult } from "../../types.js";
 import type { FleetConfig } from "../../fleet/types.js";
-import { loadFleetConfig, strictestMode } from "../../fleet/config.js";
+import { effectiveMaxAgents, loadFleetConfig, strictestMode } from "../../fleet/config.js";
 import { FleetRegistry } from "../../fleet/registry.js";
 import {
   computeFleetState,
@@ -26,6 +26,7 @@ import {
   REPLICATION_TOOLS,
 } from "../../fleet/policy.js";
 import { getActiveSharedFleet } from "../../fleet/shared.js";
+import { SPEND_TOOLS } from "../../fleet/spend-gate.js";
 
 const registries = new WeakMap<DatabaseType, FleetRegistry>();
 
@@ -64,7 +65,7 @@ function createFleetGateRule(config: FleetConfig): PolicyRule {
       const shared = snap?.healthy && snap.state ? snap.state : null;
 
       const livingAgents = shared ? shared.livingAgents + shared.reservedSlots : registry.countLiving();
-      const maxAgents = shared ? Math.min(shared.maxAgents, config.maxAgents) : config.maxAgents;
+      const maxAgents = effectiveMaxAgents(config, shared ? shared.maxAgents : null);
       const state = computeFleetState({
         configuredMode: shared ? strictestMode(config.configuredMode, shared.operatingMode) : config.configuredMode,
         emergency: registry.isEmergency(),
@@ -106,6 +107,31 @@ function createFleetGateRule(config: FleetConfig): PolicyRule {
   };
 }
 
+/**
+ * Phase D3.1 universal spend gate (policy layer): while real payments are
+ * disabled, no tool that spends or transfers value runs. The library
+ * chokepoints (spend-gate.ts) enforce the same rule independently.
+ */
+function createSpendGateRule(config: FleetConfig): PolicyRule {
+  return {
+    id: "fleet.spend_gate",
+    description: "Deny every spending / value-transfer tool while REAL_PAYMENTS_ENABLED is not true",
+    // Right after fleet.policy_gate (450), so its more specific denials (DEVELOPMENT, child-funding
+    // bypass, registry unavailable) are reported first; any spend tool it lets through stops here.
+    priority: 455,
+    appliesTo: { by: "name", names: [...SPEND_TOOLS] },
+    evaluate(request: PolicyRequest): PolicyRuleResult | null {
+      if (config.realPaymentsEnabled === true) return null;
+      return {
+        rule: "fleet.spend_gate",
+        action: "deny",
+        reasonCode: "REAL_PAYMENTS_DISABLED",
+        humanMessage: `${request.tool.name} spends or transfers real value; the fleet spend gate blocks it while REAL_PAYMENTS_ENABLED is false`,
+      };
+    },
+  };
+}
+
 export function createFleetRules(config: FleetConfig = loadFleetConfig()): PolicyRule[] {
-  return [createFleetGateRule(config)];
+  return [createSpendGateRule(config), createFleetGateRule(config)];
 }

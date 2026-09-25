@@ -481,7 +481,10 @@ export class PgTreasuryStore {
   }
 
   /** Full waterfall for an agent from registry data. Uses the latest observed balance unless cash is given. */
-  async agentWaterfall(agentId: string, opts: { cashCents?: number; asOf?: Date; monthlyExpenseOverrideCents?: number } = {}): Promise<AgentWaterfall> {
+  async agentWaterfall(
+    agentId: string,
+    opts: { cashCents?: number; asOf?: Date; monthlyExpenseOverrideCents?: number; plannedSweepsCents?: number } = {},
+  ): Promise<AgentWaterfall> {
     const asOf = opts.asOf ?? new Date();
     const agent = (await this.pool.query("SELECT created_at, status FROM fleet_agents WHERE agent_id = $1", [agentId])).rows[0];
     if (!agent) throw new Error(`unknown agent ${agentId}`);
@@ -512,25 +515,51 @@ export class PgTreasuryStore {
         livingAgents: living,
         treasury: { balanceCents: pos.balanceCents, reserveTargetCents: pos.reserveTargetCents },
         asOf,
+        plannedSweepsCents: opts.plannedSweepsCents ?? (await this.plannedSweepsCents(this.pool, agentId)),
       },
       policy,
     );
+  }
+
+  /** Phase D3.1: profit claimed by recorded sweep plans (planned, never executed; plans are immutable). */
+  private async plannedSweepsCents(q: Pool | PoolClient, agentId: string): Promise<number> {
+    const r = await q.query<{ s: string }>(
+      "SELECT COALESCE(sum(amount_cents), 0)::text AS s FROM fleet_sweep_plans WHERE agent_id = $1 AND status = 'planned_not_executed'",
+      [agentId],
+    );
+    return Number(r.rows[0].s);
   }
 
   /** Compute and record a sweep plan (never executed: payments are disabled). */
   async planSweep(agentId: string, actor: string, opts: { cashCents?: number } = {}): Promise<AgentWaterfall & { planId: string }> {
     const status = (await this.pool.query("SELECT status FROM fleet_agents WHERE agent_id = $1", [agentId])).rows[0]?.status;
     if (status !== "active") throw new Error(`sweeps are planned only for active agents (${agentId} is ${status})`);
-    const w = await this.agentWaterfall(agentId, opts);
     const id = ulid();
-    await this.tx(async (c) => {
-      await c.query(
-        "INSERT INTO fleet_sweep_plans (plan_id, agent_id, rate, amount_cents, waterfall, computed_by) VALUES ($1, $2, $3, $4, $5, $6)",
-        [id, agentId, w.rate.rate, w.FLEET_SWEEP, JSON.stringify(w), actor],
-      );
-      await this.event(c, "sweep_planned", agentId, actor, { planId: id, rate: w.rate.rate, amountCents: w.FLEET_SWEEP, executed: false });
-    });
-    return { ...w, planId: id };
+    // Phase D3.1: reserve what earlier plans claimed, so the same profit is never planned twice.
+    // Optimistic: compute without holding a lock, then insert under the agent row lock only if no
+    // other plan was recorded in between (otherwise recompute); no connection waits while computing.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const planned = await this.plannedSweepsCents(this.pool, agentId);
+      const wf = await this.agentWaterfall(agentId, { ...opts, plannedSweepsCents: planned });
+      const done = await this.tx(async (c) => {
+        await c.query("SELECT 1 FROM fleet_agents WHERE agent_id = $1 FOR UPDATE", [agentId]);
+        if ((await this.plannedSweepsCents(c, agentId)) !== planned) return false;
+        await c.query(
+          "INSERT INTO fleet_sweep_plans (plan_id, agent_id, rate, amount_cents, waterfall, computed_by) VALUES ($1, $2, $3, $4, $5, $6)",
+          [id, agentId, wf.rate.rate, wf.FLEET_SWEEP, JSON.stringify(wf), actor],
+        );
+        await this.event(c, "sweep_planned", agentId, actor, {
+          planId: id,
+          rate: wf.rate.rate,
+          amountCents: wf.FLEET_SWEEP,
+          reservedByEarlierPlansCents: planned,
+          executed: false,
+        });
+        return true;
+      });
+      if (done) return { ...wf, planId: id };
+    }
+    throw new Error(`concurrent sweep planning for ${agentId}; retry`);
   }
 
   /** Discretionary rescue advice (never automatic). */

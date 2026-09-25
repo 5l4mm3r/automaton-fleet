@@ -33,6 +33,14 @@ const SHELL_FIELDS: Record<string, string[]> = {
   remove_skill: ["name"],
 };
 
+// Phase D3.1: shell verbs that can change a file, and the runtime security-boundary paths they must not touch.
+// The shell cannot know the runtime root, so only distinctive runtime paths are listed here; the file-level
+// check (self-mod/code.ts isSecurityBoundaryFile) covers the full set, anchored to this runtime.
+const SHELL_WRITE_VERBS =
+  "sed\\s+(-[a-zA-Z]*i|--in-place)|perl\\s+-[a-zA-Z]*i|>>?|\\btee\\b|\\bcp\\b|\\bmv\\b|\\brm\\b|\\bln\\b|\\btruncate\\b|\\bpatch\\b|\\bdd\\b|\\binstall\\b|\\bchmod\\b|\\bchown\\b|\\bchattr\\b|\\btouch\\b|\\brsync\\b|writeFile|appendFile|open\\([^)]*['\"](w|a)|\\bgit\\s+(checkout|restore|apply|am|cherry-pick|revert|reset|stash)";
+const BOUNDARY_PATHS =
+  "\\b(src|dist)/(agent/(policy-rules|harnesses|policy-engine|injection-defense|tools|loop|loop-detector|spend-tracker|harness-registry|harness-types|idle-only-tools|context|system-prompt)|fleet|self-mod|replication|conway|identity/(wallet|chain|provision|siws)|state/(schema|database)|heartbeat|orchestration|skills/(loader|registry)|registry/erc8004|soul/validator)/?";
+
 // Forbidden command patterns (migrated from tools.ts isForbiddenCommand)
 const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   // Self-destruction
@@ -96,6 +104,10 @@ const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   { pattern: /automaton-fleet-witness|\bFLEET_WITNESS_\w+\s*=|\bcapability_scope\b/i, description: "Touch the fleet root witness or capability scopes" },
   // Phase B2: the Operator API, its credential, keys, database surface and tooling
   { pattern: /automaton-fleet-operator|operator\.env\b|\bFLEET_OPERATOR_\w+\s*=|fleet\/operator\/|\bfleet:operator|(?<![\w-])operator-(enroll|add-key|revoke|revoke-key|revoke-all|api|list|archive)(?![\w-])|:8788\b|\/v1\/operator\/|\bop_(begin_request|key_material|ping|whoami|fleet_status|list_agents|get_agent|list_events)\b|\bfleet_operator_\w+|x-fleet-op-/i, description: "Touch the fleet Operator API, its credentials or principals" },
+  // Phase D3.1: the runtime's security boundary (see self-mod/code.ts PROTECTED_SOURCE_*) via any write-capable shell verb
+  { pattern: new RegExp(`(${SHELL_WRITE_VERBS})[^\\n]*(${BOUNDARY_PATHS})|(${BOUNDARY_PATHS})[^\\n]*(${SHELL_WRITE_VERBS})`), description: "Modify the agent's security boundary (policy, guards, fleet, spend chokepoints) via the shell" },
+  // Phase D3.1 spend gate: no wallet-key use or value-transfer signing outside the gated runtime paths
+  { pattern: /wallet\.json|\.automaton\/wallet|privateKeyToAccount|mnemonicToAccount|signTypedData|signTransaction|sendTransaction|sendRawTransaction|writeContract|transferWithAuthorization|\/v1\/credits\/transfer|\/v1\/domains\/register|X-PAYMENT|x402|\bcast\s+send\b|\beth_sendRawTransaction\b/i, description: "Use the wallet key or sign/send a value transfer outside the fleet spend gate" },
   // Phase D3: controlled operator actions, their kill switch, proposals and holds (owner and operator tooling)
   { pattern: /(?<![\w-])operator-actions(?![\w-])|(?<![\w-])proposal-(list|approve|reject)(?![\w-])|(?<![\w-])agent-(hold|release-hold)(?![\w-])|\bop_(begin_action|act_\w+|propose_\w+|lifecycle_health|runtime_status)\b|\bfleet_agent_hold_\w+|\bfleet_operator_proposal\w*|\/v1\/operator\/(actions|proposals|lifecycle)\b/i, description: "Touch fleet operator actions, proposals or holds" },
   // Phase D: the dev-VM Claude bridge (config, signing keys, tunnel key and tooling)

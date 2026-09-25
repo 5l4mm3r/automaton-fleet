@@ -4,7 +4,7 @@
  * Parsed from environment variables. Every value fails closed: anything
  * missing or malformed resolves to the most restrictive setting.
  *
- *   FLEET_MAX_AGENTS          integer 1..50   (default 1)
+ *   FLEET_MAX_AGENTS          integer 1..50   (optional local tightening; see effectiveMaxAgents)
  *   FLEET_MODE                DEVELOPMENT | EXPANSION | HARVEST | EMERGENCY (default DEVELOPMENT)
  *   REAL_REPLICATION_ENABLED  "true" to enable (default false)
  *   REAL_PAYMENTS_ENABLED     "true" to enable (default false)
@@ -63,9 +63,30 @@ function parseUsdToCents(value: string | undefined, fallbackCents: number): numb
   return Math.round(n * 100);
 }
 
+/**
+ * The local cap to send with registry operations: the operator's explicit
+ * FLEET_MAX_AGENTS, or undefined (the registry's owner-set cap applies,
+ * bounded by the hard maximum in the database).
+ */
+export function localCapOverride(config: FleetConfig): number | undefined {
+  return config.maxAgentsExplicit === false ? undefined : Math.min(config.maxAgents, FLEET_HARD_MAX_AGENTS);
+}
+
+/**
+ * Effective living-agent cap. With a shared registry: its owner-set cap,
+ * tightened by an explicit local FLEET_MAX_AGENTS, never above the hard
+ * maximum. Without one (local-only): the local value (default 1, fail closed).
+ * Nothing an agent controls can raise either input.
+ */
+export function effectiveMaxAgents(config: FleetConfig, sharedMax: number | null | undefined): number {
+  if (sharedMax === null || sharedMax === undefined || !Number.isFinite(sharedMax)) return Math.min(config.maxAgents, FLEET_HARD_MAX_AGENTS);
+  return Math.min(sharedMax, localCapOverride(config) ?? FLEET_HARD_MAX_AGENTS, FLEET_HARD_MAX_AGENTS);
+}
+
 export function loadFleetConfig(env: Env = process.env): FleetConfig {
   return Object.freeze({
     maxAgents: parseMaxAgents(env.FLEET_MAX_AGENTS),
+    maxAgentsExplicit: env.FLEET_MAX_AGENTS !== undefined && env.FLEET_MAX_AGENTS.trim() !== "",
     configuredMode: parseMode(env.FLEET_MODE),
     realReplicationEnabled: parseFlag(env.REAL_REPLICATION_ENABLED),
     realPaymentsEnabled: parseFlag(env.REAL_PAYMENTS_ENABLED),

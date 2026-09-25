@@ -28,16 +28,24 @@ import { ulid } from "ulid";
 import { keccak256, toHex } from "viem";
 import type { Address, PrivateKeyAccount } from "viem";
 import { randomUUID } from "crypto";
+import { FLEET_SPEND_GATE, assertRealSpendAllowed, type SpendGate } from "../fleet/spend-gate.js";
 import type { ChainType, ChainIdentity } from "../identity/chain.js";
 
 interface ConwayClientOptions {
   apiUrl: string;
   apiKey: string;
   sandboxId: string;
+  /**
+   * Phase D3.1 spend gate for credit transfers, domain purchases and sandbox
+   * creation. Default: the fleet gate (fail closed unless
+   * REAL_PAYMENTS_ENABLED=true). Only owner tooling passes a different gate.
+   */
+  spendGate?: SpendGate;
 }
 
 export function createConwayClient(options: ConwayClientOptions): ConwayClient {
   const { apiUrl, apiKey } = options;
+  const spendGate = options.spendGate ?? FLEET_SPEND_GATE;
   // Normalize sandbox ID defensively so values like whitespace/"undefined"/"null"
   // never produce malformed API paths such as /v1/sandboxes//exec.
   const sandboxId = normalizeSandboxId(options.sandboxId);
@@ -255,6 +263,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
   const createSandbox = async (
     options: CreateSandboxOptions,
   ): Promise<SandboxInfo> => {
+    assertRealSpendAllowed("sandbox_creation", spendGate);
     const result = await request("POST", "/v1/sandboxes", {
       name: options.name,
       vcpu: options.vcpu || 1,
@@ -320,6 +329,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
     amountCents: number,
     note?: string,
   ): Promise<CreditTransferResult> => {
+    assertRealSpendAllowed("credit_transfer", spendGate);
     const payload = {
       to_address: toAddress,
       amount_cents: amountCents,
@@ -482,6 +492,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
     domain: string,
     years: number = 1,
   ): Promise<DomainRegistration> => {
+    assertRealSpendAllowed("domain_purchase", spendGate);
     const result = await request("POST", "/v1/domains/register", {
       domain,
       years,
@@ -581,7 +592,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
   };
 
   const createScopedClient = (targetSandboxId: string): ConwayClient => {
-    return createConwayClient({ apiUrl, apiKey, sandboxId: targetSandboxId });
+    return createConwayClient({ apiUrl, apiKey, sandboxId: targetSandboxId, spendGate });
   };
 
   const client: ConwayClient = {

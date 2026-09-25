@@ -32,6 +32,14 @@ export const LIVING_FLEET_STATUSES: readonly FleetAgentStatus[] = Object.freeze(
 export interface FleetConfig {
   /** Global living-agent cap across the lineage, including the root. 1..50. */
   maxAgents: number;
+  /**
+   * Phase D3.1: true when FLEET_MAX_AGENTS was set by the operator (valid or
+   * not; an invalid value fails closed to 1). When false, the shared
+   * registry's owner-set cap is authoritative (still bounded by the hard
+   * maximum 50) and maxAgents (1) only applies without a shared registry.
+   * Absent (hand-built configs): treated as explicit.
+   */
+  maxAgentsExplicit?: boolean;
   /** Operator-selected mode. HARVEST is additionally auto-selected at the cap. */
   configuredMode: FleetState;
   realReplicationEnabled: boolean;

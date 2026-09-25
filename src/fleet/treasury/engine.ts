@@ -403,6 +403,12 @@ export interface AgentEconomicsInput {
   asOf?: Date;
   /** Burn lookback (default 30 days). */
   lookbackDays?: number;
+  /**
+   * Phase D3.1: profit already claimed by recorded (planned, never executed)
+   * sweep plans. It is reserved: a new plan can only sweep undistributed
+   * profit beyond it, so the same profit is never planned twice.
+   */
+  plannedSweepsCents?: number;
 }
 
 export interface AgentWaterfall {
@@ -418,6 +424,8 @@ export interface AgentWaterfall {
   APPROVED_GROWTH_CAPITAL: number;
   CONTINGENCY_RESERVE: number;
   EXCESS_CAPITAL: number;
+  /** Phase D3.1: profit reserved by earlier sweep plans (see AgentEconomicsInput.plannedSweepsCents). */
+  PLANNED_SWEEPS_RESERVED: number;
   UNDISTRIBUTED_PROFIT: number;
   SWEEP_BASE: number;
   FLEET_SWEEP: number;
@@ -454,7 +462,8 @@ export function computeAgentWaterfall(input: AgentEconomicsInput, policy: Treasu
     },
     policy,
   );
-  const sweepBase = Math.min(excess, all.undistributedProfitCents);
+  const reserved = Math.max(0, Math.floor(Number.isFinite(input.plannedSweepsCents) ? (input.plannedSweepsCents as number) : 0));
+  const sweepBase = Math.min(excess, Math.max(0, all.undistributedProfitCents - reserved));
   const sweep = Math.floor(sweepBase * rate.rate);
   if (cash - sweep < Math.min(cash, protectedTotal)) {
     throw new Error("treasury invariant violated: sweep would reach protected capital");
@@ -472,6 +481,7 @@ export function computeAgentWaterfall(input: AgentEconomicsInput, policy: Treasu
     APPROVED_GROWTH_CAPITAL: growth,
     CONTINGENCY_RESERVE: contingency,
     EXCESS_CAPITAL: excess,
+    PLANNED_SWEEPS_RESERVED: reserved,
     UNDISTRIBUTED_PROFIT: all.undistributedProfitCents,
     SWEEP_BASE: sweepBase,
     FLEET_SWEEP: sweep,

@@ -222,6 +222,124 @@ const PROTECTED_FILES: readonly string[] = Object.freeze([
 ]);
 
 /**
+ * Phase D3.1: the agent's security boundary, protected systematically.
+ *
+ * Every source/compiled file of the runtime that decides, enforces, audits
+ * or wires what the agent may do: policy rules and engine, tool guards and
+ * harness confinement, injection defense, spend tracking and the spend gate,
+ * the fleet control plane client/policies, self-modification, replication,
+ * Conway spend chokepoints, wallet/identity, state schema (hard cap),
+ * heartbeat (liveness/challenge answering), orchestration (child funding),
+ * soul validation, skill loading, shared types/config defaults and the entry
+ * point. Directories are protected whole, so a new file added to them is
+ * covered automatically; see the D3.1 regression test.
+ *
+ * Anchored to THIS runtime's root (resolved from this module's location), so
+ * an unrelated project the agent works on (e.g. ~/app/src/index.ts) is not
+ * affected. Both src/ and dist/ trees, every compiled extension.
+ */
+export const PROTECTED_SOURCE_DIRS: readonly string[] = Object.freeze([
+  "agent/policy-rules",
+  "agent/harnesses",
+  "fleet",
+  "self-mod",
+  "replication",
+  "conway",
+  "identity",
+  "state",
+  "heartbeat",
+  "orchestration",
+  "skills",
+]);
+
+export const PROTECTED_SOURCE_MODULES: readonly string[] = Object.freeze([
+  "agent/policy-engine",
+  "agent/injection-defense",
+  "agent/tools",
+  "agent/loop",
+  "agent/loop-detector",
+  "agent/spend-tracker",
+  "agent/harness-registry",
+  "agent/harness-types",
+  "agent/idle-only-tools",
+  "agent/context",
+  "agent/system-prompt",
+  "registry/erc8004",
+  "soul/validator",
+  "types",
+  "config",
+  "index",
+]);
+
+/** Build and dependency configuration at the runtime root. */
+const PROTECTED_ROOT_FILES: readonly string[] = Object.freeze([
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "tsconfig.json",
+  "constitution.md",
+]);
+
+function esc(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const SOURCE_DIR_RE = new RegExp(`^(src|dist)/(${PROTECTED_SOURCE_DIRS.map(esc).join("|")})(/|$)`);
+const SOURCE_MODULE_RE = new RegExp(`^(src|dist)/(${PROTECTED_SOURCE_MODULES.map(esc).join("|")})\\.(ts|js|mjs|cjs|d\\.ts)(\\.map)?$`);
+
+/** The runtime root this module belongs to (…/src/self-mod/code.ts or …/dist/self-mod/code.js -> …). */
+function runtimeRoots(): string[] {
+  const roots = new Set<string>();
+  try {
+    const here = path.dirname(new URL(import.meta.url).pathname);
+    roots.add(path.resolve(here, "..", ".."));
+  } catch {
+    // not a file URL (bundled)
+  }
+  // Fallback only when the module location is unknown: the working directory.
+  if (roots.size === 0) roots.add(path.resolve(process.cwd()));
+  for (const r of [...roots]) {
+    try {
+      roots.add(fs.realpathSync(r));
+    } catch {
+      // keep the unresolved form
+    }
+  }
+  return [...roots];
+}
+
+/** Canonical absolute path: symlinks resolved through the nearest existing ancestor. */
+function canonicalPath(p: string): string {
+  let cur = path.resolve(p);
+  const rest: string[] = [];
+  for (let i = 0; i < 64; i++) {
+    try {
+      return path.join(fs.realpathSync(cur), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+  return path.resolve(p);
+}
+
+/** True when `filePath` is part of this runtime's security boundary (D3.1). */
+export function isSecurityBoundaryFile(filePath: string): boolean {
+  const candidates = new Set([path.resolve(filePath), canonicalPath(filePath)]);
+  for (const root of runtimeRoots()) {
+    for (const abs of candidates) {
+      const rel = path.relative(root, abs);
+      if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+      const posix = rel.split(path.sep).join("/");
+      if (SOURCE_DIR_RE.test(posix) || SOURCE_MODULE_RE.test(posix) || PROTECTED_ROOT_FILES.includes(posix)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Directory patterns that are completely off-limits.
  * The agent cannot write to these locations.
  */
@@ -300,6 +418,9 @@ function resolveAndValidatePath(filePath: string): string | null {
  */
 export function isProtectedFile(filePath: string): boolean {
   const resolved = path.resolve(filePath);
+
+  // Phase D3.1: the whole security boundary of this runtime (src/ and dist/).
+  if (isSecurityBoundaryFile(filePath)) return true;
 
   // Check against protected file patterns using path-segment matching
   for (const pattern of PROTECTED_FILES) {

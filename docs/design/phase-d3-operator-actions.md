@@ -1,8 +1,9 @@
 # Phase D3 — Claude Fleet Operator Channel (controlled operator actions)
 
-Status: **IMPLEMENTED LOCALLY — NOT DEPLOYED** (schema v9). Production stays on
-runtime `4d6a0be`, schema v8, and is read-only until the D3 deployment gate
-is approved.
+Status: **DEPLOYED 2026-09-25** (schema v9). Production runs the D3 release
+line (D3 `502876c`, whoami fix `52be40f`, D3.1 hardening on top). The
+operator-actions kill switch is **OFF** by default; the owner turns it on for
+a working session with `fleet:admin operator-actions enable <reason>`.
 
 D3 extends the existing channel. It does not replace it:
 
@@ -206,6 +207,56 @@ an allow-list. **Do not allow-list the six action tools.**
 | Owner gate | no route | no EXECUTE; approver rule; guard trigger | owner credential only in admin.env | — |
 | Evidence | JSONL line (action, decision) | ledger + events, immutable | — | — |
 
-## 8. Deployment (not executed)
+## 8. Deployment record and current state
 
-See the D3 gate record in `docs/master-key/24-PHASE-D3-OPERATOR-ACTIONS.md` §9.
+D3 was deployed on 2026-09-25 (UTC) as described in the runbook, Stage D3:
+- VPS reproducible build of `502876c` (build `695d66c0…`, lockfile unchanged).
+- Planned outage 15:35:05Z–15:36:16Z: stop the three services, take a verified
+  pre-v9 dump, run `migrate-check` (exactly 8→9) and `migrate`, the privilege
+  audit, `approve-runtime`, then start.
+- Fix release `52be40f` (whoami reported only the B2 scopes), built reproducibly
+  as `304532c8…`. The controller and Operator API restarted in about 8 s; no
+  migration.
+
+Current state:
+- **Principals:**
+  - `claude-operator` `op_01M3CKG338G2KDJ19FYEKT2T40`: bridge_claude, all six
+    scopes, key `dbaf93c5…`, 30 days.
+  - `bridge-claude`: read-only fallback, B2 scopes.
+  - `bridge-chatgpt`: status and agents only, never D3.
+- **Claude Code MCP:** the `fleet-operator` registration signs as
+  `claude-operator` (dev VM config `~/.config/automaton-fleet/operator/claude-operator.json`).
+- **Actions kill switch:** OFF; every verification left it off. While off,
+  action routes answer `FLEET_OP_ACTIONS_DISABLED` (503). Turning the Operator
+  API off, or `operator-revoke-all`, also turns actions off, and re-enabling
+  reads never re-enables actions.
+- **Proposals:** executed only by `fleet:admin proposal-approve <id>` with the
+  owner credential. `proposal-reject` and expiry (24 h) never execute anything.
+- **Verification evidence:** 8 production ledger rows, all rejected or noop.
+  They were made against a non-existent agent, plus two throttled reconciles.
+  A fresh `claude -p` session also exercised the full channel.
+
+Rollback:
+- **Immediate:** `operator-actions disable`, `operator-api disable`, or
+  `operator-revoke <principal>`.
+- **Release:** previous release directories and `runtime.env.pre-*` backups
+  are kept.
+- **Schema:** restore the pre-v9 dump
+  `~/automaton_fleet-v8-pre-v9-20260925T153505Z.dump` together with
+  `runtime.env.pre-d3` and `releases/4d6a0be…`. There is no down-migration.
+
+Current limitations:
+- **Holds:** a hold restricts fleet authority only. Compute in the sandbox is not
+  stopped (the provider has no API for it). D3.1 also blocks the upstream spending
+  tools while payments are off.
+- **Reconcile:** `reconcile_lifecycle` is throttled to once per 30 s after the
+  controller's own reaper runs, so while the controller is healthy it is almost
+  always a no-op. It matters only when the reaper has stalled.
+- **Ledger paging:** the action ledger pages oldest first (keyset on `seq`).
+- **Key expiry:** principal keys expire and rotation is manual. `bridge-claude`
+  expires 2026-10-24; `bridge-chatgpt` and `claude-operator` 2026-10-25.
+- **Human confirmation:** keep the six action tools off Claude Code's
+  allow-lists, so every action asks the human.
+- **Compromised Operator API process:** it can still skip signature checks for
+  its own requests (a B2 residual). The database re-validation, hourly caps, kill
+  switch and ledger bound what it can do.

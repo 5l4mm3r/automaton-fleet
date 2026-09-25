@@ -23,6 +23,7 @@ import {
   type PrivateKeyAccount,
 } from "viem";
 import { base, baseSepolia } from "viem/chains";
+import { assertRealSpendAllowed } from "../fleet/spend-gate.js";
 import type {
   RegistryEntry,
   DiscoveredAgent,
@@ -255,6 +256,8 @@ export async function registerAgent(
   });
 
   // Call register(agentURI)
+  // Phase D3.1: on-chain writes spend gas; fail closed while real payments are disabled.
+  assertRealSpendAllowed("onchain_transaction");
   const hash = await walletClient.writeContract({
     address: contracts.identity,
     abi: IDENTITY_ABI,
@@ -336,6 +339,8 @@ export async function updateAgentURI(
     transport: http(resolveRpcUrl(rpcUrl)),
   });
 
+  // Phase D3.1: on-chain writes spend gas; fail closed while real payments are disabled.
+  assertRealSpendAllowed("onchain_transaction");
   const hash = await walletClient.writeContract({
     address: contracts.identity,
     abi: IDENTITY_ABI,
@@ -409,6 +414,8 @@ export async function leaveFeedback(
     transport: http(resolveRpcUrl(rpcUrl)),
   });
 
+  // Phase D3.1: on-chain writes spend gas; fail closed while real payments are disabled.
+  assertRealSpendAllowed("onchain_transaction");
   const hash = await walletClient.writeContract({
     address: contracts.reputation,
     abi: REPUTATION_ABI,

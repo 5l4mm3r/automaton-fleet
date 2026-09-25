@@ -60,7 +60,17 @@ interface RequestCtx {
   /** Memoised per request: a signed request's nonce is consumed exactly once. */
   cred?: { agentId: string; token: string };
   bearerCred?: { agentId: string; token: string };
+  /** Phase D3.1: hash of the credential this request presented (session or bearer), for the known-good cache. */
+  credHash?: string;
 }
+
+/** Phase D3.1: how long a credential stays "known good" after the database accepted it. */
+const KNOWN_CRED_TTL_MS = 10 * 60_000;
+const KNOWN_CRED_MAX = 10_000;
+/** Phase D3.1: at most one suppressed-auth-failure summary event per this interval. */
+const AUTH_SUPPRESSED_SUMMARY_MS = 60_000;
+/** Phase D3.1: the public health result is shared by all callers for this long. */
+const PUBLIC_HEALTH_CACHE_MS = 2_000;
 
 /**
  * Central route authorization policy (FLEET-KI-4, default deny).
@@ -152,7 +162,16 @@ export interface FleetServiceOptions {
   allowLegacyBearer?: boolean;
   /** Max clock skew for signed requests (default 60 s). */
   maxSkewMs?: number;
-  rateLimits?: { perAgent?: RateLimit; sessions?: RateLimit; authFailuresPerIp?: RateLimit };
+  rateLimits?: {
+    perAgent?: RateLimit;
+    sessions?: RateLimit;
+    authFailuresPerIp?: RateLimit;
+    /** Phase D3.1: database-backed auth-failure events, all sources together. */
+    authFailureEvents?: RateLimit;
+    /** Phase D3.1: requests with a credential not yet proven valid (pre-database), per IP and in total. */
+    unverifiedPerIp?: RateLimit;
+    unverifiedGlobal?: RateLimit;
+  };
   /** TLS material; when set, listen() serves HTTPS. */
   tls?: { cert: string | Buffer; key: string | Buffer };
   /**
@@ -223,6 +242,14 @@ export class FleetService {
   private readonly perAgent: RateLimiter;
   private readonly sessions: RateLimiter;
   private readonly authFailures: RateLimiter;
+  private readonly authFailureEvents: RateLimiter;
+  private readonly unverifiedPerIp: RateLimiter;
+  private readonly unverifiedGlobal: RateLimiter;
+  /** credential hash -> expiry: credentials the database accepted recently (they skip the pre-database budgets). */
+  private readonly knownCreds = new Map<string, number>();
+  private suppressedAuthFailures = 0;
+  private lastSuppressedSummaryAt = 0;
+  private healthCache: { at: number; value: Promise<unknown> } | null = null;
   private readonly now: () => number;
 
   constructor(private readonly opts: FleetServiceOptions) {
@@ -231,6 +258,48 @@ export class FleetService {
     this.perAgent = new RateLimiter(opts.rateLimits?.perAgent ?? { capacity: 60, refillPerSec: 5 }, this.now);
     this.sessions = new RateLimiter(opts.rateLimits?.sessions ?? { capacity: 10, refillPerSec: 10 / 60 }, this.now);
     this.authFailures = new RateLimiter(opts.rateLimits?.authFailuresPerIp ?? { capacity: 20, refillPerSec: 20 / 60 }, this.now);
+    this.authFailureEvents = new RateLimiter(opts.rateLimits?.authFailureEvents ?? { capacity: 60, refillPerSec: 1 }, this.now);
+    this.unverifiedPerIp = new RateLimiter(opts.rateLimits?.unverifiedPerIp ?? { capacity: 30, refillPerSec: 0.5 }, this.now);
+    this.unverifiedGlobal = new RateLimiter(opts.rateLimits?.unverifiedGlobal ?? { capacity: 120, refillPerSec: 2 }, this.now);
+  }
+
+  // ── Phase D3.1: pre-database budgets for unproven credentials ───────────
+
+  private static credHash(token: string): string {
+    return crypto.createHash("sha256").update(token).digest("hex");
+  }
+
+  private isKnownCred(hash: string): boolean {
+    const exp = this.knownCreds.get(hash);
+    if (exp === undefined) return false;
+    if (exp <= this.now()) {
+      this.knownCreds.delete(hash);
+      return false;
+    }
+    return true;
+  }
+
+  /** The database accepted this credential: it may skip the unproven-credential budgets for a while. */
+  private markKnownCred(hash: string): void {
+    if (this.knownCreds.size >= KNOWN_CRED_MAX && !this.knownCreds.has(hash)) {
+      const first = this.knownCreds.keys().next().value;
+      if (first !== undefined) this.knownCreds.delete(first);
+    }
+    this.knownCreds.set(hash, this.now() + KNOWN_CRED_TTL_MS);
+  }
+
+  /**
+   * A credential not (yet) proven valid by the database costs a per-IP and a
+   * global token before any database work (nonce ledger, authentication,
+   * denial events). Refused requests cause no database write.
+   */
+  private spendUnverified(ctx: RequestCtx): void {
+    if (!this.unverifiedPerIp.take(ctx.ip) || !this.unverifiedGlobal.take("all")) {
+      this.audit("rate_limited", null, { key: "unverified_credentials", ip: ctx.ip });
+      throw Object.assign(new HttpError(429, "FLEET_RATE_LIMITED", "too many requests with unverified credentials"), {
+        retryAfter: Math.max(this.unverifiedPerIp.retryAfterS(ctx.ip), this.unverifiedGlobal.retryAfterS("all"), 1),
+      });
+    }
   }
 
   /** Audit sink (service log + JSONL). The detail is redacted here, before any sink sees it. */
@@ -439,11 +508,29 @@ export class FleetService {
     res.end(data);
   }
 
+  /**
+   * Authentication failure. Phase D3.1: the per-IP throttle is checked BEFORE
+   * the permanent database event, and database events are also bounded
+   * globally; suppressed failures are counted (the JSONL audit keeps every
+   * one) and summarised in the database at most once a minute, so evidence is
+   * kept without letting unauthenticated traffic grow the append-only log.
+   */
   private async authFailure(ctx: RequestCtx, path: string, why: string, code = "FLEET_AUTH_FAILED", status = 401): Promise<never> {
-    await this.recordDb("api_auth_failed", null, { path, why, ip: ctx.ip });
-    if (!this.authFailures.take(ctx.ip)) {
-      throw new HttpError(429, "FLEET_RATE_LIMITED", "too many failed authentications");
+    const ipOk = this.authFailures.take(ctx.ip);
+    if (ipOk && this.authFailureEvents.take("all")) {
+      await this.recordDb("api_auth_failed", null, { path, why, ip: ctx.ip });
+    } else {
+      this.suppressedAuthFailures++;
+      this.audit("api_auth_failed_suppressed", null, { path, why, ip: ctx.ip });
+      const t = this.now();
+      if (t - this.lastSuppressedSummaryAt >= AUTH_SUPPRESSED_SUMMARY_MS) {
+        const count = this.suppressedAuthFailures;
+        this.suppressedAuthFailures = 0;
+        this.lastSuppressedSummaryAt = t;
+        await this.recordDb("api_auth_failed_suppressed", null, { count, windowS: AUTH_SUPPRESSED_SUMMARY_MS / 1000 });
+      }
     }
+    if (!ipOk) throw new HttpError(429, "FLEET_RATE_LIMITED", "too many failed authentications");
     throw new HttpError(status, code, why);
   }
 
@@ -463,6 +550,7 @@ export class FleetService {
     if (!m || !agentId) return this.authFailure(ctx, path, m ? "malformed token" : "missing bearer token");
     ctx.agentId = agentId;
     ctx.bearerCred = { agentId, token: m[1] };
+    ctx.credHash = FleetService.credHash(m[1]);
     return ctx.bearerCred;
   }
 
@@ -481,7 +569,8 @@ export class FleetService {
     if (!m) {
       if (/^Bearer /.test(h) && this.opts.allowLegacyBearer) {
         const cred = await this.bearer(req, path, ctx);
-        this.rateLimit(this.perAgent, cred.agentId);
+        if (ctx.credHash && this.isKnownCred(ctx.credHash)) this.rateLimit(this.perAgent, cred.agentId);
+        else this.spendUnverified(ctx);
         ctx.cred = cred;
         return cred;
       }
@@ -491,7 +580,12 @@ export class FleetService {
     const agentId = agentIdFromSessionToken(token);
     if (!agentId) return this.authFailure(ctx, path, "malformed session token");
     ctx.agentId = agentId;
-    this.rateLimit(this.perAgent, agentId);
+    // Phase D3.1: the session token (and so the HMAC key) is caller-supplied; nothing below is
+    // authenticated until the database accepts the session. An unproven session pays the
+    // pre-database budgets and never touches the real agent's per-agent bucket.
+    ctx.credHash = FleetService.credHash(token);
+    if (this.isKnownCred(ctx.credHash)) this.rateLimit(this.perAgent, agentId);
+    else this.spendUnverified(ctx);
     const ts = String(req.headers[SIG_HEADERS.ts] ?? "");
     const nonce = String(req.headers[SIG_HEADERS.nonce] ?? "");
     const sig = String(req.headers[SIG_HEADERS.sig] ?? "");
@@ -616,9 +710,13 @@ export class FleetService {
     try {
       ctx.raw = await this.readRaw(req);
       const out = await this.route(req.method ?? "GET", path, req, ctx);
+      // Phase D3.1: the handler succeeded, so the database accepted this credential.
+      if (ctx.credHash) this.markKnownCred(ctx.credHash);
       send(200, { ok: true, ...out });
     } catch (err) {
       await this.sendError(err, path, send);
+      // A credential the database refuses (revoked, expired, dead) loses its known-good status.
+      if (ctx.credHash && (ctx.status === 401 || ctx.status === 410)) this.knownCreds.delete(ctx.credHash);
     } finally {
       // Request audit log (every API request; no bodies, no tokens).
       this.audit("api_request", ctx.agentId, {
@@ -678,7 +776,16 @@ export class FleetService {
     await this.authorize(method, path, req, ctx);
 
     if (method === "GET" && path === "/v1/health") {
-      return { health: await admin.health() };
+      // Phase D3.1: public and unauthenticated, so one database round-trip serves every caller per window.
+      const c = this.healthCache;
+      if (!c || this.now() - c.at >= PUBLIC_HEALTH_CACHE_MS) this.healthCache = { at: this.now(), value: admin.health() };
+      const hc = this.healthCache!;
+      try {
+        return { health: await hc.value };
+      } catch (err) {
+        if (this.healthCache === hc) this.healthCache = null;
+        throw err;
+      }
     }
 
     if (method === "GET" && path === "/v1/state") {
@@ -703,7 +810,10 @@ export class FleetService {
       case "/v1/session": {
         // The only endpoint that accepts the long-lived credential.
         const { agentId, token } = await this.bearer(req, path, ctx);
-        this.rateLimit(this.sessions, agentId);
+        // Phase D3.1: only a long-lived credential the database already accepted may spend the
+        // agent's session budget; an unproven one pays the pre-database budgets instead.
+        if (ctx.credHash && this.isKnownCred(ctx.credHash)) this.rateLimit(this.sessions, agentId);
+        else this.spendUnverified(ctx);
         const sessionToken = mintSessionToken(agentId);
         const r = await agent.openSession(agentId, token, hashAgentToken(sessionToken));
         if (!r.ok) {

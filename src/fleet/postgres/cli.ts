@@ -83,13 +83,15 @@ import type { ConwayClient } from "../../types.js";
 import { redactDetail, redactText } from "../redact.js";
 import { scanAuditFile } from "../redact-scan.js";
 import { PgOperatorAdmin } from "../operator/admin.js";
+import { OWNER_PROVISIONING_GATE } from "../spend-gate.js";
 import type { OperatorKind, OperatorScope } from "../operator/route-policy.js";
 
 /** Operator Conway client (CONWAY_API_KEY / CONWAY_API_URL); null when not configured. */
 function operatorConway(e: Record<string, string | undefined>): ConwayClient | null {
   const apiKey = e.CONWAY_API_KEY?.trim();
   if (!apiKey) return null;
-  return createConwayClient({ apiUrl: e.CONWAY_API_URL?.trim() || "https://api.conway.tech", apiKey, sandboxId: "" });
+  // Owner tooling: may create only the sandbox the owner explicitly requests (dry-run child); never pays or transfers.
+  return createConwayClient({ apiUrl: e.CONWAY_API_URL?.trim() || "https://api.conway.tech", apiKey, sandboxId: "", spendGate: OWNER_PROVISIONING_GATE });
 }
 
 function argValue(rest: string[], flag: string): string | undefined {

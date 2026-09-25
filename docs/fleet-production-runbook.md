@@ -1236,11 +1236,10 @@ pinned artifact. The FleetController / Operator API runtime pin, its approval an
 
 Nothing else was changed.
 
-## Stage D3 — Controlled operator actions, schema v9 (DRAFT — not executed, needs approval)
+## Stage D3 — Controlled operator actions, schema v9 (DEPLOYED 2026-09-25, times UTC)
 
-D3 is implemented and tested locally only. Production is unchanged: runtime `4d6a0be`,
-schema v8, read-only. Design: `docs/design/phase-d3-operator-actions.md`. Every row
-below needs the owner's approval, one gate at a time.
+D3 is live. Design and current state: `docs/design/phase-d3-operator-actions.md`.
+The gate table below was the plan; the record after it is what ran.
 
 | Gate | Action | Privileged | Outage |
 |---|---|---|---|
@@ -1269,6 +1268,20 @@ Rollback:
   `runtime.env.pre-d3`; point `current` back to `releases/4d6a0be…`; start in order;
   verify. There is no down migration. `4d6a0be` refuses a v9 registry (exact schema
   check).
+
+### Stage D3 record (2026-09-25)
+
+| Gate | Result |
+|---|---|
+| D3-1 | Commit `502876c`, pushed to `fleet-origin` |
+| D3-2 | The VPS build reproduced the local prediction: build `695d66c035a379f9045c9aebbb2eea9dc1692be1613f666203039b707a2914ee`, lockfile `eee9dc2f…` |
+| D3-3 | `runtime.env.pre-d3` kept (sha `c3d872ea…`, 4d6a0be pins); only the COMMIT/BUILD_ID lines changed; the release was staged and installed (root 555, no `.git`); the tooling checkout moved to `502876c` |
+| D3-4 | Outage from 15:35:05. Dump `~/automaton_fleet-v8-pre-v9-20260925T153505Z.dump` (569875 B, sha `a8e36a43…2164`, 0600). `migrate-check` gave exactly `{8→9, wouldApply:[9]}`, rolled back. `migrate` applied v9 at 15:35:35. The privilege audit passed (operator roles provisioned, 0 problems) |
+| D3-5 | `approve-runtime`, then the services started. The outage ended at 15:36:16 (about 71 s). Runtime VERIFIED, doctor DEPLOYMENT OK, `fleet:verify` 16/16, `fleet-verify-deployment.sh` 61/0 |
+| D3-6 | `bridge-claude` reads still validate against v9. The deployed ChatGPT adapter artifact `6691b4c` passed its identity gate and all 4 tools, run as its own OS user |
+| D3-7 | `claude-operator` `op_01M3CKG338G2KDJ19FYEKT2T40` enrolled with all six scopes. The key id `dbaf93c5…` matched the dev-VM keygen. The bridge config and MCP registration were switched to it |
+| D3-8 | Actions were enabled only while each probe ran. Probes: Tier 2 reads, actions on a non-existent agent (recorded refusals), idempotent replay and conflict, throttled reconcile, and a fresh `claude -p` end-to-end session. Actions were left **OFF** (generation 12) |
+| Fix | Commit `52be40f` (whoami reported only the B2 scopes), build `304532c8…d947`, `runtime.env.pre-d3-fix` kept. Approve plus restart took 15:42:54–15:43:02; no migration |
 
 ## Operating the Claude bridge (dev VM, Phase D)
 

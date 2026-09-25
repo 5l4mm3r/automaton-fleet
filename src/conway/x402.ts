@@ -5,6 +5,7 @@
  * Adapted from conway-mcp/src/x402/index.ts
  */
 
+import { assertRealSpendAllowed } from "../fleet/spend-gate.js";
 import {
   createPublicClient,
   http,
@@ -366,6 +367,14 @@ export async function x402Fetch(
           status: 402,
         };
       }
+    }
+
+    // Phase D3.1 spend gate: never sign a payment while real payments are disabled
+    // (the probe above is an ordinary request; only the payment is gated).
+    try {
+      assertRealSpendAllowed("x402_payment");
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : "REAL_PAYMENTS_DISABLED", status: 402 };
     }
 
     // Sign payment

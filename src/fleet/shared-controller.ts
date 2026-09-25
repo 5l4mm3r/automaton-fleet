@@ -21,7 +21,7 @@
  */
 
 import { ulid } from "ulid";
-import { strictestMode } from "./config.js";
+import { effectiveMaxAgents as effectiveMax, localCapOverride, strictestMode } from "./config.js";
 import { computeFleetState, evaluateFinancialEligibility, evaluateReplication } from "./policy.js";
 import type { FleetBackend } from "./backend.js";
 import { FleetRuntimeError, resolveChildRuntime, samePin } from "./runtime.js";
@@ -112,7 +112,7 @@ export class SharedFleetController {
             name: this.opts.self.name,
             runtimeVersion: this.opts.runtimeVersion ?? null,
             runtimeCommit: this.opts.runtimeCommit ?? null,
-            localMaxAgents: this.opts.config.maxAgents,
+            localMaxAgents: localCapOverride(this.opts.config),
           })
         : this.selfAgentId
           ? await this.opts.store.attachAgent(this.selfAgentId, this.opts.self.address)
@@ -221,7 +221,7 @@ export class SharedFleetController {
 
   async getStatus(): Promise<SharedFleetStatus> {
     const shared = await this.opts.store.getState();
-    const effectiveMaxAgents = Math.min(shared.maxAgents, this.opts.config.maxAgents);
+    const effectiveMaxAgents = effectiveMax(this.opts.config, shared.maxAgents);
     const occupied = shared.livingAgents + shared.reservedSlots + (shared.quarantinedSlots ?? 0);
     const state = computeFleetState({
       configuredMode: strictestMode(this.opts.config.configuredMode, shared.operatingMode),
@@ -303,7 +303,7 @@ export class SharedFleetController {
         name: request.name,
         runtime: this.opts.config.runtime ?? null,
         requestKey: request.requestKey ?? ulid(),
-        localMaxAgents: this.opts.config.maxAgents,
+        localMaxAgents: localCapOverride(this.opts.config),
       });
     } catch (err) {
       return {
