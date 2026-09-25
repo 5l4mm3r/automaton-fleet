@@ -101,6 +101,8 @@ case "$MODE" in
     run install -m 0644 -o root -g root "$REPO/deploy/systemd/$ADAPTER.socket" "/etc/systemd/system/$ADAPTER.socket"
     run install -m 0644 -o root -g root "$REPO/deploy/systemd/$ADAPTER.service" "/etc/systemd/system/$ADAPTER.service"
     run install -m 0644 -o root -g root "$REPO/deploy/systemd/$TUNNEL.service" "/etc/systemd/system/$TUNNEL.service"
+    run install -m 0644 -o root -g root "$REPO/deploy/systemd/$TUNNEL.path" "/etc/systemd/system/$TUNNEL.path"
+    run install -m 0755 -o root -g root "$REPO/scripts/fleet-chatgpt-tunnel-key.sh" /usr/local/sbin/fleet-chatgpt-tunnel-key
     run systemctl daemon-reload
     echo
     echo "Next: enrol the PUBLIC key printed above (operator, admin credential):"
@@ -127,6 +129,7 @@ case "$MODE" in
     run systemctl enable --now "$ADAPTER.socket"
     run systemctl enable --now "$ADAPTER.service"
     run systemctl enable "$TUNNEL.service"
+    run systemctl enable --now "$TUNNEL.path"
     ;;
   *) echo "usage: prepare --tunnel-client-zip <zip> [--apply] | configure <principalId> [--apply]" >&2; exit 2 ;;
 esac

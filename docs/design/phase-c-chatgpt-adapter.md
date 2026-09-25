@@ -197,27 +197,39 @@ adapter has no other code path. The tests prove this with that exact string.
 **Emergency revoke (ChatGPT only):** `fleet:admin operator-revoke <principal>`
 and `systemctl stop automaton-fleet-chatgpt-tunnel`.
 
-## 8. Owner actions (the only remaining steps)
+## 8. Owner actions
 
-1. **OpenAI Platform**
-   (<https://platform.openai.com/settings/organization/tunnels>): create a
-   tunnel associated with your ChatGPT workspace, then create a **runtime** API
-   key with Tunnels Read + Use for that tunnel.
-2. **On the VPS**, place both without echoing the key:
+Done: the tunnel `tunnel_6ab5cd2c7b088191abe137e56b5f35e4` exists; its non-secret
+id is in `/etc/automaton-fleet/chatgpt-tunnel/tunnel.env`.
+
+1. **OpenAI Platform, create the runtime key.** API keys
+   (<https://platform.openai.com/settings/organization/api-keys>) → **Create
+   new secret key**:
+   - Owned by: **You**.
+   - Project: a dedicated project (e.g. `fleet-chatgpt-tunnel`) with a low
+     monthly budget.
+   - Name: `fleet-chatgpt-tunnel-runtime`.
+   - The key's principal (you) must have the organization role permission
+     Tunnels **Read** + **Use** (Owners have it). It needs no Manage and no
+     admin key.
+   - Copy it once.
+2. **On the VPS, in your own terminal** (`ssh agentfleet-vps`, not through
+   Claude or ChatGPT):
    ```bash
-   sudo install -m 0600 -o root -g root /dev/null /etc/automaton-fleet/chatgpt-tunnel/openai-api-key
-   sudo bash -c 'read -rs K && printf %s "$K" > /etc/automaton-fleet/chatgpt-tunnel/openai-api-key'   # paste the key, Enter
-   echo 'CONTROL_PLANE_TUNNEL_ID=tunnel_<32 hex>' | sudo install -m 0644 -o root -g root /dev/stdin /etc/automaton-fleet/chatgpt-tunnel/tunnel.env
-   sudo systemctl start automaton-fleet-chatgpt-tunnel && journalctl -u automaton-fleet-chatgpt-tunnel -n 20
+   sudo fleet-chatgpt-tunnel-key
    ```
+   - Paste at the hidden prompt. The key is read from the TTY with echo off,
+     written root 0600, never printed, and never placed in argv, environment,
+     history or logs.
+   - The tunnel starts and the script prints `Result: connected`, or the
+     precise rejection (401 key, 403 permission, 404 tunnel id).
+   - It refuses to run without a real terminal.
 3. **ChatGPT (web):**
-   - turn on Settings → Security and login → **Developer mode**;
-   - go to Plugins, then **+**, and name it "Automaton fleet";
-   - set Connection to **Tunnel**, then select the tunnel;
-   - set Authentication to **No authentication**, then create it.
-4. **In a chat**, ask: "Use Automaton fleet: fleet_whoami, fleet_status,
-   fleet_list_agents". Expect `bridge-chatgpt` with scopes
-   `ops.read.agents, ops.read.status`, and 0 agents.
+   - Settings → Security and login → **Developer mode** on.
+   - Plugins → **+** → name "Automaton fleet" → Connection **Tunnel** → select
+     `tunnel_6ab5…` → Authentication **No authentication** → Create.
+4. **In a new chat with that app:** "Use Automaton fleet: call fleet_whoami,
+   fleet_status and fleet_list_agents."
 
 ## 9. Residual risks
 

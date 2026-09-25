@@ -1,0 +1,12 @@
+# Automaton Fleet ChatGPT tunnel — start automatically once the owner has
+# placed the OpenAI runtime key (Phase C). No secret is involved here.
+
+[Unit]
+Description=Start the ChatGPT tunnel when its OpenAI runtime key is present
+
+[Path]
+PathExists=/etc/automaton-fleet/chatgpt-tunnel/openai-api-key
+Unit=automaton-fleet-chatgpt-tunnel.service
+
+[Install]
+WantedBy=paths.target
