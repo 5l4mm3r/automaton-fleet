@@ -220,10 +220,35 @@ export function checkHttpProviderOptions(o: HttpProviderOptions): void {
  * and connection losses after sending never retried, redirects refused (the key never follows one), and
  * strict parsing by the provider-specific `parse`.
  */
+/** Read at most `limit` characters of an error body (to classify it), then discard the rest. Never logged. */
+async function readBounded(res: Response, limit: number): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) return "";
+  const dec = new TextDecoder();
+  let out = "";
+  try {
+    while (out.length < limit) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out += dec.decode(value, { stream: true });
+    }
+  } catch {
+    // an unreadable body classifies as nothing
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return out.slice(0, limit);
+}
+
 export async function postWithRetries(
   o: HttpProviderOptions,
   req: { url: string; headers: Record<string, string>; body: string; deadlineAt: number; agentId: string },
   parse: (text: string) => ParsedResponse,
+  /**
+   * Provider-specific refinement of an HTTP error status from its (bounded) body. Returns a code or null
+   * (use the status mapping). The body is used only for this decision: never logged, never returned.
+   */
+  classifyError?: { statuses: readonly number[]; classify: (status: number, body: string) => ProviderErrorCode | null },
 ): Promise<ChatResult> {
   const attemptTimeoutMs = Math.min(240_000, Math.max(1, o.attemptTimeoutMs ?? 90_000));
   const maxAttempts = Math.min(3, Math.max(1, o.maxAttempts ?? 3));
@@ -277,11 +302,14 @@ export async function postWithRetries(
       throw new ProviderError("PROVIDER_REDIRECT_REFUSED", { charge: "none", status: res.status, attempts, providerRequestId: headerId });
     }
     if (!res.ok) {
-      // The body is never logged or returned (it may echo request content).
-      await res.body?.cancel().catch(() => undefined);
+      // The body is never logged or returned (it may echo request content). A provider may refine the
+      // classification of specific statuses from it; nothing else is read.
+      let refined: ProviderErrorCode | null = null;
+      if (classifyError?.statuses.includes(res.status)) refined = classifyError.classify(res.status, await readBounded(res, 8_192));
+      else await res.body?.cancel().catch(() => undefined);
       const retryAfterS = parseRetryAfter(res.headers.get("retry-after"));
-      if (RETRYABLE_STATUS.has(res.status) && attempts < maxAttempts && (await backoff(attempts, retryAfterS))) continue;
-      throw new ProviderError(statusCode(res.status), { charge: "none", status: res.status, attempts, retryAfterS, providerRequestId: headerId });
+      if (!refined && RETRYABLE_STATUS.has(res.status) && attempts < maxAttempts && (await backoff(attempts, retryAfterS))) continue;
+      throw new ProviderError(refined ?? statusCode(res.status), { charge: "none", status: res.status, attempts, retryAfterS, providerRequestId: headerId });
     }
     let text: string;
     try {

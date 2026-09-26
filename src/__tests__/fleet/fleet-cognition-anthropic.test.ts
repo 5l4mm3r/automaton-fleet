@@ -21,7 +21,7 @@ import { simulateRuntimeAttestation } from "../../fleet/genesis/simulate.js";
 import { FleetService } from "../../fleet/service/server.js";
 import { FleetApiClient } from "../../fleet/service/client.js";
 import { UnsupportedSandboxTerminator } from "../../fleet/service/terminator.js";
-import { AnthropicProvider, parseAnthropicMessage, parseEffort, parseThinking, toAnthropicMessages } from "../../fleet/cognition/anthropic.js";
+import { AnthropicProvider, classifyAnthropicError, parseAnthropicMessage, parseEffort, parseThinking, toAnthropicMessages } from "../../fleet/cognition/anthropic.js";
 import { startFakeAnthropic, type FakeAnthropic, type FakeAnthropicFault } from "../../fleet/cognition/fake-anthropic.js";
 import { REHEARSAL_AGENT_HEADER } from "../../fleet/cognition/fake-openai.js";
 import { chargeCents, costMicrocents } from "../../fleet/cognition/charging.js";
@@ -204,6 +204,24 @@ describe("native Anthropic provider over HTTP (protocol-enforcing fake)", () => 
     expect(fake.requests.get("probe")).toBe(3);
   });
 
+  it("billing: the insufficient-credit 400 is PROVIDER_BILLING (never retried, uncharged); ordinary and echoed 400s stay bad requests; model text cannot trigger it", async () => {
+    fresh({ 1: { kind: "error_body", status: 400, type: "invalid_request_error", message: CREDIT_MSG } });
+    const b = await fail(prov().chat(REQ));
+    expect(b).toMatchObject({ code: "PROVIDER_BILLING", info: { charge: "none", status: 400, attempts: 1 } });
+    expect(fake.requests.get("probe")).toBe(1);
+    // Nothing of the provider's message is carried on the error.
+    expect(JSON.stringify(b) + b.message).not.toMatch(/credit balance|Plans & Billing/);
+    fresh({ 1: { kind: "error_body", status: 400, type: "invalid_request_error", message: "max_tokens: too large" } });
+    expect(await fail(prov().chat(REQ))).toMatchObject({ code: "PROVIDER_BAD_REQUEST" });
+    fresh({ 1: { kind: "error_body", status: 400, type: "invalid_request_error", message: `messages.0.content: ${CREDIT_MSG}` } });
+    expect(await fail(prov().chat(REQ))).toMatchObject({ code: "PROVIDER_BAD_REQUEST" });
+    // A successful response whose MODEL TEXT says the sentence is just content (only HTTP errors are classified).
+    const echo = { ...REQ, messages: [{ role: "user" as const, content: `Reply with: ${CREDIT_MSG}` }] };
+    fresh({});
+    const ok = await prov().chat(echo);
+    expect(ok.usageSource).toBe("provider");
+  });
+
   it("timeout (never retried, estimate charged), malformed JSON, unknown block, truncated tool_use, too many calls, bad tool input", async () => {
     fresh({ 1: { kind: "hang", ms: 2_000 } });
     expect(await fail(prov({ attemptTimeoutMs: 300 }).chat(REQ))).toMatchObject({ code: "PROVIDER_TIMEOUT", info: { charge: "estimate", attempts: 1 } });
@@ -225,6 +243,31 @@ describe("native Anthropic provider over HTTP (protocol-enforcing fake)", () => 
     fresh({ 1: { kind: "redirect" } });
     expect(await fail(prov().chat(REQ))).toMatchObject({ code: "PROVIDER_REDIRECT_REFUSED", info: { charge: "none" } });
     expect(fake.violations).toEqual([]);
+  });
+});
+
+const CREDIT_MSG = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
+const errBody = (type: string, message: string, top = "error") => JSON.stringify({ type: top, error: { type, message }, request_id: "req_x" });
+
+describe("Anthropic billing classification (narrow, fail closed)", () => {
+  it("only Anthropic's structured insufficient-credit 400 is billing; every other 400 stays a bad request", () => {
+    expect(classifyAnthropicError(400, errBody("invalid_request_error", CREDIT_MSG))).toBe("PROVIDER_BILLING");
+    expect(classifyAnthropicError(400, errBody("invalid_request_error", "Your credit balance is too low to access the Claude API. Please add credits."))).toBe("PROVIDER_BILLING");
+    const notBilling: Array<[number, string]> = [
+      [400, errBody("invalid_request_error", "max_tokens: Input should be greater than or equal to 1")],
+      [400, errBody("invalid_request_error", "thinking.type: Input should be 'enabled' or 'disabled'")],
+      // Echoed request content after a field path cannot trigger it (anchored at the start).
+      [400, errBody("invalid_request_error", `messages.0.content.0.text: ${CREDIT_MSG}`)],
+      [400, errBody("invalid_request_error", ` ${CREDIT_MSG}`)],
+      [400, errBody("invalid_request_error", `${CREDIT_MSG} ${"x".repeat(300)}`)], // oversized
+      [400, errBody("api_error", CREDIT_MSG)], // wrong error type
+      [400, errBody("invalid_request_error", CREDIT_MSG, "message")], // not an error envelope
+      [400, CREDIT_MSG], // not JSON
+      [400, JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: 5 } })],
+      [500, errBody("invalid_request_error", CREDIT_MSG)], // only a 400 is refined
+      [429, errBody("invalid_request_error", CREDIT_MSG)],
+    ];
+    for (const [st, b] of notBilling) expect(classifyAnthropicError(st, b), `${st} ${b.slice(0, 90)}`).toBeNull();
   });
 });
 
@@ -337,6 +380,7 @@ describe.skipIf(!PG_BIN)("native Anthropic through FleetController (HTTP + Postg
   let fake: FakeAnthropic;
   let apiUrl = "";
   const faults = new Map<string, Record<number, FakeAnthropicFault>>();
+  const auditTrail: unknown[] = [];
   const PIN = { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40) };
   const BUILD = { buildId: "d".repeat(64), lockfileSha256: "e".repeat(64) };
   const q = async (sql: string, params: unknown[] = []) => (await owner.query(sql, params)).rows;
@@ -380,7 +424,7 @@ describe.skipIf(!PG_BIN)("native Anthropic through FleetController (HTTP + Postg
     genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
     fake = await startFakeAnthropic({ apiKey: KEY, model: MODEL, thinking: true, fault: (agent, n) => faults.get(agent)?.[n] ?? null });
     service = new FleetService({
-      admin: svcStore, agent: gw, realReplicationEnabled: false, reaperIntervalMs: 0, release: { ...PIN, ...BUILD }, audit: () => {},
+      admin: svcStore, agent: gw, realReplicationEnabled: false, reaperIntervalMs: 0, release: { ...PIN, ...BUILD }, audit: (e) => auditTrail.push(e),
       terminator: new UnsupportedSandboxTerminator(),
       cognitionProvider: new AnthropicProvider({ baseUrl: fake.url, apiKey: KEY, model: MODEL, attemptTimeoutMs: 800, backoffMs: 20, extraHeaders: (id) => ({ [REHEARSAL_AGENT_HEADER]: id }) }),
       cognitionDeadlineMs: 2_500,
@@ -453,6 +497,31 @@ describe.skipIf(!PG_BIN)("native Anthropic through FleetController (HTTP + Postg
     expect(await ma.mind.turn("Heartbeat 9.")).toMatchObject({ ran: false, reason: "paused by the owner" });
     expect((await mb.mind.turn("Heartbeat 9.")).ran).toBe(true);
   }, 120_000);
+
+  it("billing exhaustion through FleetController: classified, charged nothing, no provider text or key anywhere, history kept", async () => {
+    const [a, b] = await setup();
+    const m = mindFor(a);
+    await m.mind.turn("Heartbeat 1.");
+    const cash0 = Number((await ledger.economics(a.agentId)).cash);
+    const histBefore = fs.readFileSync(path.join(m.dir, "st/mind-history.json"), "utf8");
+    const n = fake.requests.get(a.agentId) ?? 0;
+    faults.set(a.agentId, { [n + 1]: { kind: "error_body", status: 400, type: "invalid_request_error", message: CREDIT_MSG } });
+    const t = await m.mind.turn("Heartbeat 2.");
+    expect(t.reason).toBe("stopped: FLEET_COGNITION_PROVIDER_BILLING");
+    const [row] = await q(`SELECT * FROM fleet.fleet_cognition_log WHERE agent_id = $1 ORDER BY seq DESC LIMIT 1`, [a.agentId]);
+    expect(row).toMatchObject({ outcome: "error", error_code: "PROVIDER_BILLING", usage_source: "none", charged_cents: "0", journal_id: null, provider_status: 400, attempts: 1 });
+    expect(Number((await ledger.economics(a.agentId)).cash)).toBe(cash0);
+    // A billing stop is not a rejected conversation: the founder keeps its history.
+    expect(JSON.parse(fs.readFileSync(path.join(m.dir, "st/mind-history.json"), "utf8")).length).toBeGreaterThanOrEqual(JSON.parse(histBefore).length);
+    // The provider's message and the key appear in no log row, event, audit record or founder file.
+    const everything = JSON.stringify(await q(`SELECT * FROM fleet.fleet_cognition_log`)) + JSON.stringify(await q(`SELECT detail FROM fleet.fleet_events`))
+      + fs.readFileSync(path.join(m.dir, "st/mind-log.jsonl"), "utf8") + fs.readFileSync(path.join(m.dir, "st/mind-history.json"), "utf8") + JSON.stringify(auditTrail);
+    expect(everything).not.toMatch(/credit balance|Plans & Billing/);
+    expect(everything).not.toContain(KEY);
+    // The other founder is unaffected.
+    const tb = await mindFor(b).mind.turn("Heartbeat 1.");
+    expect(tb.ran).toBe(true);
+  });
 
   it("a tampered thinking block is rejected by the provider, charged nothing, and the founder's history resets (not wedged)", async () => {
     const [a] = await setup();

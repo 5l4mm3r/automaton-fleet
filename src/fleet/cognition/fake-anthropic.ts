@@ -28,7 +28,7 @@ export type FakeAnthropicFault =
   | { kind: "too_many_calls" }
   | { kind: "partial_usage" }
   | { kind: "cache_usage"; read: number; write: number }
-  | { kind: "error_body"; status: number; type: string };
+  | { kind: "error_body"; status: number; type: string; message?: string };
 
 export interface FakeAnthropic {
   url: string;
@@ -122,7 +122,7 @@ export async function startFakeAnthropic(o: {
       }
       const fault = o.fault?.(agent, n) ?? null;
       if (fault?.kind === "status") return send(fault.status, { type: "error", error: { type: fault.status === 429 ? "rate_limit_error" : fault.status === 529 ? "overloaded_error" : "api_error", message: "injected" } }, fault.retryAfter ? { "retry-after": fault.retryAfter } : {});
-      if (fault?.kind === "error_body") return err(fault.status, fault.type, "injected");
+      if (fault?.kind === "error_body") return err(fault.status, fault.type, fault.message ?? "injected");
       if (fault?.kind === "redirect") return send(307, "", { location: "http://127.0.0.1:9/elsewhere" });
       if (fault?.kind === "malformed_json") return send(200, "{ this is not json");
       if (fault?.kind === "hang") {

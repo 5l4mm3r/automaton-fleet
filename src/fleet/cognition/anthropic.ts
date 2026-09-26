@@ -30,7 +30,7 @@
  * A budget that does not fit the policy's max output is refused locally (uncharged) before anything is sent.
  */
 
-import { ProviderError, MAX_TOOL_CALLS_PER_RESPONSE, type ChatMessage, type ChatRequest, type ChatResult, type CognitionProvider, type ThinkingBlock, type ToolCall, type Usage } from "./types.js";
+import { ProviderError, MAX_TOOL_CALLS_PER_RESPONSE, type ChatMessage, type ChatRequest, type ChatResult, type CognitionProvider, type ProviderErrorCode, type ThinkingBlock, type ToolCall, type Usage } from "./types.js";
 import { MODEL_ID, TOOL_NAME, checkHttpProviderOptions, postWithRetries, responseIdOf, stopReasonOf, tokenCount, type HttpProviderOptions, type ParsedResponse } from "./providers.js";
 
 export type AnthropicThinking = { type: "adaptive" } | { type: "enabled"; budgetTokens: number };
@@ -195,6 +195,30 @@ export function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: "use
   return out;
 }
 
+/**
+ * Anthropic reports exhausted API credit as HTTP 400 invalid_request_error (not 402). Recognised NARROWLY:
+ *   - status 400;
+ *   - a structured error body {type:"error", error:{type:"invalid_request_error", message}};
+ *   - a short message (≤ 300 characters) that BEGINS with Anthropic's insufficient-credit sentence.
+ * Anything else, including a message that merely contains the sentence (e.g. echoing request content after a field
+ * path), stays PROVIDER_BAD_REQUEST. Model output never reaches this function: only HTTP error responses do.
+ */
+const CREDIT_EXHAUSTED = /^Your credit balance is too low to access the (Anthropic|Claude) API\./;
+
+export function classifyAnthropicError(status: number, body: string): ProviderErrorCode | null {
+  if (status !== 400) return null;
+  let j: unknown;
+  try {
+    j = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const e = (j as { type?: unknown; error?: { type?: unknown; message?: unknown } } | null) ?? {};
+  if (e.type !== "error" || !e.error || e.error.type !== "invalid_request_error" || typeof e.error.message !== "string") return null;
+  const m = e.error.message;
+  return m.length <= 300 && CREDIT_EXHAUSTED.test(m) ? "PROVIDER_BILLING" : null;
+}
+
 export class AnthropicProvider implements CognitionProvider {
   readonly id = "anthropic" as const;
 
@@ -251,6 +275,7 @@ export class AnthropicProvider implements CognitionProvider {
         agentId: req.agentId,
       },
       parseAnthropicMessage,
+      { statuses: [400], classify: classifyAnthropicError },
     );
   }
 }
