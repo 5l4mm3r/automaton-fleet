@@ -1445,6 +1445,28 @@ Rollback:
 - **Runtime only** (v14 is additive): restore `runtime.env.pre-f3` (c7c2a05) and approve. Note: c7c2a05 refuses a v14 registry (exact schema check), so a runtime-only rollback also needs the database rollback.
 - **Full:** stop the services; restore the pre-v14 dump; restore `runtime.env.pre-f3`; point `current` back to `releases/c7c2a05…`; start in order.
 
+## Stage H — Pre-Genesis cognition hardening L1–L8 + L14, schema v15 (DEPLOYED 2026-09-26, times UTC)
+
+Design: `docs/design/pre-genesis-cognition-hardening.md`. No provider credential installed; cognition **disabled** (provider `none`); Genesis **disabled**; population **0**.
+
+### Stage H record (2026-09-26)
+
+| Gate | Result |
+|---|---|
+| H-1 | Commit `7ed37ff` pushed. The local and VPS builds matched: `67da4b31…cfa`. `runtime.env.pre-h` kept (sha `d6518a39…`, 90ba6d0 pins). The installed units differed from the release only by the L8 lines (checked before install) |
+| H-2 | Outage 00:18:15–00:18:34 (about 19 s). Dump `~/automaton_fleet-v14-pre-v15-20260926T001815Z.dump` (1428918 B, sha `c2c5394a…c85d`, 0600, 65 table-data entries). `migrate-check` gave exactly `{14→15, wouldApply:[15]}`; `migrate`; audit PASS. `fleet-os-setup.sh --apply` plus the adapter/tunnel units installed; controller `LimitCORE=0`; the adapter socket and tunnel restarted |
+| Rehearsal 1 | 24/25. The forbidden-tool check **FAILED, correctly**: the fault target never reached its `spawn_child` probe in the wait window. Cause: the scripted model's plan position came from trimmed history. Fixed in `740f083` (test model and harness only; build `d7684665…0504`; the builds matched). `runtime.env.pre-h2` kept. Controller restart 00:48:15–00:48:21 (no migration) |
+| Verify | Runtime VERIFIED; doctor DEPLOYMENT OK; `fleet:verify` 16/16; audit PASS; `fleet-verify-deployment.sh` 98/0 (new: key isolation on 6 units, controller `LimitCORE=0`, "no inference-provider credential installed"); Operator API and ChatGPT adapter ready; the probe without a credential exits 2 ("Nothing to probe"); Genesis dry run 20/20 |
+| Rehearsal 2 | **PASS 25/25** (systemd host, uids 64924/62365). Real HTTP provider path against a loopback fake with injected faults for founder 1: 429→retry ok (attempts 2); 503×3 → `PROVIDER_UNAVAILABLE`, 0¢; malformed JSON → estimate; bad tool args → reported usage; timeout at 3002 ms → estimate, not retried; no usage → estimate; redirect refused, 0¢. Founder 1 kept thinking. 25 attempts = 25 provider requests and 32 = 32; journals 1:1 with charges; nothing in flight; ledger verifies. Founder 2: 32 calls, all first-attempt ok. Injection and forbidden tools refused; pause and global off; Landlock; production unchanged; host clean |
+
+Tests: fleet suite 642 passed (only KI-1). The process-host rehearsal passed 5/5 runs. Mutation campaign H01–H22: 22/22 killed.
+
+State after H: runtime `740f083` / `d7684665…0504`, schema v15; population 0, cap 2, DEVELOPMENT; Genesis disabled (0 records); cognition disabled, provider `none`, 0 inference records; no `cognition.key`, no `FLEET_COGNITION_*` in `service.env`; custody execution off; operator actions off (generation 12); identity vault empty; ledger journal empty; flags unchanged; public ports 22 and 443 only.
+
+Rollback:
+- **Runtime only:** `runtime.env.pre-h2` (7ed37ff).
+- **Full:** stop the services; restore the pre-v15 dump; restore `runtime.env.pre-h` (90ba6d0); point `current` back to `releases/90ba6d0…`; start in order. 90ba6d0 refuses a v15 registry (exact schema check). The L8 unit lines are safe to keep with any release.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes

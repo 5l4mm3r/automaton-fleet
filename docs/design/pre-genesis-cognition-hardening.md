@@ -1,5 +1,7 @@
 # Pre-Genesis cognition hardening (L1–L8, L14; schema v15)
 
+Status: **DEPLOYED 2026-09-26** (runtime `740f083`, build `d7684665…0504`, schema v15); production rehearsal 25/25. Record: runbook Stage H.
+
 A compact launch-hardening pass on the F.2/F.3 real-provider path. It fixes the defects found in the
 model/cognition configuration review and adds the provider compatibility probe. It adds no new authority.
 
