@@ -547,6 +547,7 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
         "native Anthropic protocol conformance through real founder loops (incl. signed-thinking continuity)",
         "the founder keeps thinking after every fault (not wedged)",
         "no phantom calls, no double charges: every provider attempt and every charge is accounted for once",
+        "inference is charged in the founder's currency at the controlled rate; provider credit consumed in native USD",
         "founder web research is off until the owner switches it on",
         "the founder researches a public page through the controller and the isolated fetcher (untrusted, with provenance)",
         "SSRF targets are refused (IP literals, loopback DNS, metadata, userinfo, ports, plain http, the fleet's own domain)",

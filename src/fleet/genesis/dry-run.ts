@@ -114,9 +114,11 @@ export async function runGenesisDryRun(opts: {
     // at a rate. The dry run uses a clearly synthetic rate; the real one is stated by the owner at Genesis.
     const bootRow = (await c.query(`SELECT to_jsonb(p) AS p FROM fleet_genesis_policy p WHERE id = 1`)).rows[0].p as Record<string, unknown>;
     const boot = bootRow.bootstrap_capital_minor != null ? { currency: String(bootRow.bootstrap_capital_currency), minor: Number(bootRow.bootstrap_capital_minor) } : null;
-    if (boot) alloc = capitalToCents(boot.minor, SYNTHETIC_FX_USD_MICRO);
+    const acct = (await c.query(`SELECT to_jsonb(m) ->> 'accounting_currency' AS c FROM fleet_economic_model m WHERE id = 1`)).rows[0]?.c ?? "USD";
+    const native = !!boot && boot.currency === acct; // v21: capital in the ledger's own currency needs no rate
+    if (boot) alloc = native ? boot.minor : capitalToCents(boot.minor, SYNTHETIC_FX_USD_MICRO);
     const proposeG = (idempotencyKey: string, founderCount: number) => boot
-      ? ops.proposeCapital({ idempotencyKey, founderCount, fxUsdMicro: SYNTHETIC_FX_USD_MICRO, fxSource: "synthetic dry-run rate (rolled back)", fxObservedAt: new Date(), ttlS: 3600, actor: opts.actor })
+      ? ops.proposeCapital({ idempotencyKey, founderCount, ...(native ? {} : { fxUsdMicro: SYNTHETIC_FX_USD_MICRO, fxSource: "synthetic dry-run rate (rolled back)", fxObservedAt: new Date() }), ttlS: 3600, actor: opts.actor })
       : ops.propose({ idempotencyKey, founderCount, allocationCents: alloc, ttlS: 3600, actor: opts.actor });
     check("preconditions: empty fleet", before.population === 0, `population ${before.population}`);
     await ops.setEnabled(true, opts.actor, "dry run (rolled back)");
@@ -203,14 +205,17 @@ export async function runGenesisDryRun(opts: {
     const cap = act.capital ?? (await ops.status(b.genesisId))?.capital ?? null;
     const fundingKind = (await c.query(`SELECT provenance FROM fleet_ledger_kinds WHERE kind = 'owner_funding'`)).rows[0]?.provenance;
     check("owner bootstrap capital", boot
-      ? !!cap && cap.currency === boot.currency && cap.minorUnits === boot.minor && b.allocationCents === capitalToCents(boot.minor, SYNTHETIC_FX_USD_MICRO)
+      ? !!cap && cap.currency === boot.currency && cap.minorUnits === boot.minor && b.allocationCents === alloc
+        && (native ? cap.fxUsdMicro === null : cap.fxUsdMicro === SYNTHETIC_FX_USD_MICRO)
         && cap.classification === "owner_bootstrap_capital" && fundingKind === "owner_funding"
       : true,
-      boot ? `${boot.currency} ${(boot.minor / 100).toFixed(2)} per founder at a synthetic ${SYNTHETIC_FX_USD_MICRO / 1e6} USD/${boot.currency} → ${b.allocationCents}¢ (rounded down); ` +
-        `bound into the authorization; owner funding recorded as ${fundingKind}, never revenue` : "no bootstrap capital configured (plain USD allocation)");
+      boot ? (native
+        ? `${boot.currency} ${(boot.minor / 100).toFixed(2)} per founder held natively in the ${acct} ledger (${b.allocationCents} minor units; no exchange rate at Genesis); `
+        : `${boot.currency} ${(boot.minor / 100).toFixed(2)} per founder at a synthetic rate → ${b.allocationCents} ${acct} minor units (rounded down); `) +
+        `bound into the authorization; owner funding recorded as ${fundingKind}, never revenue` : "no bootstrap capital configured (plain allocation)");
     check("virtual allocations balance", verify.ok && verify.unbalanced === 0 && econ.every((e) => e.cash === alloc && e.genesisAllocation === alloc
       && e.externalCustomerRevenue === 0 && e.realizedNetProfit === 0 && e.treasuryAllocation === 0),
-      `each founder ${alloc}¢ (synthetic) as genesis_allocation, not revenue or profit; ledger verified (${verify.journals} journals)`);
+      `each founder ${alloc} ${acct} minor units as genesis_allocation, not revenue or profit; ledger verified (${verify.journals} journals)`);
     const lfc = (await c.query(`SELECT fleet_ledger_balance('fleet:profit')::text AS v`)).rows[0].v;
     check("LFC unchanged", lfc === before.lfc, `LFC ${lfc}`);
     const pay = (await c.query(

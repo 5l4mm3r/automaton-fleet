@@ -29,6 +29,7 @@
  * codes are read from stdin.
  */
 
+import { parseFxMicro } from "../genesis/admin.js";
 import type { DestinationKind, DestinationRail, PgLedgerAdmin } from "./ledger.js";
 
 export const LEDGER_COMMANDS = new Set([
@@ -37,6 +38,7 @@ export const LEDGER_COMMANDS = new Set([
   "ledger-spend-decision", "ledger-withdraw", "ledger-confirm", "ledger-contribute",
   "ledger-destination-enroll", "ledger-destination-activate", "ledger-destination-revoke",
   "ledger-estate-open", "ledger-estate-settle", "ledger-estate-attention",
+  "fx-status", "fx-record", "provider-credits", "provider-credits-record",
 ]);
 
 const RAILS = new Set(["evm_usdc", "bank_transfer", "conway_credits", "provider_account"]);
@@ -102,6 +104,27 @@ export async function runLedgerCommand(
       return l.orders({ status: args[0] || undefined, agentId: args[1] || undefined });
     case "ledger-record-funding":
       return { journalId: await l.recordOwnerFunding(cents(args[0]), need(args[1], "ledger-record-funding <cents> <externalRef>"), actor) };
+    // v21: controlled FX and native-USD provider credit.
+    case "fx-status":
+      return l.fxStatus();
+    case "fx-record": {
+      const [base, quote, rate, date, ...src] = args;
+      if (!/^[A-Z]{3}$/.test(base ?? "") || !/^[A-Z]{3}$/.test(quote ?? "") || !/^\d{4}-\d{2}-\d{2}$/.test(date ?? "") || src.length === 0) {
+        throw new Error("usage: fx-record <BASE> <QUOTE> <quote per base, e.g. 0.754582> <YYYY-MM-DD> <source…>");
+      }
+      return l.recordFxRate(base, quote, parseFxMicro(rate ?? ""), src.join(" "), date, actor);
+    }
+    case "provider-credits":
+      return l.providerCredits(args[0] ?? "anthropic");
+    case "provider-credits-record": {
+      const [provider, kind, amount, ...ref] = args;
+      const m = /^(-?)(\d{1,7})(?:\.(\d{2}))?$/.exec(amount ?? "");
+      if (!provider || (kind !== "purchase" && kind !== "adjustment") || !m || ref.length === 0) {
+        throw new Error("usage: provider-credits-record <provider> purchase|adjustment <USD amount, e.g. 19.97> <external reference…>");
+      }
+      const usdCents = (m[1] ? -1 : 1) * (Number(m[2]) * 100 + Number(m[3] ?? "0"));
+      return l.recordProviderCredits(provider, kind, usdCents, ref.join(" "), actor);
+    }
     case "ledger-record-credits":
       return { journalId: await l.recordCreditsPurchase(cents(args[0]), need(args[1], "ledger-record-credits <cents> <externalRef>"), actor) };
     case "ledger-record-revenue": {

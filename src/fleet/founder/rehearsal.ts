@@ -65,6 +65,8 @@ import { GENESIS_FOUNDERS, PgGenesisAdmin, capitalToCents } from "../genesis/adm
 
 /** Synthetic USD-per-unit rate (micro-units), throwaway registry only. */
 const REHEARSAL_FX_USD_MICRO = 1_250_000;
+/** Synthetic controlled USD→accounting-currency rate for the rehearsal's cognition phase (throwaway registry only). */
+const REHEARSAL_COGNITION_FX_MICRO = 750_000;
 import { FleetService } from "../service/server.js";
 import { UnsupportedSandboxTerminator } from "../service/terminator.js";
 import { FOUNDER_MANIFEST_CURRENT, manifestSha256 } from "../capabilities.js";
@@ -194,9 +196,11 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
     // v20: the throwaway registry carries the production bootstrap capital (GBP 10000 = £100.00); proposals convert it
     // at a clearly synthetic rate (the real rate is stated by the owner at Genesis).
     const boot = await genesis.bootstrapCapital();
-    if (boot) alloc = capitalToCents(boot.minorUnits, REHEARSAL_FX_USD_MICRO);
+    const acct = (await genesis.accountingCurrency()) ?? "USD";
+    const native = !!boot && boot.currency === acct; // v21: GBP capital in the GBP ledger needs no rate at Genesis
+    if (boot) alloc = native ? boot.minorUnits : capitalToCents(boot.minorUnits, REHEARSAL_FX_USD_MICRO);
     const proposeG = (idempotencyKey: string, founderCount: number) => boot
-      ? genesis.proposeCapital({ idempotencyKey, founderCount, fxUsdMicro: REHEARSAL_FX_USD_MICRO, fxSource: "synthetic rehearsal rate (throwaway registry)", fxObservedAt: new Date(), ttlS: 3600, actor: o.actor })
+      ? genesis.proposeCapital({ idempotencyKey, founderCount, ...(native ? {} : { fxUsdMicro: REHEARSAL_FX_USD_MICRO, fxSource: "synthetic rehearsal rate (throwaway registry)", fxObservedAt: new Date() }), ttlS: 3600, actor: o.actor })
       : genesis.propose({ idempotencyKey, founderCount, allocationCents: alloc, ttlS: 3600, actor: o.actor });
     await ledger.recordOwnerFunding(alloc * 4, `rehearsal:synthetic-${crypto.randomUUID()}`, o.actor);
     const apiUrl = (await service.listen(0, "127.0.0.1")).url;
@@ -271,7 +275,7 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
       const x = r as Record<string, any> | null;
       return x?.agentId === ids[i] && x?.capabilities?.matchesCompiled === true && x?.capabilities?.reproductionExecutable === false
         && x?.capabilities?.paymentExecutable === false && x?.ledger?.cash === alloc && x?.ledger?.genesisAllocation === alloc && x?.ledger?.lifetimeContribution === 0;
-    }), `${boot ? `${boot.currency} ${(boot.minorUnits / 100).toFixed(2)} owner bootstrap capital at a synthetic rate = ` : "synthetic "}${alloc}¢ as genesis_allocation (not revenue or profit); LFC 0`);
+    }), `${boot ? `${boot.currency} ${(boot.minorUnits / 100).toFixed(2)} owner bootstrap capital${native ? " (native, no exchange rate)" : " at a synthetic rate"} = ` : "synthetic "}${alloc} ${acct} minor units as genesis_allocation (not revenue or profit); LFC 0`);
     check("isolated workspace", new Set(founders.map((f) => f.workspaceId)).size === ids.length && founders.every((f) => f.workspaceId.startsWith("ws_")), founders.map((f) => f.workspaceId).join(" "));
 
     const creds = ids.map((id) => JSON.parse(fs.readFileSync(`${o.host.stateDir(id)}/${FOUNDER_CREDENTIAL_FILE}`, "utf8")) as { token: string });
@@ -489,7 +493,11 @@ async function cognitionPhase(
   fs.chmodSync(inbox, 0o755);
 
   // Synthetic prepaid credits (owner recorder, v14) in the throwaway registry; priced scripted model; the founder enabled.
-  await ledger.recordCreditsPurchase(5_000, `rehearsal:synthetic-${crypto.randomUUID()}`, o.actor);
+  // v21 (throwaway registry only): a synthetic controlled USD→GBP rate and synthetic native-USD provider credit.
+  const today = new Date().toISOString().slice(0, 10);
+  const ledgerCur = (await genesis.accountingCurrency()) ?? "USD";
+  if (ledgerCur !== "USD") await ledger.recordFxRate("USD", ledgerCur, REHEARSAL_COGNITION_FX_MICRO, "synthetic rehearsal rate (throwaway registry)", today, o.actor);
+  await ledger.recordProviderCredits("anthropic", "purchase", 5_000, `rehearsal:synthetic-${crypto.randomUUID()}`, o.actor);
   x.faults.target = ids[0];
   await genesis.setCognitionPolicy({ enabled: true, provider: "anthropic", model: REHEARSAL_MODEL, inputMicrocents: 1_000, outputMicrocents: 4_000, maxOutputTokens: 4_000, actor: o.actor });
   // Budget well above what the phase can use, so no check depends on how long a wait took.
@@ -600,6 +608,17 @@ async function cognitionPhase(
   check("no phantom calls, no double charges: every provider attempt and every charge is accounted for once",
     acct.every((a) => a.attempts === a.requests && a.journalsOk && a.uncharged) && inflight === 0 && (await ledger.verify()).ok,
     acct.map((a) => `${a.id.slice(-6)}: ${a.rows} records, ${a.attempts} attempts = ${a.requests} provider requests, journals ${a.journalsOk ? "1:1" : "MISMATCH"}`).join("; ") + `; in flight ${inflight}; ledger verifies`);
+  // v21: every call's USD provider cost was consumed from the native-USD provider credit, and the founder was charged
+  // that cost converted at the reserved controlled rate (rounded up), never more than its reservation.
+  const conv = (await owner.query(`SELECT count(*)::int AS n,
+      count(*) FILTER (WHERE fx_rate_micro IS NULL OR ledger_currency IS NULL)::int AS missing,
+      count(*) FILTER (WHERE usage_source = 'provider' AND charged_microcents > ceil(cost_microcents::numeric * fx_rate_micro / 1000000))::int AS over,
+      COALESCE(sum(provider_usd_microcents), 0)::bigint AS usd, COALESCE(sum(charged_microcents), 0)::bigint AS charged
+      FROM fleet_cognition_log`)).rows[0];
+  const consumed = Number((await owner.query(`SELECT COALESCE(-sum(usd_microcents), 0)::bigint AS c FROM fleet_provider_credit_events WHERE kind = 'consumption'`)).rows[0].c);
+  check("inference is charged in the founder's currency at the controlled rate; provider credit consumed in native USD",
+    conv.n > 0 && conv.missing === 0 && conv.over === 0 && consumed === Number(conv.usd),
+    `${conv.n} call(s); USD ${(Number(conv.usd) / 1e8).toFixed(4)} consumed from provider credit; founder charged ${(Number(conv.charged) / 1e8).toFixed(4)} ${ledgerCur} at ${REHEARSAL_COGNITION_FX_MICRO / 1e6} ${ledgerCur}/USD (synthetic)`);
   // The native protocol held through real founder loops: alternation, tool results first and complete,
   // and every signed thinking block handed back unchanged.
   const withThinking = (await owner.query(`SELECT count(*)::int AS n FROM fleet_cognition_log WHERE outcome = 'ok' AND stop_reason = 'tool_use'`)).rows[0].n;

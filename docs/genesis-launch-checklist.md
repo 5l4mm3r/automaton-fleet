@@ -5,7 +5,7 @@ item says who acts, what is needed and how it is verified. Nothing here is perfo
 ChatGPT or any agent. Every step marked **OWNER GATE** is refused by the database unless an owner
 principal performs it.
 
-State after Genesis preparation: schema v20 (£100.00 bootstrap capital; founder charter v2 with the opportunity doctrine, see `docs/design/genesis-preparation-capital-doctrine.md`); Genesis **disabled**, and it creates exactly **one** founder
+State before Genesis: schema v21 (GBP ledger, £100.00 native bootstrap capital, controlled USD→GBP FX, native-USD provider credit; founder charter v2 with the opportunity doctrine, see `docs/design/genesis-preparation-capital-doctrine.md`); Genesis **disabled**, and it creates exactly **one** founder
 (`genesis_max_founders = 1`; the cap of 2 is a ceiling only; growth beyond one founder is to be earned later, and replacement
 after a founder's death is a separate later process); population 0; cognition **disabled** (provider `none`); web research
 deployed but **disabled**; real payments, custody, replication, reseeding and owner sweep **off**.
@@ -14,9 +14,9 @@ deployed but **disabled**; real payments, custody, replication, reseeding and ow
 
 | # | Decision | How | Verify |
 |---|---|---|---|
-| A1 | Founder capital: **decided — £100.00 owner bootstrap capital** (schema v20 policy `GBP 10000`; owner capital, never revenue or profit; virtual until custody execution is enabled). The ledger is USD, so the owner states a fresh GBP→USD rate at proposal; the registry derives `floor(10000 × rate)` cents and binds the amount, rate, source and time into the authorization | Change it later with `genesis-bootstrap <CUR> <amount>` (**OWNER GATE**) | doctor "genesis bootstrap capital"; `genesis-status` → `capital` |
-| A2 | Record the owner funding that backs it, in USD cents at the same rate (at least the derived allocation, plus whatever the owner wants to hold back for prepaid inference credits, A3) | `fleet:admin ledger-record-funding <cents> <bankRef>` (**OWNER GATE**; external reference required; recorded as `owner_funding`) | `ledger-verify` OK; treasury unallocated ≥ allocation |
-| A3 | Prepaid inference credits (the fleet buys; founders reimburse from their own cash) | Buy credit at the provider, then `fleet:admin ledger-record-credits <cents> <invoiceRef>` (**OWNER GATE**, schema v14; from unallocated treasury only) | `fleet:conway_credits` balance; `ledger-verify` OK |
+| A1 | Founder capital: **£100.00 GBP owner bootstrap capital, held natively** (v21: the ledger is GBP; Genesis binds GBP 10000 and allocates 10000 pence with no exchange rate; owner capital, never revenue or profit) | `genesis-bootstrap` shows it; change later with `genesis-bootstrap <CUR> <amount>` (**OWNER GATE**) | doctor "genesis bootstrap capital"; `genesis-status` → `capital` |
+| A2 | Record the owner funding that backs it, in GBP pence | `fleet:admin ledger-record-funding 10000 <ref>` (**OWNER GATE**; recorded as `owner_funding`) | `ledger-verify` OK; treasury unallocated ≥ allocation |
+| A3 | Record the REAL prepaid provider credit in its native USD (an operating resource, not founder capital) | `fleet:admin provider-credits-record anthropic purchase <USD, e.g. 19.97> <ref>` (**OWNER GATE**, v21); reconcile later with `… adjustment <±USD> <ref>` | `provider-credits anthropic` (USD balance and its GBP value at the current controlled rate) |
 | A4 | Inference prices (microcents per input/output token), matching the provider's price list | Set on `cognition-enable` (`--in-microcents`, `--out-microcents`) | `cognition-policy` |
 | A5 | Per-founder daily inference budget and hourly call limit | `founder-cognition <id> enable --daily-budget N --turns-per-hour N` | `cognition-status <id>` |
 
@@ -45,7 +45,7 @@ deployed but **disabled**; real payments, custody, replication, reseeding and ow
 | # | Step | Command | Gate |
 |---|---|---|---|
 | D1 | Enable Genesis | `fleet:admin genesis-enable <reason>` | **OWNER GATE** |
-| D2 | Propose and approve the one founder (any other count, and any allocation other than the bootstrap capital, is refused by the registry) | `genesis-propose 1 --fx <USD per GBP> --fx-source "<source>" [--fx-at <ISO>]` (rate observed within 24 h) → check `capital` and `allocationCents` in the output → `genesis-approve <id> <authSha256>` | owner |
+| D2 | Propose and approve the one founder (any other count, and any allocation other than the bootstrap capital, is refused by the registry) | `genesis-propose 1` (no rate: GBP capital in the GBP ledger) → check `capital` and `allocationCents` (10000) → `genesis-approve <id> <authSha256>` | owner |
 | D3 | Provision, attest and fund (virtual) | `sudo scripts/fleet-founders.sh provision / attest`, then `genesis-fund` | root tool + owner |
 | D4 | Activate | `sudo scripts/fleet-founders.sh activate <id> <authSha256>` | **OWNER GATE** |
 | D5 | Turn cognition on: the global switch, then the founder | `cognition-enable anthropic <model> ...` (B4-anthropic), then `founder-cognition <id> enable ...` | **OWNER GATE** |

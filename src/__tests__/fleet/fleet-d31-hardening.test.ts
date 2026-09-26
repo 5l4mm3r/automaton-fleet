@@ -505,7 +505,7 @@ describe.skipIf(!PG_BIN)("D3.1 sweep planning in PostgreSQL: repeated and concur
         before += Number(r.amount_cents);
       }
       // v9 -> v10: the plans stay (history is never deleted), are digested, and nothing new can be planned.
-      expect(await store.migrate()).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+      expect(await store.migrate()).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
       const d = (await treasury["pool"].query("SELECT row_count FROM fleet_legacy_economics WHERE table_name = 'fleet_sweep_plans'")).rows[0];
       expect(Number(d.row_count)).toBe(plans.rows.length);
       expect((await treasury["pool"].query("SELECT count(*)::int AS n FROM fleet_sweep_plans")).rows[0].n).toBe(plans.rows.length);

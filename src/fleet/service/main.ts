@@ -57,6 +57,7 @@ import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "../runti
 import { FleetService, type AuditEntry, type ReadinessCheck } from "./server.js";
 import { OpenAICompatibleProvider, ScriptedProvider } from "../cognition/providers.js";
 import { AnthropicProvider, parseEffort, parseThinking } from "../cognition/anthropic.js";
+import { startFxRefresher } from "../treasury/fx.js";
 import { DEFAULT_FETCHER_SOCKET, unixFetcher } from "../research/client.js";
 import type { CognitionProvider } from "../cognition/types.js";
 import { createAuditSink, createJsonLogger, type Logger } from "./log.js";
@@ -392,6 +393,13 @@ export async function startFleetServiceFromEnv(
       url = (await service.listen(listen.port, listen.host)).url;
     }
     service.startReaper();
+    // v21: FleetController's controlled FX feed (ECB reference rates through the isolated fetcher).
+    const fx = startFxRefresher({
+      fetcher: unixFetcher(research.socket),
+      record: (r) => controller.fxRecord(r),
+      quote: async () => (await controller.fxStatus())?.accountingCurrency ?? null,
+      log: (level, event, detail) => log(level, event, detail),
+    });
     log("info", "service_started", {
       url,
       publicUrl,
@@ -406,6 +414,7 @@ export async function startFleetServiceFromEnv(
     const stop = () =>
       (stopping ??= (async () => {
         log("info", "shutdown_started", {});
+        fx.stop();
         await service.close();
         await closePools();
         log("info", "shutdown_complete", {});

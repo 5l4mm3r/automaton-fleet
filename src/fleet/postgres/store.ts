@@ -1745,6 +1745,31 @@ export class PgFleetStore {
   }
 
   /** Schema v18: research switch and today's usage (null before v18). */
+  /** Schema v21 (service role): record a controlled FX rate from FleetController's feed. */
+  async fxRecord(r: { base: string; quote: string; rateMicro: number; source: string; url: string; sha256: string; observedOn: string }): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_fx_record($1, $2, $3, $4, $5, $6, $7::date) AS r", [r.base, r.quote, r.rateMicro, r.source, r.url, r.sha256, r.observedOn])).rows[0].r);
+  }
+
+  /** Schema v21: native-USD provider credit balance (µ¢) per provider (null before v21). */
+  async providerCreditOverview(): Promise<Array<{ provider: string; balanceUsdMicrocents: number }> | null> {
+    try {
+      return await this.read(async (c) => (await c.query(
+        `SELECT provider, fleet_provider_credit_balance(provider)::text AS b FROM (SELECT DISTINCT provider FROM fleet_provider_credit_events) p ORDER BY provider`,
+      )).rows.map((r) => ({ provider: String(r.provider), balanceUsdMicrocents: Number(r.b) })));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Schema v21: the accounting currency and the current controlled USD rate (null before v21). */
+  async fxStatus(): Promise<{ accountingCurrency: string; usd: Record<string, unknown> | null; latestAny: Record<string, unknown> | null } | null> {
+    try {
+      return await this.read(async (c) => (await c.query("SELECT svc_fx_status() AS r")).rows[0].r);
+    } catch {
+      return null;
+    }
+  }
+
   async researchOverview(): Promise<{ enabled: boolean; authorized24h: number; refused24h: number; failed24h: number; founderHourly: number; founderDaily: number } | null> {
     try {
       return await this.read(async (c) => {

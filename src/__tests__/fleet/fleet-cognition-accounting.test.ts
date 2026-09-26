@@ -15,6 +15,7 @@ import { simulateRuntimeAttestation } from "../../fleet/genesis/simulate.js";
 import { accrue, chargedMicrocents, costMicrocents } from "../../fleet/cognition/charging.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { wipeRegistry } from "./fixtures/wipe.js";
+import { crossRateMicro, parseEcbRates, refreshFx } from "../../fleet/treasury/fx.js";
 
 const PG_BIN = findPgBin();
 const OWNER = "operator:owner";
@@ -51,7 +52,11 @@ describe.skipIf(!PG_BIN)("L13 sub-cent inference accounting (schema v17, Postgre
     for (const id of p.founderIds!) await genesis.attest(g.genesisId, id, (await simulateRuntimeAttestation(genesis, genesis, g.genesisId, id, OWNER)).host, OWNER);
     await genesis.fund(g.genesisId, OWNER);
     await genesis.activateWithHashes(g.genesisId, g.authSha256, p.founderIds!.map((id) => hashAgentToken(mintAgentToken(id))), OWNER);
-    await ledger.recordCreditsPurchase(creditsCents, `invoice:${crypto.randomUUID()}`, OWNER);
+    // v21: the prepaid-credit gate is the provider's native-USD credit (outside the GBP ledger): exactly creditsCents.
+    for (const provider of ["scripted", "anthropic", "openai_compatible"]) {
+      await q(`INSERT INTO fleet.fleet_provider_credit_events (provider, kind, usd_microcents, external_ref, recorded_by)
+        SELECT $1::text, 'adjustment', $2::bigint * 1000000 - fleet.fleet_provider_credit_balance($1::text), 'test: exact credit', 'operator:test'`, [provider, creditsCents]);
+    }
     await genesis.setCognitionPolicy({
       enabled: true, provider: "anthropic", model: "claude-opus-5-5", maxOutputTokens: 4_000, actor: OWNER,
       inputMicrocents: PRICES.inputMicrocentsPerToken, outputMicrocents: PRICES.outputMicrocentsPerToken,
@@ -72,6 +77,8 @@ describe.skipIf(!PG_BIN)("L13 sub-cent inference accounting (schema v17, Postgre
   const cash = async (agent: string) => Number((await ledger.economics(agent)).cash);
   const journals = async (agent: string) => (await q(`SELECT count(*)::int AS n FROM fleet.fleet_ledger_journal WHERE kind = 'inference_charge' AND agent_id = $1`, [agent]))[0].n;
   /** The exact identity: posted cents·10⁶ + carried remainder = Σ attributed µ¢. */
+  let agentRaw: pg.Pool;
+  let svcRaw: pg.Pool;
   async function invariant(agent: string) {
     const r = (await q(`SELECT COALESCE(sum(charged_cents),0)::bigint AS posted, COALESCE(sum(charged_microcents),0)::bigint AS micro FROM fleet.fleet_cognition_log WHERE agent_id = $1`, [agent]))[0];
     expect(Number(r.posted) * M + (await unposted(agent))).toBe(Number(r.micro));
@@ -87,9 +94,13 @@ describe.skipIf(!PG_BIN)("L13 sub-cent inference accounting (schema v17, Postgre
     svc = new PgFleetStore({ connectionString: pgc.serviceUrl });
     ledger = new PgLedgerAdmin({ connectionString: pgc.ownerUrl });
     genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
+    agentRaw = new pg.Pool({ connectionString: pgc.agentUrl, max: 2 });
+    svcRaw = new pg.Pool({ connectionString: pgc.serviceUrl, max: 2 });
   }, 180_000);
 
   afterAll(async () => {
+    await agentRaw?.end();
+    await svcRaw?.end();
     await genesis?.close();
     await ledger?.close();
     await svc?.close();
@@ -209,12 +220,70 @@ describe.skipIf(!PG_BIN)("L13 sub-cent inference accounting (schema v17, Postgre
     const eq = Number((await ledger.economics(a)).survivalEquity);
     const cashA = Number((await ledger.economics(a)).cash);
     expect(eq).toBeGreaterThan(1);
-    await ledger.recordCreditsPurchase(20_000, `invoice:${crypto.randomUUID()}`, OWNER); // credits out of the way
+    await ledger.recordProviderCredits("anthropic", "purchase", 20_000, `invoice:${crypto.randomUUID()}`, OWNER); // credits out of the way (native USD, v21)
     const refused = await svc.cognitionAuthorize(a, Math.min(eq, cashA));
     expect(refused.ok).toBe(false);
     expect(["FLEET_PROTECTED_CAPITAL", "FLEET_INSUFFICIENT_ALLOCATION"]).toContain(refused.code);
     const allowed = await svc.cognitionAuthorize(a, Math.min(eq, cashA) - 1);
     expect(allowed.ok).toBe(true);
+  });
+
+  it("v21: GBP books, USD provider credit — FleetController converts the exact USD cost at its controlled rate; founders set neither", async () => {
+    const [a] = await setup(1_000_000, 1_000);
+    expect((await q(`SELECT accounting_currency FROM fleet.fleet_economic_model`))[0].accounting_currency).toBe("GBP");
+    expect((await q(`SELECT DISTINCT currency FROM fleet.fleet_ledger_accounts`)).map((r) => r.currency)).toEqual(["GBP"]);
+    // The ECB feed: strict parse, integer cross (rounded up), recorded with provenance; implausible jumps refused.
+    const csv = "KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE,OBS_STATUS\n" +
+      "EXR.D.GBP.EUR.SP00.A,D,GBP,EUR,SP00,A,2026-09-25,0.86045,A,F\nEXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,2026-09-25,1.1403,A,F";
+    expect(parseEcbRates(csv)).toEqual({ observedOn: "2026-09-25", quotePerEur: "0.86045", basePerEur: "1.1403" });
+    expect(crossRateMicro("0.86045", "1.1403")).toBe(754_583);
+    expect(() => parseEcbRates(csv.replace("2026-09-25,1.1403", "2026-09-24,1.1403"))).toThrow(/reference dates differ/);
+    expect(() => parseEcbRates("garbage")).toThrow();
+    const today = new Date().toISOString().slice(0, 10);
+    // The fixture's identity rate (1.0) is > 20 % away: the controller's feed refuses the jump (nothing recorded); the owner may record it.
+    await expect(refreshFx({ fetch: async () => ({ ok: true, requestedUrl: "u", finalUrl: "https://data-api.ecb.europa.eu/x", redirects: [], status: 200, contentType: "text/csv", title: null,
+      text: csv.replaceAll("2026-09-25", today), truncated: false, links: [], bytes: 1, sha256: "c".repeat(64), fetchedAt: "", latencyMs: 1 }) }, (r) => svc.fxRecord(r))).rejects.toThrow(/FLEET_FX_IMPLAUSIBLE/);
+    await ledger.recordFxRate("USD", "GBP", 754_582, "owner: ECB 2026-09-25 cross", today, OWNER);
+    expect((await svc.fxRecord({ base: "USD", quote: "GBP", rateMicro: 754_583, source: "ECB", url: "https://x", sha256: "c".repeat(64), observedOn: today })).ok).toBe(true);
+    await ledger.recordFxRate("USD", "GBP", 754_582, "owner: ECB 2026-09-25 cross (again)", today, OWNER); // latest wins
+    // Founders and the controller cannot record owner rates or provider credit; founders cannot even read them.
+    for (const p of [agentRaw, svcRaw]) {
+      await expect(p.query(`SELECT fleet.fleet_fx_record('USD','GBP',1,'x',current_date,'operator:owner')`)).rejects.toThrow(/permission denied/);
+      await expect(p.query(`SELECT fleet.fleet_provider_credits_record('anthropic','purchase',100,'ref','operator:owner')`)).rejects.toThrow(/permission denied/);
+    }
+    await expect(agentRaw.query(`SELECT fleet.svc_fx_record('USD','GBP',1,'x','u',NULL,current_date)`)).rejects.toThrow(/permission denied/);
+    await expect(agentRaw.query(`SELECT * FROM fleet.fleet_fx_rates`)).rejects.toThrow(/permission denied/);
+    await expect(agentRaw.query(`SELECT * FROM fleet.fleet_provider_credit_events`)).rejects.toThrow(/permission denied/);
+    await expect(q(`UPDATE fleet.fleet_fx_rates SET rate_micro = 1`)).rejects.toThrow();
+    // A 100 USD¢ estimate reserves ceil(100 × 0.754582) = 76 pence.
+    const auth = await svc.cognitionAuthorize(a, 100);
+    expect(auth).toMatchObject({ ok: true, estimateCents: 76, estimateUsdCents: 100, currency: "GBP", fxRateMicro: 754_582 });
+    // 1,000 input tokens at 400 USD µ¢ = 400,000 USD µ¢ → ceil(400,000 × 0.754582) = 301,833 GBP µp.
+    const before = Number((await ledger.providerCredits("anthropic")).balanceUsdMicrocents);
+    const rec = await svc.cognitionRecord(a, String(auth.requestId), { ...base, inputTokens: 1_000, outputTokens: 0 });
+    expect(rec).toMatchObject({ ok: true, chargedMicrocents: 301_833, currency: "GBP", fxRateMicro: 754_582, providerUsdMicrocents: 400_000 });
+    const [row] = await q(`SELECT cost_microcents, charged_microcents, ledger_currency, fx_rate_micro, fx_rate_id, provider_usd_microcents FROM fleet.fleet_cognition_log WHERE request_id = $1`, [auth.requestId]);
+    expect(row).toMatchObject({ ledger_currency: "GBP", fx_rate_micro: "754582", provider_usd_microcents: "400000" });
+    expect(Number(row.cost_microcents)).toBe(400_000);
+    expect(Number(row.charged_microcents)).toBe(301_833);
+    expect(row.fx_rate_id).not.toBeNull();
+    const pc = await ledger.providerCredits("anthropic");
+    expect(Number(pc.balanceUsdMicrocents)).toBe(before - 400_000); // native USD, exact
+    expect(pc).toMatchObject({ accountingCurrency: "GBP" });
+    // No rate within 5 days → fail closed (every rate aged in a rolled-back transaction).
+    const c = await owner.connect();
+    try {
+      await c.query("BEGIN");
+      await c.query(`ALTER TABLE fleet.fleet_fx_rates DISABLE TRIGGER USER`);
+      await c.query(`UPDATE fleet.fleet_fx_rates SET observed_on = current_date - 6`);
+      expect((await c.query(`SELECT fleet.svc_cognition_authorize($1, 1) AS r`, [a])).rows[0].r).toMatchObject({ ok: false, code: "FLEET_FX_UNAVAILABLE" });
+    } finally {
+      await c.query("ROLLBACK");
+      c.release();
+    }
+    // The accounting currency cannot change once journals exist.
+    await expect(q(`UPDATE fleet.fleet_economic_model SET accounting_currency = 'USD'`)).rejects.toThrow(/FLEET_LEDGER_NOT_EMPTY/);
+    expect((await ledger.verify()).ok).toBe(true);
   });
 
   it("the accrual survives a restart (it is registry state, not process state)", async () => {

@@ -117,6 +117,8 @@ async function main(argv: string[]): Promise<number> {
           // Pre-Genesis step 4: the rehearsal controller relays to the production isolated fetcher (research is
           // enabled only in the throwaway registry; the production registry's research switch is never touched).
           researchFetcher: unixFetcher(DEFAULT_FETCHER_SOCKET),
+          // The shipped unit thinks on every 2nd 30 s heartbeat: allow each phase six minutes.
+          timeoutMs: 360_000,
         });
       } finally {
         reg.stop();

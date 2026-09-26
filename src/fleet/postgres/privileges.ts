@@ -653,6 +653,15 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
   ]) {
     if (!have.has(need)) problems.push(`cognition surface: trigger ${need.replace(":", ".")} is missing or disabled`);
   }
+  // v21: FX rates and native-USD provider credit are append-only (only when those tables exist).
+  const v21 = (await db.query(`SELECT 1 FROM pg_tables WHERE schemaname = $1 AND tablename = 'fleet_fx_rates'`, [schema])).rows.length > 0;
+  for (const need of v21 ? [
+    "fleet_fx_rates:fleet_fx_rates_no_change", "fleet_fx_rates:fleet_fx_rates_no_truncate",
+    "fleet_provider_credit_events:fleet_provider_credit_events_no_change", "fleet_provider_credit_events:fleet_provider_credit_events_no_truncate",
+    "fleet_ledger_accounts:fleet_ledger_accounts_currency", "fleet_economic_model:fleet_economic_model_currency_guard",
+  ] : []) {
+    if (!have.has(need)) problems.push(`cognition surface: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`,
     [schema],
@@ -668,6 +677,9 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_research_results: new Set(["svc_research_record"]),
     fleet_research_policy: new Set(["fleet_research_set_policy"]),
     fleet_founder_research: new Set(["fleet_founder_research_set"]),
+    // v21: rates only through the validated insert; provider credit only through the owner recorder and inference recording.
+    fleet_fx_rates: new Set(["fleet_fx_insert"]),
+    fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record"]),
   };
   for (const f of fns.rows) {
     for (const t of writeTargets(f.src)) {

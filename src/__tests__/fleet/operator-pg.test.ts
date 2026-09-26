@@ -137,15 +137,15 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
       const h7 = await store.health();
       expect(h7.ok).toBe(false); // a v9 build refuses a v7 registry (exact version check)
       expect(h7.schemaVersion).toBe(7);
-      expect(await store.migrateCheck()).toEqual({ currentVersion: 7, resultingVersion: 20, wouldApply: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] });
+      expect(await store.migrateCheck()).toEqual({ currentVersion: 7, resultingVersion: 21, wouldApply: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21] });
       expect(await reg(schema, "fleet_operator_state")).toBeNull(); // rolled back
       const before = await owner.query(`SELECT max_agents, operating_mode, runtime_commit, runtime_build_id, replication_enabled FROM ${schema}.fleet_state`);
-      expect(await store.migrate()).toEqual([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
-      expect(FLEET_PG_SCHEMA_VERSION).toBe(20);
+      expect(await store.migrate()).toEqual([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
+      expect(FLEET_PG_SCHEMA_VERSION).toBe(21);
       const h9 = await store.health();
-      expect(h9).toMatchObject({ ok: true, schemaVersion: 20, countersConsistent: true });
+      expect(h9).toMatchObject({ ok: true, schemaVersion: 21, countersConsistent: true });
       const rows = await owner.query(`SELECT version, name FROM ${schema}.fleet_schema_migrations ORDER BY version`);
-      expect(rows.rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+      expect(rows.rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
       expect(rows.rows[7].name).toBe("operator_api_read_only");
       expect(rows.rows[8].name).toBe("operator_actions_controlled");
       expect(rows.rows[9].name).toBe("treasury_ledger_custody_boundary");
@@ -177,7 +177,7 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
       expect(await reg(schema, "fleet_operator_state")).toBeNull();
       expect(await reg(schema, "fleet_operator_principals")).toBeNull();
       await owner.query(`DROP TABLE ${schema}.fleet_operator_nonces`);
-      expect(await store.migrate()).toEqual([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+      expect(await store.migrate()).toEqual([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
     } finally {
       await store.close();
       await owner.query(`DROP SCHEMA ${schema} CASCADE`);
@@ -422,7 +422,7 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
     const ok = await begin(c, "GET /v1/operator/status");
     expect(ok).toMatchObject({ ok: true, fn: "op_fleet_status" });
     const rid = (ok as { requestId: string }).requestId;
-    expect(await gw.fleetStatus(rid)).toMatchObject({ fleet: { maxAgents: 2, mode: "DEVELOPMENT" }, schema: { version: 20 } });
+    expect(await gw.fleetStatus(rid)).toMatchObject({ fleet: { maxAgents: 2, mode: "DEVELOPMENT" }, schema: { version: 21 } });
     await expect(gw.whoami(rid)).rejects.toThrow(/FLEET_OP_REQUEST_INVALID/); // request id bound to its route's function
     await expect(gw.whoami(crypto.randomUUID())).rejects.toThrow(/FLEET_OP_REQUEST_INVALID/);
 

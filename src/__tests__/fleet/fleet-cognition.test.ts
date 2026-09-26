@@ -460,8 +460,14 @@ describe.skipIf(!PG_BIN)("Phase F.2 founder cognition (schema v13, HTTP + Postgr
     return p.founderIds!.map((agentId, i) => ({ agentId, token: tokens[i], client: new FleetApiClient({ baseUrl: apiUrl, agentId, token: tokens[i] }) }));
   }
 
+  /** v21: prepaid inference credit is the provider's native-USD balance (outside the GBP ledger). */
   async function buyCredits(cents: number) {
-    await ledger.recordCreditsPurchase(cents, `invoice:${crypto.randomUUID()}`, OWNER);
+    await ledger.recordProviderCredits("scripted", "purchase", cents, `invoice:${crypto.randomUUID()}`, OWNER);
+  }
+  /** Start a test with no provider credit (the fixture seeds a generous balance). */
+  async function noCredits() {
+    await q(`INSERT INTO fleet.fleet_provider_credit_events (provider, kind, usd_microcents, external_ref, recorded_by)
+      SELECT 'scripted', 'adjustment', -fleet.fleet_provider_credit_balance('scripted'), 'test: no credit', 'operator:test'`);
   }
 
   const inferCode = async (c: FleetApiClient) => {
@@ -560,6 +566,7 @@ describe.skipIf(!PG_BIN)("Phase F.2 founder cognition (schema v13, HTTP + Postgr
     await genesis.setCognitionPolicy({ enabled: true, provider: "scripted", model: "fleet-scripted-v1", inputMicrocents: 2_000, outputMicrocents: 8_000, actor: OWNER });
     expect(await inferCode(a.client)).toBe("FLEET_COGNITION_FOUNDER_DISABLED");
     await genesis.setFounderCognition(a.agentId, { enabled: true, reason: "test", actor: OWNER });
+    await noCredits();
     expect(await inferCode(a.client)).toBe("FLEET_COGNITION_CREDITS_EXHAUSTED");
     await buyCredits(5_000);
     // The founder cannot smuggle a system prompt or a credential through the gateway.

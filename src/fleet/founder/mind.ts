@@ -69,9 +69,14 @@ function fit(messages: ChatMessage[]): ChatMessage[] {
   return m;
 }
 
+/** Most thinking slots an idle founder skips (with the unit's every-2nd-heartbeat cadence and 30 s heartbeats ≈ 32 min). */
+export const MAX_IDLE_SKIP = 32;
+
 export class FounderMind {
   turns = 0;
   private restUntil = 0;
+  private idleBackoff = 0;
+  private idleSkip = 0;
 
   constructor(private readonly o: { ports: MindPorts; toolbox: FounderToolbox; stateDir: string; maxStepsPerTurn?: number; log?: (event: string, detail?: Record<string, unknown>) => void }) {}
 
@@ -105,11 +110,22 @@ export class FounderMind {
     } catch (err) {
       return { ...result, reason: `status unavailable (${(err as { code?: string }).code ?? "error"})` };
     }
-    if (!status.policyEnabled || status.provider === "none") return { ...result, reason: "cognition disabled by the owner" };
-    if (!status.founderEnabled) return { ...result, reason: "cognition not enabled for this founder" };
-    if (status.paused) return { ...result, reason: "paused by the owner" };
+    // Any owner intervention clears the idle backoff: when thinking is allowed again it resumes at the next slot.
+    const owner = !status.policyEnabled || status.provider === "none" ? "cognition disabled by the owner"
+      : !status.founderEnabled ? "cognition not enabled for this founder" : status.paused ? "paused by the owner" : null;
+    if (owner) {
+      this.idleBackoff = 0;
+      this.idleSkip = 0;
+      return { ...result, reason: owner };
+    }
     // The provider asked us to slow down: rest (no inference) until the advertised time.
     if (Date.now() < this.restUntil) return { ...result, reason: "resting: provider rate limit" };
+    // Nothing useful was pending last time: rest (no inference) for the backed-off number of thinking slots.
+    // Owner switches above are still observed on every slot; only paid inference is skipped.
+    if (this.idleSkip > 0) {
+      this.idleSkip--;
+      return { ...result, reason: "resting: nothing useful to do" };
+    }
     const waitMs = Number(status.founderWaitMs) || undefined;
     this.turns++;
     const messages = this.history();
@@ -153,6 +169,11 @@ export class FounderMind {
       this.logDecision({ turn: this.turns, step, requestId: r.requestId, content: (r.content ?? "").slice(0, 500), tools: outcomes.map((o) => ({ name: o.name, ok: o.ok, refused: o.refused })), chargedCents: r.chargedCents });
       if (r.toolCalls.length === 0 || r.toolCalls.some((c) => c.name === "sleep")) break;
     }
+    // A turn that only slept backs the next wake-up off exponentially (1, 2, 4 … MAX_IDLE_SKIP thinking slots);
+    // a turn that did anything else resets it.
+    const idle = result.toolCalls.length > 0 && result.toolCalls.every((n) => n === "sleep");
+    this.idleBackoff = idle ? Math.min(MAX_IDLE_SKIP, Math.max(1, this.idleBackoff * 2)) : 0;
+    this.idleSkip = this.idleBackoff;
     this.save(messages);
     this.o.log?.("founder_turn", { turn: this.turns, steps: result.steps, tools: result.toolCalls.length, refusals: result.refusals.length, chargedCents: result.chargedCents });
     return result;

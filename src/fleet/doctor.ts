@@ -407,6 +407,21 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
             "converted to USD cents at the owner-stated fresh rate bound into the Genesis authorization"
           : "no bootstrap capital configured: a Genesis would carry a plain USD allocation (owner decision missing)",
       );
+      // Schema v21: GBP books; USD provider credit; FleetController's controlled FX.
+      const fxs = await store.fxStatus();
+      if (fxs) {
+        const usd = fxs.usd as { rate_micro?: number; observed_on?: string; source?: string; recorded_by?: string } | null;
+        const credits = (await store.providerCreditOverview()) ?? [];
+        facts.accountingCurrency = fxs.accountingCurrency;
+        add(
+          "accounting currency / FX",
+          fxs.accountingCurrency === "USD" || usd ? "pass" : "warn",
+          `ledger in ${fxs.accountingCurrency}; ` + (fxs.accountingCurrency === "USD" ? "no conversion needed"
+            : usd ? `controlled USD→${fxs.accountingCurrency} ${(Number(usd.rate_micro) / 1e6).toFixed(6)} (reference ${String(usd.observed_on).slice(0, 10)}, ${usd.source}, by ${usd.recorded_by})`
+            : `no USD→${fxs.accountingCurrency} rate within 5 days: inference fails closed (FLEET_FX_UNAVAILABLE)`) +
+            `; provider credit (native USD): ${credits.length ? credits.map((c) => `${c.provider} $${(c.balanceUsdMicrocents / 1e8).toFixed(4)}`).join(", ") : "none recorded"}`,
+        );
+      }
       const want = manifestSha256(FOUNDER_MANIFEST_CURRENT);
       const mid = gv.founderManifestId ?? "?";
       add(

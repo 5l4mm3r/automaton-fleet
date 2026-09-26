@@ -37,7 +37,7 @@ import { unixFetcher, type FetcherPort } from "../../fleet/research/client.js";
 import { ResearchError, research, type ResearchRecord } from "../../fleet/research/gateway.js";
 import { FounderToolbox, MAX_RESEARCH_FILES, pruneResearch } from "../../fleet/founder/toolbox.js";
 import { FOUNDER_CHARTER, FOUNDER_CHARTER_VERSION } from "../../fleet/cognition/types.js";
-import { FounderMind } from "../../fleet/founder/mind.js";
+import { FounderMind, MAX_IDLE_SKIP } from "../../fleet/founder/mind.js";
 import { INJECTION_MARKER, ScriptedProvider } from "../../fleet/cognition/providers.js";
 import { toolsFor } from "../../fleet/cognition/gateway.js";
 import type { ChatMessage } from "../../fleet/cognition/types.js";
@@ -396,8 +396,53 @@ describe("Genesis preparation: research retention and opportunity doctrine", () 
     expect(FOUNDER_CHARTER).toMatch(/owner bootstrap capital, not revenue or profit/);
     expect(FOUNDER_CHARTER).toMatch(/never fabricate evidence, customers, revenue, market data/);
     expect(FOUNDER_CHARTER).toMatch(/Cite the research attemptId/);
-    expect(FOUNDER_CHARTER).not.toMatch(/£|GBP|\b100\b/); // the amount lives in the ledger, not the prompt
-    expect(FOUNDER_CHARTER.length).toBeLessThan(3_600); // every token is paid on every call
+    expect(FOUNDER_CHARTER).not.toMatch(/£|\b100\b/); // the amount lives in the ledger, not the prompt
+    expect(FOUNDER_CHARTER).toMatch(/Your books are in GBP/);
+    expect(FOUNDER_CHARTER).toMatch(/you never set the rate/);
+    expect(FOUNDER_CHARTER).toMatch(/scarce operating capital, not a target to spend/);
+    expect(FOUNDER_CHARTER.length).toBeLessThan(4_000); // every token is paid on every call
+  });
+});
+
+describe("Genesis authorization: an idle founder is not woken for nothing", () => {
+  it("sleep-only turns back off exponentially (no inference while resting); real work or any owner intervention resets it", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "idle-"));
+    const ws = path.join(root, "ws");
+    fs.mkdirSync(ws);
+    fs.mkdirSync(path.join(root, "mem"));
+    let infers = 0;
+    let work = false;
+    let paused = false;
+    const mind = new FounderMind({
+      toolbox: new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: ws, memoryDir: path.join(root, "mem"), ports: {} as never }),
+      stateDir: path.join(root, "st"), maxStepsPerTurn: 2,
+      ports: {
+        cognitionStatus: async () => ({ policyEnabled: true, provider: "scripted", founderEnabled: true, paused }),
+        infer: async () => {
+          infers++;
+          const toolCalls = work ? [{ id: `g${infers}`, name: "list_goals", arguments: {} }, { id: `s${infers}`, name: "sleep", arguments: {} }] : [{ id: `s${infers}`, name: "sleep", arguments: {} }];
+          return { content: "", toolCalls, usage: { inputTokens: 1, outputTokens: 1 }, chargedCents: 0, requestId: `r${infers}` };
+        },
+      },
+    });
+    fs.mkdirSync(path.join(root, "st"), { recursive: true });
+    const ran: boolean[] = [];
+    for (let i = 0; i < 10; i++) ran.push((await mind.turn(`hb ${i}`)).ran);
+    // Backoff 1, 2, 4 …: think, rest 1, think, rest 2, think, rest 4 (then think).
+    expect(ran).toEqual([true, false, true, false, false, true, false, false, false, false]);
+    expect(infers).toBe(3);
+    expect((await mind.turn("hb")).ran).toBe(true); // after 4 rest slots
+    // An owner pause clears the backoff: after resuming it thinks at once.
+    paused = true;
+    expect((await mind.turn("hb")).reason).toBe("paused by the owner");
+    paused = false;
+    expect((await mind.turn("hb")).ran).toBe(true);
+    // Real work resets the backoff.
+    work = true;
+    expect((await mind.turn("hb")).reason).toBe("resting: nothing useful to do");
+    expect((await mind.turn("hb")).ran).toBe(true);
+    expect((await mind.turn("hb")).ran).toBe(true);
+    expect(MAX_IDLE_SKIP).toBe(32);
   });
 });
 

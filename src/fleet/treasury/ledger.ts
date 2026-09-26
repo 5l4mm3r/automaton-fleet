@@ -246,6 +246,31 @@ export class PgLedgerAdmin {
     return this.one(`SELECT fleet_admin_record_credits_purchase($1, $2, $3, $4) AS r`, [cents(amountCents, "amount"), externalRef, actor, idem(key)]);
   }
 
+  /** Schema v21 (owner): record a real, verified provider credit in its native USD (purchase or reconciling adjustment). */
+  async recordProviderCredits(provider: string, kind: "purchase" | "adjustment", usdCents: number, externalRef: string, actor: string): Promise<Record<string, unknown>> {
+    return this.one(`SELECT fleet_provider_credits_record($1, $2, $3, $4, $5) AS r`, [provider, kind, usdCents, externalRef, actor]);
+  }
+
+  /** Schema v21: native-USD provider credit balance and, at the current controlled rate, its value in the accounting currency. */
+  async providerCredits(provider: string): Promise<Record<string, unknown>> {
+    return this.one(`SELECT jsonb_build_object('provider', $1::text, 'balanceUsdMicrocents', fleet_provider_credit_balance($1),
+        'accountingCurrency', m.accounting_currency, 'fx', to_jsonb(x),
+        'accountingValueMicro', CASE WHEN x.rate_id IS NULL THEN NULL ELSE floor(fleet_provider_credit_balance($1)::numeric * x.rate_micro / 1000000)::bigint END,
+        'events', (SELECT COALESCE(jsonb_agg(jsonb_build_object('kind', e.kind, 'usdMicrocents', e.usd_microcents, 'ref', e.external_ref, 'at', e.at) ORDER BY e.seq DESC), '[]'::jsonb)
+                     FROM (SELECT * FROM fleet_provider_credit_events WHERE provider = $1 AND kind <> 'consumption' ORDER BY seq DESC LIMIT 20) e),
+        'consumedUsdMicrocents', (SELECT COALESCE(-sum(usd_microcents), 0) FROM fleet_provider_credit_events WHERE provider = $1 AND kind = 'consumption'))
+       AS r FROM fleet_economic_model m LEFT JOIN LATERAL fleet_fx_latest('USD', m.accounting_currency) x ON true WHERE m.id = 1`, [provider]);
+  }
+
+  /** Schema v21 (owner): record a controlled FX rate by hand (quote units per base unit × 10^6). */
+  async recordFxRate(base: string, quote: string, rateMicro: number, source: string, observedOn: string, actor: string): Promise<Record<string, unknown>> {
+    return this.one(`SELECT fleet_fx_record($1, $2, $3, $4, $5::date, $6) AS r`, [base, quote, rateMicro, source, observedOn, actor]);
+  }
+
+  async fxStatus(): Promise<Record<string, unknown>> {
+    return this.one(`SELECT fleet_fx_status() AS r`);
+  }
+
   /**
    * Record an external economic fact for an agent (schema v11 provenance): realized
    * customer revenue, a refund, or realized investment P&L. `counterparty` is the

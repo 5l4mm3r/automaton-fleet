@@ -217,11 +217,17 @@ export class GenesisOps {
     ]);
   }
 
-  /** v20: propose with the configured bootstrap capital, converted at an owner-stated fresh rate (allocation derived). */
-  proposeCapital(p: { idempotencyKey: string; founderCount: number; manifestId?: string; fxUsdMicro: number; fxSource: string; fxObservedAt: Date | string; ttlS?: number; actor: string }) {
+  /** v20/v21: propose with the configured bootstrap capital; a rate only when the capital is not in the accounting currency. */
+  proposeCapital(p: { idempotencyKey: string; founderCount: number; manifestId?: string; fxUsdMicro?: number | null; fxSource?: string | null; fxObservedAt?: Date | string | null; ttlS?: number; actor: string }) {
     return this.one<GenesisView>(`SELECT fleet_genesis_propose_capital($1, $2, $3, $4, $5, $6, $7, $8) AS r`, [
-      p.idempotencyKey, p.founderCount, p.manifestId ?? null, p.fxUsdMicro, p.fxSource, p.fxObservedAt, p.ttlS ?? null, p.actor,
+      p.idempotencyKey, p.founderCount, p.manifestId ?? null, p.fxUsdMicro ?? null, p.fxSource ?? null, p.fxObservedAt ?? null, p.ttlS ?? null, p.actor,
     ]);
+  }
+
+  /** v21: the ledger's accounting currency (null before v21, when the ledger was USD by constitution). */
+  async accountingCurrency(): Promise<string | null> {
+    const r = await this.db.query(`SELECT to_jsonb(m) ->> 'accounting_currency' AS c FROM fleet_economic_model m WHERE id = 1`);
+    return (r.rows[0]?.c as string | null) ?? null;
   }
 
   /** v20: the configured bootstrap capital per founder (null when none is configured). */

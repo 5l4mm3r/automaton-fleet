@@ -60,4 +60,15 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
       fleet_hourly = 120, fleet_daily = 600, updated_by = 'migration'`);
   }
   for (const t of all) await c.query(`ALTER TABLE ${t} ENABLE TRIGGER USER`);
+  // v21 fixtures: an identity USD→GBP rate (so historical accounting expectations keep their numbers) and generous
+  // synthetic native-USD provider credit. Tests of FX and credit exhaustion set their own.
+  if (r.rows.some((x) => x.t === "fleet_fx_rates")) {
+    await c.query(`INSERT INTO "${schema}".fleet_fx_rates (base, quote, rate_micro, source, observed_on, recorded_by)
+      SELECT 'USD', m.accounting_currency, 1000000, 'test fixture (identity rate)', (now() AT TIME ZONE 'UTC')::date, 'operator:test-fixture'
+        FROM "${schema}".fleet_economic_model m WHERE m.id = 1 AND m.accounting_currency <> 'USD'`);
+    for (const provider of ["anthropic", "openai_compatible", "scripted"]) {
+      await c.query(`INSERT INTO "${schema}".fleet_provider_credit_events (provider, kind, usd_microcents, external_ref, recorded_by)
+        VALUES ($1, 'purchase', 100000000000000, 'test fixture credit', 'operator:test-fixture')`, [provider]);
+    }
+  }
 }

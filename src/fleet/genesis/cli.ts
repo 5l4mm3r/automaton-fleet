@@ -8,7 +8,8 @@
  *   genesis-dry-run [--founders N] [--synthetic-cents N]      full workflow in ONE rolled-back transaction (default: 1 founder, v19)
  *   genesis-enable <reason…> | genesis-disable <reason…>        OWNER GATE (never run by an AI operator)
  *   genesis-propose <founders> <allocationCents> [--ttl S] [--manifest ID] [--key K]   (v19: founders must be 1)
- *   genesis-propose <founders> --fx <USD per unit> --fx-source <text> [--fx-at ISO]   v20: bootstrap capital (e.g. £100.00) at a fresh rate
+ *   genesis-propose 1                                                  v21: the bootstrap capital (GBP £100.00) in the GBP ledger — no rate
+ *   genesis-propose <founders> --fx <rate> --fx-source <text> [--fx-at ISO]  capital in another currency, at a fresh rate
  *   genesis-bootstrap [<CUR> <amount> | none]                        v20: show / set (owner) the bootstrap capital per founder
  *   genesis-approve <genesisId> <authSha256>
  *   genesis-provision <genesisId>
@@ -181,16 +182,18 @@ export async function runGenesisCommand(
       return ok(await g.setEnabled(cmd === "genesis-enable", actor, reason));
     }
     case "genesis-propose":
-      // v20: with a configured bootstrap capital the allocation is derived from it at the stated fresh rate.
-      if (flag(a, "--fx") !== undefined) {
+      // v20/v21: with a configured bootstrap capital the allocation is the capital itself (capital in the accounting
+      // currency: no rate) or derived at a stated fresh rate (--fx, only for capital in another currency).
+      if (flag(a, "--fx") !== undefined || (await g.bootstrapCapital()) !== null) {
+        const fx = flag(a, "--fx");
         const source = flag(a, "--fx-source");
-        if (!source) throw new Error("usage: genesis-propose <founders> --fx <USD per unit> --fx-source <where the rate came from> [--fx-at ISO time]");
+        if (fx !== undefined && !source) throw new Error("usage: genesis-propose <founders> [--fx <rate> --fx-source <where the rate came from> [--fx-at ISO time]]");
         return ok(await g.proposeCapital({
           idempotencyKey: flag(a, "--key") ?? `genesis:${crypto.randomBytes(12).toString("base64url")}`,
           founderCount: int(p[0], "founders", 1),
-          fxUsdMicro: parseFxMicro(String(flag(a, "--fx"))),
-          fxSource: source,
-          fxObservedAt: flag(a, "--fx-at") ?? new Date().toISOString(),
+          fxUsdMicro: fx !== undefined ? parseFxMicro(String(fx)) : null,
+          fxSource: fx !== undefined ? source : null,
+          fxObservedAt: fx !== undefined ? (flag(a, "--fx-at") ?? new Date().toISOString()) : null,
           ttlS: flag(a, "--ttl") ? int(flag(a, "--ttl"), "--ttl", 600) : undefined,
           manifestId: flag(a, "--manifest"),
           actor,

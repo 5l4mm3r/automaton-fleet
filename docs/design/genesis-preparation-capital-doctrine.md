@@ -1,4 +1,16 @@
-# Genesis preparation: £100 bootstrap capital and the opportunity doctrine (schema v20)
+# Genesis preparation: £100 bootstrap capital and the opportunity doctrine (schema v20, corrected by v21)
+
+> **v21 owner correction (Genesis authorization).** Founder capital is held natively in GBP: the ledger's
+> accounting currency is GBP (`fleet_economic_model.accounting_currency`, part of the economic-policy hash, settable
+> only on an empty ledger), so Genesis binds `capital_currency = GBP`, `capital_minor = 10000` and allocates 10000
+> pence with **no exchange rate**. FX happens only where an operation needs it: FleetController's controlled feed
+> (ECB reference rates through the isolated fetcher, crossed through EUR, integer micro-units rounded up; owner may
+> record a rate; founders cannot) converts each inference call's exact USD provider cost into GBP micro-pence at the
+> rate reserved with the call, recording rate id, rate, USD cost and GBP charge. Prepaid provider credit is a
+> native-USD operating resource outside the GBP ledger (`fleet_provider_credit_events`, append-only; owner-recorded
+> purchases, exact per-call consumption); it is not founder capital. No fresh rate (≤ 5 days) or insufficient USD
+> credit → inference fails closed. Section 1 below describes the superseded v20 conversion-at-Genesis path, which
+> remains only for capital configured in a currency other than the ledger's.
 
 Owner and architect decisions for Founder 1, encoded with minimal changes. No founder exists yet, and Genesis,
 cognition, research, custody, payments, trading, reproduction and reseeding are all off.

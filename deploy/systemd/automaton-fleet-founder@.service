@@ -44,6 +44,8 @@ Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/runtime.env
 # Phase F.2: the founder thinks only through FleetController's gateway, and only while the
 # owner's registry switches (cognition policy, per-founder enable/pause) allow it.
 Environment=FLEET_FOUNDER_AGENT_LOOP=controller
+# Think on every 2nd heartbeat (the owner-approved cadence); an idle founder backs off further (see runtime).
+Environment=FLEET_FOUNDER_THINK_EVERY=2
 StateDirectory=automaton-founders/%i
 StateDirectoryMode=0700
 UMask=0077
