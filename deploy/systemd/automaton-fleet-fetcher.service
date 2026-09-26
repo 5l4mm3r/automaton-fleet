@@ -1,0 +1,66 @@
+# Automaton Fleet research fetcher (Pre-Genesis step 4).
+#
+# The only fleet component with outbound Internet access for founder research. FleetController relays a
+# founder's authorized, audited request over the private socket; this process resolves (its own public DNS
+# servers), validates every address, pins the connection, fetches with HTTPS GET only, enforces limits, and
+# returns bounded extracted text. It holds NO secret: no database URL, no inference/API key, no payment or
+# custody credential, no SSH or operator key, no founder data. It cannot read /etc/automaton-fleet, any service
+# state, PostgreSQL, founder state or /home. Kernel-level egress: public addresses only (the fetcher also refuses
+# them itself). Host addresses are denied in the generated drop-in (host-addresses.conf, fleet-os-setup.sh).
+
+[Unit]
+Description=Automaton Fleet research fetcher (isolated public-web reader for FleetController)
+Requires=automaton-fleet-fetcher.socket
+After=automaton-fleet-fetcher.socket network-online.target
+
+[Service]
+Type=simple
+User=automaton-fleet-fetcher
+Group=automaton-fleet-fetcher
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/research/fetcher-main.js
+Environment=NODE_ENV=production
+Environment=FLEET_FETCHER_DNS=1.1.1.1,9.9.9.9,2606:4700:4700::1111
+Environment=FLEET_FETCHER_DENY_DOMAINS=agentfleet.vip
+Restart=on-failure
+RestartSec=5
+UMask=0077
+LimitCORE=0
+MemoryMax=512M
+TasksMax=64
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Public Internet only (kernel-enforced): no loopback, private, link-local (metadata), CGNAT, multicast, ULA,
+# reserved or NAT64/6to4 destinations.
+IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 240.0.0.0/4 ::/128 64:ff9b::/96 2002::/16 fc00::/7 fec0::/10
+# Every fleet secret, credential, service state, database, founder state and log is invisible.
+InaccessiblePaths=-/etc/automaton-fleet -/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-operator-api -/var/lib/automaton-fleet-chatgpt-adapter -/var/lib/automaton-fleet-chatgpt-tunnel
+InaccessiblePaths=-/var/lib/private -/var/lib/automaton-founders -/var/lib/postgresql -/etc/postgresql -/var/log/automaton-fleet -/var/log/automaton-fleet-operator -/var/log/automaton-fleet-chatgpt-adapter
+InaccessiblePaths=-/run/credentials -/root -/etc/ssh -/opt/automaton-fleet/chatgpt-adapter -/opt/automaton-fleet/tunnel-client -/run/automaton-fleet-chatgpt
+
+[Install]
+WantedBy=multi-user.target

@@ -425,10 +425,10 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       [ulid(), `0x${randomBytes(20).toString("hex")}`],
     );
     // v8 (Operator API), v9 (D3 actions) v10 (Phase E ledger), v11 (Phase F Genesis) and v12 (F.1 founder runtimes), all additive, now follow v7 in the same migration run.
-    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 17, wouldApply: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] });
-    expect(await store.migrate()).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(17);
-    expect((await store.health()).schemaVersion).toBe(17);
+    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 18, wouldApply: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18] });
+    expect(await store.migrate()).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(18);
+    expect((await store.health()).schemaVersion).toBe(18);
     const scopes = await ownerRaw.query(`SELECT capability_scope FROM ${schema}.fleet_agents`);
     expect(scopes.rows.map((r) => r.capability_scope)).toEqual(["full"]);
     expect((await store.auditPrivileges()).problems).toEqual([]);
@@ -559,6 +559,8 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       "POST /v1/identity/fact": { claimId: "00000000-0000-4000-8000-000000000000" },
       "GET /v1/cognition/status": undefined,
       "POST /v1/cognition/infer": { messages: [{ role: "user", content: "x" }] },
+      "POST /v1/research/fetch": { url: "https://example.com/", purpose: "x" },
+      "GET /v1/research/status": undefined,
     };
     const denied = Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth !== "public" && p.auth !== "genesis_attest" && !p.witness).map(([k]) => k).sort();
     // The founder attestation route accepts no session at all (the witness's signed session is simply unauthenticated there).

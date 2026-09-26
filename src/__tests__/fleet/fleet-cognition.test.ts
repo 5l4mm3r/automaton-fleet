@@ -232,7 +232,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
     expect(validateMessages([{ role: "user", content: "hi" }])).toEqual([{ role: "user", content: "hi" }]);
     // Advertised tools = compiled toolbox ∩ granted classes; nothing forbidden is ever advertised.
     const names = toolsFor(FOUNDER_MANIFEST_V1.allowed).map((t) => t.name);
-    expect(names).toEqual(FOUNDER_TOOLS.map((t) => t.name));
+    expect(names).toEqual(FOUNDER_TOOLS.filter((t) => t.capability !== "research.web").map((t) => t.name)); // founder-v1 has no research.web
     expect(toolsFor(["planning"]).map((t) => t.name)).toEqual(["set_goal", "complete_goal", "list_goals"]);
     expect(toolsFor(["reproduction", "payment.execute"] as never)).toEqual([]);
   });

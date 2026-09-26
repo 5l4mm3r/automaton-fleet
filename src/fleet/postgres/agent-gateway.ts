@@ -244,6 +244,11 @@ export class PgAgentGateway {
     return this.call("api_cognition_status", [agentId, token]);
   }
 
+  /** Schema v18: this founder's research switch, quotas and usage. */
+  async researchStatus(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_research_status", [agentId, token]);
+  }
+
   async knowledgePropose(agentId: string, token: string, category: string, title: string, content: string): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.call("api_knowledge_propose", [agentId, token, category, title, content]);
   }

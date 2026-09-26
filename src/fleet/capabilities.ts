@@ -28,6 +28,7 @@ export type CapabilityClass =
   | "planning"
   | "memory.private"
   | "research.read"
+  | "research.web"
   | "workspace.fs"
   | "code.build"
   | "deployment"
@@ -119,6 +120,8 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   propose_knowledge: "knowledge.propose",
   read_knowledge: "knowledge.read",
   request_identity_fact: "identity.claim_request",
+  // Pre-Genesis step 4: public web research through FleetController's isolated fetcher (founder-v2)
+  web_fetch: "research.web",
   // constitutional exclusions
   edit_own_file: "self_modification",
   update_soul: "self_modification",
@@ -172,7 +175,17 @@ export const FOUNDER_MANIFEST_V1: CapabilityManifest = Object.freeze({
   ] as CapabilityClass[]),
 });
 
-export const MANIFESTS: Readonly<Record<string, CapabilityManifest>> = Object.freeze({ "founder-v1": FOUNDER_MANIFEST_V1 });
+/** founder-v1 plus controlled public web research (schema v18). The default for new Genesis. */
+export const FOUNDER_MANIFEST_V2: CapabilityManifest = Object.freeze({
+  manifestId: "founder-v2",
+  version: 2,
+  allowed: Object.freeze([...FOUNDER_MANIFEST_V1.allowed, "research.web"] as CapabilityClass[]),
+});
+
+/** The manifest new founders receive (the registry's default_manifest_id must name it). */
+export const FOUNDER_MANIFEST_CURRENT = FOUNDER_MANIFEST_V2;
+
+export const MANIFESTS: Readonly<Record<string, CapabilityManifest>> = Object.freeze({ "founder-v1": FOUNDER_MANIFEST_V1, "founder-v2": FOUNDER_MANIFEST_V2 });
 
 export type CapabilityDecision = { allowed: true; capability: CapabilityClass } | { allowed: false; capability: CapabilityClass | null; code: string };
 

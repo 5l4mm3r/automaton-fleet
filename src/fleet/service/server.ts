@@ -53,6 +53,8 @@ import { SIG_HEADERS, signRequest } from "./server-signing.js";
 import { parseFounderAttestHeader } from "../founder/evidence.js";
 import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, FOUNDER_WAIT_MARGIN_MS, MAX_COGNITION_DEADLINE_MS, infer as inferCognition } from "../cognition/gateway.js";
 import type { CognitionProvider } from "../cognition/types.js";
+import { ResearchError, research as researchFetch } from "../research/gateway.js";
+import type { FetcherPort } from "../research/client.js";
 
 interface RequestCtx {
   raw: Buffer;
@@ -124,6 +126,8 @@ export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Obj
   "POST /v1/genesis/runtime-evidence": { auth: "genesis_attest", witness: false },
   "POST /v1/cognition/infer": { auth: "session", witness: false },
   "GET /v1/cognition/status": { auth: "session", witness: false },
+  "POST /v1/research/fetch": { auth: "session", witness: false },
+  "GET /v1/research/status": { auth: "session", witness: false },
 });
 
 /**
@@ -191,6 +195,10 @@ export interface FleetServiceOptions {
   };
   /** Phase F.2: the inference provider behind POST /v1/cognition/infer (null = none configured; founders cannot think). */
   cognitionProvider?: CognitionProvider | null;
+  /** Pre-Genesis step 4: the isolated research fetcher (null = research unavailable on this controller). */
+  researchFetcher?: FetcherPort | null;
+  /** Domains founders may never research (the fleet's own). */
+  researchDenyDomains?: string[];
   /** Phase F.2 hardening (L2): one deadline for a whole inference (all attempts); founders wait this + a margin. */
   cognitionDeadlineMs?: number;
   /** TLS material; when set, listen() serves HTTPS. */
@@ -855,6 +863,14 @@ export class FleetService {
       return { cognition: { ...status, deadlineMs: this.cognitionDeadlineMs(), founderWaitMs: this.cognitionDeadlineMs() + FOUNDER_WAIT_MARGIN_MS } };
     }
 
+    if (method === "GET" && path === "/v1/research/status") {
+      const { agentId, token } = await this.credentials(req, path, ctx);
+      const r = await agent.researchStatus(agentId, token);
+      if (!r.ok) throw FleetService.refusal(r, "research status refused");
+      const { ok: _ok, ...status } = r;
+      return { research: status };
+    }
+
     if (method === "GET" && path === "/v1/capabilities") {
       // Schema v11: this agent's capability manifest (authoritative copy in the database).
       const { agentId, token } = await this.credentials(req, path, ctx);
@@ -1055,6 +1071,36 @@ export class FleetService {
           if (err instanceof CognitionError) {
             throw err.retryAfterS !== undefined ? Object.assign(new HttpError(err.status, err.code, err.message), { retryAfter: err.retryAfterS }) : new HttpError(err.status, err.code, err.message);
           }
+          throw err;
+        }
+      }
+
+      case "/v1/research/fetch": {
+        // Pre-Genesis step 4: the founder asks; FleetController authorizes, audits and relays to the isolated fetcher.
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        try {
+          const r = await researchFetch(
+            {
+              // The database accepted this session: a later policy/quota refusal must not keep charging the
+              // pre-database (unverified-credential) budgets, which are shared with unauthenticated callers.
+              capabilities: async (a, t) => {
+                const c = await agent.capabilities(a, t);
+                if (c.ok && ctx.credHash) this.markKnownCred(ctx.credHash);
+                return c;
+              },
+              authorize: (a, u, h, p) => admin.researchAuthorize(a, u, h, p),
+              record: (a, id, x) => admin.researchRecord(a, id, x),
+            },
+            this.opts.researchFetcher ?? null,
+            agentId,
+            token,
+            body,
+            { fleetDomains: this.opts.researchDenyDomains ?? [] },
+          );
+          this.audit("research_fetch", agentId, { attemptId: r.attemptId, host: new URL(r.finalUrl).hostname, status: r.status, bytes: r.bytes });
+          return { result: r };
+        } catch (err) {
+          if (err instanceof ResearchError) throw new HttpError(err.status, err.code, err.message);
           throw err;
         }
       }

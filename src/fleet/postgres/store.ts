@@ -1004,6 +1004,7 @@ export class PgFleetStore {
     livingFounders: number;
     reproductionExecutionEnabled: boolean;
     founderManifestSha256: string | null;
+    founderManifestId: string | null;
     identityFacts: number;
     identityClaimsPending: number;
     knowledgePending: number;
@@ -1019,7 +1020,7 @@ export class PgFleetStore {
                   (SELECT count(*) FROM fleet_agents WHERE origin IN ('genesis_founder','reseed_founder')) AS founders,
                   (SELECT count(*) FROM fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive')) AS living_founders,
                   (SELECT execution_enabled FROM fleet_reproduction_policy WHERE id = 1) AS repro,
-                  (SELECT manifest_sha256 FROM fleet_capability_manifests WHERE manifest_id = 'founder-v1') AS manifest,
+                  (SELECT m.manifest_sha256 FROM fleet_capability_manifests m WHERE m.manifest_id = p.default_manifest_id) AS manifest, p.default_manifest_id AS manifest_id,
                   (SELECT count(*) FROM fleet_org_identity_facts) AS facts,
                   (SELECT count(*) FROM fleet_org_identity_claims WHERE status = 'requested') AS claims,
                   (SELECT count(*) FROM fleet_knowledge_proposals WHERE status = 'proposed') AS kpending,
@@ -1037,6 +1038,7 @@ export class PgFleetStore {
           livingFounders: Number(x.living_founders),
           reproductionExecutionEnabled: x.repro === true,
           founderManifestSha256: x.manifest ?? null,
+          founderManifestId: x.manifest_id ?? null,
           identityFacts: Number(x.facts),
           identityClaimsPending: Number(x.claims),
           knowledgePending: Number(x.kpending),
@@ -1716,6 +1718,41 @@ export class PgFleetStore {
         r.cacheReadTokens ?? 0, r.cacheWriteTokens ?? 0, r.providerRequestId ?? null, r.stopReason ?? null,
       ])).rows[0].r,
     );
+  }
+
+  /** Schema v18: authorize (and audit) one founder research attempt: switch, pause, lifecycle, capability, quotas. */
+  async researchAuthorize(agentId: string, url: string, host: string, purpose: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_research_authorize($1, $2, $3, $4) AS r", [agentId, url, host, purpose])).rows[0].r);
+  }
+
+  /** Schema v18: append the outcome of an authorized research attempt (once). */
+  async researchRecord(agentId: string, attemptId: string, r: {
+    outcome: string; failureCode: string | null; finalUrl: string | null; redirects: number; status: number | null; contentType: string | null;
+    bytes: number; textChars: number; truncated: boolean; sha256: string | null; latencyMs: number;
+  }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) =>
+      (await c.query("SELECT svc_research_record($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) AS r", [
+        agentId, attemptId, r.outcome, r.failureCode, r.finalUrl, r.redirects, r.status, r.contentType, r.bytes, r.textChars, r.truncated, r.sha256, r.latencyMs,
+      ])).rows[0].r,
+    );
+  }
+
+  /** Schema v18: research switch and today's usage (null before v18). */
+  async researchOverview(): Promise<{ enabled: boolean; authorized24h: number; refused24h: number; failed24h: number; founderHourly: number; founderDaily: number } | null> {
+    try {
+      return await this.read(async (c) => {
+        const x = (await c.query(
+          `SELECT p.research_enabled, p.founder_hourly, p.founder_daily,
+                  (SELECT count(*) FROM fleet_research_attempts WHERE decision = 'authorized' AND created_at > now() - interval '1 day') AS auth,
+                  (SELECT count(*) FROM fleet_research_attempts WHERE decision = 'refused' AND created_at > now() - interval '1 day') AS ref,
+                  (SELECT count(*) FROM fleet_research_results WHERE outcome = 'failed' AND recorded_at > now() - interval '1 day') AS failed
+             FROM fleet_research_policy p WHERE p.id = 1`,
+        )).rows[0];
+        return x ? { enabled: x.research_enabled === true, authorized24h: Number(x.auth), refused24h: Number(x.ref), failed24h: Number(x.failed), founderHourly: Number(x.founder_hourly), founderDaily: Number(x.founder_daily) } : null;
+      });
+    } catch {
+      return null;
+    }
   }
 
   /** Schema v12: record a provisioned founder process's own attestation evidence (token-bound, set once). */

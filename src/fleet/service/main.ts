@@ -57,6 +57,7 @@ import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "../runti
 import { FleetService, type AuditEntry, type ReadinessCheck } from "./server.js";
 import { OpenAICompatibleProvider, ScriptedProvider } from "../cognition/providers.js";
 import { AnthropicProvider, parseEffort, parseThinking } from "../cognition/anthropic.js";
+import { DEFAULT_FETCHER_SOCKET, unixFetcher } from "../research/client.js";
 import type { CognitionProvider } from "../cognition/types.js";
 import { createAuditSink, createJsonLogger, type Logger } from "./log.js";
 
@@ -251,6 +252,24 @@ export function loadCognitionProvider(e: Record<string, string | undefined>, uid
   };
 }
 
+/**
+ * Pre-Genesis step 4: where the isolated research fetcher listens, and which domains founders may never research
+ * (the fleet's own: FLEET_RESEARCH_DENY_DOMAINS, plus the public controller hostname and its parent domain).
+ * Research itself stays off until the owner enables it in the registry.
+ */
+export function researchConfig(e: Record<string, string | undefined>): { socket: string; denyDomains: string[] } {
+  const socket = e.FLEET_RESEARCH_FETCHER_SOCKET?.trim() || DEFAULT_FETCHER_SOCKET;
+  if (!path.isAbsolute(socket)) throw new Error("FLEET_RESEARCH_FETCHER_SOCKET must be an absolute path.");
+  const deny = new Set((e.FLEET_RESEARCH_DENY_DOMAINS ?? "").split(",").map((d) => d.trim().toLowerCase()).filter(Boolean));
+  const pub = e.FLEET_PUBLIC_HOSTNAME?.trim().toLowerCase();
+  if (pub) {
+    deny.add(pub);
+    const labels = pub.split(".");
+    if (labels.length > 2) deny.add(labels.slice(-2).join("."));
+  }
+  return { socket, denyDomains: [...deny] };
+}
+
 /** Refuse to run as root, or as anyone but the expected dedicated service user. */
 export function serviceUserProblem(e: Record<string, string | undefined>, who: { uid: number; username: string } = currentUser()): string | null {
   if (who.uid === 0) return "The fleet service must not run as root.";
@@ -340,8 +359,11 @@ export async function startFleetServiceFromEnv(
     const realReplicationEnabled = e.REAL_REPLICATION_ENABLED?.trim().toLowerCase() === "true";
     const cognition = loadCognitionProvider(e);
     const cognitionProvider = cognition.provider;
+    const research = researchConfig(e);
     const service = new FleetService({
       cognitionProvider,
+      researchFetcher: unixFetcher(research.socket),
+      researchDenyDomains: research.denyDomains,
       cognitionDeadlineMs: cognition.deadlineMs,
       admin: controller,
       agent,

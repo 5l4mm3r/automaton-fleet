@@ -30,6 +30,29 @@ import { capabilitySelfTest, founderPreflight } from "../../fleet/founder/runtim
 import { FOUNDER_ATTEST_FILE, FOUNDER_CREDENTIAL_FILE, FOUNDER_IDENTITY_FILE, FOUNDER_REPORT_FILE } from "../../fleet/founder/evidence.js";
 import { FOUNDER_MANIFEST_V1 } from "../../fleet/capabilities.js";
 import { runFounderRehearsal } from "../../fleet/founder/rehearsal.js";
+import { ResearchPolicyError, checkAddresses, checkUrl } from "../../fleet/research/policy.js";
+import type { FetcherPort } from "../../fleet/research/client.js";
+
+/**
+ * The rehearsal's research phase against an offline fetcher that applies the REAL URL and address policy
+ * (fake DNS, no network); the production rehearsal relays to the isolated fetcher itself.
+ */
+const OFFLINE_DNS: Record<string, string[]> = { "example.com": ["93.184.215.14"], "localtest.me": ["127.0.0.1"], "api.agentfleet.vip": ["203.0.113.10"] };
+const offlineFetcher: FetcherPort = {
+  async fetch(url) {
+    const fail = (code: string, detail: string) => ({ ok: false as const, code, detail, requestedUrl: url, finalUrl: null, redirects: [], status: null, latencyMs: 1 });
+    try {
+      const u = checkUrl(url, ["agentfleet.vip"]);
+      checkAddresses(u.hostname, OFFLINE_DNS[u.hostname] ?? []);
+      const text = "Example Domain. This domain is for use in documentation examples.";
+      return { ok: true as const, requestedUrl: url, finalUrl: u.href, redirects: [], status: 200, contentType: "text/html", title: "Example Domain", text, truncated: false,
+        links: [], bytes: text.length, sha256: crypto.createHash("sha256").update(text).digest("hex"), fetchedAt: new Date().toISOString(), latencyMs: 1 };
+    } catch (e) {
+      if (e instanceof ResearchPolicyError) return fail(e.code, e.detail);
+      throw e;
+    }
+  },
+};
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { wipeRegistry } from "./fixtures/wipe.js";
 
@@ -64,7 +87,7 @@ describe("founder runtime preflight (unit)", () => {
     };
     expect(fail({}, [secret])).toMatch(/admin\.env is readable by this founder/);
     expect(fail({ FLEET_CAPABILITY_MANIFEST: "" })).toMatch(/not a compiled manifest/);
-    expect(fail({ FLEET_CAPABILITY_MANIFEST: "founder-v2" })).toMatch(/not a compiled manifest/);
+    expect(fail({ FLEET_CAPABILITY_MANIFEST: "founder-v3" })).toMatch(/not a compiled manifest/);
     expect(fail({ FLEET_FOUNDER_AGENT_LOOP: "enabled" })).toMatch(/only 'disabled' or 'controller'/);
     expect(fail({ FLEET_FOUNDER_AGENT_LOOP: "local" })).toMatch(/only 'disabled' or 'controller'/);
     expect(fail({ FLEET_FOUNDER_AGENT_LOOP: "controller" })).not.toMatch(/AGENT_LOOP|inference provider/);
@@ -107,7 +130,7 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
   const baseEnv = () => ({
     PATH: process.env.PATH,
     NODE_ENV: "test",
-    FLEET_CAPABILITY_MANIFEST: "founder-v1",
+    FLEET_CAPABILITY_MANIFEST: "founder-v2",
     FLEET_RUNTIME_ENV_FILE: runtimeEnvFile,
     FLEET_FOUNDER_INTERVAL_MS: "1000",
     FLEET_TEST_UNREADABLE: "",
@@ -217,7 +240,7 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
     const at = await prov.attestGenesis(g.genesisId);
     expect(at, JSON.stringify(at)).toMatchObject({ ok: true, status: "funding_virtual" });
     for (const f of at.founders) {
-      expect(f.host).toMatchObject({ commit: identity.commit, buildId: identity.buildId, manifestId: "founder-v1", envFounderId: f.agentId });
+      expect(f.host).toMatchObject({ commit: identity.commit, buildId: identity.buildId, manifestId: "founder-v2", envFounderId: f.agentId });
     }
     expect(new Set(at.founders.map((f) => f.host!.pid)).size).toBe(2);
     const rows = await owner.query(`SELECT agent_id, runtime_evidence, host_evidence, status FROM fleet.fleet_genesis_founders WHERE genesis_id = $1 ORDER BY ordinal`, [g.genesisId]);
@@ -500,6 +523,7 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
         release: { repo: REPO_URL, commit: identity.commit!, buildId: identity.buildId!, lockfileSha256: identity.lockfileSha256! },
         actor: OWNER,
         timeoutMs: 60_000,
+        researchFetcher: offlineFetcher,
       });
       expect(r.checks.filter((c) => !c.ok)).toEqual([]);
       expect(r.pass).toBe(true);
@@ -517,6 +541,12 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
         "founder 1 keeps thinking after every fault (not wedged)",
         "no phantom calls, no double charges: every provider attempt and every charge is accounted for once",
         "one founder's provider failures do not touch the other",
+        "founder web research is off until the owner switches it on",
+        "a founder researches a public page through the controller and the isolated fetcher (untrusted, with provenance)",
+        "SSRF targets are refused (IP literals, loopback DNS, metadata, userinfo, ports, plain http, the fleet's own domain)",
+        "research quotas and pause are enforced by the registry, per founder",
+        "every authorized research attempt is audited once; no page content in the registry",
+        "switching research off stops every founder",
       ]));
     } finally {
       reg.stop();

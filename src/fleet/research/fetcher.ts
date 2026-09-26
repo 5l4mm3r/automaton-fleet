@@ -1,0 +1,299 @@
+/**
+ * The isolated research fetcher's core (Pre-Genesis step 4). Runs only in automaton-fleet-fetcher.service
+ * (dedicated user, no secrets, no database, outbound HTTPS only; see the unit). FleetController calls it over
+ * a private Unix socket.
+ *
+ * For every hop (the request and at most 3 redirects):
+ *   1. checkUrl(): https only, no userinfo, port 443, DNS name (no IP literals), not private/fleet names;
+ *   2. resolve A/AAAA with the fetcher's own resolver (public DNS servers, not the host's loopback stub);
+ *   3. EVERY answer must be a public address and not one of this host's own (else refuse);
+ *   4. connect to the validated address itself (the socket is pinned to it; TLS still verifies the certificate
+ *      against the hostname), so a second DNS answer (rebinding) can never be used;
+ *   5. GET only, fixed headers (no cookies, authorization or founder-controlled headers), 5 s connect timeout,
+ *      20 s total deadline shared by all hops;
+ *   6. redirects (301/302/303/307/308) are followed manually, each Location re-validated from step 1;
+ *   7. only text-like content types are read. Content-Length and the decoded body are both limited to 2 MB, so
+ *      decompression bombs abort mid-stream. Text is extracted, bounded to 50,000 characters, and hashed.
+ */
+
+import crypto from "crypto";
+import dns from "dns";
+import http from "http";
+import https from "https";
+import os from "os";
+import zlib from "zlib";
+import { RESEARCH_LIMITS, ResearchPolicyError, checkAddresses, checkUrl } from "./policy.js";
+import { TEXT_TYPES, extractText } from "./extract.js";
+
+export type FetchCode =
+  | "RESEARCH_DNS_FAILED" | "RESEARCH_CONNECT_TIMEOUT" | "RESEARCH_TIMEOUT" | "RESEARCH_TLS_FAILED" | "RESEARCH_CONNECTION_FAILED"
+  | "RESEARCH_TOO_MANY_REDIRECTS" | "RESEARCH_REDIRECT_INVALID" | "RESEARCH_TOO_LARGE" | "RESEARCH_UNSUPPORTED_CONTENT"
+  | "RESEARCH_ENCODING_UNSUPPORTED" | "RESEARCH_DECODE_FAILED";
+
+export interface FetchSuccess {
+  ok: true;
+  requestedUrl: string;
+  finalUrl: string;
+  redirects: string[];
+  status: number;
+  contentType: string;
+  title: string | null;
+  text: string;
+  truncated: boolean;
+  links: Array<{ text: string; url: string }>;
+  bytes: number;
+  sha256: string;
+  fetchedAt: string;
+  latencyMs: number;
+}
+
+export interface FetchFailure {
+  ok: false;
+  code: string;
+  detail: string;
+  requestedUrl: string;
+  finalUrl: string | null;
+  redirects: string[];
+  status: number | null;
+  latencyMs: number;
+}
+
+export type FetchResult = FetchSuccess | FetchFailure;
+
+export interface FetcherOptions {
+  /** Resolve a name to addresses (default: a dns.Resolver bound to `dnsServers`). */
+  resolve?: (host: string) => Promise<string[]>;
+  dnsServers?: string[];
+  /** Tests only: where to actually connect for a validated address (default: that address, port 443). */
+  route?: (address: string) => { address: string; port: number };
+  /** Tests only: extra trusted CA for the test server's certificate. */
+  ca?: string | Buffer;
+  fleetDomains?: string[];
+  /** Addresses of this host (never fetchable); default: all interface addresses. */
+  localAddresses?: Set<string>;
+  limits?: Partial<typeof RESEARCH_LIMITS>;
+  userAgent?: string;
+}
+
+class FetchError extends Error {
+  constructor(readonly code: FetchCode, readonly detail: string, readonly status: number | null = null) {
+    super(code);
+  }
+}
+
+export function hostAddresses(): Set<string> {
+  const out = new Set<string>();
+  for (const list of Object.values(os.networkInterfaces())) for (const i of list ?? []) out.add(i.address.toLowerCase().replace(/%.*$/, ""));
+  return out;
+}
+
+export function defaultResolver(servers: string[]): (host: string) => Promise<string[]> {
+  const r = new dns.promises.Resolver({ timeout: 2_000, tries: 2 });
+  r.setServers(servers);
+  return async (host) => {
+    const out: string[] = [];
+    let lastErr: unknown = null;
+    for (const f of [() => r.resolve4(host), () => r.resolve6(host)]) {
+      try {
+        out.push(...(await f()));
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    if (!out.length) throw lastErr ?? new Error("no addresses");
+    return out;
+  };
+}
+
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
+export class ResearchFetcher {
+  private readonly limits: typeof RESEARCH_LIMITS;
+  private readonly resolve: (host: string) => Promise<string[]>;
+  private readonly local: Set<string>;
+
+  constructor(private readonly o: FetcherOptions = {}) {
+    this.limits = { ...RESEARCH_LIMITS, ...(o.limits ?? {}) };
+    this.resolve = o.resolve ?? defaultResolver(o.dnsServers?.length ? o.dnsServers : ["1.1.1.1", "9.9.9.9"]);
+    this.local = o.localAddresses ?? hostAddresses();
+  }
+
+  async fetch(requestedUrl: string): Promise<FetchResult> {
+    const started = Date.now();
+    const deadline = started + this.limits.totalDeadlineMs;
+    const redirects: string[] = [];
+    let current = requestedUrl;
+    let status: number | null = null;
+    try {
+      for (let hop = 0; ; hop++) {
+        const url = checkUrl(current, this.o.fleetDomains ?? []);
+        let addresses: string[];
+        try {
+          addresses = await this.resolveWithin(url.hostname, deadline);
+        } catch (err) {
+          if (err instanceof FetchError) throw err;
+          throw new FetchError("RESEARCH_DNS_FAILED", `${url.hostname}: no usable DNS answer`);
+        }
+        const valid = checkAddresses(url.hostname, addresses, this.local);
+        const pinned = valid.find((a) => !a.includes(":")) ?? valid[0];
+        const res = await this.request(url, pinned, deadline);
+        status = res.statusCode ?? 0;
+        if (REDIRECTS.has(status)) {
+          res.resume();
+          const loc = res.headers.location;
+          if (!loc || typeof loc !== "string") throw new FetchError("RESEARCH_REDIRECT_INVALID", "redirect without a location", status);
+          if (hop >= this.limits.maxRedirects) throw new FetchError("RESEARCH_TOO_MANY_REDIRECTS", `more than ${this.limits.maxRedirects} redirects`, status);
+          let next: string;
+          try {
+            next = new URL(loc, url).href;
+          } catch {
+            throw new FetchError("RESEARCH_REDIRECT_INVALID", "unparseable location", status);
+          }
+          redirects.push(next.slice(0, this.limits.maxUrlLength));
+          current = next;
+          continue;
+        }
+        const body = await this.readBody(res, deadline);
+        const fullType = String(res.headers["content-type"] ?? "text/plain").toLowerCase();
+        const mediaType = fullType.split(";")[0].trim();
+        const charset = /charset\s*=\s*"?([a-z0-9._-]{1,40})/.exec(fullType)?.[1] ?? "utf-8";
+        let decoded: string;
+        try {
+          decoded = new TextDecoder(charset, { fatal: false }).decode(body);
+        } catch {
+          decoded = new TextDecoder("utf-8", { fatal: false }).decode(body);
+        }
+        const ex = extractText(decoded, mediaType, url.href);
+        return {
+          ok: true, requestedUrl, finalUrl: url.href, redirects, status, contentType: mediaType, title: ex.title, text: ex.text,
+          truncated: ex.truncated, links: ex.links, bytes: body.length, sha256: crypto.createHash("sha256").update(body).digest("hex"),
+          fetchedAt: new Date().toISOString(), latencyMs: Date.now() - started,
+        };
+      }
+    } catch (err) {
+      const e = err instanceof ResearchPolicyError || err instanceof FetchError ? err : new FetchError("RESEARCH_CONNECTION_FAILED", "unexpected failure");
+      return {
+        ok: false, code: e.code, detail: (e as { detail: string }).detail.slice(0, 200), requestedUrl,
+        finalUrl: redirects.length ? redirects[redirects.length - 1] : null, redirects,
+        status: err instanceof FetchError ? (err.status ?? status) : status, latencyMs: Date.now() - started,
+      };
+    }
+  }
+
+  private async resolveWithin(host: string, deadline: number): Promise<string[]> {
+    const left = deadline - Date.now();
+    if (left <= 0) throw new FetchError("RESEARCH_TIMEOUT", "deadline reached");
+    let t: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        this.resolve(host),
+        new Promise<string[]>((_r, rej) => {
+          t = setTimeout(() => rej(new FetchError("RESEARCH_TIMEOUT", "deadline reached during DNS")), left);
+        }),
+      ]);
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  private request(url: URL, address: string, deadline: number): Promise<http.IncomingMessage> {
+    return new Promise((resolve, reject) => {
+      const route = this.o.route?.(address) ?? { address, port: 443 };
+      const left = deadline - Date.now();
+      if (left <= 0) return reject(new FetchError("RESEARCH_TIMEOUT", "deadline reached"));
+      const req = https.request({
+        host: route.address,
+        port: route.port,
+        servername: url.hostname, // SNI + certificate verification against the hostname, not the IP
+        path: `${url.pathname}${url.search}`,
+        method: "GET",
+        agent: false,
+        ...(this.o.ca ? { ca: this.o.ca } : {}),
+        // Fixed request headers: nothing founder-controlled, no cookies, no authorization.
+        headers: {
+          host: url.host,
+          "user-agent": this.o.userAgent ?? "AutomatonFleetResearch/1.0 (automated research; contact: owner)",
+          accept: "text/html,application/xhtml+xml,text/plain,application/json,application/xml;q=0.9,*/*;q=0.1",
+          "accept-encoding": "gzip, deflate, br",
+          "accept-language": "en",
+        },
+      });
+      const connectTimer = setTimeout(() => req.destroy(new FetchError("RESEARCH_CONNECT_TIMEOUT", `no connection within ${this.limits.connectTimeoutMs} ms`)), Math.min(this.limits.connectTimeoutMs, left));
+      const totalTimer = setTimeout(() => req.destroy(new FetchError("RESEARCH_TIMEOUT", "deadline reached")), left);
+      req.on("socket", (s) => s.once("secureConnect", () => clearTimeout(connectTimer)));
+      req.on("response", (res) => {
+        clearTimeout(connectTimer);
+        res.on("close", () => clearTimeout(totalTimer));
+        res.once("error", () => clearTimeout(totalTimer));
+        (res as http.IncomingMessage & { _deadlineTimer?: NodeJS.Timeout })._deadlineTimer = totalTimer;
+        resolve(res);
+      });
+      req.on("error", (err) => {
+        clearTimeout(connectTimer);
+        clearTimeout(totalTimer);
+        if (err instanceof FetchError) return reject(err);
+        const code = (err as { code?: string }).code ?? "";
+        reject(/CERT|SSL|TLS|SELF_SIGNED|UNABLE_TO_VERIFY|ERR_TLS|HOSTNAME|ALTNAME/i.test(code + (err as Error).message)
+          ? new FetchError("RESEARCH_TLS_FAILED", "TLS verification failed")
+          : new FetchError("RESEARCH_CONNECTION_FAILED", `connection failed (${code || "error"})`));
+      });
+      req.end();
+    });
+  }
+
+  private readBody(res: http.IncomingMessage, deadline: number): Promise<Buffer> {
+    const status = res.statusCode ?? 0;
+    const fullType = String(res.headers["content-type"] ?? "text/plain").toLowerCase();
+    const mediaType = fullType.split(";")[0].trim();
+    const max = this.limits.maxBodyBytes;
+    return new Promise((resolve, reject) => {
+      // The first failure wins: destroying the response can itself emit 'aborted'/'error' synchronously.
+      let settled = false;
+      const fail = (e: FetchError) => {
+        if (settled) return;
+        settled = true;
+        reject(e);
+        res.destroy();
+      };
+      if (!TEXT_TYPES.has(mediaType)) return fail(new FetchError("RESEARCH_UNSUPPORTED_CONTENT", `content type ${mediaType.slice(0, 60)} is not supported`, status));
+      const declared = Number(res.headers["content-length"]);
+      if (Number.isFinite(declared) && declared > max) return fail(new FetchError("RESEARCH_TOO_LARGE", `declared ${declared} bytes`, status));
+      const enc = String(res.headers["content-encoding"] ?? "identity").toLowerCase().trim();
+      let stream: NodeJS.ReadableStream = res;
+      const zopts = { maxOutputLength: max + 1 } as zlib.ZlibOptions;
+      if (enc === "gzip" || enc === "x-gzip") stream = res.pipe(zlib.createGunzip(zopts));
+      else if (enc === "deflate") stream = res.pipe(zlib.createInflate(zopts));
+      else if (enc === "br") stream = res.pipe(zlib.createBrotliDecompress({ maxOutputLength: max + 1 } as zlib.BrotliOptions));
+      else if (enc !== "identity" && enc !== "") return fail(new FetchError("RESEARCH_ENCODING_UNSUPPORTED", `content encoding ${enc.slice(0, 20)}`, status));
+      let raw = 0;
+      let total = 0;
+      const chunks: Buffer[] = [];
+      res.on("data", (d: Buffer) => {
+        raw += d.length;
+        if (raw > max) fail(new FetchError("RESEARCH_TOO_LARGE", `more than ${max} bytes on the wire`, status));
+      });
+      stream.on("data", (d: Buffer) => {
+        total += d.length;
+        if (total > max) {
+          (stream as unknown as { destroy?: () => void }).destroy?.();
+          return fail(new FetchError("RESEARCH_TOO_LARGE", `more than ${max} bytes decoded`, status));
+        }
+        chunks.push(d);
+      });
+      stream.on("end", () => {
+        if (settled) return;
+        settled = true;
+        if (Date.now() > deadline) return reject(new FetchError("RESEARCH_TIMEOUT", "deadline reached"));
+        resolve(Buffer.concat(chunks));
+      });
+      stream.on("error", (err) => {
+        const e = err as { code?: string };
+        if (e.code === "ERR_BUFFER_TOO_LARGE" || /maxOutputLength|too large/i.test(String(err))) return fail(new FetchError("RESEARCH_TOO_LARGE", `more than ${max} bytes decoded`, status));
+        if (err instanceof FetchError) return fail(err);
+        fail(new FetchError("RESEARCH_DECODE_FAILED", "the response body could not be decoded", status));
+      });
+      res.on("error", (err) => (err instanceof FetchError ? fail(err) : fail(new FetchError("RESEARCH_TIMEOUT", "the response did not complete", status))));
+      res.on("aborted", () => fail(new FetchError("RESEARCH_CONNECTION_FAILED", "the response was aborted", status)));
+    });
+  }
+}

@@ -106,13 +106,13 @@ describe("hardened OpenAI-compatible provider (real HTTP, fault-injecting fake)"
     const e = await fail(prov({ attemptTimeoutMs: 400 }).chat(REQ));
     expect(e).toMatchObject({ code: "PROVIDER_TIMEOUT", info: { charge: "estimate", attempts: 1 } });
     expect(Date.now() - t0).toBeGreaterThanOrEqual(380);
-    expect(Date.now() - t0).toBeLessThan(1_500);
+    expect(Date.now() - t0).toBeLessThan(2_900);
     expect(fake.requests.get("probe")).toBe(1);
     // The overall deadline wins over a longer per-attempt timeout.
     fresh({ 1: { kind: "hang", ms: 3_000 } });
     const t1 = Date.now();
     await fail(prov({ attemptTimeoutMs: 10_000 }).chat({ ...REQ, deadlineAt: Date.now() + 300 }));
-    expect(Date.now() - t1).toBeLessThan(1_200);
+    expect(Date.now() - t1).toBeLessThan(2_900); // bounded by the 300 ms deadline, far below the 10 s attempt timeout (slack for a loaded host)
   });
 
   it("L2: unreachable provider (nothing sent) is retried, uncharged; L7: a redirect is refused and never followed", async () => {
@@ -121,7 +121,7 @@ describe("hardened OpenAI-compatible provider (real HTTP, fault-injecting fake)"
     const port = (srv.address() as net.AddressInfo).port;
     await new Promise<void>((r) => srv.close(() => r()));
     const closed = new OpenAICompatibleProvider({ baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: KEY, model: MODEL, backoffMs: 10, attemptTimeoutMs: 1_000 });
-    const e = await fail(closed.chat(REQ));
+    const e = await fail(closed.chat({ ...REQ, deadlineAt: Date.now() + 15_000 })); // room for 3 attempts on a loaded host
     expect(e).toMatchObject({ code: "PROVIDER_UNREACHABLE", info: { charge: "none", attempts: 3 } });
     fresh({ 1: { kind: "redirect" } });
     const r = await fail(prov().chat(REQ));

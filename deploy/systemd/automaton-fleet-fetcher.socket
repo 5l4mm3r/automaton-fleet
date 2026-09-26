@@ -1,0 +1,20 @@
+# Automaton Fleet research fetcher — private Unix socket (Pre-Genesis step 4).
+#
+# The fetcher's ONLY listener. Not a TCP port. systemd (root) creates it owned by the fetcher user and the
+# controller's group, mode 0660: only FleetController (automaton-fleet-service) and root can connect. Founders
+# cannot reach it (their units also hide /run/automaton-fleet-fetcher).
+
+[Unit]
+Description=Automaton Fleet research fetcher socket (FleetController only)
+
+[Socket]
+ListenStream=/run/automaton-fleet-fetcher/fetch.sock
+SocketUser=automaton-fleet-fetcher
+SocketGroup=automaton-fleet-service
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+Accept=no
+
+[Install]
+WantedBy=sockets.target

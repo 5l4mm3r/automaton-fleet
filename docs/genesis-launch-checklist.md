@@ -34,9 +34,9 @@ State after step 2.1 (native Anthropic adapter): schema v16; Genesis **disabled*
 
 | # | Decision | How | Verify |
 |---|---|---|---|
-| C1 | Whether founders may reach the internet at all, and which hosts (exact names or `*.suffix`, 443 only) | Owner allow-list | — |
-| C2 | Build a fleet-mediated `web_fetch` tool (new capability class) whose only path is the egress proxy (F.2 module); founder shells stay network-less (F.3 Landlock). See `docs/design/phase-f3-launch-hardening.md` §4 | Engineering change + owner approval (new founder authority and network exposure) | Tests; rehearsal probes: an allowed host works, a denied host, IP literal and metadata address are refused |
-| C3 | Without C2 the founders can still think, plan, write and propose, but cannot research or sell online | — | — |
+| C1 | Founders reach the Internet only through FleetController's `web_fetch` (capability `research.web`, manifest founder-v2): HTTPS GET to public addresses, through the isolated fetcher (step 4, schema v18; `docs/design/pre-genesis-web-research.md`). Founder shells stay network-less | Deployed; **research disabled** | `research-policy` → `enabled false`; `fleet-verify-deployment.sh` "Research fetcher isolation" section |
+| C2 | Quotas: per founder 60/h, 300/day; fleet 120/h, 600/day (defaults; tighter per founder with `founder-research`) | `research-enable [--founder-hourly N --founder-daily N --fleet-hourly N --fleet-daily N]` | **OWNER GATE**; `research-policy` |
+| C3 | Stop research at once (all founders, or one) | `research-disable`; `founder-research <id> pause <reason…>` | `research-log` shows `FLEET_RESEARCH_DISABLED` / `_PAUSED` refusals |
 
 ## D. Genesis (Phase F / F.1 surface)
 

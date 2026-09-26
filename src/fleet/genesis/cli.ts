@@ -27,6 +27,10 @@
  *   founder-cognition <agentId> enable|disable|pause|resume [--daily-budget N] [--turns-per-hour N] <reason…>
  *   cognition-status <agentId>                                        limits and today's usage
  *   cognition-log [agentId] [--limit N]                               the trusted inference log
+ *   research-policy | research-enable [--founder-hourly N] [--founder-daily N] [--fleet-hourly N] [--fleet-daily N] | research-disable
+ *                                                                     schema v18 web research (OWNER GATE)
+ *   founder-research <agentId> pause|resume [--hourly N] [--daily N] <reason…>
+ *   research-log [agentId] [--limit N]                                the research audit (attempts + results)
  *   founders-report                                                   per founder: status, cash, cognition, 24 h usage,
  *                                                                     forbidden tool requests (refused), orders awaiting you
  */
@@ -42,6 +46,7 @@ export const GENESIS_COMMANDS = new Set([
   "genesis-approve", "genesis-provision", "genesis-attest", "genesis-fail", "genesis-fund", "genesis-activate", "genesis-abort",
   "reproduction-eligibility", "knowledge-review", "identity-claim-decide",
   "cognition-policy", "cognition-enable", "cognition-disable", "founder-cognition", "cognition-status", "cognition-log", "founders-report",
+  "research-policy", "research-enable", "research-disable", "founder-research", "research-log",
 ]);
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -86,6 +91,7 @@ export async function runGenesisCommand(
     "--founders", "--synthetic-cents", "--ttl", "--manifest", "--key", "--evidence-file", "--credential-dir", "--max-reads",
     "--max-output", "--in-microcents", "--out-microcents", "--daily-budget", "--turns-per-hour", "--limit",
     "--cache-write-microcents", "--cache-read-microcents",
+    "--founder-hourly", "--founder-daily", "--fleet-hourly", "--fleet-daily", "--hourly", "--daily",
   ];
   const optInt = (name: string, min = 0) => (flag(a, name) === undefined ? null : int(flag(a, name), name, min));
   const p = positional(a, flags);
@@ -136,6 +142,23 @@ export async function runGenesisCommand(
     case "cognition-status":
       if (!p[0] || !ULID.test(p[0])) throw new Error("usage: cognition-status <agentId>");
       return ok(await g.cognitionState(p[0]));
+    case "research-policy":
+      return ok(await g.researchPolicy());
+    case "research-enable":
+    case "research-disable":
+      return ok(await g.setResearchPolicy({
+        enabled: cmd === "research-enable", founderHourly: optInt("--founder-hourly", 1), founderDaily: optInt("--founder-daily", 1),
+        fleetHourly: optInt("--fleet-hourly", 1), fleetDaily: optInt("--fleet-daily", 1), actor,
+      }));
+    case "founder-research": {
+      const [agentId, action] = p;
+      const reason = p.slice(2).join(" ");
+      if (!agentId || !ULID.test(agentId) || !["pause", "resume"].includes(action ?? "") || !reason) throw new Error("usage: founder-research <agentId> pause|resume [--hourly N] [--daily N] <reason…>");
+      return ok(await g.setFounderResearch(agentId, { paused: action === "pause", hourly: optInt("--hourly", 1), daily: optInt("--daily", 1), reason, actor }));
+    }
+    case "research-log":
+      if (p[0] !== undefined && !ULID.test(p[0])) throw new Error("usage: research-log [agentId] [--limit N]");
+      return ok(await g.researchLog(p[0] ?? null, optInt("--limit", 1) ?? 50));
     case "founders-report":
       return ok(await g.foundersReport(FOUNDER_TOOLS.map((t) => t.name)));
     case "cognition-log":

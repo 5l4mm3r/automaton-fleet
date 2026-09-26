@@ -25,7 +25,7 @@ import path from "path";
 import pg from "pg";
 import { quoteIdent } from "../postgres/migrations.js";
 import { hashAgentToken, mintAgentToken } from "../postgres/store.js";
-import { FOUNDER_MANIFEST_V1, manifestSha256 } from "../capabilities.js";
+import { FOUNDER_MANIFEST_CURRENT, manifestSha256 } from "../capabilities.js";
 import { GenesisOps, type GenesisView } from "./admin.js";
 import { simulateRuntimeAttestation } from "./simulate.js";
 
@@ -172,13 +172,13 @@ export async function runGenesisDryRun(opts: {
     const att = (await c.query(`SELECT attestation FROM fleet_genesis_founders WHERE genesis_id = $1`, [b.genesisId])).rows;
     check("runtime pin attested", att.every((x) => x.attestation.commit === st.runtime_commit && x.attestation.buildId === st.runtime_build_id)
       && rows.every((r) => r.runtime_commit === st.runtime_commit), `${st.runtime_commit.slice(0, 7)} / ${st.runtime_build_id.slice(0, 12)}…`);
-    const dbManifest = (await c.query(`SELECT manifest_sha256 FROM fleet_capability_manifests WHERE manifest_id = 'founder-v1'`)).rows[0].manifest_sha256;
+    const dbManifest = (await c.query(`SELECT manifest_sha256 FROM fleet_capability_manifests WHERE manifest_id = (SELECT default_manifest_id FROM fleet_genesis_policy WHERE id = 1)`)).rows[0].manifest_sha256;
     const can = (await c.query(
       `SELECT bool_and(fleet_agent_can(a, 'spend.request')) AS spend, bool_or(fleet_agent_can(a, 'reproduction')) AS repro,
               bool_or(fleet_agent_can(a, 'custody.payment_execution')) AS pay, bool_or(fleet_agent_can(a, 'self_modification')) AS selfmod
          FROM unnest($1::text[]) a`, [ids])).rows[0];
-    check("capability manifest", dbManifest === manifestSha256(FOUNDER_MANIFEST_V1) && rows.every((r) => r.capability_manifest_id === "founder-v1")
-      && can.spend && !can.repro && !can.pay && !can.selfmod, `founder-v1 ${dbManifest.slice(0, 12)}… matches the runtime; reproduction/payment/self-mod not grantable`);
+    check("capability manifest", dbManifest === manifestSha256(FOUNDER_MANIFEST_CURRENT) && rows.every((r) => r.capability_manifest_id === FOUNDER_MANIFEST_CURRENT.manifestId)
+      && can.spend && !can.repro && !can.pay && !can.selfmod, `${FOUNDER_MANIFEST_CURRENT.manifestId} ${dbManifest.slice(0, 12)}… matches the runtime; reproduction/payment/self-mod not grantable`);
     const econ = (await c.query(`SELECT fleet_agent_economics(a) AS e FROM unnest($1::text[]) a`, [ids])).rows.map((x) => x.e);
     const verify = (await c.query(`SELECT fleet_ledger_verify() AS v`)).rows[0].v;
     check("virtual allocations balance", verify.ok && verify.unbalanced === 0 && econ.every((e) => e.cash === alloc && e.genesisAllocation === alloc

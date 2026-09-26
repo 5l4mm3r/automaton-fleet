@@ -37,7 +37,7 @@ WorkingDirectory=/opt/automaton-fleet/current
 ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/founder/main.js
 Environment=NODE_ENV=production
 Environment=FLEET_FOUNDER_ID=%i
-Environment=FLEET_CAPABILITY_MANIFEST=founder-v1
+Environment=FLEET_CAPABILITY_MANIFEST=founder-v2
 Environment=FLEET_FOUNDER_STATE_DIR=/var/lib/automaton-founders/%i
 Environment=HOME=/var/lib/automaton-founders/%i
 Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/runtime.env
@@ -97,3 +97,5 @@ InaccessiblePaths=-/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/
 InaccessiblePaths=-/var/log/automaton-fleet -/var/log/automaton-fleet-operator -/var/log/automaton-fleet-chatgpt-adapter -/run/credentials -/opt/automaton-fleet/chatgpt-adapter -/opt/automaton-fleet/tunnel-client -/var/lib/postgresql -/etc/postgresql -/etc/ssh -/root
 # The controller's inference-provider credential (owner-installed; readable by the controller only).
 InaccessiblePaths=-/etc/automaton-fleet/cognition.key
+# The research fetcher's socket (FleetController only; founders research only through the controller).
+InaccessiblePaths=-/run/automaton-fleet-fetcher

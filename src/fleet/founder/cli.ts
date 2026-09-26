@@ -29,6 +29,7 @@ import { FounderProvisioner } from "./provisioner.js";
 import { FOUNDER_UNREADABLE_PATHS } from "./runtime.js";
 import { findPostgresBin, startEphemeralRegistry } from "./ephemeral-registry.js";
 import { runFounderRehearsal } from "./rehearsal.js";
+import { DEFAULT_FETCHER_SOCKET, unixFetcher } from "../research/client.js";
 
 const PRODUCTION_API_URL = "http://127.0.0.1:8787";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -57,7 +58,9 @@ async function productionSnapshot(): Promise<Record<string, unknown>> {
               (SELECT count(*)::int FROM fleet_genesis) AS genesis_records,
               (SELECT genesis_enabled FROM fleet_genesis_policy) AS genesis_enabled,
               (SELECT count(*)::int FROM fleet_agents) AS agents,
-              (SELECT head_seq::text FROM fleet_ledger_head) AS ledger_head`,
+              (SELECT head_seq::text FROM fleet_ledger_head) AS ledger_head,
+              (SELECT research_enabled FROM fleet_research_policy) AS research_enabled,
+              (SELECT count(*)::int FROM fleet_research_attempts) AS research_attempts`,
     );
     return r.rows[0];
   } finally {
@@ -111,6 +114,9 @@ async function main(argv: string[]): Promise<number> {
           actor,
           log,
           forbiddenPaths: [...FOUNDER_UNREADABLE_PATHS, reg.dir, "/var/lib/postgresql", "/etc/postgresql/16/main/pg_hba.conf", "/var/lib/automaton-fleet-custody"],
+          // Pre-Genesis step 4: the rehearsal controller relays to the production isolated fetcher (research is
+          // enabled only in the throwaway registry; the production registry's research switch is never touched).
+          researchFetcher: unixFetcher(DEFAULT_FETCHER_SOCKET),
         });
       } finally {
         reg.stop();

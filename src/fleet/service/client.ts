@@ -333,6 +333,15 @@ export class FleetApiClient implements FleetBackend {
     );
   }
 
+  /** Schema v18: research the public web through FleetController's isolated fetcher (the result is UNTRUSTED data). */
+  async researchFetch(p: { url: string; purpose: string }) {
+    return (await this.call<{ result: Record<string, unknown> }>("POST", "/v1/research/fetch", p, false, 60_000)).result;
+  }
+
+  async researchStatus() {
+    return (await this.call<{ research: Record<string, unknown> }>("GET", "/v1/research/status")).research;
+  }
+
   /** Schema v11: this agent's capability manifest (origin, allowed classes, digest). */
   async capabilities() {
     return (await this.call<{ capabilities: Record<string, unknown> }>("GET", "/v1/capabilities")).capabilities;

@@ -30,16 +30,20 @@ import fs from "fs";
 import net from "net";
 import path from "path";
 import { FLEET_PG_SCHEMA_VERSION } from "./postgres/migrations.js";
-import { FOUNDER_MANIFEST_V1, manifestSha256 } from "./capabilities.js";
+import { FOUNDER_MANIFEST_CURRENT, manifestSha256 } from "./capabilities.js";
 import { FOUNDER_TOOLS } from "./cognition/types.js";
 import { execFileSync } from "child_process";
 
 /** automaton-fleet-custody.service state on this host (null when systemd or the unit is not available). */
 function custodyUnitState(): { enabled: boolean; active: boolean } | null {
+  return systemdUnitState("automaton-fleet-custody.service");
+}
+
+function systemdUnitState(unit: string): { enabled: boolean; active: boolean } | null {
   try {
     const q = (verb: string) => {
       try {
-        return execFileSync("systemctl", [verb, "automaton-fleet-custody.service"], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+        return execFileSync("systemctl", [verb, unit], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
       } catch (err) {
         return String((err as { stdout?: string }).stdout ?? "").trim();
       }
@@ -382,11 +386,14 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         `${gv.genesisEnabled ? "ENABLED by the owner" : "disabled (owner gate)"}; ${gv.inFlight} in flight, ${gv.activated} activated; ` +
           `${gv.founders} founder record(s), ${gv.livingFounders} living`,
       );
-      const want = manifestSha256(FOUNDER_MANIFEST_V1);
+      const want = manifestSha256(FOUNDER_MANIFEST_CURRENT);
+      const mid = gv.founderManifestId ?? "?";
       add(
         "capability manifest",
-        gv.founderManifestSha256 === want ? "pass" : "fail",
-        gv.founderManifestSha256 === want ? `founder-v1 ${want.slice(0, 12)}… matches this runtime` : `founder-v1 in the registry (${gv.founderManifestSha256 ?? "missing"}) differs from this runtime (${want})`,
+        gv.founderManifestSha256 === want && mid === FOUNDER_MANIFEST_CURRENT.manifestId ? "pass" : "fail",
+        gv.founderManifestSha256 === want && mid === FOUNDER_MANIFEST_CURRENT.manifestId
+          ? `${mid} (Genesis default) ${want.slice(0, 12)}… matches this runtime`
+          : `registry default ${mid} (${gv.founderManifestSha256 ?? "missing"}) differs from this runtime's ${FOUNDER_MANIFEST_CURRENT.manifestId} (${want})`,
       );
       if (gv.founderManifestSha256 !== want) blockers.push("The registry capability manifest differs from the runtime's compiled manifest.");
       add(
@@ -411,6 +418,21 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
           cv.forbiddenRequests24h > 0 ? "warn" : "pass",
           cv.forbiddenRequests24h > 0 ? `${cv.forbiddenRequests24h} request(s) for tools outside the founder toolbox in 24 h (all refused; see founders-report)` : "none in 24 h",
         );
+      }
+      // Pre-Genesis step 4 (schema v18): founder web research through the isolated fetcher, off until the owner enables it.
+      const rv = await store.researchOverview();
+      facts.research = rv;
+      if (rv) {
+        const fx = systemdUnitState("automaton-fleet-fetcher.socket");
+        const fetcherOk = !fx || !fx.enabled || fx.active;
+        add(
+          "founder web research",
+          fetcherOk ? "pass" : "fail",
+          `${rv.enabled ? "ENABLED by the owner" : "disabled (owner gate)"}; quotas ${rv.founderHourly}/h, ${rv.founderDaily}/day per founder; ` +
+            `24 h: ${rv.authorized24h} authorized, ${rv.refused24h} refused, ${rv.failed24h} failed; ` +
+            `fetcher socket ${fx ? (fx.active ? "active (isolated)" : fx.enabled ? "ENABLED BUT NOT LISTENING" : "installed, not enabled") : "not installed"}`,
+        );
+        if (!fetcherOk) blockers.push("automaton-fleet-fetcher.socket is enabled but not listening.");
       }
       // Phase F.1: founder runtime instances on this host must match the living founders in the registry.
       const running = founderRuntimeUnits();

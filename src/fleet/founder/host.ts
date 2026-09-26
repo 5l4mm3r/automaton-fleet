@@ -67,6 +67,8 @@ export interface FounderHost {
   readReport(agentId: string): Promise<Record<string, unknown> | null>;
   /** Could founder `asAgentId`, inside its own sandbox and uid, read `target`? null = not provable on this host. */
   canRead(asAgentId: string, target: string): Promise<boolean | null>;
+  /** Can the founder connect to this Unix socket from inside its own sandbox and uid? null = not provable on this host. */
+  canConnect?(asAgentId: string, socketPath: string): Promise<boolean | null>;
   /** Stop and delete the founder's runtime state (rollback / teardown policy). */
   remove(agentId: string): Promise<void>;
   /** The founder runtime's own log output (leak checks). */
@@ -230,6 +232,21 @@ export class SystemdFounderHost implements FounderHost {
       .then(() => true)
       .catch(() => false);
     return r;
+  }
+
+  async canConnect(asAgentId: string, socketPath: string): Promise<boolean | null> {
+    const pid = await this.pid(asAgentId);
+    if (!pid) return null;
+    const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
+    const uid = /^Uid:\s+(\d+)/m.exec(status)?.[1];
+    const gid = /^Gid:\s+(\d+)/m.exec(status)?.[1];
+    if (!uid || !gid) return null;
+    // Enter the founder's own mount namespace as its own uid/gid (supplementary groups dropped) and try to connect.
+    const probe = `require("net").connect(${JSON.stringify(socketPath)}).on("connect",()=>process.exit(0)).on("error",()=>process.exit(3))`;
+    return run("nsenter", ["-t", String(pid), "-m", "-S", uid, "-G", gid, "--", process.execPath, "-e", probe], { timeout: 10_000 })
+      .then(() => true)
+      // Only the probe's own "connect refused/denied" exit (3) proves unreachability; anything else is unproven.
+      .catch((e: { code?: unknown }) => (e.code === 3 ? false : null));
   }
 
   async logText(agentId: string): Promise<string> {

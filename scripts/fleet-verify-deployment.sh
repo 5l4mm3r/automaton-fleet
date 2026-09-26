@@ -119,7 +119,7 @@ fi
 echo "Genesis founder runtimes (Phase F.1)"
 FT=/etc/systemd/system/automaton-fleet-founder@.service
 if [[ -f "$FT" ]]; then
-  for prop in "DynamicUser=yes" "User=fnd-%i" "IPAddressDeny=any" "IPAddressAllow=localhost" "NoNewPrivileges=true" "ProtectSystem=strict" "StateDirectoryMode=0700" "Environment=FLEET_CAPABILITY_MANIFEST=founder-v1" "Environment=FLEET_FOUNDER_AGENT_LOOP=controller" "SystemCallFilter=@sandbox"; do
+  for prop in "DynamicUser=yes" "User=fnd-%i" "IPAddressDeny=any" "IPAddressAllow=localhost" "NoNewPrivileges=true" "ProtectSystem=strict" "StateDirectoryMode=0700" "Environment=FLEET_CAPABILITY_MANIFEST=founder-v2" "Environment=FLEET_FOUNDER_AGENT_LOOP=controller" "SystemCallFilter=@sandbox"; do
     grep -qx "$prop" "$FT" && ok "founder template: $prop" || bad "founder template lacks $prop"
   done
   grep -q -- "-/etc/automaton-fleet/custody.env" "$FT" && grep -q -- "-/etc/automaton-fleet/admin.env" "$FT" && ok "founder template hides fleet secrets" || bad "founder template does not hide fleet secrets"
@@ -152,6 +152,39 @@ if [[ -e "$CK" || -L "$CK" ]]; then
   done
 else
   ok "no inference-provider credential installed"
+fi
+
+echo "Research fetcher isolation (Pre-Genesis step 4)"
+FU=automaton-fleet-fetcher; FS=/etc/systemd/system/automaton-fleet-fetcher.service; FK=/etc/systemd/system/automaton-fleet-fetcher.socket
+if [[ -f "$FS" ]]; then
+  if id "$FU" >/dev/null 2>&1; then
+    [[ "$(id -nG "$FU")" == "$FU" ]] && ok "$FU is in no other group" || bad "$FU groups: $(id -nG "$FU")"
+  else bad "$FU user missing"; fi
+  for prop in "User=$FU" "NoNewPrivileges=true" "ProtectSystem=strict" "ProtectHome=yes" "CapabilityBoundingSet=" "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"; do
+    grep -qx "$prop" "$FS" && ok "fetcher unit: $prop" || bad "fetcher unit lacks $prop"
+  done
+  grep -q "^IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12" "$FS" && ok "fetcher unit: kernel egress denies loopback/private/link-local/CGNAT" || bad "fetcher unit: private-destination deny missing"
+  [[ -f /etc/systemd/system/automaton-fleet-fetcher.service.d/host-addresses.conf ]] && ok "fetcher unit: this host's own addresses denied ($(grep -o '[0-9a-f:.]*/[0-9]*' /etc/systemd/system/automaton-fleet-fetcher.service.d/host-addresses.conf | wc -l) address(es))" || bad "fetcher host-address deny drop-in missing"
+  grep -q -- "-/etc/automaton-fleet " "$FS" && grep -q -- "-/var/lib/postgresql" "$FS" && grep -q -- "-/var/lib/private" "$FS" && ok "fetcher unit hides fleet secrets, PostgreSQL and founder state" || bad "fetcher unit does not hide secrets/state"
+  grep -qE "^(EnvironmentFile|LoadCredential|SetCredential)" "$FS" && bad "fetcher unit loads files/credentials" || ok "fetcher unit loads no environment file or credential"
+  grep -qx "SocketGroup=automaton-fleet-service" "$FK" && grep -qx "SocketMode=0660" "$FK" && ok "fetcher socket: controller group only, 0660" || bad "fetcher socket permissions wrong"
+  if [[ -S /run/automaton-fleet-fetcher/fetch.sock ]]; then
+    m="$(stat -c '%a %U:%G' /run/automaton-fleet-fetcher/fetch.sock)"
+    [[ "$m" == "660 $FU:automaton-fleet-service" ]] && ok "fetcher socket on disk: $m" || bad "fetcher socket on disk: $m"
+  fi
+  for f in /etc/automaton-fleet/service.env /etc/automaton-fleet/admin.env /etc/automaton-fleet/operator.env /etc/automaton-fleet/custody.env /etc/automaton-fleet/cognition.key /etc/automaton-fleet/tls/fleet.key /var/lib/postgresql; do
+    [[ -e "$f" ]] || continue
+    if runuser -u "$FU" -- test -r "$f" 2>/dev/null; then bad "$FU CAN read $f"; else ok "$FU cannot read $f"; fi
+  done
+  grep -qx "InaccessiblePaths=-/run/automaton-fleet-fetcher" /etc/systemd/system/automaton-fleet-founder@.service && ok "founder template hides the fetcher socket" || bad "founder template does not hide the fetcher socket"
+  FP="$(systemctl show -p MainPID --value automaton-fleet-fetcher.service 2>/dev/null)"
+  if [[ -n "$FP" && "$FP" != "0" ]]; then
+    tr '\0' '\n' < /proc/$FP/environ | cut -d= -f1 | grep -qiE "DATABASE_URL|API_KEY|SECRET|TOKEN|PASSWORD|PRIVATE|COGNITION" && bad "fetcher process environment holds credential-like variables" || ok "fetcher process environment holds no credential-like variables"
+  fi
+  fuid="$(id -u "$FU" 2>/dev/null || echo x)"
+  if ss -ltnH -e 2>/dev/null | grep -qE "uid:$fuid( |$)"; then bad "$FU holds a TCP listener"; else ok "$FU holds no TCP listener"; fi
+else
+  ok "research fetcher not installed"
 fi
 
 echo "ChatGPT adapter isolation (Phase C)"

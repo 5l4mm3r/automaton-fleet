@@ -174,7 +174,7 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
   });
 
   it("migrates to v11 with a clean privilege audit and the constitutional pins in place", async () => {
-    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(17);
+    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(18);
     const a = await auditPrivileges(owner);
     expect(a.problems).toEqual([]);
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_reproduction_policy SET execution_enabled = true`))).toMatch(/ERR:.*check constraint/);
@@ -533,7 +533,7 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
     expect(await pgCode(agentRaw.query(`SELECT fleet.api_request_replication($1, $2, 'kid', $3, NULL, NULL) AS r`, [f.agentId, f.token, key()]))).toBe("FLEET_REPRODUCTION_DISABLED");
     expect(await pgCode(store.reserveSlot({ parentAgentId: f.agentId, requestedBy: "owner", name: "kid", runtime: PIN }))).toMatch(/FLEET_REPRODUCTION_DISABLED|OK/);
     expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_agents WHERE parent_agent_id = ANY($1)`, [g.founderIds]))[0].n).toBe(0);
-    expect((await gw.capabilities(f.agentId, f.token))).toMatchObject({ ok: true, origin: "genesis_founder", manifestId: "founder-v1", reproductionExecutable: false, paymentExecutable: false });
+    expect((await gw.capabilities(f.agentId, f.token))).toMatchObject({ ok: true, origin: "genesis_founder", manifestId: "founder-v2", reproductionExecutable: false, paymentExecutable: false });
     // Legacy wallet spend path is superseded; custody protocol is not reachable; spend orders are the only path (decided, never executed).
     expect((await gw.requestSpend(f.agentId, f.token, { requestId: "01" + "A".repeat(24), fromWallet: "0x" + "1".repeat(40), toAddress: "0x" + "2".repeat(40), amountCents: 1, purpose: "x", allocationId: null })))
       .toMatchObject({ ok: false, code: "FLEET_LEGACY_SUPERSEDED" });
@@ -546,10 +546,10 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
     const g = await activated(1, 0);
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_capability_manifests SET allowed = array_append(allowed, 'reproduction')`))).toBe("FLEET_HISTORY_IMMUTABLE");
     expect(await pgCode(owner.query(`INSERT INTO fleet.fleet_capability_manifests (manifest_id, version, allowed, manifest_sha256, description, created_by)
-      VALUES ('founder-v2', 2, ARRAY['reproduction'], repeat('0',64), 'x', 'x')`))).toBe("FLEET_CAPABILITY_NOT_GRANTABLE");
+      VALUES ('founder-x9', 9, ARRAY['reproduction'], repeat('0',64), 'x', 'x')`))).toBe("FLEET_CAPABILITY_NOT_GRANTABLE");
     expect(await pgCode(owner.query(`INSERT INTO fleet.fleet_capability_manifests (manifest_id, version, allowed, manifest_sha256, description, created_by)
-      VALUES ('founder-v2', 2, ARRAY['custody.payment_execution'], repeat('0',64), 'x', 'x')`))).toBe("FLEET_CAPABILITY_NOT_GRANTABLE");
-    expect(await pgCode(owner.query(`UPDATE fleet.fleet_agents SET capability_manifest_id = 'founder-v1' WHERE agent_id = $1`, [g.founderIds[0]]))).toBe("OK"); // same value: no change
+      VALUES ('founder-x9', 9, ARRAY['custody.payment_execution'], repeat('0',64), 'x', 'x')`))).toBe("FLEET_CAPABILITY_NOT_GRANTABLE");
+    expect(await pgCode(owner.query(`UPDATE fleet.fleet_agents SET capability_manifest_id = 'founder-v2' WHERE agent_id = $1`, [g.founderIds[0]]))).toBe("OK"); // same value: no change
     expect(await pgCode(agentRaw.query(`UPDATE fleet.fleet_capability_manifests SET allowed = '{}'`))).toMatch(/ERR:permission denied/);
     // Defence in depth: a manifest smuggled in around its guard (superuser) still cannot grant an excluded class.
     const s = await su.connect();

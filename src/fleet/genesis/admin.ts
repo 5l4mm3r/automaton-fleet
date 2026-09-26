@@ -153,6 +153,34 @@ export class GenesisOps {
     return r.rows.map((x) => x.r);
   }
 
+  // ─── Schema v18: founder web research (owner controls) ─────────────
+  async researchPolicy(): Promise<Record<string, unknown>> {
+    return (await this.db.query(`SELECT to_jsonb(p) AS r FROM fleet_research_policy p WHERE id = 1`)).rows[0].r;
+  }
+
+  setResearchPolicy(p: { enabled: boolean; founderHourly?: number | null; founderDaily?: number | null; fleetHourly?: number | null; fleetDaily?: number | null; actor: string }) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_research_set_policy($1, $2, $3, $4, $5, $6) AS r`, [
+      p.enabled, p.founderHourly ?? null, p.founderDaily ?? null, p.fleetHourly ?? null, p.fleetDaily ?? null, p.actor,
+    ]);
+  }
+
+  setFounderResearch(agentId: string, p: { paused?: boolean | null; hourly?: number | null; daily?: number | null; reason: string; actor: string }) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_founder_research_set($1, $2, $3, $4, $5, $6) AS r`, [agentId, p.paused ?? null, p.hourly ?? null, p.daily ?? null, p.reason, p.actor]);
+  }
+
+  researchState(agentId: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_research_state($1) AS r`, [agentId]);
+  }
+
+  async researchLog(agentId: string | null, limit = 50): Promise<Array<Record<string, unknown>>> {
+    const r = await this.db.query(
+      `SELECT to_jsonb(a) || COALESCE(to_jsonb(r) - 'attempt_id', '{}'::jsonb) AS r FROM fleet_research_attempts a LEFT JOIN fleet_research_results r USING (attempt_id)
+        WHERE ($1::text IS NULL OR a.agent_id = $1) ORDER BY a.seq DESC LIMIT $2`,
+      [agentId, Math.min(Math.max(1, limit), 500)],
+    );
+    return r.rows.map((x) => x.r);
+  }
+
   setEnabled(enabled: boolean, actor: string, reason: string) {
     return this.one<{ genesisEnabled: boolean }>(`SELECT fleet_genesis_set_enabled($1, $2, $3) AS r`, [enabled, actor, reason]);
   }
