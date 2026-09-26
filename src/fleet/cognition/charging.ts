@@ -1,11 +1,11 @@
 /**
- * The v16 inference charge rule, mirrored from svc_cognition_record for the
- * provider probe's economic reconciliation and for tests (which cross-check it
- * against the database). The database remains the authority.
+ * The inference charge rule (v17, sub-cent accrual), mirrored from svc_cognition_record for the provider
+ * probe's economic reconciliation and for tests (which cross-check it against the database). The database
+ * remains the authority. All values are integer microcents (1¢ = 1,000,000 µ¢); no floating point.
  *
- *   provider usage: min(estimate, ceil((in·p_in + out·p_out + cw·(p_cw ?? p_out) + cr·(p_cr ?? p_in)) / 1e6))
- *   estimate:       the authorized estimate
- *   none:           0
+ *   cost µ¢     = in·p_in + out·p_out + cw·(p_cw ?? p_out) + cr·(p_cr ?? p_in)
+ *   charged µ¢  = provider: min(estimate·10⁶, cost); estimate: estimate·10⁶; none: 0
+ *   accrual     = unposted + charged → post floor(accrual/10⁶) whole cents, carry the remainder (< 1¢)
  */
 
 import type { Usage } from "./types.js";
@@ -26,8 +26,18 @@ export function costMicrocents(u: Usage, p: Prices): number {
   );
 }
 
-export function chargeCents(source: "provider" | "estimate" | "none", u: Usage, p: Prices, estimateCents: number): number {
+export const MICROCENTS_PER_CENT = 1_000_000;
+
+/** Exact microcents attributed to one call (never more than its reservation). */
+export function chargedMicrocents(source: "provider" | "estimate" | "none", u: Usage, p: Prices, estimateCents: number): number {
   if (source === "none") return 0;
-  if (source === "estimate") return estimateCents;
-  return Math.min(estimateCents, Math.ceil(costMicrocents(u, p) / 1_000_000));
+  if (source === "estimate") return estimateCents * MICROCENTS_PER_CENT;
+  return Math.min(estimateCents * MICROCENTS_PER_CENT, costMicrocents(u, p));
+}
+
+/** Add a call's microcents to a founder's carried remainder: whole cents to post now, remainder to carry. */
+export function accrue(unpostedMicrocents: number, chargedMicro: number): { postCents: number; unpostedMicrocents: number } {
+  const total = unpostedMicrocents + chargedMicro;
+  const postCents = Math.floor(total / MICROCENTS_PER_CENT);
+  return { postCents, unpostedMicrocents: total - postCents * MICROCENTS_PER_CENT };
 }

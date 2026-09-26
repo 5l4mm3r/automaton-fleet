@@ -24,7 +24,7 @@ import { UnsupportedSandboxTerminator } from "../../fleet/service/terminator.js"
 import { AnthropicProvider, classifyAnthropicError, parseAnthropicMessage, parseEffort, parseThinking, toAnthropicMessages } from "../../fleet/cognition/anthropic.js";
 import { startFakeAnthropic, type FakeAnthropic, type FakeAnthropicFault } from "../../fleet/cognition/fake-anthropic.js";
 import { REHEARSAL_AGENT_HEADER } from "../../fleet/cognition/fake-openai.js";
-import { chargeCents, costMicrocents } from "../../fleet/cognition/charging.js";
+import { accrue, chargedMicrocents, costMicrocents } from "../../fleet/cognition/charging.js";
 import { runProviderProbe } from "../../fleet/cognition/probe.js";
 import { MAX_TOOL_CALLS_EXECUTED, ProviderError, type ChatMessage, type ChatRequest } from "../../fleet/cognition/types.js";
 import { FounderToolbox } from "../../fleet/founder/toolbox.js";
@@ -550,13 +550,15 @@ describe.skipIf(!PG_BIN)("native Anthropic through FleetController (HTTP + Postg
     const r1 = await svcStore.cognitionRecord(a.agentId, await auth(100), { ...base, ...usage });
     const p1 = { inputMicrocentsPerToken: 1_000, outputMicrocentsPerToken: 4_000 };
     expect(costMicrocents(usage, p1)).toBe(1_000 * 1_000 + 500 * 4_000 + 1_000 * 4_000 + 2_000 * 1_000);
-    expect(r1.chargedCents).toBe(chargeCents("provider", usage, p1, 100));
+    const a1 = accrue(0, chargedMicrocents("provider", usage, p1, 100));
+    expect(r1).toMatchObject({ chargedCents: a1.postCents, unpostedMicrocents: a1.unpostedMicrocents });
     // Configured cache prices are used as given.
     await genesis.setCognitionPolicy({ enabled: true, provider: "anthropic", model: MODEL, actor: OWNER, cacheWriteMicrocents: 1_250, cacheReadMicrocents: 100 });
     const r2 = await svcStore.cognitionRecord(a.agentId, await auth(100), { ...base, ...usage });
     const p2 = { ...p1, cacheWriteMicrocentsPerToken: 1_250, cacheReadMicrocentsPerToken: 100 };
-    expect(r2.chargedCents).toBe(chargeCents("provider", usage, p2, 100));
-    expect(Number(r2.chargedCents)).toBeLessThan(Number(r1.chargedCents));
+    const a2 = accrue(a1.unpostedMicrocents, chargedMicrocents("provider", usage, p2, 100));
+    expect(r2).toMatchObject({ chargedCents: a2.postCents, unpostedMicrocents: a2.unpostedMicrocents });
+    expect(Number(r2.chargedMicrocents)).toBeLessThan(Number(r1.chargedMicrocents));
     const rows = await q(`SELECT cache_read_tokens, cache_write_tokens, cost_microcents FROM fleet.fleet_cognition_log WHERE agent_id = $1 ORDER BY seq`, [a.agentId]);
     expect(rows.map((r) => [r.cache_read_tokens, r.cache_write_tokens, Number(r.cost_microcents)])).toEqual([[2_000, 1_000, costMicrocents(usage, p1)], [2_000, 1_000, costMicrocents(usage, p2)]]);
     // Duplicate recording is refused, never charged twice.
@@ -574,7 +576,7 @@ describe.skipIf(!PG_BIN)("native Anthropic through FleetController (HTTP + Postg
       const r = await runProviderProbe(provider, { attemptTimeoutMs: 5_000, prices: { inputMicrocentsPerToken: 1_500, outputMicrocentsPerToken: 7_500 } });
       expect(r.checks.map((c) => `${c.id}:${c.status}`)).toEqual(["P1:PASS", "P2:PASS", "P3:PASS", "P4:PASS", "P5:PASS", "P6:PASS", "P7:PASS", "P8:PASS", "P9:PASS", "P10:PASS", "P11:PASS"]);
       expect(r).toMatchObject({ pass: true, provider: "anthropic", model: MODEL, settings: { thinking: { type: "adaptive" }, apiVersion: "2023-06-01" } });
-      expect(r.usage.ledgerChargeCents).toBeGreaterThan(0);
+      expect(r.usage.ledgerChargeCents! * 1_000_000 + r.usage.ledgerCarriedMicrocents!).toBe(r.usage.costMicrocents);
       expect(JSON.stringify(r)).not.toContain(KEY);
       expect(f2.violations).toEqual([]); // including the tool-result continuation with signed thinking (P3)
       const wrong = await runProviderProbe(new AnthropicProvider({ baseUrl: f2.url, apiKey: "sk-ant-wrong-000000000", model: MODEL }), { attemptTimeoutMs: 5_000 });

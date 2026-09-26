@@ -167,3 +167,25 @@ API. The fake enforces:
 
 Founder 1's provider faults (429→retry, 503×3, malformed, timeout, bad tool input, no usage, redirect) run
 through the native path. A new check requires **zero protocol violations** across the real founder loops.
+
+## 9. Sub-cent inference accounting (L13, schema v17)
+
+Until v16 every call was rounded **up** to a whole cent. On the real L14 probe, $0.0367 of provider cost would
+have been charged 7¢. v17 keeps the ledger in integer cents and gives each founder an exact integer microcent
+accrual (`fleet_cognition_accrual.unposted_microcents`, 0 ≤ r < 10⁶; no floating point):
+
+- `charged_µ¢` for a call (logged as `charged_microcents`) = min(reservation·10⁶, provider cost) for provider usage;
+  the reservation for an ambiguous outcome; 0 for a provider error.
+- `total = unposted + charged_µ¢` → post `floor(total / 10⁶)` whole cents in one idempotent journal
+  (`infer:<requestId>`, only if > 0) → carry `total − posted·10⁶`.
+- **Exact invariant per founder:** Σ posted·10⁶ + unposted = Σ charged_µ¢. The ledger never exceeds the true
+  cost and lags it by < 1¢. The remainder is carried, never forgiven and never rounded up.
+- **Gates are exact and fail closed in µ¢, counting the unposted remainder as spent:**
+  - daily budget: Σ charged_µ¢ (24 h) + reservation·10⁶ ≤ budget·10⁶;
+  - own cash and survival equity: value·10⁶ − unposted ≥ reservation·10⁶;
+  - prepaid credits: balance·10⁶ − Σ unposted ≥ reservation·10⁶.
+- The accrual cannot be deleted or truncated, and only `svc_cognition_record` writes it (cognition surface audit).
+- Pre-v17 log rows keep `charged_microcents` NULL and are read as `charged_cents·10⁶`: history is not rewritten.
+- Real L14 under v17: 3,670,000 µ¢ → **3¢ posted + 670,000 µ¢ carried** (v16 would have posted 7¢).
+- Residual: a founder that stops forever leaves < 1¢ recorded but unposted in its accrual row (visible, never
+  lost). Estate settlement does not yet sweep it.

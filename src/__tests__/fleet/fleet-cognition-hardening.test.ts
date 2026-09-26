@@ -198,7 +198,8 @@ describe("L14 provider compatibility probe", () => {
       expect(r.checks.map((c) => `${c.id}:${c.status}`)).toEqual(["P1:PASS", "P2:PASS", "P3:PASS", "P4:PASS", "P5:PASS", "P6:PASS", "P7:PASS", "P8:PASS", "P9:PASS", "P10:PASS", "P11:PASS"]);
       expect(r.pass).toBe(true);
       expect(r.usage.costMicrocents).toBeGreaterThan(0);
-      expect(r.usage.ledgerChargeCents).toBeGreaterThan(0);
+      // Sub-cent accrual (v17): posted cents + carried µ¢ equal the attributed provider cost exactly.
+      expect(r.usage.ledgerChargeCents! * 1_000_000 + r.usage.ledgerCarriedMicrocents!).toBe(r.usage.costMicrocents);
       expect(r.authority).toMatch(/no database connection/);
       expect(JSON.stringify(r)).not.toContain(KEY);
       // P4 inspected the founder toolbox round-trip; nothing was executed.
@@ -378,8 +379,8 @@ describe.skipIf(!PG_BIN)("v15 outcome charging through FleetController (HTTP + P
     // Charges: none for 'none'; the estimate for 'estimate'; ≤ estimate for 'provider'; exactly one journal each.
     const inflightEst = 1; // estimates here are small but positive
     for (const r of la) {
-      if (r.usage_source === "none") expect([Number(r.charged_cents), r.journal_id]).toEqual([0, null]);
-      else expect(Number(r.charged_cents)).toBeGreaterThanOrEqual(inflightEst);
+      if (r.usage_source === "none") expect([Number(r.charged_cents), Number(r.charged_microcents), r.journal_id]).toEqual([0, 0, null]);
+      else expect(Number(r.charged_microcents)).toBeGreaterThanOrEqual(inflightEst); // attributed exactly (v17); posting may be deferred
       if (r.outcome !== "ok") expect(r.tool_calls).toEqual([]);
     }
     const timeoutRow = la[3];

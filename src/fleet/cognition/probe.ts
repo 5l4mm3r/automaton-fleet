@@ -24,7 +24,7 @@
 import { decideTool, FOUNDER_MANIFEST_V1 } from "../capabilities.js";
 import { parseChatCompletion, type OpenAICompatibleProvider } from "./providers.js";
 import { parseAnthropicMessage, type AnthropicProvider } from "./anthropic.js";
-import { chargeCents, costMicrocents, type Prices } from "./charging.js";
+import { accrue, chargedMicrocents, costMicrocents, type Prices } from "./charging.js";
 import { FOUNDER_CHARTER, FOUNDER_TOOLS, ProviderError, type ChatMessage, type ChatResult, type ToolSpec } from "./types.js";
 
 export interface ProbeCheck {
@@ -40,7 +40,7 @@ export interface ProbeReport {
   model: string;
   settings: Record<string, unknown>;
   checks: ProbeCheck[];
-  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; thinkingTokens: number | null; costMicrocents: number | null; ledgerChargeCents: number | null };
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; thinkingTokens: number | null; costMicrocents: number | null; ledgerChargeCents: number | null; ledgerCarriedMicrocents: number | null };
   authority: string;
 }
 
@@ -81,7 +81,7 @@ export async function runProviderProbe(provider: ProbeableProvider, o: { attempt
   // Reasoning models spend hidden tokens: give them room when the provider is configured for that.
   const reasoning = isAnthropic ? (provider as AnthropicProvider).settings.thinking !== null : (provider as OpenAICompatibleProvider).maxTokensParam === "max_completion_tokens";
   const maxTokens = reasoning ? 4_096 : 512;
-  const total = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, thinkingTokens: null as number | null, reported: 0, calls: 0, cost: 0, charge: 0 };
+  const total = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, thinkingTokens: null as number | null, reported: 0, calls: 0, cost: 0, charge: 0, unposted: 0, chargedMicro: 0 };
   const latencies: number[] = [];
   const call = async (system: string, messages: ChatMessage[], tools: ToolSpec[]): Promise<ChatResult> => {
     const t0 = Date.now();
@@ -99,7 +99,10 @@ export async function runProviderProbe(provider: ProbeableProvider, o: { attempt
         // The ledger would reserve this estimate; the charge is capped by it exactly as in svc_cognition_record.
         const estimate = Math.max(1, Math.ceil((r.usage.inputTokens * o.prices.inputMicrocentsPerToken + maxTokens * o.prices.outputMicrocentsPerToken) / 1_000_000));
         total.cost += costMicrocents(r.usage, o.prices);
-        total.charge += chargeCents("provider", r.usage, o.prices, estimate);
+        const a = accrue(total.unposted, chargedMicrocents("provider", r.usage, o.prices, estimate));
+        total.charge += a.postCents;
+        total.unposted = a.unpostedMicrocents;
+        total.chargedMicro += chargedMicrocents("provider", r.usage, o.prices, estimate);
       }
     }
     return r;
@@ -180,7 +183,8 @@ export async function runProviderProbe(provider: ProbeableProvider, o: { attempt
   // P7
   add("P7", "economic reconciliation (ledger charge rule)", !o.prices ? "WARN" : total.calls === 0 ? "FAIL" : "PASS",
     !o.prices ? "no --prices given: token counts only"
-      : `these ${total.calls} calls would be charged ${total.charge}¢ by the ledger (raw cost ${total.cost} µ¢; unset cache prices fall back conservatively)`);
+      : `these ${total.calls} calls: provider cost ${total.cost} µ¢; the ledger would attribute ${total.chargedMicro} µ¢ = ${total.charge}¢ posted + ${total.unposted} µ¢ carried (sub-cent accrual)` +
+        (o.prices.cacheWriteMicrocentsPerToken == null || o.prices.cacheReadMicrocentsPerToken == null ? "; unset cache prices fall back conservatively" : ""));
   // P8
   const bad = MALFORMED[provider.id];
   const parse = isAnthropic ? parseAnthropicMessage : parseChatCompletion;
@@ -217,6 +221,7 @@ export async function runProviderProbe(provider: ProbeableProvider, o: { attempt
     usage: {
       inputTokens: total.inputTokens, outputTokens: total.outputTokens, cacheReadTokens: total.cacheReadTokens, cacheWriteTokens: total.cacheWriteTokens,
       thinkingTokens: total.thinkingTokens, costMicrocents: o.prices ? total.cost : null, ledgerChargeCents: o.prices ? total.charge : null,
+      ledgerCarriedMicrocents: o.prices ? total.unposted : null,
     },
     authority: "none: no database connection, no founder, no Genesis; tool calls inspected, never executed; nothing charged to the fleet ledger",
   };

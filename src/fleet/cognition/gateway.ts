@@ -129,7 +129,7 @@ export async function infer(
   token: string,
   body: Record<string, unknown>,
   opts: { deadlineMs?: number; now?: () => number } = {},
-): Promise<{ content: string; toolCalls: unknown[]; usage: { inputTokens: number; outputTokens: number }; usageSource: string; chargedCents: number; requestId: string; thinking?: ThinkingBlock[]; blockOrder?: string[] }> {
+): Promise<{ content: string; toolCalls: unknown[]; usage: { inputTokens: number; outputTokens: number }; usageSource: string; chargedCents: number; chargedMicrocents: number; requestId: string; thinking?: ThinkingBlock[]; blockOrder?: string[] }> {
   const now = opts.now ?? Date.now;
   const messages = validateMessages(body.messages);
   const caps = await ports.capabilities(agentId, token);
@@ -217,7 +217,7 @@ export async function infer(
   if (!rec.ok) throw new CognitionError(409, String(rec.code), "inference could not be recorded");
   return {
     content: result.content, toolCalls: result.toolCalls, usage: result.usage, usageSource: String(rec.usageSource ?? result.usageSource),
-    chargedCents: Number(rec.chargedCents ?? 0), requestId,
+    chargedCents: Number(rec.chargedCents ?? 0), chargedMicrocents: Number(rec.chargedMicrocents ?? 0), requestId,
     // Provider-signed thinking goes back to its own founder only, to be returned unchanged on the next step.
     ...(result.thinking?.length ? { thinking: result.thinking, ...(result.blockOrder ? { blockOrder: result.blockOrder } : {}) } : {}),
   };

@@ -641,6 +641,7 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     "fleet_cognition_policy:fleet_cognition_policy_no_delete",
     "fleet_founder_cognition:fleet_founder_cognition_no_delete",
     "fleet_agents:fleet_agents_cognition_stop",
+    "fleet_cognition_accrual:fleet_cognition_accrual_no_delete",
   ]) {
     if (!have.has(need)) problems.push(`cognition surface: trigger ${need.replace(":", ".")} is missing or disabled`);
   }
@@ -652,13 +653,14 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_cognition_log: new Set(["svc_cognition_record"]),
     fleet_cognition_policy: new Set(["fleet_cognition_set_policy"]),
     fleet_founder_cognition: new Set(["fleet_founder_cognition_set", "fleet_agents_cognition_stop"]),
+    fleet_cognition_accrual: new Set(["svc_cognition_record"]),
   };
   for (const f of fns.rows) {
     for (const t of writeTargets(f.src)) {
       if (writers[t] && !writers[t].has(f.name)) problems.push(`cognition surface: ${f.name} writes a cognition control table`);
     }
     // Dynamic SQL naming a cognition table would hide its writes from the check above.
-    if (/\bEXECUTE\b/i.test(codeOf(f.src)) && /fleet_(cognition_log|cognition_policy|founder_cognition)\b/i.test(f.src)) {
+    if (/\bEXECUTE\b/i.test(codeOf(f.src)) && /fleet_(cognition_log|cognition_policy|founder_cognition|cognition_accrual)\b/i.test(f.src)) {
       problems.push(`cognition surface: ${f.name} uses dynamic SQL near a cognition control table`);
     }
   }
