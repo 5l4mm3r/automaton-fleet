@@ -219,6 +219,28 @@ export function classifyAnthropicError(status: number, body: string): ProviderEr
   return m.length <= 300 && CREDIT_EXHAUSTED.test(m) ? "PROVIDER_BILLING" : null;
 }
 
+/**
+ * A diagnosable, sanitized form of Anthropic's invalid_request_error message: its structural wording (e.g.
+ * "messages.7.content.0: Expected `thinking` …") with any quoted payload elided, single line, ≤ 240 characters.
+ * Anything that is not that structured error yields null. Never includes request bodies, thinking or keys.
+ */
+export function describeAnthropicError(status: number, body: string): string | null {
+  if (status !== 400) return null;
+  let j: unknown;
+  try {
+    j = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const e = (j as { type?: unknown; error?: { type?: unknown; message?: unknown } } | null) ?? {};
+  if (e.type !== "error" || !e.error || typeof e.error.type !== "string" || typeof e.error.message !== "string") return null;
+  const m = e.error.message
+    .replace(/"[^"]{25,}"|'[^']{25,}'/g, "\u2026")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/[A-Za-z0-9+/=_-]{48,}/g, "\u2026");
+  return `${e.error.type.slice(0, 40)}: ${m}`.slice(0, 240);
+}
+
 export class AnthropicProvider implements CognitionProvider {
   readonly id = "anthropic" as const;
 
@@ -275,7 +297,7 @@ export class AnthropicProvider implements CognitionProvider {
         agentId: req.agentId,
       },
       parseAnthropicMessage,
-      { statuses: [400], classify: classifyAnthropicError },
+      { statuses: [400], classify: classifyAnthropicError, describe: describeAnthropicError },
     );
   }
 }

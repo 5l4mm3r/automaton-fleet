@@ -118,6 +118,8 @@ export class ProviderError extends Error {
       usage?: Usage;
       responseModel?: string | null;
       providerRequestId?: string | null;
+      /** A provider's own validation message, sanitized and bounded (never request content), for diagnosis only. */
+      detail?: string | null;
     },
   ) {
     super(code);

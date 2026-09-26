@@ -7,6 +7,7 @@
 
 import { loadCognitionProvider, readCognitionKey } from "../service/main.js";
 import { runProviderProbe, type ProbeableProvider } from "./probe.js";
+import { runContextRepro } from "./context-repro.js";
 
 async function main(): Promise<number> {
   const e = process.env;
@@ -35,6 +36,18 @@ async function main(): Promise<number> {
         return { inputMicrocentsPerToken: i, outputMicrocentsPerToken: o, cacheWriteMicrocentsPerToken: cw ?? null, cacheReadMicrocentsPerToken: cr ?? null };
       })()
     : undefined;
+  if (e.FLEET_PROBE_MODE === "context-repro") {
+    // Post-Genesis diagnosis: the real mind/toolbox/provider protocol in isolation; structure-only output.
+    const turns = Math.min(8, Math.max(1, Number(e.FLEET_REPRO_TURNS) || 4));
+    if (!cfg.provider) { console.error("Refusing: no provider configured."); return 2; }
+    const calls = await runContextRepro({ provider: cfg.provider, turns, log: (c) => console.log(JSON.stringify(c).split(apiKey).join("[REDACTED]")) });
+    const inTok = calls.reduce((n, c) => n + (c.inputTokens ?? 0), 0);
+    const outTok = calls.reduce((n, c) => n + (c.outputTokens ?? 0), 0);
+    const costMicro = prices ? inTok * prices.inputMicrocentsPerToken + outTok * prices.outputMicrocentsPerToken : null;
+    const rejected = calls.filter((c) => !c.ok);
+    console.log(JSON.stringify({ calls: calls.length, rejected: rejected.length, inputTokens: inTok, outputTokens: outTok, costUsdMicrocents: costMicro }));
+    return rejected.length ? 1 : 0;
+  }
   const report = await runProviderProbe(cfg.provider as ProbeableProvider, { attemptTimeoutMs: Number(e.FLEET_COGNITION_ATTEMPT_TIMEOUT_MS) || 90_000, prices });
   // Belt and braces: the report is built from classified values only, but never let the key through.
   const out = JSON.stringify(report, null, 2).split(apiKey).join("[REDACTED]");

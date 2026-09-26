@@ -26,5 +26,8 @@ while IFS= read -r line; do
   args+=("${BASH_REMATCH[1]}=${BASH_REMATCH[3]}")
 done < <(grep -E '^FLEET_COGNITION_' "$ENVF" || true)
 [[ -n "$prices" ]] && args+=("FLEET_PROBE_PRICES=$prices")
+# Post-Genesis diagnosis mode (structure-only output): FLEET_PROBE_MODE=context-repro [FLEET_REPRO_TURNS=N]
+[[ "${FLEET_PROBE_MODE:-}" == "context-repro" ]] && args+=("FLEET_PROBE_MODE=context-repro")
+[[ "${FLEET_REPRO_TURNS:-}" =~ ^[1-8]$ ]] && args+=("FLEET_REPRO_TURNS=$FLEET_REPRO_TURNS")
 exec runuser -u "$USER_" -- env -i PATH=/usr/bin:/bin HOME=/nonexistent NODE_ENV=production "${args[@]}" \
   "$NODE" "$REL/dist/fleet/cognition/probe-main.js"

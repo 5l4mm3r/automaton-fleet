@@ -250,7 +250,7 @@ export async function postWithRetries(
    * Provider-specific refinement of an HTTP error status from its (bounded) body. Returns a code or null
    * (use the status mapping). The body is used only for this decision: never logged, never returned.
    */
-  classifyError?: { statuses: readonly number[]; classify: (status: number, body: string) => ProviderErrorCode | null },
+  classifyError?: { statuses: readonly number[]; classify: (status: number, body: string) => ProviderErrorCode | null; describe?: (status: number, body: string) => string | null },
 ): Promise<ChatResult> {
   const attemptTimeoutMs = Math.min(240_000, Math.max(1, o.attemptTimeoutMs ?? 90_000));
   const maxAttempts = Math.min(3, Math.max(1, o.maxAttempts ?? 3));
@@ -307,11 +307,15 @@ export async function postWithRetries(
       // The body is never logged or returned (it may echo request content). A provider may refine the
       // classification of specific statuses from it; nothing else is read.
       let refined: ProviderErrorCode | null = null;
-      if (classifyError?.statuses.includes(res.status)) refined = classifyError.classify(res.status, await readBounded(res, 8_192));
-      else await res.body?.cancel().catch(() => undefined);
+      let detail: string | null = null;
+      if (classifyError?.statuses.includes(res.status)) {
+        const body = await readBounded(res, 8_192);
+        refined = classifyError.classify(res.status, body);
+        detail = classifyError.describe?.(res.status, body) ?? null;
+      } else await res.body?.cancel().catch(() => undefined);
       const retryAfterS = parseRetryAfter(res.headers.get("retry-after"));
       if (!refined && RETRYABLE_STATUS.has(res.status) && attempts < maxAttempts && (await backoff(attempts, retryAfterS))) continue;
-      throw new ProviderError(refined ?? statusCode(res.status), { charge: "none", status: res.status, attempts, retryAfterS, providerRequestId: headerId });
+      throw new ProviderError(refined ?? statusCode(res.status), { charge: "none", status: res.status, attempts, retryAfterS, providerRequestId: headerId, detail });
     }
     let text: string;
     try {
