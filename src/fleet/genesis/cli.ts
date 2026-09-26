@@ -5,7 +5,7 @@
  * activation while Genesis is disabled (the owner's switch).
  *
  *   genesis-policy | genesis-list | genesis-status <genesisId>
- *   genesis-dry-run [--founders N] [--synthetic-cents N]      full workflow in ONE rolled-back transaction
+ *   genesis-dry-run [--founders N] [--synthetic-cents N]      full workflow in ONE rolled-back transaction (default: 1 founder, v19)
  *   genesis-enable <reason…> | genesis-disable <reason…>        OWNER GATE (never run by an AI operator)
  *   genesis-propose <founders> <allocationCents> [--ttl S] [--manifest ID] [--key K]   (v19: founders must be 1)
  *   genesis-approve <genesisId> <authSha256>
@@ -39,7 +39,7 @@ import crypto from "crypto";
 import fs from "fs";
 import { runGenesisDryRun } from "./dry-run.js";
 import { FOUNDER_TOOLS } from "../cognition/types.js";
-import type { AttestationEvidence, PgGenesisAdmin } from "./admin.js";
+import { GENESIS_FOUNDERS, type AttestationEvidence, type PgGenesisAdmin } from "./admin.js";
 
 export const GENESIS_COMMANDS = new Set([
   "genesis-policy", "genesis-list", "genesis-status", "genesis-dry-run", "genesis-enable", "genesis-disable", "genesis-propose",
@@ -108,7 +108,7 @@ export async function runGenesisCommand(
         connectionString: ctx.connectionString,
         schema: ctx.schema,
         actor,
-        founders: flag(a, "--founders") ? int(flag(a, "--founders"), "--founders", 1) : 2,
+        founders: flag(a, "--founders") ? int(flag(a, "--founders"), "--founders", 1) : GENESIS_FOUNDERS,
         syntheticAllocationCents: flag(a, "--synthetic-cents") ? int(flag(a, "--synthetic-cents"), "--synthetic-cents") : undefined,
       });
       return { output: r, exitCode: r.pass ? 0 : 1 };
