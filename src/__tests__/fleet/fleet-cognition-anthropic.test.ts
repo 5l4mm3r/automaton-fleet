@@ -398,6 +398,8 @@ describe.skipIf(!PG_BIN)("native Anthropic through FleetController (HTTP + Postg
     await store.setMaxAgents(2, "test");
     await genesis.setEnabled(true, OWNER, "test");
     await ledger.recordOwnerFunding(40_000, `bank:${crypto.randomUUID()}`, OWNER);
+    // Two founders simulate a future multi-founder fleet (earned expansion); production Genesis creates one (v19).
+    await q(`UPDATE fleet.fleet_genesis_policy SET genesis_max_founders = 2`);
     const g = await genesis.propose({ idempotencyKey: `g:${crypto.randomUUID()}`, founderCount: 2, allocationCents: 5_000, ttlS: 3600, actor: OWNER });
     await genesis.approve(g.genesisId, g.authSha256, OWNER);
     const p = await genesis.provision(g.genesisId, OWNER);

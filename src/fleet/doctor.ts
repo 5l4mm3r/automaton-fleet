@@ -31,6 +31,7 @@ import net from "net";
 import path from "path";
 import { FLEET_PG_SCHEMA_VERSION } from "./postgres/migrations.js";
 import { FOUNDER_MANIFEST_CURRENT, manifestSha256 } from "./capabilities.js";
+import { GENESIS_FOUNDERS } from "./genesis/admin.js";
 import { FOUNDER_TOOLS } from "./cognition/types.js";
 import { execFileSync } from "child_process";
 
@@ -386,6 +387,16 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         `${gv.genesisEnabled ? "ENABLED by the owner" : "disabled (owner gate)"}; ${gv.inFlight} in flight, ${gv.activated} activated; ` +
           `${gv.founders} founder record(s), ${gv.livingFounders} living`,
       );
+      // Schema v19: Genesis creates exactly GENESIS_FOUNDERS (1) founder.
+      const gmax = gv.genesisMaxFounders;
+      add(
+        "genesis founder target",
+        gmax === GENESIS_FOUNDERS ? "pass" : "fail",
+        gmax === GENESIS_FOUNDERS
+          ? `exactly ${GENESIS_FOUNDERS} founder per Genesis (0 → ${GENESIS_FOUNDERS}); registry cap ${facts.fleetMaximum ?? "?"} is a ceiling only`
+          : `registry allows ${gmax ?? "no v19 policy"} founder(s) per Genesis; this runtime requires ${GENESIS_FOUNDERS}`,
+      );
+      if (gmax !== GENESIS_FOUNDERS) blockers.push(`Genesis must create exactly ${GENESIS_FOUNDERS} founder (registry allows ${gmax ?? "?"}).`);
       const want = manifestSha256(FOUNDER_MANIFEST_CURRENT);
       const mid = gv.founderManifestId ?? "?";
       add(

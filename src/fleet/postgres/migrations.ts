@@ -26,8 +26,9 @@ import { V15_SQL } from "./migrations-phase15.js";
 import { V16_SQL } from "./migrations-phase16.js";
 import { V17_SQL } from "./migrations-phase17.js";
 import { V18_SQL } from "./migrations-phase18.js";
+import { V19_SQL } from "./migrations-phase19.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 18;
+export const FLEET_PG_SCHEMA_VERSION = 19;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1140,6 +1141,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 16, name: "native_anthropic_cognition", sql: V16_SQL },
   { version: 17, name: "subcent_inference_accrual", sql: V17_SQL },
   { version: 18, name: "controlled_founder_web_research", sql: V18_SQL },
+  { version: 19, name: "single_founder_genesis", sql: V19_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

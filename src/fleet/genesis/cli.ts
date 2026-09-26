@@ -7,7 +7,7 @@
  *   genesis-policy | genesis-list | genesis-status <genesisId>
  *   genesis-dry-run [--founders N] [--synthetic-cents N]      full workflow in ONE rolled-back transaction
  *   genesis-enable <reason…> | genesis-disable <reason…>        OWNER GATE (never run by an AI operator)
- *   genesis-propose <founders> <allocationCents> [--ttl S] [--manifest ID] [--key K]
+ *   genesis-propose <founders> <allocationCents> [--ttl S] [--manifest ID] [--key K]   (v19: founders must be 1)
  *   genesis-approve <genesisId> <authSha256>
  *   genesis-provision <genesisId>
  *   genesis-attest <genesisId> <agentId> --evidence-file <json>   runtime/workspace evidence of that founder

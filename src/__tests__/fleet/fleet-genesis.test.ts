@@ -102,7 +102,8 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
   const q = async (sql: string, params: unknown[] = []) => (await owner.query(sql, params)).rows;
   const key = (p = "g") => `${p}:${crypto.randomBytes(9).toString("base64url")}`;
 
-  async function reset(cap = 2) {
+  /** These tests exercise the N-founder Genesis machinery; production Genesis creates one founder (v19, own test below). */
+  async function reset(cap = 2, maxFounders = 50) {
     const c = await owner.connect();
     try {
       await c.query("BEGIN");
@@ -116,6 +117,7 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
     }
     await store.setApprovedRuntime(PIN, "test", BUILD);
     await store.setMaxAgents(cap, "test");
+    await q(`UPDATE fleet.fleet_genesis_policy SET genesis_max_founders = $1`, [maxFounders]);
     await genesis.setEnabled(true, OWNER, "test");
     // The AI bridges' principals exist (as in production), so their names are known to the approver checks.
     const opAdmin = new PgOperatorAdmin({ connectionString: pgc.ownerUrl });
@@ -174,13 +176,38 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
   });
 
   it("migrates to v11 with a clean privilege audit and the constitutional pins in place", async () => {
-    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(18);
+    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(19);
     const a = await auditPrivileges(owner);
     expect(a.problems).toEqual([]);
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_reproduction_policy SET execution_enabled = true`))).toMatch(/ERR:.*check constraint/);
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_genesis_policy SET refounding_enabled = true`))).toMatch(/ERR:.*check constraint/);
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_capability_classes SET grantable = true WHERE class = 'reproduction'`))).toBe("FLEET_HISTORY_IMMUTABLE");
     expect((await q(`SELECT manifest_sha256 FROM fleet.fleet_capability_manifests WHERE manifest_id = 'founder-v1'`))[0].manifest_sha256).toBe(manifestSha256(FOUNDER_MANIFEST_V1));
+  });
+
+  it("v19: Genesis creates exactly one founder by default; more is refused at proposal, at approval and on any direct insert", async () => {
+    await reset(2, 1);
+    expect((await q(`SELECT column_default FROM information_schema.columns WHERE table_schema = 'fleet' AND table_name = 'fleet_genesis_policy' AND column_name = 'genesis_max_founders'`))[0].column_default).toBe("1");
+    expect(await pgCode(genesis.propose({ idempotencyKey: key(), founderCount: 2, allocationCents: 0, ttlS: 3600, actor: OWNER }))).toBe("FLEET_GENESIS_FOUNDER_COUNT");
+    expect(await pgCode(genesis.propose({ idempotencyKey: key(), founderCount: 0, allocationCents: 0, ttlS: 3600, actor: OWNER }))).toMatch(/FLEET_CAP_EXCEEDED|FLEET_GENESIS_FOUNDER_COUNT/);
+    const one = await genesis.propose({ idempotencyKey: key(), founderCount: 1, allocationCents: 0, ttlS: 3600, actor: OWNER });
+    expect(one.founderCount).toBe(1);
+    // A proposal made under a raised policy is re-checked at approval once the policy is back at one.
+    await q(`UPDATE fleet.fleet_genesis_policy SET genesis_max_founders = 2`);
+    const two = await genesis.propose({ idempotencyKey: key(), founderCount: 2, allocationCents: 0, ttlS: 3600, actor: OWNER });
+    await q(`UPDATE fleet.fleet_genesis_policy SET genesis_max_founders = 1`);
+    expect(await pgCode(genesis.approve(two.genesisId, two.authSha256, OWNER))).toBe("FLEET_GENESIS_FOUNDER_COUNT");
+    // No path around the proposal function: a direct row insert is refused by the trigger.
+    expect(await pgCode(owner.query(`INSERT INTO fleet.fleet_genesis SELECT (jsonb_populate_record(NULL::fleet.fleet_genesis, to_jsonb(g) || jsonb_build_object('genesis_id', gen_random_uuid(), 'idempotency_key', 'direct:' || md5(random()::text), 'founder_count', 2))).* FROM fleet.fleet_genesis g WHERE g.genesis_id = $1`, [one.genesisId])))
+      .toMatch(/FLEET_GENESIS_FOUNDER_COUNT/);
+    // The privilege audit notices a disabled guard.
+    await q(`ALTER TABLE fleet.fleet_genesis DISABLE TRIGGER fleet_genesis_founder_count`);
+    expect((await auditPrivileges(owner)).problems).toContain("genesis surface: trigger fleet_genesis.fleet_genesis_founder_count is missing or disabled");
+    await q(`ALTER TABLE fleet.fleet_genesis ENABLE TRIGGER fleet_genesis_founder_count`);
+    expect((await auditPrivileges(owner)).problems).toEqual([]);
+    // Only the owner can change the target: no role reaches the policy table.
+    for (const p of [agentRaw, svc, opRaw, custody]) expect(await pgCode(p.query(`UPDATE fleet.fleet_genesis_policy SET genesis_max_founders = 2`))).toMatch(/permission denied/);
+    await reset(); // back to the N-founder machinery setting for the tests that follow
   });
 
   // ── Who may create / approve Genesis ─────────────────────────
@@ -685,19 +712,21 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
     }
   });
 
-  it("the two-founder Genesis dry run passes and leaves no trace", async () => {
-    await reset();
+  it("the single-founder Genesis dry run (production configuration) passes and leaves no trace", async () => {
+    await reset(2, 1);
     await genesis.setEnabled(false, OWNER, "production-like: disabled");
     const r = await runGenesisDryRun({ connectionString: pgc.ownerUrl, actor: OWNER });
     expect(r.checks.filter((c) => !c.ok)).toEqual([]);
     expect(r.pass).toBe(true);
+    expect(r.founders).toBe(1);
     expect(await population()).toBe(0);
     expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_genesis`))[0].n).toBe(0);
     expect((await q(`SELECT genesis_enabled FROM fleet.fleet_genesis_policy`))[0].genesis_enabled).toBe(false);
-    // And with the cap below two, it fails closed (cap admission).
-    await store.setMaxAgents(1, "t");
+    // A registry that would let Genesis create two founders fails the dry run.
+    await q(`UPDATE fleet.fleet_genesis_policy SET genesis_max_founders = 2`);
     const r2 = await runGenesisDryRun({ connectionString: pgc.ownerUrl, actor: OWNER });
     expect(r2.pass).toBe(false);
+    expect(r2.checks.find((c) => c.name === "Genesis founder target")?.ok).toBe(false);
     expect(await population()).toBe(0);
     await reset();
   });

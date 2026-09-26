@@ -50,6 +50,8 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     await c.query(`UPDATE "${schema}".fleet_cognition_policy SET cognition_enabled = false, provider = 'none', model = 'none', max_output_tokens = 1024,
       input_microcents_per_token = 0, output_microcents_per_token = 0, default_daily_budget_cents = 100, default_max_turns_per_hour = 30, updated_by = 'migration'`);
   }
+  const gp = await c.query("SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_genesis_policy' AND column_name = 'genesis_max_founders'", [schema]);
+  if (gp.rowCount) await c.query(`UPDATE "${schema}".fleet_genesis_policy SET genesis_max_founders = 1`);
   if (r.rows.some((x) => x.t === "fleet_research_policy")) {
     await c.query(`UPDATE "${schema}".fleet_research_policy SET research_enabled = false, founder_hourly = 60, founder_daily = 300,
       fleet_hourly = 120, fleet_daily = 600, updated_by = 'migration'`);

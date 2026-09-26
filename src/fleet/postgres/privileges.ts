@@ -597,6 +597,10 @@ export async function genesisSurfaceProblems(db: Queryable, schema: string): Pro
   ]) {
     if (!have.has(need)) problems.push(`genesis surface: trigger ${need.replace(":", ".")} is missing or disabled`);
   }
+  // v19: the single-founder Genesis guard (every new Genesis row within genesis_max_founders).
+  const v19 = await db.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_genesis_policy' AND column_name = 'genesis_max_founders'`, [schema]);
+  if (v19.rows.length > 0 && !have.has("fleet_genesis:fleet_genesis_founder_count")) problems.push("genesis surface: trigger fleet_genesis.fleet_genesis_founder_count is missing or disabled");
   const canRead = await db.query<{ ok: boolean }>(`SELECT has_table_privilege(current_user, $1, 'SELECT') AS ok`, [`${schemaIdent(schema)}.fleet_capability_classes`]);
   if (canRead.rows[0]?.ok) {
     const cls = await db.query<{ class: string; grantable: boolean }>(`SELECT class, grantable FROM ${schemaIdent(schema)}.fleet_capability_classes`);

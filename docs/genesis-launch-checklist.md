@@ -1,18 +1,20 @@
 # Genesis launch-readiness checklist (owner)
 
-The fleet is technically ready to start two founders. What remains is the **owner's decisions**. Each
+The fleet is technically ready to start **one** founder (Genesis 0 → 1, schema v19). What remains is the **owner's decisions**. Each
 item says who acts, what is needed and how it is verified. Nothing here is performed by Claude,
 ChatGPT or any agent. Every step marked **OWNER GATE** is refused by the database unless an owner
 principal performs it.
 
-State after step 2.1 (native Anthropic adapter): schema v16; Genesis **disabled**; population 0; cap 2; cognition **disabled**
-(provider `none`); egress **closed**; real payments, replication and owner sweep **off**.
+State after step 5 (final Genesis preflight): schema v19; Genesis **disabled**, and it creates exactly **one** founder
+(`genesis_max_founders = 1`; the cap of 2 is a ceiling only; growth beyond one founder is to be earned later, and replacement
+after a founder's death is a separate later process); population 0; cognition **disabled** (provider `none`); web research
+deployed but **disabled**; real payments, custody, replication, reseeding and owner sweep **off**.
 
 ## A. Money (Phase E surface)
 
 | # | Decision | How | Verify |
 |---|---|---|---|
-| A1 | Founder capital per founder (starting allocation, virtual until custody execution is enabled) | Decide the amount; it is recorded at `genesis-propose <2> <allocationCents>` | `genesis-status` shows it in the authorization hash |
+| A1 | Founder capital per founder (starting allocation, virtual until custody execution is enabled) | Decide the amount; it is recorded at `genesis-propose 1 <allocationCents>` | `genesis-status` shows it in the authorization hash |
 | A2 | Record the real owner funding that backs it | `fleet:admin ledger-record-funding <cents> <bankRef>` (**OWNER GATE**; external reference required) | `ledger-verify` OK; treasury unallocated ≥ 2 × allocation |
 | A3 | Prepaid inference credits (the fleet buys; founders reimburse from their own cash) | Buy credit at the provider, then `fleet:admin ledger-record-credits <cents> <invoiceRef>` (**OWNER GATE**, schema v14; from unallocated treasury only) | `fleet:conway_credits` balance; `ledger-verify` OK |
 | A4 | Inference prices (microcents per input/output token), matching the provider's price list | Set on `cognition-enable` (`--in-microcents`, `--out-microcents`) | `cognition-policy` |
@@ -28,7 +30,7 @@ State after step 2.1 (native Anthropic adapter): schema v16; Genesis **disabled*
 | B4 | Service configuration: `FLEET_COGNITION_PROVIDER=openai_compatible`, `FLEET_COGNITION_BASE_URL`, `FLEET_COGNITION_MODEL`, `FLEET_COGNITION_API_KEY_FILE`; optional `FLEET_COGNITION_MAX_TOKENS_PARAM` (`max_tokens`/`max_completion_tokens`), `FLEET_COGNITION_ATTEMPT_TIMEOUT_MS` (90 s), `FLEET_COGNITION_DEADLINE_MS` (120 s), `FLEET_COGNITION_MAX_ATTEMPTS` (3) | Owner edits `service.env`, then restarts the controller | `service_started` log shows `cognitionProvider: openai_compatible:<model>` |
 | B4-anthropic | **Chosen route (step 2.1): native Anthropic.** `FLEET_COGNITION_PROVIDER=anthropic`, `FLEET_COGNITION_MODEL=<verified model id>`, `FLEET_COGNITION_API_KEY_FILE=/etc/automaton-fleet/cognition.key`; optional `FLEET_COGNITION_BASE_URL` (default `https://api.anthropic.com/v1`), `FLEET_COGNITION_THINKING` (`adaptive` \| `enabled:<N>`; unset = model default), `FLEET_COGNITION_EFFORT` (`low`…`max`), `FLEET_COGNITION_ANTHROPIC_VERSION`, `FLEET_COGNITION_ATTEMPT_TIMEOUT_MS`/`DEADLINE_MS` (tier A: 150000/180000). Registry: `cognition-enable anthropic <same model> --max-output 4000 --in-microcents <p> --out-microcents <p> [--cache-write-microcents <p> --cache-read-microcents <p>] --turns-per-hour 20 --daily-budget <¢>` | Owner, after verifying the model id and prices | Probe P1–P11 |
 | B4a | **Provider probe (L14)**, before Genesis and before `cognition-enable` | `sudo scripts/fleet-cognition-probe.sh --prices <in>,<out>` | `L14 PROVIDER PROBE: PASS` (P1–P7); no founder, no ledger, no key printed |
-| B5 | ~~Per-exec sandbox~~ **Done in F.3**: every founder shell command runs in a Landlock domain (workspace only; credential/state unreadable; no TCP; fail closed) | — | Rehearsal check "each founder's shell runs in its Landlock sandbox" |
+| B5 | ~~Per-exec sandbox~~ **Done in F.3**: every founder shell command runs in a Landlock domain (workspace only; credential/state unreadable; no TCP; fail closed) | — | Rehearsal check "the founder's shell runs in its Landlock sandbox" |
 
 ## C. Egress (internet access for founders)
 
@@ -43,10 +45,10 @@ State after step 2.1 (native Anthropic adapter): schema v16; Genesis **disabled*
 | # | Step | Command | Gate |
 |---|---|---|---|
 | D1 | Enable Genesis | `fleet:admin genesis-enable <reason>` | **OWNER GATE** |
-| D2 | Propose and approve two founders | `genesis-propose 2 <allocationCents>` → `genesis-approve <id> <authSha256>` | owner |
+| D2 | Propose and approve the one founder (any other count is refused by the registry) | `genesis-propose 1 <allocationCents>` → `genesis-approve <id> <authSha256>` | owner |
 | D3 | Provision, attest and fund (virtual) | `sudo scripts/fleet-founders.sh provision / attest`, then `genesis-fund` | root tool + owner |
 | D4 | Activate | `sudo scripts/fleet-founders.sh activate <id> <authSha256>` | **OWNER GATE** |
-| D5 | Turn cognition on: the global switch, then each founder | `cognition-enable openai_compatible <model> ...`, then `founder-cognition <id> enable ...` | **OWNER GATE** |
+| D5 | Turn cognition on: the global switch, then the founder | `cognition-enable anthropic <model> ...` (B4-anthropic), then `founder-cognition <id> enable ...` | **OWNER GATE** |
 
 ## E. Monitoring and stopping
 

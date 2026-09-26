@@ -23,6 +23,13 @@ import type { Pool, PoolClient } from "pg";
 import { quoteIdent } from "../postgres/migrations.js";
 import { hashAgentToken, mintAgentToken } from "../postgres/store.js";
 
+/**
+ * Schema v19: Genesis takes the fleet from 0 to exactly this many founders (the registry's
+ * fleet_genesis_policy.genesis_max_founders must equal it in production). The registry cap is a
+ * ceiling only; growth beyond one founder is earned later, never owner-funded at Genesis.
+ */
+export const GENESIS_FOUNDERS = 1;
+
 export interface GenesisView {
   genesisId: string;
   kind: string;

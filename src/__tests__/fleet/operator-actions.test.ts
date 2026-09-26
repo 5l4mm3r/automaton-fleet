@@ -450,7 +450,7 @@ describe.skipIf(!PG_BIN)("D3 controlled operator actions (schema v9, PostgreSQL 
     expect(lc.data).toMatchObject({ fleet: { maxAgents: 10, mode: expect.any(String) }, operatorApi: { enabled: true, actionsEnabled: true } });
     expect((lc.data.agentsByStatus as Record<string, number>).dead).toBeGreaterThanOrEqual(2);
     const rt = await client(op).runtimeVerification();
-    expect(rt.data).toMatchObject({ approved: { commit: PIN.commit, buildId: BUILD.buildId }, checks: { pinnedMatchesApproved: true, operatorReleaseMatchesApproved: true }, schemaVersion: 18 });
+    expect(rt.data).toMatchObject({ approved: { commit: PIN.commit, buildId: BUILD.buildId }, checks: { pinnedMatchesApproved: true, operatorReleaseMatchesApproved: true }, schemaVersion: 19 });
     expect((await client(op).listReservations()).data.items).toEqual([]);
     expect((await client(op).listOrphans()).data.items).toEqual([]);
     const acts = await client(op).listActions({ limit: 200 });
@@ -740,9 +740,9 @@ describe.skipIf(!PG_BIN)("D3 schema v8 -> v9 (-> v10) on a production-shaped v8 
       const before = await snap();
       const store = new PgFleetStore({ connectionString: pgc.ownerUrl, schema });
       try {
-        expect(await store.migrateCheck()).toEqual({ currentVersion: 8, resultingVersion: 18, wouldApply: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18] });
+        expect(await store.migrateCheck()).toEqual({ currentVersion: 8, resultingVersion: 19, wouldApply: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] });
         expect(await snap()).toEqual(before); // check rolled back
-        expect(await store.migrate()).toEqual([9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+        expect(await store.migrate()).toEqual([9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
         const after = await snap();
         expect({ ...after, e: undefined }).toEqual({ ...before, e: undefined });
         expect(Number(after.e)).toBeGreaterThanOrEqual(Number(before.e));

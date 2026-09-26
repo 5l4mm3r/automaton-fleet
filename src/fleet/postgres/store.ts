@@ -1010,11 +1010,13 @@ export class PgFleetStore {
     knowledgePending: number;
     knowledgeEntries: number;
     openEstates: number;
+    /** Schema v19: founders one Genesis may create (null before v19). */
+    genesisMaxFounders: number | null;
   } | null> {
     try {
       return await this.read(async (c) => {
         const r = await c.query(
-          `SELECT p.genesis_enabled,
+          `SELECT p.genesis_enabled, (to_jsonb(p) ->> 'genesis_max_founders')::int AS max_founders,
                   (SELECT count(*) FROM fleet_genesis WHERE status IN ('approved','provisioning','attesting','funding_virtual','ready')) AS in_flight,
                   (SELECT count(*) FROM fleet_genesis WHERE status = 'activated') AS activated,
                   (SELECT count(*) FROM fleet_agents WHERE origin IN ('genesis_founder','reseed_founder')) AS founders,
@@ -1044,6 +1046,7 @@ export class PgFleetStore {
           knowledgePending: Number(x.kpending),
           knowledgeEntries: Number(x.kentries),
           openEstates: Number(x.estates),
+          genesisMaxFounders: x.max_founders === null || x.max_founders === undefined ? null : Number(x.max_founders),
         };
       });
     } catch {

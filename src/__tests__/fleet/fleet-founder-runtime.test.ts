@@ -168,6 +168,8 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
 
   async function approved(n = 2, alloc = 2_500) {
     if (alloc) await ledger.recordOwnerFunding(alloc * n, `synthetic:${crypto.randomUUID()}`, OWNER);
+    // n > 1 simulates a future multi-founder fleet (earned expansion); production Genesis creates one (v19).
+    await owner.query(`UPDATE fleet.fleet_genesis_policy SET genesis_max_founders = $1`, [Math.max(1, n)]);
     const g = await genesis.propose({ idempotencyKey: key(), founderCount: n, allocationCents: alloc, ttlS: 3600, actor: OWNER });
     await genesis.approve(g.genesisId, g.authSha256, OWNER);
     return g;
@@ -527,26 +529,30 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
       });
       expect(r.checks.filter((c) => !c.ok)).toEqual([]);
       expect(r.pass).toBe(true);
-      expect(r.founders).toHaveLength(2);
+      expect(r.founders).toHaveLength(1);
       expect(r.founders.every((f) => f.heartbeats >= 3 && f.challengesPassed >= 1)).toBe(true);
       expect(r.checks.map((c) => c.name)).toEqual(expect.arrayContaining([
-        "each founder's shell runs in its Landlock sandbox (own state and credential unreadable, no TCP)",
+        "Genesis creates exactly one founder: a two-founder proposal is refused (the cap is a ceiling only)",
+        "a failed attestation rolls the whole Genesis back",
+        "one founder runtime provisioned and booted",
+        "no second founder: population exactly one and a second Genesis is refused",
+        "population stayed at one through every phase",
+        "the founder's shell runs in its Landlock sandbox (own state and credential unreadable, no TCP)",
         "founder cognition is off until the owner switches it on",
-        "both founders think through the controller and pay from their own ledger",
+        "the founder thinks through the controller and pays from its own ledger",
         "forbidden tools and a planted prompt injection are refused mid-loop",
-        "pausing one founder stops it at once; the other continues",
-        "switching cognition off stops every founder",
+        "pausing the founder stops it at once; resuming restores it",
+        "switching cognition off stops the founder",
         "provider faults are classified, recorded once and charged by rule (native Anthropic path)",
         "native Anthropic protocol conformance through real founder loops (incl. signed-thinking continuity)",
-        "founder 1 keeps thinking after every fault (not wedged)",
+        "the founder keeps thinking after every fault (not wedged)",
         "no phantom calls, no double charges: every provider attempt and every charge is accounted for once",
-        "one founder's provider failures do not touch the other",
         "founder web research is off until the owner switches it on",
-        "a founder researches a public page through the controller and the isolated fetcher (untrusted, with provenance)",
+        "the founder researches a public page through the controller and the isolated fetcher (untrusted, with provenance)",
         "SSRF targets are refused (IP literals, loopback DNS, metadata, userinfo, ports, plain http, the fleet's own domain)",
-        "research quotas and pause are enforced by the registry, per founder",
+        "research quota and pause are enforced by the registry for the founder",
         "every authorized research attempt is audited once; no page content in the registry",
-        "switching research off stops every founder",
+        "switching research off stops the founder",
       ]));
     } finally {
       reg.stop();

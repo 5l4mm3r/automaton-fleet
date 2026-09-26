@@ -26,7 +26,7 @@ import pg from "pg";
 import { quoteIdent } from "../postgres/migrations.js";
 import { hashAgentToken, mintAgentToken } from "../postgres/store.js";
 import { FOUNDER_MANIFEST_CURRENT, manifestSha256 } from "../capabilities.js";
-import { GenesisOps, type GenesisView } from "./admin.js";
+import { GENESIS_FOUNDERS, GenesisOps, type GenesisView } from "./admin.js";
 import { simulateRuntimeAttestation } from "./simulate.js";
 
 export interface DryRunCheck {
@@ -82,7 +82,7 @@ export async function runGenesisDryRun(opts: {
 }): Promise<GenesisDryRunReport> {
   const schema = opts.schema ?? "fleet";
   quoteIdent(schema);
-  const n = opts.founders ?? 2;
+  const n = opts.founders ?? GENESIS_FOUNDERS;
   const alloc = opts.syntheticAllocationCents ?? 12_345; // synthetic, clearly not a real amount
   const checks: DryRunCheck[] = [];
   const check = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail });
@@ -111,7 +111,13 @@ export async function runGenesisDryRun(opts: {
     await ops.setEnabled(true, opts.actor, "dry run (rolled back)");
     await c.query(`SELECT fleet_admin_record_owner_funding($1, $2, $3, $4)`, [alloc * n * 2, `dryrun:${crypto.randomUUID()}`, opts.actor, `dryrun:${crypto.randomUUID()}`]);
 
-    // ── Scenario A: one founder fails attestation → the whole Genesis rolls back.
+    // ── v19: Genesis is 0 → GENESIS_FOUNDERS (1). The registry must say so, and a larger proposal is refused.
+    const gmax = (await c.query(`SELECT (to_jsonb(p) ->> 'genesis_max_founders')::int AS m FROM fleet_genesis_policy p WHERE id = 1`)).rows[0].m as number | null;
+    const bigger = await attempt("v19_bigger", () => ops.propose({ idempotencyKey: `dryrun-big:${crypto.randomUUID()}`, founderCount: n + 1, allocationCents: alloc, ttlS: 3600, actor: opts.actor }));
+    check("Genesis founder target", gmax === n && !bigger.ok && bigger.code === "FLEET_GENESIS_FOUNDER_COUNT",
+      `registry allows ${gmax ?? "?"} founder(s) per Genesis (target ${n}); a ${n + 1}-founder proposal → ${bigger.ok ? "ACCEPTED" : bigger.code}`);
+
+    // ── Scenario A: a founder fails attestation → the whole Genesis rolls back.
     const keyA = `dryrun-a:${crypto.randomUUID()}`;
     const a = await ops.propose({ idempotencyKey: keyA, founderCount: n, allocationCents: alloc, ttlS: 3600, actor: opts.actor });
     await ops.approve(a.genesisId, a.authSha256, opts.actor);
@@ -120,11 +126,12 @@ export async function runGenesisDryRun(opts: {
     check("A: founders provisioned without authority", aIds.length === n
       && (await c.query(`SELECT count(*)::int AS k FROM fleet_agent_credentials WHERE agent_id = ANY($1)`, [aIds])).rows[0].k === 0,
       `${aIds.length} founder(s) reserved, 0 credentials`);
-    const okA = await simulateRuntimeAttestation(c, ops, a.genesisId, aIds[0], opts.actor);
-    await ops.attest(a.genesisId, aIds[0], okA.host, opts.actor);
-    // Founder 2's running process reports a different build: its own evidence disagrees with the authorization.
-    const badA = await simulateRuntimeAttestation(c, ops, a.genesisId, aIds[1], opts.actor, { runtime: { buildId: "0".repeat(64) } });
-    const failed = await ops.attest(a.genesisId, aIds[1], badA.host, opts.actor);
+    // Every founder but the last attests correctly; the last one's running process reports a different build
+    // (with one founder: that founder), so its own evidence disagrees with the authorization.
+    for (const id of aIds.slice(0, -1)) await ops.attest(a.genesisId, id, (await simulateRuntimeAttestation(c, ops, a.genesisId, id, opts.actor)).host, opts.actor);
+    const lastA = aIds[aIds.length - 1];
+    const badA = await simulateRuntimeAttestation(c, ops, a.genesisId, lastA, opts.actor, { runtime: { buildId: "0".repeat(64) } });
+    const failed = await ops.attest(a.genesisId, lastA, badA.host, opts.actor);
     const aRows = (await c.query(`SELECT status FROM fleet_agents WHERE agent_id = ANY($1)`, [aIds])).rows.map((r) => r.status);
     const popA = (await c.query(`SELECT living_agents + reserved_slots + quarantined_slots AS p FROM fleet_state WHERE id = 1`)).rows[0].p;
     check("A: attestation failure rolls the whole Genesis back", failed.ok === false && failed.code === "FLEET_GENESIS_ATTESTATION_FAILED"
@@ -135,7 +142,7 @@ export async function runGenesisDryRun(opts: {
     check("A: consumed authorization cannot be replayed", !replayApprove.ok && replayApprove.code === "FLEET_GENESIS_CONSUMED"
       && replayPropose.genesisId === a.genesisId && replayPropose.replay === true, `approve replay ${replayApprove.ok ? "OK" : replayApprove.code}`);
 
-    // ── Scenario B: the full two-founder Genesis.
+    // ── Scenario B: the full Genesis (n = GENESIS_FOUNDERS founder(s)).
     const b = await ops.propose({ idempotencyKey: `dryrun-b:${crypto.randomUUID()}`, founderCount: n, allocationCents: alloc, ttlS: 3600, actor: opts.actor });
     const tampered = await attempt("b_tamper", () => ops.approve(b.genesisId, "f".repeat(64), opts.actor));
     check("B: approval bound to authorization content", !tampered.ok && tampered.code === "FLEET_GENESIS_TAMPERED", tampered.ok ? "accepted" : tampered.code);
@@ -168,7 +175,8 @@ export async function runGenesisDryRun(opts: {
     check("separate workspace directories", new Set(dirs).size === n && dirs.every((d, i) => dirs.every((o, j) => i === j || !o.startsWith(d + path.sep))),
       "no shared or nested founder directory");
     const st = (await c.query(`SELECT living_agents, reserved_slots, quarantined_slots, max_agents, runtime_commit, runtime_build_id FROM fleet_state WHERE id = 1`)).rows[0];
-    check("cap admission", st.living_agents === n && st.reserved_slots === 0 && st.living_agents <= st.max_agents, `${st.living_agents} living / cap ${st.max_agents}`);
+    check("cap admission", st.living_agents === n && st.reserved_slots === 0 && st.living_agents <= st.max_agents,
+      `${st.living_agents} living / cap ${st.max_agents}${st.max_agents > n ? " (a ceiling only: no further founder is created)" : ""}`);
     const att = (await c.query(`SELECT attestation FROM fleet_genesis_founders WHERE genesis_id = $1`, [b.genesisId])).rows;
     check("runtime pin attested", att.every((x) => x.attestation.commit === st.runtime_commit && x.attestation.buildId === st.runtime_build_id)
       && rows.every((r) => r.runtime_commit === st.runtime_commit), `${st.runtime_commit.slice(0, 7)} / ${st.runtime_build_id.slice(0, 12)}…`);

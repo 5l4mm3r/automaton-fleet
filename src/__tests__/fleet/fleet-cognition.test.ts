@@ -448,6 +448,8 @@ describe.skipIf(!PG_BIN)("Phase F.2 founder cognition (schema v13, HTTP + Postgr
 
   async function founders(alloc = 5_000) {
     await ledger.recordOwnerFunding(alloc * 2 + 10_000, `bank:${crypto.randomUUID()}`, OWNER);
+    // Two founders simulate a future multi-founder fleet (earned expansion); production Genesis creates one (v19).
+    await q(`UPDATE fleet.fleet_genesis_policy SET genesis_max_founders = 2`);
     const g = await genesis.propose({ idempotencyKey: key(), founderCount: 2, allocationCents: alloc, ttlS: 3600, actor: OWNER });
     await genesis.approve(g.genesisId, g.authSha256, OWNER);
     const p = await genesis.provision(g.genesisId, OWNER);
