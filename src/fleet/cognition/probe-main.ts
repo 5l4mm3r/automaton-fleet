@@ -7,7 +7,7 @@
 
 import { loadCognitionProvider, readCognitionKey } from "../service/main.js";
 import { runProviderProbe, type ProbeableProvider } from "./probe.js";
-import { runContextRepro } from "./context-repro.js";
+import { runContextRepro, runThinkingPrefixExperiment } from "./context-repro.js";
 
 async function main(): Promise<number> {
   const e = process.env;
@@ -36,6 +36,12 @@ async function main(): Promise<number> {
         return { inputMicrocentsPerToken: i, outputMicrocentsPerToken: o, cacheWriteMicrocentsPerToken: cw ?? null, cacheReadMicrocentsPerToken: cr ?? null };
       })()
     : undefined;
+  if (e.FLEET_PROBE_MODE === "thinking-prefix") {
+    if (!cfg.provider) { console.error("Refusing: no provider configured."); return 2; }
+    const verdict = await runThinkingPrefixExperiment(cfg.provider, (x) => console.log(JSON.stringify(x).split(apiKey).join("[REDACTED]")));
+    console.log(JSON.stringify({ verdict }).split(apiKey).join("[REDACTED]"));
+    return 0;
+  }
   if (e.FLEET_PROBE_MODE === "context-repro") {
     // Post-Genesis diagnosis: the real mind/toolbox/provider protocol in isolation; structure-only output.
     const turns = Math.min(8, Math.max(1, Number(e.FLEET_REPRO_TURNS) || 4));
