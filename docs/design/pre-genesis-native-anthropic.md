@@ -1,5 +1,7 @@
 # Pre-Genesis step 2.1 — Native Anthropic cognition adapter (schema v16)
 
+Status: **DEPLOYED 2026-09-26** (runtime `6ed4a28`, build `0af8aa77…bfee`, schema v16); production rehearsal 26/26. Record: runbook Stage A.
+
 Owner decision (step 2): tier A (maximum capability), Anthropic Claude, **native Messages API** (M2), one shared
 fleet credential with fully independent founder cognition. Initial targets, not yet applied:
 - max output 4,000 tokens;

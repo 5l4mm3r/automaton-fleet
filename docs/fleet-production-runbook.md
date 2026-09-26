@@ -1467,6 +1467,25 @@ Rollback:
 - **Runtime only:** `runtime.env.pre-h2` (7ed37ff).
 - **Full:** stop the services; restore the pre-v15 dump; restore `runtime.env.pre-h` (90ba6d0); point `current` back to `releases/90ba6d0…`; start in order. 90ba6d0 refuses a v15 registry (exact schema check). The L8 unit lines are safe to keep with any release.
 
+## Stage A — Native Anthropic cognition adapter, schema v16 (DEPLOYED 2026-09-26, times UTC)
+
+Design: `docs/design/pre-genesis-native-anthropic.md`. Owner choice: tier A, Claude, native Messages API. The model ID, prices and monthly cap are **not locked**. No credential installed; cognition **disabled** (provider `none`); Genesis **disabled**; population **0**.
+
+### Stage A record (2026-09-26)
+
+| Gate | Result |
+|---|---|
+| A-1 | Commit `6ed4a28` pushed. The local and VPS builds matched: `0af8aa77…bfee`, lockfile unchanged. `runtime.env.pre-a` kept (sha `efa088da…`, 740f083 pins). Installed unit files unchanged |
+| A-2 | Outage 09:47:51–09:48:09 (about 18 s). Dump `~/automaton_fleet-v15-pre-v16-20260926T094751Z.dump` (1435268 B, sha `0cd25103…89e0`, 0600, 65 table-data entries). `migrate-check` gave exactly `{15→16, wouldApply:[16]}`; `migrate`; audit PASS |
+| Verify | Runtime VERIFIED; doctor DEPLOYMENT OK; `fleet:verify` 16/16; `fleet-verify-deployment.sh` 98/0 ("no inference-provider credential installed"); Operator API and ChatGPT adapter ready; the probe without a credential exits 2; Genesis dry run 20/20. Policy `anthropic`-capable; cache prices unset; 0 inference records |
+| Rehearsal | **PASS 26/26** (systemd host, uids 63636/63710), the controller on the **native Anthropic adapter** against a protocol-enforcing fake Messages API with signed thinking. **0 protocol violations; 49 tool_use turns continued with thinking returned unchanged.** Fault schedule on founder 1 classified and charged by rule (timeout and malformed → estimate 18¢ at max output 4,000; 503×3 and redirect → 0¢); 25 = 25 and 32 = 32 provider requests; journals 1:1; founder 2 untouched; injection and forbidden tools refused; pause and global off; Landlock; production unchanged; host clean |
+
+Tests: fleet 653 passed (only the known phase2 KI-1 and the wipe deadlock, which passes alone); upstream 1614/1614; Anthropic suite 14/14. Mutations: native adapter N01–N26 26/26; L1–L8 re-run after the provider refactor 22/22.
+
+Rollback:
+- **Runtime only:** not possible across v16 (the previous release requires v15).
+- **Full:** stop the services; restore the pre-v16 dump; restore `runtime.env.pre-a` (740f083); point `current` back to `releases/740f083…`; start in order.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
