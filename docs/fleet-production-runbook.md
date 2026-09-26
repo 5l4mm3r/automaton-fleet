@@ -1542,6 +1542,42 @@ Rollback:
   - Runtime only: `runtime.env.pre-w2` (c2e616c; its fetcher does not start), or restore the pre-v18 dump and `runtime.env.pre-w` (b2ac153 requires v17).
   - Before a v17 rollback: disable `automaton-fleet-fetcher.socket`, and reinstall the founder template with founder-v1.
 
+## Stage S5 — Single-founder Genesis and final Genesis preflight, schema v19 (DEPLOYED 2026-09-26, times UTC)
+
+- **Change.** Genesis is 0 → 1.
+  - v19 `fleet_genesis_policy.genesis_max_founders` defaults to 1, and no function changes it.
+  - An insert trigger on `fleet_genesis` refuses any other count, and `fleet_genesis_approve` re-checks it.
+  - The privilege audit requires the trigger, and doctor fails unless the target is 1.
+  - The cap stays 2, as a ceiling only.
+  - Earned expansion, replacement after death and a strategy registry are later capabilities, not built.
+- **S5-1 (`916fd88`).**
+  - Build `393048e4…1627`; lockfile unchanged; the builds matched. `runtime.env.pre-s5` kept (162f07f pins).
+  - Outage 12:50:37–12:50:55 (about 18 s). Dump `~/automaton_fleet-v18-pre-v19-20260926T125037Z.dump` (1514118 B, sha `f7323fe6…cd8a`, 0600, 71 table-data entries). `migrate-check` gave exactly `{18→19, wouldApply:[19]}`; audit PASS; units unchanged.
+- **S5-1 finding.** The production `genesis-dry-run` **failed closed, correctly**: the admin CLI still passed `founders=2`, and the new target check refused it. Fixed in `d442986` (the CLI defaults to `GENESIS_FOUNDERS`).
+  - Also found while making the change: the dry run's failed-attestation scenario assumed a second founder. It now fails the last founder, which is the only one when n = 1.
+- **S5-2 (`d442986`).**
+  - Build `ba14e999…9305`; the builds matched. `runtime.env.pre-s5b` kept (916fd88 pins).
+  - No migration. Restart 12:52:32–12:52:43; fetcher restarted onto the release.
+- **Verify.**
+  - Runtime VERIFIED; schema v19; doctor DEPLOYMENT OK ("genesis founder target: exactly 1"); audit PASS; `fleet:verify` 16/16; `fleet-verify-deployment.sh` 130/0.
+  - **Genesis dry run 21/21 with 1 founder**: a 2-founder proposal is refused, and the cap of 2 is a ceiling only.
+  - **Rehearsal 35/35** (1 founder, production unchanged, host clean):
+    - a 2-founder proposal refused; a failed attestation rolls back;
+    - one runtime, a dedicated uid, its own ledger and manifest (founder-v2);
+    - a second Genesis refused; population one throughout;
+    - Landlock shell with TCP denied;
+    - cognition through the controller with faults charged by rule, journals 1:1 and the ledger verifying; injection and forbidden tools refused; pause/resume and the off switch hold;
+    - research through the controller and fetcher; SSRF refused; quota and pause hold; audit 1:1; fetcher socket unreachable from the founder;
+    - no credential leaks; the dead founder's runtime stops.
+- **Production state.**
+  - Population 0, cap 2, DEVELOPMENT. Genesis off (target 1); cognition off (provider `none`, prices 0); research off.
+  - Custody execution, real payments, replication, reseeding and owner sweep off. 0 distributions, 0 journals, ledger verifies.
+  - Unallocated treasury 0: the owner records the (virtual) founder allocation before `genesis-fund`.
+  - Public TCP 22 and 443 only; 0 key-shaped text in the logs.
+- **Rollback.**
+  - Runtime only: `runtime.env.pre-s5b` (916fd88).
+  - Full: restore the pre-v19 dump and `runtime.env.pre-s5` (162f07f requires v18).
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
