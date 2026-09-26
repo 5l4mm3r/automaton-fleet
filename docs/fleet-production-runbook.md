@@ -1578,6 +1578,30 @@ Rollback:
   - Runtime only: `runtime.env.pre-s5b` (916fd88).
   - Full: restore the pre-v19 dump and `runtime.env.pre-s5` (162f07f requires v18).
 
+## Stage GP — Genesis preparation: £100 bootstrap capital and opportunity doctrine, schema v20 (DEPLOYED 2026-09-26, times UTC)
+
+- **Change** (`docs/design/genesis-preparation-capital-doctrine.md`):
+  - v20 bootstrap capital policy: `GBP 10000` = £100.00 per founder, changed only by the owner-only `genesis-bootstrap`.
+  - `genesis-propose 1 --fx <USD per GBP> --fx-source …`: the rate must have been observed within 24 h. The registry derives `floor(10000 × rate)` cents and binds the amount, rate, source and time into the authorization hash; they are frozen afterwards. The plain-USD path is refused.
+  - Classification unchanged: `owner_funding` → `genesis_allocation`, never revenue or profit.
+  - Founder charter v2 carries the owner's economic priors.
+  - Saved research pages are pruned to the newest 100.
+- **Deploy.**
+  - Commit `06d55d5`, build `febe66b7…6865`; lockfile unchanged; the builds matched. `runtime.env.pre-gp` kept (d442986 pins).
+  - Outage 13:51:07–13:51:24 (about 17 s). Dump `~/automaton_fleet-v19-pre-v20-20260926T135107Z.dump` (1519168 B, sha `b8e3ba28…9976`, 0600). `migrate-check` gave exactly `{19→20, wouldApply:[20]}`; audit PASS; units unchanged; fetcher restarted onto the release.
+- **Verify.**
+  - Runtime VERIFIED; schema v20; doctor DEPLOYMENT OK ("genesis bootstrap capital: GBP 100.00 per founder"); `fleet:verify` 16/16; `fleet-verify-deployment.sh` 130/0.
+  - **Genesis dry run 22/22**: 1 founder; £100.00 at a synthetic 1.25 → 12500¢, bound into the authorization, `owner_funding`; revenue and LFC 0.
+  - **Rehearsal 35/35**: the capital path in a throwaway registry; production unchanged; host clean.
+- **State.**
+  - Population 0; Genesis, cognition and research off; custody, payments, replication and reseeding off; 0 distributions; 0 journals.
+  - Public TCP 22 and 443 only; 0 key-shaped text in the logs.
+- **Rollback.** Restore the pre-v20 dump and `runtime.env.pre-gp` (d442986 requires v19).
+- **At Genesis the owner:**
+  1. records `owner_funding` (USD cents ≥ the derived allocation);
+  2. states the fresh rate in `genesis-propose`;
+  3. checks `capital` and `allocationCents` in the output, then approves.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
