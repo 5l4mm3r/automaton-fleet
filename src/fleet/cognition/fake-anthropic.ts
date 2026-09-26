@@ -21,6 +21,13 @@ import { ScriptedProvider } from "./providers.js";
 import type { ChatMessage, ToolSpec } from "./types.js";
 import { REHEARSAL_AGENT_HEADER, type FakeFault } from "./fake-openai.js";
 
+/** Structural key of a conversation prefix: roles, block types and tool ids — thinking blocks excluded (they may be stripped). */
+function prefixKey(msgs: Array<{ role: string; content: string | Array<Record<string, unknown>> }>): string {
+  return JSON.stringify(msgs.map((m) => [m.role, (typeof m.content === "string" ? [{ type: "text" }] : m.content)
+    .filter((b) => b.type !== "thinking" && b.type !== "redacted_thinking")
+    .map((b) => (b.type === "tool_use" ? `u:${String(b.id)}` : b.type === "tool_result" ? `r:${String(b.tool_use_id)}` : String(b.type)))]));
+}
+
 export type FakeAnthropicFault =
   | FakeFault
   | { kind: "max_tokens_tool" }
@@ -52,6 +59,8 @@ export async function startFakeAnthropic(o: {
   const script = o.script ?? new ScriptedProvider(o.model);
   const requests = new Map<string, number>();
   const violations: string[] = [];
+  /** Signature/data of each issued thinking block → the structural conversation prefix it was generated for. */
+  const boundPrefix = new Map<string, string>();
   const issued = new Map<string, string>(); // tool_use id → JSON of the thinking blocks issued with it
   const state = { lastBody: null as Record<string, unknown> | null, seq: 0 };
   const sockets = new Set<net.Socket>();
@@ -108,9 +117,25 @@ export async function startFakeAnthropic(o: {
           if (JSON.stringify([...results].sort()) !== JSON.stringify([...prevUses].sort())) return invalid("each tool_use must be answered by exactly one tool_result in the next user turn");
         }
       }
-      // Signed thinking of the latest assistant turn must come back unchanged and before its tool_use blocks.
+      // As the real API (proven 2026-09-26): a signed thinking block is bound to the conversation it was generated in.
+      // Handing it back after earlier messages were dropped is refused; thinking stripped from older messages is fine.
+      for (let i = 0; i < msgs.length; i++) {
+        if (msgs[i].role !== "assistant") continue;
+        for (const x of blocks(msgs[i])) {
+          if (x.type !== "thinking" && x.type !== "redacted_thinking") continue;
+          const bound = boundPrefix.get(String(x.signature ?? x.data ?? ""));
+          if (bound !== undefined && bound !== prefixKey(msgs.slice(0, i))) {
+            return invalid(`messages.${i}.content.0: Invalid \`signature\` in \`thinking\` block. The block is bound to a different conversation.`);
+          }
+        }
+      }
+      // Signed thinking of the latest assistant turn must come back unchanged and before its tool_use blocks while the
+      // tool loop continues (the final user turn holds only tool results). A new user text starts a new turn: earlier
+      // thinking may be omitted.
+      const finalUser = msgs[msgs.length - 1];
+      const continuing = finalUser?.role === "user" && !blocks(finalUser).some((x) => x.type === "text");
       const lastAssistant = [...msgs].reverse().find((m) => m.role === "assistant");
-      if (lastAssistant) {
+      if (lastAssistant && continuing) {
         const b = blocks(lastAssistant);
         const uses = b.filter((x) => x.type === "tool_use").map((x) => String(x.id));
         for (const id of uses) {
@@ -172,6 +197,7 @@ export async function startFakeAnthropic(o: {
       for (const c of calls) content.push({ type: "tool_use", id: c.id, name: c.name, input: fault?.kind === "bad_tool_args" ? "not an object" : c.arguments });
       if (fault?.kind === "unknown_block") content.push({ type: "server_tool_use", id: "srvtoolu_x", name: "web_search", input: {} });
       if (o.thinking) for (const c of calls) issued.set(c.id, JSON.stringify(thinking));
+      if (o.thinking) for (const t of thinking) boundPrefix.set(String(t.signature ?? t.data ?? ""), prefixKey(msgs));
       if (fault?.kind === "cache_usage") usage = { ...usage, cache_read_input_tokens: fault.read, cache_creation_input_tokens: fault.write };
       const stop = fault?.kind === "max_tokens_tool" ? "max_tokens" : calls.length ? "tool_use" : "end_turn";
       const u = fault?.kind === "no_usage" ? undefined : fault?.kind === "partial_usage" ? { input_tokens: usage.input_tokens } : usage;

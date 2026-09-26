@@ -189,7 +189,11 @@ export async function infer(
     if (failure.code === "PROVIDER_RATE_LIMITED") throw new CognitionError(429, "FLEET_COGNITION_PROVIDER_RATE_LIMITED", "the inference provider is rate limiting", f.retryAfterS ?? 60);
     if (failure.code === "PROVIDER_TIMEOUT") throw new CognitionError(504, "FLEET_COGNITION_PROVIDER_TIMEOUT", "the inference provider did not answer in time");
     if (failure.code === "PROVIDER_MALFORMED_RESPONSE") throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_MALFORMED", "the inference provider returned an unusable response");
-    if (failure.code === "PROVIDER_BAD_REQUEST") throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_REJECTED", "the inference provider rejected the conversation");
+    if (failure.code === "PROVIDER_BAD_REQUEST") {
+      // The provider's sanitized validation sentence is for the controller's audit only (never returned to the founder).
+      throw Object.assign(new CognitionError(502, "FLEET_COGNITION_PROVIDER_REJECTED", "the inference provider rejected the conversation"),
+        { providerDetail: f.detail ?? null, providerRequestId: f.providerRequestId ?? null, requestId });
+    }
     if (failure.code === "PROVIDER_BILLING") throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_BILLING", "the inference provider refused for billing or spend-limit reasons");
     if (failure.code === "PROVIDER_CONFIG_INVALID") throw new CognitionError(409, "FLEET_COGNITION_CONFIG_INVALID", "the controller's provider configuration is invalid for this policy");
     throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_ERROR", `the inference provider failed (${failure.code})`);

@@ -311,7 +311,8 @@ export async function postWithRetries(
       if (classifyError?.statuses.includes(res.status)) {
         const body = await readBounded(res, 8_192);
         refined = classifyError.classify(res.status, body);
-        detail = classifyError.describe?.(res.status, body) ?? null;
+        // Only an unclassified rejection carries a (sanitized) description; a classified one (e.g. billing) never does.
+        detail = refined ? null : (classifyError.describe?.(res.status, body) ?? null);
       } else await res.body?.cancel().catch(() => undefined);
       const retryAfterS = parseRetryAfter(res.headers.get("retry-after"));
       if (!refined && RETRYABLE_STATUS.has(res.status) && attempts < maxAttempts && (await backoff(attempts, retryAfterS))) continue;

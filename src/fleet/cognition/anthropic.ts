@@ -192,7 +192,24 @@ export function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: "use
   }
   // The first turn must be the user's.
   while (out.length && out[0].role !== "user") out.shift();
-  return out;
+  return atNewTurnDropThinking(out);
+}
+
+/**
+ * Signed thinking is bound to the exact conversation it was generated in (Anthropic refuses it once earlier messages
+ * are dropped: "Invalid `signature` in `thinking` block. The block is bound to a different conversation."). A
+ * founder's history is capped, so a carried block goes stale when the cap trims older turns. Thinking is only
+ * required to come back WITHIN a tool loop (the final user turn holds only tool results); when the final user
+ * turn carries a new observation (text), a new turn begins and earlier thinking may be omitted — so it is.
+ */
+export function atNewTurnDropThinking(msgs: Array<{ role: "user" | "assistant"; content: Block[] }>): Array<{ role: "user" | "assistant"; content: Block[] }> {
+  const last = msgs[msgs.length - 1];
+  if (!last || last.role !== "user" || !last.content.some((b) => b.type === "text")) return msgs;
+  return msgs.map((m) => {
+    if (m.role !== "assistant") return m;
+    const kept = m.content.filter((b) => b.type !== "thinking" && b.type !== "redacted_thinking");
+    return { role: m.role, content: kept.length ? kept : [{ type: "text", text: "(no response)" }] };
+  });
 }
 
 /**
@@ -234,11 +251,13 @@ export function describeAnthropicError(status: number, body: string): string | n
   }
   const e = (j as { type?: unknown; error?: { type?: unknown; message?: unknown } } | null) ?? {};
   if (e.type !== "error" || !e.error || typeof e.error.type !== "string" || typeof e.error.message !== "string") return null;
-  const m = e.error.message
+  // The structural first sentence only (field path + rule), e.g. "messages.1.content.0: Invalid `signature` in `thinking` block.".
+  const first = /^.*?\.(?=\s|$)/s.exec(e.error.message)?.[0] ?? e.error.message;
+  const m = first
     .replace(/"[^"]{25,}"|'[^']{25,}'/g, "\u2026")
     .replace(/[\u0000-\u001f\u007f]+/g, " ")
     .replace(/[A-Za-z0-9+/=_-]{48,}/g, "\u2026");
-  return `${e.error.type.slice(0, 40)}: ${m}`.slice(0, 240);
+  return `${e.error.type.slice(0, 40)}: ${m}`.slice(0, 200);
 }
 
 export class AnthropicProvider implements CognitionProvider {

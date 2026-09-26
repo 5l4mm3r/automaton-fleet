@@ -1068,6 +1068,10 @@ export class FleetService {
           this.audit("cognition_inference", agentId, { requestId: r.requestId, chargedCents: r.chargedCents, tools: r.toolCalls.length });
           return r;
         } catch (err) {
+          if (err instanceof CognitionError && err.code === "FLEET_COGNITION_PROVIDER_REJECTED") {
+            const x = err as CognitionError & { providerDetail?: string | null; providerRequestId?: string | null; requestId?: string };
+            this.audit("cognition_provider_rejected", agentId, { requestId: x.requestId ?? null, providerRequestId: x.providerRequestId ?? null, detail: x.providerDetail ?? null });
+          }
           if (err instanceof CognitionError) {
             throw err.retryAfterS !== undefined ? Object.assign(new HttpError(err.status, err.code, err.message), { retryAfter: err.retryAfterS }) : new HttpError(err.status, err.code, err.message);
           }
