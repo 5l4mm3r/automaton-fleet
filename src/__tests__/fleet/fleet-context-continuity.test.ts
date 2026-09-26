@@ -61,3 +61,32 @@ describe("founder context continuity across history truncation (signed thinking 
     expect(describeAnthropicError(400, body("y".repeat(500)))!.length).toBeLessThanOrEqual(200);
   });
 });
+
+import { founderPinContent, founderPinPaths } from "../../fleet/founder/host.js";
+import fs from "fs";
+import path from "path";
+
+describe("founder runtime pin (live controller updates never change a living founder's code)", () => {
+  const rel = { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "e".repeat(40), buildId: "4".repeat(64), lockfileSha256: "e".repeat(64) };
+  const id = "01M3F50SH7PNX2E3GST13J52AS";
+  it("pins the unit to the founder's own release directory and runtime env — never /opt/automaton-fleet/current", () => {
+    const c = founderPinContent(id, rel);
+    expect(c.dir).toBe(`/opt/automaton-fleet/releases/${rel.commit}`);
+    expect(c.dropIn).toMatch(new RegExp(`^WorkingDirectory=/opt/automaton-fleet/releases/${rel.commit}$`, "m"));
+    expect(c.dropIn).toMatch(new RegExp(`^Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/founders/${id}\\.runtime\\.env$`, "m"));
+    expect(c.dropIn).not.toMatch(/WorkingDirectory=.*current/);
+    expect(c.env).toMatch(new RegExp(`^FLEET_RUNTIME_COMMIT=${rel.commit}$`, "m"));
+    expect(c.env).toMatch(/^REAL_PAYMENTS_ENABLED=false$/m);
+    expect(founderPinPaths(id)).toEqual({ env: `/etc/automaton-fleet/founders/${id}.runtime.env`, dropIn: `/etc/systemd/system/automaton-fleet-founder@${id}.service.d/runtime-pin.conf` });
+    expect(() => founderPinContent("../../etc", rel)).toThrow(/invalid founder id/);
+    expect(() => founderPinContent(id, { ...rel, commit: "e".repeat(39) })).toThrow(/invalid runtime release/);
+    expect(() => founderPinContent(id, { ...rel, repo: "http://evil" })).toThrow(/invalid runtime release/);
+  });
+  it("the shipped founder template retries outages without a start limit and never restarts refusals", () => {
+    const unit = fs.readFileSync(path.join(process.cwd(), "deploy/systemd/automaton-fleet-founder@.service"), "utf8").split("\n");
+    expect(unit).toContain("StartLimitIntervalSec=0");
+    expect(unit).toContain("RestartPreventExitStatus=3 4");
+    expect(unit).toContain("Restart=on-failure");
+    expect(unit).not.toContain("StartLimitBurst=5");
+  });
+});

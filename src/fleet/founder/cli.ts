@@ -78,6 +78,25 @@ function founderUnitsOnHost(): string[] {
   }
 }
 
+/** Living production founders (registry), which a rehearsal must leave untouched. */
+async function livingFounders(): Promise<string[]> {
+  const c = new pg.Client({ connectionString: adminUrl(), options: "-c search_path=fleet -c default_transaction_read_only=on" });
+  await c.connect();
+  try {
+    return (await c.query(`SELECT agent_id FROM fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive') ORDER BY agent_id`)).rows.map((r) => String(r.agent_id));
+  } finally {
+    await c.end();
+  }
+}
+
+function founderMainPid(agentId: string): string {
+  try {
+    return execFileSync("systemctl", ["show", "-p", "MainPID", "--value", `automaton-fleet-founder@${agentId}.service`], { encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
+}
+
 function founderStateOnHost(): string[] {
   try {
     return fs.readdirSync(FOUNDER_STATE_ROOT);
@@ -103,13 +122,20 @@ async function main(argv: string[]): Promise<number> {
       const bin = findPostgresBin();
       if (!bin) throw new Error("PostgreSQL server binaries not found");
       const before = await productionSnapshot();
-      if (founderUnitsOnHost().length || founderStateOnHost().length) throw new Error("founder units or state already exist on this host; refusing to rehearse over them");
+      // Living production founders may run alongside (their units are pinned to their own release); anything else refuses.
+      const living = new Set(await livingFounders());
+      const foreign = () => [
+        ...founderUnitsOnHost().filter((u) => !living.has(/automaton-fleet-founder@([0-9A-Z]{26})\.service/.exec(u)?.[1] ?? "")),
+        ...founderStateOnHost().filter((d) => !living.has(d)),
+      ];
+      if (foreign().length) throw new Error(`founder units or state that are not living production founders exist on this host (${foreign().slice(0, 3).join(", ")}); refusing to rehearse over them`);
+      const livingPids = [...living].map((id) => ({ id, pid: founderMainPid(id) }));
       const reg = await startEphemeralRegistry({ bin, rolesSql: path.join(releaseDir, "scripts/fleet-db-roles.sql"), runAs: "postgres", parent: "/var/tmp" });
       let report;
       try {
         report = await runFounderRehearsal({
           registry: reg,
-          host: new SystemdFounderHost(),
+          host: new SystemdFounderHost(undefined, undefined, release),
           release,
           actor,
           log,
@@ -124,10 +150,14 @@ async function main(argv: string[]): Promise<number> {
         reg.stop();
       }
       const after = await productionSnapshot();
-      const hostClean = founderUnitsOnHost().length === 0 && founderStateOnHost().length === 0 && !fs.existsSync(reg.dir);
-      const productionUnchanged = JSON.stringify(before) === JSON.stringify(after);
-      out({ ...report, pass: report.pass && productionUnchanged && hostClean, production: { before, after, unchanged: productionUnchanged }, hostClean });
-      return report.pass && productionUnchanged && hostClean ? 0 : 1;
+      const hostClean = foreign().length === 0 && !fs.existsSync(reg.dir);
+      // What a rehearsal must never change. (Ledger head and research counts move with living founders' own work.)
+      const inv = (x: Record<string, unknown>) => JSON.stringify([x.population, x.cap, x.genesis_records, x.genesis_enabled, x.agents, x.research_enabled]);
+      const productionUnchanged = inv(before) === inv(after);
+      const livingUntouched = livingPids.every((f) => f.pid !== "" && f.pid !== "0" && founderMainPid(f.id) === f.pid);
+      const pass = report.pass && productionUnchanged && hostClean && livingUntouched;
+      out({ ...report, pass, production: { before, after, unchanged: productionUnchanged }, hostClean, livingFounders: { before: livingPids, untouched: livingUntouched } });
+      return pass ? 0 : 1;
     }
     case "provision":
     case "attest":
@@ -138,7 +168,9 @@ async function main(argv: string[]): Promise<number> {
       if (!id || !UUID.test(id)) throw new Error(`usage: ${cmd} <genesisId>${cmd === "activate" ? " <authSha256>" : ""}`);
       const genesis = new PgGenesisAdmin({ connectionString: adminUrl() });
       try {
-        const prov = new FounderProvisioner({ genesis, host: new SystemdFounderHost(), apiUrl: PRODUCTION_API_URL, actor, log });
+        // New founders are pinned to the Genesis-authorized (= approved) release at provisioning.
+        const pinRelease = cmd === "provision" ? loadRuntimeRelease(readEnvFile(process.env.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE)) : null;
+        const prov = new FounderProvisioner({ genesis, host: new SystemdFounderHost(undefined, undefined, pinRelease), apiUrl: PRODUCTION_API_URL, actor, log });
         if (cmd === "provision") out(await prov.provisionGenesis(id));
         else if (cmd === "attest") {
           const r = await prov.attestGenesis(id);
@@ -157,8 +189,30 @@ async function main(argv: string[]): Promise<number> {
         await genesis.close();
       }
     }
+    case "pin": {
+      // Pin a living founder's unit to its REGISTERED runtime (the release it was attested with). No restart.
+      actorOrDie();
+      const id = rest[0];
+      if (!id || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)) throw new Error("usage: pin <agentId>");
+      const db = new pg.Pool({ connectionString: adminUrl(), max: 1, options: "-c search_path=fleet" });
+      try {
+        const r = (await db.query(
+          `SELECT a.status, a.runtime_commit, g.runtime_repo, g.runtime_commit AS g_commit, g.runtime_build_id, g.runtime_lockfile_sha256
+             FROM fleet_agents a JOIN fleet_genesis g ON g.genesis_id = a.genesis_id WHERE a.agent_id = $1 AND a.origin IN ('genesis_founder','reseed_founder')`, [id])).rows[0];
+        if (!r) throw new Error("no such founder");
+        if (!["active", "unresponsive"].includes(r.status)) throw new Error(`founder is ${r.status}; only living founders are pinned`);
+        if (r.runtime_commit !== r.g_commit) throw new Error("the founder's registered runtime differs from its Genesis authorization; refusing");
+        const host = new SystemdFounderHost();
+        const before = host.readPin(id);
+        const pinned = await host.pinRuntime(id, { repo: r.runtime_repo, commit: r.runtime_commit, buildId: r.runtime_build_id, lockfileSha256: r.runtime_lockfile_sha256 });
+        out({ agentId: id, before, pinned, restarted: false, note: "takes effect at the founder's next start; the running process is untouched" });
+        return 0;
+      } finally {
+        await db.end();
+      }
+    }
     default:
-      console.error("usage: fleet-founders.sh status | rehearsal | provision <genesisId> | attest <genesisId> | activate <genesisId> <authSha256> | teardown <genesisId>");
+      console.error("usage: fleet-founders.sh status | rehearsal | provision <genesisId> | attest <genesisId> | activate <genesisId> <authSha256> | teardown <genesisId> | pin <agentId>");
       return 2;
   }
 }

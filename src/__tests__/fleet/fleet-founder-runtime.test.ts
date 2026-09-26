@@ -513,6 +513,94 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
     await reset();
   }, 240_000);
 
+  it("live controller update and rollback with a living founder: the pinned founder keeps identity, state and economics; a mis-pinned start refuses; an outage is survived", async () => {
+    const host = newHost(); // the founder's pin: runtimeEnvFile (release A = this tree)
+    const prov = provisioner(host);
+    const g = await approved(1, 10_000);
+    const [a] = (await prov.provisionGenesis(g.genesisId)).founderIds!;
+    expect((await prov.attestGenesis(g.genesisId)).ok).toBe(true);
+    await genesis.fund(g.genesisId, OWNER);
+    await prov.activateGenesis(g.genesisId, g.authSha256);
+    const report = async () => (await host.readReport(a)) as Record<string, unknown> | null;
+    const beats = async () => Number((await report())?.heartbeats ?? 0);
+    const passed = async () => Number((await report())?.challengesPassed ?? 0);
+    const instance = async () => String((await report())?.instanceId ?? "");
+    const healthy = async (moreThan: { b: number; c: number }, notInstance?: string) =>
+      waitFor(async () => ((notInstance === undefined || (await instance()) !== notInstance) && (await beats()) >= moreThan.b + 3 && (await passed()) > moreThan.c ? true : null), 60_000);
+    await healthy({ b: 0, c: 0 });
+    const sha = (f: string) => crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex");
+    const snapshot = async () => ({
+      agent: (await owner.query(`SELECT agent_id, status, origin, role, runtime_commit, capability_manifest_id, genesis_id, workspace_id, state_namespace FROM fleet.fleet_agents WHERE agent_id = $1`, [a])).rows[0],
+      econ: await ledger.economics(a),
+      head: (await owner.query(`SELECT head_seq::text, head_hash FROM fleet.fleet_ledger_head`)).rows[0],
+      credential: sha(path.join(host.stateDir(a), FOUNDER_CREDENTIAL_FILE)),
+      identity: sha(path.join(host.stateDir(a), FOUNDER_IDENTITY_FILE)),
+      population: await population(),
+    });
+    const s0 = await snapshot();
+    const port = Number(new URL(apiUrl).port);
+    const A = { repo: REPO_URL, commit: identity.commit!, buildId: identity.buildId!, lockfileSha256: identity.lockfileSha256! };
+    const B = { repo: REPO_URL, commit: "b".repeat(40), buildId: "c".repeat(64), lockfileSha256: identity.lockfileSha256! };
+    const controller = async (rel: typeof A) => {
+      await service.close();
+      await store.setApprovedRuntime({ repo: rel.repo, commit: rel.commit }, "test", { buildId: rel.buildId, lockfileSha256: rel.lockfileSha256 });
+      service = new FleetService({ admin: svcStore, agent: gw, realReplicationEnabled: false, reaperIntervalMs: 0, release: rel,
+        audit: (e) => audit.push(e as unknown as Record<string, unknown>), terminator: new UnsupportedSandboxTerminator() });
+      await service.listen(port, "127.0.0.1");
+    };
+    try {
+      // 1. Controller update to a newly approved release B; the founder (pinned to A) is untouched and stays healthy.
+      await controller(B);
+      await healthy({ b: await beats(), c: await passed() });
+      expect((await snapshot()).agent.runtime_commit).toBe(A.commit);
+      // 2. The founder restarts under its pin (A): same identity; challenges pass on its registered commit.
+      let prev = await instance();
+      await host.stop(a);
+      await host.start(a);
+      await healthy({ b: 0, c: 0 }, prev);
+      // 3. A mis-pinned start (B's runtime env) is refused by the founder's own preflight: no heartbeat, nothing reset.
+      const envB = path.join(root, "runtime-b.env");
+      fs.writeFileSync(envB, [`FLEET_RUNTIME_REPO=${REPO_URL}`, `FLEET_RUNTIME_COMMIT=${B.commit}`, `FLEET_RUNTIME_BUILD_ID=${B.buildId}`, `FLEET_RUNTIME_LOCKFILE_SHA256=${B.lockfileSha256}`, ""].join("\n"));
+      await host.stop(a);
+      await host.start(a, { FLEET_RUNTIME_ENV_FILE: envB });
+      expect(await waitFor(async () => (host.exitCode(a) !== null ? true : null), 30_000)).toBe(true);
+      expect(host.exitCode(a)).not.toBe(0);
+      expect(await host.logText(a)).toMatch(/differs from the pinned/);
+      expect((await snapshot()).agent.status).toBe("active");
+      prev = await instance();
+      await host.start(a);
+      await healthy({ b: 0, c: 0 }, prev);
+      // 4. A failed controller update (the controller is down for a while): the founder keeps its process and retries.
+      await service.close();
+      await sleep(4_000);
+      expect(await host.pid(a)).toBeTruthy(); // the running founder waits in its loop
+      // …and a founder (re)started DURING the outage waits at startup instead of exiting.
+      prev = await instance();
+      await host.stop(a);
+      await host.start(a);
+      await sleep(4_000);
+      expect(await host.pid(a)).toBeTruthy();
+      expect(await host.logText(a)).toMatch(/founder_waiting_for_controller/);
+      // 5. Rollback to A: the founder resumes where it was.
+      const bBefore = await beats();
+      const cBefore = await passed();
+      service = new FleetService({ admin: svcStore, agent: gw, realReplicationEnabled: false, reaperIntervalMs: 0, release: A,
+        audit: (e) => audit.push(e as unknown as Record<string, unknown>), terminator: new UnsupportedSandboxTerminator() });
+      await store.setApprovedRuntime({ repo: A.repo, commit: A.commit }, "test", { buildId: A.buildId, lockfileSha256: A.lockfileSha256 });
+      await service.listen(port, "127.0.0.1");
+      await healthy({ b: 0, c: 0 }, prev);
+      void bBefore; void cBefore;
+      // Identity, credential, registry row, economics, ledger head and population are exactly as before; no challenge failed.
+      expect(await snapshot()).toEqual(s0);
+      expect((await owner.query(`SELECT count(*)::int AS n FROM fleet.fleet_health_challenges WHERE agent_id = $1 AND outcome = 'failed'`, [a])).rows[0].n).toBe(0);
+    } finally {
+      // Leave the shared controller on release A for the other tests.
+      if (!(await fetch(`${apiUrl}/healthz`).then((r) => r.ok, () => false))) await controller(A);
+      await store.setApprovedRuntime({ repo: A.repo, commit: A.commit }, "test", { buildId: A.buildId, lockfileSha256: A.lockfileSha256 });
+      await host.remove(a).catch(() => undefined);
+    }
+  }, 300_000);
+
   it("the real-runtime rehearsal (throwaway registry, process host, founder cognition) passes and leaves the main registry untouched", async () => {
     const reg = await startEphemeralPg(PG_BIN!);
     const before = await population();

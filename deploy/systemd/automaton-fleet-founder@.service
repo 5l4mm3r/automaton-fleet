@@ -24,8 +24,9 @@
 Description=Automaton Fleet Genesis founder runtime %i
 Documentation=file:///opt/automaton-fleet/current/docs/design/phase-f1-founder-runtime.md
 After=network-online.target
-StartLimitIntervalSec=300
-StartLimitBurst=5
+# No start limit: a founder whose controller is briefly unreachable (a deploy, a reboot) keeps retrying instead of
+# being given up after 5 fast failures (found 2026-09-26, live-update rehearsal). Refusals (3, 4) never restart.
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec
@@ -52,7 +53,7 @@ UMask=0077
 
 # 3 = the controller refused this founder; 4 = startup refusal. Never restart those.
 Restart=on-failure
-RestartSec=5s
+RestartSec=15s
 RestartPreventExitStatus=3 4
 KillSignal=SIGTERM
 TimeoutStopSec=20s

@@ -1643,6 +1643,29 @@ Rollback:
     3. then fix.
 - **Rollback.** Retire the founder through the lifecycle (not by restoring a dump). The pre-v21 dump predates the founder.
 
+## Live runtime updates with living founders (procedure, 2026-09-26)
+
+A living founder is attested to one runtime release: its health challenges compare its reported commit with its
+registered `runtime_commit`. The controller may move to newer approved releases; the founder must not move with it.
+
+- **Founder pin.** Each founder unit runs ONLY its attested release, never `/opt/automaton-fleet/current`.
+  - Drop-in: `/etc/systemd/system/automaton-fleet-founder@<id>.service.d/runtime-pin.conf`, which sets `WorkingDirectory=/opt/automaton-fleet/releases/<commit>`.
+  - Env: `/etc/automaton-fleet/founders/<id>.runtime.env`, holding its own pins.
+  - Written at provisioning, or for an existing founder by `sudo scripts/fleet-founders.sh pin <agentId>`. That command takes the registered runtime from the registry, verifies the release tree's build identity, and runs `daemon-reload` only (no restart).
+  - `fleet-verify-deployment.sh` fails if a living founder is unpinned or pinned elsewhere.
+- **Restart policy.** The founder template has no start limit and `RestartSec=15s`, so a founder retries through controller outages; refusals (exit 3/4) never restart. Founder runtimes (from `c9e…`/this release) also wait at startup for an unreachable controller.
+- **Controller update (founder untouched).**
+  1. Build, pin `runtime.env`, install (switches `current`), approve.
+  2. Restart the controller-side units only (`automaton-fleet`, operator API, custody, adapter socket, fetcher). **Never** restart the founder unit.
+  3. Verify the founder's MainPID is unchanged, heartbeats and challenges pass, `fleet-verify-deployment.sh` shows its pin, and cognition works.
+- **Rollback.** Restore the previous `runtime.env.pre-*`, approve, and restart the controller-side units. The founder is unaffected.
+- **Failure behaviour, rehearsed in `fleet-founder-runtime.test.ts` "live controller update and rollback …".** In every case the identity, credential, registry row, economics, ledger head and population are unchanged, and no challenge fails:
+  - a controller outage: the running founder waits;
+  - a founder started during the outage: it waits at startup;
+  - a mis-pinned founder start: its own preflight refuses (exit 4, never restarted), and nothing is reset.
+- **Founder runtime upgrade (not implemented).** Changing a living founder's own code needs an owner-approved registry operation (new `runtime_commit`) plus re-pinning. It is not needed for controller-side fixes.
+- **Post-Genesis rehearsals.** `fleet-founders.sh rehearsal` now runs alongside registered living founders. It refuses unknown founder units or state, and additionally proves each living founder's MainPID was untouched.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes

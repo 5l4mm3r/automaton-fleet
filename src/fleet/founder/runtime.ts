@@ -380,12 +380,24 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
     fetchImpl: opts.fetchImpl,
     healthResponder: founderHealthResponder(ctx.release),
   });
-  const me = await client.describeSelf();
+  // A controller that is briefly unreachable (a deploy, a reboot) is waited out at startup as in the loop.
+  const untilAvailable = async <T>(fn: () => Promise<T>): Promise<T> => {
+    for (;;) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (!(err instanceof FleetRegistryUnavailableError) || opts.signal?.aborted) throw err;
+        log("founder_waiting_for_controller", { error: err.message.slice(0, 120) });
+        await pause(Math.min(60_000, Math.max(1_000, Number(ctx.env.FLEET_FOUNDER_INTERVAL_MS) || 30_000)), opts.signal);
+      }
+    }
+  };
+  const me = await untilAvailable(() => client.describeSelf());
   if (!me || me.dead) throw new FounderRejectedError("The controller does not accept this founder as living.");
   if (me.agent.role !== "root" || me.agent.runtimeCommit !== ctx.release.commit) {
     throw new FounderRefusedError("Refusing to run as a Genesis founder: the registry record does not match this runtime.");
   }
-  const caps = (await client.capabilities()) as { origin?: string; manifestId?: string; manifestSha256?: string; reproductionExecutable?: boolean; paymentExecutable?: boolean };
+  const caps = (await untilAvailable(() => client.capabilities())) as { origin?: string; manifestId?: string; manifestSha256?: string; reproductionExecutable?: boolean; paymentExecutable?: boolean };
   if (caps.origin !== "genesis_founder" || caps.manifestId !== ctx.manifest.manifestId || caps.manifestSha256 !== manifestSha256(ctx.manifest)) {
     throw new FounderRejectedError("The registry capability manifest differs from this runtime's compiled manifest.");
   }

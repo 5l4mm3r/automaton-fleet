@@ -24,6 +24,8 @@ import fs from "fs";
 import path from "path";
 import { promisify } from "util";
 import { treeIdentity } from "../runtime-verify.js";
+import { computeBuildIdentity } from "../attestation.js";
+import type { RuntimeRelease } from "../runtime.js";
 import { MANIFESTS, manifestSha256 } from "../capabilities.js";
 import {
   FOUNDER_ATTEST_FILE,
@@ -167,9 +169,74 @@ export function observeProcess(
 
 // ── systemd (production) ──────────────────────────────────────
 
+/** Per-founder runtime pins (public release identifiers only; readable by the founder). */
+export const FOUNDER_PIN_DIR = "/etc/automaton-fleet/founders";
+export const RELEASES_DIR = "/opt/automaton-fleet/releases";
+const HEX40 = /^[0-9a-f]{40}$/;
+const HEX64 = /^[0-9a-f]{64}$/;
+
+export function founderPinPaths(agentId: string, pinDir = FOUNDER_PIN_DIR, unitDir = "/etc/systemd/system"): { env: string; dropIn: string } {
+  if (!ULID_RE.test(agentId)) throw new Error("invalid founder id");
+  return { env: path.join(pinDir, `${agentId}.runtime.env`), dropIn: path.join(unitDir, `${founderUnit(agentId)}.d`, "runtime-pin.conf") };
+}
+
+/**
+ * The founder-pin files: the founder unit runs ONLY its attested release (never /opt/automaton-fleet/current) with its
+ * own runtime pins, so a controller release switch can never change a living founder's code, even across a founder
+ * restart or a host reboot. Updating a founder's runtime is a separate, owner-approved operation.
+ */
+export function founderPinContent(agentId: string, release: RuntimeRelease, releasesDir = RELEASES_DIR, pinDir = FOUNDER_PIN_DIR): { env: string; dropIn: string; dir: string } {
+  if (!ULID_RE.test(agentId)) throw new Error("invalid founder id");
+  if (!HEX40.test(release.commit) || !HEX64.test(release.buildId) || !HEX64.test(release.lockfileSha256) || !/^https:\/\/[A-Za-z0-9./_-]{1,200}$/.test(release.repo)) {
+    throw new Error("invalid runtime release");
+  }
+  const dir = path.join(releasesDir, release.commit);
+  return {
+    dir,
+    env: [
+      `# Founder ${agentId}: its attested runtime (written by fleet-founders pin; do not edit by hand).`,
+      `FLEET_RUNTIME_REPO=${release.repo}`, `FLEET_RUNTIME_COMMIT=${release.commit}`, `FLEET_RUNTIME_BUILD_ID=${release.buildId}`,
+      `FLEET_RUNTIME_LOCKFILE_SHA256=${release.lockfileSha256}`, "REAL_PAYMENTS_ENABLED=false", "REAL_REPLICATION_ENABLED=false", "",
+    ].join("\n"),
+    dropIn: [
+      `# Founder ${agentId} runs only its attested release, never /opt/automaton-fleet/current (fleet-founders pin).`,
+      "[Service]", `WorkingDirectory=${dir}`, `Environment=FLEET_RUNTIME_ENV_FILE=${path.join(pinDir, `${agentId}.runtime.env`)}`, "",
+    ].join("\n"),
+  };
+}
+
 export class SystemdFounderHost implements FounderHost {
   readonly kind = "systemd" as const;
-  constructor(private readonly root = FOUNDER_STATE_ROOT, private readonly systemctl = "systemctl") {}
+  /** `pinRelease`: new founders are pinned to this (the Genesis-authorized) release at provisioning. */
+  constructor(private readonly root = FOUNDER_STATE_ROOT, private readonly systemctl = "systemctl", private readonly pinRelease: RuntimeRelease | null = null) {}
+
+  /** Pin a founder's unit to its attested release (verified on disk first). Takes effect at the next (re)start; never restarts. */
+  async pinRuntime(agentId: string, release: RuntimeRelease): Promise<{ dir: string; env: string; dropIn: string }> {
+    const c = founderPinContent(agentId, release);
+    const id = computeBuildIdentity(c.dir);
+    if (id.buildId !== release.buildId || id.lockfileSha256 !== release.lockfileSha256) {
+      throw new Error(`release ${c.dir} does not match the founder's attested build; refusing to pin`);
+    }
+    const p = founderPinPaths(agentId);
+    fs.mkdirSync(FOUNDER_PIN_DIR, { recursive: true, mode: 0o755 });
+    fs.mkdirSync(path.dirname(p.dropIn), { recursive: true, mode: 0o755 });
+    for (const [file, body] of [[p.env, c.env], [p.dropIn, c.dropIn]] as const) {
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, body, { mode: 0o644 });
+      fs.renameSync(tmp, file);
+    }
+    await run(this.systemctl, ["daemon-reload"], { timeout: 60_000 });
+    return { dir: c.dir, ...p };
+  }
+
+  /** The founder's current pin (null when unpinned). */
+  readPin(agentId: string): { workingDirectory: string | null; commit: string | null } | null {
+    const p = founderPinPaths(agentId);
+    if (!fs.existsSync(p.dropIn) || !fs.existsSync(p.env)) return null;
+    const d = fs.readFileSync(p.dropIn, "utf8");
+    const e = fs.readFileSync(p.env, "utf8");
+    return { workingDirectory: /^WorkingDirectory=(.+)$/m.exec(d)?.[1] ?? null, commit: /^FLEET_RUNTIME_COMMIT=([0-9a-f]{40})$/m.exec(e)?.[1] ?? null };
+  }
 
   stateDir(agentId: string): string {
     if (!ULID_RE.test(agentId)) throw new Error("invalid founder id");
@@ -186,6 +253,7 @@ export class SystemdFounderHost implements FounderHost {
     // systemd hands the directory (recursively) to the unit's dynamic uid at start.
     writeFile600(path.join(dir, FOUNDER_IDENTITY_FILE), identity);
     writeFile600(path.join(dir, FOUNDER_ATTEST_FILE), attest);
+    if (this.pinRelease) await this.pinRuntime(agentId, this.pinRelease);
   }
 
   async start(agentId: string): Promise<void> {
@@ -259,6 +327,11 @@ export class SystemdFounderHost implements FounderHost {
     await run(this.systemctl, ["reset-failed", founderUnit(agentId)]).catch(() => undefined);
     fs.rmSync(this.stateDir(agentId), { recursive: true, force: true });
     fs.rmSync(path.join("/var/lib/automaton-founders", agentId), { force: true }); // systemd's symlink
+    const p = founderPinPaths(agentId);
+    const pinned = fs.existsSync(p.dropIn) || fs.existsSync(p.env);
+    fs.rmSync(p.env, { force: true });
+    fs.rmSync(path.dirname(p.dropIn), { recursive: true, force: true });
+    if (pinned) await run(this.systemctl, ["daemon-reload"], { timeout: 60_000 }).catch(() => undefined);
   }
 }
 

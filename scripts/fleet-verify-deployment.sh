@@ -126,6 +126,22 @@ if [[ -f "$FT" ]]; then
   active="$(systemctl list-units --all --plain --no-legend 'automaton-fleet-founder@*' 2>/dev/null | awk '$3 != "inactive" {print $1}' | wc -l)"
   living="$(runuser -u postgres -- psql -X -At -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT count(*) FROM fleet.fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive')" 2>/dev/null || echo "?")"
   [[ "$active" == "$living" ]] && ok "founder runtime units active: $active (living founders: $living)" || bad "founder runtime units active: $active, living founders: $living"
+  # Live-update safety: no start limit (an outage is retried), refusals never restart.
+  grep -qx "StartLimitIntervalSec=0" "$FT" && grep -qx "RestartPreventExitStatus=3 4" "$FT" && ok "founder template: outages are retried, refusals never restart" || bad "founder template restart policy is not live-update safe"
+  # Every living founder runs ONLY its registered release (never /opt/automaton-fleet/current).
+  while IFS='|' read -r fid fcommit; do
+    [[ -n "$fid" ]] || continue
+    unit="automaton-fleet-founder@$fid.service"
+    wd="$(systemctl show -p WorkingDirectory --value "$unit" 2>/dev/null)"
+    pin="/etc/automaton-fleet/founders/$fid.runtime.env"
+    pc="$(grep -oP '^FLEET_RUNTIME_COMMIT=\K[0-9a-f]{40}$' "$pin" 2>/dev/null)"
+    envf="$(systemctl show -p Environment --value "$unit" 2>/dev/null | tr ' ' '\n' | grep -oP '^FLEET_RUNTIME_ENV_FILE=\K.*')"
+    if [[ "$wd" == "/opt/automaton-fleet/releases/$fcommit" && "$pc" == "$fcommit" && "$envf" == "$pin" && -d "$wd" ]]; then
+      ok "founder ${fid: -6} pinned to its registered release ${fcommit:0:7}"
+    else
+      bad "founder ${fid: -6} not pinned to its registered release ${fcommit:0:7} (WorkingDirectory=$wd, pin=${pc:-none}, env=${envf:-?})"
+    fi
+  done < <(runuser -u postgres -- psql -X -At -F '|' -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT agent_id, runtime_commit FROM fleet.fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive') ORDER BY agent_id" 2>/dev/null)
   left="$(ls -A /var/lib/private/automaton-founders 2>/dev/null | wc -l)"
   [[ "$left" -le "$living" || "$living" == "?" ]] && ok "founder state directories: $left" || bad "founder state directories: $left (living founders: $living)"
 else
