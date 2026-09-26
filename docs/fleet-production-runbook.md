@@ -1486,6 +1486,15 @@ Rollback:
 - **Runtime only:** not possible across v16 (the previous release requires v15).
 - **Full:** stop the services; restore the pre-v16 dump; restore `runtime.env.pre-a` (740f083); point `current` back to `releases/740f083…`; start in order.
 
+## Stage S3 — Real Anthropic credential and L14 provider probe (2026-09-26, times UTC)
+
+- **Owner gate.** The owner installed `/etc/automaton-fleet/cognition.key` (600 automaton-fleet-service, 108 bytes, content never read) and six `service.env` lines: `anthropic`, `claude-opus-5-5`, `THINKING=adaptive`, attempt 150 s, deadline 180 s. The controller's loader was dry-run as the service user before the restart. The controller logs `anthropic:claude-opus-5-5`. The **registry keeps cognition disabled** (provider `none`): no founder can think.
+- **Model and prices** (platform.claude.com, 2026-09-26). `claude-opus-5-5` is current (released 2026-09-22; retirement ≥ 2027-09-22). Standard prices: $4 input / $20 output / $5 cache write (5 min) / $0.20 cache read per MTok. Fleet µ¢/token: **400 / 2000 / 500 / 20**. Thinking is billed as output.
+- **First probe 10:31:** P1 HTTP 400 "credit balance is too low" (account had no credit); **$0 spent**; fail closed. It exposed a classification defect: Anthropic reports billing as a 400. Fixed in `519b773` (narrow `PROVIDER_BILLING` classifier; build `55403dcb…d060`; the builds matched). `runtime.env.pre-b` kept.
+- **Deploy incident (no impact).** The first deploy attempt of the fix was launched before the local build finished, with placeholder pins. `runtime.env` held a nonexistent pin for about 2 minutes; the `git checkout` failed and nothing was installed or restarted. It was restored from the backup made seconds earlier and re-verified (runtime identity VERIFIED on 6ed4a28), then redeployed correctly. Lesson: pins are taken only from a completed build's output.
+- **L14 10:47:39–10:47:56: PASS 11/11** (P1 completion with the exact marker; P2 native tool use; P3 tool-result continuation; P4 founder toolbox accepted; P5 no forbidden request; P6 usage on 5/5 calls; P7 reconciliation; P8 7/7 malformed refused; P9 unknown model → 404, uncharged; P10 timeout classified; P11 slowest call 5.7 s). Usage: **6,560 input, 523 output (99 thinking), 0 cache**. Provider cost at list: 6,560×$4/M + 523×$20/M = **$0.0367** = 3,670,000 µ¢, equal to Fleet's computed raw cost. The Fleet ledger rule would charge 7¢ (per-call whole-cent rounding, L13); nothing was charged (the probe has no ledger).
+- **After:** doctor DEPLOYMENT OK; `fleet:verify` 16/16; audit PASS; `fleet-verify-deployment.sh` 105/0 (14 key-isolation checks); 0 key or provider-error text in logs, journal, events, argv or environ; population 0; Genesis/cognition/custody/replication/reseeding off; 0 distributions; public ports 22 and 443.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
