@@ -40,10 +40,12 @@ export class ScriptedProvider implements CognitionProvider {
   async chat(req: ChatRequest): Promise<ChatResult> {
     const seed = crypto.createHash("sha256").update(req.agentId).digest();
     const area = OPPORTUNITY_AREAS[seed[0] % OPPORTUNITY_AREAS.length];
-    // Deterministic plan position, independent of history trimming: the heartbeat number in the latest
+    // Deterministic plan position, independent of history trimming: the thinking-slot (or heartbeat) number in the latest
     // observation (else the number of observations) sets the turn; assistant replies since it set the step.
     const lastUser = req.messages.map((m) => m.role === "user").lastIndexOf(true);
-    const beat = Number(/heartbeat\s+(\d+)/i.exec(req.messages[lastUser]?.content ?? "")?.[1] ?? req.messages.filter((m) => m.role === "user").length) || 1;
+    // The runtime's consecutive thinking-slot number when present (independent of the heartbeat cadence), else the heartbeat.
+    const obs = req.messages[lastUser]?.content ?? "";
+    const beat = Number(/thinking slot\s+(\d+)/i.exec(obs)?.[1] ?? /heartbeat\s+(\d+)/i.exec(obs)?.[1] ?? req.messages.filter((m) => m.role === "user").length) || 1;
     const inTurn = req.messages.slice(lastUser + 1).filter((m) => m.role === "assistant").length;
     const step = ((beat - 1) * 4 + inTurn) % 8;
     const call = (name: string, args: Record<string, unknown>): ToolCall => ({ id: `c${beat}-${inTurn}-${name}`, name, arguments: args });

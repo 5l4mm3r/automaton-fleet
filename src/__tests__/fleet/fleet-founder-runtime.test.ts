@@ -518,7 +518,8 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
     const before = await population();
     try {
       // As the shipped unit: the founder thinks only through the controller.
-      const host = newHost({ FLEET_FOUNDER_AGENT_LOOP: "controller" });
+      // As the shipped unit: controller loop, thinking on every 2nd heartbeat.
+      const host = newHost({ FLEET_FOUNDER_AGENT_LOOP: "controller", FLEET_FOUNDER_THINK_EVERY: "2" });
       const r = await runFounderRehearsal({
         registry: { ownerUrl: reg.ownerUrl, serviceUrl: reg.serviceUrl, agentUrl: reg.agentUrl },
         host,

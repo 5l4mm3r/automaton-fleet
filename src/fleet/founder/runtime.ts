@@ -429,7 +429,7 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
     result.heartbeats++;
     if (client.lastChallenge && client.lastChallenge !== before && client.lastChallenge.passed) result.challengesPassed++;
     if (mind && result.heartbeats % thinkEvery === 0) {
-      const t = await mind.turn(`Heartbeat ${result.heartbeats} at ${new Date().toISOString()}. Decide your next step.`);
+      const t = await mind.turn(`Heartbeat ${result.heartbeats} (thinking slot ${result.heartbeats / thinkEvery}) at ${new Date().toISOString()}. Decide your next step.`);
       if (t.ran) result.mindTurns!++;
       result.mindRefusals! += t.refusals.length;
       lastMind = { ran: t.ran, reason: t.reason ?? null, steps: t.steps, tools: t.toolCalls, refusals: t.refusals, chargedCents: t.chargedCents };

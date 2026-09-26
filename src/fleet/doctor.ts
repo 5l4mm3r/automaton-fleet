@@ -399,12 +399,15 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       if (gmax !== GENESIS_FOUNDERS) blockers.push(`Genesis must create exactly ${GENESIS_FOUNDERS} founder (registry allows ${gmax ?? "?"}).`);
       // Schema v20: the owner's bootstrap capital per founder (policy, converted to USD cents at a rate bound into the authorization).
       const bc = gv.bootstrapCapital;
+      const acctCur = (await store.fxStatus())?.accountingCurrency ?? null;
       add(
         "genesis bootstrap capital",
         bc ? "pass" : "warn",
         bc
           ? `${bc.currency} ${(bc.minorUnits / 100).toFixed(2)} per founder (owner bootstrap capital: owner_funding → genesis_allocation, never revenue or profit); ` +
-            "converted to USD cents at the owner-stated fresh rate bound into the Genesis authorization"
+            (bc.currency === (acctCur ?? "USD")
+              ? "held natively in the ledger currency (no exchange rate at Genesis)"
+              : `converted into ${acctCur ?? "USD"} at an owner-stated fresh rate bound into the Genesis authorization`)
           : "no bootstrap capital configured: a Genesis would carry a plain USD allocation (owner decision missing)",
       );
       // Schema v21: GBP books; USD provider credit; FleetController's controlled FX.
