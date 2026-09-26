@@ -241,7 +241,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
     const calls: string[] = [];
     const ports = (origin: string): CognitionPorts => ({
       capabilities: async () => ({ ok: true, origin, allowed: FOUNDER_MANIFEST_V1.allowed }),
-      cognitionStatus: async () => (calls.push("status"), { ok: true, policyEnabled: true, provider: "scripted", maxOutputTokens: 64 }),
+      cognitionStatus: async () => (calls.push("status"), { ok: true, policyEnabled: true, provider: "scripted", model: "fleet-scripted-v1", maxOutputTokens: 64 }),
       authorize: async () => (calls.push("authorize"), { ok: true, requestId: "00000000-0000-4000-8000-000000000000" }),
       record: async () => (calls.push("record"), { ok: true, chargedCents: 0 }),
     });
@@ -281,7 +281,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
         seen = JSON.parse(b);
         auth = String(req.headers.authorization);
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
-          choices: [{ message: { content: "ok", tool_calls: [{ id: "c1", function: { name: "set_goal", arguments: "{\"title\":\"t\"}" } }, { id: "c2", function: { name: "sleep", arguments: "not json" } }] } }],
+          choices: [{ message: { content: "ok", tool_calls: [{ id: "c1", function: { name: "set_goal", arguments: "{\"title\":\"t\"}" } }, { id: "c2", function: { name: "sleep", arguments: "" } }] } }],
           usage: { prompt_tokens: 12, completion_tokens: 3 },
         }));
       });
@@ -291,7 +291,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
       const port = (srv.address() as net.AddressInfo).port;
       const p = new OpenAICompatibleProvider({ baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: "k-test", model: "m1" });
       const r = await p.chat({ agentId: "A", system: "CHARTER", messages: [{ role: "user", content: "hi" }], tools: toolsFor(["planning"]), maxTokens: 64 });
-      expect(r).toEqual({ content: "ok", toolCalls: [{ id: "c1", name: "set_goal", arguments: { title: "t" } }, { id: "c2", name: "sleep", arguments: {} }], usage: { inputTokens: 12, outputTokens: 3 } });
+      expect(r).toEqual({ content: "ok", toolCalls: [{ id: "c1", name: "set_goal", arguments: { title: "t" } }, { id: "c2", name: "sleep", arguments: {} }], usage: { inputTokens: 12, outputTokens: 3 }, usageSource: "provider", attempts: 1, responseModel: null });
       expect(auth).toBe("Bearer k-test");
       expect(seen).toMatchObject({ model: "m1", max_tokens: 64, messages: [{ role: "system", content: "CHARTER" }, { role: "user", content: "hi" }] });
       expect((seen as unknown as { tools: unknown[] }).tools).toHaveLength(3);
@@ -303,18 +303,50 @@ describe("cognition gateway, providers and egress (unit)", () => {
   });
 
   it("the controller holds no provider unless explicitly configured; the key file is strictly validated", () => {
-    expect(loadCognitionProvider({})).toBeNull();
-    expect(loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "none" })).toBeNull();
-    expect(loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "scripted" })?.id).toBe("scripted");
+    expect(loadCognitionProvider({})).toEqual({ provider: null, deadlineMs: 120_000 });
+    expect(loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "none", FLEET_COGNITION_DEADLINE_MS: "60000" })).toEqual({ provider: null, deadlineMs: 60_000 });
+    expect(() => loadCognitionProvider({ FLEET_COGNITION_DEADLINE_MS: "999999" })).toThrow(/between 10000 and 240000/);
+    expect(loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "scripted" }).provider?.id).toBe("scripted");
     expect(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "magic" })).toThrow(/must be none/);
     expect(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "openai_compatible" })).toThrow(/requires/);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cogkey-"));
     const key = path.join(dir, "key");
-    fs.writeFileSync(key, "k-secret\n", { mode: 0o644 });
+    const secret = "k-secret-value-123";
+    fs.writeFileSync(key, `${secret}\n`, { mode: 0o644 });
     const env = { FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_COGNITION_BASE_URL: "https://api.example.com/v1", FLEET_COGNITION_MODEL: "m", FLEET_COGNITION_API_KEY_FILE: key };
-    expect(() => loadCognitionProvider(env)).toThrow(/world-accessible|group-accessible/);
+    const errText = (f: () => unknown) => {
+      try {
+        f();
+        return "OK";
+      } catch (err) {
+        return (err as Error).message;
+      }
+    };
+    expect(errText(() => loadCognitionProvider(env))).toMatch(/world-accessible|group-accessible/);
     fs.chmodSync(key, 0o600);
-    expect(loadCognitionProvider(env)?.id).toBe("openai_compatible");
+    const uid = process.getuid!();
+    expect(loadCognitionProvider(env, uid).provider?.id).toBe("openai_compatible");
+    // L3: the output-limit field is configurable and validated; L2: bounded timing.
+    expect((loadCognitionProvider({ ...env, FLEET_COGNITION_MAX_TOKENS_PARAM: "max_completion_tokens" }, uid).provider as OpenAICompatibleProvider).maxTokensParam).toBe("max_completion_tokens");
+    expect(errText(() => loadCognitionProvider({ ...env, FLEET_COGNITION_MAX_TOKENS_PARAM: "max_output" }, uid))).toMatch(/max_tokens or max_completion_tokens/);
+    expect(errText(() => loadCognitionProvider({ ...env, FLEET_COGNITION_MAX_ATTEMPTS: "9" }, uid))).toMatch(/between 1 and 3/);
+    // L8: owned by the service user only; one printable line; never echoed in any refusal.
+    const msgs = [errText(() => loadCognitionProvider(env, uid + 1))];
+    fs.writeFileSync(key, "has space inside\n");
+    msgs.push(errText(() => loadCognitionProvider(env, uid)));
+    fs.writeFileSync(key, `${secret}\n`);
+    const link = path.join(dir, "link");
+    fs.symlinkSync(key, link);
+    msgs.push(errText(() => loadCognitionProvider({ ...env, FLEET_COGNITION_API_KEY_FILE: link }, uid)));
+    msgs.push(errText(() => loadCognitionProvider({ ...env, FLEET_COGNITION_API_KEY_FILE: "relative/key" }, uid)));
+    const big = path.join(dir, "big");
+    fs.writeFileSync(big, "k".repeat(2_000), { mode: 0o600 });
+    expect(errText(() => loadCognitionProvider({ ...env, FLEET_COGNITION_API_KEY_FILE: big }, uid))).toMatch(/unexpected size/);
+    expect(msgs[0]).toMatch(/owned by the fleet service user/);
+    expect(msgs[1]).toMatch(/one line of 8–512 printable characters/);
+    expect(msgs[2]).toMatch(/symlink/);
+    expect(msgs[3]).toMatch(/absolute path/);
+    for (const m of msgs) expect(m).not.toContain("secret");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

@@ -51,7 +51,7 @@ import { RateLimiter, type RateLimit } from "./rate-limit.js";
 export { SIG_HEADERS, canonicalRequest, signRequest } from "./server-signing.js";
 import { SIG_HEADERS, signRequest } from "./server-signing.js";
 import { parseFounderAttestHeader } from "../founder/evidence.js";
-import { CognitionError, infer as inferCognition } from "../cognition/gateway.js";
+import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, FOUNDER_WAIT_MARGIN_MS, MAX_COGNITION_DEADLINE_MS, infer as inferCognition } from "../cognition/gateway.js";
 import type { CognitionProvider } from "../cognition/types.js";
 
 interface RequestCtx {
@@ -191,6 +191,8 @@ export interface FleetServiceOptions {
   };
   /** Phase F.2: the inference provider behind POST /v1/cognition/infer (null = none configured; founders cannot think). */
   cognitionProvider?: CognitionProvider | null;
+  /** Phase F.2 hardening (L2): one deadline for a whole inference (all attempts); founders wait this + a margin. */
+  cognitionDeadlineMs?: number;
   /** TLS material; when set, listen() serves HTTPS. */
   tls?: { cert: string | Buffer; key: string | Buffer };
   /**
@@ -334,6 +336,10 @@ export class FleetService {
    * Durable audit (fleet_events) + service log. Never throws. Redacted once;
    * the audit sink and the database receive the same redacted detail.
    */
+  private cognitionDeadlineMs(): number {
+    return Math.min(MAX_COGNITION_DEADLINE_MS, Math.max(1_000, this.opts.cognitionDeadlineMs ?? DEFAULT_COGNITION_DEADLINE_MS));
+  }
+
   private async recordDb(event: string, agentId: string | null, detail: Record<string, unknown>): Promise<void> {
     const safe = redactDetail(detail);
     this.audit(event, agentId, safe);
@@ -845,7 +851,8 @@ export class FleetService {
       const r = await agent.cognitionStatus(agentId, token);
       if (!r.ok) throw FleetService.refusal(r, "cognition status refused");
       const { ok: _ok, ...status } = r;
-      return { cognition: status };
+      // The founder's client waits longer than the controller's whole inference deadline (L2).
+      return { cognition: { ...status, deadlineMs: this.cognitionDeadlineMs(), founderWaitMs: this.cognitionDeadlineMs() + FOUNDER_WAIT_MARGIN_MS } };
     }
 
     if (method === "GET" && path === "/v1/capabilities") {
@@ -1040,11 +1047,14 @@ export class FleetService {
             agentId,
             token,
             body,
+            { deadlineMs: this.cognitionDeadlineMs() },
           );
           this.audit("cognition_inference", agentId, { requestId: r.requestId, chargedCents: r.chargedCents, tools: r.toolCalls.length });
           return r;
         } catch (err) {
-          if (err instanceof CognitionError) throw new HttpError(err.status, err.code, err.message);
+          if (err instanceof CognitionError) {
+            throw err.retryAfterS !== undefined ? Object.assign(new HttpError(err.status, err.code, err.message), { retryAfter: err.retryAfterS }) : new HttpError(err.status, err.code, err.message);
+          }
           throw err;
         }
       }

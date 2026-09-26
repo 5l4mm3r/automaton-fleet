@@ -18,7 +18,30 @@
  * controller gateway, pay for it from their own synthetic ledger, have
  * forbidden tools and a planted prompt injection refused mid-loop, and stop
  * when paused (one founder) and when cognition is switched off (all).
+ *
+ * Pre-Genesis hardening (L1–L8): the rehearsal controller reaches its model
+ * through the REAL OpenAI-compatible provider code over HTTP, against a
+ * loopback fake provider (fake key, scripted model). Provider faults are
+ * injected for founder 1 only — 429 then success on retry, 503 until retries
+ * are exhausted, malformed JSON, a timeout, unparseable tool arguments, a
+ * response without usage and a redirect — and each must be classified,
+ * recorded exactly once and charged by the v15 rule while founder 2 is unaffected.
  */
+
+export const REHEARSAL_MODEL = "fleet-rehearsal-v1";
+const REHEARSAL_FAKE_KEY = "rehearsal-fake-provider-key";
+/** Founder 1's provider faults, by its n-th request to the provider (every attempt counts). */
+export const REHEARSAL_FAULTS: Readonly<Record<number, FakeFault>> = Object.freeze({
+  2: { kind: "status", status: 429, retryAfter: "1" }, // retried → the same call succeeds (attempts 2)
+  5: { kind: "status", status: 503 },
+  6: { kind: "status", status: 503 },
+  7: { kind: "status", status: 503 }, // 3 attempts exhausted → PROVIDER_UNAVAILABLE, charge 0
+  9: { kind: "malformed_json" }, // → PROVIDER_MALFORMED_RESPONSE, estimate charged
+  11: { kind: "hang", ms: 6_000 }, // > 3 s attempt timeout → PROVIDER_TIMEOUT, estimate charged, not retried
+  13: { kind: "bad_tool_args" }, // → PROVIDER_MALFORMED_RESPONSE, reported usage charged, no tool call delivered
+  15: { kind: "no_usage" }, // → ok, estimate charged
+  17: { kind: "redirect" }, // → PROVIDER_REDIRECT_REFUSED, charge 0
+});
 
 import crypto from "crypto";
 import fs from "fs";
@@ -30,7 +53,8 @@ import { PgGenesisAdmin } from "../genesis/admin.js";
 import { FleetService } from "../service/server.js";
 import { UnsupportedSandboxTerminator } from "../service/terminator.js";
 import { FOUNDER_MANIFEST_V1, manifestSha256 } from "../capabilities.js";
-import { INJECTION_MARKER, ScriptedProvider } from "../cognition/providers.js";
+import { INJECTION_MARKER, OpenAICompatibleProvider } from "../cognition/providers.js";
+import { REHEARSAL_AGENT_HEADER, startFakeOpenAI, type FakeFault, type FakeOpenAI } from "../cognition/fake-openai.js";
 import { FOUNDER_ATTEST_FILE, FOUNDER_CREDENTIAL_FILE, type FounderAttestFile, type FounderIdentityFile } from "./evidence.js";
 import { FounderProvisioner } from "./provisioner.js";
 import type { FounderHost } from "./host.js";
@@ -110,6 +134,12 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
   const owner = new pg.Pool({ connectionString: o.registry.ownerUrl, max: 2, options: "-c search_path=fleet" });
   const agentRaw = new pg.Pool({ connectionString: o.registry.agentUrl, max: 2 });
   const audit: string[] = [];
+  const faults = { target: "" };
+  const fake: FakeOpenAI = await startFakeOpenAI({
+    apiKey: REHEARSAL_FAKE_KEY,
+    model: REHEARSAL_MODEL,
+    fault: (agent, n) => (agent === faults.target ? (REHEARSAL_FAULTS[n] ?? null) : null),
+  });
   const service = new FleetService({
     admin: svcStore,
     agent: gw,
@@ -118,8 +148,12 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
     release: o.release,
     audit: (e) => audit.push(JSON.stringify(e)),
     terminator: new UnsupportedSandboxTerminator(),
-    // The rehearsal controller only: deterministic and credential-free (the production controller holds no provider).
-    cognitionProvider: new ScriptedProvider(),
+    // The rehearsal controller only: the real HTTP provider code against a loopback fake (the production controller holds no provider).
+    cognitionProvider: new OpenAICompatibleProvider({
+      baseUrl: fake.url, apiKey: REHEARSAL_FAKE_KEY, model: REHEARSAL_MODEL, attemptTimeoutMs: 3_000, maxAttempts: 3, backoffMs: 200,
+      extraHeaders: (agentId) => ({ [REHEARSAL_AGENT_HEADER]: agentId }),
+    }),
+    cognitionDeadlineMs: 9_000,
   });
   const founders: RehearsalReport["founders"] = [];
   const allIds = new Set<string>();
@@ -226,7 +260,7 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
         probes.length ? probes.join("; ") : `own credential readable; peer credential/state and ${o.forbiddenPaths?.length ?? 0} fleet secret/state paths unreadable`);
     }
 
-    if (o.cognition !== false) await cognitionPhase(o, { ids, alloc, timeout, owner, genesis, ledger, check });
+    if (o.cognition !== false) await cognitionPhase(o, { ids, alloc, timeout, owner, genesis, ledger, check, fake, faults });
 
     // No secret in process arguments, runtime logs, registry events or the controller audit.
     const secrets = [attest0.token, ...creds.map((c) => c.token)];
@@ -253,6 +287,7 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
     const left = [...allIds].filter((id) => fs.existsSync(o.host.stateDir(id)));
     check("clean teardown", left.length === 0, left.length ? `state left for ${left.join(", ")}` : `${allIds.size} founder runtime(s) removed`);
     await service.close().catch(() => undefined);
+    await fake.close().catch(() => undefined);
     await genesis.close();
     await ledger.close();
     await gw.close();
@@ -269,7 +304,10 @@ type Report = Record<string, any> | null;
 /** Phase F.2: real founder runtimes think through the rehearsal controller under the throwaway registry's switches. */
 async function cognitionPhase(
   o: RehearsalOptions,
-  x: { ids: string[]; alloc: number; timeout: number; owner: pg.Pool; genesis: PgGenesisAdmin; ledger: PgLedgerAdmin; check: (name: string, ok: boolean, detail: string) => void },
+  x: {
+    ids: string[]; alloc: number; timeout: number; owner: pg.Pool; genesis: PgGenesisAdmin; ledger: PgLedgerAdmin; check: (name: string, ok: boolean, detail: string) => void;
+    fake: FakeOpenAI; faults: { target: string };
+  },
 ): Promise<void> {
   const { ids, owner, genesis, ledger, check } = x;
   const loop = async (id: string) => ((await o.host.readReport(id)) as Report)?.agentLoop as Record<string, any> | string | undefined;
@@ -300,7 +338,8 @@ async function cognitionPhase(
 
   // Synthetic prepaid credits (owner recorder, v14) in the throwaway registry; priced scripted model; both founders enabled.
   await ledger.recordCreditsPurchase(5_000, `rehearsal:synthetic-${crypto.randomUUID()}`, o.actor);
-  await genesis.setCognitionPolicy({ enabled: true, provider: "scripted", model: "fleet-scripted-v1", inputMicrocents: 1_000, outputMicrocents: 4_000, actor: o.actor });
+  x.faults.target = ids[0];
+  await genesis.setCognitionPolicy({ enabled: true, provider: "openai_compatible", model: REHEARSAL_MODEL, inputMicrocents: 1_000, outputMicrocents: 4_000, actor: o.actor });
   for (const id of ids) await genesis.setFounderCognition(id, { enabled: true, maxTurnsPerHour: 500, reason: "rehearsal registry only", actor: o.actor });
 
   const thinking = await waitFor(async () => ((await Promise.all(ids.map(turns))).every((t) => t >= 2) ? true : null), x.timeout);
@@ -334,6 +373,38 @@ async function cognitionPhase(
     `forbidden tools requested: ${seen.map((names, i) => `${ids[i].slice(-6)} [${forbidden.filter((f) => names.includes(f)).join(",") || "none"}]`).join(" ")}; runtime refusals ${refusals.join("/")}; ` +
     `payment instructions ${pay.i}, live orders ${pay.o}, other agents ${pay.other}`);
 
+  // Provider faults (founder 1 only) must all have happened before the kill-switch steps.
+  type Row = { request_id: string; outcome: string; error_code: string | null; usage_source: string; attempts: number; provider_status: number | null; charged_cents: string; journal_id: string | null; latency_ms: number | null; seq: string };
+  const rowsOf = async (id: string) => (await owner.query(`SELECT request_id, outcome, error_code, usage_source, attempts, provider_status, charged_cents, journal_id, latency_ms, seq FROM fleet_cognition_log WHERE agent_id = $1 ORDER BY seq`, [id])).rows as Row[];
+  const seenAll = await waitFor(async () => {
+    const r = await rowsOf(ids[0]);
+    const codes = new Set(r.map((x) => x.error_code ?? `ok:${x.usage_source}:${x.attempts}`));
+    return ["ok:provider:2", "PROVIDER_UNAVAILABLE", "PROVIDER_MALFORMED_RESPONSE", "PROVIDER_TIMEOUT", "ok:estimate:1", "PROVIDER_REDIRECT_REFUSED"].every((c) => codes.has(c))
+      && r.filter((x) => x.error_code === "PROVIDER_MALFORMED_RESPONSE").length >= 2 ? r : null;
+  }, x.timeout * 4);
+  const fa = seenAll ?? (await rowsOf(ids[0]));
+  const find = (pred: (r: Row) => boolean) => fa.find(pred);
+  const retried = find((r) => r.outcome === "ok" && r.attempts === 2);
+  const unavailable = find((r) => r.error_code === "PROVIDER_UNAVAILABLE");
+  const malformed = fa.filter((r) => r.error_code === "PROVIDER_MALFORMED_RESPONSE");
+  const timedOut = find((r) => r.error_code === "PROVIDER_TIMEOUT");
+  const noUsage = find((r) => r.outcome === "ok" && r.usage_source === "estimate");
+  const redirect = find((r) => r.error_code === "PROVIDER_REDIRECT_REFUSED");
+  const lastFault = Math.max(...fa.filter((r) => r.outcome !== "ok" || r.usage_source !== "provider" || r.attempts > 1).map((r) => Number(r.seq)));
+  const rules = Boolean(seenAll)
+    && !!retried && Number(retried.charged_cents) > 0
+    && !!unavailable && unavailable.attempts === 3 && unavailable.provider_status === 503 && unavailable.usage_source === "none" && Number(unavailable.charged_cents) === 0 && unavailable.journal_id === null
+    && malformed.some((r) => r.usage_source === "estimate" && Number(r.charged_cents) > 0) && malformed.some((r) => r.usage_source === "provider")
+    && !!timedOut && timedOut.usage_source === "estimate" && timedOut.attempts === 1 && Number(timedOut.charged_cents) > 0 && (timedOut.latency_ms ?? 0) >= 2_900 && (timedOut.latency_ms ?? 0) < 9_000
+    && !!noUsage && Number(noUsage.charged_cents) > 0
+    && !!redirect && redirect.usage_source === "none" && Number(redirect.charged_cents) === 0;
+  check("provider faults are classified, recorded once and charged by rule (real HTTP provider path)", rules,
+    `429→retry ok (attempts ${retried?.attempts ?? "?"}); 503×3 → ${unavailable?.error_code ?? "?"} charge ${unavailable?.charged_cents ?? "?"}; malformed JSON/tool args → ${malformed.map((r) => `${r.usage_source}:${r.charged_cents}¢`).join("/") || "?"}; ` +
+    `timeout after ${timedOut?.latency_ms ?? "?"} ms charge ${timedOut?.charged_cents ?? "?"}¢ (estimate); no usage → estimate ${noUsage?.charged_cents ?? "?"}¢; redirect → refused, 0¢`);
+  const recovered = fa.some((r) => Number(r.seq) > lastFault && r.outcome === "ok");
+  check("founder 1 keeps thinking after every fault (not wedged)", recovered || (await waitFor(async () => (await rowsOf(ids[0])).some((r) => Number(r.seq) > lastFault && r.outcome === "ok"), x.timeout)) === true,
+    `ok calls after the last fault: ${(await rowsOf(ids[0])).filter((r) => Number(r.seq) > lastFault && r.outcome === "ok").length}`);
+
   // Kill switch: pause founder 1; founder 2 keeps thinking.
   await genesis.setFounderCognition(ids[0], { paused: true, reason: "rehearsal kill switch", actor: o.actor });
   const pausedAt = (await owner.query(`SELECT now() AS t`)).rows[0].t as Date;
@@ -355,4 +426,25 @@ async function cognitionPhase(
   }, x.timeout);
   const late = (await owner.query(`SELECT count(*)::int AS n FROM fleet_cognition_log WHERE at > $1::timestamptz + interval '2 seconds'`, [offAt])).rows[0].n;
   check("switching cognition off stops every founder", Boolean(off) && late === 0, `${late} inference call(s) after the switch`);
+
+  // Accounting after everything settled: nothing in flight, one journal per charged call, every provider attempt accounted for.
+  await waitFor(async () => ((await owner.query(`SELECT count(*)::int AS n FROM fleet_cognition_inflight`)).rows[0].n === 0 ? true : null), x.timeout);
+  const acct = await Promise.all(ids.map(async (id) => {
+    const r = await rowsOf(id);
+    const charged = r.filter((y) => Number(y.charged_cents) > 0);
+    const journals = (await owner.query(`SELECT idempotency_key FROM fleet_ledger_journal WHERE kind = 'inference_charge' AND agent_id = $1`, [id])).rows.map((y) => y.idempotency_key as string);
+    const expected = new Set(charged.map((y) => `infer:${y.request_id}`));
+    return {
+      id, rows: r.length, attempts: r.reduce((n, y) => n + y.attempts, 0), requests: x.fake.requests.get(id) ?? 0,
+      journalsOk: journals.length === charged.length && journals.every((k) => expected.has(k)),
+      uncharged: r.filter((y) => Number(y.charged_cents) === 0).every((y) => y.journal_id === null),
+      allOk: r.every((y) => y.outcome === "ok" && y.attempts === 1 && y.usage_source === "provider"),
+    };
+  }));
+  const inflight = (await owner.query(`SELECT count(*)::int AS n FROM fleet_cognition_inflight`)).rows[0].n;
+  check("no phantom calls, no double charges: every provider attempt and every charge is accounted for once",
+    acct.every((a) => a.attempts === a.requests && a.journalsOk && a.uncharged) && inflight === 0 && (await ledger.verify()).ok,
+    acct.map((a) => `${a.id.slice(-6)}: ${a.rows} records, ${a.attempts} attempts = ${a.requests} provider requests, journals ${a.journalsOk ? "1:1" : "MISMATCH"}`).join("; ") + `; in flight ${inflight}; ledger verifies`);
+  check("one founder's provider failures do not touch the other", acct[1].allOk && acct[1].rows > 0,
+    `${ids[1].slice(-6)}: ${acct[1].rows} calls, all ok on the first attempt with provider usage`);
 }

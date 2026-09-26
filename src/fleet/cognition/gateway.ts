@@ -12,23 +12,25 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_CHARTER, FOUNDER_TOOLS, type ChatMessage, type CognitionProvider, type ToolSpec } from "./types.js";
+import { FOUNDER_CHARTER, FOUNDER_TOOLS, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ToolSpec } from "./types.js";
+import type { CognitionRecord } from "../postgres/store.js";
 
 export class CognitionError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
+  constructor(readonly status: number, readonly code: string, message: string, readonly retryAfterS?: number) {
     super(message);
   }
 }
+
+/** Controller cognition timing (L2). The founder waits deadline + FOUNDER_WAIT_MARGIN_MS, so a reply can never be paid for and lost. */
+export const DEFAULT_COGNITION_DEADLINE_MS = 120_000;
+export const MAX_COGNITION_DEADLINE_MS = 240_000; // < the 5-minute in-flight stale window
+export const FOUNDER_WAIT_MARGIN_MS = 30_000;
 
 export interface CognitionPorts {
   capabilities(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }>;
   cognitionStatus(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }>;
   authorize(agentId: string, estimateCents: number): Promise<Record<string, unknown> & { ok: boolean }>;
-  record(
-    agentId: string,
-    requestId: string,
-    r: { outcome: "ok" | "error"; inputTokens: number; outputTokens: number; promptSha256: string; responseSha256: string; toolCalls: unknown[]; errorCode: string | null },
-  ): Promise<Record<string, unknown> & { ok: boolean }>;
+  record(agentId: string, requestId: string, r: CognitionRecord): Promise<Record<string, unknown> & { ok: boolean }>;
 }
 
 const MAX_MESSAGES = 60;
@@ -81,7 +83,9 @@ export async function infer(
   agentId: string,
   token: string,
   body: Record<string, unknown>,
-): Promise<{ content: string; toolCalls: unknown[]; usage: { inputTokens: number; outputTokens: number }; chargedCents: number; requestId: string }> {
+  opts: { deadlineMs?: number; now?: () => number } = {},
+): Promise<{ content: string; toolCalls: unknown[]; usage: { inputTokens: number; outputTokens: number }; usageSource: string; chargedCents: number; requestId: string }> {
+  const now = opts.now ?? Date.now;
   const messages = validateMessages(body.messages);
   const caps = await ports.capabilities(agentId, token);
   if (!caps.ok) throw new CognitionError(401, String(caps.code ?? "FLEET_AUTH_FAILED"), "capabilities refused");
@@ -92,6 +96,8 @@ export async function infer(
   if (!status.policyEnabled || status.provider === "none") throw new CognitionError(403, "FLEET_COGNITION_DISABLED", "cognition is disabled by the owner");
   if (!provider) throw new CognitionError(409, "FLEET_COGNITION_UNAVAILABLE", "no inference provider is configured on this controller");
   if (status.provider !== provider.id) throw new CognitionError(409, "FLEET_COGNITION_PROVIDER_MISMATCH", "registry provider differs from the controller's");
+  // L6: the model the owner enabled is the model that runs (and the one the trusted log names).
+  if (status.model !== provider.model) throw new CognitionError(409, "FLEET_COGNITION_MODEL_MISMATCH", "registry model differs from the controller's");
   const tools = toolsFor(Array.isArray(caps.allowed) ? (caps.allowed as string[]) : []);
   const maxTokens = Number(status.maxOutputTokens) || 1024;
   const promptText = JSON.stringify({ system: FOUNDER_CHARTER, messages, tools: tools.map((t) => t.name) });
@@ -100,24 +106,59 @@ export async function infer(
   const auth = await ports.authorize(agentId, Math.max(1, Math.ceil(estimateMicro / 1_000_000)));
   if (!auth.ok) throw new CognitionError(auth.code === "FLEET_COGNITION_BUSY" || auth.code === "FLEET_COGNITION_RATE_LIMITED" ? 429 : 403, String(auth.code), "inference not authorized");
   const requestId = String(auth.requestId);
-  let result;
+  const deadlineMs = Math.min(MAX_COGNITION_DEADLINE_MS, Math.max(1_000, opts.deadlineMs ?? DEFAULT_COGNITION_DEADLINE_MS));
+  const started = now();
+  const promptSha = sha(promptText);
+
+  // Exactly one record per authorization, whatever happens (L1): success, classified failure or an unexpected error.
+  let result: ChatResult | null = null;
+  let failure: ProviderError | null = null;
   try {
-    result = await provider.chat({ agentId, system: FOUNDER_CHARTER, messages, tools, maxTokens });
+    result = await provider.chat({ agentId, system: FOUNDER_CHARTER, messages, tools, maxTokens, deadlineAt: started + deadlineMs });
   } catch (err) {
-    const code = (err instanceof Error && /^[A-Z_0-9]{2,64}$/.test(err.message) ? err.message : "PROVIDER_ERROR").slice(0, 64);
-    await ports.record(agentId, requestId, { outcome: "error", inputTokens: 0, outputTokens: 0, promptSha256: sha(promptText), responseSha256: sha(""), toolCalls: [], errorCode: code });
-    throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_ERROR", "the inference provider failed");
+    // An unexpected error after authorization is treated as ambiguous: the bounded estimate is charged, nothing is delivered.
+    failure = err instanceof ProviderError ? err : new ProviderError("PROVIDER_ERROR", { charge: "estimate", attempts: 1 });
+  }
+  const latencyMs = Math.max(0, Math.round(now() - started));
+  if (!result || failure) {
+    failure ??= new ProviderError("PROVIDER_ERROR", { charge: "estimate", attempts: 1 });
+    const f = failure.info;
+    const rec = await ports.record(agentId, requestId, {
+      outcome: "error",
+      inputTokens: f.usage?.inputTokens ?? 0,
+      outputTokens: f.usage?.outputTokens ?? 0,
+      promptSha256: promptSha,
+      responseSha256: sha(""),
+      toolCalls: [],
+      errorCode: failure.code,
+      usageSource: f.charge === "usage" ? "provider" : f.charge,
+      attempts: f.attempts,
+      providerStatus: f.status ?? null,
+      responseModel: f.responseModel ?? null,
+      latencyMs,
+    });
+    if (!rec.ok) throw new CognitionError(409, String(rec.code), "inference could not be recorded");
+    if (failure.code === "PROVIDER_RATE_LIMITED") throw new CognitionError(429, "FLEET_COGNITION_PROVIDER_RATE_LIMITED", "the inference provider is rate limiting", f.retryAfterS ?? 60);
+    if (failure.code === "PROVIDER_TIMEOUT") throw new CognitionError(504, "FLEET_COGNITION_PROVIDER_TIMEOUT", "the inference provider did not answer in time");
+    if (failure.code === "PROVIDER_MALFORMED_RESPONSE") throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_MALFORMED", "the inference provider returned an unusable response");
+    throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_ERROR", `the inference provider failed (${failure.code})`);
   }
   const loggedCalls = result.toolCalls.slice(0, 10).map((t) => ({ name: t.name, argsSha256: sha(JSON.stringify(t.arguments)) }));
   const rec = await ports.record(agentId, requestId, {
     outcome: "ok",
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
-    promptSha256: sha(promptText),
+    promptSha256: promptSha,
     responseSha256: sha(JSON.stringify({ content: result.content, toolCalls: result.toolCalls })),
     toolCalls: loggedCalls,
     errorCode: null,
+    usageSource: result.usageSource,
+    attempts: result.attempts,
+    providerStatus: 200,
+    responseModel: result.responseModel ?? null,
+    latencyMs,
   });
+  // Not recorded = not delivered: a response the fleet could not account for never reaches the founder.
   if (!rec.ok) throw new CognitionError(409, String(rec.code), "inference could not be recorded");
-  return { content: result.content, toolCalls: result.toolCalls, usage: result.usage, chargedCents: Number(rec.chargedCents ?? 0), requestId };
+  return { content: result.content, toolCalls: result.toolCalls, usage: result.usage, usageSource: String(rec.usageSource ?? result.usageSource), chargedCents: Number(rec.chargedCents ?? 0), requestId };
 }

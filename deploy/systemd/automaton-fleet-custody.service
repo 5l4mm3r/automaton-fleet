@@ -78,6 +78,8 @@ SystemCallFilter=~@privileged @resources
 # Controller / operator secrets, TLS sources, other services' state/logs and homes are never visible.
 InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak
 InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-chatgpt -/var/log/automaton-fleet -/var/log/automaton-fleet-operator -/run/credentials
+# The controller's inference-provider credential (owner-installed; readable by the controller only).
+InaccessiblePaths=-/etc/automaton-fleet/cognition.key
 
 [Install]
 WantedBy=multi-user.target

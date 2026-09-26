@@ -88,6 +88,7 @@ export const FOUNDER_UNREADABLE_PATHS: readonly string[] = Object.freeze([
   "/var/lib/automaton-fleet-chatgpt-adapter/bridge-chatgpt.key",
   "/var/lib/automaton-fleet-witness/fleet-credentials.json",
   "/run/credentials/automaton-fleet.service/service.env",
+  "/etc/automaton-fleet/cognition.key",
 ]);
 
 export interface FounderRuntimeOptions {

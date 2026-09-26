@@ -132,6 +132,28 @@ else
   ok "founder runtime template not installed"
 fi
 
+echo "Inference-provider credential isolation (pre-Genesis hardening L8)"
+CK=/etc/automaton-fleet/cognition.key
+for u in automaton-fleet-witness automaton-fleet-custody automaton-fleet-founder@ automaton-fleet-operator-api automaton-fleet-chatgpt-tunnel automaton-fleet-chatgpt-adapter; do
+  UF="/etc/systemd/system/$u.service"
+  [[ -f "$UF" ]] || continue
+  grep -qx "InaccessiblePaths=-$CK" "$UF" && ok "$u hides $CK" || bad "$u does not hide $CK"
+done
+grep -qx "LimitCORE=0" /etc/systemd/system/automaton-fleet.service && ok "controller: no core dumps (LimitCORE=0)" || bad "controller allows core dumps"
+if [[ -e "$CK" || -L "$CK" ]]; then
+  if [[ -L "$CK" ]]; then bad "$CK is a symlink"
+  else
+    m="$(stat -c '%a %U:%G' "$CK")"
+    [[ "$m" == "600 automaton-fleet-service:automaton-fleet-service" ]] && ok "$CK is 600 automaton-fleet-service (content not read)" || bad "$CK is $m (want 600 automaton-fleet-service:automaton-fleet-service)"
+  fi
+  for u in automaton-agent automaton-fleet-witness automaton-fleet-operator-api automaton-fleet-chatgpt-adapter automaton-fleet-chatgpt-tunnel automaton-fleet-custody "${SUDO_USER:-}"; do
+    [[ -n "$u" ]] && id "$u" >/dev/null 2>&1 || continue
+    if runuser -u "$u" -- test -r "$CK" 2>/dev/null; then bad "$u CAN read $CK"; else ok "$u cannot read $CK"; fi
+  done
+else
+  ok "no inference-provider credential installed"
+fi
+
 echo "ChatGPT adapter isolation (Phase C)"
 CA=automaton-fleet-chatgpt-adapter; CT=automaton-fleet-chatgpt-tunnel
 if id "$CA" >/dev/null 2>&1 || id "$CT" >/dev/null 2>&1; then

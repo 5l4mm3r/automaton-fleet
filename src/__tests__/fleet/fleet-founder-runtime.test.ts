@@ -512,6 +512,10 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
         "forbidden tools and a planted prompt injection are refused mid-loop",
         "pausing one founder stops it at once; the other continues",
         "switching cognition off stops every founder",
+        "provider faults are classified, recorded once and charged by rule (real HTTP provider path)",
+        "founder 1 keeps thinking after every fault (not wedged)",
+        "no phantom calls, no double charges: every provider attempt and every charge is accounted for once",
+        "one founder's provider failures do not touch the other",
       ]));
     } finally {
       reg.stop();

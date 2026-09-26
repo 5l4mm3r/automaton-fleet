@@ -21,7 +21,7 @@ import type { FounderToolbox, ToolOutcome } from "./toolbox.js";
 
 export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
-  infer(messages: unknown[]): Promise<{ content: string; toolCalls: ToolCall[]; usage: { inputTokens: number; outputTokens: number }; chargedCents: number; requestId: string }>;
+  infer(messages: unknown[], waitMs?: number): Promise<{ content: string; toolCalls: ToolCall[]; usage: { inputTokens: number; outputTokens: number }; chargedCents: number; requestId: string }>;
 }
 
 export interface TurnResult {
@@ -65,6 +65,7 @@ function fit(messages: ChatMessage[]): ChatMessage[] {
 
 export class FounderMind {
   turns = 0;
+  private restUntil = 0;
 
   constructor(private readonly o: { ports: MindPorts; toolbox: FounderToolbox; stateDir: string; maxStepsPerTurn?: number; log?: (event: string, detail?: Record<string, unknown>) => void }) {}
 
@@ -101,6 +102,9 @@ export class FounderMind {
     if (!status.policyEnabled || status.provider === "none") return { ...result, reason: "cognition disabled by the owner" };
     if (!status.founderEnabled) return { ...result, reason: "cognition not enabled for this founder" };
     if (status.paused) return { ...result, reason: "paused by the owner" };
+    // The provider asked us to slow down: rest (no inference) until the advertised time.
+    if (Date.now() < this.restUntil) return { ...result, reason: "resting: provider rate limit" };
+    const waitMs = Number(status.founderWaitMs) || undefined;
     this.turns++;
     const messages = this.history();
     messages.push({ role: "user", content: observation.slice(0, MAX_CONTENT) });
@@ -108,9 +112,10 @@ export class FounderMind {
     for (let step = 0; step < maxSteps; step++) {
       let r;
       try {
-        r = await this.o.ports.infer(fit(messages));
+        r = await this.o.ports.infer(fit(messages), waitMs);
       } catch (err) {
         const code = (err as { code?: string }).code ?? "FLEET_COGNITION_ERROR";
+        if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED") this.restUntil = Date.now() + 60_000;
         this.logDecision({ turn: this.turns, step, stopped: code });
         // A conversation the controller refuses as malformed is not kept: the next turn starts clean.
         this.save(code === "FLEET_COGNITION_SECRET_IN_PROMPT" || code === "FLEET_BAD_REQUEST" ? [] : messages);

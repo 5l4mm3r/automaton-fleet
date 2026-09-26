@@ -172,26 +172,59 @@ export function loadRemoteConfig(e: Record<string, string | undefined>, tls: { c
 }
 
 /**
- * Phase F.2: the controller's inference provider (founders never hold one).
- * Unset / "none" (the production default) → no provider: every inference is
- * refused. "scripted" is the deterministic, credential-free rehearsal model.
- * "openai_compatible" needs FLEET_COGNITION_BASE_URL, FLEET_COGNITION_MODEL and
- * FLEET_COGNITION_API_KEY_FILE (strict secret-file checks; the key is never
- * logged). The registry's owner switch must also name the same provider.
+ * Phase F.2 (hardened L1–L8): the controller's inference provider (founders never hold one).
+ * Unset / "none" (the production default) → no provider: every inference is refused.
+ * "scripted" is the deterministic, credential-free rehearsal model.
+ * "openai_compatible" needs FLEET_COGNITION_BASE_URL, FLEET_COGNITION_MODEL and FLEET_COGNITION_API_KEY_FILE
+ * (a regular 0600 file owned by this service's own uid, one line, no whitespace; its content is never logged).
+ * Optional: FLEET_COGNITION_MAX_TOKENS_PARAM (max_tokens | max_completion_tokens), FLEET_COGNITION_ATTEMPT_TIMEOUT_MS
+ * (5 s–240 s, default 90 s), FLEET_COGNITION_DEADLINE_MS (10 s–240 s, default 120 s; covers all attempts),
+ * FLEET_COGNITION_MAX_ATTEMPTS (1–3, default 3; only unprocessed failures are retried).
+ * The registry's owner switch must also name the same provider AND model.
  */
-export function loadCognitionProvider(e: Record<string, string | undefined>): CognitionProvider | null {
+export interface CognitionConfig {
+  provider: CognitionProvider | null;
+  deadlineMs: number;
+}
+
+function boundedInt(e: Record<string, string | undefined>, key: string, min: number, max: number, dflt: number): number {
+  const raw = e[key]?.trim();
+  if (!raw) return dflt;
+  if (!/^\d{1,7}$/.test(raw) || Number(raw) < min || Number(raw) > max) throw new Error(`${key} must be an integer between ${min} and ${max}.`);
+  return Number(raw);
+}
+
+/** Validate an inference credential file without ever printing its content. */
+export function readCognitionKey(file: string, uid: number | null = process.getuid?.() ?? null): string {
+  if (!path.isAbsolute(file)) throw new Error("FLEET_COGNITION_API_KEY_FILE must be an absolute path.");
+  const problems = secretFileProblems(file);
+  if (problems.length) throw new Error(`Refusing the inference credential: ${problems.join("; ")}`);
+  const st = fs.statSync(file);
+  if (uid !== null && st.uid !== uid) throw new Error("Refusing the inference credential: it must be owned by the fleet service user.");
+  if (st.size === 0 || st.size > 1024) throw new Error("Refusing the inference credential: unexpected size.");
+  const key = fs.readFileSync(file, "utf8").replace(/\r?\n$/, "");
+  if (!/^[\x21-\x7e]{8,512}$/.test(key)) throw new Error("Refusing the inference credential: it must be one line of 8–512 printable characters without spaces.");
+  return key;
+}
+
+export function loadCognitionProvider(e: Record<string, string | undefined>, uid: number | null = process.getuid?.() ?? null): CognitionConfig {
   const id = e.FLEET_COGNITION_PROVIDER?.trim() || "none";
-  if (id === "none") return null;
-  if (id === "scripted") return new ScriptedProvider(e.FLEET_COGNITION_MODEL?.trim() || undefined);
+  const deadlineMs = boundedInt(e, "FLEET_COGNITION_DEADLINE_MS", 10_000, 240_000, 120_000);
+  if (id === "none") return { provider: null, deadlineMs };
+  if (id === "scripted") return { provider: new ScriptedProvider(e.FLEET_COGNITION_MODEL?.trim() || undefined), deadlineMs };
   if (id !== "openai_compatible") throw new Error(`FLEET_COGNITION_PROVIDER must be none, scripted or openai_compatible (got ${id}).`);
   const baseUrl = e.FLEET_COGNITION_BASE_URL?.trim() ?? "";
   const model = e.FLEET_COGNITION_MODEL?.trim() ?? "";
   const keyFile = e.FLEET_COGNITION_API_KEY_FILE?.trim() ?? "";
   if (!baseUrl || !model || !keyFile) throw new Error("FLEET_COGNITION_PROVIDER=openai_compatible requires FLEET_COGNITION_BASE_URL, FLEET_COGNITION_MODEL and FLEET_COGNITION_API_KEY_FILE.");
-  const problems = secretFileProblems(keyFile);
-  if (problems.length) throw new Error(`Refusing the inference credential: ${problems.join("; ")}`);
-  const apiKey = fs.readFileSync(keyFile, "utf8").trim();
-  return new OpenAICompatibleProvider({ baseUrl, apiKey, model });
+  const param = e.FLEET_COGNITION_MAX_TOKENS_PARAM?.trim() || "max_tokens";
+  if (param !== "max_tokens" && param !== "max_completion_tokens") throw new Error("FLEET_COGNITION_MAX_TOKENS_PARAM must be max_tokens or max_completion_tokens.");
+  const attemptTimeoutMs = boundedInt(e, "FLEET_COGNITION_ATTEMPT_TIMEOUT_MS", 5_000, 240_000, 90_000);
+  const maxAttempts = boundedInt(e, "FLEET_COGNITION_MAX_ATTEMPTS", 1, 3, 3);
+  return {
+    provider: new OpenAICompatibleProvider({ baseUrl, apiKey: readCognitionKey(keyFile, uid), model, maxTokensParam: param, attemptTimeoutMs, maxAttempts }),
+    deadlineMs,
+  };
 }
 
 /** Refuse to run as root, or as anyone but the expected dedicated service user. */
@@ -281,9 +314,11 @@ export async function startFleetServiceFromEnv(
 
     let privCache: { at: number; problems: string[] } = { at: Date.now(), problems: [] };
     const realReplicationEnabled = e.REAL_REPLICATION_ENABLED?.trim().toLowerCase() === "true";
-    const cognitionProvider = loadCognitionProvider(e);
+    const cognition = loadCognitionProvider(e);
+    const cognitionProvider = cognition.provider;
     const service = new FleetService({
       cognitionProvider,
+      cognitionDeadlineMs: cognition.deadlineMs,
       admin: controller,
       agent,
       realReplicationEnabled,

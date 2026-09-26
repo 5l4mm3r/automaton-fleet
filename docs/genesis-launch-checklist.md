@@ -5,7 +5,7 @@ item says who acts, what is needed and how it is verified. Nothing here is perfo
 ChatGPT or any agent. Every step marked **OWNER GATE** is refused by the database unless an owner
 principal performs it.
 
-State at the end of F.3: schema v14; Genesis **disabled**; population 0; cap 2; cognition **disabled**
+State after pre-Genesis cognition hardening: schema v15; Genesis **disabled**; population 0; cap 2; cognition **disabled**
 (provider `none`); egress **closed**; real payments, replication and owner sweep **off**.
 
 ## A. Money (Phase E surface)
@@ -24,8 +24,9 @@ State at the end of F.3: schema v14; Genesis **disabled**; population 0; cap 2; 
 |---|---|---|---|
 | B1 | Choose the provider and model (any OpenAI-compatible HTTPS endpoint) | Owner choice | — |
 | B2 | Create a **dedicated, spend-capped** API key for the fleet only (provider-side hard limit) | At the provider | Provider dashboard |
-| B3 | Install the key on the VPS: `/etc/automaton-fleet/cognition.key`, root:fleet 0600 → delivered to the controller only | Owner, over SSH (never in a chat, repository or ticket) | `fleet:doctor` founder cognition line; the key never appears in logs |
-| B4 | Service configuration: `FLEET_COGNITION_PROVIDER=openai_compatible`, `FLEET_COGNITION_BASE_URL`, `FLEET_COGNITION_MODEL`, `FLEET_COGNITION_API_KEY_FILE` | Owner edits `service.env`, then restarts the controller | `service_started` log shows `cognitionProvider: openai_compatible:<model>` |
+| B3 | Install the key on the VPS: `/etc/automaton-fleet/cognition.key`, **0600 automaton-fleet-service:automaton-fleet-service** (the controller's own uid; every other unit has it in `InaccessiblePaths`) | Owner, over SSH (never in a chat, repository or ticket) | `fleet:doctor` founder cognition line; the key never appears in logs |
+| B4 | Service configuration: `FLEET_COGNITION_PROVIDER=openai_compatible`, `FLEET_COGNITION_BASE_URL`, `FLEET_COGNITION_MODEL`, `FLEET_COGNITION_API_KEY_FILE`; optional `FLEET_COGNITION_MAX_TOKENS_PARAM` (`max_tokens`/`max_completion_tokens`), `FLEET_COGNITION_ATTEMPT_TIMEOUT_MS` (90 s), `FLEET_COGNITION_DEADLINE_MS` (120 s), `FLEET_COGNITION_MAX_ATTEMPTS` (3) | Owner edits `service.env`, then restarts the controller | `service_started` log shows `cognitionProvider: openai_compatible:<model>` |
+| B4a | **Provider probe (L14)**, before Genesis and before `cognition-enable` | `sudo scripts/fleet-cognition-probe.sh --prices <in>,<out>` | `L14 PROVIDER PROBE: PASS` (P1–P7); no founder, no ledger, no key printed |
 | B5 | ~~Per-exec sandbox~~ **Done in F.3**: every founder shell command runs in a Landlock domain (workspace only; credential/state unreadable; no TCP; fail closed) | — | Rehearsal check "each founder's shell runs in its Landlock sandbox" |
 
 ## C. Egress (internet access for founders)

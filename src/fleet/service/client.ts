@@ -166,7 +166,7 @@ export class FleetApiClient implements FleetBackend {
     return r.sessionToken;
   }
 
-  private async call<T>(method: "GET" | "POST", p: string, body?: unknown, retried = false): Promise<T> {
+  private async call<T>(method: "GET" | "POST", p: string, body?: unknown, retried = false, timeoutMs?: number): Promise<T> {
     if (p === "/v1/health") return this.raw<T>(method, p, body, {});
     const session = await this.ensureSession();
     const payload = body === undefined ? "" : JSON.stringify(body);
@@ -178,24 +178,24 @@ export class FleetApiClient implements FleetBackend {
         [SIG_HEADERS.ts]: ts,
         [SIG_HEADERS.nonce]: nonce,
         [SIG_HEADERS.sig]: signRequest(session, method, p, ts, nonce, payload),
-      });
+      }, timeoutMs);
     } catch (err) {
       if (!retried && err instanceof ApiError && err.status === 401 && ["FLEET_SESSION_EXPIRED", "FLEET_AUTH_FAILED", "FLEET_SESSION_REQUIRED"].includes(err.code)) {
         this.session = null;
-        return this.call<T>(method, p, body, true);
+        return this.call<T>(method, p, body, true, timeoutMs);
       }
       throw err;
     }
   }
 
-  private async raw<T>(method: "GET" | "POST", p: string, body: unknown, headers: Record<string, string>): Promise<T> {
+  private async raw<T>(method: "GET" | "POST", p: string, body: unknown, headers: Record<string, string>, timeoutMs?: number): Promise<T> {
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.baseUrl}${p}`, {
         method,
         headers: { ...headers, ...(body !== undefined ? { "content-type": "application/json" } : {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
         redirect: "error",
       });
     } catch (err) {
@@ -322,10 +322,14 @@ export class FleetApiClient implements FleetBackend {
     return (await this.call<{ cognition: Record<string, unknown> }>("GET", "/v1/cognition/status")).cognition;
   }
 
-  /** Schema v13: think once through FleetController (charged to this founder's ledger). */
-  async infer(messages: unknown[]) {
-    return this.call<{ content: string; toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>; usage: { inputTokens: number; outputTokens: number }; chargedCents: number; requestId: string }>(
-      "POST", "/v1/cognition/infer", { messages },
+  /**
+   * Schema v13: think once through FleetController (charged to this founder's ledger).
+   * `waitMs` must exceed the controller's inference deadline (cognition status `founderWaitMs`), so a reply the
+   * controller records and charges is always delivered (L2). Bounded to 5 s–330 s.
+   */
+  async infer(messages: unknown[], waitMs = 150_000) {
+    return this.call<{ content: string; toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>; usage: { inputTokens: number; outputTokens: number }; usageSource: string; chargedCents: number; requestId: string }>(
+      "POST", "/v1/cognition/infer", { messages }, false, Math.min(330_000, Math.max(5_000, waitMs)),
     );
   }
 

@@ -168,7 +168,7 @@ describe.skipIf(!PG_BIN)("B2 Operator API over HTTP (PostgreSQL)", () => {
     expect(st.json.data).toMatchObject({
       fleet: { maxAgents: 2, living: 0, mode: "DEVELOPMENT", replicationEnabled: false },
       runtime: { commit: PIN.commit, buildId: BUILD.buildId, lockfileSha256: BUILD.lockfileSha256 },
-      schema: { version: 14 },
+      schema: { version: 15 },
       safety: { realReplicationEnabled: false, realPaymentsEnabled: false, ownerSweepEnabled: false, dryRunChildEnabled: false },
       operatorApi: { enabled: true },
     });

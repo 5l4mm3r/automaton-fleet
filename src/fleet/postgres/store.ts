@@ -96,6 +96,22 @@ export interface SandboxTerminationRecord {
 /** Bearer token format: fa1.<agentId>.<43 chars base64url>. */
 const TOKEN_RE = /^fa1\.([0-9A-HJKMNP-TV-Z]{26})\.[A-Za-z0-9_-]{43}$/;
 
+/** Schema v15 inference outcome (see migrations-phase15.ts for the charge rule). */
+export interface CognitionRecord {
+  outcome: "ok" | "error";
+  inputTokens: number;
+  outputTokens: number;
+  promptSha256: string;
+  responseSha256: string;
+  toolCalls: unknown[];
+  errorCode: string | null;
+  usageSource: "provider" | "estimate" | "none";
+  attempts: number;
+  providerStatus?: number | null;
+  responseModel?: string | null;
+  latencyMs?: number | null;
+}
+
 export function mintAgentToken(agentId: string): string {
   return `fa1.${agentId}.${crypto.randomBytes(32).toString("base64url")}`;
 }
@@ -1686,15 +1702,12 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_cognition_authorize($1, $2) AS r", [agentId, estimateCents])).rows[0].r);
   }
 
-  /** Schema v13: record an inference outcome, charge the founder's ledger, append the trusted cognition log. */
-  async cognitionRecord(
-    agentId: string,
-    requestId: string,
-    r: { outcome: "ok" | "error"; inputTokens: number; outputTokens: number; promptSha256: string; responseSha256: string; toolCalls: unknown[]; errorCode: string | null },
-  ): Promise<Record<string, unknown> & { ok: boolean }> {
+  /** Schema v15: record an inference outcome once, charge by the explicit usage rule, append the trusted cognition log. */
+  async cognitionRecord(agentId: string, requestId: string, r: CognitionRecord): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.tx(async (c) =>
-      (await c.query("SELECT svc_cognition_record($1, $2, $3, $4, $5, $6, $7, $8, $9) AS r", [
+      (await c.query("SELECT svc_cognition_record($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) AS r", [
         agentId, requestId, r.outcome, r.inputTokens, r.outputTokens, r.promptSha256, r.responseSha256, JSON.stringify(r.toolCalls), r.errorCode,
+        r.usageSource, r.attempts, r.providerStatus ?? null, r.responseModel ?? null, r.latencyMs ?? null,
       ])).rows[0].r,
     );
   }

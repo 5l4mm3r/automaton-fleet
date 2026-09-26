@@ -37,18 +37,53 @@ export interface ChatRequest {
   messages: ChatMessage[];
   tools: ToolSpec[];
   maxTokens: number;
+  /** Absolute time (ms since epoch) by which every attempt must have finished. */
+  deadlineAt?: number;
 }
 
 export interface ChatResult {
   content: string;
   toolCalls: ToolCall[];
   usage: { inputTokens: number; outputTokens: number };
+  /** "provider": usage came from the provider; "estimate": it was absent/invalid, so the authorized estimate is charged. */
+  usageSource: "provider" | "estimate";
+  attempts: number;
+  responseModel?: string | null;
 }
 
 export interface CognitionProvider {
   readonly id: "scripted" | "openai_compatible";
   readonly model: string;
   chat(req: ChatRequest): Promise<ChatResult>;
+}
+
+/**
+ * Provider failure, classified so charging is never ambiguous (schema v15):
+ *   charge "none"     — the provider answered with an error status or was never reached: nothing billed, nothing charged;
+ *   charge "estimate" — the outcome is ambiguous (timeout, connection lost after sending) or a 200 response was
+ *                       unusable without usable usage: the authorized estimate is charged (conservative, bounded);
+ *   charge "usage"    — an unusable 200 response that did report usage: the reported usage is charged.
+ * Codes are letters and underscores only (the trusted log's constraint).
+ */
+export type ProviderErrorCode =
+  | "PROVIDER_RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "PROVIDER_AUTH_FAILED" | "PROVIDER_MODEL_NOT_FOUND" | "PROVIDER_BAD_REQUEST"
+  | "PROVIDER_HTTP_ERROR" | "PROVIDER_TIMEOUT" | "PROVIDER_UNREACHABLE" | "PROVIDER_CONNECTION_LOST" | "PROVIDER_REDIRECT_REFUSED"
+  | "PROVIDER_MALFORMED_RESPONSE" | "PROVIDER_ERROR";
+
+export class ProviderError extends Error {
+  constructor(
+    readonly code: ProviderErrorCode,
+    readonly info: {
+      charge: "none" | "estimate" | "usage";
+      status?: number;
+      attempts: number;
+      retryAfterS?: number;
+      usage?: { inputTokens: number; outputTokens: number };
+      responseModel?: string | null;
+    },
+  ) {
+    super(code);
+  }
 }
 
 const str = (description: string, maxLength = 2000) => ({ type: "string", description, maxLength });

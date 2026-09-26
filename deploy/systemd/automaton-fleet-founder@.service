@@ -95,3 +95,5 @@ SystemCallFilter=~@privileged @resources
 InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak -/etc/automaton-fleet/chatgpt-adapter.json -/etc/automaton-fleet/chatgpt-tunnel
 InaccessiblePaths=-/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-chatgpt-adapter -/var/lib/automaton-fleet-chatgpt-tunnel -/var/lib/automaton-fleet-operator-api
 InaccessiblePaths=-/var/log/automaton-fleet -/var/log/automaton-fleet-operator -/var/log/automaton-fleet-chatgpt-adapter -/run/credentials -/opt/automaton-fleet/chatgpt-adapter -/opt/automaton-fleet/tunnel-client -/var/lib/postgresql -/etc/postgresql -/etc/ssh -/root
+# The controller's inference-provider credential (owner-installed; readable by the controller only).
+InaccessiblePaths=-/etc/automaton-fleet/cognition.key
