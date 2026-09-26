@@ -1495,6 +1495,14 @@ Rollback:
 - **L14 10:47:39–10:47:56: PASS 11/11** (P1 completion with the exact marker; P2 native tool use; P3 tool-result continuation; P4 founder toolbox accepted; P5 no forbidden request; P6 usage on 5/5 calls; P7 reconciliation; P8 7/7 malformed refused; P9 unknown model → 404, uncharged; P10 timeout classified; P11 slowest call 5.7 s). Usage: **6,560 input, 523 output (99 thinking), 0 cache**. Provider cost at list: 6,560×$4/M + 523×$20/M = **$0.0367** = 3,670,000 µ¢, equal to Fleet's computed raw cost. The Fleet ledger rule would charge 7¢ (per-call whole-cent rounding, L13); nothing was charged (the probe has no ledger).
 - **After:** doctor DEPLOYMENT OK; `fleet:verify` 16/16; audit PASS; `fleet-verify-deployment.sh` 105/0 (14 key-isolation checks); 0 key or provider-error text in logs, journal, events, argv or environ; population 0; Genesis/cognition/custody/replication/reseeding off; 0 distributions; public ports 22 and 443.
 
+## Stage L13 — Sub-cent inference accounting, schema v17 (DEPLOYED 2026-09-26, times UTC)
+
+- Commit `b2ac153` (build `16e5aee5…6300`; the builds matched; pins taken from the finished build). `runtime.env.pre-l13` kept (519b773 pins).
+- Outage 11:07:32–11:07:49 (about 17 s). Dump `~/automaton_fleet-v16-pre-v17-20260926T110732Z.dump` (1441449 B, sha `fc1a5dea…b7ed`, 0600). `migrate-check` gave exactly `{16→17, wouldApply:[17]}`; audit PASS.
+- Verify: runtime VERIFIED; doctor DEPLOYMENT OK; `fleet:verify` 16/16; `fleet-verify-deployment.sh` 105/0; Genesis dry run 20/20; **rehearsal 26/26** (accrual live: journals 1:1 with posted cents; ledger verifies); 0 key-shaped text in journals and logs.
+- State: population 0, cap 2; Genesis/cognition (registry provider `none`)/custody/replication/reseeding off; 0 distributions; 0 accrual rows; empty journal.
+- Rollback: restore the pre-v17 dump and `runtime.env.pre-l13` (519b773 requires v16).
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
