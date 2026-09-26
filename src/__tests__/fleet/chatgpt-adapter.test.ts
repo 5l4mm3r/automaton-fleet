@@ -169,7 +169,7 @@ describe.skipIf(!PG_BIN)("ChatGPT adapter against the real Operator API (ephemer
     const who = payload(await a.call("fleet_whoami"));
     expect(who.data).toMatchObject({ principal: { id: gpt.principalId, kind: "bridge_chatgpt", name: "bridge-chatgpt" }, key: { id: gpt.keyId } });
     expect(who.data.principal.scopes.sort()).toEqual(["ops.read.agents", "ops.read.status"]);
-    expect(payload(await a.call("fleet_status")).data.schema.version).toBe(19);
+    expect(payload(await a.call("fleet_status")).data.schema.version).toBe(20);
     const r = await a.call("fleet_list_agents", { limit: 10 });
     const view = payload(r);
     expect(view.notice).toBe(UNTRUSTED_NOTICE);
@@ -244,7 +244,7 @@ describe.skipIf(!PG_BIN)("ChatGPT adapter against the real Operator API (ephemer
   it("revocation, kill switch and a foreign 8788 listener all fail closed", async () => {
     const temp = await enroll("bridge-gpt-temp", "bridge_chatgpt", ["ops.read.status", "ops.read.agents"]);
     const t = await adapter("revoke", temp);
-    expect(payload(await t.call("fleet_status")).data.schema.version).toBe(19);
+    expect(payload(await t.call("fleet_status")).data.schema.version).toBe(20);
     await opAdmin.revokeKey({ keyId: temp.keyId, reason: "test", actor: ACTOR });
     expect(payload(await t.call("fleet_status")).error.code).toBe("AUTH_FAILED");
     const temp2 = await enroll("bridge-gpt-temp2", "bridge_chatgpt", ["ops.read.status", "ops.read.agents"]);

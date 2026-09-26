@@ -26,7 +26,10 @@ import pg from "pg";
 import { quoteIdent } from "../postgres/migrations.js";
 import { hashAgentToken, mintAgentToken } from "../postgres/store.js";
 import { FOUNDER_MANIFEST_CURRENT, manifestSha256 } from "../capabilities.js";
-import { GENESIS_FOUNDERS, GenesisOps, type GenesisView } from "./admin.js";
+import { GENESIS_FOUNDERS, GenesisOps, capitalToCents, type GenesisView } from "./admin.js";
+
+/** Synthetic USD-per-unit rate (micro-units) used only inside the rolled-back dry run. */
+const SYNTHETIC_FX_USD_MICRO = 1_250_000;
 import { simulateRuntimeAttestation } from "./simulate.js";
 
 export interface DryRunCheck {
@@ -83,7 +86,7 @@ export async function runGenesisDryRun(opts: {
   const schema = opts.schema ?? "fleet";
   quoteIdent(schema);
   const n = opts.founders ?? GENESIS_FOUNDERS;
-  const alloc = opts.syntheticAllocationCents ?? 12_345; // synthetic, clearly not a real amount
+  let alloc = opts.syntheticAllocationCents ?? 12_345; // synthetic, clearly not a real amount (v20: derived from the bootstrap capital when configured)
   const checks: DryRunCheck[] = [];
   const check = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail });
   const c = new pg.Client({ connectionString: opts.connectionString, application_name: "automaton-fleet-genesis-dry-run", options: `-c search_path=${schema}` });
@@ -107,19 +110,27 @@ export async function runGenesisDryRun(opts: {
     };
 
     await c.query("BEGIN");
+    // v20: with a configured bootstrap capital (production: GBP 10000 = £100.00) every proposal carries it, converted
+    // at a rate. The dry run uses a clearly synthetic rate; the real one is stated by the owner at Genesis.
+    const bootRow = (await c.query(`SELECT to_jsonb(p) AS p FROM fleet_genesis_policy p WHERE id = 1`)).rows[0].p as Record<string, unknown>;
+    const boot = bootRow.bootstrap_capital_minor != null ? { currency: String(bootRow.bootstrap_capital_currency), minor: Number(bootRow.bootstrap_capital_minor) } : null;
+    if (boot) alloc = capitalToCents(boot.minor, SYNTHETIC_FX_USD_MICRO);
+    const proposeG = (idempotencyKey: string, founderCount: number) => boot
+      ? ops.proposeCapital({ idempotencyKey, founderCount, fxUsdMicro: SYNTHETIC_FX_USD_MICRO, fxSource: "synthetic dry-run rate (rolled back)", fxObservedAt: new Date(), ttlS: 3600, actor: opts.actor })
+      : ops.propose({ idempotencyKey, founderCount, allocationCents: alloc, ttlS: 3600, actor: opts.actor });
     check("preconditions: empty fleet", before.population === 0, `population ${before.population}`);
     await ops.setEnabled(true, opts.actor, "dry run (rolled back)");
     await c.query(`SELECT fleet_admin_record_owner_funding($1, $2, $3, $4)`, [alloc * n * 2, `dryrun:${crypto.randomUUID()}`, opts.actor, `dryrun:${crypto.randomUUID()}`]);
 
     // ── v19: Genesis is 0 → GENESIS_FOUNDERS (1). The registry must say so, and a larger proposal is refused.
     const gmax = (await c.query(`SELECT (to_jsonb(p) ->> 'genesis_max_founders')::int AS m FROM fleet_genesis_policy p WHERE id = 1`)).rows[0].m as number | null;
-    const bigger = await attempt("v19_bigger", () => ops.propose({ idempotencyKey: `dryrun-big:${crypto.randomUUID()}`, founderCount: n + 1, allocationCents: alloc, ttlS: 3600, actor: opts.actor }));
+    const bigger = await attempt("v19_bigger", () => proposeG(`dryrun-big:${crypto.randomUUID()}`, n + 1));
     check("Genesis founder target", gmax === n && !bigger.ok && bigger.code === "FLEET_GENESIS_FOUNDER_COUNT",
       `registry allows ${gmax ?? "?"} founder(s) per Genesis (target ${n}); a ${n + 1}-founder proposal → ${bigger.ok ? "ACCEPTED" : bigger.code}`);
 
     // ── Scenario A: a founder fails attestation → the whole Genesis rolls back.
     const keyA = `dryrun-a:${crypto.randomUUID()}`;
-    const a = await ops.propose({ idempotencyKey: keyA, founderCount: n, allocationCents: alloc, ttlS: 3600, actor: opts.actor });
+    const a = await proposeG(keyA, n);
     await ops.approve(a.genesisId, a.authSha256, opts.actor);
     const pa = await ops.provision(a.genesisId, opts.actor);
     const aIds = pa.founderIds ?? [];
@@ -138,12 +149,12 @@ export async function runGenesisDryRun(opts: {
       && aRows.every((s) => s === "failed") && popA === 0 && (await ops.status(a.genesisId))?.status === "rolled_back",
       `founders ${aRows.join(",")}, population ${popA}`);
     const replayApprove = await attempt("a_replay", () => ops.approve(a.genesisId, a.authSha256, opts.actor));
-    const replayPropose = await ops.propose({ idempotencyKey: keyA, founderCount: n, allocationCents: alloc, ttlS: 3600, actor: opts.actor });
+    const replayPropose = await proposeG(keyA, n);
     check("A: consumed authorization cannot be replayed", !replayApprove.ok && replayApprove.code === "FLEET_GENESIS_CONSUMED"
       && replayPropose.genesisId === a.genesisId && replayPropose.replay === true, `approve replay ${replayApprove.ok ? "OK" : replayApprove.code}`);
 
     // ── Scenario B: the full Genesis (n = GENESIS_FOUNDERS founder(s)).
-    const b = await ops.propose({ idempotencyKey: `dryrun-b:${crypto.randomUUID()}`, founderCount: n, allocationCents: alloc, ttlS: 3600, actor: opts.actor });
+    const b = await proposeG(`dryrun-b:${crypto.randomUUID()}`, n);
     const tampered = await attempt("b_tamper", () => ops.approve(b.genesisId, "f".repeat(64), opts.actor));
     check("B: approval bound to authorization content", !tampered.ok && tampered.code === "FLEET_GENESIS_TAMPERED", tampered.ok ? "accepted" : tampered.code);
     const byAgent = await attempt("b_agent", () => ops.approve(b.genesisId, b.authSha256, `operator:${aIds[0]}`));
@@ -189,9 +200,17 @@ export async function runGenesisDryRun(opts: {
       && can.spend && !can.repro && !can.pay && !can.selfmod, `${FOUNDER_MANIFEST_CURRENT.manifestId} ${dbManifest.slice(0, 12)}… matches the runtime; reproduction/payment/self-mod not grantable`);
     const econ = (await c.query(`SELECT fleet_agent_economics(a) AS e FROM unnest($1::text[]) a`, [ids])).rows.map((x) => x.e);
     const verify = (await c.query(`SELECT fleet_ledger_verify() AS v`)).rows[0].v;
+    const cap = act.capital ?? (await ops.status(b.genesisId))?.capital ?? null;
+    const fundingKind = (await c.query(`SELECT provenance FROM fleet_ledger_kinds WHERE kind = 'owner_funding'`)).rows[0]?.provenance;
+    check("owner bootstrap capital", boot
+      ? !!cap && cap.currency === boot.currency && cap.minorUnits === boot.minor && b.allocationCents === capitalToCents(boot.minor, SYNTHETIC_FX_USD_MICRO)
+        && cap.classification === "owner_bootstrap_capital" && fundingKind === "owner_funding"
+      : true,
+      boot ? `${boot.currency} ${(boot.minor / 100).toFixed(2)} per founder at a synthetic ${SYNTHETIC_FX_USD_MICRO / 1e6} USD/${boot.currency} → ${b.allocationCents}¢ (rounded down); ` +
+        `bound into the authorization; owner funding recorded as ${fundingKind}, never revenue` : "no bootstrap capital configured (plain USD allocation)");
     check("virtual allocations balance", verify.ok && verify.unbalanced === 0 && econ.every((e) => e.cash === alloc && e.genesisAllocation === alloc
       && e.externalCustomerRevenue === 0 && e.realizedNetProfit === 0 && e.treasuryAllocation === 0),
-      `each founder ${alloc} (synthetic) as genesis_allocation; ledger verified (${verify.journals} journals)`);
+      `each founder ${alloc}¢ (synthetic) as genesis_allocation, not revenue or profit; ledger verified (${verify.journals} journals)`);
     const lfc = (await c.query(`SELECT fleet_ledger_balance('fleet:profit')::text AS v`)).rows[0].v;
     check("LFC unchanged", lfc === before.lfc, `LFC ${lfc}`);
     const pay = (await c.query(
@@ -207,7 +226,7 @@ export async function runGenesisDryRun(opts: {
       `API ${repl.code}; direct child insert ${child.ok ? "ACCEPTED" : child.code}`);
     const replayAct = await attempt("b_replay", () => ops.activateWithHashes(b.genesisId, b.authSha256, tokens.map(hashAgentToken), opts.actor));
     const second = await attempt("b_second", async () => {
-      const g = await ops.propose({ idempotencyKey: `dryrun-c:${crypto.randomUUID()}`, founderCount: n, allocationCents: alloc, ttlS: 3600, actor: opts.actor });
+      const g = await proposeG(`dryrun-c:${crypto.randomUUID()}`, n);
       return ops.approve(g.genesisId, g.authSha256, opts.actor);
     });
     check("replay cannot create duplicate founders", !replayAct.ok && replayAct.code === "FLEET_GENESIS_CONSUMED" && !second.ok && second.code === "FLEET_GENESIS_ALREADY_DONE",

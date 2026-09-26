@@ -5,7 +5,7 @@ item says who acts, what is needed and how it is verified. Nothing here is perfo
 ChatGPT or any agent. Every step marked **OWNER GATE** is refused by the database unless an owner
 principal performs it.
 
-State after step 5 (final Genesis preflight): schema v19; Genesis **disabled**, and it creates exactly **one** founder
+State after Genesis preparation: schema v20 (£100.00 bootstrap capital; founder charter v2 with the opportunity doctrine, see `docs/design/genesis-preparation-capital-doctrine.md`); Genesis **disabled**, and it creates exactly **one** founder
 (`genesis_max_founders = 1`; the cap of 2 is a ceiling only; growth beyond one founder is to be earned later, and replacement
 after a founder's death is a separate later process); population 0; cognition **disabled** (provider `none`); web research
 deployed but **disabled**; real payments, custody, replication, reseeding and owner sweep **off**.
@@ -14,8 +14,8 @@ deployed but **disabled**; real payments, custody, replication, reseeding and ow
 
 | # | Decision | How | Verify |
 |---|---|---|---|
-| A1 | Founder capital per founder (starting allocation, virtual until custody execution is enabled) | Decide the amount; it is recorded at `genesis-propose 1 <allocationCents>` | `genesis-status` shows it in the authorization hash |
-| A2 | Record the real owner funding that backs it | `fleet:admin ledger-record-funding <cents> <bankRef>` (**OWNER GATE**; external reference required) | `ledger-verify` OK; treasury unallocated ≥ 2 × allocation |
+| A1 | Founder capital: **decided — £100.00 owner bootstrap capital** (schema v20 policy `GBP 10000`; owner capital, never revenue or profit; virtual until custody execution is enabled). The ledger is USD, so the owner states a fresh GBP→USD rate at proposal; the registry derives `floor(10000 × rate)` cents and binds the amount, rate, source and time into the authorization | Change it later with `genesis-bootstrap <CUR> <amount>` (**OWNER GATE**) | doctor "genesis bootstrap capital"; `genesis-status` → `capital` |
+| A2 | Record the owner funding that backs it, in USD cents at the same rate (at least the derived allocation, plus whatever the owner wants to hold back for prepaid inference credits, A3) | `fleet:admin ledger-record-funding <cents> <bankRef>` (**OWNER GATE**; external reference required; recorded as `owner_funding`) | `ledger-verify` OK; treasury unallocated ≥ allocation |
 | A3 | Prepaid inference credits (the fleet buys; founders reimburse from their own cash) | Buy credit at the provider, then `fleet:admin ledger-record-credits <cents> <invoiceRef>` (**OWNER GATE**, schema v14; from unallocated treasury only) | `fleet:conway_credits` balance; `ledger-verify` OK |
 | A4 | Inference prices (microcents per input/output token), matching the provider's price list | Set on `cognition-enable` (`--in-microcents`, `--out-microcents`) | `cognition-policy` |
 | A5 | Per-founder daily inference budget and hourly call limit | `founder-cognition <id> enable --daily-budget N --turns-per-hour N` | `cognition-status <id>` |
@@ -45,7 +45,7 @@ deployed but **disabled**; real payments, custody, replication, reseeding and ow
 | # | Step | Command | Gate |
 |---|---|---|---|
 | D1 | Enable Genesis | `fleet:admin genesis-enable <reason>` | **OWNER GATE** |
-| D2 | Propose and approve the one founder (any other count is refused by the registry) | `genesis-propose 1 <allocationCents>` → `genesis-approve <id> <authSha256>` | owner |
+| D2 | Propose and approve the one founder (any other count, and any allocation other than the bootstrap capital, is refused by the registry) | `genesis-propose 1 --fx <USD per GBP> --fx-source "<source>" [--fx-at <ISO>]` (rate observed within 24 h) → check `capital` and `allocationCents` in the output → `genesis-approve <id> <authSha256>` | owner |
 | D3 | Provision, attest and fund (virtual) | `sudo scripts/fleet-founders.sh provision / attest`, then `genesis-fund` | root tool + owner |
 | D4 | Activate | `sudo scripts/fleet-founders.sh activate <id> <authSha256>` | **OWNER GATE** |
 | D5 | Turn cognition on: the global switch, then the founder | `cognition-enable anthropic <model> ...` (B4-anthropic), then `founder-cognition <id> enable ...` | **OWNER GATE** |

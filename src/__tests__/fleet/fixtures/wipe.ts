@@ -52,6 +52,9 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   }
   const gp = await c.query("SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_genesis_policy' AND column_name = 'genesis_max_founders'", [schema]);
   if (gp.rowCount) await c.query(`UPDATE "${schema}".fleet_genesis_policy SET genesis_max_founders = 1`);
+  // v20: test registries run without a bootstrap-capital decision (plain USD allocations); production-like tests set it.
+  const bc = await c.query("SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_genesis_policy' AND column_name = 'bootstrap_capital_minor'", [schema]);
+  if (bc.rowCount) await c.query(`UPDATE "${schema}".fleet_genesis_policy SET bootstrap_capital_currency = NULL, bootstrap_capital_minor = NULL`);
   if (r.rows.some((x) => x.t === "fleet_research_policy")) {
     await c.query(`UPDATE "${schema}".fleet_research_policy SET research_enabled = false, founder_hourly = 60, founder_daily = 300,
       fleet_hourly = 120, fleet_daily = 600, updated_by = 'migration'`);

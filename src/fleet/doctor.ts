@@ -397,6 +397,16 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
           : `registry allows ${gmax ?? "no v19 policy"} founder(s) per Genesis; this runtime requires ${GENESIS_FOUNDERS}`,
       );
       if (gmax !== GENESIS_FOUNDERS) blockers.push(`Genesis must create exactly ${GENESIS_FOUNDERS} founder (registry allows ${gmax ?? "?"}).`);
+      // Schema v20: the owner's bootstrap capital per founder (policy, converted to USD cents at a rate bound into the authorization).
+      const bc = gv.bootstrapCapital;
+      add(
+        "genesis bootstrap capital",
+        bc ? "pass" : "warn",
+        bc
+          ? `${bc.currency} ${(bc.minorUnits / 100).toFixed(2)} per founder (owner bootstrap capital: owner_funding → genesis_allocation, never revenue or profit); ` +
+            "converted to USD cents at the owner-stated fresh rate bound into the Genesis authorization"
+          : "no bootstrap capital configured: a Genesis would carry a plain USD allocation (owner decision missing)",
+      );
       const want = manifestSha256(FOUNDER_MANIFEST_CURRENT);
       const mid = gv.founderManifestId ?? "?";
       add(

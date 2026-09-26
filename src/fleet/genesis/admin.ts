@@ -30,6 +30,23 @@ import { hashAgentToken, mintAgentToken } from "../postgres/store.js";
  */
 export const GENESIS_FOUNDERS = 1;
 
+/**
+ * Schema v20: parse a decimal exchange rate ("1.2745" USD per unit of the capital currency) into integer
+ * micro-units without floating point. At most 6 decimals; must be positive.
+ */
+export function parseFxMicro(rate: string): number {
+  const m = /^(\d{1,4})(?:\.(\d{1,6}))?$/.exec(rate.trim());
+  if (!m) throw new Error("the exchange rate must be a positive decimal with at most 6 decimals (USD per unit)");
+  const micro = Number(m[1]) * 1_000_000 + Number((m[2] ?? "").padEnd(6, "0"));
+  if (!Number.isSafeInteger(micro) || micro < 1) throw new Error("the exchange rate must be positive");
+  return micro;
+}
+
+/** USD cents a capital amount (minor units) buys at a micro-unit rate, rounded down (the registry's rule). */
+export function capitalToCents(minorUnits: number, fxUsdMicro: number): number {
+  return Number((BigInt(minorUnits) * BigInt(fxUsdMicro)) / 1_000_000n);
+}
+
 export interface GenesisView {
   genesisId: string;
   kind: string;
@@ -41,6 +58,8 @@ export interface GenesisView {
   runtime: { repo: string; commit: string; buildId: string; lockfileSha256: string };
   economicPolicySha256: string;
   allocationCents: number;
+  /** v20: the owner's capital decision and the rate that converted it into allocationCents (null on plain USD proposals). */
+  capital?: { currency: string; minorUnits: number; fxUsdMicro: number; fxSource: string; fxObservedAt: string; classification: string } | null;
   expiresAt: string;
   requestedBy: string;
   approvedBy: string | null;
@@ -196,6 +215,25 @@ export class GenesisOps {
     return this.one<GenesisView>(`SELECT fleet_genesis_propose($1, $2, $3, $4, $5, $6, $7) AS r`, [
       p.idempotencyKey, p.kind ?? "genesis", p.founderCount, p.manifestId ?? null, p.allocationCents, p.ttlS ?? null, p.actor,
     ]);
+  }
+
+  /** v20: propose with the configured bootstrap capital, converted at an owner-stated fresh rate (allocation derived). */
+  proposeCapital(p: { idempotencyKey: string; founderCount: number; manifestId?: string; fxUsdMicro: number; fxSource: string; fxObservedAt: Date | string; ttlS?: number; actor: string }) {
+    return this.one<GenesisView>(`SELECT fleet_genesis_propose_capital($1, $2, $3, $4, $5, $6, $7, $8) AS r`, [
+      p.idempotencyKey, p.founderCount, p.manifestId ?? null, p.fxUsdMicro, p.fxSource, p.fxObservedAt, p.ttlS ?? null, p.actor,
+    ]);
+  }
+
+  /** v20: the configured bootstrap capital per founder (null when none is configured). */
+  async bootstrapCapital(): Promise<{ currency: string; minorUnits: number } | null> {
+    const r = await this.db.query(`SELECT to_jsonb(p) AS p FROM fleet_genesis_policy p WHERE id = 1`);
+    const x = r.rows[0]?.p as Record<string, unknown> | undefined;
+    return x && x.bootstrap_capital_minor != null ? { currency: String(x.bootstrap_capital_currency), minorUnits: Number(x.bootstrap_capital_minor) } : null;
+  }
+
+  /** v20 (owner only): the bootstrap capital for FUTURE Geneses; null clears it. */
+  setBootstrapCapital(capital: { currency: string; minorUnits: number } | null, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_genesis_set_bootstrap($1, $2, $3) AS r`, [capital?.currency ?? null, capital?.minorUnits ?? null, actor]);
   }
 
   approve(genesisId: string, authSha256: string, actor: string) {

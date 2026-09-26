@@ -1012,11 +1012,14 @@ export class PgFleetStore {
     openEstates: number;
     /** Schema v19: founders one Genesis may create (null before v19). */
     genesisMaxFounders: number | null;
+    /** Schema v20: owner bootstrap capital per founder (null before v20 or when none is configured). */
+    bootstrapCapital: { currency: string; minorUnits: number } | null;
   } | null> {
     try {
       return await this.read(async (c) => {
         const r = await c.query(
           `SELECT p.genesis_enabled, (to_jsonb(p) ->> 'genesis_max_founders')::int AS max_founders,
+                  to_jsonb(p) ->> 'bootstrap_capital_currency' AS boot_cur, (to_jsonb(p) ->> 'bootstrap_capital_minor')::bigint AS boot_minor,
                   (SELECT count(*) FROM fleet_genesis WHERE status IN ('approved','provisioning','attesting','funding_virtual','ready')) AS in_flight,
                   (SELECT count(*) FROM fleet_genesis WHERE status = 'activated') AS activated,
                   (SELECT count(*) FROM fleet_agents WHERE origin IN ('genesis_founder','reseed_founder')) AS founders,
@@ -1047,6 +1050,7 @@ export class PgFleetStore {
           knowledgeEntries: Number(x.kentries),
           openEstates: Number(x.estates),
           genesisMaxFounders: x.max_founders === null || x.max_founders === undefined ? null : Number(x.max_founders),
+          bootstrapCapital: x.boot_minor === null || x.boot_minor === undefined ? null : { currency: String(x.boot_cur), minorUnits: Number(x.boot_minor) },
         };
       });
     } catch {

@@ -8,6 +8,8 @@
  *   genesis-dry-run [--founders N] [--synthetic-cents N]      full workflow in ONE rolled-back transaction (default: 1 founder, v19)
  *   genesis-enable <reason…> | genesis-disable <reason…>        OWNER GATE (never run by an AI operator)
  *   genesis-propose <founders> <allocationCents> [--ttl S] [--manifest ID] [--key K]   (v19: founders must be 1)
+ *   genesis-propose <founders> --fx <USD per unit> --fx-source <text> [--fx-at ISO]   v20: bootstrap capital (e.g. £100.00) at a fresh rate
+ *   genesis-bootstrap [<CUR> <amount> | none]                        v20: show / set (owner) the bootstrap capital per founder
  *   genesis-approve <genesisId> <authSha256>
  *   genesis-provision <genesisId>
  *   genesis-attest <genesisId> <agentId> --evidence-file <json>   runtime/workspace evidence of that founder
@@ -39,10 +41,10 @@ import crypto from "crypto";
 import fs from "fs";
 import { runGenesisDryRun } from "./dry-run.js";
 import { FOUNDER_TOOLS } from "../cognition/types.js";
-import { GENESIS_FOUNDERS, type AttestationEvidence, type PgGenesisAdmin } from "./admin.js";
+import { GENESIS_FOUNDERS, parseFxMicro, type AttestationEvidence, type PgGenesisAdmin } from "./admin.js";
 
 export const GENESIS_COMMANDS = new Set([
-  "genesis-policy", "genesis-list", "genesis-status", "genesis-dry-run", "genesis-enable", "genesis-disable", "genesis-propose",
+  "genesis-policy", "genesis-bootstrap", "genesis-list", "genesis-status", "genesis-dry-run", "genesis-enable", "genesis-disable", "genesis-propose",
   "genesis-approve", "genesis-provision", "genesis-attest", "genesis-fail", "genesis-fund", "genesis-activate", "genesis-abort",
   "reproduction-eligibility", "knowledge-review", "identity-claim-decide",
   "cognition-policy", "cognition-enable", "cognition-disable", "founder-cognition", "cognition-status", "cognition-log", "founders-report",
@@ -88,7 +90,7 @@ export async function runGenesisCommand(
   ctx: { connectionString: string; schema?: string; apiUrl: string | null },
 ): Promise<{ output: unknown; exitCode: number }> {
   const flags = [
-    "--founders", "--synthetic-cents", "--ttl", "--manifest", "--key", "--evidence-file", "--credential-dir", "--max-reads",
+    "--founders", "--synthetic-cents", "--fx", "--fx-source", "--fx-at", "--ttl", "--manifest", "--key", "--evidence-file", "--credential-dir", "--max-reads",
     "--max-output", "--in-microcents", "--out-microcents", "--daily-budget", "--turns-per-hour", "--limit",
     "--cache-write-microcents", "--cache-read-microcents",
     "--founder-hourly", "--founder-daily", "--fleet-hourly", "--fleet-daily", "--hourly", "--daily",
@@ -99,6 +101,14 @@ export async function runGenesisCommand(
   switch (cmd) {
     case "genesis-policy":
       return ok(await g.policy());
+    case "genesis-bootstrap": {
+      // v20: show, or (owner) set, the bootstrap capital per founder for future Geneses: genesis-bootstrap [GBP 100.00 | none]
+      if (p.length === 0) return ok(await g.bootstrapCapital());
+      if (p[0] === "none") return ok(await g.setBootstrapCapital(null, actor));
+      const m = /^(\d{1,9})(?:\.(\d{2}))?$/.exec(p[1] ?? "");
+      if (!/^[A-Z]{3}$/.test(p[0]) || !m) throw new Error("usage: genesis-bootstrap [<CUR> <amount with 2 decimals> | none]");
+      return ok(await g.setBootstrapCapital({ currency: p[0], minorUnits: Number(m[1]) * 100 + Number(m[2] ?? "0") }, actor));
+    }
     case "genesis-list":
       return ok(await g.list());
     case "genesis-status":
@@ -171,6 +181,21 @@ export async function runGenesisCommand(
       return ok(await g.setEnabled(cmd === "genesis-enable", actor, reason));
     }
     case "genesis-propose":
+      // v20: with a configured bootstrap capital the allocation is derived from it at the stated fresh rate.
+      if (flag(a, "--fx") !== undefined) {
+        const source = flag(a, "--fx-source");
+        if (!source) throw new Error("usage: genesis-propose <founders> --fx <USD per unit> --fx-source <where the rate came from> [--fx-at ISO time]");
+        return ok(await g.proposeCapital({
+          idempotencyKey: flag(a, "--key") ?? `genesis:${crypto.randomBytes(12).toString("base64url")}`,
+          founderCount: int(p[0], "founders", 1),
+          fxUsdMicro: parseFxMicro(String(flag(a, "--fx"))),
+          fxSource: source,
+          fxObservedAt: flag(a, "--fx-at") ?? new Date().toISOString(),
+          ttlS: flag(a, "--ttl") ? int(flag(a, "--ttl"), "--ttl", 600) : undefined,
+          manifestId: flag(a, "--manifest"),
+          actor,
+        }));
+      }
       return ok(await g.propose({
         idempotencyKey: flag(a, "--key") ?? `genesis:${crypto.randomBytes(12).toString("base64url")}`,
         founderCount: int(p[0], "founders", 1),

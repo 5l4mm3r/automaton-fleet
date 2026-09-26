@@ -716,7 +716,8 @@ describe.skipIf(!PG_BIN)("Phase F.2 founder cognition (schema v13, HTTP + Postgr
     await reset();
     const [a, b] = await founders();
     await buyCredits(5_000);
-    await genesis.setCognitionPolicy({ enabled: true, provider: "scripted", model: "fleet-scripted-v1", inputMicrocents: 1_000, outputMicrocents: 4_000, actor: OWNER });
+    // Input price halved with charter v2 (about twice as long), so four turns still reach the probes before the 10¢ budget.
+    await genesis.setCognitionPolicy({ enabled: true, provider: "scripted", model: "fleet-scripted-v1", inputMicrocents: 500, outputMicrocents: 4_000, actor: OWNER });
     await genesis.setFounderCognition(a.agentId, { enabled: true, maxTurnsPerHour: 500, dailyBudgetCents: 10, reason: "t", actor: OWNER });
     const m = mindFor(a);
     for (let i = 0; i < 4; i++) await m.mind.turn(`hb ${i}`);

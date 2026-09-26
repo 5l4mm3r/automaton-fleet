@@ -35,7 +35,8 @@ import { environmentProblems, fetcherLocalAddresses, fetcherServer } from "../..
 import { spawn } from "child_process";
 import { unixFetcher, type FetcherPort } from "../../fleet/research/client.js";
 import { ResearchError, research, type ResearchRecord } from "../../fleet/research/gateway.js";
-import { FounderToolbox } from "../../fleet/founder/toolbox.js";
+import { FounderToolbox, MAX_RESEARCH_FILES, pruneResearch } from "../../fleet/founder/toolbox.js";
+import { FOUNDER_CHARTER, FOUNDER_CHARTER_VERSION } from "../../fleet/cognition/types.js";
 import { FounderMind } from "../../fleet/founder/mind.js";
 import { INJECTION_MARKER, ScriptedProvider } from "../../fleet/cognition/providers.js";
 import { toolsFor } from "../../fleet/cognition/gateway.js";
@@ -360,6 +361,43 @@ describe("fetcher service boundary", () => {
     expect(sock.some((l) => /^ListenStream=\d|^ListenStream=0\.0\.0\.0|^ListenStream=\[/.test(l))).toBe(false); // no TCP listener
     const founder = fs.readFileSync(path.join(dir, "automaton-fleet-founder@.service"), "utf8").split("\n");
     expect(founder).toEqual(expect.arrayContaining(["IPAddressDeny=any", "IPAddressAllow=localhost", "InaccessiblePaths=-/run/automaton-fleet-fetcher", "Environment=FLEET_CAPABILITY_MANIFEST=founder-v2"]));
+  });
+});
+
+describe("Genesis preparation: research retention and opportunity doctrine", () => {
+  it("saved research pages are bounded (newest kept); only toolbox pages are touched, never symlinks or other files", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "research-"));
+    const now = Date.now();
+    for (let i = 0; i < MAX_RESEARCH_FILES + 7; i++) {
+      const f = path.join(dir, `${i.toString(16).padStart(16, "0")}.txt`);
+      fs.writeFileSync(f, "page");
+      fs.utimesSync(f, new Date(now - (MAX_RESEARCH_FILES + 7 - i) * 1000), new Date(now - (MAX_RESEARCH_FILES + 7 - i) * 1000));
+    }
+    fs.writeFileSync(path.join(dir, "notes.md"), "my conclusions");
+    const outside = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "outside-")), "keep.txt");
+    fs.writeFileSync(outside, "x");
+    fs.symlinkSync(outside, path.join(dir, "ffffffffffffffff.txt"));
+    fs.utimesSync(path.join(dir, "notes.md"), new Date(0), new Date(0));
+    expect(pruneResearch(dir)).toBe(7);
+    const left = fs.readdirSync(dir);
+    expect(left).toContain("notes.md");
+    expect(left).toContain("ffffffffffffffff.txt");
+    expect(fs.existsSync(outside)).toBe(true);
+    expect(left.filter((n) => /^[0-9a-f]{16}\.txt$/.test(n) && n !== "ffffffffffffffff.txt")).toHaveLength(MAX_RESEARCH_FILES);
+    expect(left).not.toContain(`${(0).toString(16).padStart(16, "0")}.txt`); // the oldest went first
+  });
+
+  it("the charter carries the owner's doctrine as priors: no prescribed business, research ≠ execution, owner capital ≠ profit", () => {
+    expect(FOUNDER_CHARTER_VERSION).toBe("founder-charter-v2");
+    expect(FOUNDER_CHARTER).toMatch(/No business has been chosen for you/);
+    expect(FOUNDER_CHARTER).toMatch(/Economic priors \(judgement, not rules\)/);
+    expect(FOUNDER_CHARTER).toMatch(/high risk is not the same as low opportunity/);
+    expect(FOUNDER_CHARTER).toMatch(/Researching a market is not permission to trade it/);
+    expect(FOUNDER_CHARTER).toMatch(/owner bootstrap capital, not revenue or profit/);
+    expect(FOUNDER_CHARTER).toMatch(/never fabricate evidence, customers, revenue, market data/);
+    expect(FOUNDER_CHARTER).toMatch(/Cite the research attemptId/);
+    expect(FOUNDER_CHARTER).not.toMatch(/£|GBP|\b100\b/); // the amount lives in the ledger, not the prompt
+    expect(FOUNDER_CHARTER.length).toBeLessThan(3_600); // every token is paid on every call
   });
 });
 

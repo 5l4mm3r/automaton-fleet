@@ -61,7 +61,10 @@ import pg from "pg";
 import { PgFleetStore } from "../postgres/store.js";
 import { PgAgentGateway } from "../postgres/agent-gateway.js";
 import { PgLedgerAdmin } from "../treasury/ledger.js";
-import { GENESIS_FOUNDERS, PgGenesisAdmin } from "../genesis/admin.js";
+import { GENESIS_FOUNDERS, PgGenesisAdmin, capitalToCents } from "../genesis/admin.js";
+
+/** Synthetic USD-per-unit rate (micro-units), throwaway registry only. */
+const REHEARSAL_FX_USD_MICRO = 1_250_000;
 import { FleetService } from "../service/server.js";
 import { UnsupportedSandboxTerminator } from "../service/terminator.js";
 import { FOUNDER_MANIFEST_CURRENT, manifestSha256 } from "../capabilities.js";
@@ -147,7 +150,7 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
     log("rehearsal_check", { name, ok, detail });
   };
   const timeout = o.timeoutMs ?? 120_000;
-  const alloc = o.syntheticAllocationCents ?? 12_345;
+  let alloc = o.syntheticAllocationCents ?? 12_345; // v20: derived from the registry's bootstrap capital when configured
   const store = new PgFleetStore({ connectionString: o.registry.ownerUrl });
   const svcStore = new PgFleetStore({ connectionString: o.registry.serviceUrl });
   const gw = new PgAgentGateway({ connectionString: o.registry.agentUrl });
@@ -188,6 +191,13 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
     await store.setMaxAgents(2, "rehearsal");
     await store.setLifecyclePolicy({ healthChallengeIntervalS: 2, challengeTtlS: 30, healthGraceS: 300, maxChallengeFailures: 3, terminationGraceS: 480, orphanSlotHoldS: 259200, maxOpenOrphans: 1, sessionTtlS: 600 }, "rehearsal");
     await genesis.setEnabled(true, o.actor, "rehearsal registry only (throwaway)");
+    // v20: the throwaway registry carries the production bootstrap capital (GBP 10000 = £100.00); proposals convert it
+    // at a clearly synthetic rate (the real rate is stated by the owner at Genesis).
+    const boot = await genesis.bootstrapCapital();
+    if (boot) alloc = capitalToCents(boot.minorUnits, REHEARSAL_FX_USD_MICRO);
+    const proposeG = (idempotencyKey: string, founderCount: number) => boot
+      ? genesis.proposeCapital({ idempotencyKey, founderCount, fxUsdMicro: REHEARSAL_FX_USD_MICRO, fxSource: "synthetic rehearsal rate (throwaway registry)", fxObservedAt: new Date(), ttlS: 3600, actor: o.actor })
+      : genesis.propose({ idempotencyKey, founderCount, allocationCents: alloc, ttlS: 3600, actor: o.actor });
     await ledger.recordOwnerFunding(alloc * 4, `rehearsal:synthetic-${crypto.randomUUID()}`, o.actor);
     const apiUrl = (await service.listen(0, "127.0.0.1")).url;
     log("rehearsal_controller", { apiUrl });
@@ -196,14 +206,14 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
     const codeOf = (e: unknown) => /FLEET_[A-Z_]+/.exec(e instanceof Error ? e.message : String(e))?.[0] ?? "ERR";
 
     // ── v19: Genesis is 0 → 1. A two-founder proposal is refused although the cap (2) would allow it.
-    const two = await genesis.propose({ idempotencyKey: `rehearsal-two:${crypto.randomUUID()}`, founderCount: GENESIS_FOUNDERS + 1, allocationCents: alloc, ttlS: 3600, actor: o.actor })
+    const two = await proposeG(`rehearsal-two:${crypto.randomUUID()}`, GENESIS_FOUNDERS + 1)
       .then(() => "CREATED", codeOf);
     const capNow = (await owner.query(`SELECT max_agents FROM fleet_state`)).rows[0].max_agents as number;
     check("Genesis creates exactly one founder: a two-founder proposal is refused (the cap is a ceiling only)", two === "FLEET_GENESIS_FOUNDER_COUNT" && GENESIS_FOUNDERS === 1,
       `${GENESIS_FOUNDERS + 1}-founder proposal → ${two}; registry cap ${capNow}`);
 
     // ── Genesis A: the founder holds a wrong attestation token → complete rollback.
-    const ga = await genesis.propose({ idempotencyKey: `rehearsal-a:${crypto.randomUUID()}`, founderCount: GENESIS_FOUNDERS, allocationCents: alloc, ttlS: 3600, actor: o.actor });
+    const ga = await proposeG(`rehearsal-a:${crypto.randomUUID()}`, GENESIS_FOUNDERS);
     await genesis.approve(ga.genesisId, ga.authSha256, o.actor);
     const provA = new FounderProvisioner({ genesis, host: corruptingHost(o.host, 1), apiUrl, actor: o.actor, evidenceTimeoutMs: 30_000, log });
     const pa = await provA.provisionGenesis(ga.genesisId);
@@ -215,7 +225,7 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
 
     // Genesis A consumed the one Genesis a registry may activate? No: it rolled back, so B may proceed.
     // ── Genesis B: one founder, end to end.
-    const gb = await genesis.propose({ idempotencyKey: `rehearsal-b:${crypto.randomUUID()}`, founderCount: GENESIS_FOUNDERS, allocationCents: alloc, ttlS: 3600, actor: o.actor });
+    const gb = await proposeG(`rehearsal-b:${crypto.randomUUID()}`, GENESIS_FOUNDERS);
     await genesis.approve(gb.genesisId, gb.authSha256, o.actor);
     const prov = new FounderProvisioner({ genesis, host: o.host, apiUrl, actor: o.actor, evidenceTimeoutMs: timeout, log });
     const pb = await prov.provisionGenesis(gb.genesisId);
@@ -261,7 +271,7 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
       const x = r as Record<string, any> | null;
       return x?.agentId === ids[i] && x?.capabilities?.matchesCompiled === true && x?.capabilities?.reproductionExecutable === false
         && x?.capabilities?.paymentExecutable === false && x?.ledger?.cash === alloc && x?.ledger?.genesisAllocation === alloc && x?.ledger?.lifetimeContribution === 0;
-    }), `synthetic ${alloc} as genesis_allocation; LFC 0`);
+    }), `${boot ? `${boot.currency} ${(boot.minorUnits / 100).toFixed(2)} owner bootstrap capital at a synthetic rate = ` : "synthetic "}${alloc}¢ as genesis_allocation (not revenue or profit); LFC 0`);
     check("isolated workspace", new Set(founders.map((f) => f.workspaceId)).size === ids.length && founders.every((f) => f.workspaceId.startsWith("ws_")), founders.map((f) => f.workspaceId).join(" "));
 
     const creds = ids.map((id) => JSON.parse(fs.readFileSync(`${o.host.stateDir(id)}/${FOUNDER_CREDENTIAL_FILE}`, "utf8")) as { token: string });
@@ -272,7 +282,7 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
     check("the founder's credential opens only its own identity; a forged credential opens nothing",
       cross.ok === false && forged.ok === false && forged.code === "FLEET_AUTH_FAILED", `other identity ${cross.code}; forged ${forged.code}`);
     // No second founder: population exactly one, and a second Genesis is refused.
-    const g2 = await genesis.propose({ idempotencyKey: `rehearsal-second:${crypto.randomUUID()}`, founderCount: GENESIS_FOUNDERS, allocationCents: alloc, ttlS: 3600, actor: o.actor });
+    const g2 = await proposeG(`rehearsal-second:${crypto.randomUUID()}`, GENESIS_FOUNDERS);
     const second = await genesis.approve(g2.genesisId, g2.authSha256, o.actor).then(() => "APPROVED", codeOf);
     const popOne = await pop();
     const living = async () => (await owner.query(`SELECT count(*) FILTER (WHERE status IN ('active','unresponsive'))::int AS l, count(*)::int AS n FROM fleet_agents`)).rows[0] as { l: number; n: number };

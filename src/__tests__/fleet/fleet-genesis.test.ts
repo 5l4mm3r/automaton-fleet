@@ -27,6 +27,7 @@ import { auditPrivileges, genesisSurfaceProblems } from "../../fleet/postgres/pr
 import { PgLedgerAdmin, sha256Hex } from "../../fleet/treasury/ledger.js";
 import { GenesisOps, PgGenesisAdmin } from "../../fleet/genesis/admin.js";
 import { runGenesisDryRun } from "../../fleet/genesis/dry-run.js";
+import { capitalToCents, parseFxMicro } from "../../fleet/genesis/admin.js";
 import { simulateRuntimeAttestation } from "../../fleet/genesis/simulate.js";
 import { PgOperatorAdmin } from "../../fleet/operator/admin.js";
 import { rawPublicKey } from "../../fleet/operator/canonical.js";
@@ -176,7 +177,7 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
   });
 
   it("migrates to v11 with a clean privilege audit and the constitutional pins in place", async () => {
-    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(19);
+    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(20);
     const a = await auditPrivileges(owner);
     expect(a.problems).toEqual([]);
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_reproduction_policy SET execution_enabled = true`))).toMatch(/ERR:.*check constraint/);
@@ -208,6 +209,41 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
     // Only the owner can change the target: no role reaches the policy table.
     for (const p of [agentRaw, svc, opRaw, custody]) expect(await pgCode(p.query(`UPDATE fleet.fleet_genesis_policy SET genesis_max_founders = 2`))).toMatch(/permission denied/);
     await reset(); // back to the N-founder machinery setting for the tests that follow
+  });
+
+  it("v20: £100.00 owner bootstrap capital — converted at a fresh owner-stated rate, bound into the authorization, owner capital never profit", async () => {
+    await reset(2, 1);
+    // (A fresh migration sets GBP 10000; the wipe clears it for machinery tests, so the owner sets it here.)
+    expect(await genesis.bootstrapCapital()).toBeNull();
+    await genesis.setBootstrapCapital({ currency: "GBP", minorUnits: 10_000 }, OWNER);
+    expect(await genesis.bootstrapCapital()).toEqual({ currency: "GBP", minorUnits: 10_000 });
+    for (const p of [agentRaw, svc, opRaw, custody]) expect(await pgCode(p.query(`SELECT fleet.fleet_genesis_set_bootstrap('GBP', 1, 'operator:x')`))).toMatch(/permission denied/);
+    expect(await pgCode(genesis.setBootstrapCapital({ currency: "GBP", minorUnits: 1 }, "operator:op_claude"))).toMatch(/FLEET_SELF_APPROVAL|FLEET_APPROVAL_REQUIRED/);
+    // The plain USD path is refused while a capital decision exists.
+    expect(await pgCode(genesis.propose({ idempotencyKey: key(), founderCount: 1, allocationCents: 13_000, ttlS: 3600, actor: OWNER }))).toBe("FLEET_GENESIS_CAPITAL");
+    // Stale or invalid rates are refused.
+    expect(await pgCode(genesis.proposeCapital({ idempotencyKey: key(), founderCount: 1, fxUsdMicro: 1_274_500, fxSource: "test", fxObservedAt: new Date(Date.now() - 25 * 3600_000), actor: OWNER }))).toBe("FLEET_GENESIS_FX_STALE");
+    expect(await pgCode(genesis.proposeCapital({ idempotencyKey: key(), founderCount: 1, fxUsdMicro: 0, fxSource: "test", fxObservedAt: new Date(), actor: OWNER }))).toBe("FLEET_GENESIS_FX_INVALID");
+    expect(parseFxMicro("1.2745")).toBe(1_274_500);
+    expect(() => parseFxMicro("1.2745678")).toThrow();
+    expect(() => parseFxMicro("-1")).toThrow();
+    // £100.00 at 1.2745 USD/GBP → 12745¢ (rounded down), with the decision and the rate in the owner's hash.
+    const g = await genesis.proposeCapital({ idempotencyKey: key(), founderCount: 1, fxUsdMicro: parseFxMicro("1.2745"), fxSource: "owner: bank rate 2026-09-26", fxObservedAt: new Date(), ttlS: 3600, actor: OWNER });
+    expect(g.allocationCents).toBe(12_745);
+    expect(capitalToCents(10_000, 1_274_567)).toBe(12_745);
+    expect(g.capital).toMatchObject({ currency: "GBP", minorUnits: 10_000, fxUsdMicro: 1_274_500, fxSource: "owner: bank rate 2026-09-26", classification: "owner_bootstrap_capital" });
+    const canon = (await q(`SELECT fleet.fleet_genesis_canonical(g) AS c FROM fleet.fleet_genesis g WHERE genesis_id = $1`, [g.genesisId]))[0].c as string;
+    expect(canon).toMatch(/\|capital:GBP:10000:1274500:owner: bank rate 2026-09-26:/);
+    // The capital fields are frozen: even the owner connection cannot rewrite them.
+    expect(await pgCode(owner.query(`UPDATE fleet.fleet_genesis SET fx_usd_micro = 2000000 WHERE genesis_id = $1`, [g.genesisId]))).toMatch(/FLEET_GENESIS_(TAMPERED|REQUIRED)/);
+    // Idempotent replay with the same rate; a different rate under the same key conflicts.
+    const idem = (await q(`SELECT idempotency_key FROM fleet.fleet_genesis WHERE genesis_id = $1`, [g.genesisId]))[0].idempotency_key as string;
+    const again = await genesis.proposeCapital({ idempotencyKey: idem, founderCount: 1, fxUsdMicro: 1_274_500, fxSource: "owner: bank rate 2026-09-26", fxObservedAt: new Date(), ttlS: 3600, actor: OWNER });
+    expect(again).toMatchObject({ genesisId: g.genesisId, replay: true });
+    expect(await pgCode(genesis.proposeCapital({ idempotencyKey: idem, founderCount: 1, fxUsdMicro: 1_300_000, fxSource: "owner: bank rate 2026-09-26", fxObservedAt: new Date(), ttlS: 3600, actor: OWNER }))).toBe("FLEET_IDEMPOTENCY_CONFLICT");
+    // Owner capital reaches the founder as genesis_allocation (the dry run proves revenue/profit stay 0); owner_funding is its own provenance.
+    expect((await q(`SELECT provenance FROM fleet.fleet_ledger_kinds WHERE kind IN ('owner_funding','genesis_allocation') ORDER BY kind`)).map((r) => r.provenance)).toEqual(["genesis_allocation", "owner_funding"]);
+    await reset();
   });
 
   // ── Who may create / approve Genesis ─────────────────────────
@@ -714,11 +750,13 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
 
   it("the single-founder Genesis dry run (production configuration) passes and leaves no trace", async () => {
     await reset(2, 1);
+    await q(`UPDATE fleet.fleet_genesis_policy SET bootstrap_capital_currency = 'GBP', bootstrap_capital_minor = 10000`); // as production (v20)
     await genesis.setEnabled(false, OWNER, "production-like: disabled");
     const r = await runGenesisDryRun({ connectionString: pgc.ownerUrl, actor: OWNER });
     expect(r.checks.filter((c) => !c.ok)).toEqual([]);
     expect(r.pass).toBe(true);
     expect(r.founders).toBe(1);
+    expect(r.checks.find((c) => c.name === "owner bootstrap capital")?.detail).toMatch(/^GBP 100\.00 per founder at a synthetic 1\.25 USD\/GBP → 12500¢/);
     expect(await population()).toBe(0);
     expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_genesis`))[0].n).toBe(0);
     expect((await q(`SELECT genesis_enabled FROM fleet.fleet_genesis_policy`))[0].genesis_enabled).toBe(false);
