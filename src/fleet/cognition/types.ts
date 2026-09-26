@@ -17,11 +17,43 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+/**
+ * Provider-signed reasoning carried back unchanged (Anthropic extended thinking). Opaque to the fleet:
+ * the provider verifies the signature, so a founder cannot forge or alter it.
+ */
+export interface ThinkingBlock {
+  type: "thinking" | "redacted_thinking";
+  thinking?: string;
+  signature?: string;
+  data?: string;
+}
+
+/** A model may request at most this many tool calls in one response (more is malformed: fail closed). */
+export const MAX_TOOL_CALLS_PER_RESPONSE = 10;
+/** At most this many are executed per step; the rest get an explicit "not executed" result, never silence. */
+export const MAX_TOOL_CALLS_EXECUTED = 5;
+
 export interface ChatMessage {
   role: "user" | "assistant" | "tool";
   content: string;
   toolCallId?: string;
   toolCalls?: ToolCall[];
+  /** tool role: the call was refused or not executed. */
+  isError?: boolean;
+  /** assistant role: provider-signed thinking to hand back (only on the latest assistant message). */
+  thinking?: ThinkingBlock[];
+  /** assistant role: original block order ("thinking:<i>", "text", "tool:<id>") so signed thinking is returned exactly as received. */
+  blockOrder?: string[];
+}
+
+/** Canonical usage across providers. inputTokens excludes cached input, which is reported separately. */
+export interface Usage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /** Reasoning/thinking tokens when the provider reports them separately (already included in outputTokens). */
+  thinkingTokens?: number;
 }
 
 export interface ToolSpec {
@@ -44,7 +76,12 @@ export interface ChatRequest {
 export interface ChatResult {
   content: string;
   toolCalls: ToolCall[];
-  usage: { inputTokens: number; outputTokens: number };
+  usage: Usage;
+  stopReason?: string | null;
+  /** Provider's id for this response (invoice/log reconciliation). */
+  providerRequestId?: string | null;
+  thinking?: ThinkingBlock[];
+  blockOrder?: string[];
   /** "provider": usage came from the provider; "estimate": it was absent/invalid, so the authorized estimate is charged. */
   usageSource: "provider" | "estimate";
   attempts: number;
@@ -52,7 +89,7 @@ export interface ChatResult {
 }
 
 export interface CognitionProvider {
-  readonly id: "scripted" | "openai_compatible";
+  readonly id: "scripted" | "openai_compatible" | "anthropic";
   readonly model: string;
   chat(req: ChatRequest): Promise<ChatResult>;
 }
@@ -68,7 +105,7 @@ export interface CognitionProvider {
 export type ProviderErrorCode =
   | "PROVIDER_RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "PROVIDER_AUTH_FAILED" | "PROVIDER_MODEL_NOT_FOUND" | "PROVIDER_BAD_REQUEST"
   | "PROVIDER_HTTP_ERROR" | "PROVIDER_TIMEOUT" | "PROVIDER_UNREACHABLE" | "PROVIDER_CONNECTION_LOST" | "PROVIDER_REDIRECT_REFUSED"
-  | "PROVIDER_MALFORMED_RESPONSE" | "PROVIDER_ERROR";
+  | "PROVIDER_MALFORMED_RESPONSE" | "PROVIDER_BILLING" | "PROVIDER_CONFIG_INVALID" | "PROVIDER_ERROR";
 
 export class ProviderError extends Error {
   constructor(
@@ -78,8 +115,9 @@ export class ProviderError extends Error {
       status?: number;
       attempts: number;
       retryAfterS?: number;
-      usage?: { inputTokens: number; outputTokens: number };
+      usage?: Usage;
       responseModel?: string | null;
+      providerRequestId?: string | null;
     },
   ) {
     super(code);

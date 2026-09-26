@@ -23,8 +23,9 @@ import { V12_SQL } from "./migrations-phase12.js";
 import { V13_SQL } from "./migrations-phase13.js";
 import { V14_SQL } from "./migrations-phase14.js";
 import { V15_SQL } from "./migrations-phase15.js";
+import { V16_SQL } from "./migrations-phase16.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 15;
+export const FLEET_PG_SCHEMA_VERSION = 16;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1134,6 +1135,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 13, name: "founder_cognition_gateway", sql: V13_SQL },
   { version: 14, name: "owner_credits_purchase_record", sql: V14_SQL },
   { version: 15, name: "cognition_outcome_charging", sql: V15_SQL },
+  { version: 16, name: "native_anthropic_cognition", sql: V16_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1160,7 +1162,7 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_settle_estates(integer)",
   "svc_genesis_runtime_evidence(text, text, jsonb)",
   "svc_cognition_authorize(text, bigint)",
-  "svc_cognition_record(text, uuid, text, integer, integer, text, text, jsonb, text, text, integer, integer, text, integer)",
+  "svc_cognition_record(text, uuid, text, integer, integer, text, text, jsonb, text, text, integer, integer, text, integer, integer, integer, text, text)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */

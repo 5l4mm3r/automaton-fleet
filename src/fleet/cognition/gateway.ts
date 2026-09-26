@@ -12,7 +12,7 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_CHARTER, FOUNDER_TOOLS, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ToolSpec } from "./types.js";
+import { FOUNDER_CHARTER, FOUNDER_TOOLS, MAX_TOOL_CALLS_PER_RESPONSE, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock, type ToolSpec } from "./types.js";
 import type { CognitionRecord } from "../postgres/store.js";
 
 export class CognitionError extends Error {
@@ -59,9 +59,15 @@ export function validateMessages(raw: unknown): ChatMessage[] {
       throw new CognitionError(422, "FLEET_COGNITION_SECRET_IN_PROMPT", "the conversation contains credential-shaped text and was not forwarded");
     }
     const out: ChatMessage = { role: x.role, content: x.content };
-    if (x.role === "tool") out.toolCallId = typeof x.toolCallId === "string" ? x.toolCallId.slice(0, 64) : "unknown";
+    if (x.role === "tool") {
+      out.toolCallId = typeof x.toolCallId === "string" ? x.toolCallId.slice(0, 64) : "unknown";
+      if (x.isError === true) out.isError = true;
+    }
+    if (x.role === "assistant" && x.thinking !== undefined) out.thinking = validateThinking(x.thinking);
+    if (x.role === "assistant" && x.blockOrder !== undefined) out.blockOrder = validateBlockOrder(x.blockOrder);
     if (x.role === "assistant" && Array.isArray(x.toolCalls)) {
-      out.toolCalls = x.toolCalls.slice(0, 10).map((t: Record<string, unknown>, i: number) => ({
+      if (x.toolCalls.length > MAX_TOOL_CALLS_PER_RESPONSE) throw new CognitionError(400, "FLEET_BAD_REQUEST", `at most ${MAX_TOOL_CALLS_PER_RESPONSE} tool calls per assistant message`);
+      out.toolCalls = x.toolCalls.map((t: Record<string, unknown>, i: number) => ({
         id: typeof t.id === "string" ? t.id.slice(0, 64) : `call_${i}`,
         name: typeof t.name === "string" ? t.name.slice(0, 64) : "",
         arguments: t.arguments && typeof t.arguments === "object" && !Array.isArray(t.arguments) ? (t.arguments as Record<string, unknown>) : {},
@@ -69,6 +75,45 @@ export function validateMessages(raw: unknown): ChatMessage[] {
     }
     return out;
   });
+}
+
+const MAX_THINKING_CHARS = 32_000;
+
+/**
+ * Shape- and size-check provider-signed thinking handed back by a founder. The blocks are opaque: only the
+ * documented fields are accepted (type, thinking, signature, data), all strings, bounded. The provider
+ * verifies the signature, so a founder cannot forge or alter reasoning.
+ */
+function validateThinking(raw: unknown): ThinkingBlock[] {
+  if (!Array.isArray(raw) || raw.length > 8) throw new CognitionError(400, "FLEET_BAD_REQUEST", "thinking must be at most 8 blocks");
+  let total = 0;
+  const blocks = raw.map((b): ThinkingBlock => {
+    const x = b as Record<string, unknown>;
+    if (!x || typeof x !== "object" || (x.type !== "thinking" && x.type !== "redacted_thinking")) throw new CognitionError(400, "FLEET_BAD_REQUEST", "malformed thinking block");
+    const out: ThinkingBlock = { type: x.type };
+    for (const k of Object.keys(x)) {
+      if (k === "type") continue;
+      if ((k !== "thinking" && k !== "signature" && k !== "data") || typeof x[k] !== "string") throw new CognitionError(400, "FLEET_BAD_REQUEST", "malformed thinking block");
+      const v = x[k] as string;
+      if ((k === "signature" || k === "data") && !/^[A-Za-z0-9+/=_-]{0,65536}$/.test(v)) throw new CognitionError(400, "FLEET_BAD_REQUEST", "malformed thinking block");
+      total += v.length;
+      out[k] = v;
+    }
+    if (!out.signature && !out.data) throw new CognitionError(400, "FLEET_BAD_REQUEST", "thinking block without signature");
+    return out;
+  });
+  if (total > MAX_THINKING_CHARS) throw new CognitionError(400, "FLEET_BAD_REQUEST", "thinking too large");
+  if (blocks.some((b) => b.thinking && containsSecretShape(b.thinking))) {
+    throw new CognitionError(422, "FLEET_COGNITION_SECRET_IN_PROMPT", "the conversation contains credential-shaped text and was not forwarded");
+  }
+  return blocks;
+}
+
+function validateBlockOrder(raw: unknown): string[] {
+  if (!Array.isArray(raw) || raw.length > 24 || !raw.every((e) => typeof e === "string" && /^(thinking:[0-7]|text|tool:[A-Za-z0-9_.:-]{1,64})$/.test(e))) {
+    throw new CognitionError(400, "FLEET_BAD_REQUEST", "malformed block order");
+  }
+  return raw as string[];
 }
 
 /** The tools advertised to this founder: compiled toolbox filtered by its granted capability classes. */
@@ -84,7 +129,7 @@ export async function infer(
   token: string,
   body: Record<string, unknown>,
   opts: { deadlineMs?: number; now?: () => number } = {},
-): Promise<{ content: string; toolCalls: unknown[]; usage: { inputTokens: number; outputTokens: number }; usageSource: string; chargedCents: number; requestId: string }> {
+): Promise<{ content: string; toolCalls: unknown[]; usage: { inputTokens: number; outputTokens: number }; usageSource: string; chargedCents: number; requestId: string; thinking?: ThinkingBlock[]; blockOrder?: string[] }> {
   const now = opts.now ?? Date.now;
   const messages = validateMessages(body.messages);
   const caps = await ports.capabilities(agentId, token);
@@ -127,6 +172,9 @@ export async function infer(
       outcome: "error",
       inputTokens: f.usage?.inputTokens ?? 0,
       outputTokens: f.usage?.outputTokens ?? 0,
+      cacheReadTokens: f.usage?.cacheReadTokens ?? 0,
+      cacheWriteTokens: f.usage?.cacheWriteTokens ?? 0,
+      providerRequestId: f.providerRequestId ?? null,
       promptSha256: promptSha,
       responseSha256: sha(""),
       toolCalls: [],
@@ -141,6 +189,9 @@ export async function infer(
     if (failure.code === "PROVIDER_RATE_LIMITED") throw new CognitionError(429, "FLEET_COGNITION_PROVIDER_RATE_LIMITED", "the inference provider is rate limiting", f.retryAfterS ?? 60);
     if (failure.code === "PROVIDER_TIMEOUT") throw new CognitionError(504, "FLEET_COGNITION_PROVIDER_TIMEOUT", "the inference provider did not answer in time");
     if (failure.code === "PROVIDER_MALFORMED_RESPONSE") throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_MALFORMED", "the inference provider returned an unusable response");
+    if (failure.code === "PROVIDER_BAD_REQUEST") throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_REJECTED", "the inference provider rejected the conversation");
+    if (failure.code === "PROVIDER_BILLING") throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_BILLING", "the inference provider refused for billing or spend-limit reasons");
+    if (failure.code === "PROVIDER_CONFIG_INVALID") throw new CognitionError(409, "FLEET_COGNITION_CONFIG_INVALID", "the controller's provider configuration is invalid for this policy");
     throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_ERROR", `the inference provider failed (${failure.code})`);
   }
   const loggedCalls = result.toolCalls.slice(0, 10).map((t) => ({ name: t.name, argsSha256: sha(JSON.stringify(t.arguments)) }));
@@ -148,6 +199,10 @@ export async function infer(
     outcome: "ok",
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
+    cacheReadTokens: result.usage.cacheReadTokens ?? 0,
+    cacheWriteTokens: result.usage.cacheWriteTokens ?? 0,
+    providerRequestId: result.providerRequestId ?? null,
+    stopReason: result.stopReason ?? null,
     promptSha256: promptSha,
     responseSha256: sha(JSON.stringify({ content: result.content, toolCalls: result.toolCalls })),
     toolCalls: loggedCalls,
@@ -160,5 +215,10 @@ export async function infer(
   });
   // Not recorded = not delivered: a response the fleet could not account for never reaches the founder.
   if (!rec.ok) throw new CognitionError(409, String(rec.code), "inference could not be recorded");
-  return { content: result.content, toolCalls: result.toolCalls, usage: result.usage, usageSource: String(rec.usageSource ?? result.usageSource), chargedCents: Number(rec.chargedCents ?? 0), requestId };
+  return {
+    content: result.content, toolCalls: result.toolCalls, usage: result.usage, usageSource: String(rec.usageSource ?? result.usageSource),
+    chargedCents: Number(rec.chargedCents ?? 0), requestId,
+    // Provider-signed thinking goes back to its own founder only, to be returned unchanged on the next step.
+    ...(result.thinking?.length ? { thinking: result.thinking, ...(result.blockOrder ? { blockOrder: result.blockOrder } : {}) } : {}),
+  };
 }

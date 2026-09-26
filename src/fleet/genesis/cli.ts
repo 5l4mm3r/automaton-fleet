@@ -21,8 +21,8 @@
  *
  * Schema v13 founder cognition (owner controls; never run by an AI operator):
  *   cognition-policy                                                  show the global policy
- *   cognition-enable <scripted|openai_compatible> <model> [--max-output N] [--in-microcents N] [--out-microcents N]
- *                    [--daily-budget N] [--turns-per-hour N]           OWNER GATE
+ *   cognition-enable <scripted|openai_compatible|anthropic> <model> [--max-output N] [--in-microcents N] [--out-microcents N]
+ *                    [--cache-write-microcents N] [--cache-read-microcents N] [--daily-budget N] [--turns-per-hour N]   OWNER GATE
  *   cognition-disable                                                 global kill switch (immediate)
  *   founder-cognition <agentId> enable|disable|pause|resume [--daily-budget N] [--turns-per-hour N] <reason…>
  *   cognition-status <agentId>                                        limits and today's usage
@@ -85,6 +85,7 @@ export async function runGenesisCommand(
   const flags = [
     "--founders", "--synthetic-cents", "--ttl", "--manifest", "--key", "--evidence-file", "--credential-dir", "--max-reads",
     "--max-output", "--in-microcents", "--out-microcents", "--daily-budget", "--turns-per-hour", "--limit",
+    "--cache-write-microcents", "--cache-read-microcents",
   ];
   const optInt = (name: string, min = 0) => (flag(a, name) === undefined ? null : int(flag(a, name), name, min));
   const p = positional(a, flags);
@@ -109,11 +110,12 @@ export async function runGenesisCommand(
     case "cognition-policy":
       return ok(await g.cognitionPolicy());
     case "cognition-enable": {
-      if (p[0] !== "scripted" && p[0] !== "openai_compatible") throw new Error("usage: cognition-enable <scripted|openai_compatible> <model> [...]");
+      if (p[0] !== "scripted" && p[0] !== "openai_compatible" && p[0] !== "anthropic") throw new Error("usage: cognition-enable <scripted|openai_compatible|anthropic> <model> [...]");
       if (!p[1]) throw new Error("usage: cognition-enable <provider> <model> [...]");
       return ok(await g.setCognitionPolicy({
         enabled: true, provider: p[0], model: p[1], maxOutputTokens: optInt("--max-output", 16), inputMicrocents: optInt("--in-microcents"),
         outputMicrocents: optInt("--out-microcents"), dailyBudgetCents: optInt("--daily-budget"), maxTurnsPerHour: optInt("--turns-per-hour", 1), actor,
+        cacheWriteMicrocents: optInt("--cache-write-microcents"), cacheReadMicrocents: optInt("--cache-read-microcents"),
       }));
     }
     case "cognition-disable":

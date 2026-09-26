@@ -56,6 +56,7 @@ import {
 import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "../runtime.js";
 import { FleetService, type AuditEntry, type ReadinessCheck } from "./server.js";
 import { OpenAICompatibleProvider, ScriptedProvider } from "../cognition/providers.js";
+import { AnthropicProvider, parseEffort, parseThinking } from "../cognition/anthropic.js";
 import type { CognitionProvider } from "../cognition/types.js";
 import { createAuditSink, createJsonLogger, type Logger } from "./log.js";
 
@@ -180,6 +181,10 @@ export function loadRemoteConfig(e: Record<string, string | undefined>, tls: { c
  * Optional: FLEET_COGNITION_MAX_TOKENS_PARAM (max_tokens | max_completion_tokens), FLEET_COGNITION_ATTEMPT_TIMEOUT_MS
  * (5 s–240 s, default 90 s), FLEET_COGNITION_DEADLINE_MS (10 s–240 s, default 120 s; covers all attempts),
  * FLEET_COGNITION_MAX_ATTEMPTS (1–3, default 3; only unprocessed failures are retried).
+ * "anthropic" (native Messages API, step 2.1): FLEET_COGNITION_MODEL and FLEET_COGNITION_API_KEY_FILE required;
+ * FLEET_COGNITION_BASE_URL defaults to https://api.anthropic.com/v1; optional FLEET_COGNITION_ANTHROPIC_VERSION
+ * (default 2023-06-01), FLEET_COGNITION_ANTHROPIC_BETA, FLEET_COGNITION_THINKING (adaptive | enabled:<budget>),
+ * FLEET_COGNITION_EFFORT (low|medium|high|max). Thinking/effort are unset unless the owner sets them.
  * The registry's owner switch must also name the same provider AND model.
  */
 export interface CognitionConfig {
@@ -212,10 +217,29 @@ export function loadCognitionProvider(e: Record<string, string | undefined>, uid
   const deadlineMs = boundedInt(e, "FLEET_COGNITION_DEADLINE_MS", 10_000, 240_000, 120_000);
   if (id === "none") return { provider: null, deadlineMs };
   if (id === "scripted") return { provider: new ScriptedProvider(e.FLEET_COGNITION_MODEL?.trim() || undefined), deadlineMs };
-  if (id !== "openai_compatible") throw new Error(`FLEET_COGNITION_PROVIDER must be none, scripted or openai_compatible (got ${id}).`);
-  const baseUrl = e.FLEET_COGNITION_BASE_URL?.trim() ?? "";
+  if (id !== "openai_compatible" && id !== "anthropic") throw new Error(`FLEET_COGNITION_PROVIDER must be none, scripted, openai_compatible or anthropic (got ${id}).`);
+  const baseUrl = e.FLEET_COGNITION_BASE_URL?.trim() || (id === "anthropic" ? "https://api.anthropic.com/v1" : "");
   const model = e.FLEET_COGNITION_MODEL?.trim() ?? "";
   const keyFile = e.FLEET_COGNITION_API_KEY_FILE?.trim() ?? "";
+  if (id === "anthropic") {
+    if (!model || !keyFile) throw new Error("FLEET_COGNITION_PROVIDER=anthropic requires FLEET_COGNITION_MODEL and FLEET_COGNITION_API_KEY_FILE.");
+    if (e.FLEET_COGNITION_MAX_TOKENS_PARAM?.trim() && e.FLEET_COGNITION_MAX_TOKENS_PARAM.trim() !== "max_tokens") {
+      throw new Error("FLEET_COGNITION_MAX_TOKENS_PARAM does not apply to anthropic (the Messages API always uses max_tokens).");
+    }
+    return {
+      provider: new AnthropicProvider({
+        baseUrl, model, apiKey: readCognitionKey(keyFile, uid),
+        attemptTimeoutMs: boundedInt(e, "FLEET_COGNITION_ATTEMPT_TIMEOUT_MS", 5_000, 240_000, 90_000),
+        maxAttempts: boundedInt(e, "FLEET_COGNITION_MAX_ATTEMPTS", 1, 3, 3),
+        apiVersion: e.FLEET_COGNITION_ANTHROPIC_VERSION?.trim() || undefined,
+        beta: e.FLEET_COGNITION_ANTHROPIC_BETA?.trim() || undefined,
+        thinking: parseThinking(e.FLEET_COGNITION_THINKING),
+        effort: parseEffort(e.FLEET_COGNITION_EFFORT),
+      }),
+      deadlineMs,
+    };
+  }
+  if (e.FLEET_COGNITION_THINKING?.trim() || e.FLEET_COGNITION_EFFORT?.trim()) throw new Error("FLEET_COGNITION_THINKING / FLEET_COGNITION_EFFORT apply to the anthropic provider only.");
   if (!baseUrl || !model || !keyFile) throw new Error("FLEET_COGNITION_PROVIDER=openai_compatible requires FLEET_COGNITION_BASE_URL, FLEET_COGNITION_MODEL and FLEET_COGNITION_API_KEY_FILE.");
   const param = e.FLEET_COGNITION_MAX_TOKENS_PARAM?.trim() || "max_tokens";
   if (param !== "max_tokens" && param !== "max_completion_tokens") throw new Error("FLEET_COGNITION_MAX_TOKENS_PARAM must be max_tokens or max_completion_tokens.");

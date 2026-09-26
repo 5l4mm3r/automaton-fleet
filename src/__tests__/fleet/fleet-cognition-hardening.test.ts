@@ -188,18 +188,21 @@ describe("L8 credential isolation in the shipped units", () => {
   });
 });
 
+const oai = (url: string) => new OpenAICompatibleProvider({ baseUrl: url, apiKey: KEY, model: MODEL });
+
 describe("L14 provider compatibility probe", () => {
   it("passes against a compatible provider, with no authority and without printing the key", async () => {
     const fake = await startFakeOpenAI({ apiKey: KEY, model: MODEL });
     try {
-      const r = await runProviderProbe({ baseUrl: fake.url, apiKey: KEY, model: MODEL, attemptTimeoutMs: 5_000, prices: { inputMicrocentsPerToken: 300, outputMicrocentsPerToken: 1_500 } });
-      expect(r.checks.map((c) => `${c.id}:${c.status}`)).toEqual(["P1:PASS", "P2:PASS", "P3:PASS", "P4:PASS", "P5:PASS", "P6:PASS", "P7:PASS"]);
+      const r = await runProviderProbe(oai(fake.url), { attemptTimeoutMs: 5_000, prices: { inputMicrocentsPerToken: 300, outputMicrocentsPerToken: 1_500 } });
+      expect(r.checks.map((c) => `${c.id}:${c.status}`)).toEqual(["P1:PASS", "P2:PASS", "P3:PASS", "P4:PASS", "P5:PASS", "P6:PASS", "P7:PASS", "P8:PASS", "P9:PASS", "P10:PASS", "P11:PASS"]);
       expect(r.pass).toBe(true);
       expect(r.usage.costMicrocents).toBeGreaterThan(0);
+      expect(r.usage.ledgerChargeCents).toBeGreaterThan(0);
       expect(r.authority).toMatch(/no database connection/);
       expect(JSON.stringify(r)).not.toContain(KEY);
-      // P3 inspected the founder toolbox round-trip; nothing was executed.
-      expect(r.checks.find((c) => c.id === "P3")!.detail).toMatch(/inspected, not executed/);
+      // P4 inspected the founder toolbox round-trip; nothing was executed.
+      expect(r.checks.find((c) => c.id === "P4")!.detail).toMatch(/inspected, not executed/);
     } finally {
       await fake.close();
     }
@@ -210,17 +213,17 @@ describe("L14 provider compatibility probe", () => {
     const strict = await startFakeOpenAI({ apiKey: KEY, model: MODEL, acceptParam: "max_completion_tokens" });
     const noUsage = await startFakeOpenAI({ apiKey: KEY, model: MODEL, fault: () => ({ kind: "no_usage" }) });
     try {
-      const wrong = await runProviderProbe({ baseUrl: fake.url, apiKey: "wrong-key-0123456789", model: MODEL, attemptTimeoutMs: 5_000 });
+      const wrong = await runProviderProbe(new OpenAICompatibleProvider({ baseUrl: fake.url, apiKey: "wrong-key-0123456789", model: MODEL }), { attemptTimeoutMs: 5_000 });
       expect(wrong.pass).toBe(false);
       expect(wrong.checks[0]).toMatchObject({ id: "P1", status: "FAIL" });
       expect(wrong.checks[0].detail).toMatch(/PROVIDER_AUTH_FAILED \(HTTP 401\).*check the key/);
       expect(JSON.stringify(wrong)).not.toContain("wrong-key-0123456789");
-      const param = await runProviderProbe({ baseUrl: strict.url, apiKey: KEY, model: MODEL, attemptTimeoutMs: 5_000 });
+      const param = await runProviderProbe(oai(strict.url), { attemptTimeoutMs: 5_000 });
       expect(param.checks[0].detail).toMatch(/PROVIDER_BAD_REQUEST.*FLEET_COGNITION_MAX_TOKENS_PARAM=max_completion_tokens/);
-      const fixed = await runProviderProbe({ baseUrl: strict.url, apiKey: KEY, model: MODEL, attemptTimeoutMs: 5_000, maxTokensParam: "max_completion_tokens" });
+      const fixed = await runProviderProbe(new OpenAICompatibleProvider({ baseUrl: strict.url, apiKey: KEY, model: MODEL, maxTokensParam: "max_completion_tokens" }), { attemptTimeoutMs: 5_000 });
       expect(fixed.pass).toBe(true);
-      const nu = await runProviderProbe({ baseUrl: noUsage.url, apiKey: KEY, model: MODEL, attemptTimeoutMs: 5_000 });
-      expect(nu.checks.find((c) => c.id === "P4")).toMatchObject({ status: "WARN" });
+      const nu = await runProviderProbe(oai(noUsage.url), { attemptTimeoutMs: 5_000 });
+      expect(nu.checks.find((c) => c.id === "P6")).toMatchObject({ status: "WARN" });
       expect(nu.pass).toBe(true);
     } finally {
       await fake.close();

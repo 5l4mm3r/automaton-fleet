@@ -19,16 +19,17 @@
  * forbidden tools and a planted prompt injection refused mid-loop, and stop
  * when paused (one founder) and when cognition is switched off (all).
  *
- * Pre-Genesis hardening (L1–L8): the rehearsal controller reaches its model
- * through the REAL OpenAI-compatible provider code over HTTP, against a
- * loopback fake provider (fake key, scripted model). Provider faults are
+ * Pre-Genesis hardening (L1–L8) and step 2.1: the rehearsal controller reaches
+ * its model through the REAL native Anthropic provider over HTTP (the chosen
+ * production route), against a loopback fake Messages API (fake key, scripted
+ * model) that enforces the protocol, including signed-thinking continuity. Provider faults are
  * injected for founder 1 only — 429 then success on retry, 503 until retries
  * are exhausted, malformed JSON, a timeout, unparseable tool arguments, a
  * response without usage and a redirect — and each must be classified,
  * recorded exactly once and charged by the v15 rule while founder 2 is unaffected.
  */
 
-export const REHEARSAL_MODEL = "fleet-rehearsal-v1";
+export const REHEARSAL_MODEL = "fleet-rehearsal-claude";
 const REHEARSAL_FAKE_KEY = "rehearsal-fake-provider-key";
 /** Founder 1's provider faults, by its n-th request to the provider (every attempt counts). */
 export const REHEARSAL_FAULTS: Readonly<Record<number, FakeFault>> = Object.freeze({
@@ -53,8 +54,10 @@ import { PgGenesisAdmin } from "../genesis/admin.js";
 import { FleetService } from "../service/server.js";
 import { UnsupportedSandboxTerminator } from "../service/terminator.js";
 import { FOUNDER_MANIFEST_V1, manifestSha256 } from "../capabilities.js";
-import { INJECTION_MARKER, OpenAICompatibleProvider } from "../cognition/providers.js";
-import { REHEARSAL_AGENT_HEADER, startFakeOpenAI, type FakeFault, type FakeOpenAI } from "../cognition/fake-openai.js";
+import { INJECTION_MARKER } from "../cognition/providers.js";
+import { AnthropicProvider } from "../cognition/anthropic.js";
+import { REHEARSAL_AGENT_HEADER, type FakeFault } from "../cognition/fake-openai.js";
+import { startFakeAnthropic, type FakeAnthropic } from "../cognition/fake-anthropic.js";
 import { FOUNDER_ATTEST_FILE, FOUNDER_CREDENTIAL_FILE, type FounderAttestFile, type FounderIdentityFile } from "./evidence.js";
 import { FounderProvisioner } from "./provisioner.js";
 import type { FounderHost } from "./host.js";
@@ -135,9 +138,10 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
   const agentRaw = new pg.Pool({ connectionString: o.registry.agentUrl, max: 2 });
   const audit: string[] = [];
   const faults = { target: "" };
-  const fake: FakeOpenAI = await startFakeOpenAI({
+  const fake: FakeAnthropic = await startFakeAnthropic({
     apiKey: REHEARSAL_FAKE_KEY,
     model: REHEARSAL_MODEL,
+    thinking: true,
     fault: (agent, n) => (agent === faults.target ? (REHEARSAL_FAULTS[n] ?? null) : null),
   });
   const service = new FleetService({
@@ -149,7 +153,7 @@ export async function runFounderRehearsal(o: RehearsalOptions): Promise<Rehearsa
     audit: (e) => audit.push(JSON.stringify(e)),
     terminator: new UnsupportedSandboxTerminator(),
     // The rehearsal controller only: the real HTTP provider code against a loopback fake (the production controller holds no provider).
-    cognitionProvider: new OpenAICompatibleProvider({
+    cognitionProvider: new AnthropicProvider({
       baseUrl: fake.url, apiKey: REHEARSAL_FAKE_KEY, model: REHEARSAL_MODEL, attemptTimeoutMs: 3_000, maxAttempts: 3, backoffMs: 200,
       extraHeaders: (agentId) => ({ [REHEARSAL_AGENT_HEADER]: agentId }),
     }),
@@ -306,7 +310,7 @@ async function cognitionPhase(
   o: RehearsalOptions,
   x: {
     ids: string[]; alloc: number; timeout: number; owner: pg.Pool; genesis: PgGenesisAdmin; ledger: PgLedgerAdmin; check: (name: string, ok: boolean, detail: string) => void;
-    fake: FakeOpenAI; faults: { target: string };
+    fake: FakeAnthropic; faults: { target: string };
   },
 ): Promise<void> {
   const { ids, owner, genesis, ledger, check } = x;
@@ -339,7 +343,7 @@ async function cognitionPhase(
   // Synthetic prepaid credits (owner recorder, v14) in the throwaway registry; priced scripted model; both founders enabled.
   await ledger.recordCreditsPurchase(5_000, `rehearsal:synthetic-${crypto.randomUUID()}`, o.actor);
   x.faults.target = ids[0];
-  await genesis.setCognitionPolicy({ enabled: true, provider: "openai_compatible", model: REHEARSAL_MODEL, inputMicrocents: 1_000, outputMicrocents: 4_000, actor: o.actor });
+  await genesis.setCognitionPolicy({ enabled: true, provider: "anthropic", model: REHEARSAL_MODEL, inputMicrocents: 1_000, outputMicrocents: 4_000, maxOutputTokens: 4_000, actor: o.actor });
   // Budget well above what the phase can use, so no check depends on how long a wait took.
   for (const id of ids) await genesis.setFounderCognition(id, { enabled: true, maxTurnsPerHour: 2_000, dailyBudgetCents: 5_000, reason: "rehearsal registry only", actor: o.actor });
 
@@ -380,7 +384,7 @@ async function cognitionPhase(
     && !!timedOut && timedOut.usage_source === "estimate" && timedOut.attempts === 1 && Number(timedOut.charged_cents) > 0 && (timedOut.latency_ms ?? 0) >= 2_900 && (timedOut.latency_ms ?? 0) < 9_000
     && !!noUsage && Number(noUsage.charged_cents) > 0
     && !!redirect && redirect.usage_source === "none" && Number(redirect.charged_cents) === 0;
-  check("provider faults are classified, recorded once and charged by rule (real HTTP provider path)", rules,
+  check("provider faults are classified, recorded once and charged by rule (native Anthropic path)", rules,
     `429→retry ok (attempts ${retried?.attempts ?? "?"}); 503×3 → ${unavailable?.error_code ?? "?"} charge ${unavailable?.charged_cents ?? "?"}; malformed JSON/tool args → ${malformed.map((r) => `${r.usage_source}:${r.charged_cents}¢`).join("/") || "?"}; ` +
     `timeout after ${timedOut?.latency_ms ?? "?"} ms charge ${timedOut?.charged_cents ?? "?"}¢ (estimate); no usage → estimate ${noUsage?.charged_cents ?? "?"}¢; redirect → refused, 0¢`);
   const recovered = fa.some((r) => Number(r.seq) > lastFault && r.outcome === "ok");
@@ -448,4 +452,9 @@ async function cognitionPhase(
     acct.map((a) => `${a.id.slice(-6)}: ${a.rows} records, ${a.attempts} attempts = ${a.requests} provider requests, journals ${a.journalsOk ? "1:1" : "MISMATCH"}`).join("; ") + `; in flight ${inflight}; ledger verifies`);
   check("one founder's provider failures do not touch the other", acct[1].allOk && acct[1].rows > 0,
     `${ids[1].slice(-6)}: ${acct[1].rows} calls, all ok on the first attempt with provider usage`);
+  // The native protocol held through real founder loops: alternation, tool results first and complete,
+  // and every signed thinking block handed back unchanged.
+  const withThinking = (await owner.query(`SELECT count(*)::int AS n FROM fleet_cognition_log WHERE outcome = 'ok' AND stop_reason = 'tool_use'`)).rows[0].n;
+  check("native Anthropic protocol conformance through real founder loops (incl. signed-thinking continuity)", x.fake.violations.length === 0 && withThinking > 0,
+    `${x.fake.violations.length} protocol violation(s) refused by the fake Messages API${x.fake.violations.length ? `: ${x.fake.violations.slice(0, 3).join("; ")}` : ""}; ${withThinking} tool_use turns continued with thinking returned`);
 }

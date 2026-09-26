@@ -110,6 +110,11 @@ export interface CognitionRecord {
   providerStatus?: number | null;
   responseModel?: string | null;
   latencyMs?: number | null;
+  /** v16: cached input, separate from inputTokens. */
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  providerRequestId?: string | null;
+  stopReason?: string | null;
 }
 
 export function mintAgentToken(agentId: string): string {
@@ -1702,12 +1707,13 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_cognition_authorize($1, $2) AS r", [agentId, estimateCents])).rows[0].r);
   }
 
-  /** Schema v15: record an inference outcome once, charge by the explicit usage rule, append the trusted cognition log. */
+  /** Schema v15/v16: record an inference outcome once, charge by the explicit usage rule, append the trusted cognition log. */
   async cognitionRecord(agentId: string, requestId: string, r: CognitionRecord): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.tx(async (c) =>
-      (await c.query("SELECT svc_cognition_record($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) AS r", [
+      (await c.query("SELECT svc_cognition_record($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) AS r", [
         agentId, requestId, r.outcome, r.inputTokens, r.outputTokens, r.promptSha256, r.responseSha256, JSON.stringify(r.toolCalls), r.errorCode,
         r.usageSource, r.attempts, r.providerStatus ?? null, r.responseModel ?? null, r.latencyMs ?? null,
+        r.cacheReadTokens ?? 0, r.cacheWriteTokens ?? 0, r.providerRequestId ?? null, r.stopReason ?? null,
       ])).rows[0].r,
     );
   }

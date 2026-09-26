@@ -5,7 +5,7 @@ item says who acts, what is needed and how it is verified. Nothing here is perfo
 ChatGPT or any agent. Every step marked **OWNER GATE** is refused by the database unless an owner
 principal performs it.
 
-State after pre-Genesis cognition hardening: schema v15; Genesis **disabled**; population 0; cap 2; cognition **disabled**
+State after step 2.1 (native Anthropic adapter): schema v16; Genesis **disabled**; population 0; cap 2; cognition **disabled**
 (provider `none`); egress **closed**; real payments, replication and owner sweep **off**.
 
 ## A. Money (Phase E surface)
@@ -26,6 +26,7 @@ State after pre-Genesis cognition hardening: schema v15; Genesis **disabled**; p
 | B2 | Create a **dedicated, spend-capped** API key for the fleet only (provider-side hard limit) | At the provider | Provider dashboard |
 | B3 | Install the key on the VPS: `/etc/automaton-fleet/cognition.key`, **0600 automaton-fleet-service:automaton-fleet-service** (the controller's own uid; every other unit has it in `InaccessiblePaths`) | Owner, over SSH (never in a chat, repository or ticket) | `fleet:doctor` founder cognition line; the key never appears in logs |
 | B4 | Service configuration: `FLEET_COGNITION_PROVIDER=openai_compatible`, `FLEET_COGNITION_BASE_URL`, `FLEET_COGNITION_MODEL`, `FLEET_COGNITION_API_KEY_FILE`; optional `FLEET_COGNITION_MAX_TOKENS_PARAM` (`max_tokens`/`max_completion_tokens`), `FLEET_COGNITION_ATTEMPT_TIMEOUT_MS` (90 s), `FLEET_COGNITION_DEADLINE_MS` (120 s), `FLEET_COGNITION_MAX_ATTEMPTS` (3) | Owner edits `service.env`, then restarts the controller | `service_started` log shows `cognitionProvider: openai_compatible:<model>` |
+| B4-anthropic | **Chosen route (step 2.1): native Anthropic.** `FLEET_COGNITION_PROVIDER=anthropic`, `FLEET_COGNITION_MODEL=<verified model id>`, `FLEET_COGNITION_API_KEY_FILE=/etc/automaton-fleet/cognition.key`; optional `FLEET_COGNITION_BASE_URL` (default `https://api.anthropic.com/v1`), `FLEET_COGNITION_THINKING` (`adaptive` \| `enabled:<N>`; unset = model default), `FLEET_COGNITION_EFFORT` (`low`…`max`), `FLEET_COGNITION_ANTHROPIC_VERSION`, `FLEET_COGNITION_ATTEMPT_TIMEOUT_MS`/`DEADLINE_MS` (tier A: 150000/180000). Registry: `cognition-enable anthropic <same model> --max-output 4000 --in-microcents <p> --out-microcents <p> [--cache-write-microcents <p> --cache-read-microcents <p>] --turns-per-hour 20 --daily-budget <¢>` | Owner, after verifying the model id and prices | Probe P1–P11 |
 | B4a | **Provider probe (L14)**, before Genesis and before `cognition-enable` | `sudo scripts/fleet-cognition-probe.sh --prices <in>,<out>` | `L14 PROVIDER PROBE: PASS` (P1–P7); no founder, no ledger, no key printed |
 | B5 | ~~Per-exec sandbox~~ **Done in F.3**: every founder shell command runs in a Landlock domain (workspace only; credential/state unreadable; no TCP; fail closed) | — | Rehearsal check "each founder's shell runs in its Landlock sandbox" |
 

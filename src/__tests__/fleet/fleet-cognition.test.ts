@@ -294,7 +294,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
       const port = (srv.address() as net.AddressInfo).port;
       const p = new OpenAICompatibleProvider({ baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: "k-test", model: "m1" });
       const r = await p.chat({ agentId: "A", system: "CHARTER", messages: [{ role: "user", content: "hi" }], tools: toolsFor(["planning"]), maxTokens: 64 });
-      expect(r).toEqual({ content: "ok", toolCalls: [{ id: "c1", name: "set_goal", arguments: { title: "t" } }, { id: "c2", name: "sleep", arguments: {} }], usage: { inputTokens: 12, outputTokens: 3 }, usageSource: "provider", attempts: 1, responseModel: null });
+      expect(r).toEqual({ content: "ok", toolCalls: [{ id: "c1", name: "set_goal", arguments: { title: "t" } }, { id: "c2", name: "sleep", arguments: {} }], usage: { inputTokens: 12, outputTokens: 3 }, usageSource: "provider", attempts: 1, responseModel: null, providerRequestId: null, stopReason: null });
       expect(auth).toBe("Bearer k-test");
       expect(seen).toMatchObject({ model: "m1", max_tokens: 64, messages: [{ role: "system", content: "CHARTER" }, { role: "user", content: "hi" }] });
       expect((seen as unknown as { tools: unknown[] }).tools).toHaveLength(3);
@@ -526,7 +526,7 @@ describe.skipIf(!PG_BIN)("Phase F.2 founder cognition (schema v13, HTTP + Postgr
     await reset();
     expect((await genesis.cognitionPolicy())).toMatchObject({ cognition_enabled: false, provider: "none" });
     await expect(q(`UPDATE fleet.fleet_cognition_policy SET cognition_enabled = true WHERE id = 1`)).rejects.toThrow(/check constraint/);
-    for (const fn of ["fleet_cognition_set_policy(true, 'scripted', 'x', NULL, NULL, NULL, NULL, NULL, 'operator:x')", "fleet_founder_cognition_set('x', true, false, NULL, NULL, 'r', 'operator:x')"]) {
+    for (const fn of ["fleet_cognition_set_policy(true, 'scripted', 'x', NULL, NULL, NULL, NULL, NULL, 'operator:x', NULL, NULL)", "fleet_founder_cognition_set('x', true, false, NULL, NULL, 'r', 'operator:x')"]) {
       await expect(agentRaw.query(`SELECT fleet.${fn}`), fn).rejects.toThrow(/permission denied/);
       await expect(svcRaw.query(`SELECT fleet.${fn}`), fn).rejects.toThrow(/permission denied/);
     }

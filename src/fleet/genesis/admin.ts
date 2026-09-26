@@ -85,10 +85,13 @@ export class GenesisOps {
     return (await this.db.query(`SELECT to_jsonb(p) AS r FROM fleet_cognition_policy p WHERE id = 1`)).rows[0].r;
   }
 
-  setCognitionPolicy(p: { enabled: boolean; provider?: string | null; model?: string | null; maxOutputTokens?: number | null; inputMicrocents?: number | null; outputMicrocents?: number | null; dailyBudgetCents?: number | null; maxTurnsPerHour?: number | null; actor: string }) {
-    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_set_policy($1, $2, $3, $4, $5, $6, $7, $8, $9) AS r`, [
+  setCognitionPolicy(p: {
+    enabled: boolean; provider?: string | null; model?: string | null; maxOutputTokens?: number | null; inputMicrocents?: number | null; outputMicrocents?: number | null;
+    dailyBudgetCents?: number | null; maxTurnsPerHour?: number | null; actor: string; cacheWriteMicrocents?: number | null; cacheReadMicrocents?: number | null;
+  }) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_set_policy($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) AS r`, [
       p.enabled, p.provider ?? null, p.model ?? null, p.maxOutputTokens ?? null, p.inputMicrocents ?? null, p.outputMicrocents ?? null,
-      p.dailyBudgetCents ?? null, p.maxTurnsPerHour ?? null, p.actor,
+      p.dailyBudgetCents ?? null, p.maxTurnsPerHour ?? null, p.actor, p.cacheWriteMicrocents ?? null, p.cacheReadMicrocents ?? null,
     ]);
   }
 
