@@ -1602,6 +1602,47 @@ Rollback:
   2. states the fresh rate in `genesis-propose`;
   3. checks `capital` and `allocationCents` in the output, then approves.
 
+## Stage G1 — GBP-native capital (schema v21) and Genesis 0 → 1: Founder 1 (2026-09-26, times UTC)
+
+- **Owner correction (v21).**
+  - The ledger's accounting currency is GBP (policy, in the economic-policy hash, settable only on an empty ledger).
+  - Genesis binds GBP 10000 with no exchange rate.
+  - Controlled FX: FleetController's ECB feed through the isolated fetcher (EUR cross, integer micro-units, rounded up; > 20 % jumps refused), or an owner-recorded rate. Founders can neither set nor read rates. No rate within 5 days → inference refused.
+  - Provider credit is a native-USD operating resource outside the GBP ledger.
+  - Inference: exact USD cost → GBP µp at the rate reserved with the call; the L13 accrual is unchanged.
+  - Founder cadence: think on every 2nd heartbeat; sleep-only turns back off (1…32 slots).
+- **Deploys.**
+  - `f4bd9e8` (build `f7deb132…9689`): migration 20→21. Outage 14:35:49–14:36:07. Dump `~/automaton_fleet-v20-pre-v21-20260926T143549Z.dump` (sha `99115c5b…8cbd`). `runtime.env.pre-v21` kept (06d55d5); `service.env.pre-v21` kept. `FLEET_COGNITION_EFFORT=medium` added. The controller's feed recorded USD→GBP 0.754583 (ECB, reference 2026-09-25).
+  - Pre-Genesis rehearsal 35/36, **failing correctly**: at the new cadence, the scripted test model (plan keyed on the heartbeat number) never reached the planted-injection step.
+  - Fixed in `eea1932` (build `40536771…927c`): the runtime states its thinking-slot ordinal, and the scripted model uses it. The runtime test now runs at the shipped cadence and reproduces the failure without the fix. Restart 15:11:13–15:11:24. `runtime.env.pre-v21b` kept.
+- **Verify before Genesis.**
+  - Doctor DEPLOYMENT OK; `fleet:verify` 16/16; `fleet-verify-deployment.sh` 130/0.
+  - Dry run 22/22 (GBP 100.00 native, no rate).
+  - **Rehearsal 36/36** (incl. GBP charge at the controlled rate and native-USD consumption).
+- **Genesis 0 → 1** (owner-authorized; run through the owner's account on the VPS, `operator:ubuntu`; the owner gate is identity, not cryptographic).
+  - Owner funding: 10000p, ref `owner-authorized-virtual:genesis-founder-1:2026-09-26` (no real money moved).
+  - Provider credit: Anthropic **$19.97** (native USD), ref `owner-verified-balance:anthropic-console:2026-09-26`.
+  - `genesis-enable`, then `genesis-propose 1`. Genesis `eacab622-b41f-4726-bb93-f8ffe78d4048`, auth `5590ad80…bb7ad`: 1 founder, GBP 10000, founder-v2, runtime `eea1932`/`40536771…`.
+  - Approve, provision, attest (runtime evidence matched), fund, **activate 15:23:38**.
+  - **Founder 1 = `01M3F50SH7PNX2E3GST13J52AS`** (unit user `fnd-01M3F50SH7PNX2E3GST13J52AS`; IPAddressDeny=any, localhost only).
+- **Cognition, research, Genesis door.**
+  - `cognition-enable anthropic claude-opus-5-5`: max output 4000; 400/2000/500/20 USD µ¢/token; 20 calls/h; daily budget **754p** (≈ $10/day at 0.754583).
+  - `founder-cognition … enable`; `research-enable` (60/h, 300/day; fleet 120/600).
+  - **`genesis-disable`.**
+- **First operation.**
+  - Founder 1 chose, on its own, to investigate UK *Making Tax Digital* templates for sole traders: gov.uk thresholds and dates, competitor pricing on Gumroad and Etsy (Etsy 403), DuckDuckGo. It proposed one knowledge item.
+  - At the check: 20 calls; $0.4845 consumed of $19.97; 36p posted + 560,458 µp carried = the exact sum of per-call GBP charges; cash 9964p.
+  - Ledger verifies (18 journals); research 8 authorized, 0 orphans.
+- **Known limitation (open).**
+  - Every third turn's first call is rejected by Anthropic (HTTP 400 → `PROVIDER_BAD_REQUEST`; calls 9 and 17).
+  - The failure is deterministic after the first history-carrying continuation. It is uncharged, and the mind resets its conversation, so the founder loses context and repeats some research.
+  - The provider's error text is not logged, so the exact protocol rule is unknown. The fake Messages API used by the rehearsal does not reproduce it.
+  - Next steps:
+    1. log the Anthropic `invalid_request_error` message (bounded, structural);
+    2. rehearse a runtime upgrade with a living founder (not yet a verified operation: the founder is attested to `eea1932`);
+    3. then fix.
+- **Rollback.** Retire the founder through the lifecycle (not by restoring a dump). The pre-v21 dump predates the founder.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
