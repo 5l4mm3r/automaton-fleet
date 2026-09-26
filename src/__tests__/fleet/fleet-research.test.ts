@@ -470,6 +470,31 @@ describe.skipIf(!PG_BIN)("research through FleetController (HTTP + PostgreSQL + 
     expect((await store.auditPrivileges()).problems).toEqual([]);
   });
 
+  it("v18 fail-closed gates: an absent cognition or research policy row refuses (never authorizes); neither row can be truncated", async () => {
+    const [a] = await setup();
+    for (const t of ["fleet_cognition_policy", "fleet_research_policy"]) await expect(q(`TRUNCATE fleet.${t}`), t).rejects.toThrow();
+    const c = await owner.connect();
+    try {
+      await c.query("BEGIN");
+      // Switch both on (so the policy gate is the one being proven), then remove the rows.
+      await c.query(`UPDATE fleet.fleet_cognition_policy SET cognition_enabled = true, provider = 'anthropic', model = 'm'`);
+      await c.query(`UPDATE fleet.fleet_research_policy SET research_enabled = true`);
+      const cogOn = (await c.query(`SELECT fleet.svc_cognition_authorize($1, 1) AS r`, [a.agentId])).rows[0].r;
+      expect(cogOn.code).not.toBe("FLEET_COGNITION_DISABLED"); // past the global gate (the founder itself is not enabled)
+      expect((await c.query(`SELECT fleet.svc_research_authorize($1, 'https://site.example.com/', 'site.example.com', 'p') AS r`, [a.agentId])).rows[0].r).toMatchObject({ ok: true });
+      await c.query(`ALTER TABLE fleet.fleet_cognition_policy DISABLE TRIGGER USER`);
+      await c.query(`ALTER TABLE fleet.fleet_research_policy DISABLE TRIGGER USER`);
+      await c.query(`DELETE FROM fleet.fleet_cognition_policy`);
+      await c.query(`DELETE FROM fleet.fleet_research_policy`);
+      expect((await c.query(`SELECT fleet.svc_cognition_authorize($1, 1) AS r`, [a.agentId])).rows[0].r).toMatchObject({ ok: false, code: "FLEET_COGNITION_DISABLED" });
+      expect((await c.query(`SELECT fleet.svc_research_authorize($1, 'https://site.example.com/', 'site.example.com', 'p') AS r`, [a.agentId])).rows[0].r).toMatchObject({ ok: false, code: "FLEET_RESEARCH_DISABLED" });
+    } finally {
+      await c.query("ROLLBACK");
+      c.release();
+    }
+    expect(await genesis.researchPolicy()).toMatchObject({ research_enabled: false });
+  });
+
   it("a founder researches through the controller: untrusted result with provenance; complete audit; never a body in the database", async () => {
     const [a] = await setup();
     await genesis.setResearchPolicy({ enabled: true, actor: OWNER });

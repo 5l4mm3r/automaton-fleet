@@ -1503,6 +1503,45 @@ Rollback:
 - State: population 0, cap 2; Genesis/cognition (registry provider `none`)/custody/replication/reseeding off; 0 distributions; 0 accrual rows; empty journal.
 - Rollback: restore the pre-v17 dump and `runtime.env.pre-l13` (519b773 requires v16).
 
+## Stage W — Controlled founder web research, schema v18 (DEPLOYED 2026-09-26, times UTC)
+
+- **Approval.** The owner approved the Step 4 deploy of `c2e616c` (build `f5016f22…c5c4`). The first automated attempt had been refused by the session permission classifier; nothing ran then.
+- **W-1 (`c2e616c`).**
+  - Pinned from the finished local build; the VPS build matched. `runtime.env.pre-w` kept (b2ac153 pins).
+  - Outage 12:05:10–12:05:29 (about 19 s). Dump `~/automaton_fleet-v17-pre-v18-20260926T120511Z.dump` (1450288 B, sha `2657abc9…9182`, 0600, 66 table-data entries). `migrate-check` gave exactly `{17→18, wouldApply:[18]}`; `migrate`; audit PASS.
+  - `fleet-os-setup.sh --apply`: created the `automaton-fleet-fetcher` user; installed the fetcher socket/service and the founder template (founder-v2, fetcher socket hidden); generated the host-address drop-in. `automaton-fleet-fetcher.socket` enabled.
+- **W-1 findings.**
+  1. `fleet-verify-deployment.sh` reported "fetcher CAN read /var/lib/postgresql". This was a probe defect: the directory is 0755 by distro default and holds no secrets. The cluster data directory `16/main` is 0700 postgres and unreadable to the fetcher, and the unit also hides the whole tree. The probe now targets `/var/lib/postgresql/*/main`.
+  2. **The rehearsal failed 30/33, correctly.** The fetcher crash-looped on start (`uv_interface_addresses` EAFNOSUPPORT): `os.networkInterfaces()` needs AF_NETLINK, which the unit forbids. The controller failed closed (`RESEARCH_FETCHER_UNAVAILABLE`).
+  3. Fix: the sandbox is unchanged. `fleet-os-setup.sh` passes the host addresses it computes for `IPAddressDeny` to the fetcher (`FLEET_FETCHER_HOST_ADDRESSES`, same drop-in). The fetcher refuses to start without a global host address or with an invalid entry. `fleet-verify-deployment.sh` now probes the fetcher live as the controller's user, and a test starts the real entry point with enumeration failing.
+- **W-2 (`162f07f`).**
+  - Build `11899a7c…f855`; lockfile unchanged; the builds matched. `runtime.env.pre-w2` kept (c2e616c pins).
+  - No migration (`wouldApply: []`). `fleet-os-setup.sh --apply` regenerated the drop-in. Restart 12:17:48–12:18:00 (about 12 s).
+- **Verify (W-2).**
+  - Runtime VERIFIED (162f07f / 11899a7c); schema v18; doctor DEPLOYMENT OK ("founder web research: disabled; fetcher socket active (isolated)"); audit PASS; `fleet:verify` 16/16; Genesis dry run 20/20.
+  - `fleet-verify-deployment.sh` 130/0, incl. the 25-check fetcher section: no groups, hardening, kernel private-range and host-address deny, no env file or credential, secrets and PG data unreadable, live probe, founder template hides the socket, clean process environment, no TCP listener.
+  - **Rehearsal 33/33**, production unchanged, host clean:
+    - https://example.com/ fetched through the rehearsal controller and the production fetcher (200, 559 B, sha `ff67a9d7…`);
+    - 10 SSRF targets refused;
+    - quota and pause enforced;
+    - 12 authorized / 12 results, no content in the registry;
+    - both founder sandboxes cannot connect to the fetcher socket;
+    - off switch stops all.
+- **Live redirect revalidation** (fetcher, as the controller's user, via a public redirector):
+  - a hop to `127.0.0.1` or `169.254.169.254` → `RESEARCH_IP_LITERAL_REFUSED`;
+  - to `api.agentfleet.vip` → `RESEARCH_FLEET_HOST_REFUSED`;
+  - to `http:` → `RESEARCH_SCHEME_REFUSED`;
+  - 5 redirects → `RESEARCH_TOO_MANY_REDIRECTS` after 3;
+  - one hop to example.com → fetched.
+- **v18 fail-closed.** TRUNCATE is refused on both policy rows and both research audit tables; the deployed authorizers contain the NULL-state guards. The test suite proves an absent policy row refuses (and that pre-v18 logic would not).
+- **Exposure and leaks.**
+  - Public TCP 22 and 443 only (5432/6379/8787/8788 loopback). The fetcher has a Unix socket only; its environment holds only `FLEET_FETCHER_*` and systemd variables.
+  - 0 key-shaped text in the journals or logs.
+- **State.** Population 0, cap 2, DEVELOPMENT. Genesis off; cognition off (provider `none`); **research off** (0 production attempts); custody, replication and reseeding off; 0 distributions.
+- **Rollback.**
+  - Runtime only: `runtime.env.pre-w2` (c2e616c; its fetcher does not start), or restore the pre-v18 dump and `runtime.env.pre-w` (b2ac153 requires v17).
+  - Before a v17 rollback: disable `automaton-fleet-fetcher.socket`, and reinstall the founder template with founder-v1.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes

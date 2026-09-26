@@ -135,7 +135,15 @@ via MCP, read and answer only) or the owner resolves it. Nothing here precludes 
 - there is no shell, SSH, DB or fetch authority on the MCP side;
 - the fetcher is reachable only from FleetController.
 
-## 9. Mutation testing
+## 9. Deployment note
+
+The fetcher's unit forbids netlink, so it cannot enumerate interfaces (`os.networkInterfaces()` fails
+with EAFNOSUPPORT). Instead, `fleet-os-setup.sh` writes the host's global addresses into the fetcher
+drop-in twice: as the kernel `IPAddressDeny` and as `FLEET_FETCHER_HOST_ADDRESSES` for the userspace
+check. The fetcher refuses to start without them. This was found by the production rehearsal of
+`c2e616c`, which failed closed, and was fixed in `162f07f`.
+
+## 10. Mutation testing
 
 29 mutations of the URL, SSRF, redirect, limit and quota policy were each run against
 `fleet-research.test.ts`. **27 were killed.** The two survivors are equivalent:

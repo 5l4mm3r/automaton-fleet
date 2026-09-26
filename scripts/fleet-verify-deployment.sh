@@ -164,7 +164,7 @@ if [[ -f "$FS" ]]; then
     grep -qx "$prop" "$FS" && ok "fetcher unit: $prop" || bad "fetcher unit lacks $prop"
   done
   grep -q "^IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12" "$FS" && ok "fetcher unit: kernel egress denies loopback/private/link-local/CGNAT" || bad "fetcher unit: private-destination deny missing"
-  [[ -f /etc/systemd/system/automaton-fleet-fetcher.service.d/host-addresses.conf ]] && ok "fetcher unit: this host's own addresses denied ($(grep -o '[0-9a-f:.]*/[0-9]*' /etc/systemd/system/automaton-fleet-fetcher.service.d/host-addresses.conf | wc -l) address(es))" || bad "fetcher host-address deny drop-in missing"
+  [[ -f /etc/systemd/system/automaton-fleet-fetcher.service.d/host-addresses.conf ]] && ok "fetcher unit: this host's own addresses denied ($(grep -oP '^IPAddressDeny=\K.*' /etc/systemd/system/automaton-fleet-fetcher.service.d/host-addresses.conf | wc -w) address(es))" || bad "fetcher host-address deny drop-in missing"
   HD=/etc/systemd/system/automaton-fleet-fetcher.service.d/host-addresses.conf
   [[ -f "$HD" ]] && [[ "$(grep -oP '^IPAddressDeny=\K.*' "$HD" | tr ' ' ',')" == "$(grep -oP '^Environment=FLEET_FETCHER_HOST_ADDRESSES=\K.*' "$HD")" ]] \
     && ok "fetcher knows the same host addresses the kernel denies" || bad "fetcher host-address list missing or differs from the kernel deny"
