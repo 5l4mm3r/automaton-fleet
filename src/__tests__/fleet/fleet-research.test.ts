@@ -31,7 +31,8 @@ import { FOUNDER_MANIFEST_V1, FOUNDER_MANIFEST_V2, decideTool } from "../../flee
 import { RESEARCH_LIMITS, checkAddresses, checkUrl, isPublicAddress } from "../../fleet/research/policy.js";
 import { ResearchFetcher, type FetchResult } from "../../fleet/research/fetcher.js";
 import { extractHtml } from "../../fleet/research/extract.js";
-import { environmentProblems, fetcherServer } from "../../fleet/research/fetcher-main.js";
+import { environmentProblems, fetcherLocalAddresses, fetcherServer } from "../../fleet/research/fetcher-main.js";
+import { spawn } from "child_process";
 import { unixFetcher, type FetcherPort } from "../../fleet/research/client.js";
 import { ResearchError, research, type ResearchRecord } from "../../fleet/research/gateway.js";
 import { FounderToolbox } from "../../fleet/founder/toolbox.js";
@@ -306,6 +307,46 @@ describe("fetcher service boundary", () => {
     expect(environmentProblems({ FLEET_SERVICE_DATABASE_URL: "x", ANTHROPIC_API_KEY: "y", FLEET_COGNITION_API_KEY_FILE: "z", OPERATOR_TOKEN: "t" }).sort())
       .toEqual(["ANTHROPIC_API_KEY", "FLEET_COGNITION_API_KEY_FILE", "FLEET_SERVICE_DATABASE_URL", "OPERATOR_TOKEN"]);
   });
+
+  it("host addresses come from the unit when interfaces cannot be enumerated; unknown or invalid lists refuse to start", () => {
+    const none = () => new Set<string>();
+    expect([...fetcherLocalAddresses({ FLEET_FETCHER_HOST_ADDRESSES: "2001:41D0::7bd1/128,51.195.148.111/32" }, none)].sort()).toEqual(["2001:41d0::7bd1", "51.195.148.111"]);
+    expect(() => fetcherLocalAddresses({}, none)).toThrow(/unknown/);
+    expect(() => fetcherLocalAddresses({}, () => new Set(["127.0.0.1", "::1"]))).toThrow(/unknown/);
+    expect(() => fetcherLocalAddresses({ FLEET_FETCHER_HOST_ADDRESSES: "51.195.148.111,evil.example.com" }, none)).toThrow(/not an IP/);
+    expect(fetcherLocalAddresses({}, () => new Set(["127.0.0.1", "192.0.2.5"])).has("192.0.2.5")).toBe(true);
+    // The fetcher refuses its own host address even when DNS says it is public.
+    expect(() => checkAddresses("self.example.com", ["51.195.148.111"], fetcherLocalAddresses({ FLEET_FETCHER_HOST_ADDRESSES: "51.195.148.111/32" }, none))).toThrow();
+  });
+
+  it("the real entry point starts without netlink (as under RestrictAddressFamilies) only when the unit supplies host addresses", async () => {
+    // Simulate the production sandbox: interface enumeration fails with EAFNOSUPPORT.
+    const noNetlink = "data:text/javascript," + encodeURIComponent('import os from "node:os"; os.networkInterfaces = () => { throw Object.assign(new Error("uv_interface_addresses returned Unknown system error 97"), { errno: 97 }); };');
+    const entry = path.join(process.cwd(), "src/fleet/research/fetcher-main.ts");
+    const run = (env: Record<string, string>) => {
+      const child = spawn(process.execPath, ["--import", "tsx", "--import", noNetlink, entry], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: os.tmpdir(), ...env }, stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.stderr.on("data", (d) => (out += d));
+      return { child, out: () => out, exit: new Promise<number | null>((r) => child.on("exit", (c) => r(c))) };
+    };
+    const sock = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fetchmain-")), "f.sock");
+    const refused = run({ FLEET_FETCHER_SOCKET: sock });
+    expect(await refused.exit).toBe(5);
+    expect(refused.out()).toMatch(/Refusing to start: the host's own addresses are unknown/);
+    const good = run({ FLEET_FETCHER_SOCKET: sock, FLEET_FETCHER_HOST_ADDRESSES: "51.195.148.111/32,2001:41d0:801:2000::7bd1/128", FLEET_FETCHER_DENY_DOMAINS: "agentfleet.vip" });
+    try {
+      const deadline = Date.now() + 20_000;
+      while (!/fetcher_started/.test(good.out()) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+      expect(good.out()).toMatch(/"hostAddresses":2/);
+      const client = unixFetcher(sock, 10_000);
+      expect(await client.fetch("https://127.0.0.1/")).toMatchObject({ ok: false, code: "RESEARCH_IP_LITERAL_REFUSED" });
+      expect(await client.fetch("https://api.agentfleet.vip/")).toMatchObject({ ok: false, code: "RESEARCH_FLEET_HOST_REFUSED" });
+    } finally {
+      good.child.kill("SIGTERM");
+      await good.exit;
+    }
+  }, 60_000);
 
   it("the shipped units isolate the fetcher and keep founders away from it", () => {
     const dir = path.join(process.cwd(), "deploy/systemd");

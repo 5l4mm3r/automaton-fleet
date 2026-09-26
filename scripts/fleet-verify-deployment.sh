@@ -165,6 +165,9 @@ if [[ -f "$FS" ]]; then
   done
   grep -q "^IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12" "$FS" && ok "fetcher unit: kernel egress denies loopback/private/link-local/CGNAT" || bad "fetcher unit: private-destination deny missing"
   [[ -f /etc/systemd/system/automaton-fleet-fetcher.service.d/host-addresses.conf ]] && ok "fetcher unit: this host's own addresses denied ($(grep -o '[0-9a-f:.]*/[0-9]*' /etc/systemd/system/automaton-fleet-fetcher.service.d/host-addresses.conf | wc -l) address(es))" || bad "fetcher host-address deny drop-in missing"
+  HD=/etc/systemd/system/automaton-fleet-fetcher.service.d/host-addresses.conf
+  [[ -f "$HD" ]] && [[ "$(grep -oP '^IPAddressDeny=\K.*' "$HD" | tr ' ' ',')" == "$(grep -oP '^Environment=FLEET_FETCHER_HOST_ADDRESSES=\K.*' "$HD")" ]] \
+    && ok "fetcher knows the same host addresses the kernel denies" || bad "fetcher host-address list missing or differs from the kernel deny"
   grep -q -- "-/etc/automaton-fleet " "$FS" && grep -q -- "-/var/lib/postgresql" "$FS" && grep -q -- "-/var/lib/private" "$FS" && ok "fetcher unit hides fleet secrets, PostgreSQL and founder state" || bad "fetcher unit does not hide secrets/state"
   grep -qE "^(EnvironmentFile|LoadCredential|SetCredential)" "$FS" && bad "fetcher unit loads files/credentials" || ok "fetcher unit loads no environment file or credential"
   grep -qx "SocketGroup=automaton-fleet-service" "$FK" && grep -qx "SocketMode=0660" "$FK" && ok "fetcher socket: controller group only, 0660" || bad "fetcher socket permissions wrong"
@@ -172,10 +175,18 @@ if [[ -f "$FS" ]]; then
     m="$(stat -c '%a %U:%G' /run/automaton-fleet-fetcher/fetch.sock)"
     [[ "$m" == "660 $FU:automaton-fleet-service" ]] && ok "fetcher socket on disk: $m" || bad "fetcher socket on disk: $m"
   fi
-  for f in /etc/automaton-fleet/service.env /etc/automaton-fleet/admin.env /etc/automaton-fleet/operator.env /etc/automaton-fleet/custody.env /etc/automaton-fleet/cognition.key /etc/automaton-fleet/tls/fleet.key /var/lib/postgresql; do
+  for f in /etc/automaton-fleet/service.env /etc/automaton-fleet/admin.env /etc/automaton-fleet/operator.env /etc/automaton-fleet/custody.env /etc/automaton-fleet/cognition.key /etc/automaton-fleet/tls/fleet.key /var/lib/postgresql/*/main; do
+    # /var/lib/postgresql itself is world-listable by distro default (no secrets); its cluster data directories are what matter.
     [[ -e "$f" ]] || continue
-    if runuser -u "$FU" -- test -r "$f" 2>/dev/null; then bad "$FU CAN read $f"; else ok "$FU cannot read $f"; fi
+    if runuser -u "$FU" -- test -r "$f" 2>/dev/null || runuser -u "$FU" -- test -x "$f" 2>/dev/null; then bad "$FU CAN read $f"; else ok "$FU cannot read $f"; fi
   done
+  # Live probe (no network): the controller's user reaches the fetcher, and the fetcher refuses a loopback literal itself.
+  if systemctl is-active -q automaton-fleet-fetcher.socket; then
+    PR="$(runuser -u automaton-fleet-service -- curl -s --max-time 10 --unix-socket /run/automaton-fleet-fetcher/fetch.sock -H 'content-type: application/json' -d '{"url":"https://127.0.0.1/"}' http://fetcher/fetch 2>/dev/null)"
+    [[ "$PR" == *'"code":"RESEARCH_IP_LITERAL_REFUSED"'* ]] && ok "fetcher answers the controller and refuses a loopback literal" || bad "fetcher live probe failed: ${PR:0:120}"
+  else
+    bad "fetcher socket is not active"
+  fi
   grep -qx "InaccessiblePaths=-/run/automaton-fleet-fetcher" /etc/systemd/system/automaton-fleet-founder@.service && ok "founder template hides the fetcher socket" || bad "founder template does not hide the fetcher socket"
   FP="$(systemctl show -p MainPID --value automaton-fleet-fetcher.service 2>/dev/null)"
   if [[ -n "$FP" && "$FP" != "0" ]]; then
