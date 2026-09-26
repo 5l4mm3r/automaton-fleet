@@ -1643,6 +1643,29 @@ Rollback:
     3. then fix.
 - **Rollback.** Retire the founder through the lifecycle (not by restoring a dump). The pre-v21 dump predates the founder.
 
+## Stage CL — Founder 1 context-loss fix and first live controller update (2026-09-26, times UTC)
+
+- **Root cause.** Reproduced in isolation against the real API (`FLEET_PROBE_MODE=thinking-prefix`; X full ok / Y truncated+thinking REJECTED / Z truncated without thinking ok).
+  - Anthropic binds signed thinking to its conversation prefix: `Invalid 'signature' in 'thinking' block. The block is bound to a different conversation.`
+  - The founder's 16-message history cap dropped older turns while the latest assistant message kept its thinking. The next turn's first call was rejected (every third turn), and the mind reset its conversation.
+- **Fix `0c502fb` (build `12fd46f6…3f6e`), controller-side.** At a new turn (a new observation), earlier thinking is not handed back. Within a tool loop it still is, verbatim. Also included:
+  - the sanitized provider-rejection sentence, audited as `cognition_provider_rejected`;
+  - a prefix-binding fake;
+  - the founder runtime pin, the live-update restart policy, and a founder startup wait.
+- **Deploy.**
+  1. Founder 1 pinned to `eea1932` first, with the new CLI from an isolated copy (`daemon-reload` only; PID 146185 unchanged).
+  2. `runtime.env.pre-cl` kept (eea1932); install; `fleet-os-setup --apply` (founder template: no start limit, `RestartSec=15s`).
+  3. Controller-side restart 16:13:35–16:13:51. **The founder unit was not touched** (same PID, 0 restarts).
+- **Verify.**
+  - Runtime VERIFIED; doctor OK; audit PASS; `fleet:verify` 16/16; `fleet-verify-deployment.sh` 132/0 (founder pinned to `eea1932`; restart policy).
+  - **Production rehearsal 36/36 alongside Founder 1** (its PID untouched).
+- **Observation.**
+  - 20 consecutive real calls 16:25–16:40, **0 rejections**, over roughly ten turns. Turn openings kept 5–7k tokens of carried history (no reset). 40 challenges passed since the fix, 0 ever failed.
+  - Since the fix: 131,300 in / 5,881 out tokens, $0.64282, charged £0.48506.
+  - Reconciled exactly: USD consumption = Σ per-call USD cost (117,436,000 µ¢); GBP posted 88p + 615,226 µp carried = Σ per-call GBP charges; ledger verifies (40 journals).
+- **Diagnostic spend.** Isolated repro runs cost $0.456 at list prices, used from the same prepaid balance outside the fleet's metering. Recorded as an owner adjustment of −$0.46. Provider balance **$18.33564**.
+- **Rollback.** `runtime.env.pre-cl`, approve, and restart the controller-side units; Founder 1 is unaffected.
+
 ## Live runtime updates with living founders (procedure, 2026-09-26)
 
 A living founder is attested to one runtime release: its health challenges compare its reported commit with its
@@ -1653,7 +1676,7 @@ registered `runtime_commit`. The controller may move to newer approved releases;
   - Env: `/etc/automaton-fleet/founders/<id>.runtime.env`, holding its own pins.
   - Written at provisioning, or for an existing founder by `sudo scripts/fleet-founders.sh pin <agentId>`. That command takes the registered runtime from the registry, verifies the release tree's build identity, and runs `daemon-reload` only (no restart).
   - `fleet-verify-deployment.sh` fails if a living founder is unpinned or pinned elsewhere.
-- **Restart policy.** The founder template has no start limit and `RestartSec=15s`, so a founder retries through controller outages; refusals (exit 3/4) never restart. Founder runtimes (from `c9e…`/this release) also wait at startup for an unreachable controller.
+- **Restart policy.** The founder template has no start limit and `RestartSec=15s`, so a founder retries through controller outages; refusals (exit 3/4) never restart. Founder runtimes from `0c502fb` on also wait at startup for an unreachable controller (Founder 1 stays on `eea1932` and relies on the unit policy).
 - **Controller update (founder untouched).**
   1. Build, pin `runtime.env`, install (switches `current`), approve.
   2. Restart the controller-side units only (`automaton-fleet`, operator API, custody, adapter socket, fetcher). **Never** restart the founder unit.
