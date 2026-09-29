@@ -1,0 +1,279 @@
+{
+ "cellId": "B-trunk",
+ "phase": "B",
+ "arm": "trunk",
+ "model": "fake-founder-model",
+ "startedAt": "2026-09-29T21:09:08.595Z",
+ "finishedAt": "2026-09-29T21:09:08.616Z",
+ "calls": [
+  {
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 10764,
+   "contextBytes": 1196,
+   "messages": 1,
+   "packetPresent": false,
+   "boundMicrocents": 14382000,
+   "costMicrocents": 1719600,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 3299,
+    "outputTokens": 200
+   },
+   "stopReason": "tool_use",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "web_fetch",
+     "arguments": {
+      "url": "https://stallhub.example/search?q=wedding+planner+template",
+      "purpose": "evaluate the candidate"
+     }
+    },
+    {
+     "name": "web_fetch",
+     "arguments": {
+      "url": "https://forum.groomersnet.example/t/bookkeeping-for-groomers",
+      "purpose": "evaluate the candidate"
+     }
+    },
+    {
+     "name": "web_fetch",
+     "arguments": {
+      "url": "https://stallhub.example/search?q=dog+groomer+bookkeeping",
+      "purpose": "evaluate the candidate"
+     }
+    },
+    {
+     "name": "web_fetch",
+     "arguments": {
+      "url": "https://keywords.example/uk/dog-groomer-bookkeeping",
+      "purpose": "evaluate the candidate"
+     }
+    },
+    {
+     "name": "web_fetch",
+     "arguments": {
+      "url": "https://gigsly.example/seller-terms",
+      "purpose": "evaluate the candidate"
+     }
+    }
+   ]
+  },
+  {
+   "turn": 1,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 17132,
+   "contextBytes": 7564,
+   "messages": 7,
+   "packetPresent": false,
+   "boundMicrocents": 17566000,
+   "costMicrocents": 2356400,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 4891,
+    "outputTokens": 200
+   },
+   "stopReason": "tool_use",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "evidence:2:0",
+      "value": "https://stallhub.example/search?q=wedding+planner+template attemptId 8db0ca8f-0000-4000-8000-000000000001: 2,300 results for \"wedding planner template\". Median price £3.10. The top 10 listings each show 10,000+ sales and 4.8-star averages; many are bundles of 50–200 pages sold at £2.50 with \"lifetime access\". New listings from the last 90 days: 410, median sales 0."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "evidence:2:1",
+      "value": "https://forum.groomersnet.example/t/bookkeeping-for-groomers attemptId 8db0ca8f-0000-4000-8000-000000000002: Thread started 12 August 2026, 41 replies. Recurring complaints: generic spreadsheets do not track per-dog service types, product stock (shampoos, blades) or mileage between mobile appointments. Several replies ask whether anything works with Making Tax Digital. Two members say they pay an accountant £400+ a year mostly for bookkeeping. One reply: \"would pay £10-15 for something that just works\". Another: \"I tried a template once and gave up after a week\". Forum members are self-selected and vocal; no reply mentions a completed purchase."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "evidence:2:2",
+      "value": "https://stallhub.example/search?q=dog+groomer+bookkeeping attemptId 8db0ca8f-0000-4000-8000-000000000003: 2 results. \"Groomer Income Tracker\" — £12, 14 sales, 3 reviews (4.3 stars; one review: \"doesn't do mileage\"). \"Pet Business Accounts Sheet\" — £18, 6 sales, 1 review."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "evidence:2:3",
+      "value": "https://keywords.example/uk/dog-groomer-bookkeeping attemptId 8db0ca8f-0000-4000-8000-000000000004: Estimated UK monthly searches (August 2026): \"dog grooming bookkeeping\" ~390; \"groomer accounts spreadsheet\" ~110; \"dog groomer tax\" ~720. Estimates are modelled from a panel; stated accuracy ±40%."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "evidence:2:4",
+      "value": "https://gigsly.example/seller-terms attemptId 8db0ca8f-0000-4000-8000-000000000005: Gigsly service fee: 20% of each order. Buyer funds are held for 14 days after delivery. Before accepting a first order, sellers must complete identity verification with a government-issued photo ID and a bank account in their own legal name. Accounts operated on behalf of another person or an automated agent are not permitted."
+     }
+    }
+   ]
+  },
+  {
+   "turn": 1,
+   "step": 2,
+   "ok": true,
+   "requestBytes": 20125,
+   "contextBytes": 10557,
+   "messages": 13,
+   "packetPresent": false,
+   "boundMicrocents": 19062500,
+   "costMicrocents": 2656000,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 5640,
+    "outputTokens": 200
+   },
+   "stopReason": "end_turn",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "COMPARISON/UPDATE/LESSON (fake model): recorded.",
+   "toolCalls": []
+  },
+  {
+   "turn": 2,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 20405,
+   "contextBytes": 10837,
+   "messages": 15,
+   "packetPresent": false,
+   "boundMicrocents": 19202500,
+   "costMicrocents": 2684000,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 5710,
+    "outputTokens": 200
+   },
+   "stopReason": "end_turn",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "COMPARISON/UPDATE/LESSON (fake model): recorded.",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 3,
+   "toolCalls": [
+    "web_fetch",
+    "web_fetch",
+    "web_fetch",
+    "web_fetch",
+    "web_fetch",
+    "remember_fact",
+    "remember_fact",
+    "remember_fact",
+    "remember_fact",
+    "remember_fact"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  },
+  {
+   "ran": true,
+   "steps": 1,
+   "toolCalls": [],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 9416000,
+ "fetches": [
+  {
+   "url": "https://stallhub.example/search?q=wedding+planner+template",
+   "found": true,
+   "attemptId": "8db0ca8f-0000-4000-8000-000000000001"
+  },
+  {
+   "url": "https://forum.groomersnet.example/t/bookkeeping-for-groomers",
+   "found": true,
+   "attemptId": "8db0ca8f-0000-4000-8000-000000000002"
+  },
+  {
+   "url": "https://stallhub.example/search?q=dog+groomer+bookkeeping",
+   "found": true,
+   "attemptId": "8db0ca8f-0000-4000-8000-000000000003"
+  },
+  {
+   "url": "https://keywords.example/uk/dog-groomer-bookkeeping",
+   "found": true,
+   "attemptId": "8db0ca8f-0000-4000-8000-000000000004"
+  },
+  {
+   "url": "https://gigsly.example/seller-terms",
+   "found": true,
+   "attemptId": "8db0ca8f-0000-4000-8000-000000000005"
+  }
+ ],
+ "toolOutcomes": [
+  {
+   "name": "web_fetch",
+   "ok": true
+  },
+  {
+   "name": "web_fetch",
+   "ok": true
+  },
+  {
+   "name": "web_fetch",
+   "ok": true
+  },
+  {
+   "name": "web_fetch",
+   "ok": true
+  },
+  {
+   "name": "web_fetch",
+   "ok": true
+  },
+  {
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "name": "remember_fact",
+   "ok": true
+  }
+ ],
+ "proposals": [],
+ "spendRequests": [],
+ "identityRequests": [],
+ "packet": null,
+ "packetBytes": 0,
+ "restored": {
+  "history": 0,
+  "memory": 0,
+  "workspace": 0
+ },
+ "finalText": "COMPARISON/UPDATE/LESSON (fake model): recorded.",
+ "requestedModel": "fake-founder-model",
+ "effort": "high",
+ "thinking": null,
+ "maxAttempts": null
+}

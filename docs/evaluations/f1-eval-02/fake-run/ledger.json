@@ -1,0 +1,127 @@
+{
+ "capMicrocents": 300000000,
+ "cells": {
+  "B-trunk": {
+   "spentMicrocents": 9416000,
+   "stopped": null,
+   "calls": 4,
+   "finishedAt": "2026-09-29T21:09:08.616Z"
+  },
+  "C-trunk": {
+   "spentMicrocents": 5524400,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-09-29T21:09:08.628Z"
+  },
+  "D-B-1": {
+   "spentMicrocents": 2414800,
+   "stopped": null,
+   "calls": 1,
+   "finishedAt": "2026-09-29T21:09:08.637Z"
+  },
+  "D-C-1": {
+   "spentMicrocents": 3312400,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-09-29T21:09:08.647Z"
+  },
+  "D-A-1": {
+   "spentMicrocents": 3847600,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-09-29T21:09:08.658Z"
+  },
+  "E-trunk": {
+   "spentMicrocents": 6018800,
+   "stopped": null,
+   "calls": 3,
+   "finishedAt": "2026-09-29T21:09:08.671Z"
+  },
+  "F-trunk": {
+   "spentMicrocents": 2246800,
+   "stopped": null,
+   "calls": 1,
+   "finishedAt": "2026-09-29T21:09:08.678Z"
+  },
+  "G-trunk": {
+   "spentMicrocents": 7760400,
+   "stopped": null,
+   "calls": 3,
+   "finishedAt": "2026-09-29T21:09:08.697Z"
+  },
+  "G-G0-1": {
+   "spentMicrocents": 5876000,
+   "stopped": null,
+   "calls": 3,
+   "finishedAt": "2026-09-29T21:09:08.709Z"
+  },
+  "H-B-1": {
+   "spentMicrocents": 2550000,
+   "stopped": null,
+   "calls": 1,
+   "finishedAt": "2026-09-29T21:09:08.717Z"
+  },
+  "H-C-1": {
+   "spentMicrocents": 3336400,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-09-29T21:09:08.726Z"
+  },
+  "H-A-1": {
+   "spentMicrocents": 2334800,
+   "stopped": null,
+   "calls": 1,
+   "finishedAt": "2026-09-29T21:09:08.734Z"
+  },
+  "D-R-1": {
+   "spentMicrocents": 3540400,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-09-29T21:09:08.744Z"
+  },
+  "H-R-1": {
+   "spentMicrocents": 3541600,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-09-29T21:09:08.754Z"
+  },
+  "D-B-2": {
+   "spentMicrocents": 2414800,
+   "stopped": null,
+   "calls": 1,
+   "finishedAt": "2026-09-29T21:09:08.762Z"
+  },
+  "H-B-2": {
+   "spentMicrocents": 2550000,
+   "stopped": null,
+   "calls": 1,
+   "finishedAt": "2026-09-29T21:09:08.776Z"
+  },
+  "D-C-2": {
+   "spentMicrocents": 3312400,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-09-29T21:09:08.786Z"
+  },
+  "H-C-2": {
+   "spentMicrocents": 3336400,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-09-29T21:09:08.795Z"
+  },
+  "D-A-2": {
+   "spentMicrocents": 3847600,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-09-29T21:09:08.806Z"
+  },
+  "H-A-2": {
+   "spentMicrocents": 2334800,
+   "stopped": null,
+   "calls": 1,
+   "finishedAt": "2026-09-29T21:09:08.813Z"
+  }
+ },
+ "interrupted": [],
+ "totalMicrocents": 79516400
+}

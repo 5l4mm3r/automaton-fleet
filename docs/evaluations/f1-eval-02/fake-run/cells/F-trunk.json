@@ -1,0 +1,59 @@
+{
+ "cellId": "F-trunk",
+ "phase": "F",
+ "arm": "trunk",
+ "model": "fake-founder-model",
+ "startedAt": "2026-09-29T21:09:08.675Z",
+ "finishedAt": "2026-09-29T21:09:08.678Z",
+ "calls": [
+  {
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 16033,
+   "contextBytes": 6465,
+   "messages": 17,
+   "packetPresent": false,
+   "boundMicrocents": 17016500,
+   "costMicrocents": 2246800,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 4617,
+    "outputTokens": 200
+   },
+   "stopReason": "end_turn",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "COMPARISON/UPDATE/LESSON (fake model): recorded.",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 1,
+   "toolCalls": [],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 2246800,
+ "fetches": [],
+ "toolOutcomes": [],
+ "proposals": [],
+ "spendRequests": [],
+ "identityRequests": [],
+ "packet": null,
+ "packetBytes": 0,
+ "restored": {
+  "history": 5863,
+  "memory": 2144,
+  "workspace": 6051
+ },
+ "finalText": "COMPARISON/UPDATE/LESSON (fake model): recorded.",
+ "requestedModel": "fake-founder-model",
+ "effort": "high",
+ "thinking": null,
+ "maxAttempts": null
+}

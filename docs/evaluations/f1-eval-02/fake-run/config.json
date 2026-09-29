@@ -1,0 +1,1 @@
+{"transport":"fake","model":"fake","effort":"high","maxTokens":4000,"prices":{"inputMicrocentsPerToken":400,"outputMicrocentsPerToken":2000,"cacheWriteMicrocentsPerToken":500,"cacheReadMicrocentsPerToken":20},"capMicrocents":300000000}

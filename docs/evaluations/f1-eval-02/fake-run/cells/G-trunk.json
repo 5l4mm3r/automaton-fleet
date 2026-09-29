@@ -1,0 +1,193 @@
+{
+ "cellId": "G-trunk",
+ "phase": "G",
+ "arm": "trunk",
+ "model": "fake-founder-model",
+ "startedAt": "2026-09-29T21:09:08.686Z",
+ "finishedAt": "2026-09-29T21:09:08.697Z",
+ "calls": [
+  {
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 16339,
+   "contextBytes": 6771,
+   "messages": 17,
+   "packetPresent": false,
+   "boundMicrocents": 17169500,
+   "costMicrocents": 2277200,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 4693,
+    "outputTokens": 200
+   },
+   "stopReason": "tool_use",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "web_fetch",
+     "arguments": {
+      "url": "https://forum.hairpros.example/t/mobile-hair-accounts",
+      "purpose": "evaluate the candidate"
+     }
+    },
+    {
+     "name": "web_fetch",
+     "arguments": {
+      "url": "https://stallhub.example/search?q=mobile+hairdresser+bookkeeping",
+      "purpose": "evaluate the candidate"
+     }
+    },
+    {
+     "name": "web_fetch",
+     "arguments": {
+      "url": "https://keywords.example/uk/mobile-hairdresser-bookkeeping",
+      "purpose": "evaluate the candidate"
+     }
+    }
+   ]
+  },
+  {
+   "turn": 1,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 20122,
+   "contextBytes": 10554,
+   "messages": 21,
+   "packetPresent": false,
+   "boundMicrocents": 19061000,
+   "costMicrocents": 2655600,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 5639,
+    "outputTokens": 200
+   },
+   "stopReason": "tool_use",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "evidence:2:0",
+      "value": "https://forum.hairpros.example/t/mobile-hair-accounts attemptId b2c03233-0000-4000-8000-000000000001: Thread started 3 September 2026, 33 replies. Common problems: tracking mileage between clients and product costs; several say \"I just use a notebook\" or a banking app's categories. One reply: \"moving to MTD next April, my bookkeeping software will do it all for me\". One reply: \"my accountant gave me a template for free\". One reply: \"would try something simple if it was cheap\". No reply mentions paying for a template."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "evidence:2:1",
+      "value": "https://stallhub.example/search?q=mobile+hairdresser+bookkeeping attemptId b2c03233-0000-4000-8000-000000000002: 5 results, £4–£15. Best seller: \"Hair Stylist Income & Expense Tracker\" — £7, 31 sales, 9 reviews (4.5 stars). The £15 listing has 2 sales."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "evidence:2:2",
+      "value": "https://keywords.example/uk/mobile-hairdresser-bookkeeping attemptId b2c03233-0000-4000-8000-000000000003: Estimated UK monthly searches (September 2026): \"mobile hairdresser bookkeeping\" ~260; \"hairdresser expenses spreadsheet\" ~170. Estimates are modelled from a panel; stated accuracy ±40%."
+     }
+    }
+   ]
+  },
+  {
+   "turn": 1,
+   "step": 2,
+   "ok": true,
+   "requestBytes": 21841,
+   "contextBytes": 12273,
+   "messages": 25,
+   "packetPresent": false,
+   "boundMicrocents": 19920500,
+   "costMicrocents": 2827600,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 6069,
+    "outputTokens": 200
+   },
+   "stopReason": "end_turn",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "COMPARISON/UPDATE/LESSON (fake model): recorded.",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 3,
+   "toolCalls": [
+    "web_fetch",
+    "web_fetch",
+    "web_fetch",
+    "remember_fact",
+    "remember_fact",
+    "remember_fact"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 7760400,
+ "fetches": [
+  {
+   "url": "https://forum.hairpros.example/t/mobile-hair-accounts",
+   "found": true,
+   "attemptId": "b2c03233-0000-4000-8000-000000000001"
+  },
+  {
+   "url": "https://stallhub.example/search?q=mobile+hairdresser+bookkeeping",
+   "found": true,
+   "attemptId": "b2c03233-0000-4000-8000-000000000002"
+  },
+  {
+   "url": "https://keywords.example/uk/mobile-hairdresser-bookkeeping",
+   "found": true,
+   "attemptId": "b2c03233-0000-4000-8000-000000000003"
+  }
+ ],
+ "toolOutcomes": [
+  {
+   "name": "web_fetch",
+   "ok": true
+  },
+  {
+   "name": "web_fetch",
+   "ok": true
+  },
+  {
+   "name": "web_fetch",
+   "ok": true
+  },
+  {
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "name": "remember_fact",
+   "ok": true
+  }
+ ],
+ "proposals": [],
+ "spendRequests": [],
+ "identityRequests": [],
+ "packet": null,
+ "packetBytes": 0,
+ "restored": {
+  "history": 6282,
+  "memory": 2144,
+  "workspace": 6051
+ },
+ "finalText": "COMPARISON/UPDATE/LESSON (fake model): recorded.",
+ "requestedModel": "fake-founder-model",
+ "effort": "high",
+ "thinking": null,
+ "maxAttempts": null
+}

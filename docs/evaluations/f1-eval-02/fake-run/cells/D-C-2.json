@@ -1,0 +1,92 @@
+{
+ "cellId": "D-C-2",
+ "phase": "D",
+ "arm": "C",
+ "model": "fake-founder-model",
+ "startedAt": "2026-09-29T21:09:08.781Z",
+ "finishedAt": "2026-09-29T21:09:08.786Z",
+ "calls": [
+  {
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 10011,
+   "contextBytes": 443,
+   "messages": 1,
+   "packetPresent": false,
+   "boundMicrocents": 14005500,
+   "costMicrocents": 1644400,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 3111,
+    "outputTokens": 200
+   },
+   "stopReason": "tool_use",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "recall_facts",
+     "arguments": {}
+    }
+   ]
+  },
+  {
+   "turn": 1,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 10247,
+   "contextBytes": 679,
+   "messages": 3,
+   "packetPresent": false,
+   "boundMicrocents": 14123500,
+   "costMicrocents": 1668000,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 3170,
+    "outputTokens": 200
+   },
+   "stopReason": "end_turn",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "DECISION (fake model): markers visible to me: none — I lack the earlier research.",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 2,
+   "toolCalls": [
+    "recall_facts"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 3312400,
+ "fetches": [],
+ "toolOutcomes": [
+  {
+   "name": "recall_facts",
+   "ok": true
+  }
+ ],
+ "proposals": [],
+ "spendRequests": [],
+ "identityRequests": [],
+ "packet": null,
+ "packetBytes": 0,
+ "restored": {
+  "history": 0,
+  "memory": 0,
+  "workspace": 0
+ },
+ "finalText": "DECISION (fake model): markers visible to me: none — I lack the earlier research.",
+ "requestedModel": "fake-founder-model",
+ "effort": "high",
+ "thinking": null,
+ "maxAttempts": null
+}

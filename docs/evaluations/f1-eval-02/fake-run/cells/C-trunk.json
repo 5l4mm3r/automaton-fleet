@@ -1,0 +1,119 @@
+{
+ "cellId": "C-trunk",
+ "phase": "C",
+ "arm": "trunk",
+ "model": "fake-founder-model",
+ "startedAt": "2026-09-29T21:09:08.622Z",
+ "finishedAt": "2026-09-29T21:09:08.628Z",
+ "calls": [
+  {
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 20879,
+   "contextBytes": 11311,
+   "messages": 17,
+   "packetPresent": false,
+   "boundMicrocents": 19439500,
+   "costMicrocents": 2731200,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 5828,
+    "outputTokens": 200
+   },
+   "stopReason": "tool_use",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "session_summary",
+      "value": "Consolidated by the fake model; evidence facts are stored under evidence:*."
+     }
+    },
+    {
+     "name": "set_goal",
+     "arguments": {
+      "title": "Validate the chosen candidate",
+      "rationale": "from the comparison"
+     }
+    }
+   ]
+  },
+  {
+   "turn": 1,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 21499,
+   "contextBytes": 11931,
+   "messages": 20,
+   "packetPresent": false,
+   "boundMicrocents": 19749500,
+   "costMicrocents": 2793200,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 5983,
+    "outputTokens": 200
+   },
+   "stopReason": "tool_use",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "sleep",
+     "arguments": {
+      "reason": "consolidated"
+     }
+    }
+   ]
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 2,
+   "toolCalls": [
+    "remember_fact",
+    "set_goal",
+    "sleep"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 5524400,
+ "fetches": [],
+ "toolOutcomes": [
+  {
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "name": "set_goal",
+   "ok": true
+  },
+  {
+   "name": "sleep",
+   "ok": true
+  }
+ ],
+ "proposals": [],
+ "spendRequests": [],
+ "identityRequests": [],
+ "packet": null,
+ "packetBytes": 0,
+ "restored": {
+  "history": 10934,
+  "memory": 2144,
+  "workspace": 4369
+ },
+ "finalText": "",
+ "requestedModel": "fake-founder-model",
+ "effort": "high",
+ "thinking": null,
+ "maxAttempts": null
+}

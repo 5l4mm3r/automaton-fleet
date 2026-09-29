@@ -1,0 +1,59 @@
+{
+ "cellId": "H-A-2",
+ "phase": "H",
+ "arm": "A",
+ "model": "fake-founder-model",
+ "startedAt": "2026-09-29T21:09:08.810Z",
+ "finishedAt": "2026-09-29T21:09:08.813Z",
+ "calls": [
+  {
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 16916,
+   "contextBytes": 7348,
+   "messages": 13,
+   "packetPresent": false,
+   "boundMicrocents": 17458000,
+   "costMicrocents": 2334800,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 4837,
+    "outputTokens": 200
+   },
+   "stopReason": "end_turn",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "DECISION (fake model): markers visible to me: groom | b2c03233-0000-4000-8000-000000000001 | 212 | MTD | accountant gives me a free | 33.",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 1,
+   "toolCalls": [],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 2334800,
+ "fetches": [],
+ "toolOutcomes": [],
+ "proposals": [],
+ "spendRequests": [],
+ "identityRequests": [],
+ "packet": null,
+ "packetBytes": 0,
+ "restored": {
+  "history": 6788,
+  "memory": 2190,
+  "workspace": 8595
+ },
+ "finalText": "DECISION (fake model): markers visible to me: groom | b2c03233-0000-4000-8000-000000000001 | 212 | MTD | accountant gives me a free | 33.",
+ "requestedModel": "fake-founder-model",
+ "effort": "high",
+ "thinking": null,
+ "maxAttempts": null
+}

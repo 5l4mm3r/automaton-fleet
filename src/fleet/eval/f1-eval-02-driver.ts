@@ -1,0 +1,227 @@
+/**
+ * F1-EVAL-02 driver (dev VM). Runs the plan cell by cell and checkpoints everything durably, so the evaluation never
+ * depends on a conversation surviving:
+ *
+ *   <out>/config.json            model, effort, prices, cap, transport target (written by the operator/engineer)
+ *   <out>/ledger.json            spend per cell, interrupted-cell reservations, cumulative total (the budget authority)
+ *   <out>/events/<cell>.jsonl    every progress line as it arrives (call_start with its worst-case bound, call_end)
+ *   <out>/cells/<cell>.json      the cell result (observable outputs, usage, cost) — written once, never rerun
+ *   <out>/state/<cell>.json      the founder-private persistent state after the cell (thinking stripped)
+ *   <out>/scores.json            deterministic scoring (`score`)
+ *
+ * Resume: completed cells are skipped. A cell with events but no result was interrupted: its spend is counted
+ * conservatively (reported costs + the worst-case bound of any call that started without ending) before it is rerun.
+ * The remaining budget passed to each cell is cap − everything counted so far, and the runner refuses any call whose
+ * worst case would exceed it. A budget stop or a provider error stops the driver (no retry loops).
+ *
+ *   tsx src/fleet/eval/f1-eval-02-driver.ts run   --out <dir> [--mandatory-only] [--only <cellId>]
+ *   tsx src/fleet/eval/f1-eval-02-driver.ts models --out <dir>
+ *   tsx src/fleet/eval/f1-eval-02-driver.ts score  --out <dir>
+ */
+
+import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
+import type { Prices } from "../cognition/charging.js";
+import { runCell, type CellRequest, type CellResult, type Snapshot } from "./f1-eval-02.js";
+import { PLAN, scoreCell, type PlannedCell } from "./f1-eval-02-plan.js";
+import { FakeFounderModel } from "./fake-founder-model.js";
+
+export interface EvalConfig {
+  transport: "fake" | "ssh";
+  model: string;
+  effort: "low" | "medium" | "high" | "max";
+  maxTokens: number;
+  prices: Required<Prices>;
+  capMicrocents: number;
+  /** ssh: host alias and the evaluation runner script on it. */
+  sshTarget?: string;
+  remoteScript?: string;
+}
+
+interface Ledger {
+  capMicrocents: number;
+  cells: Record<string, { spentMicrocents: number; stopped: string | null; calls: number; finishedAt: string }>;
+  interrupted: Array<{ cellId: string; countedMicrocents: number; at: string; events: string }>;
+  totalMicrocents: number;
+}
+
+const readJson = <T>(f: string, d: T): T => { try { return JSON.parse(fs.readFileSync(f, "utf8")) as T; } catch { return d; } };
+/** Durable write: temp file, fsync, rename. */
+function writeDurable(f: string, v: unknown): void {
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const tmp = `${f}.tmp`;
+  const fd = fs.openSync(tmp, "w", 0o644);
+  fs.writeSync(fd, typeof v === "string" ? v : JSON.stringify(v, null, 1));
+  fs.fsyncSync(fd);
+  fs.closeSync(fd);
+  fs.renameSync(tmp, f);
+}
+
+function total(l: Ledger): number {
+  return Object.values(l.cells).reduce((n, c) => n + c.spentMicrocents, 0) + l.interrupted.reduce((n, i) => n + i.countedMicrocents, 0);
+}
+
+/** Conservative spend of an interrupted cell from its event log. */
+export function interruptedSpend(lines: string[]): number {
+  const started = new Map<string, number>();
+  let n = 0;
+  for (const line of lines) {
+    let e: Record<string, unknown>;
+    try { e = JSON.parse(line); } catch { continue; }
+    const key = `${String(e.turn)}.${String(e.step)}`;
+    if (e.event === "call_start") started.set(key, Number(e.boundMicrocents) || 0);
+    if (e.event === "call_end") { n += Number(e.costMicrocents) || 0; started.delete(key); }
+  }
+  for (const b of started.values()) n += b;
+  return n;
+}
+
+type Transport = (payload: Record<string, unknown>, onEvent: (line: string) => void) => Promise<Record<string, unknown>>;
+
+function sshTransport(cfg: EvalConfig): Transport {
+  return (payload, onEvent) => new Promise((resolve, reject) => {
+    const child = spawn("ssh", ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", cfg.sshTarget!, "sudo", "-n", cfg.remoteScript!], { stdio: ["pipe", "pipe", "pipe"] });
+    let buf = "";
+    let result: Record<string, unknown> | null = null;
+    let err = "";
+    const timer = setTimeout(() => child.kill("SIGTERM"), 40 * 60_000);
+    child.stdout.on("data", (d: Buffer) => {
+      buf += d.toString("utf8");
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 1);
+        if (line.startsWith("EVT ")) onEvent(line.slice(4));
+        else if (line.startsWith("RESULT ")) result = JSON.parse(line.slice(7));
+      }
+    });
+    child.stderr.on("data", (d: Buffer) => { err += d.toString("utf8").slice(0, 2000); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (result) resolve(result);
+      else reject(new Error(`remote runner exit ${code}: ${err.slice(0, 500)}`));
+    });
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
+
+function fakeTransport(): Transport {
+  return async (payload, onEvent) => {
+    if (payload.mode === "models") return { mode: "models", models: [{ id: "fake-founder-model", status: 200 }] };
+    const result = await runCell(payload.request as CellRequest, new FakeFounderModel(), { log: (e) => onEvent(JSON.stringify(e)) });
+    return { mode: "cell", model: "fake-founder-model", effort: payload.effort, result };
+  };
+}
+
+export async function runPlan(out: string, o: { mandatoryOnly?: boolean; only?: string; transport?: Transport; log?: (s: string) => void } = {}): Promise<{ ran: string[]; stoppedAt: string | null; reason: string | null }> {
+  const log = o.log ?? ((s: string) => console.log(s));
+  const cfg = readJson<EvalConfig | null>(path.join(out, "config.json"), null);
+  if (!cfg) throw new Error(`missing ${out}/config.json`);
+  if (!(cfg.capMicrocents > 0 && cfg.capMicrocents <= 300_000_000)) throw new Error("cap must be within the authorised $3.00");
+  const transport = o.transport ?? (cfg.transport === "ssh" ? sshTransport(cfg) : fakeTransport());
+  const ledgerFile = path.join(out, "ledger.json");
+  const ledger = readJson<Ledger>(ledgerFile, { capMicrocents: cfg.capMicrocents, cells: {}, interrupted: [], totalMicrocents: 0 });
+  const ran: string[] = [];
+  const done = (id: string) => fs.existsSync(path.join(out, "cells", `${id}.json`));
+  const avgCost = (phase: string) => {
+    const xs = PLAN.filter((p) => p.phase === phase && ledger.cells[p.cellId]).map((p) => ledger.cells[p.cellId].spentMicrocents);
+    return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+  };
+  for (const cell of PLAN) {
+    if (o.only && cell.cellId !== o.only) continue;
+    if (o.mandatoryOnly && !cell.mandatory) continue;
+    if (done(cell.cellId)) continue;
+    if (cell.from && !done(cell.from)) { log(`skip ${cell.cellId}: input ${cell.from} not complete`); continue; }
+    const evFile = path.join(out, "events", `${cell.cellId}.jsonl`);
+    if (fs.existsSync(evFile)) {
+      const lines = fs.readFileSync(evFile, "utf8").split("\n").filter(Boolean);
+      const counted = interruptedSpend(lines);
+      const moved = `${evFile.replace(/\.jsonl$/, "")}.interrupted-${ledger.interrupted.length + 1}.jsonl`;
+      fs.renameSync(evFile, moved);
+      ledger.interrupted.push({ cellId: cell.cellId, countedMicrocents: counted, at: new Date().toISOString(), events: path.basename(moved) });
+      ledger.totalMicrocents = total(ledger);
+      writeDurable(ledgerFile, ledger);
+      log(`${cell.cellId}: previous attempt interrupted; counted ${counted} µ¢ conservatively`);
+    }
+    const remaining = cfg.capMicrocents - total(ledger);
+    const oneCall = (60_000 + 2_000) * Math.max(cfg.prices.inputMicrocentsPerToken, cfg.prices.cacheWriteMicrocentsPerToken ?? 0) + cfg.maxTokens * cfg.prices.outputMicrocentsPerToken;
+    if (!cell.mandatory && remaining < avgCost(cell.phase) * 1.5 + oneCall) { log(`skip optional ${cell.cellId}: remaining ${remaining} µ¢ is not enough for a complete cell`); continue; }
+    if (remaining <= 0) return { ran, stoppedAt: cell.cellId, reason: "budget exhausted" };
+    const state = cell.from ? readJson<Snapshot>(path.join(out, "state", `${cell.from}.json`), {}) : null;
+    const request: CellRequest = {
+      cellId: cell.cellId, phase: cell.phase, arm: cell.arm, observations: cell.observations, webVersion: cell.webVersion, state,
+      maxSteps: cell.maxSteps, maxTokens: cfg.maxTokens, prices: cfg.prices, budgetMicrocents: remaining,
+    };
+    log(`${cell.cellId}: start (remaining ${(remaining / 1e8).toFixed(4)} USD)`);
+    fs.mkdirSync(path.dirname(evFile), { recursive: true });
+    const evFd = fs.openSync(evFile, "a", 0o644);
+    let res: Record<string, unknown>;
+    try {
+      res = await transport({ mode: "cell", model: cfg.model, effort: cfg.effort, request }, (line) => { fs.writeSync(evFd, `${line}\n`); fs.fsyncSync(evFd); });
+    } finally {
+      fs.closeSync(evFd);
+    }
+    const result = res.result as CellResult;
+    const { snapshot, ...rest } = result;
+    writeDurable(path.join(out, "state", `${cell.cellId}.json`), snapshot);
+    writeDurable(path.join(out, "cells", `${cell.cellId}.json`), { ...rest, requestedModel: res.model, effort: res.effort, thinking: res.thinking ?? null, maxAttempts: res.maxAttempts ?? null });
+    ledger.cells[cell.cellId] = { spentMicrocents: result.spentMicrocents, stopped: result.stopped, calls: result.calls.length, finishedAt: result.finishedAt };
+    ledger.totalMicrocents = total(ledger);
+    writeDurable(ledgerFile, ledger);
+    fs.renameSync(evFile, evFile.replace(/\.jsonl$/, ".done.jsonl"));
+    ran.push(cell.cellId);
+    log(`${cell.cellId}: ${result.calls.length} calls, ${(result.spentMicrocents / 1e8).toFixed(5)} USD; total ${(ledger.totalMicrocents / 1e8).toFixed(5)} USD${result.stopped ? `; STOPPED ${result.stopped}` : ""}`);
+    if (result.stopped) return { ran, stoppedAt: cell.cellId, reason: result.stopped };
+  }
+  return { ran, stoppedAt: null, reason: null };
+}
+
+/** URLs the trunk fetched up to (and including) a cell, following `from`. */
+function fetchedBefore(out: string, from: string | null): Set<string> {
+  const s = new Set<string>();
+  let id = from;
+  while (id) {
+    const r = readJson<CellResult | null>(path.join(out, "cells", `${id}.json`), null);
+    for (const f of r?.fetches ?? []) if (f.found) s.add(f.url);
+    id = PLAN.find((p) => p.cellId === id)?.from ?? null;
+  }
+  return s;
+}
+
+export function scorePlan(out: string): ReturnType<typeof scoreCell>[] {
+  const scores = [];
+  for (const cell of PLAN as readonly PlannedCell[]) {
+    const r = readJson<CellResult | null>(path.join(out, "cells", `${cell.cellId}.json`), null);
+    if (r) scores.push(scoreCell(r, fetchedBefore(out, cell.from)));
+  }
+  writeDurable(path.join(out, "scores.json"), scores);
+  return scores;
+}
+
+async function cli(): Promise<number> {
+  const [cmd, ...rest] = process.argv.slice(2);
+  const arg = (k: string) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : undefined; };
+  const out = arg("--out");
+  if (!out) { console.error("--out <dir> required"); return 2; }
+  if (cmd === "run") {
+    const r = await runPlan(out, { mandatoryOnly: rest.includes("--mandatory-only"), only: arg("--only") });
+    console.log(JSON.stringify(r));
+    return r.reason && r.reason !== "budget exhausted" ? 1 : 0;
+  }
+  if (cmd === "models") {
+    const cfg = readJson<EvalConfig>(path.join(out, "config.json"), null as never);
+    const r = await (cfg.transport === "ssh" ? sshTransport(cfg) : fakeTransport())({ mode: "models", ids: ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5"] }, () => undefined);
+    writeDurable(path.join(out, "models.json"), r);
+    console.log(JSON.stringify(r, null, 1));
+    return 0;
+  }
+  if (cmd === "score") {
+    for (const s of scorePlan(out)) console.log(`${s.cellId.padEnd(8)} ${s.arm.padEnd(5)} markers ${s.hitCount}/${s.markerCount} calls ${s.calls} in ${s.inputTokens} out ${s.outputTokens} first-in ${s.firstCallInputTokens} fetch ${s.fetches} dup ${s.duplicateFetches} $${(s.costMicrocents / 1e8).toFixed(4)}`);
+    return 0;
+  }
+  console.error("usage: run|models|score --out <dir>");
+  return 2;
+}
+
+if (process.argv[1] && /f1-eval-02-driver\.[jt]s$/.test(process.argv[1])) cli().then((c) => process.exit(c), (e) => { console.error(e); process.exit(1); });

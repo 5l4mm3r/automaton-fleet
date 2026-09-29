@@ -1,0 +1,92 @@
+{
+ "cellId": "D-A-1",
+ "phase": "D",
+ "arm": "A",
+ "model": "fake-founder-model",
+ "startedAt": "2026-09-29T21:09:08.651Z",
+ "finishedAt": "2026-09-29T21:09:08.658Z",
+ "calls": [
+  {
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 11546,
+   "contextBytes": 1978,
+   "messages": 9,
+   "packetPresent": false,
+   "boundMicrocents": 14773000,
+   "costMicrocents": 1798000,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 3495,
+    "outputTokens": 200
+   },
+   "stopReason": "tool_use",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "recall_facts",
+     "arguments": {}
+    }
+   ]
+  },
+  {
+   "turn": 1,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 14063,
+   "contextBytes": 4495,
+   "messages": 11,
+   "packetPresent": false,
+   "boundMicrocents": 16031500,
+   "costMicrocents": 2049600,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 4124,
+    "outputTokens": 200
+   },
+   "stopReason": "end_turn",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "DECISION (fake model): markers visible to me: groom | 41 | 390 | £12, 14 sales, 3 reviews (4.3 stars; one review: \\\"doesn't do mileage\\\"). \\\"Pet Business Accounts Sheet\\\" — £18 | identity verif | 2,300 | 8db0ca8f-0000-4000-8000-000000000001 | Making Tax Digital.",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 2,
+   "toolCalls": [
+    "recall_facts"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 3847600,
+ "fetches": [],
+ "toolOutcomes": [
+  {
+   "name": "recall_facts",
+   "ok": true
+  }
+ ],
+ "proposals": [],
+ "spendRequests": [],
+ "identityRequests": [],
+ "packet": null,
+ "packetBytes": 0,
+ "restored": {
+  "history": 1536,
+  "memory": 2416,
+  "workspace": 4369
+ },
+ "finalText": "DECISION (fake model): markers visible to me: groom | 41 | 390 | £12, 14 sales, 3 reviews (4.3 stars; one review: \\\"doesn't do mileage\\\"). \\\"Pet Business Accounts Sheet\\\" — £18 | identity verif | 2,300 | 8db0ca8f-0000-4000-8000-000000000001 | Making Tax Digital.",
+ "requestedModel": "fake-founder-model",
+ "effort": "high",
+ "thinking": null,
+ "maxAttempts": null
+}

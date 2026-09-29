@@ -1,0 +1,12 @@
+{
+ "transport": "ssh",
+ "model": "claude-opus-5-5",
+ "effort": "high",
+ "maxTokens": 8000,
+ "prices": {"inputMicrocentsPerToken": 400, "outputMicrocentsPerToken": 2000, "cacheWriteMicrocentsPerToken": 500, "cacheReadMicrocentsPerToken": 20},
+ "capMicrocents": 300000000,
+ "sshTarget": "agentfleet-vps",
+ "remoteScript": "/opt/automaton-fleet/eval/f1-eval-02/scripts/fleet-eval-02.sh",
+ "_pricesSource": "https://platform.claude.com/docs/en/about-claude/pricing (fetched 2026-09-29): Opus 5.5 $4 in / $5 5m cache write / $0.20 cache read / $20 out per MTok",
+ "_modelChoice": "Strongest configuration that completes the mandatory gauntlet within the $3.00 ceiling. Fable 5.1 ($10/$50) projected ~$5.4 for the mandatory cells (over budget). Opus 5.5 at effort high (production: medium) projected ~$2.2. max_tokens 8000 (production 4000) to avoid max_tokens truncation of tool calls at higher effort. Evaluation-only: the controller's service.env and Founder 1 are unchanged."
+}

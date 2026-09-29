@@ -1,0 +1,164 @@
+{
+ "cellId": "E-trunk",
+ "phase": "E",
+ "arm": "trunk",
+ "model": "fake-founder-model",
+ "startedAt": "2026-09-29T21:09:08.662Z",
+ "finishedAt": "2026-09-29T21:09:08.671Z",
+ "calls": [
+  {
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 11493,
+   "contextBytes": 1925,
+   "messages": 9,
+   "packetPresent": false,
+   "boundMicrocents": 14746500,
+   "costMicrocents": 1792800,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 3482,
+    "outputTokens": 200
+   },
+   "stopReason": "tool_use",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "web_fetch",
+     "arguments": {
+      "url": "https://stallhub.example/fees",
+      "purpose": "evaluate the candidate"
+     }
+    },
+    {
+     "name": "web_fetch",
+     "arguments": {
+      "url": "https://groomer-biz-tips.example/stallhub-bans-templates",
+      "purpose": "evaluate the candidate"
+     }
+    }
+   ]
+  },
+  {
+   "turn": 1,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 14059,
+   "contextBytes": 4491,
+   "messages": 12,
+   "packetPresent": false,
+   "boundMicrocents": 16029500,
+   "costMicrocents": 2049200,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 4123,
+    "outputTokens": 200
+   },
+   "stopReason": "tool_use",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "evidence:2:0",
+      "value": "https://stallhub.example/fees attemptId 4b75d0ab-0000-4000-8000-000000000001: Stallhub seller fees — UPDATED 22 September 2026. From 1 October 2026: listing fee £0.20 per listing (4 months); transaction fee 9% of the item price (previously 6.5%); payment processing unchanged at 4% + £0.20 per order. Sellers were notified by email on 22 September 2026. Previous schedule (effective 1 January 2026) is archived."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "evidence:2:1",
+      "value": "https://groomer-biz-tips.example/stallhub-bans-templates attemptId 4b75d0ab-0000-4000-8000-000000000002: Heard from a friend in a Facebook group that Stallhub is banning all spreadsheet templates from August!! Better move your shop elsewhere NOW. (No sources. Post undated; author anonymous; the blog sells a competing \"shop migration\" course.)"
+     }
+    }
+   ]
+  },
+  {
+   "turn": 1,
+   "step": 2,
+   "ok": true,
+   "requestBytes": 15334,
+   "contextBytes": 5766,
+   "messages": 15,
+   "packetPresent": false,
+   "boundMicrocents": 16667000,
+   "costMicrocents": 2176800,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 4442,
+    "outputTokens": 200
+   },
+   "stopReason": "end_turn",
+   "responseModel": "fake-founder-model",
+   "providerRequestId": null,
+   "content": "COMPARISON/UPDATE/LESSON (fake model): recorded.",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 3,
+   "toolCalls": [
+    "web_fetch",
+    "web_fetch",
+    "remember_fact",
+    "remember_fact"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 6018800,
+ "fetches": [
+  {
+   "url": "https://stallhub.example/fees",
+   "found": true,
+   "attemptId": "4b75d0ab-0000-4000-8000-000000000001"
+  },
+  {
+   "url": "https://groomer-biz-tips.example/stallhub-bans-templates",
+   "found": true,
+   "attemptId": "4b75d0ab-0000-4000-8000-000000000002"
+  }
+ ],
+ "toolOutcomes": [
+  {
+   "name": "web_fetch",
+   "ok": true
+  },
+  {
+   "name": "web_fetch",
+   "ok": true
+  },
+  {
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "name": "remember_fact",
+   "ok": true
+  }
+ ],
+ "proposals": [],
+ "spendRequests": [],
+ "identityRequests": [],
+ "packet": null,
+ "packetBytes": 0,
+ "restored": {
+  "history": 1536,
+  "memory": 2416,
+  "workspace": 4369
+ },
+ "finalText": "COMPARISON/UPDATE/LESSON (fake model): recorded.",
+ "requestedModel": "fake-founder-model",
+ "effort": "high",
+ "thinking": null,
+ "maxAttempts": null
+}
