@@ -193,6 +193,60 @@ export class GenesisOps {
     return this.one<Record<string, unknown>>(`SELECT fleet_cognition_report($1) AS r`, [since.toISOString()]);
   }
 
+  // ─── Schema v24: opportunity → experiment pipeline (owner side; financially inert) ───
+  experimentPolicy() {
+    return this.one<Record<string, unknown>>(`SELECT jsonb_build_object('policy', (SELECT to_jsonb(p) FROM fleet_experiment_policy p WHERE id = 1),
+      'ladder', (SELECT jsonb_agg(to_jsonb(l) ORDER BY l.level) FROM fleet_evidence_ladder l)) AS r`);
+  }
+
+  experimentPolicySet(enabled: boolean | null, hardCapMinor: number | null, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_experiment_policy_set($1, $2, $3) AS r`, [enabled, hardCapMinor, actor]);
+  }
+
+  evidenceLadderSet(level: number, autoCapMinor: number | null, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_evidence_ladder_set($1::smallint, $2, $3) AS r`, [level, autoCapMinor, actor]);
+  }
+
+  experimentList(agentId: string | null, limit = 50) {
+    return this.one<Array<Record<string, unknown>>>(`SELECT COALESCE(jsonb_agg(fleet_experiment_json(e) || jsonb_build_object('agentId', e.agent_id) ORDER BY e.seq DESC), '[]'::jsonb) AS r
+      FROM (SELECT * FROM fleet_experiments WHERE $1::text IS NULL OR agent_id = $1 ORDER BY seq DESC LIMIT $2) e`, [agentId, limit]);
+  }
+
+  experimentView(experimentId: string) {
+    return this.one<Record<string, unknown> | null>(`SELECT fleet_experiment_view($1) AS r`, [experimentId]);
+  }
+
+  experimentDecide(experimentId: string, decision: string, approvedMinor: number | null, maxLossMinor: number | null, actor: string, reason: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_experiment_decide($1, $2, $3, $4, $5, $6) AS r`, [experimentId, decision, approvedMinor, maxLossMinor, actor, reason]);
+  }
+
+  /** Relevance of one provenance-verified evidence item (owner; the controller then re-decides). */
+  experimentAssessRelevance(experimentId: string, attemptId: string, verdict: "relevant" | "irrelevant", actor: string, reason: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_experiment_assess_relevance($1, $2, $3, $4, $5) AS r`, [experimentId, attemptId, verdict, actor, reason]);
+  }
+
+  /** E4 lineage: attribute a realized external-revenue journal to a concluded experiment of the same founder (reads the ledger only). */
+  experimentAttributeRevenue(journalId: string, experimentId: string, actor: string, reason: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_experiment_attribute_revenue($1, $2, $3, $4) AS r`, [journalId, experimentId, actor, reason]);
+  }
+
+  experimentObserve(experimentId: string, idempotencyKey: string, metric: string, value: number, source: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_experiment_observe($1, $2, $3, $4, $5, $6) AS r`, [experimentId, idempotencyKey, metric, value, source, actor]);
+  }
+
+  experimentStop(experimentId: string, actor: string, reason: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_experiment_stop($1, $2, $3) AS r`, [experimentId, actor, reason]);
+  }
+
+  experimentConclude(experimentId: string, actor: string, lessons: string | null, confidence: number | null) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_experiment_conclude($1, $2, $3, $4::smallint) AS r`, [experimentId, actor, lessons, confidence]);
+  }
+
+  strategyRegistry(agentId: string | null, limit = 50) {
+    return this.one<Array<Record<string, unknown>>>(`SELECT COALESCE(jsonb_agg(to_jsonb(s) ORDER BY s.seq DESC), '[]'::jsonb) AS r
+      FROM (SELECT * FROM fleet_strategy_registry WHERE $1::text IS NULL OR agent_id = $1 ORDER BY seq DESC LIMIT $2) s`, [agentId, limit]);
+  }
+
   /** Schema v23: a tier's prompt-cache policy (T1 is constrained to off; a question-scoped escalation never caches). */
   cognitionTierCacheSet(tier: string, mode: string, actor: string) {
     return this.one<Record<string, unknown>>(`SELECT fleet_cognition_tier_cache_set($1, $2, $3) AS r`, [tier, mode, actor]);

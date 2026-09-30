@@ -1842,6 +1842,44 @@ Evidence: `docs/evaluations/r23/`.
 - **Living founders and controller deploys from now on:** Founder 1's unit is pinned to `aab6ca3`; the rule is
   unchanged — a controller deploy never restarts the founder unit; founder code changes only via `upgrade-runtime`.
 
+## Stage R24 — Opportunity → Experiment Pipeline (procedure; prepared 2026-09-30, NOT deployed)
+
+Design, Evidence Ladder and AMBER items: `docs/design/r24-opportunity-experiment-pipeline.md`. Financially inert
+(`financial_mode` CHECK-pinned to `simulated`). Every step is an owner gate. Local evidence: `docs/evaluations/r24/`
+(migration rehearsal, simulated experiment receipt).
+
+- **R24-1 Controller release with schema v24** (controller-only, the R23-1 procedure; Founder 1 is never restarted).
+  1. Build the R24 commit on the VPS and pin `runtime.env` with the commit, build id and lockfile hash that the
+     build prints. Keep `runtime.env.pre-r24` (the `4821616` pins).
+  2. Install, then stop the controller-side units.
+  3. Dump to `~/automaton_fleet-v23-pre-v24-<ts>.dump`.
+  4. `migrate-check` must be exactly `{23→24, wouldApply:[24]}`. Then `migrate` and `audit-privileges` (PASS).
+  5. `approve-runtime`, then start the controller-side units.
+  6. Verify:
+     - doctor, `fleet:verify` and `fleet-verify-deployment.sh`;
+     - Founder 1's PID and pin (`aab6ca3`) unchanged;
+     - `fleet:admin experiment-policy` shows `enabled:false`.
+
+  v24 is additive: 9 new tables and `api_capabilities` gains `experimentsEnabled`, which the `aab6ca3` client
+  ignores. `aab6ca3` has no experiment tools, so nothing changes for Founder 1.
+- **R24-2 (later, separate owner gate) Founder runtime upgrade** to a release carrying the experiment tools. This
+  also activates the R23.1 slim wake packet. Follow the R23-2 → R23-4 procedure: rehearsal from `aab6ca3`,
+  preflight, then `upgrade-runtime`.
+- **R24-3 (later, owner) Enable the pipeline:** `fleet:admin experiment-enable [--hard-cap N]` (optionally
+  `evidence-ladder-set` first; the caps are simulation-only). While enabled, the owner assesses cited evidence with
+  `experiment-relevance <experimentId> <attemptId> relevant|irrelevant <reason…>`: the controller decides only when
+  every item is assessed. The owner links realized revenue to its experiment with
+  `experiment-attribute-revenue <journalId> <experimentId> <reason…>`, the only route to E4. Back out with
+  `experiment-disable`: the founder API refuses with
+  `FLEET_EXPERIMENTS_DISABLED`, the tools disappear from the next cognition turn, and all history is kept.
+- **Rollback.**
+  - Pipeline: `experiment-disable`, with no restart.
+  - Founder runtime: `rollback-runtime <id> <upgradeId>`.
+  - Controller: `runtime.env.pre-r24` plus `current` → `releases/4821616…`. This needs the pre-v24 dump and the
+    founder back on `aab6ca3` first, because a v23 controller cannot serve a runtime that expects v24 routes.
+- **Not part of R24:** real capital or payments, trading, custody execution, owner sweep, reproduction, refounding,
+  Founder 2, `docs/master-key/`.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes

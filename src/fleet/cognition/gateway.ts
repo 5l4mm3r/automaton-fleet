@@ -12,7 +12,7 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_CHARTER, FOUNDER_TOOLS, MAX_TOOL_CALLS_PER_RESPONSE, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock, type ToolSpec } from "./types.js";
+import { FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_TOOLS, MAX_TOOL_CALLS_PER_RESPONSE, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock, type ToolSpec } from "./types.js";
 import type { CognitionRecord } from "../postgres/store.js";
 
 export class CognitionError extends Error {
@@ -143,7 +143,9 @@ export async function infer(
   if (status.provider !== provider.id) throw new CognitionError(409, "FLEET_COGNITION_PROVIDER_MISMATCH", "registry provider differs from the controller's");
   // L6: the model the owner enabled is the model that runs (and the one the trusted log names).
   if (status.model !== provider.model) throw new CognitionError(409, "FLEET_COGNITION_MODEL_MISMATCH", "registry model differs from the controller's");
-  const tools = toolsFor(Array.isArray(caps.allowed) ? (caps.allowed as string[]) : []);
+  const allowed = Array.isArray(caps.allowed) ? (caps.allowed as string[]) : [];
+  // R24: the experiment tools only while the owner has the pipeline on (otherwise the legacy prompt is byte-identical).
+  const tools = [...toolsFor(allowed), ...(caps.experimentsEnabled === true ? FOUNDER_EXPERIMENT_TOOLS.filter((t) => allowed.includes(t.capability)) : [])];
   const maxTokens = Number(status.maxOutputTokens) || 1024;
   const promptText = JSON.stringify({ system: FOUNDER_CHARTER, messages, tools: tools.map((t) => t.name) });
   const inTok = approxTokens(promptText);

@@ -31,8 +31,9 @@ import { V20_SQL } from "./migrations-phase20.js";
 import { V21_SQL } from "./migrations-phase21.js";
 import { V22_SQL } from "./migrations-phase22.js";
 import { V23_SQL } from "./migrations-phase23.js";
+import { V24_SQL } from "./migrations-phase24.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 23;
+export const FLEET_PG_SCHEMA_VERSION = 24;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1150,6 +1151,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 21, name: "gbp_native_capital_controlled_fx", sql: V21_SQL },
   { version: 22, name: "neutral_cognition_routing_inert", sql: V22_SQL },
   { version: 23, name: "founder_runtime_upgrade_cache_policy", sql: V23_SQL },
+  { version: 24, name: "opportunity_experiment_pipeline_inert", sql: V24_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1186,6 +1188,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_cognition_routed_authorize(text, bigint, jsonb, text)",
   "svc_cognition_routed_record(text, uuid, text, integer, integer, text, text, jsonb, text, text, integer, integer, text, integer, integer, integer, text, text, jsonb)",
   "svc_action_cognition_verify(text, text, bigint, text, text)",
+  // v24: experiment expiry / run windows (reaper).
+  "svc_experiment_reap(integer)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */
@@ -1224,6 +1228,12 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_identity_fact(text, text, uuid)",
   "api_cognition_status(text, text)",
   "api_research_status(text, text)",
+  // v24: the founder's side of the opportunity → experiment pipeline (propose, add evidence, start, record, list).
+  "api_experiment_propose(text, text, text, jsonb)",
+  "api_experiment_add_evidence(text, text, uuid, text, jsonb)",
+  "api_experiment_start(text, text, uuid)",
+  "api_experiment_record(text, text, uuid, text, text, bigint, text, numeric, uuid, text, jsonb)",
+  "api_experiment_list(text, text, integer)",
 ]);
 
 /**

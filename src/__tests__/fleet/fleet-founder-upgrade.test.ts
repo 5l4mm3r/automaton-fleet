@@ -197,12 +197,12 @@ describe.skipIf(!PG_BIN)("schema v23 runtime-upgrade registry guarantees (Postgr
 
   it("migrates to v23 with a clean privilege audit; a founder's registered runtime is its Genesis attestation until an upgrade", async () => {
     const a = await setup();
-    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(23);
+    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(24);
     expect((await store.auditPrivileges()).problems).toEqual([]);
     expect(await genesis.founderRuntimeCurrent(a)).toMatchObject({ ...FROM, source: "genesis" });
     expect(await genesis.founderRuntimeCurrent("01ZZZZZZZZZZZZZZZZZZZZZZZZ")).toBeNull();
     const ctx = await genesis.founderRuntimeContext(a);
-    expect(ctx).toMatchObject({ agent: { status: "active", origin: "genesis_founder", role: "root", runtimeCommit: FROM.commit }, approved: TO, inFlight: false, schemaVersion: 23 });
+    expect(ctx).toMatchObject({ agent: { status: "active", origin: "genesis_founder", role: "root", runtimeCommit: FROM.commit }, approved: TO, inFlight: false, schemaVersion: 24 });
     // The lifecycle is owner-only: the service and agent roles can run none of it, nor read the history.
     for (const f of ["fleet_founder_runtime_upgrade_prepare($1, '{}', '{}', '{}', 'x')", "fleet_founder_runtime_current($1)", "fleet_founder_ledger_fingerprint($1)"]) {
       await expect(svcRaw.query(`SELECT fleet.${f}`, [a])).rejects.toThrow(/permission denied/);

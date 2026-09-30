@@ -20,7 +20,7 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_CHARTER, FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTED_TOOLS, FOUNDER_ROUTINE_CHARTER, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
+import { FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTED_TOOLS, FOUNDER_ROUTINE_CHARTER, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
 import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, MAX_COGNITION_DEADLINE_MS, toolsFor, validateMessages } from "./gateway.js";
 import { RouteError, actionDigest, candidateFor, parseRouteRequest, route, type RouteDecision, type TierCandidate } from "./router.js";
 import { DECISION_PACKET_VERSION, TASK_PACKET_VERSION, taskPacketProblems } from "./task-packet.js";
@@ -162,7 +162,9 @@ export async function inferRouted(
   const provider = providerFor(candidate, decision.effort, cache.mode);
   const allowed = new Set(Array.isArray(caps.allowed) ? (caps.allowed as string[]) : []);
   // Ordinary routed steps also get the cognition tools (delegate a routine chore, escalate one question).
-  const tools = routine || question ? [] : [...toolsFor([...allowed]), ...FOUNDER_ROUTED_TOOLS.filter((t) => allowed.has(t.capability))];
+  const tools = routine || question ? [] : [...toolsFor([...allowed]), ...FOUNDER_ROUTED_TOOLS.filter((t) => allowed.has(t.capability)),
+    // R24: the experiment tools only while the owner has the pipeline on (otherwise the prompt is unchanged).
+    ...(caps.experimentsEnabled === true ? FOUNDER_EXPERIMENT_TOOLS.filter((t) => allowed.has(t.capability)) : [])];
   const maxTokens = candidate.maxOutputTokens;
   const promptText = JSON.stringify({ system, messages, tools: tools.map((t) => t.name) });
   const promptSha = sha(promptText);

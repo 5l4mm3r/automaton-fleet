@@ -334,6 +334,27 @@ export class FleetApiClient implements FleetBackend {
     );
   }
 
+  // ─── Schema v24: opportunity → experiment pipeline (the registry decides; simulated capital) ───
+  async experimentPropose(idempotencyKey: string, proposal: Record<string, unknown>) {
+    return this.call<Record<string, unknown>>("POST", "/v1/experiments/propose", { idempotencyKey, proposal });
+  }
+
+  async experimentAddEvidence(experimentId: string, idempotencyKey: string, evidence: unknown[]) {
+    return this.call<Record<string, unknown>>("POST", "/v1/experiments/evidence", { experimentId, idempotencyKey, evidence });
+  }
+
+  async experimentStart(experimentId: string) {
+    return this.call<Record<string, unknown>>("POST", "/v1/experiments/start", { experimentId });
+  }
+
+  async experimentRecord(r: { experimentId: string; idempotencyKey: string; kind: string; amountMinor?: number; metric?: string; value?: number; attemptId?: string; note?: string; detail?: Record<string, unknown> }) {
+    return this.call<Record<string, unknown>>("POST", "/v1/experiments/record", r);
+  }
+
+  async experimentList(limit = 20) {
+    return this.call<Record<string, unknown>>("POST", "/v1/experiments/list", { limit });
+  }
+
   /** Schema v18: research the public web through FleetController's isolated fetcher (the result is UNTRUSTED data). */
   async researchFetch(p: { url: string; purpose: string }) {
     return (await this.call<{ result: Record<string, unknown> }>("POST", "/v1/research/fetch", p, false, 60_000)).result;

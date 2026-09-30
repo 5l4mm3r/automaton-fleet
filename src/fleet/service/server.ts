@@ -130,6 +130,12 @@ export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Obj
   "GET /v1/cognition/status": { auth: "session", witness: false },
   "POST /v1/research/fetch": { auth: "session", witness: false },
   "GET /v1/research/status": { auth: "session", witness: false },
+  // Schema v24: opportunity → experiment pipeline (financially inert; the registry decides every capital question).
+  "POST /v1/experiments/propose": { auth: "session", witness: false },
+  "POST /v1/experiments/evidence": { auth: "session", witness: false },
+  "POST /v1/experiments/start": { auth: "session", witness: false },
+  "POST /v1/experiments/record": { auth: "session", witness: false },
+  "POST /v1/experiments/list": { auth: "session", witness: false },
 });
 
 /**
@@ -372,6 +378,8 @@ export class FleetService {
         if (genesis) this.audit("genesis_expired", null, { count: genesis });
         const estates = await this.opts.admin.settleEstates(10);
         if (estates) this.audit("estates_settled", null, { count: estates });
+        const experiments = await this.opts.admin.reapExperiments(50);
+        if (experiments) this.audit("experiments_reaped", null, { count: experiments });
         await this.processTerminations();
         this.lastReapOkAt = Date.now();
         this.lastReapError = null;
@@ -1041,6 +1049,46 @@ export class FleetService {
         });
         if (!r.ok && !r.order) throw FleetService.refusal(r, "spend refused");
         return { ok: r.ok, code: r.code ?? null, order: r.order ?? null, replay: r.replay === true, executed: false };
+      }
+
+      // ─── Schema v24: the founder's side of the experiment pipeline. Every decision is the registry's; the answer —
+      // approved, partial, WATCH, refused — is returned as data (a refusal is not an HTTP error: the founder learns why).
+      case "/v1/experiments/propose": {
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const r = await agent.experimentPropose(agentId, token, str(body, "idempotencyKey", 128), body.proposal);
+        if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "experiment refused");
+        this.audit("experiment_propose", agentId, { ok: r.ok, code: r.code ?? null });
+        return r;
+      }
+      case "/v1/experiments/evidence": {
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const r = await agent.experimentAddEvidence(agentId, token, str(body, "experimentId", 36), str(body, "idempotencyKey", 128), body.evidence);
+        if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "experiment refused");
+        return r;
+      }
+      case "/v1/experiments/start": {
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const r = await agent.experimentStart(agentId, token, str(body, "experimentId", 36));
+        if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "experiment refused");
+        return r;
+      }
+      case "/v1/experiments/record": {
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const num = (k: string) => (body[k] === undefined || body[k] === null ? null : Number(body[k]));
+        const r = await agent.experimentRecord(agentId, token, {
+          experimentId: str(body, "experimentId", 36), idempotencyKey: str(body, "idempotencyKey", 128), kind: str(body, "kind", 20),
+          amountMinor: num("amountMinor"), metric: typeof body.metric === "string" ? body.metric.slice(0, 40) : null, value: num("value"),
+          attemptId: typeof body.attemptId === "string" ? body.attemptId.slice(0, 36) : null, note: typeof body.note === "string" ? body.note.slice(0, 600) : null,
+          detail: body.detail && typeof body.detail === "object" && !Array.isArray(body.detail) ? (body.detail as Record<string, unknown>) : null,
+        });
+        if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "experiment refused");
+        return r;
+      }
+      case "/v1/experiments/list": {
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const r = await agent.experimentList(agentId, token, Math.min(50, Math.max(1, Number(body.limit) || 20)));
+        if (!r.ok) throw FleetService.refusal(r, "experiments refused");
+        return r;
       }
 
       case "/v1/knowledge/propose": {

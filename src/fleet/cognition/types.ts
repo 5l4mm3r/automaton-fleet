@@ -205,6 +205,50 @@ export const FOUNDER_ROUTED_TOOLS: readonly ToolSpec[] = Object.freeze([
   },
 ] as ToolSpec[]);
 
+/**
+ * R24 experiment tools (schema v24): advertised only while the owner has the experiment pipeline switched on
+ * (capabilities.experimentsEnabled). Proposing asks for (simulated) capital: the already-granted spend.request class;
+ * the rest are planning. The registry decides every capital question; money never moves (financial mode: simulated).
+ */
+const criterion = obj({ metric: { type: "string", pattern: "^[a-z][a-z0-9_]{1,39}$" }, op: { type: "string", enum: [">=", "<=", ">", "<", "=="] }, value: { type: "number" } }, ["metric", "op", "value"]);
+export const FOUNDER_EXPERIMENT_TOOLS: readonly ToolSpec[] = Object.freeze([
+  {
+    name: "propose_experiment",
+    capability: "spend.request",
+    description: "Turn an opportunity into ONE bounded, measurable experiment and submit it to FleetController. Cite evidence only as research attemptIds with the sha256 of the saved page (from web_fetch), and say for each which part of the proposal it supports and why. FleetController verifies that you fetched them unaltered; provenance alone earns nothing: an item counts only after the owner assesses it relevant. FleetController then decides the evidence level, the budget (approve, partial, WATCH or reject) and never lets you approve or resize it. Capital is simulated in this phase: nothing is paid.",
+    parameters: obj({
+      opportunityKey: str("Short slug for the opportunity, e.g. etsy-bookkeeping-templates", 64),
+      hypothesis: str("What you believe and why", 1000),
+      evidence: { type: "array", maxItems: 20, items: obj({ attemptId: str("Research attemptId", 36), sha256: str("sha256 of the saved page", 64), supports: { type: "string", enum: ["problem", "demand", "willingness_to_pay", "channel", "competition", "feasibility", "cost"], description: "Which part of the proposal this page supports" }, rationale: str("How this page supports that part of the proposal (10-300 chars)", 300) }, ["attemptId", "sha256", "supports", "rationale"]) },
+      claimedLevel: { type: "integer", minimum: 0, maximum: 4, description: "Evidence Ladder level you believe applies (E0 claim .. E4 revenue); the controller computes its own" },
+      uncertainty: str("What could make this wrong", 600),
+      objective: str("What the experiment will establish", 600),
+      requestedMinor: { type: "integer", minimum: 0, description: "Capital requested (GBP pence)" },
+      maxLossMinor: { type: "integer", minimum: 0, description: "Most you could lose (GBP pence, ≤ requestedMinor)" },
+      timeToSignalS: { type: "integer", minimum: 600, description: "Seconds until a measurable signal is expected" },
+      successCriteria: { type: "array", minItems: 1, maxItems: 8, items: criterion },
+      failureCriteria: { type: "array", minItems: 1, maxItems: 8, items: criterion },
+      stopConditions: { type: "array", minItems: 1, maxItems: 8, items: { type: "object", properties: { kind: { type: "string", enum: ["spend_at_least", "elapsed_at_least_s", "metric"] },
+        metric: { type: "string" }, op: { type: "string", enum: [">=", "<=", ">", "<", "=="] }, value: { type: "number" } }, required: ["kind", "value"], additionalProperties: false } },
+      expiresInS: { type: "integer", minimum: 3600, description: "How long the proposal stays open" },
+      reversibility: { type: "string", enum: ["reversible", "partially_reversible", "irreversible"] },
+      dependencies: { type: "array", maxItems: 12, items: str("A dependency", 300) },
+      revenuePath: str("How this could become external revenue", 600),
+      expectedPayoff: obj({ simulatedRevenueMinor: { type: "integer", minimum: 0 }, learningValue: str("What the fleet learns either way", 600) }, ["simulatedRevenueMinor", "learningValue"]),
+      executionSteps: { type: "array", minItems: 1, maxItems: 12, items: str("A step", 300) },
+    }, ["opportunityKey", "hypothesis", "claimedLevel", "uncertainty", "objective", "requestedMinor", "maxLossMinor", "timeToSignalS", "successCriteria", "failureCriteria",
+        "stopConditions", "expiresInS", "reversibility", "dependencies", "revenuePath", "expectedPayoff", "executionSteps"]),
+  },
+  { name: "add_experiment_evidence", capability: "planning", description: "Add verified research evidence (attemptId + sha256) to a proposal FleetController is watching; it re-verifies and re-decides.",
+    parameters: obj({ experimentId: str("Experiment id", 36), evidence: { type: "array", minItems: 1, maxItems: 20, items: obj({ attemptId: str("Research attemptId", 36), sha256: str("sha256 of the saved page", 64), supports: { type: "string", enum: ["problem", "demand", "willingness_to_pay", "channel", "competition", "feasibility", "cost"], description: "Which part of the proposal this page supports" }, rationale: str("How this page supports that part of the proposal (10-300 chars)", 300) }, ["attemptId", "sha256", "supports", "rationale"]) } }, ["experimentId", "evidence"]) },
+  { name: "start_experiment", capability: "planning", description: "Start an approved (or partially approved) experiment before its approval expires.", parameters: obj({ experimentId: str("Experiment id", 36) }, ["experimentId"]) },
+  { name: "record_experiment", capability: "planning", description: "Record one step of a running experiment: a simulated spend (never beyond the approved budget), an observation (link a research attemptId when you have one), a step note, or your result claim. Your claims are kept but only FleetController's record is authoritative.",
+    parameters: obj({ experimentId: str("Experiment id", 36), kind: { type: "string", enum: ["sim_spend", "observation", "step", "result_claim"] }, amountMinor: { type: "integer", minimum: 1 },
+      metric: { type: "string", pattern: "^[a-z][a-z0-9_]{1,39}$" }, value: { type: "number" }, attemptId: str("Research attemptId backing an observation", 36), note: str("Note", 600),
+      claimedOutcome: { type: "string", enum: ["succeeded", "failed", "stopped"] } }, ["experimentId", "kind"]) },
+  { name: "list_experiments", capability: "planning", description: "Your experiments, their status and budgets, the Evidence Ladder and your strategy-registry entries (successes and failures).", parameters: obj({}, []) },
+] as ToolSpec[]);
+
 /** Appended to the charter for routed task steps (stable text: it is part of the cached prefix). */
 export const FOUNDER_ROUTED_ADDENDUM = [
   "Cognition economy: FleetController routes every call by the task, never by your past results. Your ordinary steps run at the standard tier. Arithmetic, balances, dates, lookups and policy checks are answered by your tools, not by thinking about them.",

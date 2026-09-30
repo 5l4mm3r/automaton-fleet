@@ -1828,6 +1828,11 @@ export class PgFleetStore {
     return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_settle_estates($1) AS n", [limit])).rows[0].n));
   }
 
+  /** Schema v24: expire experiment proposals/approvals and conclude experiments past their run window. Returns the count. */
+  async reapExperiments(limit = 50): Promise<number> {
+    return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_experiment_reap($1) AS n", [limit])).rows[0].n));
+  }
+
   /** Schema v10: expire payment orders past their TTL (releases their reservations). Returns the count. */
   async expirePaymentOrders(limit = 100): Promise<number> {
     return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_expire_payment_orders($1) AS n", [limit])).rows[0].n));

@@ -32,7 +32,7 @@ import path from "path";
 import { FLEET_PG_SCHEMA_VERSION } from "./postgres/migrations.js";
 import { FOUNDER_MANIFEST_CURRENT, manifestSha256 } from "./capabilities.js";
 import { GENESIS_FOUNDERS } from "./genesis/admin.js";
-import { FOUNDER_ROUTED_TOOLS, FOUNDER_TOOLS } from "./cognition/types.js";
+import { FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_TOOLS, FOUNDER_TOOLS } from "./cognition/types.js";
 import { execFileSync } from "child_process";
 
 /** automaton-fleet-custody.service state on this host (null when systemd or the unit is not available). */
@@ -441,7 +441,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         gv.reproductionExecutionEnabled ? "EXECUTION ENABLED — must be pinned off" : "execution constitutionally disabled; eligibility is assessment only",
       );
       // Phase F.2 (schema v13): founders think only through the controller gateway, under owner switches.
-      const cv = await store.cognitionOverview([...FOUNDER_TOOLS, ...FOUNDER_ROUTED_TOOLS].map((t) => t.name));
+      const cv = await store.cognitionOverview([...FOUNDER_TOOLS, ...FOUNDER_ROUTED_TOOLS, ...FOUNDER_EXPERIMENT_TOOLS].map((t) => t.name));
       facts.cognition = cv;
       if (cv) {
         add(

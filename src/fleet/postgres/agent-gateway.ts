@@ -249,6 +249,29 @@ export class PgAgentGateway {
     return this.call("api_research_status", [agentId, token]);
   }
 
+  // ─── Schema v24: opportunity → experiment pipeline (financially inert; the registry decides) ───
+  async experimentPropose(agentId: string, token: string, idempotencyKey: string, proposal: unknown): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_experiment_propose", [agentId, token, idempotencyKey, JSON.stringify(proposal ?? null)]);
+  }
+
+  async experimentAddEvidence(agentId: string, token: string, experimentId: string, idempotencyKey: string, evidence: unknown): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_experiment_add_evidence", [agentId, token, experimentId, idempotencyKey, JSON.stringify(evidence ?? null)]);
+  }
+
+  async experimentStart(agentId: string, token: string, experimentId: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_experiment_start", [agentId, token, experimentId]);
+  }
+
+  async experimentRecord(agentId: string, token: string, r: { experimentId: string; idempotencyKey: string; kind: string; amountMinor?: number | null; metric?: string | null;
+    value?: number | null; attemptId?: string | null; note?: string | null; detail?: Record<string, unknown> | null }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_experiment_record", [agentId, token, r.experimentId, r.idempotencyKey, r.kind, r.amountMinor ?? null, r.metric ?? null, r.value ?? null,
+      r.attemptId ?? null, r.note ?? null, r.detail ? JSON.stringify(r.detail) : null]);
+  }
+
+  async experimentList(agentId: string, token: string, limit = 20): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_experiment_list", [agentId, token, limit]);
+  }
+
   async knowledgePropose(agentId: string, token: string, category: string, title: string, content: string): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.call("api_knowledge_propose", [agentId, token, category, title, content]);
   }

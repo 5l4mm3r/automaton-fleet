@@ -679,6 +679,42 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
   ] : []) {
     if (!have.has(need)) problems.push(`founder runtime upgrade: trigger ${need.replace(":", ".")} is missing or disabled`);
   }
+  // v24: the experiment pipeline's history is append-only, changes only inside experiment operations, and is financially inert.
+  const v24 = (await db.query(`SELECT 1 FROM pg_tables WHERE schemaname = $1 AND tablename = 'fleet_experiments'`, [schema])).rows.length > 0;
+  for (const need of v24 ? [
+    "fleet_experiments:fleet_experiments_guard", "fleet_experiments:fleet_experiments_no_delete", "fleet_experiments:fleet_experiments_no_truncate",
+    "fleet_experiment_transitions:fleet_experiment_transitions_guard", "fleet_experiment_transitions:fleet_experiment_transitions_no_change",
+    "fleet_experiment_events:fleet_experiment_events_guard", "fleet_experiment_events:fleet_experiment_events_no_change",
+    "fleet_experiment_results:fleet_experiment_results_guard", "fleet_experiment_results:fleet_experiment_results_no_change",
+    "fleet_strategy_registry:fleet_strategy_registry_guard", "fleet_strategy_registry:fleet_strategy_registry_no_change",
+    "fleet_experiment_policy:fleet_experiment_policy_no_delete", "fleet_evidence_ladder:fleet_evidence_ladder_no_delete",
+    "fleet_experiment_relevance:fleet_experiment_relevance_guard", "fleet_experiment_relevance:fleet_experiment_relevance_no_change",
+    "fleet_opportunity_revenue_attributions:fleet_opportunity_revenue_guard", "fleet_opportunity_revenue_attributions:fleet_opportunity_revenue_no_change",
+  ] : []) {
+    if (!have.has(need)) problems.push(`experiment pipeline: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  if (v24) {
+    const ck = await db.query<{ t: string }>(
+      `SELECT c.relname || ':' || pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND k.contype = 'c' AND c.relname IN ('fleet_experiment_policy','fleet_experiment_results','fleet_strategy_registry','fleet_evidence_ladder')`, [schema]);
+    for (const t of ["fleet_experiment_policy", "fleet_experiment_results", "fleet_strategy_registry"]) {
+      if (!ck.rows.some((r) => r.t.startsWith(`${t}:`) && /financial_mode = 'simulated'/.test(r.t))) problems.push(`experiment pipeline: ${t} is not pinned to simulated money (CHECK missing)`);
+    }
+    for (const t of ["fleet_experiment_results", "fleet_strategy_registry"]) {
+      if (!ck.rows.some((r) => r.t.startsWith(`${t}:`) && /roi_authority = 'simulated_non_authoritative'/.test(r.t))) problems.push(`experiment pipeline: ${t} ROI is not pinned non-authoritative (CHECK missing)`);
+    }
+    if (!ck.rows.some((r) => r.t.startsWith("fleet_evidence_ladder:") && /cap_scope = 'simulation_only'/.test(r.t))) problems.push("experiment pipeline: ladder caps are not pinned simulation-only (CHECK missing)");
+    const money = await db.query<{ name: string }>(
+      `SELECT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = $1 AND (p.proname LIKE '%experiment%' OR p.proname LIKE '%evidence_ladder%')
+          AND p.prosrc ~* '(fleet_ledger_post\\s*\\(|fleet_payment_orders|fleet_payment_instructions|fleet_order_reserve|fleet_order_release|fleet_admin_)'`, [schema]);
+    for (const r of money.rows) problems.push(`experiment pipeline: ${r.name} touches ledger postings or payment orders (R24 is financially inert)`);
+    // Simulated ROI (founder-reported spend) is recorded and reported, never read by a decision: only these may name it.
+    const roiReaders = new Set(["fleet_experiment_conclude_internal", "fleet_experiment_json", "api_experiment_list"]);
+    const roi = await db.query<{ name: string }>(
+      `SELECT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 AND p.prosrc ~* 'simulated_roi'`, [schema]);
+    for (const r of roi.rows) if (!roiReaders.has(r.name)) problems.push(`experiment pipeline: ${r.name} reads simulated (non-authoritative) ROI`);
+  }
   if (v23) {
     const ck = await db.query<{ t: string }>(
       `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -704,6 +740,17 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_cognition_routing: new Set(["fleet_cognition_routing_set"]),
     fleet_cognition_tiers: new Set(["fleet_cognition_tier_set", "fleet_cognition_tier_verify", "fleet_cognition_tier_enable", "fleet_cognition_tier_cache_set"]),
     // v23: a living founder's runtime-upgrade history only through the lifecycle functions.
+    // v24: experiments change only through the experiment functions (founder API, controller reaper, owner decisions).
+    fleet_experiments: new Set(["api_experiment_propose", "api_experiment_add_evidence", "api_experiment_start", "api_experiment_record", "svc_experiment_reap",
+      "fleet_experiment_apply", "fleet_experiment_conclude_internal", "fleet_experiment_decide", "fleet_experiment_assess_relevance"]),
+    fleet_experiment_relevance: new Set(["fleet_experiment_assess_relevance"]),
+    fleet_opportunity_revenue_attributions: new Set(["fleet_experiment_attribute_revenue"]),
+    fleet_experiment_results: new Set(["fleet_experiment_conclude_internal"]),
+    fleet_strategy_registry: new Set(["fleet_experiment_conclude_internal"]),
+    fleet_experiment_transitions: new Set(["fleet_experiment_transition"]),
+    fleet_experiment_events: new Set(["api_experiment_add_evidence", "api_experiment_record", "fleet_experiment_observe"]),
+    fleet_experiment_policy: new Set(["fleet_experiment_policy_set"]),
+    fleet_evidence_ladder: new Set(["fleet_evidence_ladder_set"]),
     fleet_founder_runtime_upgrades: new Set(["fleet_founder_runtime_upgrade_prepare", "fleet_founder_runtime_upgrade_commit", "fleet_founder_runtime_upgrade_verify",
       "fleet_founder_runtime_upgrade_rollback", "fleet_founder_runtime_upgrade_rollback_verify", "fleet_founder_runtime_upgrade_abort"]),
     fleet_founder_routing: new Set(["fleet_founder_routing_set"]),

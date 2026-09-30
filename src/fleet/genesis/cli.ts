@@ -48,12 +48,23 @@
  *   cognition-routing-enable [--major-spend N] | cognition-routing-disable     OWNER GATE (global switch)
  *   founder-routing <agentId> enable|disable                          per-founder opt-in (moves that founder off the legacy model)
  *   cognition-report [--hours N]                                      cost and outcome per task class × tier
+ *
+ * Schema v24 opportunity → experiment pipeline (owner controls; FINANCIALLY INERT: simulated capital only):
+ *   experiment-policy                                                  switch, caps and the Evidence Ladder
+ *   experiment-enable [--hard-cap N] | experiment-disable              OWNER GATE (founders may propose only while enabled)
+ *   evidence-ladder-set <level 0..4> <autoCapMinor|owner>              auto-approval cap of a level ("owner" = owner decides)
+ *   experiment-list [agentId] | experiment-show <experimentId> | strategy-registry [agentId]
+ *   experiment-decide <experimentId> approved|partially_approved|watch|rejected [--approved N] [--max-loss N] <reason…>
+ *   experiment-relevance <experimentId> <attemptId> relevant|irrelevant <reason…>   assess one verified evidence item (the controller re-decides)
+ *   experiment-attribute-revenue <revenueJournalId> <experimentId> <reason…>        E4 lineage: link realized revenue to its experiment
+ *   experiment-observe <experimentId> <metric> <value> <source…>       a controller-recorded observation (the synthetic executor)
+ *   experiment-stop <experimentId> <reason…> | experiment-conclude <experimentId> [--confidence 0..4] [lessons…]
  */
 
 import crypto from "crypto";
 import fs from "fs";
 import { runGenesisDryRun } from "./dry-run.js";
-import { FOUNDER_ROUTED_TOOLS, FOUNDER_TOOLS } from "../cognition/types.js";
+import { FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_TOOLS, FOUNDER_TOOLS } from "../cognition/types.js";
 import { GENESIS_FOUNDERS, parseFxMicro, type AttestationEvidence, type PgGenesisAdmin } from "./admin.js";
 
 export const GENESIS_COMMANDS = new Set([
@@ -64,6 +75,8 @@ export const GENESIS_COMMANDS = new Set([
   "research-policy", "research-enable", "research-disable", "founder-research", "research-log",
   "cognition-routing", "cognition-tier-set", "cognition-tier-verify", "cognition-tier-enable", "cognition-tier-disable",
   "cognition-routing-enable", "cognition-routing-disable", "founder-routing", "cognition-report", "cognition-tier-cache",
+  "experiment-policy", "experiment-enable", "experiment-disable", "evidence-ladder-set", "experiment-list", "experiment-show", "strategy-registry",
+  "experiment-decide", "experiment-relevance", "experiment-attribute-revenue", "experiment-observe", "experiment-stop", "experiment-conclude",
 ]);
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -109,6 +122,7 @@ export async function runGenesisCommand(
     "--max-output", "--in-microcents", "--out-microcents", "--daily-budget", "--turns-per-hour", "--limit",
     "--cache-write-microcents", "--cache-read-microcents",
     "--founder-hourly", "--founder-daily", "--fleet-hourly", "--fleet-daily", "--hourly", "--daily",
+    "--hard-cap", "--approved", "--max-loss", "--confidence",
   ];
   const optInt = (name: string, min = 0) => (flag(a, name) === undefined ? null : int(flag(a, name), name, min));
   const p = positional(a, flags);
@@ -185,7 +199,7 @@ export async function runGenesisCommand(
       if (p[0] !== undefined && !ULID.test(p[0])) throw new Error("usage: research-log [agentId] [--limit N]");
       return ok(await g.researchLog(p[0] ?? null, optInt("--limit", 1) ?? 50));
     case "founders-report":
-      return ok(await g.foundersReport([...FOUNDER_TOOLS, ...FOUNDER_ROUTED_TOOLS].map((t) => t.name)));
+      return ok(await g.foundersReport([...FOUNDER_TOOLS, ...FOUNDER_ROUTED_TOOLS, ...FOUNDER_EXPERIMENT_TOOLS].map((t) => t.name)));
     case "cognition-routing":
       return ok(await g.cognitionRouting());
     case "cognition-tier-set": {
@@ -207,6 +221,60 @@ export async function runGenesisCommand(
     case "cognition-tier-disable":
       if (!/^T[123]$/.test(p[0] ?? "")) throw new Error(`usage: ${cmd} <T1|T2|T3>`);
       return ok(await g.cognitionTierEnable(p[0], cmd === "cognition-tier-enable", actor));
+    case "experiment-policy":
+      return ok(await g.experimentPolicy());
+    case "experiment-enable":
+    case "experiment-disable":
+      return ok(await g.experimentPolicySet(cmd === "experiment-enable", optInt("--hard-cap", 0) ?? null, actor));
+    case "evidence-ladder-set": {
+      const level = Number(p[0]);
+      if (!Number.isInteger(level) || level < 0 || level > 4 || !(p[1] === "owner" || /^[0-9]{1,7}$/.test(p[1] ?? ""))) throw new Error("usage: evidence-ladder-set <0..4> <autoCapMinor|owner>");
+      return ok(await g.evidenceLadderSet(level, p[1] === "owner" ? null : Number(p[1]), actor));
+    }
+    case "experiment-list":
+      if (p[0] !== undefined && !ULID.test(p[0])) throw new Error("usage: experiment-list [agentId]");
+      return ok(await g.experimentList(p[0] ?? null));
+    case "strategy-registry":
+      if (p[0] !== undefined && !ULID.test(p[0])) throw new Error("usage: strategy-registry [agentId]");
+      return ok(await g.strategyRegistry(p[0] ?? null));
+    case "experiment-show":
+      if (!UUID.test(p[0] ?? "")) throw new Error("usage: experiment-show <experimentId>");
+      return ok(await g.experimentView(p[0]));
+    case "experiment-decide": {
+      const [id, decision] = p;
+      const reason = p.slice(2).join(" ");
+      if (!UUID.test(id ?? "") || !["approved", "partially_approved", "watch", "rejected"].includes(decision ?? "") || reason.length < 3) {
+        throw new Error("usage: experiment-decide <experimentId> approved|partially_approved|watch|rejected [--approved N] [--max-loss N] <reason…>");
+      }
+      return ok(await g.experimentDecide(id, decision, optInt("--approved", 0) ?? null, optInt("--max-loss", 0) ?? null, actor, reason));
+    }
+    case "experiment-relevance": {
+      const [id, attempt, verdict] = p;
+      const reason = p.slice(3).join(" ");
+      if (!UUID.test(id ?? "") || !UUID.test(attempt ?? "") || !["relevant", "irrelevant"].includes(verdict ?? "") || reason.length < 3) {
+        throw new Error("usage: experiment-relevance <experimentId> <attemptId> relevant|irrelevant <reason…>");
+      }
+      return ok(await g.experimentAssessRelevance(id, attempt, verdict as "relevant" | "irrelevant", actor, reason));
+    }
+    case "experiment-attribute-revenue":
+      if (!UUID.test(p[0] ?? "") || !UUID.test(p[1] ?? "") || p.slice(2).join(" ").length < 3) {
+        throw new Error("usage: experiment-attribute-revenue <revenueJournalId> <experimentId> <reason…>");
+      }
+      return ok(await g.experimentAttributeRevenue(p[0], p[1], actor, p.slice(2).join(" ")));
+    case "experiment-observe": {
+      const [id, metric, value] = p;
+      const source = p.slice(3).join(" ");
+      if (!UUID.test(id ?? "") || !/^[a-z][a-z0-9_]{1,39}$/.test(metric ?? "") || !Number.isFinite(Number(value)) || source.length < 3) {
+        throw new Error("usage: experiment-observe <experimentId> <metric> <value> <source…>");
+      }
+      return ok(await g.experimentObserve(id, `owner-obs:${crypto.randomUUID()}`, metric, Number(value), source, actor));
+    }
+    case "experiment-stop":
+      if (!UUID.test(p[0] ?? "") || p.slice(1).join(" ").length < 3) throw new Error("usage: experiment-stop <experimentId> <reason…>");
+      return ok(await g.experimentStop(p[0], actor, p.slice(1).join(" ")));
+    case "experiment-conclude":
+      if (!UUID.test(p[0] ?? "")) throw new Error("usage: experiment-conclude <experimentId> [--confidence 0..4] [lessons…]");
+      return ok(await g.experimentConclude(p[0], actor, p.slice(1).join(" ") || null, optInt("--confidence", 0) ?? null));
     case "cognition-tier-cache":
       if (!/^T[123]$/.test(p[0] ?? "") || !["off", "prefix", "prefix+tail"].includes(p[1] ?? "")) throw new Error("usage: cognition-tier-cache <T1|T2|T3> <off|prefix|prefix+tail>");
       return ok(await g.cognitionTierCacheSet(p[0], p[1], actor));

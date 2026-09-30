@@ -1,0 +1,18 @@
+R24 local migration rehearsal (2026-09-30, local dev database; not a live registry)
+
+Run 2 — after the architect's corrections (relevance separate from provenance, E4 lineage, non-authoritative ROI),
+scratch schema r24_rehearsal_b:
+
+1. Deployed controller commit 4821616 (schema v23), `fleet/postgres/cli.ts migrate` on an empty schema:
+   Applied migrations: 1..23   health {"ok":true,"schemaVersion":23,"countersConsistent":true}
+2. R24 working tree, `migrate-check`:
+   {"currentVersion":23,"resultingVersion":24,"wouldApply":[24],"requiredVersion":24,"rolledBack":true}
+3. R24 `migrate`: Applied migrations: 24   health {"ok":true,"schemaVersion":24,"countersConsistent":true}
+4. R24 `migrate` again: Schema up to date.
+5. `audit-privileges`: PASS (agent and service roles least-privilege; operator/custody roles not provisioned in this cluster)
+6. `experiment-policy`: {"enabled":false,"financial_mode":"simulated","hard_cap_minor":5000,"approval_ttl_s":604800,
+   "max_proposal_ttl_s":1209600,"max_run_s":2592000,"max_active_per_founder":3}
+   ladder [level, auto_cap_minor, cap_scope]: [0,0,simulation_only] [1,300,simulation_only] [2,1000,simulation_only]
+   [3,2500,simulation_only] [4,null,simulation_only]
+
+Run 1 (superseded, pre-correction schema) used scratch schema r24_rehearsal with the same 23→24 result.

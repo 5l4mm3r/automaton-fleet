@@ -125,6 +125,12 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   // R23 routed founder runtime: cognition requests through FleetController (no new authority: the planning class)
   routine_task: "planning",
   escalate_question: "planning",
+  // R24 experiment pipeline (schema v24): proposing asks for (simulated) capital; the rest is planning.
+  propose_experiment: "spend.request",
+  add_experiment_evidence: "planning",
+  start_experiment: "planning",
+  record_experiment: "planning",
+  list_experiments: "planning",
   // constitutional exclusions
   edit_own_file: "self_modification",
   update_soul: "self_modification",

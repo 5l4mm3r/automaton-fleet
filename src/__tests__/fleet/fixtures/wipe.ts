@@ -17,6 +17,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_capability_classes", "fleet_capability_manifests", "fleet_genesis_policy", "fleet_reproduction_policy",
     "fleet_operator_state", "fleet_operator_routes", "fleet_cognition_policy", "fleet_research_policy",
     "fleet_cognition_routing", "fleet_cognition_tiers", "fleet_action_min_tier",
+    "fleet_experiment_policy", "fleet_evidence_ladder",
   ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
@@ -70,6 +71,13 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   // v23: tier prompt-cache policy back to its migration default (T1 off; T2/T3 prefix).
   const pc = await c.query("SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_cognition_tiers' AND column_name = 'prompt_cache'", [schema]);
   if (pc.rowCount) await c.query(`UPDATE "${schema}".fleet_cognition_tiers SET prompt_cache = CASE WHEN tier = 'T1' THEN 'off' ELSE 'prefix' END`);
+  // v24: experiment pipeline back to its inert defaults (off; ladder caps as seeded).
+  if (r.rows.some((x) => x.t === "fleet_experiment_policy")) {
+    await c.query(`UPDATE "${schema}".fleet_experiment_policy SET enabled = false, hard_cap_minor = 5000, max_proposal_ttl_s = 1209600, approval_ttl_s = 604800,
+      max_run_s = 2592000, max_active_per_founder = 3, updated_by = 'migration'`);
+    await c.query(`UPDATE "${schema}".fleet_evidence_ladder l SET auto_cap_minor = s.cap, updated_by = 'migration'
+      FROM (VALUES (0, 0::bigint), (1, 300::bigint), (2, 1000::bigint), (3, 2500::bigint), (4, NULL::bigint)) AS s(level, cap) WHERE l.level = s.level`);
+  }
   if (r.rows.some((x) => x.t === "fleet_research_policy")) {
     await c.query(`UPDATE "${schema}".fleet_research_policy SET research_enabled = false, founder_hourly = 60, founder_daily = 300,
       fleet_hourly = 120, fleet_daily = 600, updated_by = 'migration'`);

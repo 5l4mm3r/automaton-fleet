@@ -310,6 +310,8 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       release: RELEASE,
       audit: (e) => audit.push(e),
       terminator: new UnsupportedSandboxTerminator(),
+      // The route-denial sweep exceeds the default unverified per-IP budget (30).
+      rateLimits: { unverifiedPerIp: { capacity: 200, refillPerSec: 10 } },
     });
     url = (await service.listen(0, "127.0.0.1")).url;
   }
@@ -425,10 +427,10 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       [ulid(), `0x${randomBytes(20).toString("hex")}`],
     );
     // v8 (Operator API), v9 (D3 actions) v10 (Phase E ledger), v11 (Phase F Genesis) and v12 (F.1 founder runtimes), all additive, now follow v7 in the same migration run.
-    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 23, wouldApply: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23] });
-    expect(await store.migrate()).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(23);
-    expect((await store.health()).schemaVersion).toBe(23);
+    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 24, wouldApply: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24] });
+    expect(await store.migrate()).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(24);
+    expect((await store.health()).schemaVersion).toBe(24);
     const scopes = await ownerRaw.query(`SELECT capability_scope FROM ${schema}.fleet_agents`);
     expect(scopes.rows.map((r) => r.capability_scope)).toEqual(["full"]);
     expect((await store.auditPrivileges()).problems).toEqual([]);
@@ -561,6 +563,11 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       "POST /v1/cognition/infer": { messages: [{ role: "user", content: "x" }] },
       "POST /v1/research/fetch": { url: "https://example.com/", purpose: "x" },
       "GET /v1/research/status": undefined,
+      "POST /v1/experiments/propose": { idempotencyKey: "witness:exp-00001", proposal: {} },
+      "POST /v1/experiments/evidence": { experimentId: "00000000-0000-4000-8000-000000000000", idempotencyKey: "witness:ev-000001", evidence: [] },
+      "POST /v1/experiments/start": { experimentId: "00000000-0000-4000-8000-000000000000" },
+      "POST /v1/experiments/record": { experimentId: "00000000-0000-4000-8000-000000000000", idempotencyKey: "witness:rec-00001", kind: "step" },
+      "POST /v1/experiments/list": { limit: 5 },
     };
     const denied = Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth !== "public" && p.auth !== "genesis_attest" && !p.witness).map(([k]) => k).sort();
     // The founder attestation route accepts no session at all (the witness's signed session is simply unauthenticated there).
