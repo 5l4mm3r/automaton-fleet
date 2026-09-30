@@ -66,8 +66,10 @@ describe("living-founder restart protection (needrestart guard)", () => {
   });
 
   it("host setup installs it, deployment verification checks it, and the rehearsal can never touch a real service", () => {
+    const guard0 = fs.readFileSync("scripts/fleet-maintenance-guard.sh", "utf8");
     const setup = fs.readFileSync("scripts/fleet-os-setup.sh", "utf8");
     expect(setup).toContain('"$REPO/deploy/needrestart/50-automaton-fleet-founders.conf" /etc/needrestart/conf.d/50-automaton-fleet-founders.conf');
+    expect(guard0).toContain("guard_matches automaton-fleet.service");
     const verify = fs.readFileSync("scripts/fleet-verify-deployment.sh", "utf8");
     expect(verify).toContain('/fleet-maintenance-guard.sh"');
     expect(verify).toContain('"$G" check');

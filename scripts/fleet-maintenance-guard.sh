@@ -50,6 +50,14 @@ decide() { # decide <conf> <unit>...
     }' "$@"
 }
 
+# Which unit names the guard file's OWN entries cover (evaluated alone).
+guard_matches() {
+  perl -e '
+    our %nrconf = (override_rc => {});
+    my $f = shift @ARGV; do $f; die "config error: $@" if $@;
+    for my $u (@ARGV) { print "$u ", ((grep { $u =~ /$_/ } keys %{$nrconf{override_rc}}) ? "matched" : "unmatched"), "\n"; }' "$DST" "$@"
+}
+
 check() {
   if [[ -f "$DST" ]]; then
     [[ "$(stat -c %U:%G "$DST")" == root:root && $(( 0$(stat -c %a "$DST") & 022 )) -eq 0 ]] && ok "guard file root-owned, not group/world-writable" || bad "guard file ownership/mode ($(stat -c '%U:%G %a' "$DST"))"
@@ -60,16 +68,20 @@ check() {
   local units dec n=0
   units="$(living_units)"
   # Fail closed: a configuration needrestart cannot evaluate is a failure, never "no founders".
-  if dec="$(decide "$NRCONF" $units automaton-fleet.service automaton-fleet-operator-api.service automaton-fleet-fetcher.service unattended-upgrades.service)"; then
+  if dec="$(decide "$NRCONF" $units)"; then
     while read -r u d; do
-      case "$u" in
-        automaton-fleet-founder@*) n=$((n+1)); [[ "$d" == 0 ]] && ok "needrestart will not restart $u (override 0)" || bad "needrestart decision for $u is '$d' (must be 0)" ;;
-        *) [[ "$d" == default ]] && ok "$u keeps needrestart's default behaviour (the guard is narrow)" || bad "$u unexpectedly overridden ($d)" ;;
-      esac
+      [[ -z "$u" ]] && continue
+      n=$((n+1)); [[ "$d" == 0 ]] && ok "needrestart will not restart $u (override 0)" || bad "needrestart decision for $u is '$d' (must be 0)"
     done <<<"$dec"
     [[ $n -gt 0 ]] || echo "INFO  no living founder units are running"
   else
     bad "needrestart configuration could not be evaluated"
+  fi
+  # Narrow: the guard's own entries match founder units only (other services keep whatever the stock config says).
+  if [[ -f "$DST" ]] && nar="$(guard_matches automaton-fleet.service automaton-fleet-operator-api.service automaton-fleet-fetcher.service automaton-fleet-custody.service unattended-upgrades.service ssh.service systemd-logind.service)"; then
+    while read -r u m; do
+      [[ "$m" == unmatched ]] && ok "guard does not cover $u (narrow)" || bad "guard unexpectedly covers $u"
+    done <<<"$nar"
   fi
   [[ "$(apt-config dump APT::Periodic::Unattended-Upgrade | sed -n 's/.*"\(.*\)";/\1/p')" == 1 ]] && ok "unattended upgrades enabled (APT::Periodic::Unattended-Upgrade 1)" || bad "unattended upgrades are not enabled"
   apt-config dump | grep -q 'Unattended-Upgrade::Allowed-Origins:: "${distro_id}:${distro_codename}-security"' && ok "security origin allowed" || bad "security origin not allowed"
