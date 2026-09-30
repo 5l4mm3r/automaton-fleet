@@ -1833,6 +1833,12 @@ Evidence: `docs/evaluations/r23/`.
   (`releases/eea1932…` verified intact). A controller rollback to `b8e8e9a` needs the pre-v23 dump AND the founder
   rolled back first (its runtime record lives in v23).
 - **R23-6 not done:** routing OFF, tiers disabled and unverified, no founder opted in. Owner commands only.
+- **R23.1 (controller-only, 2026-09-30 18:00):** release `4821616` (build `18dab667…04db2`, VPS = local), no migration
+  (`migrate-check` 23→23, nothing to apply). `runtime.env.pre-r231` kept (`aab6ca3` pins). Controller-side restart
+  18:00:12–18:00:22; **Founder 1 not restarted** (PID 253900, pin `aab6ca3`). Active: T2/T3 prefix cache only on
+  evidenced reuse. **Pending activation on Founder 1:** the slim bare-wake-up packet (founder code in `4821616`),
+  to ride with the next justified founder runtime upgrade. Checks: verify 16/16, vdep 149/0, ledger verifies, leak scan 0.
+  Rollback: `runtime.env.pre-r231`, approve, restart the controller-side units (no migration involved).
 - **Living founders and controller deploys from now on:** Founder 1's unit is pinned to `aab6ca3`; the rule is
   unchanged — a controller deploy never restarts the founder unit; founder code changes only via `upgrade-runtime`.
 

@@ -118,6 +118,10 @@ read (33-minute gap), and the full task packet (~3.6k tokens) is larger than the
   Still one message, no transcript replay.
 - The cache part is controller-only. The slim packet is founder code: it reaches Founder 1 only through the R23
   runtime-upgrade lifecycle.
+- **Status (2026-09-30):** controller release `4821616` deployed controller-only — the evidenced-reuse cache policy
+  is ACTIVE in production. The slim bare-wake-up packet is **IMPLEMENTED (in `4821616`) / NOT ACTIVE ON FOUNDER 1**
+  (Founder 1 runs `aab6ca3`): pending activation, to be bundled into the next Founder runtime upgrade that has its own
+  reason to restart the founder (owner decision: not worth a restart on its own, ≈ $0.30/day at the idle cadence).
 
 ## Evidence (local, 2026-09-30)
 
