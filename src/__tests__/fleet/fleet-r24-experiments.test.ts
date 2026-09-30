@@ -3,8 +3,10 @@
  *
  * Real roles: the founder acts only through its authenticated api_experiment_* functions (agent role), the controller
  * through svc_experiment_reap (service role), the owner through fleet_experiment_* (owner role). Research evidence is
- * the registry's own research record (attempt + result rows with the page hash). Provenance (the hash-verified page)
- * and relevance (the owner's assessment of that page for that proposal) are separate: only relevant items count.
+ * the registry's own research record (attempt + result rows with the page hash) plus the evidence artifact the controller
+ * keeps at fetch time. Provenance (the hash-verified page) and relevance (the controller's independent judgement of that
+ * page for that proposal) are separate: only relevant items count. The assessor's model is scripted here: it answers
+ * from markers in the page text, so each test fixes what the model says and checks what the controller does with it.
  *
  * Set R24_RECEIPT=<file> to write the simulated end-to-end experiment receipt.
  */
@@ -29,6 +31,12 @@ import { infer as inferLegacy } from "../../fleet/cognition/gateway.js";
 import os from "os";
 import path from "path";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
+import { RelevanceAssessor, relevanceRoute, type RelevanceJob } from "../../fleet/experiments/relevance.js";
+import { buildEvidenceArtifact } from "../../fleet/research/artifact.js";
+import { research } from "../../fleet/research/gateway.js";
+import { containsSecretShape } from "../../fleet/cognition/gateway.js";
+import type { ProviderFactory } from "../../fleet/cognition/routed-gateway.js";
+import type { TierCandidate } from "../../fleet/cognition/router.js";
 import { wipeRegistry } from "./fixtures/wipe.js";
 
 const PG_BIN = findPgBin();
@@ -79,19 +87,59 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     await ledger.recordOwnerFunding(allocation * 4, `bank:${crypto.randomUUID()}`, OWNER);
     [F, G] = await founders(2, allocation);
     await genesis.experimentPolicySet(true, null, OWNER);
+    for (const [t, m] of [["T2", "claude-sonnet-5-5"], ["T3", "claude-opus-5-5"]]) {
+      await genesis.cognitionTierVerify(t, m, "test: models api 200", OWNER);
+      await genesis.cognitionTierEnable(t, true, OWNER);
+    }
+    modelLog.length = 0;
   }
 
-  /** A page this founder fetched through the controller (the registry's research record), cited with its relevance claim. */
-  async function page(agent: string, host: string, outcome: "fetched" | "failed" = "fetched"): Promise<Item> {
+  /**
+   * A page this founder fetched through the controller: the research record (attempt + result with the page hash) and,
+   * unless artifact:false, the evidence artifact the controller keeps at fetch time. Cited with its relevance claim.
+   */
+  async function page(agent: string, host: string, o: { outcome?: "fetched" | "failed"; text?: string; artifact?: boolean; supports?: string } = {}): Promise<Item> {
     const id = crypto.randomUUID();
-    const sha = crypto.createHash("sha256").update(`${host}:${id}`).digest("hex");
+    const outcome = o.outcome ?? "fetched";
+    const text = o.text ?? `Forum thread on ${host}: landlords asked for a simple rent-tracking spreadsheet and several said they would pay £10-£15 for one.`;
+    const sha = crypto.createHash("sha256").update(text).digest("hex");
     await q(`INSERT INTO fleet.fleet_research_attempts (attempt_id, agent_id, requested_url, requested_host, purpose, decision) VALUES ($1, $2, $3, $4, 'test research', 'authorized')`,
       [id, agent, `https://${host}/page`, host]);
     await q(`INSERT INTO fleet.fleet_research_results (attempt_id, outcome, failure_code, final_url, http_status, content_type, bytes, text_chars, content_sha256, latency_ms)
              VALUES ($1, $2, $3, $4, 200, 'text/html', 100, 80, $5, 10)`, [id, outcome, outcome === "failed" ? "RESEARCH_UPSTREAM" : null, `https://${host}/page`, outcome === "fetched" ? sha : null]);
-    return { attemptId: id, sha256: sha, supports: "demand", rationale: `Landlords on ${host} ask for a simple rent-tracking sheet.` };
+    if (outcome === "fetched" && o.artifact !== false) {
+      const art = buildEvidenceArtifact({ sha256: sha, finalUrl: `https://${host}/page`, title: `${host} thread`, text })!;
+      expect(await svc.researchArtifactRecord(agent, id, art)).toMatchObject({ ok: true });
+    }
+    return { attemptId: id, sha256: sha, supports: o.supports ?? "demand", rationale: `Landlords on ${host} ask for a simple rent-tracking sheet.` };
   }
 
+  /**
+   * The assessor's model, scripted from markers in the page text: a genuine demand page supports 'demand' with a verbatim
+   * quote; MIXED is ambiguous at every tier; T3RESOLVES is ambiguous at T2 and supports at T3; CONTRADICT contradicts;
+   * FABRICATE claims support with a quote that is not on the page; anything else does not bear on the claim.
+   */
+  const modelLog: Array<{ tier: string; model: string; agentId: string; system: string; prompt: string }> = [];
+  const scripted: ProviderFactory = (c: TierCandidate) => ({
+    id: "scripted" as const, model: c.model,
+    async chat(req) {
+      const prompt = String(req.messages[0].content);
+      modelLog.push({ tier: c.tier, model: c.model, agentId: req.agentId, system: req.system, prompt });
+      const page = prompt.slice(prompt.indexOf("<page"));
+      const say = (x: Record<string, unknown>) => ({ content: JSON.stringify(x), toolCalls: [], usage: { inputTokens: 1_200, outputTokens: 150 }, usageSource: "provider" as const, attempts: 1 });
+      if (page.includes("FABRICATE")) return say({ stance: "supports", supports: "demand", quotes: ["thousands of landlords pre-ordered"], reason: "strong demand" });
+      if (page.includes("MIXED") || (page.includes("T3RESOLVES") && c.tier === "T2")) return say({ stance: "mixed", supports: "demand", quotes: [], reason: "some want it, some do not" });
+      if (page.includes("CONTRADICT")) return say({ stance: "contradicts", supports: "none", quotes: ["landlords said they would never pay"], reason: "evidence against demand" });
+      if (page.includes("landlords asked for a simple rent-tracking spreadsheet") || page.includes("T3RESOLVES")) {
+        return say({ stance: "supports", supports: "demand", quotes: [page.includes("T3RESOLVES") ? "T3RESOLVES landlords want" : "landlords asked for a simple rent-tracking spreadsheet"], reason: "landlords ask for it and name a price" });
+      }
+      return say({ stance: "neutral", supports: "none", quotes: [], reason: "the page is about something else" });
+    },
+  });
+  let assessor: RelevanceAssessor;
+  /** One pass of the controller's independent relevance assessor (the reaper and the request path run the same pass). */
+  const settle = () => assessor.runOnce(50);
+  const expJson = async (id: string) => (await q(`SELECT fleet.fleet_experiment_json(e) AS j FROM fleet.fleet_experiments e WHERE experiment_id = $1`, [id]))[0].j as Record<string, any>;
   const proposal = (over: Record<string, unknown> = {}) => ({
     opportunityKey: "bookkeeping-templates",
     hypothesis: "Small landlords will pay £12 for a rent-tracking spreadsheet template sold on a marketplace.",
@@ -110,18 +158,15 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
   });
   const propose = (who: Who, p: Record<string, unknown>, idem = `exp:${crypto.randomUUID()}`) => gw.experimentPropose(who.id, who.token, idem, p);
   const exp = (r: Record<string, unknown>) => r.experiment as Record<string, any>;
-  /** The owner assesses evidence items of a proposal; the controller re-decides after each. Returns the last experiment view. */
-  const assess = async (experimentId: string, items: Item[], verdict: "relevant" | "irrelevant" = "relevant") => {
-    let last: Record<string, any> = {};
-    for (const i of items) last = await genesis.experimentAssessRelevance(experimentId, i.attemptId, verdict, OWNER, `${verdict}: read against the hypothesis`);
-    return last;
-  };
-  /** Propose, then the owner assesses every cited item relevant: the controller's decision after relevance. */
+  /** An audited owner override of one item (optional; never needed for ordinary evidence). */
+  const override = (experimentId: string, item: Item, verdict: "relevant" | "irrelevant" | "uncertain", actor = OWNER) =>
+    genesis.experimentAssessRelevance(experimentId, item.attemptId, verdict, actor, `${verdict}: owner read the page`);
+  /** Propose, then let the controller's assessor judge every cited item: the controller's decision after relevance. */
   const proposeAssessed = async (who: Who, p: Record<string, unknown>, idem?: string): Promise<Record<string, any>> => {
     const r = await propose(who, p, idem);
-    const items = (p.evidence ?? []) as Item[];
-    if (!r.ok || !items.length) return r;
-    return { ok: true, proposed: r, experiment: await assess(exp(r).experimentId, items) };
+    if (!r.ok || !((p.evidence ?? []) as Item[]).length) return r;
+    await settle();
+    return { ok: true, proposed: r, experiment: await expJson(exp(r).experimentId) };
   };
   const rec = (who: Who, experimentId: string, r: Record<string, unknown>) =>
     gw.experimentRecord(who.id, who.token, { experimentId, idempotencyKey: `rec:${crypto.randomUUID()}`, ...r } as never);
@@ -163,6 +208,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     gw = new PgAgentGateway({ connectionString: pgc.agentUrl });
     ledger = new PgLedgerAdmin({ connectionString: pgc.ownerUrl });
     genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
+    assessor = new RelevanceAssessor({ ports: { relevancePending: (n) => svc.relevancePending(n), relevanceRecord: (...a) => svc.relevanceRecord(...a) }, providerFactory: scripted });
   }, 180_000);
 
   afterAll(async () => {
@@ -219,7 +265,8 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     const ev = [await page(F.id, "b.example"), await page(F.id, "c.example")];
     const more = await gw.experimentAddEvidence(F.id, F.token, exp(w).experimentId, `ev:${crypto.randomUUID()}`, ev);
     expect(exp(more)).toMatchObject({ status: "watch", verifiedLevel: 0, decisionCode: "FLEET_RELEVANCE_PENDING", evidence: { verified: 2, relevant: 0, unassessed: 2 } });
-    expect(await assess(exp(w).experimentId, ev)).toMatchObject({ status: "approved", verifiedLevel: 2, approvedMinor: 800 });
+    await settle();
+    expect(await expJson(exp(w).experimentId)).toMatchObject({ status: "approved", verifiedLevel: 2, approvedMinor: 800 });
     // A rejected proposal is final.
     expect(await code(genesis.experimentDecide(exp(big).experimentId, "approved", 9_000, null, OWNER, "try"))).toBe("FLEET_INVALID_STATE");
   });
@@ -331,48 +378,205 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     const only = await page(F.id, "only.example");
     const claim = await propose(F, proposal({ opportunityKey: "overclaim", claimedLevel: 4, evidence: [only] }));
     expect(exp(claim)).toMatchObject({ claimedLevel: 4, verifiedLevel: 0, status: "watch" });
-    expect(await code(genesis.experimentAssessRelevance(exp(claim).experimentId, only.attemptId, "relevant", `operator:${F.id}`, "my own page"))).toBe("FLEET_SELF_APPROVAL");
-    expect(await assess(exp(claim).experimentId, [only])).toMatchObject({ claimedLevel: 4, verifiedLevel: 1, approvedMinor: 300 });
+    expect(await code(override(exp(claim).experimentId, only, "relevant", `operator:${F.id}`))).toBe("FLEET_SELF_APPROVAL");
+    await settle();
+    expect(await expJson(exp(claim).experimentId)).toMatchObject({ claimedLevel: 4, verifiedLevel: 1, approvedMinor: 300 });
   });
 
-  it("(16) provenance is not relevance: hash-valid but irrelevant evidence earns nothing; relevance is explicit, per item, final and immutable", async () => {
+  it("(16) provenance is not relevance: the founder claims relevance, the independent assessor rejects it; genuine support is accepted", async () => {
     await setup();
-    // Two genuinely fetched, unaltered pages from two hosts: provenance alone leaves the proposal at E0 (WATCH).
-    const weather = await page(F.id, "weather.example");
-    const recipes = await page(F.id, "recipes.example");
+    // Two genuinely fetched, unaltered pages from two hosts, each claimed by the founder to show demand.
+    const weather = await page(F.id, "weather.example", { text: "Sunny spells tomorrow with light winds from the west and a high of 18 degrees." });
+    const recipes = await page(F.id, "recipes.example", { text: "Whisk two eggs with milk, add flour gradually and rest the batter for an hour." });
     const r = await propose(F, proposal({ claimedLevel: 2, evidence: [weather, recipes] }));
     const id = exp(r).experimentId as string;
-    expect(exp(r)).toMatchObject({ status: "watch", verifiedLevel: 0, approvedMinor: null, evidence: { verified: 2, relevant: 0, unassessed: 2 } });
-    expect(exp(r)).toMatchObject({ decisionCode: "FLEET_RELEVANCE_PENDING" });
-    expect(exp(r).decisionReason).toMatch(/awaiting relevance assessment of 2 of 2 provenance-verified item\(s\); provenance alone earns nothing/);
-    // Assessed irrelevant: still E0, still WATCH, never capital.
-    const after = await assess(id, [weather, recipes], "irrelevant");
-    expect(after).toMatchObject({ status: "watch", verifiedLevel: 0, approvedMinor: null, decisionCode: "FLEET_EVIDENCE_INSUFFICIENT", evidence: { verified: 2, relevant: 0, irrelevant: 2, unassessed: 0 } });
-    // The assessment is recorded explicitly, referencing the attempt and the page hash that verified its provenance.
+    // Provenance alone: E0, WATCH, pending the controller's assessment (no owner involved).
+    expect(exp(r)).toMatchObject({ status: "watch", verifiedLevel: 0, decisionCode: "FLEET_RELEVANCE_PENDING", evidence: { verified: 2, relevant: 0, unassessed: 2 } });
+    expect(await settle()).toEqual({ assessed: 2, deferred: 0 });
+    expect(await expJson(id)).toMatchObject({ status: "watch", verifiedLevel: 0, approvedMinor: null, decisionCode: "FLEET_EVIDENCE_INSUFFICIENT",
+      evidence: { verified: 2, relevant: 0, irrelevant: 2, unassessed: 0, overridden: 0 } });
     const view = (await genesis.experimentView(id))! as Record<string, any>;
-    expect(view.relevance.map((x: Record<string, unknown>) => [x.attempt_id, x.content_sha256, x.supports, x.verdict, x.assessed_by, x.assessor_kind]))
-      .toEqual([[weather.attemptId, weather.sha256, "demand", "irrelevant", OWNER, "owner"], [recipes.attemptId, recipes.sha256, "demand", "irrelevant", OWNER, "owner"]]);
-    // Final and immutable: no second verdict, no rewrite, no assessment of an item the proposal did not cite.
-    expect(await code(genesis.experimentAssessRelevance(id, weather.attemptId, "relevant", OWNER, "changed my mind"))).toBe("FLEET_DUPLICATE_EVENT");
+    // Each verdict is explicit: the controller, the tier (T2: the normal judgement), the artifact it judged, the reason.
+    expect(view.relevance.map((x: Record<string, any>) => [x.attempt_id, x.verdict, x.assessed_by, x.assessor_kind, x.tier, x.refs.contentSha256, x.cognition.length]))
+      .toEqual([[weather.attemptId, "irrelevant", "controller", "controller", "T2", weather.sha256, 1], [recipes.attemptId, "irrelevant", "controller", "controller", "T2", recipes.sha256, 1]]);
+    expect(view.relevance[0].reason).toMatch(/does not bear on the claim/);
+    expect(view.relevance[0].artifact_excerpt_sha256).toMatch(/^[0-9a-f]{64}$/);
+    // Genuinely supporting evidence is accepted by the same assessor, with a verbatim quote of the preserved artifact.
+    const ev = [await page(F.id, "landlord-forum.example"), await page(F.id, "letting-agents.example")];
+    const ok = await proposeAssessed(F, proposal({ opportunityKey: "genuine-demand", evidence: ev }));
+    expect(exp(ok)).toMatchObject({ status: "approved", verifiedLevel: 2, approvedMinor: 800, decidedBy: "controller", evidence: { relevant: 2, overridden: 0 } });
+    const gv = (await genesis.experimentView(exp(ok).experimentId))! as Record<string, any>;
+    expect(gv.relevance[0]).toMatchObject({ verdict: "relevant", tier: "T2", refs: { quotes: ["landlords asked for a simple rent-tracking spreadsheet"] } });
+    // The founder's own rationale never reaches the assessor (its judgement is independent of the founder's argument).
+    expect(modelLog.every((m) => !m.prompt.includes("ask for a simple rent-tracking sheet") && m.agentId === "controller")).toBe(true);
+    // Verdicts are final and immutable; no direct write.
     expect(await code(inTime(`UPDATE fleet.fleet_experiment_relevance SET verdict = 'relevant' WHERE experiment_id = $1`, [id]))).toBe("FLEET_HISTORY_IMMUTABLE");
-    expect(await code(q(`INSERT INTO fleet.fleet_experiment_relevance (experiment_id, attempt_id, content_sha256, supports, verdict, assessed_by, assessor_kind, reason)
-                          VALUES ($1, $2, $3, 'demand', 'relevant', 'operator:owner', 'owner', 'sneak')`, [id, weather.attemptId, weather.sha256]))).toBe("FLEET_EXPERIMENT_OP_REQUIRED");
-    const stranger = await page(F.id, "stranger.example");
-    expect(await code(genesis.experimentAssessRelevance(id, stranger.attemptId, "relevant", OWNER, "not cited"))).toBe("FLEET_NOT_FOUND");
-    // Mixed: two hosts, but only one relevant → E1 (single), not E2 (corroborated).
-    const good = await page(F.id, "landlord-forum.example");
-    const noise = await page(F.id, "noise.example");
-    const m = await propose(F, proposal({ opportunityKey: "mixed-evidence", evidence: [good, noise] }));
-    // Assessing one item never decides while another is pending: the order of assessments cannot size the budget.
-    expect(await assess(exp(m).experimentId, [noise], "irrelevant")).toMatchObject({ status: "watch", decisionCode: "FLEET_RELEVANCE_PENDING" });
-    const mixed = await assess(exp(m).experimentId, [good], "relevant");
-    expect(mixed).toMatchObject({ status: "partially_approved", verifiedLevel: 1, approvedMinor: 300, evidence: { verified: 2, relevant: 1, irrelevant: 1 } });
-    // Relevance is assessed before the decision only.
-    const d = await page(F.id, "decided-a.example");
-    const decided = await propose(F, proposal({ opportunityKey: "decided-first", evidence: [d] }));
-    await genesis.experimentDecide(exp(decided).experimentId, "rejected", null, null, OWNER, "not now");
-    expect(await code(genesis.experimentAssessRelevance(exp(decided).experimentId, d.attemptId, "relevant", OWNER, "too late"))).toBe("FLEET_INVALID_STATE");
+    expect(await code(q(`INSERT INTO fleet.fleet_experiment_relevance (experiment_id, attempt_id, content_sha256, supports, verdict, assessed_by, assessor_kind, tier, reason)
+                          VALUES ($1, $2, $3, 'demand', 'relevant', 'controller', 'controller', 'T2', 'sneak')`, [id, weather.attemptId, weather.sha256]))).toBe("FLEET_EXPERIMENT_OP_REQUIRED");
+    expect(await code(agentRaw.query(`SELECT fleet.svc_experiment_relevance_record($1, $1, 'relevant', 'T2', 'self', '{}'::jsonb, '[]'::jsonb)`, [id]))).toBe("permission denied");
     expect((await store.auditPrivileges()).problems).toEqual([]);
+  });
+
+  it("(19) hash/source mismatch fails closed; a missing artifact cannot earn E1/E2; a fabricated quote is not relevance", async () => {
+    await setup();
+    // The artifact is bound to the research record: same page hash, same host, this founder's fetched attempt.
+    const text = "landlords asked for a simple rent-tracking spreadsheet";
+    const base = await page(F.id, "bound.example", { artifact: false, text });
+    const art = buildEvidenceArtifact({ sha256: base.sha256, finalUrl: "https://bound.example/page", title: null, text })!;
+    expect(await svc.researchArtifactRecord(F.id, base.attemptId, { ...art, sha256: "0".repeat(64) })).toMatchObject({ ok: false, code: "FLEET_ARTIFACT_HASH_MISMATCH" });
+    expect(await svc.researchArtifactRecord(F.id, base.attemptId, { ...art, host: "elsewhere.example" })).toMatchObject({ ok: false, code: "FLEET_ARTIFACT_SOURCE_MISMATCH" });
+    expect(await svc.researchArtifactRecord(G.id, base.attemptId, art)).toMatchObject({ ok: false, code: "FLEET_ARTIFACT_NO_FETCH" });
+    const failed = await page(F.id, "down.example", { outcome: "failed" });
+    expect(await svc.researchArtifactRecord(F.id, failed.attemptId, art)).toMatchObject({ ok: false, code: "FLEET_ARTIFACT_NO_FETCH" });
+    expect(await svc.researchArtifactRecord(F.id, base.attemptId, art)).toMatchObject({ ok: true });
+    expect(await svc.researchArtifactRecord(F.id, base.attemptId, art)).toMatchObject({ ok: false, code: "FLEET_DUPLICATE_EVENT" });
+    // Pages without an artifact: T0 (software, no model call) → uncertain → no level, WATCH, never capital.
+    const bare = [await page(F.id, "no-artifact-a.example", { artifact: false }), await page(F.id, "no-artifact-b.example", { artifact: false })];
+    const r = await proposeAssessed(F, proposal({ opportunityKey: "no-artifacts", evidence: bare }));
+    expect(exp(r)).toMatchObject({ status: "watch", verifiedLevel: 0, approvedMinor: null, decisionCode: "FLEET_EVIDENCE_UNCERTAIN", evidence: { uncertain: 2, relevant: 0 } });
+    expect(modelLog.length).toBe(0);
+    const bv = (await genesis.experimentView(exp(r).experimentId))! as Record<string, any>;
+    expect(bv.relevance.map((x: Record<string, any>) => [x.verdict, x.tier, x.cognition.length])).toEqual([["uncertain", "T0", 0], ["uncertain", "T0", 0]]);
+    // A 'relevant' verdict must quote the artifact verbatim — the registry refuses anything else, whoever sends it.
+    const liar = await page(F.id, "fabricate.example", { text: "FABRICATE a page about something: landlords asked about the weather." });
+    const lr = await propose(F, proposal({ opportunityKey: "fabricated-quote", evidence: [liar] }));
+    const lid = exp(lr).experimentId as string;
+    const artRow = (await q(`SELECT excerpt_sha256 FROM fleet.fleet_research_evidence_artifacts WHERE attempt_id = $1`, [liar.attemptId]))[0];
+    expect(await svc.relevanceRecord(lid, liar.attemptId, "relevant", "T2", "trust me", { excerptSha256: artRow.excerpt_sha256, quotes: ["thousands of landlords pre-ordered"] }, []))
+      .toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" }); // (a model verdict needs its call on record)
+    const call = [{ requestId: crypto.randomUUID(), provider: "anthropic", tier: "T2", model: "claude-sonnet-5-5", inputTokens: 10, outputTokens: 5, usdMicrocents: 3000, stance: "supports" }];
+    expect(await svc.relevanceRecord(lid, liar.attemptId, "relevant", "T2", "trust me", { excerptSha256: artRow.excerpt_sha256, quotes: ["thousands of landlords pre-ordered"] }, call))
+      .toMatchObject({ ok: false, code: "FLEET_RELEVANCE_UNVERIFIED" });
+    expect(await svc.relevanceRecord(lid, liar.attemptId, "relevant", "T2", "trust me", { excerptSha256: "f".repeat(64), quotes: ["landlords asked about the weather"] }, [{ ...call[0], requestId: crypto.randomUUID() }]))
+      .toMatchObject({ ok: false, code: "FLEET_RELEVANCE_UNVERIFIED" });
+    // (both refused verdicts' inference is still accounted as provider consumption)
+    expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_provider_credit_events WHERE recorded_by = 'controller:evidence_relevance'`))[0].n).toBe(2);
+    // Through the assessor: the model's fabricated quote is not on the page → uncertain, after one T3 look.
+    await settle();
+    expect(await expJson(lid)).toMatchObject({ status: "watch", decisionCode: "FLEET_EVIDENCE_UNCERTAIN", evidence: { uncertain: 1 } });
+  });
+
+  it("(20) conflicting or ambiguous evidence is uncertain (T3 only then); uncertain never auto-approves; the owner override is audited, optional", async () => {
+    await setup();
+    const head0 = await ledgerHead();
+    const good = await page(F.id, "good.example");
+    const mixed = await page(F.id, "mixed.example", { text: "MIXED reviews: some landlords want a tracker, others say spreadsheets are pointless." });
+    const r = await proposeAssessed(F, proposal({ opportunityKey: "mixed-signal", evidence: [good, mixed] }));
+    const id = exp(r).experimentId as string;
+    // One relevant page and one ambiguous page: never an automatic approval, whatever the relevant page is worth.
+    expect(exp(r)).toMatchObject({ status: "watch", verifiedLevel: 1, approvedMinor: null, decisionCode: "FLEET_EVIDENCE_UNCERTAIN", evidence: { relevant: 1, uncertain: 1 } });
+    const view = (await genesis.experimentView(id))! as Record<string, any>;
+    const m = view.relevance.find((x: Record<string, any>) => x.attempt_id === mixed.attemptId);
+    // Ambiguous at T2 → one question-scoped escalation to T3 (EVIDENCE_CONFLICT) → still ambiguous → uncertain.
+    expect(m).toMatchObject({ verdict: "uncertain", tier: "T3" });
+    expect(m.cognition.map((c: Record<string, any>) => [c.tier, c.model, c.stance, c.route.escalationReason])).toEqual([["T2", "claude-sonnet-5-5", "mixed", null], ["T3", "claude-opus-5-5", "mixed", "EVIDENCE_CONFLICT"]]);
+    // The clear page never went above T2.
+    expect(view.relevance.find((x: Record<string, any>) => x.attempt_id === good.attemptId)).toMatchObject({ verdict: "relevant", tier: "T2" });
+    // A contradicting page is conflicting evidence: uncertain.
+    const contra = await page(F.id, "contra.example", { text: "CONTRADICT: surveyed landlords said they would never pay for a template." });
+    const c = await proposeAssessed(F, proposal({ opportunityKey: "contradicted", evidence: [contra] }));
+    expect(exp(c)).toMatchObject({ status: "watch", decisionCode: "FLEET_EVIDENCE_UNCERTAIN" });
+    // Ambiguous at T2 but clear at T3: the escalation resolves it (relevant at T3).
+    const t3 = await page(G.id, "t3.example", { text: "T3RESOLVES landlords want a tracker; the thread is long and meandering." });
+    const t = await proposeAssessed(G, proposal({ opportunityKey: "t3-resolves", evidence: [t3] }));
+    expect(exp(t)).toMatchObject({ status: "partially_approved", verifiedLevel: 1, approvedMinor: 300 });
+    // The owner may override (audited), e.g. after reading the mixed page; the controller re-decides. Never required above.
+    expect(await code(override(id, mixed, "relevant", `operator:${F.id}`))).toBe("FLEET_SELF_APPROVAL");
+    const after = await override(id, mixed, "relevant");
+    expect(after).toMatchObject({ status: "approved", verifiedLevel: 2, decidedBy: "controller", evidence: { relevant: 2, uncertain: 0, overridden: 1 } });
+    expect(await code(override(id, mixed, "irrelevant"))).toBe("FLEET_INVALID_STATE"); // relevance is settled before the decision
+    const ov = (await genesis.experimentView(id))! as Record<string, any>;
+    expect(ov.relevance.filter((x: Record<string, any>) => x.attempt_id === mixed.attemptId).map((x: Record<string, any>) => [x.assessor_kind, x.verdict, x.overrides]))
+      .toEqual([["controller", "uncertain", null], ["owner", "relevant", "uncertain"]]);
+    const ev = await q(`SELECT actor, detail FROM fleet.fleet_events WHERE event_type = 'experiment_relevance_overridden' AND detail ->> 'experimentId' = $1`, [id]);
+    expect(ev).toEqual([{ actor: OWNER, detail: expect.objectContaining({ attemptId: mixed.attemptId, verdict: "relevant", controllerVerdict: "uncertain" }) }]);
+    // Ordinary evidence needed no owner at all: across every other proposal here, zero owner rows.
+    expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_experiment_relevance WHERE assessor_kind = 'owner'`))[0].n).toBe(1);
+    // Consequential proposals (irreversible, or above the E2 cap) are judged at T3 directly.
+    const big = await page(F.id, "big.example");
+    await q(`UPDATE fleet.fleet_experiment_policy SET max_active_per_founder = 10`);
+    modelLog.length = 0;
+    await proposeAssessed(F, proposal({ opportunityKey: "bigger", requestedMinor: 2_000, maxLossMinor: 500, evidence: [big] }));
+    expect(modelLog.map((x) => x.tier)).toEqual(["T3"]);
+    // The assessor's inference is fleet overhead in the provider-credit record: never a ledger posting or a founder charge.
+    const credit = await q(`SELECT count(*)::int AS n, COALESCE(sum(usd_microcents), 0)::bigint AS usd FROM fleet.fleet_provider_credit_events WHERE recorded_by = 'controller:evidence_relevance'`);
+    expect(credit[0].n).toBeGreaterThan(0);
+    expect(Number(credit[0].usd)).toBeLessThan(0);
+    expect(await ledgerHead()).toEqual(head0);
+  });
+
+  it("(21) relevance cognition is independent of the founder's profitability and history; the work list carries no founder data", async () => {
+    await setup();
+    await q(`UPDATE fleet.fleet_experiment_policy SET max_active_per_founder = 10`);
+    // F becomes 'successful': realized revenue and a succeeded experiment. G has nothing.
+    await q(`SELECT fleet.fleet_admin_record_external('external_revenue', $1, 2500, $2, $3, $4, $5)`,
+      [F.id, `stripe:${crypto.randomUUID()}`, crypto.createHash("sha256").update("customer:x").digest("hex"), OWNER, `rev:${crypto.randomUUID()}`]);
+    const past = await proposeAssessed(F, proposal({ opportunityKey: "past-win", evidence: [await page(F.id, "pw-a.example"), await page(F.id, "pw-b.example")] }));
+    await gw.experimentStart(F.id, F.token, exp(past).experimentId);
+    await genesis.experimentObserve(exp(past).experimentId, `obs:${crypto.randomUUID()}`, "sales", 9, "synthetic executor (simulated)", OWNER);
+    await genesis.experimentConclude(exp(past).experimentId, OWNER, null, null);
+    // Identical proposals and identical pages (same host and text) from both founders.
+    const same = { text: "MIXED: landlords are split on paying for a rent tracker." };
+    const pf = await propose(F, proposal({ opportunityKey: "same-task", evidence: [await page(F.id, "same.example", same)] }));
+    const pg2 = await propose(G, proposal({ opportunityKey: "same-task", evidence: [await page(G.id, "same.example", same)] }));
+    const work = await svc.relevancePending(50);
+    const jobs = work.jobs as Array<Record<string, unknown>>;
+    expect(jobs.length).toBe(2);
+    for (const j of jobs) expect(Object.keys(j).sort()).toEqual(["artifact", "attemptId", "e2CapMinor", "experimentId", "proposal", "seq", "sha256", "supports"]);
+    expect(JSON.stringify(work)).not.toContain(F.id);
+    expect(JSON.stringify(work)).not.toContain(G.id);
+    expect(JSON.stringify(work)).not.toMatch(/revenue|roi|wealth|balance|history|outcome/i);
+    // The route is a function of the task alone: identical for both, and identical to a route computed without any founder.
+    expect(relevanceRoute(jobs[0] as unknown as RelevanceJob)).toEqual(relevanceRoute(jobs[1] as unknown as RelevanceJob));
+    modelLog.length = 0;
+    await settle();
+    const byFounder = modelLog.map((m) => ({ tier: m.tier, model: m.model, system: m.system, prompt: m.prompt.replace(/fetched="[^"]+"/, "") }));
+    expect(byFounder.length).toBe(4); // T2 then T3 for each (ambiguous)
+    expect(byFounder.slice(0, 2)).toEqual(byFounder.slice(2, 4));
+    const [vf, vg] = [(await genesis.experimentView(exp(pf).experimentId))! as Record<string, any>, (await genesis.experimentView(exp(pg2).experimentId))! as Record<string, any>];
+    expect(vf.relevance.map((x: Record<string, any>) => [x.verdict, x.tier])).toEqual(vg.relevance.map((x: Record<string, any>) => [x.verdict, x.tier]));
+    // The relevance source cannot even name founder economics or history (structural check of the assessor module).
+    const src = fs.readFileSync("src/fleet/experiments/relevance.ts", "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(src).not.toMatch(/economics|agent_revenue|strategy_registry|simulated_roi|fleet_experiment_results/);
+  });
+
+  it("(22) no raw page dump or credential-shaped material enters a persistent evidence artifact", async () => {
+    await setup();
+    const secrets = ["sk-ant-api03-" + "A".repeat(40), "-----BEGIN RSA PRIVATE KEY-----\nMIIEow" + "B".repeat(60) + "\n-----END RSA PRIVATE KEY-----",
+      "postgres://fleetadmin:hunter2secret@db.example/fleet", "0x" + "c".repeat(64)];
+    const body = `<html>` + "Landlords asked for a simple rent-tracking spreadsheet. ".repeat(20) + secrets.join(" leaked ") + " filler ".repeat(8_000);
+    const text = body.replace(/<[^>]+>/g, "");
+    const sha = crypto.createHash("sha256").update(body).digest("hex");
+    const attemptId = crypto.randomUUID();
+    await q(`INSERT INTO fleet.fleet_research_attempts (attempt_id, agent_id, requested_url, requested_host, purpose, decision) VALUES ($1, $2, 'https://forum.landlord-talk.co.uk/p', 'forum.landlord-talk.co.uk', 'test', 'authorized')`, [attemptId, F.id]);
+    const refused: string[] = [];
+    const out = await research({
+      capabilities: async () => ({ ok: true }),
+      authorize: async () => ({ ok: true, attemptId }),
+      record: (a, id, x) => svc.researchRecord(a, id, x),
+      recordArtifact: (a, id, x) => svc.researchArtifactRecord(a, id, x),
+      artifactRefused: (_a, _id, c) => refused.push(c),
+    }, { fetch: async (url: string) => ({ ok: true as const, requestedUrl: url, finalUrl: url, redirects: [], status: 200, contentType: "text/html", title: "Landlord forum",
+      text, truncated: false, links: [], bytes: body.length, sha256: sha, fetchedAt: new Date().toISOString(), latencyMs: 5 }) }, F.id, F.token, { url: "https://forum.landlord-talk.co.uk/p", purpose: "demand research" });
+    expect(out.sha256).toBe(sha);
+    expect(refused).toEqual([]);
+    const a = (await q(`SELECT * FROM fleet.fleet_research_evidence_artifacts WHERE attempt_id = $1`, [attemptId]))[0];
+    expect(a).toMatchObject({ agent_id: F.id, content_sha256: sha, host: "forum.landlord-talk.co.uk", truncated: true, artifact_version: 1 });
+    expect(a.excerpt.length).toBeLessThanOrEqual(6_000);
+    expect(a.source_chars).toBe(50_000); // the research text bound; the artifact keeps at most 6000 of it
+    expect(a.excerpt).not.toMatch(/<html>/);
+    expect(a.redactions).toBeGreaterThan(0);
+    for (const s of secrets) expect(a.excerpt).not.toContain(s.slice(0, 20));
+    expect(containsSecretShape(a.excerpt)).toBe(false);
+    expect((await q(`SELECT fleet.fleet_secret_shaped($1) AS s`, [a.excerpt]))[0].s).toBe(false);
+    expect(a.excerpt_sha256).toBe(crypto.createHash("sha256").update(a.excerpt).digest("hex"));
+    // Directly, too: the registry refuses a secret-shaped or oversized excerpt, whatever the controller code does.
+    const p2 = await page(F.id, "direct.example", { artifact: false, text: "x" });
+    const base = { sha256: p2.sha256, host: "direct.example", title: null, sourceChars: 1, truncated: false, redactions: 0 };
+    expect(await svc.researchArtifactRecord(F.id, p2.attemptId, { ...base, excerpt: `key ${secrets[0]}` })).toMatchObject({ ok: false, code: "FLEET_ARTIFACT_SECRET_SHAPED" });
+    expect(await svc.researchArtifactRecord(F.id, p2.attemptId, { ...base, excerpt: "y".repeat(6_001) })).toMatchObject({ ok: false, code: "FLEET_ARTIFACT_INVALID" });
+    expect(await code(inTime(`UPDATE fleet.fleet_research_evidence_artifacts SET excerpt = 'rewritten' WHERE attempt_id = $1`, [attemptId]))).toBe("FLEET_HISTORY_IMMUTABLE");
+    expect(await code(agentRaw.query(`SELECT * FROM fleet.fleet_research_evidence_artifacts`))).toBe("permission denied");
   });
 
   it("(9) success is decided from controller-recorded observations only, and records strategy-registry knowledge; (7) the founder cannot edit the authoritative result", async () => {
@@ -411,7 +615,8 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     const s3 = await page(F.id, "s3.example");
     const pending = await propose(F, proposal({ requestedMinor: 2_000, maxLossMinor: 1_000, evidence: [s3] }));
     expect(exp(pending)).toMatchObject({ verifiedLevel: 0, status: "watch" }); // the earlier success alone is not relevance for a new proposal
-    expect(await assess(exp(pending).experimentId, [s3])).toMatchObject({ verifiedLevel: 3, status: "approved", approvedMinor: 2_000 });
+    await settle();
+    expect(await expJson(exp(pending).experimentId)).toMatchObject({ verifiedLevel: 3, status: "approved", approvedMinor: 2_000 });
   });
 
   it("(17) E4 needs revenue attributed to the same opportunity lineage: unrelated revenue cannot produce E4, attributed revenue can", async () => {
@@ -527,7 +732,8 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(await propose(F, { ...p, requestedMinor: 700 }, "exp:replay-key-0001")).toMatchObject({ ok: false, code: "FLEET_IDEMPOTENCY_CONFLICT" });
     expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_experiments WHERE agent_id = $1`, [F.id]))[0].n).toBe(1);
     const id = exp(a).experimentId as string;
-    expect(await assess(id, ev)).toMatchObject({ status: "approved" });
+    await settle();
+    expect(await expJson(id)).toMatchObject({ status: "approved" });
     await gw.experimentStart(F.id, F.token, id);
     expect(await gw.experimentStart(F.id, F.token, id)).toMatchObject({ ok: true, replay: true });
     const step = { experimentId: id, idempotencyKey: "rec:replay-step-0001", kind: "sim_spend", amountMinor: 100 };
@@ -543,7 +749,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     await setup();
     const good = await page(F.id, "ok.example");
     const other = await page(G.id, "other.example");
-    const failed = await page(F.id, "down.example", "failed");
+    const failed = await page(F.id, "down.example", { outcome: "failed" });
     const cases: Array<[unknown, string]> = [
       [[{ ...good, sha256: "0".repeat(64) }], "FLEET_EVIDENCE_UNVERIFIED"],          // tampered page hash
       [[other], "FLEET_EVIDENCE_UNVERIFIED"],                                         // another founder's research
@@ -622,7 +828,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     await setup();
     const service = new FleetService({ admin: svc, agent: gw, realReplicationEnabled: false, reaperIntervalMs: 0,
       release: { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40), buildId: "d".repeat(64), lockfileSha256: "e".repeat(64) },
-      audit: () => undefined, terminator: new UnsupportedSandboxTerminator() });
+      audit: () => undefined, terminator: new UnsupportedSandboxTerminator(), cognitionProviderFactory: scripted });
     const url = (await service.listen(0, "127.0.0.1")).url;
     try {
       const client = new FleetApiClient({ baseUrl: url, agentId: F.id, token: F.token });
@@ -632,7 +838,8 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
       const r = await client.experimentPropose("exp:http-propose-001", proposal({ evidence: ev }));
       expect(r).toMatchObject({ ok: true, experiment: { status: "watch", evidence: { verified: 2, relevant: 0 } } });
       const id = (r.experiment as { experimentId: string }).experimentId;
-      expect(await assess(id, ev)).toMatchObject({ status: "approved", approvedMinor: 800 });
+      await service.assessRelevance();
+      expect(await expJson(id)).toMatchObject({ status: "approved", approvedMinor: 800 });
       expect(await client.experimentStart(id)).toMatchObject({ ok: true, experiment: { status: "running" } });
       // (the client raises a refusal as an ApiError carrying the registry's code; the founder toolbox turns it into data)
       await expect(client.experimentRecord({ experimentId: id, idempotencyKey: "rec:http-over-budget", kind: "sim_spend", amountMinor: 5_000 }))
@@ -661,7 +868,8 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     const evidence = [await page(F.id, "marketplace.example"), await page(F.id, "forum.example")];
     const proposed = await propose(F, proposal({ opportunityKey: "landlord-rent-tracker", evidence }), "exp:e2e-receipt-0001");
     const id = exp(proposed).experimentId as string;
-    const decided = await assess(id, evidence);
+    await settle();
+    const decided = await expJson(id);
     const started = await gw.experimentStart(F.id, F.token, id);
     await rec(F, id, { kind: "step", note: "template drafted (simulated)" });
     await rec(F, id, { kind: "sim_spend", amountMinor: 20, note: "listing fee (simulated)" });

@@ -215,7 +215,7 @@ export const FOUNDER_EXPERIMENT_TOOLS: readonly ToolSpec[] = Object.freeze([
   {
     name: "propose_experiment",
     capability: "spend.request",
-    description: "Turn an opportunity into ONE bounded, measurable experiment and submit it to FleetController. Cite evidence only as research attemptIds with the sha256 of the saved page (from web_fetch), and say for each which part of the proposal it supports and why. FleetController verifies that you fetched them unaltered; provenance alone earns nothing: an item counts only after the owner assesses it relevant. FleetController then decides the evidence level, the budget (approve, partial, WATCH or reject) and never lets you approve or resize it. Capital is simulated in this phase: nothing is paid.",
+    description: "Turn an opportunity into ONE bounded, measurable experiment and submit it to FleetController. Cite evidence only as research attemptIds with the sha256 of the saved page (from web_fetch), and say for each which part of the proposal it supports and why. FleetController verifies that you fetched them unaltered; provenance alone earns nothing: FleetController's independent assessor judges each page against your hypothesis and the part you say it supports (relevant, irrelevant or uncertain), and only relevant pages count. FleetController then decides the evidence level, the budget (approve, partial, WATCH or reject) and never lets you approve or resize it. Capital is simulated in this phase: nothing is paid.",
     parameters: obj({
       opportunityKey: str("Short slug for the opportunity, e.g. etsy-bookkeeping-templates", 64),
       hypothesis: str("What you believe and why", 1000),

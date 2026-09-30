@@ -56,6 +56,7 @@ export const TASK_CLASSES: Readonly<Record<string, TaskClassSpec>> = Object.free
   agent_step: { minTier: "T2", maxTier: "T3", description: "multistep autonomous tool use (default)" },
   opportunity_research: { minTier: "T2", maxTier: "T3", description: "opportunity research" },
   evidence_synthesis: { minTier: "T2", maxTier: "T3", description: "evidence synthesis" },
+  evidence_relevance: { minTier: "T2", maxTier: "T3", description: "independent judgement of one cited page against a proposal (controller-owned)" },
   market_comparison: { minTier: "T2", maxTier: "T3", description: "market comparison" },
   hypothesis_generation: { minTier: "T2", maxTier: "T3", description: "hypothesis generation" },
   validation_design: { minTier: "T2", maxTier: "T3", description: "validation design" },

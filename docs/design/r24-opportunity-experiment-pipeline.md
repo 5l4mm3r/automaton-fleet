@@ -1,7 +1,8 @@
 # R24 — Opportunity → Experiment Pipeline (2026-09-30)
 
-Status: **implemented and tested locally** (schema v24), with the architect's three corrections applied (relevance
-separate from provenance, E4 lineage, non-authoritative simulated ROI). Financially inert: every amount is simulated,
+Status: **implemented and tested locally** (schema v24), with the architect's corrections applied (relevance separate
+from provenance, E4 lineage, non-authoritative simulated ROI, and **autonomous evidence relevance**: a controller-owned
+independent assessor instead of an owner gate). Financially inert: every amount is simulated,
 and no path reaches ledger postings, payment orders or instructions, custody or the owner sweep.
 
 ## Core invariant
@@ -44,23 +45,86 @@ proposed ───────────┼──────────► r
 must equal the recorded `content_sha256`. It proves the founder really fetched that page unaltered. It says nothing
 about whether the page supports the proposal.
 
-**Relevance** is a separate, explicit record:
+### Evidence artifacts (at research-fetch time)
 
-- Every cited item must carry the founder's relevance **claim**: `supports` (one of `problem`, `demand`,
-  `willingness_to_pay`, `channel`, `competition`, `feasibility`, `cost`) and a `rationale` (10–300 chars). The claim
-  is stored with the verified item and is never trusted.
-- The item counts only after an **assessment** in `fleet_experiment_relevance`: one immutable row per (experiment,
-  item). The row references the research attempt and the page hash that verified its provenance, and records the claimed
-  `supports`, the verdict (`relevant` or `irrelevant`), the assessor and a reason.
-- In R24 the assessor is the **owner** (`fleet:admin experiment-relevance`). It is never the founder:
-  `fleet_require_operator_approver` refuses the founder's own identity. The controller cannot judge relevance itself,
-  because the registry stores page hashes, not page text.
-- The controller decides only on a **complete** relevance record. While any cited item is unassessed, the proposal
-  stays on WATCH (`FLEET_RELEVANCE_PENDING`), so the order of assessments can never size a budget. When the last item
-  is assessed, the controller re-evaluates deterministically. The assessment is an input to the controller's decision,
-  not an approval.
-- Relevance is assessed only before the decision (`proposed` or `watch`). Each item is assessed once, and only items
-  the proposal cited can be assessed.
+When a page is fetched, the controller keeps a bounded, sanitized **evidence artifact** in
+`fleet_research_evidence_artifacts`, written by `svc_research_artifact_record` from `src/fleet/research/artifact.ts`.
+
+What the artifact holds:
+
+- the research attempt id, the page hash (equal to the research result's `content_sha256`), the host of the recorded
+  final URL, and the registry's own fetch timestamp;
+- at most 6000 characters of normalized extracted text: never the raw page or HTML;
+- the excerpt's own sha256, source length, a truncation flag and a redaction count.
+
+How it is sanitized and checked:
+
+- **Normalization:** NFKC, control and invisible characters removed, whitespace collapsed.
+- **Redaction:** the canonical redaction runs over the first 8000 characters before the cut, so a secret starting inside
+  the excerpt is removed whole. The registry's own secret shapes are also neutralized.
+- **Fail closed:** if anything credential-shaped remains, no artifact is kept.
+- **Registry refusals:** a hash mismatch, a host mismatch, another founder's or an unfetched attempt, an oversized or
+  secret-shaped excerpt, or a duplicate.
+- **Immutable** once written. The agent role cannot read the table.
+
+This applies to every fetch once v24 is deployed, even while the pipeline is off, so pages fetched before enabling can
+be judged later. Worst case is about 19 MB a day at the fleet research quota.
+
+### The independent relevance assessor (FleetController)
+
+`src/fleet/experiments/relevance.ts` runs on the controller:
+
+- once after every accepted `propose` or `add_evidence` (off the request path);
+- on every reaper tick;
+- single-flight in both cases.
+
+Its work list comes from `svc_experiment_relevance_pending`. Each job holds:
+
+- the cited item: attempt, page hash and claimed support category;
+- the proposal's hypothesis, objective, reversibility and amount relative to the E2 cap;
+- the artifact.
+
+It carries **no founder id, wealth, history or ROI**. The founder's own rationale is not shown to the model either.
+
+| Step | Cognition | Rule |
+|---|---|---|
+| No artifact, or artifact for another page hash | **T0** (software, no model) | `uncertain` |
+| Normal judgement | **T2** (task class `evidence_relevance`, router v22) | the model returns stance, category, verbatim quotes and a reason |
+| T2 answered ambiguous/conflicting/unusable | one question-scoped **T3** escalation (`EVIDENCE_CONFLICT` / `LOWER_TIER_INSUFFICIENT`) | T3's answer is final |
+| Consequential proposal: irreversible, or requested above the E2 cap | **T3** directly (`IRREVERSIBLE_ACTION` / `HIGH_CONSEQUENCE`) | — |
+
+T1 is not used. The deterministic checks are exact software (T0), and a relevance judgement is not a routine chore.
+
+**Deterministic reduction** of the model's answer to a verdict:
+
+- **`relevant`** only if the model says the page supports *exactly the claimed category* and gives ≥1 quote that is
+  verbatim in the artifact.
+- **`irrelevant`** if the page does not bear on the claim.
+- **`uncertain`** for contradicting or mixed pages, a different category, no verifiable quote, or an unusable answer.
+
+The page and the proposal are delimited as untrusted data in the prompt.
+
+**Recording** (`svc_experiment_relevance_record`):
+
+- One immutable controller row per item, with the tier, the artifact's excerpt hash, the quotes and a concise reason.
+- The registry **re-checks** that a `relevant` verdict cites the artifact of the same page hash and that every quote
+  occurs verbatim in it. Otherwise it refuses (`FLEET_RELEVANCE_UNVERIFIED`), whoever sent it.
+- Each model call is recorded as **provider-credit consumption**. This is fleet overhead: no ledger posting, no charge
+  to the founder. It is recorded even when the verdict is refused, and is bounded by
+  `relevance_max_calls_per_hour` (60).
+- The controller then re-derives the level and **re-decides**.
+
+**Controller decision path:**
+
+- While any cited item is unassessed, the proposal stays on WATCH (`FLEET_RELEVANCE_PENDING`).
+- **Any `uncertain` item keeps the proposal on WATCH** (`FLEET_EVIDENCE_UNCERTAIN`), whatever the other items are
+  worth. Uncertain never earns a level and never auto-approves. The founder can add evidence, and nothing goes to the
+  owner unless it is owner-authority work (irreversible, E4).
+
+**Owner override (optional, audited):** `fleet:admin experiment-relevance <exp> <attempt> relevant|irrelevant|uncertain
+<reason…>` adds one owner row per item, recording the controller verdict it overrides. It emits
+`experiment_relevance_overridden`. It is allowed only before the decision and never for the founder's own identity. The
+effective verdict is the override if present, else the controller's. Ordinary evidence never needs it.
 
 ## Evidence Ladder (`fleet_evidence_ladder`)
 
@@ -70,7 +134,7 @@ real-money limits.
 
 | Level | Code | Verified when (relevant = provenance-verified **and** assessed relevant) | Auto cap (simulated) |
 |---|---|---|---|
-| E0 | `claim` | the founder's assertion, or only unassessed or irrelevant items | 0, so the proposal goes to WATCH |
+| E0 | `claim` | the founder's assertion, or no relevant item | 0, so the proposal goes to WATCH |
 | E1 | `desk_single` | ≥1 relevant item | 300 |
 | E2 | `desk_corroborated` | ≥2 relevant items from ≥2 distinct hosts | 1000 |
 | E3 | `observed_signal` | E1, plus an earlier **succeeded** controller result of this founder on the same opportunity | 2500 |
@@ -98,12 +162,13 @@ The checks run in this order, and the first one that matches decides:
 
 1. Requested amount above `hard_cap_minor` (default 5000, simulation-only): **rejected** (`FLEET_EXPERIMENT_OVER_CAP`).
 2. Any cited item still unassessed: **watch** (`FLEET_RELEVANCE_PENDING`).
-3. Verified level E0: **watch** (`FLEET_EVIDENCE_INSUFFICIENT`).
-4. No survival headroom: **rejected** (`FLEET_PROTECTED_CAPITAL`). Headroom is `expensePurchasingCapacity` minus the
+3. Any cited item uncertain: **watch** (`FLEET_EVIDENCE_UNCERTAIN`).
+4. Verified level E0: **watch** (`FLEET_EVIDENCE_INSUFFICIENT`).
+5. No survival headroom: **rejected** (`FLEET_PROTECTED_CAPITAL`). Headroom is `expensePurchasingCapacity` minus the
    **whole approved maximum loss** of the founder's other active experiments. Founder-reported simulated spend never
    releases headroom (corrected in this revision).
-5. Irreversible, or a level with no cap (E4): the **owner decides** (`FLEET_OWNER_DECISION_REQUIRED`).
-6. Budget is `LEAST(requested, cap)` and max loss is `LEAST(max_loss, budget, headroom)`. If either was reduced, the
+6. Irreversible, or a level with no cap (E4): the **owner decides** (`FLEET_OWNER_DECISION_REQUIRED`).
+7. Budget is `LEAST(requested, cap)` and max loss is `LEAST(max_loss, budget, headroom)`. If either was reduced, the
    result is **partially_approved**; otherwise it is **approved**.
 
 ## Simulated ROI is non-authoritative
@@ -147,16 +212,24 @@ The checks run in this order, and the first one that matches decides:
 
 | Layer | Additions |
 |---|---|
-| SQL (v24) | 9 tables (policy, ladder, experiments, transitions, events, relevance, revenue attributions, results, registry), guards, evaluation, founder API, reaper, owner functions (`fleet_experiment_{policy_set,decide,assess_relevance,attribute_revenue,observe,stop,conclude,view}`, `fleet_evidence_ladder_set`) |
-| FleetController HTTP | `POST /v1/experiments/{propose,evidence,start,record,list}` (session auth; not a witness route) |
+| SQL (v24) | 10 tables (policy, ladder, evidence artifacts, experiments, transitions, events, relevance, revenue attributions, results, registry), guards, evaluation, founder API, service (`svc_experiment_reap`, `svc_research_artifact_record`, `svc_experiment_relevance_pending`, `svc_experiment_relevance_record`), owner functions (`fleet_experiment_{policy_set,decide,assess_relevance,attribute_revenue,observe,stop,conclude,view}`, `fleet_evidence_ladder_set`) |
+| FleetController HTTP | `POST /v1/experiments/{propose,evidence,start,record,list}` (session auth; not a witness route); research fetch keeps the evidence artifact; the relevance assessor runs after propose/evidence and on the reaper tick |
 | Founder runtime (R24-2, later) | toolbox cases and client methods for the five tools. Evidence items require `supports` and `rationale` |
-| Owner CLI (`fleet:admin`) | `experiment-policy`, `experiment-enable` / `-disable`, `evidence-ladder-set`, `experiment-list`, `experiment-show`, `strategy-registry`, `experiment-decide`, **`experiment-relevance`**, **`experiment-attribute-revenue`**, `experiment-observe`, `experiment-stop`, `experiment-conclude` |
+| Owner CLI (`fleet:admin`) | `experiment-policy`, `experiment-enable` / `-disable`, `evidence-ladder-set`, `experiment-list`, `experiment-show`, `strategy-registry`, `experiment-decide`, **`experiment-relevance`** (optional override), **`experiment-attribute-revenue`**, `experiment-observe`, `experiment-stop`, `experiment-conclude` |
 
 ## Remaining review items
 
-1. **The owner is the relevance assessor.** Once the pipeline is enabled, every automatic decision waits for owner
-   assessments. A future controller-side assessor, independent of the founder, would be an architecture change.
-2. **A founder can end its own experiment early** (metric or max-loss stop). The outcome is then `stopped`, never
-   `succeeded`, which is conservative.
-3. **A founder runtime upgrade is required** for Founder 1 to use the tools (R24-2). It also activates the pending
+1. **Relevance is not credibility.** The assessor judges whether a page supports the claim, not whether its source is
+   trustworthy. A founder could fetch a page it arranged to exist, such as a public paste. Caps are small and simulated,
+   and E2 needs two hosts. Source credibility is future work.
+2. **Prompt injection.** Page text is delimited untrusted data. A `relevant` verdict needs verbatim quotes that the
+   registry re-checks, and consequential proposals use T3. A page written to persuade a model can still sway a judgement.
+3. **Provider failures.** If the first (T2) call fails, the item stays pending and is retried on the next pass. The
+   hourly budget bounds retries. A failed call the provider still billed is not recorded (small accounting gap).
+4. **Artifacts start accumulating at deploy**, even with the pipeline off: bounded, sanitized, and readable only by the
+   owner and controller roles. There is no retention sweep yet.
+5. **The assessor's inference is fleet overhead** in the provider-credit record, not charged to a founder.
+6. **A founder can end its own experiment early** (metric or max-loss stop). The outcome is then `stopped`, which is
+   conservative.
+7. **A founder runtime upgrade is required** for Founder 1 to use the tools (R24-2). It also activates the pending
    R23.1 slim wake packet.

@@ -1828,6 +1828,23 @@ export class PgFleetStore {
     return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_settle_estates($1) AS n", [limit])).rows[0].n));
   }
 
+  /** Schema v24: the bounded, sanitized evidence artifact of a fetched page (controller, at research-fetch time). */
+  async researchArtifactRecord(agentId: string, attemptId: string, a: { sha256: string; host: string; title: string | null; excerpt: string; sourceChars: number; truncated: boolean; redactions: number }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_research_artifact_record($1, $2, $3, $4, $5, $6, $7, $8, $9) AS r",
+      [agentId, attemptId, a.sha256, a.host, a.title, a.excerpt, a.sourceChars, a.truncated, a.redactions])).rows[0].r);
+  }
+
+  /** Schema v24: the controller relevance assessor's work list (task inputs and artifacts only; no founder data). */
+  async relevancePending(limit = 10): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_experiment_relevance_pending($1) AS r", [limit])).rows[0].r);
+  }
+
+  /** Schema v24: record the controller's relevance verdict (and its inference as provider-credit consumption). */
+  async relevanceRecord(experimentId: string, attemptId: string, verdict: string, tier: string, reason: string, refs: Record<string, unknown>, calls: unknown[]): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_experiment_relevance_record($1, $2, $3, $4, $5, $6, $7) AS r",
+      [experimentId, attemptId, verdict, tier, reason, JSON.stringify(refs), JSON.stringify(calls)])).rows[0].r);
+  }
+
   /** Schema v24: expire experiment proposals/approvals and conclude experiments past their run window. Returns the count. */
   async reapExperiments(limit = 50): Promise<number> {
     return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_experiment_reap($1) AS n", [limit])).rows[0].n));

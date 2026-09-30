@@ -17,6 +17,7 @@ import { containsSecretShape } from "../cognition/gateway.js";
 import { RESEARCH_LIMITS, ResearchPolicyError, checkUrl, cleanPurpose } from "./policy.js";
 import type { FetchResult } from "./fetcher.js";
 import type { FetcherPort } from "./client.js";
+import { buildEvidenceArtifact, type EvidenceArtifact } from "./artifact.js";
 
 export class ResearchError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -28,6 +29,10 @@ export interface ResearchPorts {
   capabilities(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }>;
   authorize(agentId: string, url: string, host: string, purpose: string): Promise<Record<string, unknown> & { ok: boolean }>;
   record(agentId: string, attemptId: string, r: ResearchRecord): Promise<Record<string, unknown> & { ok: boolean }>;
+  /** Schema v24: keep the bounded, sanitized evidence artifact of a fetched page (absent = not kept on this controller). */
+  recordArtifact?(agentId: string, attemptId: string, a: EvidenceArtifact): Promise<Record<string, unknown> & { ok: boolean }>;
+  /** Called when an artifact could not be kept (the page stays usable; it just cannot be assessed relevant later). */
+  artifactRefused?(agentId: string, attemptId: string, code: string): void;
 }
 
 export interface ResearchRecord {
@@ -120,6 +125,12 @@ export async function research(
     outcome: "fetched", failureCode: null, finalUrl: r.finalUrl, redirects: r.redirects.length, status: r.status, contentType: r.contentType,
     bytes: r.bytes, textChars: text.length, truncated: r.truncated || text.length < r.text.length, sha256: r.sha256, latencyMs: r.latencyMs,
   });
+  if (ports.recordArtifact) {
+    // Evidence artifact for later independent relevance review (never the raw page; fail closed on secret-shaped text).
+    const artifact = buildEvidenceArtifact({ sha256: r.sha256, finalUrl: r.finalUrl, title: r.title, text });
+    const kept = artifact ? await ports.recordArtifact(agentId, attemptId, artifact).catch(() => ({ ok: false, code: "FLEET_ARTIFACT_STORE_FAILED" })) : { ok: false, code: "FLEET_ARTIFACT_NOT_BUILT" };
+    if (!kept.ok) ports.artifactRefused?.(agentId, attemptId, String((kept as { code?: unknown }).code ?? "FLEET_ARTIFACT_REFUSED"));
+  }
   return {
     attemptId, untrusted: true, requestedUrl: r.requestedUrl, finalUrl: r.finalUrl, redirects: r.redirects, fetchedAt: r.fetchedAt,
     status: r.status, contentType: r.contentType, title: r.title, truncated: r.truncated || text.length < r.text.length, bytes: r.bytes,

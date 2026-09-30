@@ -220,8 +220,8 @@ export class GenesisOps {
     return this.one<Record<string, unknown>>(`SELECT fleet_experiment_decide($1, $2, $3, $4, $5, $6) AS r`, [experimentId, decision, approvedMinor, maxLossMinor, actor, reason]);
   }
 
-  /** Relevance of one provenance-verified evidence item (owner; the controller then re-decides). */
-  experimentAssessRelevance(experimentId: string, attemptId: string, verdict: "relevant" | "irrelevant", actor: string, reason: string) {
+  /** Optional, audited owner override of one evidence item's relevance (ordinary evidence is judged by the controller). */
+  experimentAssessRelevance(experimentId: string, attemptId: string, verdict: "relevant" | "irrelevant" | "uncertain", actor: string, reason: string) {
     return this.one<Record<string, unknown>>(`SELECT fleet_experiment_assess_relevance($1, $2, $3, $4, $5) AS r`, [experimentId, attemptId, verdict, actor, reason]);
   }
 

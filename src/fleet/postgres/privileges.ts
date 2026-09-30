@@ -690,6 +690,7 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     "fleet_experiment_policy:fleet_experiment_policy_no_delete", "fleet_evidence_ladder:fleet_evidence_ladder_no_delete",
     "fleet_experiment_relevance:fleet_experiment_relevance_guard", "fleet_experiment_relevance:fleet_experiment_relevance_no_change",
     "fleet_opportunity_revenue_attributions:fleet_opportunity_revenue_guard", "fleet_opportunity_revenue_attributions:fleet_opportunity_revenue_no_change",
+    "fleet_research_evidence_artifacts:fleet_research_evidence_artifacts_guard", "fleet_research_evidence_artifacts:fleet_research_evidence_artifacts_no_change",
   ] : []) {
     if (!have.has(need)) problems.push(`experiment pipeline: trigger ${need.replace(":", ".")} is missing or disabled`);
   }
@@ -742,8 +743,9 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     // v23: a living founder's runtime-upgrade history only through the lifecycle functions.
     // v24: experiments change only through the experiment functions (founder API, controller reaper, owner decisions).
     fleet_experiments: new Set(["api_experiment_propose", "api_experiment_add_evidence", "api_experiment_start", "api_experiment_record", "svc_experiment_reap",
-      "fleet_experiment_apply", "fleet_experiment_conclude_internal", "fleet_experiment_decide", "fleet_experiment_assess_relevance"]),
-    fleet_experiment_relevance: new Set(["fleet_experiment_assess_relevance"]),
+      "fleet_experiment_apply", "fleet_experiment_conclude_internal", "fleet_experiment_decide", "fleet_experiment_assess_relevance", "svc_experiment_relevance_record"]),
+    fleet_experiment_relevance: new Set(["svc_experiment_relevance_record", "fleet_experiment_assess_relevance"]),
+    fleet_research_evidence_artifacts: new Set(["svc_research_artifact_record"]),
     fleet_opportunity_revenue_attributions: new Set(["fleet_experiment_attribute_revenue"]),
     fleet_experiment_results: new Set(["fleet_experiment_conclude_internal"]),
     fleet_strategy_registry: new Set(["fleet_experiment_conclude_internal"]),
@@ -763,7 +765,7 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_founder_research: new Set(["fleet_founder_research_set"]),
     // v21: rates only through the validated insert; provider credit only through the owner recorder and inference recording.
     fleet_fx_rates: new Set(["fleet_fx_insert"]),
-    fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record"]),
+    fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record"]),
   };
   for (const f of fns.rows) {
     for (const t of writeTargets(f.src)) {

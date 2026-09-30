@@ -73,7 +73,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   if (pc.rowCount) await c.query(`UPDATE "${schema}".fleet_cognition_tiers SET prompt_cache = CASE WHEN tier = 'T1' THEN 'off' ELSE 'prefix' END`);
   // v24: experiment pipeline back to its inert defaults (off; ladder caps as seeded).
   if (r.rows.some((x) => x.t === "fleet_experiment_policy")) {
-    await c.query(`UPDATE "${schema}".fleet_experiment_policy SET enabled = false, hard_cap_minor = 5000, max_proposal_ttl_s = 1209600, approval_ttl_s = 604800,
+    await c.query(`UPDATE "${schema}".fleet_experiment_policy SET enabled = false, hard_cap_minor = 5000, max_proposal_ttl_s = 1209600, approval_ttl_s = 604800, relevance_max_calls_per_hour = 60,
       max_run_s = 2592000, max_active_per_founder = 3, updated_by = 'migration'`);
     await c.query(`UPDATE "${schema}".fleet_evidence_ladder l SET auto_cap_minor = s.cap, updated_by = 'migration'
       FROM (VALUES (0, 0::bigint), (1, 300::bigint), (2, 1000::bigint), (3, 2500::bigint), (4, NULL::bigint)) AS s(level, cap) WHERE l.level = s.level`);

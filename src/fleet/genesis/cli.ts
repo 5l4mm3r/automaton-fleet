@@ -55,7 +55,7 @@
  *   evidence-ladder-set <level 0..4> <autoCapMinor|owner>              auto-approval cap of a level ("owner" = owner decides)
  *   experiment-list [agentId] | experiment-show <experimentId> | strategy-registry [agentId]
  *   experiment-decide <experimentId> approved|partially_approved|watch|rejected [--approved N] [--max-loss N] <reason…>
- *   experiment-relevance <experimentId> <attemptId> relevant|irrelevant <reason…>   assess one verified evidence item (the controller re-decides)
+ *   experiment-relevance <experimentId> <attemptId> relevant|irrelevant|uncertain <reason…>   audited override of the controller's relevance verdict (optional)
  *   experiment-attribute-revenue <revenueJournalId> <experimentId> <reason…>        E4 lineage: link realized revenue to its experiment
  *   experiment-observe <experimentId> <metric> <value> <source…>       a controller-recorded observation (the synthetic executor)
  *   experiment-stop <experimentId> <reason…> | experiment-conclude <experimentId> [--confidence 0..4] [lessons…]
@@ -251,10 +251,10 @@ export async function runGenesisCommand(
     case "experiment-relevance": {
       const [id, attempt, verdict] = p;
       const reason = p.slice(3).join(" ");
-      if (!UUID.test(id ?? "") || !UUID.test(attempt ?? "") || !["relevant", "irrelevant"].includes(verdict ?? "") || reason.length < 3) {
-        throw new Error("usage: experiment-relevance <experimentId> <attemptId> relevant|irrelevant <reason…>");
+      if (!UUID.test(id ?? "") || !UUID.test(attempt ?? "") || !["relevant", "irrelevant", "uncertain"].includes(verdict ?? "") || reason.length < 3) {
+        throw new Error("usage: experiment-relevance <experimentId> <attemptId> relevant|irrelevant|uncertain <reason…>");
       }
-      return ok(await g.experimentAssessRelevance(id, attempt, verdict as "relevant" | "irrelevant", actor, reason));
+      return ok(await g.experimentAssessRelevance(id, attempt, verdict as "relevant" | "irrelevant" | "uncertain", actor, reason));
     }
     case "experiment-attribute-revenue":
       if (!UUID.test(p[0] ?? "") || !UUID.test(p[1] ?? "") || p.slice(2).join(" ").length < 3) {

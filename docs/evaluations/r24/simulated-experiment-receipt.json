@@ -1,51 +1,51 @@
 {
   "receipt": "r24-simulated-experiment",
-  "generatedAt": "2026-09-30T19:25:26.378Z",
-  "startedAt": "2026-09-30T19:25:26.318Z",
+  "generatedAt": "2026-09-30T19:51:00.555Z",
+  "startedAt": "2026-09-30T19:51:00.453Z",
   "financialMode": "simulated",
-  "founder": "01M3SWESC9VJ5TG5CY216NDBV6",
-  "experimentId": "26810521-9ff8-4fa8-adf5-b33087a282db",
+  "founder": "01M3SXXKHS7PHY2T9NP53D3ECJ",
+  "experimentId": "368b9cfd-8e95-46d0-97f5-de4a06bf08e0",
   "opportunityKey": "landlord-rent-tracker",
   "evidence": {
     "claimedLevel": 2,
     "verifiedLevel": 2,
     "provenance": [
       {
-        "attemptId": "99c4aaac-806f-4c15-805a-5d3b9679cef4",
+        "attemptId": "b236c420-8d8d-401c-a87a-8c6a6989060b",
         "host": "marketplace.example",
-        "sha256": "a850855dd996d995341af0eef8745bac3ca5cda157d32a8fe73b9492ebbf7ad8",
+        "sha256": "7c510b2877780b803415f254f6c9ed1a1c6852d259db3561fbd0bf67e23038a7",
         "supports": "demand",
         "rationale": "Landlords on marketplace.example ask for a simple rent-tracking sheet."
       },
       {
-        "attemptId": "bc5a7c74-8ef7-4cae-80b3-aa15f0757df0",
+        "attemptId": "215f9151-c5ad-406f-bcdb-fde7de42264c",
         "host": "forum.example",
-        "sha256": "cfb6f343b9d0b5c9f18492f143ceb99adccd1200ec24fbacf8d542b5bd7c6daf",
+        "sha256": "4c076fc45b3c0b98838f43d09f958b39a5371cc8f2f421dc2615634db1409685",
         "supports": "demand",
         "rationale": "Landlords on forum.example ask for a simple rent-tracking sheet."
       }
     ],
     "relevance": [
       {
-        "attemptId": "99c4aaac-806f-4c15-805a-5d3b9679cef4",
-        "sha256": "a850855dd996d995341af0eef8745bac3ca5cda157d32a8fe73b9492ebbf7ad8",
+        "attemptId": "b236c420-8d8d-401c-a87a-8c6a6989060b",
+        "sha256": "7c510b2877780b803415f254f6c9ed1a1c6852d259db3561fbd0bf67e23038a7",
         "verdict": "relevant",
-        "assessedBy": "operator:owner",
-        "reason": "relevant: read against the hypothesis"
+        "assessedBy": "controller",
+        "reason": "supports demand: landlords ask for it and name a price"
       },
       {
-        "attemptId": "bc5a7c74-8ef7-4cae-80b3-aa15f0757df0",
-        "sha256": "cfb6f343b9d0b5c9f18492f143ceb99adccd1200ec24fbacf8d542b5bd7c6daf",
+        "attemptId": "215f9151-c5ad-406f-bcdb-fde7de42264c",
+        "sha256": "4c076fc45b3c0b98838f43d09f958b39a5371cc8f2f421dc2615634db1409685",
         "verdict": "relevant",
-        "assessedBy": "operator:owner",
-        "reason": "relevant: read against the hypothesis"
+        "assessedBy": "controller",
+        "reason": "supports demand: landlords ask for it and name a price"
       }
     ]
   },
   "proposal": {
     "status": "watch",
     "code": "FLEET_RELEVANCE_PENDING",
-    "reason": "awaiting relevance assessment of 2 of 2 provenance-verified item(s); provenance alone earns nothing (claimed E2)"
+    "reason": "awaiting the controller's relevance assessment of 2 of 2 provenance-verified item(s); provenance alone earns nothing (claimed E2)"
   },
   "decision": {
     "status": "approved",
@@ -55,11 +55,11 @@
     "requestedMinor": 800,
     "approvedMinor": 800,
     "approvedMaxLossMinor": 600,
-    "approvalExpiresAt": "2026-10-07T20:25:26.332336+01:00"
+    "approvalExpiresAt": "2026-10-07T20:51:00.479562+01:00"
   },
   "run": {
-    "startedAt": "2026-09-30T20:25:26.354522+01:00",
-    "runDeadline": "2026-10-02T20:25:26.354522+01:00",
+    "startedAt": "2026-09-30T20:51:00.514083+01:00",
+    "runDeadline": "2026-10-02T20:51:00.514083+01:00",
     "events": [
       {
         "kind": "step",
@@ -209,17 +209,17 @@
   "strategyRegistry": {
     "seq": 1,
     "outcome": "succeeded",
-    "knowledgeProposalId": "8959f936-73f5-40bc-8df0-5082c152522a"
+    "knowledgeProposalId": "9b94dc2b-10d8-4afe-ab93-130422cb857b"
   },
   "ledger": {
     "before": {
       "s": "3",
-      "h": "25a9f7a5c25f3828079af8d6a4d105c6f5015ed2fe5aff522f7b39119ac5eed9",
+      "h": "50fef1865f75ce4a2441abf0b36b4707673a402c6c14b4f115e12d8c7c64e44a",
       "j": 3
     },
     "after": {
       "s": "3",
-      "h": "25a9f7a5c25f3828079af8d6a4d105c6f5015ed2fe5aff522f7b39119ac5eed9",
+      "h": "50fef1865f75ce4a2441abf0b36b4707673a402c6c14b4f115e12d8c7c64e44a",
       "j": 3
     },
     "unchanged": true

@@ -23,8 +23,11 @@
  *     policy leaves to the owner, stop an experiment, record controller observations and conclude.
  *   - The evidence level used for decisions is the level the registry VERIFIES — never the founder's claim. PROVENANCE
  *     (this founder really fetched this unaltered page) and RELEVANCE (the page supports this proposal) are separate:
- *     provenance alone never elevates an opportunity. Relevance is an explicit, immutable assessment per evidence item by
- *     the owner (never the founder), referencing the attempt and page hash (fleet_experiment_relevance).
+ *     provenance alone never elevates an opportunity. Relevance is judged per evidence item by FleetController's
+ *     independent assessor (never the founder) against a bounded, sanitized evidence artifact preserved at fetch time
+ *     (fleet_research_evidence_artifacts); verdicts relevant / irrelevant / uncertain are immutable, cite the artifact,
+ *     and a 'relevant' verdict must quote the artifact verbatim (checked here). 'uncertain' never earns a level and
+ *     keeps the proposal on WATCH. The owner may override (audited), but ordinary evidence never waits for the owner.
  *   - E4 needs external revenue attributed to the SAME opportunity lineage: a ledger revenue journal the owner linked to a
  *     concluded experiment of this founder on this opportunity (fleet_opportunity_revenue_attributions). Generic revenue
  *     of the founder is not evidence for any particular opportunity.
@@ -49,6 +52,8 @@ CREATE TABLE fleet_experiment_policy (
   approval_ttl_s         integer     NOT NULL DEFAULT 604800 CHECK (approval_ttl_s BETWEEN 600 AND 7776000),
   max_run_s              integer     NOT NULL DEFAULT 2592000 CHECK (max_run_s BETWEEN 3600 AND 15552000),
   max_active_per_founder integer     NOT NULL DEFAULT 3 CHECK (max_active_per_founder BETWEEN 1 AND 20),
+  -- Controller relevance-assessor inference budget (calls per rolling hour, fleet-wide).
+  relevance_max_calls_per_hour integer NOT NULL DEFAULT 60 CHECK (relevance_max_calls_per_hour BETWEEN 0 AND 1000),
   updated_at             timestamptz NOT NULL DEFAULT now(),
   updated_by             text        NOT NULL DEFAULT 'migration'
 );
@@ -77,6 +82,24 @@ INSERT INTO fleet_evidence_ladder (level, code, description, auto_cap_minor) VAL
   (4, 'revenue',           'observed signal plus ledger revenue attributed to this opportunity''s experiment lineage; owner decides',   NULL);
 CREATE TRIGGER fleet_evidence_ladder_no_delete BEFORE DELETE OR TRUNCATE ON fleet_evidence_ladder
   FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
+
+-- Evidence artifacts: what the controller preserved of a fetched page for later relevance review — normalized,
+-- redacted, bounded text (never the raw page), tied to the attempt, the page hash, the host and the fetch time.
+CREATE TABLE fleet_research_evidence_artifacts (
+  attempt_id       uuid        PRIMARY KEY REFERENCES fleet_research_results(attempt_id),
+  agent_id         text        NOT NULL REFERENCES fleet_agents(agent_id),
+  content_sha256   text        NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+  host             text        NOT NULL CHECK (host ~ '^[a-z0-9.-]{1,253}$'),
+  fetched_at       timestamptz NOT NULL,
+  title            text        CHECK (length(title) <= 200),
+  excerpt          text        NOT NULL CHECK (length(excerpt) BETWEEN 1 AND 6000),
+  excerpt_sha256   text        NOT NULL CHECK (excerpt_sha256 ~ '^[0-9a-f]{64}$'),
+  source_chars     integer     NOT NULL CHECK (source_chars >= 0),
+  truncated        boolean     NOT NULL,
+  redactions       integer     NOT NULL CHECK (redactions >= 0),
+  artifact_version smallint    NOT NULL DEFAULT 1 CHECK (artifact_version = 1),
+  recorded_at      timestamptz NOT NULL DEFAULT now()
+);
 
 -- ═══ 2. Experiments and their history ═══
 CREATE TABLE fleet_experiments (
@@ -197,21 +220,32 @@ CREATE TABLE fleet_strategy_registry (
 );
 CREATE INDEX fleet_strategy_registry_opp_idx ON fleet_strategy_registry (agent_id, opportunity_key, seq);
 
--- Relevance, separate from provenance: the owner's explicit assessment of one verified evidence item for one proposal,
--- referencing the research attempt and the page hash it was verified against. One immutable assessment per item.
+-- Relevance, separate from provenance: one verified evidence item of one proposal, judged by FleetController's independent
+-- assessor (T0 software checks, then T2, T3 only when ambiguous/conflicting or consequential) against the evidence
+-- artifact, with the artifact reference and the quotes that justify it. The owner may add ONE audited override per
+-- item; the effective verdict is the override if present, else the controller's. Rows never change.
 CREATE TABLE fleet_experiment_relevance (
-  seq            bigserial   PRIMARY KEY,
-  experiment_id  uuid        NOT NULL REFERENCES fleet_experiments(experiment_id),
-  attempt_id     uuid        NOT NULL REFERENCES fleet_research_attempts(attempt_id),
-  content_sha256 text        NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
-  supports       text        NOT NULL,
-  verdict        text        NOT NULL CHECK (verdict IN ('relevant','irrelevant')),
-  assessed_by    text        NOT NULL CHECK (assessed_by ~ '^operator:[A-Za-z0-9._-]{1,64}$'),
-  assessor_kind  text        NOT NULL CHECK (assessor_kind = 'owner'),
-  reason         text        NOT NULL CHECK (length(reason) BETWEEN 3 AND 300),
-  at             timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (experiment_id, attempt_id)
+  seq             bigserial   PRIMARY KEY,
+  experiment_id   uuid        NOT NULL REFERENCES fleet_experiments(experiment_id),
+  attempt_id      uuid        NOT NULL REFERENCES fleet_research_attempts(attempt_id),
+  content_sha256  text        NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+  supports        text        NOT NULL,
+  verdict         text        NOT NULL CHECK (verdict IN ('relevant','irrelevant','uncertain')),
+  assessed_by     text        NOT NULL CHECK (assessed_by = 'controller' OR assessed_by ~ '^operator:[A-Za-z0-9._-]{1,64}$'),
+  assessor_kind   text        NOT NULL CHECK (assessor_kind IN ('controller','owner')),
+  tier            text        CHECK (tier IN ('T0','T1','T2','T3')),
+  artifact_excerpt_sha256 text CHECK (artifact_excerpt_sha256 ~ '^[0-9a-f]{64}$'),
+  refs            jsonb       NOT NULL DEFAULT '{}'::jsonb CHECK (length(refs::text) <= 4096),
+  cognition       jsonb       NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(cognition) = 'array' AND length(cognition::text) <= 8192),
+  overrides       text        CHECK (overrides IN ('relevant','irrelevant','uncertain')),
+  reason          text        NOT NULL CHECK (length(reason) BETWEEN 3 AND 300),
+  at              timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (experiment_id, attempt_id, assessor_kind),
+  CHECK ((assessor_kind = 'controller') = (assessed_by = 'controller')),
+  CHECK ((assessor_kind = 'controller') = (tier IS NOT NULL)),
+  CHECK (assessor_kind = 'owner' OR verdict <> 'relevant' OR artifact_excerpt_sha256 IS NOT NULL)
 );
+CREATE INDEX fleet_experiment_relevance_at_idx ON fleet_experiment_relevance (assessor_kind, at);
 
 -- E4 lineage: realized ledger revenue attributed to a concluded experiment of the same founder and opportunity. Each
 -- revenue journal is attributable once; a reversed journal stops counting.
@@ -283,6 +317,9 @@ CREATE TRIGGER fleet_experiment_results_no_truncate BEFORE TRUNCATE ON fleet_exp
 CREATE TRIGGER fleet_strategy_registry_guard BEFORE INSERT ON fleet_strategy_registry FOR EACH ROW EXECUTE FUNCTION fleet_experiments_guard();
 CREATE TRIGGER fleet_strategy_registry_no_change BEFORE UPDATE OR DELETE ON fleet_strategy_registry FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
 CREATE TRIGGER fleet_strategy_registry_no_truncate BEFORE TRUNCATE ON fleet_strategy_registry FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
+CREATE TRIGGER fleet_research_evidence_artifacts_guard BEFORE INSERT ON fleet_research_evidence_artifacts FOR EACH ROW EXECUTE FUNCTION fleet_experiments_guard();
+CREATE TRIGGER fleet_research_evidence_artifacts_no_change BEFORE UPDATE OR DELETE ON fleet_research_evidence_artifacts FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+CREATE TRIGGER fleet_research_evidence_artifacts_no_truncate BEFORE TRUNCATE ON fleet_research_evidence_artifacts FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
 CREATE TRIGGER fleet_experiment_relevance_guard BEFORE INSERT ON fleet_experiment_relevance FOR EACH ROW EXECUTE FUNCTION fleet_experiments_guard();
 CREATE TRIGGER fleet_experiment_relevance_no_change BEFORE UPDATE OR DELETE ON fleet_experiment_relevance FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
 CREATE TRIGGER fleet_experiment_relevance_no_truncate BEFORE TRUNCATE ON fleet_experiment_relevance FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
@@ -349,18 +386,25 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'items', v_items, 'hosts', (SELECT count(DISTINCT h) FROM unnest(v_hosts) h));
 END $$;
 
--- Relevant, provenance-verified evidence of one proposal: {items, hosts, assessed, unassessed}. An item counts only when
--- the owner assessed it relevant for THIS experiment against the same page hash that verified its provenance.
+-- Relevance of one proposal's provenance-verified evidence: {verified, relevant, irrelevant, uncertain, unassessed,
+-- relevantHosts, overridden}. The effective verdict of an item is the owner's override if any, else the controller's;
+-- a verdict counts only for the same page hash that verified the item's provenance.
 CREATE FUNCTION fleet_experiment_relevant_evidence(p_exp uuid, p_verified jsonb) RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT jsonb_build_object(
     'verified', count(*),
-    'relevant', count(*) FILTER (WHERE rv.verdict = 'relevant'),
-    'irrelevant', count(*) FILTER (WHERE rv.verdict = 'irrelevant'),
-    'unassessed', count(*) FILTER (WHERE rv.verdict IS NULL),
-    'relevantHosts', count(DISTINCT x ->> 'host') FILTER (WHERE rv.verdict = 'relevant'))
+    'relevant', count(*) FILTER (WHERE v.verdict = 'relevant'),
+    'irrelevant', count(*) FILTER (WHERE v.verdict = 'irrelevant'),
+    'uncertain', count(*) FILTER (WHERE v.verdict = 'uncertain'),
+    'unassessed', count(*) FILTER (WHERE v.verdict IS NULL),
+    'relevantHosts', count(DISTINCT x ->> 'host') FILTER (WHERE v.verdict = 'relevant'),
+    'overridden', count(*) FILTER (WHERE v.overridden))
   FROM jsonb_array_elements(COALESCE(p_verified -> 'items', '[]'::jsonb)) x
-  LEFT JOIN fleet_experiment_relevance rv ON rv.experiment_id = p_exp AND rv.attempt_id = (x ->> 'attemptId')::uuid AND rv.content_sha256 = x ->> 'sha256'
+  CROSS JOIN LATERAL (
+    SELECT (SELECT rv.verdict FROM fleet_experiment_relevance rv WHERE rv.experiment_id = p_exp AND rv.attempt_id = (x ->> 'attemptId')::uuid
+              AND rv.content_sha256 = x ->> 'sha256' ORDER BY (rv.assessor_kind = 'owner') DESC LIMIT 1) AS verdict,
+           EXISTS (SELECT 1 FROM fleet_experiment_relevance rv WHERE rv.experiment_id = p_exp AND rv.attempt_id = (x ->> 'attemptId')::uuid
+              AND rv.assessor_kind = 'owner') AS overridden) v
 $$;
 
 -- The registry's evidence level: never the founder's claim, never provenance alone.
@@ -399,8 +443,15 @@ BEGIN
   rel := fleet_experiment_relevant_evidence(e.experiment_id, e.verified_evidence);
   IF (rel ->> 'unassessed')::integer > 0 THEN
     RETURN jsonb_build_object('decision', 'watch', 'code', 'FLEET_RELEVANCE_PENDING',
-      'reason', format('awaiting relevance assessment of %s of %s provenance-verified item(s); provenance alone earns nothing (claimed E%s)',
+      'reason', format('awaiting the controller''s relevance assessment of %s of %s provenance-verified item(s); provenance alone earns nothing (claimed E%s)',
         rel ->> 'unassessed', rel ->> 'verified', e.claimed_level));
+  END IF;
+  -- Uncertain evidence (ambiguous, conflicting, unverifiable, or without an artifact) never earns capital automatically:
+  -- the proposal stays on WATCH through the controller's own path (more evidence, or an audited owner override).
+  IF (rel ->> 'uncertain')::integer > 0 THEN
+    RETURN jsonb_build_object('decision', 'watch', 'code', 'FLEET_EVIDENCE_UNCERTAIN',
+      'reason', format('%s of %s cited item(s) assessed uncertain (ambiguous, conflicting or unverifiable); relevant %s: watching (claimed E%s)',
+        rel ->> 'uncertain', rel ->> 'verified', rel ->> 'relevant', e.claimed_level));
   END IF;
   IF e.verified_level = 0 THEN
     RETURN jsonb_build_object('decision', 'watch', 'code', 'FLEET_EVIDENCE_INSUFFICIENT',
@@ -825,6 +876,133 @@ BEGIN
   RETURN n;
 END $$;
 
+-- Evidence artifact (controller, at research-fetch time): the bounded, sanitized text the controller keeps of a fetched page
+-- for later relevance review. Bound to the research record: this founder's authorized, fetched attempt, the same page hash
+-- and the host of the recorded final URL; the fetch time is the registry's own. Never the raw page; never secret-shaped.
+CREATE FUNCTION svc_research_artifact_record(p_agent text, p_attempt uuid, p_sha256 text, p_host text, p_title text, p_excerpt text,
+  p_source_chars integer, p_truncated boolean, p_redactions integer) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE a fleet_research_attempts; r fleet_research_results; v_host text;
+BEGIN
+  SELECT * INTO a FROM fleet_research_attempts WHERE attempt_id = p_attempt;
+  SELECT * INTO r FROM fleet_research_results WHERE attempt_id = p_attempt;
+  IF a.attempt_id IS NULL OR a.agent_id <> p_agent OR a.decision <> 'authorized' OR r.attempt_id IS NULL OR r.outcome <> 'fetched' THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_ARTIFACT_NO_FETCH');
+  END IF;
+  IF p_sha256 IS DISTINCT FROM r.content_sha256 THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_ARTIFACT_HASH_MISMATCH'); END IF;
+  v_host := lower(COALESCE(substring(r.final_url FROM '^https://([^/:?#]+)'), a.requested_host));
+  IF lower(COALESCE(p_host, '')) IS DISTINCT FROM v_host THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_ARTIFACT_SOURCE_MISMATCH'); END IF;
+  IF p_excerpt IS NULL OR length(p_excerpt) NOT BETWEEN 1 AND 6000 OR length(COALESCE(p_title, '')) > 200
+     OR p_source_chars IS NULL OR p_source_chars < 0 OR p_redactions IS NULL OR p_redactions < 0 THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_ARTIFACT_INVALID');
+  END IF;
+  IF fleet_secret_shaped(p_excerpt) OR fleet_secret_shaped(p_title) THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_ARTIFACT_SECRET_SHAPED'); END IF;
+  IF EXISTS (SELECT 1 FROM fleet_research_evidence_artifacts WHERE attempt_id = p_attempt) THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_DUPLICATE_EVENT'); END IF;
+  PERFORM fleet_experiment_begin();
+  INSERT INTO fleet_research_evidence_artifacts (attempt_id, agent_id, content_sha256, host, fetched_at, title, excerpt, excerpt_sha256, source_chars, truncated, redactions)
+    VALUES (p_attempt, p_agent, r.content_sha256, v_host, r.recorded_at, NULLIF(p_title, ''), p_excerpt,
+      encode(sha256(convert_to(p_excerpt, 'UTF8')), 'hex'), p_source_chars, COALESCE(p_truncated, false), p_redactions);
+  RETURN jsonb_build_object('ok', true, 'attemptId', p_attempt, 'excerptSha256', encode(sha256(convert_to(p_excerpt, 'UTF8')), 'hex'));
+END $$;
+
+-- The relevance assessor's work list (controller): items of proposals under consideration that nobody has assessed yet,
+-- with the evidence artifact and ONLY the task inputs (hypothesis, objective, claimed support, reversibility, amount vs
+-- the E2 cap). No founder id, wealth, history or ROI is ever included: they cannot influence the assessment or its tier.
+-- Bounded by the pipeline switch and the hourly inference budget (each job may take up to two calls).
+CREATE FUNCTION svc_experiment_relevance_pending(p_limit integer) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE pol fleet_experiment_policy; v_used integer; v_room integer;
+BEGIN
+  SELECT * INTO pol FROM fleet_experiment_policy WHERE id = 1;
+  SELECT COALESCE(sum(jsonb_array_length(cognition)), 0) INTO v_used FROM fleet_experiment_relevance WHERE assessor_kind = 'controller' AND at > now() - interval '1 hour';
+  v_room := CASE WHEN pol.enabled THEN GREATEST(0, (pol.relevance_max_calls_per_hour - v_used) / 2) ELSE 0 END;
+  RETURN jsonb_build_object('enabled', pol.enabled, 'callsLastHour', v_used, 'maxCallsPerHour', pol.relevance_max_calls_per_hour,
+    'tiers', (SELECT COALESCE(jsonb_agg(jsonb_build_object('tier', t.tier, 'provider', t.provider, 'model', t.model, 'thinking', t.thinking,
+                'effort', t.effort, 'maxOutputTokens', t.max_output_tokens, 'enabled', t.enabled, 'verifiedAt', t.verified_at, 'promptCache', 'off',
+                'prices', jsonb_build_object('inputMicrocentsPerToken', t.input_microcents_per_token, 'outputMicrocentsPerToken', t.output_microcents_per_token,
+                  'cacheWriteMicrocentsPerToken', t.cache_write_microcents_per_token, 'cacheReadMicrocentsPerToken', t.cache_read_microcents_per_token))
+                ORDER BY t.tier), '[]'::jsonb) FROM fleet_cognition_tiers t),
+    'jobs', (SELECT COALESCE(jsonb_agg(j ORDER BY j ->> 'seq'), '[]'::jsonb) FROM (
+      SELECT jsonb_build_object('seq', lpad(e.seq::text, 20, '0') || lpad(x.ord::text, 3, '0'), 'experimentId', e.experiment_id, 'attemptId', x.item ->> 'attemptId',
+        'sha256', x.item ->> 'sha256', 'supports', x.item ->> 'supports',
+        'proposal', jsonb_build_object('hypothesis', e.proposal ->> 'hypothesis', 'objective', e.proposal ->> 'objective', 'reversibility', e.reversibility,
+          'requestedMinor', e.requested_minor),
+        'e2CapMinor', (SELECT auto_cap_minor FROM fleet_evidence_ladder WHERE level = 2),
+        'artifact', (SELECT jsonb_build_object('contentSha256', ar.content_sha256, 'host', ar.host, 'fetchedAt', ar.fetched_at, 'title', ar.title,
+                       'excerpt', ar.excerpt, 'excerptSha256', ar.excerpt_sha256, 'truncated', ar.truncated)
+                     FROM fleet_research_evidence_artifacts ar WHERE ar.attempt_id = (x.item ->> 'attemptId')::uuid)) AS j
+      FROM fleet_experiments e
+      CROSS JOIN LATERAL jsonb_array_elements(e.verified_evidence -> 'items') WITH ORDINALITY AS x(item, ord)
+      WHERE pol.enabled AND e.status IN ('proposed','watch')
+        AND NOT EXISTS (SELECT 1 FROM fleet_experiment_relevance rv WHERE rv.experiment_id = e.experiment_id AND rv.attempt_id = (x.item ->> 'attemptId')::uuid)
+      ORDER BY e.seq, x.ord LIMIT LEAST(GREATEST(COALESCE(p_limit, 10), 0), 50, v_room)) q(j)));
+END $$;
+
+-- The assessor's verdict (controller). Its inference is recorded as provider-credit consumption (fleet overhead; no
+-- ledger posting, no founder charge) even when the verdict itself is refused. A 'relevant' verdict must cite the
+-- artifact of the same page hash and quote it verbatim; otherwise it is refused (fail closed). Then the CONTROLLER
+-- re-derives the level and re-decides.
+CREATE FUNCTION svc_experiment_relevance_record(p_exp uuid, p_attempt uuid, p_verdict text, p_tier text, p_reason text, p_refs jsonb, p_calls jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE e fleet_experiments; x jsonb; ar fleet_research_evidence_artifacts; c jsonb; q jsonb; v_level smallint; d jsonb; v_calls jsonb := '[]'::jsonb;
+BEGIN
+  IF p_verdict NOT IN ('relevant','irrelevant','uncertain') OR p_tier NOT IN ('T0','T1','T2','T3') OR p_reason IS NULL OR length(p_reason) NOT BETWEEN 3 AND 300
+     OR fleet_secret_shaped(p_reason) OR jsonb_typeof(COALESCE(p_refs, '{}'::jsonb)) <> 'object' OR length(COALESCE(p_refs, '{}'::jsonb)::text) > 4096
+     OR fleet_secret_shaped(COALESCE(p_refs, '{}'::jsonb)::text)
+     OR jsonb_typeof(COALESCE(p_calls, '[]'::jsonb)) <> 'array' OR jsonb_array_length(COALESCE(p_calls, '[]'::jsonb)) > 4
+     OR (p_tier = 'T0') <> (jsonb_array_length(COALESCE(p_calls, '[]'::jsonb)) = 0) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST');
+  END IF;
+  -- Inference already happened: account for it first, whatever becomes of the verdict.
+  FOR c IN SELECT * FROM jsonb_array_elements(COALESCE(p_calls, '[]'::jsonb)) LOOP
+    IF COALESCE(c ->> 'requestId', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' OR COALESCE(c ->> 'provider', '') !~ '^[a-z][a-z0-9_]{1,39}$'
+       OR COALESCE(c ->> 'tier', '') NOT IN ('T1','T2','T3') OR COALESCE(c ->> 'model', '') !~ '^[A-Za-z0-9._:/@-]{1,120}$'
+       OR COALESCE(c ->> 'usdMicrocents', '') !~ '^[0-9]{1,15}$' OR COALESCE(c ->> 'inputTokens', '') !~ '^[0-9]{1,9}$' OR COALESCE(c ->> 'outputTokens', '') !~ '^[0-9]{1,9}$' THEN
+      RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'calls');
+    END IF;
+    INSERT INTO fleet_provider_credit_events (provider, kind, usd_microcents, request_id, recorded_by)
+      VALUES (c ->> 'provider', 'consumption', -(c ->> 'usdMicrocents')::bigint, (c ->> 'requestId')::uuid, 'controller:evidence_relevance')
+      ON CONFLICT (request_id) DO NOTHING;
+    v_calls := v_calls || jsonb_build_array(jsonb_build_object('requestId', c ->> 'requestId', 'tier', c ->> 'tier', 'model', c ->> 'model',
+      'inputTokens', (c ->> 'inputTokens')::bigint, 'outputTokens', (c ->> 'outputTokens')::bigint, 'usdMicrocents', (c ->> 'usdMicrocents')::bigint,
+      'stance', left(c ->> 'stance', 20), 'route', c -> 'route'));
+  END LOOP;
+  SELECT * INTO e FROM fleet_experiments WHERE experiment_id = p_exp FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND'); END IF;
+  IF e.status NOT IN ('proposed','watch') THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_INVALID_STATE'); END IF;
+  SELECT i INTO x FROM jsonb_array_elements(e.verified_evidence -> 'items') i WHERE (i ->> 'attemptId')::uuid = p_attempt;
+  IF x IS NULL THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND'); END IF;
+  IF EXISTS (SELECT 1 FROM fleet_experiment_relevance WHERE experiment_id = p_exp AND attempt_id = p_attempt) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_DUPLICATE_EVENT');
+  END IF;
+  SELECT * INTO ar FROM fleet_research_evidence_artifacts WHERE attempt_id = p_attempt;
+  IF p_verdict = 'relevant' THEN
+    -- Relevant only against the preserved artifact of the same page, with verbatim quotes of it.
+    IF ar.attempt_id IS NULL OR ar.content_sha256 <> x ->> 'sha256' OR p_refs ->> 'excerptSha256' IS DISTINCT FROM ar.excerpt_sha256
+       OR jsonb_typeof(p_refs -> 'quotes') IS DISTINCT FROM 'array' OR jsonb_array_length(p_refs -> 'quotes') NOT BETWEEN 1 AND 3 THEN
+      RETURN jsonb_build_object('ok', false, 'code', 'FLEET_RELEVANCE_UNVERIFIED');
+    END IF;
+    FOR q IN SELECT * FROM jsonb_array_elements(p_refs -> 'quotes') LOOP
+      IF jsonb_typeof(q) <> 'string' OR length(q #>> '{}') NOT BETWEEN 8 AND 300 OR position((q #>> '{}') IN ar.excerpt) = 0 THEN
+        RETURN jsonb_build_object('ok', false, 'code', 'FLEET_RELEVANCE_UNVERIFIED');
+      END IF;
+    END LOOP;
+  END IF;
+  PERFORM fleet_experiment_begin();
+  INSERT INTO fleet_experiment_relevance (experiment_id, attempt_id, content_sha256, supports, verdict, assessed_by, assessor_kind, tier, artifact_excerpt_sha256,
+      refs, cognition, reason)
+    VALUES (p_exp, p_attempt, x ->> 'sha256', x ->> 'supports', p_verdict, 'controller', 'controller', p_tier,
+      CASE WHEN ar.attempt_id IS NOT NULL AND ar.content_sha256 = x ->> 'sha256' THEN ar.excerpt_sha256 END, COALESCE(p_refs, '{}'::jsonb), v_calls, fleet_scrub(p_reason));
+  PERFORM fleet_event('experiment_relevance_assessed', e.agent_id, 'controller',
+    jsonb_build_object('experimentId', p_exp, 'attemptId', p_attempt, 'sha256', x ->> 'sha256', 'verdict', p_verdict, 'tier', p_tier, 'calls', jsonb_array_length(v_calls)));
+  v_level := fleet_experiment_evidence_level(e.experiment_id, e.agent_id, e.opportunity_key, e.verified_evidence);
+  UPDATE fleet_experiments SET verified_level = v_level WHERE experiment_id = e.experiment_id RETURNING * INTO e;
+  d := fleet_experiment_evaluate(e);
+  e := fleet_experiment_apply(e, d, 'controller', 'controller');
+  RETURN jsonb_build_object('ok', true, 'experiment', fleet_experiment_json(e), 'decision', d);
+END $$;
+
 -- ═══ 6. Owner functions (never granted to the service, agent or operator roles) ═══
 CREATE FUNCTION fleet_experiment_policy_set(p_enabled boolean, p_hard_cap bigint, p_actor text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = @@SCHEMA@@, pg_temp AS $$
@@ -873,31 +1051,32 @@ BEGIN
   RETURN fleet_experiment_json(e);
 END $$;
 
--- Relevance (owner): assess one provenance-verified evidence item of a proposal as relevant or irrelevant to it. The
--- assessment is final for that item; the evidence level is recomputed and the CONTROLLER re-decides (the owner's
--- assessment is an input, not an approval). Never the founder itself (fleet_require_operator_approver).
+-- Relevance override (owner, optional and audited): record the owner's verdict for one provenance-verified evidence item
+-- (before or after the controller's). Once per item; the override is the effective verdict; the CONTROLLER re-decides.
+-- Never the founder itself (fleet_require_operator_approver). Ordinary evidence never needs this.
 CREATE FUNCTION fleet_experiment_assess_relevance(p_exp uuid, p_attempt uuid, p_verdict text, p_actor text, p_reason text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE e fleet_experiments; x jsonb; v_level smallint; d jsonb;
+DECLARE e fleet_experiments; x jsonb; v_level smallint; d jsonb; v_ctl text;
 BEGIN
   IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
-  IF p_verdict NOT IN ('relevant','irrelevant') OR p_reason IS NULL OR length(p_reason) NOT BETWEEN 3 AND 300 OR fleet_secret_shaped(p_reason) THEN
-    RAISE EXCEPTION 'FLEET_BAD_REQUEST: verdict (relevant|irrelevant) and a reason (3..300) required';
+  IF p_verdict NOT IN ('relevant','irrelevant','uncertain') OR p_reason IS NULL OR length(p_reason) NOT BETWEEN 3 AND 300 OR fleet_secret_shaped(p_reason) THEN
+    RAISE EXCEPTION 'FLEET_BAD_REQUEST: verdict (relevant|irrelevant|uncertain) and a reason (3..300) required';
   END IF;
   SELECT * INTO e FROM fleet_experiments WHERE experiment_id = p_exp FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no such experiment'; END IF;
-  IF e.status NOT IN ('proposed','watch') THEN RAISE EXCEPTION 'FLEET_INVALID_STATE: relevance is assessed before the decision (experiment is %)', e.status; END IF;
+  IF e.status NOT IN ('proposed','watch') THEN RAISE EXCEPTION 'FLEET_INVALID_STATE: relevance is settled before the decision (experiment is %)', e.status; END IF;
   PERFORM fleet_require_operator_approver(substr(p_actor, 10), e.agent_id);
   SELECT i INTO x FROM jsonb_array_elements(e.verified_evidence -> 'items') i WHERE (i ->> 'attemptId')::uuid = p_attempt;
   IF x IS NULL THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: the attempt is not verified evidence of this experiment'; END IF;
-  IF EXISTS (SELECT 1 FROM fleet_experiment_relevance WHERE experiment_id = p_exp AND attempt_id = p_attempt) THEN
-    RAISE EXCEPTION 'FLEET_DUPLICATE_EVENT: this evidence item is already assessed';
+  IF EXISTS (SELECT 1 FROM fleet_experiment_relevance WHERE experiment_id = p_exp AND attempt_id = p_attempt AND assessor_kind = 'owner') THEN
+    RAISE EXCEPTION 'FLEET_DUPLICATE_EVENT: this evidence item already has an owner override';
   END IF;
+  SELECT verdict INTO v_ctl FROM fleet_experiment_relevance WHERE experiment_id = p_exp AND attempt_id = p_attempt AND assessor_kind = 'controller';
   PERFORM fleet_experiment_begin();
-  INSERT INTO fleet_experiment_relevance (experiment_id, attempt_id, content_sha256, supports, verdict, assessed_by, assessor_kind, reason)
-    VALUES (p_exp, p_attempt, x ->> 'sha256', x ->> 'supports', p_verdict, p_actor, 'owner', fleet_scrub(p_reason));
-  PERFORM fleet_event('experiment_relevance_assessed', e.agent_id, p_actor,
-    jsonb_build_object('experimentId', p_exp, 'attemptId', p_attempt, 'sha256', x ->> 'sha256', 'supports', x ->> 'supports', 'verdict', p_verdict));
+  INSERT INTO fleet_experiment_relevance (experiment_id, attempt_id, content_sha256, supports, verdict, assessed_by, assessor_kind, overrides, reason)
+    VALUES (p_exp, p_attempt, x ->> 'sha256', x ->> 'supports', p_verdict, p_actor, 'owner', v_ctl, fleet_scrub(p_reason));
+  PERFORM fleet_event('experiment_relevance_overridden', e.agent_id, p_actor,
+    jsonb_build_object('experimentId', p_exp, 'attemptId', p_attempt, 'sha256', x ->> 'sha256', 'verdict', p_verdict, 'controllerVerdict', v_ctl));
   v_level := fleet_experiment_evidence_level(e.experiment_id, e.agent_id, e.opportunity_key, e.verified_evidence);
   UPDATE fleet_experiments SET verified_level = v_level WHERE experiment_id = e.experiment_id RETURNING * INTO e;
   d := fleet_experiment_evaluate(e);

@@ -54,6 +54,7 @@ import { parseFounderAttestHeader } from "../founder/evidence.js";
 import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, FOUNDER_WAIT_MARGIN_MS, MAX_COGNITION_DEADLINE_MS, infer as inferCognition } from "../cognition/gateway.js";
 import type { CognitionProvider } from "../cognition/types.js";
 import { inferRouted, type ProviderFactory } from "../cognition/routed-gateway.js";
+import { RelevanceAssessor } from "../experiments/relevance.js";
 import { actionDigest } from "../cognition/router.js";
 import { ResearchError, research as researchFetch } from "../research/gateway.js";
 import type { FetcherPort } from "../research/client.js";
@@ -272,6 +273,8 @@ export class FleetService {
   private servers: http.Server[] = [];
   private reaperTimer: ReturnType<typeof setInterval> | null = null;
   private reaping: Promise<void> | null = null;
+  /** Schema v24: the controller's independent evidence-relevance assessor (null without a routed provider factory). */
+  readonly relevance: RelevanceAssessor | null;
   private lastReapOkAt: number | null = null;
   private lastReapError: string | null = null;
   private inFlight = 0;
@@ -294,6 +297,14 @@ export class FleetService {
   constructor(private readonly opts: FleetServiceOptions) {
     this.terminator = opts.terminator ?? new UnsupportedSandboxTerminator();
     this.now = opts.now ?? Date.now;
+    this.relevance = opts.cognitionProviderFactory
+      ? new RelevanceAssessor({
+        ports: { relevancePending: (n) => opts.admin.relevancePending(n), relevanceRecord: (...a) => opts.admin.relevanceRecord(...a) },
+        providerFactory: opts.cognitionProviderFactory,
+        audit: (event, detail) => this.audit(event, null, detail),
+        deadlineMs: this.cognitionDeadlineMs(),
+      })
+      : null;
     this.perAgent = new RateLimiter(opts.rateLimits?.perAgent ?? { capacity: 60, refillPerSec: 5 }, this.now);
     this.sessions = new RateLimiter(opts.rateLimits?.sessions ?? { capacity: 10, refillPerSec: 10 / 60 }, this.now);
     this.authFailures = new RateLimiter(opts.rateLimits?.authFailuresPerIp ?? { capacity: 20, refillPerSec: 20 / 60 }, this.now);
@@ -380,6 +391,7 @@ export class FleetService {
         if (estates) this.audit("estates_settled", null, { count: estates });
         const experiments = await this.opts.admin.reapExperiments(50);
         if (experiments) this.audit("experiments_reaped", null, { count: experiments });
+        this.assessRelevance();
         await this.processTerminations();
         this.lastReapOkAt = Date.now();
         this.lastReapError = null;
@@ -391,6 +403,19 @@ export class FleetService {
       }
     })();
     return this.reaping;
+  }
+
+  /**
+   * Schema v24: one pass of the independent relevance assessor, off the request and reaper paths (single-flight; model
+   * calls may take a while). Cited evidence is judged by the controller, never by the founder or, ordinarily, the owner.
+   */
+  assessRelevance(limit = 10): Promise<{ assessed: number; deferred: number }> {
+    if (!this.relevance) return Promise.resolve({ assessed: 0, deferred: 0 });
+    const p = this.relevance.runOnce(limit);
+    p.then((r) => {
+      if (r.assessed || r.deferred) this.audit("experiment_relevance_pass", null, { ...r });
+    }, (err) => this.audit("experiment_relevance_error", null, { error: err instanceof Error ? err.message.slice(0, 200) : "error" }));
+    return p;
   }
 
   /** Work the sandbox termination queue. Unsupported terminations stay recorded as zombies. */
@@ -1058,12 +1083,14 @@ export class FleetService {
         const r = await agent.experimentPropose(agentId, token, str(body, "idempotencyKey", 128), body.proposal);
         if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "experiment refused");
         this.audit("experiment_propose", agentId, { ok: r.ok, code: r.code ?? null });
+        if (r.ok) void this.assessRelevance().catch(() => undefined);
         return r;
       }
       case "/v1/experiments/evidence": {
         const { agentId, token } = await this.credentials(req, path, ctx);
         const r = await agent.experimentAddEvidence(agentId, token, str(body, "experimentId", 36), str(body, "idempotencyKey", 128), body.evidence);
         if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "experiment refused");
+        if (r.ok) void this.assessRelevance().catch(() => undefined);
         return r;
       }
       case "/v1/experiments/start": {
@@ -1187,6 +1214,8 @@ export class FleetService {
               },
               authorize: (a, u, h, p) => admin.researchAuthorize(a, u, h, p),
               record: (a, id, x) => admin.researchRecord(a, id, x),
+              recordArtifact: (a, id, x) => admin.researchArtifactRecord(a, id, x),
+              artifactRefused: (a, id, code) => this.audit("research_artifact_refused", a, { attemptId: id, code }),
             },
             this.opts.researchFetcher ?? null,
             agentId,

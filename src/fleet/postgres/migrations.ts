@@ -1190,6 +1190,9 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_action_cognition_verify(text, text, bigint, text, text)",
   // v24: experiment expiry / run windows (reaper).
   "svc_experiment_reap(integer)",
+  "svc_research_artifact_record(text, uuid, text, text, text, text, integer, boolean, integer)",
+  "svc_experiment_relevance_pending(integer)",
+  "svc_experiment_relevance_record(uuid, uuid, text, text, text, jsonb, jsonb)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */

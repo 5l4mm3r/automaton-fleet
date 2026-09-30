@@ -331,6 +331,11 @@ export function redactText(input: string): string {
   return textInternal(String(input), BOUNDED);
 }
 
+/** Redact long free text without the per-string output bound (evidence artifacts); the caller bounds the result. */
+export function redactLongText(input: string, onRedact?: RedactionCounter): string {
+  return textInternal(String(input), { bounded: false, onRedact });
+}
+
 // ─── Structural walk ────────────────────────────────────────────
 
 /** JSON-safe result of redact(). */
