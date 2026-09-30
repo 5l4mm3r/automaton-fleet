@@ -31,3 +31,6 @@ custody_execution_enabled false
 founder1_routed_rows 0
 founder1_calls_since_restart 0
 founder1_last_call 2026-09-30 10:41:32.98921+00
+# Founder 1 first cognition call after the v22 controller restart (observed 11:15:49Z):
+2026-09-30 11:15:11Z  model claude-opus-5-5  tier NULL (legacy path)  outcome ok  in 4536 / out 87
+Founder 1 PID 185890 NRestarts 0 (unchanged)
