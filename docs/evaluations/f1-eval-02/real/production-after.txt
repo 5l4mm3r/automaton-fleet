@@ -1,0 +1,29 @@
+# F1-EVAL-02 production check after the paid run (read-only), VPS time 2026-09-29T23:49:51Z
+MainPID=185890
+NRestarts=0
+ActiveState=active
+ActiveEnterTimestamp=Mon 2026-09-28 06:59:58 UTC
+
+MainPID=149614
+NRestarts=0
+ActiveState=active
+ActiveEnterTimestamp=Sat 2026-09-26 16:13:41 UTC
+current=/opt/automaton-fleet/releases/0c502fb98c00c62b272995e02a0f3355de57f93b
+FLEET_RUNTIME_COMMIT=eea1932d293d3aba9264b0f084fa2becd9899ba4
+FLEET_RUNTIME_BUILD_ID=40536771eaebdb6c19703884c2015bba17387056e8362d001caaa616cfc4927c
+WorkingDirectory=/opt/automaton-fleet/releases/eea1932d293d3aba9264b0f084fa2becd9899ba4
+Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/founders/01M3F50SH7PNX2E3GST13J52AS.runtime.env
+FLEET_COGNITION_PROVIDER=anthropic
+FLEET_COGNITION_MODEL=claude-opus-5-5
+FLEET_COGNITION_THINKING=adaptive
+FLEET_COGNITION_EFFORT=medium
+cognition.key 600 automaton-fleet-service 108 mtime=2026-09-26 10:23:42.742052685 +0000
+/var/lib/private/automaton-founders/01M3F50SH7PNX2E3GST13J52AS/founder.json 368 2026-09-26 15:23:26.139440956 +0000
+/var/lib/private/automaton-founders/01M3F50SH7PNX2E3GST13J52AS/fleet-credentials.json 171 2026-09-26 15:23:38.620493963 +0000
+founder.json.sha256=d8a8beb418409def6c0eb01543725b21dc7225c6367fce148de4c5ee4db11517
+founder turns since eval start (journal):
+0
+leftover eval tmp dirs:
+0
+key-shaped text in controller+founder journal since eval start:
+0

@@ -11,12 +11,15 @@ surviving: everything needed to continue is here.
 | 3–5 Harness, task packet, fixtures (`src/fleet/eval/`) | DONE |
 | 6–7 Fake-provider A/B/C run, controls proven (`fake-run/`) | DONE |
 | 8 Focused tests (`src/__tests__/fleet/fleet-f1-eval-02.test.ts`, 12/12) | DONE |
-| 9 Founder 1 untouched (pre-check, operator API read-only, 2026-09-29 20:58Z) | DONE (pre) |
-| 10 Model/config availability via Models API (`real/models.json`) | pending — needs VPS SSH |
-| 11 Bounded real gauntlet (`real/`) | pending |
-| 12–13 Analysis and receipt (`docs/evaluations/founder-test-and-evaluation-record.md`) | pending |
+| 9 Founder 1 untouched (before/after: `real/production-before.txt`, `real/production-after.txt`) | DONE |
+| 10 Model/config availability via Models API (`real/models.json`) | DONE |
+| 11 Bounded real gauntlet (`real/`): 13 cells, 52 calls, $2.445604 (VPS 23:41:32–23:49:39Z) | DONE |
+| 12–13 Analysis and receipt (`docs/evaluations/founder-test-and-evaluation-record.md`, `real/economics.json`) | DONE |
 
-Paid inference consumed so far: see `real/ledger.json` (absent = $0).
+**F1-EVAL-02 is complete.** Do not rerun paid cells. Open owner items: record the −$2.45 provider-credit adjustment;
+decide on unattended-upgrades restarting founder units (see the record, §L and §P).
+
+Paid inference: $2.445604 (see `real/ledger.json`).
 
 ## How to continue
 

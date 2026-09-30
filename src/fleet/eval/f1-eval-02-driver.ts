@@ -145,7 +145,11 @@ export async function runPlan(out: string, o: { mandatoryOnly?: boolean; only?: 
       log(`${cell.cellId}: previous attempt interrupted; counted ${counted} µ¢ conservatively`);
     }
     const remaining = cfg.capMicrocents - total(ledger);
-    const oneCall = (60_000 + 2_000) * Math.max(cfg.prices.inputMicrocentsPerToken, cfg.prices.cacheWriteMicrocentsPerToken ?? 0) + cfg.maxTokens * cfg.prices.outputMicrocentsPerToken;
+    // One more call's worst case: the largest bound observed so far (falls back to a 60 KB request). The runner's
+    // per-call guard stays the hard limit; this only decides whether an optional cell is worth starting.
+    const observed = PLAN.flatMap((p) => readJson<CellResult | null>(path.join(out, "cells", `${p.cellId}.json`), null)?.calls ?? []).map((c) => c.boundMicrocents);
+    const oneCall = observed.length ? Math.max(...observed)
+      : (60_000 + 2_000) * Math.max(cfg.prices.inputMicrocentsPerToken, cfg.prices.cacheWriteMicrocentsPerToken ?? 0) + cfg.maxTokens * cfg.prices.outputMicrocentsPerToken;
     if (!cell.mandatory && remaining < avgCost(cell.phase) * 1.5 + oneCall) { log(`skip optional ${cell.cellId}: remaining ${remaining} µ¢ is not enough for a complete cell`); continue; }
     if (remaining <= 0) return { ran, stoppedAt: cell.cellId, reason: "budget exhausted" };
     const state = cell.from ? readJson<Snapshot>(path.join(out, "state", `${cell.from}.json`), {}) : null;

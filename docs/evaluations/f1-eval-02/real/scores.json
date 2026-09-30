@@ -1,0 +1,520 @@
+[
+ {
+  "cellId": "B-trunk",
+  "phase": "B",
+  "arm": "trunk",
+  "hits": {},
+  "hitCount": 0,
+  "markerCount": 0,
+  "calls": 7,
+  "inputTokens": 60555,
+  "outputTokens": 5868,
+  "firstCallInputTokens": 4073,
+  "costMicrocents": 35958000,
+  "duplicateFetches": 0,
+  "unknownFetches": 0,
+  "fetches": 7,
+  "toolCalls": [
+   "web_fetch",
+   "web_fetch",
+   "web_fetch",
+   "web_fetch",
+   "web_fetch",
+   "web_fetch",
+   "web_fetch",
+   "remember_fact",
+   "propose_knowledge",
+   "web_fetch",
+   "set_goal"
+  ],
+  "packetBytes": 0,
+  "packetPresentAllCalls": false,
+  "restoredHistoryBytes": 0,
+  "answered": false,
+  "packetMarkerSources": null
+ },
+ {
+  "cellId": "C-trunk",
+  "phase": "C",
+  "arm": "trunk",
+  "hits": {},
+  "hitCount": 0,
+  "markerCount": 0,
+  "calls": 4,
+  "inputTokens": 31493,
+  "outputTokens": 2935,
+  "firstCallInputTokens": 6308,
+  "costMicrocents": 18467200,
+  "duplicateFetches": 0,
+  "unknownFetches": 0,
+  "fetches": 0,
+  "toolCalls": [
+   "recall_facts",
+   "list_goals",
+   "remember_fact",
+   "remember_fact",
+   "remember_fact",
+   "propose_knowledge",
+   "remember_fact"
+  ],
+  "packetBytes": 0,
+  "packetPresentAllCalls": false,
+  "restoredHistoryBytes": 6767,
+  "answered": false,
+  "packetMarkerSources": null
+ },
+ {
+  "cellId": "D-B-1",
+  "phase": "D",
+  "arm": "B",
+  "hits": {
+   "chooses_O2": true,
+   "forum_41": true,
+   "search_390": true,
+   "competitors_12_18": true,
+   "O3_identity_block": true,
+   "O1_saturation": true,
+   "fee_6_5": true,
+   "cites_attempt": true
+  },
+  "hitCount": 8,
+  "markerCount": 8,
+  "calls": 4,
+  "inputTokens": 36491,
+  "outputTokens": 2993,
+  "firstCallInputTokens": 7600,
+  "costMicrocents": 20582400,
+  "duplicateFetches": 0,
+  "unknownFetches": 1,
+  "fetches": 1,
+  "toolCalls": [
+   "recall_facts",
+   "read_knowledge",
+   "web_fetch",
+   "propose_knowledge",
+   "remember_fact"
+  ],
+  "packetBytes": 8903,
+  "packetPresentAllCalls": true,
+  "restoredHistoryBytes": 0,
+  "answered": true,
+  "packetMarkerSources": {
+   "chooses_O2": [
+    "knowledge",
+    "evidence",
+    "objective"
+   ],
+   "forum_41": [
+    "knowledge",
+    "evidence"
+   ],
+   "search_390": [
+    "knowledge"
+   ],
+   "competitors_12_18": [
+    "knowledge"
+   ],
+   "O3_identity_block": [
+    "knowledge"
+   ],
+   "O1_saturation": [
+    "knowledge"
+   ],
+   "fee_6_5": [
+    "knowledge"
+   ],
+   "cites_attempt": [
+    "knowledge",
+    "evidence"
+   ]
+  }
+ },
+ {
+  "cellId": "D-C-1",
+  "phase": "D",
+  "arm": "C",
+  "hits": {
+   "chooses_O2": false,
+   "forum_41": false,
+   "search_390": false,
+   "competitors_12_18": false,
+   "O3_identity_block": false,
+   "O1_saturation": false,
+   "fee_6_5": false,
+   "cites_attempt": false
+  },
+  "hitCount": 0,
+  "markerCount": 8,
+  "calls": 4,
+  "inputTokens": 18413,
+  "outputTokens": 1348,
+  "firstCallInputTokens": 3789,
+  "costMicrocents": 10061200,
+  "duplicateFetches": 0,
+  "unknownFetches": 4,
+  "fetches": 4,
+  "toolCalls": [
+   "check_ledger",
+   "recall_facts",
+   "list_goals",
+   "read_knowledge",
+   "list_files",
+   "web_fetch",
+   "web_fetch",
+   "web_fetch",
+   "web_fetch",
+   "remember_fact",
+   "set_goal"
+  ],
+  "packetBytes": 0,
+  "packetPresentAllCalls": false,
+  "restoredHistoryBytes": 0,
+  "answered": false,
+  "packetMarkerSources": null
+ },
+ {
+  "cellId": "D-A-1",
+  "phase": "D",
+  "arm": "A",
+  "hits": {
+   "chooses_O2": false,
+   "forum_41": false,
+   "search_390": false,
+   "competitors_12_18": false,
+   "O3_identity_block": false,
+   "O1_saturation": false,
+   "fee_6_5": false,
+   "cites_attempt": false
+  },
+  "hitCount": 0,
+  "markerCount": 8,
+  "calls": 4,
+  "inputTokens": 32605,
+  "outputTokens": 1153,
+  "firstCallInputTokens": 6835,
+  "costMicrocents": 15348000,
+  "duplicateFetches": 0,
+  "unknownFetches": 1,
+  "fetches": 1,
+  "toolCalls": [
+   "list_files",
+   "exec",
+   "exec",
+   "web_fetch"
+  ],
+  "packetBytes": 0,
+  "packetPresentAllCalls": false,
+  "restoredHistoryBytes": 7935,
+  "answered": false,
+  "packetMarkerSources": null
+ },
+ {
+  "cellId": "E-trunk",
+  "phase": "E",
+  "arm": "trunk",
+  "hits": {},
+  "hitCount": 0,
+  "markerCount": 0,
+  "calls": 4,
+  "inputTokens": 34284,
+  "outputTokens": 3853,
+  "firstCallInputTokens": 6815,
+  "costMicrocents": 21419600,
+  "duplicateFetches": 1,
+  "unknownFetches": 0,
+  "fetches": 2,
+  "toolCalls": [
+   "web_fetch",
+   "web_fetch",
+   "remember_fact",
+   "remember_fact",
+   "remember_fact",
+   "remember_fact",
+   "remember_fact",
+   "propose_knowledge"
+  ],
+  "packetBytes": 0,
+  "packetPresentAllCalls": false,
+  "restoredHistoryBytes": 7935,
+  "answered": false,
+  "packetMarkerSources": null
+ },
+ {
+  "cellId": "F-trunk",
+  "phase": "F",
+  "arm": "trunk",
+  "hits": {},
+  "hitCount": 0,
+  "markerCount": 0,
+  "calls": 3,
+  "inputTokens": 28648,
+  "outputTokens": 4050,
+  "firstCallInputTokens": 8255,
+  "costMicrocents": 19559200,
+  "duplicateFetches": 0,
+  "unknownFetches": 0,
+  "fetches": 0,
+  "toolCalls": [
+   "list_goals",
+   "remember_fact",
+   "complete_goal",
+   "remember_fact",
+   "propose_knowledge"
+  ],
+  "packetBytes": 0,
+  "packetPresentAllCalls": false,
+  "restoredHistoryBytes": 10501,
+  "answered": false,
+  "packetMarkerSources": null
+ },
+ {
+  "cellId": "G-trunk",
+  "phase": "G",
+  "arm": "trunk",
+  "hits": {
+   "mtd_compat": true,
+   "free_alternative": true,
+   "pre_sale_validation": false,
+   "prior_failure_ref": true,
+   "fee_updated_9": false,
+   "kill_criteria": true
+  },
+  "hitCount": 4,
+  "markerCount": 6,
+  "calls": 4,
+  "inputTokens": 39021,
+  "outputTokens": 4274,
+  "firstCallInputTokens": 7597,
+  "costMicrocents": 24156400,
+  "duplicateFetches": 0,
+  "unknownFetches": 1,
+  "fetches": 4,
+  "toolCalls": [
+   "web_fetch",
+   "web_fetch",
+   "web_fetch",
+   "web_fetch",
+   "write_file",
+   "remember_fact"
+  ],
+  "packetBytes": 0,
+  "packetPresentAllCalls": false,
+  "restoredHistoryBytes": 10084,
+  "answered": true,
+  "packetMarkerSources": null
+ },
+ {
+  "cellId": "G-G0-1",
+  "phase": "G",
+  "arm": "G0",
+  "hits": {
+   "mtd_compat": true,
+   "free_alternative": true,
+   "pre_sale_validation": false,
+   "prior_failure_ref": true,
+   "fee_updated_9": false,
+   "kill_criteria": true
+  },
+  "hitCount": 4,
+  "markerCount": 6,
+  "calls": 4,
+  "inputTokens": 21184,
+  "outputTokens": 2902,
+  "firstCallInputTokens": 3837,
+  "costMicrocents": 14277600,
+  "duplicateFetches": 0,
+  "unknownFetches": 0,
+  "fetches": 3,
+  "toolCalls": [
+   "recall_facts",
+   "check_ledger",
+   "read_knowledge",
+   "web_fetch",
+   "web_fetch",
+   "web_fetch",
+   "remember_fact"
+  ],
+  "packetBytes": 0,
+  "packetPresentAllCalls": false,
+  "restoredHistoryBytes": 0,
+  "answered": true,
+  "packetMarkerSources": null
+ },
+ {
+  "cellId": "H-B-1",
+  "phase": "H",
+  "arm": "B",
+  "hits": {
+   "failure_result": true,
+   "failure_cause_mtd": true,
+   "failure_cause_free": true,
+   "fee_updated_9": false,
+   "hair_evidence": true,
+   "pre_sale_validation": false,
+   "cites_attempt": true
+  },
+  "hitCount": 5,
+  "markerCount": 7,
+  "calls": 3,
+  "inputTokens": 38051,
+  "outputTokens": 3518,
+  "firstCallInputTokens": 10789,
+  "costMicrocents": 22256400,
+  "duplicateFetches": 0,
+  "unknownFetches": 0,
+  "fetches": 0,
+  "toolCalls": [
+   "recall_facts",
+   "read_file",
+   "remember_fact"
+  ],
+  "packetBytes": 16139,
+  "packetPresentAllCalls": true,
+  "restoredHistoryBytes": 0,
+  "answered": true,
+  "packetMarkerSources": {
+   "failure_result": [
+    "knowledge",
+    "previousResults"
+   ],
+   "failure_cause_mtd": [
+    "knowledge",
+    "notes",
+    "previousResults"
+   ],
+   "failure_cause_free": [
+    "knowledge",
+    "notes",
+    "previousResults"
+   ],
+   "fee_updated_9": [
+    "knowledge",
+    "evidence"
+   ],
+   "hair_evidence": [
+    "knowledge",
+    "notes"
+   ],
+   "pre_sale_validation": [],
+   "cites_attempt": [
+    "knowledge",
+    "evidence"
+   ]
+  }
+ },
+ {
+  "cellId": "H-C-1",
+  "phase": "H",
+  "arm": "C",
+  "hits": {
+   "failure_result": true,
+   "failure_cause_mtd": true,
+   "failure_cause_free": false,
+   "fee_updated_9": false,
+   "hair_evidence": false,
+   "pre_sale_validation": false,
+   "cites_attempt": false
+  },
+  "hitCount": 2,
+  "markerCount": 7,
+  "calls": 3,
+  "inputTokens": 13578,
+  "outputTokens": 2093,
+  "firstCallInputTokens": 3840,
+  "costMicrocents": 9617200,
+  "duplicateFetches": 0,
+  "unknownFetches": 0,
+  "fetches": 0,
+  "toolCalls": [
+   "recall_facts",
+   "list_files",
+   "check_ledger",
+   "read_knowledge",
+   "list_goals",
+   "remember_fact"
+  ],
+  "packetBytes": 0,
+  "packetPresentAllCalls": false,
+  "restoredHistoryBytes": 0,
+  "answered": true,
+  "packetMarkerSources": null
+ },
+ {
+  "cellId": "H-A-1",
+  "phase": "H",
+  "arm": "A",
+  "hits": {
+   "failure_result": false,
+   "failure_cause_mtd": false,
+   "failure_cause_free": false,
+   "fee_updated_9": false,
+   "hair_evidence": false,
+   "pre_sale_validation": false,
+   "cites_attempt": false
+  },
+  "hitCount": 0,
+  "markerCount": 7,
+  "calls": 4,
+  "inputTokens": 45912,
+  "outputTokens": 1748,
+  "firstCallInputTokens": 9083,
+  "costMicrocents": 21860800,
+  "duplicateFetches": 0,
+  "unknownFetches": 0,
+  "fetches": 0,
+  "toolCalls": [
+   "recall_facts",
+   "list_files",
+   "recall_facts",
+   "recall_facts",
+   "remember_fact",
+   "exec"
+  ],
+  "packetBytes": 0,
+  "packetPresentAllCalls": false,
+  "restoredHistoryBytes": 13154,
+  "answered": false,
+  "packetMarkerSources": null
+ },
+ {
+  "cellId": "D-R-1",
+  "phase": "D",
+  "arm": "R",
+  "hits": {
+   "chooses_O2": false,
+   "forum_41": false,
+   "search_390": false,
+   "competitors_12_18": false,
+   "O3_identity_block": false,
+   "O1_saturation": false,
+   "fee_6_5": false,
+   "cites_attempt": false
+  },
+  "hitCount": 0,
+  "markerCount": 8,
+  "calls": 4,
+  "inputTokens": 24496,
+  "outputTokens": 599,
+  "firstCallInputTokens": 3789,
+  "costMicrocents": 10996400,
+  "duplicateFetches": 0,
+  "unknownFetches": 0,
+  "fetches": 0,
+  "toolCalls": [
+   "check_ledger",
+   "recall_facts",
+   "list_goals",
+   "list_files",
+   "read_knowledge",
+   "list_files",
+   "recall_facts",
+   "exec",
+   "exec"
+  ],
+  "packetBytes": 0,
+  "packetPresentAllCalls": false,
+  "restoredHistoryBytes": 0,
+  "answered": false,
+  "packetMarkerSources": null
+ }
+]

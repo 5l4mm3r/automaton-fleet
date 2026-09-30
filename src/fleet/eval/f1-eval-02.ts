@@ -179,7 +179,8 @@ export async function runCell(req: CellRequest, provider: CognitionProvider, o: 
     ports: {
       ledger: async () => ({ ...FIXTURE_LEDGER }),
       spendOrder: async (r) => { spendRequests.push({ ...r }); return { status: "refused", code: "FLEET_EVAL_NO_SPEND", reason: "evaluation environment: spend requests are recorded, never executed" }; },
-      proposeKnowledge: async (p) => { proposals.push({ ...p }); return { status: "pending_owner_review", id: `kp-${proposals.length}` }; },
+      proposeKnowledge: async (p) => { proposals.push({ ...p }); // Ids are unique across cells (the F1-EVAL-02 run used per-cell ids and the model noticed a repeated kp-1).
+        return { status: "pending_owner_review", id: `kp-${prefix}-${proposals.length}` }; },
       knowledge: async () => ({ items: PROMOTED_KNOWLEDGE }),
       requestIdentityFact: async (p) => { identityRequests.push({ ...p }); return { status: "refused", reason: "evaluation environment" }; },
       researchFetch: async (p: { url: string; purpose: string }) => {

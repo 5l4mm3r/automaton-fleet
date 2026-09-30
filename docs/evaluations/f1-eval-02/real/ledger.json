@@ -1,0 +1,85 @@
+{
+ "capMicrocents": 300000000,
+ "cells": {
+  "B-trunk": {
+   "spentMicrocents": 35958000,
+   "stopped": null,
+   "calls": 7,
+   "finishedAt": "2026-09-29T23:42:37.794Z"
+  },
+  "C-trunk": {
+   "spentMicrocents": 18467200,
+   "stopped": null,
+   "calls": 4,
+   "finishedAt": "2026-09-29T23:43:14.788Z"
+  },
+  "D-B-1": {
+   "spentMicrocents": 20582400,
+   "stopped": null,
+   "calls": 4,
+   "finishedAt": "2026-09-29T23:43:49.189Z"
+  },
+  "D-C-1": {
+   "spentMicrocents": 10061200,
+   "stopped": null,
+   "calls": 4,
+   "finishedAt": "2026-09-29T23:44:08.946Z"
+  },
+  "D-A-1": {
+   "spentMicrocents": 15348000,
+   "stopped": null,
+   "calls": 4,
+   "finishedAt": "2026-09-29T23:44:26.109Z"
+  },
+  "E-trunk": {
+   "spentMicrocents": 21419600,
+   "stopped": null,
+   "calls": 4,
+   "finishedAt": "2026-09-29T23:45:01.120Z"
+  },
+  "F-trunk": {
+   "spentMicrocents": 19559200,
+   "stopped": null,
+   "calls": 3,
+   "finishedAt": "2026-09-29T23:45:47.087Z"
+  },
+  "G-trunk": {
+   "spentMicrocents": 24156400,
+   "stopped": null,
+   "calls": 4,
+   "finishedAt": "2026-09-29T23:46:41.469Z"
+  },
+  "G-G0-1": {
+   "spentMicrocents": 14277600,
+   "stopped": null,
+   "calls": 4,
+   "finishedAt": "2026-09-29T23:47:17.579Z"
+  },
+  "H-B-1": {
+   "spentMicrocents": 22256400,
+   "stopped": null,
+   "calls": 3,
+   "finishedAt": "2026-09-29T23:47:56.165Z"
+  },
+  "H-C-1": {
+   "spentMicrocents": 9617200,
+   "stopped": null,
+   "calls": 3,
+   "finishedAt": "2026-09-29T23:48:25.249Z"
+  },
+  "H-A-1": {
+   "spentMicrocents": 21860800,
+   "stopped": null,
+   "calls": 4,
+   "finishedAt": "2026-09-29T23:48:48.051Z"
+  },
+  "D-R-1": {
+   "spentMicrocents": 10996400,
+   "stopped": null,
+   "calls": 4,
+   "finishedAt": "2026-09-29T23:49:38.888Z"
+  }
+ },
+ "interrupted": [],
+ "totalMicrocents": 244560400
+}

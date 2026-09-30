@@ -1,0 +1,276 @@
+{
+ "fxUsdGbpMicro": 754893,
+ "fxSource": "fleet fx-status rate_id 15, ECB 2026-09-29",
+ "totals": {
+  "calls": 52,
+  "in": 424731,
+  "out": 37334,
+  "think": 8809,
+  "cr": 0,
+  "cw": 0
+ },
+ "totalUsdMicrocents": 244560400,
+ "totalGbp": 1.846169340372,
+ "cells": [
+  {
+   "cell": "B-trunk",
+   "arm": "trunk",
+   "start": "23:41:32",
+   "calls": 7,
+   "errors": 0,
+   "inTok": 60555,
+   "outTok": 5868,
+   "thinkTok": 685,
+   "firstIn": 4073,
+   "restoredHist": 0,
+   "packetBytes": 0,
+   "usd": 0.35958,
+   "gbp": 0.27144442494,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": true
+  },
+  {
+   "cell": "C-trunk",
+   "arm": "trunk",
+   "start": "23:42:38",
+   "calls": 4,
+   "errors": 0,
+   "inTok": 31493,
+   "outTok": 2935,
+   "thinkTok": 815,
+   "firstIn": 6308,
+   "restoredHist": 6767,
+   "packetBytes": 0,
+   "usd": 0.184672,
+   "gbp": 0.139407600096,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": false
+  },
+  {
+   "cell": "D-B-1",
+   "arm": "B",
+   "start": "23:43:15",
+   "calls": 4,
+   "errors": 0,
+   "inTok": 36491,
+   "outTok": 2993,
+   "thinkTok": 467,
+   "firstIn": 7600,
+   "restoredHist": 0,
+   "packetBytes": 8903,
+   "usd": 0.205824,
+   "gbp": 0.155375096832,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": true
+  },
+  {
+   "cell": "D-C-1",
+   "arm": "C",
+   "start": "23:43:50",
+   "calls": 4,
+   "errors": 0,
+   "inTok": 18413,
+   "outTok": 1348,
+   "thinkTok": 441,
+   "firstIn": 3789,
+   "restoredHist": 0,
+   "packetBytes": 0,
+   "usd": 0.100612,
+   "gbp": 0.07595129451600001,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": false
+  },
+  {
+   "cell": "D-A-1",
+   "arm": "A",
+   "start": "23:44:09",
+   "calls": 4,
+   "errors": 0,
+   "inTok": 32605,
+   "outTok": 1153,
+   "thinkTok": 610,
+   "firstIn": 6835,
+   "restoredHist": 7935,
+   "packetBytes": 0,
+   "usd": 0.15348,
+   "gbp": 0.11586097764,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": false
+  },
+  {
+   "cell": "E-trunk",
+   "arm": "trunk",
+   "start": "23:44:26",
+   "calls": 4,
+   "errors": 0,
+   "inTok": 34284,
+   "outTok": 3853,
+   "thinkTok": 430,
+   "firstIn": 6815,
+   "restoredHist": 7935,
+   "packetBytes": 0,
+   "usd": 0.214196,
+   "gbp": 0.161695061028,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": false
+  },
+  {
+   "cell": "F-trunk",
+   "arm": "trunk",
+   "start": "23:45:02",
+   "calls": 3,
+   "errors": 0,
+   "inTok": 28648,
+   "outTok": 4050,
+   "thinkTok": 1000,
+   "firstIn": 8255,
+   "restoredHist": 10501,
+   "packetBytes": 0,
+   "usd": 0.195592,
+   "gbp": 0.147651031656,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": true
+  },
+  {
+   "cell": "G-trunk",
+   "arm": "trunk",
+   "start": "23:45:47",
+   "calls": 4,
+   "errors": 0,
+   "inTok": 39021,
+   "outTok": 4274,
+   "thinkTok": 834,
+   "firstIn": 7597,
+   "restoredHist": 10084,
+   "packetBytes": 0,
+   "usd": 0.241564,
+   "gbp": 0.182354972652,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": true
+  },
+  {
+   "cell": "G-G0-1",
+   "arm": "G0",
+   "start": "23:46:42",
+   "calls": 4,
+   "errors": 0,
+   "inTok": 21184,
+   "outTok": 2902,
+   "thinkTok": 629,
+   "firstIn": 3837,
+   "restoredHist": 0,
+   "packetBytes": 0,
+   "usd": 0.142776,
+   "gbp": 0.107780602968,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": true
+  },
+  {
+   "cell": "H-B-1",
+   "arm": "B",
+   "start": "23:47:18",
+   "calls": 3,
+   "errors": 0,
+   "inTok": 38051,
+   "outTok": 3518,
+   "thinkTok": 1222,
+   "firstIn": 10789,
+   "restoredHist": 0,
+   "packetBytes": 16139,
+   "usd": 0.222564,
+   "gbp": 0.168012005652,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": true
+  },
+  {
+   "cell": "H-C-1",
+   "arm": "C",
+   "start": "23:47:57",
+   "calls": 3,
+   "errors": 0,
+   "inTok": 13578,
+   "outTok": 2093,
+   "thinkTok": 637,
+   "firstIn": 3840,
+   "restoredHist": 0,
+   "packetBytes": 0,
+   "usd": 0.096172,
+   "gbp": 0.072599569596,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": true
+  },
+  {
+   "cell": "H-A-1",
+   "arm": "A",
+   "start": "23:48:25",
+   "calls": 4,
+   "errors": 0,
+   "inTok": 45912,
+   "outTok": 1748,
+   "thinkTok": 889,
+   "firstIn": 9083,
+   "restoredHist": 13154,
+   "packetBytes": 0,
+   "usd": 0.218608,
+   "gbp": 0.16502564894400001,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": false
+  },
+  {
+   "cell": "D-R-1",
+   "arm": "R",
+   "start": "23:49:22",
+   "calls": 4,
+   "errors": 0,
+   "inTok": 24496,
+   "outTok": 599,
+   "thinkTok": 150,
+   "firstIn": 3789,
+   "restoredHist": 0,
+   "packetBytes": 0,
+   "usd": 0.109964,
+   "gbp": 0.083011053852,
+   "maxTokStops": 0,
+   "models": [
+    "claude-opus-5-5"
+   ],
+   "answered": false
+  }
+ ]
+}
