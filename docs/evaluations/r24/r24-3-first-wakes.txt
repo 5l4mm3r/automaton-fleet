@@ -1,0 +1,19 @@
+R24-3 — first natural wakes after experiment-enable (2026-09-30 20:59:34 UTC). Founder 1 was not prompted.
+Watch window 20:59–22:53 UTC. Columns: call | time | tier | packet bytes | input tokens | provider cost (USD µ¢) | tools.
+
+call 441|21:09:03|T2|2804|8946|1867200|sleep
+call 442|21:42:10|T2|2805|8946|1867200|sleep
+call 443|22:15:17|T2|2806|8946|1867200|sleep
+call 444|22:48:24|T2|2806|8946|1868200|sleep
+window end 22:53:11: experiments=0 artifacts=0 relevance-calls=0
+
+Comparison:
+  call 431 (full packet, pipeline off):   14,326 B, 11,638 input, 2,416,600 µ¢
+  call 440 (slim packet, pipeline off):     2,804 B,  5,976 input, 1,273,200 µ¢
+  calls 441-444 (slim, pipeline on):        ~2,805 B, 8,946 input, 1,867,200 µ¢  (−23% vs 431; +47% vs 440)
+
+Findings (not acted on; each needs owner/architect review):
+1. The five experiment tool schemas add ~2,970 input tokens to every routed call, including bare idle wakes.
+2. Bare-wake detection (wakeDigest: memory, workspace, ledger fields) does not include capabilities, so the slim
+   packet told the founder "Nothing has changed since your last turn" after the pipeline was enabled. The founder has
+   had no prompt to notice the new capability; natural use is unlikely while it stays idle.

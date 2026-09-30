@@ -1842,7 +1842,7 @@ Evidence: `docs/evaluations/r23/`.
 - **Living founders and controller deploys from now on:** Founder 1's unit is pinned to `aab6ca3`; the rule is
   unchanged — a controller deploy never restarts the founder unit; founder code changes only via `upgrade-runtime`.
 
-## Stage R24 — Opportunity → Experiment Pipeline (procedure; R24-1 and R24-2 done 2026-09-30, pipeline OFF)
+## Stage R24 — Opportunity → Experiment Pipeline (R24-1, R24-2, R24-3 done 2026-09-30; pipeline ON, simulated)
 
 Design, Evidence Ladder and AMBER items: `docs/design/r24-opportunity-experiment-pipeline.md`. Financially inert
 (`financial_mode` CHECK-pinned to `simulated`). Every step is an owner gate. Local evidence: `docs/evaluations/r24/`
@@ -1905,7 +1905,14 @@ Design, Evidence Ladder and AMBER items: `docs/design/r24-opportunity-experiment
   - Experiment tools not sent to the model while the pipeline is off. Evidence: `docs/evaluations/r24/`.
   - Rollback of the founder runtime: `rollback-runtime 01M3F50SH7PNX2E3GST13J52AS 9315b1f0-9cba-404a-8c0d-a6b0a7667e5c
     <reason…>` (`releases/aab6ca3…` intact).
-- **Pending (owner gate):** R24-3 `experiment-enable`.
+- **R24-3 done** (owner's own instruction): `experiment-enable` at **20:59:34**, event `experiment_policy_set` by
+  `operator:ubuntu`.
+  - Policy: enabled, `financial_mode` simulated, hard cap 5000, 3 active per founder, relevance assessor 60 calls/h.
+  - Ladder unchanged (E0 0, E1 300, E2 1000, E3 2500, E4 owner), all `simulation_only`.
+  - Checks after: privilege audit PASS, `fleet:verify` SAFE FOR DRY RUN YES (real replication and payments still NO);
+    replication, payments, owner sweep, custody, reproduction and refounding all off; 0 payment orders.
+  - Founder 1 was not prompted: it meets the pipeline at its next natural wake.
+  - Back out: `fleet:admin experiment-disable` (no restart; history kept).
 - **Rollback:** `runtime.env.pre-r24` + `current` → `releases/4821616…` + restore the pre-v24 dump (Founder 1 needs
   nothing: it still runs `aab6ca3`).
 
