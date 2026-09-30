@@ -56,7 +56,8 @@ import {
 import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "../runtime.js";
 import { FleetService, type AuditEntry, type ReadinessCheck } from "./server.js";
 import { OpenAICompatibleProvider, ScriptedProvider } from "../cognition/providers.js";
-import { AnthropicProvider, parseEffort, parseThinking } from "../cognition/anthropic.js";
+import { AnthropicProvider, parseEffort, parsePromptCache, parseThinking } from "../cognition/anthropic.js";
+import type { ProviderFactory } from "../cognition/routed-gateway.js";
 import { startFxRefresher } from "../treasury/fx.js";
 import { DEFAULT_FETCHER_SOCKET, unixFetcher } from "../research/client.js";
 import type { CognitionProvider } from "../cognition/types.js";
@@ -237,11 +238,12 @@ export function loadCognitionProvider(e: Record<string, string | undefined>, uid
         beta: e.FLEET_COGNITION_ANTHROPIC_BETA?.trim() || undefined,
         thinking: parseThinking(e.FLEET_COGNITION_THINKING),
         effort: parseEffort(e.FLEET_COGNITION_EFFORT),
+        promptCache: parsePromptCache(e.FLEET_COGNITION_PROMPT_CACHE),
       }),
       deadlineMs,
     };
   }
-  if (e.FLEET_COGNITION_THINKING?.trim() || e.FLEET_COGNITION_EFFORT?.trim()) throw new Error("FLEET_COGNITION_THINKING / FLEET_COGNITION_EFFORT apply to the anthropic provider only.");
+  if (e.FLEET_COGNITION_THINKING?.trim() || e.FLEET_COGNITION_EFFORT?.trim() || e.FLEET_COGNITION_PROMPT_CACHE?.trim()) throw new Error("FLEET_COGNITION_THINKING / FLEET_COGNITION_EFFORT / FLEET_COGNITION_PROMPT_CACHE apply to the anthropic provider only.");
   if (!baseUrl || !model || !keyFile) throw new Error("FLEET_COGNITION_PROVIDER=openai_compatible requires FLEET_COGNITION_BASE_URL, FLEET_COGNITION_MODEL and FLEET_COGNITION_API_KEY_FILE.");
   const param = e.FLEET_COGNITION_MAX_TOKENS_PARAM?.trim() || "max_tokens";
   if (param !== "max_tokens" && param !== "max_completion_tokens") throw new Error("FLEET_COGNITION_MAX_TOKENS_PARAM must be max_tokens or max_completion_tokens.");
@@ -361,8 +363,17 @@ export async function startFleetServiceFromEnv(
     const cognition = loadCognitionProvider(e);
     const cognitionProvider = cognition.provider;
     const research = researchConfig(e);
+    // Schema v22: routed tiers reuse this controller's credential and settings; only model/thinking/effort differ, and
+    // only as the owner's verified mapping says. Inert unless the owner enables routing (global and per founder).
+    const cognitionProviderFactory: ProviderFactory | null = cognitionProvider instanceof AnthropicProvider
+      ? (c, effortOverride) => {
+          const p = cognitionProvider.with({ model: c.model, thinking: c.thinking === "adaptive" ? { type: "adaptive" } : undefined, effort: effortOverride ?? c.effort ?? undefined });
+          return Object.assign(p, { promptCache: p.settings.promptCache });
+        }
+      : null;
     const service = new FleetService({
       cognitionProvider,
+      cognitionProviderFactory,
       researchFetcher: unixFetcher(research.socket),
       researchDenyDomains: research.denyDomains,
       cognitionDeadlineMs: cognition.deadlineMs,

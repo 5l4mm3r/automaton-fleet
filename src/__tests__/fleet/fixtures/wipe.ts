@@ -16,6 +16,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_economic_model", "fleet_ledger_classes", "fleet_ledger_kinds", "fleet_ledger_rules", "fleet_ledger_head", "fleet_legacy_economics",
     "fleet_capability_classes", "fleet_capability_manifests", "fleet_genesis_policy", "fleet_reproduction_policy",
     "fleet_operator_state", "fleet_operator_routes", "fleet_cognition_policy", "fleet_research_policy",
+    "fleet_cognition_routing", "fleet_cognition_tiers", "fleet_action_min_tier",
   ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
@@ -55,6 +56,17 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   // v20: test registries run without a bootstrap-capital decision (plain USD allocations); production-like tests set it.
   const bc = await c.query("SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_genesis_policy' AND column_name = 'bootstrap_capital_minor'", [schema]);
   if (bc.rowCount) await c.query(`UPDATE "${schema}".fleet_genesis_policy SET bootstrap_capital_currency = NULL, bootstrap_capital_minor = NULL`);
+  // v22: routing back to its inert default (off; tiers disabled and unverified).
+  if (r.rows.some((x) => x.t === "fleet_cognition_tiers")) {
+    await c.query(`UPDATE "${schema}".fleet_cognition_routing SET routing_enabled = false, major_spend_threshold_minor = 2000, duplicate_failure_window_s = 600, action_link_window_s = 1800, updated_by = 'migration'`);
+    await c.query(`UPDATE "${schema}".fleet_cognition_tiers t SET provider = 'anthropic', model = s.model, thinking = s.thinking, effort = s.effort,
+        max_output_tokens = s.max_out, input_microcents_per_token = s.i, output_microcents_per_token = s.o, cache_write_microcents_per_token = s.cw,
+        cache_read_microcents_per_token = s.cr, enabled = false, verified_at = NULL, verified_ref = NULL, updated_by = 'migration'
+      FROM (VALUES ('T1', 'claude-haiku-4-5-20251001', NULL, NULL, 2000, 100, 500, 125, 10),
+                   ('T2', 'claude-sonnet-5-5', 'adaptive', 'medium', 8000, 200, 1000, 250, 20),
+                   ('T3', 'claude-opus-5-5', 'adaptive', 'medium', 8000, 400, 2000, 500, 20)) AS s(tier, model, thinking, effort, max_out, i, o, cw, cr)
+      WHERE t.tier = s.tier`);
+  }
   if (r.rows.some((x) => x.t === "fleet_research_policy")) {
     await c.query(`UPDATE "${schema}".fleet_research_policy SET research_enabled = false, founder_hourly = 60, founder_daily = 300,
       fleet_hourly = 120, fleet_daily = 600, updated_by = 'migration'`);

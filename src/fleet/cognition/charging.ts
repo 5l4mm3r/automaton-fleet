@@ -41,3 +41,15 @@ export function accrue(unpostedMicrocents: number, chargedMicro: number): { post
   const postCents = Math.floor(total / MICROCENTS_PER_CENT);
   return { postCents, unpostedMicrocents: total - postCents * MICROCENTS_PER_CENT };
 }
+
+/**
+ * Prompt-cache economics of one call, in USD µ¢ at list prices: what the cached tokens actually cost versus what the
+ * same tokens would have cost uncached. Positive = saved; a first write costs a premium (negative).
+ */
+export function cacheEconomics(u: Usage, p: Prices): { cachedTokens: number; uncachedInputTokens: number; hit: boolean; savedMicrocents: number } {
+  const cr = u.cacheReadTokens ?? 0;
+  const cw = u.cacheWriteTokens ?? 0;
+  const actual = cr * (p.cacheReadMicrocentsPerToken ?? p.inputMicrocentsPerToken) + cw * (p.cacheWriteMicrocentsPerToken ?? p.outputMicrocentsPerToken);
+  const uncached = (cr + cw) * p.inputMicrocentsPerToken;
+  return { cachedTokens: cr + cw, uncachedInputTokens: u.inputTokens, hit: cr > 0, savedMicrocents: uncached - actual };
+}

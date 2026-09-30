@@ -131,6 +131,43 @@ export class GenesisOps {
     return this.one<Record<string, unknown>>(`SELECT fleet_cognition_state($1) AS r`, [agentId]);
   }
 
+  // ─── Schema v22: neutral cognition routing (owner controls; inert by default) ─────────────────
+  cognitionRouting() {
+    return this.one<Record<string, unknown>>(`SELECT jsonb_build_object('routing', (SELECT to_jsonb(r) FROM fleet_cognition_routing r WHERE id = 1),
+      'tiers', (SELECT jsonb_agg(to_jsonb(t) ORDER BY t.tier) FROM fleet_cognition_tiers t),
+      'actionMinTier', (SELECT jsonb_agg(to_jsonb(m) ORDER BY m.action_class) FROM fleet_action_min_tier m),
+      'founders', (SELECT COALESCE(jsonb_agg(to_jsonb(f) ORDER BY f.agent_id), '[]'::jsonb) FROM fleet_founder_routing f)) AS r`);
+  }
+
+  cognitionRoutingSet(enabled: boolean, majorSpendThresholdMinor: number | null, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_routing_set($1, $2, $3) AS r`, [enabled, majorSpendThresholdMinor, actor]);
+  }
+
+  /** Changing a tier's mapping voids its verification and disables it until re-verified. */
+  cognitionTierSet(p: { tier: string; model: string; thinking: string | null; effort: string | null; maxOutputTokens: number;
+    inputMicrocents: number; outputMicrocents: number; cacheWriteMicrocents: number; cacheReadMicrocents: number; actor: string }) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_tier_set($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) AS r`, [
+      p.tier, p.model, p.thinking, p.effort, p.maxOutputTokens, p.inputMicrocents, p.outputMicrocents, p.cacheWriteMicrocents, p.cacheReadMicrocents, p.actor,
+    ]);
+  }
+
+  /** Record that `model` was verified for `tier` against the provider account (e.g. a Models API check reference). */
+  cognitionTierVerify(tier: string, model: string, ref: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_tier_verify($1, $2, $3, $4) AS r`, [tier, model, ref, actor]);
+  }
+
+  cognitionTierEnable(tier: string, enabled: boolean, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_tier_enable($1, $2, $3) AS r`, [tier, enabled, actor]);
+  }
+
+  founderRoutingSet(agentId: string, enabled: boolean, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_founder_routing_set($1, $2, $3) AS r`, [agentId, enabled, actor]);
+  }
+
+  cognitionReport(since: Date) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_report($1) AS r`, [since.toISOString()]);
+  }
+
   /**
    * Phase F.3 owner monitoring: one row per founder — lifecycle, own economics,
    * cognition switches and usage, forbidden tool requests the model made (all

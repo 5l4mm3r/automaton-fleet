@@ -327,9 +327,10 @@ export class FleetApiClient implements FleetBackend {
    * `waitMs` must exceed the controller's inference deadline (cognition status `founderWaitMs`), so a reply the
    * controller records and charges is always delivered (L2). Bounded to 5 s–330 s.
    */
-  async infer(messages: unknown[], waitMs = 150_000) {
-    return this.call<{ content: string; toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>; usage: { inputTokens: number; outputTokens: number }; usageSource: string; chargedCents: number; requestId: string }>(
-      "POST", "/v1/cognition/infer", { messages }, false, Math.min(330_000, Math.max(5_000, waitMs)),
+  async infer(messages: unknown[], waitMs = 150_000, route?: Record<string, unknown>) {
+    return this.call<{ content: string; toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>; usage: { inputTokens: number; outputTokens: number }; usageSource: string; chargedCents: number; requestId: string; route?: { tier: string; model: string; taskClass: string; scope: string } }>(
+      // v22: the task's routing request (a request only: FleetController decides). Omitted = the legacy request body.
+      "POST", "/v1/cognition/infer", route ? { messages, route } : { messages }, false, Math.min(330_000, Math.max(5_000, waitMs)),
     );
   }
 

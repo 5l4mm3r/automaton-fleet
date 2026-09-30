@@ -44,6 +44,21 @@ export interface AnthropicOptions extends HttpProviderOptions {
   /** Unset = send nothing (the model's default). */
   thinking?: AnthropicThinking;
   effort?: AnthropicEffort;
+  /**
+   * Prompt caching (default off). "prefix": one explicit breakpoint on the (single, frozen) system block, which caches
+   * tools + charter together — the stable prefix every founder call shares. "prefix+tail": also top-level automatic
+   * caching of the growing conversation tail (reuse inside a tool loop). Volatile task state is never in the prefix.
+   */
+  promptCache?: PromptCacheMode;
+}
+
+export type PromptCacheMode = "off" | "prefix" | "prefix+tail";
+
+export function parsePromptCache(v: string | undefined): PromptCacheMode {
+  const x = v?.trim();
+  if (!x || x === "off") return "off";
+  if (x === "prefix" || x === "prefix+tail") return x;
+  throw new Error("FLEET_COGNITION_PROMPT_CACHE must be off, prefix or prefix+tail");
 }
 
 const STOP_REASONS = new Set(["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal", "model_context_window_exceeded"]);
@@ -274,8 +289,8 @@ export class AnthropicProvider implements CognitionProvider {
     return this.opts.model;
   }
 
-  get settings(): { apiVersion: string; beta: string | null; thinking: AnthropicThinking | null; effort: AnthropicEffort | null } {
-    return { apiVersion: this.opts.apiVersion ?? "2023-06-01", beta: this.opts.beta ?? null, thinking: this.opts.thinking ?? null, effort: this.opts.effort ?? null };
+  get settings(): { apiVersion: string; beta: string | null; thinking: AnthropicThinking | null; effort: AnthropicEffort | null; promptCache: PromptCacheMode } {
+    return { apiVersion: this.opts.apiVersion ?? "2023-06-01", beta: this.opts.beta ?? null, thinking: this.opts.thinking ?? null, effort: this.opts.effort ?? null, promptCache: this.opts.promptCache ?? "off" };
   }
 
   /** The same provider with some settings changed (probe variants). */
@@ -284,10 +299,12 @@ export class AnthropicProvider implements CognitionProvider {
   }
 
   body(req: ChatRequest): Record<string, unknown> {
+    const cache = this.opts.promptCache ?? "off";
     return {
       model: this.opts.model,
       max_tokens: req.maxTokens,
-      system: req.system,
+      system: cache === "off" ? req.system : [{ type: "text", text: req.system, cache_control: { type: "ephemeral" } }],
+      ...(cache === "prefix+tail" ? { cache_control: { type: "ephemeral" } } : {}),
       messages: toAnthropicMessages(req.messages),
       ...(req.tools.length ? { tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) } : {}),
       ...(this.opts.thinking

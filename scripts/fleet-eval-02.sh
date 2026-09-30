@@ -20,7 +20,7 @@ case "$TREE" in /opt/automaton-fleet/eval/*) ;; *) echo "refusing: not an evalua
 [[ -f "$ENVF" ]] || { echo "missing $ENVF" >&2; exit 2; }
 args=()
 while IFS= read -r line; do
-  [[ "$line" =~ ^(FLEET_COGNITION_(PROVIDER|BASE_URL|MODEL|API_KEY_FILE|ATTEMPT_TIMEOUT_MS|MAX_ATTEMPTS|DEADLINE_MS|ANTHROPIC_VERSION|ANTHROPIC_BETA|THINKING|EFFORT))=([A-Za-z0-9._:/@,-]{0,512})$ ]] || continue
+  [[ "$line" =~ ^(FLEET_COGNITION_(PROVIDER|BASE_URL|MODEL|API_KEY_FILE|ATTEMPT_TIMEOUT_MS|MAX_ATTEMPTS|DEADLINE_MS|ANTHROPIC_VERSION|ANTHROPIC_BETA|THINKING|EFFORT|PROMPT_CACHE))=([A-Za-z0-9._:/@,-]{0,512})$ ]] || continue
   args+=("${BASH_REMATCH[1]}=${BASH_REMATCH[3]}")
 done < <(grep -E '^FLEET_COGNITION_' "$ENVF" || true)
 cd /

@@ -51,10 +51,17 @@ type Block = Record<string, unknown>;
 export async function startFakeAnthropic(o: {
   apiKey: string;
   model: string;
+  /** Further model ids this fake serves (routing tests); responses name the requested model. */
+  models?: string[];
   /** Emit signed thinking blocks (and enforce their unchanged return). */
   thinking?: boolean;
   fault?: (agent: string, n: number) => FakeAnthropicFault | null;
   script?: ScriptedProvider;
+  /**
+   * Prompt-cache simulation (as the real API): an explicit cache_control breakpoint on the last system block caches
+   * tools + system (prefix match, model-scoped); prefixes shorter than this many (approximate) tokens are not cached.
+   */
+  cacheMinTokens?: number;
 }): Promise<FakeAnthropic> {
   const script = o.script ?? new ScriptedProvider(o.model);
   const requests = new Map<string, number>();
@@ -63,6 +70,7 @@ export async function startFakeAnthropic(o: {
   const boundPrefix = new Map<string, string>();
   const issued = new Map<string, string>(); // tool_use id → JSON of the thinking blocks issued with it
   const state = { lastBody: null as Record<string, unknown> | null, seq: 0 };
+  const cache = new Set<string>();
   const sockets = new Set<net.Socket>();
   const server = http.createServer((req, res) => {
     let raw = "";
@@ -90,10 +98,26 @@ export async function startFakeAnthropic(o: {
         return invalid("invalid json");
       }
       state.lastBody = body;
-      if (body.model !== o.model) return err(404, "not_found_error", `model: ${String(body.model).slice(0, 40)}`);
+      if (body.model !== o.model && !(o.models ?? []).includes(String(body.model))) return err(404, "not_found_error", `model: ${String(body.model).slice(0, 40)}`);
       if (!Number.isInteger(body.max_tokens) || (body.max_tokens as number) < 1) return invalid("max_tokens required");
       if ("max_completion_tokens" in body) return invalid("max_completion_tokens: Extra inputs are not permitted");
-      if (body.system !== undefined && typeof body.system !== "string") return invalid("system must be a string here");
+      // system: a string, or text blocks (optionally with a cache_control breakpoint).
+      let systemText = "";
+      let breakpoints = 0;
+      const cc = (x: unknown) => {
+        const c = x as Record<string, unknown>;
+        return !!c && typeof c === "object" && c.type === "ephemeral" && (c.ttl === undefined || c.ttl === "5m" || c.ttl === "1h") && Object.keys(c).every((k) => k === "type" || k === "ttl");
+      };
+      if (typeof body.system === "string") systemText = body.system;
+      else if (Array.isArray(body.system)) {
+        for (const b of body.system as Array<Record<string, unknown>>) {
+          if (!b || b.type !== "text" || typeof b.text !== "string") return invalid("system blocks must be text blocks");
+          if (b.cache_control !== undefined) { if (!cc(b.cache_control)) return invalid("system.cache_control: invalid"); breakpoints++; }
+          systemText += b.text;
+        }
+      } else if (body.system !== undefined) return invalid("system must be a string or text blocks");
+      if (body.cache_control !== undefined) { if (!cc(body.cache_control)) return invalid("cache_control: invalid"); breakpoints++; }
+      if (breakpoints > 4) return invalid("A maximum of 4 blocks with cache_control may be provided.");
       if (body.thinking !== undefined) {
         const t = body.thinking as Record<string, unknown>;
         const okAdaptive = t.type === "adaptive";
@@ -178,7 +202,7 @@ export async function startFakeAnthropic(o: {
       } else if (specs.length === 0) {
         text = "FLEET-PROBE-OK";
       } else {
-        const r = await script.chat({ agentId: agent, system: String(body.system ?? ""), messages: conv, tools: specs, maxTokens: body.max_tokens as number });
+        const r = await script.chat({ agentId: agent, system: systemText, messages: conv, tools: specs, maxTokens: body.max_tokens as number });
         text = r.content;
         calls = r.toolCalls.map((c, i) => ({ ...c, id: `toolu_${agent.slice(-6)}${n}x${i}` }));
         usage = { input_tokens: r.usage.inputTokens, output_tokens: r.usage.outputTokens };
@@ -198,10 +222,22 @@ export async function startFakeAnthropic(o: {
       if (fault?.kind === "unknown_block") content.push({ type: "server_tool_use", id: "srvtoolu_x", name: "web_search", input: {} });
       if (o.thinking) for (const c of calls) issued.set(c.id, JSON.stringify(thinking));
       if (o.thinking) for (const t of thinking) boundPrefix.set(String(t.signature ?? t.data ?? ""), prefixKey(msgs));
+      // Explicit breakpoint on the last system block: tools + system are one cacheable prefix (model-scoped).
+      const sys = body.system as Array<Record<string, unknown>> | string | undefined;
+      if (Array.isArray(sys) && sys.length && sys[sys.length - 1].cache_control !== undefined) {
+        const prefix = JSON.stringify({ model: body.model, tools: body.tools ?? [], system: systemText, thinking: body.thinking ?? null, effort: (body.output_config as Record<string, unknown> | undefined)?.effort ?? null });
+        const tok = Math.ceil(JSON.stringify({ tools: body.tools ?? [], system: systemText }).length / 4);
+        if (tok >= (o.cacheMinTokens ?? 1024)) {
+          const hit = cache.has(prefix);
+          if (!hit) cache.add(prefix);
+          const total = Math.max(usage.input_tokens, tok + 1);
+          usage = { ...usage, input_tokens: total - tok, ...(hit ? { cache_read_input_tokens: tok, cache_creation_input_tokens: 0 } : { cache_creation_input_tokens: tok, cache_read_input_tokens: 0 }) };
+        }
+      }
       if (fault?.kind === "cache_usage") usage = { ...usage, cache_read_input_tokens: fault.read, cache_creation_input_tokens: fault.write };
       const stop = fault?.kind === "max_tokens_tool" ? "max_tokens" : calls.length ? "tool_use" : "end_turn";
       const u = fault?.kind === "no_usage" ? undefined : fault?.kind === "partial_usage" ? { input_tokens: usage.input_tokens } : usage;
-      send(200, { id: `msg_fake${n}${agent.slice(-4)}`, type: "message", role: "assistant", model: o.model, content, stop_reason: stop, stop_sequence: null, ...(u ? { usage: u } : {}) });
+      send(200, { id: `msg_fake${n}${agent.slice(-4)}`, type: "message", role: "assistant", model: String(body.model), content, stop_reason: stop, stop_sequence: null, ...(u ? { usage: u } : {}) });
     });
   });
   server.on("connection", (s) => {

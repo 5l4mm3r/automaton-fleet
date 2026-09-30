@@ -36,6 +36,16 @@
  *   research-log [agentId] [--limit N]                                the research audit (attempts + results)
  *   founders-report                                                   per founder: status, cash, cognition, 24 h usage,
  *                                                                     forbidden tool requests (refused), orders awaiting you
+ *
+ * Schema v22 neutral cognition routing (owner controls; inert until enabled; never run by an AI operator):
+ *   cognition-routing                                                 routing switch, thresholds and tier mappings
+ *   cognition-tier-set <T1|T2|T3> <model> --max-output N --in-microcents N --out-microcents N --cache-write-microcents N
+ *                      --cache-read-microcents N [--thinking adaptive] [--effort low|medium|high|max]   (voids verification)
+ *   cognition-tier-verify <tier> <model> <verification reference…>    after checking the model on the provider account
+ *   cognition-tier-enable <tier> | cognition-tier-disable <tier>      a tier can only be enabled once verified
+ *   cognition-routing-enable [--major-spend N] | cognition-routing-disable     OWNER GATE (global switch)
+ *   founder-routing <agentId> enable|disable                          per-founder opt-in (moves that founder off the legacy model)
+ *   cognition-report [--hours N]                                      cost and outcome per task class × tier
  */
 
 import crypto from "crypto";
@@ -50,6 +60,8 @@ export const GENESIS_COMMANDS = new Set([
   "reproduction-eligibility", "knowledge-review", "identity-claim-decide",
   "cognition-policy", "cognition-enable", "cognition-disable", "founder-cognition", "cognition-status", "cognition-log", "founders-report",
   "research-policy", "research-enable", "research-disable", "founder-research", "research-log",
+  "cognition-routing", "cognition-tier-set", "cognition-tier-verify", "cognition-tier-enable", "cognition-tier-disable",
+  "cognition-routing-enable", "cognition-routing-disable", "founder-routing", "cognition-report",
 ]);
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -172,6 +184,35 @@ export async function runGenesisCommand(
       return ok(await g.researchLog(p[0] ?? null, optInt("--limit", 1) ?? 50));
     case "founders-report":
       return ok(await g.foundersReport(FOUNDER_TOOLS.map((t) => t.name)));
+    case "cognition-routing":
+      return ok(await g.cognitionRouting());
+    case "cognition-tier-set": {
+      const [tier, model] = p;
+      const thinking = flag(a, "--thinking") ?? null;
+      const effort = flag(a, "--effort") ?? null;
+      const need = (k: string) => { const v = optInt(k); if (v === undefined || v === null) throw new Error(`cognition-tier-set needs ${k}`); return v; };
+      if (!/^T[123]$/.test(tier ?? "") || !model) throw new Error("usage: cognition-tier-set <T1|T2|T3> <model> --max-output N --in-microcents N --out-microcents N --cache-write-microcents N --cache-read-microcents N [--thinking adaptive] [--effort …]");
+      return ok(await g.cognitionTierSet({ tier, model, thinking, effort, maxOutputTokens: need("--max-output"), inputMicrocents: need("--in-microcents"),
+        outputMicrocents: need("--out-microcents"), cacheWriteMicrocents: need("--cache-write-microcents"), cacheReadMicrocents: need("--cache-read-microcents"), actor }));
+    }
+    case "cognition-tier-verify": {
+      const [tier, model] = p;
+      const ref = p.slice(2).join(" ");
+      if (!/^T[123]$/.test(tier ?? "") || !model || ref.length < 3) throw new Error("usage: cognition-tier-verify <tier> <model> <verification reference…>");
+      return ok(await g.cognitionTierVerify(tier, model, ref, actor));
+    }
+    case "cognition-tier-enable":
+    case "cognition-tier-disable":
+      if (!/^T[123]$/.test(p[0] ?? "")) throw new Error(`usage: ${cmd} <T1|T2|T3>`);
+      return ok(await g.cognitionTierEnable(p[0], cmd === "cognition-tier-enable", actor));
+    case "cognition-routing-enable":
+    case "cognition-routing-disable":
+      return ok(await g.cognitionRoutingSet(cmd === "cognition-routing-enable", optInt("--major-spend", 1) ?? null, actor));
+    case "founder-routing":
+      if (!p[0] || !ULID.test(p[0]) || !["enable", "disable"].includes(p[1] ?? "")) throw new Error("usage: founder-routing <agentId> enable|disable");
+      return ok(await g.founderRoutingSet(p[0], p[1] === "enable", actor));
+    case "cognition-report":
+      return ok(await g.cognitionReport(new Date(Date.now() - (optInt("--hours", 1) ?? 24) * 3_600_000)));
     case "cognition-log":
       if (p[0] !== undefined && !ULID.test(p[0])) throw new Error("usage: cognition-log [agentId] [--limit N]");
       return ok(await g.cognitionLog(p[0] ?? null, optInt("--limit", 1) ?? 50));

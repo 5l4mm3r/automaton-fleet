@@ -137,7 +137,7 @@ describe("Anthropic protocol mapping and strict parsing (unit)", () => {
     const env = { FLEET_COGNITION_PROVIDER: "anthropic", FLEET_COGNITION_MODEL: MODEL, FLEET_COGNITION_API_KEY_FILE: key };
     const cfg = loadCognitionProvider(env, uid);
     expect(cfg.provider?.id).toBe("anthropic");
-    expect((cfg.provider as AnthropicProvider).settings).toEqual({ apiVersion: "2023-06-01", beta: null, thinking: null, effort: null });
+    expect((cfg.provider as AnthropicProvider).settings).toEqual({ apiVersion: "2023-06-01", beta: null, thinking: null, effort: null, promptCache: "off" });
     expect((loadCognitionProvider({ ...env, FLEET_COGNITION_THINKING: "adaptive", FLEET_COGNITION_EFFORT: "high" }, uid).provider as AnthropicProvider).settings).toMatchObject({ thinking: { type: "adaptive" }, effort: "high" });
     const err = (f: () => unknown) => {
       try {

@@ -53,6 +53,8 @@ import { SIG_HEADERS, signRequest } from "./server-signing.js";
 import { parseFounderAttestHeader } from "../founder/evidence.js";
 import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, FOUNDER_WAIT_MARGIN_MS, MAX_COGNITION_DEADLINE_MS, infer as inferCognition } from "../cognition/gateway.js";
 import type { CognitionProvider } from "../cognition/types.js";
+import { inferRouted, type ProviderFactory } from "../cognition/routed-gateway.js";
+import { actionDigest } from "../cognition/router.js";
 import { ResearchError, research as researchFetch } from "../research/gateway.js";
 import type { FetcherPort } from "../research/client.js";
 
@@ -195,6 +197,8 @@ export interface FleetServiceOptions {
   };
   /** Phase F.2: the inference provider behind POST /v1/cognition/infer (null = none configured; founders cannot think). */
   cognitionProvider?: CognitionProvider | null;
+  /** Schema v22: builds the provider for a routed tier candidate (null/absent = routing unavailable on this controller). */
+  cognitionProviderFactory?: ProviderFactory | null;
   /** Pre-Genesis step 4: the isolated research fetcher (null = research unavailable on this controller). */
   researchFetcher?: FetcherPort | null;
   /** Domains founders may never research (the fleet's own). */
@@ -1013,6 +1017,16 @@ export class FleetService {
         if (!/^[A-Za-z0-9:_.-]{8,128}$/.test(idempotencyKey) || !/^dst_[0-9A-HJKMNP-TV-Z]{26}$/.test(destinationId)) {
           throw new HttpError(400, "FLEET_BAD_REQUEST", "idempotencyKey or destinationId is malformed");
         }
+        // Schema v22 consequential-action boundary: for a routed founder the spend must come from a logged cognition
+        // call of at least the action class's minimum tier (controller's record, single-use, digest-matched).
+        // Founders not on routing: not enforced (enforced=false), the legacy path is unchanged.
+        const toolCallId = typeof body.cognitionToolCallId === "string" ? body.cognitionToolCallId.slice(0, 64) : (/^mind:([A-Za-z0-9_.-]{1,64}):/.exec(idempotencyKey)?.[1] ?? null);
+        const boundary = await admin.actionCognitionVerify(agentId, "spend_request", amount, toolCallId,
+          actionDigest("request_spend", { amountCents: amount, category: body.category, destinationId }));
+        if (!boundary.ok) {
+          this.audit("action_cognition_refused", agentId, { code: boundary.code ?? null, actionClass: boundary.actionClass ?? null, minTier: boundary.minTier ?? null, tier: boundary.tier ?? null });
+          throw new HttpError(403, String(boundary.code ?? "FLEET_ACTION_COGNITION_MISSING"), "the cognition behind this action does not meet its minimum tier");
+        }
         const r = await agent.spendRequest(agentId, token, {
           idempotencyKey,
           amountCents: amount,
@@ -1051,6 +1065,33 @@ export class FleetService {
       case "/v1/cognition/infer": {
         // Phase F.2: the founder's only way to think. The controller holds the provider credential, meters and records.
         const { agentId, token } = await this.credentials(req, path, ctx);
+        // Schema v22: only founders the owner opted into routing (global AND per founder) take the routed path.
+        const routing = this.opts.cognitionProviderFactory ? await admin.cognitionRoutingState(agentId) : null;
+        if (routing?.routingEnabled === true && this.opts.cognitionProviderFactory) {
+          try {
+            const r = await inferRouted(
+              {
+                capabilities: (a, t) => agent.capabilities(a, t),
+                cognitionStatus: (a, t) => agent.cognitionStatus(a, t),
+                routingState: (a) => admin.cognitionRoutingState(a),
+                authorize: (a, e, route, psha) => admin.cognitionRoutedAuthorize(a, e, route, psha),
+                record: (a, id, x, obs) => admin.cognitionRoutedRecord(a, id, x, obs),
+              },
+              this.opts.cognitionProviderFactory, agentId, token, body, { deadlineMs: this.cognitionDeadlineMs() },
+            );
+            this.audit("cognition_inference", agentId, { requestId: r.requestId, chargedCents: r.chargedCents, tools: r.toolCalls.length, tier: r.route.tier, taskClass: r.route.taskClass, scope: r.route.scope });
+            return r;
+          } catch (err) {
+            if (err instanceof CognitionError && err.code === "FLEET_COGNITION_PROVIDER_REJECTED") {
+              const x = err as CognitionError & { providerDetail?: string | null; providerRequestId?: string | null; requestId?: string };
+              this.audit("cognition_provider_rejected", agentId, { requestId: x.requestId ?? null, providerRequestId: x.providerRequestId ?? null, detail: x.providerDetail ?? null });
+            }
+            if (err instanceof CognitionError) {
+              throw err.retryAfterS !== undefined ? Object.assign(new HttpError(err.status, err.code, err.message), { retryAfter: err.retryAfterS }) : new HttpError(err.status, err.code, err.message);
+            }
+            throw err;
+          }
+        }
         try {
           const r = await inferCognition(
             {

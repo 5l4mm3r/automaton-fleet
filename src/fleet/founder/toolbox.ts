@@ -24,6 +24,7 @@ import { decideTool, type CapabilityManifest } from "../capabilities.js";
 import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
 import type { ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
+import type { LoopGuard } from "./loop-guard.js";
 
 export interface ToolboxPorts {
   ledger(): Promise<unknown>;
@@ -92,7 +93,8 @@ export class FounderToolbox {
   private readonly workspace: string;
   private readonly memory: string;
 
-  constructor(private readonly o: { manifest: CapabilityManifest; workspaceDir: string; memoryDir: string; ports: ToolboxPorts; execTimeoutMs?: number; /** tests only */ sandboxPython?: string }) {
+  constructor(private readonly o: { manifest: CapabilityManifest; workspaceDir: string; memoryDir: string; ports: ToolboxPorts; execTimeoutMs?: number; /** tests only */ sandboxPython?: string;
+    /** v22 phase: loop/duplication economics (absent = unchanged behaviour). */ loopGuard?: LoopGuard }) {
     this.workspace = fs.realpathSync(o.workspaceDir);
     this.memory = fs.realpathSync(o.memoryDir);
   }
@@ -132,6 +134,16 @@ export class FounderToolbox {
   }
 
   async execute(call: ToolCall): Promise<ToolOutcome> {
+    const g = this.o.loopGuard;
+    if (!g) return this.run(call);
+    const early = g.before(call);
+    if (early) return early;
+    const out = await this.run(call);
+    g.after(call, out);
+    return out;
+  }
+
+  private async run(call: ToolCall): Promise<ToolOutcome> {
     const refuse = (code: string, why: string): ToolOutcome => ({ name: call.name, ok: false, refused: code, output: `REFUSED ${code}: ${why}` });
     const d = decideTool(call.name, this.o.manifest);
     if (!d.allowed) return refuse(d.code, `capability ${d.capability ?? "unclassified"} is not available to this founder`);

@@ -1,0 +1,56 @@
+/**
+ * Escalate the question, not the job (schema v22 phase; new founder runtimes only).
+ *
+ * When ordinary work meets ONE question that needs more capability, the founder materialises a Critical Decision
+ * Packet from its own persistent state (never its transcript), sends it as a fresh single-message conversation with a
+ * structured escalation request, and persists the higher tier's observable answer as a fact. The task then continues
+ * at its own class's tier: an escalation routes exactly one call. FleetController decides whether the escalation is
+ * granted (reason code, class maximum) — the founder only asks.
+ */
+
+import fs from "fs";
+import path from "path";
+import { buildDecisionPacket, renderDecisionPacket, type DecisionInputs } from "../cognition/task-packet.js";
+import type { MindPorts } from "./mind.js";
+
+export interface EscalationResult {
+  requestId: string;
+  answer: string;
+  factKey: string;
+  packetBytes: number;
+  route?: { tier: string; model: string; taskClass: string; scope: string };
+}
+
+export async function escalateQuestion(o: {
+  ports: Pick<MindPorts, "infer">;
+  memoryDir: string;
+  workspaceDir: string;
+  /** Task class of the question (e.g. evidence_conflict_resolution) and the lower-tier call it came from. */
+  taskClass: string;
+  requestedTier: "T2" | "T3";
+  parentRequestId?: string;
+  taskId?: string;
+  waitMs?: number;
+  decision: Omit<DecisionInputs, "memoryDir" | "workspaceDir">;
+}): Promise<EscalationResult> {
+  const packet = buildDecisionPacket({ ...o.decision, memoryDir: o.memoryDir, workspaceDir: o.workspaceDir });
+  const text = renderDecisionPacket(packet);
+  const r = await o.ports.infer([{ role: "user", content: text }], o.waitMs, {
+    taskClass: o.taskClass,
+    ...(o.taskId ? { taskId: o.taskId } : {}),
+    escalation: { reasonCode: o.decision.escalationReason, requestedTier: o.requestedTier, ...(o.parentRequestId ? { parentRequestId: o.parentRequestId } : {}) },
+  }) as Awaited<ReturnType<MindPorts["infer"]>> & { route?: EscalationResult["route"] };
+  // The higher tier's answer becomes observable persistent state (never its reasoning).
+  const factKey = `decision:${r.requestId}`;
+  const facts = (() => {
+    try { return JSON.parse(fs.readFileSync(path.join(o.memoryDir, "facts.json"), "utf8")) as Record<string, string>; } catch { return {} as Record<string, string>; }
+  })();
+  facts[factKey] = JSON.stringify({
+    question: packet.question, reason: packet.escalationReason, answer: (r.content ?? "").slice(0, 3_000),
+    tier: r.route?.tier ?? null, model: r.route?.model ?? null, requestId: r.requestId, at: new Date().toISOString(),
+  }).slice(0, 4_000);
+  const f = path.join(o.memoryDir, "facts.json");
+  fs.writeFileSync(`${f}.tmp`, JSON.stringify(facts, null, 2), { mode: 0o600 });
+  fs.renameSync(`${f}.tmp`, f);
+  return { requestId: r.requestId, answer: r.content ?? "", factKey, packetBytes: Buffer.byteLength(text), ...(r.route ? { route: r.route } : {}) };
+}

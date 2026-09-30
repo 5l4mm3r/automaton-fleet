@@ -29,8 +29,9 @@ import { V18_SQL } from "./migrations-phase18.js";
 import { V19_SQL } from "./migrations-phase19.js";
 import { V20_SQL } from "./migrations-phase20.js";
 import { V21_SQL } from "./migrations-phase21.js";
+import { V22_SQL } from "./migrations-phase22.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 21;
+export const FLEET_PG_SCHEMA_VERSION = 22;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1146,6 +1147,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 19, name: "single_founder_genesis", sql: V19_SQL },
   { version: 20, name: "genesis_bootstrap_capital", sql: V20_SQL },
   { version: 21, name: "gbp_native_capital_controlled_fx", sql: V21_SQL },
+  { version: 22, name: "neutral_cognition_routing_inert", sql: V22_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1177,6 +1179,11 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_research_record(text, uuid, text, text, text, integer, integer, text, integer, integer, boolean, text, integer)",
   "svc_fx_record(text, text, bigint, text, text, text, date)",
   "svc_fx_status()",
+  // v22: neutral cognition routing (inert until enabled): routed authorize/record, routing state, action boundary.
+  "svc_cognition_routing_state(text)",
+  "svc_cognition_routed_authorize(text, bigint, jsonb, text)",
+  "svc_cognition_routed_record(text, uuid, text, integer, integer, text, text, jsonb, text, text, integer, integer, text, integer, integer, integer, text, text, jsonb)",
+  "svc_action_cognition_verify(text, text, bigint, text, text)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */

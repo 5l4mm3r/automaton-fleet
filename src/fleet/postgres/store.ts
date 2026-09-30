@@ -1727,6 +1727,32 @@ export class PgFleetStore {
     );
   }
 
+  /** Schema v22: routing state for one founder (global switch AND per-founder opt-in) and the tier mappings. */
+  async cognitionRoutingState(agentId: string): Promise<Record<string, unknown> | null> {
+    return this.tx(async (c) => (await c.query("SELECT svc_cognition_routing_state($1) AS r", [agentId])).rows[0]?.r ?? null);
+  }
+
+  /** Schema v22: routed authorization (legacy breakers + route snapshot + duplicate-failure guard). */
+  async cognitionRoutedAuthorize(agentId: string, estimateUsdCents: number, route: Record<string, unknown>, promptSha256: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_cognition_routed_authorize($1, $2, $3, $4) AS r", [agentId, estimateUsdCents, JSON.stringify(route), promptSha256])).rows[0].r);
+  }
+
+  /** Schema v22: record a routed call at its snapshot prices, with routing observability. */
+  async cognitionRoutedRecord(agentId: string, requestId: string, r: CognitionRecord, obs: { packetBytes?: number | null; thinkingTokens?: number | null; promptCache?: string | null }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) =>
+      (await c.query("SELECT svc_cognition_routed_record($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) AS r", [
+        agentId, requestId, r.outcome, r.inputTokens, r.outputTokens, r.promptSha256, r.responseSha256, JSON.stringify(r.toolCalls), r.errorCode,
+        r.usageSource, r.attempts, r.providerStatus ?? null, r.responseModel ?? null, r.latencyMs ?? null,
+        r.cacheReadTokens ?? 0, r.cacheWriteTokens ?? 0, r.providerRequestId ?? null, r.stopReason ?? null, JSON.stringify(obs),
+      ])).rows[0].r,
+    );
+  }
+
+  /** Schema v22: consequential-action boundary (single-use link to the producing cognition call at the class's minimum tier). */
+  async actionCognitionVerify(agentId: string, actionClass: string, amountMinor: number | null, toolCallId: string | null, actionSha256: string | null): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_action_cognition_verify($1, $2, $3, $4, $5) AS r", [agentId, actionClass, amountMinor, toolCallId, actionSha256])).rows[0].r);
+  }
+
   /** Schema v18: authorize (and audit) one founder research attempt: switch, pause, lifecycle, capability, quotas. */
   async researchAuthorize(agentId: string, url: string, host: string, purpose: string): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.tx(async (c) => (await c.query("SELECT svc_research_authorize($1, $2, $3, $4) AS r", [agentId, url, host, purpose])).rows[0].r);

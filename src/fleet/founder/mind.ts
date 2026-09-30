@@ -21,7 +21,8 @@ import type { FounderToolbox, ToolOutcome } from "./toolbox.js";
 
 export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
-  infer(messages: unknown[], waitMs?: number): Promise<{ content: string; toolCalls: ToolCall[]; usage: { inputTokens: number; outputTokens: number }; chargedCents: number; requestId: string; thinking?: ThinkingBlock[]; blockOrder?: string[] }>;
+  /** v22: `route` is the task's routing request (omitted by legacy runtimes; FleetController decides the tier). */
+  infer(messages: unknown[], waitMs?: number, route?: Record<string, unknown>): Promise<{ content: string; toolCalls: ToolCall[]; usage: { inputTokens: number; outputTokens: number }; chargedCents: number; requestId: string; thinking?: ThinkingBlock[]; blockOrder?: string[] }>;
 }
 
 export interface TurnResult {
@@ -78,7 +79,8 @@ export class FounderMind {
   private idleBackoff = 0;
   private idleSkip = 0;
 
-  constructor(private readonly o: { ports: MindPorts; toolbox: FounderToolbox; stateDir: string; maxStepsPerTurn?: number; log?: (event: string, detail?: Record<string, unknown>) => void }) {}
+  constructor(private readonly o: { ports: MindPorts; toolbox: FounderToolbox; stateDir: string; maxStepsPerTurn?: number; log?: (event: string, detail?: Record<string, unknown>) => void;
+    /** v22: the task class of ordinary steps (sent as a routing request; absent = legacy request body). */ taskClass?: string }) {}
 
   private history(): ChatMessage[] {
     try {
@@ -134,7 +136,7 @@ export class FounderMind {
     for (let step = 0; step < maxSteps; step++) {
       let r;
       try {
-        r = await this.o.ports.infer(fit(messages), waitMs);
+        r = this.o.taskClass ? await this.o.ports.infer(fit(messages), waitMs, { taskClass: this.o.taskClass }) : await this.o.ports.infer(fit(messages), waitMs);
       } catch (err) {
         const code = (err as { code?: string }).code ?? "FLEET_COGNITION_ERROR";
         if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED") this.restUntil = Date.now() + 60_000;

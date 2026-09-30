@@ -662,15 +662,35 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
   ] : []) {
     if (!have.has(need)) problems.push(`cognition surface: trigger ${need.replace(":", ".")} is missing or disabled`);
   }
+  // v22: routing policy rows cannot be deleted; the action-minimum table and action links are append-only.
+  const v22 = (await db.query(`SELECT 1 FROM pg_tables WHERE schemaname = $1 AND tablename = 'fleet_cognition_tiers'`, [schema])).rows.length > 0;
+  for (const need of v22 ? [
+    "fleet_cognition_routing:fleet_cognition_routing_no_delete", "fleet_cognition_tiers:fleet_cognition_tiers_no_delete",
+    "fleet_action_min_tier:fleet_action_min_tier_no_change", "fleet_action_min_tier:fleet_action_min_tier_no_truncate",
+    "fleet_action_cognition_links:fleet_action_cognition_links_no_change", "fleet_action_cognition_links:fleet_action_cognition_links_no_truncate",
+  ] : []) {
+    if (!have.has(need)) problems.push(`cognition surface: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  if (v22) {
+    const ck = await db.query<{ t: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = 'fleet_cognition_tiers' AND k.contype = 'c'`, [schema]);
+    if (!ck.rows.some((r) => /NOT enabled\) OR \(verified_at IS NOT NULL/.test(r.t))) problems.push("cognition surface: a tier can be enabled without verification (CHECK missing)");
+  }
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`,
     [schema],
   );
   const writers: Record<string, Set<string>> = {
-    fleet_cognition_log: new Set(["svc_cognition_record"]),
+    fleet_cognition_log: new Set(["svc_cognition_record", "svc_cognition_routed_record"]),
     fleet_cognition_policy: new Set(["fleet_cognition_set_policy"]),
     fleet_founder_cognition: new Set(["fleet_founder_cognition_set", "fleet_agents_cognition_stop"]),
-    fleet_cognition_accrual: new Set(["svc_cognition_record"]),
+    fleet_cognition_accrual: new Set(["svc_cognition_record", "svc_cognition_routed_record"]),
+    // v22 routing: policy data only through the owner functions; action links only through the boundary check.
+    fleet_cognition_routing: new Set(["fleet_cognition_routing_set"]),
+    fleet_cognition_tiers: new Set(["fleet_cognition_tier_set", "fleet_cognition_tier_verify", "fleet_cognition_tier_enable"]),
+    fleet_founder_routing: new Set(["fleet_founder_routing_set"]),
+    fleet_action_cognition_links: new Set(["svc_action_cognition_verify"]),
     // v18 research: only the controller functions write the audit; only the owner functions write the switches.
     fleet_research_attempts: new Set(["svc_research_authorize"]),
     fleet_research_refusals_suppressed: new Set(["svc_research_authorize"]),
@@ -679,14 +699,14 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_founder_research: new Set(["fleet_founder_research_set"]),
     // v21: rates only through the validated insert; provider credit only through the owner recorder and inference recording.
     fleet_fx_rates: new Set(["fleet_fx_insert"]),
-    fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record"]),
+    fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record"]),
   };
   for (const f of fns.rows) {
     for (const t of writeTargets(f.src)) {
       if (writers[t] && !writers[t].has(f.name)) problems.push(`cognition surface: ${f.name} writes a cognition control table`);
     }
     // Dynamic SQL naming a cognition table would hide its writes from the check above.
-    if (/\bEXECUTE\b/i.test(codeOf(f.src)) && /fleet_(cognition_log|cognition_policy|founder_cognition|cognition_accrual|research_[a-z_]+|founder_research)\b/i.test(f.src)) {
+    if (/\bEXECUTE\b/i.test(codeOf(f.src)) && /fleet_(cognition_log|cognition_policy|founder_cognition|cognition_accrual|research_[a-z_]+|founder_research|cognition_routing|cognition_tiers|founder_routing|action_cognition_links|action_min_tier)\b/i.test(f.src)) {
       problems.push(`cognition surface: ${f.name} uses dynamic SQL near a cognition control table`);
     }
   }
