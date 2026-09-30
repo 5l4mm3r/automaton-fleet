@@ -43,6 +43,8 @@
  *                      --cache-read-microcents N [--thinking adaptive] [--effort low|medium|high|max]   (voids verification)
  *   cognition-tier-verify <tier> <model> <verification reference…>    after checking the model on the provider account
  *   cognition-tier-enable <tier> | cognition-tier-disable <tier>      a tier can only be enabled once verified
+ *   cognition-tier-cache <T2|T3> <off|prefix|prefix+tail>             v23 prompt-cache policy of a tier (T1 is always off; a
+ *                                                                     question-scoped escalation never caches, whatever the tier says)
  *   cognition-routing-enable [--major-spend N] | cognition-routing-disable     OWNER GATE (global switch)
  *   founder-routing <agentId> enable|disable                          per-founder opt-in (moves that founder off the legacy model)
  *   cognition-report [--hours N]                                      cost and outcome per task class × tier
@@ -51,7 +53,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import { runGenesisDryRun } from "./dry-run.js";
-import { FOUNDER_TOOLS } from "../cognition/types.js";
+import { FOUNDER_ROUTED_TOOLS, FOUNDER_TOOLS } from "../cognition/types.js";
 import { GENESIS_FOUNDERS, parseFxMicro, type AttestationEvidence, type PgGenesisAdmin } from "./admin.js";
 
 export const GENESIS_COMMANDS = new Set([
@@ -61,7 +63,7 @@ export const GENESIS_COMMANDS = new Set([
   "cognition-policy", "cognition-enable", "cognition-disable", "founder-cognition", "cognition-status", "cognition-log", "founders-report",
   "research-policy", "research-enable", "research-disable", "founder-research", "research-log",
   "cognition-routing", "cognition-tier-set", "cognition-tier-verify", "cognition-tier-enable", "cognition-tier-disable",
-  "cognition-routing-enable", "cognition-routing-disable", "founder-routing", "cognition-report",
+  "cognition-routing-enable", "cognition-routing-disable", "founder-routing", "cognition-report", "cognition-tier-cache",
 ]);
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -183,7 +185,7 @@ export async function runGenesisCommand(
       if (p[0] !== undefined && !ULID.test(p[0])) throw new Error("usage: research-log [agentId] [--limit N]");
       return ok(await g.researchLog(p[0] ?? null, optInt("--limit", 1) ?? 50));
     case "founders-report":
-      return ok(await g.foundersReport(FOUNDER_TOOLS.map((t) => t.name)));
+      return ok(await g.foundersReport([...FOUNDER_TOOLS, ...FOUNDER_ROUTED_TOOLS].map((t) => t.name)));
     case "cognition-routing":
       return ok(await g.cognitionRouting());
     case "cognition-tier-set": {
@@ -205,6 +207,9 @@ export async function runGenesisCommand(
     case "cognition-tier-disable":
       if (!/^T[123]$/.test(p[0] ?? "")) throw new Error(`usage: ${cmd} <T1|T2|T3>`);
       return ok(await g.cognitionTierEnable(p[0], cmd === "cognition-tier-enable", actor));
+    case "cognition-tier-cache":
+      if (!/^T[123]$/.test(p[0] ?? "") || !["off", "prefix", "prefix+tail"].includes(p[1] ?? "")) throw new Error("usage: cognition-tier-cache <T1|T2|T3> <off|prefix|prefix+tail>");
+      return ok(await g.cognitionTierCacheSet(p[0], p[1], actor));
     case "cognition-routing-enable":
     case "cognition-routing-disable":
       return ok(await g.cognitionRoutingSet(cmd === "cognition-routing-enable", optInt("--major-spend", 1) ?? null, actor));

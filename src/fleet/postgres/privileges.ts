@@ -671,6 +671,20 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
   ] : []) {
     if (!have.has(need)) problems.push(`cognition surface: trigger ${need.replace(":", ".")} is missing or disabled`);
   }
+  // v23: the runtime-upgrade history is append-only and guarded; a founder's registered runtime moves only inside it.
+  const v23 = (await db.query(`SELECT 1 FROM pg_tables WHERE schemaname = $1 AND tablename = 'fleet_founder_runtime_upgrades'`, [schema])).rows.length > 0;
+  for (const need of v23 ? [
+    "fleet_founder_runtime_upgrades:fleet_founder_runtime_upgrades_guard", "fleet_founder_runtime_upgrades:fleet_founder_runtime_upgrades_no_delete",
+    "fleet_founder_runtime_upgrades:fleet_founder_runtime_upgrades_no_truncate", "fleet_agents:fleet_agents_founder_runtime_guard",
+  ] : []) {
+    if (!have.has(need)) problems.push(`founder runtime upgrade: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  if (v23) {
+    const ck = await db.query<{ t: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = 'fleet_cognition_tiers' AND k.conname = 'fleet_cognition_tiers_t1_no_cache'`, [schema]);
+    if (!ck.rows.length) problems.push("cognition surface: T1 prompt caching is not constrained off (CHECK missing)");
+  }
   if (v22) {
     const ck = await db.query<{ t: string }>(
       `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -688,7 +702,10 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_cognition_accrual: new Set(["svc_cognition_record", "svc_cognition_routed_record"]),
     // v22 routing: policy data only through the owner functions; action links only through the boundary check.
     fleet_cognition_routing: new Set(["fleet_cognition_routing_set"]),
-    fleet_cognition_tiers: new Set(["fleet_cognition_tier_set", "fleet_cognition_tier_verify", "fleet_cognition_tier_enable"]),
+    fleet_cognition_tiers: new Set(["fleet_cognition_tier_set", "fleet_cognition_tier_verify", "fleet_cognition_tier_enable", "fleet_cognition_tier_cache_set"]),
+    // v23: a living founder's runtime-upgrade history only through the lifecycle functions.
+    fleet_founder_runtime_upgrades: new Set(["fleet_founder_runtime_upgrade_prepare", "fleet_founder_runtime_upgrade_commit", "fleet_founder_runtime_upgrade_verify",
+      "fleet_founder_runtime_upgrade_rollback", "fleet_founder_runtime_upgrade_rollback_verify", "fleet_founder_runtime_upgrade_abort"]),
     fleet_founder_routing: new Set(["fleet_founder_routing_set"]),
     fleet_action_cognition_links: new Set(["svc_action_cognition_verify"]),
     // v18 research: only the controller functions write the audit; only the owner functions write the switches.

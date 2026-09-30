@@ -41,7 +41,8 @@ describe("routing verification runner (fake Messages API, real process)", () => 
       expect(r.out + r.err).not.toContain(KEY);
       const res = JSON.parse(r.out.split("\n").find((l) => l.startsWith("RESULT "))!.slice(7));
       expect(res.stopped).toBeNull();
-      expect(res.promptCache).toBe("prefix");
+      // v23: the cache mode is decided per call from each tier's policy (T1 off; T2/T3 prefix; a one-off question never caches).
+      expect(res.tierPromptCache).toEqual({ T1: "off", T2: "prefix", T3: "prefix" });
       expect(res.controllerPromptCache).toBe("off");
       const c = res.calls;
       expect(c.map((x: Record<string, unknown>) => [x.tier, x.model, x.scope])).toEqual([
@@ -53,10 +54,13 @@ describe("routing verification runner (fake Messages API, real process)", () => 
         expect(x.requests[0].responseModel).toBe(x.model);
       }
       expect(c[0].requests[0]).toMatchObject({ tools: 0, thinking: null, effort: null });
-      expect(c[1].requests[0]).toMatchObject({ thinking: { type: "adaptive" }, effort: "medium", systemCached: true, tools: 16 });
+      expect(c[0].requests[0].systemCached).toBe(false);
+      expect(c[1].requests[0]).toMatchObject({ thinking: { type: "adaptive" }, effort: "medium", systemCached: true, tools: 18 }); // toolbox + the two cognition tools
       expect(c[1].usage.cacheWriteTokens).toBeGreaterThan(0);
       expect(c[2].usage.cacheReadTokens).toBe(c[1].usage.cacheWriteTokens);
-      expect(c[3].requests[0]).toMatchObject({ messages: 1, model: "claude-opus-5-5", effort: "medium" });
+      // The T3 escalation: one decision packet, no toolbox, no cache write premium.
+      expect(c[3].requests[0]).toMatchObject({ messages: 1, model: "claude-opus-5-5", effort: "medium", systemCached: false, tools: 0 });
+      expect(c[3].usage.cacheWriteTokens ?? 0).toBe(0);
       expect(c[3].thinkingBlocks).toBeGreaterThan(0); // Opus produced signed thinking…
       expect(c[4].requests[0].containsSignature).toBe(false); // …which never reached Sonnet
       for (const x of c) expect(x.costMicrocents).toBe(costMicrocents(x.usage, VERIFY_TIERS.find((t) => t.model === x.model)!.prices));

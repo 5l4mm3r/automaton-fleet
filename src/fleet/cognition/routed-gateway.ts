@@ -11,14 +11,16 @@
  *        transcript replay; the next ordinary call routes by its own class again
  *     5. provider-bound thinking only goes back to the model that produced it (otherwise stripped)
  *     6. svc_cognition_routed_authorize (all legacy breakers + route snapshot + duplicate-failure guard)
- *     7. provider.chat with the stable cached prefix (tools + charter) when prompt caching is on; T1 gets a compact
- *        routine charter and no toolbox (one bounded chore, never padded)
+ *     7. provider.chat; T1 gets a compact routine charter and no toolbox (one bounded chore, never padded); a
+ *        question-scoped escalation gets the charter and no toolbox (it answers, the lower tier acts). Prompt caching
+ *        is decided per call by cachePolicy (schema v23): tier policy × scope × evidenced reuse — never a blanket
+ *        setting, and never a write premium for a one-off escalation
  *     8. svc_cognition_routed_record: charge at the snapshot prices; log tier/class/escalation/packet/cache/thinking
  *        and, per tool call, its id and consequential-action digest (the action boundary's evidence)
  */
 
 import crypto from "crypto";
-import { FOUNDER_CHARTER, FOUNDER_ROUTINE_CHARTER, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
+import { FOUNDER_CHARTER, FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTED_TOOLS, FOUNDER_ROUTINE_CHARTER, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
 import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, MAX_COGNITION_DEADLINE_MS, toolsFor, validateMessages } from "./gateway.js";
 import { RouteError, actionDigest, candidateFor, parseRouteRequest, route, type RouteDecision, type TierCandidate } from "./router.js";
 import { DECISION_PACKET_VERSION, TASK_PACKET_VERSION, taskPacketProblems } from "./task-packet.js";
@@ -29,23 +31,57 @@ export interface RoutedCognitionPorts {
   cognitionStatus(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }>;
   routingState(agentId: string): Promise<Record<string, unknown> | null>;
   authorize(agentId: string, estimateUsdCents: number, route: Record<string, unknown>, promptSha256: string): Promise<Record<string, unknown> & { ok: boolean }>;
-  record(agentId: string, requestId: string, r: CognitionRecord, obs: { packetBytes: number | null; thinkingTokens: number | null; promptCache: string | null }): Promise<Record<string, unknown> & { ok: boolean }>;
+  record(agentId: string, requestId: string, r: CognitionRecord, obs: { packetBytes: number | null; thinkingTokens: number | null; promptCache: string | null; cacheReason?: string | null }): Promise<Record<string, unknown> & { ok: boolean }>;
 }
 
-/** Builds the provider for one candidate (the controller's credential; model/thinking/effort from the owner's mapping). */
-export type ProviderFactory = (c: TierCandidate, effortOverride: "high" | null) => CognitionProvider & { promptCache?: string };
+export type PromptCachePolicy = "off" | "prefix" | "prefix+tail";
+
+/**
+ * Builds the provider for one candidate (the controller's credential; model/thinking/effort from the owner's mapping)
+ * with the prompt-cache mode decided for THIS call.
+ */
+export type ProviderFactory = (c: TierCandidate, effortOverride: "high" | null, promptCache: PromptCachePolicy) => CognitionProvider & { promptCache?: string };
+
+/** The provider's default cache lifetime: a prefix written longer ago than this is not read back. */
+export const PROMPT_CACHE_TTL_S = 300;
+
+/**
+ * Prompt-cache policy for one routed call (schema v23; R22 evidence in docs/evaluations/routing-v22):
+ *   T1            off — a compact routine prompt, below the provider's cacheable minimum and never padded to reach it;
+ *   T2            the tier's policy (baseline `prefix`): the stable tools+charter prefix is reused within the tool loop;
+ *   T3 question   off — a one-off escalation would pay the write premium and never read it back;
+ *   T3 task step  the tier's policy only when reuse is evidenced (the same model served this founder's previous call
+ *                 within the cache lifetime); otherwise off.
+ * Deterministic in (tier, scope, tier policy, the founder's last model and its age): never commercial history.
+ */
+export function cachePolicy(d: Pick<RouteDecision, "tier" | "scope">, c: Pick<TierCandidate, "model" | "promptCache">,
+  last: { lastModel?: unknown; lastAgeS?: unknown } = {}): { mode: PromptCachePolicy; reason: string } {
+  const configured: PromptCachePolicy = c.promptCache === "prefix" || c.promptCache === "prefix+tail" ? c.promptCache : "off";
+  if (d.tier === "T1") return { mode: "off", reason: "T1 routine: compact, never padded" };
+  if (configured === "off") return { mode: "off", reason: "tier policy off" };
+  if (d.scope === "question") return { mode: "off", reason: "one-off escalation: no write premium" };
+  if (d.tier === "T3") {
+    const warm = last.lastModel === c.model && typeof last.lastAgeS === "number" && last.lastAgeS >= 0 && last.lastAgeS <= PROMPT_CACHE_TTL_S;
+    return warm ? { mode: configured, reason: "T3 task continuing on the same model" } : { mode: "off", reason: "T3 step without evidenced reuse" };
+  }
+  return { mode: configured, reason: "T2 stable prefix: reuse expected" };
+}
 
 const sha = (s: string) => crypto.createHash("sha256").update(s, "utf8").digest("hex");
 const approxTokens = (s: string) => Math.ceil(s.length / 4);
 
-/** First line of a rendered packet and its JSON body (line 3), or null. */
+/**
+ * First line of a rendered packet and its JSON body, or null. The body is the single JSON line after the header lines
+ * (a task packet has three, a decision packet two: see renderTaskPacket / renderDecisionPacket).
+ */
 function packetOf(m: ChatMessage | undefined): { kind: string; bytes: number; problems: string[] } | null {
   if (!m || m.role !== "user") return null;
   const head = /^(TASK PACKET|CRITICAL DECISION PACKET) \((fleet-task-v1|fleet-decision-v1)\)/.exec(m.content);
   if (!head) return null;
   const lines = m.content.split("\n");
+  const at = lines.findIndex((l, i) => i > 0 && l.startsWith("{"));
   let body: unknown = null;
-  try { body = JSON.parse(lines.slice(2).join("\n")); } catch { return { kind: head[2], bytes: Buffer.byteLength(m.content), problems: ["packet body is not JSON"] }; }
+  try { body = JSON.parse(at < 0 ? "" : lines.slice(at).join("\n")); } catch { return { kind: head[2], bytes: Buffer.byteLength(m.content), problems: ["packet body is not JSON"] }; }
   const problems = taskPacketProblems(body);
   if ((body as { packet?: string })?.packet !== head[2]) problems.push("packet kind does not match its header");
   return { kind: head[2], bytes: Buffer.byteLength(m.content), problems };
@@ -63,7 +99,7 @@ export async function inferRouted(
   body: Record<string, unknown>,
   opts: { deadlineMs?: number; now?: () => number } = {},
 ): Promise<{ content: string; toolCalls: unknown[]; usage: ChatResult["usage"]; usageSource: string; chargedCents: number; chargedMicrocents: number; requestId: string;
-  route: { tier: string; model: string; taskClass: string; scope: string; source: string }; thinking?: ThinkingBlock[]; blockOrder?: string[] }> {
+  route: { tier: string; model: string; taskClass: string; scope: string; source: string; promptCache: string }; thinking?: ThinkingBlock[]; blockOrder?: string[] }> {
   const now = opts.now ?? Date.now;
   let messages = validateMessages(body.messages);
   const caps = await ports.capabilities(agentId, token);
@@ -104,8 +140,11 @@ export async function inferRouted(
   } else if (packet?.kind === DECISION_PACKET_VERSION) {
     throw new CognitionError(400, "FLEET_ROUTE_INVALID", "a decision packet is only sent with an escalation");
   }
-  // 5. Provider-bound thinking stays with the model that produced it.
-  if (rs.lastModel !== candidate.model) messages = stripThinking(messages);
+  // 5. Provider-bound thinking stays with the model that produced it: it is handed back only to the model behind this
+  //    founder's most recent conversational call (a T1 chore or a question-scoped escalation in between is a separate
+  //    conversation and does not count), and never crosses to another model.
+  const producer = typeof rs.conversationModel === "string" ? rs.conversationModel : rs.lastModel;
+  if (producer !== candidate.model) messages = stripThinking(messages);
 
   // T1 is a single bounded chore with a small context: a compact routine charter, no toolbox, no tool loop.
   // Anything else is refused — never silently promoted to a higher tier.
@@ -113,9 +152,14 @@ export async function inferRouted(
   if (routine && messages.some((m) => m.role !== "user")) {
     throw new CognitionError(400, "FLEET_ROUTE_T1_SINGLE_TASK", "T1 is one bounded routine task: user material only, no tool loop");
   }
-  const system = routine ? FOUNDER_ROUTINE_CHARTER : FOUNDER_CHARTER;
-  const provider = providerFor(candidate, decision.effort);
-  const tools = routine ? [] : toolsFor(Array.isArray(caps.allowed) ? (caps.allowed as string[]) : []);
+  // A question-scoped escalation answers; it does not act: the charter's rules and priors, no toolbox.
+  const question = decision.scope === "question";
+  const system = routine ? FOUNDER_ROUTINE_CHARTER : question ? FOUNDER_CHARTER : `${FOUNDER_CHARTER}\n${FOUNDER_ROUTED_ADDENDUM}`;
+  const cache = cachePolicy(decision, candidate, rs);
+  const provider = providerFor(candidate, decision.effort, cache.mode);
+  const allowed = new Set(Array.isArray(caps.allowed) ? (caps.allowed as string[]) : []);
+  // Ordinary routed steps also get the cognition tools (delegate a routine chore, escalate one question).
+  const tools = routine || question ? [] : [...toolsFor([...allowed]), ...FOUNDER_ROUTED_TOOLS.filter((t) => allowed.has(t.capability))];
   const maxTokens = candidate.maxOutputTokens;
   const promptText = JSON.stringify({ system, messages, tools: tools.map((t) => t.name) });
   const promptSha = sha(promptText);
@@ -125,6 +169,7 @@ export async function inferRouted(
     tier: decision.tier, provider: candidate.provider, model: candidate.model, taskClass: decision.taskClass, ...(req.taskId ? { taskId: req.taskId } : {}),
     requestedTier: decision.requestedTier, escalationReason: decision.escalationReason, ...(req.escalation?.parentRequestId ? { parentRequestId: req.escalation.parentRequestId } : {}),
     source: decision.source, scope: decision.scope, minTier: decision.minTier, maxTier: decision.maxTier,
+    ...(req.actionClass ? { actionClass: req.actionClass } : {}),
     thinking: candidate.thinking, effort: decision.effort ?? candidate.effort,
   };
   const auth = await ports.authorize(agentId, Math.max(1, Math.ceil(estimateMicro / 1_000_000)), snapshot, promptSha);
@@ -135,7 +180,7 @@ export async function inferRouted(
   const requestId = String(auth.requestId);
   const deadlineMs = Math.min(MAX_COGNITION_DEADLINE_MS, Math.max(1_000, opts.deadlineMs ?? DEFAULT_COGNITION_DEADLINE_MS));
   const started = now();
-  const obs = { packetBytes: packet?.bytes ?? null, thinkingTokens: null as number | null, promptCache: provider.promptCache ?? null };
+  const obs = { packetBytes: packet?.bytes ?? null, thinkingTokens: null as number | null, promptCache: cache.mode as string | null, cacheReason: cache.reason as string | null };
 
   let result: ChatResult | null = null;
   let failure: ProviderError | null = null;
@@ -177,7 +222,7 @@ export async function inferRouted(
   return {
     content: result.content, toolCalls: result.toolCalls, usage: result.usage, usageSource: String(rec.usageSource ?? result.usageSource),
     chargedCents: Number(rec.chargedCents ?? 0), chargedMicrocents: Number(rec.chargedMicrocents ?? 0), requestId,
-    route: { tier: decision.tier, model: candidate.model, taskClass: decision.taskClass, scope: decision.scope, source: decision.source },
+    route: { tier: decision.tier, model: candidate.model, taskClass: decision.taskClass, scope: decision.scope, source: decision.source, promptCache: cache.mode },
     ...(result.thinking?.length ? { thinking: result.thinking, ...(result.blockOrder ? { blockOrder: result.blockOrder } : {}) } : {}),
   };
 }

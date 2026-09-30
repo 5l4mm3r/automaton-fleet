@@ -221,8 +221,10 @@ export function readCognitionKey(file: string, uid: number | null = process.getu
  * by the routing verification runner, so both exercise the same code.
  */
 export function routedProviderFactory(base: AnthropicProvider): ProviderFactory {
-  return (c, effortOverride) => {
-    const p = base.with({ model: c.model, thinking: c.thinking === "adaptive" ? { type: "adaptive" } : undefined, effort: effortOverride ?? c.effort ?? undefined });
+  // Schema v23: the prompt-cache mode is decided per routed call (tier policy × scope × evidenced reuse), never taken
+  // from this controller's FLEET_COGNITION_PROMPT_CACHE, which governs the legacy single-model path only.
+  return (c, effortOverride, promptCache) => {
+    const p = base.with({ model: c.model, thinking: c.thinking === "adaptive" ? { type: "adaptive" } : undefined, effort: effortOverride ?? c.effort ?? undefined, promptCache });
     return Object.assign(p, { promptCache: p.settings.promptCache });
   };
 }

@@ -122,6 +122,9 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   request_identity_fact: "identity.claim_request",
   // Pre-Genesis step 4: public web research through FleetController's isolated fetcher (founder-v2)
   web_fetch: "research.web",
+  // R23 routed founder runtime: cognition requests through FleetController (no new authority: the planning class)
+  routine_task: "planning",
+  escalate_question: "planning",
   // constitutional exclusions
   edit_own_file: "self_modification",
   update_soul: "self_modification",

@@ -9,6 +9,17 @@
  *   attest <genesisId>                       runtime + host evidence per founder (or whole-set rollback)
  *   activate <genesisId> <authSha256>        OWNER GATE: credentials delivered, runtimes restart active
  *   teardown <genesisId>                     stop and delete every runtime of that Genesis
+ *   pin <agentId>                            (re)write a living founder's pin to its REGISTERED runtime; no restart
+ *
+ * R23 — runtime upgrade of a LIVING founder (schema v23; src/fleet/founder/upgrade.ts). The founder stays the same
+ * economic agent; its process is stopped and started only by these explicit operations:
+ *   upgrade-status <agentId>                 registered runtime, host pin, running process, upgrade history
+ *   upgrade-preflight <agentId>              prove the upgrade to the approved runtime is possible; changes NOTHING
+ *   upgrade-runtime <agentId> [--health-timeout S]      OWNER GATE: stop → snapshot → registry pin → host pin → start →
+ *                                            health proof → verify; any failure rolls back to the previous runtime
+ *   rollback-runtime <agentId> <upgradeId> <reason…>    OWNER GATE: return to the runtime recorded by that upgrade
+ *   upgrade-rehearsal <fromCommit>           the whole lifecycle + routed cognition on a SYNTHETIC founder created on
+ *                                            the installed release <fromCommit>, THROWAWAY registry, fake provider
  *
  * The acting owner is operator:<SUDO_USER>. provision/attest/activate/teardown
  * use the production registry through admin.env; the database still refuses
@@ -24,7 +35,10 @@ import { DEFAULT_RUNTIME_ENV_FILE, loadAdminEnv, readEnvFile } from "../secret-f
 import { loadRuntimeRelease, runningRuntimeDir } from "../runtime.js";
 import { PgGenesisAdmin } from "../genesis/admin.js";
 import { createRedactedLineLogger } from "../redact.js";
-import { FOUNDER_STATE_ROOT, SystemdFounderHost } from "./host.js";
+import { FOUNDER_STATE_ROOT, RELEASES_DIR, SystemdFounderHost, founderPinPaths } from "./host.js";
+import { computeBuildIdentity } from "../attestation.js";
+import { rollbackFounderRuntime, upgradeFounderRuntime } from "./upgrade.js";
+import { runUpgradeRehearsal } from "./upgrade-rehearsal.js";
 import { FounderProvisioner } from "./provisioner.js";
 import { FOUNDER_UNREADABLE_PATHS } from "./runtime.js";
 import { findPostgresBin, startEphemeralRegistry } from "./ephemeral-registry.js";
@@ -32,6 +46,9 @@ import { runFounderRehearsal } from "./rehearsal.js";
 import { DEFAULT_FETCHER_SOCKET, unixFetcher } from "../research/client.js";
 
 const PRODUCTION_API_URL = "http://127.0.0.1:8787";
+/** Root-only (0700) home of pre-upgrade state backups: durable founder state, never a credential. */
+const UPGRADE_BACKUP_ROOT = "/var/lib/automaton-fleet-upgrades";
+const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function actorOrDie(): string {
@@ -103,6 +120,35 @@ function founderStateOnHost(): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * What any real-runtime rehearsal on this host must leave untouched: the production registry's population, Genesis
+ * records and switches, and every living production founder's process. Refuses to start over founder units or state
+ * that are not living production founders.
+ */
+async function rehearsalGuard() {
+  const before = await productionSnapshot();
+  const living = new Set(await livingFounders());
+  const foreign = () => [
+    ...founderUnitsOnHost().filter((u) => !living.has(/automaton-fleet-founder@([0-9A-Z]{26})\.service/.exec(u)?.[1] ?? "")),
+    ...founderStateOnHost().filter((d) => !living.has(d)),
+  ];
+  if (foreign().length) throw new Error(`founder units or state that are not living production founders exist on this host (${foreign().slice(0, 3).join(", ")}); refusing to rehearse over them`);
+  const livingPids = [...living].map((id) => ({ id, pid: founderMainPid(id) }));
+  const inv = (x: Record<string, unknown>) => JSON.stringify([x.population, x.cap, x.genesis_records, x.genesis_enabled, x.agents, x.research_enabled]);
+  return {
+    async finish(registryDir: string) {
+      const after = await productionSnapshot();
+      return {
+        production: { before, after, unchanged: inv(before) === inv(after) },
+        productionUnchanged: inv(before) === inv(after),
+        hostClean: foreign().length === 0 && !fs.existsSync(registryDir),
+        livingFounders: { before: livingPids, untouched: livingPids.every((f) => f.pid !== "" && f.pid !== "0" && founderMainPid(f.id) === f.pid) },
+        livingUntouched: livingPids.every((f) => f.pid !== "" && f.pid !== "0" && founderMainPid(f.id) === f.pid),
+      };
+    },
+  };
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -190,29 +236,102 @@ async function main(argv: string[]): Promise<number> {
       }
     }
     case "pin": {
-      // Pin a living founder's unit to its REGISTERED runtime (the release it was attested with). No restart.
+      // Pin a living founder's unit to its REGISTERED runtime (Genesis attestation, or its latest upgrade). No restart.
       actorOrDie();
       const id = rest[0];
-      if (!id || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)) throw new Error("usage: pin <agentId>");
-      const db = new pg.Pool({ connectionString: adminUrl(), max: 1, options: "-c search_path=fleet" });
+      if (!id || !ULID.test(id)) throw new Error("usage: pin <agentId>");
+      const genesis = new PgGenesisAdmin({ connectionString: adminUrl() });
       try {
-        const r = (await db.query(
-          `SELECT a.status, a.runtime_commit, g.runtime_repo, g.runtime_commit AS g_commit, g.runtime_build_id, g.runtime_lockfile_sha256
-             FROM fleet_agents a JOIN fleet_genesis g ON g.genesis_id = a.genesis_id WHERE a.agent_id = $1 AND a.origin IN ('genesis_founder','reseed_founder')`, [id])).rows[0];
-        if (!r) throw new Error("no such founder");
-        if (!["active", "unresponsive"].includes(r.status)) throw new Error(`founder is ${r.status}; only living founders are pinned`);
-        if (r.runtime_commit !== r.g_commit) throw new Error("the founder's registered runtime differs from its Genesis authorization; refusing");
+        const ctx = await genesis.founderRuntimeContext(id);
+        if (!ctx.agent || !["genesis_founder", "reseed_founder"].includes(ctx.agent.origin)) throw new Error("no such founder");
+        if (!["active", "unresponsive"].includes(ctx.agent.status)) throw new Error(`founder is ${ctx.agent.status}; only living founders are pinned`);
+        const cur = await genesis.founderRuntimeCurrent(id);
+        if (!cur) throw new Error("the founder has no registered runtime");
+        if (ctx.agent.runtimeCommit !== cur.commit) throw new Error("the founder's registry row and its runtime record disagree; refusing");
         const host = new SystemdFounderHost();
         const before = host.readPin(id);
-        const pinned = await host.pinRuntime(id, { repo: r.runtime_repo, commit: r.runtime_commit, buildId: r.runtime_build_id, lockfileSha256: r.runtime_lockfile_sha256 });
-        out({ agentId: id, before, pinned, restarted: false, note: "takes effect at the founder's next start; the running process is untouched" });
+        const pinned = await host.pinRuntime(id, { repo: cur.repo, commit: cur.commit, buildId: cur.buildId, lockfileSha256: cur.lockfileSha256 });
+        out({ agentId: id, registered: { commit: cur.commit, source: cur.source }, before, pinned, restarted: false, note: "takes effect at the founder's next start; the running process is untouched" });
         return 0;
       } finally {
-        await db.end();
+        await genesis.close();
       }
     }
+    case "upgrade-status":
+    case "upgrade-preflight":
+    case "upgrade-runtime":
+    case "rollback-runtime": {
+      const actor = actorOrDie();
+      const id = rest[0];
+      if (!id || !ULID.test(id)) throw new Error(`usage: ${cmd} <agentId>${cmd === "rollback-runtime" ? " <upgradeId> <reason…>" : ""}`);
+      const genesis = new PgGenesisAdmin({ connectionString: adminUrl() });
+      try {
+        const host = new SystemdFounderHost();
+        if (cmd === "upgrade-status") {
+          const ctx = await genesis.founderRuntimeContext(id);
+          const pid = await host.pid(id);
+          out({ agentId: id, agent: ctx.agent, approved: ctx.approved, registered: await genesis.founderRuntimeCurrent(id), hostPin: host.readPin(id), mainPid: pid,
+            inFlight: ctx.inFlight, policy: { heartbeatUnresponsiveS: ctx.heartbeatUnresponsiveS, heartbeatDeadS: ctx.heartbeatDeadS }, upgrades: await genesis.founderRuntimeUpgrades(id, 10) });
+          return 0;
+        }
+        if (cmd === "rollback-runtime") {
+          const upgradeId = rest[1];
+          const reason = rest.slice(2).join(" ");
+          if (!upgradeId || !UUID.test(upgradeId) || reason.length < 3) throw new Error("usage: rollback-runtime <agentId> <upgradeId> <reason…>");
+          const r = await rollbackFounderRuntime({ agentId: id, host, registry: genesis, upgradeId, reason, actor, log });
+          out(r);
+          return r.ok ? 0 : 1;
+        }
+        // The target is never chosen on the command line: it is the release this tool runs from, which must be the
+        // pinned AND owner-approved runtime (the registry refuses anything else at prepare and again at commit).
+        const target = loadRuntimeRelease(readEnvFile(process.env.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE));
+        if (!target) throw new Error("no pinned runtime release in runtime.env");
+        const i = rest.indexOf("--health-timeout");
+        const healthS = i >= 0 ? Number(rest[i + 1]) : 120;
+        if (!Number.isInteger(healthS) || healthS < 30 || healthS > 300) throw new Error("--health-timeout is 30..300 seconds");
+        const r = await upgradeFounderRuntime({ agentId: id, host, registry: genesis, target, actor, backupRoot: UPGRADE_BACKUP_ROOT, dryRun: cmd === "upgrade-preflight", healthTimeoutMs: healthS * 1_000, log });
+        out(r);
+        return r.ok ? 0 : 1;
+      } finally {
+        await genesis.close();
+      }
+    }
+    case "upgrade-rehearsal": {
+      const actor = actorOrDie();
+      const fromCommit = rest[0];
+      if (!fromCommit || !/^[0-9a-f]{40}$/.test(fromCommit)) throw new Error("usage: upgrade-rehearsal <fromCommit>   (the full commit of an installed previous release)");
+      const to = loadRuntimeRelease(readEnvFile(process.env.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE));
+      if (!to) throw new Error("no pinned runtime release in runtime.env");
+      const releaseDir = runningRuntimeDir(import.meta.url);
+      if (fs.realpathSync(releaseDir) !== fs.realpathSync(path.join(RELEASES_DIR, to.commit))) throw new Error("run the rehearsal from the pinned release (scripts/fleet-founders.sh)");
+      const fromId = computeBuildIdentity(path.join(RELEASES_DIR, fromCommit));
+      const from = { repo: to.repo, commit: fromCommit, buildId: fromId.buildId, lockfileSha256: fromId.lockfileSha256 };
+      if (from.commit === to.commit) throw new Error("the previous release is the pinned release: nothing to rehearse");
+      const bin = findPostgresBin();
+      if (!bin) throw new Error("PostgreSQL server binaries not found");
+      const guard = await rehearsalGuard();
+      const reg = await startEphemeralRegistry({ bin, rolesSql: path.join(releaseDir, "scripts/fleet-db-roles.sql"), runAs: "postgres", parent: "/var/tmp" });
+      const backupRoot = fs.mkdtempSync(path.join("/var/tmp", "fleet-upgrade-rehearsal-"));
+      let report;
+      try {
+        report = await runUpgradeRehearsal({
+          registry: reg, host: new SystemdFounderHost(undefined, undefined, from), from, to, actor, backupRoot, log,
+          pinEnvFile: (agentId) => founderPinPaths(agentId).env,
+          // The shipped unit heartbeats every 30 s and thinks on every 2nd heartbeat.
+          timeoutMs: 360_000, healthTimeoutMs: 120_000, pollMs: 1_000,
+        });
+      } finally {
+        reg.stop();
+        fs.rmSync(backupRoot, { recursive: true, force: true });
+      }
+      const end = await guard.finish(reg.dir);
+      const pass = report.pass && end.productionUnchanged && end.hostClean && end.livingUntouched;
+      out({ ...report, pass, production: end.production, hostClean: end.hostClean, livingFounders: end.livingFounders });
+      return pass ? 0 : 1;
+    }
     default:
-      console.error("usage: fleet-founders.sh status | rehearsal | provision <genesisId> | attest <genesisId> | activate <genesisId> <authSha256> | teardown <genesisId> | pin <agentId>");
+      console.error("usage: fleet-founders.sh status | rehearsal | provision <genesisId> | attest <genesisId> | activate <genesisId> <authSha256> | teardown <genesisId> | pin <agentId>\n"
+        + "       fleet-founders.sh upgrade-status <agentId> | upgrade-preflight <agentId> | upgrade-runtime <agentId> [--health-timeout S] | rollback-runtime <agentId> <upgradeId> <reason…> | upgrade-rehearsal <fromCommit>");
       return 2;
   }
 }

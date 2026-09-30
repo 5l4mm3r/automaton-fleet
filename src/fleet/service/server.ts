@@ -863,8 +863,12 @@ export class FleetService {
       const r = await agent.cognitionStatus(agentId, token);
       if (!r.ok) throw FleetService.refusal(r, "cognition status refused");
       const { ok: _ok, ...status } = r;
+      // R23: whether THIS founder's calls are routed (global switch AND its own opt-in). A routed runtime then sends
+      // task packets and routing requests; a legacy runtime ignores the field. Nothing else about routing is disclosed.
+      const routing = this.opts.cognitionProviderFactory ? await admin.cognitionRoutingState(agentId) : null;
       // The founder's client waits longer than the controller's whole inference deadline (L2).
-      return { cognition: { ...status, deadlineMs: this.cognitionDeadlineMs(), founderWaitMs: this.cognitionDeadlineMs() + FOUNDER_WAIT_MARGIN_MS } };
+      return { cognition: { ...status, deadlineMs: this.cognitionDeadlineMs(), founderWaitMs: this.cognitionDeadlineMs() + FOUNDER_WAIT_MARGIN_MS,
+        routing: { active: routing?.routingEnabled === true } } };
     }
 
     if (method === "GET" && path === "/v1/research/status") {

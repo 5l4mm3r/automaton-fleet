@@ -60,6 +60,10 @@ call: cache write/read, uncached input, output, cost, and saving vs uncached at 
 cacheable prompt: Haiku 4.5 4096 tokens (the ~3.8k founder prefix will not cache there; T1 calls use a small prompt and
 are never padded), Sonnet 5.5 and Opus 5.5 512 tokens.
 
+**R23 (schema v23):** the cache mode is now decided per routed call — tier policy × scope × evidenced reuse
+(`cachePolicy()`; T1 off, T2 `prefix`, a question-scoped T3 escalation off, a T3 task step only on evidenced reuse) —
+and `FLEET_COGNITION_PROMPT_CACHE` governs the legacy path only. See `docs/design/r23-founder-runtime-upgrade.md`.
+
 ## Loop and duplication economics
 
 - Controller (routed path): an identical prompt digest after a non-transient failure within 10 minutes is refused

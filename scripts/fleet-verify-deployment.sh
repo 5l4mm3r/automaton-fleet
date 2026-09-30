@@ -145,6 +145,16 @@ if [[ -f "$FT" ]]; then
       bad "founder ${fid: -6} not pinned to its registered release ${fcommit:0:7} (WorkingDirectory=$wd, pin=${pc:-none}, env=${envf:-?})"
     fi
   done < <(runuser -u postgres -- psql -X -At -F '|' -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT agent_id, runtime_commit FROM fleet.fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive') ORDER BY agent_id" 2>/dev/null)
+  # R23: no living-founder runtime upgrade is left half done (prepared, or committed but not verified or rolled back),
+  # and the pre-upgrade state backups are root-only.
+  openup="$(runuser -u postgres -- psql -X -At -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT count(*) FROM fleet.fleet_founder_runtime_upgrades WHERE status IN ('prepared','committed')" 2>/dev/null || echo "?")"
+  if [[ "$openup" == "0" ]]; then ok "no founder runtime upgrade left open"
+  elif [[ "$openup" == "?" ]]; then ok "founder runtime upgrades: not applicable (schema before v23)"
+  else bad "founder runtime upgrades left open: $openup (finish with fleet-founders.sh rollback-runtime)"; fi
+  if [[ -e /var/lib/automaton-fleet-upgrades ]]; then
+    bm="$(stat -c '%U:%a' /var/lib/automaton-fleet-upgrades 2>/dev/null)"
+    [[ "$bm" == "root:700" ]] && ok "founder upgrade backups are root-only" || bad "founder upgrade backups are $bm (expected root:700)"
+  fi
   # Host maintenance (needrestart via apt / unattended-upgrades) never restarts a living founder.
   G="$(dirname "$0")/fleet-maintenance-guard.sh"
   if [[ -x "$G" ]]; then

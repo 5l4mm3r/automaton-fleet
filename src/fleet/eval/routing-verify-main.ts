@@ -66,11 +66,12 @@ async function main(): Promise<number> {
   const sink: ObservedRequest[] = [];
   let spent = 0;
   // The deployed factory, on a provider whose HTTP layer is observed and budget-guarded; one attempt per call.
-  // Prompt caching is exercised here as a verification-only override: the controller's own setting is untouched (off).
-  const guarded = base.with({ maxAttempts: 1, promptCache: "prefix", fetchImpl: observingFetch({ tiers: VERIFY_TIERS, budgetMicrocents: budget, spent: () => spent, sink }) });
+  // Schema v23: the prompt-cache mode of each call is decided by the routed gateway (tier policy × scope × reuse) from
+  // VERIFY_TIERS' policies — the same rule production applies; the controller's own legacy-path setting is untouched.
+  const guarded = base.with({ maxAttempts: 1, fetchImpl: observingFetch({ tiers: VERIFY_TIERS, budgetMicrocents: budget, spent: () => spent, sink }) });
   const factory = routedProviderFactory(guarded);
   const r = await runRoutingVerification({ factory, tiers: VERIFY_TIERS, budgetMicrocents: budget, sink, log: (c) => { spent += c.costMicrocents; out("EVT", c); } });
-  out("RESULT", { mode: "verify", promptCache: guarded.settings.promptCache, controllerPromptCache: base.settings.promptCache, ...r });
+  out("RESULT", { mode: "verify", tierPromptCache: Object.fromEntries(VERIFY_TIERS.map((t) => [t.tier, t.promptCache ?? "off"])), controllerPromptCache: base.settings.promptCache, ...r });
   return 0;
 }
 

@@ -219,6 +219,8 @@ export interface TierCandidate {
   prices: { inputMicrocentsPerToken: number; outputMicrocentsPerToken: number; cacheWriteMicrocentsPerToken: number; cacheReadMicrocentsPerToken: number };
   enabled: boolean;
   verifiedAt: string | null;
+  /** Schema v23: the tier's prompt-cache policy (absent = off). The gateway narrows it by scope and evidenced reuse. */
+  promptCache?: "off" | "prefix" | "prefix+tail";
 }
 
 /** The candidate that serves a decided tier. Never falls to a lower tier: unavailable is a refusal. */

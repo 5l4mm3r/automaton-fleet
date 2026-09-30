@@ -67,6 +67,9 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
                    ('T3', 'claude-opus-5-5', 'adaptive', 'medium', 8000, 400, 2000, 500, 20)) AS s(tier, model, thinking, effort, max_out, i, o, cw, cr)
       WHERE t.tier = s.tier`);
   }
+  // v23: tier prompt-cache policy back to its migration default (T1 off; T2/T3 prefix).
+  const pc = await c.query("SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_cognition_tiers' AND column_name = 'prompt_cache'", [schema]);
+  if (pc.rowCount) await c.query(`UPDATE "${schema}".fleet_cognition_tiers SET prompt_cache = CASE WHEN tier = 'T1' THEN 'off' ELSE 'prefix' END`);
   if (r.rows.some((x) => x.t === "fleet_research_policy")) {
     await c.query(`UPDATE "${schema}".fleet_research_policy SET research_enabled = false, founder_hourly = 60, founder_daily = 300,
       fleet_hourly = 120, fleet_daily = 600, updated_by = 'migration'`);

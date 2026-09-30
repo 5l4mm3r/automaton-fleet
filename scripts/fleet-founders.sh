@@ -7,6 +7,14 @@
 #   sudo scripts/fleet-founders.sh attest <genesisId>
 #   sudo scripts/fleet-founders.sh activate <genesisId> <authSha256>   # OWNER GATE
 #   sudo scripts/fleet-founders.sh teardown <genesisId>
+#   sudo scripts/fleet-founders.sh pin <agentId>                 # (re)write a living founder's pin; no restart
+#
+# R23 — runtime upgrade of a LIVING founder (same founder id, memory, workspace, ledger and credential):
+#   sudo scripts/fleet-founders.sh upgrade-status <agentId>
+#   sudo scripts/fleet-founders.sh upgrade-preflight <agentId>   # changes nothing
+#   sudo scripts/fleet-founders.sh upgrade-rehearsal <fromCommit>  # synthetic founder, THROWAWAY registry, fake provider
+#   sudo scripts/fleet-founders.sh upgrade-runtime <agentId> [--health-timeout S]            # OWNER GATE
+#   sudo scripts/fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason...>        # OWNER GATE
 #
 # Secrets (attestation tokens, founder credentials) are generated inside the
 # provisioner and written only to each founder's own 0600 state files; none

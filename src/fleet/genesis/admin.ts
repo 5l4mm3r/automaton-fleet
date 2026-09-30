@@ -70,6 +70,31 @@ export interface GenesisView {
   replay?: boolean;
 }
 
+/** A runtime release as the registry records it. */
+export interface RuntimeReleaseRow { repo: string; commit: string; buildId: string; lockfileSha256: string }
+
+/** One living-founder runtime upgrade attempt (schema v23). */
+export interface RuntimeUpgradeView {
+  upgradeId: string;
+  seq: number;
+  agentId: string;
+  status: "prepared" | "committed" | "verified" | "rolled_back" | "aborted";
+  from: RuntimeReleaseRow;
+  to: RuntimeReleaseRow;
+  stateSha256Before: string;
+  ledgerBefore: Record<string, unknown>;
+  before: Record<string, unknown>;
+  after: Record<string, unknown> | null;
+  rollback: Record<string, unknown> | null;
+  reason: string | null;
+  preparedAt: string;
+  preparedBy: string;
+  committedAt: string | null;
+  verifiedAt: string | null;
+  closedAt: string | null;
+  closedBy: string | null;
+}
+
 export interface AttestationEvidence {
   commit: string;
   buildId: string;
@@ -166,6 +191,78 @@ export class GenesisOps {
 
   cognitionReport(since: Date) {
     return this.one<Record<string, unknown>>(`SELECT fleet_cognition_report($1) AS r`, [since.toISOString()]);
+  }
+
+  /** Schema v23: a tier's prompt-cache policy (T1 is constrained to off; a question-scoped escalation never caches). */
+  cognitionTierCacheSet(tier: string, mode: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_tier_cache_set($1, $2, $3) AS r`, [tier, mode, actor]);
+  }
+
+  // ─── Schema v23: runtime upgrade of a LIVING founder (the host-side lifecycle is src/fleet/founder/upgrade.ts) ───
+  /** The runtime the founder is registered to run (latest committed/verified upgrade, else its Genesis attestation). */
+  founderRuntimeCurrent(agentId: string) {
+    return this.one<(RuntimeReleaseRow & { source: string; upgradeId?: string; status?: string }) | null>(`SELECT fleet_founder_runtime_current($1) AS r`, [agentId]);
+  }
+
+  founderRuntimeUpgradePrepare(agentId: string, from: RuntimeReleaseRow, to: RuntimeReleaseRow, before: Record<string, unknown>, actor: string) {
+    return this.one<RuntimeUpgradeView>(`SELECT fleet_founder_runtime_upgrade_prepare($1, $2, $3, $4, $5) AS r`, [agentId, JSON.stringify(from), JSON.stringify(to), JSON.stringify(before), actor]);
+  }
+
+  founderRuntimeUpgradeCommit(upgradeId: string, stateSha256: string, actor: string) {
+    return this.one<RuntimeUpgradeView>(`SELECT fleet_founder_runtime_upgrade_commit($1, $2, $3) AS r`, [upgradeId, stateSha256, actor]);
+  }
+
+  founderRuntimeUpgradeVerify(upgradeId: string, after: Record<string, unknown>, actor: string) {
+    return this.one<RuntimeUpgradeView>(`SELECT fleet_founder_runtime_upgrade_verify($1, $2, $3) AS r`, [upgradeId, JSON.stringify(after), actor]);
+  }
+
+  founderRuntimeUpgradeRollback(upgradeId: string, reason: string, actor: string) {
+    return this.one<RuntimeUpgradeView>(`SELECT fleet_founder_runtime_upgrade_rollback($1, $2, $3) AS r`, [upgradeId, reason, actor]);
+  }
+
+  founderRuntimeUpgradeRollbackVerify(upgradeId: string, after: Record<string, unknown>, actor: string) {
+    return this.one<RuntimeUpgradeView>(`SELECT fleet_founder_runtime_upgrade_rollback_verify($1, $2, $3) AS r`, [upgradeId, JSON.stringify(after), actor]);
+  }
+
+  founderRuntimeUpgradeAbort(upgradeId: string, reason: string, actor: string) {
+    return this.one<RuntimeUpgradeView>(`SELECT fleet_founder_runtime_upgrade_abort($1, $2, $3) AS r`, [upgradeId, reason, actor]);
+  }
+
+  founderRuntimeUpgrade(upgradeId: string) {
+    return this.one<RuntimeUpgradeView | null>(`SELECT fleet_founder_runtime_upgrade_view($1) AS r`, [upgradeId]);
+  }
+
+  /** A founder's upgrade history, newest first. */
+  founderRuntimeUpgrades(agentId: string, limit = 20) {
+    return this.one<RuntimeUpgradeView[]>(
+      `SELECT COALESCE(jsonb_agg(fleet_founder_runtime_upgrade_view(x.upgrade_id) ORDER BY x.seq DESC), '[]'::jsonb) AS r
+         FROM (SELECT upgrade_id, seq FROM fleet_founder_runtime_upgrades WHERE agent_id = $1 ORDER BY seq DESC LIMIT $2) x`, [agentId, limit]);
+  }
+
+  founderRuntimeHealthSince(agentId: string, since: Date | string) {
+    return this.one<{ status: string; lastHeartbeat: string | null; heartbeatAfter: boolean; challengesPassed: number; challengesFailed: number; challengeFailures: number; runtimeCommit: string | null } | null>(
+      `SELECT fleet_founder_runtime_health_since($1, $2) AS r`, [agentId, typeof since === "string" ? since : since.toISOString()]);
+  }
+
+  founderLedgerFingerprint(agentId: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_founder_ledger_fingerprint($1) AS r`, [agentId]);
+  }
+
+  /** What the upgrade preflight needs to know about the founder and the fleet (read-only). */
+  founderRuntimeContext(agentId: string) {
+    return this.one<{ agent: { status: string; origin: string; role: string; runtimeRepo: string | null; runtimeCommit: string | null; genesisId: string | null; workspaceId: string | null; stateNamespace: string | null; lastHeartbeat: string | null; challengeFailures: number } | null;
+      approved: RuntimeReleaseRow | null; heartbeatUnresponsiveS: number; heartbeatDeadS: number; maxChallengeFailures: number; inFlight: boolean; schemaVersion: number }>(
+      `SELECT jsonb_build_object(
+         'agent', (SELECT jsonb_build_object('status', a.status, 'origin', a.origin, 'role', a.role, 'runtimeRepo', a.runtime_repo, 'runtimeCommit', a.runtime_commit,
+                     'genesisId', a.genesis_id, 'workspaceId', a.workspace_id, 'stateNamespace', a.state_namespace, 'lastHeartbeat', a.last_heartbeat,
+                     'challengeFailures', a.challenge_failures) FROM fleet_agents a WHERE a.agent_id = $1),
+         'approved', (SELECT CASE WHEN s.runtime_commit IS NULL THEN NULL ELSE jsonb_build_object('repo', s.runtime_repo, 'commit', s.runtime_commit,
+                        'buildId', s.runtime_build_id, 'lockfileSha256', s.runtime_lockfile_sha256) END FROM fleet_state s WHERE s.id = 1),
+         'heartbeatUnresponsiveS', (SELECT heartbeat_unresponsive_s FROM fleet_state WHERE id = 1),
+         'heartbeatDeadS', (SELECT heartbeat_dead_s FROM fleet_state WHERE id = 1),
+         'maxChallengeFailures', (SELECT max_challenge_failures FROM fleet_state WHERE id = 1),
+         'inFlight', EXISTS (SELECT 1 FROM fleet_cognition_inflight WHERE agent_id = $1),
+         'schemaVersion', (SELECT max(version) FROM fleet_schema_migrations)) AS r`, [agentId]);
   }
 
   /**

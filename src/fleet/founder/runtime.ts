@@ -49,6 +49,7 @@ import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safet
 import { DRY_RUN_FORBIDDEN_ENV } from "../dry-run/child.js";
 import { FounderToolbox } from "./toolbox.js";
 import { FounderMind } from "./mind.js";
+import { LoopGuard } from "./loop-guard.js";
 import { sandboxSelfTest, type SandboxSelfTest } from "./exec-sandbox.js";
 import {
   FOUNDER_ATTEST_FILE,
@@ -402,13 +403,19 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
     throw new FounderRejectedError("The registry capability manifest differs from this runtime's compiled manifest.");
   }
   const result: FounderRuntimeResult = { mode: "active", agentId: ctx.agentId, instanceId: ctx.instanceId, heartbeats: 0, challengesPassed: 0, mindTurns: 0, mindRefusals: 0 };
+  // R23: loop/duplicate guards always; the routed mode (task classification, task packets, routine delegation,
+  // question-scoped escalation, action linkage) is used only while FleetController reports routing active for this
+  // founder — until then the mind runs its legacy turn with its existing history, exactly as before.
+  const memoryDir = path.join(stateNsDir, "memory");
+  const loopGuard = new LoopGuard();
   const mind =
     ctx.env.FLEET_FOUNDER_AGENT_LOOP === "controller"
       ? new FounderMind({
           ports: client,
           stateDir: stateNsDir,
           log,
-          toolbox: new FounderToolbox({ manifest: ctx.manifest, workspaceDir, memoryDir: path.join(stateNsDir, "memory"), ports: client }),
+          toolbox: new FounderToolbox({ manifest: ctx.manifest, workspaceDir, memoryDir, ports: client, loopGuard }),
+          routed: { memoryDir, workspaceDir, manifest: ctx.manifest, loopGuard },
         })
       : null;
   const thinkEvery = Math.max(1, opts.thinkEvery ?? (Number(ctx.env.FLEET_FOUNDER_THINK_EVERY) || 1));
@@ -453,7 +460,7 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
       challengesPassed: result.challengesPassed,
       capabilities: { manifestSha256: caps.manifestSha256, matchesCompiled: true, reproductionExecutable: caps.reproductionExecutable, paymentExecutable: caps.paymentExecutable },
       ledger: ledger ? { cash: ledger.cash, genesisAllocation: ledger.genesisAllocation, externalCustomerRevenue: ledger.externalCustomerRevenue, lifetimeContribution: ledger.lifetimeContribution } : null,
-      agentLoop: mind ? { mode: "controller", turns: result.mindTurns, refusals: result.mindRefusals, last: lastMind, execSandbox } : "disabled",
+      agentLoop: mind ? { mode: "controller", turns: result.mindTurns, refusals: result.mindRefusals, last: lastMind, execSandbox, routing: mind.routing, loopGuard: loopGuard.stats } : "disabled",
       home: os.homedir() === ctx.stateDir,
     });
     if (target === 0 || result.heartbeats < target) await pause(interval, opts.signal);

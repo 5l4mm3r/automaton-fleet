@@ -1738,7 +1738,7 @@ export class PgFleetStore {
   }
 
   /** Schema v22: record a routed call at its snapshot prices, with routing observability. */
-  async cognitionRoutedRecord(agentId: string, requestId: string, r: CognitionRecord, obs: { packetBytes?: number | null; thinkingTokens?: number | null; promptCache?: string | null }): Promise<Record<string, unknown> & { ok: boolean }> {
+  async cognitionRoutedRecord(agentId: string, requestId: string, r: CognitionRecord, obs: { packetBytes?: number | null; thinkingTokens?: number | null; promptCache?: string | null; cacheReason?: string | null }): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.tx(async (c) =>
       (await c.query("SELECT svc_cognition_routed_record($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) AS r", [
         agentId, requestId, r.outcome, r.inputTokens, r.outputTokens, r.promptSha256, r.responseSha256, JSON.stringify(r.toolCalls), r.errorCode,

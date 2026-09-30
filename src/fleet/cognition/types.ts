@@ -165,6 +165,53 @@ export const FOUNDER_TOOLS: readonly ToolSpec[] = Object.freeze([
   { name: "sleep", capability: "liveness", description: "End this turn and rest until the next one.", parameters: obj({ reason: str("Why", 300) }, []) },
 ] as ToolSpec[]);
 
+/** Reason codes a founder may give when it asks for one question to be escalated (mirrors the router's closed set). */
+const ESCALATION_REASON_ENUM = ["EVIDENCE_CONFLICT", "HIGH_CONSEQUENCE", "IRREVERSIBLE_ACTION", "NOVEL_UNCERTAINTY", "LOWER_TIER_INSUFFICIENT", "SECURITY_CRITICAL", "LEGAL_COMPLIANCE_CRITICAL", "REPRODUCTION_DECISION"];
+/** Routine (T1) task classes a founder may delegate one bounded chore to. */
+export const ROUTINE_TASK_CLASSES: readonly string[] = Object.freeze([
+  "extraction", "classification", "basic_summary", "research_triage", "page_interpretation", "formatting",
+  "knowledge_tagging", "query_formulation", "simple_comparison", "semantic_dedupe", "tool_result_interpretation",
+]);
+
+/**
+ * Cognition tools of a ROUTED founder runtime (R23). Advertised only on the routed path, for ordinary task steps,
+ * and executed by the founder's mind (each is one more call through FleetController, which decides the tier — the
+ * founder only asks). They grant no new authority: both map to the already-granted `planning` class.
+ */
+export const FOUNDER_ROUTED_TOOLS: readonly ToolSpec[] = Object.freeze([
+  {
+    name: "routine_task",
+    capability: "planning",
+    description: "Hand ONE bounded routine chore (extract, classify, summarise, triage, format, compare) to the cheap routine tier instead of doing it yourself. Give the material inline or name a workspace file (e.g. a saved research page); you get back only the result. Use it for bulk reading; keep judgement for yourself.",
+    parameters: obj({
+      taskClass: { type: "string", enum: [...ROUTINE_TASK_CLASSES] },
+      instructions: str("Exactly what to produce, and in what format", 1200),
+      material: str("The text to work on (omit when `path` is given)", 12_000),
+      path: str("Workspace-relative file to work on instead of inline material", 400),
+    }, ["taskClass", "instructions"]),
+  },
+  {
+    name: "escalate_question",
+    capability: "planning",
+    description: "Ask the critical tier ONE hard question (conflicting evidence, a high-consequence or irreversible choice, novel uncertainty, a security/legal/reproduction matter). Only the question and the relevant facts are sent, never this conversation; the answer is saved to your memory and you continue the task yourself. Use sparingly: it is the most expensive call you can make.",
+    parameters: obj({
+      question: str("The single question to resolve", 1000),
+      reasonCode: { type: "string", enum: ESCALATION_REASON_ENUM },
+      hypothesis: str("Your current proposal or answer", 1500),
+      state: str("Relevant current state: goal, step, what you observed", 1200),
+      economicConsequence: str("What is at stake: amounts, reversibility", 600),
+      conflict: { type: "array", maxItems: 8, items: str("One unresolved uncertainty or conflict", 400) },
+    }, ["question", "reasonCode", "hypothesis"]),
+  },
+] as ToolSpec[]);
+
+/** Appended to the charter for routed task steps (stable text: it is part of the cached prefix). */
+export const FOUNDER_ROUTED_ADDENDUM = [
+  "Cognition economy: FleetController routes every call by the task, never by your past results. Your ordinary steps run at the standard tier. Arithmetic, balances, dates, lookups and policy checks are answered by your tools, not by thinking about them.",
+  "Hand bounded reading and sorting chores to routine_task. For one genuinely hard or high-consequence question use escalate_question, then carry on with the answer; a major spend request is decided at the critical tier.",
+  "Each turn starts from a task packet built from your own saved memory, goals and notes, not from the previous conversation: anything you want to keep must be remembered (remember_fact, set_goal, write_file) before you sleep.",
+].join("\n");
+
 /**
  * The founder charter (system prompt). Controller-supplied; the founder cannot edit it.
  * v2 (Genesis preparation): the owner's opportunity doctrine — economic PRIORS, not a prescribed business.

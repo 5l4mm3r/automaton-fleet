@@ -30,8 +30,9 @@ import { V19_SQL } from "./migrations-phase19.js";
 import { V20_SQL } from "./migrations-phase20.js";
 import { V21_SQL } from "./migrations-phase21.js";
 import { V22_SQL } from "./migrations-phase22.js";
+import { V23_SQL } from "./migrations-phase23.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 22;
+export const FLEET_PG_SCHEMA_VERSION = 23;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1148,6 +1149,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 20, name: "genesis_bootstrap_capital", sql: V20_SQL },
   { version: 21, name: "gbp_native_capital_controlled_fx", sql: V21_SQL },
   { version: 22, name: "neutral_cognition_routing_inert", sql: V22_SQL },
+  { version: 23, name: "founder_runtime_upgrade_cache_policy", sql: V23_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

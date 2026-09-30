@@ -9,7 +9,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { ACTION_MIN_TIER, RouteError, TASK_CLASSES, actionDigest, candidateFor, parseRouteRequest, route, type TierCandidate } from "../../fleet/cognition/router.js";
-import { inferRouted, type RoutedCognitionPorts } from "../../fleet/cognition/routed-gateway.js";
+import { inferRouted, type ProviderFactory, type RoutedCognitionPorts } from "../../fleet/cognition/routed-gateway.js";
 import { buildDecisionPacket, renderDecisionPacket, taskPacketProblems, DECISION_LIMITS } from "../../fleet/cognition/task-packet.js";
 import { AnthropicProvider } from "../../fleet/cognition/anthropic.js";
 import { startFakeAnthropic } from "../../fleet/cognition/fake-anthropic.js";
@@ -29,8 +29,8 @@ const OPUS = "claude-opus-5-5";
 const verified = "2026-09-30T00:00:00Z";
 const TIERS: TierCandidate[] = [
   { tier: "T1", provider: "anthropic", model: HAIKU, thinking: null, effort: null, maxOutputTokens: 2000, prices: { inputMicrocentsPerToken: 100, outputMicrocentsPerToken: 500, cacheWriteMicrocentsPerToken: 125, cacheReadMicrocentsPerToken: 10 }, enabled: true, verifiedAt: verified },
-  { tier: "T2", provider: "anthropic", model: SONNET, thinking: "adaptive", effort: "medium", maxOutputTokens: 8000, prices: { inputMicrocentsPerToken: 200, outputMicrocentsPerToken: 1000, cacheWriteMicrocentsPerToken: 250, cacheReadMicrocentsPerToken: 20 }, enabled: true, verifiedAt: verified },
-  { tier: "T3", provider: "anthropic", model: OPUS, thinking: "adaptive", effort: "medium", maxOutputTokens: 8000, prices: { inputMicrocentsPerToken: 400, outputMicrocentsPerToken: 2000, cacheWriteMicrocentsPerToken: 500, cacheReadMicrocentsPerToken: 20 }, enabled: true, verifiedAt: verified },
+  { tier: "T2", provider: "anthropic", model: SONNET, thinking: "adaptive", effort: "medium", maxOutputTokens: 8000, prices: { inputMicrocentsPerToken: 200, outputMicrocentsPerToken: 1000, cacheWriteMicrocentsPerToken: 250, cacheReadMicrocentsPerToken: 20 }, enabled: true, verifiedAt: verified, promptCache: "prefix" },
+  { tier: "T3", provider: "anthropic", model: OPUS, thinking: "adaptive", effort: "medium", maxOutputTokens: 8000, prices: { inputMicrocentsPerToken: 400, outputMicrocentsPerToken: 2000, cacheWriteMicrocentsPerToken: 500, cacheReadMicrocentsPerToken: 20 }, enabled: true, verifiedAt: verified, promptCache: "prefix" },
 ];
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "f-routing-"));
 
@@ -134,11 +134,12 @@ function fakePorts(o: { lastModel?: string | null; authorize?: (route: Record<st
 }
 
 describe("routed gateway (real AnthropicProvider → fake Messages API)", () => {
-  async function withFake<T>(f: (factory: (c: TierCandidate, eff: "high" | null) => CognitionProvider & { promptCache?: string }, fake: Awaited<ReturnType<typeof startFakeAnthropic>>) => Promise<T>, cacheMinTokens = 256) {
+  async function withFake<T>(f: (factory: ProviderFactory, fake: Awaited<ReturnType<typeof startFakeAnthropic>>) => Promise<T>, cacheMinTokens = 256) {
     const fake = await startFakeAnthropic({ apiKey: "k", model: OPUS, models: [HAIKU, SONNET], thinking: false, fault: () => null, cacheMinTokens });
-    const base = new AnthropicProvider({ baseUrl: fake.url, apiKey: "k", model: OPUS, attemptTimeoutMs: 5000, maxAttempts: 1, backoffMs: 10, promptCache: "prefix" });
-    const factory = (c: TierCandidate, eff: "high" | null) => {
-      const p = base.with({ model: c.model, thinking: c.thinking === "adaptive" ? { type: "adaptive" } : undefined, effort: eff ?? c.effort ?? undefined });
+    // v23: the gateway decides the cache mode per call (tier policy × scope × evidenced reuse) and hands it to the factory.
+    const base = new AnthropicProvider({ baseUrl: fake.url, apiKey: "k", model: OPUS, attemptTimeoutMs: 5000, maxAttempts: 1, backoffMs: 10 });
+    const factory: ProviderFactory = (c, eff, promptCache) => {
+      const p = base.with({ model: c.model, thinking: c.thinking === "adaptive" ? { type: "adaptive" } : undefined, effort: eff ?? c.effort ?? undefined, promptCache });
       return Object.assign(p, { promptCache: p.settings.promptCache });
     };
     try {

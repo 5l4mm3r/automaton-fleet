@@ -44,6 +44,15 @@ export class LoopGuard {
     return (this.o.now ?? Date.now)();
   }
 
+  /**
+   * Something the founder's decisions depend on changed without a mutating tool call: a higher tier answered an
+   * escalated question, or the next step runs at a different tier (the consequential-action boundary). An identical
+   * call may be justified again.
+   */
+  noteContextChange(): void {
+    this.stateVersion++;
+  }
+
   /** Decide before executing: null = run it; an outcome = answered without re-running. */
   before(call: ToolCall): ToolOutcome | null {
     const key = callKey(call);

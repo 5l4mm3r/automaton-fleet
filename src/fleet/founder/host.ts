@@ -77,6 +77,23 @@ export interface FounderHost {
   logText(agentId: string): Promise<string>;
 }
 
+/**
+ * What the living-founder runtime-upgrade lifecycle (upgrade.ts) needs from a host beyond FounderHost: read and move
+ * the founder's runtime pin, and stop/start it as an explicit, verified operation.
+ */
+export interface FounderUpgradeHost extends FounderHost {
+  /** Directory an installed release lives in. */
+  releaseDir(commit: string): string;
+  /** The founder's current pin as this host has it (null = unpinned). */
+  currentPin(agentId: string): Promise<{ commit: string | null; buildId: string | null; workingDirectory: string | null } | null>;
+  /** Point the founder at `release` (its tree is verified against the pins first). Takes effect at the next start; never restarts. */
+  pinRuntime(agentId: string, release: RuntimeRelease): Promise<{ dir: string }>;
+  /** Stop the founder and fail unless it really stopped (the upgrade never proceeds over a running process). */
+  stopStrict(agentId: string, timeoutMs?: number): Promise<void>;
+  /** Exit status of the founder's last process, when the host knows it (a refusal at startup is final: no waiting). */
+  lastExit?(agentId: string): Promise<number | null>;
+}
+
 function writeFile600(file: string, value: unknown, uid?: number, gid?: number): void {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { mode: 0o600 });
@@ -205,7 +222,7 @@ export function founderPinContent(agentId: string, release: RuntimeRelease, rele
   };
 }
 
-export class SystemdFounderHost implements FounderHost {
+export class SystemdFounderHost implements FounderUpgradeHost {
   readonly kind = "systemd" as const;
   /** `pinRelease`: new founders are pinned to this (the Genesis-authorized) release at provisioning. */
   constructor(private readonly root = FOUNDER_STATE_ROOT, private readonly systemctl = "systemctl", private readonly pinRelease: RuntimeRelease | null = null) {}
@@ -230,12 +247,44 @@ export class SystemdFounderHost implements FounderHost {
   }
 
   /** The founder's current pin (null when unpinned). */
-  readPin(agentId: string): { workingDirectory: string | null; commit: string | null } | null {
+  readPin(agentId: string): { workingDirectory: string | null; commit: string | null; buildId: string | null } | null {
     const p = founderPinPaths(agentId);
     if (!fs.existsSync(p.dropIn) || !fs.existsSync(p.env)) return null;
     const d = fs.readFileSync(p.dropIn, "utf8");
     const e = fs.readFileSync(p.env, "utf8");
-    return { workingDirectory: /^WorkingDirectory=(.+)$/m.exec(d)?.[1] ?? null, commit: /^FLEET_RUNTIME_COMMIT=([0-9a-f]{40})$/m.exec(e)?.[1] ?? null };
+    return { workingDirectory: /^WorkingDirectory=(.+)$/m.exec(d)?.[1] ?? null, commit: /^FLEET_RUNTIME_COMMIT=([0-9a-f]{40})$/m.exec(e)?.[1] ?? null,
+      buildId: /^FLEET_RUNTIME_BUILD_ID=([0-9a-f]{64})$/m.exec(e)?.[1] ?? null };
+  }
+
+  releaseDir(commit: string): string {
+    if (!HEX40.test(commit)) throw new Error("invalid release commit");
+    return path.join(RELEASES_DIR, commit);
+  }
+
+  async currentPin(agentId: string): Promise<{ commit: string | null; buildId: string | null; workingDirectory: string | null } | null> {
+    return this.readPin(agentId);
+  }
+
+  /** Stop the unit and prove it stopped: no main process, unit inactive (or failed — still not running). */
+  async stopStrict(agentId: string, timeoutMs = 60_000): Promise<void> {
+    await run(this.systemctl, ["stop", founderUnit(agentId)], { timeout: timeoutMs });
+    const end = Date.now() + timeoutMs;
+    for (;;) {
+      const state = (await run(this.systemctl, ["show", "-p", "ActiveState", "--value", founderUnit(agentId)]).catch(() => null))?.stdout.trim();
+      if (!(await this.pid(agentId)) && (state === "inactive" || state === "failed")) return;
+      if (Date.now() > end) throw new Error(`founder unit did not stop (state ${state ?? "unknown"})`);
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+
+  async lastExit(agentId: string): Promise<number | null> {
+    const r = await run(this.systemctl, ["show", "-p", "ExecMainStatus", "-p", "ActiveState", "-p", "SubState", founderUnit(agentId)]).catch(() => null);
+    if (!r) return null;
+    const kv = Object.fromEntries(r.stdout.split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+    // Only a unit that has actually stopped reports a final status (a running or auto-restarting unit is still trying).
+    if (kv.ActiveState !== "failed" && !(kv.ActiveState === "inactive" && kv.SubState === "dead")) return null;
+    const n = Number(kv.ExecMainStatus);
+    return Number.isInteger(n) ? n : null;
   }
 
   stateDir(agentId: string): string {
@@ -337,15 +386,81 @@ export class SystemdFounderHost implements FounderHost {
 
 // ── child process (tests / development) ───────────────────────
 
-export class ProcessFounderHost implements FounderHost {
+export class ProcessFounderHost implements FounderUpgradeHost {
   readonly kind = "process" as const;
   private readonly procs = new Map<string, ChildProcess>();
   readonly logs = new Map<string, string>();
 
+  /** agentId → the release its next start runs (absent = the host's own command: the development tree). */
+  private readonly pins = new Map<string, { release: RuntimeRelease; dir: string; envFile: string }>();
+
+  /**
+   * `releases` (tests/rehearsals of the runtime-upgrade lifecycle): where installed releases live and how a founder
+   * process of a given release tree is launched — the process-host counterpart of the systemd unit's pin drop-in.
+   */
   constructor(
     private readonly root: string,
     private readonly command: { file: string; args: string[]; cwd: string; env: Record<string, string | undefined> },
+    private readonly releases?: { dir: string; command(releaseDir: string): { file: string; args: string[] };
+      /** New founders are pinned to this release at provisioning (as the systemd host pins to the Genesis-authorized one). */ pin?: RuntimeRelease },
   ) {}
+
+  releaseDir(commit: string): string {
+    if (!this.releases) throw new Error("this process host has no release directory");
+    if (!HEX40.test(commit)) throw new Error("invalid release commit");
+    return path.join(this.releases.dir, commit);
+  }
+
+  async currentPin(agentId: string): Promise<{ commit: string | null; buildId: string | null; workingDirectory: string | null } | null> {
+    const p = this.pins.get(agentId);
+    return p ? { commit: p.release.commit, buildId: p.release.buildId, workingDirectory: p.dir } : null;
+  }
+
+  /** Pin a founder to an installed release (its tree verified first). Takes effect at the next start; never restarts. */
+  async pinRuntime(agentId: string, release: RuntimeRelease): Promise<{ dir: string }> {
+    const dir = this.releaseDir(release.commit);
+    const id = computeBuildIdentity(dir);
+    if (id.buildId !== release.buildId || id.lockfileSha256 !== release.lockfileSha256) throw new Error(`release ${dir} does not match the founder's attested build; refusing to pin`);
+    const pinDir = path.join(this.root, ".pins");
+    fs.mkdirSync(pinDir, { recursive: true, mode: 0o700 });
+    const envFile = path.join(pinDir, `${agentId}.runtime.env`);
+    const tmp = `${envFile}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, founderPinContent(agentId, release, this.releases!.dir, pinDir).env, { mode: 0o644 });
+    fs.renameSync(tmp, envFile);
+    this.pins.set(agentId, { release, dir, envFile });
+    return { dir };
+  }
+
+  async stopStrict(agentId: string, timeoutMs = 10_000): Promise<void> {
+    await this.stop(agentId);
+    const end = Date.now() + timeoutMs;
+    while (await this.pid(agentId)) {
+      if (Date.now() > end) throw new Error("founder process did not stop");
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  async lastExit(agentId: string): Promise<number | null> {
+    return this.exitCode(agentId);
+  }
+
+  /** The pin file of a founder on this host (rehearsals damage it once to prove a mis-pinned runtime refuses to start). */
+  pinEnvFile(agentId: string): string {
+    const p = this.pins.get(agentId);
+    if (!p) throw new Error("founder is not pinned");
+    return p.envFile;
+  }
+
+  private launch(agentId: string, extraEnv: Record<string, string> = {}): ChildProcess {
+    const pin = this.pins.get(agentId);
+    const cmd = pin ? { ...this.releases!.command(pin.dir), cwd: pin.dir } : this.command;
+    return spawn(cmd.file, cmd.args, {
+      cwd: cmd.cwd,
+      env: { ...this.command.env, FLEET_FOUNDER_ID: agentId, FLEET_FOUNDER_STATE_DIR: this.stateDir(agentId), HOME: this.stateDir(agentId),
+        ...(pin ? { FLEET_RUNTIME_ENV_FILE: pin.envFile } : {}), ...extraEnv },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
 
   stateDir(agentId: string): string {
     if (!ULID_RE.test(agentId)) throw new Error("invalid founder id");
@@ -358,16 +473,13 @@ export class ProcessFounderHost implements FounderHost {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFile600(path.join(dir, FOUNDER_IDENTITY_FILE), identity);
     writeFile600(path.join(dir, FOUNDER_ATTEST_FILE), attest);
+    if (this.releases?.pin) await this.pinRuntime(agentId, this.releases.pin);
   }
 
   async start(agentId: string, extraEnv: Record<string, string> = {}): Promise<void> {
     const prev = this.procs.get(agentId);
     if (prev && prev.exitCode === null && prev.signalCode === null) throw new Error(`founder ${agentId} is already running`);
-    const child = spawn(this.command.file, this.command.args, {
-      cwd: this.command.cwd,
-      env: { ...this.command.env, FLEET_FOUNDER_ID: agentId, FLEET_FOUNDER_STATE_DIR: this.stateDir(agentId), HOME: this.stateDir(agentId), ...extraEnv },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = this.launch(agentId, extraEnv);
     this.logs.set(agentId, "");
     const add = (d: Buffer) => this.logs.set(agentId, (this.logs.get(agentId) ?? "") + d.toString());
     child.stdout?.on("data", add);
@@ -432,5 +544,8 @@ export class ProcessFounderHost implements FounderHost {
   async remove(agentId: string): Promise<void> {
     await this.stop(agentId);
     fs.rmSync(this.stateDir(agentId), { recursive: true, force: true });
+    const pin = this.pins.get(agentId);
+    if (pin) fs.rmSync(pin.envFile, { force: true });
+    this.pins.delete(agentId);
   }
 }

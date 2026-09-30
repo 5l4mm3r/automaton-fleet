@@ -1686,7 +1686,10 @@ registered `runtime_commit`. The controller may move to newer approved releases;
   - a controller outage: the running founder waits;
   - a founder started during the outage: it waits at startup;
   - a mis-pinned founder start: its own preflight refuses (exit 4, never restarted), and nothing is reset.
-- **Founder runtime upgrade (not implemented).** Changing a living founder's own code needs an owner-approved registry operation (new `runtime_commit`) plus re-pinning. It is not needed for controller-side fixes.
+- **Founder runtime upgrade (R23, schema v23).** Changing a living founder's own code is the explicit lifecycle in
+  `docs/design/r23-founder-runtime-upgrade.md` (`fleet-founders.sh upgrade-runtime`): registry pin and host pin move
+  together, the founder stays the same economic agent, and any failure rolls back to the previous pinned runtime. It is
+  never a side effect of a controller deploy. See "Stage R23" below.
 - **Post-Genesis rehearsals.** `fleet-founders.sh rehearsal` now runs alongside registered living founders. It refuses unknown founder units or state, and additionally proves each living founder's MainPID was untouched.
 
 ## Host maintenance and living founders (restart guard, 2026-09-30)
@@ -1774,6 +1777,45 @@ Design: `docs/design/cognition-efficiency-routing.md`. Nothing changes for any f
   (0c502fb expects v21); controller-side units only, founder untouched.
 - **Not done (owner decisions):** `cognition-tier-verify`/`-enable`, `cognition-routing-enable`, any `founder-routing`,
   `FLEET_COGNITION_PROMPT_CACHE`.
+
+## Stage R23 — founder runtime upgrade and controlled cognition cutover (procedure; prepared 2026-09-30)
+
+Design and invariants: `docs/design/r23-founder-runtime-upgrade.md`. Every step below is an owner gate; the runtime
+upgrade (R23-4) and the cognition cutover (R23-6) are separate and separately reversible.
+
+- **R23-1 Controller release with schema v23** (controller-only update, founder untouched — the procedure of "Live
+  runtime updates with living founders"): build on the VPS, pin `runtime.env` (keep `runtime.env.pre-r23`), install,
+  stop the controller-side units, dump, `migrate-check` must be exactly `{22→23, wouldApply:[23]}`, `migrate`, audit,
+  `approve-runtime`, start, verify (doctor, `fleet:verify`, `fleet-verify-deployment.sh`, Founder 1 PID unchanged).
+  v23 is additive. Rollback: `runtime.env.pre-r23` + `current` → `releases/b8e8e9a…` needs the pre-v23 dump.
+- **R23-2 Rehearsal on the host** (throwaway registry, synthetic founder, fake provider; production only read):
+  `sudo scripts/fleet-founders.sh upgrade-rehearsal eea1932d293d3aba9264b0f084fa2becd9899ba4` — creates a synthetic
+  founder on Founder 1's release with real systemd units, then abort / failed-start rollback / upgrade / rollback /
+  re-upgrade / routed cognition. Must pass with `production.unchanged`, `hostClean` and Founder 1's PID untouched.
+- **R23-3 Preflight on Founder 1** (changes nothing): `sudo scripts/fleet-founders.sh upgrade-status <id>` and
+  `upgrade-preflight <id>`.
+- **R23-4 Upgrade Founder 1** (OWNER GATE; expected downtime: one stop/start, tens of seconds):
+  `sudo scripts/fleet-founders.sh upgrade-runtime <id> [--health-timeout 120]`. The receipt carries the steps, the
+  state digests before / at start / after, the ledger fingerprints, the health proof and the backup directory
+  (`/var/lib/automaton-fleet-upgrades/<upgradeId>`, root 0700, no credential). Outcome `verified`, or `rolled_back` /
+  `aborted` with the founder back on `eea1932`. Afterwards: `fleet-verify-deployment.sh` (pin = registered release, no
+  open upgrade), challenges passing, cognition continuing on the **legacy** path (routing still off).
+- **R23-5 Manual rollback** (OWNER GATE, any time while it is the founder's latest upgrade):
+  `sudo scripts/fleet-founders.sh rollback-runtime <id> <upgradeId> <reason…>`.
+- **R23-6 Cognition cutover** (owner commands through `fleet:admin`, in this order; each is reversible):
+  1. `cognition-tier-verify T1 claude-haiku-4-5-20251001 <ref>`, `… T2 claude-sonnet-5-5 <ref>`,
+     `… T3 claude-opus-5-5 <ref>` — reference the R22 Models API evidence (`docs/evaluations/routing-v22/models.json`).
+  2. `cognition-tier-enable T1`, `T2`, `T3`; check `cognition-routing` (cache policy T1 off, T2/T3 prefix).
+  3. `cognition-routing-enable` (global).
+  4. `founder-routing <id> enable` — from the founder's next thinking slot its calls are routed.
+  5. Observe a bounded window: `cognition-report --hours 1`, `cognition-log <id>`, `founders-report`,
+     `fleet-founders.sh upgrade-status <id>`.
+  6. Verify: T1/T2/T3 rows with the mapped models; cache policy and saving per row; charges reconcile to the ledger;
+     facts/goals/workspace intact; no failed challenge.
+  Back out in reverse: `founder-routing <id> disable` (the founder returns to the legacy path and its old history),
+  `cognition-routing-disable`.
+- **Not part of R23:** Founder 2, reproduction, reseed, payments, trading, custody execution, owner sweep,
+  `docs/master-key/`.
 
 ## Operating the Claude bridge (dev VM, Phase D)
 

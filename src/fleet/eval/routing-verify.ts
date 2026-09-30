@@ -7,7 +7,7 @@
  *   1  T1 extraction            Haiku (compact routine context; not padded to any cache minimum)
  *   2  T2 agent_step            Sonnet, founder prefix → cache WRITE expected
  *   3  T2 agent_step (new tail) Sonnet → cache READ expected
- *   4  T3 escalation            Opus, one Critical Decision Packet (question-scoped)
+ *   4  T3 escalation            Opus, one Critical Decision Packet (question-scoped; v23: no toolbox, no cache write)
  *   5  T2 agent_step            Sonnet again (control returned downward); the history carries call 4's Opus-signed
  *                               thinking, which must NOT reach Sonnet
  * A request observer records structure only (model, thinking/effort, cache marker, message count, whether any
@@ -65,9 +65,9 @@ export const VERIFY_TIERS: TierCandidate[] = [
   { tier: "T1", provider: "anthropic", model: "claude-haiku-4-5-20251001", thinking: null, effort: null, maxOutputTokens: 300,
     prices: { inputMicrocentsPerToken: 100, outputMicrocentsPerToken: 500, cacheWriteMicrocentsPerToken: 125, cacheReadMicrocentsPerToken: 10 }, enabled: true, verifiedAt: "verification-run" },
   { tier: "T2", provider: "anthropic", model: "claude-sonnet-5-5", thinking: "adaptive", effort: "medium", maxOutputTokens: 1024,
-    prices: { inputMicrocentsPerToken: 200, outputMicrocentsPerToken: 1000, cacheWriteMicrocentsPerToken: 250, cacheReadMicrocentsPerToken: 20 }, enabled: true, verifiedAt: "verification-run" },
+    prices: { inputMicrocentsPerToken: 200, outputMicrocentsPerToken: 1000, cacheWriteMicrocentsPerToken: 250, cacheReadMicrocentsPerToken: 20 }, enabled: true, verifiedAt: "verification-run", promptCache: "prefix" },
   { tier: "T3", provider: "anthropic", model: "claude-opus-5-5", thinking: "adaptive", effort: "medium", maxOutputTokens: 2048,
-    prices: { inputMicrocentsPerToken: 400, outputMicrocentsPerToken: 2000, cacheWriteMicrocentsPerToken: 500, cacheReadMicrocentsPerToken: 20 }, enabled: true, verifiedAt: "verification-run" },
+    prices: { inputMicrocentsPerToken: 400, outputMicrocentsPerToken: 2000, cacheWriteMicrocentsPerToken: 500, cacheReadMicrocentsPerToken: 20 }, enabled: true, verifiedAt: "verification-run", promptCache: "prefix" },
 ];
 export const VERIFY_MAX_BUDGET_MICROCENTS = 25_000_000;
 

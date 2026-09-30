@@ -62,13 +62,15 @@ export async function startFakeAnthropic(o: {
    * tools + system (prefix match, model-scoped); prefixes shorter than this many (approximate) tokens are not cached.
    */
   cacheMinTokens?: number;
+  /** Answer of a request that carries no tools (a T1 routine chore, a question-scoped escalation); default: the probe reply. */
+  toolless?: (r: { agentId: string; model: string; system: string; messages: ChatMessage[] }) => string | null;
 }): Promise<FakeAnthropic> {
   const script = o.script ?? new ScriptedProvider(o.model);
   const requests = new Map<string, number>();
   const violations: string[] = [];
   /** Signature/data of each issued thinking block → the structural conversation prefix it was generated for. */
   const boundPrefix = new Map<string, string>();
-  const issued = new Map<string, string>(); // tool_use id → JSON of the thinking blocks issued with it
+  const issued = new Map<string, { thinking: string; model: string }>(); // tool_use id → the thinking blocks issued with it, and by which model
   const state = { lastBody: null as Record<string, unknown> | null, seq: 0 };
   const cache = new Set<string>();
   const sockets = new Set<net.Socket>();
@@ -165,8 +167,11 @@ export async function startFakeAnthropic(o: {
         for (const id of uses) {
           const want = issued.get(id);
           if (!want) continue;
+          // Thinking is bound to the model that produced it: another model cannot read those blocks (the real API leaves
+          // them out itself), so their absence on a model switch is not a violation. The producing model still requires them.
+          if (want.model !== String(body.model)) continue;
           const got = JSON.stringify(b.slice(0, b.findIndex((x) => x.type === "tool_use")).filter((x) => x.type === "thinking" || x.type === "redacted_thinking"));
-          if (got !== want) return invalid("thinking or redacted_thinking blocks in the latest assistant message cannot be modified");
+          if (got !== want.thinking) return invalid("thinking or redacted_thinking blocks in the latest assistant message cannot be modified");
         }
       }
       const fault = o.fault?.(agent, n) ?? null;
@@ -200,7 +205,7 @@ export async function startFakeAnthropic(o: {
         if (last?.role === "tool") text = `echo: ${last.content}`; // native tool-result continuation
         else calls = [{ id: `toolu_probe${n}`, name: "probe_echo", arguments: { value: /value "([^"]{1,64})"/.exec(last?.content ?? "")?.[1] ?? "" } }];
       } else if (specs.length === 0) {
-        text = "FLEET-PROBE-OK";
+        text = o.toolless?.({ agentId: agent, model: String(body.model), system: systemText, messages: conv }) ?? "FLEET-PROBE-OK";
       } else {
         const r = await script.chat({ agentId: agent, system: systemText, messages: conv, tools: specs, maxTokens: body.max_tokens as number });
         text = r.content;
@@ -220,7 +225,7 @@ export async function startFakeAnthropic(o: {
       if (text) content.push({ type: "text", text });
       for (const c of calls) content.push({ type: "tool_use", id: c.id, name: c.name, input: fault?.kind === "bad_tool_args" ? "not an object" : c.arguments });
       if (fault?.kind === "unknown_block") content.push({ type: "server_tool_use", id: "srvtoolu_x", name: "web_search", input: {} });
-      if (o.thinking) for (const c of calls) issued.set(c.id, JSON.stringify(thinking));
+      if (o.thinking) for (const c of calls) issued.set(c.id, { thinking: JSON.stringify(thinking), model: String(body.model) });
       if (o.thinking) for (const t of thinking) boundPrefix.set(String(t.signature ?? t.data ?? ""), prefixKey(msgs));
       // Explicit breakpoint on the last system block: tools + system are one cacheable prefix (model-scoped).
       const sys = body.system as Array<Record<string, unknown>> | string | undefined;
