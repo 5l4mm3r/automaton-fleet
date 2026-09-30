@@ -84,7 +84,9 @@ check() {
     done <<<"$nar"
   fi
   [[ "$(apt-config dump APT::Periodic::Unattended-Upgrade | sed -n 's/.*"\(.*\)";/\1/p')" == 1 ]] && ok "unattended upgrades enabled (APT::Periodic::Unattended-Upgrade 1)" || bad "unattended upgrades are not enabled"
-  apt-config dump | grep -q 'Unattended-Upgrade::Allowed-Origins:: "${distro_id}:${distro_codename}-security"' && ok "security origin allowed" || bad "security origin not allowed"
+  # Captured first: piping a producer into an early-exiting grep under pipefail fails at random (SIGPIPE).
+  local aptcfg; aptcfg="$(apt-config dump)"
+  grep -qF 'Unattended-Upgrade::Allowed-Origins:: "${distro_id}:${distro_codename}-security"' <<<"$aptcfg" && ok "security origin allowed" || bad "security origin not allowed"
   systemctl is-enabled --quiet apt-daily-upgrade.timer && ok "apt-daily-upgrade.timer enabled" || bad "apt-daily-upgrade.timer not enabled"
   grep -q needrestart /etc/apt/apt.conf.d/99needrestart 2>/dev/null && ok "needrestart apt hook present (outdated code is still detected and reported)" || bad "needrestart apt hook missing"
   local reboot; reboot="$(apt-config dump Unattended-Upgrade::Automatic-Reboot | sed -n 's/.*"\(.*\)";/\1/p')"
@@ -110,7 +112,7 @@ case "$MODE" in
     C=fleet-nr-rehearsal-control.service
     U=/run/systemd/system
     [[ ! -e "$R" && ! -e "$B" && ! -e "$U/$P" && ! -e "$U/$C" ]] || { echo "rehearsal leftovers exist; remove them first" >&2; exit 1; }
-    systemctl list-units --all --plain --no-legend "$P" | grep -q . && { echo "$P already known to systemd" >&2; exit 1; }
+    [[ -z "$(systemctl list-units --all --plain --no-legend "$P")" ]] || { echo "$P already known to systemd" >&2; exit 1; }
     declare -A before
     for u in $(living_units); do before[$u]="$(mainpid "$u")"; done
     cleanup() {

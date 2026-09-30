@@ -83,5 +83,8 @@ describe("living-founder restart protection (needrestart guard)", () => {
     // No restart of anything but the rehearsal units; cleanup always runs.
     expect(guard).not.toMatch(/systemctl restart/);
     expect(guard).toContain("trap cleanup EXIT");
+    // An early-exiting grep fed by a pipe under pipefail gives random false results (SIGPIPE): seen live, 3/20 runs.
+    expect(guard).toContain("set -euo pipefail");
+    expect(guard).not.toMatch(/\|\s*grep -q/);
   });
 });
