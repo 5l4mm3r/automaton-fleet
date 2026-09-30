@@ -55,9 +55,12 @@ describe("routing verification runner (fake Messages API, real process)", () => 
       }
       expect(c[0].requests[0]).toMatchObject({ tools: 0, thinking: null, effort: null });
       expect(c[0].requests[0].systemCached).toBe(false);
-      expect(c[1].requests[0]).toMatchObject({ thinking: { type: "adaptive" }, effort: "medium", systemCached: true, tools: 18 }); // toolbox + the two cognition tools
-      expect(c[1].usage.cacheWriteTokens).toBeGreaterThan(0);
-      expect(c[2].usage.cacheReadTokens).toBe(c[1].usage.cacheWriteTokens);
+      // R23.1: T2 caches only on evidenced reuse — not right after the T1 chore, but on the next Sonnet call inside the window.
+      expect(c[1].requests[0]).toMatchObject({ thinking: { type: "adaptive" }, effort: "medium", systemCached: false, tools: 18 }); // toolbox + the two cognition tools
+      expect(c[1].usage.cacheWriteTokens ?? 0).toBe(0);
+      expect(c[2].requests[0].systemCached).toBe(true);
+      expect(c[2].usage.cacheWriteTokens).toBeGreaterThan(0);
+      expect(c[4].requests[0].systemCached).toBe(false); // after the Opus escalation: no evidenced Sonnet reuse
       // The T3 escalation: one decision packet, no toolbox, no cache write premium.
       expect(c[3].requests[0]).toMatchObject({ messages: 1, model: "claude-opus-5-5", effort: "medium", systemCached: false, tools: 0 });
       expect(c[3].usage.cacheWriteTokens ?? 0).toBe(0);

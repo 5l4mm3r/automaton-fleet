@@ -101,6 +101,24 @@ every routed call records `cache_policy`, the reason, cache write/read tokens an
 Routing still never reads commercial history: the classifier and `cachePolicy` take task, tier, scope and the
 founder's last model/age only; economic risk stays proposal-based.
 
+## R23.1 — idle cognition efficiency (from the first natural routed production turn)
+
+Call 430 (a bare wake-up that only slept) cost +33% vs the legacy Opus idle turns: the T2 prefix was written and never
+read (33-minute gap), and the full task packet (~3.6k tokens) is larger than the legacy idle history.
+
+- **Controller (`cachePolicy`):** T2 and T3 task steps cache only on **evidenced reuse** — the request continues a tool
+  loop whose previous step ran on the same model, or the same model served this founder's previous call within the
+  300 s cache lifetime. Otherwise off. T1 and question-scoped escalations stay off; a T3 action step inside a T2 loop
+  is not reuse (control returns to T2). Classification, routing, tiers and charging are unchanged.
+- **Founder runtime (`mind.ts`):** a **bare wake-up** — the previous turn only slept and a digest of what the founder
+  could act on (facts and goals content, workspace paths/sizes/mtimes, economy-event ledger fields; not cash/expense,
+  which move with its own inference charges) is unchanged since — starts from a **slim** fleet-task-v1 packet: policy,
+  economics, open goals, output contract and the task, with facts reduced to their keys and notes/pages to counts,
+  which the founder can expand with its own T0 tools. Any change, a first turn or a working turn gets the full packet.
+  Still one message, no transcript replay.
+- The cache part is controller-only. The slim packet is founder code: it reaches Founder 1 only through the R23
+  runtime-upgrade lifecycle.
+
 ## Evidence (local, 2026-09-30)
 
 - `fleet-founder-upgrade.test.ts` — state snapshot unit tests; schema v23 registry guarantees on a real PostgreSQL

@@ -46,25 +46,26 @@ export type ProviderFactory = (c: TierCandidate, effortOverride: "high" | null, 
 export const PROMPT_CACHE_TTL_S = 300;
 
 /**
- * Prompt-cache policy for one routed call (schema v23; R22 evidence in docs/evaluations/routing-v22):
+ * Prompt-cache policy for one routed call (schema v23; R22 evidence in docs/evaluations/routing-v22; R23.1 refinement
+ * from the first natural routed production turn, docs/evaluations/r23):
  *   T1            off — a compact routine prompt, below the provider's cacheable minimum and never padded to reach it;
- *   T2            the tier's policy (baseline `prefix`): the stable tools+charter prefix is reused within the tool loop;
- *   T3 question   off — a one-off escalation would pay the write premium and never read it back;
- *   T3 task step  the tier's policy only when reuse is evidenced (the same model served this founder's previous call
- *                 within the cache lifetime); otherwise off.
- * Deterministic in (tier, scope, tier policy, the founder's last model and its age): never commercial history.
+ *   question      off — a one-off escalation would pay the write premium and never read it back;
+ *   T2 / T3 step  the tier's policy only when reuse is EVIDENCED: the call continues an active tool loop on the same
+ *                 model (the request already carries an assistant turn and the loop's previous step ran on this model),
+ *                 or the same model served this founder's previous call within the cache lifetime. A bare wake-up that only sleeps and is followed by a long gap writes nothing.
+ * Deterministic in (tier, scope, tier policy, the loop position, the founder's last model and its age): never
+ * commercial history.
  */
 export function cachePolicy(d: Pick<RouteDecision, "tier" | "scope">, c: Pick<TierCandidate, "model" | "promptCache">,
-  last: { lastModel?: unknown; lastAgeS?: unknown } = {}): { mode: PromptCachePolicy; reason: string } {
+  last: { lastModel?: unknown; lastAgeS?: unknown } = {}, loop: { continuing?: boolean } = {}): { mode: PromptCachePolicy; reason: string } {
   const configured: PromptCachePolicy = c.promptCache === "prefix" || c.promptCache === "prefix+tail" ? c.promptCache : "off";
   if (d.tier === "T1") return { mode: "off", reason: "T1 routine: compact, never padded" };
   if (configured === "off") return { mode: "off", reason: "tier policy off" };
   if (d.scope === "question") return { mode: "off", reason: "one-off escalation: no write premium" };
-  if (d.tier === "T3") {
-    const warm = last.lastModel === c.model && typeof last.lastAgeS === "number" && last.lastAgeS >= 0 && last.lastAgeS <= PROMPT_CACHE_TTL_S;
-    return warm ? { mode: configured, reason: "T3 task continuing on the same model" } : { mode: "off", reason: "T3 step without evidenced reuse" };
-  }
-  return { mode: configured, reason: "T2 stable prefix: reuse expected" };
+  const warm = last.lastModel === c.model && typeof last.lastAgeS === "number" && last.lastAgeS >= 0 && last.lastAgeS <= PROMPT_CACHE_TTL_S;
+  if (loop.continuing === true) return { mode: configured, reason: `${d.tier} tool loop: reuse expected` };
+  if (warm) return { mode: configured, reason: `${d.tier} same model within the cache lifetime` };
+  return { mode: "off", reason: `${d.tier} no evidenced reuse` };
 }
 
 const sha = (s: string) => crypto.createHash("sha256").update(s, "utf8").digest("hex");
@@ -155,7 +156,9 @@ export async function inferRouted(
   // A question-scoped escalation answers; it does not act: the charter's rules and priors, no toolbox.
   const question = decision.scope === "question";
   const system = routine ? FOUNDER_ROUTINE_CHARTER : question ? FOUNDER_CHARTER : `${FOUNDER_CHARTER}\n${FOUNDER_ROUTED_ADDENDUM}`;
-  const cache = cachePolicy(decision, candidate, rs);
+  // Reuse is evidenced inside an active tool loop on the SAME model: the request already carries an assistant turn and
+  // this conversation's previous step ran on this model (a T3 action step inside a T2 loop is not reuse: it returns to T2).
+  const cache = cachePolicy(decision, candidate, rs, { continuing: messages.some((m) => m.role === "assistant") && producer === candidate.model });
   const provider = providerFor(candidate, decision.effort, cache.mode);
   const allowed = new Set(Array.isArray(caps.allowed) ? (caps.allowed as string[]) : []);
   // Ordinary routed steps also get the cognition tools (delegate a routine chore, escalate one question).

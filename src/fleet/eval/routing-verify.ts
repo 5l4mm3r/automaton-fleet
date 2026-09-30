@@ -5,8 +5,8 @@
  * ports instead of the registry: no founder, no cognition log, no ledger, no provider-credit consumption row. Each
  * call is priced exactly at its tier's own prices. Smallest experiment that proves the real path:
  *   1  T1 extraction            Haiku (compact routine context; not padded to any cache minimum)
- *   2  T2 agent_step            Sonnet, founder prefix → cache WRITE expected
- *   3  T2 agent_step (new tail) Sonnet → cache READ expected
+ *   2  T2 agent_step            Sonnet right after the T1 chore → no evidenced reuse, no cache marker (R23.1)
+ *   3  T2 agent_step (new tail) Sonnet, same model within the cache window → prefix written (R23.1)
  *   4  T3 escalation            Opus, one Critical Decision Packet (question-scoped; v23: no toolbox, no cache write)
  *   5  T2 agent_step            Sonnet again (control returned downward); the history carries call 4's Opus-signed
  *                               thinking, which must NOT reach Sonnet
@@ -114,11 +114,12 @@ export async function runRoutingVerification(o: {
   const calls: VerifyCall[] = [];
   let spent = 0;
   let lastModel: string | null = null;
+  let lastAt = 0;
   const byModel = new Map(o.tiers.map((t) => [t.model, t]));
   const ports: RoutedCognitionPorts = {
     capabilities: async () => ({ ok: true, origin: "genesis_founder", allowed: FOUNDER_MANIFEST_V2.allowed as unknown as string[] }),
     cognitionStatus: async () => ({ ok: true, policyEnabled: true, provider: "anthropic" }),
-    routingState: async () => ({ routingEnabled: true, tiers: o.tiers, lastModel }),
+    routingState: async () => ({ routingEnabled: true, tiers: o.tiers, lastModel, lastAgeS: lastAt ? Math.floor((Date.now() - lastAt) / 1000) : null }),
     authorize: async () => ({ ok: true, requestId: crypto.randomUUID() }),
     record: async (_a, _id, r) => ({ ok: true, chargedCents: 0, chargedMicrocents: 0, usageSource: r.usageSource }),
   };
@@ -140,8 +141,8 @@ export async function runRoutingVerification(o: {
     let opusAssistant: ChatMessage | null = null;
     const steps: Array<{ label: string; body: () => Record<string, unknown> }> = [
       { label: "T1 extraction (Haiku, compact routine context)", body: () => ({ messages: [{ role: "user", content: "Extract the product name and price as JSON {name, priceGBP} from: \"Groomer Income Tracker — £12 — 14 sales\"." }], route: { taskClass: "extraction" } }) },
-      { label: "T2 agent_step (Sonnet) — cache write expected", body: () => ({ messages: [{ role: "user", content: "Routing verification heartbeat A. Reply with one short sentence and no tool call." }] }) },
-      { label: "T2 agent_step (Sonnet) — new tail, cache read expected", body: () => ({ messages: [{ role: "user", content: "Routing verification heartbeat B (a different observation). Reply with one short sentence and no tool call." }] }) },
+      { label: "T2 agent_step (Sonnet) after the T1 chore — bare wake, no cache (R23.1: no evidenced reuse)", body: () => ({ messages: [{ role: "user", content: "Routing verification heartbeat A. Reply with one short sentence and no tool call." }] }) },
+      { label: "T2 agent_step (Sonnet) within the cache window — prefix written (reuse evidenced)", body: () => ({ messages: [{ role: "user", content: "Routing verification heartbeat B (a different observation). Reply with one short sentence and no tool call." }] }) },
       { label: "T3 escalation (Opus) — one decision packet", body: () => ({ messages: [{ role: "user", content: packet }], route: { taskClass: "agent_step", escalation: { reasonCode: "HIGH_CONSEQUENCE", requestedTier: "T3" } } }) },
       { label: "T2 agent_step (Sonnet) after the escalation — Opus thinking must not cross", body: () => ({ messages: [
         { role: "user", content: "Routing verification heartbeat C." },
@@ -159,6 +160,7 @@ export async function runRoutingVerification(o: {
           costMicrocents: costMicrocents(r.usage, t.prices), cache: cacheEconomics(r.usage, t.prices), toolCalls: (r.toolCalls as Array<{ name: string }>).map((x) => x.name), thinkingBlocks: r.thinking?.length ?? 0 });
         spent += c.costMicrocents;
         lastModel = r.route.model;
+        lastAt = Date.now();
         if (r.route.tier === "T3") opusAssistant = { role: "assistant", content: r.content || "(answer)", ...(r.thinking?.length ? { thinking: r.thinking, ...(r.blockOrder ? { blockOrder: r.blockOrder.filter((k) => !k.startsWith("tool:")) } : {}) } : {}) };
       } catch (err) {
         c.code = o.sink.slice(before).some((x) => x.budgetStop) ? "BUDGET_STOP" : ((err as { code?: string }).code ?? (err as Error).name);

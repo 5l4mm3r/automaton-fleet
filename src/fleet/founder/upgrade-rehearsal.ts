@@ -347,12 +347,39 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
         && !links.some((l) => l.action_class === "major_spend_request" && l.tier !== "T3") && action.length >= 1 && action[0].router_decision?.actionClass === "major_spend_request" && afterAction?.tier === "T2",
       `links ${links.map((l) => `${l.action_class}@${l.tier}`).join(", ") || "none"}; ${refusedTier} tier refusal(s) audited; T3 action step then ${afterAction?.tier}`);
     const saving = t2.reduce((n, r) => n + Number(r.cache_saving_microcents ?? 0), 0);
-    check("routed: cache policy is tier/scope-aware — T1 off, T2 stable prefix written once and read back, the T3 question pays no write premium",
-      t1.every((r) => r.cache_policy === "off" && Number(r.cache_write_tokens) === 0) && t2.every((r) => r.cache_policy === "prefix") && t2.filter((r) => Number(r.cache_write_tokens) > 0).length === 1
-        && t2.some((r) => Number(r.cache_read_tokens) > 0) && saving > 0 && question.every((r) => r.cache_policy === "off" && Number(r.cache_write_tokens) === 0 && Number(r.cache_read_tokens) === 0),
-      `T2: 1 write, ${t2.filter((r) => Number(r.cache_read_tokens) > 0).length} read(s), net saving ${saving} µ¢; T1 and the T3 question: no cache marker`);
+    // R23.1: the prefix is cached only on evidenced reuse — inside the tool loop on the same model — never on a turn's
+    // first step after a gap, a T1 chore, the T3 question or the T3 action step; uncached rows carry no cache tokens.
+    const cachedT2 = t2.filter((r) => r.cache_policy === "prefix");
+    check("routed: cache only on evidenced reuse — T2 prefix written once inside the tool loop and read back; T1, the T3 question, the T3 action step and a turn's first step write nothing",
+      t1.every((r) => r.cache_policy === "off" && Number(r.cache_write_tokens) === 0) && cachedT2.length >= 2 && cachedT2.every((r) => String(r.reasoning?.cacheReason ?? "").match(/tool loop|within the cache lifetime/))
+        && t2.filter((r) => Number(r.cache_write_tokens) > 0).length === 1 && t2.some((r) => Number(r.cache_read_tokens) > 0) && saving > 0
+        && [...t2, ...question, ...action].filter((r) => r.cache_policy === "off").every((r) => Number(r.cache_write_tokens) === 0 && Number(r.cache_read_tokens) === 0)
+        && question.every((r) => r.cache_policy === "off") && action.every((r) => r.cache_policy === "off") && t2[0]?.cache_policy === "off",
+      `T2: ${cachedT2.length} cached call(s), 1 write, ${t2.filter((r) => Number(r.cache_read_tokens) > 0).length} read(s), net saving ${saving} µ¢; `
+        + `uncached: ${[...t1, ...t2, ...question, ...action].filter((r) => r.cache_policy === "off").length} call(s) (first step, T1, T3)`);
     check("routed: provider protocol holds through real founder loops — signed thinking never crosses a model boundary, nothing is edited mid-loop",
       fake.violations.length === 0 && routed.every((r) => r.outcome === "ok"), fake.violations.length ? fake.violations.slice(0, 3).join("; ") : `0 protocol violations over ${routed.length} routed call(s)`);
+    // R23.1: after the walk the founder only sleeps; its next bare wake-up starts from the slim packet (the exact call is
+    // matched by its request id in the founder's own decision log) and pays no cache write unless reuse is evidenced.
+    const slimLog = () => {
+      try {
+        return fs.readFileSync(path.join(stateNs, "mind-log.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>).filter((e) => e.packet === "slim" && e.requestId);
+      } catch {
+        return [] as Array<Record<string, unknown>>;
+      }
+    };
+    const slimRow = await waitFor(async () => {
+      const ids = new Set(slimLog().map((e) => String(e.requestId)));
+      return (await logRows()).find((r) => ids.has(String(r.request_id))) ?? null;
+    }, timeout * 2, poll);
+    const lastFull = slimRow ? [...(await logRows())].filter((r) => r.tier === "T2" && Number(r.packet_bytes) > 0 && Number(r.seq) < Number(slimRow.seq)
+      && !slimLog().some((e) => String(e.requestId) === String(r.request_id))).at(-1) : undefined;
+    const why = String(slimRow?.reasoning?.cacheReason ?? "");
+    check("routed: a bare wake-up after a sleep-only turn uses the slim packet — still T2, one message, smaller than the full packet of the same state, no cache write without evidenced reuse",
+      Boolean(slimRow) && slimRow!.tier === "T2" && slimRow!.task_class === "agent_step" && Number(slimRow!.packet_bytes) > 0 && Boolean(lastFull)
+        && Number(slimRow!.packet_bytes) < Number(lastFull!.packet_bytes)
+        && (slimRow!.cache_policy === "off" ? Number(slimRow!.cache_write_tokens) === 0 : /within the cache lifetime/.test(why)),
+      slimRow ? `slim packet ${slimRow.packet_bytes} B vs the previous full packet ${lastFull?.packet_bytes ?? "?"} B; cache ${slimRow.cache_policy} (${why}); cost ${slimRow.cost_microcents} µ¢` : "no slim wake-up observed");
     const booksEnd = await booksOk();
     const sumCost = routed.reduce((n, r) => n + Number(r.cost_microcents), 0);
     check("routed: memory and ledger continuity — pre-upgrade facts, goals and notes are still the founder's; every call is charged once to the same books",

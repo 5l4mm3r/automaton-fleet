@@ -99,10 +99,12 @@ describe("R23 prompt-cache policy (tier × scope × evidenced reuse)", () => {
   const [t1, t2, t3] = tiers();
   it("T1 off; T2 prefix; T3 question off; T3 step only when the same model served the previous call within the cache lifetime", () => {
     expect(cachePolicy({ tier: "T1", scope: "task_step" }, { ...t1, promptCache: "prefix" as never })).toMatchObject({ mode: "off" });
-    expect(cachePolicy({ tier: "T2", scope: "task_step" }, t2)).toMatchObject({ mode: "prefix" });
-    expect(cachePolicy({ tier: "T2", scope: "task_step" }, { ...t2, promptCache: "prefix+tail" })).toMatchObject({ mode: "prefix+tail" });
-    expect(cachePolicy({ tier: "T2", scope: "task_step" }, { ...t2, promptCache: "off" })).toMatchObject({ mode: "off", reason: "tier policy off" });
-    expect(cachePolicy({ tier: "T2", scope: "task_step" }, { model: SONNET })).toMatchObject({ mode: "off" }); // no policy recorded = off
+    const warm = { lastModel: SONNET, lastAgeS: 20 };
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, t2, warm)).toMatchObject({ mode: "prefix" });
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, t2)).toMatchObject({ mode: "off" }); // R23.1: no evidenced reuse
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, { ...t2, promptCache: "prefix+tail" }, warm)).toMatchObject({ mode: "prefix+tail" });
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, { ...t2, promptCache: "off" }, warm)).toMatchObject({ mode: "off", reason: "tier policy off" });
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, { model: SONNET }, warm)).toMatchObject({ mode: "off" }); // no policy recorded = off
     expect(cachePolicy({ tier: "T3", scope: "question" }, t3, { lastModel: OPUS, lastAgeS: 1 })).toMatchObject({ mode: "off", reason: expect.stringMatching(/one-off/) });
     expect(cachePolicy({ tier: "T3", scope: "task_step" }, t3)).toMatchObject({ mode: "off" });
     expect(cachePolicy({ tier: "T3", scope: "task_step" }, t3, { lastModel: SONNET, lastAgeS: 5 })).toMatchObject({ mode: "off" });
@@ -164,16 +166,17 @@ describe("R23 routed gateway on the wire (real AnthropicProvider → fake Messag
       expect(toolNames(fake.lastBody)).toEqual([]);
       expect(a.usage.cacheWriteTokens ?? 0).toBe(0);
 
-      const b = await inferRouted(ports, factory, "A", "t", { messages: obs });
+      const warm = fakePorts({ lastModel: SONNET, lastAgeS: 5 });
+      const b = await inferRouted(warm.ports, factory, "A", "t", { messages: obs });
       expect(b.route).toMatchObject({ tier: "T2", model: SONNET, promptCache: "prefix" });
       expect(cached(fake.lastBody)).toBe(true);
       expect(toolNames(fake.lastBody)).toEqual([...FOUNDER_TOOLS.map((t) => t.name), "routine_task", "escalate_question"]);
       expect(b.usage.cacheWriteTokens ?? 0).toBeGreaterThan(0);
-      const c = await inferRouted(ports, factory, "A", "t", { messages: [{ role: "user", content: "Heartbeat 4: something else." }] });
+      const c = await inferRouted(warm.ports, factory, "A", "t", { messages: [{ role: "user", content: "Heartbeat 4: something else." }] });
       expect(c.usage.cacheReadTokens).toBe(b.usage.cacheWriteTokens); // the stable prefix is read back: reuse was expected
       expect(modes).toEqual(["T1:off", "T2:prefix", "T2:prefix"]);
-      expect(seen.recorded.map((x) => [x.obs.promptCache, String(x.obs.cacheReason)])).toEqual([
-        ["off", "T1 routine: compact, never padded"], ["prefix", "T2 stable prefix: reuse expected"], ["prefix", "T2 stable prefix: reuse expected"]]);
+      expect([...seen.recorded, ...warm.seen.recorded].map((x) => [x.obs.promptCache, String(x.obs.cacheReason)])).toEqual([
+        ["off", "T1 routine: compact, never padded"], ["prefix", "T2 same model within the cache lifetime"], ["prefix", "T2 same model within the cache lifetime"]]);
     });
   });
 
@@ -501,5 +504,105 @@ describe("R23 founder mind: routed mode", () => {
     const text = renderBoundedPacket(buildTaskPacket({ memoryDir: m, workspaceDir: w, task: "THE-TASK-MARKER: decide the next step", outputContract: { form: "analysis", mustCite: false, instructions: "act" } }));
     expect(text.length).toBeLessThanOrEqual(15_000);
     expect(text).toContain("THE-TASK-MARKER");
+  });
+});
+
+// ─────────────────────────────────────────────── R23.1 idle cognition efficiency
+
+describe("R23.1 cache only on evidenced reuse (T2/T3 steps)", () => {
+  const [, t2, t3] = tiers();
+  it("policy table: bare wake off, active loop on, same model within the window on, stale gap off, question off, T3 action step inside a T2 loop off", () => {
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, t2, { lastModel: SONNET, lastAgeS: 1_980 })).toMatchObject({ mode: "off", reason: "T2 no evidenced reuse" });
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, t2, {})).toMatchObject({ mode: "off" });
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, t2, { lastModel: SONNET, lastAgeS: 1_980 }, { continuing: true })).toMatchObject({ mode: "prefix", reason: "T2 tool loop: reuse expected" });
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, t2, { lastModel: SONNET, lastAgeS: 30 })).toMatchObject({ mode: "prefix", reason: "T2 same model within the cache lifetime" });
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, t2, { lastModel: SONNET, lastAgeS: 301 })).toMatchObject({ mode: "off" });
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, t2, { lastModel: HAIKU, lastAgeS: 10 })).toMatchObject({ mode: "off" });
+    expect(cachePolicy({ tier: "T3", scope: "question" }, t3, { lastModel: OPUS, lastAgeS: 1 }, { continuing: true })).toMatchObject({ mode: "off" });
+    expect(cachePolicy({ tier: "T3", scope: "task_step" }, t3, { lastModel: SONNET, lastAgeS: 5 }, { continuing: false })).toMatchObject({ mode: "off" });
+    expect(cachePolicy({ tier: "T2", scope: "task_step" }, { ...t2, promptCache: "off" }, { lastModel: SONNET, lastAgeS: 1 }, { continuing: true })).toMatchObject({ mode: "off" });
+  });
+
+  it("on the wire: a bare wake writes nothing; inside a tool loop the prefix is written once and read back; a T3 action step inside the T2 loop does not write", async () => {
+    await withFake(async (factory, fake) => {
+      // Bare idle wake after a 33-minute gap: T2, one message, no cache marker, no write premium.
+      const wake = await inferRouted(fakePorts({ lastModel: SONNET, conversationModel: SONNET, lastAgeS: 1_980 }).ports, factory, "A", "t", { messages: obs });
+      expect(wake.route).toMatchObject({ tier: "T2", promptCache: "off" });
+      expect(cached(fake.lastBody)).toBe(false);
+      expect(wake.usage.cacheWriteTokens ?? 0).toBe(0);
+      // An active loop (the request carries this conversation's assistant turn): write, then read.
+      const loop = (n: number) => [...obs, { role: "assistant", content: "", toolCalls: [{ id: `toolu_${n}`, name: "list_goals", arguments: {} }] }, { role: "tool", toolCallId: `toolu_${n}`, content: "[]" }];
+      const s1 = await inferRouted(fakePorts({ lastModel: SONNET, conversationModel: SONNET, lastAgeS: 3 }).ports, factory, "A", "t", { messages: loop(1) });
+      const s2 = await inferRouted(fakePorts({ lastModel: SONNET, conversationModel: SONNET, lastAgeS: 3 }).ports, factory, "A", "t", { messages: loop(2) });
+      expect([s1.route.promptCache, s2.route.promptCache]).toEqual(["prefix", "prefix"]);
+      expect(s1.usage.cacheWriteTokens ?? 0).toBeGreaterThan(0);
+      expect(s2.usage.cacheReadTokens).toBe(s1.usage.cacheWriteTokens);
+      // A second T2 call inside the cache window (no loop): reuse is permitted and hits.
+      const again = await inferRouted(fakePorts({ lastModel: SONNET, lastAgeS: 40 }).ports, factory, "A", "t", { messages: [{ role: "user", content: "Heartbeat 8." }] });
+      expect(again.route.promptCache).toBe("prefix");
+      expect(again.usage.cacheReadTokens ?? 0).toBeGreaterThan(0);
+      // The T3 action step inside the T2 loop: no evidenced reuse on Opus, so no write premium.
+      const act = await inferRouted(fakePorts({ lastModel: SONNET, conversationModel: SONNET, lastAgeS: 3 }).ports, factory, "A", "t", { messages: loop(3), route: { taskClass: "agent_step", actionClass: "major_spend_request" } });
+      expect(act.route).toMatchObject({ tier: "T3", source: "action_boundary", promptCache: "off" });
+      expect(cached(fake.lastBody)).toBe(false);
+    });
+  });
+});
+
+describe("R23.1 slim bare-wake-up packet (founder runtime)", () => {
+  const sleepy = (n: number) => ({ content: "", toolCalls: [call(`toolu_z${n}`, "sleep", { reason: "nothing to do" })] });
+  const bodyOf = (c: { messages: Array<Record<string, unknown>> }) => JSON.parse(String(c.messages[0].content).split("\n").slice(3).join("\n"));
+
+  it("after a sleep-only turn with nothing changed, the next turn is a slim, still-valid packet; any change brings back the full packet", async () => {
+    const facts = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`fact ${i}`, "v".repeat(400)]));
+    const rig = mindRig({ facts, replies: Array.from({ length: 8 }, (_, i) => sleepy(i)) });
+    fs.mkdirSync(path.join(rig.dirs.w, "notes"));
+    fs.writeFileSync(path.join(rig.dirs.w, "notes", "plan.md"), "p".repeat(900));
+    await rig.mind.turn("Heartbeat 2.");   // full (no closing note yet)
+    await rig.mind.turn("Heartbeat 4.");   // resting (idle backoff), no call
+    await rig.mind.turn("Heartbeat 6.");   // bare wake → slim
+    expect(rig.calls).toHaveLength(2);
+    const [full, slim] = rig.calls.map((c) => ({ c, b: bodyOf(c), bytes: Buffer.byteLength(String(c.messages[0].content)) }));
+    expect(full.b.knowledge).toHaveLength(12);
+    expect(full.b.notes).toHaveLength(1);
+    expect(slim.c.messages).toHaveLength(1); // still no transcript replay
+    expect(taskPacketProblems(slim.b)).toEqual([]); // a complete fleet-task-v1 packet
+    expect(slim.b).toMatchObject({ packet: TASK_PACKET_VERSION, knowledge: [], notes: [], evidence: [], institutionalKnowledge: [] });
+    expect(slim.b.policy).toEqual(full.b.policy); // the safety and policy context is never dropped
+    expect(slim.b.economics).toEqual(full.b.economics);
+    expect(slim.b.outputContract).toEqual(full.b.outputContract);
+    expect(slim.b.task).toMatch(/Nothing has changed since your last turn.*12 remembered fact\(s\) \(keys: fact 0, fact 1/s);
+    expect(slim.bytes).toBeLessThan(full.bytes / 3);
+    expect(slim.c.route).toEqual({ taskClass: "agent_step", taskId: expect.any(String) }); // classification unchanged: T2
+    expect(rig.mind.routing.slimWakeups).toBe(1);
+    // Something changes (an owner note lands in the workspace): the next wake gets the full packet at once.
+    await rig.mind.turn("Heartbeat 8."); // resting
+    await rig.mind.turn("Heartbeat 10."); // resting (backoff 2)
+    fs.writeFileSync(path.join(rig.dirs.w, "OWNER_NOTE.md"), "please look at the listing");
+    for (let i = 0; i < 6 && rig.calls.length < 3; i++) await rig.mind.turn(`Heartbeat ${12 + 2 * i}.`);
+    const after = bodyOf(rig.calls[2]);
+    expect(after.knowledge).toHaveLength(12);
+    expect(after.notes.map((n: { path: string }) => n.path)).toContain("OWNER_NOTE.md");
+    expect(rig.mind.routing.slimWakeups).toBe(1);
+  });
+
+  it("a working turn, a changed fact or a changed economy never yields a slim packet; the founder's own inference charges do not count as a change", async () => {
+    let cash = 9_000;
+    const rig = mindRig({ facts: { a: "1" }, replies: [sleepy(0), sleepy(1), { toolCalls: [call("toolu_w", "set_goal", { title: "Work" })] }, sleepy(2), sleepy(3), sleepy(4), sleepy(5)] });
+    (rig.mind as unknown as { o: { ports: MindPorts } }).o.ports.ledger = async () => ({ cash: (cash -= 2), expenses: 10_000 - cash, reserved: 0, externalCustomerRevenue: 0 });
+    await rig.mind.turn("h1"); // full
+    await rig.mind.turn("h2"); // resting
+    await rig.mind.turn("h3"); // slim although cash moved (own charges)
+    expect(rig.mind.routing.slimWakeups).toBe(1);
+    await rig.mind.turn("h4"); await rig.mind.turn("h5"); // resting ×2
+    await rig.mind.turn("h6"); // slim; this turn works (set_goal) instead of sleeping
+    expect(rig.mind.routing.slimWakeups).toBe(2);
+    await rig.mind.turn("h7"); // after a working turn: full
+    expect(bodyOf(rig.calls.at(-1)!).knowledge).toHaveLength(1);
+    expect(rig.mind.routing.slimWakeups).toBe(2);
+    // An economy event (an order reserved) after a sleep-only turn: full packet.
+    (rig.mind as unknown as { o: { ports: MindPorts } }).o.ports.ledger = async () => ({ cash, reserved: 500, externalCustomerRevenue: 0 });
+    for (let i = 0; i < 4; i++) await rig.mind.turn(`h${8 + i}`);
+    expect(rig.mind.routing.slimWakeups).toBe(2);
   });
 });

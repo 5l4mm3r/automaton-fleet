@@ -499,7 +499,8 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
         "upgrade again after the rollback: verified, same founder",
         "routed: one question escalated as a Critical Decision Packet (reason code, parent call), then control returned to T2",
         "routed: consequential actions are linked to the cognition that produced them — a small spend at T2, a major spend only from a T3 step",
-        "routed: cache policy is tier/scope-aware — T1 off, T2 stable prefix written once and read back, the T3 question pays no write premium",
+        "routed: cache only on evidenced reuse — T2 prefix written once inside the tool loop and read back; T1, the T3 question, the T3 action step and a turn's first step write nothing",
+        "routed: a bare wake-up after a sleep-only turn uses the slim packet — still T2, one message, smaller than the full packet of the same state, no cache write without evidenced reuse",
         "routed: provider protocol holds through real founder loops — signed thinking never crosses a model boundary, nothing is edited mid-loop",
         "clean teardown",
       ]));

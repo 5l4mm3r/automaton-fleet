@@ -114,13 +114,13 @@ describe("Critical Decision Packet: the question, not the job", () => {
 });
 
 /** In-memory ports that behave like the database for the gateway (authorization snapshot, exact record). */
-function fakePorts(o: { lastModel?: string | null; authorize?: (route: Record<string, unknown>) => Record<string, unknown> & { ok: boolean }; status?: Record<string, unknown> } = {}) {
+function fakePorts(o: { lastModel?: string | null; lastAgeS?: number | null; authorize?: (route: Record<string, unknown>) => Record<string, unknown> & { ok: boolean }; status?: Record<string, unknown> } = {}) {
   const seen = { authorized: [] as Array<{ estimate: number; route: Record<string, unknown>; promptSha: string }>, recorded: [] as Array<{ r: CognitionRecord; obs: Record<string, unknown> }> };
   let n = 0;
   const ports: RoutedCognitionPorts = {
     capabilities: async () => ({ ok: true, origin: "genesis_founder", allowed: FOUNDER_MANIFEST_V2.allowed as unknown as string[] }),
     cognitionStatus: async () => ({ ok: true, policyEnabled: true, provider: "anthropic", model: OPUS, ...(o.status ?? {}) }),
-    routingState: async () => ({ routingEnabled: true, tiers: TIERS, lastModel: o.lastModel ?? null }),
+    routingState: async () => ({ routingEnabled: true, tiers: TIERS, lastModel: o.lastModel ?? null, lastAgeS: o.lastAgeS ?? null }),
     authorize: async (_a, estimate, route, promptSha) => {
       seen.authorized.push({ estimate, route, promptSha });
       return o.authorize?.(route) ?? { ok: true, requestId: `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}` };
@@ -206,7 +206,8 @@ describe("routed gateway (real AnthropicProvider → fake Messages API)", () => 
 
   it("prompt caching: tools + charter are one cached prefix — written once, then read; the tail stays uncached", async () => {
     await withFake(async (factory) => {
-      const { ports, seen } = fakePorts();
+      // R23.1: the prefix is cached when reuse is evidenced (here: the same model served this founder moments ago).
+      const { ports, seen } = fakePorts({ lastModel: SONNET, lastAgeS: 10 });
       const a = await inferRouted(ports, factory, "A", "t", { messages: obs });
       const b = await inferRouted(ports, factory, "A", "t", { messages: [{ role: "user", content: "Heartbeat 4, something new." }] });
       expect(a.usage.cacheWriteTokens ?? 0).toBeGreaterThan(0);
