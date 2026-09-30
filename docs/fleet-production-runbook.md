@@ -1842,7 +1842,7 @@ Evidence: `docs/evaluations/r23/`.
 - **Living founders and controller deploys from now on:** Founder 1's unit is pinned to `aab6ca3`; the rule is
   unchanged — a controller deploy never restarts the founder unit; founder code changes only via `upgrade-runtime`.
 
-## Stage R24 — Opportunity → Experiment Pipeline (procedure; prepared 2026-09-30, NOT deployed)
+## Stage R24 — Opportunity → Experiment Pipeline (procedure; R24-1 deployed 2026-09-30, pipeline OFF)
 
 Design, Evidence Ladder and AMBER items: `docs/design/r24-opportunity-experiment-pipeline.md`. Financially inert
 (`financial_mode` CHECK-pinned to `simulated`). Every step is an owner gate. Local evidence: `docs/evaluations/r24/`
@@ -1882,6 +1882,24 @@ Design, Evidence Ladder and AMBER items: `docs/design/r24-opportunity-experiment
     founder back on `aab6ca3` first, because a v23 controller cannot serve a runtime that expects v24 routes.
 - **Not part of R24:** real capital or payments, trading, custody execution, owner sweep, reproduction, refounding,
   Founder 2, `docs/master-key/`.
+
+### Stage R24 record (2026-09-30, times UTC)
+
+- **R24-1 done** (owner-confirmed): release `59896ce` (build `301133b5…d0b5`, VPS = local prediction), lockfile
+  `eee9dc2f…` unchanged. Pushed `1476ae8..59896ce`.
+  - Preparation: `runtime.env.pre-r24` kept (`4821616` pins); `current` → `releases/59896ce…`; tooling at `59896ce`.
+  - Controller-only outage 20:16:32–20:16:44 (12 s).
+  - Dump `~/automaton_fleet-v23-pre-v24-20260930T201632Z.dump` (2,476,584 B, 0600, sha `f2c8d314…0cf2`, 79 tables with
+    data).
+  - `migrate-check` exactly `{23→24, wouldApply:[24]}`; migrate, audit PASS, approve-runtime, runtime VERIFIED.
+  - Checks: doctor DEPLOYMENT OK, `fleet:verify` 16/16, `fleet-verify-deployment.sh` 149/0, ledger verifies.
+- **Founder 1 untouched:** PID 253900, 0 restarts, pin `aab6ca3`. Identity, credential and Genesis unchanged; books
+  continuous (cash 9267 + expense 733 = 10000p); heartbeating on the new controller.
+- **Inert:** `experiment-policy` enabled=false (simulated), 0 experiments, 0 evidence artifacts, 0 relevance calls.
+- **Pending (separate owner gates):** R24-2 founder runtime upgrade (experiment tools + R23.1 slim wake packet); R24-3
+  `experiment-enable`.
+- **Rollback:** `runtime.env.pre-r24` + `current` → `releases/4821616…` + restore the pre-v24 dump (Founder 1 needs
+  nothing: it still runs `aab6ca3`).
 
 ## Operating the Claude bridge (dev VM, Phase D)
 
