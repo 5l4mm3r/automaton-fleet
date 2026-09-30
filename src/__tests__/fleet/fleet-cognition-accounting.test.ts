@@ -275,7 +275,9 @@ describe.skipIf(!PG_BIN)("L13 sub-cent inference accounting (schema v17, Postgre
     try {
       await c.query("BEGIN");
       await c.query(`ALTER TABLE fleet.fleet_fx_rates DISABLE TRIGGER USER`);
-      await c.query(`UPDATE fleet.fleet_fx_rates SET observed_on = current_date - 6`);
+      // Aged on the same UTC calendar the freshness rule uses (current_date follows the session time zone, which is a
+      // day ahead of UTC for part of every day outside UTC and would leave the rate exactly 5 UTC days old: still valid).
+      await c.query(`UPDATE fleet.fleet_fx_rates SET observed_on = (now() AT TIME ZONE 'UTC')::date - 6`);
       expect((await c.query(`SELECT fleet.svc_cognition_authorize($1, 1) AS r`, [a])).rows[0].r).toMatchObject({ ok: false, code: "FLEET_FX_UNAVAILABLE" });
     } finally {
       await c.query("ROLLBACK");

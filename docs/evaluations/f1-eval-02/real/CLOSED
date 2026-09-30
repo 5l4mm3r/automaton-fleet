@@ -1,0 +1,4 @@
+F1-EVAL-02 is complete and accepted (2026-09-30). This directory is sealed: the driver refuses `run` here
+(F1EVAL_CLOSED), so no restart or resume can start new billable cells against this evidence.
+Final accounting: 52 calls (claude-opus-5-5), 424,731 input / 37,334 output tokens, 0 cache tokens,
+244,560,400 USD µ¢ ($2.445604) of the 300,000,000 µ¢ ($3.00) cap. See ledger.json and SHA256SUMS.

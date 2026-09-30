@@ -6,7 +6,9 @@
  *   - the budget guard refuses a call before anything is sent;
  *   - signed thinking never reaches a snapshot, a result or a packet;
  *   - the real Anthropic adapter path accepts the harness's conversations (fake Messages API, no violations);
- *   - the driver checkpoints, resumes without rerunning completed cells, and counts interrupted spend conservatively.
+ *   - the driver checkpoints, resumes without rerunning completed cells, and counts interrupted spend conservatively;
+ *   - restart shield: ambiguous durable state, a second driver, a sealed evaluation or an interrupted cell without the
+ *     operator's explicit consent all refuse BEFORE any billable call; a crash between result and ledger reconciles.
  */
 import { describe, it, expect } from "vitest";
 import fs from "fs";
@@ -16,7 +18,7 @@ import { buildTaskPacket, renderTaskPacket, taskPacketProblems, PACKET_LIMITS } 
 import { runCell, worstCaseMicrocents, type CellRequest, type Snapshot } from "../../fleet/eval/f1-eval-02.js";
 import { FakeFounderModel } from "../../fleet/eval/fake-founder-model.js";
 import { PLAN, scoreCell } from "../../fleet/eval/f1-eval-02-plan.js";
-import { interruptedSpend, runPlan } from "../../fleet/eval/f1-eval-02-driver.js";
+import { EvalStateError, interruptedSpend, runPlan } from "../../fleet/eval/f1-eval-02-driver.js";
 import { PHASE_B_OBSERVATIONS, PHASE_C_OBSERVATION, PROBE_D, PROBE_CONTRACT } from "../../fleet/eval/f1-eval-02-fixtures.js";
 import { startFakeAnthropic } from "../../fleet/cognition/fake-anthropic.js";
 import { AnthropicProvider } from "../../fleet/cognition/anthropic.js";
@@ -196,7 +198,7 @@ describe("F1-EVAL-02 driver (durable checkpoints, resume, conservative accountin
     fs.writeFileSync(path.join(out, "events", "C-trunk.jsonl"), `${JSON.stringify({ event: "call_start", turn: 1, step: 0, boundMicrocents: 7_000_000 })}\n`);
     const seen: number[] = [];
     const r2 = await runPlan(out, {
-      mandatoryOnly: true, log: () => undefined,
+      mandatoryOnly: true, rerunInterrupted: ["C-trunk"], log: () => undefined,
       transport: async (payload, onEvent) => {
         const req = payload.request as CellRequest;
         seen.push(req.budgetMicrocents);
@@ -212,6 +214,110 @@ describe("F1-EVAL-02 driver (durable checkpoints, resume, conservative accountin
     expect(seen[0]).toBe(300_000_000 - ledger.cells["B-trunk"].spentMicrocents - 7_000_000);
     expect(ledger.totalMicrocents).toBeLessThanOrEqual(300_000_000);
   }, 60_000);
+
+  // ─── Restart shield: every refusal happens before the transport (the billable path) is reached ───
+  const CONFIG = { transport: "fake", model: "fake", effort: "high", maxTokens: 4000, prices: PRICES, capMicrocents: 300_000_000 };
+  const counting = () => {
+    const calls: string[] = [];
+    const transport = async (payload: Record<string, unknown>, onEvent: (l: string) => void) => {
+      const req = payload.request as CellRequest;
+      calls.push(req.cellId);
+      return { mode: "cell", model: "fake", effort: "high", result: await runCell(req, new FakeFounderModel(), { log: (e) => onEvent(JSON.stringify(e)) }) };
+    };
+    return { calls, transport };
+  };
+  async function afterB(): Promise<string> {
+    const out = tmp();
+    fs.writeFileSync(path.join(out, "config.json"), JSON.stringify(CONFIG));
+    await runPlan(out, { only: "B-trunk", log: () => undefined });
+    return out;
+  }
+  const ledgerOf = (out: string) => JSON.parse(fs.readFileSync(path.join(out, "ledger.json"), "utf8"));
+
+  it("restart after an interruption: the spend is counted once, and the cell is NOT rerun without the operator naming it", async () => {
+    const out = await afterB();
+    fs.writeFileSync(path.join(out, "events", "C-trunk.jsonl"), `${JSON.stringify({ event: "call_start", turn: 1, step: 0, boundMicrocents: 7_000_000 })}\n`);
+    const t = counting();
+    for (let i = 0; i < 2; i++) {
+      const r = await runPlan(out, { mandatoryOnly: true, transport: t.transport, log: () => undefined });
+      expect(r).toMatchObject({ ran: [], stoppedAt: "C-trunk", reason: expect.stringMatching(/--rerun-interrupted C-trunk/) });
+    }
+    expect(t.calls).toEqual([]);
+    const l = ledgerOf(out);
+    expect(l.interrupted.map((x: { cellId: string }) => x.cellId)).toEqual(["C-trunk"]); // counted once across two restarts
+    expect(l.totalMicrocents).toBe(l.cells["B-trunk"].spentMicrocents + 7_000_000);
+    const r = await runPlan(out, { only: "C-trunk", rerunInterrupted: ["C-trunk"], transport: t.transport, log: () => undefined });
+    expect(r.ran).toEqual(["C-trunk"]);
+    expect(t.calls).toEqual(["C-trunk"]);
+  }, 60_000);
+
+  it("a corrupt, truncated or missing ledger with prior work refuses (never an empty ledger with a fresh cap)", async () => {
+    const out = await afterB();
+    const t = counting();
+    fs.writeFileSync(path.join(out, "ledger.json"), '{"capMicrocents": 300000000, "cells": {"B-tr');
+    await expect(runPlan(out, { transport: t.transport, log: () => undefined })).rejects.toThrow(/F1EVAL_STATE_AMBIGUOUS: ledger.json is not valid JSON/);
+    fs.rmSync(path.join(out, "ledger.json"));
+    await expect(runPlan(out, { transport: t.transport, log: () => undefined })).rejects.toThrow(/ledger.json does not/);
+    expect(t.calls).toEqual([]);
+    expect(fs.existsSync(path.join(out, "run.lock"))).toBe(false); // the lock is released on refusal
+  }, 60_000);
+
+  it("a ledger whose total or cap does not match refuses (budget identity is never reinterpreted)", async () => {
+    const out = await afterB();
+    const t = counting();
+    const l = ledgerOf(out);
+    fs.writeFileSync(path.join(out, "ledger.json"), JSON.stringify({ ...l, totalMicrocents: 0 }));
+    await expect(runPlan(out, { transport: t.transport, log: () => undefined })).rejects.toThrow(/does not match its entries/);
+    fs.writeFileSync(path.join(out, "ledger.json"), JSON.stringify({ ...l, capMicrocents: 250_000_000 }));
+    await expect(runPlan(out, { transport: t.transport, log: () => undefined })).rejects.toThrow(/differs from config cap/);
+    expect(t.calls).toEqual([]);
+  }, 60_000);
+
+  it("a crash between the result write and the ledger write is reconciled from the durable result before anything runs", async () => {
+    const out = await afterB();
+    const spent = ledgerOf(out).cells["B-trunk"].spentMicrocents;
+    fs.writeFileSync(path.join(out, "ledger.json"), JSON.stringify({ capMicrocents: 300_000_000, cells: {}, interrupted: [], totalMicrocents: 0 }));
+    const seen: number[] = [];
+    const t = counting();
+    const r = await runPlan(out, { only: "C-trunk", log: () => undefined, transport: async (p, e) => { seen.push((p.request as CellRequest).budgetMicrocents); return t.transport(p, e); } });
+    expect(r.ran).toEqual(["C-trunk"]);
+    expect(ledgerOf(out).cells["B-trunk"].spentMicrocents).toBe(spent);
+    expect(seen).toEqual([300_000_000 - spent]); // the reconciled spend was deducted before the next billable cell
+  }, 60_000);
+
+  it("a missing or corrupt parent state refuses: a severance arm never silently starts from nothing", async () => {
+    const out = await afterB();
+    const t = counting();
+    fs.writeFileSync(path.join(out, "state", "B-trunk.json"), "{not json");
+    await expect(runPlan(out, { only: "C-trunk", transport: t.transport, log: () => undefined })).rejects.toThrow(/state\/B-trunk.json is not valid JSON/);
+    fs.rmSync(path.join(out, "state", "B-trunk.json"));
+    await expect(runPlan(out, { only: "C-trunk", transport: t.transport, log: () => undefined })).rejects.toThrow(/state\/B-trunk.json \(input of C-trunk\) is missing/);
+    expect(t.calls).toEqual([]);
+  }, 60_000);
+
+  it("one driver at a time (a stale lock is the operator's decision), and a sealed evaluation never runs again", async () => {
+    const out = await afterB();
+    const t = counting();
+    fs.writeFileSync(path.join(out, "run.lock"), JSON.stringify({ pid: 999_999, at: "2026-09-29T23:41:00Z" }));
+    await expect(runPlan(out, { transport: t.transport, log: () => undefined })).rejects.toThrow(/F1EVAL_LOCKED/);
+    expect(fs.existsSync(path.join(out, "run.lock"))).toBe(true); // never removed by the refused run
+    fs.rmSync(path.join(out, "run.lock"));
+    fs.writeFileSync(path.join(out, "CLOSED"), "accepted");
+    await expect(runPlan(out, { transport: t.transport, log: () => undefined })).rejects.toThrow(EvalStateError);
+    await expect(runPlan(out, { transport: t.transport, log: () => undefined })).rejects.toThrow(/F1EVAL_CLOSED/);
+    expect(t.calls).toEqual([]);
+    // A driver that dies mid-cell (transport error) releases its lock: the next run sees the interruption, not a lock.
+    fs.rmSync(path.join(out, "CLOSED"));
+    await expect(runPlan(out, { only: "C-trunk", log: () => undefined, transport: async (_p, e) => { e(JSON.stringify({ event: "call_start", turn: 1, step: 0, boundMicrocents: 5 })); throw new Error("ssh: connection reset"); } }))
+      .rejects.toThrow(/connection reset/);
+    expect(fs.existsSync(path.join(out, "run.lock"))).toBe(false);
+    expect(await runPlan(out, { only: "C-trunk", transport: t.transport, log: () => undefined })).toMatchObject({ stoppedAt: "C-trunk", reason: expect.stringMatching(/interrupted/) });
+    expect(t.calls).toEqual([]);
+  }, 60_000);
+
+  it("the accepted F1-EVAL-02 evidence directory is sealed", () => {
+    expect(fs.existsSync("docs/evaluations/f1-eval-02/real/CLOSED")).toBe(true);
+  });
 
   it("refuses a cap above the authorised ceiling", async () => {
     const out = tmp();

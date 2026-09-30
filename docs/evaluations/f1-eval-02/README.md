@@ -22,6 +22,9 @@ evidence in `closeout/`).
 
 Paid inference: $2.445604 (see `real/ledger.json`).
 
+**Sealed 2026-10-01:** `real/CLOSED` makes the driver refuse `run` against this evidence (`F1EVAL_CLOSED`). The
+driver's restart shield also fails closed on ambiguous durable state. Details: record, "Closeout addendum".
+
 ## How to continue
 
 1. Stage the evaluation tree on the VPS (no restart, no pin change, `current` untouched):
@@ -34,9 +37,14 @@ Paid inference: $2.445604 (see `real/ledger.json`).
         && sudo mv -T /opt/automaton-fleet/eval/f1-eval-02.tmp /opt/automaton-fleet/eval/f1-eval-02
    ```
 2. `pnpm tsx src/fleet/eval/f1-eval-02-driver.ts models --out docs/evaluations/f1-eval-02/real` (free).
-3. `pnpm tsx src/fleet/eval/f1-eval-02-driver.ts run --out docs/evaluations/f1-eval-02/real` — resumable at any
-   point: completed cells are never rerun; an interrupted cell's spend is counted at its worst case before it is rerun;
-   the $3.00 cap is enforced before every call.
+3. `pnpm tsx src/fleet/eval/f1-eval-02-driver.ts run --out <new evaluation dir>`. Resumable at any point:
+   - completed cells are never rerun;
+   - an interrupted cell's spend is counted at its worst case, and the driver then stops; the cell is rerun only with
+     `--rerun-interrupted <cellId>`;
+   - the $3.00 cap is enforced before every call;
+   - one driver at a time (`run.lock`);
+   - unreadable, missing or inconsistent durable state refuses the run.
+   `real/` itself is sealed.
 4. `… score --out docs/evaluations/f1-eval-02/real`.
 
 ## Layout

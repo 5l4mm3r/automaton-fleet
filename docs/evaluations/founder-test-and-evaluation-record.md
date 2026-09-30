@@ -326,6 +326,27 @@ Appended after the evaluation; the evidence above and under `docs/evaluations/f1
   installing and detection keeps reporting. Live rehearsal with the real needrestart/systemd: PASS (control
   restarted, founder-pattern unit deferred); `fleet-verify-deployment.sh` 147/0. Founder 1 MainPID 185890 and pin
   `eea1932` unchanged throughout. See the runbook section "Host maintenance and living founders" and `closeout/`.
+- **Closeout addendum (2026-10-01): evaluation-runner restart shield.** The host restart guard (above) covers
+  founder units. The evaluation driver's own resume path had fail-open states. They are hypothetical: the evaluated
+  run hit none of them (0 interruptions; the ledger reconciles exactly with the 52 call events). The defects:
+  - an unreadable or truncated `ledger.json` was replaced by an empty ledger, restoring the full $3.00 cap after
+    $2.445604 was spent;
+  - a crash between the result write and the ledger write dropped that cell's spend;
+  - a missing or corrupt parent state started a severance arm from an empty state;
+  - two drivers could run at once;
+  - an interrupted cell was rerun automatically, repeating billable calls;
+  - nothing sealed the accepted evidence directory.
+
+  The driver now fails closed on each of these before any billable call:
+  - strict reads;
+  - ledger shape, cap and total checks;
+  - reconciliation from the durable result;
+  - an exclusive `run.lock`;
+  - explicit `--rerun-interrupted <cellId>`;
+  - a `CLOSED` seal, now present in `real/`.
+
+  7 new tests; 6 of them fail on the previous driver. The evidence under `real/` is unchanged (`SHA256SUMS` verifies;
+  only `CLOSED` was added).
 - **Post-run harness fixes committed separately** (not present during the evaluated run, which used `88b0896`):
   unique knowledge-proposal ids; optional-cell admission by the largest observed call bound (applied before the
   optional pass).

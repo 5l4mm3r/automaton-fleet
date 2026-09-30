@@ -10,11 +10,21 @@
  *   <out>/scores.json            deterministic scoring (`score`)
  *
  * Resume: completed cells are skipped. A cell with events but no result was interrupted: its spend is counted
- * conservatively (reported costs + the worst-case bound of any call that started without ending) before it is rerun.
- * The remaining budget passed to each cell is cap − everything counted so far, and the runner refuses any call whose
- * worst case would exceed it. A budget stop or a provider error stops the driver (no retry loops).
+ * conservatively (reported costs + the worst-case bound of any call that started without ending) and the driver STOPS;
+ * the interrupted cell is rerun only when the operator names it (`--rerun-interrupted <cellId>`), so a restart never
+ * repeats billable calls by itself. The remaining budget passed to each cell is cap − everything counted so far, and
+ * the runner refuses any call whose worst case would exceed it. A budget stop or a provider error stops the driver.
  *
- *   tsx src/fleet/eval/f1-eval-02-driver.ts run   --out <dir> [--mandatory-only] [--only <cellId>]
+ * Restart shield (fails closed on ambiguous durable state; never guesses):
+ *   - `<out>/CLOSED` seals an accepted evaluation: `run` refuses;
+ *   - `<out>/run.lock` (exclusive create) admits one driver at a time; a lock left by a dead driver must be inspected
+ *     and removed by the operator;
+ *   - config, ledger, cell results and parent state are read strictly: a present but unreadable file refuses the run
+ *     (it is never replaced by an empty default); a missing ledger while results or events exist refuses too;
+ *   - the ledger must match the configured cap and its own total; a completed cell missing from the ledger (a crash
+ *     between the result write and the ledger write) is reconciled from its durable result before anything runs.
+ *
+ *   tsx src/fleet/eval/f1-eval-02-driver.ts run   --out <dir> [--mandatory-only] [--only <cellId>] [--rerun-interrupted <cellId>]…
  *   tsx src/fleet/eval/f1-eval-02-driver.ts models --out <dir>
  *   tsx src/fleet/eval/f1-eval-02-driver.ts score  --out <dir>
  */
@@ -47,6 +57,23 @@ interface Ledger {
 }
 
 const readJson = <T>(f: string, d: T): T => { try { return JSON.parse(fs.readFileSync(f, "utf8")) as T; } catch { return d; } };
+
+/** Durable evaluation state is never guessed: absent → the default; present but unreadable or not JSON → refuse. */
+export class EvalStateError extends Error {}
+function readJsonStrict<T>(f: string, d: T, what: string): T {
+  let text: string;
+  try {
+    text = fs.readFileSync(f, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return d;
+    throw new EvalStateError(`F1EVAL_STATE_AMBIGUOUS: ${what} cannot be read`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new EvalStateError(`F1EVAL_STATE_AMBIGUOUS: ${what} is not valid JSON`);
+  }
+}
 /** Durable write: temp file, fsync, rename. */
 function writeDurable(f: string, v: unknown): void {
   fs.mkdirSync(path.dirname(f), { recursive: true });
@@ -114,16 +141,58 @@ function fakeTransport(): Transport {
   };
 }
 
-export async function runPlan(out: string, o: { mandatoryOnly?: boolean; only?: string; transport?: Transport; log?: (s: string) => void } = {}): Promise<{ ran: string[]; stoppedAt: string | null; reason: string | null }> {
+export async function runPlan(out: string, o: { mandatoryOnly?: boolean; only?: string; rerunInterrupted?: string[]; transport?: Transport; log?: (s: string) => void } = {}): Promise<{ ran: string[]; stoppedAt: string | null; reason: string | null }> {
   const log = o.log ?? ((s: string) => console.log(s));
-  const cfg = readJson<EvalConfig | null>(path.join(out, "config.json"), null);
+  if (fs.existsSync(path.join(out, "CLOSED"))) throw new EvalStateError(`F1EVAL_CLOSED: ${out} is a sealed, accepted evaluation; it is never run again`);
+  const cfg = readJsonStrict<EvalConfig | null>(path.join(out, "config.json"), null, "config.json");
   if (!cfg) throw new Error(`missing ${out}/config.json`);
   if (!(cfg.capMicrocents > 0 && cfg.capMicrocents <= 300_000_000)) throw new Error("cap must be within the authorised $3.00");
+  // One driver at a time, across restarts: an exclusive lock file. A stale lock (dead driver) is the operator's call.
+  const lockFile = path.join(out, "run.lock");
+  let lockFd: number;
+  try {
+    lockFd = fs.openSync(lockFile, "wx", 0o644);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new EvalStateError(`F1EVAL_LOCKED: ${lockFile} exists — another driver is running, or one died; inspect its events and remove the lock deliberately`);
+    }
+    throw e;
+  }
+  fs.writeSync(lockFd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+  fs.fsyncSync(lockFd);
+  fs.closeSync(lockFd);
+  try {
+    return await runLocked(out, cfg, o, log);
+  } finally {
+    fs.rmSync(lockFile, { force: true });
+  }
+}
+
+async function runLocked(out: string, cfg: EvalConfig, o: { mandatoryOnly?: boolean; only?: string; rerunInterrupted?: string[]; transport?: Transport },
+  log: (s: string) => void): Promise<{ ran: string[]; stoppedAt: string | null; reason: string | null }> {
   const transport = o.transport ?? (cfg.transport === "ssh" ? sshTransport(cfg) : fakeTransport());
   const ledgerFile = path.join(out, "ledger.json");
-  const ledger = readJson<Ledger>(ledgerFile, { capMicrocents: cfg.capMicrocents, cells: {}, interrupted: [], totalMicrocents: 0 });
-  const ran: string[] = [];
   const done = (id: string) => fs.existsSync(path.join(out, "cells", `${id}.json`));
+  const priorWork = PLAN.some((p) => done(p.cellId)) || (fs.existsSync(path.join(out, "events")) && fs.readdirSync(path.join(out, "events")).length > 0);
+  const stored = readJsonStrict<Ledger | null>(ledgerFile, null, "ledger.json");
+  if (!stored && priorWork) throw new EvalStateError("F1EVAL_STATE_AMBIGUOUS: results or events exist but ledger.json does not: spend on record would be lost");
+  const ledger: Ledger = stored ?? { capMicrocents: cfg.capMicrocents, cells: {}, interrupted: [], totalMicrocents: 0 };
+  if (typeof ledger.cells !== "object" || ledger.cells === null || !Array.isArray(ledger.interrupted)) throw new EvalStateError("F1EVAL_STATE_AMBIGUOUS: ledger.json has an unexpected shape");
+  if (ledger.capMicrocents !== cfg.capMicrocents) throw new EvalStateError(`F1EVAL_STATE_AMBIGUOUS: ledger cap ${ledger.capMicrocents} differs from config cap ${cfg.capMicrocents}`);
+  if (ledger.totalMicrocents !== total(ledger)) throw new EvalStateError(`F1EVAL_STATE_AMBIGUOUS: ledger total ${ledger.totalMicrocents} does not match its entries (${total(ledger)})`);
+  // A crash between the result write and the ledger write: the durable result carries the exact spend.
+  for (const p of PLAN) {
+    if (!done(p.cellId) || ledger.cells[p.cellId]) continue;
+    const r = readJsonStrict<CellResult | null>(path.join(out, "cells", `${p.cellId}.json`), null, `cells/${p.cellId}.json`);
+    if (!r || !Number.isSafeInteger(r.spentMicrocents) || r.spentMicrocents < 0 || !Array.isArray(r.calls)) {
+      throw new EvalStateError(`F1EVAL_STATE_AMBIGUOUS: cells/${p.cellId}.json has no usable spend`);
+    }
+    ledger.cells[p.cellId] = { spentMicrocents: r.spentMicrocents, stopped: r.stopped ?? null, calls: r.calls.length, finishedAt: r.finishedAt };
+    ledger.totalMicrocents = total(ledger);
+    writeDurable(ledgerFile, ledger);
+    log(`${p.cellId}: completed result missing from the ledger; reconciled ${r.spentMicrocents} µ¢ from the durable result`);
+  }
+  const ran: string[] = [];
   const avgCost = (phase: string) => {
     const xs = PLAN.filter((p) => p.phase === phase && ledger.cells[p.cellId]).map((p) => ledger.cells[p.cellId].spentMicrocents);
     return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
@@ -144,15 +213,21 @@ export async function runPlan(out: string, o: { mandatoryOnly?: boolean; only?: 
       writeDurable(ledgerFile, ledger);
       log(`${cell.cellId}: previous attempt interrupted; counted ${counted} µ¢ conservatively`);
     }
+    // Rerunning an interrupted cell repeats billable calls: only when the operator names it for this invocation.
+    if (ledger.interrupted.some((i) => i.cellId === cell.cellId) && !(o.rerunInterrupted ?? []).includes(cell.cellId)) {
+      return { ran, stoppedAt: cell.cellId, reason: `interrupted: rerun only with --rerun-interrupted ${cell.cellId}` };
+    }
     const remaining = cfg.capMicrocents - total(ledger);
     // One more call's worst case: the largest bound observed so far (falls back to a 60 KB request). The runner's
     // per-call guard stays the hard limit; this only decides whether an optional cell is worth starting.
-    const observed = PLAN.flatMap((p) => readJson<CellResult | null>(path.join(out, "cells", `${p.cellId}.json`), null)?.calls ?? []).map((c) => c.boundMicrocents);
+    const observed = PLAN.flatMap((p) => readJsonStrict<CellResult | null>(path.join(out, "cells", `${p.cellId}.json`), null, `cells/${p.cellId}.json`)?.calls ?? []).map((c) => c.boundMicrocents);
     const oneCall = observed.length ? Math.max(...observed)
       : (60_000 + 2_000) * Math.max(cfg.prices.inputMicrocentsPerToken, cfg.prices.cacheWriteMicrocentsPerToken ?? 0) + cfg.maxTokens * cfg.prices.outputMicrocentsPerToken;
     if (!cell.mandatory && remaining < avgCost(cell.phase) * 1.5 + oneCall) { log(`skip optional ${cell.cellId}: remaining ${remaining} µ¢ is not enough for a complete cell`); continue; }
     if (remaining <= 0) return { ran, stoppedAt: cell.cellId, reason: "budget exhausted" };
-    const state = cell.from ? readJson<Snapshot>(path.join(out, "state", `${cell.from}.json`), {}) : null;
+    // A severance arm must start from its parent's exact state: missing or unreadable is never "empty".
+    const state = cell.from ? readJsonStrict<Snapshot | null>(path.join(out, "state", `${cell.from}.json`), null, `state/${cell.from}.json`) : null;
+    if (cell.from && !state) throw new EvalStateError(`F1EVAL_STATE_AMBIGUOUS: state/${cell.from}.json (input of ${cell.cellId}) is missing`);
     const request: CellRequest = {
       cellId: cell.cellId, phase: cell.phase, arm: cell.arm, observations: cell.observations, webVersion: cell.webVersion, state,
       maxSteps: cell.maxSteps, maxTokens: cfg.maxTokens, prices: cfg.prices, budgetMicrocents: remaining,
@@ -209,7 +284,8 @@ async function cli(): Promise<number> {
   const out = arg("--out");
   if (!out) { console.error("--out <dir> required"); return 2; }
   if (cmd === "run") {
-    const r = await runPlan(out, { mandatoryOnly: rest.includes("--mandatory-only"), only: arg("--only") });
+    const rerun = rest.flatMap((k, i) => (k === "--rerun-interrupted" && rest[i + 1] ? [rest[i + 1]] : []));
+    const r = await runPlan(out, { mandatoryOnly: rest.includes("--mandatory-only"), only: arg("--only"), rerunInterrupted: rerun });
     console.log(JSON.stringify(r));
     return r.reason && r.reason !== "budget exhausted" ? 1 : 0;
   }
