@@ -104,30 +104,31 @@ case "$MODE" in
     ;;
   rehearse)
     check >/dev/null || { check; echo "refusing to rehearse: check fails" >&2; exit 1; }
-    R=/run/fleet-nr-rehearsal
+    R=/run/fleet-nr-rehearsal          # rehearsal configuration (not executed)
+    B=/usr/local/lib/fleet-nr-rehearsal  # rehearsal binary (/run is mounted noexec)
     P=automaton-fleet-founder@NRREHEARSAL.service
     C=fleet-nr-rehearsal-control.service
     U=/run/systemd/system
-    [[ ! -e "$R" && ! -e "$U/$P" && ! -e "$U/$C" ]] || { echo "rehearsal leftovers exist; remove them first" >&2; exit 1; }
+    [[ ! -e "$R" && ! -e "$B" && ! -e "$U/$P" && ! -e "$U/$C" ]] || { echo "rehearsal leftovers exist; remove them first" >&2; exit 1; }
     systemctl list-units --all --plain --no-legend "$P" | grep -q . && { echo "$P already known to systemd" >&2; exit 1; }
     declare -A before
     for u in $(living_units); do before[$u]="$(mainpid "$u")"; done
     cleanup() {
       systemctl stop "$P" "$C" >/dev/null 2>&1 || true
-      rm -f "$U/$P" "$U/$C"; systemctl daemon-reload; rm -rf "$R"
+      rm -f "$U/$P" "$U/$C"; systemctl daemon-reload; systemctl reset-failed "$P" "$C" >/dev/null 2>&1 || true; rm -rf "$R" "$B"
     }
     trap cleanup EXIT
-    mkdir -m 0755 "$R"
-    cp /usr/bin/sleep "$R/rehearsal-sleep"
+    mkdir -m 0755 "$R" "$B"
+    cp /usr/bin/sleep "$B/rehearsal-sleep"
     for f in "$P" "$C"; do
-      printf '[Unit]\nDescription=fleet maintenance-guard rehearsal (NOT a founder; removed on exit)\n[Service]\nExecStart=%s infinity\nDynamicUser=yes\n' "$R/rehearsal-sleep" >"$U/$f"
+      printf '[Unit]\nDescription=fleet maintenance-guard rehearsal (NOT a founder; removed on exit)\n[Service]\nExecStart=%s infinity\nDynamicUser=yes\n' "$B/rehearsal-sleep" >"$U/$f"
     done
     systemctl daemon-reload
     systemctl start "$P" "$C"
     p0="$(mainpid "$P")"; c0="$(mainpid "$C")"
     [[ "$p0" -gt 0 && "$c0" -gt 0 ]] || { echo "rehearsal units did not start" >&2; exit 1; }
     # Make both outdated exactly as a package upgrade would: the running binary is replaced on disk.
-    rm -f "$R/rehearsal-sleep"; cp /usr/bin/sleep "$R/rehearsal-sleep"
+    rm -f "$B/rehearsal-sleep"; cp /usr/bin/sleep "$B/rehearsal-sleep"
     echo "== detection with the installed configuration (list mode, nothing restarted)"
     nr_all="$(needrestart -r l -b -l </dev/null 2>/dev/null | sed -n 's/^NEEDRESTART-SVC: //p' | sort)"
     echo "$nr_all" | sed 's/^/  /'
