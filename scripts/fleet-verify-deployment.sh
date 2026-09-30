@@ -22,6 +22,8 @@
 #     login; the executor holds no TCP listener
 # Exit 1 on any failure. Never prints secret contents.
 set -uo pipefail
+# Never pipe a producer into an early-exiting `grep -q`: under pipefail the producer can die of SIGPIPE and the
+# pipeline reads as "no match" at random (a false PASS for "no listener"/"no credential" checks). Capture first.
 [[ $EUID -eq 0 ]] || { echo "run with sudo (read-only checks)" >&2; exit 2; }
 ETC=/etc/automaton-fleet
 fail=0
@@ -69,7 +71,8 @@ if id automaton-fleet-operator-api >/dev/null 2>&1; then
     bad "$OPENV missing"
   fi
   if [[ "$(systemctl is-active automaton-fleet-operator-api.service 2>/dev/null)" == active ]]; then
-    if ss -ltnH | awk '{print $4}' | grep -E ':8788$' | grep -qvE '^(127\.0\.0\.1|\[::1\]):8788$'; then
+    l8788="$(ss -ltnH | awk '{print $4}' | grep -E ':8788$')"
+    if [[ -n "$l8788" ]] && grep -qvE '^(127\.0\.0\.1|\[::1\]):8788$' <<<"$l8788"; then
       bad "Operator API port 8788 is bound beyond loopback"
     else
       ok "Operator API port 8788 is loopback-only"
@@ -108,7 +111,7 @@ if id "$CX" >/dev/null 2>&1; then
     bad "$CXENV missing"
   fi
   uidn="$(id -u "$CX")"
-  if ss -ltneH 2>/dev/null | grep -qE "uid:$uidn( |$)"; then bad "$CX holds a TCP listener"; else ok "$CX holds no TCP listener"; fi
+  if grep -qE "uid:$uidn( |$)" <<<"$(ss -ltneH 2>/dev/null)"; then bad "$CX holds a TCP listener"; else ok "$CX holds no TCP listener"; fi
   if [[ "$(systemctl is-enabled automaton-fleet-custody.service 2>/dev/null)" == enabled ]]; then
     [[ "$(systemctl is-active automaton-fleet-custody.service 2>/dev/null)" == active ]] && ok "custody executor is running (inert)" || bad "custody executor is enabled but not running"
   fi
@@ -215,10 +218,10 @@ if [[ -f "$FS" ]]; then
   grep -qx "InaccessiblePaths=-/run/automaton-fleet-fetcher" /etc/systemd/system/automaton-fleet-founder@.service && ok "founder template hides the fetcher socket" || bad "founder template does not hide the fetcher socket"
   FP="$(systemctl show -p MainPID --value automaton-fleet-fetcher.service 2>/dev/null)"
   if [[ -n "$FP" && "$FP" != "0" ]]; then
-    tr '\0' '\n' < /proc/$FP/environ | cut -d= -f1 | grep -qiE "DATABASE_URL|API_KEY|SECRET|TOKEN|PASSWORD|PRIVATE|COGNITION" && bad "fetcher process environment holds credential-like variables" || ok "fetcher process environment holds no credential-like variables"
+    grep -qiE "DATABASE_URL|API_KEY|SECRET|TOKEN|PASSWORD|PRIVATE|COGNITION" <<<"$(tr '\0' '\n' < /proc/$FP/environ | cut -d= -f1)" && bad "fetcher process environment holds credential-like variables" || ok "fetcher process environment holds no credential-like variables"
   fi
   fuid="$(id -u "$FU" 2>/dev/null || echo x)"
-  if ss -ltnH -e 2>/dev/null | grep -qE "uid:$fuid( |$)"; then bad "$FU holds a TCP listener"; else ok "$FU holds no TCP listener"; fi
+  if grep -qE "uid:$fuid( |$)" <<<"$(ss -ltnH -e 2>/dev/null)"; then bad "$FU holds a TCP listener"; else ok "$FU holds no TCP listener"; fi
 else
   ok "research fetcher not installed"
 fi
@@ -255,7 +258,7 @@ if id "$CA" >/dev/null 2>&1 || id "$CT" >/dev/null 2>&1; then
   done
   for u in "$CA" "$CT"; do
     uidn="$(id -u "$u" 2>/dev/null || echo x)"
-    if ss -ltneH 2>/dev/null | grep -qE "uid:$uidn( |$)"; then bad "$u holds a TCP listener"; else ok "$u holds no TCP listener"; fi
+    if grep -qE "uid:$uidn( |$)" <<<"$(ss -ltneH 2>/dev/null)"; then bad "$u holds a TCP listener"; else ok "$u holds no TCP listener"; fi
   done
 else
   ok "ChatGPT adapter not installed"
@@ -307,7 +310,7 @@ pid="$(systemctl show -p MainPID --value automaton-fleet.service 2>/dev/null || 
 if [[ "$pid" =~ ^[0-9]+$ && "$pid" != 0 ]]; then
   user="$(ps -o user= -p "$pid" | tr -d ' ')"
   [[ "$user" == automaton-fleet-service ]] && ok "service process runs as $user" || bad "service process runs as $user"
-  if tr '\0' '\n' <"/proc/$pid/environ" | grep -qE '^(FLEET_ADMIN_DATABASE_URL|FLEET_SERVICE_DATABASE_URL|FLEET_AGENT_DATABASE_URL|DATABASE_URL)='; then
+  if grep -qE '^(FLEET_ADMIN_DATABASE_URL|FLEET_SERVICE_DATABASE_URL|FLEET_AGENT_DATABASE_URL|DATABASE_URL)=' <<<"$(tr '\0' '\n' <"/proc/$pid/environ")"; then
     bad "database credentials visible in the service environment (/proc/$pid/environ)"
   else
     ok "no database credential in the service environment"
