@@ -1,0 +1,224 @@
+{
+ "mode": "models",
+ "models": [
+  {
+   "tier": "T1",
+   "id": "claude-haiku-4-5-20251001",
+   "at": "2026-09-30T10:43:55.712Z",
+   "status": 200,
+   "providerRequestId": "req_011CfZVBE2MmroLbAfnUXFKh",
+   "model": "claude-haiku-4-5-20251001",
+   "displayName": "Claude Haiku 4.5",
+   "createdAt": "2025-10-15T00:00:00Z",
+   "maxInputTokens": 200000,
+   "maxTokens": 64000,
+   "capabilities": {
+    "batch": {
+     "supported": true
+    },
+    "citations": {
+     "supported": true
+    },
+    "code_execution": {
+     "supported": false
+    },
+    "context_management": {
+     "supported": true,
+     "clear_tool_uses_20250919": {
+      "supported": true
+     },
+     "clear_thinking_20251015": {
+      "supported": true
+     },
+     "compact_20260112": {
+      "supported": false
+     }
+    },
+    "effort": {
+     "supported": false,
+     "low": {
+      "supported": false
+     },
+     "medium": {
+      "supported": false
+     },
+     "high": {
+      "supported": false
+     },
+     "xhigh": {
+      "supported": false
+     },
+     "max": {
+      "supported": false
+     }
+    },
+    "image_input": {
+     "supported": true
+    },
+    "pdf_input": {
+     "supported": true
+    },
+    "structured_outputs": {
+     "supported": true
+    },
+    "thinking": {
+     "supported": true,
+     "types": {
+      "enabled": {
+       "supported": true
+      },
+      "adaptive": {
+       "supported": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "tier": "T2",
+   "id": "claude-sonnet-5-5",
+   "at": "2026-09-30T10:43:56.191Z",
+   "status": 200,
+   "providerRequestId": "req_011CfZVBFjZ8CLJ3ZddFfYLq",
+   "model": "claude-sonnet-5-5",
+   "displayName": "Claude Sonnet 5.5",
+   "createdAt": "2026-09-28T00:00:00Z",
+   "maxInputTokens": 1000000,
+   "maxTokens": 128000,
+   "capabilities": {
+    "batch": {
+     "supported": true
+    },
+    "citations": {
+     "supported": true
+    },
+    "code_execution": {
+     "supported": true
+    },
+    "context_management": {
+     "supported": true,
+     "clear_tool_uses_20250919": {
+      "supported": true
+     },
+     "clear_thinking_20251015": {
+      "supported": true
+     },
+     "compact_20260112": {
+      "supported": true
+     }
+    },
+    "effort": {
+     "supported": true,
+     "low": {
+      "supported": true
+     },
+     "medium": {
+      "supported": true
+     },
+     "high": {
+      "supported": true
+     },
+     "xhigh": {
+      "supported": true
+     },
+     "max": {
+      "supported": true
+     }
+    },
+    "image_input": {
+     "supported": true
+    },
+    "pdf_input": {
+     "supported": true
+    },
+    "structured_outputs": {
+     "supported": true
+    },
+    "thinking": {
+     "supported": true,
+     "types": {
+      "enabled": {
+       "supported": false
+      },
+      "adaptive": {
+       "supported": true
+      }
+     }
+    }
+   }
+  },
+  {
+   "tier": "T3",
+   "id": "claude-opus-5-5",
+   "at": "2026-09-30T10:43:56.424Z",
+   "status": 200,
+   "providerRequestId": "req_011CfZVBGkpV8uFvTAZMaGF3",
+   "model": "claude-opus-5-5",
+   "displayName": "Claude Opus 5.5",
+   "createdAt": "2026-09-21T16:24:00Z",
+   "maxInputTokens": 1000000,
+   "maxTokens": 128000,
+   "capabilities": {
+    "batch": {
+     "supported": true
+    },
+    "citations": {
+     "supported": true
+    },
+    "code_execution": {
+     "supported": true
+    },
+    "context_management": {
+     "supported": true,
+     "clear_tool_uses_20250919": {
+      "supported": true
+     },
+     "clear_thinking_20251015": {
+      "supported": true
+     },
+     "compact_20260112": {
+      "supported": true
+     }
+    },
+    "effort": {
+     "supported": true,
+     "low": {
+      "supported": true
+     },
+     "medium": {
+      "supported": true
+     },
+     "high": {
+      "supported": true
+     },
+     "xhigh": {
+      "supported": true
+     },
+     "max": {
+      "supported": true
+     }
+    },
+    "image_input": {
+     "supported": true
+    },
+    "pdf_input": {
+     "supported": true
+    },
+    "structured_outputs": {
+     "supported": true
+    },
+    "thinking": {
+     "supported": true,
+     "types": {
+      "enabled": {
+       "supported": false
+      },
+      "adaptive": {
+       "supported": true
+      }
+     }
+    }
+   }
+  }
+ ]
+}

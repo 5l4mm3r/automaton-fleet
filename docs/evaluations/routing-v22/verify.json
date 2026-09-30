@@ -1,0 +1,215 @@
+{
+ "mode": "verify",
+ "promptCache": "prefix",
+ "controllerPromptCache": "off",
+ "calls": [
+  {
+   "step": 1,
+   "label": "T1 extraction (Haiku, compact routine context)",
+   "ok": true,
+   "costMicrocents": 33500,
+   "requests": [
+    {
+     "model": "claude-haiku-4-5-20251001",
+     "thinking": null,
+     "effort": null,
+     "systemCached": true,
+     "tools": 0,
+     "messages": 1,
+     "containsSignature": false,
+     "bodyBytes": 874,
+     "boundMicrocents": 509250,
+     "status": 200,
+     "providerRequestId": "req_011CfZVCCUsUa5QdJdzRXTcm",
+     "responseModel": "claude-haiku-4-5-20251001"
+    }
+   ],
+   "tier": "T1",
+   "taskClass": "extraction",
+   "scope": "task_step",
+   "model": "claude-haiku-4-5-20251001",
+   "usage": {
+    "inputTokens": 160,
+    "outputTokens": 35
+   },
+   "cache": {
+    "cachedTokens": 0,
+    "uncachedInputTokens": 160,
+    "hit": false,
+    "savedMicrocents": 0
+   },
+   "toolCalls": [],
+   "thinkingBlocks": 0
+  },
+  {
+   "step": 2,
+   "label": "T2 agent_step (Sonnet) \u2014 cache write expected",
+   "ok": true,
+   "costMicrocents": 941100,
+   "requests": [
+    {
+     "model": "claude-sonnet-5-5",
+     "thinking": {
+      "type": "adaptive"
+     },
+     "effort": "medium",
+     "systemCached": true,
+     "tools": 16,
+     "messages": 1,
+     "containsSignature": false,
+     "bodyBytes": 9458,
+     "boundMicrocents": 3888500,
+     "status": 200,
+     "providerRequestId": "req_011CfZVCGWi8wDmq2PiYBsdv",
+     "responseModel": "claude-sonnet-5-5"
+    }
+   ],
+   "tier": "T2",
+   "taskClass": "agent_step",
+   "scope": "task_step",
+   "model": "claude-sonnet-5-5",
+   "usage": {
+    "inputTokens": 103,
+    "outputTokens": 27,
+    "cacheWriteTokens": 3574,
+    "thinkingTokens": 0
+   },
+   "cache": {
+    "cachedTokens": 3574,
+    "uncachedInputTokens": 103,
+    "hit": false,
+    "savedMicrocents": -178700
+   },
+   "toolCalls": [],
+   "thinkingBlocks": 0
+  },
+  {
+   "step": 3,
+   "label": "T2 agent_step (Sonnet) \u2014 new tail, cache read expected",
+   "ok": true,
+   "costMicrocents": 126080,
+   "requests": [
+    {
+     "model": "claude-sonnet-5-5",
+     "thinking": {
+      "type": "adaptive"
+     },
+     "effort": "medium",
+     "systemCached": true,
+     "tools": 16,
+     "messages": 1,
+     "containsSignature": false,
+     "bodyBytes": 9484,
+     "boundMicrocents": 3895000,
+     "status": 200,
+     "providerRequestId": "req_011CfZVCMfmoKdAZScxCSNcj",
+     "responseModel": "claude-sonnet-5-5"
+    }
+   ],
+   "tier": "T2",
+   "taskClass": "agent_step",
+   "scope": "task_step",
+   "model": "claude-sonnet-5-5",
+   "usage": {
+    "inputTokens": 108,
+    "outputTokens": 33,
+    "cacheReadTokens": 3574,
+    "thinkingTokens": 0
+   },
+   "cache": {
+    "cachedTokens": 3574,
+    "uncachedInputTokens": 108,
+    "hit": true,
+    "savedMicrocents": 643320
+   },
+   "toolCalls": [],
+   "thinkingBlocks": 0
+  },
+  {
+   "step": 4,
+   "label": "T3 escalation (Opus) \u2014 one decision packet",
+   "ok": true,
+   "costMicrocents": 3120600,
+   "requests": [
+    {
+     "model": "claude-opus-5-5",
+     "thinking": {
+      "type": "adaptive"
+     },
+     "effort": "medium",
+     "systemCached": true,
+     "tools": 16,
+     "messages": 1,
+     "containsSignature": false,
+     "bodyBytes": 11103,
+     "boundMicrocents": 10647500,
+     "status": 200,
+     "providerRequestId": "req_011CfZVCT1zN8tvoPnPdcKQR",
+     "responseModel": "claude-opus-5-5"
+    }
+   ],
+   "tier": "T3",
+   "taskClass": "agent_step",
+   "scope": "question",
+   "model": "claude-opus-5-5",
+   "usage": {
+    "inputTokens": 699,
+    "outputTokens": 527,
+    "cacheWriteTokens": 3574,
+    "thinkingTokens": 293
+   },
+   "cache": {
+    "cachedTokens": 3574,
+    "uncachedInputTokens": 699,
+    "hit": false,
+    "savedMicrocents": -357400
+   },
+   "toolCalls": [],
+   "thinkingBlocks": 1
+  },
+  {
+   "step": 5,
+   "label": "T2 agent_step (Sonnet) after the escalation \u2014 Opus thinking must not cross",
+   "ok": true,
+   "costMicrocents": 335680,
+   "requests": [
+    {
+     "model": "claude-sonnet-5-5",
+     "thinking": {
+      "type": "adaptive"
+     },
+     "effort": "medium",
+     "systemCached": true,
+     "tools": 16,
+     "messages": 3,
+     "containsSignature": false,
+     "bodyBytes": 10241,
+     "boundMicrocents": 4084250,
+     "status": 200,
+     "providerRequestId": "req_011CfZVD37LakVG8pYahcnm6",
+     "responseModel": "claude-sonnet-5-5"
+    }
+   ],
+   "tier": "T2",
+   "taskClass": "agent_step",
+   "scope": "task_step",
+   "model": "claude-sonnet-5-5",
+   "usage": {
+    "inputTokens": 346,
+    "outputTokens": 195,
+    "cacheReadTokens": 3574,
+    "thinkingTokens": 132
+   },
+   "cache": {
+    "cachedTokens": 3574,
+    "uncachedInputTokens": 346,
+    "hit": true,
+    "savedMicrocents": 643320
+   },
+   "toolCalls": [],
+   "thinkingBlocks": 1
+  }
+ ],
+ "spentMicrocents": 4556960,
+ "stopped": null
+}

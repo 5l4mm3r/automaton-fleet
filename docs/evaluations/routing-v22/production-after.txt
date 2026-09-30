@@ -1,0 +1,33 @@
+# Production after the v22 deployment + routing verification (read-only), VPS 2026-09-30T10:45:13Z
+automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service   185890 0 active 
+automaton-fleet.service                                      244445 0 active 
+automaton-fleet-operator-api.service                         244454 0 active 
+automaton-fleet-custody.service                              244464 0 active 
+current=/opt/automaton-fleet/releases/b8e8e9aa8b989e764993bfbba2fb59a26326ee67
+FLEET_RUNTIME_COMMIT=b8e8e9aa8b989e764993bfbba2fb59a26326ee67
+FLEET_RUNTIME_BUILD_ID=d9aae68384f14d94cccb413b6a187d169922a3d6157c70f9588ca4a672f1039f
+REAL_REPLICATION_ENABLED=false
+REAL_PAYMENTS_ENABLED=false
+OWNER_SWEEP_ENABLED=false
+FLEET_DRY_RUN_CHILD=false
+FLEET_RUNTIME_COMMIT=eea1932d293d3aba9264b0f084fa2becd9899ba4
+founder.json.sha256=d8a8beb418409def6c0eb01543725b21dc7225c6367fce148de4c5ee4db11517
+service.env PROMPT_CACHE lines: 0
+Founder 1 cognition rows since the controller restart (model, tier — legacy path = tier NULL):
+ERROR:  relation "fleet.fleet_custody_policy" does not exist
+LINE 1: ...ion_enabled', custody_execution_enabled::int FROM fleet.flee...
+                                                             ^
+key-shaped text in fleet journals since 10:40: 0
+cognition.key: 600 automaton-fleet-service mtime=2026-09-26 10:23:42.742052685 +0000
+# (corrected state query, VPS 2026-09-30T10:45:29Z)
+schema 22
+routing_enabled false
+tiers_enabled 0
+tiers_verified 0
+founders_opted_in 0
+living_agents 1
+genesis_enabled false
+custody_execution_enabled false
+founder1_routed_rows 0
+founder1_calls_since_restart 0
+founder1_last_call 2026-09-30 10:41:32.98921+00

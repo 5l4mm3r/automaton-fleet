@@ -1754,6 +1754,27 @@ Design: `docs/design/cognition-efficiency-routing.md`. Nothing changes for any f
 - **Prompt cache minimums (official docs):** Haiku 4.5 4096 tokens, Sonnet 5.5 512, Opus 5.5 512. The ~3.8k founder
   prefix is expected to cache on Sonnet/Opus 5.5 only; T1 prompts are never padded to reach a cache threshold.
 
+## Stage R22 — v22 neutral routing deployed INERT (2026-09-30, times UTC)
+
+- **Release** `b8e8e9a` (build `d9aae68384f14d94cccb413b6a187d169922a3d6157c70f9588ca4a672f1039f`, lockfile
+  unchanged; reproducible build locally and on the VPS). `runtime.env.pre-v22` kept (sha `3dede18f…`, `0c502fb` pins);
+  only the COMMIT/BUILD_ID lines changed. Tooling checkout at `b8e8e9a`.
+- **Controller-only outage 10:42:17–10:42:42 (25 s).** Stopped: controller, Operator API, custody, fetcher (socket +
+  service), ChatGPT adapter (socket + service). **The founder unit was not touched.** Dump
+  `~/automaton_fleet-v21-pre-v22-20260930T104217Z.dump` (2,231,214 B, 0600, sha `706f4ed4…`, 73 tables with data).
+  `migrate-check` exactly `{21→22, wouldApply:[22]}` (rolled back); `migrate` applied v22 10:42:30; audit PASS;
+  `approve-runtime`; runtime VERIFIED; units started; controller cwd `releases/b8e8e9a…`, `/readyz` 200.
+- **After:** doctor DEPLOYMENT OK; `fleet:verify` SAFE FOR DRY RUN YES; `fleet-verify-deployment.sh` 147/0; ledger
+  verifies (374 journals). Routing OFF, 0 founders opted in, T1/T2/T3 disabled and unverified in the registry.
+  Founder 1: PID 185890 before and after, 0 restarts, pin `eea1932`, `founder.json` sha `d8a8beb4…` unchanged; its
+  heartbeats, health challenge and cognition-status calls succeeded after the restart.
+- **Models API + real routed verification:** `docs/evaluations/routing-v22/` — all three mappings available;
+  5 calls, $0.0455696, recorded as provider-credit adjustment −$0.05 (balance $8.256628 after it).
+- **Rollback:** `runtime.env.pre-v22` + `current` → `releases/0c502fb…` requires restoring the pre-v22 dump
+  (0c502fb expects v21); controller-side units only, founder untouched.
+- **Not done (owner decisions):** `cognition-tier-verify`/`-enable`, `cognition-routing-enable`, any `founder-routing`,
+  `FLEET_COGNITION_PROMPT_CACHE`.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
