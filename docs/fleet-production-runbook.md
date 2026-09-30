@@ -1817,6 +1817,25 @@ upgrade (R23-4) and the cognition cutover (R23-6) are separate and separately re
 - **Not part of R23:** Founder 2, reproduction, reseed, payments, trading, custody execution, owner sweep,
   `docs/master-key/`.
 
+### Stage R23 record (2026-09-30, times UTC)
+
+Evidence: `docs/evaluations/r23/`.
+
+- **R23-1 done.** Release `aab6ca3` (build `2a0a324c…dab01`, VPS = local), schema v23. Controller-only outage
+  13:19:09–13:19:20 (11 s). Dump `~/automaton_fleet-v22-pre-v23-20260930T131909Z.dump` (sha `e7f3c44a…097e`).
+  `runtime.env.pre-r23` kept. `fleet:verify` 16/16, `fleet-verify-deployment.sh` 148/0. Founder 1 untouched.
+- **R23-2 done.** Host rehearsal 23/23, production unchanged, Founder 1's PID untouched.
+- **R23-3/4 done.** Founder 1 preflight OK, then upgrade `3ae01f74-5db4-4dbb-a237-4504ff7b5df3` **verified 13:26:20**:
+  `eea1932` → `aab6ca3`, PID 185890 → 253900, downtime 1.8 s, durable state byte-identical
+  (`dfdd470c…be83a12b`), identity, credential, Genesis, ledger accounts and population unchanged, books continuous.
+  Backup `/var/lib/automaton-fleet-upgrades/3ae01f74-…` (root 0700, no credential). `fleet-verify-deployment.sh` 149/0.
+- **Rollback of the founder runtime:** `rollback-runtime <id> 3ae01f74-5db4-4dbb-a237-4504ff7b5df3 <reason…>`
+  (`releases/eea1932…` verified intact). A controller rollback to `b8e8e9a` needs the pre-v23 dump AND the founder
+  rolled back first (its runtime record lives in v23).
+- **R23-6 not done:** routing OFF, tiers disabled and unverified, no founder opted in. Owner commands only.
+- **Living founders and controller deploys from now on:** Founder 1's unit is pinned to `aab6ca3`; the rule is
+  unchanged — a controller deploy never restarts the founder unit; founder code changes only via `upgrade-runtime`.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes

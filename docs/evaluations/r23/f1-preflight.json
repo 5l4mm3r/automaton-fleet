@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "outcome": "preflight_ok",
+  "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+  "upgradeId": null,
+  "from": {
+    "repo": "https://github.com/5l4mm3r/automaton-fleet",
+    "commit": "eea1932d293d3aba9264b0f084fa2becd9899ba4",
+    "buildId": "40536771eaebdb6c19703884c2015bba17387056e8362d001caaa616cfc4927c",
+    "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811"
+  },
+  "to": {
+    "repo": "https://github.com/5l4mm3r/automaton-fleet",
+    "commit": "aab6ca3dace7ed3de26bd300b96f3da785c6bc84",
+    "buildId": "2a0a324c25d90be3b4cb631136284f734c0f2394a30d708384bd8a19fa1dab01",
+    "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811"
+  },
+  "steps": [
+    {
+      "step": "preflight",
+      "ok": true,
+      "at": "2026-09-30T13:25:18.771Z",
+      "detail": "from eea1932 to aab6ca3; 25 state files"
+    }
+  ],
+  "state": {},
+  "ledger": {},
+  "process": {
+    "before": {
+      "pid": 185890,
+      "uid": 65037,
+      "instanceId": "j2VaNf8PLSWMHljoesKmucGh"
+    }
+  },
+  "backupDir": null,
+  "downtimeMs": null,
+  "record": null
+}

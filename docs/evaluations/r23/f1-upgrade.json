@@ -1,0 +1,594 @@
+{
+  "ok": true,
+  "outcome": "verified",
+  "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+  "upgradeId": "3ae01f74-5db4-4dbb-a237-4504ff7b5df3",
+  "from": {
+    "repo": "https://github.com/5l4mm3r/automaton-fleet",
+    "commit": "eea1932d293d3aba9264b0f084fa2becd9899ba4",
+    "buildId": "40536771eaebdb6c19703884c2015bba17387056e8362d001caaa616cfc4927c",
+    "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811"
+  },
+  "to": {
+    "repo": "https://github.com/5l4mm3r/automaton-fleet",
+    "commit": "aab6ca3dace7ed3de26bd300b96f3da785c6bc84",
+    "buildId": "2a0a324c25d90be3b4cb631136284f734c0f2394a30d708384bd8a19fa1dab01",
+    "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811"
+  },
+  "steps": [
+    {
+      "step": "preflight",
+      "ok": true,
+      "at": "2026-09-30T13:26:18.372Z",
+      "detail": "from eea1932 to aab6ca3; 25 state files"
+    },
+    {
+      "step": "quiesce",
+      "ok": true,
+      "at": "2026-09-30T13:26:18.380Z"
+    },
+    {
+      "step": "stop",
+      "ok": true,
+      "at": "2026-09-30T13:26:18.468Z",
+      "detail": "pid 185890 stopped"
+    },
+    {
+      "step": "snapshot",
+      "ok": true,
+      "at": "2026-09-30T13:26:18.471Z",
+      "detail": "state dfdd470c7b41e08f…, 25 files"
+    },
+    {
+      "step": "prepare",
+      "ok": true,
+      "at": "2026-09-30T13:26:18.483Z",
+      "detail": "3ae01f74-5db4-4dbb-a237-4504ff7b5df3"
+    },
+    {
+      "step": "backup",
+      "ok": true,
+      "at": "2026-09-30T13:26:18.488Z",
+      "detail": "24 files, 212128 bytes (credential excluded)"
+    },
+    {
+      "step": "recheck",
+      "ok": true,
+      "at": "2026-09-30T13:26:18.490Z"
+    },
+    {
+      "step": "commit",
+      "ok": true,
+      "at": "2026-09-30T13:26:18.498Z",
+      "detail": "registry pin aab6ca3"
+    },
+    {
+      "step": "pin",
+      "ok": true,
+      "at": "2026-09-30T13:26:18.913Z"
+    },
+    {
+      "step": "prestart",
+      "ok": true,
+      "at": "2026-09-30T13:26:18.918Z"
+    },
+    {
+      "step": "start",
+      "ok": true,
+      "at": "2026-09-30T13:26:19.010Z"
+    },
+    {
+      "step": "prove",
+      "ok": true,
+      "at": "2026-09-30T13:26:20.242Z",
+      "detail": "pid 253900, 1 challenge(s) passed after 1232 ms"
+    },
+    {
+      "step": "compare",
+      "ok": true,
+      "at": "2026-09-30T13:26:20.245Z",
+      "detail": "state identical"
+    },
+    {
+      "step": "verify",
+      "ok": true,
+      "at": "2026-09-30T13:26:20.254Z"
+    }
+  ],
+  "state": {
+    "before": {
+      "takenAt": "2026-09-30T13:26:18.470Z",
+      "stateSha256": "dfdd470c7b41e08f16c833623d034b3d35478ca9cbf680e14bdffc19be83a12b",
+      "identitySha256": "d8a8beb418409def6c0eb01543725b21dc7225c6367fce148de4c5ee4db11517",
+      "credentialSha256": "f25654bace32d607e06b5fc18f6f5c658c295267226c23ecd4309d7b33bec540",
+      "ownerUids": [
+        65037
+      ],
+      "files": 25,
+      "categories": {
+        "identity": {
+          "files": 1,
+          "bytes": 368,
+          "sha256": "1957c1f8ed1c01d74b2eb05d2763d4b6cc27b700ac6e29aedd85016e2ff62471"
+        },
+        "credential": {
+          "files": 1,
+          "bytes": 171,
+          "sha256": "814cc49973613065312f9f526a551a10b628b4237e809f8d43835b5e218efc40"
+        },
+        "memory": {
+          "files": 2,
+          "bytes": 4625,
+          "sha256": "ce6d9e5d40f11272ca963c70930f04992a7c16c16bad2df0d2d92adef323cab8"
+        },
+        "mind": {
+          "files": 2,
+          "bytes": 103308,
+          "sha256": "2420ac2c73633ce0df859cba0ee52280fedda20b8e4423f48ddcd86e91f60714"
+        },
+        "workspace": {
+          "files": 19,
+          "bytes": 103827,
+          "sha256": "9fec2c6aa2cb0955e36f25e041205c3b500f3851715a9959f0ce6097d54a9936"
+        },
+        "other": {
+          "files": 0,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "volatile": {
+          "files": 2,
+          "bytes": 1408,
+          "sha256": "84dbae33967576b4b17a08487e8fc2ce1839fde2a309ae8a1dcd6e2c1e5b30ef"
+        }
+      }
+    },
+    "atStart": {
+      "takenAt": "2026-09-30T13:26:18.917Z",
+      "stateSha256": "dfdd470c7b41e08f16c833623d034b3d35478ca9cbf680e14bdffc19be83a12b",
+      "identitySha256": "d8a8beb418409def6c0eb01543725b21dc7225c6367fce148de4c5ee4db11517",
+      "credentialSha256": "f25654bace32d607e06b5fc18f6f5c658c295267226c23ecd4309d7b33bec540",
+      "ownerUids": [
+        65037
+      ],
+      "files": 25,
+      "categories": {
+        "identity": {
+          "files": 1,
+          "bytes": 368,
+          "sha256": "1957c1f8ed1c01d74b2eb05d2763d4b6cc27b700ac6e29aedd85016e2ff62471"
+        },
+        "credential": {
+          "files": 1,
+          "bytes": 171,
+          "sha256": "814cc49973613065312f9f526a551a10b628b4237e809f8d43835b5e218efc40"
+        },
+        "memory": {
+          "files": 2,
+          "bytes": 4625,
+          "sha256": "ce6d9e5d40f11272ca963c70930f04992a7c16c16bad2df0d2d92adef323cab8"
+        },
+        "mind": {
+          "files": 2,
+          "bytes": 103308,
+          "sha256": "2420ac2c73633ce0df859cba0ee52280fedda20b8e4423f48ddcd86e91f60714"
+        },
+        "workspace": {
+          "files": 19,
+          "bytes": 103827,
+          "sha256": "9fec2c6aa2cb0955e36f25e041205c3b500f3851715a9959f0ce6097d54a9936"
+        },
+        "other": {
+          "files": 0,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "volatile": {
+          "files": 2,
+          "bytes": 1408,
+          "sha256": "84dbae33967576b4b17a08487e8fc2ce1839fde2a309ae8a1dcd6e2c1e5b30ef"
+        }
+      }
+    },
+    "after": {
+      "takenAt": "2026-09-30T13:26:20.244Z",
+      "stateSha256": "dfdd470c7b41e08f16c833623d034b3d35478ca9cbf680e14bdffc19be83a12b",
+      "identitySha256": "d8a8beb418409def6c0eb01543725b21dc7225c6367fce148de4c5ee4db11517",
+      "credentialSha256": "f25654bace32d607e06b5fc18f6f5c658c295267226c23ecd4309d7b33bec540",
+      "ownerUids": [
+        65037
+      ],
+      "files": 25,
+      "categories": {
+        "identity": {
+          "files": 1,
+          "bytes": 368,
+          "sha256": "1957c1f8ed1c01d74b2eb05d2763d4b6cc27b700ac6e29aedd85016e2ff62471"
+        },
+        "credential": {
+          "files": 1,
+          "bytes": 171,
+          "sha256": "814cc49973613065312f9f526a551a10b628b4237e809f8d43835b5e218efc40"
+        },
+        "memory": {
+          "files": 2,
+          "bytes": 4625,
+          "sha256": "ce6d9e5d40f11272ca963c70930f04992a7c16c16bad2df0d2d92adef323cab8"
+        },
+        "mind": {
+          "files": 2,
+          "bytes": 103308,
+          "sha256": "2420ac2c73633ce0df859cba0ee52280fedda20b8e4423f48ddcd86e91f60714"
+        },
+        "workspace": {
+          "files": 19,
+          "bytes": 103827,
+          "sha256": "9fec2c6aa2cb0955e36f25e041205c3b500f3851715a9959f0ce6097d54a9936"
+        },
+        "other": {
+          "files": 0,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "volatile": {
+          "files": 2,
+          "bytes": 1657,
+          "sha256": "c7e6be462a4bda7de6d7426dbc5128b35fa012fc68dd80ed9f750b1b887bb1e9"
+        }
+      }
+    },
+    "diff": {
+      "identical": true,
+      "durableLost": 0,
+      "identityChanged": false,
+      "credentialChanged": false,
+      "lost": 0,
+      "changed": 0,
+      "added": 0,
+      "changedPaths": []
+    }
+  },
+  "ledger": {
+    "before": {
+      "accounts": [
+        {
+          "class": "agent_assets",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:assets",
+          "balance": 0
+        },
+        {
+          "class": "agent_cash",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:cash",
+          "balance": 9334
+        },
+        {
+          "class": "agent_contributions",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:contributions",
+          "balance": 0
+        },
+        {
+          "class": "agent_expense",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:expense",
+          "balance": 666
+        },
+        {
+          "class": "agent_fees",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:fees",
+          "balance": 0
+        },
+        {
+          "class": "agent_investment_pnl",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:investment_pnl",
+          "balance": 0
+        },
+        {
+          "class": "agent_principal",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:principal",
+          "balance": 0
+        },
+        {
+          "class": "agent_reserved",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:reserved",
+          "balance": 0
+        },
+        {
+          "class": "agent_revenue",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:revenue",
+          "balance": 0
+        }
+      ],
+      "journals": 377,
+      "lastJournalSeq": 415,
+      "unpostedMicrocents": 614314
+    },
+    "after": {
+      "accounts": [
+        {
+          "class": "agent_assets",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:assets",
+          "balance": 0
+        },
+        {
+          "class": "agent_cash",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:cash",
+          "balance": 9334
+        },
+        {
+          "class": "agent_contributions",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:contributions",
+          "balance": 0
+        },
+        {
+          "class": "agent_expense",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:expense",
+          "balance": 666
+        },
+        {
+          "class": "agent_fees",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:fees",
+          "balance": 0
+        },
+        {
+          "class": "agent_investment_pnl",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:investment_pnl",
+          "balance": 0
+        },
+        {
+          "class": "agent_principal",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:principal",
+          "balance": 0
+        },
+        {
+          "class": "agent_reserved",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:reserved",
+          "balance": 0
+        },
+        {
+          "class": "agent_revenue",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:revenue",
+          "balance": 0
+        }
+      ],
+      "journals": 377,
+      "lastJournalSeq": 415,
+      "unpostedMicrocents": 614314
+    }
+  },
+  "process": {
+    "before": {
+      "pid": 185890,
+      "uid": 65037,
+      "instanceId": "j2VaNf8PLSWMHljoesKmucGh"
+    },
+    "after": {
+      "pid": 253900,
+      "uid": 65037,
+      "instanceId": "KJGZxLwwqM2ZO11W3BS71lI7"
+    }
+  },
+  "backupDir": "/var/lib/automaton-fleet-upgrades/3ae01f74-5db4-4dbb-a237-4504ff7b5df3",
+  "downtimeMs": 1776,
+  "record": {
+    "to": {
+      "repo": "https://github.com/5l4mm3r/automaton-fleet",
+      "commit": "aab6ca3dace7ed3de26bd300b96f3da785c6bc84",
+      "buildId": "2a0a324c25d90be3b4cb631136284f734c0f2394a30d708384bd8a19fa1dab01",
+      "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811"
+    },
+    "seq": 1,
+    "from": {
+      "repo": "https://github.com/5l4mm3r/automaton-fleet",
+      "commit": "eea1932d293d3aba9264b0f084fa2becd9899ba4",
+      "buildId": "40536771eaebdb6c19703884c2015bba17387056e8362d001caaa616cfc4927c",
+      "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811"
+    },
+    "after": {
+      "pid": 253900,
+      "uid": 65037,
+      "added": 0,
+      "commit": "aab6ca3dace7ed3de26bd300b96f3da785c6bc84",
+      "health": {
+        "status": "active",
+        "lastHeartbeat": "2026-09-30T13:26:19.530034+00:00",
+        "runtimeCommit": "aab6ca3dace7ed3de26bd300b96f3da785c6bc84",
+        "heartbeatAfter": true,
+        "challengesFailed": 0,
+        "challengesPassed": 1,
+        "challengeFailures": 0
+      },
+      "ledger": {
+        "accounts": [
+          {
+            "class": "agent_assets",
+            "account": "agent:01M3F50SH7PNX2E3GST13J52AS:assets",
+            "balance": 0
+          },
+          {
+            "class": "agent_cash",
+            "account": "agent:01M3F50SH7PNX2E3GST13J52AS:cash",
+            "balance": 9334
+          },
+          {
+            "class": "agent_contributions",
+            "account": "agent:01M3F50SH7PNX2E3GST13J52AS:contributions",
+            "balance": 0
+          },
+          {
+            "class": "agent_expense",
+            "account": "agent:01M3F50SH7PNX2E3GST13J52AS:expense",
+            "balance": 666
+          },
+          {
+            "class": "agent_fees",
+            "account": "agent:01M3F50SH7PNX2E3GST13J52AS:fees",
+            "balance": 0
+          },
+          {
+            "class": "agent_investment_pnl",
+            "account": "agent:01M3F50SH7PNX2E3GST13J52AS:investment_pnl",
+            "balance": 0
+          },
+          {
+            "class": "agent_principal",
+            "account": "agent:01M3F50SH7PNX2E3GST13J52AS:principal",
+            "balance": 0
+          },
+          {
+            "class": "agent_reserved",
+            "account": "agent:01M3F50SH7PNX2E3GST13J52AS:reserved",
+            "balance": 0
+          },
+          {
+            "class": "agent_revenue",
+            "account": "agent:01M3F50SH7PNX2E3GST13J52AS:revenue",
+            "balance": 0
+          }
+        ],
+        "journals": 377,
+        "lastJournalSeq": 415,
+        "unpostedMicrocents": 614314
+      },
+      "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+      "buildId": "2a0a324c25d90be3b4cb631136284f734c0f2394a30d708384bd8a19fa1dab01",
+      "changed": 0,
+      "backupDir": "/var/lib/automaton-fleet-upgrades/3ae01f74-5db4-4dbb-a237-4504ff7b5df3",
+      "downtimeMs": 1776,
+      "instanceId": "KJGZxLwwqM2ZO11W3BS71lI7",
+      "durableLost": 0,
+      "identitySha256": "d8a8beb418409def6c0eb01543725b21dc7225c6367fce148de4c5ee4db11517",
+      "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811",
+      "credentialSha256": "f25654bace32d607e06b5fc18f6f5c658c295267226c23ecd4309d7b33bec540",
+      "stateSha256After": "dfdd470c7b41e08f16c833623d034b3d35478ca9cbf680e14bdffc19be83a12b",
+      "stateSha256AtStart": "dfdd470c7b41e08f16c833623d034b3d35478ca9cbf680e14bdffc19be83a12b"
+    },
+    "before": {
+      "pid": 185890,
+      "uid": 65037,
+      "host": "systemd",
+      "files": 25,
+      "takenAt": "2026-09-30T13:26:18.470Z",
+      "ownerUids": [
+        65037
+      ],
+      "categories": {
+        "mind": {
+          "bytes": 103308,
+          "files": 2,
+          "sha256": "2420ac2c73633ce0df859cba0ee52280fedda20b8e4423f48ddcd86e91f60714"
+        },
+        "other": {
+          "bytes": 0,
+          "files": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "memory": {
+          "bytes": 4625,
+          "files": 2,
+          "sha256": "ce6d9e5d40f11272ca963c70930f04992a7c16c16bad2df0d2d92adef323cab8"
+        },
+        "identity": {
+          "bytes": 368,
+          "files": 1,
+          "sha256": "1957c1f8ed1c01d74b2eb05d2763d4b6cc27b700ac6e29aedd85016e2ff62471"
+        },
+        "volatile": {
+          "bytes": 1408,
+          "files": 2,
+          "sha256": "84dbae33967576b4b17a08487e8fc2ce1839fde2a309ae8a1dcd6e2c1e5b30ef"
+        },
+        "workspace": {
+          "bytes": 103827,
+          "files": 19,
+          "sha256": "9fec2c6aa2cb0955e36f25e041205c3b500f3851715a9959f0ce6097d54a9936"
+        },
+        "credential": {
+          "bytes": 171,
+          "files": 1,
+          "sha256": "814cc49973613065312f9f526a551a10b628b4237e809f8d43835b5e218efc40"
+        }
+      },
+      "instanceId": "j2VaNf8PLSWMHljoesKmucGh",
+      "stateSha256": "dfdd470c7b41e08f16c833623d034b3d35478ca9cbf680e14bdffc19be83a12b",
+      "identitySha256": "d8a8beb418409def6c0eb01543725b21dc7225c6367fce148de4c5ee4db11517",
+      "credentialSha256": "f25654bace32d607e06b5fc18f6f5c658c295267226c23ecd4309d7b33bec540"
+    },
+    "reason": null,
+    "status": "verified",
+    "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+    "closedAt": null,
+    "closedBy": null,
+    "rollback": null,
+    "upgradeId": "3ae01f74-5db4-4dbb-a237-4504ff7b5df3",
+    "preparedAt": "2026-09-30T13:26:18.471995+00:00",
+    "preparedBy": "operator:ubuntu",
+    "verifiedAt": "2026-09-30T13:26:20.246084+00:00",
+    "committedAt": "2026-09-30T13:26:18.491099+00:00",
+    "ledgerBefore": {
+      "accounts": [
+        {
+          "class": "agent_assets",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:assets",
+          "balance": 0
+        },
+        {
+          "class": "agent_cash",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:cash",
+          "balance": 9334
+        },
+        {
+          "class": "agent_contributions",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:contributions",
+          "balance": 0
+        },
+        {
+          "class": "agent_expense",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:expense",
+          "balance": 666
+        },
+        {
+          "class": "agent_fees",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:fees",
+          "balance": 0
+        },
+        {
+          "class": "agent_investment_pnl",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:investment_pnl",
+          "balance": 0
+        },
+        {
+          "class": "agent_principal",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:principal",
+          "balance": 0
+        },
+        {
+          "class": "agent_reserved",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:reserved",
+          "balance": 0
+        },
+        {
+          "class": "agent_revenue",
+          "account": "agent:01M3F50SH7PNX2E3GST13J52AS:revenue",
+          "balance": 0
+        }
+      ],
+      "journals": 377,
+      "lastJournalSeq": 415,
+      "unpostedMicrocents": 614314
+    },
+    "stateSha256Before": "dfdd470c7b41e08f16c833623d034b3d35478ca9cbf680e14bdffc19be83a12b"
+  },
+  "health": {
+    "ok": true,
+    "pid": 253900,
+    "uid": 65037,
+    "instanceId": "KJGZxLwwqM2ZO11W3BS71lI7",
+    "commit": "aab6ca3dace7ed3de26bd300b96f3da785c6bc84",
+    "buildId": "2a0a324c25d90be3b4cb631136284f734c0f2394a30d708384bd8a19fa1dab01",
+    "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811",
+    "heartbeatAfter": true,
+    "challengesPassed": 1,
+    "challengesFailed": 0,
+    "status": "active",
+    "waitedMs": 1232
+  }
+}

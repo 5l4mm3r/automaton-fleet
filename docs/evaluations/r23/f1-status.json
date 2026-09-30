@@ -1,0 +1,41 @@
+{
+  "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+  "agent": {
+    "role": "root",
+    "origin": "genesis_founder",
+    "status": "active",
+    "genesisId": "eacab622-b41f-4726-bb93-f8ffe78d4048",
+    "runtimeRepo": "https://github.com/5l4mm3r/automaton-fleet",
+    "workspaceId": "ws_01M3F50SH8BHKVHZP1291FN09K",
+    "lastHeartbeat": "2026-09-30T13:25:09.057487+00:00",
+    "runtimeCommit": "eea1932d293d3aba9264b0f084fa2becd9899ba4",
+    "stateNamespace": "st_01M3F50SH8JVSDE1QBRN591114",
+    "challengeFailures": 0
+  },
+  "approved": {
+    "repo": "https://github.com/5l4mm3r/automaton-fleet",
+    "commit": "aab6ca3dace7ed3de26bd300b96f3da785c6bc84",
+    "buildId": "2a0a324c25d90be3b4cb631136284f734c0f2394a30d708384bd8a19fa1dab01",
+    "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811"
+  },
+  "registered": {
+    "repo": "https://github.com/5l4mm3r/automaton-fleet",
+    "commit": "eea1932d293d3aba9264b0f084fa2becd9899ba4",
+    "source": "genesis",
+    "buildId": "40536771eaebdb6c19703884c2015bba17387056e8362d001caaa616cfc4927c",
+    "genesisId": "eacab622-b41f-4726-bb93-f8ffe78d4048",
+    "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811"
+  },
+  "hostPin": {
+    "workingDirectory": "/opt/automaton-fleet/releases/eea1932d293d3aba9264b0f084fa2becd9899ba4",
+    "commit": "eea1932d293d3aba9264b0f084fa2becd9899ba4",
+    "buildId": "40536771eaebdb6c19703884c2015bba17387056e8362d001caaa616cfc4927c"
+  },
+  "mainPid": 185890,
+  "inFlight": false,
+  "policy": {
+    "heartbeatUnresponsiveS": 120,
+    "heartbeatDeadS": 600
+  },
+  "upgrades": []
+}
