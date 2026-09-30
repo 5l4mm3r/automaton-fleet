@@ -1722,6 +1722,35 @@ registered `runtime_commit`. The controller may move to newer approved releases;
     deferred, Founder 1 MainPID 185890 before and after); `fleet-verify-deployment.sh` 147/0.
   - Evidence: `docs/evaluations/f1-eval-02/closeout/`.
 
+## Provider credit: external observation vs Fleet record (2026-09-30)
+
+- **FleetAdmin's latest direct provider observation:** Anthropic balance **$8.91** (reported by the owner; not
+  readable through the API without an admin credential).
+- **Fleet record** (`fleet:admin provider-credits anthropic`) after the F1-EVAL-02 closeout: **$8.899712**
+  (889,971,200 µ¢).
+- **Difference:** **$0.010288** (Fleet record lower).
+- Recorded as an observation only. **No explanation is asserted and no adjustment was made**: the Fleet record is not
+  forced to match the console without authoritative transaction evidence.
+
+## Neutral cognition routing (schema v22) — built INERT (2026-09-30)
+
+Design: `docs/design/cognition-efficiency-routing.md`. Nothing changes for any founder until the owner acts.
+
+- **Default state after migrating to v22:** routing OFF globally; no founder opted in; tiers T1/T2/T3 seeded
+  (`claude-haiku-4-5-20251001`, `claude-sonnet-5-5`, `claude-opus-5-5`) **disabled and unverified**; the legacy
+  single-model path (Founder 1's) is unchanged. Prompt caching is OFF (`FLEET_COGNITION_PROMPT_CACHE` unset).
+- **Activation (owner gates, in order):**
+  1. Deploy the release carrying v22 (controller-only update; never restart a founder unit) and migrate v21→v22.
+  2. Verify each tier's model on the provider account (Models API) and record it:
+     `cognition-tier-verify <tier> <model> <reference>`; then `cognition-tier-enable <tier>`.
+  3. A small real check of routing + cache usage (bounded spend, separately approved).
+  4. `cognition-routing-enable [--major-spend <pence>]`, then `founder-routing <agentId> enable` for a **new**
+     founder runtime. Opting in an existing founder changes its model; Founder 1 (`eea1932`) is not opted in.
+  5. Optional: `FLEET_COGNITION_PROMPT_CACHE=prefix` in `service.env` (also affects the legacy path; measure first).
+- **Observe:** `cognition-report [--hours N]` (cost/outcome per task class × tier), `cognition-routing`.
+- **Model lifecycle warning:** Anthropic lists Claude Haiku 4.5's retirement as "not sooner than 2026-10-15". The T1
+  mapping must be reviewed before activation; changing it (`cognition-tier-set`) voids its verification.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
