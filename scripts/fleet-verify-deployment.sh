@@ -142,6 +142,15 @@ if [[ -f "$FT" ]]; then
       bad "founder ${fid: -6} not pinned to its registered release ${fcommit:0:7} (WorkingDirectory=$wd, pin=${pc:-none}, env=${envf:-?})"
     fi
   done < <(runuser -u postgres -- psql -X -At -F '|' -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT agent_id, runtime_commit FROM fleet.fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive') ORDER BY agent_id" 2>/dev/null)
+  # Host maintenance (needrestart via apt / unattended-upgrades) never restarts a living founder.
+  G="$(dirname "$0")/fleet-maintenance-guard.sh"
+  if [[ -x "$G" ]]; then
+    while read -r st msg; do
+      case "$st" in PASS) ok "maintenance guard: $msg" ;; FAIL) bad "maintenance guard: $msg" ;; esac
+    done < <("$G" check 2>&1)
+  else
+    bad "maintenance guard script missing ($G)"
+  fi
   left="$(ls -A /var/lib/private/automaton-founders 2>/dev/null | wc -l)"
   [[ "$left" -le "$living" || "$living" == "?" ]] && ok "founder state directories: $left" || bad "founder state directories: $left (living founders: $living)"
 else

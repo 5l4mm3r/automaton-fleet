@@ -32,6 +32,8 @@
 #     automaton-fleet-custody.service, automaton-fleet-founder@.service (template; instances only via
 #     scripts/fleet-founders.sh)  (installed, NOT enabled/started)
 #   /etc/logrotate.d/automaton-fleet                 root 0644 (D-9 bounded JSONL audit retention)
+#   /etc/needrestart/conf.d/50-automaton-fleet-founders.conf  root 0644: host maintenance never restarts a
+#                                                    living founder (scripts/fleet-maintenance-guard.sh)
 # and moves controller secrets out of the repository .env.fleet (backup kept root-only).
 #
 # It never prints secret values, never starts anything and never touches PostgreSQL
@@ -181,6 +183,10 @@ run systemctl daemon-reload
 
 say "7b. logrotate (D-9 bounded JSONL audit retention)"
 run install -m 0644 -o root -g root "$REPO/deploy/logrotate/automaton-fleet" /etc/logrotate.d/automaton-fleet
+
+say "7c. Host maintenance never restarts a living founder (needrestart via apt / unattended-upgrades; security updates unchanged)"
+run install -d -m 0755 -o root -g root /etc/needrestart/conf.d
+run install -m 0644 -o root -g root "$REPO/deploy/needrestart/50-automaton-fleet-founders.conf" /etc/needrestart/conf.d/50-automaton-fleet-founders.conf
 
 say "8. Remove controller secrets from the repository .env.fleet (root-only backup kept)"
 if grep -qE '^[[:space:]]*(DATABASE_URL|FLEET_CONTROLLER_DATABASE_URL|FLEET_ADMIN_DATABASE_URL|REDIS_URL)[[:space:]]*=' "$REPO/.env.fleet" 2>/dev/null; then
