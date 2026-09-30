@@ -48,3 +48,26 @@ Preflight 13:25:18 `preflight_ok`. Upgrade `3ae01f74-5db4-4dbb-a237-4504ff7b5df3
 
 ## Not done (owner commands)
 `cognition-tier-verify`, `cognition-tier-enable`, `cognition-routing-enable`, `founder-routing` — see runbook "Stage R23", R23-6.
+
+## R23-6 First natural routed call after the owner cutover (evidence: `routed-first-calls.txt`)
+Owner cutover 17:09–17:14 (tiers verified + enabled, routing on, Founder 1 opted in). No cognition was forced: Founder 1
+was in its maximum idle backoff (sleep-only turns every ~33 min) and its next natural turn came at 17:34:40.
+
+| Call | Tier / model | Route | Tokens in (uncached / cache write / read) | Out | Cost | Result |
+|---|---|---|---|---|---|---|
+| 430, 17:34:40 | T2 / claude-sonnet-5-5 | agent_step, class_minimum, task_step | 6,817 / 4,767 / 0 | 90 | 2,645,150 µ¢ ($0.0265); charged 1,996,806 µp | ok, 1 attempt, `sleep` |
+
+- Task packet 14,255 B as the only message (no transcript replay); cache policy `prefix` ("T2 stable prefix: reuse
+  expected"); no provider error, no refusal, no legacy call after the cutover; routing counters in the runtime
+  report: 1 routed turn, 1 T2 step.
+- Health: 22 challenges passed, 0 failed since the cutover; still `aab6ca3`, PID 253900. Books: cash 9274p +
+  expense 726p = 10000p = allocation, equal to the sum of all charges; ledger verifies (411 journals). Identity and
+  credential files unchanged; `goals.json` unchanged; `facts.json` has changed since the upgrade (the founder's own
+  writes); continuity note written.
+- **Finding (economics, not safety):** for an idle wake-up that only sleeps, the routed T2 call cost **+33%** versus the
+  legacy Opus idle turns it replaced (1,994,800 µ¢ each at 15:55/16:28/17:01). Two causes: (1) the task packet
+  (~3.6k tokens) is larger than the legacy idle history, so input went from ~4.5k to ~11.6k tokens; (2) the T2 prefix
+  was written (premium −238,350 µ¢) but a one-step turn followed by a 33-minute sleep never reads it back.
+  Candidate refinement (not deployed): cache the T2 prefix only when reuse is evidenced (inside a tool loop, or the
+  founder's previous call within the cache lifetime), as T3 task steps already do; and a slimmer packet for a bare
+  wake-up. Absolute impact at the current idle cadence ≈ +$0.3/day.
