@@ -307,3 +307,25 @@ configuration, and never went through the controller's gateway or ledger.
 3. Re-run the severance probes with ≥ 3 replicates per arm and a discriminating transfer fixture before any
    tier-routing or provider comparison, which should then use identical packets (design §6.3).
 4. Owner: record the −$2.45 provider-credit adjustment; decide how unattended upgrades may restart founder units.
+
+### Closeout (2026-09-30, after architect acceptance)
+
+Appended after the evaluation; the evidence above and under `docs/evaluations/f1-eval-02/real/` is unchanged
+(`real/SHA256SUMS`).
+
+- **Accounting recorded** 2026-09-30 00:01:20: provider-credit `adjustment` −245,000,000 USD µ¢ (−$2.45) for
+  `anthropic`. The owner function takes whole USD cents (`fleet_provider_credits_record`), so the exact
+  **244,560,400 µ¢ ($2.445604)** is preserved in its reference: "F1-EVAL-02 owner/evaluation adjustment 2026-09-29:
+  exact 244560400 USD microcents ($2.445604), 52 calls, rounded up to cents; not founder expense/revenue/profit".
+  Balance 1,134,971,200 → 889,971,200 µ¢ ($8.899712; £6.718330 at rate id 15). Founder consumption unchanged
+  (816,028,800 µ¢). Classification: owner/evaluation adjustment — not founder operating expense, revenue, profit,
+  realized earnings or reproduction earnings.
+- **Host restart defect fixed** (§P): the path was unattended-upgrade → apt `DPkg::Post-Invoke` → needrestart
+  (automatic mode). A needrestart `override_rc` 0 entry for `^automaton-fleet-founder@.+\.service$` (guard file
+  `c668b11`, scripts final at `f675a9e`) makes needrestart defer, never restart, a living founder, while updates keep
+  installing and detection keeps reporting. Live rehearsal with the real needrestart/systemd: PASS (control
+  restarted, founder-pattern unit deferred); `fleet-verify-deployment.sh` 147/0. Founder 1 MainPID 185890 and pin
+  `eea1932` unchanged throughout. See the runbook section "Host maintenance and living founders" and `closeout/`.
+- **Post-run harness fixes committed separately** (not present during the evaluated run, which used `88b0896`):
+  unique knowledge-proposal ids; optional-cell admission by the largest observed call bound (applied before the
+  optional pass).

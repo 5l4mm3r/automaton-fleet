@@ -1,0 +1,58 @@
+# maintenance guard at f675a9e (root-owned /opt/automaton-fleet/maintenance-guard/f675a9e9de8dde9b7bd55c1bff349995c253fb8c), VPS 2026-09-30T00:11:44Z
+== check repeated 50 times: 0 failing runs
+PASS  guard file root-owned, not group/world-writable
+PASS  guard file identical to /opt/automaton-fleet/maintenance-guard/f675a9e9de8dde9b7bd55c1bff349995c253fb8c/deploy/needrestart/50-automaton-fleet-founders.conf (0e9d9d0e3bb1b421…)
+PASS  needrestart will not restart automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service (override 0)
+PASS  guard does not cover automaton-fleet.service (narrow)
+PASS  guard does not cover automaton-fleet-operator-api.service (narrow)
+PASS  guard does not cover automaton-fleet-fetcher.service (narrow)
+PASS  guard does not cover automaton-fleet-custody.service (narrow)
+PASS  guard does not cover unattended-upgrades.service (narrow)
+PASS  guard does not cover ssh.service (narrow)
+PASS  guard does not cover systemd-logind.service (narrow)
+PASS  unattended upgrades enabled (APT::Periodic::Unattended-Upgrade 1)
+PASS  security origin allowed
+PASS  apt-daily-upgrade.timer enabled
+PASS  needrestart apt hook present (outdated code is still detected and reported)
+PASS  unattended-upgrades does not reboot automatically (Automatic-Reboot=unset)
+check exit 0
+== VPS 2026-09-30T00:11:50Z Founder 1 BEFORE: MainPID=185890 NRestarts=0 controller=149614
+== detection with the installed configuration (list mode, nothing restarted)
+  automaton-fleet-founder@NRREHEARSAL.service
+  dbus.service
+  fleet-nr-rehearsal-control.service
+  serial-getty@ttyS0.service
+  systemd-logind.service
+  unattended-upgrades.service
+PASS  installed needrestart still DETECTS the outdated founder-pattern unit
+PASS  installed needrestart detects the outdated control unit
+PASS  rehearsal candidates are exactly the two rehearsal units
+PASS  the installed guard entry covers automaton-fleet-founder@NRREHEARSAL.service
+== automatic restart (needrestart -r a), as the apt/unattended-upgrades hook does
+  
+  Restarting services...
+   systemctl restart fleet-nr-rehearsal-control.service
+  
+  Service restarts being deferred:
+   systemctl restart automaton-fleet-founder@NRREHEARSAL.service
+  
+  No containers need to be restarted.
+  
+  User sessions running outdated binaries:
+   ubuntu @ session #2: login[796]
+   ubuntu @ user manager service: systemd[1008]
+  
+  No VM guests are running outdated hypervisor (qemu) binaries on this host.
+PASS  control unit WAS restarted automatically (PID 232527 -> 232576): automatic restarts still work
+PASS  founder-pattern unit was NOT restarted (PID 232526 unchanged)
+PASS  living founder automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service untouched (MainPID 185890)
+REHEARSAL PASS
+rehearse exit 0
+== VPS 2026-09-30T00:11:52Z Founder 1 AFTER: MainPID=185890 NRestarts=0 controller=149614
+== leftovers:
+  ls: cannot access '/run/fleet-nr-rehearsal': No such file or directory
+  ls: cannot access '/usr/local/lib/fleet-nr-rehearsal': No such file or directory
+  ls: cannot access '/run/systemd/system/automaton-fleet-founder@NRREHEARSAL.service': No such file or directory
+  ls: cannot access '/run/systemd/system/fleet-nr-rehearsal-control.service': No such file or directory
+automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service loaded active running Automaton Fleet Genesis founder runtime 01M3F50SH7PNX2E3GST13J52AS
+verify-deployment exit 0 : 147 PASS / 0 FAIL

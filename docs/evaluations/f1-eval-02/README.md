@@ -16,8 +16,9 @@ surviving: everything needed to continue is here.
 | 11 Bounded real gauntlet (`real/`): 13 cells, 52 calls, $2.445604 (VPS 23:41:32–23:49:39Z) | DONE |
 | 12–13 Analysis and receipt (`docs/evaluations/founder-test-and-evaluation-record.md`, `real/economics.json`) | DONE |
 
-**F1-EVAL-02 is complete.** Do not rerun paid cells. Open owner items: record the −$2.45 provider-credit adjustment;
-decide on unattended-upgrades restarting founder units (see the record, §L and §P).
+**F1-EVAL-02 is complete and accepted.** Do not rerun paid cells. Closeout 2026-09-30: provider-credit adjustment
+recorded (−$2.45; exact 244,560,400 µ¢ in its reference) and the host restart guard installed (record, "Closeout";
+evidence in `closeout/`).
 
 Paid inference: $2.445604 (see `real/ledger.json`).
 

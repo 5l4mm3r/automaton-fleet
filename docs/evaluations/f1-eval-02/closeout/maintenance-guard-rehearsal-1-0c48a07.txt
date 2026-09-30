@@ -1,0 +1,39 @@
+== VPS 2026-09-30T00:09:12Z Founder 1 BEFORE: MainPID=185890 NRestarts=0 controller=149614
+== detection with the installed configuration (list mode, nothing restarted)
+  automaton-fleet-founder@NRREHEARSAL.service
+  dbus.service
+  fleet-nr-rehearsal-control.service
+  serial-getty@ttyS0.service
+  systemd-logind.service
+  unattended-upgrades.service
+PASS  installed needrestart still DETECTS the outdated founder-pattern unit
+PASS  installed needrestart detects the outdated control unit
+PASS  rehearsal candidates are exactly the two rehearsal units
+PASS  the installed guard entry covers automaton-fleet-founder@NRREHEARSAL.service
+== automatic restart (needrestart -r a), as the apt/unattended-upgrades hook does
+  
+  Restarting services...
+   systemctl restart fleet-nr-rehearsal-control.service
+  
+  Service restarts being deferred:
+   systemctl restart automaton-fleet-founder@NRREHEARSAL.service
+  
+  No containers need to be restarted.
+  
+  User sessions running outdated binaries:
+   ubuntu @ session #2: login[796]
+   ubuntu @ user manager service: systemd[1008]
+  
+  No VM guests are running outdated hypervisor (qemu) binaries on this host.
+PASS  control unit WAS restarted automatically (PID 228546 -> 228728): automatic restarts still work
+PASS  founder-pattern unit was NOT restarted (PID 228545 unchanged)
+PASS  living founder automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service untouched (MainPID 185890)
+REHEARSAL PASS
+rehearse exit 0
+== VPS 2026-09-30T00:09:14Z Founder 1 AFTER: MainPID=185890 NRestarts=0 controller=149614
+== leftovers:
+  ls: cannot access '/run/fleet-nr-rehearsal': No such file or directory
+  ls: cannot access '/usr/local/lib/fleet-nr-rehearsal': No such file or directory
+  ls: cannot access '/run/systemd/system/automaton-fleet-founder@NRREHEARSAL.service': No such file or directory
+  ls: cannot access '/run/systemd/system/fleet-nr-rehearsal-control.service': No such file or directory
+automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service loaded active running Automaton Fleet Genesis founder runtime 01M3F50SH7PNX2E3GST13J52AS

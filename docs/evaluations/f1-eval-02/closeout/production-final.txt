@@ -1,0 +1,18 @@
+# Final production state after the F1-EVAL-02 closeout (read-only), VPS 2026-09-30T00:10:11Z
+MainPID=185890 NRestarts=0 ActiveState=active ActiveEnterTimestamp=Mon 2026-09-28 06:59:58 UTC  MainPID=149614 NRestarts=0 ActiveState=active ActiveEnterTimestamp=Sat 2026-09-26 16:13:41 UTC 
+current=/opt/automaton-fleet/releases/0c502fb98c00c62b272995e02a0f3355de57f93b
+FLEET_RUNTIME_COMMIT=eea1932d293d3aba9264b0f084fa2becd9899ba4
+FLEET_RUNTIME_BUILD_ID=40536771eaebdb6c19703884c2015bba17387056e8362d001caaa616cfc4927c
+WorkingDirectory=/opt/automaton-fleet/releases/eea1932d293d3aba9264b0f084fa2becd9899ba4
+founder.json.sha256=d8a8beb418409def6c0eb01543725b21dc7225c6367fce148de4c5ee4db11517
+REAL_REPLICATION_ENABLED=false
+REAL_PAYMENTS_ENABLED=false
+OWNER_SWEEP_ENABLED=false
+FLEET_DRY_RUN_CHILD=false
+FLEET_COGNITION_MODEL=claude-opus-5-5
+FLEET_COGNITION_EFFORT=medium
+cognition.key 600 automaton-fleet-service mtime=2026-09-26 10:23:42.742052685 +0000
+ledger-verify: {  "ok": true,  "headHash": "2944fcc2d27310d132fa9a7fc71849f52570606c9aba23065188607724c793af",  "journals": 348,  "unbalanced": 0}
+key-shaped text in fleet journals since 2026-09-29 23:40: 0
+needrestart guard: 15 PASS / 1 FAIL
+# NOTE (appended 2026-09-30 00:12Z): the '1 FAIL' above was a false result of the guard script at 0c48a07 ('security origin not allowed', a pipefail/SIGPIPE race; 3/20 runs). Fixed in f675a9e: 50/50 checks clean, rehearsal PASS, verify-deployment 147/0 (see maintenance-guard-rehearsal-2-f675a9e.txt, verify-deployment.txt).

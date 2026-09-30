@@ -1689,6 +1689,39 @@ registered `runtime_commit`. The controller may move to newer approved releases;
 - **Founder runtime upgrade (not implemented).** Changing a living founder's own code needs an owner-approved registry operation (new `runtime_commit`) plus re-pinning. It is not needed for controller-side fixes.
 - **Post-Genesis rehearsals.** `fleet-founders.sh rehearsal` now runs alongside registered living founders. It refuses unknown founder units or state, and additionally proves each living founder's MainPID was untouched.
 
+## Host maintenance and living founders (restart guard, 2026-09-30)
+
+- **Incident.** 2026-09-28 06:59:58: `unattended-upgrade` upgraded `python3-requests`; apt's `DPkg::Post-Invoke`
+  hook (`/etc/apt/apt.conf.d/99needrestart`) ran needrestart in automatic mode, which restarted
+  `automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service` (PID 146185 → 185890; same pinned `eea1932`).
+- **Invariant.** Security updates keep installing automatically. A living founder unit is never restarted as a side
+  effect of apt, unattended-upgrades or needrestart. A founder restart is an explicit Fleet lifecycle/maintenance
+  operation (preflight, runtime-pin verification, state protection, post-restart attestation).
+- **Mechanism.** `/etc/needrestart/conf.d/50-automaton-fleet-founders.conf` (from `deploy/needrestart/`) sets
+  `override_rc` 0 for `^automaton-fleet-founder@.+\.service$` only. needrestart still detects and reports a founder
+  running outdated code ("Service restarts being deferred"); it never restarts it (automatic mode defers it,
+  interactive default is no). Unattended upgrades, the security origin, the needrestart hook and every other
+  service's behaviour are unchanged. Unattended-upgrades does not reboot automatically (`Automatic-Reboot` unset).
+- **Operate.**
+  - `sudo scripts/fleet-maintenance-guard.sh install | check | rehearse` (install is also step 7c of
+    `fleet-os-setup.sh --apply`; `fleet-verify-deployment.sh` runs `check`).
+  - `rehearse` proves it with the real needrestart and systemd on two throwaway runtime units (a founder-pattern
+    instance and a control) running a replaced binary: the control is restarted, the founder-pattern unit is
+    deferred, living founders' MainPIDs are unchanged. The automatic run is confined by a rehearsal-only blacklist
+    that is verified in list mode first. Everything is removed on exit.
+  - When `check` or a login banner reports a founder "deferred", it keeps running the old library until an explicit,
+    owner-approved founder maintenance restart.
+- **Installed 2026-09-30 00:07:** guard file from commit `c668b11` (sha256 `0e9d9d0e…`, unchanged since); a check
+  run before install failed as expected (no override for Founder 1).
+  - Script fixes during rollout: the narrowness check now tests the guard's own entries (stock needrestart already
+    overrides `unattended-upgrades.service`); the rehearsal binary moved out of `noexec` `/run` (first attempt:
+    `203/EXEC`, nothing else started, cleaned up with `reset-failed`); no `producer | grep -q` under pipefail
+    (intermittent false "security origin not allowed", 3/20 runs).
+  - Final (`f675a9e`, staged root-owned at `/opt/automaton-fleet/maintenance-guard/f675a9e…`): `check` 15/15 and
+    50/50 repeated runs clean; **rehearsal PASS** 00:11:50–00:11:52 (control restarted, founder-pattern unit
+    deferred, Founder 1 MainPID 185890 before and after); `fleet-verify-deployment.sh` 147/0.
+  - Evidence: `docs/evaluations/f1-eval-02/closeout/`.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
