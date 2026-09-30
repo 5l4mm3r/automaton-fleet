@@ -1,7 +1,7 @@
 # R23 — v23 controller deploy, host rehearsal and Founder 1 runtime upgrade (2026-09-30, VPS UTC)
 
 Evidence files (digests, counts and ids only — no credential, token or key; scanned): `aab6ca3-pins.txt`,
-`cutover.log`, `rehearsal.json`, `f1-status.json`, `f1-preflight.json`, `f1-before.txt`, `f1-upgrade.json`,
+`cutover.txt`, `rehearsal.json`, `f1-status.json`, `f1-preflight.json`, `f1-before.txt`, `f1-upgrade.json`,
 `f1-after.txt` (37 s after the upgrade), `f1-after2.txt` (3 min after).
 
 ## R23-1 Controller release `aab6ca3`, schema v23
