@@ -11,13 +11,14 @@
  *        transcript replay; the next ordinary call routes by its own class again
  *     5. provider-bound thinking only goes back to the model that produced it (otherwise stripped)
  *     6. svc_cognition_routed_authorize (all legacy breakers + route snapshot + duplicate-failure guard)
- *     7. provider.chat with the stable cached prefix (tools + charter) when prompt caching is on
+ *     7. provider.chat with the stable cached prefix (tools + charter) when prompt caching is on; T1 gets a compact
+ *        routine charter and no toolbox (one bounded chore, never padded)
  *     8. svc_cognition_routed_record: charge at the snapshot prices; log tier/class/escalation/packet/cache/thinking
  *        and, per tool call, its id and consequential-action digest (the action boundary's evidence)
  */
 
 import crypto from "crypto";
-import { FOUNDER_CHARTER, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
+import { FOUNDER_CHARTER, FOUNDER_ROUTINE_CHARTER, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
 import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, MAX_COGNITION_DEADLINE_MS, toolsFor, validateMessages } from "./gateway.js";
 import { RouteError, actionDigest, candidateFor, parseRouteRequest, route, type RouteDecision, type TierCandidate } from "./router.js";
 import { DECISION_PACKET_VERSION, TASK_PACKET_VERSION, taskPacketProblems } from "./task-packet.js";
@@ -106,10 +107,17 @@ export async function inferRouted(
   // 5. Provider-bound thinking stays with the model that produced it.
   if (rs.lastModel !== candidate.model) messages = stripThinking(messages);
 
+  // T1 is a single bounded chore with a small context: a compact routine charter, no toolbox, no tool loop.
+  // Anything else is refused — never silently promoted to a higher tier.
+  const routine = decision.tier === "T1";
+  if (routine && messages.some((m) => m.role !== "user")) {
+    throw new CognitionError(400, "FLEET_ROUTE_T1_SINGLE_TASK", "T1 is one bounded routine task: user material only, no tool loop");
+  }
+  const system = routine ? FOUNDER_ROUTINE_CHARTER : FOUNDER_CHARTER;
   const provider = providerFor(candidate, decision.effort);
-  const tools = toolsFor(Array.isArray(caps.allowed) ? (caps.allowed as string[]) : []);
+  const tools = routine ? [] : toolsFor(Array.isArray(caps.allowed) ? (caps.allowed as string[]) : []);
   const maxTokens = candidate.maxOutputTokens;
-  const promptText = JSON.stringify({ system: FOUNDER_CHARTER, messages, tools: tools.map((t) => t.name) });
+  const promptText = JSON.stringify({ system, messages, tools: tools.map((t) => t.name) });
   const promptSha = sha(promptText);
   const estimateMicro = approxTokens(promptText) * candidate.prices.inputMicrocentsPerToken + maxTokens * candidate.prices.outputMicrocentsPerToken;
   const req = parseRouteRequest(body.route ?? { taskClass: "agent_step" });
@@ -132,7 +140,7 @@ export async function inferRouted(
   let result: ChatResult | null = null;
   let failure: ProviderError | null = null;
   try {
-    result = await provider.chat({ agentId, system: FOUNDER_CHARTER, messages, tools, maxTokens, deadlineAt: started + deadlineMs });
+    result = await provider.chat({ agentId, system, messages, tools, maxTokens, deadlineAt: started + deadlineMs });
   } catch (err) {
     failure = err instanceof ProviderError ? err : new ProviderError("PROVIDER_ERROR", { charge: "estimate", attempts: 1 });
   }

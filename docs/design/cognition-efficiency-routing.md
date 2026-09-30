@@ -56,8 +56,9 @@ controller's record, never the founder's label, so mislabelling cannot lower it.
 Stable cached prefix (tools + charter; one explicit breakpoint on the last system block) + minimal packet + current
 task. Adapter option `promptCache` (`off` default | `prefix` | `prefix+tail`); tail = top-level automatic caching for
 the growing tool loop. Thinking/effort are pinned per tier (changing them invalidates caches). Usage instrumented per
-call: cache write/read, uncached input, output, cost, and saving vs uncached at list price. Known limit: Haiku 4.5's
-minimum cacheable prefix is 4096 tokens (the founder prefix is ~3.8k) — T1 calls are meant to use a small prompt.
+call: cache write/read, uncached input, output, cost, and saving vs uncached at list price. Documented minimum
+cacheable prompt: Haiku 4.5 4096 tokens (the ~3.8k founder prefix will not cache there; T1 calls use a small prompt and
+are never padded), Sonnet 5.5 and Opus 5.5 512 tokens.
 
 ## Loop and duplication economics
 
@@ -93,5 +94,14 @@ Founders never grade themselves: outcome scoring stays owner/evaluator-only (fut
 | T2 | `claude-sonnet-5-5` | valid ID; $2/$10 (cache write $2.50, read $0.20); adaptive thinking; **API default effort `high`** (the mapping sets `medium` explicitly); 1M / 128K | not yet checked |
 | T3 | `claude-opus-5-5` | valid ID; $4/$20 (cache write $5, read $0.20); adaptive, always on; default effort `medium`; 1M / 128K | verified 2026-09-29 (F1-EVAL-02 `models.json`) |
 
-Minimum cacheable prefix for Sonnet 5.5 / Opus 5.5 is not published in the reference table used; it is measured in
-the activation check, not assumed. T1 max output is seeded at 2,000 (routine chores); T2/T3 at 8,000.
+Minimum cacheable prompt (current official Anthropic documentation, per FleetAdmin 2026-09-30): Haiku 4.5 **4096**
+tokens, Sonnet 5.5 **512**, Opus 5.5 **512**. (An earlier revision of this document said the 5.5 minimums were
+unpublished; that was based on an older reference table and is corrected.) So the ~3.8k stable founder prefix is
+expected to be too short to cache on Haiku and comfortably cacheable on Sonnet 5.5 / Opus 5.5 — to be confirmed by the
+small real verification, not assumed. T1 keeps its deliberately small routine-task context: prompts are never padded
+to cross a cache threshold. T1 max output is seeded at 2,000 (routine chores); T2/T3 at 8,000.
+
+**T1 lifecycle (FleetAdmin 2026-09-30):** keep `claude-haiku-4-5-20251001` while it remains available and verified.
+T1 means cheap routine cognition, not "Haiku 4.5". A missing, retired, unavailable or unverified T1 mapping **fails
+closed** (`FLEET_COGNITION_TIER_UNAVAILABLE` / `_UNVERIFIED`): T1 work is never silently promoted to T2/T3. A
+replacement is installed only through `cognition-tier-set` + `cognition-tier-verify` + `cognition-tier-enable`.

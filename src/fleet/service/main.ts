@@ -215,6 +215,18 @@ export function readCognitionKey(file: string, uid: number | null = process.getu
   return key;
 }
 
+/**
+ * Schema v22: the provider for a routed tier candidate — this controller's credential and settings, with only the
+ * model/thinking/effort the owner's verified mapping names (T1: no thinking, no effort). Used by the controller and
+ * by the routing verification runner, so both exercise the same code.
+ */
+export function routedProviderFactory(base: AnthropicProvider): ProviderFactory {
+  return (c, effortOverride) => {
+    const p = base.with({ model: c.model, thinking: c.thinking === "adaptive" ? { type: "adaptive" } : undefined, effort: effortOverride ?? c.effort ?? undefined });
+    return Object.assign(p, { promptCache: p.settings.promptCache });
+  };
+}
+
 export function loadCognitionProvider(e: Record<string, string | undefined>, uid: number | null = process.getuid?.() ?? null): CognitionConfig {
   const id = e.FLEET_COGNITION_PROVIDER?.trim() || "none";
   const deadlineMs = boundedInt(e, "FLEET_COGNITION_DEADLINE_MS", 10_000, 240_000, 120_000);
@@ -365,12 +377,7 @@ export async function startFleetServiceFromEnv(
     const research = researchConfig(e);
     // Schema v22: routed tiers reuse this controller's credential and settings; only model/thinking/effort differ, and
     // only as the owner's verified mapping says. Inert unless the owner enables routing (global and per founder).
-    const cognitionProviderFactory: ProviderFactory | null = cognitionProvider instanceof AnthropicProvider
-      ? (c, effortOverride) => {
-          const p = cognitionProvider.with({ model: c.model, thinking: c.thinking === "adaptive" ? { type: "adaptive" } : undefined, effort: effortOverride ?? c.effort ?? undefined });
-          return Object.assign(p, { promptCache: p.settings.promptCache });
-        }
-      : null;
+    const cognitionProviderFactory: ProviderFactory | null = cognitionProvider instanceof AnthropicProvider ? routedProviderFactory(cognitionProvider) : null;
     const service = new FleetService({
       cognitionProvider,
       cognitionProviderFactory,

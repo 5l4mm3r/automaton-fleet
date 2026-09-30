@@ -269,6 +269,52 @@ describe("routed gateway (real AnthropicProvider → fake Messages API)", () => 
     });
   });
 
+  it("T1 uses a small routine context: compact charter, no toolbox, single bounded task (no tool loop)", async () => {
+    await withFake(async (factory, fake) => {
+      const { ports } = fakePorts();
+      await inferRouted(ports, factory, "A", "t", { messages: [{ role: "user", content: "Extract the price: 'Groomer Income Tracker — £12'" }], route: { taskClass: "extraction" } });
+      const body = fake.lastBody as Record<string, unknown>;
+      expect(body).not.toHaveProperty("tools");
+      const sys = JSON.stringify(body.system);
+      expect(sys).toContain("one bounded routine task");
+      expect(sys).toContain("untrusted data");
+      expect(sys).not.toContain("independent economic actor"); // not the full founder charter
+      expect(Buffer.byteLength(JSON.stringify(body))).toBeLessThan(2_000);
+      const loop = [{ role: "user", content: "x" }, { role: "assistant", content: "", toolCalls: [{ id: "toolu_9", name: "list_goals", arguments: {} }] }, { role: "tool", toolCallId: "toolu_9", content: "[]" }];
+      await expect(inferRouted(ports, factory, "A", "t", { messages: loop, route: { taskClass: "extraction" } })).rejects.toMatchObject({ code: "FLEET_ROUTE_T1_SINGLE_TASK" });
+    });
+  });
+
+  it("T1 lifecycle fails closed: disabled, unverified, missing or retired T1 is refused — never promoted to T2/T3", async () => {
+    await withFake(async (factory, fake) => {
+      const variants: Array<[string, TierCandidate[]]> = [
+        ["disabled", TIERS.map((t) => (t.tier === "T1" ? { ...t, enabled: false } : t))],
+        ["unverified", TIERS.map((t) => (t.tier === "T1" ? { ...t, verifiedAt: null } : t))],
+        ["missing", TIERS.filter((t) => t.tier !== "T1")],
+      ];
+      for (const [label, tiers] of variants) {
+        const { ports, seen } = fakePorts();
+        ports.routingState = async () => ({ routingEnabled: true, tiers, lastModel: null });
+        const err = await inferRouted(ports, factory, "A", "t", { messages: obs, route: { taskClass: "extraction" } }).catch((e) => e);
+        expect([label, err.code]).toEqual([label, label === "unverified" ? "FLEET_COGNITION_TIER_UNVERIFIED" : "FLEET_COGNITION_TIER_UNAVAILABLE"]);
+        expect(seen.authorized).toEqual([]);
+      }
+      expect(fake.requests.size).toBe(0); // no model at all was called, least of all Sonnet or Opus
+      // Retired at the provider (verified earlier, now 404): a classified provider failure, recorded, not re-routed.
+      const retired = TIERS.map((t) => (t.tier === "T1" ? { ...t, model: "claude-haiku-retired" } : t));
+      const { ports, seen } = fakePorts();
+      ports.routingState = async () => ({ routingEnabled: true, tiers: retired, lastModel: null });
+      await expect(inferRouted(ports, factory, "A", "t", { messages: obs, route: { taskClass: "extraction" } })).rejects.toMatchObject({ code: "FLEET_COGNITION_PROVIDER_ERROR" });
+      expect(seen.authorized.map((x) => x.route.model)).toEqual(["claude-haiku-retired"]);
+      expect(seen.recorded.map((x) => [x.r.outcome, x.r.errorCode])).toEqual([["error", "PROVIDER_MODEL_NOT_FOUND"]]);
+      expect(fake.lastBody).toMatchObject({ model: "claude-haiku-retired" }); // the only request: the configured T1 model
+      // A consequential task still routes by its own class (normal task routing applies).
+      const { ports: p2 } = fakePorts();
+      p2.routingState = async () => ({ routingEnabled: true, tiers: TIERS.map((t) => (t.tier === "T1" ? { ...t, enabled: false } : t)), lastModel: null });
+      expect((await inferRouted(p2, factory, "A", "t", { messages: obs, route: { taskClass: "validation_design" } })).route).toMatchObject({ tier: "T2", model: SONNET });
+    });
+  });
+
   it("each logged tool call carries its id and, for a spend, the canonical action digest the boundary checks", async () => {
     const spend = { amountCents: 2500, category: "expense", destinationId: "dst_01ABCDEFGHJKMNPQRSTVWXYZ01", purpose: "listing fee" };
     const provider: CognitionProvider = {

@@ -1748,8 +1748,11 @@ Design: `docs/design/cognition-efficiency-routing.md`. Nothing changes for any f
      founder runtime. Opting in an existing founder changes its model; Founder 1 (`eea1932`) is not opted in.
   5. Optional: `FLEET_COGNITION_PROMPT_CACHE=prefix` in `service.env` (also affects the legacy path; measure first).
 - **Observe:** `cognition-report [--hours N]` (cost/outcome per task class × tier), `cognition-routing`.
-- **Model lifecycle warning:** Anthropic lists Claude Haiku 4.5's retirement as "not sooner than 2026-10-15". The T1
-  mapping must be reviewed before activation; changing it (`cognition-tier-set`) voids its verification.
+- **Model lifecycle:** Anthropic lists Claude Haiku 4.5's retirement as "not sooner than 2026-10-15". Decision
+  (FleetAdmin 2026-09-30): keep it as T1 while available and verified. An unavailable/unverified T1 fails closed — T1
+  work is never promoted to T2/T3; a replacement goes through `cognition-tier-set` → `-verify` → `-enable`.
+- **Prompt cache minimums (official docs):** Haiku 4.5 4096 tokens, Sonnet 5.5 512, Opus 5.5 512. The ~3.8k founder
+  prefix is expected to cache on Sonnet/Opus 5.5 only; T1 prompts are never padded to reach a cache threshold.
 
 ## Operating the Claude bridge (dev VM, Phase D)
 

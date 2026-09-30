@@ -153,6 +153,19 @@ describe.skipIf(!PG_BIN)("schema v22 neutral cognition routing (PostgreSQL)", ()
     expect(credit).toEqual([{ used: String(want) }]);
   });
 
+  it("T1 lifecycle fails closed in the database too: a disabled T1 is refused, never served by another tier", async () => {
+    const [a] = await setup();
+    await activate(a);
+    // A T1 task cannot be smuggled onto T2's model: the snapshot must match the named tier's own mapping.
+    expect(await svc.cognitionRoutedAuthorize(a, 5, routeFor("T1", "claude-sonnet-5-5", "extraction"), "3".repeat(64))).toMatchObject({ ok: false, code: "FLEET_COGNITION_MODEL_MISMATCH" });
+    await genesis.cognitionTierEnable("T1", false, OWNER);
+    expect(await svc.cognitionRoutedAuthorize(a, 5, routeFor("T1", "claude-haiku-4-5-20251001", "extraction"), "3".repeat(64))).toMatchObject({ ok: false, code: "FLEET_COGNITION_TIER_UNAVAILABLE" });
+    // A replacement mapping is unverified until verified through the control path.
+    await genesis.cognitionTierSet({ tier: "T1", model: "claude-haiku-5", thinking: null, effort: null, maxOutputTokens: 2000, inputMicrocents: 100, outputMicrocents: 500, cacheWriteMicrocents: 125, cacheReadMicrocents: 10, actor: OWNER });
+    await expect(genesis.cognitionTierEnable("T1", true, OWNER)).rejects.toThrow(/enabled_requires_verified/);
+    expect(await svc.cognitionRoutedAuthorize(a, 5, routeFor("T1", "claude-haiku-5", "extraction"), "3".repeat(64))).toMatchObject({ ok: false, code: "FLEET_COGNITION_TIER_UNAVAILABLE" });
+  });
+
   it("loop economics: an identical prompt after a non-transient failure is refused before the provider", async () => {
     const [a] = await setup();
     await activate(a);
