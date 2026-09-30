@@ -1,24 +1,24 @@
 {
   "receipt": "r24-simulated-experiment",
-  "generatedAt": "2026-09-30T19:51:00.555Z",
-  "startedAt": "2026-09-30T19:51:00.453Z",
+  "generatedAt": "2026-09-30T20:08:46.320Z",
+  "startedAt": "2026-09-30T20:08:46.227Z",
   "financialMode": "simulated",
-  "founder": "01M3SXXKHS7PHY2T9NP53D3ECJ",
-  "experimentId": "368b9cfd-8e95-46d0-97f5-de4a06bf08e0",
+  "founder": "01M3SYY4BANF1CQ0K19H5Q9EJQ",
+  "experimentId": "78a14823-55c2-4e5e-bbf1-8882a10af2ab",
   "opportunityKey": "landlord-rent-tracker",
   "evidence": {
     "claimedLevel": 2,
     "verifiedLevel": 2,
     "provenance": [
       {
-        "attemptId": "b236c420-8d8d-401c-a87a-8c6a6989060b",
+        "attemptId": "32358557-8f6f-40f7-8a5c-349ba93b82fc",
         "host": "marketplace.example",
         "sha256": "7c510b2877780b803415f254f6c9ed1a1c6852d259db3561fbd0bf67e23038a7",
         "supports": "demand",
         "rationale": "Landlords on marketplace.example ask for a simple rent-tracking sheet."
       },
       {
-        "attemptId": "215f9151-c5ad-406f-bcdb-fde7de42264c",
+        "attemptId": "7912f0c1-413f-41c2-aec2-b6b9332eea2b",
         "host": "forum.example",
         "sha256": "4c076fc45b3c0b98838f43d09f958b39a5371cc8f2f421dc2615634db1409685",
         "supports": "demand",
@@ -27,14 +27,14 @@
     ],
     "relevance": [
       {
-        "attemptId": "b236c420-8d8d-401c-a87a-8c6a6989060b",
+        "attemptId": "32358557-8f6f-40f7-8a5c-349ba93b82fc",
         "sha256": "7c510b2877780b803415f254f6c9ed1a1c6852d259db3561fbd0bf67e23038a7",
         "verdict": "relevant",
         "assessedBy": "controller",
         "reason": "supports demand: landlords ask for it and name a price"
       },
       {
-        "attemptId": "215f9151-c5ad-406f-bcdb-fde7de42264c",
+        "attemptId": "7912f0c1-413f-41c2-aec2-b6b9332eea2b",
         "sha256": "4c076fc45b3c0b98838f43d09f958b39a5371cc8f2f421dc2615634db1409685",
         "verdict": "relevant",
         "assessedBy": "controller",
@@ -55,11 +55,11 @@
     "requestedMinor": 800,
     "approvedMinor": 800,
     "approvedMaxLossMinor": 600,
-    "approvalExpiresAt": "2026-10-07T20:51:00.479562+01:00"
+    "approvalExpiresAt": "2026-10-07T21:08:46.251551+01:00"
   },
   "run": {
-    "startedAt": "2026-09-30T20:51:00.514083+01:00",
-    "runDeadline": "2026-10-02T20:51:00.514083+01:00",
+    "startedAt": "2026-09-30T21:08:46.284986+01:00",
+    "runDeadline": "2026-10-02T21:08:46.284986+01:00",
     "events": [
       {
         "kind": "step",
@@ -209,17 +209,17 @@
   "strategyRegistry": {
     "seq": 1,
     "outcome": "succeeded",
-    "knowledgeProposalId": "9b94dc2b-10d8-4afe-ab93-130422cb857b"
+    "knowledgeProposalId": "eabd688f-6d9b-4bf5-b040-377e252ca0ee"
   },
   "ledger": {
     "before": {
       "s": "3",
-      "h": "50fef1865f75ce4a2441abf0b36b4707673a402c6c14b4f115e12d8c7c64e44a",
+      "h": "202550766445b3e74888603ce46165726005c77991d9ffb7dd243b2da0a95044",
       "j": 3
     },
     "after": {
       "s": "3",
-      "h": "50fef1865f75ce4a2441abf0b36b4707673a402c6c14b4f115e12d8c7c64e44a",
+      "h": "202550766445b3e74888603ce46165726005c77991d9ffb7dd243b2da0a95044",
       "j": 3
     },
     "unchanged": true

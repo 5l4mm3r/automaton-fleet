@@ -299,7 +299,8 @@ export class FleetService {
     this.now = opts.now ?? Date.now;
     this.relevance = opts.cognitionProviderFactory
       ? new RelevanceAssessor({
-        ports: { relevancePending: (n) => opts.admin.relevancePending(n), relevanceRecord: (...a) => opts.admin.relevanceRecord(...a) },
+        ports: { relevancePending: (n) => opts.admin.relevancePending(n), relevanceRecord: (...a) => opts.admin.relevanceRecord(...a),
+          relevanceCallFailed: (...a) => opts.admin.relevanceCallFailed(...a) },
         providerFactory: opts.cognitionProviderFactory,
         audit: (event, detail) => this.audit(event, null, detail),
         deadlineMs: this.cognitionDeadlineMs(),

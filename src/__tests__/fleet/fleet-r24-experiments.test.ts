@@ -37,6 +37,7 @@ import { research } from "../../fleet/research/gateway.js";
 import { containsSecretShape } from "../../fleet/cognition/gateway.js";
 import type { ProviderFactory } from "../../fleet/cognition/routed-gateway.js";
 import type { TierCandidate } from "../../fleet/cognition/router.js";
+import { ProviderError } from "../../fleet/cognition/types.js";
 import { wipeRegistry } from "./fixtures/wipe.js";
 
 const PG_BIN = findPgBin();
@@ -137,6 +138,8 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     },
   });
   let assessor: RelevanceAssessor;
+  const relevancePorts = () => ({ relevancePending: (n: number) => svc.relevancePending(n), relevanceRecord: (...a: Parameters<PgFleetStore["relevanceRecord"]>) => svc.relevanceRecord(...a),
+    relevanceCallFailed: (...a: Parameters<PgFleetStore["relevanceCallFailed"]>) => svc.relevanceCallFailed(...a) });
   /** One pass of the controller's independent relevance assessor (the reaper and the request path run the same pass). */
   const settle = () => assessor.runOnce(50);
   const expJson = async (id: string) => (await q(`SELECT fleet.fleet_experiment_json(e) AS j FROM fleet.fleet_experiments e WHERE experiment_id = $1`, [id]))[0].j as Record<string, any>;
@@ -208,7 +211,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     gw = new PgAgentGateway({ connectionString: pgc.agentUrl });
     ledger = new PgLedgerAdmin({ connectionString: pgc.ownerUrl });
     genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
-    assessor = new RelevanceAssessor({ ports: { relevancePending: (n) => svc.relevancePending(n), relevanceRecord: (...a) => svc.relevanceRecord(...a) }, providerFactory: scripted });
+    assessor = new RelevanceAssessor({ ports: relevancePorts(), providerFactory: scripted });
   }, 180_000);
 
   afterAll(async () => {
@@ -577,6 +580,116 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(await svc.researchArtifactRecord(F.id, p2.attemptId, { ...base, excerpt: "y".repeat(6_001) })).toMatchObject({ ok: false, code: "FLEET_ARTIFACT_INVALID" });
     expect(await code(inTime(`UPDATE fleet.fleet_research_evidence_artifacts SET excerpt = 'rewritten' WHERE attempt_id = $1`, [attemptId]))).toBe("FLEET_HISTORY_IMMUTABLE");
     expect(await code(agentRaw.query(`SELECT * FROM fleet.fleet_research_evidence_artifacts`))).toBe("permission denied");
+  });
+
+  it("(23) no evidence artifact accumulates while the pipeline is off; activation keeps artifacts from then on only", async () => {
+    await setup();
+    await genesis.experimentPolicySet(false, null, OWNER);
+    const text = "Forum: landlords asked for a simple rent-tracking spreadsheet; several would pay £12.";
+    const fetchOnce = async (host: string) => {
+      const attemptId = crypto.randomUUID();
+      await q(`INSERT INTO fleet.fleet_research_attempts (attempt_id, agent_id, requested_url, requested_host, purpose, decision) VALUES ($1, $2, $3, $4, 'test', 'authorized')`,
+        [attemptId, F.id, `https://${host}/p`, host]);
+      const refused: string[] = [];
+      const sha = crypto.createHash("sha256").update(`${host}:${text}`).digest("hex");
+      await research({ capabilities: async () => ({ ok: true }), authorize: async () => ({ ok: true, attemptId }), record: (a, id, x) => svc.researchRecord(a, id, x),
+        recordArtifact: (a, id, x) => svc.researchArtifactRecord(a, id, x), artifactRefused: (_a, _id, c) => refused.push(c) },
+      { fetch: async (url: string) => ({ ok: true as const, requestedUrl: url, finalUrl: url, redirects: [], status: 200, contentType: "text/html", title: "t", text, truncated: false,
+        links: [], bytes: text.length, sha256: sha, fetchedAt: new Date().toISOString(), latencyMs: 3 }) }, F.id, F.token, { url: `https://${host}/p`, purpose: "demand research" });
+      return { attemptId, sha256: sha, refused };
+    };
+    // Off: the fetch works as always, but nothing is archived (and that is not treated as a refusal worth auditing).
+    const off = await fetchOnce("forum.landlord-talk.co.uk");
+    expect(off.refused).toEqual([]);
+    expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_research_evidence_artifacts`))[0].n).toBe(0);
+    const art = buildEvidenceArtifact({ sha256: off.sha256, finalUrl: "https://forum.landlord-talk.co.uk/p", title: null, text })!;
+    expect(await svc.researchArtifactRecord(F.id, off.attemptId, art)).toMatchObject({ ok: false, code: "FLEET_EXPERIMENTS_DISABLED" });
+    // On: artifacts are kept from now on — never retroactively for pages fetched while off.
+    await genesis.experimentPolicySet(true, null, OWNER);
+    const on = await fetchOnce("letting-agents-forum.co.uk");
+    expect(on.refused).toEqual([]);
+    expect((await q(`SELECT attempt_id FROM fleet.fleet_research_evidence_artifacts`)).map((r) => r.attempt_id)).toEqual([on.attemptId]);
+    // A page fetched while off can still be cited (provenance), but without an artifact it can never earn a level.
+    const cite = (x: { attemptId: string; sha256: string }) => ({ attemptId: x.attemptId, sha256: x.sha256, supports: "demand", rationale: "Landlords ask for this tracker." });
+    const r = await proposeAssessed(F, proposal({ opportunityKey: "archive-off", evidence: [cite(off)] }));
+    expect(exp(r)).toMatchObject({ status: "watch", verifiedLevel: 0, decisionCode: "FLEET_EVIDENCE_UNCERTAIN" });
+    const ok = await proposeAssessed(F, proposal({ opportunityKey: "archive-on", evidence: [cite(on)] }));
+    expect(exp(ok)).toMatchObject({ verifiedLevel: 1, status: "partially_approved" });
+  });
+
+  it("(24) failed relevance-provider calls never disappear from provider-credit accounting", async () => {
+    await setup();
+    const T2 = { in: 200, out: 1000 }; // seeded T2 prices (USD µ¢ per token)
+    let mode: "estimate" | "usage" | "none" | "throw" | "t3-estimate" = "estimate";
+    const failing: ProviderFactory = (c: TierCandidate) => ({
+      id: "scripted" as const, model: c.model,
+      async chat(req) {
+        modelLog.push({ tier: c.tier, model: c.model, agentId: req.agentId, system: req.system, prompt: String(req.messages[0].content) });
+        if (mode === "t3-estimate" && c.tier === "T2") {
+          return { content: JSON.stringify({ stance: "mixed", supports: "demand", quotes: [], reason: "unclear" }), toolCalls: [], usage: { inputTokens: 1_000, outputTokens: 100 }, usageSource: "provider" as const, attempts: 1 };
+        }
+        if (mode === "throw") throw new Error("socket hang up");
+        if (mode === "usage") throw new ProviderError("PROVIDER_MALFORMED_RESPONSE", { charge: "usage", attempts: 1, usage: { inputTokens: 900, outputTokens: 40 } });
+        if (mode === "none") throw new ProviderError("PROVIDER_RATE_LIMITED", { charge: "none", attempts: 3, status: 429 });
+        throw new ProviderError("PROVIDER_TIMEOUT", { charge: "estimate", attempts: 1 });
+      },
+    });
+    const flaky = new RelevanceAssessor({ ports: relevancePorts(), providerFactory: failing });
+    const calls = async () => q(`SELECT request_id, tier, outcome, error_code, charge, usd_microcents, estimate_usd_microcents, cost_status FROM fleet.fleet_relevance_calls ORDER BY at, request_id`);
+    const credit = async (id: string) => q(`SELECT usd_microcents::bigint AS usd, recorded_by, external_ref FROM fleet.fleet_provider_credit_events WHERE request_id = $1`, [id]);
+    const item = await page(F.id, "flaky.example");
+    const r = await propose(F, proposal({ opportunityKey: "flaky-provider", evidence: [item] }));
+    const id = exp(r).experimentId as string;
+
+    // 1. Timeout after sending (the provider may have billed; amount unknown): an explicit, audited reconciliation item.
+    expect(await flaky.runOnce(5)).toEqual({ assessed: 0, deferred: 1 });
+    let k = await calls();
+    expect(k).toHaveLength(1);
+    expect(k[0]).toMatchObject({ tier: "T2", outcome: "failed", error_code: "PROVIDER_TIMEOUT", charge: "unknown", usd_microcents: null, cost_status: "unknown_reconciliation_required" });
+    expect(Number(k[0].estimate_usd_microcents)).toBeGreaterThan(0);
+    expect(await credit(k[0].request_id)).toEqual([]); // not guessed into the credit record
+    expect((await q(`SELECT detail FROM fleet.fleet_events WHERE event_type = 'provider_cost_reconciliation_required'`)).map((e) => e.detail.requestId)).toEqual([k[0].request_id]);
+    expect((await genesis.relevanceCallsUnreconciled()).map((x) => x.request_id)).toEqual([k[0].request_id]);
+    expect(await expJson(id)).toMatchObject({ status: "watch", decisionCode: "FLEET_RELEVANCE_PENDING" }); // the item stays pending for a retry
+    // The owner reconciles it once with the provider's actual charge.
+    expect(await genesis.relevanceCallReconcile(k[0].request_id, 4_200, OWNER, "console usage 2026-09-30")).toMatchObject({ ok: true, usdMicrocents: 4_200 });
+    expect(await credit(k[0].request_id)).toEqual([{ usd: "-4200", recorded_by: OWNER, external_ref: "console usage 2026-09-30" }]);
+    expect(await genesis.relevanceCallsUnreconciled()).toEqual([]);
+    expect(await code(genesis.relevanceCallReconcile(k[0].request_id, 1, OWNER, "again"))).toBe("FLEET_DUPLICATE_EVENT");
+    expect(await code(genesis.relevanceCallReconcile(crypto.randomUUID(), 1, OWNER, "no such call"))).toBe("FLEET_NOT_FOUND");
+    expect(await code(agentRaw.query(`SELECT fleet.svc_relevance_call_failed($1, $1, '{}'::jsonb)`, [id]))).toBe("permission denied");
+
+    // 2. A failure that reported usage: its actual cost, straight into the credit record.
+    mode = "usage";
+    await flaky.runOnce(5);
+    k = await calls();
+    expect(k[1]).toMatchObject({ charge: "usage", cost_status: "known", usd_microcents: String(900 * T2.in + 40 * T2.out) });
+    expect(await credit(k[1].request_id)).toEqual([{ usd: String(-(900 * T2.in + 40 * T2.out)), recorded_by: "controller:evidence_relevance", external_ref: null }]);
+
+    // 3. Refused before billing (rate limited): known zero, logged, nothing to reconcile.
+    mode = "none";
+    await flaky.runOnce(5);
+    k = await calls();
+    expect(k[2]).toMatchObject({ charge: "none", cost_status: "none", usd_microcents: null, error_code: "PROVIDER_RATE_LIMITED" });
+    expect(await credit(k[2].request_id)).toEqual([]);
+
+    // 4. Not even a provider error (connection dropped in our own code): unknown cost, reconciliation required.
+    mode = "throw";
+    await flaky.runOnce(5);
+    expect((await calls())[3]).toMatchObject({ error_code: "PROVIDER_ERROR", charge: "unknown", cost_status: "unknown_reconciliation_required" });
+
+    // 5. T2 answers (ambiguous), the T3 escalation fails: the verdict stands at T2 with its cost; the T3 failure is logged too.
+    mode = "t3-estimate";
+    expect(await flaky.runOnce(5)).toEqual({ assessed: 1, deferred: 0 });
+    k = await calls();
+    expect(k.slice(4).map((x) => [x.tier, x.outcome, x.cost_status])).toEqual(expect.arrayContaining([["T2", "ok", "known"], ["T3", "failed", "unknown_reconciliation_required"]]));
+    const v = (await genesis.experimentView(id))! as Record<string, any>;
+    expect(v.relevance[0]).toMatchObject({ verdict: "uncertain", tier: "T2" });
+    // Every call is in the log and counts against the hourly budget, answered or failed.
+    expect((await svc.relevancePending(10)).callsLastHour).toBe(k.length);
+    expect(k.length).toBe(6);
+    expect((await genesis.relevanceCallsUnreconciled()).length).toBe(2);
+    expect((await store.auditPrivileges()).problems).toEqual([]);
   });
 
   it("(9) success is decided from controller-recorded observations only, and records strategy-registry knowledge; (7) the founder cannot edit the authoritative result", async () => {

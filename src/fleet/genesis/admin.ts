@@ -225,6 +225,16 @@ export class GenesisOps {
     return this.one<Record<string, unknown>>(`SELECT fleet_experiment_assess_relevance($1, $2, $3, $4, $5) AS r`, [experimentId, attemptId, verdict, actor, reason]);
   }
 
+  /** Relevance-assessor calls whose cost is unknown and still needs reconciliation with the provider. */
+  relevanceCallsUnreconciled() {
+    return this.one<Array<Record<string, unknown>>>(`SELECT fleet_relevance_calls_unreconciled() AS r`, []);
+  }
+
+  /** Record the provider's actual charge for one unknown-cost relevance call (0 allowed; once per call). */
+  relevanceCallReconcile(requestId: string, usdMicrocents: number, actor: string, ref: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_relevance_call_reconcile($1, $2, $3, $4) AS r`, [requestId, usdMicrocents, actor, ref]);
+  }
+
   /** E4 lineage: attribute a realized external-revenue journal to a concluded experiment of the same founder (reads the ledger only). */
   experimentAttributeRevenue(journalId: string, experimentId: string, actor: string, reason: string) {
     return this.one<Record<string, unknown>>(`SELECT fleet_experiment_attribute_revenue($1, $2, $3, $4) AS r`, [journalId, experimentId, actor, reason]);

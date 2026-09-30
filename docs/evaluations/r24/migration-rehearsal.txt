@@ -1,6 +1,12 @@
 R24 local migration rehearsal (2026-09-30, local dev database; not a live registry)
 
-Run 3 — after the autonomous-relevance correction (controller-owned assessor, evidence artifacts), scratch schema
+Run 4 — final pre-deploy corrections (artifacts only while the pipeline is on; failed relevance calls always accounted),
+scratch schema r24_rehearsal_d: 4821616 migrate → v23; migrate-check {"currentVersion":23,"resultingVersion":24,
+"wouldApply":[24],"rolledBack":true}; migrate → "Applied migrations: 24" (schemaVersion 24, countersConsistent); again →
+"Schema up to date."; audit-privileges PASS; experiment-policy {"enabled":false,"financial_mode":"simulated",
+"hard_cap_minor":5000,"relevance_max_calls_per_hour":60}; relevance-calls (unreconciled) [].
+
+Run 3 (superseded) — after the autonomous-relevance correction (controller-owned assessor, evidence artifacts), scratch schema
 r24_rehearsal_c: 4821616 migrate → v23; migrate-check {"currentVersion":23,"resultingVersion":24,"wouldApply":[24],
 "rolledBack":true}; migrate → "Applied migrations: 24" (schemaVersion 24, countersConsistent); again → "Schema up to
 date."; audit-privileges PASS; experiment-policy {"enabled":false,"financial_mode":"simulated","hard_cap_minor":5000,

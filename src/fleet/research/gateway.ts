@@ -29,7 +29,7 @@ export interface ResearchPorts {
   capabilities(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }>;
   authorize(agentId: string, url: string, host: string, purpose: string): Promise<Record<string, unknown> & { ok: boolean }>;
   record(agentId: string, attemptId: string, r: ResearchRecord): Promise<Record<string, unknown> & { ok: boolean }>;
-  /** Schema v24: keep the bounded, sanitized evidence artifact of a fetched page (absent = not kept on this controller). */
+  /** Schema v24: keep the bounded, sanitized evidence artifact of a fetched page (absent = not kept; the registry keeps none while the pipeline is off). */
   recordArtifact?(agentId: string, attemptId: string, a: EvidenceArtifact): Promise<Record<string, unknown> & { ok: boolean }>;
   /** Called when an artifact could not be kept (the page stays usable; it just cannot be assessed relevant later). */
   artifactRefused?(agentId: string, attemptId: string, code: string): void;
@@ -129,7 +129,9 @@ export async function research(
     // Evidence artifact for later independent relevance review (never the raw page; fail closed on secret-shaped text).
     const artifact = buildEvidenceArtifact({ sha256: r.sha256, finalUrl: r.finalUrl, title: r.title, text });
     const kept = artifact ? await ports.recordArtifact(agentId, attemptId, artifact).catch(() => ({ ok: false, code: "FLEET_ARTIFACT_STORE_FAILED" })) : { ok: false, code: "FLEET_ARTIFACT_NOT_BUILT" };
-    if (!kept.ok) ports.artifactRefused?.(agentId, attemptId, String((kept as { code?: unknown }).code ?? "FLEET_ARTIFACT_REFUSED"));
+    const code = String((kept as { code?: unknown }).code ?? "FLEET_ARTIFACT_REFUSED");
+    // (while the pipeline is off the registry keeps nothing, by design: not a refusal worth auditing)
+    if (!kept.ok && code !== "FLEET_EXPERIMENTS_DISABLED") ports.artifactRefused?.(agentId, attemptId, code);
   }
   return {
     attemptId, untrusted: true, requestedUrl: r.requestedUrl, finalUrl: r.finalUrl, redirects: r.redirects, fetchedAt: r.fetchedAt,

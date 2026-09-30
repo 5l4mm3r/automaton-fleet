@@ -1860,17 +1860,17 @@ Design, Evidence Ladder and AMBER items: `docs/design/r24-opportunity-experiment
      - Founder 1's PID and pin (`aab6ca3`) unchanged;
      - `fleet:admin experiment-policy` shows `enabled:false`.
 
-  v24 is additive: 10 new tables and `api_capabilities` gains `experimentsEnabled`, which the `aab6ca3` client
-  ignores. `aab6ca3` has no experiment tools, so nothing changes for Founder 1. One live behaviour change: every
-  research fetch now also stores a bounded, sanitized evidence artifact (≤6000 chars, redacted; no raw page). With the
-  pipeline off, the relevance assessor makes no model calls.
+  v24 is additive: 11 new tables and `api_capabilities` gains `experimentsEnabled`, which the `aab6ca3` client
+  ignores. `aab6ca3` has no experiment tools, so nothing changes for Founder 1. With the pipeline off, the registry
+  keeps no evidence artifact and the relevance assessor makes no model calls: no live behaviour changes.
 - **R24-2 (later, separate owner gate) Founder runtime upgrade** to a release carrying the experiment tools. This
   also activates the R23.1 slim wake packet. Follow the R23-2 → R23-4 procedure: rehearsal from `aab6ca3`,
   preflight, then `upgrade-runtime`.
 - **R24-3 (later, owner) Enable the pipeline:** `fleet:admin experiment-enable [--hard-cap N]` (optionally
   `evidence-ladder-set` first; the caps are simulation-only). Cited evidence is judged by the controller's independent
   relevance assessor (T2, T3 only when ambiguous or consequential; `relevance_max_calls_per_hour` 60). The owner does
-  not need to act. An optional, audited override is
+  not need to act. Failed assessor calls with an unknown provider cost are listed by `relevance-calls`. Settle each
+  with `relevance-reconcile <requestId> <usdMicrocents> <providerRef…>`. An optional, audited override is
   `experiment-relevance <experimentId> <attemptId> relevant|irrelevant|uncertain <reason…>`. The owner links realized
   revenue to its experiment with `experiment-attribute-revenue <journalId> <experimentId> <reason…>`, the only route to
   E4. Back out with `experiment-disable`: the founder API refuses with

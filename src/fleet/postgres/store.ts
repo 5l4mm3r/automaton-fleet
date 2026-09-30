@@ -1839,6 +1839,11 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_experiment_relevance_pending($1) AS r", [limit])).rows[0].r);
   }
 
+  /** Schema v24: a failed relevance-assessor call — known cost, known zero, or an audited reconciliation-required item. */
+  async relevanceCallFailed(experimentId: string, attemptId: string, call: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_relevance_call_failed($1, $2, $3) AS r", [experimentId, attemptId, JSON.stringify(call)])).rows[0].r);
+  }
+
   /** Schema v24: record the controller's relevance verdict (and its inference as provider-credit consumption). */
   async relevanceRecord(experimentId: string, attemptId: string, verdict: string, tier: string, reason: string, refs: Record<string, unknown>, calls: unknown[]): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.tx(async (c) => (await c.query("SELECT svc_experiment_relevance_record($1, $2, $3, $4, $5, $6, $7) AS r",

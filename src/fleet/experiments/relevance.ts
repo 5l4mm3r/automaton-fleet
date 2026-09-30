@@ -14,6 +14,10 @@
  *       escalation) or the proposal is consequential (irreversible, or above the E2 cap) — then T3 directly.
  * T1 is not used: the deterministic checks are exact software (T0); a relevance judgement is not a routine chore.
  *
+ * Every model call is accounted: an answered call with its usage (provider-credit consumption, with the verdict); a failed
+ * call with the provider's reported usage when there is one, as known zero when the provider billed nothing, and
+ * otherwise as an explicit unknown-cost item requiring the owner's reconciliation (never silently dropped).
+ *
  * The model's answer is reduced deterministically: 'relevant' only if it says the page supports exactly the claimed
  * category AND quotes the artifact verbatim (the registry re-checks the quotes); a page that does not bear on the claim is
  * 'irrelevant'; contradicting, mixed, mismatched, unquoted or unusable answers are 'uncertain'. The page and the
@@ -43,6 +47,8 @@ export interface RelevanceJob {
 export interface RelevancePorts {
   relevancePending(limit: number): Promise<Record<string, unknown>>;
   relevanceRecord(experimentId: string, attemptId: string, verdict: Verdict, tier: string, reason: string, refs: Record<string, unknown>, calls: unknown[]): Promise<Record<string, unknown> & { ok: boolean }>;
+  /** A failed call is never lost: actual usage if reported, known zero if not billed, else an audited unknown-cost item. */
+  relevanceCallFailed(experimentId: string, attemptId: string, call: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }>;
 }
 
 export interface AssessedCall {
@@ -213,27 +219,43 @@ export class RelevanceAssessor {
       this.o.audit?.("experiment_relevance_tier_unavailable", { tier: d.tier, error: err instanceof Error ? err.message : "unavailable" });
       return null;
     }
-    const provider = this.o.providerFactory(c, d.effort, "off");
     const requestId = crypto.randomUUID();
+    const prompt = relevancePrompt(job);
+    const maxTokens = Math.min(c.maxOutputTokens, 4_000);
+    const costOf = (u: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }) => Math.max(0, Math.round(
+      u.inputTokens * c.prices.inputMicrocentsPerToken + u.outputTokens * c.prices.outputMicrocentsPerToken
+      + (u.cacheReadTokens ?? 0) * c.prices.cacheReadMicrocentsPerToken + (u.cacheWriteTokens ?? 0) * c.prices.cacheWriteMicrocentsPerToken));
     try {
+      const provider = this.o.providerFactory(c, d.effort, "off");
       const res = await provider.chat({
         agentId: "controller",
         system: RELEVANCE_SYSTEM,
-        messages: [{ role: "user", content: relevancePrompt(job) }],
+        messages: [{ role: "user", content: prompt }],
         tools: [],
-        maxTokens: Math.min(c.maxOutputTokens, 4_000),
+        maxTokens,
         deadlineAt: Date.now() + (this.o.deadlineMs ?? 120_000),
       });
-      const usd = res.usage.inputTokens * c.prices.inputMicrocentsPerToken + res.usage.outputTokens * c.prices.outputMicrocentsPerToken
-        + (res.usage.cacheReadTokens ?? 0) * c.prices.cacheReadMicrocentsPerToken + (res.usage.cacheWriteTokens ?? 0) * c.prices.cacheWriteMicrocentsPerToken;
+      const usd = costOf(res.usage);
       const parsed = parseAssessment(res.content);
       return {
         parsed,
         call: { requestId, provider: c.provider, tier: d.tier, model: c.model, inputTokens: res.usage.inputTokens, outputTokens: res.usage.outputTokens,
-          usdMicrocents: Math.max(0, Math.round(usd)), stance: parsed?.stance ?? "unusable", route: { source: d.source, escalationReason: d.escalationReason } },
+          usdMicrocents: usd, stance: parsed?.stance ?? "unusable", route: { source: d.source, escalationReason: d.escalationReason } },
       };
     } catch (err) {
-      this.o.audit?.("experiment_relevance_provider_error", { tier: d.tier, code: err instanceof ProviderError ? err.code : "PROVIDER_ERROR" });
+      const pe = err instanceof ProviderError ? err : null;
+      const usage = pe?.info.charge === "usage" ? pe.info.usage : undefined;
+      // Upper bound when the cost is unknown: the whole prompt as input plus the full output allowance.
+      const estimate = Math.ceil((RELEVANCE_SYSTEM.length + prompt.length) / 3) * c.prices.inputMicrocentsPerToken + maxTokens * c.prices.outputMicrocentsPerToken;
+      const failed = {
+        requestId, provider: c.provider, tier: d.tier, model: c.model, errorCode: pe ? pe.code : "PROVIDER_ERROR",
+        charge: usage ? "usage" : pe?.info.charge === "none" ? "none" : "unknown",
+        ...(usage ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, usdMicrocents: costOf(usage) } : {}),
+        estimateUsdMicrocents: estimate,
+      };
+      const kept = await this.o.ports.relevanceCallFailed(job.experimentId, job.attemptId, failed)
+        .catch((e: unknown) => ({ ok: false, code: e instanceof Error ? e.message.slice(0, 120) : "unrecorded" }));
+      this.o.audit?.("experiment_relevance_provider_error", { tier: d.tier, requestId, code: failed.errorCode, charge: failed.charge, recorded: kept.ok === true });
       if (d.scope === "question") throw err;
       return null;
     }

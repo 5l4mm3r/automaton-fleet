@@ -1193,6 +1193,7 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_research_artifact_record(text, uuid, text, text, text, text, integer, boolean, integer)",
   "svc_experiment_relevance_pending(integer)",
   "svc_experiment_relevance_record(uuid, uuid, text, text, text, jsonb, jsonb)",
+  "svc_relevance_call_failed(uuid, uuid, jsonb)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */

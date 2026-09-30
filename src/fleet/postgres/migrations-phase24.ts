@@ -247,6 +247,34 @@ CREATE TABLE fleet_experiment_relevance (
 );
 CREATE INDEX fleet_experiment_relevance_at_idx ON fleet_experiment_relevance (assessor_kind, at);
 
+-- Every relevance-assessor model call, answered or failed: nothing the provider may have billed disappears. A known
+-- cost is also provider-credit consumption; a failure the provider did not bill is known zero ('none'); anything else
+-- is 'unknown_reconciliation_required' (with the upper-bound estimate) until the owner records the actual cost
+-- (fleet_relevance_call_reconcile: a consumption event carrying this request id).
+CREATE TABLE fleet_relevance_calls (
+  request_id      uuid        PRIMARY KEY,
+  experiment_id   uuid        REFERENCES fleet_experiments(experiment_id),
+  attempt_id      uuid,
+  provider        text        NOT NULL CHECK (provider ~ '^[a-z][a-z0-9_]{1,39}$'),
+  tier            text        NOT NULL CHECK (tier IN ('T1','T2','T3')),
+  model           text        NOT NULL CHECK (model ~ '^[A-Za-z0-9._:/@-]{1,120}$'),
+  outcome         text        NOT NULL CHECK (outcome IN ('ok','failed')),
+  error_code      text        CHECK (error_code ~ '^[A-Z_]{2,64}$'),
+  charge          text        NOT NULL CHECK (charge IN ('usage','none','unknown')),
+  input_tokens    bigint      CHECK (input_tokens >= 0),
+  output_tokens   bigint      CHECK (output_tokens >= 0),
+  usd_microcents  bigint      CHECK (usd_microcents >= 0),
+  estimate_usd_microcents bigint CHECK (estimate_usd_microcents >= 0),
+  cost_status     text        NOT NULL CHECK (cost_status IN ('known','none','unknown_reconciliation_required')),
+  at              timestamptz NOT NULL DEFAULT now(),
+  CHECK ((cost_status = 'known') = (usd_microcents IS NOT NULL)),
+  CHECK ((outcome = 'failed') = (error_code IS NOT NULL)),
+  CHECK (outcome = 'failed' OR cost_status = 'known'),
+  CHECK (cost_status <> 'none' OR charge = 'none'),
+  CHECK (cost_status <> 'unknown_reconciliation_required' OR charge = 'unknown')
+);
+CREATE INDEX fleet_relevance_calls_at_idx ON fleet_relevance_calls (at);
+
 -- E4 lineage: realized ledger revenue attributed to a concluded experiment of the same founder and opportunity. Each
 -- revenue journal is attributable once; a reversed journal stops counting.
 CREATE TABLE fleet_opportunity_revenue_attributions (
@@ -317,6 +345,9 @@ CREATE TRIGGER fleet_experiment_results_no_truncate BEFORE TRUNCATE ON fleet_exp
 CREATE TRIGGER fleet_strategy_registry_guard BEFORE INSERT ON fleet_strategy_registry FOR EACH ROW EXECUTE FUNCTION fleet_experiments_guard();
 CREATE TRIGGER fleet_strategy_registry_no_change BEFORE UPDATE OR DELETE ON fleet_strategy_registry FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
 CREATE TRIGGER fleet_strategy_registry_no_truncate BEFORE TRUNCATE ON fleet_strategy_registry FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
+CREATE TRIGGER fleet_relevance_calls_guard BEFORE INSERT ON fleet_relevance_calls FOR EACH ROW EXECUTE FUNCTION fleet_experiments_guard();
+CREATE TRIGGER fleet_relevance_calls_no_change BEFORE UPDATE OR DELETE ON fleet_relevance_calls FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+CREATE TRIGGER fleet_relevance_calls_no_truncate BEFORE TRUNCATE ON fleet_relevance_calls FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
 CREATE TRIGGER fleet_research_evidence_artifacts_guard BEFORE INSERT ON fleet_research_evidence_artifacts FOR EACH ROW EXECUTE FUNCTION fleet_experiments_guard();
 CREATE TRIGGER fleet_research_evidence_artifacts_no_change BEFORE UPDATE OR DELETE ON fleet_research_evidence_artifacts FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
 CREATE TRIGGER fleet_research_evidence_artifacts_no_truncate BEFORE TRUNCATE ON fleet_research_evidence_artifacts FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
@@ -876,14 +907,18 @@ BEGIN
   RETURN n;
 END $$;
 
--- Evidence artifact (controller, at research-fetch time): the bounded, sanitized text the controller keeps of a fetched page
--- for later relevance review. Bound to the research record: this founder's authorized, fetched attempt, the same page hash
+-- Evidence artifact (controller, at research-fetch time, only while the pipeline is ON): the bounded, sanitized text the
+-- controller keeps of a fetched page for later relevance review. Bound to the research record: this founder's authorized, fetched attempt, the same page hash
 -- and the host of the recorded final URL; the fetch time is the registry's own. Never the raw page; never secret-shaped.
 CREATE FUNCTION svc_research_artifact_record(p_agent text, p_attempt uuid, p_sha256 text, p_host text, p_title text, p_excerpt text,
   p_source_chars integer, p_truncated boolean, p_redactions integer) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE a fleet_research_attempts; r fleet_research_results; v_host text;
 BEGIN
+  -- Nothing accumulates before the owner activates the pipeline: no artifact is kept while it is off.
+  IF NOT COALESCE((SELECT enabled FROM fleet_experiment_policy WHERE id = 1), false) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_EXPERIMENTS_DISABLED');
+  END IF;
   SELECT * INTO a FROM fleet_research_attempts WHERE attempt_id = p_attempt;
   SELECT * INTO r FROM fleet_research_results WHERE attempt_id = p_attempt;
   IF a.attempt_id IS NULL OR a.agent_id <> p_agent OR a.decision <> 'authorized' OR r.attempt_id IS NULL OR r.outcome <> 'fetched' THEN
@@ -914,7 +949,8 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE pol fleet_experiment_policy; v_used integer; v_room integer;
 BEGIN
   SELECT * INTO pol FROM fleet_experiment_policy WHERE id = 1;
-  SELECT COALESCE(sum(jsonb_array_length(cognition)), 0) INTO v_used FROM fleet_experiment_relevance WHERE assessor_kind = 'controller' AND at > now() - interval '1 hour';
+  -- Every call counts, answered or failed (a failing provider cannot turn retries into an unbounded bill).
+  SELECT count(*) INTO v_used FROM fleet_relevance_calls WHERE at > now() - interval '1 hour';
   v_room := CASE WHEN pol.enabled THEN GREATEST(0, (pol.relevance_max_calls_per_hour - v_used) / 2) ELSE 0 END;
   RETURN jsonb_build_object('enabled', pol.enabled, 'callsLastHour', v_used, 'maxCallsPerHour', pol.relevance_max_calls_per_hour,
     'tiers', (SELECT COALESCE(jsonb_agg(jsonb_build_object('tier', t.tier, 'provider', t.provider, 'model', t.model, 'thinking', t.thinking,
@@ -961,6 +997,11 @@ BEGIN
        OR COALESCE(c ->> 'usdMicrocents', '') !~ '^[0-9]{1,15}$' OR COALESCE(c ->> 'inputTokens', '') !~ '^[0-9]{1,9}$' OR COALESCE(c ->> 'outputTokens', '') !~ '^[0-9]{1,9}$' THEN
       RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'calls');
     END IF;
+    PERFORM fleet_experiment_begin();
+    INSERT INTO fleet_relevance_calls (request_id, experiment_id, attempt_id, provider, tier, model, outcome, charge, input_tokens, output_tokens, usd_microcents, cost_status)
+      VALUES ((c ->> 'requestId')::uuid, (SELECT experiment_id FROM fleet_experiments WHERE experiment_id = p_exp), p_attempt, c ->> 'provider', c ->> 'tier', c ->> 'model',
+        'ok', 'usage', (c ->> 'inputTokens')::bigint, (c ->> 'outputTokens')::bigint, (c ->> 'usdMicrocents')::bigint, 'known')
+      ON CONFLICT (request_id) DO NOTHING;
     INSERT INTO fleet_provider_credit_events (provider, kind, usd_microcents, request_id, recorded_by)
       VALUES (c ->> 'provider', 'consumption', -(c ->> 'usdMicrocents')::bigint, (c ->> 'requestId')::uuid, 'controller:evidence_relevance')
       ON CONFLICT (request_id) DO NOTHING;
@@ -1003,7 +1044,69 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'experiment', fleet_experiment_json(e), 'decision', d);
 END $$;
 
+-- A relevance-assessor call that failed (controller). Recorded whatever happened: actual usage when the provider reported
+-- it (→ provider-credit consumption), known zero when the provider billed nothing, otherwise an explicit, audited
+-- unknown-cost item that requires the owner's reconciliation (with the upper-bound estimate for guidance).
+CREATE FUNCTION svc_relevance_call_failed(p_exp uuid, p_attempt uuid, p_call jsonb) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE c jsonb := p_call; v_status text; v_usd bigint;
+BEGIN
+  IF jsonb_typeof(c) IS DISTINCT FROM 'object' OR COALESCE(c ->> 'requestId', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     OR COALESCE(c ->> 'provider', '') !~ '^[a-z][a-z0-9_]{1,39}$' OR COALESCE(c ->> 'tier', '') NOT IN ('T1','T2','T3')
+     OR COALESCE(c ->> 'model', '') !~ '^[A-Za-z0-9._:/@-]{1,120}$' OR COALESCE(c ->> 'errorCode', '') !~ '^[A-Z_]{2,64}$'
+     OR COALESCE(c ->> 'charge', '') NOT IN ('usage','none','unknown')
+     OR (c ->> 'charge' = 'usage' AND COALESCE(c ->> 'usdMicrocents', '') !~ '^[0-9]{1,15}$')
+     OR (c ? 'estimateUsdMicrocents' AND COALESCE(c ->> 'estimateUsdMicrocents', '') !~ '^[0-9]{1,15}$') THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST');
+  END IF;
+  v_status := CASE c ->> 'charge' WHEN 'usage' THEN 'known' WHEN 'none' THEN 'none' ELSE 'unknown_reconciliation_required' END;
+  v_usd := CASE WHEN v_status = 'known' THEN (c ->> 'usdMicrocents')::bigint END;
+  PERFORM fleet_experiment_begin();
+  INSERT INTO fleet_relevance_calls (request_id, experiment_id, attempt_id, provider, tier, model, outcome, error_code, charge, input_tokens, output_tokens,
+      usd_microcents, estimate_usd_microcents, cost_status)
+    VALUES ((c ->> 'requestId')::uuid, (SELECT experiment_id FROM fleet_experiments WHERE experiment_id = p_exp), p_attempt, c ->> 'provider', c ->> 'tier', c ->> 'model',
+      'failed', c ->> 'errorCode', c ->> 'charge', (c ->> 'inputTokens')::bigint, (c ->> 'outputTokens')::bigint, v_usd, (c ->> 'estimateUsdMicrocents')::bigint, v_status)
+    ON CONFLICT (request_id) DO NOTHING;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', true, 'replay', true); END IF;
+  IF v_status = 'known' THEN
+    INSERT INTO fleet_provider_credit_events (provider, kind, usd_microcents, request_id, recorded_by)
+      VALUES (c ->> 'provider', 'consumption', -v_usd, (c ->> 'requestId')::uuid, 'controller:evidence_relevance')
+      ON CONFLICT (request_id) DO NOTHING;
+  ELSIF v_status = 'unknown_reconciliation_required' THEN
+    PERFORM fleet_event('provider_cost_reconciliation_required', NULL, 'controller',
+      jsonb_build_object('requestId', c ->> 'requestId', 'provider', c ->> 'provider', 'model', c ->> 'model', 'tier', c ->> 'tier',
+        'errorCode', c ->> 'errorCode', 'estimateUsdMicrocents', (c ->> 'estimateUsdMicrocents')::bigint, 'source', 'evidence_relevance'));
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'costStatus', v_status);
+END $$;
+
 -- ═══ 6. Owner functions (never granted to the service, agent or operator roles) ═══
+
+-- Reconcile one unknown-cost relevance call with the provider's actual charge (0 allowed): a consumption event carrying the
+-- call's request id, so each call is reconciled at most once and the provider-credit record stays complete.
+CREATE FUNCTION fleet_relevance_call_reconcile(p_request uuid, p_usd_microcents bigint, p_actor text, p_ref text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE k fleet_relevance_calls;
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  IF p_usd_microcents IS NULL OR p_usd_microcents < 0 OR p_usd_microcents > 100000000000 OR p_ref IS NULL OR length(p_ref) NOT BETWEEN 3 AND 200 OR fleet_secret_shaped(p_ref) THEN
+    RAISE EXCEPTION 'FLEET_BAD_REQUEST: actual USD microcents (>= 0) and a provider reference required';
+  END IF;
+  SELECT * INTO k FROM fleet_relevance_calls WHERE request_id = p_request;
+  IF NOT FOUND OR k.cost_status <> 'unknown_reconciliation_required' THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no unknown-cost relevance call with this id'; END IF;
+  IF EXISTS (SELECT 1 FROM fleet_provider_credit_events WHERE request_id = p_request) THEN RAISE EXCEPTION 'FLEET_DUPLICATE_EVENT: already reconciled'; END IF;
+  INSERT INTO fleet_provider_credit_events (provider, kind, usd_microcents, request_id, external_ref, recorded_by)
+    VALUES (k.provider, 'consumption', -p_usd_microcents, p_request, p_ref, p_actor);
+  PERFORM fleet_event('provider_cost_reconciled', NULL, p_actor, jsonb_build_object('requestId', p_request, 'usdMicrocents', p_usd_microcents, 'source', 'evidence_relevance'));
+  RETURN jsonb_build_object('ok', true, 'requestId', p_request, 'usdMicrocents', p_usd_microcents, 'balanceUsdMicrocents', fleet_provider_credit_balance(k.provider));
+END $$;
+
+-- Relevance calls whose cost is still unknown (owner view): each needs fleet_relevance_call_reconcile.
+CREATE FUNCTION fleet_relevance_calls_unreconciled() RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT COALESCE(jsonb_agg(to_jsonb(k) ORDER BY k.at), '[]'::jsonb) FROM fleet_relevance_calls k
+   WHERE k.cost_status = 'unknown_reconciliation_required' AND NOT EXISTS (SELECT 1 FROM fleet_provider_credit_events e WHERE e.request_id = k.request_id)
+$$;
 CREATE FUNCTION fleet_experiment_policy_set(p_enabled boolean, p_hard_cap bigint, p_actor text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 BEGIN

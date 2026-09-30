@@ -58,6 +58,8 @@
  *   experiment-relevance <experimentId> <attemptId> relevant|irrelevant|uncertain <reason…>   audited override of the controller's relevance verdict (optional)
  *   experiment-attribute-revenue <revenueJournalId> <experimentId> <reason…>        E4 lineage: link realized revenue to its experiment
  *   experiment-observe <experimentId> <metric> <value> <source…>       a controller-recorded observation (the synthetic executor)
+ *   relevance-calls                                                    relevance-assessor calls whose provider cost is unknown (reconcile each)
+ *   relevance-reconcile <requestId> <usdMicrocents> <providerRef…>     record the provider's actual charge for one of them
  *   experiment-stop <experimentId> <reason…> | experiment-conclude <experimentId> [--confidence 0..4] [lessons…]
  */
 
@@ -76,7 +78,7 @@ export const GENESIS_COMMANDS = new Set([
   "cognition-routing", "cognition-tier-set", "cognition-tier-verify", "cognition-tier-enable", "cognition-tier-disable",
   "cognition-routing-enable", "cognition-routing-disable", "founder-routing", "cognition-report", "cognition-tier-cache",
   "experiment-policy", "experiment-enable", "experiment-disable", "evidence-ladder-set", "experiment-list", "experiment-show", "strategy-registry",
-  "experiment-decide", "experiment-relevance", "experiment-attribute-revenue", "experiment-observe", "experiment-stop", "experiment-conclude",
+  "experiment-decide", "experiment-relevance", "experiment-attribute-revenue", "experiment-observe", "experiment-stop", "experiment-conclude", "relevance-calls", "relevance-reconcile",
 ]);
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -261,6 +263,13 @@ export async function runGenesisCommand(
         throw new Error("usage: experiment-attribute-revenue <revenueJournalId> <experimentId> <reason…>");
       }
       return ok(await g.experimentAttributeRevenue(p[0], p[1], actor, p.slice(2).join(" ")));
+    case "relevance-calls":
+      return ok(await g.relevanceCallsUnreconciled());
+    case "relevance-reconcile":
+      if (!UUID.test(p[0] ?? "") || !/^[0-9]{1,12}$/.test(p[1] ?? "") || p.slice(2).join(" ").length < 3) {
+        throw new Error("usage: relevance-reconcile <requestId> <usdMicrocents> <providerRef…>");
+      }
+      return ok(await g.relevanceCallReconcile(p[0], Number(p[1]), actor, p.slice(2).join(" ")));
     case "experiment-observe": {
       const [id, metric, value] = p;
       const source = p.slice(3).join(" ");

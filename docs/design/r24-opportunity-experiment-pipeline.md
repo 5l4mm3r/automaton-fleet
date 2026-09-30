@@ -67,8 +67,10 @@ How it is sanitized and checked:
   secret-shaped excerpt, or a duplicate.
 - **Immutable** once written. The agent role cannot read the table.
 
-This applies to every fetch once v24 is deployed, even while the pipeline is off, so pages fetched before enabling can
-be judged later. Worst case is about 19 MB a day at the fleet research quota.
+Artifacts are kept **only while the pipeline is on** (`fleet_experiment_policy.enabled`). While it is off the registry
+refuses to store any artifact, so nothing accumulates before activation. A page fetched while the pipeline was off can
+still be cited for provenance, but it has no artifact and can never earn a level (T0 uncertain). At most about 19 MB a
+day are kept, at the fleet research quota.
 
 ### The independent relevance assessor (FleetController)
 
@@ -109,9 +111,17 @@ The page and the proposal are delimited as untrusted data in the prompt.
 - One immutable controller row per item, with the tier, the artifact's excerpt hash, the quotes and a concise reason.
 - The registry **re-checks** that a `relevant` verdict cites the artifact of the same page hash and that every quote
   occurs verbatim in it. Otherwise it refuses (`FLEET_RELEVANCE_UNVERIFIED`), whoever sent it.
-- Each model call is recorded as **provider-credit consumption**. This is fleet overhead: no ledger posting, no charge
-  to the founder. It is recorded even when the verdict is refused, and is bounded by
-  `relevance_max_calls_per_hour` (60).
+- **Every model call, answered or failed, is logged** in `fleet_relevance_calls`. A known cost is also
+  provider-credit consumption: fleet overhead, with no ledger posting and no charge to the founder.
+- **Failed calls never disappear:**
+  - the provider's reported usage, when it gave one, is recorded as known cost;
+  - a call refused before billing is known zero;
+  - otherwise the call becomes `unknown_reconciliation_required`, with an upper-bound estimate and a
+    `provider_cost_reconciliation_required` event.
+- The owner lists open items with `fleet:admin relevance-calls` and settles each once with
+  `relevance-reconcile <requestId> <usdMicrocents> <providerRef…>`. That writes a consumption event carrying the call's
+  request id.
+- All calls, including failed ones, count against `relevance_max_calls_per_hour` (60).
 - The controller then re-derives the level and **re-decides**.
 
 **Controller decision path:**
@@ -212,10 +222,10 @@ The checks run in this order, and the first one that matches decides:
 
 | Layer | Additions |
 |---|---|
-| SQL (v24) | 10 tables (policy, ladder, evidence artifacts, experiments, transitions, events, relevance, revenue attributions, results, registry), guards, evaluation, founder API, service (`svc_experiment_reap`, `svc_research_artifact_record`, `svc_experiment_relevance_pending`, `svc_experiment_relevance_record`), owner functions (`fleet_experiment_{policy_set,decide,assess_relevance,attribute_revenue,observe,stop,conclude,view}`, `fleet_evidence_ladder_set`) |
+| SQL (v24) | 11 tables (policy, ladder, evidence artifacts, experiments, transitions, events, relevance, relevance calls, revenue attributions, results, registry), guards, evaluation, founder API, service (`svc_experiment_reap`, `svc_research_artifact_record`, `svc_experiment_relevance_pending`, `svc_experiment_relevance_record`, `svc_relevance_call_failed`), owner functions (incl. `fleet_relevance_call_reconcile`, `fleet_relevance_calls_unreconciled`) (`fleet_experiment_{policy_set,decide,assess_relevance,attribute_revenue,observe,stop,conclude,view}`, `fleet_evidence_ladder_set`) |
 | FleetController HTTP | `POST /v1/experiments/{propose,evidence,start,record,list}` (session auth; not a witness route); research fetch keeps the evidence artifact; the relevance assessor runs after propose/evidence and on the reaper tick |
 | Founder runtime (R24-2, later) | toolbox cases and client methods for the five tools. Evidence items require `supports` and `rationale` |
-| Owner CLI (`fleet:admin`) | `experiment-policy`, `experiment-enable` / `-disable`, `evidence-ladder-set`, `experiment-list`, `experiment-show`, `strategy-registry`, `experiment-decide`, **`experiment-relevance`** (optional override), **`experiment-attribute-revenue`**, `experiment-observe`, `experiment-stop`, `experiment-conclude` |
+| Owner CLI (`fleet:admin`) | `experiment-policy`, `experiment-enable` / `-disable`, `evidence-ladder-set`, `experiment-list`, `experiment-show`, `strategy-registry`, `experiment-decide`, **`experiment-relevance`** (optional override), **`experiment-attribute-revenue`**, **`relevance-calls`**, **`relevance-reconcile`**, `experiment-observe`, `experiment-stop`, `experiment-conclude` |
 
 ## Remaining review items
 
@@ -224,10 +234,12 @@ The checks run in this order, and the first one that matches decides:
    and E2 needs two hosts. Source credibility is future work.
 2. **Prompt injection.** Page text is delimited untrusted data. A `relevant` verdict needs verbatim quotes that the
    registry re-checks, and consequential proposals use T3. A page written to persuade a model can still sway a judgement.
-3. **Provider failures.** If the first (T2) call fails, the item stays pending and is retried on the next pass. The
-   hourly budget bounds retries. A failed call the provider still billed is not recorded (small accounting gap).
-4. **Artifacts start accumulating at deploy**, even with the pipeline off: bounded, sanitized, and readable only by the
-   owner and controller roles. There is no retention sweep yet.
+3. **Provider failures.** If the first (T2) call fails, the item stays pending and is retried on the next pass. Every
+   failed call is logged and accounted, and an unknown cost needs the owner's reconciliation. The hourly budget counts
+   failed calls. A call is unaccounted only if the database itself is unreachable at that moment (the journal audit
+   still records it).
+4. **Artifacts are kept only while the pipeline is on.** They are bounded, sanitized and readable only by the owner and
+   controller roles. There is no retention sweep yet.
 5. **The assessor's inference is fleet overhead** in the provider-credit record, not charged to a founder.
 6. **A founder can end its own experiment early** (metric or max-loss stop). The outcome is then `stopped`, which is
    conservative.
