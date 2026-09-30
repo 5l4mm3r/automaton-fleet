@@ -1,0 +1,23 @@
+founder before: pid 253900 restarts 0
+inflight: 0
+OUTAGE START 2026-09-30T20:16:32Z
+dump 2476584 B sha f2c8d314663bc2c4445941b0d401f516cc79a7a0952053c262e9e3e7d17c0cf2 tables-with-data 79
+migrate-check: {"currentVersion":23,"resultingVersion":24,"wouldApply":[24],"requiredVersion":24,"rolledBack":true}
+Applied migrations: 24
+{"ok":true,"latencyMs":2,"schemaVersion":24,"countersConsistent":true}
+migrated 2026-09-30T20:16:36Z: schema 24
+audit PASS
+approved
+RUNTIME IDENTITY: VERIFIED
+OUTAGE END 2026-09-30T20:16:44Z
+readyz 200
+controller cwd /opt/automaton-fleet/releases/59896ceac4269474d982dd046af75f4684cd1b24
+founder after: pid 253900 restarts 0 (before: 253900/0)
+automaton-fleet: active
+automaton-fleet-operator-api: active
+automaton-fleet-custody: active
+automaton-fleet-fetcher.socket: active
+automaton-fleet-chatgpt-adapter.socket: active
+automaton-fleet-chatgpt-tunnel: active
+automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service: active
+experiment-policy: false/simulated artifacts 0 relevance-calls 0

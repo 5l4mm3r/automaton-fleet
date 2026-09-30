@@ -9,6 +9,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { ACTION_MIN_TIER, RouteError, TASK_CLASSES, actionDigest, candidateFor, parseRouteRequest, route, type TierCandidate } from "../../fleet/cognition/router.js";
+import { FOUNDER_EXPERIMENT_TOOLS } from "../../fleet/cognition/types.js";
 import { inferRouted, type ProviderFactory, type RoutedCognitionPorts } from "../../fleet/cognition/routed-gateway.js";
 import { buildDecisionPacket, renderDecisionPacket, taskPacketProblems, DECISION_LIMITS } from "../../fleet/cognition/task-packet.js";
 import { AnthropicProvider } from "../../fleet/cognition/anthropic.js";
@@ -114,11 +115,11 @@ describe("Critical Decision Packet: the question, not the job", () => {
 });
 
 /** In-memory ports that behave like the database for the gateway (authorization snapshot, exact record). */
-function fakePorts(o: { lastModel?: string | null; lastAgeS?: number | null; authorize?: (route: Record<string, unknown>) => Record<string, unknown> & { ok: boolean }; status?: Record<string, unknown> } = {}) {
+function fakePorts(o: { lastModel?: string | null; lastAgeS?: number | null; authorize?: (route: Record<string, unknown>) => Record<string, unknown> & { ok: boolean }; status?: Record<string, unknown>; experimentsEnabled?: boolean } = {}) {
   const seen = { authorized: [] as Array<{ estimate: number; route: Record<string, unknown>; promptSha: string }>, recorded: [] as Array<{ r: CognitionRecord; obs: Record<string, unknown> }> };
   let n = 0;
   const ports: RoutedCognitionPorts = {
-    capabilities: async () => ({ ok: true, origin: "genesis_founder", allowed: FOUNDER_MANIFEST_V2.allowed as unknown as string[] }),
+    capabilities: async () => ({ ok: true, origin: "genesis_founder", allowed: FOUNDER_MANIFEST_V2.allowed as unknown as string[], ...(o.experimentsEnabled === undefined ? {} : { experimentsEnabled: o.experimentsEnabled }) }),
     cognitionStatus: async () => ({ ok: true, policyEnabled: true, provider: "anthropic", model: OPUS, ...(o.status ?? {}) }),
     routingState: async () => ({ routingEnabled: true, tiers: TIERS, lastModel: o.lastModel ?? null, lastAgeS: o.lastAgeS ?? null }),
     authorize: async (_a, estimate, route, promptSha) => {
@@ -149,6 +150,20 @@ describe("routed gateway (real AnthropicProvider → fake Messages API)", () => 
     }
   }
   const obs = [{ role: "user", content: "Heartbeat 2. Decide your next step." }];
+
+  it("R24: the experiment tools reach the model only while the owner has the pipeline on (routed path, as Founder 1 runs)", async () => {
+    await withFake(async (factory, fake) => {
+      const names = () => ((fake.lastBody as { tools?: Array<{ name: string }> }).tools ?? []).map((t) => t.name);
+      const experimentTools = FOUNDER_EXPERIMENT_TOOLS.map((t) => t.name);
+      for (const flag of [undefined, false] as const) {
+        await inferRouted(fakePorts({ experimentsEnabled: flag }).ports, factory, "A", "t", { messages: obs });
+        expect(names().length).toBeGreaterThan(0);
+        expect(names().filter((n) => experimentTools.includes(n))).toEqual([]);
+      }
+      await inferRouted(fakePorts({ experimentsEnabled: true }).ports, factory, "A", "t", { messages: obs });
+      expect(names()).toEqual(expect.arrayContaining(experimentTools));
+    });
+  });
 
   it("T0 bypasses inference entirely: no authorization, no provider call", async () => {
     await withFake(async (factory, fake) => {

@@ -1842,7 +1842,7 @@ Evidence: `docs/evaluations/r23/`.
 - **Living founders and controller deploys from now on:** Founder 1's unit is pinned to `aab6ca3`; the rule is
   unchanged — a controller deploy never restarts the founder unit; founder code changes only via `upgrade-runtime`.
 
-## Stage R24 — Opportunity → Experiment Pipeline (procedure; R24-1 deployed 2026-09-30, pipeline OFF)
+## Stage R24 — Opportunity → Experiment Pipeline (procedure; R24-1 and R24-2 done 2026-09-30, pipeline OFF)
 
 Design, Evidence Ladder and AMBER items: `docs/design/r24-opportunity-experiment-pipeline.md`. Financially inert
 (`financial_mode` CHECK-pinned to `simulated`). Every step is an owner gate. Local evidence: `docs/evaluations/r24/`
@@ -1896,8 +1896,16 @@ Design, Evidence Ladder and AMBER items: `docs/design/r24-opportunity-experiment
 - **Founder 1 untouched:** PID 253900, 0 restarts, pin `aab6ca3`. Identity, credential and Genesis unchanged; books
   continuous (cash 9267 + expense 733 = 10000p); heartbeating on the new controller.
 - **Inert:** `experiment-policy` enabled=false (simulated), 0 experiments, 0 evidence artifacts, 0 relevance calls.
-- **Pending (separate owner gates):** R24-2 founder runtime upgrade (experiment tools + R23.1 slim wake packet); R24-3
-  `experiment-enable`.
+- **R24-2 done** (owner-confirmed). Host rehearsal 24/24 passed (production unchanged).
+  - Founder 1 preflight OK. Upgrade `9315b1f0-9cba-404a-8c0d-a6b0a7667e5c` **verified 20:32:16**: `aab6ca3` →
+    `59896ce`, PID 253900 → 270844, downtime 1.76 s.
+  - Durable state `508369ee…` identical. Identity, credential, Genesis, ledger accounts, routing and safety switches
+    unchanged. Books continuous; health passing.
+  - Slim wake packet active: a cold idle wake (call 440) costs −47% against call 431 (2,804 B vs 14,326 B packet).
+  - Experiment tools not sent to the model while the pipeline is off. Evidence: `docs/evaluations/r24/`.
+  - Rollback of the founder runtime: `rollback-runtime 01M3F50SH7PNX2E3GST13J52AS 9315b1f0-9cba-404a-8c0d-a6b0a7667e5c
+    <reason…>` (`releases/aab6ca3…` intact).
+- **Pending (owner gate):** R24-3 `experiment-enable`.
 - **Rollback:** `runtime.env.pre-r24` + `current` → `releases/4821616…` + restore the pre-v24 dump (Founder 1 needs
   nothing: it still runs `aab6ca3`).
 

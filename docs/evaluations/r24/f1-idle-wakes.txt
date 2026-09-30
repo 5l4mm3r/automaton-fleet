@@ -1,0 +1,21 @@
+430|17:34:40|T2|ok|6817|90|4767|0|prefix|2645150|1996806|14255|sleep
+431|18:07:47|T2|ok|11638|89|0|0|off|2416600|1818847|14326|sleep
+432|18:40:55|T2|ok|11637|89|0|0|off|2416400|1818697|14320|sleep
+433|19:14:03|T2|ok|11637|89|0|0|off|2416400|1818697|14320|sleep
+434|19:47:10|T2|ok|11637|89|0|0|off|2416400|1818697|14320|sleep
+435|20:20:18|T2|ok|11637|89|0|0|off|2416400|1818697|14320|sleep
+436|20:32:47|T2|ok|11637|90|0|0|off|2417400|1819449|14316|sleep
+437|20:34:50|T2|ok|1221|87|4767|0|prefix|1522950|1146244|2813|sleep
+438|20:37:52|T2|ok|1218|78|0|4767|prefix|416940|313809|2812|sleep
+439|20:42:55|T2|ok|1209|78|0|4767|prefix|415140|312454|2804|sleep
+440|20:51:58|T2|ok|5976|78|0|0|off|1273200|958271|2804|sleep
+"turn":1,"routed":true,"step":0,"packet":"full"
+"turn":2,"routed":true,"step":0,"packet":"slim"
+"turn":3,"routed":true,"step":0,"packet":"slim"
+"turn":4,"routed":true,"step":0,"packet":"slim"
+"turn":5,"routed":true,"step":0,"packet":"slim"
+health: active hb 20:52:28 challenges since upgrade: passed=21 pid 270844 restarts 0 now 20:52:41
+balance": 9261
+balance": 739
+pipeline: false exp=0 art=0 rel=0
+  "ok": true,
