@@ -1,0 +1,19 @@
+time 2026-09-30T18:09:35Z
+== calls since the cutover
+430 | 17:34:40 | T2 | claude-sonnet-5-5 | agent_step | task_step | class_minimum | - | ok | - | 6817 | 90 | 4767 | 0 | prefix | T2 stable prefix: reuse expected | -238350 | 2645150 | 1996806 | 2 | 0 | 14255 | 1 | 2383 | claude-sonnet-5-5 | sleep
+431 | 18:07:47 | T2 | claude-sonnet-5-5 | agent_step | task_step | class_minimum | - | ok | - | 11638 | 89 | 0 | 0 | off | T2 no evidenced reuse | 0 | 2416600 | 1818847 | 2 | 0 | 14326 | 1 | 1900 | claude-sonnet-5-5 | sleep
+== per tier
+T2 | claude-sonnet-5-5 | 2 | 0 | 18455 | 179 | 4767 | 0 | -238350 | 5061750 | 3815653
+== legacy calls after the cutover (must be 0 once the first routed turn began): 0
+== provider errors / audit rejections since the cutover
+api_auth_failed | 4
+== action links: 0
+== mind log since the cutover
+{"at":"2026-09-30T17:34:40.792Z","turn":39,"routed":true,"step":0,"taskClass":"agent_step","expectedTier":"T2","route":{"tier":"T2","model":"claude-sonnet-5-5","taskClass":"agent_step","scope":"task_step","source":"class_minimum","promptCache":"prefix"},"tools":[{"name":"sleep","ok":true}],"charged":2}
+{"at":"2026-09-30T18:07:47.653Z","turn":40,"routed":true,"step":0,"taskClass":"agent_step","expectedTier":"T2","route":{"tier":"T2","model":"claude-sonnet-5-5","taskClass":"agent_step","scope":"task_step","source":"class_minimum","promptCache":"off"},"tools":[{"name":"sleep","ok":true}],"charged":2}
+== runtime report
+{"commit":"aab6ca3","pid":253900,"heartbeats":561,"challengesPassed":281,"ledger":{"cash":9272,"genesisAllocation":10000,"externalCustomerRevenue":0,"lifetimeContribution":0},"loop":{"turns":29,"refusals":0,"last":{"ran":false,"reason":"resting: nothing useful to do","steps":0,"tools":[],"refusals":[],"chargedCents":0},"routing":{"routedTurns":2,"steps":{"T2":2,"T3":0},"routineCalls":0,"escalations":0,"escalationsReused":0,"actionBoundarySteps":0,"thinkingDropped":0,"budgetStops":0,"lastRoute":{"tier":"T2","model":"claude-sonnet-5-5","taskClass":"agent_step","scope":"task_step","source":"class_minimum","promptCache":"off"}},"loopGuard":{"duplicateFailuresBlocked":0,"refetchesAvoided":0,"readOnlyReused":0}}}
+== continuity: present
+== health since the cutover: {"status": "active", "lastHeartbeat": "2026-09-30T18:09:17.836282+00:00", "runtimeCommit": "aab6ca3dace7ed3de26bd300b96f3da785c6bc84", "heartbeatAfter": true, "challengesFailed": 0, "challengesPassed": 55, "challengeFailures": 0}
+== books: cash 9272 + expense 728 = 10000; charged sum 728; unposted µp 48850
+== provider credit (USD µ¢): 736128250

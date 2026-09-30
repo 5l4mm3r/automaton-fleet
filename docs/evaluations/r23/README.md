@@ -71,3 +71,20 @@ was in its maximum idle backoff (sleep-only turns every ~33 min) and its next na
   Candidate refinement (not deployed): cache the T2 prefix only when reuse is evidenced (inside a tool loop, or the
   founder's previous call within the cache lifetime), as T3 task steps already do; and a slimmer packet for a bare
   wake-up. Absolute impact at the current idle cadence ≈ +$0.3/day.
+
+## R23.1 controller-only (`4821616`, 18:00) — first natural idle wake vs call 430 (evidence: `r231-first-idle-wake.txt`)
+| | Call 430 (17:34:40, before) | Call 431 (18:07:47, after) | Change |
+|---|---|---|---|
+| Tier / model / outcome | T2 Sonnet 5.5, ok, 1 attempt | T2 Sonnet 5.5, ok, 1 attempt | same (classification unchanged) |
+| Cache policy | `prefix` ("reuse expected") | `off` ("T2 no evidenced reuse") | — |
+| Packet bytes | 14,255 | 14,326 | slim packet not active on Founder 1 (runs `aab6ca3`) |
+| Input tokens uncached / cache write / read | 6,817 / 4,767 / 0 | 11,638 / 0 / 0 | write premium gone |
+| Output tokens | 90 | 89 | — |
+| Provider cost (USD µ¢) | 2,645,150 | 2,416,600 | **−228,550 (−8.6%)** |
+| Founder charge (GBP µp) | 1,996,806 | 1,818,847 | **−177,959 (−8.9%)** |
+
+- Provider-credit balance fell by exactly 2,416,600 µ¢ (call 431's cost); books cash 9272p + expense 728p = 10000p =
+  sum of charges; ledger verifies. Founder 1 PID 253900 (not restarted), 55 challenges passed / 0 failed since the
+  cutover; identity, credential, Genesis, ledger accounts, switches unchanged; only its mind log and continuity note changed.
+- Still +21% vs the legacy Opus idle turn (1,994,800 µ¢): the rest is packet size, which the slim wake-up packet
+  (pending on Founder 1) addresses.
