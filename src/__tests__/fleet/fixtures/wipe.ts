@@ -5,7 +5,7 @@ import type { PoolClient } from "pg";
  * throwaway schema/cluster). Singleton config rows (fleet_state,
  * fleet_treasury_policy) are kept; counters and reaper bookkeeping reset.
  * Schema v10: the economic model, chart of accounts grammar and legacy
- * digests (and, v11, the capability catalogue, Genesis and reproduction policies; v26, the discovery policy; v13, the
+ * digests (and, v11, the capability catalogue, Genesis and reproduction policies; v13, the
  * cognition policy row, reset to its disabled default; v18, the research policy row, likewise) are kept; the fleet-scope ledger accounts are restored and the
  * ledger head reset (journals, postings and agent accounts are emptied).
  * Must run inside the caller's transaction.
@@ -17,7 +17,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_capability_classes", "fleet_capability_manifests", "fleet_genesis_policy", "fleet_reproduction_policy",
     "fleet_operator_state", "fleet_operator_routes", "fleet_cognition_policy", "fleet_research_policy",
     "fleet_cognition_routing", "fleet_cognition_tiers", "fleet_action_min_tier",
-    "fleet_experiment_policy", "fleet_evidence_ladder", "fleet_discovery_policy",
+    "fleet_experiment_policy", "fleet_evidence_ladder",
   ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
@@ -81,11 +81,6 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   if (r.rows.some((x) => x.t === "fleet_research_policy")) {
     await c.query(`UPDATE "${schema}".fleet_research_policy SET research_enabled = false, founder_hourly = 60, founder_daily = 300,
       fleet_hourly = 120, fleet_daily = 600, updated_by = 'migration'`);
-  }
-  // v26: discovery allowance back to its migration defaults.
-  if (r.rows.some((x) => x.t === "fleet_discovery_policy")) {
-    await c.query(`UPDATE "${schema}".fleet_discovery_policy SET enabled = true, daily_fraction_bp = 200, max_daily_cents = 300, min_runway_days = 14,
-      burn_window_days = 7, updated_by = 'migration'`);
   }
   for (const t of all) await c.query(`ALTER TABLE ${t} ENABLE TRIGGER USER`);
   // v21 fixtures: an identity USD→GBP rate (so historical accounting expectations keep their numbers) and generous

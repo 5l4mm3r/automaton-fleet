@@ -5,7 +5,7 @@
  * DISCOVERY ALLOWANCE. This drives the real migration over a registry seeded through the v25 functions themselves —
  * including Founder 1's Gumroad record under its production id — and checks the data mapping, the autonomy invariants
  * (an open record is always one unavailable action of an exceptional kind; nothing else in the registry consults
- * dependency records), the privilege audit, doctor and the allowance (bounded, renewable, fail-closed).
+ * dependency records), the privilege audit, doctor and the survival observation (figures only: no ration, gate or runway shutdown).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
@@ -46,8 +46,7 @@ describe.skipIf(!PG_BIN)("F2-A schema v26 on an R28-shaped v25 registry (Postgre
   const code = (p: Promise<unknown>) => p.then(() => "OK", (e: Error) => /FLEET_[A-Z_]+|permission denied/.exec(e.message)?.[0] ?? e.message.slice(0, 100));
   const row = async (id: string) => (await q(`SELECT kind, action, blocks_action, status, category, decided_by, response, goal_ref, title FROM fleet.fleet_owner_requests WHERE request_id = $1`, [id]))[0];
   const equity = async (id: string) => Number((await q(`SELECT (fleet.fleet_agent_economics($1) ->> 'survivalEquity')::bigint AS e`, [id]))[0].e);
-  const budgetFor = (eq: number) => Math.min(300, Math.floor((eq * 200) / 10_000));
-  const allowance = async (who: Who) => (await gw.cognitionStatus(who.id, who.token)).discovery as Record<string, unknown>;
+  const survival = async (who: Who) => (await gw.cognitionStatus(who.id, who.token)).survival as Record<string, unknown>;
   const charge = (who: Who, cents: number, ago = "0 seconds") => q(`INSERT INTO fleet.fleet_cognition_log (request_id, agent_id, provider, model, outcome, input_tokens, output_tokens,
       cost_microcents, charged_cents, prompt_sha256, response_sha256, charged_microcents, at)
     VALUES (gen_random_uuid(), $1, 'anthropic', 'm', 'ok', 1, 1, 0, $2, repeat('a', 64), repeat('b', 64), $2::bigint * 1000000, now() - $3::interval)`, [who.id, cents, ago]);
@@ -109,7 +108,7 @@ describe.skipIf(!PG_BIN)("F2-A schema v26 on an R28-shaped v25 registry (Postgre
 
   it("migrate-check rolls back; migrate applies exactly v26, once; nothing is lost and every identity column is unchanged", async () => {
     expect(await store.migrateCheck()).toEqual({ currentVersion: 25, resultingVersion: 26, wouldApply: [26] });
-    expect((await q(`SELECT to_regclass('fleet.fleet_discovery_policy') AS r`))[0].r).toBeNull(); // rolled back
+    expect((await q(`SELECT to_regprocedure('fleet.fleet_survival_observation(text)') AS r`))[0].r).toBeNull(); // rolled back
     expect(await store.migrate()).toEqual([26]);
     expect(await store.migrate()).toEqual([]);
     gw = new PgAgentGateway({ connectionString: pgc.agentUrl });
@@ -167,10 +166,10 @@ describe.skipIf(!PG_BIN)("F2-A schema v26 on an R28-shaped v25 registry (Postgre
     expect(readers.length).toBeGreaterThan(0);
     expect(readers.filter((n) => !family.has(n))).toEqual([]);
     // In particular the spend, experiment, capability, cognition and lifecycle paths never consult it.
-    for (const fn of ["api_spend_request", "api_capabilities", "api_cognition_status", "api_experiment_propose", "svc_cognition_authorize", "fleet_discovery_allowance"]) expect(readers).not.toContain(fn);
+    for (const fn of ["api_spend_request", "api_capabilities", "api_cognition_status", "api_experiment_propose", "svc_cognition_authorize", "fleet_survival_observation"]) expect(readers).not.toContain(fn);
   });
 
-  it("the privilege audit enforces the autonomy invariants (triggers, the open-is-exception CHECK, no writer of the discovery policy)", async () => {
+  it("the privilege audit enforces the autonomy invariants (triggers, the open-is-exception CHECK, the dependency writers)", async () => {
     const audit = async () => (await store.auditPrivileges()).problems;
     await q(`ALTER TABLE fleet.fleet_owner_requests DISABLE TRIGGER fleet_owner_requests_guard`);
     try {
@@ -182,12 +181,10 @@ describe.skipIf(!PG_BIN)("F2-A schema v26 on an R28-shaped v25 registry (Postgre
     } finally {
       await q(`ALTER TABLE fleet.fleet_owner_requests ADD CONSTRAINT fleet_owner_requests_open_is_exception CHECK (status <> 'pending' OR (kind IN (${EXCEPTIONS}) AND blocks_action))`);
     }
-    await q(`CREATE FUNCTION fleet.rogue_discovery() RETURNS void LANGUAGE sql AS $$ UPDATE fleet.fleet_discovery_policy SET max_daily_cents = 100000 $$`);
     await q(`CREATE FUNCTION fleet.rogue_dependency() RETURNS void LANGUAGE sql AS $$ UPDATE fleet.fleet_owner_requests SET response = 'x' WHERE false $$`);
     try {
-      expect(await audit()).toEqual(expect.arrayContaining(["cognition surface: rogue_discovery writes a cognition control table", "cognition surface: rogue_dependency writes a cognition control table"]));
+      expect(await audit()).toEqual(expect.arrayContaining(["cognition surface: rogue_dependency writes a cognition control table"]));
     } finally {
-      await q(`DROP FUNCTION fleet.rogue_discovery()`);
       await q(`DROP FUNCTION fleet.rogue_dependency()`);
     }
     expect(await audit()).toEqual([]);
@@ -206,43 +203,29 @@ describe.skipIf(!PG_BIN)("F2-A schema v26 on an R28-shaped v25 registry (Postgre
     expect(d).toMatchObject({ status: "pass", detail: expect.stringMatching(/^2 open \(kyc 2\): each makes one action unavailable; no founder is blocked; oldest \d+\.\d d$/) });
   });
 
-  it("discovery allowance: constitutional defaults; bounded by equity and today's inference; a runway floor; disabled or missing policy fails closed", async () => {
-    expect(await q(`SELECT enabled, daily_fraction_bp, max_daily_cents, min_runway_days, burn_window_days, updated_by FROM fleet.fleet_discovery_policy`))
-      .toEqual([{ enabled: true, daily_fraction_bp: 200, max_daily_cents: 300, min_runway_days: 14, burn_window_days: 7, updated_by: "migration" }]);
+  it("survival observation: the founder sees its equity, burn and runway; FleetController attaches no gate, ration, threshold or schedule to it", async () => {
+    // No research policy, allowance or runway floor exists in the registry.
+    expect(await q(`SELECT to_regclass('fleet.fleet_discovery_policy') AS t, to_regprocedure('fleet.fleet_discovery_allowance(text)') AS f`)).toEqual([{ t: null, f: null }]);
     const eqF = await equity(F.id);
     const eqG = await equity(G.id);
     expect(eqF).toBeGreaterThan(0);
-    expect(eqG).toBeGreaterThan(0);
-    // Nothing spent yet: allowed, no runway figure (no burn).
-    expect(await allowance(F)).toEqual({ allowed: true, budgetCents: budgetFor(eqF), spentTodayCents: 0, runwayDays: null, reason: "allowed" });
-    // Today's inference (all of it, not only discovery) reaching the budget ends today's discovery.
-    await charge(F, budgetFor(eqF));
-    expect(await allowance(F)).toMatchObject({ allowed: false, budgetCents: budgetFor(eqF), spentTodayCents: budgetFor(eqF), reason: "today's discovery allowance is spent" });
-    // Spend older than a day renews the allowance but still counts as burn: runway below the floor means revenue-first.
+    // Nothing spent yet: figures only, no runway (no burn), and no "allowed"/"reason" field at all.
+    expect(await survival(F)).toEqual({ survivalEquityCents: eqF, inferenceTodayCents: 0, burnPerDayCents: 0, runwayDays: null, burnBasis: "inference, last 7 days" });
+    // Today's inference shows as today's spend and as burn; nothing switches off.
+    await charge(F, 300);
+    expect(await survival(F)).toMatchObject({ inferenceTodayCents: 300, runwayDays: expect.any(Number) });
+    expect(Number((await survival(F)).burnPerDayCents)).toBeCloseTo(300 / 7, 1);
+    // A runway far below 14 days is reported as it is — the founder's own strategy decides what to do with it.
     await charge(G, eqG, "3 days");
-    const g = await allowance(G);
-    expect(g).toMatchObject({ allowed: false, spentTodayCents: 0, reason: "runway below the discovery floor: revenue-first" });
-    expect(Number(g.runwayDays)).toBeCloseTo(7, 0); // equity ÷ (equity / 7 days)
-    // The owner's constitutional switch, and its bounds.
-    await q(`UPDATE fleet.fleet_discovery_policy SET enabled = false`);
-    expect(await allowance(F)).toMatchObject({ allowed: false, reason: "discovery disabled by policy" });
-    await q(`UPDATE fleet.fleet_discovery_policy SET enabled = true, max_daily_cents = 0`);
-    expect(await allowance(F)).toMatchObject({ allowed: false, budgetCents: 0 }); // a zero budget is never "allowed"
-    await q(`UPDATE fleet.fleet_discovery_policy SET max_daily_cents = 300`);
-    await expect(q(`UPDATE fleet.fleet_discovery_policy SET daily_fraction_bp = 5000`)).rejects.toThrow(/check constraint/);
-    expect(await code(q(`DELETE FROM fleet.fleet_discovery_policy`))).toBe("FLEET_HISTORY_IMMUTABLE");
-    expect(await code(q(`TRUNCATE fleet.fleet_discovery_policy`))).toBe("FLEET_HISTORY_IMMUTABLE");
-    // Fail closed: without the policy row there is no allowance (NULL arithmetic must never read as "allowed").
-    await q(`ALTER TABLE fleet.fleet_discovery_policy DISABLE TRIGGER fleet_discovery_policy_no_delete`);
-    try {
-      await q(`DELETE FROM fleet.fleet_discovery_policy`);
-      expect(await allowance(F)).toEqual({ allowed: false, budgetCents: 0, spentTodayCents: 0, runwayDays: null, reason: "no discovery policy" });
-    } finally {
-      await q(`INSERT INTO fleet.fleet_discovery_policy (id) VALUES (1) ON CONFLICT DO NOTHING`);
-      await q(`ALTER TABLE fleet.fleet_discovery_policy ENABLE TRIGGER fleet_discovery_policy_no_delete`);
-    }
+    const g = await survival(G);
+    expect(g).toMatchObject({ inferenceTodayCents: 0, survivalEquityCents: eqG });
+    expect(Number(g.runwayDays)).toBeCloseTo(7, 0);
+    expect(Object.keys(g).sort()).toEqual(["burnBasis", "burnPerDayCents", "inferenceTodayCents", "runwayDays", "survivalEquityCents"]);
+    // The founder cannot call the observation directly (it reaches it through its own authenticated status).
+    const agent = new pg.Pool({ connectionString: pgc.agentUrl, max: 1 });
+    try { expect(await code(agent.query(`SELECT fleet.fleet_survival_observation($1)`, [F.id]))).toBe("permission denied"); } finally { await agent.end(); }
     expect((await store.auditPrivileges()).problems).toEqual([]);
-    // The allowance grants nothing: the founder's capabilities and the four switches are as before.
+    // The observation grants nothing: the founder's capabilities and the four switches are as before.
     expect(await gw.capabilities(F.id, F.token)).toMatchObject({ ok: true, paymentExecutable: false, reproductionExecutable: false, experimentFinancialMode: "simulated" });
     expect(await q(`SELECT replication_enabled FROM fleet.fleet_state`)).toEqual([{ replication_enabled: false }]);
   });

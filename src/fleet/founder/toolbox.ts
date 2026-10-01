@@ -26,6 +26,7 @@ import type { ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
 import type { LoopGuard } from "./loop-guard.js";
 import { recallFacts, rememberFact, rememberFacts, retractFact, sourceLabel, type FactRecord, type FactResult } from "./facts.js";
+import { DecisionLedgerError, loadDecisions, noteResearch, openDecision, researchCheck, resolveDecision, saveDecisions, type Decision } from "./decisions.js";
 
 export interface ToolboxPorts {
   ledger(): Promise<unknown>;
@@ -96,6 +97,7 @@ function memoryRecord(call: ToolCall, out: ToolOutcome, r: FactResult | null): M
 }
 const IMPLEMENTED = new Set([
   "read_file", "list_files", "write_file", "exec", "remember_fact", "remember_facts", "retract_fact", "record_external_dependency", "withdraw_external_dependency", "recall_facts", "set_goal", "complete_goal", "list_goals",
+  "open_decision", "resolve_decision",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
 ]);
@@ -148,7 +150,14 @@ export class FounderToolbox {
   constructor(private readonly o: { manifest: CapabilityManifest; workspaceDir: string; memoryDir: string; ports: ToolboxPorts; execTimeoutMs?: number; /** tests only */ sandboxPython?: string;
     /** v22 phase: loop/duplication economics (absent = unchanged behaviour). */ loopGuard?: LoopGuard;
     /** F1-FRESH-02 observability: one metadata-only record per memory write (and per failed recall); absent = none. */
-    memoryTelemetry?: (record: MemoryTelemetry) => void }) {
+    memoryTelemetry?: (record: MemoryTelemetry) => void;
+    /**
+     * F2-A: web research is decision-driven — a research fetch must serve an open decision (decisions.ts) and is refused
+     * by this runtime when it is unframed, low-value, already gathered, past the founder's own stop condition or about a
+     * decided question; an execution fetch names its step. The production founder runtime sets it; absent = the legacy
+     * {url, purpose} behaviour the sealed evaluation instruments ran with.
+     */
+    decisionResearch?: boolean }) {
     this.workspace = fs.realpathSync(o.workspaceDir);
     this.memory = fs.realpathSync(o.memoryDir);
   }
@@ -243,8 +252,25 @@ export class FounderToolbox {
         case "web_fetch": {
           if (!this.o.ports.researchFetch) return refuse("FLEET_TOOL_NOT_AVAILABLE", "web research is not available to this runtime");
           const url = str(a.url, 2048);
-          const purpose = str(a.purpose, 300);
-          if (!url || !purpose) return refuse("FLEET_BAD_REQUEST", "url and purpose required");
+          if (!url) return refuse("FLEET_BAD_REQUEST", "url required");
+          // F2-A: research serves an open economic decision (the founder's own discipline; FleetController approves nothing).
+          let purpose = str(a.purpose, 300) || str(a.evidenceGap, 300) || str(a.step, 300);
+          let ledger: Decision[] | null = null;
+          let framed: Decision | null = null;
+          if (this.o.decisionResearch) {
+            if (a.mode === "execution") {
+              const step = str(a.step, 300);
+              if (!step || step.trim().length < 5) return refuse("FLEET_BAD_REQUEST", "an execution fetch names the execution step it serves (step)");
+              purpose = `execution: ${step}`.slice(0, 300);
+            } else {
+              try { ledger = loadDecisions(this.memory); } catch (e) { return refuse((e as DecisionLedgerError).code ?? "FLEET_DECISIONS_UNREADABLE", (e as Error).message); }
+              const c = researchCheck(ledger, a);
+              if (!c.ok) return refuse(c.code, c.detail);
+              framed = c.decision;
+              purpose = `[${framed.key}] ${String(a.evidenceGap).trim()}`.slice(0, 300);
+            }
+          }
+          if (!purpose) return refuse("FLEET_BAD_REQUEST", "url and purpose required");
           const r = await this.o.ports.researchFetch({ url, purpose });
           const text = String(r.text ?? "");
           const sha = String(r.sha256 ?? "").slice(0, 16) || "page";
@@ -263,10 +289,17 @@ export class FounderToolbox {
           fs.writeFileSync(f, `${header}\n---BEGIN UNTRUSTED CONTENT---\n${REDACT.reduce((t, re) => t.replace(re, "[REDACTED CREDENTIAL]"), text)}\n---END UNTRUSTED CONTENT---\n`, { mode: 0o600 });
           pruneResearch(path.dirname(f));
           const links = Array.isArray(r.links) ? (r.links as Array<{ text: string; url: string }>).slice(0, 8).map((l) => `- ${l.text}: ${l.url}`).join("\n") : "";
+          let framing = "";
+          if (ledger && framed) {
+            noteResearch(ledger, framed.key, { evidenceGap: String(a.evidenceGap), expectedValue: String(a.expectedValue), informationValue: a.informationValue as "high" | "medium",
+              url, attemptId: typeof r.attemptId === "string" ? r.attemptId : null });
+            saveDecisions(this.memory, ledger);
+            framing = `Decision ${framed.key}: ${framed.research.length}/${framed.stop.maxFetches} research fetch(es) used. As soon as you know enough for the next economically meaningful move, resolve_decision and execute.\n`;
+          }
           return {
             name: call.name,
             ok: true,
-            output: clip(`${header}\nsaved: ${rel} (${text.length} characters; read_file with offset to continue)\n---BEGIN UNTRUSTED CONTENT (excerpt)---\n${text.slice(0, EXCERPT_CHARS)}\n---END UNTRUSTED CONTENT---${links ? `\nlinks:\n${links}` : ""}`),
+            output: clip(`${framing}${header}\nsaved: ${rel} (${text.length} characters; read_file with offset to continue)\n---BEGIN UNTRUSTED CONTENT (excerpt)---\n${text.slice(0, EXCERPT_CHARS)}\n---END UNTRUSTED CONTENT---${links ? `\nlinks:\n${links}` : ""}`),
           };
         }
         case "list_files": {
@@ -346,6 +379,31 @@ export class FounderToolbox {
         }
         case "list_goals":
           return { name: call.name, ok: true, output: clip(JSON.stringify(this.readJson("goals.json", []))) };
+        // F2-A: decision-driven research. The founder's own ledger; FleetController neither sees nor approves it.
+        case "open_decision": {
+          let ledger: Decision[];
+          try { ledger = loadDecisions(this.memory); } catch (e) { return refuse((e as DecisionLedgerError).code ?? "FLEET_DECISIONS_UNREADABLE", (e as Error).message); }
+          const r = openDecision(ledger, a);
+          if (!r.ok) return refuse(r.code, r.detail);
+          saveDecisions(this.memory, ledger);
+          return { name: call.name, ok: true, output: `decision ${r.decision.key} open: research only what could change it (at most ${r.decision.stop.maxFetches} fetch(es); stop when ${r.decision.stop.when}), then resolve_decision and execute` };
+        }
+        case "resolve_decision": {
+          let ledger: Decision[];
+          try { ledger = loadDecisions(this.memory); } catch (e) { return refuse((e as DecisionLedgerError).code ?? "FLEET_DECISIONS_UNREADABLE", (e as Error).message); }
+          const r = resolveDecision(ledger, a);
+          if (!r.ok) return refuse(r.code, r.detail);
+          // The decision ends in an action: its next action becomes an execution goal.
+          const o = r.decision.outcome!;
+          const goals = this.readJson<Array<Record<string, unknown>>>("goals.json", []);
+          const id = `g${goals.length + 1}`;
+          goals.push({ id, title: `Execute ${r.decision.key}: ${o.nextAction}`.slice(0, 300), rationale: `Selected "${o.selected}". Expected: ${o.expectedOutcome}`.slice(0, 2000),
+            status: "open", at: new Date().toISOString(), decision: r.decision.key });
+          o.goalId = id;
+          this.writeJson("goals.json", goals.slice(-100));
+          saveDecisions(this.memory, ledger);
+          return { name: call.name, ok: true, output: `decision ${r.decision.key} made: "${o.selected}". Goal ${id} opened for its next action (${o.nextAction}). Research on this question is closed — execute.` };
+        }
         case "check_ledger":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.ledger())) };
         case "request_spend": {

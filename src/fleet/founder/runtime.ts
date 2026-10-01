@@ -414,7 +414,8 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
           ports: client,
           stateDir: stateNsDir,
           log,
-          toolbox: new FounderToolbox({ manifest: ctx.manifest, workspaceDir, memoryDir, ports: client, loopGuard,
+          // F2-A: research is decision-driven (decisions.ts): framed by an open decision, bounded by the founder's own stop.
+          toolbox: new FounderToolbox({ manifest: ctx.manifest, workspaceDir, memoryDir, ports: client, loopGuard, decisionResearch: true,
             // F1-FRESH-02: counts and codes only (MemoryTelemetry), through the same redacted line logger as every event.
             memoryTelemetry: (m) => log("founder_memory_write", { ...m, runtimeCommit: ctx.release.commit, buildId: ctx.release.buildId }) }),
           routed: { memoryDir, workspaceDir, manifest: ctx.manifest, loopGuard },

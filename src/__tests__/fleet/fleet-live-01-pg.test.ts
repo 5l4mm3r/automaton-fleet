@@ -58,9 +58,8 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
     await q(`UPDATE fleet.fleet_owner_requests SET created_at = now() - make_interval(secs => $2) WHERE request_id = $1`, [id, s]);
     await q(`ALTER TABLE fleet.fleet_owner_requests ENABLE TRIGGER fleet_owner_requests_guard`);
   };
-  /** The registry's survival equity for a founder, and the discovery budget the v26 policy defaults derive from it. */
+  /** The registry's survival equity for a founder. */
   const equity = async (id: string) => Number((await q(`SELECT (fleet.fleet_agent_economics($1) ->> 'survivalEquity')::bigint AS e`, [id]))[0].e);
-  const budgetFor = (eq: number) => Math.min(300, Math.floor((eq * 200) / 10_000));
   const doctorLines = async () => (await runDoctor({ env: {}, store, paths: { cwd: os.tmpdir() }, serviceActive: async () => "inactive" } as never)).checks
     .filter((c) => c.name === "external dependencies" || c.name === "institutional knowledge");
 
@@ -101,8 +100,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       expect(await code(agent.query(`SELECT fleet.fleet_owner_request_decide(gen_random_uuid(), 'approved', 'x', 'operator:owner')`))).toBe("permission denied");
       expect(await code(agent.query(`SELECT * FROM fleet.fleet_owner_requests`))).toBe("permission denied");
       expect(await code(agent.query(`SELECT fleet.fleet_owner_queue(true)`))).toBe("permission denied");
-      expect(await code(agent.query(`SELECT * FROM fleet.fleet_discovery_policy`))).toBe("permission denied");
-      expect(await code(agent.query(`SELECT fleet.fleet_discovery_allowance($1)`, [F.id]))).toBe("permission denied");
+      expect(await code(agent.query(`SELECT fleet.fleet_survival_observation($1)`, [F.id]))).toBe("permission denied");
     } finally { await agent.end(); }
     // The v25 signatures are gone (a founder cannot mark a goal blocked; the owner cannot import by category).
     expect(await q(`SELECT to_regprocedure('fleet.api_owner_request_create(text,text,text,text,text,text,text,boolean)') AS a,
@@ -194,7 +192,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
     expect(lines.find((c) => c.name === "institutional knowledge")).toMatchObject({ status: "pass", detail: expect.stringMatching(/1 proposal\(s\) for review; nothing waits on them/) });
     for (const c of lines) expect(c.detail).not.toMatch(/blocking|unanswered|STALE/);
     // A constitutional change is the one thing the owner is asked to look at (still not a founder blocker).
-    const k = await create(G, { kind: "constitutional_change", action: "Raise the discovery allowance ceiling", goalRef: null });
+    const k = await create(G, { kind: "constitutional_change", action: "Change the fleet's research quota policy", goalRef: null });
     lines = await doctorLines();
     const dep = lines.find((c) => c.name === "external dependencies")!;
     expect(dep).toMatchObject({ status: "warn" });
@@ -225,7 +223,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
     expect(capabilityView(await gw.capabilities(F.id, F.token), true).signature).toBe(off.signature); // stable across reads
   });
 
-  it("over HTTP: create / list / withdraw; an R28 runtime's category body is mapped or refused; cognition status carries capabilities and the discovery allowance", async () => {
+  it("over HTTP: create / list / withdraw; an R28 runtime's category body is mapped or refused; cognition status carries capabilities and the survival observation", async () => {
     const svc = new PgFleetStore({ connectionString: pgc.serviceUrl });
     const service = new FleetService({ admin: svc, agent: gw, realReplicationEnabled: false, reaperIntervalMs: 0,
       release: { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40), buildId: "d".repeat(64), lockfileSha256: "e".repeat(64) },
@@ -254,10 +252,11 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       const view = capabilityView(await gw.capabilities(G.id, G.token), (status.routing as { active?: boolean }).active === true);
       expect(status.capabilities).toEqual(JSON.parse(JSON.stringify(view)));
       expect(JSON.stringify(status.capabilities)).not.toMatch(/token|secret|fs1\./);
-      // F2-A: the controller's discovery allowance (equity × 2 %, at most 300; no burn yet, so no runway figure).
+      // F2-A: the founder's survival position as FleetController observes it — figures only (no allowance, gate or floor).
       const eq = await equity(G.id);
       expect(eq).toBeGreaterThan(0);
-      expect(status.discovery).toEqual({ allowed: true, budgetCents: budgetFor(eq), spentTodayCents: 0, runwayDays: null, reason: "allowed" });
+      expect(status.survival).toEqual({ survivalEquityCents: eq, inferenceTodayCents: 0, burnPerDayCents: 0, runwayDays: null, burnBasis: "inference, last 7 days" });
+      expect(status.discovery).toBeUndefined();
     } finally {
       await service.close();
       await svc.close();
@@ -337,7 +336,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       expect(checks.find((c) => c.name === "institutional knowledge")!.detail).toMatch(/\(\d+ imported as dependencies\)/);
     });
 
-    it("after F2-A the founder gets ONE full packet naming the renamed tools and the Gumroad action; idle wakes become discovery; the allowance bounds it; nothing is granted", async () => {
+    it("after F2-A the founder gets ONE full packet naming the new tools, the Gumroad action and its next move; a short runway is information, not a shutdown; nothing is granted", async () => {
       await genesis.experimentPolicySet(true, null, OWNER); // as in production since 2026-09-30
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "f2a-e2e-"));
       const dirs = { w: path.join(root, "w"), s: path.join(root, "s"), m: path.join(root, "s", "memory") };
@@ -347,12 +346,13 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       const economics = { cash: 9_000, genesisAllocation: 10_000 };
       // State as the R28 runtime leaves it: a sleep-only turn, a digest with R28 signals, and R28's tool names.
       const caps = capabilityView(await gw.capabilities(F.id, F.token), true);
-      const r28Tools = caps.tools.map((t) => (t === "record_external_dependency" ? "request_owner_decision" : t === "withdraw_external_dependency" ? "withdraw_owner_request" : t)).sort();
+      const r28Tools = caps.tools.filter((t) => t !== "open_decision" && t !== "resolve_decision")
+        .map((t) => (t === "record_external_dependency" ? "request_owner_decision" : t === "withdraw_external_dependency" ? "withdraw_owner_request" : t)).sort();
       fs.writeFileSync(path.join(dirs.s, "mind-continuity.json"), JSON.stringify({ at: "2026-10-01T15:32:23.972Z", turn: 12, outcome: "sleep: Gumroad 62cbe1b7 still pending; awaiting approval.",
         tools: ["sleep"], wakeDigest: "0".repeat(64), capabilities: { sig: "1".repeat(64), tools: r28Tools } }));
       const packets: string[] = [];
       const ports: MindPorts = {
-        // The real registry status (including its discovery allowance); cognition switched on for the test.
+        // The real registry status (including its survival observation); cognition switched on for the test.
         cognitionStatus: async () => ({ ...(await gw.cognitionStatus(F.id, F.token)), policyEnabled: true, provider: "anthropic", founderEnabled: true, paused: false, routing: { active: true },
           capabilities: capabilityView(await gw.capabilities(F.id, F.token), true) }),
         ledger: async () => economics,
@@ -369,34 +369,33 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
         for (let i = 0; i <= MAX_IDLE_SKIP + 1 && packets.length === n; i++) await mind.turn(`heartbeat ${i}`);
         expect(packets.length).toBe(n + 1);
         const task = String(JSON.parse(packets.at(-1)!.split("\n").slice(3).join("\n")).task);
-        return { task, slim: /Nothing has changed since your last turn/.test(task), discovery: /autonomous opportunity discovery/.test(task) };
+        return { task, slim: /Nothing has changed since your last turn/.test(task), idle: /^Idle wake/m.test(task) };
       };
       const line = (t: string) => t.split("\n").filter((l) => l.startsWith(`External dependency ${legacyId.slice(0, 8)}`));
       // 1: the first wake after the upgrade is FULL and names what changed — once.
       const first = await next();
       expect(first.slim).toBe(false);
-      expect(first.task).toMatch(/Your capabilities changed since your last turn\. Newly available: record_external_dependency, withdraw_external_dependency\. No longer available: request_owner_decision, withdraw_owner_request\./);
+      expect(first.task).toMatch(/Your capabilities changed since your last turn\. Newly available: open_decision, record_external_dependency, resolve_decision, withdraw_external_dependency\. No longer available: request_owner_decision, withdraw_owner_request\./);
+      expect(first.task).toContain("Your open goals are your execution path: take the next concrete step toward a sale.");
+      expect(first.task).toMatch(new RegExp(`Your survival position \\(FleetController's observation; the strategy is yours\\): survival equity ${await equity(F.id)}p`));
       expect(line(first.task)).toEqual([`External dependency ${legacyId.slice(0, 8)} (kyc): the action "${ACTION}" is unavailable for now. This blocks only that action — not you, your goals or other work: pursue alternatives (another marketplace, direct sales that need no new account, another product, service, niche or venture).`]);
       expect(first.task).not.toMatch(OWNER_DEPENDENCY);
-      // 2: the next idle wake is not "nothing has changed → sleep": the allowance permits discovery, Gumroad still unresolved.
+      // 2: idle wakes are slim (the full packet already carried the next move) — no research happens because of idleness.
+      expect(await next()).toMatchObject({ slim: true, idle: false });
+      // 3: a short runway is reported to the founder; nothing switches off. (Inference worth its whole equity 3 days ago → ≈ 7 days.)
       const eq = await equity(F.id);
-      const budget = budgetFor(eq);
-      expect(budget).toBeGreaterThan(0);
-      const discovery = await next();
-      expect(discovery).toMatchObject({ slim: false, discovery: true });
-      expect(discovery.task).toContain(`autonomous opportunity discovery (allowance today 0p of ${budget}p).`);
-      expect(line(discovery.task)).toHaveLength(1);
-      expect(mind.routing.discoveryTurns).toBe(1);
-      // 3: the allowance is the controller's: once today's inference reaches it, idle wakes fall back to the slim packet.
-      await q(`INSERT INTO fleet.fleet_cognition_log (request_id, agent_id, provider, model, outcome, input_tokens, output_tokens, cost_microcents, charged_cents, prompt_sha256, response_sha256, charged_microcents)
-        VALUES (gen_random_uuid(), $1, 'anthropic', 'm', 'ok', 1, 1, 0, $2, repeat('a', 64), repeat('b', 64), $2::bigint * 1000000)`, [F.id, budget]);
-      const after = (await gw.cognitionStatus(F.id, F.token)).discovery as Record<string, unknown>;
-      expect(after).toMatchObject({ allowed: false, budgetCents: budget, spentTodayCents: budget, reason: "today's discovery allowance is spent" });
-      expect(Number(after.runwayDays)).toBeCloseTo((eq * 7) / budget, 0); // equity ÷ (today's burn spread over the 7-day window)
-      const spent = await next();
-      expect(spent).toMatchObject({ slim: true, discovery: false });
-      expect(spent.task).toMatch(/otherwise you may sleep until your discovery allowance renews/);
-      expect(line(spent.task)).toHaveLength(1); // the dependency stays visible as one unavailable action
+      await q(`INSERT INTO fleet.fleet_cognition_log (request_id, agent_id, provider, model, outcome, input_tokens, output_tokens, cost_microcents, charged_cents, prompt_sha256, response_sha256, charged_microcents, at)
+        VALUES (gen_random_uuid(), $1, 'anthropic', 'm', 'ok', 1, 1, 0, $2, repeat('a', 64), repeat('b', 64), $2::bigint * 1000000, now() - interval '3 days')`, [F.id, eq]);
+      const obs = (await gw.cognitionStatus(F.id, F.token)).survival as Record<string, unknown>;
+      expect(Number(obs.runwayDays)).toBeCloseTo(7, 0);
+      for (let i = 0; i < 3; i++) expect((await next()).slim).toBe(true); // 4 slim wakes in all…
+      const recheck = await next(); // …then the same idle state is re-checked with one push toward its next move
+      expect(recheck).toMatchObject({ slim: false, idle: true });
+      expect(recheck.task).toContain("Idle wake: your open goals are your execution path");
+      expect(recheck.task).toMatch(/runway ≈ 7 days at that burn\. The less capital you have, the more selective you are/);
+      expect(recheck.task).not.toMatch(/revenue-first|discovery floor|allowance/);
+      expect(line(recheck.task)).toHaveLength(1); // the dependency stays visible as one unavailable action
+      expect(mind.routing.idleNudges).toEqual({ decide: 0, execute: 1, opportunity: 0 });
       // 4: a resolution (rare: the owner provides the identity) is news exactly once; it grants nothing.
       const before = await authority();
       const capsBefore = capabilityView(await gw.capabilities(F.id, F.token), true).signature;

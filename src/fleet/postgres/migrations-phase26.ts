@@ -13,14 +13,9 @@
  *      ordinary decisions belong to the founder or FleetController.
  *    - API responses keep `blocking: false` and `stale: false` so an older founder runtime never renders a dependency as
  *      blocking or stale.
- * 2. A DISCOVERY ALLOWANCE (constitutional policy, per founder, computed — never owner-decided). An idle founder whose
- *    allowance permits turns its idle wake into autonomous opportunity discovery instead of sleep. The allowance is a
- *    bound on the founder's own inference spend (already charged to its ledger): no new financial authority.
- *      budget/day  = min(max_daily_cents, survival equity × daily_fraction_bp / 10 000)
- *      runway days = survival equity ÷ (cognition charged over the last burn_window_days ÷ window)
- *      allowed     = enabled ∧ survival equity > 0 ∧ runway ≥ min_runway_days (or no burn yet) ∧ spent today < budget
- *    "Spent today" is ALL of the founder's inference in the last 24 h (from fleet_cognition_log), so the allowance bounds
- *    idle exploration on top of ordinary work, never beyond it. A missing policy row means no allowance (fail closed).
+ * 2. A SURVIVAL OBSERVATION in cognition status: survival equity, today's inference, the 7-day inference burn and the
+ *    runway it implies. FleetController observes and reports; it never rations, schedules or refuses research or work
+ *    on that basis. Runway strategy belongs to the founder (decision-driven research is founder-side: decisions.ts).
  */
 
 const EXCEPTION_KINDS = "'human_identity','kyc','legal_signature','constitutional_change','non_delegable_credential'";
@@ -156,51 +151,27 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
     'knowledgeImported', (SELECT count(*) FROM fleet_knowledge_proposals k WHERE k.status = 'proposed' AND EXISTS (SELECT 1 FROM fleet_owner_requests r WHERE r.source_ref = k.proposal_id)))
 $$;
 
--- ═══ 2. Discovery allowance (constitutional policy; computed per founder) ═══
-CREATE TABLE fleet_discovery_policy (
-  id                 smallint    PRIMARY KEY CHECK (id = 1),
-  enabled            boolean     NOT NULL DEFAULT true,
-  daily_fraction_bp  integer     NOT NULL DEFAULT 200 CHECK (daily_fraction_bp BETWEEN 0 AND 2000),
-  max_daily_cents    integer     NOT NULL DEFAULT 300 CHECK (max_daily_cents BETWEEN 0 AND 100000),
-  min_runway_days    integer     NOT NULL DEFAULT 14 CHECK (min_runway_days BETWEEN 0 AND 365),
-  burn_window_days   integer     NOT NULL DEFAULT 7 CHECK (burn_window_days BETWEEN 1 AND 90),
-  updated_at         timestamptz NOT NULL DEFAULT now(),
-  updated_by         text        NOT NULL DEFAULT 'migration'
-);
-INSERT INTO fleet_discovery_policy (id) VALUES (1);
-CREATE TRIGGER fleet_discovery_policy_no_delete BEFORE DELETE OR TRUNCATE ON fleet_discovery_policy FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
-
-CREATE FUNCTION fleet_discovery_allowance(p_agent text) RETURNS jsonb LANGUAGE plpgsql STABLE
+-- ═══ 2. Survival observation (FleetController observes; the founder decides) ═══
+-- Read-only figures the founder reasons with. Nothing here permits, refuses, rations or schedules research or any other
+-- work: there is no threshold, no allowance and no "allowed" flag. Burn is the inference charged over the last 7 days
+-- (the founder's only running cost today); runway is survival equity at that burn (absent while there is no burn).
+CREATE FUNCTION fleet_survival_observation(p_agent text) RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE p fleet_discovery_policy; v_eq bigint; v_spent bigint; v_burn numeric; v_runway numeric; v_budget bigint; v_reason text;
-BEGIN
-  SELECT * INTO p FROM fleet_discovery_policy WHERE id = 1;
-  -- Fail closed: without its policy row there is no allowance (NULL arithmetic must never read as "allowed").
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object('allowed', false, 'budgetCents', 0, 'spentTodayCents', 0, 'runwayDays', NULL, 'reason', 'no discovery policy');
-  END IF;
-  v_eq := GREATEST(COALESCE((fleet_agent_economics(p_agent) ->> 'survivalEquity')::bigint, 0), 0);
-  v_spent := (SELECT ceil(COALESCE(sum(COALESCE(charged_microcents, charged_cents * 1000000)), 0) / 1000000.0)::bigint
-                FROM fleet_cognition_log WHERE agent_id = p_agent AND at > now() - interval '1 day');
-  v_burn := (SELECT COALESCE(sum(COALESCE(charged_microcents, charged_cents * 1000000)), 0) / 1000000.0
-               FROM fleet_cognition_log WHERE agent_id = p_agent AND at > now() - make_interval(days => p.burn_window_days)) / p.burn_window_days;
-  v_runway := CASE WHEN v_burn > 0 THEN v_eq / v_burn END;
-  v_budget := LEAST(p.max_daily_cents::bigint, (v_eq * p.daily_fraction_bp) / 10000);
-  v_reason := CASE WHEN NOT p.enabled THEN 'discovery disabled by policy'
-                   WHEN v_eq <= 0 THEN 'no survival equity'
-                   WHEN v_runway IS NOT NULL AND v_runway < p.min_runway_days THEN 'runway below the discovery floor: revenue-first'
-                   WHEN v_spent >= v_budget THEN 'today''s discovery allowance is spent'
-                   ELSE 'allowed' END;
-  RETURN jsonb_build_object('allowed', v_reason = 'allowed', 'budgetCents', v_budget, 'spentTodayCents', v_spent,
-    'runwayDays', CASE WHEN v_runway IS NULL THEN NULL ELSE round(v_runway, 1) END, 'reason', v_reason);
-END $$;
+  WITH e AS (SELECT COALESCE((fleet_agent_economics(p_agent) ->> 'survivalEquity')::bigint, 0) AS eq),
+       b AS (SELECT COALESCE(sum(COALESCE(charged_microcents, charged_cents * 1000000)) FILTER (WHERE at > now() - interval '1 day'), 0) / 1000000.0 AS today,
+                    COALESCE(sum(COALESCE(charged_microcents, charged_cents * 1000000)), 0) / 1000000.0 / 7 AS per_day
+               FROM fleet_cognition_log WHERE agent_id = p_agent AND at > now() - interval '7 days')
+  SELECT jsonb_build_object('survivalEquityCents', e.eq, 'inferenceTodayCents', ceil(b.today)::bigint, 'burnPerDayCents', round(b.per_day, 1),
+    'runwayDays', CASE WHEN b.per_day > 0 THEN round(GREATEST(e.eq, 0) / b.per_day, 1) END, 'burnBasis', 'inference, last 7 days')
+    FROM e CROSS JOIN b
+$$;
 
 CREATE OR REPLACE FUNCTION api_cognition_status(p_agent text, p_token text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE v_code text := fleet_authenticate(p_agent, p_token, 'cognition_status');
 BEGIN
   IF v_code IS NOT NULL THEN RETURN jsonb_build_object('ok', false, 'code', v_code); END IF;
-  RETURN jsonb_build_object('ok', true) || fleet_cognition_state(p_agent) || jsonb_build_object('discovery', fleet_discovery_allowance(p_agent));
+  RETURN jsonb_build_object('ok', true) || fleet_cognition_state(p_agent) || jsonb_build_object('survival', fleet_survival_observation(p_agent));
 END $$;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA @@SCHEMA@@ FROM PUBLIC;

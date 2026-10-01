@@ -39,6 +39,7 @@ import { decideTool, type CapabilityManifest } from "../capabilities.js";
 import type { FounderToolbox, ToolOutcome } from "./toolbox.js";
 import type { LoopGuard } from "./loop-guard.js";
 import { escalateQuestion, priorDecision } from "./escalation.js";
+import { DECISIONS_FILE, decisionLines, nextMoveLine, idleKind, idleTask, loadDecisions, parseSurvival, survivalLine, type Decision, type IdleKind } from "./decisions.js";
 import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineClass } from "./task-classifier.js";
 
 export interface MindPorts {
@@ -74,8 +75,8 @@ export interface RoutingStats {
   budgetStops: number;
   /** R23.1: turns that started from the slim bare-wake-up packet (nothing had changed since a sleep-only turn). */
   slimWakeups: number;
-  /** F2-A: idle wakes turned into autonomous opportunity discovery (controller-granted allowance). */
-  discoveryTurns: number;
+  /** F2-A: idle wakes that got one push toward the next economically meaningful move (decide, execute or find one). */
+  idleNudges: Record<IdleKind, number>;
   lastRoute: { tier: string; model: string; taskClass: string; scope: string } | null;
 }
 
@@ -150,6 +151,8 @@ export function wakeDigest(memoryDir: string, workspaceDir: string, economics: R
   for (const f of ["facts.json", "goals.json"]) {
     try { h.update(`${f}\0`).update(fs.readFileSync(path.join(memoryDir, f))); } catch { h.update(`${f}\0-`); }
   }
+  // F2-A: the decision ledger is founder state too (absent = the digest exactly as before).
+  try { const d = fs.readFileSync(path.join(memoryDir, DECISIONS_FILE)); h.update(`${DECISIONS_FILE}\0`).update(d); } catch { /* no ledger yet */ }
   const walk = (rel: string) => {
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(path.join(workspaceDir, rel), { withFileTypes: true }); } catch { return; }
@@ -211,26 +214,26 @@ export function dependencyLines(list: DependencyView[]): string[] {
   });
 }
 
-/** F2-A: the controller's discovery allowance for this founder (reported in cognition status; absent = older controller). */
-export interface DiscoveryAllowance { allowed: boolean; budgetCents: number; spentTodayCents: number; runwayDays: number | null; reason: string }
-
-export function parseDiscovery(v: unknown): DiscoveryAllowance | null {
-  const d = v as Record<string, unknown> | null;
-  if (!d || typeof d.allowed !== "boolean") return null;
-  const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : Number(x) || 0);
-  return { allowed: d.allowed, budgetCents: n(d.budgetCents), spentTodayCents: n(d.spentTodayCents), runwayDays: d.runwayDays === null || d.runwayDays === undefined ? null : n(d.runwayDays),
-    reason: String(d.reason ?? "").slice(0, 120) };
+/** The founder's open goals (its execution path), read from its own memory. */
+function openGoalsOf(memoryDir: string): Array<{ id: string; title: string }> {
+  try {
+    const g = JSON.parse(fs.readFileSync(path.join(memoryDir, "goals.json"), "utf8"));
+    return Array.isArray(g) ? g.filter((x) => x && x.status === "open").map((x) => ({ id: String(x.id), title: String(x.title ?? "") })) : [];
+  } catch {
+    return [];
+  }
 }
 
-/** The task of an idle wake that has discovery allowance: autonomous opportunity discovery instead of sleep (F2-A). */
-export function discoveryTask(d: DiscoveryAllowance): string {
-  return [
-    `No actionable current work — autonomous opportunity discovery (allowance today ${d.spentTodayCents}p of ${d.budgetCents}p${d.runwayDays !== null ? `; runway ≈ ${Math.round(d.runwayDays)} days` : ""}).`,
-    "Use this turn to find your next profitable work: research current demand; look for distribution routes that need no new account or human identity (direct sales, storefronts or channels you can use now) and alternative marketplaces;"
-      + " consider other products, services, niches or a new venture you can realistically build; compare, reject weak options, and record what you learn (remember_facts / set_goal / write_file).",
-    "Unavailable actions (external dependencies) do not block this. Keep the turn proportionate to the allowance, then continue or sleep with a one-line note of where you are.",
-  ].join("\n");
-}
+/**
+ * F2-A idle re-check. Every full packet ends with the founder's next economically meaningful move (decide, execute, or
+ * one concise opportunity cycle); a founder that then sleeps on an unchanged state gets slim wake-ups, and the same
+ * state is re-checked with one idle push after 4, 8, 16, then every 32 slim wakes (≈ 17 h at the full idle backoff).
+ * Liveness without an entitlement to spend: nothing here renews daily, and nothing comes from FleetController.
+ */
+export const RENUDGE_FIRST = 4;
+export const RENUDGE_MAX = 32;
+/** The idle state being re-checked: its digest, slim wakes since its last push, and when the next push is due. */
+interface IdleState { digest: string; slim: number; after: number }
 
 /** The capability view the controller reports in cognition status (null when it reports none). */
 export function parseCapabilityView(v: unknown): { policySignature: string; tools: string[]; experiments: Record<string, unknown> | null } | null {
@@ -248,7 +251,7 @@ export function parseCapabilityView(v: unknown): { policySignature: string; tool
 export function slimWakePacket(p: TaskPacket): TaskPacket {
   const counts = `Nothing has changed since your last turn, which ended in sleep: ${p.knowledge.length} remembered fact(s)`
     + ` (keys: ${p.knowledge.map((k) => k.key).slice(0, 40).join(", ") || "none"}), ${p.notes.length} note file(s), ${p.evidence.length} saved page(s).`
-    + " If any of this means there is work to do, read what you need (recall_facts, list_goals, list_files, read_file) and do it; otherwise you may sleep until your discovery allowance renews.";
+    + " If this leaves an economically meaningful move, read what you need (recall_facts, list_goals, list_files, read_file) and make it; if not, sleep — the same state is re-checked later, and any change brings a full packet.";
   const slim: TaskPacket = {
     ...p, task: `${p.task}\n${counts}`, knowledge: [], institutionalKnowledge: [], evidence: [], notes: [], previousResults: p.previousResults.slice(-2),
     uncertainty: [], sizes: {},
@@ -277,7 +280,7 @@ export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS):
 
 export class FounderMind {
   turns = 0;
-  readonly routing: RoutingStats = { routedTurns: 0, steps: { T2: 0, T3: 0 }, routineCalls: 0, escalations: 0, escalationsReused: 0, actionBoundarySteps: 0, thinkingDropped: 0, budgetStops: 0, slimWakeups: 0, discoveryTurns: 0, lastRoute: null };
+  readonly routing: RoutingStats = { routedTurns: 0, steps: { T2: 0, T3: 0 }, routineCalls: 0, escalations: 0, escalationsReused: 0, actionBoundarySteps: 0, thinkingDropped: 0, budgetStops: 0, slimWakeups: 0, idleNudges: { decide: 0, execute: 0, opportunity: 0 }, lastRoute: null };
   private restUntil = 0;
   private idleBackoff = 0;
   private idleSkip = 0;
@@ -389,13 +392,15 @@ export class FounderMind {
 
   // ─────────────────────────────────────────────── R23 routed mode
 
-  private continuity(): { at: string; outcome: string; tools: string[]; wakeDigest: string | null; capabilities: { sig: string; tools: string[] } | null } | null {
+  private continuity(): { at: string; outcome: string; tools: string[]; wakeDigest: string | null; capabilities: { sig: string; tools: string[] } | null; idle: IdleState | null } | null {
     try {
       const c = JSON.parse(fs.readFileSync(path.join(this.o.stateDir, CONTINUITY_FILE), "utf8"));
       const caps = c?.capabilities && typeof c.capabilities.sig === "string" && Array.isArray(c.capabilities.tools)
         ? { sig: String(c.capabilities.sig), tools: (c.capabilities.tools as unknown[]).map(String).slice(0, 100) } : null;
+      const idle = c?.idle && typeof c.idle.digest === "string" && Number.isSafeInteger(c.idle.slim) && Number.isSafeInteger(c.idle.after)
+        ? { digest: String(c.idle.digest), slim: Number(c.idle.slim), after: Number(c.idle.after) } : null;
       return typeof c?.at === "string" && typeof c?.outcome === "string"
-        ? { at: c.at, outcome: c.outcome, tools: Array.isArray(c.tools) ? c.tools.map(String).slice(0, 20) : [], wakeDigest: typeof c.wakeDigest === "string" ? c.wakeDigest : null, capabilities: caps }
+        ? { at: c.at, outcome: c.outcome, tools: Array.isArray(c.tools) ? c.tools.map(String).slice(0, 20) : [], wakeDigest: typeof c.wakeDigest === "string" ? c.wakeDigest : null, capabilities: caps, idle }
         : null;
     } catch {
       return null;
@@ -403,10 +408,10 @@ export class FounderMind {
   }
 
   /** `wakeDigest`: the state digest at the END of a sleep-only turn (absent otherwise), for the next bare-wake-up test. */
-  private saveContinuity(outcome: string, tools: string[], wake: string | null = null, capabilities: { sig: string; tools: string[] } | null = null): void {
+  private saveContinuity(outcome: string, tools: string[], wake: string | null = null, capabilities: { sig: string; tools: string[] } | null = null, idle: IdleState | null = null): void {
     const f = path.join(this.o.stateDir, CONTINUITY_FILE);
     fs.writeFileSync(`${f}.tmp`, JSON.stringify({ at: new Date().toISOString(), turn: this.turns, outcome: outcome.slice(0, 1_200), tools: tools.slice(-20), ...(wake ? { wakeDigest: wake } : {}),
-      ...(capabilities ? { capabilities } : {}) }), { mode: 0o600 });
+      ...(capabilities ? { capabilities } : {}), ...(idle && wake ? { idle } : {}) }), { mode: 0o600 });
     fs.renameSync(`${f}.tmp`, f);
   }
 
@@ -440,7 +445,16 @@ export class FounderMind {
     try { deps = parseDependencies(await this.o.ports.ownerRequests?.()); } catch { deps = null; }
     // F2-A: a dependency's STATUS is a signal (a resolution is news once); its age is not — nothing escalates over time.
     const signals = [capabilities ? `caps:${capabilities.sig}` : "", ...(deps ?? []).map((r) => `dep:${r.requestId}:${r.status}`).sort()].filter(Boolean).join("|");
-    const discovery = parseDiscovery(status.discovery);
+    // F2-A: the founder's own decision ledger and open goals decide what an idle wake is for; its survival position is
+    // FleetController's observation (information for the founder's own strategy, never a permission or a ration).
+    let ledger: Decision[] = [];
+    let ledgerProblem: string | null = null;
+    try { ledger = loadDecisions(R.memoryDir); } catch (e) {
+      ledgerProblem = `Your decision ledger (memory/${DECISIONS_FILE}) is unreadable (${(e as Error).message.slice(0, 120)}): open_decision and resolve_decision refuse until it is repaired.`;
+    }
+    const openGoals = openGoalsOf(R.memoryDir);
+    const kind = idleKind(ledger, openGoals.length);
+    const survival = parseSurvival(status.survival);
     const capNote: string[] = [];
     if (capabilities && prev?.capabilities?.sig !== capabilities.sig) {
       const exp = view!.experiments?.enabled === true
@@ -459,26 +473,36 @@ export class FounderMind {
            : "No closing note from a previous turn is recorded: rely on your goals, facts and notes below.",
       ...capNote,
       ...dependencyLines(deps ?? []),
+      ...decisionLines(ledger),
+      ...(ledgerProblem ? [ledgerProblem] : []),
     ].join("\n");
     // R23.1: a bare wake-up — the previous turn only slept and nothing the founder could act on has changed since — gets the
     // slim packet. Anything else (a first turn, a working turn, any change in memory, workspace, economy, capabilities or
     // dependency status) gets the full one.
     const unchanged = !!prev && prev.tools.length > 0 && prev.tools.every((t) => t === "sleep") && prev.wakeDigest !== null
       && prev.wakeDigest === wakeDigest(R.memoryDir, R.workspaceDir, economics, signals);
-    // F2-A: an idle wake (nothing changed since a sleep-only turn) is NOT a sleep by default: while the controller's
-    // discovery allowance permits, it becomes autonomous opportunity discovery (a full packet). Only without allowance
-    // (budget spent today, runway too short, or an older controller) does it fall back to the slim packet.
-    const discover = unchanged && discovery?.allowed === true;
-    const bare = unchanged && !discover;
+    // F2-A: an idle wake is not a browse. A full packet already carries the next move; an unchanged idle state gets slim
+    // wake-ups and is re-checked with one idle push after 4, 8, 16, then every 32 slim wakes (RENUDGE_*). No allowance,
+    // ration or runway threshold from FleetController enters this.
+    const nowDigest = unchanged ? prev!.wakeDigest! : null;
+    const idlePrev = nowDigest && prev?.idle?.digest === nowDigest ? prev.idle : null;
+    const nudge = unchanged && !!idlePrev && idlePrev.slim >= idlePrev.after;
+    const bare = unchanged && !nudge;
+    // (An idle state recorded before F2-A, or by an older runtime, starts its schedule now: the next slim wake counts.)
+    const idleNext: IdleState | null = !nowDigest ? null
+      : nudge ? { digest: nowDigest, slim: 0, after: Math.min(RENUDGE_MAX, idlePrev!.after * 2) }
+      : { digest: nowDigest, slim: (idlePrev?.slim ?? 0) + 1, after: idlePrev?.after ?? RENUDGE_FIRST };
+    const move = nudge ? idleTask(kind, ledger, openGoals) : unchanged ? null : nextMoveLine(kind);
+    const extra = [...(move ? [move] : []), ...(!bare && survival ? [survivalLine(survival)] : [])];
     let text: string;
     try {
       const full = buildTaskPacket({
-        memoryDir: R.memoryDir, workspaceDir: R.workspaceDir, task: discover ? `${task}\n${discoveryTask(discovery!)}` : task, economics,
+        memoryDir: R.memoryDir, workspaceDir: R.workspaceDir, task: extra.length ? `${task}\n${extra.join("\n")}` : task, economics,
         outputContract: { form: "analysis", mustCite: false, instructions: "Decide and take your next step with your tools. Remember whatever you will need later, then call sleep with a one-line note of where you are." },
       });
       text = renderBoundedPacket(bare ? slimWakePacket(full) : full);
       if (bare) this.routing.slimWakeups++;
-      if (discover) this.routing.discoveryTurns++;
+      if (nudge) this.routing.idleNudges[kind]++;
     } catch (err) {
       const code = (err as { code?: string }).code ?? "FLEET_TASK_PACKET_INVALID";
       // The reason names packet sections and error kinds only (never packet content).
@@ -486,7 +510,7 @@ export class FounderMind {
       return { ...result, reason: `stopped: ${code}` };
     }
     const messages: ChatMessage[] = [{ role: "user", content: text }];
-    const packetKind = bare ? "slim" : discover ? "discovery" : "full";
+    const packetKind = bare ? "slim" : nudge ? `idle-${kind}` : "full";
     const size = () => Buffer.byteLength(JSON.stringify({ messages }), "utf8");
     const maxSteps = this.o.maxStepsPerTurn ?? 4;
     const counters = { routine: 0, escalations: 0 };
@@ -570,7 +594,9 @@ export class FounderMind {
     if (sleptOnly) {
       try { digest = wakeDigest(R.memoryDir, R.workspaceDir, ((await this.o.ports.ledger?.()) as Record<string, unknown> | undefined) ?? {}, signals); } catch { digest = null; }
     }
-    this.saveContinuity(outcome, result.toolCalls, digest, capabilities ?? prev?.capabilities ?? null);
+    // A sleep-only turn starts (or continues) the re-check schedule of the state it leaves behind.
+    const idleSave = !digest ? null : digest === nowDigest && idleNext ? idleNext : { digest, slim: 0, after: RENUDGE_FIRST };
+    this.saveContinuity(outcome, result.toolCalls, digest, capabilities ?? prev?.capabilities ?? null, idleSave);
     this.o.log?.("founder_turn", { turn: this.turns, routed: true, steps: result.steps, tools: result.toolCalls.length, refusals: result.refusals.length, chargedCents: result.chargedCents });
     return result;
   }

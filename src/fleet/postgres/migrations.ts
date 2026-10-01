@@ -1155,7 +1155,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 23, name: "founder_runtime_upgrade_cache_policy", sql: V23_SQL },
   { version: 24, name: "opportunity_experiment_pipeline_inert", sql: V24_SQL },
   { version: 25, name: "owner_request_liveness", sql: V25_SQL },
-  { version: 26, name: "f2a_action_scoped_dependencies_discovery", sql: V26_SQL },
+  { version: 26, name: "f2a_action_scoped_dependencies_survival_observation", sql: V26_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

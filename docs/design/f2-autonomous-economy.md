@@ -97,23 +97,55 @@ blocks one *action* and always carries an autonomous next step.
   listing", with `blocks_action = true`. The goal is not blocked, no owner action is requested, and the record may stay
   open indefinitely without consequence.
 
-## 7. Opportunity engine
+## 7. Opportunity engine: decision-driven research (corrected 2026-10-01)
 
-- **Trigger:** a wake with no active venture work, no pending envelope step and a **discovery allowance** remaining
-  starts a *discovery task* instead of the slim "otherwise sleep" packet.
-  - FleetController grants the allowance from runway: e.g. ≤ 2 % of survival equity per day for exploration inference
-    and research, and none below a runway floor.
-  - Idle backoff applies only when the allowance is spent or runway is low.
-- **Pipeline (agent-side, persisted):**
-  1. scan: trends, demand signals, marketplaces, forums;
-  2. generate several candidates (product, service, tool, content, niche);
-  3. evidence per candidate: research artifacts, so the controller verifies provenance and relevance as today;
-  4. score with a standard rubric (§10 inputs): demand evidence, competition, price and margin, capability fit, build
-     time, time-to-first-revenue, capital needed, **channel availability including no-account channels**, downside;
-  5. reject weak candidates (kept with reasons, so the agent never re-explores the same idea blindly);
-  6. promote the best to a venture in `DISCOVERED → RESEARCHING`.
-- **Non-prescriptive:** the rubric is economic; no business model is prescribed. Fleet knowledge (promoted lessons) is
-  advisory input.
+**Research is not browsing.** It exists for two reasons only:
+1. to **find** a viable niche, business model, product, service or gap in existing businesses that agents can bridge;
+2. to **expand** an existing viable or profitable venture.
+
+Everything else is noise. The loop is TARGET → EVIDENCE → DECISION → EXECUTION → SALES → LEARNING → NEXT DECISION,
+never SEARCH → SEARCH → SEARCH. The first draft of this section granted a daily "discovery allowance" (≤ 2 % of survival
+equity) and shut discovery off below a 14-day runway floor. Both are **withdrawn**: an entitlement invites spending for
+its own sake, and a controller-imposed runway floor takes survival strategy away from the agent.
+
+**Trigger: an unresolved economic decision, never a budget.** Before spending meaningful cognition on research the agent
+has:
+- a concrete decision ("Is there enough demand for X at £29 to launch it?", "Which of these three validated products has
+  the best demand-to-competition ratio?", "Would expanding venture A onto marketplace B improve profit?");
+- a hypothesis;
+- an identified evidence gap: the ONE missing fact;
+- the expected information value: how the answer could change the decision;
+- a stop condition, its own.
+
+"Search for interesting trends", "browse social media for ideas" and "use today's allowance" are not decisions.
+
+**Information-value stop.** Research stops when more information is unlikely to change the decision. The agent asks "do
+I know enough to make the next economically meaningful move?":
+- if yes: decide and execute;
+- if no: obtain the single highest-value missing fact.
+
+**Idle is not browse.**
+- An agent with an open decision is pushed to decide it.
+- An agent with an execution path (open goals) is pushed to execute it. A dependency blocks only its own action.
+- An agent with neither runs ONE concise opportunity-identification cycle:
+  1. **Targeted search** for economic evidence: sales velocity, marketplace rankings and bestseller lists, search
+     demand, price, competition, customer pain, recurring demand, margins, fulfilment complexity, startup capital, time
+     to first sale, channel availability and evidence of actual purchasing. A viral topic without purchase intent is
+     weak evidence.
+  2. **Rank** a short shortlist (≤ 5) by expected economic value: likely demand, competition, margin, capital, time to
+     launch and revenue, confidence, downside, evidence quality, ability to execute.
+  3. **Select** the strongest. The agent decides; no owner approval, and FleetController does not choose the business.
+  4. **Execute** the production stage the venture type needs:
+     - physical goods: source → prototype → produce → list → market → sell;
+     - digital product: build → package → publish → market → sell;
+     - software: build → deploy → acquire users → monetise;
+     - service: operationalise → list/outreach → deliver → collect.
+  5. **Measure**: sales, conversion, revenue, margin, acquisition cost, refunds, customer response, operating cost,
+     actual versus forecast.
+  6. **Learn**: every outcome updates the agent's knowledge, so the next decision is better and nothing is rediscovered.
+  7. **Iterate, scale or pivot**: scale what the evidence proves; modify what weakens; stop or pivot quickly when the
+     economics fail, regardless of sunk work.
+- **Non-prescriptive:** no business model and no permanent scoring weights are prescribed (§21, §22).
 
 ## 8. Venture lifecycle
 
@@ -234,17 +266,39 @@ services (vendor-registry categories or ids), milestones (tranches), stop-loss, 
 - **Remaining dependencies:** an action that still needs a new human KYC or signature becomes an action-scoped
   dependency record (§6). The agent routes around it.
 
-## 15. Survival and death loop
+## 15. Survival and death loop (corrected 2026-10-01)
 
-**Runway** = survival equity ÷ trailing burn (inference + subscriptions + infrastructure allocation + committed
-envelope spend).
+**Runway** = survival equity ÷ trailing burn (inference today; later also subscriptions, infrastructure allocation and
+committed envelope spend).
 
-| Runway band | Behaviour |
-|---|---|
-| > 60 days | Explore and build; normal discovery allowance |
-| 30–60 days | Focus: fewer parallel ventures; discovery allowance halved |
-| 14–30 days | Cut weak envelopes (auto stop-loss tightening); fastest-revenue ventures only; cheaper cognition budget (the per-agent budget falls with runway; routing stays task-based) |
-| < 14 days | Revenue-only mode: no new envelopes except fast-payback; liquidate or abandon poor ventures |
+**Runway strategy belongs to the agent.**
+- FleetController **observes and audits** runway. It reports survival equity, today's inference, the 7-day burn and the
+  implied runway in cognition status, as figures only.
+- FleetController **protects**: the Fleet Treasury, other agents' capital, tax reserves, protected shared capital,
+  credentials, custody, payment rails and infrastructure.
+- FleetController **never dictates**:
+  - "you have 14 days left, therefore discovery stops";
+  - "you may only spend X % researching";
+  - "owner approval required".
+
+The agent reasons about:
+- its balance, burn, obligations, revenue and expected revenue;
+- opportunity quality, confidence and time to monetisation;
+- the cost of validation and the probability of success;
+- its remaining survival capital.
+
+As capital tightens it becomes **more selective, not blind**:
+- reduce low-value exploration;
+- kill weak hypotheses early;
+- prefer short paths to revenue and strong evidence;
+- reuse accumulated knowledge;
+- keep enough capital for execution;
+- act decisively once evidence is adequate.
+
+It never panics, goes inactive, researches endlessly, gambles blindly or spends for activity's sake. A small wallet is
+a reason to be precise.
+
+(The earlier runway-band table, with its halved and suspended discovery allowance, is withdrawn.)
 
 **Death:** at `survivalEquityExhausted` the agent dies under the established lifecycle rules (estate, settlement). No
 owner rescue path, though the owner may fund the *treasury*.
@@ -269,7 +323,8 @@ owner rescue path, though the owner may fund the *treasury*.
   - a lint test that founder-facing text contains no "the owner decides" outside the constitutional list.
 - **Operations:**
   - doctor metric "operational owner dependencies = 0" (WARN if > 0);
-  - "agent idle with discovery allowance unused for > N wakes" WARN, which would have caught Founder 1 days ago.
+  - "agent idle with no open decision, no open goal and no decision recorded for > N wakes" WARN, which would have caught
+    Founder 1 days ago (a liveness signal, never a research quota).
 
 ## 18. Migration implications
 
@@ -290,12 +345,12 @@ owner rescue path, though the owner may fund the *treasury*.
 
 | Phase | Content | Fixes |
 |---|---|---|
-| **A. Doctrine and loop** (small, first) | Charter v3 and tool text; R28 → dependency records (non-blocking); slim packet → discovery trigger with a controller-granted discovery allowance; Gumroad re-scoped | Founder 1's indefinite sleep |
-| **B. Ventures and opportunity engine** | `fleet_ventures`, discovery pipeline, rubric, rejected-candidate memory | Autonomous work creation |
+| **A. Doctrine and loop** (small, first) | Charter v3 and tool text; R28 → dependency records (non-blocking); decision-driven research (founder-side decision ledger, information-value stop) and idle next-move pushes; survival observation (no ration, no floor); Gumroad re-scoped | Founder 1's indefinite sleep |
+| **B. Ventures and opportunity engine** | `fleet_ventures`; the Opportunity Candidate / Leaderboard / Decision Record contract (§21); rejected-candidate memory | Autonomous work creation |
 | **C. Bank** | Capital requests, risk engine, envelopes (simulated money); replaces the experiment owner branches and the spend owner threshold | Owner-free capital |
 | **D. Distribution** | Vendor registry and capability broker; simulated channels plus a controller-hosted storefront route; the owner's one-time fleet-level identities (infrastructure) | Agents can sell without per-venture KYC |
 | **E. Economics** | Profit board, forecast calibration, sweep integration, automatic reductions | Rank and allocate by real performance |
-| **F. Survival** | Runway bands driving discovery allowance, envelopes and cognition budget; death-loop integration | Rational behaviour under scarcity |
+| **F. Survival** | Runway and burn observation extended to all costs; death-loop integration (strategy stays the agent's) | Rational behaviour under scarcity |
 | **G. Proof** | The Phase-13 deterministic end-to-end autonomy simulation (all listed scenarios), the zero-owner-approval invariant and the 30-day owner-absence test | Gate before any production rollout |
 | **H. Later, constitutional** | Enabling real payments, custody, sweeps and replication under FleetController governance | — |
 
@@ -305,7 +360,9 @@ owner rescue path, though the owner may fund the *treasury*.
 - charter v3;
 - tool and packet text;
 - R28 owner requests → action-scoped dependency records (schema v26);
-- the discovery trigger with a controller-computed allowance;
+- decision-driven research, with idle next-move pushes (corrected the same day: the first draft's controller
+  "discovery allowance" and 14-day runway shutdown are removed);
+- a survival observation;
 - Gumroad re-scoped.
 
 Nothing touches money, custody, payments, replication, sweeps, the cap, the mode or the runtime pins.
@@ -332,28 +389,60 @@ Nothing touches money, custody, payments, replication, sweeps, the cap, the mode
     most 5 can be open.
 - **Doctor.** "external dependencies" is information. It WARNs only while a `constitutional_change` is open.
   "institutional knowledge" no longer WARNs on age.
-- **Discovery allowance** (`fleet_discovery_policy`, `fleet_discovery_allowance`, reported in cognition status).
-  Defaults:
-  - budget/day = min(300p, survival equity × 2 %);
-  - runway = equity ÷ (7-day inference burn ÷ 7);
-  - allowed only when enabled, equity > 0, runway ≥ 14 days (or no burn yet), and today's *total* inference < budget.
-  - A missing policy row fails closed. The row cannot be deleted, and no function may write it.
-  - Changing it is a constitutional act (owner, SQL). A setter is a follow-up.
+- **Survival observation** (`fleet_survival_observation`, reported as `survival` in cognition status): survival
+  equity, today's inference, the 7-day inference burn and the implied runway.
+  - Figures only: no `allowed`, no budget, no floor, no schedule.
+  - The function is read-only, and the founder cannot call it directly.
+  - v26 creates no policy table and writes no table but `fleet_owner_requests`.
 
 **Founder runtime:**
-- **Charter v3** (3 950 chars): an autonomous economic actor; FleetController is the bank; the owner is not consulted
-  on ordinary business; a blocked dependency blocks one action; "never idle by default".
+- **Charter v3** (3 976 chars):
+  - an autonomous economic actor; FleetController is the bank; the owner is not consulted on ordinary business;
+  - the loop target → evidence → decision → execution → sales → learning;
+  - research only to find or expand, for an open decision, preferring purchase evidence, stopping once the next move
+    is clear;
+  - "Your runway is yours to manage … less capital means more precision";
+  - a blocked dependency blocks one action.
   - `FOUNDER_CHARTER_V2` and `FOUNDER_ROUTED_ADDENDUM_R23` are frozen byte-for-byte for the sealed evaluations. Both
     pre-registration hashes reproduce.
-- **Tools.** `request_owner_decision` / `withdraw_owner_request` → `record_external_dependency` /
-  `withdraw_external_dependency`. Both are still `planning`, and the manifest digest is unchanged.
+- **Tools.**
+  - `request_owner_decision` / `withdraw_owner_request` → `record_external_dependency` / `withdraw_external_dependency`.
+  - New `open_decision` / `resolve_decision`, both `planning`; the manifest digest is unchanged.
+  - `web_fetch` takes `mode` (research | execution) and, for research, `decisionKey`, `evidenceGap`, `expectedValue`
+    and `informationValue`.
   - The `request_spend`, `propose_knowledge` and `request_identity_fact` descriptions no longer say "the owner
     decides".
-- **Discovery trigger.** An idle wake (nothing changed since a sleep-only turn) with `discovery.allowed` gets a full
-  *discovery* packet instead of the slim one: research demand, no-account routes, other products or ventures.
-  - Without an allowance (spent, runway floor, or an older controller) it falls back to the slim packet, which now ends
-    "you may sleep until your discovery allowance renews".
-  - The existing idle backoff still bounds calls.
+- **Decision ledger** (`founder/decisions.ts`, `memory/decisions.json`; the founder's own state, never sent to or
+  approved by FleetController). This is the minimal Phase A form of the §21 Decision Record.
+  - `open_decision`:
+    - purpose `find_opportunity` or `expand_venture` only;
+    - a question, a hypothesis, ≤ 5 candidates and the founder's own stop condition (≤ 8 fetches plus "when I know
+      enough");
+    - at most 3 open at once;
+    - a question already decided cannot be reopened under another key.
+  - `web_fetch` in research mode, in the production runtime (`decisionResearch: true`), is refused **by the founder's
+    own runtime** when it is:
+    - unframed;
+    - for an unknown or decided decision;
+    - of low information value;
+    - for a gap already gathered (normalised wording);
+    - past the founder's own stop condition.
+
+    Every refusal says "decide with what you have / reuse it / execute", never "wait".
+  - Execution mode needs only the step it serves.
+  - `resolve_decision` records selected / ranking / rejected-with-reasons / rationale / expected outcome / next action,
+    opens an execution goal for the next action, and closes the question to research for good.
+  - The sealed evaluation instruments construct the toolbox without the flag and keep their recorded `{url, purpose}`
+    behaviour.
+- **Idle semantics.**
+  - Every full packet carries the founder's next economically meaningful move:
+    - open decisions speak through their own lines ("Do you know enough…?");
+    - open goals give the execution push, including dependency alternatives;
+    - with neither, the packet carries ONE concise opportunity cycle with a ≤ 5 shortlist and purchase evidence.
+  - An unchanged idle state gets slim wake-ups and is re-checked with one idle push after 4, 8, 16, then every 32 slim
+    wakes. That is about once every 17 h at full backoff: liveness without any daily entitlement.
+  - Survival figures appear in every non-slim packet as information for the founder's own selectivity.
+  - The wake digest includes `decisions.json`.
 - **Capability-change detection (R28) is preserved.** An R28 → F2-A upgrade yields one full packet naming the renamed
   tools.
 - **Fixed in passing:**
@@ -362,9 +451,11 @@ Nothing touches money, custody, payments, replication, sweeps, the cap, the mode
   - a malformed list entry dropped every dependency from the packet.
 
 **Proof that owner absence cannot freeze a founder:**
-- Founder side (`fleet-f2a-autonomy.test.ts`): 30 simulated days with zero owner actions and Gumroad unresolved
-  throughout. Every day has at least one discovery packet, no packet points at the owner, and spend stays inside the
-  allowance.
+- Founder side (`fleet-f2a-autonomy.test.ts`): 30 simulated days at 1 440 thinking slots a day, with zero owner
+  actions, Gumroad unresolved and a founder that always sleeps.
+  - Every day has at least one push toward the next move, and no packet points at the owner.
+  - An idle founder costs at most about 43 thinking calls a day, with nothing fetched because of idleness.
+  - Runway falling from 230 to 1 day switches nothing off.
 - Registry side (`fleet-f2a-pg.test.ts`): no function outside the dependency family reads `fleet_owner_requests`, so an
   open record cannot gate spend, experiments, capabilities, cognition or lifecycle.
 - The remaining owner-only exits are constitutional kill switches: cognition disabled or paused.
@@ -372,5 +463,63 @@ Nothing touches money, custody, payments, replication, sweeps, the cap, the mode
 **Not in Phase A** (later phases, unchanged):
 - the spend owner threshold and enrolled destinations (C/D);
 - experiment E4/irreversible owner branches (C);
-- ventures, capital requests, envelopes, vendor registry, profit board and runway bands (B–F).
+- ventures, capital requests, envelopes, vendor registry and profit board (B–F);
+- the Opportunity Engine's persistent candidate store and leaderboard (§21).
+
+## 21. Future contract: Opportunity Engine (Phase B; not implemented)
+
+The learning flywheel for later, smarter agents. Phase A's decision ledger is its minimal precursor. Nothing here
+prescribes weights (§22).
+
+**OPPORTUNITY CANDIDATE**
+
+| Field | Meaning |
+|---|---|
+| venture type | physical goods, digital product, software, service, … |
+| product / service | what would be sold |
+| target customer | who buys, and why |
+| evidence | research attemptIds and URLs (verified provenance, as today), with what each supports |
+| demand score | from purchase evidence: sales velocity, rankings, search demand, recurring demand |
+| competition score | density, strength and price pressure of competing offers |
+| margin estimate | price − unit cost − channel fees |
+| required capital | to reach first sale |
+| time to launch | to a sellable offer |
+| time to revenue | to first external payment |
+| confidence | the agent's, later calibrated against outcomes |
+| downside | maximum loss and reversibility |
+| expected ROI | expected net profit ÷ capital |
+| evidence freshness | age of the newest supporting evidence; stale candidates are re-verified or dropped |
+
+**OPPORTUNITY LEADERBOARD**
+- A small, ranked candidate set (≤ 5 per decision), evidence-backed.
+- Refreshed only when a decision needs it, never on a timer.
+- Stale or invalid candidates are removed: evidence too old, a channel unavailable, the economics disproved.
+- Not a scrolling content feed. Ranking is the agent's expected-value judgement until owner-approved weights exist.
+
+**DECISION RECORD**
+- what was selected;
+- what was rejected, and why;
+- the evidence at the time;
+- the expected outcome;
+- the actual outcome (from the ledger and sales signals);
+- lessons learned (promoted to fleet knowledge when validated).
+
+Phase A already records the first four in the founder's own ledger. Phase B adds actual outcomes and lessons, the
+registry copy, and the controller-verified attribution of revenue to the decision that produced it.
+
+## 22. Open architectural decisions for the owner
+
+- **Scoring weights.** Any permanent economic weighting of candidate dimensions (demand, competition, margin, capital,
+  time-to-revenue, confidence, downside) is an architecture decision. Phase A deliberately has none: the agent ranks.
+  If Phase B needs fleet-wide weights, the owner decides them.
+- **Existing cost controls that touch "FleetController must not dictate":** these predate F2 and are unchanged here.
+  - The owner-set per-founder daily cognition budget (`fleet_founder_cognition`, `dailyBudgetCents`): a hard inference
+    ceiling, not research-specific.
+  - The research fetch quotas (`fleet_research_policy`; migration defaults 60/h and 300/day per founder, 120/h and
+    600/day fleet-wide): infrastructure and rate protection.
+
+  Whether either stays constitutional, becomes infrastructure-only, or moves to the agent is the owner's decision.
+- **Risk engine (§10, Phase C).** The draft's "runway after commitment ≥ the floor" applies a runway floor to capital
+  decisions. That is legitimate where treasury or shared capital is at risk. Applied to the agent's own capital, it
+  conflicts with "runway strategy belongs to the agent". The owner decides the boundary before Phase C.
 
