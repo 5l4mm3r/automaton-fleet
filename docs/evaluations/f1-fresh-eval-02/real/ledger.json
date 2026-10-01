@@ -1,0 +1,61 @@
+{
+ "capMicrocents": 200000000,
+ "cells": {
+  "C-FRESH-1": {
+   "spentMicrocents": 23713800,
+   "stopped": null,
+   "calls": 10,
+   "finishedAt": "2026-10-01T06:03:34.183Z"
+  },
+  "C-LEGACY-1": {
+   "spentMicrocents": 17500200,
+   "stopped": null,
+   "calls": 7,
+   "finishedAt": "2026-10-01T06:04:12.178Z"
+  },
+  "C-NOMEM-1": {
+   "spentMicrocents": 3755400,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-10-01T06:04:17.417Z"
+  },
+  "C-FRESH-2": {
+   "spentMicrocents": 18566000,
+   "stopped": null,
+   "calls": 8,
+   "finishedAt": "2026-10-01T06:04:51.750Z"
+  },
+  "C-LEGACY-2": {
+   "spentMicrocents": 19392800,
+   "stopped": null,
+   "calls": 8,
+   "finishedAt": "2026-10-01T06:05:33.656Z"
+  },
+  "C-NOMEM-2": {
+   "spentMicrocents": 3763400,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-10-01T06:05:38.398Z"
+  },
+  "C-FRESH-3": {
+   "spentMicrocents": 20084000,
+   "stopped": null,
+   "calls": 9,
+   "finishedAt": "2026-10-01T06:06:09.293Z"
+  },
+  "C-LEGACY-3": {
+   "spentMicrocents": 23427800,
+   "stopped": null,
+   "calls": 10,
+   "finishedAt": "2026-10-01T06:06:45.963Z"
+  },
+  "C-NOMEM-3": {
+   "spentMicrocents": 3698400,
+   "stopped": null,
+   "calls": 2,
+   "finishedAt": "2026-10-01T06:06:51.088Z"
+  }
+ },
+ "interrupted": [],
+ "totalMicrocents": 133901800
+}

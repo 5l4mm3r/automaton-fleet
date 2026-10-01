@@ -1,0 +1,7 @@
+F1-FRESH-EVAL-02 is complete (2026-10-01T06:02:52Z–06:06:51Z). This directory is sealed: the driver refuses `run`
+here (F1EVAL_CLOSED). Verdict (pre-registered rule, sha256 90a7674339ea1f2ff78f95ac7948c827bc61ccfa6bfbd975c075a0c3b1a3316a):
+INCONCLUSIVE — validity PASS, negative control PASS, retention FAIL (LEGACY 3/6 controls < 4; FRESH 4/6),
+FRESH quality PASS (24/24), superiority FAIL (FRESH 24 vs LEGACY 24, advantage 0, 0 replicate pairs won).
+Both memory arms consolidated news into one superseding summary fact per turn: 0 AMBIGUOUS domains in either arm.
+Accounting: 58 calls (claude-sonnet-5-5), 557,809 input / 22,340 output tokens, 0 cache tokens,
+133,901,800 USD µ¢ ($1.339018) of the 200,000,000 µ¢ ($2.00) cap. See ledger.json, scores.json and SHA256SUMS.

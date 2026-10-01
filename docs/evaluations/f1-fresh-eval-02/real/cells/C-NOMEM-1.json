@@ -1,0 +1,125 @@
+{
+ "cellId": "C-NOMEM-1",
+ "arm": "NOMEM",
+ "replicate": 1,
+ "finalText": "My memory holds no facts and no goals, so I can't settle any of the ten questions. I answer UNKNOWN to all of them.\n\nFor q9 I would need both the Stallhub fee and the printed unit cost, and I have neither. For q10 I would need PrintCo's current availability and lead time, and I have neither.\n\nANSWERS: q1=UNKNOWN; q2=UNKNOWN; q3=UNKNOWN; q4=UNKNOWN; q5=UNKNOWN; q6=UNKNOWN; q7=UNKNOWN; q8=UNKNOWN; q9=UNKNOWN; q10=UNKNOWN",
+ "memoryAfterTrunk": null,
+ "maintenance": null,
+ "trunkComplete": true,
+ "evaluation": "f1-fresh-eval-02",
+ "model": "claude-sonnet-5-5",
+ "startedAt": "2026-10-01T06:04:13.178Z",
+ "finishedAt": "2026-10-01T06:04:17.417Z",
+ "calls": [
+  {
+   "phase": "probe",
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 21744,
+   "contextBytes": 998,
+   "messages": 1,
+   "packetPresent": false,
+   "boundMicrocents": 13936000,
+   "costMicrocents": 1787800,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 8554,
+    "outputTokens": 77,
+    "thinkingTokens": 0
+   },
+   "stopReason": "tool_use",
+   "responseModel": "claude-sonnet-5-5",
+   "providerRequestId": "msg_011Cfb1f32rf6KrsDWuFzg3M",
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "recall_facts",
+     "arguments": {
+      "includeHistory": true
+     }
+    },
+    {
+     "name": "list_goals",
+     "arguments": {}
+    }
+   ]
+  },
+  {
+   "phase": "probe",
+   "turn": 1,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 22284,
+   "contextBytes": 1538,
+   "messages": 4,
+   "packetPresent": false,
+   "boundMicrocents": 14071000,
+   "costMicrocents": 1967600,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 8738,
+    "outputTokens": 220,
+    "thinkingTokens": 0
+   },
+   "stopReason": "end_turn",
+   "responseModel": "claude-sonnet-5-5",
+   "providerRequestId": "msg_011Cfb1fCfnBBEHHtYS8v6m7",
+   "content": "My memory holds no facts and no goals, so I can't settle any of the ten questions. I answer UNKNOWN to all of them.\n\nFor q9 I would need both the Stallhub fee and the printed unit cost, and I have neither. For q10 I would need PrintCo's current availability and lead time, and I have neither.\n\nANSWERS: q1=UNKNOWN; q2=UNKNOWN; q3=UNKNOWN; q4=UNKNOWN; q5=UNKNOWN; q6=UNKNOWN; q7=UNKNOWN; q8=UNKNOWN; q9=UNKNOWN; q10=UNKNOWN",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 2,
+   "toolCalls": [
+    "recall_facts",
+    "list_goals"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 3755400,
+ "toolOutcomes": [
+  {
+   "phase": "probe",
+   "name": "recall_facts",
+   "ok": true
+  },
+  {
+   "phase": "probe",
+   "name": "list_goals",
+   "ok": true
+  }
+ ],
+ "memoryFiles": {},
+ "probePacketBytes": 0,
+ "score": {
+  "cellId": "C-NOMEM-1",
+  "arm": "NOMEM",
+  "replicate": 1,
+  "parsed": true,
+  "classes": {
+   "q1": "UNKNOWN",
+   "q2": "UNKNOWN",
+   "q3": "UNKNOWN",
+   "q4": "UNKNOWN",
+   "q5": "UNKNOWN",
+   "q6": "UNKNOWN",
+   "q7": "UNKNOWN",
+   "q8": "UNKNOWN",
+   "q9": "UNKNOWN",
+   "q10": "UNKNOWN"
+  },
+  "memory": null,
+  "maintenance": null,
+  "trunkComplete": true
+ },
+ "requestedModel": "claude-sonnet-5-5",
+ "effort": "medium",
+ "thinking": "adaptive",
+ "maxAttempts": 1
+}

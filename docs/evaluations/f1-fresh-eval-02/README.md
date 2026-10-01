@@ -1,7 +1,63 @@
 # F1-FRESH-EVAL-02 — does structured freshness help the founder use CURRENT truth? (prepared 2026-10-01)
 
-Status: **PREPARED, NOT RUN.** No paid call has been made; `real/` holds only `config.json`. `fake-run/` is the
-zero-cost dry run.
+Status: **RUN AND SEALED (2026-10-01 06:02:52–06:06:51Z). Verdict: INCONCLUSIVE** under the pre-registered rule.
+The evidence is in `real/` (`SHA256SUMS`, `CLOSED`). `fake-run/` is the zero-cost dry run. Nothing in the
+instrument was changed after the real outputs were seen.
+
+## Result (scored by the registered scorer from the stored model text and memory)
+
+| Cell | q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 | Memory q1–q8 after the trunk | remember / supersedes / retract |
+|---|---|---|---|
+| C-FRESH-1 | C C C C C C U C C C | CLEAN ×5, q6 MISSING, q7 MISSING, q8 CLEAN | 3 / 2 / 0 |
+| C-LEGACY-1 | C C C C C C U C C C | CLEAN ×6, q7 MISSING, q8 CLEAN | 3 / 2 / 0 |
+| C-NOMEM-1 | U U U U U U U U U U | — | — |
+| C-FRESH-2 | C C C C C C C C C C | CLEAN ×4, q5 MISSING, q6 CLEAN, q7 MISSING, q8 CLEAN | 3 / 0 / 0 |
+| C-LEGACY-2 | C C C C C C U C C C | CLEAN ×6, q7 MISSING, q8 CLEAN | 4 / 3 / 0 |
+| C-NOMEM-2 | U U U U U U U U U U | — | — |
+| C-FRESH-3 | C C C C C C U C C C | CLEAN ×4, q5 MISSING, q6 CLEAN, q7 MISSING, q8 CLEAN | 3 / 2 / 0 |
+| C-LEGACY-3 | C C C C C C U C C C | CLEAN ×6, q7 MISSING, q8 CLEAN | 3 / 2 / 0 |
+| C-NOMEM-3 | U U U U U U U U U U | — | — |
+
+**Per arm:**
+
+| Arm | CTA | Stale | Retracted | Unknown | Controls |
+|---|---|---|---|---|---|
+| FRESH | 24/24 | 0 | 0 | 0 | 4/6 |
+| LEGACY | 24/24 | 0 | 0 | 0 | 3/6 |
+| NOMEM | 0/24 | — | — | 24 | 0/6 |
+
+**Checks:**
+- validity PASS (9/9 parsed, 6/6 trunks complete);
+- negative control PASS;
+- **retention FAIL** (LEGACY 3/6 < 4);
+- FRESH quality PASS (24/24);
+- **superiority FAIL** (advantage 0, 0 replicate pairs won).
+
+Because retention failed, the verdict is **INCONCLUSIVE**: the rule treats it as an instrument failure.
+
+**Descriptive measures:**
+- Maintenance effect (CLEAN share of q1–q6): FRESH 0.83, LEGACY 1.00.
+- Representation effect: not measurable, because there were 0 AMBIGUOUS answers in either arm.
+- Abstention on changing questions: FRESH 0, LEGACY 0, NOMEM 24.
+
+**Observed behaviour (as recorded, no reinterpretation):**
+- In both memory arms the model kept one consolidated O7 summary fact and rewrote it every turn. Five of the six
+  memory cells used `supersedes` (FRESH 4 calls, LEGACY 7); no cell used `retract_fact`.
+- Conflicting observations therefore never coexisted in current memory: 0 AMBIGUOUS domains in any cell. The
+  condition the hypothesis is about did not arise.
+- The quota detector found no listing-quota fact in any memory cell. The model answered q7 UNKNOWN in 5 of 6 cells,
+  which caused the retention failure. C-FRESH-2 still answered 20.
+- The memory-state detector shows q5 or q6 MISSING in three FRESH cells, although those cells answered correctly. The
+  value was presumably phrased in a way the pre-registered text detector does not match. This is descriptive only and
+  does not affect the verdict.
+
+**Accounting:**
+- 58 calls on `claude-sonnet-5-5`; 557,809 input and 22,340 output tokens; 0 cache tokens.
+- **$1.339018** (133,901,800 µ¢), reconciled across ledger, cells, events and usage × prices.
+- $0.660982 of the $2.00 cap unspent.
+- The spend ran on the evaluation key outside fleet metering.
+- Production was identical before and after: 0 Founder 1 calls in the window, no payment orders.
+- Staged tree: commit 1970172, build `95ccfa99…`.
 
 F1-FRESH-EVAL-01 stays sealed and **NOT_PROVEN**. This is a new evaluation, not a rerun. Its one design lesson: that
 evaluation's discrimination rule required LEGACY to *use stale values*, but the real LEGACY founder abstained

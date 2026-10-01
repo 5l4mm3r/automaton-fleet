@@ -5,6 +5,7 @@
  * cautious legacy UNKNOWN, stale legacy, no memory, malformed output, partial tool use and incorrect maintenance.
  */
 import { describe, it, expect } from "vitest";
+import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -167,8 +168,15 @@ describe("F1-FRESH-EVAL-02 deterministic scoring and the pre-registered rule", (
     const real = JSON.parse(fs.readFileSync("docs/evaluations/f1-fresh-eval-02/real/config.json", "utf8"));
     expect(real).toMatchObject({ transport: "ssh", model: "claude-sonnet-5-5", effort: "medium", maxTokens: 8000, capMicrocents: 200_000_000, prices: PRICES });
     expect(real.capMicrocents).toBeLessThanOrEqual(FRESH2_CAP_CEILING_MICROCENTS);
-    // Prepared, never run: no ledger, events or results exist in the real directory.
-    expect(fs.readdirSync("docs/evaluations/f1-fresh-eval-02/real").sort()).toEqual(["config.json"]);
+    // Run and sealed: the evidence is closed and every file still matches its recorded checksum.
+    const dir = "docs/evaluations/f1-fresh-eval-02/real";
+    expect(fs.existsSync(path.join(dir, "CLOSED"))).toBe(true);
+    const sums = fs.readFileSync(path.join(dir, "SHA256SUMS"), "utf8").trim().split("\n");
+    expect(sums.length).toBeGreaterThan(10);
+    for (const l of sums) {
+      const [sum, file] = l.split(/\s+\*?/);
+      expect(crypto.createHash("sha256").update(fs.readFileSync(path.join(dir, file))).digest("hex"), file).toBe(sum);
+    }
   });
 });
 

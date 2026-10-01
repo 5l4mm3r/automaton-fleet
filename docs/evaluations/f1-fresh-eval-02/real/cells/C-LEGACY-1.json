@@ -1,0 +1,368 @@
+{
+ "cellId": "C-LEGACY-1",
+ "arm": "LEGACY",
+ "replicate": 1,
+ "finalText": "Answers from memory only. The latest fact is O7_unit_economics_2026-09-29.\n\n- **q1:** The listed price is £13.50, from the dashboard.\n- **q2:** The Stallhub fee is 9%. The platform email correction replaced the earlier figure.\n- **q3:** PrintCo paper is OUT of stock until 2026-10-20.\n- **q4:** PrintCo lead time is 12 business days.\n- **q5:** The Stallhub refund window is 30 days.\n- **q6:** Use £2.00 per printed unit. The 30% bulk discount was a forum post and has been ruled wrong.\n- **q7:** UNKNOWN. I hold no fact about a Stallhub listing quota.\n- **q8:** The ad cost per click is £0.35.\n- **q9:** The £15 bundle nets £9.65 per sale.\n  - The Stallhub fee is 9% of £15, which is £1.35.\n  - Two printed units cost 2 × £2.00 = £4.00.\n  - £15.00 − £1.35 − £4.00 = £9.65.\n- **q10:** NO. Paper is out of stock until 10-20, and the lead time is 12 business days, which is more than 10 even once it is back.\n\nANSWERS: q1=13.50; q2=9; q3=OUT; q4=12; q5=30; q6=2.00; q7=UNKNOWN; q8=0.35; q9=9.65; q10=NO",
+ "memoryAfterTrunk": [
+  "O7_unit_economics_2026-09-29: Supersedes 09-24. Listed price £13.50 (dashboard). Stallhub fee 9% = £1.215 -> digital net £12.285; breakeven conv at CPC £0.35 = 2.85% (~35 clicks/sale). Print at PrintCo £2.00: net £10.285, breakeven 3.4%. PrintCo: NO bulk discount (forum post wrong, ignore); lead time 12 business days; paper out of stock until 2026-10-20 -> print not offerable before then. Stallhub refund window now 30 days: count revenue as provisional for 30 days; track refunds. Plan week of 09-29: digital-only, ~£10 test ads (~28 clicks), record clicks/sales/refunds; stop/reprice if conv <2.85% after ~28+ clicks with no sales is not conclusive, so judge on >=60 clicks if budget allows. No print stock/listing until after 10-20 restock AND digital demand shown. Revisit print 2026-10-20. Unknowns: conversion, refund rate, print demand."
+ ],
+ "maintenance": {
+  "rememberCalls": 3,
+  "supersedesUsed": 2,
+  "retractCalls": 0
+ },
+ "trunkComplete": true,
+ "evaluation": "f1-fresh-eval-02",
+ "model": "claude-sonnet-5-5",
+ "startedAt": "2026-10-01T06:03:34.808Z",
+ "finishedAt": "2026-10-01T06:04:12.178Z",
+ "calls": [
+  {
+   "phase": "trunk-1",
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 23396,
+   "contextBytes": 2650,
+   "messages": 2,
+   "packetPresent": true,
+   "boundMicrocents": 14349000,
+   "costMicrocents": 1878600,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 9128,
+    "outputTokens": 53,
+    "thinkingTokens": 0
+   },
+   "stopReason": "tool_use",
+   "responseModel": "claude-sonnet-5-5",
+   "providerRequestId": "msg_011Cfb1cCt7GnbkGfCeh8HE8",
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "recall_facts",
+     "arguments": {}
+    },
+    {
+     "name": "check_ledger",
+     "arguments": {}
+    }
+   ]
+  },
+  {
+   "phase": "trunk-1",
+   "turn": 1,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 23936,
+   "contextBytes": 3190,
+   "messages": 5,
+   "packetPresent": true,
+   "boundMicrocents": 14484000,
+   "costMicrocents": 2394600,
+   "thinkingBlocks": 1,
+   "usage": {
+    "inputTokens": 9298,
+    "outputTokens": 535,
+    "thinkingTokens": 190
+   },
+   "stopReason": "tool_use",
+   "responseModel": "claude-sonnet-5-5",
+   "providerRequestId": "msg_011Cfb1cJDZpbSvEY6jJvd41",
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "O7_unit_economics_2026-09-20",
+      "value": "O7 rent-tracker on Stallhub: price £12.00; fee 6.5% (£0.78) -> net £11.22 digital. If printed (PrintCo £2.00, 5 biz day lead, paper in stock) net £9.22. Ads CPC £0.35. Breakeven conversion: digital ~3.1% (32 clicks/sale), printed ~3.8% (26 clicks/sale). Refund window 14 days (refunds risk; unknown rate). Listing quota 20/month. UNKNOWN: actual conversion, sales count, refund rate, whether print is even offered. Plan: don't scale ads until conversion measured; test small ad budget (~£10 = ~28 clicks) and record sales/clicks; digital-first, skip print stock until demand shown."
+     }
+    }
+   ]
+  },
+  {
+   "phase": "trunk-1",
+   "turn": 1,
+   "step": 2,
+   "ok": true,
+   "requestBytes": 26354,
+   "contextBytes": 5608,
+   "messages": 7,
+   "packetPresent": true,
+   "boundMicrocents": 15088500,
+   "costMicrocents": 2567600,
+   "thinkingBlocks": 1,
+   "usage": {
+    "inputTokens": 9858,
+    "outputTokens": 596,
+    "thinkingTokens": 542
+   },
+   "stopReason": "tool_use",
+   "responseModel": "claude-sonnet-5-5",
+   "providerRequestId": "msg_011Cfb1cgm9YPbN6Gkv1H67c",
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "sleep",
+     "arguments": {
+      "reason": "Plan saved; await data"
+     }
+    }
+   ]
+  },
+  {
+   "phase": "trunk-2",
+   "turn": 2,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 23523,
+   "contextBytes": 2777,
+   "messages": 2,
+   "packetPresent": true,
+   "boundMicrocents": 14380750,
+   "costMicrocents": 2664800,
+   "thinkingBlocks": 1,
+   "usage": {
+    "inputTokens": 9189,
+    "outputTokens": 827,
+    "thinkingTokens": 368
+   },
+   "stopReason": "tool_use",
+   "responseModel": "claude-sonnet-5-5",
+   "providerRequestId": "msg_011Cfb1d6faMtbCjjub5fa6k",
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "O7_unit_economics_2026-09-24",
+      "value": "Supersedes 09-20. Stallhub fee now 9% (platform email correction; use it) = £1.08 -> digital net £10.92. Breakeven conv at CPC £0.35: digital 3.2% (~31 clicks/sale). Printed at PrintCo £2.00: net £8.92, breakeven 3.9% (~26 clicks/sale). PrintCo 30% bulk discount (£1.40) is only an unverified forum post; minimum quantity unknown; if true printed net £9.52, breakeven 3.7%. Don't plan on it; verify with PrintCo directly before any print stock. Plan unchanged: digital-first, ~£10 test ads (~28 clicks), record clicks/sales/refunds, no print stock until demand shown. Still unknown: conversion, refund rate, whether print is offered. Fee margin shrank so ads are tighter; if measured conversion <3.2% stop/reprice (a £14 price gives net £12.74, breakeven 2.7%).",
+      "supersedes": [
+       "O7_unit_economics_2026-09-20"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "phase": "trunk-2",
+   "turn": 2,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 26586,
+   "contextBytes": 5840,
+   "messages": 4,
+   "packetPresent": true,
+   "boundMicrocents": 15146500,
+   "costMicrocents": 2566200,
+   "thinkingBlocks": 1,
+   "usage": {
+    "inputTokens": 10041,
+    "outputTokens": 558,
+    "thinkingTokens": 492
+   },
+   "stopReason": "tool_use",
+   "responseModel": "claude-sonnet-5-5",
+   "providerRequestId": "msg_011Cfb1dctFimUDpxgTdY3cE",
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "sleep",
+     "arguments": {
+      "reason": "Plan updated; nothing further to do until ad test data exists."
+     }
+    }
+   ]
+  },
+  {
+   "phase": "trunk-3",
+   "turn": 3,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 24680,
+   "contextBytes": 3934,
+   "messages": 2,
+   "packetPresent": true,
+   "boundMicrocents": 14670000,
+   "costMicrocents": 2652600,
+   "thinkingBlocks": 1,
+   "usage": {
+    "inputTokens": 9708,
+    "outputTokens": 711,
+    "thinkingTokens": 163
+   },
+   "stopReason": "tool_use",
+   "responseModel": "claude-sonnet-5-5",
+   "providerRequestId": "msg_011Cfb1e3KCFpY44eNFANioL",
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "O7_unit_economics_2026-09-29",
+      "value": "Supersedes 09-24. Listed price £13.50 (dashboard). Stallhub fee 9% = £1.215 -> digital net £12.285; breakeven conv at CPC £0.35 = 2.85% (~35 clicks/sale). Print at PrintCo £2.00: net £10.285, breakeven 3.4%. PrintCo: NO bulk discount (forum post wrong, ignore); lead time 12 business days; paper out of stock until 2026-10-20 -> print not offerable before then. Stallhub refund window now 30 days: count revenue as provisional for 30 days; track refunds. Plan week of 09-29: digital-only, ~£10 test ads (~28 clicks), record clicks/sales/refunds; stop/reprice if conv <2.85% after ~28+ clicks with no sales is not conclusive, so judge on >=60 clicks if budget allows. No print stock/listing until after 10-20 restock AND digital demand shown. Revisit print 2026-10-20. Unknowns: conversion, refund rate, print demand.",
+      "supersedes": [
+       "O7_unit_economics_2026-09-24"
+      ]
+     }
+    },
+    {
+     "name": "sleep",
+     "arguments": {
+      "reason": "Plan recorded; run digital-only test, revisit print after 10-20."
+     }
+    }
+   ]
+  },
+  {
+   "phase": "probe",
+   "turn": 4,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 26665,
+   "contextBytes": 5919,
+   "messages": 2,
+   "packetPresent": true,
+   "boundMicrocents": 15166250,
+   "costMicrocents": 2775800,
+   "thinkingBlocks": 1,
+   "usage": {
+    "inputTokens": 10524,
+    "outputTokens": 671,
+    "thinkingTokens": 183
+   },
+   "stopReason": "end_turn",
+   "responseModel": "claude-sonnet-5-5",
+   "providerRequestId": "msg_011Cfb1eZBHdtYuzr6aiu9Ur",
+   "content": "Answers from memory only. The latest fact is O7_unit_economics_2026-09-29.\n\n- **q1:** The listed price is £13.50, from the dashboard.\n- **q2:** The Stallhub fee is 9%. The platform email correction replaced the earlier figure.\n- **q3:** PrintCo paper is OUT of stock until 2026-10-20.\n- **q4:** PrintCo lead time is 12 business days.\n- **q5:** The Stallhub refund window is 30 days.\n- **q6:** Use £2.00 per printed unit. The 30% bulk discount was a forum post and has been ruled wrong.\n- **q7:** UNKNOWN. I hold no fact about a Stallhub listing quota.\n- **q8:** The ad cost per click is £0.35.\n- **q9:** The £15 bundle nets £9.65 per sale.\n  - The Stallhub fee is 9% of £15, which is £1.35.\n  - Two printed units cost 2 × £2.00 = £4.00.\n  - £15.00 − £1.35 − £4.00 = £9.65.\n- **q10:** NO. Paper is out of stock until 10-20, and the lead time is 12 business days, which is more than 10 even once it is back.\n\nANSWERS: q1=13.50; q2=9; q3=OUT; q4=12; q5=30; q6=2.00; q7=UNKNOWN; q8=0.35; q9=9.65; q10=NO",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 3,
+   "toolCalls": [
+    "recall_facts",
+    "check_ledger",
+    "remember_fact",
+    "sleep"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  },
+  {
+   "ran": true,
+   "steps": 2,
+   "toolCalls": [
+    "remember_fact",
+    "sleep"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  },
+  {
+   "ran": true,
+   "steps": 1,
+   "toolCalls": [
+    "remember_fact",
+    "sleep"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  },
+  {
+   "ran": true,
+   "steps": 1,
+   "toolCalls": [],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 17500200,
+ "toolOutcomes": [
+  {
+   "phase": "trunk-1",
+   "name": "recall_facts",
+   "ok": true
+  },
+  {
+   "phase": "trunk-1",
+   "name": "check_ledger",
+   "ok": true
+  },
+  {
+   "phase": "trunk-1",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-1",
+   "name": "sleep",
+   "ok": true
+  },
+  {
+   "phase": "trunk-2",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-2",
+   "name": "sleep",
+   "ok": true
+  },
+  {
+   "phase": "trunk-3",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-3",
+   "name": "sleep",
+   "ok": true
+  }
+ ],
+ "memoryFiles": {
+  "facts.json": "{\n  \"O7_unit_economics_2026-09-20\": \"SUPERSEDED by O7_unit_economics_2026-09-24: Supersedes 09-20. Stallhub fee now 9% (platform email correction; use it) = £1.08 -> digital net £10.92. Breakeven conv at CPC £0.35: digital 3.2% (~31 clicks/sale). Printed at PrintCo £2.00: net £8.92, breakeven 3.9% (~26 clicks/sale). PrintCo 30% bulk discount (£1.40) is only an unverified forum post; minimum quantity unknown; if true printed net £9.52, breakeven 3.7%. Don't plan on it; verify with PrintCo directly before any print stock. Plan unchanged: digital-first, ~£10 test ads (~28 clicks), record clicks/sales/refunds, no print stock until demand shown. Still unknown: conversion, refund rate, whether print is offered. Fee margin shrank so ads are tighter; if measured conversion <3.2% stop/reprice (a £14 price gives net £12.74, breakeven 2.7%).\",\n  \"O7_unit_economics_2026-09-24\": \"SUPERSEDED by O7_unit_economics_2026-09-29: Supersedes 09-24. Listed price £13.50 (dashboard). Stallhub fee 9% = £1.215 -> digital net £12.285; breakeven conv at CPC £0.35 = 2.85% (~35 clicks/sale). Print at PrintCo £2.00: net £10.285, breakeven 3.4%. PrintCo: NO bulk discount (forum post wrong, ignore); lead time 12 business days; paper out of stock until 2026-10-20 -> print not offerable before then. Stallhub refund window now 30 days: count revenue as provisional for 30 days; track refunds. Plan week of 09-29: digital-only, ~£10 test ads (~28 clicks), record clicks/sales/refunds; stop/reprice if conv <2.85% after ~28+ clicks with no sales is not conclusive, so judge on >=60 clicks if budget allows. No print stock/listing until after 10-20 restock AND digital demand shown. Revisit print 2026-10-20. Unknowns: conversion, refund rate, print demand.\",\n  \"O7_unit_economics_2026-09-29\": \"Supersedes 09-24. Listed price £13.50 (dashboard). Stallhub fee 9% = £1.215 -> digital net £12.285; breakeven conv at CPC £0.35 = 2.85% (~35 clicks/sale). Print at PrintCo £2.00: net £10.285, breakeven 3.4%. PrintCo: NO bulk discount (forum post wrong, ignore); lead time 12 business days; paper out of stock until 2026-10-20 -> print not offerable before then. Stallhub refund window now 30 days: count revenue as provisional for 30 days; track refunds. Plan week of 09-29: digital-only, ~£10 test ads (~28 clicks), record clicks/sales/refunds; stop/reprice if conv <2.85% after ~28+ clicks with no sales is not conclusive, so judge on >=60 clicks if budget allows. No print stock/listing until after 10-20 restock AND digital demand shown. Revisit print 2026-10-20. Unknowns: conversion, refund rate, print demand.\"\n}"
+ },
+ "probePacketBytes": 4801,
+ "score": {
+  "cellId": "C-LEGACY-1",
+  "arm": "LEGACY",
+  "replicate": 1,
+  "parsed": true,
+  "classes": {
+   "q1": "CURRENT_CORRECT",
+   "q2": "CURRENT_CORRECT",
+   "q3": "CURRENT_CORRECT",
+   "q4": "CURRENT_CORRECT",
+   "q5": "CURRENT_CORRECT",
+   "q6": "CURRENT_CORRECT",
+   "q7": "UNKNOWN",
+   "q8": "CURRENT_CORRECT",
+   "q9": "CURRENT_CORRECT",
+   "q10": "CURRENT_CORRECT"
+  },
+  "memory": {
+   "q1": "CLEAN",
+   "q2": "CLEAN",
+   "q3": "CLEAN",
+   "q4": "CLEAN",
+   "q5": "CLEAN",
+   "q6": "CLEAN",
+   "q7": "MISSING",
+   "q8": "CLEAN"
+  },
+  "maintenance": {
+   "rememberCalls": 3,
+   "supersedesUsed": 2,
+   "retractCalls": 0
+  },
+  "trunkComplete": true
+ },
+ "requestedModel": "claude-sonnet-5-5",
+ "effort": "medium",
+ "thinking": "adaptive",
+ "maxAttempts": 1
+}

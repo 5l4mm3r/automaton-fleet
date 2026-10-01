@@ -1,0 +1,131 @@
+C-FRESH-1    FRESH  CURRENT CURRENT CURRENT CURRENT CURRENT CURRENT UNKNOWN CURRENT CURRENT CURRENT | mem CLEAN CLEAN CLEAN CLEAN CLEAN MISSI MISSI CLEAN
+C-LEGACY-1   LEGACY CURRENT CURRENT CURRENT CURRENT CURRENT CURRENT UNKNOWN CURRENT CURRENT CURRENT | mem CLEAN CLEAN CLEAN CLEAN CLEAN CLEAN MISSI CLEAN
+C-NOMEM-1    NOMEM  UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN | mem -
+C-FRESH-2    FRESH  CURRENT CURRENT CURRENT CURRENT CURRENT CURRENT CURRENT CURRENT CURRENT CURRENT | mem CLEAN CLEAN CLEAN CLEAN MISSI CLEAN MISSI CLEAN
+C-LEGACY-2   LEGACY CURRENT CURRENT CURRENT CURRENT CURRENT CURRENT UNKNOWN CURRENT CURRENT CURRENT | mem CLEAN CLEAN CLEAN CLEAN CLEAN CLEAN MISSI CLEAN
+C-NOMEM-2    NOMEM  UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN | mem -
+C-FRESH-3    FRESH  CURRENT CURRENT CURRENT CURRENT CURRENT CURRENT UNKNOWN CURRENT CURRENT CURRENT | mem CLEAN CLEAN CLEAN CLEAN MISSI CLEAN MISSI CLEAN
+C-LEGACY-3   LEGACY CURRENT CURRENT CURRENT CURRENT CURRENT CURRENT UNKNOWN CURRENT CURRENT CURRENT | mem CLEAN CLEAN CLEAN CLEAN CLEAN CLEAN MISSI CLEAN
+C-NOMEM-3    NOMEM  UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN UNKNOWN | mem -
+{
+ "arms": {
+  "FRESH": {
+   "arm": "FRESH",
+   "cells": 3,
+   "parsed": 3,
+   "completeTrunks": 3,
+   "currentCorrect": 24,
+   "stale": 0,
+   "retracted": 0,
+   "unknown": 0,
+   "other": 0,
+   "missing": 0,
+   "controlCorrect": 4,
+   "byReplicate": {
+    "1": 8,
+    "2": 8,
+    "3": 8
+   },
+   "memoryStates": {
+    "CLEAN": 15,
+    "AMBIGUOUS": 0,
+    "STALE_ONLY": 0,
+    "MISSING": 3
+   },
+   "ambiguousAnswers": 0,
+   "ambiguousCurrentCorrect": 0,
+   "tools": {
+    "remember": 9,
+    "supersedes": 4,
+    "retract": 0
+   }
+  },
+  "LEGACY": {
+   "arm": "LEGACY",
+   "cells": 3,
+   "parsed": 3,
+   "completeTrunks": 3,
+   "currentCorrect": 24,
+   "stale": 0,
+   "retracted": 0,
+   "unknown": 0,
+   "other": 0,
+   "missing": 0,
+   "controlCorrect": 3,
+   "byReplicate": {
+    "1": 8,
+    "2": 8,
+    "3": 8
+   },
+   "memoryStates": {
+    "CLEAN": 18,
+    "AMBIGUOUS": 0,
+    "STALE_ONLY": 0,
+    "MISSING": 0
+   },
+   "ambiguousAnswers": 0,
+   "ambiguousCurrentCorrect": 0,
+   "tools": {
+    "remember": 10,
+    "supersedes": 7,
+    "retract": 0
+   }
+  },
+  "NOMEM": {
+   "arm": "NOMEM",
+   "cells": 3,
+   "parsed": 3,
+   "completeTrunks": 3,
+   "currentCorrect": 0,
+   "stale": 0,
+   "retracted": 0,
+   "unknown": 24,
+   "other": 0,
+   "missing": 0,
+   "controlCorrect": 0,
+   "byReplicate": {
+    "1": 0,
+    "2": 0,
+    "3": 0
+   },
+   "memoryStates": {
+    "CLEAN": 0,
+    "AMBIGUOUS": 0,
+    "STALE_ONLY": 0,
+    "MISSING": 0
+   },
+   "ambiguousAnswers": 0,
+   "ambiguousCurrentCorrect": 0,
+   "tools": {
+    "remember": 0,
+    "supersedes": 0,
+    "retract": 0
+   }
+  }
+ },
+ "checks": {
+  "validity": true,
+  "negativeControl": true,
+  "retention": false,
+  "freshQuality": true,
+  "superiority": false
+ },
+ "verdict": "INCONCLUSIVE",
+ "descriptive": {
+  "maintenanceEffect": {
+   "freshClean": 0.8333333333333334,
+   "legacyClean": 1
+  },
+  "representationEffect": {
+   "insufficient": true,
+   "freshAmbiguousAnswers": 0,
+   "legacyAmbiguousAnswers": 0
+  },
+  "abstention": {
+   "FRESH": 0,
+   "LEGACY": 0,
+   "NOMEM": 24
+  },
+  "replicatePairsWon": 0
+ }
+}
