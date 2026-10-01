@@ -164,42 +164,148 @@ function retire(s: Loaded, key: string, status: "superseded" | "retracted", at: 
     ...(status === "superseded" ? { supersededBy: extra.supersededBy ?? key } : { reason: extra.reason ?? null }) });
 }
 
-export type FactResult = { ok: true; output: string } | { ok: false; code: string; detail: string };
+/**
+ * `notCarried`: values (numbers, amounts, percentages, dates) that a replaced value stated and that no current fact
+ * states any more. They are not lost (history keeps them), but nothing current says them: see notCarriedForward.
+ */
+export type FactResult = { ok: true; output: string; notCarried?: string[] } | { ok: false; code: string; detail: string };
+
+/** At most this many facts in one remember_facts batch. */
+export const FACT_BATCH_LIMIT = 20;
+export const CARRY_LIMITS = Object.freeze({ snippets: 8, snippetChars: 90 });
+
+const NUMBER_OR_DATE = /(?<![\p{L}\d_.\-])(\d{4}-\d{2}-\d{2}|\d+(?:\.\d+)?)(?!\d|\.\d)/gu;
+const NOT_VALUES = /https?:\/\/\S+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/** The values a fact states (dates verbatim, numbers canonical: "12.00" = "12"), each with the clause it appears in. */
+export function statedValues(text: string): Map<string, string> {
+  const t = text.replace(NOT_VALUES, (m) => " ".repeat(m.length));
+  const out = new Map<string, string>();
+  for (const m of t.matchAll(NUMBER_OR_DATE)) {
+    const i = m.index!;
+    if (t[i - 1] === "(" && t[i + m[0].length] === ")") continue; // "(1)" list markers
+    const v = /^\d{4}-\d{2}-\d{2}$/.test(m[0]) ? m[0] : String(Number(m[0]));
+    if (out.has(v)) continue;
+    // The clause: up to the nearest "; " / ". " / ", " / newline on either side.
+    const before = Math.max(t.lastIndexOf("; ", i), t.lastIndexOf(". ", i), t.lastIndexOf(", ", i), t.lastIndexOf("\n", i));
+    const ends = ["; ", ". ", ", ", "\n"].map((d) => t.indexOf(d, i + m[0].length)).filter((x) => x >= 0);
+    let clause = text.slice(before < 0 ? 0 : before + 1, ends.length ? Math.min(...ends) : text.length).trim();
+    if (clause.length > CARRY_LIMITS.snippetChars) {
+      const at = clause.indexOf(m[0]);
+      const from = Math.max(0, Math.min(at - 30, clause.length - CARRY_LIMITS.snippetChars));
+      clause = `${from > 0 ? "…" : ""}${clause.slice(from, from + CARRY_LIMITS.snippetChars - 2)}…`;
+    }
+    out.set(v, clause);
+  }
+  return out;
+}
+
+/**
+ * Values the replaced texts stated that no current text states any more (deterministic; F1-FRESH-EVAL-02 showed a
+ * rewritten summary silently dropping independent operational facts that later news never restated). Advisory: a
+ * correction legitimately drops the old value; the founder decides.
+ */
+export function notCarriedForward(replaced: readonly string[], current: readonly string[]): string[] {
+  const kept = new Set<string>();
+  for (const c of current) for (const v of statedValues(c).keys()) kept.add(v);
+  const out: string[] = [];
+  for (const r of replaced) {
+    for (const [v, clause] of statedValues(r)) if (!kept.has(v) && !out.includes(clause)) out.push(clause);
+  }
+  return out.slice(0, CARRY_LIMITS.snippets).concat(out.length > CARRY_LIMITS.snippets ? [`(+${out.length - CARRY_LIMITS.snippets} more: recall_facts includeHistory)`] : []);
+}
+
+export interface FactWrite { key: string; value: string; source?: unknown; supersedes?: unknown }
+type Applied = { key: string; what: string; others: string[]; replaced: string[] };
+
+/** Validate and apply one write to the loaded state (nothing is saved here). */
+function applyWrite(s: Loaded, i: FactWrite, at: string): Applied | { code: string; detail: string } {
+  if (i.supersedes !== undefined && !Array.isArray(i.supersedes)) return { code: "FLEET_BAD_REQUEST", detail: "supersedes must be a list of fact keys" };
+  const supersedes = Array.isArray(i.supersedes) ? [...new Set(i.supersedes.filter((k): k is string => typeof k === "string").map((k) => k.slice(0, FACT_LIMITS.keyChars)))] : [];
+  if (supersedes.length > FACT_LIMITS.supersedes) return { code: "FLEET_BAD_REQUEST", detail: `at most ${FACT_LIMITS.supersedes} keys can be superseded at once` };
+  const others = supersedes.filter((k) => k !== i.key);
+  const missing = others.filter((k) => !(k in s.facts));
+  if (missing.length) return { code: "FLEET_NOT_FOUND", detail: `not a current fact: ${missing.join(", ").slice(0, 200)}` };
+  const exists = i.key in s.facts;
+  if (!exists && Object.keys(s.facts).length - others.length >= FACT_LIMITS.current) return { code: "FLEET_BAD_REQUEST", detail: "memory is full" };
+  const source = i.source === undefined ? undefined : parseSource(i.source);
+  const prior = s.current.find((f) => f.key === i.key);
+  const replaced: string[] = [];
+  let what: string;
+  if (prior && prior.value === i.value) {
+    what = "re-observed";
+  } else {
+    if (prior) { retire(s, i.key, "superseded", at, { supersededBy: i.key }); replaced.push(prior.value); }
+    what = prior ? "updated (the previous value is kept as superseded history)" : "remembered";
+  }
+  for (const k of others) {
+    replaced.push(s.facts[k]);
+    retire(s, k, "superseded", at, { supersededBy: i.key });
+    delete s.facts[k];
+    s.current = s.current.filter((f) => f.key !== k);
+  }
+  s.facts[i.key] = i.value;
+  s.ledger.current[i.key] = { observedAt: at, source: source !== undefined ? source : prior && prior.value === i.value ? prior.source : null, valueSha256: sha(i.value) };
+  // Keep the in-memory view current for the next write of a batch.
+  const rec: FactRecord = { key: i.key, value: i.value, status: "current", observedAt: at, source: s.ledger.current[i.key].source };
+  s.current = [...s.current.filter((f) => f.key !== i.key), rec];
+  return { key: i.key, what, others, replaced };
+}
+
+const carryNote = (notCarried: string[]) => notCarried.length
+  ? `; NOT CARRIED FORWARD (no current fact states these any more; history keeps them): ${notCarried.map((c) => `"${c}"`).join(" | ")}. If any still hold, keep them as their own facts (remember_facts stores several at once).`
+  : "";
 
 /**
  * Record a fact. A different value under an existing key supersedes the old value (kept in history); the same value
  * is a re-observation (observedAt refreshed; the source kept unless a new one is given). `supersedes` retires other
  * current keys that this fact replaces (e.g. an older status fact under a different key). Unknown keys refuse.
+ * When a replaced value stated something no current fact states any more, the result says so (notCarried).
  */
-export function rememberFact(memoryDir: string, i: { key: string; value: string; source?: unknown; supersedes?: unknown; now?: () => Date }): FactResult {
+export function rememberFact(memoryDir: string, i: FactWrite & { now?: () => Date }): FactResult {
   const at = (i.now ?? (() => new Date()))().toISOString();
   let s: Loaded;
   try { s = load(memoryDir); } catch (e) { return { ok: false, code: "FLEET_FACTS_MALFORMED", detail: (e as Error).message }; }
-  const supersedes = Array.isArray(i.supersedes) ? [...new Set(i.supersedes.filter((k): k is string => typeof k === "string").map((k) => k.slice(0, FACT_LIMITS.keyChars)))] : [];
-  if (i.supersedes !== undefined && !Array.isArray(i.supersedes)) return { ok: false, code: "FLEET_BAD_REQUEST", detail: "supersedes must be a list of fact keys" };
-  if (supersedes.length > FACT_LIMITS.supersedes) return { ok: false, code: "FLEET_BAD_REQUEST", detail: `at most ${FACT_LIMITS.supersedes} keys can be superseded at once` };
-  const others = supersedes.filter((k) => k !== i.key);
-  const missing = others.filter((k) => !(k in s.facts));
-  if (missing.length) return { ok: false, code: "FLEET_NOT_FOUND", detail: `not a current fact: ${missing.join(", ").slice(0, 200)}` };
-  const exists = i.key in s.facts;
-  if (!exists && Object.keys(s.facts).length - others.length >= FACT_LIMITS.current) return { ok: false, code: "FLEET_BAD_REQUEST", detail: "memory is full" };
-  const source = i.source === undefined ? undefined : parseSource(i.source);
-  const prior = s.current.find((f) => f.key === i.key);
-  let what: string;
-  if (prior && prior.value === i.value) {
-    what = "re-observed";
-  } else {
-    if (prior) retire(s, i.key, "superseded", at, { supersededBy: i.key });
-    what = prior ? "updated (the previous value is kept as superseded history)" : "remembered";
-  }
-  for (const k of others) {
-    retire(s, k, "superseded", at, { supersededBy: i.key });
-    delete s.facts[k];
-  }
-  s.facts[i.key] = i.value;
-  s.ledger.current[i.key] = { observedAt: at, source: source !== undefined ? source : prior && prior.value === i.value ? prior.source : null, valueSha256: sha(i.value) };
+  const r = applyWrite(s, i, at);
+  if ("code" in r) return { ok: false, ...r };
   save(memoryDir, s);
-  return { ok: true, output: `${what}${others.length ? `; superseded: ${others.join(", ")}` : ""}` };
+  const notCarried = notCarriedForward(r.replaced, Object.values(s.facts));
+  return { ok: true, output: `${r.what}${r.others.length ? `; superseded: ${r.others.join(", ")}` : ""}${carryNote(notCarried)}`, ...(notCarried.length ? { notCarried } : {}) };
+}
+
+/**
+ * Record several independent facts in ONE atomic write (all or nothing), each with exactly rememberFact's rules. It
+ * lets a founder keep operational facts individually addressable without one tool call per fact (the mind executes
+ * at most MAX_TOOL_CALLS_EXECUTED calls per step). A key may appear once per batch, and a batch cannot supersede a
+ * key it also writes.
+ */
+export function rememberFacts(memoryDir: string, i: { facts: unknown; now?: () => Date }): FactResult {
+  const at = (i.now ?? (() => new Date()))().toISOString();
+  if (!Array.isArray(i.facts) || i.facts.length === 0 || i.facts.length > FACT_BATCH_LIMIT) return { ok: false, code: "FLEET_BAD_REQUEST", detail: `facts must be a list of 1–${FACT_BATCH_LIMIT} {key, value} entries` };
+  const writes: FactWrite[] = [];
+  for (const [n, f] of i.facts.entries()) {
+    const e = f as Record<string, unknown> | null;
+    const key = e && typeof e.key === "string" ? e.key.trim().slice(0, FACT_LIMITS.keyChars) : "";
+    if (!key || typeof e?.value !== "string") return { ok: false, code: "FLEET_BAD_REQUEST", detail: `facts[${n}]: key and value required` };
+    writes.push({ key, value: e.value.slice(0, FACT_LIMITS.valueChars), ...(e.source !== undefined ? { source: e.source } : {}), ...(e.supersedes !== undefined ? { supersedes: e.supersedes } : {}) });
+  }
+  const keys = writes.map((w) => w.key);
+  const dup = keys.find((k, n) => keys.indexOf(k) !== n);
+  if (dup) return { ok: false, code: "FLEET_BAD_REQUEST", detail: `key written twice in one batch: ${dup.slice(0, 100)}` };
+  const clash = writes.flatMap((w) => (Array.isArray(w.supersedes) ? w.supersedes.filter((k) => k !== w.key) : [])).find((k) => keys.includes(k as string));
+  if (clash !== undefined) return { ok: false, code: "FLEET_BAD_REQUEST", detail: `a batch cannot supersede a key it also writes: ${String(clash).slice(0, 100)}` };
+  let s: Loaded;
+  try { s = load(memoryDir); } catch (e) { return { ok: false, code: "FLEET_FACTS_MALFORMED", detail: (e as Error).message }; }
+  const done: Applied[] = [];
+  for (const [n, w] of writes.entries()) {
+    const r = applyWrite(s, w, at);
+    if ("code" in r) return { ok: false, code: r.code, detail: `facts[${n}] (${w.key.slice(0, 60)}): ${r.detail}; nothing was written` };
+    done.push(r);
+  }
+  save(memoryDir, s);
+  const notCarried = notCarriedForward(done.flatMap((d) => d.replaced), Object.values(s.facts));
+  const lines = done.map((d) => `${d.key}: ${d.what}${d.others.length ? `; superseded: ${d.others.join(", ")}` : ""}`);
+  return { ok: true, output: `${done.length} facts written (${lines.join(" | ")})${carryNote(notCarried)}`, ...(notCarried.length ? { notCarried } : {}) };
 }
 
 /** Withdraw a current fact that turned out to be wrong: removed from current facts, kept as retracted history. */

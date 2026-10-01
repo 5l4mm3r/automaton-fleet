@@ -56,7 +56,7 @@ describe("routing verification runner (fake Messages API, real process)", () => 
       expect(c[0].requests[0]).toMatchObject({ tools: 0, thinking: null, effort: null });
       expect(c[0].requests[0].systemCached).toBe(false);
       // R23.1: T2 caches only on evidenced reuse — not right after the T1 chore, but on the next Sonnet call inside the window.
-      expect(c[1].requests[0]).toMatchObject({ thinking: { type: "adaptive" }, effort: "medium", systemCached: false, tools: 19 }); // toolbox (incl. F1-FRESH-01 retract_fact) + the two cognition tools
+      expect(c[1].requests[0]).toMatchObject({ thinking: { type: "adaptive" }, effort: "medium", systemCached: false, tools: 20 }); // toolbox (incl. F1-FRESH-01 retract_fact, F1-FRESH-02 remember_facts) + the two cognition tools
       expect(c[1].usage.cacheWriteTokens ?? 0).toBe(0);
       expect(c[2].requests[0].systemCached).toBe(true);
       expect(c[2].usage.cacheWriteTokens).toBeGreaterThan(0);

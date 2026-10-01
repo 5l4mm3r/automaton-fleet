@@ -25,7 +25,7 @@ import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safet
 import type { ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
 import type { LoopGuard } from "./loop-guard.js";
-import { recallFacts, rememberFact, retractFact, sourceLabel, type FactRecord } from "./facts.js";
+import { recallFacts, rememberFact, rememberFacts, retractFact, sourceLabel, type FactRecord } from "./facts.js";
 
 export interface ToolboxPorts {
   ledger(): Promise<unknown>;
@@ -52,7 +52,7 @@ export interface ToolOutcome {
 
 const MAX_OUTPUT = 8_000;
 const IMPLEMENTED = new Set([
-  "read_file", "list_files", "write_file", "exec", "remember_fact", "retract_fact", "recall_facts", "set_goal", "complete_goal", "list_goals",
+  "read_file", "list_files", "write_file", "exec", "remember_fact", "remember_facts", "retract_fact", "recall_facts", "set_goal", "complete_goal", "list_goals",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
 ]);
@@ -228,6 +228,11 @@ export class FounderToolbox {
           if (!key || value === null) return refuse("FLEET_BAD_REQUEST", "key and value required");
           // F1-FRESH-01: a changed value supersedes (history kept); `supersedes` retires older keys this fact replaces.
           const r = rememberFact(this.memory, { key, value, ...(a.source !== undefined ? { source: a.source } : {}), ...(a.supersedes !== undefined ? { supersedes: a.supersedes } : {}) });
+          return r.ok ? { name: call.name, ok: true, output: r.output } : refuse(r.code, r.detail);
+        }
+        case "remember_facts": {
+          // F1-FRESH-02: several independent facts in one atomic write (rememberFacts validates every entry).
+          const r = rememberFacts(this.memory, { facts: a.facts });
           return r.ok ? { name: call.name, ok: true, output: r.output } : refuse(r.code, r.detail);
         }
         case "retract_fact": {
