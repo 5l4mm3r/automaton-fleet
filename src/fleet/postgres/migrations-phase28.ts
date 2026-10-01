@@ -46,6 +46,7 @@ CREATE TABLE fleet_economy_policy (
   failsafe_open_opportunities integer     NOT NULL DEFAULT 60  CHECK (failsafe_open_opportunities BETWEEN 5 AND 1000),
   failsafe_active_ventures    integer     NOT NULL DEFAULT 25  CHECK (failsafe_active_ventures BETWEEN 1 AND 500),
   failsafe_records_per_day    integer     NOT NULL DEFAULT 400 CHECK (failsafe_records_per_day BETWEEN 10 AND 10000),
+  failsafe_vendors_per_day    integer     NOT NULL DEFAULT 20  CHECK (failsafe_vendors_per_day BETWEEN 1 AND 1000),
   research_loop_fetches       integer     NOT NULL DEFAULT 40  CHECK (research_loop_fetches BETWEEN 5 AND 5000),
   research_loop_window_h      integer     NOT NULL DEFAULT 24  CHECK (research_loop_window_h BETWEEN 1 AND 720),
   no_route_hours              integer     NOT NULL DEFAULT 72  CHECK (no_route_hours BETWEEN 1 AND 2160),
@@ -63,7 +64,7 @@ BEGIN
   IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
   FOR k IN SELECT jsonb_object_keys(COALESCE(p, '{}'::jsonb)) LOOP
     IF k NOT IN ('shortlistMax','evidenceFreshDays','knowledgeFreshDays','forecastToleranceBp','failsafeOpenOpportunities','failsafeActiveVentures',
-                 'failsafeRecordsPerDay','researchLoopFetches','researchLoopWindowH','noRouteHours') THEN
+                 'failsafeRecordsPerDay','failsafeVendorsPerDay','researchLoopFetches','researchLoopWindowH','noRouteHours') THEN
       RAISE EXCEPTION 'FLEET_BAD_REQUEST: unknown economy policy key %', k;
     END IF;
   END LOOP;
@@ -75,6 +76,7 @@ BEGIN
     failsafe_open_opportunities = COALESCE((p ->> 'failsafeOpenOpportunities')::integer, failsafe_open_opportunities),
     failsafe_active_ventures = COALESCE((p ->> 'failsafeActiveVentures')::integer, failsafe_active_ventures),
     failsafe_records_per_day = COALESCE((p ->> 'failsafeRecordsPerDay')::integer, failsafe_records_per_day),
+    failsafe_vendors_per_day = COALESCE((p ->> 'failsafeVendorsPerDay')::integer, failsafe_vendors_per_day),
     research_loop_fetches = COALESCE((p ->> 'researchLoopFetches')::integer, research_loop_fetches),
     research_loop_window_h = COALESCE((p ->> 'researchLoopWindowH')::integer, research_loop_window_h),
     no_route_hours = COALESCE((p ->> 'noRouteHours')::integer, no_route_hours),

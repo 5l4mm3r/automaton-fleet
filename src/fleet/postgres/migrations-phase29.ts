@@ -591,7 +591,8 @@ BEGIN
   SELECT d.destination_id INTO v_existing FROM fleet_payment_destinations d JOIN fleet_vendor_destinations v ON v.destination_id = d.destination_id
    WHERE v.agent_id = p_agent AND d.reference_sha256 = v_sha AND d.status = 'active';
   IF v_existing IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'replayed', true, 'destinationId', v_existing); END IF;
-  IF (SELECT count(*) FROM fleet_vendor_destinations WHERE agent_id = p_agent AND registered_at > now() - interval '1 day') >= 20 THEN
+  IF (SELECT count(*) FROM fleet_vendor_destinations WHERE agent_id = p_agent AND registered_at > now() - interval '1 day')
+     >= (SELECT failsafe_vendors_per_day FROM fleet_economy_policy WHERE id = 1) THEN
     RAISE EXCEPTION 'FLEET_INFRASTRUCTURE_CEILING: an infrastructure failsafe against runaway loops was hit';
   END IF;
   IF a ? 'ventureKey' THEN

@@ -1009,11 +1009,11 @@ Founder-1-shaped registry; v8 and v24 direct), `fleet-f2-payments`, `fleet-f2-fo
 | `fleet_economy_policy.shortlist_max` | 5 | candidates an agent may shortlist |
 | `evidence_fresh_days` / `knowledge_fresh_days` | 30 / 180 | evidence and knowledge freshness |
 | `forecast_tolerance_bp` | 2 500 | calibration reporting tolerance |
-| failsafes (open opportunities 60, active ventures 25, records/day 400) | — | runaway-loop ceilings; never shown as budgets |
+| failsafes (open opportunities 60, active ventures 25, records/day 400, vendor registrations/day 20) | — | runaway-loop ceilings; never shown as budgets |
 | `research_loop_fetches` / `_window_h`, `no_route_hours` | 40 / 24 h, 72 h | doctor liveness signals |
 | `fleet_tax_policy.unprofiled_reserve_bp` | 2 500 | conservative reserve while no tax profile exists |
 | `fleet_transfer_policy` cushion / horizon / burn window | 1 000 bp / 30 d / 30 d | safe-transfer protection |
-| `fleet_capital_policy` (version, enabled, reserve 5 000 bp, per-request 1 000 bp, per-agent 2 500 bp, partial tranche 5 000 bp, min confidence 3 000 bp, min evidence 2, min track record 3, limited stop-loss 5 000 bp, envelope 30 d / limited 14 d, high-ROI 5 000 bp, reinvestment reduction 2 500 bp, re-apply cooldown 3 600 s) | as listed | the lender's policy for Fleet capital only |
+| `fleet_capital_policy` (version, enabled, reserve 5 000 bp, per-request 1 000 bp, per-agent 2 500 bp, partial tranche 5 000 bp, min confidence 3 000 bp, min evidence 2, min track record 3, limited stop-loss 5 000 bp, envelope 30 d / limited 14 d, high-ROI 5 000 bp, reinvestment reduction 2 500 bp, re-apply cooldown 3 600 s, limited-approval single exposure 5 000 bp, calibration floor 2 500 bp) | as listed | the lender's policy for Fleet capital only |
 | `fleet_sweep_policy` (enabled false, bands 10→1 000 … 49→2 000 bp, mature 4 500 bp, max 7 000 bp, maturity 180 d, surplus multiple 4) | as listed | the sweep curve |
 | `fleet_cognition_depth_policy.major_exposure_bp` | 2 500 | relative major-spend line |
 | circuit breaker (`order_wallet_bp`, velocity window/bp, destination novelty age/bp) | unset | infrastructure anomaly signals; production values need evidence |

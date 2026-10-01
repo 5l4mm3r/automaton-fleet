@@ -49,6 +49,8 @@ CREATE TABLE fleet_capital_policy (
   high_roi_bp               integer     NOT NULL DEFAULT 5000 CHECK (high_roi_bp BETWEEN 1 AND 1000000),
   reinvestment_reduction_bp integer     NOT NULL DEFAULT 2500 CHECK (reinvestment_reduction_bp BETWEEN 0 AND 10000),
   reapply_cooldown_s        integer     NOT NULL DEFAULT 3600 CHECK (reapply_cooldown_s BETWEEN 0 AND 604800),
+  limited_max_single_bp     integer     NOT NULL DEFAULT 5000 CHECK (limited_max_single_bp BETWEEN 1 AND 10000),
+  calibration_floor_bp      integer     NOT NULL DEFAULT 2500 CHECK (calibration_floor_bp BETWEEN 0 AND 10000),
   updated_at                timestamptz NOT NULL DEFAULT now(),
   updated_by                text        NOT NULL DEFAULT 'migration'
 );
@@ -64,7 +66,8 @@ BEGIN
   IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
   FOR k IN SELECT jsonb_object_keys(COALESCE(p, '{}'::jsonb)) LOOP
     IF k NOT IN ('enabled','treasuryReserveBp','maxRequestTreasuryBp','maxAgentExposureBp','partialTrancheBp','minConfidenceBp','minEvidenceItems','minTrackRecord',
-                 'limitedStopLossBp','envelopeDays','limitedEnvelopeDays','highRoiBp','reinvestmentReductionBp','reapplyCooldownS') THEN
+                 'limitedStopLossBp','envelopeDays','limitedEnvelopeDays','highRoiBp','reinvestmentReductionBp','reapplyCooldownS',
+                 'limitedMaxSingleBp','calibrationFloorBp') THEN
       RAISE EXCEPTION 'FLEET_BAD_REQUEST: unknown capital policy key %', k;
     END IF;
   END LOOP;
@@ -83,6 +86,8 @@ BEGIN
     high_roi_bp = COALESCE((p ->> 'highRoiBp')::integer, high_roi_bp),
     reinvestment_reduction_bp = COALESCE((p ->> 'reinvestmentReductionBp')::integer, reinvestment_reduction_bp),
     reapply_cooldown_s = COALESCE((p ->> 'reapplyCooldownS')::integer, reapply_cooldown_s),
+    limited_max_single_bp = COALESCE((p ->> 'limitedMaxSingleBp')::integer, limited_max_single_bp),
+    calibration_floor_bp = COALESCE((p ->> 'calibrationFloorBp')::integer, calibration_floor_bp),
     updated_at = now(), updated_by = p_actor
    WHERE id = 1 RETURNING * INTO r;
   PERFORM fleet_event('capital_policy_set', NULL, p_actor, p || jsonb_build_object('version', r.version));
@@ -335,7 +340,7 @@ BEGIN
   v_within := (perf #>> '{forecast,withinToleranceBp}')::integer;
   v_failed := COALESCE((perf #>> '{ventures,failed}')::integer, 0);
   v_profitable := COALESCE((perf #>> '{ventures,profitable}')::integer, 0);
-  v_adj_net := CASE WHEN v_measured >= p.min_track_record AND v_within IS NOT NULL THEN (q.expected_net_minor * GREATEST(v_within, 2500)) / 10000
+  v_adj_net := CASE WHEN v_measured >= p.min_track_record AND v_within IS NOT NULL THEN (q.expected_net_minor * GREATEST(v_within, p.calibration_floor_bp)) / 10000
                     ELSE (q.expected_net_minor * q.confidence_bp) / 10000 END;
   v_roi := (v_adj_net * 10000) / q.amount_minor;
   IF q.expected_net_minor <= 0 OR v_adj_net <= 0 THEN
@@ -418,7 +423,7 @@ BEGIN
         -- Partial: the first tranche now, the rest through milestones (bounded by what was requested).
         CASE WHEN d ->> 'outcome' = 'PARTIAL_APPROVE' THEN LEAST(q.amount_minor, v_amount + COALESCE((SELECT sum((x ->> 'trancheMinor')::bigint) FROM jsonb_array_elements(v_ms) x), 0)) ELSE v_amount END,
         GREATEST(1, LEAST(q.downside_minor, CASE WHEN (d ->> 'limits')::boolean THEN fleet_ceil_bp(v_amount, p.limited_stop_loss_bp) ELSE v_amount END)),
-        CASE WHEN (d ->> 'limits')::boolean THEN 5000 END, q.categories, v_ms,
+        CASE WHEN (d ->> 'limits')::boolean THEN p.limited_max_single_bp END, q.categories, v_ms,
         now() + make_interval(days => v_days), now() + make_interval(days => GREATEST(1, v_days / 2)),
         CASE WHEN (d ->> 'adjustedRoiBp')::bigint >= p.high_roi_bp THEN p.reinvestment_reduction_bp ELSE 0 END)
       RETURNING * INTO e;
