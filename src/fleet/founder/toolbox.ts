@@ -25,6 +25,7 @@ import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safet
 import type { ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
 import type { LoopGuard } from "./loop-guard.js";
+import { recallFacts, rememberFact, retractFact, sourceLabel, type FactRecord } from "./facts.js";
 
 export interface ToolboxPorts {
   ledger(): Promise<unknown>;
@@ -51,7 +52,7 @@ export interface ToolOutcome {
 
 const MAX_OUTPUT = 8_000;
 const IMPLEMENTED = new Set([
-  "read_file", "list_files", "write_file", "exec", "remember_fact", "recall_facts", "set_goal", "complete_goal", "list_goals",
+  "read_file", "list_files", "write_file", "exec", "remember_fact", "retract_fact", "recall_facts", "set_goal", "complete_goal", "list_goals",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
 ]);
@@ -225,16 +226,26 @@ export class FounderToolbox {
           const key = str(a.key, 100);
           const value = str(a.value, 4000);
           if (!key || value === null) return refuse("FLEET_BAD_REQUEST", "key and value required");
-          const facts = this.readJson<Record<string, string>>("facts.json", {});
-          if (Object.keys(facts).length >= 500 && !(key in facts)) return refuse("FLEET_BAD_REQUEST", "memory is full");
-          facts[key] = value;
-          this.writeJson("facts.json", facts);
-          return { name: call.name, ok: true, output: "remembered" };
+          // F1-FRESH-01: a changed value supersedes (history kept); `supersedes` retires older keys this fact replaces.
+          const r = rememberFact(this.memory, { key, value, ...(a.source !== undefined ? { source: a.source } : {}), ...(a.supersedes !== undefined ? { supersedes: a.supersedes } : {}) });
+          return r.ok ? { name: call.name, ok: true, output: r.output } : refuse(r.code, r.detail);
+        }
+        case "retract_fact": {
+          const key = str(a.key, 100);
+          const reason = str(a.reason, 300);
+          if (!key || !reason) return refuse("FLEET_BAD_REQUEST", "key and reason required");
+          const r = retractFact(this.memory, { key, reason });
+          return r.ok ? { name: call.name, ok: true, output: r.output } : refuse(r.code, r.detail);
         }
         case "recall_facts": {
-          const q = typeof a.query === "string" ? a.query.toLowerCase() : "";
-          const facts = this.readJson<Record<string, string>>("facts.json", {});
-          return { name: call.name, ok: true, output: clip(JSON.stringify(Object.fromEntries(Object.entries(facts).filter(([k, v]) => !q || k.toLowerCase().includes(q) || v.toLowerCase().includes(q))))) };
+          const r = recallFacts(this.memory, { query: typeof a.query === "string" ? a.query : "", includeHistory: a.includeHistory === true });
+          if (!r.ok) return refuse(r.code, r.detail);
+          const compact = (f: FactRecord) => ({ value: f.value, status: f.status, ...(f.observedAt ? { observedAt: f.observedAt } : {}), ...(f.source ? { source: sourceLabel(f.source) } : {}),
+            ...(f.supersededBy ? { supersededBy: f.supersededBy } : {}), ...(f.endedAt ? { endedAt: f.endedAt } : {}), ...(f.reason ? { reason: f.reason } : {}) });
+          const out: Record<string, unknown> = { current: Object.fromEntries(r.current.map((f) => [f.key, compact(f)])) };
+          if (r.history) out.history = r.history.map((f) => ({ key: f.key, ...compact(f) }));
+          if (r.trimmed) out.historyTrimmed = r.trimmed;
+          return { name: call.name, ok: true, output: clip(JSON.stringify(out)) };
         }
         case "set_goal": {
           const title = str(a.title, 300);
@@ -251,6 +262,7 @@ export class FounderToolbox {
           if (!g) return refuse("FLEET_NOT_FOUND", "no such goal");
           g.status = "complete";
           g.outcome = typeof a.outcome === "string" ? a.outcome.slice(0, 2000) : "";
+          g.completedAt = new Date().toISOString(); // F1-FRESH-01: lets a packet flag facts observed while the goal was open
           this.writeJson("goals.json", goals);
           return { name: call.name, ok: true, output: `goal ${String(g.id)} complete` };
         }

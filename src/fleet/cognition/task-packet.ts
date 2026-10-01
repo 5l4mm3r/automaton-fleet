@@ -17,6 +17,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { loadFacts, sourceLabel, type FactRecord } from "../founder/facts.js";
 
 export const TASK_PACKET_VERSION = "fleet-task-v1";
 
@@ -34,7 +35,12 @@ export interface TaskPacket {
   packet: typeof TASK_PACKET_VERSION;
   objective: Array<{ id: string; title: string; rationale?: string }>;
   task: string;
-  knowledge: Array<{ key: string; value: string; source: "facts.json" }>;
+  /**
+   * CURRENT facts only (F1-FRESH-01: superseded and retracted values never enter a packet; recall_facts with
+   * includeHistory shows them). observedAt / provenance only when known; possiblyStale when the fact names a goal that
+   * was completed after (or not provably before) the fact was recorded.
+   */
+  knowledge: Array<{ key: string; value: string; source: "facts.json"; observedAt?: string; provenance?: string; possiblyStale?: string }>;
   institutionalKnowledge: Array<{ category: string; title: string; content: string }>;
   evidence: PacketEvidence[];
   notes: Array<{ path: string; sha256: string; bytes: number; excerpt: string }>;
@@ -135,13 +141,30 @@ export interface PacketInputs {
  * sharing words with the task are kept first (then by key).
  */
 export function buildTaskPacket(i: PacketInputs): TaskPacket {
-  const facts = readJson<Record<string, unknown>>(path.join(i.memoryDir, "facts.json"), {});
+  // Current facts only, with their freshness; unreadable memory is reported, never shown as "no facts".
+  let current: FactRecord[] = [];
+  let factsProblem: string | null = null;
+  try { current = loadFacts(i.memoryDir).current; } catch (e) { factsProblem = `memory:facts unreadable (${(e as Error).message.slice(0, 120)}); recall_facts reports the error`; }
+  const facts: Record<string, string> = Object.fromEntries(current.map((f) => [f.key, f.value]));
   const goals = readJson<Array<Record<string, unknown>>>(path.join(i.memoryDir, "goals.json"), []);
+  const completed = goals.filter((g) => g.status === "complete" && typeof g.id === "string" && /^g\d+$/.test(g.id));
+  const staleHint = (f: FactRecord): string | undefined => {
+    for (const g of completed) {
+      if (!new RegExp(`\\b${g.id as string}\\b`, "i").test(`${f.key} ${f.value}`)) continue;
+      const done = typeof g.completedAt === "string" ? g.completedAt : null;
+      if (f.observedAt && done && f.observedAt >= done) continue; // recorded after the goal closed: not stale on this ground
+      return `names goal ${g.id as string}, completed ${done ?? "(time unknown)"}${f.observedAt ? ` after this fact was recorded (${f.observedAt})` : "; this fact's time is unknown"}`;
+    }
+    return undefined;
+  };
   const taskWords = new Set(i.task.toLowerCase().split(/[^a-z0-9£%]+/).filter((w) => w.length > 3));
   const clipV = (v: unknown, n: number) => { const s = typeof v === "string" ? v : JSON.stringify(v); return s.length > n ? `${s.slice(0, n)}…[${s.length - n} chars: recall_facts for the full value]` : s; };
-  const all = Object.entries(facts)
-    .filter(([k]) => typeof k === "string")
-    .map(([key, v]) => ({ key, value: clipV(v, PACKET_LIMITS.factValueChars), source: "facts.json" as const }));
+  const all: TaskPacket["knowledge"] = current.map((f) => {
+    const stale = staleHint(f);
+    const prov = sourceLabel(f.source);
+    return { key: f.key, value: clipV(f.value, PACKET_LIMITS.factValueChars), source: "facts.json" as const,
+      ...(f.observedAt ? { observedAt: f.observedAt } : {}), ...(prov ? { provenance: prov } : {}), ...(stale ? { possiblyStale: stale } : {}) };
+  });
   const overlap = (f: { key: string; value: string }) => `${f.key} ${f.value}`.toLowerCase().split(/[^a-z0-9£%]+/).filter((w) => taskWords.has(w)).length;
   let knowledge = [...all].sort((a, b) => a.key.localeCompare(b.key));
   if (bytes(knowledge) > PACKET_LIMITS.knowledgeBytes) {
@@ -172,7 +195,7 @@ export function buildTaskPacket(i: PacketInputs): TaskPacket {
     const t = buf.toString("utf8");
     return { path: f, sha256: sha256(buf), bytes: buf.length, excerpt: t.length > PACKET_LIMITS.noteExcerptChars ? `${t.slice(0, PACKET_LIMITS.noteExcerptChars)}…[read_file ${f} for the rest]` : t };
   });
-  const uncertainty = knowledge.filter((f) => UNCERTAIN.test(f.key) || UNCERTAIN.test(f.value.slice(0, 200))).map((f) => f.key);
+  const uncertainty = [...(factsProblem ? [factsProblem] : []), ...knowledge.filter((f) => f.possiblyStale || UNCERTAIN.test(f.key) || UNCERTAIN.test(f.value.slice(0, 200))).map((f) => f.key)];
 
   const p: TaskPacket = {
     packet: TASK_PACKET_VERSION,

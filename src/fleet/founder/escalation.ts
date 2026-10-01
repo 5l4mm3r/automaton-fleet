@@ -9,6 +9,7 @@
  */
 
 import fs from "fs";
+import { rememberFact } from "./facts.js";
 import path from "path";
 import { buildDecisionPacket, renderDecisionPacket, type DecisionInputs } from "../cognition/task-packet.js";
 import type { MindPorts } from "./mind.js";
@@ -63,15 +64,11 @@ export async function escalateQuestion(o: {
   }) as Awaited<ReturnType<MindPorts["infer"]>> & { route?: EscalationResult["route"] };
   // The higher tier's answer becomes observable persistent state (never its reasoning).
   const factKey = `decision:${r.requestId}`;
-  const facts = (() => {
-    try { return JSON.parse(fs.readFileSync(path.join(o.memoryDir, "facts.json"), "utf8")) as Record<string, string>; } catch { return {} as Record<string, string>; }
-  })();
-  facts[factKey] = JSON.stringify({
+  // Through the fact store (F1-FRESH-01): observedAt and provenance recorded; malformed memory is never overwritten
+  // (the answer is still returned to the caller).
+  rememberFact(o.memoryDir, { key: factKey, source: factKey, value: JSON.stringify({
     question: packet.question, reason: packet.escalationReason, answer: (r.content ?? "").slice(0, 2_600),
     tier: r.route?.tier ?? null, model: r.route?.model ?? null, requestId: r.requestId, at: new Date().toISOString(),
-  }).slice(0, 4_000);
-  const f = path.join(o.memoryDir, "facts.json");
-  fs.writeFileSync(`${f}.tmp`, JSON.stringify(facts, null, 2), { mode: 0o600 });
-  fs.renameSync(`${f}.tmp`, f);
+  }).slice(0, 4_000) });
   return { requestId: r.requestId, answer: r.content ?? "", factKey, packetBytes: Buffer.byteLength(text), chargedCents: r.chargedCents ?? 0, ...(r.route ? { route: r.route } : {}) };
 }

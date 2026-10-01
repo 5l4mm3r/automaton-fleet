@@ -120,8 +120,10 @@ describe("founder toolbox (unit)", () => {
     // Private memory and goals live in the memory directory, not the workspace.
     expect(await call("remember_fact", { key: "k", value: "v" })).toMatchObject({ ok: true });
     expect(await call("set_goal", { title: "g" })).toMatchObject({ ok: true, output: "goal g1 set" });
-    expect(JSON.parse((await call("recall_facts", {})).output)).toEqual({ k: "v" });
+    // F1-FRESH-01: recall returns current facts with their status and freshness.
+    expect(JSON.parse((await call("recall_facts", {})).output)).toEqual({ current: { k: { value: "v", status: "current", observedAt: expect.any(String) } } });
     expect(fs.statSync(path.join(mem, "facts.json")).mode & 0o077).toBe(0);
+    expect(fs.statSync(path.join(mem, "facts-ledger.json")).mode & 0o077).toBe(0);
     expect(fs.existsSync(path.join(ws, "facts.json"))).toBe(false);
     fs.rmSync(root, { recursive: true, force: true });
   });

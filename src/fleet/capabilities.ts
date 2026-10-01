@@ -74,6 +74,7 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   orchestrator_status: "planning",
   // private memory
   remember_fact: "memory.private",
+  retract_fact: "memory.private",
   recall_facts: "memory.private",
   forget: "memory.private",
   save_procedure: "memory.private",
