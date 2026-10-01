@@ -26,6 +26,7 @@ import type { ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
 import type { LoopGuard } from "./loop-guard.js";
 import { recallFacts, rememberFact, rememberFacts, retractFact, sourceLabel, type FactRecord, type FactResult } from "./facts.js";
+import { custodyCategory, custodyRefusalText } from "../custody-refusals.js";
 import { DecisionLedgerError, commitmentCheck, loadDecisions, noteCommitment, noteResearch, openDecision, researchCheck, resolveDecision, reviewDecision, saveDecisions, type Decision } from "./decisions.js";
 
 export interface ToolboxPorts {
@@ -461,6 +462,12 @@ export class FounderToolbox {
             noteCommitment(ledger, String(a.decisionKey).trim(), amountCents);
             saveDecisions(this.memory, ledger);
           }
+          // v27: a custody refusal is precise and final for this order, and routes nowhere (no owner approval route).
+          if (ledger && (r as { ok?: unknown }).ok === false) {
+            const code = String((r as { code?: unknown }).code ?? "");
+            const cat = custodyCategory(code);
+            if (cat) return { name: call.name, ok: false, refused: code, output: `ERROR ${code} — ${custodyRefusalText(code, cat)} ${clip(JSON.stringify(r))}` };
+          }
           return { name: call.name, ok: true, output: clip(JSON.stringify(r)) };
         }
         case "propose_knowledge":
@@ -537,6 +544,9 @@ export class FounderToolbox {
         return { name: call.name, ok: false, refused: ceiling, output: `INFRASTRUCTURE CEILING ${ceiling}: a safety limit against runaway loops, bugs and provider abuse — not a research budget or a target. `
           + "Decide with the evidence you have; if one fact is still decisive, fetch it once the ceiling resets." };
       }
+      // v27: a custody refusal of an own-capital order (thrown by the HTTP layer) reads as custody, never as "ask the owner".
+      const cat = call.name === "request_spend" && this.o.selfGovernance ? custodyCategory(code) : null;
+      if (cat) return { name: call.name, ok: false, refused: code as string, output: `ERROR ${code} — ${custodyRefusalText(code as string, cat)}` };
       // The workspace resolver throws bare codes; a controller refusal carries its own code and is reported as such.
       if (/^FLEET_[A-Z_]+$/.test(msg) && code === undefined) return refuse(msg, "path must stay inside your workspace");
       return { name: call.name, ok: false, refused: typeof code === "string" && /^(FLEET|RESEARCH)_[A-Z_]+$/.test(code) ? code : "FLEET_TOOL_ERROR", output: `ERROR ${code ?? ""} ${msg.slice(0, 300)}` };

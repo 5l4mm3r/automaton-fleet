@@ -945,7 +945,10 @@ export class PgFleetStore {
     verify: { ok: boolean; journals: number; unbalanced?: number; firstBadSeq?: number };
     custodyExecutionEnabled: boolean;
     ledgerAuthoritative: boolean;
-    awaitingOwner: number;
+    /** Orders left in the retired owner spend route (v27: a CHECK keeps this at 0). */
+    legacyOwnerRoute: number;
+    /** v27 infrastructure circuit breaker: tripped, and how many relative signals are configured (0 = every signal unset). */
+    circuitBreaker: { tripped: boolean; signals: number };
     reserved: number;
     executing: number;
     pendingDestinations: number;
@@ -961,6 +964,8 @@ export class PgFleetStore {
         const r = await c.query(
           `SELECT fleet_ledger_verify() AS verify, m.custody_execution_enabled, m.ledger_authoritative,
                   (SELECT count(*) FROM fleet_payment_orders WHERE status = 'awaiting_owner') AS awaiting,
+                  (SELECT jsonb_build_object('tripped', b.tripped, 'signals', num_nonnulls(b.order_wallet_bp, b.velocity_wallet_bp))
+                     FROM fleet_spend_circuit_breaker b WHERE b.id = 1) AS breaker,
                   (SELECT count(*) FROM fleet_payment_orders WHERE status = 'reserved') AS reserved,
                   (SELECT count(*) FROM fleet_payment_orders WHERE status = 'executing') AS executing,
                   (SELECT count(*) FROM fleet_payment_destinations WHERE status = 'pending') AS dst_pending,
@@ -978,7 +983,8 @@ export class PgFleetStore {
           verify: x.verify,
           custodyExecutionEnabled: x.custody_execution_enabled === true,
           ledgerAuthoritative: x.ledger_authoritative === true,
-          awaitingOwner: Number(x.awaiting),
+          legacyOwnerRoute: Number(x.awaiting),
+          circuitBreaker: { tripped: x.breaker?.tripped === true, signals: Number(x.breaker?.signals ?? 0) },
           reserved: Number(x.reserved),
           executing: Number(x.executing),
           pendingDestinations: Number(x.dst_pending),

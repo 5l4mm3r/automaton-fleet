@@ -93,7 +93,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
   });
 
   it("migrates to v26 with a clean privilege audit; founders get exactly create / withdraw / list, nothing to decide", async () => {
-    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(26);
+    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(27);
     expect((await store.auditPrivileges()).problems).toEqual([]);
     const agent = new pg.Pool({ connectionString: pgc.agentUrl, max: 1 });
     try {

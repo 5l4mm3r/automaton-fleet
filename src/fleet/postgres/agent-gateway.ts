@@ -212,9 +212,9 @@ export class PgAgentGateway {
   }
 
   /**
-   * Schema v10: submit a structured spend order against the agent's own
-   * ledger allocation. The database decides (reserved / awaiting_owner /
-   * rejected); nothing is executed by this call.
+   * Schema v10/v27: submit a structured order committing the agent's OWN capital.
+   * The database checks custody only (reserved, or rejected with a precise
+   * custody category; never an owner route); nothing is executed by this call.
    */
   async spendRequest(
     agentId: string,

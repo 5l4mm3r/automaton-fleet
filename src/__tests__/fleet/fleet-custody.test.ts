@@ -132,6 +132,8 @@ describe("agent shell guard (Phase E surfaces)", () => {
       "psql -c 'select fleet.fleet_ledger_post(1)'",
       "psql -c 'update fleet.fleet_payment_orders set status = 1'",
       "psql -c 'select fleet_admin_spend_decision(1)'",
+      "psql -c 'update fleet.fleet_spend_circuit_breaker set tripped = false'", // v27: the infrastructure circuit breaker
+      "psql -c 'select fleet_admin_spend_circuit_breaker(1)'",
       "psql -c 'update fleet_economic_model set custody_execution_enabled = true'",
       "pnpm fleet:admin ledger-withdraw 100 dst_x",
       "pnpm fleet:admin ledger-destination-enroll owner bank_transfer me",

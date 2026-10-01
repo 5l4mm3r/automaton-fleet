@@ -527,9 +527,11 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       );
       add(
         "payment orders",
-        "pass",
-        `${lg.awaitingOwner} awaiting the owner, ${lg.reserved} reserved (unexecuted), ${lg.pendingConfirmations} owner confirmation(s) pending; ` +
-          `destinations: ${lg.activeDestinations} active, ${lg.pendingDestinations} pending`,
+        lg.legacyOwnerRoute > 0 ? "fail" : lg.circuitBreaker.tripped ? "warn" : "pass",
+        `${lg.reserved} reserved (unexecuted); own-capital spend is custody-checked, no owner spend route` +
+          (lg.legacyOwnerRoute > 0 ? ` — but ${lg.legacyOwnerRoute} order(s) are still in the retired owner route` : "") +
+          `; spend circuit breaker ${lg.circuitBreaker.tripped ? "TRIPPED (all own-capital spend refused)" : `clear (${lg.circuitBreaker.signals} relative signal(s) set)`}; ` +
+          `${lg.pendingConfirmations} owner withdrawal confirmation(s) pending; destinations: ${lg.activeDestinations} active, ${lg.pendingDestinations} pending`,
       );
       const est = lg.estate;
       add(

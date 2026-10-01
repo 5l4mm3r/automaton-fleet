@@ -23,10 +23,13 @@
  * at most three per decision.
  *
  * The founder self-manages its OWN spendable capital: its runtime commits own capital (request_spend) only under a
- * decided decision whose capital at risk the founder sized, and never beyond it. FleetController is not asked about any
- * of this; it remains the custody boundary that executes orders and protects treasury, shared, restricted and
- * protected capital (fleet_order_hard_check). No weights, scores, budgets, runway thresholds or quota figures live
- * here: ranking and risk appetite are the founder's own judgement. Minimal Phase A form of the Decision Record (§21).
+ * decided decision whose capital at risk the founder sized, and never beyond it (more exposure needs a review on new
+ * evidence). FleetController is not asked about any of this; it remains the custody boundary that executes orders and
+ * protects treasury, shared, restricted, protected and tax-reserved capital (schema v27: fleet_spend_custody_check —
+ * custody only, no owner approval route and no fixed amount). Wallet size and the founder's own track record reach it
+ * as information (ownCapitalLine), never as a permission or a score. No weights, scores, budgets, runway thresholds or
+ * quota figures live here: ranking and risk appetite are the founder's own judgement. Minimal Phase A form of the
+ * Decision Record (§21).
  */
 
 import fs from "fs";
@@ -334,6 +337,33 @@ export const CONSTANT_STANDARD = "Runway changes which opportunities are rationa
 export function survivalLine(s: SurvivalView): string {
   return `Your survival position (FleetController's observation; the risk management is yours): survival equity ${s.survivalEquityCents}p; inference ${s.inferenceTodayCents}p today, `
     + `≈ ${s.burnPerDayCents}p/day over 7 days${s.runwayDays !== null ? `; runway ≈ ${Math.round(s.runwayDays)} days at that burn` : ""}. ${CONSTANT_STANDARD}`;
+}
+
+/**
+ * The founder's own-capital position and its own record, for its OWN sizing: wallet, protected capital, open exposure,
+ * concentration, realised results and how its measured results compared with its decisions. Information only — never a
+ * permission, a limit or a score: it is computed in the founder's runtime from its ledger view and its own decision
+ * ledger, nothing here is sent to FleetController, and FleetController checks custody alone (no owner approval route,
+ * no fixed amount). Null when the ledger view carries no cash figure.
+ */
+export function ownCapitalLine(economics: Record<string, unknown>, list: Decision[]): string | null {
+  const n = (k: string): number | null => { const v = economics[k]; return v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Math.round(Number(v)); };
+  const cash = n("cash");
+  if (cash === null) return null;
+  const decided = list.filter((d) => d.status === "decided" && d.outcome);
+  const sized = decided.reduce((s, d) => s + (d.outcome!.capitalAtRiskPence || 0), 0);
+  const committed = decided.reduce((s, d) => s + (d.outcome!.committedPence || 0), 0);
+  const largest = decided.reduce((m, d) => Math.max(m, d.outcome!.capitalAtRiskPence || 0), 0);
+  const reviews = decided.flatMap((d) => d.reviews);
+  const confirmed = reviews.filter((r) => r.verdict === "confirmed").length;
+  return `Your own capital (for your own sizing — information, not a permission or a limit): unreserved cash ${cash}p; reserved in open orders ${n("reserved") ?? 0}p; `
+    + `protected, never spendable: ${n("protectedPrincipal") ?? 0}p borrowed principal and ${n("protectedObligations") ?? 0}p obligations (tax reserves included); survival equity ${n("survivalEquity") ?? 0}p. `
+    + `Sized exposure under your decided decisions: ${sized}p across ${decided.length}, ${committed}p committed`
+    + `${largest > 0 ? `; largest single exposure ${largest}p${cash > 0 ? ` (${Math.round((largest / cash) * 100)}% of your cash)` : ""}` : ""}. `
+    + `Your record: ${reviews.length} measured result(s) — ${confirmed} confirmed the path, ${reviews.length - confirmed} corrected it on evidence; `
+    + `realised revenue ${n("externalCustomerRevenue") ?? 0}p, expenses and fees ${(n("expenses") ?? 0) + (n("fees") ?? 0)}p, net ${n("realizedNetProfit") ?? 0}p. `
+    + "FleetController checks custody only (protected and tax-reserved capital, other agents' and Treasury money, holds, destinations, infrastructure safety): "
+    + "no approval queue, no fixed amount — the sizing is yours.";
 }
 
 export type IdleKind = "decide" | "execute" | "opportunity";

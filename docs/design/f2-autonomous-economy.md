@@ -21,7 +21,7 @@ touches an agent's work, plus the inward ones for completeness.
 
 | # | Barrier (where) | Why it exists | Class |
 |---|---|---|---|
-| 1 | **Spend > £100/order or > £50/day → `awaiting_owner`** (`api_spend_request`, `fleet_economic_model.owner_approval_threshold_cents` 10000 / `agent_daily_spend_cents` 5000, `ledger-spend-decision`) | Early custody caution: a flat cap with the owner above it | **MOVE TO FLEETCONTROLLER**: spend inside an approved envelope is reserved automatically; a constitutional ceiling (a % of treasury) remains as an absolute stop, not an approval queue |
+| 1 | **Spend > £100/order or > £50/day → `awaiting_owner`** (`api_spend_request`, `fleet_economic_model.owner_approval_threshold_cents` 10000 / `agent_daily_spend_cents` 5000, `ledger-spend-decision`) | Early custody caution: a flat cap with the owner above it | **RETIRED at schema v27 (§24)**: own capital is the founder's to risk-manage; FleetController checks custody only — no fixed amount, no owner queue. Any emergency stop is a relative, contextual infrastructure circuit breaker |
 | 2 | **Every payee is an owner-enrolled destination**, with a 3-day cooldown (`fleet_destination_enroll/activate`; 0 destinations exist today, so *no* spend of any size is possible) | Anti-exfiltration: agents never name addresses | **MOVE**: a controller-managed vendor registry with automated verification (category, domain, limits, risk-based cooldown). Owner and treasury withdrawal destinations stay an **EXCEPTION** |
 | 3 | **Capital to an agent** (`fleet_admin_agent_capital` grant/principal; `api_propose_allocation` / `fleet_allocations_guard`) | Bootstrap-era manual funding | **MOVE**: capital requests → automated decision → envelope. The owner funds the **treasury**, not agents |
 | 4 | **Experiment decisions the policy leaves to the owner**: E4 and irreversible (`fleet_experiment_evaluate` → `FLEET_OWNER_DECISION_REQUIRED`, `experiment-decide`) | Caution for high stakes | **MOVE**: irreversible and high-evidence cases go to stricter risk bands, never to the owner |
@@ -229,8 +229,9 @@ services (vendor-registry categories or ids), milestones (tranches), stop-loss, 
 (spent, committed, realized revenue).
 
 **Enforcement:**
-- `api_spend_request` checks the envelope instead of the owner threshold. Spend inside the envelope is reserved
-  automatically; spend outside is refused with a reason ("request more capital"), never `awaiting_owner`.
+- For Fleet capital, the controller checks the envelope. Spend inside it is reserved automatically; spend outside it is
+  refused with a reason ("request more capital"), never `awaiting_owner`. (Own capital needs no envelope: since schema
+  v27 an own-capital order is checked on custody alone, §24.)
 - Stop-loss reached → *that envelope* freezes automatically; the agent and its other ventures continue.
 - A milestone met (controller-verified signal) → the next tranche is released automatically.
 - Expiry → unspent capital returns.
@@ -560,13 +561,11 @@ registry copy, and the controller-verified attribution of revenue to the decisio
    outside the founder's ordinary cognition unless a ceiling is actually hit.
 
 **Implementation consequences recorded for later phases (not open questions):**
-- **Phase C.** The existing spend policy routes own-capital orders above `owner_approval_threshold_cents` or
-  `agent_daily_spend_cents` to `awaiting_owner`. That contradicts decisions 2–4. Phase C must:
-  - leave own-capital orders to the agent's self-governance plus FleetController's custody checks
-    (`fleet_order_hard_check`: protected principal and obligations, allocation, destination, freezes and holds);
-  - keep any per-order or daily figure only as a catastrophic failsafe that refuses rather than queues for the owner.
-
-  It has no effect today, because real payments and custody execution are off.
+- **Own-capital spend policy — done in Phase A (schema v27, §24), not deferred to Phase C.** The v10 spend policy
+  routed own-capital orders above `owner_approval_threshold_cents` (£100.00) or `agent_daily_spend_cents` (£50.00 a
+  day) to `awaiting_owner`, which contradicted decisions 2–4. v27 leaves own-capital orders to the agent's
+  self-governance plus FleetController's custody checks, and keeps no per-order or daily figure: any emergency stop is
+  a relative infrastructure circuit breaker that refuses and never queues for the owner.
 - **Failsafe values.** The numeric values of the failsafe ceilings are infrastructure settings. They should sit well
   above professional use, so a ceiling is hit only by a fault.
 
@@ -648,3 +647,160 @@ is not a substitute for custody, and custody is not a substitute for the agent's
 - the 30-day zero-owner proof;
 - Gumroad action scoping;
 - the four flags.
+
+## 24. Own-capital risk and custody (schema v27; owner decision 2026-10-01)
+
+**Retired.** These two legacy thresholds no longer apply to own-capital spending:
+
+- the £100.00 per-order owner threshold (`fleet_economic_model.owner_approval_threshold_cents` = 10000);
+- the £50.00 per-day agent line (`agent_daily_spend_cents` = 5000).
+
+Both routed an order to `awaiting_owner` / `FLEET_OWNER_APPROVAL_REQUIRED`. A fixed nominal amount knows nothing about
+the founder's wallet, evidence, exposure or downside, and the owner queue made every larger decision wait on a person.
+
+| Legacy piece | What v27 does |
+|---|---|
+| `api_spend_request` threshold branch (v10) | Replaced (same signature and grants): custody checks only, then reserved (`FLEET_CUSTODY_CLEARED`) or rejected with a precise reason |
+| `awaiting_owner` order state | Legacy rows are **cancelled** with `FLEET_OWNER_ROUTE_RETIRED` and an event, never decided. They were never reserved, so no capital was locked. CHECK `fleet_payment_orders_no_owner_route` makes the state unreachable |
+| `fleet_admin_spend_decision` (owner approve / reject) | Raises `FLEET_OWNER_ROUTE_RETIRED` for every actor |
+| `fleet:admin ledger-spend-decision` | Retired: refuses without touching the database |
+| The two columns | Inert, marked `LEGACY (retired at v27)`. No decision reads them. They stay in `fleet_economic_policy_sha256` so earlier economic-policy seals remain comparable |
+| `ledger-model` output | The figures moved under `legacyRetired` (history, never policy) |
+| Doctor "payment orders" | FAILs if any order is still in the retired route. Reports the circuit breaker state |
+| `founders-report` | "orders awaiting you" became reserved (unexecuted) orders |
+
+**Three capital layers.**
+
+- **A — Own capital.** The founder's. Self-risk-managed by the founder. FleetController does custody and security
+  validation only, with no owner involvement.
+- **B — Fleet / Treasury / shared capital.** A separate allocation path (the capital engine, §9–§10), not built here
+  (Phase C). Agents request; they never approve their own requests.
+- **C — Restricted capital.** Never spendable: protected principal, approved obligations, tax reserves, other agents'
+  money and Treasury reserves.
+
+**Flow of an own-capital commitment.**
+
+1. objective → evidence → decision → sizing → downside → concentration, commitments and runway → expenditure;
+2. **self-governance validation** (the founder's runtime): a decided decision, within the founder's own sizing;
+3. **custody and security validation** (FleetController);
+4. payment adapter — **disabled**: custody execution is constitutionally pinned off and `REAL_PAYMENTS_ENABLED=false`.
+
+**Founder side — the risk judgement.**
+
+- *Explicit sizing.*
+  - `resolve_decision` requires `capitalAtRiskPence`, `downside` and `invalidatedBy`; otherwise `FLEET_RISK_UNSIZED`.
+  - `request_spend` needs a decided decision (`FLEET_COMMITMENT_UNDECIDED`) and stays within its sizing
+    (`FLEET_EXPOSURE_EXCEEDED`), with no controller call.
+  - More exposure needs `review_decision` with new evidence (`FLEET_EXPOSURE_UNSUPPORTED`). Less is always allowed.
+- *Wallet size.* The ledger view (`economics`) is in every packet. Full packets also carry an own-capital line,
+  information and never a permission or a limit (`ownCapitalLine`). It shows:
+  - unreserved cash and what is reserved in open orders;
+  - protected capital: principal, and obligations including tax reserves;
+  - survival equity;
+  - sized versus committed exposure under decided decisions;
+  - the largest single exposure as a share of cash.
+- *History.* From the founder's own decision ledger:
+  - measured results, i.e. how many reviews confirmed the decided path and how many corrected it on evidence;
+  - realised revenue, expenses and net profit from the ledger view.
+
+  This is computed in the founder's runtime and never sent to FleetController: it is reasoning material, not a
+  permission score. Concentration, commitments, runway, ROI, confidence and alternatives stay the founder's judgement
+  (§23).
+- *No fixed amount.*
+  - The charter (v3) says "FleetController is your bank: custodian of your own capital, allocator of Fleet capital".
+  - The `request_spend` description says "Nobody else approves it and no fixed amount limits it".
+
+**FleetController side — custody, never commercial judgement.**
+
+`fleet_spend_custody_check` is the v10 `fleet_order_hard_check`, defined once and unchanged, plus precise naming of tax
+reserves. It refuses:
+
+- an inactive agent, an operator hold, or a spending freeze;
+- a destination that is not an active payee allowed to this agent;
+- more than the unreserved own cash;
+- anything that would consume protected principal, approved obligations or a tax reserve (an approved obligation of
+  category `tax_reserve`; `obligation --tax-reserve` on the CLI).
+
+`api_spend_request` takes no expected return, ranking, evidence or history, and reads none. Every refusal returns the
+`FLEET_*` code and its custody category (`fleet_custody_refusal`, built from `src/fleet/custody-refusals.ts`):
+
+| Code | Category |
+|---|---|
+| `FLEET_PROTECTED_CAPITAL` | `PROTECTED_CAPITAL` |
+| `FLEET_TAX_RESERVE` | `TAX_RESERVE` |
+| `FLEET_INSUFFICIENT_ALLOCATION` | `INSUFFICIENT_OWN_CAPITAL` |
+| `FLEET_AGENT_HELD` | `HOLD` |
+| `FLEET_SPENDING_FROZEN` | `FROZEN` |
+| `FLEET_AGENT_NOT_ACTIVE` | `AGENT_NOT_ACTIVE` |
+| `FLEET_DESTINATION_NOT_ALLOWED`, `FLEET_DESTINATION_NOT_ACTIVE` | `INVALID_DESTINATION` |
+| `FLEET_IDEMPOTENCY_CONFLICT` | `IDEMPOTENCY_CONFLICT` |
+| `FLEET_INFRASTRUCTURE_CIRCUIT_BREAKER` | `INFRASTRUCTURE_CIRCUIT_BREAKER` |
+| `FLEET_CUSTODY_EXECUTION_DISABLED` | `PAYMENT_RAIL_UNAVAILABLE` (execution layer) |
+
+Two categories are not emitted yet:
+
+- **Another agent's funds** is structurally unreachable. An order cannot name a source of funds, and reserving debits
+  only the authenticated agent's own cash account.
+- **Credential unavailable** needs a payment credential broker, which arrives with the payment rails (Phase B/C).
+
+A refusal is final for that order. It creates no owner request, no admin instruction and no queue, and it commits
+nothing against the founder's sizing. The founder's runtime frames it as custody ("not a judgement of your decision;
+nothing is queued for anyone and no one else decides it") and hands the next move back to the founder.
+
+**Infrastructure circuit breaker (mechanism only; every signal unset).**
+
+- *Table.* `fleet_spend_circuit_breaker`, a single row that cannot be deleted. It holds:
+  - a manual incident trip, which needs a reason (e.g. a compromised provider or a catastrophic anomaly);
+  - `order_wallet_bp`: one order above this share of the founder's own unreserved cash;
+  - `velocity_window_s` + `velocity_wallet_bp`: own spend within the window above this share of the wallet the window
+    started with.
+- *No nominal amounts.* No column can hold one, and the privilege audit refuses any nominal-looking column. v27
+  chooses no production threshold: every signal is NULL, and an unset signal never trips.
+- *Control.* `fleet_admin_spend_circuit_breaker` is owner-approver only and audited (`spend_circuit_breaker_set`). It
+  is an infrastructure switch, never a per-order decision.
+- *Invisible to agents.* No agent function returns the configuration. A refusal names only the signal (`tripped`,
+  `order_wallet_share`, `velocity_wallet_share`), never a threshold or a remaining amount. No founder-facing text
+  mentions the breaker. When it trips, the founder is told it is "not a spending allowance, a target or a judgement of
+  your decision".
+- *Rule for future breakers.* Any emergency circuit breaker must be relative and contextual. Possible signals: share
+  of wallet, deviation from the founder's own history, velocity, destination novelty, commitments, reserves, duplicate
+  orders, provider anomaly, systemic exposure. It must never be a fixed GBP amount, and never owner approval disguised
+  as safety. New signals are added as relative columns of this table. Their values are set only by an operator
+  decision backed by evidence.
+
+**Recorded, not changed here.** Remaining fixed amounts and owner gates near spending; none is the own-capital spend
+path:
+
+1. **`fleet_cognition_routing.major_spend_threshold_minor` = 2000 (£20.00).**
+   - For a routed founder, a spend at or above it must be produced by T3 (critical-tier) cognition.
+   - It is a reasoning-depth requirement, not a limit or an approval, but it is a fixed nominal figure.
+   - Candidate for a relative definition, with an operator decision on the value.
+2. **R24 experiment pipeline.**
+   - Evidence Ladder `auto_cap_minor` values: 0 / 300 / 1000 / 2500, and NULL at E4.
+   - `FLEET_OWNER_DECISION_REQUIRED` for irreversible or E4 experiments.
+   - Simulation-only (`cap_scope = 'simulation_only'`, `financial_mode = 'simulated'`): it moves no money.
+   - These must be retired the same way before experiments commit real own capital (audit row 4).
+3. **Payment destinations.**
+   - Owner enrolment and activation, with a 3-day cooldown.
+   - An anti-exfiltration custody control (audit row 2). Phase B/C replaces it with a controller-managed vendor
+     registry.
+4. **`strong_auth_threshold_cents` = 50000.** Strong authentication for owner withdrawals: the owner's own Treasury
+   action, not agent spend.
+5. **The legacy v5 wallet path.**
+   - `fleet_wallet_custody.daily_limit_cents`, the `spending-limit` command and v5 `api_request_spend`.
+   - Superseded since v10 (`FLEET_LEGACY_SUPERSEDED`); no active route.
+6. **`FOUNDER_CHARTER_V2`.** Frozen for the sealed evaluations, it still says spending is "a structured request that
+   policy and the owner decide". It is historical text. Production runs charter v3.
+7. **Treasury capital allocations** (`capital-approve` and its discretionary limit). Layer B: agents propose and never
+   approve.
+
+**Tests.**
+
+- `fleet-f2a-own-capital.test.ts` (founder side and the SQL as text) covers the 19 properties.
+- `fleet-ledger.test.ts` and `fleet-f2a-pg.test.ts` (PostgreSQL) cover:
+  - spend above the retired lines, reserved on custody alone;
+  - precise refusals, including tax reserve;
+  - the circuit breaker;
+  - the v25 → v27 retirement of a seeded legacy owner-route order.
+
+  These need the VM: PostgreSQL refuses to run as root in the cloud container (KI-7).

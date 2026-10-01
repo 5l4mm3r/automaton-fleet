@@ -34,8 +34,9 @@ import { V23_SQL } from "./migrations-phase23.js";
 import { V24_SQL } from "./migrations-phase24.js";
 import { V25_SQL } from "./migrations-phase25.js";
 import { V26_SQL } from "./migrations-phase26.js";
+import { V27_SQL } from "./migrations-phase27.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 26;
+export const FLEET_PG_SCHEMA_VERSION = 27;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1156,6 +1157,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 24, name: "opportunity_experiment_pipeline_inert", sql: V24_SQL },
   { version: 25, name: "owner_request_liveness", sql: V25_SQL },
   { version: 26, name: "f2a_action_scoped_dependencies_survival_observation", sql: V26_SQL },
+  { version: 27, name: "f2a_own_capital_custody_circuit_breaker", sql: V27_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

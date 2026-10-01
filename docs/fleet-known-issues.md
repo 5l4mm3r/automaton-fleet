@@ -139,6 +139,14 @@ where it was first confirmed so it is not mistaken for a new regression.
   as root.
 - **Direction:** run the suites as an unprivileged user (the local VM's normal setup), or have the fixture start the
   cluster under a dedicated unprivileged account. Changing users in the container needs operator approval.
+- **Unverified as a result (F2-A, schemas v26 + v27):** `fleet-f2a-pg`, `fleet-live-01-pg` and the v27 cases in
+  `fleet-ledger` cover:
+  - own capital above the retired £100/£50 lines, reserved on custody alone;
+  - custody refusal categories, including tax reserve;
+  - the infrastructure circuit breaker;
+  - the v25 → v27 retirement of a legacy `awaiting_owner` order.
+
+  These suites, and every pin-bumped PostgreSQL suite, must run on the VM before any merge.
 
 ## FLEET-KI-8: isolated-fetcher connect-timeout test depends on the network path
 

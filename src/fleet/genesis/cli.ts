@@ -42,7 +42,8 @@
  *   CEILINGS (runaway loops, bugs, provider abuse, accidental catastrophic burn) — never research budgets, targets or
  *   entitlements. Set them well above professional use; founders never see them unless a ceiling is actually hit.
  *   founders-report                                                   per founder: status, cash, cognition, 24 h usage,
- *                                                                     forbidden tool requests (refused), orders awaiting you
+ *                                                                     forbidden tool requests (refused), reserved orders
+ *                                                                     (v27: no spend order ever awaits the owner)
  *
  * Schema v22 neutral cognition routing (owner controls; inert until enabled; never run by an AI operator):
  *   cognition-routing                                                 routing switch, thresholds and tier mappings

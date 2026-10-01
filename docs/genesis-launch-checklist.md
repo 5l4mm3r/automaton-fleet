@@ -54,7 +54,7 @@ deployed but **disabled**; real payments, custody, replication, reseeding and ow
 
 | What | How |
 |---|---|
-| Is each founder thinking, and what does it cost? | `fleet:admin founders-report` (all founders: cash, cognition, 24 h usage, refused forbidden requests, orders awaiting you); `cognition-status <id>`, `cognition-log <id>`, `ledger-economics <id>`; doctor warns on budget pressure and forbidden-tool requests |
+| Is each founder thinking, and what does it cost? | `fleet:admin founders-report` (all founders: cash, cognition, 24 h usage, refused forbidden requests, reserved orders — since v27 no spend order awaits the owner); `cognition-status <id>`, `cognition-log <id>`, `ledger-economics <id>`; doctor warns on budget pressure and forbidden-tool requests |
 | Stop one founder thinking now | `fleet:admin founder-cognition <id> pause <reason>` (next call refused) |
 | Stop all thinking now | `fleet:admin cognition-disable` |
 | Stop a founder entirely | `agent-hold <id> <reason>` (owner hold) or `mark-dead` (runtimes exit when refused) |

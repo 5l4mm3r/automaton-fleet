@@ -76,7 +76,9 @@ describe("F2-A charter v3 and founder-facing text", () => {
     expect(FOUNDER_CHARTER_VERSION).toBe("founder-charter-v3");
     expect(FOUNDER_CHARTER).toMatch(/an autonomous economic actor\. Your purpose is to stay alive economically/);
     expect(FOUNDER_CHARTER).toMatch(/no one approves your business choices: you choose niches, products, services, channels, marketing, experiments, pivots and new ventures yourself/);
-    expect(FOUNDER_CHARTER).toMatch(/FleetController is your bank: it decides spending and capital by policy/);
+    // v27: the bank is the custodian of the founder's own capital and the allocator of Fleet capital — it does not decide own spending.
+    expect(FOUNDER_CHARTER).toMatch(/FleetController is your bank: custodian of your own capital, allocator of Fleet capital\./);
+    expect(FOUNDER_CHARTER).not.toMatch(/decides spending/);
     expect(FOUNDER_CHARTER).toMatch(/The owner maintains the fleet, is not your manager and is not consulted on ordinary business/);
     expect(FOUNDER_CHARTER).toMatch(/Your standard at any runway: pinpoint → decide → execute → measure → learn → forward\. Never search → search → search or activity for its own sake; step back only when new evidence breaks an assumption, then go forward\./);
     expect(FOUNDER_CHARTER).toMatch(/Every move has economic purpose\. Research only to find a viable niche, product, service or business gap you can bridge, or to expand a viable venture/);
@@ -163,8 +165,8 @@ describe("F2-A charter v3 and founder-facing text", () => {
     expect(V26_SQL).toMatch(/CREATE FUNCTION fleet_survival_observation\(p_agent text\) RETURNS jsonb LANGUAGE sql STABLE/);
     // The only table v26 writes is the dependency table: no ledger, treasury, payment, reserve, obligation or tax table.
     expect(writeTargets(V26_SQL)).toEqual(["fleet_owner_requests"]);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(26);
-    expect(PG_MIGRATIONS.at(-1)).toMatchObject({ version: 26, name: "f2a_action_scoped_dependencies_survival_observation" });
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(27); // v27 (own-capital custody) is its own, separately reviewable migration
+    expect(PG_MIGRATIONS.find((m) => m.version === 26)).toMatchObject({ name: "f2a_action_scoped_dependencies_survival_observation", sql: V26_SQL });
     // Own capital: the founder's risk judgement; FleetController is the custodian that protects treasury/shared/restricted capital.
     expect(FOUNDER_TOOLS.find((t) => t.name === "request_spend")!.description).toMatch(/the risk judgement is yours.*FleetController is the custodian: it executes orders only within its custody rules, which protect treasury, shared, restricted and protected capital/);
   });

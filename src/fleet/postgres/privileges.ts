@@ -729,6 +729,22 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
         WHERE n.nspname = $1 AND c.relname = 'fleet_owner_requests' AND k.conname = 'fleet_owner_requests_open_is_exception'`, [schema]);
     if (!ck.rows.length) problems.push("autonomy: an open dependency could be an ordinary owner decision (CHECK missing)");
   }
+  // v27 (F2-A): own-capital spend never waits on the owner; the circuit breaker is infrastructure with relative signals only.
+  const v27 = (await db.query(`SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'fleet_spend_circuit_breaker'`, [schema])).rows.length > 0;
+  for (const need of v27 ? ["fleet_spend_circuit_breaker:fleet_spend_circuit_breaker_no_delete", "fleet_spend_circuit_breaker:fleet_spend_circuit_breaker_no_truncate"] : []) {
+    if (!have.has(need)) problems.push(`own capital: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  if (v27) {
+    const ck = await db.query<{ t: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = 'fleet_payment_orders' AND k.conname = 'fleet_payment_orders_no_owner_route'`, [schema]);
+    if (!ck.rows.length) problems.push("own capital: a spend order could wait on the owner (CHECK fleet_payment_orders_no_owner_route missing)");
+    const cols = await db.query<{ c: string }>(
+      `SELECT column_name AS c FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_spend_circuit_breaker'`, [schema]);
+    for (const r of cols.rows) {
+      if (/cents|minor|amount|gbp|usd/i.test(r.c)) problems.push(`own capital: circuit breaker column ${r.c} looks like a nominal amount (relative signals only)`);
+    }
+  }
   if (v23) {
     const ck = await db.query<{ t: string }>(
       `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -782,6 +798,8 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile"]),
     // v25/v26: dependency records only through the founder API and the owner's resolve/import.
     fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import"]),
+    // v27: the spend circuit breaker only through the owner's infrastructure control.
+    fleet_spend_circuit_breaker: new Set(["fleet_admin_spend_circuit_breaker"]),
   };
   for (const f of fns.rows) {
     for (const t of writeTargets(f.src)) {

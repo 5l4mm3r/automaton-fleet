@@ -39,7 +39,7 @@ import { decideTool, type CapabilityManifest } from "../capabilities.js";
 import type { FounderToolbox, ToolOutcome } from "./toolbox.js";
 import type { LoopGuard } from "./loop-guard.js";
 import { escalateQuestion, priorDecision } from "./escalation.js";
-import { DECISIONS_FILE, decisionLines, nextMoveLine, idleKind, idleTask, loadDecisions, parseSurvival, survivalLine, type Decision, type IdleKind } from "./decisions.js";
+import { DECISIONS_FILE, decisionLines, nextMoveLine, idleKind, idleTask, loadDecisions, ownCapitalLine, parseSurvival, survivalLine, type Decision, type IdleKind } from "./decisions.js";
 import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineClass } from "./task-classifier.js";
 
 export interface MindPorts {
@@ -493,7 +493,10 @@ export class FounderMind {
       : nudge ? { digest: nowDigest, slim: 0, after: Math.min(RENUDGE_MAX, idlePrev!.after * 2) }
       : { digest: nowDigest, slim: (idlePrev?.slim ?? 0) + 1, after: idlePrev?.after ?? RENUDGE_FIRST };
     const move = nudge ? idleTask(kind, ledger, openGoals) : unchanged ? null : nextMoveLine(kind);
-    const extra = [...(move ? [move] : []), ...(!bare && survival ? [survivalLine(survival)] : [])];
+    // F2-A (v26+ controller): the survival observation and the founder's own-capital position and record — information
+    // for its own risk management (wallet, exposure, results), never a permission, a limit or a score.
+    const own = !bare && survival ? ownCapitalLine(economics, ledger) : null;
+    const extra = [...(move ? [move] : []), ...(!bare && survival ? [survivalLine(survival)] : []), ...(own ? [own] : [])];
     let text: string;
     try {
       const full = buildTaskPacket({

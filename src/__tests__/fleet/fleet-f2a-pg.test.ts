@@ -1,8 +1,9 @@
 /**
- * F2-A schema v26 on an R28-shaped v25 registry (PostgreSQL).
+ * F2-A schemas v26 + v27 on an R28-shaped v25 registry (PostgreSQL).
  *
- * The v25 → v26 migration turns owner requests into ACTION-SCOPED EXTERNAL DEPENDENCIES and adds the controller's
- * DISCOVERY ALLOWANCE. This drives the real migration over a registry seeded through the v25 functions themselves —
+ * The v25 → v26 migration turns owner requests into ACTION-SCOPED EXTERNAL DEPENDENCIES and adds the survival
+ * observation; v27 retires the owner spend route (a legacy `awaiting_owner` order seeded here through the v25 spend
+ * function is cancelled, never decided, and locks no capital). This drives the real migrations over a registry seeded through the v25 functions themselves —
  * including Founder 1's Gumroad record under its production id — and checks the data mapping, the autonomy invariants
  * (an open record is always one unavailable action of an exceptional kind; nothing else in the registry consults
  * dependency records), the privilege audit, doctor and the survival observation (figures only: no ration, gate or runway shutdown).
@@ -31,9 +32,10 @@ const EXCEPTIONS = "'human_identity','kyc','legal_signature','constitutional_cha
 const OWNER_DEPENDENCY = /owner decides|owner approv|the owner can enable|ask the owner|awaiting (the )?owner|owner-enrolled|keep waiting|STALE|decision only the owner/i;
 type Who = { id: string; token: string };
 
-describe.skipIf(!PG_BIN)("F2-A schema v26 on an R28-shaped v25 registry (PostgreSQL)", () => {
+describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (PostgreSQL)", () => {
   let pgc: EphemeralPg;
   let owner: pg.Pool;
+  let su: pg.Pool;
   let store: PgFleetStore;
   let gw: PgAgentGateway;
   let ledger: PgLedgerAdmin;
@@ -41,6 +43,9 @@ describe.skipIf(!PG_BIN)("F2-A schema v26 on an R28-shaped v25 registry (Postgre
   let F: Who = { id: "", token: "" };
   let G: Who = { id: "", token: "" };
   const ids: Record<string, string> = {};
+  let payee = "";
+  let legacyOrder = "";
+  let cashBefore = 0;
   let before: Array<Record<string, unknown>> = [];
   const q = async (sql: string, params: unknown[] = []) => (await owner.query(sql, params)).rows;
   const code = (p: Promise<unknown>) => p.then(() => "OK", (e: Error) => /FLEET_[A-Z_]+|permission denied/.exec(e.message)?.[0] ?? e.message.slice(0, 100));
@@ -100,16 +105,36 @@ describe.skipIf(!PG_BIN)("F2-A schema v26 on an R28-shaped v25 registry (Postgre
     before = await q(`SELECT request_id, agent_id, idempotency_key, category, goal_ref, title, detail, status, response, decided_by, decided_at, created_at, seq, source_kind, source_ref
                         FROM fleet.fleet_owner_requests ORDER BY seq`);
     expect(before).toHaveLength(8);
+    // ── A legacy owner-route spend order (v25 policy: above the daily line → awaiting_owner), as v10–v26 produced them.
+    su = new pg.Pool({ connectionString: pgc.superUrl.replace(/\/postgres$/, `/${pgc.dbname}`), max: 1 });
+    const e = await ledger.enrollDestination({ kind: "payee", rail: "evm_usdc", label: "payee test", reference: `ref-${crypto.randomUUID()}`, hint: "***1234", agentId: null, actor: OWNER });
+    const sc = await su.connect();
+    try {
+      await sc.query("SET session_replication_role = replica");
+      await sc.query(`UPDATE fleet.fleet_payment_destinations SET activatable_at = now() - interval '1 second', enrolled_at = now() - interval '4 days' WHERE destination_id = $1`, [e.destinationId]);
+    } finally {
+      await sc.query("RESET session_replication_role").catch(() => {});
+      sc.release();
+    }
+    await ledger.activateDestination(e.destinationId, e.activationCode, OWNER);
+    payee = e.destinationId;
+    await q(`UPDATE fleet.fleet_economic_model SET agent_daily_spend_cents = 1000`);
+    cashBefore = Number((await q(`SELECT fleet.fleet_ledger_balance(fleet.fleet_ledger_account($1, 'agent_cash')) AS b`, [F.id]))[0].b);
+    expect(cashBefore).toBeGreaterThanOrEqual(2000); // the founder's real cash account (its Genesis allocation)
+    const legacy = (await q(`SELECT fleet.api_spend_request($1, $2, $3, 2000, 'expense', $4, 'checkout hosting', 0) AS r`, [F.id, F.token, `legacy:${crypto.randomUUID()}`, payee]))[0].r;
+    expect(legacy).toMatchObject({ ok: true, order: { status: "awaiting_owner", decisionCode: "FLEET_OWNER_APPROVAL_REQUIRED" } });
+    legacyOrder = legacy.order.orderId;
   }, 240_000);
 
   afterAll(async () => {
-    await genesis?.close(); await ledger?.close(); await gw?.close(); await store?.close(); await owner?.end(); pgc?.stop();
+    await genesis?.close(); await ledger?.close(); await gw?.close(); await store?.close(); await su?.end(); await owner?.end(); pgc?.stop();
   });
 
-  it("migrate-check rolls back; migrate applies exactly v26, once; nothing is lost and every identity column is unchanged", async () => {
-    expect(await store.migrateCheck()).toEqual({ currentVersion: 25, resultingVersion: 26, wouldApply: [26] });
+  it("migrate-check rolls back; migrate applies exactly v26 and v27, once; nothing is lost and every identity column is unchanged", async () => {
+    expect(await store.migrateCheck()).toEqual({ currentVersion: 25, resultingVersion: 27, wouldApply: [26, 27] });
     expect((await q(`SELECT to_regprocedure('fleet.fleet_survival_observation(text)') AS r`))[0].r).toBeNull(); // rolled back
-    expect(await store.migrate()).toEqual([26]);
+    expect((await q(`SELECT status FROM fleet.fleet_payment_orders WHERE order_id = $1`, [legacyOrder]))[0].status).toBe("awaiting_owner"); // rolled back
+    expect(await store.migrate()).toEqual([26, 27]);
     expect(await store.migrate()).toEqual([]);
     gw = new PgAgentGateway({ connectionString: pgc.agentUrl });
     expect(await q(`SELECT request_id, agent_id, idempotency_key, category, goal_ref, title, detail, status, response, decided_by, decided_at, created_at, seq, source_kind, source_ref
@@ -118,6 +143,23 @@ describe.skipIf(!PG_BIN)("F2-A schema v26 on an R28-shaped v25 registry (Postgre
     expect(await q(`SELECT to_regprocedure('fleet.api_owner_request_create(text,text,text,text,text,text,text,boolean)') IS NULL AS old_gone,
                            to_regprocedure('fleet.api_owner_request_create(text,text,text,text,text,text,text,text)') IS NOT NULL AS new_there,
                            to_regprocedure('fleet.fleet_owner_request_import(uuid,text,boolean,text,text)') IS NULL AS old_import_gone`)).toEqual([{ old_gone: true, new_there: true, old_import_gone: true }]);
+  });
+
+  it("v27: the legacy owner-route order is retired (cancelled, never decided), locks no capital, and the route is unreachable; the legacy lines are inert", async () => {
+    expect((await q(`SELECT status, decision_code, decided_by, reservation_journal_id, release_journal_id FROM fleet.fleet_payment_orders WHERE order_id = $1`, [legacyOrder]))[0])
+      .toEqual({ status: "cancelled", decision_code: "FLEET_OWNER_ROUTE_RETIRED", decided_by: "controller", reservation_journal_id: null, release_journal_id: null });
+    expect(Number((await q(`SELECT fleet.fleet_ledger_balance(fleet.fleet_ledger_account($1, 'agent_cash')) AS b`, [F.id]))[0].b)).toBe(cashBefore);
+    expect(await q(`SELECT actor, detail ->> 'code' AS code FROM fleet.fleet_events WHERE event_type = 'payment_order_cancelled' AND detail ->> 'orderId' = $1`, [legacyOrder]))
+      .toEqual([{ actor: "migration", code: "FLEET_OWNER_ROUTE_RETIRED" }]);
+    expect(await q(`SELECT count(*)::int AS n FROM fleet.fleet_payment_orders WHERE status = 'awaiting_owner'`)).toEqual([{ n: 0 }]);
+    expect(await code(q(`SELECT fleet.fleet_admin_spend_decision($1::uuid, 'approve', $2, NULL, true)`, [legacyOrder, OWNER]))).toBe("FLEET_OWNER_ROUTE_RETIRED");
+    // The legacy daily line is still set low (1000) from the seed, and the same founder's order of 2000 is now reserved on custody alone.
+    expect((await q(`SELECT agent_daily_spend_cents FROM fleet.fleet_economic_model`))[0].agent_daily_spend_cents).toBe("1000");
+    const fresh = await gw.spendRequest(F.id, F.token, { idempotencyKey: `fresh:${crypto.randomUUID()}`, amountCents: 2000, category: "expense", destinationId: payee, purpose: "checkout hosting" });
+    expect(fresh).toMatchObject({ ok: true, order: { status: "reserved", decisionCode: "FLEET_CUSTODY_CLEARED", decidedBy: "controller" } });
+    expect(await gw.spendCancel(F.id, F.token, (fresh.order as { orderId: string }).orderId)).toMatchObject({ ok: true, order: { status: "cancelled" } });
+    expect(Number((await q(`SELECT fleet.fleet_ledger_balance(fleet.fleet_ledger_account($1, 'agent_cash')) AS b`, [F.id]))[0].b)).toBe(cashBefore);
+    await q(`UPDATE fleet.fleet_economic_model SET agent_daily_spend_cents = 5000`);
   });
 
   it("Gumroad is re-scoped to its one action (kyc, still unresolved: nobody decided it); ordinary requests are retired; identity ones stay open", async () => {

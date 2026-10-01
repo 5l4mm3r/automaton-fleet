@@ -1050,9 +1050,9 @@ export class FleetService {
       }
 
       case "/v1/spend/request": {
-        // Schema v10: a structured spend order against the agent's own ledger allocation. The
-        // database decides (reserved / awaiting_owner / rejected); nothing is executed here: the
-        // agent never names an address, only an owner-enrolled destination id.
+        // Schema v10/v27: a structured order committing the agent's OWN capital. The database checks custody only
+        // (reserved, or rejected with a precise custody category; never an owner route); nothing is executed here:
+        // the agent never names an address, only an owner-enrolled destination id.
         const { agentId, token } = await this.credentials(req, path, ctx);
         const amount = Number(body.amountCents);
         const recoverable = body.recoverableCents === undefined ? 0 : Number(body.recoverableCents);
@@ -1083,7 +1083,7 @@ export class FleetService {
           recoverableCents: recoverable,
         });
         if (!r.ok && !r.order) throw FleetService.refusal(r, "spend refused");
-        return { ok: r.ok, code: r.code ?? null, order: r.order ?? null, replay: r.replay === true, executed: false };
+        return { ok: r.ok, code: r.code ?? null, custody: r.custody ?? null, order: r.order ?? null, replay: r.replay === true, executed: false };
       }
 
       // ─── Schema v24: the founder's side of the experiment pipeline. Every decision is the registry's; the answer —

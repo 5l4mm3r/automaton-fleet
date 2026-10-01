@@ -332,7 +332,8 @@ export class GenesisOps {
   /**
    * Phase F.3 owner monitoring: one row per founder — lifecycle, own economics,
    * cognition switches and usage, forbidden tool requests the model made (all
-   * refused by the runtime) and spend orders awaiting a decision.
+   * refused by the runtime) and its reserved (unexecuted) spend orders. Schema v27: no order ever awaits the owner —
+   * own-capital spend is the founder's, custody-checked by FleetController.
    */
   async foundersReport(founderToolNames: readonly string[]): Promise<Array<Record<string, unknown>>> {
     const r = await this.db.query(
@@ -345,7 +346,7 @@ export class GenesisOps {
                  SELECT t ->> 'name' AS n, count(*) AS c FROM fleet_cognition_log l, jsonb_array_elements(l.tool_calls) t
                   WHERE l.agent_id = a.agent_id AND l.at > now() - interval '1 day' AND NOT ((t ->> 'name') = ANY($1::text[]))
                   GROUP BY 1) x) AS forbidden_24h,
-              (SELECT count(*) FROM fleet_payment_orders o WHERE o.agent_id = a.agent_id AND o.status IN ('requested','awaiting_owner'))::int AS orders_awaiting
+              (SELECT count(*) FROM fleet_payment_orders o WHERE o.agent_id = a.agent_id AND o.status = 'reserved')::int AS orders_reserved
          FROM fleet_agents a WHERE a.origin IN ('genesis_founder','reseed_founder') ORDER BY a.agent_id`,
       [founderToolNames],
     );
@@ -365,7 +366,7 @@ export class GenesisOps {
       calls24h: x.calls_24h,
       charged24hCents: Number(x.charged_24h),
       forbiddenRequests24h: x.forbidden_24h,
-      ordersAwaitingDecision: x.orders_awaiting,
+      ordersReserved: x.orders_reserved,
     }));
   }
 

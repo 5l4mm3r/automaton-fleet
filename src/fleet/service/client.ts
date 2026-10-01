@@ -305,12 +305,12 @@ export class FleetApiClient implements FleetBackend {
   }
 
   /**
-   * Schema v10: submit a structured spend order against this agent's own ledger
-   * allocation, to an owner-enrolled destination id. The controller decides
-   * (reserved / awaiting_owner / rejected); nothing is executed by this call.
+   * Schema v10/v27: commit this agent's OWN capital through a structured order, to an owner-enrolled destination id.
+   * The controller checks custody only (reserved, or rejected with a precise custody category; never an owner
+   * route); nothing is executed by this call.
    */
   async spendOrder(r: { idempotencyKey: string; amountCents: number; category: "expense" | "fee" | "asset_acquisition" | "conway_credits"; destinationId: string; purpose: string; recoverableCents?: number }) {
-    return this.call<{ ok: boolean; code: string | null; order: Record<string, unknown> | null; replay: boolean; executed: false }>("POST", "/v1/spend/request", r);
+    return this.call<{ ok: boolean; code: string | null; custody?: string | null; order: Record<string, unknown> | null; replay: boolean; executed: false }>("POST", "/v1/spend/request", r);
   }
 
   async cancelSpendOrder(orderId: string) {
