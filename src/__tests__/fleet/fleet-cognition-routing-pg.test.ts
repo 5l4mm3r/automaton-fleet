@@ -16,6 +16,7 @@ import { costMicrocents } from "../../fleet/cognition/charging.js";
 import { actionDigest } from "../../fleet/cognition/router.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { wipeRegistry } from "./fixtures/wipe.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const OWNER = "operator:owner";
@@ -99,7 +100,7 @@ describe.skipIf(!PG_BIN)("schema v22 neutral cognition routing (PostgreSQL)", ()
 
   it("migrates to v22 with a clean privilege audit; routing is inert by default", async () => {
     const [a] = await setup();
-    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(25);
+    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(FLEET_PG_SCHEMA_VERSION);
     expect((await store.auditPrivileges()).problems).toEqual([]);
     const st = await svc.cognitionRoutingState(a);
     expect(st).toMatchObject({ routingEnabled: false, globalEnabled: false });
@@ -185,10 +186,15 @@ describe.skipIf(!PG_BIN)("schema v22 neutral cognition routing (PostgreSQL)", ()
       await svc.cognitionRoutedRecord(a, String(au.requestId), rec({ toolCalls: [{ id: toolId, name: "request_spend", argsSha256: "0".repeat(64), actionSha256: actionDigest("request_spend", spend(amountCents)) }] }), {});
       return String(au.requestId);
     }
-    // Below the major threshold (2000p): T2 cognition suffices; the link is single-use.
-    await produce("T2", "claude-sonnet-5-5", "capital_request_preparation", "toolu_small", 1_500);
-    expect(await svc.actionCognitionVerify(a, "spend_request", 1_500, "toolu_small", actionDigest("request_spend", spend(1_500)))).toMatchObject({ ok: true, enforced: true, actionClass: "spend_request", tier: "T2" });
-    expect(await svc.actionCognitionVerify(a, "spend_request", 1_500, "toolu_small", actionDigest("request_spend", spend(1_500)))).toMatchObject({ ok: false, code: "FLEET_ACTION_COGNITION_REUSED" });
+    // v30: "major" is RELATIVE — a spend exposing at least 25% (fleet_cognition_depth_policy) of the founder's own available
+    // capital — never a fixed amount (the v22 £20 line is retired). Small: 10% of this founder's wallet; big: 5 000p (≥ 25%).
+    const avail = Number((await q(`SELECT fleet.fleet_agent_economics($1) ->> 'expensePurchasingCapacity' AS v`, [a]))[0].v);
+    const small = Math.max(1, Math.floor(avail / 10));
+    expect(5_000 * 4).toBeGreaterThanOrEqual(avail);
+    // Below the relative major line: T2 cognition suffices; the link is single-use.
+    await produce("T2", "claude-sonnet-5-5", "capital_request_preparation", "toolu_small", small);
+    expect(await svc.actionCognitionVerify(a, "spend_request", small, "toolu_small", actionDigest("request_spend", spend(small)))).toMatchObject({ ok: true, enforced: true, actionClass: "spend_request", tier: "T2" });
+    expect(await svc.actionCognitionVerify(a, "spend_request", small, "toolu_small", actionDigest("request_spend", spend(small)))).toMatchObject({ ok: false, code: "FLEET_ACTION_COGNITION_REUSED" });
     // A major spend produced by T2 cognition is refused: it needs T3.
     await produce("T2", "claude-sonnet-5-5", "capital_request_preparation", "toolu_big", 5_000);
     expect(await svc.actionCognitionVerify(a, "spend_request", 5_000, "toolu_big", actionDigest("request_spend", spend(5_000)))).toMatchObject({ ok: false, code: "FLEET_ACTION_COGNITION_TIER", actionClass: "major_spend_request", minTier: "T3", tier: "T2" });

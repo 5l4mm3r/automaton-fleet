@@ -33,8 +33,13 @@ import { V22_SQL } from "./migrations-phase22.js";
 import { V23_SQL } from "./migrations-phase23.js";
 import { V24_SQL } from "./migrations-phase24.js";
 import { V25_SQL } from "./migrations-phase25.js";
+import { V26_SQL } from "./migrations-phase26.js";
+import { V27_SQL } from "./migrations-phase27.js";
+import { V28_SQL } from "./migrations-phase28.js";
+import { V29_SQL } from "./migrations-phase29.js";
+import { V30_SQL } from "./migrations-phase30.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 25;
+export const FLEET_PG_SCHEMA_VERSION = 30;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1154,6 +1159,11 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 23, name: "founder_runtime_upgrade_cache_policy", sql: V23_SQL },
   { version: 24, name: "opportunity_experiment_pipeline_inert", sql: V24_SQL },
   { version: 25, name: "owner_request_liveness", sql: V25_SQL },
+  { version: 26, name: "f2a_action_scoped_dependencies_survival_observation", sql: V26_SQL },
+  { version: 27, name: "f2a_own_capital_custody_circuit_breaker", sql: V27_SQL },
+  { version: 28, name: "f2_economy_opportunities_decisions_ventures_knowledge", sql: V28_SQL },
+  { version: 29, name: "f2_money_core_tax_rails_vendors_settlement_wallet", sql: V29_SQL },
+  { version: 30, name: "f2_capital_engine_sweeps_cognition_depth_hub", sql: V30_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1196,6 +1206,14 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_experiment_relevance_pending(integer)",
   "svc_experiment_relevance_record(uuid, uuid, text, text, text, jsonb, jsonb)",
   "svc_relevance_call_failed(uuid, uuid, jsonb)",
+  // v29 (F2): the rail adapter reports external transactions (settled idempotently into the attributed venture) and the
+  // credential broker audits every use of a credential reference (never the secret).
+  "svc_settlement_ingest(uuid, text, text, bigint, bigint, text, uuid, timestamp with time zone, text, text)",
+  "svc_credential_use(uuid, text, text, uuid, text, text)",
+  // v30 (F2): envelope expiry / stop-loss / milestones, and the Treasury sweep run (a no-op until an operator enables sweeps).
+  "svc_capital_reap(integer)",
+  "svc_sweep_run(text)",
+  "svc_tax_true_up(integer)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */
@@ -1240,10 +1258,13 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_experiment_start(text, text, uuid)",
   "api_experiment_record(text, text, uuid, text, text, bigint, text, numeric, uuid, text, jsonb)",
   "api_experiment_list(text, text, integer)",
-  // v25 (F1-LIVE-01): explicit owner requests — create, withdraw and list the founder's own (only the owner decides).
-  "api_owner_request_create(text, text, text, text, text, text, text, boolean)",
+  // v25/v26: action-scoped external dependencies — create, withdraw and list the founder's own (identity/legal exceptions only; nothing waits on them).
+  "api_owner_request_create(text, text, text, text, text, text, text, text)",
   "api_owner_request_withdraw(text, text, uuid)",
   "api_owner_request_list(text, text)",
+  // v28 (F2): the agent's own economic records — opportunities, decisions, ventures, knowledge, performance — through one
+  // authenticated, capability-checked dispatcher (internal fleet_econ_* functions are never granted).
+  "api_economy(text, text, text, jsonb)",
 ]);
 
 /**

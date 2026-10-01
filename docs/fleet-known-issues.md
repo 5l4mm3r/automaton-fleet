@@ -116,3 +116,45 @@ where it was first confirmed so it is not mistaken for a new regression.
     database-wide change (REVOKE on `lo_*`/advisory functions from PUBLIC,
     `REVOKE CONNECT ON DATABASE postgres`, `pg_hba` per-login rules) and needs
     its own gate.
+
+## FLEET-KI-6: sealed-evaluation driver logs are not in git (fresh clones fail the checksum tests)
+
+- **Status:** open, pre-existing (fails identically on `b840cfe`; found during F2-A, 2026-10-01).
+- **Tests:** `fleet-f1-fresh-eval-01.test.ts` and `fleet-f1-fresh-eval-02.test.ts` > "the pre-registration hash
+  recorded in the evaluation configs matches the code" (`ENOENT … real/driver.log`).
+- **Cause:** `.gitignore` has `*.log`, so `docs/evaluations/f1-fresh-eval-0{1,2}/real/driver.log` (and
+  `f1-eval-02/real/driver-{mandatory,optional}.log`) were never committed, although each sealed `SHA256SUMS` lists
+  them. The files exist only on the development VM that ran the evaluations.
+- **What still holds on a fresh clone:** both pre-registration hashes reproduce from the code
+  (`65b864c7…`, `90a76743…`), every committed sealed file matches its recorded checksum (34/35, 34/35 and 46/48),
+  and each `CLOSED` marker is present. Only the uncommitted logs are missing.
+- **Direction:** commit the logs with a `.gitignore` negation for `docs/evaluations/**/real/*.log`, from the VM that
+  holds the originals. Never regenerate them.
+
+## FLEET-KI-7: PostgreSQL-backed tests cannot run as root (cloud containers)
+
+- **Status:** environment-only; the F2 candidate's PostgreSQL suites were run on the development VM on 2026-10-01
+  (branch `f2/autonomous-economy`). That run found and fixed two candidate defects and a fixture defect (design doc
+  §25.0); cloud sessions still cannot run these suites as root.
+- **Symptom:** every suite that calls `startEphemeralPg` fails in `beforeAll` with
+  `Command failed: …/initdb …`. PostgreSQL refuses to initialise or run a cluster as root, and cloud sessions run
+  as root.
+- **Direction:** run the suites as an unprivileged user (the local VM's normal setup), or have the fixture start the
+  cluster under a dedicated unprivileged account. Changing users in the container needs operator approval.
+- **Unverified as a result (F2-A, schemas v26 + v27):** `fleet-f2a-pg`, `fleet-live-01-pg` and the v27 cases in
+  `fleet-ledger` cover:
+  - own capital above the retired £100/£50 lines, reserved on custody alone;
+  - custody refusal categories, including tax reserve;
+  - the infrastructure circuit breaker;
+  - the v25 → v27 retirement of a legacy `awaiting_owner` order.
+
+  These suites, and every pin-bumped PostgreSQL suite, must run on the VM before any merge. (Done for the F2 build:
+  see the build report; all of the above now pass on the VM.)
+
+## FLEET-KI-8: isolated-fetcher connect-timeout test depends on the network path
+
+- **Status:** open, pre-existing (fails identically on `b840cfe` in a proxied cloud container).
+- **Test:** `fleet-research.test.ts` > "time limits: a stalled response hits the total deadline; an unreachable
+  address hits the connect timeout". It returns `RESEARCH_TLS_FAILED` instead of a connect timeout when outbound
+  traffic goes through an intercepting proxy.
+- **Impact:** test-only. Expected to pass with a direct network path (the development VM); not verified from the cloud container.

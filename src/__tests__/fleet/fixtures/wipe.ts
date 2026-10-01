@@ -17,7 +17,9 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_capability_classes", "fleet_capability_manifests", "fleet_genesis_policy", "fleet_reproduction_policy",
     "fleet_operator_state", "fleet_operator_routes", "fleet_cognition_policy", "fleet_research_policy",
     "fleet_cognition_routing", "fleet_cognition_tiers", "fleet_action_min_tier",
-    "fleet_experiment_policy", "fleet_evidence_ladder",
+    "fleet_experiment_policy", "fleet_evidence_ladder", "fleet_spend_circuit_breaker",
+    "fleet_economy_policy", "fleet_venture_transition_rules", "fleet_tax_policy", "fleet_transfer_policy",
+    "fleet_capital_policy", "fleet_sweep_policy", "fleet_cognition_depth_policy",
   ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
@@ -81,6 +83,33 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   if (r.rows.some((x) => x.t === "fleet_research_policy")) {
     await c.query(`UPDATE "${schema}".fleet_research_policy SET research_enabled = false, founder_hourly = 60, founder_daily = 300,
       fleet_hourly = 120, fleet_daily = 600, updated_by = 'migration'`);
+  }
+  // v27: the spend circuit breaker is a singleton infrastructure row (a missing row fails closed): back to every signal unset.
+  if (r.rows.some((x) => x.t === "fleet_spend_circuit_breaker")) {
+    await c.query(`UPDATE "${schema}".fleet_spend_circuit_breaker SET tripped = false, trip_reason = NULL, order_wallet_bp = NULL,
+      velocity_window_s = NULL, velocity_wallet_bp = NULL, updated_by = 'migration'`);
+  }
+  // v28: the economy policy back to its migration defaults (the transition rules are grammar and are kept as is).
+  if (r.rows.some((x) => x.t === "fleet_economy_policy")) {
+    await c.query(`UPDATE "${schema}".fleet_economy_policy SET shortlist_max = 5, evidence_fresh_days = 30, knowledge_fresh_days = 180, forecast_tolerance_bp = 2500,
+      failsafe_open_opportunities = 60, failsafe_active_ventures = 25, failsafe_records_per_day = 400, failsafe_vendors_per_day = 20, research_loop_fetches = 40, research_loop_window_h = 24,
+      no_route_hours = 72, updated_by = 'migration'`);
+  }
+  // v29: tax fallback and safe-transfer policy back to their defaults; the circuit-breaker novelty signal unset.
+  if (r.rows.some((x) => x.t === "fleet_tax_policy")) {
+    await c.query(`UPDATE "${schema}".fleet_tax_policy SET unprofiled_reserve_bp = 2500, updated_by = 'migration'`);
+    await c.query(`UPDATE "${schema}".fleet_transfer_policy SET cushion_bp = 1000, horizon_days = 30, burn_window_days = 30, updated_by = 'migration'`);
+    await c.query(`UPDATE "${schema}".fleet_spend_circuit_breaker SET new_destination_age_s = NULL, new_destination_wallet_bp = NULL`);
+  }
+  // v30: capital, sweep and cognition-depth policy back to their migration defaults (sweeps disabled).
+  if (r.rows.some((x) => x.t === "fleet_capital_policy")) {
+    await c.query(`UPDATE "${schema}".fleet_capital_policy SET version = 1, enabled = true, treasury_reserve_bp = 5000, max_request_treasury_bp = 1000,
+      max_agent_exposure_bp = 2500, partial_tranche_bp = 5000, min_confidence_bp = 3000, min_evidence_items = 2, min_track_record = 3, limited_stop_loss_bp = 5000,
+      envelope_days = 30, limited_envelope_days = 14, high_roi_bp = 5000, reinvestment_reduction_bp = 2500, reapply_cooldown_s = 3600,
+      limited_max_single_bp = 5000, calibration_floor_bp = 2500, updated_by = 'migration'`);
+    await c.query(`UPDATE "${schema}".fleet_sweep_policy SET enabled = false, mature_fleet_bp = 4500, max_bp = 7000, maturity_days = 180, surplus_multiple = 4,
+      population_bands = '[{"maxAgents":10,"rateBp":1000},{"maxAgents":20,"rateBp":1250},{"maxAgents":30,"rateBp":1500},{"maxAgents":40,"rateBp":1750},{"maxAgents":49,"rateBp":2000}]', updated_by = 'migration'`);
+    await c.query(`UPDATE "${schema}".fleet_cognition_depth_policy SET major_exposure_bp = 2500, updated_by = 'migration'`);
   }
   for (const t of all) await c.query(`ALTER TABLE ${t} ENABLE TRIGGER USER`);
   // v21 fixtures: an identity USD→GBP rate (so historical accounting expectations keep their numbers) and generous

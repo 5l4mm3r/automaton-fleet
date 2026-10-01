@@ -60,8 +60,11 @@ export interface LedgerVerifyResult {
 export interface EconomicModel {
   ledgerAuthoritative: boolean;
   custodyExecutionEnabled: boolean;
-  ownerApprovalThresholdCents: number;
-  agentDailySpendCents: number;
+  /**
+   * Schema v27: the per-order owner threshold and the agent daily line are RETIRED — no spend decision reads them (own
+   * capital is the founder's to risk-manage; FleetController checks custody only). Shown for history, never as policy.
+   */
+  legacyRetired: { ownerApprovalThresholdCents: number; agentDailySpendCents: number };
   reservationTtlS: number;
   strongAuthThresholdCents: number;
   destinationCooldownS: number;
@@ -141,8 +144,7 @@ export class PgLedgerAdmin {
     return {
       ledgerAuthoritative: m.ledger_authoritative,
       custodyExecutionEnabled: m.custody_execution_enabled,
-      ownerApprovalThresholdCents: num(m.owner_approval_threshold_cents),
-      agentDailySpendCents: num(m.agent_daily_spend_cents),
+      legacyRetired: { ownerApprovalThresholdCents: num(m.owner_approval_threshold_cents), agentDailySpendCents: num(m.agent_daily_spend_cents) },
       reservationTtlS: m.reservation_ttl_s,
       strongAuthThresholdCents: num(m.strong_auth_threshold_cents),
       destinationCooldownS: m.destination_cooldown_s,
@@ -319,12 +321,6 @@ export class PgLedgerAdmin {
     return this.one(`SELECT fleet_admin_agent_capital($1, $2, $3, $4, $5, $6, $7) AS r`, [
       p.agentId, cents(p.amountCents, "amount"), p.mode, p.actor, p.reason ?? null, p.acknowledgeWarnings === true,
       idem(p.key ?? idempotencyKey(p.mode)),
-    ]);
-  }
-
-  async spendDecision(orderId: string, decision: "approve" | "reject", actor: string, opts: { note?: string; acknowledgeWarnings?: boolean } = {}) {
-    return this.one<Record<string, unknown>>(`SELECT fleet_admin_spend_decision($1, $2, $3, $4, $5) AS r`, [
-      orderId, decision, actor, opts.note ?? null, opts.acknowledgeWarnings === true,
     ]);
   }
 

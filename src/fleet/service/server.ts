@@ -138,10 +138,12 @@ export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Obj
   "POST /v1/experiments/start": { auth: "session", witness: false },
   "POST /v1/experiments/record": { auth: "session", witness: false },
   "POST /v1/experiments/list": { auth: "session", witness: false },
-  // Schema v25 (F1-LIVE-01): explicit owner requests (a request records a need; only the owner decides; nothing is granted).
+  // Schema v25/v26: action-scoped external dependencies (F2-A: one unavailable action; never blocks the founder; grants nothing).
   "POST /v1/owner-requests/create": { auth: "session", witness: false },
   "POST /v1/owner-requests/withdraw": { auth: "session", witness: false },
   "POST /v1/owner-requests/list": { auth: "session", witness: false },
+  // v28+ (F2): the agent's own economic operations through one dispatcher (the database authorizes each op).
+  "POST /v1/economy": { auth: "session", witness: false },
 });
 
 /**
@@ -397,6 +399,10 @@ export class FleetService {
         if (estates) this.audit("estates_settled", null, { count: estates });
         const experiments = await this.opts.admin.reapExperiments(50);
         if (experiments) this.audit("experiments_reaped", null, { count: experiments });
+        // F2 (v30): execution envelopes — expiry returns unspent Fleet capital, stop-loss freezes only that envelope,
+        // ledger-verified milestones release the next tranche. (Sweeps run only when an operator enables them.)
+        const capital = await this.opts.admin.reapCapital(100);
+        if (capital.changed) this.audit("envelopes_reaped", null, { evaluated: capital.evaluated, changed: capital.changed });
         this.assessRelevance();
         await this.processTerminations();
         this.lastReapOkAt = Date.now();
@@ -1050,9 +1056,9 @@ export class FleetService {
       }
 
       case "/v1/spend/request": {
-        // Schema v10: a structured spend order against the agent's own ledger allocation. The
-        // database decides (reserved / awaiting_owner / rejected); nothing is executed here: the
-        // agent never names an address, only an owner-enrolled destination id.
+        // Schema v10/v27: a structured order committing the agent's OWN capital. The database checks custody only
+        // (reserved, or rejected with a precise custody category; never an owner route); nothing is executed here:
+        // the agent never names an address, only a registered destination id (owner-enrolled payee or controller-verified vendor, v29).
         const { agentId, token } = await this.credentials(req, path, ctx);
         const amount = Number(body.amountCents);
         const recoverable = body.recoverableCents === undefined ? 0 : Number(body.recoverableCents);
@@ -1083,7 +1089,7 @@ export class FleetService {
           recoverableCents: recoverable,
         });
         if (!r.ok && !r.order) throw FleetService.refusal(r, "spend refused");
-        return { ok: r.ok, code: r.code ?? null, order: r.order ?? null, replay: r.replay === true, executed: false };
+        return { ok: r.ok, code: r.code ?? null, custody: r.custody ?? null, order: r.order ?? null, replay: r.replay === true, executed: false };
       }
 
       // ─── Schema v24: the founder's side of the experiment pipeline. Every decision is the registry's; the answer —
@@ -1130,9 +1136,13 @@ export class FleetService {
 
       case "/v1/owner-requests/create": {
         const { agentId, token } = await this.credentials(req, path, ctx);
+        // A runtime older than F2-A sends a category: the identity/legal ones map to a kind; anything ordinary is refused
+        // by the registry (FLEET_NOT_AN_EXCEPTION) — it was never the owner's to decide.
+        const legacyKind: Record<string, string> = { account_or_identity: "kyc", policy_exception: "constitutional_change" };
+        const kind = typeof body.kind === "string" ? body.kind.slice(0, 40) : (legacyKind[str(body, "category", 40)] ?? str(body, "category", 40));
         const r = await agent.ownerRequestCreate(agentId, token, {
-          idempotencyKey: str(body, "idempotencyKey", 128), category: str(body, "category", 40), goalRef: typeof body.goalRef === "string" ? body.goalRef.slice(0, 16) : null,
-          title: str(body, "title", 200), detail: str(body, "detail", 2000), blocking: body.blocking === true,
+          idempotencyKey: str(body, "idempotencyKey", 128), kind, action: typeof body.action === "string" ? body.action.slice(0, 200) : str(body, "title", 200),
+          goalRef: typeof body.goalRef === "string" ? body.goalRef.slice(0, 16) : null, title: str(body, "title", 200), detail: str(body, "detail", 2000),
         });
         if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "owner request refused");
         this.audit("owner_request_create", agentId, { ok: r.ok, code: r.code ?? null });
@@ -1150,6 +1160,21 @@ export class FleetService {
         const { agentId, token } = await this.credentials(req, path, ctx);
         const r = await agent.ownerRequestList(agentId, token);
         if (!r.ok) throw FleetService.refusal(r, "owner requests refused");
+        return r;
+      }
+
+      case "/v1/economy": {
+        // F2 (schema v28+): opportunities, decisions, ventures, knowledge, wallet, rails, vendors, Fleet capital and
+        // envelopes. The op is checked against the database's own closed set (FLEET_UNKNOWN_OPERATION otherwise) and every
+        // op is authenticated and capability-checked there; arguments are a bounded JSON object validated by the database.
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const op = str(body, "op", 40);
+        if (!/^[a-z]+(\.[a-z_]+)?$/.test(op)) return { ok: false, code: "FLEET_BAD_REQUEST" };
+        const args = body.args && typeof body.args === "object" && !Array.isArray(body.args) ? (body.args as Record<string, unknown>) : {};
+        const r = await agent.economy(agentId, token, op, args);
+        if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "economy refused");
+        // Metadata telemetry only (op, outcome code): never arguments, amounts or text.
+        if (/^(capital|envelope|vendor|rail|venture|decision)\./.test(op)) this.audit("economy_op", agentId, { op, ok: r.ok, code: r.code ?? null });
         return r;
       }
 

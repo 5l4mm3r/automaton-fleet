@@ -14,7 +14,8 @@
  *   ledger-record-revenue <agentId> <cents> <externalRef> [refund|gain|loss]   counterparty reference on stdin (hashed)
  *   ledger-reverse <journalId> <reason…>
  *   ledger-capital <agentId> <cents> grant|principal [--ack] [reason…]
- *   ledger-spend-decision <orderId> approve|reject [--ack] [note…]
+ *   ledger-spend-decision                          RETIRED (schema v27): own-capital spend is the founder's, custody-checked
+ *                                                  by FleetController; there is no owner spend approval
  *   ledger-withdraw <cents> <destinationId> [--ack] [reason…]   (above the strong threshold: prints a one-time code)
  *   ledger-confirm <instructionId>                 reads the one-time code from stdin
  *   ledger-contribute <agentId> <cents>            realized, uncontributed net profit -> LFC
@@ -143,11 +144,10 @@ export async function runLedgerCommand(
       if (mode !== "grant" && mode !== "principal") throw new Error("usage: ledger-capital <agentId> <cents> grant|principal [--ack] [reason…]");
       return l.agentCapital({ agentId: args[0], amountCents: cents(args[1]), mode, actor, reason: args.slice(3).join(" ") || undefined, acknowledgeWarnings: ack });
     }
-    case "ledger-spend-decision": {
-      const d = args[1];
-      if (d !== "approve" && d !== "reject") throw new Error("usage: ledger-spend-decision <orderId> approve|reject [--ack] [note…]");
-      return l.spendDecision(args[0], d, actor, { note: args.slice(2).join(" ") || undefined, acknowledgeWarnings: ack });
-    }
+    case "ledger-spend-decision":
+      throw new Error("FLEET_OWNER_ROUTE_RETIRED: ledger-spend-decision is retired (schema v27). Own-capital spend is decided by the founder and "
+        + "validated by FleetController's custody rules; there is no owner spend approval. Incident controls: spending-freeze, the agent hold, "
+        + "and the infrastructure circuit breaker (owner SQL: fleet_admin_spend_circuit_breaker).");
     case "ledger-withdraw": {
       const r = await l.ownerWithdrawal({
         amountCents: cents(args[0]),

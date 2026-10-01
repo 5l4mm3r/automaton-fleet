@@ -286,6 +286,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   if (owner) problems.push(...(await ledgerSurfaceProblems(db, schema)));
   if (owner) problems.push(...(await genesisSurfaceProblems(db, schema)));
   if (owner) problems.push(...(await cognitionSurfaceProblems(db, schema)));
+  if (owner) problems.push(...(await economySurfaceProblems(db, schema)));
 
   return { ok: problems.length === 0, schema, owner, database, problems, roles, operatorRoles: operatorState, custodyRoles: custodyState };
 }
@@ -717,6 +718,34 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
       `SELECT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 AND p.prosrc ~* 'simulated_roi'`, [schema]);
     for (const r of roi.rows) if (!roiReaders.has(r.name)) problems.push(`experiment pipeline: ${r.name} reads simulated (non-authoritative) ROI`);
   }
+  // v26 (F2-A): dependency records are guarded and never deleted; an OPEN record is always an action-scoped exception
+  // (never an ordinary business decision waiting on the owner).
+  const v26 = (await db.query(`SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_owner_requests' AND column_name = 'blocks_action'`, [schema])).rows.length > 0;
+  for (const need of v26 ? ["fleet_owner_requests:fleet_owner_requests_guard", "fleet_owner_requests:fleet_owner_requests_no_truncate"] : []) {
+    if (!have.has(need)) problems.push(`autonomy: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  if (v26) {
+    const ck = await db.query<{ t: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = 'fleet_owner_requests' AND k.conname = 'fleet_owner_requests_open_is_exception'`, [schema]);
+    if (!ck.rows.length) problems.push("autonomy: an open dependency could be an ordinary owner decision (CHECK missing)");
+  }
+  // v27 (F2-A): own-capital spend never waits on the owner; the circuit breaker is infrastructure with relative signals only.
+  const v27 = (await db.query(`SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'fleet_spend_circuit_breaker'`, [schema])).rows.length > 0;
+  for (const need of v27 ? ["fleet_spend_circuit_breaker:fleet_spend_circuit_breaker_no_delete", "fleet_spend_circuit_breaker:fleet_spend_circuit_breaker_no_truncate"] : []) {
+    if (!have.has(need)) problems.push(`own capital: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  if (v27) {
+    const ck = await db.query<{ t: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = 'fleet_payment_orders' AND k.conname = 'fleet_payment_orders_no_owner_route'`, [schema]);
+    if (!ck.rows.length) problems.push("own capital: a spend order could wait on the owner (CHECK fleet_payment_orders_no_owner_route missing)");
+    const cols = await db.query<{ c: string }>(
+      `SELECT column_name AS c FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_spend_circuit_breaker'`, [schema]);
+    for (const r of cols.rows) {
+      if (/cents|minor|amount|gbp|usd/i.test(r.c)) problems.push(`own capital: circuit breaker column ${r.c} looks like a nominal amount (relative signals only)`);
+    }
+  }
   if (v23) {
     const ck = await db.query<{ t: string }>(
       `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -768,6 +797,12 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     // v21: rates only through the validated insert; provider credit only through the owner recorder and inference recording.
     fleet_fx_rates: new Set(["fleet_fx_insert"]),
     fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile"]),
+    // v25/v26: dependency records only through the founder API and the owner's resolve/import.
+    fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import",
+      // v29: PAYMENT_RAIL_REQUIRED records ONE action-scoped kyc dependency (and answers it when a rail is connected).
+      "fleet_rail_resolve"]),
+    // v27: the spend circuit breaker only through the owner's infrastructure control.
+    fleet_spend_circuit_breaker: new Set(["fleet_admin_spend_circuit_breaker", "fleet_admin_spend_circuit_breaker_novelty"]),
   };
   for (const f of fns.rows) {
     for (const t of writeTargets(f.src)) {
@@ -789,4 +824,89 @@ function schemaIdent(schema: string): string {
 /** Problems that concern only the given roles (plus PUBLIC); used by the service's startup self-check. */
 export function problemsFor(result: PrivilegeAuditResult, roles: string[]): string[] {
   return result.problems.filter((p) => p.startsWith("PUBLIC") || roles.some((r) => p.startsWith(`${r} `) || p.startsWith(`role ${r} `)) || p.includes(" is not SECURITY DEFINER") || p.includes(" does not pin search_path"));
+}
+
+/**
+ * Schema v28–v30 (F2) economy invariants (only once the economy tables exist):
+ *  - the guard / append-only / no-delete triggers of the economic records, money tables and policies are present and
+ *    enabled;
+ *  - real money is constitutionally off here: no payment rail can be live (CHECK), and every capital decision is the
+ *    controller's (CHECK), never the owner's or the agent's;
+ *  - each money / record / policy table is written only by its named functions (no other function can attribute money,
+ *    settle a transaction, move an envelope, change a rail or a credential, or move a venture's state);
+ *  - the state-machine and vendor-registry bypass settings are referenced only by their single owner functions;
+ *  - no economy function uses dynamic SQL near those tables.
+ */
+export async function economySurfaceProblems(db: Queryable, schema: string): Promise<string[]> {
+  const problems: string[] = [];
+  const has = async (t: string) => (await db.query(`SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`, [schema, t])).rows.length > 0;
+  if (!(await has("fleet_ventures"))) return problems;
+  const v29 = await has("fleet_payment_rails");
+  const v30 = await has("fleet_envelopes");
+  const trig = await db.query<{ t: string }>(
+    `SELECT c.relname || ':' || tg.tgname AS t FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1 AND NOT tg.tgisinternal AND tg.tgenabled <> 'D'`, [schema]);
+  const have = new Set(trig.rows.map((r) => r.t));
+  const need = [
+    "fleet_ventures:fleet_ventures_guard", "fleet_ventures:fleet_ventures_no_delete", "fleet_venture_transitions:fleet_venture_transitions_no_change",
+    "fleet_venture_transition_rules:fleet_venture_transition_rules_no_change", "fleet_venture_journals:fleet_venture_journals_guard",
+    "fleet_venture_journals:fleet_venture_journals_no_change", "fleet_decision_records:fleet_decision_records_guard", "fleet_opportunities:fleet_opportunities_guard",
+    "fleet_economic_knowledge:fleet_economic_knowledge_guard", "fleet_economy_policy:fleet_economy_policy_no_delete",
+    ...(v29 ? ["fleet_payment_rails:fleet_payment_rails_guard", "fleet_payment_rails:fleet_payment_rails_no_delete", "fleet_external_transactions:fleet_external_transactions_guard",
+      "fleet_external_transactions:fleet_external_transactions_no_delete", "fleet_credential_refs:fleet_credential_refs_guard", "fleet_credential_use_log:fleet_credential_use_log_no_change",
+      "fleet_tax_profiles:fleet_tax_profiles_no_change", "fleet_legal_entities:fleet_legal_entities_guard", "fleet_vendor_destinations:fleet_vendor_destinations_no_delete",
+      "fleet_rail_assignments:fleet_rail_assignments_no_delete", "fleet_tax_policy:fleet_tax_policy_no_delete", "fleet_transfer_policy:fleet_transfer_policy_no_delete"] : []),
+    ...(v30 ? ["fleet_envelopes:fleet_envelopes_guard", "fleet_envelopes:fleet_envelopes_no_delete", "fleet_capital_decisions:fleet_capital_decisions_no_change",
+      "fleet_capital_requests:fleet_capital_requests_no_change", "fleet_payment_orders:fleet_orders_funding_guard", "fleet_capital_policy:fleet_capital_policy_no_delete",
+      "fleet_sweep_policy:fleet_sweep_policy_no_delete", "fleet_cognition_depth_policy:fleet_cognition_depth_policy_no_delete"] : []),
+  ];
+  for (const t of need) if (!have.has(t)) problems.push(`economy surface: trigger ${t.replace(":", ".")} is missing or disabled`);
+  const checks = await db.query<{ n: string; d: string }>(
+    `SELECT k.conname AS n, pg_get_constraintdef(k.oid) AS d FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+      WHERE s.nspname = $1 AND k.contype = 'c' AND c.relname IN ('fleet_payment_rails','fleet_capital_decisions')`, [schema]);
+  if (v29 && !checks.rows.some((r) => r.n === "fleet_payment_rails_not_live" && /mode <> 'live'/.test(r.d))) {
+    problems.push("economy surface: a payment rail could be live (the not-live CHECK is missing) — real payments are constitutionally off");
+  }
+  if (v30 && !checks.rows.some((r) => /decided_by = 'controller'/.test(r.d))) problems.push("economy surface: a capital decision could be made by someone other than the controller (CHECK missing)");
+  const writers: Record<string, Set<string>> = {
+    fleet_ventures: new Set(["fleet_econ_venture_create", "fleet_econ_venture_transition", "fleet_venture_move"]),
+    fleet_venture_transitions: new Set(["fleet_econ_venture_create", "fleet_venture_move"]),
+    fleet_venture_journals: new Set(["fleet_admin_venture_attribute", "fleet_settlement_post"]),
+    fleet_decision_records: new Set(["fleet_econ_decision_record", "fleet_econ_decision_outcome", "fleet_econ_decision_correct"]),
+    fleet_opportunities: new Set(["fleet_econ_opportunity_record", "fleet_econ_opportunity_shortlist", "fleet_econ_opportunity_status", "fleet_opportunity_expire", "fleet_econ_venture_create"]),
+    fleet_economic_knowledge: new Set(["fleet_econ_knowledge_record", "fleet_econ_decision_outcome"]),
+    fleet_economy_policy: new Set(["fleet_admin_economy_policy_set"]),
+    fleet_payment_rails: new Set(["fleet_admin_rail_add", "fleet_admin_rail_set_status", "fleet_admin_credential_set_status", "fleet_settlement_post"]),
+    fleet_rail_assignments: new Set(["fleet_rail_resolve", "fleet_admin_rail_set_status"]),
+    fleet_rail_requirements: new Set(["fleet_rail_resolve", "fleet_econ_rail_require"]),
+    fleet_external_transactions: new Set(["svc_settlement_ingest", "fleet_settlement_post"]),
+    fleet_credential_refs: new Set(["fleet_admin_credential_register", "fleet_admin_credential_set_status", "svc_credential_use"]),
+    fleet_credential_use_log: new Set(["svc_credential_use"]),
+    fleet_legal_entities: new Set(["fleet_admin_legal_entity_add"]),
+    fleet_tax_profiles: new Set(["fleet_admin_tax_profile_set"]),
+    fleet_tax_policy: new Set(["fleet_admin_tax_policy_set"]),
+    fleet_transfer_policy: new Set(["fleet_admin_transfer_policy_set"]),
+    fleet_vendor_destinations: new Set(["fleet_econ_vendor_register"]),
+    fleet_destination_references: new Set(["fleet_econ_vendor_register"]),
+    fleet_agent_wallet_plans: new Set(["fleet_econ_wallet_plan"]),
+    fleet_capital_requests: new Set(["fleet_econ_capital_request"]),
+    fleet_capital_decisions: new Set(["fleet_econ_capital_request"]),
+    fleet_envelopes: new Set(["fleet_econ_capital_request", "fleet_envelope_allocate", "fleet_envelope_return", "fleet_envelope_evaluate"]),
+    fleet_capital_policy: new Set(["fleet_admin_capital_policy_set"]),
+    fleet_sweep_policy: new Set(["fleet_admin_sweep_policy_set"]),
+    fleet_cognition_depth_policy: new Set(["fleet_admin_cognition_depth_set"]),
+  };
+  const fns = await db.query<{ name: string; src: string }>(
+    `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);
+  for (const f of fns.rows) {
+    for (const t of writeTargets(f.src)) {
+      if (writers[t] && !writers[t].has(f.name)) problems.push(`economy surface: ${f.name} writes ${t}`);
+    }
+    if (/fleet\.venture_move/.test(f.src) && !["fleet_venture_move", "fleet_ventures_guard"].includes(f.name)) problems.push(`economy surface: ${f.name} references the venture state-machine guard`);
+    if (/fleet\.vendor_register/.test(f.src) && !["fleet_econ_vendor_register", "fleet_destinations_guard"].includes(f.name)) problems.push(`economy surface: ${f.name} references the vendor-registry guard`);
+    if (/\bEXECUTE\b/i.test(codeOf(f.src)) && /fleet_(ventures|venture_journals|external_transactions|envelopes|capital_decisions|payment_rails|credential_refs|tax_profiles)\b/.test(f.src)) {
+      problems.push(`economy surface: ${f.name} uses dynamic SQL near an economy table`);
+    }
+  }
+  return [...new Set(problems)];
 }

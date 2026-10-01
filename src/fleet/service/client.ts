@@ -305,12 +305,13 @@ export class FleetApiClient implements FleetBackend {
   }
 
   /**
-   * Schema v10: submit a structured spend order against this agent's own ledger
-   * allocation, to an owner-enrolled destination id. The controller decides
-   * (reserved / awaiting_owner / rejected); nothing is executed by this call.
+   * Schema v10/v27: commit this agent's OWN capital through a structured order, to a registered destination id (a payee, or since
+   * v29 a vendor the founder registered itself and FleetController verified).
+   * The controller checks custody only (reserved, or rejected with a precise custody category; never an owner
+   * route); nothing is executed by this call.
    */
   async spendOrder(r: { idempotencyKey: string; amountCents: number; category: "expense" | "fee" | "asset_acquisition" | "conway_credits"; destinationId: string; purpose: string; recoverableCents?: number }) {
-    return this.call<{ ok: boolean; code: string | null; order: Record<string, unknown> | null; replay: boolean; executed: false }>("POST", "/v1/spend/request", r);
+    return this.call<{ ok: boolean; code: string | null; custody?: string | null; order: Record<string, unknown> | null; replay: boolean; executed: false }>("POST", "/v1/spend/request", r);
   }
 
   async cancelSpendOrder(orderId: string) {
@@ -355,8 +356,8 @@ export class FleetApiClient implements FleetBackend {
     return this.call<Record<string, unknown>>("POST", "/v1/experiments/list", { limit });
   }
 
-  /** Schema v25 (F1-LIVE-01): ask the owner for a decision or action only the owner can take (a request; grants nothing). */
-  async ownerRequestCreate(r: { idempotencyKey: string; category: string; goalRef: string | null; title: string; detail: string; blocking: boolean }) {
+  /** Schema v26 (F2-A): record ONE action that needs a human/legal identity or a constitutional change (blocks only that action). */
+  async ownerRequestCreate(r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string }) {
     return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/create", r);
   }
 
@@ -364,9 +365,29 @@ export class FleetApiClient implements FleetBackend {
     return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/withdraw", { requestId });
   }
 
-  /** This founder's own owner requests: status, age, staleness and the owner's answer. */
+  /** This founder's own external dependencies: kind, the unavailable action, status and any recorded answer. */
   async ownerRequests() {
     return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/list", {});
+  }
+
+  /**
+   * Schema v28+ (F2): one of this founder's own economic operations (opportunity.*, venture.*, decision.*, knowledge.*,
+   * wallet, performance, brief, rail.require, vendor.*, capital.*, envelope.*). The database authorizes and validates.
+   */
+  async economy(op: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    try {
+      return await this.call<Record<string, unknown>>("POST", "/v1/economy", { op, args });
+    } catch (err) {
+      // A business refusal (HTTP 200, ok:false) is DATA the founder acts on — keep its code and reason. Authentication,
+      // transport and availability failures still raise.
+      if (err instanceof ApiError && err.status === 200) return { ok: false, code: err.code, reason: err.message === err.code ? undefined : err.message };
+      throw err;
+    }
+  }
+
+  /** F2: the compact economic brief for a full task packet (figures only). */
+  async economyBrief() {
+    return (await this.economy("brief", {})).brief;
   }
 
   /** Schema v18: research the public web through FleetController's isolated fetcher (the result is UNTRUSTED data). */
@@ -383,7 +404,7 @@ export class FleetApiClient implements FleetBackend {
     return (await this.call<{ capabilities: Record<string, unknown> }>("GET", "/v1/capabilities")).capabilities;
   }
 
-  /** Propose institutional knowledge (the owner decides whether it is promoted). */
+  /** Propose institutional knowledge (curated promotion; it never blocks the founder — F2 economic knowledge is shared automatically when ledger-backed). */
   async proposeKnowledge(p: { category: string; title: string; content: string }) {
     return this.call<{ proposalId: string; status: string }>("POST", "/v1/knowledge/propose", p);
   }

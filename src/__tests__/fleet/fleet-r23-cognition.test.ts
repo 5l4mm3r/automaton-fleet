@@ -442,7 +442,7 @@ describe("R23 founder mind: routed mode", () => {
     const spend = { amountCents: 5_000, category: "expense", destinationId: "dst_01ZZZZZZZZZZZZZZZZZZZZZZZZ", purpose: "stock" };
     let attempt = 0;
     const rig = mindRig({
-      spend: () => (++attempt === 1 ? Object.assign(new Error("tier"), { code: "FLEET_ACTION_COGNITION_TIER" }) : { ok: true, order: { status: "awaiting_owner" } }),
+      spend: () => (++attempt === 1 ? Object.assign(new Error("tier"), { code: "FLEET_ACTION_COGNITION_TIER" }) : { ok: true, order: { status: "reserved" } }),
       replies: [
         { content: "Buy stock.", thinking: true, toolCalls: [call("toolu_s1", "request_spend", spend)] },
         { content: "Still justified at the critical tier.", thinking: true, toolCalls: [call("toolu_s2", "request_spend", spend)] },

@@ -36,6 +36,7 @@ import { CHATGPT_TOOL_NAMES, TOOLS } from "../../fleet/bridge/mcp-core.js";
 import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { wipeRegistry } from "./fixtures/wipe.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const PIN = { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40) };
@@ -177,7 +178,7 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
   });
 
   it("migrates to v11 with a clean privilege audit and the constitutional pins in place", async () => {
-    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(25);
+    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(FLEET_PG_SCHEMA_VERSION);
     const a = await auditPrivileges(owner);
     expect(a.problems).toEqual([]);
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_reproduction_policy SET execution_enabled = true`))).toMatch(/ERR:.*check constraint/);
@@ -463,9 +464,9 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
     await genesis.approve(g.genesisId, g.authSha256, OWNER);
     const p = await genesis.provision(g.genesisId, OWNER);
     for (const id of p.founderIds!) await genesis.attest(g.genesisId, id, (await simulateRuntimeAttestation(genesis, genesis, g.genesisId, id, OWNER)).host, OWNER);
-    await owner.query(`UPDATE fleet.fleet_economic_model SET agent_daily_spend_cents = agent_daily_spend_cents + 1`);
+    await owner.query(`UPDATE fleet.fleet_economic_model SET reservation_ttl_s = reservation_ttl_s + 1`); // a live economic setting (v27: the spend thresholds are retired)
     expect(await pgCode(genesis.fund(g.genesisId, OWNER))).toBe("FLEET_POLICY_CHANGED");
-    await owner.query(`UPDATE fleet.fleet_economic_model SET agent_daily_spend_cents = agent_daily_spend_cents - 1`);
+    await owner.query(`UPDATE fleet.fleet_economic_model SET reservation_ttl_s = reservation_ttl_s - 1`);
     await genesis.fund(g.genesisId, OWNER);
     await store.setApprovedRuntime({ repo: PIN.repo, commit: "a".repeat(40) }, "test", BUILD);
     const hashes = p.founderIds!.map((id) => hashAgentToken(mintAgentToken(id)));

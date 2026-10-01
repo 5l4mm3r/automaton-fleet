@@ -1,19 +1,19 @@
 /**
  * F1-LIVE-01 — autonomous-loop liveness (founder side; no database, no model).
  *
- * Founder 1 slept for days: (1) its "has anything changed?" wake digest ignored capability, so the experiment pipeline
- * appeared behind repeated "nothing has changed" packets; (2) its owner request sat in the knowledge queue with no answer
- * path. These tests drive the production FounderMind and FounderToolbox with scripted cognition.
+ * Founder 1 slept for days partly because its "has anything changed?" wake digest ignored capability, so the experiment
+ * pipeline appeared behind repeated "nothing has changed" packets. These tests drive the production FounderMind with
+ * scripted cognition. (Owner requests became action-scoped dependencies in F2-A: see fleet-f2a-autonomy.test.ts.)
  */
 import { describe, it, expect } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { FounderMind, MAX_IDLE_SKIP, ownerRequestLines, parseOwnerRequests, staleBucket, wakeDigest, type MindPorts, type OwnerRequestView } from "../../fleet/founder/mind.js";
+import { FounderMind, MAX_IDLE_SKIP, wakeDigest, type MindPorts } from "../../fleet/founder/mind.js";
 import { FounderToolbox } from "../../fleet/founder/toolbox.js";
 import { LoopGuard } from "../../fleet/founder/loop-guard.js";
-import { FOUNDER_MANIFEST_V2, decideTool, manifestSha256 } from "../../fleet/capabilities.js";
-import { FOUNDER_TOOLS, type ToolCall } from "../../fleet/cognition/types.js";
+import { FOUNDER_MANIFEST_V2, manifestSha256 } from "../../fleet/capabilities.js";
+import { type ToolCall } from "../../fleet/cognition/types.js";
 import { capabilityView, founderStepTools } from "../../fleet/cognition/capability-signature.js";
 import { taskPacketProblems } from "../../fleet/cognition/task-packet.js";
 
@@ -43,7 +43,7 @@ describe("F1-LIVE-01 semantic capability signature (controller side)", () => {
   it("the routed gateway and the signature use one tool list (no drift)", () => {
     const tools = founderStepTools(CAPS({ experimentsEnabled: true }), true).map((t) => t.name);
     expect(capabilityView(CAPS({ experimentsEnabled: true }), true).tools).toEqual([...new Set(tools)].sort());
-    expect(tools).toEqual(expect.arrayContaining(["request_owner_decision", "withdraw_owner_request", "routine_task", "escalate_question", "propose_experiment"]));
+    expect(tools).toEqual(expect.arrayContaining(["record_external_dependency", "withdraw_external_dependency", "routine_task", "escalate_question", "propose_experiment"]));
   });
 });
 
@@ -96,13 +96,13 @@ describe("F1-LIVE-01 capability change detection (founder runtime)", () => {
     const r = rig({ caps: () => caps });
     const [first, second, third] = await seq(r, 3);
     expect(first.slim).toBe(false);
-    expect(first.body.task).toMatch(/Your available tools \(first capability record of this runtime\): .*request_owner_decision/);
+    expect(first.body.task).toMatch(/Your available tools \(first capability record of this runtime\): .*record_external_dependency/);
     expect([second.slim, third.slim]).toEqual([true, true]);
     expect(second.body.task).not.toMatch(/capabilit/i);
     caps = CAPS({ experimentsEnabled: true }); // the owner switches the pipeline on
     const [changed, after1, after2] = await seq(r, 3);
     expect(changed.slim).toBe(false);
-    expect(changed.body.task).toMatch(/Your capabilities changed since your last turn\. Newly available: add_experiment_evidence, list_experiments, propose_experiment, record_experiment, start_experiment\. Experiment pipeline: ON \(simulated; hard cap 5000 minor units; up to 3 active\)/);
+    expect(changed.body.task).toMatch(/Your capabilities changed since your last turn\. Newly available: add_experiment_evidence, list_experiments, propose_experiment, record_experiment, start_experiment\. Experiment pipeline: ON \(simulated; sized within your own survival headroom; up to 3 active\)/);
     expect([after1.slim, after2.slim]).toEqual([true, true]); // acknowledged once; no repeated full packets
     caps = CAPS(); // switched off again: one more full packet, naming what went away
     const [off, offAfter] = await seq(r, 2);
@@ -145,102 +145,5 @@ describe("F1-LIVE-01 capability change detection (founder runtime)", () => {
     expect(first.slim).toBe(false);
     expect(first.body.task).toMatch(/first capability record.*propose_experiment.*Experiment pipeline: ON/s);
     expect(second.slim).toBe(true);
-  });
-});
-
-describe("F1-LIVE-01 owner-request liveness in the task packet", () => {
-  const req = (o: Partial<OwnerRequestView> & { ageS: number }) => ({ requestId: "62cbe1b7-0000-4000-8000-000000000001", category: "sales_channel", goalRef: "g1",
-    title: "Enable a Gumroad channel", blocking: true, status: "pending", stale: o.ageS >= 86_400, staleAfterS: 86_400, response: null, ...o });
-
-  it("stale buckets: fresh −1; then 0, 1, 2 … at 1×, 2×, 4× the threshold, capped; decided requests have none", () => {
-    const b = (ageS: number, o: Partial<OwnerRequestView> = {}) => staleBucket(parseOwnerRequests({ requests: [req({ ageS, ...o })] })![0]);
-    expect([b(3_600), b(86_400), b(1.9 * 86_400), b(2 * 86_400), b(5 * 86_400), b(8 * 86_400), b(400 * 86_400)]).toEqual([-1, 0, 0, 1, 2, 3, 6]);
-    expect(b(9 * 86_400, { status: "declined" })).toBe(-1);
-    expect(parseOwnerRequests({ nope: 1 })).toBeNull();
-  });
-
-  it("lines: pending shows age; STALE blocking lists the founder's own options; decided shows the owner's answer", () => {
-    const [fresh, stale, answered] = ownerRequestLines(parseOwnerRequests({ requests: [req({ ageS: 7_200 }), req({ ageS: 5 * 86_400 }),
-      req({ ageS: 3_600, status: "declined", response: "No Gumroad. Use a free route or pivot." })] })!);
-    expect(fresh).toMatch(/^Owner request 62cbe1b7 \(sales_channel, blocks goal g1\) "Enable a Gumroad channel": pending for 2 h\.$/);
-    expect(stale).toMatch(/pending for 5 d — STALE \(no owner answer after 24 h\)\. Waiting is one option, not the only one: you may pursue an alternative route, propose a safe experiment, gather more evidence, pivot, abandon the blocked path, or keep waiting/);
-    expect(answered).toMatch(/: DECLINED by the owner, who wrote: "No Gumroad\. Use a free route or pivot\."\. This records the owner's answer only; it grants no capability, account, money or permission by itself\.$/);
-    // Approved / answered are distinct words; none implies authority; a withdrawal is the founder's own act.
-    const [approved, answer, withdrawn] = ownerRequestLines(parseOwnerRequests({ requests: [req({ ageS: 60, status: "approved" }), req({ ageS: 60, status: "answered", response: "Yes." }), req({ ageS: 60, status: "withdrawn" })] })!);
-    expect(approved).toMatch(/: APPROVED by the owner \(no comment\)\. This records the owner's answer only; it grants no capability/);
-    expect(answer).toMatch(/: ANSWERED by the owner, who wrote: "Yes\."\. This records the owner's answer only/);
-    expect(withdrawn).toMatch(/: withdrawn by you\.$/);
-  });
-
-  it("a request turning stale yields one full packet, re-surfaces only at sparse milestones, and an owner answer yields one more", async () => {
-    let ageS = 3_600;
-    let status = "pending";
-    let response: string | null = null;
-    const r = rig({ caps: () => CAPS(), owner: () => ({ ok: true, staleAfterS: 86_400, requests: [req({ ageS, status, response })] }) });
-    const [a, b] = await seq(r, 2);
-    expect(a.slim).toBe(false);
-    expect(b.slim).toBe(true);
-    expect(b.body.task).toMatch(/pending for 60 min/); // visible on every wake, slim or not
-    ageS = 7_200; // time alone, same bucket: still slim
-    expect((await r.next()).slim).toBe(true);
-    ageS = 86_400 + 60; // crosses the threshold
-    const stale = await r.next();
-    expect(stale.slim).toBe(false);
-    expect(stale.body.task).toMatch(/STALE .* pursue an alternative route/);
-    ageS = 1.5 * 86_400;
-    const quiet = await r.next();
-    expect(quiet.slim).toBe(true); // same milestone: no new full packet
-    expect(quiet.body.task).toMatch(/STALE/); // but the stale line stays visible
-    ageS = 2 * 86_400 + 60; // next milestone
-    expect((await r.next()).slim).toBe(false);
-    expect((await r.next()).slim).toBe(true);
-    status = "answered"; response = "Listing is not possible this month; consider an experiment.";
-    const answered = await r.next();
-    expect(answered.slim).toBe(false);
-    expect(answered.body.task).toMatch(/ANSWERED by the owner, who wrote: "Listing is not possible this month; consider an experiment\."/);
-    expect((await r.next()).slim).toBe(true);
-    // Bounded: from 2× to 400× the threshold there are at most 5 more milestones (4×, 8×, 16×, 32×, 64× cap).
-    const buckets = new Set(Array.from({ length: 400 }, (_, d) => staleBucket(parseOwnerRequests({ requests: [req({ ageS: (d + 1) * 86_400 })] })![0])));
-    expect([...buckets].sort((x, y) => x - y)).toEqual([0, 1, 2, 3, 4, 5, 6]);
-  });
-});
-
-describe("F1-LIVE-01 owner-request tools (founder toolbox)", () => {
-  function box(ports: Record<string, unknown> = {}) {
-    const root = tmp();
-    fs.mkdirSync(path.join(root, "w"));
-    fs.mkdirSync(path.join(root, "m"));
-    return new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: path.join(root, "w"), memoryDir: path.join(root, "m"), ports: {
-      ledger: async () => ({}), spendOrder: async () => ({}), proposeKnowledge: async () => ({}), knowledge: async () => [], requestIdentityFact: async () => ({}), ...ports,
-    } as never });
-  }
-
-  it("request_owner_decision records a request through the controller — it grants nothing — and is validated", async () => {
-    const sent: Array<Record<string, unknown>> = [];
-    const t = box({ ownerRequestCreate: async (r: Record<string, unknown>) => { sent.push(r); return { ok: true, request: { requestId: "x", status: "pending" } }; } });
-    const ok = await t.execute({ id: "toolu_1", name: "request_owner_decision", arguments: { category: "sales_channel", title: "Enable a channel", detail: "Product built; need a listing route.", goalId: "g1", blocking: true } });
-    expect(ok).toMatchObject({ ok: true });
-    expect(sent).toEqual([{ idempotencyKey: "own:toolu_1", category: "sales_channel", goalRef: "g1", title: "Enable a channel", detail: "Product built; need a listing route.", blocking: true }]);
-    await t.execute({ id: "toolu_2", name: "request_owner_decision", arguments: { category: "other", title: "t", detail: "d", goalId: "not-a-goal" } });
-    expect(sent[1]).toMatchObject({ goalRef: null, blocking: false });
-    expect(await t.execute({ id: "toolu_3", name: "request_owner_decision", arguments: { category: "other", title: "t" } })).toMatchObject({ ok: false, refused: "FLEET_BAD_REQUEST" });
-    expect(await box().execute({ id: "toolu_4", name: "request_owner_decision", arguments: { category: "other", title: "t", detail: "d" } })).toMatchObject({ ok: false, refused: "FLEET_TOOL_NOT_AVAILABLE" });
-    const w = box({ ownerRequestWithdraw: async (id: string) => ({ ok: true, request: { requestId: id, status: "withdrawn" } }) });
-    expect(await w.execute({ id: "toolu_5", name: "withdraw_owner_request", arguments: { requestId: "62cbe1b7-0000-4000-8000-000000000001" } })).toMatchObject({ ok: true });
-    expect(await w.execute({ id: "toolu_6", name: "withdraw_owner_request", arguments: { requestId: "../x" } })).toMatchObject({ ok: false, refused: "FLEET_BAD_REQUEST" });
-    // A controller refusal (the client raises it) comes back as data with the controller's code — never a misleading message.
-    const limited = box({ ownerRequestCreate: async () => { throw Object.assign(new Error("FLEET_LIMIT_REACHED"), { code: "FLEET_LIMIT_REACHED" }); } });
-    const refused = await limited.execute({ id: "toolu_7", name: "request_owner_decision", arguments: { category: "other", title: "t", detail: "d" } });
-    expect(refused).toMatchObject({ ok: false, refused: "FLEET_LIMIT_REACHED" });
-    expect(refused.output).not.toMatch(/workspace/);
-  });
-
-  it("no new authority: both tools are 'planning' (already granted), the manifest digest is unchanged, and nothing in them executes a payment, account or approval", () => {
-    for (const name of ["request_owner_decision", "withdraw_owner_request"]) {
-      expect(decideTool(name, FOUNDER_MANIFEST_V2)).toMatchObject({ allowed: true, capability: "planning" });
-      expect(FOUNDER_TOOLS.find((t) => t.name === name)).toMatchObject({ capability: "planning" });
-    }
-    expect(manifestSha256(FOUNDER_MANIFEST_V2)).toBe("30a7060986930db3f611545c8c57fa5a98c9ad798bac279f66c39bdfe527a3d8");
-    expect(FOUNDER_TOOLS.find((t) => t.name === "request_owner_decision")!.description).toMatch(/grants nothing by itself/);
   });
 });

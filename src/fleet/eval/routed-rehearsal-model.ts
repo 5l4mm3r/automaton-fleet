@@ -8,7 +8,8 @@
  *
  *   1. write a small page to the workspace and hand its extraction to the routine tier      (T2 step → T1 chore)
  *   2. remember the result, then escalate ONE question                                       (T2 step → T3 question)
- *   3. act on the answer: a small spend (linked at T2) and a major spend (refused at T2)     (T2 step)
+ *   3. act on the answer: frame and decide the commitment (open_decision → resolve_decision, its own sizing), then a
+ *      small spend (linked at T2) and a major spend (refused at T2) under that decision      (T2 step)
  *   4. re-issue the major spend in the step the controller runs at the critical tier         (T3 action step)
  *   5. record completion and sleep                                                           (back at T2)
  *
@@ -24,7 +25,10 @@ export const REHEARSAL_TRIAGE_FACT = "rehearsal:triage";
 export const REHEARSAL_ROUTINE_ANSWER = '{"name":"Groomer Income Tracker","priceGBP":12}';
 export const REHEARSAL_DECISION_ANSWER = "Decision: proceed with the £12 listing test; the fee change lowers net per sale to £10.24 and does not alter the plan. Residual uncertainty: low.";
 export const REHEARSAL_SMALL_SPEND_MINOR = 500;
-export const REHEARSAL_MAJOR_SPEND_MINOR = 2_500;
+/** F2 (v30): "major" is relative — ≥ 25% of the founder's own available capital — never a fixed amount. The rehearsal
+ *  founder starts with 10 000p, so 500p is ordinary and 4 000p (≈ 40%) is major. */
+export const REHEARSAL_MAJOR_SPEND_MINOR = 4_000;
+export const REHEARSAL_DECISION_KEY = "listing-test";
 const approx = (s: string) => Math.ceil(s.length / 4);
 
 export function routedRehearsalToolless(r: { messages: Array<{ role: string; content: string }> }): string | null {
@@ -35,7 +39,7 @@ export function routedRehearsalToolless(r: { messages: Array<{ role: string; con
 }
 
 export class RoutedRehearsalModel extends ScriptedProvider {
-  /** Destination id the rehearsal's spend requests name (an owner-enrolled one, or a well-formed unknown id). */
+  /** Destination id the rehearsal's spend requests name (a registered one, or a well-formed unknown id). */
   constructor(model: string, private readonly destinationId = `dst_${"0".repeat(26)}`) {
     super(model);
   }
@@ -48,7 +52,9 @@ export class RoutedRehearsalModel extends ScriptedProvider {
     const lastTool = [...req.messages].reverse().find((m) => m.role === "tool")?.content ?? "";
     const toolText = req.messages.filter((m) => m.role === "tool").map((m) => m.content).join("\n");
     const call = (name: string, args: Record<string, unknown>): ToolCall => ({ id: `r${inTurn}-${name}`, name, arguments: args });
-    const spend = (amountCents: number, purpose: string) => call("request_spend", { amountCents, category: "expense", destinationId: this.destinationId, purpose });
+    // F2-A self-governance: own capital is committed only under a decided decision, within the founder's own sizing.
+    const spend = (amountCents: number, purpose: string) => ({ ...call("request_spend", { amountCents, category: "expense", destinationId: this.destinationId, purpose,
+      decisionKey: REHEARSAL_DECISION_KEY }), id: `r${inTurn}-request_spend-${amountCents}` });
     let content = "";
     let toolCalls: ToolCall[] = [];
     if (first.includes(`"${REHEARSAL_DONE_FACT}"`)) {
@@ -68,8 +74,16 @@ export class RoutedRehearsalModel extends ScriptedProvider {
       content = "At the critical tier the major spend is still justified by the recorded decision.";
       toolCalls = [spend(REHEARSAL_MAJOR_SPEND_MINOR, "listing stock for the validated test (major)")];
     } else if (toolText.includes("CRITICAL-TIER ANSWER") && !toolText.includes("must be decided at the critical tier")) {
-      content = "Acting on the decision.";
-      toolCalls = [spend(REHEARSAL_SMALL_SPEND_MINOR, "listing fee for the validated test"), spend(REHEARSAL_MAJOR_SPEND_MINOR, "listing stock for the validated test (major)")];
+      content = "Acting on the decision: framing and sizing the commitment, then the spends.";
+      toolCalls = [
+        call("open_decision", { key: REHEARSAL_DECISION_KEY, purpose: "find_opportunity", objective: "Validate the £12 listing with first sales within 14 days",
+          question: "Should the listing test run with paid stock and a listing fee?", hypothesis: "The fee rise does not change the plan; the test still clears its cost",
+          stopAfterFetches: 1, stopWhen: "the critical-tier answer is in" }),
+        call("resolve_decision", { key: REHEARSAL_DECISION_KEY, selected: "run the listing test", rationale: "The critical-tier answer: net per sale £10.24, plan unchanged.",
+          expectedOutcome: "3 sales in 14 days", capitalAtRiskPence: REHEARSAL_SMALL_SPEND_MINOR + REHEARSAL_MAJOR_SPEND_MINOR,
+          downside: "listing fee and stock, partly recoverable", invalidatedBy: "no sale after 14 days", nextAction: "pay the listing fee and buy the stock" }),
+        spend(REHEARSAL_SMALL_SPEND_MINOR, "listing fee for the validated test"), spend(REHEARSAL_MAJOR_SPEND_MINOR, "listing stock for the validated test (major)"),
+      ];
     } else if (toolText.includes("routine-tier result") && !toolText.includes("CRITICAL-TIER ANSWER") && !toolText.includes("ALREADY DECIDED")) {
       content = "The extraction is in; one question is beyond this step.";
       toolCalls = [

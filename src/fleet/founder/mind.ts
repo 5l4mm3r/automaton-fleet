@@ -39,7 +39,9 @@ import { decideTool, type CapabilityManifest } from "../capabilities.js";
 import type { FounderToolbox, ToolOutcome } from "./toolbox.js";
 import type { LoopGuard } from "./loop-guard.js";
 import { escalateQuestion, priorDecision } from "./escalation.js";
+import { DECISIONS_FILE, decisionLines, nextMoveLine, idleKind, idleTask, loadDecisions, ownCapitalLine, parseSurvival, survivalLine, type Decision, type IdleKind } from "./decisions.js";
 import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineClass } from "./task-classifier.js";
+import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
 
 export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
@@ -48,8 +50,10 @@ export interface MindPorts {
     /** Routed path only: what FleetController decided for this call. */ route?: { tier: string; model: string; taskClass: string; scope: string } }>;
   /** R23 routed mode: the founder's own economic position for the task packet (exact software output: T0). */
   ledger?(): Promise<unknown>;
-  /** F1-LIVE-01: this founder's own owner requests (status, age, staleness; T0). Absent = not offered by this controller. */
+  /** F2-A: this founder's own external dependencies (kind, the unavailable action, status; T0). Absent = not offered by this controller. */
   ownerRequests?(): Promise<unknown>;
+  /** F2 (schema v28+): the compact economic brief for a full packet (one call; absent = not offered by this controller). */
+  economyBrief?(): Promise<unknown>;
 }
 
 /** What a routed mind needs beyond the legacy one (absent = this runtime never routes). */
@@ -74,6 +78,8 @@ export interface RoutingStats {
   budgetStops: number;
   /** R23.1: turns that started from the slim bare-wake-up packet (nothing had changed since a sleep-only turn). */
   slimWakeups: number;
+  /** F2-A: idle wakes that got one push toward the next economically meaningful move (decide, execute or find one). */
+  idleNudges: Record<IdleKind, number>;
   lastRoute: { tier: string; model: string; taskClass: string; scope: string } | null;
 }
 
@@ -148,6 +154,8 @@ export function wakeDigest(memoryDir: string, workspaceDir: string, economics: R
   for (const f of ["facts.json", "goals.json"]) {
     try { h.update(`${f}\0`).update(fs.readFileSync(path.join(memoryDir, f))); } catch { h.update(`${f}\0-`); }
   }
+  // F2-A: the decision ledger is founder state too (absent = the digest exactly as before).
+  try { const d = fs.readFileSync(path.join(memoryDir, DECISIONS_FILE)); h.update(`${DECISIONS_FILE}\0`).update(d); } catch { /* no ledger yet */ }
   const walk = (rel: string) => {
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(path.join(workspaceDir, rel), { withFileTypes: true }); } catch { return; }
@@ -161,53 +169,74 @@ export function wakeDigest(memoryDir: string, workspaceDir: string, economics: R
   };
   walk("");
   h.update(`\0ledger\0${JSON.stringify(WAKE_LEDGER_FIELDS.map((k) => economics[k] ?? null))}`);
-  // F1-LIVE-01: semantic liveness signals (capability signature, owner-request states). Empty = the pre-F1-LIVE-01 digest.
+  // F1-LIVE-01 / F2-A: semantic liveness signals (capability signature, dependency states). Empty = the pre-F1-LIVE-01 digest.
   if (signals) h.update(`\0signals\0${signals}`);
   return h.digest("hex");
 }
 
-/** One owner request as the founder sees it (founder- and owner-written text is data, bounded here). */
-export interface OwnerRequestView { requestId: string; category: string; goalRef: string | null; title: string; blocking: boolean; status: string; ageS: number; stale: boolean;
-  staleAfterS: number; response: string | null }
+/**
+ * F2-A: one external dependency as the founder sees it (founder- and owner-written text is data, bounded here). A
+ * dependency makes ONE action unavailable; it never blocks the founder, a goal or other work, and nothing escalates it
+ * toward the owner over time.
+ */
+export interface DependencyView { requestId: string; kind: string; action: string; goalRef: string | null; title: string; status: string; ageS: number; response: string | null;
+  /** Seconds since the record was resolved (null while open, or when the controller reports no decision time). */
+  sinceDecidedS: number | null }
 
-export function parseOwnerRequests(v: unknown): OwnerRequestView[] | null {
+export function parseDependencies(v: unknown, now = Date.now()): DependencyView[] | null {
   const list = v && typeof v === "object" && Array.isArray((v as { requests?: unknown }).requests) ? (v as { requests: unknown[] }).requests : null;
   if (!list) return null;
-  const out: OwnerRequestView[] = [];
+  const out: DependencyView[] = [];
   for (const x of list.slice(0, 20)) {
+    if (!x || typeof x !== "object") continue;
     const r = x as Record<string, unknown>;
     if (typeof r.requestId !== "string" || typeof r.status !== "string") continue;
-    out.push({ requestId: r.requestId, category: String(r.category ?? "other").slice(0, 40), goalRef: typeof r.goalRef === "string" ? r.goalRef.slice(0, 16) : null,
-      title: String(r.title ?? "").slice(0, 160), blocking: r.blocking === true, status: r.status.slice(0, 20), ageS: Math.max(0, Number(r.ageS) || 0),
-      stale: r.stale === true, staleAfterS: Math.max(1, Number(r.staleAfterS) || 86_400), response: typeof r.response === "string" ? r.response.slice(0, 400) : null });
+    const decided = typeof r.decidedAt === "string" ? Date.parse(r.decidedAt) : NaN;
+    out.push({ requestId: r.requestId, kind: String(r.kind ?? r.category ?? "other").slice(0, 40), action: String(r.action ?? r.title ?? "").slice(0, 200),
+      goalRef: typeof r.goalRef === "string" ? r.goalRef.slice(0, 16) : null, title: String(r.title ?? "").slice(0, 160), status: r.status.slice(0, 20),
+      ageS: Math.max(0, Number(r.ageS) || 0), response: typeof r.response === "string" ? r.response.slice(0, 400) : null,
+      sinceDecidedS: Number.isFinite(decided) ? Math.max(0, Math.floor((now - decided) / 1000)) : null });
   }
   return out;
 }
 
-/**
- * Staleness milestone of a pending request: -1 while fresh, then 0, 1, 2 … at 1×, 2×, 4× … the threshold (capped at 6,
- * i.e. 64×). Folded into the wake digest, it re-surfaces a long-unanswered blocking request at a few, ever sparser
- * milestones — never on every wake, and never forever.
- */
-export function staleBucket(r: OwnerRequestView): number {
-  if (r.status !== "pending" || !r.stale) return -1;
-  return Math.min(6, Math.max(0, Math.floor(Math.log2(Math.max(1, r.ageS / r.staleAfterS)))));
-}
-
-const age = (s: number) => (s < 2 * 3_600 ? `${Math.round(s / 60)} min` : s < 2 * 86_400 ? `${Math.round(s / 3_600)} h` : `${Math.round(s / 86_400)} d`);
-
-/** The owner-request lines of a task (bounded; data, not instructions). */
-export function ownerRequestLines(list: OwnerRequestView[]): string[] {
-  const shown = list.filter((r) => r.status === "pending" || r.ageS < 7 * 86_400).slice(0, 5);
+/** The dependency lines of a task (bounded; data, not instructions). Open ones are listed as unavailable ACTIONS only. */
+export function dependencyLines(list: DependencyView[]): string[] {
+  // Open ones always; resolved ones for a week after their resolution (ageS is the age AT resolution, so a long-open
+  // record answered today is still news).
+  const shown = list.filter((r) => r.status === "pending" || (r.sinceDecidedS ?? r.ageS) < 7 * 86_400).slice(0, 5);
   return shown.map((r) => {
-    const head = `Owner request ${r.requestId.slice(0, 8)} (${r.category}${r.goalRef ? `, ${r.blocking ? "blocks" : "about"} goal ${r.goalRef}` : r.blocking ? ", blocking" : ""}) "${r.title}"`;
+    const head = `External dependency ${r.requestId.slice(0, 8)} (${r.kind})`;
+    if (r.status === "pending") {
+      return `${head}: the action "${r.action}" is unavailable for now. This blocks only that action — not you, your goals or other work: pursue alternatives (another marketplace, direct sales that need no new account, another product, service, niche or venture).`;
+    }
+    if (r.status === "withdrawn") return `${head} for "${r.action}": withdrawn by you.`;
+    if (r.status === "retired") return `${head} for "${r.action}": retired — ordinary business decisions are yours; nothing waits on it.`;
     // An answer is information, not authority: only the tools and policy in this packet define what you can do.
-    if (r.status === "withdrawn") return `${head}: withdrawn by you.`;
-    if (r.status !== "pending") return `${head}: ${r.status.toUpperCase()} by the owner${r.response ? `, who wrote: "${r.response}"` : " (no comment)"}. This records the owner's answer only; it grants no capability, account, money or permission by itself.`;
-    if (!r.stale) return `${head}: pending for ${age(r.ageS)}.`;
-    return `${head}: pending for ${age(r.ageS)} — STALE (no owner answer after ${age(r.staleAfterS)}).${r.blocking ? " Waiting is one option, not the only one: you may pursue an alternative route, propose a safe experiment, gather more evidence, pivot, abandon the blocked path, or keep waiting if that is genuinely best — decide, and say why." : ""}`;
+    return `${head} for "${r.action}": ${r.status.toUpperCase()}${r.response ? `, with the note: "${r.response}"` : ""}. This records an answer only; it grants no capability, account, money or permission by itself.`;
   });
 }
+
+/** The founder's open goals (its execution path), read from its own memory. */
+function openGoalsOf(memoryDir: string): Array<{ id: string; title: string }> {
+  try {
+    const g = JSON.parse(fs.readFileSync(path.join(memoryDir, "goals.json"), "utf8"));
+    return Array.isArray(g) ? g.filter((x) => x && x.status === "open").map((x) => ({ id: String(x.id), title: String(x.title ?? "") })) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * F2-A idle re-check. Every full packet ends with the founder's next economically meaningful move (decide, execute, or
+ * one concise opportunity cycle); a founder that then sleeps on an unchanged state gets slim wake-ups, and the same
+ * state is re-checked with one idle push after 4, 8, 16, then every 32 slim wakes (≈ 17 h at the full idle backoff).
+ * Liveness without an entitlement to spend: nothing here renews daily, and nothing comes from FleetController.
+ */
+export const RENUDGE_FIRST = 4;
+export const RENUDGE_MAX = 32;
+/** The idle state being re-checked: its digest, slim wakes since its last push, and when the next push is due. */
+interface IdleState { digest: string; slim: number; after: number }
 
 /** The capability view the controller reports in cognition status (null when it reports none). */
 export function parseCapabilityView(v: unknown): { policySignature: string; tools: string[]; experiments: Record<string, unknown> | null } | null {
@@ -225,7 +254,7 @@ export function parseCapabilityView(v: unknown): { policySignature: string; tool
 export function slimWakePacket(p: TaskPacket): TaskPacket {
   const counts = `Nothing has changed since your last turn, which ended in sleep: ${p.knowledge.length} remembered fact(s)`
     + ` (keys: ${p.knowledge.map((k) => k.key).slice(0, 40).join(", ") || "none"}), ${p.notes.length} note file(s), ${p.evidence.length} saved page(s).`
-    + " If any of this means there is work to do, read what you need (recall_facts, list_goals, list_files, read_file) and do it; otherwise sleep.";
+    + " If this leaves an economically meaningful move, read what you need (recall_facts, list_goals, list_files, read_file) and make it; if not, sleep — the same state is re-checked later, and any change brings a full packet.";
   const slim: TaskPacket = {
     ...p, task: `${p.task}\n${counts}`, knowledge: [], institutionalKnowledge: [], evidence: [], notes: [], previousResults: p.previousResults.slice(-2),
     uncertainty: [], sizes: {},
@@ -254,7 +283,7 @@ export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS):
 
 export class FounderMind {
   turns = 0;
-  readonly routing: RoutingStats = { routedTurns: 0, steps: { T2: 0, T3: 0 }, routineCalls: 0, escalations: 0, escalationsReused: 0, actionBoundarySteps: 0, thinkingDropped: 0, budgetStops: 0, slimWakeups: 0, lastRoute: null };
+  readonly routing: RoutingStats = { routedTurns: 0, steps: { T2: 0, T3: 0 }, routineCalls: 0, escalations: 0, escalationsReused: 0, actionBoundarySteps: 0, thinkingDropped: 0, budgetStops: 0, slimWakeups: 0, idleNudges: { decide: 0, execute: 0, opportunity: 0 }, lastRoute: null };
   private restUntil = 0;
   private idleBackoff = 0;
   private idleSkip = 0;
@@ -366,13 +395,15 @@ export class FounderMind {
 
   // ─────────────────────────────────────────────── R23 routed mode
 
-  private continuity(): { at: string; outcome: string; tools: string[]; wakeDigest: string | null; capabilities: { sig: string; tools: string[] } | null } | null {
+  private continuity(): { at: string; outcome: string; tools: string[]; wakeDigest: string | null; capabilities: { sig: string; tools: string[] } | null; idle: IdleState | null } | null {
     try {
       const c = JSON.parse(fs.readFileSync(path.join(this.o.stateDir, CONTINUITY_FILE), "utf8"));
       const caps = c?.capabilities && typeof c.capabilities.sig === "string" && Array.isArray(c.capabilities.tools)
         ? { sig: String(c.capabilities.sig), tools: (c.capabilities.tools as unknown[]).map(String).slice(0, 100) } : null;
+      const idle = c?.idle && typeof c.idle.digest === "string" && Number.isSafeInteger(c.idle.slim) && Number.isSafeInteger(c.idle.after)
+        ? { digest: String(c.idle.digest), slim: Number(c.idle.slim), after: Number(c.idle.after) } : null;
       return typeof c?.at === "string" && typeof c?.outcome === "string"
-        ? { at: c.at, outcome: c.outcome, tools: Array.isArray(c.tools) ? c.tools.map(String).slice(0, 20) : [], wakeDigest: typeof c.wakeDigest === "string" ? c.wakeDigest : null, capabilities: caps }
+        ? { at: c.at, outcome: c.outcome, tools: Array.isArray(c.tools) ? c.tools.map(String).slice(0, 20) : [], wakeDigest: typeof c.wakeDigest === "string" ? c.wakeDigest : null, capabilities: caps, idle }
         : null;
     } catch {
       return null;
@@ -380,10 +411,10 @@ export class FounderMind {
   }
 
   /** `wakeDigest`: the state digest at the END of a sleep-only turn (absent otherwise), for the next bare-wake-up test. */
-  private saveContinuity(outcome: string, tools: string[], wake: string | null = null, capabilities: { sig: string; tools: string[] } | null = null): void {
+  private saveContinuity(outcome: string, tools: string[], wake: string | null = null, capabilities: { sig: string; tools: string[] } | null = null, idle: IdleState | null = null): void {
     const f = path.join(this.o.stateDir, CONTINUITY_FILE);
     fs.writeFileSync(`${f}.tmp`, JSON.stringify({ at: new Date().toISOString(), turn: this.turns, outcome: outcome.slice(0, 1_200), tools: tools.slice(-20), ...(wake ? { wakeDigest: wake } : {}),
-      ...(capabilities ? { capabilities } : {}) }), { mode: 0o600 });
+      ...(capabilities ? { capabilities } : {}), ...(idle && wake ? { idle } : {}) }), { mode: 0o600 });
     fs.renameSync(`${f}.tmp`, f);
   }
 
@@ -406,21 +437,32 @@ export class FounderMind {
     } catch {
       economics = {};
     }
+    this.o.toolbox.noteEconomics(economics);
     const prev = this.continuity();
     // F1-LIVE-01: what this founder can actually do now (offered by the controller AND implemented by this runtime), and
-    // its owner requests. Both are semantic signals: a genuine change brings one full packet, then slim wake-ups resume.
+    // its external dependencies. Both are semantic signals: a genuine change brings one full packet, then idle wake-ups resume.
     const view = parseCapabilityView(status.capabilities);
     const effective = view ? view.tools.filter((n) => COGNITION_TOOLS.has(n) || this.o.toolbox.implements(n)) : null;
     // The founder's own signature: the controller's policy (no tool names) + the tools this runtime can actually execute.
     const capabilities = view && effective ? { sig: crypto.createHash("sha256").update(`${view.policySignature}|${[...effective].sort().join(",")}`).digest("hex"), tools: effective } : null;
-    let owner: OwnerRequestView[] | null = null;
-    try { owner = parseOwnerRequests(await this.o.ports.ownerRequests?.()); } catch { owner = null; }
-    const signals = [capabilities ? `caps:${capabilities.sig}` : "",
-      ...(owner ?? []).map((r) => `req:${r.requestId}:${r.status}:${r.blocking ? 1 : 0}:${staleBucket(r)}`).sort()].filter(Boolean).join("|");
+    let deps: DependencyView[] | null = null;
+    try { deps = parseDependencies(await this.o.ports.ownerRequests?.()); } catch { deps = null; }
+    // F2-A: a dependency's STATUS is a signal (a resolution is news once); its age is not — nothing escalates over time.
+    const signals = [capabilities ? `caps:${capabilities.sig}` : "", ...(deps ?? []).map((r) => `dep:${r.requestId}:${r.status}`).sort()].filter(Boolean).join("|");
+    // F2-A: the founder's own decision ledger and open goals decide what an idle wake is for; its survival position is
+    // FleetController's observation (information for the founder's own strategy, never a permission or a ration).
+    let ledger: Decision[] = [];
+    let ledgerProblem: string | null = null;
+    try { ledger = loadDecisions(R.memoryDir); } catch (e) {
+      ledgerProblem = `Your decision ledger (memory/${DECISIONS_FILE}) is unreadable (${(e as Error).message.slice(0, 120)}): open_decision and resolve_decision refuse until it is repaired.`;
+    }
+    const openGoals = openGoalsOf(R.memoryDir);
+    const kind = idleKind(ledger, openGoals.length);
+    const survival = parseSurvival(status.survival);
     const capNote: string[] = [];
     if (capabilities && prev?.capabilities?.sig !== capabilities.sig) {
       const exp = view!.experiments?.enabled === true
-        ? ` Experiment pipeline: ON (${String(view!.experiments?.financialMode ?? "simulated")}; hard cap ${String(view!.experiments?.hardCapMinor ?? "?")} minor units; up to ${String(view!.experiments?.maxActive ?? "?")} active) — see list_experiments.` : "";
+        ? ` Experiment pipeline: ON (${String(view!.experiments?.financialMode ?? "simulated")}; sized within your own survival headroom; up to ${String(view!.experiments?.maxActive ?? "?")} active) — see list_experiments.` : "";
       if (prev?.capabilities) {
         const added = capabilities.tools.filter((t) => !prev.capabilities!.tools.includes(t));
         const removed = prev.capabilities.tools.filter((t) => !capabilities.tools.includes(t));
@@ -434,21 +476,45 @@ export class FounderMind {
       prev ? `Your previous turn (${prev.at}) ended with: ${prev.outcome || "(no closing note)"}${prev.tools.length ? ` [tools used: ${prev.tools.join(", ")}]` : ""}`
            : "No closing note from a previous turn is recorded: rely on your goals, facts and notes below.",
       ...capNote,
-      ...ownerRequestLines(owner ?? []),
+      ...dependencyLines(deps ?? []),
+      ...decisionLines(ledger),
+      ...(ledgerProblem ? [ledgerProblem] : []),
     ].join("\n");
     // R23.1: a bare wake-up — the previous turn only slept and nothing the founder could act on has changed since — gets the
     // slim packet. Anything else (a first turn, a working turn, any change in memory, workspace, economy, capabilities or
-    // owner requests) gets the full one.
-    const bare = !!prev && prev.tools.length > 0 && prev.tools.every((t) => t === "sleep") && prev.wakeDigest !== null
+    // dependency status) gets the full one.
+    const unchanged = !!prev && prev.tools.length > 0 && prev.tools.every((t) => t === "sleep") && prev.wakeDigest !== null
       && prev.wakeDigest === wakeDigest(R.memoryDir, R.workspaceDir, economics, signals);
+    // F2-A: an idle wake is not a browse. A full packet already carries the next move; an unchanged idle state gets slim
+    // wake-ups and is re-checked with one idle push after 4, 8, 16, then every 32 slim wakes (RENUDGE_*). No allowance,
+    // ration or runway threshold from FleetController enters this.
+    const nowDigest = unchanged ? prev!.wakeDigest! : null;
+    const idlePrev = nowDigest && prev?.idle?.digest === nowDigest ? prev.idle : null;
+    const nudge = unchanged && !!idlePrev && idlePrev.slim >= idlePrev.after;
+    const bare = unchanged && !nudge;
+    // (An idle state recorded before F2-A, or by an older runtime, starts its schedule now: the next slim wake counts.)
+    const idleNext: IdleState | null = !nowDigest ? null
+      : nudge ? { digest: nowDigest, slim: 0, after: Math.min(RENUDGE_MAX, idlePrev!.after * 2) }
+      : { digest: nowDigest, slim: (idlePrev?.slim ?? 0) + 1, after: idlePrev?.after ?? RENUDGE_FIRST };
+    const move = nudge ? idleTask(kind, ledger, openGoals) : unchanged ? null : nextMoveLine(kind);
+    // F2-A (v26+ controller): the survival observation and the founder's own-capital position and record — information
+    // for its own risk management (wallet, exposure, results), never a permission, a limit or a score.
+    const own = !bare && survival ? ownCapitalLine(economics, ledger) : null;
+    // F2: one compact line of the founder's economy (full packets only; slim wake-ups stay slim). A failure drops the line.
+    let brief: EconomyBrief | null = null;
+    if (!bare && this.o.ports.economyBrief) {
+      try { brief = parseBrief(await this.o.ports.economyBrief()); } catch { brief = null; }
+    }
+    const extra = [...(move ? [move] : []), ...(!bare && survival ? [survivalLine(survival)] : []), ...(own ? [own] : []), ...(brief ? [economyLine(brief)] : [])];
     let text: string;
     try {
       const full = buildTaskPacket({
-        memoryDir: R.memoryDir, workspaceDir: R.workspaceDir, task, economics,
+        memoryDir: R.memoryDir, workspaceDir: R.workspaceDir, task: extra.length ? `${task}\n${extra.join("\n")}` : task, economics,
         outputContract: { form: "analysis", mustCite: false, instructions: "Decide and take your next step with your tools. Remember whatever you will need later, then call sleep with a one-line note of where you are." },
       });
       text = renderBoundedPacket(bare ? slimWakePacket(full) : full);
       if (bare) this.routing.slimWakeups++;
+      if (nudge) this.routing.idleNudges[kind]++;
     } catch (err) {
       const code = (err as { code?: string }).code ?? "FLEET_TASK_PACKET_INVALID";
       // The reason names packet sections and error kinds only (never packet content).
@@ -456,7 +522,7 @@ export class FounderMind {
       return { ...result, reason: `stopped: ${code}` };
     }
     const messages: ChatMessage[] = [{ role: "user", content: text }];
-    const packetKind = bare ? "slim" : "full";
+    const packetKind = bare ? "slim" : nudge ? `idle-${kind}` : "full";
     const size = () => Buffer.byteLength(JSON.stringify({ messages }), "utf8");
     const maxSteps = this.o.maxStepsPerTurn ?? 4;
     const counters = { routine: 0, escalations: 0 };
@@ -540,7 +606,9 @@ export class FounderMind {
     if (sleptOnly) {
       try { digest = wakeDigest(R.memoryDir, R.workspaceDir, ((await this.o.ports.ledger?.()) as Record<string, unknown> | undefined) ?? {}, signals); } catch { digest = null; }
     }
-    this.saveContinuity(outcome, result.toolCalls, digest, capabilities ?? prev?.capabilities ?? null);
+    // A sleep-only turn starts (or continues) the re-check schedule of the state it leaves behind.
+    const idleSave = !digest ? null : digest === nowDigest && idleNext ? idleNext : { digest, slim: 0, after: RENUDGE_FIRST };
+    this.saveContinuity(outcome, result.toolCalls, digest, capabilities ?? prev?.capabilities ?? null, idleSave);
     this.o.log?.("founder_turn", { turn: this.turns, routed: true, steps: result.steps, tools: result.toolCalls.length, refusals: result.refusals.length, chargedCents: result.chargedCents });
     return result;
   }

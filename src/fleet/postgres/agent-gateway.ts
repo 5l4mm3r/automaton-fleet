@@ -212,9 +212,9 @@ export class PgAgentGateway {
   }
 
   /**
-   * Schema v10: submit a structured spend order against the agent's own
-   * ledger allocation. The database decides (reserved / awaiting_owner /
-   * rejected); nothing is executed by this call.
+   * Schema v10/v27: submit a structured order committing the agent's OWN capital.
+   * The database checks custody only (reserved, or rejected with a precise
+   * custody category; never an owner route); nothing is executed by this call.
    */
   async spendRequest(
     agentId: string,
@@ -272,9 +272,9 @@ export class PgAgentGateway {
     return this.call("api_experiment_list", [agentId, token, limit]);
   }
 
-  /** Schema v25 (F1-LIVE-01): explicit owner requests. */
-  async ownerRequestCreate(agentId: string, token: string, r: { idempotencyKey: string; category: string; goalRef: string | null; title: string; detail: string; blocking: boolean }): Promise<Record<string, unknown> & { ok: boolean }> {
-    return this.call("api_owner_request_create", [agentId, token, r.idempotencyKey, r.category, r.goalRef, r.title, r.detail, r.blocking]);
+  /** Schema v26 (F2-A): action-scoped external dependencies (only identity/legal/constitutional kinds). */
+  async ownerRequestCreate(agentId: string, token: string, r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_owner_request_create", [agentId, token, r.idempotencyKey, r.kind, r.action, r.goalRef, r.title, r.detail]);
   }
 
   async ownerRequestWithdraw(agentId: string, token: string, requestId: string): Promise<Record<string, unknown> & { ok: boolean }> {
@@ -283,6 +283,15 @@ export class PgAgentGateway {
 
   async ownerRequestList(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.call("api_owner_request_list", [agentId, token]);
+  }
+
+  /**
+   * Schema v28+ (F2): the agent's own economic operations (opportunities, decisions, ventures, knowledge, wallet,
+   * capital requests, payment rails) through the single authenticated dispatcher. The op is one of a fixed set the
+   * database knows; arguments are a JSON object validated by the database.
+   */
+  async economy(agentId: string, token: string, op: string, args: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_economy", [agentId, token, op, JSON.stringify(args ?? {})]);
   }
 
   async knowledgePropose(agentId: string, token: string, category: string, title: string, content: string): Promise<Record<string, unknown> & { ok: boolean }> {

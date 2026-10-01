@@ -8,7 +8,7 @@
  *   treasury-record <kind> <cents> [agentId]           observed treasury movement (sweep_in, infrastructure, …)
  *   ledger <agentId> <kind> <cents> [reference]         agent ledger entry (revenue, direct_cost, owner_funding, …)
  *   balance <agentId> <cents>                           observed agent cash
- *   obligation <agentId> <cents> <dueInDays> <description…>
+ *   obligation <agentId> <cents> <dueInDays> [--tax-reserve] <description…>   (v27: a tax reserve is never spendable)
  *   capital-list [agentId]
  *   capital-approve <allocationId> <cents> <days> <reason…> [--override]
  *   capital-reject <allocationId> <reason…>
@@ -76,13 +76,17 @@ export async function runTreasuryCommand(cmd: string, a: string[], ts: PgTreasur
     case "balance":
       await ts.recordBalance(a[0], int(a[1], "cents"), "operator");
       return { recorded: true };
-    case "obligation":
+    case "obligation": {
+      const tax = a.includes("--tax-reserve");
+      const o = a.filter((x) => x !== "--tax-reserve");
       return {
         obligationId: await ts.addObligation(
-          { agentId: a[0], amountCents: int(a[1], "cents"), dueAt: new Date(Date.now() + int(a[2], "dueInDays") * DAY), description: a.slice(3).join(" ") },
+          { agentId: o[0], amountCents: int(o[1], "cents"), dueAt: new Date(Date.now() + int(o[2], "dueInDays") * DAY), description: o.slice(3).join(" "),
+            ...(tax ? { category: "tax_reserve" as const } : {}) },
           actor,
         ),
       };
+    }
     case "capital-list":
       return ts.listAllocations(a[0]);
     case "capital-approve": {

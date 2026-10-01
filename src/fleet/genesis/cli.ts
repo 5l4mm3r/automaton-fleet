@@ -21,10 +21,10 @@
  *   reproduction-eligibility <agentId>                             inert assessment (never executable)
  *   knowledge-review <proposalId> promote|reject [note…]
  *   identity-claim-decide <claimId> approve|reject [--ttl S] [--max-reads N]
- *   owner-queue [all]                                              v25: founders' owner requests + knowledge proposals awaiting review (oldest first)
- *   owner-request-decide <requestId> approved|declined|answered <response…>   v25: record the answer (grants nothing)
- *   owner-request-import <proposalId> <category> blocking|non-blocking [--goal gN]   v25: a legacy knowledge proposal that is
- *                                                                  really an owner request becomes an UNRESOLVED one (decides nothing)
+ *   owner-queue [all]                                              v26: founders' open external dependencies + knowledge proposals for review (oldest first)
+ *   owner-request-decide <requestId> approved|declined|answered <response…>   resolve an identity/legal/constitutional dependency (records the answer; grants nothing)
+ *   owner-request-import <proposalId> <kind> <action…> [--goal gN]   v26: a legacy proposal that is really an identity/legal
+ *                                                                  dependency becomes an action-scoped one (decides nothing; blocks only that action)
  *
  * Schema v13 founder cognition (owner controls; never run by an AI operator):
  *   cognition-policy                                                  show the global policy
@@ -38,8 +38,12 @@
  *                                                                     schema v18 web research (OWNER GATE)
  *   founder-research <agentId> pause|resume [--hourly N] [--daily N] <reason…>
  *   research-log [agentId] [--limit N]                                the research audit (attempts + results)
+ *   F2-A: --daily-budget / --turns-per-hour and the research --*-hourly / --*-daily figures are INFRASTRUCTURE SAFETY
+ *   CEILINGS (runaway loops, bugs, provider abuse, accidental catastrophic burn) — never research budgets, targets or
+ *   entitlements. Set them well above professional use; founders never see them unless a ceiling is actually hit.
  *   founders-report                                                   per founder: status, cash, cognition, 24 h usage,
- *                                                                     forbidden tool requests (refused), orders awaiting you
+ *                                                                     forbidden tool requests (refused), reserved orders
+ *                                                                     (v27: no spend order ever awaits the owner)
  *
  * Schema v22 neutral cognition routing (owner controls; inert until enabled; never run by an AI operator):
  *   cognition-routing                                                 routing switch, thresholds and tier mappings
@@ -56,7 +60,7 @@
  * Schema v24 opportunity → experiment pipeline (owner controls; FINANCIALLY INERT: simulated capital only):
  *   experiment-policy                                                  switch, caps and the Evidence Ladder
  *   experiment-enable [--hard-cap N] | experiment-disable              OWNER GATE (founders may propose only while enabled)
- *   evidence-ladder-set <level 0..4> <autoCapMinor|owner>              auto-approval cap of a level ("owner" = owner decides)
+ *   evidence-ladder-set <level 0..4> <autoCapMinor|owner>              LEGACY since schema v30: stored only; no ladder cap and no owner level is applied
  *   experiment-list [agentId] | experiment-show <experimentId> | strategy-registry [agentId]
  *   experiment-decide <experimentId> approved|partially_approved|watch|rejected [--approved N] [--max-loss N] <reason…>
  *   experiment-relevance <experimentId> <attemptId> relevant|irrelevant|uncertain <reason…>   audited override of the controller's relevance verdict (optional)
@@ -378,9 +382,9 @@ export async function runGenesisCommand(
       return ok(await g.decideOwnerRequest(uuid(p[0], "owner-request-decide"), d, p.slice(2).join(" ") || null, actor));
     }
     case "owner-request-import": {
-      const usage = "usage: owner-request-import <proposalId> sales_channel|account_or_identity|capital_or_spend|policy_exception|information|other blocking|non-blocking [--goal gN]";
-      if (!p[1] || (p[2] !== "blocking" && p[2] !== "non-blocking")) throw new Error(usage);
-      return ok(await g.importOwnerRequest(uuid(p[0], "owner-request-import"), p[1], p[2] === "blocking", flag(a, "--goal") ?? null, actor));
+      const usage = "usage: owner-request-import <proposalId> human_identity|kyc|legal_signature|constitutional_change|non_delegable_credential <unavailable action…> [--goal gN]";
+      if (!p[1] || p.length < 3) throw new Error(usage);
+      return ok(await g.importOwnerRequest(uuid(p[0], "owner-request-import"), p[1], p.slice(2).join(" "), flag(a, "--goal") ?? null, actor));
     }
     case "identity-claim-decide": {
       if (p[1] !== "approve" && p[1] !== "reject") throw new Error("usage: identity-claim-decide <claimId> approve|reject [--ttl S] [--max-reads N]");

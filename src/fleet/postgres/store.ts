@@ -945,7 +945,10 @@ export class PgFleetStore {
     verify: { ok: boolean; journals: number; unbalanced?: number; firstBadSeq?: number };
     custodyExecutionEnabled: boolean;
     ledgerAuthoritative: boolean;
-    awaitingOwner: number;
+    /** Orders left in the retired owner spend route (v27: a CHECK keeps this at 0). */
+    legacyOwnerRoute: number;
+    /** v27 infrastructure circuit breaker: tripped, and how many relative signals are configured (0 = every signal unset). */
+    circuitBreaker: { tripped: boolean; signals: number };
     reserved: number;
     executing: number;
     pendingDestinations: number;
@@ -961,6 +964,8 @@ export class PgFleetStore {
         const r = await c.query(
           `SELECT fleet_ledger_verify() AS verify, m.custody_execution_enabled, m.ledger_authoritative,
                   (SELECT count(*) FROM fleet_payment_orders WHERE status = 'awaiting_owner') AS awaiting,
+                  (SELECT jsonb_build_object('tripped', b.tripped, 'signals', num_nonnulls(b.order_wallet_bp, b.velocity_wallet_bp))
+                     FROM fleet_spend_circuit_breaker b WHERE b.id = 1) AS breaker,
                   (SELECT count(*) FROM fleet_payment_orders WHERE status = 'reserved') AS reserved,
                   (SELECT count(*) FROM fleet_payment_orders WHERE status = 'executing') AS executing,
                   (SELECT count(*) FROM fleet_payment_destinations WHERE status = 'pending') AS dst_pending,
@@ -978,7 +983,8 @@ export class PgFleetStore {
           verify: x.verify,
           custodyExecutionEnabled: x.custody_execution_enabled === true,
           ledgerAuthoritative: x.ledger_authoritative === true,
-          awaitingOwner: Number(x.awaiting),
+          legacyOwnerRoute: Number(x.awaiting),
+          circuitBreaker: { tripped: x.breaker?.tripped === true, signals: Number(x.breaker?.signals ?? 0) },
           reserved: Number(x.reserved),
           executing: Number(x.executing),
           pendingDestinations: Number(x.dst_pending),
@@ -995,16 +1001,24 @@ export class PgFleetStore {
     }
   }
 
-  /** Schema v25 (F1-LIVE-01): owner-request liveness for doctor (admin credential; null before v25 or otherwise). */
-  async ownerRequestsOverview(): Promise<{ staleAfterS: number; pending: number; blockingPending: number; stalePending: number; staleBlocking: number;
-    oldestPendingS: number | null; knowledgePending: number; knowledgeImported: number; oldestKnowledgePendingS: number | null } | null> {
+  /** Schema v26 (F2-A): open external dependencies for doctor — information, never an owner to-do (admin credential). */
+  /** Schema v30 (F2): the economy doctor's findings (INFO / WARN / FAIL); null before v30 or when unreadable. */
+  async economyHealth(): Promise<{ ok: boolean; warn: boolean; findings: Array<{ severity: "INFO" | "WARN" | "FAIL"; code: string; detail: unknown }> } | null> {
+    try {
+      return await this.read(async (c) => (await c.query(`SELECT fleet_economy_health() AS j`)).rows[0].j);
+    } catch {
+      return null;
+    }
+  }
+
+  async ownerRequestsOverview(): Promise<{ open: number; openByKind: Record<string, number>; constitutionalOpen: number; oldestOpenS: number | null;
+    knowledgePending: number; knowledgeImported: number } | null> {
     try {
       return await this.read(async (c) => {
         const j = (await c.query(`SELECT fleet_owner_requests_overview() AS j`)).rows[0].j as Record<string, unknown>;
-        const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
-        return { staleAfterS: Number(j.staleAfterS), pending: Number(j.pending), blockingPending: Number(j.blockingPending), stalePending: Number(j.stalePending),
-          staleBlocking: Number(j.staleBlocking), oldestPendingS: n(j.oldestPendingS), knowledgePending: Number(j.knowledgePending),
-          knowledgeImported: Number(j.knowledgeImported ?? 0), oldestKnowledgePendingS: n(j.oldestKnowledgePendingS) };
+        return { open: Number(j.open ?? 0), openByKind: (j.openByKind ?? {}) as Record<string, number>, constitutionalOpen: Number(j.constitutionalOpen ?? 0),
+          oldestOpenS: j.oldestOpenS === null || j.oldestOpenS === undefined ? null : Number(j.oldestOpenS),
+          knowledgePending: Number(j.knowledgePending ?? 0), knowledgeImported: Number(j.knowledgeImported ?? 0) };
       });
     } catch {
       return null;
@@ -1869,6 +1883,36 @@ export class PgFleetStore {
   /** Schema v24: expire experiment proposals/approvals and conclude experiments past their run window. Returns the count. */
   async reapExperiments(limit = 50): Promise<number> {
     return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_experiment_reap($1) AS n", [limit])).rows[0].n));
+  }
+
+  /** Schema v30 (F2): envelope expiry, stop-loss and ledger-verified milestones for every active execution envelope. */
+  async reapCapital(limit = 100): Promise<{ evaluated: number; changed: number }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_capital_reap($1) AS r", [limit])).rows[0].r);
+  }
+
+  /** Schema v30 (F2): FleetController's tax true-up pass (reserves follow the estimated liability; over-reserve released). */
+  async taxTrueUp(limit = 100): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_tax_true_up($1) AS r", [limit])).rows[0].r);
+  }
+
+  /** Schema v30 (F2): one Treasury sweep pass for a period (a no-op returning {enabled:false} until an operator enables sweeps). */
+  async sweepRun(period: string): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_sweep_run($1) AS r", [period])).rows[0].r);
+  }
+
+  /**
+   * Schema v29 (F2): the rail adapter reports one external transaction. Idempotent per (rail, external id, kind); a
+   * transaction not attributable to a venture assignment stays UNATTRIBUTED for reconciliation (never guessed).
+   */
+  async settlementIngest(t: { railId: string; externalId: string; kind: "sale" | "refund"; grossMinor: number; feeMinor: number; currency: string;
+    ventureId: string | null; occurredAt: string; payloadSha256: string; counterpartySha256: string | null }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_settlement_ingest($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) AS r",
+      [t.railId, t.externalId, t.kind, t.grossMinor, t.feeMinor, t.currency, t.ventureId, t.occurredAt, t.payloadSha256, t.counterpartySha256])).rows[0].r);
+  }
+
+  /** Schema v29 (F2): the credential broker's audit of one credential use (never the secret). */
+  async credentialUse(credentialId: string, action: string, agentId: string | null, ventureId: string | null, outcome: "ok" | "refused" | "failed", detail: string | null): Promise<{ ok: boolean; status?: string; code?: string }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_credential_use($1, $2, $3, $4, $5, $6) AS r", [credentialId, action, agentId, ventureId, outcome, detail])).rows[0].r);
   }
 
   /** Schema v10: expire payment orders past their TTL (releases their reservations). Returns the count. */
