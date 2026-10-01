@@ -1916,6 +1916,22 @@ Design, Evidence Ladder and AMBER items: `docs/design/r24-opportunity-experiment
 - **Rollback:** `runtime.env.pre-r24` + `current` → `releases/4821616…` + restore the pre-v24 dump (Founder 1 needs
   nothing: it still runs `aab6ca3`).
 
+## Stage R25 — F1-FRESH-01 structured fact freshness (done 2026-10-01, times UTC)
+
+Design: `docs/design/f1-fresh-01-fact-freshness.md`. Evidence: `docs/evaluations/r25/`.
+
+- **R25-1** controller `aabb297` (build `bb3fd917…dc17`), no migration. `runtime.env.pre-r25` = `59896ce` pins.
+  Dump `~/automaton_fleet-v24-pre-r25-*.dump`. Controller-side restart 00:04:44–00:04:54. Checks green (149/0).
+  Founder 1 untouched.
+- **R25-2** Founder 1 `59896ce` → `aabb297`. Rehearsal 24/24; upgrade `86c6ec8d-eb1b-4048-a05b-91e50b0d3cd2` verified
+  00:13:38 (downtime 1.72 s). Identity, credential, Genesis, ledger, routing and safety switches unchanged.
+  `facts.json` byte-identical; `facts-ledger.json` appears on the first legitimate fact write.
+- **Cost:** idle wake +366 input tokens (+3.9%).
+- **Rollback:**
+  - Founder: `rollback-runtime <id> 86c6ec8d-… <reason>`. A rolled-back founder ignores `facts-ledger.json`, and its
+    `facts.json` edits are detected by hash on re-upgrade.
+  - Controller: `runtime.env.pre-r25` + `current` → `releases/59896ce…`.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
