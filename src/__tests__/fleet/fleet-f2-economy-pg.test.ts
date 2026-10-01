@@ -207,7 +207,7 @@ describe.skipIf(!PG_BIN)("F2 v28 economy records: opportunities, ventures, decis
     const audited: Array<{ event: string; detail: Record<string, unknown> }> = [];
     const service = new FleetService({ admin: svcStore, agent: R.gw, realReplicationEnabled: false, reaperIntervalMs: 0,
       release: { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40), buildId: "d".repeat(64), lockfileSha256: "e".repeat(64) },
-      audit: (e: { event: string; detail: Record<string, unknown> }) => { audited.push({ event: e.event, detail: e.detail }); }, terminator: new UnsupportedSandboxTerminator(),
+      audit: (e) => { audited.push({ event: e.event, detail: e.detail as Record<string, unknown> }); }, terminator: new UnsupportedSandboxTerminator(),
       cognitionProviderFactory: () => { throw new Error("no inference in this test"); } });
     const url = (await service.listen(0, "127.0.0.1")).url;
     try {
