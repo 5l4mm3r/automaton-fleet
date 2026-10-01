@@ -355,8 +355,8 @@ export class FleetApiClient implements FleetBackend {
     return this.call<Record<string, unknown>>("POST", "/v1/experiments/list", { limit });
   }
 
-  /** Schema v25 (F1-LIVE-01): ask the owner for a decision or action only the owner can take (a request; grants nothing). */
-  async ownerRequestCreate(r: { idempotencyKey: string; category: string; goalRef: string | null; title: string; detail: string; blocking: boolean }) {
+  /** Schema v26 (F2-A): record ONE action that needs a human/legal identity or a constitutional change (blocks only that action). */
+  async ownerRequestCreate(r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string }) {
     return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/create", r);
   }
 
@@ -364,7 +364,7 @@ export class FleetApiClient implements FleetBackend {
     return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/withdraw", { requestId });
   }
 
-  /** This founder's own owner requests: status, age, staleness and the owner's answer. */
+  /** This founder's own external dependencies: kind, the unavailable action, status and any recorded answer. */
   async ownerRequests() {
     return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/list", {});
   }

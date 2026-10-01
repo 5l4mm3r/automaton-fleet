@@ -41,8 +41,8 @@ export interface ToolboxPorts {
   experimentStart?(experimentId: string): Promise<Record<string, unknown>>;
   experimentRecord?(r: { experimentId: string; idempotencyKey: string; kind: string; amountMinor?: number; metric?: string; value?: number; attemptId?: string; note?: string; detail?: Record<string, unknown> }): Promise<Record<string, unknown>>;
   experimentList?(limit?: number): Promise<Record<string, unknown>>;
-  /** Schema v25 (F1-LIVE-01): an explicit request for an OWNER decision or action (optional: absent → unavailable). */
-  ownerRequestCreate?(r: { idempotencyKey: string; category: string; goalRef: string | null; title: string; detail: string; blocking: boolean }): Promise<Record<string, unknown>>;
+  /** Schema v26 (F2-A): record ONE action that needs a human/legal identity or a constitutional change (optional). */
+  ownerRequestCreate?(r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string }): Promise<Record<string, unknown>>;
   ownerRequestWithdraw?(requestId: string): Promise<Record<string, unknown>>;
 }
 
@@ -95,7 +95,7 @@ function memoryRecord(call: ToolCall, out: ToolOutcome, r: FactResult | null): M
   };
 }
 const IMPLEMENTED = new Set([
-  "read_file", "list_files", "write_file", "exec", "remember_fact", "remember_facts", "retract_fact", "request_owner_decision", "withdraw_owner_request", "recall_facts", "set_goal", "complete_goal", "list_goals",
+  "read_file", "list_files", "write_file", "exec", "remember_fact", "remember_facts", "retract_fact", "record_external_dependency", "withdraw_external_dependency", "recall_facts", "set_goal", "complete_goal", "list_goals",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
 ]);
@@ -370,20 +370,22 @@ export class FounderToolbox {
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.requestIdentityFact({ factKey: String(a.factKey ?? ""), purpose: String(a.purpose ?? ""), workflow: String(a.workflow ?? "") }))) };
         case "sleep":
           return { name: call.name, ok: true, output: "sleeping" };
-        // F1-LIVE-01: a request only — it records what the founder needs from the owner; it grants nothing.
-        case "request_owner_decision": {
-          if (!this.o.ports.ownerRequestCreate) return refuse("FLEET_TOOL_NOT_AVAILABLE", "owner requests are not available to this runtime");
+        // F2-A: an action-scoped external dependency. It makes ONE action unavailable; it never blocks the founder, a goal
+        // or other work, and it grants nothing. Ordinary business choices are not valid kinds (FleetController refuses them).
+        case "record_external_dependency": {
+          if (!this.o.ports.ownerRequestCreate) return refuse("FLEET_TOOL_NOT_AVAILABLE", "external dependencies are not available to this runtime");
           const title = str(a.title, 200);
           const detail = str(a.detail, 2000);
-          const category = str(a.category, 40);
-          if (!title || !detail || !category) return refuse("FLEET_BAD_REQUEST", "category, title and detail required");
+          const kind = str(a.kind, 40);
+          const action = str(a.action, 200);
+          if (!title || !detail || !kind || !action) return refuse("FLEET_BAD_REQUEST", "kind, action, title and detail required");
           const goalRef = typeof a.goalId === "string" && /^g\d{1,6}$/.test(a.goalId) ? a.goalId : null;
-          const r = await this.o.ports.ownerRequestCreate({ idempotencyKey: `own:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128), category, goalRef, title, detail, blocking: a.blocking === true })
+          const r = await this.o.ports.ownerRequestCreate({ idempotencyKey: `dep:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128), kind, action, goalRef, title, detail })
             .catch(ownerRefusal);
           return { name: call.name, ok: r.ok === true, ...(r.ok === true ? {} : { refused: String(r.code ?? "FLEET_REFUSED") }), output: clip(JSON.stringify(r)) };
         }
-        case "withdraw_owner_request": {
-          if (!this.o.ports.ownerRequestWithdraw) return refuse("FLEET_TOOL_NOT_AVAILABLE", "owner requests are not available to this runtime");
+        case "withdraw_external_dependency": {
+          if (!this.o.ports.ownerRequestWithdraw) return refuse("FLEET_TOOL_NOT_AVAILABLE", "external dependencies are not available to this runtime");
           if (!EXPERIMENT_ID.test(String(a.requestId ?? ""))) return refuse("FLEET_BAD_REQUEST", "requestId required");
           const r = await this.o.ports.ownerRequestWithdraw(String(a.requestId)).catch(ownerRefusal);
           return { name: call.name, ok: r.ok === true, ...(r.ok === true ? {} : { refused: String(r.code ?? "FLEET_REFUSED") }), output: clip(JSON.stringify(r)) };

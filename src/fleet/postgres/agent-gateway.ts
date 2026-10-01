@@ -272,9 +272,9 @@ export class PgAgentGateway {
     return this.call("api_experiment_list", [agentId, token, limit]);
   }
 
-  /** Schema v25 (F1-LIVE-01): explicit owner requests. */
-  async ownerRequestCreate(agentId: string, token: string, r: { idempotencyKey: string; category: string; goalRef: string | null; title: string; detail: string; blocking: boolean }): Promise<Record<string, unknown> & { ok: boolean }> {
-    return this.call("api_owner_request_create", [agentId, token, r.idempotencyKey, r.category, r.goalRef, r.title, r.detail, r.blocking]);
+  /** Schema v26 (F2-A): action-scoped external dependencies (only identity/legal/constitutional kinds). */
+  async ownerRequestCreate(agentId: string, token: string, r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_owner_request_create", [agentId, token, r.idempotencyKey, r.kind, r.action, r.goalRef, r.title, r.detail]);
   }
 
   async ownerRequestWithdraw(agentId: string, token: string, requestId: string): Promise<Record<string, unknown> & { ok: boolean }> {

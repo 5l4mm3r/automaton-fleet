@@ -74,6 +74,8 @@ export interface RoutingStats {
   budgetStops: number;
   /** R23.1: turns that started from the slim bare-wake-up packet (nothing had changed since a sleep-only turn). */
   slimWakeups: number;
+  /** F2-A: idle wakes turned into autonomous opportunity discovery (controller-granted allowance). */
+  discoveryTurns: number;
   lastRoute: { tier: string; model: string; taskClass: string; scope: string } | null;
 }
 
@@ -166,47 +168,61 @@ export function wakeDigest(memoryDir: string, workspaceDir: string, economics: R
   return h.digest("hex");
 }
 
-/** One owner request as the founder sees it (founder- and owner-written text is data, bounded here). */
-export interface OwnerRequestView { requestId: string; category: string; goalRef: string | null; title: string; blocking: boolean; status: string; ageS: number; stale: boolean;
-  staleAfterS: number; response: string | null }
+/**
+ * F2-A: one external dependency as the founder sees it (founder- and owner-written text is data, bounded here). A
+ * dependency makes ONE action unavailable; it never blocks the founder, a goal or other work, and nothing escalates it
+ * toward the owner over time.
+ */
+export interface DependencyView { requestId: string; kind: string; action: string; goalRef: string | null; title: string; status: string; ageS: number; response: string | null }
 
-export function parseOwnerRequests(v: unknown): OwnerRequestView[] | null {
+export function parseDependencies(v: unknown): DependencyView[] | null {
   const list = v && typeof v === "object" && Array.isArray((v as { requests?: unknown }).requests) ? (v as { requests: unknown[] }).requests : null;
   if (!list) return null;
-  const out: OwnerRequestView[] = [];
+  const out: DependencyView[] = [];
   for (const x of list.slice(0, 20)) {
     const r = x as Record<string, unknown>;
     if (typeof r.requestId !== "string" || typeof r.status !== "string") continue;
-    out.push({ requestId: r.requestId, category: String(r.category ?? "other").slice(0, 40), goalRef: typeof r.goalRef === "string" ? r.goalRef.slice(0, 16) : null,
-      title: String(r.title ?? "").slice(0, 160), blocking: r.blocking === true, status: r.status.slice(0, 20), ageS: Math.max(0, Number(r.ageS) || 0),
-      stale: r.stale === true, staleAfterS: Math.max(1, Number(r.staleAfterS) || 86_400), response: typeof r.response === "string" ? r.response.slice(0, 400) : null });
+    out.push({ requestId: r.requestId, kind: String(r.kind ?? r.category ?? "other").slice(0, 40), action: String(r.action ?? r.title ?? "").slice(0, 200),
+      goalRef: typeof r.goalRef === "string" ? r.goalRef.slice(0, 16) : null, title: String(r.title ?? "").slice(0, 160), status: r.status.slice(0, 20),
+      ageS: Math.max(0, Number(r.ageS) || 0), response: typeof r.response === "string" ? r.response.slice(0, 400) : null });
   }
   return out;
 }
 
-/**
- * Staleness milestone of a pending request: -1 while fresh, then 0, 1, 2 … at 1×, 2×, 4× … the threshold (capped at 6,
- * i.e. 64×). Folded into the wake digest, it re-surfaces a long-unanswered blocking request at a few, ever sparser
- * milestones — never on every wake, and never forever.
- */
-export function staleBucket(r: OwnerRequestView): number {
-  if (r.status !== "pending" || !r.stale) return -1;
-  return Math.min(6, Math.max(0, Math.floor(Math.log2(Math.max(1, r.ageS / r.staleAfterS)))));
-}
-
-const age = (s: number) => (s < 2 * 3_600 ? `${Math.round(s / 60)} min` : s < 2 * 86_400 ? `${Math.round(s / 3_600)} h` : `${Math.round(s / 86_400)} d`);
-
-/** The owner-request lines of a task (bounded; data, not instructions). */
-export function ownerRequestLines(list: OwnerRequestView[]): string[] {
+/** The dependency lines of a task (bounded; data, not instructions). Open ones are listed as unavailable ACTIONS only. */
+export function dependencyLines(list: DependencyView[]): string[] {
   const shown = list.filter((r) => r.status === "pending" || r.ageS < 7 * 86_400).slice(0, 5);
   return shown.map((r) => {
-    const head = `Owner request ${r.requestId.slice(0, 8)} (${r.category}${r.goalRef ? `, ${r.blocking ? "blocks" : "about"} goal ${r.goalRef}` : r.blocking ? ", blocking" : ""}) "${r.title}"`;
+    const head = `External dependency ${r.requestId.slice(0, 8)} (${r.kind})`;
+    if (r.status === "pending") {
+      return `${head}: the action "${r.action}" is unavailable for now. This blocks only that action — not you, your goals or other work: pursue alternatives (another marketplace, direct sales that need no new account, another product, service, niche or venture).`;
+    }
+    if (r.status === "withdrawn") return `${head} for "${r.action}": withdrawn by you.`;
+    if (r.status === "retired") return `${head} for "${r.action}": retired — ordinary business decisions are yours; nothing waits on it.`;
     // An answer is information, not authority: only the tools and policy in this packet define what you can do.
-    if (r.status === "withdrawn") return `${head}: withdrawn by you.`;
-    if (r.status !== "pending") return `${head}: ${r.status.toUpperCase()} by the owner${r.response ? `, who wrote: "${r.response}"` : " (no comment)"}. This records the owner's answer only; it grants no capability, account, money or permission by itself.`;
-    if (!r.stale) return `${head}: pending for ${age(r.ageS)}.`;
-    return `${head}: pending for ${age(r.ageS)} — STALE (no owner answer after ${age(r.staleAfterS)}).${r.blocking ? " Waiting is one option, not the only one: you may pursue an alternative route, propose a safe experiment, gather more evidence, pivot, abandon the blocked path, or keep waiting if that is genuinely best — decide, and say why." : ""}`;
+    return `${head} for "${r.action}": ${r.status.toUpperCase()}${r.response ? `, with the note: "${r.response}"` : ""}. This records an answer only; it grants no capability, account, money or permission by itself.`;
   });
+}
+
+/** F2-A: the controller's discovery allowance for this founder (reported in cognition status; absent = older controller). */
+export interface DiscoveryAllowance { allowed: boolean; budgetCents: number; spentTodayCents: number; runwayDays: number | null; reason: string }
+
+export function parseDiscovery(v: unknown): DiscoveryAllowance | null {
+  const d = v as Record<string, unknown> | null;
+  if (!d || typeof d.allowed !== "boolean") return null;
+  const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : Number(x) || 0);
+  return { allowed: d.allowed, budgetCents: n(d.budgetCents), spentTodayCents: n(d.spentTodayCents), runwayDays: d.runwayDays === null || d.runwayDays === undefined ? null : n(d.runwayDays),
+    reason: String(d.reason ?? "").slice(0, 120) };
+}
+
+/** The task of an idle wake that has discovery allowance: autonomous opportunity discovery instead of sleep (F2-A). */
+export function discoveryTask(d: DiscoveryAllowance): string {
+  return [
+    `No actionable current work — autonomous opportunity discovery (allowance today ${d.spentTodayCents}p of ${d.budgetCents}p${d.runwayDays !== null ? `; runway ≈ ${Math.round(d.runwayDays)} days` : ""}).`,
+    "Use this turn to find your next profitable work: research current demand; look for distribution routes that need no new account or human identity (direct sales, storefronts or channels you can use now) and alternative marketplaces;"
+      + " consider other products, services, niches or a new venture you can realistically build; compare, reject weak options, and record what you learn (remember_facts / set_goal / write_file).",
+    "Unavailable actions (external dependencies) do not block this. Keep the turn proportionate to the allowance, then continue or sleep with a one-line note of where you are.",
+  ].join("\n");
 }
 
 /** The capability view the controller reports in cognition status (null when it reports none). */
@@ -225,7 +241,7 @@ export function parseCapabilityView(v: unknown): { policySignature: string; tool
 export function slimWakePacket(p: TaskPacket): TaskPacket {
   const counts = `Nothing has changed since your last turn, which ended in sleep: ${p.knowledge.length} remembered fact(s)`
     + ` (keys: ${p.knowledge.map((k) => k.key).slice(0, 40).join(", ") || "none"}), ${p.notes.length} note file(s), ${p.evidence.length} saved page(s).`
-    + " If any of this means there is work to do, read what you need (recall_facts, list_goals, list_files, read_file) and do it; otherwise sleep.";
+    + " If any of this means there is work to do, read what you need (recall_facts, list_goals, list_files, read_file) and do it; otherwise you may sleep until your discovery allowance renews.";
   const slim: TaskPacket = {
     ...p, task: `${p.task}\n${counts}`, knowledge: [], institutionalKnowledge: [], evidence: [], notes: [], previousResults: p.previousResults.slice(-2),
     uncertainty: [], sizes: {},
@@ -254,7 +270,7 @@ export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS):
 
 export class FounderMind {
   turns = 0;
-  readonly routing: RoutingStats = { routedTurns: 0, steps: { T2: 0, T3: 0 }, routineCalls: 0, escalations: 0, escalationsReused: 0, actionBoundarySteps: 0, thinkingDropped: 0, budgetStops: 0, slimWakeups: 0, lastRoute: null };
+  readonly routing: RoutingStats = { routedTurns: 0, steps: { T2: 0, T3: 0 }, routineCalls: 0, escalations: 0, escalationsReused: 0, actionBoundarySteps: 0, thinkingDropped: 0, budgetStops: 0, slimWakeups: 0, discoveryTurns: 0, lastRoute: null };
   private restUntil = 0;
   private idleBackoff = 0;
   private idleSkip = 0;
@@ -413,10 +429,11 @@ export class FounderMind {
     const effective = view ? view.tools.filter((n) => COGNITION_TOOLS.has(n) || this.o.toolbox.implements(n)) : null;
     // The founder's own signature: the controller's policy (no tool names) + the tools this runtime can actually execute.
     const capabilities = view && effective ? { sig: crypto.createHash("sha256").update(`${view.policySignature}|${[...effective].sort().join(",")}`).digest("hex"), tools: effective } : null;
-    let owner: OwnerRequestView[] | null = null;
-    try { owner = parseOwnerRequests(await this.o.ports.ownerRequests?.()); } catch { owner = null; }
-    const signals = [capabilities ? `caps:${capabilities.sig}` : "",
-      ...(owner ?? []).map((r) => `req:${r.requestId}:${r.status}:${r.blocking ? 1 : 0}:${staleBucket(r)}`).sort()].filter(Boolean).join("|");
+    let deps: DependencyView[] | null = null;
+    try { deps = parseDependencies(await this.o.ports.ownerRequests?.()); } catch { deps = null; }
+    // F2-A: a dependency's STATUS is a signal (a resolution is news once); its age is not — nothing escalates over time.
+    const signals = [capabilities ? `caps:${capabilities.sig}` : "", ...(deps ?? []).map((r) => `dep:${r.requestId}:${r.status}`).sort()].filter(Boolean).join("|");
+    const discovery = parseDiscovery(status.discovery);
     const capNote: string[] = [];
     if (capabilities && prev?.capabilities?.sig !== capabilities.sig) {
       const exp = view!.experiments?.enabled === true
@@ -434,21 +451,27 @@ export class FounderMind {
       prev ? `Your previous turn (${prev.at}) ended with: ${prev.outcome || "(no closing note)"}${prev.tools.length ? ` [tools used: ${prev.tools.join(", ")}]` : ""}`
            : "No closing note from a previous turn is recorded: rely on your goals, facts and notes below.",
       ...capNote,
-      ...ownerRequestLines(owner ?? []),
+      ...dependencyLines(deps ?? []),
     ].join("\n");
     // R23.1: a bare wake-up — the previous turn only slept and nothing the founder could act on has changed since — gets the
     // slim packet. Anything else (a first turn, a working turn, any change in memory, workspace, economy, capabilities or
     // owner requests) gets the full one.
-    const bare = !!prev && prev.tools.length > 0 && prev.tools.every((t) => t === "sleep") && prev.wakeDigest !== null
+    const unchanged = !!prev && prev.tools.length > 0 && prev.tools.every((t) => t === "sleep") && prev.wakeDigest !== null
       && prev.wakeDigest === wakeDigest(R.memoryDir, R.workspaceDir, economics, signals);
+    // F2-A: an idle wake (nothing changed since a sleep-only turn) is NOT a sleep by default: while the controller's
+    // discovery allowance permits, it becomes autonomous opportunity discovery (a full packet). Only without allowance
+    // (budget spent today, runway too short, or an older controller) does it fall back to the slim packet.
+    const discover = unchanged && discovery?.allowed === true;
+    const bare = unchanged && !discover;
     let text: string;
     try {
       const full = buildTaskPacket({
-        memoryDir: R.memoryDir, workspaceDir: R.workspaceDir, task, economics,
+        memoryDir: R.memoryDir, workspaceDir: R.workspaceDir, task: discover ? `${task}\n${discoveryTask(discovery!)}` : task, economics,
         outputContract: { form: "analysis", mustCite: false, instructions: "Decide and take your next step with your tools. Remember whatever you will need later, then call sleep with a one-line note of where you are." },
       });
       text = renderBoundedPacket(bare ? slimWakePacket(full) : full);
       if (bare) this.routing.slimWakeups++;
+      if (discover) this.routing.discoveryTurns++;
     } catch (err) {
       const code = (err as { code?: string }).code ?? "FLEET_TASK_PACKET_INVALID";
       // The reason names packet sections and error kinds only (never packet content).
@@ -456,7 +479,7 @@ export class FounderMind {
       return { ...result, reason: `stopped: ${code}` };
     }
     const messages: ChatMessage[] = [{ role: "user", content: text }];
-    const packetKind = bare ? "slim" : "full";
+    const packetKind = bare ? "slim" : discover ? "discovery" : "full";
     const size = () => Buffer.byteLength(JSON.stringify({ messages }), "utf8");
     const maxSteps = this.o.maxStepsPerTurn ?? 4;
     const counters = { routine: 0, escalations: 0 };

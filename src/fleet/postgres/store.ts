@@ -995,16 +995,15 @@ export class PgFleetStore {
     }
   }
 
-  /** Schema v25 (F1-LIVE-01): owner-request liveness for doctor (admin credential; null before v25 or otherwise). */
-  async ownerRequestsOverview(): Promise<{ staleAfterS: number; pending: number; blockingPending: number; stalePending: number; staleBlocking: number;
-    oldestPendingS: number | null; knowledgePending: number; knowledgeImported: number; oldestKnowledgePendingS: number | null } | null> {
+  /** Schema v26 (F2-A): open external dependencies for doctor — information, never an owner to-do (admin credential). */
+  async ownerRequestsOverview(): Promise<{ open: number; openByKind: Record<string, number>; constitutionalOpen: number; oldestOpenS: number | null;
+    knowledgePending: number; knowledgeImported: number } | null> {
     try {
       return await this.read(async (c) => {
         const j = (await c.query(`SELECT fleet_owner_requests_overview() AS j`)).rows[0].j as Record<string, unknown>;
-        const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
-        return { staleAfterS: Number(j.staleAfterS), pending: Number(j.pending), blockingPending: Number(j.blockingPending), stalePending: Number(j.stalePending),
-          staleBlocking: Number(j.staleBlocking), oldestPendingS: n(j.oldestPendingS), knowledgePending: Number(j.knowledgePending),
-          knowledgeImported: Number(j.knowledgeImported ?? 0), oldestKnowledgePendingS: n(j.oldestKnowledgePendingS) };
+        return { open: Number(j.open ?? 0), openByKind: (j.openByKind ?? {}) as Record<string, number>, constitutionalOpen: Number(j.constitutionalOpen ?? 0),
+          oldestOpenS: j.oldestOpenS === null || j.oldestOpenS === undefined ? null : Number(j.oldestOpenS),
+          knowledgePending: Number(j.knowledgePending ?? 0), knowledgeImported: Number(j.knowledgeImported ?? 0) };
       });
     } catch {
       return null;

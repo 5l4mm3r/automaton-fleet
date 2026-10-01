@@ -70,8 +70,8 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   cancel_goal: "planning",
   complete_task: "planning",
   list_goals: "planning",
-  request_owner_decision: "planning",
-  withdraw_owner_request: "planning",
+  record_external_dependency: "planning",
+  withdraw_external_dependency: "planning",
   get_plan: "planning",
   orchestrator_status: "planning",
   // private memory

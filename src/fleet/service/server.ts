@@ -138,7 +138,7 @@ export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Obj
   "POST /v1/experiments/start": { auth: "session", witness: false },
   "POST /v1/experiments/record": { auth: "session", witness: false },
   "POST /v1/experiments/list": { auth: "session", witness: false },
-  // Schema v25 (F1-LIVE-01): explicit owner requests (a request records a need; only the owner decides; nothing is granted).
+  // Schema v25/v26: action-scoped external dependencies (F2-A: one unavailable action; never blocks the founder; grants nothing).
   "POST /v1/owner-requests/create": { auth: "session", witness: false },
   "POST /v1/owner-requests/withdraw": { auth: "session", witness: false },
   "POST /v1/owner-requests/list": { auth: "session", witness: false },
@@ -1130,9 +1130,13 @@ export class FleetService {
 
       case "/v1/owner-requests/create": {
         const { agentId, token } = await this.credentials(req, path, ctx);
+        // A runtime older than F2-A sends a category: the identity/legal ones map to a kind; anything ordinary is refused
+        // by the registry (FLEET_NOT_AN_EXCEPTION) — it was never the owner's to decide.
+        const legacyKind: Record<string, string> = { account_or_identity: "kyc", policy_exception: "constitutional_change" };
+        const kind = typeof body.kind === "string" ? body.kind.slice(0, 40) : (legacyKind[str(body, "category", 40)] ?? str(body, "category", 40));
         const r = await agent.ownerRequestCreate(agentId, token, {
-          idempotencyKey: str(body, "idempotencyKey", 128), category: str(body, "category", 40), goalRef: typeof body.goalRef === "string" ? body.goalRef.slice(0, 16) : null,
-          title: str(body, "title", 200), detail: str(body, "detail", 2000), blocking: body.blocking === true,
+          idempotencyKey: str(body, "idempotencyKey", 128), kind, action: typeof body.action === "string" ? body.action.slice(0, 200) : str(body, "title", 200),
+          goalRef: typeof body.goalRef === "string" ? body.goalRef.slice(0, 16) : null, title: str(body, "title", 200), detail: str(body, "detail", 2000),
         });
         if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "owner request refused");
         this.audit("owner_request_create", agentId, { ok: r.ok, code: r.code ?? null });

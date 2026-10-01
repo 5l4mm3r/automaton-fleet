@@ -31,7 +31,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import {
-  FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTED_TOOLS, ProviderError,
+  FOUNDER_CHARTER_V2, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_ADDENDUM_R23, FOUNDER_ROUTED_TOOLS, ProviderError,
   type ChatMessage, type ChatResult, type CognitionProvider, type ToolCall, type ToolSpec,
 } from "../cognition/types.js";
 import { toolsFor } from "../cognition/gateway.js";
@@ -55,7 +55,8 @@ export const REPLICATES = 3;
  * The production routed T2 prefix (routed-gateway: an ordinary step): charter + routed addendum; the founder tools,
  * the two cognition tools and — the pipeline is on in production — the experiment tools. Identical in every arm.
  */
-export const EVAL_SYSTEM = `${FOUNDER_CHARTER}\n${FOUNDER_ROUTED_ADDENDUM}`;
+// The sealed evaluations' instrument: the charter and routed addendum as they were run (frozen; F2 changed production's).
+export const EVAL_SYSTEM = `${FOUNDER_CHARTER_V2}\n${FOUNDER_ROUTED_ADDENDUM_R23}`;
 export function evalTools(): ToolSpec[] {
   const allowed = new Set(FOUNDER_MANIFEST_V2.allowed as readonly string[]);
   return [...toolsFor([...allowed]), ...FOUNDER_ROUTED_TOOLS.filter((t) => allowed.has(t.capability)), ...FOUNDER_EXPERIMENT_TOOLS.filter((t) => allowed.has(t.capability))];

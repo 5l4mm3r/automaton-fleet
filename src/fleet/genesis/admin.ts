@@ -517,11 +517,12 @@ export class GenesisOps {
   }
 
   /**
-   * OWNER: import a legacy knowledge proposal that was really an operational owner request as an UNRESOLVED owner request
-   * (same id, founder and creation time; category and blocking stated here, never inferred). Decides nothing; idempotent.
+   * Admin migration step: import a legacy knowledge proposal that was really an identity/legal dependency as an
+   * action-scoped dependency (same id, founder and creation time; kind and the one action stated here). Decides nothing;
+   * blocks nothing but that action; idempotent.
    */
-  importOwnerRequest(proposalId: string, category: string, blocking: boolean, goalRef: string | null, actor: string) {
-    return this.one<Record<string, unknown>>(`SELECT fleet_owner_request_import($1, $2, $3, $4, $5) AS r`, [proposalId, category, blocking, goalRef, actor]);
+  importOwnerRequest(proposalId: string, kind: string, action: string, goalRef: string | null, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_owner_request_import($1, $2, $3, $4, $5) AS r`, [proposalId, kind, action, goalRef, actor]);
   }
 
   decideIdentityClaim(claimId: string, approve: boolean, ttlS: number | null, maxReads: number | null, actor: string) {

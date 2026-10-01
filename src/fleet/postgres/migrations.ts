@@ -33,8 +33,9 @@ import { V22_SQL } from "./migrations-phase22.js";
 import { V23_SQL } from "./migrations-phase23.js";
 import { V24_SQL } from "./migrations-phase24.js";
 import { V25_SQL } from "./migrations-phase25.js";
+import { V26_SQL } from "./migrations-phase26.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 25;
+export const FLEET_PG_SCHEMA_VERSION = 26;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1154,6 +1155,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 23, name: "founder_runtime_upgrade_cache_policy", sql: V23_SQL },
   { version: 24, name: "opportunity_experiment_pipeline_inert", sql: V24_SQL },
   { version: 25, name: "owner_request_liveness", sql: V25_SQL },
+  { version: 26, name: "f2a_action_scoped_dependencies_discovery", sql: V26_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1241,7 +1243,7 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_experiment_record(text, text, uuid, text, text, bigint, text, numeric, uuid, text, jsonb)",
   "api_experiment_list(text, text, integer)",
   // v25 (F1-LIVE-01): explicit owner requests — create, withdraw and list the founder's own (only the owner decides).
-  "api_owner_request_create(text, text, text, text, text, text, text, boolean)",
+  "api_owner_request_create(text, text, text, text, text, text, text, text)",
   "api_owner_request_withdraw(text, text, uuid)",
   "api_owner_request_list(text, text)",
 ]);
