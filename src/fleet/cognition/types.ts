@@ -142,6 +142,8 @@ export const FOUNDER_TOOLS: readonly ToolSpec[] = Object.freeze([
   { name: "set_goal", capability: "planning", description: "Set a goal for yourself.", parameters: obj({ title: str("Goal", 300), rationale: str("Why", 2000) }, ["title"]) },
   { name: "complete_goal", capability: "planning", description: "Mark one of your goals complete.", parameters: obj({ id: str("Goal id", 40), outcome: str("What happened", 2000) }, ["id"]) },
   { name: "list_goals", capability: "planning", description: "List your goals.", parameters: obj({}, []) },
+  { name: "request_owner_decision", capability: "planning", description: "Ask the owner for a decision or action only the owner can take (e.g. enable a sales channel or account). It grants nothing by itself; its status and the owner's answer appear in your task packet. Mark it blocking when a goal cannot continue without it.", parameters: obj({ category: { type: "string", enum: ["sales_channel", "account_or_identity", "capital_or_spend", "policy_exception", "information", "other"] }, title: str("What you need, in one line", 200), detail: str("Why, what you tried, and what you will do if the answer is no", 2000), goalId: str("Goal id it serves, e.g. g1", 8), blocking: { type: "boolean" } }, ["category", "title", "detail"]) },
+  { name: "withdraw_owner_request", capability: "planning", description: "Withdraw one of your pending owner requests (e.g. after pivoting).", parameters: obj({ requestId: str("Request id", 36) }, ["requestId"]) },
   { name: "check_ledger", capability: "ledger.read", description: "Your own economic position: cash, protected principal, survival equity, revenue, expenses, lifetime contribution.", parameters: obj({}, []) },
   {
     name: "request_spend",

@@ -355,6 +355,20 @@ export class FleetApiClient implements FleetBackend {
     return this.call<Record<string, unknown>>("POST", "/v1/experiments/list", { limit });
   }
 
+  /** Schema v25 (F1-LIVE-01): ask the owner for a decision or action only the owner can take (a request; grants nothing). */
+  async ownerRequestCreate(r: { idempotencyKey: string; category: string; goalRef: string | null; title: string; detail: string; blocking: boolean }) {
+    return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/create", r);
+  }
+
+  async ownerRequestWithdraw(requestId: string) {
+    return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/withdraw", { requestId });
+  }
+
+  /** This founder's own owner requests: status, age, staleness and the owner's answer. */
+  async ownerRequests() {
+    return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/list", {});
+  }
+
   /** Schema v18: research the public web through FleetController's isolated fetcher (the result is UNTRUSTED data). */
   async researchFetch(p: { url: string; purpose: string }) {
     return (await this.call<{ result: Record<string, unknown> }>("POST", "/v1/research/fetch", p, false, 60_000)).result;

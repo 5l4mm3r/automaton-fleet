@@ -41,6 +41,9 @@ export interface ToolboxPorts {
   experimentStart?(experimentId: string): Promise<Record<string, unknown>>;
   experimentRecord?(r: { experimentId: string; idempotencyKey: string; kind: string; amountMinor?: number; metric?: string; value?: number; attemptId?: string; note?: string; detail?: Record<string, unknown> }): Promise<Record<string, unknown>>;
   experimentList?(limit?: number): Promise<Record<string, unknown>>;
+  /** Schema v25 (F1-LIVE-01): an explicit request for an OWNER decision or action (optional: absent → unavailable). */
+  ownerRequestCreate?(r: { idempotencyKey: string; category: string; goalRef: string | null; title: string; detail: string; blocking: boolean }): Promise<Record<string, unknown>>;
+  ownerRequestWithdraw?(requestId: string): Promise<Record<string, unknown>>;
 }
 
 export interface ToolOutcome {
@@ -72,6 +75,11 @@ export interface MemoryTelemetry {
   retracted: number;
   notCarried: number;
 }
+/** A controller refusal of an owner-request call, as data the founder can act on (the code is FleetController's). */
+const ownerRefusal = (err: unknown): Record<string, unknown> => {
+  const c = (err as { code?: unknown }).code;
+  return { ok: false, code: typeof c === "string" && /^FLEET_[A-Z_]+$/.test(c) ? c : "FLEET_TOOL_ERROR" };
+};
 const MEMORY_TOOLS = new Set(["remember_fact", "remember_facts", "retract_fact", "recall_facts"]);
 const CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
 
@@ -87,7 +95,7 @@ function memoryRecord(call: ToolCall, out: ToolOutcome, r: FactResult | null): M
   };
 }
 const IMPLEMENTED = new Set([
-  "read_file", "list_files", "write_file", "exec", "remember_fact", "remember_facts", "retract_fact", "recall_facts", "set_goal", "complete_goal", "list_goals",
+  "read_file", "list_files", "write_file", "exec", "remember_fact", "remember_facts", "retract_fact", "request_owner_decision", "withdraw_owner_request", "recall_facts", "set_goal", "complete_goal", "list_goals",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
 ]);
@@ -186,6 +194,11 @@ export class FounderToolbox {
       try { this.o.memoryTelemetry(memoryRecord(call, out, this.lastFact)); } catch { /* telemetry never affects the tool */ }
     }
     return out;
+  }
+
+  /** Whether this runtime executes the tool (a tool the controller advertises may be newer than this runtime). */
+  implements(name: string): boolean {
+    return IMPLEMENTED.has(name);
   }
 
   /** A call the mind answered without running it (the per-step limit): recorded like any refused memory write. */
@@ -357,6 +370,24 @@ export class FounderToolbox {
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.requestIdentityFact({ factKey: String(a.factKey ?? ""), purpose: String(a.purpose ?? ""), workflow: String(a.workflow ?? "") }))) };
         case "sleep":
           return { name: call.name, ok: true, output: "sleeping" };
+        // F1-LIVE-01: a request only — it records what the founder needs from the owner; it grants nothing.
+        case "request_owner_decision": {
+          if (!this.o.ports.ownerRequestCreate) return refuse("FLEET_TOOL_NOT_AVAILABLE", "owner requests are not available to this runtime");
+          const title = str(a.title, 200);
+          const detail = str(a.detail, 2000);
+          const category = str(a.category, 40);
+          if (!title || !detail || !category) return refuse("FLEET_BAD_REQUEST", "category, title and detail required");
+          const goalRef = typeof a.goalId === "string" && /^g\d{1,6}$/.test(a.goalId) ? a.goalId : null;
+          const r = await this.o.ports.ownerRequestCreate({ idempotencyKey: `own:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128), category, goalRef, title, detail, blocking: a.blocking === true })
+            .catch(ownerRefusal);
+          return { name: call.name, ok: r.ok === true, ...(r.ok === true ? {} : { refused: String(r.code ?? "FLEET_REFUSED") }), output: clip(JSON.stringify(r)) };
+        }
+        case "withdraw_owner_request": {
+          if (!this.o.ports.ownerRequestWithdraw) return refuse("FLEET_TOOL_NOT_AVAILABLE", "owner requests are not available to this runtime");
+          if (!EXPERIMENT_ID.test(String(a.requestId ?? ""))) return refuse("FLEET_BAD_REQUEST", "requestId required");
+          const r = await this.o.ports.ownerRequestWithdraw(String(a.requestId)).catch(ownerRefusal);
+          return { name: call.name, ok: r.ok === true, ...(r.ok === true ? {} : { refused: String(r.code ?? "FLEET_REFUSED") }), output: clip(JSON.stringify(r)) };
+        }
         // R24: every capital and outcome question is FleetController's; the founder's call is a request, its answer data.
         case "propose_experiment": {
           if (!this.o.ports.experimentPropose) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the experiment pipeline is not available to this runtime");

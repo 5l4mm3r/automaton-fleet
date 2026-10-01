@@ -21,6 +21,10 @@
  *   reproduction-eligibility <agentId>                             inert assessment (never executable)
  *   knowledge-review <proposalId> promote|reject [note…]
  *   identity-claim-decide <claimId> approve|reject [--ttl S] [--max-reads N]
+ *   owner-queue [all]                                              v25: founders' owner requests + knowledge proposals awaiting review (oldest first)
+ *   owner-request-decide <requestId> approved|declined|answered <response…>   v25: record the answer (grants nothing)
+ *   owner-request-import <proposalId> <category> blocking|non-blocking [--goal gN]   v25: a legacy knowledge proposal that is
+ *                                                                  really an owner request becomes an UNRESOLVED one (decides nothing)
  *
  * Schema v13 founder cognition (owner controls; never run by an AI operator):
  *   cognition-policy                                                  show the global policy
@@ -72,7 +76,7 @@ import { GENESIS_FOUNDERS, parseFxMicro, type AttestationEvidence, type PgGenesi
 export const GENESIS_COMMANDS = new Set([
   "genesis-policy", "genesis-bootstrap", "genesis-list", "genesis-status", "genesis-dry-run", "genesis-enable", "genesis-disable", "genesis-propose",
   "genesis-approve", "genesis-provision", "genesis-attest", "genesis-fail", "genesis-fund", "genesis-activate", "genesis-abort",
-  "reproduction-eligibility", "knowledge-review", "identity-claim-decide",
+  "reproduction-eligibility", "knowledge-review", "identity-claim-decide", "owner-queue", "owner-request-decide", "owner-request-import",
   "cognition-policy", "cognition-enable", "cognition-disable", "founder-cognition", "cognition-status", "cognition-log", "founders-report",
   "research-policy", "research-enable", "research-disable", "founder-research", "research-log",
   "cognition-routing", "cognition-tier-set", "cognition-tier-verify", "cognition-tier-enable", "cognition-tier-disable",
@@ -124,7 +128,7 @@ export async function runGenesisCommand(
     "--max-output", "--in-microcents", "--out-microcents", "--daily-budget", "--turns-per-hour", "--limit",
     "--cache-write-microcents", "--cache-read-microcents",
     "--founder-hourly", "--founder-daily", "--fleet-hourly", "--fleet-daily", "--hourly", "--daily",
-    "--hard-cap", "--approved", "--max-loss", "--confidence",
+    "--hard-cap", "--approved", "--max-loss", "--confidence", "--goal",
   ];
   const optInt = (name: string, min = 0) => (flag(a, name) === undefined ? null : int(flag(a, name), name, min));
   const p = positional(a, flags);
@@ -365,6 +369,18 @@ export async function runGenesisCommand(
     case "knowledge-review": {
       if (p[1] !== "promote" && p[1] !== "reject") throw new Error("usage: knowledge-review <proposalId> promote|reject [note…]");
       return ok(await g.reviewKnowledge(uuid(p[0], "knowledge-review"), p[1] === "promote", p.slice(2).join(" ") || null, actor));
+    }
+    case "owner-queue":
+      return ok(await g.ownerQueue(p[0] === "all"));
+    case "owner-request-decide": {
+      const d = p[1];
+      if (d !== "approved" && d !== "declined" && d !== "answered") throw new Error("usage: owner-request-decide <requestId> approved|declined|answered <response…>");
+      return ok(await g.decideOwnerRequest(uuid(p[0], "owner-request-decide"), d, p.slice(2).join(" ") || null, actor));
+    }
+    case "owner-request-import": {
+      const usage = "usage: owner-request-import <proposalId> sales_channel|account_or_identity|capital_or_spend|policy_exception|information|other blocking|non-blocking [--goal gN]";
+      if (!p[1] || (p[2] !== "blocking" && p[2] !== "non-blocking")) throw new Error(usage);
+      return ok(await g.importOwnerRequest(uuid(p[0], "owner-request-import"), p[1], p[2] === "blocking", flag(a, "--goal") ?? null, actor));
     }
     case "identity-claim-decide": {
       if (p[1] !== "approve" && p[1] !== "reject") throw new Error("usage: identity-claim-decide <claimId> approve|reject [--ttl S] [--max-reads N]");

@@ -26,6 +26,7 @@
  * monitoring, and drains in-flight requests on shutdown.
  */
 
+import { capabilityView } from "../cognition/capability-signature.js";
 import crypto from "crypto";
 import http from "http";
 import https from "https";
@@ -137,6 +138,10 @@ export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Obj
   "POST /v1/experiments/start": { auth: "session", witness: false },
   "POST /v1/experiments/record": { auth: "session", witness: false },
   "POST /v1/experiments/list": { auth: "session", witness: false },
+  // Schema v25 (F1-LIVE-01): explicit owner requests (a request records a need; only the owner decides; nothing is granted).
+  "POST /v1/owner-requests/create": { auth: "session", witness: false },
+  "POST /v1/owner-requests/withdraw": { auth: "session", witness: false },
+  "POST /v1/owner-requests/list": { auth: "session", witness: false },
 });
 
 /**
@@ -900,9 +905,13 @@ export class FleetService {
       // R23: whether THIS founder's calls are routed (global switch AND its own opt-in). A routed runtime then sends
       // task packets and routing requests; a legacy runtime ignores the field. Nothing else about routing is disclosed.
       const routing = this.opts.cognitionProviderFactory ? await admin.cognitionRoutingState(agentId) : null;
+      // F1-LIVE-01: the semantic capability signature (what this founder is offered), so a genuine capability change
+      // reaches it once instead of being hidden behind "nothing has changed". Unavailable = omitted (old behaviour).
+      const caps = await agent.capabilities(agentId, token).catch(() => null);
+      const capabilities = caps && caps.ok ? capabilityView(caps as Record<string, unknown>, routing?.routingEnabled === true) : null;
       // The founder's client waits longer than the controller's whole inference deadline (L2).
       return { cognition: { ...status, deadlineMs: this.cognitionDeadlineMs(), founderWaitMs: this.cognitionDeadlineMs() + FOUNDER_WAIT_MARGIN_MS,
-        routing: { active: routing?.routingEnabled === true } } };
+        routing: { active: routing?.routingEnabled === true }, ...(capabilities ? { capabilities } : {}) } };
     }
 
     if (method === "GET" && path === "/v1/research/status") {
@@ -1116,6 +1125,31 @@ export class FleetService {
         const { agentId, token } = await this.credentials(req, path, ctx);
         const r = await agent.experimentList(agentId, token, Math.min(50, Math.max(1, Number(body.limit) || 20)));
         if (!r.ok) throw FleetService.refusal(r, "experiments refused");
+        return r;
+      }
+
+      case "/v1/owner-requests/create": {
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const r = await agent.ownerRequestCreate(agentId, token, {
+          idempotencyKey: str(body, "idempotencyKey", 128), category: str(body, "category", 40), goalRef: typeof body.goalRef === "string" ? body.goalRef.slice(0, 16) : null,
+          title: str(body, "title", 200), detail: str(body, "detail", 2000), blocking: body.blocking === true,
+        });
+        if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "owner request refused");
+        this.audit("owner_request_create", agentId, { ok: r.ok, code: r.code ?? null });
+        return r;
+      }
+      case "/v1/owner-requests/withdraw": {
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const id = str(body, "requestId", 36);
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return { ok: false, code: "FLEET_BAD_REQUEST" };
+        const r = await agent.ownerRequestWithdraw(agentId, token, id);
+        if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "owner request refused");
+        return r;
+      }
+      case "/v1/owner-requests/list": {
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const r = await agent.ownerRequestList(agentId, token);
+        if (!r.ok) throw FleetService.refusal(r, "owner requests refused");
         return r;
       }
 

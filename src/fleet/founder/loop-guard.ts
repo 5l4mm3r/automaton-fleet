@@ -15,7 +15,7 @@ import type { ToolCall } from "../cognition/types.js";
 import type { ToolOutcome } from "./toolbox.js";
 
 const READ_ONLY = new Set(["read_file", "list_files", "recall_facts", "list_goals", "check_ledger", "read_knowledge"]);
-const MUTATING = new Set(["write_file", "remember_fact", "remember_facts", "retract_fact", "set_goal", "complete_goal", "exec"]);
+const MUTATING = new Set(["write_file", "remember_fact", "remember_facts", "retract_fact", "request_owner_decision", "withdraw_owner_request", "set_goal", "complete_goal", "exec"]);
 /** Refusal codes that describe a transient condition (bounded retry allowed). */
 const TRANSIENT = /^(RESEARCH_(TIMEOUT|UNAVAILABLE|RATE_LIMITED|UPSTREAM)|FLEET_(RATE_LIMITED|RESEARCH_QUOTA|UNAVAILABLE)|FLEET_TOOL_ERROR)/;
 

@@ -48,6 +48,8 @@ export interface MindPorts {
     /** Routed path only: what FleetController decided for this call. */ route?: { tier: string; model: string; taskClass: string; scope: string } }>;
   /** R23 routed mode: the founder's own economic position for the task packet (exact software output: T0). */
   ledger?(): Promise<unknown>;
+  /** F1-LIVE-01: this founder's own owner requests (status, age, staleness; T0). Absent = not offered by this controller. */
+  ownerRequests?(): Promise<unknown>;
 }
 
 /** What a routed mind needs beyond the legacy one (absent = this runtime never routes). */
@@ -141,7 +143,7 @@ const WAKE_LEDGER_FIELDS = ["reserved", "reservedRecoverable", "assetsRecoverabl
  * could act on — its facts and goals (content), its workspace (paths, sizes, mtimes) and the economy fields above. The
  * conversation history and the decision log are not part of it.
  */
-export function wakeDigest(memoryDir: string, workspaceDir: string, economics: Record<string, unknown>): string {
+export function wakeDigest(memoryDir: string, workspaceDir: string, economics: Record<string, unknown>, signals = ""): string {
   const h = crypto.createHash("sha256");
   for (const f of ["facts.json", "goals.json"]) {
     try { h.update(`${f}\0`).update(fs.readFileSync(path.join(memoryDir, f))); } catch { h.update(`${f}\0-`); }
@@ -159,7 +161,60 @@ export function wakeDigest(memoryDir: string, workspaceDir: string, economics: R
   };
   walk("");
   h.update(`\0ledger\0${JSON.stringify(WAKE_LEDGER_FIELDS.map((k) => economics[k] ?? null))}`);
+  // F1-LIVE-01: semantic liveness signals (capability signature, owner-request states). Empty = the pre-F1-LIVE-01 digest.
+  if (signals) h.update(`\0signals\0${signals}`);
   return h.digest("hex");
+}
+
+/** One owner request as the founder sees it (founder- and owner-written text is data, bounded here). */
+export interface OwnerRequestView { requestId: string; category: string; goalRef: string | null; title: string; blocking: boolean; status: string; ageS: number; stale: boolean;
+  staleAfterS: number; response: string | null }
+
+export function parseOwnerRequests(v: unknown): OwnerRequestView[] | null {
+  const list = v && typeof v === "object" && Array.isArray((v as { requests?: unknown }).requests) ? (v as { requests: unknown[] }).requests : null;
+  if (!list) return null;
+  const out: OwnerRequestView[] = [];
+  for (const x of list.slice(0, 20)) {
+    const r = x as Record<string, unknown>;
+    if (typeof r.requestId !== "string" || typeof r.status !== "string") continue;
+    out.push({ requestId: r.requestId, category: String(r.category ?? "other").slice(0, 40), goalRef: typeof r.goalRef === "string" ? r.goalRef.slice(0, 16) : null,
+      title: String(r.title ?? "").slice(0, 160), blocking: r.blocking === true, status: r.status.slice(0, 20), ageS: Math.max(0, Number(r.ageS) || 0),
+      stale: r.stale === true, staleAfterS: Math.max(1, Number(r.staleAfterS) || 86_400), response: typeof r.response === "string" ? r.response.slice(0, 400) : null });
+  }
+  return out;
+}
+
+/**
+ * Staleness milestone of a pending request: -1 while fresh, then 0, 1, 2 … at 1×, 2×, 4× … the threshold (capped at 6,
+ * i.e. 64×). Folded into the wake digest, it re-surfaces a long-unanswered blocking request at a few, ever sparser
+ * milestones — never on every wake, and never forever.
+ */
+export function staleBucket(r: OwnerRequestView): number {
+  if (r.status !== "pending" || !r.stale) return -1;
+  return Math.min(6, Math.max(0, Math.floor(Math.log2(Math.max(1, r.ageS / r.staleAfterS)))));
+}
+
+const age = (s: number) => (s < 2 * 3_600 ? `${Math.round(s / 60)} min` : s < 2 * 86_400 ? `${Math.round(s / 3_600)} h` : `${Math.round(s / 86_400)} d`);
+
+/** The owner-request lines of a task (bounded; data, not instructions). */
+export function ownerRequestLines(list: OwnerRequestView[]): string[] {
+  const shown = list.filter((r) => r.status === "pending" || r.ageS < 7 * 86_400).slice(0, 5);
+  return shown.map((r) => {
+    const head = `Owner request ${r.requestId.slice(0, 8)} (${r.category}${r.goalRef ? `, ${r.blocking ? "blocks" : "about"} goal ${r.goalRef}` : r.blocking ? ", blocking" : ""}) "${r.title}"`;
+    // An answer is information, not authority: only the tools and policy in this packet define what you can do.
+    if (r.status === "withdrawn") return `${head}: withdrawn by you.`;
+    if (r.status !== "pending") return `${head}: ${r.status.toUpperCase()} by the owner${r.response ? `, who wrote: "${r.response}"` : " (no comment)"}. This records the owner's answer only; it grants no capability, account, money or permission by itself.`;
+    if (!r.stale) return `${head}: pending for ${age(r.ageS)}.`;
+    return `${head}: pending for ${age(r.ageS)} — STALE (no owner answer after ${age(r.staleAfterS)}).${r.blocking ? " Waiting is one option, not the only one: you may pursue an alternative route, propose a safe experiment, gather more evidence, pivot, abandon the blocked path, or keep waiting if that is genuinely best — decide, and say why." : ""}`;
+  });
+}
+
+/** The capability view the controller reports in cognition status (null when it reports none). */
+export function parseCapabilityView(v: unknown): { policySignature: string; tools: string[]; experiments: Record<string, unknown> | null } | null {
+  const c = v as Record<string, unknown> | null;
+  if (!c || typeof c.policySignature !== "string" || !/^[0-9a-f]{64}$/.test(c.policySignature) || !Array.isArray(c.tools)) return null;
+  return { policySignature: c.policySignature, tools: c.tools.filter((t): t is string => typeof t === "string").slice(0, 100),
+    experiments: c.experiments && typeof c.experiments === "object" ? (c.experiments as Record<string, unknown>) : null };
 }
 
 /**
@@ -257,7 +312,7 @@ export class FounderMind {
     const waitMs = Number(status.founderWaitMs) || undefined;
     this.turns++;
     // R23: routed only when the controller says THIS founder is routed; otherwise the legacy turn below, unchanged.
-    if (this.o.routed && (status.routing as { active?: unknown } | undefined)?.active === true) return this.routedTurn(observation, waitMs, result);
+    if (this.o.routed && (status.routing as { active?: unknown } | undefined)?.active === true) return this.routedTurn(observation, waitMs, result, status);
     const messages = this.history();
     messages.push({ role: "user", content: observation.slice(0, MAX_CONTENT) });
     const maxSteps = this.o.maxStepsPerTurn ?? 4;
@@ -311,11 +366,13 @@ export class FounderMind {
 
   // ─────────────────────────────────────────────── R23 routed mode
 
-  private continuity(): { at: string; outcome: string; tools: string[]; wakeDigest: string | null } | null {
+  private continuity(): { at: string; outcome: string; tools: string[]; wakeDigest: string | null; capabilities: { sig: string; tools: string[] } | null } | null {
     try {
       const c = JSON.parse(fs.readFileSync(path.join(this.o.stateDir, CONTINUITY_FILE), "utf8"));
+      const caps = c?.capabilities && typeof c.capabilities.sig === "string" && Array.isArray(c.capabilities.tools)
+        ? { sig: String(c.capabilities.sig), tools: (c.capabilities.tools as unknown[]).map(String).slice(0, 100) } : null;
       return typeof c?.at === "string" && typeof c?.outcome === "string"
-        ? { at: c.at, outcome: c.outcome, tools: Array.isArray(c.tools) ? c.tools.map(String).slice(0, 20) : [], wakeDigest: typeof c.wakeDigest === "string" ? c.wakeDigest : null }
+        ? { at: c.at, outcome: c.outcome, tools: Array.isArray(c.tools) ? c.tools.map(String).slice(0, 20) : [], wakeDigest: typeof c.wakeDigest === "string" ? c.wakeDigest : null, capabilities: caps }
         : null;
     } catch {
       return null;
@@ -323,9 +380,10 @@ export class FounderMind {
   }
 
   /** `wakeDigest`: the state digest at the END of a sleep-only turn (absent otherwise), for the next bare-wake-up test. */
-  private saveContinuity(outcome: string, tools: string[], wake: string | null = null): void {
+  private saveContinuity(outcome: string, tools: string[], wake: string | null = null, capabilities: { sig: string; tools: string[] } | null = null): void {
     const f = path.join(this.o.stateDir, CONTINUITY_FILE);
-    fs.writeFileSync(`${f}.tmp`, JSON.stringify({ at: new Date().toISOString(), turn: this.turns, outcome: outcome.slice(0, 1_200), tools: tools.slice(-20), ...(wake ? { wakeDigest: wake } : {}) }), { mode: 0o600 });
+    fs.writeFileSync(`${f}.tmp`, JSON.stringify({ at: new Date().toISOString(), turn: this.turns, outcome: outcome.slice(0, 1_200), tools: tools.slice(-20), ...(wake ? { wakeDigest: wake } : {}),
+      ...(capabilities ? { capabilities } : {}) }), { mode: 0o600 });
     fs.renameSync(`${f}.tmp`, f);
   }
 
@@ -336,7 +394,7 @@ export class FounderMind {
     this.idleSkip = this.idleBackoff;
   }
 
-  private async routedTurn(observation: string, waitMs: number | undefined, result: TurnResult): Promise<TurnResult> {
+  private async routedTurn(observation: string, waitMs: number | undefined, result: TurnResult, status: Record<string, unknown> = {}): Promise<TurnResult> {
     const R = this.o.routed!;
     const taskId = `turn-${Date.now().toString(36)}-${this.turns}`;
     this.routing.routedTurns++;
@@ -349,15 +407,40 @@ export class FounderMind {
       economics = {};
     }
     const prev = this.continuity();
+    // F1-LIVE-01: what this founder can actually do now (offered by the controller AND implemented by this runtime), and
+    // its owner requests. Both are semantic signals: a genuine change brings one full packet, then slim wake-ups resume.
+    const view = parseCapabilityView(status.capabilities);
+    const effective = view ? view.tools.filter((n) => COGNITION_TOOLS.has(n) || this.o.toolbox.implements(n)) : null;
+    // The founder's own signature: the controller's policy (no tool names) + the tools this runtime can actually execute.
+    const capabilities = view && effective ? { sig: crypto.createHash("sha256").update(`${view.policySignature}|${[...effective].sort().join(",")}`).digest("hex"), tools: effective } : null;
+    let owner: OwnerRequestView[] | null = null;
+    try { owner = parseOwnerRequests(await this.o.ports.ownerRequests?.()); } catch { owner = null; }
+    const signals = [capabilities ? `caps:${capabilities.sig}` : "",
+      ...(owner ?? []).map((r) => `req:${r.requestId}:${r.status}:${r.blocking ? 1 : 0}:${staleBucket(r)}`).sort()].filter(Boolean).join("|");
+    const capNote: string[] = [];
+    if (capabilities && prev?.capabilities?.sig !== capabilities.sig) {
+      const exp = view!.experiments?.enabled === true
+        ? ` Experiment pipeline: ON (${String(view!.experiments?.financialMode ?? "simulated")}; hard cap ${String(view!.experiments?.hardCapMinor ?? "?")} minor units; up to ${String(view!.experiments?.maxActive ?? "?")} active) — see list_experiments.` : "";
+      if (prev?.capabilities) {
+        const added = capabilities.tools.filter((t) => !prev.capabilities!.tools.includes(t));
+        const removed = prev.capabilities.tools.filter((t) => !capabilities.tools.includes(t));
+        capNote.push(`Your capabilities changed since your last turn.${added.length ? ` Newly available: ${added.join(", ")}.` : ""}${removed.length ? ` No longer available: ${removed.join(", ")}.` : ""}${exp}`);
+      } else {
+        capNote.push(`Your available tools (first capability record of this runtime): ${capabilities.tools.join(", ")}.${exp}`);
+      }
+    }
     const task = [
       observation.slice(0, MAX_CONTENT),
       prev ? `Your previous turn (${prev.at}) ended with: ${prev.outcome || "(no closing note)"}${prev.tools.length ? ` [tools used: ${prev.tools.join(", ")}]` : ""}`
            : "No closing note from a previous turn is recorded: rely on your goals, facts and notes below.",
+      ...capNote,
+      ...ownerRequestLines(owner ?? []),
     ].join("\n");
     // R23.1: a bare wake-up — the previous turn only slept and nothing the founder could act on has changed since — gets the
-    // slim packet. Anything else (a first turn, a working turn, any change in memory, workspace or economy) gets the full one.
+    // slim packet. Anything else (a first turn, a working turn, any change in memory, workspace, economy, capabilities or
+    // owner requests) gets the full one.
     const bare = !!prev && prev.tools.length > 0 && prev.tools.every((t) => t === "sleep") && prev.wakeDigest !== null
-      && prev.wakeDigest === wakeDigest(R.memoryDir, R.workspaceDir, economics);
+      && prev.wakeDigest === wakeDigest(R.memoryDir, R.workspaceDir, economics, signals);
     let text: string;
     try {
       const full = buildTaskPacket({
@@ -404,7 +487,7 @@ export class FounderMind {
         const code = (err as { code?: string }).code ?? "FLEET_COGNITION_ERROR";
         if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED") this.restUntil = Date.now() + 60_000;
         this.logDecision({ turn: this.turns, routed: true, step, taskClass: cls.taskClass, expectedTier: cls.tier, stopped: code });
-        if (result.steps > 0) this.saveContinuity(outcome || `(turn stopped: ${code})`, result.toolCalls);
+        if (result.steps > 0) this.saveContinuity(outcome || `(turn stopped: ${code})`, result.toolCalls, null, capabilities ?? prev?.capabilities ?? null);
         return { ...result, ran: result.steps > 0, reason: `stopped: ${code}` };
       }
       result.ran = true;
@@ -455,9 +538,9 @@ export class FounderMind {
     const sleptOnly = result.toolCalls.length > 0 && result.toolCalls.every((n) => n === "sleep");
     let digest: string | null = null;
     if (sleptOnly) {
-      try { digest = wakeDigest(R.memoryDir, R.workspaceDir, ((await this.o.ports.ledger?.()) as Record<string, unknown> | undefined) ?? {}); } catch { digest = null; }
+      try { digest = wakeDigest(R.memoryDir, R.workspaceDir, ((await this.o.ports.ledger?.()) as Record<string, unknown> | undefined) ?? {}, signals); } catch { digest = null; }
     }
-    this.saveContinuity(outcome, result.toolCalls, digest);
+    this.saveContinuity(outcome, result.toolCalls, digest, capabilities ?? prev?.capabilities ?? null);
     this.o.log?.("founder_turn", { turn: this.turns, routed: true, steps: result.steps, tools: result.toolCalls.length, refusals: result.refusals.length, chargedCents: result.chargedCents });
     return result;
   }

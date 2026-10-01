@@ -506,6 +506,24 @@ export class GenesisOps {
     return this.one<Record<string, unknown>>(`SELECT fleet_knowledge_review($1, $2, $3, $4) AS r`, [proposalId, promote, note, actor]);
   }
 
+  /** F1-LIVE-01 (v25): pending owner requests and knowledge proposals awaiting review, oldest first (all: every status). */
+  ownerQueue(all: boolean) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_owner_queue($1) AS r`, [all]);
+  }
+
+  /** OWNER: record the answer to a founder's owner request. It grants nothing; the founder reads it in its task packet. */
+  decideOwnerRequest(requestId: string, decision: "approved" | "declined" | "answered", response: string | null, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_owner_request_decide($1, $2, $3, $4) AS r`, [requestId, decision, response, actor]);
+  }
+
+  /**
+   * OWNER: import a legacy knowledge proposal that was really an operational owner request as an UNRESOLVED owner request
+   * (same id, founder and creation time; category and blocking stated here, never inferred). Decides nothing; idempotent.
+   */
+  importOwnerRequest(proposalId: string, category: string, blocking: boolean, goalRef: string | null, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_owner_request_import($1, $2, $3, $4, $5) AS r`, [proposalId, category, blocking, goalRef, actor]);
+  }
+
   decideIdentityClaim(claimId: string, approve: boolean, ttlS: number | null, maxReads: number | null, actor: string) {
     return this.one<Record<string, unknown>>(`SELECT fleet_org_identity_decide($1, $2, $3, $4, $5) AS r`, [claimId, approve, ttlS, maxReads, actor]);
   }

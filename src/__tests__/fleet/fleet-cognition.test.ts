@@ -235,7 +235,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
     // Advertised tools = compiled toolbox ∩ granted classes; nothing forbidden is ever advertised.
     const names = toolsFor(FOUNDER_MANIFEST_V1.allowed).map((t) => t.name);
     expect(names).toEqual(FOUNDER_TOOLS.filter((t) => t.capability !== "research.web").map((t) => t.name)); // founder-v1 has no research.web
-    expect(toolsFor(["planning"]).map((t) => t.name)).toEqual(["set_goal", "complete_goal", "list_goals"]);
+    expect(toolsFor(["planning"]).map((t) => t.name)).toEqual(["set_goal", "complete_goal", "list_goals", "request_owner_decision", "withdraw_owner_request"]); // F1-LIVE-01: owner requests are planning
     expect(toolsFor(["reproduction", "payment.execute"] as never)).toEqual([]);
   });
 
@@ -299,7 +299,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
       expect(r).toEqual({ content: "ok", toolCalls: [{ id: "c1", name: "set_goal", arguments: { title: "t" } }, { id: "c2", name: "sleep", arguments: {} }], usage: { inputTokens: 12, outputTokens: 3 }, usageSource: "provider", attempts: 1, responseModel: null, providerRequestId: null, stopReason: null });
       expect(auth).toBe("Bearer k-test");
       expect(seen).toMatchObject({ model: "m1", max_tokens: 64, messages: [{ role: "system", content: "CHARTER" }, { role: "user", content: "hi" }] });
-      expect((seen as unknown as { tools: unknown[] }).tools).toHaveLength(3);
+      expect((seen as unknown as { tools: unknown[] }).tools).toHaveLength(5); // the planning tools (incl. F1-LIVE-01 owner requests)
     } finally {
       srv.close();
     }

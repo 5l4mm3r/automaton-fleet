@@ -485,7 +485,18 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         if (!ok) blockers.push("Founder runtime units on this host do not match the registry (sudo scripts/fleet-founders.sh status).");
       }
       add("identity vault", "pass", `${gv.identityFacts} fact(s) stored, ${gv.identityClaimsPending} claim(s) awaiting the owner; facts are released only per approved claim`);
-      add("institutional knowledge", "pass", `${gv.knowledgeEntries} promoted entr(ies), ${gv.knowledgePending} proposal(s) awaiting the owner; ${gv.openEstates} open estate(s)`);
+      // F1-LIVE-01: an owner request or proposal left unanswered past the staleness threshold is a WARN, never an ordinary PASS.
+      const orq = await store.ownerRequestsOverview();
+      facts.ownerRequests = orq;
+      const days = (s: number | null) => (s === null ? "-" : `${(s / 86_400).toFixed(1)} d`);
+      const staleKnowledge = orq !== null && orq.oldestKnowledgePendingS !== null && orq.oldestKnowledgePendingS >= orq.staleAfterS;
+      add("institutional knowledge", staleKnowledge ? "warn" : "pass", `${gv.knowledgeEntries} promoted entr(ies), ${gv.knowledgePending} proposal(s) awaiting the owner${orq?.knowledgeImported ? ` (${orq.knowledgeImported} imported as owner requests)` : ""}`
+        + `${orq?.oldestKnowledgePendingS != null ? ` (oldest ${days(orq.oldestKnowledgePendingS)}${staleKnowledge ? `: unreviewed past ${days(orq.staleAfterS)} — fleet:admin owner-queue` : ""})` : ""}; ${gv.openEstates} open estate(s)`);
+      if (orq) {
+        add("owner requests", orq.staleBlocking > 0 ? "warn" : "pass",
+          `${orq.pending} pending (${orq.blockingPending} blocking a founder goal); ${orq.staleBlocking} blocking request(s) unanswered past ${days(orq.staleAfterS)}`
+          + `${orq.oldestPendingS !== null ? `; oldest ${days(orq.oldestPendingS)}` : ""}${orq.pending ? " — fleet:admin owner-queue / owner-request-decide" : ""}`);
+      }
     }
 
     // ── Central ledger and custody boundary (schema v10). Detailed checks only; the

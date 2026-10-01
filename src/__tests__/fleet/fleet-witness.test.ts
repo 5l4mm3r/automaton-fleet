@@ -427,10 +427,10 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       [ulid(), `0x${randomBytes(20).toString("hex")}`],
     );
     // v8 (Operator API), v9 (D3 actions) v10 (Phase E ledger), v11 (Phase F Genesis) and v12 (F.1 founder runtimes), all additive, now follow v7 in the same migration run.
-    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 24, wouldApply: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24] });
-    expect(await store.migrate()).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(24);
-    expect((await store.health()).schemaVersion).toBe(24);
+    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 25, wouldApply: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25] });
+    expect(await store.migrate()).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(25);
+    expect((await store.health()).schemaVersion).toBe(25);
     const scopes = await ownerRaw.query(`SELECT capability_scope FROM ${schema}.fleet_agents`);
     expect(scopes.rows.map((r) => r.capability_scope)).toEqual(["full"]);
     expect((await store.auditPrivileges()).problems).toEqual([]);
@@ -568,6 +568,9 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       "POST /v1/experiments/start": { experimentId: "00000000-0000-4000-8000-000000000000" },
       "POST /v1/experiments/record": { experimentId: "00000000-0000-4000-8000-000000000000", idempotencyKey: "witness:rec-00001", kind: "step" },
       "POST /v1/experiments/list": { limit: 5 },
+      "POST /v1/owner-requests/create": { idempotencyKey: "witness:own-00001", category: "other", goalRef: null, title: "x", detail: "x", blocking: false },
+      "POST /v1/owner-requests/withdraw": { requestId: "00000000-0000-4000-8000-000000000000" },
+      "POST /v1/owner-requests/list": {},
     };
     const denied = Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth !== "public" && p.auth !== "genesis_attest" && !p.witness).map(([k]) => k).sort();
     // The founder attestation route accepts no session at all (the witness's signed session is simply unauthenticated there).

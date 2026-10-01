@@ -272,6 +272,19 @@ export class PgAgentGateway {
     return this.call("api_experiment_list", [agentId, token, limit]);
   }
 
+  /** Schema v25 (F1-LIVE-01): explicit owner requests. */
+  async ownerRequestCreate(agentId: string, token: string, r: { idempotencyKey: string; category: string; goalRef: string | null; title: string; detail: string; blocking: boolean }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_owner_request_create", [agentId, token, r.idempotencyKey, r.category, r.goalRef, r.title, r.detail, r.blocking]);
+  }
+
+  async ownerRequestWithdraw(agentId: string, token: string, requestId: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_owner_request_withdraw", [agentId, token, requestId]);
+  }
+
+  async ownerRequestList(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_owner_request_list", [agentId, token]);
+  }
+
   async knowledgePropose(agentId: string, token: string, category: string, title: string, content: string): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.call("api_knowledge_propose", [agentId, token, category, title, content]);
   }

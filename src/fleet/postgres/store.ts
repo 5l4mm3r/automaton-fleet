@@ -995,6 +995,22 @@ export class PgFleetStore {
     }
   }
 
+  /** Schema v25 (F1-LIVE-01): owner-request liveness for doctor (admin credential; null before v25 or otherwise). */
+  async ownerRequestsOverview(): Promise<{ staleAfterS: number; pending: number; blockingPending: number; stalePending: number; staleBlocking: number;
+    oldestPendingS: number | null; knowledgePending: number; knowledgeImported: number; oldestKnowledgePendingS: number | null } | null> {
+    try {
+      return await this.read(async (c) => {
+        const j = (await c.query(`SELECT fleet_owner_requests_overview() AS j`)).rows[0].j as Record<string, unknown>;
+        const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+        return { staleAfterS: Number(j.staleAfterS), pending: Number(j.pending), blockingPending: Number(j.blockingPending), stalePending: Number(j.stalePending),
+          staleBlocking: Number(j.staleBlocking), oldestPendingS: n(j.oldestPendingS), knowledgePending: Number(j.knowledgePending),
+          knowledgeImported: Number(j.knowledgeImported ?? 0), oldestKnowledgePendingS: n(j.oldestKnowledgePendingS) };
+      });
+    } catch {
+      return null;
+    }
+  }
+
   /** Schema v11 Genesis / capability / reproduction / vault / knowledge overview for doctor (admin credential; null otherwise). */
   async genesisOverview(): Promise<{
     genesisEnabled: boolean;
