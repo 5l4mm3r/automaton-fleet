@@ -717,6 +717,20 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
       `SELECT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 AND p.prosrc ~* 'simulated_roi'`, [schema]);
     for (const r of roi.rows) if (!roiReaders.has(r.name)) problems.push(`experiment pipeline: ${r.name} reads simulated (non-authoritative) ROI`);
   }
+  // v26 (F2-A): dependency records are guarded and never deleted; an OPEN record is always an action-scoped exception
+  // (never an ordinary business decision waiting on the owner); the discovery policy row cannot be deleted.
+  const v26 = (await db.query(`SELECT 1 FROM pg_tables WHERE schemaname = $1 AND tablename = 'fleet_discovery_policy'`, [schema])).rows.length > 0;
+  for (const need of v26 ? [
+    "fleet_owner_requests:fleet_owner_requests_guard", "fleet_owner_requests:fleet_owner_requests_no_truncate", "fleet_discovery_policy:fleet_discovery_policy_no_delete",
+  ] : []) {
+    if (!have.has(need)) problems.push(`autonomy: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  if (v26) {
+    const ck = await db.query<{ t: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = 'fleet_owner_requests' AND k.conname = 'fleet_owner_requests_open_is_exception'`, [schema]);
+    if (!ck.rows.length) problems.push("autonomy: an open dependency could be an ordinary owner decision (CHECK missing)");
+  }
   if (v23) {
     const ck = await db.query<{ t: string }>(
       `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -768,6 +782,10 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     // v21: rates only through the validated insert; provider credit only through the owner recorder and inference recording.
     fleet_fx_rates: new Set(["fleet_fx_insert"]),
     fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile"]),
+    // v25/v26: dependency records only through the founder API and the owner's resolve/import; the discovery allowance
+    // policy (it bounds founder inference) has no writer function at all.
+    fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import"]),
+    fleet_discovery_policy: new Set<string>(),
   };
   for (const f of fns.rows) {
     for (const t of writeTargets(f.src)) {

@@ -1,7 +1,8 @@
 # F2 — Autonomous economy: removing the owner from operations (design review, 2026-10-01)
 
-Status: **DESIGN REVIEW — nothing implemented, nothing deployed.** The four engineering safety flags stay false
-while the machinery is proved. They are engineering flags, not the intended operating model.
+Status: **DESIGN REVIEW. Phase A implemented on a development branch (schema v26, charter v3; §20); nothing
+deployed.** Phases B–H are not started. The four engineering safety flags stay false while the machinery is proved.
+They are engineering flags, not the intended operating model.
 
 ## 0. The correction
 
@@ -297,3 +298,79 @@ owner rescue path, though the owner may fund the *treasury*.
 | **F. Survival** | Runway bands driving discovery allowance, envelopes and cognition budget; death-loop integration | Rational behaviour under scarcity |
 | **G. Proof** | The Phase-13 deterministic end-to-end autonomy simulation (all listed scenarios), the zero-owner-approval invariant and the 30-day owner-absence test | Gate before any production rollout |
 | **H. Later, constitutional** | Enabling real payments, custody, sweeps and replication under FleetController governance | — |
+
+## 20. Phase A implementation record (2026-10-01; branch only, not deployed, not merged)
+
+**Scope delivered:**
+- charter v3;
+- tool and packet text;
+- R28 owner requests → action-scoped dependency records (schema v26);
+- the discovery trigger with a controller-computed allowance;
+- Gumroad re-scoped.
+
+Nothing touches money, custody, payments, replication, sweeps, the cap, the mode or the runtime pins.
+
+**Registry (schema v26, `migrations-phase26.ts`):**
+- **Table kept, records re-scoped.** `fleet_owner_requests` stays in place for compatibility and is not renamed.
+  - `blocking` → `blocks_action`.
+  - New columns `kind` and `action` (the one unavailable action).
+  - Valid kinds: `human_identity`, `kyc`, `legal_signature`, `constitutional_change`, `non_delegable_credential`.
+  - Any other kind → `FLEET_NOT_AN_EXCEPTION`, with a reason telling the founder the decision is its own (or
+    FleetController's).
+  - CHECK `fleet_owner_requests_open_is_exception`: an open record is always an exceptional kind that blocks exactly
+    its action. The privilege audit enforces it, together with the guard trigger and the allowed writers.
+- **Data migration:**
+  - Founder 1's `62cbe1b7` becomes `kyc`, action "List the landlord compliance tracker on Gumroad …", still pending
+    and undecided.
+  - Other open rows of an ordinary category are `retired` by `migration`, with a response saying nothing waits on
+    them.
+  - `account_or_identity` → `kyc`; `policy_exception` → `constitutional_change`.
+  - Decided history keeps its outcome (kind `legacy_ordinary`).
+- **No staleness.** The API reports `blocking:false` / `stale:false`, so an R28 runtime never escalates. The founder's
+  wake signal is the record's status only, not its age.
+  - Deviation from §6: there is no auto-expiry. An open record has no consequence, the founder can withdraw it, and at
+    most 5 can be open.
+- **Doctor.** "external dependencies" is information. It WARNs only while a `constitutional_change` is open.
+  "institutional knowledge" no longer WARNs on age.
+- **Discovery allowance** (`fleet_discovery_policy`, `fleet_discovery_allowance`, reported in cognition status).
+  Defaults:
+  - budget/day = min(300p, survival equity × 2 %);
+  - runway = equity ÷ (7-day inference burn ÷ 7);
+  - allowed only when enabled, equity > 0, runway ≥ 14 days (or no burn yet), and today's *total* inference < budget.
+  - A missing policy row fails closed. The row cannot be deleted, and no function may write it.
+  - Changing it is a constitutional act (owner, SQL). A setter is a follow-up.
+
+**Founder runtime:**
+- **Charter v3** (3 950 chars): an autonomous economic actor; FleetController is the bank; the owner is not consulted
+  on ordinary business; a blocked dependency blocks one action; "never idle by default".
+  - `FOUNDER_CHARTER_V2` and `FOUNDER_ROUTED_ADDENDUM_R23` are frozen byte-for-byte for the sealed evaluations. Both
+    pre-registration hashes reproduce.
+- **Tools.** `request_owner_decision` / `withdraw_owner_request` → `record_external_dependency` /
+  `withdraw_external_dependency`. Both are still `planning`, and the manifest digest is unchanged.
+  - The `request_spend`, `propose_knowledge` and `request_identity_fact` descriptions no longer say "the owner
+    decides".
+- **Discovery trigger.** An idle wake (nothing changed since a sleep-only turn) with `discovery.allowed` gets a full
+  *discovery* packet instead of the slim one: research demand, no-account routes, other products or ventures.
+  - Without an allowance (spent, runway floor, or an older controller) it falls back to the slim packet, which now ends
+    "you may sleep until your discovery allowance renews".
+  - The existing idle backoff still bounds calls.
+- **Capability-change detection (R28) is preserved.** An R28 → F2-A upgrade yields one full packet naming the renamed
+  tools.
+- **Fixed in passing:**
+  - a resolved dependency's answer was hidden when the record had been open for more than 7 days (`ageS` is the age
+    *at* resolution);
+  - a malformed list entry dropped every dependency from the packet.
+
+**Proof that owner absence cannot freeze a founder:**
+- Founder side (`fleet-f2a-autonomy.test.ts`): 30 simulated days with zero owner actions and Gumroad unresolved
+  throughout. Every day has at least one discovery packet, no packet points at the owner, and spend stays inside the
+  allowance.
+- Registry side (`fleet-f2a-pg.test.ts`): no function outside the dependency family reads `fleet_owner_requests`, so an
+  open record cannot gate spend, experiments, capabilities, cognition or lifecycle.
+- The remaining owner-only exits are constitutional kill switches: cognition disabled or paused.
+
+**Not in Phase A** (later phases, unchanged):
+- the spend owner threshold and enrolled destinations (C/D);
+- experiment E4/irreversible owner branches (C);
+- ventures, capital requests, envelopes, vendor registry, profit board and runway bands (B–F).
+

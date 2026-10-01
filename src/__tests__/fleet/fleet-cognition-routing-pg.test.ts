@@ -99,7 +99,7 @@ describe.skipIf(!PG_BIN)("schema v22 neutral cognition routing (PostgreSQL)", ()
 
   it("migrates to v22 with a clean privilege audit; routing is inert by default", async () => {
     const [a] = await setup();
-    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(25);
+    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(26);
     expect((await store.auditPrivileges()).problems).toEqual([]);
     const st = await svc.cognitionRoutingState(a);
     expect(st).toMatchObject({ routingEnabled: false, globalEnabled: false });

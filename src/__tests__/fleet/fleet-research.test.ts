@@ -36,7 +36,7 @@ import { spawn } from "child_process";
 import { unixFetcher, type FetcherPort } from "../../fleet/research/client.js";
 import { ResearchError, research, type ResearchRecord } from "../../fleet/research/gateway.js";
 import { FounderToolbox, MAX_RESEARCH_FILES, pruneResearch } from "../../fleet/founder/toolbox.js";
-import { FOUNDER_CHARTER, FOUNDER_CHARTER_VERSION } from "../../fleet/cognition/types.js";
+import { FOUNDER_CHARTER, FOUNDER_CHARTER_V2, FOUNDER_CHARTER_VERSION } from "../../fleet/cognition/types.js";
 import { FounderMind, MAX_IDLE_SKIP } from "../../fleet/founder/mind.js";
 import { INJECTION_MARKER, ScriptedProvider } from "../../fleet/cognition/providers.js";
 import { toolsFor } from "../../fleet/cognition/gateway.js";
@@ -388,7 +388,7 @@ describe("Genesis preparation: research retention and opportunity doctrine", () 
   });
 
   it("the charter carries the owner's doctrine as priors: no prescribed business, research ≠ execution, owner capital ≠ profit", () => {
-    expect(FOUNDER_CHARTER_VERSION).toBe("founder-charter-v2");
+    expect(FOUNDER_CHARTER_VERSION).toBe("founder-charter-v3"); // F2-A: autonomy doctrine (the priors below are unchanged from v2)
     expect(FOUNDER_CHARTER).toMatch(/No business has been chosen for you/);
     expect(FOUNDER_CHARTER).toMatch(/Economic priors \(judgement, not rules\)/);
     expect(FOUNDER_CHARTER).toMatch(/high risk is not the same as low opportunity/);
@@ -401,6 +401,8 @@ describe("Genesis preparation: research retention and opportunity doctrine", () 
     expect(FOUNDER_CHARTER).toMatch(/you never set the rate/);
     expect(FOUNDER_CHARTER).toMatch(/scarce operating capital, not a target to spend/);
     expect(FOUNDER_CHARTER.length).toBeLessThan(4_000); // every token is paid on every call
+    // v2 stays frozen for the sealed evaluations and still carries the same priors.
+    for (const re of [/No business has been chosen for you/, /Economic priors \(judgement, not rules\)/, /owner bootstrap capital, not revenue or profit/]) expect(FOUNDER_CHARTER_V2).toMatch(re);
   });
 });
 

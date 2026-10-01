@@ -235,7 +235,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
     // Advertised tools = compiled toolbox ∩ granted classes; nothing forbidden is ever advertised.
     const names = toolsFor(FOUNDER_MANIFEST_V1.allowed).map((t) => t.name);
     expect(names).toEqual(FOUNDER_TOOLS.filter((t) => t.capability !== "research.web").map((t) => t.name)); // founder-v1 has no research.web
-    expect(toolsFor(["planning"]).map((t) => t.name)).toEqual(["set_goal", "complete_goal", "list_goals", "request_owner_decision", "withdraw_owner_request"]); // F1-LIVE-01: owner requests are planning
+    expect(toolsFor(["planning"]).map((t) => t.name)).toEqual(["set_goal", "complete_goal", "list_goals", "record_external_dependency", "withdraw_external_dependency"]); // F2-A: action-scoped dependencies are planning
     expect(toolsFor(["reproduction", "payment.execute"] as never)).toEqual([]);
   });
 

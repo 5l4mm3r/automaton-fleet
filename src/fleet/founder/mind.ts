@@ -48,7 +48,7 @@ export interface MindPorts {
     /** Routed path only: what FleetController decided for this call. */ route?: { tier: string; model: string; taskClass: string; scope: string } }>;
   /** R23 routed mode: the founder's own economic position for the task packet (exact software output: T0). */
   ledger?(): Promise<unknown>;
-  /** F1-LIVE-01: this founder's own owner requests (status, age, staleness; T0). Absent = not offered by this controller. */
+  /** F2-A: this founder's own external dependencies (kind, the unavailable action, status; T0). Absent = not offered by this controller. */
   ownerRequests?(): Promise<unknown>;
 }
 
@@ -163,7 +163,7 @@ export function wakeDigest(memoryDir: string, workspaceDir: string, economics: R
   };
   walk("");
   h.update(`\0ledger\0${JSON.stringify(WAKE_LEDGER_FIELDS.map((k) => economics[k] ?? null))}`);
-  // F1-LIVE-01: semantic liveness signals (capability signature, owner-request states). Empty = the pre-F1-LIVE-01 digest.
+  // F1-LIVE-01 / F2-A: semantic liveness signals (capability signature, dependency states). Empty = the pre-F1-LIVE-01 digest.
   if (signals) h.update(`\0signals\0${signals}`);
   return h.digest("hex");
 }
@@ -173,25 +173,32 @@ export function wakeDigest(memoryDir: string, workspaceDir: string, economics: R
  * dependency makes ONE action unavailable; it never blocks the founder, a goal or other work, and nothing escalates it
  * toward the owner over time.
  */
-export interface DependencyView { requestId: string; kind: string; action: string; goalRef: string | null; title: string; status: string; ageS: number; response: string | null }
+export interface DependencyView { requestId: string; kind: string; action: string; goalRef: string | null; title: string; status: string; ageS: number; response: string | null;
+  /** Seconds since the record was resolved (null while open, or when the controller reports no decision time). */
+  sinceDecidedS: number | null }
 
-export function parseDependencies(v: unknown): DependencyView[] | null {
+export function parseDependencies(v: unknown, now = Date.now()): DependencyView[] | null {
   const list = v && typeof v === "object" && Array.isArray((v as { requests?: unknown }).requests) ? (v as { requests: unknown[] }).requests : null;
   if (!list) return null;
   const out: DependencyView[] = [];
   for (const x of list.slice(0, 20)) {
+    if (!x || typeof x !== "object") continue;
     const r = x as Record<string, unknown>;
     if (typeof r.requestId !== "string" || typeof r.status !== "string") continue;
+    const decided = typeof r.decidedAt === "string" ? Date.parse(r.decidedAt) : NaN;
     out.push({ requestId: r.requestId, kind: String(r.kind ?? r.category ?? "other").slice(0, 40), action: String(r.action ?? r.title ?? "").slice(0, 200),
       goalRef: typeof r.goalRef === "string" ? r.goalRef.slice(0, 16) : null, title: String(r.title ?? "").slice(0, 160), status: r.status.slice(0, 20),
-      ageS: Math.max(0, Number(r.ageS) || 0), response: typeof r.response === "string" ? r.response.slice(0, 400) : null });
+      ageS: Math.max(0, Number(r.ageS) || 0), response: typeof r.response === "string" ? r.response.slice(0, 400) : null,
+      sinceDecidedS: Number.isFinite(decided) ? Math.max(0, Math.floor((now - decided) / 1000)) : null });
   }
   return out;
 }
 
 /** The dependency lines of a task (bounded; data, not instructions). Open ones are listed as unavailable ACTIONS only. */
 export function dependencyLines(list: DependencyView[]): string[] {
-  const shown = list.filter((r) => r.status === "pending" || r.ageS < 7 * 86_400).slice(0, 5);
+  // Open ones always; resolved ones for a week after their resolution (ageS is the age AT resolution, so a long-open
+  // record answered today is still news).
+  const shown = list.filter((r) => r.status === "pending" || (r.sinceDecidedS ?? r.ageS) < 7 * 86_400).slice(0, 5);
   return shown.map((r) => {
     const head = `External dependency ${r.requestId.slice(0, 8)} (${r.kind})`;
     if (r.status === "pending") {
@@ -424,7 +431,7 @@ export class FounderMind {
     }
     const prev = this.continuity();
     // F1-LIVE-01: what this founder can actually do now (offered by the controller AND implemented by this runtime), and
-    // its owner requests. Both are semantic signals: a genuine change brings one full packet, then slim wake-ups resume.
+    // its external dependencies. Both are semantic signals: a genuine change brings one full packet, then idle wake-ups resume.
     const view = parseCapabilityView(status.capabilities);
     const effective = view ? view.tools.filter((n) => COGNITION_TOOLS.has(n) || this.o.toolbox.implements(n)) : null;
     // The founder's own signature: the controller's policy (no tool names) + the tools this runtime can actually execute.
@@ -455,7 +462,7 @@ export class FounderMind {
     ].join("\n");
     // R23.1: a bare wake-up — the previous turn only slept and nothing the founder could act on has changed since — gets the
     // slim packet. Anything else (a first turn, a working turn, any change in memory, workspace, economy, capabilities or
-    // owner requests) gets the full one.
+    // dependency status) gets the full one.
     const unchanged = !!prev && prev.tools.length > 0 && prev.tools.every((t) => t === "sleep") && prev.wakeDigest !== null
       && prev.wakeDigest === wakeDigest(R.memoryDir, R.workspaceDir, economics, signals);
     // F2-A: an idle wake (nothing changed since a sleep-only turn) is NOT a sleep by default: while the controller's

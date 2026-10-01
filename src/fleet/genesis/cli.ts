@@ -21,8 +21,8 @@
  *   reproduction-eligibility <agentId>                             inert assessment (never executable)
  *   knowledge-review <proposalId> promote|reject [note…]
  *   identity-claim-decide <claimId> approve|reject [--ttl S] [--max-reads N]
- *   owner-queue [all]                                              v25: founders' owner requests + knowledge proposals awaiting review (oldest first)
- *   owner-request-decide <requestId> approved|declined|answered <response…>   v25: record the answer (grants nothing)
+ *   owner-queue [all]                                              v26: founders' open external dependencies + knowledge proposals for review (oldest first)
+ *   owner-request-decide <requestId> approved|declined|answered <response…>   resolve an identity/legal/constitutional dependency (records the answer; grants nothing)
  *   owner-request-import <proposalId> <kind> <action…> [--goal gN]   v26: a legacy proposal that is really an identity/legal
  *                                                                  dependency becomes an action-scoped one (decides nothing; blocks only that action)
  *

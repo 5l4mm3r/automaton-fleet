@@ -228,7 +228,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
 
   it("migrates to v24 with a clean privilege audit; the pipeline is off by default, pinned to simulated money and simulation-only caps", async () => {
     await setup();
-    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(25);
+    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(26);
     expect((await store.auditPrivileges()).problems).toEqual([]);
     await genesis.experimentPolicySet(false, null, OWNER);
     expect(await propose(F, proposal())).toMatchObject({ ok: false, code: "FLEET_EXPERIMENTS_DISABLED" });

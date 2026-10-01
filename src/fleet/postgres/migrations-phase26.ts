@@ -19,6 +19,8 @@
  *      budget/day  = min(max_daily_cents, survival equity × daily_fraction_bp / 10 000)
  *      runway days = survival equity ÷ (cognition charged over the last burn_window_days ÷ window)
  *      allowed     = enabled ∧ survival equity > 0 ∧ runway ≥ min_runway_days (or no burn yet) ∧ spent today < budget
+ *    "Spent today" is ALL of the founder's inference in the last 24 h (from fleet_cognition_log), so the allowance bounds
+ *    idle exploration on top of ordinary work, never beyond it. A missing policy row means no allowance (fail closed).
  */
 
 const EXCEPTION_KINDS = "'human_identity','kyc','legal_signature','constitutional_change','non_delegable_credential'";
@@ -173,6 +175,10 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE p fleet_discovery_policy; v_eq bigint; v_spent bigint; v_burn numeric; v_runway numeric; v_budget bigint; v_reason text;
 BEGIN
   SELECT * INTO p FROM fleet_discovery_policy WHERE id = 1;
+  -- Fail closed: without its policy row there is no allowance (NULL arithmetic must never read as "allowed").
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('allowed', false, 'budgetCents', 0, 'spentTodayCents', 0, 'runwayDays', NULL, 'reason', 'no discovery policy');
+  END IF;
   v_eq := GREATEST(COALESCE((fleet_agent_economics(p_agent) ->> 'survivalEquity')::bigint, 0), 0);
   v_spent := (SELECT ceil(COALESCE(sum(COALESCE(charged_microcents, charged_cents * 1000000)), 0) / 1000000.0)::bigint
                 FROM fleet_cognition_log WHERE agent_id = p_agent AND at > now() - interval '1 day');
