@@ -1,0 +1,141 @@
+{
+ "cellId": "P-NOMEM-1",
+ "evaluation": "f1-fresh-eval-01",
+ "arm": "NOMEM",
+ "replicate": 1,
+ "model": "claude-sonnet-5-5",
+ "startedAt": "2026-10-01T00:47:39.862Z",
+ "finishedAt": "2026-10-01T00:47:44.552Z",
+ "calls": [
+  {
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 21512,
+   "contextBytes": 766,
+   "messages": 1,
+   "packetPresent": false,
+   "boundMicrocents": 13878000,
+   "costMicrocents": 1770400,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 8467,
+    "outputTokens": 77,
+    "thinkingTokens": 0
+   },
+   "stopReason": "tool_use",
+   "responseModel": "claude-sonnet-5-5",
+   "providerRequestId": "msg_011CfabWxRmAKE5fjov6wpkm",
+   "content": "",
+   "toolCalls": [
+    {
+     "name": "recall_facts",
+     "arguments": {
+      "includeHistory": true
+     }
+    },
+    {
+     "name": "list_goals",
+     "arguments": {}
+    }
+   ]
+  },
+  {
+   "turn": 1,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 22052,
+   "contextBytes": 1306,
+   "messages": 4,
+   "packetPresent": false,
+   "boundMicrocents": 14013000,
+   "costMicrocents": 1940200,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 8651,
+    "outputTokens": 210,
+    "thinkingTokens": 0
+   },
+   "stopReason": "end_turn",
+   "responseModel": "claude-sonnet-5-5",
+   "providerRequestId": "msg_011CfabX9fgoQWZNvumNvLn6",
+   "content": "My memory is empty. I hold no facts or goals about O7, Stallhub pricing, fees or printing costs.\n\n1. q1: UNKNOWN. I have no saved price for the O7 single template.\n2. q2: UNKNOWN. I have no saved Stallhub transaction fee.\n3. q3: UNKNOWN. I have no saved printed unit cost.\n4. q4: UNKNOWN. The margin depends on the fee and the unit cost, and I have neither.\n\nANSWERS: q1=UNKNOWN; q2=UNKNOWN; q3=UNKNOWN; q4=UNKNOWN",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 2,
+   "toolCalls": [
+    "recall_facts",
+    "list_goals"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 3710600,
+ "toolOutcomes": [
+  {
+   "name": "recall_facts",
+   "ok": true
+  },
+  {
+   "name": "list_goals",
+   "ok": true
+  }
+ ],
+ "memorySha256": null,
+ "packet": null,
+ "packetBytes": 0,
+ "toolNames": [
+  "read_file",
+  "list_files",
+  "write_file",
+  "exec",
+  "remember_fact",
+  "retract_fact",
+  "recall_facts",
+  "set_goal",
+  "complete_goal",
+  "list_goals",
+  "check_ledger",
+  "request_spend",
+  "propose_knowledge",
+  "read_knowledge",
+  "request_identity_fact",
+  "web_fetch",
+  "sleep",
+  "routine_task",
+  "escalate_question",
+  "propose_experiment",
+  "add_experiment_evidence",
+  "start_experiment",
+  "record_experiment",
+  "list_experiments"
+ ],
+ "finalText": "My memory is empty. I hold no facts or goals about O7, Stallhub pricing, fees or printing costs.\n\n1. q1: UNKNOWN. I have no saved price for the O7 single template.\n2. q2: UNKNOWN. I have no saved Stallhub transaction fee.\n3. q3: UNKNOWN. I have no saved printed unit cost.\n4. q4: UNKNOWN. The margin depends on the fee and the unit cost, and I have neither.\n\nANSWERS: q1=UNKNOWN; q2=UNKNOWN; q3=UNKNOWN; q4=UNKNOWN",
+ "score": {
+  "cellId": "P-NOMEM-1",
+  "arm": "NOMEM",
+  "parsed": true,
+  "answers": {
+   "q1": "UNKNOWN",
+   "q2": "UNKNOWN",
+   "q3": "UNKNOWN",
+   "q4": "UNKNOWN"
+  },
+  "classes": {
+   "q1": "unknown",
+   "q2": "unknown",
+   "q3": "unknown",
+   "q4": "unknown"
+  }
+ },
+ "requestedModel": "claude-sonnet-5-5",
+ "effort": "medium",
+ "thinking": "adaptive",
+ "maxAttempts": 1
+}

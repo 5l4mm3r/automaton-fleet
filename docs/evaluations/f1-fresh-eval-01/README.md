@@ -1,7 +1,39 @@
 # F1-FRESH-EVAL-01 — does structured fact freshness change downstream decisions? (prepared 2026-10-01, revision 2)
 
-Status: **PREPARED, NOT RUN. No paid call has been made.** `real/` holds only the prepared configuration. `fake-run/` is
-the zero-cost dry run with the deterministic fake model.
+Status: **RUN AND SEALED (2026-10-01 00:47:28–00:48:16Z). Verdict: NOT_PROVEN** under the pre-registered rule. The
+evidence is in `real/` (`SHA256SUMS`, `CLOSED`). `fake-run/` is the zero-cost dry run.
+
+## Result (scored by the registered scorer from the stored model text)
+
+| Arm | rep 1 | rep 2 | rep 3 | correct | stale | retracted | unknown |
+|---|---|---|---|---|---|---|---|
+| FRESH | ✓✓✓✓ | ✓✓✓✓ | ✓✓✓✓ | 12 | 0 | 0 | 0 |
+| LEGACY | ?? ✓ ? | ?? ✓ ? | ?? ✓ ? | 3 | 0 | 0 | 9 |
+| NOMEM | ???? | ???? | ???? | 0 | 0 | 0 | 12 |
+
+(Per replicate the order is q1 q2 q3 q4; ✓ = correct, ? = UNKNOWN.)
+
+**Checks:**
+- validity PASS (9/9 parsed);
+- negative control PASS (0 correct);
+- FRESH pass PASS (12/12, 0 stale, 0 retracted);
+- **discrimination FAIL**:
+  - the correct-answer advantage of 9 meets its threshold of 3;
+  - but the stale+retracted-use advantage is 0, below its threshold of 2.
+
+**Observed behaviour:**
+- **FRESH** explicitly compared `observedAt` and used the later fact.
+- **LEGACY** identified both unlinked contradictions, said it could not tell which was current, and answered
+  **UNKNOWN**. It never used the stale value. It answered the parity question (q3) correctly from the overwritten
+  retraction.
+
+**Accounting:**
+- 15 calls on `claude-sonnet-5-5` (FRESH 1 call per cell; LEGACY and NOMEM 2 each, recalling facts first).
+- 139,705 input and 4,210 output tokens; 0 cache tokens.
+- **$0.32151** (32,151,000 µ¢), reconciled across events, cells, ledger and usage × prices; $1.17849 of the $1.50 cap
+  unspent.
+- The spend ran outside fleet metering. Founder 1 and production were identical before and after (0 founder calls in
+  the window).
 
 Code: `src/fleet/eval/f1-fresh-eval-01.ts` and the hardened driver `src/fleet/eval/f1-eval-02-driver.ts`
 (`--evaluation f1-fresh-eval-01`). Tests: `src/__tests__/fleet/fleet-f1-fresh-eval-01.test.ts`. The sealed F1-EVAL-02

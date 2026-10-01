@@ -1,0 +1,6 @@
+F1-FRESH-EVAL-01 is complete (2026-10-01T00:47:28Z–00:48:16Z). This directory is sealed: the driver refuses `run`
+here (F1EVAL_CLOSED). Verdict (pre-registered rule, sha256 65b864c77915cb1347a65ca28643806c4f5edb69134e228453fe24544c69f68c):
+NOT_PROVEN — validity PASS, negative control PASS, FRESH pass PASS (12/12), discrimination FAIL (LEGACY abstained:
+9 UNKNOWN, 0 stale uses; the stale-use condition was not met).
+Accounting: 15 calls (claude-sonnet-5-5), 139,705 input / 4,210 output tokens, 0 cache tokens,
+32,151,000 USD µ¢ ($0.32151) of the 150,000,000 µ¢ ($1.50) cap. See ledger.json, scores.json and SHA256SUMS.

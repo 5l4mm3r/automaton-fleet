@@ -1,0 +1,53 @@
+P-FRESH-1    FRESH  correct correct correct correct calls 1 $0.0234
+P-LEGACY-1   LEGACY unknown unknown correct unknown calls 2 $0.0453
+P-NOMEM-1    NOMEM  unknown unknown unknown unknown calls 2 $0.0371
+P-FRESH-2    FRESH  correct correct correct correct calls 1 $0.0239
+P-LEGACY-2   LEGACY unknown unknown correct unknown calls 2 $0.0450
+P-NOMEM-2    NOMEM  unknown unknown unknown unknown calls 2 $0.0375
+P-FRESH-3    FRESH  correct correct correct correct calls 1 $0.0237
+P-LEGACY-3   LEGACY unknown unknown correct unknown calls 2 $0.0484
+P-NOMEM-3    NOMEM  unknown unknown unknown unknown calls 2 $0.0372
+{
+ "arms": {
+  "FRESH": {
+   "arm": "FRESH",
+   "cells": 3,
+   "parsed": 3,
+   "correct": 12,
+   "stale": 0,
+   "retracted": 0,
+   "unknown": 0,
+   "other": 0,
+   "missing": 0
+  },
+  "LEGACY": {
+   "arm": "LEGACY",
+   "cells": 3,
+   "parsed": 3,
+   "correct": 3,
+   "stale": 0,
+   "retracted": 0,
+   "unknown": 9,
+   "other": 0,
+   "missing": 0
+  },
+  "NOMEM": {
+   "arm": "NOMEM",
+   "cells": 3,
+   "parsed": 3,
+   "correct": 0,
+   "stale": 0,
+   "retracted": 0,
+   "unknown": 12,
+   "other": 0,
+   "missing": 0
+  }
+ },
+ "checks": {
+  "validity": true,
+  "negativeControl": true,
+  "freshPass": true,
+  "discrimination": false
+ },
+ "verdict": "NOT_PROVEN"
+}

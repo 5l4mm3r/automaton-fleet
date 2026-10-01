@@ -1,0 +1,10 @@
+2026-10-01T00:49:06Z
+founder pid 283229 restarts 0 wd /opt/automaton-fleet/releases/aabb297637a16382a7b3c5be468693949b8f85f4
+founder.json d8a8beb418409def6c0eb01543725b21dc7225c6367fce148de4c5ee4db11517
+facts.json bed022a8099eb296f6e70f7954c05cbcd148689184d86369b557a44afb9952e9 ledger absent
+controller pid 281254 since Thu 2026-10-01 00:04:44 UTC
+FLEET_RUNTIME_COMMIT=aabb297637a16382a7b3c5be468693949b8f85f4
+FLEET_RUNTIME_BUILD_ID=bb3fd917ffe610c086532fedb746c16bfbe26a498d5b54c4ba4d2f5f5fd8dc17
+REAL_REPLICATION_ENABLED=false REAL_PAYMENTS_ENABLED=false OWNER_SWEEP_ENABLED=false FLEET_DRY_RUN_CHILD=false 
+founder cognition calls 451 last seq 451
+provider credit balance µ¢ 702022550
