@@ -146,7 +146,7 @@ export function applyTrunk(memoryDir: string, semantics: "fresh" | "legacy"): vo
 }
 
 /** The LEGACY toolbox: the same tool schemas, string semantics (see above). Recall has the production shape, minus metadata. */
-function legacyFactTool(memoryDir: string, call: ToolCall): ToolOutcome | null {
+export function legacyFactTool(memoryDir: string, call: ToolCall): ToolOutcome | null {
   const a = call.arguments ?? {};
   const str = (v: unknown, n: number) => (typeof v === "string" && v ? v.slice(0, n) : null);
   if (call.name === "remember_fact") {

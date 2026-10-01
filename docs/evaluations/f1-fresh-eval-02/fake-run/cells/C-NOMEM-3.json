@@ -1,0 +1,76 @@
+{
+ "cellId": "C-NOMEM-3",
+ "arm": "NOMEM",
+ "replicate": 3,
+ "finalText": "From memory.\nANSWERS: q1=UNKNOWN; q2=UNKNOWN; q3=UNKNOWN; q4=UNKNOWN; q5=UNKNOWN; q6=UNKNOWN; q7=UNKNOWN; q8=UNKNOWN; q9=UNKNOWN; q10=UNKNOWN",
+ "memoryAfterTrunk": null,
+ "maintenance": null,
+ "trunkComplete": true,
+ "evaluation": "f1-fresh-eval-02",
+ "model": "fake-founder-2",
+ "startedAt": "2026-10-01T02:17:29.106Z",
+ "finishedAt": "2026-10-01T02:17:29.109Z",
+ "calls": [
+  {
+   "phase": "probe",
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 21744,
+   "contextBytes": 998,
+   "messages": 1,
+   "packetPresent": false,
+   "boundMicrocents": 13936000,
+   "costMicrocents": 1829600,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 8548,
+    "outputTokens": 120
+   },
+   "stopReason": "end_turn",
+   "responseModel": null,
+   "providerRequestId": null,
+   "content": "From memory.\nANSWERS: q1=UNKNOWN; q2=UNKNOWN; q3=UNKNOWN; q4=UNKNOWN; q5=UNKNOWN; q6=UNKNOWN; q7=UNKNOWN; q8=UNKNOWN; q9=UNKNOWN; q10=UNKNOWN",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 1,
+   "toolCalls": [],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 1829600,
+ "toolOutcomes": [],
+ "memoryFiles": {},
+ "probePacketBytes": 0,
+ "score": {
+  "cellId": "C-NOMEM-3",
+  "arm": "NOMEM",
+  "replicate": 3,
+  "parsed": true,
+  "classes": {
+   "q1": "UNKNOWN",
+   "q2": "UNKNOWN",
+   "q3": "UNKNOWN",
+   "q4": "UNKNOWN",
+   "q5": "UNKNOWN",
+   "q6": "UNKNOWN",
+   "q7": "UNKNOWN",
+   "q8": "UNKNOWN",
+   "q9": "UNKNOWN",
+   "q10": "UNKNOWN"
+  },
+  "memory": null,
+  "maintenance": null,
+  "trunkComplete": true
+ },
+ "requestedModel": "fake-founder-2",
+ "effort": "medium",
+ "thinking": null,
+ "maxAttempts": null
+}

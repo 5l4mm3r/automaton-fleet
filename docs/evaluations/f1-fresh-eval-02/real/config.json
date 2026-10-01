@@ -1,0 +1,14 @@
+{
+ "transport": "ssh",
+ "model": "claude-sonnet-5-5",
+ "effort": "medium",
+ "maxTokens": 8000,
+ "prices": {"inputMicrocentsPerToken": 200, "outputMicrocentsPerToken": 1000, "cacheWriteMicrocentsPerToken": 250, "cacheReadMicrocentsPerToken": 20},
+ "capMicrocents": 200000000,
+ "sshTarget": "agentfleet-vps",
+ "remoteScript": "/opt/automaton-fleet/eval/f1-fresh-eval-02/scripts/fleet-eval-02.sh",
+ "_evaluation": "f1-fresh-eval-02",
+ "_preRegistrationSha256": "90a7674339ea1f2ff78f95ac7948c827bc61ccfa6bfbd975c075a0c3b1a3316a",
+ "_pricesSource": "live fleet_cognition_tiers T2 (claude-sonnet-5-5, adaptive, effort medium, max_output_tokens 8000), read 2026-10-01",
+ "_note": "PREPARED, NOT RUN. Production T2 settings and the production routed prefix (identical for every arm). Hard cap $2.00."
+}

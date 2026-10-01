@@ -36,6 +36,7 @@ import type { Prices } from "../cognition/charging.js";
 import { runCell, type CellRequest, type CellResult, type Snapshot } from "./f1-eval-02.js";
 import { PLAN, scoreCell, type PlannedCell } from "./f1-eval-02-plan.js";
 import { FakeFounderModel } from "./fake-founder-model.js";
+import { EVALUATION as FRESH2_EVALUATION, FRESH2_CAP_CEILING_MICROCENTS, FRESH2_PLAN, FakeFounder2, PROBE_MAX_STEPS, TRUNK_MAX_STEPS, runFresh2Cell, scoreCell2, summarize2, type Fresh2CellRequest, type Fresh2CellResult, type Fresh2PlannedCell } from "./f1-fresh-eval-02.js";
 import { EVALUATION as FRESH_EVALUATION, FRESH_CAP_CEILING_MICROCENTS, FRESH_PLAN, FakeFreshModel, runFreshCell, scoreProbe as scoreProbeFresh, summarize, type FreshCellRequest, type FreshCellResult, type FreshPlannedCell } from "./f1-fresh-eval-01.js";
 
 export interface EvalConfig {
@@ -144,7 +145,28 @@ export const F1_FRESH_EVAL_01_SPEC: EvalSpec = {
   fakeCell: async (request, onEvent) => runFreshCell(request as unknown as FreshCellRequest, new FakeFreshModel(), { log: (e) => onEvent(JSON.stringify(e)) }) as unknown as Record<string, unknown>,
 };
 
-export const EVAL_SPECS: Readonly<Record<string, EvalSpec>> = Object.freeze({ [F1_EVAL_02_SPEC.name]: F1_EVAL_02_SPEC, [F1_FRESH_EVAL_01_SPEC.name]: F1_FRESH_EVAL_01_SPEC });
+export const F1_FRESH_EVAL_02_SPEC: EvalSpec = {
+  name: FRESH2_EVALUATION,
+  capCeilingMicrocents: FRESH2_CAP_CEILING_MICROCENTS,
+  plan: FRESH2_PLAN,
+  request: (c, _state, remaining, cfg) => {
+    const cell = c as Fresh2PlannedCell;
+    return { cellId: cell.cellId, arm: cell.arm, replicate: cell.replicate, trunkMaxSteps: TRUNK_MAX_STEPS, probeMaxSteps: PROBE_MAX_STEPS, maxTokens: cfg.maxTokens, prices: cfg.prices, budgetMicrocents: remaining } satisfies Fresh2CellRequest;
+  },
+  // The default dry-run founder: realistic unlinked maintenance, cautious without freshness.
+  fakeCell: async (request, onEvent) => runFresh2Cell(request as unknown as Fresh2CellRequest, new FakeFounder2("unlinked"), { log: (e) => onEvent(JSON.stringify(e)) }) as unknown as Record<string, unknown>,
+};
+
+export const EVAL_SPECS: Readonly<Record<string, EvalSpec>> = Object.freeze({ [F1_EVAL_02_SPEC.name]: F1_EVAL_02_SPEC, [F1_FRESH_EVAL_01_SPEC.name]: F1_FRESH_EVAL_01_SPEC, [F1_FRESH_EVAL_02_SPEC.name]: F1_FRESH_EVAL_02_SPEC });
+
+/** F1-FRESH-EVAL-02: re-derive every class and memory state from the stored model text and memory; apply the pre-registered rule. */
+export function scoreFresh2(out: string) {
+  const cells = FRESH2_PLAN.map((c) => readJsonStrict<Fresh2CellResult | null>(path.join(out, "cells", `${c.cellId}.json`), null, `cells/${c.cellId}.json`))
+    .filter((r): r is Fresh2CellResult => !!r).map((r) => scoreCell2(r));
+  const s = { ...summarize2(cells), cells };
+  writeDurable(path.join(out, "scores.json"), s);
+  return s;
+}
 
 function sshTransport(cfg: EvalConfig): Transport {
   return (payload, onEvent) => new Promise((resolve, reject) => {
@@ -350,6 +372,12 @@ async function cli(): Promise<number> {
     console.log(JSON.stringify(r, null, 1));
     return 0;
   }
+  if (cmd === "score" && spec === F1_FRESH_EVAL_02_SPEC) {
+    const s = scoreFresh2(out);
+    for (const c of s.cells) console.log(`${c.cellId.padEnd(12)} ${c.arm.padEnd(6)} ${Object.values(c.classes).map((x) => x.slice(0, 7)).join(" ")} | mem ${c.memory ? Object.values(c.memory).map((m) => m.slice(0, 5)).join(" ") : "-"}`);
+    console.log(JSON.stringify({ arms: s.arms, checks: s.checks, verdict: s.verdict, descriptive: s.descriptive }, null, 1));
+    return 0;
+  }
   if (cmd === "score" && spec === F1_FRESH_EVAL_01_SPEC) {
     const s = scoreFresh(out);
     for (const c of s.cells) console.log(`${c.cellId.padEnd(12)} ${c.arm.padEnd(6)} ${Object.values(c.score.classes).join(" ")} calls ${c.calls} $${(c.spentMicrocents / 1e8).toFixed(4)}`);
@@ -360,7 +388,7 @@ async function cli(): Promise<number> {
     for (const s of scorePlan(out)) console.log(`${s.cellId.padEnd(8)} ${s.arm.padEnd(5)} markers ${s.hitCount}/${s.markerCount} calls ${s.calls} in ${s.inputTokens} out ${s.outputTokens} first-in ${s.firstCallInputTokens} fetch ${s.fetches} dup ${s.duplicateFetches} $${(s.costMicrocents / 1e8).toFixed(4)}`);
     return 0;
   }
-  console.error("usage: run|models|score --out <dir> [--evaluation f1-eval-02|f1-fresh-eval-01]");
+  console.error("usage: run|models|score --out <dir> [--evaluation f1-eval-02|f1-fresh-eval-01|f1-fresh-eval-02]");
   return 2;
 }
 

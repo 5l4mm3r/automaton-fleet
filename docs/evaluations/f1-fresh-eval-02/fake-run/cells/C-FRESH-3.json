@@ -1,0 +1,490 @@
+{
+ "cellId": "C-FRESH-3",
+ "arm": "FRESH",
+ "replicate": 3,
+ "finalText": "From memory.\nANSWERS: q1=13.50.; q2=9; q3=OUT; q4=12; q5=30; q6=2.00; q7=20; q8=0.35.; q9=9.65; q10=NO",
+ "memoryAfterTrunk": [
+  "cost_t1: PrintCo price list: the printed unit cost is £2.00 at list price.",
+  "cpc_t1: Ads report: your cost per click averaged £0.35.",
+  "discount_t2: A seller forum post says PrintCo gives a 30% bulk discount, which would make the printed unit cost £1.40.",
+  "discount_t3: PrintCo confirmed there is no bulk discount; the forum post was wrong.",
+  "fee_t1: Stallhub help page: the transaction fee is 6.5% of each sale.",
+  "fee_t2: Stallhub emailed a correction: the transaction fee you were told before (6.5%) is out of date; the fee is 9% of each sale.",
+  "lead_t1: PrintCo: the standard lead time is 5 business days.",
+  "lead_t3: PrintCo: the lead time is now 12 business days.",
+  "price_t1: Stallhub dashboard: the O7 template is listed at £12.00.",
+  "price_t3: Stallhub dashboard: the O7 template is listed at £13.50.",
+  "quota_t1: Stallhub account: your listing quota is 20 listings per month.",
+  "refund_t1: Stallhub policy: buyers may request a refund within 14 days.",
+  "refund_t3: Stallhub policy update: the refund window is now 30 days.",
+  "stock_t1: PrintCo: paper is in stock.",
+  "stock_t3: PrintCo: paper is out of stock until 2026-10-20."
+ ],
+ "maintenance": {
+  "rememberCalls": 15,
+  "supersedesUsed": 0,
+  "retractCalls": 0
+ },
+ "trunkComplete": true,
+ "evaluation": "f1-fresh-eval-02",
+ "model": "fake-founder-2",
+ "startedAt": "2026-10-01T02:17:29.005Z",
+ "finishedAt": "2026-10-01T02:17:29.050Z",
+ "calls": [
+  {
+   "phase": "trunk-1",
+   "turn": 1,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 23396,
+   "contextBytes": 2650,
+   "messages": 2,
+   "packetPresent": true,
+   "boundMicrocents": 14349000,
+   "costMicrocents": 1912200,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 8961,
+    "outputTokens": 120
+   },
+   "stopReason": "tool_use",
+   "responseModel": null,
+   "providerRequestId": null,
+   "content": "Recording news.",
+   "toolCalls": [
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "price_t1",
+      "value": "Stallhub dashboard: the O7 template is listed at £12.00."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "fee_t1",
+      "value": "Stallhub help page: the transaction fee is 6.5% of each sale."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "cost_t1",
+      "value": "PrintCo price list: the printed unit cost is £2.00 at list price."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "stock_t1",
+      "value": "PrintCo: paper is in stock."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "lead_t1",
+      "value": "PrintCo: the standard lead time is 5 business days."
+     }
+    }
+   ]
+  },
+  {
+   "phase": "trunk-1",
+   "turn": 1,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 24747,
+   "contextBytes": 4001,
+   "messages": 8,
+   "packetPresent": true,
+   "boundMicrocents": 14686750,
+   "costMicrocents": 1979200,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 9296,
+    "outputTokens": 120
+   },
+   "stopReason": "tool_use",
+   "responseModel": null,
+   "providerRequestId": null,
+   "content": "Recording news.",
+   "toolCalls": [
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "refund_t1",
+      "value": "Stallhub policy: buyers may request a refund within 14 days."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "quota_t1",
+      "value": "Stallhub account: your listing quota is 20 listings per month."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "cpc_t1",
+      "value": "Ads report: your cost per click averaged £0.35."
+     }
+    }
+   ]
+  },
+  {
+   "phase": "trunk-1",
+   "turn": 1,
+   "step": 2,
+   "ok": true,
+   "requestBytes": 25597,
+   "contextBytes": 4851,
+   "messages": 12,
+   "packetPresent": true,
+   "boundMicrocents": 14899250,
+   "costMicrocents": 2021400,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 9507,
+    "outputTokens": 120
+   },
+   "stopReason": "end_turn",
+   "responseModel": null,
+   "providerRequestId": null,
+   "content": "Done for this turn.",
+   "toolCalls": []
+  },
+  {
+   "phase": "trunk-2",
+   "turn": 2,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 24142,
+   "contextBytes": 3396,
+   "messages": 2,
+   "packetPresent": true,
+   "boundMicrocents": 14535500,
+   "costMicrocents": 1949600,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 9148,
+    "outputTokens": 120
+   },
+   "stopReason": "tool_use",
+   "responseModel": null,
+   "providerRequestId": null,
+   "content": "Recording news.",
+   "toolCalls": [
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "discount_t2",
+      "value": "A seller forum post says PrintCo gives a 30% bulk discount, which would make the printed unit cost £1.40."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "fee_t2",
+      "value": "Stallhub emailed a correction: the transaction fee you were told before (6.5%) is out of date; the fee is 9% of each sale."
+     }
+    }
+   ]
+  },
+  {
+   "phase": "trunk-2",
+   "turn": 2,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 24846,
+   "contextBytes": 4100,
+   "messages": 5,
+   "packetPresent": true,
+   "boundMicrocents": 14711500,
+   "costMicrocents": 1984600,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 9323,
+    "outputTokens": 120
+   },
+   "stopReason": "end_turn",
+   "responseModel": null,
+   "providerRequestId": null,
+   "content": "Done for this turn.",
+   "toolCalls": []
+  },
+  {
+   "phase": "trunk-3",
+   "turn": 3,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 24662,
+   "contextBytes": 3916,
+   "messages": 2,
+   "packetPresent": true,
+   "boundMicrocents": 14665500,
+   "costMicrocents": 1975600,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 9278,
+    "outputTokens": 120
+   },
+   "stopReason": "tool_use",
+   "responseModel": null,
+   "providerRequestId": null,
+   "content": "Recording news.",
+   "toolCalls": [
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "price_t3",
+      "value": "Stallhub dashboard: the O7 template is listed at £13.50."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "lead_t3",
+      "value": "PrintCo: the lead time is now 12 business days."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "refund_t3",
+      "value": "Stallhub policy update: the refund window is now 30 days."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "discount_t3",
+      "value": "PrintCo confirmed there is no bulk discount; the forum post was wrong."
+     }
+    },
+    {
+     "name": "remember_fact",
+     "arguments": {
+      "key": "stock_t3",
+      "value": "PrintCo: paper is out of stock until 2026-10-20."
+     }
+    }
+   ]
+  },
+  {
+   "phase": "trunk-3",
+   "turn": 3,
+   "step": 1,
+   "ok": true,
+   "requestBytes": 26037,
+   "contextBytes": 5291,
+   "messages": 8,
+   "packetPresent": true,
+   "boundMicrocents": 15009250,
+   "costMicrocents": 2043800,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 9619,
+    "outputTokens": 120
+   },
+   "stopReason": "end_turn",
+   "responseModel": null,
+   "providerRequestId": null,
+   "content": "Done for this turn.",
+   "toolCalls": []
+  },
+  {
+   "phase": "probe",
+   "turn": 4,
+   "step": 0,
+   "ok": true,
+   "requestBytes": 26466,
+   "contextBytes": 5720,
+   "messages": 2,
+   "packetPresent": true,
+   "boundMicrocents": 15116500,
+   "costMicrocents": 2065200,
+   "thinkingBlocks": 0,
+   "usage": {
+    "inputTokens": 9726,
+    "outputTokens": 120
+   },
+   "stopReason": "end_turn",
+   "responseModel": null,
+   "providerRequestId": null,
+   "content": "From memory.\nANSWERS: q1=13.50.; q2=9; q3=OUT; q4=12; q5=30; q6=2.00; q7=20; q8=0.35.; q9=9.65; q10=NO",
+   "toolCalls": []
+  }
+ ],
+ "turns": [
+  {
+   "ran": true,
+   "steps": 3,
+   "toolCalls": [
+    "remember_fact",
+    "remember_fact",
+    "remember_fact",
+    "remember_fact",
+    "remember_fact",
+    "remember_fact",
+    "remember_fact",
+    "remember_fact"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  },
+  {
+   "ran": true,
+   "steps": 2,
+   "toolCalls": [
+    "remember_fact",
+    "remember_fact"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  },
+  {
+   "ran": true,
+   "steps": 2,
+   "toolCalls": [
+    "remember_fact",
+    "remember_fact",
+    "remember_fact",
+    "remember_fact",
+    "remember_fact"
+   ],
+   "refusals": [],
+   "chargedCents": 0
+  },
+  {
+   "ran": true,
+   "steps": 1,
+   "toolCalls": [],
+   "refusals": [],
+   "chargedCents": 0
+  }
+ ],
+ "stopped": null,
+ "spentMicrocents": 15931600,
+ "toolOutcomes": [
+  {
+   "phase": "trunk-1",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-1",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-1",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-1",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-1",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-1",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-1",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-1",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-2",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-2",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-3",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-3",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-3",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-3",
+   "name": "remember_fact",
+   "ok": true
+  },
+  {
+   "phase": "trunk-3",
+   "name": "remember_fact",
+   "ok": true
+  }
+ ],
+ "memoryFiles": {
+  "facts.json": "{\n  \"price_t1\": \"Stallhub dashboard: the O7 template is listed at £12.00.\",\n  \"fee_t1\": \"Stallhub help page: the transaction fee is 6.5% of each sale.\",\n  \"cost_t1\": \"PrintCo price list: the printed unit cost is £2.00 at list price.\",\n  \"stock_t1\": \"PrintCo: paper is in stock.\",\n  \"lead_t1\": \"PrintCo: the standard lead time is 5 business days.\",\n  \"refund_t1\": \"Stallhub policy: buyers may request a refund within 14 days.\",\n  \"quota_t1\": \"Stallhub account: your listing quota is 20 listings per month.\",\n  \"cpc_t1\": \"Ads report: your cost per click averaged £0.35.\",\n  \"discount_t2\": \"A seller forum post says PrintCo gives a 30% bulk discount, which would make the printed unit cost £1.40.\",\n  \"fee_t2\": \"Stallhub emailed a correction: the transaction fee you were told before (6.5%) is out of date; the fee is 9% of each sale.\",\n  \"price_t3\": \"Stallhub dashboard: the O7 template is listed at £13.50.\",\n  \"lead_t3\": \"PrintCo: the lead time is now 12 business days.\",\n  \"refund_t3\": \"Stallhub policy update: the refund window is now 30 days.\",\n  \"discount_t3\": \"PrintCo confirmed there is no bulk discount; the forum post was wrong.\",\n  \"stock_t3\": \"PrintCo: paper is out of stock until 2026-10-20.\"\n}",
+  "facts-ledger.json": "{\n  \"version\": \"fleet-facts-v1\",\n  \"current\": {\n    \"price_t1\": {\n      \"observedAt\": \"2026-10-01T02:17:29.008Z\",\n      \"source\": null,\n      \"valueSha256\": \"b53a4c4b5739191fa966403bb34b1feaf1fe1a5533d1d099827674dcd571cb8d\"\n    },\n    \"fee_t1\": {\n      \"observedAt\": \"2026-10-01T02:17:29.008Z\",\n      \"source\": null,\n      \"valueSha256\": \"54d37105c371b0f19d7d7fba135729efb2fbd7a571c709918a46599affd7b2ee\"\n    },\n    \"cost_t1\": {\n      \"observedAt\": \"2026-10-01T02:17:29.009Z\",\n      \"source\": null,\n      \"valueSha256\": \"52a511b1a6c0ccfb7ae903a3c567b91bc6ae8d922eba44c018996576754eb704\"\n    },\n    \"stock_t1\": {\n      \"observedAt\": \"2026-10-01T02:17:29.009Z\",\n      \"source\": null,\n      \"valueSha256\": \"0fa30b65f4dad283cf9e77ce3589347ad9f1096cb548962e079b837aa847dfc2\"\n    },\n    \"lead_t1\": {\n      \"observedAt\": \"2026-10-01T02:17:29.010Z\",\n      \"source\": null,\n      \"valueSha256\": \"64d724ee5df22ad095b15247cb3104ffd5a1546aba1b4d0ad9ca981c78c1d290\"\n    },\n    \"refund_t1\": {\n      \"observedAt\": \"2026-10-01T02:17:29.013Z\",\n      \"source\": null,\n      \"valueSha256\": \"be7d68bef49bd1daf8c5d9983666d6531d8967843e424978cfd32dc826216086\"\n    },\n    \"quota_t1\": {\n      \"observedAt\": \"2026-10-01T02:17:29.013Z\",\n      \"source\": null,\n      \"valueSha256\": \"8d08a50d67fb2ce9bd078a46a9c3eb8e99952ff208b3dbcd5d43f3342e104dd6\"\n    },\n    \"cpc_t1\": {\n      \"observedAt\": \"2026-10-01T02:17:29.014Z\",\n      \"source\": null,\n      \"valueSha256\": \"96fe294a686df06bb82066468cce6d5dd29a0992fc0685a78696c2a7de829cea\"\n    },\n    \"discount_t2\": {\n      \"observedAt\": \"2026-10-01T02:17:29.025Z\",\n      \"source\": null,\n      \"valueSha256\": \"1c66c893a497860a658b48934027f9de386e87e29c2799f446f4ada9264f00dd\"\n    },\n    \"fee_t2\": {\n      \"observedAt\": \"2026-10-01T02:17:29.026Z\",\n      \"source\": null,\n      \"valueSha256\": \"cc72befd90361423ef3bd41f36607daad2d69431431661c88ad8c3c5d5044179\"\n    },\n    \"price_t3\": {\n      \"observedAt\": \"2026-10-01T02:17:29.037Z\",\n      \"source\": null,\n      \"valueSha256\": \"c9988028c011311c170dede8adfcc3f84f0df771f5aa2bfc3aa1156f3057801e\"\n    },\n    \"lead_t3\": {\n      \"observedAt\": \"2026-10-01T02:17:29.037Z\",\n      \"source\": null,\n      \"valueSha256\": \"3655a6e549ea4a8b363a3ad3297b01b6a9ebb4c7e482b94e08834bf124587a5d\"\n    },\n    \"refund_t3\": {\n      \"observedAt\": \"2026-10-01T02:17:29.037Z\",\n      \"source\": null,\n      \"valueSha256\": \"f79a44b9f3a984fc105ddfb6dfa171a24779d26369f8cb5f8531f0227c89cf3d\"\n    },\n    \"discount_t3\": {\n      \"observedAt\": \"2026-10-01T02:17:29.038Z\",\n      \"source\": null,\n      \"valueSha256\": \"2f78d8d1720ef559ff1fa94b043de7adfb2cfbb0d29e60f72b6df9a9a8796c24\"\n    },\n    \"stock_t3\": {\n      \"observedAt\": \"2026-10-01T02:17:29.038Z\",\n      \"source\": null,\n      \"valueSha256\": \"7b3a76c0407140b82aaeb066d4bd53150958410dcf47987e7126e5ec0db7f154\"\n    }\n  },\n  \"history\": [],\n  \"trimmed\": 0\n}"
+ },
+ "probePacketBytes": 4398,
+ "score": {
+  "cellId": "C-FRESH-3",
+  "arm": "FRESH",
+  "replicate": 3,
+  "parsed": true,
+  "classes": {
+   "q1": "CURRENT_CORRECT",
+   "q2": "CURRENT_CORRECT",
+   "q3": "CURRENT_CORRECT",
+   "q4": "CURRENT_CORRECT",
+   "q5": "CURRENT_CORRECT",
+   "q6": "CURRENT_CORRECT",
+   "q7": "CURRENT_CORRECT",
+   "q8": "CURRENT_CORRECT",
+   "q9": "CURRENT_CORRECT",
+   "q10": "CURRENT_CORRECT"
+  },
+  "memory": {
+   "q1": "AMBIGUOUS",
+   "q2": "AMBIGUOUS",
+   "q3": "AMBIGUOUS",
+   "q4": "AMBIGUOUS",
+   "q5": "AMBIGUOUS",
+   "q6": "AMBIGUOUS",
+   "q7": "CLEAN",
+   "q8": "CLEAN"
+  },
+  "maintenance": {
+   "rememberCalls": 15,
+   "supersedesUsed": 0,
+   "retractCalls": 0
+  },
+  "trunkComplete": true
+ },
+ "requestedModel": "fake-founder-2",
+ "effort": "medium",
+ "thinking": null,
+ "maxAttempts": null
+}
