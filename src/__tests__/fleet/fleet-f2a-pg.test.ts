@@ -22,6 +22,7 @@ import { dependencyLines, parseDependencies } from "../../fleet/founder/mind.js"
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { migrateUpTo } from "./fixtures/migrate-to.js";
 import { wipeRegistry } from "./fixtures/wipe.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const OWNER = "operator:owner";
@@ -131,10 +132,10 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
   });
 
   it("migrate-check rolls back; migrate applies exactly v26 and v27, once; nothing is lost and every identity column is unchanged", async () => {
-    expect(await store.migrateCheck()).toEqual({ currentVersion: 25, resultingVersion: 27, wouldApply: [26, 27] });
+    expect(await store.migrateCheck()).toEqual({ currentVersion: 25, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: Array.from({ length: FLEET_PG_SCHEMA_VERSION - 26 + 1 }, (_, i) => 26 + i) });
     expect((await q(`SELECT to_regprocedure('fleet.fleet_survival_observation(text)') AS r`))[0].r).toBeNull(); // rolled back
     expect((await q(`SELECT status FROM fleet.fleet_payment_orders WHERE order_id = $1`, [legacyOrder]))[0].status).toBe("awaiting_owner"); // rolled back
-    expect(await store.migrate()).toEqual([26, 27]);
+    expect(await store.migrate()).toEqual(Array.from({ length: FLEET_PG_SCHEMA_VERSION - 25 }, (_, i) => 26 + i));
     expect(await store.migrate()).toEqual([]);
     gw = new PgAgentGateway({ connectionString: pgc.agentUrl });
     expect(await q(`SELECT request_id, agent_id, idempotency_key, category, goal_ref, title, detail, status, response, decided_by, decided_at, created_at, seq, source_kind, source_ref
@@ -204,11 +205,16 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
     const readers = (await q(`SELECT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                                 WHERE n.nspname = 'fleet' AND p.prosrc ~ 'fleet_owner_requests' ORDER BY 1`)).map((r) => r.name as string);
     const family = new Set(["api_owner_request_create", "api_owner_request_withdraw", "api_owner_request_list", "fleet_owner_request_decide", "fleet_owner_request_import",
-      "fleet_owner_requests_overview", "fleet_owner_queue", "fleet_owner_requests_guard", "fleet_owner_request_json"]);
+      "fleet_owner_requests_overview", "fleet_owner_queue", "fleet_owner_requests_guard", "fleet_owner_request_json",
+      // v29: PAYMENT_RAIL_REQUIRED records (and answers) the one action-scoped kyc dependency — a member of the family.
+      "fleet_rail_resolve",
+      // v30: read-only observability (the Hub's dependency list and Doctor's action-scoping check) — they gate nothing.
+      "fleet_hub", "fleet_economy_health"]);
     expect(readers.length).toBeGreaterThan(0);
     expect(readers.filter((n) => !family.has(n))).toEqual([]);
     // In particular the spend, experiment, capability, cognition and lifecycle paths never consult it.
-    for (const fn of ["api_spend_request", "api_capabilities", "api_cognition_status", "api_experiment_propose", "svc_cognition_authorize", "fleet_survival_observation"]) expect(readers).not.toContain(fn);
+    for (const fn of ["api_spend_request", "api_capabilities", "api_cognition_status", "api_experiment_propose", "svc_cognition_authorize", "fleet_survival_observation",
+      "api_economy", "fleet_capital_decide", "fleet_econ_envelope_spend", "fleet_venture_move", "svc_settlement_ingest"]) expect(readers).not.toContain(fn);
   });
 
   it("the privilege audit enforces the autonomy invariants (triggers, the open-is-exception CHECK, the dependency writers)", async () => {

@@ -39,6 +39,7 @@ import type { ProviderFactory } from "../../fleet/cognition/routed-gateway.js";
 import type { TierCandidate } from "../../fleet/cognition/router.js";
 import { ProviderError } from "../../fleet/cognition/types.js";
 import { wipeRegistry } from "./fixtures/wipe.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const OWNER = "operator:owner";
@@ -228,7 +229,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
 
   it("migrates to v24 with a clean privilege audit; the pipeline is off by default, pinned to simulated money and simulation-only caps", async () => {
     await setup();
-    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(27);
+    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(FLEET_PG_SCHEMA_VERSION);
     expect((await store.auditPrivileges()).problems).toEqual([]);
     await genesis.experimentPolicySet(false, null, OWNER);
     expect(await propose(F, proposal())).toMatchObject({ ok: false, code: "FLEET_EXPERIMENTS_DISABLED" });
@@ -257,46 +258,51 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(await code(inTime(`UPDATE fleet.fleet_experiments SET requested_minor = 5000 WHERE experiment_id = $1`, [exp(r).experimentId]))).toBe("FLEET_HISTORY_IMMUTABLE");
   });
 
-  it("(2) insufficient evidence goes to WATCH (never capital); over the hard cap is rejected; added evidence re-decides a watched proposal once assessed", async () => {
+  it("(2) insufficient evidence goes to WATCH (never capital); no nominal cap (v30): survival headroom bounds a large request; added evidence re-decides a watched proposal once assessed", async () => {
     await setup();
     const w = await propose(F, proposal({ claimedLevel: 3 }));
     expect(exp(w)).toMatchObject({ status: "watch", claimedLevel: 3, verifiedLevel: 0, approvedMinor: null, decisionCode: "FLEET_EVIDENCE_INSUFFICIENT" });
     expect(exp(w).decisionReason).toMatch(/claimed E3, verified E0/);
     const big = await propose(F, proposal({ requestedMinor: 9_000, maxLossMinor: 9_000, evidence: [await page(F.id, "a.example")] }));
-    expect(exp(big)).toMatchObject({ status: "rejected", decisionCode: "FLEET_EXPERIMENT_OVER_CAP" });
+    expect(exp(big)).toMatchObject({ status: "watch", decisionCode: "FLEET_RELEVANCE_PENDING" });
     // Evidence arrives for the watched proposal: re-verified (provenance), still watched until its relevance is assessed.
     const ev = [await page(F.id, "b.example"), await page(F.id, "c.example")];
     const more = await gw.experimentAddEvidence(F.id, F.token, exp(w).experimentId, `ev:${crypto.randomUUID()}`, ev);
     expect(exp(more)).toMatchObject({ status: "watch", verifiedLevel: 0, decisionCode: "FLEET_RELEVANCE_PENDING", evidence: { verified: 2, relevant: 0, unassessed: 2 } });
     await settle();
     expect(await expJson(exp(w).experimentId)).toMatchObject({ status: "approved", verifiedLevel: 2, approvedMinor: 800 });
-    // A rejected proposal is final.
-    expect(await code(genesis.experimentDecide(exp(big).experimentId, "approved", 9_000, null, OWNER, "try"))).toBe("FLEET_INVALID_STATE");
+    // v30: the large request is not rejected for a nominal amount: the controller bounds it by the founder's survival headroom.
+    const bigNow = await expJson(exp(big).experimentId);
+    expect(bigNow).toMatchObject({ status: "partially_approved", decisionCode: "FLEET_EXPERIMENT_PARTIAL", decidedBy: "controller" });
+    expect(bigNow.approvedMinor).toBeGreaterThan(0);
+    expect(bigNow.approvedMinor).toBeLessThanOrEqual(5_000);
+    expect(bigNow.decisionReason).toMatch(/survival headroom/);
   });
 
-  it("(3) partial approval: the evidence level caps the budget, and survival headroom caps the maximum loss", async () => {
+  it("(3) v30: survival headroom (custody) bounds the budget and the maximum loss — no nominal evidence-ladder cap, no owner level", async () => {
     await setup(1_500);
+    // E1 evidence: the founder's own requested budget, within its headroom (the retired ladder would have capped it at 300).
     const single = await proposeAssessed(F, proposal({ evidence: [await page(F.id, "one.example")] }));
-    expect(exp(single)).toMatchObject({ status: "partially_approved", verifiedLevel: 1, requestedMinor: 800, approvedMinor: 300, approvedMaxLossMinor: 300, decisionCode: "FLEET_EXPERIMENT_PARTIAL" });
+    expect(exp(single)).toMatchObject({ status: "approved", verifiedLevel: 1, requestedMinor: 800, approvedMinor: 800, approvedMaxLossMinor: 600, decisionCode: "FLEET_EXPERIMENT_APPROVED" });
     const ev2 = [await page(F.id, "two.example"), await page(F.id, "three.example")];
     const a = await proposeAssessed(F, proposal({ opportunityKey: "second-opp", requestedMinor: 1_000, maxLossMinor: 1_000, evidence: ev2 }));
-    // Cash 1500: 300 already committed as maximum loss → headroom 1200 → full approval of 1000.
-    expect(exp(a)).toMatchObject({ status: "approved", approvedMinor: 1_000, approvedMaxLossMinor: 1_000 });
+    // Cash 1500: 600 already committed as maximum loss → headroom 900 → budget and maximum loss bounded to 900.
+    expect(exp(a)).toMatchObject({ status: "partially_approved", approvedMinor: 900, approvedMaxLossMinor: 900 });
+    // Headroom now 1500 − 600 − 900 = 0: protected capital refuses before anything else.
     const b = await proposeAssessed(F, proposal({ opportunityKey: "third-opp", requestedMinor: 1_000, maxLossMinor: 1_000, evidence: [await page(F.id, "four.example"), await page(F.id, "five.example")] }));
-    // Headroom now 1500 − 300 − 1000 = 200: the budget stays within the E2 cap, the maximum loss shrinks to the headroom.
-    expect(exp(b)).toMatchObject({ status: "partially_approved", approvedMinor: 1_000, approvedMaxLossMinor: 200 });
-    // A founder holds at most max_active_per_founder open experiments (3 by default).
+    expect(exp(b)).toMatchObject({ status: "rejected", decisionCode: "FLEET_PROTECTED_CAPITAL" });
+    // A founder holds at most max_active_per_founder open experiments (an infrastructure bound).
+    await q(`UPDATE fleet.fleet_experiment_policy SET max_active_per_founder = 2`);
     const six = await page(F.id, "six.example");
-    const irreversible = proposal({ opportunityKey: "fourth-opp", reversibility: "irreversible", requestedMinor: 100, maxLossMinor: 100, evidence: [six] });
+    const irreversible = proposal({ opportunityKey: "fourth-opp", reversibility: "irreversible", requestedMinor: 100, maxLossMinor: 40, evidence: [six] });
     expect(await propose(F, irreversible)).toMatchObject({ ok: false, code: "FLEET_EXPERIMENT_LIMIT" });
     await q(`UPDATE fleet.fleet_experiment_policy SET max_active_per_founder = 10`);
-    // All of F's survival headroom is committed (300 + 1000 + 200 of 1500): protected capital refuses before anything else.
     expect(exp(await proposeAssessed(F, irreversible))).toMatchObject({ status: "rejected", decisionCode: "FLEET_PROTECTED_CAPITAL" });
-    // G has headroom: an irreversible experiment is returned to the owner (watch → proposed), who may decide it partially.
+    // G has headroom: an irreversible experiment is decided by the controller at once — never returned to the owner. The stronger
+    // boundary: its whole budget counts as maximum loss (40 requested → 100 at risk), and the reason says so.
     const w = await proposeAssessed(G, { ...irreversible, evidence: [await page(G.id, "seven.example")] });
-    expect(exp(w)).toMatchObject({ status: "proposed", decisionCode: "FLEET_OWNER_DECISION_REQUIRED", approvedMinor: null });
-    expect(await code(genesis.experimentDecide(exp(w).experimentId, "partially_approved", 101, null, OWNER, "too much"))).toBe("FLEET_BAD_REQUEST");
-    expect(await genesis.experimentDecide(exp(w).experimentId, "partially_approved", 50, 50, OWNER, "half, as a probe")).toMatchObject({ status: "partially_approved", approvedMinor: 50, decidedBy: OWNER });
+    expect(exp(w)).toMatchObject({ status: "approved", decisionCode: "FLEET_EXPERIMENT_APPROVED", approvedMinor: 100, approvedMaxLossMinor: 100, decidedBy: "controller" });
+    expect(exp(w).decisionReason).toMatch(/irreversible: the whole budget is at risk/);
   });
 
   it("(4) the budget cannot be exceeded; (8) a stop condition (maximum loss, or a metric) ends the experiment with a result", async () => {
@@ -383,7 +389,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(exp(claim)).toMatchObject({ claimedLevel: 4, verifiedLevel: 0, status: "watch" });
     expect(await code(override(exp(claim).experimentId, only, "relevant", `operator:${F.id}`))).toBe("FLEET_SELF_APPROVAL");
     await settle();
-    expect(await expJson(exp(claim).experimentId)).toMatchObject({ claimedLevel: 4, verifiedLevel: 1, approvedMinor: 300 });
+    expect(await expJson(exp(claim).experimentId)).toMatchObject({ claimedLevel: 4, verifiedLevel: 1, approvedMinor: 800, decidedBy: "controller" });
   });
 
   it("(16) provenance is not relevance: the founder claims relevance, the independent assessor rejects it; genuine support is accepted", async () => {
@@ -482,7 +488,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     // Ambiguous at T2 but clear at T3: the escalation resolves it (relevant at T3).
     const t3 = await page(G.id, "t3.example", { text: "T3RESOLVES landlords want a tracker; the thread is long and meandering." });
     const t = await proposeAssessed(G, proposal({ opportunityKey: "t3-resolves", evidence: [t3] }));
-    expect(exp(t)).toMatchObject({ status: "partially_approved", verifiedLevel: 1, approvedMinor: 300 });
+    expect(exp(t)).toMatchObject({ status: "approved", verifiedLevel: 1, approvedMinor: 800 });
     // The owner may override (audited), e.g. after reading the mixed page; the controller re-decides. Never required above.
     expect(await code(override(id, mixed, "relevant", `operator:${F.id}`))).toBe("FLEET_SELF_APPROVAL");
     const after = await override(id, mixed, "relevant");
@@ -614,7 +620,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     const r = await proposeAssessed(F, proposal({ opportunityKey: "archive-off", evidence: [cite(off)] }));
     expect(exp(r)).toMatchObject({ status: "watch", verifiedLevel: 0, decisionCode: "FLEET_EVIDENCE_UNCERTAIN" });
     const ok = await proposeAssessed(F, proposal({ opportunityKey: "archive-on", evidence: [cite(on)] }));
-    expect(exp(ok)).toMatchObject({ verifiedLevel: 1, status: "partially_approved" });
+    expect(exp(ok)).toMatchObject({ verifiedLevel: 1, status: "approved" });
   });
 
   it("(24) failed relevance-provider calls never disappear from provider-credit accounting", async () => {
@@ -752,12 +758,12 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(Number((await q(`SELECT fleet.fleet_ledger_balance(fleet.fleet_ledger_account($1, 'agent_revenue')) AS b`, [F.id]))[0].b)).toBeGreaterThan(0);
     const e3 = await proposeAssessed(F, proposal({ opportunityKey: "rent-tracker", evidence: [await page(F.id, "rt-1.example")] }));
     expect(exp(e3)).toMatchObject({ verifiedLevel: 3, status: "approved", approvedMinor: 800 });
-    // Revenue attributed to this opportunity's lineage: E4, which the owner decides (never automatic).
+    // Revenue attributed to this opportunity's lineage: E4 — recorded as information; v30: no owner level, survival headroom bounds the budget.
     expect(await genesis.experimentAttributeRevenue(unattributed, rt, OWNER, "tracker customers paid via the marketplace"))
       .toMatchObject({ journal_id: unattributed, opportunity_key: "rent-tracker", experiment_id: rt, amount_minor: 700, attributed_by: OWNER });
     expect(await code(genesis.experimentAttributeRevenue(unattributed, rt, OWNER, "again"))).toBe("FLEET_DUPLICATE_EVENT");
     const e4 = await proposeAssessed(F, proposal({ opportunityKey: "rent-tracker", requestedMinor: 1_200, maxLossMinor: 600, evidence: [await page(F.id, "rt-2.example")] }));
-    expect(exp(e4)).toMatchObject({ verifiedLevel: 4, status: "proposed", decisionCode: "FLEET_OWNER_DECISION_REQUIRED", approvedMinor: null });
+    expect(exp(e4)).toMatchObject({ verifiedLevel: 4, status: "approved", decisionCode: "FLEET_EXPERIMENT_APPROVED", approvedMinor: 1_200, decidedBy: "controller" });
     // The attribution cannot be rewritten; a reversed revenue journal stops counting.
     expect(await code(inTime(`UPDATE fleet.fleet_opportunity_revenue_attributions SET opportunity_key = 'rent-tracker' WHERE journal_id = $1`, [otherRev]))).toBe("FLEET_HISTORY_IMMUTABLE");
     await q(`SELECT fleet.fleet_admin_reverse($1, $2, 'customer refunded', $3)`, [unattributed, OWNER, `rev:${crypto.randomUUID()}`]);
@@ -775,9 +781,9 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     const aid = exp(a).experimentId as string;
     await gw.experimentStart(F.id, F.token, aid);
     await rec(F, aid, { kind: "sim_spend", amountMinor: 590 });
-    // Reported spend never releases headroom: A still commits its whole maximum loss (600), so B's loss is capped at 900.
+    // Reported spend never releases headroom: A still commits its whole maximum loss (600), so B's budget and loss are bounded at 900.
     const b = await proposeAssessed(F, proposal({ opportunityKey: "roi-b", requestedMinor: 1_000, maxLossMinor: 1_000, evidence: [await page(F.id, "rb-1.example"), await page(F.id, "rb-2.example")] }));
-    expect(exp(b)).toMatchObject({ status: "partially_approved", approvedMinor: 1_000, approvedMaxLossMinor: 900 });
+    expect(exp(b)).toMatchObject({ status: "partially_approved", approvedMinor: 900, approvedMaxLossMinor: 900 });
     const bid = exp(b).experimentId as string;
     await gw.experimentStart(F.id, F.token, bid);
     await rec(F, bid, { kind: "sim_spend", amountMinor: 10 });

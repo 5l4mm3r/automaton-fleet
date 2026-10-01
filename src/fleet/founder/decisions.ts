@@ -403,3 +403,44 @@ export function idleTask(kind: IdleKind, list: Decision[], goals: Array<{ id: st
   }
   return `Idle wake with no open decision and no execution path. ${OPPORTUNITY_CYCLE}`;
 }
+
+/**
+ * F2: dynamic cognition depth (replaces the retired fixed £20 "major spend" line). How carefully a commitment deserves to
+ * be reasoned about depends on its CONTEXT, never on a nominal amount: exposure as a share of the founder's own available
+ * capital, irreversibility, weak or thin evidence, novelty (no comparable decision on record) and concentration in one
+ * path. The result is information for the founder (it may escalate one question to the critical tier); FleetController
+ * enforces only its own relative boundary (fleet_cognition_depth_policy) when a spend is actually ordered.
+ */
+export interface DepthInput {
+  capitalAtRiskPence: number;
+  availablePence: number | null;
+  irreversible: boolean;
+  evidenceItems: number;
+  comparableDecisions: number;
+  committedElsewherePence: number;
+}
+export interface DepthResult { level: "routine" | "standard" | "critical"; score: number; reasons: string[] }
+
+export function cognitionDepth(i: DepthInput): DepthResult {
+  const reasons: string[] = [];
+  let score = 0;
+  // An unknown wallet figure is not scored as exposure (it is not evidence of anything); a known empty wallet is total exposure.
+  const avail = i.availablePence ?? 0;
+  const share = i.availablePence === null ? 0 : avail > 0 ? Math.floor((i.capitalAtRiskPence * 10_000) / avail) : i.capitalAtRiskPence > 0 ? 10_000 : 0;
+  if (share >= 5_000) { score += 3; reasons.push(`exposure ${Math.round(share / 100)}% of your available capital`); }
+  else if (share >= 2_000) { score += 2; reasons.push(`exposure ${Math.round(share / 100)}% of your available capital`); }
+  else if (share >= 500) score += 1;
+  if (i.irreversible && i.capitalAtRiskPence > 0) { score += 2; reasons.push("irreversible"); }
+  if (i.evidenceItems < 2 && i.capitalAtRiskPence > 0) { score += 1; reasons.push(`thin evidence (${i.evidenceItems} fact${i.evidenceItems === 1 ? "" : "s"})`); }
+  if (i.comparableDecisions === 0 && i.capitalAtRiskPence > 0) { score += 1; reasons.push("novel: no comparable decision on record"); }
+  if (avail > 0 && i.committedElsewherePence + i.capitalAtRiskPence > avail) { score += 2; reasons.push("commitments would exceed your available capital"); }
+  const level = score >= 4 ? "critical" : score >= 2 ? "standard" : "routine";
+  return { level, score, reasons };
+}
+
+export function depthLine(d: DepthResult): string {
+  if (d.level === "routine") return "";
+  return d.level === "critical"
+    ? ` Risk complexity HIGH (${d.reasons.join("; ")}): reason this through carefully — size down, stage it, or escalate_question once — before committing.`
+    : ` Risk complexity moderate (${d.reasons.join("; ")}).`;
+}

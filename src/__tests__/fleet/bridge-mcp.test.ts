@@ -27,6 +27,7 @@ import { OperatorService } from "../../fleet/operator/server.js";
 import { generateOperatorKey } from "../../fleet/operator/keygen.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { bridgeFixture, privateTmp, writeFakeSsh } from "./fixtures/fake-ssh.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 type Msg = Record<string, any>;
 /** B2/D2 read tools (unchanged) + D3 Tier 2 read tools. */
@@ -383,7 +384,7 @@ describe.skipIf(!PG_BIN)("MCP stdio process against the real Operator API", () =
     m.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "fleet_list_events", arguments: { limit: 5 } } });
     expect((await m.wait(5)).result.isError).toBe(false);
     m.send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "fleet_status", arguments: {} } });
-    expect(JSON.parse((await m.wait(6)).result.content[0].text).data.schema.version).toBe(27);
+    expect(JSON.parse((await m.wait(6)).result.content[0].text).data.schema.version).toBe(FLEET_PG_SCHEMA_VERSION);
     m.send({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "shell", arguments: { cmd: "id" } } });
     expect((await m.wait(7)).error.code).toBe(-32602);
 

@@ -73,6 +73,12 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   record_external_dependency: "planning",
   withdraw_external_dependency: "planning",
   open_decision: "planning",
+  // F2 (schema v28+): the founder's own economic records and Fleet capital (no new authority: existing classes)
+  opportunity: "planning",
+  venture: "planning",
+  wallet: "ledger.read",
+  fleet_capital: "spend.request",
+  economic_knowledge: "knowledge.read",
   resolve_decision: "planning",
   review_decision: "planning",
   get_plan: "planning",

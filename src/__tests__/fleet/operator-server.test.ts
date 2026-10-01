@@ -21,6 +21,7 @@ import { keyIdOf, newNonce, rawPublicKey, signedHeaders } from "../../fleet/oper
 import { OPERATOR_REQUEST_CAP } from "../../fleet/postgres/migrations-phase8.js";
 import { findLeaks, makeCorpus } from "./fixtures/redaction-corpus.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const PIN = { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40) };
@@ -168,7 +169,7 @@ describe.skipIf(!PG_BIN)("B2 Operator API over HTTP (PostgreSQL)", () => {
     expect(st.json.data).toMatchObject({
       fleet: { maxAgents: 2, living: 0, mode: "DEVELOPMENT", replicationEnabled: false },
       runtime: { commit: PIN.commit, buildId: BUILD.buildId, lockfileSha256: BUILD.lockfileSha256 },
-      schema: { version: 27 },
+      schema: { version: FLEET_PG_SCHEMA_VERSION },
       safety: { realReplicationEnabled: false, realPaymentsEnabled: false, ownerSweepEnabled: false, dryRunChildEnabled: false },
       operatorApi: { enabled: true },
     });

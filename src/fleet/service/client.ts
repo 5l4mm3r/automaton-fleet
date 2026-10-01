@@ -369,6 +369,19 @@ export class FleetApiClient implements FleetBackend {
     return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/list", {});
   }
 
+  /**
+   * Schema v28+ (F2): one of this founder's own economic operations (opportunity.*, venture.*, decision.*, knowledge.*,
+   * wallet, performance, brief, rail.require, vendor.*, capital.*, envelope.*). The database authorizes and validates.
+   */
+  async economy(op: string, args: Record<string, unknown> = {}) {
+    return this.call<Record<string, unknown>>("POST", "/v1/economy", { op, args });
+  }
+
+  /** F2: the compact economic brief for a full task packet (figures only). */
+  async economyBrief() {
+    return (await this.economy("brief", {})).brief;
+  }
+
   /** Schema v18: research the public web through FleetController's isolated fetcher (the result is UNTRUSTED data). */
   async researchFetch(p: { url: string; purpose: string }) {
     return (await this.call<{ result: Record<string, unknown> }>("POST", "/v1/research/fetch", p, false, 60_000)).result;

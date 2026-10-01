@@ -31,6 +31,7 @@ import { migrateUpTo } from "./fixtures/migrate-to.js";
 import { FleetApiClient } from "../../fleet/service/client.js";
 import { FleetService } from "../../fleet/service/server.js";
 import { UnsupportedSandboxTerminator } from "../../fleet/service/terminator.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const PIN = { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40) };
@@ -143,7 +144,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
   // ── Schema, model and privileges ─────────────────────────────
 
   it("migrates to v10 with custody execution constitutionally pinned off and a clean privilege audit", async () => {
-    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(27);
+    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(FLEET_PG_SCHEMA_VERSION);
     const m = await ledger.model();
     expect(m).toMatchObject({ ledgerAuthoritative: true, custodyExecutionEnabled: false, strongAuthThresholdCents: 50000,
       legacyRetired: { ownerApprovalThresholdCents: 10000, agentDailySpendCents: 5000 } }); // v27: inert history, never policy
@@ -496,10 +497,12 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
   it("v27 infrastructure circuit breaker: relative signals only, unset by default, a refusal names no threshold, and the owner control is audited", async () => {
     const a = agents[2];
     const breaker = async () => (await q(`SELECT to_jsonb(b) - 'updated_at' AS r FROM fleet.fleet_spend_circuit_breaker b`))[0].r;
-    expect(await breaker()).toEqual({ id: 1, tripped: false, trip_reason: null, order_wallet_bp: null, velocity_window_s: null, velocity_wallet_bp: null, updated_by: "migration" });
+    expect(await breaker()).toEqual({ id: 1, tripped: false, trip_reason: null, order_wallet_bp: null, velocity_window_s: null, velocity_wallet_bp: null,
+      new_destination_age_s: null, new_destination_wallet_bp: null, updated_by: "migration" });
     // No column can hold a nominal amount; the table cannot be emptied (fail-closed otherwise).
     const cols = (await q(`SELECT column_name AS c FROM information_schema.columns WHERE table_schema = 'fleet' AND table_name = 'fleet_spend_circuit_breaker' ORDER BY ordinal_position`)).map((r) => r.c);
-    expect(cols).toEqual(["id", "tripped", "trip_reason", "order_wallet_bp", "velocity_window_s", "velocity_wallet_bp", "updated_at", "updated_by"]);
+    expect(cols).toEqual(["id", "tripped", "trip_reason", "order_wallet_bp", "velocity_window_s", "velocity_wallet_bp", "updated_at", "updated_by",
+      "new_destination_age_s", "new_destination_wallet_bp"]); // v29: the destination-novelty signal (relative, unset)
     expect(await pgCode(owner.query(`DELETE FROM fleet.fleet_spend_circuit_breaker`))).toBe("FLEET_HISTORY_IMMUTABLE");
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_spend_circuit_breaker SET order_wallet_bp = 20000`))).toMatch(/check constraint/);
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_spend_circuit_breaker SET velocity_wallet_bp = 100`))).toMatch(/check constraint/); // a share needs its window
@@ -626,7 +629,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(order(r).status).toBe("reserved");
     expect((await svc.query(`SELECT fleet.svc_issue_payment_instruction($1) AS r`, [order(r).orderId])).rows[0].r).toEqual({ ok: false, code: "FLEET_CUSTODY_EXECUTION_DISABLED" });
     expect((await custody.query(`SELECT fleet.cx_claim_instruction('executor', $1) AS r`, [sha256Hex("lease")])).rows[0].r).toEqual({ ok: false, code: "FLEET_CUSTODY_EXECUTION_DISABLED" });
-    expect((await custody.query(`SELECT fleet.cx_ping() AS r`)).rows[0].r).toMatchObject({ schemaVersion: 27, executionEnabled: false, issued: 0, claimed: 0 });
+    expect((await custody.query(`SELECT fleet.cx_ping() AS r`)).rows[0].r).toMatchObject({ schemaVersion: FLEET_PG_SCHEMA_VERSION, executionEnabled: false, issued: 0, claimed: 0 });
     expect(await pgCode(owner.query(
       `INSERT INTO fleet.fleet_payment_instructions (instruction_id, order_id, amount_cents, destination_id, rail, instruction_sha256, issued_by)
        VALUES (gen_random_uuid(), $1, 50, $2, 'evm_usdc', repeat('a',64), 'owner')`, [order(r).orderId, payee],
@@ -937,9 +940,9 @@ describe.skipIf(!PG_BIN)("schema v9 -> v10 on a production-shaped v9 registry", 
       await owner.query(`INSERT INTO fleet.fleet_treasury_ledger (kind, amount_cents, status, recorded_by) VALUES ('owner_funding_in', 1000, 'recorded', 'operator:x')`);
       const legacyBefore = (await owner.query(`SELECT string_agg(row_to_json(x)::text, E'\\n' ORDER BY x.entry_id) AS s, count(*)::int AS n FROM fleet.fleet_agent_ledger x`)).rows[0];
       const eventsBefore = (await owner.query(`SELECT count(*)::int AS n FROM fleet.fleet_events`)).rows[0].n;
-      expect(await store.migrateCheck()).toEqual({ currentVersion: 9, resultingVersion: 27, wouldApply: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27] });
+      expect(await store.migrateCheck()).toEqual({ currentVersion: 9, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: Array.from({ length: FLEET_PG_SCHEMA_VERSION - 10 + 1 }, (_, i) => 10 + i) });
       expect((await owner.query(`SELECT to_regclass('fleet.fleet_ledger_journal') AS r`)).rows[0].r).toBeNull(); // rolled back
-      expect(await store.migrate()).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
+      expect(await store.migrate()).toEqual(Array.from({ length: FLEET_PG_SCHEMA_VERSION - 9 }, (_, i) => 10 + i));
       expect(await store.migrate()).toEqual([]);
       const digest = (await owner.query(`SELECT row_count, rows_sha256 FROM fleet.fleet_legacy_economics WHERE table_name = 'fleet_agent_ledger'`)).rows[0];
       expect(Number(digest.row_count)).toBe(legacyBefore.n);

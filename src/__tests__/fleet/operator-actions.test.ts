@@ -35,6 +35,7 @@ import { OperatorBridgeClient, type SignerIdentity } from "../../fleet/bridge/cl
 import { BridgeError } from "../../fleet/bridge/errors.js";
 import { CHATGPT_TOOL_NAMES, FleetMcpServer, TOOLS, toolsNamed } from "../../fleet/bridge/mcp-core.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const PIN = { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40) };
@@ -450,7 +451,7 @@ describe.skipIf(!PG_BIN)("D3 controlled operator actions (schema v9, PostgreSQL 
     expect(lc.data).toMatchObject({ fleet: { maxAgents: 10, mode: expect.any(String) }, operatorApi: { enabled: true, actionsEnabled: true } });
     expect((lc.data.agentsByStatus as Record<string, number>).dead).toBeGreaterThanOrEqual(2);
     const rt = await client(op).runtimeVerification();
-    expect(rt.data).toMatchObject({ approved: { commit: PIN.commit, buildId: BUILD.buildId }, checks: { pinnedMatchesApproved: true, operatorReleaseMatchesApproved: true }, schemaVersion: 27 });
+    expect(rt.data).toMatchObject({ approved: { commit: PIN.commit, buildId: BUILD.buildId }, checks: { pinnedMatchesApproved: true, operatorReleaseMatchesApproved: true }, schemaVersion: FLEET_PG_SCHEMA_VERSION });
     expect((await client(op).listReservations()).data.items).toEqual([]);
     expect((await client(op).listOrphans()).data.items).toEqual([]);
     const acts = await client(op).listActions({ limit: 200 });
@@ -740,9 +741,9 @@ describe.skipIf(!PG_BIN)("D3 schema v8 -> v9 (-> v10) on a production-shaped v8 
       const before = await snap();
       const store = new PgFleetStore({ connectionString: pgc.ownerUrl, schema });
       try {
-        expect(await store.migrateCheck()).toEqual({ currentVersion: 8, resultingVersion: 27, wouldApply: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27] });
+        expect(await store.migrateCheck()).toEqual({ currentVersion: 8, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: Array.from({ length: FLEET_PG_SCHEMA_VERSION - 9 + 1 }, (_, i) => 9 + i) });
         expect(await snap()).toEqual(before); // check rolled back
-        expect(await store.migrate()).toEqual([9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
+        expect(await store.migrate()).toEqual(Array.from({ length: FLEET_PG_SCHEMA_VERSION - 9 + 1 }, (_, i) => 9 + i));
         const after = await snap();
         expect({ ...after, e: undefined }).toEqual({ ...before, e: undefined });
         expect(Number(after.e)).toBeGreaterThanOrEqual(Number(before.e));

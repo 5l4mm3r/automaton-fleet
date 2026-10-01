@@ -797,9 +797,11 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_fx_rates: new Set(["fleet_fx_insert"]),
     fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile"]),
     // v25/v26: dependency records only through the founder API and the owner's resolve/import.
-    fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import"]),
+    fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import",
+      // v29: PAYMENT_RAIL_REQUIRED records ONE action-scoped kyc dependency (and answers it when a rail is connected).
+      "fleet_rail_resolve"]),
     // v27: the spend circuit breaker only through the owner's infrastructure control.
-    fleet_spend_circuit_breaker: new Set(["fleet_admin_spend_circuit_breaker"]),
+    fleet_spend_circuit_breaker: new Set(["fleet_admin_spend_circuit_breaker", "fleet_admin_spend_circuit_breaker_novelty"]),
   };
   for (const f of fns.rows) {
     for (const t of writeTargets(f.src)) {

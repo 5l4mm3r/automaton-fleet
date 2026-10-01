@@ -427,10 +427,10 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       [ulid(), `0x${randomBytes(20).toString("hex")}`],
     );
     // v8 (Operator API), v9 (D3 actions) v10 (Phase E ledger), v11 (Phase F Genesis) and v12 (F.1 founder runtimes), all additive, now follow v7 in the same migration run.
-    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 27, wouldApply: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27] });
-    expect(await store.migrate()).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(27);
-    expect((await store.health()).schemaVersion).toBe(27);
+    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: Array.from({ length: FLEET_PG_SCHEMA_VERSION - 7 + 1 }, (_, i) => 7 + i) });
+    expect(await store.migrate()).toEqual(Array.from({ length: FLEET_PG_SCHEMA_VERSION - 7 + 1 }, (_, i) => 7 + i));
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(FLEET_PG_SCHEMA_VERSION);
+    expect((await store.health()).schemaVersion).toBe(FLEET_PG_SCHEMA_VERSION);
     const scopes = await ownerRaw.query(`SELECT capability_scope FROM ${schema}.fleet_agents`);
     expect(scopes.rows.map((r) => r.capability_scope)).toEqual(["full"]);
     expect((await store.auditPrivileges()).problems).toEqual([]);

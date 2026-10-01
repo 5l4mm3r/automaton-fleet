@@ -388,7 +388,7 @@ describe("Genesis preparation: research retention and opportunity doctrine", () 
   });
 
   it("the charter carries the owner's doctrine as priors: no prescribed business, research ≠ execution, owner capital ≠ profit", () => {
-    expect(FOUNDER_CHARTER_VERSION).toBe("founder-charter-v3"); // F2-A: autonomy doctrine (the priors below are unchanged from v2)
+    expect(FOUNDER_CHARTER_VERSION).toBe("founder-charter-v4"); // F2-A: autonomy doctrine (the priors below are unchanged from v2)
     expect(FOUNDER_CHARTER).toMatch(/No business has been chosen for you/);
     expect(FOUNDER_CHARTER).toMatch(/Economic priors \(judgement, not rules\)/);
     expect(FOUNDER_CHARTER).toMatch(/high risk is not the same as low opportunity/);

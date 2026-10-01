@@ -28,6 +28,7 @@ import { capabilityView } from "../../fleet/cognition/capability-signature.js";
 import { CUSTODY_REFUSAL_CODES, custodyCategory, custodyRefusalText, type CustodyCategory } from "../../fleet/custody-refusals.js";
 import { V26_SQL } from "../../fleet/postgres/migrations-phase26.js";
 import { V27_SQL } from "../../fleet/postgres/migrations-phase27.js";
+import { V29_SQL } from "../../fleet/postgres/migrations-phase29.js";
 import { AGENT_API_FUNCTIONS, FLEET_PG_SCHEMA_VERSION, PG_MIGRATIONS } from "../../fleet/postgres/migrations.js";
 import { runLedgerCommand } from "../../fleet/treasury/ledger-cli.js";
 import type { PgLedgerAdmin } from "../../fleet/treasury/ledger.js";
@@ -129,8 +130,8 @@ const decidedHistory = (): Decision[] => [{
 
 describe("F2-A v27: the owner spend route and the fixed 100.00 / 50.00 lines are retired from own-capital spending", () => {
   it("(1, 2, 5) the registry's spend decision reads no nominal threshold and has no owner branch; nothing in the latest SQL routes spend to the owner", () => {
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(27);
-    expect(PG_MIGRATIONS.at(-1)).toMatchObject({ version: 27, name: "f2a_own_capital_custody_circuit_breaker", sql: V27_SQL });
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(FLEET_PG_SCHEMA_VERSION);
+    expect(PG_MIGRATIONS.find((m) => m.version === 27)).toMatchObject({ version: 27, name: "f2a_own_capital_custody_circuit_breaker", sql: V27_SQL });
     const spend = code(fn("api_spend_request"));
     expect(V27_SQL).toContain("CREATE OR REPLACE FUNCTION api_spend_request(");
     expect(spend).not.toMatch(/owner_approval_threshold_cents|agent_daily_spend_cents|awaiting_owner|FLEET_OWNER_APPROVAL_REQUIRED|v_today|interval '1 day'/);
@@ -312,7 +313,11 @@ describe("F2-A v27: the infrastructure circuit breaker", () => {
     expect(V27_SQL).toContain("INSERT INTO fleet_spend_circuit_breaker (id) VALUES (1);");
     // Unset signals never trip; the check reads only the founder's own wallet and its own recent orders.
     const check = code(fn("fleet_spend_circuit_breaker_check"));
-    expect(check).toMatch(/IF b\.order_wallet_bp IS NULL AND b\.velocity_wallet_bp IS NULL THEN RETURN NULL; END IF;/);
+    expect(check).toMatch(/IF b\.order_wallet_bp IS NULL AND b\.velocity_wallet_bp IS NULL AND b\.new_destination_wallet_bp IS NULL THEN RETURN NULL; END IF;/);
+    // v29 adds one more RELATIVE signal (destination novelty: an age window and a share of the wallet), unset like the others.
+    expect(V29_SQL).toMatch(/ADD COLUMN new_destination_age_s integer CHECK \(new_destination_age_s BETWEEN 60 AND 31536000\)/);
+    expect(V29_SQL).toMatch(/ADD COLUMN new_destination_wallet_bp integer CHECK \(new_destination_wallet_bp BETWEEN 1 AND 10000\)/);
+    expect(V29_SQL).not.toMatch(/new_destination_[a-z_]+ integer[^,;]*DEFAULT/);
     expect(check).toMatch(/fleet_ledger_account\(o\.agent_id, 'agent_cash'\)/);
     expect(check).toMatch(/WHERE agent_id = o\.agent_id/);
     // Configured only by an owner approver, with an audit event; never an agent function.
@@ -327,7 +332,7 @@ describe("F2-A v27: the infrastructure circuit breaker", () => {
     const spend = code(fn("api_spend_request"));
     expect(spend).toMatch(/'infrastructure circuit breaker: ' \|\| v_signal/);
     expect(spend).not.toMatch(/order_wallet_bp|velocity_wallet_bp|velocity_window_s|fleet_spend_circuit_breaker[^_]/);
-    expect([...code(fn("fleet_spend_circuit_breaker_check")).matchAll(/RETURN '([a-z_]+)'/g)].map((m) => m[1])).toEqual(["unavailable", "tripped", "order_wallet_share", "velocity_wallet_share"]);
+    expect([...code(fn("fleet_spend_circuit_breaker_check")).matchAll(/RETURN '([a-z_]+)'/g)].map((m) => m[1])).toEqual(["unavailable", "tripped", "order_wallet_share", "velocity_wallet_share", "new_destination_wallet_share"]);
     // Founder-facing text never mentions it as something to use: not the charter, tools, packet policy or own-capital line.
     const facing = [FOUNDER_CHARTER, FOUNDER_ROUTED_ADDENDUM, ...FOUNDER_TOOLS.map((x) => x.description), ...PACKET_POLICY, ownCapitalLine({ cash: 1 }, [])!].join("\n");
     expect(facing).not.toMatch(/circuit|breaker|allowance|entitle|remaining (budget|spend)|you may spend up to/i);

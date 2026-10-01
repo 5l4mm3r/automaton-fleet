@@ -30,6 +30,7 @@ import { backupFounderState, categorize, diffFounderState, snapshotFounderState,
 import { runUpgradeRehearsal } from "../../fleet/founder/upgrade-rehearsal.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { wipeRegistry } from "./fixtures/wipe.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const OWNER = "operator:owner";
@@ -197,7 +198,7 @@ describe.skipIf(!PG_BIN)("schema v23 runtime-upgrade registry guarantees (Postgr
 
   it("migrates to v23 with a clean privilege audit; a founder's registered runtime is its Genesis attestation until an upgrade", async () => {
     const a = await setup();
-    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(27);
+    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(FLEET_PG_SCHEMA_VERSION);
     expect((await store.auditPrivileges()).problems).toEqual([]);
     expect(await genesis.founderRuntimeCurrent(a)).toMatchObject({ ...FROM, source: "genesis" });
     expect(await genesis.founderRuntimeCurrent("01ZZZZZZZZZZZZZZZZZZZZZZZZ")).toBeNull();

@@ -142,6 +142,8 @@ export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Obj
   "POST /v1/owner-requests/create": { auth: "session", witness: false },
   "POST /v1/owner-requests/withdraw": { auth: "session", witness: false },
   "POST /v1/owner-requests/list": { auth: "session", witness: false },
+  // v28+ (F2): the agent's own economic operations through one dispatcher (the database authorizes each op).
+  "POST /v1/economy": { auth: "session", witness: false },
 });
 
 /**
@@ -1154,6 +1156,21 @@ export class FleetService {
         const { agentId, token } = await this.credentials(req, path, ctx);
         const r = await agent.ownerRequestList(agentId, token);
         if (!r.ok) throw FleetService.refusal(r, "owner requests refused");
+        return r;
+      }
+
+      case "/v1/economy": {
+        // F2 (schema v28+): opportunities, decisions, ventures, knowledge, wallet, rails, vendors, Fleet capital and
+        // envelopes. The op is checked against the database's own closed set (FLEET_UNKNOWN_OPERATION otherwise) and every
+        // op is authenticated and capability-checked there; arguments are a bounded JSON object validated by the database.
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const op = str(body, "op", 40);
+        if (!/^[a-z]+(\.[a-z_]+)?$/.test(op)) return { ok: false, code: "FLEET_BAD_REQUEST" };
+        const args = body.args && typeof body.args === "object" && !Array.isArray(body.args) ? (body.args as Record<string, unknown>) : {};
+        const r = await agent.economy(agentId, token, op, args);
+        if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "economy refused");
+        // Metadata telemetry only (op, outcome code): never arguments, amounts or text.
+        if (/^(capital|envelope|vendor|rail|venture|decision)\./.test(op)) this.audit("economy_op", agentId, { op, ok: r.ok, code: r.code ?? null });
         return r;
       }
 

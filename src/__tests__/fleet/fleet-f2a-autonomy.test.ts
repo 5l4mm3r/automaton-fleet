@@ -73,7 +73,7 @@ const framed = (o: Record<string, unknown> = {}) => ({ url: "https://market.exam
 
 describe("F2-A charter v3 and founder-facing text", () => {
   it("charter v3: autonomous actor; FleetController is the bank; decision-driven research; runway strategy is the founder's", () => {
-    expect(FOUNDER_CHARTER_VERSION).toBe("founder-charter-v3");
+    expect(FOUNDER_CHARTER_VERSION).toBe("founder-charter-v4");
     expect(FOUNDER_CHARTER).toMatch(/an autonomous economic actor\. Your purpose is to stay alive economically/);
     expect(FOUNDER_CHARTER).toMatch(/no one approves your business choices: you choose niches, products, services, channels, marketing, experiments, pivots and new ventures yourself/);
     // v27: the bank is the custodian of the founder's own capital and the allocator of Fleet capital — it does not decide own spending.
@@ -165,7 +165,7 @@ describe("F2-A charter v3 and founder-facing text", () => {
     expect(V26_SQL).toMatch(/CREATE FUNCTION fleet_survival_observation\(p_agent text\) RETURNS jsonb LANGUAGE sql STABLE/);
     // The only table v26 writes is the dependency table: no ledger, treasury, payment, reserve, obligation or tax table.
     expect(writeTargets(V26_SQL)).toEqual(["fleet_owner_requests"]);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(27); // v27 (own-capital custody) is its own, separately reviewable migration
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(FLEET_PG_SCHEMA_VERSION); // v27 (own-capital custody) is its own, separately reviewable migration
     expect(PG_MIGRATIONS.find((m) => m.version === 26)).toMatchObject({ name: "f2a_action_scoped_dependencies_survival_observation", sql: V26_SQL });
     // Own capital: the founder's risk judgement; FleetController is the custodian that protects treasury/shared/restricted capital.
     expect(FOUNDER_TOOLS.find((t) => t.name === "request_spend")!.description).toMatch(/the risk judgement is yours.*FleetController is the custodian: it executes orders only within its custody rules, which protect treasury, shared, restricted and protected capital/);
@@ -337,7 +337,9 @@ describe("F2-A research through the founder's own runtime", () => {
       .toMatchObject({ ok: false, refused: "FLEET_DECISION_STOP_REACHED" });
     expect(t.calls.fetch).toHaveLength(2);
     const decided = await t.run("resolve_decision", resolveArgs());
-    expect(decided).toMatchObject({ ok: true, output: 'decision tracker-demand made: "direct checkout page". Goal g1 opened for its next action (Publish the tracker on a self-hosted checkout page). Research on this question is closed — execute.' });
+    // (F2 appends the founder's own risk-complexity reading when one applies: information after the decision, never a gate.)
+    expect(decided).toMatchObject({ ok: true });
+    expect(decided.output.startsWith('decision tracker-demand made: "direct checkout page". Goal g1 opened for its next action (Publish the tracker on a self-hosted checkout page). Research on this question is closed — execute.')).toBe(true);
     const goals = JSON.parse(fs.readFileSync(path.join(t.dirs.m, "goals.json"), "utf8"));
     expect(goals).toEqual([expect.objectContaining({ id: "g1", title: "Execute tracker-demand: Publish the tracker on a self-hosted checkout page", status: "open", decision: "tracker-demand" })]);
     expect(loadDecisions(t.dirs.m)[0].outcome).toMatchObject({ goalId: "g1", selected: "direct checkout page" });

@@ -41,6 +41,7 @@ import type { LoopGuard } from "./loop-guard.js";
 import { escalateQuestion, priorDecision } from "./escalation.js";
 import { DECISIONS_FILE, decisionLines, nextMoveLine, idleKind, idleTask, loadDecisions, ownCapitalLine, parseSurvival, survivalLine, type Decision, type IdleKind } from "./decisions.js";
 import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineClass } from "./task-classifier.js";
+import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
 
 export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
@@ -51,6 +52,8 @@ export interface MindPorts {
   ledger?(): Promise<unknown>;
   /** F2-A: this founder's own external dependencies (kind, the unavailable action, status; T0). Absent = not offered by this controller. */
   ownerRequests?(): Promise<unknown>;
+  /** F2 (schema v28+): the compact economic brief for a full packet (one call; absent = not offered by this controller). */
+  economyBrief?(): Promise<unknown>;
 }
 
 /** What a routed mind needs beyond the legacy one (absent = this runtime never routes). */
@@ -496,7 +499,12 @@ export class FounderMind {
     // F2-A (v26+ controller): the survival observation and the founder's own-capital position and record — information
     // for its own risk management (wallet, exposure, results), never a permission, a limit or a score.
     const own = !bare && survival ? ownCapitalLine(economics, ledger) : null;
-    const extra = [...(move ? [move] : []), ...(!bare && survival ? [survivalLine(survival)] : []), ...(own ? [own] : [])];
+    // F2: one compact line of the founder's economy (full packets only; slim wake-ups stay slim). A failure drops the line.
+    let brief: EconomyBrief | null = null;
+    if (!bare && this.o.ports.economyBrief) {
+      try { brief = parseBrief(await this.o.ports.economyBrief()); } catch { brief = null; }
+    }
+    const extra = [...(move ? [move] : []), ...(!bare && survival ? [survivalLine(survival)] : []), ...(own ? [own] : []), ...(brief ? [economyLine(brief)] : [])];
     let text: string;
     try {
       const full = buildTaskPacket({

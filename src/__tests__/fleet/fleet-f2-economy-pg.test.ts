@@ -176,7 +176,13 @@ describe.skipIf(!PG_BIN)("F2 v28 economy records: opportunities, ventures, decis
     expect(p.ventures).toMatchObject({ active: 1, profitable: 1, failed: 0 });
     const readers = (await R.q(`SELECT p.proname AS n FROM pg_proc p JOIN pg_namespace s ON s.oid = p.pronamespace
                                 WHERE s.nspname = 'fleet' AND p.prosrc ~ 'fleet_agent_performance' ORDER BY 1`)).map((r) => r.n);
-    expect(readers).toEqual(["api_economy"]);
+    // Readers: the agent's own view, the admin Hub, and FleetController's LENDER decision on Fleet capital (track record is a
+    // legitimate input there). No own-capital decision reads it: custody, the breaker and experiments never do.
+    expect(readers).toEqual(["api_economy", "fleet_capital_decide", "fleet_hub"]);
+    const ownCapital = (await R.q(`SELECT p.proname AS n FROM pg_proc p JOIN pg_namespace s ON s.oid = p.pronamespace WHERE s.nspname = 'fleet'
+      AND p.proname IN ('api_spend_request','fleet_spend_custody_check','fleet_order_hard_check','fleet_spend_circuit_breaker_check','fleet_experiment_evaluate',
+                        'fleet_econ_envelope_spend') AND p.prosrc ~ '(performance|forecast|roi)'`)).map((r) => r.n);
+    expect(ownCapital).toEqual([]);
   });
 
   it("failsafes are infrastructure ceilings (never budgets): a hit refuses, is recorded as telemetry, and names no figure", async () => {
@@ -198,7 +204,7 @@ describe.skipIf(!PG_BIN)("F2 v28 economy records: opportunities, ventures, decis
       expect(await R.econ(G, "opportunity.list")).toEqual({ ok: false, code: "FLEET_AGENT_HELD" });
     } finally { await R.q(`SELECT fleet.fleet_agent_hold_release($1, $2)`, [G.id, OWNER]); }
     const src = (await R.q(`SELECT string_agg(p.prosrc, E'\\n') AS s FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                           WHERE n.nspname = 'fleet' AND (p.proname LIKE 'fleet_econ_%' OR p.proname IN ('api_economy','fleet_venture_move'))`))[0].s as string;
+                           WHERE n.nspname = 'fleet' AND (p.proname LIKE 'fleet\\_econ\\_%' OR p.proname IN ('api_economy','fleet_venture_move'))`))[0].s as string;
     expect(src).not.toMatch(/owner_request|awaiting_owner|owner approv|operator:owner|fleet_require_operator_approver/i);
   });
 });
