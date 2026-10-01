@@ -1058,7 +1058,7 @@ export class FleetService {
       case "/v1/spend/request": {
         // Schema v10/v27: a structured order committing the agent's OWN capital. The database checks custody only
         // (reserved, or rejected with a precise custody category; never an owner route); nothing is executed here:
-        // the agent never names an address, only an owner-enrolled destination id.
+        // the agent never names an address, only a registered destination id (owner-enrolled payee or controller-verified vendor, v29).
         const { agentId, token } = await this.credentials(req, path, ctx);
         const amount = Number(body.amountCents);
         const recoverable = body.recoverableCents === undefined ? 0 : Number(body.recoverableCents);

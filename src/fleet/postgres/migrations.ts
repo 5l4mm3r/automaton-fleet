@@ -1258,7 +1258,7 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_experiment_start(text, text, uuid)",
   "api_experiment_record(text, text, uuid, text, text, bigint, text, numeric, uuid, text, jsonb)",
   "api_experiment_list(text, text, integer)",
-  // v25 (F1-LIVE-01): explicit owner requests — create, withdraw and list the founder's own (only the owner decides).
+  // v25/v26: action-scoped external dependencies — create, withdraw and list the founder's own (identity/legal exceptions only; nothing waits on them).
   "api_owner_request_create(text, text, text, text, text, text, text, text)",
   "api_owner_request_withdraw(text, text, uuid)",
   "api_owner_request_list(text, text)",

@@ -461,7 +461,7 @@ export class FounderMind {
     const capNote: string[] = [];
     if (capabilities && prev?.capabilities?.sig !== capabilities.sig) {
       const exp = view!.experiments?.enabled === true
-        ? ` Experiment pipeline: ON (${String(view!.experiments?.financialMode ?? "simulated")}; hard cap ${String(view!.experiments?.hardCapMinor ?? "?")} minor units; up to ${String(view!.experiments?.maxActive ?? "?")} active) — see list_experiments.` : "";
+        ? ` Experiment pipeline: ON (${String(view!.experiments?.financialMode ?? "simulated")}; budgets bounded by your own survival headroom; up to ${String(view!.experiments?.maxActive ?? "?")} active) — see list_experiments.` : "";
       if (prev?.capabilities) {
         const added = capabilities.tools.filter((t) => !prev.capabilities!.tools.includes(t));
         const removed = prev.capabilities.tools.filter((t) => !capabilities.tools.includes(t));

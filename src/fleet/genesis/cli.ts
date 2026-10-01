@@ -60,7 +60,7 @@
  * Schema v24 opportunity → experiment pipeline (owner controls; FINANCIALLY INERT: simulated capital only):
  *   experiment-policy                                                  switch, caps and the Evidence Ladder
  *   experiment-enable [--hard-cap N] | experiment-disable              OWNER GATE (founders may propose only while enabled)
- *   evidence-ladder-set <level 0..4> <autoCapMinor|owner>              auto-approval cap of a level ("owner" = owner decides)
+ *   evidence-ladder-set <level 0..4> <autoCapMinor|owner>              LEGACY since schema v30: stored only; no ladder cap and no owner level is applied
  *   experiment-list [agentId] | experiment-show <experimentId> | strategy-registry [agentId]
  *   experiment-decide <experimentId> approved|partially_approved|watch|rejected [--approved N] [--max-loss N] <reason…>
  *   experiment-relevance <experimentId> <attemptId> relevant|irrelevant|uncertain <reason…>   audited override of the controller's relevance verdict (optional)

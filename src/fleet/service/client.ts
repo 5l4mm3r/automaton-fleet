@@ -305,7 +305,8 @@ export class FleetApiClient implements FleetBackend {
   }
 
   /**
-   * Schema v10/v27: commit this agent's OWN capital through a structured order, to an owner-enrolled destination id.
+   * Schema v10/v27: commit this agent's OWN capital through a structured order, to a registered destination id (a payee, or since
+   * v29 a vendor the founder registered itself and FleetController verified).
    * The controller checks custody only (reserved, or rejected with a precise custody category; never an owner
    * route); nothing is executed by this call.
    */
@@ -396,7 +397,7 @@ export class FleetApiClient implements FleetBackend {
     return (await this.call<{ capabilities: Record<string, unknown> }>("GET", "/v1/capabilities")).capabilities;
   }
 
-  /** Propose institutional knowledge (the owner decides whether it is promoted). */
+  /** Propose institutional knowledge (curated promotion; it never blocks the founder — F2 economic knowledge is shared automatically when ledger-backed). */
   async proposeKnowledge(p: { category: string; title: string; content: string }) {
     return this.call<{ proposalId: string; status: string }>("POST", "/v1/knowledge/propose", p);
   }
