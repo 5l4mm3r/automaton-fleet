@@ -733,7 +733,8 @@ END $$;
 -- A compact economic brief for one task packet (figures only; drill down with the economy tools).
 CREATE FUNCTION fleet_economy_brief(p_agent text) RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-  WITH w AS (SELECT fleet_agent_wallet(p_agent) AS w)
+  -- MATERIALIZED: computed once (an inlined CTE would re-run the wallet for every field it feeds).
+  WITH w AS MATERIALIZED (SELECT fleet_agent_wallet(p_agent) AS w)
   SELECT jsonb_strip_nulls(jsonb_build_object(
     'availableMinor', (w ->> 'availableMinor')::bigint, 'taxReserveMinor', (w ->> 'taxReserveMinor')::bigint,
     'envelopeCapitalMinor', (w #>> '{restricted,envelopeCapitalMinor}')::bigint, 'burnPerDayMinor', (w #>> '{runway,burnPerDayMinor}')::bigint,
@@ -867,7 +868,7 @@ DECLARE a jsonb := COALESCE(p_args, '{}'::jsonb); v_agent text := a ->> 'agentId
 BEGIN
   RETURN CASE p_section
     WHEN 'overview' THEN (
-      WITH ws AS (SELECT fleet_agent_wallet(ag.agent_id) AS w FROM fleet_agents ag
+      WITH ws AS MATERIALIZED (SELECT fleet_agent_wallet(ag.agent_id) AS w FROM fleet_agents ag
                    WHERE ag.status NOT IN ('dead','failed') AND EXISTS (SELECT 1 FROM fleet_ledger_accounts x WHERE x.agent_id = ag.agent_id))
       SELECT jsonb_build_object(
         'currency', (SELECT accounting_currency FROM fleet_economic_model WHERE id = 1),
@@ -928,8 +929,9 @@ BEGIN
           'netProfitMinor', (w #>> '{lifetime,netProfitMinor}')::bigint, 'roiBp', p #>> '{realized,roiBp}', 'treasuryContributionMinor', (w ->> 'treasuryContributionsMinor')::bigint,
           'taxReserveMinor', (w ->> 'taxReserveMinor')::bigint, 'retainedMinor', (w ->> 'retainedEarningsMinor')::bigint, 'runwayDays', w #>> '{runway,days}',
           'forecast', p -> 'forecast', 'ventures', p -> 'ventures') AS x
+          -- OFFSET 0 keeps the subquery from being flattened (each agent's wallet and performance are computed once).
           FROM (SELECT ag.*, fleet_agent_wallet(ag.agent_id) AS w, fleet_agent_performance(ag.agent_id) AS p FROM fleet_agents ag
-                 WHERE EXISTS (SELECT 1 FROM fleet_ledger_accounts x WHERE x.agent_id = ag.agent_id)) ag) y)
+                 WHERE EXISTS (SELECT 1 FROM fleet_ledger_accounts x WHERE x.agent_id = ag.agent_id) OFFSET 0) ag) y)
     WHEN 'dependencies' THEN (SELECT COALESCE(jsonb_agg(fleet_owner_request_json(r) || jsonb_build_object('agentId', r.agent_id) ORDER BY r.created_at DESC), '[]'::jsonb)
         FROM fleet_owner_requests r WHERE r.status = 'pending' OR (a ->> 'all')::boolean)
     WHEN 'credentials' THEN (SELECT COALESCE(jsonb_agg(jsonb_build_object('credentialId', c.credential_id, 'provider', c.provider, 'purpose', c.purpose, 'status', c.status,

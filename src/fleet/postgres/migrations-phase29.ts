@@ -917,13 +917,13 @@ CREATE TRIGGER fleet_agent_wallet_plans_no_truncate BEFORE TRUNCATE ON fleet_age
 -- Daily operating burn (inference, expenses, fees) over the policy window, in minor units per day (integer, rounded up).
 CREATE FUNCTION fleet_agent_burn_per_day(p_agent text) RETURNS bigint LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-  -- sum(bigint) is numeric: cast back before the integer ceiling division (never fractional money).
-  SELECT (COALESCE(sum(CASE WHEN po.side = 'D' THEN po.amount_cents ELSE -po.amount_cents END), 0)::bigint + w.d - 1) / w.d
+  -- From the two cost accounts' postings (account index), within the window. sum(bigint) is numeric: cast back before the
+  -- integer ceiling division (never fractional money).
+  SELECT (COALESCE((SELECT sum(CASE WHEN po.side = 'D' THEN po.amount_cents ELSE -po.amount_cents END)
+                      FROM fleet_ledger_postings po JOIN fleet_ledger_journal j ON j.journal_id = po.journal_id
+                     WHERE po.account_id IN (fleet_ledger_account(p_agent, 'agent_expense'), fleet_ledger_account(p_agent, 'agent_fees'))
+                       AND j.occurred_at > now() - make_interval(days => w.d)), 0)::bigint + w.d - 1) / w.d
     FROM (SELECT burn_window_days AS d FROM fleet_transfer_policy WHERE id = 1) w
-    LEFT JOIN fleet_ledger_journal j ON j.agent_id = p_agent AND j.occurred_at > now() - make_interval(days => w.d)
-    LEFT JOIN fleet_ledger_postings po ON po.journal_id = j.journal_id
-         AND po.account_id IN (fleet_ledger_account(p_agent, 'agent_expense'), fleet_ledger_account(p_agent, 'agent_fees'))
-   GROUP BY w.d
 $$;
 
 -- The maximum amount safely transferable out of an agent's wallet (Treasury / operating pool), with its derivation.
