@@ -414,7 +414,9 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
           ports: client,
           stateDir: stateNsDir,
           log,
-          toolbox: new FounderToolbox({ manifest: ctx.manifest, workspaceDir, memoryDir, ports: client, loopGuard }),
+          toolbox: new FounderToolbox({ manifest: ctx.manifest, workspaceDir, memoryDir, ports: client, loopGuard,
+            // F1-FRESH-02: counts and codes only (MemoryTelemetry), through the same redacted line logger as every event.
+            memoryTelemetry: (m) => log("founder_memory_write", { ...m, runtimeCommit: ctx.release.commit, buildId: ctx.release.buildId }) }),
           routed: { memoryDir, workspaceDir, manifest: ctx.manifest, loopGuard },
         })
       : null;

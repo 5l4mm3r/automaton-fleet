@@ -168,7 +168,22 @@ function retire(s: Loaded, key: string, status: "superseded" | "retracted", at: 
  * `notCarried`: values (numbers, amounts, percentages, dates) that a replaced value stated and that no current fact
  * states any more. They are not lost (history keeps them), but nothing current says them: see notCarriedForward.
  */
-export type FactResult = { ok: true; output: string; notCarried?: string[] } | { ok: false; code: string; detail: string };
+export type FactResult = { ok: true; output: string; notCarried?: string[]; stats: FactStats } | { ok: false; code: string; detail: string; factsBefore?: number };
+
+/** Metadata of one memory write (counts only, never keys or values): what F1-FRESH-02 observability records. */
+export interface FactStats {
+  factsBefore: number;
+  factsAfter: number;
+  /** Facts written by this call (1 for remember_fact; the batch size for remember_facts; 0 for a retraction). */
+  written: number;
+  /** Values retired as superseded: same-key updates plus keys retired through `supersedes`. */
+  superseded: number;
+  /** Writes in this call that named other keys in `supersedes`. */
+  supersedesUsed: number;
+  retracted: number;
+  /** Values the replaced facts stated that no current fact states any more (the NOT CARRIED FORWARD clauses). */
+  notCarried: number;
+}
 
 /** At most this many facts in one remember_facts batch. */
 export const FACT_BATCH_LIMIT = 20;
@@ -252,6 +267,14 @@ function applyWrite(s: Loaded, i: FactWrite, at: string): Applied | { code: stri
   return { key: i.key, what, others, replaced };
 }
 
+/** The counts of a completed write (the carry-forward summary line "(+N more…)" is not a value). */
+const statsOf = (factsBefore: number, s: Loaded, done: Applied[], notCarried: string[]): FactStats => ({
+  factsBefore, factsAfter: Object.keys(s.facts).length, written: done.length,
+  superseded: done.reduce((n, d) => n + d.others.length + (d.what.startsWith("updated") ? 1 : 0), 0),
+  supersedesUsed: done.filter((d) => d.others.length > 0).length, retracted: 0,
+  notCarried: notCarried.filter((c) => !c.startsWith("(+")).length + Number(/^\(\+(\d+) more/.exec(notCarried[notCarried.length - 1] ?? "")?.[1] ?? 0),
+});
+
 const carryNote = (notCarried: string[]) => notCarried.length
   ? `; NOT CARRIED FORWARD (no current fact states these any more; history keeps them): ${notCarried.map((c) => `"${c}"`).join(" | ")}. If any still hold, keep them as their own facts (remember_facts stores several at once).`
   : "";
@@ -266,11 +289,13 @@ export function rememberFact(memoryDir: string, i: FactWrite & { now?: () => Dat
   const at = (i.now ?? (() => new Date()))().toISOString();
   let s: Loaded;
   try { s = load(memoryDir); } catch (e) { return { ok: false, code: "FLEET_FACTS_MALFORMED", detail: (e as Error).message }; }
+  const factsBefore = Object.keys(s.facts).length;
   const r = applyWrite(s, i, at);
-  if ("code" in r) return { ok: false, ...r };
+  if ("code" in r) return { ok: false, ...r, factsBefore };
   save(memoryDir, s);
   const notCarried = notCarriedForward(r.replaced, Object.values(s.facts));
-  return { ok: true, output: `${r.what}${r.others.length ? `; superseded: ${r.others.join(", ")}` : ""}${carryNote(notCarried)}`, ...(notCarried.length ? { notCarried } : {}) };
+  return { ok: true, output: `${r.what}${r.others.length ? `; superseded: ${r.others.join(", ")}` : ""}${carryNote(notCarried)}`, ...(notCarried.length ? { notCarried } : {}),
+    stats: statsOf(factsBefore, s, [r], notCarried) };
 }
 
 /**
@@ -296,16 +321,18 @@ export function rememberFacts(memoryDir: string, i: { facts: unknown; now?: () =
   if (clash !== undefined) return { ok: false, code: "FLEET_BAD_REQUEST", detail: `a batch cannot supersede a key it also writes: ${String(clash).slice(0, 100)}` };
   let s: Loaded;
   try { s = load(memoryDir); } catch (e) { return { ok: false, code: "FLEET_FACTS_MALFORMED", detail: (e as Error).message }; }
+  const factsBefore = Object.keys(s.facts).length;
   const done: Applied[] = [];
   for (const [n, w] of writes.entries()) {
     const r = applyWrite(s, w, at);
-    if ("code" in r) return { ok: false, code: r.code, detail: `facts[${n}] (${w.key.slice(0, 60)}): ${r.detail}; nothing was written` };
+    if ("code" in r) return { ok: false, code: r.code, detail: `facts[${n}] (${w.key.slice(0, 60)}): ${r.detail}; nothing was written`, factsBefore };
     done.push(r);
   }
   save(memoryDir, s);
   const notCarried = notCarriedForward(done.flatMap((d) => d.replaced), Object.values(s.facts));
   const lines = done.map((d) => `${d.key}: ${d.what}${d.others.length ? `; superseded: ${d.others.join(", ")}` : ""}`);
-  return { ok: true, output: `${done.length} facts written (${lines.join(" | ")})${carryNote(notCarried)}`, ...(notCarried.length ? { notCarried } : {}) };
+  return { ok: true, output: `${done.length} facts written (${lines.join(" | ")})${carryNote(notCarried)}`, ...(notCarried.length ? { notCarried } : {}),
+    stats: statsOf(factsBefore, s, done, notCarried) };
 }
 
 /** Withdraw a current fact that turned out to be wrong: removed from current facts, kept as retracted history. */
@@ -313,11 +340,12 @@ export function retractFact(memoryDir: string, i: { key: string; reason: string;
   const at = (i.now ?? (() => new Date()))().toISOString();
   let s: Loaded;
   try { s = load(memoryDir); } catch (e) { return { ok: false, code: "FLEET_FACTS_MALFORMED", detail: (e as Error).message }; }
-  if (!(i.key in s.facts)) return { ok: false, code: "FLEET_NOT_FOUND", detail: "not a current fact" };
+  const factsBefore = Object.keys(s.facts).length;
+  if (!(i.key in s.facts)) return { ok: false, code: "FLEET_NOT_FOUND", detail: "not a current fact", factsBefore };
   retire(s, i.key, "retracted", at, { reason: i.reason.slice(0, FACT_LIMITS.reasonChars) });
   delete s.facts[i.key];
   save(memoryDir, s);
-  return { ok: true, output: "retracted (kept as history)" };
+  return { ok: true, output: "retracted (kept as history)", stats: { factsBefore, factsAfter: factsBefore - 1, written: 0, superseded: 0, supersedesUsed: 0, retracted: 1, notCarried: 0 } };
 }
 
 /** Current facts (with freshness and provenance), optionally the superseded/retracted history, filtered by substring. */

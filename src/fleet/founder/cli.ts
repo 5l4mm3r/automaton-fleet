@@ -21,6 +21,9 @@
  *   upgrade-rehearsal <fromCommit>           the whole lifecycle + routed cognition on a SYNTHETIC founder created on
  *                                            the installed release <fromCommit>, THROWAWAY registry, fake provider
  *
+ * F1-FRESH-02 — memory retention health (read-only; counts and status only, never a fact key or value):
+ *   memory-report <agentId>                  founder_memory_write telemetry from the unit's journal + fact-store health
+ *
  * The acting owner is operator:<SUDO_USER>. provision/attest/activate/teardown
  * use the production registry through admin.env; the database still refuses
  * approval/activation while Genesis is disabled. Output is JSON without any
@@ -35,7 +38,7 @@ import { DEFAULT_RUNTIME_ENV_FILE, loadAdminEnv, readEnvFile } from "../secret-f
 import { loadRuntimeRelease, runningRuntimeDir } from "../runtime.js";
 import { PgGenesisAdmin } from "../genesis/admin.js";
 import { createRedactedLineLogger } from "../redact.js";
-import { FOUNDER_STATE_ROOT, RELEASES_DIR, SystemdFounderHost, founderPinPaths } from "./host.js";
+import { FOUNDER_STATE_ROOT, RELEASES_DIR, SystemdFounderHost, founderPinPaths, founderUnit } from "./host.js";
 import { computeBuildIdentity } from "../attestation.js";
 import { rollbackFounderRuntime, upgradeFounderRuntime } from "./upgrade.js";
 import { runUpgradeRehearsal } from "./upgrade-rehearsal.js";
@@ -44,6 +47,8 @@ import { FOUNDER_UNREADABLE_PATHS } from "./runtime.js";
 import { findPostgresBin, startEphemeralRegistry } from "./ephemeral-registry.js";
 import { runFounderRehearsal } from "./rehearsal.js";
 import { DEFAULT_FETCHER_SOCKET, unixFetcher } from "../research/client.js";
+import { FOUNDER_IDENTITY_FILE } from "./evidence.js";
+import { aggregateMemoryEvents, factStoreHealth } from "./memory-report.js";
 
 const PRODUCTION_API_URL = "http://127.0.0.1:8787";
 /** Root-only (0700) home of pre-upgrade state backups: durable founder state, never a credential. */
@@ -256,6 +261,37 @@ async function main(argv: string[]): Promise<number> {
       } finally {
         await genesis.close();
       }
+    }
+    case "memory-report": {
+      // Read-only: no registry, no unit change, no write to founder state. Output: counts and status only.
+      const id = rest[0];
+      if (!id || !ULID.test(id)) throw new Error("usage: memory-report <agentId>");
+      const dir = path.join(FOUNDER_STATE_ROOT, id);
+      let ns: string | null = null;
+      try {
+        const f = path.join(dir, FOUNDER_IDENTITY_FILE);
+        const fd = fs.openSync(f, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        try {
+          if (fs.fstatSync(fd).isFile()) {
+            const v = (JSON.parse(fs.readFileSync(fd, "utf8")) as { stateNamespace?: unknown }).stateNamespace;
+            ns = typeof v === "string" && /^st_[0-9A-HJKMNP-TV-Z]{26}$/.test(v) ? v : null;
+          }
+        } finally { fs.closeSync(fd); }
+      } catch { ns = null; }
+      let lines: string[] = [];
+      let journal = "ok";
+      try {
+        lines = execFileSync("journalctl", ["-u", founderUnit(id), "-o", "cat", "--no-pager", "-g", "founder_memory_write"], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).split("\n");
+      } catch (e) {
+        // journalctl exits 1 when --grep matches nothing; anything else is reported, not guessed.
+        journal = (e as { status?: number }).status === 1 ? "ok" : "unavailable";
+      }
+      out({
+        agentId: id, unit: founderUnit(id), at: new Date().toISOString(),
+        telemetry: { source: "journald founder_memory_write (retained window; runtimes from F1-FRESH-02 observability on)", journal, ...aggregateMemoryEvents(lines) },
+        factStore: ns ? factStoreHealth(path.join(dir, "state", ns, "memory")) : { identity: "unreadable: state namespace unknown" },
+      });
+      return 0;
     }
     case "upgrade-status":
     case "upgrade-preflight":

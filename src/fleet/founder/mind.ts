@@ -290,7 +290,7 @@ export class FounderMind {
         // Bounded, never silent: calls beyond the per-step limit are answered as not executed.
         const out: ToolOutcome = i < MAX_TOOL_CALLS_EXECUTED
           ? await this.o.toolbox.execute(call)
-          : { name: call.name, ok: false, refused: "FLEET_TOOL_CALL_LIMIT", output: `NOT EXECUTED FLEET_TOOL_CALL_LIMIT: at most ${MAX_TOOL_CALLS_EXECUTED} tool calls run per step; request it again in a later step if still needed.` };
+          : this.o.toolbox.noteNotExecuted(call, { name: call.name, ok: false, refused: "FLEET_TOOL_CALL_LIMIT", output: `NOT EXECUTED FLEET_TOOL_CALL_LIMIT: at most ${MAX_TOOL_CALLS_EXECUTED} tool calls run per step; request it again in a later step if still needed.` });
         outcomes.push(out);
         result.toolCalls.push(call.name);
         if (!out.ok && out.refused) result.refusals.push({ tool: call.name, code: out.refused });
@@ -425,7 +425,7 @@ export class FounderMind {
       for (const [i, call] of r.toolCalls.entries()) {
         let out: ToolOutcome;
         if (i >= MAX_TOOL_CALLS_EXECUTED) {
-          out = { name: call.name, ok: false, refused: "FLEET_TOOL_CALL_LIMIT", output: `NOT EXECUTED FLEET_TOOL_CALL_LIMIT: at most ${MAX_TOOL_CALLS_EXECUTED} tool calls run per step; request it again in a later step if still needed.` };
+          out = this.o.toolbox.noteNotExecuted(call, { name: call.name, ok: false, refused: "FLEET_TOOL_CALL_LIMIT", output: `NOT EXECUTED FLEET_TOOL_CALL_LIMIT: at most ${MAX_TOOL_CALLS_EXECUTED} tool calls run per step; request it again in a later step if still needed.` });
         } else if (COGNITION_TOOLS.has(call.name)) {
           out = await this.cognitionTool(call, { taskId, waitMs, parentRequestId: r.requestId, counters, result });
         } else {

@@ -25,7 +25,7 @@ import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safet
 import type { ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
 import type { LoopGuard } from "./loop-guard.js";
-import { recallFacts, rememberFact, rememberFacts, retractFact, sourceLabel, type FactRecord } from "./facts.js";
+import { recallFacts, rememberFact, rememberFacts, retractFact, sourceLabel, type FactRecord, type FactResult } from "./facts.js";
 
 export interface ToolboxPorts {
   ledger(): Promise<unknown>;
@@ -51,6 +51,41 @@ export interface ToolOutcome {
 }
 
 const MAX_OUTPUT = 8_000;
+
+/**
+ * F1-FRESH-02 memory observability. One record per memory write (remember_fact, remember_facts, retract_fact) and per
+ * failed recall_facts. COUNTS AND CODES ONLY: never a key, value, reason, source or any tool output — those are the
+ * founder's private memory. The runtime sends it through its redacted line logger (event founder_memory_write).
+ */
+export interface MemoryTelemetry {
+  tool: string;
+  ok: boolean;
+  /** Refusal/error code, e.g. FLEET_BAD_REQUEST, FLEET_NOT_FOUND, FLEET_FACTS_MALFORMED, FLEET_TOOL_CALL_LIMIT. */
+  code: string | null;
+  /** remember_facts: entries in the request (whether or not they were valid); null otherwise. */
+  batch: number | null;
+  factsBefore: number | null;
+  factsAfter: number | null;
+  written: number;
+  superseded: number;
+  supersedesUsed: number;
+  retracted: number;
+  notCarried: number;
+}
+const MEMORY_TOOLS = new Set(["remember_fact", "remember_facts", "retract_fact", "recall_facts"]);
+const CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
+
+function memoryRecord(call: ToolCall, out: ToolOutcome, r: FactResult | null): MemoryTelemetry {
+  const facts = (call.arguments ?? {}).facts;
+  const st = r && r.ok ? r.stats : null;
+  const before = st ? st.factsBefore : r && !r.ok && typeof r.factsBefore === "number" ? r.factsBefore : null;
+  return {
+    tool: call.name, ok: out.ok, code: out.ok ? null : CODE.test(out.refused ?? "") ? out.refused! : "FLEET_TOOL_ERROR",
+    batch: call.name === "remember_facts" ? (Array.isArray(facts) ? facts.length : 0) : null,
+    factsBefore: before, factsAfter: st ? st.factsAfter : before,
+    written: st?.written ?? 0, superseded: st?.superseded ?? 0, supersedesUsed: st?.supersedesUsed ?? 0, retracted: st?.retracted ?? 0, notCarried: st?.notCarried ?? 0,
+  };
+}
 const IMPLEMENTED = new Set([
   "read_file", "list_files", "write_file", "exec", "remember_fact", "remember_facts", "retract_fact", "recall_facts", "set_goal", "complete_goal", "list_goals",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
@@ -103,7 +138,9 @@ export class FounderToolbox {
   private readonly memory: string;
 
   constructor(private readonly o: { manifest: CapabilityManifest; workspaceDir: string; memoryDir: string; ports: ToolboxPorts; execTimeoutMs?: number; /** tests only */ sandboxPython?: string;
-    /** v22 phase: loop/duplication economics (absent = unchanged behaviour). */ loopGuard?: LoopGuard }) {
+    /** v22 phase: loop/duplication economics (absent = unchanged behaviour). */ loopGuard?: LoopGuard;
+    /** F1-FRESH-02 observability: one metadata-only record per memory write (and per failed recall); absent = none. */
+    memoryTelemetry?: (record: MemoryTelemetry) => void }) {
     this.workspace = fs.realpathSync(o.workspaceDir);
     this.memory = fs.realpathSync(o.memoryDir);
   }
@@ -143,6 +180,26 @@ export class FounderToolbox {
   }
 
   async execute(call: ToolCall): Promise<ToolOutcome> {
+    this.lastFact = null;
+    const out = await this.guarded(call);
+    if (this.o.memoryTelemetry && MEMORY_TOOLS.has(call.name) && (call.name !== "recall_facts" || !out.ok)) {
+      try { this.o.memoryTelemetry(memoryRecord(call, out, this.lastFact)); } catch { /* telemetry never affects the tool */ }
+    }
+    return out;
+  }
+
+  /** A call the mind answered without running it (the per-step limit): recorded like any refused memory write. */
+  noteNotExecuted(call: ToolCall, out: ToolOutcome): ToolOutcome {
+    if (this.o.memoryTelemetry && MEMORY_TOOLS.has(call.name)) {
+      try { this.o.memoryTelemetry(memoryRecord(call, out, null)); } catch { /* telemetry never affects the tool */ }
+    }
+    return out;
+  }
+
+  /** The fact-store result of the current call (counts for telemetry; never logged as such). */
+  private lastFact: FactResult | null = null;
+
+  private async guarded(call: ToolCall): Promise<ToolOutcome> {
     const g = this.o.loopGuard;
     if (!g) return this.run(call);
     const early = g.before(call);
@@ -228,11 +285,13 @@ export class FounderToolbox {
           if (!key || value === null) return refuse("FLEET_BAD_REQUEST", "key and value required");
           // F1-FRESH-01: a changed value supersedes (history kept); `supersedes` retires older keys this fact replaces.
           const r = rememberFact(this.memory, { key, value, ...(a.source !== undefined ? { source: a.source } : {}), ...(a.supersedes !== undefined ? { supersedes: a.supersedes } : {}) });
+          this.lastFact = r;
           return r.ok ? { name: call.name, ok: true, output: r.output } : refuse(r.code, r.detail);
         }
         case "remember_facts": {
           // F1-FRESH-02: several independent facts in one atomic write (rememberFacts validates every entry).
           const r = rememberFacts(this.memory, { facts: a.facts });
+          this.lastFact = r;
           return r.ok ? { name: call.name, ok: true, output: r.output } : refuse(r.code, r.detail);
         }
         case "retract_fact": {
@@ -240,6 +299,7 @@ export class FounderToolbox {
           const reason = str(a.reason, 300);
           if (!key || !reason) return refuse("FLEET_BAD_REQUEST", "key and reason required");
           const r = retractFact(this.memory, { key, reason });
+          this.lastFact = r;
           return r.ok ? { name: call.name, ok: true, output: r.output } : refuse(r.code, r.detail);
         }
         case "recall_facts": {

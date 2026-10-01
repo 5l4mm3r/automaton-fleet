@@ -16,6 +16,9 @@
 #   sudo scripts/fleet-founders.sh upgrade-runtime <agentId> [--health-timeout S]            # OWNER GATE
 #   sudo scripts/fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason...>        # OWNER GATE
 #
+# F1-FRESH-02 — memory retention health (read-only; counts and status only, never a fact key or value):
+#   sudo scripts/fleet-founders.sh memory-report <agentId>
+#
 # Secrets (attestation tokens, founder credentials) are generated inside the
 # provisioner and written only to each founder's own 0600 state files; none
 # is printed, logged or passed on a command line.
