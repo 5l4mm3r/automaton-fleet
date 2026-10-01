@@ -1,0 +1,20 @@
+founder before: pid 283229 restarts 0 pin-sha ff95352c5f1db311 facts bed022a8099eb296f6e70f7954c05cbcd148689184d86369b557a44afb9952e9 facts-ledger absent
+pins: FLEET_RUNTIME_COMMIT=64be9ce4d56b718c07ab0cba20ebcf70e975837d FLEET_RUNTIME_BUILD_ID=fe22333a7c74f2595a2c5441e9686de3364d12799544be71a184f178d3fe4896  (pre-r26 sha 95e1a348aaa6e362)
+Verified build fe22333a7c74f2595a2c5441e9686de3364d12799544be71a184f178d3fe4896 staged at /home/ubuntu/.cache/automaton-fleet/stage/64be9ce4d56b718c07ab0cba20ebcf70e975837d
+Installed release 64be9ce4d56b718c07ab0cba20ebcf70e975837d (build fe22333a7c74f2595a2c5441e9686de3364d12799544be71a184f178d3fe4896). Restart the service to pick it up: systemctl restart automaton-fleet
+dump 2899974 B sha 220d8c60618ba77107f8681dc267753043328070439155404bd1252ed9d87e63 tables-with-data 90
+migrate-check: {"currentVersion":24,"resultingVersion":24,"wouldApply":[],"requiredVersion":24,"rolledBack":true}
+approved
+RUNTIME IDENTITY: VERIFIED
+RESTART START 2026-10-01T10:27:11Z
+RESTART END 2026-10-01T10:27:13Z readyz 200
+controller cwd /opt/automaton-fleet/releases/64be9ce4d56b718c07ab0cba20ebcf70e975837d
+founder after: pid 283229 restarts 0 pin-sha ff95352c5f1db311 facts bed022a8099eb296f6e70f7954c05cbcd148689184d86369b557a44afb9952e9 facts-ledger absent
+schema 24
+automaton-fleet: active
+automaton-fleet-operator-api: active
+automaton-fleet-custody: active
+automaton-fleet-fetcher.socket: active
+automaton-fleet-chatgpt-adapter.socket: active
+automaton-fleet-chatgpt-tunnel: active
+automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service: active
