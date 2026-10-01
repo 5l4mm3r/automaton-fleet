@@ -374,8 +374,15 @@ export class FleetApiClient implements FleetBackend {
    * Schema v28+ (F2): one of this founder's own economic operations (opportunity.*, venture.*, decision.*, knowledge.*,
    * wallet, performance, brief, rail.require, vendor.*, capital.*, envelope.*). The database authorizes and validates.
    */
-  async economy(op: string, args: Record<string, unknown> = {}) {
-    return this.call<Record<string, unknown>>("POST", "/v1/economy", { op, args });
+  async economy(op: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    try {
+      return await this.call<Record<string, unknown>>("POST", "/v1/economy", { op, args });
+    } catch (err) {
+      // A business refusal (HTTP 200, ok:false) is DATA the founder acts on — keep its code and reason. Authentication,
+      // transport and availability failures still raise.
+      if (err instanceof ApiError && err.status === 200) return { ok: false, code: err.code, reason: err.message === err.code ? undefined : err.message };
+      throw err;
+    }
   }
 
   /** F2: the compact economic brief for a full task packet (figures only). */

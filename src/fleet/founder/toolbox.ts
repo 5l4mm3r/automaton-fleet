@@ -222,6 +222,12 @@ export class FounderToolbox {
     }
   }
 
+  /** The founder's ledger view for this turn (set by the mind when it reads it; read-only figures for the depth reading). */
+  private economics: Record<string, unknown> | null = null;
+  noteEconomics(e: Record<string, unknown> | null): void {
+    this.economics = e && typeof e === "object" ? e : null;
+  }
+
   private writeJson(file: string, v: unknown): void {
     const f = path.join(this.memory, file);
     fs.writeFileSync(`${f}.tmp`, JSON.stringify(v, null, 2), { mode: 0o600 });
@@ -450,15 +456,10 @@ export class FounderToolbox {
           });
           // F2: cognition depth from context (exposure share of own available capital, irreversibility, evidence, novelty,
           // concentration) — information for the founder, never a gate and never a fixed amount.
-          // (Nothing at risk: nothing to weigh, and nothing is asked of FleetController.)
-          let available: number | null = null;
-          if (o.capitalAtRiskPence > 0) {
-            try {
-              const l = (await this.o.ports.ledger()) as Record<string, unknown> | null;
-              const v = l?.expensePurchasingCapacity ?? l?.cash;
-              available = v !== undefined && v !== null && Number.isFinite(Number(v)) ? Number(v) : null;
-            } catch { available = null; }
-          }
+          // The wallet figure is the one the mind already read for this turn (noteEconomics): resolving a decision asks
+          // FleetController nothing. Without it, exposure is simply not scored.
+          const wv = this.economics?.expensePurchasingCapacity ?? this.economics?.cash;
+          const available = wv !== undefined && wv !== null && Number.isFinite(Number(wv)) ? Number(wv) : null;
           const depth = cognitionDepth({ capitalAtRiskPence: o.capitalAtRiskPence, availablePence: available,
             irreversible: /irrevers|non-refundable|cannot be undone|sunk/i.test(o.downside), evidenceItems: r.decision.research.length,
             comparableDecisions: ledger.filter((d) => d.key !== r.decision.key && d.status === "decided" && d.purpose === r.decision.purpose).length,

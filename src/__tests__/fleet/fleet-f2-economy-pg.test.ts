@@ -10,6 +10,10 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { PgFleetStore } from "../../fleet/postgres/store.js";
+import { FleetService } from "../../fleet/service/server.js";
+import { FleetApiClient } from "../../fleet/service/client.js";
+import { UnsupportedSandboxTerminator } from "../../fleet/service/terminator.js";
 
 const PG_BIN = findPgBin();
 const ev = (kind: string, observation: string, daysAgo = 0) => ({ kind, source: "https://example.test/x", observation,
@@ -196,6 +200,37 @@ describe.skipIf(!PG_BIN)("F2 v28 economy records: opportunities, ventures, decis
       expect(String(last.reason)).not.toMatch(/[0-9]/);
       expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_events WHERE event_type = 'economy_failsafe' AND agent_id = $1`, [G.id]))[0].n).toBeGreaterThan(0);
     } finally { await R.q(`UPDATE fleet.fleet_economy_policy SET failsafe_records_per_day = 400`); }
+  });
+
+  it("over HTTP (/v1/economy): session-authenticated, signed, op allow-listed by the database; refusals arrive as data with their reason", async () => {
+    const svcStore = new PgFleetStore({ connectionString: R.pgc.serviceUrl });
+    const audited: Array<{ event: string; detail: Record<string, unknown> }> = [];
+    const service = new FleetService({ admin: svcStore, agent: R.gw, realReplicationEnabled: false, reaperIntervalMs: 0,
+      release: { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40), buildId: "d".repeat(64), lockfileSha256: "e".repeat(64) },
+      audit: (e: { event: string; detail: Record<string, unknown> }) => { audited.push({ event: e.event, detail: e.detail }); }, terminator: new UnsupportedSandboxTerminator(),
+      cognitionProviderFactory: () => { throw new Error("no inference in this test"); } });
+    const url = (await service.listen(0, "127.0.0.1")).url;
+    try {
+      const client = new FleetApiClient({ baseUrl: url, agentId: G.id, token: G.token });
+      expect(await client.economy("venture.create", { key: "http-venture", model: "service", offer: "via http", state: "selected" })).toMatchObject({ ok: true, venture: { key: "http-venture" } });
+      // A refusal is data with its reason (the founder acts on it); it never throws.
+      expect(await client.economy("venture.transition", { key: "http-venture", to: "scaling", reason: "x" })).toMatchObject({ ok: false, code: "FLEET_VENTURE_TRANSITION",
+        reason: expect.stringContaining("is not a venture transition") });
+      expect(await client.economy("no.such", {})).toMatchObject({ ok: false, code: "FLEET_UNKNOWN_OPERATION" });
+      expect(await client.economy("bad op!", {})).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+      expect((await client.economyBrief()) as Record<string, unknown>).toMatchObject({ ventures: [expect.objectContaining({ key: "http-venture" })] });
+      // Another founder's records are not reachable through G's session.
+      expect(await client.economy("venture.status", { key: "landlord-tracker" })).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
+      // A forged identity cannot even be constructed (the credential names its agent); the server re-checks every session.
+      expect(() => new FleetApiClient({ baseUrl: url, agentId: F.id, token: G.token })).toThrow(/does not belong/);
+      // Telemetry is metadata only: op and outcome code, never arguments.
+      const ev = audited.filter((a) => a.event === "economy_op");
+      expect(ev.length).toBeGreaterThan(0);
+      expect(JSON.stringify(ev)).not.toMatch(/via http|http-venture/);
+    } finally {
+      await service.close();
+      await svcStore.close();
+    }
   });
 
   it("a held agent is refused; the economy functions contain no owner route", async () => {

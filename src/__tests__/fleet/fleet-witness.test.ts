@@ -571,6 +571,7 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       "POST /v1/owner-requests/create": { idempotencyKey: "witness:own-00001", kind: "kyc", action: "x", goalRef: null, title: "x", detail: "x" },
       "POST /v1/owner-requests/withdraw": { requestId: "00000000-0000-4000-8000-000000000000" },
       "POST /v1/owner-requests/list": {},
+      "POST /v1/economy": { op: "wallet", args: {} },
     };
     const denied = Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth !== "public" && p.auth !== "genesis_attest" && !p.witness).map(([k]) => k).sort();
     // The founder attestation route accepts no session at all (the witness's signed session is simply unauthenticated there).

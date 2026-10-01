@@ -33,7 +33,7 @@ function rig(o: { economy?: (op: string, args: Record<string, unknown>) => Promi
   } as never });
   let id = 0;
   const run = (name: string, args: Record<string, unknown>) => box.execute({ id: `t${++id}`, name, arguments: args });
-  return { run, calls, dirs };
+  return { run, calls, dirs, box };
 }
 
 describe("F2 founder economy tools", () => {
@@ -110,7 +110,8 @@ describe("F2 founder economy tools", () => {
   });
 
   it("resolve_decision reports the depth reading from the founder's own wallet (information, never a refusal)", async () => {
-    const t = rig({ ledger: { expensePurchasingCapacity: 600 } });
+    const t = rig();
+    t.box.noteEconomics({ expensePurchasingCapacity: 600 }); // the mind passes the turn's ledger view; no controller call
     await t.run("open_decision", { key: "big-bet", purpose: "find_opportunity", objective: "First £200 of revenue within 30 days", question: "Is there enough demand to launch this product?", hypothesis: "Similar products sell steadily on marketplaces", stopAfterFetches: 1, stopWhen: "two independent signals of actual purchases" });
     const r = await t.run("resolve_decision", { key: "big-bet", selected: "first stock order", rationale: "purchase evidence on two marketplaces", expectedOutcome: "sell through in 30 days", capitalAtRiskPence: 500,
       downside: "non-refundable stock", invalidatedBy: "no sale after 50 visits", nextAction: "order the first batch" });

@@ -133,7 +133,9 @@ where it was first confirmed so it is not mistaken for a new regression.
 
 ## FLEET-KI-7: PostgreSQL-backed tests cannot run as root (cloud containers)
 
-- **Status:** open, environment-only.
+- **Status:** environment-only; the F2 candidate's PostgreSQL suites were run on the development VM on 2026-10-01
+  (branch `f2/autonomous-economy`). That run found and fixed two candidate defects and a fixture defect (design doc
+  §25.0); cloud sessions still cannot run these suites as root.
 - **Symptom:** every suite that calls `startEphemeralPg` fails in `beforeAll` with
   `Command failed: …/initdb …`. PostgreSQL refuses to initialise or run a cluster as root, and cloud sessions run
   as root.
@@ -146,7 +148,8 @@ where it was first confirmed so it is not mistaken for a new regression.
   - the infrastructure circuit breaker;
   - the v25 → v27 retirement of a legacy `awaiting_owner` order.
 
-  These suites, and every pin-bumped PostgreSQL suite, must run on the VM before any merge.
+  These suites, and every pin-bumped PostgreSQL suite, must run on the VM before any merge. (Done for the F2 build:
+  see the build report; all of the above now pass on the VM.)
 
 ## FLEET-KI-8: isolated-fetcher connect-timeout test depends on the network path
 

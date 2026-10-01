@@ -1,8 +1,9 @@
 # F2 — Autonomous economy: removing the owner from operations (design review, 2026-10-01)
 
-Status: **DESIGN REVIEW. Phase A implemented on a development branch (schema v26, charter v3; §20); nothing
-deployed.** Phases B–H are not started. The four engineering safety flags stay false while the machinery is proved.
-They are engineering flags, not the intended operating model.
+Status: **CANDIDATE BUILT AND TESTED ON THE DEVELOPMENT VM (branch `f2/autonomous-economy`; schemas v26–v30, charter
+v4; §20, §24, §25); nothing deployed, nothing merged.** Phases A–G are implemented as a candidate; phase H (real money,
+custody, sweeps to the owner, replication) is not. The four engineering safety flags stay false. They are engineering
+flags, not the intended operating model. Production activation is a separate, approved procedure (§29).
 
 ## 0. The correction
 
@@ -496,7 +497,7 @@ Nothing touches money, custody, payments, replication, sweeps, the cap, the mode
 - ventures, capital requests, envelopes, vendor registry and profit board (B–F);
 - the Opportunity Engine's persistent candidate store and leaderboard (§21).
 
-## 21. Future contract: Opportunity Engine (Phase B; not implemented)
+## 21. Opportunity Engine contract (implemented at schema v28 — §25.1)
 
 The learning flywheel for later, smarter agents. Phase A's decision ledger is its minimal precursor. The engine
 supplies evidence and structured comparison; ranking and selection stay the agent's (§22, §23).
@@ -804,3 +805,276 @@ path:
   - the v25 → v27 retirement of a seeded legacy owner-route order.
 
   These need the VM: PostgreSQL refuses to run as root in the cloud container (KI-7).
+
+
+## 25. F2 build record — schemas v28–v30 (2026-10-01; development VM; not deployed, not merged)
+
+Branch `f2/autonomous-economy`, from the Cloud candidate `393c22b`. Every statement below is implemented and covered by
+the tests named in §25.10; anything not implemented is listed in §27/§28.
+
+### 25.0 VM verification of the Cloud candidate (v26/v27)
+
+The PostgreSQL suites Cloud could not run (KI-7) were run on the VM. Findings and fixes (commit `3b5c79e`):
+- `api_spend_request` (v27): a held agent was refused by authentication before the custody categorisation, so
+  `FLEET_AGENT_HELD` came back without `custody: HOLD`. The auth-stage refusal now carries its category.
+- The test wipe fixture truncated the singleton `fleet_spend_circuit_breaker` row, and every later order failed closed
+  (`unavailable`); three Genesis tests cascaded. The fixture keeps and resets the row (the fail-closed behaviour is right).
+- Two test defects (an unaccounted Treasury grant; a literal migration list missing v27).
+- The founder-upgrade rehearsal's scripted model spent without a `decisionKey`, so the production runtime's own
+  self-governance refused the spend locally and the routed-action check failed. The script now frames and decides the
+  commitment first (fixed with the cognition-depth change, §25.6).
+
+### 25.1 Agent-owned economic records (v28)
+
+- **Opportunities** (`fleet_opportunities`): type, offer, customer, market, structured evidence (sales, rankings,
+  bestsellers, search demand, pain, reviews, pricing, competition, repeat purchase, margin, channel, supplier, Fleet
+  outcomes, social), demand, competition, estimated margin, capital, operating cost, time to launch/revenue, downside,
+  confidence, channel, expected outcome, status. The agent's **own ranking** forms a shortlist of at most
+  `shortlist_max`; FleetController computes no score (no score/weight columns exist). Evidence older than
+  `evidence_fresh_days` makes a candidate `stale` until re-verified. Rejected/invalidated candidates are not reopened.
+- **Ventures** (`fleet_ventures`): the lifecycle discovered → researching → validating → selected → building → launching
+  → operating → scaling, plus pivoting / paused / failed → closed, as a rule table. The agent moves it; FleetController
+  enforces facts only (operating names a channel; scaling needs ledger-backed positive net profit). The state column
+  moves only inside `fleet_venture_move` (guard); history is append-only. Expansion is a child venture (`parent`).
+- **Venture attribution** (`fleet_venture_journals`): a ledger journal of the venture's own agent, with a cost category.
+  Financials (revenue, refunds, processor fees, costs by category, tax reserved/paid, gross/net/after-tax profit,
+  capital deployed, ROI, Treasury contribution) are derived from attributed postings only; reversals follow.
+- **Decision records** (`fleet_decision_records`): selected option, alternatives, evidence, forecast (revenue, cost,
+  margin, ROI, days to revenue, confidence), capital exposed, downside, invalidation evidence, next action. The forecast
+  is immutable; the outcome is recorded once, **from the ledger** when the decision names a venture; a correction is a
+  new revision that needs new evidence (same path → `FLEET_NOT_A_CORRECTION`; return to an abandoned path →
+  `FLEET_OSCILLATION`). Forecast error is computed in basis points.
+- **Economic knowledge** (`fleet_economic_knowledge`): topic, subject, claim, evidence, confidence, freshness; superseded,
+  never deleted. An agent sees its own entries; entries backed by a ledger-measured outcome are shared fleet-wide.
+- **Performance** (`fleet_agent_performance`): decisions measured/corrected, forecast accuracy (mean absolute error,
+  bias, share within tolerance), ventures by outcome, realized ROI, capital efficiency, conversion. Reasoning input for
+  the agent; never read by any own-capital decision (tested).
+- **API**: one dispatcher `api_economy(agent, token, op, args)` mapped onto the founder's existing capability classes
+  (planning, ledger.read, knowledge.read, spend.request), so Founder 1's `founder-v2` manifest is unchanged.
+
+### 25.2 Money core (v29)
+
+- **Legal entities + versioned tax profiles**: rules `{taxKind: vat|sales_tax|profit|other, rateBp, inclusive}` are
+  policy data with versions; a venture belongs to an entity (default entity otherwise). No rate is a constant. Without a
+  profile, a configurable conservative fallback reserve (`unprofiled_reserve_bp`, default 2 500) applies and doctor
+  WARNs. Reserves round up (never down).
+- **Ledger**: `agent_tax_reserve` (restricted — spend orders debit `agent_cash` only, so a reserve can never be spent),
+  `agent_tax_expense`, `agent_envelope_cash` (Fleet capital under an envelope), `fleet_operating_pool`; kinds
+  `venture_sale` (gross / fee / net in one journal), `tax_reservation` / `tax_reserve_release` / `tax_payment`,
+  envelope allocation / return / spend reservation / release, `operating_transfer`, `operating_expense_settlement`.
+- **Payment rails** (`fleet_payment_rails`): Fleet-owned, `shared` or `dedicated` (to one venture), per legal entity,
+  capabilities, a **masked** account reference (a CHECK refuses digit runs: `Visa •••• 4821` is accepted, a card
+  number is not), a credential **reference**, a mode — `live` is impossible by CHECK (`fleet_payment_rails_not_live`).
+  **PAYMENT_RAIL_REQUIRED** (`rail.require`): FleetController assigns a compatible rail (dedicated to the venture first,
+  else shared with capacity, same entity, valid credential); if none exists and a provider was named, ONE action-scoped
+  `kyc` dependency is recorded (the venture is not frozen). Connecting a matching rail later assigns it and answers the
+  dependency automatically.
+- **Vendor destinations** (`vendor.register`): the agent registers a business payee (supplier, manufacturer, marketplace
+  fee, advertising, software, hosting, fulfilment, freelancer, professional service, other); FleetController verifies the
+  format, the rail (provider account or bank transfer — never crypto), refuses personal/gambling/cash categories and
+  Fleet-controlled references, and activates it as a payee **scoped to that agent** (no owner enrolment, no cooldown).
+  The v10 custody hard check is unchanged and applies to every order. The real reference is kept apart
+  (`fleet_destination_references`, owner-only). A relative circuit-breaker signal for destination novelty
+  (`new_destination_age_s` + `new_destination_wallet_bp`) is added, unset.
+- **Credentials** (`fleet_credential_refs`, `fleet_credential_use_log`): vault references only (a CHECK refuses anything
+  but `vault:<path>`), scope, spend-limited flag, status, health, rotation, revocation (which suspends the credential's
+  rails); every broker use is audited.
+- **Settlement** (`svc_settlement_ingest`): idempotent per (rail, external id, kind); a different payload for a known id
+  is a conflict (nothing moves); a transaction on a rail assigned to a venture settles atomically (sale journal,
+  attribution, revenue provenance, tax reservation); anything else — no assignment, foreign currency, a closed venture,
+  a rail out of service — stays **unattributed** for reconciliation, never guessed. A refund releases the tax reserved
+  for it first. `fleet_admin_settlement_attribute` resolves an orphan (audited).
+- **Wallet** (`fleet_agent_wallet`, op `wallet`): cash held, economic balance, available, committed, restricted (tax
+  reserve, envelope capital, principal, obligations), venture allocations, 30-day revenue/refunds/inference/operating
+  costs, pending settlement, lifetime figures, retained earnings, Treasury contributions, runway figures, safe transfer.
+- **Safe transfer** (`fleet_safe_transfer_amount`): available − max(projected costs over `horizon_days`, the agent's own
+  runway target) − cushion (`cushion_bp`, default 1 000) − open decision commitments − the agent's own growth reserve.
+  Expected revenue never increases it. `fleet_admin_wallet_transfer` (Treasury or operating pool) refuses above it.
+- **Tax true-up** (`fleet_tax_true_up`, `svc_tax_true_up`): liability = VAT/sales tax of settled sales (net of refunds)
+  + profit-tax rate × max(0, realized net profit − VAT); the reserve is topped up as far as cash allows (shortfall
+  reported) or released when over-reserved (never while the fallback applied).
+- **Reconciliation** (`fleet_reconcile`): ledger verification, unattributed and stale orphans, settlement failures and
+  conflicts, settled-journal ↔ transaction consistency, venture ⊆ agent attribution, missing tax profiles, rails with
+  revoked credentials, Treasury figures.
+
+### 25.3 Capital engine (v30)
+
+- **Three classes stay distinct.** Own capital: the agent's, custody only (v27). Fleet capital: FleetController lends
+  through `capital.request`. Restricted: never ordinarily spendable.
+- **Capital requests** (`fleet_capital_requests`): venture, purpose, amount, evidence, expected revenue/net/payback,
+  downside, confidence, milestones, lower-capital alternative, categories. **`fleet_capital_decide`** is deterministic
+  and versioned (decisions record the policy version and their inputs) with outcomes APPROVE / PARTIAL_APPROVE /
+  APPROVE_WITH_LIMITS / DEFER / REJECT and a "what would change it" note; `decided_by = 'controller'` is a CHECK. Inputs:
+  Treasury liquidity after a reserve floor (`treasury_reserve_bp`), a per-request ceiling (`max_request_treasury_bp`),
+  agent concentration (`max_agent_exposure_bp`), evidence count, expected value discounted by the agent's forecast
+  calibration once it has a track record (else its stated confidence), and its venture record. No owner branch.
+- **Execution envelopes** (`fleet_envelopes`): capital (tranches), purpose, venture, expiry, maximum loss, permitted
+  categories, optional maximum single exposure, milestones (ledger-verified: revenue or net profit since the envelope),
+  reassessment date, a sweep reduction for high-ROI cases. Envelope-funded orders (`envelope.spend`) reserve from
+  `agent_envelope_cash`, release back to it (the v10 release function now honours the order's funding), pass the same
+  agent/destination custody and the circuit breaker. `svc_capital_reap` (run by the controller reaper) expires envelopes
+  (unspent capital returns), freezes one at its stop-loss (only that envelope) and releases tranches on milestones.
+- **Sweeps** (`fleet_sweep_policy`, `fleet_sweep_compute`, `fleet_sweep_execute`, `svc_sweep_run`): base = min(realized
+  net profit after tax not yet contributed, the safely transferable amount) — never gross revenue; rate = population band
+  + maturity × surplus × (max − band), less active reinvestment reductions, integer bp, ≤ 7 000; posted through the v10
+  LFC-capped `fleet_profit_contribution`; idempotent per period; **disabled by default**. These are agent → Treasury
+  contributions inside the ledger; owner distributions (`OWNER_SWEEP_ENABLED`) are untouched and off.
+- **Hub** (`fleet_hub(section)`) and **Doctor** (`fleet_economy_health`), §25.7.
+
+### 25.4 Retired fixed thresholds and owner gates
+
+| Legacy | Status |
+|---|---|
+| £100/order and £50/day owner spend route | retired at v27 (§24) |
+| `major_spend_threshold_minor` = 2000 (£20 → T3) | retired at v30: `fleet_spend_is_major` = exposure ≥ `major_exposure_bp` (default 2 500) of the founder's own available capital; the column is inert (LEGACY comment) |
+| Experiment owner branch (irreversible / E4 → `FLEET_OWNER_DECISION_REQUIRED`) | retired at v30: the controller decides within survival headroom; irreversible = the whole budget counts as maximum loss |
+| Evidence-ladder nominal caps (0/300/1000/2500) and `hard_cap_minor` | retired at v30 (inert): the budget is bounded by survival headroom |
+| Owner-enrolled payees as the only destinations (3-day cooldown) | complemented at v29 by agent-registered, controller-verified vendors |
+| Discovery allowance / 14-day runway floor | withdrawn in Phase A (§7) |
+
+### 25.5 Founder runtime
+
+- Tools (existing classes; no manifest change): `opportunity` (record / shortlist / status / list), `venture` (create /
+  transition / status / list / metric), `wallet` (view / performance / plan / vendors), `fleet_capital` (register_vendor
+  / revoke_vendor / require_rail / request / list / envelopes / envelope_spend), `economic_knowledge` (search / record).
+  Money-committing ops carry a deterministic idempotency key from the tool call. Custody refusals and infrastructure
+  ceilings are framed as such.
+- Decisions are mirrored to the registry: `resolve_decision` → `decision.record` (forecast, sizing, alternatives; optional
+  `forecastRevenuePence`, `forecastCostPence`, `forecastDaysToRevenue`, `confidenceBp`, `ventureKey`, `opportunityKey`),
+  `review_decision` → `decision.outcome` / `decision.correct`. A mirror failure is a note; the founder's own decision
+  stands.
+- Full packets carry one compact economy line (`brief`: available, restricted tax reserve and envelope capital, burn,
+  30-day revenue, ventures, the shortlist, measurements pending); slim wake-ups stay slim.
+- Charter v4 (3 998 characters, under the 4 000 budget) adds working in ventures; `FOUNDER_CHARTER_V2` and
+  `FOUNDER_ROUTED_ADDENDUM_R23` are unchanged for the sealed evaluations.
+
+### 25.6 Cognition depth
+
+Server side: a spend is a major action (critical tier) when it exposes at least `major_exposure_bp` of the founder's own
+available capital (or the founder has none) — a £500 and a £500 000 wallet are treated proportionally. Founder side:
+`cognitionDepth` reads exposure share, irreversibility, evidence count, novelty (no comparable decision) and
+concentration (commitments beyond available capital) into routine / standard / critical; `resolve_decision` reports it
+("reason this through carefully — size down, stage it, or escalate_question once"). Information, never a gate; scaling
+every figure by 1 000 gives the same reading (tested).
+
+### 25.7 Fleet Hub and Doctor
+
+- `pnpm fleet:admin hub <section>`: overview (external cash held, economic equity, spendable, Treasury, operating pool,
+  tax reserves, revenue, net profit, LFC, active ventures, agent statuses, open dependencies, switches), agents (wallet +
+  performance), wallet `<agentId>` (with journal history), ventures (financials, rails, decisions, transitions,
+  metrics), treasury (balances, 30-day flows, sweep and capital policy), rails (with credential status, masked), tax
+  (entities, active profiles, reserves by agent, fallback policy), capital (requests, decisions, inputs, policy
+  versions), envelopes, opportunities, profit board, dependencies, credentials (status, health, use counts — never a
+  reference), audit (financial, credential, policy and capital events), reconcile.
+- `hub-render <file.html>`: one static, script-free dashboard written 0600; no listener exists for the Hub.
+- `economy-*` commands: entities, tax profiles/policy/true-up/payment, rails, credential references, settlement
+  attribution, capital/sweep/economy/transfer/cognition-depth policy, the novelty breaker, safe transfers, sweep preview.
+- Doctor: an `economy` check (FAIL on reconciliation failures, envelope ledger mismatch, failing credentials, an
+  unpinned live rail; WARN on orphans, missing tax profiles, degraded rails, research without decisions, an agent with no
+  route forward, negative equity; INFO otherwise). Agent autonomy itself is never an error.
+- Privilege audit: `economySurfaceProblems` (guard triggers, the not-live and controller-only CHECKs, single writers of
+  every money/record/policy table, no reference to the state-machine or vendor-registry bypass outside their functions,
+  no dynamic SQL near economy tables). Mutation-tested.
+
+### 25.8 Payments layer (TypeScript, FleetController only)
+
+`src/fleet/payments/`: the provider adapter interface; the credential broker (audits before resolving, refuses revoked or
+expired references, opaque `SecretHandle` that cannot be serialised, printed or inspected, failure audits redacted); a
+deterministic simulated rail; the PayPal adapter architecture (sandbox only; `live` refused at construction; payouts
+always behind the spend gate; amounts parsed exactly; attribution by the venture id carried in the payment link);
+`syncRail` (provider → `svc_settlement_ingest`); `maskAccount`.
+
+### 25.9 Telemetry (metadata only)
+
+`fleet_events`: opportunity_recorded / shortlist / stale / selected / rejected / invalidated, venture_created /
+venture_state, decision_recorded / measured / corrected, knowledge_recorded, economy_failsafe, payment_rail_required /
+assigned / added / status, external_dependency_recorded, vendor_registered / revoked, credential_* , settlement_sale /
+refund / unattributed / failed / conflict, tax_true_up, tax_profile_set, wallet_transfer, capital_decision,
+envelope_allocation / milestone / frozen / expired, treasury_sweep, *_policy_set, spend_circuit_breaker_set. The
+controller audit adds `economy_op` (op and outcome code only) and `envelopes_reaped`. No secret, argument text or amount
+of a founder's free text is logged.
+
+### 25.10 Tests
+
+`fleet-f2-economy-pg` (v28), `fleet-f2-money-pg` (v29), `fleet-f2-capital-pg` (v30 + audit mutation),
+`fleet-f2-autonomy-sim-pg` (30 days, zero owner actions), `fleet-f2-accounting-pg` (160-step seeded property test,
+security boundaries, safety flags), `fleet-f2-migration-paths-pg` (v25 → current one step at a time on a
+Founder-1-shaped registry; v8 and v24 direct), `fleet-f2-payments`, `fleet-f2-founder-economy`, `fleet-f2-static-audit`,
+`fleet-f2-performance-pg`; plus the updated Phase A/R24/routing/upgrade suites.
+
+## 26. Configurable policy (non-constitutional values; all owner-set through audited functions)
+
+| Policy | Default | Meaning |
+|---|---|---|
+| `fleet_economy_policy.shortlist_max` | 5 | candidates an agent may shortlist |
+| `evidence_fresh_days` / `knowledge_fresh_days` | 30 / 180 | evidence and knowledge freshness |
+| `forecast_tolerance_bp` | 2 500 | calibration reporting tolerance |
+| failsafes (open opportunities 60, active ventures 25, records/day 400) | — | runaway-loop ceilings; never shown as budgets |
+| `research_loop_fetches` / `_window_h`, `no_route_hours` | 40 / 24 h, 72 h | doctor liveness signals |
+| `fleet_tax_policy.unprofiled_reserve_bp` | 2 500 | conservative reserve while no tax profile exists |
+| `fleet_transfer_policy` cushion / horizon / burn window | 1 000 bp / 30 d / 30 d | safe-transfer protection |
+| `fleet_capital_policy` (version, enabled, reserve 5 000 bp, per-request 1 000 bp, per-agent 2 500 bp, partial tranche 5 000 bp, min confidence 3 000 bp, min evidence 2, min track record 3, limited stop-loss 5 000 bp, envelope 30 d / limited 14 d, high-ROI 5 000 bp, reinvestment reduction 2 500 bp, re-apply cooldown 3 600 s) | as listed | the lender's policy for Fleet capital only |
+| `fleet_sweep_policy` (enabled false, bands 10→1 000 … 49→2 000 bp, mature 4 500 bp, max 7 000 bp, maturity 180 d, surplus multiple 4) | as listed | the sweep curve |
+| `fleet_cognition_depth_policy.major_exposure_bp` | 2 500 | relative major-spend line |
+| circuit breaker (`order_wallet_bp`, velocity window/bp, destination novelty age/bp) | unset | infrastructure anomaly signals; production values need evidence |
+
+## 27. Remaining owner-gated or legacy items (classified)
+
+None of these is an ordinary entrepreneurial approval:
+- **Legal / identity (non-delegable):** identity facts (`request_identity_fact` → owner approves a claim), KYC/legal
+  dependencies (action-scoped; one action waits, nothing else).
+- **Constitutional / infrastructure:** policy setters (§26), rails and credential references (connecting an account is
+  infrastructure), legal entities and tax profiles, safe transfers out of an agent wallet (solvency management, refused
+  above the safe amount), Treasury funding, owner withdrawals, Genesis, runtime approval and upgrades, operator D3
+  proposals, the internet-egress switch, cognition enable/budget ceilings.
+- **Curated institutional knowledge** (`propose_knowledge` → owner promotion): optional curation; it blocks nothing, and
+  economic knowledge is shared automatically when ledger-backed.
+- **Owner-enrolled payees** remain available alongside vendor registration (owner and Treasury withdrawal destinations
+  stay owner-only).
+- **R24 evidence gating of simulated experiments** (relevance assessment, E0 → WATCH) is the controller's automated
+  assessment, not an owner step; it applies to simulation-only experiments and is a candidate for retirement before
+  experiments commit real own capital.
+- **Inert legacy columns** (kept for history and seals): `owner_approval_threshold_cents`, `agent_daily_spend_cents`,
+  `major_spend_threshold_minor`, `hard_cap_minor`, `auto_cap_minor`.
+
+## 28. Known limitations and risks of the candidate
+
+- **Real money is not exercised.** Custody execution, live rails and real payments are pinned off; envelope and vendor
+  payments end at `reserved`. The settlement path is exercised only with the simulated rail and a fake PayPal API.
+- **Tax model is an estimate.** Inclusive VAT and a flat profit-tax rate per entity; the true-up works per agent and
+  refuses agents whose ventures span several legal entities (`FLEET_TAX_MULTI_ENTITY`). No filing periods, thresholds,
+  allowances or jurisdiction rules — the profile is policy data a professional must set and review.
+- **Foreign-currency settlements** stay unattributed (`FX required`); no conversion path exists yet.
+- **Vendor registration trusts the agent's reference format**, not ownership of the account. With real money, the
+  novelty breaker signal and provider-side verification must be set from evidence before activation.
+- **Operator API** has no economy route; the Hub is owner-side (admin credential, CLI, static HTML).
+- **Prompt prefix** grew by ≈ 1 400 tokens (five tool schemas; cached prefix) — §29 measurement.
+- **Agent wallet runway** uses expense postings over the burn window (inference and settled expenses); subscriptions
+  and envelope commitments are not projected separately.
+
+## 29. Production activation plan (NOT executed; each step needs explicit approval)
+
+1. **Review and merge.** Code review of `f2/autonomous-economy` (v26–v30 are candidate migrations and may still be
+   adjusted before merge); merge to `fleet-development`; build the release (`scripts/fleet-build-runtime.sh`) and record
+   commit, build id and lockfile SHA from its output.
+2. **Backup.** On the VPS: stop nothing yet; `pg_dump` the fleet database (custom format, checksum recorded) and copy
+   Founder 1's state namespace (memory, workspace, decisions.json) to the release backup; record the current pins
+   (runtime commit, build id, lockfile) for rollback. A rollback below v30 requires restoring this dump (v26–v30 add
+   tables, classes and rules).
+3. **Migration rehearsal.** Restore the dump into a throwaway database on the VM; run `fleet:migrate-check` then
+   `fleet:migrate` (v25 → v30); `fleet:audit-privileges`; `fleet:doctor`; the migration-path suite against it.
+4. **Controller release.** Pin the new runtime (commit/build/lockfile from step 1), restart `automaton-fleet.service`,
+   run `fleet:migrate` on production, `fleet:verify-runtime`, `fleet:audit-privileges`, `fleet:doctor`, `fleet:verify`.
+5. **Founder release.** Upgrade Founder 1 through the runtime-upgrade lifecycle (prepare → commit → verify, with the
+   snapshot); confirm one full packet naming the new tools, its ledger and memory unchanged, and its first `brief`.
+6. **Economy configuration (infrastructure, owner).** Legal entity and a professionally reviewed tax profile; one shared
+   simulated or sandbox rail; leave sweeps disabled; keep the capital engine's defaults or set them; set no circuit-breaker
+   values without evidence.
+7. **Observation.** Doctor `economy` PASS/INFO; Hub overview and reconcile daily; Founder 1's opportunities, ventures and
+   decisions appear; no owner action is requested by any agent flow.
+8. **Provider connection (later, owner).** Register the Treasury PayPal credential reference
+   (`economy-credential-register paypal vault:paypal/treasury …` — the secret goes into the vault, never the database
+   or the repository) and a `sandbox` rail; verify `syncRail` against the sandbox.
+9. **Financial activation (constitutional; separate review).** A reviewed migration lifting the rail `not_live` pin and
+   custody execution together with `REAL_PAYMENTS_ENABLED=true`, circuit-breaker values from evidence, tax profile
+   sign-off, enabling sweeps. Owner sweeps and replication remain separate decisions.

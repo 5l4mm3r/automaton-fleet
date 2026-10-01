@@ -437,6 +437,7 @@ export class FounderMind {
     } catch {
       economics = {};
     }
+    this.o.toolbox.noteEconomics(economics);
     const prev = this.continuity();
     // F1-LIVE-01: what this founder can actually do now (offered by the controller AND implemented by this runtime), and
     // its external dependencies. Both are semantic signals: a genuine change brings one full packet, then idle wake-ups resume.
@@ -461,7 +462,7 @@ export class FounderMind {
     const capNote: string[] = [];
     if (capabilities && prev?.capabilities?.sig !== capabilities.sig) {
       const exp = view!.experiments?.enabled === true
-        ? ` Experiment pipeline: ON (${String(view!.experiments?.financialMode ?? "simulated")}; budgets bounded by your own survival headroom; up to ${String(view!.experiments?.maxActive ?? "?")} active) — see list_experiments.` : "";
+        ? ` Experiment pipeline: ON (${String(view!.experiments?.financialMode ?? "simulated")}; sized within your own survival headroom; up to ${String(view!.experiments?.maxActive ?? "?")} active) — see list_experiments.` : "";
       if (prev?.capabilities) {
         const added = capabilities.tools.filter((t) => !prev.capabilities!.tools.includes(t));
         const removed = prev.capabilities.tools.filter((t) => !capabilities.tools.includes(t));
