@@ -9,6 +9,7 @@
  * Requests:
  *   {"mode":"models","ids":[…]}                       GET /v1/models/{id}: availability and capabilities (free)
  *   {"mode":"cell","model":…,"effort":…,"request":{…}} one F1-EVAL-02 cell (paid, budget-guarded)
+ *   {"mode":"cell","evaluation":"f1-fresh-eval-01",…}  one F1-FRESH-EVAL-01 probe cell (paid, budget-guarded, ≤ $1.50)
  * The model must be one of EVAL_MODELS; each provider call is attempted once (no automatic retries).
  * Exit 0 = ran (the result says what happened), 2 = refused.
  */
@@ -16,8 +17,9 @@
 import { loadCognitionProvider, readCognitionKey } from "../service/main.js";
 import { AnthropicProvider, type AnthropicEffort } from "../cognition/anthropic.js";
 import { runCell, type CellRequest } from "./f1-eval-02.js";
+import { EVALUATION as FRESH_EVALUATION, FRESH_CAP_CEILING_MICROCENTS, runFreshCell, type FreshCellRequest } from "./f1-fresh-eval-01.js";
 
-export const EVAL_MODELS: readonly string[] = ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5"];
+export const EVAL_MODELS: readonly string[] = ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5", "claude-sonnet-5-5"];
 const EFFORTS: readonly string[] = ["low", "medium", "high", "max"];
 const MAX_STDIN = 4 * 1024 * 1024;
 let scrubKey = "";
@@ -97,14 +99,22 @@ async function main(): Promise<number> {
     console.error("Refusing: model/effort/request invalid.");
     return 2;
   }
-  if (!(Number.isSafeInteger(cell.budgetMicrocents) && cell.budgetMicrocents >= 0 && cell.budgetMicrocents <= 300_000_000)) {
-    console.error("Refusing: the cell budget must be within the authorised $3.00 ceiling.");
+  const evaluation = req.evaluation === undefined ? "f1-eval-02" : String(req.evaluation);
+  if (evaluation !== "f1-eval-02" && evaluation !== FRESH_EVALUATION) {
+    console.error("Refusing: unknown evaluation.");
+    return 2;
+  }
+  const ceiling = evaluation === FRESH_EVALUATION ? FRESH_CAP_CEILING_MICROCENTS : 300_000_000;
+  if (!(Number.isSafeInteger(cell.budgetMicrocents) && cell.budgetMicrocents >= 0 && cell.budgetMicrocents <= ceiling)) {
+    console.error(`Refusing: the cell budget must be within the authorised $${(ceiling / 1e8).toFixed(2)} ceiling.`);
     return 2;
   }
   // Evaluation-only settings on a copy: the controller's own configuration is untouched. One attempt per call.
   const provider = base.with({ model, effort: effort as AnthropicEffort, thinking: { type: "adaptive" }, maxAttempts: 1 });
-  const result = await runCell(cell, provider, { log: (x) => out("EVT", x) });
-  out("RESULT", { mode: "cell", model, effort, thinking: "adaptive", maxAttempts: 1, result });
+  const result = evaluation === FRESH_EVALUATION
+    ? await runFreshCell(cell as unknown as FreshCellRequest, provider, { log: (x) => out("EVT", x) })
+    : await runCell(cell, provider, { log: (x) => out("EVT", x) });
+  out("RESULT", { mode: "cell", evaluation, model, effort, thinking: "adaptive", maxAttempts: 1, result });
   return 0;
 }
 

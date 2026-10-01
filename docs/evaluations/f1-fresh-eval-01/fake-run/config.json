@@ -1,0 +1,14 @@
+{
+ "transport": "fake",
+ "model": "claude-sonnet-5-5",
+ "effort": "medium",
+ "maxTokens": 8000,
+ "prices": {"inputMicrocentsPerToken": 200, "outputMicrocentsPerToken": 1000, "cacheWriteMicrocentsPerToken": 250, "cacheReadMicrocentsPerToken": 20},
+ "capMicrocents": 150000000,
+ "sshTarget": "agentfleet-vps",
+ "remoteScript": "/opt/automaton-fleet/eval/f1-fresh-eval-01/scripts/fleet-eval-02.sh",
+ "_evaluation": "f1-fresh-eval-01",
+ "_preRegistrationSha256": "65b864c77915cb1347a65ca28643806c4f5edb69134e228453fe24544c69f68c",
+ "_pricesSource": "live fleet_cognition_tiers T2 (claude-sonnet-5-5, adaptive, effort medium), read 2026-10-01",
+ "_note": "Zero-cost dry run with the deterministic fake model. Production T2 settings (claude-sonnet-5-5, adaptive, effort medium, max_tokens 8000) and the production routed prefix. Hard cap $1.50."
+}

@@ -1,0 +1,253 @@
+{
+ "arms": {
+  "FRESH": {
+   "arm": "FRESH",
+   "cells": 3,
+   "parsed": 3,
+   "correct": 12,
+   "stale": 0,
+   "retracted": 0,
+   "unknown": 0,
+   "other": 0,
+   "missing": 0
+  },
+  "LEGACY": {
+   "arm": "LEGACY",
+   "cells": 3,
+   "parsed": 3,
+   "correct": 9,
+   "stale": 3,
+   "retracted": 0,
+   "unknown": 0,
+   "other": 0,
+   "missing": 0
+  },
+  "NOMEM": {
+   "arm": "NOMEM",
+   "cells": 3,
+   "parsed": 3,
+   "correct": 0,
+   "stale": 0,
+   "retracted": 0,
+   "unknown": 12,
+   "other": 0,
+   "missing": 0
+  }
+ },
+ "checks": {
+  "validity": true,
+  "negativeControl": true,
+  "freshPass": true,
+  "discrimination": true
+ },
+ "verdict": "PROVEN",
+ "cells": [
+  {
+   "cellId": "P-FRESH-1",
+   "arm": "FRESH",
+   "calls": 1,
+   "spentMicrocents": 1924000,
+   "score": {
+    "cellId": "P-FRESH-1",
+    "arm": "FRESH",
+    "parsed": true,
+    "answers": {
+     "q1": "13.50",
+     "q2": "9",
+     "q3": "2.00",
+     "q4": "9.65"
+    },
+    "classes": {
+     "q1": "correct",
+     "q2": "correct",
+     "q3": "correct",
+     "q4": "correct"
+    }
+   }
+  },
+  {
+   "cellId": "P-LEGACY-1",
+   "arm": "LEGACY",
+   "calls": 1,
+   "spentMicrocents": 1911000,
+   "score": {
+    "cellId": "P-LEGACY-1",
+    "arm": "LEGACY",
+    "parsed": true,
+    "answers": {
+     "q1": "12.00",
+     "q2": "9",
+     "q3": "2.00",
+     "q4": "9.65"
+    },
+    "classes": {
+     "q1": "stale",
+     "q2": "correct",
+     "q3": "correct",
+     "q4": "correct"
+    }
+   }
+  },
+  {
+   "cellId": "P-NOMEM-1",
+   "arm": "NOMEM",
+   "calls": 1,
+   "spentMicrocents": 1758200,
+   "score": {
+    "cellId": "P-NOMEM-1",
+    "arm": "NOMEM",
+    "parsed": true,
+    "answers": {
+     "q1": "UNKNOWN",
+     "q2": "UNKNOWN",
+     "q3": "UNKNOWN",
+     "q4": "UNKNOWN"
+    },
+    "classes": {
+     "q1": "unknown",
+     "q2": "unknown",
+     "q3": "unknown",
+     "q4": "unknown"
+    }
+   }
+  },
+  {
+   "cellId": "P-FRESH-2",
+   "arm": "FRESH",
+   "calls": 1,
+   "spentMicrocents": 1924000,
+   "score": {
+    "cellId": "P-FRESH-2",
+    "arm": "FRESH",
+    "parsed": true,
+    "answers": {
+     "q1": "13.50",
+     "q2": "9",
+     "q3": "2.00",
+     "q4": "9.65"
+    },
+    "classes": {
+     "q1": "correct",
+     "q2": "correct",
+     "q3": "correct",
+     "q4": "correct"
+    }
+   }
+  },
+  {
+   "cellId": "P-LEGACY-2",
+   "arm": "LEGACY",
+   "calls": 1,
+   "spentMicrocents": 1911000,
+   "score": {
+    "cellId": "P-LEGACY-2",
+    "arm": "LEGACY",
+    "parsed": true,
+    "answers": {
+     "q1": "12.00",
+     "q2": "9",
+     "q3": "2.00",
+     "q4": "9.65"
+    },
+    "classes": {
+     "q1": "stale",
+     "q2": "correct",
+     "q3": "correct",
+     "q4": "correct"
+    }
+   }
+  },
+  {
+   "cellId": "P-NOMEM-2",
+   "arm": "NOMEM",
+   "calls": 1,
+   "spentMicrocents": 1758200,
+   "score": {
+    "cellId": "P-NOMEM-2",
+    "arm": "NOMEM",
+    "parsed": true,
+    "answers": {
+     "q1": "UNKNOWN",
+     "q2": "UNKNOWN",
+     "q3": "UNKNOWN",
+     "q4": "UNKNOWN"
+    },
+    "classes": {
+     "q1": "unknown",
+     "q2": "unknown",
+     "q3": "unknown",
+     "q4": "unknown"
+    }
+   }
+  },
+  {
+   "cellId": "P-FRESH-3",
+   "arm": "FRESH",
+   "calls": 1,
+   "spentMicrocents": 1924000,
+   "score": {
+    "cellId": "P-FRESH-3",
+    "arm": "FRESH",
+    "parsed": true,
+    "answers": {
+     "q1": "13.50",
+     "q2": "9",
+     "q3": "2.00",
+     "q4": "9.65"
+    },
+    "classes": {
+     "q1": "correct",
+     "q2": "correct",
+     "q3": "correct",
+     "q4": "correct"
+    }
+   }
+  },
+  {
+   "cellId": "P-LEGACY-3",
+   "arm": "LEGACY",
+   "calls": 1,
+   "spentMicrocents": 1911000,
+   "score": {
+    "cellId": "P-LEGACY-3",
+    "arm": "LEGACY",
+    "parsed": true,
+    "answers": {
+     "q1": "12.00",
+     "q2": "9",
+     "q3": "2.00",
+     "q4": "9.65"
+    },
+    "classes": {
+     "q1": "stale",
+     "q2": "correct",
+     "q3": "correct",
+     "q4": "correct"
+    }
+   }
+  },
+  {
+   "cellId": "P-NOMEM-3",
+   "arm": "NOMEM",
+   "calls": 1,
+   "spentMicrocents": 1758200,
+   "score": {
+    "cellId": "P-NOMEM-3",
+    "arm": "NOMEM",
+    "parsed": true,
+    "answers": {
+     "q1": "UNKNOWN",
+     "q2": "UNKNOWN",
+     "q3": "UNKNOWN",
+     "q4": "UNKNOWN"
+    },
+    "classes": {
+     "q1": "unknown",
+     "q2": "unknown",
+     "q3": "unknown",
+     "q4": "unknown"
+    }
+   }
+  }
+ ]
+}

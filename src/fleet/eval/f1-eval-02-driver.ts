@@ -36,6 +36,7 @@ import type { Prices } from "../cognition/charging.js";
 import { runCell, type CellRequest, type CellResult, type Snapshot } from "./f1-eval-02.js";
 import { PLAN, scoreCell, type PlannedCell } from "./f1-eval-02-plan.js";
 import { FakeFounderModel } from "./fake-founder-model.js";
+import { EVALUATION as FRESH_EVALUATION, FRESH_CAP_CEILING_MICROCENTS, FRESH_PLAN, FakeFreshModel, runFreshCell, scoreProbe as scoreProbeFresh, summarize, type FreshCellRequest, type FreshCellResult, type FreshPlannedCell } from "./f1-fresh-eval-01.js";
 
 export interface EvalConfig {
   transport: "fake" | "ssh";
@@ -106,6 +107,45 @@ export function interruptedSpend(lines: string[]): number {
 
 type Transport = (payload: Record<string, unknown>, onEvent: (line: string) => void) => Promise<Record<string, unknown>>;
 
+/**
+ * What the driver needs to know about one evaluation. The durable machinery (ledger, lock, seal, strict reads,
+ * interrupted-cell consent, reconciliation, cap) is shared; the plan, the cap ceiling and the cell request differ.
+ */
+export interface EvalSpec {
+  name: string;
+  /** The authorised ceiling: a config cap above it is refused. */
+  capCeilingMicrocents: number;
+  plan: ReadonlyArray<{ cellId: string; phase: string; from: string | null; mandatory: boolean }>;
+  request(cell: EvalSpec["plan"][number], state: Snapshot | null, remaining: number, cfg: EvalConfig): Record<string, unknown>;
+  /** The zero-cost dry run (fake transport): the cell against a deterministic fake model. */
+  fakeCell(request: Record<string, unknown>, onEvent: (line: string) => void): Promise<Record<string, unknown>>;
+}
+
+export const F1_EVAL_02_SPEC: EvalSpec = {
+  name: "f1-eval-02",
+  capCeilingMicrocents: 300_000_000,
+  plan: PLAN,
+  request: (c, state, remaining, cfg) => {
+    const cell = c as PlannedCell;
+    return { cellId: cell.cellId, phase: cell.phase, arm: cell.arm, observations: cell.observations, webVersion: cell.webVersion, state,
+      maxSteps: cell.maxSteps, maxTokens: cfg.maxTokens, prices: cfg.prices, budgetMicrocents: remaining } satisfies CellRequest;
+  },
+  fakeCell: async (request, onEvent) => runCell(request as unknown as CellRequest, new FakeFounderModel(), { log: (e) => onEvent(JSON.stringify(e)) }) as unknown as Record<string, unknown>,
+};
+
+export const F1_FRESH_EVAL_01_SPEC: EvalSpec = {
+  name: FRESH_EVALUATION,
+  capCeilingMicrocents: FRESH_CAP_CEILING_MICROCENTS,
+  plan: FRESH_PLAN,
+  request: (c, _state, remaining, cfg) => {
+    const cell = c as FreshPlannedCell;
+    return { cellId: cell.cellId, arm: cell.arm, replicate: cell.replicate, maxSteps: cell.maxSteps, maxTokens: cfg.maxTokens, prices: cfg.prices, budgetMicrocents: remaining } satisfies FreshCellRequest;
+  },
+  fakeCell: async (request, onEvent) => runFreshCell(request as unknown as FreshCellRequest, new FakeFreshModel(), { log: (e) => onEvent(JSON.stringify(e)) }) as unknown as Record<string, unknown>,
+};
+
+export const EVAL_SPECS: Readonly<Record<string, EvalSpec>> = Object.freeze({ [F1_EVAL_02_SPEC.name]: F1_EVAL_02_SPEC, [F1_FRESH_EVAL_01_SPEC.name]: F1_FRESH_EVAL_01_SPEC });
+
 function sshTransport(cfg: EvalConfig): Transport {
   return (payload, onEvent) => new Promise((resolve, reject) => {
     const child = spawn("ssh", ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", cfg.sshTarget!, "sudo", "-n", cfg.remoteScript!], { stdio: ["pipe", "pipe", "pipe"] });
@@ -133,20 +173,21 @@ function sshTransport(cfg: EvalConfig): Transport {
   });
 }
 
-function fakeTransport(): Transport {
+function fakeTransport(spec: EvalSpec = F1_EVAL_02_SPEC): Transport {
   return async (payload, onEvent) => {
     if (payload.mode === "models") return { mode: "models", models: [{ id: "fake-founder-model", status: 200 }] };
-    const result = await runCell(payload.request as CellRequest, new FakeFounderModel(), { log: (e) => onEvent(JSON.stringify(e)) });
-    return { mode: "cell", model: "fake-founder-model", effort: payload.effort, result };
+    const result = await spec.fakeCell(payload.request as Record<string, unknown>, onEvent);
+    return { mode: "cell", model: String(result.model ?? "fake"), effort: payload.effort, result };
   };
 }
 
-export async function runPlan(out: string, o: { mandatoryOnly?: boolean; only?: string; rerunInterrupted?: string[]; transport?: Transport; log?: (s: string) => void } = {}): Promise<{ ran: string[]; stoppedAt: string | null; reason: string | null }> {
+export async function runPlan(out: string, o: { spec?: EvalSpec; mandatoryOnly?: boolean; only?: string; rerunInterrupted?: string[]; transport?: Transport; log?: (s: string) => void } = {}): Promise<{ ran: string[]; stoppedAt: string | null; reason: string | null }> {
   const log = o.log ?? ((s: string) => console.log(s));
+  const spec = o.spec ?? F1_EVAL_02_SPEC;
   if (fs.existsSync(path.join(out, "CLOSED"))) throw new EvalStateError(`F1EVAL_CLOSED: ${out} is a sealed, accepted evaluation; it is never run again`);
   const cfg = readJsonStrict<EvalConfig | null>(path.join(out, "config.json"), null, "config.json");
   if (!cfg) throw new Error(`missing ${out}/config.json`);
-  if (!(cfg.capMicrocents > 0 && cfg.capMicrocents <= 300_000_000)) throw new Error("cap must be within the authorised $3.00");
+  if (!(cfg.capMicrocents > 0 && cfg.capMicrocents <= spec.capCeilingMicrocents)) throw new Error(`cap must be within the authorised $${(spec.capCeilingMicrocents / 1e8).toFixed(2)} (${spec.name})`);
   // One driver at a time, across restarts: an exclusive lock file. A stale lock (dead driver) is the operator's call.
   const lockFile = path.join(out, "run.lock");
   let lockFd: number;
@@ -162,15 +203,16 @@ export async function runPlan(out: string, o: { mandatoryOnly?: boolean; only?: 
   fs.fsyncSync(lockFd);
   fs.closeSync(lockFd);
   try {
-    return await runLocked(out, cfg, o, log);
+    return await runLocked(out, cfg, spec, o, log);
   } finally {
     fs.rmSync(lockFile, { force: true });
   }
 }
 
-async function runLocked(out: string, cfg: EvalConfig, o: { mandatoryOnly?: boolean; only?: string; rerunInterrupted?: string[]; transport?: Transport },
+async function runLocked(out: string, cfg: EvalConfig, spec: EvalSpec, o: { mandatoryOnly?: boolean; only?: string; rerunInterrupted?: string[]; transport?: Transport },
   log: (s: string) => void): Promise<{ ran: string[]; stoppedAt: string | null; reason: string | null }> {
-  const transport = o.transport ?? (cfg.transport === "ssh" ? sshTransport(cfg) : fakeTransport());
+  const transport = o.transport ?? (cfg.transport === "ssh" ? sshTransport(cfg) : fakeTransport(spec));
+  const PLAN = spec.plan;
   const ledgerFile = path.join(out, "ledger.json");
   const done = (id: string) => fs.existsSync(path.join(out, "cells", `${id}.json`));
   const priorWork = PLAN.some((p) => done(p.cellId)) || (fs.existsSync(path.join(out, "events")) && fs.readdirSync(path.join(out, "events")).length > 0);
@@ -228,16 +270,14 @@ async function runLocked(out: string, cfg: EvalConfig, o: { mandatoryOnly?: bool
     // A severance arm must start from its parent's exact state: missing or unreadable is never "empty".
     const state = cell.from ? readJsonStrict<Snapshot | null>(path.join(out, "state", `${cell.from}.json`), null, `state/${cell.from}.json`) : null;
     if (cell.from && !state) throw new EvalStateError(`F1EVAL_STATE_AMBIGUOUS: state/${cell.from}.json (input of ${cell.cellId}) is missing`);
-    const request: CellRequest = {
-      cellId: cell.cellId, phase: cell.phase, arm: cell.arm, observations: cell.observations, webVersion: cell.webVersion, state,
-      maxSteps: cell.maxSteps, maxTokens: cfg.maxTokens, prices: cfg.prices, budgetMicrocents: remaining,
-    };
+    const request = spec.request(cell, state, remaining, cfg);
     log(`${cell.cellId}: start (remaining ${(remaining / 1e8).toFixed(4)} USD)`);
     fs.mkdirSync(path.dirname(evFile), { recursive: true });
     const evFd = fs.openSync(evFile, "a", 0o644);
     let res: Record<string, unknown>;
     try {
-      res = await transport({ mode: "cell", model: cfg.model, effort: cfg.effort, request }, (line) => { fs.writeSync(evFd, `${line}\n`); fs.fsyncSync(evFd); });
+      res = await transport({ mode: "cell", ...(spec === F1_EVAL_02_SPEC ? {} : { evaluation: spec.name }), model: cfg.model, effort: cfg.effort, request },
+        (line) => { fs.writeSync(evFd, `${line}\n`); fs.fsyncSync(evFd); });
     } finally {
       fs.closeSync(evFd);
     }
@@ -278,14 +318,28 @@ export function scorePlan(out: string): ReturnType<typeof scoreCell>[] {
   return scores;
 }
 
+/** F1-FRESH-EVAL-01: re-derive every answer class from the stored final text and apply the pre-registered rule. */
+export function scoreFresh(out: string): ReturnType<typeof summarize> & { cells: Array<ReturnType<typeof scoreProbeOf>> } {
+  const cells = FRESH_PLAN.map((c) => readJsonStrict<FreshCellResult | null>(path.join(out, "cells", `${c.cellId}.json`), null, `cells/${c.cellId}.json`))
+    .filter((r): r is FreshCellResult => !!r).map(scoreProbeOf);
+  const s = { ...summarize(cells.map((c) => c.score)), cells };
+  writeDurable(path.join(out, "scores.json"), s);
+  return s;
+}
+function scoreProbeOf(r: FreshCellResult) {
+  return { cellId: r.cellId, arm: r.arm, calls: r.calls.length, spentMicrocents: r.spentMicrocents, score: scoreProbeFresh(r.cellId, r.arm, r.finalText) };
+}
+
 async function cli(): Promise<number> {
   const [cmd, ...rest] = process.argv.slice(2);
   const arg = (k: string) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : undefined; };
   const out = arg("--out");
   if (!out) { console.error("--out <dir> required"); return 2; }
+  const spec = EVAL_SPECS[arg("--evaluation") ?? F1_EVAL_02_SPEC.name];
+  if (!spec) { console.error(`unknown --evaluation; one of ${Object.keys(EVAL_SPECS).join(", ")}`); return 2; }
   if (cmd === "run") {
     const rerun = rest.flatMap((k, i) => (k === "--rerun-interrupted" && rest[i + 1] ? [rest[i + 1]] : []));
-    const r = await runPlan(out, { mandatoryOnly: rest.includes("--mandatory-only"), only: arg("--only"), rerunInterrupted: rerun });
+    const r = await runPlan(out, { spec, mandatoryOnly: rest.includes("--mandatory-only"), only: arg("--only"), rerunInterrupted: rerun });
     console.log(JSON.stringify(r));
     return r.reason && r.reason !== "budget exhausted" ? 1 : 0;
   }
@@ -296,11 +350,17 @@ async function cli(): Promise<number> {
     console.log(JSON.stringify(r, null, 1));
     return 0;
   }
+  if (cmd === "score" && spec === F1_FRESH_EVAL_01_SPEC) {
+    const s = scoreFresh(out);
+    for (const c of s.cells) console.log(`${c.cellId.padEnd(12)} ${c.arm.padEnd(6)} ${Object.values(c.score.classes).join(" ")} calls ${c.calls} $${(c.spentMicrocents / 1e8).toFixed(4)}`);
+    console.log(JSON.stringify({ arms: s.arms, checks: s.checks, verdict: s.verdict }, null, 1));
+    return 0;
+  }
   if (cmd === "score") {
     for (const s of scorePlan(out)) console.log(`${s.cellId.padEnd(8)} ${s.arm.padEnd(5)} markers ${s.hitCount}/${s.markerCount} calls ${s.calls} in ${s.inputTokens} out ${s.outputTokens} first-in ${s.firstCallInputTokens} fetch ${s.fetches} dup ${s.duplicateFetches} $${(s.costMicrocents / 1e8).toFixed(4)}`);
     return 0;
   }
-  console.error("usage: run|models|score --out <dir>");
+  console.error("usage: run|models|score --out <dir> [--evaluation f1-eval-02|f1-fresh-eval-01]");
   return 2;
 }
 

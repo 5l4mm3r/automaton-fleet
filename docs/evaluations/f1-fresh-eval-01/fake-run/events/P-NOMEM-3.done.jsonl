@@ -1,0 +1,2 @@
+{"event":"call_start","cellId":"P-NOMEM-3","turn":1,"step":0,"boundMicrocents":13878000}
+{"event":"call_end","cellId":"P-NOMEM-3","turn":1,"step":0,"ok":true,"requestBytes":21512,"contextBytes":766,"messages":1,"packetPresent":false,"boundMicrocents":13878000,"costMicrocents":1758200,"thinkingBlocks":0,"usage":{"inputTokens":8491,"outputTokens":60},"stopReason":"end_turn","responseModel":null,"providerRequestId":null,"content":"Decision from memory.\nANSWERS: q1=UNKNOWN; q2=UNKNOWN; q3=UNKNOWN; q4=UNKNOWN","toolCalls":[]}
