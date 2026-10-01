@@ -1,0 +1,58 @@
+{
+  "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+  "unit": "automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service",
+  "at": "2026-10-01T11:28:40.645Z",
+  "telemetry": {
+    "source": "journald founder_memory_write (retained window; runtimes from F1-FRESH-02 observability on)",
+    "journal": "ok",
+    "events": 0,
+    "firstAt": null,
+    "lastAt": null,
+    "byTool": {
+      "remember_fact": {
+        "ok": 0,
+        "refused": 0
+      },
+      "remember_facts": {
+        "ok": 0,
+        "refused": 0
+      },
+      "retract_fact": {
+        "ok": 0,
+        "refused": 0
+      },
+      "recall_facts": {
+        "ok": 0,
+        "refused": 0
+      }
+    },
+    "rememberFactsEverUsed": false,
+    "batchWrites": 0,
+    "batchFactsWritten": 0,
+    "individualWrites": 0,
+    "retractions": 0,
+    "superseded": 0,
+    "supersedesUsed": 0,
+    "notCarriedWarnings": 0,
+    "notCarriedValues": 0,
+    "refused": 0,
+    "refusedByCode": {},
+    "malformed": 0,
+    "lastFactsAfter": null,
+    "runtimes": []
+  },
+  "factStore": {
+    "memoryDir": "present",
+    "factsFile": "present",
+    "ledgerFile": "absent",
+    "parse": "ok",
+    "currentFacts": 14,
+    "legacyFacts": 14,
+    "history": {
+      "superseded": 0,
+      "retracted": 0,
+      "trimmed": 0
+    },
+    "multiFactWrites": 0
+  }
+}
