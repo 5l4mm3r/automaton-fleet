@@ -166,6 +166,10 @@ DISCOVERED → RESEARCHING → VALIDATING → BUILDING → LAUNCHING → OPERATI
 
 ## 9. Automated capital allocation
 
+> **Scope (resolved 2026-10-01, §23): Fleet / treasury / shared capital only.** These are FleetController's decisions as a
+> lender and custodian. The agent's own spendable capital is self-risk-managed by the agent and never passes through
+> `fleet_capital_decide`.
+
 **`fleet_capital_requests`** holds the fields you listed: agent, venture, amount, purpose, evidence, expected revenue,
 expected net profit, ROI, payback, maximum downside, runway impact, stop conditions, milestones, lower-cost alternative
 and confidence.
@@ -182,15 +186,22 @@ It **generalises** the existing pieces:
 
 ## 10. Risk engine
 
+> **Scope (resolved 2026-10-01, §23):** the risk engine assesses requests for Fleet / treasury / shared capital, where
+> FleetController is exposed. It never rates, ranks or selects the agent's opportunities, and it never applies to the
+> agent's own spendable capital.
+
 **Hard boundaries (constitutional; any failure → REJECT):**
-- **Agent:** maximum loss ≤ a fraction of survival equity; never touches protected capital or obligations; runway after
-  commitment ≥ the floor.
+- **Agent, as a borrower of Fleet capital:**
+  - the request never touches protected capital or obligations;
+  - FleetController may weigh the agent's loss capacity, runway and liquidity as the lender.
+
+  No such floor applies to the agent's own capital.
 - **Fleet:** treasury reserve ≥ target months; capital committed fleet-wide ≤ cap; concentration per opportunity class,
   channel or vendor ≤ cap; a per-request absolute ceiling as a % of treasury.
 - **Never automated:** illegal, prohibited or reputational-risk categories; custody, crypto or trading while those
   flags are off.
 
-**Scoring bands (economic):**
+**Scoring bands (economic; FleetController's own exposure as lender, not an opportunity ranking):**
 - **Expected value:** confidence-weighted, discounted by evidence level (verified, not claimed) and by the agent's
   **forecast calibration** (realized vs predicted on past envelopes).
 - **Track-record bonus:** realized ROI and capital efficiency, ledger-backed only. Simulated ROI is never used, as
@@ -407,20 +418,22 @@ Nothing touches money, custody, payments, replication, sweeps, the cap, the mode
     pre-registration hashes reproduce.
 - **Tools.**
   - `request_owner_decision` / `withdraw_owner_request` → `record_external_dependency` / `withdraw_external_dependency`.
-  - New `open_decision` / `resolve_decision`, both `planning`; the manifest digest is unchanged.
+  - New `open_decision` / `resolve_decision` / `review_decision`, all `planning`; the manifest digest is unchanged.
+  - `request_spend` names its `decisionKey`.
   - `web_fetch` takes `mode` (research | execution) and, for research, `decisionKey`, `evidenceGap`, `expectedValue`
     and `informationValue`.
   - The `request_spend`, `propose_knowledge` and `request_identity_fact` descriptions no longer say "the owner
     decides".
 - **Decision ledger** (`founder/decisions.ts`, `memory/decisions.json`; the founder's own state, never sent to or
-  approved by FleetController). This is the minimal Phase A form of the §21 Decision Record.
+  approved by FleetController). This is the minimal Phase A form of the §21 Decision Record; it holds the answers to the
+  eight §23 questions.
   - `open_decision`:
     - purpose `find_opportunity` or `expand_venture` only;
-    - a question, a hypothesis, ≤ 5 candidates and the founder's own stop condition (≤ 8 fetches plus "when I know
-      enough");
+    - an economic objective, a question, a hypothesis, ≤ 5 candidates and the founder's own stop condition (≤ 8
+      fetches plus "when I know enough");
     - at most 3 open at once;
     - a question already decided cannot be reopened under another key.
-  - `web_fetch` in research mode, in the production runtime (`decisionResearch: true`), is refused **by the founder's
+  - `web_fetch` in research mode, in the production runtime (`selfGovernance: true`), is refused **by the founder's
     own runtime** when it is:
     - unframed;
     - for an unknown or decided decision;
@@ -430,10 +443,26 @@ Nothing touches money, custody, payments, replication, sweeps, the cap, the mode
 
     Every refusal says "decide with what you have / reuse it / execute", never "wait".
   - Execution mode needs only the step it serves.
-  - `resolve_decision` records selected / ranking / rejected-with-reasons / rationale / expected outcome / next action,
-    opens an execution goal for the next action, and closes the question to research for good.
+  - `resolve_decision` records:
+    - the selection, ranking and rejected options with reasons (the founder's own judgement, stored verbatim);
+    - the rationale and expected outcome;
+    - the risk sizing: `capitalAtRiskPence`, `downside` and `invalidatedBy` (refused unsized: `FLEET_RISK_UNSIZED`);
+    - the next action.
+
+    It opens an execution goal for the next action and closes the question to research for good.
+  - `review_decision` is measure → learn → forward. It closes the step's goal with what was measured and opens the next
+    forward goal.
+    - `corrected` is the one permitted step back. It records the previous path and failed assumption, the NEW evidence,
+      why the path changed and the economic impact.
+    - It refuses: the same path (`FLEET_NOT_A_CORRECTION`); no new evidence (`FLEET_CORRECTION_UNSUPPORTED`); a return
+      to an abandoned path (`FLEET_OSCILLATION`); more than 3 corrections per decision (`FLEET_CORRECTION_LIMIT`).
+    - Capital at risk may be lowered at any time and raised only with new evidence.
+  - `request_spend` (own capital) is let through by the founder's own runtime only under a decided decision and within
+    its sizing (`FLEET_COMMITMENT_UNDECIDED`, `FLEET_EXPOSURE_EXCEEDED`), before FleetController's custody checks run.
   - The sealed evaluation instruments construct the toolbox without the flag and keep their recorded `{url, purpose}`
     behaviour.
+  - A registry ceiling hit (`FLEET_RESEARCH_QUOTA_*`, `FLEET_COGNITION_BUDGET_EXHAUSTED`) is reported to the founder as
+    an INFRASTRUCTURE CEILING, never as a budget. No packet or tool shows quota figures.
 - **Idle semantics.**
   - Every full packet carries the founder's next economically meaningful move:
     - open decisions speak through their own lines ("Do you know enough…?");
@@ -468,8 +497,8 @@ Nothing touches money, custody, payments, replication, sweeps, the cap, the mode
 
 ## 21. Future contract: Opportunity Engine (Phase B; not implemented)
 
-The learning flywheel for later, smarter agents. Phase A's decision ledger is its minimal precursor. Nothing here
-prescribes weights (§22).
+The learning flywheel for later, smarter agents. Phase A's decision ledger is its minimal precursor. The engine
+supplies evidence and structured comparison; ranking and selection stay the agent's (§22, §23).
 
 **OPPORTUNITY CANDIDATE**
 
@@ -494,7 +523,7 @@ prescribes weights (§22).
 - A small, ranked candidate set (≤ 5 per decision), evidence-backed.
 - Refreshed only when a decision needs it, never on a timer.
 - Stale or invalid candidates are removed: evidence too old, a channel unavailable, the economics disproved.
-- Not a scrolling content feed. Ranking is the agent's expected-value judgement until owner-approved weights exist.
+- Not a scrolling content feed. Ranking is the agent's own judgement; no Fleet-wide weights exist (resolved, §22).
 
 **DECISION RECORD**
 - what was selected;
@@ -507,19 +536,115 @@ prescribes weights (§22).
 Phase A already records the first four in the founder's own ledger. Phase B adds actual outcomes and lessons, the
 registry copy, and the controller-verified attribution of revenue to the decision that produced it.
 
-## 22. Open architectural decisions for the owner
+## 22. Owner decisions — RESOLVED (2026-10-01; constitutional for the build; do not re-raise)
 
-- **Scoring weights.** Any permanent economic weighting of candidate dimensions (demand, competition, margin, capital,
-  time-to-revenue, confidence, downside) is an architecture decision. Phase A deliberately has none: the agent ranks.
-  If Phase B needs fleet-wide weights, the owner decides them.
-- **Existing cost controls that touch "FleetController must not dictate":** these predate F2 and are unchanged here.
-  - The owner-set per-founder daily cognition budget (`fleet_founder_cognition`, `dailyBudgetCents`): a hard inference
-    ceiling, not research-specific.
-  - The research fetch quotas (`fleet_research_policy`; migration defaults 60/h and 300/day per founder, 120/h and
-    600/day fleet-wide): infrastructure and rate protection.
+1. **Opportunity ranking belongs to the agent.** There are no permanent Fleet-wide opportunity-scoring weights and no
+   universal formula. FleetController does not select the business. The Opportunity Engine (§21) may supply evidence
+   and structured comparison, but the ranking and the final judgement are the agent's, against its own situation and
+   evidence.
+2. **Professional efficiency is constant.** The same standard applies at every runway:
+   pinpoint → decide → execute → measure → learn → forward. The only step backwards is an evidence-driven correction,
+   which must lead straight back to forward execution. Activity volume is never rewarded.
+3. **Agents risk-manage themselves.**
+   - The agent's own spendable capital is self-risk-managed by the agent: no FleetController runway floor, no routine
+     controller approval.
+   - Fleet / treasury / shared / restricted capital is independently protected by FleetController: requests may be
+     rejected or constrained, and runway, liquidity and systemic-risk rules may apply there (§9–§10).
+4. **Existing cost controls are infrastructure failsafes only.** These stay in place, and their semantics are
+   corrected:
+   - the per-founder daily inference limit (`fleet_founder_cognition.daily_budget_cents` and its policy default);
+   - the web-fetch hourly and daily quotas (`fleet_research_policy`).
 
-  Whether either stays constitutional, becomes infrastructure-only, or moves to the agent is the owner's decision.
-- **Risk engine (§10, Phase C).** The draft's "runway after commitment ≥ the floor" applies a runway floor to capital
-  decisions. That is legitimate where treasury or shared capital is at risk. Applied to the agent's own capital, it
-  conflicts with "runway strategy belongs to the agent". The owner decides the boundary before Phase C.
+   They guard against runaway loops, software bugs, provider abuse and accidental catastrophic burn. They are not
+   discovery allowances, research budgets, targets, entitlements or instructions to use the quota, and they stay
+   outside the founder's ordinary cognition unless a ceiling is actually hit.
 
+**Implementation consequences recorded for later phases (not open questions):**
+- **Phase C.** The existing spend policy routes own-capital orders above `owner_approval_threshold_cents` or
+  `agent_daily_spend_cents` to `awaiting_owner`. That contradicts decisions 2–4. Phase C must:
+  - leave own-capital orders to the agent's self-governance plus FleetController's custody checks
+    (`fleet_order_hard_check`: protected principal and obligations, allocation, destination, freezes and holds);
+  - keep any per-order or daily figure only as a catastrophic failsafe that refuses rather than queues for the owner.
+
+  It has no effect today, because real payments and custody execution are off.
+- **Failsafe values.** The numeric values of the failsafe ceilings are infrastructure settings. They should sit well
+  above professional use, so a ceiling is hit only by a fault.
+
+## 23. Professional Agent Self-Governance (constitutional; owner decision 2026-10-01)
+
+**The standard (all runways):** pinpoint → decide → execute → measure → learn → forward.
+- Agents keep professional economic discipline regardless of runway: minimal wasted cognition, minimal unnecessary
+  capital expenditure, sharp decisions, calculated actions, high information value, precise execution and an explicit
+  economic purpose for every meaningful move.
+- A wealthy agent does not browse casually because it has runway. A struggling agent does not panic or get sloppy.
+  Runway changes which opportunity is rational (capital required, time to revenue, downside), never the standard.
+
+**Opportunity judgement belongs to the agent.** It ranks candidates on demand, actual purchasing evidence, margin,
+capital required, execution complexity, time to launch and to revenue, competition, downside, confidence, accumulated
+knowledge, its own wallet and economic state, and expected return. It does this its own way. No Fleet-wide weights
+exist, and FleetController never selects the business.
+
+**Runway is agent-owned.**
+- FleetController observes and reports it as figures only.
+- There is no 14- or 30-day rule, no discovery percentage and no research authorisation.
+- Runway is information for the agent's own risk management.
+
+**Agents self-risk-manage their own spendable capital.** Before committing, the agent reasons about:
+- capital at risk, downside and concentration;
+- opportunity cost, runway and expected return;
+- failure probability, commitments and operating requirements;
+- experiment sizing;
+- when to terminate a weak hypothesis, when to preserve capital, and when the evidence justifies committing more.
+
+A decision answers eight questions:
+
+| # | Question | Where it lives |
+|---|---|---|
+| 1 | What am I trying to achieve economically? | `objective` (open_decision) |
+| 2 | What do I currently believe? | `hypothesis` |
+| 3 | What critical fact is missing? | `evidenceGap` (each research fetch) |
+| 4 | Will that fact materially change the decision? | `expectedValue`, `informationValue` (low → not fetched) |
+| 5 | What is the downside / capital exposure? | `capitalAtRiskPence`, `downside` (resolve_decision) |
+| 6 | What evidence would invalidate this path? | `invalidatedBy` |
+| 7 | When do I stop researching? | the founder's own stop condition |
+| 8 | What exact action follows? | `selected`, `nextAction` → an execution goal |
+
+Once these are answered: **execute**. Do not research more merely because research capability remains. The founder's
+own runtime holds it to its sizing: own capital is committed only under a decided decision and within the capital at
+risk the founder declared. FleetController is not consulted for any of this.
+
+**FleetController protects Fleet, shared and restricted resources.** It remains the security and custody boundary
+for:
+- the Fleet Treasury, shared capital and other agents' capital;
+- tax reserves, restricted reserves and protected principal / obligations;
+- credentials, payment rails and infrastructure;
+- systemic or catastrophic exposure.
+
+It executes own-capital orders only within its custody rules (`fleet_order_hard_check`), and it independently assesses
+and constrains requests for Fleet or shared capital (§9–§10). The two layers are never blurred: the agent's judgement
+is not a substitute for custody, and custody is not a substitute for the agent's judgement.
+
+**Infrastructure quotas are emergency ceilings, not behavioural budgets.**
+- The daily inference limit and the web-fetch hourly and daily quotas exist only against runaway loops, software bugs,
+  provider abuse and accidental catastrophic burn.
+- No founder-facing text or packet mentions them. A founder never reasons "I have 300 searches today".
+- A hit is reported as an INFRASTRUCTURE CEILING, with the instruction to decide with the evidence at hand.
+
+**Corrective steps are evidence-driven and lead back to forward execution.**
+- A correction (`review_decision`, verdict `corrected`) records the previous path and assumption, the NEW evidence, why
+  the path changed, the economic impact and the new forward action. The new action becomes the open goal at once.
+- Meaningless oscillation is refused: no correction without new evidence, none to the same path, no return to an
+  abandoned path, and at most three per decision (beyond that, a new and narrower decision).
+- A pivot must improve the agent's expected economic position on evidence.
+- Confirmed results also close their step and open the next forward one.
+
+**Tests** (`fleet-f2a-autonomy.test.ts`):
+- no weights or scores anywhere, and selection stored verbatim;
+- own-risk sizing enforced by the founder's runtime with no controller call;
+- custody intact and defined once;
+- identical discipline, refusals and packet schedule at 2 and 5 000 days of runway;
+- quota figures that change nothing, ceilings unchanged and framed as ceilings;
+- pivot, record, forward-goal and anti-oscillation cases;
+- the 30-day zero-owner proof;
+- Gumroad action scoping;
+- the four flags.

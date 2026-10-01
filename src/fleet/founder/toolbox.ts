@@ -26,7 +26,7 @@ import type { ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
 import type { LoopGuard } from "./loop-guard.js";
 import { recallFacts, rememberFact, rememberFacts, retractFact, sourceLabel, type FactRecord, type FactResult } from "./facts.js";
-import { DecisionLedgerError, loadDecisions, noteResearch, openDecision, researchCheck, resolveDecision, saveDecisions, type Decision } from "./decisions.js";
+import { DecisionLedgerError, commitmentCheck, loadDecisions, noteCommitment, noteResearch, openDecision, researchCheck, resolveDecision, reviewDecision, saveDecisions, type Decision } from "./decisions.js";
 
 export interface ToolboxPorts {
   ledger(): Promise<unknown>;
@@ -97,11 +97,13 @@ function memoryRecord(call: ToolCall, out: ToolOutcome, r: FactResult | null): M
 }
 const IMPLEMENTED = new Set([
   "read_file", "list_files", "write_file", "exec", "remember_fact", "remember_facts", "retract_fact", "record_external_dependency", "withdraw_external_dependency", "recall_facts", "set_goal", "complete_goal", "list_goals",
-  "open_decision", "resolve_decision",
+  "open_decision", "resolve_decision", "review_decision",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
 ]);
 const EXPERIMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** Registry refusals that are infrastructure safety ceilings (fetch quotas, the daily inference ceiling), never budgets. */
+export const INFRA_CEILING = /^FLEET_(RESEARCH_QUOTA_[A-Z]+|COGNITION_BUDGET_EXHAUSTED)$/;
 
 const EXCERPT_CHARS = 1_800;
 
@@ -152,12 +154,14 @@ export class FounderToolbox {
     /** F1-FRESH-02 observability: one metadata-only record per memory write (and per failed recall); absent = none. */
     memoryTelemetry?: (record: MemoryTelemetry) => void;
     /**
-     * F2-A: web research is decision-driven — a research fetch must serve an open decision (decisions.ts) and is refused
-     * by this runtime when it is unframed, low-value, already gathered, past the founder's own stop condition or about a
-     * decided question; an execution fetch names its step. The production founder runtime sets it; absent = the legacy
-     * {url, purpose} behaviour the sealed evaluation instruments ran with.
+     * F2-A professional self-governance (decisions.ts), enforced by the founder's OWN runtime — FleetController is never
+     * asked: a research fetch must serve an open decision and is refused when it is unframed, low-value, already
+     * gathered, past the founder's own stop condition or about a decided question (an execution fetch names its step);
+     * own capital is committed (request_spend) only under a decided decision whose capital at risk the founder sized,
+     * and never beyond it. The production founder runtime sets it; absent = the legacy behaviour the sealed evaluation
+     * instruments ran with.
      */
-    decisionResearch?: boolean }) {
+    selfGovernance?: boolean }) {
     this.workspace = fs.realpathSync(o.workspaceDir);
     this.memory = fs.realpathSync(o.memoryDir);
   }
@@ -257,7 +261,7 @@ export class FounderToolbox {
           let purpose = str(a.purpose, 300) || str(a.evidenceGap, 300) || str(a.step, 300);
           let ledger: Decision[] | null = null;
           let framed: Decision | null = null;
-          if (this.o.decisionResearch) {
+          if (this.o.selfGovernance) {
             if (a.mode === "execution") {
               const step = str(a.step, 300);
               if (!step || step.trim().length < 5) return refuse("FLEET_BAD_REQUEST", "an execution fetch names the execution step it serves (step)");
@@ -404,12 +408,45 @@ export class FounderToolbox {
           saveDecisions(this.memory, ledger);
           return { name: call.name, ok: true, output: `decision ${r.decision.key} made: "${o.selected}". Goal ${id} opened for its next action (${o.nextAction}). Research on this question is closed — execute.` };
         }
+        case "review_decision": {
+          let ledger: Decision[];
+          try { ledger = loadDecisions(this.memory); } catch (e) { return refuse((e as DecisionLedgerError).code ?? "FLEET_DECISIONS_UNREADABLE", (e as Error).message); }
+          const r = reviewDecision(ledger, a);
+          if (!r.ok) return refuse(r.code, r.detail);
+          // MEASURE → LEARN → FORWARD: the reviewed step is closed with what happened; the next forward step is opened.
+          const o = r.decision.outcome!;
+          const review = r.decision.reviews.at(-1)!;
+          const goals = this.readJson<Array<Record<string, unknown>>>("goals.json", []);
+          const prev = goals.find((g) => g.id === r.previousGoalId && g.status === "open");
+          if (prev) {
+            prev.status = "complete";
+            prev.outcome = `${review.verdict === "corrected" ? "superseded by a correction" : "measured"}: ${review.actual}`.slice(0, 2000);
+            prev.completedAt = new Date().toISOString();
+          }
+          const id = `g${goals.length + 1}`;
+          goals.push({ id, title: `${review.verdict === "corrected" ? "Corrected" : "Forward"} ${r.decision.key}: ${o.nextAction}`.slice(0, 300),
+            rationale: `${review.learning}`.slice(0, 2000), status: "open", at: new Date().toISOString(), decision: r.decision.key });
+          o.goalId = id;
+          review.goalId = id;
+          this.writeJson("goals.json", goals.slice(-100));
+          saveDecisions(this.memory, ledger);
+          return { name: call.name, ok: true, output: review.verdict === "corrected"
+            ? `${r.decision.key} corrected on new evidence: "${review.previousPath}" → "${review.newPath}". Goal ${id} opened for the forward action (${o.nextAction}).`
+            : `${r.decision.key} confirmed: ${review.actual}. Goal ${id} opened for the next forward action (${o.nextAction}).` };
+        }
         case "check_ledger":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.ledger())) };
         case "request_spend": {
           const amountCents = Number(a.amountCents);
           const category = String(a.category);
           if (!Number.isSafeInteger(amountCents) || amountCents <= 0 || !["expense", "fee", "asset_acquisition", "conway_credits"].includes(category)) return refuse("FLEET_BAD_REQUEST", "amountCents and category required");
+          // F2-A: the founder risk-manages its own capital — its runtime commits only within the founder's own sizing.
+          let ledger: Decision[] | null = null;
+          if (this.o.selfGovernance) {
+            try { ledger = loadDecisions(this.memory); } catch (e) { return refuse((e as DecisionLedgerError).code ?? "FLEET_DECISIONS_UNREADABLE", (e as Error).message); }
+            const c = commitmentCheck(ledger, a, amountCents);
+            if (!c.ok) return refuse(c.code, c.detail);
+          }
           const r = await this.o.ports.spendOrder({
             idempotencyKey: `mind:${call.id}:${Date.now().toString(36)}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128),
             amountCents,
@@ -418,6 +455,12 @@ export class FounderToolbox {
             purpose: String(a.purpose ?? "").slice(0, 300),
             recoverableCents: Number.isSafeInteger(Number(a.recoverableCents)) ? Number(a.recoverableCents) : 0,
           });
+          // FleetController (the custody boundary) accepted or refused the order on its own rules; only an accepted order
+          // counts against the founder's own sizing.
+          if (ledger && (r as { ok?: unknown }).ok !== false) {
+            noteCommitment(ledger, String(a.decisionKey).trim(), amountCents);
+            saveDecisions(this.memory, ledger);
+          }
           return { name: call.name, ok: true, output: clip(JSON.stringify(r)) };
         }
         case "propose_knowledge":
@@ -488,7 +531,14 @@ export class FounderToolbox {
     } catch (err) {
       const code = (err as { code?: string }).code;
       const msg = err instanceof Error ? err.message : String(err);
-      if (/^FLEET_[A-Z_]+$/.test(msg)) return refuse(msg, "path must stay inside your workspace");
+      // Infrastructure ceilings (runaway, bug and abuse protection) are not budgets: say so, so a hit never reads as "use it up".
+      const ceiling = [code, msg].find((c): c is string => typeof c === "string" && INFRA_CEILING.test(c));
+      if (ceiling) {
+        return { name: call.name, ok: false, refused: ceiling, output: `INFRASTRUCTURE CEILING ${ceiling}: a safety limit against runaway loops, bugs and provider abuse — not a research budget or a target. `
+          + "Decide with the evidence you have; if one fact is still decisive, fetch it once the ceiling resets." };
+      }
+      // The workspace resolver throws bare codes; a controller refusal carries its own code and is reported as such.
+      if (/^FLEET_[A-Z_]+$/.test(msg) && code === undefined) return refuse(msg, "path must stay inside your workspace");
       return { name: call.name, ok: false, refused: typeof code === "string" && /^(FLEET|RESEARCH)_[A-Z_]+$/.test(code) ? code : "FLEET_TOOL_ERROR", output: `ERROR ${code ?? ""} ${msg.slice(0, 300)}` };
     }
     return refuse("FLEET_TOOL_NOT_AVAILABLE", "unknown");

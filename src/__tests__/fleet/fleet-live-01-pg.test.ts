@@ -346,7 +346,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       const economics = { cash: 9_000, genesisAllocation: 10_000 };
       // State as the R28 runtime leaves it: a sleep-only turn, a digest with R28 signals, and R28's tool names.
       const caps = capabilityView(await gw.capabilities(F.id, F.token), true);
-      const r28Tools = caps.tools.filter((t) => t !== "open_decision" && t !== "resolve_decision")
+      const r28Tools = caps.tools.filter((t) => !["open_decision", "resolve_decision", "review_decision"].includes(t))
         .map((t) => (t === "record_external_dependency" ? "request_owner_decision" : t === "withdraw_external_dependency" ? "withdraw_owner_request" : t)).sort();
       fs.writeFileSync(path.join(dirs.s, "mind-continuity.json"), JSON.stringify({ at: "2026-10-01T15:32:23.972Z", turn: 12, outcome: "sleep: Gumroad 62cbe1b7 still pending; awaiting approval.",
         tools: ["sleep"], wakeDigest: "0".repeat(64), capabilities: { sig: "1".repeat(64), tools: r28Tools } }));
@@ -375,9 +375,9 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       // 1: the first wake after the upgrade is FULL and names what changed — once.
       const first = await next();
       expect(first.slim).toBe(false);
-      expect(first.task).toMatch(/Your capabilities changed since your last turn\. Newly available: open_decision, record_external_dependency, resolve_decision, withdraw_external_dependency\. No longer available: request_owner_decision, withdraw_owner_request\./);
+      expect(first.task).toMatch(/Your capabilities changed since your last turn\. Newly available: open_decision, record_external_dependency, resolve_decision, review_decision, withdraw_external_dependency\. No longer available: request_owner_decision, withdraw_owner_request\./);
       expect(first.task).toContain("Your open goals are your execution path: take the next concrete step toward a sale.");
-      expect(first.task).toMatch(new RegExp(`Your survival position \\(FleetController's observation; the strategy is yours\\): survival equity ${await equity(F.id)}p`));
+      expect(first.task).toMatch(new RegExp(`Your survival position \\(FleetController's observation; the risk management is yours\\): survival equity ${await equity(F.id)}p`));
       expect(line(first.task)).toEqual([`External dependency ${legacyId.slice(0, 8)} (kyc): the action "${ACTION}" is unavailable for now. This blocks only that action — not you, your goals or other work: pursue alternatives (another marketplace, direct sales that need no new account, another product, service, niche or venture).`]);
       expect(first.task).not.toMatch(OWNER_DEPENDENCY);
       // 2: idle wakes are slim (the full packet already carried the next move) — no research happens because of idleness.
@@ -392,7 +392,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       const recheck = await next(); // …then the same idle state is re-checked with one push toward its next move
       expect(recheck).toMatchObject({ slim: false, idle: true });
       expect(recheck.task).toContain("Idle wake: your open goals are your execution path");
-      expect(recheck.task).toMatch(/runway ≈ 7 days at that burn\. The less capital you have, the more selective you are/);
+      expect(recheck.task).toMatch(/runway ≈ 7 days at that burn\. Runway changes which opportunities are rational for you .* never your standard/);
       expect(recheck.task).not.toMatch(/revenue-first|discovery floor|allowance/);
       expect(line(recheck.task)).toHaveLength(1); // the dependency stays visible as one unavailable action
       expect(mind.routing.idleNudges).toEqual({ decide: 0, execute: 1, opportunity: 0 });

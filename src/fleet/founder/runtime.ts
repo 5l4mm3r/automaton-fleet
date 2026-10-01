@@ -414,8 +414,9 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
           ports: client,
           stateDir: stateNsDir,
           log,
-          // F2-A: research is decision-driven (decisions.ts): framed by an open decision, bounded by the founder's own stop.
-          toolbox: new FounderToolbox({ manifest: ctx.manifest, workspaceDir, memoryDir, ports: client, loopGuard, decisionResearch: true,
+          // F2-A: professional self-governance (decisions.ts): research serves an open decision within the founder's own stop;
+          // own capital is committed only within the founder's own risk sizing. FleetController approves none of it.
+          toolbox: new FounderToolbox({ manifest: ctx.manifest, workspaceDir, memoryDir, ports: client, loopGuard, selfGovernance: true,
             // F1-FRESH-02: counts and codes only (MemoryTelemetry), through the same redacted line logger as every event.
             memoryTelemetry: (m) => log("founder_memory_write", { ...m, runtimeCommit: ctx.release.commit, buildId: ctx.release.buildId }) }),
           routed: { memoryDir, workspaceDir, manifest: ctx.manifest, loopGuard },

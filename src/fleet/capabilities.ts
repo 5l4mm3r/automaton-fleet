@@ -74,6 +74,7 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   withdraw_external_dependency: "planning",
   open_decision: "planning",
   resolve_decision: "planning",
+  review_decision: "planning",
   get_plan: "planning",
   orchestrator_status: "planning",
   // private memory

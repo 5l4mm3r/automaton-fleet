@@ -25,10 +25,10 @@ import {
   FounderMind, MAX_IDLE_SKIP, RENUDGE_FIRST, RENUDGE_MAX, dependencyLines, parseDependencies, slimWakePacket, type MindPorts,
 } from "../../fleet/founder/mind.js";
 import {
-  DECISION_LIMITS, DecisionLedgerError, OPPORTUNITY_CYCLE, decisionLines, idleKind, idleTask, loadDecisions, nextMoveLine, openDecision, parseSurvival,
-  researchCheck, resolveDecision, survivalLine, type Decision, type SurvivalView,
+  CONSTANT_STANDARD, DECISION_LIMITS, DecisionLedgerError, OPPORTUNITY_CYCLE, commitmentCheck, decisionLines, idleKind, idleTask, loadDecisions, nextMoveLine, openDecision,
+  parseSurvival, researchCheck, resolveDecision, reviewDecision, survivalLine, type Decision, type SurvivalView,
 } from "../../fleet/founder/decisions.js";
-import { FounderToolbox } from "../../fleet/founder/toolbox.js";
+import { FounderToolbox, INFRA_CEILING } from "../../fleet/founder/toolbox.js";
 import { LoopGuard } from "../../fleet/founder/loop-guard.js";
 import { FOUNDER_MANIFEST_V2, decideTool, manifestSha256 } from "../../fleet/capabilities.js";
 import {
@@ -61,12 +61,13 @@ const OWNER_DEPENDENCY = /owner decides|owner approv|the owner can enable|ask th
 /** Founder-facing words that make research an entitlement or a pastime rather than a decision (the corrected doctrine). */
 const BROWSING = /discovery allowance|allowance (today|renews|is spent)|use (today's|your) (allowance|budget)|look for (interesting )?trends|explore trends|browse for|research current demand;|scroll/i;
 
-const decisionArgs = (o: Record<string, unknown> = {}) => ({ key: "tracker-demand", purpose: "find_opportunity",
+const decisionArgs = (o: Record<string, unknown> = {}) => ({ key: "tracker-demand", purpose: "find_opportunity", objective: "First £200 of tracker revenue within 30 days",
   question: "Is there enough demand for a UK landlord compliance tracker at £9 to launch it?", hypothesis: "Landlord templates sell steadily on marketplaces at £5–£15",
   options: ["direct checkout page", "Etsy listing", "Notion template marketplace"], stopAfterFetches: 2, stopWhen: "two independent signals of actual purchases", ...o });
 const resolveArgs = (o: Record<string, unknown> = {}) => ({ key: "tracker-demand", selected: "direct checkout page", ranking: ["direct checkout page", "Etsy listing"],
   rejected: [{ option: "Notion template marketplace", reason: "no purchase evidence for compliance templates" }], rationale: "Two marketplaces show steady sales of similar trackers at £7–£12.",
-  expectedOutcome: "First sale within 14 days at £9", nextAction: "Publish the tracker on a self-hosted checkout page", ...o });
+  expectedOutcome: "First sale within 14 days at £9", capitalAtRiskPence: 500, downside: "At most 500p of hosting and listing costs; fully reversible",
+  invalidatedBy: "No sale after 50 targeted visitors", nextAction: "Publish the tracker on a self-hosted checkout page", ...o });
 const framed = (o: Record<string, unknown> = {}) => ({ url: "https://market.example/landlord", mode: "research", decisionKey: "tracker-demand",
   evidenceGap: "How many landlord compliance templates sold last month on Etsy?", expectedValue: "Low sales would rule the tracker out at £9", informationValue: "high", ...o });
 
@@ -77,14 +78,16 @@ describe("F2-A charter v3 and founder-facing text", () => {
     expect(FOUNDER_CHARTER).toMatch(/no one approves your business choices: you choose niches, products, services, channels, marketing, experiments, pivots and new ventures yourself/);
     expect(FOUNDER_CHARTER).toMatch(/FleetController is your bank: it decides spending and capital by policy/);
     expect(FOUNDER_CHARTER).toMatch(/The owner maintains the fleet, is not your manager and is not consulted on ordinary business/);
-    expect(FOUNDER_CHARTER).toMatch(/target → evidence → decision → execution → sales → learning → next decision\. Never search → search → search\./);
+    expect(FOUNDER_CHARTER).toMatch(/Your standard at any runway: pinpoint → decide → execute → measure → learn → forward\. Never search → search → search or activity for its own sake; step back only when new evidence breaks an assumption, then go forward\./);
     expect(FOUNDER_CHARTER).toMatch(/Every move has economic purpose\. Research only to find a viable niche, product, service or business gap you can bridge, or to expand a viable venture/);
     expect(FOUNDER_CHARTER).toMatch(/Prefer purchase evidence \(sales velocity, rankings, search demand, prices, reviews, competition\) over popularity/);
     expect(FOUNDER_CHARTER).toMatch(/Once you know enough for the next economically meaningful move, resolve_decision and execute; never re-research a decided question/);
-    expect(FOUNDER_CHARTER).toMatch(/Your runway is yours to manage/);
-    expect(FOUNDER_CHARTER).toMatch(/Less capital means more precision .* never paralysis, blind bets or activity for its own sake/);
+    expect(FOUNDER_CHARTER).toMatch(/You manage your own risk: capital at risk, downside, concentration, opportunity cost, runway, commitments and expected return; size each commitment and name what would invalidate it first\./);
+    expect(FOUNDER_CHARTER).toMatch(/Runway changes which opportunity is rational, never your precision: no casual research when rich, no panic when poor\./);
+    expect(FOUNDER_CHARTER).toMatch(/rank candidates by your own judgement/);
+    expect(FOUNDER_CHARTER).toMatch(/all spending is a structured request that FleetController executes under its custody rules/);
     expect(FOUNDER_CHARTER).toMatch(/A blocked dependency blocks only that one action, never you/);
-    expect(FOUNDER_CHARTER).not.toMatch(/allowance|14 days|% of|discover and research opportunities/);
+    expect(FOUNDER_CHARTER).not.toMatch(/allowance|14 days|30 days|% of|discover and research opportunities|quota|searches|weight|score/i);
     // The hard rules are unchanged (no new authority), and the length stays bounded (every token is paid on every call).
     expect(FOUNDER_CHARTER).toMatch(/you cannot hold keys, sign, pay, transfer value, create sandboxes, modify your own code, install tools or reproduce/);
     expect(FOUNDER_CHARTER).toMatch(/Researching a market is not permission to trade it/);
@@ -141,9 +144,9 @@ describe("F2-A charter v3 and founder-facing text", () => {
     expect(op.properties.purpose.enum).toEqual(["find_opportunity", "expand_venture"]);
     expect(op.properties.options.maxItems).toBe(5);
     expect(op.properties.stopAfterFetches.maximum).toBe(8);
-    expect(op.required).toEqual(["key", "purpose", "question", "hypothesis", "stopAfterFetches", "stopWhen"]);
+    expect(op.required).toEqual(["key", "purpose", "objective", "question", "hypothesis", "stopAfterFetches", "stopWhen"]);
     const res = FOUNDER_TOOLS.find((t) => t.name === "resolve_decision")!;
-    expect((res.parameters as { required: string[] }).required).toEqual(["key", "selected", "rationale", "expectedOutcome", "nextAction"]);
+    expect((res.parameters as { required: string[] }).required).toEqual(["key", "selected", "rationale", "expectedOutcome", "capitalAtRiskPence", "downside", "invalidatedBy", "nextAction"]);
     // No new authority: every new or renamed tool is 'planning' (already granted) and the manifest digest is unchanged.
     for (const name of ["record_external_dependency", "withdraw_external_dependency", "open_decision", "resolve_decision"]) {
       expect(decideTool(name, FOUNDER_MANIFEST_V2)).toMatchObject({ allowed: true, capability: "planning" });
@@ -162,8 +165,8 @@ describe("F2-A charter v3 and founder-facing text", () => {
     expect(writeTargets(V26_SQL)).toEqual(["fleet_owner_requests"]);
     expect(FLEET_PG_SCHEMA_VERSION).toBe(26);
     expect(PG_MIGRATIONS.at(-1)).toMatchObject({ version: 26, name: "f2a_action_scoped_dependencies_survival_observation" });
-    // Spending is still a structured request FleetController decides by policy.
-    expect(FOUNDER_TOOLS.find((t) => t.name === "request_spend")!.description).toMatch(/FleetController decides by policy/);
+    // Own capital: the founder's risk judgement; FleetController is the custodian that protects treasury/shared/restricted capital.
+    expect(FOUNDER_TOOLS.find((t) => t.name === "request_spend")!.description).toMatch(/the risk judgement is yours.*FleetController is the custodian: it executes orders only within its custody rules, which protect treasury, shared, restricted and protected capital/);
   });
 });
 
@@ -259,7 +262,7 @@ describe("F2-A decision-driven research (the founder's own ledger)", () => {
     expect(openDecision(ledger, decisionArgs({ key: "tracker-demand-2", question: "is there ENOUGH demand for a UK landlord compliance tracker at £9 to launch it" })))
       .toMatchObject({ ok: false, code: "FLEET_DECISION_ALREADY_MADE" });
     expect(resolveDecision(ledger, resolveArgs())).toMatchObject({ ok: false, code: "FLEET_DECISION_ALREADY_MADE" });
-    expect(decisionLines(ledger)).toEqual([`Decided tracker-demand: "direct checkout page" (rejected: Notion template marketplace — no purchase evidence for compliance templates). Next action: Publish the tracker on a self-hosted checkout page. Research on this question is closed: execute.`]);
+    expect(decisionLines(ledger)).toEqual([`Decided tracker-demand: "direct checkout page" (rejected: Notion template marketplace — no purchase evidence for compliance templates). At risk: 500p of your capital (0p committed; downside: At most 500p of hosting and listing costs; fully reversible); invalidated if: No sale after 50 targeted visitors. Next action: Publish the tracker on a self-hosted checkout page. Research on this question is closed: execute, measure, then review_decision.`]);
     // With the decision made and an execution goal open, an idle founder's move is execution, not another search.
     expect(idleKind(ledger, 1)).toBe("execute");
     expect(idleKind([], 0)).toBe("opportunity");
@@ -276,17 +279,19 @@ describe("F2-A decision-driven research (the founder's own ledger)", () => {
 
 // ─────────────────────────────────────────────── the production toolbox (decision-framed web_fetch)
 
-function toolbox(o: { decisionResearch?: boolean } = {}) {
+function toolbox(o: { selfGovernance?: boolean; spend?: (order: Record<string, unknown>) => Promise<Record<string, unknown>>; fetchError?: string } = {}) {
   const root = tmp();
   const dirs = { w: path.join(root, "w"), m: path.join(root, "m") };
   for (const d of Object.values(dirs)) fs.mkdirSync(d, { recursive: true });
   const calls = { fetch: [] as Array<{ url: string; purpose: string }>, spend: 0, other: 0 };
   let n = 0;
-  const box = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: dirs.w, memoryDir: dirs.m, loopGuard: new LoopGuard(), decisionResearch: o.decisionResearch ?? true, ports: {
-    ledger: async () => { calls.other++; return {}; }, spendOrder: async () => { calls.spend++; return {}; }, proposeKnowledge: async () => { calls.other++; return {}; },
+  const box = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: dirs.w, memoryDir: dirs.m, loopGuard: new LoopGuard(), selfGovernance: o.selfGovernance ?? true, ports: {
+    ledger: async () => { calls.other++; return {}; }, spendOrder: async (order: Record<string, unknown>) => { calls.spend++; return o.spend ? o.spend(order) : { ok: true, order: { status: "reserved" } }; },
+    proposeKnowledge: async () => { calls.other++; return {}; },
     knowledge: async () => [], requestIdentityFact: async () => { calls.other++; return {}; },
     researchFetch: async (p: { url: string; purpose: string }) => {
       calls.fetch.push(p);
+      if (o.fetchError) throw Object.assign(new Error(o.fetchError), { code: o.fetchError });
       n++;
       return { attemptId: `att-${n}`, requestedUrl: p.url, finalUrl: p.url, fetchedAt: `2026-10-01T00:0${n}:00Z`, status: 200, contentType: "text/html", bytes: 100, truncated: false,
         sha256: crypto.createHash("sha256").update(p.url).digest("hex"), title: "Marketplace page", text: "42 sold in the last month at £8.99", links: [] };
@@ -338,7 +343,7 @@ describe("F2-A research through the founder's own runtime", () => {
       output: expect.stringMatching(/Research on this question is closed — execute it/) });
     expect(await t.run("open_decision", decisionArgs({ key: "tracker-again" }))).toMatchObject({ ok: false, refused: "FLEET_DECISION_ALREADY_MADE" });
     expect(t.calls.fetch).toHaveLength(2);
-    expect(t.calls.spend).toBe(0); // (14) deciding spends nothing: capital moves only through FleetController's spend policy
+    expect(t.calls.spend).toBe(0); // deciding spends nothing: capital moves only through an explicit, self-sized commitment
   });
 
   it("(12) a short runway changes nothing about permission: the founder's runtime never sees runway, and FleetController has no veto on research", async () => {
@@ -348,19 +353,19 @@ describe("F2-A research through the founder's own runtime", () => {
     expect(await t.run("web_fetch", framed())).toMatchObject({ ok: true });
     // The survival line informs selectivity — it is never a refusal, a ration or a deadline.
     const low = survivalLine(SURVIVAL({ survivalEquityCents: 120, burnPerDayCents: 40, runwayDays: 3 }));
-    expect(low).toMatch(/^Your survival position \(FleetController's observation; the strategy is yours\): survival equity 120p; inference 12p today, ≈ 40p\/day over 7 days; runway ≈ 3 days at that burn\./);
-    expect(low).toMatch(/The less capital you have, the more selective you are — fewer, higher-value facts, the shortest credible path to revenue, enough kept to execute — never idle, never blind/);
+    expect(low).toMatch(/^Your survival position \(FleetController's observation; the risk management is yours\): survival equity 120p; inference 12p today, ≈ 40p\/day over 7 days; runway ≈ 3 days at that burn\./);
+    expect(low).toContain(CONSTANT_STANDARD);
     expect(low).not.toMatch(/stop|may not|must not|refus|allowance|only spend/i);
     expect(parseSurvival({ survivalEquityCents: 120, inferenceTodayCents: 12, burnPerDayCents: 40, runwayDays: null })).toMatchObject({ runwayDays: null });
     expect(parseSurvival(LEGACY_ALLOWANCE)).toBeNull(); // a legacy allowance is not a survival observation
   });
 
   it("the sealed evaluation instruments keep their recorded behaviour (decision framing is the production runtime's setting)", async () => {
-    const legacy = toolbox({ decisionResearch: false });
+    const legacy = toolbox({ selfGovernance: false });
     expect(await legacy.run("web_fetch", { url: "https://x.example/p", purpose: "evaluate the candidate" })).toMatchObject({ ok: true });
     expect(legacy.calls.fetch).toEqual([{ url: "https://x.example/p", purpose: "evaluate the candidate" }]);
     // The production founder runtime turns it on.
-    expect(fs.readFileSync(path.resolve("src/fleet/founder/runtime.ts"), "utf8")).toMatch(/new FounderToolbox\(\{[^)]*decisionResearch: true/);
+    expect(fs.readFileSync(path.resolve("src/fleet/founder/runtime.ts"), "utf8")).toMatch(/new FounderToolbox\(\{[^)]*selfGovernance: true/);
   });
 });
 
@@ -395,7 +400,7 @@ function rig(o: { deps?: () => unknown; survival?: () => SurvivalView | null; ex
     },
   };
   const loopGuard = new LoopGuard();
-  const toolbox = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: dirs.w, memoryDir: dirs.m, loopGuard, decisionResearch: true, ports: {
+  const toolbox = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: dirs.w, memoryDir: dirs.m, loopGuard, selfGovernance: true, ports: {
     ledger: async () => ({}), spendOrder: async () => { spend.n++; return {}; }, proposeKnowledge: async () => ({}), knowledge: async () => [], requestIdentityFact: async () => ({}),
     ownerRequestCreate: async () => ({ ok: true }), ownerRequestWithdraw: async () => ({ ok: true }),
     researchFetch: async (p: { url: string; purpose: string }) => {
@@ -480,13 +485,13 @@ describe("F2-A dependencies in the founder loop", () => {
   it("R28 semantic capability-change detection is preserved: the upgrade names the new and renamed tools exactly once", async () => {
     const r = rig({ deps: () => ({ ok: true, requests: [gumroadDep()] }) });
     const current = capabilityView(CAPS(), true).tools;
-    const r28Tools = current.filter((t) => t !== "open_decision" && t !== "resolve_decision")
+    const r28Tools = current.filter((t) => !["open_decision", "resolve_decision", "review_decision"].includes(t))
       .map((t) => (t === "record_external_dependency" ? "request_owner_decision" : t === "withdraw_external_dependency" ? "withdraw_owner_request" : t)).sort();
     fs.writeFileSync(path.join(r.dirs.s, "mind-continuity.json"), JSON.stringify({ at: "2026-10-01T15:32:23.972Z", turn: 12, outcome: "sleep: Gumroad 62cbe1b7 still pending.",
       tools: ["sleep"], wakeDigest: "0".repeat(64), capabilities: { sig: "1".repeat(64), tools: r28Tools } }));
     const [first, second] = await seq(r, 2);
     expect(first.slim).toBe(false);
-    expect(first.task).toMatch(/Your capabilities changed since your last turn\. Newly available: open_decision, record_external_dependency, resolve_decision, withdraw_external_dependency\. No longer available: request_owner_decision, withdraw_owner_request\./);
+    expect(first.task).toMatch(/Your capabilities changed since your last turn\. Newly available: open_decision, record_external_dependency, resolve_decision, review_decision, withdraw_external_dependency\. No longer available: request_owner_decision, withdraw_owner_request\./);
     expect(first.task).toContain("This blocks only that action");
     expect(second.slim).toBe(true);
     expect(second.task).not.toMatch(/capabilit/i);
@@ -501,7 +506,7 @@ describe("F2-A idle semantics: the next economically meaningful move, never a br
     const first = await r.next();
     expect(first).toMatchObject({ slim: false, opportunity: true });
     expect(first.task).toContain(`No open decision and no execution path. ${OPPORTUNITY_CYCLE}`);
-    expect(first.task).toMatch(/Your survival position \(FleetController's observation; the strategy is yours\)/);
+    expect(first.task).toMatch(/Your survival position \(FleetController's observation; the risk management is yours\)/);
     // A "new day" (today's inference back to 0) and a legacy allowance object from an older controller change nothing.
     s = SURVIVAL({ inferenceTodayCents: 0 });
     extra.discovery = { allowed: true, budgetCents: 300, spentTodayCents: 0, runwayDays: 400, reason: "allowed" };
@@ -521,7 +526,7 @@ describe("F2-A idle semantics: the next economically meaningful move, never a br
       const r = rig({ goals: [], survival: () => SURVIVAL({ runwayDays, survivalEquityCents: runwayDays === 3 ? 120 : 9_188 }), extraStatus: () => ({ discovery: LEGACY_ALLOWANCE }) });
       const [first] = await seq(r, 1);
       expect(first.opportunity, String(runwayDays)).toBe(true);
-      expect(first.task).toMatch(runwayDays === null ? /≈ 40p\/day over 7 days\. The less capital/ : new RegExp(`runway ≈ ${runwayDays} days at that burn`));
+      expect(first.task).toMatch(runwayDays === null ? /≈ 40p\/day over 7 days\. Runway changes which opportunities/ : new RegExp(`runway ≈ ${runwayDays} days at that burn`));
       expect(first.task).not.toMatch(/revenue-first|discovery floor|may not research|allowance/);
       expect((await fullAt(r, 5)).map((i) => i + 1)).toEqual([5]); // the same idle schedule at any runway
     }
@@ -537,11 +542,11 @@ describe("F2-A idle semantics: the next economically meaningful move, never a br
     } });
     const [p1, p2, p3, p4, p5] = await seq(r, 5);
     expect(p1.opportunity).toBe(true);
-    expect(p2.task).toMatch(/Open decision tracker-demand \(find_opportunity\): "Is there enough demand for a UK landlord compliance tracker at £9 to launch it\?" .* Shortlist: direct checkout page \| Etsy listing \| Notion template marketplace\. Research: 0\/2 fetch\(es\)/);
+    expect(p2.task).toMatch(/Open decision tracker-demand \(find_opportunity, objective: First £200 of tracker revenue within 30 days\): "Is there enough demand for a UK landlord compliance tracker at £9 to launch it\?" .* Shortlist: direct checkout page \| Etsy listing \| Notion template marketplace\. Research: 0\/2 fetch\(es\)/);
     expect(p2.task).toMatch(/Do you know enough to make the next economically meaningful move\? If yes, resolve_decision and execute; if no, fetch the ONE highest-value missing fact\./);
     expect(p2.opportunity).toBe(false); // an open decision is the move: no new cycle on top of it
     expect(p3.task).toMatch(/Research: 1\/2 fetch\(es\) .*already gathered: "How many landlord compliance templates sold last month on Etsy\?" \(attemptId att-1\)/);
-    expect(p4.task).toContain(`Decided tracker-demand: "direct checkout page" (rejected: Notion template marketplace — no purchase evidence for compliance templates). Next action: Publish the tracker on a self-hosted checkout page [goal g1]. Research on this question is closed: execute.`);
+    expect(p4.task).toContain(`Decided tracker-demand: "direct checkout page" (rejected: Notion template marketplace — no purchase evidence for compliance templates). At risk: 500p of your capital (0p committed; downside: At most 500p of hosting and listing costs; fully reversible); invalidated if: No sale after 50 targeted visitors. Next action: Publish the tracker on a self-hosted checkout page [goal g1]. Research on this question is closed: execute, measure, then review_decision.`);
     expect(p4.task).toContain("Your open goals are your execution path: take the next concrete step toward a sale.");
     expect(p4.opportunity).toBe(false);
     expect(p4.body.objective).toEqual([expect.objectContaining({ id: "g1", title: "Execute tracker-demand: Publish the tracker on a self-hosted checkout page" })]);
@@ -570,6 +575,178 @@ describe("F2-A idle semantics: the next economically meaningful move, never a br
     expect(p2.body.objective.map((g: { id: string }) => g.id)).toEqual(["g1", "g2"]); // the original goal and the execution goal
     expect(deps[0].status).toBe("pending"); // nothing was decided by, or asked of, the owner
     deps = [gumroadDep()];
+  });
+});
+
+describe("F2-A professional self-governance (constitutional, owner-resolved 2026-10-01)", () => {
+  /** Every parameter name anywhere in a JSON schema. */
+  const paramNames = (schema: unknown): string[] => {
+    if (!schema || typeof schema !== "object") return [];
+    const o = schema as Record<string, unknown>;
+    const props = (o.properties ?? {}) as Record<string, unknown>;
+    return [...Object.keys(props), ...Object.values(props).flatMap(paramNames), ...paramNames(o.items)];
+  };
+
+  it("(1, 2) opportunity ranking and selection are the founder's: no Fleet-wide weights or scores exist, and the ledger stores the founder's own choice verbatim", async () => {
+    const decisions = await import("../../fleet/founder/decisions.js");
+    expect(Object.keys(decisions).filter((k) => /weight|score|rubric|formula/i.test(k))).toEqual([]);
+    for (const t of [...FOUNDER_TOOLS, ...FOUNDER_ROUTED_TOOLS, ...FOUNDER_EXPERIMENT_TOOLS]) {
+      expect(paramNames(t.parameters).filter((k) => /weight|score/i.test(k)), t.name).toEqual([]);
+    }
+    expect(V26_SQL.replace(/--[^\n]*/g, "")).not.toMatch(/weight|score/i);
+    // The founder ranks the direct page first but selects the cheapest path for its wallet: stored exactly as given.
+    const t = toolbox();
+    await t.run("open_decision", decisionArgs());
+    const ranking = ["direct checkout page", "Etsy listing", "Notion template marketplace"];
+    expect(await t.run("resolve_decision", resolveArgs({ ranking, selected: "Notion template marketplace", rationale: "Lowest capital at risk for my current wallet; demand is adequate.",
+      capitalAtRiskPence: 0, rejected: [] }))).toMatchObject({ ok: true });
+    expect(loadDecisions(t.dirs.m)[0].outcome).toMatchObject({ selected: "Notion template marketplace", ranking });
+    // Nothing was asked of FleetController to rank, select or approve.
+    expect([t.calls.fetch.length, t.calls.spend, t.calls.other]).toEqual([0, 0, 0]);
+  });
+
+  it("(6, 7) the founder sizes its own downside before committing its own capital; its runtime holds it to that sizing; FleetController is not asked", async () => {
+    const t = toolbox();
+    await t.run("open_decision", decisionArgs());
+    // No sizing, no decision: a resolve without capital at risk, downside and invalidation is refused.
+    expect(await t.run("resolve_decision", resolveArgs({ capitalAtRiskPence: undefined }))).toMatchObject({ ok: false, refused: "FLEET_RISK_UNSIZED" });
+    expect(await t.run("resolve_decision", resolveArgs({ invalidatedBy: undefined }))).toMatchObject({ ok: false, refused: "FLEET_RISK_UNSIZED" });
+    const spend = (amountCents: number, decisionKey?: string) => t.run("request_spend", { amountCents, category: "expense", destinationId: "dst_hosting", purpose: "checkout hosting", ...(decisionKey ? { decisionKey } : {}) });
+    // Committing own capital outside a decided, sized decision is refused by the founder's own runtime.
+    expect(await spend(300)).toMatchObject({ ok: false, refused: "FLEET_COMMITMENT_UNDECIDED" });
+    expect(await spend(300, "tracker-demand")).toMatchObject({ ok: false, refused: "FLEET_COMMITMENT_UNDECIDED" }); // still open
+    expect([t.calls.spend, t.calls.other]).toEqual([0, 0]); // every risk decision so far stayed with the founder
+    await t.run("resolve_decision", resolveArgs()); // 500p at risk, sized by the founder
+    expect(await spend(300, "tracker-demand")).toMatchObject({ ok: true });
+    expect(await spend(300, "tracker-demand")).toMatchObject({ ok: false, refused: "FLEET_EXPOSURE_EXCEEDED",
+      output: expect.stringMatching(/you sized tracker-demand at 500p of capital at risk and have committed 300p: 300p more exceeds your own limit/) });
+    expect(await spend(200, "tracker-demand")).toMatchObject({ ok: true });
+    expect(t.calls.spend).toBe(2); // only the two commitments within the founder's own sizing reached the custodian
+    expect(loadDecisions(t.dirs.m)[0].outcome).toMatchObject({ capitalAtRiskPence: 500, committedPence: 500 });
+  });
+
+  it("(8) FleetController still protects treasury, shared, restricted and protected capital: self-governance never bypasses custody", async () => {
+    // A commitment within the founder's sizing still goes through the custodian, which may refuse it on its own rules.
+    const t = toolbox({ spend: async () => { throw Object.assign(new Error("FLEET_PROTECTED_CAPITAL"), { code: "FLEET_PROTECTED_CAPITAL" }); } });
+    await t.run("open_decision", decisionArgs());
+    await t.run("resolve_decision", resolveArgs());
+    expect(await t.run("request_spend", { amountCents: 300, category: "expense", destinationId: "dst_hosting", purpose: "checkout hosting", decisionKey: "tracker-demand" }))
+      .toMatchObject({ ok: false, refused: "FLEET_PROTECTED_CAPITAL", output: expect.stringMatching(/^ERROR FLEET_PROTECTED_CAPITAL/) });
+    expect(loadDecisions(t.dirs.m)[0].outcome).toMatchObject({ committedPence: 0 }); // a refused order commits nothing
+    // The registry's custody checks are intact and defined once (no later migration replaced them) — and v26 touches none.
+    const all = PG_MIGRATIONS.map((m) => m.sql).join("\n");
+    expect(all.match(/FUNCTION fleet_order_hard_check\(/g)).toHaveLength(1);
+    const hard = all.slice(all.indexOf("FUNCTION fleet_order_hard_check("), all.indexOf("END $$;", all.indexOf("FUNCTION fleet_order_hard_check(")));
+    for (const code of ["FLEET_PROTECTED_CAPITAL", "FLEET_INSUFFICIENT_ALLOCATION", "FLEET_INSUFFICIENT_TREASURY", "FLEET_DESTINATION_NOT_ALLOWED", "FLEET_SPENDING_FROZEN", "FLEET_AGENT_HELD"]) {
+      expect(hard, code).toContain(code);
+    }
+    expect(V26_SQL).not.toMatch(/api_spend_request|fleet_order_|fleet_ledger_post|payment|treasury|obligation|reserve/i);
+    // Fleet / shared capital (experiments) stays FleetController's to assess: the founder never approves or resizes it.
+    expect(FOUNDER_EXPERIMENT_TOOLS.find((x) => x.name === "propose_experiment")!.description).toMatch(/FleetController then decides the evidence level, the budget .* and never lets you approve or resize it/);
+  });
+
+  it("(3, 4, 5) the same professional discipline at any runway: no broader research when rich, no panic when poor, identical information-value refusals", async () => {
+    const flow = (runwayDays: number) => rig({ goals: [], survival: () => SURVIVAL({ runwayDays, survivalEquityCents: runwayDays > 100 ? 900_000 : 80 }), reply: (n) => {
+      if (n === 1) return [{ id: "a", name: "open_decision", arguments: decisionArgs() }, { id: "a2", name: "sleep", arguments: { reason: "x" } }];
+      if (n === 2) return [{ id: "b", name: "web_fetch", arguments: framed({ url: "https://x.example/font", evidenceGap: "Font of the competitor page", informationValue: "low" }) },
+        { id: "b2", name: "web_fetch", arguments: framed() }, { id: "b3", name: "sleep", arguments: { reason: "x" } }];
+      if (n === 3) return [{ id: "c", name: "web_fetch", arguments: framed({ url: "https://x.example/p2", evidenceGap: "Top-5 tracker prices" }) },
+        { id: "c2", name: "web_fetch", arguments: framed({ url: "https://x.example/p3", evidenceGap: "One more marketplace" }) }, { id: "c3", name: "sleep", arguments: { reason: "x" } }];
+      return [{ id: `s${n}`, name: "sleep", arguments: { reason: "x" } }];
+    } });
+    const rich = flow(5_000);
+    const poor = flow(2);
+    const a = await seq(rich, 12);
+    const b = await seq(poor, 12);
+    // Same fetches (low value refused, stop condition honoured), same packet schedule, same moves.
+    expect(rich.fetches.map((f) => f.url)).toEqual(["https://market.example/landlord", "https://x.example/p2"]);
+    expect(poor.fetches.map((f) => f.url)).toEqual(rich.fetches.map((f) => f.url));
+    expect(a.map((p) => [p.slim, p.idle, p.opportunity])).toEqual(b.map((p) => [p.slim, p.idle, p.opportunity]));
+    for (const p of [...a, ...b].filter((x) => !x.slim)) {
+      expect(p.task).toContain(CONSTANT_STANDARD);
+      expect(p.task).not.toMatch(/urgent|emergency|hurry|panic mode|revenue-only|explore freely|plenty of runway/i);
+    }
+    // Only the figures differ: the guidance is word-for-word the same at 2 and 5 000 days.
+    const strip = (t: string) => t.replace(/survival equity \d+p/g, "").replace(/runway ≈ \d+ days/g, "");
+    expect(strip(a[0].task)).toBe(strip(b[0].task));
+  });
+
+  it("(9, 10) quota availability is never a reason to research; the ceilings stay, as infrastructure failsafes only", async () => {
+    // A status reporting plenty of unused quota and inference ceiling changes nothing the founder is asked to do.
+    const quiet = rig({ goals: [] });
+    const loud = rig({ goals: [], extraStatus: () => ({ dailyBudgetCents: 100_000, spentTodayCents: 0, research: { founderHourlyRemaining: 60, founderDailyRemaining: 300 } }) });
+    const q = await seq(quiet, 10);
+    const l = await seq(loud, 10);
+    expect(l.map((p) => [p.slim, p.idle])).toEqual(q.map((p) => [p.slim, p.idle]));
+    expect([...loud.fetches, ...quiet.fetches]).toEqual([]);
+    for (const p of l) expect(p.task).not.toMatch(/quota|ceiling|remaining|searches|budget/i);
+    // No founder-facing text mentions quotas or ceilings as something to use.
+    const texts = [FOUNDER_CHARTER, FOUNDER_ROUTED_ADDENDUM, ...PACKET_POLICY, OPPORTUNITY_CYCLE, CONSTANT_STANDARD,
+      ...[...FOUNDER_TOOLS, ...FOUNDER_ROUTED_TOOLS, ...FOUNDER_EXPERIMENT_TOOLS].map((t) => `${t.description} ${JSON.stringify(t.parameters)}`)];
+    for (const text of texts) expect(text).not.toMatch(/quota|ceiling|searches (per|a) day|fetches (per|a) day|daily budget/i);
+    // The ceilings themselves remain (unchanged by v26), and a hit reads as a safety limit, never a budget.
+    const all = PG_MIGRATIONS.map((m) => m.sql).join("\n");
+    for (const re of [/founder_hourly\s+integer\s+NOT NULL DEFAULT 60/, /founder_daily\s+integer\s+NOT NULL DEFAULT 300/, /default_daily_budget_cents/, /'FLEET_COGNITION_BUDGET_EXHAUSTED'/]) expect(all).toMatch(re);
+    expect(V26_SQL).not.toMatch(/fleet_research_policy|fleet_cognition_policy|fleet_founder_cognition|fleet_founder_research/);
+    for (const code of ["FLEET_RESEARCH_QUOTA_HOURLY", "FLEET_RESEARCH_QUOTA_DAILY", "FLEET_COGNITION_BUDGET_EXHAUSTED"]) expect(INFRA_CEILING.test(code), code).toBe(true);
+    const t = toolbox({ fetchError: "FLEET_RESEARCH_QUOTA_DAILY" });
+    await t.run("open_decision", decisionArgs());
+    const hit = await t.run("web_fetch", framed());
+    expect(hit).toMatchObject({ ok: false, refused: "FLEET_RESEARCH_QUOTA_DAILY" });
+    expect(hit.output).toMatch(/^INFRASTRUCTURE CEILING FLEET_RESEARCH_QUOTA_DAILY: a safety limit against runaway loops, bugs and provider abuse — not a research budget or a target\. Decide with the evidence you have/);
+  });
+
+  it("(11, 12, 15) an evidence-invalidated path may pivot; the pivot records why; it is followed at once by a concrete forward action", async () => {
+    const t = toolbox();
+    await t.run("open_decision", decisionArgs());
+    await t.run("web_fetch", framed());
+    await t.run("resolve_decision", resolveArgs());
+    const pivot = { key: "tracker-demand", verdict: "corrected", actual: "0 sales from 64 targeted visitors in 10 days", failedAssumption: "Landlords buy compliance trackers from a direct checkout page",
+      evidence: ["checkout analytics: 64 visitors, 0 purchases, 2026-10-12", "att-9: Etsy listing data shows 37 tracker sales last month"], learning: "Buyers search marketplaces, not the open web, for this product",
+      impact: "Etsy fees (~10 %) are smaller than an unsellable direct page; expected first sale moves from never to ~14 days", newPath: "Etsy listing", nextAction: "List the tracker on Etsy at £9 with the landlord keywords" };
+    const r = await t.run("review_decision", pivot);
+    expect(r).toMatchObject({ ok: true, output: 'tracker-demand corrected on new evidence: "direct checkout page" → "Etsy listing". Goal g2 opened for the forward action (List the tracker on Etsy at £9 with the landlord keywords).' });
+    const d = loadDecisions(t.dirs.m)[0];
+    expect(d.outcome).toMatchObject({ selected: "Etsy listing", nextAction: "List the tracker on Etsy at £9 with the landlord keywords", goalId: "g2" });
+    expect(d.reviews).toEqual([expect.objectContaining({ verdict: "corrected", previousPath: "direct checkout page", newPath: "Etsy listing", failedAssumption: pivot.failedAssumption,
+      evidence: pivot.evidence, learning: pivot.learning, impact: pivot.impact, nextAction: pivot.nextAction, goalId: "g2" })]);
+    // The superseded step is closed with what was measured; the forward step is the open goal.
+    const goals = JSON.parse(fs.readFileSync(path.join(t.dirs.m, "goals.json"), "utf8"));
+    expect(goals).toEqual([expect.objectContaining({ id: "g1", status: "complete", outcome: "superseded by a correction: 0 sales from 64 targeted visitors in 10 days" }),
+      expect.objectContaining({ id: "g2", status: "open", title: "Corrected tracker-demand: List the tracker on Etsy at £9 with the landlord keywords" })]);
+    expect(decisionLines(loadDecisions(t.dirs.m))[0]).toMatch(/Corrected \d{4}-\d{2}-\d{2}: "direct checkout page" → "Etsy listing" — Landlords buy compliance trackers from a direct checkout page failed \(Buyers search marketplaces, not the open web, for this product\); impact: Etsy fees .* Next action: List the tracker on Etsy at £9 with the landlord keywords \[goal g2\]/);
+    // A confirmed result also closes the step and opens the next forward one (measure → learn → forward).
+    expect(await t.run("review_decision", { key: "tracker-demand", verdict: "confirmed", actual: "11 sales in 14 days on Etsy at £9", learning: "Marketplace demand holds",
+      nextAction: "Add a premium HMO edition at £19" })).toMatchObject({ ok: true, output: expect.stringMatching(/confirmed: 11 sales in 14 days on Etsy at £9\. Goal g3 opened/) });
+  });
+
+  it("(13) unsupported oscillation is refused: no correction without new evidence, none to the same path, no return to an abandoned path, at most three", async () => {
+    const ledger: Decision[] = [];
+    openDecision(ledger, decisionArgs());
+    ledger[0].research.push({ at: "t", evidenceGap: "gap", expectedValue: "v", informationValue: "high", url: "https://market.example/landlord", attemptId: "att-1" });
+    expect(reviewDecision(ledger, { key: "tracker-demand", verdict: "confirmed", actual: "x sales", learning: "it holds", nextAction: "keep going" })).toMatchObject({ ok: false, code: "FLEET_DECISION_OPEN" });
+    resolveDecision(ledger, resolveArgs());
+    const correct = (o: Record<string, unknown>) => reviewDecision(ledger, { key: "tracker-demand", verdict: "corrected", actual: "0 sales", learning: "the channel is wrong",
+      failedAssumption: "direct buyers exist", impact: "lower fees beat no sales", nextAction: "list it there", ...o });
+    expect(correct({ newPath: "direct checkout page", evidence: ["new data"] })).toMatchObject({ ok: false, code: "FLEET_NOT_A_CORRECTION" });
+    expect(correct({ newPath: "Etsy listing", evidence: [] })).toMatchObject({ ok: false, code: "FLEET_CORRECTION_UNSUPPORTED" });
+    expect(correct({ newPath: "Etsy listing", evidence: ["att-1", "https://market.example/landlord"] })).toMatchObject({ ok: false, code: "FLEET_CORRECTION_UNSUPPORTED" }); // what it decided with
+    expect(correct({ newPath: "Etsy listing", evidence: ["checkout: 64 visitors, 0 purchases"], failedAssumption: undefined })).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+    expect(correct({ newPath: "Etsy listing", evidence: ["checkout: 64 visitors, 0 purchases"] })).toMatchObject({ ok: true });
+    // Back to the abandoned path, even with fresh-looking evidence: oscillation.
+    expect(correct({ newPath: "Direct checkout page", evidence: ["a blog post says direct sales work"] })).toMatchObject({ ok: false, code: "FLEET_OSCILLATION" });
+    // Re-citing the evidence that drove the last correction is not new evidence.
+    expect(correct({ newPath: "Notion template marketplace", evidence: ["checkout: 64 visitors, 0 purchases"] })).toMatchObject({ ok: false, code: "FLEET_CORRECTION_UNSUPPORTED" });
+    expect(correct({ newPath: "Notion template marketplace", evidence: ["etsy: 0 sales in 21 days"] })).toMatchObject({ ok: true });
+    expect(correct({ newPath: "Gumtree listing", evidence: ["notion: 0 sales in 21 days"] })).toMatchObject({ ok: true });
+    expect(correct({ newPath: "Facebook marketplace", evidence: ["gumtree: 0 sales"] })).toMatchObject({ ok: false, code: "FLEET_CORRECTION_LIMIT",
+      detail: expect.stringMatching(/stop re-deciding it — open a new, narrower decision/) });
+    // More capital needs new evidence that justifies it; less is always allowed (preserve capital).
+    const confirm = (o: Record<string, unknown>) => reviewDecision(ledger, { key: "tracker-demand", verdict: "confirmed", actual: "2 sales this week", learning: "demand is slow but real", nextAction: "continue listing", ...o });
+    expect(confirm({ capitalAtRiskPence: 5_000, evidence: [] })).toMatchObject({ ok: false, code: "FLEET_EXPOSURE_UNSUPPORTED" });
+    expect(confirm({ capitalAtRiskPence: 100 })).toMatchObject({ ok: true, decision: { outcome: { capitalAtRiskPence: 100 } } });
+    expect(confirm({ capitalAtRiskPence: 2_000, evidence: ["gumtree: 9 sales at £9 in 7 days"] })).toMatchObject({ ok: true, decision: { outcome: { capitalAtRiskPence: 2_000 } } });
+    expect(commitmentCheck(ledger, { decisionKey: "tracker-demand" }, 2_001)).toMatchObject({ ok: false, code: "FLEET_EXPOSURE_EXCEEDED" });
   });
 });
 

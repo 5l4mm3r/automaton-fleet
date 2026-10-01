@@ -38,6 +38,9 @@
  *                                                                     schema v18 web research (OWNER GATE)
  *   founder-research <agentId> pause|resume [--hourly N] [--daily N] <reason…>
  *   research-log [agentId] [--limit N]                                the research audit (attempts + results)
+ *   F2-A: --daily-budget / --turns-per-hour and the research --*-hourly / --*-daily figures are INFRASTRUCTURE SAFETY
+ *   CEILINGS (runaway loops, bugs, provider abuse, accidental catastrophic burn) — never research budgets, targets or
+ *   entitlements. Set them well above professional use; founders never see them unless a ceiling is actually hit.
  *   founders-report                                                   per founder: status, cash, cognition, 24 h usage,
  *                                                                     forbidden tool requests (refused), orders awaiting you
  *
