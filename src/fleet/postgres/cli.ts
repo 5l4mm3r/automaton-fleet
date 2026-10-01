@@ -33,6 +33,7 @@
  *   pnpm fleet:admin <treasury command>        see src/fleet/treasury/cli.ts (v5 money records are superseded by v10)
  *   pnpm fleet:admin <ledger command>          schema v10 central ledger; see src/fleet/treasury/ledger-cli.ts
  *   pnpm fleet:admin <genesis command>         schema v11 Genesis (owner gates); see src/fleet/genesis/cli.ts
+ *   pnpm fleet:admin <hub command>             schema v30 Fleet Hub views and economy infrastructure; see src/fleet/hub/cli.ts
  *   pnpm fleet:admin reap | reservations
  *   pnpm fleet:admin release <agentId> [reason]
  *   pnpm fleet:admin mark-dead <agentId> [reason]
@@ -76,6 +77,8 @@ import { PgTreasuryStore } from "../treasury/store.js";
 import { TREASURY_COMMANDS, runTreasuryCommand } from "../treasury/cli.js";
 import { PgLedgerAdmin } from "../treasury/ledger.js";
 import { LEDGER_COMMANDS, runLedgerCommand } from "../treasury/ledger-cli.js";
+import { PgHubAdmin } from "../hub/admin.js";
+import { HUB_COMMANDS, runHubCommand } from "../hub/cli.js";
 import { PgGenesisAdmin } from "../genesis/admin.js";
 import { GENESIS_COMMANDS, runGenesisCommand } from "../genesis/cli.js";
 import type { FleetCredential } from "../types.js";
@@ -376,6 +379,23 @@ async function main(argv: string[]): Promise<number> {
       return 1;
     } finally {
       await genesis.close();
+      await store.close();
+    }
+  }
+  if (HUB_COMMANDS.has(cmd)) {
+    // F2 (schema v30): Fleet Hub views and infrastructure controls; see src/fleet/hub/cli.ts.
+    const hub = new PgHubAdmin({
+      connectionString: (e.FLEET_ADMIN_DATABASE_URL || e.FLEET_CONTROLLER_DATABASE_URL || e.DATABASE_URL)!.trim(),
+      schema: e.FLEET_PG_SCHEMA?.trim() || undefined,
+    });
+    try {
+      console.log(JSON.stringify(await runHubCommand(cmd, rest, hub, actor), null, 2));
+      return 0;
+    } catch (err) {
+      console.error(redactText(err instanceof Error ? err.message : String(err)));
+      return 1;
+    } finally {
+      await hub.close();
       await store.close();
     }
   }

@@ -619,6 +619,21 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'enabled', true, 'swept', n, 'totalMinor', total);
 END $$;
 
+-- FleetController's periodic tax true-up for every active agent with settled sales (the reserve follows the liability).
+CREATE FUNCTION svc_tax_true_up(p_limit integer) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE a record; r jsonb; n integer := 0; moved bigint := 0; short bigint := 0;
+BEGIN
+  FOR a IN SELECT DISTINCT t.agent_id FROM fleet_external_transactions t JOIN fleet_agents ag ON ag.agent_id = t.agent_id
+            WHERE t.status = 'settled' AND ag.status = 'active' ORDER BY t.agent_id LIMIT LEAST(GREATEST(COALESCE(p_limit, 100), 1), 1000) LOOP
+    r := fleet_tax_true_up(a.agent_id, 'controller');
+    n := n + 1;
+    moved := moved + COALESCE((r ->> 'movedMinor')::bigint, 0);
+    short := short + COALESCE((r ->> 'shortfallMinor')::bigint, 0);
+  END LOOP;
+  RETURN jsonb_build_object('ok', true, 'agents', n, 'movedMinor', moved, 'shortfallMinor', short);
+END $$;
+
 -- ═══ 4. Cognition depth: relative, never a fixed amount (retires the £20 major-spend line) ═══
 CREATE TABLE fleet_cognition_depth_policy (
   id                smallint    PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -813,6 +828,36 @@ BEGIN
     WHEN invalid_text_representation OR invalid_datetime_format OR datetime_field_overflow OR numeric_value_out_of_range THEN
       RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'a value has the wrong format');
   END;
+END $$;
+
+-- Owner setters for the remaining configurable policies (audited; one writer each).
+CREATE FUNCTION fleet_admin_cognition_depth_set(p_major_exposure_bp integer, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE r fleet_cognition_depth_policy;
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  UPDATE fleet_cognition_depth_policy SET major_exposure_bp = p_major_exposure_bp, updated_at = now(), updated_by = p_actor WHERE id = 1 RETURNING * INTO r;
+  PERFORM fleet_event('cognition_depth_set', NULL, p_actor, to_jsonb(r) - 'id');
+  RETURN to_jsonb(r) - 'id';
+END $$;
+CREATE FUNCTION fleet_admin_transfer_policy_set(p_cushion_bp integer, p_horizon_days integer, p_burn_window_days integer, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE r fleet_transfer_policy;
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  UPDATE fleet_transfer_policy SET cushion_bp = COALESCE(p_cushion_bp, cushion_bp), horizon_days = COALESCE(p_horizon_days, horizon_days),
+         burn_window_days = COALESCE(p_burn_window_days, burn_window_days), updated_at = now(), updated_by = p_actor WHERE id = 1 RETURNING * INTO r;
+  PERFORM fleet_event('transfer_policy_set', NULL, p_actor, to_jsonb(r) - 'id');
+  RETURN to_jsonb(r) - 'id';
+END $$;
+CREATE FUNCTION fleet_admin_tax_policy_set(p_unprofiled_reserve_bp integer, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE r fleet_tax_policy;
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  UPDATE fleet_tax_policy SET unprofiled_reserve_bp = p_unprofiled_reserve_bp, updated_at = now(), updated_by = p_actor WHERE id = 1 RETURNING * INTO r;
+  PERFORM fleet_event('tax_policy_set', NULL, p_actor, to_jsonb(r) - 'id');
+  RETURN to_jsonb(r) - 'id';
 END $$;
 
 -- ═══ 7. Hub (owner/admin views; read-only) ═══

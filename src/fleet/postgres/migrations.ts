@@ -1213,6 +1213,7 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v30 (F2): envelope expiry / stop-loss / milestones, and the Treasury sweep run (a no-op until an operator enables sweeps).
   "svc_capital_reap(integer)",
   "svc_sweep_run(text)",
+  "svc_tax_true_up(integer)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */

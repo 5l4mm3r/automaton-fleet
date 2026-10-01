@@ -533,6 +533,19 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
           `; spend circuit breaker ${lg.circuitBreaker.tripped ? "TRIPPED (all own-capital spend refused)" : `clear (${lg.circuitBreaker.signals} relative signal(s) set)`}; ` +
           `${lg.pendingConfirmations} owner withdrawal confirmation(s) pending; destinations: ${lg.activeDestinations} active, ${lg.pendingDestinations} pending`,
       );
+      // F2 (schema v30): the economy — reconciliation, tax reserves, settlement, rails and credentials, envelopes, action-
+      // scoped dependencies, research loops and agents with no route forward. Agent autonomy itself is never an error.
+      const eh = await store.economyHealth();
+      facts.economy = eh;
+      if (eh) {
+        const fails = eh.findings.filter((f) => f.severity === "FAIL");
+        const warns = eh.findings.filter((f) => f.severity === "WARN");
+        add("economy", fails.length ? "fail" : warns.length ? "warn" : "pass",
+          fails.length || warns.length
+            ? [...fails, ...warns].map((f) => `${f.severity} ${f.code} ${JSON.stringify(f.detail)}`).join("; ").slice(0, 600)
+            : `reconciled: ledger verified, settlements attributed, envelope cash = positions, rails pinned not-live, dependencies action-scoped (${eh.findings.length} check(s))`);
+        if (fails.length) blockers.push(`Economy reconciliation failed (${fails.map((f) => f.code).join(", ")}): fleet:admin hub-health.`);
+      }
       const est = lg.estate;
       add(
         "estates and assets",

@@ -1002,6 +1002,15 @@ export class PgFleetStore {
   }
 
   /** Schema v26 (F2-A): open external dependencies for doctor — information, never an owner to-do (admin credential). */
+  /** Schema v30 (F2): the economy doctor's findings (INFO / WARN / FAIL); null before v30 or when unreadable. */
+  async economyHealth(): Promise<{ ok: boolean; warn: boolean; findings: Array<{ severity: "INFO" | "WARN" | "FAIL"; code: string; detail: unknown }> } | null> {
+    try {
+      return await this.read(async (c) => (await c.query(`SELECT fleet_economy_health() AS j`)).rows[0].j);
+    } catch {
+      return null;
+    }
+  }
+
   async ownerRequestsOverview(): Promise<{ open: number; openByKind: Record<string, number>; constitutionalOpen: number; oldestOpenS: number | null;
     knowledgePending: number; knowledgeImported: number } | null> {
     try {
@@ -1874,6 +1883,36 @@ export class PgFleetStore {
   /** Schema v24: expire experiment proposals/approvals and conclude experiments past their run window. Returns the count. */
   async reapExperiments(limit = 50): Promise<number> {
     return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_experiment_reap($1) AS n", [limit])).rows[0].n));
+  }
+
+  /** Schema v30 (F2): envelope expiry, stop-loss and ledger-verified milestones for every active execution envelope. */
+  async reapCapital(limit = 100): Promise<{ evaluated: number; changed: number }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_capital_reap($1) AS r", [limit])).rows[0].r);
+  }
+
+  /** Schema v30 (F2): FleetController's tax true-up pass (reserves follow the estimated liability; over-reserve released). */
+  async taxTrueUp(limit = 100): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_tax_true_up($1) AS r", [limit])).rows[0].r);
+  }
+
+  /** Schema v30 (F2): one Treasury sweep pass for a period (a no-op returning {enabled:false} until an operator enables sweeps). */
+  async sweepRun(period: string): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_sweep_run($1) AS r", [period])).rows[0].r);
+  }
+
+  /**
+   * Schema v29 (F2): the rail adapter reports one external transaction. Idempotent per (rail, external id, kind); a
+   * transaction not attributable to a venture assignment stays UNATTRIBUTED for reconciliation (never guessed).
+   */
+  async settlementIngest(t: { railId: string; externalId: string; kind: "sale" | "refund"; grossMinor: number; feeMinor: number; currency: string;
+    ventureId: string | null; occurredAt: string; payloadSha256: string; counterpartySha256: string | null }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_settlement_ingest($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) AS r",
+      [t.railId, t.externalId, t.kind, t.grossMinor, t.feeMinor, t.currency, t.ventureId, t.occurredAt, t.payloadSha256, t.counterpartySha256])).rows[0].r);
+  }
+
+  /** Schema v29 (F2): the credential broker's audit of one credential use (never the secret). */
+  async credentialUse(credentialId: string, action: string, agentId: string | null, ventureId: string | null, outcome: "ok" | "refused" | "failed", detail: string | null): Promise<{ ok: boolean; status?: string; code?: string }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_credential_use($1, $2, $3, $4, $5, $6) AS r", [credentialId, action, agentId, ventureId, outcome, detail])).rows[0].r);
   }
 
   /** Schema v10: expire payment orders past their TTL (releases their reservations). Returns the count. */

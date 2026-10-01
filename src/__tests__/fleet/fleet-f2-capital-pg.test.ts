@@ -57,6 +57,23 @@ describe.skipIf(!PG_BIN)("F2 v30 capital engine, envelopes, sweeps, cognition de
     expect(src).not.toMatch(/owner/i);
   });
 
+  it("the privilege audit enforces the economy invariants: guards, the not-live rail pin, controller-only decisions, single writers, no bypass", async () => {
+    const audit = async () => (await R.store.auditPrivileges()).problems;
+    await R.q(`ALTER TABLE fleet.fleet_ventures DISABLE TRIGGER fleet_ventures_guard`);
+    try { expect(await audit()).toContain("economy surface: trigger fleet_ventures.fleet_ventures_guard is missing or disabled"); }
+    finally { await R.q(`ALTER TABLE fleet.fleet_ventures ENABLE TRIGGER fleet_ventures_guard`); }
+    await R.q(`ALTER TABLE fleet.fleet_payment_rails DROP CONSTRAINT fleet_payment_rails_not_live`);
+    try { expect(await audit()).toEqual(expect.arrayContaining([expect.stringMatching(/a payment rail could be live/)])); }
+    finally { await R.q(`ALTER TABLE fleet.fleet_payment_rails ADD CONSTRAINT fleet_payment_rails_not_live CHECK (mode <> 'live')`); }
+    await R.q(`CREATE FUNCTION fleet.rogue_settle() RETURNS void LANGUAGE sql AS $$ UPDATE fleet.fleet_external_transactions SET status = 'settled' WHERE false $$`);
+    await R.q(`CREATE FUNCTION fleet.rogue_move() RETURNS text LANGUAGE sql AS $$ SELECT set_config('fleet.venture_move', 'x', true) $$`);
+    try {
+      expect(await audit()).toEqual(expect.arrayContaining(["economy surface: rogue_settle writes fleet_external_transactions",
+        "economy surface: rogue_move references the venture state-machine guard"]));
+    } finally { await R.q(`DROP FUNCTION fleet.rogue_settle(); DROP FUNCTION fleet.rogue_move();`); }
+    expect(await audit()).toEqual([]);
+  });
+
   it("APPROVE creates an envelope funded from the Treasury into restricted envelope capital; the agent's own cash is untouched", async () => {
     const t0 = await R.balance("fleet:treasury:unallocated");
     const cash0 = await R.balance(acct(F, "agent_cash"));

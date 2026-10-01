@@ -399,6 +399,10 @@ export class FleetService {
         if (estates) this.audit("estates_settled", null, { count: estates });
         const experiments = await this.opts.admin.reapExperiments(50);
         if (experiments) this.audit("experiments_reaped", null, { count: experiments });
+        // F2 (v30): execution envelopes — expiry returns unspent Fleet capital, stop-loss freezes only that envelope,
+        // ledger-verified milestones release the next tranche. (Sweeps run only when an operator enables them.)
+        const capital = await this.opts.admin.reapCapital(100);
+        if (capital.changed) this.audit("envelopes_reaped", null, { evaluated: capital.evaluated, changed: capital.changed });
         this.assessRelevance();
         await this.processTerminations();
         this.lastReapOkAt = Date.now();
