@@ -18,6 +18,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_operator_state", "fleet_operator_routes", "fleet_cognition_policy", "fleet_research_policy",
     "fleet_cognition_routing", "fleet_cognition_tiers", "fleet_action_min_tier",
     "fleet_experiment_policy", "fleet_evidence_ladder", "fleet_spend_circuit_breaker",
+    "fleet_economy_policy", "fleet_venture_transition_rules",
   ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
@@ -86,6 +87,12 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   if (r.rows.some((x) => x.t === "fleet_spend_circuit_breaker")) {
     await c.query(`UPDATE "${schema}".fleet_spend_circuit_breaker SET tripped = false, trip_reason = NULL, order_wallet_bp = NULL,
       velocity_window_s = NULL, velocity_wallet_bp = NULL, updated_by = 'migration'`);
+  }
+  // v28: the economy policy back to its migration defaults (the transition rules are grammar and are kept as is).
+  if (r.rows.some((x) => x.t === "fleet_economy_policy")) {
+    await c.query(`UPDATE "${schema}".fleet_economy_policy SET shortlist_max = 5, evidence_fresh_days = 30, knowledge_fresh_days = 180, forecast_tolerance_bp = 2500,
+      failsafe_open_opportunities = 60, failsafe_active_ventures = 25, failsafe_records_per_day = 400, research_loop_fetches = 40, research_loop_window_h = 24,
+      no_route_hours = 72, updated_by = 'migration'`);
   }
   for (const t of all) await c.query(`ALTER TABLE ${t} ENABLE TRIGGER USER`);
   // v21 fixtures: an identity USD→GBP rate (so historical accounting expectations keep their numbers) and generous

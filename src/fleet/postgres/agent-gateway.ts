@@ -285,6 +285,15 @@ export class PgAgentGateway {
     return this.call("api_owner_request_list", [agentId, token]);
   }
 
+  /**
+   * Schema v28+ (F2): the agent's own economic operations (opportunities, decisions, ventures, knowledge, wallet,
+   * capital requests, payment rails) through the single authenticated dispatcher. The op is one of a fixed set the
+   * database knows; arguments are a JSON object validated by the database.
+   */
+  async economy(agentId: string, token: string, op: string, args: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_economy", [agentId, token, op, JSON.stringify(args ?? {})]);
+  }
+
   async knowledgePropose(agentId: string, token: string, category: string, title: string, content: string): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.call("api_knowledge_propose", [agentId, token, category, title, content]);
   }

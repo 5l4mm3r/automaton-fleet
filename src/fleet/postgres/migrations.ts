@@ -35,8 +35,9 @@ import { V24_SQL } from "./migrations-phase24.js";
 import { V25_SQL } from "./migrations-phase25.js";
 import { V26_SQL } from "./migrations-phase26.js";
 import { V27_SQL } from "./migrations-phase27.js";
+import { V28_SQL } from "./migrations-phase28.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 27;
+export const FLEET_PG_SCHEMA_VERSION = 28;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
@@ -1158,6 +1159,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 25, name: "owner_request_liveness", sql: V25_SQL },
   { version: 26, name: "f2a_action_scoped_dependencies_survival_observation", sql: V26_SQL },
   { version: 27, name: "f2a_own_capital_custody_circuit_breaker", sql: V27_SQL },
+  { version: 28, name: "f2_economy_opportunities_decisions_ventures_knowledge", sql: V28_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1248,6 +1250,9 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_owner_request_create(text, text, text, text, text, text, text, text)",
   "api_owner_request_withdraw(text, text, uuid)",
   "api_owner_request_list(text, text)",
+  // v28 (F2): the agent's own economic records — opportunities, decisions, ventures, knowledge, performance — through one
+  // authenticated, capability-checked dispatcher (internal fleet_econ_* functions are never granted).
+  "api_economy(text, text, text, jsonb)",
 ]);
 
 /**
