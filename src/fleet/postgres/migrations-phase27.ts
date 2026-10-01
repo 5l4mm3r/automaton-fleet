@@ -146,7 +146,11 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE v_code text := fleet_authenticate(p_agent, p_token, 'spend_request'); o fleet_payment_orders; v_ttl integer;
         v_hash text; v_refusal text; v_signal text; v_rec bigint := COALESCE(p_recoverable_cents, 0);
 BEGIN
-  IF v_code IS NOT NULL THEN RETURN jsonb_build_object('ok', false, 'code', v_code); END IF;
+  -- Authentication refuses a held or inactive agent first; such a refusal is still a custody category (HOLD, ...).
+  IF v_code IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'code', v_code)
+      || CASE WHEN fleet_custody_refusal(v_code) IS NOT NULL THEN jsonb_build_object('custody', fleet_custody_refusal(v_code)) ELSE '{}'::jsonb END;
+  END IF;
   IF p_idem IS NULL OR p_idem !~ '^[A-Za-z0-9:_.-]{8,128}$' OR p_amount_cents IS NULL OR p_amount_cents <= 0 OR p_amount_cents > 100000000000
      OR p_category NOT IN ('expense','fee','asset_acquisition','conway_credits') OR p_destination IS NULL
      OR p_destination !~ '^dst_[0-9A-HJKMNP-TV-Z]{26}$' OR p_purpose IS NULL OR length(p_purpose) NOT BETWEEN 1 AND 300

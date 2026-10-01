@@ -17,7 +17,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_capability_classes", "fleet_capability_manifests", "fleet_genesis_policy", "fleet_reproduction_policy",
     "fleet_operator_state", "fleet_operator_routes", "fleet_cognition_policy", "fleet_research_policy",
     "fleet_cognition_routing", "fleet_cognition_tiers", "fleet_action_min_tier",
-    "fleet_experiment_policy", "fleet_evidence_ladder",
+    "fleet_experiment_policy", "fleet_evidence_ladder", "fleet_spend_circuit_breaker",
   ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
@@ -81,6 +81,11 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   if (r.rows.some((x) => x.t === "fleet_research_policy")) {
     await c.query(`UPDATE "${schema}".fleet_research_policy SET research_enabled = false, founder_hourly = 60, founder_daily = 300,
       fleet_hourly = 120, fleet_daily = 600, updated_by = 'migration'`);
+  }
+  // v27: the spend circuit breaker is a singleton infrastructure row (a missing row fails closed): back to every signal unset.
+  if (r.rows.some((x) => x.t === "fleet_spend_circuit_breaker")) {
+    await c.query(`UPDATE "${schema}".fleet_spend_circuit_breaker SET tripped = false, trip_reason = NULL, order_wallet_bp = NULL,
+      velocity_window_s = NULL, velocity_wallet_bp = NULL, updated_by = 'migration'`);
   }
   for (const t of all) await c.query(`ALTER TABLE ${t} ENABLE TRIGGER USER`);
   // v21 fixtures: an identity USD→GBP rate (so historical accounting expectations keep their numbers) and generous

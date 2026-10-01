@@ -486,7 +486,8 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(await spend(a, 3_000, { idem })).toMatchObject({ ok: false, replay: true, code: "FLEET_TAX_RESERVE", custody: "TAX_RESERVE" });
     expect(await bal(agentAcct(a, "reserved"))).toBe(14_000);
     // Only the agent's own cash moved: the Treasury and other agents are untouched; no refusal created anything for anyone to decide.
-    expect(await bal("fleet:treasury:unallocated")).toBe(treasuryBefore);
+    // (The Treasury moved only by the explicit 600 grant to `b` above.)
+    expect(await bal("fleet:treasury:unallocated")).toBe(treasuryBefore - 600);
     expect(await bal(agentAcct(agents[5], "cash"))).toBe(otherBefore);
     expect(await ownerQueue()).toEqual(queue0);
     expect(await q(`SELECT count(*)::int AS n FROM fleet.fleet_payment_orders WHERE agent_id = $1 AND status NOT IN ('reserved','rejected')`, [a.agentId])).toEqual([{ n: 0 }]);
