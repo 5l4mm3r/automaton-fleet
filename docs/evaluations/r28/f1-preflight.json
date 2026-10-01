@@ -1,0 +1,39 @@
+{"agentId":"01M3F50SH7PNX2E3GST13J52AS","step":"preflight","detail":"from 42dc14a to 6764d78; 26 state files","ts":"2026-10-01T16:48:33.923Z","service":"fleet-founders","event":"founder_runtime_upgrade_step"}
+{
+  "ok": true,
+  "outcome": "preflight_ok",
+  "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+  "upgradeId": null,
+  "from": {
+    "repo": "https://github.com/5l4mm3r/automaton-fleet",
+    "commit": "42dc14a597ae3d213c90aaf986fecccb29249887",
+    "buildId": "6d426f452477cc32352d0fc60b65a13b2f7b8014e95f41fd0c9b28aef0772611",
+    "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811"
+  },
+  "to": {
+    "repo": "https://github.com/5l4mm3r/automaton-fleet",
+    "commit": "6764d78b68ea3d97ea78a91ce1a15fbc2a5adad8",
+    "buildId": "cdbcffb9ea9b368b8eed9b633c126a8baf2a9c5a9b11b47eb9acd54b35894d11",
+    "lockfileSha256": "eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811"
+  },
+  "steps": [
+    {
+      "step": "preflight",
+      "ok": true,
+      "at": "2026-10-01T16:48:33.923Z",
+      "detail": "from 42dc14a to 6764d78; 26 state files"
+    }
+  ],
+  "state": {},
+  "ledger": {},
+  "process": {
+    "before": {
+      "pid": 306862,
+      "uid": 65037,
+      "instanceId": "iod1PEUZmSK4Arlku9sliOB0"
+    }
+  },
+  "backupDir": null,
+  "downtimeMs": null,
+  "record": null
+}

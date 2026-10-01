@@ -1,0 +1,64 @@
+{
+ "ownerRequests": [
+  {
+   "ageS": 433604,
+   "stale": true,
+   "title": "Owner request: enrol a Gumroad channel for zero-capex digital products",
+   "source": {
+    "ref": "62cbe1b7-8642-4bf4-a6a7-b41c1dcc09e3",
+    "kind": "knowledge_proposal",
+    "importedAt": "2026-10-01T16:40:00.29255+00:00",
+    "importedBy": "operator:ubuntu"
+   },
+   "status": "pending",
+   "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+   "goalRef": "g1",
+   "blocking": true,
+   "category": "sales_channel",
+   "response": null,
+   "createdAt": "2026-09-26T16:28:10.793483+00:00",
+   "decidedAt": null,
+   "decidedBy": null,
+   "requestId": "62cbe1b7-8642-4bf4-a6a7-b41c1dcc09e3",
+   "staleAfterS": 86400
+  }
+ ],
+ "knowledgeProposals": [
+  {
+   "ageS": 437081,
+   "stale": true,
+   "title": "UK MTD Income Tax spreadsheet templates are commoditised (free lead magnets)",
+   "status": "proposed",
+   "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+   "category": "market",
+   "proposalId": "b34ea08c-5cb8-4975-ab65-437689e499aa",
+   "submittedAt": "2026-09-26T15:30:13.921689+00:00",
+   "importedAsRequest": false,
+   "looksLikeOwnerRequest": false
+  },
+  {
+   "ageS": 433604,
+   "stale": true,
+   "title": "Owner request: enrol a Gumroad channel for zero-capex digital products",
+   "status": "proposed",
+   "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+   "category": "policy",
+   "proposalId": "62cbe1b7-8642-4bf4-a6a7-b41c1dcc09e3",
+   "submittedAt": "2026-09-26T16:28:10.793483+00:00",
+   "importedAsRequest": true,
+   "looksLikeOwnerRequest": true
+  },
+  {
+   "ageS": 115022,
+   "stale": true,
+   "title": "Idle waiting on an owner approval still costs inference",
+   "status": "proposed",
+   "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+   "category": "failure",
+   "proposalId": "410ae344-2991-46b5-95b6-d2ebc09e5f9a",
+   "submittedAt": "2026-09-30T08:57:53.09108+00:00",
+   "importedAsRequest": false,
+   "looksLikeOwnerRequest": false
+  }
+ ]
+}

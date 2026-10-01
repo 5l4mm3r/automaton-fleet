@@ -1,0 +1,28 @@
+founder before: pid 306862 restarts 0 pin-sha ca62f0f744287ebd facts bed022a8099eb296f6e70f7954c05cbcd148689184d86369b557a44afb9952e9 facts-ledger absent
+pins before: FLEET_RUNTIME_COMMIT=42dc14a597ae3d213c90aaf986fecccb29249887 FLEET_RUNTIME_BUILD_ID=6d426f452477cc32352d0fc60b65a13b2f7b8014e95f41fd0c9b28aef0772611  current releases/42dc14a597ae3d213c90aaf986fecccb29249887
+pins: FLEET_RUNTIME_COMMIT=6764d78b68ea3d97ea78a91ce1a15fbc2a5adad8 FLEET_RUNTIME_BUILD_ID=cdbcffb9ea9b368b8eed9b633c126a8baf2a9c5a9b11b47eb9acd54b35894d11  (pre-r28 sha ebb0a3aea2e905e3)
+Verified build cdbcffb9ea9b368b8eed9b633c126a8baf2a9c5a9b11b47eb9acd54b35894d11 staged at /home/ubuntu/.cache/automaton-fleet/stage/6764d78b68ea3d97ea78a91ce1a15fbc2a5adad8
+Installed release 6764d78b68ea3d97ea78a91ce1a15fbc2a5adad8 (build cdbcffb9ea9b368b8eed9b633c126a8baf2a9c5a9b11b47eb9acd54b35894d11). Restart the service to pick it up: systemctl restart automaton-fleet
+inflight: 0
+OUTAGE START 2026-10-01T16:38:56Z
+dump /home/ubuntu/automaton_fleet-v24-pre-v25-20261001T163857Z.dump 2940283 B mode 600 owner ubuntu sha 70ababe0e265b603b167fb501e0418e721c7f09ba7d5125f5b31b318831b942d
+dump readable: 90 tables with data, 588 functions; schema_migrations entry 1
+dump sha verified
+migrate-check: {"currentVersion":24,"resultingVersion":25,"wouldApply":[25],"requiredVersion":25,"rolledBack":true}
+Applied migrations: 25
+{"ok":true,"latencyMs":4,"schemaVersion":25,"countersConsistent":true}
+migrated 2026-10-01T16:39:02Z: schema 25
+audit PASS
+approved
+RUNTIME IDENTITY: VERIFIED
+OUTAGE END 2026-10-01T16:39:10Z
+readyz 200
+controller cwd /opt/automaton-fleet/releases/6764d78b68ea3d97ea78a91ce1a15fbc2a5adad8
+founder after: pid 306862 restarts 0 pin-sha ca62f0f744287ebd facts bed022a8099eb296f6e70f7954c05cbcd148689184d86369b557a44afb9952e9 facts-ledger absent
+automaton-fleet: active
+automaton-fleet-operator-api: active
+automaton-fleet-custody: active
+automaton-fleet-fetcher.socket: active
+automaton-fleet-chatgpt-adapter.socket: active
+automaton-fleet-chatgpt-tunnel: active
+automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service: active

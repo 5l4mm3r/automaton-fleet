@@ -1,0 +1,44 @@
+time 2026-10-01T16:40:27Z
+unit pid=306862 restarts=0 wd=/opt/automaton-fleet/releases/42dc14a597ae3d213c90aaf986fecccb29249887 since=Thu 2026-10-01 11:36:52 UTC
+pin FLEET_RUNTIME_COMMIT=42dc14a597ae3d213c90aaf986fecccb29249887 FLEET_RUNTIME_BUILD_ID=6d426f452477cc32352d0fc60b65a13b2f7b8014e95f41fd0c9b28aef0772611 
+identity-row-sha a8a7af564191e3d8e3d2653bf227f9be
+agent active|42dc14a597ae3d213c90aaf986fecccb29249887|0|2026-10-01 16:40:08.364517+00|2026-10-01 16:39:38.295603+00
+credential-row-sha 107ddfca986688e86de6b2cc9823b263
+genesis-sha 8af1178c0e95fbe81b93af6415b57724
+ledger-accounts-sha 552ef792196c908f88d08f861c623f2d
+ledger-fingerprint {"accounts": [{"class": "agent_assets", "account": "agent:01M3F50SH7PNX2E3GST13J52AS:assets", "balance": 0}, {"class": "agent_cash", "account": "agent:01M3F50SH7PNX2E3GST13J52AS:cash", "balance": 9194}, {"class": "agent_contributions", "account": "agent:01M3F50SH7PNX2E3GST13J52AS:contributions", "balance": 0}, {"class": "agent_expense", "account": "agent:01M3F50SH7PNX2E3GST13J52AS:expense", "balance": 806}, {"class": "agent_fees", "account": "agent:01M3F50SH7PNX2E3GST13J52AS:fees", "balance": 0}, {"class": "agent_investment_pnl", "account": "agent:01M3F50SH7PNX2E3GST13J52AS:investment_pnl", "balance": 0}, {"class": "agent_principal", "account": "agent:01M3F50SH7PNX2E3GST13J52AS:principal", "balance": 0}, {"class": "agent_reserved", "account": "agent:01M3F50SH7PNX2E3GST13J52AS:reserved", "balance": 0}, {"class": "agent_revenue", "account": "agent:01M3F50SH7PNX2E3GST13J52AS:revenue", "balance": 0}], "journals": 462, "lastJournalSeq": 500, "unpostedMicrocents": 128046}
+ledger-head 500 2193fa1c1e07672c
+cognition calls=489 charged_p=806 routed=60 last=2026-10-01 16:38:38.149946+00
+population 1/0/0 cap 2 agents 1 genesis 1
+switches routing=t founder_routing=1 tiers_enabled=3 tiers_verified=3 genesis=f replication=f custody=f repro_exec=f refounding=f
+runtime.env REAL_REPLICATION_ENABLED=false REAL_PAYMENTS_ENABLED=false OWNER_SWEEP_ENABLED=false FLEET_DRY_RUN_CHILD=false 
+challenges passed=7235
+upgrades verified@aab6ca3 verified@59896ce verified@aabb297 verified@64be9ce verified@42dc14a
+files:
+  f25654bace32d607 ./fleet-credentials.json
+  d8a8beb418409def ./founder.json
+  bed022a8099eb296 ./state/st_01M3F50SH8JVSDE1QBRN591114/memory/facts.json
+  21e970ef9a9caa74 ./state/st_01M3F50SH8JVSDE1QBRN591114/memory/goals.json
+  65a7470b464c58ae ./state/st_01M3F50SH8JVSDE1QBRN591114/mind-continuity.json
+  3371573f2ecb690b ./state/st_01M3F50SH8JVSDE1QBRN591114/mind-history.json
+  a64c0436e5d1938c ./state/st_01M3F50SH8JVSDE1QBRN591114/mind-log.jsonl
+  8591e7098c3d91c0 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/OWNER_NOTE.md
+  9e60818a26945578 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/product/README.txt
+  8eaeeeb85dd06fc7 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/product/properties.csv
+  2f2d3f7307cada93 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/product/rent_log.csv
+  e3b0c44298fc1c14 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/product/sed6oJcGQ
+  0a0c0fbc296f1bd0 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/proposal_gumroad.md
+  457ef91ebf388e8d ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/0e9ef624147a61c5.txt
+  97bdca2920ce637e ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/122b444e2dcae50c.txt
+  43b95c0bce0fd633 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/21174c3cfb214b53.txt
+  58c95789127e7c91 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/2da6c8ff6fed6fa4.txt
+  d808d0927221d24c ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/3bd6943bc76a33c7.txt
+  83995821d39dcc3c ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/58421d87453dfe53.txt
+  ea55e925d66df39f ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/68db30bf7860f432.txt
+  ff04c26b240f30cf ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/6e83557b2dbfe42c.txt
+  29238ebc339aeec4 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/84e07458064899eb.txt
+  14ced0aa47f11860 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/961af6280281dd1b.txt
+  e63fb223dd366f86 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/b142229b185cfbe8.txt
+  e5ebba52d96f819b ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/cef18216c9ced1eb.txt
+  ab3b86741ec39f60 ./workspace/ws_01M3F50SH8BHKVHZP1291FN09K/research/f7247d4de84c0046.txt
+state-owner 65037:65037 700
