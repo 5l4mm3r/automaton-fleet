@@ -1932,6 +1932,60 @@ Design: `docs/design/f1-fresh-01-fact-freshness.md`. Evidence: `docs/evaluations
     `facts.json` edits are detected by hash on re-upgrade.
   - Controller: `runtime.env.pre-r25` + `current` → `releases/59896ce…`.
 
+## Stage R29 — F2 autonomous economy: controller + schema v26–v31, Founder 1 (procedure; prepared 2026-10-02, NOT executed)
+
+Candidate `b949b1c7f156ac73ac12c31cbc3eeb958413169e` (`fleet-origin/f2/integration`; contains the frozen F2 candidate
+`713f4dd`, merged as `aceea47`). Design: `docs/design/f2-autonomous-economy.md` §25–§30. Local build (reproducible,
+`scripts/fleet-build-runtime.sh`): build `2b9584d5f73b87552e8d672feb2b90b1ef10419c00c603e7f46f084739e10da2`, lockfile
+`eee9dc2f…` unchanged (`docs/evaluations/r29/pins-local.txt`). Full suite on the exact tree: 127 files, 2670 passed,
+1 skipped (root-only), 0 failed, no exclusions. Same shape as R28 (controller-only update, then the founder via the
+R23 lifecycle). Real payments, owner sweeps, replication and the dry-run child stay off; rails stay pinned not-live.
+
+- **R29-0 Read-only inventory** (no change): pins and `current`, unit states / MainPIDs / NRestarts, `readyz`,
+  `fleet:doctor`, `fleet:verify`, `fleet-verify-deployment.sh`, schema (expect 25), Founder 1 pin (`6764d78`), PID,
+  `facts.json` digest, books (cash + expenses), population 1/0/0 cap 2, safety flags, disk space.
+- **R29-1 Build on the VPS:** tooling checkout to `b949b1c`; `scripts/fleet-build-runtime.sh
+  https://github.com/5l4mm3r/automaton-fleet.git b949b1c7f156ac73ac12c31cbc3eeb958413169e` must print the local
+  build id above. Pin `runtime.env` (keep `runtime.env.pre-r29` = the `6764d78` pins); `fleet-deploy-release.sh build`
+  then `sudo … install` (switches `current`; `releases/6764d78…` kept). The running controller keeps the old code.
+- **R29-2 Backup + restore proof + real-data rehearsal (before any outage):**
+  1. `pg_dump -Fc` of the live v25 database to `~/automaton_fleet-v25-pre-v31-<ts>.dump` (0600; size, sha256,
+     `pg_restore -l` table/function counts; PostgreSQL version); copy Founder 1's durable state (root 0700 backup,
+     no credential) with its sha256; snapshot non-secret pins and unit-file checksums.
+  2. Restore the dump into a THROWAWAY database (separate name, never the live one); row counts and ledger verify
+     equal the source.
+  3. On the restored copy with the new tooling: `migrate-check` must be exactly
+     `{currentVersion:25, resultingVersion:31, wouldApply:[26,27,28,29,30,31]}`; `migrate`; `audit-privileges` PASS;
+     ledger verifies, journal count and hash-chain head unchanged (migrations post no journal); Founder 1's agent row,
+     identity, credential hash, Genesis, accounts and balances unchanged; `fleet_economy_health()` ok; run `migrate`
+     again → nothing to apply. Drop the throwaway database.
+  4. Rollback proof on the throwaway side: restore the same dump again → schema 25 with identical counts (a v25
+     database is what the `6764d78` release serves).
+- **R29-3 Controller cutover** (OUTAGE, controller-side units only; never the founder unit): stop the controller-side
+  units; fresh dump `~/automaton_fleet-v25-pre-v31-<ts>.dump` (verified as above); `migrate-check` exactly as in
+  R29-2.3; `migrate`; `audit-privileges` PASS; `approve-runtime`; start; `readyz` 200; `fleet:verify-runtime` VERIFIED;
+  doctor, `fleet:verify`, `fleet-verify-deployment.sh`, ledger verify, `hub reconcile`, `hub-health`; Founder 1 PID and
+  pin unchanged; flags false. A `6764d78` founder against v31: v26–v31 are additive for the v25 founder API (the
+  migration-path suite runs the v25-shaped founder's API across every step).
+- **R29-4 Founder 1** (R23 lifecycle): `upgrade-rehearsal 6764d78b68ea3d97ea78a91ce1a15fbc2a5adad8` (must pass with
+  production unchanged); `upgrade-status`, `upgrade-preflight`; `upgrade-runtime 01M3F50SH7PNX2E3GST13J52AS`. Expect
+  `verified`, state digests identical, identity/credential/Genesis/ledger unchanged; then verify-deployment, challenges,
+  first natural wake (economy tools in the capability record; wallet and runway shown as information).
+- **Rollback.**
+  - Founder: `rollback-runtime 01M3F50SH7PNX2E3GST13J52AS <upgradeId> <reason…>` (`releases/6764d78…` intact).
+  - Controller/schema: founder back on `6764d78` first; restore `runtime.env.pre-r29`; `current` →
+    `releases/6764d78…`; restore the pre-v31 dump (v25 code refuses a v31 database); verify schema 25; re-verify.
+    A restore loses every row written after the dump.
+- **Not part of R29:** real payments, live rails, owner sweeps, replication, a child, crypto, tax-profile data, the
+  PayPal credential, FX.
+
+### Stage R29 status (2026-10-02)
+
+- Candidate pushed (`fleet-origin/f2/integration` = `b949b1c` at preparation; frozen `f2/autonomous-economy` =
+  `713f4dd`). Local reproducible build recorded. R29-0 … R29-4 NOT started: SSH to `agentfleet-vps` refused by the
+  dev VM's ssh-agent (`agent refused operation` — the VPS key requires an interactive per-use confirmation at the
+  agent). Production unchanged.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
