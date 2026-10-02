@@ -76,13 +76,20 @@ describe.skipIf(!PG_BIN)("v35 Fleet economy engine (PostgreSQL)", () => {
     expect(await wealth()).toBe(0);
     expect((await tick(true)).phase).toBe("idle");
 
-    // Realised customer revenue moved into the Treasury is. A transfer above the advised safe amount needs an
-    // acknowledgement — never a cap.
+    // v39: Fleet-generated realised wealth is the Lifetime Fleet Contribution — realised net profit contributed to the
+    // Treasury. Moving an agent's cash to the Treasury is liquidity, not earned progress: it never counts.
     await revenue(A.id, 1_200_000);
-    expect(await R.code(R.q(`SELECT fleet.fleet_admin_wallet_transfer($1, 1100000, 'treasury', 'surplus', $2, $3)`, [A.id, OWNER, key("wt")]))).toBe("FLEET_ACKNOWLEDGE_REQUIRED");
-    expect(await R.code(R.q(`SELECT fleet.fleet_admin_wallet_transfer($1, 99999999, 'treasury', 'too much', $2, $3, true)`, [A.id, OWNER, key("wt")]))).toBe("FLEET_INSUFFICIENT_FUNDS");
-    await R.q(`SELECT fleet.fleet_admin_wallet_transfer($1, 1100000, 'treasury', 'surplus', $2, $3, true)`, [A.id, OWNER, key("wt")]);
+    await R.q(`SELECT fleet.fleet_profit_contribution($1, 1070000, $2, 'owner', $3)`, [A.id, OWNER, key("lfc")]);
     expect(await wealth()).toBe(1_070_000);
+    const cashA = await cash(A);
+    // A transfer above the advised safe amount needs an acknowledgement — never a cap; it moves cash, not wealth.
+    expect(await R.code(R.q(`SELECT fleet.fleet_admin_wallet_transfer($1, $2, 'treasury', 'surplus', $3, $4)`, [A.id, cashA, OWNER, key("wt")]))).toBe("FLEET_ACKNOWLEDGE_REQUIRED");
+    expect(await R.code(R.q(`SELECT fleet.fleet_admin_wallet_transfer($1, 99999999, 'treasury', 'too much', $2, $3, true)`, [A.id, OWNER, key("wt")]))).toBe("FLEET_INSUFFICIENT_FUNDS");
+    await R.q(`SELECT fleet.fleet_admin_wallet_transfer($1, $2, 'treasury', 'surplus', $3, $4, true)`, [A.id, cashA, OWNER, key("wt")]);
+    expect(await wealth()).toBe(1_070_000);
+    const tw = await R.one<any>(`fleet.fleet_generated_treasury_wealth()`);
+    expect(Number(tw.ownerContributedMinor)).toBe(1_500_000);
+    expect(Number(tw.treasuryCashMinor)).toBe(1_500_000 - 30_000 + 1_070_000 + cashA);
 
     // Crossing a threshold makes replication PENDING, not a birth.
     let t = await tick(true);
@@ -129,15 +136,17 @@ describe.skipIf(!PG_BIN)("v35 Fleet economy engine (PostgreSQL)", () => {
     t = await tick(true);
     expect(t.phase).toBe("idle");
     expect(t.health.thresholdMinor).toBe(1_200_000);
-    // High-water mark: wealth dips below £8k and recovers — no second birth at £8k; the next trigger stays £12k.
+    // Liquidity falls and recovers: Fleet-generated wealth is untouched (v39), and the used £8k threshold never
+    // triggers again — the next trigger stays £12k (high-water mark).
     await R.q(`SELECT fleet.fleet_admin_agent_capital($1, 600000, 'grant', $2, 'test dip', true, $3)`, [B.id, OWNER, key("cap")]);
-    expect(await wealth()).toBe(470_000);
+    expect(await wealth()).toBe(1_070_000);
     expect((await tick(true)).phase).toBe("idle");
     await R.q(`SELECT fleet.fleet_admin_wallet_transfer($1, 600000, 'treasury', 'recover', $2, $3, true)`, [B.id, OWNER, key("wt")]);
-    expect(await wealth()).toBe(1_070_000);
     t = await tick(true);
     expect(t.phase).toBe("idle");
     expect(t.health.thresholdMinor).toBe(1_200_000);
+    expect(t.health.economic).toMatchObject({ met: false, remainingMinor: 130_000 });
+    expect(t.health.blockers).toContain("wealthThresholdNotMet");
     expect(await R.code(R.q(`UPDATE fleet.fleet_replication_state SET thresholds_consumed = 0`))).toBe("FLEET_IMMUTABLE");
     expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_birth_orders WHERE kind = 'automatic'`))[0].n).toBe(4);
     // The agent role cannot drive replication.
@@ -339,5 +348,37 @@ describe.skipIf(!PG_BIN)("v35 Fleet economy engine (PostgreSQL)", () => {
 
   it("the privilege audit passes with the v35 surface", async () => {
     expect((await auditPrivileges(R.owner, { schema: "fleet" })).problems).toEqual([]);
+  });
+});
+
+describe.skipIf(!PG_BIN)("v39 replication accounting: the owner's worked example (PostgreSQL)", () => {
+  let R: EconomyRegistry;
+  let F: Founder;
+  beforeAll(async () => {
+    // The owner contributes £500; Genesis spends £300 of it on the founder.
+    R = await startEconomyRegistry(PG_BIN!, { founders: 1, allocationCents: 30_000, treasuryCents: 50_000 });
+    [F] = R.founders;
+  }, 240_000);
+  afterAll(async () => { await R?.close(); });
+
+  it("owner funding spent is not a debt: £1,000 of Fleet-generated wealth meets the £1,000 threshold; liquidity is gated separately", async () => {
+    await R.q(`SELECT fleet.fleet_admin_record_external('external_revenue', $1, 150000, $2, $3, $4, $5)`,
+      [F.id, `stripe:${crypto.randomUUID()}`, crypto.createHash("sha256").update(crypto.randomUUID()).digest("hex"), OWNER, `rev:${crypto.randomUUID()}`]);
+    await R.q(`SELECT fleet.fleet_profit_contribution($1, 100000, $2, 'owner', $3)`, [F.id, OWNER, `lfc:${crypto.randomUUID()}`]);
+    const w = await R.one<any>(`fleet.fleet_generated_treasury_wealth()`);
+    expect({ cash: Number(w.treasuryCashMinor), owner: Number(w.ownerContributedMinor), fleet: Number(w.fleetGeneratedMinor) })
+      .toEqual({ cash: 120_000, owner: 50_000, fleet: 100_000 });
+    const st = await R.one<any>(`fleet.fleet_admin_replication_status()`);
+    expect(st.health.economic).toMatchObject({ met: true, thresholdMinor: 100000, remainingMinor: 0 });
+    expect(st.treasury).toMatchObject({ treasuryCashMinor: 120000, ownerContributedMinor: 50000, fleetGeneratedMinor: 100000 });
+    expect(st).toMatchObject({ livingAgents: 1, stage: { thresholdsConsumed: 0, nextAgentNumber: 2 } });
+    // The health gate is a separate question: make the next Genesis allocation unaffordable — wealth is unchanged,
+    // the gate (not the threshold) blocks.
+    await R.q(`UPDATE fleet.fleet_genesis_policy SET bootstrap_capital_currency = 'GBP', bootstrap_capital_minor = 500000`);
+    const h = await R.one<any>(`fleet.fleet_replication_health()`);
+    expect(h.economic.met).toBe(true);
+    expect(h.gate.genesisAllocationAvailable).toBe(false);
+    expect(h.blockers).toEqual(["genesisAllocationAvailable"]);
+    expect(Number(h.wealth.fleetGeneratedMinor)).toBe(100_000);
   });
 });

@@ -185,7 +185,20 @@ describe("Fleet security: reproducible child builds (pnpm, frozen lockfile)", ()
       expect(att.nonce).toBe(nonce);
       // Any change to built output changes the build identity.
       fs.writeFileSync(path.join(dir, "dist", "a.js"), "export const a = 2;\n");
-      expect(computeBuildIdentity(dir).buildId).not.toBe(mine.buildId);
+      const changed = computeBuildIdentity(dir).buildId;
+      expect(changed).not.toBe(mine.buildId);
+      // v39: the control-centre export is pinned when present (both implementations), and absent leaves the identity as it was.
+      fs.mkdirSync(path.join(dir, "packages", "dashboard-web", "out", "login"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "packages", "dashboard-web", "out", "login", "index.html"), "<!doctype html>ui");
+      const withUi = computeBuildIdentity(dir);
+      expect(withUi.buildId).not.toBe(changed);
+      fs.writeFileSync(scriptPath, ATTEST_SCRIPT);
+      expect(parseAttestation(execFileSync(process.execPath, [scriptPath, dir, nonce], { encoding: "utf8" })).buildId).toBe(withUi.buildId);
+      fs.rmSync(scriptPath);
+      fs.writeFileSync(path.join(dir, "packages", "dashboard-web", "out", "login", "index.html"), "<!doctype html>tampered");
+      expect(computeBuildIdentity(dir).buildId).not.toBe(withUi.buildId);
+      fs.rmSync(path.join(dir, "packages"), { recursive: true });
+      expect(computeBuildIdentity(dir).buildId).toBe(changed);
       fs.rmSync(path.join(dir, "pnpm-lock.yaml"));
       expect(() => computeBuildIdentity(dir)).toThrow(/lockfile integrity/);
     } finally {

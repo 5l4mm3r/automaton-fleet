@@ -245,7 +245,7 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       if (!/^https?:\/\/[a-z0-9.-]+(:\d+)?$/.test(origin)) throw new Error("FLEET_BAD_REQUEST: hub-dashboard-enroll <https://admin origin>");
       const token = crypto.randomBytes(32).toString("base64url");
       const r = await h.dashboardEnroll(crypto.createHash("sha256").update(token, "utf8").digest("hex"), actor);
-      return { ...(r as object), link: `${origin}/#enroll=${token}`, note: "open this link on the device that will hold your passkey; it works once, for 15 minutes" };
+      return { ...(r as object), link: `${origin}/login/#enroll=${token}`, note: "open this link on the device that will hold your passkey; it works once, for 15 minutes" };
     }
     case "hub-browser":
       return h.browser(p[0] ?? null);

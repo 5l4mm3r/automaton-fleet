@@ -46,8 +46,9 @@ import { V35_SQL } from "./migrations-phase35.js";
 import { V36_SQL } from "./migrations-phase36.js";
 import { V37_SQL } from "./migrations-phase37.js";
 import { V38_SQL } from "./migrations-phase38.js";
+import { V39_SQL } from "./migrations-phase39.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 38;
+export const FLEET_PG_SCHEMA_VERSION = 39;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1181,6 +1182,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 36, name: "business_mail_sms_admin_reveal_owner_vault_upload", sql: V36_SQL },
   { version: 37, name: "general_browser_operator_credential_execution", sql: V37_SQL },
   { version: 38, name: "admin_dashboard_auth_gateway", sql: V38_SQL },
+  { version: 39, name: "replication_accounting_fleet_generated_wealth", sql: V39_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

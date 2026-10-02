@@ -1,5 +1,5 @@
 /**
- * Admin dashboard HTTP server (schema v38). Serves the control-centre UI and a small JSON API. Listens on loopback behind
+ * Admin dashboard HTTP server (schema v38). Serves the control-centre UI (the Next.js static export) and a small JSON API. Listens on loopback behind
  * the TLS front (admin.agentfleet.vip). Authentication (owner decision 2026-10-02):
  *
  *   passkey (WebAuthn, user verification required) → TOTP (replay-proof) → a session (HttpOnly, Secure, SameSite=Strict,
@@ -13,9 +13,10 @@
 import crypto from "crypto";
 import http from "http";
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from "@simplewebauthn/server";
+import fs from "fs";
+import path from "path";
 import { SecretBox, totp } from "../identity/crypto.js";
 import type { DashboardGatewayPort } from "./gateway.js";
-import { APP_CSS, APP_JS, INDEX_HTML } from "./ui.js";
 
 export interface DashboardOptions {
   /** The public origin, e.g. https://admin.agentfleet.vip (http://localhost:<port> only in tests). */
@@ -26,6 +27,12 @@ export interface DashboardOptions {
   stateKey: Buffer;
   /** Take the client address from X-Forwarded-For (only behind the loopback TLS front). */
   trustProxy?: boolean;
+  /**
+   * The Next.js static export (packages/dashboard-web/out) — the control-centre UI (owner decision 2026-10-02). Served
+   * read-only from this directory; each HTML page gets a CSP listing the SHA-256 of its own inline bootstrap scripts.
+   * Absent: the API only (no UI).
+   */
+  staticDir?: string | null;
   log?: (level: string, event: string, detail?: Record<string, unknown>) => void;
 }
 
@@ -55,8 +62,11 @@ export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOpti
   const authLimit = new RateLimiter(30, 10 * 60_000);
   const apiLimit = new RateLimiter(600, 60_000);
 
+  const csp = (scriptHashes: string[] = []) =>
+    `default-src 'none'; script-src 'self'${scriptHashes.map((h) => ` 'sha256-${h}'`).join("")}; style-src 'self'; img-src 'self' data: blob:; ` +
+    "connect-src 'self'; font-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
   const headers = (extra: Record<string, string> = {}) => ({
-    "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    "Content-Security-Policy": csp(),
     "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY", "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin", "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
     "Cache-Control": "no-store", ...(secure ? { "Strict-Transport-Security": "max-age=63072000; includeSubDomains" } : {}), ...extra,
@@ -107,16 +117,63 @@ export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOpti
     return k.id;
   };
 
+  // ── the static UI (Next.js export) ──
+  const root = o.staticDir ? fs.realpathSync(o.staticDir) : null;
+  const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
+    ".woff2": "font/woff2", ".webmanifest": "application/manifest+json" };
+  const pageCsp = new Map<string, string>(); // html file -> its CSP (hashes of its inline scripts), computed once (release files are immutable)
+  const htmlCsp = (file: string, body: Buffer) => {
+    let c = pageCsp.get(file);
+    if (!c) {
+      const hashes = [...body.toString("utf8").matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
+        .map((m) => crypto.createHash("sha256").update(m[1], "utf8").digest("base64"));
+      c = csp(hashes);
+      pageCsp.set(file, c);
+    }
+    return c;
+  };
+  const serveStatic = (pathname: string, res: http.ServerResponse) => {
+    if (!root) return json(res, 404, { ok: false, code: "FLEET_NOT_FOUND" });
+    let rel: string;
+    try { rel = decodeURIComponent(pathname); } catch { return json(res, 400, { ok: false, code: "FLEET_BAD_REQUEST" }); }
+    if (rel.includes("\0") || rel.split("/").some((seg) => seg === ".." || seg.startsWith("."))) return json(res, 404, { ok: false, code: "FLEET_NOT_FOUND" });
+    let file = path.join(root, rel.endsWith("/") ? path.join(rel, "index.html") : rel);
+    const send = (status: number, f: string) => {
+      const st = fs.lstatSync(f);
+      if (!st.isFile()) return json(res, 404, { ok: false, code: "FLEET_NOT_FOUND" });
+      const real = fs.realpathSync(f);
+      if (real !== f && !real.startsWith(root + path.sep)) return json(res, 404, { ok: false, code: "FLEET_NOT_FOUND" });
+      const body = fs.readFileSync(f);
+      const ext = path.extname(f).toLowerCase();
+      const isHtml = ext === ".html";
+      const immutable = rel.startsWith("/_next/static/");
+      res.writeHead(status, headers({ "Content-Type": TYPES[ext] ?? "application/octet-stream",
+        ...(isHtml ? { "Content-Security-Policy": htmlCsp(f, body) } : {}),
+        "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-store" }));
+      return res.end(body);
+    };
+    if (!file.startsWith(root + path.sep) && file !== root) return json(res, 404, { ok: false, code: "FLEET_NOT_FOUND" });
+    try {
+      if (!rel.endsWith("/") && fs.existsSync(file) && fs.lstatSync(file).isDirectory() && fs.existsSync(path.join(file, "index.html"))) {
+        res.writeHead(308, headers({ Location: `${rel}/` }));
+        return res.end();
+      }
+      if (fs.existsSync(file)) return send(200, file);
+      file = path.join(root, "404.html");
+      return fs.existsSync(file) ? send(404, file) : json(res, 404, { ok: false, code: "FLEET_NOT_FOUND" });
+    } catch {
+      return json(res, 404, { ok: false, code: "FLEET_NOT_FOUND" });
+    }
+  };
+
   const handle = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     const url = new URL(req.url ?? "/", o.origin);
     const ip = ipOf(req);
-    if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-      res.writeHead(200, headers({ "Content-Type": "text/html; charset=utf-8" }));
-      return res.end(INDEX_HTML);
+    if (!url.pathname.startsWith("/api/")) {
+      if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { ok: false, code: "FLEET_METHOD" });
+      return serveStatic(url.pathname, res);
     }
-    if (req.method === "GET" && url.pathname === "/app.js") { res.writeHead(200, headers({ "Content-Type": "text/javascript; charset=utf-8" })); return res.end(APP_JS); }
-    if (req.method === "GET" && url.pathname === "/app.css") { res.writeHead(200, headers({ "Content-Type": "text/css; charset=utf-8" })); return res.end(APP_CSS); }
-    if (!url.pathname.startsWith("/api/")) return json(res, 404, { ok: false, code: "FLEET_NOT_FOUND" });
     if (!apiLimit.allow(ip)) return json(res, 429, { ok: false, code: "FLEET_RATE_LIMITED" });
     if (req.method === "POST") {
       if (req.headers.origin !== o.origin) return json(res, 403, { ok: false, code: "FLEET_ORIGIN" });

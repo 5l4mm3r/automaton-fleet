@@ -8,6 +8,7 @@
  *   FLEET_DASHBOARD_LISTEN         127.0.0.1:8790 (loopback only)
  *   FLEET_DASHBOARD_STATE_DIR      private directory (0700) holding dashboard.key (32 bytes, base64; 0600/0400)
  *   FLEET_DASHBOARD_TRUST_PROXY    "true" when a loopback TLS front sets X-Forwarded-For
+ *   FLEET_DASHBOARD_STATIC_DIR     the Next.js static export (default: <release>/packages/dashboard-web/out)
  *
  * Startup refuses (fail closed): running as root; any controller/admin/service/agent/operator/custody/identity/browser
  * credential visible; a non-loopback listen address; a non-https origin; a non-private state directory or key; a schema
@@ -28,6 +29,9 @@ import { createDashboardServer } from "./server.js";
 
 const FORBIDDEN = [...CUSTODY_FORBIDDEN_ENV, "FLEET_CUSTODY_DATABASE_URL", "FLEET_IDENTITY_DATABASE_URL", "FLEET_BROWSER_DATABASE_URL"];
 
+export const staticDirOf = (e: Record<string, string | undefined>) =>
+  path.resolve(e.FLEET_DASHBOARD_STATIC_DIR?.trim() || path.join(process.cwd(), "packages", "dashboard-web", "out"));
+
 export function dashboardEnvProblems(e: Record<string, string | undefined>, opts: { uid?: number | null; username?: string } = {}): string[] {
   const problems: string[] = [];
   const uid = opts.uid === undefined ? (typeof process.getuid === "function" ? process.getuid() : null) : opts.uid;
@@ -43,6 +47,10 @@ export function dashboardEnvProblems(e: Record<string, string | undefined>, opts
   const dir = e.FLEET_DASHBOARD_STATE_DIR?.trim();
   if (!dir || !path.isAbsolute(dir)) problems.push("FLEET_DASHBOARD_STATE_DIR (absolute) is not configured");
   else { problems.push(...privateDirProblems(dir, uid)); problems.push(...vaultFileProblems(path.join(dir, "dashboard.key"), uid)); }
+  const ui = staticDirOf(e);
+  if (!fs.existsSync(path.join(ui, "index.html")) || !fs.existsSync(path.join(ui, "login", "index.html"))) {
+    problems.push(`${ui}: the Next.js control centre is not built (pnpm --filter @automaton-fleet/dashboard-web build)`);
+  }
   return problems;
 }
 
@@ -61,7 +69,7 @@ export async function startDashboard(e: Record<string, string | undefined>) {
   const origin = e.FLEET_DASHBOARD_ORIGIN!.trim();
   const key = Buffer.from(fs.readFileSync(path.join(e.FLEET_DASHBOARD_STATE_DIR!.trim(), "dashboard.key"), "utf8").trim(), "base64");
   const server = createDashboardServer(gw, { origin, rpId: e.FLEET_DASHBOARD_RP_ID?.trim() || new URL(origin).hostname, stateKey: key,
-    trustProxy: e.FLEET_DASHBOARD_TRUST_PROXY === "true", log: (level, event, detail) => log(level as never, event, detail) });
+    trustProxy: e.FLEET_DASHBOARD_TRUST_PROXY === "true", staticDir: staticDirOf(e), log: (level, event, detail) => log(level as never, event, detail) });
   const [host, port] = (e.FLEET_DASHBOARD_LISTEN?.trim() || "127.0.0.1:8790").replace(/^\[|\](?=:)/g, "").split(/:(?=\d+$)/);
   await new Promise<void>((resolve) => server.listen(Number(port), host, () => resolve()));
   log("info", "dashboard_started", { origin, listen: `${host}:${port}`, schemaVersion: FLEET_PG_SCHEMA_VERSION });
