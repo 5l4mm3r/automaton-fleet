@@ -1,0 +1,41 @@
+== R30-2 start 2026-10-02T11:25:34Z
+rehearsal tooling /var/tmp/r30-tooling at f07261464ec208a11b8d904adf6baa0e9460f47c
+dump /home/ubuntu/automaton_fleet-v31-r30-20261002T112538Z.dump 3910212 B mode 600 sha 7a3816d6c2d86f82bfc2709c887d8cd4ca6b48aeb9179d9d5968cc347597123e pg 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+dump contents: 121 tables with data, 812 functions
+live at dump: 540 1d3e56f717f130e4758f4feccb7f13016184b987dc9d43ea0439780df566cd3c journals 503 | ident a8a7af564191e3d8e3d2653bf227f9be 107ddfca986688e86de6b2cc9823b263
+founder state /var/lib/automaton-fleet-backups/r30-20261002T112538Z/founder-01M3F50SH7PNX2E3GST13J52AS.tar 296960 B mode 600 sha 086d50c55a354288bb95074622096760105b77f12d8edd0ce800d6405f3feb5f files 27
+unit automaton-fleet 246a2495f36fd5e4
+unit automaton-fleet-operator-api b6461de748c6faea
+unit automaton-fleet-custody c3e3557580f44c4d
+unit automaton-fleet-founder@ fbbf6faf44d3460c
+restore proof: 121 tables, row counts identical to the live database at dump time
+restored: schema 31 | 540 1d3e56f717f130e4758f4feccb7f13016184b987dc9d43ea0439780df566cd3c journals 503 | ident a8a7af564191e3d8e3d2653bf227f9be 107ddfca986688e86de6b2cc9823b263
+rehearsal target: automaton_fleet_r30rh fleetadmin
+migrate-check: {"currentVersion":31,"resultingVersion":32,"wouldApply":[32],"requiredVersion":32,"rolledBack":true}
+Applied migrations: 32
+{"ok":true,"latencyMs":2,"schemaVersion":32,"countersConsistent":true}
+migrate took 927 ms
+schema 32
+audit PASS
+ledger head and journal count unchanged by the migration: 540 1d3e56f717f130e4758f4feccb7f13016184b987dc9d43ea0439780df566cd3c journals 503
+Founder 1 ledger fingerprint: OK 12 accounts identical; 0 new zero-balance account(s): 
+Founder 1 identity and credential rows unchanged
+ledger verify (SQL): {"ok": true, "headHash": "1d3e56f717f130e4758f4feccb7f13016184b987dc9d43ea0439780df566cd3c", "journals": 503, "unbalanced": 0}
+economy health: true LEDGER_VERIFY:INFO SETTLEMENT_JOURNALS:INFO ENVELOPE_LEDGER:INFO DEPENDENCIES_ACTION_SCOPED:INFO RAILS_NOT_LIVE_PINNED:INFO
+agent economics: 9125 cash, 9125 available
+wallet runway: {"days": 304, "note": "figures for the agent's own judgement; FleetController sets no runway rule", "burnPerDayMinor": 30}
+custody (v32): {"liveSigners": 0, "livingAgents": 1, "agentHeldKeys": 0, "attestedRails": 0, "keylessAgents": 1, "attestationTtlS": 900, "executionEnabled": false} | founder mode controller_keyless
+withdrawal advice: 0 safe of 0 liquid, cushion 0
+row-count changes after migration (pre-existing tables):
+  fleet_events=1927=1931
+  fleet_schema_migrations=31=32
+new tables: 2; dropped tables: 0
+re-check: {"currentVersion":32,"resultingVersion":32,"wouldApply":[],"requiredVersion":32,"rolledBack":true}
+{"ok":true,"latencyMs":4,"schemaVersion":32,"countersConsistent":true}
+re-run is a no-op (head unchanged, schema 32)
+audit PASS after re-run
+rollback proof: the pre-upgrade dump restores to schema 31 with identical rows, head and identity
+previous release releases/b949b1c… present
+throwaway dropped
+live untouched: schema 31, controller active, founder pid 349284
+== R30-2 end 2026-10-02T11:25:51Z

@@ -2019,6 +2019,14 @@ Evidence: `docs/evaluations/r29/` (ids, digests, counts, status; scanned clean, 
 - **Clean-up later:** the extra rehearsal dumps in `~` and backup directories `r29-20261002T1017*`–`1024*` (the first
   tar is 0644 inside the 0700 directory); `/var/tmp/r29-tooling`.
 
+## Stage R30 — controller custody signer, schema v32 (2026-10-02, VPS UTC)
+
+Controller-only update (`b949b1c` → `f072614`, build `9bf9ae22…6091`); Founder 1 untouched (its code is unchanged).
+Same procedure as R29-1…R29-3 (VPS build = local; real-data rehearsal on a throwaway restore with `migrate-check`
+exactly `{31→32, [32]}`; cutover 11:26:43–11:26:55; pre-v32 dump `~/automaton_fleet-v31-pre-v32-20261002T112643Z.dump`, sha
+`d6609eee…`; `runtime.env.pre-r30`). Result: wallet custody PASS (Founder 1 keyless); the only real-payment blocker is the
+absent live custody signer (pins unchanged). Evidence and rollback: `docs/evaluations/r30/`.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
