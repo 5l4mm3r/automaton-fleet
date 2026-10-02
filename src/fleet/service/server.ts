@@ -385,6 +385,9 @@ export class FleetService {
 
   // ─── Reaper ─────────────────────────────────────────────────────
 
+  /** v35: the economy-engine pass runs at most once a minute (its health window is measured in hours). */
+  private lastEngineAt = 0;
+
   async reapOnce(): Promise<void> {
     if (this.reaping) return this.reaping;
     this.reaping = (async () => {
@@ -405,7 +408,8 @@ export class FleetService {
         if (capital.changed) this.audit("envelopes_reaped", null, { evaluated: capital.evaluated, changed: capital.changed });
         // v35: the economy engine (replication window, missions, estates, notifications). A failure here is reported and
         // never stops the rest of the reaper.
-        if (typeof this.opts.admin.engineTick === "function") {
+        if (typeof this.opts.admin.engineTick === "function" && Date.now() - this.lastEngineAt >= 60_000) {
+          this.lastEngineAt = Date.now();
           try {
             const e = await this.opts.admin.engineTick(this.opts.realReplicationEnabled);
             const m = e.missions as { expired?: number; assigned?: number };

@@ -47,6 +47,7 @@
  *   economy-estate-assign <itemId> <agentId> | economy-estate-release <itemId> [reason…]
  *   economy-notification-ack <notificationId> | economy-notification-policy <dailyHourUtc|-> [adminEmail]
  *   hub-comms [agentId] | hub-reveal-log | hub-broker-key | hub-browser [agentId]
+ *   hub-dashboard-enroll <https://admin origin>    a one-time (15 min) Admin dashboard enrollment link: register a passkey (+ TOTP)
  *   owner-identity-upload <class> <file> <text/plain|application/pdf|image/jpeg|image/png|image/webp> --fingerprint <brokerKeySha256> [--expires iso]
  *                                               seal a fact/document to the broker's published key (pinned by fingerprint) and upload it
  *   hub-reveal <agent_credential|owner_identity> <credentialId|class> <outFile>   Admin reveal: the broker seals the value to a
@@ -69,7 +70,7 @@ export const HUB_COMMANDS = new Set([
   "economy-replication-policy", "economy-birth", "economy-reseed", "economy-birth-fulfil", "economy-birth-cancel",
   "economy-mission-assign", "economy-mission-end", "economy-mission-request", "economy-mission-policy", "economy-risk-policy",
   "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
-  "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser",
+  "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser", "hub-dashboard-enroll",
 ]);
 
 const flag = (a: string[], name: string): string | null => {
@@ -239,6 +240,13 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.estateRelease(p[0], p.slice(1).join(" ") || null, actor);
     case "hub-comms":
       return h.comms(p[0] ?? null);
+    case "hub-dashboard-enroll": {
+      const origin = p[0] ?? "";
+      if (!/^https?:\/\/[a-z0-9.-]+(:\d+)?$/.test(origin)) throw new Error("FLEET_BAD_REQUEST: hub-dashboard-enroll <https://admin origin>");
+      const token = crypto.randomBytes(32).toString("base64url");
+      const r = await h.dashboardEnroll(crypto.createHash("sha256").update(token, "utf8").digest("hex"), actor);
+      return { ...(r as object), link: `${origin}/#enroll=${token}`, note: "open this link on the device that will hold your passkey; it works once, for 15 minutes" };
+    }
     case "hub-browser":
       return h.browser(p[0] ?? null);
     case "hub-reveal-log":

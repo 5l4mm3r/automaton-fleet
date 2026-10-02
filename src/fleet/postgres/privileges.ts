@@ -35,6 +35,7 @@ import {
   CUSTODY_WRITES,
   IDENTITY_API_FUNCTIONS,
   BROWSER_API_FUNCTIONS,
+  DASHBOARD_API_FUNCTIONS,
   GENESIS_GUARDS,
   GENESIS_OPERATORS,
   LEDGER_TABLES,
@@ -77,6 +78,9 @@ export interface PrivilegeAuditOptions {
   /** Schema v37 browser worker roles (default fleet_browser + fleet_browser_login). */
   browserRoles?: string[];
   requireBrowserRoles?: boolean;
+  /** Schema v38 Admin dashboard roles (default fleet_dashboard + fleet_dashboard_login). */
+  dashboardRoles?: string[];
+  requireDashboardRoles?: boolean;
 }
 
 /** "provisioned": every operator role exists; "not_provisioned": none exists (and not required); "incomplete": some are missing. */
@@ -101,8 +105,10 @@ export const DEFAULT_CUSTODY_ROLES = ["fleet_custody", "fleet_custody_login"];
 export const DEFAULT_IDENTITY_ROLES = ["fleet_identity", "fleet_identity_login"];
 /** Schema v37 browser worker roles (same provisioning rule). */
 export const DEFAULT_BROWSER_ROLES = ["fleet_browser", "fleet_browser_login"];
+/** Schema v38 Admin dashboard roles (same provisioning rule). */
+export const DEFAULT_DASHBOARD_ROLES = ["fleet_dashboard", "fleet_dashboard_login"];
 
-type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser";
+type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser" | "dashboard";
 
 const TABLE_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
@@ -156,6 +162,14 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   if (browserState === "not_provisioned") {
     for (const r of configuredBrowserRoles) roles.push({ role: r, kind: "browser", exists: false, functions: [], tables: [] });
   }
+  const configuredDashboardRoles = opts.dashboardRoles ?? DEFAULT_DASHBOARD_ROLES;
+  const dashboardPresent = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = ANY($1)`, [configuredDashboardRoles])).rows[0].n;
+  const dashboardState: OperatorRoleState =
+    dashboardPresent === configuredDashboardRoles.length ? "provisioned" : dashboardPresent === 0 && !opts.requireDashboardRoles ? "not_provisioned" : "incomplete";
+  const dashboardRoles = dashboardState === "not_provisioned" ? [] : configuredDashboardRoles;
+  if (dashboardState === "not_provisioned") {
+    for (const r of configuredDashboardRoles) roles.push({ role: r, kind: "dashboard", exists: false, functions: [], tables: [] });
+  }
   const allRestricted = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES),
     ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES),
@@ -163,6 +177,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
     ...custodyRoles,
     ...identityRoles,
     ...browserRoles,
+    ...dashboardRoles,
   ];
   const plan: Array<[string, RoleKind]> = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES).map((r) => [r, "agent"] as [string, RoleKind]),
@@ -171,6 +186,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
     ...custodyRoles.map((r) => [r, "custody"] as [string, RoleKind]),
     ...identityRoles.map((r) => [r, "identity"] as [string, RoleKind]),
     ...browserRoles.map((r) => [r, "browser"] as [string, RoleKind]),
+    ...dashboardRoles.map((r) => [r, "dashboard"] as [string, RoleKind]),
   ];
 
   const agentFns = new Set(AGENT_API_FUNCTIONS.map(normSig));
@@ -179,6 +195,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   const custodyFns = new Set(CUSTODY_API_FUNCTIONS.map(normSig));
   const identityFns = new Set(IDENTITY_API_FUNCTIONS.map(normSig));
   const browserFns = new Set(BROWSER_API_FUNCTIONS.map(normSig));
+  const dashboardFns = new Set(DASHBOARD_API_FUNCTIONS.map(normSig));
   const operatorVolatile = new Set(OPERATOR_VOLATILE_FUNCTIONS.map(normSig));
   const serviceTables = new Set(SERVICE_READ_TABLES);
 
@@ -273,7 +290,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
         ORDER BY 1`,
       [role, schema],
     );
-    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : kind === "identity" ? identityFns : kind === "browser" ? browserFns : operatorFns;
+    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : kind === "identity" ? identityFns : kind === "browser" ? browserFns : kind === "dashboard" ? dashboardFns : operatorFns;
     const executable: string[] = [];
     for (const f of fns.rows) {
       const sig = normSig(f.sig);
@@ -979,6 +996,14 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_browser_actions: new Set(["fleet_browser_enqueue", "bx_claim_action", "bx_report_action"]),
     fleet_browser_secret_requests: new Set(["bx_secret_request", "bx_secret_take", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
     fleet_auth_message_blobs: new Set(["ix_auth_blob_store", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
+    // v38: Admin authentication state — written only by the dashboard gateway functions (and the owner's enrollment).
+    fleet_admin_passkeys: new Set(["dash_passkey_add", "dash_passkey_used", "dash_passkey_revoke"]),
+    fleet_admin_totp: new Set(["dash_totp_set", "dash_totp_accept", "dash_totp_reset"]),
+    fleet_admin_enrollment: new Set(["dash_passkey_add", "fleet_admin_dashboard_enroll"]),
+    fleet_admin_challenges: new Set(["dash_challenge_new", "dash_challenge_use"]),
+    fleet_admin_sessions: new Set(["dash_session_begin", "dash_session_totp", "dash_session_live", "dash_session_end", "dash_sessions_revoke_all"]),
+    fleet_admin_stepups: new Set(["dash_stepup_record", "dash_stepup_consume"]),
+    fleet_admin_auth_log: new Set(["fleet_admin_auth_log_write"]),
     fleet_identity_releases: new Set(["ix_release_record"]),
     fleet_owner_identity_classes: new Set(["fleet_admin_owner_identity_class_set", "ix_vault_installed"]),
     fleet_owner_identity_consent: new Set(["fleet_admin_owner_identity_consent_set", "fleet_admin_owner_identity_consent_revoke"]),

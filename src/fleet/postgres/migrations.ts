@@ -45,8 +45,9 @@ import { V34_SQL } from "./migrations-phase34.js";
 import { V35_SQL } from "./migrations-phase35.js";
 import { V36_SQL } from "./migrations-phase36.js";
 import { V37_SQL } from "./migrations-phase37.js";
+import { V38_SQL } from "./migrations-phase38.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 37;
+export const FLEET_PG_SCHEMA_VERSION = 38;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1179,6 +1180,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 35, name: "fleet_economy_engine_replication_missions_estates_notifications", sql: V35_SQL },
   { version: 36, name: "business_mail_sms_admin_reveal_owner_vault_upload", sql: V36_SQL },
   { version: 37, name: "general_browser_operator_credential_execution", sql: V37_SQL },
+  { version: 38, name: "admin_dashboard_auth_gateway", sql: V38_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1362,6 +1364,28 @@ export const BROWSER_API_FUNCTIONS: readonly string[] = Object.freeze([
   "bx_secret_request(uuid, text, text, text, text, bytea)",
   "bx_secret_take(uuid, uuid, text)",
   "bx_broker_key()",
+]);
+
+/** Schema v38: the Admin dashboard's whole database surface (dash_*): authentication protocol + the single Admin gateway. */
+export const DASHBOARD_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "dash_ping()",
+  "dash_auth_state()",
+  "dash_log(text, boolean, text, text, jsonb)",
+  "dash_challenge_new(text, text, text, text, text)",
+  "dash_challenge_use(text, text, text, text, text)",
+  "dash_enroll_valid(text)",
+  "dash_passkey_add(text, text, text, text, bytea, bigint, text[], text, text)",
+  "dash_passkey_get(text)",
+  "dash_passkey_used(text, bigint, text)",
+  "dash_totp_set(text, bytea, text)",
+  "dash_totp_get()",
+  "dash_totp_accept(bigint, boolean)",
+  "dash_session_begin(text, text, text, text, text)",
+  "dash_session_totp(text, boolean, text)",
+  "dash_session_check(text)",
+  "dash_session_end(text, text)",
+  "dash_stepup_record(text, text, text, text, text)",
+  "dash_call(text, text, text, text, text, text)",
 ]);
 
 /** Schema v10: the only functions whose bodies may write the ledger tables (append-only double entry). */

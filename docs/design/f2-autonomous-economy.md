@@ -1247,3 +1247,33 @@ sweeps stay OFF (build flags; not constitution).
 - Agent tool `fleet_services`; Hub `hub-engine`, `hub-replication`, `hub-estates`, `hub-notifications`, `hub-daily-report`,
   `hub-risk`; policies `economy-replication-policy`, `economy-mission-policy`, `economy-risk-policy`,
   `economy-notification-policy`.
+
+## 35. Admin control centre — schema v38 (2026-10-02; owner decisions of the master handoff)
+
+The dashboard (`src/fleet/dashboard`, unit `automaton-fleet-dashboard.service`, go-live steps in
+`deploy/proposed/dashboard/README.md`) is the owner's primary interface. Admin is unrestricted; these controls only
+authenticate that the person exercising Admin authority is the owner.
+
+- **Process / privilege**: own OS user; loopback behind the `admin.agentfleet.vip` TLS front; DB role `fleet_dashboard`
+  with `dash_*` only — **no owner credential, no table access, no vault**.
+- **Authentication**: WebAuthn passkey (user verification required; signature-counter regression = RED) → TOTP
+  (encrypted at rest with the dashboard's state key; each time-step accepted once) → session cookie (HttpOnly, Secure,
+  SameSite=Strict, `__Host-`; 30 min idle, 12 h absolute) + CSRF token. No password, no IP allow-list. 20 failed
+  attempts in 15 minutes lock sign-in for 15 minutes and raise RED. First passkey (and recovery) by a one-time
+  15-minute link from `fleet:admin hub-dashboard-enroll`. Every auth event is in the append-only `fleet_admin_auth_log`.
+- **Step-up**: reveals, owner-identity changes, every money movement (agent transfers, Treasury transfers, funding, owner
+  withdrawals — the passkey assertion is the strong confirmation), kill, birth/reseed, estate moves, policy and security
+  settings require a fresh passkey assertion bound to the exact operation and its exact arguments (single use, 2 min).
+- **dash_call** — the single gateway: session + CSRF + step-up checks, an allow-listed operation set dispatched as
+  `operator:owner`, an audit row per change, error codes only.
+- **Reveal / upload end to end**: the browser generates an X25519 key (WebCrypto); the identity broker seals the secret to
+  it; the browser opens it, shows it for 60 s and forgets it. Uploads (facts or documents) are sealed in the browser to
+  the broker's published key (fingerprint shown). The dashboard server only relays sealed bytes.
+- **Views**: overview (daily report, Treasury, replication, health, alerts), agents, per-agent page (personas/brands,
+  accounts, credentials with Reveal, mailboxes, numbers, browser sessions, economics/risk, wallet, activity; controls:
+  pause/resume, kill, fund, transfer, Treasury transfer, mission), Treasury (owner withdrawal, Genesis capital),
+  replication & births (status, health window, wealth, manual birth, reseed, policy), missions, estates (assign /
+  release), owner identity (upload, classes with Reveal, standing consent, releases, uploads), notifications (ack,
+  delivery policy), security (passkeys, sessions, reveal log, auth log).
+- **Rendering**: every registry value through `textContent` (agent-written text cannot become markup); strict CSP (no
+  inline script/style, `connect-src 'self'`, `frame-ancestors 'none'`); no third-party script.

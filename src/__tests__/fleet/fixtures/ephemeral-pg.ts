@@ -29,6 +29,8 @@ export interface EphemeralPg {
   identityUrl: string;
   /** Schema v37 browser worker login (bx_* only). */
   browserUrl: string;
+  /** Schema v38 Admin dashboard login (dash_* only). */
+  dashboardUrl: string;
   superUrl: string;
   /** Re-run scripts/fleet-db-roles.sql (idempotency tests). */
   applyRoles(): void;
@@ -77,6 +79,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
   const custodyPw = randomBytes(12).toString("hex");
   const identityPw = randomBytes(12).toString("hex");
   const browserPw = randomBytes(12).toString("hex");
+  const dashboardPw = randomBytes(12).toString("hex");
   const pwfile = path.join(dir, "pw");
   fs.writeFileSync(pwfile, superPw + "\n", { mode: 0o600 });
   execFileSync(path.join(bin, "initdb"), ["-D", data, "-U", "postgres", "--pwfile", pwfile, "--auth=scram-sha-256", "-E", "UTF8"], {
@@ -110,7 +113,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       psql(
         superUrl,
         ["-v", `dbname=${dbname}`, "-v", "owner=fleet_owner", "-f", "-"],
-        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n\\set custody_password ${custodyPw}\n\\set identity_password ${identityPw}\n\\set browser_password ${browserPw}\n` +
+        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n\\set custody_password ${custodyPw}\n\\set identity_password ${identityPw}\n\\set browser_password ${browserPw}\n\\set dashboard_password ${dashboardPw}\n` +
           fs.readFileSync(path.resolve("scripts/fleet-db-roles.sql"), "utf8"),
       );
     // Owner: like production fleetadmin — not a superuser, cannot create roles.
@@ -128,6 +131,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       custodyUrl: `postgresql://fleet_custody_login:${custodyPw}@127.0.0.1:${port}/${dbname}`,
       identityUrl: `postgresql://fleet_identity_login:${identityPw}@127.0.0.1:${port}/${dbname}`,
       browserUrl: `postgresql://fleet_browser_login:${browserPw}@127.0.0.1:${port}/${dbname}`,
+      dashboardUrl: `postgresql://fleet_dashboard_login:${dashboardPw}@127.0.0.1:${port}/${dbname}`,
       applyRoles,
       stop,
     };

@@ -1,0 +1,73 @@
+# Automaton Fleet Admin dashboard — schema v38 (admin.agentfleet.vip; passkey + TOTP; step-up for sensitive actions).
+#
+# NOT INSTALLED by default (owner-approved host step; deploy/proposed/dashboard/README.md). Runs
+# dist/fleet/dashboard/main.js from the pinned release as its own system user (automaton-fleet-dashboard, no other group).
+# Loopback only (127.0.0.1:8790); the public TLS front for admin.agentfleet.vip forwards to it. It holds NO owner database
+# credential (fleet_dashboard_login: dash_* only) and no vault: reveals are sealed by the identity broker to a key that
+# exists only in the Admin's browser; uploads are sealed in the browser to the broker's key.
+
+[Unit]
+Description=Automaton Fleet Admin dashboard (loopback; behind the admin.agentfleet.vip TLS front)
+Wants=postgresql.service
+After=postgresql.service automaton-fleet.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-dashboard
+Group=automaton-fleet-dashboard
+SupplementaryGroups=
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/dashboard/main.js
+EnvironmentFile=/etc/automaton-fleet/dashboard.env
+Environment=NODE_ENV=production
+Environment=FLEET_DASHBOARD_EXPECTED_USER=automaton-fleet-dashboard
+Environment=FLEET_DASHBOARD_ORIGIN=https://admin.agentfleet.vip
+Environment=FLEET_DASHBOARD_LISTEN=127.0.0.1:8790
+Environment=FLEET_DASHBOARD_TRUST_PROXY=true
+Environment=FLEET_DASHBOARD_STATE_DIR=/var/lib/automaton-fleet-dashboard
+StateDirectory=automaton-fleet-dashboard
+StateDirectoryMode=0700
+UMask=0077
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-dashboard
+
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/browser.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key
+InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-identity -/var/lib/automaton-fleet-witness -/var/lib/private/automaton-founders -/var/log/automaton-fleet -/run/credentials
+
+[Install]
+WantedBy=multi-user.target

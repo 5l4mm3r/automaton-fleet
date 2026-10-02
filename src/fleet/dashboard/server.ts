@@ -1,0 +1,249 @@
+/**
+ * Admin dashboard HTTP server (schema v38). Serves the control-centre UI and a small JSON API. Listens on loopback behind
+ * the TLS front (admin.agentfleet.vip). Authentication (owner decision 2026-10-02):
+ *
+ *   passkey (WebAuthn, user verification required) → TOTP (replay-proof) → a session (HttpOnly, Secure, SameSite=Strict,
+ *   __Host- cookie; 30-minute idle / 12-hour absolute) + a CSRF token for every state change; STEP-UP — a fresh passkey
+ *   assertion bound to one operation and its exact arguments — for every sensitive operation. No password, no IP list.
+ *
+ * Every Admin operation is dash_call in the database (allow-listed, audited). Reveals and owner-identity uploads are
+ * end-to-end encrypted in the Admin's browser (WebCrypto X25519): this server relays sealed bytes only. Every response
+ * carries a strict CSP and no-store; POSTs must come from the configured origin; per-IP rate limits apply.
+ */
+import crypto from "crypto";
+import http from "http";
+import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from "@simplewebauthn/server";
+import { SecretBox, totp } from "../identity/crypto.js";
+import type { DashboardGatewayPort } from "./gateway.js";
+import { APP_CSS, APP_JS, INDEX_HTML } from "./ui.js";
+
+export interface DashboardOptions {
+  /** The public origin, e.g. https://admin.agentfleet.vip (http://localhost:<port> only in tests). */
+  origin: string;
+  rpId: string;
+  rpName?: string;
+  /** 32-byte key (dashboard state) encrypting the TOTP secret at rest. */
+  stateKey: Buffer;
+  /** Take the client address from X-Forwarded-For (only behind the loopback TLS front). */
+  trustProxy?: boolean;
+  log?: (level: string, event: string, detail?: Record<string, unknown>) => void;
+}
+
+const sha = (s: string) => crypto.createHash("sha256").update(s, "utf8").digest("hex");
+const rand = () => crypto.randomBytes(32).toString("base64url");
+const USER_ID = new Uint8Array(Buffer.from("automaton-fleet-admin-owner"));
+const MAX_BODY = 22 * 1024 * 1024;
+
+class RateLimiter {
+  private readonly hits = new Map<string, number[]>();
+  constructor(private readonly max: number, private readonly windowMs: number) {}
+  allow(key: string): boolean {
+    const now = Date.now();
+    const h = (this.hits.get(key) ?? []).filter((t) => now - t < this.windowMs);
+    if (h.length >= this.max) { this.hits.set(key, h); return false; }
+    h.push(now);
+    this.hits.set(key, h);
+    if (this.hits.size > 10_000) this.hits.clear();
+    return true;
+  }
+}
+
+export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOptions): http.Server {
+  const box = new SecretBox(o.stateKey);
+  const secure = o.origin.startsWith("https://");
+  const cookieName = secure ? "__Host-fleet_session" : "fleet_session";
+  const authLimit = new RateLimiter(30, 10 * 60_000);
+  const apiLimit = new RateLimiter(600, 60_000);
+
+  const headers = (extra: Record<string, string> = {}) => ({
+    "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY", "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin", "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
+    "Cache-Control": "no-store", ...(secure ? { "Strict-Transport-Security": "max-age=63072000; includeSubDomains" } : {}), ...extra,
+  });
+  const json = (res: http.ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}) => {
+    res.writeHead(status, headers({ "Content-Type": "application/json; charset=utf-8", ...extra }));
+    res.end(JSON.stringify(body));
+  };
+  const ipOf = (req: http.IncomingMessage) => {
+    const fwd = o.trustProxy ? String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() : "";
+    return (fwd || req.socket.remoteAddress || "?").slice(0, 64);
+  };
+  const cookie = (req: http.IncomingMessage): string | null => {
+    for (const part of String(req.headers.cookie ?? "").split(";")) {
+      const [k, v] = part.trim().split("=");
+      if (k === cookieName && v && /^[A-Za-z0-9_-]{40,60}$/.test(v)) return v;
+    }
+    return null;
+  };
+  const setCookie = (token: string | null, maxAge: number) =>
+    `${cookieName}=${token ?? ""}; Path=/; HttpOnly; SameSite=Strict;${secure ? " Secure;" : ""} Max-Age=${token ? maxAge : 0}`;
+  const body = (req: http.IncomingMessage): Promise<Record<string, any>> => new Promise((resolve, reject) => {
+    let n = 0;
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => { n += c.length; if (n > MAX_BODY) { reject(new Error("too large")); req.destroy(); } else chunks.push(c); });
+    req.on("end", () => { try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {}); } catch { reject(new Error("bad json")); } });
+    req.on("error", reject);
+  });
+  const totpCheck = (secret: string, code: string, after: number): number | null => {
+    if (!/^\d{6}$/.test(code)) return null;
+    const now = Math.floor(Date.now() / 30_000);
+    for (const c of [now - 1, now, now + 1]) {
+      if (c > after && crypto.timingSafeEqual(Buffer.from(totp(secret, c * 30_000)), Buffer.from(code))) return c;
+    }
+    return null;
+  };
+  const verifyAssertion = async (response: any, purpose: string, sessionSha: string | null, op: string | null, argsSha: string | null, ip: string) => {
+    const id = typeof response?.id === "string" ? response.id : "";
+    const k = await gw.passkeyGet(id);
+    if (!k) return null;
+    const v = await verifyAuthenticationResponse({
+      response, expectedOrigin: o.origin, expectedRPID: o.rpId, requireUserVerification: true,
+      expectedChallenge: async (c: string) => gw.challengeUse(sha(c), purpose, sessionSha, op, argsSha),
+      credential: { id: k.id, publicKey: new Uint8Array(Buffer.from(k.publicKeyB64, "base64")), counter: Number(k.counter), transports: k.transports },
+    }).catch(() => null);
+    if (!v?.verified) return null;
+    if (!(await gw.passkeyUsed(k.id, v.authenticationInfo.newCounter, ip))) return null;
+    return k.id;
+  };
+
+  const handle = async (req: http.IncomingMessage, res: http.ServerResponse) => {
+    const url = new URL(req.url ?? "/", o.origin);
+    const ip = ipOf(req);
+    if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+      res.writeHead(200, headers({ "Content-Type": "text/html; charset=utf-8" }));
+      return res.end(INDEX_HTML);
+    }
+    if (req.method === "GET" && url.pathname === "/app.js") { res.writeHead(200, headers({ "Content-Type": "text/javascript; charset=utf-8" })); return res.end(APP_JS); }
+    if (req.method === "GET" && url.pathname === "/app.css") { res.writeHead(200, headers({ "Content-Type": "text/css; charset=utf-8" })); return res.end(APP_CSS); }
+    if (!url.pathname.startsWith("/api/")) return json(res, 404, { ok: false, code: "FLEET_NOT_FOUND" });
+    if (!apiLimit.allow(ip)) return json(res, 429, { ok: false, code: "FLEET_RATE_LIMITED" });
+    if (req.method === "POST") {
+      if (req.headers.origin !== o.origin) return json(res, 403, { ok: false, code: "FLEET_ORIGIN" });
+      if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) return json(res, 415, { ok: false, code: "FLEET_CONTENT_TYPE" });
+    }
+    const tok = cookie(req);
+    const sessionSha = tok ? sha(tok) : null;
+
+    // ── authentication ──
+    if (url.pathname.startsWith("/api/auth/") && !authLimit.allow(ip)) return json(res, 429, { ok: false, code: "FLEET_RATE_LIMITED" });
+    if (req.method === "GET" && url.pathname === "/api/auth/state") {
+      const st = await gw.authState();
+      const live = sessionSha ? (await gw.sessionCheck(sessionSha)).ok : false;
+      return json(res, 200, { ok: true, enrolled: st.passkeys.length > 0 && st.totpConfigured, locked: st.locked, session: live ? "full" : "none" });
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/enroll/options") {
+      const b = await body(req);
+      const tokenSha = sha(String(b.token ?? ""));
+      if (!(await gw.enrollValid(tokenSha))) { await gw.log("enroll", false, "FLEET_ENROLLMENT_INVALID", ip); return json(res, 403, { ok: false, code: "FLEET_ENROLLMENT_INVALID" }); }
+      const st = await gw.authState();
+      const opts = await generateRegistrationOptions({ rpName: o.rpName ?? "Automaton Fleet", rpID: o.rpId, userName: "owner", userDisplayName: "Fleet Admin",
+        userID: USER_ID, attestationType: "none", excludeCredentials: st.passkeys.map((p) => ({ id: p.id, transports: p.transports })),
+        authenticatorSelection: { residentKey: "preferred", userVerification: "required" }, supportedAlgorithmIDs: [-7, -8, -257] });
+      await gw.challengeNew(sha(opts.challenge), "enroll", null, null, tokenSha);
+      return json(res, 200, { ok: true, options: opts });
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/enroll/verify") {
+      const b = await body(req);
+      const token = String(b.token ?? "");
+      const tokenSha = sha(token);
+      const v = await verifyRegistrationResponse({ response: b.response, expectedOrigin: o.origin, expectedRPID: o.rpId, requireUserVerification: true,
+        expectedChallenge: async (c: string) => gw.challengeUse(sha(c), "enroll", null, null, tokenSha) }).catch(() => null);
+      if (!v?.verified) { await gw.log("enroll", false, "FLEET_PASSKEY_INVALID", ip); return json(res, 403, { ok: false, code: "FLEET_PASSKEY_INVALID" }); }
+      const c = v.registrationInfo.credential;
+      const add = await gw.passkeyAdd(tokenSha, null, null, c.id, Buffer.from(c.publicKey), c.counter, c.transports ?? [], String(b.name ?? "passkey").slice(0, 80), ip);
+      if (!add.ok) return json(res, 403, add);
+      const st = await gw.authState();
+      if (st.totpConfigured) return json(res, 200, { ok: true, next: "login" });
+      // First enrollment: a TOTP factor, shown ONCE to the owner's device that just enrolled (base32, otpauth URI).
+      const raw = crypto.randomBytes(20);
+      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      let bits = 0, value = 0, secret = "";
+      for (const x of raw) { value = (value << 8) | x; bits += 8; while (bits >= 5) { secret += alphabet[(value >>> (bits - 5)) & 31]; bits -= 5; } }
+      const set = await gw.totpSet(tokenSha, box.seal(secret, "dashboard:totp"), ip);
+      if (!set.ok) return json(res, 403, set);
+      return json(res, 200, { ok: true, next: "totp", totpSecret: secret,
+        otpauth: `otpauth://totp/${encodeURIComponent("Automaton Fleet:owner")}?secret=${secret}&issuer=${encodeURIComponent("Automaton Fleet")}&period=30&digits=6` });
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/enroll/totp") {
+      const b = await body(req);
+      const t = await gw.totpGet();
+      if (!t || t.confirmed) return json(res, 400, { ok: false, code: "FLEET_TOTP_STATE" });
+      const secret = box.open(Buffer.from(t.secretEncB64, "base64"), "dashboard:totp");
+      const c = totpCheck(secret, String(b.code ?? ""), Number(t.lastCounter));
+      if (c === null || !(await gw.totpAccept(c, true))) { await gw.log("enroll", false, "FLEET_TOTP_INVALID", ip); return json(res, 403, { ok: false, code: "FLEET_TOTP_INVALID" }); }
+      await gw.log("enroll", true, null, ip, { totpConfirmed: true });
+      return json(res, 200, { ok: true, next: "login" });
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/login/options") {
+      const st = await gw.authState();
+      if (st.locked) return json(res, 423, { ok: false, code: "FLEET_ADMIN_LOCKED" });
+      const opts = await generateAuthenticationOptions({ rpID: o.rpId, userVerification: "required", allowCredentials: st.passkeys.map((p) => ({ id: p.id, transports: p.transports })) });
+      await gw.challengeNew(sha(opts.challenge), "login", null, null, null);
+      return json(res, 200, { ok: true, options: opts });
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/login/verify") {
+      const b = await body(req);
+      const id = await verifyAssertion(b.response, "login", null, null, null, ip);
+      if (!id) { await gw.log("login", false, "FLEET_PASSKEY_INVALID", ip); return json(res, 403, { ok: false, code: "FLEET_PASSKEY_INVALID" }); }
+      const session = rand();
+      const csrf = rand();
+      await gw.sessionBegin(sha(session), sha(csrf), id, ip, String(req.headers["user-agent"] ?? "").slice(0, 300));
+      return json(res, 200, { ok: true, next: "totp", csrf }, { "Set-Cookie": setCookie(session, 300) });
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/login/totp") {
+      if (!sessionSha) return json(res, 401, { ok: false, code: "FLEET_SESSION_INVALID" });
+      const b = await body(req);
+      const t = await gw.totpGet();
+      if (!t?.confirmed) return json(res, 403, { ok: false, code: "FLEET_TOTP_STATE" });
+      const secret = box.open(Buffer.from(t.secretEncB64, "base64"), "dashboard:totp");
+      const c = totpCheck(secret, String(b.code ?? ""), Number(t.lastCounter));
+      const accepted = c !== null && (await gw.totpAccept(c, false));
+      const r = await gw.sessionTotp(sessionSha, accepted, ip);
+      if (!r.ok) return json(res, 403, r);
+      return json(res, 200, { ok: true }, { "Set-Cookie": setCookie(tok, 12 * 3600) });
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+      if (sessionSha) await gw.sessionEnd(sessionSha, ip);
+      return json(res, 200, { ok: true }, { "Set-Cookie": setCookie(null, 0) });
+    }
+
+    // ── everything below needs a full session ──
+    if (!sessionSha || !(await gw.sessionCheck(sessionSha)).ok) return json(res, 401, { ok: false, code: "FLEET_SESSION_INVALID" });
+    if (req.method === "POST" && url.pathname === "/api/stepup/options") {
+      const b = await body(req);
+      const op = String(b.op ?? ""), args = String(b.args ?? "{}");
+      const st = await gw.authState();
+      const opts = await generateAuthenticationOptions({ rpID: o.rpId, userVerification: "required", allowCredentials: st.passkeys.map((p) => ({ id: p.id, transports: p.transports })) });
+      await gw.challengeNew(sha(opts.challenge), "stepup", sessionSha, op, sha(args));
+      return json(res, 200, { ok: true, options: opts });
+    }
+    if (req.method === "POST" && url.pathname === "/api/stepup/verify") {
+      const b = await body(req);
+      const op = String(b.op ?? ""), args = String(b.args ?? "{}");
+      const id = await verifyAssertion(b.response, "stepup", sessionSha, op, sha(args), ip);
+      if (!id) { await gw.log("stepup", false, "FLEET_PASSKEY_INVALID", ip, { op }); return json(res, 403, { ok: false, code: "FLEET_PASSKEY_INVALID" }); }
+      const stepup = rand();
+      const r = await gw.stepupRecord(sessionSha, sha(stepup), op, sha(args), ip);
+      return r.ok ? json(res, 200, { ok: true, stepup }) : json(res, 403, r);
+    }
+    if (req.method === "GET" && url.pathname === "/api/read") {
+      const r = await gw.call(sessionSha, null, url.searchParams.get("op") ?? "", url.searchParams.get("args") ?? "{}", null, ip);
+      return json(res, r.ok ? 200 : r.code === "FLEET_SESSION_INVALID" ? 401 : 400, r);
+    }
+    if (req.method === "POST" && url.pathname === "/api/call") {
+      const b = await body(req);
+      const csrf = String(req.headers["x-csrf"] ?? "");
+      const r = await gw.call(sessionSha, csrf ? sha(csrf) : null, String(b.op ?? ""), String(b.args ?? "{}"), b.stepup ? sha(String(b.stepup)) : null, ip);
+      return json(res, r.ok ? 200 : r.code === "FLEET_SESSION_INVALID" ? 401 : 400, r);
+    }
+    return json(res, 404, { ok: false, code: "FLEET_NOT_FOUND" });
+  };
+
+  return http.createServer((req, res) => {
+    handle(req, res).catch((err) => {
+      o.log?.("error", "dashboard_request_failed", { path: (req.url ?? "").split("?")[0], error: err instanceof Error ? err.message.slice(0, 200) : "error" });
+      if (!res.headersSent) json(res, 500, { ok: false, code: "FLEET_DASHBOARD_ERROR" });
+    });
+  });
+}

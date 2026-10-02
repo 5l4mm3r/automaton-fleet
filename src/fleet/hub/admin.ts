@@ -223,6 +223,10 @@ export class PgHubAdmin {
   revealTake(requestId: string, actor: string) {
     return this.one<{ ok: boolean; status?: string; sealedB64?: string; code?: string }>(`SELECT fleet_admin_reveal_take($1, $2) AS r`, [requestId, actor]);
   }
+  /** v38: a one-time dashboard enrollment token (first passkey + TOTP, or recovery); the database keeps its digest only. */
+  dashboardEnroll(tokenSha: string, actor: string) {
+    return this.one(`SELECT fleet_admin_dashboard_enroll($1, $2) AS r`, [tokenSha, actor]);
+  }
   /** v37: browser sessions, actions, credential requests and refused origins (no secret). */
   browser(agentId: string | null) {
     return this.one(`SELECT fleet_hub_browser($1) AS r`, [agentId]);
