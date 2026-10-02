@@ -1012,6 +1012,16 @@ export class PgFleetStore {
 
   /** Schema v26 (F2-A): open external dependencies for doctor — information, never an owner to-do (admin credential). */
   /** Schema v30 (F2): the economy doctor's findings (INFO / WARN / FAIL); null before v30 or when unreadable. */
+  /** Schema v32: custody facts — keyless vs agent-held-key living agents, attested signers, instruction states. Null before v32. */
+  async custodyStatus(): Promise<{ executionEnabled: boolean; livingAgents: number; keylessAgents: number; agentHeldKeys: number; attestedRails: number;
+    liveSigners: number; attestationTtlS: number; instructions: { issued: number; claimed: number; claimedStale: number; settled: number; failed: number } } | null> {
+    try {
+      return await this.read(async (c) => (await c.query(`SELECT fleet_custody_status() AS j`)).rows[0].j);
+    } catch {
+      return null;
+    }
+  }
+
   async economyHealth(): Promise<{ ok: boolean; warn: boolean; findings: Array<{ severity: "INFO" | "WARN" | "FAIL"; code: string; detail: unknown }> } | null> {
     try {
       return await this.read(async (c) => (await c.query(`SELECT fleet_economy_health() AS j`)).rows[0].j);

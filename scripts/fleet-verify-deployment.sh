@@ -145,6 +145,12 @@ if [[ -f "$FT" ]]; then
       bad "founder ${fid: -6} not pinned to its registered release ${fcommit:0:7} (WorkingDirectory=$wd, pin=${pc:-none}, env=${envf:-?})"
     fi
   done < <(runuser -u postgres -- psql -X -At -F '|' -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT agent_id, runtime_commit FROM fleet.fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive') ORDER BY agent_id" 2>/dev/null)
+  # v32: founders are keyless — no wallet key file anywhere in a founder's private state (custody is the Treasury's).
+  FS=/var/lib/private/automaton-founders
+  if [[ -d "$FS" ]]; then
+    keys="$(find "$FS" -xdev \( -name 'wallet.json' -o -name '*.key' -o -name '*.pem' -o -name 'mnemonic*' -o -name '*keystore*' \) -type f 2>/dev/null | wc -l)"
+    [[ "$keys" == "0" ]] && ok "founder state holds no wallet or private-key file (keyless custody)" || bad "founder state holds $keys wallet/private-key file(s): founders must be keyless"
+  fi
   # R23: no living-founder runtime upgrade is left half done (prepared, or committed but not verified or rolled back),
   # and the pre-upgrade state backups are root-only.
   openup="$(runuser -u postgres -- psql -X -At -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT count(*) FROM fleet.fleet_founder_runtime_upgrades WHERE status IN ('prepared','committed')" 2>/dev/null || echo "?")"

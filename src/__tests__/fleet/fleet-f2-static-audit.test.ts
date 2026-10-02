@@ -37,6 +37,8 @@ const RULES: Rule[] = [
   { cls: "retirement", file: /src\/fleet\/service\/server\.ts$/, line: /owner-enrolled payee or controller-verified vendor/, why: "documents both destination kinds" },
   { cls: "retirement", file: /src\/fleet\/postgres\/migrations-phase31\.ts$/, line: /^\s*\[`\s+IF p_approved IS NULL OR p_approved < 0 OR p_approved > e\.requested_minor OR p_approved > pol\.hard_cap_minor$/,
     why: "the v24 owner-decide text a v31 asserted edit REMOVES (own capital is sized by the founder)" },
+  { cls: "legal/security", file: /src\/fleet\/(hub\/admin|treasury\/ledger|postgres\/migrations-phase32)\.ts$/, line: /owner-enrolled destination/,
+    why: "v32: the payable reference of the owner's own enrolled destinations (owner/Treasury accounts; owner-only by constitution) for the custody signer" },
   { cls: "inert-legacy", file: /src\/fleet\/cognition\/capability-signature\.ts$/, why: "capability-policy signature field (data, not shown as a cap; signature compatibility)" },
 ];
 

@@ -871,7 +871,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
   const writers: Record<string, Set<string>> = {
     fleet_ventures: new Set(["fleet_econ_venture_create", "fleet_econ_venture_transition", "fleet_venture_move"]),
     fleet_venture_transitions: new Set(["fleet_econ_venture_create", "fleet_venture_move"]),
-    fleet_venture_journals: new Set(["fleet_admin_venture_attribute", "fleet_settlement_post"]),
+    fleet_venture_journals: new Set(["fleet_admin_venture_attribute", "fleet_settlement_post", "cx_report_result"]),
     fleet_decision_records: new Set(["fleet_econ_decision_record", "fleet_econ_decision_outcome", "fleet_econ_decision_correct"]),
     fleet_opportunities: new Set(["fleet_econ_opportunity_record", "fleet_econ_opportunity_shortlist", "fleet_econ_opportunity_status", "fleet_opportunity_expire", "fleet_econ_venture_create"]),
     fleet_economic_knowledge: new Set(["fleet_econ_knowledge_record", "fleet_econ_decision_outcome"]),
@@ -880,14 +880,14 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_rail_assignments: new Set(["fleet_rail_resolve", "fleet_admin_rail_set_status"]),
     fleet_rail_requirements: new Set(["fleet_rail_resolve", "fleet_econ_rail_require"]),
     fleet_external_transactions: new Set(["svc_settlement_ingest", "fleet_settlement_post"]),
-    fleet_credential_refs: new Set(["fleet_admin_credential_register", "fleet_admin_credential_set_status", "svc_credential_use"]),
-    fleet_credential_use_log: new Set(["svc_credential_use"]),
+    fleet_credential_refs: new Set(["fleet_admin_credential_register", "fleet_admin_credential_set_status", "svc_credential_use", "cx_credential_use"]),
+    fleet_credential_use_log: new Set(["svc_credential_use", "cx_credential_use"]),
     fleet_legal_entities: new Set(["fleet_admin_legal_entity_add"]),
     fleet_tax_profiles: new Set(["fleet_admin_tax_profile_set"]),
     fleet_tax_policy: new Set(["fleet_admin_tax_policy_set"]),
     fleet_transfer_policy: new Set(["fleet_admin_transfer_policy_set"]),
     fleet_vendor_destinations: new Set(["fleet_econ_vendor_register"]),
-    fleet_destination_references: new Set(["fleet_econ_vendor_register"]),
+    fleet_destination_references: new Set(["fleet_econ_vendor_register", "fleet_admin_destination_reference_set"]),
     fleet_agent_wallet_plans: new Set(["fleet_econ_wallet_plan"]),
     fleet_capital_requests: new Set(["fleet_econ_capital_request"]),
     fleet_capital_decisions: new Set(["fleet_econ_capital_request"]),
@@ -896,6 +896,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_sweep_policy: new Set(["fleet_admin_sweep_policy_set"]),
     fleet_cognition_depth_policy: new Set(["fleet_admin_cognition_depth_set"]),
     fleet_admin_withdrawal_policy: new Set(["fleet_admin_withdrawal_policy_set"]),
+    // v32: custody signer attestations (custody role only) and the attestation heartbeat policy (owner).
+    fleet_custody_attestations: new Set(["cx_attest_signer"]),
+    fleet_custody_policy: new Set(["fleet_admin_custody_policy_set"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

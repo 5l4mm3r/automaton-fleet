@@ -19,7 +19,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_cognition_routing", "fleet_cognition_tiers", "fleet_action_min_tier",
     "fleet_experiment_policy", "fleet_evidence_ladder", "fleet_spend_circuit_breaker",
     "fleet_economy_policy", "fleet_venture_transition_rules", "fleet_tax_policy", "fleet_transfer_policy",
-    "fleet_capital_policy", "fleet_sweep_policy", "fleet_cognition_depth_policy", "fleet_admin_withdrawal_policy",
+    "fleet_capital_policy", "fleet_sweep_policy", "fleet_cognition_depth_policy", "fleet_admin_withdrawal_policy", "fleet_custody_policy",
   ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
@@ -114,6 +114,10 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   // v31: admin-withdrawal risk advice back to its default (10 % cushion, 30-day horizon).
   if (r.rows.some((x) => x.t === "fleet_admin_withdrawal_policy")) {
     await c.query(`UPDATE "${schema}".fleet_admin_withdrawal_policy SET cushion_bp = 1000, horizon_days = 30, updated_by = 'migration'`);
+  }
+  // v32: custody signer heartbeat window back to its default.
+  if (r.rows.some((x) => x.t === "fleet_custody_policy")) {
+    await c.query(`UPDATE "${schema}".fleet_custody_policy SET attestation_ttl_s = 900, updated_by = 'migration'`);
   }
   for (const t of all) await c.query(`ALTER TABLE ${t} ENABLE TRIGGER USER`);
   // v21 fixtures: an identity USD→GBP rate (so historical accounting expectations keep their numbers) and generous

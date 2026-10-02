@@ -26,6 +26,7 @@ import { auditPrivileges, ledgerSurfaceProblems } from "../../fleet/postgres/pri
 import { PgLedgerAdmin, sha256Hex } from "../../fleet/treasury/ledger.js";
 import { PgOperatorAdmin } from "../../fleet/operator/admin.js";
 import { rawPublicKey } from "../../fleet/operator/canonical.js";
+import { unpinCustody, liveRail, attest, makeKeyless } from "./fixtures/custody-signer.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { migrateUpTo } from "./fixtures/migrate-to.js";
 import { FleetApiClient } from "../../fleet/service/client.js";
@@ -156,7 +157,8 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(audit.problems).toEqual([]);
     expect(audit.custodyRoles).toBe("provisioned");
     const cx = audit.roles.find((r) => r.role === "fleet_custody_login")!;
-    expect(cx.functions.sort()).toEqual(["cx_claim_instruction(text,text)", "cx_ping()", "cx_report_result(uuid,text,text,text,bigint,text)"]);
+    expect(cx.functions.sort()).toEqual(["cx_attest_signer(text,uuid,text,text,uuid)", "cx_claim_instruction(text,text)", "cx_credential_use(uuid,text,text,text,text)",
+      "cx_ping()", "cx_report_result(uuid,text,text,text,bigint,text)"]);
     expect(cx.tables).toEqual([]);
     expect((await ledger.verify()).ok).toBe(true);
   });
@@ -473,8 +475,10 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     await q(`SELECT fleet.fleet_agent_hold_set($1, 'investigation', 'operator:owner')`, [a.agentId]);
     expect(await spend(a, 1)).toMatchObject({ ok: false, code: "FLEET_AGENT_HELD", custody: "HOLD" });
     await q(`SELECT fleet.fleet_agent_hold_release($1, 'operator:owner')`, [a.agentId]);
-    await q(`INSERT INTO fleet.fleet_wallet_custody (agent_id, wallet_address, spending_frozen, frozen_reason, frozen_at) VALUES ($1, $2, true, 'test', now())
-             ON CONFLICT (agent_id) DO UPDATE SET spending_frozen = true, frozen_reason = 'test', frozen_at = now()`, [a.agentId, `0x${"2".repeat(40)}`]);
+    // v32: a custody record always carries the agent's own identity address.
+    await q(`INSERT INTO fleet.fleet_wallet_custody (agent_id, wallet_address, spending_frozen, frozen_reason, frozen_at)
+             SELECT agent_id, wallet_address, true, 'test', now() FROM fleet.fleet_agents WHERE agent_id = $1
+             ON CONFLICT (agent_id) DO UPDATE SET spending_frozen = true, frozen_reason = 'test', frozen_at = now()`, [a.agentId]);
     expect(await spend(a, 1)).toMatchObject({ ok: false, code: "FLEET_SPENDING_FROZEN", custody: "FROZEN" });
     await q(`UPDATE fleet.fleet_wallet_custody SET spending_frozen = false, frozen_reason = NULL, frozen_at = NULL WHERE agent_id = $1`, [a.agentId]);
     // Destinations: another agent's payee and an unknown destination are invalid destinations.
@@ -650,23 +654,28 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       const reg = await xs.registerRoot({ walletAddress: `0x${crypto.randomBytes(20).toString("hex")}`, name: "cx" });
       if (!reg.ok) throw new Error(reg.reason);
       const a = { agentId: reg.agent.agentId, token: (await xs.issueCredential(reg.agent.agentId, "t")).token };
-      // Test-only constitutional change (the production path would be a reviewed migration).
-      const cname = (await owner.query(`SELECT conname FROM pg_constraint WHERE conrelid = '${X}.fleet_economic_model'::regclass AND pg_get_constraintdef(oid) ~ 'NOT custody_execution_enabled'`)).rows[0].conname;
+      // Test-only constitutional change (the production path would be a reviewed migration): custody execution and live rails.
       expect((await ledgerSurfaceProblems(owner, X))).toEqual([]);
-      await owner.query(`ALTER TABLE ${X}.fleet_economic_model DROP CONSTRAINT ${cname}`);
+      await unpinCustody(owner, X);
       expect(await ledgerSurfaceProblems(owner, X)).toContain("custody surface: custody execution is not pinned off by a CHECK constraint (constitutional invariant)");
-      await owner.query(`UPDATE ${X}.fleet_economic_model SET custody_execution_enabled = true`);
+      // v32: a live payout rail whose signer the custody role attests.
+      const armed = await liveRail(owner, X, OWNER);
       await xl.recordOwnerFunding(10_000, "bank:cx-1", OWNER);
       await xl.agentCapital({ agentId: a.agentId, amountCents: 5000, mode: "grant", actor: OWNER });
-      const e = await xl.enrollDestination({ kind: "payee", rail: "evm_usdc", label: "vendor", reference: "0xabc", actor: OWNER });
+      const e = await xl.enrollDestination({ kind: "payee", rail: "provider_account", label: "vendor", reference: "paypal:vendor@example.com", actor: OWNER });
       const su2 = await su.connect();
       await su2.query("SET session_replication_role = replica");
       await su2.query(`UPDATE ${X}.fleet_payment_destinations SET activatable_at = now() - interval '1 second', enrolled_at = now() - interval '4 days'`);
       su2.release();
       await xl.activateDestination(e.destinationId, e.activationCode, OWNER);
+      await xl.destinationReferenceSet(e.destinationId, "paypal:vendor@example.com", OWNER);
+      expect((await attest(xc, X, armed)).ok).toBe(true);
       const s1 = await xg.spendRequest(a.agentId, a.token, { idempotencyKey: key(), amountCents: 700, category: "expense", destinationId: e.destinationId, purpose: "api" });
       const s2 = await xg.spendRequest(a.agentId, a.token, { idempotencyKey: key(), amountCents: 400, category: "asset_acquisition", destinationId: e.destinationId, purpose: "domain", recoverableCents: 100 });
       const xsvc = new pg.Pool({ connectionString: pgc.serviceUrl, max: 1, options: `-c search_path=${X}` });
+      // v32: a root whose runtime holds its own key is never paid by the custody signer; a keyless identity is.
+      expect((await xsvc.query(`SELECT ${X}.svc_issue_payment_instruction($1) AS r`, [order(s1).orderId])).rows[0].r).toEqual({ ok: false, code: "FLEET_CUSTODY_AGENT_HELD_KEY" });
+      await makeKeyless(su, X, a.agentId);
       for (const o of [s1, s2]) expect((await xsvc.query(`SELECT ${X}.svc_issue_payment_instruction($1) AS r`, [order(o).orderId])).rows[0].r.ok).toBe(true);
       expect((await xsvc.query(`SELECT ${X}.svc_issue_payment_instruction($1) AS r`, [order(s1).orderId])).rows[0].r).toEqual({ ok: false, code: "FLEET_INVALID_STATE" });
       await xsvc.end();
@@ -674,7 +683,9 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       const report = async (id: string, lease: string, outcome: string, ref: string | null, amt: number | null) =>
         (await xc.query(`SELECT ${X}.cx_report_result($1, $2, $3, $4, $5, $6) AS r`, [id, lease, outcome, ref, amt, outcome === "failed" ? "provider_down" : null])).rows[0].r;
       const i1 = (await claim("lease-1")).instruction;
-      expect(i1).toMatchObject({ amountCents: 700, rail: "evm_usdc", referenceSha256: sha256Hex("0xabc") });
+      expect(i1).toMatchObject({ amountCents: 700, rail: "provider_account", referenceSha256: sha256Hex("paypal:vendor@example.com"),
+        reference: "paypal:vendor@example.com", paymentRailId: armed.railId, provider: "paypal", railMode: "live", credentialId: armed.credentialId,
+        vaultRef: armed.vaultRef, capability: "payouts", currency: "GBP" });
       expect(await report(i1.instructionId, "wrong-lease", "settled", "tx:0001", 700)).toEqual({ ok: false, code: "FLEET_LEASE_INVALID" });
       expect(await report(i1.instructionId, "lease-1", "settled", "tx:0001", 701)).toEqual({ ok: false, code: "FLEET_SETTLEMENT_MISMATCH" });
       expect(await report(i1.instructionId, "lease-1", "settled", null, 700)).toEqual({ ok: false, code: "FLEET_SETTLEMENT_MISMATCH" });

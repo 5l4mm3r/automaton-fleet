@@ -1,25 +1,29 @@
 /**
- * Custody executor entrypoint (Phase E, schema v10): `node dist/fleet/custody/main.js`,
+ * Custody executor entrypoint (Phase E, schema v10; custody signer, schema v32): `node dist/fleet/custody/main.js`,
  * run by deploy/systemd/automaton-fleet-custody.service as its own system user
  * (automaton-fleet-custody), from the same pinned release as FleetController.
  *
- * INERT in v10: it opens no network listener, holds no custody credential,
- * has no provider integration, and the database refuses every instruction.
- * It proves the boundary exists: a distinct OS identity and DB role that can
- * do nothing but ping, and later claim/report already-authorized instructions.
+ * It opens no network listener. Its signers (v32) come from a NON-SECRET signer
+ * file (FLEET_CUSTODY_SIGNERS_FILE: rail, provider, mode, credential id, vault
+ * reference) and their secrets from the custody vault directory
+ * (FLEET_CUSTODY_VAULT_DIR, else systemd $CREDENTIALS_DIRECTORY) — never from the
+ * environment. It attests its signers to the registry; while the registry pins
+ * custody execution off (and rails never live) it never claims anything.
  *
  * Startup refuses (fail closed) when:
  *  - running as root, or not as FLEET_CUSTODY_EXPECTED_USER;
  *  - any admin/service/agent/operator/Conway credential is visible, or
  *    admin.env / service.env / operator.env / the TLS key is readable;
- *  - any custody provider or custody credential is configured (none exists in v10);
+ *  - any custody credential is present in the environment;
+ *  - the signer file or a signer's vault file is missing, malformed or insecure;
+ *  - a LIVE signer is configured while REAL_PAYMENTS_ENABLED is not true;
  *  - REAL_PAYMENTS_ENABLED / REAL_REPLICATION_ENABLED / OWNER_SWEEP_ENABLED is on;
  *  - FLEET_CUSTODY_DATABASE_URL is missing;
  *  - the pinned release is incomplete or differs from the registry approval;
  *  - the database login is the schema owner, a superuser, or a member of
  *    anything but fleet_custody;
- *  - the schema is not this release's schema, custody execution is enabled, or the custody
- *    privilege audit reports anything.
+ *  - the schema is not this release's schema, custody execution is enabled with no
+ *    signer, or the custody privilege audit reports anything.
  */
 
 import fs from "fs";
@@ -35,7 +39,10 @@ import {
 } from "../secret-files.js";
 import { loadRuntimeRelease, normalizeRepoUrl } from "../runtime.js";
 import { redactText } from "../redact.js";
+import path from "path";
 import { CustodyExecutor, providersFromEnv } from "./executor.js";
+import { loadSignerConfig, PayPalPayoutSigner, type CustodySigner, type HttpPort } from "./signers.js";
+import { FileVault, vaultFileProblems } from "./vault.js";
 import { PgCustodyGateway } from "./gateway.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../postgres/migrations.js";
 
@@ -88,9 +95,42 @@ export function custodyEnvProblems(
     }
   }
   if (!e.FLEET_CUSTODY_DATABASE_URL?.trim()) problems.push("FLEET_CUSTODY_DATABASE_URL is not configured (custody.env)");
-  for (const s of SAFETY_SWITCHES) if (on(e[s])) problems.push(`${s}=true (the v10 custody executor is inert and refuses to run with ${s} on)`);
+  for (const s of SAFETY_SWITCHES) if (on(e[s])) problems.push(`${s}=true (live custody execution needs a reviewed activation; the executor refuses to run with ${s} on)`);
+  problems.push(...signersFromEnv(e, opts.uid === undefined ? undefined : opts.uid).problems);
   if (!loadRuntimeRelease(e)) problems.push("no complete pinned runtime release (FLEET_RUNTIME_REPO/_COMMIT/_BUILD_ID/_LOCKFILE_SHA256)");
   return problems;
+}
+
+/** Real HTTP for provider calls (custody executor only), with a timeout; nothing is logged. */
+const fetchHttp: HttpPort = async (url, init) => {
+  const r = await fetch(url, { ...init, signal: AbortSignal.timeout(20_000) });
+  return { status: r.status, json: () => r.json() };
+};
+
+/** The configured signers (rail-bound) and the vault, or the problems that refuse startup. */
+export function signersFromEnv(e: Record<string, string | undefined>, uid?: number | null, http: HttpPort = fetchHttp):
+  { signers: CustodySigner[]; vault: FileVault | null; problems: string[] } {
+  const file = e.FLEET_CUSTODY_SIGNERS_FILE?.trim();
+  if (!file) return { signers: [], vault: null, problems: [] };
+  const cfg = loadSignerConfig(file);
+  if (cfg.problems.length) return { signers: [], vault: null, problems: cfg.problems };
+  const dir = e.FLEET_CUSTODY_VAULT_DIR?.trim() || e.CREDENTIALS_DIRECTORY?.trim();
+  if (!dir || !path.isAbsolute(dir)) return { signers: [], vault: null, problems: ["signers are configured but no custody vault directory (FLEET_CUSTODY_VAULT_DIR or $CREDENTIALS_DIRECTORY)"] };
+  const owner = uid === undefined ? (typeof process.getuid === "function" ? process.getuid() : null) : uid;
+  const vault = new FileVault(dir, owner);
+  const problems: string[] = [];
+  const signers: CustodySigner[] = [];
+  for (const b of cfg.entries) {
+    const f = vault.fileFor(b.vaultRef);
+    if (!f) problems.push(`signer ${b.railId}: malformed vault reference`);
+    else problems.push(...vaultFileProblems(f, owner).map((x) => `signer ${b.railId}: vault ${x}`));
+    try {
+      signers.push(new PayPalPayoutSigner(b, http));
+    } catch (err) {
+      problems.push(`signer ${b.railId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return problems.length ? { signers: [], vault: null, problems } : { signers, vault, problems: [] };
 }
 
 export async function startCustodyFromEnv(
@@ -111,7 +151,7 @@ export async function startCustodyFromEnv(
     if (extra.length) throw new Error(`the custody database login is a member of ${extra.join(", ")}`);
     const ping = await gateway.ping();
     if (ping.schemaVersion !== CUSTODY_SCHEMA_VERSION) throw new Error(`registry schema v${ping.schemaVersion ?? "none"} != required v${CUSTODY_SCHEMA_VERSION}`);
-    if (ping.executionEnabled) throw new Error("custody execution is enabled in the registry, but this executor has no provider integration (v10 is inert)");
+    if (ping.executionEnabled && !signersFromEnv(e, opts.uid).signers.length) throw new Error("custody execution is enabled in the registry, but this executor has no signer");
     const release = loadRuntimeRelease(e)!;
     const approvedRepo = ping.runtimeRepo ? normalizeRepoUrl(ping.runtimeRepo) : null;
     if (
@@ -128,15 +168,20 @@ export async function startCustodyFromEnv(
     await gateway.close();
     throw new Error(`custody executor startup refused: ${redactText(err instanceof Error ? err.message : String(err))}`);
   }
-  const executor = new CustodyExecutor(gateway, providersFromEnv(e).providers, {
+  const { signers, vault } = signersFromEnv(e, opts.uid);
+  const stateDir = e.FLEET_CUSTODY_STATE_DIR?.trim() || "/var/lib/automaton-fleet-custody";
+  const executor = new CustodyExecutor(gateway, [...providersFromEnv(e).providers, ...signers], {
     worker: "custody-executor",
     pollMs: opts.pollMs ?? 60_000,
+    vault,
+    stateFile: signers.length && fs.existsSync(stateDir) ? path.join(stateDir, "pending.json") : null,
     log: (level, event, detail) => log(level as never, event, detail),
   });
   // The service must stay up on its poll timer (an idle database pool alone would let Node exit 0 and
   // systemd's Restart=on-failure would not bring it back).
   executor.start({ keepAlive: true });
-  log("info", "custody_executor_started", { schemaVersion: CUSTODY_SCHEMA_VERSION, providers: [], executionEnabled: false, inert: true });
+  log("info", "custody_executor_started", { schemaVersion: CUSTODY_SCHEMA_VERSION, signers: signers.map((x) => ({ railId: x.binding.railId, mode: x.binding.mode })),
+    executionEnabled: false });
   const close = async () => {
     await executor.stop();
     await gateway.close();

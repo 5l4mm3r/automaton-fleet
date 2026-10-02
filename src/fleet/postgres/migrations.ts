@@ -39,8 +39,9 @@ import { V28_SQL } from "./migrations-phase28.js";
 import { V29_SQL } from "./migrations-phase29.js";
 import { V30_SQL } from "./migrations-phase30.js";
 import { V31_SQL } from "./migrations-phase31.js";
+import { V32_SQL } from "./migrations-phase32.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 31;
+export const FLEET_PG_SCHEMA_VERSION = 32;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1167,6 +1168,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 29, name: "f2_money_core_tax_rails_vendors_settlement_wallet", sql: V29_SQL },
   { version: 30, name: "f2_capital_engine_sweeps_cognition_depth_hub", sql: V30_SQL },
   { version: 31, name: "f2_launch_admin_withdrawal_risk_r24_custody_contextual_depth", sql: V31_SQL },
+  { version: 32, name: "custody_signer_keyless_custody_bound_instructions", sql: V32_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1282,6 +1284,9 @@ export const CUSTODY_API_FUNCTIONS: readonly string[] = Object.freeze([
   "cx_ping()",
   "cx_claim_instruction(text, text)",
   "cx_report_result(uuid, text, text, text, bigint, text)",
+  // v32: the custody signer attests the rails it holds a signer for, and gates each credential use under the lease.
+  "cx_attest_signer(text, uuid, text, text, uuid)",
+  "cx_credential_use(uuid, text, text, text, text)",
 ]);
 
 /** Per custody function: the only tables it may write and the only volatile fleet functions it may call. */
@@ -1289,9 +1294,11 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   cx_ping: { writes: [], calls: [] },
   cx_claim_instruction: { writes: ["fleet_payment_instructions"], calls: [] },
   cx_report_result: {
-    writes: ["fleet_payment_instructions", "fleet_payment_orders", "fleet_assets"],
+    writes: ["fleet_payment_instructions", "fleet_payment_orders", "fleet_assets", "fleet_venture_journals"],
     calls: ["fleet_ledger_post", "fleet_order_release", "fleet_event"],
   },
+  cx_attest_signer: { writes: ["fleet_custody_attestations"], calls: [] },
+  cx_credential_use: { writes: ["fleet_credential_use_log", "fleet_credential_refs"], calls: [] },
 });
 
 /** Schema v10: the only functions whose bodies may write the ledger tables (append-only double entry). */

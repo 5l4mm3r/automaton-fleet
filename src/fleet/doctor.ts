@@ -137,7 +137,7 @@ export interface DoctorDeps {
   sandboxTerminationGuaranteed?: boolean;
   /** `systemctl is-active` of the fleet unit (default: runs systemctl; null = unknown). */
   serviceActive?: () => Promise<string | null>;
-  /** A controller custody signer exists for live payments (default false: none is implemented). */
+  /** Override: a live controller custody signer is attested (default: read from the registry, schema v32). */
   custodySignerAvailable?: boolean;
 }
 
@@ -535,6 +535,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       );
       // F2 (schema v30): the economy — reconciliation, tax reserves, settlement, rails and credentials, envelopes, action-
       // scoped dependencies, research loops and agents with no route forward. Agent autonomy itself is never an error.
+      facts.custody = await store.custodyStatus();
       const eh = await store.economyHealth();
       facts.economy = eh;
       if (eh) {
@@ -668,9 +669,21 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   if (!(tlsConfigured && remote)) {
     blockers.push("Remote child sandboxes cannot reach the fleet service: no HTTPS endpoint deployed (certificate, DNS, firewall).");
   }
-  // Wallet custody: the upstream runtime generates and holds its own wallet key.
-  add("wallet custody", "warn", "agent wallets are controller-supervised (freeze, spend requests) but keys are still generated and held by each agent runtime");
-  blockers.push("Agent wallet keys are still generated and held by the agent runtime (~/.automaton/wallet.json); no controller custody signer exists yet.");
+  // Wallet custody (v32): Genesis founders are keyless (custody is the Treasury ledger and the controller's custody
+  // signer); only agents whose runtime generated its own key are a custody concern, and they are never paid by custody.
+  const cs = facts.custody as { agentHeldKeys: number; keylessAgents: number; liveSigners: number; attestedRails: number;
+    instructions: { claimedStale: number } } | null | undefined;
+  if (cs) {
+    add("wallet custody", cs.agentHeldKeys > 0 ? "warn" : "pass",
+      `${cs.keylessAgents} living agent(s) keyless (controller custody), ${cs.agentHeldKeys} with a key held by their own runtime` +
+        `; custody signers: ${cs.liveSigners} live, ${cs.attestedRails} attested rail(s)` +
+        (cs.instructions.claimedStale ? `; ${cs.instructions.claimedStale} instruction(s) claimed > 1 h (reconcile with the provider)` : ""));
+    if (cs.instructions.claimedStale) add("custody instructions", "warn", `${cs.instructions.claimedStale} claimed > 1 h without a final provider result`);
+  } else {
+    add("wallet custody", "warn", "custody facts unavailable (registry before schema v32)");
+  }
+  // Replicated children run the upstream runtime, which generates its own wallet key (agent-held custody).
+  blockers.push("Replicated children run the upstream runtime, which generates and holds its own wallet key (~/.automaton/wallet.json); custody never pays such an agent.");
 
   facts.securityWarnings = securityWarnings;
   const deploymentOk = !checks.some((c) => c.status === "fail");
@@ -771,8 +784,12 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   const realPayments = [
     ...failing,
     ...checklist.filter((c) => !c.ok && /PostgreSQL|schema|secrets|owner sweeps/.test(c.item)).map((c) => `${c.item}: ${c.detail}`),
-    ...(deps.custodySignerAvailable ? [] : ["No controller custody signer exists; approved spends cannot be executed safely (executeApprovedSpend refuses)."]),
-    "Agent wallet keys are still generated and held by the agent runtime; payments need controller-held custody first.",
+    ...(deps.custodySignerAvailable ?? (((facts.custody as { liveSigners?: number } | null)?.liveSigners ?? 0) > 0)
+      ? []
+      : ["No live controller custody signer is attested (a live payout rail with an active, scoped credential reference and the custody executor's signer); live rails and custody execution are constitutionally pinned off until a reviewed activation."]),
+    ...(((facts.custody as { agentHeldKeys?: number } | null)?.agentHeldKeys ?? 1) > 0
+      ? [facts.custody ? "A living agent holds its own wallet key (agent-held custody); custody never pays it, but it must not exist when real payments start." : "Custody facts unavailable (registry before schema v32)."]
+      : []),
     ...(flags.OWNER_SWEEP_ENABLED ? ["OWNER_SWEEP_ENABLED must stay false until owner distributions are separately approved."] : []),
   ];
   const level = (b: string[]): ReadinessLevel => ({ safe: b.length === 0, blockers: [...new Set(b)] });

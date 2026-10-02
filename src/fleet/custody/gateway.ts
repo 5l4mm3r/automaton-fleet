@@ -32,6 +32,16 @@ export interface ClaimedInstruction {
   rail: string;
   referenceSha256: string;
   instructionSha256: string;
+  // v32: the binding (rail, credential, capability, venture), where to pay, and the accounting currency.
+  reference?: string | null;
+  paymentRailId?: string | null;
+  provider?: string | null;
+  railMode?: string | null;
+  credentialId?: string | null;
+  vaultRef?: string | null;
+  capability?: string | null;
+  ventureId?: string | null;
+  currency?: string | null;
 }
 
 export type CxResult = { ok: true; [k: string]: unknown } | { ok: false; code: string };
@@ -73,6 +83,16 @@ export class PgCustodyGateway {
         instructionId, lease, outcome, externalRef, settledCents, failureCode,
       ])
     ).rows[0].r;
+  }
+
+  /** v32: attest one signer (rail + credential) this executor holds. */
+  async attest(worker: string, railId: string, provider: string, mode: string, credentialId: string): Promise<CxResult> {
+    return (await this.pool.query(`SELECT ${this.s}.cx_attest_signer($1, $2, $3, $4, $5) AS r`, [worker, railId, provider, mode, credentialId])).rows[0].r;
+  }
+
+  /** v32: gate and audit one credential use for a claimed instruction (under its lease). */
+  async credentialUse(instructionId: string, lease: string, action: string, outcome: "ok" | "failed", detail: string | null): Promise<CxResult> {
+    return (await this.pool.query(`SELECT ${this.s}.cx_credential_use($1, $2, $3, $4, $5) AS r`, [instructionId, lease, action, outcome, detail])).rows[0].r;
   }
 
   async identity(): Promise<{ user: string; isOwner: boolean; superuser: boolean; memberOf: string[] }> {

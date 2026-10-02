@@ -42,6 +42,18 @@ export class PgHubAdmin {
     return this.one(`SELECT fleet_admin_withdrawal_policy_set($1, $2, $3) AS r`, [cushionBp, horizonDays, actor]);
   }
 
+  /** v32: custody facts (keyless vs self-keyed agents, attested signers, instruction states). */
+  custody() {
+    return this.one(`SELECT fleet_custody_status() AS r`);
+  }
+  custodyPolicy(ttlS: number, actor: string) {
+    return this.one(`SELECT fleet_admin_custody_policy_set($1, $2) AS r`, [ttlS, actor]);
+  }
+  /** v32: record an owner-enrolled destination's payable reference (only the enrolled one is accepted). */
+  destinationReference(destinationId: string, reference: string, actor: string) {
+    return this.one(`SELECT fleet_admin_destination_reference_set($1, $2, $3) AS r`, [destinationId, reference, actor]);
+  }
+
   health(): Promise<{ ok: boolean; warn: boolean; findings: Array<{ severity: string; code: string; detail: unknown }> }> {
     return this.one(`SELECT fleet_economy_health() AS r`);
   }

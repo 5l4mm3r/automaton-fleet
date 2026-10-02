@@ -225,6 +225,14 @@ export class PgLedgerAdmin {
     return { destinationId: r.destinationId, activatableAt: r.activatableAt, activationCode: code.code };
   }
 
+  /**
+   * Schema v32: record the payable reference of an owner-enrolled destination for the custody signer. Only the enrolled
+   * reference is accepted (its hash must equal the one recorded at enrolment); it is an account identifier, not a secret.
+   */
+  async destinationReferenceSet(destinationId: string, reference: string, actor: string): Promise<{ ok: boolean; replay?: boolean }> {
+    return this.one(`SELECT fleet_admin_destination_reference_set($1, $2, $3) AS r`, [destinationId, reference, actor]);
+  }
+
   async activateDestination(destinationId: string, activationCode: string, actor: string): Promise<{ status: string }> {
     return this.one(`SELECT fleet_destination_activate($1, $2, $3) AS r`, [destinationId, activationCode, actor]);
   }
