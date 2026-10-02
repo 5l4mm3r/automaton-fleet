@@ -753,14 +753,17 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(await ledger.ownerWithdrawal({ amountCents: 100, destinationId: e.destinationId, actor: OWNER })).toMatchObject({ status: "refused", code: "FLEET_DESTINATION_NOT_ACTIVE" });
   });
 
-  it("owner withdrawals: hard limits refuse, warnings need acknowledgement, large ones need a second confirmation, nothing executes", async () => {
+  // Schema v31 (owner decision): no nominal cap; EVERY withdrawal needs the second confirmation, whatever the amount.
+  it("owner withdrawals: ownership/availability limits refuse, warnings need acknowledgement, every one needs a second confirmation, nothing executes", async () => {
     expect(await ledger.ownerWithdrawal({ amountCents: 100, destinationId: payee, actor: OWNER })).toMatchObject({ status: "refused", code: "FLEET_DESTINATION_NOT_ALLOWED" });
     const avail = await bal("fleet:treasury:unallocated");
     expect(await ledger.ownerWithdrawal({ amountCents: avail + 1, destinationId: ownerDst, actor: OWNER })).toMatchObject({ status: "refused", code: "FLEET_INSUFFICIENT_TREASURY" });
     const small = await ledger.ownerWithdrawal({ amountCents: 1000, destinationId: ownerDst, actor: OWNER });
-    expect(small).toMatchObject({ status: "reserved", executed: false });
+    expect(small).toMatchObject({ status: "pending_confirmation" });
+    expect(await bal("fleet:custody:withdrawal_clearing")).toBe(0); // nothing reserved before the confirmation
+    expect(await ledger.confirm(small.instructionId as string, small.confirmationCode!, OWNER)).toMatchObject({ status: "reserved", executed: false });
     expect(await bal("fleet:custody:withdrawal_clearing")).toBe(1000);
-    // Above the strong-auth threshold: two steps.
+    // A larger amount: the same two steps (security does not depend on the amount).
     await fund(200_000);
     const big = await ledger.ownerWithdrawal({ amountCents: 60_000, destinationId: ownerDst, actor: OWNER });
     expect(big.status).toBe("pending_confirmation");
@@ -785,7 +788,10 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     }
     const warn = await ledger.ownerWithdrawal({ amountCents: 1000, destinationId: ownerDst, actor: OWNER });
     expect(warn).toMatchObject({ status: "needs_acknowledgement", recommendation: "recommend_against" });
-    expect(await ledger.ownerWithdrawal({ amountCents: 1000, destinationId: ownerDst, actor: OWNER, acknowledgeWarnings: true })).toMatchObject({ status: "reserved" });
+    expect(warn.warnings).toContain("below_reserve_target");
+    const acked = await ledger.ownerWithdrawal({ amountCents: 1000, destinationId: ownerDst, actor: OWNER, acknowledgeWarnings: true });
+    expect(acked).toMatchObject({ status: "pending_confirmation" });
+    expect(await ledger.confirm(acked.instructionId as string, acked.confirmationCode!, OWNER)).toMatchObject({ status: "reserved" });
     await q(`UPDATE fleet.fleet_treasury_policy SET reserve_target_months = 3 WHERE id = 1`);
     // Operator principals and agents cannot instruct withdrawals.
     expect(await pgCode(ledger.ownerWithdrawal({ amountCents: 10, destinationId: ownerDst, actor: "operator:claude-operator" }))).toBe("FLEET_SELF_APPROVAL");

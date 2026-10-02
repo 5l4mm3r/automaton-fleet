@@ -38,10 +38,12 @@ import { V27_SQL } from "./migrations-phase27.js";
 import { V28_SQL } from "./migrations-phase28.js";
 import { V29_SQL } from "./migrations-phase29.js";
 import { V30_SQL } from "./migrations-phase30.js";
+import { V31_SQL } from "./migrations-phase31.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 30;
+export const FLEET_PG_SCHEMA_VERSION = 31;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
-const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
+/** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
+export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
 export interface PgMigration {
   version: number;
@@ -1164,6 +1166,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 28, name: "f2_economy_opportunities_decisions_ventures_knowledge", sql: V28_SQL },
   { version: 29, name: "f2_money_core_tax_rails_vendors_settlement_wallet", sql: V29_SQL },
   { version: 30, name: "f2_capital_engine_sweeps_cognition_depth_hub", sql: V30_SQL },
+  { version: 31, name: "f2_launch_admin_withdrawal_risk_r24_custody_contextual_depth", sql: V31_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1214,6 +1217,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_capital_reap(integer)",
   "svc_sweep_run(text)",
   "svc_tax_true_up(integer)",
+  // v31: the spend boundary with context (category, destination, recoverable value) for contextual cognition depth.
+  "svc_action_cognition_verify_ctx(text, text, bigint, text, text, bigint, text, text)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */

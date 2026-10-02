@@ -325,8 +325,9 @@ export class PgLedgerAdmin {
   }
 
   /**
-   * Owner withdrawal instruction. Above the strong-auth threshold this returns
-   * `pending_confirmation` plus a one-time confirmation code (shown once);
+   * Owner withdrawal instruction. Every amount returns `pending_confirmation` plus a
+   * one-time confirmation code (shown once), or `needs_acknowledgement` with the
+   * controller's risk advice when above the recommended safe amount (schema v31);
    * confirmWithdrawal() with that code places the (inert) reserved order.
    */
   async ownerWithdrawal(p: {
@@ -337,13 +338,13 @@ export class PgLedgerAdmin {
     acknowledgeWarnings?: boolean;
     key?: string;
   }): Promise<Record<string, unknown> & { confirmationCode?: string }> {
-    const m = await this.model();
-    const code = p.amountCents >= m.strongAuthThresholdCents ? oneTimeCode() : null;
+    // Schema v31: every withdrawal is strongly confirmed (no amount decides when security applies).
+    const code = oneTimeCode();
     const r = await this.one<Record<string, unknown>>(`SELECT fleet_admin_owner_withdrawal($1, $2, $3, $4, $5, $6, $7) AS r`, [
       cents(p.amountCents, "amount"), p.destinationId, p.actor, p.reason ?? null, p.acknowledgeWarnings === true,
-      idem(p.key ?? idempotencyKey("withdrawal")), code?.sha256 ?? null,
+      idem(p.key ?? idempotencyKey("withdrawal")), code.sha256,
     ]);
-    return r.status === "pending_confirmation" && code ? { ...r, confirmationCode: code.code } : r;
+    return r.status === "pending_confirmation" ? { ...r, confirmationCode: code.code } : r;
   }
 
   async confirm(instructionId: string, code: string, actor: string): Promise<Record<string, unknown>> {

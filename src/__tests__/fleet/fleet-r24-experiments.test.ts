@@ -250,27 +250,26 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
       decisionCode: "FLEET_EXPERIMENT_APPROVED", financialMode: "simulated", executed: false, evidence: { verified: 2, relevant: 2, unassessed: 0 } });
     const view = await genesis.experimentView(exp(r).experimentId);
     expect((view!.transitions as Array<Record<string, unknown>>).map((t) => [t.from_status, t.to_status, t.actor_kind, t.code]))
-      .toEqual([[null, "proposed", "founder", "FLEET_EXPERIMENT_PROPOSED"], ["proposed", "watch", "controller", "FLEET_RELEVANCE_PENDING"],
-        ["watch", "approved", "controller", "FLEET_EXPERIMENT_APPROVED"]]);
+      // v31: an own-capital experiment is decided on custody at once; the evidence is assessed afterwards as information.
+      .toEqual([[null, "proposed", "founder", "FLEET_EXPERIMENT_PROPOSED"], ["proposed", "approved", "controller", "FLEET_EXPERIMENT_APPROVED"]]);
     expect((view!.verified_evidence as { items: Array<{ host: string; supports: string }> }).items.map((i) => [i.host, i.supports])).toEqual([["example.com", "demand"], ["marketplace.example", "demand"]]);
     // Every required field is on record, as proposed; the proposal is immutable.
     expect(view!.proposal).toMatchObject({ opportunityKey: "bookkeeping-templates", expectedPayoff: { simulatedRevenueMinor: 3_600 }, reversibility: "reversible", executionSteps: expect.any(Array) });
     expect(await code(inTime(`UPDATE fleet.fleet_experiments SET requested_minor = 5000 WHERE experiment_id = $1`, [exp(r).experimentId]))).toBe("FLEET_HISTORY_IMMUTABLE");
   });
 
-  it("(2) insufficient evidence goes to WATCH (never capital); no nominal cap (v30): survival headroom bounds a large request; added evidence re-decides a watched proposal once assessed", async () => {
+  it("(2) v31: thin evidence is no gate on own capital (decided on custody); no nominal cap: survival headroom bounds a large request; added evidence is assessed as information", async () => {
     await setup();
     const w = await propose(F, proposal({ claimedLevel: 3 }));
-    expect(exp(w)).toMatchObject({ status: "watch", claimedLevel: 3, verifiedLevel: 0, approvedMinor: null, decisionCode: "FLEET_EVIDENCE_INSUFFICIENT" });
-    expect(exp(w).decisionReason).toMatch(/claimed E3, verified E0/);
+    expect(exp(w)).toMatchObject({ status: "approved", claimedLevel: 3, verifiedLevel: 0, approvedMinor: 800, decisionCode: "FLEET_EXPERIMENT_APPROVED", decidedBy: "controller" });
+    expect(exp(w).decisionReason).toMatch(/E0 verified \(claimed E3/);
     const big = await propose(F, proposal({ requestedMinor: 9_000, maxLossMinor: 9_000, evidence: [await page(F.id, "a.example")] }));
-    expect(exp(big)).toMatchObject({ status: "watch", decisionCode: "FLEET_RELEVANCE_PENDING" });
-    // Evidence arrives for the watched proposal: re-verified (provenance), still watched until its relevance is assessed.
+    expect(exp(big)).toMatchObject({ status: "partially_approved", decisionCode: "FLEET_EXPERIMENT_PARTIAL" });
+    // Evidence is cited at proposal; adding it to an already decided experiment changes nothing (v31: no WATCH to leave).
     const ev = [await page(F.id, "b.example"), await page(F.id, "c.example")];
-    const more = await gw.experimentAddEvidence(F.id, F.token, exp(w).experimentId, `ev:${crypto.randomUUID()}`, ev);
-    expect(exp(more)).toMatchObject({ status: "watch", verifiedLevel: 0, decisionCode: "FLEET_RELEVANCE_PENDING", evidence: { verified: 2, relevant: 0, unassessed: 2 } });
+    await gw.experimentAddEvidence(F.id, F.token, exp(w).experimentId, `ev:${crypto.randomUUID()}`, ev);
     await settle();
-    expect(await expJson(exp(w).experimentId)).toMatchObject({ status: "approved", verifiedLevel: 2, approvedMinor: 800 });
+    expect(await expJson(exp(w).experimentId)).toMatchObject({ status: "approved", verifiedLevel: 0, approvedMinor: 800 });
     // v30: the large request is not rejected for a nominal amount: the controller bounds it by the founder's survival headroom.
     const bigNow = await expJson(exp(big).experimentId);
     expect(bigNow).toMatchObject({ status: "partially_approved", decisionCode: "FLEET_EXPERIMENT_PARTIAL", decidedBy: "controller" });
@@ -338,7 +337,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     await inTime(`UPDATE fleet.fleet_experiments SET approval_expires_at = now() - interval '1 second' WHERE experiment_id = $1`, [id]);
     expect(await gw.experimentStart(F.id, F.token, id)).toMatchObject({ ok: false, code: "FLEET_APPROVAL_EXPIRED", experiment: { status: "expired" } });
     expect(await rec(F, id, { kind: "sim_spend", amountMinor: 10 })).toMatchObject({ ok: false, code: "FLEET_INVALID_STATE" });
-    // Reaper: a watched proposal past its expiry, and an approval never started in time.
+    // Reaper: approvals never started in time (v31: a proposal is decided at once, so time passing ages both clocks).
     const w = await propose(F, proposal({ opportunityKey: "stale-watch" }));
     const a = await proposeAssessed(F, proposal({ opportunityKey: "stale-approval", evidence: [await page(F.id, "e3.example"), await page(F.id, "e4.example")] }));
     await inTime(`UPDATE fleet.fleet_experiments SET approval_expires_at = now() - interval '1 second' WHERE experiment_id = $1`, [exp(a).experimentId]);
@@ -347,7 +346,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
       // (expires_at is part of the immutable proposal: simulate the passage of time on the clock instead)
       await c.query("BEGIN");
       await c.query(`ALTER TABLE fleet.fleet_experiments DISABLE TRIGGER fleet_experiments_guard`);
-      await c.query(`UPDATE fleet.fleet_experiments SET expires_at = now() - interval '1 second' WHERE experiment_id = $1`, [exp(w).experimentId]);
+      await c.query(`UPDATE fleet.fleet_experiments SET expires_at = now() - interval '1 second', approval_expires_at = now() - interval '2 seconds' WHERE experiment_id = $1`, [exp(w).experimentId]);
       await c.query(`ALTER TABLE fleet.fleet_experiments ENABLE TRIGGER fleet_experiments_guard`);
       await c.query("COMMIT");
     } finally {
@@ -357,7 +356,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     const st = await q(`SELECT experiment_id, status FROM fleet.fleet_experiments WHERE experiment_id IN ($1, $2)`, [exp(w).experimentId, exp(a).experimentId]);
     expect(st.map((x) => x.status).sort()).toEqual(["expired", "expired"]);
     const codes = await q(`SELECT code FROM fleet.fleet_experiment_transitions WHERE experiment_id IN ($1, $2) AND to_status = 'expired' ORDER BY code`, [exp(w).experimentId, exp(a).experimentId]);
-    expect(codes.map((x) => x.code)).toEqual(["FLEET_APPROVAL_EXPIRED", "FLEET_EXPIRED"]);
+    expect(codes.map((x) => x.code)).toEqual(["FLEET_APPROVAL_EXPIRED", "FLEET_APPROVAL_EXPIRED"]);
   });
 
   it("(6) a founder cannot self-approve, size its budget, assess its own evidence, change policy or alter its evidence level", async () => {
@@ -378,7 +377,9 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(await code(svcRaw.query(`SELECT fleet.fleet_experiment_decide($1, 'approved', 800, 600, 'operator:x', 'x')`, [id]))).toBe("permission denied");
     expect(await code(svcRaw.query(`SELECT fleet.fleet_experiment_assess_relevance($1, $1, 'relevant', 'operator:x', 'x')`, [id]))).toBe("permission denied");
     // The owner path refuses the founder's own identity as approver or relevance assessor.
-    expect(await code(genesis.experimentDecide(id, "approved", 800, 600, `operator:${F.id}`, "self"))).toBe("FLEET_SELF_APPROVAL");
+    // (v31: own-capital experiments are decided by the controller at once; the owner decision path refuses either way.)
+    expect(await code(genesis.experimentDecide(id, "approved", 800, 600, `operator:${F.id}`, "self"))).toMatch(/^FLEET_(SELF_APPROVAL|INVALID_STATE)$/);
+    expect(await expJson(id)).toMatchObject({ decidedBy: "controller" });
     // A proposal cannot carry decision fields or its own verified level.
     for (const k of ["approvedMinor", "status", "verifiedLevel", "decidedBy"]) {
       expect(await propose(F, { ...proposal(), [k]: 1 })).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
@@ -386,7 +387,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     // Claiming E4 buys nothing: the level is the registry's.
     const only = await page(F.id, "only.example");
     const claim = await propose(F, proposal({ opportunityKey: "overclaim", claimedLevel: 4, evidence: [only] }));
-    expect(exp(claim)).toMatchObject({ claimedLevel: 4, verifiedLevel: 0, status: "watch" });
+    expect(exp(claim)).toMatchObject({ claimedLevel: 4, verifiedLevel: 0, status: "approved" });
     expect(await code(override(exp(claim).experimentId, only, "relevant", `operator:${F.id}`))).toBe("FLEET_SELF_APPROVAL");
     await settle();
     expect(await expJson(exp(claim).experimentId)).toMatchObject({ claimedLevel: 4, verifiedLevel: 1, approvedMinor: 800, decidedBy: "controller" });
@@ -399,10 +400,10 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     const recipes = await page(F.id, "recipes.example", { text: "Whisk two eggs with milk, add flour gradually and rest the batter for an hour." });
     const r = await propose(F, proposal({ claimedLevel: 2, evidence: [weather, recipes] }));
     const id = exp(r).experimentId as string;
-    // Provenance alone: E0, WATCH, pending the controller's assessment (no owner involved).
-    expect(exp(r)).toMatchObject({ status: "watch", verifiedLevel: 0, decisionCode: "FLEET_RELEVANCE_PENDING", evidence: { verified: 2, relevant: 0, unassessed: 2 } });
+    // Provenance alone: E0 pending the controller's assessment (no owner involved); v31: the custody decision does not wait.
+    expect(exp(r)).toMatchObject({ status: "approved", verifiedLevel: 0, evidence: { verified: 2, relevant: 0, unassessed: 2 } });
     expect(await settle()).toEqual({ assessed: 2, deferred: 0 });
-    expect(await expJson(id)).toMatchObject({ status: "watch", verifiedLevel: 0, approvedMinor: null, decisionCode: "FLEET_EVIDENCE_INSUFFICIENT",
+    expect(await expJson(id)).toMatchObject({ status: "approved", verifiedLevel: 0, decisionCode: "FLEET_EXPERIMENT_APPROVED",
       evidence: { verified: 2, relevant: 0, irrelevant: 2, unassessed: 0, overridden: 0 } });
     const view = (await genesis.experimentView(id))! as Record<string, any>;
     // Each verdict is explicit: the controller, the tier (T2: the normal judgement), the artifact it judged, the reason.
@@ -439,10 +440,10 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(await svc.researchArtifactRecord(F.id, failed.attemptId, art)).toMatchObject({ ok: false, code: "FLEET_ARTIFACT_NO_FETCH" });
     expect(await svc.researchArtifactRecord(F.id, base.attemptId, art)).toMatchObject({ ok: true });
     expect(await svc.researchArtifactRecord(F.id, base.attemptId, art)).toMatchObject({ ok: false, code: "FLEET_DUPLICATE_EVENT" });
-    // Pages without an artifact: T0 (software, no model call) → uncertain → no level, WATCH, never capital.
+    // Pages without an artifact: T0 (software, no model call) → uncertain → no level (information; the custody decision stands).
     const bare = [await page(F.id, "no-artifact-a.example", { artifact: false }), await page(F.id, "no-artifact-b.example", { artifact: false })];
     const r = await proposeAssessed(F, proposal({ opportunityKey: "no-artifacts", evidence: bare }));
-    expect(exp(r)).toMatchObject({ status: "watch", verifiedLevel: 0, approvedMinor: null, decisionCode: "FLEET_EVIDENCE_UNCERTAIN", evidence: { uncertain: 2, relevant: 0 } });
+    expect(exp(r)).toMatchObject({ status: "approved", verifiedLevel: 0, evidence: { uncertain: 2, relevant: 0 } });
     expect(modelLog.length).toBe(0);
     const bv = (await genesis.experimentView(exp(r).experimentId))! as Record<string, any>;
     expect(bv.relevance.map((x: Record<string, any>) => [x.verdict, x.tier, x.cognition.length])).toEqual([["uncertain", "T0", 0], ["uncertain", "T0", 0]]);
@@ -462,18 +463,18 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_provider_credit_events WHERE recorded_by = 'controller:evidence_relevance'`))[0].n).toBe(2);
     // Through the assessor: the model's fabricated quote is not on the page → uncertain, after one T3 look.
     await settle();
-    expect(await expJson(lid)).toMatchObject({ status: "watch", decisionCode: "FLEET_EVIDENCE_UNCERTAIN", evidence: { uncertain: 1 } });
+    expect(await expJson(lid)).toMatchObject({ status: "approved", evidence: { uncertain: 1 } });
   });
 
-  it("(20) conflicting or ambiguous evidence is uncertain (T3 only then); uncertain never auto-approves; the owner override is audited, optional", async () => {
+  it("(20) conflicting or ambiguous evidence is uncertain (T3 only then); uncertain evidence lowers the recorded level (information); the owner override is audited, optional", async () => {
     await setup();
     const head0 = await ledgerHead();
     const good = await page(F.id, "good.example");
     const mixed = await page(F.id, "mixed.example", { text: "MIXED reviews: some landlords want a tracker, others say spreadsheets are pointless." });
     const r = await proposeAssessed(F, proposal({ opportunityKey: "mixed-signal", evidence: [good, mixed] }));
     const id = exp(r).experimentId as string;
-    // One relevant page and one ambiguous page: never an automatic approval, whatever the relevant page is worth.
-    expect(exp(r)).toMatchObject({ status: "watch", verifiedLevel: 1, approvedMinor: null, decisionCode: "FLEET_EVIDENCE_UNCERTAIN", evidence: { relevant: 1, uncertain: 1 } });
+    // One relevant page and one ambiguous page: the recorded level reflects only the relevant page (v31: custody decides).
+    expect(exp(r)).toMatchObject({ status: "approved", verifiedLevel: 1, evidence: { relevant: 1, uncertain: 1 } });
     const view = (await genesis.experimentView(id))! as Record<string, any>;
     const m = view.relevance.find((x: Record<string, any>) => x.attempt_id === mixed.attemptId);
     // Ambiguous at T2 → one question-scoped escalation to T3 (EVIDENCE_CONFLICT) → still ambiguous → uncertain.
@@ -484,7 +485,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     // A contradicting page is conflicting evidence: uncertain.
     const contra = await page(F.id, "contra.example", { text: "CONTRADICT: surveyed landlords said they would never pay for a template." });
     const c = await proposeAssessed(F, proposal({ opportunityKey: "contradicted", evidence: [contra] }));
-    expect(exp(c)).toMatchObject({ status: "watch", decisionCode: "FLEET_EVIDENCE_UNCERTAIN" });
+    expect(exp(c)).toMatchObject({ status: "approved", verifiedLevel: 0, evidence: { uncertain: 1 } });
     // Ambiguous at T2 but clear at T3: the escalation resolves it (relevant at T3).
     const t3 = await page(G.id, "t3.example", { text: "T3RESOLVES landlords want a tracker; the thread is long and meandering." });
     const t = await proposeAssessed(G, proposal({ opportunityKey: "t3-resolves", evidence: [t3] }));
@@ -493,7 +494,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(await code(override(id, mixed, "relevant", `operator:${F.id}`))).toBe("FLEET_SELF_APPROVAL");
     const after = await override(id, mixed, "relevant");
     expect(after).toMatchObject({ status: "approved", verifiedLevel: 2, decidedBy: "controller", evidence: { relevant: 2, uncertain: 0, overridden: 1 } });
-    expect(await code(override(id, mixed, "irrelevant"))).toBe("FLEET_INVALID_STATE"); // relevance is settled before the decision
+    expect(await code(override(id, mixed, "irrelevant"))).toBe("FLEET_DUPLICATE_EVENT"); // one owner override per evidence item
     const ov = (await genesis.experimentView(id))! as Record<string, any>;
     expect(ov.relevance.filter((x: Record<string, any>) => x.attempt_id === mixed.attemptId).map((x: Record<string, any>) => [x.assessor_kind, x.verdict, x.overrides]))
       .toEqual([["controller", "uncertain", null], ["owner", "relevant", "uncertain"]]);
@@ -618,7 +619,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     // A page fetched while off can still be cited (provenance), but without an artifact it can never earn a level.
     const cite = (x: { attemptId: string; sha256: string }) => ({ attemptId: x.attemptId, sha256: x.sha256, supports: "demand", rationale: "Landlords ask for this tracker." });
     const r = await proposeAssessed(F, proposal({ opportunityKey: "archive-off", evidence: [cite(off)] }));
-    expect(exp(r)).toMatchObject({ status: "watch", verifiedLevel: 0, decisionCode: "FLEET_EVIDENCE_UNCERTAIN" });
+    expect(exp(r)).toMatchObject({ status: "approved", verifiedLevel: 0, evidence: { uncertain: 1 } });
     const ok = await proposeAssessed(F, proposal({ opportunityKey: "archive-on", evidence: [cite(on)] }));
     expect(exp(ok)).toMatchObject({ verifiedLevel: 1, status: "approved" });
   });
@@ -656,7 +657,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(await credit(k[0].request_id)).toEqual([]); // not guessed into the credit record
     expect((await q(`SELECT detail FROM fleet.fleet_events WHERE event_type = 'provider_cost_reconciliation_required'`)).map((e) => e.detail.requestId)).toEqual([k[0].request_id]);
     expect((await genesis.relevanceCallsUnreconciled()).map((x) => x.request_id)).toEqual([k[0].request_id]);
-    expect(await expJson(id)).toMatchObject({ status: "watch", decisionCode: "FLEET_RELEVANCE_PENDING" }); // the item stays pending for a retry
+    expect(await expJson(id)).toMatchObject({ status: "approved", evidence: { unassessed: 1 } }); // the item stays pending for a retry
     // The owner reconciles it once with the provider's actual charge.
     expect(await genesis.relevanceCallReconcile(k[0].request_id, 4_200, OWNER, "console usage 2026-09-30")).toMatchObject({ ok: true, usdMicrocents: 4_200 });
     expect(await credit(k[0].request_id)).toEqual([{ usd: "-4200", recorded_by: OWNER, external_ref: "console usage 2026-09-30" }]);
@@ -733,7 +734,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     // A later proposal on the same opportunity, with relevant desk evidence, reaches E3 (observed signal) — a controller-derived level.
     const s3 = await page(F.id, "s3.example");
     const pending = await propose(F, proposal({ requestedMinor: 2_000, maxLossMinor: 1_000, evidence: [s3] }));
-    expect(exp(pending)).toMatchObject({ verifiedLevel: 0, status: "watch" }); // the earlier success alone is not relevance for a new proposal
+    expect(exp(pending)).toMatchObject({ verifiedLevel: 0, status: "approved", approvedMinor: 2_000 }); // the earlier success alone is not relevance for a new proposal
     await settle();
     expect(await expJson(exp(pending).experimentId)).toMatchObject({ verifiedLevel: 3, status: "approved", approvedMinor: 2_000 });
   });
@@ -955,7 +956,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
       expect(caps.experimentsEnabled).toBe(true);
       const ev = [await page(F.id, "h1.example"), await page(F.id, "h2.example")];
       const r = await client.experimentPropose("exp:http-propose-001", proposal({ evidence: ev }));
-      expect(r).toMatchObject({ ok: true, experiment: { status: "watch", evidence: { verified: 2, relevant: 0 } } });
+      expect(r).toMatchObject({ ok: true, experiment: { status: "approved", evidence: { verified: 2, relevant: 0 } } });
       const id = (r.experiment as { experimentId: string }).experimentId;
       await service.assessRelevance();
       expect(await expJson(id)).toMatchObject({ status: "approved", approvedMinor: 800 });
@@ -1019,9 +1020,9 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
       paymentOrders: (await q(`SELECT count(*)::int AS n FROM fleet.fleet_payment_orders`))[0].n,
     };
     expect(concluded).toMatchObject({ status: "succeeded" });
-    expect(receipt).toMatchObject({ proposal: { status: "watch" }, decision: { status: "approved", decidedBy: "controller" },
+    expect(receipt).toMatchObject({ proposal: { status: "approved" }, decision: { status: "approved", decidedBy: "controller" },
       result: { outcome: "succeeded", actualSpendMinor: 170, simulatedRevenueMinor: 3600, roiAuthority: "simulated_non_authoritative" }, ledger: { unchanged: true }, paymentOrders: 0 });
-    expect(receipt.transitions.map((t) => t.to)).toEqual(["proposed", "watch", "approved", "running", "succeeded"]);
+    expect(receipt.transitions.map((t) => t.to)).toEqual(["proposed", "approved", "running", "succeeded"]);
     if (process.env.R24_RECEIPT) fs.writeFileSync(process.env.R24_RECEIPT, JSON.stringify(receipt, null, 2) + "\n");
   });
 });

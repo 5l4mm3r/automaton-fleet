@@ -34,6 +34,14 @@ export class PgHubAdmin {
     return this.one(`SELECT fleet_hub($1, $2::jsonb) AS r`, [section, JSON.stringify(args)]);
   }
 
+  /** v31: FleetController's admin-withdrawal risk advice for an amount (or the recommendation alone) and the audited history. */
+  withdrawals(amountMinor: number | null) {
+    return this.one(`SELECT fleet_hub_withdrawals($1) AS r`, [amountMinor]);
+  }
+  withdrawalPolicy(cushionBp: number | null, horizonDays: number | null, actor: string) {
+    return this.one(`SELECT fleet_admin_withdrawal_policy_set($1, $2, $3) AS r`, [cushionBp, horizonDays, actor]);
+  }
+
   health(): Promise<{ ok: boolean; warn: boolean; findings: Array<{ severity: string; code: string; detail: unknown }> }> {
     return this.one(`SELECT fleet_economy_health() AS r`);
   }

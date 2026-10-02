@@ -1778,6 +1778,13 @@ export class PgFleetStore {
     );
   }
 
+  /** Schema v31: the spend boundary with context (category, destination, recoverable value). */
+  async actionCognitionVerifyCtx(agentId: string, actionClass: string, amountMinor: number | null, category: string | null, destinationId: string | null,
+    recoverableMinor: number | null, toolCallId: string | null, actionSha256: string | null): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_action_cognition_verify_ctx($1, $2, $3, $4, $5, $6, $7, $8) AS r",
+      [agentId, actionClass, amountMinor, category, destinationId, recoverableMinor, toolCallId, actionSha256])).rows[0].r);
+  }
+
   /** Schema v22: consequential-action boundary (single-use link to the producing cognition call at the class's minimum tier). */
   async actionCognitionVerify(agentId: string, actionClass: string, amountMinor: number | null, toolCallId: string | null, actionSha256: string | null): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.tx(async (c) => (await c.query("SELECT svc_action_cognition_verify($1, $2, $3, $4, $5) AS r", [agentId, actionClass, amountMinor, toolCallId, actionSha256])).rows[0].r);

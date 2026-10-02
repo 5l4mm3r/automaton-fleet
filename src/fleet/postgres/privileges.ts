@@ -787,7 +787,7 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_founder_runtime_upgrades: new Set(["fleet_founder_runtime_upgrade_prepare", "fleet_founder_runtime_upgrade_commit", "fleet_founder_runtime_upgrade_verify",
       "fleet_founder_runtime_upgrade_rollback", "fleet_founder_runtime_upgrade_rollback_verify", "fleet_founder_runtime_upgrade_abort"]),
     fleet_founder_routing: new Set(["fleet_founder_routing_set"]),
-    fleet_action_cognition_links: new Set(["svc_action_cognition_verify"]),
+    fleet_action_cognition_links: new Set(["svc_action_cognition_verify", "svc_action_cognition_verify_ctx"]),
     // v18 research: only the controller functions write the audit; only the owner functions write the switches.
     fleet_research_attempts: new Set(["svc_research_authorize"]),
     fleet_research_refusals_suppressed: new Set(["svc_research_authorize"]),
@@ -895,6 +895,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_capital_policy: new Set(["fleet_admin_capital_policy_set"]),
     fleet_sweep_policy: new Set(["fleet_admin_sweep_policy_set"]),
     fleet_cognition_depth_policy: new Set(["fleet_admin_cognition_depth_set"]),
+    fleet_admin_withdrawal_policy: new Set(["fleet_admin_withdrawal_policy_set"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

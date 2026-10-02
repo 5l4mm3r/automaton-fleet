@@ -1074,8 +1074,9 @@ export class FleetService {
         // call of at least the action class's minimum tier (controller's record, single-use, digest-matched).
         // Founders not on routing: not enforced (enforced=false), the legacy path is unchanged.
         const toolCallId = typeof body.cognitionToolCallId === "string" ? body.cognitionToolCallId.slice(0, 64) : (/^mind:([A-Za-z0-9_.-]{1,64}):/.exec(idempotencyKey)?.[1] ?? null);
-        const boundary = await admin.actionCognitionVerify(agentId, "spend_request", amount, toolCallId,
-          actionDigest("request_spend", { amountCents: amount, category: body.category, destinationId }));
+        // v31: contextual depth — exposure share, recoverability and destination novelty (never one percentage alone).
+        const boundary = await admin.actionCognitionVerifyCtx(agentId, "spend_request", amount, typeof body.category === "string" ? body.category.slice(0, 32) : null,
+          destinationId, recoverable, toolCallId, actionDigest("request_spend", { amountCents: amount, category: body.category, destinationId }));
         if (!boundary.ok) {
           this.audit("action_cognition_refused", agentId, { code: boundary.code ?? null, actionClass: boundary.actionClass ?? null, minTier: boundary.minTier ?? null, tier: boundary.tier ?? null });
           throw new HttpError(403, String(boundary.code ?? "FLEET_ACTION_COGNITION_MISSING"), "the cognition behind this action does not meet its minimum tier");
