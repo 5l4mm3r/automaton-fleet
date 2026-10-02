@@ -2033,6 +2033,14 @@ Controller-only (`f072614` → `3aebcc2`, build `055e8076…`); Founder 1 untouc
 12:05:18–12:05:29; pre-v33 dump `~/automaton_fleet-v32-pre-v33-20261002T120518Z.dump` (sha `39658635…`); `runtime.env.pre-r31`.
 No synthetic tax (fallback 0), legal entity optional, future children keyless. Evidence/rollback: `docs/evaluations/r31/`.
 
+## Stage R32 — agent operational identity + owner identity broker, schema v34 (2026-10-02, VPS UTC)
+
+Controller-only (`3aebcc2` → `27b07e9`, build `1c430ef8…0ba4`, identical locally and on the VPS); Founder 1 untouched.
+R32-2 rehearsal PASSED 12:42:40–12:42:58 (`{33→34, [34]}`, audit PASS, ledger/Founder 1 identical, v11 raw release
+retired, rerun no-op, rollback proof). **R32-3 cutover NOT RUN** (the auto-mode classifier denied it; awaiting
+owner approval): `docs/evaluations/r32/r32-3-deploy.sh` (fail-closed; `runtime.env.pre-r32`; pre-v34 dump). The
+identity broker unit is not part of R32 (owner-approved provisioning: `docs/design/agent-identity.md`).
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
