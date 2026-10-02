@@ -33,7 +33,19 @@
  *   economy-capital-policy <json> | economy-sweep-policy <json> | economy-economy-policy <json>
  *   economy-transfer-policy <cushionBp> <horizonDays> <burnWindowDays> | economy-cognition-depth <majorExposureBp>
  *   economy-breaker-novelty <ageSeconds|off> [walletBp]
- *   economy-safe-transfer <agentId> | economy-wallet-transfer <agentId> <minor> <treasury|operating_pool> <reason…>
+ *   economy-safe-transfer <agentId> | economy-wallet-transfer <agentId> <minor> <treasury|operating_pool> <reason…> [--acknowledge]
+ *   economy-agent-transfer <fromAgentId> <toAgentId> <minor> <reason…> [--acknowledge]   Admin transfer between agents (no cap;
+ *                                               acknowledgement above the advised safe amount; real balances only)
+ *   hub-engine | hub-replication | hub-estates | hub-notifications [--all] [--limit n] | hub-daily-report | hub-risk <agentId> [amountMinor]
+ *   economy-replication-policy <json>           ladderMinor, stepAfterMinor, windowHours, autoBirthEnabled, populationCeiling
+ *   economy-birth <independent|marketing|opportunity_hunt|knowledge_data|other> <fundingMinor> <reason…> [--role r]   manual birth
+ *   economy-reseed <deadAgentId> <fundingMinor> <reason…>   a new agent inheriting the dead agent's estate
+ *   economy-birth-fulfil <orderId> <agentId> | economy-birth-cancel <orderId> <reason…>
+ *   economy-mission-assign <agentId> <marketing|opportunity_hunt|knowledge_data> <brief…> [--beneficiaries json]
+ *   economy-mission-end <missionId> [outcome…] | economy-mission-request <kind> <brief…> [--beneficiaries json]
+ *   economy-mission-policy <json> | economy-risk-policy <json>
+ *   economy-estate-assign <itemId> <agentId> | economy-estate-release <itemId> [reason…]
+ *   economy-notification-ack <notificationId> | economy-notification-policy <dailyHourUtc|-> [adminEmail]
  *   economy-sweep-compute <agentId>
  */
 import crypto from "crypto";
@@ -47,6 +59,10 @@ export const HUB_COMMANDS = new Set([
   "economy-rail-add", "economy-rail-status", "economy-credential-register", "economy-credential-status", "economy-settlement-attribute",
   "economy-capital-policy", "economy-sweep-policy", "economy-economy-policy", "economy-transfer-policy", "economy-cognition-depth", "economy-breaker-novelty",
   "economy-safe-transfer", "economy-wallet-transfer", "economy-sweep-compute",
+  "economy-agent-transfer", "hub-engine", "hub-replication", "hub-estates", "hub-notifications", "hub-daily-report", "hub-risk",
+  "economy-replication-policy", "economy-birth", "economy-reseed", "economy-birth-fulfil", "economy-birth-cancel",
+  "economy-mission-assign", "economy-mission-end", "economy-mission-request", "economy-mission-policy", "economy-risk-policy",
+  "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
 ]);
 
 const flag = (a: string[], name: string): string | null => {
@@ -77,7 +93,15 @@ const json = (v: string | undefined, what: string): Record<string, unknown> => {
 };
 
 export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, actor: string): Promise<unknown> {
-  const p = positional(a, ["--entity", "--credential", "--mode", "--venture", "--max", "--hint"]);
+  const p = positional(a, ["--entity", "--credential", "--mode", "--venture", "--max", "--hint", "--role", "--beneficiaries", "--limit"]);
+  const ack = a.includes("--acknowledge");
+  const beneficiaries = (): unknown[] | null => {
+    const v = flag(a, "--beneficiaries");
+    if (v === null) return null;
+    const x = JSON.parse(v);
+    if (!Array.isArray(x)) throw new Error("FLEET_BAD_REQUEST: --beneficiaries is a JSON array");
+    return x;
+  };
   switch (cmd) {
     case "hub": {
       const section = (p[0] ?? "overview") as HubSection;
@@ -91,6 +115,7 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       sections.custody = await h.custody();
       sections.identity = await h.identity(null);
       sections.health = await h.health();
+      sections.engine = await h.engine();
       fs.writeFileSync(p[0], renderHub(sections), { mode: 0o600 });
       return { written: p[0], sections: Object.keys(sections) };
     }
@@ -165,8 +190,50 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-wallet-transfer": {
       const target = p[2];
       if (target !== "treasury" && target !== "operating_pool") throw new Error("FLEET_BAD_REQUEST: target is treasury or operating_pool");
-      return h.walletTransfer(p[0], int(p[1], "amount"), target, p.slice(3).join(" "), actor, `wt:${crypto.randomUUID()}`);
+      return h.walletTransfer(p[0], int(p[1], "amount"), target, p.slice(3).join(" "), actor, `wt:${crypto.randomUUID()}`, ack);
     }
+    case "economy-agent-transfer":
+      return h.agentTransfer(p[0], p[1], int(p[2], "amount"), p.slice(3).join(" "), actor, `at:${crypto.randomUUID()}`, ack);
+    case "hub-engine":
+      return h.engine();
+    case "hub-replication":
+      return h.replication();
+    case "hub-estates":
+      return h.estates();
+    case "hub-notifications":
+      return h.notifications(flag(a, "--limit") ? int(flag(a, "--limit"), "limit") : 50, !a.includes("--all"));
+    case "hub-daily-report":
+      return h.dailyReport();
+    case "hub-risk":
+      return h.riskContext(p[0], p[1] ? int(p[1], "amountMinor") : null);
+    case "economy-replication-policy":
+      return h.replicationPolicy(json(p[0], "policy"), actor);
+    case "economy-birth":
+      return h.birth(p[0], p.slice(2).join(" "), int(p[1], "fundingMinor"), flag(a, "--role"), actor, `birth:${crypto.randomUUID()}`);
+    case "economy-reseed":
+      return h.reseed(p[0], p.slice(2).join(" "), int(p[1], "fundingMinor"), actor, `reseed:${crypto.randomUUID()}`);
+    case "economy-birth-fulfil":
+      return h.birthFulfil(p[0], p[1], actor);
+    case "economy-birth-cancel":
+      return h.birthCancel(p[0], p.slice(1).join(" "), actor);
+    case "economy-mission-assign":
+      return h.missionAssign(p[0], p[1], p.slice(2).join(" "), beneficiaries(), actor);
+    case "economy-mission-end":
+      return h.missionEnd(p[0], p.slice(1).join(" ") || null, actor);
+    case "economy-mission-request":
+      return h.missionRequest(p[0], p.slice(1).join(" "), beneficiaries(), actor);
+    case "economy-mission-policy":
+      return h.missionPolicy(json(p[0], "policy"), actor);
+    case "economy-risk-policy":
+      return h.riskPolicy(json(p[0], "policy"), actor);
+    case "economy-estate-assign":
+      return h.estateAssign(p[0], p[1], actor);
+    case "economy-estate-release":
+      return h.estateRelease(p[0], p.slice(1).join(" ") || null, actor);
+    case "economy-notification-ack":
+      return h.notificationAck(p[0], actor);
+    case "economy-notification-policy":
+      return h.notificationPolicy(p[0] && p[0] !== "-" ? int(p[0], "dailyHourUtc") : null, p[1] ?? null, actor);
     case "economy-sweep-compute":
       return h.sweepCompute(p[0]);
     default:

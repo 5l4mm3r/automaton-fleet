@@ -156,20 +156,22 @@ describe.skipIf(!PG_BIN)("F2 v28 economy records: opportunities, ventures, decis
     expect(c.decision).toMatchObject({ revision: 2, selected: "direct storefront", correction: expect.stringContaining("9.5%") });
     expect(c.decision.alternatives).toEqual(expect.arrayContaining([{ option: "etsy", reason: "abandoned on new evidence" }]));
     expect(await R.econ(F, "decision.correct", { key: "d-channel", selected: "etsy", correction: "back", nextAction: "x", evidence: [ev("note", "n")] })).toMatchObject({ code: "FLEET_OSCILLATION" });
-    // An unlinked decision is measured from the agent's report and stays private knowledge.
+    // An unlinked decision is measured from the agent's report: not outcome-backed. v35: the whole Fleet still sees it
+    // (knowledge compounds), flagged as another agent's, unbacked entry so G can weigh it.
     const m = await R.econ(F, "decision.outcome", { key: "d-channel", actualRevenueMinor: 800, actualCostMinor: 50, lessons: "own storefront ok" });
     expect(m.decision.outcome).toMatchObject({ source: "agent_reported", revenueMinor: 800, revenueErrorBp: -2000 });
-    expect((await R.econ(G, "knowledge.search", { query: "own storefront" })).knowledge).toEqual([]);
+    expect((await R.econ(G, "knowledge.search", { query: "own storefront" })).knowledge).toEqual([expect.objectContaining({ own: false, fleetShared: true, outcomeBacked: false })]);
     expect((await R.econ(F, "knowledge.search", { query: "own storefront" })).knowledge).toEqual([expect.objectContaining({ own: true, outcomeBacked: false })]);
   });
 
-  it("knowledge: recorded by the agent, superseded (never deleted), fresh only; own entries private", async () => {
+  it("knowledge: recorded by the agent, superseded (never deleted), fresh only; shared Fleet-wide and flagged (v35)", async () => {
     await R.econ(F, "knowledge.record", { topic: "vendor", subject: "printful/a4-posters", claim: "Printful A4 poster unit cost £6.20 incl. delivery", confidenceBp: 8000 });
     await R.econ(F, "knowledge.record", { topic: "vendor", subject: "printful/a4-posters", claim: "Printful A4 poster unit cost £6.50 incl. delivery (Oct price rise)" });
     const k = await R.econ(F, "knowledge.search", { topic: "vendor" });
     expect(k.knowledge.map((x: { claim: string }) => x.claim)).toEqual(["Printful A4 poster unit cost £6.50 incl. delivery (Oct price rise)"]);
     expect(await R.code(R.q(`DELETE FROM fleet.fleet_economic_knowledge`))).toBe("FLEET_IMMUTABLE");
-    expect((await R.econ(G, "knowledge.search", { topic: "vendor" })).knowledge).toEqual([]);
+    expect((await R.econ(G, "knowledge.search", { topic: "vendor" })).knowledge.map((x: { claim: string; own: boolean }) => [x.claim, x.own]))
+      .toEqual([["Printful A4 poster unit cost £6.50 incl. delivery (Oct price rise)", false]]);
     expect(await R.econ(F, "knowledge.search", {})).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
   });
 

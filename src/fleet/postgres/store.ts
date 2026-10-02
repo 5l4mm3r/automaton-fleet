@@ -1952,6 +1952,17 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_capital_reap($1) AS r", [limit])).rows[0].r);
   }
 
+  /** Schema v35: the economy engine's passes — replication window (births only when every switch is on), missions, estates, notifications. */
+  async engineTick(realReplicationEnabled: boolean): Promise<{ replication: Record<string, unknown>; missions: Record<string, unknown>;
+    estates: Record<string, unknown>; notifications: Record<string, unknown> }> {
+    return this.tx(async (c) => ({
+      replication: (await c.query("SELECT svc_replication_tick($1) AS r", [realReplicationEnabled])).rows[0].r,
+      missions: (await c.query("SELECT svc_mission_tick() AS r")).rows[0].r,
+      estates: (await c.query("SELECT svc_estate_tick(20) AS r")).rows[0].r,
+      notifications: (await c.query("SELECT svc_notify_tick() AS r")).rows[0].r,
+    }));
+  }
+
   /** Schema v30 (F2): FleetController's tax true-up pass (reserves follow the estimated liability; over-reserve released). */
   async taxTrueUp(limit = 100): Promise<Record<string, unknown>> {
     return this.tx(async (c) => (await c.query("SELECT svc_tax_true_up($1) AS r", [limit])).rows[0].r);

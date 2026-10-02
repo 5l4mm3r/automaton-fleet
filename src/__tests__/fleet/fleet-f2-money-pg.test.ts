@@ -175,7 +175,7 @@ describe.skipIf(!PG_BIN)("F2 v29 money core: tax, rails, settlement, vendors, wa
     expect(s1).toMatchObject({ growthReserveMinor: 2000, cushionBp: 1000 });
     expect(s1.safeTransferableMinor).toBe(Math.max(0, s0 - 2000));
     expect(await R.code(R.one(`fleet.fleet_admin_wallet_transfer($1, $2, 'treasury', 'infrastructure costs', $3, $4)`, [G.id, s1.safeTransferableMinor + 1, OWNER, `wt:${crypto.randomUUID()}`])))
-      .toBe("FLEET_TRANSFER_EXCEEDS_SAFE");
+      .toBe("FLEET_ACKNOWLEDGE_REQUIRED"); // v35: Admin has no economic cap — the safe amount is advice, crossed only with an acknowledgement
     const t = await R.one(`fleet.fleet_admin_wallet_transfer($1, 1000, 'operating_pool', 'provider subscriptions', $2, $3)`, [G.id, OWNER, `wt:${crypto.randomUUID()}`]);
     expect(t).toMatchObject({ ok: true });
     expect(await R.balance("fleet:operating:pool")).toBe(1000);

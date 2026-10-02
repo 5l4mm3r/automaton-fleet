@@ -42,8 +42,9 @@ import { V31_SQL } from "./migrations-phase31.js";
 import { V32_SQL } from "./migrations-phase32.js";
 import { V33_SQL } from "./migrations-phase33.js";
 import { V34_SQL } from "./migrations-phase34.js";
+import { V35_SQL } from "./migrations-phase35.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 34;
+export const FLEET_PG_SCHEMA_VERSION = 35;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1173,6 +1174,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 32, name: "custody_signer_keyless_custody_bound_instructions", sql: V32_SQL },
   { version: 33, name: "no_synthetic_tax_legal_entity_optional", sql: V33_SQL },
   { version: 34, name: "agent_operational_identity_owner_identity_broker", sql: V34_SQL },
+  { version: 35, name: "fleet_economy_engine_replication_missions_estates_notifications", sql: V35_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1197,6 +1199,11 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_issue_payment_instruction(uuid)",
   "svc_genesis_expire(integer)",
   "svc_settle_estates(integer)",
+  // v35: the economy engine passes (replication window, missions, estates, notifications).
+  "svc_replication_tick(boolean)",
+  "svc_mission_tick()",
+  "svc_estate_tick(integer)",
+  "svc_notify_tick()",
   "svc_genesis_runtime_evidence(text, text, jsonb)",
   "svc_cognition_authorize(text, bigint)",
   "svc_cognition_record(text, uuid, text, integer, integer, text, text, jsonb, text, text, integer, integer, text, integer, integer, integer, text, text)",

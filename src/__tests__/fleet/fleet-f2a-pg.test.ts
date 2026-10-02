@@ -211,7 +211,9 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
       // v34: the identity broker records (and answers) the one action-scoped human_identity dependency of an account.
       "ix_report_job",
       // v30: read-only observability (the Hub's dependency list and Doctor's action-scoping check) — they gate nothing.
-      "fleet_hub", "fleet_economy_health"]);
+      "fleet_hub", "fleet_economy_health",
+      // v35: reports only — the IDENTITY notification for a human-only action and the daily report's count; they gate nothing.
+      "svc_notify_tick", "fleet_daily_report"]);
     expect(readers.length).toBeGreaterThan(0);
     expect(readers.filter((n) => !family.has(n))).toEqual([]);
     // In particular the spend, experiment, capability, cognition and lifecycle paths never consult it.

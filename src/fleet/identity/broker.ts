@@ -229,6 +229,20 @@ export class IdentityBroker {
           : ({ outcome: "succeeded" } as AccountOutcome);
         return r.outcome === "succeeded" ? { outcome: "succeeded", result: { status: "closed" }, account: { status: "closed" } } : this.fromAccountOutcome(r);
       }
+      case "credential.rebind": {
+        // v35 estate transfer: re-seal each active credential from the previous owner's scope to the new owner's, then
+        // shred the retired blobs. A blob that does not belong to (previous agent, this account, kind) cannot be opened.
+        const from = typeof job.params.fromAgent === "string" ? job.params.fromAgent : "";
+        if (!from) return failed("FLEET_BAD_REQUEST", "no previous owner");
+        let n = 0;
+        for (const cred of job.credentials) {
+          const secret = await this.vault.withSecret(cred.vaultRef, { agentId: from, accountId: job.accountId!, kind: cred.kind }, async (s) => s);
+          await this.gw.credentialRecord(job.jobId, lease, cred.kind, this.vault.put(this.scope(job, cred.kind), secret));
+          n++;
+        }
+        for (const ref of await this.gw.retiredCredentials(job.jobId, lease)) this.vault.shred(ref);
+        return { outcome: "succeeded", result: { status: "rebound", data: { credentials: n } }, account: { credentialHealth: n ? "ok" : "none" } };
+      }
       default:
         return failed("FLEET_UNKNOWN_JOB");
     }

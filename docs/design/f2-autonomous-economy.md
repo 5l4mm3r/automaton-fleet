@@ -1208,3 +1208,42 @@ platform accounts) with no owner step; credentials live only in the isolated ide
 cognition; owner identity is a separate sealed vault used only through the broker under standing, revocable consent;
 agents receive statuses only; a provider needing a non-delegable human act blocks only that account. v11's raw release of
 organisation identity to agents is retired. Full design: `docs/design/agent-identity.md`.
+
+## 34. Fleet economy engine — schema v35 (2026-10-02; master handoff)
+
+Built on the existing ledger (GBP minor units) and the v10 provenance model. Automatic births, real payments and owner
+sweeps stay OFF (build flags; not constitution).
+
+- **Replication** (`fleet_replication_policy` / `_state`, `svc_replication_tick`, reaper): Fleet-generated Treasury wealth
+  = Treasury cash in excess of the owner's net contributed capital (owner funding never counts; **owner to confirm this
+  definition**). Ladder £1k, £2k, £4k, £8k, £12k, £16k, £20k, then +£4k per agent, up to the 50-living ceiling. Crossing →
+  PENDING; healthy (threshold, Treasury ≥ obligations, cover for the next Genesis allocation, no living agent short of its
+  30-day commitments, vulnerable agents' cushions met, no open RED) for 24 continuous hours, else the timer resets.
+  Each threshold triggers once (`thresholds_consumed` and `high_water_minor` only rise). A completed window queues an
+  automatic birth order only when the policy's `autoBirthEnabled`, the registry switch and the service's
+  `REAL_REPLICATION_ENABLED` are all on; otherwise it waits (`ready_disabled` / `ready_capacity`) without consuming.
+- **Births** (`fleet_birth_orders`): automatic, Admin (`economy-birth`) and reseed (`economy-reseed`: a NEW agent that
+  inherits a dead agent's estate). Bounded only by the population ceiling (living + queued) and real Treasury cash.
+  `economy-birth-fulfil` links an order to the agent the provisioning pipeline created, posts its funding and transfers a
+  reseed's estate. **Gap:** the provisioning pipeline that creates a further founder from an order (OS user, unit,
+  credentials) does not exist yet — Genesis is one-shot.
+- **Missions** (`fleet_agent_missions`, `fleet_mission_requests`): NORMAL / MARKETING / OPPORTUNITY_HUNT / KNOWLEDGE_DATA,
+  separate from the permanent role. Assigned after meaningful stagnation (no realised revenue for `stagnationDays`)
+  only against a real open request, or by Admin. Knowledge/opportunity 36 h target, 48 h max; marketing up to 7 days,
+  reviewed (by the mission agent or a beneficiary) and ended early when ineffective. On ending, the mission's external
+  costs are recharged to the beneficiaries (journal kind `mission_cost_recharge`), bounded by what each holds.
+- **Commitments and risk** (`fleet_agent_commitments`, `fleet_agent_risk_context`): the agent records its recurring costs;
+  the risk picture gives value, burn, runway, the vulnerable-business cushion (10% of 30-day requirements while
+  vulnerable) and exposure tiers (≥50% deep, ≥75% deepest) — guidance and an AMBER report, never a veto.
+- **Notifications** (`fleet_notifications`, `svc_notify_tick`): DAILY report, AMBER (high-exposure spend, automatic
+  birth), RED (breaker tripped, Treasury below obligations), IDENTITY (each human-only action). Email delivery is v36.
+- **Admin transfers**: `economy-agent-transfer` and `economy-wallet-transfer --acknowledge` — no economic cap; above the
+  advised safe amount an acknowledgement; real balances only; audited.
+- **Estate** (`fleet_estate_items`, `svc_estate_tick`): inventory at death (identities, accounts, ventures, knowledge,
+  assets), a 1 GB value-ranked store (least valuable unprotected data pruned first), dead agents' commitments stopped at
+  renewal and unused renewing accounts (domains) released, reuse by `estate.claim` / `economy-estate-assign` — an
+  account's credentials are re-sealed to the new owner by the identity broker (`credential.rebind`).
+- **Knowledge** compounds Fleet-wide: every agent searches every agent's current entries, flagged own / outcome-backed.
+- Agent tool `fleet_services`; Hub `hub-engine`, `hub-replication`, `hub-estates`, `hub-notifications`, `hub-daily-report`,
+  `hub-risk`; policies `economy-replication-policy`, `economy-mission-policy`, `economy-risk-policy`,
+  `economy-notification-policy`.

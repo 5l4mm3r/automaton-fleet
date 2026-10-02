@@ -136,8 +136,74 @@ export class PgHubAdmin {
   safeTransfer(agentId: string) {
     return this.one(`SELECT fleet_safe_transfer_amount($1) AS r`, [agentId]);
   }
-  walletTransfer(agentId: string, amountMinor: number, target: "treasury" | "operating_pool", reason: string, actor: string, idem: string) {
-    return this.one(`SELECT fleet_admin_wallet_transfer($1, $2, $3, $4, $5, $6) AS r`, [agentId, amountMinor, target, reason, actor, idem]);
+  /** v35: no economic cap — above the advised safe amount the Admin acknowledges; only the real balance binds. */
+  walletTransfer(agentId: string, amountMinor: number, target: "treasury" | "operating_pool", reason: string, actor: string, idem: string, acknowledge = false) {
+    return this.one(`SELECT fleet_admin_wallet_transfer($1, $2, $3, $4, $5, $6, $7) AS r`, [agentId, amountMinor, target, reason, actor, idem, acknowledge]);
+  }
+  agentTransfer(from: string, to: string, amountMinor: number, reason: string, actor: string, idem: string, acknowledge = false) {
+    return this.one(`SELECT fleet_admin_agent_transfer($1, $2, $3, $4, $5, $6, $7) AS r`, [from, to, amountMinor, reason, actor, idem, acknowledge]);
+  }
+
+  // ── v35 economy engine: replication, births, missions, estates, notifications, risk ──
+  engine() {
+    return this.one(`SELECT fleet_hub_engine() AS r`);
+  }
+  replication() {
+    return this.one(`SELECT fleet_admin_replication_status() AS r`);
+  }
+  replicationPolicy(patch: Record<string, unknown>, actor: string) {
+    return this.one(`SELECT fleet_admin_replication_policy_set($1::jsonb, $2) AS r`, [JSON.stringify(patch), actor]);
+  }
+  birth(mission: string, reason: string, fundingMinor: number, role: string | null, actor: string, idem: string) {
+    return this.one(`SELECT fleet_admin_birth($1, $2, $3, $4, $5, $6) AS r`, [mission, reason, fundingMinor, role, actor, idem]);
+  }
+  reseed(deadAgentId: string, reason: string, fundingMinor: number, actor: string, idem: string) {
+    return this.one(`SELECT fleet_admin_reseed($1, $2, $3, $4, $5) AS r`, [deadAgentId, reason, fundingMinor, actor, idem]);
+  }
+  birthFulfil(orderId: string, agentId: string, actor: string) {
+    return this.one(`SELECT fleet_admin_birth_fulfil($1, $2, $3) AS r`, [orderId, agentId, actor]);
+  }
+  birthCancel(orderId: string, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_birth_cancel($1, $2, $3) AS r`, [orderId, reason, actor]);
+  }
+  missionAssign(agentId: string, kind: string, brief: string, beneficiaries: unknown[] | null, actor: string) {
+    return this.one(`SELECT fleet_admin_mission_assign($1, $2, $3, $4::jsonb, $5) AS r`, [agentId, kind, brief, beneficiaries ? JSON.stringify(beneficiaries) : null, actor]);
+  }
+  missionEnd(missionId: string, outcome: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_mission_end($1, $2, $3) AS r`, [missionId, outcome, actor]);
+  }
+  missionRequest(kind: string, brief: string, beneficiaries: unknown[] | null, actor: string) {
+    return this.one(`SELECT fleet_admin_mission_request($1, $2, $3::jsonb, $4) AS r`, [kind, brief, beneficiaries ? JSON.stringify(beneficiaries) : null, actor]);
+  }
+  missionPolicy(patch: Record<string, unknown>, actor: string) {
+    return this.one(`SELECT fleet_admin_mission_policy_set($1::jsonb, $2) AS r`, [JSON.stringify(patch), actor]);
+  }
+  estates() {
+    return this.one(`SELECT fleet_admin_estates() AS r`);
+  }
+  estateAssign(itemId: string, agentId: string, actor: string) {
+    return this.one(`SELECT fleet_admin_estate_assign($1, $2, $3) AS r`, [itemId, agentId, actor]);
+  }
+  estateRelease(itemId: string, reason: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_estate_release($1, $2, $3) AS r`, [itemId, reason, actor]);
+  }
+  notifications(limit: number, unacknowledgedOnly: boolean) {
+    return this.one(`SELECT fleet_admin_notifications($1, $2) AS r`, [limit, unacknowledgedOnly]);
+  }
+  notificationAck(id: string, actor: string) {
+    return this.one(`SELECT fleet_admin_notification_ack($1, $2) AS r`, [id, actor]);
+  }
+  notificationPolicy(dailyHourUtc: number | null, adminEmail: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_notification_policy_set($1, $2, $3) AS r`, [dailyHourUtc, adminEmail, actor]);
+  }
+  riskPolicy(patch: Record<string, unknown>, actor: string) {
+    return this.one(`SELECT fleet_admin_risk_policy_set($1::jsonb, $2) AS r`, [JSON.stringify(patch), actor]);
+  }
+  riskContext(agentId: string, amountMinor: number | null) {
+    return this.one(`SELECT fleet_agent_risk_context($1, $2) AS r`, [agentId, amountMinor]);
+  }
+  dailyReport() {
+    return this.one(`SELECT fleet_daily_report() AS r`);
   }
   sweepCompute(agentId: string) {
     return this.one(`SELECT fleet_sweep_compute($1) AS r`, [agentId]);

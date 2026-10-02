@@ -243,4 +243,27 @@ describe.skipIf(!PG_BIN)("v34 agent-owned identity and owner identity broker (Po
     for (const pw of passwords()) expect(text).not.toContain(pw);
     expect((await auditPrivileges(R.owner, { schema: "fleet", requireIdentityRoles: true })).problems).toEqual([]);
   });
+
+  it("v35 estate transfer: a dead agent's account passes to another agent; the broker re-seals its credentials to the new owner", async () => {
+    const accA = (await R.q(`SELECT account_id FROM fleet.fleet_agent_accounts WHERE platform = 'sim-market' AND handle = 'axiomdata'`))[0].account_id as string;
+    const oldRefs = (await R.q(`SELECT vault_ref FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND status = 'active'`, [accA])).map((x) => x.vault_ref as string);
+    expect(oldRefs).toHaveLength(1);
+    await R.store.markDead(A.id, "test death", "test", "reported");
+    await svc.query(`SELECT fleet.svc_estate_tick(20)`);
+    const item = (await R.q(`SELECT item_id FROM fleet.fleet_estate_items WHERE kind = 'account' AND ref_id = $1`, [accA]))[0].item_id;
+    const claim = await ok(R.econ(B, "estate.claim", { itemId: item, reason: "an established marketplace account with reviews" }));
+    expect((await broker.tick()).outcomes).toContain("succeeded");
+    const job = (await R.q(`SELECT status, result FROM fleet.fleet_identity_jobs WHERE job_id = $1`, [claim.credentialRebindJob]))[0];
+    expect(job).toMatchObject({ status: "succeeded", result: { status: "rebound", data: { credentials: 1 } } });
+    const now = await R.q(`SELECT agent_id, vault_ref FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND status = 'active'`, [accA]);
+    expect(now).toHaveLength(1);
+    expect(now[0].agent_id).toBe(B.id);
+    expect(now[0].vault_ref).not.toBe(oldRefs[0]);
+    expect(fs.existsSync(path.join(dir, "agent-vault", `${oldRefs[0].slice(7)}.bin`))).toBe(false);
+    // The new owner operates the inherited account (the broker opens the re-sealed credential under B's scope).
+    await ok(R.econ(B, "account.operate", { accountId: accA, action: "listing.create", params: { title: "inherited listing" }, idempotencyKey: idem() }));
+    expect((await broker.tick()).outcomes).toEqual(["succeeded"]);
+    const text = await registryText();
+    for (const pw of passwords()) expect(text).not.toContain(pw);
+  });
 });

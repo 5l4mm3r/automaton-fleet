@@ -10,6 +10,10 @@ import type { PoolClient } from "pg";
  * ledger head reset (journals, postings and agent accounts are emptied).
  * Must run inside the caller's transaction.
  */
+/** v35 singleton rows (economy-engine policies and the replication high-water state): reset to migration defaults. */
+const V35_SINGLETONS = ["fleet_replication_policy", "fleet_replication_state", "fleet_mission_policy", "fleet_risk_policy",
+  "fleet_notification_policy", "fleet_estate_policy"];
+
 export async function wipeRegistry(c: PoolClient, schema: string): Promise<void> {
   const keep = new Set([
     "fleet_state", "fleet_schema_migrations", "fleet_treasury_policy",
@@ -20,6 +24,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_experiment_policy", "fleet_evidence_ladder", "fleet_spend_circuit_breaker",
     "fleet_economy_policy", "fleet_venture_transition_rules", "fleet_tax_policy", "fleet_transfer_policy",
     "fleet_capital_policy", "fleet_sweep_policy", "fleet_cognition_depth_policy", "fleet_admin_withdrawal_policy", "fleet_custody_policy",
+    ...V35_SINGLETONS,
   ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
@@ -120,6 +125,9 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   // v32: custody signer heartbeat window back to its default.
   if (r.rows.some((x) => x.t === "fleet_custody_policy")) {
     await c.query(`UPDATE "${schema}".fleet_custody_policy SET attestation_ttl_s = 900, updated_by = 'migration'`);
+  }
+  for (const t of V35_SINGLETONS) {
+    if (r.rows.some((x) => x.t === t)) await c.query(`DELETE FROM "${schema}".${t}; INSERT INTO "${schema}".${t} (id) VALUES (1)`);
   }
   for (const t of all) await c.query(`ALTER TABLE ${t} ENABLE TRIGGER USER`);
   // v21 fixtures: an identity USD→GBP rate (so historical accounting expectations keep their numbers) and generous

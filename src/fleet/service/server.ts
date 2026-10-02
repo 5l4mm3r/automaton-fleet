@@ -403,6 +403,21 @@ export class FleetService {
         // ledger-verified milestones release the next tranche. (Sweeps run only when an operator enables them.)
         const capital = await this.opts.admin.reapCapital(100);
         if (capital.changed) this.audit("envelopes_reaped", null, { evaluated: capital.evaluated, changed: capital.changed });
+        // v35: the economy engine (replication window, missions, estates, notifications). A failure here is reported and
+        // never stops the rest of the reaper.
+        if (typeof this.opts.admin.engineTick === "function") {
+          try {
+            const e = await this.opts.admin.engineTick(this.opts.realReplicationEnabled);
+            const m = e.missions as { expired?: number; assigned?: number };
+            const es = e.estates as { inventoried?: number; commitmentsStopped?: number; released?: number; pruned?: number };
+            const phase = (e.replication as { phase?: string }).phase;
+            if (phase === "birth_ordered" || m.expired || m.assigned || es.inventoried || es.commitmentsStopped || es.released || es.pruned) {
+              this.audit("engine_pass", null, { replication: phase, missions: m, estates: es, notifications: e.notifications });
+            }
+          } catch (err) {
+            this.audit("engine_error", null, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
         this.assessRelevance();
         await this.processTerminations();
         this.lastReapOkAt = Date.now();

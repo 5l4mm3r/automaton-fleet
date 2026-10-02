@@ -62,10 +62,14 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
   identity: { create_persona: "identity.create", update_persona: "identity.update", list: "identity.list", provision_mailbox: "mailbox.provision",
     inbox: "mail.inbox", create_account: "account.create", operate: "account.operate", status: "account.status", verify_identity: "account.verify_identity",
     recover: "account.recover", rotate: "account.rotate", revoke: "account.revoke", close: "account.close" },
+  // v35: recurring commitments, risk context, temporary Fleet missions and estate reuse (the agent's own planning).
+  fleet_services: { add_commitment: "commitment.add", cancel_commitment: "commitment.cancel", commitments: "commitment.list", assess_risk: "risk.assess",
+    mission_status: "mission.status", request_mission: "mission.request", mission_report: "mission.report", mission_review: "mission.review",
+    estate_search: "estate.search", estate_claim: "estate.claim" },
 });
 /** Registry ops that move or commit money get a deterministic idempotency key from the tool call (a retry never doubles). */
 const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend", "mailbox.provision", "account.create", "account.operate", "account.verify_identity",
-  "account.recover", "account.rotate", "account.revoke", "account.close"]);
+  "account.recover", "account.rotate", "account.revoke", "account.close", "commitment.add"]);
 
 export interface ToolOutcome {
   name: string;
@@ -123,7 +127,7 @@ const IMPLEMENTED = new Set([
   "open_decision", "resolve_decision", "review_decision",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
-  "opportunity", "venture", "wallet", "fleet_capital", "economic_knowledge", "identity",
+  "opportunity", "venture", "wallet", "fleet_capital", "economic_knowledge", "identity", "fleet_services",
 ]);
 const EXPERIMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Registry refusals that are infrastructure safety ceilings (fetch quotas, the daily inference ceiling), never budgets. */
@@ -509,7 +513,7 @@ export class FounderToolbox {
         case "check_ledger":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.ledger())) };
         // F2 (schema v28+): opportunities, ventures, wallet, Fleet capital/payments and economic knowledge.
-        case "opportunity": case "venture": case "wallet": case "fleet_capital": case "economic_knowledge": case "identity": {
+        case "opportunity": case "venture": case "wallet": case "fleet_capital": case "economic_knowledge": case "identity": case "fleet_services": {
           if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
           const op = ECONOMY_OPS[call.name][String(a.op)];
           if (!op) return refuse("FLEET_BAD_REQUEST", `op is one of ${Object.keys(ECONOMY_OPS[call.name]).join(", ")}`);
