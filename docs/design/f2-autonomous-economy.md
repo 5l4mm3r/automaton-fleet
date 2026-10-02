@@ -1128,3 +1128,55 @@ The service calls `svc_action_cognition_verify_ctx`.
 **Fixes found during hardening.** FLEET-KI-1 (grants now under the migration advisory lock); MK-TEST-1 reclassified as
 an agent-runtime liveness defect (quadratic tokenizer on long pieces) and fixed (`countTokensBounded`). See
 `docs/fleet-known-issues.md` and `docs/master-key/18-KNOWN-ISSUES.md`.
+
+## 31. Controller custody signer — schema v32 (2026-10-02; live-financial hardening; real payments still off)
+
+**Finding.** Founder 1 never held a wallet key: Genesis (v11) gives every founder the keyless address
+`0x || sha256("automaton-fleet:founder:no-key:" || agentId)[1..40]`, and custody has always been the Treasury ledger
+(E1). The doctor's "agent wallet keys are held by the agent runtime" blocker was a hard-coded statement about the
+upstream runtime that replicated children run (disabled). Nothing had to be migrated off Founder 1; v32 makes the fact
+enforceable and completes the signer side of the custody boundary.
+
+**Custody mode (enforced, never chosen).** `fleet_wallet_custody.custody_mode` is derived by trigger from the agent's
+IDENTITY address (`fleet_agents.wallet_address`, immutable once set): `controller_keyless` for the keyless derivation,
+`agent_held_key` otherwise. A custody record must carry the agent's own identity address (`FLEET_CUSTODY_IDENTITY`).
+Writing the mode by hand is recomputed. An `agent_held_key` agent's orders are never issued to custody.
+
+**Signer side.** The custody executor (own OS user, own DB role) is the only process with payment credentials:
+- signers come from a NON-SECRET file (`FLEET_CUSTODY_SIGNERS_FILE`: rail id, provider, mode, credential id, vault
+  reference); secrets come from the custody vault (`FLEET_CUSTODY_VAULT_DIR`; one strict 0600/0400 file per reference,
+  `vault:paypal/treasury` → `paypal~treasury`); every credential-like environment variable is still refused;
+- `cx_attest_signer` records that the executor holds a signer for a rail, checked against the registry (rail active;
+  provider, mode and credential equal; credential active; credential scoped to the rail's payout capability);
+  attestations are append-only and expire (`fleet_custody_policy.attestation_ttl_s`, default 900 s — a heartbeat
+  window, never a money amount);
+- `svc_issue_payment_instruction` binds each instruction to an attested LIVE rail (rail, provider, mode, credential,
+  capability and venture are inside the content hash) and refuses: a self-keyed agent, a frozen/held/inactive agent,
+  crypto or credits destinations (`FLEET_RAIL_UNSUPPORTED`), a destination with no reference on record, and — when no
+  fresh live signer exists — `FLEET_NO_CUSTODY_SIGNER` (the order stays reserved; nothing else is blocked);
+- `cx_claim_instruction` hands the signer the binding and the destination reference; the executor re-checks the
+  reference against the enrolled hash and its own configuration before any credential use; `cx_credential_use`
+  gates and audits each use under the instruction's lease (a revoked credential fails the payment closed before the
+  provider is called);
+- `cx_report_result` settles exactly as before and attributes the settlement journal to the instruction's venture
+  (envelope venture, else the vendor destination's venture): venture → agent → wallet (ledger) → Treasury.
+
+**PayPal payout signer.** OAuth client credentials from the vault → one single-item payout with
+`PayPal-Request-Id = sender_batch_id = instructionId` (a retry returns the original batch, never a second payout).
+`settled` only on SUCCESS with exactly the instructed amount and currency; `failed` only on a definitive refusal;
+`pending` otherwise — including any outcome unknown after the request may have left. Pending payouts and their
+leases persist in the custody state directory (0600) and are re-checked each tick; a claimed instruction older than
+one hour is a doctor WARN (reconcile with the provider). Live mode is refused while `REAL_PAYMENTS_ENABLED` is not true.
+
+**Doctor.** Custody facts come from `fleet_custody_status()`. Real-payment blockers are now exact: a living
+self-keyed agent, and the absence of an attested live signer. The replication blocker (upstream children generate
+their own key) stays. `fleet-verify-deployment.sh` also fails if any wallet/private-key file exists in founder state.
+
+**Owner tooling.** `fleet:admin hub-custody`, `economy-custody-policy <ttlS>`,
+`economy-destination-reference <destinationId> <reference>` (only the enrolled reference is accepted).
+
+**Still pinned (unchanged).** `custody_execution_enabled` (v10 CHECK) and `fleet_payment_rails_not_live` (v29 CHECK):
+no instruction can be issued in production. Activation remains a separate reviewed step: a migration lifting both
+pins, `REAL_PAYMENTS_ENABLED=true`, the custody unit's egress opened to the provider API only, a custody state
+directory, the owner's PayPal credential placed in the custody vault, a live rail registered, and the custody
+executor's start-up refusal of `REAL_PAYMENTS_ENABLED=true` reviewed.
