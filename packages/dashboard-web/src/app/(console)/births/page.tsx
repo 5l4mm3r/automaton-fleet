@@ -7,6 +7,7 @@ import { money, when } from "@/lib/format";
 
 export default function Births() {
   const rep = useRead<any>("replication");
+  const pending = useRead<any[]>("births_pending");
   return (
     <>
       <PageHeader title="Birth orders" description="Automatic births (earned and healthy) and Admin-directed births. All count toward the 50-living ceiling." />
@@ -18,8 +19,15 @@ export default function Births() {
             { key: "status", label: "Status", render: (b) => <Badge tone={b.status === "born" ? "good" : b.status === "queued" ? "warn" : "neutral"}>{b.status}</Badge> },
             { key: "agent_id", label: "Agent" }]} />
         </Loading></Section>
+        <Section title="Provisioning" description="A queued order is provisioned on the host (fleet-founders.sh birth <order id>): authorize, provision, attest, fund, activate.">
+          <Loading loading={pending.loading} error={pending.error}>
+            <DataTable rows={pending.data} rowKey={(b) => b.orderId} empty="No queued orders" columns={[{ key: "createdAt", label: "Ordered", render: (b) => when(b.createdAt) },
+              { key: "orderId", label: "Order id" }, { key: "kind", label: "Kind" }, { key: "fundingMinor", label: "Funding", render: (b) => money(b.fundingMinor) },
+              { key: "genesisStatus", label: "Cohort", render: (b) => <Badge tone={b.genesisStatus ? "info" : "neutral"}>{b.genesisStatus ?? "not started"}</Badge> }]} />
+          </Loading>
+        </Section>
         <Section title="Birth an agent" description="An Admin override of the automatic rule: bounded only by the population ceiling and real Treasury cash.">
-          <ActionForm op="birth" label="Birth agent" onDone={() => void rep.reload()} fields={[
+          <ActionForm op="birth" label="Birth agent" onDone={() => { void rep.reload(); void pending.reload(); }} fields={[
             { name: "mission", label: "Mission", type: "select", options: ["independent", "marketing", "opportunity_hunt", "knowledge_data", "other"] },
             { name: "fundingMinor", label: "Funding (£)", type: "number", pence: true }, { name: "reason", label: "Reason", type: "textarea", required: true }]} />
         </Section>

@@ -6,6 +6,8 @@
  *   rehearsal                                real-runtime two-founder rehearsal against a THROWAWAY
  *                                            registry (production registry is only read, before/after)
  *   provision <genesisId>                    approved → attesting, one isolated runtime per founder
+ *   births                                   queued birth orders and their provisioning state (v40)
+ *   birth <orderId>                          a birth order → a running agent: authorize, provision, attest, fund, activate (v40)
  *   attest <genesisId>                       runtime + host evidence per founder (or whole-set rollback)
  *   activate <genesisId> <authSha256>        OWNER GATE: credentials delivered, runtimes restart active
  *   teardown <genesisId>                     stop and delete every runtime of that Genesis
@@ -240,6 +242,27 @@ async function main(argv: string[]): Promise<number> {
         await genesis.close();
       }
     }
+    case "birth": {
+      // v40: provision a running agent for a queued birth order (automatic or Admin-directed), end to end.
+      const actor = actorOrDie();
+      const orderId = rest[0];
+      if (!orderId || !UUID.test(orderId)) throw new Error("usage: birth <orderId>");
+      const genesis = new PgGenesisAdmin({ connectionString: adminUrl() });
+      try {
+        const pinRelease = loadRuntimeRelease(readEnvFile(process.env.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE));
+        const prov = new FounderProvisioner({ genesis, host: new SystemdFounderHost(undefined, undefined, pinRelease), apiUrl: PRODUCTION_API_URL, actor, log });
+        const r = await prov.birth(orderId);
+        out(r);
+        return r.genesis.status === "activated" ? 0 : 1;
+      } finally {
+        await genesis.close();
+      }
+    }
+    case "births": {
+      actorOrDie();
+      const genesis = new PgGenesisAdmin({ connectionString: adminUrl() });
+      try { out(await genesis.birthsPending()); return 0; } finally { await genesis.close(); }
+    }
     case "pin": {
       // Pin a living founder's unit to its REGISTERED runtime (Genesis attestation, or its latest upgrade). No restart.
       actorOrDie();
@@ -366,7 +389,7 @@ async function main(argv: string[]): Promise<number> {
       return pass ? 0 : 1;
     }
     default:
-      console.error("usage: fleet-founders.sh status | rehearsal | provision <genesisId> | attest <genesisId> | activate <genesisId> <authSha256> | teardown <genesisId> | pin <agentId>\n"
+      console.error("usage: fleet-founders.sh status | rehearsal | births | birth <orderId> | provision <genesisId> | attest <genesisId> | activate <genesisId> <authSha256> | teardown <genesisId> | pin <agentId>\n"
         + "       fleet-founders.sh upgrade-status <agentId> | upgrade-preflight <agentId> | upgrade-runtime <agentId> [--health-timeout S] | rollback-runtime <agentId> <upgradeId> <reason…> | upgrade-rehearsal <fromCommit>");
       return 2;
   }

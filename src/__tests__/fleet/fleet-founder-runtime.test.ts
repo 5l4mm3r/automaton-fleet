@@ -318,6 +318,38 @@ describe.skipIf(!PG_BIN)("Phase F.1 founder runtimes (schema v12, real processes
     await reset();
   }, 240_000);
 
+  it("v40: a birth order becomes a running founder runtime through the same pipeline (authorize, provision, attest, fund, activate)", async () => {
+    const host = newHost();
+    const prov = provisioner(host);
+    const g = await approved(1, 2_500);
+    const [a] = (await prov.provisionGenesis(g.genesisId)).founderIds!;
+    expect((await prov.attestGenesis(g.genesisId)).ok).toBe(true);
+    await genesis.fund(g.genesisId, OWNER);
+    await prov.activateGenesis(g.genesisId, g.authSha256);
+
+    await ledger.recordOwnerFunding(3_000, `synthetic:${crypto.randomUUID()}`, OWNER);
+    const o = (await owner.query(`SELECT fleet.fleet_admin_birth('independent', 'a second agent', 3000, NULL, $1, $2) AS r`, [OWNER, key()])).rows[0].r;
+    const r = await prov.birth(o.orderId);
+    expect(r.genesis, JSON.stringify(r)).toMatchObject({ kind: "birth", status: "activated" });
+    const [b] = r.genesis.founderIds!;
+    expect(b).not.toBe(a);
+    const rep = await waitFor(async () => {
+      const x = await host.readReport(b);
+      return x && x.mode === "active" && Number(x.heartbeats) >= 2 ? x : null;
+    }, 60_000);
+    expect(rep).toMatchObject({ agentId: b, capabilities: { reproductionExecutable: false, paymentExecutable: false }, ledger: { cash: 3_000 } });
+    const ord = (await owner.query(`SELECT status, agent_id FROM fleet.fleet_birth_orders WHERE order_id = $1`, [o.orderId])).rows[0];
+    expect(ord).toEqual({ status: "born", agent_id: b });
+    expect((await owner.query(`SELECT origin, status FROM fleet.fleet_agents WHERE agent_id = $1`, [b])).rows[0]).toEqual({ origin: "reseed_founder", status: "active" });
+    expect(await population()).toBe(2);
+    // Replaying the host command for a born order changes nothing.
+    await expect(prov.birth(o.orderId)).rejects.toThrow(/FLEET_INVALID_STATE/);
+    for (const id of [a, b]) await store.markDead(id, "rehearsal teardown", "test", "reported");
+    await prov.teardown(g.genesisId);
+    await prov.teardown(r.genesis.genesisId);
+    await reset();
+  }, 240_000);
+
   it("wrong runtime commit, build id or lockfile rolls the whole Genesis back and tears the runtimes down", async () => {
     for (const bad of [{ commit: "a".repeat(40) }, { buildId: "b".repeat(64) }, { lockfileSha256: "c".repeat(64) }]) {
       // The authorization pins a runtime that is NOT what the founder processes actually run.

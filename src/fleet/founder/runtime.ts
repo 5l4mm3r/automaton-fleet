@@ -399,7 +399,7 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
     throw new FounderRefusedError("Refusing to run as a Genesis founder: the registry record does not match this runtime.");
   }
   const caps = (await untilAvailable(() => client.capabilities())) as { origin?: string; manifestId?: string; manifestSha256?: string; reproductionExecutable?: boolean; paymentExecutable?: boolean };
-  if (caps.origin !== "genesis_founder" || caps.manifestId !== ctx.manifest.manifestId || caps.manifestSha256 !== manifestSha256(ctx.manifest)) {
+  if ((caps.origin !== "genesis_founder" && caps.origin !== "reseed_founder") || caps.manifestId !== ctx.manifest.manifestId || caps.manifestSha256 !== manifestSha256(ctx.manifest)) {
     throw new FounderRejectedError("The registry capability manifest differs from this runtime's compiled manifest.");
   }
   const result: FounderRuntimeResult = { mode: "active", agentId: ctx.agentId, instanceId: ctx.instanceId, heartbeats: 0, challengesPassed: 0, mindTurns: 0, mindRefusals: 0 };

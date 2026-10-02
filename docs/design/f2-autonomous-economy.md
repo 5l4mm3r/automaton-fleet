@@ -1215,8 +1215,7 @@ Built on the existing ledger (GBP minor units) and the v10 provenance model. Aut
 sweeps stay OFF (build flags; not constitution).
 
 - **Replication** (`fleet_replication_policy` / `_state`, `svc_replication_tick`, reaper): Fleet-generated Treasury wealth
-  = Treasury cash in excess of the owner's net contributed capital (owner funding never counts; **owner to confirm this
-  definition**). Ladder £1k, £2k, £4k, £8k, £12k, £16k, £20k, then +£4k per agent, up to the 50-living ceiling. Crossing →
+  (owner funding never counts; **v39 corrected the definition** to the Lifetime Fleet Contribution — see §36). Ladder £1k, £2k, £4k, £8k, £12k, £16k, £20k, then +£4k per agent, up to the 50-living ceiling. Crossing →
   PENDING; healthy (threshold, Treasury ≥ obligations, cover for the next Genesis allocation, no living agent short of its
   30-day commitments, vulnerable agents' cushions met, no open RED) for 24 continuous hours, else the timer resets.
   Each threshold triggers once (`thresholds_consumed` and `high_water_minor` only rise). A completed window queues an
@@ -1225,8 +1224,7 @@ sweeps stay OFF (build flags; not constitution).
 - **Births** (`fleet_birth_orders`): automatic, Admin (`economy-birth`) and reseed (`economy-reseed`: a NEW agent that
   inherits a dead agent's estate). Bounded only by the population ceiling (living + queued) and real Treasury cash.
   `economy-birth-fulfil` links an order to the agent the provisioning pipeline created, posts its funding and transfers a
-  reseed's estate. **Gap:** the provisioning pipeline that creates a further founder from an order (OS user, unit,
-  credentials) does not exist yet — Genesis is one-shot.
+  reseed's estate. The provisioning pipeline that turns an order into a running agent is v40 (§37).
 - **Missions** (`fleet_agent_missions`, `fleet_mission_requests`): NORMAL / MARKETING / OPPORTUNITY_HUNT / KNOWLEDGE_DATA,
   separate from the permanent role. Assigned after meaningful stagnation (no realised revenue for `stagnationDays`)
   only against a real open request, or by Admin. Knowledge/opportunity 36 h target, 48 h max; marketing up to 7 days,
@@ -1277,3 +1275,55 @@ authenticate that the person exercising Admin authority is the owner.
   delivery policy), security (passkeys, sessions, reveal log, auth log).
 - **Rendering**: every registry value through `textContent` (agent-written text cannot become markup); strict CSP (no
   inline script/style, `connect-src 'self'`, `frame-ancestors 'none'`); no third-party script.
+
+## 36. Replication accounting and the Next.js control centre — schema v39 (2026-10-02; owner correction)
+
+Three figures, never collapsed into one balance (`fleet_generated_treasury_wealth()`, shown separately everywhere):
+
+- **A. Treasury cash**: real spendable Treasury funds now (every `treasury_cash` partition).
+- **B. Owner-contributed funding**: `fleet:owner:capital`, with owner withdrawals beside it. It is funding, never profit,
+  and owner funding spent on Fleet activity is not a debt to be earned back.
+- **C. Fleet-generated realised wealth**: the Lifetime Fleet Contribution `fleet:profit` (realised net profit the agents
+  contributed: profit contributions and sweeps). A fall in liquidity never lowers it; only an exact ledger reversal does.
+
+The automatic-replication **trigger** is C against the ladder. The **24 h health gate** is separate: Treasury solvent,
+next Genesis allocation available, businesses funded, vulnerable cushions healthy, no open RED. The high-water mark
+is unchanged. `fleet_replication_health()` returns `economic {fleetGeneratedMinor, thresholdMinor, remainingMinor, met}`,
+`gate {…}` and `blockers`. `fleet_admin_replication_status()` adds the three figures, the window (phase, pending since,
+elapsed/remaining), the stage (thresholds consumed, high-water, next agent number) and the living count.
+Worked example (`fleet-engine-pg.test.ts`): owner funding £500, £300 of it spent on a Genesis allocation, then £1,000
+Fleet-contributed profit. Treasury cash is £1,200, owner-contributed £500 and Fleet-generated £1,000, so the £1k trigger
+is met while the gate is answered on its own.
+
+**Control centre frontend**: Next.js 16 (App Router) + React 19 + TypeScript + Tailwind v4 with source-controlled
+shadcn-style primitives (`packages/dashboard-web`). It is a **static export** (owner decision) served by the v38
+dashboard service (`FLEET_DASHBOARD_STATIC_DIR`, default `packages/dashboard-web/out`). There is no Next server, and
+every request still goes through `dash_call` (session, CSRF, step-up, audit). The server computes a strict per-page CSP
+from the SHA-256 of each inline script (no `unsafe-inline`), and rejects dotfiles, traversal and symlinks outside the
+export. The build is deterministic (constant build ID) and the export is in the runtime build identity
+(`BUILD_IDENTITY_OPTIONAL_DIRS`). Twenty routes in four groups: Overview, Agents/Agent detail, Treasury, Wallets,
+Ventures, Replication, Birth orders, Missions, Knowledge, Estate, Identity, Credentials, Owner vault, Email, SMS,
+Browser ops, Alerts, Security, Audit, Settings. New `dash_call` reads: knowledge, mail, sms, events, settings. The
+enrollment link is `/login/#enroll=<token>`. The vanilla UI (`src/fleet/dashboard/ui.ts`) is removed.
+
+## 37. Birth provisioning — schema v40 (2026-10-02)
+
+A birth order (automatic, Admin or reseed) **is** the authorization. `fleet_birth_authorize(order)` (owner) creates
+an **approved** one-founder Genesis cohort of kind `birth`. The cohort is linked immutably to its order and pinned to
+the approved runtime, the capability manifest and the economic policy, exactly like the initial Genesis. Its
+allocation is the order's funding. The unchanged Genesis machinery then runs: provision (a reserved, keyless agent
+`agent-N`, origin `reseed_founder`, so every founder-aware path applies), attest (runtime evidence), fund (from the
+Treasury), activate (credential). Activation marks the order **born**, links the agent and its funding journal,
+starts its birth mission and, for a reseed, transfers the dead agent's held identities, accounts and assets.
+
+- Host: `scripts/fleet-founders.sh births` lists queued orders and their cohort status. `fleet-founders.sh birth
+  <order id>` runs the whole pipeline through the same systemd founder host as Genesis (pinned release).
+- Bounds: the living cap and the 50 ceiling bind (a queued order holds its place; the reserved agent binds again at
+  provisioning). One cohort is in flight at a time (shared with Genesis). The initial Genesis keeps its one-shot rules,
+  and the configured Genesis capital governs only the initial Genesis.
+- Unwinding: cancelling an order closes its cohort; a provisioned and funded cohort rolls back (the reserved agent
+  fails and the funding returns). A cohort that expires or is aborted leaves the order queued, so it can be
+  authorized again. `fleet_admin_birth_fulfil` refuses an order whose cohort is in flight.
+- Founders still cannot spawn children (`FLEET_REPRODUCTION_DISABLED` stays): new agents come only from birth orders.
+  Automatic births still need `autoBirthEnabled`, the registry switch and `REAL_REPLICATION_ENABLED` (all off).
+- Dashboard: Birth orders → Provisioning (`births_pending`). Tests: `fleet-births-pg.test.ts`.

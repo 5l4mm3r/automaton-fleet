@@ -8,6 +8,8 @@
 #   sudo scripts/fleet-founders.sh activate <genesisId> <authSha256>   # OWNER GATE
 #   sudo scripts/fleet-founders.sh teardown <genesisId>
 #   sudo scripts/fleet-founders.sh pin <agentId>                 # (re)write a living founder's pin; no restart
+#   sudo scripts/fleet-founders.sh births                        # v40: queued birth orders
+#   sudo scripts/fleet-founders.sh birth <orderId>               # v40: a birth order → a running agent (authorize … activate)
 #
 # R23 — runtime upgrade of a LIVING founder (same founder id, memory, workspace, ledger and credential):
 #   sudo scripts/fleet-founders.sh upgrade-status <agentId>

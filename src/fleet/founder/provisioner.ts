@@ -140,6 +140,29 @@ export class FounderProvisioner {
   }
 
   /**
+   * v40: a birth order becomes a running agent — authorize (the order is the authorization), provision one isolated
+   * runtime, attest it, fund it from the Treasury (the order's own funding) and activate it. Resumable: each step runs
+   * only from the state it expects, so a rerun after an interruption continues where it stopped.
+   */
+  async birth(orderId: string): Promise<{ orderId: string; genesis: GenesisView; attest?: AttestOutcome }> {
+    const a = await this.o.genesis.birthAuthorize(orderId, this.o.actor);
+    const genesisId = a.genesisId;
+    const auth = a.authSha256;
+    let g = await this.view(genesisId);
+    if (g.status === "approved" || g.status === "attesting") g = await this.provisionGenesis(genesisId);
+    let attest: AttestOutcome | undefined;
+    if (g.status === "attesting") {
+      attest = await this.attestGenesis(genesisId);
+      if (!attest.ok) return { orderId, genesis: await this.view(genesisId), attest };
+      g = await this.view(genesisId);
+    }
+    if (g.status === "funding_virtual") g = await this.o.genesis.fund(genesisId, this.o.actor);
+    if (g.status === "ready") g = await this.activateGenesis(genesisId, auth);
+    this.log("birth_provisioned", { orderId, genesisId, status: g.status });
+    return { orderId, genesis: g, attest };
+  }
+
+  /**
    * OWNER GATE (never run by an AI operator in production): activate every founder in one database
    * transaction, then deliver each its own fleet credential and restart its runtime in active mode.
    */

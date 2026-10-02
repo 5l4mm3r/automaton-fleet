@@ -478,6 +478,14 @@ export class GenesisOps {
     return this.one<Record<string, unknown>>(`SELECT fleet_genesis_fail($1, $2, $3, $4) AS r`, [genesisId, agentId, reason, actor]);
   }
 
+  /** v40: turn a queued birth order into an approved one-founder birth cohort (the order is the authorization). */
+  birthAuthorize(orderId: string, actor: string, ttlS: number | null = null) {
+    return this.one<GenesisView & { birthOrderId: string; authSha256: string; replay?: boolean }>(`SELECT fleet_birth_authorize($1, $2, $3) AS r`, [orderId, ttlS, actor]);
+  }
+  birthsPending() {
+    return this.one<Array<{ orderId: string; kind: string; genesisId: string | null; genesisStatus: string | null; authSha256: string | null }>>(`SELECT fleet_admin_births_pending() AS r`);
+  }
+
   fund(genesisId: string, actor: string) {
     return this.one<GenesisView & { status: string }>(`SELECT fleet_genesis_fund($1, $2) AS r`, [genesisId, actor]);
   }

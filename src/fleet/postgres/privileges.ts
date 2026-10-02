@@ -970,7 +970,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // engine; commitments by the agent; notifications through fleet_notify; estate items by the estate engine.
     fleet_replication_state: new Set(["svc_replication_tick"]),
     fleet_replication_policy: new Set(["fleet_admin_replication_policy_set"]),
-    fleet_birth_orders: new Set(["svc_replication_tick", "fleet_admin_birth", "fleet_admin_reseed", "fleet_admin_birth_fulfil", "fleet_admin_birth_cancel"]),
+    fleet_birth_orders: new Set(["svc_replication_tick", "fleet_admin_birth", "fleet_admin_reseed", "fleet_admin_birth_fulfil", "fleet_admin_birth_cancel",
+      "fleet_birth_authorize", "fleet_birth_born"]),
     fleet_mission_policy: new Set(["fleet_admin_mission_policy_set"]),
     fleet_mission_requests: new Set(["fleet_mission_start", "fleet_mission_end", "fleet_admin_mission_request", "fleet_econ_mission_request"]),
     fleet_agent_missions: new Set(["fleet_mission_start", "fleet_mission_end", "fleet_econ_mission_report", "fleet_econ_mission_review"]),

@@ -1,8 +1,10 @@
 # Admin dashboard go-live (PROPOSED — owner-approved host steps; nothing here is applied)
 
 The dashboard is built and tested (`fleet-dashboard-pg.test.ts`: enrollment, passkey + TOTP sign-in, step-up, reveal
-decrypted only in the browser, owner-identity upload sealed in the browser, CSRF / origin / replay refusals). Going live
-needs these host steps, in order:
+decrypted only in the browser, owner-identity upload sealed in the browser, CSRF / origin / replay refusals). The UI is the
+Next.js static export in `packages/dashboard-web/out`, built by `pnpm build` (part of the pinned runtime build and its
+build identity). The service refuses to start if the export is missing; `FLEET_DASHBOARD_STATIC_DIR` overrides the path.
+Going live needs these host steps, in order:
 
 1. **DNS**: an A record `admin.agentfleet.vip` → the VPS address (Porkbun).
 2. **TLS front on :443** — `nginx-sni.conf` (stream SNI routing: `api.` passthrough to FleetController moved to
@@ -17,7 +19,7 @@ needs these host steps, in order:
    `FLEET_DASHBOARD_DATABASE_URL`; `sudo -u automaton-fleet-dashboard FLEET_DASHBOARD_STATE_DIR=/var/lib/automaton-fleet-dashboard node dist/fleet/dashboard/main.js init`.
 5. **Unit**: install `deploy/systemd/automaton-fleet-dashboard.service`; enable; start.
 6. **Enroll** (the owner, on the device that will hold the passkey): `pnpm fleet:admin hub-dashboard-enroll https://admin.agentfleet.vip`
-   → open the printed one-time link (15 minutes) → register the passkey → add the TOTP secret to an authenticator →
+   → open the printed one-time link (`…/login/#enroll=…`, 15 minutes) → register the passkey → add the TOTP secret to an authenticator →
    confirm a code. Register a second passkey (e.g. a hardware key) from Security → as a recovery factor.
 
 Recovery: a new `hub-dashboard-enroll` link (owner shell on the VPS) registers a passkey on a new device; `totp_reset` (step-up)

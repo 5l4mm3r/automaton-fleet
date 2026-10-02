@@ -164,6 +164,21 @@ describe.skipIf(!PG_BIN || !CHROME)("v38/v39 Admin control centre — Next.js (P
     expect(await page.locator('[data-gate="treasurySolvent"]').textContent()).toContain("ok");
   });
 
+  it("births: a queued order shows its provisioning cohort (v40)", async () => {
+    await R.q(`UPDATE fleet.fleet_state SET max_agents = 3`);
+    const o = await R.one<any>(`fleet.fleet_admin_birth('independent', 'dashboard births view', 0, NULL, $1, $2)`, [OWNER, `birth:${crypto.randomUUID()}`]);
+    await page.goto(`${ORIGIN}/births/`);
+    const row = page.locator("tr", { hasText: o.orderId });
+    await row.waitFor();
+    expect(await row.textContent()).toContain("not started");
+    await R.genesis.birthAuthorize(o.orderId, OWNER);
+    await page.reload();
+    await row.waitFor();
+    expect(await row.textContent()).toContain("approved");
+    await R.q(`SELECT fleet.fleet_admin_birth_cancel($1, 'test', $2)`, [o.orderId, OWNER]);
+    await R.q(`UPDATE fleet.fleet_state SET max_agents = 2`);
+  });
+
   it("agents and an agent page: agent-written text stays text; pause works", async () => {
     await page.goto(`${ORIGIN}/agents/`);
     await page.locator(`.open-agent[data-agent="${A.id}"]`).click();
