@@ -1979,12 +1979,45 @@ R23 lifecycle). Real payments, owner sweeps, replication and the dry-run child s
 - **Not part of R29:** real payments, live rails, owner sweeps, replication, a child, crypto, tax-profile data, the
   PayPal credential, FX.
 
-### Stage R29 status (2026-10-02)
+### Stage R29 record (2026-10-02, VPS UTC)
 
-- Candidate pushed (`fleet-origin/f2/integration` = `b949b1c` at preparation; frozen `f2/autonomous-economy` =
-  `713f4dd`). Local reproducible build recorded. R29-0 … R29-4 NOT started: SSH to `agentfleet-vps` refused by the
-  dev VM's ssh-agent (`agent refused operation` — the VPS key requires an interactive per-use confirmation at the
-  agent). Production unchanged.
+Evidence: `docs/evaluations/r29/` (ids, digests, counts, status; scanned clean, no founder-written text).
+
+- **R29-0** inventory 09:45–09:51: as after R28 (`6764d78`/`cdbcffb9…`, schema 25, Founder 1 PID 318932, books
+  9139 + 861 = 10000p, doctor DEPLOYMENT OK, flags false).
+- **R29-1** VPS build of `b949b1c` = local: build `2b9584d5…0da2`, lockfile `eee9dc2f…` unchanged (`pins.txt`).
+- **R29-2** real-data rehearsal 10:25:10–10:25:22 (after five aborted runs on script defects, all fail-closed on the
+  throwaway or backup side): online dump `~/automaton_fleet-v25-r29-20261002T102510Z.dump` (3,103,763 B, sha
+  `9050f84d…29ec`); Founder 1 state `/var/lib/automaton-fleet-backups/r29-20261002T102510Z/` (root 0700, tar 0600, sha
+  `91cd9867…`, credential file excluded). Restore into throwaway `automaton_fleet_r29rh` (production database ACL; CLI
+  as `postgres` over the socket with session role `fleetadmin`, no credential read): 91 tables with identical row
+  counts, schema 25. `migrate-check` `{25→31, [26..31]}`, migrate 1.2 s, audit PASS, ledger head 535 / 498 journals
+  unchanged, `fleet_ledger_verify` ok (0 unbalanced), Founder 1's 9 accounts identical + 3 new zero-balance accounts
+  (envelope cash, tax expense, tax reserve), identity/credential unchanged. Re-run a no-op; rollback proof (the dump
+  restores to schema 25 with identical rows, head, identity); throwaway dropped.
+- **R29-3** controller `6764d78` → `b949b1c`, schema 25 → 31: outage 10:34:44–10:34:56 (12 s), controller-side units
+  only. Pre-v31 dump `~/automaton_fleet-v25-pre-v31-20261002T103444Z.dump` (3,105,069 B, sha `e0ce25a0…c94b`, verified,
+  91 tables / 608 functions); `runtime.env.pre-r29` kept (`6764d78` pins). Audit PASS, runtime approved, VERIFIED,
+  `readyz` 200. Doctor DEPLOYMENT OK (WARNs: `AGENT_NO_ROUTE_FORWARD` until the founder acts, sandbox termination,
+  wallet custody); SAFE FOR REAL PAYMENTS NO (no custody signer; agent-held wallet keys). verify-deployment 149/0,
+  ledger verify ok (499 journals), Hub health ok. Founder 1 untouched (PID 318932). Owner request `62cbe1b7` preserved
+  as a pending action-scoped dependency (no response, no decision).
+- **R29-4** Founder 1 `6764d78` → `b949b1c`: rehearsal 24/24 (production unchanged, host clean, founder untouched);
+  preflight ok; upgrade `8b85e001-1922-492b-9016-efe708c168dd` **verified**, downtime 1.8 s, PID 318932 → 349284,
+  state diff identical (0 lost/changed/added). Identity `a8a7af56…`, credential `107ddfca…`, Genesis `8af1178c…`,
+  ledger accounts `f37337b8…` (changed at R29-3 by the three zero-balance accounts), ledger head, population 1/0/0
+  cap 2, routing and safety switches unchanged. verify-deployment 149/0.
+- **First wake on `b949b1c`** (10:45:02–10:45:10, 4 T2 calls, 10p): capability record 35 tools (wallet, venture,
+  opportunity, fleet_capital, economic_knowledge, routine_task, …). The founder consulted `fleet_capital`, created and
+  selected one venture itself; no capital request, no payment order, no owner step; challenges passing.
+- **Rollback:**
+  - Founder: `rollback-runtime 01M3F50SH7PNX2E3GST13J52AS 8b85e001-1922-492b-9016-efe708c168dd <reason…>`
+    (`releases/6764d78…` intact).
+  - Controller/schema: founder first; `runtime.env.pre-r29`; `current` → `releases/6764d78…`; restore
+    `~/automaton_fleet-v25-pre-v31-20261002T103444Z.dump` (v25 code refuses v31). Loses every row written after
+    10:34:44, including the founder's venture.
+- **Clean-up later:** the extra rehearsal dumps in `~` and backup directories `r29-20261002T1017*`–`1024*` (the first
+  tar is 0644 inside the 0700 directory); `/var/tmp/r29-tooling`.
 
 ## Operating the Claude bridge (dev VM, Phase D)
 
