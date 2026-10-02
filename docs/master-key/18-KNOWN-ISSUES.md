@@ -22,7 +22,7 @@ Rules applied:
 
 | ID | Title | Source | Current status (this pass) | Production impact |
 |---|---|---|---|---|
-| FLEET-KI-1 | Concurrent migration REVOKE race | known-issues doc | **OPEN**, confirmed in code; surface widened by `5a5469e` | None under the runbook's single manual `fleet:migrate`; see §1 |
+| FLEET-KI-1 | Concurrent migration REVOKE race | known-issues doc | **RESOLVED** on `f2/integration` (2026-10-02): grants take the migration advisory lock | None under the runbook's single manual `fleet:migrate`; see §1 |
 | FLEET-KI-2 | PostgreSQL test cleanup deadlock | known-issues doc | **OPEN**, fixture unchanged; doc's cause text partly **STALE** | Test-only |
 | FLEET-KI-3 | TLS key via LoadCredential | known-issues doc | **RESOLVED**; status text **STALE** (now in production with a real certificate) | Resolved |
 | FLEET-KI-4 | Dry-run root / witness | known-issues doc | **STALE** status: committed `cdfd70c`, deployed (schema v7, user and unit installed); **enrolment and start still pending** | Dry run blocked until the operator enrols and starts the witness |
@@ -43,7 +43,7 @@ Rules applied:
 | MK-ARCH-4 | No completed dry-run child | FLEET.md / runbook | **OPEN** | Blocks real replication readiness |
 | MK-ARCH-5 | Checklist item "fleet cap = 2" is a literal | code | **OPEN (design constraint)** | `fleet:verify` becomes 15/16 whenever the cap ≠ 2 |
 | MK-ARCH-6 | Redactor does not detect deliberate re-encoding | code comment | **ACCEPTED LIMITATION** | Redaction targets accidental inclusion only |
-| MK-TEST-1 | Full-suite hang in `context-hardening.test.ts` | operator record | **OPEN (upstream, pre-fleet)** | Test-only |
+| MK-TEST-1 | Full-suite hang in `context-hardening.test.ts` | operator record | **RESOLVED** on `f2/integration` (2026-10-02); reclassified as an agent-runtime defect | Agent loop liveness (not test-only) |
 | MK-TEST-2 | Phase 2 PG tests fall back to `admin.env` DSN | code | **OPEN (test-safety)** | Could run test DDL on a real registry database |
 | MK-TEST-3 | Host-conditional Phase 6 tests pass vacuously | code | **OPEN (coverage)** | Test-only |
 | MK-TEST-4 | Tunnel-key helper fixes `aed747e`/`efad214` have no automated tests | commits + tests | **OPEN (coverage)** | Regression risk on a root-run script |
@@ -387,8 +387,19 @@ Mitigation: secrets are never placed in agent-reachable text by design; B0 scan 
 `src/__tests__/context-hardening.test.ts:104` describe "buildContextMessages token budget" never
 finishes (synchronous CPU spin), so `pnpm test`, `test:ci` and `test:coverage` never exit. Last
 changed upstream `2c717cf` (2026-02-19), before `baseline-before-fleet` (`d8f8168`). Recorded
-2026-09-23 on a clean worktree. Workaround: exclude the file, then run it with
-`-t '^(?!.*buildContextMessages token budget)'` (see `13-TEST-INVENTORY.md` §8). Status **OPEN**, not fleet code.
+2026-09-23 on a clean worktree.
+
+**Reclassified and RESOLVED (2026-10-02, `f2/integration`).** Not a harness defect: the same call
+hangs outside vitest. `estimateTokens` → `createTokenCounter().countTokens` → js-tiktoken
+`encode`, whose BPE merge is quadratic in the length of one pre-tokenized piece (measured: 4 000
+`x` 748 ms, 4 000 `字` 6.6 s, 50 000 `x` minutes; random base64 and prose stay linear). The agent
+loop (`src/agent/loop.ts` → `buildContextMessages`) counts every turn's thinking and *untruncated*
+tool results, so a tool output containing a long run (zero-buffer base64, `----` rules, padding,
+unspaced CJK) would block a live agent's event loop. Fix: `countTokensBounded`
+(`src/memory/context-manager.ts`) encodes pieces longer than 48 characters in slices — linear
+overall, never under-counts (each cut can only add a token), ordinary text unchanged within 2 %.
+Regression tests in `src/__tests__/memory/context-manager.test.ts`; `context-hardening.test.ts`
+now runs in full (29/29, ≈ 1.7 s) and the exclusion workaround is no longer needed.
 
 ### MK-TEST-2 — Phase 2 PostgreSQL tests may target a real registry database
 

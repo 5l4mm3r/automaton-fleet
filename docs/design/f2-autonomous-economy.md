@@ -1031,9 +1031,8 @@ None of these is an ordinary entrepreneurial approval:
   economic knowledge is shared automatically when ledger-backed.
 - **Owner-enrolled payees** remain available alongside vendor registration (owner and Treasury withdrawal destinations
   stay owner-only).
-- **R24 evidence gating of simulated experiments** (relevance assessment, E0 → WATCH) is the controller's automated
-  assessment, not an owner step; it applies to simulation-only experiments and is a candidate for retirement before
-  experiments commit real own capital.
+- **R24 evidence gating** — RETIRED in v31 (§30): own-capital experiments are decided on custody alone; evidence and
+  relevance are recorded as information.
 - **Inert legacy columns** (kept for history and seals): `owner_approval_threshold_cents`, `agent_daily_spend_cents`,
   `major_spend_threshold_minor`, `hard_cap_minor`, `auto_cap_minor`.
 
@@ -1065,6 +1064,7 @@ None of these is an ordinary entrepreneurial approval:
    `fleet:migrate` (v25 → v30); `fleet:audit-privileges`; `fleet:doctor`; the migration-path suite against it.
 4. **Controller release.** Pin the new runtime (commit/build/lockfile from step 1), restart `automaton-fleet.service`,
    run `fleet:migrate` on production, `fleet:verify-runtime`, `fleet:audit-privileges`, `fleet:doctor`, `fleet:verify`.
+   The schema target is now v31 (§30); a rollback below v31 likewise requires the pre-migration dump.
 5. **Founder release.** Upgrade Founder 1 through the runtime-upgrade lifecycle (prepare → commit → verify, with the
    snapshot); confirm one full packet naming the new tools, its ledger and memory unchanged, and its first `brief`.
 6. **Economy configuration (infrastructure, owner).** Legal entity and a professionally reviewed tax profile; one shared
@@ -1078,3 +1078,44 @@ None of these is an ordinary entrepreneurial approval:
 9. **Financial activation (constitutional; separate review).** A reviewed migration lifting the rail `not_live` pin and
    custody execution together with `REAL_PAYMENTS_ENABLED=true`, circuit-breaker values from evidence, tax profile
    sign-off, enabling sweeps. Owner sweeps and replication remain separate decisions.
+
+## 30. Launch hardening — schema v31 (2026-10-02; `f2/integration`; not deployed)
+
+Built on the merge of the frozen candidate `713f4dd` into `fleet-development` (merge `aceea47`, tree identical to the
+candidate's). `713f4dd` itself is unchanged.
+
+**Admin manual withdrawals (owner decision: no nominal cap; security not amount-based).**
+- `fleet_admin_owner_withdrawal` (same signature) refuses only on ownership/availability: the destination is not an
+  active owner destination, or the amount exceeds the unrestricted Treasury pool (`FLEET_INSUFFICIENT_TREASURY`). There
+  is no software amount cap; `strong_auth_threshold_cents` is legacy and inert.
+- Every withdrawal requires strong confirmation (one-time-code digest → `pending_confirmation` → `fleet_admin_confirm`),
+  whatever the amount. Idempotent on `idempotencyKey` (a replay returns the original instruction and its state).
+- FleetController's advisory assessment `fleet_admin_withdrawal_assessment(amount)`: unrestricted liquidity
+  (`fleet:treasury:unallocated`); restricted money shown and excluded (agent cash and reservations, tax reserves,
+  envelope capital, in-flight withdrawals, Treasury partitions, operating pool); protected operating requirements
+  (committed Fleet capital not yet released, approved Treasury obligations, projected infrastructure burn over the
+  horizon, agent-continuity shortfall); the Treasury cushion (`cushion_bp`, default 1000 = 10 % of unrestricted
+  liquidity); `recommendedSafeMinor = max(0, liquid − protected − cushion)`; resulting liquidity, infrastructure cover
+  days and the commitments that would go unfunded. Severity: normal (≤ recommendation), elevated (cushion only), high
+  (infrastructure/continuity no longer covered), critical (committed capital or obligations unfunded), unavailable.
+- Above the recommendation the call returns `needs_acknowledgement` with the full assessment; with acknowledgement the
+  admin proceeds. Advice, never a rejection. The owner's own reserve target (`reserve_target_months`, v10) remains an
+  acknowledgeable `below_reserve_target` warning alongside it. Event `admin_withdrawal_requested` records amount, recommendation,
+  severity and acknowledgement. Policy: `economy-withdrawal-policy <cushionBp> <horizonDays>` (approver-checked, audited).
+  Hub: `hub-withdrawals [amountMinor]` and the `withdrawals` section of `hub-render`.
+- Tax, restricted, envelope and agent money can never be withdrawn by this path. Owner funding lands in the Treasury
+  and never counts as revenue or profit.
+
+**R24 retired.** `fleet_experiment_evaluate` decides own-capital experiments on custody (survival headroom) alone —
+no WATCH for insufficient, uncertain or pending evidence. The relevance assessor still records evidence levels for
+approved/running experiments as information (`FLEET_EVIDENCE_RECORDED`); an override is settled once the experiment
+has ended.
+
+**Contextual cognition depth.** `fleet_spend_depth` replaces the single `major_exposure_bp` threshold at the spend
+boundary with points: no available funds (3), share ≥ `major_exposure_bp` (2) or ≥ half of it (1), fully recoverable
+asset acquisition (−1), first payment to the destination (+1); ≥ 2 points routes to the major-spend cognition tier.
+The service calls `svc_action_cognition_verify_ctx`.
+
+**Fixes found during hardening.** FLEET-KI-1 (grants now under the migration advisory lock); MK-TEST-1 reclassified as
+an agent-runtime liveness defect (quadratic tokenizer on long pieces) and fixed (`countTokensBounded`). See
+`docs/fleet-known-issues.md` and `docs/master-key/18-KNOWN-ISSUES.md`.

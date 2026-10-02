@@ -3,9 +3,13 @@
 Tracked open issues that are deliberately not fixed yet. Each entry names
 where it was first confirmed so it is not mistaken for a new regression.
 
-## FLEET-KI-1: concurrent migration REVOKE race
+## FLEET-KI-1 (resolved): concurrent migration REVOKE race
 
-- **Status:** open, pre-existing (fails identically on `2d6d4cf`, fleet-v0.6).
+- **Status:** fixed on `f2/integration` (2026-10-02, with schema v31): every `grant*Role` transaction
+  now takes the same `pg_advisory_xact_lock(MIGRATION_LOCK_KEY)` as the migration itself, so the
+  REVOKE/GRANT catalog rewrites of two migrators are serialised. The concurrency test passes
+  (3/3 consecutive runs). Production was reachable only by two simultaneous operator
+  `fleet:migrate` runs (the service never migrates). Pre-existing on `2d6d4cf`, fleet-v0.6.
 - **Test:** `src/__tests__/fleet/fleet-phase2.test.ts` > "migrations are idempotent and safe to run concurrently".
 - **Symptom:** `error: tuple concurrently updated` from
   `REVOKE ALL ON ALL TABLES IN SCHEMA … FROM PUBLIC` in
