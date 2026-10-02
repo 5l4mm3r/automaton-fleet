@@ -1180,3 +1180,23 @@ no instruction can be issued in production. Activation remains a separate review
 pins, `REAL_PAYMENTS_ENABLED=true`, the custody unit's egress opened to the provider API only, a custody state
 directory, the owner's PayPal credential placed in the custody vault, a live rail registered, and the custody
 executor's start-up refusal of `REAL_PAYMENTS_ENABLED=true` reviewed.
+
+## 32. Constitutional correction — schema v33 (2026-10-02; owner decision)
+
+Automaton Fleet is an experimental autonomous economic survival system funded by the owner — not a company or a
+conventional managed business. Conventional administration must not become an artificial restriction on it.
+
+- **No synthetic tax.** A sale reserves tax only under an owner-configured tax profile (a real external obligation).
+  The retired unprofiled reserve (25 % default) is pinned to 0 by CHECK; its setter refuses anything else; the
+  true-up returns any reserve no configured obligation backs. Tax/legal obligations, when real earnings create them,
+  are tracked at the owner/payment boundary — never invented in advance, never an agent gate.
+- **No required legal entity.** A payment rail needs none; rail matching uses an entity only when both the rail and
+  the venture name one. No UK limited company (or any entity) is assumed.
+- **Future agents can transact.** A replicated child's economic identity is the keyless controller-custody address a
+  Genesis founder has (v32 custody pays only keyless identities); the wallet its upstream runtime generated is kept as
+  `runtime_wallet_address` (information; never custody). It still identifies the agent: it can never approve anything
+  (self-approval guard) and cannot be registered twice (unique). A child confirms its identity with either address.
+  Replication stays off.
+- **Unchanged:** custody and payment security, ledger integrity, Fleet-capital envelopes, own capital founder-sized.
+
+The whole-system autonomy/permission audit that accompanied v33 is `docs/design/autonomy-permission-audit.md`.
