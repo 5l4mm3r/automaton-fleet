@@ -82,3 +82,30 @@ export function generatePassword(length = 28): string {
   }
   return out.join("");
 }
+
+/** RFC 4648 base32 decode (TOTP seeds); spaces and padding ignored. */
+export function base32Decode(s: string): Buffer {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const clean = s.toUpperCase().replace(/[\s=]/g, "");
+  let bits = 0, value = 0;
+  const out: number[] = [];
+  for (const ch of clean) {
+    const i = alphabet.indexOf(ch);
+    if (i < 0) throw new Error("not base32");
+    value = (value << 5) | i;
+    bits += 5;
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  return Buffer.from(out);
+}
+
+/** v37: an RFC 6238 one-time code (SHA-1, 30 s, 6 digits) from a base32 seed or an otpauth:// URI. */
+export function totp(seedOrUri: string, at = Date.now(), step = 30, digits = 6): string {
+  const seed = seedOrUri.startsWith("otpauth://") ? new URL(seedOrUri).searchParams.get("secret") ?? "" : seedOrUri;
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(at / 1000 / step)));
+  const h = crypto.createHmac("sha1", base32Decode(seed)).update(counter).digest();
+  const o = h[h.length - 1] & 0xf;
+  const n = ((h[o] & 0x7f) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3];
+  return String(n % 10 ** digits).padStart(digits, "0");
+}

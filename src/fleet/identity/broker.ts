@@ -8,7 +8,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { generatePassword, sealTo } from "./crypto.js";
+import { generatePassword, sealTo, totp } from "./crypto.js";
 import type { IdentityGatewayPort, IdentityJob } from "./gateway.js";
 import { findVerification, isAuthenticationMessage, redactMail, type AccountOutcome, type MailMessage, type MailProvider, type PlatformConnector,
   type SmsProvider } from "./providers.js";
@@ -82,6 +82,8 @@ export class IdentityBroker {
         if (r.ok) {
           this.seenMail.set(m.id, String(r.messageId));
           if (!r.replay) n++;
+          // v37: the withheld original, encrypted for the broker alone (credential execution: a code or link to fill).
+          if (auth && !r.replay) await this.gw.authBlobStore("mail", String(r.messageId), this.worker, this.vault.sealAux(m.body, `authmsg:mail:${r.messageId}`));
         }
       }
     }
@@ -96,7 +98,10 @@ export class IdentityBroker {
       for (const m of await this.o.sms.fetch(num.e164, new Date(new Date(num.since).getTime() - 3_600_000))) {
         const auth = isAuthenticationMessage("", m.body);
         const r = await this.gw.smsDeliver(this.worker, m.to, m.from, auth ? redactMail(m.body) : m.body, auth, m.id);
-        if (r.ok && !r.replay) n++;
+        if (r.ok && !r.replay) {
+          n++;
+          if (auth) await this.gw.authBlobStore("sms", String(r.smsId), this.worker, this.vault.sealAux(m.body, `authmsg:sms:${r.smsId}`));
+        }
       }
     }
     return n;
@@ -144,6 +149,68 @@ export class IdentityBroker {
         error = /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "reveal_failed";
       }
       await this.gw.revealServe(r.requestId, this.worker, sealed, error);
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * v37 credential execution for the browser worker: the value a fill step needs, sealed to the worker's one-time key
+   * (scope bsecret:<requestId>). The registry already checked the account and its pinned origin. A generated password or
+   * a captured secret is stored in the vault first; the agent never receives any of it.
+   */
+  async serveBrowserSecrets(): Promise<number> {
+    let n = 0;
+    for (const r of await this.gw.browserSecretsPending(this.worker)) {
+      let value: string | null = null;
+      let error: string | null = null;
+      let used: string | null = null;
+      const scope = (kind: string) => ({ agentId: r.agentId, accountId: r.accountId, kind });
+      const cred = (kind: string) => r.credentials.find((c) => c.kind === kind) ?? null;
+      try {
+        switch (r.kind) {
+          case "username": value = r.handle ?? null; break;
+          case "email": value = r.loginEmail ?? null; break;
+          case "password": case "api_key": {
+            const c = cred(r.kind);
+            if (c) value = await this.vault.withSecret(c.vaultRef, scope(r.kind), async (x) => x);
+            break;
+          }
+          case "totp": {
+            const c = cred("totp");
+            if (c) value = await this.vault.withSecret(c.vaultRef, scope("totp"), async (seed) => totp(seed));
+            break;
+          }
+          case "generate_password": {
+            const pw = generatePassword();
+            const rec = await this.gw.browserCredentialRecord(r.requestId, this.worker, "password", this.vault.put(scope("password"), pw));
+            if (rec.ok) value = pw;
+            break;
+          }
+          case "capture": {
+            if (!this.o.ownerVault || !r.sealedInB64 || !r.captureKind) break;
+            const secret = this.o.ownerVault.openCapture(Buffer.from(r.sealedInB64, "base64"), `capture:${r.accountId}:${r.captureKind}`);
+            const rec = await this.gw.browserCredentialRecord(r.requestId, this.worker, r.captureKind, this.vault.put(scope(r.captureKind), secret));
+            if (rec.ok) value = "stored";
+            break;
+          }
+          case "email_code": case "sms_code": case "auth_link": {
+            for (const m of r.authMessages ?? []) {
+              const body = this.vault.openAux(Buffer.from(m.blobB64, "base64"), `authmsg:${m.kind}:${m.messageId}`);
+              const v = findVerification(body);
+              const found = r.kind === "auth_link" ? v.link : (v.code ?? /\b(\d{4,8})\b/.exec(body)?.[1] ?? null);
+              if (found) { value = found; used = m.messageId; break; }
+            }
+            break;
+          }
+        }
+        if (value === null) error = r.kind === "email_code" || r.kind === "sms_code" || r.kind === "auth_link" ? "FLEET_NO_AUTH_MESSAGE" : "FLEET_CREDENTIAL_UNAVAILABLE";
+      } catch (err) {
+        error = /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "FLEET_CREDENTIAL_UNAVAILABLE";
+        value = null;
+      }
+      const sealed = value === null ? null : sealTo(Buffer.from(r.workerPub, "base64"), value, `bsecret:${r.requestId}`);
+      await this.gw.browserSecretServe(r.requestId, this.worker, sealed, error, used);
       n++;
     }
     return n;
@@ -406,6 +473,14 @@ export class IdentityBroker {
     return out.outcome;
   }
 
+  private async pass(name: string, fn: () => Promise<unknown>): Promise<void> {
+    try {
+      await fn();
+    } catch (err) {
+      this.log("error", "identity_pass_failed", { pass: name, code: /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "error" });
+    }
+  }
+
   /** One pass: sync mail, re-check pending jobs, then process queued jobs (up to `max`). */
   async tick(max = 10): Promise<{ processed: number; outcomes: string[] }> {
     const outcomes: string[] = [];
@@ -413,10 +488,12 @@ export class IdentityBroker {
       const r = await this.gw.publishOwnerKey(this.worker, this.o.ownerVault.publicKeyBase64());
       this.keyPublished = r.ok;
     }
-    await this.syncMail();
-    await this.syncSms();
-    await this.installVaultUploads();
-    await this.serveReveals();
+    // Each pass is isolated: one failing pass (a provider outage, a bad row) never stops the others.
+    await this.pass("mail_sync", () => this.syncMail());
+    await this.pass("sms_sync", () => this.syncSms());
+    await this.pass("vault_uploads", () => this.installVaultUploads());
+    await this.pass("reveals", () => this.serveReveals());
+    await this.pass("browser_secrets", () => this.serveBrowserSecrets());
     for (const job of await this.gw.pending(this.worker)) {
       const lease = this.leases.get(job.jobId);
       if (lease) outcomes.push(await this.run(job, lease));
@@ -427,8 +504,8 @@ export class IdentityBroker {
       if (!c.ok || !c.job) break;
       outcomes.push(await this.run(c.job, lease));
     }
-    await this.syncMail();
-    await this.emailNotifications();
+    await this.pass("mail_sync", () => this.syncMail());
+    await this.pass("notification_email", () => this.emailNotifications());
     return { processed: outcomes.length, outcomes };
   }
 }

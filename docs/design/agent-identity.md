@@ -121,3 +121,34 @@ accepts no new rows (production held none). History is kept.
   `mail.key`; run `main.js mail-setup` once. (2) A programmable-numbers account (funded); its Account SID + auth token into
   `sms.json`. (3) Provision the broker service (above). Until then mail/SMS jobs fail with `FLEET_NO_MAIL_PROVIDER` /
   `FLEET_NO_SMS_PROVIDER` and nothing else is affected.
+
+## v37 — the general browser / account operator and credential execution (2026-10-02)
+
+Agents use ordinary websites without a per-site adapter (master handoff §2/§41): the `browser` tool opens a session,
+runs steps (goto, click, fill, select, check, press, wait, wait_for, back) and returns the page (text, fields with
+selectors, links, buttons, CAPTCHA presence). Adapters remain an optimisation.
+
+- **Browser worker** (`src/fleet/browser`, unit `automaton-fleet-browser.service`, not installed): own OS user and DB role
+  `fleet_browser` (bx_* only); headless Chromium via `playwright-core` (no bundled browser); public internet only
+  (private/metadata ranges denied at the URL layer and by systemd); no vault.
+- **use_credentials(account)** — `{action: fill, credential: password|username|email|totp|email_code|sms_code|api_key|
+  generate_password}`, `{action: open_auth_link}`, `{action: capture, kind}`. The worker requests the value; the registry
+  checks the session's account and that the page is on one of the account's **pinned origins**; the identity broker
+  seals the value to the worker's one-time key (scope `bsecret:<id>`); the worker fills and forgets it. Generated
+  passwords and captured page secrets (sealed by the worker to the broker's published key) go straight into the vault.
+  Snapshots never read input values and redact any value the session filled or captured; reported URLs carry no query
+  string. Authentication messages are kept encrypted for the broker (24 h) so it can supply a code or link.
+- **Accounts on any site**: `register_account {platform, kind, origin, loginEmail?, …}` → browser sign-up with
+  `generate_password` → `open_auth_link` → `mark_account {status}`. `add_origin` pins another origin (audited).
+- **Human-only steps**: a CAPTCHA/liveness page is reported (`captcha: true`); `mark_account human_action_required`
+  records ONE dependency for that account (Admin notified, IDENTITY); everything else continues. No CAPTCHA solving or
+  anti-bot evasion is built.
+- **Proven** in `fleet-browser-pg.test.ts` against real Chrome and a local HTTPS site: sign-up, email verification, login,
+  API-key capture, no secret in anything the agent receives or the registry stores, origin pinning, CAPTCHA, scope,
+  private-address refusal, least-privilege roles.
+- **Owner steps to go live**: install a Chromium build on the VPS (e.g. a pinned Chromium/Chrome-for-Testing download
+  into `/opt/automaton-fleet/chromium`, plus its shared-library packages — OS package installation), create the OS user
+  `automaton-fleet-browser`, the DB role (`fleet-db-roles.sql` with `browser_password`), `/etc/automaton-fleet/browser.env`
+  (`FLEET_BROWSER_DATABASE_URL`), and install/enable the unit. The browser runs without Chromium's own sandbox under this
+  unit (NoNewPrivileges/RestrictNamespaces); its containment is the service user, the network policy and the absence of
+  any secret at rest.

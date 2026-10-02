@@ -86,6 +86,16 @@ export class AgentCredentialVault {
     return fn(secret);
   }
 
+  /** v37: encrypt an auxiliary broker-only value (an authentication message) under a scope distinct from any credential. */
+  sealAux(value: string, scope: string): Buffer {
+    if (!/^authmsg:/.test(scope)) throw new Error("auxiliary scopes are authmsg:*");
+    return this.box.seal(value, scope);
+  }
+  openAux(blob: Buffer, scope: string): string {
+    if (!/^authmsg:/.test(scope)) throw new Error("auxiliary scopes are authmsg:*");
+    return this.box.open(blob, scope);
+  }
+
   /** Shred a retired credential (overwrite, then unlink). */
   shred(ref: string): boolean {
     const f = this.file(ref);
@@ -131,6 +141,12 @@ export class OwnerIdentityVault {
     openSealed(this.privateDer, this.publicDer, sealed, `owner:${cls}`);
     writePrivate(this.fileFor(cls), sealed);
     return `ovault:${cls}`;
+  }
+
+  /** v37: open a secret the browser worker captured from a page, sealed to this key for one account and kind. */
+  openCapture(sealed: Buffer, scope: string): string {
+    if (!/^capture:[0-9a-f-]{36}:(api_key|password|recovery_codes|totp)$/.test(scope)) throw new Error("bad capture scope");
+    return openSealed(this.privateDer, this.publicDer, sealed, scope);
   }
 
   /**

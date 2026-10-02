@@ -468,7 +468,9 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
     expect(fs.readFileSync(path.join(old, "src/fleet/founder/mind.ts"), "utf8")).not.toMatch(/routedTurn|TASK PACKET/);
     expect(from.commit).not.toBe(to.commit);
     expect(from.buildId).not.toBe(to.buildId);
-    expect(from.lockfileSha256).toBe(to.lockfileSha256);
+    // Each release is pinned to its OWN lockfile (v37 added playwright-core, so they may differ); the upgrade verifies each.
+    expect(from.lockfileSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(to.lockfileSha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("upgrade, rollback, re-upgrade and routed cognition preserve the same founder: identity, memory, workspace, books", async () => {

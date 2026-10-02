@@ -34,6 +34,7 @@ import {
   CUSTODY_API_FUNCTIONS,
   CUSTODY_WRITES,
   IDENTITY_API_FUNCTIONS,
+  BROWSER_API_FUNCTIONS,
   GENESIS_GUARDS,
   GENESIS_OPERATORS,
   LEDGER_TABLES,
@@ -73,6 +74,9 @@ export interface PrivilegeAuditOptions {
   /** Schema v34 identity broker roles (default fleet_identity + fleet_identity_login). */
   identityRoles?: string[];
   requireIdentityRoles?: boolean;
+  /** Schema v37 browser worker roles (default fleet_browser + fleet_browser_login). */
+  browserRoles?: string[];
+  requireBrowserRoles?: boolean;
 }
 
 /** "provisioned": every operator role exists; "not_provisioned": none exists (and not required); "incomplete": some are missing. */
@@ -95,8 +99,10 @@ export const DEFAULT_OPERATOR_ROLES = ["fleet_operator", "fleet_operator_login"]
 export const DEFAULT_CUSTODY_ROLES = ["fleet_custody", "fleet_custody_login"];
 /** Schema v34 identity broker roles (same provisioning rule: absent = not provisioned). */
 export const DEFAULT_IDENTITY_ROLES = ["fleet_identity", "fleet_identity_login"];
+/** Schema v37 browser worker roles (same provisioning rule). */
+export const DEFAULT_BROWSER_ROLES = ["fleet_browser", "fleet_browser_login"];
 
-type RoleKind = "agent" | "service" | "operator" | "custody" | "identity";
+type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser";
 
 const TABLE_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
@@ -142,12 +148,21 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   if (identityState === "not_provisioned") {
     for (const r of configuredIdentityRoles) roles.push({ role: r, kind: "identity", exists: false, functions: [], tables: [] });
   }
+  const configuredBrowserRoles = opts.browserRoles ?? DEFAULT_BROWSER_ROLES;
+  const browserPresent = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = ANY($1)`, [configuredBrowserRoles])).rows[0].n;
+  const browserState: OperatorRoleState =
+    browserPresent === configuredBrowserRoles.length ? "provisioned" : browserPresent === 0 && !opts.requireBrowserRoles ? "not_provisioned" : "incomplete";
+  const browserRoles = browserState === "not_provisioned" ? [] : configuredBrowserRoles;
+  if (browserState === "not_provisioned") {
+    for (const r of configuredBrowserRoles) roles.push({ role: r, kind: "browser", exists: false, functions: [], tables: [] });
+  }
   const allRestricted = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES),
     ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES),
     ...operatorRoles,
     ...custodyRoles,
     ...identityRoles,
+    ...browserRoles,
   ];
   const plan: Array<[string, RoleKind]> = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES).map((r) => [r, "agent"] as [string, RoleKind]),
@@ -155,6 +170,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
     ...operatorRoles.map((r) => [r, "operator"] as [string, RoleKind]),
     ...custodyRoles.map((r) => [r, "custody"] as [string, RoleKind]),
     ...identityRoles.map((r) => [r, "identity"] as [string, RoleKind]),
+    ...browserRoles.map((r) => [r, "browser"] as [string, RoleKind]),
   ];
 
   const agentFns = new Set(AGENT_API_FUNCTIONS.map(normSig));
@@ -162,6 +178,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   const operatorFns = new Set(OPERATOR_API_FUNCTIONS.map(normSig));
   const custodyFns = new Set(CUSTODY_API_FUNCTIONS.map(normSig));
   const identityFns = new Set(IDENTITY_API_FUNCTIONS.map(normSig));
+  const browserFns = new Set(BROWSER_API_FUNCTIONS.map(normSig));
   const operatorVolatile = new Set(OPERATOR_VOLATILE_FUNCTIONS.map(normSig));
   const serviceTables = new Set(SERVICE_READ_TABLES);
 
@@ -256,7 +273,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
         ORDER BY 1`,
       [role, schema],
     );
-    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : kind === "identity" ? identityFns : operatorFns;
+    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : kind === "identity" ? identityFns : kind === "browser" ? browserFns : operatorFns;
     const executable: string[] = [];
     for (const f of fns.rows) {
       const sig = normSig(f.sig);
@@ -820,6 +837,8 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
       "fleet_rail_resolve",
       // v36: a number provider's account-holder identity step records ONE action-scoped human_identity dependency.
       "ix_phone_status",
+      // v37: an agent marking its own account human_action_required (CAPTCHA, liveness) records ONE dependency for it.
+      "fleet_account_human_dependency",
       // v34: a provider needing a non-delegable human identity act records ONE action-scoped dependency for that account.
       "ix_report_job"]),
     // v27: the spend circuit breaker only through the owner's infrastructure control.
@@ -924,8 +943,10 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // (v35: an estate transfer re-owns an inherited identity/account/mailbox and queues the credential re-seal.)
     fleet_agent_identities: new Set(["fleet_econ_identity_create", "fleet_econ_identity_update", "fleet_estate_assign_internal"]),
     fleet_agent_accounts: new Set(["fleet_econ_account_create", "fleet_econ_mailbox_provision", "fleet_econ_account_revoke", "ix_claim_job",
-      "ix_credential_record", "ix_mailbox_record", "ix_report_job", "fleet_estate_assign_internal"]),
-    fleet_agent_account_credentials: new Set(["fleet_econ_account_revoke", "ix_credential_record"]),
+      "ix_credential_record", "ix_mailbox_record", "ix_report_job", "fleet_estate_assign_internal",
+      // v37: browser-created accounts (register / pin origins / record outcome) and broker-stored browser credentials.
+      "fleet_econ_account_register", "fleet_econ_account_add_origin", "fleet_econ_account_mark", "fleet_account_human_dependency", "ix_browser_credential_record"]),
+    fleet_agent_account_credentials: new Set(["fleet_econ_account_revoke", "ix_credential_record", "ix_browser_credential_record"]),
     fleet_agent_mailboxes: new Set(["ix_mailbox_record", "fleet_estate_assign_internal"]),
     fleet_identity_jobs: new Set(["fleet_identity_enqueue", "ix_claim_job", "ix_report_job", "fleet_estate_assign_internal", "svc_estate_tick"]),
     // v35: the economy engine. Replication state/birth orders only by the controller pass and Admin; missions by their
@@ -952,6 +973,12 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_reveal_requests: new Set(["fleet_admin_reveal_request", "fleet_admin_reveal_take", "ix_reveal_pending", "ix_reveal_serve"]),
     fleet_reveal_log: new Set(["fleet_reveal_log_write"]),
     fleet_identity_broker_keys: new Set(["ix_publish_owner_key"]),
+    // v37: the browser operator — sessions/actions by the agent ops and the worker (bx_*); credential requests by the worker,
+    // served by the broker; authentication-message blobs by the broker only.
+    fleet_browser_sessions: new Set(["fleet_econ_browser_open", "fleet_econ_browser_close", "fleet_browser_enqueue", "bx_report_action"]),
+    fleet_browser_actions: new Set(["fleet_browser_enqueue", "bx_claim_action", "bx_report_action"]),
+    fleet_browser_secret_requests: new Set(["bx_secret_request", "bx_secret_take", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
+    fleet_auth_message_blobs: new Set(["ix_auth_blob_store", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
     fleet_identity_releases: new Set(["ix_release_record"]),
     fleet_owner_identity_classes: new Set(["fleet_admin_owner_identity_class_set", "ix_vault_installed"]),
     fleet_owner_identity_consent: new Set(["fleet_admin_owner_identity_consent_set", "fleet_admin_owner_identity_consent_revoke"]),

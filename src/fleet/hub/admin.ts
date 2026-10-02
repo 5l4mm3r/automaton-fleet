@@ -223,6 +223,10 @@ export class PgHubAdmin {
   revealTake(requestId: string, actor: string) {
     return this.one<{ ok: boolean; status?: string; sealedB64?: string; code?: string }>(`SELECT fleet_admin_reveal_take($1, $2) AS r`, [requestId, actor]);
   }
+  /** v37: browser sessions, actions, credential requests and refused origins (no secret). */
+  browser(agentId: string | null) {
+    return this.one(`SELECT fleet_hub_browser($1) AS r`, [agentId]);
+  }
   revealLog(limit: number) {
     return this.one(`SELECT fleet_admin_reveal_log($1) AS r`, [limit]);
   }

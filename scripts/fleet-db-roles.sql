@@ -129,3 +129,25 @@ ALTER ROLE fleet_identity_login IN DATABASE :"dbname" SET statement_timeout = '1
 ALTER ROLE fleet_identity_login IN DATABASE :"dbname" SET lock_timeout = '5s';
 ALTER ROLE fleet_identity_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '10s';
 \endif
+
+-- Schema v37: the browser worker (optional; provisioned only when browser_password is supplied).
+--   fleet_browser        NOLOGIN group: USAGE on fleet + EXECUTE on the bx_* browser-worker functions only
+--   fleet_browser_login  LOGIN member of fleet_browser, held by the browser worker process only
+\if :{?browser_password}
+SELECT 'CREATE ROLE fleet_browser NOLOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_browser') \gexec
+SELECT 'CREATE ROLE fleet_browser_login LOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_browser_login') \gexec
+ALTER ROLE fleet_browser       NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+ALTER ROLE fleet_browser_login LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4;
+SELECT format('ALTER ROLE fleet_browser_login PASSWORD %L', :'browser_password') \gexec
+GRANT fleet_browser TO fleet_browser_login;
+SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname)
+  FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
+ WHERE m.rolname IN ('fleet_browser_login', 'fleet_browser') AND NOT (m.rolname = 'fleet_browser_login' AND r.rolname = 'fleet_browser') \gexec
+REVOKE ALL ON DATABASE :"dbname" FROM fleet_browser, fleet_browser_login;
+GRANT CONNECT ON DATABASE :"dbname" TO fleet_browser_login;
+ALTER ROLE fleet_browser_login IN DATABASE :"dbname" SET statement_timeout = '10s';
+ALTER ROLE fleet_browser_login IN DATABASE :"dbname" SET lock_timeout = '5s';
+ALTER ROLE fleet_browser_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '10s';
+\endif

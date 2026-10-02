@@ -1,0 +1,70 @@
+# Automaton Fleet browser worker — schema v37 (the general website / account operator).
+#
+# NOT INSTALLED by default (owner-approved host step; docs/design/agent-identity.md "v37"). Runs dist/fleet/browser/main.js
+# from the pinned release as its own system user (automaton-fleet-browser, in no other group). It drives headless
+# Chromium for agents' browser actions. It holds NO vault and no secret at rest: a credential reaches it one fill at a
+# time, sealed by the identity broker to a key that exists only in this process's memory. Database: fleet_browser_login
+# (bx_* only), from browser.env.
+#
+# Network: the public internet only (agents visit ordinary websites). Loopback (PostgreSQL) allowed; private, link-local,
+# CGNAT and metadata ranges denied — the worker cannot reach the controller, the operator API, the broker or the host.
+
+[Unit]
+Description=Automaton Fleet browser worker (agents' web sessions; no vault; no listener)
+Wants=postgresql.service
+After=postgresql.service automaton-fleet.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-browser
+Group=automaton-fleet-browser
+SupplementaryGroups=
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/browser/main.js
+EnvironmentFile=/etc/automaton-fleet/browser.env
+Environment=NODE_ENV=production
+Environment=FLEET_BROWSER_EXPECTED_USER=automaton-fleet-browser
+Environment=FLEET_BROWSER_EXECUTABLE=/opt/automaton-fleet/chromium/chrome
+Environment=HOME=/var/lib/automaton-fleet-browser
+StateDirectory=automaton-fleet-browser
+StateDirectoryMode=0700
+UMask=0077
+MemoryMax=3G
+TasksMax=512
+
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=20s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-browser
+
+IPAddressAllow=localhost
+IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/4 240.0.0.0/4
+IPAddressDeny=fc00::/7 fe80::/10 ff00::/8
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key
+InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-identity -/var/lib/automaton-fleet-witness -/var/lib/private/automaton-founders -/var/log/automaton-fleet -/run/credentials
+
+[Install]
+WantedBy=multi-user.target

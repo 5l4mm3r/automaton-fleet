@@ -66,6 +66,25 @@ export interface IdentityGatewayPort {
     title: string; detail: Record<string, unknown>; at: string }> } | null>;
   notificationEmailed(id: string, worker: string, ok: boolean): Promise<IxResult>;
   publishOwnerKey(worker: string, pubB64: string): Promise<IxResult>;
+  // v37
+  authBlobStore(kind: "mail" | "sms", messageId: string, worker: string, blob: Buffer): Promise<IxResult>;
+  browserSecretsPending(worker: string): Promise<BrowserSecretRequest[]>;
+  browserSecretServe(requestId: string, worker: string, sealed: Buffer | null, error: string | null, usedMessageId: string | null): Promise<IxResult>;
+  browserCredentialRecord(requestId: string, worker: string, kind: string, vaultRef: string): Promise<IxResult>;
+}
+
+export interface BrowserSecretRequest {
+  requestId: string;
+  kind: "password" | "username" | "email" | "totp" | "email_code" | "sms_code" | "api_key" | "generate_password" | "auth_link" | "capture";
+  captureKind?: "api_key" | "password" | "recovery_codes" | "totp";
+  agentId: string;
+  accountId: string;
+  workerPub: string;
+  sealedInB64?: string;
+  handle?: string;
+  loginEmail?: string;
+  credentials: Array<{ kind: string; vaultRef: string }>;
+  authMessages?: Array<{ kind: "mail" | "sms"; messageId: string; blobB64: string }>;
 }
 
 export class PgIdentityGateway implements IdentityGatewayPort {
@@ -130,6 +149,14 @@ export class PgIdentityGateway implements IdentityGatewayPort {
   }
   notificationEmailed(id: string, worker: string, ok: boolean) { return this.call<IxResult>("ix_notification_emailed", [id, worker, ok]); }
   publishOwnerKey(worker: string, pubB64: string) { return this.call<IxResult>("ix_publish_owner_key", [worker, pubB64]); }
+  authBlobStore(kind: "mail" | "sms", messageId: string, worker: string, blob: Buffer) { return this.call<IxResult>("ix_auth_blob_store", [kind, messageId, worker, blob]); }
+  browserSecretsPending(worker: string) { return this.call<BrowserSecretRequest[]>("ix_browser_secrets_pending", [worker]); }
+  browserSecretServe(requestId: string, worker: string, sealed: Buffer | null, error: string | null, usedMessageId: string | null) {
+    return this.call<IxResult>("ix_browser_secret_serve", [requestId, worker, sealed, error, usedMessageId]);
+  }
+  browserCredentialRecord(requestId: string, worker: string, kind: string, vaultRef: string) {
+    return this.call<IxResult>("ix_browser_credential_record", [requestId, worker, kind, vaultRef]);
+  }
   async close(): Promise<void> {
     await this.pool.end().catch(() => {});
   }

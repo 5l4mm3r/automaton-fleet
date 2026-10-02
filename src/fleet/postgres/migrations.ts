@@ -44,8 +44,9 @@ import { V33_SQL } from "./migrations-phase33.js";
 import { V34_SQL } from "./migrations-phase34.js";
 import { V35_SQL } from "./migrations-phase35.js";
 import { V36_SQL } from "./migrations-phase36.js";
+import { V37_SQL } from "./migrations-phase37.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 36;
+export const FLEET_PG_SCHEMA_VERSION = 37;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1177,6 +1178,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 34, name: "agent_operational_identity_owner_identity_broker", sql: V34_SQL },
   { version: 35, name: "fleet_economy_engine_replication_missions_estates_notifications", sql: V35_SQL },
   { version: 36, name: "business_mail_sms_admin_reveal_owner_vault_upload", sql: V36_SQL },
+  { version: 37, name: "general_browser_operator_credential_execution", sql: V37_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1344,6 +1346,22 @@ export const IDENTITY_API_FUNCTIONS: readonly string[] = Object.freeze([
   "ix_notifications_unsent(text, integer)",
   "ix_notification_emailed(uuid, text, boolean)",
   "ix_publish_owner_key(text, text)",
+  // v37: credential execution for the browser worker (sealed to its one-time key), authentication-message blobs, and
+  // credentials generated or captured during a browser session.
+  "ix_auth_blob_store(text, uuid, text, bytea)",
+  "ix_browser_secrets_pending(text)",
+  "ix_browser_secret_serve(uuid, text, bytea, text, uuid)",
+  "ix_browser_credential_record(uuid, text, text, text)",
+]);
+
+/** Schema v37: the browser worker's whole database surface (bx_*): claim an action, report it, ask for / take a sealed secret. */
+export const BROWSER_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "bx_ping()",
+  "bx_claim_action(text, text)",
+  "bx_report_action(uuid, text, boolean, jsonb, text)",
+  "bx_secret_request(uuid, text, text, text, text, bytea)",
+  "bx_secret_take(uuid, uuid, text)",
+  "bx_broker_key()",
 ]);
 
 /** Schema v10: the only functions whose bodies may write the ledger tables (append-only double entry). */

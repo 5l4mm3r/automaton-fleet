@@ -64,7 +64,11 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
     recover: "account.recover", rotate: "account.rotate", revoke: "account.revoke", close: "account.close",
     // v36: business mail and SMS.
     read_mail: "mail.read", send_mail: "mail.send", provision_phone: "phone.provision", release_phone: "phone.release", phones: "phone.list",
-    send_sms: "sms.send", sms_inbox: "sms.inbox" },
+    send_sms: "sms.send", sms_inbox: "sms.inbox",
+    // v37: accounts created through the general browser operator.
+    register_account: "account.register", add_origin: "account.add_origin", mark_account: "account.mark" },
+  // v37: the general browser / account operator (any legitimate website; credentials filled by the broker, never shown).
+  browser: { open: "browser.open", act: "browser.act", observe: "browser.observe", close: "browser.close" },
   // v35: recurring commitments, risk context, temporary Fleet missions and estate reuse (the agent's own planning).
   fleet_services: { add_commitment: "commitment.add", cancel_commitment: "commitment.cancel", commitments: "commitment.list", assess_risk: "risk.assess",
     mission_status: "mission.status", request_mission: "mission.request", mission_report: "mission.report", mission_review: "mission.review",
@@ -130,7 +134,7 @@ const IMPLEMENTED = new Set([
   "open_decision", "resolve_decision", "review_decision",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
-  "opportunity", "venture", "wallet", "fleet_capital", "economic_knowledge", "identity", "fleet_services",
+  "opportunity", "venture", "wallet", "fleet_capital", "economic_knowledge", "identity", "fleet_services", "browser",
 ]);
 const EXPERIMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Registry refusals that are infrastructure safety ceilings (fetch quotas, the daily inference ceiling), never budgets. */
@@ -516,13 +520,23 @@ export class FounderToolbox {
         case "check_ledger":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.ledger())) };
         // F2 (schema v28+): opportunities, ventures, wallet, Fleet capital/payments and economic knowledge.
-        case "opportunity": case "venture": case "wallet": case "fleet_capital": case "economic_knowledge": case "identity": case "fleet_services": {
+        case "opportunity": case "venture": case "wallet": case "fleet_capital": case "economic_knowledge": case "identity": case "fleet_services": case "browser": {
           if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
           const op = ECONOMY_OPS[call.name][String(a.op)];
           if (!op) return refuse("FLEET_BAD_REQUEST", `op is one of ${Object.keys(ECONOMY_OPS[call.name]).join(", ")}`);
           const args: Record<string, unknown> = a.args && typeof a.args === "object" && !Array.isArray(a.args) ? { ...(a.args as Record<string, unknown>) } : {};
           if (IDEMPOTENT_OPS.has(op) && typeof args.idempotencyKey !== "string") args.idempotencyKey = `econ:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128).padEnd(8, "_");
-          const r = await this.o.ports.economy(op, args).catch(ownerRefusal);
+          let r = await this.o.ports.economy(op, args).catch(ownerRefusal);
+          // v37: a browser action runs in the browser worker; wait (bounded) for its page result within this tool call.
+          if (call.name === "browser" && (r as { ok?: unknown }).ok === true && typeof (r as { actionId?: unknown }).actionId === "string") {
+            const actionId = (r as { actionId: string }).actionId;
+            for (let i = 0; i < 90; i++) {
+              await new Promise((res) => setTimeout(res, i < 5 ? 300 : 1000));
+              const x = await this.o.ports.economy("browser.result", { actionId }).catch(ownerRefusal);
+              const st = (x as { status?: unknown }).status;
+              if ((x as { ok?: unknown }).ok === false || st === "done" || st === "failed") { r = x; break; }
+            }
+          }
           if ((r as { ok?: unknown }).ok === false) {
             const code = String((r as { code?: unknown }).code ?? "FLEET_TOOL_ERROR");
             const cat = custodyCategory(code);
