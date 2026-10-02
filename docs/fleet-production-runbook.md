@@ -2027,6 +2027,12 @@ exactly `{31→32, [32]}`; cutover 11:26:43–11:26:55; pre-v32 dump `~/automato
 `d6609eee…`; `runtime.env.pre-r30`). Result: wallet custody PASS (Founder 1 keyless); the only real-payment blocker is the
 absent live custody signer (pins unchanged). Evidence and rollback: `docs/evaluations/r30/`.
 
+## Stage R31 — constitutional correction, schema v33 (2026-10-02, VPS UTC)
+
+Controller-only (`f072614` → `3aebcc2`, build `055e8076…`); Founder 1 untouched. Same procedure as R30. Cutover
+12:05:18–12:05:29; pre-v33 dump `~/automaton_fleet-v32-pre-v33-20261002T120518Z.dump` (sha `39658635…`); `runtime.env.pre-r31`.
+No synthetic tax (fallback 0), legal entity optional, future children keyless. Evidence/rollback: `docs/evaluations/r31/`.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
