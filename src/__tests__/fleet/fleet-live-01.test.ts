@@ -102,7 +102,7 @@ describe("F1-LIVE-01 capability change detection (founder runtime)", () => {
     caps = CAPS({ experimentsEnabled: true }); // the owner switches the pipeline on
     const [changed, after1, after2] = await seq(r, 3);
     expect(changed.slim).toBe(false);
-    expect(changed.body.task).toMatch(/Your capabilities changed since your last turn\. Newly available: add_experiment_evidence, list_experiments, propose_experiment, record_experiment, start_experiment\. Experiment pipeline: ON \(simulated; sized within your own survival headroom; up to 3 active\)/);
+    expect(changed.body.task).toMatch(/Your capabilities changed since your last turn\. Newly available: add_experiment_evidence, list_experiments, propose_experiment, record_experiment, start_experiment\. Experiment pipeline: ON \(simulated; you size it from your own available capital — FleetController checks custody only; up to 3 active\)/);
     expect([after1.slim, after2.slim]).toEqual([true, true]); // acknowledged once; no repeated full packets
     caps = CAPS(); // switched off again: one more full packet, naming what went away
     const [off, offAfter] = await seq(r, 2);

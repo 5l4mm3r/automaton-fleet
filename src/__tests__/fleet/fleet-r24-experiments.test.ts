@@ -258,50 +258,99 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(await code(inTime(`UPDATE fleet.fleet_experiments SET requested_minor = 5000 WHERE experiment_id = $1`, [exp(r).experimentId]))).toBe("FLEET_HISTORY_IMMUTABLE");
   });
 
-  it("(2) v31: thin evidence is no gate on own capital (decided on custody); no nominal cap: survival headroom bounds a large request; added evidence is assessed as information", async () => {
+  it("(2) v31: thin evidence is no gate on own capital (decided on custody); a budget above the available own capital is refused as custody, never resized; added evidence is assessed as information", async () => {
     await setup();
     const w = await propose(F, proposal({ claimedLevel: 3 }));
     expect(exp(w)).toMatchObject({ status: "approved", claimedLevel: 3, verifiedLevel: 0, approvedMinor: 800, decisionCode: "FLEET_EXPERIMENT_APPROVED", decidedBy: "controller" });
     expect(exp(w).decisionReason).toMatch(/E0 verified \(claimed E3/);
     const big = await propose(F, proposal({ requestedMinor: 9_000, maxLossMinor: 9_000, evidence: [await page(F.id, "a.example")] }));
-    expect(exp(big)).toMatchObject({ status: "partially_approved", decisionCode: "FLEET_EXPERIMENT_PARTIAL" });
+    // 9 000 requested, 5 000 available: a custody fact — refused as insufficient own capital, not turned into a smaller budget.
+    expect(exp(big)).toMatchObject({ status: "rejected", decisionCode: "FLEET_INSUFFICIENT_OWN_CAPITAL", decidedBy: "controller" });
+    expect(exp(big).approvedMinor ?? null).toBeNull();
     // Evidence is cited at proposal; adding it to an already decided experiment changes nothing (v31: no WATCH to leave).
     const ev = [await page(F.id, "b.example"), await page(F.id, "c.example")];
     await gw.experimentAddEvidence(F.id, F.token, exp(w).experimentId, `ev:${crypto.randomUUID()}`, ev);
     await settle();
     expect(await expJson(exp(w).experimentId)).toMatchObject({ status: "approved", verifiedLevel: 0, approvedMinor: 800 });
-    // v30: the large request is not rejected for a nominal amount: the controller bounds it by the founder's survival headroom.
     const bigNow = await expJson(exp(big).experimentId);
-    expect(bigNow).toMatchObject({ status: "partially_approved", decisionCode: "FLEET_EXPERIMENT_PARTIAL", decidedBy: "controller" });
-    expect(bigNow.approvedMinor).toBeGreaterThan(0);
-    expect(bigNow.approvedMinor).toBeLessThanOrEqual(5_000);
-    expect(bigNow.decisionReason).toMatch(/survival headroom/);
+    expect(bigNow).toMatchObject({ status: "rejected", decisionCode: "FLEET_INSUFFICIENT_OWN_CAPITAL" });
+    expect(bigNow.decisionReason).toMatch(/exceeds your available own capital 5000/);
+    expect(bigNow.decisionReason).not.toMatch(/survival headroom/);
   });
 
-  it("(3) v30: survival headroom (custody) bounds the budget and the maximum loss — no nominal evidence-ladder cap, no owner level", async () => {
+  it("(3) v31: the founder sizes its own exposure; custody (available own capital) is the only bound — no ladder cap, no owner level, no controller resizing", async () => {
     await setup(1_500);
-    // E1 evidence: the founder's own requested budget, within its headroom (the retired ladder would have capped it at 300).
+    // E1 evidence: the founder's own requested budget, within its available capital (the retired ladder would have capped it at 300).
     const single = await proposeAssessed(F, proposal({ evidence: [await page(F.id, "one.example")] }));
     expect(exp(single)).toMatchObject({ status: "approved", verifiedLevel: 1, requestedMinor: 800, approvedMinor: 800, approvedMaxLossMinor: 600, decisionCode: "FLEET_EXPERIMENT_APPROVED" });
     const ev2 = [await page(F.id, "two.example"), await page(F.id, "three.example")];
     const a = await proposeAssessed(F, proposal({ opportunityKey: "second-opp", requestedMinor: 1_000, maxLossMinor: 1_000, evidence: ev2 }));
-    // Cash 1500: 600 already committed as maximum loss → headroom 900 → budget and maximum loss bounded to 900.
-    expect(exp(a)).toMatchObject({ status: "partially_approved", approvedMinor: 900, approvedMaxLossMinor: 900 });
-    // Headroom now 1500 − 600 − 900 = 0: protected capital refuses before anything else.
+    // Available own capital 1 500 (no ledger reservation by simulated experiments): the founder's 1 000 is approved in full —
+    // the controller keeps no reserve and does not net out the founder's other experiment budgets (shown as information).
+    expect(exp(a)).toMatchObject({ status: "approved", approvedMinor: 1_000, approvedMaxLossMinor: 1_000, decisionCode: "FLEET_EXPERIMENT_APPROVED" });
+    expect(exp(a).decisionReason).toMatch(/other active experiment budgets 800/);
     const b = await proposeAssessed(F, proposal({ opportunityKey: "third-opp", requestedMinor: 1_000, maxLossMinor: 1_000, evidence: [await page(F.id, "four.example"), await page(F.id, "five.example")] }));
-    expect(exp(b)).toMatchObject({ status: "rejected", decisionCode: "FLEET_PROTECTED_CAPITAL" });
+    expect(exp(b)).toMatchObject({ status: "approved", approvedMinor: 1_000 });
     // A founder holds at most max_active_per_founder open experiments (an infrastructure bound).
     await q(`UPDATE fleet.fleet_experiment_policy SET max_active_per_founder = 2`);
     const six = await page(F.id, "six.example");
     const irreversible = proposal({ opportunityKey: "fourth-opp", reversibility: "irreversible", requestedMinor: 100, maxLossMinor: 40, evidence: [six] });
     expect(await propose(F, irreversible)).toMatchObject({ ok: false, code: "FLEET_EXPERIMENT_LIMIT" });
     await q(`UPDATE fleet.fleet_experiment_policy SET max_active_per_founder = 10`);
-    expect(exp(await proposeAssessed(F, irreversible))).toMatchObject({ status: "rejected", decisionCode: "FLEET_PROTECTED_CAPITAL" });
-    // G has headroom: an irreversible experiment is decided by the controller at once — never returned to the owner. The stronger
+    expect(exp(await proposeAssessed(F, irreversible))).toMatchObject({ status: "approved", approvedMinor: 100, approvedMaxLossMinor: 100 });
+    // G: an irreversible experiment is decided by the controller at once — never returned to the owner. The stronger
     // boundary: its whole budget counts as maximum loss (40 requested → 100 at risk), and the reason says so.
     const w = await proposeAssessed(G, { ...irreversible, evidence: [await page(G.id, "seven.example")] });
     expect(exp(w)).toMatchObject({ status: "approved", decisionCode: "FLEET_EXPERIMENT_APPROVED", approvedMinor: 100, approvedMaxLossMinor: 100, decidedBy: "controller" });
     expect(exp(w).decisionReason).toMatch(/irreversible: the whole budget is at risk/);
+  });
+
+  it("constitution (v31): the founder owns commercial sizing of its own capital; runway is information; FleetController checks custody only", async () => {
+    await setup(5_000);
+    const ulid = () => "01" + crypto.randomBytes(12).toString("hex").toUpperCase().replace(/[ILOU]/g, "0").slice(0, 24);
+    // Low runway: 2 400 of inference burn on record (≈ 80/day over the 30-day window) against 2 600 left → ≈ 32 days.
+    await q(`SELECT fleet.fleet_ledger_post('inference_charge', $1, 'controller', 'founder inference', 'controller', $2, NULL, NULL, NULL, NULL, now(), $3::jsonb)`, [
+      `infer:${crypto.randomUUID()}`, F.id, JSON.stringify([
+        { account: `agent:${F.id}:expense`, side: "D", amount: 2_400 }, { account: `agent:${F.id}:cash`, side: "C", amount: 2_400 }])]);
+    const avail = Number((await ledger.economics(F.id)).expensePurchasingCapacity);
+    expect(avail).toBe(2_600);
+    // (A)(B)(F) A high relative exposure the founder chose — 2 500 of 2 600 (96 %), irreversible, with a short runway — is
+    // approved IN FULL: no runway floor, no survival reserve, no resizing, no partial approval.
+    const high = await propose(F, proposal({ opportunityKey: "all-in", requestedMinor: 2_500, maxLossMinor: 2_500, reversibility: "irreversible" }));
+    expect(exp(high)).toMatchObject({ status: "approved", decisionCode: "FLEET_EXPERIMENT_APPROVED", requestedMinor: 2_500, approvedMinor: 2_500, approvedMaxLossMinor: 2_500, decidedBy: "controller" });
+    // (E) The founder's cognition receives the exposure and runway context with the decision (information, not permission)…
+    expect(exp(high).decisionReason).toMatch(/available own capital 2600, this budget 96\.2% of it, other active experiment budgets 0, runway \d+ days \(information for your own judgement\)/);
+    const wallet = await q(`SELECT fleet.fleet_agent_wallet($1) AS w`, [F.id]);
+    expect(wallet[0].w.runway).toMatchObject({ burnPerDayMinor: 80, note: expect.stringMatching(/sets no runway rule/) });
+    // …and may voluntarily choose a smaller risk: the controller neither raises nor lowers what the founder chose.
+    const small = await propose(F, proposal({ opportunityKey: "careful", requestedMinor: 50, maxLossMinor: 20 }));
+    expect(exp(small)).toMatchObject({ status: "approved", approvedMinor: 50, approvedMaxLossMinor: 20 });
+    expect(exp(small).decisionReason).toMatch(/other active experiment budgets 2500/);
+    // (C) More than the ACTUAL available own capital is a custody refusal, never a smaller controller-sized budget.
+    const over = await propose(F, proposal({ opportunityKey: "over", requestedMinor: 2_601, maxLossMinor: 100 }));
+    expect(exp(over)).toMatchObject({ status: "rejected", decisionCode: "FLEET_INSUFFICIENT_OWN_CAPITAL" });
+    expect(exp(over).approvedMinor ?? null).toBeNull();
+    // (D) Tax reserves and approved obligations are not available own capital (custody), on G with nothing else going on.
+    await q(`INSERT INTO fleet.fleet_obligations (obligation_id, agent_id, description, amount_cents, due_at, approved_by, category)
+             VALUES ($1, $2, 'VAT reserve', 1500, now() + interval '30 days', 'operator:owner', 'tax_reserve')`, [ulid(), G.id]);
+    await q(`INSERT INTO fleet.fleet_obligations (obligation_id, agent_id, description, amount_cents, due_at, approved_by)
+             VALUES ($1, $2, 'rent', 1000, now() + interval '1 day', 'operator:owner')`, [ulid(), G.id]);
+    expect(Number((await ledger.economics(G.id)).expensePurchasingCapacity)).toBe(2_500);
+    expect(exp(await propose(G, proposal({ opportunityKey: "g-over", requestedMinor: 2_501, maxLossMinor: 10 })))).toMatchObject({ status: "rejected", decisionCode: "FLEET_INSUFFICIENT_OWN_CAPITAL" });
+    expect(exp(await propose(G, proposal({ opportunityKey: "g-fit", requestedMinor: 2_500, maxLossMinor: 10 })))).toMatchObject({ status: "approved", approvedMinor: 2_500 });
+    // (F) No own-capital experiment of either founder was ever resized or partially approved by the controller.
+    expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_experiments WHERE status = 'partially_approved' OR approved_minor <> requested_minor`))[0].n).toBe(0);
+    // Nor can the owner's (legacy) decision path size a founder's own capital: no partial approval, no WATCH, no other amount.
+    const hid = exp(high).experimentId as string;
+    for (const [d, amt] of [["partially_approved", 1_000], ["watch", null]] as const) {
+      expect(await code(genesis.experimentDecide(hid, d, amt, null, OWNER, "resize the founder's exposure"))).toBe("FLEET_BAD_REQUEST");
+    }
+    const decideSrc = (await q(`SELECT prosrc FROM pg_proc WHERE proname = 'fleet_experiment_decide'`))[0].prosrc as string;
+    expect(decideSrc).not.toMatch(/'partially_approved'|hard_cap_minor/);
+    expect(decideSrc).toMatch(/p_decision NOT IN \('approved','rejected'\)/);
+    expect(decideSrc).toMatch(/FLEET_INSUFFICIENT_OWN_CAPITAL/);
+    // (H) No owner approval was introduced anywhere in these decisions.
+    expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_experiments WHERE decided_by <> 'controller'`))[0].n).toBe(0);
   });
 
   it("(4) the budget cannot be exceeded; (8) a stop condition (maximum loss, or a metric) ends the experiment with a result", async () => {
@@ -759,7 +808,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(Number((await q(`SELECT fleet.fleet_ledger_balance(fleet.fleet_ledger_account($1, 'agent_revenue')) AS b`, [F.id]))[0].b)).toBeGreaterThan(0);
     const e3 = await proposeAssessed(F, proposal({ opportunityKey: "rent-tracker", evidence: [await page(F.id, "rt-1.example")] }));
     expect(exp(e3)).toMatchObject({ verifiedLevel: 3, status: "approved", approvedMinor: 800 });
-    // Revenue attributed to this opportunity's lineage: E4 — recorded as information; v30: no owner level, survival headroom bounds the budget.
+    // Revenue attributed to this opportunity's lineage: E4 — recorded as information; no owner level; custody alone bounds the budget.
     expect(await genesis.experimentAttributeRevenue(unattributed, rt, OWNER, "tracker customers paid via the marketplace"))
       .toMatchObject({ journal_id: unattributed, opportunity_key: "rent-tracker", experiment_id: rt, amount_minor: 700, attributed_by: OWNER });
     expect(await code(genesis.experimentAttributeRevenue(unattributed, rt, OWNER, "again"))).toBe("FLEET_DUPLICATE_EVENT");
@@ -773,7 +822,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect((await store.auditPrivileges()).problems).toEqual([]);
   });
 
-  it("(18) simulated founder-reported ROI influences no authoritative decision: capital, headroom, evidence level, confidence, reproduction", async () => {
+  it("(18) simulated founder-reported ROI influences no authoritative decision: capital, custody, evidence level, confidence, reproduction", async () => {
     await setup(1_500);
     const repro0 = (await q(`SELECT fleet.fleet_reproduction_eligibility($1) AS r`, [F.id]))[0].r;
     const eco0 = await ledger.economics(F.id);
@@ -782,9 +831,9 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     const aid = exp(a).experimentId as string;
     await gw.experimentStart(F.id, F.token, aid);
     await rec(F, aid, { kind: "sim_spend", amountMinor: 590 });
-    // Reported spend never releases headroom: A still commits its whole maximum loss (600), so B's budget and loss are bounded at 900.
+    // Founder-reported simulated spend changes no custody figure: B is checked against the ledger's available own capital only.
     const b = await proposeAssessed(F, proposal({ opportunityKey: "roi-b", requestedMinor: 1_000, maxLossMinor: 1_000, evidence: [await page(F.id, "rb-1.example"), await page(F.id, "rb-2.example")] }));
-    expect(exp(b)).toMatchObject({ status: "partially_approved", approvedMinor: 900, approvedMaxLossMinor: 900 });
+    expect(exp(b)).toMatchObject({ status: "approved", approvedMinor: 1_000, approvedMaxLossMinor: 1_000 });
     const bid = exp(b).experimentId as string;
     await gw.experimentStart(F.id, F.token, bid);
     await rec(F, bid, { kind: "sim_spend", amountMinor: 10 });

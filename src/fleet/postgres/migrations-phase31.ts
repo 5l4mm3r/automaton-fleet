@@ -18,7 +18,8 @@
  *    - This is distinct from automatic owner sweeps (OWNER_SWEEP_ENABLED, still off) and from agent spending.
  * 2. R24 OWN-CAPITAL EXPERIMENTS: the controller's commercial-evidence gate is retired. Relevance assessment and the
  *    verified evidence level are still recorded (information, Fleet knowledge), but an own-capital experiment is decided
- *    on custody alone — survival headroom bounds its budget; irreversible = the whole budget at risk. No WATCH for
+ *    on custody alone — the budget must fit the founder's available own capital; the controller never resizes or
+ *    partially approves own capital (runway is information); irreversible = the whole budget at risk. No WATCH for
  *    "insufficient", "uncertain" or "pending" evidence.
  * 3. CONTEXTUAL COGNITION DEPTH at the spend boundary: exposure share of own available capital is ONE input (half the
  *    configured line = 1 point, the line = 2, no capital = 3); a fully recoverable asset purchase lowers it (−1); a
@@ -71,6 +72,33 @@ const RELEVANCE_OVERRIDE = v24Function("fleet_experiment_assess_relevance", [
   ELSE
     d := jsonb_build_object('decision', e.status, 'code', 'FLEET_EVIDENCE_RECORDED', 'reason', 'evidence level recorded as information; the custody decision stands');
   END IF;`],
+]);
+
+/**
+ * The owner's experiment decision (v24) no longer sizes own capital either: it can only resolve a legacy proposed/WATCH
+ * experiment (v31 leaves none) as approved IN FULL — custody-checked against the founder's available own capital, with the
+ * founder's own maximum loss — or rejected. No partial approval, no WATCH, no owner-chosen amount or loss bound.
+ */
+const OWNER_DECIDE = v24Function("fleet_experiment_decide", [
+  ["IF p_decision NOT IN ('approved','partially_approved','watch','rejected') OR p_reason IS NULL OR length(p_reason) < 3 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: decision and reason required'; END IF;",
+   "IF p_decision NOT IN ('approved','rejected') OR p_reason IS NULL OR length(p_reason) < 3 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: decision (approved | rejected) and reason required; own capital is sized by the founder'; END IF;"],
+  ["  IF p_decision IN ('approved','partially_approved') THEN", "  IF p_decision = 'approved' THEN"],
+  [`    IF p_approved IS NULL OR p_approved < 0 OR p_approved > e.requested_minor OR p_approved > pol.hard_cap_minor
+       OR (p_decision = 'approved') <> (p_approved = e.requested_minor) THEN
+      RAISE EXCEPTION 'FLEET_BAD_REQUEST: approved amount must be within the request and the hard cap (full = approved, less = partially_approved)';
+    END IF;`,
+   `    IF p_approved IS DISTINCT FROM e.requested_minor OR (p_max_loss IS NOT NULL AND p_max_loss <> e.max_loss_minor) THEN
+      RAISE EXCEPTION 'FLEET_BAD_REQUEST: own capital is sized by the founder: approve the requested budget and maximum loss in full, or reject';
+    END IF;`],
+  [`    IF COALESCE(p_max_loss, LEAST(e.max_loss_minor, p_approved)) > GREATEST(0, COALESCE((eco ->> 'expensePurchasingCapacity')::bigint, 0)) THEN
+      RAISE EXCEPTION 'FLEET_PROTECTED_CAPITAL: the maximum loss exceeds what the founder can lose above its protected capital';
+    END IF;`,
+   `    IF e.requested_minor > GREATEST(0, COALESCE((eco ->> 'expensePurchasingCapacity')::bigint, 0)) THEN
+      RAISE EXCEPTION 'FLEET_INSUFFICIENT_OWN_CAPITAL: the budget exceeds the founder''s available own capital';
+    END IF;`],
+  [`'approvedMinor', p_approved, 'maxLossMinor', LEAST(COALESCE(p_max_loss, e.max_loss_minor), COALESCE(p_approved, 0))), p_actor, 'owner');`,
+   `'approvedMinor', p_approved, 'maxLossMinor', CASE WHEN e.reversibility = 'irreversible' THEN e.requested_minor ELSE LEAST(e.max_loss_minor, e.requested_minor) END),
+    p_actor, 'owner');`],
 ]);
 
 export const V31_SQL = `
@@ -217,31 +245,34 @@ COMMENT ON COLUMN fleet_economic_model.strong_auth_threshold_cents IS 'LEGACY (r
 -- ═══ 2. R24: own-capital experiments are decided on custody alone ═══
 CREATE OR REPLACE FUNCTION fleet_experiment_evaluate(e fleet_experiments) RETURNS jsonb LANGUAGE plpgsql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE eco jsonb; v_committed bigint; v_head bigint; v_amt bigint; v_loss bigint; rel jsonb; v_info text;
+DECLARE eco jsonb; v_avail bigint; v_others bigint; v_loss bigint; rel jsonb; v_info text; v_runway text; v_burn bigint;
 BEGIN
   -- Evidence is recorded as information (relevance, verified level), never a commercial gate on the founder's own capital.
   rel := fleet_experiment_relevant_evidence(e.experiment_id, e.verified_evidence);
   v_info := format('E%s verified (claimed E%s; %s relevant, %s uncertain, %s unassessed)', e.verified_level, e.claimed_level,
     rel ->> 'relevant', rel ->> 'uncertain', rel ->> 'unassessed');
-  -- Custody: never more than the founder could lose without touching protected capital (survival headroom), net of the
-  -- maximum loss other active experiments already commit.
+  -- The founder owns commercial risk and exposure sizing of its own capital. FleetController checks custody only: the
+  -- budget must fit the founder's genuinely available own capital (cash net of reserved orders, Treasury-granted principal
+  -- and approved obligations; tax reserves and envelope capital are separate accounts). It never resizes the request,
+  -- never keeps a runway or survival reserve and never partially approves own capital. Runway, exposure share and the
+  -- budgets of the founder's other experiments are information for the founder's own judgement.
   eco := fleet_agent_economics(e.agent_id);
-  SELECT COALESCE(sum(COALESCE(approved_max_loss_minor, 0)), 0) INTO v_committed
+  v_avail := GREATEST(0, COALESCE((eco ->> 'expensePurchasingCapacity')::bigint, 0));
+  SELECT COALESCE(sum(COALESCE(approved_minor, 0)), 0) INTO v_others
     FROM fleet_experiments WHERE agent_id = e.agent_id AND status IN ('approved','partially_approved','running') AND experiment_id <> e.experiment_id;
-  v_head := GREATEST(0, COALESCE((eco ->> 'expensePurchasingCapacity')::bigint, 0) - v_committed);
-  IF e.max_loss_minor > 0 AND v_head = 0 THEN
-    RETURN jsonb_build_object('decision', 'rejected', 'code', 'FLEET_PROTECTED_CAPITAL', 'reason', 'no headroom above protected capital and committed experiments');
+  v_burn := COALESCE(fleet_agent_burn_per_day(e.agent_id), 0);
+  v_runway := CASE WHEN v_burn > 0 THEN (v_avail / v_burn)::text ELSE 'n/a' END;
+  v_info := format('%s; available own capital %s, this budget %s%% of it, other active experiment budgets %s, runway %s days (information for your own judgement)',
+    v_info, v_avail, CASE WHEN v_avail > 0 THEN round(e.requested_minor::numeric * 100 / v_avail, 1)::text ELSE 'n/a' END, v_others, v_runway);
+  IF e.requested_minor > v_avail THEN
+    RETURN jsonb_build_object('decision', 'rejected', 'code', 'FLEET_INSUFFICIENT_OWN_CAPITAL', 'availableMinor', v_avail,
+      'reason', format('custody: the budget %s exceeds your available own capital %s (restricted, reserved and committed money excluded); %s',
+        e.requested_minor, v_avail, v_info));
   END IF;
-  v_amt := LEAST(e.requested_minor, v_head);
-  v_loss := CASE WHEN e.reversibility = 'irreversible' THEN v_amt ELSE LEAST(e.max_loss_minor, v_amt) END;
-  IF v_amt < e.requested_minor OR v_loss < e.max_loss_minor THEN
-    RETURN jsonb_build_object('decision', 'partially_approved', 'code', 'FLEET_EXPERIMENT_PARTIAL', 'approvedMinor', v_amt, 'maxLossMinor', v_loss,
-      'reason', format('%s; survival headroom %s: budget %s of %s, maximum loss %s%s', v_info, v_head, v_amt, e.requested_minor, v_loss,
-        CASE WHEN e.reversibility = 'irreversible' THEN ' (irreversible: the whole budget is at risk — reason carefully)' ELSE '' END));
-  END IF;
+  v_loss := CASE WHEN e.reversibility = 'irreversible' THEN e.requested_minor ELSE LEAST(e.max_loss_minor, e.requested_minor) END;
   RETURN jsonb_build_object('decision', 'approved', 'code', 'FLEET_EXPERIMENT_APPROVED', 'approvedMinor', e.requested_minor, 'maxLossMinor', v_loss,
-    'reason', format('%s; within survival headroom %s%s', v_info, v_head,
-      CASE WHEN e.reversibility = 'irreversible' THEN ' (irreversible: the whole budget is at risk — reason carefully)' ELSE '' END));
+    'reason', format('custody check passed; %s%s', v_info,
+      CASE WHEN e.reversibility = 'irreversible' THEN ' (irreversible: the whole budget is at risk)' ELSE '' END));
 END $$;
 
 -- R24 evidence assessment continues after approval (information; see RELEVANCE_* above).
@@ -250,6 +281,9 @@ ${RELEVANCE_PENDING}
 ${RELEVANCE_RECORD}
 
 ${RELEVANCE_OVERRIDE}
+
+-- The owner's decision resolves legacy proposed/WATCH experiments only; it never sizes own capital.
+${OWNER_DECIDE}
 
 -- ═══ 3. Contextual cognition depth at the spend boundary ═══
 CREATE FUNCTION fleet_spend_depth(p_agent text, p_amount bigint, p_category text, p_destination text, p_recoverable bigint) RETURNS jsonb LANGUAGE plpgsql STABLE

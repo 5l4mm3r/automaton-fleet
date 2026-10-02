@@ -35,6 +35,8 @@ const RULES: Rule[] = [
   { cls: "inert-legacy", file: /src\/fleet\/genesis\/admin\.ts$/, line: /cognitionRoutingSet|experimentPolicySet|evidenceLadderSet|fleet_cognition_routing_set|fleet_experiment_policy_set|fleet_evidence_ladder_set/, why: "setters of inert legacy columns" },
   { cls: "inert-legacy", file: /src\/fleet\/genesis\/cli\.ts$/, line: /evidence-ladder-set/, why: "usage of an inert legacy setter" },
   { cls: "retirement", file: /src\/fleet\/service\/server\.ts$/, line: /owner-enrolled payee or controller-verified vendor/, why: "documents both destination kinds" },
+  { cls: "retirement", file: /src\/fleet\/postgres\/migrations-phase31\.ts$/, line: /^\s*\[`\s+IF p_approved IS NULL OR p_approved < 0 OR p_approved > e\.requested_minor OR p_approved > pol\.hard_cap_minor$/,
+    why: "the v24 owner-decide text a v31 asserted edit REMOVES (own capital is sized by the founder)" },
   { cls: "inert-legacy", file: /src\/fleet\/cognition\/capability-signature\.ts$/, why: "capability-policy signature field (data, not shown as a cap; signature compatibility)" },
 ];
 
@@ -62,6 +64,22 @@ describe("F2 static architecture audit: no active owner gate or fixed nominal au
     const unclassified = hits.filter((h) => !h.cls).map((h) => `${h.file}:${h.line}  ${h.text}`);
     expect(unclassified).toEqual([]);
     expect(hits.length).toBeGreaterThan(0);
+  });
+
+  // v31 constitution: the founder sizes its own capital. No ACTIVE source may resize, partially approve or reserve runway
+  // over own capital (migrations ≤ v30 are superseded by v31's CREATE OR REPLACE and checked live in the PG suites).
+  it("no active controller sizing of own capital: no survival-headroom netting, no own-capital partial approval, no runway floor", () => {
+    const SIZING = /survival headroom|runway headroom|survival reserve|runway floor|FLEET_EXPERIMENT_PARTIAL|'decision', 'partially_approved'|p_decision IN \('approved','partially_approved'\)/i;
+    const allowed = (rel: string, text: string) =>
+      /src\/fleet\/postgres\/migrations-phase([0-9]|[12][0-9]|30)\.ts$/.test(rel)   // historical, superseded at v31
+      || (/migrations-phase31\.ts$/.test(rel) && /^\s*\["\s*IF p_decision IN \('approved','partially_approved'\) THEN"/.test(text)) // the text a v31 edit removes
+      || /never keeps a runway or survival reserve|no runway floor/i.test(text);                       // negations
+    const active: string[] = [];
+    for (const f of walk(path.join(ROOT, "src"))) {
+      const rel = path.relative(ROOT, f);
+      fs.readFileSync(f, "utf8").split("\n").forEach((text, i) => { if (SIZING.test(text) && !allowed(rel, text)) active.push(`${rel}:${i + 1}  ${text.trim().slice(0, 160)}`); });
+    }
+    expect(active).toEqual([]);
   });
 
   it("founder-facing text names no owner gate, no fixed GBP authority, no allowance and no runway rule", () => {

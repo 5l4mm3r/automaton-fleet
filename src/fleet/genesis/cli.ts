@@ -62,7 +62,7 @@
  *   experiment-enable [--hard-cap N] | experiment-disable              OWNER GATE (founders may propose only while enabled)
  *   evidence-ladder-set <level 0..4> <autoCapMinor|owner>              LEGACY since schema v30: stored only; no ladder cap and no owner level is applied
  *   experiment-list [agentId] | experiment-show <experimentId> | strategy-registry [agentId]
- *   experiment-decide <experimentId> approved|partially_approved|watch|rejected [--approved N] [--max-loss N] <reason…>
+ *   experiment-decide <experimentId> approved|rejected [--approved N] <reason…>   legacy proposed/WATCH only; approve = the founder's requested budget in full (own capital is sized by the founder)
  *   experiment-relevance <experimentId> <attemptId> relevant|irrelevant|uncertain <reason…>   audited override of the controller's relevance verdict (optional)
  *   experiment-attribute-revenue <revenueJournalId> <experimentId> <reason…>        E4 lineage: link realized revenue to its experiment
  *   experiment-observe <experimentId> <metric> <value> <source…>       a controller-recorded observation (the synthetic executor)
@@ -253,8 +253,8 @@ export async function runGenesisCommand(
     case "experiment-decide": {
       const [id, decision] = p;
       const reason = p.slice(2).join(" ");
-      if (!UUID.test(id ?? "") || !["approved", "partially_approved", "watch", "rejected"].includes(decision ?? "") || reason.length < 3) {
-        throw new Error("usage: experiment-decide <experimentId> approved|partially_approved|watch|rejected [--approved N] [--max-loss N] <reason…>");
+      if (!UUID.test(id ?? "") || !["approved", "rejected"].includes(decision ?? "") || reason.length < 3) {
+        throw new Error("usage: experiment-decide <experimentId> approved|rejected [--approved N] <reason…> (approve = the requested budget in full)");
       }
       return ok(await g.experimentDecide(id, decision, optInt("--approved", 0) ?? null, optInt("--max-loss", 0) ?? null, actor, reason));
     }

@@ -205,9 +205,10 @@ describe.skipIf(!PG_BIN)("F2 v30 capital engine, envelopes, sweeps, cognition de
     expect(src).toMatch(/fleet_spend_is_major/);
   });
 
-  it("experiments: no owner branch and no nominal ladder cap — irreversible and E4 are bounded by survival headroom with a stronger loss bound", async () => {
+  it("experiments: no owner branch, no nominal ladder cap, no controller sizing of own capital (v31: custody only; irreversible = whole budget at risk)", async () => {
     const src = (await R.q(`SELECT prosrc FROM pg_proc WHERE proname = 'fleet_experiment_evaluate'`))[0].prosrc as string;
     expect(src).not.toMatch(/OWNER_DECISION_REQUIRED|decided by the owner|auto_cap_minor|hard_cap_minor/);
+    expect(src).not.toMatch(/'partially_approved', 'code'|FLEET_EXPERIMENT_PARTIAL|survival headroom|approved_max_loss_minor/);
     expect(src).toMatch(/irreversible/);
   });
 

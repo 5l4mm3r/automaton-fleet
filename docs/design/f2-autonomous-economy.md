@@ -927,8 +927,8 @@ The PostgreSQL suites Cloud could not run (KI-7) were run on the VM. Findings an
 |---|---|
 | £100/order and £50/day owner spend route | retired at v27 (§24) |
 | `major_spend_threshold_minor` = 2000 (£20 → T3) | retired at v30: `fleet_spend_is_major` = exposure ≥ `major_exposure_bp` (default 2 500) of the founder's own available capital; the column is inert (LEGACY comment) |
-| Experiment owner branch (irreversible / E4 → `FLEET_OWNER_DECISION_REQUIRED`) | retired at v30: the controller decides within survival headroom; irreversible = the whole budget counts as maximum loss |
-| Evidence-ladder nominal caps (0/300/1000/2500) and `hard_cap_minor` | retired at v30 (inert): the budget is bounded by survival headroom |
+| Experiment owner branch (irreversible / E4 → `FLEET_OWNER_DECISION_REQUIRED`) | retired at v30; v31: the controller checks custody only (the founder's budget must fit its available own capital — never resized); irreversible = the whole budget counts as maximum loss |
+| Evidence-ladder nominal caps (0/300/1000/2500) and `hard_cap_minor` | retired at v30 (inert); v31: the founder sizes the budget, custody alone bounds it |
 | Owner-enrolled payees as the only destinations (3-day cooldown) | complemented at v29 by agent-registered, controller-verified vendors |
 | Discovery allowance / 14-day runway floor | withdrawn in Phase A (§7) |
 
@@ -1106,8 +1106,17 @@ candidate's). `713f4dd` itself is unchanged.
 - Tax, restricted, envelope and agent money can never be withdrawn by this path. Owner funding lands in the Treasury
   and never counts as revenue or profit.
 
-**R24 retired.** `fleet_experiment_evaluate` decides own-capital experiments on custody (survival headroom) alone —
-no WATCH for insufficient, uncertain or pending evidence. The relevance assessor still records evidence levels for
+**R24 retired; the founder sizes its own capital.** `fleet_experiment_evaluate` decides own-capital experiments on
+custody alone: the founder's requested budget is approved IN FULL when it fits the founder's available own capital
+(`expensePurchasingCapacity` = cash net of reserved orders, Treasury-granted principal and approved obligations including
+tax reserves; envelope and tax-reserve accounts are separate), otherwise it is refused (`FLEET_INSUFFICIENT_OWN_CAPITAL`).
+The controller keeps no runway floor or survival reserve, does not net out the founder's other simulated experiment
+budgets, and never partially approves or resizes own capital (v30 still did: "survival headroom" = capacity minus other
+experiments' maximum loss, then `partially_approved`). Exposure share, other experiment budgets and runway are written
+into the decision reason as information for the founder's own judgement. The owner's legacy `fleet_experiment_decide`
+can only resolve a pre-v31 proposed/WATCH row as approved in full (custody-checked) or rejected — no partial approval,
+no WATCH, no owner-chosen amount. `PARTIAL_APPROVE` remains the capital engine's outcome for Fleet/shared capital. No
+WATCH for insufficient, uncertain or pending evidence; the relevance assessor still records evidence levels for
 approved/running experiments as information (`FLEET_EVIDENCE_RECORDED`); an override is settled once the experiment
 has ended.
 

@@ -116,10 +116,11 @@ describe.skipIf(!PG_BIN)("F2 v31 launch hardening: admin withdrawals, R24 custod
     expect(F.id).not.toBe(G.id);
   });
 
-  it("R24: an own-capital experiment is decided on custody alone — no WATCH on insufficient, uncertain or pending evidence", async () => {
+  it("R24: an own-capital experiment is decided on custody alone — no WATCH on evidence, no controller resizing", async () => {
     const src = (await R.q(`SELECT prosrc FROM pg_proc WHERE proname = 'fleet_experiment_evaluate'`))[0].prosrc as string;
     expect(src).not.toMatch(/'watch'|FLEET_EVIDENCE_INSUFFICIENT|FLEET_EVIDENCE_UNCERTAIN|FLEET_RELEVANCE_PENDING|OWNER_DECISION/);
-    expect(src).toMatch(/survival headroom/);
+    expect(src).toMatch(/FLEET_INSUFFICIENT_OWN_CAPITAL/);
+    expect(src).not.toMatch(/survival headroom|FLEET_EXPERIMENT_PARTIAL/);
   });
 
   it("contextual cognition depth: exposure is one input; recoverability lowers it, a new destination raises it", async () => {
