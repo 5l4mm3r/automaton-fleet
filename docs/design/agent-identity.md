@@ -152,3 +152,44 @@ selectors, links, buttons, CAPTCHA presence). Adapters remain an optimisation.
   (`FLEET_BROWSER_DATABASE_URL`), and install/enable the unit. The browser runs without Chromium's own sandbox under this
   unit (NoNewPrivileges/RestrictNamespaces); its containment is the service user, the network policy and the absence of
   any secret at rest.
+
+## v41 — communications ready but dormant; one shared Fleet mailbox; cost-aware numbers (2026-10-02, owner decisions)
+
+- **Dormant by default.** The broker registers exactly the providers its configuration names (`fleet_comms_providers`).
+  None = `NOT CONFIGURED`, a deliberate cost state, not a failure. `mailbox.provision`, `mail.send`, `phone.quote` and
+  `phone.provision` then answer `FLEET_CAPABILITY_NOT_CONFIGURED` for that action only. They queue no job and record
+  the agent's need (`fleet_capability_demands`: the activation evidence on the dashboard); everything else continues.
+  Founder runtimes never depend on mail or SMS. Activation steps and costs: `deploy/proposed/proton-bridge/README.md`,
+  `deploy/proposed/twilio/README.md`.
+- **Mail = one shared Proton mailbox** (`ProtonBridgeMailProvider`, mode `shared`):
+  - Bridge is reached on loopback only, with an exact certificate pin, the Bridge-generated credentials and no client
+    logging.
+  - The INBOX is read read-only after a UIDVALIDITY:UID cursor.
+  - Agents hold internal routing addresses (`<local>+<tag>@<domain>`, the same mailbox).
+  - Outgoing mail is From the shared address, with Reply-To the routing address, a Fleet Message-ID and References.
+  - `ix_mail_ingest` attributes each message to agent / venture / account / identity / platform / job / thread, with
+    `routing` and `routing_reason`, in this order:
+    1. routing address;
+    2. conversation (In-Reply-To / References of the agent's messages);
+    3. the only account awaiting verification on the sender's domain;
+    4. for ordinary mail only, an established correspondent of exactly one agent;
+    5. otherwise **unassigned** (Admin: Email → Unassigned → Assign).
+  - Authentication mail is withheld as before and never guessed. An unassigned code is usable only after Admin routes it.
+  - The Mailgun adapter remains available (mode `dedicated`); agent operations do not change with the provider.
+- **SMS = Twilio** (scoped API key preferred):
+  - The flow is quote first (`phone.quote`), then `phone.provision {quoteId, numberType, maxMonthlyMinor}`. The broker
+    re-checks the live price against the ceiling before buying.
+  - Rental and messages are charged to the agent (`svc_comms_tick`, journal `provider_usage_charge` against
+    `fleet:provider_credits`, which Admin tops up with `provider_credits_record`). This is the inference /
+    Conway-credit pattern.
+  - Number lifecycle:
+    - an idle number (30 days) is flagged to its agent for review;
+    - a number unpaid for 7 days is released;
+    - an account that verified with a number blocks its release (unless `force`);
+    - a dead agent's numbers follow the living heir of their dependent accounts, or are released.
+  - Regulation: an approved bundle or validated address is attached automatically; otherwise `human_action_required` for
+    that number only.
+- **Provider secrets**: `ProviderSecretVault` (`<state>/provider-vault`, AES-256-GCM under a key derived from the broker
+  vault key), installed with `main.js provider-secret-set <name>` from stdin. The registry holds names, fields and keyed
+  fingerprints (`fleet_provider_secrets`). Admin reveals one through the step-up Reveal (`provider_secret`).
+- **Hardening**: the v37 `fleet_agent_accounts_origins_guard` trigger now has a pinned search path.

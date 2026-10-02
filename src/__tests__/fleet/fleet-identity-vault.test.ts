@@ -9,7 +9,8 @@ import os from "os";
 import path from "path";
 import { SecretBox, generatePassword, generateX25519, openSealed, sealTo } from "../../fleet/identity/crypto.js";
 import { AgentCredentialVault, OwnerIdentityVault, privateDirProblems, sealOwnerFact } from "../../fleet/identity/vaults.js";
-import { identityEnvProblems, initIdentityState } from "../../fleet/identity/main.js";
+import { identityEnvProblems, initIdentityState, openProviderVault, openProviders } from "../../fleet/identity/main.js";
+import { execFileSync } from "child_process";
 import { findVerification, redactMail } from "../../fleet/identity/providers.js";
 import { FOUNDER_TOOLS } from "../../fleet/cognition/types.js";
 
@@ -110,6 +111,72 @@ describe("identity vaults", () => {
       fs.rmSync(d, { recursive: true, force: true });
     }
   });
+});
+
+describe("v41 communications configuration: dormant by default, secrets encrypted, loopback only", () => {
+  const db = "postgresql://fleet_identity_login:x@127.0.0.1/db";
+  it("no provider configured is valid and opens nothing (NOT CONFIGURED)", () => {
+    const d = tmp();
+    try {
+      initIdentityState(d);
+      expect(fs.statSync(path.join(d, "provider-vault")).mode & 0o777).toBe(0o700);
+      const env = { FLEET_IDENTITY_DATABASE_URL: db, FLEET_IDENTITY_STATE_DIR: d };
+      expect(identityEnvProblems(env, { uid: process.getuid!(), username: "u" })).toEqual([]);
+      expect(openProviders(env, d)).toEqual({ mail: null, sms: null, mailgun: null });
+    } finally {
+      fs.rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("proton-bridge needs the shared address, a loopback Bridge and its installed secret; twilio its secret; notify-from is the shared address", () => {
+    const d = tmp();
+    try {
+      initIdentityState(d);
+      const env = { FLEET_IDENTITY_DATABASE_URL: db, FLEET_IDENTITY_STATE_DIR: d, FLEET_MAIL_PROVIDER: "proton-bridge", FLEET_SMS_PROVIDER: "twilio" };
+      const p = identityEnvProblems(env, { uid: process.getuid!(), username: "u" }).join("\n");
+      expect(p).toMatch(/FLEET_MAIL_ADDRESS/);
+      expect(p).toMatch(/provider secret proton-bridge is not installed/);
+      expect(p).toMatch(/sms\.json/); // no twilio secret installed either
+      expect(identityEnvProblems({ ...env, FLEET_MAIL_ADDRESS: "fleet@proton.example", FLEET_MAIL_BRIDGE_HOST: "203.0.113.5" }, { uid: process.getuid!(), username: "u" }).join())
+        .toMatch(/loopback/);
+      const v = openProviderVault(d);
+      v.put("proton-bridge", { username: "fleet@proton.example", password: "bridge-generated-pw-1", certPem: "-----BEGIN CERTIFICATE-----x" });
+      v.put("twilio", { accountSid: `AC${"0".repeat(32)}`, apiKeySid: `SK${"1".repeat(32)}`, apiKeySecret: "api-secret-0123456789" });
+      const ok = { ...env, FLEET_MAIL_ADDRESS: "fleet@proton.example" };
+      expect(identityEnvProblems(ok, { uid: process.getuid!(), username: "u" })).toEqual([]);
+      expect(identityEnvProblems({ ...ok, FLEET_NOTIFY_FROM: "other@proton.example" }, { uid: process.getuid!(), username: "u" }).join()).toMatch(/shared address/);
+      // The vault files are encrypted: no secret value is readable on disk.
+      for (const f of fs.readdirSync(path.join(d, "provider-vault"))) {
+        const raw = fs.readFileSync(path.join(d, "provider-vault", f)).toString("latin1");
+        expect(raw).not.toMatch(/bridge-generated-pw-1|api-secret-0123456789/);
+        expect(fs.statSync(path.join(d, "provider-vault", f)).mode & 0o777).toBe(0o600);
+      }
+      expect(v.list().map((x) => x.name)).toEqual(["proton-bridge", "twilio"]);
+      expect(JSON.stringify(v.list())).not.toMatch(/bridge-generated-pw-1|api-secret/);
+      expect(() => v.put("../escape", { a: "b" })).toThrow(/malformed/);
+      expect(() => v.put("x1", { a: "" })).toThrow(/non-empty/);
+    } finally {
+      fs.rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("the provider-secret CLI reads stdin only and prints names, fields and a fingerprint — never the value", () => {
+    const d = tmp();
+    try {
+      initIdentityState(d);
+      const run = (args: string[], input = "") => execFileSync(process.execPath, ["--import", "tsx", path.join(process.cwd(), "src/fleet/identity/main.ts"), ...args],
+        { input, env: { PATH: process.env.PATH, FLEET_IDENTITY_STATE_DIR: d }, encoding: "utf8" });
+      const out = run(["provider-secret-set", "twilio"], JSON.stringify({ accountSid: `AC${"0".repeat(32)}`, apiKeySid: `SK${"1".repeat(32)}`, apiKeySecret: "cli-secret-0123456789" }));
+      expect(JSON.parse(out)).toMatchObject({ ok: true, name: "twilio", fields: ["accountSid", "apiKeySecret", "apiKeySid"] });
+      expect(out).not.toContain("cli-secret-0123456789");
+      const list = run(["provider-secret-list"]);
+      expect(list).not.toContain("cli-secret-0123456789");
+      expect(JSON.parse(list).secrets).toEqual([expect.objectContaining({ name: "twilio" })]);
+      expect(openProviderVault(d).get("twilio")?.apiKeySecret).toBe("cli-secret-0123456789");
+    } finally {
+      fs.rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
 
 describe("mail and the founder-facing identity tool", () => {

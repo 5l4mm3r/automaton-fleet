@@ -9,10 +9,10 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { generatePassword, sealTo, totp } from "./crypto.js";
-import type { IdentityGatewayPort, IdentityJob } from "./gateway.js";
-import { findVerification, isAuthenticationMessage, redactMail, type AccountOutcome, type MailMessage, type MailProvider, type PlatformConnector,
-  type SmsProvider } from "./providers.js";
-import { OWNER_IDENTITY_CLASSES, type AgentCredentialVault, type OwnerIdentityVault, type OwnerIdentityClass } from "./vaults.js";
+import type { CommsProviderConfig, IdentityGatewayPort, IdentityJob } from "./gateway.js";
+import { findVerification, isAuthenticationMessage, redactMail, type AccountOutcome, type MailMessage, type MailProvider, type NumberType,
+  type PlatformConnector, type SmsProvider } from "./providers.js";
+import { OWNER_IDENTITY_CLASSES, type AgentCredentialVault, type OwnerIdentityVault, type OwnerIdentityClass, type ProviderSecretVault } from "./vaults.js";
 
 type JobOutcome = { outcome: "pending" | "succeeded" | "failed" | "human_action_required"; result: Record<string, unknown>; account: Record<string, unknown> };
 
@@ -26,6 +26,9 @@ export interface BrokerOptions {
   connectors?: PlatformConnector[];
   ownerVault?: OwnerIdentityVault | null;
   stateFile?: string | null;
+  /** v41: the providers' master secrets (Admin reveal) and the shared mailbox's read cursor (a private 0600 file). */
+  providerVault?: ProviderSecretVault | null;
+  mailCursorFile?: string | null;
   log?: (level: string, event: string, detail?: Record<string, unknown>) => void;
 }
 
@@ -38,6 +41,12 @@ export class IdentityBroker {
   private readonly leases = new Map<string, string>();
   private readonly seenMail = new Map<string, string>(); // provider message id -> registry message id
   private keyPublished = false;
+  /** v41: the registry ids of the configured providers (null until registered). */
+  private mailChannel: string | null = null;
+  private smsChannel: string | null = null;
+  private registered = false;
+  /** v41 (shared mailbox): authentication messages seen this process, by routing address (for connector confirmations). */
+  private readonly recentAuth = new Map<string, MailMessage[]>();
 
   constructor(private readonly gw: IdentityGatewayPort, private readonly vault: AgentCredentialVault, private readonly o: BrokerOptions = {}) {
     this.worker = o.worker ?? "identity-broker";
@@ -68,11 +77,106 @@ export class IdentityBroker {
   }
 
   /**
+   * v41: register exactly the providers this broker is configured with. None = NOT CONFIGURED (a deliberate state):
+   * agents asking for mail / SMS get an action-scoped capability dependency and everything else continues.
+   */
+  async registerProviders(): Promise<void> {
+    const config: CommsProviderConfig[] = [];
+    if (this.o.mail) config.push({ capability: "mail", provider: this.o.mail.name, mode: this.o.mail.mode ?? "dedicated", address: this.o.mail.address ?? null });
+    if (this.o.sms) config.push({ capability: "sms", provider: this.o.sms.name, mode: "numbers" });
+    const r = await this.gw.commsConfigure(this.worker, config);
+    if (!r.ok) throw new Error(`FLEET_COMMS_CONFIG_REFUSED`);
+    const providers = r.providers ?? [];
+    this.mailChannel = providers.find((p) => p.capability === "mail")?.providerId ?? null;
+    this.smsChannel = providers.find((p) => p.capability === "sms")?.providerId ?? null;
+    if (this.o.providerVault) await this.gw.providerSecretsPublish(this.worker, this.o.providerVault.list());
+    this.registered = true;
+    this.log("info", "comms_providers_registered", { mail: this.o.mail ? `${this.o.mail.name}/${this.o.mail.mode ?? "dedicated"}` : "NOT_CONFIGURED",
+      sms: this.o.sms?.name ?? "NOT_CONFIGURED" });
+  }
+
+  private readCursor(): string | null {
+    const f = this.o.mailCursorFile;
+    if (!f || !fs.existsSync(f)) return null;
+    const st = fs.lstatSync(f);
+    if (!st.isFile() || (st.mode & 0o077) !== 0) throw new Error("FLEET_MAIL_CURSOR_UNSAFE");
+    return fs.readFileSync(f, "utf8").trim() || null;
+  }
+
+  private writeCursor(cursor: string | null): void {
+    const f = this.o.mailCursorFile;
+    if (!f || cursor === null) return;
+    const tmp = path.join(path.dirname(f), `.${path.basename(f)}.${process.pid}.tmp`);
+    fs.writeFileSync(tmp, cursor, { mode: 0o600 });
+    fs.renameSync(tmp, f);
+  }
+
+  private memCursor: string | null = null;
+
+  /**
+   * v41: the shared mailbox — every new message goes to the registry, which attributes it (routing address,
+   * conversation, awaiting verification, correspondent) or keeps it UNASSIGNED; authentication messages arrive with their
+   * link/code withheld and the original sealed for the broker alone. The cursor advances only after a whole batch.
+   */
+  async syncShared(): Promise<number> {
+    const mail = this.o.mail;
+    if (!mail?.fetchShared || !this.mailChannel) return 0;
+    let batch: Awaited<ReturnType<NonNullable<MailProvider["fetchShared"]>>>;
+    try {
+      batch = await mail.fetchShared(this.o.mailCursorFile ? this.readCursor() : this.memCursor);
+    } catch (err) {
+      const c = /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "FLEET_MAIL_PROVIDER_ERROR";
+      await this.gw.commsHealth(this.worker, this.mailChannel, false, c);
+      throw new Error(c);
+    }
+    let n = 0;
+    for (const m of batch.messages) {
+      const auth = isAuthenticationMessage(m.subject, m.body);
+      const r = await this.gw.mailIngest(this.worker, this.mailChannel, { ...m, body: auth ? redactMail(m.body) : m.body }, auth);
+      if (!r.ok) throw new Error(`FLEET_MAIL_INGEST_REFUSED`);
+      if (r.replay) continue;
+      for (const d of r.deliveries ?? []) {
+        n++;
+        this.seenMail.set(`${m.providerId}:${d.agentId ?? "-"}`, d.messageId);
+        if (auth) {
+          await this.gw.authBlobStore("mail", d.messageId, this.worker, this.vault.sealAux(m.body, `authmsg:mail:${d.messageId}`));
+          const to = (d.address ?? "").toLowerCase();
+          if (to) {
+            const list = this.recentAuth.get(to) ?? [];
+            list.push({ id: d.messageId, to, from: m.from, subject: m.subject, body: m.body, at: m.at });
+            this.recentAuth.set(to, list.slice(-10));
+          }
+        }
+      }
+    }
+    if (this.o.mailCursorFile) this.writeCursor(batch.cursor);
+    else this.memCursor = batch.cursor;
+    await this.gw.commsHealth(this.worker, this.mailChannel, true, null);
+    return n;
+  }
+
+  /** v41: the provider's final price of each recent message, recorded for charging the agent. */
+  async syncSmsCosts(): Promise<number> {
+    const sms = this.o.sms;
+    if (!sms?.messagePrice) return 0;
+    let n = 0;
+    for (const x of await this.gw.smsCostsPending(this.worker)) {
+      if (x.provider !== sms.name) continue;
+      const p = await sms.messagePrice(x.providerMessageId);
+      if (!p) continue;
+      const r = await this.gw.smsCost(this.worker, x.smsId, p.priceMicro, p.currency);
+      if (r.ok) n++;
+    }
+    return n;
+  }
+
+  /**
    * Mail sync (v36): provider messages → the owning agent's mailbox, WHOLE (business mail is the agent's own); only an
    * account-authentication message has its link/code withheld (the broker uses it). Provider ids make it idempotent.
    */
   async syncMail(): Promise<number> {
     if (!this.o.mail) return 0;
+    if (this.o.mail.mode === "shared") return this.syncShared();
     let n = 0;
     for (const b of await this.gw.mailboxes(this.worker)) {
       for (const m of await this.o.mail.fetch(b.address, new Date(new Date(b.since).getTime() - 3_600_000))) {
@@ -95,7 +199,14 @@ export class IdentityBroker {
     if (!this.o.sms) return 0;
     let n = 0;
     for (const num of await this.gw.numbers(this.worker)) {
-      for (const m of await this.o.sms.fetch(num.e164, new Date(new Date(num.since).getTime() - 3_600_000))) {
+      let inbound: Awaited<ReturnType<SmsProvider["fetch"]>>;
+      try {
+        inbound = await this.o.sms.fetch(num.e164, new Date(new Date(num.since).getTime() - 3_600_000));
+      } catch (err) {
+        if (this.smsChannel) await this.gw.commsHealth(this.worker, this.smsChannel, false, /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "FLEET_SMS_PROVIDER_ERROR");
+        throw err;
+      }
+      for (const m of inbound) {
         const auth = isAuthenticationMessage("", m.body);
         const r = await this.gw.smsDeliver(this.worker, m.to, m.from, auth ? redactMail(m.body) : m.body, auth, m.id);
         if (r.ok && !r.replay) {
@@ -104,6 +215,7 @@ export class IdentityBroker {
         }
       }
     }
+    if (this.smsChannel) await this.gw.commsHealth(this.worker, this.smsChannel, true, null);
     return n;
   }
 
@@ -140,6 +252,10 @@ export class IdentityBroker {
           if (!r.vaultRef || !r.agentId || !r.accountId || !r.credentialKind) throw new Error("FLEET_BAD_REQUEST");
           sealed = await this.vault.withSecret(r.vaultRef, { agentId: r.agentId, accountId: r.accountId, kind: r.credentialKind },
             async (secret) => sealTo(pub, secret, `reveal:${r.requestId}`));
+        } else if (r.kind === "provider_secret") {
+          const v = r.secretName ? this.o.providerVault?.get(r.secretName) : null;
+          if (!v) throw new Error("FLEET_PROVIDER_SECRET_UNAVAILABLE");
+          sealed = sealTo(pub, JSON.stringify(v), `reveal:${r.requestId}`);
         } else {
           if (!this.o.ownerVault || !r.class) throw new Error("FLEET_OWNER_VAULT_UNAVAILABLE");
           const v = this.o.ownerVault.open([r.class as OwnerIdentityClass]);
@@ -260,10 +376,18 @@ export class IdentityBroker {
   /** Try to consume a verification email the platform sent to the account's mailbox. */
   private async confirmFromMail(job: IdentityJob, lease: string, c: PlatformConnector, ref: string | null, email: string | null): Promise<boolean> {
     if (!this.o.mail || !email) return false;
-    for (const m of await this.o.mail.fetch(email, new Date(Date.now() - 7 * 86_400_000))) {
+    const candidates = this.o.mail.mode === "shared"
+      ? (await this.syncShared(), [...(this.recentAuth.get(email.toLowerCase()) ?? [])])
+      : await this.o.mail.fetch(email, new Date(Date.now() - 7 * 86_400_000));
+    for (const m of candidates) {
       if (!findVerification(m.body).link && !findVerification(m.body).code) continue;
       const r = await c.confirmEmail({ providerAccountRef: ref, message: m });
       if (r.outcome === "succeeded") {
+        if (this.o.mail.mode === "shared") {
+          // m.id is the registry message id (the shared sync delivered it already).
+          await this.gw.mailConsumed(job.jobId, lease, m.id);
+          return true;
+        }
         await this.syncMail();
         const id = this.seenMail.get(m.id);
         if (id) await this.gw.mailConsumed(job.jobId, lease, id);
@@ -391,21 +515,31 @@ export class IdentityBroker {
         if (!this.o.mail) return failed("FLEET_NO_MAIL_PROVIDER");
         const m = job.message;
         if (!m) return failed("FLEET_NOT_FOUND", "the message is gone");
+        // v41: a Fleet Message-ID (known before sending, so replies thread back) and, on the shared mailbox, the agent's
+        // routing address as Reply-To.
+        const domain = (this.o.mail.address ?? m.from).split("@")[1] ?? "fleet.invalid";
+        const messageId = `<${crypto.randomUUID()}@${domain}>`;
         try {
-          const r = await this.o.mail.send({ from: m.from, to: m.to, subject: m.subject, body: m.body, inReplyTo: m.inReplyTo });
-          await this.gw.mailSent(job.jobId, lease, r.providerMessageId, true);
+          const r = await this.o.mail.send({ from: m.from, to: m.to, subject: m.subject, body: m.body, inReplyTo: m.inReplyTo,
+            replyTo: m.shared ? m.replyTo ?? null : null, messageId, references: m.references ?? null });
+          await this.gw.mailSent2(job.jobId, lease, r.providerMessageId, r.externalMessageId ?? messageId, true, null);
           return { outcome: "succeeded", result: { status: "sent", data: { messageId: m.messageId } }, account: {} };
-        } catch {
-          await this.gw.mailSent(job.jobId, lease, null, false);
+        } catch (err) {
+          const code = /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "FLEET_MAIL_SEND_FAILED";
+          await this.gw.mailSent2(job.jobId, lease, null, null, false, code);
+          if (this.mailChannel) await this.gw.commsHealth(this.worker, this.mailChannel, false, code);
           return failed("FLEET_MAIL_SEND_FAILED", "the mail provider refused or was unavailable; try again later or another channel");
         }
       }
       case "phone.provision": {
         if (!this.o.sms) return failed("FLEET_NO_SMS_PROVIDER");
         const country = String(job.params.country ?? job.number?.country ?? "");
-        const r = await this.o.sms.provision(country);
+        const max = Number(job.params.maxMonthlyMicro);
+        const r = await this.o.sms.provision(country, { numberType: (job.params.numberType as NumberType | undefined) ?? undefined,
+          phoneNumber: typeof job.params.phoneNumber === "string" ? job.params.phoneNumber : null,
+          maxMonthlyMicro: Number.isFinite(max) && max > 0 ? max : null, currency: typeof job.params.currency === "string" ? job.params.currency : null });
         if (r.outcome === "succeeded") {
-          const rec = await this.gw.phoneRecord(job.jobId, lease, r.e164, this.o.sms.name, r.providerRef, r.monthlyMinor ?? null, r.currency ?? null);
+          const rec = await this.gw.phoneRecord2(job.jobId, lease, r.e164, this.o.sms.name, r.providerRef, r.monthlyMicro ?? null, r.currency ?? null);
           return { outcome: "succeeded", result: { status: "active", data: { e164: r.e164, commitmentId: rec.commitmentId ?? null } }, account: {} };
         }
         if (r.outcome === "human_action_required") {
@@ -414,6 +548,15 @@ export class IdentityBroker {
         }
         await this.gw.phoneStatus(job.jobId, lease, "failed", r.note ?? r.code);
         return failed(r.code, r.note);
+      }
+      case "phone.quote": {
+        if (!this.o.sms) return failed("FLEET_NO_SMS_PROVIDER");
+        const types = (Array.isArray(job.params.numberTypes) ? job.params.numberTypes : ["mobile", "local"]) as NumberType[];
+        const q = this.o.sms.quote ? await this.o.sms.quote(String(job.params.country ?? ""), types) : { error: "quote_unsupported" };
+        const rec = await this.gw.phoneQuoteRecord(job.jobId, lease, q as Record<string, unknown>);
+        if (!rec.ok) return failed(String(rec.code));
+        return "error" in q ? failed(q.error, "no quote: try another country or number type")
+          : { outcome: "succeeded", result: { status: "quoted", data: { quoteId: job.params.quoteId } }, account: {} };
       }
       case "phone.release": {
         if (!this.o.sms) return failed("FLEET_NO_SMS_PROVIDER");
@@ -484,6 +627,7 @@ export class IdentityBroker {
   /** One pass: sync mail, re-check pending jobs, then process queued jobs (up to `max`). */
   async tick(max = 10): Promise<{ processed: number; outcomes: string[] }> {
     const outcomes: string[] = [];
+    if (!this.registered) await this.pass("comms_register", () => this.registerProviders());
     if (!this.keyPublished && this.o.ownerVault) {
       const r = await this.gw.publishOwnerKey(this.worker, this.o.ownerVault.publicKeyBase64());
       this.keyPublished = r.ok;
@@ -491,6 +635,7 @@ export class IdentityBroker {
     // Each pass is isolated: one failing pass (a provider outage, a bad row) never stops the others.
     await this.pass("mail_sync", () => this.syncMail());
     await this.pass("sms_sync", () => this.syncSms());
+    await this.pass("sms_costs", () => this.syncSmsCosts());
     await this.pass("vault_uploads", () => this.installVaultUploads());
     await this.pass("reveals", () => this.serveReveals());
     await this.pass("browser_secrets", () => this.serveBrowserSecrets());

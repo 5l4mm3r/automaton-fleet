@@ -13,15 +13,25 @@
  * is visible; the state directory, keys or vaults are not private; the login is the schema owner, a superuser or a
  * member of anything but fleet_identity; the schema is not this release's.
  *
- * Provider adapters (v36), each optional and swappable — absent, its jobs fail with a clear code (FLEET_NO_MAIL_PROVIDER,
- * FLEET_NO_SMS_PROVIDER, FLEET_NO_CONNECTOR) and nothing else is affected:
- *   FLEET_MAIL_PROVIDER=mailgun   FLEET_MAIL_DOMAIN=<fleet mail domain>   [FLEET_MAIL_API_BASE=https://api.eu.mailgun.net]
- *                                 key: <state>/mail.key (0600/0400)        [FLEET_NOTIFY_FROM=fleet@<domain>: Admin email]
- *   FLEET_SMS_PROVIDER=twilio     credentials: <state>/sms.json {"accountSid","authToken"} (0600/0400)
+ * Provider adapters — DORMANT by default (owner decision 2026-10-02: no paid communications infrastructure until a real
+ * operating need justifies it). Unset = NOT CONFIGURED: the broker registers nothing, agents asking for mail / SMS get an
+ * action-scoped capability dependency, and everything else is unaffected. Each is optional and swappable:
+ *   FLEET_MAIL_PROVIDER=proton-bridge   (v41, the preferred initial provider) ONE shared Fleet mailbox through Proton Mail
+ *                                 Bridge on loopback: FLEET_MAIL_ADDRESS=<the Proton address>
+ *                                 [FLEET_MAIL_BRIDGE_HOST=127.0.0.1 FLEET_MAIL_BRIDGE_IMAP_PORT=1143 FLEET_MAIL_BRIDGE_SMTP_PORT=1025
+ *                                  FLEET_MAIL_BRIDGE_SECURITY=starttls|ssl]; secret "proton-bridge" {username, password, certPem}
+ *   FLEET_MAIL_PROVIDER=mailgun   (optional / future) FLEET_MAIL_DOMAIN=<fleet mail domain> [FLEET_MAIL_API_BASE=…];
+ *                                 secret "mailgun" {apiKey} (or the legacy <state>/mail.key)
+ *   FLEET_SMS_PROVIDER=twilio     (v41, the preferred initial provider) secret "twilio" {accountSid, apiKeySid, apiKeySecret}
+ *                                 (scoped API key, preferred) or {accountSid, authToken} (or the legacy <state>/sms.json)
+ *   [FLEET_NOTIFY_FROM=<an address of the configured mail provider>: Admin notification email]
+ * Provider secrets live encrypted in <state>/provider-vault (installed with `provider-secret-set <name>` from stdin).
  * Platform connectors: none yet (accounts on specific platforms use the general browser operator when it lands).
  * Personas, brands and venture identities need no broker at all.
  *
- * Subcommands: `init` (keys and vault directories), `mail-setup` (the one-time catch-all inbound route at the provider).
+ * Subcommands: `init` (keys and vault directories), `mail-setup` (Mailgun's one-time catch-all inbound route),
+ * `provider-secret-set <name>` (a JSON object on stdin), `provider-secret-list` (names and fingerprints only),
+ * `provider-secret-remove <name>`, `comms-check` (connect to each configured provider; no message is sent).
  */
 import crypto from "crypto";
 import fs from "fs";
@@ -37,7 +47,9 @@ import { generateX25519 } from "./crypto.js";
 import { PgIdentityGateway } from "./gateway.js";
 import { AgentCredentialVault, OwnerIdentityVault, privateDirProblems } from "./vaults.js";
 import { MailgunMailProvider } from "./adapters/mailgun.js";
+import { ProtonBridgeMailProvider } from "./adapters/proton-bridge.js";
 import { TwilioSmsProvider } from "./adapters/twilio.js";
+import { ProviderSecretVault } from "./vaults.js";
 import type { MailProvider, SmsProvider } from "./providers.js";
 
 const FORBIDDEN = [...CUSTODY_FORBIDDEN_ENV, "FLEET_CUSTODY_DATABASE_URL"];
@@ -58,39 +70,73 @@ export function identityEnvProblems(e: Record<string, string | undefined>, opts:
     for (const f of ["agent.key", "owner.key"]) problems.push(...vaultFileProblems(path.join(dir, f), uid));
     for (const d of ["agent-vault", "owner-vault"]) problems.push(...privateDirProblems(path.join(dir, d), uid));
     if (!fs.existsSync(path.join(dir, "owner.pub"))) problems.push(`${path.join(dir, "owner.pub")}: missing`);
+    const pv = path.join(dir, "provider-vault");
+    const hasVault = fs.existsSync(pv);
+    if (hasVault) problems.push(...privateDirProblems(pv, uid));
+    const has = (name: string) => hasVault && fs.existsSync(path.join(pv, `${name}.bin`));
     const mp = e.FLEET_MAIL_PROVIDER?.trim();
-    if (mp && mp !== "mailgun") problems.push("FLEET_MAIL_PROVIDER is mailgun or unset");
-    if (mp) {
+    if (mp && mp !== "mailgun" && mp !== "proton-bridge") problems.push("FLEET_MAIL_PROVIDER is proton-bridge, mailgun or unset");
+    if (mp === "mailgun") {
       if (!/^[a-z0-9.-]{3,190}$/.test(e.FLEET_MAIL_DOMAIN?.trim() ?? "")) problems.push("FLEET_MAIL_DOMAIN (a lowercase DNS name) is required with a mail provider");
-      problems.push(...vaultFileProblems(path.join(dir, "mail.key"), uid));
+      if (!has("mailgun")) problems.push(...vaultFileProblems(path.join(dir, "mail.key"), uid));
+    }
+    if (mp === "proton-bridge") {
+      if (!/^[a-z0-9._-]{1,64}@[a-z0-9.-]{3,190}$/.test(e.FLEET_MAIL_ADDRESS?.trim() ?? "")) problems.push("FLEET_MAIL_ADDRESS (the shared Proton address, lowercase) is required with proton-bridge");
+      if (!["127.0.0.1", "::1", "localhost"].includes(e.FLEET_MAIL_BRIDGE_HOST?.trim() || "127.0.0.1")) problems.push("FLEET_MAIL_BRIDGE_HOST must be loopback (Bridge is never exposed)");
+      if (e.FLEET_MAIL_BRIDGE_SECURITY && !["starttls", "ssl"].includes(e.FLEET_MAIL_BRIDGE_SECURITY.trim())) problems.push("FLEET_MAIL_BRIDGE_SECURITY is starttls or ssl");
+      if (!has("proton-bridge")) problems.push("provider secret proton-bridge is not installed (provider-secret-set proton-bridge)");
     }
     const sp = e.FLEET_SMS_PROVIDER?.trim();
     if (sp && sp !== "twilio") problems.push("FLEET_SMS_PROVIDER is twilio or unset");
-    if (sp) problems.push(...vaultFileProblems(path.join(dir, "sms.json"), uid));
-    if (e.FLEET_NOTIFY_FROM && !e.FLEET_NOTIFY_FROM.trim().endsWith(`@${e.FLEET_MAIL_DOMAIN?.trim()}`)) problems.push("FLEET_NOTIFY_FROM must be an address on FLEET_MAIL_DOMAIN");
+    if (sp && !has("twilio")) problems.push(...vaultFileProblems(path.join(dir, "sms.json"), uid));
+    const notify = e.FLEET_NOTIFY_FROM?.trim();
+    if (notify && mp === "proton-bridge" && notify !== e.FLEET_MAIL_ADDRESS?.trim()) problems.push("FLEET_NOTIFY_FROM must be the shared address FLEET_MAIL_ADDRESS");
+    if (notify && mp !== "proton-bridge" && !notify.endsWith(`@${e.FLEET_MAIL_DOMAIN?.trim()}`)) problems.push("FLEET_NOTIFY_FROM must be an address on FLEET_MAIL_DOMAIN");
   }
   return problems;
 }
 
-/** v36: the configured provider adapters (secrets read from the broker's private state directory only). */
+/** v41: the broker's provider-secret vault (a key derived from its vault key for this purpose only). */
+export function openProviderVault(dir: string): ProviderSecretVault {
+  const key = Buffer.from(fs.readFileSync(path.join(dir, "agent.key"), "utf8").trim(), "base64");
+  return new ProviderSecretVault(path.join(dir, "provider-vault"), key);
+}
+
+/**
+ * The configured provider adapters (secrets from the broker's encrypted provider vault, or the legacy files). None
+ * configured = NOT CONFIGURED (the default): nothing is contacted, nothing is paid for.
+ */
 export function openProviders(e: Record<string, string | undefined>, dir: string): { mail: MailProvider | null; sms: SmsProvider | null; mailgun: MailgunMailProvider | null } {
+  const vault = fs.existsSync(path.join(dir, "provider-vault")) ? openProviderVault(dir) : null;
+  const secret = (name: string) => vault?.get(name) ?? null;
   let mailgun: MailgunMailProvider | null = null;
-  if (e.FLEET_MAIL_PROVIDER?.trim() === "mailgun") {
-    mailgun = new MailgunMailProvider({ domain: e.FLEET_MAIL_DOMAIN!.trim(), apiKey: fs.readFileSync(path.join(dir, "mail.key"), "utf8").trim(),
-      apiBase: e.FLEET_MAIL_API_BASE?.trim() || undefined });
+  let mail: MailProvider | null = null;
+  const mp = e.FLEET_MAIL_PROVIDER?.trim();
+  if (mp === "mailgun") {
+    const apiKey = secret("mailgun")?.apiKey ?? fs.readFileSync(path.join(dir, "mail.key"), "utf8").trim();
+    mail = mailgun = new MailgunMailProvider({ domain: e.FLEET_MAIL_DOMAIN!.trim(), apiKey, apiBase: e.FLEET_MAIL_API_BASE?.trim() || undefined });
+  } else if (mp === "proton-bridge") {
+    const s = secret("proton-bridge");
+    if (!s?.username || !s.password || !s.certPem) throw new Error("provider secret proton-bridge needs username, password and certPem");
+    const port = (v: string | undefined, d: number) => (v && /^\d{2,5}$/.test(v.trim()) ? Number(v.trim()) : d);
+    mail = new ProtonBridgeMailProvider({ address: e.FLEET_MAIL_ADDRESS!.trim(), username: s.username, password: s.password, certPem: s.certPem,
+      host: e.FLEET_MAIL_BRIDGE_HOST?.trim() || "127.0.0.1", imapPort: port(e.FLEET_MAIL_BRIDGE_IMAP_PORT, 1143), smtpPort: port(e.FLEET_MAIL_BRIDGE_SMTP_PORT, 1025),
+      security: e.FLEET_MAIL_BRIDGE_SECURITY?.trim() === "ssl" ? "ssl" : "starttls" });
   }
   let sms: SmsProvider | null = null;
   if (e.FLEET_SMS_PROVIDER?.trim() === "twilio") {
-    const c = JSON.parse(fs.readFileSync(path.join(dir, "sms.json"), "utf8")) as { accountSid?: string; authToken?: string };
-    sms = new TwilioSmsProvider({ accountSid: String(c.accountSid ?? ""), authToken: String(c.authToken ?? "") });
+    const c = secret("twilio") ?? (JSON.parse(fs.readFileSync(path.join(dir, "sms.json"), "utf8")) as Record<string, string>);
+    sms = c.apiKeySid
+      ? new TwilioSmsProvider({ accountSid: String(c.accountSid ?? ""), apiKeySid: String(c.apiKeySid), apiKeySecret: String(c.apiKeySecret ?? "") })
+      : new TwilioSmsProvider({ accountSid: String(c.accountSid ?? ""), authToken: String(c.authToken ?? "") });
   }
-  return { mail: mailgun, sms, mailgun };
+  return { mail, sms, mailgun };
 }
 
 /** One-time provisioning of the broker's keys and vault directories (run as the broker's user). */
 export function initIdentityState(dir: string): { ownerPublicKeyBase64: string } {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  for (const d of ["agent-vault", "owner-vault"]) fs.mkdirSync(path.join(dir, d), { recursive: true, mode: 0o700 });
+  for (const d of ["agent-vault", "owner-vault", "provider-vault"]) fs.mkdirSync(path.join(dir, d), { recursive: true, mode: 0o700 });
   const agentKey = path.join(dir, "agent.key");
   if (!fs.existsSync(agentKey)) fs.writeFileSync(agentKey, crypto.randomBytes(32).toString("base64"), { mode: 0o600, flag: "wx" });
   if (!fs.existsSync(path.join(dir, "owner.key"))) {
@@ -123,12 +169,15 @@ export async function startIdentityBroker(e: Record<string, string | undefined>,
   const dir = e.FLEET_IDENTITY_STATE_DIR!.trim();
   const { vault, ownerVault } = openIdentityState(dir);
   const providers = openProviders(e, dir);
-  const broker = new IdentityBroker(gw, vault, { mail: providers.mail, sms: providers.sms, notifyFrom: e.FLEET_NOTIFY_FROM?.trim() || null,
-    connectors: [], ownerVault, stateFile: path.join(dir, "pending.json"), log: (level, event, detail) => log(level as never, event, detail) });
+  const broker = new IdentityBroker(gw, vault, { mail: providers.mail, sms: providers.sms,
+    notifyFrom: e.FLEET_NOTIFY_FROM?.trim() || (providers.mail?.mode === "shared" ? providers.mail.address ?? null : null),
+    connectors: [], ownerVault, stateFile: path.join(dir, "pending.json"), mailCursorFile: path.join(dir, "mail-cursor.json"),
+    providerVault: fs.existsSync(path.join(dir, "provider-vault")) ? openProviderVault(dir) : null,
+    log: (level, event, detail) => log(level as never, event, detail) });
   const timer = setInterval(() => void broker.tick().catch((err) => log("error", "identity_tick_failed",
     { error: redactText(err instanceof Error ? err.message : String(err)) })), Math.max(5_000, opts.pollMs ?? 15_000));
-  log("info", "identity_broker_started", { schemaVersion: FLEET_PG_SCHEMA_VERSION, connectors: [], mail: providers.mail?.name ?? null,
-    sms: providers.sms?.name ?? null, notifyFrom: Boolean(e.FLEET_NOTIFY_FROM) });
+  log("info", "identity_broker_started", { schemaVersion: FLEET_PG_SCHEMA_VERSION, connectors: [], mail: providers.mail?.name ?? "NOT_CONFIGURED",
+    sms: providers.sms?.name ?? "NOT_CONFIGURED", notifyFrom: Boolean(e.FLEET_NOTIFY_FROM) });
   return { broker, close: async () => { clearInterval(timer); await gw.close(); } };
 }
 
@@ -145,6 +194,39 @@ if (process.argv[1] && /fleet[\\/]identity[\\/]main\.(ts|js)$/.test(process.argv
     if (!p.mailgun) { log("fatal", "mail_setup_failed", { error: "FLEET_MAIL_PROVIDER=mailgun is not configured" }); process.exit(2); }
     p.mailgun.ensureInboundRoute().then((r) => console.log(JSON.stringify({ ok: true, ...r })),
       (err) => { log("fatal", "mail_setup_failed", { error: redactText(err instanceof Error ? err.message : String(err)) }); process.exit(1); });
+  } else if (process.argv[2] === "provider-secret-set" || process.argv[2] === "provider-secret-list" || process.argv[2] === "provider-secret-remove") {
+    // Run as the broker's own user. The value is read from stdin (never an argument, never echoed, never logged).
+    const dir = process.env.FLEET_IDENTITY_STATE_DIR?.trim() ?? "";
+    try {
+      const v = openProviderVault(dir);
+      if (process.argv[2] === "provider-secret-list") {
+        console.log(JSON.stringify({ ok: true, secrets: v.list() }));
+      } else if (process.argv[2] === "provider-secret-remove") {
+        console.log(JSON.stringify({ ok: v.remove(process.argv[3] ?? "") }));
+      } else {
+        const name = process.argv[3] ?? "";
+        const raw = fs.readFileSync(0, "utf8");
+        let obj: Record<string, string>;
+        try { obj = JSON.parse(raw) as Record<string, string>; } catch { throw new Error("stdin must be one JSON object of string fields"); }
+        const r = v.put(name, obj);
+        console.log(JSON.stringify({ ok: true, name, fields: r.fields, fingerprint: r.fingerprint }));
+      }
+    } catch (err) {
+      log("fatal", "provider_secret_failed", { error: (err instanceof Error ? err.message : String(err)).slice(0, 200) });
+      process.exit(1);
+    }
+  } else if (process.argv[2] === "comms-check") {
+    // Connect to each configured provider (no message is sent, nothing is bought). Codes only.
+    const dir = process.env.FLEET_IDENTITY_STATE_DIR?.trim() ?? "";
+    (async () => {
+      const p = openProviders(process.env, dir);
+      const out: Record<string, string> = { mail: p.mail ? "configured" : "NOT_CONFIGURED", sms: p.sms ? "configured" : "NOT_CONFIGURED" };
+      for (const [k, x] of [["mail", p.mail], ["sms", p.sms]] as const) {
+        if (!x?.health) continue;
+        try { await x.health(); out[k] = "ok"; } catch (err) { out[k] = /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "error"; }
+      }
+      console.log(JSON.stringify({ ok: true, ...out }));
+    })().catch((err) => { log("fatal", "comms_check_failed", { error: redactText(err instanceof Error ? err.message : String(err)) }); process.exit(1); });
   } else {
     startIdentityBroker(process.env).catch((err) => {
       log("fatal", "startup_failed", { error: err instanceof Error ? err.message : String(err) });

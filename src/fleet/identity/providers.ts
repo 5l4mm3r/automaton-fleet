@@ -18,12 +18,49 @@ export interface MailMessage {
 
 export interface MailProvider {
   readonly name: string;
-  /** Provision an address (a mailbox or alias) for an agent; idempotent per local part. */
+  /**
+   * v41: "shared" = ONE Fleet-controlled external mailbox (agents hold internal routing addresses on it and the registry
+   * attributes every message); "dedicated" (default) = an address per agent at the provider.
+   */
+  readonly mode?: "shared" | "dedicated";
+  /** v41 (shared): the shared mailbox's own address — the From of all outgoing mail. */
+  readonly address?: string;
+  /** Provision an address (a mailbox or alias) for an agent; idempotent per local part. (Dedicated providers.) */
   provision(localPart: string | null, hint: string): Promise<{ address: string }>;
-  /** Messages for an address since a time (provider order). */
+  /** Messages for an address since a time (provider order). (Dedicated providers.) */
   fetch(address: string, since: Date): Promise<MailMessage[]>;
-  /** v36: send from one of the Fleet's addresses. */
-  send(input: { from: string; to: string[]; subject: string; body: string; inReplyTo?: string | null }): Promise<{ providerMessageId: string }>;
+  /** v36: send from one of the Fleet's addresses. v41: Reply-To, a Fleet Message-ID and the conversation's references. */
+  send(input: OutgoingMail): Promise<{ providerMessageId: string; externalMessageId?: string }>;
+  /** v41 (shared): inbound messages after an opaque cursor (null: the last 7 days); returns the next cursor. */
+  fetchShared?(cursor: string | null): Promise<{ messages: SharedMailMessage[]; cursor: string | null }>;
+  /** v41: a connectivity check for the health view (throws a FLEET_MAIL_PROVIDER_* code). */
+  health?(): Promise<void>;
+}
+
+export interface OutgoingMail {
+  from: string;
+  to: string[];
+  subject: string;
+  body: string;
+  inReplyTo?: string | null;
+  replyTo?: string | null;
+  messageId?: string | null;
+  references?: string[] | null;
+}
+
+/** v41: one inbound message of a shared mailbox (the registry attributes it). */
+export interface SharedMailMessage {
+  /** Stable per mailbox (e.g. imap:<uidvalidity>:<uid>): makes ingestion idempotent. */
+  providerId: string;
+  messageId: string | null;
+  inReplyTo: string | null;
+  references: string[];
+  from: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+  body: string;
+  at: string;
 }
 
 export interface SmsMessage {
@@ -34,18 +71,37 @@ export interface SmsMessage {
   at: string;
 }
 
+export type NumberType = "mobile" | "local" | "toll_free" | "national";
+
 export type NumberOutcome =
-  | { outcome: "succeeded"; e164: string; providerRef: string; monthlyMinor?: number; currency?: string }
+  | { outcome: "succeeded"; e164: string; providerRef: string; numberType?: NumberType; monthlyMicro?: number; currency?: string }
   | { outcome: "failed"; code: string; note?: string }
   | { outcome: "human_action_required"; code: string; note: string };
+
+/** v41: a live quote — what numbers exist now, what they cost per month, what messages cost, what regulation needs. */
+export type NumberQuote =
+  | { provider: string; currency: string;
+      options: Array<{ numberType: NumberType; monthlyMicro: number | null; available: Array<{ e164: string; locality?: string; region?: string }>;
+        smsCapable: boolean; voiceCapable?: boolean }>;
+      /** Per-message prices in micro-units of `currency`, keyed outbound_<type> / inbound_<type>. */
+      messaging: Record<string, number>;
+      regulation?: Record<string, unknown> }
+  | { error: string };
 
 /** v36: legitimate programmable numbers and SMS behind a swappable adapter (the constitution names no provider). */
 export interface SmsProvider {
   readonly name: string;
-  provision(country: string): Promise<NumberOutcome>;
+  /** v41: live availability and prices (the agent decides with them). */
+  quote?(country: string, types: NumberType[]): Promise<NumberQuote>;
+  /** Buy a number; v41: of a type, preferably a quoted one, never above the agent's ceiling (micro-units of `currency`). */
+  provision(country: string, opts?: { numberType?: NumberType; phoneNumber?: string | null; maxMonthlyMicro?: number | null; currency?: string | null }): Promise<NumberOutcome>;
   release(providerRef: string): Promise<{ ok: boolean; code?: string }>;
   send(input: { from: string; to: string; body: string }): Promise<{ providerMessageId: string }>;
   fetch(e164: string, since: Date): Promise<SmsMessage[]>;
+  /** v41: the provider's final price of a message (null while not yet priced). */
+  messagePrice?(providerMessageId: string): Promise<{ priceMicro: number; currency: string } | null>;
+  /** v41: a connectivity check for the health view. */
+  health?(): Promise<void>;
 }
 
 export type AccountOutcome =
@@ -262,24 +318,48 @@ export class SimulatedPlatform implements PlatformConnector {
 }
 
 
-/** A simulated SMS provider: numbers per country, inbound injection, an outbox; "XR" needs a regulatory bundle (human). */
+/**
+ * A simulated SMS provider: numbers per country, inbound injection, an outbox; "XR" needs a regulatory bundle (human).
+ * v41: live-style quotes (monthly rental per type, per-message prices) and message prices.
+ */
 export class SimulatedSmsProvider implements SmsProvider {
   readonly name = "sim-sms";
-  readonly numbers = new Map<string, { e164: string; country: string; released: boolean }>();
+  readonly numbers = new Map<string, { e164: string; country: string; released: boolean; numberType: NumberType }>();
   readonly outbox: Array<{ from: string; to: string; body: string; providerMessageId: string }> = [];
   private readonly inbound = new Map<string, SmsMessage[]>();
   private next = 7_700_900_100;
-  constructor(private readonly o: { monthlyMinor?: number; currency?: string; down?: boolean } = {}) {}
+  /** Simulation hook: change the live monthly price (micro-units) to test the agent's ceiling. */
+  monthlyMicro: number;
+  constructor(private readonly o: { monthlyMinor?: number; currency?: string; down?: boolean; perMessageMicro?: number } = {}) {
+    this.monthlyMicro = (o.monthlyMinor ?? 115) * 10_000;
+  }
 
-  async provision(country: string): Promise<NumberOutcome> {
+  async quote(country: string, types: NumberType[]): Promise<NumberQuote> {
+    if (this.o.down) return { error: "provider_unavailable" };
+    if (country === "XX") return { error: "no_numbers_available" };
+    const per = this.o.perMessageMicro ?? 7_900;
+    return {
+      provider: this.name, currency: this.o.currency ?? "USD",
+      options: types.map((t, i) => ({ numberType: t, monthlyMicro: this.monthlyMicro + i * 10_000, smsCapable: true, voiceCapable: true,
+        available: [{ e164: `+44${this.next + 1000 + i}`, locality: "Simulated" }] })),
+      messaging: Object.fromEntries(types.flatMap((t) => [[`outbound_${t}`, per], [`inbound_${t}`, per]])),
+      regulation: country === "XR" ? { requires: ["address", "identity_document"], note: "an approved regulatory bundle for the account holder" } : undefined,
+    };
+  }
+
+  async provision(country: string, opts: { numberType?: NumberType; phoneNumber?: string | null; maxMonthlyMicro?: number | null; currency?: string | null } = {}): Promise<NumberOutcome> {
     if (this.o.down) return { outcome: "failed", code: "provider_unavailable", note: "SMS provider unavailable" };
     if (country === "XR") return { outcome: "human_action_required", code: "regulatory_bundle_required", note: "numbers in this country need an address/identity bundle approved for the account holder" };
     if (country === "XX") return { outcome: "failed", code: "no_numbers_available", note: "no numbers available in that country" };
+    if (opts.maxMonthlyMicro != null && this.monthlyMicro > opts.maxMonthlyMicro) {
+      return { outcome: "failed", code: "price_above_ceiling", note: "the current monthly price is above your ceiling; request a fresh quote" };
+    }
     const e164 = `+44${this.next++}`;
-    const providerRef = `PN${crypto.randomBytes(8).toString("hex")}`;
-    this.numbers.set(providerRef, { e164, country, released: false });
+    const providerRef = `PN${crypto.randomBytes(16).toString("hex")}`;
+    const numberType = opts.numberType ?? "mobile";
+    this.numbers.set(providerRef, { e164, country, released: false, numberType });
     this.inbound.set(e164, []);
-    return { outcome: "succeeded", e164, providerRef, monthlyMinor: this.o.monthlyMinor ?? 115, currency: this.o.currency ?? "USD" };
+    return { outcome: "succeeded", e164, providerRef, numberType, monthlyMicro: this.monthlyMicro, currency: this.o.currency ?? "USD" };
   }
   async release(providerRef: string) {
     const n = this.numbers.get(providerRef);
@@ -295,6 +375,9 @@ export class SimulatedSmsProvider implements SmsProvider {
   async fetch(e164: string, since: Date): Promise<SmsMessage[]> {
     return (this.inbound.get(e164) ?? []).filter((m) => new Date(m.at) >= since);
   }
+  async messagePrice(_providerMessageId: string) {
+    return { priceMicro: this.o.perMessageMicro ?? 7_900, currency: this.o.currency ?? "USD" };
+  }
   /** Simulation hook: someone texts a number. */
   deliver(to: string, from: string, body: string): SmsMessage {
     const box = this.inbound.get(to);
@@ -302,5 +385,59 @@ export class SimulatedSmsProvider implements SmsProvider {
     const m = { id: `SM${crypto.randomBytes(8).toString("hex")}`, to, from, body, at: new Date().toISOString() };
     box.push(m);
     return m;
+  }
+}
+
+/**
+ * v41: a simulated SHARED mailbox (the Proton-Bridge shape without a network): one address, every routing tag of it
+ * delivering into the same inbox, an outbox that records Reply-To / Message-ID / threading, and a cursor.
+ */
+export class SimulatedSharedMailProvider implements MailProvider {
+  readonly name = "sim-shared-mail";
+  readonly mode = "shared" as const;
+  readonly inbox: SharedMailMessage[] = [];
+  readonly outbox: Array<OutgoingMail & { providerMessageId: string; externalMessageId: string }> = [];
+  down = false;
+  constructor(readonly address = "fleet@shared.fleet-mail.test") {}
+
+  private ours(addr: string): boolean {
+    const [l, d] = addr.toLowerCase().split("@");
+    const [bl, bd] = this.address.split("@");
+    return d === bd && (l === bl || l.startsWith(`${bl}+`));
+  }
+
+  async provision(): Promise<{ address: string }> {
+    throw new Error("FLEET_BAD_REQUEST: a shared mailbox's routing addresses are created by the registry");
+  }
+  async fetch(): Promise<MailMessage[]> {
+    return [];
+  }
+  async send(input: OutgoingMail): Promise<{ providerMessageId: string; externalMessageId: string }> {
+    if (this.down) throw new Error("FLEET_MAIL_PROVIDER_CONNECT");
+    if (input.from.toLowerCase() !== this.address) throw new Error("FLEET_MAIL_FOREIGN_SENDER");
+    const externalMessageId = input.messageId ?? `<${crypto.randomUUID()}@${this.address.split("@")[1]}>`;
+    this.outbox.push({ ...input, providerMessageId: externalMessageId, externalMessageId });
+    // Mail to the shared mailbox itself (an agent writing to another agent's routing address) lands in the inbox.
+    const local = input.to.filter((t) => this.ours(t));
+    if (local.length) this.deliver({ from: input.from, to: local, subject: input.subject, body: input.body, messageId: externalMessageId,
+      inReplyTo: input.inReplyTo ?? null, references: input.references ?? [] });
+    return { providerMessageId: externalMessageId, externalMessageId };
+  }
+  async fetchShared(cursor: string | null): Promise<{ messages: SharedMailMessage[]; cursor: string | null }> {
+    if (this.down) throw new Error("FLEET_MAIL_PROVIDER_CONNECT");
+    const from = cursor ? Number(cursor) : 0;
+    return { messages: this.inbox.slice(from), cursor: String(this.inbox.length) };
+  }
+  async health(): Promise<void> {
+    if (this.down) throw new Error("FLEET_MAIL_PROVIDER_CONNECT");
+  }
+  /** Simulation hook: someone emails the shared mailbox (or one of its routing addresses). */
+  deliver(m: { from: string; to: string[]; cc?: string[]; subject: string; body: string; messageId?: string | null; inReplyTo?: string | null;
+    references?: string[] }): SharedMailMessage {
+    const msg: SharedMailMessage = { providerId: `sim:${this.inbox.length + 1}`, messageId: m.messageId ?? `<${crypto.randomUUID()}@sender.example>`,
+      inReplyTo: m.inReplyTo ?? null, references: m.references ?? [], from: m.from, to: m.to, cc: m.cc ?? [], subject: m.subject, body: m.body,
+      at: new Date().toISOString() };
+    this.inbox.push(msg);
+    return msg;
   }
 }

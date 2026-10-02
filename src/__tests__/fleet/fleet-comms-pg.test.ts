@@ -61,6 +61,7 @@ describe.skipIf(!PG_BIN)("v36 business mail, SMS, Admin reveal and owner vault u
     initIdentityState(dir);
     gw = new PgIdentityGateway({ connectionString: R.pgc.identityUrl });
     broker = newBroker();
+    await broker.registerProviders(); // v41: the broker registers its providers (none = NOT CONFIGURED)
     await R.store.grantServiceRole();
     svc = new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 2 });
     agentDb = new pg.Pool({ connectionString: R.pgc.agentUrl, max: 1 });
@@ -105,7 +106,16 @@ describe.skipIf(!PG_BIN)("v36 business mail, SMS, Admin reveal and owner vault u
 
   it("phones and SMS: a number becomes the agent's own commitment; texts both ways; release stops the cost; a bundle-gated country blocks one number only", async () => {
     await R.q(`SELECT fleet.fleet_fx_insert('USD', 'GBP', 790000, 'test rate', NULL, NULL, (now() AT TIME ZONE 'UTC')::date, 'operator:owner', false)`);
-    const p = await ok(R.econ(A, "phone.provision", { country: "GB", purpose: "customer support line", idempotencyKey: idem() }));
+    // v41: price first (a live quote), then provision under the agent's own ceiling.
+    const quoteFor = async (country: string) => {
+      const q = await ok(R.econ(A, "phone.quote", { country, purpose: "customer support line", idempotencyKey: idem() }));
+      await broker.tick();
+      return (await ok(R.econ(A, "phone.quote", { quoteId: q.quoteId }))).quote;
+    };
+    const quote = await quoteFor("GB");
+    expect(quote.options.find((o: any) => o.numberType === "mobile")).toMatchObject({ monthlyMinor: 91, monthlyProvider: "1.15 USD" });
+    const p = await ok(R.econ(A, "phone.provision", { quoteId: quote.quoteId, numberType: "mobile", maxMonthlyMinor: 100, purpose: "customer support line",
+      idempotencyKey: idem() }));
     await broker.tick();
     const nums = (await ok(R.econ(A, "phone.list"))).numbers;
     const num = nums.find((n: any) => n.numberId === p.numberId);
@@ -127,7 +137,8 @@ describe.skipIf(!PG_BIN)("v36 business mail, SMS, Admin reveal and owner vault u
     expect((await ok(R.econ(A, "phone.list"))).numbers.find((n: any) => n.numberId === p.numberId).status).toBe("released");
     expect((await R.q(`SELECT status FROM fleet.fleet_agent_commitments WHERE commitment_id = $1`, [num.commitmentId]))[0].status).toBe("cancelled");
     // A country whose numbers need an account-holder bundle: that number only waits; Admin is told (IDENTITY).
-    const x = await ok(R.econ(A, "phone.provision", { country: "XR", purpose: "regional line", idempotencyKey: idem() }));
+    const xq = await quoteFor("XR");
+    const x = await ok(R.econ(A, "phone.provision", { quoteId: xq.quoteId, numberType: "mobile", maxMonthlyMinor: 100, purpose: "regional line", idempotencyKey: idem() }));
     await broker.tick();
     expect((await ok(R.econ(A, "phone.list"))).numbers.find((n: any) => n.numberId === x.numberId).status).toBe("human_action_required");
     await svc.query(`SELECT fleet.svc_notify_tick()`);

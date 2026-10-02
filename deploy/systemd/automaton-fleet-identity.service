@@ -9,7 +9,9 @@
 #
 # Network (v36): outbound to the configured providers' public HTTPS APIs (mail, numbers/SMS) plus loopback PostgreSQL.
 # Private, link-local and metadata ranges are denied (no SSRF into the host or the provider's internal network). No
-# listener, no inbound webhook: the broker polls. Provider credentials: mail.key / sms.json in the 0700 state directory.
+# listener, no inbound webhook: the broker polls. v41: Proton Mail Bridge is reached on LOOPBACK only (IPAddressAllow=localhost).
+# Provider credentials: encrypted in <state>/provider-vault (main.js provider-secret-set <name>, from stdin).
+# Communications are DORMANT unless identity.env names a provider (owner decision 2026-10-02): no mailbox, no number.
 
 [Unit]
 Description=Automaton Fleet identity broker (agent account credentials and owner identity vault; no listener)
@@ -29,8 +31,10 @@ EnvironmentFile=/etc/automaton-fleet/identity.env
 Environment=NODE_ENV=production
 Environment=FLEET_IDENTITY_EXPECTED_USER=automaton-fleet-identity
 Environment=FLEET_IDENTITY_STATE_DIR=/var/lib/automaton-fleet-identity
-# Providers (set in identity.env when the owner has the accounts): FLEET_MAIL_PROVIDER=mailgun FLEET_MAIL_DOMAIN=…
-# [FLEET_MAIL_API_BASE=https://api.eu.mailgun.net] FLEET_NOTIFY_FROM=fleet@… FLEET_SMS_PROVIDER=twilio
+# Providers (only when the owner activates them; unset = NOT CONFIGURED):
+#   FLEET_MAIL_PROVIDER=proton-bridge FLEET_MAIL_ADDRESS=<shared Proton address>  (deploy/proposed/proton-bridge/README.md)
+#   FLEET_SMS_PROVIDER=twilio                                                      (secret "twilio": a scoped API key)
+#   optional/future: FLEET_MAIL_PROVIDER=mailgun FLEET_MAIL_DOMAIN=… [FLEET_MAIL_API_BASE=https://api.eu.mailgun.net]
 StateDirectory=automaton-fleet-identity
 StateDirectoryMode=0700
 UMask=0077
@@ -71,7 +75,7 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key
-InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-witness -/var/lib/private/automaton-founders -/var/log/automaton-fleet -/run/credentials
+InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-witness -/var/lib/private/automaton-founders -/var/log/automaton-fleet -/run/credentials -/var/lib/automaton-fleet-mailbridge
 
 [Install]
 WantedBy=multi-user.target

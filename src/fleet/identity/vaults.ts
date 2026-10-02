@@ -164,3 +164,79 @@ export class OwnerIdentityVault {
     return out;
   }
 }
+
+/**
+ * v41: the communications providers' master secrets (a mail bridge login, a numbers-API key), one blob per provider,
+ * AES-256-GCM under a key derived from the broker's vault key for this purpose only. They reach only the provider
+ * adapters inside the broker: never an agent, a prompt, a log or the database (which learns names, field names and a
+ * keyed fingerprint). Admin reveals one through the step-up Reveal (sealed to the session's key).
+ */
+export const PROVIDER_SECRET_NAME = /^[a-z0-9][a-z0-9._-]{1,40}$/;
+
+export class ProviderSecretVault {
+  private readonly box: SecretBox;
+  private readonly mac: Buffer;
+  constructor(private readonly dir: string, vaultKey: Buffer) {
+    const k = Buffer.from(crypto.hkdfSync("sha256", vaultKey, Buffer.alloc(0), "fleet-provider-secrets-v1", 64));
+    this.box = new SecretBox(k.subarray(0, 32));
+    this.mac = k.subarray(32);
+  }
+
+  private file(name: string): string {
+    if (!PROVIDER_SECRET_NAME.test(name)) throw new Error("malformed provider secret name");
+    return path.join(this.dir, `${name}.bin`);
+  }
+
+  /** Install (or replace) a provider's secret: a flat object of non-empty string fields. */
+  put(name: string, value: Record<string, string>): { fields: string[]; fingerprint: string } {
+    const keys = Object.keys(value).sort();
+    if (keys.length < 1 || keys.length > 10 || keys.some((k) => !/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(k) || typeof value[k] !== "string" || !value[k] || value[k].length > 8192)) {
+      throw new Error("a provider secret is 1..10 non-empty string fields");
+    }
+    const canonical = JSON.stringify(Object.fromEntries(keys.map((k) => [k, value[k]])));
+    writePrivate(this.file(name), this.box.seal(canonical, `provider:${name}`));
+    return { fields: keys, fingerprint: this.fingerprint(canonical) };
+  }
+
+  /** The secret for a provider adapter (null when not installed). */
+  get(name: string): Record<string, string> | null {
+    const blob = readPrivate(this.file(name));
+    if (!blob) return null;
+    return JSON.parse(this.box.open(blob, `provider:${name}`)) as Record<string, string>;
+  }
+
+  /** Names, field names and keyed fingerprints — what the registry may know. */
+  list(): Array<{ name: string; fields: string[]; fingerprint: string }> {
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(this.dir).filter((f) => f.endsWith(".bin")).map((f) => f.slice(0, -4)).filter((n) => PROVIDER_SECRET_NAME.test(n));
+    } catch {
+      return [];
+    }
+    const out: Array<{ name: string; fields: string[]; fingerprint: string }> = [];
+    for (const name of names.sort()) {
+      try {
+        const v = this.get(name);
+        if (v) out.push({ name, fields: Object.keys(v).sort(), fingerprint: this.fingerprint(JSON.stringify(v)) });
+      } catch {
+        // an unreadable blob is not listed (and cannot be used)
+      }
+    }
+    return out;
+  }
+
+  remove(name: string): boolean {
+    const f = this.file(name);
+    try {
+      fs.writeFileSync(f, crypto.randomBytes(fs.statSync(f).size));
+      fs.unlinkSync(f);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private fingerprint(canonical: string): string {
+    return crypto.createHmac("sha256", this.mac).update(canonical, "utf8").digest("hex").slice(0, 16);
+  }
+}

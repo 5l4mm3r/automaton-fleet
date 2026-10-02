@@ -71,6 +71,7 @@ describe.skipIf(!PG_BIN)("v34 agent-owned identity and owner identity broker (Po
     initIdentityState(dir);
     gw = new PgIdentityGateway({ connectionString: R.pgc.identityUrl });
     broker = newBroker();
+    await broker.registerProviders(); // v41: the broker registers its providers (none = NOT CONFIGURED)
     await R.store.grantServiceRole();
     svc = new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 2 });
     agentDb = new pg.Pool({ connectionString: R.pgc.agentUrl, max: 1 });

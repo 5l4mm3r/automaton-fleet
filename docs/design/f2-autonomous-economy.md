@@ -1327,3 +1327,15 @@ starts its birth mission and, for a reseed, transfers the dead agent's held iden
 - Founders still cannot spawn children (`FLEET_REPRODUCTION_DISABLED` stays): new agents come only from birth orders.
   Automatic births still need `autoBirthEnabled`, the registry switch and `REAL_REPLICATION_ENABLED` (all off).
 - Dashboard: Birth orders → Provisioning (`births_pending`). Tests: `fleet-births-pg.test.ts`.
+
+## 38. Communications costs — schema v41 (2026-10-02)
+
+Mail and SMS are dormant until activated (see agent-identity.md, v41). When numbers exist, they are agents' own costs:
+
+- the agent quotes, decides and sets a ceiling;
+- the rental (first month at once, then monthly) and each priced message are charged from the agent's cash to the
+  Treasury, against prepaid provider credit (`provider_credits` class, `provider_credits_purchase` /
+  `provider_usage_charge` journals — the inference / Conway-credit pattern; no new economic policy);
+- the Fleet never carries an abandoned or unpaid number beyond 7 days.
+
+The shared mailbox is Fleet infrastructure (one subscription when activated) and is not charged to agents.

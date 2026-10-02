@@ -2000,12 +2000,14 @@ export class PgFleetStore {
 
   /** Schema v35: the economy engine's passes — replication window (births only when every switch is on), missions, estates, notifications. */
   async engineTick(realReplicationEnabled: boolean): Promise<{ replication: Record<string, unknown>; missions: Record<string, unknown>;
-    estates: Record<string, unknown>; notifications: Record<string, unknown> }> {
+    estates: Record<string, unknown>; notifications: Record<string, unknown>; comms: Record<string, unknown> }> {
     return this.tx(async (c) => ({
       replication: (await c.query("SELECT svc_replication_tick($1) AS r", [realReplicationEnabled])).rows[0].r,
       missions: (await c.query("SELECT svc_mission_tick() AS r")).rows[0].r,
       estates: (await c.query("SELECT svc_estate_tick(20) AS r")).rows[0].r,
       notifications: (await c.query("SELECT svc_notify_tick() AS r")).rows[0].r,
+      // v41: number rental / usage charged to their agents; unpaid, idle and dead-agent numbers (a no-op while SMS is dormant).
+      comms: (await c.query("SELECT svc_comms_tick(50) AS r")).rows[0].r,
     }));
   }
 

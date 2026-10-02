@@ -63,7 +63,7 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
     inbox: "mail.inbox", create_account: "account.create", operate: "account.operate", status: "account.status", verify_identity: "account.verify_identity",
     recover: "account.recover", rotate: "account.rotate", revoke: "account.revoke", close: "account.close",
     // v36: business mail and SMS.
-    read_mail: "mail.read", send_mail: "mail.send", provision_phone: "phone.provision", release_phone: "phone.release", phones: "phone.list",
+    read_mail: "mail.read", send_mail: "mail.send", quote_phone: "phone.quote", provision_phone: "phone.provision", release_phone: "phone.release", phones: "phone.list",
     send_sms: "sms.send", sms_inbox: "sms.inbox",
     // v37: accounts created through the general browser operator.
     register_account: "account.register", add_origin: "account.add_origin", mark_account: "account.mark" },
@@ -76,7 +76,7 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
 });
 /** Registry ops that move or commit money get a deterministic idempotency key from the tool call (a retry never doubles). */
 const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend", "mailbox.provision", "account.create", "account.operate", "account.verify_identity",
-  "account.recover", "account.rotate", "account.revoke", "account.close", "commitment.add", "mail.send", "phone.provision", "phone.release", "sms.send"]);
+  "account.recover", "account.rotate", "account.revoke", "account.close", "commitment.add", "mail.send", "phone.quote", "phone.provision", "phone.release", "sms.send"]);
 
 export interface ToolOutcome {
   name: string;

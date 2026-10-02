@@ -18,14 +18,18 @@ export interface IdentityJob {
   mailboxes: string[];
   credentials: Array<{ kind: string; vaultRef: string }>;
   /** v36: the outbound message of a mail.send job, the SMS of an sms.send job, the number of a phone job. */
-  message?: { messageId: string; from: string; to: string[]; subject: string; body: string; inReplyTo: string | null } | null;
+  message?: { messageId: string; from: string; to: string[]; subject: string; body: string; inReplyTo: string | null;
+    /** v41: on the shared mailbox, the agent's routing address (Reply-To) and the conversation's Message-IDs. */
+    replyTo?: string | null; shared?: boolean; references?: string[] | null } | null;
   sms?: { smsId: string; from: string; to: string; body: string } | null;
   number?: { numberId: string; e164: string | null; providerRef: string | null; country: string } | null;
 }
 
 export interface RevealRequest {
   requestId: string;
-  kind: "agent_credential" | "owner_identity";
+  kind: "agent_credential" | "owner_identity" | "provider_secret";
+  /** v41: the provider secret's name (kind provider_secret). */
+  secretName?: string;
   ephemeralPub: string;
   class?: string;
   vaultRef?: string;
@@ -71,6 +75,39 @@ export interface IdentityGatewayPort {
   browserSecretsPending(worker: string): Promise<BrowserSecretRequest[]>;
   browserSecretServe(requestId: string, worker: string, sealed: Buffer | null, error: string | null, usedMessageId: string | null): Promise<IxResult>;
   browserCredentialRecord(requestId: string, worker: string, kind: string, vaultRef: string): Promise<IxResult>;
+  // v41
+  commsConfigure(worker: string, config: CommsProviderConfig[]): Promise<IxResult & { providers?: Array<CommsProviderConfig & { providerId: string }> }>;
+  commsHealth(worker: string, providerId: string, ok: boolean, error: string | null): Promise<IxResult>;
+  mailIngest(worker: string, channelId: string, message: SharedMailInput, withheld: boolean): Promise<IxResult & {
+    replay?: boolean; deliveries?: Array<{ messageId: string; agentId: string | null; routing: string; address?: string | null }> }>;
+  mailSent2(job: string, lease: string, providerId: string | null, externalId: string | null, ok: boolean, error: string | null): Promise<IxResult>;
+  providerSecretsPublish(worker: string, list: Array<{ name: string; fields: string[]; fingerprint: string }>): Promise<IxResult>;
+  phoneQuoteRecord(job: string, lease: string, quote: Record<string, unknown>): Promise<IxResult>;
+  phoneRecord2(job: string, lease: string, e164: string, provider: string, providerRef: string, monthlyMicro: number | null, currency: string | null): Promise<IxResult>;
+  smsCostsPending(worker: string): Promise<Array<{ smsId: string; providerMessageId: string; provider: string }>>;
+  smsCost(worker: string, smsId: string, priceMicro: number, currency: string): Promise<IxResult>;
+}
+
+/** v41: one provider the broker is configured with (registered in the registry; none = NOT CONFIGURED). */
+export interface CommsProviderConfig {
+  capability: "mail" | "sms";
+  provider: string;
+  mode: "shared" | "dedicated" | "numbers";
+  address?: string | null;
+}
+
+/** v41: an inbound message of a shared mailbox, as the broker hands it to the registry for attribution. */
+export interface SharedMailInput {
+  providerId: string;
+  messageId: string | null;
+  inReplyTo: string | null;
+  references: string[];
+  from: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+  body: string;
+  at: string;
 }
 
 export interface BrowserSecretRequest {
@@ -157,6 +194,26 @@ export class PgIdentityGateway implements IdentityGatewayPort {
   browserCredentialRecord(requestId: string, worker: string, kind: string, vaultRef: string) {
     return this.call<IxResult>("ix_browser_credential_record", [requestId, worker, kind, vaultRef]);
   }
+  commsConfigure(worker: string, config: CommsProviderConfig[]) {
+    return this.call<IxResult & { providers?: Array<CommsProviderConfig & { providerId: string }> }>("ix_comms_configure", [worker, JSON.stringify(config)]);
+  }
+  commsHealth(worker: string, providerId: string, ok: boolean, error: string | null) { return this.call<IxResult>("ix_comms_health", [worker, providerId, ok, error]); }
+  mailIngest(worker: string, channelId: string, message: SharedMailInput, withheld: boolean) {
+    return this.call<IxResult & { replay?: boolean; deliveries?: Array<{ messageId: string; agentId: string | null; routing: string; address?: string | null }> }>(
+      "ix_mail_ingest", [worker, channelId, JSON.stringify(message), withheld]);
+  }
+  mailSent2(job: string, lease: string, providerId: string | null, externalId: string | null, ok: boolean, error: string | null) {
+    return this.call<IxResult>("ix_mail_sent2", [job, lease, providerId, externalId, ok, error]);
+  }
+  providerSecretsPublish(worker: string, list: Array<{ name: string; fields: string[]; fingerprint: string }>) {
+    return this.call<IxResult>("ix_provider_secrets_publish", [worker, JSON.stringify(list)]);
+  }
+  phoneQuoteRecord(job: string, lease: string, quote: Record<string, unknown>) { return this.call<IxResult>("ix_phone_quote_record", [job, lease, JSON.stringify(quote)]); }
+  phoneRecord2(job: string, lease: string, e164: string, provider: string, providerRef: string, monthlyMicro: number | null, currency: string | null) {
+    return this.call<IxResult>("ix_phone_record2", [job, lease, e164, provider, providerRef, monthlyMicro, currency]);
+  }
+  smsCostsPending(worker: string) { return this.call<Array<{ smsId: string; providerMessageId: string; provider: string }>>("ix_sms_costs_pending", [worker]); }
+  smsCost(worker: string, smsId: string, priceMicro: number, currency: string) { return this.call<IxResult>("ix_sms_cost", [worker, smsId, priceMicro, currency]); }
   async close(): Promise<void> {
     await this.pool.end().catch(() => {});
   }

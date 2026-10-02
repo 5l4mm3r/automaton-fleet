@@ -47,9 +47,10 @@ import { V36_SQL } from "./migrations-phase36.js";
 import { V37_SQL } from "./migrations-phase37.js";
 import { V38_SQL } from "./migrations-phase38.js";
 import { V39_SQL } from "./migrations-phase39.js";
+import { V41_SQL } from "./migrations-phase41.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 40;
+export const FLEET_PG_SCHEMA_VERSION = 41;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1185,6 +1186,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 38, name: "admin_dashboard_auth_gateway", sql: V38_SQL },
   { version: 39, name: "replication_accounting_fleet_generated_wealth", sql: V39_SQL },
   { version: 40, name: "birth_provisioning", sql: V40_SQL },
+  { version: 41, name: "comms_dormant_shared_mailbox_cost_aware_numbers", sql: V41_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1242,6 +1244,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_tax_true_up(integer)",
   // v31: the spend boundary with context (category, destination, recoverable value) for contextual cognition depth.
   "svc_action_cognition_verify_ctx(text, text, bigint, text, text, bigint, text, text)",
+  // v41: communications charging (number rental and usage from the agent's own cash), unpaid / idle / dead-agent numbers.
+  "svc_comms_tick(integer)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */
@@ -1358,6 +1362,17 @@ export const IDENTITY_API_FUNCTIONS: readonly string[] = Object.freeze([
   "ix_browser_secrets_pending(text)",
   "ix_browser_secret_serve(uuid, text, bytea, text, uuid)",
   "ix_browser_credential_record(uuid, text, text, text)",
+  // v41: the broker's provider configuration and health, shared-mailbox ingestion and sending, provider-secret names,
+  // live number quotes, cost-checked provisioning and message prices.
+  "ix_comms_configure(text, jsonb)",
+  "ix_comms_health(text, uuid, boolean, text)",
+  "ix_mail_ingest(text, uuid, jsonb, boolean)",
+  "ix_mail_sent2(uuid, text, text, text, boolean, text)",
+  "ix_provider_secrets_publish(text, jsonb)",
+  "ix_phone_quote_record(uuid, text, jsonb)",
+  "ix_phone_record2(uuid, text, text, text, text, bigint, text)",
+  "ix_sms_costs_pending(text)",
+  "ix_sms_cost(text, uuid, bigint, text)",
 ]);
 
 /** Schema v37: the browser worker's whole database surface (bx_*): claim an action, report it, ask for / take a sealed secret. */

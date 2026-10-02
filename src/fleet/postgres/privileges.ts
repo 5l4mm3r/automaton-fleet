@@ -964,7 +964,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       // v37: browser-created accounts (register / pin origins / record outcome) and broker-stored browser credentials.
       "fleet_econ_account_register", "fleet_econ_account_add_origin", "fleet_econ_account_mark", "fleet_account_human_dependency", "ix_browser_credential_record"]),
     fleet_agent_account_credentials: new Set(["fleet_econ_account_revoke", "ix_credential_record", "ix_browser_credential_record"]),
-    fleet_agent_mailboxes: new Set(["ix_mailbox_record", "fleet_estate_assign_internal"]),
+    fleet_agent_mailboxes: new Set(["ix_mailbox_record", "fleet_estate_assign_internal", "fleet_econ_mailbox_provision"]),
     fleet_identity_jobs: new Set(["fleet_identity_enqueue", "ix_claim_job", "ix_report_job", "fleet_estate_assign_internal", "svc_estate_tick"]),
     // v35: the economy engine. Replication state/birth orders only by the controller pass and Admin; missions by their
     // engine; commitments by the agent; notifications through fleet_notify; estate items by the estate engine.
@@ -976,7 +976,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_mission_requests: new Set(["fleet_mission_start", "fleet_mission_end", "fleet_admin_mission_request", "fleet_econ_mission_request"]),
     fleet_agent_missions: new Set(["fleet_mission_start", "fleet_mission_end", "fleet_econ_mission_report", "fleet_econ_mission_review"]),
     fleet_agent_commitments: new Set(["fleet_econ_commitment_add", "fleet_econ_commitment_cancel", "fleet_estate_assign_internal", "svc_estate_tick",
-      "ix_phone_record", "fleet_econ_phone_release"]),
+      "ix_phone_record", "fleet_econ_phone_release",
+      // v41: a number's rental commitment (created at provisioning, advanced when charged, cancelled at release, inherited).
+      "ix_phone_record2", "fleet_phone_release_internal", "svc_comms_tick"]),
     fleet_risk_policy: new Set(["fleet_admin_risk_policy_set"]),
     fleet_notifications: new Set(["fleet_notify", "fleet_admin_notification_ack", "ix_notification_emailed"]),
     fleet_notification_policy: new Set(["fleet_admin_notification_policy_set", "svc_notify_tick"]),
@@ -984,9 +986,20 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_estate_policy: new Set([]),
     // v36: mail (agent send; broker delivery/status), phones/SMS (agent ops; broker provision/delivery/status), commitments
     // created for a number's monthly fee, owner vault installation, reveal serving/taking, notification email status.
-    fleet_agent_mail: new Set(["ix_mail_deliver", "ix_mail_consumed", "ix_mail_deliver2", "ix_mail_sent", "fleet_econ_mail_send"]),
-    fleet_agent_phone_numbers: new Set(["fleet_econ_phone_provision", "fleet_econ_phone_release", "ix_phone_record", "ix_phone_status"]),
-    fleet_agent_sms: new Set(["fleet_econ_sms_send", "ix_sms_deliver", "ix_sms_sent"]),
+    fleet_agent_mail: new Set(["ix_mail_deliver", "ix_mail_consumed", "ix_mail_deliver2", "ix_mail_sent", "fleet_econ_mail_send",
+      // v41: shared-mailbox ingestion (attribution), outbound status, Admin routing of unassigned mail.
+      "fleet_mail_store_in", "ix_mail_sent2", "fleet_admin_mail_assign"]),
+    fleet_agent_phone_numbers: new Set(["fleet_econ_phone_provision", "fleet_econ_phone_release", "ix_phone_record", "ix_phone_status",
+      "ix_phone_record2", "fleet_phone_release_internal", "svc_comms_tick"]),
+    fleet_agent_sms: new Set(["fleet_econ_sms_send", "ix_sms_deliver", "ix_sms_sent", "ix_sms_cost", "svc_comms_tick"]),
+    // v41: communications providers (the broker's configuration), capability dependencies, quotes, charges, number
+    // dependencies, provider-secret names.
+    fleet_comms_providers: new Set(["ix_comms_configure", "ix_comms_health"]),
+    fleet_capability_demands: new Set(["fleet_comms_unavailable", "ix_comms_configure"]),
+    fleet_phone_quotes: new Set(["fleet_econ_phone_quote", "ix_phone_quote_record"]),
+    fleet_phone_charges: new Set(["fleet_comms_charge"]),
+    fleet_phone_number_dependencies: new Set(["ix_browser_secret_serve"]),
+    fleet_provider_secrets: new Set(["ix_provider_secrets_publish"]),
     fleet_owner_vault_inbox: new Set(["fleet_admin_owner_vault_upload", "ix_vault_installed"]),
     fleet_reveal_requests: new Set(["fleet_admin_reveal_request", "fleet_admin_reveal_take", "ix_reveal_pending", "ix_reveal_serve"]),
     fleet_reveal_log: new Set(["fleet_reveal_log_write"]),
@@ -996,7 +1009,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_browser_sessions: new Set(["fleet_econ_browser_open", "fleet_econ_browser_close", "fleet_browser_enqueue", "bx_report_action"]),
     fleet_browser_actions: new Set(["fleet_browser_enqueue", "bx_claim_action", "bx_report_action"]),
     fleet_browser_secret_requests: new Set(["bx_secret_request", "bx_secret_take", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
-    fleet_auth_message_blobs: new Set(["ix_auth_blob_store", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
+    fleet_auth_message_blobs: new Set(["ix_auth_blob_store", "ix_browser_secrets_pending", "ix_browser_secret_serve", "fleet_admin_mail_assign"]),
     // v38: Admin authentication state — written only by the dashboard gateway functions (and the owner's enrollment).
     fleet_admin_passkeys: new Set(["dash_passkey_add", "dash_passkey_used", "dash_passkey_revoke"]),
     fleet_admin_totp: new Set(["dash_totp_set", "dash_totp_accept", "dash_totp_reset"]),

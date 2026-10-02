@@ -91,6 +91,7 @@ describe.skipIf(!PG_BIN || !CHROME)("v38/v39 Admin control centre — Next.js (P
     igw = new PgIdentityGateway({ connectionString: R.pgc.identityUrl });
     const { vault, ownerVault } = openIdentityState(dir);
     broker = new IdentityBroker(igw, vault, { mail, connectors: [market], ownerVault, stateFile: path.join(dir, "pending.json") });
+    await broker.registerProviders(); // v41: the broker registers its providers (none = NOT CONFIGURED)
     let busy = false;
     loop = setInterval(() => { if (!busy) { busy = true; void broker.tick().catch(() => {}).finally(() => { busy = false; }); } }, 200);
     // An agent with a credential (created by the broker) and a hostile persona name.
@@ -162,6 +163,26 @@ describe.skipIf(!PG_BIN || !CHROME)("v38/v39 Admin control centre — Next.js (P
     expect(await page.locator("main").textContent()).toContain("Has the Fleet earned another agent?");
     expect(await page.locator("main").textContent()).toContain("Wealth threshold not yet met");
     expect(await page.locator('[data-gate="treasurySolvent"]').textContent()).toContain("ok");
+  });
+
+  it("email and SMS are shown as NOT CONFIGURED (dormant by design, not a failure), with the agents' recorded needs (v41)", async () => {
+    // A broker configured with no provider: the deployment default.
+    const { vault, ownerVault } = openIdentityState(dir);
+    await new IdentityBroker(igw, vault, { ownerVault }).registerProviders();
+    expect(await R.econ(R.founders[0], "mailbox.provision", { purpose: "supplier quotes", idempotencyKey: `id:${crypto.randomUUID()}` }))
+      .toMatchObject({ ok: false, code: "FLEET_CAPABILITY_NOT_CONFIGURED" });
+    await page.goto(`${ORIGIN}/email/`);
+    await page.locator("#mail-state").waitFor();
+    expect(await page.locator("#mail-state").textContent()).toBe("MAIL: NOT CONFIGURED");
+    expect(await page.locator("main").textContent()).toContain("supplier quotes");
+    await page.goto(`${ORIGIN}/sms/`);
+    await page.locator("#sms-state").waitFor();
+    expect(await page.locator("#sms-state").textContent()).toBe("SMS: NOT CONFIGURED");
+    await page.goto(`${ORIGIN}/`);
+    await page.locator("#overview-mail").waitFor();
+    expect(await page.locator("#overview-mail").textContent()).toBe("MAIL: NOT CONFIGURED");
+    expect(await page.locator("#overview-sms").textContent()).toBe("SMS: NOT CONFIGURED");
+    await broker.registerProviders(); // restore the fixture's (simulated) mail provider
   });
 
   it("births: a queued order shows its provisioning cohort (v40)", async () => {

@@ -77,8 +77,9 @@ describe("SMS adapter (Twilio-compatible)", () => {
       [/pricing\.twilio\.com\/v1\/PhoneNumbers\/Countries\/GB/, () => ({ json: { price_unit: "USD", phone_number_prices: [{ number_type: "mobile", current_price: "1.15" }] } })],
     ]);
     const t = new TwilioSmsProvider({ accountSid: sid, authToken: token, fetchImpl: f });
-    expect(await t.provision("GB")).toEqual({ outcome: "succeeded", e164: "+447700900111", providerRef: "PN" + "a".repeat(32), monthlyMinor: 115, currency: "USD" });
-    expect(new URLSearchParams(calls[1].body).get("PhoneNumber")).toBe("+447700900111");
+    expect(await t.provision("GB")).toEqual({ outcome: "succeeded", e164: "+447700900111", providerRef: "PN" + "a".repeat(32), numberType: "mobile",
+      monthlyMicro: 1_150_000, currency: "USD" });
+    expect(new URLSearchParams(calls.find((c) => c.method === "POST")!.body).get("PhoneNumber")).toBe("+447700900111");
     expect(calls[0].auth).toBe("Basic " + Buffer.from(`${sid}:${token}`).toString("base64"));
   });
 

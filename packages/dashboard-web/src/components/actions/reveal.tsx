@@ -11,7 +11,7 @@ import { useToast } from "@/components/shell/toast";
  * it. The plaintext lives only in this component's state, is shown for 60 seconds, and is wiped on close or unmount —
  * never persisted, logged or sent anywhere.
  */
-export function RevealButton({ kind, target, title, className }: { kind: "agent_credential" | "owner_identity"; target: string; title: string; className?: string }) {
+export function RevealButton({ kind, target, title, className }: { kind: "agent_credential" | "owner_identity" | "provider_secret"; target: string; title: string; className?: string }) {
   const toast = useToast();
   const [busy, setBusy] = React.useState(false);
   const [secret, setSecret] = React.useState<string | null>(null);

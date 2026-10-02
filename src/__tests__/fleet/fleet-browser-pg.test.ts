@@ -147,6 +147,7 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
     igw = new PgIdentityGateway({ connectionString: R.pgc.identityUrl });
     const { vault, ownerVault } = openIdentityState(path.join(dir, "identity"));
     broker = new IdentityBroker(igw, vault, { mail, ownerVault, stateFile: path.join(dir, "identity", "pending.json") });
+    await broker.registerProviders(); // v41: the broker registers its providers (none = NOT CONFIGURED)
     bgw = new PgBrowserGateway({ connectionString: R.pgc.browserUrl });
     worker = new BrowserWorker(bgw, { executablePath: CHROME!, allowLoopback: true, ignoreHttpsErrors: true, brokerPublicKey: async () => (await bgw.brokerKey()).ownerPub });
     agentDb = new pg.Pool({ connectionString: R.pgc.agentUrl, max: 1 });

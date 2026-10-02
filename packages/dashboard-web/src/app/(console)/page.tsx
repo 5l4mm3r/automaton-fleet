@@ -11,10 +11,17 @@ export default function Overview() {
   const daily = useRead<any>("daily_report", {}, { refreshMs: 60_000 });
   const rep = useRead<any>("replication", {}, { refreshMs: 60_000 });
   const health = useRead<any>("health");
+  const comms = useRead<any>("comms_status", {}, { refreshMs: 300_000 });
   const d = daily.data;
+  const commsBadge = (k: "mail" | "sms", label: string) => {
+    const c = comms.data?.[k];
+    if (!c) return null;
+    return <Link href={k === "mail" ? "/email/" : "/sms/"}><Badge id={`overview-${k}`} tone={c.configured ? "good" : "neutral"}>{label}: {c.configured ? "CONFIGURED" : "NOT CONFIGURED"}</Badge></Link>;
+  };
   return (
     <>
-      <PageHeader title="Overview" description="The Fleet right now: money, agents, growth and alerts." />
+      <PageHeader title="Overview" description="The Fleet right now: money, agents, growth and alerts."
+        actions={<div className="flex gap-2">{commsBadge("mail", "MAIL")}{commsBadge("sms", "SMS")}</div>} />
       <Loading loading={rep.loading} error={rep.error}><TreasuryFigures t={rep.data?.treasury} /></Loading>
       <div className="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat label="Revenue (24 h)" value={money(d?.flows?.revenueMinor)} />
