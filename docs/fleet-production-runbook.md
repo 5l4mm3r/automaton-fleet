@@ -2041,6 +2041,13 @@ retired, rerun no-op, rollback proof). **R32-3 cutover NOT RUN** (the auto-mode 
 owner approval): `docs/evaluations/r32/r32-3-deploy.sh` (fail-closed; `runtime.env.pre-r32`; pre-v34 dump). The
 identity broker unit is not part of R32 (owner-approved provisioning: `docs/design/agent-identity.md`).
 
+## Stage R33 — schemas v34–v38 (2026-10-02, VPS UTC) — rehearsed; cutover awaiting the owner
+
+Release `e9eee6f` (build `89533671…`, lockfile `ea24cb1f…`), identical locally and on the VPS. Supersedes R32.
+`scripts/fleet-rollout.sh rehearse ~/r33-pins.txt 33 38` PASSED at 16:02 (`docs/evaluations/r33/`). Cutover (owner):
+`bash ~/fleet-rollout.sh cutover ~/r33-pins.txt 33 38` — controller-side only, automatic rollback on failure. New services
+(identity broker, browser worker, dashboard) remain unprovisioned until their owner-approved host steps.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
