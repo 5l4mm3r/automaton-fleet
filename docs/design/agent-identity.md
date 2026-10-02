@@ -90,3 +90,34 @@ accepts no new rows (production held none). History is kept.
 3. `sudo -u automaton-fleet-identity FLEET_IDENTITY_STATE_DIR=/var/lib/automaton-fleet-identity node dist/fleet/identity/main.js init`.
 4. Install `deploy/systemd/automaton-fleet-identity.service`; enable and start.
 5. Later, per provider: a reviewed adapter change (and its exact egress in the unit).
+
+## v36 — business mail, SMS, Admin reveal, owner vault upload (2026-10-02; owner decisions of the master handoff)
+
+- **Business mail is the agent's own, complete.** Customers' names, addresses, phone numbers, orders and messages reach
+  the agent unredacted (`mail.inbox` previews, `mail.read` whole). Only an *account-authentication* message (sign-up
+  confirmation, login/security/one-time code, password reset, 2FA) has its link/code withheld — the broker uses it for
+  credential execution. Agents send mail from their own addresses (`mail.send`, replies threaded). Delivery is idempotent
+  by provider message id. Failsafe: 500 sends/agent/day (runaway-loop and shared-domain protection, not a budget).
+- **Mail provider** (owner decision: hosted API, provider-neutral): adapter `adapters/mailgun.ts` (Mailgun-compatible API).
+  Any local part on the Fleet mail domain is live through one catch-all *store* route (`main.js mail-setup`); the broker
+  polls stored messages (no webhook, no listener) and sends through the messages API.
+- **Phones / SMS** (owner decision: Twilio-style adapter): `phone.provision` buys an SMS-capable number; its monthly price
+  becomes the agent's own commitment (converted at the Fleet FX rate); `sms.send`, `sms.inbox`, `phone.release` (the
+  commitment stops). A country needing an account-holder bundle is `human_action_required` for that number only
+  (IDENTITY notification). No mechanism to evade a platform's verification controls is built.
+- **Admin reveal** (owner decision: nothing hidden from Admin; the web process never touches a vault): a reveal request
+  names a credential or owner class plus an ephemeral X25519 key and a step-up reference; the broker seals the plaintext
+  to that key (scope `reveal:<id>`); the requesting Admin takes it once (the sealed copy is erased; 2-minute expiry);
+  `fleet_reveal_log` records requested / served / delivered / expired — never the value. CLI: `hub-reveal … <outFile>`
+  (written to a new 0600 file, never printed).
+- **Owner vault upload**: the broker publishes its owner-vault public key (`fleet_identity_broker_keys`, fingerprint; a
+  change raises RED). The dashboard/CLI seals an uploaded fact or document (`passport`, `driving_licence`, … as
+  `{contentType, dataB64}`) to it — pinned by fingerprint — and the broker installs it (only a blob sealed to its key for
+  that class is accepted); the database keeps metadata only.
+- **Notification email**: the broker emails Admin the DAILY / AMBER / RED / IDENTITY classes the policy selects, from
+  `FLEET_NOTIFY_FROM`.
+- **Owner steps to go live** (exact): (1) a mail provider account with a Fleet sending/receiving domain — DNS at Porkbun:
+  the provider's MX records, SPF TXT, DKIM TXT and a DMARC TXT for that domain; the API key into the broker's
+  `mail.key`; run `main.js mail-setup` once. (2) A programmable-numbers account (funded); its Account SID + auth token into
+  `sms.json`. (3) Provision the broker service (above). Until then mail/SMS jobs fail with `FLEET_NO_MAIL_PROVIDER` /
+  `FLEET_NO_SMS_PROVIDER` and nothing else is affected.

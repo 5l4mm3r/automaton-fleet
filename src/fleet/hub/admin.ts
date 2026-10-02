@@ -205,6 +205,27 @@ export class PgHubAdmin {
   dailyReport() {
     return this.one(`SELECT fleet_daily_report() AS r`);
   }
+
+  // ── v36: communications, reveal through the broker, owner vault upload ──
+  comms(agentId: string | null) {
+    return this.one(`SELECT fleet_hub_comms($1) AS r`, [agentId]);
+  }
+  brokerOwnerKey() {
+    return this.one<{ ownerPub: string | null; fingerprint?: string; publishedAt?: string }>(`SELECT fleet_admin_broker_owner_key() AS r`);
+  }
+  ownerVaultUpload(cls: string, sealed: Buffer, contentType: string, expiresAt: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_owner_vault_upload($1, $2, $3, $4, $5) AS r`, [cls, sealed, contentType, expiresAt, actor]);
+  }
+  revealRequest(kind: "agent_credential" | "owner_identity", target: string, ephemeralPubB64: string, stepupRef: string, actor: string) {
+    return this.one<{ ok: boolean; requestId: string; expiresAt: string }>(`SELECT fleet_admin_reveal_request($1, $2, $3, $4, $5) AS r`,
+      [kind, target, ephemeralPubB64, stepupRef, actor]);
+  }
+  revealTake(requestId: string, actor: string) {
+    return this.one<{ ok: boolean; status?: string; sealedB64?: string; code?: string }>(`SELECT fleet_admin_reveal_take($1, $2) AS r`, [requestId, actor]);
+  }
+  revealLog(limit: number) {
+    return this.one(`SELECT fleet_admin_reveal_log($1) AS r`, [limit]);
+  }
   sweepCompute(agentId: string) {
     return this.one(`SELECT fleet_sweep_compute($1) AS r`, [agentId]);
   }

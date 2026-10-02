@@ -7,8 +7,9 @@
 # reports statuses. Agents, FleetController, the custody executor, the operator API and the bridges cannot read its
 # state (0700 StateDirectory, own uid). Database: fleet_identity_login (ix_* only), from identity.env.
 #
-# Network: loopback only until a real provider adapter (mail domain, platform) is added in its own reviewed change; that
-# change adds the exact provider egress here. No listener.
+# Network (v36): outbound to the configured providers' public HTTPS APIs (mail, numbers/SMS) plus loopback PostgreSQL.
+# Private, link-local and metadata ranges are denied (no SSRF into the host or the provider's internal network). No
+# listener, no inbound webhook: the broker polls. Provider credentials: mail.key / sms.json in the 0700 state directory.
 
 [Unit]
 Description=Automaton Fleet identity broker (agent account credentials and owner identity vault; no listener)
@@ -28,6 +29,8 @@ EnvironmentFile=/etc/automaton-fleet/identity.env
 Environment=NODE_ENV=production
 Environment=FLEET_IDENTITY_EXPECTED_USER=automaton-fleet-identity
 Environment=FLEET_IDENTITY_STATE_DIR=/var/lib/automaton-fleet-identity
+# Providers (set in identity.env when the owner has the accounts): FLEET_MAIL_PROVIDER=mailgun FLEET_MAIL_DOMAIN=…
+# [FLEET_MAIL_API_BASE=https://api.eu.mailgun.net] FLEET_NOTIFY_FROM=fleet@… FLEET_SMS_PROVIDER=twilio
 StateDirectory=automaton-fleet-identity
 StateDirectoryMode=0700
 UMask=0077
@@ -39,8 +42,9 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=automaton-fleet-identity
 
-IPAddressDeny=any
 IPAddressAllow=localhost
+IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/4 240.0.0.0/4
+IPAddressDeny=fc00::/7 fe80::/10 ff00::/8
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 NoNewPrivileges=true

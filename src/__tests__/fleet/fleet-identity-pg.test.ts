@@ -100,9 +100,10 @@ describe.skipIf(!PG_BIN)("v34 agent-owned identity and owner identity broker (Po
     expect((await R.q(`SELECT kind, status, vault_ref FROM fleet.fleet_agent_account_credentials WHERE account_id = $1`, [acc.accountId])))
       .toEqual([{ kind: "password", status: "active", vault_ref: expect.stringMatching(/^avault:/) }]);
     const inbox = (await ok(R.econ(A, "mail.inbox", {}))).messages;
-    expect(inbox).toEqual([expect.objectContaining({ subject: "Confirm your sim-market account", verification: true, consumed: true })]);
-    expect(inbox[0].body).toContain("[link]");
-    expect(inbox[0].body).not.toMatch(/https?:|482913/);
+    // v36: an account-authentication message — its link/code is the broker's (withheld); ordinary business mail is whole.
+    expect(inbox).toEqual([expect.objectContaining({ subject: "Confirm your sim-market account", authenticationMessage: true, consumedByBroker: true })]);
+    expect(inbox[0].preview).toContain("[link]");
+    expect(inbox[0].preview).not.toMatch(/https?:|482913/);
     // 7. Operate it.
     const op = await ok(R.econ(A, "account.operate", { accountId: acc.accountId, action: "listing.create", params: { title: "CSV cleaner" }, idempotencyKey: idem() }));
     await broker.tick();

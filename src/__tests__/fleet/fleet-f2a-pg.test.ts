@@ -210,6 +210,8 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
       "fleet_rail_resolve",
       // v34: the identity broker records (and answers) the one action-scoped human_identity dependency of an account.
       "ix_report_job",
+      // v36: likewise for a phone number whose provider needs an account-holder identity step.
+      "ix_phone_status",
       // v30: read-only observability (the Hub's dependency list and Doctor's action-scoping check) — they gate nothing.
       "fleet_hub", "fleet_economy_health",
       // v35: reports only — the IDENTITY notification for a human-only action and the daily report's count; they gate nothing.

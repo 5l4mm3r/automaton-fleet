@@ -17,6 +17,21 @@ export interface IdentityJob {
     displayName: string | null } | null;
   mailboxes: string[];
   credentials: Array<{ kind: string; vaultRef: string }>;
+  /** v36: the outbound message of a mail.send job, the SMS of an sms.send job, the number of a phone job. */
+  message?: { messageId: string; from: string; to: string[]; subject: string; body: string; inReplyTo: string | null } | null;
+  sms?: { smsId: string; from: string; to: string; body: string } | null;
+  number?: { numberId: string; e164: string | null; providerRef: string | null; country: string } | null;
+}
+
+export interface RevealRequest {
+  requestId: string;
+  kind: "agent_credential" | "owner_identity";
+  ephemeralPub: string;
+  class?: string;
+  vaultRef?: string;
+  agentId?: string;
+  accountId?: string;
+  credentialKind?: string;
 }
 
 export type IxResult = { ok: true; [k: string]: unknown } | { ok: false; code: string; [k: string]: unknown };
@@ -35,6 +50,22 @@ export interface IdentityGatewayPort {
   releaseRecord(job: string, lease: string, provider: string, purpose: string, classes: string[], consentId: string | null, outcome: string): Promise<IxResult>;
   report(job: string, lease: string, outcome: "pending" | "succeeded" | "failed" | "human_action_required", result: Record<string, unknown>,
     account: Record<string, unknown>): Promise<IxResult>;
+  // v36
+  mailDeliver2(worker: string, address: string, sender: string, subject: string, body: string, withheld: boolean, providerId: string | null): Promise<IxResult>;
+  mailSent(job: string, lease: string, providerId: string | null, ok: boolean): Promise<IxResult>;
+  phoneRecord(job: string, lease: string, e164: string, provider: string, providerRef: string, monthlyMinor: number | null, currency: string | null): Promise<IxResult>;
+  phoneStatus(job: string, lease: string, status: "released" | "failed" | "human_action_required", reason: string | null): Promise<IxResult>;
+  numbers(worker: string): Promise<Array<{ numberId: string; e164: string; provider: string; since: string }>>;
+  smsDeliver(worker: string, to: string, from: string, body: string, withheld: boolean, providerId: string): Promise<IxResult>;
+  smsSent(job: string, lease: string, providerId: string | null, ok: boolean): Promise<IxResult>;
+  vaultInbox(worker: string): Promise<Array<{ uploadId: string; class: string; sealedB64: string; contentType: string; expiresAt: string | null }>>;
+  vaultInstalled(uploadId: string, worker: string, ok: boolean, error: string | null): Promise<IxResult>;
+  revealPending(worker: string): Promise<RevealRequest[]>;
+  revealServe(requestId: string, worker: string, sealed: Buffer | null, error: string | null): Promise<IxResult>;
+  notificationsUnsent(worker: string, limit: number): Promise<{ to: string; notifications: Array<{ id: string; class: string; code: string; agentId: string | null;
+    title: string; detail: Record<string, unknown>; at: string }> } | null>;
+  notificationEmailed(id: string, worker: string, ok: boolean): Promise<IxResult>;
+  publishOwnerKey(worker: string, pubB64: string): Promise<IxResult>;
 }
 
 export class PgIdentityGateway implements IdentityGatewayPort {
@@ -70,6 +101,35 @@ export class PgIdentityGateway implements IdentityGatewayPort {
   report(job: string, lease: string, outcome: "pending" | "succeeded" | "failed" | "human_action_required", result: Record<string, unknown>, account: Record<string, unknown>) {
     return this.call<IxResult>("ix_report_job", [job, lease, outcome, JSON.stringify(result), JSON.stringify(account)]);
   }
+  mailDeliver2(worker: string, address: string, sender: string, subject: string, body: string, withheld: boolean, providerId: string | null) {
+    return this.call<IxResult>("ix_mail_deliver2", [worker, address, sender, subject, body, withheld, providerId]);
+  }
+  mailSent(job: string, lease: string, providerId: string | null, ok: boolean) { return this.call<IxResult>("ix_mail_sent", [job, lease, providerId, ok]); }
+  phoneRecord(job: string, lease: string, e164: string, provider: string, providerRef: string, monthlyMinor: number | null, currency: string | null) {
+    return this.call<IxResult>("ix_phone_record", [job, lease, e164, provider, providerRef, monthlyMinor, currency]);
+  }
+  phoneStatus(job: string, lease: string, status: "released" | "failed" | "human_action_required", reason: string | null) {
+    return this.call<IxResult>("ix_phone_status", [job, lease, status, reason]);
+  }
+  numbers(worker: string) { return this.call<Array<{ numberId: string; e164: string; provider: string; since: string }>>("ix_numbers", [worker]); }
+  smsDeliver(worker: string, to: string, from: string, body: string, withheld: boolean, providerId: string) {
+    return this.call<IxResult>("ix_sms_deliver", [worker, to, from, body, withheld, providerId]);
+  }
+  smsSent(job: string, lease: string, providerId: string | null, ok: boolean) { return this.call<IxResult>("ix_sms_sent", [job, lease, providerId, ok]); }
+  vaultInbox(worker: string) {
+    return this.call<Array<{ uploadId: string; class: string; sealedB64: string; contentType: string; expiresAt: string | null }>>("ix_vault_inbox", [worker]);
+  }
+  vaultInstalled(uploadId: string, worker: string, ok: boolean, error: string | null) { return this.call<IxResult>("ix_vault_installed", [uploadId, worker, ok, error]); }
+  revealPending(worker: string) { return this.call<RevealRequest[]>("ix_reveal_pending", [worker]); }
+  revealServe(requestId: string, worker: string, sealed: Buffer | null, error: string | null) {
+    return this.call<IxResult>("ix_reveal_serve", [requestId, worker, sealed, error]);
+  }
+  notificationsUnsent(worker: string, limit: number) {
+    return this.call<{ to: string; notifications: Array<{ id: string; class: string; code: string; agentId: string | null; title: string;
+      detail: Record<string, unknown>; at: string }> } | null>("ix_notifications_unsent", [worker, limit]);
+  }
+  notificationEmailed(id: string, worker: string, ok: boolean) { return this.call<IxResult>("ix_notification_emailed", [id, worker, ok]); }
+  publishOwnerKey(worker: string, pubB64: string) { return this.call<IxResult>("ix_publish_owner_key", [worker, pubB64]); }
   async close(): Promise<void> {
     await this.pool.end().catch(() => {});
   }

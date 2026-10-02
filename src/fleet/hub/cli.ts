@@ -46,6 +46,11 @@
  *   economy-mission-policy <json> | economy-risk-policy <json>
  *   economy-estate-assign <itemId> <agentId> | economy-estate-release <itemId> [reason…]
  *   economy-notification-ack <notificationId> | economy-notification-policy <dailyHourUtc|-> [adminEmail]
+ *   hub-comms [agentId] | hub-reveal-log | hub-broker-key
+ *   owner-identity-upload <class> <file> <text/plain|application/pdf|image/jpeg|image/png|image/webp> --fingerprint <brokerKeySha256> [--expires iso]
+ *                                               seal a fact/document to the broker's published key (pinned by fingerprint) and upload it
+ *   hub-reveal <agent_credential|owner_identity> <credentialId|class> <outFile>   Admin reveal: the broker seals the value to a
+ *                                               one-time key of this command; the plaintext is written to a NEW 0600 file (never printed)
  *   economy-sweep-compute <agentId>
  */
 import crypto from "crypto";
@@ -53,6 +58,7 @@ import fs from "fs";
 import { HUB_SECTIONS, type HubSection, type PgHubAdmin } from "./admin.js";
 import { renderHub } from "./render.js";
 import { OWNER_IDENTITY_CLASSES, sealOwnerFact, type OwnerIdentityClass } from "../identity/vaults.js";
+import { generateX25519, openSealed } from "../identity/crypto.js";
 
 export const HUB_COMMANDS = new Set([
   "hub", "hub-render", "hub-health", "hub-withdrawals", "economy-withdrawal-policy", "hub-custody", "economy-custody-policy", "hub-identity", "owner-identity-seal", "owner-identity-class", "owner-identity-consent", "owner-identity-consent-revoke", "economy-destination-reference", "economy-entity-add", "economy-tax-profile", "economy-tax-policy", "economy-tax-true-up", "economy-tax-payment",
@@ -63,6 +69,7 @@ export const HUB_COMMANDS = new Set([
   "economy-replication-policy", "economy-birth", "economy-reseed", "economy-birth-fulfil", "economy-birth-cancel",
   "economy-mission-assign", "economy-mission-end", "economy-mission-request", "economy-mission-policy", "economy-risk-policy",
   "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
+  "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal",
 ]);
 
 const flag = (a: string[], name: string): string | null => {
@@ -93,7 +100,7 @@ const json = (v: string | undefined, what: string): Record<string, unknown> => {
 };
 
 export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, actor: string): Promise<unknown> {
-  const p = positional(a, ["--entity", "--credential", "--mode", "--venture", "--max", "--hint", "--role", "--beneficiaries", "--limit"]);
+  const p = positional(a, ["--entity", "--credential", "--mode", "--venture", "--max", "--hint", "--role", "--beneficiaries", "--limit", "--fingerprint", "--expires"]);
   const ack = a.includes("--acknowledge");
   const beneficiaries = (): unknown[] | null => {
     const v = flag(a, "--beneficiaries");
@@ -230,6 +237,42 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.estateAssign(p[0], p[1], actor);
     case "economy-estate-release":
       return h.estateRelease(p[0], p.slice(1).join(" ") || null, actor);
+    case "hub-comms":
+      return h.comms(p[0] ?? null);
+    case "hub-reveal-log":
+      return h.revealLog(100);
+    case "hub-broker-key":
+      return h.brokerOwnerKey();
+    case "owner-identity-upload": {
+      const [cls, file, contentType] = p;
+      if (!OWNER_IDENTITY_CLASSES.includes(cls as OwnerIdentityClass) || !file || !contentType) {
+        throw new Error("FLEET_BAD_REQUEST: owner-identity-upload <class> <file> <contentType> --fingerprint <sha256> [--expires iso]");
+      }
+      const key = await h.brokerOwnerKey();
+      if (!key.ownerPub) throw new Error("FLEET_NOT_FOUND: the identity broker has not published its key (is it running?)");
+      if (flag(a, "--fingerprint") !== key.fingerprint) throw new Error(`FLEET_KEY_MISMATCH: the broker key fingerprint is ${key.fingerprint}; pin it with --fingerprint`);
+      const raw = fs.readFileSync(file);
+      const value = contentType === "text/plain" ? raw.toString("utf8").replace(/\n$/, "") : JSON.stringify({ contentType, dataB64: raw.toString("base64") });
+      const sealed = sealOwnerFact(Buffer.from(key.ownerPub, "base64"), cls as OwnerIdentityClass, value);
+      return h.ownerVaultUpload(cls, sealed, contentType, flag(a, "--expires"), actor);
+    }
+    case "hub-reveal": {
+      const [kind, target, outFile] = p;
+      if ((kind !== "agent_credential" && kind !== "owner_identity") || !target || !outFile) throw new Error("FLEET_BAD_REQUEST: hub-reveal <agent_credential|owner_identity> <target> <outFile>");
+      const eph = generateX25519();
+      const req = await h.revealRequest(kind, target, eph.publicKeyDer.toString("base64"), `cli:${crypto.randomUUID()}`, actor);
+      for (let i = 0; i < 60; i++) {
+        const t = await h.revealTake(req.requestId, actor);
+        if (t.ok && t.status === "delivered" && t.sealedB64) {
+          const plain = openSealed(eph.privateKeyDer, eph.publicKeyDer, Buffer.from(t.sealedB64, "base64"), `reveal:${req.requestId}`);
+          fs.writeFileSync(outFile, plain, { mode: 0o600, flag: "wx" });
+          return { requestId: req.requestId, written: outFile, bytes: Buffer.byteLength(plain) };
+        }
+        if (!t.ok) throw new Error(t.code ?? "FLEET_REVEAL_FAILED");
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      throw new Error("FLEET_REVEAL_TIMEOUT: the identity broker did not serve the reveal (is it running?)");
+    }
     case "economy-notification-ack":
       return h.notificationAck(p[0], actor);
     case "economy-notification-policy":

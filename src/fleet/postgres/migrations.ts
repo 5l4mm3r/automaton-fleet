@@ -43,8 +43,9 @@ import { V32_SQL } from "./migrations-phase32.js";
 import { V33_SQL } from "./migrations-phase33.js";
 import { V34_SQL } from "./migrations-phase34.js";
 import { V35_SQL } from "./migrations-phase35.js";
+import { V36_SQL } from "./migrations-phase36.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 35;
+export const FLEET_PG_SCHEMA_VERSION = 36;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1175,6 +1176,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 33, name: "no_synthetic_tax_legal_entity_optional", sql: V33_SQL },
   { version: 34, name: "agent_operational_identity_owner_identity_broker", sql: V34_SQL },
   { version: 35, name: "fleet_economy_engine_replication_missions_estates_notifications", sql: V35_SQL },
+  { version: 36, name: "business_mail_sms_admin_reveal_owner_vault_upload", sql: V36_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1326,6 +1328,22 @@ export const IDENTITY_API_FUNCTIONS: readonly string[] = Object.freeze([
   "ix_identity_authorize(uuid, text, text, text, text[])",
   "ix_release_record(uuid, text, text, text, text[], uuid, text)",
   "ix_report_job(uuid, text, text, jsonb, jsonb)",
+  // v36: business mail (idempotent delivery, outbound status), phone numbers and SMS, owner vault installation,
+  // Admin reveal serving (sealed to the Admin session's key) and Admin notification email.
+  "ix_mail_deliver2(text, text, text, text, text, boolean, text)",
+  "ix_mail_sent(uuid, text, text, boolean)",
+  "ix_phone_record(uuid, text, text, text, text, bigint, text)",
+  "ix_phone_status(uuid, text, text, text)",
+  "ix_numbers(text)",
+  "ix_sms_deliver(text, text, text, text, boolean, text)",
+  "ix_sms_sent(uuid, text, text, boolean)",
+  "ix_vault_inbox(text)",
+  "ix_vault_installed(uuid, text, boolean, text)",
+  "ix_reveal_pending(text)",
+  "ix_reveal_serve(uuid, text, bytea, text)",
+  "ix_notifications_unsent(text, integer)",
+  "ix_notification_emailed(uuid, text, boolean)",
+  "ix_publish_owner_key(text, text)",
 ]);
 
 /** Schema v10: the only functions whose bodies may write the ledger tables (append-only double entry). */

@@ -22,6 +22,30 @@ export interface MailProvider {
   provision(localPart: string | null, hint: string): Promise<{ address: string }>;
   /** Messages for an address since a time (provider order). */
   fetch(address: string, since: Date): Promise<MailMessage[]>;
+  /** v36: send from one of the Fleet's addresses. */
+  send(input: { from: string; to: string[]; subject: string; body: string; inReplyTo?: string | null }): Promise<{ providerMessageId: string }>;
+}
+
+export interface SmsMessage {
+  id: string;
+  to: string;
+  from: string;
+  body: string;
+  at: string;
+}
+
+export type NumberOutcome =
+  | { outcome: "succeeded"; e164: string; providerRef: string; monthlyMinor?: number; currency?: string }
+  | { outcome: "failed"; code: string; note?: string }
+  | { outcome: "human_action_required"; code: string; note: string };
+
+/** v36: legitimate programmable numbers and SMS behind a swappable adapter (the constitution names no provider). */
+export interface SmsProvider {
+  readonly name: string;
+  provision(country: string): Promise<NumberOutcome>;
+  release(providerRef: string): Promise<{ ok: boolean; code?: string }>;
+  send(input: { from: string; to: string; body: string }): Promise<{ providerMessageId: string }>;
+  fetch(e164: string, since: Date): Promise<SmsMessage[]>;
 }
 
 export type AccountOutcome =
@@ -61,9 +85,21 @@ export function findVerification(body: string): { link: string | null; code: str
   return { link, code };
 }
 
-/** What an agent may read of a message: links and codes are redacted (they are credentials of a kind). */
+/** The link/code of an ACCOUNT AUTHENTICATION message withheld (credential execution uses it; the agent sees the rest). */
 export function redactMail(body: string): string {
-  return body.replace(/https?:\/\/\S+/g, "[link]").replace(/\b\d{4,8}\b/g, "[code]").slice(0, 4000);
+  return body.replace(/https?:\/\/\S+/g, "[link]").replace(/\b\d{4,8}\b/g, "[code]").slice(0, 100_000);
+}
+
+/**
+ * v36: an account-authentication message (sign-up confirmation, one-time / login / security code, password reset,
+ * two-factor) — its link/code is a credential, handled by the broker. Every other message is ordinary business mail
+ * and reaches the agent whole (customers, suppliers, platform correspondence).
+ */
+export function isAuthenticationMessage(subject: string, body: string): boolean {
+  const v = findVerification(body);
+  if (!v.link && !v.code && !/\b\d{4,8}\b/.test(body) && !/https?:\/\//.test(body)) return false;
+  return /verif|confirm (your|the) (email|account|address)|activat|one[- ]time|\botp\b|security code|log ?in code|sign[- ]?in code|reset (your )?password|password reset|two[- ]factor|\b2fa\b|authenticat/i
+    .test(`${subject}\n${body}`);
 }
 
 // ─── Simulated adapters (no network; deterministic) ───────────────────────────
@@ -83,6 +119,14 @@ export class SimulatedMailProvider implements MailProvider {
 
   async fetch(address: string, since: Date): Promise<MailMessage[]> {
     return (this.boxes.get(address) ?? []).filter((m) => new Date(m.at) >= since);
+  }
+
+  readonly outbox: Array<{ from: string; to: string[]; subject: string; body: string; inReplyTo?: string | null; providerMessageId: string }> = [];
+  async send(input: { from: string; to: string[]; subject: string; body: string; inReplyTo?: string | null }): Promise<{ providerMessageId: string }> {
+    const providerMessageId = `<${crypto.randomUUID()}@${this.domain}>`;
+    this.outbox.push({ ...input, providerMessageId });
+    for (const to of input.to) if (this.boxes.has(to)) this.deliver({ to, from: input.from, subject: input.subject, body: input.body });
+    return { providerMessageId };
   }
 
   /** Simulation hook: a platform (or anyone) emails an address. */
@@ -214,5 +258,49 @@ export class SimulatedPlatform implements PlatformConnector {
     if (err) return err;
     a!.closed = true;
     return { outcome: "succeeded" };
+  }
+}
+
+
+/** A simulated SMS provider: numbers per country, inbound injection, an outbox; "XR" needs a regulatory bundle (human). */
+export class SimulatedSmsProvider implements SmsProvider {
+  readonly name = "sim-sms";
+  readonly numbers = new Map<string, { e164: string; country: string; released: boolean }>();
+  readonly outbox: Array<{ from: string; to: string; body: string; providerMessageId: string }> = [];
+  private readonly inbound = new Map<string, SmsMessage[]>();
+  private next = 7_700_900_100;
+  constructor(private readonly o: { monthlyMinor?: number; currency?: string; down?: boolean } = {}) {}
+
+  async provision(country: string): Promise<NumberOutcome> {
+    if (this.o.down) return { outcome: "failed", code: "provider_unavailable", note: "SMS provider unavailable" };
+    if (country === "XR") return { outcome: "human_action_required", code: "regulatory_bundle_required", note: "numbers in this country need an address/identity bundle approved for the account holder" };
+    if (country === "XX") return { outcome: "failed", code: "no_numbers_available", note: "no numbers available in that country" };
+    const e164 = `+44${this.next++}`;
+    const providerRef = `PN${crypto.randomBytes(8).toString("hex")}`;
+    this.numbers.set(providerRef, { e164, country, released: false });
+    this.inbound.set(e164, []);
+    return { outcome: "succeeded", e164, providerRef, monthlyMinor: this.o.monthlyMinor ?? 115, currency: this.o.currency ?? "USD" };
+  }
+  async release(providerRef: string) {
+    const n = this.numbers.get(providerRef);
+    if (!n) return { ok: false, code: "not_found" };
+    n.released = true;
+    return { ok: true };
+  }
+  async send(input: { from: string; to: string; body: string }) {
+    const providerMessageId = `SM${crypto.randomBytes(8).toString("hex")}`;
+    this.outbox.push({ ...input, providerMessageId });
+    return { providerMessageId };
+  }
+  async fetch(e164: string, since: Date): Promise<SmsMessage[]> {
+    return (this.inbound.get(e164) ?? []).filter((m) => new Date(m.at) >= since);
+  }
+  /** Simulation hook: someone texts a number. */
+  deliver(to: string, from: string, body: string): SmsMessage {
+    const box = this.inbound.get(to);
+    if (!box) throw new Error("no such number");
+    const m = { id: `SM${crypto.randomBytes(8).toString("hex")}`, to, from, body, at: new Date().toISOString() };
+    box.push(m);
+    return m;
   }
 }

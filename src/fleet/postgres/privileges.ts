@@ -818,6 +818,8 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import",
       // v29: PAYMENT_RAIL_REQUIRED records ONE action-scoped kyc dependency (and answers it when a rail is connected).
       "fleet_rail_resolve",
+      // v36: a number provider's account-holder identity step records ONE action-scoped human_identity dependency.
+      "ix_phone_status",
       // v34: a provider needing a non-delegable human identity act records ONE action-scoped dependency for that account.
       "ix_report_job"]),
     // v27: the spend circuit breaker only through the owner's infrastructure control.
@@ -925,7 +927,6 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       "ix_credential_record", "ix_mailbox_record", "ix_report_job", "fleet_estate_assign_internal"]),
     fleet_agent_account_credentials: new Set(["fleet_econ_account_revoke", "ix_credential_record"]),
     fleet_agent_mailboxes: new Set(["ix_mailbox_record", "fleet_estate_assign_internal"]),
-    fleet_agent_mail: new Set(["ix_mail_deliver", "ix_mail_consumed"]),
     fleet_identity_jobs: new Set(["fleet_identity_enqueue", "ix_claim_job", "ix_report_job", "fleet_estate_assign_internal", "svc_estate_tick"]),
     // v35: the economy engine. Replication state/birth orders only by the controller pass and Admin; missions by their
     // engine; commitments by the agent; notifications through fleet_notify; estate items by the estate engine.
@@ -935,14 +936,24 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_mission_policy: new Set(["fleet_admin_mission_policy_set"]),
     fleet_mission_requests: new Set(["fleet_mission_start", "fleet_mission_end", "fleet_admin_mission_request", "fleet_econ_mission_request"]),
     fleet_agent_missions: new Set(["fleet_mission_start", "fleet_mission_end", "fleet_econ_mission_report", "fleet_econ_mission_review"]),
-    fleet_agent_commitments: new Set(["fleet_econ_commitment_add", "fleet_econ_commitment_cancel", "fleet_estate_assign_internal", "svc_estate_tick"]),
+    fleet_agent_commitments: new Set(["fleet_econ_commitment_add", "fleet_econ_commitment_cancel", "fleet_estate_assign_internal", "svc_estate_tick",
+      "ix_phone_record", "fleet_econ_phone_release"]),
     fleet_risk_policy: new Set(["fleet_admin_risk_policy_set"]),
-    fleet_notifications: new Set(["fleet_notify", "fleet_admin_notification_ack"]),
+    fleet_notifications: new Set(["fleet_notify", "fleet_admin_notification_ack", "ix_notification_emailed"]),
     fleet_notification_policy: new Set(["fleet_admin_notification_policy_set", "svc_notify_tick"]),
     fleet_estate_items: new Set(["svc_estate_tick", "fleet_estate_assign_internal", "fleet_admin_estate_release"]),
     fleet_estate_policy: new Set([]),
+    // v36: mail (agent send; broker delivery/status), phones/SMS (agent ops; broker provision/delivery/status), commitments
+    // created for a number's monthly fee, owner vault installation, reveal serving/taking, notification email status.
+    fleet_agent_mail: new Set(["ix_mail_deliver", "ix_mail_consumed", "ix_mail_deliver2", "ix_mail_sent", "fleet_econ_mail_send"]),
+    fleet_agent_phone_numbers: new Set(["fleet_econ_phone_provision", "fleet_econ_phone_release", "ix_phone_record", "ix_phone_status"]),
+    fleet_agent_sms: new Set(["fleet_econ_sms_send", "ix_sms_deliver", "ix_sms_sent"]),
+    fleet_owner_vault_inbox: new Set(["fleet_admin_owner_vault_upload", "ix_vault_installed"]),
+    fleet_reveal_requests: new Set(["fleet_admin_reveal_request", "fleet_admin_reveal_take", "ix_reveal_pending", "ix_reveal_serve"]),
+    fleet_reveal_log: new Set(["fleet_reveal_log_write"]),
+    fleet_identity_broker_keys: new Set(["ix_publish_owner_key"]),
     fleet_identity_releases: new Set(["ix_release_record"]),
-    fleet_owner_identity_classes: new Set(["fleet_admin_owner_identity_class_set"]),
+    fleet_owner_identity_classes: new Set(["fleet_admin_owner_identity_class_set", "ix_vault_installed"]),
     fleet_owner_identity_consent: new Set(["fleet_admin_owner_identity_consent_set", "fleet_admin_owner_identity_consent_revoke"]),
   };
   const fns = await db.query<{ name: string; src: string }>(

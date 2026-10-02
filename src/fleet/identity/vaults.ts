@@ -101,18 +101,24 @@ export class AgentCredentialVault {
 }
 
 export const OWNER_IDENTITY_CLASSES = ["legal_name", "date_of_birth", "residential_address", "contact_email", "contact_phone", "id_document",
-  "proof_of_address", "tax_identifier", "bank_account_owner", "other_fact"] as const;
+  "proof_of_address", "tax_identifier", "bank_account_owner", "other_fact", "passport", "driving_licence"] as const;
 export type OwnerIdentityClass = (typeof OWNER_IDENTITY_CLASSES)[number];
 
 /** Owner CLI side: seal one class to the broker's public key. The CLI can never read it back. */
 export function sealOwnerFact(brokerPublicDer: Buffer, cls: OwnerIdentityClass, value: string): Buffer {
   if (!OWNER_IDENTITY_CLASSES.includes(cls)) throw new Error("unknown owner identity class");
-  if (!value || value.length > 500_000) throw new Error("an owner fact is 1 byte to 500 kB");
+  // A fact is text; a document (passport, licence, proof of address) is {"contentType","dataB64"} JSON — up to ~8 MB.
+  if (!value || value.length > 11_000_000) throw new Error("an owner fact or document is 1 byte to ~8 MB");
   return sealTo(brokerPublicDer, value, `owner:${cls}`);
 }
 
 export class OwnerIdentityVault {
   constructor(private readonly dir: string, private readonly privateDer: Buffer, private readonly publicDer: Buffer) {}
+
+  /** The broker's owner-vault public key (SPKI DER, base64) — published so uploads can be sealed to it. */
+  publicKeyBase64(): string {
+    return this.publicDer.toString("base64");
+  }
 
   fileFor(cls: OwnerIdentityClass): string {
     if (!OWNER_IDENTITY_CLASSES.includes(cls)) throw new Error("unknown owner identity class");
@@ -121,6 +127,8 @@ export class OwnerIdentityVault {
 
   /** Install a sealed blob (written by the owner CLI) for one class. */
   install(cls: OwnerIdentityClass, sealed: Buffer): string {
+    // v36: only a blob sealed to THIS broker key for THIS class is accepted (the plaintext is discarded at once).
+    openSealed(this.privateDer, this.publicDer, sealed, `owner:${cls}`);
     writePrivate(this.fileFor(cls), sealed);
     return `ovault:${cls}`;
   }

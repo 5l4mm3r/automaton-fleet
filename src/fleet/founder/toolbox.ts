@@ -61,7 +61,10 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
   // v34: the agent's own operational identity and accounts (asynchronous broker jobs; statuses only).
   identity: { create_persona: "identity.create", update_persona: "identity.update", list: "identity.list", provision_mailbox: "mailbox.provision",
     inbox: "mail.inbox", create_account: "account.create", operate: "account.operate", status: "account.status", verify_identity: "account.verify_identity",
-    recover: "account.recover", rotate: "account.rotate", revoke: "account.revoke", close: "account.close" },
+    recover: "account.recover", rotate: "account.rotate", revoke: "account.revoke", close: "account.close",
+    // v36: business mail and SMS.
+    read_mail: "mail.read", send_mail: "mail.send", provision_phone: "phone.provision", release_phone: "phone.release", phones: "phone.list",
+    send_sms: "sms.send", sms_inbox: "sms.inbox" },
   // v35: recurring commitments, risk context, temporary Fleet missions and estate reuse (the agent's own planning).
   fleet_services: { add_commitment: "commitment.add", cancel_commitment: "commitment.cancel", commitments: "commitment.list", assess_risk: "risk.assess",
     mission_status: "mission.status", request_mission: "mission.request", mission_report: "mission.report", mission_review: "mission.review",
@@ -69,7 +72,7 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
 });
 /** Registry ops that move or commit money get a deterministic idempotency key from the tool call (a retry never doubles). */
 const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend", "mailbox.provision", "account.create", "account.operate", "account.verify_identity",
-  "account.recover", "account.rotate", "account.revoke", "account.close", "commitment.add"]);
+  "account.recover", "account.rotate", "account.revoke", "account.close", "commitment.add", "mail.send", "phone.provision", "phone.release", "sms.send"]);
 
 export interface ToolOutcome {
   name: string;
