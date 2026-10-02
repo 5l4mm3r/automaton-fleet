@@ -41,8 +41,9 @@ import { V30_SQL } from "./migrations-phase30.js";
 import { V31_SQL } from "./migrations-phase31.js";
 import { V32_SQL } from "./migrations-phase32.js";
 import { V33_SQL } from "./migrations-phase33.js";
+import { V34_SQL } from "./migrations-phase34.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 33;
+export const FLEET_PG_SCHEMA_VERSION = 34;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1171,6 +1172,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 31, name: "f2_launch_admin_withdrawal_risk_r24_custody_contextual_depth", sql: V31_SQL },
   { version: 32, name: "custody_signer_keyless_custody_bound_instructions", sql: V32_SQL },
   { version: 33, name: "no_synthetic_tax_legal_entity_optional", sql: V33_SQL },
+  { version: 34, name: "agent_operational_identity_owner_identity_broker", sql: V34_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1302,6 +1304,22 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   cx_attest_signer: { writes: ["fleet_custody_attestations"], calls: [] },
   cx_credential_use: { writes: ["fleet_credential_use_log", "fleet_credential_refs"], calls: [] },
 });
+
+/** Schema v34: the only functions the identity broker's role may execute (fleet_identity; ix_* protocol). */
+export const IDENTITY_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "ix_ping()",
+  "ix_claim_job(text, text)",
+  "ix_pending_jobs(text)",
+  "ix_credential_record(uuid, text, text, text)",
+  "ix_retired_credentials(uuid, text)",
+  "ix_mailbox_record(uuid, text, text, text)",
+  "ix_mailboxes(text)",
+  "ix_mail_deliver(text, text, text, text, text, boolean)",
+  "ix_mail_consumed(uuid, text, uuid)",
+  "ix_identity_authorize(uuid, text, text, text, text[])",
+  "ix_release_record(uuid, text, text, text, text[], uuid, text)",
+  "ix_report_job(uuid, text, text, jsonb, jsonb)",
+]);
 
 /** Schema v10: the only functions whose bodies may write the ledger tables (append-only double entry). */
 export const LEDGER_TABLES: readonly string[] = Object.freeze(["fleet_ledger_journal", "fleet_ledger_postings", "fleet_ledger_head"]);

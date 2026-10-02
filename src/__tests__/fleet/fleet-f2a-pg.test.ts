@@ -208,6 +208,8 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
       "fleet_owner_requests_overview", "fleet_owner_queue", "fleet_owner_requests_guard", "fleet_owner_request_json",
       // v29: PAYMENT_RAIL_REQUIRED records (and answers) the one action-scoped kyc dependency — a member of the family.
       "fleet_rail_resolve",
+      // v34: the identity broker records (and answers) the one action-scoped human_identity dependency of an account.
+      "ix_report_job",
       // v30: read-only observability (the Hub's dependency list and Doctor's action-scoping check) — they gate nothing.
       "fleet_hub", "fleet_economy_health"]);
     expect(readers.length).toBeGreaterThan(0);

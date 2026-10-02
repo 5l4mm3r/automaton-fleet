@@ -33,6 +33,7 @@ import {
   AGENT_API_FUNCTIONS,
   CUSTODY_API_FUNCTIONS,
   CUSTODY_WRITES,
+  IDENTITY_API_FUNCTIONS,
   GENESIS_GUARDS,
   GENESIS_OPERATORS,
   LEDGER_TABLES,
@@ -69,6 +70,9 @@ export interface PrivilegeAuditOptions {
   /** Schema v10 custody executor roles (default fleet_custody + fleet_custody_login); same provisioning rule as the operator roles. */
   custodyRoles?: string[];
   requireCustodyRoles?: boolean;
+  /** Schema v34 identity broker roles (default fleet_identity + fleet_identity_login). */
+  identityRoles?: string[];
+  requireIdentityRoles?: boolean;
 }
 
 /** "provisioned": every operator role exists; "not_provisioned": none exists (and not required); "incomplete": some are missing. */
@@ -89,8 +93,10 @@ export const DEFAULT_AGENT_ROLES = ["fleet_agent", "fleet_agent_login"];
 export const DEFAULT_SERVICE_ROLES = ["fleet_service", "fleet_service_login"];
 export const DEFAULT_OPERATOR_ROLES = ["fleet_operator", "fleet_operator_login"];
 export const DEFAULT_CUSTODY_ROLES = ["fleet_custody", "fleet_custody_login"];
+/** Schema v34 identity broker roles (same provisioning rule: absent = not provisioned). */
+export const DEFAULT_IDENTITY_ROLES = ["fleet_identity", "fleet_identity_login"];
 
-type RoleKind = "agent" | "service" | "operator" | "custody";
+type RoleKind = "agent" | "service" | "operator" | "custody" | "identity";
 
 const TABLE_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
@@ -128,23 +134,34 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   if (custodyState === "not_provisioned") {
     for (const r of configuredCustodyRoles) roles.push({ role: r, kind: "custody", exists: false, functions: [], tables: [] });
   }
+  const configuredIdentityRoles = opts.identityRoles ?? DEFAULT_IDENTITY_ROLES;
+  const identityPresent = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = ANY($1)`, [configuredIdentityRoles])).rows[0].n;
+  const identityState: OperatorRoleState =
+    identityPresent === configuredIdentityRoles.length ? "provisioned" : identityPresent === 0 && !opts.requireIdentityRoles ? "not_provisioned" : "incomplete";
+  const identityRoles = identityState === "not_provisioned" ? [] : configuredIdentityRoles;
+  if (identityState === "not_provisioned") {
+    for (const r of configuredIdentityRoles) roles.push({ role: r, kind: "identity", exists: false, functions: [], tables: [] });
+  }
   const allRestricted = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES),
     ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES),
     ...operatorRoles,
     ...custodyRoles,
+    ...identityRoles,
   ];
   const plan: Array<[string, RoleKind]> = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES).map((r) => [r, "agent"] as [string, RoleKind]),
     ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES).map((r) => [r, "service"] as [string, RoleKind]),
     ...operatorRoles.map((r) => [r, "operator"] as [string, RoleKind]),
     ...custodyRoles.map((r) => [r, "custody"] as [string, RoleKind]),
+    ...identityRoles.map((r) => [r, "identity"] as [string, RoleKind]),
   ];
 
   const agentFns = new Set(AGENT_API_FUNCTIONS.map(normSig));
   const serviceFns = new Set(SERVICE_API_FUNCTIONS.map(normSig));
   const operatorFns = new Set(OPERATOR_API_FUNCTIONS.map(normSig));
   const custodyFns = new Set(CUSTODY_API_FUNCTIONS.map(normSig));
+  const identityFns = new Set(IDENTITY_API_FUNCTIONS.map(normSig));
   const operatorVolatile = new Set(OPERATOR_VOLATILE_FUNCTIONS.map(normSig));
   const serviceTables = new Set(SERVICE_READ_TABLES);
 
@@ -239,7 +256,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
         ORDER BY 1`,
       [role, schema],
     );
-    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : operatorFns;
+    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : kind === "identity" ? identityFns : operatorFns;
     const executable: string[] = [];
     for (const f of fns.rows) {
       const sig = normSig(f.sig);
@@ -800,7 +817,9 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     // v25/v26: dependency records only through the founder API and the owner's resolve/import.
     fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import",
       // v29: PAYMENT_RAIL_REQUIRED records ONE action-scoped kyc dependency (and answers it when a rail is connected).
-      "fleet_rail_resolve"]),
+      "fleet_rail_resolve",
+      // v34: a provider needing a non-delegable human identity act records ONE action-scoped dependency for that account.
+      "ix_report_job"]),
     // v27: the spend circuit breaker only through the owner's infrastructure control.
     fleet_spend_circuit_breaker: new Set(["fleet_admin_spend_circuit_breaker", "fleet_admin_spend_circuit_breaker_novelty"]),
   };
@@ -899,6 +918,17 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v32: custody signer attestations (custody role only) and the attestation heartbeat policy (owner).
     fleet_custody_attestations: new Set(["cx_attest_signer"]),
     fleet_custody_policy: new Set(["fleet_admin_custody_policy_set"]),
+    // v34: agent operational identity (agent ops), the broker protocol (ix_*), owner identity metadata/consent (owner).
+    fleet_agent_identities: new Set(["fleet_econ_identity_create", "fleet_econ_identity_update"]),
+    fleet_agent_accounts: new Set(["fleet_econ_account_create", "fleet_econ_mailbox_provision", "fleet_econ_account_revoke", "ix_claim_job",
+      "ix_credential_record", "ix_mailbox_record", "ix_report_job"]),
+    fleet_agent_account_credentials: new Set(["fleet_econ_account_revoke", "ix_credential_record"]),
+    fleet_agent_mailboxes: new Set(["ix_mailbox_record"]),
+    fleet_agent_mail: new Set(["ix_mail_deliver", "ix_mail_consumed"]),
+    fleet_identity_jobs: new Set(["fleet_identity_enqueue", "ix_claim_job", "ix_report_job"]),
+    fleet_identity_releases: new Set(["ix_release_record"]),
+    fleet_owner_identity_classes: new Set(["fleet_admin_owner_identity_class_set"]),
+    fleet_owner_identity_consent: new Set(["fleet_admin_owner_identity_consent_set", "fleet_admin_owner_identity_consent_revoke"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

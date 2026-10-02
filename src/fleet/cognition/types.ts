@@ -205,6 +205,13 @@ export const FOUNDER_TOOLS: readonly ToolSpec[] = Object.freeze([
     parameters: obj({ op: { type: "string", enum: ["register_vendor", "revoke_vendor", "require_rail", "request", "list", "envelopes", "envelope_spend"] }, args: { type: "object" } }, ["op"]),
   },
   {
+    name: "identity",
+    capability: "planning",
+    description: "Your own operational identities and internet accounts — yours to create and run, no permission needed. op create_persona: {displayName, kind (persona|brand|venture_identity), handle?, bio?, ventureKey?} — a pseudonym, brand or venture name (never a claim of a government identity or of a real person); op update_persona: {identityId, bio?, handle?, status?}; op provision_mailbox: {localPart?, identityId?} → an email address of yours; op create_account: {platform, kind (domain|website|marketplace|storefront|social|service|api|payment_profile|other), handle?, identityId?, ventureKey?, mailboxAddress?} — FleetController's identity broker creates it, keeps its credentials in a vault (you never see them) and consumes the verification email; op operate: {accountId, action, params}; op verify_identity: {accountId, purpose (account_verification|seller_verification|payment_profile|domain_registration|other_legitimate)} — only where a provider requires a verified account holder; you receive a status only; op recover / rotate / revoke / close: {accountId}; op status: {accountId}; op inbox; op list. Account work runs asynchronously: check status or list on a later turn. A provider needing a human act blocks only that account — use another platform or channel meanwhile.",
+    parameters: obj({ op: { type: "string", enum: ["create_persona", "update_persona", "list", "provision_mailbox", "inbox", "create_account", "operate", "status", "verify_identity",
+      "recover", "rotate", "revoke", "close"] }, args: { type: "object", description: "Fields for the op (see description)" } }, ["op"]),
+  },
+  {
     name: "economic_knowledge",
     capability: "knowledge.read",
     description: "Structured economic learning, so nothing is rediscovered. op search: {topic?, query?} — your own entries and Fleet entries backed by measured ledger outcomes; op record: {topic (niche|product|channel|pricing|conversion|vendor|manufacturer|demand|acquisition|assumption_failed|assumption_succeeded|launch_result|operational_cost), subject (short key, e.g. etsy/printables), claim, evidence?, confidenceBp?, ventureKey?}. Search before researching a fact the Fleet may already know.",

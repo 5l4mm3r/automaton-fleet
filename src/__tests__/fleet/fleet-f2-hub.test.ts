@@ -49,7 +49,8 @@ describe("F2 Fleet Hub", () => {
     await expect(runHubCommand("economy-wallet-transfer", ["AGENT1", "100", "owner", "x"], h, actor)).rejects.toThrow(/treasury or operating_pool/);
     await expect(runHubCommand("economy-capital-policy", ["not json"], h, actor)).rejects.toThrow(/JSON object/);
     expect(calls).toHaveLength(4);
-    expect([...HUB_COMMANDS].every((c) => c === "hub" || c.startsWith("hub-") || c.startsWith("economy-"))).toBe(true);
+    // v34: owner identity vault commands are their own explicit family (owner-identity-*).
+    expect([...HUB_COMMANDS].every((c) => c === "hub" || c.startsWith("hub-") || c.startsWith("economy-") || c.startsWith("owner-identity-"))).toBe(true);
   });
 
   it("hub-render writes one 0600 file with every section and the doctor findings", async () => {

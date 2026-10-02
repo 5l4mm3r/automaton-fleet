@@ -536,6 +536,17 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
       // F2 (schema v30): the economy — reconciliation, tax reserves, settlement, rails and credentials, envelopes, action-
       // scoped dependencies, research loops and agents with no route forward. Agent autonomy itself is never an error.
       facts.custody = await store.custodyStatus();
+      // v34: the identity broker. Personas and brands need no broker; account work waits for it (agents carry on).
+      const ids = await store.identityStatus();
+      facts.identity = ids;
+      if (ids) {
+        const idle = ids.queuedStale > 0 || ids.claimedStale > 0;
+        add("identity broker", idle ? "warn" : "pass",
+          `${ids.identities} operational identit(ies), ${ids.accounts} account(s); queue ${ids.queued}` +
+            (ids.queuedStale ? ` (${ids.queuedStale} queued > 1 h: the identity broker is not running or not provisioned)` : "") +
+            (ids.claimedStale ? `; ${ids.claimedStale} claimed > 1 day` : "") +
+            `; ${ids.humanActionRequired} account(s) await a human identity act (action-scoped); owner vault ${ids.ownerVaultConfigured ? "configured" : "not configured"}, ${ids.activeConsents} active consent(s)`);
+      }
       const eh = await store.economyHealth();
       facts.economy = eh;
       if (eh) {

@@ -42,6 +42,23 @@ export class PgHubAdmin {
     return this.one(`SELECT fleet_admin_withdrawal_policy_set($1, $2, $3) AS r`, [cushionBp, horizonDays, actor]);
   }
 
+  /** v34: agent identities/accounts, the owner identity vault's metadata and the broker queue (never a value or secret). */
+  identity(agentId: string | null) {
+    return this.one(`SELECT fleet_hub_identity($1) AS r`, [agentId]);
+  }
+  ownerIdentityClass(cls: string, status: string, expiresAt: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_owner_identity_class_set($1, $2, $3, $4, $5) AS r`, [cls, `ovault:${cls}`, expiresAt, status, actor]);
+  }
+  ownerIdentityConsent(purposes: string[], providers: string[] | null, classes: string[], statement: string, actor: string) {
+    return this.one(`SELECT fleet_admin_owner_identity_consent_set($1, $2, $3, $4, $5) AS r`, [purposes, providers, classes, statement, actor]);
+  }
+  ownerIdentityConsentRevoke(consentId: string, actor: string) {
+    return this.one(`SELECT fleet_admin_owner_identity_consent_revoke($1, $2) AS r`, [consentId, actor]);
+  }
+  identityStatus() {
+    return this.one(`SELECT fleet_identity_status() AS r`);
+  }
+
   /** v32: custody facts (keyless vs self-keyed agents, attested signers, instruction states). */
   custody() {
     return this.one(`SELECT fleet_custody_status() AS r`);

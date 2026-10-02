@@ -706,24 +706,14 @@ describe.skipIf(!PG_BIN)("Phase F Genesis (schema v11, PostgreSQL)", () => {
     await reset();
   });
 
-  it("identity vault: one approved fact per approved claim, bounded reads, never secrets, never a listing, never another agent's claim", async () => {
+  it("v34: owner identity is never stored in the registry nor released to an agent (the identity broker replaces the v11 claim flow)", async () => {
     const g = await activated(2, 0);
-    const [a, b] = g.founders;
-    await owner.query(`SELECT fleet.fleet_org_identity_set('trading_name', 'Synthetic Test Co', 'public', 'operator:owner')`);
-    await owner.query(`SELECT fleet.fleet_org_identity_set('tax_identifier', 'SYNTHETIC-TAX-000', 'secret', 'operator:owner')`);
-    const c1 = await gw.identityRequest(a.agentId, a.token, "trading_name", "invoice header", "invoicing");
-    expect(await gw.identityFact(a.agentId, a.token, c1.claimId as string)).toMatchObject({ ok: false, code: "FLEET_IDENTITY_CLAIM_NOT_ACTIVE" });
-    expect(await pgCode(genesis.decideIdentityClaim(c1.claimId as string, true, 600, 2, `operator:${a.agentId}`))).toBe("FLEET_SELF_APPROVAL");
-    await genesis.decideIdentityClaim(c1.claimId as string, true, 600, 2, OWNER);
-    expect(await gw.identityFact(b.agentId, b.token, c1.claimId as string)).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
-    expect(await gw.identityFact(a.agentId, a.token, c1.claimId as string)).toMatchObject({ ok: true, factKey: "trading_name", value: "Synthetic Test Co" });
-    expect(await gw.identityFact(a.agentId, a.token, c1.claimId as string)).toMatchObject({ ok: true });
-    expect(await gw.identityFact(a.agentId, a.token, c1.claimId as string)).toMatchObject({ ok: false, code: "FLEET_IDENTITY_CLAIM_NOT_ACTIVE" }); // max 2 reads
-    const c2 = await gw.identityRequest(a.agentId, a.token, "tax_identifier", "registration", "tax");
-    await genesis.decideIdentityClaim(c2.claimId as string, true, 600, 5, OWNER);
-    expect(await gw.identityFact(a.agentId, a.token, c2.claimId as string)).toMatchObject({ ok: false, code: "FLEET_IDENTITY_FACT_UNAVAILABLE" });
-    const ev = await q(`SELECT detail::text AS d FROM fleet.fleet_events WHERE event_type LIKE 'identity_%'`);
-    expect(ev.map((x) => x.d).join("\n")).not.toContain("SYNTHETIC-TAX-000");
+    const [a] = g.founders;
+    expect(await pgCode(owner.query(`SELECT fleet.fleet_org_identity_set('trading_name', 'Synthetic Test Co', 'public', 'operator:owner')`))).toBe("FLEET_OWNER_VAULT");
+    expect(await pgCode(owner.query(`INSERT INTO fleet.fleet_org_identity_facts (fact_key, sensitivity, value, value_sha256, set_by)
+      VALUES ('legal_name', 'public', 'x', repeat('a', 64), 'operator:owner')`))).toBe("FLEET_OWNER_VAULT");
+    expect(await gw.identityRequest(a.agentId, a.token, "trading_name", "invoice header", "invoicing")).toMatchObject({ ok: false, code: "FLEET_IDENTITY_BROKERED" });
+    expect(await gw.identityFact(a.agentId, a.token, crypto.randomUUID())).toMatchObject({ ok: false, code: "FLEET_IDENTITY_BROKERED" });
     await reset();
   });
 

@@ -107,3 +107,25 @@ ALTER ROLE fleet_operator_login IN DATABASE :"dbname" SET idle_in_transaction_se
 ALTER ROLE fleet_custody_login IN DATABASE :"dbname" SET statement_timeout = '10s';
 ALTER ROLE fleet_custody_login IN DATABASE :"dbname" SET lock_timeout = '5s';
 ALTER ROLE fleet_custody_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '10s';
+
+-- Schema v34: the identity broker (optional; provisioned only when identity_password is supplied).
+--   fleet_identity        NOLOGIN group: USAGE on fleet + EXECUTE on the ix_* identity-broker functions only
+--   fleet_identity_login  LOGIN member of fleet_identity, held by the identity broker process only
+\if :{?identity_password}
+SELECT 'CREATE ROLE fleet_identity NOLOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_identity') \gexec
+SELECT 'CREATE ROLE fleet_identity_login LOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_identity_login') \gexec
+ALTER ROLE fleet_identity       NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+ALTER ROLE fleet_identity_login LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4;
+SELECT format('ALTER ROLE fleet_identity_login PASSWORD %L', :'identity_password') \gexec
+GRANT fleet_identity TO fleet_identity_login;
+SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname)
+  FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
+ WHERE m.rolname IN ('fleet_identity_login', 'fleet_identity') AND NOT (m.rolname = 'fleet_identity_login' AND r.rolname = 'fleet_identity') \gexec
+REVOKE ALL ON DATABASE :"dbname" FROM fleet_identity, fleet_identity_login;
+GRANT CONNECT ON DATABASE :"dbname" TO fleet_identity_login;
+ALTER ROLE fleet_identity_login IN DATABASE :"dbname" SET statement_timeout = '10s';
+ALTER ROLE fleet_identity_login IN DATABASE :"dbname" SET lock_timeout = '5s';
+ALTER ROLE fleet_identity_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '10s';
+\endif

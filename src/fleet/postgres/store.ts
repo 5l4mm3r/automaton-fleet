@@ -55,6 +55,7 @@ import type {
 import { migrateCheck,
   AGENT_API_FUNCTIONS,
   CUSTODY_API_FUNCTIONS,
+  IDENTITY_API_FUNCTIONS,
   FLEET_PG_HARD_MAX_AGENTS,
   FLEET_PG_SCHEMA_VERSION,
   OPERATOR_API_FUNCTIONS,
@@ -76,6 +77,8 @@ export const DEFAULT_SERVICE_ROLE = "fleet_service";
 export const DEFAULT_OPERATOR_ROLE = "fleet_operator";
 /** Schema v10: inert custody executor role (granted cx_* only). */
 export const DEFAULT_CUSTODY_ROLE = "fleet_custody";
+/** Schema v34: the identity broker's NOLOGIN group (ix_* only). */
+export const DEFAULT_IDENTITY_ROLE = "fleet_identity";
 
 export interface FleetTimeouts {
   reservationTtlS: number;
@@ -592,13 +595,14 @@ export class PgFleetStore {
       client.release();
     }
     const roles = await this.pool
-      .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole, DEFAULT_CUSTODY_ROLE]])
+      .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole, DEFAULT_CUSTODY_ROLE, DEFAULT_IDENTITY_ROLE]])
       .catch(() => null);
     const present = new Set(roles?.rows.map((r) => r.rolname) ?? []);
     if (present.has(this.agentRole)) await this.grantAgentRole(this.agentRole);
     if (present.has(this.serviceRole)) await this.grantServiceRole(this.serviceRole);
     if (present.has(this.operatorRole)) await this.grantOperatorRole(this.operatorRole);
     if (present.has(DEFAULT_CUSTODY_ROLE)) await this.grantCustodyRole(DEFAULT_CUSTODY_ROLE);
+    if (present.has(DEFAULT_IDENTITY_ROLE)) await this.grantIdentityRole(DEFAULT_IDENTITY_ROLE);
     return applied;
   }
 
@@ -888,6 +892,24 @@ export class PgFleetStore {
       await this.event(c, "custody_role_granted", null, "operator", { role, functions: [...CUSTODY_API_FUNCTIONS] });
     });
   }
+  /** Schema v34: the identity broker's role — USAGE on the schema and EXECUTE on IDENTITY_API_FUNCTIONS only. */
+  async grantIdentityRole(role: string = DEFAULT_IDENTITY_ROLE): Promise<void> {
+    const r = quoteIdent(role);
+    const s = quoteIdent(this.schema);
+    await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
+      const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
+      if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
+      await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
+      for (const fn of IDENTITY_API_FUNCTIONS) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
+      await this.event(c, "identity_role_granted", null, "operator", { role, functions: [...IDENTITY_API_FUNCTIONS] });
+    });
+  }
 
   /**
    * Operator API overview for doctor (schema v8). Needs the admin (owner)
@@ -1014,6 +1036,16 @@ export class PgFleetStore {
 
   /** Schema v26 (F2-A): open external dependencies for doctor — information, never an owner to-do (admin credential). */
   /** Schema v30 (F2): the economy doctor's findings (INFO / WARN / FAIL); null before v30 or when unreadable. */
+  /** Schema v34: identity broker facts (queue, stale jobs, human-action accounts, owner vault configured, consents). Null before v34. */
+  async identityStatus(): Promise<{ identities: number; accounts: number; queued: number; queuedStale: number; claimedStale: number; humanActionRequired: number;
+    ownerVaultConfigured: boolean; activeConsents: number } | null> {
+    try {
+      return await this.read(async (c) => (await c.query(`SELECT fleet_identity_status() AS j`)).rows[0].j);
+    } catch {
+      return null;
+    }
+  }
+
   /** Schema v32: custody facts — keyless vs agent-held-key living agents, attested signers, instruction states. Null before v32. */
   async custodyStatus(): Promise<{ executionEnabled: boolean; livingAgents: number; keylessAgents: number; agentHeldKeys: number; attestedRails: number;
     liveSigners: number; attestationTtlS: number; instructions: { issued: number; claimed: number; claimedStale: number; settled: number; failed: number } } | null> {

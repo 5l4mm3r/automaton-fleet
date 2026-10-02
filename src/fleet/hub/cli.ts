@@ -10,6 +10,13 @@
  *                                               requirements) and the audited withdrawal history; the withdrawal itself is
  *                                               `ledger-withdraw` (no nominal cap; acknowledgement above the advice; strong confirmation)
  *   economy-withdrawal-policy <cushionBp> <horizonDays>
+ *   hub-identity [agentId]                      agents' personas, brands, accounts (status, credential health, reputation), the owner
+ *                                               identity vault's classes/consents/releases and the broker queue — never a value or secret
+ *   owner-identity-seal <class> <valueFile> <brokerPubFile> <outFile>   seal one owner fact (read from a file, never argv)
+ *                                               to the broker's public key; install it with the broker's user (runbook)
+ *   owner-identity-class <class> <configured|removed> [expiresIso]
+ *   owner-identity-consent <purposesCsv> <providersCsv|*> <classesCsv> <statement…>   standing authorisation (revocable)
+ *   owner-identity-consent-revoke <consentId>
  *   hub-custody                                 custody facts: keyless vs self-keyed agents, attested signers, instruction states
  *   economy-custody-policy <attestationTtlS>    custody signer heartbeat window (technical liveness; never a money amount)
  *   economy-destination-reference <destinationId> <reference>   record an owner destination's enrolled payable reference
@@ -33,9 +40,10 @@ import crypto from "crypto";
 import fs from "fs";
 import { HUB_SECTIONS, type HubSection, type PgHubAdmin } from "./admin.js";
 import { renderHub } from "./render.js";
+import { OWNER_IDENTITY_CLASSES, sealOwnerFact, type OwnerIdentityClass } from "../identity/vaults.js";
 
 export const HUB_COMMANDS = new Set([
-  "hub", "hub-render", "hub-health", "hub-withdrawals", "economy-withdrawal-policy", "hub-custody", "economy-custody-policy", "economy-destination-reference", "economy-entity-add", "economy-tax-profile", "economy-tax-policy", "economy-tax-true-up", "economy-tax-payment",
+  "hub", "hub-render", "hub-health", "hub-withdrawals", "economy-withdrawal-policy", "hub-custody", "economy-custody-policy", "hub-identity", "owner-identity-seal", "owner-identity-class", "owner-identity-consent", "owner-identity-consent-revoke", "economy-destination-reference", "economy-entity-add", "economy-tax-profile", "economy-tax-policy", "economy-tax-true-up", "economy-tax-payment",
   "economy-rail-add", "economy-rail-status", "economy-credential-register", "economy-credential-status", "economy-settlement-attribute",
   "economy-capital-policy", "economy-sweep-policy", "economy-economy-policy", "economy-transfer-policy", "economy-cognition-depth", "economy-breaker-novelty",
   "economy-safe-transfer", "economy-wallet-transfer", "economy-sweep-compute",
@@ -81,6 +89,7 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       for (const s of HUB_SECTIONS) if (s !== "wallet") sections[s] = await h.view(s);
       sections.withdrawals = await h.withdrawals(null);
       sections.custody = await h.custody();
+      sections.identity = await h.identity(null);
       sections.health = await h.health();
       fs.writeFileSync(p[0], renderHub(sections), { mode: 0o600 });
       return { written: p[0], sections: Object.keys(sections) };
@@ -91,6 +100,25 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.withdrawals(p[0] ? int(p[0], "amountMinor") : null);
     case "economy-withdrawal-policy":
       return h.withdrawalPolicy(int(p[0], "cushionBp"), int(p[1], "horizonDays"), actor);
+    case "hub-identity":
+      return h.identity(p[0] ?? null);
+    case "owner-identity-seal": {
+      const [cls, valueFile, pubFile, outFile] = p;
+      if (!OWNER_IDENTITY_CLASSES.includes(cls as OwnerIdentityClass) || !valueFile || !pubFile || !outFile) {
+        throw new Error(`FLEET_BAD_REQUEST: owner-identity-seal <${OWNER_IDENTITY_CLASSES.join("|")}> <valueFile> <brokerPubFile> <outFile>`);
+      }
+      const value = fs.readFileSync(valueFile, "utf8").replace(/\n$/, "");
+      const sealed = sealOwnerFact(Buffer.from(fs.readFileSync(pubFile, "utf8").trim(), "base64"), cls as OwnerIdentityClass, value);
+      fs.writeFileSync(outFile, sealed, { mode: 0o600, flag: "wx" });
+      return { class: cls, sealedBytes: sealed.length, written: outFile, next: "install it into the broker's owner-vault as the broker user, then owner-identity-class" };
+    }
+    case "owner-identity-class":
+      return h.ownerIdentityClass(p[0], p[1] ?? "configured", p[2] ?? null, actor);
+    case "owner-identity-consent":
+      return h.ownerIdentityConsent((p[0] ?? "").split(",").filter(Boolean), p[1] === "*" ? null : (p[1] ?? "").split(",").filter(Boolean),
+        (p[2] ?? "").split(",").filter(Boolean), p.slice(3).join(" "), actor);
+    case "owner-identity-consent-revoke":
+      return h.ownerIdentityConsentRevoke(p[0], actor);
     case "hub-custody":
       return h.custody();
     case "economy-custody-policy":

@@ -1,0 +1,73 @@
+# Automaton Fleet identity broker — schema v34 (agent operational identity + owner identity vault).
+#
+# NOT INSTALLED by default: provisioning needs an owner-approved host step (system user, DB role, keys; runbook
+# "Identity broker provisioning"). Runs dist/fleet/identity/main.js from the pinned release as its own system user
+# (automaton-fleet-identity, in no other group). It is the ONLY process holding agent account credentials (encrypted,
+# agent+account bound) and the owner identity vault (sealed to its key); it executes identity jobs agents queue and
+# reports statuses. Agents, FleetController, the custody executor, the operator API and the bridges cannot read its
+# state (0700 StateDirectory, own uid). Database: fleet_identity_login (ix_* only), from identity.env.
+#
+# Network: loopback only until a real provider adapter (mail domain, platform) is added in its own reviewed change; that
+# change adds the exact provider egress here. No listener.
+
+[Unit]
+Description=Automaton Fleet identity broker (agent account credentials and owner identity vault; no listener)
+Wants=postgresql.service
+After=postgresql.service automaton-fleet.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-identity
+Group=automaton-fleet-identity
+SupplementaryGroups=
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/identity/main.js
+EnvironmentFile=/etc/automaton-fleet/identity.env
+Environment=NODE_ENV=production
+Environment=FLEET_IDENTITY_EXPECTED_USER=automaton-fleet-identity
+Environment=FLEET_IDENTITY_STATE_DIR=/var/lib/automaton-fleet-identity
+StateDirectory=automaton-fleet-identity
+StateDirectoryMode=0700
+UMask=0077
+
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=15s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-identity
+
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key
+InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-witness -/var/lib/private/automaton-founders -/var/log/automaton-fleet -/run/credentials
+
+[Install]
+WantedBy=multi-user.target

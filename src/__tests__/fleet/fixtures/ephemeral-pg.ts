@@ -25,6 +25,8 @@ export interface EphemeralPg {
   operatorUrl: string;
   /** Schema v10 custody executor login (cx_* only). */
   custodyUrl: string;
+  /** Schema v34 identity broker login (ix_* only). */
+  identityUrl: string;
   superUrl: string;
   /** Re-run scripts/fleet-db-roles.sql (idempotency tests). */
   applyRoles(): void;
@@ -71,6 +73,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
   const servicePw = randomBytes(12).toString("hex");
   const operatorPw = randomBytes(12).toString("hex");
   const custodyPw = randomBytes(12).toString("hex");
+  const identityPw = randomBytes(12).toString("hex");
   const pwfile = path.join(dir, "pw");
   fs.writeFileSync(pwfile, superPw + "\n", { mode: 0o600 });
   execFileSync(path.join(bin, "initdb"), ["-D", data, "-U", "postgres", "--pwfile", pwfile, "--auth=scram-sha-256", "-E", "UTF8"], {
@@ -104,7 +107,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       psql(
         superUrl,
         ["-v", `dbname=${dbname}`, "-v", "owner=fleet_owner", "-f", "-"],
-        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n\\set custody_password ${custodyPw}\n` +
+        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n\\set custody_password ${custodyPw}\n\\set identity_password ${identityPw}\n` +
           fs.readFileSync(path.resolve("scripts/fleet-db-roles.sql"), "utf8"),
       );
     // Owner: like production fleetadmin — not a superuser, cannot create roles.
@@ -120,6 +123,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       serviceUrl: `postgresql://fleet_service_login:${servicePw}@127.0.0.1:${port}/${dbname}`,
       operatorUrl: `postgresql://fleet_operator_login:${operatorPw}@127.0.0.1:${port}/${dbname}`,
       custodyUrl: `postgresql://fleet_custody_login:${custodyPw}@127.0.0.1:${port}/${dbname}`,
+      identityUrl: `postgresql://fleet_identity_login:${identityPw}@127.0.0.1:${port}/${dbname}`,
       applyRoles,
       stop,
     };

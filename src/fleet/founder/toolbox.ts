@@ -58,9 +58,14 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
   fleet_capital: { register_vendor: "vendor.register", revoke_vendor: "vendor.revoke", require_rail: "rail.require", request: "capital.request", list: "capital.list",
     envelopes: "envelope.list", envelope_spend: "envelope.spend" },
   economic_knowledge: { search: "knowledge.search", record: "knowledge.record" },
+  // v34: the agent's own operational identity and accounts (asynchronous broker jobs; statuses only).
+  identity: { create_persona: "identity.create", update_persona: "identity.update", list: "identity.list", provision_mailbox: "mailbox.provision",
+    inbox: "mail.inbox", create_account: "account.create", operate: "account.operate", status: "account.status", verify_identity: "account.verify_identity",
+    recover: "account.recover", rotate: "account.rotate", revoke: "account.revoke", close: "account.close" },
 });
 /** Registry ops that move or commit money get a deterministic idempotency key from the tool call (a retry never doubles). */
-const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend"]);
+const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend", "mailbox.provision", "account.create", "account.operate", "account.verify_identity",
+  "account.recover", "account.rotate", "account.revoke", "account.close"]);
 
 export interface ToolOutcome {
   name: string;
@@ -118,7 +123,7 @@ const IMPLEMENTED = new Set([
   "open_decision", "resolve_decision", "review_decision",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
-  "opportunity", "venture", "wallet", "fleet_capital", "economic_knowledge",
+  "opportunity", "venture", "wallet", "fleet_capital", "economic_knowledge", "identity",
 ]);
 const EXPERIMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Registry refusals that are infrastructure safety ceilings (fetch quotas, the daily inference ceiling), never budgets. */
@@ -504,7 +509,7 @@ export class FounderToolbox {
         case "check_ledger":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.ledger())) };
         // F2 (schema v28+): opportunities, ventures, wallet, Fleet capital/payments and economic knowledge.
-        case "opportunity": case "venture": case "wallet": case "fleet_capital": case "economic_knowledge": {
+        case "opportunity": case "venture": case "wallet": case "fleet_capital": case "economic_knowledge": case "identity": {
           if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
           const op = ECONOMY_OPS[call.name][String(a.op)];
           if (!op) return refuse("FLEET_BAD_REQUEST", `op is one of ${Object.keys(ECONOMY_OPS[call.name]).join(", ")}`);

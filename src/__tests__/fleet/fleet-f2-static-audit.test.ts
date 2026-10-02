@@ -100,6 +100,24 @@ describe("F2 static architecture audit: no active owner gate or fixed nominal au
     expect(active).toEqual([]);
   });
 
+  // v34: owner identity is opened only inside the identity broker; agent credentials never leave it.
+  it("owner identity and agent credentials are reachable only through the identity broker (v34)", () => {
+    const bad: string[] = [];
+    for (const f of walk(path.join(ROOT, "src"))) {
+      const rel = path.relative(ROOT, f);
+      const text = fs.readFileSync(f, "utf8");
+      // Only the broker (and the vault module itself) may open the owner vault or read agent credential secrets.
+      // (The custody executor's own withSecret is the v32 payment-signer vault, a separate isolated service.)
+      if (/ownerVault\??\.open\(|\.withSecret\(/.test(text) && !/src\/fleet\/(identity\/(broker|vaults)|custody\/executor)\.ts$/.test(rel)) bad.push(`${rel}: opens a vault`);
+    }
+    // No agent-callable SQL path reads owner identity or credential references (the v34 migration source).
+    const v34 = fs.readFileSync(path.join(ROOT, "src/fleet/postgres/migrations-phase34.ts"), "utf8");
+    for (const m of v34.matchAll(/CREATE (?:OR REPLACE )?FUNCTION (fleet_econ_[a-z_]+|api_[a-z_]+)\([\s\S]*?END \$\$;|CREATE (?:OR REPLACE )?FUNCTION (fleet_econ_[a-z_]+)\([\s\S]*?\n\$\$;/g)) {
+      if (/fleet_owner_identity|fleet_identity_releases|fleet_agent_account_credentials[^\n]*SELECT[^\n]*vault_ref/.test(m[0])) bad.push(`agent path ${m[1] ?? m[2]} reads owner identity or credential references`);
+    }
+    expect(bad).toEqual([]);
+  });
+
   it("founder-facing text names no owner gate, no fixed GBP authority, no allowance and no runway rule", () => {
     const facing = [FOUNDER_CHARTER, FOUNDER_ROUTED_ADDENDUM, ...[...FOUNDER_TOOLS, ...FOUNDER_EXPERIMENT_TOOLS].map((t) => t.description)].join("\n");
     expect(facing).not.toMatch(/owner (decides|approves|approval)|awaiting (the )?owner|ask the owner|owner-enrolled|hard cap|discovery allowance|£\s?\d|\b(14|30)[- ]day runway/i);
