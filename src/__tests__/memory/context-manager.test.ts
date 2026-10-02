@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { getEncoding } from "js-tiktoken";
 import {
+  countTokensBounded,
   ContextManager,
   createTokenCounter,
   type StreamEvent,
@@ -45,6 +47,30 @@ function makeEvent(index: number, overrides?: Partial<StreamEvent>): StreamEvent
     ...overrides,
   };
 }
+
+describe("countTokensBounded", () => {
+  // Regression: js-tiktoken's BPE is quadratic per pre-tokenized piece; a 50k-character run blocked the agent loop for minutes.
+  it("counts long single-character, periodic, whitespace and CJK runs in bounded time", () => {
+    const counter = createTokenCounter();
+    counter.countTokens("warm");
+    for (const s of ["x".repeat(50_000), "ab".repeat(25_000), "=-".repeat(25_000), " ".repeat(50_000), "字".repeat(50_000), "😀".repeat(25_000)]) {
+      const t = performance.now();
+      expect(counter.countTokens(s)).toBeGreaterThan(0);
+      expect(performance.now() - t).toBeLessThan(5_000);
+    }
+  });
+
+  it("is exact for ordinary text and a conservative upper bound when a long piece is sliced", () => {
+    const enc = getEncoding("cl100k_base");
+    const prose = "The fleet controller reconciles the ledger, then the agent plans its next step. ".repeat(200);
+    expect(countTokensBounded(enc, prose)).toBeGreaterThanOrEqual(enc.encode(prose).length);
+    expect(countTokensBounded(enc, prose)).toBeLessThanOrEqual(Math.ceil(enc.encode(prose).length * 1.02));
+    const long = "x".repeat(2_000);
+    expect(countTokensBounded(enc, long)).toBeGreaterThanOrEqual(enc.encode(long).length);
+    expect(countTokensBounded(enc, "")).toBe(0);
+    expect(countTokensBounded(enc, "short")).toBe(enc.encode("short").length);
+  });
+});
 
 describe("createTokenCounter", () => {
   it("createTokenCounter returns a working counter", () => {
