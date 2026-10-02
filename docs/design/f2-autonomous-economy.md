@@ -1200,3 +1200,11 @@ conventional managed business. Conventional administration must not become an ar
 - **Unchanged:** custody and payment security, ledger integrity, Fleet-capital envelopes, own capital founder-sized.
 
 The whole-system autonomy/permission audit that accompanied v33 is `docs/design/autonomy-permission-audit.md`.
+
+## 33. Agent-owned identity and the owner identity broker — schema v34 (2026-10-02)
+
+Agents create and run their own operational identities and accounts (personas, brands, venture identities, email,
+platform accounts) with no owner step; credentials live only in the isolated identity broker's vault and are never in
+cognition; owner identity is a separate sealed vault used only through the broker under standing, revocable consent;
+agents receive statuses only; a provider needing a non-delegable human act blocks only that account. v11's raw release of
+organisation identity to agents is retired. Full design: `docs/design/agent-identity.md`.
