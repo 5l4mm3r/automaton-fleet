@@ -14,6 +14,8 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import path from "path";
 import { FOUNDER_CHARTER, FOUNDER_TOOLS, FOUNDER_ROUTED_ADDENDUM, FOUNDER_EXPERIMENT_TOOLS } from "../../fleet/cognition/types.js";
+import { V35_SQL } from "../../fleet/postgres/migrations-phase35.js";
+import { V37_SQL } from "../../fleet/postgres/migrations-phase37.js";
 
 const ROOT = path.resolve(__dirname, "../../..");
 const PATTERN = /owner approv|owner decides|the owner decide|wait(ing)? for (the )?owner|awaiting_owner|awaiting the owner|owner-enrolled|OWNER_DECISION_REQUIRED|major_spend_threshold|majorSpendThreshold|discovery allowance|min_runway_days|agent_daily_spend|owner_approval_threshold|hard_cap_minor|auto_cap_minor|hardCapMinor|autoCapMinor/i;
@@ -121,5 +123,35 @@ describe("F2 static architecture audit: no active owner gate or fixed nominal au
   it("founder-facing text names no owner gate, no fixed GBP authority, no allowance and no runway rule", () => {
     const facing = [FOUNDER_CHARTER, FOUNDER_ROUTED_ADDENDUM, ...[...FOUNDER_TOOLS, ...FOUNDER_EXPERIMENT_TOOLS].map((t) => t.description)].join("\n");
     expect(facing).not.toMatch(/owner (decides|approves|approval)|awaiting (the )?owner|ask the owner|owner-enrolled|hard cap|discovery allowance|£\s?\d|\b(14|30)[- ]day runway/i);
+  });
+
+  it("master handoff §51: no regression into owner-approved operations, own-capital vetoes, entity/tax gates, whole-founder freezes or adapter-only web use", () => {
+    const fnBody = (sql: string, name: string) => {
+      const h = Math.max(sql.lastIndexOf(`CREATE FUNCTION ${name}(`), sql.lastIndexOf(`CREATE OR REPLACE FUNCTION ${name}(`));
+      expect(h, name).toBeGreaterThanOrEqual(0);
+      return sql.slice(h, sql.indexOf("$$;", sql.indexOf("AS $$", h) + 5));
+    };
+    // 1. Active source (migrations after v33, all runtime code) names none of the forbidden gates.
+    const FORBIDDEN = /owner[- ]approved (vendor|account|e-?mail|domain|identit|persona|platform)|(vendor|account|domain|persona)s? (need|require)s? (the )?owner|requires? (a )?legal entity|tax profile (is )?required|synthetic tax reserve|commercial[_ ]score|own[_ ]capital[_ ]cap|spend[_ ]veto|freeze (the )?(whole|entire) founder/i;
+    const files: string[] = [];
+    const walk = (d: string) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else if (f.endsWith(".ts")) files.push(f); } };
+    walk(path.join(ROOT, "src/fleet"));
+    const hits = files.filter((f) => !/migrations-phase([0-9]|[12][0-9]|3[0-3])\.ts$|\/eval\//.test(f))
+      .flatMap((f) => fs.readFileSync(f, "utf8").split("\n").map((l, i) => [f, i + 1, l] as const)).filter(([, , l]) => FORBIDDEN.test(l));
+    expect(hits.map(([f, n, l]) => `${path.relative(ROOT, f)}:${n}: ${l.trim().slice(0, 120)}`)).toEqual([]);
+    // 2. The risk picture is advisory: it can never refuse (no RAISE), and the spend path does not consult it.
+    expect(fnBody(V35_SQL, "fleet_agent_risk_context")).not.toMatch(/RAISE EXCEPTION 'FLEET_(?!NOT_FOUND)/);
+    expect(fnBody(V35_SQL, "fleet_econ_risk_assess")).not.toMatch(/RAISE/);
+    // 3. Recurring commitments are the agent's own: no approval, no owner route.
+    expect(fnBody(V35_SQL, "fleet_econ_commitment_add")).not.toMatch(/owner|approv|fleet_require_admin/i);
+    // 4. General web use needs no adapter: registering an account on any site queues no connector job and names none.
+    const reg = fnBody(V37_SQL, "fleet_econ_account_register");
+    expect(reg).not.toMatch(/FLEET_NO_CONNECTOR|fleet_identity_enqueue/);
+    expect(FOUNDER_TOOLS.find((t) => t.name === "browser")?.capability).toBe("planning");
+    // 5. A human-only step blocks one account, never the whole agent.
+    expect(fnBody(V37_SQL, "fleet_econ_account_mark") + fnBody(V37_SQL, "fleet_account_human_dependency")).not.toMatch(/fleet_agent_hold_set|operator_hold_at|fleet_mark_dead/);
+    // 6. Admin authority has no economic cap: the transfers acknowledge advice instead of refusing it.
+    expect(fnBody(V35_SQL, "fleet_admin_agent_transfer")).toMatch(/FLEET_ACKNOWLEDGE_REQUIRED/);
+    expect(fnBody(V35_SQL, "fleet_admin_agent_transfer")).not.toMatch(/EXCEEDS_SAFE/);
   });
 });

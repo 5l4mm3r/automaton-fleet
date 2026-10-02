@@ -3,8 +3,9 @@
 # Install (owner-approved): install -o root -g root -m 0755 fleet-release /usr/local/sbin/fleet-release
 #
 # It runs ONLY the proven R29–R31 controller rollout, for a release whose pins file the operator built and verified:
-#   fleet-release rehearse <pinsFile>                 backup + isolated restore + real-data migration rehearsal (no outage)
-#   fleet-release cutover  <pinsFile> <fromSchema> <toSchema>   controller-side outage, migrate exactly from→to, verify
+#   fleet-release rehearse <pinsFile> <fromSchema> <toSchema>   backup + isolated restore + real-data migration rehearsal (no outage)
+#   fleet-release cutover  <pinsFile> <fromSchema> <toSchema>   controller-side outage, migrate exactly from→to, verify,
+#                                                               automatic rollback on any failure (refuses without a rehearsal)
 # Everything else (sudo shell, arbitrary systemctl, /etc edits, founder units, real-money switches) stays outside it.
 # The pins file must be the operator's own build output (~ubuntu/rNN-pins.txt, owned by ubuntu, not group/world-writable,
 # exactly four FLEET_RUNTIME_* lines with a 40-hex commit, a 64-hex build id and lockfile hash, and the pinned repository).
@@ -13,7 +14,7 @@ umask 077
 die() { echo "fleet-release: $*" >&2; exit 2; }
 [[ $EUID -eq 0 ]] || die "run through sudo"
 MODE="${1:-}"; PINS="${2:-}"
-[[ "$MODE" == rehearse || "$MODE" == cutover ]] || die "usage: fleet-release rehearse|cutover <pinsFile> [fromSchema toSchema]"
+[[ "$MODE" == rehearse || "$MODE" == cutover ]] || die "usage: fleet-release rehearse|cutover <pinsFile> <fromSchema> <toSchema>"
 [[ "$PINS" =~ ^/home/ubuntu/r[0-9]{2,3}-pins\.txt$ && -f "$PINS" && ! -L "$PINS" ]] || die "pins file must be /home/ubuntu/rNN-pins.txt"
 [[ "$(stat -c '%U %a' "$PINS")" =~ ^ubuntu\ (6[04][04]|400)$ ]] || die "pins file must be owned by ubuntu and not group/world-writable"
 mapfile -t L < "$PINS"
@@ -24,11 +25,6 @@ C="${L[1]#*=}"; B="${L[2]#*=}"; LK="${L[3]#*=}"
 # The rollout scripts are the release's own, from the installed tooling checkout at exactly that commit.
 TOOL=/home/ubuntu/automaton-fleet-build
 [[ "$(runuser -u ubuntu -- git -C "$TOOL" rev-parse HEAD)" == "$C" ]] || die "tooling checkout is not at $C"
-case "$MODE" in
-  rehearse) exec runuser -u ubuntu -- env FLEET_RELEASE_COMMIT="$C" FLEET_RELEASE_BUILD="$B" FLEET_RELEASE_LOCK="$LK" bash "$TOOL/scripts/fleet-rollout.sh" rehearse ;;
-  cutover)
-    FROM="${3:-}"; TO="${4:-}"
-    [[ "$FROM" =~ ^[0-9]{1,3}$ && "$TO" =~ ^[0-9]{1,3}$ && "$TO" -ge "$FROM" ]] || die "cutover needs <fromSchema> <toSchema>"
-    exec runuser -u ubuntu -- env FLEET_RELEASE_COMMIT="$C" FLEET_RELEASE_BUILD="$B" FLEET_RELEASE_LOCK="$LK" FLEET_RELEASE_FROM="$FROM" FLEET_RELEASE_TO="$TO" \
-      bash "$TOOL/scripts/fleet-rollout.sh" cutover ;;
-esac
+FROM="${3:-}"; TO="${4:-}"
+[[ "$FROM" =~ ^[0-9]{1,3}$ && "$TO" =~ ^[0-9]{1,3}$ && "$TO" -ge "$FROM" ]] || die "<fromSchema> <toSchema> are integers, to >= from"
+exec runuser -u ubuntu -- bash "$TOOL/scripts/fleet-rollout.sh" "$MODE" "$PINS" "$FROM" "$TO"

@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# Automaton Fleet — routine controller rollout (master handoff §39): BUILD → TEST → REHEARSE → VERIFY → DEPLOY → VERIFY →
+# AUTO-ROLLBACK ON FAILURE → AUDIT → REPORT. The R29–R32 procedure, parameterised. Controller-side units only; Founder
+# runtimes are never touched (their upgrades stay a separate, explicit step).
+#
+#   scripts/fleet-rollout.sh rehearse <pinsFile> <fromSchema> <toSchema>
+#       fresh read-only dump + Founder state backup, isolated restore, real-data migration of a THROWAWAY database with
+#       the candidate tooling, audit, ledger / Founder fingerprints / identity unchanged, re-run no-op, rollback proof,
+#       cleanup. Writes ~/rollout-<commit7>-rehearsal.ok on success. Never writes to the live database.
+#   scripts/fleet-rollout.sh cutover <pinsFile> <fromSchema> <toSchema>
+#       refuses unless a successful rehearsal of the SAME commit exists from the last 24 h; then stage + install the
+#       release, stop controller-side units, pre-migration dump, fail-closed migrate-check, migrate, audit, approve,
+#       verify-runtime, start, readyz. ANY failure after the dump rolls back automatically: previous runtime.env and
+#       release, the pre-migration dump restored into the live database, units restarted — and reports it.
+#
+# <pinsFile>: the four lines printed by scripts/fleet-build-runtime.sh for the candidate (REPO, COMMIT, BUILD_ID,
+# LOCKFILE_SHA256), produced on this host. Runs as the operator account (ubuntu) with sudo for the privileged steps.
+# Real payments, owner sweeps, replication and the dry-run child flag are asserted false before and after.
+set -euo pipefail
+export PATH=/opt/automaton-fleet/node/bin:$PATH
+MODE="${1:-}"; PINS="${2:-}"; FROM="${3:-}"; TO="${4:-}"
+die() { echo "ROLLOUT REFUSED: $*" >&2; exit 2; }
+[[ "$MODE" == rehearse || "$MODE" == cutover ]] || die "mode is rehearse or cutover"
+[[ -f "$PINS" && ! -L "$PINS" ]] || die "pins file missing"
+[[ "$FROM" =~ ^[0-9]{1,3}$ && "$TO" =~ ^[0-9]{1,3}$ && "$TO" -ge "$FROM" ]] || die "schemas are integers, to >= from"
+grep -qxE 'FLEET_RUNTIME_REPO=https://github\.com/5l4mm3r/automaton-fleet\.git' "$PINS" || die "pins: unexpected repository"
+C=$(sed -n 's/^FLEET_RUNTIME_COMMIT=\([0-9a-f]\{40\}\)$/\1/p' "$PINS"); B=$(sed -n 's/^FLEET_RUNTIME_BUILD_ID=\([0-9a-f]\{64\}\)$/\1/p' "$PINS")
+L=$(sed -n 's/^FLEET_RUNTIME_LOCKFILE_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$PINS")
+[[ -n "$C" && -n "$B" && -n "$L" && $(wc -l < "$PINS") -eq 4 ]] || die "pins file must hold exactly the four pins"
+LIVE=automaton_fleet; RH=automaton_fleet_rollout_rh; F=01M3F50SH7PNX2E3GST13J52AS
+ENVF=/etc/automaton-fleet/runtime.env
+OLD=$(sudo sed -n 's/^FLEET_RUNTIME_COMMIT=//p' $ENVF); [[ "$OLD" =~ ^[0-9a-f]{40}$ ]] || die "current pin unreadable"
+[[ "$OLD" != "$C" ]] || die "the candidate is already the running release"
+WANT="\"currentVersion\":$FROM,\"resultingVersion\":$TO,\"wouldApply\":\[$(seq -s, $((FROM + 1)) "$TO")\]"
+REPORT=~/rollout-${C:0:7}-$MODE.txt
+exec > >(tee -a "$REPORT") 2>&1
+ts() { date -u +%FT%TZ; }
+live() { sudo -u postgres psql -X -At -d "$LIVE" -c "$1"; }
+flags() { for k in REAL_REPLICATION_ENABLED REAL_PAYMENTS_ENABLED OWNER_SWEEP_ENABLED FLEET_DRY_RUN_CHILD; do grep -qx "$k=false" <(sudo grep -E "^$k=" $ENVF) || die "$k is not false"; done; }
+echo "== rollout $MODE ${C:0:7} (schema $FROM -> $TO) from ${OLD:0:7} start $(ts)"
+flags
+test "$(live 'SELECT max(version) FROM fleet.fleet_schema_migrations')" = "$FROM" || die "live schema is not $FROM"
+
+if [[ "$MODE" == rehearse ]]; then
+  TOOL=/var/tmp/rollout-tooling-${C:0:12}
+  rh() { sudo -u postgres psql -X -At -v ON_ERROR_STOP=1 -d "$RH" -c "$1"; }
+  RHURL="postgresql://postgres@/$RH?host=/var/run/postgresql&options=-c%20role%3Dfleetadmin%20-c%20search_path%3Dfleet"
+  EMPTY=/var/tmp/rollout-empty.env; sudo rm -f "$EMPTY"; sudo -u postgres bash -c "umask 077; : > $EMPTY"
+  cli() { sudo -u postgres env -i PATH="$PATH" HOME=/var/tmp FLEET_ADMIN_ENV_FILE=$EMPTY FLEET_RUNTIME_ENV_FILE=$EMPTY FLEET_ADMIN_DATABASE_URL="$RHURL" \
+    bash -c "cd $TOOL && node --import tsx src/fleet/postgres/cli.ts $*"; }
+  counts() { sudo -u postgres psql -X -At -d "$1" -c "SELECT string_agg(format('SELECT %L || ''='' || count(*) FROM fleet.%I', tablename, tablename), ' UNION ALL ' ORDER BY tablename) FROM pg_tables WHERE schemaname='fleet'" | sudo -u postgres psql -X -At -d "$1" | sort; }
+  head_() { sudo -u postgres psql -X -At -d "$1" -c "SELECT head_seq || ' ' || head_hash || ' journals ' || (SELECT count(*) FROM fleet.fleet_ledger_journal) FROM fleet.fleet_ledger_head"; }
+  ident() { sudo -u postgres psql -X -At -d "$1" -c "SELECT md5(row(agent_id, role, generation, origin, genesis_id, lineage_root, workspace_id, state_namespace, capability_manifest_id, name, wallet_address, created_at)::text) FROM fleet.fleet_agents WHERE agent_id='$F'"; }
+  fp() { sudo -u postgres psql -X -At -d "$1" -c "SELECT fleet.fleet_founder_ledger_fingerprint('$F')"; }
+  if [[ ! -d $TOOL ]]; then
+    git clone -q ~/automaton-fleet-build "$TOOL"; git -C "$TOOL" fetch -q https://github.com/5l4mm3r/automaton-fleet.git "$C"; git -C "$TOOL" checkout -q --detach "$C"
+    echo "$L  pnpm-lock.yaml" | (cd "$TOOL" && sha256sum -c --quiet -); (cd "$TOOL" && CI=true pnpm install --frozen-lockfile > ~/rollout-tooling.log 2>&1)
+    chmod 755 "$TOOL"; chmod -R go+rX "$TOOL"
+  fi
+  test "$(git -C "$TOOL" rev-parse HEAD)" = "$C"
+  if [[ -n "$(sudo -u postgres psql -X -At -d postgres -c "SELECT 1 FROM pg_database WHERE datname='$RH'")" ]]; then sudo -u postgres dropdb "$RH"; fi
+  STAMP=$(date -u +%Y%m%dT%H%M%SZ); D=~/automaton_fleet-v$FROM-rollout-${C:0:7}-$STAMP.dump
+  ( umask 077; sudo -u postgres pg_dump -Fc -n fleet "$LIVE" > "$D" ); chmod 600 "$D"; sha256sum "$D" > "$D.sha256"
+  echo "dump $D sha $(cut -c1-16 "$D.sha256")"
+  BK=/var/lib/automaton-fleet-backups/rollout-${C:0:7}-$STAMP; sudo install -d -m 0700 -o root -g root /var/lib/automaton-fleet-backups "$BK"
+  sudo tar -C /var/lib/private/automaton-founders --exclude="$F/fleet-credentials.json" -cpf "$BK/founder-$F.tar" "$F"; sudo chmod 600 "$BK/founder-$F.tar"
+  counts "$LIVE" > ~/rollout-counts-live.txt
+  sudo -u postgres createdb -O fleetadmin "$RH"
+  sudo -u postgres psql -X -q -d postgres -c "REVOKE ALL ON DATABASE $RH FROM PUBLIC"
+  sudo -u postgres pg_restore -d "$RH" --exit-on-error < "$D"
+  counts "$RH" > ~/rollout-counts-restored.txt
+  diff -q ~/rollout-counts-live.txt ~/rollout-counts-restored.txt > /dev/null && echo "restore: row counts identical" || echo "restore: counts moved while dumping (live kept running)"
+  H0=$(head_ "$RH"); I0=$(ident "$RH"); FP0=$(fp "$RH")
+  CHK=$(cli migrate-check 2>&1 | tail -1); echo "migrate-check: $CHK"; echo "$CHK" | grep -q "$WANT" || { sudo -u postgres dropdb "$RH"; die "unexpected migrate-check"; }
+  cli migrate 2>&1 | tail -1
+  test "$(rh 'SELECT max(version) FROM fleet.fleet_schema_migrations')" = "$TO" || { sudo -u postgres dropdb "$RH"; die "rehearsal schema is not $TO"; }
+  cli audit-privileges > ~/rollout-rh-audit.txt 2>&1 || { tail -20 ~/rollout-rh-audit.txt; sudo -u postgres dropdb "$RH"; die "privilege audit failed"; }
+  [[ "$(head_ "$RH")" == "$H0" ]] || { sudo -u postgres dropdb "$RH"; die "ledger head changed by the migration"; }
+  [[ "$(ident "$RH")" == "$I0" ]] || { sudo -u postgres dropdb "$RH"; die "Founder 1 identity changed"; }
+  FPCMP=$(FP0="$FP0" FP1="$(fp "$RH")" node -e 'const a=JSON.parse(process.env.FP0),b=JSON.parse(process.env.FP1);const mb=new Map(b.accounts.map(x=>[x.account,x]));const bad=[];
+    for(const x of a.accounts){const y=mb.get(x.account);if(!y||y.balance!==x.balance||y.class!==x.class)bad.push(x.account)}for(const y of b.accounts)if(!a.accounts.some(x=>x.account===y.account)&&y.balance!==0)bad.push("new:"+y.account);
+    console.log(bad.length?"BAD "+bad.join(" "):"OK")')
+  [[ "$FPCMP" == OK ]] || { sudo -u postgres dropdb "$RH"; die "Founder 1 ledger fingerprint changed: $FPCMP"; }
+  echo "ledger verify: $(rh "SELECT (fleet.fleet_ledger_verify() ->> 'ok')")"; [[ "$(rh "SELECT (fleet.fleet_ledger_verify() ->> 'ok')")" == true ]] || { sudo -u postgres dropdb "$RH"; die "ledger verify failed"; }
+  echo "re-run: $(cli migrate-check 2>&1 | tail -1)"; cli migrate > /dev/null 2>&1; [[ "$(head_ "$RH")" == "$H0" ]] || die "re-run changed the ledger"
+  sudo -u postgres dropdb "$RH"; sudo -u postgres createdb -O fleetadmin "$RH"; sudo -u postgres pg_restore -d "$RH" --exit-on-error < "$D"
+  [[ "$(rh 'SELECT max(version) FROM fleet.fleet_schema_migrations')" == "$FROM" && "$(head_ "$RH")" == "$H0" ]] || die "rollback proof failed"
+  echo "rollback proof: the dump restores to schema $FROM with the same ledger head"
+  sudo -u postgres dropdb "$RH"; sudo rm -f "$EMPTY"
+  echo "$C $B $L $FROM $TO $(ts)" > ~/rollout-${C:0:7}-rehearsal.ok
+  echo "== REHEARSAL PASSED $(ts) — live untouched (schema $(live 'SELECT max(version) FROM fleet.fleet_schema_migrations'))"
+  exit 0
+fi
+
+# ── cutover ──
+OK=~/rollout-${C:0:7}-rehearsal.ok
+[[ -f "$OK" ]] && read -r RC RB RL RF RT RAT < "$OK" || die "no successful rehearsal of ${C:0:7} on this host"
+[[ "$RC $RB $RL $RF $RT" == "$C $B $L $FROM $TO" ]] || die "the rehearsal was for different pins or schemas"
+(( $(date +%s) - $(date -d "$RAT" +%s) < 86400 )) || die "the rehearsal is older than 24 hours: rehearse again"
+UNITS="automaton-fleet-operator-api.service automaton-fleet-chatgpt-adapter.socket automaton-fleet-chatgpt-adapter.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-fetcher.service automaton-fleet.service"
+START="automaton-fleet.service automaton-fleet-operator-api.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-chatgpt-adapter.socket"
+psqlq() { live "$1"; }
+sudo test ! -e $ENVF.pre-${C:0:7} || die "a previous cutover attempt of this commit left $ENVF.pre-${C:0:7}"
+sudo cp -p $ENVF $ENVF.pre-${C:0:7}
+sudo sed -i -e "s/^FLEET_RUNTIME_COMMIT=.*/FLEET_RUNTIME_COMMIT=$C/" -e "s/^FLEET_RUNTIME_BUILD_ID=.*/FLEET_RUNTIME_BUILD_ID=$B/" -e "s/^FLEET_RUNTIME_LOCKFILE_SHA256=.*/FLEET_RUNTIME_LOCKFILE_SHA256=$L/" $ENVF
+cd ~/automaton-fleet-build
+scripts/fleet-deploy-release.sh build > ~/rollout-stage.log 2>&1; tail -1 ~/rollout-stage.log
+git fetch -q origin "$C"; git checkout -q --detach "$C"; test "$(git rev-parse HEAD)" = "$C"; CI=true pnpm install --frozen-lockfile > ~/rollout-tooling.log 2>&1
+sudo scripts/fleet-deploy-release.sh install 2>&1 | tail -1
+test "$(readlink /opt/automaton-fleet/current)" = "releases/$C"
+for i in $(seq 1 90); do [ "$(psqlq 'SELECT count(*) FROM fleet.fleet_cognition_inflight')" = 0 ] && break; sleep 2; done
+echo "OUTAGE START $(ts)"; sudo systemctl stop $UNITS
+STAMP=$(date -u +%Y%m%dT%H%M%SZ); D=~/automaton_fleet-v$FROM-pre-v$TO-$STAMP.dump
+( umask 077; sudo -u postgres pg_dump -Fc -n fleet $LIVE > "$D" ); chmod 600 "$D"; sha256sum "$D" > "$D.sha256"; sha256sum -c --quiet "$D.sha256"
+echo "pre-migration dump $D sha $(cut -c1-16 "$D.sha256")"
+MIGRATED=0
+rollback() {
+  echo "!! FAILURE: $1 — automatic rollback $(ts)"
+  sudo systemctl stop $UNITS || true
+  if [[ $MIGRATED == 1 ]]; then
+    test "$LIVE" = automaton_fleet
+    sudo -u postgres psql -X -q -d $LIVE -c "DROP SCHEMA fleet CASCADE"
+    sudo -u postgres pg_restore -d $LIVE --exit-on-error < "$D"
+    echo "database restored from $D: schema $(psqlq 'SELECT max(version) FROM fleet.fleet_schema_migrations')"
+  fi
+  sudo cp -p $ENVF.pre-${C:0:7} $ENVF
+  sudo ln -sfn "releases/$OLD" /opt/automaton-fleet/current.tmp && sudo mv -T /opt/automaton-fleet/current.tmp /opt/automaton-fleet/current
+  sudo systemctl start $START
+  for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8787/readyz 2>/dev/null && break; sleep 1; done
+  echo "OUTAGE END (ROLLED BACK) $(ts): readyz $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/readyz), release $(readlink /opt/automaton-fleet/current)"
+  echo "== ROLLOUT ${C:0:7} ROLLED BACK"
+  exit 1
+}
+CHK=$(pnpm -s fleet:migrate-check 2>&1 | tail -1); echo "migrate-check: $CHK"
+echo "$CHK" | grep -q "$WANT" || rollback "unexpected migrate-check"
+MIGRATED=1
+pnpm -s fleet:migrate > ~/rollout-migrate.log 2>&1 || rollback "migration failed"
+[[ "$(psqlq 'SELECT max(version) FROM fleet.fleet_schema_migrations')" == "$TO" ]] || rollback "schema is not $TO"
+pnpm -s fleet:audit-privileges > ~/rollout-audit.txt 2>&1 || rollback "privilege audit failed"
+pnpm -s fleet:admin approve-runtime > ~/rollout-approve.log 2>&1 || rollback "runtime approval failed"
+pnpm -s fleet:verify-runtime > ~/rollout-verify-runtime.log 2>&1 || rollback "runtime verification failed"
+sudo systemctl start automaton-fleet.service
+READY=0; for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8787/readyz 2>/dev/null && { READY=1; break; }; sleep 1; done
+[[ $READY == 1 ]] || rollback "controller not ready"
+sudo systemctl start automaton-fleet-operator-api.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-chatgpt-adapter.socket
+echo "OUTAGE END $(ts)"
+[[ "$(pnpm -s fleet:admin ledger-verify 2>&1 | tr -d ' \n' | grep -o '"ok":true' | head -1)" == '"ok":true' ]] || rollback "ledger verify failed after cutover"
+flags
+pnpm -s fleet:doctor > ~/rollout-doctor.txt 2>&1 || true; grep -E "^DEPLOYMENT|^SAFE FOR" ~/rollout-doctor.txt || true
+sudo scripts/fleet-verify-deployment.sh > ~/rollout-vdep.txt 2>&1 || true; tail -1 ~/rollout-vdep.txt
+echo "rollback point: $ENVF.pre-${C:0:7}; releases/${OLD:0:7}; dump $D"
+echo "== ROLLOUT ${C:0:7} DEPLOYED $(ts): schema $TO, readyz $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/readyz)"
