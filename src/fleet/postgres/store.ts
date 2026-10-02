@@ -60,6 +60,7 @@ import { migrateCheck,
   OPERATOR_API_FUNCTIONS,
   SERVICE_API_FUNCTIONS,
   SERVICE_READ_TABLES,
+  MIGRATION_LOCK_KEY,
   migrate,
   quoteIdent,
 } from "./migrations.js";
@@ -798,6 +799,8 @@ export class PgFleetStore {
     const r = quoteIdent(role);
     const s = quoteIdent(this.schema);
     await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
       const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
       if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
       await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
@@ -819,6 +822,8 @@ export class PgFleetStore {
     const r = quoteIdent(role);
     const s = quoteIdent(this.schema);
     await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
       const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
       if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
       await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM ${r}`);
@@ -845,6 +850,8 @@ export class PgFleetStore {
     const r = quoteIdent(role);
     const s = quoteIdent(this.schema);
     await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
       const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
       if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
       await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
@@ -866,6 +873,8 @@ export class PgFleetStore {
     const r = quoteIdent(role);
     const s = quoteIdent(this.schema);
     await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
       const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
       if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
       await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
