@@ -40,8 +40,9 @@ import { V29_SQL } from "./migrations-phase29.js";
 import { V30_SQL } from "./migrations-phase30.js";
 import { V31_SQL } from "./migrations-phase31.js";
 import { V32_SQL } from "./migrations-phase32.js";
+import { V33_SQL } from "./migrations-phase33.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 32;
+export const FLEET_PG_SCHEMA_VERSION = 33;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1169,6 +1170,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 30, name: "f2_capital_engine_sweeps_cognition_depth_hub", sql: V30_SQL },
   { version: 31, name: "f2_launch_admin_withdrawal_risk_r24_custody_contextual_depth", sql: V31_SQL },
   { version: 32, name: "custody_signer_keyless_custody_bound_instructions", sql: V32_SQL },
+  { version: 33, name: "no_synthetic_tax_legal_entity_optional", sql: V33_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

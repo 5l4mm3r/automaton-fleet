@@ -84,6 +84,22 @@ describe("F2 static architecture audit: no active owner gate or fixed nominal au
     expect(active).toEqual([]);
   });
 
+  // v33 constitution: the survival experiment needs no conventional business administration. No active code may take a
+  // synthetic tax (the retired unprofiled reserve) or require a legal entity for a payment rail to match a venture.
+  it("no synthetic tax and no required legal entity in active code (v33)", () => {
+    const active: string[] = [];
+    for (const f of walk(path.join(ROOT, "src"))) {
+      const rel = path.relative(ROOT, f);
+      if (/src\/fleet\/postgres\/migrations-phase(29|30)\.ts$/.test(rel)) continue; // history, superseded by v33
+      fs.readFileSync(f, "utf8").split("\n").forEach((text, i) => {
+        const synthetic = /unprofiled_reserve_bp/.test(text) && !/migrations-phase33\.ts$/.test(rel);
+        const entityGate = /legal_entity_id = fleet_venture_entity/.test(text) && !/legal_entity_id IS NULL OR fleet_venture_entity\(p_venture\) IS NULL OR/.test(text);
+        if (synthetic || entityGate) active.push(`${rel}:${i + 1}  ${text.trim().slice(0, 160)}`);
+      });
+    }
+    expect(active).toEqual([]);
+  });
+
   it("founder-facing text names no owner gate, no fixed GBP authority, no allowance and no runway rule", () => {
     const facing = [FOUNDER_CHARTER, FOUNDER_ROUTED_ADDENDUM, ...[...FOUNDER_TOOLS, ...FOUNDER_EXPERIMENT_TOOLS].map((t) => t.description)].join("\n");
     expect(facing).not.toMatch(/owner (decides|approves|approval)|awaiting (the )?owner|ask the owner|owner-enrolled|hard cap|discovery allowance|£\s?\d|\b(14|30)[- ]day runway/i);

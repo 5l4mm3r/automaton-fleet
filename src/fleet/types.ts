@@ -221,7 +221,10 @@ export interface SharedAgentRecord {
   role: FleetAgentRole;
   generation: number;
   name: string;
+  /** The economic identity (v33: keyless controller custody for Genesis founders and replicated children). */
   walletAddress: string | null;
+  /** v33: the address a replicated runtime generated for itself (information only; never custody). */
+  runtimeWalletAddress?: string | null;
   runtimeVersion: string | null;
   runtimeRepo: string | null;
   runtimeCommit: string | null;

@@ -97,7 +97,9 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   }
   // v29: tax fallback and safe-transfer policy back to their defaults; the circuit-breaker novelty signal unset.
   if (r.rows.some((x) => x.t === "fleet_tax_policy")) {
-    await c.query(`UPDATE "${schema}".fleet_tax_policy SET unprofiled_reserve_bp = 2500, updated_by = 'migration'`);
+    // v33 pins the retired unprofiled reserve to 0 (no synthetic tax); before v33 its default was 2500.
+    const v33 = (await c.query(`SELECT 1 FROM pg_constraint WHERE conname = 'fleet_tax_policy_no_synthetic_tax' AND connamespace = '"${schema}"'::regnamespace`)).rows.length > 0;
+    await c.query(`UPDATE "${schema}".fleet_tax_policy SET unprofiled_reserve_bp = ${v33 ? 0 : 2500}, updated_by = 'migration'`);
     await c.query(`UPDATE "${schema}".fleet_transfer_policy SET cushion_bp = 1000, horizon_days = 30, burn_window_days = 30, updated_by = 'migration'`);
     await c.query(`UPDATE "${schema}".fleet_spend_circuit_breaker SET new_destination_age_s = NULL, new_destination_wallet_bp = NULL`);
   }

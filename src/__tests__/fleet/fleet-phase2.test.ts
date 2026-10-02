@@ -927,7 +927,15 @@ describe.skipIf(!PG_URL)("Fleet policy: shared PostgreSQL registry", () => {
     if (!out.ok) throw new Error("expected spawn");
     const agent = (await admin.getAgent(out.agentId))!;
     expect(agent).toMatchObject({ status: "active", runtimeCommit: PIN.commit, runtimeRepo: PIN.repo, generation: 1, parentAgentId: root.agentId });
-    expect(agent.walletAddress).toBe(out.child.address);
+    // v33: the economic identity is keyless controller custody; the runtime's own address is recorded beside it.
+    expect(agent.runtimeWalletAddress).toBe(out.child.address);
+    expect(agent.walletAddress).not.toBe(out.child.address);
+    // A future child participates through controller custody (never holding a payment credential), exactly like a
+    // Genesis founder; its runtime's own address can never act as an approver.
+    const cust = (await raw.query(`SELECT w.custody_mode, a.wallet_address = ${schema}.fleet_keyless_address(a.agent_id) AS keyless
+      FROM ${schema}.fleet_wallet_custody w JOIN ${schema}.fleet_agents a USING (agent_id) WHERE a.agent_id = $1`, [out.agentId])).rows[0];
+    expect(cust).toEqual({ custody_mode: "controller_keyless", keyless: true });
+    await expect(raw.query(`SELECT ${schema}.fleet_require_operator_approver($1, 'x')`, [out.child.address])).rejects.toThrow(/FLEET_SELF_APPROVAL/);
 
     lifecycle.transition(out.child.id, "failed", "crashed");
     await vi.waitFor(async () => expect((await admin.getAgent(out.agentId))!.status).toBe("dead"));

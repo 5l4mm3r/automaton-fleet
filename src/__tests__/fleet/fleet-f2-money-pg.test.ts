@@ -43,11 +43,11 @@ describe.skipIf(!PG_BIN)("F2 v29 money core: tax, rails, settlement, vendors, wa
     expect((await R.one(`fleet.fleet_ledger_verify()`)).ok).toBe(true);
   });
 
-  it("tax is versioned policy of a legal entity: inclusive VAT and profit tax round up; no profile means a conservative fallback", async () => {
+  it("tax is versioned policy of an OWNER-configured legal entity (an actual obligation): inclusive VAT and profit tax round up; without a profile nothing is reserved", async () => {
     const e = await R.one(`fleet.fleet_admin_legal_entity_add('Fleet Trading Ltd', 'GB', 'company', true, $1)`, [OWNER]);
     entity = e.entity_id;
-    // No profile yet: the configurable fallback reserve (25% of the sale net of fees).
-    expect(await R.one(`fleet.fleet_tax_for_sale($1, 1200, 50)`, [entity])).toMatchObject({ fallback: true, totalMinor: 288 });
+    // An entity without a profile has no configured obligation: nothing is reserved (v33: no synthetic tax).
+    expect(await R.one(`fleet.fleet_tax_for_sale($1, 1200, 50)`, [entity])).toMatchObject({ fallback: false, profiled: false, totalMinor: 0 });
     await R.one(`fleet.fleet_admin_tax_profile_set($1, $2::jsonb, now() - interval '1 second', 'test rates', $3)`,
       [entity, JSON.stringify([{ taxKind: "vat", rateBp: 2000, inclusive: true }, { taxKind: "profit", rateBp: 2500 }]), OWNER]);
     // 1200 gross incl. 20% VAT → 200 VAT; profit 25% × (1200 − 50 − 200) = 237.5 → 238 (never rounded down).
@@ -202,4 +202,48 @@ describe.skipIf(!PG_BIN)("F2 v29 money core: tax, rails, settlement, vendors, wa
     expect(by.UNATTRIBUTED_TRANSACTIONS).toMatchObject({ detail: { count: 1 } });
     expect(rec.ok).toBe(true);
   });
+});
+
+describe.skipIf(!PG_BIN)("v33 constitutional correction: no legal entity, no tax profile, no synthetic tax (fresh registry, PostgreSQL)", () => {
+  let R2: EconomyRegistry;
+  let svc2: pg.Pool;
+  let G2: Founder;
+  const acct2 = (who: Founder, cls: string) => `agent:${who.id}:${cls.slice(6)}`;
+  const ingest2 = (rail: string, ext: string, kind: "sale" | "refund", gross: number, fee: number, venture: string | null) =>
+    svc2.query(`SELECT fleet.svc_settlement_ingest($1, $2, $3, $4, $5, 'GBP', $6, now(), $7, $8) AS r`,
+      [rail, ext, kind, gross, fee, venture, sha(`${rail}|${ext}|${kind}|${gross}|${fee}`), sha(`customer-${ext}`)]).then((r) => r.rows[0].r);
+  beforeAll(async () => {
+    R2 = await startEconomyRegistry(PG_BIN!, { founders: 1, allocationCents: 10_000 });
+    [G2] = R2.founders;
+    svc2 = new pg.Pool({ connectionString: R2.pgc.serviceUrl, max: 2 });
+    await R2.store.grantServiceRole();
+  }, 240_000);
+  afterAll(async () => { await svc2?.end(); await R2?.close(); });
+
+  it("v33: no legal entity and no tax profile — rails register and match, a sale keeps its whole net cash, no synthetic tax can be set", async () => {
+    // Nothing configured: no entity, no profile. A rail registers without any legal entity and is assigned automatically.
+    expect(await R2.one(`(SELECT count(*)::int FROM fleet.fleet_legal_entities)`)).toBe(0);
+    const rail = await R2.one(`fleet.fleet_admin_rail_add('simulated', 'No-entity sim checkout', 'shared', NULL, ARRAY['receive_payments'], 'sim', NULL, 'simulated', NULL, NULL, $1)`, [OWNER]);
+    expect(rail.legalEntity).toBeUndefined();
+    await R2.econ(G2, "venture.create", { key: "no-entity-venture", model: "digital_product", offer: "x", state: "selected" });
+    const vG = (await R2.q(`SELECT venture_id FROM fleet.fleet_ventures WHERE agent_id = $1 AND venture_key = 'no-entity-venture'`, [G2.id]))[0].venture_id;
+    expect(await R2.econ(G2, "rail.require", { ventureKey: "no-entity-venture", capability: "receive_payments" })).toMatchObject({ ok: true, status: "assigned" });
+    // A sale with no configured obligation reserves nothing: the agent's survival capital receives the whole net.
+    expect(await R2.one(`fleet.fleet_tax_for_sale(NULL, 1200, 50)`)).toMatchObject({ profiled: false, fallback: false, totalMinor: 0 });
+    const cash0 = await R2.balance(acct2(G2, "agent_cash"));
+    expect(await ingest2(rail.railId, "ne-1", "sale", 1200, 50, vG)).toMatchObject({ ok: true, status: "settled" });
+    expect(await R2.balance(acct2(G2, "agent_cash"))).toBe(cash0 + 1150);
+    expect(await R2.balance(acct2(G2, "agent_tax_reserve"))).toBe(0);
+    // The retired fallback can never be set again; the true-up has nothing to hold back.
+    expect(await R2.code(R2.one(`fleet.fleet_admin_tax_policy_set(2500, $1)`, [OWNER]))).toBe("FLEET_NO_SYNTHETIC_TAX");
+    expect(await R2.code(R2.q(`UPDATE fleet.fleet_tax_policy SET unprofiled_reserve_bp = 2500`))).toMatch(/fleet_tax_policy_no_synthetic_tax|check constraint/);
+    expect(await R2.one(`fleet.fleet_tax_true_up($1, 'controller')`, [G2.id])).toMatchObject({ ok: true, skipped: true, reason: "no configured tax obligation" });
+    // A reserve left over from the retired fallback (pre-v33 history) is returned to the agent by the true-up.
+    await R2.one(`fleet.fleet_ledger_post('tax_reservation', $1, 'controller', 'pre-v33 fallback reserve', 'controller', $2, NULL, NULL, NULL, NULL, now(), $3::jsonb)`,
+      [`legacy:${crypto.randomUUID()}`, G2.id, JSON.stringify([{ account: acct2(G2, "agent_tax_reserve"), side: "D", amount: 288 }, { account: acct2(G2, "agent_cash"), side: "C", amount: 288 }])]);
+    const released = await R2.one(`fleet.fleet_tax_true_up($1, 'controller')`, [G2.id]);
+    expect(released).toMatchObject({ ok: true, releasedMinor: 288 });
+    expect([await R2.balance(acct2(G2, "agent_tax_reserve")), await R2.balance(acct2(G2, "agent_cash"))]).toEqual([0, cash0 + 1150]);
+  });
+
 });

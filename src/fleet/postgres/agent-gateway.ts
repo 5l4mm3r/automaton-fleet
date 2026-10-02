@@ -64,6 +64,7 @@ export function agentFromJson(a: Record<string, unknown>): SharedAgentRecord {
     generation: a.generation as number,
     name: a.name as string,
     walletAddress: (a.walletAddress as string) ?? null,
+    runtimeWalletAddress: (a.runtimeWalletAddress as string) ?? null,
     runtimeVersion: (a.runtimeVersion as string) ?? null,
     runtimeRepo: (a.runtimeRepo as string) ?? null,
     runtimeCommit: (a.runtimeCommit as string) ?? null,

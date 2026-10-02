@@ -51,9 +51,8 @@ describe.skipIf(!PG_BIN)("F2 30-day zero-owner autonomy simulation (PostgreSQL)"
     [A, B, C] = R.founders;
     svc = new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 2 });
     await R.store.grantServiceRole();
-    // ── Day 0: infrastructure (the owner's normal role), then nothing.
-    const e = await R.one(`fleet.fleet_admin_legal_entity_add('Fleet Trading Ltd', 'GB', 'company', true, $1)`, [OWNER]);
-    await R.one(`fleet.fleet_admin_tax_profile_set($1, '[{"taxKind":"vat","rateBp":2000,"inclusive":true},{"taxKind":"profit","rateBp":1900}]'::jsonb, now() - interval '1 second', 'policy data', $2)`, [e.entity_id, OWNER]);
+    // ── Day 0: Fleet infrastructure only (a payment rail, the Treasury's net-profit sweep), then nothing. v33: no legal
+    // entity and no tax profile — the survival game needs no conventional business administration.
     rail = (await R.one(`fleet.fleet_admin_rail_add('simulated', 'Fleet checkout (simulated)', 'shared', NULL, ARRAY['receive_payments','refunds','storefront'], 'sim checkout', NULL, 'simulated', NULL, NULL, $1)`, [OWNER])).railId;
     await R.one(`fleet.fleet_admin_sweep_policy_set(true, NULL, NULL, NULL, NULL, NULL, $1)`, [OWNER]);
     // B starts with a much larger wallet (a Treasury grant before the simulation).
@@ -137,6 +136,11 @@ describe.skipIf(!PG_BIN)("F2 30-day zero-owner autonomy simulation (PostgreSQL)"
         expect(["APPROVE", "PARTIAL_APPROVE", "APPROVE_WITH_LIMITS"]).toContain(cap.outcome);
         const ads = (await ok(R.econ(A, "vendor.register", { vendorName: "Ad network", category: "advertising", reference: "https://ads.example/billing" }))).destinationId;
         await ok(R.econ(A, "envelope.spend", { envelopeId: cap.envelope.envelopeId, amountMinor: 3_000, destinationId: ads, purpose: "first campaign", idempotencyKey: `env:${crypto.randomUUID()}` }));
+        // A also reinvests its OWN earned capital in the same channel: its decision, custody-checked, no owner step.
+        const before = Number((await R.one(`fleet.fleet_agent_economics($1)`, [A.id])).expensePurchasingCapacity);
+        expect(await R.gw.spendRequest(A.id, A.token, { idempotencyKey: `own:${crypto.randomUUID()}`, amountCents: 4_000, category: "expense", destinationId: ads, purpose: "reinvest own profit in ads" }))
+          .toMatchObject({ ok: true, order: { status: "reserved" } });
+        expect(Number((await R.one(`fleet.fleet_agent_economics($1)`, [A.id])).expensePurchasingCapacity)).toBe(before - 4_000);
         // C asks for Fleet capital for its failed path: negative expected value — FleetController declines; nobody rescues it.
         expect(await R.econ(C, "capital.request", { idempotencyKey: `cap:${crypto.randomUUID()}`, ventureKey: "cv-templates", purpose: "rescue", amountMinor: 50_000,
           evidence: [ev("note", "none")], expectedRevenueMinor: 0, expectedNetMinor: -1_000, downsideMinor: 50_000, confidenceBp: 2000 })).toMatchObject({ outcome: "REJECT" });
@@ -189,7 +193,7 @@ describe.skipIf(!PG_BIN)("F2 30-day zero-owner autonomy simulation (PostgreSQL)"
     }
   });
 
-  it("the books reconcile: ledger, every settlement, venture → agent attribution, tax reserves and envelopes", async () => {
+  it("the books reconcile: ledger, every settlement, venture → agent attribution and envelopes", async () => {
     const rec = await R.one(`fleet.fleet_reconcile()`);
     expect(rec.ok).toBe(true);
     const by = Object.fromEntries(rec.findings.map((f: { code: string }) => [f.code, f]));
@@ -210,22 +214,20 @@ describe.skipIf(!PG_BIN)("F2 30-day zero-owner autonomy simulation (PostgreSQL)"
     expect(h.ok).toBe(true);
   });
 
-  it("tax reserves were held for the legal entity and never became spendable; the sweep took only after-tax net profit", async () => {
+  it("v33: no configured tax obligation, so nothing was held back — every agent kept its whole net earnings as survival capital; the sweep took only realized net profit", async () => {
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_legal_entities`))[0].n).toBe(0);
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_tax_profiles`))[0].n).toBe(0);
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_ledger_journal WHERE kind = 'tax_reservation'`))[0].n).toBe(0);
     for (const who of [A, B, C]) {
       const w = (await R.econ(who, "wallet")).wallet;
-      const tax = w.taxReserveMinor;
-      if (w.lifetime.revenueMinor > 0) expect(tax).toBeGreaterThan(0);
-      // Available never includes the reserve: an order for available + 1 is refused as insufficient own capital.
-      const dst = (await R.q(`SELECT destination_id FROM fleet.fleet_vendor_destinations WHERE agent_id = $1 LIMIT 1`, [who.id]))[0]?.destination_id
-        ?? (await ok(R.econ(who, "vendor.register", { vendorName: "probe", category: "other", reference: `probe-${who.id.slice(-6).toLowerCase()}@vendor.example` }))).destinationId;
-      expect(await R.gw.spendRequest(who.id, who.token, { idempotencyKey: `p:${crypto.randomUUID()}`, amountCents: w.availableMinor + 1, category: "expense", destinationId: dst, purpose: "probe" }))
-        .toMatchObject({ ok: false });
-      expect((await R.econ(who, "wallet")).wallet.taxReserveMinor).toBe(tax);
+      expect(w.taxReserveMinor).toBe(0);
+      expect(w.restricted.taxReserveMinor).toBe(0);
+      // Spendable is exactly the agent's own unreserved cash (no synthetic deduction): an order for all of it is accepted.
+      const eco = await R.one(`fleet.fleet_agent_economics($1)`, [who.id]);
+      expect(Number(w.availableMinor)).toBe(Number(eco.expensePurchasingCapacity));
     }
     const lfc = await R.balance("fleet:profit");
-    const gross = Number((await R.q(`SELECT sum(gross_minor) AS s FROM fleet.fleet_external_transactions WHERE status = 'settled' AND kind = 'sale'`))[0].s);
     expect(lfc).toBeGreaterThan(0);
-    expect(lfc).toBeLessThan(gross / 2);
     for (const who of [A, B, C]) {
       const eco = await R.one(`fleet.fleet_agent_economics($1)`, [who.id]);
       expect(Number(eco.lifetimeContribution)).toBeLessThanOrEqual(Math.max(0, Number(eco.realizedNetProfit)));

@@ -848,7 +848,11 @@ describe.skipIf(!PG_BIN)("Fleet security policy: Phase 6 control plane, provisio
     try {
       const agentId = report.agentId!;
       const a = (await admin.getAgent(agentId))!;
-      expect(a.walletAddress?.toLowerCase()).toBe(keylessDryRunAddress(agentId));
+      // v33: the economic identity is the controller's keyless custody address; the address the dry-run runtime derived for
+      // itself is recorded as its runtime wallet (information only).
+      const ids = (await ownerRaw.query(`SELECT wallet_address, runtime_wallet_address, fleet.fleet_keyless_address(agent_id) AS keyless FROM fleet.fleet_agents WHERE agent_id = $1`, [agentId])).rows[0];
+      expect(a.walletAddress?.toLowerCase()).toBe(ids.keyless);
+      expect(ids.runtime_wallet_address.toLowerCase()).toBe(keylessDryRunAddress(agentId));
       expect(report.authority).toMatchObject({ spendingFrozen: true, dailyLimitCents: 0 });
       // Even the owner cannot grant it spend authority.
       await ownerRaw.query("UPDATE fleet.fleet_wallet_custody SET spending_frozen = false, daily_limit_cents = 1000000 WHERE agent_id = $1", [agentId]);

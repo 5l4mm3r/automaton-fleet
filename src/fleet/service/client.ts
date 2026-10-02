@@ -265,7 +265,8 @@ export class FleetApiClient implements FleetBackend {
     const me = await this.self();
     if (!me) return { ok: false, code: "FLEET_NOT_REGISTERED", reason: "Fleet credential rejected (enroll with fleet:admin)." };
     if (me.dead) return { ok: false, code: "FLEET_AGENT_DEAD", reason: `Agent ${agentId} is ${me.agent.status}.` };
-    if (me.agent.role !== role || (me.agent.walletAddress ?? "").toLowerCase() !== walletAddress.toLowerCase()) {
+    const mine = [me.agent.walletAddress, me.agent.runtimeWalletAddress].filter((x): x is string => !!x).map((x) => x.toLowerCase());
+    if (me.agent.role !== role || !mine.includes(walletAddress.toLowerCase())) {
       return { ok: false, code: "FLEET_IDENTITY_MISMATCH", reason: "Fleet credential does not match this automaton's wallet/role." };
     }
     return { ok: true, agent: me.agent, created: false };

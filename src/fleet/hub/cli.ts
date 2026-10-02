@@ -15,7 +15,7 @@
  *   economy-destination-reference <destinationId> <reference>   record an owner destination's enrolled payable reference
  *   economy-entity-add <name> <CC> <company|sole_trader|partnership|other> [--default]
  *   economy-tax-profile <entityId> <rulesJson> [effectiveIso] [note…]     a new VERSION; rates are policy data
- *   economy-tax-policy <unprofiledReserveBp>
+ *   economy-tax-policy 0                         RETIRED (v33): no synthetic tax; only 0 is accepted — configure a real obligation with a tax profile
  *   economy-tax-true-up <agentId> | economy-tax-payment <agentId> <minor> <externalRef>
  *   economy-rail-add <provider> <shared|dedicated> <capCsv> <maskedAccountRef> [--entity id] [--credential id] [--mode simulated|sandbox]
  *                    [--venture id] [--max n] [label…]

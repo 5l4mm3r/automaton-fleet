@@ -232,6 +232,7 @@ interface AgentRow {
   generation: number;
   name: string;
   wallet_address: string | null;
+  runtime_wallet_address?: string | null;
   runtime_version: string | null;
   runtime_repo: string | null;
   runtime_commit: string | null;
@@ -309,6 +310,7 @@ function toAgent(r: AgentRow): SharedAgentRecord {
     generation: r.generation,
     name: r.name,
     walletAddress: r.wallet_address,
+    runtimeWalletAddress: r.runtime_wallet_address ?? null,
     runtimeVersion: r.runtime_version,
     runtimeRepo: r.runtime_repo,
     runtimeCommit: r.runtime_commit,
@@ -1223,7 +1225,9 @@ export class PgFleetStore {
       const r = await c.query<AgentRow>("SELECT * FROM fleet_agents WHERE agent_id = $1", [agentId]);
       const row = r.rows[0];
       if (!row) return { ok: false, code: "FLEET_NOT_REGISTERED", reason: `Agent ${agentId} is not in the fleet registry.` };
-      if (!row.wallet_address || row.wallet_address.toLowerCase() !== walletAddress.toLowerCase()) {
+      // v33: a replicated child's runtime knows its own (runtime) address; its economic identity is the keyless custody one.
+      const mine = [row.wallet_address, row.runtime_wallet_address].filter((x): x is string => !!x).map((x) => x.toLowerCase());
+      if (!mine.includes(walletAddress.toLowerCase())) {
         return { ok: false, code: "FLEET_IDENTITY_MISMATCH", reason: "Wallet does not match the registered agent." };
       }
       if (row.status !== "active" && row.status !== "unresponsive") {
