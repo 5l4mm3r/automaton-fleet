@@ -106,3 +106,30 @@ bash ~/r36-src/scripts/fleet-rollout.sh cutover ~/r36-pins.txt 41 41 && bash /op
 Manual rollback:
 - `fleet-edge.sh rollback` (env only).
 - The R35 release plus `runtime.env.pre-29cde7d` (code).
+
+## Cutover 2026-10-03: code live, edge stopped on a false certificate mismatch (fixed, not yet applied)
+
+- **Code cutover succeeded.** The owner ran `fleet-rollout.sh cutover`, and the controller started at 20:08:04Z.
+  - Verified read-only: pin `29cde7d`, installed build `a85fd089…`, schema 41, readyz all ok.
+  - Ledger: 503 journals, head `1d3e56f7…`.
+  - Founder 1: same process, heartbeat fresh.
+  - Flags false, mail and SMS not configured.
+- **Edge cutover stopped at its certificate check**, before it changed anything:
+  - No edge files were installed, there is no `runtime.env.pre-edge`, and the controller is still on `0.0.0.0:443`.
+  - The edge is not installed, and nginx is not running.
+  - Port 80 is closed again.
+- **The certificate is valid.** Let's Encrypt YE1 issued an ECDSA P-256 certificate, valid until 2027-01-01. Its key
+  matches: the certificate's public key and the private key's public key have the same SPKI SHA-256,
+  `e4e6db18…84ab`.
+- **Cause: a script bug.** The check used `sudo cmp -s <(…) <(…)`. sudo closes descriptors 3 and above, so `cmp` could
+  not open `/dev/fd/6x`, exited 2, and the script read that as a mismatch. The rehearsal did not catch it because it uses
+  self-signed certificates and never runs the cutover's check.
+- **Fix:**
+  - `check_cert` hashes each DER public key into a variable, so no descriptors are passed through sudo. It works for RSA
+    and EC.
+  - The check is also exposed as a read-only `fleet-edge.sh check-cert <lineage> <host>` mode.
+  - `fleet-edge-script.test.ts` reproduces the failure with a sudo stand-in that closes descriptors. It accepts matching
+    EC and RSA lineages and refuses mismatched keys, a look-alike hostname, an expiring certificate and a missing key.
+  - Red/green: the old comparison fails on a matching lineage, and the new one passes.
+  - Read-only on production, `check-cert` reports `CERT OK`.
+- **No new runtime release.** Scripts are not part of the build identity, so the running R36 runtime is unchanged.

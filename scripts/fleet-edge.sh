@@ -19,6 +19,9 @@
 #       edge start, verification. ANY failure after the env change rolls back automatically.
 #   scripts/fleet-edge.sh rollback
 #       Edge stopped and disabled, runtime.env.pre-edge restored, controller restarted on 0.0.0.0:443 (direct TLS).
+#   scripts/fleet-edge.sh check-cert <lineage dir> <hostname>
+#       Read-only: the lineage's private key matches its certificate (SHA-256 of the DER SubjectPublicKeyInfo, RSA or
+#       EC), the certificate names <hostname> and is valid for 30 more days. Prints only public-key hashes.
 #
 # Runs as the operator account with sudo. Founder runtimes are never touched (they use http://127.0.0.1:8787, which
 # this does not change). Real payments, owner sweeps, replication and the dry-run child flag are asserted false.
@@ -26,7 +29,24 @@ set -euo pipefail
 export PATH=/opt/automaton-fleet/node/bin:$PATH
 MODE="${1:-}"; PINS="${2:-}"
 die() { echo "EDGE REFUSED: $*" >&2; exit 2; }
-[[ "$MODE" == rehearse || "$MODE" == cutover || "$MODE" == rollback ]] || die "mode is rehearse, cutover or rollback"
+[[ "$MODE" == rehearse || "$MODE" == cutover || "$MODE" == rollback || "$MODE" == check-cert ]] || die "mode is rehearse, cutover, rollback or check-cert"
+# Each public key is hashed into a variable. Never `sudo cmp <(…) <(…)`: sudo closes descriptors >= 3, so cmp cannot open
+# /dev/fd/6x and fails as if the keys differed (the R36 edge cutover's false "admin key/cert mismatch", 2026-10-03).
+spki_key() { sudo openssl pkey -in "$1" -pubout -outform DER | sha256sum | cut -d' ' -f1; }
+spki_crt() { sudo openssl x509 -in "$1" -noout -pubkey | openssl pkey -pubin -outform DER | sha256sum | cut -d' ' -f1; }
+check_cert() {
+  local dir="$1" host="$2" kh ch
+  sudo test -f "$dir/privkey.pem" && sudo test -f "$dir/fullchain.pem" || die "$dir: privkey.pem or fullchain.pem missing"
+  kh=$(spki_key "$dir/privkey.pem") || die "$dir: private key unreadable"
+  ch=$(spki_crt "$dir/fullchain.pem") || die "$dir: certificate unreadable"
+  echo "certificate public key sha256 $ch; private key's public key sha256 $kh"
+  [[ "$kh" =~ ^[0-9a-f]{64}$ && "$kh" != "$(printf '' | sha256sum | cut -d' ' -f1)" && "$kh" == "$ch" ]] || die "$host key/cert mismatch"
+  sudo openssl x509 -in "$dir/fullchain.pem" -noout -checkend 2592000 > /dev/null || die "$host certificate expires within 30 days"
+  sudo openssl x509 -in "$dir/fullchain.pem" -noout -ext subjectAltName | grep -qE "DNS:${host//./\\.}([,[:space:]]|\$)" || die "$host certificate lacks the hostname"
+}
+if [[ "$MODE" == check-cert ]]; then
+  check_cert "${2:?lineage dir}" "${3:?hostname}"; echo "CERT OK $3"; exit 0
+fi
 ENVF=/etc/automaton-fleet/runtime.env; LIVE=automaton_fleet; F=01M3F50SH7PNX2E3GST13J52AS
 ts() { date -u +%FT%TZ; }
 live() { sudo -u postgres psql -X -At -d "$LIVE" -c "$1"; }
@@ -229,9 +249,7 @@ if ! sudo test -f $LIN/fullchain.pem; then
   sudo certbot certonly --standalone --preferred-challenges http -d admin.agentfleet.vip --non-interactive --agree-tos --keep-until-expiring
   sudo /usr/local/sbin/fleet-certbot-port80 close; trap - EXIT
 fi
-sudo cmp -s <(sudo openssl pkey -in $LIN/privkey.pem -pubout) <(sudo openssl x509 -in $LIN/fullchain.pem -noout -pubkey) || die "admin key/cert mismatch"
-sudo openssl x509 -in $LIN/fullchain.pem -noout -checkend 2592000 > /dev/null || die "admin certificate expires within 30 days"
-sudo openssl x509 -in $LIN/fullchain.pem -noout -ext subjectAltName | grep -qE 'DNS:admin\.agentfleet\.vip' || die "admin certificate lacks the hostname"
+check_cert $LIN admin.agentfleet.vip
 echo "admin certificate: $(sudo openssl x509 -in $LIN/fullchain.pem -noout -enddate -issuer | tr '\n' ' ')"
 
 # 2. Edge files (no outage).
