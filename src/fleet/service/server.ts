@@ -30,7 +30,7 @@ import { capabilityView } from "../cognition/capability-signature.js";
 import crypto from "crypto";
 import http from "http";
 import https from "https";
-import type { AddressInfo } from "net";
+import net, { type AddressInfo } from "net";
 import { ulid } from "ulid";
 import { FleetBypassError } from "../registry.js";
 import { FleetRuntimeError, sameRelease, type RuntimeRelease } from "../runtime.js";
@@ -48,6 +48,7 @@ import {
 import type { PgAgentGateway } from "../postgres/agent-gateway.js";
 import { UnsupportedSandboxTerminator, type SandboxTerminator } from "./terminator.js";
 import { RateLimiter, type RateLimit } from "./rate-limit.js";
+import { readProxyV1, type ProxiedPeer } from "./proxy-protocol.js";
 
 export { SIG_HEADERS, canonicalRequest, signRequest } from "./server-signing.js";
 import { SIG_HEADERS, signRequest } from "./server-signing.js";
@@ -276,8 +277,13 @@ export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_PEERS.has(host.replace(/^\[|\]$/g, "")) || host === "localhost";
 }
 
+/** R36: how long a connection to the PROXY-protocol listener may take to send its header. */
+const PROXY_HEADER_TIMEOUT_MS = 5_000;
+
 export class FleetService {
-  private servers: http.Server[] = [];
+  private servers: Array<http.Server | net.Server> = [];
+  /** R36: requests that arrived through the loopback PROXY-protocol listener, with the client the header named. */
+  private readonly proxied = new WeakMap<http.IncomingMessage, ProxiedPeer>();
   private reaperTimer: ReturnType<typeof setInterval> | null = null;
   private reaping: Promise<void> | null = null;
   /** Schema v24: the controller's independent evidence-relevance assessor (null without a routed provider factory). */
@@ -496,6 +502,79 @@ export class FleetService {
     return this.bind(port, host, false);
   }
 
+  /**
+   * R36: the public HTTPS listener behind the host's nginx (stream SNI routing, `proxy_protocol on`). TLS still
+   * terminates here; every connection must open with one PROXY v1 line naming the real client, which then stands in
+   * for the TCP peer (rate limits, audit). Bound to loopback only and accepted only from a loopback peer, so no remote
+   * party can supply the line. A proxied request is NEVER a loopback peer, whatever address the line names: founder
+   * credentials and detailed /readyz stay on the controller host's direct listener.
+   */
+  async listenProxied(port = 0, host = "127.0.0.1"): Promise<{ host: string; port: number; url: string }> {
+    if (!this.opts.tls) throw new Error("The PROXY-protocol listener serves HTTPS only (TLS is not configured).");
+    if (!isLoopbackHost(host)) throw new Error(`The PROXY-protocol listener must bind to loopback (got ${host}): only the local nginx may send PROXY headers.`);
+    const byPeer = new Map<string, ProxiedPeer>();
+    const keyOf = (s: { remoteAddress?: string; remotePort?: number }) => `${s.remoteAddress ?? ""}|${s.remotePort ?? ""}`;
+    const tlsServer = https.createServer({ cert: this.opts.tls.cert, key: this.opts.tls.key, minVersion: "TLSv1.2" }, (req, res) => {
+      const peer = byPeer.get(keyOf(req.socket));
+      if (!peer) {
+        req.socket.destroy();
+        return;
+      }
+      this.proxied.set(req, peer);
+      void this.handle(req, res, true);
+    });
+    const raw = net.createServer((sock) => {
+      if (!LOOPBACK_PEERS.has(sock.remoteAddress ?? "")) {
+        this.audit("proxy_peer_refused", null, { ip: sock.remoteAddress ?? "unknown" });
+        sock.destroy();
+        return;
+      }
+      let buf = Buffer.alloc(0);
+      const timer = setTimeout(() => refuse("timeout"), PROXY_HEADER_TIMEOUT_MS);
+      const refuse = (why: string) => {
+        clearTimeout(timer);
+        sock.removeListener("data", onData);
+        this.audit("proxy_header_refused", null, { why });
+        sock.destroy();
+      };
+      const onData = (chunk: Buffer) => {
+        buf = Buffer.concat([buf, chunk]);
+        const r = readProxyV1(buf);
+        if (r.status === "incomplete") return;
+        if (r.status === "invalid") return refuse("malformed");
+        clearTimeout(timer);
+        sock.removeListener("data", onData);
+        sock.pause();
+        // Bytes after the header (the start of the TLS handshake) go back to the stream for the TLS layer.
+        if (r.rest.length) sock.unshift(r.rest);
+        const key = keyOf(sock);
+        byPeer.set(key, r.peer);
+        sock.once("close", () => byPeer.delete(key));
+        tlsServer.emit("connection", sock);
+      };
+      sock.on("data", onData);
+      sock.on("error", () => sock.destroy());
+    });
+    await new Promise<void>((resolve, reject) => {
+      raw.once("error", reject);
+      raw.listen(port, host, () => resolve());
+    });
+    this.servers.push(raw, tlsServer);
+    const addr = raw.address() as AddressInfo;
+    const h = addr.family === "IPv6" ? `[${addr.address}]` : addr.address;
+    return { host: addr.address, port: addr.port, url: `https://${h}:${addr.port}` };
+  }
+
+  /** The client address used for rate limits and audit: the PROXY header's on the proxied listener, else the TCP peer. */
+  private clientIp(req: http.IncomingMessage): string {
+    return this.proxied.get(req)?.sourceAddress ?? req.socket.remoteAddress ?? "unknown";
+  }
+
+  /** True only for a direct loopback TCP peer. A request through the PROXY-protocol listener is never local. */
+  private isLoopbackPeer(req: http.IncomingMessage): boolean {
+    return !this.proxied.has(req) && LOOPBACK_PEERS.has(req.socket.remoteAddress ?? "");
+  }
+
   private async bind(port: number, host: string, tls: boolean): Promise<{ host: string; port: number; url: string }> {
     if (!tls && !isLoopbackHost(host)) {
       throw new Error(`Refusing plain-HTTP binding on non-loopback address ${host}: remote access requires TLS.`);
@@ -521,12 +600,12 @@ export class FleetService {
     this.servers = [];
     if (!servers.length) return;
     const closed = Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
-    for (const s of servers) s.closeIdleConnections?.();
+    for (const s of servers) if ("closeIdleConnections" in s) s.closeIdleConnections();
     const deadline = Date.now() + (this.opts.drainMs ?? 10_000);
     while ((this.inFlight > 0 || this.reaping) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 25));
     }
-    for (const s of servers) s.closeAllConnections?.();
+    for (const s of servers) if ("closeAllConnections" in s) s.closeAllConnections();
     await closed;
   }
 
@@ -775,7 +854,7 @@ export class FleetService {
     const origin = req.headers.origin;
     if (origin !== undefined) {
       if (!(this.opts.allowedOrigins ?? []).includes(origin)) {
-        this.audit("api_origin_denied", null, { path, ip: req.socket.remoteAddress ?? "unknown" });
+        this.audit("api_origin_denied", null, { path, ip: this.clientIp(req) });
         this.send(res, 403, { ok: false, code: "FLEET_ORIGIN_DENIED", reason: "origin not allowed" });
         return;
       }
@@ -812,7 +891,7 @@ export class FleetService {
   private async handleInner(req: http.IncomingMessage, res: http.ServerResponse, path: string): Promise<void> {
     if (req.method === "GET" && path === "/readyz") {
       // Detailed readiness is for local administration only.
-      if (!LOOPBACK_PEERS.has(req.socket.remoteAddress ?? "")) {
+      if (!this.isLoopbackPeer(req)) {
         this.send(res, 404, { ok: false, code: "FLEET_NOT_FOUND", reason: "no such endpoint" });
         return;
       }
@@ -821,7 +900,7 @@ export class FleetService {
       return;
     }
     const started = this.now();
-    const ctx: RequestCtx = { raw: Buffer.alloc(0), ip: req.socket.remoteAddress ?? "unknown", requestId: crypto.randomUUID(), agentId: null, status: 200 };
+    const ctx: RequestCtx = { raw: Buffer.alloc(0), ip: this.clientIp(req), requestId: crypto.randomUUID(), agentId: null, status: 200 };
     const send = (status: number, body: unknown, headers?: Record<string, string>) => {
       ctx.status = status;
       this.send(res, status, body, { "x-request-id": ctx.requestId, ...headers });
@@ -977,7 +1056,7 @@ export class FleetService {
         // Phase F.2: founders run on the controller host, so a founder credential is honoured
         // only from a loopback peer. A founder token that leaked (e.g. through a model
         // provider) cannot open a session over the public listener.
-        if (!LOOPBACK_PEERS.has(req.socket.remoteAddress ?? "")) {
+        if (!this.isLoopbackPeer(req)) {
           const caps = await agent.capabilities(agentId, token);
           if (caps.ok && (caps.origin === "genesis_founder" || caps.origin === "reseed_founder")) {
             await this.recordDb("founder_remote_session_refused", agentId, { ip: ctx.ip });

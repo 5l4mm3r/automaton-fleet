@@ -335,12 +335,17 @@ fi
 
 echo "Network exposure"
 listeners="$(ss -Hltn 2>/dev/null)"
-for port in 5432 6379 8787; do
+# R36: 8443 (FleetController behind the edge, PROXY protocol), 8790 (dashboard) and 9443 (edge admin TLS) are internal.
+for port in 5432 6379 8787 8443 8790 9443; do
   public="$(awk -v p=":$port" '$4 ~ p"$" && $4 !~ /^(127\.0\.0\.1|\[::1\]):/' <<<"$listeners")"
   [[ -z "$public" ]] && ok "port $port loopback-only (or closed)" || bad "port $port listens publicly: $public"
 done
 if grep -q '^FLEET_REMOTE_LISTEN_ENABLED=true' "$ETC/runtime.env" 2>/dev/null; then
   ok "remote HTTPS listener enabled by runtime.env"
+  if grep -q '^FLEET_PUBLIC_PROXY_PROTOCOL=true' "$ETC/runtime.env" 2>/dev/null; then
+    systemctl is-active --quiet automaton-fleet-edge.service && ok "public :443 served by the TLS edge (PROXY protocol to the loopback controller)" \
+      || bad "FLEET_PUBLIC_PROXY_PROTOCOL=true but automaton-fleet-edge.service is not active"
+  fi
 else
   ok "remote exposure disabled (FLEET_REMOTE_LISTEN_ENABLED is not true)"
 fi

@@ -2048,6 +2048,31 @@ Release `e9eee6f` (build `89533671…`, lockfile `ea24cb1f…`), identical local
 `bash ~/fleet-rollout.sh cutover ~/r33-pins.txt 33 38` — controller-side only, automatic rollback on failure. New services
 (identity broker, browser worker, dashboard) remain unprovisioned until their owner-approved host steps.
 
+## Stage R36 — TLS edge with PROXY protocol (networking only; schema unchanged at 41)
+
+Owner decision (2026-10-03): option B. `api.agentfleet.vip` and `admin.agentfleet.vip` both on :443 behind nginx, with the
+real client address preserved at FleetController.
+
+- **Controller** (`FLEET_PUBLIC_PROXY_PROTOCOL=true`, off by default): the public listener binds loopback only
+  (`FLEET_PUBLIC_LISTEN=127.0.0.1:8443`; a non-loopback bind is refused at startup), accepts connections only from the
+  peer 127.0.0.1, and requires one PROXY v1 `TCP4`/`TCP6` line before TLS (anything else closes the connection). TLS
+  still terminates in the controller with the same API certificate. The header's address is used for per-IP rate limits
+  and audit. A proxied request is never local, whatever address it names: founder credentials and detailed `/readyz`
+  remain on the direct `127.0.0.1:8787` listener (Founder 1 uses it and is unaffected).
+- **Edge** (`deploy/nginx/automaton-fleet-edge.conf`, `automaton-fleet-edge.service`; the stock `nginx.service` stays
+  disabled so :80 remains free for certbot): stream SNI preread on :443 (IPv4, as before); `admin.agentfleet.vip` goes to
+  nginx's own TLS server on `127.0.0.1:9443` (Let's Encrypt, renewal hook `automaton-fleet-edge.sh` reloads the edge),
+  which overwrites `X-Forwarded-For` with the PROXY address and proxies to the dashboard on `127.0.0.1:8790`; everything
+  else goes to the controller. The edge cannot read Fleet secrets or the API private key.
+- **Procedure**:
+  1. `scripts/fleet-rollout.sh rehearse <pins> 41 41`, then the owner runs `cutover`. This is the code only, and
+     behaviour is identical because the flag is off.
+  2. `scripts/fleet-edge.sh rehearse <pins>`: a throwaway controller and edge on test ports against a fresh dump.
+  3. The owner runs `scripts/fleet-edge.sh cutover <pins>`: admin certificate, edge files, env switch, controller
+     restart, edge start, external checks, with automatic rollback.
+  4. Rollback: `scripts/fleet-edge.sh rollback` (env only, back to 0.0.0.0:443). For the code, the R35 release and
+     `runtime.env.pre-<commit7>`.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes

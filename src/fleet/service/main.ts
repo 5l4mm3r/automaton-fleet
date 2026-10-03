@@ -21,6 +21,10 @@
  *   FLEET_PUBLIC_HOSTNAME          DNS name children connect to; the certificate must cover it
  *   FLEET_PUBLIC_LISTEN            HTTPS bind address, e.g. 0.0.0.0:8443. FLEET_API_LISTEN then
  *                                  stays a loopback plain-HTTP listener for local administration
+ *   FLEET_PUBLIC_PROXY_PROTOCOL    R36: "true" when the host's nginx fronts :443 (stream SNI routing,
+ *                                  `proxy_protocol on`). FLEET_PUBLIC_LISTEN must then be a loopback
+ *                                  address (e.g. 127.0.0.1:8443); every connection must open with a
+ *                                  PROXY v1 line naming the real client, and is never treated as local
  *   FLEET_ALLOWED_ORIGINS          comma-separated browser origins (default: none)
  *   FLEET_SERVICE_EXPECTED_USER    OS user the service must run as (systemd: automaton-fleet-service)
  *   FLEET_REAPER_INTERVAL_MS       reaper period (default 15000; 0 = off)
@@ -54,7 +58,7 @@ import {
   type SystemdCredentialHost,
 } from "../secret-files.js";
 import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "../runtime.js";
-import { FleetService, type AuditEntry, type ReadinessCheck } from "./server.js";
+import { FleetService, isLoopbackHost, type AuditEntry, type ReadinessCheck } from "./server.js";
 import { OpenAICompatibleProvider, ScriptedProvider } from "../cognition/providers.js";
 import { AnthropicProvider, parseEffort, parsePromptCache, parseThinking } from "../cognition/anthropic.js";
 import type { ProviderFactory } from "../cognition/routed-gateway.js";
@@ -152,6 +156,8 @@ const HOSTNAME_RE = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]
 export interface RemoteConfig {
   hostname: string;
   publicListen: { host: string; port: number } | null;
+  /** R36: the public listener sits behind the local nginx and reads PROXY v1 headers (loopback bind only). */
+  proxyProtocol: boolean;
   allowedOrigins: string[];
 }
 
@@ -163,8 +169,12 @@ export function loadRemoteConfig(e: Record<string, string | undefined>, tls: { c
   for (const o of origins) {
     if (!/^https:\/\/[^/\s]+$/.test(o)) throw new Error(`FLEET_ALLOWED_ORIGINS entries must be https origins (got ${o}).`);
   }
+  const proxyRaw = e.FLEET_PUBLIC_PROXY_PROTOCOL?.trim().toLowerCase() ?? "";
+  if (proxyRaw !== "" && proxyRaw !== "true" && proxyRaw !== "false") throw new Error(`FLEET_PUBLIC_PROXY_PROTOCOL must be true or false (got ${proxyRaw}).`);
+  const proxyProtocol = proxyRaw === "true";
   if (!remote) {
     if (publicListenRaw) throw new Error("FLEET_PUBLIC_LISTEN requires FLEET_REMOTE_LISTEN_ENABLED=true.");
+    if (proxyProtocol) throw new Error("FLEET_PUBLIC_PROXY_PROTOCOL requires FLEET_REMOTE_LISTEN_ENABLED=true.");
     return null;
   }
   if (!tls) throw new Error("FLEET_REMOTE_LISTEN_ENABLED=true requires FLEET_TLS_CERT_FILE and FLEET_TLS_KEY_FILE.");
@@ -172,7 +182,15 @@ export function loadRemoteConfig(e: Record<string, string | undefined>, tls: { c
   if (!HOSTNAME_RE.test(hostname)) throw new Error("FLEET_REMOTE_LISTEN_ENABLED=true requires FLEET_PUBLIC_HOSTNAME (a DNS name).");
   const problems = tlsProblemsForHost(tls, hostname);
   if (problems.length) throw new Error(`Refusing remote listener: ${problems.join("; ")}`);
-  return { hostname, publicListen: publicListenRaw ? parseListen(publicListenRaw, { remoteAllowed: true }) : null, allowedOrigins: origins };
+  const publicListen = publicListenRaw ? parseListen(publicListenRaw, { remoteAllowed: true }) : null;
+  if (proxyProtocol) {
+    if (!publicListen) throw new Error("FLEET_PUBLIC_PROXY_PROTOCOL=true requires FLEET_PUBLIC_LISTEN (a loopback address the local nginx forwards to).");
+    // A PROXY header is trusted only because nothing but the local nginx can reach the listener.
+    if (!isLoopbackHost(publicListen.host)) {
+      throw new Error(`FLEET_PUBLIC_PROXY_PROTOCOL=true requires a loopback FLEET_PUBLIC_LISTEN (got ${publicListen.host}): PROXY headers from the network would be forgeable.`);
+    }
+  }
+  return { hostname, publicListen, proxyProtocol, allowedOrigins: origins };
 }
 
 /**
@@ -407,8 +425,14 @@ export async function startFleetServiceFromEnv(
     let publicUrl: string | null = null;
     if (remote?.publicListen) {
       url = (await service.listenAdmin(listen.port, listen.host)).url;
-      const pub = await service.listen(remote.publicListen.port, remote.publicListen.host);
-      publicUrl = `https://${remote.hostname}:${pub.port}`;
+      if (remote.proxyProtocol) {
+        // R36: clients reach https://<hostname> (:443) through the local nginx; this listener is loopback only.
+        await service.listenProxied(remote.publicListen.port, remote.publicListen.host);
+        publicUrl = `https://${remote.hostname}`;
+      } else {
+        const pub = await service.listen(remote.publicListen.port, remote.publicListen.host);
+        publicUrl = `https://${remote.hostname}:${pub.port}`;
+      }
     } else {
       url = (await service.listen(listen.port, listen.host)).url;
     }

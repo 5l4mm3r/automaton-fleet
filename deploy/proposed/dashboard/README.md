@@ -14,11 +14,12 @@ Going live needs these host steps, in order (after the R35 cutover):
 
 1. **DNS**: an A record `admin.agentfleet.vip` → `51.195.148.111` (the VPS, as `api.`) at Porkbun. As of 2026-10-02 the
    name resolves to Porkbun's parking servers (207.207.210.107/.229), so the existing record must be replaced.
-2. **TLS front on :443** — `nginx-sni.conf` (stream SNI routing: `api.` passthrough to FleetController moved to
-   `127.0.0.1:8443`; `admin.` terminated by nginx). Install nginx (OS package), obtain the `admin.agentfleet.vip`
-   certificate (HTTP-01 like the API's), change `FLEET_PUBLIC_LISTEN` to `127.0.0.1:8443` — a production change with a
-   short controller restart. Firewall unchanged (443 already open).
-   *Alternative without touching the controller*: serve the dashboard on its own public port (e.g. 8443) — opens a port.
+2. **TLS front on :443 (R36, owner decision 2026-10-03: option B, PROXY protocol)** — `deploy/nginx/automaton-fleet-edge.conf`
+   run by `deploy/systemd/automaton-fleet-edge.service` (stream SNI routing with `proxy_protocol on`: `api.` passes through
+   to FleetController on `127.0.0.1:8443` with `FLEET_PUBLIC_PROXY_PROTOCOL=true`, so the controller keeps the real client
+   address and never treats a proxied client as local; `admin.` is terminated by nginx and proxied to `127.0.0.1:8790`).
+   `scripts/fleet-edge.sh rehearse|cutover|rollback` (runbook "Stage R36"). Firewall unchanged (443 already open); no
+   extra public port.
 3. **OS user + DB role**: `useradd --system --no-create-home --shell /usr/sbin/nologin automaton-fleet-dashboard`;
    re-run `scripts/fleet-db-roles.sql` with `dashboard_password` (fleet_dashboard / fleet_dashboard_login, CONNECTION
    LIMIT 8); `fleet:migrate` grants dash_* only.

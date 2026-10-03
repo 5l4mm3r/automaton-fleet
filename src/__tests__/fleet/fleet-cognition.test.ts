@@ -23,6 +23,7 @@ import net from "net";
 import os from "os";
 import path from "path";
 import pg from "pg";
+import tls from "tls";
 import { PgFleetStore, hashAgentToken, mintAgentToken } from "../../fleet/postgres/store.js";
 import { PgAgentGateway } from "../../fleet/postgres/agent-gateway.js";
 import { PgLedgerAdmin } from "../../fleet/treasury/ledger.js";
@@ -778,5 +779,111 @@ describe.skipIf(!PG_BIN)("Phase F.2 founder cognition (schema v13, HTTP + Postgr
     }
     const [ev] = await q(`SELECT count(*)::int AS n FROM fleet.fleet_events WHERE event_type = 'founder_remote_session_refused' AND agent_id = $1`, [a.agentId]);
     expect(ev.n).toBe(1);
+  });
+
+  // ── R36: the public listener behind the host's nginx (PROXY protocol v1, loopback only)
+
+  function proxyService(audit: (e: { event: string; detail?: Record<string, unknown> }) => void = () => {}, rateLimits?: ConstructorParameters<typeof FleetService>[0]["rateLimits"]) {
+    const dir = fs.mkdtempSync(path.join(root, "tls-"));
+    execFileSync("openssl", ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "2", "-subj", "/CN=localhost",
+      "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1", "-keyout", path.join(dir, "k"), "-out", path.join(dir, "c")], { stdio: "ignore" });
+    return new FleetService({
+      admin: svcStore, agent: gw, realReplicationEnabled: false, reaperIntervalMs: 0, release: { ...PIN, ...BUILD }, audit: audit as never,
+      terminator: new UnsupportedSandboxTerminator(), cognitionProvider: new ScriptedProvider(), rateLimits,
+      tls: { cert: fs.readFileSync(path.join(dir, "c")), key: fs.readFileSync(path.join(dir, "k")) },
+    });
+  }
+
+  /** One HTTPS request as nginx would deliver it: PROXY line (or raw bytes), then the client's TLS. null = connection refused/closed. */
+  function viaProxy(port: number, header: string | Buffer | null, method: string, p: string, headers: Record<string, string> = {}, localAddress?: string) {
+    return new Promise<{ status: number; body: Record<string, unknown> } | null>((resolve) => {
+      const sock = net.connect({ port, host: "127.0.0.1", localAddress }, () => {
+        if (header !== null) sock.write(header);
+        const t = tls.connect({ socket: sock, rejectUnauthorized: false, servername: "localhost" });
+        t.on("error", () => resolve(null));
+        const req = https.request({ host: "localhost", path: p, method, headers, createConnection: () => t }, (res) => {
+          let b = "";
+          res.on("data", (d) => (b += d));
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body: b ? JSON.parse(b) : {} }));
+        });
+        req.on("error", () => resolve(null));
+        req.end();
+      });
+      sock.on("error", () => resolve(null));
+      setTimeout(() => { sock.destroy(); resolve(null); }, 8_000);
+    });
+  }
+
+  it("R36: the real client address survives the proxy; a proxied founder is never local, even if the header claims 127.0.0.1", async () => {
+    await reset();
+    const [a] = await founders();
+    const pub = proxyService();
+    const { port } = await pub.listenProxied(0, "127.0.0.1");
+    const direct = await pub.listenAdmin(0, "127.0.0.1");
+    try {
+      const auth = { authorization: `Bearer ${a.token}` };
+      for (const src of ["203.0.113.7", "127.0.0.1"]) {
+        const r = await viaProxy(port, `PROXY TCP4 ${src} 51.195.148.111 52144 443\r\n`, "POST", "/v1/session", auth);
+        expect(r, src).toMatchObject({ status: 403, body: { code: "FLEET_FOUNDER_LOOPBACK_ONLY" } });
+      }
+      const r6 = await viaProxy(port, "PROXY TCP6 ::1 2001:db8::1 52144 443\r\n", "POST", "/v1/session", auth);
+      expect(r6).toMatchObject({ status: 403, body: { code: "FLEET_FOUNDER_LOOPBACK_ONLY" } });
+      // The controller host's own direct listener keeps honouring the founder (Founder 1's path is unchanged).
+      const local = await fetch(`${direct.url}/v1/session`, { method: "POST", headers: auth });
+      expect(local.status).toBe(200);
+    } finally {
+      await pub.close();
+    }
+    const ev = await q(`SELECT detail->>'ip' AS ip FROM fleet.fleet_events WHERE event_type = 'founder_remote_session_refused' AND agent_id = $1 ORDER BY id`, [a.agentId]);
+    expect(ev.map((e) => e.ip)).toEqual(["203.0.113.7", "127.0.0.1", "::1"]);
+  });
+
+  it("R36: detailed /readyz stays private through the proxy; /healthz is served", async () => {
+    const pub = proxyService();
+    const { port } = await pub.listenProxied(0, "127.0.0.1");
+    const direct = await pub.listenAdmin(0, "127.0.0.1");
+    try {
+      for (const src of ["203.0.113.7", "127.0.0.1"]) {
+        expect(await viaProxy(port, `PROXY TCP4 ${src} 10.0.0.1 1 443\r\n`, "GET", "/readyz"), src).toMatchObject({ status: 404, body: { code: "FLEET_NOT_FOUND" } });
+      }
+      expect(await viaProxy(port, "PROXY TCP4 203.0.113.7 10.0.0.1 1 443\r\n", "GET", "/healthz")).toMatchObject({ status: 200, body: { ok: true } });
+      expect([200, 503]).toContain((await fetch(`${direct.url}/readyz`)).status);
+    } finally {
+      await pub.close();
+    }
+  });
+
+  it("R36: per-IP rate limits key on the real client; one client exhausting its budget does not block another", async () => {
+    const pub = proxyService(undefined, { unverifiedPerIp: { capacity: 2, refillPerSec: 0.001 } });
+    const { port } = await pub.listenProxied(0, "127.0.0.1");
+    const hdr = (ip: string) => `PROXY TCP4 ${ip} 10.0.0.1 40000 443\r\n`;
+    const auth = { authorization: `Bearer ${FAKE_TOKEN}` };
+    try {
+      for (let i = 0; i < 2; i++) expect((await viaProxy(port, hdr("198.51.100.1"), "POST", "/v1/session", auth))!.status).not.toBe(429);
+      expect(await viaProxy(port, hdr("198.51.100.1"), "POST", "/v1/session", auth)).toMatchObject({ status: 429, body: { code: "FLEET_RATE_LIMITED" } });
+      expect((await viaProxy(port, hdr("198.51.100.2"), "POST", "/v1/session", auth))!.status).not.toBe(429);
+    } finally {
+      await pub.close();
+    }
+  });
+
+  it("R36: no header, a malformed or UNKNOWN header, or a non-127.0.0.1 peer gets no HTTP service at all", async () => {
+    const audit: Array<{ event: string; detail?: Record<string, unknown> }> = [];
+    const pub = proxyService((e) => audit.push(e));
+    const { port } = await pub.listenProxied(0, "127.0.0.1");
+    try {
+      expect(await viaProxy(port, null, "GET", "/healthz")).toBeNull(); // TLS straight to the listener (no nginx)
+      expect(await viaProxy(port, "PROXY UNKNOWN\r\n", "GET", "/healthz")).toBeNull();
+      expect(await viaProxy(port, "PROXY TCP4 203.0.113.7 10.0.0.1 99999 443\r\n", "GET", "/healthz")).toBeNull();
+      expect(await viaProxy(port, "GET /healthz HTTP/1.1\r\n\r\n", "GET", "/healthz")).toBeNull();
+      // Another loopback-range source (not the local nginx's 127.0.0.1) is refused before any header is read.
+      expect(await viaProxy(port, "PROXY TCP4 203.0.113.7 10.0.0.1 1 443\r\n", "GET", "/healthz", {}, "127.0.0.2")).toBeNull();
+      // A well-formed header still works after all of that.
+      expect(await viaProxy(port, "PROXY TCP4 203.0.113.7 10.0.0.1 1 443\r\n", "GET", "/healthz")).toMatchObject({ status: 200 });
+    } finally {
+      await pub.close();
+    }
+    expect(audit.filter((e) => e.event === "proxy_header_refused").length).toBeGreaterThanOrEqual(4);
+    expect(audit.filter((e) => e.event === "proxy_peer_refused").map((e) => e.detail?.ip)).toEqual(["127.0.0.2"]);
   });
 });

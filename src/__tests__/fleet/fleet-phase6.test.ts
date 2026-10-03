@@ -233,7 +233,7 @@ describe("Fleet security: Phase 6 HTTPS controller configuration", () => {
       { FLEET_REMOTE_LISTEN_ENABLED: "true", FLEET_PUBLIC_HOSTNAME: "localhost", FLEET_PUBLIC_LISTEN: "0.0.0.0:8443", FLEET_ALLOWED_ORIGINS: "https://ops.example.com" },
       tls,
     );
-    expect(ok).toEqual({ hostname: "localhost", publicListen: { host: "0.0.0.0", port: 8443 }, allowedOrigins: ["https://ops.example.com"] });
+    expect(ok).toEqual({ hostname: "localhost", publicListen: { host: "0.0.0.0", port: 8443 }, proxyProtocol: false, allowedOrigins: ["https://ops.example.com"] });
     expect(() => loadRemoteConfig({ FLEET_ALLOWED_ORIGINS: "http://insecure.example.com" }, null)).toThrow(/https origins/);
     // A certificate about to expire, or a key that does not match, is refused.
     const short = makeCert(tmpDir(), "localhost", 1);
