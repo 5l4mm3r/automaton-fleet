@@ -1,0 +1,25 @@
+== edge rehearse 29cde7d start 2026-10-03T19:56:58Z (public 51.195.148.111)
+production before: controller 398942 :443 node:398942 founder 349284 schema 41 head 540
+throwaway database restored: schema 41, head 540
+throwaway registry approves 29cde7d (build a85fd089905f)
+throwaway controller ready (R36 29cde7d, PROXY listener 127.0.0.1:28443, direct 127.0.0.1:28787)
+throwaway edge running (this release's config and unit): 51.195.148.111:18443 127.0.0.1:18443 
+  PASS TLS passthrough: the edge serves the controller's own certificate for api.agentfleet.vip
+  PASS unknown or absent SNI still reaches the controller (as today)
+  PASS api /healthz 200 through the edge (public address and loopback)
+  PASS /readyz is 404 through the edge, even for a client at 127.0.0.1
+  PASS /readyz still 200 on the direct loopback listener
+  PASS real client address reaches the controller (audit ip 51.195.148.111, not 127.0.0.1)
+  PASS per-IP limit: 51.195.148.111 got 16 x 429 after its budget; another client (127.0.0.1) still got 401, not 429
+  PASS auth-failure events carry the real client address (127.0.0.1 51.195.148.111)
+  PASS the controller's PROXY listener gives nothing to a client without a PROXY header
+  PASS a peer other than 127.0.0.1 (127.0.0.2) is refused before any header is read
+  PASS admin backend receives X-Forwarded-For=51.195.148.111 only (client-supplied 6.6.6.6 dropped), proto https
+  PASS admin TLS with another Host header is refused (421)
+  PASS the admin TLS listener requires the PROXY line (direct connections fail)
+  PASS the edge unit cannot read the API certificate's private key
+  PASS ufw has no rule for any rehearsal port (18443 is not reachable from outside)
+  PASS rollback (env only): PROXY off, direct TLS listener serves /healthz 200 with the controller certificate
+rollback (code): R35 f4be395 stays in /opt/automaton-fleet/releases; fleet-rollout.sh restores it with runtime.env.pre-<commit7>
+  PASS production untouched: controller 398942 :443 node:398942 founder 349284 schema 41 head 540
+== EDGE REHEARSAL PASSED 2026-10-03T19:57:11Z: 17 checks
