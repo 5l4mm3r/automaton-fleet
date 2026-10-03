@@ -133,3 +133,24 @@ Manual rollback:
   - Red/green: the old comparison fails on a matching lineage, and the new one passes.
   - Read-only on production, `check-cert` reports `CERT OK`.
 - **No new runtime release.** Scripts are not part of the build identity, so the running R36 runtime is unchanged.
+
+## Edge re-rehearsal after the certificate-check fix (2026-10-03, about 20:21–20:25Z)
+
+- **`f85ff45` pushed** with owner approval (normal push). `~/r36-src` was updated to it.
+- **`check-cert` on the production lineage:** `CERT OK`, with the SPKI hashes matching at `e4e6db18…84ab`.
+- **First rehearsal run from `f85ff45` failed one check:** "forged-peer connection served".
+  - The controller had refused the peer correctly: its journal shows `proxy_peer_refused ip=127.0.0.2`.
+  - The probe was flaky. It decided "served" from whether a Python TLS wrapper raised an error. Across 300 runs against a
+    listener that always resets, it reported "served" 21 times.
+  - The rehearsal failed closed and did not refresh `~/fleet-edge-29cde7d-rehearsal.ok`.
+  - A diagnostic run from an uncommitted debug copy passed and overwrote that file. That result was superseded by the
+    committed runs below.
+- **Probe fix (`c6ca352`):**
+  - The probe now reports "served" only when the listener answers the ClientHello with a TLS handshake record.
+  - It prints nothing if the probe itself fails.
+  - It is paired with a positive control from 127.0.0.1.
+  - It is deterministic: 300 of 300 refused from 127.0.0.2, and 300 of 300 served from 127.0.0.1.
+- **Two committed rehearsal runs from `c6ca352`:** both PASSED all 17 checks, at 20:24:30Z and 20:24:43Z, with production
+  untouched.
+  - The rehearsal is valid until **2026-10-04 20:24:43Z**.
+  - The runtime pins are unchanged (R36 `29cde7d`, build `a85fd089…`).
