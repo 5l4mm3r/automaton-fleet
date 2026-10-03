@@ -7,6 +7,8 @@ import { GatewayClient } from "../api/client";
 import { LiveFleetAdapter } from "../adapters/live";
 import type { Command, Fleet } from "../model";
 import { loadWallets, toFleet, toLiveCommand, type Wallets } from "./mapping";
+import { CommandReader } from "../api/command";
+import type { CommandView, Pulse, Row } from "../command/view";
 
 let client: GatewayClient | null = null;
 
@@ -16,11 +18,22 @@ export function liveClient(): GatewayClient {
   return client;
 }
 
-export function createLiveAdapter(): LiveFleetAdapter<Fleet, Command, Wallets> {
-  const c = liveClient();
-  return new LiveFleetAdapter<Fleet, Command, Wallets>({
-    toFleet: (s, wallets) => toFleet(s, wallets),
-    toLiveCommand: (cmd, last) => toLiveCommand(cmd, last, c),
-    loadExtra: (cl, s) => loadWallets(cl, s),
-  }, c);
+/** The deck's LIVE adapter: the tested LiveFleetAdapter plus the Fleet Command / Virtual reads (existing operations only). */
+export class LiveDeckAdapter extends LiveFleetAdapter<Fleet, Command, Wallets> {
+  private readonly reader: CommandReader;
+  constructor(c: GatewayClient) {
+    super({
+      toFleet: (s, wallets) => toFleet(s, wallets),
+      toLiveCommand: (cmd, last) => toLiveCommand(cmd, last, c),
+      loadExtra: (cl, s) => loadWallets(cl, s),
+    }, c);
+    this.reader = new CommandReader(c);
+  }
+  command(): Promise<CommandView> { return this.reader.load(); }
+  pulse(): Promise<Pulse> { return this.reader.pulse(); }
+  agentLedger(agentId: string): Promise<Row[]> { return this.reader.agentLedger(agentId); }
+}
+
+export function createLiveAdapter(): LiveDeckAdapter {
+  return new LiveDeckAdapter(liveClient());
 }

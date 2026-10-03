@@ -7,6 +7,9 @@
  * live contract disabled with their reason; an owner fact sealed in the browser, then revealed through the broker for 60
  * s; MAIL / SMS NOT CONFIGURED as a healthy state; an unreachable gateway shown as unreachable (never fictional data);
  * an expired session returning to sign-in; and zero CSP violations under the service's strict per-page policy.
+ * Fleet Command / Virtual Command Centre: FleetController's state, decisions and events in Formal Fleet Command; a
+ * behaviour change through a fresh passkey step-up; portraits and health identical in Agents and Virtual; a real event
+ * moving an agent in real time; the 3D scene and the 2D map; an interrupted feed recovering.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
@@ -84,7 +87,8 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     ORIGIN = `http://localhost:${port}`;
     server = createDashboardServer(dgw, { origin: ORIGIN, rpId: "localhost", stateKey: crypto.randomBytes(32), staticDir: UI });
     await new Promise<void>((r) => server.listen(port, "127.0.0.1", () => r()));
-    browser = await chromium.launch({ executablePath: CHROME!, headless: true, args: ["--no-sandbox"] });
+    // SwiftShader gives headless Chrome WebGL, so the Virtual Command Centre's 3D scene runs under the same CSP.
+    browser = await chromium.launch({ executablePath: CHROME!, headless: true, args: ["--no-sandbox", "--enable-unsafe-swiftshader", "--use-angle=swiftshader"] });
     const ctx = await browser.newContext();
     page = await ctx.newPage();
     page.on("console", (m) => { if (/Content Security Policy|Refused to (execute|load|apply)/i.test(m.text())) csp.push(m.text()); });
@@ -92,6 +96,8 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await cdp.send("WebAuthn.enable", { enableUI: false });
     await cdp.send("WebAuthn.addVirtualAuthenticator", { options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true,
       isUserVerified: true, automaticPresenceSimulation: true } });
+    // The Genesis allocation per agent (100 % wallet health), as production has it (£100.00).
+    await R.q(`UPDATE fleet.fleet_genesis_policy SET bootstrap_capital_currency = 'GBP', bootstrap_capital_minor = 10000`);
     token = crypto.randomBytes(32).toString("base64url");
     await R.q(`SELECT fleet.fleet_admin_dashboard_enroll($1, $2)`, [crypto.createHash("sha256").update(token).digest("hex"), OWNER]);
   }, 300_000);
@@ -104,7 +110,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
   it("an unauthenticated visit to the deck goes to sign-in; the export is the LIVE build", async () => {
     await page.goto(`${ORIGIN}/`);
     await page.waitForURL(/\/login\/$/);
-    expect(await main()).toContain("This Fleet has no owner passkey yet");
+    await page.getByText("This Fleet has no owner passkey yet", { exact: false }).waitFor(); // after the sign-in state is read
     expect(await main()).toContain(`hub-dashboard-enroll ${ORIGIN}`); // the origin it is served from, nothing built in
     for (const f of FICTION) expect(await page.content(), f).not.toContain(f);
   });
@@ -193,6 +199,103 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     expect((await R.q(`SELECT outcome FROM fleet.fleet_reveal_log WHERE kind = 'owner_identity' ORDER BY seq`)).map((r) => r.outcome)).toEqual(["requested", "served", "delivered"]);
     const storage = await page.evaluate(() => JSON.stringify({ l: { ...localStorage }, s: { ...sessionStorage } }));
     expect(storage).not.toContain("Owner Example Legal Name");
+  });
+
+  const gbp = (minor: unknown) => new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(Number(minor) / 100);
+  const words = (t: string) => t.replace(/_/g, " ");
+  /** The shared health definition, computed independently from the database (100 % = the Genesis allocation). */
+  async function expectedBand(agentId: string) {
+    const c = await cash(agentId);
+    const g = Number((await R.q(`SELECT bootstrap_capital_minor AS g FROM fleet.fleet_genesis_policy LIMIT 1`))[0].g);
+    const pct = Math.floor((c * 100) / g);
+    return { pct, label: pct >= 80 ? "HEALTHY" : pct >= 40 ? "STRESSED" : "CRITICAL" };
+  }
+
+  it("Fleet Command: FleetController's state, decisions and event feed; capability states are read-only and truthful", async () => {
+    await page.goto(`${ORIGIN}/#Fleet%20Command`);
+    await page.getByText("Controller status").waitFor();
+    await page.getByText("command data read", { exact: false }).waitFor();
+    const text = await main();
+    expect(text).toMatch(/Living agents2 \/ cap \d+/);
+    expect(text).toContain("Fleet-generated wealth");
+    // The decision log holds the Admin's earlier hold / resume (stored decisions only).
+    await page.getByRole("tab", { name: "Decision Log" }).click();
+    await page.getByText("agent hold set").first().waitFor();
+    expect(await main()).toContain("Model reasoning is never recorded or shown");
+    // The information feed shows FleetController's own latest event types.
+    const latest = await R.q(`SELECT event_type FROM fleet.fleet_events ORDER BY created_at DESC LIMIT 5`);
+    await page.getByRole("tab", { name: "Information Feed" }).click();
+    await page.getByText(words(latest[0].event_type)).first().waitFor();
+    await page.getByRole("tab", { name: "Safety & Capabilities" }).click();
+    const caps = await main();
+    for (const t of ["REAL PAYMENTS", "HOST SWITCH", "NOT CONFIGURED", "not exposed to this gateway"]) expect(caps.toUpperCase()).toContain(t.toUpperCase());
+    expect(await page.locator("table button, table input, table select").count()).toBe(0); // nothing editable there
+  });
+
+  it("a behaviour change asks the passkey for a fresh step-up and changes the real mission policy (then restored)", async () => {
+    await page.goto(`${ORIGIN}/#Fleet%20Command`);
+    await page.getByRole("tab", { name: "Behaviour" }).click();
+    const before = Number((await R.q(`SELECT stagnation_days FROM fleet.fleet_mission_policy WHERE id = 1`))[0].stagnation_days);
+    const stepups = Number((await R.q(`SELECT count(*) AS n FROM fleet.fleet_admin_auth_log WHERE event = 'stepup' AND ok`))[0].n);
+    const stagnation = async () => Number((await R.q(`SELECT stagnation_days FROM fleet.fleet_mission_policy WHERE id = 1`))[0].stagnation_days);
+    for (const value of [before + 7, before]) {
+      await page.getByRole("button", { name: "Change mission behaviour" }).click();
+      await page.getByLabel("Stagnation threshold (days, 1–365)").fill(String(value));
+      await page.getByRole("button", { name: "Review changes" }).click();
+      await page.getByRole("button", { name: "Confirm", exact: true }).click();
+      // The status line may still show the previous "Done", so wait for the real policy row instead.
+      for (let i = 0; i < 100 && (await stagnation()) !== value; i++) await new Promise((r) => setTimeout(r, 100));
+      expect(await stagnation()).toBe(value);
+      await page.getByRole("button", { name: "Change mission behaviour" }).waitFor(); // dialog closed
+    }
+    expect(Number((await R.q(`SELECT count(*) AS n FROM fleet.fleet_admin_auth_log WHERE event = 'stepup' AND ok`))[0].n)).toBe(stepups + 2);
+    expect(Number((await R.q(`SELECT count(*) AS n FROM fleet.fleet_events WHERE event_type = 'mission_policy_set'`))[0].n)).toBeGreaterThanOrEqual(2);
+  });
+
+  it("Agents show original portraits with the shared health state (text, not colour alone)", async () => {
+    await page.goto(`${ORIGIN}/#Agents`);
+    const exp = await expectedBand(A.id);
+    const row = page.locator("tr", { hasText: A.id });
+    await row.getByText(`${exp.label} · ${exp.pct}%`).waitFor();
+    expect(await row.locator("svg[data-band]").count()).toBe(1);
+    expect(await row.locator("svg[role=img]").getAttribute("aria-label")).toMatch(/portrait/);
+  });
+
+  it("Virtual shows the same Fleet: same health and figures, a real event moves the agent live, 3D and map, the feed recovers", async () => {
+    const exp = await expectedBand(A.id);
+    const w = await R.one<any>(`fleet.fleet_generated_treasury_wealth()`);
+    await page.evaluate(() => localStorage.setItem("fleet.virtual.prefs.v1", JSON.stringify({ renderer: "map", quality: "medium", fps: 30, reduceMotion: false, ambient: true, dataFlow: true })));
+    await page.goto(`${ORIGIN}/#Virtual`);
+    const labels = page.getByLabel("Agents", { exact: true });
+    const label = labels.getByRole("button", { name: new RegExp(`^founder-1, ${gbp(await cash(A.id)).replace(/[.£]/g, "\\$&")}, ${exp.label}, `) });
+    await label.waitFor();
+    // The Treasury room's panel shows the same Treasury cash as the Formal Treasury page.
+    await page.getByRole("button", { name: /^Treasury: / }).click();
+    await page.getByRole("complementary", { name: "Selection details" }).getByText(gbp(w.treasuryCashMinor)).first().waitFor();
+    // A real FleetController event (research recorded) moves the agent to the Library within the live pulse.
+    await R.q(`SELECT fleet.fleet_event('knowledge_recorded', $1, 'agent', '{"topic":"e2e"}'::jsonb)`, [A.id]);
+    await page.getByRole("list", { name: "Recent Fleet activity" }).getByText("Research recorded").waitFor({ timeout: 20_000 });
+    await labels.getByRole("button", { name: /^founder-1, .*, RESEARCHING$/ }).waitFor({ timeout: 20_000 });
+    await labels.getByRole("button", { name: /^founder-1,/ }).click();
+    const details = page.getByRole("complementary", { name: "Selection details" });
+    expect(await details.textContent()).toContain("Library / Research");
+    // The agent's own recent transactions come from its real ledger journals.
+    const j = await R.q(`SELECT kind FROM fleet.fleet_ledger_journal WHERE agent_id = $1 ORDER BY seq DESC LIMIT 1`, [A.id]);
+    await details.getByText(words(j[0].kind), { exact: false }).first().waitFor();
+    // The 3D scene (WebGL through SwiftShader) renders the same agents.
+    await page.getByRole("button", { name: "Display" }).click();
+    await page.getByLabel("View").selectOption("3d");
+    await page.locator("canvas").first().waitFor();
+    await labels.getByRole("button", { name: /^founder-1,/ }).waitFor();
+    expect(await page.getByText("The 3D view stopped").count()).toBe(0);
+    await page.getByLabel("View").selectOption("map");
+    expect(await page.getByText("The 3D view stopped").count()).toBe(0); // leaving 3D is not a failure
+    // The live feed is interrupted (reads fail), says so, keeps the last authoritative positions, then recovers.
+    await page.route("**/api/read**", (r) => r.abort());
+    await page.getByText("Feed interrupted — reconnecting", { exact: false }).waitFor({ timeout: 20_000 });
+    expect(await labels.getByRole("button", { name: /^founder-1,/ }).count()).toBe(1);
+    await page.unroute("**/api/read**");
+    await page.getByText("Live feed", { exact: true }).waitFor({ timeout: 70_000 });
   });
 
   it("an unreachable gateway is shown as unreachable — never fictional data", async () => {

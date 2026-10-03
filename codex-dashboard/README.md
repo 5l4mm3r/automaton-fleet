@@ -62,6 +62,21 @@ Dependencies are pinned through package-lock.json. No credentials or environment
   - `api/*`: the gateway client, auth, step-up, sealed reveal and upload, operations, structured errors.
   - `live/mapping.ts`: `toFleet` / `toLiveCommand`.
   - `adapter*.ts`: build-time selection via the `@fleet/adapter-impl` alias in `next.config.ts`.
+  - `command/*` (0.3.0): the shared Fleet Command model, used by the Formal Fleet Command page and the Virtual Command
+    Centre:
+    - wallet health and the winning state (`economics.ts`);
+    - department placement (`departments.ts`);
+    - event normalisation (`events.ts`);
+    - portraits (`portrait.ts`, `AgentPortrait.tsx`);
+    - display preferences (`prefs.ts`);
+    - the transport hook (`useFleetCommand.ts`) and the shared panels.
+  - `virtual/*` (0.3.0): the Virtual Command Centre, a lazy chunk. It has:
+    - world state (`world.ts`);
+    - the 2D map;
+    - the 3D scene (three.js / React Three Fiber, a further lazy chunk);
+    - the label layer and panels.
+  - `api/command.ts`: LIVE reads for Fleet Command and Virtual (existing gateway reads only).
+  - See `docs/CURRENT-STATUS.md` for the exact definitions.
 - `src/lib/fleet.ts` and `src/components/*`: earlier scaffolds, still unused (kept as delivered).
 
 The packaged root layout uses system fonts and Fleet metadata. This removes the starter layout's Google Fonts build download; the live local project was not modified by packaging.

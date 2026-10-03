@@ -6,6 +6,7 @@
  */
 import type { ComponentType } from "react";
 import type { Command, Fleet } from "./model";
+import type { CommandView, Pulse, Row } from "./command/view";
 import type { LiveAuth } from "./api/auth";
 import type { loadAgentDetail } from "./api/snapshot";
 import type { RevealKind } from "./api/reveal";
@@ -15,6 +16,12 @@ export interface DeckAdapter {
   readonly mode: "simulation" | "live";
   snapshot(): Promise<Fleet>;
   execute(command: Command): Promise<Fleet>;
+  /** Fleet Command / Virtual reads: economics, the event log, decisions, ventures, knowledge, policies. */
+  command(): Promise<CommandView>;
+  /** The light real-time read: current agents and the latest events. Reads only; never replays a write. */
+  pulse(): Promise<Pulse>;
+  /** One agent's recent ledger journals (newest first). */
+  agentLedger(agentId: string): Promise<Row[]>;
 }
 
 /** Everything the deck needs only in LIVE mode (null in a simulation build). */

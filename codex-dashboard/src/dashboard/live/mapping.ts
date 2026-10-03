@@ -10,7 +10,7 @@
  */
 import { FleetApiError } from "../api/errors";
 import type { GatewayClient } from "../api/client";
-import type { Json, LiveCommand, LiveSnapshot, MissionBeneficiary, Section } from "../api/types";
+import type { AgentRow, Json, LiveCommand, LiveSnapshot, MissionBeneficiary, Section } from "../api/types";
 import { sealOwnerFact } from "../api/seal";
 import { pence, type Agent, type Command, type Fleet, type LiveView, type Notice } from "../model";
 import { CONSENT_PURPOSES, LIVE_MISSION_KINDS, LIVE_UNAVAILABLE } from "./constants";
@@ -37,6 +37,14 @@ function agentStatus(status: string, held: boolean): Agent["status"] {
   return "provisioning";
 }
 
+/** One `agents` row (plus the agent's wallet, when read) as the deck's Agent. Shared by the snapshot and the pulse. */
+export function toAgent(a: AgentRow, w?: Row): Agent {
+  return {
+    id: a.agentId, name: a.name ?? a.agentId, role: words(a.mode ?? "NORMAL"), mode: a.mode ?? "NORMAL", status: agentStatus(a.status, a.held), cash: num(a.cashMinor),
+    burn: num(w?.runway?.burnPerDayMinor), runwayDays: w?.runway ? (w.runway.days ?? null) : null, colour: colourOf(a.agentId), venture: "", events: [],
+  };
+}
+
 export function toFleet(s: LiveSnapshot, wallets: Wallets = {}): Fleet {
   const unavailable = (Object.entries(s) as Array<[string, unknown]>)
     .filter(([, v]) => v && typeof v === "object" && (v as { state?: string }).state === "unavailable").map(([k]) => k);
@@ -54,11 +62,7 @@ export function toFleet(s: LiveSnapshot, wallets: Wallets = {}): Fleet {
 
   const agents: Agent[] = (data(s.agents) ?? []).map((a) => {
     names.set(a.agentId, a.name ?? a.agentId);
-    const w = wallets[a.agentId];
-    return {
-      id: a.agentId, name: a.name ?? a.agentId, role: words(a.mode ?? "NORMAL"), status: agentStatus(a.status, a.held), cash: num(a.cashMinor),
-      burn: num(w?.runway?.burnPerDayMinor), runwayDays: w?.runway ? (w.runway.days ?? null) : null, colour: colourOf(a.agentId), venture: "", events: [],
-    };
+    return toAgent(a, wallets[a.agentId]);
   });
   const notices: Notice[] = (((data(s.notifications) as Row | null)?.notifications ?? []) as Row[]).map((n) => ({
     id: String(n.notification_id), title: String(n.title ?? n.code ?? ""), acknowledged: Boolean(n.acknowledged_at), time: clock(n.created_at),
@@ -196,6 +200,43 @@ export async function toLiveCommand(cmd: Command, last: LiveSnapshot | null, c: 
       if (!Number.isInteger(ceiling) || ceiling < 1 || ceiling > 50) throw new FleetApiError("FLEET_BAD_REQUEST", "The population ceiling is 1–50 (constitutional maximum 50).");
       if (!Number.isInteger(hours) || hours < 1 || hours > 720) throw new FleetApiError("FLEET_BAD_REQUEST", "The health window is 1–720 hours.");
       return { kind: "policy", area: "replication", patch: { autoBirthEnabled: a.autoBirth === "true", populationCeiling: ceiling, windowHours: hours } };
+    }
+    case "mission_policy": {
+      // Mission behaviour (fleet_admin_mission_policy_set; step-up). Only the fields the form sends; ranges as the table's CHECKs.
+      const patch: Record<string, unknown> = {};
+      for (const [k, lo, hi] of [["stagnationDays", 1, 365], ["knowledgeTargetHours", 1, 336], ["knowledgeMaxHours", 1, 336], ["marketingMaxHours", 1, 720], ["marketingReviewHours", 1, 168]] as const) {
+        if (a[k] === undefined || a[k].trim() === "") continue;
+        const v = Number(a[k]);
+        if (!Number.isInteger(v) || v < lo || v > hi) throw new FleetApiError("FLEET_BAD_REQUEST", `${k} must be a whole number from ${lo} to ${hi}.`);
+        patch[k] = v;
+      }
+      if (patch.knowledgeTargetHours !== undefined && patch.knowledgeMaxHours !== undefined && (patch.knowledgeTargetHours as number) > (patch.knowledgeMaxHours as number)) {
+        throw new FleetApiError("FLEET_BAD_REQUEST", "The research target cannot exceed the research maximum.");
+      }
+      if (a.autoAssignEnabled === "true" || a.autoAssignEnabled === "false") patch.autoAssignEnabled = a.autoAssignEnabled === "true";
+      if (!Object.keys(patch).length) throw new FleetApiError("FLEET_BAD_REQUEST", "Nothing to change.");
+      return { kind: "policy", area: "mission", patch };
+    }
+    case "risk_policy": {
+      // Risk thresholds (fleet_admin_risk_policy_set; step-up). Entered as percentages, sent as basis points.
+      const patch: Record<string, unknown> = {};
+      const bp = (k: string, lo: number) => {
+        const raw = a[k]?.trim();
+        if (!raw) return;
+        if (!/^\d{1,3}(\.\d{1,2})?$/.test(raw)) throw new FleetApiError("FLEET_BAD_REQUEST", `${k} is a percentage with at most two decimals.`);
+        const v = Math.round(Number(raw) * 100);
+        if (v < lo || v > 10_000) throw new FleetApiError("FLEET_BAD_REQUEST", `${k} must be between ${lo / 100} % and 100 %.`);
+        patch[k] = v;
+      };
+      bp("redZoneBp", 0); bp("amberBp", 1); bp("deepBp", 1); bp("deepestBp", 1);
+      for (const [k, lo, hi] of [["vulnerableAgeDays", 0, 3650], ["comfortMonths", 1, 36]] as const) {
+        if (a[k] === undefined || a[k].trim() === "") continue;
+        const v = Number(a[k]);
+        if (!Number.isInteger(v) || v < lo || v > hi) throw new FleetApiError("FLEET_BAD_REQUEST", `${k} must be a whole number from ${lo} to ${hi}.`);
+        patch[k] = v;
+      }
+      if (!Object.keys(patch).length) throw new FleetApiError("FLEET_BAD_REQUEST", "Nothing to change.");
+      return { kind: "policy", area: "risk", patch };
     }
     case "delivery": {
       const hour = Number(a.hour);

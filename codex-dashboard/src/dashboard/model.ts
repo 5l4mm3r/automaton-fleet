@@ -7,6 +7,8 @@ export type Agent = {
   id: string; name: string; role: string; status: 'active' | 'held' | 'dead' | 'provisioning'; cash: number; burn: number; colour: string; venture: string; events: string[];
   /** LIVE: the backend's runway in days (null = no burn yet / not supplied). The simulation derives it from cash/burn. */
   runwayDays?: number | null;
+  /** LIVE: the `agents` read's mode (NORMAL or the active temporary mission). Decides the agent's department. */
+  mode?: string;
 };
 export type Notice = { id: string; title: string; level: 'RED' | 'AMBER' | 'INFO' | 'IDENTITY'; acknowledged: boolean; time: string };
 export type LedgerRow = { id: string; label: string; amount: number; balance: number | null; time: string };

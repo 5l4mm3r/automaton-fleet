@@ -67,3 +67,118 @@ Remaining backend contract gaps (not invented here):
 - document (file) uploads to the owner vault (LIVE adds text facts; files need a file input, not built);
 - customer / sales models;
 - persistent role changes.
+
+## Fleet Command and the Virtual Command Centre — 3 October 2026 (version 0.3.0)
+
+Both views read the same authoritative data and compute agent state through one shared model
+(`src/dashboard/command/`). There is no second backend and no browser-only state. This version adds **no backend
+operations**: everything is read through the gateway's existing reads (`settings`, `events`, `knowledge`, `risk`, and
+the `hub` sections agents, capital, ventures, opportunities, dependencies, overview and treasury). Writes go through the
+existing step-up operations.
+
+**Formal: Fleet Command** (new first-class page)
+
+| Section | Content |
+|---|---|
+| Overview | Controller status, agents with portraits, latest decisions, information received, pending dependencies, Treasury. |
+| Decision Log | Capital requests with FleetController's decision, reasons, would-change factors, inputs, policy version; plus recorded decision events (replication, missions, interventions, estates, policy). Searchable and filterable. Stored reasons only; model reasoning is never recorded or shown. |
+| Information Feed | FleetController's event log, filterable. |
+| Behaviour | Editable, each with review and a fresh passkey step-up: replication policy (ceiling, window, automatic-birth policy); mission policy (stagnation threshold, research and marketing durations, automatic assignment); risk thresholds (red-zone cushion, comfort runway, vulnerability age, exposure tiers). Read-only: the registry cap (host, owner approval), the Genesis allocation, sweep and capital policies (economic policy). |
+| Safety & Capabilities | Read-only and truthful. Real payments and owner sweep are host switches the gateway does not expose, and they are labelled as such. Shown as reported: the replication policy and registry switch, sweeps, the capital engine, MAIL / SMS. |
+| Advanced | Data freshness, unavailable sections, transport, and links to the audit log, Replication and Notifications. |
+
+**Formal: Agents.** Each row shows the operative portrait, a health tag (text and percentage), the current activity
+and the department.
+
+**Virtual Command Centre** (replaces the single-page "operations floor")
+- **Facility:** Fleet Command at the centre; Treasury, Opportunity Lab, Agent Floor, Marketing, Library / Research,
+  Venture / Dev, Identity, Estate Storage, Comms, Security / Systems.
+- **Interaction:** every room and agent is clickable and keyboard-reachable. Focus moves from the whole Fleet to a
+  department to an agent; Esc returns to the Fleet view.
+- **Renderers:** a 3D scene (three.js / React Three Fiber, its own lazily loaded chunk) and a 2D map with no WebGL.
+  Phones and devices without WebGL use the map, and a lost WebGL context falls back to it.
+- **Display settings:** quality Low / Medium / High / Ultra, 30 or 60 fps, reduce motion, ambient on/off, data flow
+  on/off. They are stored in this browser only and never change the Fleet.
+- **Panels:** clicking a room or agent opens the same Fleet Command components with the same data. Agent actions use the
+  deck's controls (review plus passkey step-up).
+- **No fake activity:**
+  - An agent moves only when its status, mission or latest recorded event changes.
+  - Packets travel only for new FleetController events, or for differences between two authoritative readings.
+  - Ambient effects (core rings, monitor glow, dust, 3D only) carry no meaning and can be turned off.
+  - The map never animates on its own.
+
+**Wallet health** (`command/economics.ts`, one definition for both views)
+- 100 % is the Genesis allocation per agent (`fleet_genesis_policy.bootstrap_capital_minor`; £100.00 in production).
+- health = ⌊cash ÷ allocation × 100⌋.
+- Bands: HEALTHY at 80 % or more; STRESSED (wounded) from 40 % to 79 %; CRITICAL below 40 %.
+- DEAD only when FleetController records death. A living agent at £0 is CRITICAL.
+- The risk context can only lower a band:
+  - cash below the commitments due in the next 30 days → at most CRITICAL;
+  - a vulnerable business below its red-zone cushion → at most WOUNDED.
+- With no readable allocation the band is HEALTH UNAVAILABLE. Nothing is guessed.
+
+**Winning ("shades")** requires all of:
+1. lifetime realised net profit above 0;
+2. the last-30-day net above 0 (revenue minus refunds, inference and operating costs);
+3. the red-zone cushion not missed;
+4. the agent otherwise HEALTHY.
+
+Priority: DEAD > CRITICAL > WOUNDED > WINNING > HEALTHY.
+
+**Portraits** (`command/portrait.ts`)
+- Original 24×24 pixel operatives, drawn in code with no third-party art.
+- Each agent's look is seeded from its id, so it is the same everywhere.
+- Every band has its own face: alert; shades and a grin; bruise and cut; blood, black eye and gritted teeth;
+  powered-down grey; dimmed.
+- A portrait is always accompanied by its text state.
+
+**Department placement** (`command/departments.ts`)
+- A dead agent goes to Estate.
+- A provisioning or held agent goes to the Agent Floor.
+- A mission (MARKETING, OPPORTUNITY_HUNT, KNOWLEDGE_DATA) places the agent in that room.
+- Otherwise the agent's latest own event within 6 hours decides the room, mapped from FleetController's event vocabulary.
+- With none of these, the agent is on the Agent Floor. Unknown modes and event types fall back safely.
+
+**Transport** (`command/useFleetCommand.ts`)
+- The gateway has no server push, so this is efficient polling, reads only:
+  - while Fleet Command or Virtual is open and the tab is visible: a pulse of agents plus the latest 60 events every
+    5 s, and the full command view every 30 s;
+  - the per-agent `risk` read at most every 90 s.
+- Nothing is read while the tab is hidden, and it resumes on return.
+- Failures back off (5 s, 10 s, 20 s, 60 s) and show "Feed interrupted — reconnecting" while keeping the last
+  authoritative data. Nothing is ever replayed.
+- Events are de-duplicated and capped at 400 per tab.
+
+**Security**
+- Strict CSP unchanged. 3D, map and labels set no style attributes; motion uses CSSOM/attributes; portraits are `data:`
+  images.
+- Virtual receives nothing Formal does not.
+- No new write path and no browser-side authority.
+- Sensitive actions use the same step-up.
+
+**Performance:** Virtual and three.js are separate lazy chunks; the Formal dashboard never fetches them (tested).
+
+LIVE export on real Fleets, headless Chrome with software WebGL:
+
+| Agents | 3D (low), settled | Map, settled | Heap growth over 25 s |
+|---|---|---|---|
+| 1 | 57 fps | 60 fps | ≤ 2.8 MB |
+| 10 | 47 fps | 60 fps | ≤ 2.8 MB |
+| 25 | 48 fps | 60 fps | ≤ 2.8 MB |
+| 50 | 42 fps | 60 fps (42 while the camera moves) | ≤ 2.8 MB |
+
+Reproduce with `FLEET_SCALE_TESTS=1 npx vitest run src/__tests__/fleet/fleet-virtual-scale-pg.test.ts`. It is a dedicated
+run because the figures need an idle machine.
+
+**Responsive**
+- Desktop: full experience.
+- Tablet: the scene is simplified to Medium automatically.
+- Phone: Formal by default, Virtual as the map.
+- A pre-existing layout bug, where the nav row widened the page beyond phone width, is fixed.
+
+**Still read-only, or not available from the backend**
+- The live-money host switches.
+- The registry cap, Genesis allocation, sweep and capital policies.
+- Per-transaction Treasury history (30-day totals only, as before).
+- Marketing campaign records (marketing is shown through missions and events).
+- Server push: polling, as described above.
