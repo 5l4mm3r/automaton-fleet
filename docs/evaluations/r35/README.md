@@ -22,3 +22,23 @@ communications architecture changed after R34, so R34 must not be cut over. R33 
   (needs a rehearsal from the last 24 h: re-rehearse after 2026-10-03 19:02Z).
 - After the cutover, mail and SMS stay **NOT CONFIGURED**: no broker provider is set and nothing is paid. Activation
   briefs: `deploy/proposed/proton-bridge/README.md`, `deploy/proposed/twilio/README.md`.
+
+## Re-rehearsal — 2026-10-03 (the first window was expiring)
+
+- **Production verified read-only first (18:52Z):**
+  - controller `3aebcc2` (build `055e8076…`), schema 33;
+  - ledger verify ok (503 journals, 0 unbalanced, head `1d3e56f7…`);
+  - Founder 1 active, not held, on `b949b1c`;
+  - registry cap 2, DEVELOPMENT, replication off;
+  - REAL_PAYMENTS / OWNER_SWEEP / REAL_REPLICATION / DRY_RUN_CHILD false;
+  - controller ready; public healthz 200.
+- **Build identity re-verified:** a from-scratch VPS rebuild of `f4be395` (build checkout at `f4be395`, rollout script
+  identical to the commit's) gave exactly `c088aa58…` / `1df54e35…`, equal to `~/r35-pins.txt` and `pins-local.txt`.
+- **Rehearsal PASSED 2026-10-03 18:53:48–18:53:59Z** (`r35-rehearsal-2026-10-03.txt`):
+  - fresh dump (sha `5c249c44…`), restore row counts identical;
+  - migrate-check 33→41 [34..41], migrate;
+  - privilege audit PASS; Founder 1 identity and books unchanged (fail-closed checks); ledger verify ok;
+  - re-run a no-op; rollback proof (the dump restores schema 33 with the same head);
+  - live re-read afterwards unchanged (schema 33, same ledger head).
+  - Valid for a cutover until 2026-10-04 18:53Z.
+- The Codex dashboard commits (`4fa02a4`, `27ea168`) change no runtime file: R35 is still `f4be395`.
