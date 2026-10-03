@@ -102,7 +102,7 @@ if [[ "$MODE" == rehearse ]]; then
   echo "throwaway registry approves ${C:0:7} (build ${B:0:12})"
 
   # 2. Self-signed certificates (the production API key is never copied).
-  sslgen() { sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj "/CN=$1" -addext "subjectAltName=DNS:$1" -keyout "$2.key" -out "$2.crt" 2>/dev/null; }
+  sslgen() { sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 -subj "/CN=$1" -addext "subjectAltName=DNS:$1" -keyout "$2.key" -out "$2.crt" 2>/dev/null; }
   sslgen api.agentfleet.vip $R/svc/api; sudo chown $SVCU:$SVCU $R/svc/api.key $R/svc/api.crt; sudo chmod 0600 $R/svc/api.key; sudo chmod 0644 $R/svc/api.crt
   sslgen admin.agentfleet.vip $R/nginx/admin; sudo chmod 0600 $R/nginx/admin.key
   APIFP=$(sudo openssl x509 -in $R/svc/api.crt -noout -fingerprint -sha256 | cut -d= -f2)
