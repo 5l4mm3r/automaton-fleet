@@ -20,7 +20,7 @@ export function agentTargets(models: readonly AgentModel[]): Map<string, Point &
   for (const m of models) (byDep.get(m.placement.department) ?? byDep.set(m.placement.department, []).get(m.placement.department)!).push(m);
   const out = new Map<string, Point & { department: DepartmentId }>();
   for (const [dep, list] of byDep) {
-    [...list].sort((a, b) => a.agent.id.localeCompare(b.agent.id)).forEach((m, i) => out.set(m.agent.id, { ...slot(dep, i), department: dep }));
+    [...list].sort((a, b) => a.agent.id.localeCompare(b.agent.id)).forEach((m, i) => out.set(m.agent.id, { ...slot(dep, i, list.length), department: dep }));
   }
   return out;
 }
@@ -83,3 +83,52 @@ export function focusRect(focus: { level: "fleet" } | { level: "department"; id:
 }
 
 export const departmentIds = DEPARTMENTS.map((d) => d.id);
+
+// ── Workstations and births ─────────────────────────────────────────────────────────────────────────────────────
+// Every agent has a persistent workstation on the Agent Floor (stable order by agent id, the dead included). Living
+// agents' stations are lit; a dead agent's station is powered down. An agent on the Agent Floor stands at its own one.
+
+export function stationIndex(models: readonly AgentModel[]): Map<string, number> {
+  return new Map([...models].map((m) => m.agent.id).sort().map((id, i) => [id, i]));
+}
+export const stationPoint = (i: number, count = 50): Point => slot("floor", i, count);
+
+/** How long a newborn's station powers up before the agent appears, then how long it stays at its station. */
+export const BIRTH_POWER_MS = 1_200;
+export const BIRTH_ENTER_MS = 7_000;
+/** The static "new" marker that replaces the sequence when motion is reduced. */
+export const BIRTH_MARK_MS = 10_000;
+
+export type BirthPhase = "powering" | "entering" | "settled";
+export interface BirthState { phase: BirthPhase; power: number; visible: boolean; atStation: boolean; mark: boolean }
+
+/**
+ * The birth sequence of an agent first seen at `bornAt` (presentation only: `bornAt` comes from an authoritative new
+ * reading or a recorded birth event). Dormant station → powers up → the agent enters from Fleet Command and walks to its
+ * station → it goes to its first destination. Reduced motion: the station is simply online and the agent in place,
+ * marked as new for a while.
+ */
+export function birthState(bornAt: number | undefined, now: number, reduceMotion: boolean): BirthState {
+  if (bornAt === undefined) return { phase: "settled", power: 1, visible: true, atStation: false, mark: false };
+  const t = now - bornAt;
+  if (reduceMotion) return { phase: "settled", power: 1, visible: true, atStation: false, mark: t < BIRTH_MARK_MS };
+  if (t < BIRTH_POWER_MS) return { phase: "powering", power: Math.max(0, t / BIRTH_POWER_MS), visible: false, atStation: true, mark: false };
+  if (t < BIRTH_POWER_MS + BIRTH_ENTER_MS) return { phase: "entering", power: 1, visible: true, atStation: true, mark: false };
+  return { phase: "settled", power: 1, visible: true, atStation: false, mark: false };
+}
+
+/** Agents' targets including stations and birth sequences (an entering newborn heads for its own station first). */
+export function agentTargetsWithStations(models: readonly AgentModel[], births: ReadonlyMap<string, number>, now: number, reduceMotion: boolean): Map<string, Point & { department: DepartmentId }> {
+  const base = agentTargets(models), stations = stationIndex(models);
+  for (const m of models) {
+    const i = stations.get(m.agent.id)!;
+    const b = birthState(births.get(m.agent.id), now, reduceMotion);
+    if (b.atStation || m.placement.department === "floor") base.set(m.agent.id, { ...stationPoint(i, stations.size), department: "floor" });
+  }
+  return base;
+}
+
+/** Birth event types that mark when an agent came into being (authoritative; nothing else starts a sequence). */
+export const BIRTH_EVENTS = new Set(["agent_born", "genesis_activated"]);
+/** Funding events that justify a Genesis-capital flow to a newborn's station. */
+export const BIRTH_FUNDING_EVENTS = new Set(["genesis_funded", "wallet_transfer", "agent_transfer"]);

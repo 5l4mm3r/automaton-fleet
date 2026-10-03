@@ -2051,7 +2051,11 @@ Release `e9eee6f` (build `89533671…`, lockfile `ea24cb1f…`), identical local
 ## Stage R36 — TLS edge with PROXY protocol (networking only; schema unchanged at 41)
 
 Release `29cde7d` (build `a85fd089…`, lockfile `1df54e35…` unchanged), identical locally and on the VPS; both
-rehearsals PASSED 2026-10-03 ~19:57Z (`docs/evaluations/r36/`). Production stays on R35 until the owner's cutover.
+rehearsals PASSED 2026-10-03 ~19:57Z (`docs/evaluations/r36/`). Owner cutovers:
+- the code at 20:08Z;
+- the edge at 20:29:39Z, after the fixed certificate check.
+
+R36 and the edge are live, and admin.agentfleet.vip is served by nginx.
 
 Owner decision (2026-10-03): option B. `api.agentfleet.vip` and `admin.agentfleet.vip` both on :443 behind nginx, with the
 real client address preserved at FleetController.

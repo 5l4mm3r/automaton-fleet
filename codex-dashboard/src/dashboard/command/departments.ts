@@ -130,14 +130,17 @@ export function placeAgent(a: PlaceableAgent, latest: AgentEventLike | undefined
 }
 
 /**
- * The i-th agent's spot inside a department (deterministic: same agents in the same order → same places). A grid that
- * keeps 50 agents inside the largest room; overflow wraps onto further rows rather than overlapping the walls.
+ * The i-th of `count` agents' spot inside a department (deterministic: same agents in the same order → same places).
+ * Spacing adapts to how many share the room — 1.1 units apart when there is space, tighter (never under 0.45) when the
+ * room is crowded — so up to 50 agents stay inside the room without stacking on one another.
  */
-export function slot(dep: DepartmentId, index: number): { x: number; z: number } {
+export function slot(dep: DepartmentId, index: number, count = 1): { x: number; z: number } {
   const d = DEPARTMENT[dep];
-  const cols = Math.max(1, Math.floor((d.w - 1.2) / 1.1));
+  const w = d.w - 1.4, h = d.d - 2.4; // inside the walls, below the room's name and back-wall workstations
+  let s = 1.1;
+  const fits = (sp: number) => (Math.floor(w / sp) + 1) * (Math.floor(h / sp) + 1) >= count;
+  while (s > 0.45 && !fits(s)) s -= 0.05;
+  const cols = Math.max(1, Math.floor(w / s) + 1), rows = Math.max(1, Math.floor(h / s) + 1);
   const col = index % cols, row = Math.floor(index / cols);
-  // Rows start below the room's name and the workstations along its back wall.
-  const rows = Math.max(1, Math.floor((d.d - 2.2) / 1.1));
-  return { x: d.x - d.w / 2 + 0.9 + col * 1.1, z: d.z - d.d / 2 + 2.0 + (row % rows) * 1.1 + Math.floor(row / rows) * 0.35 };
+  return { x: d.x - d.w / 2 + 0.7 + col * s, z: d.z - d.d / 2 + 2.0 + (row % rows) * s + Math.floor(row / rows) * (s / 2) };
 }

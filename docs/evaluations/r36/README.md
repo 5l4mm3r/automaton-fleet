@@ -154,3 +154,28 @@ Manual rollback:
   untouched.
   - The rehearsal is valid until **2026-10-04 20:24:43Z**.
   - The runtime pins are unchanged (R36 `29cde7d`, build `a85fd089…`).
+
+## Edge cutover — DEPLOYED (owner, 2026-10-03 20:29:39Z)
+
+`fleet-edge.sh cutover ~/r36-pins.txt`, run from the fixed script, completed:
+- the admin certificate was already present;
+- outage 20:29:05–20:29:37Z (32 s, public listener only).
+
+Verified by the script:
+- api `/healthz` 200 with the same certificate;
+- public `/readyz` 404;
+- admin `/login/` 200 with the CSP;
+- the admin API returns 401 unauthenticated;
+- the real client address reaches the controller.
+
+The owner then enrolled a passkey and TOTP and signed in to the live Admin dashboard.
+
+Read-only check (2026-10-04):
+- **Edge and controller:** nginx edge active and enabled, owning public :443; controller on `127.0.0.1:8443` with
+  `FLEET_PUBLIC_PROXY_PROTOCOL=true`; R36 `29cde7d`, schema 41.
+- **Dashboard:** serving UI 0.2.0; one passkey enrolled.
+- **Founder 1:** active, 0 restarts.
+- **Flags:** all four false.
+- **Communications:** MAIL and SMS NOT CONFIGURED.
+
+The edge is complete; later UI releases do not re-run or modify it.

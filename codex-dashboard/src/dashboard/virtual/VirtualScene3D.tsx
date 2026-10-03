@@ -16,7 +16,7 @@ import type { AgentModel } from "../command/agents";
 import { DEPARTMENT, DEPARTMENTS, type Department, type DepartmentId } from "../command/departments";
 import { BAND_FRAME, PORTRAIT_SIZE, portraitGrid } from "../command/portrait";
 import { QUALITY_PROFILE, type VirtualPrefs } from "../command/prefs";
-import { focusRect, livePackets, packetAt, type Packet, type Point } from "./world";
+import { birthState, focusRect, livePackets, packetAt, type BirthState, type Packet, type Point } from "./world";
 import type { Focus } from "./VirtualMap";
 
 function canvasTexture(w: number, h: number, draw: (c: CanvasRenderingContext2D) => void, pixel = false): THREE.CanvasTexture {
@@ -41,13 +41,13 @@ function portraitTexture(id: string, band: AgentModel["health"]["band"]) {
 
 interface Shared { body: THREE.CapsuleGeometry; plane: THREE.PlaneGeometry; ring: THREE.RingGeometry; packet: THREE.SphereGeometry; armour: THREE.MeshStandardMaterial; deadArmour: THREE.MeshStandardMaterial }
 
-const AgentFigure = memo(function AgentFigure({ m, target, shared, selected, mountedAt, onAgent, reduceMotion, positionsRef }: {
-  m: AgentModel; target: Point; shared: Shared; selected: boolean; mountedAt: number; onAgent: (id: string) => void; reduceMotion: boolean;
+const AgentFigure = memo(function AgentFigure({ m, target, shared, selected, bornAt, mark, onAgent, reduceMotion, positionsRef }: {
+  m: AgentModel; target: Point; shared: Shared; selected: boolean; bornAt: number | undefined; mark: boolean; onAgent: (id: string) => void; reduceMotion: boolean;
   positionsRef: MutableRefObject<Map<string, Point>>;
 }) {
   const group = useRef<THREE.Group>(null), head = useRef<THREE.Mesh>(null);
-  // Born while the scene is open → walks in from Fleet Command; otherwise appears at its own spot.
-  const [start] = useState<Point>(() => (Date.now() - mountedAt > 3000 ? { x: DEPARTMENT.command.x, z: DEPARTMENT.command.z } : { ...target }));
+  // A newborn enters from Fleet Command (after its station powers up); everyone else appears at their own spot.
+  const [start] = useState<Point>(() => (birthState(bornAt, Date.now(), reduceMotion).phase !== "settled" ? { x: DEPARTMENT.command.x, z: DEPARTMENT.command.z } : { ...target }));
   const pos = useRef<Point>(start);
   const dead = m.agent.status === "dead";
   const face = useMemo(() => portraitTexture(m.agent.id, m.health.band), [m.agent.id, m.health.band]);
@@ -60,6 +60,7 @@ const AgentFigure = memo(function AgentFigure({ m, target, shared, selected, mou
   useFrame(({ camera }, dt) => {
     const g = group.current;
     if (!g) return;
+    g.visible = birthState(bornAt, Date.now(), reduceMotion).visible;
     const cur = pos.current, dx = target.x - cur.x, dz = target.z - cur.z, dist = Math.hypot(dx, dz), step = 4 * Math.min(dt, 0.1);
     if (reduceMotion || dist <= step) { cur.x = target.x; cur.z = target.z; } else { cur.x += (dx / dist) * step; cur.z += (dz / dist) * step; }
     g.position.set(cur.x, 0, cur.z);
@@ -73,6 +74,7 @@ const AgentFigure = memo(function AgentFigure({ m, target, shared, selected, mou
     <mesh geometry={shared.body} material={dead ? shared.deadArmour : shared.armour} position={[0, 0.5, 0]} rotation={dead ? [Math.PI / 2, 0, 0] : [0, 0, 0]} castShadow dispose={null} />
     <mesh ref={head} geometry={shared.plane} material={faceMat} position={[0, dead ? 0.45 : 1.25, 0]} scale={0.75} dispose={null} />
     {selected && <mesh geometry={shared.ring} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]} dispose={null}><meshBasicMaterial color="#e2e8f0" /></mesh>}
+    {mark && <mesh geometry={shared.ring} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.035, 0]} scale={1.25} dispose={null}><meshBasicMaterial color="#67e8f9" /></mesh>}
   </group>;
 });
 
@@ -81,6 +83,8 @@ function Room({ d, onRoom, prefs, focused }: { d: Department; onRoom: (id: Depar
   const name = useMemo(() => canvasTexture(768, 96, (c) => { c.fillStyle = d.accent; c.font = "bold 56px ui-monospace, monospace"; c.textBaseline = "middle"; c.fillText(d.name.toUpperCase(), 12, 48); }), [d]);
   // Workstations along the back wall (static set dressing; their monitors glow with the room's accent).
   const desks = useMemo(() => {
+    // The Agent Floor shows only the real per-agent workstations (Stations), never decorative ones.
+    if (d.id === "floor") return [];
     const n = Math.max(2, Math.floor((d.w - 1) / 2.4));
     return Array.from({ length: n }, (_, i) => -d.w / 2 + 1.2 + i * ((d.w - 2.4) / (n - 1)));
   }, [d]);
@@ -106,6 +110,39 @@ function Room({ d, onRoom, prefs, focused }: { d: Department; onRoom: (id: Depar
     {q.screens && <mesh position={[d.w / 2 - 1.6, 1.0, -d.d / 2 + 0.13]}><planeGeometry args={[2.2, 0.9]} />
       <meshStandardMaterial ref={screen} color="#020617" emissive={d.accent} emissiveIntensity={0.6} /></mesh>}
   </group>;
+}
+
+/**
+ * One workstation per agent on the Agent Floor: a desk and a monitor whose glow is the station's power — dark before a
+ * newborn's station powers up, lit while its agent lives, powered down after death. Written only when the value changes.
+ */
+function Stations({ models, stations, births, reduceMotion }: { models: AgentModel[]; stations: ReadonlyMap<string, Point>; births: ReadonlyMap<string, number>; reduceMotion: boolean }) {
+  const mats = useRef(new Map<string, THREE.MeshStandardMaterial>());
+  const desk = useMemo(() => new THREE.BoxGeometry(0.85, 0.06, 0.4), []), screen = useMemo(() => new THREE.BoxGeometry(0.6, 0.34, 0.03), []);
+  const deskMat = useMemo(() => new THREE.MeshStandardMaterial({ color: "#111c2e", metalness: 0.5, roughness: 0.6 }), []);
+  useEffect(() => () => { desk.dispose(); screen.dispose(); deskMat.dispose(); }, [desk, screen, deskMat]);
+  const live = useRef({ models, births, reduceMotion });
+  useEffect(() => { live.current = { models, births, reduceMotion }; }, [models, births, reduceMotion]);
+  useFrame(() => {
+    const now = Date.now();
+    for (const m of live.current.models) {
+      const mat = mats.current.get(m.agent.id);
+      if (!mat) continue;
+      const power = m.agent.status === "dead" ? 0.02 : birthState(live.current.births.get(m.agent.id), now, live.current.reduceMotion).power * 0.9;
+      if (Math.abs(mat.emissiveIntensity - power) > 0.005) mat.emissiveIntensity = power;
+    }
+  });
+  return <>{models.map((m) => {
+    const st = stations.get(m.agent.id);
+    if (!st) return null;
+    return <group key={m.agent.id} position={[st.x, 0.3, st.z - 0.62]}>
+      <mesh geometry={desk} material={deskMat} position={[0, 0.3, 0]} dispose={null} />
+      <mesh geometry={screen} position={[0, 0.52, -0.12]} dispose={null}>
+        <meshStandardMaterial ref={(mt: THREE.MeshStandardMaterial | null) => { if (mt) mats.current.set(m.agent.id, mt); else mats.current.delete(m.agent.id); }}
+          color="#020617" emissive="#22d3ee" emissiveIntensity={0} />
+      </mesh>
+    </group>;
+  })}</>;
 }
 
 function CommandCore({ prefs }: { prefs: VirtualPrefs }) {
@@ -211,10 +248,11 @@ function Driver({ fps }: { fps: number }) {
   return null;
 }
 
-export default function VirtualScene3D({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, onLost, positionsRef, projectRef }: {
+export default function VirtualScene3D({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, onLost, positionsRef, projectRef, stations, births, birthStates }: {
   models: AgentModel[]; targets: Map<string, Point>; packets: Packet[]; focus: Focus; prefs: VirtualPrefs; selected: string | null;
   onRoom: (id: DepartmentId) => void; onAgent: (id: string) => void; onLost: () => void;
   positionsRef: MutableRefObject<Map<string, Point>>; projectRef: MutableRefObject<Projector | null>;
+  stations: ReadonlyMap<string, Point>; births: ReadonlyMap<string, number>; birthStates: ReadonlyMap<string, BirthState>;
 }) {
   // This scene's own table of animated positions (published to the label layer; never shared with the map).
   const own = useRef(new Map<string, Point>());
@@ -223,7 +261,6 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const q = QUALITY_PROFILE[prefs.quality];
-  const [mountedAt] = useState(() => Date.now());
   const shared = useMemo<Shared>(() => ({
     body: new THREE.CapsuleGeometry(0.22, 0.5, 4, 8), plane: new THREE.PlaneGeometry(1, 1), ring: new THREE.RingGeometry(0.55, 0.65, 24),
     packet: new THREE.SphereGeometry(0.16, 10, 10),
@@ -258,8 +295,10 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
     {models.map((m) => {
       const t = targets.get(m.agent.id);
       if (!t) return null;
-      return <AgentFigure key={m.agent.id} m={m} target={t} shared={shared} selected={selected === m.agent.id} mountedAt={mountedAt} onAgent={onAgent} reduceMotion={prefs.reduceMotion} positionsRef={own} />;
+      return <AgentFigure key={m.agent.id} m={m} target={t} shared={shared} selected={selected === m.agent.id} bornAt={births.get(m.agent.id)} mark={birthStates.get(m.agent.id)?.mark ?? false}
+        onAgent={onAgent} reduceMotion={prefs.reduceMotion} positionsRef={own} />;
     })}
+    <Stations models={models} stations={stations} births={births} reduceMotion={prefs.reduceMotion} />
     <Packets packets={packets} prefs={prefs} geometry={shared.packet} />
     <Particles prefs={prefs} />
   </Canvas>;

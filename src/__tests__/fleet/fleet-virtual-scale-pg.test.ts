@@ -107,7 +107,23 @@ describe.skipIf(!process.env.FLEET_SCALE_TESTS || !PG_BIN || !CHROME || !fs.exis
           });
           await page.waitForFunction((k) => [...document.querySelectorAll('aside[aria-label="Selection details"] li button')].filter((b) => b.textContent?.startsWith("founder-")).length === k, n, { timeout: 60_000 });
           if (renderer === "map") expect(await page.locator('svg[aria-label="Fleet headquarters map"] g[role=button][aria-label^="founder-"]').count()).toBe(n);
-          if (n <= 16) expect(await page.getByLabel("Agents", { exact: true }).getByRole("button").count()).toBe(n);
+          // In the zoomed-out Fleet view every agent is identifiable by name and wallet (compact above 16 agents).
+          const labelState = () => page.evaluate(() => {
+            const layer = document.querySelector('[aria-label="Agents"]') as HTMLElement;
+            const shown = [...layer.querySelectorAll("button")].filter((b) => (b as HTMLElement).style.visibility !== "hidden" && (b as HTMLElement).style.transform);
+            const rects = shown.map((b) => b.getBoundingClientRect());
+            let overlapping = 0;
+            rects.forEach((a, i) => { if (rects.some((c, j) => j !== i && a.left < c.right && a.right > c.left && a.top < c.bottom && a.bottom > c.top)) overlapping++; });
+            return { density: layer.dataset.density, shown: shown.length, withNameAndWallet: shown.filter((b) => /founder-\d+/.test(b.textContent ?? "") && /£\d/.test(b.textContent ?? "")).length, overlapping };
+          });
+          await page.waitForFunction((k) => [...document.querySelectorAll('[aria-label="Agents"] button')].filter((b) => (b as HTMLElement).style.visibility !== "hidden" && (b as HTMLElement).style.transform).length === k, n, { timeout: 60_000 });
+          await page.waitForTimeout(1500); // births settle, the layout converges
+          const ls = await labelState();
+          expect(ls.density).toBe(n > 16 ? "compact" : "full");
+          expect(ls.shown).toBe(n);
+          expect(ls.withNameAndWallet).toBe(n);
+          r[`${renderer}LabelOverlapPct`] = Math.round((ls.overlapping / n) * 100);
+          expect(ls.overlapping / n, "share of labels overlapping another").toBeLessThanOrEqual(0.15);
           // Focus one agent: its label and panel appear whatever the Fleet size.
           await panel.getByRole("button").filter({ hasText: /^founder-/ }).first().click();
           await panel.getByText("WHY THIS CONDITION", { exact: false }).waitFor();

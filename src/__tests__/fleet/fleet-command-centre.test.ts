@@ -15,7 +15,9 @@ import { diffReadings, isDecision, mergeEvents, toFleetEvent, visualFromEvent, t
 import { QUALITY_PROFILE, defaultPrefs, loadPrefs, sanitizePrefs, savePrefs, STORAGE_KEY, type DeviceHints } from "../../../codex-dashboard/src/dashboard/command/prefs";
 import { PORTRAIT_SIZE, portraitGrid, portraitPaths, traitsOf } from "../../../codex-dashboard/src/dashboard/command/portrait";
 import { deriveAgents, mergePulseAgents } from "../../../codex-dashboard/src/dashboard/command/agents";
-import { agentTargets, livePackets, packetAt, packetFor, focusRect, EXTERNAL } from "../../../codex-dashboard/src/dashboard/virtual/world";
+import { agentTargets, agentTargetsWithStations, birthState, BIRTH_ENTER_MS, BIRTH_MARK_MS, BIRTH_POWER_MS, livePackets, packetAt, packetFor, focusRect, EXTERNAL, stationIndex, stationPoint } from "../../../codex-dashboard/src/dashboard/virtual/world";
+import { COMPACT_ABOVE, densityFor, layoutLabels, type LabelItem } from "../../../codex-dashboard/src/dashboard/virtual/labelLayout";
+import { AgentLabels } from "../../../codex-dashboard/src/dashboard/virtual/AgentLabels";
 import { AgentPortrait, HealthTag } from "../../../codex-dashboard/src/dashboard/command/AgentPortrait";
 import { CapabilityState, DecisionFeed, EventFeed, TreasurySummary, capabilitiesOf } from "../../../codex-dashboard/src/dashboard/command/panels";
 import { FleetCommandPage } from "../../../codex-dashboard/src/dashboard/command/FleetCommandPage";
@@ -108,11 +110,16 @@ describe("state → department (deterministic placement)", () => {
     expect(m.size).toBe(1);
   });
 
-  it("every one of 50 agents gets a distinct spot inside its room", () => {
-    for (const d of DEPARTMENTS) {
-      const spots = Array.from({ length: 50 }, (_, i) => slot(d.id, i));
-      for (const s of spots.slice(0, 30)) { expect(s.x).toBeGreaterThan(d.x - d.w / 2); expect(s.x).toBeLessThan(d.x + d.w / 2); }
-      expect(new Set(spots.map((s) => `${s.x.toFixed(2)},${s.z.toFixed(2)}`)).size).toBe(50);
+  it("up to 50 agents in any one room get distinct spots inside its walls, spaced by how many share it", () => {
+    for (const d of DEPARTMENTS) for (const n of [1, 10, 25, 50]) {
+      const spots = Array.from({ length: n }, (_, i) => slot(d.id, i, n));
+      for (const s of spots) {
+        expect(s.x, `${d.id} ${n}`).toBeGreaterThan(d.x - d.w / 2); expect(s.x, `${d.id} ${n}`).toBeLessThan(d.x + d.w / 2);
+        expect(s.z, `${d.id} ${n}`).toBeGreaterThan(d.z - d.d / 2); expect(s.z, `${d.id} ${n}`).toBeLessThan(d.z + d.d / 2);
+      }
+      expect(new Set(spots.map((s) => `${s.x.toFixed(2)},${s.z.toFixed(2)}`)).size).toBe(n);
+      const min = Math.min(...spots.flatMap((a, i) => spots.slice(i + 1).map((b) => Math.hypot(a.x - b.x, a.z - b.z))), Infinity);
+      if (n > 1) expect(min, `${d.id} ${n}`).toBeGreaterThanOrEqual(0.2);
     }
   });
 });
@@ -339,5 +346,91 @@ describe("behaviour commands (LIVE mapping, step-up policy operations)", () => {
       await expect(toLiveCommand({ id: "3", op: "mission_policy", args }, null, c)).rejects.toThrow();
     for (const args of [{ redZoneBp: "101" }, { redZoneBp: "1.234" }, { comfortMonths: "99" }, {}])
       await expect(toLiveCommand({ id: "4", op: "risk_policy", args }, null, c)).rejects.toThrow();
+  });
+});
+
+
+describe("agent birth: dedicated workstation, power-up, entrance (presentation only)", () => {
+  it("phases: dormant station powers up, the agent enters from Fleet Command to its station, then settles", () => {
+    expect(birthState(undefined, 0, false)).toEqual({ phase: "settled", power: 1, visible: true, atStation: false, mark: false });
+    expect(birthState(1000, 1000, false)).toMatchObject({ phase: "powering", power: 0, visible: false, atStation: true });
+    expect(birthState(1000, 1000 + BIRTH_POWER_MS / 2, false).power).toBeCloseTo(0.5);
+    expect(birthState(1000, 1000 + BIRTH_POWER_MS + 1, false)).toMatchObject({ phase: "entering", power: 1, visible: true, atStation: true });
+    expect(birthState(1000, 1000 + BIRTH_POWER_MS + BIRTH_ENTER_MS + 1, false)).toMatchObject({ phase: "settled", atStation: false });
+  });
+  it("reduced motion: the station is simply online and the newborn in place, marked new for a while", () => {
+    expect(birthState(0, 1, true)).toEqual({ phase: "settled", power: 1, visible: true, atStation: false, mark: true });
+    expect(birthState(0, BIRTH_MARK_MS + 1, true).mark).toBe(false);
+  });
+  it("every agent (the dead included) has a stable station; Floor agents stand at their own, a newborn heads there first", () => {
+    const view = { ...emptyCommandView("live"), genesisMinor: GENESIS };
+    const models = deriveAgents([agent("C"), agent("A", { mode: "KNOWLEDGE_DATA" }), agent("B", { status: "dead" })], view);
+    const idx = stationIndex(models);
+    expect([...idx]).toEqual([["A", 0], ["B", 1], ["C", 2]]);
+    expect(stationIndex([...models].reverse())).toEqual(idx);
+    const now = 50_000;
+    const t = agentTargetsWithStations(models, new Map(), now, false);
+    expect(t.get("C")).toMatchObject({ ...stationPoint(2), department: "floor" }); // on the Floor: at its own station
+    expect(t.get("A")!.department).toBe("library");
+    const born = agentTargetsWithStations(models, new Map([["A", now - BIRTH_POWER_MS - 10]]), now, false);
+    expect(born.get("A")).toMatchObject({ ...stationPoint(0), department: "floor" }); // entering: its station first
+    const settled = agentTargetsWithStations(models, new Map([["A", now - BIRTH_POWER_MS - BIRTH_ENTER_MS - 10]]), now, false);
+    expect(settled.get("A")!.department).toBe("library"); // then its first real destination
+    expect(agentTargetsWithStations(models, new Map([["A", now]]), now, true).get("A")!.department).toBe("library"); // reduced motion: in place
+  });
+});
+
+describe("adaptive agent labels (name + wallet visible at Fleet scale)", () => {
+  const item = (id: string, x: number, y: number, priority = 1, w = 100, h = 14): LabelItem => ({ id, x, y, w, h, priority });
+  it("density: full in small Fleets or when zoomed in; compact NAME · £WALLET in the Fleet view of a large Fleet", () => {
+    expect(densityFor(COMPACT_ABOVE, true)).toBe("full");
+    expect(densityFor(COMPACT_ABOVE + 1, true)).toBe("compact");
+    expect(densityFor(50, false)).toBe("full");
+  });
+  it("places labels without overlap where space allows; highest priority keeps its natural spot", () => {
+    const out = layoutLabels([item("a", 200, 100), item("b", 205, 102), item("crit", 210, 101, 3)], { w: 800, h: 600 });
+    expect(out.get("crit")).toMatchObject({ displaced: false, overlapping: false });
+    const rects = [...out.values()].map((p) => p!);
+    for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i], b = rects[j];
+      expect(a.x < b.x + 100 && a.x + 100 > b.x && a.y < b.y + 14 && a.y + 14 > b.y, `${i}/${j}`).toBe(false);
+    }
+    expect(rects.filter((r) => r.displaced)).toHaveLength(2);
+  });
+  it("culls only agents off-screen; a crowded label is still shown (flagged), never hidden; deterministic", () => {
+    const out = layoutLabels([item("off", -50, 100), item("on", 50, 100)], { w: 400, h: 300 });
+    expect(out.get("off")).toBeNull();
+    expect(out.get("on")).not.toBeNull();
+    const crowd = Array.from({ length: 50 }, (_, i) => item(`a${i}`, 60 + (i % 5), 40 + (i % 3), 1, 100, 14));
+    const tight = layoutLabels(crowd, { w: 160, h: 90 });
+    expect([...tight.values()].every((p) => p !== null)).toBe(true);
+    expect([...tight.values()].some((p) => p!.overlapping)).toBe(true);
+    expect(JSON.stringify([...layoutLabels(crowd, { w: 160, h: 90 })])).toBe(JSON.stringify([...tight]));
+  });
+  it("50 labels in a realistic Fleet view: almost all placed clear of each other, well inside a frame", () => {
+    // 50 agents on a 12 × 4 grid of stations ~20 px apart (the Agent Floor zoomed out), compact labels ~110 × 14 px.
+    const items = Array.from({ length: 50 }, (_, i) => item(`f${String(i).padStart(2, "0")}`, 300 + (i % 12) * 20, 220 + Math.floor(i / 12) * 20, i % 7 === 0 ? 3 : 1, 110, 14));
+    const t0 = performance.now();
+    let out = layoutLabels(items, { w: 900, h: 560 });
+    for (let k = 0; k < 99; k++) out = layoutLabels(items, { w: 900, h: 560 });
+    expect((performance.now() - t0) / 100).toBeLessThan(4);
+    const shown = [...out.values()].filter((p) => p !== null);
+    expect(shown).toHaveLength(50);
+    expect(shown.filter((p) => p!.overlapping).length).toBeLessThanOrEqual(5);
+  });
+  it("renders compact NAME · £WALLET in a large Fleet view, and the full card when zoomed in (always with state in the name)", () => {
+    const view = { ...emptyCommandView("live"), genesisMinor: GENESIS };
+    const many = deriveAgents(Array.from({ length: 20 }, (_, i) => agent(`A${i}`, { name: `Agent ${i}`, cash: i === 3 ? 1_000 : 9_000 })), view);
+    const props = { models: many, positionsRef: { current: new Map() }, projectRef: { current: null }, prefs: defaultPrefs({ width: 1600, cores: 8, memoryGb: 8, coarsePointer: false, prefersReducedMotion: false, webgl: true }),
+      selected: null, onAgent: () => {}, hidden: new Set<string>(), marked: new Map() };
+    const compact = renderToStaticMarkup(h(AgentLabels, { ...props, fleetView: true }) as never);
+    expect(compact).toContain('data-density="compact"');
+    expect(compact).toContain("Agent 3");
+    expect(compact).toContain("£10.00");
+    expect(compact).toContain('aria-label="Agent 3, £10.00, CRITICAL, OPERATING"');
+    expect(compact).not.toContain("OPERATING</span>"); // activity text only in the full card
+    const full = renderToStaticMarkup(h(AgentLabels, { ...props, fleetView: false }) as never);
+    expect(full).toContain('data-density="full"');
+    expect(full).toContain("OPERATING</span>");
   });
 });

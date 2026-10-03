@@ -27,6 +27,8 @@ import { initIdentityState, openIdentityState } from "../../fleet/identity/main.
 import { totp } from "../../fleet/identity/crypto.js";
 import { PgDashboardGateway } from "../../fleet/dashboard/gateway.js";
 import { createDashboardServer } from "../../fleet/dashboard/server.js";
+import { simulateRuntimeAttestation } from "../../fleet/genesis/simulate.js";
+import { hashAgentToken, mintAgentToken } from "../../fleet/postgres/store.js";
 
 const PG_BIN = findPgBin();
 const CHROME = ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find((p) => fs.existsSync(p)) ?? null;
@@ -170,12 +172,17 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await confirm(/Done: fund/);
     expect(await cash(A.id)).toBe(before + 1234);
     expect((await R.q(`SELECT op, ok FROM fleet.fleet_admin_auth_log WHERE event = 'stepup' ORDER BY seq DESC LIMIT 1`))[0]).toMatchObject({ ok: true });
+    // Hold and Resume both report "Done: hold", so the second confirmation can match the first status line: wait for
+    // the real agent row instead.
+    const held = async () => (await R.q(`SELECT operator_hold_at FROM fleet.fleet_agents WHERE agent_id = $1`, [A.id]))[0].operator_hold_at !== null;
+    const until = async (want: boolean) => { for (let i = 0; i < 100 && (await held()) !== want; i++) await new Promise((r) => setTimeout(r, 100)); return held(); };
     await page.getByRole("button", { name: "Hold" }).click();
     await confirm(/Done: hold/);
-    expect((await R.q(`SELECT operator_hold_at FROM fleet.fleet_agents WHERE agent_id = $1`, [A.id]))[0].operator_hold_at).not.toBeNull();
+    expect(await until(true)).toBe(true);
     await page.getByRole("button", { name: "Resume" }).click();
-    await confirm(/Done: hold/);
-    expect((await R.q(`SELECT operator_hold_at FROM fleet.fleet_agents WHERE agent_id = $1`, [A.id]))[0].operator_hold_at).toBeNull();
+    await page.getByRole("button", { name: "Review changes" }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    expect(await until(false)).toBe(false);
   });
 
   it("an owner fact is sealed in the browser, installed by the broker, then revealed through the broker for 60 s", async () => {
@@ -275,6 +282,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     // A real FleetController event (research recorded) moves the agent to the Library within the live pulse.
     await R.q(`SELECT fleet.fleet_event('knowledge_recorded', $1, 'agent', '{"topic":"e2e"}'::jsonb)`, [A.id]);
     await page.getByRole("list", { name: "Recent Fleet activity" }).getByText("Research recorded").waitFor({ timeout: 20_000 });
+    await page.keyboard.press("Escape"); // back to the Fleet view (the Treasury framing put the Library off-screen)
     await labels.getByRole("button", { name: /^founder-1, .*, RESEARCHING$/ }).waitFor({ timeout: 20_000 });
     await labels.getByRole("button", { name: /^founder-1,/ }).click();
     const details = page.getByRole("complementary", { name: "Selection details" });
@@ -296,6 +304,47 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     expect(await labels.getByRole("button", { name: /^founder-1,/ }).count()).toBe(1);
     await page.unroute("**/api/read**");
     await page.getByText("Live feed", { exact: true }).waitFor({ timeout: 70_000 });
+  });
+
+  it("a real birth while Virtual is open: its dormant workstation powers up, then the agent enters with name and wallet", async () => {
+    await page.evaluate(() => localStorage.setItem("fleet.virtual.prefs.v1", JSON.stringify({ renderer: "map", quality: "medium", fps: 60, reduceMotion: false, ambient: true, dataFlow: true })));
+    await page.goto(`${ORIGIN}/#Overview`);
+    await page.goto(`${ORIGIN}/#Virtual`);
+    await page.reload();
+    const labels = page.getByLabel("Agents", { exact: true });
+    await labels.getByRole("button", { name: /^founder-1,/ }).waitFor();
+    const before = new Set((await R.q(`SELECT agent_id FROM fleet.fleet_agents`)).map((r) => r.agent_id));
+    // A real birth (the authoritative pipeline: Admin birth order → authorize → provision → attest → fund → activate).
+    await R.q(`UPDATE fleet.fleet_state SET max_agents = max_agents + 1`);
+    const orderId = (await R.one<any>(`fleet.fleet_admin_birth('marketing', 'e2e birth', 10000, NULL, $1, $2)`, [OWNER, `birth:${crypto.randomUUID()}`])).orderId as string;
+    const g = await R.genesis.birthAuthorize(orderId, OWNER) as any;
+    const pv = await R.genesis.provision(g.genesisId, OWNER);
+    for (const id of pv.founderIds!) await R.genesis.attest(g.genesisId, id, (await simulateRuntimeAttestation(R.genesis, R.genesis, g.genesisId, id, OWNER)).host, OWNER);
+    await R.genesis.fund(g.genesisId, OWNER);
+    await R.genesis.activateWithHashes(g.genesisId, g.authSha256, pv.founderIds!.map((id) => hashAgentToken(mintAgentToken(id))), OWNER);
+    const born = (await R.q(`SELECT agent_id, name FROM fleet.fleet_agents`)).find((r) => !before.has(r.agent_id))!;
+    expect(born).toBeTruthy();
+    // Its workstation appears dark, powers up, and only then does the agent show.
+    const station = page.locator(`rect[data-station="${born.agent_id}"]`);
+    await station.waitFor({ state: "attached", timeout: 30_000 });
+    const samples: Array<{ power: number; agentShown: boolean }> = [];
+    for (let i = 0; i < 40; i++) {
+      samples.push(await page.evaluate(([id, name]) => {
+        const st = document.querySelector(`rect[data-station="${id}"]`);
+        const g = [...document.querySelectorAll('svg[aria-label="Fleet headquarters map"] g[role=button]')].find((e) => e.getAttribute("aria-label")?.startsWith(`${name},`));
+        return { power: Number(st?.getAttribute("fill-opacity") ?? 0), agentShown: !!g && g.getAttribute("visibility") !== "hidden" };
+      }, [born.agent_id, born.name]));
+      await page.waitForTimeout(100);
+    }
+    // While the station is still dark the agent is not shown; once it is online the agent is.
+    for (const x of samples) if (x.power < 0.3) expect(x.agentShown, JSON.stringify(x)).toBe(false);
+    expect(samples.at(-1)!.agentShown).toBe(true);
+    expect(Math.min(...samples.map((s) => s.power)), "station starts dormant / powering").toBeLessThan(0.4);
+    expect(samples.at(-1)!.power, "station fully online").toBeCloseTo(0.56, 2);
+    await labels.getByRole("button", { name: new RegExp(`^${born.name}, £100\.00, `) }).waitFor({ timeout: 20_000 });
+    // It then goes to its first destination: its birth mission (Marketing).
+    await labels.getByRole("button", { name: new RegExp(`^${born.name}, .*, MARKETING$`) }).waitFor({ timeout: 20_000 });
+    await page.getByRole("list", { name: "Recent Fleet activity" }).getByText("Agent born — station online").first().waitFor({ timeout: 20_000 });
   });
 
   it("an unreachable gateway is shown as unreachable — never fictional data", async () => {

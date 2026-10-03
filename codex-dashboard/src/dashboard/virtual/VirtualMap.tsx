@@ -12,7 +12,7 @@ import type { AgentModel } from "../command/agents";
 import { DEPARTMENT, DEPARTMENTS, type DepartmentId } from "../command/departments";
 import { portraitPng } from "../command/portrait";
 import type { VirtualPrefs } from "../command/prefs";
-import { focusRect, livePackets, packetAt, WORLD, type Packet, type Point } from "./world";
+import { birthState, focusRect, livePackets, packetAt, WORLD, type BirthState, type Packet, type Point } from "./world";
 
 /** The floor grid as one path (cheaper to repaint than a pattern fill). */
 const GRID = (() => {
@@ -34,25 +34,29 @@ function activate(fn: () => void) {
   return { onClick: fn, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(); } } };
 }
 
-const MapAgent = memo(function MapAgent({ m, selected, mountedAt, register, onAgent }: {
-  m: AgentModel; selected: boolean; mountedAt: number; register: (id: string, el: SVGGElement | null, start: Point | null) => void; onAgent: (id: string) => void;
+const MapAgent = memo(function MapAgent({ m, selected, newborn, mark, register, onAgent }: {
+  m: AgentModel; selected: boolean; newborn: boolean; mark: boolean; register: (id: string, el: SVGGElement | null, start: Point | null) => void; onAgent: (id: string) => void;
 }) {
   // Born while the map is open → walks in from Fleet Command; otherwise appears at its own spot.
-  const [start] = useState<Point | null>(() => (Date.now() - mountedAt > 3000 ? { x: DEPARTMENT.command.x, z: DEPARTMENT.command.z } : null));
+  const [start] = useState<Point | null>(() => (newborn ? { x: DEPARTMENT.command.x, z: DEPARTMENT.command.z } : null));
   const id = m.agent.id;
   const ref = useCallback((el: SVGGElement | null) => register(id, el, start), [register, id, start]);
   return <g ref={ref} role="button" tabIndex={0} aria-label={`${m.agent.name}, ${money(m.agent.cash)}, ${m.health.label}, ${m.placement.activity}`} className="cursor-pointer outline-none"
     opacity={m.agent.status === "dead" ? 0.55 : 1} {...activate(() => onAgent(id))}>
     {selected && <circle r={0.95} fill="none" stroke="#e2e8f0" strokeWidth={0.06} />}
+    {/* Reduced motion: a newborn is marked "new" by a static ring instead of the entrance sequence. */}
+    {mark && <circle r={1.1} fill="none" stroke="#67e8f9" strokeWidth={0.05} strokeDasharray="0.2 0.12" />}
     <Portrait id={id} band={m.health.band} />
   </g>;
 });
 
-export function VirtualMap({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, positionsRef, projectRef }: {
+export function VirtualMap({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, positionsRef, projectRef, stations, births, birthStates }: {
   models: AgentModel[]; targets: Map<string, Point>; packets: Packet[]; focus: Focus; prefs: VirtualPrefs; selected: string | null;
   onRoom: (id: DepartmentId) => void; onAgent: (id: string) => void;
   /** Published for the label layer: animated positions and world → screen projection. */
   positionsRef: MutableRefObject<Map<string, Point>>; projectRef: MutableRefObject<Projector | null>;
+  /** Each agent's workstation on the Agent Floor, and births (presentation only). */
+  stations: ReadonlyMap<string, Point>; births: ReadonlyMap<string, number>; birthStates: ReadonlyMap<string, BirthState>;
 }) {
   const svg = useRef<SVGSVGElement>(null);
   const agentEls = useRef(new Map<string, SVGGElement>());
@@ -62,9 +66,11 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
   const drawn = useRef(new Map<string, SVGGElement>());
   const packetsOn = useRef(true);
   const view = useRef<{ x: number; z: number; w: number; d: number }>({ x: WORLD.minX, z: WORLD.minZ, w: WORLD.maxX - WORLD.minX, d: WORLD.maxZ - WORLD.minZ });
-  const [mountedAt] = useState(() => Date.now());
-  const live = useRef({ targets, packets, focus, prefs });
-  useEffect(() => { live.current = { targets, packets, focus, prefs }; }, [targets, packets, focus, prefs]);
+  const live = useRef({ targets, packets, focus, prefs, births, models });
+  useEffect(() => { live.current = { targets, packets, focus, prefs, births, models }; }, [targets, packets, focus, prefs, births, models]);
+  const stationEls = useRef(new Map<string, SVGRectElement>());
+  /** Set an attribute only when its value changes (a still Fleet costs no repaint); cached per element. */
+  const put = (el: Element, attr: string, value: string) => { if (el.getAttribute(attr) !== value) el.setAttribute(attr, value); };
   /** An agent's element registers here; `start` is where it appears (Fleet Command for a birth), else its own spot. */
   const register = useCallback((id: string, el: SVGGElement | null, start: Point | null) => {
     if (!el) { agentEls.current.delete(id); return; }
@@ -89,6 +95,16 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
       const dt = last ? Math.min(0.1, (t - last) / 1000) : 0.016;
       last = t;
       const snap = pr.reduceMotion;
+      // Workstations: lit while the agent lives, powering up during a birth, powered down after death.
+      const nowMs = Date.now(), dead = new Set(live.current.models.filter((m) => m.agent.status === "dead").map((m) => m.agent.id));
+      for (const [id, st] of stationEls.current) {
+        const b = birthState(live.current.births.get(id), nowMs, snap);
+        const power = dead.has(id) ? 0 : b.power;
+        put(st, "fill-opacity", (0.06 + power * 0.5).toFixed(2));
+        put(st, "stroke", dead.has(id) ? "#334155" : power >= 1 ? "#22d3ee" : "#155e75");
+        const el = agentEls.current.get(id);
+        if (el) put(el, "visibility", b.visible ? "visible" : "hidden");
+      }
       // Only what changes is written to the DOM: a still Fleet costs no repaint (large Fleets stay smooth).
       // Agents walk towards their department slot (about 4 units per second; snap with reduced motion).
       for (const [id, el] of agentEls.current) {
@@ -141,7 +157,10 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
       {d.id === "command" && <circle cx={d.x} cy={d.z} r={1.4} fill="none" stroke={d.accent} strokeWidth={0.1} />}
       <text x={d.x - d.w / 2 + 0.4} y={d.z - d.d / 2 + 0.75} fontSize={0.62} fill={d.accent} className="font-mono tracking-widest">{d.name.toUpperCase()}</text>
     </g>)}
-    {models.map((m) => <MapAgent key={m.agent.id} m={m} selected={selected === m.agent.id} mountedAt={mountedAt} register={register} onAgent={onAgent} />)}
+    {/* One workstation per agent on the Agent Floor (a dark bar until it is powered). */}
+    {models.map((m) => { const st = stations.get(m.agent.id); return st ? <rect key={`st-${m.agent.id}`} ref={(el) => { if (el) stationEls.current.set(m.agent.id, el); else stationEls.current.delete(m.agent.id); }}
+      x={st.x - 0.45} y={st.z - 1.42} width={0.9} height={0.24} rx={0.05} fill="#22d3ee" fillOpacity={0.06} stroke="#155e75" strokeWidth={0.04} data-station={m.agent.id} /> : null; })}
+    {models.map((m) => <MapAgent key={m.agent.id} m={m} selected={selected === m.agent.id} newborn={(birthStates.get(m.agent.id)?.phase ?? "settled") !== "settled"} mark={birthStates.get(m.agent.id)?.mark ?? false} register={register} onAgent={onAgent} />)}
     {Array.from({ length: 60 }, (_, i) => <circle key={`p${i}`} ref={(el) => { if (el) packetEls.current[i] = el; }} r={0} />)}
   </svg>;
 }

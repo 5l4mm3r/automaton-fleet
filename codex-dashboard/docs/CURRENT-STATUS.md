@@ -107,6 +107,35 @@ and the department.
   - Ambient effects (core rings, monitor glow, dust, 3D only) carry no meaning and can be turned off.
   - The map never animates on its own.
 
+**Workstations and births** (`virtual/world.ts`, presentation only)
+- **Stations:** every agent has a dedicated workstation on the Agent Floor, in a stable order by agent id that includes
+  the dead. It is lit while the agent lives and powered down after its death. An agent on the Floor stands at its own
+  station.
+- **What counts as a birth:** a new agent id between two authoritative readings, or, on first opening, a recorded
+  `agent_born` / `genesis_activated` event from the last 90 s.
+- **The sequence:**
+  1. The dark station powers up (1.2 s).
+  2. The agent enters from Fleet Command and walks to its station.
+  3. Its persistent portrait, name and wallet appear.
+  4. After about 7 s it goes to its first real destination (for example its birth mission's room).
+- **Genesis capital:** drawn from the Treasury to the station only when a real funding event exists, or the birth
+  event's own recorded funding. Nothing is generated for the animation, and there is no backend birth operation.
+- **Reduced motion:** the station is simply online and the agent in place, marked "new" by a static ring for 10 s.
+
+**Agent labels** (`virtual/AgentLabels.tsx`, `virtual/labelLayout.ts`)
+- **Readability:** every on-screen agent is identifiable by name and wallet at any Fleet size, as an HTML layer at a
+  fixed readable size over either renderer.
+- **Density:**
+  - full card (name, wallet, activity) in Fleets of up to 16 agents, or when zoomed into a department or an agent;
+  - compact `NAME · £WALLET` in the zoomed-out Fleet view above 16 agents.
+- **Layout:** greedy, every frame that something moved, in priority order: the selected agent, then critical, wounded,
+  the rest, the dead. Each label tries staggered spots near its agent, then the nearest free cell of the view, with a
+  leader line to its agent.
+- **Distress and state:** critical and wounded agents carry a coloured edge and bold text. The accessible name always
+  states wallet, health and activity.
+- **Culling:** a label is culled only when its agent is off-screen.
+- **Rooms:** spacing adapts to how many agents share one, so up to 50 stay inside its walls.
+
 **Wallet health** (`command/economics.ts`, one definition for both views)
 - 100 % is the Genesis allocation per agent (`fleet_genesis_policy.bootstrap_capital_minor`; £100.00 in production).
 - health = ⌊cash ÷ allocation × 100⌋.
@@ -160,12 +189,12 @@ Priority: DEAD > CRITICAL > WOUNDED > WINNING > HEALTHY.
 
 LIVE export on real Fleets, headless Chrome with software WebGL:
 
-| Agents | 3D (low), settled | Map, settled | Heap growth over 25 s |
-|---|---|---|---|
-| 1 | 57 fps | 60 fps | ≤ 2.8 MB |
-| 10 | 47 fps | 60 fps | ≤ 2.8 MB |
-| 25 | 48 fps | 60 fps | ≤ 2.8 MB |
-| 50 | 42 fps | 60 fps (42 while the camera moves) | ≤ 2.8 MB |
+| Agents | 3D (low), settled / moving | Map, settled / moving | Labels overlapping | Heap growth over 25 s |
+|---|---|---|---|---|
+| 1 | 58 / 48 fps | 60 / 53 fps | 0 % | 2.4 MB |
+| 10 | 57 / 47 fps | 60 / 60 fps | 0 % | 2.3 MB |
+| 25 | 50 / 45 fps | 60 / 59 fps | 0 % | 2.8 MB |
+| 50 | 43 / 39 fps | 60 / 58 fps | 0 % | 3.8 MB |
 
 Reproduce with `FLEET_SCALE_TESTS=1 npx vitest run src/__tests__/fleet/fleet-virtual-scale-pg.test.ts`. It is a dedicated
 run because the figures need an idle machine.

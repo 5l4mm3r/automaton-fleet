@@ -47,7 +47,7 @@ function Chart({ values }: { values: number[] }) {
     {[30, 70, 110, 150].map(y => <line key={y} x1="15" x2="685" y1={y} y2={y} stroke="#334155" />)}
     <polygon points={`15,160 ${points} 685,160`} fill="#22d3ee18" /><polyline points={points} fill="none" stroke="#67e8f9" strokeWidth="3" />
     <text x="15" y="178" fill="#94a3b8" fontSize="10">EARLIER</text><text x="645" y="178" fill="#94a3b8" fontSize="10">LATEST</text>
-  </svg><p className="text-xs text-slate-400">Fictional historical samples. Real history needs a backend endpoint.</p></>;
+  </svg>{!LIVE && <p className="text-xs text-slate-400">Fictional historical samples. Real history needs a backend endpoint.</p>}</>;
 }
 function Modal({ action, close, submit }: { action: Action; close: () => void; submit: (args: Record<string, string>) => Promise<void> }) {
   const ref = useRef<HTMLDialogElement>(null), locked = useRef(false);
