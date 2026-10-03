@@ -143,3 +143,10 @@ export type LiveCommandKind = LiveCommand["kind"];
 
 /** Who a temporary mission serves and pays its attributable cost: 1..10 entries, shares summing to 10000 basis points. */
 export type MissionBeneficiary = { agentId: string; shareBp: number; ventureId?: string } | { fleet: true; shareBp: number };
+
+/**
+ * Untyped gateway JSON (WebAuthn options, gateway envelopes, read results). Every value taken from it is narrowed where
+ * it is used (String(), num(), explicit checks) — this alias is the single place the wire is not statically typed.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- see above
+export type Json = Record<string, any>;

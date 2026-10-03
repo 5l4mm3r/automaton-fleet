@@ -1,6 +1,11 @@
 # Owner dashboard (Codex-built) ⇄ Automaton Fleet — LIVE integration contract
 
-Status (2026-10-02): **the Codex dashboard source is not in this repository or on the Fleet hosts**, so it has not been
+**Update 2026-10-03:** the owner's Codex dashboard is now in the repository at `codex-dashboard/` and is wired. The files
+listed below live in `codex-dashboard/src/dashboard/` (the single source). The deck's mapping is
+`codex-dashboard/src/dashboard/live/mapping.ts`, and its status matrix is `codex-dashboard/docs/CURRENT-STATUS.md`.
+This README remains the gateway contract.
+
+Status (2026-10-02, superseded): **the Codex dashboard source is not in this repository or on the Fleet hosts**, so it has not been
 wired. This directory contains everything on the Fleet side. It is tested against the real v41 gateway
 (`src/__tests__/fleet/fleet-codex-live-contract-pg.test.ts`, 13 tests). The dashboard's own source must be supplied to
 finish the wiring (see "What is needed from the dashboard repository").

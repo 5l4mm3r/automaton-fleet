@@ -4,8 +4,8 @@ The dashboard is built and tested (`fleet-dashboard-pg.test.ts`: enrollment, pas
 decrypted only in the browser, owner-identity upload sealed in the browser, CSRF / origin / replay refusals). 
 **UI decision (owner, 2026-10-02): the owner's Codex-built dashboard is the UI. `packages/dashboard-web` (the Claude UI)
 is NOT deployed as the main dashboard.** The service serves whatever static build `FLEET_DASHBOARD_STATIC_DIR` names
-(same origin, behind `/api/*`, strict per-page CSP). The Codex build is wired through
-`integrations/codex-dashboard` (LiveFleetAdapter; contract and requirements in its README). It is installed as a
+(same origin, behind `/api/*`, strict per-page CSP). The Codex build lives in `codex-dashboard/` (LIVE wiring in `codex-dashboard/src/dashboard/`).
+It is built with `npm ci && npm run build:live` (a reproducible static export in `out/`, digest in `artifact-live.json`). It is installed as a
 versioned frontend artifact, e.g. `/opt/automaton-fleet/ui/<version>/`, independent of the Fleet runtime release.
 **Do not start the dashboard service until that build exists.** The service checks for `index.html` and
 `login/index.html`; it must never fall back to the Claude UI.

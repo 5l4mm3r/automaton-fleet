@@ -2,11 +2,17 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import ts from 'typescript';
-const source = fs.readFileSync(fileURLToPath(new URL('../src/app/page.tsx', import.meta.url)),'utf8').split('const pages =')[0] + '\nexport { initialFleet, evolve, pence };';
-const compiled = ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
-const mod = {exports:{}};
-new Function('exports','module',compiled)(mod.exports,mod);
-const {initialFleet,evolve,pence}=mod.exports;
+// The engine the page actually uses (src/dashboard/adapters/simulation.ts, with its model module).
+const load = (rel, deps = {}) => {
+  const source = fs.readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+  const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const mod = { exports: {} };
+  new Function('exports', 'module', 'require', compiled)(mod.exports, mod, (name) => { if (deps[name]) return deps[name]; throw new Error(`unexpected import ${name}`); });
+  return mod.exports;
+};
+const model = load('../src/dashboard/model.ts');
+const engine = load('../src/dashboard/adapters/simulation.ts', { '../model': model });
+const { initialFleet, evolve } = engine, { pence } = model;
 let s=initialFleet(), count=0;
 function run(op,args={}){s=evolve(s,{id:`test-${++count}`,op,args});}
 function total(){return s.treasury+s.agents.reduce((a,x)=>a+x.cash,0)+s.births.filter(x=>x.status==='queued').reduce((a,x)=>a+x.funding,0);}

@@ -27,9 +27,13 @@ export interface FleetAdapter<Fleet, Command> {
   execute(command: Command): Promise<Fleet>;
 }
 
-export interface LiveMapping<Fleet, Command> {
-  toFleet(snapshot: LiveSnapshot): Fleet;
-  toLiveCommand(command: Command): LiveCommand;
+export interface LiveMapping<Fleet, Command, Extra = undefined> {
+  /** Reshape the authoritative snapshot (and any extra reads) into the dashboard's view model. No computed authority. */
+  toFleet(snapshot: LiveSnapshot, extra: Extra): Fleet;
+  /** The command's live form. `last` is the last authoritative snapshot (e.g. which notifications are unacknowledged). */
+  toLiveCommand(command: Command, last: LiveSnapshot | null): LiveCommand | Promise<LiveCommand>;
+  /** Optional further gateway reads the view needs (same rules: authoritative values only, unavailable stays unavailable). */
+  loadExtra?(client: GatewayClient, snapshot: LiveSnapshot): Promise<Extra>;
 }
 
 export class OutcomeUnknownError<Fleet> extends FleetApiError {
@@ -38,24 +42,25 @@ export class OutcomeUnknownError<Fleet> extends FleetApiError {
   }
 }
 
-export class LiveFleetAdapter<Fleet, Command> implements FleetAdapter<Fleet, Command> {
+export class LiveFleetAdapter<Fleet, Command, Extra = undefined> implements FleetAdapter<Fleet, Command> {
   readonly mode = "live" as const;
   readonly client: GatewayClient;
   /** The last authoritative snapshot (for "last updated" display); never substituted for a failed read. */
   last: LiveSnapshot | null = null;
 
-  constructor(private readonly map: LiveMapping<Fleet, Command>, client?: GatewayClient | GatewayClientOptions) {
+  constructor(private readonly map: LiveMapping<Fleet, Command, Extra>, client?: GatewayClient | GatewayClientOptions) {
     this.client = client instanceof GatewayClient ? client : new GatewayClient(client);
   }
 
   async snapshot(): Promise<Fleet> {
     const s = await loadLiveSnapshot(this.client);
+    const extra = (this.map.loadExtra ? await this.map.loadExtra(this.client, s) : undefined) as Extra;
     this.last = s;
-    return this.map.toFleet(s);
+    return this.map.toFleet(s, extra);
   }
 
   async execute(command: Command): Promise<Fleet> {
-    const live = this.map.toLiveCommand(command);
+    const live = await this.map.toLiveCommand(command, this.last);
     try {
       await executeLiveCommand(this.client, live);
     } catch (e) {

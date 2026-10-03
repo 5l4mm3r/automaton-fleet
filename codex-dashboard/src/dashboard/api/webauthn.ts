@@ -2,11 +2,13 @@
  * WebAuthn for the Fleet gateway: the standard JSON wire shape (base64url fields) the server's @simplewebauthn verifier
  * expects. The browser implementation uses `navigator.credentials`; tests inject a software authenticator.
  */
+import type { Json } from "./types";
+
 export interface WebAuthnPort {
   /** Register a passkey from PublicKeyCredentialCreationOptionsJSON; returns RegistrationResponseJSON. */
-  create(options: Record<string, any>): Promise<Record<string, any>>;
+  create(options: Json): Promise<Json>;
   /** Assert with a passkey from PublicKeyCredentialRequestOptionsJSON; returns AuthenticationResponseJSON. */
-  get(options: Record<string, any>): Promise<Record<string, any>>;
+  get(options: Json): Promise<Json>;
 }
 
 const enc = (buf: ArrayBuffer): string => {

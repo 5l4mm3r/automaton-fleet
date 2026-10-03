@@ -27,17 +27,17 @@ import { totp } from "../../fleet/identity/crypto.js";
 import { PgDashboardGateway } from "../../fleet/dashboard/gateway.js";
 import { createDashboardServer } from "../../fleet/dashboard/server.js";
 import { DASHBOARD_SENSITIVE_OPS_V41, DASHBOARD_WRITE_OPS_V41 } from "../../fleet/postgres/migrations-phase41.js";
-import { GatewayClient } from "../../../integrations/codex-dashboard/dashboard/api/client";
-import { LiveAuth } from "../../../integrations/codex-dashboard/dashboard/api/auth";
-import { FleetApiError } from "../../../integrations/codex-dashboard/dashboard/api/errors";
-import { SENSITIVE_OPS, WRITE_OPS } from "../../../integrations/codex-dashboard/dashboard/api/operations-meta";
-import { OPERATIONS, UNSUPPORTED } from "../../../integrations/codex-dashboard/dashboard/api/operations";
-import { reveal } from "../../../integrations/codex-dashboard/dashboard/api/reveal";
-import { LiveFleetAdapter, OutcomeUnknownError } from "../../../integrations/codex-dashboard/dashboard/adapters/live";
-import type { LiveCommand, LiveSnapshot } from "../../../integrations/codex-dashboard/dashboard/api/types";
+import { GatewayClient } from "../../../codex-dashboard/src/dashboard/api/client";
+import { LiveAuth } from "../../../codex-dashboard/src/dashboard/api/auth";
+import { FleetApiError } from "../../../codex-dashboard/src/dashboard/api/errors";
+import { SENSITIVE_OPS, WRITE_OPS } from "../../../codex-dashboard/src/dashboard/api/operations-meta";
+import { OPERATIONS, UNSUPPORTED } from "../../../codex-dashboard/src/dashboard/api/operations";
+import { reveal } from "../../../codex-dashboard/src/dashboard/api/reveal";
+import { LiveFleetAdapter, OutcomeUnknownError } from "../../../codex-dashboard/src/dashboard/adapters/live";
+import type { LiveCommand, LiveSnapshot } from "../../../codex-dashboard/src/dashboard/api/types";
 
 const PG_BIN = findPgBin();
-const INTEGRATION = path.join(process.cwd(), "integrations", "codex-dashboard", "dashboard");
+const INTEGRATION = path.join(process.cwd(), "codex-dashboard", "src", "dashboard");
 
 describe.skipIf(!PG_BIN)("Codex dashboard LIVE contract against the real v41 gateway (PostgreSQL + gateway + broker)", { timeout: 120_000 }, () => {
   let R: EconomyRegistry;
@@ -109,7 +109,7 @@ describe.skipIf(!PG_BIN)("Codex dashboard LIVE contract against the real v41 gat
   it("the client's operation classes are exactly the gateway's; no live module imports a simulation", () => {
     expect([...SENSITIVE_OPS].sort()).toEqual([...DASHBOARD_SENSITIVE_OPS_V41].sort());
     expect([...WRITE_OPS].sort()).toEqual([...DASHBOARD_WRITE_OPS_V41].sort());
-    for (const f of ["adapters/live.ts", "api/client.ts", "api/auth.ts", "api/operations.ts", "api/snapshot.ts", "api/reveal.ts"]) {
+    for (const f of ["adapters/live.ts", "api/client.ts", "api/auth.ts", "api/operations.ts", "api/snapshot.ts", "api/reveal.ts", "api/seal.ts", "live/mapping.ts", "live/index.ts", "adapter.live.ts"]) {
       const src = fs.readFileSync(path.join(INTEGRATION, f), "utf8");
       expect(src, f).not.toMatch(/from\s+["'][^"']*simulat/i);
       expect(src, f).not.toMatch(/agentfleet\.vip|localhost|127\.0\.0\.1/); // nothing installation-specific

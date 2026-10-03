@@ -11,6 +11,7 @@
  *  • reads are retried once on a network error only.
  */
 import { FleetApiError } from "./errors";
+import type { Json } from "./types";
 import { browserWebAuthn, type WebAuthnPort } from "./webauthn";
 import { SENSITIVE_OPS } from "./operations-meta";
 
@@ -56,14 +57,14 @@ export class GatewayClient {
     this.signedOut = o.onSignedOut ?? (() => {});
   }
 
-  private async parse(r: Response): Promise<Record<string, any>> {
-    const j = (await r.json().catch(() => ({ ok: false, code: "FLEET_BAD_RESPONSE" }))) as Record<string, any>;
+  private async parse(r: Response): Promise<Json> {
+    const j = (await r.json().catch(() => ({ ok: false, code: "FLEET_BAD_RESPONSE" }))) as Json;
     if (r.status === 401) { this.csrf.clear(); this.signedOut(); }
     return j;
   }
 
   /** POST JSON; throws FleetApiError("FLEET_NETWORK") when the request may not have reached the gateway. */
-  async post(path: string, body: unknown): Promise<{ status: number; json: Record<string, any> }> {
+  async post(path: string, body: unknown): Promise<{ status: number; json: Json }> {
     const t = this.csrf.get();
     let r: Response;
     try {
@@ -75,7 +76,7 @@ export class GatewayClient {
     return { status: r.status, json: await this.parse(r) };
   }
 
-  async getJson(path: string): Promise<{ status: number; json: Record<string, any> }> {
+  async getJson(path: string): Promise<{ status: number; json: Json }> {
     for (let attempt = 0; ; attempt++) {
       try {
         const r = await this.f(`${this.base}${path}`, { credentials: "same-origin", cache: "no-store" });
@@ -103,7 +104,7 @@ export class GatewayClient {
     if (SENSITIVE_OPS.has(op)) {
       const o = await this.post("/api/stepup/options", { op, args: a });
       if (!o.json.ok) throw new FleetApiError(o.json.code ?? "FLEET_STEPUP_REQUIRED", undefined, o.status);
-      let assertion: Record<string, any>;
+      let assertion: Json;
       try {
         assertion = await this.webauthn.get(o.json.options);
       } catch {
@@ -113,7 +114,7 @@ export class GatewayClient {
       if (!v.json.ok) throw new FleetApiError(v.json.code ?? "FLEET_PASSKEY_INVALID", undefined, v.status);
       stepup = v.json.stepup;
     }
-    let r: { status: number; json: Record<string, any> };
+    let r: { status: number; json: Json };
     try {
       r = await this.post("/api/call", { op, args: a, stepup });
     } catch (e) {

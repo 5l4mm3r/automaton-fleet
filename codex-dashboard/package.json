@@ -1,15 +1,15 @@
 {
   "name": "automaton-fleet-dashboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "build": "node scripts/build.mjs simulation",
+    "build:live": "node scripts/build.mjs live",
+    "build:simulation": "node scripts/build.mjs simulation",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node tests/simulation.mjs",
-    "build:webpack": "next build --webpack"
+    "test": "node tests/simulation.mjs"
   },
   "dependencies": {
     "next": "16.3.8",
@@ -25,6 +25,8 @@
     "eslint-config-next": "16.3.8",
     "tailwindcss": "^4",
     "typescript": "^5"
-  }
+  },
+  "sideEffects": [
+    "*.css"
+  ]
 }
-
