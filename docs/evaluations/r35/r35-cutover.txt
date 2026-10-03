@@ -1,0 +1,14 @@
+== rollout cutover f4be395 (schema 33 -> 41) from 3aebcc2 start 2026-10-03T18:56:42Z
+Verified build c088aa58ff257ec45e364d92a9d718436c535ffbd896442c6a62ed71c7cb7728 staged at /home/ubuntu/.cache/automaton-fleet/stage/f4be395393d332b1bc35d25c07603f571d1182f3
+Installed release f4be395393d332b1bc35d25c07603f571d1182f3 (build c088aa58ff257ec45e364d92a9d718436c535ffbd896442c6a62ed71c7cb7728). Restart the service to pick it up: systemctl restart automaton-fleet
+OUTAGE START 2026-10-03T18:57:25Z
+pre-migration dump /home/ubuntu/automaton_fleet-v33-pre-v41-20261003T185725Z.dump sha a71711970c1526f7
+migrate-check: {"currentVersion":33,"resultingVersion":41,"wouldApply":[34,35,36,37,38,39,40,41],"requiredVersion":41,"rolledBack":true}
+OUTAGE END 2026-10-03T18:57:38Z
+DEPLOYMENT:        OK
+SAFE FOR DRY RUN:           YES
+SAFE FOR REAL REPLICATION:  NO (3 blockers)
+SAFE FOR REAL PAYMENTS:     NO (1 blocker)
+  [PASS] remote HTTPS listener enabled by runtime.env
+rollback point: /etc/automaton-fleet/runtime.env.pre-f4be395; releases/3aebcc2; dump /home/ubuntu/automaton_fleet-v33-pre-v41-20261003T185725Z.dump
+== ROLLOUT f4be395 DEPLOYED 2026-10-03T18:57:43Z: schema 41, readyz 200

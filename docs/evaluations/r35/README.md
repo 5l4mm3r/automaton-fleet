@@ -42,3 +42,31 @@ communications architecture changed after R34, so R34 must not be cut over. R33 
   - live re-read afterwards unchanged (schema 33, same ledger head).
   - Valid for a cutover until 2026-10-04 18:53Z.
 - The Codex dashboard commits (`4fa02a4`, `27ea168`) change no runtime file: R35 is still `f4be395`.
+
+## Cutover — DEPLOYED 2026-10-03 18:56:42–18:57:43Z (run by the owner); verified read-only 18:59Z
+
+- **Rollout log** (`r35-cutover.txt`):
+  - the verified build `c088aa58…` was staged and installed;
+  - outage 18:57:25–18:57:38Z (13 s), with a pre-migration dump (`automaton_fleet-v33-pre-v41-20261003T185725Z.dump`,
+    sha `a7171197…`);
+  - migrate 33→41; doctor DEPLOYMENT OK, SAFE FOR DRY RUN YES, real replication / payments NO (as intended);
+  - `DEPLOYED … schema 41, readyz 200`; no rollback.
+  - Rollback point: `runtime.env.pre-f4be395`, `releases/3aebcc2`, that dump.
+- **Runtime:**
+  - runtime.env pins `f4be395` / `c088aa58…` / `1df54e35…`; `current` → `releases/f4be395…`;
+  - the controller process runs from that release (started 18:57:36Z, 0 restarts);
+  - the installed release's own build identity recomputes to `c088aa58…` / `1df54e35…`;
+  - no process runs from `3aebcc2`; readyz: schema v41, release `f4be395`, privileges ok; public healthz 200.
+- **Database:**
+  - migrations 34–41 applied; ledger verify ok, with the same head `1d3e56f7…` and 503 journals as before the cutover
+    (no money moved);
+  - Treasury cash 0, owner contributed £100.00, Fleet-generated 0 (the whole Genesis capital is Founder 1's);
+  - registry cap 2, DEVELOPMENT mode, replication off; counters consistent (1 living).
+- **Founder 1:**
+  - same process (since 2026-10-02 10:44Z, 0 restarts), still on `b949b1c`, active, not held, heartbeat fresh;
+  - books identical to the pre-cutover fingerprint (cash 9,125, expense 875, 502 journals, last seq 540).
+- **Absent, as intended:**
+  - automatic birth orders and birth cohorts: none;
+  - mail / SMS providers, numbers, provider secrets: none (MAIL and SMS NOT CONFIGURED);
+  - flags: REAL_PAYMENTS / OWNER_SWEEP / REAL_REPLICATION / DRY_RUN_CHILD false;
+  - not yet provisioned: identity, dashboard and browser roles and services.
