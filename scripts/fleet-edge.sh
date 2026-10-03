@@ -192,15 +192,28 @@ http.server.HTTPServer(("127.0.0.1", 28790), H).serve_forever()'
   EV=$(rh "SELECT string_agg(DISTINCT detail->>'ip', ' ') FROM fleet.fleet_events WHERE event_type = 'api_auth_failed' AND created_at > now() - interval '10 minutes'" 2>/dev/null || true)
   [[ "$EV" == *"$PUBIP"* ]] && pass "auth-failure events carry the real client address ($EV)" || echo "  note: auth-failure event addresses: ${EV:-none recorded}"
   [[ "$(code -k --http1.1 --connect-to ::127.0.0.1:28443 https://api.agentfleet.vip/healthz)" == 000 ]] && pass "the controller's PROXY listener gives nothing to a client without a PROXY header" || fail "headerless connection served"
-  R2=$(python3 -c '
-import socket, ssl
-s = socket.socket(); s.settimeout(5); s.bind(("127.0.0.2", 0)); s.connect(("127.0.0.1", 28443))
+  # "served" only if the listener answers the ClientHello with a TLS handshake record (0x16); an exception from a TLS
+  # wrapper is not evidence either way (it reported "served" on ~7% of plain resets). A probe that fails prints nothing.
+  probe() { python3 - "$1" "$2" <<'PY'
+import socket, ssl, sys
+s = socket.socket(); s.settimeout(5); s.bind((sys.argv[1], 0)); s.connect(("127.0.0.1", int(sys.argv[2])))
 s.sendall(b"PROXY TCP4 203.0.113.9 10.0.0.1 1 443\r\n")
+inc, out = ssl.MemoryBIO(), ssl.MemoryBIO()
+tls = ssl._create_unverified_context().wrap_bio(inc, out, server_hostname="api.agentfleet.vip")
 try:
-    ssl._create_unverified_context().wrap_socket(s, server_hostname="api.agentfleet.vip"); print("served")
-except Exception:
-    print("refused")' 2>/dev/null || echo refused)
-  [[ "$R2" == refused ]] && pass "a peer other than 127.0.0.1 (127.0.0.2) is refused before any header is read" || fail "forged-peer connection served"
+    tls.do_handshake()
+except ssl.SSLWantReadError:
+    pass
+try:
+    s.sendall(out.read()); d = s.recv(5)
+except OSError:
+    d = b""
+print("served" if d[:1] == b"\x16" else "refused")
+PY
+  }
+  R1=$(probe 127.0.0.1 28443 || true); R2=$(probe 127.0.0.2 28443 || true)
+  [[ "$R1" == served && "$R2" == refused ]] && pass "a peer other than 127.0.0.1 (127.0.0.2) is refused before any header is read (control: 127.0.0.1 is served)" \
+    || fail "peer check: 127.0.0.1 $R1, 127.0.0.2 $R2"
   J=$(curl -sk -m 10 -H 'X-Forwarded-For: 6.6.6.6' -H 'X-Forwarded-Proto: http' $ADM/login/)
   [[ "$J" == *"\"xff\": [\"$PUBIP\"]"* && "$J" == *'"proto": "https"'* && "$J" == *'"host": "admin.agentfleet.vip"'* && "$J" != *6.6.6.6* ]] \
     && pass "admin backend receives X-Forwarded-For=$PUBIP only (client-supplied 6.6.6.6 dropped), proto https" || fail "admin headers: $J"
