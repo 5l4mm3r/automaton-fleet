@@ -26,6 +26,9 @@ import { emptyCommandView, type CommandView } from "../../../codex-dashboard/src
 import { toLiveCommand } from "../../../codex-dashboard/src/dashboard/live/mapping";
 import { GatewayClient } from "../../../codex-dashboard/src/dashboard/api/client";
 import type { Agent, Fleet } from "../../../codex-dashboard/src/dashboard/model";
+import { hqDataFrom, redAlertOpen } from "../../../codex-dashboard/src/dashboard/virtual/hq/data";
+import { buildWorld } from "../../../codex-dashboard/src/dashboard/virtual/hq/world-build";
+import { HQ_PROFILE } from "../../../codex-dashboard/src/dashboard/virtual/hq/quality";
 
 const GENESIS = 10_000;
 const econ = (o: Partial<AgentEconomics> = {}): AgentEconomics => ({ agentId: "A", revenueMinor: 0, expensesMinor: 0, netProfitMinor: 0, recentNetMinor: 0, retainedMinor: 0,
@@ -213,7 +216,10 @@ describe("original operative portraits", () => {
   });
   it("condition changes the face: shades when winning, damage when wounded or critical, greyscale when dead", () => {
     const id = "01AGENT", healthy = portraitGrid(id, "HEALTHY"), win = portraitGrid(id, "WINNING"), crit = portraitGrid(id, "CRITICAL"), dead = portraitGrid(id, "DEAD");
-    expect(win[11].slice(6, 18).every((c) => c === "#0b1220" || c === "#94a3b8" || c === "#111827")).toBe(true); // shades across both eyes
+    expect(win[14].slice(9, 23).every((c) => c === "#140e0b" || c === "#5b636b" || c === "#2b2b2b" || c === "#9aa4ae")).toBe(true); // shades across both eyes
+    expect(PORTRAIT_SIZE).toBe(32);
+    // Adult proportions: a neck and the uniform collar below the jaw, no helmet over the face.
+    expect(healthy[30].filter((c) => c === "#2b3a4d" || c === "#1c2736" || c === "#111821").length).toBeGreaterThan(20);
     expect(JSON.stringify(crit)).toMatch(/#7f1d1d|#991b1b/); // blood
     expect(JSON.stringify(portraitGrid(id, "WOUNDED"))).toMatch(/#6b4a7a/); // bruise
     for (const row of dead) for (const c of row) if (c) expect(c.slice(1, 3)).toBe(c.slice(3, 5)); // grey
@@ -333,6 +339,65 @@ describe("Formal Fleet Command and Virtual panels (rendered)", () => {
     for (const t of ["Founder 1", "£91.25", "HEALTHY", "Net profit (lifetime)", "-£8.75", "View full agent"]) expect(a).toContain(t);
     expect(a).toContain('data-op="hold"'); // actions go through the deck's controls (review + step-up), not a bypass
   });
+
+  it("Virtual HQ screens show only FleetController's figures; a figure the gateway does not supply reads —", () => {
+    const f = fleet(), v = view(), models = deriveAgents(f.agents, v), d = hqDataFrom(f, v, models);
+    const row = (dep: keyof typeof d, k: string) => d[dep]!.find(([key]) => key === k)?.[1];
+    expect(row("command", "Living agents")).toBe("1 / 2");
+    expect(row("command", "Treasury cash")).toBe("£500.00");
+    expect(row("treasury", "Owner funding")).toBe("£1,000.00");
+    expect(row("treasury", "Spend 24 h")).toBe("£8.75");
+    expect(row("command", "Replication")).toBe("£1,000.00 to go");
+    expect(row("comms", "Mail")).toBe("NOT CONFIGURED");
+    expect(row("security", "RED alerts open")).toBe("0");
+    expect(row("estate", "Store")).toBe("—"); // storage not reported: no number is made up
+    // Without the LIVE view (simulation), LIVE-only figures are absent, not invented.
+    const sim = hqDataFrom({ ...f, live: undefined }, null, models);
+    expect(sim.treasury!.find(([k]) => k === "Fleet-generated")?.[1]).toBe("—");
+    expect(sim.command!.find(([k]) => k === "Decisions (log)")?.[1]).toBe("—");
+    // Security beacons turn red only for an unacknowledged RED notice.
+    expect(redAlertOpen(f)).toBe(false);
+    expect(redAlertOpen({ ...f, notices: [{ id: "n", level: "RED", text: "x", acknowledged: true } as Fleet["notices"][number]] })).toBe(false);
+    expect(redAlertOpen({ ...f, notices: [{ id: "n", level: "RED", text: "x", acknowledged: false } as Fleet["notices"][number]] })).toBe(true);
+  });
+});
+
+describe("Virtual HQ v2: the building (quality never removes the world)", () => {
+  it("every department is a real room with its live status screen, sign and light; furniture inside its walls", () => {
+    const plan = buildWorld();
+    for (const d of DEPARTMENTS) {
+      expect(plan.screens.some((s) => s.id === `${d.id}:status` && s.kind === "status"), d.id).toBe(true);
+      expect(plan.screens.some((s) => s.dep === d.id && s.kind === "sign"), d.id).toBe(true);
+      expect(plan.lights.some((l) => l.dep === d.id), d.id).toBe(true);
+      for (const s of plan.screens.filter((x) => x.dep === d.id)) {
+        expect(Math.abs(s.x - d.x) <= d.w / 2 + 0.01 && Math.abs(s.z - d.z) <= d.d / 2 + 0.01, `${s.id} inside ${d.id}`).toBe(true);
+      }
+    }
+    expect(new Set(plan.screens.map((s) => s.id)).size).toBe(plan.screens.length);
+  });
+
+  it("the merged building can be built again (every quality change / fallback re-mounts the scene with the full world)", () => {
+    const plan = buildWorld();
+    const a = plan.builder.build(), b = plan.builder.build();
+    expect(a.size).toBeGreaterThan(10);
+    expect([...b.keys()]).toEqual([...a.keys()]);
+    for (const [k, g] of a) expect(b.get(k)!.getAttribute("position").count, k).toBe(g.getAttribute("position").count);
+  });
+
+  it("quality levels change materials, light and effects only — never the world; Low keeps every room", () => {
+    expect(Object.keys(HQ_PROFILE)).toEqual(["low", "medium", "high", "ultra"]);
+    const order = ["low", "medium", "high", "ultra"] as const;
+    for (let i = 1; i < order.length; i++) {
+      const lo = HQ_PROFILE[order[i - 1]], hi = HQ_PROFILE[order[i]];
+      expect(hi.shadowMap).toBeGreaterThanOrEqual(lo.shadowMap);
+      expect(hi.detail).toBeGreaterThanOrEqual(lo.detail);
+      expect(hi.particles).toBeGreaterThanOrEqual(lo.particles);
+    }
+    // The world plan does not depend on quality at all (no quality input), so nothing can be hidden by it.
+    expect(buildWorld.length).toBe(0);
+    expect(HQ_PROFILE.low.shadows).toBe(false);
+    expect(HQ_PROFILE.ultra.atmosphere && HQ_PROFILE.ultra.reflections).toBe(true);
+  });
 });
 
 describe("behaviour commands (LIVE mapping, step-up policy operations)", () => {
@@ -370,10 +435,10 @@ describe("agent birth: dedicated workstation, power-up, entrance (presentation o
     expect(stationIndex([...models].reverse())).toEqual(idx);
     const now = 50_000;
     const t = agentTargetsWithStations(models, new Map(), now, false);
-    expect(t.get("C")).toMatchObject({ ...stationPoint(2), department: "floor" }); // on the Floor: at its own station
+    expect(t.get("C")).toMatchObject({ ...stationPoint(2, 3), department: "floor" }); // on the Floor: at its own station
     expect(t.get("A")!.department).toBe("library");
     const born = agentTargetsWithStations(models, new Map([["A", now - BIRTH_POWER_MS - 10]]), now, false);
-    expect(born.get("A")).toMatchObject({ ...stationPoint(0), department: "floor" }); // entering: its station first
+    expect(born.get("A")).toMatchObject({ ...stationPoint(0, 3), department: "floor" }); // entering: its station first
     const settled = agentTargetsWithStations(models, new Map([["A", now - BIRTH_POWER_MS - BIRTH_ENTER_MS - 10]]), now, false);
     expect(settled.get("A")!.department).toBe("library"); // then its first real destination
     expect(agentTargetsWithStations(models, new Map([["A", now]]), now, true).get("A")!.department).toBe("library"); // reduced motion: in place

@@ -211,3 +211,110 @@ run because the figures need an idle machine.
 - Per-transaction Treasury history (30-day totals only, as before).
 - Marketing campaign records (marketing is shown through missions and events).
 - Server push: polling, as described above.
+
+## Virtual HQ v2 and adult portraits — 4 October 2026 (version 0.4.0)
+
+A rebuild of the Virtual 3D presentation layer only. FleetController bindings, the shared command model, selection
+state, the live feed, the panels, labels and the 2D map are unchanged in meaning; no backend operation was added and
+no economic, financial, replication or autonomy behaviour was touched.
+
+**Portraits v2** (`command/portrait.ts`)
+- 32×32, adult proportions: a jaw and neck, a uniform collar with cyan tabs, painted front-lit shading, deep eye
+  sockets. In the spirit of the classic 1990s status-bar face (the owner's reference), but original art.
+- The identity is seeded from the agent id: face width, jaw, six skin ramps, six hair styles and colours, brows, eyes,
+  nose, facial hair, a scar and an earpiece. The same face appears in every condition.
+- Conditions: HEALTHY alert; WINNING shades and a grin; WOUNDED bruise, cuts and sweat; CRITICAL swollen eye, blood
+  and gritted teeth; DEAD eyes closed and greyed.
+- `identityColours(id)` gives the 3D body the same skin, hair and beard as the portrait.
+
+**The building** (`virtual/hq/`)
+- **Layout:** a connected cutaway operations complex of 11 real rooms, with Fleet Command at the north, corridors with
+  guide lights, perimeter glass, an east gate, pillars and concourse benches.
+- **Rooms:** each has a tiled floor with an accent inset, a back wall with cornice light, side walls with lit doorways,
+  a low glass-topped front parapet (the cutaway), a sign, a live status screen and ceiling fixtures.
+- **Furniture by department** (`world-build.ts`):
+
+| Department | Furniture |
+|---|---|
+| Fleet Command | Command dais with the core and a console arc, two flanking live displays, racks. |
+| Treasury | Vault door, deposit boxes, side ledger desks under wall display banks, and a hanging four-sided hub display over a gold floor seal. |
+| Opportunity Lab | Analysis table and benches. |
+| Agent Floor | Status wall, lockers, supervisor console, and one workstation per agent. |
+| Marketing | Media wall and studio lights. |
+| Library / Research | Data stacks and reading desks. |
+| Venture / Dev | Racks, dev pods and a whiteboard. |
+| Identity | Booths. |
+| Estate Storage | Lockers and crates. |
+| Comms | Dish and switchboards. |
+| Security / Systems | Network-operations wall, racks and alert beacons. |
+
+- **Rendering:** static geometry is merged per material, so the building costs a few dozen draw calls. Surfaces carry
+  procedural textures in world-space UVs.
+
+**People** (`hq/crowd.tsx`)
+- **Build:** adult operators about 1.78 m tall, rendered as instanced parts on a joint rig. They have a head with nose,
+  ears, brows and identity hair or beard; a dark technical uniform with vest, cyan piping, belt and shoulder patches;
+  and boots.
+- **Animation:** walk, idle, seated typing at their own workstation, seated idle when held, standing terminal use with a
+  personal holo panel, and lying when dead. Poses blend, and Reduce Motion snaps them.
+- **Contact shadows:** Medium and above.
+
+**Truthfulness** (`hq/data.ts`, `hq/screens.tsx`, `hq/effects.tsx`)
+- **Screens:** every room screen shows FleetController's own figures, such as living agents and the cap, Treasury cash,
+  owner funding, fleet-generated wealth, 24-hour flows, RED and AMBER alerts, Mail and SMS status, and estate storage.
+  A figure the gateway does not supply reads "—".
+- **Security beacons:** red only while there are unacknowledged RED alerts.
+- **Workstation monitors:** they show a generic terminal face with no figures.
+- **Agents and packets:** they still move only on authoritative state or recorded events.
+
+**Camera** (`hq/camera.tsx`)
+- **Levels:** Fleet, then Department (into the room over its parapet), then Agent (a raised side view from the room's
+  open side).
+- **Movement:** smooth, damped flight with a lift over walls. Reduce Motion cuts instead.
+- **Escape:** goes back one level, from agent to its department to the Fleet.
+
+**Quality** (`hq/quality.ts`). Quality never removes rooms, screens, people or architecture.
+
+| Level | What it adds |
+|---|---|
+| Low | Flat-shaded materials with a brightened palette, no shadow maps, static screens. |
+| Medium | Physically based materials, procedural textures, image-based light, PCF shadows, contact shadows. |
+| High | Soft shadows, a light per room, bloom, animated screens. |
+| Ultra | Physical clearcoat floors (reflections), 4096 shadows, haze and light shafts, ceiling gantries. |
+
+**Degradation:**
+- A GPU that cannot link shadow-map shaders keeps the same level without shadow maps. This is remembered in this
+  browser so the driver is not reset again.
+- A failure without shadow maps, or a lost context, hands over to the 2D map.
+
+**Fixes found while building:**
+- The building geometry was consumed by its first build, so a re-mounted scene (a quality change) had no building.
+  It now rebuilds every time, and a unit test covers this.
+- three.js has removed PCFSoftShadowMap, so the soft level now uses PCF with a radius.
+
+**Measured** (LIVE export, real Fleet of 6, 1600×1000, settled frame cadence, Fleet view / Agent view):
+
+| Quality | Software WebGL (SwiftShader) | GPU (VMware SVGA3D, ANGLE/GL, shadow maps unavailable on this driver) |
+|---|---|---|
+| Low | 37 / 41 fps | 60 / 60 fps |
+| Medium | 6 / 7 fps | 60 / 60 fps |
+| High | 4 / 4 fps | 60 / 60 fps |
+| Ultra | 2.3 / 3.5 fps | 48 / 60 fps |
+
+Software WebGL renders shadows, bloom and physical materials on the CPU, so the Medium-to-Ultra figures there only show
+relative cost. The default for weak devices stays Low or Medium (`command/prefs.ts`).
+
+Scale run, 3D at Low with software WebGL, settled / moving:
+
+| Agents | v0.4.0 | v0.3.0 |
+|---|---|---|
+| 1 | 51 / 43 fps | 58 / 48 fps |
+| 10 | 43 / 38 fps | 57 / 47 fps |
+| 25 | 32 / 28 fps | 50 / 45 fps |
+| 50 | 23 / 15 fps | 43 / 39 fps |
+
+Across all four sizes the map stays at 60 fps, labels overlap 0 %, and heap growth is at most 1.5 MB.
+
+Reproduce:
+- `FLEET_HQ_TESTS=1 [FLEET_HQ_SHOTS=dir] [FLEET_HQ_GPU=1] npx vitest run src/__tests__/fleet/fleet-virtual-hq-pg.test.ts`
+- `FLEET_SCALE_TESTS=1 …fleet-virtual-scale-pg.test.ts`

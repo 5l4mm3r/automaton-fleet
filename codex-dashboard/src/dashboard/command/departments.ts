@@ -29,20 +29,27 @@ export interface Department {
   purpose: string;
   /** Restrained accent (hex) used by both renderers. */
   accent: string;
+  /** Where the free floor (people's spots) begins, measured from the back wall (default 3.2 m). */
+  slotTop?: number;
 }
 
+/**
+ * The headquarters floor plan (world units ≈ metres): a connected complex — rooms on a grid with 3 m corridors between
+ * them, Fleet Command at the head of the central spine, Security / Systems at its foot. Room sizes leave space for up to
+ * 50 adult-scale operators and their furniture.
+ */
 export const DEPARTMENTS: readonly Department[] = Object.freeze([
-  { id: "command", name: "Fleet Command", x: 0, z: -15, w: 13, d: 6, purpose: "FleetController: decisions, policy and the control plane", accent: "#38bdf8" },
-  { id: "treasury", name: "Treasury", x: -14, z: -8, w: 10, d: 5, purpose: "Treasury cash, flows, allocations and contributions", accent: "#fbbf24" },
-  { id: "opportunity", name: "Opportunity Lab", x: 14, z: -8, w: 10, d: 5, purpose: "Opportunity hunting and signals under investigation", accent: "#a78bfa" },
-  { id: "floor", name: "Agent Floor", x: 0, z: -2, w: 15, d: 7, purpose: "Agents operating their businesses", accent: "#22d3ee" },
-  { id: "marketing", name: "Marketing", x: -14, z: 5, w: 10, d: 5, purpose: "Marketing missions and campaigns", accent: "#f472b6" },
-  { id: "library", name: "Library / Research", x: 0, z: 5, w: 10, d: 5, purpose: "Research missions and the Fleet's knowledge", accent: "#60a5fa" },
-  { id: "venture", name: "Venture / Dev", x: 14, z: 5, w: 10, d: 5, purpose: "Ventures being built, launched and operated", accent: "#34d399" },
-  { id: "identity", name: "Identity", x: -14, z: 12, w: 10, d: 5, purpose: "Agent identities and accounts (metadata only)", accent: "#c084fc" },
-  { id: "estate", name: "Estate Storage", x: 0, z: 12, w: 10, d: 5, purpose: "Assets and data of agents that died", accent: "#94a3b8" },
-  { id: "comms", name: "Comms", x: 14, z: 12, w: 10, d: 5, purpose: "Mail and SMS capability", accent: "#2dd4bf" },
-  { id: "security", name: "Security / Systems", x: 0, z: 19, w: 13, d: 5, purpose: "Health, alerts, runtime and capability state", accent: "#f87171" },
+  { id: "command", name: "Fleet Command", x: 0, z: -30, w: 18, d: 10, purpose: "FleetController: decisions, policy and the control plane", accent: "#38bdf8", slotTop: 8.0 },
+  { id: "treasury", name: "Treasury", x: -18, z: -17, w: 14, d: 10, purpose: "Treasury cash, flows, allocations and contributions", accent: "#fbbf24" },
+  { id: "opportunity", name: "Opportunity Lab", x: 18, z: -17, w: 14, d: 10, purpose: "Opportunity hunting and signals under investigation", accent: "#a78bfa", slotTop: 3.8 },
+  { id: "floor", name: "Agent Floor", x: 0, z: -4, w: 18, d: 14, purpose: "Agents operating their businesses", accent: "#22d3ee" },
+  { id: "marketing", name: "Marketing", x: -18, z: 11, w: 14, d: 10, purpose: "Marketing missions and campaigns", accent: "#f472b6" },
+  { id: "library", name: "Library / Research", x: 0, z: 11, w: 16, d: 10, purpose: "Research missions and the Fleet's knowledge", accent: "#60a5fa" },
+  { id: "venture", name: "Venture / Dev", x: 18, z: 11, w: 14, d: 10, purpose: "Ventures being built, launched and operated", accent: "#34d399" },
+  { id: "identity", name: "Identity", x: -18, z: 24, w: 14, d: 10, purpose: "Agent identities and accounts (metadata only)", accent: "#c084fc" },
+  { id: "estate", name: "Estate Storage", x: 0, z: 24, w: 16, d: 10, purpose: "Assets and data of agents that died", accent: "#94a3b8" },
+  { id: "comms", name: "Comms", x: 18, z: 24, w: 14, d: 10, purpose: "Mail and SMS capability", accent: "#2dd4bf" },
+  { id: "security", name: "Security / Systems", x: 0, z: 37, w: 18, d: 9, purpose: "Health, alerts, runtime and capability state", accent: "#f87171" },
 ]);
 
 export const DEPARTMENT: Readonly<Record<DepartmentId, Department>> = Object.freeze(Object.fromEntries(DEPARTMENTS.map((d) => [d.id, d])) as Record<DepartmentId, Department>);
@@ -131,16 +138,19 @@ export function placeAgent(a: PlaceableAgent, latest: AgentEventLike | undefined
 
 /**
  * The i-th of `count` agents' spot inside a department (deterministic: same agents in the same order → same places).
- * Spacing adapts to how many share the room — 1.1 units apart when there is space, tighter (never under 0.45) when the
+ * Spacing adapts to how many share the room — 1.6 m apart when there is space, tighter (never under 0.6) when the
  * room is crowded — so up to 50 agents stay inside the room without stacking on one another.
  */
 export function slot(dep: DepartmentId, index: number, count = 1): { x: number; z: number } {
   const d = DEPARTMENT[dep];
-  const w = d.w - 1.4, h = d.d - 2.4; // inside the walls, below the room's name and back-wall workstations
-  let s = 1.1;
+  const top = d.slotTop ?? 3.2, w = d.w - 2.4, h = Math.max(0.5, d.d - top - 1.0); // clear of the back-wall equipment and side furniture
+  // Adult-scale people: 1.6 m apart when there is space, never closer than 0.6 m.
+  let s = 1.6;
   const fits = (sp: number) => (Math.floor(w / sp) + 1) * (Math.floor(h / sp) + 1) >= count;
-  while (s > 0.45 && !fits(s)) s -= 0.05;
+  while (s > 0.6 && !fits(s)) s -= 0.05;
   const cols = Math.max(1, Math.floor(w / s) + 1), rows = Math.max(1, Math.floor(h / s) + 1);
   const col = index % cols, row = Math.floor(index / cols);
-  return { x: d.x - d.w / 2 + 0.7 + col * s, z: d.z - d.d / 2 + 2.0 + (row % rows) * s + Math.floor(row / rows) * (s / 2) };
+  // Centre the grid in the free floor.
+  const used = Math.min(cols, Math.max(1, count)) - 1, x0 = d.x - (used * s) / 2;
+  return { x: x0 + col * s, z: d.z - d.d / 2 + top + (row % rows) * s + Math.floor(row / rows) * (s / 2) };
 }

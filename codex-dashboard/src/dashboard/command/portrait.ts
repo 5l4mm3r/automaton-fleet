@@ -1,30 +1,54 @@
 /**
- * Original Automaton Fleet operative portraits — low-resolution, front-facing tactical status faces in the spirit of
- * early-1990s first-person-shooter HUD portraits (the idea: the face tells you the condition before the numbers do).
- * Everything is drawn here, pixel by pixel, from simple shapes: no third-party sprites or artwork are used or copied.
+ * Original Automaton Fleet operative portraits (v2) — adult, front-facing tactical-operator FACES in the spirit of the
+ * early-1990s first-person-shooter HUD status face: a painted, front-lit pixel head whose condition you read before the
+ * numbers. Everything is drawn here from geometry and shading rules; no third-party sprite or artwork is used, traced or
+ * copied.
  *
- * Identity is DETERMINISTIC: the agent id seeds helmet, skin, insignia, stubble, scar, goggles and earpiece, so an agent
- * looks the same everywhere and on every render. Condition comes ONLY from the shared health band (economics.ts):
- * HEALTHY alert · WINNING shades and a smug grin · WOUNDED bruise, cut, tired eye · CRITICAL blood, black eye, gritted
- * teeth · DEAD powered down and desaturated · UNKNOWN dimmed. Kept non-graphic; always shown with a text label.
+ * Identity is DETERMINISTIC (seeded by the agent id): face width and jaw, skin tone, hair style and colour, brows, eye
+ * colour, nose, facial hair, scar, ears and a comms earpiece — so an agent looks the same everywhere, on every render.
+ * Condition comes ONLY from the shared health band (economics.ts) and is drawn on the SAME face:
+ * HEALTHY alert · WINNING shades and a confident grin · WOUNDED fatigue, bruise, cuts · CRITICAL battered, bleeding,
+ * exhausted · DEAD eyes closed, desaturated · UNKNOWN dimmed. Kept non-graphic; always shown with a text label.
  */
 import type { HealthBand } from "./economics";
 
-export const PORTRAIT_SIZE = 24;
+export const PORTRAIT_SIZE = 32;
 
 export interface PortraitTraits {
+  width: 0 | 1 | 2;
+  jaw: 0 | 1 | 2;
   skin: number;
-  helmet: number;
-  accent: number;
-  stubble: 0 | 1 | 2;
-  scar: boolean;
-  goggles: boolean;
+  hair: 0 | 1 | 2 | 3 | 4 | 5;
+  hairColour: number;
+  brows: 0 | 1 | 2;
+  eyes: number;
+  nose: 0 | 1 | 2;
+  facialHair: 0 | 1 | 2 | 3 | 4;
+  scar: 0 | 1 | 2 | 3;
   earpiece: -1 | 0 | 1;
 }
 
-const SKIN = ["#f1c7a5", "#e0ac83", "#c68a5e", "#a8704a", "#7f5236", "#5c3a26"];
-const HELMET = ["#334155", "#3f4a2f", "#3a3f47", "#1f4a52", "#5b5240"];
-const ACCENT = ["#22d3ee", "#fbbf24", "#a78bfa", "#34d399", "#f87171"];
+/** Skin ramps: highlight, light, base, shadow, deep shadow. */
+const SKIN: string[][] = [
+  ["#f6d7bd", "#ebc2a0", "#d9a77f", "#b9845e", "#8e5f40"],
+  ["#eec39b", "#dfa97d", "#c98f63", "#a7714a", "#7d5133"],
+  ["#d9a678", "#c48c5c", "#a9744a", "#875935", "#623e24"],
+  ["#bf8c62", "#a6734b", "#8c5e3a", "#6c4529", "#4c2f1b"],
+  ["#9c6c48", "#845a3a", "#6b472d", "#52361f", "#3a2515"],
+  ["#7a5236", "#64422b", "#503421", "#3d2718", "#2a1a10"],
+];
+/** Hair: highlight, base, shadow. */
+const HAIR: string[][] = [
+  ["#3a3634", "#1f1c1b", "#100e0d"],
+  ["#5a3f2c", "#3d2a1d", "#251910"],
+  ["#7a5534", "#573b22", "#3a2715"],
+  ["#9a5a32", "#74401f", "#4f2a12"],
+  ["#c9a36a", "#a68048", "#7a5b2e"],
+  ["#a7a29c", "#7e7a75", "#56534f"],
+];
+const IRIS = ["#4a3020", "#2f5f86", "#3f6b45", "#5b6670", "#6b4a2a"];
+const UNIFORM = ["#2b3a4d", "#1c2736", "#111821"];
+const INK = "#140e0b", WHITE = "#e9e0d2", TEETH = "#ece4d6", CYAN = "#22d3ee";
 
 /** FNV-1a: a stable 32-bit hash of the id (no randomness anywhere). */
 export function seedOf(id: string): number {
@@ -34,104 +58,171 @@ export function seedOf(id: string): number {
 }
 
 export function traitsOf(id: string): PortraitTraits {
-  const s = seedOf(id);
-  // `^` yields a signed 32-bit value; `>>> 0` keeps it unsigned so every index is in range.
-  const bits = (shift: number, mod: number) => (((s >>> shift) ^ (s >>> (shift + 11))) >>> 0) % mod;
-  return { skin: bits(0, SKIN.length), helmet: bits(3, HELMET.length), accent: bits(6, ACCENT.length), stubble: bits(9, 3) as 0 | 1 | 2,
-    scar: bits(12, 4) === 0, goggles: bits(15, 3) === 0, earpiece: (bits(18, 3) - 1) as -1 | 0 | 1 };
+  // Two independent hashes give enough bits for every trait (all indices unsigned, always in range).
+  const a = seedOf(id), b = seedOf(`${id}#face`);
+  const pick = (h: number, shift: number, mod: number) => ((h >>> shift) >>> 0) % mod;
+  return {
+    width: pick(a, 0, 3) as 0 | 1 | 2, jaw: pick(a, 3, 3) as 0 | 1 | 2, skin: pick(a, 6, SKIN.length), hair: pick(a, 10, 6) as PortraitTraits["hair"],
+    hairColour: pick(a, 14, HAIR.length), brows: pick(a, 18, 3) as 0 | 1 | 2, eyes: pick(b, 0, IRIS.length), nose: pick(b, 4, 3) as 0 | 1 | 2,
+    facialHair: pick(b, 8, 5) as PortraitTraits["facialHair"], scar: pick(b, 12, 4) as PortraitTraits["scar"], earpiece: (pick(b, 16, 3) - 1) as -1 | 0 | 1,
+  };
 }
 
 type Grid = (string | null)[][];
 
-function shade(hex: string, f: number): string {
-  const v = parseInt(hex.slice(1), 16);
-  const c = (x: number) => Math.max(0, Math.min(255, Math.round(x * f))).toString(16).padStart(2, "0");
-  return `#${c(v >> 16)}${c((v >> 8) & 255)}${c(v & 255)}`;
-}
 function grey(hex: string, dim = 0.55): string {
   const v = parseInt(hex.slice(1), 16);
   const y = Math.round((0.3 * (v >> 16) + 0.59 * ((v >> 8) & 255) + 0.11 * (v & 255)) * dim).toString(16).padStart(2, "0");
   return `#${y}${y}${y}`;
 }
+function mix(hex: string, to: string, t: number): string {
+  const a = parseInt(hex.slice(1), 16), b = parseInt(to.slice(1), 16);
+  const c = (s: number) => Math.round(((a >> s) & 255) * (1 - t) + ((b >> s) & 255) * t).toString(16).padStart(2, "0");
+  return `#${c(16)}${c(8)}${c(0)}`;
+}
 
-/** The portrait as a 24×24 grid of colours (null = background). */
+/** Half-width of the head at row y (adult proportions: broad cheekbones, a defined jaw). */
+function halfWidth(y: number, t: PortraitTraits): number {
+  const w = [-0.6, 0, 0.6][t.width];
+  if (y < 3) return 0;
+  if (y <= 5) return [5, 6.6, 7.6][y - 3] + w;
+  if (y <= 15) return 8.4 + w + (y >= 10 && y <= 13 ? 0.3 : 0);
+  const jaw = [[8.2, 7.9, 7.6, 7.2, 6.6, 5.8, 4.8, 3.6], [8.2, 8.0, 7.9, 7.6, 7.2, 6.6, 5.6, 4.2], [8.0, 7.6, 7.0, 6.4, 5.6, 4.8, 3.8, 2.8]][t.jaw];
+  return y - 16 < jaw.length ? jaw[y - 16] + w : 0;
+}
+
+/** The portrait as a 32×32 grid of colours (null = background). */
 export function portraitGrid(id: string, band: HealthBand): Grid {
   const t = traitsOf(id);
-  const N = PORTRAIT_SIZE;
+  const N = PORTRAIT_SIZE, cx = 15.5;
   const g: Grid = Array.from({ length: N }, () => Array<string | null>(N).fill(null));
   const put = (x: number, y: number, c: string) => { if (x >= 0 && x < N && y >= 0 && y < N) g[y][x] = c; };
   const rect = (x: number, y: number, w: number, h: number, c: string) => { for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) put(x + i, y + j, c); };
-
-  const pale = band === "CRITICAL" ? 0.88 : 1;
-  const skin = shade(SKIN[t.skin], pale), skinDark = shade(SKIN[t.skin], 0.78 * pale);
-  const helmet = HELMET[t.helmet], helmetHi = shade(helmet, 1.35), helmetLo = shade(helmet, 0.7), accent = ACCENT[t.accent];
-  const ink = "#0b1220", white = "#e2e8f0", armour = "#1e293b", armourHi = "#334155";
-
-  // Shoulders, collar and chest rig.
-  rect(2, 20, 20, 4, armour); rect(4, 20, 16, 1, armourHi); rect(9, 21, 6, 3, shade(armour, 0.8)); rect(10, 22, 1, 1, accent); rect(13, 22, 1, 1, accent);
-  // Neck.
-  rect(9, 18, 6, 2, skinDark);
-  // Face.
-  rect(6, 8, 12, 10, skin); rect(7, 18, 10, 1, skin); rect(5, 10, 1, 6, skinDark); rect(18, 10, 1, 6, skinDark);
-  rect(8, 18, 1, 1, skinDark); rect(15, 18, 1, 1, skinDark);
-  // Helmet with brim, stripe and insignia.
-  rect(5, 3, 14, 6, helmet); rect(6, 2, 12, 1, helmet); rect(4, 7, 16, 2, helmetLo); rect(6, 3, 12, 1, helmetHi);
-  rect(11, 3, 2, 4, shade(helmet, 0.85)); rect(11, 4, 2, 1, accent);
-  if (t.goggles) { rect(7, 5, 4, 2, ink); rect(13, 5, 4, 2, ink); rect(8, 5, 1, 1, accent); rect(14, 5, 1, 1, accent); rect(11, 6, 2, 1, ink); }
-  if (t.earpiece !== 0) { const x = t.earpiece < 0 ? 4 : 19; rect(x, 10, 1, 4, ink); put(x, 10, accent); }
-  // Brows.
-  rect(7, 10, 3, 1, skinDark); rect(14, 10, 3, 1, skinDark);
-  // Nose.
-  rect(11, 13, 2, 2, skinDark); put(11, 15, shade(skin, 0.7));
-  // Stubble.
-  if (t.stubble) for (let x = 7; x <= 16; x++) if ((x + t.stubble) % 2 === 0) put(x, 17, skinDark);
-  if (t.stubble === 2) { rect(8, 18, 8, 1, skinDark); }
-  // Scar (identity trait, not damage).
-  if (t.scar) { put(15, 12, shade(skin, 0.75)); put(16, 13, shade(skin, 0.75)); }
-
-  const eye = (x: number, open: "open" | "half" | "x" | "closed") => {
-    if (open === "open") { rect(x, 11, 3, 2, white); rect(x + 1, 11, 1, 2, ink); }
-    else if (open === "half") { rect(x, 12, 3, 1, white); put(x + 1, 12, ink); rect(x, 11, 3, 1, skinDark); }
-    else if (open === "x") { put(x, 11, ink); put(x + 2, 11, ink); put(x + 1, 12, ink); put(x, 13, ink); put(x + 2, 13, ink); }
-    else rect(x, 12, 3, 1, ink);
-  };
-  const mouth = (kind: "flat" | "grin" | "grit" | "tired") => {
-    if (kind === "flat") rect(9, 16, 6, 1, shade(skin, 0.55));
-    else if (kind === "grin") { rect(9, 16, 6, 1, ink); rect(10, 16, 4, 1, white); put(15, 15, ink); put(8, 16, shade(skin, 0.55)); }
-    else if (kind === "grit") { rect(9, 15, 6, 2, ink); rect(9, 15, 6, 1, white); put(10, 16, white); put(13, 16, white); }
-    else { rect(9, 16, 6, 1, shade(skin, 0.55)); put(9, 17, shade(skin, 0.6)); put(14, 17, shade(skin, 0.6)); }
+  const pale = band === "CRITICAL" ? 0.16 : band === "WOUNDED" ? 0.06 : 0;
+  const ramp = SKIN[t.skin].map((c) => (pale ? mix(c, "#c9c2bb", pale) : c));
+  const hair = HAIR[t.hairColour];
+  const skinAt = (x: number, y: number): string => {
+    // Front-lit from the upper left: lighter towards the left cheek and forehead, darker at the right edge and jaw.
+    const hw = Math.max(1, halfWidth(y, t)), nx = (x + 0.5 - cx) / hw;
+    let s = 1.8 + nx * 1.6 + (Math.abs(nx) > 0.8 ? 1.0 : 0) + (y >= 21 ? 0.8 : 0);
+    if (y >= 5 && y <= 10 && Math.abs(nx) < 0.45) s -= 0.8; // forehead highlight
+    if (y >= 15 && y <= 17 && nx < -0.35 && nx > -0.8) s -= 0.7; // cheekbone highlight
+    if (y >= 19 && y <= 21 && Math.abs(nx) < 0.3) s -= 0.4; // chin / upper-lip light
+    return ramp[Math.max(0, Math.min(4, Math.round(s)))];
   };
 
+  // Shoulders and the technical uniform's collar (Fleet cyan tabs).
+  for (let y = 27; y < N; y++) for (let x = 2; x < 30; x++) { const nx = (x + 0.5 - cx) / 14; put(x, y, UNIFORM[nx < -0.3 ? 0 : nx > 0.45 ? 2 : 1]); }
+  for (let y = 26; y < 29; y++) for (let x = 11; x < 21; x++) if (Math.abs(x + 0.5 - cx) < 5 - (y - 26) * 1.6) put(x, y, ramp[3]);
+  rect(9, 27, 2, 1, CYAN); rect(21, 27, 2, 1, CYAN); rect(15, 29, 2, 1, UNIFORM[0]);
+  // Neck (in shadow under the jaw).
+  for (let y = 22; y < 27; y++) for (let x = 11; x < 21; x++) put(x, y, ramp[y < 24 ? 4 : 3]);
+  // Head.
+  for (let y = 3; y < 24; y++) { const hw = halfWidth(y, t); for (let x = 0; x < N; x++) if (Math.abs(x + 0.5 - cx) <= hw) put(x, y, skinAt(x, y)); }
+  // Ears.
+  for (let y = 12; y < 18; y++) { const hw = halfWidth(y, t); put(Math.floor(cx - hw - 1), y, ramp[2]); put(Math.ceil(cx + hw), y, ramp[4]); if (y > 12 && y < 17) put(Math.floor(cx - hw - 1) + (y === 14 ? 1 : 0), y, ramp[3]); }
+  if (t.earpiece !== 0) { const x = t.earpiece < 0 ? Math.floor(cx - halfWidth(14, t) - 2) : Math.ceil(cx + halfWidth(14, t)) + 1; rect(x, 13, 1, 4, INK); put(x, 13, CYAN); }
+
+  // Hair: crew cut, buzz, shaved, swept back, high fade, receding.
+  const hairline = [7, 6, 6, 6, 7, 8][t.hair];
+  for (let y = 2; y < 12; y++) {
+    const hw = Math.max(halfWidth(y, t), y < 3 ? 4 : 0) + (y < 8 ? 0.6 : 0.2);
+    for (let x = 0; x < N; x++) {
+      const dx = Math.abs(x + 0.5 - cx);
+      if (dx > hw) continue;
+      const side = dx > hw - 1.6;
+      const top = y < hairline || (t.hair === 5 && y < hairline + 1 && dx < 3);
+      if (!(top || (side && y < 11))) continue;
+      if (t.hair === 5 && y >= 5 && dx > 3 && dx < hw - 1.6 && !side) continue;
+      if (t.hair === 4 && side && y > 4) { if ((x + y) % 2 === 0) put(x, y, hair[2]); continue; }
+      if (t.hair === 2) { if ((x * 3 + y) % 3 !== 0) put(x, y, mix(skinAt(x, Math.max(y, 6)), hair[1], 0.45)); continue; }
+      const tone = t.hair === 1 ? hair[(x + y) % 3 === 0 ? 1 : 2] : x + 0.5 < cx - 2 && y < hairline - 1 ? hair[0] : dx > hw - 2 ? hair[2] : hair[1];
+      put(x, y, tone);
+      if (t.hair === 3 && y < hairline - 1 && (x + y) % 4 === 0) put(x, y, hair[0]);
+    }
+  }
+  if (t.hair === 0) for (let x = Math.round(cx - 6); x < Math.round(cx + 6); x++) if (x % 2) put(x, hairline - 1, hair[2]);
+
+  // Brows (stern: the inner ends sit lower).
+  const browH = t.brows === 2 ? 2 : 1;
+  for (const side of [-1, 1]) for (let i = 0; i < 4; i++) {
+    const x = Math.round(cx + side * (2 + i)) - (side < 0 ? 1 : 0);
+    for (let k = 0; k < browH; k++) put(x, 11 + (i === 0 ? 1 : 0) + k, hair[t.brows === 0 && i === 3 ? 1 : 2]);
+  }
+  // Deep eye sockets under the brow ridge, and the folds from nose to mouth.
+  for (let x = Math.round(cx - 7); x < Math.round(cx + 7); x++) if (g[13][x] && x !== 15 && x !== 16) { put(x, 13, ramp[x < cx ? 3 : 4]); put(x, 15, ramp[x < cx ? 2 : 3]); }
+  put(12, 19, ramp[3]); put(11, 20, ramp[3]); put(19, 19, ramp[4]); put(20, 20, ramp[4]);
+
+  const iris = IRIS[t.eyes];
+  const eye = (side: -1 | 1, kind: "open" | "half" | "closed" | "narrow") => {
+    const x0 = side < 0 ? Math.round(cx - 6) : Math.round(cx + 2);
+    if (kind === "closed") { rect(x0, 14, 4, 1, ramp[4]); put(x0 + (side < 0 ? 0 : 3), 15, ramp[4]); return; }
+    if (kind === "half") { rect(x0, 13, 4, 1, ramp[4]); rect(x0, 14, 4, 1, WHITE); put(x0 + 1, 14, iris); put(x0 + 2, 14, INK); return; }
+    rect(x0, 13, 4, 1, INK);
+    // White, iris, pupil, white: the eyes look straight out.
+    put(x0, 14, WHITE); put(x0 + 1, 14, iris); put(x0 + 2, 14, INK); put(x0 + 3, 14, WHITE);
+    if (kind === "narrow") rect(x0, 13, 4, 1, ramp[4]);
+  };
+  // Nose: bridge highlight, shaded side, nostrils.
+  const noseW = [2, 3, 2][t.nose], noseOff = t.nose === 2 ? 1 : 0;
+  for (let y = 14; y < 19; y++) { put(15 + noseOff, y, ramp[y < 17 ? 1 : 2]); put(16 + noseOff, y, ramp[3]); }
+  rect(14 - (noseW > 2 ? 1 : 0) + noseOff, 19, noseW + 2, 1, ramp[4]); put(15 + noseOff, 19, ramp[3]); put(16 + noseOff, 18, ramp[2]);
+  // Facial hair.
+  const fh = t.facialHair;
+  if (fh === 1) for (let y = 19; y < 24; y++) for (let x = 8; x < 24; x++) if (g[y][x] && (x * 7 + y * 3) % 3 === 0 && Math.abs(x + 0.5 - cx) <= halfWidth(y, t) - 0.5) put(x, y, mix(skinAt(x, y), hair[2], 0.5));
+  if (fh === 2) rect(12, 20, 8, 1, hair[1]);
+  if (fh === 3) { rect(13, 20, 6, 1, hair[1]); rect(14, 22, 4, 2, hair[1]); put(14, 23, hair[2]); }
+  if (fh === 4) for (let y = 19; y < 24; y++) for (let x = 6; x < 26; x++) if (g[y][x] && Math.abs(x + 0.5 - cx) <= halfWidth(y, t) - (y < 21 ? 2.5 : 0.4)) put(x, y, (x + y) % 3 === 0 ? hair[2] : hair[1]);
+  // Scar (an identity mark, not damage).
+  if (t.scar === 1) { put(20, 16, ramp[0]); put(21, 17, ramp[0]); put(21, 18, ramp[0]); }
+  if (t.scar === 2) { put(18, 10, ramp[0]); put(18, 11, ramp[0]); put(18, 12, ramp[0]); }
+  if (t.scar === 3) { put(13, 20, ramp[0]); put(13, 22, ramp[0]); }
+
+  const mouth = (kind: "set" | "grin" | "grit" | "slack") => {
+    const y = 21;
+    if (kind === "set") { rect(14, y, 4, 1, INK); put(13, y, ramp[4]); put(18, y, ramp[4]); rect(14, y + 1, 4, 1, ramp[1]); }
+    else if (kind === "grin") { rect(12, y, 8, 1, INK); rect(13, y, 6, 1, TEETH); put(20, y - 1, INK); put(19, y + 1, ramp[4]); rect(13, y + 1, 5, 1, ramp[1]); }
+    else if (kind === "grit") { rect(12, y - 1, 8, 3, INK); rect(12, y - 1, 8, 1, TEETH); rect(12, y + 1, 8, 1, TEETH); for (let x = 13; x < 20; x += 2) put(x, y - 1, INK); }
+    else { rect(13, y + 1, 6, 1, ramp[4]); put(12, y + 1, ramp[3]); }
+  };
+
+  const BRUISE = "#6b4a7a", BRUISE2 = "#4e3560", BLOOD = "#7f1d1d", BLOOD2 = "#a31b1b", SWEAT = "#bfe6f2";
   switch (band) {
     case "WINNING":
-      // Shades across both eyes with a glint, raised brow, smug one-sided grin.
-      rect(6, 11, 12, 2, ink); rect(11, 11, 2, 1, "#111827"); put(8, 11, "#94a3b8"); put(15, 11, "#94a3b8");
-      rect(14, 9, 3, 1, skinDark); mouth("grin");
+      // Shades across both eyes with a glint, one raised brow, a confident one-sided grin.
+      rect(Math.round(cx - 7), 13, 15, 3, INK); rect(15, 13, 2, 1, "#2b2b2b"); put(10, 13, "#9aa4ae"); put(19, 13, "#9aa4ae"); put(11, 14, "#5b636b");
+      for (let i = 0; i < 4; i++) put(Math.round(cx + 2 + i), 10, hair[2]);
+      mouth("grin");
       break;
     case "WOUNDED":
-      eye(7, "open"); eye(14, "half"); mouth("tired");
-      rect(15, 13, 2, 2, "#6b4a7a"); // bruise
-      put(7, 9, "#9f1239"); put(8, 8, "#9f1239"); // small cut
-      rect(5, 9, 4, 1, "#d6d3d1"); // field dressing at the helmet edge
+      eye(-1, "half"); eye(1, "narrow"); mouth("slack");
+      rect(18, 15, 3, 2, BRUISE); put(21, 16, BRUISE2);
+      put(12, 8, BLOOD); put(13, 9, BLOOD); put(13, 10, BLOOD2);
+      put(9, 17, BLOOD); put(10, 18, BLOOD);
+      put(22, 10, SWEAT); put(22, 11, SWEAT);
       break;
     case "CRITICAL":
-      eye(7, "half"); eye(14, "half"); mouth("grit");
-      // Black eye: a ring around the right eye, not a patch.
-      for (const [x, y] of [[13, 11], [13, 12], [17, 11], [17, 12], [14, 13], [15, 13], [16, 13], [14, 11], [16, 11]] as const) put(x, y, "#4a2545");
-      // Blood from a forehead wound, kept to a few pixels.
-      put(9, 8, "#7f1d1d"); put(9, 9, "#991b1b"); put(8, 10, "#991b1b"); put(8, 13, "#7f1d1d"); put(8, 14, "#7f1d1d"); put(16, 15, "#7f1d1d");
-      put(17, 9, "#a5f3fc"); // sweat
-      rect(12, 5, 1, 2, ink); // cracked helmet
+      eye(-1, "half"); eye(1, "half"); mouth("grit");
+      for (const [x, y] of [[17, 12], [18, 12], [19, 12], [20, 12], [21, 13], [21, 14], [21, 15], [17, 16], [18, 16], [19, 16], [20, 16], [16, 15]] as const) put(x, y, BRUISE2);
+      for (const [x, y] of [[11, 6], [11, 7], [12, 8], [12, 9], [11, 10], [11, 11], [10, 12], [10, 16], [10, 17], [16, 20], [17, 20], [9, 19]] as const) put(x, y, y < 9 ? BLOOD2 : BLOOD);
+      put(22, 9, SWEAT); put(22, 10, SWEAT); put(8, 12, SWEAT);
+      put(19, 19, BRUISE); put(20, 19, BRUISE);
       break;
     case "DEAD":
-      eye(7, "x"); eye(14, "x"); mouth("flat");
+      eye(-1, "closed"); eye(1, "closed"); mouth("slack");
       break;
     default:
-      eye(7, "open"); eye(14, "open"); mouth("flat");
+      eye(-1, "open"); eye(1, "open"); mouth("set");
   }
 
-  if (band === "DEAD") for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const c = g[y][x]; if (c) g[y][x] = grey(c); }
-  return g;
+  // Outline: a dark contour where the head meets the background (the painted-sprite look).
+  const out: Grid = g.map((r) => [...r]);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    if (g[y][x] || y > 26) continue;
+    if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => { const v = g[y + dy]?.[x + dx]; return v && v !== CYAN && y + dy <= 26; })) out[y][x] = "#0a0705";
+  }
+  if (band === "DEAD") for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const c = out[y][x]; if (c) out[y][x] = grey(c, 0.78); }
+  return out;
 }
 
 /** Runs of equal colour per row → compact SVG/Canvas rectangles (one path per colour). */
@@ -177,3 +268,9 @@ export function portraitPng(id: string, band: HealthBand): string {
 export const BAND_FRAME: Readonly<Record<HealthBand, string>> = Object.freeze({
   HEALTHY: "#22d3ee", WINNING: "#34d399", WOUNDED: "#f59e0b", CRITICAL: "#ef4444", DEAD: "#475569", UNKNOWN: "#64748b",
 });
+
+/** Colours the 3D operator model takes from the same identity (skin and hair), so body and portrait agree. */
+export function identityColours(id: string): { skin: string; skinShadow: string; hair: string; hairStyle: PortraitTraits["hair"]; facialHair: PortraitTraits["facialHair"] } {
+  const t = traitsOf(id);
+  return { skin: SKIN[t.skin][2], skinShadow: SKIN[t.skin][3], hair: HAIR[t.hairColour][1], hairStyle: t.hair, facialHair: t.facialHair };
+}

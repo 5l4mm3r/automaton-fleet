@@ -20,6 +20,7 @@ import type { FeedState } from "../command/useFleetCommand";
 import type { CommandView, Row } from "../command/view";
 import { AgentPanel, DepartmentPanel } from "./VirtualPanels";
 import { utc } from "../command/panels";
+import { hqDataFrom, redAlertOpen } from "./hq/data";
 import { VirtualMap, type Focus } from "./VirtualMap";
 import { agentTargetsWithStations, birthState, BIRTH_ENTER_MS, BIRTH_EVENTS, BIRTH_FUNDING_EVENTS, BIRTH_MARK_MS, BIRTH_POWER_MS, livePackets, packetFor, stationIndex, stationPoint, type Packet, type Point } from "./world";
 import { AgentLabels, type Projector } from "./AgentLabels";
@@ -77,6 +78,8 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
     return () => clearInterval(timer);
   }, [births]);
 
+  const modelsRef = useRef(models);
+  useEffect(() => { modelsRef.current = models; }, [models]);
   const targetsRef = useRef(targets);
   useEffect(() => { targetsRef.current = targets; }, [targets]);
   const emit = useCallback((events: VisualEvent[]) => {
@@ -145,7 +148,11 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
   }, [models, emit, registerBirths, events]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFocus({ level: "fleet" }); };
+    // Escape moves back one camera level: Agent → its department → Fleet.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setFocus((f) => (f.level === "agent" ? { level: "department", id: modelsRef.current.find((m) => m.agent.id === f.id)?.placement.department ?? "floor" } : { level: "fleet" }));
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
@@ -160,6 +167,7 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
   const onAgent = (id: string) => setFocus({ level: "agent", id });
   const sceneProps = { models, targets, packets, focus, prefs: effective, selected: selectedAgent?.agent.id ?? null, onRoom, onAgent, positionsRef: positions, projectRef: project,
     stations, births, birthStates };
+  const hqData = hqDataFrom(fleet, view, models), redAlert = redAlertOpen(fleet);
 
   return <section aria-label="Virtual Command Centre" className="space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -183,13 +191,13 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
     <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
       <div className="relative h-[62vh] min-h-[360px] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950">
         {use3d ? <SceneBoundary onError={() => setWebglFailed(true)}><Suspense fallback={<p className="p-5 text-sm text-slate-400">Loading the 3D facility…</p>}>
-          <Scene3D {...sceneProps} onLost={() => setWebglFailed(true)} /></Suspense></SceneBoundary>
+          <Scene3D {...sceneProps} hqData={hqData} redAlert={redAlert} onLost={() => setWebglFailed(true)} /></Suspense></SceneBoundary>
           : <VirtualMap {...sceneProps} />}
         <AgentLabels models={models} positionsRef={positions} projectRef={project} prefs={effective} selected={selectedAgent?.agent.id ?? null} fleetView={focus.level === "fleet"} onAgent={onAgent} hidden={hidden} marked={birthStates} />
         <ol aria-live="polite" aria-label="Recent Fleet activity" className="pointer-events-none absolute bottom-3 left-3 z-50 max-w-[70%] space-y-1 text-xs">
           {ticker.map((v) => <li key={v.id} className="rounded bg-slate-950 px-2 py-1 text-slate-200">{utc(v.at, true).slice(11)} · {models.find((m) => m.agent.id === v.agentId)?.agent.name ?? "Fleet"} · {v.label}</li>)}
         </ol>
-        <p className="pointer-events-none absolute right-3 top-3 z-50 rounded bg-slate-950/80 px-2 py-1 text-xs text-slate-400">{focus.level === "fleet" ? "Fleet view" : focus.level === "department" ? DEPARTMENT[focus.id].name : selectedAgent?.agent.name ?? "Agent"} · Esc returns to the Fleet view</p>
+        <p className="pointer-events-none absolute right-3 top-3 z-50 rounded bg-slate-950/80 px-2 py-1 text-xs text-slate-400">{focus.level === "fleet" ? "Fleet view" : focus.level === "department" ? DEPARTMENT[focus.id].name : selectedAgent?.agent.name ?? "Agent"} · Esc steps back a level</p>
       </div>
       <aside aria-label="Selection details" className="max-h-[62vh] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900/95 p-5">
         {focus.level === "agent" && selectedAgent ? <AgentPanel m={selectedAgent} fleet={fleet} view={view} control={control} go={go} loadLedger={loadLedger} />

@@ -10,9 +10,9 @@ import type { FlowStop, VisualEvent } from "../command/events";
 export interface Point { x: number; z: number }
 
 /** The facility's bounds (world units) — the 2D map's viewBox and the 3D camera's "Fleet view". */
-export const WORLD = Object.freeze({ minX: -21, maxX: 21, minZ: -20, maxZ: 23 });
-/** Where outside information (customers, providers) enters the facility. */
-export const EXTERNAL: Point = Object.freeze({ x: 23, z: -2 });
+export const WORLD = Object.freeze({ minX: -27, maxX: 27, minZ: -37, maxZ: 43 });
+/** Where outside information (customers, providers) enters the facility: its east gate. */
+export const EXTERNAL: Point = Object.freeze({ x: 29, z: -4 });
 
 /** Each agent's target spot: its department, then a deterministic slot by order of id within that department. */
 export function agentTargets(models: readonly AgentModel[]): Map<string, Point & { department: DepartmentId }> {
@@ -78,7 +78,7 @@ export function livePackets(packets: readonly Packet[], t: number, cap: number):
 /** The rectangle to frame for a focus level (Fleet → department → agent). */
 export function focusRect(focus: { level: "fleet" } | { level: "department"; id: DepartmentId } | { level: "agent"; id: string }, agents: ReadonlyMap<string, Point>) {
   if (focus.level === "department") { const d = DEPARTMENT[focus.id]; return { x: d.x, z: d.z, w: d.w + 4, d: d.d + 4 }; }
-  if (focus.level === "agent") { const p = agents.get(focus.id); if (p) return { x: p.x, z: p.z, w: 12, d: 10 }; }
+  if (focus.level === "agent") { const p = agents.get(focus.id); if (p) return { x: p.x, z: p.z, w: 9, d: 7 }; }
   return { x: (WORLD.minX + WORLD.maxX) / 2, z: (WORLD.minZ + WORLD.maxZ) / 2, w: WORLD.maxX - WORLD.minX, d: WORLD.maxZ - WORLD.minZ };
 }
 
