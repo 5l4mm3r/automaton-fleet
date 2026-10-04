@@ -111,7 +111,8 @@ const PROJECT_LABEL: Readonly<Record<string, string>> = {
   project_member_offered: "Team offer", project_member_joined: "Team member joined", project_member_declined: "Offer declined", project_member_countered: "Counter-offer",
   project_offer_withdrawn: "Offer withdrawn", project_task_started: "Task started", project_task_delivered: "Task delivered", project_task_accepted: "Delivery accepted",
   project_task_rejected: "Delivery rejected", project_payment: "Project payment", project_member_exited: "Member exited", project_member_removed: "Member replaced",
-  project_completed: "Project completed", project_cancelled: "Project cancelled",
+  project_completed: "Project completed", project_cancelled: "Project cancelled", project_profit_distribution: "Profit distribution",
+  project_distribution_pending: "Distribution pending", project_assessment: "Project assessment",
 };
 
 /** One FleetController event → its visual event (null: listed in feeds, not animated). */

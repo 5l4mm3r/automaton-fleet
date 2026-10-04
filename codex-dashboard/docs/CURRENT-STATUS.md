@@ -456,3 +456,38 @@ How this was achieved without hiding anything:
 - **Building:** indexed merged geometry, split per room so out-of-view rooms are culled.
 - **People:** only those in view are drawn. The Fleet view skips sub-pixel details. Round parts use lower
   tessellation on Low.
+
+**Team-project compensation, as corrected by the owner (schema v42, `4a09db0`).**
+
+Order of accounting: external revenue → project/business expenses → tax/restricted → realised net profit → Treasury
+sweep → post-sweep distributable profit → the agents' negotiated distribution.
+
+The project card shows:
+- exact negotiated terms, with no default ratio;
+- profit shares as a percentage of post-sweep distributable profit;
+- the distribution: members' shares, the lead's residual, and each tranche (profit → Treasury sweep at its rate →
+  distributable → allocations);
+- paid and owed shares;
+- the lead's forecast, labelled as a forecast, for later comparison with what is realised.
+
+**Final measurements (candidate).**
+
+GPU matrix (fps shown as Fleet / Department / Agent):
+
+| Quality | Fleet view | Department / Agent views |
+|---|---|---|
+| Low | about 60 | 47–60 |
+| Medium | about 60 | 55–60 |
+| High | 43–48 | about 60 |
+| Ultra | 14–15 | 30–59 |
+
+Software WebGL, 12 agents:
+
+| Quality | Fleet / Department / Agent |
+|---|---|
+| Low | 41 / 53 / 59 fps |
+| Medium | 5.3 / 6.3 / 6 fps |
+| High | 2.3 / 2.7 / 3 fps |
+| Ultra | 1.3 / 1.3 / 2 fps |
+
+Virtual scale, 3D at Low, settled: 1 agent 54, 10 agents 58, 25 agents 46, 50 agents 34 fps.

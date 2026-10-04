@@ -121,7 +121,7 @@ async function teamProject(R: EconomyRegistry) {
   }));
   const P = p.project.projectId as string;
   await ok(R.econ(A, "project.fund", { projectId: P, amountMinor: 1_600, source: "own" }));
-  const o = await ok(R.econ(A, "project.offer", { projectId: P, role: "engineer", agentId: B.id, deliverable: "the backend API", expectedHours: 20, deadline: new Date(Date.now() + 7 * 86_400_000).toISOString() }));
+  const o = await ok(R.econ(A, "project.offer", { projectId: P, role: "engineer", agentId: B.id, deliverable: "the backend API", expectedHours: 20, compensation: { type: "FIXED", fixedMinor: 1_000 }, deadline: new Date(Date.now() + 7 * 86_400_000).toISOString() }));
   await ok(R.econ(B, "project.respond", { memberId: o.memberId, response: "ACCEPT", reason: "fits my capacity; fair pay" }));
   await ok(R.econ(A, "project.start", { projectId: P }));
   await ok(R.econ(A, "project.task", { projectId: P, taskKey: "arch", action: "start" }));

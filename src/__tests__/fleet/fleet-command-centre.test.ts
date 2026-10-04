@@ -382,7 +382,11 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
 
   it("project views show the record's own figures: working-day ETAs, exact compensation, who is actively collaborating", () => {
     expect(hours(52)).toBe("6.5 days"); expect(hours(16)).toBe("16 h"); expect(hours(undefined)).toBe("—");
-    expect(compensationText({ type: "HYBRID", fixedMinor: 500, revenueShareBp: 1000, revenueShareCapMinor: 2000 })).toBe("hybrid — £5.00 fixed + 10 % of attributable net (cap £20.00)");
+    // Shares are of the POST-SWEEP distributable profit, exactly as negotiated (no default ratio is ever shown or assumed).
+    expect(compensationText({ type: "HYBRID", fixedMinor: 500, profitShareBp: 1000, profitShareCapMinor: 2000 })).toBe("hybrid — £5.00 fixed + 10 % of post-sweep distributable profit (cap £20.00)");
+    expect(compensationText({ type: "PROFIT_SHARE", profitShareBp: 3000 })).toBe("profit share — 30 % of post-sweep distributable profit");
+    expect(compensationText({ type: "PROFIT_SHARE", revenueShareBp: 2500 })).toBe("profit share — 25 % of post-sweep distributable profit"); // read alias
+    expect(compensationText({ type: "FIXED", fixedMinor: 1000 })).not.toMatch(/%/);
     expect(compensationText(null)).toBe("—");
     const view = { ...emptyCommandView("live"), projects: [
       { projectId: "P1", status: "active", leadAgentId: "A", members: [{ agentId: "B", status: "accepted" }, { agentId: "C", status: "declined" }] },
