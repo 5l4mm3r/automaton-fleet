@@ -14,8 +14,27 @@ export type MatKey =
 
 const tmp = new THREE.Object3D();
 
+/** A merged piece: `chunk|material` (chunks are rooms or the shell, so the renderer can cull what is out of view). */
+export const matOf = (key: string): MatKey => key.slice(key.indexOf("|") + 1) as MatKey;
+
+/**
+ * Low quality: lighting baked into the geometry once (a vertex colour per face direction — lit tops, darker sides and
+ * undersides, from the same key light the other levels use), so Low draws with unlit materials and no per-pixel light.
+ */
+export function bakeShade(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  const n = g.getAttribute("normal"), c = new Float32Array(n.count * 3), L = new THREE.Vector3(0.38, 0.8, 0.46).normalize();
+  for (let i = 0; i < n.count; i++) {
+    const d = n.getX(i) * L.x + n.getY(i) * L.y + n.getZ(i) * L.z, v = 0.5 + 0.5 * Math.max(0, d) + 0.08 * Math.max(0, n.getY(i));
+    c[i * 3] = c[i * 3 + 1] = c[i * 3 + 2] = Math.min(1.05, v);
+  }
+  g.setAttribute("color", new THREE.BufferAttribute(c, 3));
+  return g;
+}
+
 export class GeoBuilder {
-  private readonly parts = new Map<MatKey, THREE.BufferGeometry[]>();
+  private readonly parts = new Map<string, THREE.BufferGeometry[]>();
+  /** The chunk new solids belong to (a department id, or "shell"). */
+  chunk = "shell";
 
   private add(key: MatKey, g: THREE.BufferGeometry, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) {
     tmp.position.set(x, y, z);
@@ -23,8 +42,9 @@ export class GeoBuilder {
     tmp.scale.set(1, 1, 1);
     tmp.updateMatrix();
     g.applyMatrix4(tmp.matrix);
-    const list = this.parts.get(key) ?? this.parts.set(key, []).get(key)!;
-    list.push(g.index ? g.toNonIndexed() : g);
+    const k = `${this.chunk}|${key}`;
+    const list = this.parts.get(k) ?? this.parts.set(k, []).get(k)!;
+    list.push(g); // indexed (every primitive here is), so shared vertices are shaded once
   }
 
   /** An axis-aligned box centred at (x, y, z), optionally turned about Y. */
@@ -51,15 +71,15 @@ export class GeoBuilder {
   }
 
   /**
-   * Merge into one geometry per material key. Keys in `worldUV` get world-space texture coordinates (metres / tile), so
+   * Merge into one geometry per chunk and material key. Keys in `worldUV` get world-space texture coordinates (metres / tile), so
    * floor tiles and wall panels keep their real size on surfaces of any size.
    */
   /** Callers own (and dispose) the returned geometries; building again returns fresh ones. */
-  build(worldUV: ReadonlySet<MatKey> = new Set(), tile = 2): Map<MatKey, THREE.BufferGeometry> {
-    const out = new Map<MatKey, THREE.BufferGeometry>();
+  build(worldUV: ReadonlySet<MatKey> = new Set(), tile = 2, bake = false): Map<string, THREE.BufferGeometry> {
+    const out = new Map<string, THREE.BufferGeometry>();
     for (const [key, list] of this.parts) {
       const merged = mergeGeometries(list, false);
-      if (merged && worldUV.has(key)) {
+      if (merged && worldUV.has(matOf(key))) {
         const pos = merged.getAttribute("position"), nor = merged.getAttribute("normal"), uv = merged.getAttribute("uv");
         for (let i = 0; i < pos.count; i++) {
           const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i), ny = Math.abs(nor.getY(i)), nx = Math.abs(nor.getX(i));
@@ -67,7 +87,7 @@ export class GeoBuilder {
         }
         uv.needsUpdate = true;
       }
-      if (merged) { merged.computeBoundingSphere(); out.set(key, merged); }
+      if (merged) { if (bake) bakeShade(merged); merged.computeBoundingSphere(); out.set(key, merged); }
     }
     // The parts are kept: every (re)mounted scene — a quality change, a shadow-map fallback — builds its own geometry.
     return out;

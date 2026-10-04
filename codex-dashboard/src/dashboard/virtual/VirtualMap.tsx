@@ -5,12 +5,12 @@
  * their targets, carries packets and frames the focus by setting SVG attributes directly: no React render per frame, no
  * style attributes (the deck's strict CSP), capped to the chosen frame rate and paused while the tab is hidden.
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import type { Projector } from "./AgentLabels";
 import { money } from "../model";
 import type { AgentModel } from "../command/agents";
 import { DEPARTMENT, DEPARTMENTS, type DepartmentId } from "../command/departments";
-import { portraitPng } from "../command/portrait";
+import { usePortraitUrl } from "../command/AgentPortrait";
 import type { VirtualPrefs } from "../command/prefs";
 import { birthState, focusRect, livePackets, packetAt, WORLD, type BirthState, type Packet, type Point } from "./world";
 
@@ -26,8 +26,8 @@ export type Focus = { level: "fleet" } | { level: "department"; id: DepartmentId
 
 /** One cached bitmap per agent and condition (cheap to repaint with 50 agents on the map). */
 const Portrait = memo(function Portrait({ id, band }: { id: string; band: AgentModel["health"]["band"] }) {
-  const href = useMemo(() => portraitPng(id, band), [id, band]);
-  return <image href={href} x={-0.5} y={-1.04} width={1} height={1} className="[image-rendering:pixelated]" />;
+  const href = usePortraitUrl(id, band);
+  return href ? <image href={href} x={-0.5} y={-1.04} width={1} height={1} /> : <rect x={-0.5} y={-1.04} width={1} height={1} fill="#020617" />;
 });
 
 function activate(fn: () => void) {

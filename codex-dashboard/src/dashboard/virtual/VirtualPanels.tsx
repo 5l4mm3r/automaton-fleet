@@ -3,6 +3,7 @@
  * Fleet Command components and the same authoritative data as the Formal dashboard; actions reuse the deck's controls
  * (review + passkey step-up on the gateway). Nothing here holds state of its own.
  */
+import { ProjectCard, projectsOf } from "../command/projects";
 import { useEffect, useState, type ReactNode } from "react";
 import { money, type Fleet } from "../model";
 import { button } from "../ui";
@@ -51,7 +52,9 @@ export function DepartmentPanel({ dep, fleet, view, models, openAgent, go }: { d
       body = <>{roster}<Section title="Marketing missions">{list(fleet.missions.filter((m) => /market/i.test(m.kind)) as unknown as Row[], (m) => <>{String(m.brief)} · {String(m.status)} · {name(m.agentId)}</>, "No marketing missions.")}</Section>{feed}</>;
       break;
     case "venture":
-      body = <>{roster}<Section title="Ventures">{list(view?.ventures ?? [], (v) => <>{String(v.key ?? "venture")}{v.offer ? ` — ${String(v.offer).slice(0, 80)}` : ""} · {String(v.state ?? "")} · {name(v.agentId)}</>, "No ventures yet.")}</Section>{feed}</>;
+      body = <>{roster}<Section title="Team projects">{(view?.projects ?? []).filter((p) => p.status === "active" || p.status === "planning").length
+        ? <div className="space-y-2">{(view?.projects ?? []).filter((p) => p.status === "active" || p.status === "planning").map((p) => <ProjectCard key={String(p.projectId)} p={p} models={models} onOpenAgent={openAgent} />)}</div>
+        : <p className="text-sm text-slate-400">No team projects in progress.</p>}</Section><Section title="Ventures">{list(view?.ventures ?? [], (v) => <>{String(v.key ?? "venture")}{v.offer ? ` — ${String(v.offer).slice(0, 80)}` : ""} · {String(v.state ?? "")} · {name(v.agentId)}</>, "No ventures yet.")}</Section>{feed}</>;
       break;
     case "identity":
       body = <>{roster}<p className="mt-4 text-sm text-slate-400">Identity and account metadata only. Credentials and owner identity facts are revealed only through the Formal pages, with a fresh passkey verification.</p>{feed}
@@ -92,7 +95,7 @@ export function AgentPanel({ m, fleet, view, control, go, loadLedger }: { m: Age
   const decisions = (view?.capital ?? []).filter((c) => c.agentId === a.id);
   const stat = (k: string, v: string) => <div className="rounded border border-slate-800 p-2"><dt className="text-xs text-slate-400">{k}</dt><dd className="font-mono">{v}</dd></div>;
   return <div>
-    <div className="flex items-center gap-4"><AgentPortrait id={a.id} name={a.name} band={m.health.band} size={96} />
+    <div className="flex items-center gap-4"><AgentPortrait id={a.id} name={a.name} band={m.health.band} size={128} />
       <div><p className="text-xs tracking-widest text-cyan-300">AGENT</p><h3 className="text-xl font-semibold">{a.name}</h3><p className="font-mono text-2xl">{money(a.cash)}</p><HealthTag health={m.health} /></div></div>
     <dl className="mt-4 grid grid-cols-2 gap-2 text-sm">
       {stat("State", a.status.toUpperCase())}{stat("Activity", m.placement.activity)}{stat("Department", DEPARTMENT[m.placement.department].name)}
@@ -103,6 +106,7 @@ export function AgentPanel({ m, fleet, view, control, go, loadLedger }: { m: Age
     </dl>
     <Section title="Why this condition"><ul className="list-disc pl-5 text-sm text-slate-300">{m.health.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
       <p className="mt-1 text-xs text-slate-400">Placed in {DEPARTMENT[m.placement.department].name}: {m.placement.basis === "mission" ? "its active mission" : m.placement.basis === "event" ? "its latest recorded activity" : m.placement.basis}.</p></Section>
+    <Section title="Team projects">{projectsOf(view, a.id).length ? <div className="space-y-2">{projectsOf(view, a.id).map((p) => <ProjectCard key={String(p.projectId)} p={p} models={fleet.agents.map((x) => ({ agent: x }) as unknown as AgentModel)} />)}</div> : <p className="text-sm text-slate-400">Not on a team project.</p>}</Section>
     <Section title="Venture">{ventures.length ? ventures.map((v, i) => <p key={i} className="text-sm">{String(v.key ?? "venture")}{v.offer ? ` — ${String(v.offer).slice(0, 80)}` : ""} · {String(v.state ?? "")}</p>) : <p className="text-sm text-slate-400">No venture recorded.</p>}</Section>
     <Section title="Recent transactions">{ledger === null ? <p className="text-sm text-slate-400">Reading the agent&apos;s ledger…</p> : ledger.length ? <ol className="space-y-1 text-sm">{ledger.slice(0, 8).map((j, i) => <li key={i}>{time(j.at)} · {String(j.kind ?? "").replace(/_/g, " ")}{j.reason ? ` · ${String(j.reason).slice(0, 60)}` : ""}{Array.isArray(j.postings) && j.postings.length ? ` · ${money(Math.max(...j.postings.map((p: Row) => Number(p.amountMinor) || 0)))}` : ""}</li>)}</ol> : <p className="text-sm text-slate-400">No ledger journals for this agent.</p>}</Section>
     <Section title="Assets">{assets.length ? assets.map((x) => <p key={x.id} className="text-sm">{x.name} · {x.size} MB (inherited from {x.owner})</p>) : <p className="text-sm text-slate-400">No estate assets assigned.</p>}</Section>

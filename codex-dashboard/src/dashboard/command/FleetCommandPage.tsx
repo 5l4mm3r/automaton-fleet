@@ -3,6 +3,7 @@
  * Command panel shows, from the same components). Behaviour changes use the deck's action dialog: review, then a fresh
  * passkey step-up on the gateway. Settings with no safe write path are shown read-only and say why.
  */
+import { ProjectsOverview } from "./projects";
 import { useState, type ReactNode } from "react";
 import { money, type Fleet } from "../model";
 import { Panel, button } from "../ui";
@@ -40,6 +41,7 @@ export function FleetCommandPage({ fleet, view, models, feed, live, control, ope
       </div>
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title="Agents">{models.length ? <ul className="space-y-3">{models.map((m) => <li key={m.agent.id}><AgentRow m={m} onOpen={openAgent} /></li>)}</ul> : <p className="text-sm text-slate-400">No agents.</p>}</Panel>
+        <Panel title="Team projects">{pending ?? <ProjectsOverview view={view} models={models} onOpenAgent={openAgent} />}</Panel>
         <Panel title="Pending dependencies">{pending ?? (view!.dependencies.length ? <ul className="space-y-2 text-sm">{view!.dependencies.map((d, i) => <li key={i} className="rounded border border-slate-700 p-2">{val(d.title ?? d.kind ?? d.summary ?? "dependency")} · {val(d.status)}{d.agentId ? ` · ${models.find((m) => m.agent.id === d.agentId)?.agent.name ?? d.agentId}` : ""}</li>)}</ul> : <p className="text-sm text-slate-400">No pending dependencies.</p>)}</Panel>
       </div>
       <Panel title="Treasury"><TreasurySummary fleet={fleet} view={view} /><button className={`${button} mt-4`} onClick={() => go("Treasury")}>Treasury controls</button></Panel>

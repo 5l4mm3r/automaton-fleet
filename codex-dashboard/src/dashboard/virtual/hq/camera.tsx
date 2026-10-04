@@ -1,41 +1,56 @@
 "use client";
 /**
- * Hierarchical camera: Fleet View → Department View → Agent View. Each level frames a rectangle of the headquarters
- * from the south, looking into the cutaway; moving between levels is a smooth flight (critically damped, with a lift
- * on long moves so the camera rises over the walls rather than through them). Reduce Motion cuts instead of flying.
+ * Hierarchical camera: Fleet View → Department View → Agent View. Fleet and Department frame a rectangle of the
+ * headquarters from the south, looking into the cutaway. Agent View is composed for the person (framing.ts): a view of
+ * the face from inside the room or its open side, chosen so nobody stands in the way; anyone still on the line of sight
+ * is faded (ghostsRef). The chosen angle is kept while the agent stays put, so the view does not jump.
+ *
+ * Moving between levels is a smooth flight (critically damped, with a lift on long moves so the camera rises over the
+ * walls rather than through them). Reduce Motion cuts instead of flying.
  */
 import { useFrame, useThree } from "@react-three/fiber";
 import { useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
-import { DEPARTMENTS } from "../../command/departments";
 import { focusRect, type Point } from "../world";
 import type { Focus } from "../VirtualMap";
+import { frameAgent } from "./framing";
+import type { WorkSpot } from "./world-build";
 
-export function CameraRig({ focus, positionsRef, reduceMotion }: { focus: Focus; positionsRef: MutableRefObject<Map<string, Point>>; reduceMotion: boolean }) {
+const NONE: ReadonlySet<string> = new Set();
+
+export function CameraRig({ focus, positionsRef, reduceMotion, spots, stations, ghostsRef }: {
+  focus: Focus; positionsRef: MutableRefObject<Map<string, Point>>; reduceMotion: boolean;
+  spots: ReadonlyMap<string, WorkSpot>; stations: ReadonlyMap<string, Point>; ghostsRef: MutableRefObject<ReadonlySet<string>>;
+}) {
   const { camera } = useThree();
   const look = useRef(new THREE.Vector3(0, 0, 2));
   const goalPos = useRef(new THREE.Vector3()), goalLook = useRef(new THREE.Vector3());
   const started = useRef(false);
+  const held = useRef<{ id: string; az: number; at: Point } | null>(null);
   useFrame((_, dt) => {
-    const r = focusRect(focus, positionsRef.current);
     const level = focus.level;
-    const span = level === "fleet" ? Math.max(r.w * 0.8, r.d) : Math.max(r.w * 0.85, r.d * 1.2);
-    // Fleet: high and steep over the whole complex. Department: into the room over its front parapet. Agent: close.
-    const height = level === "fleet" ? span * 0.78 : level === "department" ? span * 0.5 + 1.5 : 3.4;
-    const back = level === "fleet" ? span * 0.42 : level === "department" ? span * 0.56 : 4.2;
-    const lookY = level === "agent" ? 1.0 : 0;
-    goalLook.current.set(r.x, lookY, r.z + (level === "fleet" ? 3 : level === "department" ? -0.8 : 0));
-    // Agent View: a raised side view from the room's open side (towards its centre, so no wall is in the way), slightly
-    // ahead of the person so their face shows, high enough to look over a neighbour's head.
-    if (level === "agent") {
-      const room = DEPARTMENTS.find((d) => Math.abs(r.x - d.x) <= d.w / 2 && Math.abs(r.z - d.z) <= d.d / 2);
-      const side = room && r.x > room.x ? -1 : 1;
-      goalPos.current.set(r.x + side * 3.1, 3.0, r.z - 0.9);
+    if (level === "agent" && positionsRef.current.get(focus.id)) {
+      const id = focus.id, p = positionsRef.current.get(id)!, spot = spots.get(id), st = stations.get(id);
+      const atStation = !!st && Math.hypot(st.x - p.x, st.z - p.z) < 0.1;
+      const yaw = spot ? spot.yaw : Math.PI, seated = atStation || spot?.pose === "seat";
+      // Keep the chosen angle while the agent is where it was; recompose when it moves or a new agent is selected.
+      const h = held.current, keep = h && h.id === id && Math.hypot(h.at.x - p.x, h.at.z - p.z) < 0.3 ? h.az : undefined;
+      const f = frameAgent(id, p, yaw, seated, positionsRef.current, keep);
+      held.current = { id, az: f.azimuth, at: { x: p.x, z: p.z } };
+      ghostsRef.current = new Set(f.ghosts);
+      goalPos.current.set(f.cam.x, f.cam.y, f.cam.z); goalLook.current.set(f.look.x, f.look.y, f.look.z);
+    } else {
+      held.current = null;
+      if (ghostsRef.current.size) ghostsRef.current = NONE;
+      const r = focusRect(focus, positionsRef.current);
+      const span = level === "fleet" ? Math.max(r.w * 0.8, r.d) : Math.max(r.w * 0.95, r.d * 1.25);
+      const height = level === "fleet" ? span * 0.78 : span * 0.52 + 1.5, back = level === "fleet" ? span * 0.42 : span * 0.6;
+      goalLook.current.set(r.x, level === "fleet" ? 0 : 0.8, r.z + (level === "fleet" ? 3 : -1.6));
+      goalPos.current.set(r.x, height, r.z + back);
     }
-    else goalPos.current.set(r.x, height, r.z + back);
     if (!started.current || reduceMotion) { camera.position.copy(goalPos.current); look.current.copy(goalLook.current); started.current = true; }
     else {
-      const k = 1 - Math.exp(-dt * 3.2);
+      const k = 1 - Math.exp(-dt * 3.0);
       const far = camera.position.distanceTo(goalPos.current);
       const lift = Math.min(10, far * 0.25);
       const tmp = goalPos.current.clone(); tmp.y += lift * Math.min(1, far / 20);

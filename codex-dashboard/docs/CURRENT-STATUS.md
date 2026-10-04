@@ -318,3 +318,141 @@ Across all four sizes the map stays at 60 fps, labels overlap 0 %, and heap grow
 Reproduce:
 - `FLEET_HQ_TESTS=1 [FLEET_HQ_SHOTS=dir] [FLEET_HQ_GPU=1] npx vitest run src/__tests__/fleet/fleet-virtual-hq-pg.test.ts`
 - `FLEET_SCALE_TESTS=1 …fleet-virtual-scale-pg.test.ts`
+
+## Virtual HQ refinement, portraits v3 and team projects — 4 October 2026 (version 0.5.0)
+
+Presentation refinement on top of 0.4.0, plus the dashboard side of the multi-agent team projects added in schema v42
+(backend: `docs/design/f2-autonomous-economy.md` §39). Live state, bindings, the gateway, selection, safety boundaries,
+economy, autonomy and replication are unchanged; the HQ shows only FleetController's data.
+
+**Portraits v3** (`command/portrait.ts`)
+- 128×128 painted faces. Each is computed as a 2.5D height field (skull, brow ridge, eye sockets, cheekbones, nose,
+  lips, jaw, ears, neck and shoulders), lit by a warm key light, a cool cyan rim light and cavity occlusion. Skin,
+  hair, eyes, lips, facial hair, scars, an earpiece and the uniform collar are painted on top.
+- Identity is seeded from the agent id. The same face appears in every condition: composed (HEALTHY); shades and a
+  half smile (WINNING); fatigue, a bruise and a cut (WOUNDED); battered, with one eye swollen shut (CRITICAL);
+  powered down and desaturated (DEAD). Nothing graphic, and no comedy X-eyes.
+- Shown at 64 px in compact places and 128 px on profiles, as a `data:` PNG (allowed by the CSP).
+- Portraits are painted in idle slices of about 17 ms each, so 50 agents never block the page.
+
+**Operators v3** (`virtual/hq/crowd.tsx`)
+- Adult proportions: a tapered torso, deltoids, lathed limbs, hands with thumbs and boots.
+- Uniform: a vest and harness, cyan piping, and a role insignia in the room's accent colour.
+- Hair shapes per style.
+- The face is the agent's own portrait, cut out and mapped onto the head through a shared face atlas, so 3D and portrait
+  are the same face in the same condition.
+- Poses: walk, fast walk on long transitions, idle, seated work, held, terminal operation, team meeting, dead.
+
+**The building** (`virtual/hq/world-build.ts`)
+- **Work spots:** every department has them (seats at desks, places at consoles, tables and booths). An agent sits or
+  stands at one inside the room its FleetController state puts it in. The room itself never changes (`hq/spots.ts`).
+- **Furniture by department:**
+  - Fleet Command: a tactical console arc, the agents board, and the missions and team-projects boards.
+  - Treasury: vault, ledger desks, the Treasury event board, settlement stations, access gates, the hanging hub display
+    and the banner.
+  - Opportunity Lab: the opportunities board, an analysis table with a survey display, evidence boards and research desks.
+  - Agent Floor: workstations with desk lights, pedestals, dividers and status strips that power with the station.
+  - Marketing: a media wall, review desks and a studio set.
+  - Library / Research: an archive with data columns and a knowledge-graph wall.
+  - Venture / Dev: racks, the ventures and team-projects boards, dev desks and a team table.
+  - Identity: booths with kiosks.
+  - Estate Storage: labelled archive sections.
+  - Comms: switchboards, an antenna array and switching stations.
+  - Security / Systems: a NOC wall, the alerts board and two tiers of desks.
+- **Boards list real items** (`hq/data.ts` `hqBoardsFrom`): agents and their condition, missions, opportunities,
+  ventures, knowledge, alerts, estate items, Treasury events and team projects. An empty source says it is empty.
+- **The Treasury banner** shows FLEET TREASURY and the authoritative cash (`treasuryCash`: in LIVE only the gateway's
+  figure; if it is missing the banner reads —, never 0).
+  - A ticker below lists only breakdowns the data carries: owner funding, fleet-generated profit, operating pool,
+    committed envelopes and owner withdrawn. Restricted / tax reads — because the gateway does not supply it.
+  - A real change slides the old figure out and the new one in, with no invented intermediate amounts.
+  - The banner is tilted towards the corridor so it reads from the Fleet view.
+- **Lighting:** dimmer base light on High and Ultra, room lights scaled by each room's mood (quiet rooms are darker),
+  pools of light under the fixtures and restrained bloom.
+  - Ultra adds GTAO ambient occlusion, SMAA, a vignette, real planar floor reflections, narrow light shafts under the
+    fixtures and spine gantries.
+
+**Information flow** (`hq/route.ts`, `hq/flow.tsx`)
+- **Source:** every packet is one recorded event (or one difference between two authoritative readings), as before.
+- **Route:** it now travels the building's data conduits: out of the source room's opening, along the cross corridor,
+  along a spine, and in through the destination's opening. It never passes through walls.
+- **While travelling:** the route lights up, the ends flash, and a label rides with the packet (KNOWLEDGE RECORDED,
+  CAPITAL ALLOCATED, SALE RECORDED, SETTLEMENT, MISSION UPDATE, TASK DELIVERED, PROJECT PAYMENT and so on). Labels
+  keep a constant on-screen size, and packets scale with distance, so they read from the Fleet view.
+- **Reduce Motion:** nothing travels. The lit route, direction chevrons, both ends and the label are shown for the
+  same time (`flowFrame`, unit-tested).
+- **Two-agent project events** (offer, joined, task delivered or accepted, payment) travel from one agent to the other
+  as recorded (`fromAgentId` → `toAgentId`).
+
+**Camera** (`hq/framing.ts`)
+- Agent View chooses an angle that shows the face from inside the room or its open side, never behind a wall.
+- It avoids people on the line of sight and people standing beside the camera.
+- Anyone still in the way is faded out while the view holds, and the chosen angle is kept while the agent stays put.
+- The department view is a little wider, so side desks stay in frame.
+
+**Team projects in the dashboard** (`command/projects.tsx`, the `projects` read)
+- **Fleet Command:** active and planning projects, team size, status and planned time saved.
+- **Venture / Dev panel, agent panel and Formal agent profile:** a project card with the lead, team and roles, each
+  member's exact compensation, contract status, contribution status, earned and paid amounts, and the planner's ETAs.
+  - ETAs shown: solo, team, projected remaining, and realised time saved once completed.
+  - Also: budget, expected value, funding source, the lead's recorded reasoning and the task graph.
+- **In the HQ:** project activity places agents in Venture / Dev (`project_*` events). Teammates of an active
+  project who are in the same room meet at its team table (`meetSeat` / `meetStand`). An agent on no team is never
+  seated there while its own desk is free.
+- **Simulation:** shows one fictional project, labelled as such.
+
+**Degradation:** unchanged. A GPU without shadow-map support keeps 3D without shadow maps, and other failures fall
+back to the 2D map.
+
+Tests:
+- Unit (`fleet-command-centre.test.ts`, 50), including:
+  - portraits are 128×128, identity persists across states, and avatar identity matches the portrait;
+  - the banner is authoritative and shows — when unknown;
+  - boards list real items only;
+  - flows follow events and the conduits, with no event meaning no traffic, and Reduce Motion keeping the
+    information;
+  - Agent View is not occluded;
+  - work spots and team tables follow the rules above;
+  - Ultra is richer than High with the same world.
+- LIVE run (`fleet-virtual-hq-pg.test.ts`, gated by `FLEET_HQ_TESTS=1`): a real team project created through the
+  agents' own operations, the department views, a real event in flight, every quality level, and an optional
+  performance matrix (`FLEET_HQ_MATRIX=1`).
+
+**Performance** (LIVE export, real Fleets, 1600×1000; fps shown as Fleet / Department / Agent view).
+
+GPU: the dev VM's virtual GPU (VMware SVGA3D, ANGLE/GL). Its driver cannot build shadow maps, so they are off there.
+
+| Agents | Low | Medium | High | Ultra |
+|---|---|---|---|---|
+| 1 | 59 / 60 / 57 | 39 / 60 / 60 | 44 / 58 / 60 | 12 / 46 / 54 |
+| 10 | 60 / 60 / 60 | 60 / 60 / 60 | 46 / 59 / 60 | 14 / 44 / 38 |
+| 25 | 60 / 60 / 60 | 61 / 60 / 60 | 43 / 60 / 60 | 10 / 46 / 41 |
+| 50 | 60 / 60 / 60 | 60 / 60 / 60 | 48 / 60 / 60 | 14 / 47 / 57 |
+
+- Ultra's Fleet view is bound by the full-frame planar reflection pass plus GTAO; that is the expected cost of the
+  maximum level.
+- The 39 fps for 1 agent at Medium is a single measurement in a run whose other sizes all reached 60 at Medium.
+
+Software WebGL (SwiftShader, a fallback and test case), 12 agents:
+
+| Quality | Fleet / Department / Agent |
+|---|---|
+| Low | 32 / 46 / 56 fps |
+| Medium | 4.3 / 5.3 / 6 fps |
+| High | 1.7 / 2.3 / 3 fps |
+| Ultra | 1.3 / 1.3 / 1.7 fps |
+
+Scale run at Low with software WebGL, settled 3D fps:
+
+| Agents | 3D fps |
+|---|---|
+| 1 | 49 |
+| 10 | 56 |
+| 25 | 34 |
+| 50 | 28 (0.4.0: 23) |
+
+How this was achieved without hiding anything:
+- **Low:** shading is baked into the geometry and drawn with unlit materials.
+- **Building:** indexed merged geometry, split per room so out-of-view rooms are culled.
+- **People:** only those in view are drawn. The Fleet view skips sub-pixel details. Round parts use lower
+  tessellation on Low.

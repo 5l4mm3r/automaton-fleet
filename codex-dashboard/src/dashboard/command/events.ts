@@ -12,10 +12,11 @@ export type VisualKind =
   | "CAPITAL_REQUEST_CREATED" | "CAPITAL_REQUEST_DECIDED" | "TREASURY_TRANSFER" | "REVENUE_EVENT" | "EXPENSE_EVENT"
   | "MISSION_STARTED" | "MISSION_COMPLETED" | "RESEARCH_EVENT" | "OPPORTUNITY_EVENT" | "MARKETING_EVENT" | "VENTURE_EVENT"
   | "IDENTITY_EVENT" | "COMMS_EVENT" | "DEPENDENCY_EVENT" | "AGENT_DIED" | "ESTATE_TRANSFER" | "AGENT_BORN" | "REPLICATION_EVENT"
-  | "SYSTEM_ALERT" | "CAPABILITY_CHANGED";
+  | "SYSTEM_ALERT" | "CAPABILITY_CHANGED" | "PROJECT_EVENT";
 
 /** A stop on a flow: a department, the agent's own position, or the outside world (customers, providers). */
-export type FlowStop = DepartmentId | "agent" | "external";
+/** A stop on an information route: a department, the event's agent, the other agent of a two-agent event, the outside. */
+export type FlowStop = DepartmentId | "agent" | "counterpart" | "external";
 
 export interface FleetEvent {
   /** Stable identity for de-duplication (the gateway's rows carry no id). */
@@ -33,6 +34,8 @@ export interface VisualEvent {
   kind: VisualKind;
   at: string;
   agentId: string | null;
+  /** The other agent of a two-agent event (a team project's lead and member), when the event records one. */
+  counterpartId?: string | null;
   /** The route information travels (empty: nothing travels, e.g. a state change shown on the agent). */
   path: FlowStop[];
   label: string;
@@ -82,6 +85,12 @@ const RULES: Rule[] = [
   [/^mission_requested$/, () => ({ kind: "MISSION_STARTED", path: ["command"], label: "Mission requested" })],
   [/^knowledge_/, () => ({ kind: "RESEARCH_EVENT", path: ["library", "agent", "command"], label: "Research recorded" })],
   [/^opportunity_/, (e) => ({ kind: "OPPORTUNITY_EVENT", path: ["opportunity", "agent"], label: words(e.type) })],
+  // Team projects: two-agent events travel between the two agents (fromAgentId → toAgentId as recorded); the others are
+  // the project's own record in Venture / Dev.
+  [/^project_/, (e) => ({ kind: "PROJECT_EVENT", label: PROJECT_LABEL[e.type] ?? words(e.type),
+    path: typeof e.detail.fromAgentId === "string" && typeof e.detail.toAgentId === "string"
+      ? (e.detail.fromAgentId === e.agentId ? ["agent", "counterpart"] : ["counterpart", "agent"])
+      : ["agent", "venture"] })],
   [/^(venture_|decision_(recorded|measured|corrected)|experiment_)/, (e) => ({ kind: "VENTURE_EVENT", path: ["agent", "venture"], label: words(e.type) })],
   [/^agent_died$/, () => ({ kind: "AGENT_DIED", path: ["agent", "estate"], label: "Agent died" })],
   [/^estate_/, (e) => ({ kind: "ESTATE_TRANSFER", path: ["agent", "estate"], label: words(e.type) })],
@@ -97,6 +106,14 @@ const RULES: Rule[] = [
   [/^agent_hold_(set|released)$/, (e) => ({ kind: "AGENT_STATE_CHANGED", path: ["command", "agent"], label: e.type === "agent_hold_set" ? "Held by the Admin" : "Hold released" })],
 ];
 
+const PROJECT_LABEL: Readonly<Record<string, string>> = {
+  project_created: "Project created", project_started: "Project started", project_funded: "Project funded", project_replanned: "Project replanned",
+  project_member_offered: "Team offer", project_member_joined: "Team member joined", project_member_declined: "Offer declined", project_member_countered: "Counter-offer",
+  project_offer_withdrawn: "Offer withdrawn", project_task_started: "Task started", project_task_delivered: "Task delivered", project_task_accepted: "Delivery accepted",
+  project_task_rejected: "Delivery rejected", project_payment: "Project payment", project_member_exited: "Member exited", project_member_removed: "Member replaced",
+  project_completed: "Project completed", project_cancelled: "Project cancelled",
+};
+
 /** One FleetController event → its visual event (null: listed in feeds, not animated). */
 export function visualFromEvent(e: FleetEvent): VisualEvent | null {
   for (const [re, make] of RULES) {
@@ -104,8 +121,10 @@ export function visualFromEvent(e: FleetEvent): VisualEvent | null {
     const v = make(e);
     if (!v) return null;
     // A route through "agent" needs an agent; without one the information goes to Fleet Command instead.
-    const path = e.agentId ? v.path : v.path.map((s) => (s === "agent" ? "command" : s)).filter((s, i, a) => i === 0 || a[i - 1] !== s);
-    return { ...v, path, id: `ev:${e.key}`, at: e.at, agentId: e.agentId, source: e.type };
+    const from = typeof e.detail.fromAgentId === "string" ? e.detail.fromAgentId : null, to = typeof e.detail.toAgentId === "string" ? e.detail.toAgentId : null;
+    const counterpartId = from && to ? (from === e.agentId ? to : from) : null;
+    const path = (e.agentId ? v.path : v.path.map((s) => (s === "agent" ? "command" : s))).filter((s) => s !== "counterpart" || counterpartId).filter((s, i, a) => i === 0 || a[i - 1] !== s);
+    return { ...v, path, id: `ev:${e.key}`, at: e.at, agentId: e.agentId, counterpartId, source: e.type };
   }
   return null;
 }

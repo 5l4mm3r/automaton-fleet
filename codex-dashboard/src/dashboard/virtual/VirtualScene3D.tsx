@@ -12,7 +12,7 @@
  * calls), instanced stations and crowd, one capped frame driver that stops while the tab is hidden; a lost WebGL context
  * hands over to the 2D map.
  */
-import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
+import { Canvas, useThree, type ThreeEvent } from "@react-three/fiber";
 import { memo, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import * as THREE from "three";
 import type { AgentModel } from "../command/agents";
@@ -20,15 +20,17 @@ import { DEPARTMENTS, type DepartmentId } from "../command/departments";
 import type { VirtualPrefs } from "../command/prefs";
 import type { Projector } from "./AgentLabels";
 import type { Focus } from "./VirtualMap";
-import { livePackets, packetAt, type BirthState, type Packet, type Point } from "./world";
+import type { BirthState, Packet, Point } from "./world";
 import { buildWorld } from "./hq/world-build";
 import { createMaterials } from "./hq/materials";
-import type { MatKey } from "./hq/builder";
+import { matOf, type MatKey } from "./hq/builder";
 import { HQ_PROFILE, type HQProfile } from "./hq/quality";
 import { Crowd } from "./hq/crowd";
 import { Stations } from "./hq/stations";
-import { Screens, type HQData } from "./hq/screens";
-import { Atmosphere, Beacons, CommandCore, Environment, Lights, PostFX } from "./hq/effects";
+import { Screens, type ScreenFeed } from "./hq/screens";
+import { Atmosphere, Beacons, CommandCore, Environment, FloorReflections, LightPools, Lights, PostFX } from "./hq/effects";
+import { DataFlow } from "./hq/flow";
+import { workTargets } from "./hq/spots";
 import { CameraRig } from "./hq/camera";
 
 const NO_SHADOW_MAPS_KEY = "fleet.virtual.gpu.noShadowMaps.v1";
@@ -37,8 +39,8 @@ const WORLD_UV: ReadonlySet<MatKey> = new Set(["floor", "corridor", "wall"] as M
 
 /** The static building, merged per material; clicking a room's floor opens that department. */
 const Building = memo(function Building({ q, plan, onRoom }: { q: HQProfile; plan: ReturnType<typeof buildWorld>; onRoom: (id: DepartmentId) => void }) {
-  const geos = useMemo(() => plan.builder.build(WORLD_UV), [plan]);
-  const details = useMemo(() => plan.details.build(WORLD_UV), [plan]);
+  const geos = useMemo(() => plan.builder.build(WORLD_UV, 2, !q.pbr), [plan, q.pbr]);
+  const details = useMemo(() => plan.details.build(WORLD_UV, 2, !q.pbr), [plan, q.pbr]);
   useEffect(() => () => { for (const g of geos.values()) g.dispose(); for (const g of details.values()) g.dispose(); }, [geos, details]);
   const mats = useMemo(() => createMaterials(q), [q]);
   useEffect(() => () => mats.dispose(), [mats]);
@@ -46,29 +48,15 @@ const Building = memo(function Building({ q, plan, onRoom }: { q: HQProfile; pla
     const p = e.point, d = DEPARTMENTS.find((r) => Math.abs(p.x - r.x) <= r.w / 2 && Math.abs(p.z - r.z) <= r.d / 2);
     if (d) { e.stopPropagation(); onRoom(d.id); }
   };
-  const meshes = (map: Map<MatKey, THREE.BufferGeometry>, tag: string) => [...map].map(([key, g]) => <mesh key={`${tag}:${key}`} geometry={g} material={mats.get(key)}
-    castShadow={!!q.shadows && !RECEIVE_ONLY.has(key) && !key.startsWith("glow:")} receiveShadow={!!q.shadows && !key.startsWith("glow:")}
-    onClick={key === "floor" ? pick : undefined} onPointerOver={key === "floor" ? () => { document.body.style.cursor = "pointer"; } : undefined}
-    onPointerOut={key === "floor" ? () => { document.body.style.cursor = ""; } : undefined} />);
+  const meshes = (map: Map<string, THREE.BufferGeometry>, tag: string) => [...map].map(([key, g]) => {
+    const mat = matOf(key), floor = mat === "floor";
+    return <mesh key={`${tag}:${key}`} geometry={g} material={mats.get(mat)}
+      castShadow={!!q.shadows && !RECEIVE_ONLY.has(mat) && !mat.startsWith("glow:")} receiveShadow={!!q.shadows && !mat.startsWith("glow:")}
+      onClick={floor ? pick : undefined} onPointerOver={floor ? () => { document.body.style.cursor = "pointer"; } : undefined}
+      onPointerOut={floor ? () => { document.body.style.cursor = ""; } : undefined} />;
+  });
   return <>{meshes(geos, "w")}{q.detail >= 2 && meshes(details, "d")}</>;
 });
-
-function Packets({ packets, prefs, cap }: { packets: Packet[]; prefs: VirtualPrefs; cap: number }) {
-  const mesh = useRef<THREE.InstancedMesh>(null);
-  const live = useRef(packets);
-  useEffect(() => { live.current = packets; }, [packets]);
-  const geom = useMemo(() => new THREE.SphereGeometry(0.16, 12, 10), []), mat = useMemo(() => new THREE.MeshBasicMaterial({ toneMapped: false }), []);
-  useEffect(() => () => { geom.dispose(); mat.dispose(); }, [geom, mat]);
-  const m4 = useMemo(() => new THREE.Matrix4(), []), colour = useMemo(() => new THREE.Color(), []);
-  useFrame(() => {
-    const im = mesh.current; if (!im) return;
-    const now = Date.now(), shown = prefs.dataFlow && !prefs.reduceMotion ? livePackets(live.current, now, cap) : [];
-    let n = 0;
-    for (const p of shown) { const at = packetAt(p, now); if (!at) continue; m4.makeTranslation(at.x, 1.6, at.z); im.setMatrixAt(n, m4); im.setColorAt(n, colour.set(p.colour)); n++; }
-    im.count = n; im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true;
-  });
-  return <instancedMesh ref={mesh} args={[geom, mat, cap]} frustumCulled={false} />;
-}
 
 /** Publishes the world → screen projection for the HTML label layer. */
 function ProjectorOut({ projectRef }: { projectRef: MutableRefObject<Projector | null> }) {
@@ -104,13 +92,15 @@ function Driver({ fps }: { fps: number }) {
   return null;
 }
 
-export default function VirtualScene3D({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, onLost, positionsRef, projectRef, stations, births, hqData, redAlert }: {
+export default function VirtualScene3D({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, onLost, positionsRef, projectRef, stations, births, screenFeed, redAlert, teams }: {
   models: AgentModel[]; targets: Map<string, Point>; packets: Packet[]; focus: Focus; prefs: VirtualPrefs; selected: string | null;
   onRoom: (id: DepartmentId) => void; onAgent: (id: string) => void; onLost: () => void;
   positionsRef: MutableRefObject<Map<string, Point>>; projectRef: MutableRefObject<Projector | null>;
   stations: ReadonlyMap<string, Point>; births: ReadonlyMap<string, number>; birthStates: ReadonlyMap<string, BirthState>;
-  /** Authoritative figures for the screens, and whether FleetController has unacknowledged RED alerts. */
-  hqData: HQData; redAlert: boolean;
+  /** Authoritative figures, items and the Treasury banner for the screens; whether FleetController has unacknowledged RED alerts. */
+  screenFeed: ScreenFeed; redAlert: boolean;
+  /** Agents actively collaborating on a team project (agent → project), from FleetController's project records. */
+  teams: ReadonlyMap<string, string>;
 }) {
   // Some GPU drivers cannot link shadow-map shaders. The first shader failure with shadows on retries the same level
   // without shadow maps (everything else kept); a failure without them hands over to the 2D map.
@@ -124,6 +114,11 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const ambient = prefs.ambient && !prefs.reduceMotion;
+  // Where each agent stands or sits: its department comes from FleetController (targets); inside a room it takes that
+  // room's next free work spot (a desk, a console, a table), so people are at the equipment, not on an empty grid.
+  // People the Agent View camera wants out of its line of sight (faded by the crowd).
+  const ghosts = useRef<ReadonlySet<string>>(new Set());
+  const work = useMemo(() => workTargets(models, targets, stations, plan.spots, teams), [models, targets, stations, plan.spots, teams]);
 
   return <Canvas key={`${prefs.quality}:${q.shadows}`} frameloop="never" dpr={[1, q.dpr]} shadows={q.shadows === "soft" ? "percentage" : q.shadows === "basic" ? "basic" : false}
     camera={{ position: [0, 70, 50], fov: 42, near: 0.3, far: 400 }}
@@ -145,17 +140,19 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
     onPointerMissed={() => { document.body.style.cursor = ""; }}>
     <Driver fps={prefs.fps} />
     <ProjectorOut projectRef={projectRef} />
-    <CameraRig focus={focus} positionsRef={positionsRef} reduceMotion={prefs.reduceMotion} />
+    <CameraRig focus={focus} positionsRef={positionsRef} reduceMotion={prefs.reduceMotion} spots={work.spots} stations={stations} ghostsRef={ghosts} />
     <Lights q={q} lights={plan.lights} />
     <Environment q={q} />
     <Atmosphere q={q} lights={plan.lights} ambient={ambient} />
     <Building q={q} plan={plan} onRoom={onRoom} />
-    <Screens spots={plan.screens} data={hqData} q={q} />
+    <LightPools q={q} lights={plan.lights} />
+    <FloorReflections q={q} />
+    <Screens spots={plan.screens} feed={screenFeed} q={q} reduceMotion={prefs.reduceMotion} />
     <CommandCore at={plan.core} q={q} ambient={ambient} />
     <Beacons spots={plan.beacons} red={redAlert} ambient={ambient} />
     <Stations models={models} stations={stations} births={births} reduceMotion={prefs.reduceMotion} q={q} />
-    <Crowd models={models} targets={targets} births={births} selected={selected} q={q} reduceMotion={prefs.reduceMotion} positionsRef={positionsRef} onAgent={onAgent} stations={stations} />
-    <Packets packets={packets} prefs={prefs} cap={q.particles ? 60 : 24} />
+    <Crowd models={models} targets={work.targets} spots={work.spots} meetings={work.meetings} ghostsRef={ghosts} births={births} selected={selected} q={q} reduceMotion={prefs.reduceMotion} positionsRef={positionsRef} onAgent={onAgent} stations={stations} />
+    <DataFlow packets={packets} enabled={prefs.dataFlow} reduceMotion={prefs.reduceMotion} q={q} />
     <PostFX q={q} />
   </Canvas>;
 }

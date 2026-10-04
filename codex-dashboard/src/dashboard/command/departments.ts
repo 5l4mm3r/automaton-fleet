@@ -65,7 +65,7 @@ const MODE_DEPARTMENT: Readonly<Record<string, DepartmentId>> = Object.freeze({
 
 /** Event type → department, by exact name or prefix (first match). Covers FleetController's event vocabulary. */
 const EVENT_RULES: ReadonlyArray<[RegExp, DepartmentId]> = [
-  [/^(venture_|experiment_|decision_(recorded|measured|corrected))/, "venture"],
+  [/^(venture_|experiment_|decision_(recorded|measured|corrected)|project_)/, "venture"],
   [/^opportunity_/, "opportunity"],
   [/^knowledge_/, "library"],
   [/^(identity_|account_|agent_identity_created|browser_credential_|credential_|agent_credential_revoked|agent_account_credentials_revoked)/, "identity"],

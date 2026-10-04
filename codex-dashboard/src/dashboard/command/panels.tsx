@@ -37,7 +37,7 @@ export function factsOf(detail: Row | null | undefined, max = 5): Array<[string,
 
 export function AgentRow({ m, onOpen }: { m: AgentModel; onOpen?: (id: string) => void }) {
   return <div className="flex items-center gap-3">
-    <AgentPortrait id={m.agent.id} name={m.agent.name} band={m.health.band} size={40} />
+    <AgentPortrait id={m.agent.id} name={m.agent.name} band={m.health.band} size={64} />
     <div className="min-w-0">
       {onOpen ? <button className="text-cyan-300 underline" onClick={() => onOpen(m.agent.id)}>{m.agent.name}</button> : <strong>{m.agent.name}</strong>}
       <p className="text-xs text-slate-400"><span className="font-mono">{money(m.agent.cash)}</span> · <HealthTag health={m.health} /> · {m.placement.activity}</p>

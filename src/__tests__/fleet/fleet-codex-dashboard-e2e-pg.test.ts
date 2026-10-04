@@ -264,8 +264,12 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     const exp = await expectedBand(A.id);
     const row = page.locator("tr", { hasText: A.id });
     await row.getByText(`${exp.label} · ${exp.pct}%`).waitFor();
-    expect(await row.locator("svg[data-band]").count()).toBe(1);
-    expect(await row.locator("svg[role=img]").getAttribute("aria-label")).toMatch(/portrait/);
+    // The painted 128×128 portrait (a data: PNG under the CSP), with its state in text and data.
+    await row.locator("img[data-band]").waitFor();
+    expect(await row.locator("img[data-band]").count()).toBe(1);
+    expect(await row.locator("img[role=img]").getAttribute("alt")).toMatch(/portrait/);
+    expect(await row.locator("img[data-band]").getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+    expect(await row.locator("img[data-band]").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(128);
   });
 
   it("Virtual shows the same Fleet: same health and figures, a real event moves the agent live, 3D and map, the feed recovers", async () => {

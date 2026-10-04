@@ -2,7 +2,7 @@
  * LIVE reads for Fleet Command and the Virtual Command Centre — existing gateway read operations only (no new backend):
  *   settings (Genesis allocation, policies, flags) · hub agents (each agent's wallet) · risk (per living agent) ·
  *   events (FleetController's event log) · hub capital / ventures / opportunities / dependencies / overview / treasury ·
- *   knowledge.
+ *   knowledge · projects (multi-agent team projects).
  * Same rules as the snapshot: each section is the backend's answer or listed unavailable; a signed-out session throws.
  * Rate: one command view is ~10 reads plus one `risk` read per living agent, the risk part at most every RISK_TTL_MS
  * (50 agents stay far inside the gateway's 600 requests/minute). The pulse is two reads.
@@ -39,7 +39,7 @@ export class CommandReader {
 
   async load(): Promise<CommandView> {
     const c = this.c, missing: string[] = [];
-    const [settings, hubAgents, ev, capital, ventures, opportunities, dependencies, overview, treasury, knowledge, agents] = await Promise.all([
+    const [settings, hubAgents, ev, capital, ventures, opportunities, dependencies, overview, treasury, knowledge, agents, projects] = await Promise.all([
       read<Row>(c, "settings", {}, missing, "settings"),
       read<Row[]>(c, "hub", { section: "agents" }, missing, "economics"),
       read<Row[]>(c, "events", { limit: EVENT_LIMIT }, missing, "events"),
@@ -51,6 +51,7 @@ export class CommandReader {
       read<Row>(c, "hub", { section: "treasury" }, missing, "treasury"),
       read<Row[]>(c, "knowledge", { limit: 100 }, missing, "knowledge"),
       read<AgentRow[]>(c, "agents", {}, missing, "agents"),
+      read<Row>(c, "projects", { limit: 50 }, missing, "projects"),
     ]);
     const living = (agents ?? []).filter((a) => a.status !== "dead" && a.status !== "failed").map((a) => a.agentId);
     await this.refreshRisk(living, missing);
@@ -66,6 +67,7 @@ export class CommandReader {
       mode: "live", fetchedAt: new Date().toISOString(), genesisMinor: genesis && genesis > 0 ? genesis : null,
       currency: String(g?.currency ?? overview?.currency ?? "GBP"), economics, events: events(ev),
       capital: rows(capital), ventures: rows(ventures), opportunities: rows(opportunities), knowledge: rows(knowledge), dependencies: rows(dependencies),
+      projects: rows(projects?.projects), projectSummary: (projects?.summary as Row | undefined) ?? null,
       overview: overview ?? null, treasury: treasury ?? null, settings: settings ?? null, unavailable: [...new Set(missing)],
     };
   }

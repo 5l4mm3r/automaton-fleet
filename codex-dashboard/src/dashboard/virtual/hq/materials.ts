@@ -70,14 +70,13 @@ export function createMaterials(q: HQProfile): HQMaterials {
     if (key.startsWith("accent:") || key.startsWith("glow:")) {
       const colour = key.slice(key.indexOf(":") + 1), glow = key.startsWith("glow:");
       if (!q.pbr) return new THREE.MeshBasicMaterial({ color: glow ? colour : new THREE.Color(colour).multiplyScalar(0.75) });
-      return new THREE.MeshStandardMaterial({ color: glow ? "#0a0f18" : colour, emissive: colour, emissiveIntensity: glow ? (q.bloom ? 2.2 : 1.2) : 0.35, roughness: 0.4, metalness: 0.3 });
+      return new THREE.MeshStandardMaterial({ color: glow ? "#0a0f18" : colour, emissive: colour, emissiveIntensity: glow ? (q.bloom ? 1.5 : 1.1) : 0.3, roughness: 0.4, metalness: 0.3 });
     }
     const b = BASE[key] ?? BASE.metal;
     const map = maps[key] ?? null;
     if (!q.pbr) {
-      // Flat shading has no specular or image light to lift dark surfaces, so Low brightens the palette instead.
-      const m = new THREE.MeshLambertMaterial({ color: new THREE.Color(b.color).multiplyScalar(key === "ground" ? 1 : 2.4), emissive: b.emissive ?? "#000000", emissiveIntensity: b.emissiveIntensity ?? 0, transparent: b.transparent !== undefined, opacity: b.transparent ?? 1, side: b.side ?? THREE.FrontSide });
-      return m;
+      // Low: unlit materials over the geometry's baked shading (builder bakeShade) — no per-pixel lighting at all.
+      return new THREE.MeshBasicMaterial({ color: new THREE.Color(b.color).multiplyScalar(key === "ground" ? 1 : 2.6), vertexColors: true, transparent: b.transparent !== undefined, opacity: b.transparent ?? 1, side: b.side ?? THREE.FrontSide });
     }
     const opts: THREE.MeshPhysicalMaterialParameters = {
       color: map ? "#ffffff" : b.color, map, roughness: q.reflections && (key === "floor" || key === "corridor") ? Math.max(0.12, b.rough - 0.35) : b.rough,

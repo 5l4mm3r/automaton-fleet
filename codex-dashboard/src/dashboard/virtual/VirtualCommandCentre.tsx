@@ -20,7 +20,8 @@ import type { FeedState } from "../command/useFleetCommand";
 import type { CommandView, Row } from "../command/view";
 import { AgentPanel, DepartmentPanel } from "./VirtualPanels";
 import { utc } from "../command/panels";
-import { hqDataFrom, redAlertOpen } from "./hq/data";
+import { hqBoardsFrom, hqDataFrom, redAlertOpen, treasuryBannerFrom } from "./hq/data";
+import { activeTeams } from "../command/projects";
 import { VirtualMap, type Focus } from "./VirtualMap";
 import { agentTargetsWithStations, birthState, BIRTH_ENTER_MS, BIRTH_EVENTS, BIRTH_FUNDING_EVENTS, BIRTH_MARK_MS, BIRTH_POWER_MS, livePackets, packetFor, stationIndex, stationPoint, type Packet, type Point } from "./world";
 import { AgentLabels, type Projector } from "./AgentLabels";
@@ -157,6 +158,9 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // What the HQ's screens show: FleetController's figures and items, recomputed only when the data changes.
+  const teams = useMemo(() => activeTeams(view), [view]);
+  const screenFeed = useMemo(() => ({ data: hqDataFrom(fleet, view, models), boards: hqBoardsFrom(fleet, view, models), banner: treasuryBannerFrom(fleet, view) }), [fleet, view, models]);
   if (!prefs || !hints) return <p className="text-sm text-slate-400">Preparing the Virtual Command Centre…</p>;
   const cls = deviceClass(hints);
   const use3d = !webglFailed && hints.webgl && (prefs.renderer === "3d" || (prefs.renderer === "auto" && cls !== "phone"));
@@ -167,7 +171,7 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
   const onAgent = (id: string) => setFocus({ level: "agent", id });
   const sceneProps = { models, targets, packets, focus, prefs: effective, selected: selectedAgent?.agent.id ?? null, onRoom, onAgent, positionsRef: positions, projectRef: project,
     stations, births, birthStates };
-  const hqData = hqDataFrom(fleet, view, models), redAlert = redAlertOpen(fleet);
+  const redAlert = redAlertOpen(fleet);
 
   return <section aria-label="Virtual Command Centre" className="space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -191,7 +195,7 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
     <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
       <div className="relative h-[62vh] min-h-[360px] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950">
         {use3d ? <SceneBoundary onError={() => setWebglFailed(true)}><Suspense fallback={<p className="p-5 text-sm text-slate-400">Loading the 3D facility…</p>}>
-          <Scene3D {...sceneProps} hqData={hqData} redAlert={redAlert} onLost={() => setWebglFailed(true)} /></Suspense></SceneBoundary>
+          <Scene3D {...sceneProps} screenFeed={screenFeed} redAlert={redAlert} teams={teams} onLost={() => setWebglFailed(true)} /></Suspense></SceneBoundary>
           : <VirtualMap {...sceneProps} />}
         <AgentLabels models={models} positionsRef={positions} projectRef={project} prefs={effective} selected={selectedAgent?.agent.id ?? null} fleetView={focus.level === "fleet"} onAgent={onAgent} hidden={hidden} marked={birthStates} />
         <ol aria-live="polite" aria-label="Recent Fleet activity" className="pointer-events-none absolute bottom-3 left-3 z-50 max-w-[70%] space-y-1 text-xs">

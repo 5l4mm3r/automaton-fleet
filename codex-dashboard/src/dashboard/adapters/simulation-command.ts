@@ -19,6 +19,23 @@ const OP_EVENT: Readonly<Record<string, string>> = Object.freeze({
   tick: "settlement_recorded", withdraw: "admin_withdrawal_requested", topup: "ledger_journal_posted",
 });
 
+/** One fictional team project, so the project views are exercised in the simulation (labelled fictional everywhere). */
+const SIMULATION_PROJECT = (at: string): Row => ({
+  projectId: "sim-p1", projectKey: "sim-pipeline", name: "Research pipeline (fictional)", objective: "Fictional: automate the research brief pipeline", ventureKey: "Signal intelligence (fictional)",
+  leadAgentId: "A-001", leadName: "Atlas", status: "active", stage: "building", risk: "medium", createdAt: at, startedAt: at, teamSize: 2,
+  economics: { expectedValueMinor: 90_000, budgetMinor: 12_000, coordinationBudgetMinor: 1_500, benefitMinor: 30_000, costMinor: 9_500, justified: true, fundingSource: "own_capital", escrowMinor: 9_000, paidMinor: 0,
+    gate: ["Fictional: backend and frontend run in parallel after the architecture task"] },
+  eta: { soloHours: 52, teamHours: 38, criticalPathHours: 34, coordinationHours: 4, plannedTimeSavedHours: 14, criticalPath: ["arch", "backend", "integrate"], projectedRemainingHours: 30 },
+  members: [{ memberId: "sim-m1", agentId: "A-003", name: "Rook", role: "engineer", taskScope: "Frontend build", expectedHours: 18, compensation: { type: "FIXED", fixedMinor: 6_000 }, status: "accepted", contributionStatus: "in_progress", earnedMinor: 0, paidMinor: 0 }],
+  tasks: [
+    { key: "arch", title: "Architecture", ownerRole: "lead", hours: 8, deps: [], status: "accepted", progressBp: 10_000 },
+    { key: "backend", title: "Backend", ownerRole: "lead", hours: 20, deps: ["arch"], status: "in_progress", progressBp: 4_000 },
+    { key: "frontend", title: "Frontend", ownerRole: "engineer", assigneeAgentId: "A-003", hours: 18, deps: ["arch"], status: "in_progress", progressBp: 5_000 },
+    { key: "integrate", title: "Integration", ownerRole: "lead", hours: 6, deps: ["backend", "frontend"], status: "pending", progressBp: 0 },
+  ],
+  events: [],
+});
+
 export class SimulationDeckAdapter {
   readonly mode = "simulation" as const;
   private readonly engine = new SimulationAdapter();
@@ -34,6 +51,8 @@ export class SimulationDeckAdapter {
       { at: t(20), type: "mission_started", agentId: "A-002", actor: "operator:owner", detail: { kind: "marketing" } },
       { at: t(12), type: "commitment_added", agentId: "A-003", actor: "agent", detail: { amountMinor: 2_200 } },
       { at: t(5), type: "agent_hold_set", agentId: "A-004", actor: "operator:owner", detail: { reason: "Fictional review" } },
+      { at: t(30), type: "project_created", agentId: "A-001", actor: "agent", detail: { projectKey: "sim-pipeline", name: "Research pipeline (fictional)", leadAgentId: "A-001" } },
+      { at: t(28), type: "project_member_joined", agentId: "A-003", actor: "agent", detail: { projectKey: "sim-pipeline", name: "Research pipeline (fictional)", leadAgentId: "A-001", fromAgentId: "A-003", toAgentId: "A-001" } },
     ];
     this.log = mergeEvents([], fixture.map(toFleetEvent).filter((e): e is FleetEvent => e !== null));
   }
@@ -82,6 +101,7 @@ export class SimulationDeckAdapter {
         wouldChange: ["Fictional: more evidence would raise the amount"], inputs: { cushionMet: true }, policyVersion: 1, at: this.log.find((e) => e.type === "capital_decision")?.at ?? "" }],
       ventures: f.agents.map((a) => ({ agentId: a.id, key: a.venture, state: a.status === "dead" ? "closed" : "operating", decisions: [] })),
       opportunities: [{ agentId: "A-004", title: "Frontier Labs lead (fictional)", status: "shortlisted" }],
+      projects: [SIMULATION_PROJECT(this.log.find((e) => e.type === "project_created")?.at ?? "")], projectSummary: { active: 1, planning: 0, completed: 0, cancelled: 0, agentsCollaborating: 2, plannedTimeSavedHours: 14, note: "Simulation: fictional project." },
       knowledge: [{ agentId: "A-001", topic: "demand", subject: "Independent research services (fictional)", claim: "Fictional claim for the simulation.", observedAt: this.log.at(-1)?.at }],
       dependencies: [], overview: { currency: "GBP", activeVentures: f.agents.filter((a) => a.status !== "dead").length },
       treasury: { unallocatedMinor: f.treasury, lifetimeContributionMinor: 0, flows30d: {} },

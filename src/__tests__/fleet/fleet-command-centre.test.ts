@@ -13,7 +13,7 @@ import { BAND_LABEL, HEALTH_THRESHOLDS, economicsFrom, healthOf, type AgentEcono
 import { ACTIVITY_WINDOW_MS, DEPARTMENT, DEPARTMENTS, eventDepartment, latestEventByAgent, placeAgent, slot } from "../../../codex-dashboard/src/dashboard/command/departments";
 import { diffReadings, isDecision, mergeEvents, toFleetEvent, visualFromEvent, type FleetEvent } from "../../../codex-dashboard/src/dashboard/command/events";
 import { QUALITY_PROFILE, defaultPrefs, loadPrefs, sanitizePrefs, savePrefs, STORAGE_KEY, type DeviceHints } from "../../../codex-dashboard/src/dashboard/command/prefs";
-import { PORTRAIT_SIZE, portraitGrid, portraitPaths, traitsOf } from "../../../codex-dashboard/src/dashboard/command/portrait";
+import { PORTRAIT_SIZE, identityColours, portraitFigure, portraitPixels, portraitPng, traitsOf } from "../../../codex-dashboard/src/dashboard/command/portrait";
 import { deriveAgents, mergePulseAgents } from "../../../codex-dashboard/src/dashboard/command/agents";
 import { agentTargets, agentTargetsWithStations, birthState, BIRTH_ENTER_MS, BIRTH_MARK_MS, BIRTH_POWER_MS, livePackets, packetAt, packetFor, focusRect, EXTERNAL, stationIndex, stationPoint } from "../../../codex-dashboard/src/dashboard/virtual/world";
 import { COMPACT_ABOVE, densityFor, layoutLabels, type LabelItem } from "../../../codex-dashboard/src/dashboard/virtual/labelLayout";
@@ -26,7 +26,12 @@ import { emptyCommandView, type CommandView } from "../../../codex-dashboard/src
 import { toLiveCommand } from "../../../codex-dashboard/src/dashboard/live/mapping";
 import { GatewayClient } from "../../../codex-dashboard/src/dashboard/api/client";
 import type { Agent, Fleet } from "../../../codex-dashboard/src/dashboard/model";
-import { hqDataFrom, redAlertOpen } from "../../../codex-dashboard/src/dashboard/virtual/hq/data";
+import { hqBoardsFrom, hqDataFrom, redAlertOpen, treasuryBannerFrom } from "../../../codex-dashboard/src/dashboard/virtual/hq/data";
+import { roomAt, routeThrough } from "../../../codex-dashboard/src/dashboard/virtual/hq/route";
+import { flowDuration, flowFrame, flowLabel } from "../../../codex-dashboard/src/dashboard/virtual/hq/flow";
+import { blockers, frameAgent, viewable } from "../../../codex-dashboard/src/dashboard/virtual/hq/framing";
+import { workTargets } from "../../../codex-dashboard/src/dashboard/virtual/hq/spots";
+import { activeTeams, compensationText, hours, projectsOf } from "../../../codex-dashboard/src/dashboard/command/projects";
 import { buildWorld } from "../../../codex-dashboard/src/dashboard/virtual/hq/world-build";
 import { HQ_PROFILE } from "../../../codex-dashboard/src/dashboard/virtual/hq/quality";
 
@@ -198,33 +203,202 @@ describe("display preferences (local only)", () => {
   });
 });
 
-describe("original operative portraits", () => {
-  it("identity is deterministic per agent and differs between agents", () => {
-    expect(portraitGrid("01M3F50SH7PNX2E3GST13J52AS", "HEALTHY")).toEqual(portraitGrid("01M3F50SH7PNX2E3GST13J52AS", "HEALTHY"));
+describe("original operative portraits (v3: 128×128 painted)", () => {
+  const BANDS = ["HEALTHY", "WINNING", "WOUNDED", "CRITICAL", "DEAD", "UNKNOWN"] as const;
+  const lum = (px: Uint8ClampedArray, i: number) => 0.3 * px[i * 4] + 0.59 * px[i * 4 + 1] + 0.11 * px[i * 4 + 2];
+  /** Correlation of luminance over a window (the structure of the face, independent of grading). */
+  const corr = (a: Uint8ClampedArray, b: Uint8ClampedArray, y0: number, y1: number, x0 = 30, x1 = 98) => {
+    const xs: number[] = [], ys: number[] = [];
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { xs.push(lum(a, y * PORTRAIT_SIZE + x)); ys.push(lum(b, y * PORTRAIT_SIZE + x)); }
+    const m = (v: number[]) => v.reduce((s, x) => s + x, 0) / v.length, ma = m(xs), mb = m(ys);
+    let num = 0, da = 0, db = 0; xs.forEach((x, i) => { num += (x - ma) * (ys[i] - mb); da += (x - ma) ** 2; db += (ys[i] - mb) ** 2; });
+    return num / Math.sqrt(da * db);
+  };
+  it("source resolution is 128×128 RGBA; identity is deterministic per agent and differs between agents", () => {
+    expect(PORTRAIT_SIZE).toBe(128);
+    const p = portraitPixels("01M3F50SH7PNX2E3GST13J52AS", "HEALTHY");
+    expect(p.length).toBe(128 * 128 * 4);
+    expect([...portraitPixels("01M3F50SH7PNX2E3GST13J52AS", "HEALTHY")]).toEqual([...p]);
     const seen = new Set(Array.from({ length: 40 }, (_, i) => JSON.stringify(traitsOf(`agent-${i}`))));
     expect(seen.size).toBeGreaterThan(20);
+    // A PNG for img-src data: (the built-in encoder outside the browser).
+    expect(portraitPng("01AGENT", "HEALTHY")).toMatch(/^data:image\/png;base64,iVBOR/);
   });
-  it("every band renders valid colours for many ids (regression: signed hash → missing palette entry)", () => {
-    const bad: string[] = [];
-    for (let i = 0; i < 1500; i++) {
-      for (const band of ["HEALTHY", "WINNING", "WOUNDED", "CRITICAL", "DEAD", "UNKNOWN"] as const) {
-        const g = portraitGrid(`id-${i}-${"x".repeat(i % 7)}`, band);
-        if (g.length !== PORTRAIT_SIZE || g.some((row) => row.length !== PORTRAIT_SIZE || row.some((c) => c !== null && !/^#[0-9a-f]{6}$/.test(c)))) bad.push(`${i} ${band}`);
-      }
+  it("every band renders for many ids (indices always in range; no NaN)", () => {
+    for (let i = 0; i < 300; i++) { const t = traitsOf(`id-${i}-${"x".repeat(i % 7)}`); expect(t.skin).toBeGreaterThanOrEqual(0); expect(t.eyes).toBeGreaterThanOrEqual(0); }
+    for (let i = 0; i < 6; i++) for (const band of BANDS) {
+      const p = portraitPixels(`id-${i}`, band);
+      expect(p.length).toBe(128 * 128 * 4);
+      expect(p.every((v, k) => (k % 4 === 3 ? v === 255 : v >= 0))).toBe(true);
     }
-    expect(bad).toEqual([]);
   });
-  it("condition changes the face: shades when winning, damage when wounded or critical, greyscale when dead", () => {
-    const id = "01AGENT", healthy = portraitGrid(id, "HEALTHY"), win = portraitGrid(id, "WINNING"), crit = portraitGrid(id, "CRITICAL"), dead = portraitGrid(id, "DEAD");
-    expect(win[14].slice(9, 23).every((c) => c === "#140e0b" || c === "#5b636b" || c === "#2b2b2b" || c === "#9aa4ae")).toBe(true); // shades across both eyes
-    expect(PORTRAIT_SIZE).toBe(32);
-    // Adult proportions: a neck and the uniform collar below the jaw, no helmet over the face.
-    expect(healthy[30].filter((c) => c === "#2b3a4d" || c === "#1c2736" || c === "#111821").length).toBeGreaterThan(20);
-    expect(JSON.stringify(crit)).toMatch(/#7f1d1d|#991b1b/); // blood
-    expect(JSON.stringify(portraitGrid(id, "WOUNDED"))).toMatch(/#6b4a7a/); // bruise
-    for (const row of dead) for (const c of row) if (c) expect(c.slice(1, 3)).toBe(c.slice(3, 5)); // grey
-    expect(JSON.stringify(healthy)).not.toBe(JSON.stringify(win));
-    expect(portraitPaths(id, "HEALTHY").length).toBeGreaterThan(5);
+  it("the same face persists through every health state; another agent's face does not match", () => {
+    const id = "founder-3", other = "founder-6", base = portraitPixels(id, "HEALTHY");
+    for (const band of BANDS) {
+      const same = corr(base, portraitPixels(id, band), 18, 52); // forehead, hair and brows: identity, not condition
+      expect(same, band).toBeGreaterThan(0.9);
+      expect(same, band).toBeGreaterThan(corr(base, portraitPixels(other, band), 18, 52));
+    }
+  });
+  it("condition is painted on the face: shades when winning, bruising and blood when critical, greyscale when dead (non-graphic)", () => {
+    const id = "01AGENT", healthy = portraitPixels(id, "HEALTHY"), win = portraitPixels(id, "WINNING"), crit = portraitPixels(id, "CRITICAL"), dead = portraitPixels(id, "DEAD");
+    const eyeBand = (p: Uint8ClampedArray) => { let s = 0, n = 0; for (let y = 56; y < 64; y++) for (let x = 44; x < 84; x++) { s += lum(p, y * 128 + x); n++; } return s / n; };
+    expect(eyeBand(win)).toBeLessThan(eyeBand(healthy) * 0.75); // dark lenses across the eyes
+    const reds = (p: Uint8ClampedArray) => { let n = 0; for (let i = 0; i < 128 * 128; i++) if (p[i * 4] > 80 && p[i * 4 + 1] < 45 && p[i * 4 + 2] < 45) n++; return n; };
+    expect(reds(crit)).toBeGreaterThan(reds(healthy) + 10); // blood, restrained
+    expect(reds(crit)).toBeLessThan(400); // …and not graphic
+    let maxSat = 0; for (let i = 0; i < 128 * 128; i++) { const r = dead[i * 4], g = dead[i * 4 + 1], b = dead[i * 4 + 2]; maxSat = Math.max(maxSat, Math.max(r, g, b) - Math.min(r, g, b)); }
+    expect(maxSat).toBeLessThan(40); // powered down, desaturated
+  });
+  it("the 3D operator shares the portrait's identity: the same seeded traits, and the face is cut from the portrait itself", () => {
+    for (let i = 0; i < 30; i++) {
+      const id = `agent-${i}`, t = traitsOf(id), c = identityColours(id);
+      expect(c.hairStyle).toBe(t.hair); expect(c.facialHair).toBe(t.facialHair); expect(c.width).toBe(t.width); expect(c.earpiece).toBe(t.earpiece);
+      expect(c).toEqual(identityColours(id));
+    }
+    const fig = portraitFigure("founder-1", "HEALTHY");
+    expect(fig[60 * 128 + 64]).toBe(255); // the face centre is person
+    expect(fig[2 * 128 + 2]).toBe(0); // the corner is background (cut away on the 3D head)
+  });
+});
+
+describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (presentation of authoritative data only)", () => {
+  const live = (over: Partial<NonNullable<Fleet["live"]>> = {}): Fleet => ({ treasury: 777_777, contributed: 0, revenue: 0, spend: 0, tick: 0, agents: [], notices: [], ledger: [], history: [],
+    missions: [], births: [], estates: [], documents: [], consents: [], passkeys: [], sessions: [], audit: [], processed: [],
+    policy: { threshold: 0, autoBirth: false, maxAgents: 2, dailyHour: 8, email: "", riskLimit: 0, missionLimit: 0 },
+    live: { fetchedAt: "2026-10-04T12:00:00Z", wealth: { cash: 1_248_200, ownerContributed: 1_000_000, ownerWithdrawn: 0, fleetGenerated: 0 }, flows24h: null, replication: null,
+      mail: "NOT_CONFIGURED", sms: "NOT_CONFIGURED", recordedNeeds: 0, storage: null, health: null, adminEmail: null, unavailable: [], ...over } });
+
+  it("the Treasury banner shows the authoritative Treasury cash; an unknown figure reads — and no other amount is substituted", () => {
+    const b = treasuryBannerFrom(live(), null);
+    expect(b.cash).toBe("£12,482.00"); expect(b.cashMinor).toBe(1_248_200);
+    const unknown = treasuryBannerFrom(live({ wealth: null }), null);
+    expect(unknown.cash).toBe("—"); expect(unknown.cashMinor).toBeNull();
+    expect(JSON.stringify(unknown)).not.toContain("7,777.77"); // the snapshot's fallback figure is never shown as Treasury cash
+    // Breakdowns the gateway does not supply read —, never estimated.
+    expect(Object.fromEntries(unknown.secondary)).toMatchObject({ "Restricted / tax": "—", "Operating pool": "—", "Committed (envelopes)": "—" });
+    expect(Object.fromEntries(b.secondary)).toMatchObject({ "Owner funding": "£10,000.00", "Fleet-generated profit": "£0.00" });
+    // The status screens follow the same rule.
+    expect(hqDataFrom(live({ wealth: null }), null, []).treasury![0]).toEqual(["Treasury cash", "—"]);
+  });
+
+  it("department boards list only real items; an empty source says it is empty", () => {
+    const f = live(), boards = hqBoardsFrom(f, emptyCommandView("live"), []);
+    expect(boards["opportunity:board"]!.rows).toEqual([]);
+    expect(boards["opportunity:board"]!.empty).toMatch(/No opportunities/);
+    expect(boards["security:board"]!.rows).toEqual([]);
+    const withData = hqBoardsFrom({ ...f, notices: [{ id: "n1", level: "RED", title: "Runtime check failed", time: "now", acknowledged: false } as unknown as Fleet["notices"][number]] },
+      { ...emptyCommandView("live"), opportunities: [{ key: "op-1", offer: "Data cleaning service", status: "shortlisted", agentId: "A1" }] }, []);
+    expect(withData["opportunity:board"]!.rows[0][0]).toContain("Data cleaning service");
+    expect(withData["security:board"]!.rows[0]).toEqual(["Runtime check failed", "RED", "bad"]);
+    // Every board placed in the building has a source.
+    for (const s of buildWorld().screens.filter((x) => x.kind === "board")) expect(boards[s.board!], s.id).toBeDefined();
+  });
+
+  it("a real Fleet event becomes a packet routed through the building's conduits (never through walls)", () => {
+    const e = { key: "k1", type: "knowledge_recorded", agentId: "A1", at: "2026-10-04T12:00:00Z", detail: {} } as FleetEvent;
+    const v = visualFromEvent(e)!;
+    const pk = packetFor(v, new Map([["A1", { x: 0, z: -4 }]]), 1000)!;
+    const route = routeThrough(pk.points);
+    expect(route[0]).toEqual(pk.points[0]); expect(route[route.length - 1]).toEqual(pk.points[pk.points.length - 1]);
+    // Between rooms the path runs along axis-aligned conduit segments.
+    for (let i = 1; i < route.length; i++) {
+      const a = route[i - 1], b = route[i];
+      if (roomAt(a) && roomAt(b) && roomAt(a)!.id === roomAt(b)!.id) continue;
+      expect(Math.abs(a.x - b.x) < 1e-6 || Math.abs(a.z - b.z) < 1e-6, `${JSON.stringify(a)}→${JSON.stringify(b)}`).toBe(true);
+    }
+    expect(flowLabel(pk)).toBe("KNOWLEDGE RECORDED");
+    // Treasury → Library goes out of the Treasury's front opening and in through the Library's.
+    const t2l = routeThrough([{ x: -18, z: -17 }, { x: 0, z: 11 }]);
+    expect(t2l).toContainEqual({ x: -18, z: -12 }); expect(t2l).toContainEqual({ x: 0, z: 16 });
+  });
+
+  it("no event, no traffic; Reduce Motion removes travel but keeps the information (route, ends, direction, label)", () => {
+    expect(flowFrame([], 5000, false)).toEqual({ heads: [], routes: [], rings: [], chevrons: [], labels: [] });
+    const route = routeThrough([{ x: -18, z: -17 }, { x: 0, z: 11 }]);
+    const f = { id: "f1", route, start: 1000, duration: flowDuration(route), colour: "#60a5fa", label: "KNOWLEDGE RECORDED" };
+    const moving = flowFrame([f], 2000, false);
+    expect(moving.heads).toHaveLength(1); expect(moving.labels[0].text).toBe("KNOWLEDGE RECORDED");
+    const still = flowFrame([f], 2000, true);
+    expect(still.heads).toEqual([]);
+    expect(still.routes).toHaveLength(1); expect(still.rings).toHaveLength(2); expect(still.chevrons.length).toBeGreaterThan(3);
+    expect(still.labels).toEqual([{ id: "f1", text: "KNOWLEDGE RECORDED", p: route[route.length - 1], y: 2.6 }]);
+    expect(flowFrame([f], 1000 + f.duration + 5000, false).heads).toEqual([]); // over: nothing lingers
+  });
+
+  it("Agent View keeps the selected agent unobstructed: another person in the preferred view moves the camera, never behind a wall", () => {
+    const p = { x: 18, z: 12 }, yaw = Math.PI; // facing north in Venture / Dev
+    const free = frameAgent("me", p, yaw, false, new Map([["me", p]]));
+    expect(free.ghosts).toEqual([]);
+    // Put someone exactly between that camera and the agent.
+    const mid = { x: (free.cam.x + p.x) / 2, z: (free.cam.z + p.z) / 2 };
+    const f = frameAgent("me", p, yaw, false, new Map([["me", p], ["other", mid]]));
+    expect(blockers({ x: f.cam.x, z: f.cam.z }, p, new Map([["other", mid]]), "me")).toEqual([]);
+    expect(viewable({ x: f.cam.x, z: f.cam.z }, p)).toBe(true);
+    // Surrounded on every side: the camera still frames the agent, and those in the way are faded.
+    const ring = new Map<string, { x: number; z: number }>([["me", p]]);
+    for (let i = 0; i < 24; i++) ring.set(`r${i}`, { x: p.x + Math.sin(i / 24 * Math.PI * 2) * 1.2, z: p.z + Math.cos(i / 24 * Math.PI * 2) * 1.2 });
+    const boxed = frameAgent("me", p, yaw, false, ring);
+    expect(boxed.ghosts.length).toBeGreaterThan(0);
+    expect(boxed.ghosts).not.toContain("me");
+  });
+
+  it("agents take work spots inside the room their state puts them in (the room never changes); the dead and workstation agents keep theirs", () => {
+    const plan = buildWorld();
+    for (const d of DEPARTMENTS) if (d.id !== "floor") expect(plan.spots[d.id].length, d.id).toBeGreaterThanOrEqual(2);
+    const ag = (id: string, status = "active") => ({ agent: { id, status } } as unknown as Parameters<typeof workTargets>[0][number]);
+    const models = [ag("a"), ag("b"), ag("c", "dead"), ag("d")];
+    const targets = new Map([["a", { x: 18, z: 11 }], ["b", { x: 18, z: 12 }], ["c", { x: 0, z: 24 }], ["d", { x: 1, z: -4 }]]);
+    const stations = new Map([["d", { x: 1, z: -4 }]]);
+    const w = workTargets(models, targets, stations, plan.spots);
+    for (const id of ["a", "b"]) { expect(roomAt(w.targets.get(id)!)!.id).toBe("venture"); expect(w.spots.get(id)).toBeDefined(); }
+    expect(w.targets.get("a")).not.toEqual(w.targets.get("b"));
+    expect(w.targets.get("c")).toEqual({ x: 0, z: 24 }); expect(w.targets.get("d")).toEqual({ x: 1, z: -4 });
+    expect(workTargets(models, targets, stations, plan.spots).targets).toEqual(w.targets); // stable
+    // Team projects: teammates in the same room meet at its table; an agent on no team is not seated there while its own
+    // desk or console is free (no implied collaboration).
+    const team = [ag("lead"), ag("member"), ag("solo")];
+    const inVenture = new Map(team.map((m, i) => [m.agent.id, { x: 18 + i * 0.1, z: 11 }]));
+    const t2 = workTargets(team, inVenture, new Map(), plan.spots, new Map([["lead", "P1"], ["member", "P1"]]));
+    expect(t2.spots.get("lead")!.table).toBe(true); expect(t2.spots.get("member")!.table).toBe(true);
+    expect([...t2.meetings].sort()).toEqual(["lead", "member"]);
+    expect(t2.spots.get("solo")!.table).toBeFalsy();
+    // A lone team member (teammate elsewhere) has no meeting.
+    const t3 = workTargets(team, inVenture, new Map(), plan.spots, new Map([["lead", "P1"]]));
+    expect(t3.meetings.size).toBe(0);
+  });
+
+  it("team projects: a two-agent project event travels between the two agents; project activity places agents in Venture / Dev", () => {
+    const e = { key: "p1", type: "project_task_delivered", agentId: "B", at: "2026-10-04T12:00:00Z", detail: { projectId: "P1", fromAgentId: "B", toAgentId: "A", name: "Client portal" } } as FleetEvent;
+    const v = visualFromEvent(e)!;
+    expect(v).toMatchObject({ kind: "PROJECT_EVENT", path: ["agent", "counterpart"], counterpartId: "A", label: "Task delivered" });
+    const pk = packetFor(v, new Map([["A", { x: 17, z: 12 }], ["B", { x: -18, z: 11 }]]), 0)!;
+    expect(pk.points).toEqual([{ x: -18, z: 11 }, { x: 17, z: 12 }]);
+    expect(flowLabel(pk)).toBe("TASK DELIVERED");
+    // Without a recorded counterpart nothing is invented: the project's own record (Venture / Dev).
+    expect(visualFromEvent({ ...e, key: "p2", type: "project_created", detail: { projectId: "P1" } })!.path).toEqual(["agent", "venture"]);
+    expect(eventDepartment("project_member_joined")).toBe("venture");
+  });
+
+  it("project views show the record's own figures: working-day ETAs, exact compensation, who is actively collaborating", () => {
+    expect(hours(52)).toBe("6.5 days"); expect(hours(16)).toBe("16 h"); expect(hours(undefined)).toBe("—");
+    expect(compensationText({ type: "HYBRID", fixedMinor: 500, revenueShareBp: 1000, revenueShareCapMinor: 2000 })).toBe("hybrid — £5.00 fixed + 10 % of attributable net (cap £20.00)");
+    expect(compensationText(null)).toBe("—");
+    const view = { ...emptyCommandView("live"), projects: [
+      { projectId: "P1", status: "active", leadAgentId: "A", members: [{ agentId: "B", status: "accepted" }, { agentId: "C", status: "declined" }] },
+      { projectId: "P2", status: "planning", leadAgentId: "D", members: [{ agentId: "E", status: "accepted" }] },
+    ] };
+    expect([...activeTeams(view)]).toEqual([["A", "P1"], ["B", "P1"]]); // only active projects, only accepted members
+    expect(projectsOf(view, "C").map((p) => p.projectId)).toEqual(["P1"]); // the declined offer is still part of its history
+    expect(hqBoardsFrom(live(), view, [])["venture:projects"]!.rows[0][0]).toContain("+1");
+  });
+
+  it("Ultra is materially richer than High while the world and its data stay the same", () => {
+    const hi = HQ_PROFILE.high, ul = HQ_PROFILE.ultra;
+    const richer = [ul.physical && !hi.physical, ul.reflections && !hi.reflections, ul.atmosphere && !hi.atmosphere, ul.detail > hi.detail, ul.shadowMap > hi.shadowMap, ul.textures > hi.textures, ul.particles > hi.particles];
+    expect(richer.filter(Boolean).length).toBeGreaterThanOrEqual(6);
+    const a = buildWorld(), b = buildWorld();
+    expect(a.screens).toEqual(b.screens); expect(a.spots).toEqual(b.spots);
   });
 });
 

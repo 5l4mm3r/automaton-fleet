@@ -25,6 +25,10 @@ export interface CommandView {
   ventures: Row[];
   opportunities: Row[];
   knowledge: Row[];
+  /** Multi-agent team projects (the `projects` read): lead, members' contracts, planner ETAs, economics, recent events. */
+  projects: Row[];
+  /** The projects read's Fleet-wide summary (active, collaborating agents, planned time saved…); null = not read. */
+  projectSummary: Row | null;
   /** Pending owner requests / external dependencies (hub dependencies). */
   dependencies: Row[];
   /** Fleet totals (hub overview). */
@@ -44,6 +48,6 @@ export interface Pulse {
 }
 
 export const emptyCommandView = (mode: CommandView["mode"]): CommandView => ({
-  mode, fetchedAt: "", genesisMinor: null, currency: "GBP", economics: {}, events: [], capital: [], ventures: [], opportunities: [], knowledge: [],
+  mode, fetchedAt: "", genesisMinor: null, currency: "GBP", economics: {}, events: [], capital: [], ventures: [], opportunities: [], knowledge: [], projects: [], projectSummary: null,
   dependencies: [], overview: null, treasury: null, settings: null, unavailable: [],
 });
