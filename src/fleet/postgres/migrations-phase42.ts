@@ -182,6 +182,41 @@ const ENVELOPE_POSITION = restate(V30_SQL, "fleet_envelope_position", [
   [`  FROM o, rv`, `  FROM o, rv, pj`],
 ]);
 
+// Treasury sweep (v30) — demonstrated defect fixed here: the base was "realised profit not yet CONTRIBUTED", so after a
+// 10% sweep the other 90% stayed in the base and the next period swept it again (Σ → 100% of the same profit over
+// time), contradicting the owner's order (£1,000 at 10% → £100 Treasury, £900 post-sweep distributable). Each executed
+// sweep now records the basis it determined (`fleet_sweep_records`), and the base is realised after-tax profit not yet
+// SWEPT. A determined 0% sweep (e.g. a full reinvestment reduction) is recorded too, so distributions can proceed.
+const SWEEP_COMPUTE = restate(V30_SQL, "fleet_sweep_compute", [
+  [`v_avail bigint; v_uplift integer;`, `v_avail bigint; v_swept_basis bigint; v_swept_amount bigint; v_uplift integer;`],
+  [`  v_profit := GREATEST(0, (eco ->> 'realizedNetProfit')::bigint - (eco ->> 'lifetimeContribution')::bigint - v_tax);`,
+   `  -- Profit already swept (its basis), and contributions made outside the sweep (owner-posted LFC), are not swept again.
+  SELECT COALESCE(sum(basis_minor), 0), COALESCE(sum(amount_minor), 0) INTO v_swept_basis, v_swept_amount FROM fleet_sweep_records WHERE agent_id = p_agent;
+  v_profit := GREATEST(0, (eco ->> 'realizedNetProfit')::bigint - ((eco ->> 'lifetimeContribution')::bigint - v_swept_amount) - v_swept_basis - v_tax);`],
+  [`'basisMinor', v_basis, 'livingAgents', v_living);`, `'basisMinor', v_basis, 'sweptBasisMinor', v_swept_basis, 'livingAgents', v_living);`],
+]);
+const SWEEP_EXECUTE = restate(V30_SQL, "fleet_sweep_execute", [
+  [`  IF EXISTS (SELECT 1 FROM fleet_ledger_journal WHERE idempotency_key = p_idem) THEN
+    RETURN jsonb_build_object('ok', true, 'replay', true, 'journalId', (SELECT journal_id FROM fleet_ledger_journal WHERE idempotency_key = p_idem));
+  END IF;`,
+   `  IF EXISTS (SELECT 1 FROM fleet_ledger_journal WHERE idempotency_key = p_idem) OR EXISTS (SELECT 1 FROM fleet_sweep_records WHERE idempotency_key = p_idem) THEN
+    RETURN jsonb_build_object('ok', true, 'replay', true, 'journalId', (SELECT journal_id FROM fleet_ledger_journal WHERE idempotency_key = p_idem));
+  END IF;`],
+  [`  IF (c ->> 'amountMinor')::bigint <= 0 THEN RETURN jsonb_build_object('ok', true, 'amountMinor', 0, 'computed', c); END IF;`,
+   `  IF (c ->> 'basisMinor')::bigint <= 0 THEN RETURN jsonb_build_object('ok', true, 'amountMinor', 0, 'computed', c); END IF;
+  IF (c ->> 'amountMinor')::bigint <= 0 THEN
+    -- A determined 0% sweep on a positive basis: recorded (that profit is settled for the sweep), nothing moves.
+    INSERT INTO fleet_sweep_records (sweep_id, agent_id, idempotency_key, basis_minor, rate_bp, amount_minor, journal_id)
+      VALUES (gen_random_uuid(), p_agent, p_idem, (c ->> 'basisMinor')::bigint, (c ->> 'rateBp')::integer, 0, NULL);
+    PERFORM fleet_event('treasury_sweep', p_agent, p_actor, jsonb_build_object('journalId', NULL) || (c - 'enabled'));
+    RETURN jsonb_build_object('ok', true, 'amountMinor', 0, 'computed', c);
+  END IF;`],
+  [`  v_j := fleet_profit_contribution(p_agent, (c ->> 'amountMinor')::bigint, p_actor, 'controller', p_idem);`,
+   `  v_j := fleet_profit_contribution(p_agent, (c ->> 'amountMinor')::bigint, p_actor, 'controller', p_idem);
+  INSERT INTO fleet_sweep_records (sweep_id, agent_id, idempotency_key, basis_minor, rate_bp, amount_minor, journal_id)
+    VALUES (gen_random_uuid(), p_agent, p_idem, (c ->> 'basisMinor')::bigint, (c ->> 'rateBp')::integer, (c ->> 'amountMinor')::bigint, v_j);`],
+]);
+
 // Shared capital for a team project goes through the EXISTING request path; the request names the project and carries
 // its planner economics into the decision's inputs. The decision itself is FleetController's, unchanged.
 const CAPITAL_REQUEST = restate(V30_SQL, "fleet_econ_capital_request", [
@@ -1086,6 +1121,23 @@ BEGIN
     'outcome', CASE WHEN o.project_id IS NOT NULL THEN jsonb_strip_nulls(to_jsonb(o) - 'project_id') END));
 END $$;
 
+-- What an AGENT sees (tool outputs): compact, ids first — a founder runtime keeps only the first few thousand characters
+-- of a tool output (and jsonb orders keys by length). The dashboard read keeps the full fleet_project_json.
+CREATE FUNCTION fleet_project_brief(p fleet_projects) RETURNS jsonb LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT jsonb_strip_nulls(jsonb_build_object('id', p.project_id, 'key', p.project_key, 'name', p.name, 'lead', p.lead_agent_id, 'status', p.status, 'stage', p.stage,
+    'eta', jsonb_build_object('soloHours', p.solo_hours, 'teamHours', p.team_hours, 'criticalPath', to_jsonb(p.critical_path),
+             'projectedFinishAt', fleet_project_projection(p) -> 'projectedFinishAt'),
+    'gate', jsonb_build_object('benefitMinor', p.benefit_minor, 'costMinor', p.cost_minor, 'justified', p.benefit_minor > p.cost_minor),
+    'escrowMinor', p.escrow_own_minor + p.escrow_fleet_minor, 'committedMinor', fleet_project_committed(p.project_id),
+    'leadShareBp', fleet_project_lead_share_bp(p.project_id),
+    'members', (SELECT COALESCE(jsonb_agg(jsonb_strip_nulls(jsonb_build_object('memberId', m.member_id, 'agentId', m.agent_id, 'role', m.role, 'status', m.status,
+         'terms', m.terms, 'counter', m.counter_terms -> 'compensation', 'paidMinor', m.paid_minor, 'shareOwedMinor', NULLIF(m.share_owed_minor, 0))) ORDER BY m.offered_at), '[]'::jsonb)
+       FROM fleet_project_members m WHERE m.project_id = p.project_id AND m.status IN ('offered','countered','accepted','completed')),
+    'tasks', (SELECT COALESCE(jsonb_agg(jsonb_build_object('key', t.task_key, 'owner', t.owner_role, 'status', t.status, 'hours', t.hours, 'deps', to_jsonb(t.deps)) ORDER BY t.ord), '[]'::jsonb)
+       FROM fleet_project_tasks t WHERE t.project_id = p.project_id AND t.status <> 'cancelled')))
+$$;
+
 -- Competency from completed work only (no birth-assigned scores, no universal ranking): per agent and capability.
 CREATE VIEW fleet_agent_competency AS
   SELECT t.assignee_agent_id AS agent_id,
@@ -1230,7 +1282,7 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE v fleet_ventures; p fleet_projects; v_idem text := fleet_econ_text(a, 'idempotencyKey', 128, true); v_id uuid := gen_random_uuid(); v_roles integer;
 BEGIN
   SELECT * INTO p FROM fleet_projects WHERE lead_agent_id = p_agent AND idempotency_key = v_idem;
-  IF FOUND THEN RETURN jsonb_build_object('ok', true, 'replayed', true, 'project', fleet_project_json(p)); END IF;
+  IF FOUND THEN RETURN jsonb_build_object('ok', true, 'replayed', true, 'id', p.project_id, 'project', fleet_project_brief(p)); END IF;
   SELECT * INTO v FROM fleet_ventures WHERE agent_id = p_agent AND venture_key = fleet_econ_key(a, 'ventureKey');
   IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND', 'reason', 'a project serves one of your own ventures'); END IF;
   IF lower(COALESCE(a ->> 'risk', '')) NOT IN ('low','medium','high') THEN PERFORM fleet_econ_bad('risk is low, medium or high'); END IF;
@@ -1257,8 +1309,8 @@ BEGIN
   UPDATE fleet_projects SET stage = 'recruiting' WHERE project_id = v_id RETURNING * INTO p;
   PERFORM fleet_project_event(p, 'project_created', p_agent, p_agent, jsonb_build_object('soloHours', p.solo_hours, 'teamHours', p.team_hours,
     'timeSavedHours', p.planned_time_saved_hours, 'benefitMinor', p.benefit_minor, 'costMinor', p.cost_minor, 'roles', v_roles));
-  RETURN jsonb_build_object('ok', true, 'project', fleet_project_json(p),
-    'note', 'Planner figures are FleetController''s. Fund the escrow (project.fund) and offer roles (project.offer) to existing living agents; each decides for itself.');
+  RETURN jsonb_build_object('ok', true, 'id', p.project_id, 'project', fleet_project_brief(p),
+    'note', 'Planner figures are FleetController''s. Next: fund (fixed / milestone pay) and offer roles; each agent decides for itself.');
 END $$;
 
 CREATE FUNCTION fleet_econ_project_replan(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
@@ -1283,7 +1335,7 @@ BEGIN
   p := fleet_project_evaluate(p.project_id);
   PERFORM fleet_project_event(p, 'project_replanned', p_agent, p_agent, jsonb_build_object('reason', v_reason, 'planVersion', p.plan_version,
     'teamHours', p.team_hours, 'soloHours', p.solo_hours, 'benefitMinor', p.benefit_minor, 'costMinor', p.cost_minor, 'stage', p.stage));
-  RETURN jsonb_build_object('ok', true, 'project', fleet_project_json(p), 'justified', p.benefit_minor > p.cost_minor);
+  RETURN jsonb_build_object('ok', true, 'id', p.project_id, 'project', fleet_project_brief(p), 'justified', p.benefit_minor > p.cost_minor);
 END $$;
 
 -- Fund the escrow: own spendable capital (custody availability only), or a Fleet-capital envelope approved for THIS project.
@@ -1295,7 +1347,7 @@ DECLARE p fleet_projects := fleet_project_for_lead(p_agent, a); v_amount bigint 
 BEGIN
   -- A retried call with the same idempotency key funds once.
   IF EXISTS (SELECT 1 FROM fleet_ledger_journal WHERE idempotency_key = v_key) THEN
-    RETURN jsonb_build_object('ok', true, 'replayed', true, 'project', fleet_project_json(p, false));
+    RETURN jsonb_build_object('ok', true, 'replayed', true, 'id', p.project_id, 'project', fleet_project_brief(p));
   END IF;
   PERFORM fleet_project_live(p);
   PERFORM fleet_ledger_open_agent(p_agent, 'controller');
@@ -1336,7 +1388,7 @@ BEGIN
   END IF;
   PERFORM fleet_project_event(p, 'project_funded', p_agent, p_agent, jsonb_build_object('source', v_src, 'amountMinor', v_amount,
     'escrowMinor', p.escrow_own_minor + p.escrow_fleet_minor));
-  RETURN jsonb_build_object('ok', true, 'project', fleet_project_json(p, false));
+  RETURN jsonb_build_object('ok', true, 'id', p.project_id, 'project', fleet_project_brief(p));
 END $$;
 
 -- Offer a role to an EXISTING LIVING agent (never a new one): an internal contract proposal.
@@ -1428,7 +1480,7 @@ BEGIN
   p := fleet_project_evaluate(p.project_id);
   PERFORM fleet_project_event(p, 'project_member_joined', p_agent, p_agent, jsonb_build_object('fromAgentId', p_agent, 'toAgentId', p.lead_agent_id, 'memberId', m.member_id,
     'role', m.role, 'response', v_resp, 'startAt', m.start_at, 'compensation', m.terms, 'teamHours', p.team_hours));
-  RETURN jsonb_build_object('ok', true, 'status', 'accepted', 'contract', fleet_project_member_json(m), 'project', fleet_project_json(p, false));
+  RETURN jsonb_build_object('ok', true, 'status', 'accepted', 'contract', fleet_project_member_json(m), 'project', fleet_project_brief(p));
 END $$;
 
 CREATE FUNCTION fleet_econ_project_counter_accept(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
@@ -1454,7 +1506,7 @@ BEGIN
   END IF;
   PERFORM fleet_project_event(p, 'project_member_joined', m.agent_id, p_agent, jsonb_build_object('fromAgentId', m.agent_id, 'toAgentId', p_agent, 'memberId', m.member_id,
     'role', m.role, 'response', 'COUNTER_ACCEPTED', 'compensation', m.terms, 'teamHours', p.team_hours));
-  RETURN jsonb_build_object('ok', true, 'contract', fleet_project_member_json(m), 'project', fleet_project_json(p, false));
+  RETURN jsonb_build_object('ok', true, 'contract', fleet_project_member_json(m), 'project', fleet_project_brief(p));
 END $$;
 
 CREATE FUNCTION fleet_econ_project_withdraw_offer(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
@@ -1478,7 +1530,7 @@ BEGIN
    WHERE project_id = p.project_id RETURNING * INTO p;
   PERFORM fleet_project_event(p, 'project_started', p_agent, p_agent, jsonb_build_object('teamHours', p.team_hours, 'soloHours', p.solo_hours,
     'members', (SELECT COALESCE(jsonb_agg(m.agent_id), '[]'::jsonb) FROM fleet_project_members m WHERE m.project_id = p.project_id AND m.status = 'accepted')));
-  RETURN jsonb_build_object('ok', true, 'project', fleet_project_json(p, false));
+  RETURN jsonb_build_object('ok', true, 'id', p.project_id, 'project', fleet_project_brief(p));
 END $$;
 
 -- Task work by its owner (the lead for "lead" tasks, the role's accepted member otherwise): start, progress, deliver.
@@ -1653,12 +1705,12 @@ BEGIN
   END IF;
   r := fleet_project_finish(p.project_id, 'completed', p_agent, 'completed', fleet_econ_int(a, 'actualReturnMinor', -100000000000, 100000000000), fleet_econ_text(a, 'lessons', 600, true));
   SELECT * INTO p FROM fleet_projects WHERE project_id = p.project_id;
-  RETURN jsonb_build_object('ok', true, 'project', fleet_project_json(p)) || r;
+  RETURN jsonb_build_object('ok', true, 'id', p.project_id, 'project', fleet_project_brief(p)) || r;
 END $$;
 
 CREATE FUNCTION fleet_econ_project_list(p_agent text, a jsonb) RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-  SELECT jsonb_build_object('ok', true, 'projects', COALESCE(jsonb_agg(fleet_project_json(p, false) ORDER BY p.updated_at DESC), '[]'::jsonb))
+  SELECT jsonb_build_object('ok', true, 'projects', COALESCE(jsonb_agg(fleet_project_brief(p) ORDER BY p.updated_at DESC), '[]'::jsonb))
     FROM fleet_projects p
    WHERE (p.lead_agent_id = p_agent OR EXISTS (SELECT 1 FROM fleet_project_members m WHERE m.project_id = p.project_id AND m.agent_id = p_agent))
      AND (a ->> 'status' IS NULL OR p.status = a ->> 'status')
@@ -1672,15 +1724,18 @@ BEGIN
   IF NOT FOUND OR NOT (p.lead_agent_id = p_agent OR EXISTS (SELECT 1 FROM fleet_project_members m WHERE m.project_id = p.project_id AND m.agent_id = p_agent)) THEN
     RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND', 'reason', 'not a project you lead or were offered work in');
   END IF;
-  RETURN jsonb_build_object('ok', true, 'project', fleet_project_json(p, p.lead_agent_id = p_agent));
+  -- Agent tool outputs stay compact (the founder runtime clips long outputs); full detail (roles, justification, events) on request.
+  RETURN jsonb_build_object('ok', true, 'id', p.project_id, 'project', CASE WHEN p.lead_agent_id = p_agent AND COALESCE((a ->> 'detail')::boolean, false)
+    THEN fleet_project_json(p, true) ELSE fleet_project_brief(p) END);
 END $$;
 
 CREATE FUNCTION fleet_econ_project_offers(p_agent text, a jsonb) RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-  SELECT jsonb_build_object('ok', true, 'offers', COALESCE(jsonb_agg(fleet_project_member_json(m) || jsonb_build_object('projectId', p.project_id, 'project', p.name,
-           'objective', p.objective, 'leadAgentId', p.lead_agent_id, 'escrowFreeMinor', p.escrow_own_minor + p.escrow_fleet_minor - fleet_project_committed(p.project_id),
-           'teamHours', p.team_hours, 'tasks', (SELECT COALESCE(jsonb_agg(jsonb_build_object('key', t.task_key, 'title', t.title, 'hours', t.hours, 'deps', to_jsonb(t.deps)) ORDER BY t.ord), '[]'::jsonb)
-                                                FROM fleet_project_tasks t WHERE t.project_id = p.project_id AND t.owner_role = m.role AND t.status <> 'cancelled'))
+  SELECT jsonb_build_object('ok', true, 'offers', COALESCE(jsonb_agg(jsonb_strip_nulls(jsonb_build_object('memberId', m.member_id, 'projectId', p.project_id, 'project', p.name,
+           'lead', p.lead_agent_id, 'role', m.role, 'terms', fleet_project_terms_json(m.terms), 'deliverable', m.deliverable, 'expectedHours', m.expected_hours, 'deadline', m.deadline,
+           'escrowFreeMinor', p.escrow_own_minor + p.escrow_fleet_minor - fleet_project_committed(p.project_id), 'teamHours', p.team_hours,
+           'tasks', (SELECT COALESCE(jsonb_agg(jsonb_build_object('key', t.task_key, 'hours', t.hours, 'deps', to_jsonb(t.deps)) ORDER BY t.ord), '[]'::jsonb)
+                       FROM fleet_project_tasks t WHERE t.project_id = p.project_id AND t.owner_role = m.role AND t.status <> 'cancelled')))
            ORDER BY m.offered_at), '[]'::jsonb),
     'note', 'Decide on your own economics: your projects, commitments, capacity, the pay and its strategic value. ACCEPT, COUNTER, DECLINE or ACCEPT_WITH_TIMING.')
     FROM fleet_project_members m JOIN fleet_projects p ON p.project_id = m.project_id
@@ -1758,4 +1813,24 @@ ${DASH_CALL}
 ${ENVELOPE_POSITION}
 
 ${CAPITAL_REQUEST}
+
+-- ═══ 9. Treasury sweep: each unit of realised profit is swept once (internal ledger allocation only) ═══
+CREATE TABLE fleet_sweep_records (
+  sweep_id         uuid        PRIMARY KEY,
+  agent_id         text        NOT NULL REFERENCES fleet_agents(agent_id),
+  idempotency_key  text        NOT NULL UNIQUE CHECK (idempotency_key ~ '^[A-Za-z0-9:_.-]{8,128}$'),
+  basis_minor      bigint      NOT NULL CHECK (basis_minor > 0),
+  rate_bp          integer     NOT NULL CHECK (rate_bp BETWEEN 0 AND 10000),
+  amount_minor     bigint      NOT NULL CHECK (amount_minor >= 0 AND amount_minor <= basis_minor),
+  journal_id       uuid        UNIQUE REFERENCES fleet_ledger_journal(journal_id),
+  at               timestamptz NOT NULL DEFAULT now(),
+  CHECK ((amount_minor = 0) = (journal_id IS NULL))
+);
+CREATE INDEX fleet_sweep_records_agent ON fleet_sweep_records (agent_id, at);
+CREATE TRIGGER fleet_sweep_records_no_change BEFORE UPDATE OR DELETE ON fleet_sweep_records FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+CREATE TRIGGER fleet_sweep_records_no_truncate BEFORE TRUNCATE ON fleet_sweep_records FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
+
+${SWEEP_COMPUTE}
+
+${SWEEP_EXECUTE}
 `;

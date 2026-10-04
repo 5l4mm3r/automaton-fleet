@@ -28,6 +28,8 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
   let rail = "";
   const acct = (who: Founder | string, cls: string) => `agent:${typeof who === "string" ? who : who.id}:${cls.slice(6)}`;
   const ok = async (p: Promise<Record<string, any>>) => { const r = await p; expect(r, JSON.stringify(r)).toMatchObject({ ok: true }); return r; };
+  /** The lead's full project view (agent tool outputs are a compact brief; detail on request). */
+  const full = async (lead: Founder, pid: string) => (await ok(R.econ(lead, "project.status", { projectId: pid, detail: true }))).project;
   const external = async () => R.one(`(fleet.fleet_daily_report() -> 'flows')`);
   const sumNet = async () => Number(await R.one(`(SELECT COALESCE(sum((fleet.fleet_agent_economics(agent_id) ->> 'realizedNetProfit')::bigint), 0) FROM fleet.fleet_agents)`));
 
@@ -93,14 +95,17 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
     const ownerReq0 = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_owner_requests)`));
     const capReq0 = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_capital_requests)`));
     const r = await ok(R.econ(A, "project.propose", plan("portal-v1", "portal")));
-    P = r.project.projectId;
+    P = r.id;
+    expect(r.project).toMatchObject({ id: P, eta: { soloHours: 52, teamHours: 36 }, gate: { justified: true } }); // the agent's compact brief
+    const fp = await full(A, P);
     // The planner's figures (never the lead's claim): solo 52 h; team = 34 h critical path + 2 h coordination.
-    expect(r.project.eta).toMatchObject({ soloHours: 52, teamHours: 36, criticalPathHours: 34, plannedTimeSavedHours: 16, criticalPath: ["arch", "backend", "integration"] });
-    expect(r.project.economics).toMatchObject({ benefitMinor: 2666, costMinor: 1500, justified: true });
+    expect(fp.eta).toMatchObject({ soloHours: 52, teamHours: 36, criticalPathHours: 34, plannedTimeSavedHours: 16, criticalPath: ["arch", "backend", "integration"] });
+    expect(fp.economics).toMatchObject({ benefitMinor: 2666, costMinor: 1500, justified: true });
     // Own capital: FleetController checks custody availability only — the exact amount the agent chose is escrowed (no resizing).
     const cash0 = await R.balance(acct(A, "agent_cash"));
     const f = await ok(R.econ(A, "project.fund", { projectId: P, amountMinor: 1_737, source: "own" }));
-    expect(f.project.economics).toMatchObject({ escrowOwnMinor: 1_737, fundingSource: "own_capital" });
+    expect(f.project.escrowMinor).toBe(1_737);
+    expect((await full(A, P)).economics).toMatchObject({ escrowOwnMinor: 1_737, fundingSource: "own_capital" });
     expect(await R.balance(acct(A, "agent_cash"))).toBe(cash0 - 1_737);
     expect(await R.balance(acct(A, "agent_project_escrow"))).toBe(1_737);
     // Offer → the target decides itself.
@@ -118,7 +123,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
   });
 
   it("14: the recruit may decline; nobody can accept for another agent; an offer to a non-existent agent creates nothing", async () => {
-    const p2 = (await ok(R.econ(A, "project.propose", plan("portal-v2", "portal-two")))).project.projectId;
+    const p2 = (await ok(R.econ(A, "project.propose", plan("portal-v2", "portal-two")))).id;
     await ok(R.econ(A, "project.fund", { projectId: p2, amountMinor: 1_200, source: "own" }));
     const m = (await ok(offer(p2, C))).memberId;
     // The lead (or anyone else) cannot answer on C's behalf.
@@ -216,8 +221,10 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
     expect(c.returned).toMatchObject({ ownReturnedMinor: 737 });
     expect(await R.balance(acct(A, "agent_cash"))).toBe(cash0 + 737);
     expect(await R.balance(acct(A, "agent_project_escrow"))).toBe(0);
-    expect(c.project).toMatchObject({ status: "completed", teamSize: 2 });
-    expect(c.project.eta.realisedTimeSavedHours).toBeGreaterThan(0); // 52 h solo vs seconds of test time — measured, not claimed
+    expect(c.project).toMatchObject({ status: "completed" });
+    const cp = await full(A, P);
+    expect(cp).toMatchObject({ status: "completed", teamSize: 2 });
+    expect(cp.eta.realisedTimeSavedHours).toBeGreaterThan(0); // 52 h solo vs seconds of test time — measured, not claimed
     const out = (await R.q(`SELECT * FROM fleet.fleet_project_outcomes WHERE project_id = $1`, [P]))[0];
     expect(out).toMatchObject({ outcome: "completed", team_size: 2, actual_cost_minor: "1000" });
     expect(out.contributions[0]).toMatchObject({ agentId: B.id, role: "engineer", paidMinor: 1000, tasksAccepted: 1, rejections: 1 });
@@ -236,7 +243,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
   });
 
   it("20: tax reserves and restricted capital cannot fund an ordinary project; envelope capital of another purpose is refused", async () => {
-    const p = (await ok(R.econ(A, "project.propose", plan("restricted", "portal-three")))).project.projectId;
+    const p = (await ok(R.econ(A, "project.propose", plan("restricted", "portal-three")))).id;
     const spend = Number((await R.one(`fleet.fleet_agent_economics($1)`, [A.id])).expensePurchasingCapacity);
     // Move most of A's cash into its restricted tax reserve (owner-posted tax reservation).
     await R.one(`fleet.fleet_ledger_post('tax_reservation', $1, $2, 'tax set aside', 'owner', $3, NULL, NULL, NULL, NULL, now(),
@@ -266,7 +273,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
   it("21: Fleet capital for a team project goes through the existing capital-request path with the project's economics attached", async () => {
     await ok(R.econ(B, "venture.create", { key: "b-tools", model: "software", offer: "tools", state: "selected", channels: ["direct"] }));
     const pr = await ok(R.econ(B, "project.propose", plan("b-proj", "b-tools")));
-    const p = pr.project.projectId;
+    const p = pr.id;
     const cap = await ok(R.econ(B, "capital.request", { idempotencyKey: idem(), ventureKey: "b-tools", projectId: p, purpose: "team project budget", amountMinor: 1_500,
       evidence: ev3, expectedRevenueMinor: 50_000, expectedNetMinor: 30_000,
       expectedPaybackDays: 30, downsideMinor: 1_500, confidenceBp: 7_000 }));
@@ -278,7 +285,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
     expect(cap.envelope, JSON.stringify(cap)).toBeTruthy(); // this request is fundable; a DEFER / REJECT would simply stand
     const env = cap.envelope.envelopeId;
     const f = await ok(R.econ(B, "project.fund", { projectId: p, amountMinor: 1_200, source: "fleet_capital", envelopeId: env }));
-    expect(f.project.economics).toMatchObject({ escrowFleetMinor: 1_200, fundingSource: "fleet_capital" });
+    expect((await full(B, p)).economics).toMatchObject({ escrowFleetMinor: 1_200, fundingSource: "fleet_capital" });
     const pos = (await R.one(`fleet.fleet_envelope_json((SELECT e FROM fleet.fleet_envelopes e WHERE envelope_id = $1))`, [env])).position;
     expect(pos).toMatchObject({ projectEscrowMinor: 1_200 });
     // The envelope ledger still equals the envelopes' positions (health check).
@@ -301,7 +308,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
       roles: [{ role: "engineer", taskScope: "api and jobs", requiredCapability: "backend",
         compensation: { type: "MILESTONE", milestones: [{ key: "m-api", taskKey: "api", amountMinor: 600 }, { key: "m-jobs", taskKey: "jobs", amountMinor: 400 }] } }],
     })));
-    const p = pr.project.projectId;
+    const p = pr.id;
     await ok(R.econ(A, "project.fund", { projectId: p, amountMinor: 1_500, source: "own" }));
     // An unfunded acceptance is refused (escrow must cover the contract) — fund first, then accept.
     const m = (await ok(offer(p, C, { compensation: { type: "MILESTONE", milestones: [{ key: "m-api", taskKey: "api", amountMinor: 600 }, { key: "m-jobs", taskKey: "jobs", amountMinor: 400 }] } }))).memberId;
@@ -324,7 +331,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
   });
 
   it("members can exit; the lead can replace a member; nobody is trapped", async () => {
-    const p = (await ok(R.econ(A, "project.propose", plan("exit-me", "portal-three")))).project.projectId;
+    const p = (await ok(R.econ(A, "project.propose", plan("exit-me", "portal-three")))).id;
     await ok(R.econ(A, "project.fund", { projectId: p, amountMinor: 2_000, source: "own" }));
     const m = (await ok(offer(p, D))).memberId;
     await ok(R.econ(D, "project.respond", { memberId: m, response: "ACCEPT" }));
@@ -358,7 +365,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
   const shareProject = async (lead: Founder, key: string, ventureKey: string) => (await ok(R.econ(lead, "project.propose", plan(key, ventureKey, {
     ...enables,
     roles: [{ role: "engineer", taskScope: "the backend", requiredCapability: "backend", compensation: { type: "PROFIT_SHARE", profitShareBp: 1, profitShareUntil: inDays(90) } }],
-  })))).project.projectId as string;
+  })))).id as string;
   const shareOffer = (lead: Founder, pid: string, to: Founder, bp: number | unknown, role = "engineer") => R.econ(lead, "project.offer", {
     projectId: pid, role, agentId: to.id, deliverable: "the backend", expectedHours: 20, deadline: inDays(7),
     compensation: { type: "PROFIT_SHARE", profitShareBp: bp, profitShareUntil: inDays(90) } });
@@ -384,7 +391,8 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
     expect(await shareOffer(E, p, H, 5_000, "writer")).toMatchObject({ ok: false, code: "FLEET_PROJECT_SHARES_EXCEED" });
     expect(await ok(shareOffer(E, p, H, 3_000, "writer"))).toBeTruthy();       // 60% + 30% offered: the lead's residual would be 10%, explicitly
     const st = await ok(R.econ(E, "project.status", { projectId: p }));
-    expect(st.project.distribution).toMatchObject({ basis: "post_sweep_distributable_profit", leadShareBp: 10_000 }); // nothing accepted yet
+    expect((await full(E, p)).distribution).toMatchObject({ basis: "post_sweep_distributable_profit", leadShareBp: 10_000 }); // nothing accepted yet
+    expect(st.project.leadShareBp).toBe(10_000);
     // REVENUE_SHARE is the same post-sweep share (an explicit alias, documented), never a share of gross revenue.
     const terms = await R.one(`fleet.fleet_project_terms('{"type":"REVENUE_SHARE","revenueShareBp":2500,"revenueShareUntil":"2027-01-01T00:00:00Z"}'::jsonb, $1, 'engineer')`, [p]);
     expect(terms).toMatchObject({ type: "PROFIT_SHARE", profitShareBp: 2500 });
@@ -405,7 +413,8 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
       reason: "the backend is the larger half of the risk" }));
     const ca = await ok(R.econ(E, "project.counter_accept", { projectId: PE, memberId: m }));
     expect(ca.contract.compensation).toMatchObject({ type: "PROFIT_SHARE", profitShareBp: 3_000, revenueShareBp: 3_000, shareBasis: "post_sweep_distributable_profit" });
-    expect((await ok(R.econ(E, "project.status", { projectId: PE }))).project.distribution.leadShareBp).toBe(7_000);
+    expect((await full(E, PE)).distribution.leadShareBp).toBe(7_000);
+    expect((await ok(R.econ(F, "project.status", { projectId: PE }))).project.leadShareBp).toBe(7_000);   // the member sees the brief
     // Accepted terms are frozen.
     expect(await R.code(R.q(`UPDATE fleet.fleet_project_members SET terms = jsonb_set(terms, '{profitShareBp}', '1') WHERE member_id = $1`, [m]))).toBe("FLEET_IMMUTABLE");
   });
@@ -483,7 +492,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
 
   it("a legitimate pre-agreed fixed cost before profit works: payer expense, payee income — and that income is sweepable", async () => {
     await venture(H, "h-fixed");
-    const p = (await ok(R.econ(H, "project.propose", plan("h-fixed", "h-fixed")))).project.projectId;
+    const p = (await ok(R.econ(H, "project.propose", plan("h-fixed", "h-fixed")))).id;
     await ok(R.econ(H, "project.fund", { projectId: p, amountMinor: 1_000, source: "own" }));
     const m = (await ok(R.econ(H, "project.offer", { projectId: p, role: "engineer", agentId: B.id, deliverable: "api", expectedHours: 20, deadline: inDays(5),
       compensation: { type: "FIXED", fixedMinor: 1_000 } }))).memberId;
@@ -514,7 +523,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
                   ...members.map(([, , role], i) => ({ key: `t${i}`, title: role, ownerRole: role, hours: 20, deps: ["a"], deliverable: role, acceptance: "ok" })),
                   { key: "z", title: "Z", ownerRole: "lead", hours: 30, deps: ["a"], deliverable: "z", acceptance: "z" }],
           roles: members.map(([, , role]) => ({ role, taskScope: role, requiredCapability: "backend", compensation: { type: "PROFIT_SHARE", profitShareBp: 1, profitShareUntil: inDays(90) } })),
-        })))).project.projectId as string;
+        })))).id as string;
         for (const [who, bp, role] of members) {
           const m = (await ok(shareOffer(lead, p, who, bp, role))).memberId;
           await ok(R.econ(who, "project.respond", { memberId: m, response: "ACCEPT" }));
@@ -543,10 +552,11 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
     expect(await R.econ(F, "project.propose", plan("fc-bad", "f-forecast", { qualityBenefitMinor: 500 })))
       .toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST", reason: expect.stringMatching(/forecast/) });
     const p = (await ok(R.econ(F, "project.propose", plan("fc", "f-forecast", { qualityBenefitMinor: 500,
-      forecast: { qualityReasoning: "a dedicated backend engineer halves the defect rate", evidence: [{ kind: "fleet_outcome", observation: "past project defects" }] } })))).project.projectId;
+      forecast: { qualityReasoning: "a dedicated backend engineer halves the defect rate", evidence: [{ kind: "fleet_outcome", observation: "past project defects" }] } })))).id;
     const st = await ok(R.econ(F, "project.status", { projectId: p }));
-    expect(st.project.economics.forecast).toMatchObject({ label: "forecast", qualityBenefitMinor: 500, qualityReasoning: expect.stringMatching(/defect/) });
-    expect(st.project.economics.gate.join(" ")).toMatch(/FORECAST/);
+    const fpf = await full(F, p);
+    expect(fpf.economics.forecast).toMatchObject({ label: "forecast", qualityBenefitMinor: 500, qualityReasoning: expect.stringMatching(/defect/) });
+    expect(fpf.economics.gate.join(" ")).toMatch(/FORECAST/);
     await ok(R.econ(F, "project.fund", { projectId: p, amountMinor: 1_000, source: "own" }));
     const m = (await ok(R.econ(F, "project.offer", { projectId: p, role: "engineer", agentId: G.id, deliverable: "api", expectedHours: 20, deadline: inDays(5),
       compensation: { type: "FIXED", fixedMinor: 1_000 } }))).memberId;
@@ -575,13 +585,13 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
   it("28: a member's death settles its contract; the lead's death or quarantine cancels its projects — authority ends at once", async () => {
     // Lead C (quarantined later) with member D; lead A with member B (B dies).
     await ok(R.econ(C, "venture.create", { key: "c-app", model: "software", offer: "app", state: "selected", channels: ["direct"] }));
-    const pc = (await ok(R.econ(C, "project.propose", plan("c-proj", "c-app")))).project.projectId;
+    const pc = (await ok(R.econ(C, "project.propose", plan("c-proj", "c-app")))).id;
     await ok(R.econ(C, "project.fund", { projectId: pc, amountMinor: 1_500, source: "own" }));
     const md = (await ok(R.econ(C, "project.offer", { projectId: pc, role: "engineer", agentId: D.id, deliverable: "api", expectedHours: 20, deadline: inDays(5),
       compensation: { type: "FIXED", fixedMinor: 1_000 } }))).memberId;
     await ok(R.econ(D, "project.respond", { memberId: md, response: "ACCEPT" }));
 
-    const pa = (await ok(R.econ(A, "project.propose", plan("a-proj", "portal-three")))).project.projectId;
+    const pa = (await ok(R.econ(A, "project.propose", plan("a-proj", "portal-three")))).id;
     await ok(R.econ(A, "project.fund", { projectId: pa, amountMinor: 1_200, source: "own" }));
     const mb = (await ok(offer(pa, B))).memberId;
     await ok(R.econ(B, "project.respond", { memberId: mb, response: "ACCEPT" }));

@@ -920,7 +920,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     ...(v42 ? ["fleet_projects:fleet_projects_guard", "fleet_projects:fleet_projects_no_delete", "fleet_project_members:fleet_project_members_guard",
       "fleet_project_members:fleet_project_members_no_delete", "fleet_project_payments:fleet_project_payments_no_change",
       "fleet_project_events:fleet_project_events_no_change", "fleet_project_outcomes:fleet_project_outcomes_no_change",
-      "fleet_project_distributions:fleet_project_distributions_no_change"] : []),
+      "fleet_project_distributions:fleet_project_distributions_no_change", "fleet_sweep_records:fleet_sweep_records_no_change"] : []),
   ];
   for (const t of need) if (!have.has(t)) problems.push(`economy surface: trigger ${t.replace(":", ".")} is missing or disabled`);
   const checks = await db.query<{ n: string; d: string }>(
@@ -1037,6 +1037,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       "fleet_project_finish"]),
     fleet_project_payments: new Set(["fleet_project_pay", "fleet_project_pay_share"]),
     fleet_project_distributions: new Set(["fleet_project_distribute"]),
+    fleet_sweep_records: new Set(["fleet_sweep_execute"]),
     fleet_project_events: new Set(["fleet_project_event"]),
     fleet_project_outcomes: new Set(["fleet_project_finish"]),
   };

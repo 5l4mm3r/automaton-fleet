@@ -53,6 +53,7 @@
  *   hub-reveal <agent_credential|owner_identity> <credentialId|class> <outFile>   Admin reveal: the broker seals the value to a
  *                                               one-time key of this command; the plaintext is written to a NEW 0600 file (never printed)
  *   economy-sweep-compute <agentId>
+ *   economy-sweep-run <period YYYY-MM | YYYY-MM-DD>   one internal Treasury allocation pass (ledger only; no payment; idempotent per period)
  */
 import crypto from "crypto";
 import fs from "fs";
@@ -65,7 +66,7 @@ export const HUB_COMMANDS = new Set([
   "hub", "hub-render", "hub-health", "hub-withdrawals", "economy-withdrawal-policy", "hub-custody", "economy-custody-policy", "hub-identity", "owner-identity-seal", "owner-identity-class", "owner-identity-consent", "owner-identity-consent-revoke", "economy-destination-reference", "economy-entity-add", "economy-tax-profile", "economy-tax-policy", "economy-tax-true-up", "economy-tax-payment",
   "economy-rail-add", "economy-rail-status", "economy-credential-register", "economy-credential-status", "economy-settlement-attribute",
   "economy-capital-policy", "economy-sweep-policy", "economy-economy-policy", "economy-transfer-policy", "economy-cognition-depth", "economy-breaker-novelty",
-  "economy-safe-transfer", "economy-wallet-transfer", "economy-sweep-compute",
+  "economy-safe-transfer", "economy-wallet-transfer", "economy-sweep-compute", "economy-sweep-run",
   "economy-agent-transfer", "hub-engine", "hub-replication", "hub-estates", "hub-notifications", "hub-daily-report", "hub-risk",
   "economy-replication-policy", "economy-birth", "economy-reseed", "economy-birth-fulfil", "economy-birth-cancel",
   "economy-mission-assign", "economy-mission-end", "economy-mission-request", "economy-mission-policy", "economy-risk-policy",
@@ -289,6 +290,9 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.notificationPolicy(p[0] && p[0] !== "-" ? int(p[0], "dailyHourUtc") : null, p[1] ?? null, actor);
     case "economy-sweep-compute":
       return h.sweepCompute(p[0]);
+    case "economy-sweep-run":
+      if (!/^[0-9]{4}-[0-9]{2}(-[0-9]{2})?$/.test(p[0] ?? "")) throw new Error("economy-sweep-run <period YYYY-MM | YYYY-MM-DD>");
+      return h.sweepRun(p[0]);
     default:
       throw new Error(`unknown hub command ${cmd}`);
   }

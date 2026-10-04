@@ -237,4 +237,14 @@ export class PgHubAdmin {
   sweepCompute(agentId: string) {
     return this.one(`SELECT fleet_sweep_compute($1) AS r`, [agentId]);
   }
+  /**
+   * One INTERNAL Treasury allocation pass for a period (YYYY-MM or YYYY-MM-DD): for each active agent, the policy's share
+   * of its realised, uncontributed net profit after tax is recorded as a Lifetime Fleet Contribution (agent cash →
+   * Treasury on the ledger). No payment order, rail or custody executor is involved, and no host flag is read: only the
+   * DB sweep policy (`fleet_sweep_policy.enabled`) gates it. Idempotent per period and agent (a retry never sweeps twice).
+   * The cadence is the owner's decision: nothing runs this automatically.
+   */
+  sweepRun(period: string) {
+    return this.one(`SELECT svc_sweep_run($1) AS r`, [period]);
+  }
 }

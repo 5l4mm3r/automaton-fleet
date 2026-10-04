@@ -1388,6 +1388,9 @@ differs by (rate_payee − rate_payer) × amount. Two rules contain this:
 5. **Record and pay.** Tranches are immutable (`fleet_project_distributions`). Owed shares are paid from the lead's
    spendable cash; what cannot be paid stays owed.
 
+**One sweep per unit of profit** (fixed in V2.2, §40): `fleet_sweep_records` records each sweep's basis, so post-sweep
+profit is never swept again in a later period.
+
 **Pending profit.** Profit realised after the lead's last sweep is **pending**. It is never paid ahead of the sweep and
 never deducted from sweepable profit. While the sweep policy is disabled, as it is in production today, no sweep is
 determined, so shares stay pending (flagged). Losses carry forward within the project.
@@ -1479,3 +1482,99 @@ project escrow and payments. Existing senior obligations and the shared-capital 
   - fixed-before-profit income being sweepable;
   - forecast versus realised.
 - `fleet-projects-scale-pg.test.ts`: 1 / 10 / 25 / 50 living agents; requires `FLEET_SCALE_TESTS=1`.
+
+## 40. Treasury sweep semantics: internal allocation, external payments, owner withdrawals (V2.2 audit, 2026-10-04; not deployed)
+
+Audited before any change. Three mechanisms exist, and they are separate.
+
+| | (1) Internal Treasury allocation ("the sweep") | (2) External payment-rail movement | (3) Owner withdrawal |
+|---|---|---|---|
+| **What it is** | A ledger journal `profit_contribution`: agent cash → `fleet:treasury:unallocated`, agent contributions → Lifetime Fleet Contribution | A payment order executed against a real provider or chain | The owner taking Treasury money out of the Fleet |
+| **Code** | `svc_sweep_run(period)` → `fleet_sweep_execute` → `fleet_sweep_compute` + `fleet_profit_contribution` (SQL); `fleet:admin economy-sweep-run <period>` | `fleet_payment_orders` + the custody executor (`custody/executor.ts`, `treasury/custody.ts` `executeApprovedSpend`), rail adapters | `fleet_admin_owner_withdrawal` (step-up, strong confirmation) → reservation `owner_withdrawal_reservation` + an order of type `owner_withdrawal`; external settlement is mechanism (2) |
+| **Enabled by** | **Only** the database policy row `fleet_sweep_policy.enabled` (owner-set: `fleet:admin economy-sweep-policy {"enabled":true}`) | `REAL_PAYMENTS_ENABLED=true` **and** a configured controller signer. The registry also pins `fleet_economic_model.custody_execution_enabled` false (CHECK) and rails never live (CHECK) | The owner's step-up instruction (reservation and order are internal). Execution is mechanism (2) |
+| **Reads host flags?** | **No.** No SQL function reads `OWNER_SWEEP_ENABLED` or `REAL_PAYMENTS_ENABLED` (tested) | Yes: `REAL_PAYMENTS_ENABLED` at call time (spend gate, custody executor) | No (execution does, via (2)) |
+| **Moves money externally?** | **Never.** No payment order, rail call, custody instruction or owner instruction (tested) | Yes, when enabled (it is not) | Only through (2) |
+
+`OWNER_SWEEP_ENABLED` is a host safety assertion. Runtimes, the custody worker and the doctor refuse or flag it when
+true. It does not gate any ledger accounting.
+
+**Coupling verdict: correct, no refactor.**
+- `OWNER_SWEEP_ENABLED=false` does not disable internal Treasury accounting.
+- `REAL_PAYMENTS_ENABLED=false` prohibits external execution but not internal ledger attribution.
+- £1 000 of realised after-tax net profit at the 10% policy rate is recorded internally as £100 to the Treasury and £900
+  post-sweep distributable. There is no external transfer and no owner withdrawal. The £900 is then distributed per the
+  negotiated contracts (§39.2).
+
+**Two defects found and fixed.**
+
+1. **Double sweep** (v30 base, fixed in the undeployed v42).
+   - **The fault:** the base was "realised profit not yet *contributed*", so after a 10% sweep the other 90% stayed in
+     the base. Every later period swept it again: 10%, then 9%, then 8.1%, approaching 100% of the same profit.
+   - **The fix:** each executed sweep records the basis it determined in `fleet_sweep_records` (append-only; idempotent
+     per period and agent). The base is now realised after-tax profit not yet *swept*. A basis capped by the
+     safe-transferable protection leaves the unswept rest for a later period. A determined 0% sweep (for example a full
+     reinvestment reduction) is recorded too, so post-sweep distributions can proceed.
+   - **Impact:** production never ran a sweep (the policy is disabled and nothing scheduled one), so no history is
+     affected.
+2. **No runner.** The service never runs `svc_sweep_run`, and no command exposed it, so enabling the policy alone would
+   allocate nothing and profit shares would stay pending. Added the admin command `economy-sweep-run <period>`
+   (`PgHubAdmin.sweepRun`). It is internal-only, idempotent per period, and a no-op while the policy is disabled. No
+   automatic cadence was added: how often to sweep is the owner's decision.
+
+**What the owner would need to do** for internal allocation and post-sweep distributions (an owner decision; nothing
+changed here):
+1. Enable the policy: `npm run fleet:admin -- economy-sweep-policy '{"enabled":true}'` (bands and rates as configured;
+   the default band is 10% up to 10 living agents).
+2. Run a pass per chosen period: `npm run fleet:admin -- economy-sweep-run 2026-10`, or schedule it.
+
+Both steps are internal ledger only. No flag changes, and `REAL_PAYMENTS_ENABLED` and `OWNER_SWEEP_ENABLED` stay false.
+
+**Tests** (`fleet-treasury-allocation-pg.test.ts`):
+- only the policy row gates allocation, and no SQL reads host flags;
+- the allocation is internal-only (no order, rail, custody or owner instruction);
+- a retried period replays, and a later period never re-sweeps already-swept profit;
+- an interrupted pass followed by a retry records exactly one sweep;
+- `OWNER_SWEEP_ENABLED=false` and `REAL_PAYMENTS_ENABLED=false` leave internal accounting intact;
+- `REAL_PAYMENTS_ENABLED=false` blocks every external movement;
+- post-sweep distributions follow the recorded allocation, with no double sweep and no double payment.
+
+## 41. Project runtime readiness (V2.2, 2026-10-04)
+
+`fleet-projects-founder-pg.test.ts` runs four test founders through their own runtime against a real migrated registry
+via the restricted agent role, using the real `FounderMind` turn loop and `FounderToolbox`. A scripted policy reads the
+real tool outputs; there are no model calls and no payments. Between them, the founders:
+- discover a teammate from its delivery history;
+- propose a plan, and the planner finds the concurrency;
+- offer terms and receive COUNTER, DECLINE and ACCEPT;
+- accept the counter, fund the fixed cost, work, deliver and review;
+- go through a real sale and the service's Treasury pass;
+- distribute the post-sweep pool (35% / 20% / lead 45%);
+- assess, complete, and read back the forecast-versus-realised knowledge.
+
+No owner action is needed, nothing external moves, and the ledger verifies.
+
+**Two integration defects found and fixed.**
+1. `project` was not classified in `TOOL_CAPABILITIES`, so the runtime refused it (`FLEET_CAPABILITY_UNCLASSIFIED`). It
+   is now `planning`: no new authority, manifest unchanged.
+2. Agent tool outputs carried the full project JSON, but a founder keeps only the first 3 000 characters of a tool
+   output, and jsonb orders keys by length, so `projectId` could be cut off. Agent ops now return a compact brief:
+   top-level `id`, plus `project`: `{id, key, name, lead, status, stage, eta, gate, escrowMinor, committedMinor,
+   leadShareBp, members[{memberId, agentId, role, status, terms, counter, paidMinor, shareOwedMinor}], tasks[{key, owner,
+   status, hours, deps}]}`. The lead gets the full view with `project.status {projectId, detail: true}`. The dashboard read
+   (`dash_call projects`) is unchanged.
+
+**Noted, not changed** (out of scope; would grant founders new authority): `identity`, `fleet_services` and `browser`
+(v34–v37) are advertised in `FOUNDER_TOOLS` but are not classified in `TOOL_CAPABILITIES`, so a founder runtime refuses
+them. The owner should decide whether founders get them.
+
+**Production founder upgrade** (owner gate; nothing done here). Founder 1 runs an earlier pinned runtime; its toolbox
+has no `project` tool. The steps follow the R23 lifecycle (`docs/design/r23-founder-runtime-upgrade.md`):
+1. Owner approval of the target runtime release containing this commit: a new runtime commit, build ID and lockfile SHA
+   recorded as the approved runtime in `fleet_state` (pins are taken from the actual build output, never placeholders).
+2. Build and install the release tree on the VPS from the approved commit, and verify the tree hash.
+3. Run `sudo scripts/fleet-founders.sh upgrade-rehearsal <fromCommit>` (locally, the eea1932 → this-tree rehearsal
+   passes: `fleet-founder-upgrade.test.ts`).
+4. Run `upgrade-preflight`, then `upgrade-runtime` (owner gate). This goes through quiesce, snapshot, commit, pin, start,
+   prove and verify, with automatic rollback on failure.
+5. The schema prerequisite (v42) must be live first. It is a separate, owner-approved migration of the production
+   database.

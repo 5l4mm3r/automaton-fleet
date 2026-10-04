@@ -79,6 +79,9 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   wallet: "ledger.read",
   fleet_capital: "spend.request",
   economic_knowledge: "knowledge.read",
+  // v42: team projects (recruit existing agents by internal contract) — the agent's own commercial planning; funding
+  // goes through FleetController's custody checks (no new authority: the planning class).
+  project: "planning",
   resolve_decision: "planning",
   review_decision: "planning",
   get_plan: "planning",
