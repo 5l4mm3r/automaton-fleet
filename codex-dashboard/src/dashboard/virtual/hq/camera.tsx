@@ -9,26 +9,46 @@
  * walls rather than through them). Reduce Motion cuts instead of flying.
  */
 import { useFrame, useThree } from "@react-three/fiber";
-import { useRef, type MutableRefObject } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import { focusRect, type Point } from "../world";
 import type { Focus } from "../VirtualMap";
 import { frameAgent } from "./framing";
+import { interact, shotGoal, takeShot, wantShot, type DirectorState } from "./director";
+import type { TransportDirector } from "./flow";
 import type { Occluder, WorkSpot } from "./world-build";
 
 const NONE: ReadonlySet<string> = new Set();
 
-export function CameraRig({ focus, positionsRef, reduceMotion, spots, stations, ghostsRef, occluders = [] }: {
+export function CameraRig({ focus, positionsRef, reduceMotion, spots, stations, ghostsRef, occluders = [], autoFollow = false, directorRef }: {
   focus: Focus; positionsRef: MutableRefObject<Map<string, Point>>; reduceMotion: boolean;
   spots: ReadonlyMap<string, WorkSpot>; stations: ReadonlyMap<string, Point>; ghostsRef: MutableRefObject<ReadonlySet<string>>;
   /** Tall furniture the Agent View must not look through (world-build). */
   occluders?: readonly Occluder[];
+  /** Auto-follow important events (off by default) and the handle the transport renderer offers them to. */
+  autoFollow?: boolean; directorRef?: MutableRefObject<TransportDirector | null>;
 }) {
   const { camera } = useThree();
   const look = useRef(new THREE.Vector3(0, 0, 2));
   const goalPos = useRef(new THREE.Vector3()), goalLook = useRef(new THREE.Vector3());
   const started = useRef(false);
   const held = useRef<{ id: string; az: number; at: Point } | null>(null);
+  // The event camera: optional, brief, interruptible. Any user input (pointer, wheel, key) or focus change cancels it.
+  const director = useRef<DirectorState>({ enabled: autoFollow, shot: null, lastInteraction: 0 }); // set on mount (focus effect)
+  const gl = useThree((s) => s.gl);
+  useEffect(() => { director.current = { ...director.current, enabled: autoFollow, shot: autoFollow ? director.current.shot : null }; }, [autoFollow]);
+  useEffect(() => { director.current = interact(director.current, Date.now()); }, [focus]);
+  useEffect(() => {
+    const cancel = () => { director.current = interact(director.current, Date.now()); };
+    const el = gl.domElement.parentElement ?? gl.domElement;
+    el.addEventListener("pointerdown", cancel); el.addEventListener("wheel", cancel, { passive: true }); window.addEventListener("keydown", cancel);
+    return () => { el.removeEventListener("pointerdown", cancel); el.removeEventListener("wheel", cancel); window.removeEventListener("keydown", cancel); };
+  }, [gl]);
+  useEffect(() => {
+    if (!directorRef) return;
+    directorRef.current = { offer: (t) => { if (wantShot(director.current, t, Date.now(), { focusLevel: focus.level, reduceMotion })) director.current = takeShot(director.current, t); } };
+    return () => { directorRef.current = null; };
+  }, [directorRef, focus.level, reduceMotion]);
   useFrame((_, dt) => {
     const level = focus.level;
     if (level === "agent" && positionsRef.current.get(focus.id)) {
@@ -50,6 +70,9 @@ export function CameraRig({ focus, positionsRef, reduceMotion, spots, stations, 
       goalLook.current.set(r.x, level === "fleet" ? 0 : 0.8, r.z + (level === "fleet" ? 3 : -1.6));
       goalPos.current.set(r.x, height, r.z + back);
     }
+    // An event shot (if one is running) frames the event instead of the user's level; it ends by itself or on any input.
+    const shot = level !== "agent" ? shotGoal(director.current, Date.now()) : null;
+    if (shot) { goalPos.current.set(shot.pos.x, shot.pos.y, shot.pos.z); goalLook.current.set(shot.look.x, shot.look.y, shot.look.z); }
     if (!started.current || reduceMotion) { camera.position.copy(goalPos.current); look.current.copy(goalLook.current); started.current = true; }
     else {
       const k = 1 - Math.exp(-dt * 3.0);

@@ -206,7 +206,7 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     await open(page, origin, "high");
     expect(await hint(page)).toMatch(/^Fleet view/);
     for (const [dep, file] of [["Fleet Command", "05-fleet-command"], ["Treasury", "06-treasury-banner"], ["Agent Floor", "07-agent-floor"], ["Opportunity Lab", "08-opportunity-lab"],
-      ["Venture / Dev", "09-venture-dev"], ["Library / Research", "10-library-research"], ["Security / Systems", "11-security-systems"]] as const) {
+      ["Venture / Dev", "09-venture-dev"], ["Library / Research", "10-library-research"], ["Security / Systems", "11-security-systems"], ["Marketing", "11b-marketing"]] as const) {
       await toDepartment(page, dep);
       await shot(page, file);
       await toFleet(page);
@@ -247,6 +247,8 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
       await ok(R.econ(B, "project.task", { projectId: P, taskKey: "backend", action: "start" }));
       await ok(R.econ(A, "project.task", { projectId: P, taskKey: "frontend", action: "start" }));
       await page.waitForTimeout(8000); // both now work in Venture / Dev (their latest recorded activity is the project)
+      // 21. Collaboration: the two teammates at work together in Venture / Dev (team table, project activity).
+      await toDepartment(page, "Venture / Dev"); await shot(page, "21-collaboration"); await toFleet(page);
       // 16. founder-2 delivers the backend to founder-1.
       await startRec(page);
       await ok(R.econ(B, "project.task", { projectId: P, taskKey: "backend", action: "deliver" }));
@@ -318,6 +320,33 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     await toFleet(page);
   });
 
+  it("V2.3 presentation: an opportunity transport; the optional event camera follows it; Reduce Motion keeps the information", async () => {
+    const { page, origin, R, errors } = F;
+    const opp = R.founders[1].id, lib = R.founders[6].id;
+    // 19 + 22. Auto-follow on (opt-in): the user leaves the camera alone; a real opportunity event is recorded; the
+    // camera frames source → route → destination and returns control as soon as the user interacts.
+    await open(page, origin, "high", { autoFollow: true });
+    await page.waitForTimeout(5000);
+    await startRec(page);
+    await R.q(`SELECT fleet.fleet_event('opportunity_validated', $1, 'agent', '{"topic":"hq-v23"}'::jsonb)`, [opp]);
+    await ticker(page, "opportunity validated");
+    await page.waitForTimeout(2600); await shot(page, "19-opportunity-transport");
+    await page.waitForTimeout(4500); await shot(page, "22-auto-camera");
+    await page.waitForTimeout(2500); await stopRec(page, "22-auto-camera");
+    await page.mouse.move(400, 300); await page.mouse.wheel(0, -200); await page.waitForTimeout(600); // interaction: manual control
+    expect(await hint(page)).toMatch(/^Fleet view/); // the camera level never changes on its own
+    // 23. Reduce Motion: no racing packet — source, route, destination and label shown together; state still updates.
+    await open(page, origin, "high", { reduceMotion: true });
+    await startRec(page);
+    await R.q(`SELECT fleet.fleet_event('knowledge_recorded', $1, 'agent', '{"topic":"hq-reduced"}'::jsonb)`, [lib]);
+    await ticker(page, "Research recorded");
+    await page.waitForTimeout(1200); await shot(page, "23-reduce-motion");
+    await page.waitForTimeout(3500); await stopRec(page, "23-reduce-motion");
+    expect(await page.getByText("The 3D view stopped").count()).toBe(0);
+    expect(errors, errors.join("\n")).toEqual([]);
+    await open(page, origin, "high");
+  });
+
   for (const [i, q] of QUALITIES.entries()) {
     it(`${q}: every room, screen and person renders without errors; frame cadence recorded`, async () => {
       const { page, origin, errors } = F;
@@ -345,6 +374,7 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
         await spreadAgents(G.R);
         for (const q of QUALITIES) {
           await open(G.page, G.origin, q);
+          if (q === "high" && n >= 25) await shot(G.page, `${n === 25 ? "14b" : "14c"}-fleet-${n}-agents`);
           const fleet = round(await rafRate(G.page));
           await toDepartment(G.page, "Agent Floor");
           const dep = round(await rafRate(G.page));
@@ -353,6 +383,18 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
           const agent = round(await rafRate(G.page));
           await toFleet(G.page);
           report[`${n} agents ${q}`] = { fleet, department: dep, agent };
+          expect(await G.page.getByText("The 3D view stopped").count()).toBe(0);
+        }
+        if (n === 50) {
+          // Concurrency: 30 real events recorded at once across 50 agents — the visual scheduler plays the most
+          // important first, queues the rest (bounded) and the scene keeps its cadence.
+          await open(G.page, G.origin, "ultra");
+          const types = ["knowledge_recorded", "opportunity_validated", "mission_started", "identity_verified"];
+          const ids = Array.from({ length: 30 }, (_, i) => G.R.founders[(i * 7) % G.R.founders.length].id), ts = ids.map((_, i) => types[i % types.length]);
+          await G.R.q(`SELECT fleet.fleet_event(t, a, 'agent', '{"topic":"burst"}'::jsonb) FROM unnest($1::text[], $2::text[]) AS u(t, a)`, [ts, ids]);
+          await G.page.waitForTimeout(2500);
+          await shot(G.page, "24-concurrency-burst");
+          report["50 agents ultra burst (30 events)"] = { fleet: round(await rafRate(G.page)), department: 0, agent: 0 };
           expect(await G.page.getByText("The 3D view stopped").count()).toBe(0);
         }
         expect(G.errors, G.errors.join("\n")).toEqual([]);

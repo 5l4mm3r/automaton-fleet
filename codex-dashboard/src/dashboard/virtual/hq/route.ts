@@ -5,7 +5,7 @@
  * along the destination's cross corridor and in through its opening — so information visibly travels through the
  * infrastructure instead of through walls. Pure geometry, unit-tested.
  */
-import { DEPARTMENTS, type Department } from "../../command/departments";
+import { DEPARTMENTS, type Department, type DepartmentId } from "../../command/departments";
 import type { Point } from "../world";
 
 /** Cross-corridor conduit lines (z) and the two spine conduits (x), as built by world-build. */
@@ -13,6 +13,16 @@ export const CROSS_Z = [-23.5, -11.5, 4.5, 17.5, 30.75, 42.6] as const;
 export const SPINE_X = [-10, 10] as const;
 /** Where outside information enters the conduit network (the east gate's spine junction). */
 const GATE_NODE: Point = { x: 10, z: -4 };
+
+/**
+ * Each department's INTAKE: the physical point where information for that department arrives and leaves — the end of
+ * the room's conduit (world-build builds the installation there). Fleet Command: the live core on its dais. Treasury:
+ * the capital intake on the gold seal under the hub displays. Elsewhere: the intake node in the equipment band.
+ */
+export const INTAKE: Readonly<Record<DepartmentId, Point>> = Object.freeze(Object.fromEntries(DEPARTMENTS.map((d) => {
+  const z0 = d.z - d.d / 2;
+  return [d.id, d.id === "command" ? { x: d.x, z: z0 + 3.5 } : d.id === "treasury" ? { x: d.x, z: d.z + 1.4 } : { x: d.x, z: z0 + 1.6 }];
+})) as Record<DepartmentId, Point>);
 
 export const roomAt = (p: Point): Department | undefined => DEPARTMENTS.find((d) => Math.abs(p.x - d.x) <= d.w / 2 && Math.abs(p.z - d.z) <= d.d / 2);
 

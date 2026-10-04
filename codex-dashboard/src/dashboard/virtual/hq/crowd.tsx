@@ -6,10 +6,12 @@
  * head through a shared face atlas — the 3D person and the portrait are literally the same face, in the same condition;
  * skin, hair style and colour, beard and build come from the same identity.
  *
- * Animation states come from the agent's real state and position, never from decoration:
- *   walking (fast walk on long transitions) to the spot its FleetController state puts it · idle · seated typing at
- *   its own Agent Floor workstation or a room's desk · seated idle when held · terminal operation at a console or table
- *   · lying when dead. Poses blend; Reduce Motion snaps positions and stills the motion.
+ * Animation states come from the agent's real state and position, never from decoration (choreo.ts): standing up and
+ *   walking (brisk on long moves) along nav-grid paths to the spot its FleetController state puts it · typing, reading
+ *   or seated idle at a desk · operating, reading or inspecting at a console · meeting (seated, standing, pointing at
+ *   the shared table) with teammates · watching a crowded room's displays · waiting · lying when dead — and reactions to
+ *   the agent's own recorded events (confirm as it sends, complete on a delivery, look up as something arrives). Agents
+ *   with nothing recent never mime work. Poses blend; Reduce Motion snaps positions and stills the motion.
  *
  * Rendering: each body part is ONE instanced mesh for the whole crowd (≈40 draw calls for 50 people); a reusable rig
  * of joints poses each agent in turn and writes the part matrices. Agents the camera reports as standing between it
@@ -21,7 +23,9 @@ import * as THREE from "three";
 import type { AgentModel } from "../../command/agents";
 import { DEPARTMENT } from "../../command/departments";
 import { identityColours, portraitFigure, portraitPixels, PORTRAIT_SIZE, seedOf } from "../../command/portrait";
-import { pathLength, routeThrough } from "./route";
+import { pathLength } from "./route";
+import { findPath, walkable, type NavGrid } from "./nav";
+import { chooseActivity, giveWay, reactionAt, type Activity, type Reaction } from "./choreo";
 import { appearanceOf } from "./appearance";
 import { birthState, type Point } from "../world";
 import type { HQProfile } from "./quality";
@@ -31,9 +35,16 @@ import { bakeShade } from "./builder";
 type Pose = { hipY: number; lean: number; head: number; headYaw: number; sh: [number, number]; shRoll: [number, number]; el: [number, number]; th: [number, number]; kn: [number, number]; lying: number };
 const POSE_KEYS = ["hipY", "lean", "head", "headYaw", "lying"] as const;
 
-export type Activity = "walk" | "fastWalk" | "idle" | "seated" | "terminal" | "seatedIdle" | "meetSeat" | "meetStand" | "dead";
+export type { Activity } from "./choreo";
 
-interface AgentState { pos: Point; yaw: number; phase: number; pose: Pose; activity: Activity; ghost: number; goal: Point | null; path: Point[]; speed: number; fast: boolean }
+/**
+ * Per person: where it is, its pose, and its current move. A move goes PLAN (path requested; the person stands up
+ * from its seat meanwhile) → DEPART (after the stand-up) → WALK (the nav path) → ARRIVE (slows, turns to the work,
+ * sits or starts work).
+ */
+interface AgentState { pos: Point; yaw: number; phase: number; pose: Pose; activity: Activity; ghost: number; goal: Point | null; path: Point[]; speed: number; fast: boolean;
+  /** Waiting for a path (and/or the stand-up) before leaving: the time it may leave (ms). */
+  departAt: number; planned: boolean }
 
 const zero = (): Pose => ({ hipY: 0.95, lean: 0, head: 0, headYaw: 0, sh: [0.02, 0.02], shRoll: [0.1, -0.1], el: [0.18, 0.18], th: [0, 0], kn: [0.04, 0.04], lying: 0 });
 
@@ -56,15 +67,26 @@ function targetPose(a: Activity, t: number, phase: number, i: number, still: boo
     case "seated":
       p.hipY = 0.5; p.th = [-1.48, -1.48]; p.kn = [1.42, 1.42]; p.lean = 0.12; p.head = 0.16;
       p.sh = [-0.6, -0.6]; p.shRoll = [0.14, -0.14]; p.el = [-1.0 + Math.sin(t * 13 + i) * 0.05 * s, -1.0 + Math.sin(t * 11 + i + 1) * 0.05 * s]; break;
-    case "seatedIdle":
-      p.hipY = 0.5; p.th = [-1.48, -1.48]; p.kn = [1.42, 1.42]; p.lean = -0.06; p.sh = [-0.22, -0.22]; p.el = [-0.95, -0.95]; p.headYaw = Math.sin(t * 0.3 + i) * 0.2 * s; break;
-    case "terminal": {
-      // Operating the console, with periods of inspecting the screen (a hand raised to the chin, leaning in).
-      const inspect = s > 0 && Math.sin(t * 0.11 + i * 1.3) > 0.55;
-      if (inspect) { p.sh = [-1.1, -0.2]; p.el = [-1.9, -0.4]; p.shRoll = [0.35, -0.1]; p.lean = 0.14; p.head = 0.18; p.headYaw = Math.sin(t * 0.4 + i) * 0.12; }
-      else { p.sh = [-0.55 + Math.sin(t * 1.7 + i) * 0.08 * s, -0.48 - Math.sin(t * 1.3 + i) * 0.06 * s]; p.el = [-0.95, -0.9]; p.shRoll = [0.18, -0.18]; p.lean = 0.08; p.head = 0.12; p.headYaw = Math.sin(t * 0.5 + i) * 0.08 * s; }
-      break;
-    }
+    case "seatedIdle": // nothing recent to work on: leaning back, hands in the lap, looking around now and then (never typing)
+      p.hipY = 0.5; p.th = [-1.48, -1.48]; p.kn = [1.42, 1.42]; p.lean = -0.1; p.sh = [-0.18, -0.18]; p.shRoll = [0.12, -0.12]; p.el = [-0.85, -0.85];
+      p.headYaw = (Math.sin(t * 0.17 + i * 2.3) > 0.5 ? 0.45 * Math.sign(Math.sin(i * 1.7)) : Math.sin(t * 0.3 + i) * 0.12) * s; p.head = -0.04; break;
+    case "seatedRead": // reading the screen: one hand on the mouse, chin forward, slow scrolling
+      p.hipY = 0.5; p.th = [-1.48, -1.48]; p.kn = [1.42, 1.42]; p.lean = 0.2; p.head = 0.22;
+      p.sh = [-0.7, -0.35]; p.shRoll = [0.16, -0.08]; p.el = [-0.9 + Math.sin(t * 0.8 + i) * 0.03 * s, -1.25]; p.headYaw = Math.sin(t * 0.25 + i) * 0.05 * s; break;
+    case "rise": // standing up from the seat before leaving (the hips come up, a lean forward)
+      p.lean = 0.16; p.sh = [0.1, 0.1]; p.el = [0.3, 0.3]; p.head = 0.05; break;
+    case "terminal": // operating the console (both hands on the controls)
+      p.sh = [-0.55 + Math.sin(t * 1.7 + i) * 0.08 * s, -0.48 - Math.sin(t * 1.3 + i) * 0.06 * s]; p.el = [-0.95, -0.9]; p.shRoll = [0.18, -0.18]; p.lean = 0.08; p.head = 0.12; p.headYaw = Math.sin(t * 0.5 + i) * 0.08 * s; break;
+    case "inspect": // inspecting the screen: a hand raised to the chin, leaning in
+      p.sh = [-1.1, -0.2]; p.el = [-1.9, -0.4]; p.shRoll = [0.35, -0.1]; p.lean = 0.14; p.head = 0.18; p.headYaw = Math.sin(t * 0.4 + i) * 0.12 * s; break;
+    case "reading": // reading the terminal: hands on the console edge, head down, scanning
+      p.sh = [-0.42, -0.42]; p.el = [-0.55, -0.55]; p.shRoll = [0.22, -0.22]; p.lean = 0.16; p.head = 0.3; p.headYaw = Math.sin(t * 0.9 + i) * 0.1 * s; break;
+    case "observe": // watching the room's displays (arms folded, weight on one leg)
+      p.sh = [-0.55, -0.55]; p.shRoll = [0.5, -0.5]; p.el = [-1.6, -1.6]; p.head = -0.12; p.headYaw = Math.sin(t * 0.2 + i) * 0.35 * s; p.th = [0.04, -0.03]; break;
+    case "waiting": // waiting: hands behind the back, a small sway
+      p.sh = [0.25, 0.25]; p.shRoll = [0.05, -0.05]; p.el = [-0.5, -0.5]; p.headYaw = Math.sin(t * 0.25 + i) * 0.25 * s; p.hipY = 0.95 + Math.sin(t * 0.9 + i) * 0.003 * s; break;
+    case "pointing": // at the project table: pointing at the shared surface while explaining
+      p.sh = [-1.15 + Math.sin(t * 0.7 + i) * 0.08 * s, 0.05]; p.shRoll = [0.1, -0.1]; p.el = [-0.15, -0.35]; p.lean = 0.12; p.head = 0.2; p.headYaw = Math.sin(t * 0.5 + i) * 0.2 * s; break;
     case "meetSeat": // at a team table with teammates (a project record says they work together): talk, gesture, listen
       p.hipY = 0.5; p.th = [-1.48, -1.48]; p.kn = [1.42, 1.42]; p.lean = 0.1 + Math.sin(t * 0.7 + i) * 0.04 * s;
       p.sh = [-0.55 + Math.max(0, Math.sin(t * 0.9 + i * 2)) * 0.35 * s, -0.45]; p.el = [-1.2 + Math.sin(t * 2.1 + i) * 0.15 * s, -1.0]; p.headYaw = Math.sin(t * 0.45 + i * 1.7) * 0.45 * s; p.head = 0.06; break;
@@ -74,6 +96,18 @@ function targetPose(a: Activity, t: number, phase: number, i: number, still: boo
       p.lying = 1; p.hipY = 0.14; p.sh = [0, 0]; p.el = [0, 0]; break;
   }
   return p;
+}
+
+/** A reaction to one of the agent's own events, layered over its pose (k: 0..1 through the reaction). */
+function react(p: Pose, kind: Reaction, k: number, seated: boolean) {
+  const w = Math.sin(Math.min(1, k) * Math.PI); // in and out
+  if (kind === "confirm") { // a firm tap on the console and a nod: the agent sent this
+    p.sh[1] += (-0.9 - p.sh[1]) * w; p.el[1] += (-0.5 - p.el[1]) * w; p.head += 0.25 * w * Math.max(0, Math.sin(k * Math.PI * 3));
+  } else if (kind === "complete") { // delivered: sits back / straightens, both fists up briefly
+    p.lean += (-0.15 - p.lean) * w; p.sh[0] += (-2.4 - p.sh[0]) * w; p.sh[1] += (-2.4 - p.sh[1]) * w; p.el[0] += (-0.5 - p.el[0]) * w; p.el[1] += (-0.5 - p.el[1]) * w; p.head += (-0.2 - p.head) * w;
+  } else { // something arrived for it: looks up at the screen, straightens
+    p.head += (-0.15 - p.head) * w; p.lean += ((seated ? 0.02 : -0.02) - p.lean) * w; p.headYaw *= 1 - w;
+  }
 }
 
 function blend(cur: Pose, to: Pose, k: number) {
@@ -234,9 +268,15 @@ function faceMaterial(map: THREE.Texture, pbr: boolean): THREE.Material {
 /** Seated agents sit a little behind their spot (in the chair), facing the desk. */
 const SEAT_BACK = 0.1;
 
-export const Crowd = memo(function Crowd({ models, targets, spots, meetings, births, selected, q, reduceMotion, positionsRef, ghostsRef, onAgent, stations }: {
+export const Crowd = memo(function Crowd({ models, targets, spots, meetings, births, selected, q, reduceMotion, positionsRef, ghostsRef, onAgent, stations, nav, teams, receivedRef }: {
   models: AgentModel[]; targets: ReadonlyMap<string, Point>; spots: ReadonlyMap<string, WorkSpot>; meetings: ReadonlySet<string>; births: ReadonlyMap<string, number>; selected: string | null; q: HQProfile; reduceMotion: boolean;
   positionsRef: MutableRefObject<Map<string, Point>>; ghostsRef: MutableRefObject<ReadonlySet<string>>; onAgent: (id: string) => void; stations: ReadonlyMap<string, Point>;
+  /** The walkable floor (nav.ts), with the Agent Floor's desks. */
+  nav: NavGrid;
+  /** Agents on an active team project (FleetController's project record): working, even without a recent event. */
+  teams: ReadonlyMap<string, string>;
+  /** When each agent last sent / completed / received a real event (flow.tsx), for its reactions. */
+  receivedRef?: MutableRefObject<Map<string, number>>;
 }) {
   const rig = useMemo(() => makeRig(), []);
   const names = useMemo(() => Object.keys(rig.parts) as PartName[], [rig]);
@@ -306,6 +346,7 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
     pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse); frustum.setFromProjectionMatrix(pv);
     const far = camera.position.y > 24; // the Fleet view
     const t = clock.elapsedTime, k = reduceMotion ? 1 : Math.min(1, dt * 6), now = Date.now(), ghosts = ghostsRef.current;
+    let budget = 4; // ms of path planning per frame (moves queue up and leave over the next frames)
     const drawn = new Map<PartName, number>();
     models.forEach((m, i) => {
       const id = m.agent.id, target = targets.get(id);
@@ -314,30 +355,44 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
       const b = birthState(births.get(id), now, reduceMotion);
       if (!st) {
         const start = b.phase !== "settled" ? { x: DEPARTMENT.command.x, z: DEPARTMENT.command.z + 6 } : { ...target };
-        st = { pos: start, yaw: Math.PI, phase: 0, pose: zero(), activity: "idle", ghost: 0, goal: null, path: [], speed: 0, fast: false };
+        st = { pos: start, yaw: Math.PI, phase: 0, pose: zero(), activity: "idle", ghost: 0, goal: null, path: [], speed: 0, fast: false, departAt: 0, planned: true };
         states.current.set(id, st);
       }
-      // Walk to the authoritative target THROUGH the building (route.ts: out of the room's opening, along the corridors
-      // in the agent's own lane, in through the destination's opening) — never through walls. Speed eases in and out;
-      // long moves between rooms are a brisk walk.
+      // A new authoritative target: finish the current activity (stand up from the seat), then walk THROUGH the
+      // building on the nav grid — around desks and people's chairs, out through the room's doorway, along the
+      // corridors, in through the destination's doorway — and approach the work spot. Teleport only if no path exists.
       if (!st.goal || st.goal.x !== target.x || st.goal.z !== target.z) {
         st.goal = { ...target };
-        const route = reduceMotion ? [target] : routeThrough([{ ...st.pos }, target]).slice(1);
-        const lane = ((seedOf(id) % 5) - 2) * 0.22; // spread people across the corridor width
-        st.path = route.map((p, k) => (k < route.length - 1 ? { x: p.x + lane, z: p.z + lane } : p));
-        st.fast = pathLength([st.pos, ...st.path]) > 12;
+        const seatedNow = st.pose.hipY < 0.8;
+        st.path = []; st.planned = false; st.departAt = now + (seatedNow && !reduceMotion ? 900 : 200);
       }
+      if (!st.planned && (reduceMotion || budget > 0)) {
+        st.planned = true;
+        if (reduceMotion) st.path = [st.goal];
+        else {
+          const t0 = performance.now(), path = findPath(nav, st.pos, st.goal);
+          budget -= performance.now() - t0;
+          if (path) st.path = path; else { st.pos.x = st.goal.x; st.pos.z = st.goal.z; st.path = []; } // fallback only
+          st.fast = pathLength([st.pos, ...st.path]) > 12;
+        }
+      }
+      const waiting = !st.planned || now < st.departAt;
       let moving = false, dx = 0, dz = 0;
       if (reduceMotion) { st.pos.x = target.x; st.pos.z = target.z; st.path = []; st.speed = 0; }
-      else if (st.path.length) {
+      else if (st.path.length && !waiting) {
         const wp = st.path[0]; dx = wp.x - st.pos.x; dz = wp.z - st.pos.z;
         const d = Math.hypot(dx, dz), remaining = d + pathLength(st.path);
         const cruise = st.fast ? 2.1 : 1.35, want = Math.min(cruise, 0.35 + remaining * 0.9); // slow down on arrival
         const turn = Math.abs(Math.atan2(Math.sin(Math.atan2(dx, dz) - st.yaw), Math.cos(Math.atan2(dx, dz) - st.yaw)));
-        st.speed += ((turn > 1.2 ? want * 0.45 : want) - st.speed) * Math.min(1, dt * 3); // accelerate, ease into turns
+        // Give way to people close ahead (keep right; slow down), never stepping off walkable floor.
+        const dir = d > 1e-4 ? { x: dx / d, z: dz / d } : { x: 0, z: 1 };
+        const gw = remaining > 0.8 ? giveWay(id, st.pos, dir, own.current) : { push: { x: 0, z: 0 }, slow: 1 };
+        st.speed += ((turn > 1.2 ? want * 0.45 : want) * gw.slow - st.speed) * Math.min(1, dt * 3); // accelerate, ease into turns
         const step = st.speed * Math.min(dt, 0.1);
         if (d <= Math.max(step, 0.02)) { st.pos.x = wp.x; st.pos.z = wp.z; st.path.shift(); }
         else { st.pos.x += (dx / d) * step; st.pos.z += (dz / d) * step; }
+        const sx = st.pos.x + gw.push.x * Math.min(dt, 0.1), sz = st.pos.z + gw.push.z * Math.min(dt, 0.1);
+        if ((gw.push.x || gw.push.z) && walkable(nav, { x: sx, z: sz })) { st.pos.x = sx; st.pos.z = sz; }
         st.phase += (step / (st.fast ? 0.9 : 0.75)) * Math.PI;
         moving = st.path.length > 0 || d > step;
       } else st.speed = 0;
@@ -345,11 +400,8 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
       own.current.set(id, { x: st.pos.x, z: st.pos.z });
       const station = stations.get(id), atStation = !!station && Math.hypot(station.x - st.pos.x, station.z - st.pos.z) < 0.05;
       const spot = spots.get(id), atSpot = !!spot && Math.hypot(spot.x - st.pos.x, spot.z - st.pos.z) < 0.05;
-      const held = m.agent.status === "held" || m.agent.status === "provisioning";
-      const activity: Activity = m.agent.status === "dead" ? "dead" : moving ? (fast ? "fastWalk" : "walk")
-        : atSpot && meetings.has(id) ? (spot!.pose === "seat" ? "meetSeat" : "meetStand")
-        : atStation || (atSpot && spot!.pose === "seat") ? (held ? "seatedIdle" : "seated")
-        : atSpot ? "terminal" : m.placement.department === "floor" ? "idle" : "terminal";
+      const activity = chooseActivity({ status: m.agent.status, basis: m.placement.basis, department: m.placement.department, moving, fast, rising: waiting && (st.path.length > 0 || !st.planned),
+        atStation, atSpot, spotPose: spot?.pose ?? null, meeting: meetings.has(id), team: teams.has(id), seed: seedOf(id), t });
       st.activity = activity;
       // Stationary: face the equipment (the spot's direction; workstations face north).
       const wantYaw = moving && (dx || dz) ? Math.atan2(dx, dz) : atSpot ? spot!.yaw : Math.PI;
@@ -357,7 +409,12 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
       st.yaw += dy * (reduceMotion ? 1 : Math.min(1, dt * (moving ? 6 : 4)));
       // Sitting down and standing up take a moment (slower blend while the hips change height).
       const settling = Math.abs(targetPose(activity, t, st.phase, i, true).hipY - st.pose.hipY) > 0.05;
-      blend(st.pose, targetPose(activity, t, st.phase, i, reduceMotion), settling && !reduceMotion ? Math.min(1, dt * 3) : k);
+      const want = targetPose(activity, t, st.phase, i, reduceMotion);
+      // Reactions to the agent's own real events (not while walking, not when dead; Reduce Motion keeps them still).
+      const rec = receivedRef?.current, rx = rec && !moving && activity !== "dead" && !reduceMotion
+        ? reactionAt(now, { send: rec.get(`send:${id}`), done: rec.get(`done:${id}`), receive: rec.get(`agent:${id}`) }) : null;
+      if (rx) react(want, rx.kind, rx.k, activity.startsWith("seat") || activity === "meetSeat");
+      blend(st.pose, want, settling && !reduceMotion ? Math.min(1, dt * 3) : rx ? Math.min(1, dt * 10) : k);
       // Fade out of the camera's line of sight to the selected agent.
       const ghostTarget = ghosts.has(id) && id !== selected ? 1 : 0;
       st.ghost += (ghostTarget - st.ghost) * (reduceMotion ? 1 : Math.min(1, dt * 8));
@@ -366,7 +423,7 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
       sphere.center.set(st.pos.x, 1, st.pos.z);
       if (!frustum.intersectsSphere(sphere)) return;
       // Pose the rig.
-      const P = st.pose, r = rig, seated = activity === "seated" || activity === "seatedIdle" || activity === "meetSeat";
+      const P = st.pose, r = rig, seated = activity === "seated" || activity === "seatedIdle" || activity === "seatedRead" || activity === "meetSeat";
       const back = seated ? SEAT_BACK : 0;
       r.root.position.set(st.pos.x - Math.sin(st.yaw) * back, 0.12, st.pos.z - Math.cos(st.yaw) * back);
       r.root.rotation.set(0, st.yaw, 0);
@@ -393,7 +450,7 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
           && (p !== "beard" || look.facialHair >= 3)
           && (!p.startsWith("hair") || p === hairPart)
           && (p !== "earpiece" || look.accessories.includes("earpiece"))
-          && (p !== "holo" || (activity === "terminal" && look.accessories.includes("holoPanel")))
+          && (p !== "holo" || ((activity === "terminal" || activity === "reading" || activity === "inspect") && look.accessories.includes("holoPanel")))
           && (p !== "vest" || look.armour !== "none")
           && (!(p === "plate" || p.startsWith("pouch")) || look.armour === "plateCarrier")
           && (!(p === "cap" || p === "brim") || look.headgear === "cap")

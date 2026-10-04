@@ -6,6 +6,7 @@
 import type { AgentModel } from "../command/agents";
 import { DEPARTMENT, DEPARTMENTS, slot, type DepartmentId } from "../command/departments";
 import type { FlowStop, VisualEvent } from "../command/events";
+import { INTAKE } from "./hq/route";
 
 export interface Point { x: number; z: number }
 
@@ -29,8 +30,8 @@ export function stopPoint(stop: FlowStop, agentId: string | null, agents: Readon
   if (stop === "external") return EXTERNAL;
   if (stop === "agent") return agentId ? agents.get(agentId) ?? null : null;
   if (stop === "counterpart") return counterpartId ? agents.get(counterpartId) ?? null : null;
-  const d = DEPARTMENT[stop];
-  return d ? { x: d.x, z: d.z } : null;
+  // A department's information arrives at (and leaves from) its intake at the end of the room's conduit.
+  return INTAKE[stop] ?? null;
 }
 
 export interface Packet {
@@ -42,6 +43,12 @@ export interface Packet {
   colour: string;
   label: string;
   agentId: string | null;
+  /** The agent at the destination end of the route, when the route ends at an agent (receive reactions). */
+  endAgentId?: string | null;
+  /** The agent at the source end, when the route starts at an agent (its terminal confirms). */
+  startAgentId?: string | null;
+  /** When the event itself happened (ms), if known — the scheduler does not animate stale events. */
+  at?: number;
 }
 
 const COLOUR: Partial<Record<VisualEvent["kind"], string>> = {
@@ -59,7 +66,9 @@ export function packetFor(e: VisualEvent, agents: ReadonlyMap<string, Point>, no
   if (points.length === 1) points.push({ x: points[0].x, z: points[0].z - 0.01 }); // a pulse in place
   let length = 0;
   for (let i = 1; i < points.length; i++) length += Math.hypot(points[i].x - points[i - 1].x, points[i].z - points[i - 1].z);
-  return { id: e.id, kind: e.kind, points, start: now, duration: Math.min(6000, Math.max(1200, length * 140)), colour: COLOUR[e.kind] ?? "#22d3ee", label: e.label, agentId: e.agentId };
+  const last = e.path[e.path.length - 1], endAgentId = last === "agent" ? e.agentId : last === "counterpart" ? e.counterpartId ?? null : null;
+  const first = e.path[0], startAgentId = first === "agent" ? e.agentId : first === "counterpart" ? e.counterpartId ?? null : null;
+  return { id: e.id, kind: e.kind, points, start: now, duration: Math.min(6000, Math.max(1200, length * 140)), colour: COLOUR[e.kind] ?? "#22d3ee", label: e.label, agentId: e.agentId, endAgentId, startAgentId, at: Number.isFinite(Date.parse(e.at ?? "")) ? Date.parse(e.at!) : undefined };
 }
 
 /** Where a packet is at time t (null once it has arrived). */
@@ -92,7 +101,17 @@ export const departmentIds = DEPARTMENTS.map((d) => d.id);
 export function stationIndex(models: readonly AgentModel[]): Map<string, number> {
   return new Map([...models].map((m) => m.agent.id).sort().map((id, i) => [id, i]));
 }
-export const stationPoint = (i: number, count = 50): Point => slot("floor", i, count);
+/**
+ * The i-th workstation on the Agent Floor: an office layout of two banks either side of a central aisle (filled from
+ * the aisle outwards, alternating banks), rows 2.4 m apart so there is a walkway behind every row of chairs. Ten
+ * desks a row, five rows: the constitutional 50. Seats face the back wall (monitors north).
+ */
+export const STATION_DX = 1.45, STATION_DZ = 2.4, STATION_AISLE = 1.7;
+export function stationPoint(i: number): Point {
+  const d = DEPARTMENT.floor, col = i % 10, row = Math.floor(i / 10) % 5;
+  const bank = col % 2 ? 1 : -1, k = Math.floor(col / 2);
+  return { x: d.x + bank * (STATION_AISLE / 2 + 0.65 + k * STATION_DX), z: d.z - d.d / 2 + 3.2 + row * STATION_DZ };
+}
 
 /** How long a newborn's station powers up before the agent appears, then how long it stays at its station. */
 export const BIRTH_POWER_MS = 1_200;
@@ -124,7 +143,7 @@ export function agentTargetsWithStations(models: readonly AgentModel[], births: 
   for (const m of models) {
     const i = stations.get(m.agent.id)!;
     const b = birthState(births.get(m.agent.id), now, reduceMotion);
-    if (b.atStation || m.placement.department === "floor") base.set(m.agent.id, { ...stationPoint(i, stations.size), department: "floor" });
+    if (b.atStation || m.placement.department === "floor") base.set(m.agent.id, { ...stationPoint(i), department: "floor" });
   }
   return base;
 }

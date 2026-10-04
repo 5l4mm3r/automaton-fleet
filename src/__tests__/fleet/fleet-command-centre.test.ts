@@ -29,8 +29,14 @@ import { toLiveCommand } from "../../../codex-dashboard/src/dashboard/live/mappi
 import { GatewayClient } from "../../../codex-dashboard/src/dashboard/api/client";
 import type { Agent, Fleet } from "../../../codex-dashboard/src/dashboard/model";
 import { hqBoardsFrom, hqDataFrom, redAlertOpen, treasuryBannerFrom } from "../../../codex-dashboard/src/dashboard/virtual/hq/data";
-import { roomAt, routeThrough } from "../../../codex-dashboard/src/dashboard/virtual/hq/route";
-import { flowDuration, flowFrame, flowLabel, LEAD_MS, SETTLE_MS } from "../../../codex-dashboard/src/dashboard/virtual/hq/flow";
+import { INTAKE, roomAt, routeThrough } from "../../../codex-dashboard/src/dashboard/virtual/hq/route";
+import { flowLabel } from "../../../codex-dashboard/src/dashboard/virtual/hq/flow";
+import { advance, CATEGORY_COLOUR, categoryOf, importanceOf, newSchedule, PHASE, phaseAt, priorityOf, QUEUE_CAP, slotsFor, STALE_MS, totalTime, toTransport, transportFrame, type Transport } from "../../../codex-dashboard/src/dashboard/virtual/hq/transport";
+import { transportSkin, registerTransportSkin } from "../../../codex-dashboard/src/dashboard/virtual/hq/transport-skin";
+import { findPath, lineClear, navGrid, walkable } from "../../../codex-dashboard/src/dashboard/virtual/hq/nav";
+import { chooseActivity, giveWay, isWorking, reactionAt, stationDesks, type ActivityContext } from "../../../codex-dashboard/src/dashboard/virtual/hq/choreo";
+import { NAV_BOUNDS } from "../../../codex-dashboard/src/dashboard/virtual/hq/world-build";
+import { IDLE_BEFORE_SHOT_MS, interact, shotGoal, takeShot, wantShot, type DirectorState } from "../../../codex-dashboard/src/dashboard/virtual/hq/director";
 import { blockers, frameAgent, viewable } from "../../../codex-dashboard/src/dashboard/virtual/hq/framing";
 import { workTargets } from "../../../codex-dashboard/src/dashboard/virtual/hq/spots";
 import { appearanceOf, COSMETIC_SLOTS, registerCosmetic } from "../../../codex-dashboard/src/dashboard/virtual/hq/appearance";
@@ -316,41 +322,219 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
     expect(t2l).toContainEqual({ x: -18, z: -12 }); expect(t2l).toContainEqual({ x: 0, z: 16 });
   });
 
-  it("no event, no traffic; Reduce Motion removes travel but keeps the information (route, ends, direction, label)", () => {
-    expect(flowFrame([], 5000, false)).toEqual({ heads: [], routes: [], rings: [], columns: [], junctions: [], chevrons: [], labels: [], receiving: [] });
+  const mkT = (over: Partial<Transport> & { id: string }): Transport => {
     const route = routeThrough([{ x: -18, z: -17 }, { x: 0, z: 11 }]);
-    const f = { id: "f1", route, start: 1000, duration: flowDuration(route), colour: "#60a5fa", label: "KNOWLEDGE RECORDED" };
-    const moving = flowFrame([f], 2000, false);
-    expect(moving.heads).toHaveLength(1); expect(moving.labels[0].text).toBe("KNOWLEDGE RECORDED");
-    const still = flowFrame([f], 2000, true);
-    expect(still.heads).toEqual([]);
-    expect(still.routes).toHaveLength(1); expect(still.rings).toHaveLength(2); expect(still.chevrons.length).toBeGreaterThan(3);
-    expect(still.labels).toEqual([{ id: "f1", text: "KNOWLEDGE RECORDED", p: route[route.length - 1], y: 2.6 }]);
-    expect(flowFrame([f], 1000 + f.duration + 5000, false).heads).toEqual([]); // over: nothing lingers
+    return { route, eventAt: 0, start: 0, travel: 4000, category: "information", colour: CATEGORY_COLOUR.information, priority: 5, importance: "low", label: "KNOWLEDGE RECORDED", agentId: "A1", counterpartId: null, sourceAgentId: "A1", ...over };
+  };
+
+  it("no event, no traffic; Reduce Motion removes travel but keeps the information (source, route, destination, direction, label)", () => {
+    const empty = transportFrame([], 5000, "full");
+    for (const v of Object.values(empty)) expect(v).toEqual([]);
+    expect(advance(newSchedule(), [], 0, 6).active).toEqual([]); // the scheduler never invents traffic
+    const t = mkT({ id: "f1" }), route = t.route, dst = route[route.length - 1];
+    const moving = transportFrame([t], PHASE.activate + PHASE.launch + 1000, "full");
+    expect(moving.orbs).toHaveLength(1); expect(moving.labels[0].text).toBe("KNOWLEDGE RECORDED");
+    const still = transportFrame([t], PHASE.activate + PHASE.launch + 1000, "reduced");
+    expect(still.orbs).toEqual([]);
+    expect(still.sources).toHaveLength(1); expect(still.routes).toEqual([{ id: "f1", lit: 1, glow: 0.8 }]); expect(still.receivers).toHaveLength(1);
+    expect(still.chevrons.length).toBeGreaterThan(3);
+    expect(still.labels).toEqual([{ id: "f1", text: "KNOWLEDGE RECORDED", p: dst, y: 2.6 }]);
+    // Data Flow off: no route, orb or chevrons — the label and the destination's acknowledgement remain.
+    const off = transportFrame([t], 1000, "off");
+    expect(off.orbs).toEqual([]); expect(off.routes).toEqual([]); expect(off.chevrons).toEqual([]);
+    expect(off.labels[0]).toMatchObject({ text: "KNOWLEDGE RECORDED", p: dst }); expect(off.receivers).toHaveLength(1);
+    expect(transportFrame([t], totalTime(t) + 1, "full").orbs).toEqual([]); // over: nothing lingers
   });
 
-  it("the hero choreography: source activates, the conduit reveals, junctions pulse, the destination acknowledges, then settles", () => {
-    const route = routeThrough([{ x: -18, z: -17 }, { x: 0, z: 11 }]);
-    const f = { id: "f1", route, start: 0, duration: flowDuration(route), colour: "#60a5fa", label: "KNOWLEDGE RECORDED" };
-    const lead = flowFrame([f], 400, "full");
-    expect(lead.heads).toEqual([]); expect(lead.columns[0].p).toEqual(route[0]); expect(lead.routes[0].reveal).toBeCloseTo(0.5, 5);
-    // While travelling, corners already passed pulse.
-    const mid = flowFrame([f], LEAD_MS + f.duration * 0.6, "full");
-    expect(mid.heads).toHaveLength(1); expect(mid.junctions.length).toBeGreaterThanOrEqual(0);
-    const anyJunction = Array.from({ length: 40 }, (_, i) => flowFrame([f], LEAD_MS + (f.duration * i) / 40, "full").junctions.length).some((n) => n > 0);
-    expect(anyJunction).toBe(true);
-    // Receipt: the destination acknowledges (column + ring + label) and the route fades; then everything settles.
-    const rec = flowFrame([f], LEAD_MS + f.duration + 300, "full");
-    expect(rec.receiving).toEqual([{ id: "f1", p: route[route.length - 1] }]); expect(rec.routes[0].fade).toBeLessThan(1);
-    expect(flowFrame([f], LEAD_MS + f.duration + SETTLE_MS + 1, "full").routes).toEqual([]);
-    // Data Flow off: no route, packet or chevrons — the information (label + acknowledgement at the destination) remains.
-    const off = flowFrame([f], 2000, "off");
-    expect(off.heads).toEqual([]); expect(off.routes).toEqual([]); expect(off.chevrons).toEqual([]);
-    expect(off.labels[0]).toMatchObject({ text: "KNOWLEDGE RECORDED", p: route[route.length - 1] }); expect(off.receiving).toHaveLength(1);
-    // New hero labels.
-    expect(flowLabel({ kind: "TREASURY_TRANSFER", label: "Profit contribution to the Treasury", points: [] })).toBe("TREASURY SWEEP");
-    expect(flowLabel({ kind: "SYSTEM_ALERT", label: "x", points: [] })).toBe("SECURITY ALERT");
-    expect(flowLabel({ kind: "PROJECT_EVENT", label: "Profit distribution", points: [] })).toBe("PROFIT DISTRIBUTION");
+  it("the transport phases: activate → launch → travel → arrive → respond → settle; the destination responds only after arrival", () => {
+    const t = mkT({ id: "f1", counterpartId: "B2" }), route = t.route, src = route[0], dst = route[route.length - 1];
+    const seq: string[] = [];
+    let respondedBeforeArrival = false, arrived = false;
+    for (let now = 0; now <= totalTime(t) + 50; now += 25) {
+      const { phase } = phaseAt(t, now); if (seq[seq.length - 1] !== phase) seq.push(phase);
+      const f = transportFrame([t], now, "full");
+      if (f.receivers.some((r) => r.phase === "arrive")) arrived = true;
+      if (f.responding.length && !arrived) respondedBeforeArrival = true;
+    }
+    expect(seq).toEqual(["activate", "launch", "travel", "arrive", "respond", "settle", "done"]);
+    expect(respondedBeforeArrival).toBe(false);
+    const act = transportFrame([t], 100, "full");
+    expect(act.sources[0].p).toEqual(src); expect(act.orbs).toEqual([]); expect(act.activating).toEqual([{ id: "f1", agentId: "A1", done: false }]);
+    // Illumination propagates with the orb; corners already passed pulse.
+    const at = (k: number) => PHASE.activate + PHASE.launch + t.travel * k;
+    expect(transportFrame([t], at(0.6), "full").routes[0].lit).toBeCloseTo(0.6, 5);
+    expect(Array.from({ length: 40 }, (_, i) => transportFrame([t], at(i / 40), "full").junctions.length).some((n) => n > 0)).toBe(true);
+    const resp = transportFrame([t], at(1) + PHASE.arrive + 100, "full");
+    expect(resp.responding).toEqual([{ id: "f1", room: roomAt(dst)!.id, agentId: "B2" }]);
+    expect(resp.receivers[0]).toMatchObject({ p: dst, phase: "respond" });
+  });
+
+  it("semantic colour: money is gold, opportunity violet, information cyan, realised revenue green, red only for real alerts", () => {
+    const P = (kind: string, label = "x") => ({ kind, label, points: [] }) as never;
+    expect(categoryOf(P("TREASURY_TRANSFER", "Profit contribution to the Treasury"))).toBe("money");
+    expect(CATEGORY_COLOUR.money).toBe("#fbbf24");
+    expect(categoryOf(P("PROJECT_EVENT", "Profit distribution"))).toBe("money");
+    expect(categoryOf(P("OPPORTUNITY_EVENT"))).toBe("opportunity");
+    expect(categoryOf(P("RESEARCH_EVENT"))).toBe("information");
+    expect(categoryOf(P("REVENUE_EVENT"))).toBe("outcome");
+    expect(categoryOf(P("SYSTEM_ALERT"))).toBe("alert");
+    for (const k of ["RESEARCH_EVENT", "OPPORTUNITY_EVENT", "REVENUE_EVENT", "TREASURY_TRANSFER", "PROJECT_EVENT", "MISSION_STARTED", "COMMS_EVENT"]) expect(categoryOf(P(k)), k).not.toBe("alert");
+    // Presentation priority: alert > money > project > outcome > opportunity/research > status.
+    expect([P("SYSTEM_ALERT"), P("TREASURY_TRANSFER"), P("PROJECT_EVENT", "Task delivered"), P("REVENUE_EVENT"), P("OPPORTUNITY_EVENT"), P("MISSION_STARTED")].map(priorityOf)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(importanceOf(P("TREASURY_TRANSFER", "Profit contribution to the Treasury"))).toBe("high");
+    expect(importanceOf(P("PROJECT_EVENT", "Team offer"))).toBe("medium");
+    expect(importanceOf(P("MISSION_STARTED"))).toBe("low");
+    // A real sweep packet becomes a gold TREASURY SWEEP transport ending at the Treasury.
+    const e = { key: "s1", type: "treasury_sweep", agentId: "A1", at: "2026-10-04T12:00:00Z", detail: {} } as FleetEvent;
+    const pk = packetFor(visualFromEvent(e)!, new Map([["A1", { x: 0, z: -4 }]]), 1000)!;
+    const tr = toTransport(pk, 0);
+    expect(tr.label).toBe("TREASURY SWEEP"); expect(tr.colour).toBe(CATEGORY_COLOUR.money); expect(tr.importance).toBe("high");
+    expect(roomAt(tr.route[tr.route.length - 1])?.id).toBe("treasury"); expect(tr.sourceAgentId).toBe("A1");
+    // Skins are presentation adapters only: the default is the tube orb; a registered skin is selectable; unknown ids fall back.
+    expect(transportSkin(undefined).id).toBe("tube-orb");
+    expect(transportSkin("no-such-skin").id).toBe("tube-orb");
+    registerTransportSkin({ ...transportSkin("tube-orb"), id: "test-skin", name: "Test" });
+    expect(transportSkin("test-skin").id).toBe("test-skin");
+  });
+
+  it("the visual scheduler is bounded and deterministic: most important first, then oldest, then id — never more than the slots", () => {
+    const burst = (seed: number) => Array.from({ length: 120 }, (_, i) => { const j = (i * 37 + seed) % 120; return mkT({ id: `t${j}`, priority: 1 + (j % 6), eventAt: j }); });
+    const run = (seed: number) => { const s = newSchedule(); advance(s, burst(seed), 0, 6); return s; };
+    const a = run(0), b = run(55);
+    expect(a.active.map((t) => t.id)).toEqual(b.active.map((t) => t.id)); // arrival order does not matter
+    expect(a.queue.map((t) => t.id)).toEqual(b.queue.map((t) => t.id));
+    expect(a.active).toHaveLength(6); expect(a.queue.length).toBeLessThanOrEqual(QUEUE_CAP); expect(a.dropped).toBe(120 - 6 - QUEUE_CAP);
+    expect(a.active.every((t) => t.priority === 1)).toBe(true); // critical alerts are shown first
+    // Duplicates are ignored; finished transports free their slot; the queue drains in order.
+    advance(a, burst(3), 10, 6); expect(a.queue.length).toBeLessThanOrEqual(QUEUE_CAP); expect(a.active).toHaveLength(6);
+    const firstWaiting = a.queue[0].id;
+    advance(a, [], totalTime(a.active[0]) + 20, 6);
+    expect(a.active.map((t) => t.id)).toContain(firstWaiting);
+    for (let i = 0; i < 200; i++) advance(a, [], 1e6 * (i + 1), 6);
+    expect(a.active).toEqual([]); expect(a.queue).toEqual([]);
+    // A late event (its turn comes long after it happened, e.g. a backlog after a reload) is not animated; it stays in the feed.
+    const late = newSchedule(); advance(late, [mkT({ id: "old", eventAt: 0 }), mkT({ id: "new", eventAt: 100_000 })], 100_000, 6);
+    expect(late.active.map((t) => t.id)).toEqual(["new"]); expect(late.dropped).toBe(1); expect(100_000).toBeGreaterThan(STALE_MS);
+    expect(slotsFor(0, false)).toBeLessThan(slotsFor(2, false)); expect(slotsFor(2, true)).toBeLessThanOrEqual(4);
+  });
+
+  it("the event camera is opt-in, high-importance first, never while an agent is selected, and any interaction cancels it", () => {
+    const hi = mkT({ id: "h", importance: "high", start: 10_000 }), med = mkT({ id: "m", importance: "medium", start: 10_000 }), lo = mkT({ id: "l", importance: "low", start: 10_000 });
+    const ctx = { focusLevel: "fleet" as const, reduceMotion: false };
+    const off: DirectorState = { enabled: false, shot: null, lastInteraction: 0 };
+    expect(wantShot(off, hi, 10_000, ctx)).toBe(false); // off by default: manual camera is primary
+    const on: DirectorState = { ...off, enabled: true };
+    expect(wantShot(on, lo, 10_000, ctx)).toBe(false);
+    expect(wantShot(on, hi, 10_000, ctx)).toBe(true);
+    expect(wantShot(on, hi, 10_000, { ...ctx, focusLevel: "agent" })).toBe(false); // the selected agent keeps the camera
+    expect(wantShot(on, hi, 10_000, { ...ctx, reduceMotion: true })).toBe(false);
+    expect(wantShot({ ...on, lastInteraction: 9_000 }, hi, 10_000, ctx)).toBe(false); // the user just moved the camera
+    expect(10_000 - 9_000).toBeLessThan(IDLE_BEFORE_SHOT_MS);
+    const showingMed = takeShot(on, med);
+    expect(wantShot(showingMed, lo, 10_100, ctx)).toBe(false);
+    expect(wantShot(showingMed, hi, 10_100, ctx)).toBe(true); // a high event may replace a medium shot
+    expect(wantShot(takeShot(on, hi), med, 10_100, ctx)).toBe(false);
+    const shooting = takeShot(on, hi);
+    expect(shotGoal(shooting, 10_100)!.look).toMatchObject({ x: hi.route[0].x, z: hi.route[0].z }); // source first
+    const dst = hi.route[hi.route.length - 1];
+    expect(shotGoal(shooting, 10_000 + PHASE.activate + PHASE.launch + hi.travel + 100)!.look).toMatchObject({ x: dst.x, z: dst.z }); // then the destination
+    const cancelled = interact(shooting, 10_200);
+    expect(cancelled.shot).toBeNull(); expect(shotGoal(cancelled, 10_300)).toBeNull();
+    expect(wantShot(cancelled, hi, 10_300, ctx)).toBe(false);
+  });
+
+  it("agents walk through the building: around furniture and walls, through doorways, ending in the right room", () => {
+    const w = buildWorld(), DEP = Object.fromEntries(DEPARTMENTS.map((d) => [d.id, d]));
+    // 50 workstations on the Agent Floor are obstacles too.
+    const stations = new Map(Array.from({ length: 50 }, (_, i) => [`A${String(i).padStart(2, "0")}`, stationPoint(i)] as const));
+    const nav = navGrid([...w.footprints, ...stationDesks(stations)], NAV_BOUNDS);
+    const solid = [...w.footprints, ...stationDesks(stations)];
+    const inside = (p: { x: number; z: number }, f: { x0: number; z0: number; x1: number; z1: number }) => p.x > f.x0 + 0.02 && p.x < f.x1 - 0.02 && p.z > f.z0 + 0.02 && p.z < f.z1 - 0.02;
+    const all = DEPARTMENTS.flatMap((d) => w.spots[d.id].map((s) => ({ ...s, dep: d.id })));
+    expect(all.length).toBeGreaterThan(40);
+    const starts = [...all, ...[...stations.values()].slice(0, 12).map((p) => ({ ...p, dep: "floor" as const }))];
+    for (let n = 0; n < starts.length; n++) {
+      const a = starts[n], b = all[(n * 7 + 3) % all.length];
+      const path = findPath(nav, a, b);
+      expect(path, `${a.dep}→${b.dep}`).not.toBeNull();
+      const pts = [a, ...path!];
+      expect(pts[pts.length - 1]).toEqual({ x: b.x, z: b.z });
+      expect(roomAt(pts[pts.length - 1])?.id).toBe(b.dep); // ends in the department its state puts it in
+      // Between the first step out of the seat and the last step into the destination seat, every point of every
+      // segment is walkable floor: never through a wall, a desk, a console or a rack.
+      for (let i = 2; i < pts.length - 1; i++) {
+        expect(lineClear(nav, pts[i - 1], pts[i]), `${a.dep}→${b.dep} segment ${i}`).toBe(true);
+        for (let k = 0; k <= 10; k++) {
+          const q = { x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * k / 10, z: pts[i - 1].z + (pts[i].z - pts[i - 1].z) * k / 10 };
+          const hit = solid.find((f) => inside(q, f));
+          expect(hit, `${a.dep}→${b.dep} crosses an obstacle at ${q.x.toFixed(2)},${q.z.toFixed(2)}`).toBeUndefined();
+        }
+      }
+      // Leaving or entering a room happens through its openings (front cutaway or the side doors), not through walls.
+      for (let i = 1; i < pts.length; i++) {
+        const ra = roomAt(pts[i - 1])?.id, rb = roomAt(pts[i])?.id;
+        if (ra === rb) continue;
+        const d = DEP[(ra ?? rb)!], m = { x: (pts[i - 1].x + pts[i].x) / 2, z: (pts[i - 1].z + pts[i].z) / 2 };
+        const front = Math.abs(m.z - (d.z + d.d / 2)) < 1.2 && Math.abs(m.x - d.x) < 1.6, side = Math.abs(Math.abs(m.x - d.x) - d.w / 2) < 1.2 && Math.abs(m.z - d.z) < 1.2;
+        expect(front || side || walkable(nav, m), `${a.dep}→${b.dep} leaves ${ra ?? "corridor"} → ${rb ?? "corridor"} at ${m.x.toFixed(1)},${m.z.toFixed(1)}`).toBe(true);
+      }
+    }
+    // Every department has a physical intake inside it, at the end of its room conduit (straight in from the opening).
+    for (const d of DEPARTMENTS) { expect(roomAt(INTAKE[d.id])?.id, d.id).toBe(d.id); expect(INTAKE[d.id].x).toBe(d.x); }
+    // Walls block: the straight line from the Treasury into the Library is not walkable; the path is longer than it.
+    const t = all.find((s) => s.dep === "treasury")!, l = all.find((s) => s.dep === "library")!;
+    expect(lineClear(nav, t, l)).toBe(false);
+  });
+
+  it("choreography: work animations only for real work; idle agents never mime work; reactions follow the agent's own events", () => {
+    const base: ActivityContext = { status: "active", basis: "event", department: "library", moving: false, fast: false, rising: false, atStation: false, atSpot: true, spotPose: "seat", meeting: false, team: false, seed: 7, t: 0 };
+    const WORK = new Set(["seated", "seatedRead", "terminal", "reading", "inspect", "meetSeat", "meetStand", "pointing", "observe"]);
+    // Idle (no mission, no recent event, no project): never a working animation, at any time, anywhere.
+    for (let t = 0; t < 400; t += 3) for (const at of [{ atStation: true, atSpot: false }, { atSpot: true, spotPose: "seat" as const }, { atSpot: true, spotPose: "stand" as const }, { atSpot: false, department: "venture" }]) {
+      for (const status of ["active", "held", "provisioning"]) {
+        const a = chooseActivity({ ...base, ...at, basis: status === "active" ? "default" : (status as "held"), status, t });
+        expect(WORK.has(a), `${status} ${JSON.stringify(at)} → ${a}`).toBe(false);
+      }
+    }
+    expect(isWorking("active", "default")).toBe(false); expect(isWorking("active", "mission")).toBe(true); expect(isWorking("held", "event")).toBe(false);
+    // Working: typing and reading at a desk, operating / reading / inspecting at a console, meeting at a team table.
+    const seen = new Set(Array.from({ length: 200 }, (_, t) => chooseActivity({ ...base, t: t * 3 })));
+    expect(seen).toEqual(new Set(["seated", "seatedRead"]));
+    const consoleSeen = new Set(Array.from({ length: 200 }, (_, t) => chooseActivity({ ...base, spotPose: "stand", t: t * 3 })));
+    expect(consoleSeen).toEqual(new Set(["terminal", "reading", "inspect"]));
+    expect(chooseActivity({ ...base, meeting: true })).toBe("meetSeat");
+    expect(new Set(Array.from({ length: 200 }, (_, t) => chooseActivity({ ...base, meeting: true, spotPose: "stand", t: t * 3 })))).toEqual(new Set(["meetStand", "pointing"]));
+    // A team-project member works even without a recent event of its own.
+    expect(chooseActivity({ ...base, basis: "default", team: true, t: 0 })).not.toBe("seatedIdle");
+    // Moving and standing up take precedence; the dead lie still.
+    expect(chooseActivity({ ...base, moving: true })).toBe("walk"); expect(chooseActivity({ ...base, moving: true, fast: true })).toBe("fastWalk");
+    expect(chooseActivity({ ...base, rising: true })).toBe("rise"); expect(chooseActivity({ ...base, status: "dead", moving: true })).toBe("dead");
+    // Reactions: only within their window, most recent wins; nothing without an event.
+    expect(reactionAt(10_000, {})).toBeNull();
+    expect(reactionAt(10_000, { send: 9_500 })).toMatchObject({ kind: "confirm" });
+    expect(reactionAt(10_000, { send: 9_000, receive: 9_800 })).toMatchObject({ kind: "receive" });
+    expect(reactionAt(10_000, { done: 9_000 })).toMatchObject({ kind: "complete" });
+    expect(reactionAt(10_000, { send: 1_000 })).toBeNull();
+    // Giving way: someone dead ahead pushes the walker to its right and slows it; nobody near, no change.
+    const gw = giveWay("me", { x: 0, z: 0 }, { x: 0, z: 1 }, new Map([["me", { x: 0, z: 0 }], ["you", { x: 0, z: 0.4 }]]));
+    expect(Math.hypot(gw.push.x, gw.push.z)).toBeGreaterThan(0); expect(gw.slow).toBeLessThan(1);
+    const both = giveWay("you", { x: 0, z: 0.4 }, { x: 0, z: -1 }, new Map([["me", { x: 0, z: 0 }]]));
+    expect(Math.sign(gw.push.x)).toBe(-Math.sign(both.push.x)); // head-on: they sidestep in opposite world directions (each to its right)
+    expect(giveWay("me", { x: 0, z: 0 }, { x: 0, z: 1 }, new Map([["you", { x: 3, z: 3 }]]))).toEqual({ push: { x: 0, z: 0 }, slow: 1 });
+  });
+
+  it("team members in different rooms: a delivery travels from one agent to the other through the building", () => {
+    const e = { key: "d1", type: "project_task_delivered", agentId: "A1", at: "2026-10-04T12:00:00Z", detail: { fromAgentId: "A1", toAgentId: "B2" } } as FleetEvent;
+    const a1 = { x: -18, z: 11 }, b2 = { x: 18, z: 11 }; // Marketing and Venture / Dev
+    const pk = packetFor(visualFromEvent(e)!, new Map([["A1", a1], ["B2", b2]]), 0)!;
+    const tr = toTransport(pk, 0);
+    expect(tr.route[0]).toEqual(a1); expect(tr.route[tr.route.length - 1]).toEqual(b2);
+    expect(tr.sourceAgentId).toBe("A1"); expect(tr.counterpartId).toBe("B2"); expect(tr.label).toBe("TASK DELIVERED");
+    expect(roomAt(tr.route[0])?.id).toBe("marketing"); expect(roomAt(tr.route[tr.route.length - 1])?.id).toBe("venture");
+    // The sender's terminal completes as it launches; the receiver reacts after arrival.
+    expect(transportFrame([tr], 100, "full").activating).toEqual([{ id: tr.id, agentId: "A1", done: true }]);
+    const resp = transportFrame([tr], PHASE.activate + PHASE.launch + tr.travel + PHASE.arrive + 50, "full");
+    expect(resp.responding[0]).toMatchObject({ agentId: "B2", room: "venture" });
   });
 
   it("Agent View keeps the selected agent unobstructed: another person in the preferred view moves the camera, never behind a wall", () => {
@@ -461,7 +645,7 @@ describe("world: positions and packets", () => {
     expect(t1.get("C")!.department).toBe("floor");
     const v = visualFromEvent(ev("capital_decision", "A", 1, { outcome: "approved" }))!;
     const p = packetFor(v, t1, 1000)!;
-    expect(p.points[0]).toEqual({ x: DEPARTMENT.command.x, z: DEPARTMENT.command.z });
+    expect(p.points[0]).toEqual(INTAKE.command); // a department's information leaves from its intake (the live core in Fleet Command)
     expect(p.points.at(-1)).toMatchObject({ x: t1.get("A")!.x, z: t1.get("A")!.z });
     expect(packetAt(p, 1000)).toEqual(p.points[0]);
     expect(packetAt(p, 1000 + p.duration + 1)).toBeNull();
@@ -659,10 +843,10 @@ describe("agent birth: dedicated workstation, power-up, entrance (presentation o
     expect(stationIndex([...models].reverse())).toEqual(idx);
     const now = 50_000;
     const t = agentTargetsWithStations(models, new Map(), now, false);
-    expect(t.get("C")).toMatchObject({ ...stationPoint(2, 3), department: "floor" }); // on the Floor: at its own station
+    expect(t.get("C")).toMatchObject({ ...stationPoint(2), department: "floor" }); // on the Floor: at its own station
     expect(t.get("A")!.department).toBe("library");
     const born = agentTargetsWithStations(models, new Map([["A", now - BIRTH_POWER_MS - 10]]), now, false);
-    expect(born.get("A")).toMatchObject({ ...stationPoint(0, 3), department: "floor" }); // entering: its station first
+    expect(born.get("A")).toMatchObject({ ...stationPoint(0), department: "floor" }); // entering: its station first
     const settled = agentTargetsWithStations(models, new Map([["A", now - BIRTH_POWER_MS - BIRTH_ENTER_MS - 10]]), now, false);
     expect(settled.get("A")!.department).toBe("library"); // then its first real destination
     expect(agentTargetsWithStations(models, new Map([["A", now]]), now, true).get("A")!.department).toBe("library"); // reduced motion: in place

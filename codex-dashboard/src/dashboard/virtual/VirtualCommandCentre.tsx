@@ -23,6 +23,7 @@ import { utc } from "../command/panels";
 import { hqBoardsFrom, hqDataFrom, redAlertOpen, treasuryBannerFrom } from "./hq/data";
 import { activeTeams } from "../command/projects";
 import { VirtualMap, type Focus } from "./VirtualMap";
+import { INTAKE } from "./hq/route";
 import { agentTargetsWithStations, birthState, BIRTH_ENTER_MS, BIRTH_EVENTS, BIRTH_FUNDING_EVENTS, BIRTH_MARK_MS, BIRTH_POWER_MS, livePackets, packetFor, stationIndex, stationPoint, type Packet, type Point } from "./world";
 import { AgentLabels, type Projector } from "./AgentLabels";
 
@@ -68,7 +69,7 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
 
   const reduce = prefs?.reduceMotion ?? false;
   const targets = useMemo(() => agentTargetsWithStations(models, births, clock, reduce), [models, births, clock, reduce]);
-  const stations = useMemo(() => { const idx = stationIndex(models); return new Map([...idx].map(([id, i]) => [id, stationPoint(i, idx.size)])); }, [models]);
+  const stations = useMemo(() => { const idx = stationIndex(models); return new Map([...idx].map(([id, i]) => [id, stationPoint(i)])); }, [models]);
   const birthStates = useMemo(() => new Map(models.map((m) => [m.agent.id, birthState(births.get(m.agent.id), clock, reduce)])), [models, births, clock, reduce]);
   const hidden = useMemo(() => new Set([...birthStates].filter(([, b]) => !b.visible).map(([id]) => id)), [birthStates]);
   // While a birth sequence runs, a light clock re-evaluates phases (stops as soon as none is active).
@@ -105,7 +106,7 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
         const funded = events.find((e) => e.agentId === id && Math.abs(Date.parse(e.at) - at) < FRESH_MS
           && (BIRTH_FUNDING_EVENTS.has(e.type) || (BIRTH_EVENTS.has(e.type) && Number(e.detail?.fundingMinor ?? 0) > 0)));
         const station = stationsRef.current.get(id);
-        if (funded && station) flows.push({ id: `birth-capital:${id}`, kind: "TREASURY_TRANSFER", points: [{ x: DEPARTMENT.treasury.x, z: DEPARTMENT.treasury.z }, station],
+        if (funded && station) flows.push({ id: `birth-capital:${id}`, kind: "TREASURY_TRANSFER", points: [INTAKE.treasury, station],
           start: at + BIRTH_POWER_MS, duration: 2500, colour: "#fbbf24", label: "Genesis capital", agentId: id });
       }
       if (flows.length) setPackets((ps) => [...ps, ...flows]);
@@ -189,7 +190,7 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
         <option value="auto">Automatic</option><option value="3d" disabled={!hints.webgl}>3D{hints.webgl ? "" : " (WebGL unavailable)"}</option><option value="map">Map (no WebGL)</option></select></label>
       <label>Virtual quality<select className={input} value={prefs.quality} onChange={(e) => setPrefs({ ...prefs, quality: e.target.value as Quality })}>{QUALITIES.map((q) => <option key={q} value={q}>{q[0].toUpperCase() + q.slice(1)}</option>)}</select></label>
       <label>Frame rate<select className={input} value={prefs.fps} onChange={(e) => setPrefs({ ...prefs, fps: Number(e.target.value) === 30 ? 30 : 60 })}><option value={30}>30</option><option value={60}>60</option></select></label>
-      {([["reduceMotion", "Reduce motion"], ["ambient", "Ambient animations"], ["dataFlow", "Data flow animations"]] as const).map(([k, l]) => <label key={k} className="flex items-center gap-2 pt-6"><input type="checkbox" checked={prefs[k]} onChange={(e) => setPrefs({ ...prefs, [k]: e.target.checked })} />{l}</label>)}
+      {([["reduceMotion", "Reduce motion"], ["ambient", "Ambient animations"], ["dataFlow", "Data flow animations"], ["autoFollow", "Auto-follow important events"]] as const).map(([k, l]) => <label key={k} className="flex items-center gap-2 pt-6"><input type="checkbox" checked={prefs[k]} onChange={(e) => setPrefs({ ...prefs, [k]: e.target.checked })} />{l}</label>)}
       <p className="text-xs text-slate-400 sm:col-span-3 lg:col-span-6">Display preferences are kept in this browser only and never change the Fleet.{webglFailed ? " The 3D view stopped (WebGL unavailable or lost), so the map is shown." : ""}</p>
     </div>}
     <div className="grid gap-4 xl:grid-cols-[1fr_380px]">

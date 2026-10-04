@@ -38,8 +38,11 @@ export const Lights = memo(function Lights({ q, lights }: { q: HQProfile; lights
     <ambientLight intensity={!q.pbr ? 1.1 : room ? 0.16 : 0.5} color="#8ea6c8" />
     <hemisphereLight args={["#2c4a72", "#04070d", !q.pbr ? 1.0 : room ? 0.32 : 0.75]} />
     <directionalLight ref={sun} position={[22, 46, 34]} intensity={!q.pbr ? 1.5 : room ? 0.95 : 1.6} color="#c9d8f2" castShadow={!!q.shadows} target-position={[0, 0, 2]} />
-    {room && lights.map((l) => <pointLight key={l.dep} position={[l.x, l.y, l.z]} color={l.colour} intensity={(q.physical ? 3.4 : 2.8) * l.mood} distance={15} decay={1.3} />)}
-    {room && lights.map((l) => <pointLight key={`${l.dep}:fill`} position={[l.x, l.y + 0.2, l.z + 1.5]} color="#f1f5ff" intensity={5 * l.mood} distance={14} decay={1.4} />)}
+    {/* Believable sources, not pools: the department colour washes the equipment wall (where its displays and
+        machines are); a soft, wide white fill hangs over the work zone (the ceiling fixtures) — the work zone reads
+        brighter than the circulation, without a bright disc in the middle of the room. */}
+    {room && lights.map((l) => { const d = DEPARTMENT[l.dep]; return <pointLight key={l.dep} position={[l.x, l.y - 0.5, d.z - d.d / 2 + 1.3]} color={l.colour} intensity={(q.physical ? 3.0 : 2.5) * l.mood} distance={9} decay={1.5} />; })}
+    {room && lights.map((l) => <pointLight key={`${l.dep}:fill`} position={[l.x, l.y + 0.3, l.z + 0.6]} color="#f1f5ff" intensity={3.6 * l.mood} distance={20} decay={0.9} />)}
   </>;
 });
 
@@ -185,7 +188,7 @@ export const LightPools = memo(function LightPools({ q, lights }: { q: HQProfile
   useEffect(() => () => { tex.pool.dispose(); tex.wash.dispose(); }, [tex]);
   const items = useMemo(() => lights.flatMap((l) => {
     const d = DEPARTMENT[l.dep], tint = new THREE.Color("#fff3df").lerp(new THREE.Color(l.colour), 0.18);
-    const pools = [-1, 1].flatMap((i) => [0.3, 0.66].map((f) => ({ key: `${l.dep}:${i}:${f}`, kind: "pool" as const, x: d.x + (i * d.w) / 4, z: d.z - d.d / 2 + d.d * f, w: 3.4, h: 1.5, c: tint.clone().multiplyScalar(0.17 * l.mood) })));
+    const pools = [-1, 1].flatMap((i) => [0.3, 0.66].map((f) => ({ key: `${l.dep}:${i}:${f}`, kind: "pool" as const, x: d.x + (i * d.w) / 4, z: d.z - d.d / 2 + d.d * f, w: 3.4, h: 1.5, c: tint.clone().multiplyScalar(0.12 * l.mood) })));
     const wash = { key: `${l.dep}:wash`, kind: "wash" as const, x: d.x, z: d.z - d.d / 2 + 0.16, w: d.w - 1.2, h: 3.2, c: new THREE.Color(l.colour).lerp(new THREE.Color("#e8f1ff"), 0.6).multiplyScalar(0.5 * l.mood) };
     return [...pools, wash];
   }), [lights]);

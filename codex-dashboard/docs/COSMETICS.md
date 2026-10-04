@@ -47,3 +47,38 @@ operator could replace the instanced primitive parts behind the same `Appearance
 - Keep the identity face: either project the portrait atlas cell onto the asset's face UVs, or use the portrait as
   the identity reference.
 - Keep the poses (`targetPose`) as retargetable joint rotations.
+
+## Data-transport skins (V2.3)
+
+The transport model in `hq/transport.ts` decides which **real** event travels, when, along which route, in which
+phase, with which semantic colour, priority and importance. A skin in `hq/transport-skin.ts` decides only how it looks.
+
+- **Phases:** `ACTIVATE → LAUNCH → TRAVEL → ARRIVE → RESPOND → SETTLE`.
+- **Semantic colours:** fixed by category, never by skin.
+  - cyan/blue: information;
+  - violet: opportunity;
+  - gold: money, Treasury and sweep;
+  - green: realised revenue;
+  - red: real alerts only.
+- **Skin fields:**
+  - the travelling body (radius, halo, trail, whether it rides inside the glass conduits);
+  - the light that travels with it;
+  - the lit route's width and preview brightness;
+  - the end markers (column, ring).
+- **Built in:**
+  - `tube-orb` (default): an orb inside the HQ's glass conduits;
+  - `fibre-pulse`: an example alternative.
+
+```ts
+import { registerTransportSkin, transportSkin } from "./transport-skin";
+registerTransportSkin({ ...transportSkin("tube-orb"), id: "capsule", name: "Data capsule", orb: { radius: 0.12, halo: 2, trail: 4, inTube: true } });
+// <DataFlow skin="capsule" … />
+```
+
+Future skins (electrical rail, bioluminescent vein, holographic beam, drone) plug into the same seam. They never
+change:
+- event semantics;
+- the scheduler's order;
+- Fleet state or economics.
+
+There is no store and no payment logic.

@@ -10,9 +10,14 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 export type MatKey =
   | "ground" | "floor" | "floorDark" | "corridor" | "wall" | "wallTrim" | "metal" | "darkMetal" | "desk" | "fabric" | "glass"
   | "screen" | "gold" | "paper" | "rubber" | "concrete"
+  // V2.3 material classes: painted structural steel, smoked glass, illuminated acrylic, polished floor inlay, screen
+  // glass (bezels over displays), equipment housings, vent grilles and cables.
+  | "painted" | "smokedGlass" | "acrylic" | "polished" | "screenGlass" | "equipment" | "grille" | "cable"
   | `accent:${string}` | `glow:${string}`;
 
 const tmp = new THREE.Object3D();
+/** Heights (m) a walking person occupies: solids entirely below (floor inlays) or above (door lintels, ceilings) do not block. */
+const NAV_BAND = [0.3, 1.9] as const;
 
 /** A merged piece: `chunk|material` (chunks are rooms or the shell, so the renderer can cull what is out of view). */
 export const matOf = (key: string): MatKey => key.slice(key.indexOf("|") + 1) as MatKey;
@@ -35,6 +40,8 @@ export class GeoBuilder {
   private readonly parts = new Map<string, THREE.BufferGeometry[]>();
   /** The chunk new solids belong to (a department id, or "shell"). */
   chunk = "shell";
+  /** Floor footprints (axis-aligned bounds) of every solid in the walking band — what people must walk around (nav.ts). */
+  readonly footprints: Array<{ x0: number; z0: number; x1: number; z1: number }> = [];
 
   private add(key: MatKey, g: THREE.BufferGeometry, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) {
     tmp.position.set(x, y, z);
@@ -42,6 +49,9 @@ export class GeoBuilder {
     tmp.scale.set(1, 1, 1);
     tmp.updateMatrix();
     g.applyMatrix4(tmp.matrix);
+    g.computeBoundingBox();
+    const bb = g.boundingBox!;
+    if (bb.min.y < NAV_BAND[1] && bb.max.y > NAV_BAND[0]) this.footprints.push({ x0: bb.min.x, z0: bb.min.z, x1: bb.max.x, z1: bb.max.z });
     const k = `${this.chunk}|${key}`;
     const list = this.parts.get(k) ?? this.parts.set(k, []).get(k)!;
     list.push(g); // indexed (every primitive here is), so shared vertices are shaded once
@@ -62,6 +72,10 @@ export class GeoBuilder {
   /** A flat panel (plane) facing +z, turned by ry. */
   panel(key: MatKey, w: number, h: number, x: number, y: number, z: number, ry = 0, rx = 0) {
     this.add(key, new THREE.PlaneGeometry(w, h), x, y, z, rx, ry);
+  }
+  /** The upper half of a horizontal open tube along x or z (a conduit cover, a collar), its axis at height y. */
+  halfTube(key: MatKey, r: number, len: number, x: number, y: number, z: number, along: "x" | "z", segments = 16) {
+    this.add(key, new THREE.CylinderGeometry(r, r, len, segments, 1, true, along === "x" ? 0 : Math.PI / 2, Math.PI), x, y, z, along === "z" ? Math.PI / 2 : 0, 0, along === "x" ? Math.PI / 2 : 0);
   }
   /** A sphere. */
   sphere(key: MatKey, r: number, x: number, y: number, z: number, segments = 16, sy = 1) {

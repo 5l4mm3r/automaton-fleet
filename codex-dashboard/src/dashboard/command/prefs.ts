@@ -12,6 +12,8 @@ export interface VirtualPrefs {
   reduceMotion: boolean;
   ambient: boolean;
   dataFlow: boolean;
+  /** Optional event camera: important real events may briefly frame source → route → destination (off by default). */
+  autoFollow: boolean;
   /** "auto" = 3D where WebGL is available on a capable device, else the 2D map; "map" never loads WebGL. */
   renderer: Renderer;
 }
@@ -44,7 +46,7 @@ export function defaultPrefs(h: DeviceHints): VirtualPrefs {
   const cls = deviceClass(h);
   const strong = (h.cores ?? 4) >= 8 && (h.memoryGb ?? 8) >= 8;
   const quality: Quality = cls === "phone" ? "low" : cls === "tablet" ? "medium" : strong ? "high" : "medium";
-  return { quality, fps: cls === "desktop" ? 60 : 30, reduceMotion: h.prefersReducedMotion, ambient: !h.prefersReducedMotion, dataFlow: true,
+  return { quality, fps: cls === "desktop" ? 60 : 30, reduceMotion: h.prefersReducedMotion, ambient: !h.prefersReducedMotion, dataFlow: true, autoFollow: false,
     renderer: !h.webgl || cls === "phone" ? "map" : "auto" };
 }
 
@@ -57,6 +59,7 @@ export function sanitizePrefs(raw: unknown, fallback: VirtualPrefs): VirtualPref
     reduceMotion: typeof r.reduceMotion === "boolean" ? r.reduceMotion : fallback.reduceMotion,
     ambient: typeof r.ambient === "boolean" ? r.ambient : fallback.ambient,
     dataFlow: typeof r.dataFlow === "boolean" ? r.dataFlow : fallback.dataFlow,
+    autoFollow: typeof r.autoFollow === "boolean" ? r.autoFollow : fallback.autoFollow,
     renderer: r.renderer === "auto" || r.renderer === "3d" || r.renderer === "map" ? r.renderer : fallback.renderer,
   };
 }

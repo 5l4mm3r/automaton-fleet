@@ -5,7 +5,7 @@
  * powers up, lit while its agent lives, powered down after its death (presentation only; world.ts births).
  */
 import { useFrame } from "@react-three/fiber";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import type { AgentModel } from "../../command/agents";
 import { birthState, type Point } from "../world";
@@ -47,8 +47,10 @@ function screenFace() {
   return t;
 }
 
-export const Stations = memo(function Stations({ models, stations, births, reduceMotion, q }: {
+export const Stations = memo(function Stations({ models, stations, births, reduceMotion, q, receivedRef }: {
   models: AgentModel[]; stations: ReadonlyMap<string, Point>; births: ReadonlyMap<string, number>; reduceMotion: boolean; q: HQProfile;
+  /** When the station's agent last sent, completed or received a real event (flow.tsx): its monitor flashes. */
+  receivedRef?: MutableRefObject<Map<string, number>>;
 }) {
   const ids = useMemo(() => models.map((m) => m.agent.id).filter((id) => stations.has(id)), [models, stations]);
   const cap = Math.max(1, ids.length);
@@ -80,7 +82,7 @@ export const Stations = memo(function Stations({ models, stations, births, reduc
 
   // Screen power (written only when it changes).
   const last = useRef(new Map<string, number>());
-  const c = useMemo(() => new THREE.Color(), []), lit = useMemo(() => new THREE.Color("#22d3ee"), []), off = useMemo(() => new THREE.Color("#0b1220"), []), warm = useMemo(() => new THREE.Color("#fde7c4"), []);
+  const c = useMemo(() => new THREE.Color(), []), flash = useMemo(() => new THREE.Color("#e0faff"), []), doneC = useMemo(() => new THREE.Color("#6ee7b7"), []), lit = useMemo(() => new THREE.Color("#22d3ee"), []), off = useMemo(() => new THREE.Color("#0b1220"), []), warm = useMemo(() => new THREE.Color("#fde7c4"), []);
   // From the Fleet view the small parts are sub-pixel: not drawn while the camera is far above the building.
   useFrame(({ camera }) => { const far = camera.position.y > 24; for (const p of FINE) { const m = meshes.current.get(p); if (m) m.visible = !far; } });
   useFrame(() => {
@@ -88,8 +90,14 @@ export const Stations = memo(function Stations({ models, stations, births, reduc
     const now = Date.now(); let changed = false;
     ids.forEach((id, i) => {
       const power = dead.has(id) ? 0 : birthState(births.get(id), now, reduceMotion).power;
-      if (Math.abs((last.current.get(id) ?? -1) - power) < 0.01) return;
-      last.current.set(id, power); c.copy(off).lerp(lit, power * (q.bloom ? 1 : 0.85)); scr.setColorAt(i, c); changed = true;
+      // The agent's own real events light its monitor: a white flash as it sends or receives, green on a completion.
+      const rec = receivedRef?.current, fade = (at: number | undefined) => (at === undefined ? 0 : Math.max(0, 1 - (now - at) / 1500));
+      const send = rec ? Math.max(fade(rec.get(`send:${id}`)), fade(rec.get(`agent:${id}`))) : 0, done = rec ? fade(rec.get(`done:${id}`)) : 0;
+      const key = power + send * 2 + done * 4;
+      if (Math.abs((last.current.get(id) ?? -1) - key) < 0.01) return;
+      last.current.set(id, key); c.copy(off).lerp(lit, power * (q.bloom ? 1 : 0.85));
+      if (power > 0) { c.lerp(flash, send * 0.8); c.lerp(doneC, done * 0.85); }
+      scr.setColorAt(i, c); changed = true;
       // The desk light and the station's status strip power with it (warm light; cyan strip), dark when powered down.
       lamp?.setColorAt(i, c.copy(off).lerp(warm, power)); strip?.setColorAt(i, c.copy(off).lerp(lit, power * 0.7));
     });

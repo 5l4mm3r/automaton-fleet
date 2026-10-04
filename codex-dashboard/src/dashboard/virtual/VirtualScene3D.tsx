@@ -29,12 +29,15 @@ import { Crowd } from "./hq/crowd";
 import { Stations } from "./hq/stations";
 import { Screens, type ScreenFeed } from "./hq/screens";
 import { AdaptiveResolution, Atmosphere, Beacons, CommandCore, Environment, FloorReflections, LightPools, Lights, PostFX } from "./hq/effects";
-import { DataFlow } from "./hq/flow";
+import { DataFlow, type TransportDirector } from "./hq/flow";
 import { workTargets } from "./hq/spots";
+import { navGrid } from "./hq/nav";
+import { stationDesks } from "./hq/choreo";
+import { NAV_BOUNDS } from "./hq/world-build";
 import { CameraRig } from "./hq/camera";
 
 const NO_SHADOW_MAPS_KEY = "fleet.virtual.gpu.noShadowMaps.v1";
-const RECEIVE_ONLY: ReadonlySet<string> = new Set(["ground", "floor", "floorDark", "corridor"]);
+const RECEIVE_ONLY: ReadonlySet<string> = new Set(["ground", "floor", "floorDark", "corridor", "polished", "acrylic", "smokedGlass"]);
 const WORLD_UV: ReadonlySet<MatKey> = new Set(["floor", "corridor", "wall"] as MatKey[]);
 
 /** The static building, merged per material; clicking a room's floor opens that department. */
@@ -120,6 +123,10 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
   const ghosts = useRef<ReadonlySet<string>>(new Set());
   // When a real flow last arrived at each room (the room's displays acknowledge it, e.g. the Treasury banner).
   const received = useRef(new Map<string, number>());
+  // The optional event camera's handle (the transport renderer offers it important real events).
+  const director = useRef<TransportDirector | null>(null);
+  // The walkable floor: the building's own obstacles plus this Fleet's Agent Floor desks (nav.ts, choreo.ts).
+  const nav = useMemo(() => navGrid([...plan.footprints, ...stationDesks(stations)], NAV_BOUNDS), [plan, stations]);
   const work = useMemo(() => workTargets(models, targets, stations, plan.spots, teams), [models, targets, stations, plan.spots, teams]);
 
   return <Canvas key={`${prefs.quality}:${q.shadows}`} frameloop="never" dpr={[1, q.dpr]} shadows={q.shadows === "soft" ? "percentage" : q.shadows === "basic" ? "basic" : false}
@@ -142,7 +149,7 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
     onPointerMissed={() => { document.body.style.cursor = ""; }}>
     <Driver fps={prefs.fps} />
     <ProjectorOut projectRef={projectRef} />
-    <CameraRig focus={focus} positionsRef={positionsRef} reduceMotion={prefs.reduceMotion} spots={work.spots} stations={stations} ghostsRef={ghosts} occluders={plan.occluders} />
+    <CameraRig focus={focus} positionsRef={positionsRef} reduceMotion={prefs.reduceMotion} spots={work.spots} stations={stations} ghostsRef={ghosts} occluders={plan.occluders} autoFollow={prefs.autoFollow} directorRef={director} />
     <Lights q={q} lights={plan.lights} />
     <Environment q={q} />
     <Atmosphere q={q} lights={plan.lights} ambient={ambient} />
@@ -152,9 +159,9 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
     <Screens spots={plan.screens} feed={screenFeed} q={q} reduceMotion={prefs.reduceMotion} receivedRef={received} />
     <CommandCore at={plan.core} q={q} ambient={ambient} />
     <Beacons spots={plan.beacons} red={redAlert} ambient={ambient} />
-    <Stations models={models} stations={stations} births={births} reduceMotion={prefs.reduceMotion} q={q} />
-    <Crowd models={models} targets={work.targets} spots={work.spots} meetings={work.meetings} ghostsRef={ghosts} births={births} selected={selected} q={q} reduceMotion={prefs.reduceMotion} positionsRef={positionsRef} onAgent={onAgent} stations={stations} />
-    <DataFlow packets={packets} enabled={prefs.dataFlow} reduceMotion={prefs.reduceMotion} q={q} receivedRef={received} />
+    <Stations models={models} stations={stations} births={births} reduceMotion={prefs.reduceMotion} q={q} receivedRef={received} />
+    <Crowd models={models} targets={work.targets} spots={work.spots} meetings={work.meetings} ghostsRef={ghosts} births={births} selected={selected} q={q} reduceMotion={prefs.reduceMotion} positionsRef={positionsRef} onAgent={onAgent} stations={stations} nav={nav} teams={teams} receivedRef={received} />
+    <DataFlow packets={packets} enabled={prefs.dataFlow} reduceMotion={prefs.reduceMotion} q={q} receivedRef={received} directorRef={director} />
     <AdaptiveResolution q={q} />
     <PostFX q={q} />
   </Canvas>;

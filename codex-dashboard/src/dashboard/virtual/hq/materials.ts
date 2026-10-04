@@ -24,6 +24,14 @@ const BASE: Record<string, { color: string; rough: number; metal: number; emissi
   gold: { color: "#b8862b", rough: 0.3, metal: 0.95 },
   paper: { color: "#2b3445", rough: 0.85, metal: 0 },
   rubber: { color: "#0a0d12", rough: 0.95, metal: 0 },
+  painted: { color: "#25324a", rough: 0.62, metal: 0.3 },
+  smokedGlass: { color: "#0b1622", rough: 0.06, metal: 0.2, transparent: 0.55, side: THREE.DoubleSide },
+  acrylic: { color: "#9fc7e0", rough: 0.3, metal: 0, emissive: "#5b8fb0", emissiveIntensity: 0.45, transparent: 0.85 },
+  polished: { color: "#0c1424", rough: 0.12, metal: 0.55 },
+  screenGlass: { color: "#03070c", rough: 0.04, metal: 0.4 },
+  equipment: { color: "#202a39", rough: 0.5, metal: 0.55 },
+  grille: { color: "#141b27", rough: 0.55, metal: 0.7 },
+  cable: { color: "#07090c", rough: 0.7, metal: 0.1 },
 };
 
 /** Procedural tiling textures (canvas), drawn once per quality level. */
@@ -51,7 +59,7 @@ function texture(kind: "tiles" | "panels" | "plating", size: number, base: strin
  * Surface finishes (canvas, drawn once per level): brushed metal (fine directional streaks), matte technical composite
  * (soft mottling), rubber workstation flooring (raised dots) — as a colour-variation map plus a matching roughness map.
  */
-function finish(kind: "brushed" | "composite" | "rubberDots", size: number): { map: THREE.CanvasTexture; rough: THREE.CanvasTexture } {
+function finish(kind: "brushed" | "composite" | "rubberDots" | "vents", size: number): { map: THREE.CanvasTexture; rough: THREE.CanvasTexture } {
   const mk = () => { const c = document.createElement("canvas"); c.width = c.height = size; return c; };
   const cm = mk(), cr = mk(), g = cm.getContext("2d")!, r = cr.getContext("2d")!;
   let seed = kind.length * 977;
@@ -69,6 +77,10 @@ function finish(kind: "brushed" | "composite" | "rubberDots", size: number): { m
   if (kind === "rubberDots") { const st = size / 16; for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
     g.fillStyle = "rgba(255,255,255,0.10)"; g.beginPath(); g.arc((x + 0.5) * st, (y + 0.5) * st, st * 0.22, 0, Math.PI * 2); g.fill();
     r.fillStyle = "rgba(255,255,255,0.35)"; r.beginPath(); r.arc((x + 0.5) * st, (y + 0.5) * st, st * 0.22, 0, Math.PI * 2); r.fill(); } }
+  if (kind === "vents") { const st = size / 12; for (let y = 0; y < 12; y++) {
+    g.fillStyle = "rgba(0,0,0,0.55)"; g.fillRect(st * 0.6, y * st + st * 0.3, size - st * 1.2, st * 0.4);
+    g.fillStyle = "rgba(255,255,255,0.08)"; g.fillRect(st * 0.6, y * st + st * 0.7, size - st * 1.2, 1);
+    r.fillStyle = "rgba(255,255,255,0.4)"; r.fillRect(st * 0.6, y * st + st * 0.3, size - st * 1.2, st * 0.4); } }
   const wrap = (c: HTMLCanvasElement, srgb: boolean) => { const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; };
   return { map: wrap(cm, true), rough: wrap(cr, false) };
 }
@@ -93,7 +105,8 @@ function seamNormals(kind: "tiles" | "panels" | "plating", size: number): THREE.
 }
 
 /** Which finish each material gets (department colours stay accents; finishes vary the base surfaces). */
-const FINISH: Partial<Record<string, "brushed" | "composite" | "rubberDots">> = { metal: "brushed", darkMetal: "brushed", wallTrim: "composite", desk: "composite", concrete: "composite", floorDark: "rubberDots" };
+const FINISH: Partial<Record<string, "brushed" | "composite" | "rubberDots" | "vents">> = { metal: "brushed", darkMetal: "brushed", wallTrim: "composite", desk: "composite", concrete: "composite", floorDark: "rubberDots",
+  painted: "composite", equipment: "composite", grille: "vents", rubber: "rubberDots" };
 
 export interface HQMaterials { get(key: MatKey): THREE.Material; dispose(): void }
 
@@ -115,7 +128,7 @@ export function createMaterials(q: HQProfile): HQMaterials {
     wall: tex("panels", "#162133", "rgba(140,170,220,0.12)", 1),
   };
   const finCache = new Map<string, ReturnType<typeof finish>>(), normCache = new Map<string, THREE.CanvasTexture>();
-  const finishes = (k: "brushed" | "composite" | "rubberDots") => {
+  const finishes = (k: "brushed" | "composite" | "rubberDots" | "vents") => {
     let f = finCache.get(k);
     if (!f) { f = finish(k, Math.min(512, q.textures)); f.map.repeat.set(2, 2); f.rough.repeat.set(2, 2); finCache.set(k, f); textures.push(f.map, f.rough); }
     return f;
@@ -147,7 +160,7 @@ export function createMaterials(q: HQProfile): HQMaterials {
       ...(f ? { map: map ?? f.map, roughnessMap: f.rough, color: b.color } : {}),
       ...(normal ? { normalMap: normal, normalScale: new THREE.Vector2(0.6, 0.6) } : {}),
     };
-    if (q.physical && (key === "floor" || key === "corridor" || key === "metal")) return new THREE.MeshPhysicalMaterial({ ...opts, clearcoat: 0.6, clearcoatRoughness: 0.25 });
+    if (q.physical && (key === "floor" || key === "corridor" || key === "metal" || key === "polished" || key === "screenGlass")) return new THREE.MeshPhysicalMaterial({ ...opts, clearcoat: 0.6, clearcoatRoughness: 0.25 });
     return new THREE.MeshStandardMaterial(opts);
   };
   return {

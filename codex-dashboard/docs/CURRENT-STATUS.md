@@ -588,3 +588,99 @@ Software WebGL, 12 agents (shadows rendered):
 **Review package:** produced by `fleet-virtual-hq-pg.test.ts` with `FLEET_HQ_SHOTS` (stills), plus `FLEET_HQ_VIDEO=1`
 for WebM recordings of the sequences. The sequences are a walk, a team offer, a task delivery, and a sweep followed by
 a distribution.
+
+## V2.3: the HQ performs Fleet state — 4 October 2026 (version 0.7.0)
+
+This builds on the V2.2 candidate (`646849c`). It makes presentation changes only.
+- No economic, payment, replication, owner-sweep, cap, tax, custody or schema change.
+- The schema stays v42.
+- No portrait, face, skin or character art was rebuilt.
+
+**Cinematic information transport** (`hq/transport.ts`, pure and unit-tested; `hq/flow.tsx` draws it)
+- **Phases:** each real event plays `ACTIVATE → LAUNCH → TRAVEL → ARRIVE → RESPOND → SETTLE`.
+  - The source's socket lights, and the sending agent's terminal confirms.
+  - An orb travels inside the glass conduits. The route lights up behind it, and the junctions it passes pulse.
+  - The destination's receiver lights on arrival. Only then do its displays respond (the Treasury banner, hub
+    displays, room screens) and does the receiving agent react.
+- **Semantic colour:**
+  - cyan/blue: information;
+  - violet: opportunity;
+  - gold: money, Treasury, sweep and distribution;
+  - green: realised revenue;
+  - red: real alerts only.
+- **Visual scheduler:**
+  - Priority, for presentation only: security alert > financial/Treasury > project > realised outcome >
+    opportunity/research > status.
+  - At most 3–8 transports play at once, depending on quality (4 under Reduce Motion).
+  - The waiting queue is bounded at 40, in a deterministic order (priority, event time, id).
+  - An event whose turn comes more than 45 s after it happened is not animated, for example a backlog after a reload.
+  - Every event stays in the activity feed and in the state.
+- **Reduce Motion:** the source, the lit route with direction marks, the destination receiver and the label are shown
+  together, and the response follows. Nothing races.
+- **Skins:** `hq/transport-skin.ts` (`tube-orb` default, `fibre-pulse` example). See `docs/COSMETICS.md`.
+- **Physical infrastructure:**
+  - glass-covered conduits along every corridor line, with structural collars and junction hubs;
+  - a glass tube in each room, from a receiving socket at its opening to the room's **intake** (`route.ts INTAKE`);
+  - Fleet Command's intake is the live core;
+  - the Treasury's is a gold-rimmed capital intake on the seal, under the hub displays;
+  - department-bound transports start and end at the intakes.
+
+**Event camera** (`hq/director.ts`, unit-tested): "Auto-follow important events" is off by default.
+- **When:** only once the user has left the camera alone for 4 s, never while an agent is selected, and never under
+  Reduce Motion.
+- **Importance:** high events (sale, sweep, critical alert, project completion or distribution, birth, death) may
+  replace a medium shot.
+- **Framing:** smooth goal changes, no cuts — source, then just ahead of the orb, then destination.
+- **Cancelling:** any pointer, wheel or key input cancels the shot at once.
+
+**Authoritative choreography** (`hq/nav.ts`, `hq/choreo.ts`, unit-tested)
+- **Navigation grid:** a 0.25 m grid rasterised from the building's own geometry. Every solid in the walking band
+  blocks its footprint, inflated by a person's radius: walls, parapets, desks, chairs, consoles, racks, tables and
+  pillars, plus the Agent Floor's desks and chairs.
+- **Paths:** A* (8-way, no corner cutting, a clearance cost that keeps people mid-aisle), then pulled straight wherever
+  the line stays walkable.
+- **Guarantees:** never through a wall or furniture; rooms are entered only through their openings. A test walks
+  between every work spot in the building, and from 50 workstations.
+- **Moves:** stand up from the seat → leave → walk the corridors (keeping right, slowing, giving way) → approach →
+  begin. Path planning is paced at 4 ms per frame. Teleporting is only a fallback.
+- **Agent Floor:** workstations are now two banks either side of a lit central aisle, rows 2.4 m apart, with a walkway
+  behind every row of chairs. There are 10 × 5 = 50 places.
+- **Work animations:**
+  - at a desk: typing, reading;
+  - at a console: operating, reading, inspecting;
+  - meeting: seated, standing, pointing at the shared table;
+  - watching a crowded room's displays.
+- **Reactions** to the agent's own recorded events:
+  - confirm as it sends;
+  - a completion gesture on a delivery;
+  - looking up as something arrives;
+  - the station monitor flashes (white, or green for a completion).
+- **Idle agents never mime work:** no mission, recent event or team project means seated idle or waiting. This is
+  enforced by a test.
+
+**Environment, materials, light, identity**
+- **New material classes:** painted structural steel, smoked glass, illuminated acrylic, polished floor, screen
+  glass, equipment housings, vent grilles (slotted finish), cable.
+- **Density:** about +40–60% functional equipment in every room:
+  - Fleet Command: operator banks, comms panels, ring truss, light fins.
+  - Treasury: settlement consoles, transaction receivers, vault security line, ledger strips, cabinets, polished
+    trading floor, wainscot.
+  - Opportunity Lab: ranking totems, projection frame, comparison benches.
+  - Agent Floor: row status displays, huddle table, supervisor platform, team screen.
+  - Marketing: review table, editing stations, channel cluster, content queue, lighting grid.
+  - Library / Research: second reading table, evidence light table, retrieval kiosk, acoustic panels, reading carpet,
+    baffles.
+  - Venture / Dev: test consoles, a fifth rack, engineering board, build display, build bay, cable ladders.
+  - Identity: credential vault, terminal islands, queue marks, readers.
+  - Estate Storage: scanning station, roller table, pallets, deck plates, gantry hoist.
+  - Comms: patch-bay island, transmission racks, mast ladder, fibre ring.
+  - Security / Systems: SOC consoles, map table, grilles, network plates, cable trays.
+- **Identity:** each room has its own floor inlay and overhead signature (radial, coffered, lattice, hex cells,
+  waves, baffles, ladders). Overhead structure hugs the walls, so the cutaway view stays open.
+- **Light:** each room's accent light washes its equipment wall, and a soft, wide white fill sits over the work zone.
+  This replaced the two centre lights that made a round pool. The fixture pools are dimmer.
+
+**V2.3 measurements:** the dev VM was under heavy external load (load average 6–8) during this pass, so absolute frame
+rates are lower than V2.2's quiet-machine figures. A paired run on the same machine minutes apart measured V2.2 at
+12–39 fps and V2.3 at 16–36 fps (12 agents, every quality and view): no measurable regression. The GPU matrix, a
+50-agent Ultra burst of 30 simultaneous events and the review package are in the V2.3 review page.
