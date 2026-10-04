@@ -900,6 +900,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
   if (!(await has("fleet_ventures"))) return problems;
   const v29 = await has("fleet_payment_rails");
   const v30 = await has("fleet_envelopes");
+  const v42 = await has("fleet_projects");
   const trig = await db.query<{ t: string }>(
     `SELECT c.relname || ':' || tg.tgname AS t FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = $1 AND NOT tg.tgisinternal AND tg.tgenabled <> 'D'`, [schema]);
@@ -916,6 +917,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     ...(v30 ? ["fleet_envelopes:fleet_envelopes_guard", "fleet_envelopes:fleet_envelopes_no_delete", "fleet_capital_decisions:fleet_capital_decisions_no_change",
       "fleet_capital_requests:fleet_capital_requests_no_change", "fleet_payment_orders:fleet_orders_funding_guard", "fleet_capital_policy:fleet_capital_policy_no_delete",
       "fleet_sweep_policy:fleet_sweep_policy_no_delete", "fleet_cognition_depth_policy:fleet_cognition_depth_policy_no_delete"] : []),
+    ...(v42 ? ["fleet_projects:fleet_projects_guard", "fleet_projects:fleet_projects_no_delete", "fleet_project_members:fleet_project_members_guard",
+      "fleet_project_members:fleet_project_members_no_delete", "fleet_project_payments:fleet_project_payments_no_change",
+      "fleet_project_events:fleet_project_events_no_change", "fleet_project_outcomes:fleet_project_outcomes_no_change"] : []),
   ];
   for (const t of need) if (!have.has(t)) problems.push(`economy surface: trigger ${t.replace(":", ".")} is missing or disabled`);
   const checks = await db.query<{ n: string; d: string }>(
@@ -931,7 +935,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_venture_journals: new Set(["fleet_admin_venture_attribute", "fleet_settlement_post", "cx_report_result"]),
     fleet_decision_records: new Set(["fleet_econ_decision_record", "fleet_econ_decision_outcome", "fleet_econ_decision_correct"]),
     fleet_opportunities: new Set(["fleet_econ_opportunity_record", "fleet_econ_opportunity_shortlist", "fleet_econ_opportunity_status", "fleet_opportunity_expire", "fleet_econ_venture_create"]),
-    fleet_economic_knowledge: new Set(["fleet_econ_knowledge_record", "fleet_econ_decision_outcome"]),
+    fleet_economic_knowledge: new Set(["fleet_econ_knowledge_record", "fleet_econ_decision_outcome", "fleet_project_finish"]),
     fleet_economy_policy: new Set(["fleet_admin_economy_policy_set"]),
     fleet_payment_rails: new Set(["fleet_admin_rail_add", "fleet_admin_rail_set_status", "fleet_admin_credential_set_status", "fleet_settlement_post"]),
     fleet_rail_assignments: new Set(["fleet_rail_resolve", "fleet_admin_rail_set_status"]),
@@ -1021,6 +1025,17 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_identity_releases: new Set(["ix_release_record"]),
     fleet_owner_identity_classes: new Set(["fleet_admin_owner_identity_class_set", "ix_vault_installed"]),
     fleet_owner_identity_consent: new Set(["fleet_admin_owner_identity_consent_set", "fleet_admin_owner_identity_consent_revoke"]),
+    // v42: team projects — written only by the project operations and their settlement helpers (money moves only through
+    // fleet_project_pay / fleet_project_release, both posting through fleet_ledger_post).
+    fleet_projects: new Set(["fleet_econ_project_propose", "fleet_econ_project_replan", "fleet_econ_project_fund", "fleet_econ_project_start",
+      "fleet_project_evaluate", "fleet_project_pay", "fleet_project_release", "fleet_project_finish"]),
+    fleet_project_roles: new Set(["fleet_project_set_plan"]),
+    fleet_project_tasks: new Set(["fleet_project_set_plan", "fleet_econ_project_task", "fleet_econ_project_review", "fleet_project_end_member", "fleet_project_finish"]),
+    fleet_project_members: new Set(["fleet_econ_project_offer", "fleet_econ_project_respond", "fleet_econ_project_counter_accept", "fleet_econ_project_withdraw_offer",
+      "fleet_econ_project_task", "fleet_econ_project_review", "fleet_project_pay", "fleet_project_end_member", "fleet_project_finish"]),
+    fleet_project_payments: new Set(["fleet_project_pay"]),
+    fleet_project_events: new Set(["fleet_project_event"]),
+    fleet_project_outcomes: new Set(["fleet_project_finish"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

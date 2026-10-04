@@ -1339,3 +1339,94 @@ Mail and SMS are dormant until activated (see agent-identity.md, v41). When numb
 - the Fleet never carries an abandoned or unpaid number beyond 7 days.
 
 The shared mailbox is Fleet infrastructure (one subscription when activated) and is not charged to agents.
+
+## 39. Multi-agent project teams — schema v42 (2026-10-04; owner brief "Virtual HQ v2 refinement", Part B; not deployed)
+
+Recruitment lets an agent contract **other existing living agents** into one of its ventures when collaboration has a
+strong economic reason. It is not replication: it never creates an agent and never touches the replication switch, the
+registry cap or the constitutional ceiling of 50 living agents. No owner step is involved; FleetController is the ledger
+and custody authority.
+
+**Planner** (`src/fleet/projects/planner.ts` and its twin, `fleet_project_schedule`, checked for equality on random
+graphs). A project is a task graph whose tasks are owned by the lead or by a role. Each owner works on one task at a time,
+and each task waits for its dependencies. Scheduling is a deterministic greedy list schedule.
+
+| Figure | Definition |
+|---|---|
+| Solo ETA | Σ task hours |
+| Team ETA | Makespan + the coordination overhead the lead declares |
+| Projected finish | Recomputed from actual progress |
+| Realised time saved | Measured only at completion |
+
+There is no hours ÷ headcount formula: a serial chain gets slower with more owners, because coordination is added.
+
+**Gate.** A team (one or more roles) is accepted only when the expected benefit exceeds the expected contract cost plus
+the coordination cost. The reasons are stored, and the gate is re-checked when an offer or a counter changes the terms.
+
+- Expected benefit = time saved × the lead's value of a day + the quality / risk benefit it claims.
+- Expected contract cost = fixed + milestones + the expected revenue share, which is capped.
+
+**Contracts.**
+- **Compensation:** FIXED, REVENUE_SHARE, MILESTONE or HYBRID, explicit before work starts.
+- **Responses:** only the target agent answers: ACCEPT, COUNTER, DECLINE or ACCEPT_WITH_TIMING. A later start moves the
+  planned ETA.
+- **Leaving:** members can exit at any time. The lead can withdraw an offer or replace a member.
+
+**Money.** The lead's escrow (`agent_project_escrow`) is funded in one of two ways:
+- from its **own spendable capital**: custody availability is the only check, with no resizing or ceiling;
+- from **Fleet capital** approved through the existing `capital.request` path. The request carries `projectId` and the
+  decision's inputs include the project's planner economics; the resulting envelope funds the escrow.
+
+Tax reserves, envelope capital of other purposes, protected principal and obligations cannot fund a project. A member
+can ACCEPT only when the free escrow covers its fixed and milestone pay.
+
+Payments are `project_payment` journals between exactly two agents, enforced by `fleet_ledger_post`:
+`agent_project_expense` for the payer and `agent_project_income` for the payee. These internal classes are never read as
+external revenue or cost.
+
+**Internal flows are excluded from the Fleet's consolidated figures** (decision, conservative). Daily-report flows,
+Fleet-generated wealth, replication wealth, venture financials, tax and the sweep base (`realizedNetProfit`) are
+unchanged by them on both sides. As a result:
+- Σ sweep base = consolidated external net profit;
+- an internal transfer can never create sweepable profit;
+- internal flows can never escape the sweep.
+
+Per agent, `fleet_agent_economics` also reports `internalProjectIncome`, `internalProjectExpense`,
+`netProfitInclInternal` and `projectEscrow`. The escrow counts as recoverable value but is never spendable cash.
+
+**Settlement.**
+
+| Pay | When |
+|---|---|
+| Milestones | When the lead accepts the milestone's task |
+| Fixed pay | When all of the role's tasks are accepted |
+| Revenue share | On request, from the venture's ledger net profit (external) since the contract began, up to its end date and cap, out of the lead's spendable cash. The remainder stays owed. |
+
+On cancellation, removal, a member's death or the lead's death, delivered work counts as earned. Unspent escrow returns
+to its source: own capital to the lead's cash, Fleet capital to its envelope (or to the Treasury if the envelope has
+closed). Envelope positions count project escrow as reserved and project payments as spent.
+
+**Lifecycle.**
+- Death or quarantine ends authority at once (authentication).
+- A dead member's contracts are settled and ended.
+- A dead or quarantined lead's projects are cancelled with settlement: no project survives without a living lead.
+- An operator hold only pauses the agent.
+
+**History.**
+- Append-only project events; immutable payments.
+- An outcome record per finished project: predicted versus actual duration, cost and return; parallelism; coordination;
+  contributions; failures; lessons.
+- An economic-knowledge entry (topic `team_project`).
+- `fleet_agent_competency`: a view over completed work, with no birth-assigned score and no ranking.
+
+**Surface.**
+- **Agent:** `project.*` operations through `api_economy`, and the founder tool `project`.
+- **Admin (read-only):** the `projects` read through `dash_call`.
+- **Events:** lifecycle events `project_*`. They carry `fromAgentId` / `toAgentId` where two agents are involved, so the
+  Virtual HQ can draw a truthful packet.
+- **Privilege audit:** every project table has named single writers.
+
+**Tests:**
+- `fleet-project-planner.test.ts`
+- `fleet-projects-pg.test.ts` (the brief's 13–32)
+- `fleet-projects-scale-pg.test.ts` (1 / 10 / 25 / 50 living agents with concurrent projects; `FLEET_SCALE_TESTS=1`)
