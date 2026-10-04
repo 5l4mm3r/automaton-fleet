@@ -97,19 +97,26 @@ export function estimate(tasks: readonly PlanTask[], coordinationHours: number, 
   return { soloHours: hours(solo), teamHours: hours(team), makespanHours: s.makespanHours, coordinationHours, timeSavedHours: hours(solo - team), criticalPath: s.criticalPath };
 }
 
-/** Compensation terms of one contract (minor units; revenue share in basis points of attributable venture net profit). */
+/**
+ * Compensation terms of one contract, negotiated per project (there is no default). Fixed / milestone pay is a pre-profit
+ * project cost; a profit share is a whole number of basis points of the POST-SWEEP distributable pool (REVENUE_SHARE is
+ * accepted by the database as the same post-sweep share).
+ */
 export interface Terms {
-  type: "FIXED" | "REVENUE_SHARE" | "MILESTONE" | "HYBRID";
+  type: "FIXED" | "PROFIT_SHARE" | "MILESTONE" | "HYBRID";
   fixedMinor?: number;
-  revenueShareBp?: number;
-  revenueShareCapMinor?: number;
+  profitShareBp?: number;
+  profitShareCapMinor?: number;
   milestones?: Array<{ key: string; taskKey: string; amountMinor: number }>;
 }
 
-/** The cost a lead should expect from a contract: fixed + milestones + its expected revenue share (capped). */
-export function expectedCost(t: Terms, expectedValueMinor: number): number {
-  const share = t.revenueShareBp ? Math.floor((Math.max(0, expectedValueMinor) * t.revenueShareBp) / 10_000) : 0;
-  const capped = t.revenueShareCapMinor !== undefined ? Math.min(share, t.revenueShareCapMinor) : share;
+/**
+ * The cost a lead should forecast for a contract: fixed + milestones + its share of the EXPECTED POST-SWEEP pool (capped).
+ * `postSweepExpectedMinor` is the expected value after the Treasury sweep.
+ */
+export function expectedCost(t: Terms, postSweepExpectedMinor: number): number {
+  const share = t.profitShareBp ? Math.floor((Math.max(0, postSweepExpectedMinor) * t.profitShareBp) / 10_000) : 0;
+  const capped = t.profitShareCapMinor !== undefined ? Math.min(share, t.profitShareCapMinor) : share;
   return (t.fixedMinor ?? 0) + (t.milestones ?? []).reduce((a, m) => a + m.amountMinor, 0) + capped;
 }
 

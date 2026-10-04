@@ -32,7 +32,8 @@ async function teamProject(R: EconomyRegistry, lead: Founder, member: Founder, i
     roles: [{ role: "dev", taskScope: "task b", requiredCapability: "backend", compensation: { type: "MILESTONE", milestones: [{ key: "mb", taskKey: "b", amountMinor: 700 }] } }],
   }))).project.projectId;
   await ok(R.econ(lead, "project.fund", { projectId: p, amountMinor: 900, source: "own", idempotencyKey: `fund:${i}` }));
-  const m = (await ok(R.econ(lead, "project.offer", { projectId: p, role: "dev", agentId: member.id, deliverable: "b", expectedHours: 16, deadline: inDays(3) }))).memberId;
+  const m = (await ok(R.econ(lead, "project.offer", { projectId: p, role: "dev", agentId: member.id, deliverable: "b", expectedHours: 16, deadline: inDays(3),
+    compensation: { type: "MILESTONE", milestones: [{ key: "mb", taskKey: "b", amountMinor: 700 }] } }))).memberId;
   await ok(R.econ(member, "project.respond", { memberId: m, response: "ACCEPT" }));
   await ok(R.econ(lead, "project.start", { projectId: p }));
   for (const [who, k] of [[lead, "a"], [member, "b"], [lead, "c"], [lead, "d"]] as const) {

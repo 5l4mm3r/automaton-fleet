@@ -23,7 +23,7 @@ const inDays = (d: number) => new Date(Date.now() + d * 86_400_000).toISOString(
 
 describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
   let R: EconomyRegistry;
-  let A: Founder, B: Founder, C: Founder, D: Founder;
+  let A: Founder, B: Founder, C: Founder, D: Founder, E: Founder, F: Founder, G: Founder, H: Founder;
   let svc: pg.Pool;
   let rail = "";
   const acct = (who: Founder | string, cls: string) => `agent:${typeof who === "string" ? who : who.id}:${cls.slice(6)}`;
@@ -47,12 +47,14 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
     roles: [{ role: "engineer", taskScope: "the backend API", requiredCapability: "backend", compensation: { type: "FIXED", fixedMinor: 1_000 } }],
     ...extra,
   });
+  // Every offer states its terms explicitly (there are no default terms); these tests offer the plan's FIXED £10 unless they say otherwise.
   const offer = (pid: string, to: Founder, extra: Record<string, unknown> = {}) => R.econ(A, "project.offer", {
-    projectId: pid, role: "engineer", agentId: to.id, deliverable: "the backend API", expectedHours: 20, deadline: inDays(7), ...extra });
+    projectId: pid, role: "engineer", agentId: to.id, deliverable: "the backend API", expectedHours: 20, deadline: inDays(7), compensation: { type: "FIXED", fixedMinor: 1_000 }, ...extra });
 
   beforeAll(async () => {
-    R = await startEconomyRegistry(PG_BIN!, { founders: 4, allocationCents: 20_000, treasuryCents: 2_000_000 });
-    [A, B, C, D] = R.founders;
+    // Allocations large enough that the sweep's safe-transfer protection does not bind in the profit tests (the policy rate applies).
+    R = await startEconomyRegistry(PG_BIN!, { founders: 8, allocationCents: 1_000_000, treasuryCents: 20_000_000 });
+    [A, B, C, D, E, F, G, H] = R.founders;
     svc = new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 2 });
     await R.store.grantServiceRole();
     const e = await R.one(`fleet.fleet_admin_legal_entity_add('Fleet Trading Ltd', 'GB', 'company', true, $1)`, [OWNER]);
@@ -193,7 +195,9 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
     expect(await R.balance("fleet:treasury:unallocated")).toBe(treasury0);
     const eB = await R.one(`fleet.fleet_agent_economics($1)`, [B.id]);
     const eA = await R.one(`fleet.fleet_agent_economics($1)`, [A.id]);
-    expect(eB).toMatchObject({ externalCustomerRevenue: 0, internalProjectIncome: 1_000, netProfitInclInternal: Number(eB.realizedNetProfit) + 1_000 });
+    // Owner correction: a fixed / milestone payment is a pre-profit cost — payer expense and payee income are both INSIDE
+    // realised net profit (the payee's is sweepable); external revenue is untouched and Σ over agents is unchanged.
+    expect(eB).toMatchObject({ externalCustomerRevenue: 0, internalProjectIncome: 1_000, realizedNetProfit: 1_000, netProfitInclInternal: 1_000 });
     expect(eA).toMatchObject({ internalProjectExpense: 1_000, projectEscrow: 737 });
     expect(Number(eA.internalProjectExpense)).toBe(Number(eB.internalProjectIncome)); // consolidated: internal flows net to zero
     expect(Number(await R.one(`(SELECT COALESCE(sum((fleet.fleet_agent_economics(agent_id) ->> 'internalProjectIncome')::bigint - (fleet.fleet_agent_economics(agent_id) ->> 'internalProjectExpense')::bigint), 0) FROM fleet.fleet_agents)`))).toBe(0);
@@ -300,7 +304,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
     const p = pr.project.projectId;
     await ok(R.econ(A, "project.fund", { projectId: p, amountMinor: 1_500, source: "own" }));
     // An unfunded acceptance is refused (escrow must cover the contract) — fund first, then accept.
-    const m = (await ok(offer(p, C, { compensation: undefined }))).memberId;
+    const m = (await ok(offer(p, C, { compensation: { type: "MILESTONE", milestones: [{ key: "m-api", taskKey: "api", amountMinor: 600 }, { key: "m-jobs", taskKey: "jobs", amountMinor: 400 }] } }))).memberId;
     await ok(R.econ(C, "project.respond", { memberId: m, response: "ACCEPT" }));
     await ok(R.econ(A, "project.start", { projectId: p }));
     for (const step of [["start"], ["deliver"]]) await ok(R.econ(A, "project.task", { projectId: p, taskKey: "arch", action: step[0] }));
@@ -334,27 +338,238 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
     await ok(R.econ(A, "project.cancel", { projectId: p, reason: "test cleanup" }));
   });
 
-  it("revenue share is settled from the venture's ledger net profit (external), within its term", async () => {
-    await ok(R.econ(B, "venture.create", { key: "b-share", model: "software", offer: "share", state: "selected", channels: ["direct"] }));
-    await R.econ(B, "rail.require", { ventureKey: "b-share" });
-    const p = (await ok(R.econ(B, "project.propose", plan("share", "b-share", {
-      roles: [{ role: "engineer", taskScope: "backend", requiredCapability: "backend", compensation: { type: "HYBRID", fixedMinor: 300, revenueShareBp: 1_000, revenueShareCapMinor: 1_000, revenueShareUntil: inDays(30) } }],
-    })))).project.projectId;
-    await ok(R.econ(B, "project.fund", { projectId: p, amountMinor: 300, source: "own" }));
-    const m = (await ok(R.econ(B, "project.offer", { projectId: p, role: "engineer", agentId: D.id, deliverable: "backend", expectedHours: 20, deadline: inDays(5) }))).memberId;
-    await ok(R.econ(D, "project.respond", { memberId: m, response: "ACCEPT" }));
+  // ═══ Owner's economic order (correction to v42): external revenue → project costs → tax → realised net profit →
+  // Treasury sweep (existing policy, no team exemption) → post-sweep distributable pool → the shares the agents negotiated.
+  const sell = async (who: Founder, venture: string, gross: number) => {
+    const vid = (await R.q(`SELECT venture_id FROM fleet.fleet_ventures WHERE agent_id = $1 AND venture_key = $2`, [who.id, venture]))[0].venture_id;
     const ext = `sale:${crypto.randomUUID()}`;
-    const vb = (await R.q(`SELECT venture_id FROM fleet.fleet_ventures WHERE venture_key = 'b-share'`))[0].venture_id;
-    await svc.query(`SELECT fleet.svc_settlement_ingest($1, $2, 'sale', 5000, 0, 'GBP', $4, now(), $3, NULL)`, [rail, ext, sha(ext), vb]);
-    const net = Number((await R.one(`fleet.fleet_venture_financials((SELECT venture_id FROM fleet.fleet_ventures WHERE venture_key = 'b-share'))`)).netProfitMinor);
-    expect(net).toBeGreaterThan(0);
-    const flows0 = await external();
-    const s = await ok(R.econ(D, "project.settle_share", { memberId: m }));
-    expect(s).toMatchObject({ ventureNetProfitMinor: net, owedMinor: Math.floor(net / 10), paidNowMinor: Math.floor(net / 10) });
-    expect(await ok(R.econ(B, "project.settle_share", { memberId: m }))).toMatchObject({ paidNowMinor: 0 }); // never twice
-    expect(await external()).toEqual(flows0);                                                            // still not Fleet revenue
-    expect(await R.econ(C, "project.settle_share", { memberId: m })).toMatchObject({ ok: false, code: "FLEET_PROJECT_NOT_PARTY" });
-    await ok(R.econ(B, "project.cancel", { projectId: p, reason: "test cleanup" }));
+    await svc.query(`SELECT fleet.svc_settlement_ingest($1, $2, 'sale', $3, 0, 'GBP', $4, now(), $5, NULL)`, [rail, ext, gross, vid, sha(ext)]);
+  };
+  const sweep = (who: Founder) => R.one(`fleet.fleet_sweep_execute($1, 'controller', $2)`, [who.id, `sw:${crypto.randomUUID()}`]);
+  const venture = async (who: Founder, key: string) => {
+    await ok(R.econ(who, "venture.create", { key, model: "software", offer: key, state: "selected", channels: ["direct"] }));
+    await R.econ(who, "rail.require", { ventureKey: key });
+  };
+  /** A share-only team project (no fixed cost): the lead keeps its explicit residual of the post-sweep pool. */
+  // The member brings a capability the lead lacks: the lead's FORECAST values that (with its reasoning) — this, not a default,
+  // is what justifies giving up part of the post-sweep pool.
+  const enables = { qualityBenefitMinor: 45_000, forecast: { qualityReasoning: "the lead has no backend capability; without the engineer the portal does not launch",
+    evidence: [{ kind: "fleet_outcome", observation: "two earlier solo attempts stalled at the backend" }] } };
+  const shareProject = async (lead: Founder, key: string, ventureKey: string) => (await ok(R.econ(lead, "project.propose", plan(key, ventureKey, {
+    ...enables,
+    roles: [{ role: "engineer", taskScope: "the backend", requiredCapability: "backend", compensation: { type: "PROFIT_SHARE", profitShareBp: 1, profitShareUntil: inDays(90) } }],
+  })))).project.projectId as string;
+  const shareOffer = (lead: Founder, pid: string, to: Founder, bp: number | unknown, role = "engineer") => R.econ(lead, "project.offer", {
+    projectId: pid, role, agentId: to.id, deliverable: "the backend", expectedHours: 20, deadline: inDays(7),
+    compensation: { type: "PROFIT_SHARE", profitShareBp: bp, profitShareUntil: inDays(90) } });
+  const cashOf = (who: Founder) => R.balance(acct(who, "agent_cash"));
+  const eco = (who: Founder) => R.one(`fleet.fleet_agent_economics($1)`, [who.id]);
+  const totalCash = async () => Number(await R.one(`(SELECT COALESCE(sum(fleet.fleet_ledger_balance(account_id)), 0) FROM fleet.fleet_ledger_accounts
+    WHERE class IN ('agent_cash','treasury_cash','agent_project_escrow','agent_tax_reserve','agent_envelope_cash','agent_reserved'))`));
+
+  it("profit shares: no default ratio — explicit negotiated terms only; invalid percentages and totals over 100% are refused", async () => {
+    await venture(E, "e-terms");
+    const p = await shareProject(E, "terms", "e-terms");
+    // No compensation → refused (never a default percentage).
+    expect(await R.econ(E, "project.offer", { projectId: p, role: "engineer", agentId: F.id, deliverable: "x", expectedHours: 1, deadline: inDays(2) }))
+      .toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST", reason: expect.stringMatching(/no default/) });
+    for (const bad of [0, -500, 12.5, 10_001, "3000"]) {
+      expect(await shareOffer(E, p, F, bad), String(bad)).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+    }
+    // Members' shares + the lead's residual = 100%: 6 000 bp + 5 000 bp is refused.
+    await ok(shareOffer(E, p, F, 6_000));
+    await ok(R.econ(E, "project.replan", { projectId: p, reason: "second role", tasks: plan("x", "x").tasks.concat([{ key: "docs", title: "Docs", ownerRole: "writer", hours: 4, deps: ["arch"], deliverable: "docs", acceptance: "ok" }]),
+      roles: [{ role: "engineer", taskScope: "the backend", requiredCapability: "backend", compensation: { type: "PROFIT_SHARE", profitShareBp: 1, profitShareUntil: inDays(90) } },
+              { role: "writer", taskScope: "docs", requiredCapability: "copywriting", compensation: { type: "PROFIT_SHARE", profitShareBp: 1, profitShareUntil: inDays(90) } }] }));
+    expect(await shareOffer(E, p, H, 5_000, "writer")).toMatchObject({ ok: false, code: "FLEET_PROJECT_SHARES_EXCEED" });
+    expect(await ok(shareOffer(E, p, H, 3_000, "writer"))).toBeTruthy();       // 60% + 30% offered: the lead's residual would be 10%, explicitly
+    const st = await ok(R.econ(E, "project.status", { projectId: p }));
+    expect(st.project.distribution).toMatchObject({ basis: "post_sweep_distributable_profit", leadShareBp: 10_000 }); // nothing accepted yet
+    // REVENUE_SHARE is the same post-sweep share (an explicit alias, documented), never a share of gross revenue.
+    const terms = await R.one(`fleet.fleet_project_terms('{"type":"REVENUE_SHARE","revenueShareBp":2500,"revenueShareUntil":"2027-01-01T00:00:00Z"}'::jsonb, $1, 'engineer')`, [p]);
+    expect(terms).toMatchObject({ type: "PROFIT_SHARE", profitShareBp: 2500 });
+    // A FIXED contract carries no share at all.
+    expect(await R.one(`fleet.fleet_project_share_bp('{"type":"FIXED","fixedMinor":100}'::jsonb)`)).toBe(0);
+    await ok(R.econ(E, "project.cancel", { projectId: p, reason: "test cleanup" }));
+  });
+
+  let PE = "";
+  it("a counter-offer changes the split; the lead accepts it; the lead cannot impose or accept terms on a member's behalf", async () => {
+    await venture(E, "e-split");
+    PE = await shareProject(E, "split-7030", "e-split");
+    const m = (await ok(shareOffer(E, PE, F, 2_000))).memberId;
+    // The lead cannot answer for F, nor accept a counter that F never made.
+    expect(await R.econ(E, "project.respond", { memberId: m, response: "ACCEPT" })).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
+    expect(await R.econ(E, "project.counter_accept", { projectId: PE, memberId: m })).toMatchObject({ ok: false, code: "FLEET_INVALID_STATE" });
+    await ok(R.econ(F, "project.respond", { memberId: m, response: "COUNTER", counter: { compensation: { type: "PROFIT_SHARE", profitShareBp: 3_000, profitShareUntil: inDays(90) } },
+      reason: "the backend is the larger half of the risk" }));
+    const ca = await ok(R.econ(E, "project.counter_accept", { projectId: PE, memberId: m }));
+    expect(ca.contract.compensation).toMatchObject({ type: "PROFIT_SHARE", profitShareBp: 3_000, revenueShareBp: 3_000, shareBasis: "post_sweep_distributable_profit" });
+    expect((await ok(R.econ(E, "project.status", { projectId: PE }))).project.distribution.leadShareBp).toBe(7_000);
+    // Accepted terms are frozen.
+    expect(await R.code(R.q(`UPDATE fleet.fleet_project_members SET terms = jsonb_set(terms, '{profitShareBp}', '1') WHERE member_id = $1`, [m]))).toBe("FLEET_IMMUTABLE");
+  });
+
+  it("£1,000 project profit at the policy rate: the Treasury takes the same sweep as a solo agent; the pool splits 70/30 per contract; shares are distributions", async () => {
+    await R.one(`fleet.fleet_admin_sweep_policy_set(true, NULL, NULL, NULL, NULL, NULL, $1)`, [OWNER]);
+    try {
+      await venture(G, "g-solo");
+      // The same sale: £1,250 gross with the fixture's 20% profit tax → £1,000 realised net profit after tax.
+      await sell(G, "g-solo", 125_000);
+      await sell(E, "e-split", 125_000);
+      const pe = await R.q(`SELECT * FROM fleet.fleet_projects WHERE project_id = $1`, [PE]);
+      expect(Number((await R.one(`fleet.fleet_project_profit((SELECT p FROM fleet.fleet_projects p WHERE project_id = $1), $2::timestamptz, NULL::timestamptz)`, [PE, pe[0].created_at])).attributableProfitMinor)).toBe(100_000);
+      // Before the sweep: the share is PENDING (never deducted from sweepable profit).
+      const pend = await ok(R.econ(F, "project.distribute", { projectId: PE }));
+      expect(pend).toMatchObject({ pendingProfitMinor: 100_000, paidNowMinor: 0 });
+      expect((await eco(E)).realizedNetProfit).toBe(125_000);
+      // The Treasury sweep under the existing policy, solo control vs the team's lead.
+      const rate = Number((await R.one(`fleet.fleet_sweep_compute($1)`, [G.id])).rateBp);
+      expect(Number((await R.one(`fleet.fleet_sweep_compute($1)`, [E.id])).rateBp)).toBe(rate);
+      const t0 = await R.balance("fleet:treasury:unallocated");
+      const solo = await sweep(G);
+      const t1 = await R.balance("fleet:treasury:unallocated");
+      const team = await sweep(E);
+      const t2 = await R.balance("fleet:treasury:unallocated");
+      expect(t1 - t0).toBe(Math.floor((100_000 * rate) / 10_000));        // policy rate (10% at this population) → £100
+      expect(t2 - t1).toBe(t1 - t0);                                      // a team gets exactly the solo sweep: no exemption, no reduction
+      expect(solo.amountMinor).toBe(team.amountMinor);
+      // After the sweep: £900 distributable, split by contract 70/30 → £630 lead (residual), £270 member.
+      const fluxes0 = await external();
+      const cash0 = await totalCash();
+      const f0 = await cashOf(F), e0 = await cashOf(E);
+      const d = await ok(R.econ(E, "project.distribute", { projectId: PE }));
+      const sweepPart = Math.floor((100_000 * rate) / 10_000), pool = 100_000 - sweepPart;
+      expect(d.tranche).toMatchObject({ profitMinor: 100_000, sweepRateBp: rate, sweepAttributedMinor: sweepPart, distributableMinor: pool,
+        leadShareBp: 7_000, leadResidualMinor: pool - Math.floor(pool * 0.3) });
+      expect(d.tranche.allocations[0]).toMatchObject({ agentId: F.id, shareBp: 3_000, amountMinor: Math.floor(pool * 0.3) });
+      expect(d.paidNowMinor).toBe(Math.floor(pool * 0.3));
+      // The fixture's real policy: the default band for ≤ 10 living agents is 10% (no maturity uplift for agents born today).
+      expect(rate).toBe(1_000);
+      expect([sweepPart, pool, Math.floor(pool * 0.3), pool - Math.floor(pool * 0.3)]).toEqual([10_000, 90_000, 27_000, 63_000]); // £100 / £900 / £270 / £630
+      expect(await cashOf(F)).toBe(f0 + Math.floor(pool * 0.3));
+      expect(await cashOf(E)).toBe(e0 - Math.floor(pool * 0.3));
+      // Distributions are equity on both sides: the lead's sweep base is not reduced; the member is not swept again.
+      expect((await eco(E)).realizedNetProfit).toBe(125_000);
+      expect((await eco(E)).profitDistributedOut).toBe(Math.floor(pool * 0.3));
+      expect((await eco(F)).realizedNetProfit).toBe(0);
+      expect((await eco(F)).profitDistributionsIn).toBe(Math.floor(pool * 0.3));
+      expect(Number((await R.one(`fleet.fleet_sweep_compute($1)`, [F.id])).afterTaxUncontributedProfitMinor)).toBe(0);
+      // Never Fleet external revenue; the consolidated ledger only moved cash between agents.
+      expect(await external()).toEqual(fluxes0);
+      expect(await totalCash()).toBe(cash0);
+      expect(await R.one(`fleet.fleet_ledger_verify()`)).toMatchObject({ ok: true, unbalanced: 0 });
+      // Once paid, never twice.
+      expect(await ok(R.econ(F, "project.distribute", { projectId: PE }))).toMatchObject({ paidNowMinor: 0, stillOwedMinor: 0 });
+    } finally { await R.one(`fleet.fleet_admin_sweep_policy_set(false, NULL, NULL, NULL, NULL, NULL, $1)`, [OWNER]); }
+  });
+
+  it("a fake project cost after profit exists is refused (offer, counter and re-plan); payments never exceed the agreed terms", async () => {
+    // e-split already has realised profit since project PE began.
+    const fixed = { type: "FIXED", fixedMinor: 5_000 };
+    expect(await R.econ(E, "project.offer", { projectId: PE, role: "engineer", agentId: H.id, deliverable: "x", expectedHours: 1, deadline: inDays(2), compensation: fixed }))
+      .toMatchObject({ ok: false, code: "FLEET_PROJECT_COST_AFTER_PROFIT" });
+    const hybrid = { type: "HYBRID", fixedMinor: 5_000, profitShareBp: 3_000, profitShareUntil: inDays(90) };
+    expect(await R.econ(E, "project.replan", { projectId: PE, reason: "raise the fixed part", tasks: plan("x", "x").tasks,
+      roles: [{ role: "engineer", taskScope: "the backend", requiredCapability: "backend", compensation: hybrid }] }))
+      .toMatchObject({ ok: false, code: "FLEET_PROJECT_COST_AFTER_PROFIT" });
+    // The pure guard, as the counter and acceptance paths use it.
+    expect(await R.code(R.q(`SELECT fleet.fleet_project_cost_guard(p, '{"type":"FIXED","fixedMinor":1}'::jsonb) FROM fleet.fleet_projects p WHERE project_id = $1`, [PE])))
+      .toBe("FLEET_PROJECT_COST_AFTER_PROFIT");
+    // Fixed / milestone pay happens exactly once per agreed amount (unique per contract and milestone).
+    const idx = (await R.q(`SELECT indexdef FROM pg_indexes WHERE indexname = 'fleet_project_payments_once'`))[0].indexdef as string;
+    expect(idx).toMatch(/member_id, kind/);
+  });
+
+  it("a legitimate pre-agreed fixed cost before profit works: payer expense, payee income — and that income is sweepable", async () => {
+    await venture(H, "h-fixed");
+    const p = (await ok(R.econ(H, "project.propose", plan("h-fixed", "h-fixed")))).project.projectId;
+    await ok(R.econ(H, "project.fund", { projectId: p, amountMinor: 1_000, source: "own" }));
+    const m = (await ok(R.econ(H, "project.offer", { projectId: p, role: "engineer", agentId: B.id, deliverable: "api", expectedHours: 20, deadline: inDays(5),
+      compensation: { type: "FIXED", fixedMinor: 1_000 } }))).memberId;
+    await ok(R.econ(B, "project.respond", { memberId: m, response: "ACCEPT" }));
+    await ok(R.econ(H, "project.start", { projectId: p }));
+    await ok(R.econ(H, "project.task", { projectId: p, taskKey: "arch", action: "start" }));
+    await ok(R.econ(H, "project.task", { projectId: p, taskKey: "arch", action: "deliver" }));
+    const netH0 = (await eco(H)).realizedNetProfit, netB0 = (await eco(B)).realizedNetProfit, sum0 = await sumNet();
+    const base0 = Number((await R.one(`fleet.fleet_sweep_compute($1)`, [B.id])).afterTaxUncontributedProfitMinor);
+    await ok(R.econ(B, "project.task", { projectId: p, taskKey: "backend", action: "start" }));
+    await ok(R.econ(B, "project.task", { projectId: p, taskKey: "backend", action: "deliver" }));
+    expect((await ok(R.econ(H, "project.review", { projectId: p, taskKey: "backend", verdict: "accept", reason: "good" }))).paidMinor).toBe(1_000);
+    expect((await eco(H)).realizedNetProfit).toBe(netH0 - 1_000);   // a pre-profit project cost for the payer
+    expect((await eco(B)).realizedNetProfit).toBe(netB0 + 1_000);   // income for the payee, inside its realised net profit
+    expect(Number((await R.one(`fleet.fleet_sweep_compute($1)`, [B.id])).afterTaxUncontributedProfitMinor)).toBe(base0 + 1_000); // sweepable at the payee
+    expect(await sumNet()).toBe(sum0);                              // Σ sweep base = consolidated external net profit (unchanged)
+    await ok(R.econ(H, "project.cancel", { projectId: p, reason: "test cleanup" }));
+  });
+
+  it("negotiated splits with exact ledger attribution after the sweep: 50/50 and a three-agent 60/25/15", async () => {
+    await R.one(`fleet.fleet_admin_sweep_policy_set(true, NULL, NULL, NULL, NULL, NULL, $1)`, [OWNER]);
+    try {
+      const run = async (lead: Founder, key: string, members: Array<[Founder, number, string]>) => {
+        await venture(lead, key);
+        const p = (await ok(R.econ(lead, "project.propose", plan(key, key, {
+          ...enables,
+          tasks: [{ key: "a", title: "A", ownerRole: "lead", hours: 8, deliverable: "a", acceptance: "a" },
+                  ...members.map(([, , role], i) => ({ key: `t${i}`, title: role, ownerRole: role, hours: 20, deps: ["a"], deliverable: role, acceptance: "ok" })),
+                  { key: "z", title: "Z", ownerRole: "lead", hours: 30, deps: ["a"], deliverable: "z", acceptance: "z" }],
+          roles: members.map(([, , role]) => ({ role, taskScope: role, requiredCapability: "backend", compensation: { type: "PROFIT_SHARE", profitShareBp: 1, profitShareUntil: inDays(90) } })),
+        })))).project.projectId as string;
+        for (const [who, bp, role] of members) {
+          const m = (await ok(shareOffer(lead, p, who, bp, role))).memberId;
+          await ok(R.econ(who, "project.respond", { memberId: m, response: "ACCEPT" }));
+        }
+        await sell(lead, key, 125_000);
+        const rate = Number((await R.one(`fleet.fleet_sweep_compute($1)`, [lead.id])).rateBp);
+        await sweep(lead);
+        const before = await Promise.all(members.map(([who]) => cashOf(who)));
+        const d = await ok(R.econ(lead, "project.distribute", { projectId: p }));
+        const pool = 100_000 - Math.floor((100_000 * rate) / 10_000);
+        const allocs = members.map(([, bp]) => Math.floor((pool * bp) / 10_000));
+        expect(d.tranche.allocations.map((x: any) => x.amountMinor)).toEqual(allocs);
+        expect(d.tranche.leadShareBp).toBe(10_000 - members.reduce((s, [, bp]) => s + bp, 0));
+        expect(d.tranche.leadResidualMinor + allocs.reduce((s, x) => s + x, 0)).toBe(pool);   // the whole distributable pool, exactly
+        for (const [i, [who]] of members.entries()) expect(await cashOf(who)).toBe(before[i] + allocs[i]);
+        await ok(R.econ(lead, "project.cancel", { projectId: p, reason: "test cleanup" }));
+      };
+      await run(H, "h-5050", [[F, 5_000, "engineer"]]);
+      await run(G, "g-602515", [[E, 2_500, "engineer"], [H, 1_500, "designer"]]);
+      expect(await R.one(`fleet.fleet_ledger_verify()`)).toMatchObject({ ok: true, unbalanced: 0 });
+    } finally { await R.one(`fleet.fleet_admin_sweep_policy_set(false, NULL, NULL, NULL, NULL, NULL, $1)`, [OWNER]); }
+  });
+
+  it("forecast vs realised: a claimed quality benefit needs its reasoning; completion records forecast, realised figures and assessments in knowledge", async () => {
+    await venture(F, "f-forecast");
+    expect(await R.econ(F, "project.propose", plan("fc-bad", "f-forecast", { qualityBenefitMinor: 500 })))
+      .toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST", reason: expect.stringMatching(/forecast/) });
+    const p = (await ok(R.econ(F, "project.propose", plan("fc", "f-forecast", { qualityBenefitMinor: 500,
+      forecast: { qualityReasoning: "a dedicated backend engineer halves the defect rate", evidence: [{ kind: "fleet_outcome", observation: "past project defects" }] } })))).project.projectId;
+    const st = await ok(R.econ(F, "project.status", { projectId: p }));
+    expect(st.project.economics.forecast).toMatchObject({ label: "forecast", qualityBenefitMinor: 500, qualityReasoning: expect.stringMatching(/defect/) });
+    expect(st.project.economics.gate.join(" ")).toMatch(/FORECAST/);
+    await ok(R.econ(F, "project.fund", { projectId: p, amountMinor: 1_000, source: "own" }));
+    const m = (await ok(R.econ(F, "project.offer", { projectId: p, role: "engineer", agentId: G.id, deliverable: "api", expectedHours: 20, deadline: inDays(5),
+      compensation: { type: "FIXED", fixedMinor: 1_000 } }))).memberId;
+    await ok(R.econ(G, "project.respond", { memberId: m, response: "ACCEPT" }));
+    await ok(R.econ(F, "project.start", { projectId: p }));
+    for (const [who, k] of [[F, "arch"], [G, "backend"], [F, "frontend"], [F, "integration"]] as const) {
+      await ok(R.econ(who, "project.task", { projectId: p, taskKey: k, action: "start" }));
+      await ok(R.econ(who, "project.task", { projectId: p, taskKey: k, action: "deliver" }));
+      await ok(R.econ(F, "project.review", { projectId: p, taskKey: k, verdict: "accept", reason: "ok" }));
+    }
+    await ok(R.econ(G, "project.assess", { projectId: p, assessment: "two defects found in review instead of the usual five", qualityRealisedMinor: 300,
+      evidence: [{ kind: "note", observation: "review log" }] }));
+    expect(await R.econ(H, "project.assess", { projectId: p, assessment: "not mine" })).toMatchObject({ ok: false, code: "FLEET_PROJECT_NOT_PARTY" });
+    const c = await ok(R.econ(F, "project.complete", { projectId: p, actualReturnMinor: 0, lessons: "the forecast quality gain was 60% realised" }));
+    expect(c.forecast).toMatchObject({ label: "forecast", qualityBenefitMinor: 500, teamHours: 36, expectedCostMinor: 1_000 });
+    expect(c.realised).toMatchObject({ label: "realised", costMinor: 1_000, attributableProfitMinor: -1_000, reportedReturnMinor: 0 });
+    expect(c.realised.assessments[0]).toMatchObject({ by: G.id, role: "engineer", qualityRealisedMinor: 300, label: "realised_assessment" });
+    const out = (await R.q(`SELECT * FROM fleet.fleet_project_outcomes WHERE project_id = $1`, [p]))[0];
+    expect(out.forecast.qualityReasoning).toMatch(/defect/);
+    const k = (await R.q(`SELECT * FROM fleet.fleet_economic_knowledge WHERE knowledge_id = $1`, [out.knowledge_id]))[0];
+    expect(k.subject).toBe(`forecast/software/${F.id.toLowerCase()}`);
+    expect(k.claim).toMatch(/FORECAST vs REALISED/);
+    expect(k.claim).toMatch(/quality\/risk benefit forecast 500, realised assessments 300 by engineer/);
   });
 
   it("28: a member's death settles its contract; the lead's death or quarantine cancels its projects — authority ends at once", async () => {
@@ -362,7 +577,8 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
     await ok(R.econ(C, "venture.create", { key: "c-app", model: "software", offer: "app", state: "selected", channels: ["direct"] }));
     const pc = (await ok(R.econ(C, "project.propose", plan("c-proj", "c-app")))).project.projectId;
     await ok(R.econ(C, "project.fund", { projectId: pc, amountMinor: 1_500, source: "own" }));
-    const md = (await ok(R.econ(C, "project.offer", { projectId: pc, role: "engineer", agentId: D.id, deliverable: "api", expectedHours: 20, deadline: inDays(5) }))).memberId;
+    const md = (await ok(R.econ(C, "project.offer", { projectId: pc, role: "engineer", agentId: D.id, deliverable: "api", expectedHours: 20, deadline: inDays(5),
+      compensation: { type: "FIXED", fixedMinor: 1_000 } }))).memberId;
     await ok(R.econ(D, "project.respond", { memberId: md, response: "ACCEPT" }));
 
     const pa = (await ok(R.econ(A, "project.propose", plan("a-proj", "portal-three")))).project.projectId;
@@ -404,7 +620,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
     expect(FLEET_PG_HARD_MAX_AGENTS).toBe(50);
     expect(st.replication_enabled).toBe(false);
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_birth_orders)`))).toBe(0);
-    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_agents)`))).toBe(4);
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_agents)`))).toBe(R.founders.length);
     // No project function writes agents, births, replication or the registry state.
     const src = (await R.q(`SELECT string_agg(p.prosrc, ' ') AS s FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       WHERE n.nspname = 'fleet' AND (p.proname LIKE 'fleet_econ_project_%' OR p.proname LIKE 'fleet_project_%' OR p.proname = 'fleet_admin_projects')`))[0].s as string;
@@ -415,7 +631,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
 
   it("the dashboard read lists projects with lead, members, compensation, planner ETAs and events (read-only gateway op)", async () => {
     const r = await R.one(`fleet.fleet_admin_projects('{}'::jsonb)`);
-    expect(r.summary).toMatchObject({ completed: 1 });
+    expect(r.summary.completed).toBeGreaterThanOrEqual(1);
     const done = r.projects.find((x: any) => x.projectId === P);
     expect(done).toMatchObject({ leadAgentId: A.id, status: "completed", eta: { soloHours: 52, teamHours: 36 } });
     expect(done.members[0]).toMatchObject({ agentId: B.id, role: "engineer", compensation: { type: "FIXED" }, paidMinor: 1000 });

@@ -919,7 +919,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       "fleet_sweep_policy:fleet_sweep_policy_no_delete", "fleet_cognition_depth_policy:fleet_cognition_depth_policy_no_delete"] : []),
     ...(v42 ? ["fleet_projects:fleet_projects_guard", "fleet_projects:fleet_projects_no_delete", "fleet_project_members:fleet_project_members_guard",
       "fleet_project_members:fleet_project_members_no_delete", "fleet_project_payments:fleet_project_payments_no_change",
-      "fleet_project_events:fleet_project_events_no_change", "fleet_project_outcomes:fleet_project_outcomes_no_change"] : []),
+      "fleet_project_events:fleet_project_events_no_change", "fleet_project_outcomes:fleet_project_outcomes_no_change",
+      "fleet_project_distributions:fleet_project_distributions_no_change"] : []),
   ];
   for (const t of need) if (!have.has(t)) problems.push(`economy surface: trigger ${t.replace(":", ".")} is missing or disabled`);
   const checks = await db.query<{ n: string; d: string }>(
@@ -1032,8 +1033,10 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_project_roles: new Set(["fleet_project_set_plan"]),
     fleet_project_tasks: new Set(["fleet_project_set_plan", "fleet_econ_project_task", "fleet_econ_project_review", "fleet_project_end_member", "fleet_project_finish"]),
     fleet_project_members: new Set(["fleet_econ_project_offer", "fleet_econ_project_respond", "fleet_econ_project_counter_accept", "fleet_econ_project_withdraw_offer",
-      "fleet_econ_project_task", "fleet_econ_project_review", "fleet_project_pay", "fleet_project_end_member", "fleet_project_finish"]),
-    fleet_project_payments: new Set(["fleet_project_pay"]),
+      "fleet_econ_project_task", "fleet_econ_project_review", "fleet_project_pay", "fleet_project_pay_share", "fleet_project_distribute", "fleet_project_end_member",
+      "fleet_project_finish"]),
+    fleet_project_payments: new Set(["fleet_project_pay", "fleet_project_pay_share"]),
+    fleet_project_distributions: new Set(["fleet_project_distribute"]),
     fleet_project_events: new Set(["fleet_project_event"]),
     fleet_project_outcomes: new Set(["fleet_project_finish"]),
   };

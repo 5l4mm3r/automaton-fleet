@@ -71,10 +71,10 @@ describe("team-project planner", () => {
     expect(() => schedule([{ key: "a", role: "lead", hours: 1, deps: ["zz"] }])).toThrow(/unknown task/);
   });
 
-  it("expected contract cost: fixed + milestones + expected revenue share (capped)", () => {
+  it("forecast contract cost: fixed + milestones + the share of the expected POST-SWEEP pool (capped)", () => {
     expect(expectedCost({ type: "FIXED", fixedMinor: 1000 }, 50_000)).toBe(1000);
-    expect(expectedCost({ type: "HYBRID", fixedMinor: 500, revenueShareBp: 1000 }, 50_000)).toBe(5500);
-    expect(expectedCost({ type: "HYBRID", fixedMinor: 500, revenueShareBp: 1000, revenueShareCapMinor: 2000 }, 50_000)).toBe(2500);
+    expect(expectedCost({ type: "HYBRID", fixedMinor: 500, profitShareBp: 1000 }, 45_000)).toBe(5000); // 10% of a 45 000 post-sweep pool
+    expect(expectedCost({ type: "HYBRID", fixedMinor: 500, profitShareBp: 1000, profitShareCapMinor: 2000 }, 45_000)).toBe(2500);
     expect(expectedCost({ type: "MILESTONE", milestones: [{ key: "m1", taskKey: "t", amountMinor: 200 }, { key: "m2", taskKey: "u", amountMinor: 300 }] }, 0)).toBe(500);
   });
 });

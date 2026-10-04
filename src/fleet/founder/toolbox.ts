@@ -76,7 +76,7 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
   // v42: team projects — recruit other existing living agents by internal contract when collaboration pays.
   project: { propose: "project.propose", replan: "project.replan", fund: "project.fund", offer: "project.offer", respond: "project.respond",
     accept_counter: "project.counter_accept", withdraw_offer: "project.withdraw_offer", start: "project.start", task: "project.task", review: "project.review",
-    settle_share: "project.settle_share", exit: "project.exit", replace: "project.replace", cancel: "project.cancel", complete: "project.complete",
+    distribute: "project.distribute", settle_share: "project.settle_share", assess: "project.assess", exit: "project.exit", replace: "project.replace", cancel: "project.cancel", complete: "project.complete",
     list: "project.list", status: "project.status", offers: "project.offers", talent: "project.talent" },
 });
 /** Registry ops that move or commit money get a deterministic idempotency key from the tool call (a retry never doubles). */

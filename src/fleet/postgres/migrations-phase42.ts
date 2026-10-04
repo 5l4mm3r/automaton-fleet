@@ -15,27 +15,34 @@
  *    earlier at the lead's own value of a day, plus any quality / risk benefit it claims) exceeds the expected cost of
  *    the contracts plus the coordination cost; the reasons are stored. Re-checked when a counter-offer changes terms.
  *  • CONTRACTS (`fleet_project_members`): the lead OFFERS a role to an existing living agent (role, scope, deliverable,
- *    duration, deadline, dependencies, compensation: FIXED | REVENUE_SHARE | MILESTONE | HYBRID — explicit before work
+ *    duration, deadline, dependencies, compensation: FIXED | PROFIT_SHARE | MILESTONE | HYBRID — explicit before work
  *    starts). Only the target answers: ACCEPT, COUNTER, DECLINE or ACCEPT_WITH_TIMING. Nobody is forced; an offer can be
  *    withdrawn; a member can exit at any time; the lead can replace a member.
- *  • MONEY (ledger): the lead's project budget sits in escrow (`agent_project_escrow`), funded from its OWN spendable
- *    capital (custody availability is the only check — no resizing, no owner step, no ceiling) or from FLEET capital
- *    approved through the EXISTING capital-request path (the request carries the project's economics; the envelope it
- *    creates funds the escrow). Tax reserves, envelope capital of other purposes, protected principal and obligations can
- *    never fund a project (they are not spendable cash). A member's ACCEPT requires the escrow to cover the contract's
- *    fixed and milestone amounts, so earned pay is always there. Payments are balanced `project_payment` journals between
- *    exactly two agents: project EXPENSE for the payer, project INCOME for the payee — internal classes that are never
- *    external revenue or external cost. The Fleet's consolidated revenue, profit, sweep base, replication wealth and tax
- *    figures are unchanged by them (they read only agent_revenue / agent_expense / agent_fees). Per agent, the economics
- *    add `internalProjectIncome`, `internalProjectExpense` and `netProfitInclInternal`; the sweep base
- *    (realizedNetProfit) deliberately excludes internal flows on both sides, so Σ over agents of the sweep base equals the
- *    Fleet's consolidated external net profit (an internal transfer can never create sweepable profit).
+ *  • ECONOMIC ORDER (owner, authoritative): external revenue → project costs → tax → REALISED NET PROFIT → Treasury
+ *    sweep (the existing dynamic policy; no team exemption) → post-sweep distributable pool → the agreed distribution.
+ *  • COSTS: fixed / milestone pay (and HYBRID's fixed part) is a pre-agreed project cost paid from escrow by balanced
+ *    `project_payment` journals: payer `agent_project_expense`, payee `agent_project_income`, both INSIDE realised net
+ *    profit (the sweep base; Σ over agents unchanged = the Fleet's consolidated external net profit). Such a cost cannot
+ *    be offered, accepted or raised once the venture has realised profit since the project began
+ *    (FLEET_PROJECT_COST_AFTER_PROFIT); each agreed amount is paid exactly once.
+ *  • SHARES: PROFIT_SHARE (REVENUE_SHARE is accepted as an explicit alias of the same post-sweep share) is a negotiated
+ *    whole number of basis points of the POST-SWEEP distributable pool — no Fleet default, no universal ratio; members'
+ *    shares + the lead's explicit residual = 100%. `project.distribute` closes a tranche at the lead's latest executed
+ *    Treasury sweep, attributes that sweep to the project's profit at the sweep's own policy rate, and pays each contract
+ *    its share as `project_profit_distribution` (equity: distribution out / in, OUTSIDE both agents' realised net
+ *    profit — the lead's sweep base is not reduced, the payee is never swept again). Profit after the last sweep stays
+ *    pending; nothing reserves teammate profit compensation ahead of the sweep.
+ *  • ESCROW (`agent_project_escrow`, fixed / milestone only): the lead's OWN spendable capital (custody availability is the
+ *    only check — no resizing, no owner step, no ceiling) or FLEET capital approved through the EXISTING capital-request
+ *    path (the request carries the project's economics; its envelope funds the escrow). Tax reserves and restricted
+ *    capital can never fund a project. A member's ACCEPT requires the escrow to cover its fixed and milestone pay.
+ *    Internal payments and distributions never touch Fleet external revenue, daily flows, Fleet wealth or tax.
  *  • SETTLEMENT: milestones are paid when the lead accepts the milestone's task; fixed pay when all the role's tasks are
- *    accepted; revenue share is settled on request from the venture's ledger net profit since the contract started
- *    (bounded by its end date and cap) out of the lead's spendable cash. On cancellation, removal, a member's death or the
- *    lead's death, work already DELIVERED counts as earned (the lead cannot avoid paying by cancelling instead of
- *    reviewing); unspent escrow returns to its source (own → the lead's cash; Fleet → its envelope, or the Treasury if the
- *    envelope has closed).
+ *    accepted. On cancellation, removal, a member's death or the lead's death, work already DELIVERED counts as earned;
+ *    unspent escrow returns to its source (own → the lead's cash; Fleet → its envelope, or the Treasury if it closed).
+ *  • FORECASTS: the gate's value claims (time value, quality / risk benefit, expected value) are the lead's FORECAST,
+ *    stored with reasoning and evidence; at the finish, forecast vs realised (duration, cost, ledger return, the lead's
+ *    and members' own assessments) is recorded and written to economic knowledge (topic team_project).
  *  • LIFECYCLE: a dead or quarantined agent loses all project authority at once (authentication refuses it). A member's
  *    death or quarantine exits its contracts with settlement; the LEAD's death or quarantine cancels its projects with
  *    settlement (documented rule — no project survives without a living lead). An operator hold only pauses the agent.
@@ -69,14 +76,14 @@ const q = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(",");
 
 /** v42 agent operations (all through api_economy). */
 export const PROJECT_OPS = ["project.propose", "project.replan", "project.fund", "project.offer", "project.respond", "project.counter_accept",
-  "project.withdraw_offer", "project.start", "project.task", "project.review", "project.settle_share", "project.exit", "project.replace",
+  "project.withdraw_offer", "project.start", "project.task", "project.review", "project.distribute", "project.settle_share", "project.assess", "project.exit", "project.replace",
   "project.cancel", "project.complete", "project.list", "project.status", "project.offers", "project.talent"] as const;
 export const DASHBOARD_READ_OPS_V42 = [...DASHBOARD_READ_OPS_V41, "projects"] as const;
 /** Lifecycle event types (fleet_events.event_type) — each carries projectId, and fromAgentId / toAgentId where two agents are involved. */
 export const PROJECT_EVENT_TYPES = ["project_created", "project_replanned", "project_funded", "project_member_offered", "project_member_countered",
   "project_member_joined", "project_member_declined", "project_offer_withdrawn", "project_started", "project_task_started", "project_task_delivered",
-  "project_task_accepted", "project_task_rejected", "project_payment", "project_member_exited", "project_member_removed", "project_completed",
-  "project_cancelled"] as const;
+  "project_task_accepted", "project_task_rejected", "project_payment", "project_profit_distribution", "project_distribution_pending",
+  "project_assessment", "project_member_exited", "project_member_removed", "project_completed", "project_cancelled"] as const;
 
 const DISPATCH = restate(V41_SQL, "api_economy", [
   [`WHEN 'account.mark' THEN 'planning' WHEN 'phone.quote' THEN 'planning'`,
@@ -85,7 +92,7 @@ const DISPATCH = restate(V41_SQL, "api_economy", [
     WHEN 'project.fund' THEN 'spend.request'
     WHEN 'project.propose' THEN 'planning' WHEN 'project.replan' THEN 'planning' WHEN 'project.offer' THEN 'planning' WHEN 'project.respond' THEN 'planning'
     WHEN 'project.counter_accept' THEN 'planning' WHEN 'project.withdraw_offer' THEN 'planning' WHEN 'project.start' THEN 'planning' WHEN 'project.task' THEN 'planning'
-    WHEN 'project.review' THEN 'planning' WHEN 'project.settle_share' THEN 'planning' WHEN 'project.exit' THEN 'planning' WHEN 'project.replace' THEN 'planning'
+    WHEN 'project.review' THEN 'planning' WHEN 'project.distribute' THEN 'planning' WHEN 'project.settle_share' THEN 'planning' WHEN 'project.assess' THEN 'planning' WHEN 'project.exit' THEN 'planning' WHEN 'project.replace' THEN 'planning'
     WHEN 'project.cancel' THEN 'planning' WHEN 'project.complete' THEN 'planning' WHEN 'project.list' THEN 'planning' WHEN 'project.status' THEN 'planning'
     WHEN 'project.offers' THEN 'planning' WHEN 'project.talent' THEN 'planning'`],
   [`      WHEN 'phone.quote' THEN fleet_econ_phone_quote(p_agent, a)`,
@@ -100,7 +107,9 @@ const DISPATCH = restate(V41_SQL, "api_economy", [
       WHEN 'project.start' THEN fleet_econ_project_start(p_agent, a)
       WHEN 'project.task' THEN fleet_econ_project_task(p_agent, a)
       WHEN 'project.review' THEN fleet_econ_project_review(p_agent, a)
-      WHEN 'project.settle_share' THEN fleet_econ_project_settle_share(p_agent, a)
+      WHEN 'project.distribute' THEN fleet_econ_project_distribute(p_agent, a)
+      WHEN 'project.settle_share' THEN fleet_econ_project_distribute(p_agent, a)
+      WHEN 'project.assess' THEN fleet_econ_project_assess(p_agent, a)
       WHEN 'project.exit' THEN fleet_econ_project_exit(p_agent, a)
       WHEN 'project.replace' THEN fleet_econ_project_replace(p_agent, a)
       WHEN 'project.cancel' THEN fleet_econ_project_cancel(p_agent, a)
@@ -124,29 +133,35 @@ const LEDGER_POST = restate(V10_SQL, "fleet_ledger_post", [
     RAISE EXCEPTION 'FLEET_LEDGER_SCOPE: agent_transfer moves cash between exactly two agents';`,
    `  ELSIF p_kind = 'agent_transfer' AND cardinality(v_agents) <> 2 THEN
     RAISE EXCEPTION 'FLEET_LEDGER_SCOPE: agent_transfer moves cash between exactly two agents';
-  ELSIF p_kind = 'project_payment' AND (cardinality(v_agents) <> 2 OR p_agent IS NULL OR NOT (p_agent = ANY (v_agents))) THEN
-    RAISE EXCEPTION 'FLEET_LEDGER_SCOPE: project_payment moves value from the paying agent to exactly one other agent';`],
+  ELSIF p_kind IN ('project_payment','project_profit_distribution') AND (cardinality(v_agents) <> 2 OR p_agent IS NULL OR NOT (p_agent = ANY (v_agents))) THEN
+    RAISE EXCEPTION 'FLEET_LEDGER_SCOPE: % moves value from the paying agent to exactly one other agent', p_kind;`],
 ]);
 
 const OPEN_AGENT = restate(V29_SQL, "fleet_ledger_open_agent", [
   [`'agent_contributions','agent_investment_pnl','agent_tax_reserve','agent_tax_expense','agent_envelope_cash']`,
    `'agent_contributions','agent_investment_pnl','agent_tax_reserve','agent_tax_expense','agent_envelope_cash',
-                           'agent_project_escrow','agent_project_income','agent_project_expense']`],
+                           'agent_project_escrow','agent_project_income','agent_project_expense','agent_distribution_out','agent_distribution_in']`],
 ]);
 
-// Escrow is still the agent's (recoverable, returned unspent) but never spendable cash; internal flows are reported
-// beside, never inside, the external figures (realizedNetProfit stays the sweep base).
+// Escrow is still the agent's (recoverable, returned unspent) but never spendable cash. Owner's economic order: a
+// pre-agreed fixed / milestone project cost is the payer's expense and the payee's income, both INSIDE realised net
+// profit (the sweep base) — Σ over agents is unchanged, so the Fleet's sweep base stays its consolidated external net
+// profit. Post-sweep profit distributions are equity, OUTSIDE realised net profit on both sides.
 const ECONOMICS = restate(V11_SQL, "fleet_agent_economics", [
-  [`DECLARE v_cash bigint; v_res bigint;`, `DECLARE v_escrow bigint; v_pinc bigint; v_pexp bigint; v_cash bigint; v_res bigint;`],
+  [`DECLARE v_cash bigint; v_res bigint;`, `DECLARE v_escrow bigint; v_pinc bigint; v_pexp bigint; v_dout bigint; v_din bigint; v_cash bigint; v_res bigint;`],
   [`  v_inv := fleet_ledger_balance(fleet_ledger_account(p_agent, 'agent_investment_pnl'));`,
    `  v_inv := fleet_ledger_balance(fleet_ledger_account(p_agent, 'agent_investment_pnl'));
   v_escrow := fleet_ledger_balance(fleet_ledger_account(p_agent, 'agent_project_escrow'));
   v_pinc := fleet_ledger_balance(fleet_ledger_account(p_agent, 'agent_project_income'));
-  v_pexp := fleet_ledger_balance(fleet_ledger_account(p_agent, 'agent_project_expense'));`],
+  v_pexp := fleet_ledger_balance(fleet_ledger_account(p_agent, 'agent_project_expense'));
+  v_dout := fleet_ledger_balance(fleet_ledger_account(p_agent, 'agent_distribution_out'));
+  v_din := fleet_ledger_balance(fleet_ledger_account(p_agent, 'agent_distribution_in'));`],
+  [`  v_net := v_rev - v_exp - v_fees + v_inv;`, `  v_net := v_rev - v_exp - v_fees + v_inv + v_pinc - v_pexp;`],
   [`  v_rec := v_cash + v_res_rec + v_assets_rec;`, `  v_rec := v_cash + v_res_rec + v_assets_rec + v_escrow;`],
   [`    'survivalEquityExhausted', v_eq <= 0 AND v_principal > 0);`,
    `    'survivalEquityExhausted', v_eq <= 0 AND v_principal > 0,
-    'projectEscrow', v_escrow, 'internalProjectIncome', v_pinc, 'internalProjectExpense', v_pexp, 'netProfitInclInternal', v_net + v_pinc - v_pexp);`],
+    'projectEscrow', v_escrow, 'internalProjectIncome', v_pinc, 'internalProjectExpense', v_pexp, 'netProfitInclInternal', v_net,
+    'profitDistributedOut', v_dout, 'profitDistributionsIn', v_din);`],
 ]);
 
 const AGENT_VALUE = restate(V35_SQL, "fleet_agent_value", [
@@ -193,7 +208,9 @@ export const V42_SQL = `
 INSERT INTO fleet_ledger_classes (class, kind, normal_side, scope, non_negative, description) VALUES
   ('agent_project_escrow',  'asset',   'D', 'agent', true, 'Agent capital committed to its own team project (escrow): recoverable, never spendable cash'),
   ('agent_project_income',  'revenue', 'C', 'agent', true, 'Internal project income received from another Fleet agent (never external revenue)'),
-  ('agent_project_expense', 'expense', 'D', 'agent', true, 'Internal project expense paid to another Fleet agent (never an external cost)');
+  ('agent_project_expense', 'expense', 'D', 'agent', true, 'Internal project expense paid to another Fleet agent (never an external cost)'),
+  ('agent_distribution_out', 'equity', 'D', 'agent', true, 'Post-sweep project profit distributed to teammates (contra equity; never an expense)'),
+  ('agent_distribution_in',  'equity', 'C', 'agent', true, 'Post-sweep project profit received from a lead (already swept; never income)');
 
 INSERT INTO fleet_ledger_kinds (kind, requires_external_ref, allowed_sources, multi_agent, description, provenance) VALUES
   ('project_escrow',           false, ARRAY['controller'], false, 'Move the lead''s own spendable cash into its project escrow', 'reservation'),
@@ -201,7 +218,8 @@ INSERT INTO fleet_ledger_kinds (kind, requires_external_ref, allowed_sources, mu
   ('project_envelope_escrow',  false, ARRAY['controller'], false, 'Move approved envelope capital into the project escrow it was approved for', 'fleet_capital'),
   ('project_envelope_release', false, ARRAY['controller'], false, 'Return unspent Fleet-capital project escrow to its envelope', 'fleet_capital'),
   ('project_envelope_return',  false, ARRAY['controller'], false, 'Return unspent Fleet-capital project escrow to the Treasury (its envelope has closed)', 'fleet_capital'),
-  ('project_payment',          false, ARRAY['controller'], true,  'Internal project compensation between two agents (expense for the payer, income for the payee)', 'internal_transfer');
+  ('project_payment',          false, ARRAY['controller'], true,  'Pre-agreed fixed / milestone project cost between two agents (expense for the payer, income for the payee)', 'internal_transfer'),
+  ('project_profit_distribution', false, ARRAY['controller'], true, 'Post-sweep project profit distributed to a teammate per its contract (equity, outside both sweep bases)', 'internal_transfer');
 
 INSERT INTO fleet_ledger_rules (kind, class, side) VALUES
   ('project_escrow','agent_project_escrow','D'), ('project_escrow','agent_cash','C'),
@@ -209,8 +227,10 @@ INSERT INTO fleet_ledger_rules (kind, class, side) VALUES
   ('project_envelope_escrow','agent_project_escrow','D'), ('project_envelope_escrow','agent_envelope_cash','C'),
   ('project_envelope_release','agent_envelope_cash','D'), ('project_envelope_release','agent_project_escrow','C'),
   ('project_envelope_return','treasury_cash','D'), ('project_envelope_return','agent_project_escrow','C'),
-  ('project_payment','agent_project_expense','D'), ('project_payment','agent_project_escrow','C'), ('project_payment','agent_cash','C'),
-  ('project_payment','agent_cash','D'), ('project_payment','agent_project_income','C');
+  ('project_payment','agent_project_expense','D'), ('project_payment','agent_project_escrow','C'),
+  ('project_payment','agent_cash','D'), ('project_payment','agent_project_income','C'),
+  ('project_profit_distribution','agent_distribution_out','D'), ('project_profit_distribution','agent_cash','C'),
+  ('project_profit_distribution','agent_cash','D'), ('project_profit_distribution','agent_distribution_in','C');
 
 ${LEDGER_POST}
 
@@ -249,6 +269,8 @@ CREATE TABLE fleet_projects (
   risk                     text          NOT NULL CHECK (risk IN ('low','medium','high')),
   risk_note                text          CHECK (length(risk_note) <= 300),
   justification            jsonb         NOT NULL CHECK (jsonb_typeof(justification) = 'object' AND length(justification::text) <= 6000),
+  -- The lead's FORECAST (value of time, quality / risk benefit, expected value / return) with its reasoning and evidence.
+  forecast                 jsonb         NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(forecast) = 'object' AND length(forecast::text) <= 8000),
   -- The planner's figures (recomputed on every plan, timing and terms change; never the lead's own claim).
   solo_hours               numeric(11,2) NOT NULL,
   team_hours               numeric(11,2) NOT NULL,
@@ -355,6 +377,7 @@ CREATE TABLE fleet_project_members (
   paid_minor            bigint       NOT NULL DEFAULT 0 CHECK (paid_minor >= 0),
   fixed_paid            boolean      NOT NULL DEFAULT false,
   share_paid_minor      bigint       NOT NULL DEFAULT 0 CHECK (share_paid_minor >= 0),
+  share_owed_minor      bigint       NOT NULL DEFAULT 0 CHECK (share_owed_minor >= 0),
   exit_reason           text         CHECK (length(exit_reason) <= 300),
   offered_at            timestamptz  NOT NULL DEFAULT now(),
   responded_at          timestamptz,
@@ -388,7 +411,7 @@ CREATE TABLE fleet_project_payments (
   venture_id       uuid        NOT NULL REFERENCES fleet_ventures(venture_id),
   payer_agent_id   text        NOT NULL REFERENCES fleet_agents(agent_id),
   payee_agent_id   text        NOT NULL REFERENCES fleet_agents(agent_id),
-  kind             text        NOT NULL CHECK (kind IN ('fixed','milestone','revenue_share')),
+  kind             text        NOT NULL CHECK (kind IN ('fixed','milestone','profit_share')),
   milestone_key    text,
   amount_minor     bigint      NOT NULL CHECK (amount_minor > 0),
   from_fleet_minor bigint      NOT NULL CHECK (from_fleet_minor >= 0),
@@ -400,9 +423,33 @@ CREATE TABLE fleet_project_payments (
   CHECK (payer_agent_id <> payee_agent_id),
   CHECK (amount_minor = from_fleet_minor + from_own_minor + from_cash_minor)
 );
-CREATE UNIQUE INDEX fleet_project_payments_once ON fleet_project_payments (member_id, kind, COALESCE(milestone_key, '')) WHERE kind <> 'revenue_share';
+CREATE UNIQUE INDEX fleet_project_payments_once ON fleet_project_payments (member_id, kind, COALESCE(milestone_key, '')) WHERE kind <> 'profit_share';
 CREATE TRIGGER fleet_project_payments_no_change BEFORE UPDATE OR DELETE ON fleet_project_payments FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
 CREATE TRIGGER fleet_project_payments_no_truncate BEFORE TRUNCATE ON fleet_project_payments FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
+
+-- Post-sweep distribution tranches: profit realised up to a determined Treasury sweep, the sweep attributed to it at
+-- that sweep's policy rate, the distributable pool and each contract's allocation (immutable).
+CREATE TABLE fleet_project_distributions (
+  tranche_id             uuid        PRIMARY KEY,
+  project_id             uuid        NOT NULL REFERENCES fleet_projects(project_id),
+  from_at                timestamptz NOT NULL,
+  to_at                  timestamptz NOT NULL,
+  sweep_event_id         bigint      NOT NULL,
+  sweep_journal_id       uuid,
+  sweep_rate_bp          integer     NOT NULL CHECK (sweep_rate_bp BETWEEN 0 AND 10000),
+  profit_minor           bigint      NOT NULL CHECK (profit_minor > 0),
+  sweep_attributed_minor bigint      NOT NULL CHECK (sweep_attributed_minor >= 0),
+  distributable_minor    bigint      NOT NULL CHECK (distributable_minor >= 0),
+  lead_share_bp          integer     NOT NULL CHECK (lead_share_bp BETWEEN 0 AND 10000),
+  lead_residual_minor    bigint      NOT NULL CHECK (lead_residual_minor >= 0),
+  allocations            jsonb       NOT NULL,
+  created_at             timestamptz NOT NULL DEFAULT now(),
+  CHECK (to_at > from_at),
+  CHECK (sweep_attributed_minor + distributable_minor = profit_minor)
+);
+CREATE INDEX fleet_project_distributions_project ON fleet_project_distributions (project_id, to_at);
+CREATE TRIGGER fleet_project_distributions_no_change BEFORE UPDATE OR DELETE ON fleet_project_distributions FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+CREATE TRIGGER fleet_project_distributions_no_truncate BEFORE TRUNCATE ON fleet_project_distributions FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
 
 CREATE TABLE fleet_project_events (
   seq          bigserial   PRIMARY KEY,
@@ -436,6 +483,8 @@ CREATE TABLE fleet_project_outcomes (
   failures                 jsonb         NOT NULL,
   lessons                  text          CHECK (length(lessons) <= 600),
   knowledge_id             uuid,
+  forecast                 jsonb         NOT NULL DEFAULT '{}',
+  realised                 jsonb         NOT NULL DEFAULT '{}',
   recorded_at              timestamptz   NOT NULL DEFAULT now()
 );
 CREATE TRIGGER fleet_project_outcomes_no_change BEFORE UPDATE OR DELETE ON fleet_project_outcomes FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
@@ -519,14 +568,24 @@ END $$;
 CREATE FUNCTION fleet_project_terms(t jsonb, p_project uuid, p_role text) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE v_type text; v_fixed bigint; v_bp integer; v_cap bigint; v_until timestamptz; v_ms jsonb := '[]'::jsonb; m jsonb; v_keys text[] := ARRAY[]::text[];
+        k text;
 BEGIN
-  IF t IS NULL OR jsonb_typeof(t) <> 'object' THEN PERFORM fleet_econ_bad('compensation is {type: FIXED|REVENUE_SHARE|MILESTONE|HYBRID, ...}'); END IF;
+  IF t IS NULL OR jsonb_typeof(t) <> 'object' THEN
+    PERFORM fleet_econ_bad('compensation is required and explicit: {type: FIXED|PROFIT_SHARE|MILESTONE|HYBRID, ...} (there are no default terms)');
+  END IF;
   v_type := upper(COALESCE(t ->> 'type', ''));
-  IF v_type NOT IN ('FIXED','REVENUE_SHARE','MILESTONE','HYBRID') THEN PERFORM fleet_econ_bad('compensation.type is FIXED, REVENUE_SHARE, MILESTONE or HYBRID'); END IF;
+  -- REVENUE_SHARE is accepted as the same POST-SWEEP mechanism (a share of the distributable pool, never of gross revenue).
+  IF v_type = 'REVENUE_SHARE' THEN v_type := 'PROFIT_SHARE'; END IF;
+  IF v_type NOT IN ('FIXED','PROFIT_SHARE','MILESTONE','HYBRID') THEN PERFORM fleet_econ_bad('compensation.type is FIXED, PROFIT_SHARE (alias REVENUE_SHARE), MILESTONE or HYBRID'); END IF;
+  FOREACH k IN ARRAY ARRAY['Bp','CapMinor','Until'] LOOP
+    IF t ? ('profitShare' || k) AND t ? ('revenueShare' || k) THEN PERFORM fleet_econ_bad('profitShare' || k || ' and its revenueShare alias were both given'); END IF;
+    IF t ? ('revenueShare' || k) THEN t := (t - ('revenueShare' || k)) || jsonb_build_object('profitShare' || k, t -> ('revenueShare' || k)); END IF;
+  END LOOP;
   v_fixed := fleet_econ_int(t, 'fixedMinor', 1, 100000000000);
-  v_bp := fleet_econ_int(t, 'revenueShareBp', 1, 5000)::integer;
-  v_cap := fleet_econ_int(t, 'revenueShareCapMinor', 1, 100000000000);
-  IF t ? 'revenueShareUntil' THEN v_until := (t ->> 'revenueShareUntil')::timestamptz; END IF;
+  -- A share is a whole number of basis points of the post-sweep distributable pool, 1..10000 (no Fleet default, no cap).
+  v_bp := fleet_econ_int(t, 'profitShareBp', 1, 10000)::integer;
+  v_cap := fleet_econ_int(t, 'profitShareCapMinor', 1, 100000000000);
+  IF t ? 'profitShareUntil' THEN v_until := (t ->> 'profitShareUntil')::timestamptz; END IF;
   IF t ? 'milestones' THEN
     IF jsonb_typeof(t -> 'milestones') <> 'array' OR jsonb_array_length(t -> 'milestones') NOT BETWEEN 1 AND 6 THEN PERFORM fleet_econ_bad('milestones is an array of 1 to 6'); END IF;
     FOR m IN SELECT x FROM jsonb_array_elements(t -> 'milestones') x LOOP
@@ -542,13 +601,13 @@ BEGIN
   END IF;
   IF v_type = 'FIXED' AND (v_fixed IS NULL OR v_bp IS NOT NULL OR jsonb_array_length(v_ms) > 0) THEN PERFORM fleet_econ_bad('FIXED is fixedMinor only'); END IF;
   IF v_type = 'MILESTONE' AND (jsonb_array_length(v_ms) = 0 OR v_fixed IS NOT NULL OR v_bp IS NOT NULL) THEN PERFORM fleet_econ_bad('MILESTONE is milestones only'); END IF;
-  IF v_type = 'REVENUE_SHARE' AND (v_bp IS NULL OR v_fixed IS NOT NULL OR jsonb_array_length(v_ms) > 0) THEN PERFORM fleet_econ_bad('REVENUE_SHARE is revenueShareBp (+ cap, end date)'); END IF;
-  IF v_type = 'HYBRID' AND (v_bp IS NULL OR (v_fixed IS NULL AND jsonb_array_length(v_ms) = 0)) THEN PERFORM fleet_econ_bad('HYBRID is a fixed or milestone part plus a revenue share'); END IF;
+  IF v_type = 'PROFIT_SHARE' AND (v_bp IS NULL OR v_fixed IS NOT NULL OR jsonb_array_length(v_ms) > 0) THEN PERFORM fleet_econ_bad('PROFIT_SHARE is profitShareBp (+ cap, end date)'); END IF;
+  IF v_type = 'HYBRID' AND (v_bp IS NULL OR (v_fixed IS NULL AND jsonb_array_length(v_ms) = 0)) THEN PERFORM fleet_econ_bad('HYBRID is a fixed or milestone part plus a profit share'); END IF;
   IF v_bp IS NOT NULL AND (v_until IS NULL OR v_until <= now() OR v_until > now() + interval '3 years') THEN
-    PERFORM fleet_econ_bad('a revenue share needs revenueShareUntil: a date within 3 years (an agreed period)');
+    PERFORM fleet_econ_bad('a profit share needs profitShareUntil: a date within 3 years (an agreed period)');
   END IF;
-  RETURN jsonb_strip_nulls(jsonb_build_object('type', v_type, 'fixedMinor', v_fixed, 'revenueShareBp', v_bp, 'revenueShareCapMinor', v_cap,
-    'revenueShareUntil', v_until, 'milestones', CASE WHEN jsonb_array_length(v_ms) > 0 THEN v_ms END));
+  RETURN jsonb_strip_nulls(jsonb_build_object('type', v_type, 'fixedMinor', v_fixed, 'profitShareBp', v_bp, 'profitShareCapMinor', v_cap,
+    'profitShareUntil', v_until, 'milestones', CASE WHEN jsonb_array_length(v_ms) > 0 THEN v_ms END));
 END $$;
 
 -- What a contract needs in escrow (fixed + milestones) and what the lead should expect it to cost (+ expected share).
@@ -556,8 +615,9 @@ CREATE FUNCTION fleet_project_terms_escrow(t jsonb) RETURNS bigint LANGUAGE sql 
   SELECT COALESCE((t ->> 'fixedMinor')::bigint, 0) + COALESCE((SELECT sum((m ->> 'amountMinor')::bigint) FROM jsonb_array_elements(COALESCE(t -> 'milestones', '[]'::jsonb)) m), 0)
 $$;
 CREATE FUNCTION fleet_project_terms_cost(t jsonb, p_expected bigint) RETURNS bigint LANGUAGE sql IMMUTABLE AS $$
-  SELECT fleet_project_terms_escrow(t) + CASE WHEN t ? 'revenueShareBp' THEN
-    LEAST(COALESCE((t ->> 'revenueShareCapMinor')::bigint, 9223372036854775807), floor(GREATEST(0, p_expected)::numeric * (t ->> 'revenueShareBp')::integer / 10000)::bigint) ELSE 0 END
+  -- Forecast only (the gate): fixed + milestones + the share of the EXPECTED POST-SWEEP pool (p_expected is post-sweep).
+  SELECT fleet_project_terms_escrow(t) + CASE WHEN t ? 'profitShareBp' THEN
+    LEAST(COALESCE((t ->> 'profitShareCapMinor')::bigint, 9223372036854775807), floor(GREATEST(0, p_expected)::numeric * (t ->> 'profitShareBp')::integer / 10000)::bigint) ELSE 0 END
 $$;
 
 CREATE FUNCTION fleet_project_event(p fleet_projects, p_type text, p_agent text, p_actor text, p_detail jsonb) RETURNS void LANGUAGE plpgsql
@@ -589,15 +649,19 @@ $$;
 CREATE FUNCTION fleet_project_evaluate(p_project uuid) RETURNS fleet_projects LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE p fleet_projects; s jsonb; v_solo numeric; v_team numeric; v_saved numeric; v_cost bigint; v_benefit bigint; v_roles integer; r jsonb := '[]'::jsonb;
+        v_rate integer; v_post bigint;
 BEGIN
   SELECT * INTO p FROM fleet_projects WHERE project_id = p_project FOR UPDATE;
+  -- Shares are of the post-sweep pool: the forecast cost of a share uses the expected value after the lead's current sweep rate.
+  v_rate := CASE WHEN (SELECT enabled FROM fleet_sweep_policy WHERE id = 1) THEN COALESCE((fleet_sweep_compute(p.lead_agent_id) ->> 'rateBp')::integer, 0) ELSE 0 END;
+  v_post := p.expected_value_minor - floor(p.expected_value_minor::numeric * v_rate / 10000)::bigint;
   s := fleet_project_schedule(fleet_project_plan_tasks(p_project), fleet_project_offsets(p_project));
   SELECT COALESCE(sum(hours), 0) INTO v_solo FROM fleet_project_tasks WHERE project_id = p_project AND status <> 'cancelled';
   SELECT count(*) INTO v_roles FROM fleet_project_roles WHERE project_id = p_project;
   v_team := (s ->> 'makespanHours')::numeric + CASE WHEN v_roles > 0 THEN p.coordination_hours ELSE 0 END;
   v_saved := v_solo - v_team;
   -- Expected cost: live contracts at their terms, unfilled roles at their proposed terms.
-  SELECT COALESCE(sum(CASE WHEN m.member_id IS NOT NULL THEN fleet_project_terms_cost(COALESCE(m.terms, ro.proposed_terms), p.expected_value_minor) ELSE ro.expected_cost_minor END), 0)
+  SELECT COALESCE(sum(fleet_project_terms_cost(COALESCE(CASE WHEN m.status = 'countered' THEN m.counter_terms -> 'compensation' END, m.terms, ro.proposed_terms), v_post)), 0)
     INTO v_cost
     FROM fleet_project_roles ro LEFT JOIN fleet_project_members m ON m.project_id = ro.project_id AND m.role = ro.role AND m.status IN ('offered','countered','accepted')
    WHERE ro.project_id = p_project;
@@ -605,8 +669,9 @@ BEGIN
   v_benefit := floor(round(v_saved * 100) * p.time_value_minor_per_day / 2400)::bigint + p.quality_benefit_minor;
   r := jsonb_build_array(
     format('solo %s h (one agent, every task in turn); team %s h = critical path %s h + coordination %s h', v_solo, v_team, s ->> 'makespanHours', CASE WHEN v_roles > 0 THEN p.coordination_hours ELSE 0 END),
-    format('time saved %s h valued at %s per day = %s; quality/risk benefit %s', v_saved, p.time_value_minor_per_day, v_benefit - p.quality_benefit_minor, p.quality_benefit_minor),
-    format('expected cost: contracts %s + coordination %s = %s', v_cost - CASE WHEN v_roles > 0 THEN p.coordination_cost_minor ELSE 0 END, CASE WHEN v_roles > 0 THEN p.coordination_cost_minor ELSE 0 END, v_cost),
+    format('FORECAST (the lead''s): time saved %s h valued at %s per day = %s; quality/risk benefit %s', v_saved, p.time_value_minor_per_day, v_benefit - p.quality_benefit_minor, p.quality_benefit_minor),
+    format('expected cost: contracts %s (fixed / milestone, plus shares of the expected post-sweep pool %s at sweep rate %s bp) + coordination %s = %s',
+      v_cost - CASE WHEN v_roles > 0 THEN p.coordination_cost_minor ELSE 0 END, v_post, v_rate, CASE WHEN v_roles > 0 THEN p.coordination_cost_minor ELSE 0 END, v_cost),
     CASE WHEN v_benefit > v_cost THEN 'justified: expected benefit exceeds collaboration cost plus coordination overhead'
          ELSE 'not justified: expected benefit does not exceed collaboration cost plus coordination overhead' END);
   UPDATE fleet_projects SET solo_hours = v_solo, team_hours = v_team, makespan_hours = (s ->> 'makespanHours')::numeric, planned_time_saved_hours = v_saved,
@@ -637,7 +702,7 @@ END $$;
 -- Committed (not yet paid) escrow needs of live contracts, and what is free.
 CREATE FUNCTION fleet_project_committed(p_project uuid) RETURNS bigint LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-  SELECT COALESCE(sum(GREATEST(0, fleet_project_terms_escrow(m.terms) - (m.paid_minor - m.share_paid_minor))), 0)::bigint
+  SELECT COALESCE(sum(GREATEST(0, fleet_project_terms_escrow(m.terms) - m.paid_minor)), 0)::bigint
     FROM fleet_project_members m WHERE m.project_id = p_project AND m.status = 'accepted'
 $$;
 
@@ -654,45 +719,167 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT fleet_ledger_post(p_kind, p_idem, p_actor, left(p_reason, 200), 'controller', p_agent, NULL, NULL, NULL, NULL, now(), p_lines)
 $$;
 
--- One payment: from escrow (Fleet capital first — what it was approved for — then own), or for a revenue share from the
--- lead's spendable cash. Balanced: payer project expense / payee project income.
+-- One fixed / milestone payment from escrow (Fleet capital first — what it was approved for — then own). Balanced:
+-- payer project expense / payee project income (a pre-profit cost; both inside realised net profit).
 CREATE FUNCTION fleet_project_pay(p_project uuid, p_member uuid, p_kind text, p_ms text, p_amount bigint, p_actor text, p_reason text) RETURNS bigint LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE p fleet_projects; m fleet_project_members; v_fleet bigint := 0; v_own bigint := 0; v_cash bigint := 0; v_j uuid; v_id uuid := gen_random_uuid(); v_lines jsonb;
+DECLARE p fleet_projects; m fleet_project_members; v_fleet bigint := 0; v_own bigint := 0; v_j uuid; v_id uuid := gen_random_uuid();
 BEGIN
   IF p_amount IS NULL OR p_amount <= 0 THEN RETURN 0; END IF;
+  IF p_kind NOT IN ('fixed','milestone') THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: only fixed and milestone pay are project costs'; END IF;
   SELECT * INTO p FROM fleet_projects WHERE project_id = p_project FOR UPDATE;
   SELECT * INTO m FROM fleet_project_members WHERE member_id = p_member FOR UPDATE;
-  IF p_kind <> 'revenue_share' AND EXISTS (SELECT 1 FROM fleet_project_payments WHERE member_id = p_member AND kind = p_kind AND COALESCE(milestone_key, '') = COALESCE(p_ms, '')) THEN
+  IF EXISTS (SELECT 1 FROM fleet_project_payments WHERE member_id = p_member AND kind = p_kind AND COALESCE(milestone_key, '') = COALESCE(p_ms, '')) THEN
     RETURN 0;  -- already paid (exactly once)
   END IF;
   PERFORM fleet_ledger_open_agent(p.lead_agent_id, p_actor); PERFORM fleet_ledger_open_agent(m.agent_id, p_actor);
-  IF p_kind = 'revenue_share' THEN
-    v_cash := p_amount;
-  ELSE
-    IF p.escrow_fleet_minor + p.escrow_own_minor < p_amount THEN RAISE EXCEPTION 'FLEET_PROJECT_UNFUNDED: the escrow holds % of the % due', p.escrow_fleet_minor + p.escrow_own_minor, p_amount; END IF;
-    v_fleet := LEAST(p.escrow_fleet_minor, p_amount); v_own := p_amount - v_fleet;
-  END IF;
-  v_lines := jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(p.lead_agent_id, 'agent_project_expense'), 'side', 'D', 'amount', p_amount));
-  IF v_fleet + v_own > 0 THEN v_lines := v_lines || jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(p.lead_agent_id, 'agent_project_escrow'), 'side', 'C', 'amount', v_fleet + v_own)); END IF;
-  IF v_cash > 0 THEN v_lines := v_lines || jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(p.lead_agent_id, 'agent_cash'), 'side', 'C', 'amount', v_cash)); END IF;
-  v_lines := v_lines || jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(m.agent_id, 'agent_cash'), 'side', 'D', 'amount', p_amount),
-                                          jsonb_build_object('account', fleet_ledger_account(m.agent_id, 'agent_project_income'), 'side', 'C', 'amount', p_amount));
-  v_j := fleet_project_post('project_payment', 'prjpay:' || v_id, p_actor, p_kind || ' — ' || p.name || ': ' || p_reason, p.lead_agent_id, v_lines);
+  IF p.escrow_fleet_minor + p.escrow_own_minor < p_amount THEN RAISE EXCEPTION 'FLEET_PROJECT_UNFUNDED: the escrow holds % of the % due', p.escrow_fleet_minor + p.escrow_own_minor, p_amount; END IF;
+  v_fleet := LEAST(p.escrow_fleet_minor, p_amount); v_own := p_amount - v_fleet;
+  -- A pre-agreed project cost: the payer's expense and the payee's income, both inside realised net profit (the sweep base).
+  v_j := fleet_project_post('project_payment', 'prjpay:' || v_id, p_actor, p_kind || ' — ' || p.name || ': ' || p_reason, p.lead_agent_id,
+    jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(p.lead_agent_id, 'agent_project_expense'), 'side', 'D', 'amount', p_amount),
+                      jsonb_build_object('account', fleet_ledger_account(p.lead_agent_id, 'agent_project_escrow'), 'side', 'C', 'amount', p_amount),
+                      jsonb_build_object('account', fleet_ledger_account(m.agent_id, 'agent_cash'), 'side', 'D', 'amount', p_amount),
+                      jsonb_build_object('account', fleet_ledger_account(m.agent_id, 'agent_project_income'), 'side', 'C', 'amount', p_amount)));
   INSERT INTO fleet_project_payments (payment_id, project_id, member_id, venture_id, payer_agent_id, payee_agent_id, kind, milestone_key, amount_minor,
       from_fleet_minor, from_own_minor, from_cash_minor, journal_id, reason)
-    VALUES (v_id, p_project, p_member, p.venture_id, p.lead_agent_id, m.agent_id, p_kind, p_ms, p_amount, v_fleet, v_own, v_cash, v_j, left(p_reason, 300));
-  IF v_fleet + v_own > 0 THEN
-    UPDATE fleet_projects SET escrow_fleet_minor = escrow_fleet_minor - v_fleet, escrow_own_minor = escrow_own_minor - v_own,
-           fleet_paid_minor = fleet_paid_minor + v_fleet, own_paid_minor = own_paid_minor + v_own WHERE project_id = p_project;
-  END IF;
-  UPDATE fleet_project_members SET paid_minor = paid_minor + p_amount, earned_minor = earned_minor + p_amount,
-         share_paid_minor = share_paid_minor + CASE WHEN p_kind = 'revenue_share' THEN p_amount ELSE 0 END,
-         fixed_paid = fixed_paid OR p_kind = 'fixed' WHERE member_id = p_member;
+    VALUES (v_id, p_project, p_member, p.venture_id, p.lead_agent_id, m.agent_id, p_kind, p_ms, p_amount, v_fleet, v_own, 0, v_j, left(p_reason, 300));
+  UPDATE fleet_projects SET escrow_fleet_minor = escrow_fleet_minor - v_fleet, escrow_own_minor = escrow_own_minor - v_own,
+         fleet_paid_minor = fleet_paid_minor + v_fleet, own_paid_minor = own_paid_minor + v_own WHERE project_id = p_project;
+  UPDATE fleet_project_members SET paid_minor = paid_minor + p_amount, earned_minor = earned_minor + p_amount, fixed_paid = fixed_paid OR p_kind = 'fixed'
+   WHERE member_id = p_member;
   PERFORM fleet_project_event(p, 'project_payment', p.lead_agent_id, p_actor, jsonb_build_object('fromAgentId', p.lead_agent_id, 'toAgentId', m.agent_id,
-    'memberId', m.member_id, 'role', m.role, 'kind', p_kind, 'milestone', p_ms, 'amountMinor', p_amount, 'fromFleetCapitalMinor', v_fleet, 'fromOwnMinor', v_own + v_cash,
-    'internal', true));
+    'memberId', m.member_id, 'role', m.role, 'kind', p_kind, 'milestone', p_ms, 'amountMinor', p_amount, 'fromFleetCapitalMinor', v_fleet, 'fromOwnMinor', v_own,
+    'internal', true, 'treatment', 'project_cost'));
   RETURN p_amount;
+END $$;
+
+-- The project's attributable realised net profit in [p_from, p_to) (p_to NULL = now): the venture's external net profit
+-- after tax (ledger) less the project's own fixed / milestone costs. Distributions are not part of it.
+CREATE FUNCTION fleet_project_profit(p fleet_projects, p_from timestamptz, p_to timestamptz) RETURNS jsonb LANGUAGE plpgsql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_ext bigint; v_costs bigint;
+BEGIN
+  v_ext := (fleet_venture_financials(p.venture_id, p_from) ->> 'netProfitAfterTaxMinor')::bigint
+         - CASE WHEN p_to IS NOT NULL THEN (fleet_venture_financials(p.venture_id, p_to) ->> 'netProfitAfterTaxMinor')::bigint ELSE 0 END;
+  SELECT COALESCE(sum(amount_minor), 0) INTO v_costs FROM fleet_project_payments
+   WHERE project_id = p.project_id AND kind IN ('fixed','milestone') AND at >= p_from AND (p_to IS NULL OR at < p_to);
+  RETURN jsonb_build_object('externalNetAfterTaxMinor', v_ext, 'projectCostsMinor', v_costs, 'attributableProfitMinor', v_ext - v_costs);
+END $$;
+
+-- Anti-gaming: a fixed / milestone cost cannot be offered, accepted or raised once the project's venture has realised a
+-- positive after-tax profit since the project began (it would move already-made profit around the sweep).
+CREATE FUNCTION fleet_project_cost_guard(p fleet_projects, p_terms jsonb) RETURNS void LANGUAGE plpgsql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_profit bigint;
+BEGIN
+  IF fleet_project_terms_escrow(p_terms) <= 0 THEN RETURN; END IF;
+  v_profit := (fleet_project_profit(p, p.created_at, NULL) ->> 'externalNetAfterTaxMinor')::bigint;
+  IF v_profit > 0 THEN
+    RAISE EXCEPTION 'FLEET_PROJECT_COST_AFTER_PROFIT: the venture has realised % after-tax profit since the project began; a fixed or milestone cost is agreed before profit exists (share profit after the sweep instead)', v_profit;
+  END IF;
+END $$;
+
+-- Negotiated shares of the post-sweep pool: members' shares (live and finished contracts still sharing) plus the lead's
+-- explicit residual = 100%. Returns the lead's residual after p_bp for p_member; refuses a total over 100%.
+CREATE FUNCTION fleet_project_share_bp(t jsonb) RETURNS integer LANGUAGE sql IMMUTABLE AS $$
+  SELECT COALESCE((t ->> 'profitShareBp')::integer, 0)
+$$;
+CREATE FUNCTION fleet_project_shares_check(p_project uuid, p_member uuid, p_bp integer) RETURNS integer LANGUAGE plpgsql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_others bigint;
+BEGIN
+  SELECT COALESCE(sum(fleet_project_share_bp(CASE WHEN m.status = 'countered' AND m.counter_terms ? 'compensation' THEN m.counter_terms -> 'compensation' ELSE m.terms END)), 0)
+    INTO v_others FROM fleet_project_members m
+   WHERE m.project_id = p_project AND m.member_id IS DISTINCT FROM p_member AND m.status IN ('offered','countered','accepted','completed')
+     AND (m.status <> 'completed' OR (m.terms ->> 'profitShareUntil')::timestamptz > now());
+  IF v_others + COALESCE(p_bp, 0) > 10000 THEN
+    RAISE EXCEPTION 'FLEET_PROJECT_SHARES_EXCEED: members'' profit shares would total % bp, more than 100%% of the distributable pool (the lead''s residual cannot be negative)', v_others + p_bp;
+  END IF;
+  RETURN (10000 - v_others - COALESCE(p_bp, 0))::integer;
+END $$;
+
+-- One post-sweep distribution payment (equity: outside both agents' realised net profit; the payee's share was swept at the lead).
+CREATE FUNCTION fleet_project_pay_share(p fleet_projects, m fleet_project_members, p_amount bigint, p_actor text) RETURNS void LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_id uuid := gen_random_uuid(); v_j uuid;
+BEGIN
+  PERFORM fleet_ledger_open_agent(p.lead_agent_id, p_actor); PERFORM fleet_ledger_open_agent(m.agent_id, p_actor);
+  v_j := fleet_project_post('project_profit_distribution', 'prjdist:' || v_id, p_actor, 'post-sweep profit share — ' || p.name, p.lead_agent_id,
+    jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(p.lead_agent_id, 'agent_distribution_out'), 'side', 'D', 'amount', p_amount),
+                      jsonb_build_object('account', fleet_ledger_account(p.lead_agent_id, 'agent_cash'), 'side', 'C', 'amount', p_amount),
+                      jsonb_build_object('account', fleet_ledger_account(m.agent_id, 'agent_cash'), 'side', 'D', 'amount', p_amount),
+                      jsonb_build_object('account', fleet_ledger_account(m.agent_id, 'agent_distribution_in'), 'side', 'C', 'amount', p_amount)));
+  INSERT INTO fleet_project_payments (payment_id, project_id, member_id, venture_id, payer_agent_id, payee_agent_id, kind, milestone_key, amount_minor,
+      from_fleet_minor, from_own_minor, from_cash_minor, journal_id, reason)
+    VALUES (v_id, p.project_id, m.member_id, p.venture_id, p.lead_agent_id, m.agent_id, 'profit_share', NULL, p_amount, 0, 0, p_amount, v_j,
+            format('post-sweep profit share (%s bp of the distributable pool)', m.terms ->> 'profitShareBp'));
+  UPDATE fleet_project_members SET share_paid_minor = share_paid_minor + p_amount, share_owed_minor = share_owed_minor - p_amount WHERE member_id = m.member_id;
+  PERFORM fleet_project_event(p, 'project_profit_distribution', p.lead_agent_id, p_actor, jsonb_build_object('fromAgentId', p.lead_agent_id, 'toAgentId', m.agent_id,
+    'memberId', m.member_id, 'role', m.role, 'shareBp', (m.terms ->> 'profitShareBp')::integer, 'amountMinor', p_amount, 'internal', true, 'treatment', 'post_sweep_distribution'));
+END $$;
+
+-- Determine and pay post-sweep distributions. A tranche closes at the lead's latest executed Treasury sweep: the profit
+-- realised up to it, the part of that sweep attributable to it at that sweep's own policy rate (incl. any legitimate
+-- reduction), and the remaining pool split by contract (lead's residual explicit). Profit after the last sweep stays
+-- PENDING (never deducted from sweepable profit). Owed shares are paid from the lead's spendable cash.
+CREATE FUNCTION fleet_project_distribute(p_project uuid, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE p fleet_projects; v_from timestamptz; ev fleet_events; pr jsonb; v_delta bigint; v_rate integer; v_sweep bigint; v_pool bigint; m fleet_project_members;
+        v_alloc bigint; v_allocs jsonb := '[]'::jsonb; v_sum bigint := 0; v_bp_sum integer := 0; v_tranche jsonb; v_avail bigint; v_pay bigint; v_paid bigint := 0;
+        v_pending bigint := 0; v_tid uuid := gen_random_uuid(); v_cap bigint;
+BEGIN
+  SELECT * INTO p FROM fleet_projects WHERE project_id = p_project FOR UPDATE;
+  v_from := COALESCE((SELECT max(to_at) FROM fleet_project_distributions WHERE project_id = p_project), p.created_at);
+  SELECT * INTO ev FROM fleet_events WHERE event_type = 'treasury_sweep' AND agent_id = p.lead_agent_id AND created_at > v_from ORDER BY id DESC LIMIT 1;
+  IF ev.id IS NOT NULL THEN
+    pr := fleet_project_profit(p, v_from, ev.created_at);
+    v_delta := (pr ->> 'attributableProfitMinor')::bigint;
+    IF v_delta > 0 THEN
+      v_rate := COALESCE((ev.detail ->> 'rateBp')::integer, 0);
+      v_sweep := floor(v_delta::numeric * v_rate / 10000)::bigint;
+      v_pool := v_delta - v_sweep;
+      FOR m IN SELECT * FROM fleet_project_members WHERE project_id = p_project AND accepted_at IS NOT NULL AND accepted_at < ev.created_at
+                 AND COALESCE(ended_at, 'infinity'::timestamptz) > v_from AND terms ? 'profitShareBp' AND (terms ->> 'profitShareUntil')::timestamptz > v_from
+                 AND status IN ('accepted','completed','exited','removed') ORDER BY accepted_at, member_id FOR UPDATE LOOP
+        v_alloc := floor(v_pool::numeric * (m.terms ->> 'profitShareBp')::integer / 10000)::bigint;
+        IF m.terms ? 'profitShareCapMinor' THEN
+          v_cap := (m.terms ->> 'profitShareCapMinor')::bigint;
+          v_alloc := LEAST(v_alloc, GREATEST(0, v_cap - m.share_paid_minor - m.share_owed_minor));
+        END IF;
+        IF v_alloc > 0 THEN UPDATE fleet_project_members SET share_owed_minor = share_owed_minor + v_alloc WHERE member_id = m.member_id; END IF;
+        v_sum := v_sum + v_alloc; v_bp_sum := v_bp_sum + (m.terms ->> 'profitShareBp')::integer;
+        v_allocs := v_allocs || jsonb_build_array(jsonb_build_object('memberId', m.member_id, 'agentId', m.agent_id, 'role', m.role,
+          'shareBp', (m.terms ->> 'profitShareBp')::integer, 'amountMinor', v_alloc));
+      END LOOP;
+      INSERT INTO fleet_project_distributions (tranche_id, project_id, from_at, to_at, sweep_event_id, sweep_journal_id, sweep_rate_bp, profit_minor,
+          sweep_attributed_minor, distributable_minor, lead_share_bp, lead_residual_minor, allocations)
+        VALUES (v_tid, p_project, v_from, ev.created_at, ev.id, NULLIF(ev.detail ->> 'journalId', '')::uuid, v_rate, v_delta, v_sweep, v_pool,
+                GREATEST(0, 10000 - v_bp_sum), v_pool - v_sum, v_allocs);
+      v_tranche := jsonb_build_object('trancheId', v_tid, 'profitMinor', v_delta, 'sweepRateBp', v_rate, 'sweepAttributedMinor', v_sweep,
+        'distributableMinor', v_pool, 'leadShareBp', GREATEST(0, 10000 - v_bp_sum), 'leadResidualMinor', v_pool - v_sum, 'allocations', v_allocs);
+    END IF;
+    v_from := ev.created_at;
+  END IF;
+  v_pending := GREATEST(0, (fleet_project_profit(p, v_from, NULL) ->> 'attributableProfitMinor')::bigint);
+  -- Pay what is owed (determined tranches only), from the lead's spendable cash; the rest stays owed.
+  v_avail := GREATEST(0, (fleet_agent_economics(p.lead_agent_id) ->> 'expensePurchasingCapacity')::bigint);
+  FOR m IN SELECT * FROM fleet_project_members WHERE project_id = p_project AND share_owed_minor > 0 ORDER BY accepted_at, member_id FOR UPDATE LOOP
+    v_pay := LEAST(m.share_owed_minor, v_avail);
+    EXIT WHEN v_pay <= 0;
+    PERFORM fleet_project_pay_share(p, m, v_pay, p_actor);
+    v_avail := v_avail - v_pay; v_paid := v_paid + v_pay;
+  END LOOP;
+  IF v_pending > 0 THEN
+    PERFORM fleet_project_event(p, 'project_distribution_pending', NULL, p_actor, jsonb_build_object('pendingProfitMinor', v_pending,
+      'reason', 'awaiting the Treasury sweep on this profit'));
+  END IF;
+  RETURN jsonb_build_object('tranche', v_tranche, 'paidNowMinor', v_paid,
+    'stillOwedMinor', (SELECT COALESCE(sum(share_owed_minor), 0) FROM fleet_project_members WHERE project_id = p_project),
+    'pendingProfitMinor', v_pending,
+    'pendingReason', CASE WHEN v_pending > 0 THEN CASE WHEN (SELECT enabled FROM fleet_sweep_policy WHERE id = 1)
+                       THEN 'profit realised after the lead''s last Treasury sweep: distributable once that sweep is determined'
+                       ELSE 'the Treasury sweep policy is not active, so no sweep has been determined on this profit: shares stay pending' END END);
 END $$;
 
 -- What a contract has earned and not been paid. p_delivered: count delivered-but-unreviewed work as earned
@@ -749,9 +936,12 @@ END $$;
 -- Finish a project (completed or cancelled): settle every live contract, return escrow, record the outcome.
 CREATE FUNCTION fleet_project_finish(p_project uuid, p_outcome text, p_actor text, p_reason text, p_actual_return bigint, p_lessons text) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE p fleet_projects; m fleet_project_members; v_paid bigint := 0; rel jsonb; v_actual numeric; v_task_hours numeric; v_kid uuid; v_contrib jsonb; v_fail jsonb; v_cost bigint;
+DECLARE p fleet_projects; m fleet_project_members; v_paid bigint := 0; rel jsonb; v_actual numeric; v_task_hours numeric; v_kid uuid; v_contrib jsonb; v_fail jsonb;
+        v_cost bigint; v_profit jsonb; v_assess jsonb; v_forecast jsonb; v_realised jsonb; v_model text; v_quality text;
 BEGIN
   SELECT * INTO p FROM fleet_projects WHERE project_id = p_project FOR UPDATE;
+  -- Earned fixed / milestone pay settles exactly (on cancellation, delivered work counts as earned). Profit shares are not
+  -- settled here: they follow the post-sweep distribution of the profit realised in each contract's window.
   FOR m IN SELECT * FROM fleet_project_members WHERE project_id = p_project AND status IN ('accepted','exited','removed') ORDER BY offered_at LOOP
     v_paid := v_paid + fleet_project_settle_member(m.member_id, p_outcome = 'cancelled', p_actor, p_outcome || ': ' || p_reason);
   END LOOP;
@@ -765,46 +955,82 @@ BEGIN
   SELECT * INTO p FROM fleet_projects WHERE project_id = p_project;
   v_actual := CASE WHEN p.started_at IS NOT NULL THEN round((extract(epoch FROM (now() - p.started_at)) / 3600)::numeric, 2) END;
   SELECT COALESCE(sum(hours), 0) INTO v_task_hours FROM fleet_project_tasks WHERE project_id = p_project AND status IN ('accepted','delivered');
-  SELECT COALESCE(sum(amount_minor), 0) INTO v_cost FROM fleet_project_payments WHERE project_id = p_project;
+  SELECT COALESCE(sum(amount_minor), 0) INTO v_cost FROM fleet_project_payments WHERE project_id = p_project AND kind IN ('fixed','milestone');
+  v_profit := fleet_project_profit(p, p.created_at, NULL);
   SELECT COALESCE(jsonb_agg(jsonb_build_object('agentId', x.agent_id, 'role', x.role, 'status', x.status, 'paidMinor', x.paid_minor,
+           'profitSharePaidMinor', x.share_paid_minor, 'profitShareOwedMinor', x.share_owed_minor,
            'tasksAccepted', (SELECT count(*) FROM fleet_project_tasks t WHERE t.project_id = p_project AND t.assignee_agent_id = x.agent_id AND t.status = 'accepted'),
            'rejections', (SELECT COALESCE(sum(t.rejections), 0) FROM fleet_project_tasks t WHERE t.project_id = p_project AND t.assignee_agent_id = x.agent_id))), '[]'::jsonb)
     INTO v_contrib FROM fleet_project_members x WHERE x.project_id = p_project AND x.accepted_at IS NOT NULL;
   SELECT COALESCE(jsonb_agg(jsonb_build_object('type', e.event_type, 'agentId', e.agent_id, 'detail', e.detail - 'projectId' - 'projectKey' - 'name' - 'leadAgentId' - 'ventureKey', 'at', e.at) ORDER BY e.seq), '[]'::jsonb)
     INTO v_fail FROM fleet_project_events e WHERE e.project_id = p_project AND e.event_type IN ('project_task_rejected','project_member_exited','project_member_removed','project_member_declined');
-  IF p_outcome = 'completed' OR v_actual IS NOT NULL THEN
-    v_kid := gen_random_uuid();
-    INSERT INTO fleet_economic_knowledge (knowledge_id, agent_id, topic, subject, claim, evidence, venture_id, confidence_bp, expires_at)
-      VALUES (v_kid, p.lead_agent_id, 'team_project', left('project/' || p.project_key, 80),
-        left(format('%s team project "%s": %s agents, planned %s h (solo %s h), actual %s h; cost %s vs predicted %s; return %s vs predicted %s.%s',
-          p_outcome, p.name, (SELECT count(*) FROM fleet_project_members x WHERE x.project_id = p_project AND x.accepted_at IS NOT NULL) + 1,
-          p.team_hours, p.solo_hours, COALESCE(v_actual::text, 'n/a'), v_cost, p.cost_minor - p.coordination_cost_minor,
-          COALESCE(p_actual_return::text, 'n/a'), p.expected_return_minor, COALESCE(' Lessons: ' || p_lessons, '')), 600),
-        '[]'::jsonb, p.venture_id, NULL, now() + interval '365 days');
-  END IF;
+  -- Realised assessments are the lead's / members' own, with their evidence (never invented here).
+  SELECT COALESCE(jsonb_agg(e.detail - 'projectId' - 'projectKey' - 'name' - 'leadAgentId' - 'ventureKey' ORDER BY e.seq), '[]'::jsonb)
+    INTO v_assess FROM fleet_project_events e WHERE e.project_id = p_project AND e.event_type = 'project_assessment';
+  v_forecast := p.forecast || jsonb_build_object('label', 'forecast', 'soloHours', p.solo_hours, 'teamHours', p.team_hours, 'plannedTimeSavedHours', p.planned_time_saved_hours,
+    'expectedCostMinor', p.cost_minor - p.coordination_cost_minor, 'coordinationHours', p.coordination_hours, 'benefitMinor', p.benefit_minor);
+  v_realised := jsonb_strip_nulls(jsonb_build_object('label', 'realised', 'outcome', p_outcome, 'durationHours', v_actual,
+    'timeSavedHours', CASE WHEN p_outcome = 'completed' AND v_actual IS NOT NULL THEN p.solo_hours - v_actual END,
+    'costMinor', v_cost, 'attributableProfitMinor', (v_profit ->> 'attributableProfitMinor')::bigint,
+    'sweepAttributedMinor', (SELECT COALESCE(sum(sweep_attributed_minor), 0) FROM fleet_project_distributions WHERE project_id = p_project),
+    'distributedMinor', (SELECT COALESCE(sum(amount_minor), 0) FROM fleet_project_payments WHERE project_id = p_project AND kind = 'profit_share'),
+    'reportedReturnMinor', p_actual_return, 'assessments', v_assess));
+  SELECT lower(business_model) INTO v_model FROM fleet_ventures WHERE venture_id = p.venture_id;
+  v_quality := CASE WHEN jsonb_array_length(v_assess) > 0
+    THEN format('quality/risk benefit forecast %s, realised assessments %s', p.quality_benefit_minor,
+           (SELECT string_agg(COALESCE(x ->> 'qualityRealisedMinor', 'n/a') || ' by ' || (x ->> 'role'), ', ') FROM jsonb_array_elements(v_assess) x))
+    ELSE format('quality/risk benefit forecast %s, not assessed', p.quality_benefit_minor) END;
+  v_kid := gen_random_uuid();
+  -- Forecast accuracy, per lead and venture model, for future recruitment decisions (no central score).
+  INSERT INTO fleet_economic_knowledge (knowledge_id, agent_id, topic, subject, claim, evidence, venture_id, confidence_bp, expires_at)
+    VALUES (v_kid, p.lead_agent_id, 'team_project', left('forecast/' || COALESCE(v_model, 'other') || '/' || lower(p.lead_agent_id), 80),
+      left(format('%s team project "%s" (%s agents). FORECAST vs REALISED — duration %s h vs %s h (solo %s h); cost %s vs %s; return %s vs ledger %s (reported %s); %s.%s',
+        p_outcome, p.name, jsonb_array_length(v_contrib) + 1, p.team_hours, COALESCE(v_actual::text, 'not started'), p.solo_hours,
+        p.cost_minor - p.coordination_cost_minor, v_cost, p.expected_return_minor, v_profit ->> 'attributableProfitMinor', COALESCE(p_actual_return::text, 'n/a'),
+        v_quality, COALESCE(' Lessons: ' || p_lessons, '')), 600),
+      '[]'::jsonb, p.venture_id, NULL, now() + interval '365 days');
   INSERT INTO fleet_project_outcomes (project_id, outcome, team_size, solo_hours, predicted_hours, actual_hours, realised_time_saved_hours, task_hours_delivered,
-      parallelism, coordination_hours, predicted_cost_minor, actual_cost_minor, predicted_return_minor, actual_return_minor, contributions, failures, lessons, knowledge_id)
+      parallelism, coordination_hours, predicted_cost_minor, actual_cost_minor, predicted_return_minor, actual_return_minor, contributions, failures, lessons, knowledge_id,
+      forecast, realised)
     VALUES (p_project, p_outcome, jsonb_array_length(v_contrib) + 1, p.solo_hours, p.team_hours, v_actual,
       CASE WHEN p_outcome = 'completed' AND v_actual IS NOT NULL THEN p.solo_hours - v_actual END, v_task_hours,
       CASE WHEN v_actual > 0 THEN round(v_task_hours / v_actual, 2) END, p.coordination_hours,
-      p.cost_minor - p.coordination_cost_minor, v_cost, p.expected_return_minor, p_actual_return, v_contrib, v_fail, fleet_scrub(p_lessons), v_kid);
+      p.cost_minor - p.coordination_cost_minor, v_cost, p.expected_return_minor, (v_profit ->> 'attributableProfitMinor')::bigint, v_contrib, v_fail, fleet_scrub(p_lessons), v_kid,
+      v_forecast, v_realised);
   UPDATE fleet_projects SET status = p_outcome, stage = p_outcome, completed_at = CASE WHEN p_outcome = 'completed' THEN now() END,
          cancelled_at = CASE WHEN p_outcome = 'cancelled' THEN now() END, cancel_reason = CASE WHEN p_outcome = 'cancelled' THEN left(p_reason, 300) END
    WHERE project_id = p_project RETURNING * INTO p;
   PERFORM fleet_project_event(p, 'project_' || p_outcome, p.lead_agent_id, p_actor, jsonb_build_object('reason', p_reason, 'paidOnSettlementMinor', v_paid,
     'returned', rel, 'actualHours', v_actual, 'realisedTimeSavedHours', CASE WHEN p_outcome = 'completed' AND v_actual IS NOT NULL THEN p.solo_hours - v_actual END));
-  RETURN jsonb_build_object('paidOnSettlementMinor', v_paid, 'returned', rel);
+  RETURN jsonb_build_object('paidOnSettlementMinor', v_paid, 'returned', rel, 'forecast', v_forecast, 'realised', v_realised);
 END $$;
 
 -- ═══ 5. JSON views ═══
+-- Terms as shown: the canonical PROFIT_SHARE fields plus the former revenueShare* names as read-only aliases (same values).
+CREATE FUNCTION fleet_project_terms_json(t jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE WHEN t IS NULL THEN NULL ELSE t || jsonb_strip_nulls(jsonb_build_object('revenueShareBp', t -> 'profitShareBp', 'revenueShareCapMinor', t -> 'profitShareCapMinor',
+    'revenueShareUntil', t -> 'profitShareUntil', 'shareBasis', CASE WHEN t ? 'profitShareBp' THEN 'post_sweep_distributable_profit' END)) END
+$$;
+
 CREATE FUNCTION fleet_project_member_json(m fleet_project_members) RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT jsonb_strip_nulls(jsonb_build_object('memberId', m.member_id, 'agentId', m.agent_id, 'name', (SELECT name FROM fleet_agents WHERE agent_id = m.agent_id),
     'role', m.role, 'taskScope', m.task_scope, 'requiredCapability', m.required_capability, 'deliverable', m.deliverable, 'expectedHours', m.expected_hours,
-    'deadline', m.deadline, 'dependencies', m.dependencies, 'compensation', m.terms, 'counterTerms', m.counter_terms, 'status', m.status, 'response', m.response,
+    'deadline', m.deadline, 'dependencies', m.dependencies, 'compensation', fleet_project_terms_json(m.terms),
+    'counterTerms', CASE WHEN m.counter_terms IS NOT NULL THEN m.counter_terms || jsonb_strip_nulls(jsonb_build_object('compensation', fleet_project_terms_json(m.counter_terms -> 'compensation'))) END,
+    'status', m.status, 'response', m.response,
     'responseReason', m.response_reason, 'startAt', m.start_at, 'expectedFinish', m.expected_finish, 'actualFinish', m.actual_finish,
-    'contributionStatus', m.contribution_status, 'earnedMinor', m.earned_minor, 'paidMinor', m.paid_minor, 'revenueSharePaidMinor', m.share_paid_minor,
+    'contributionStatus', m.contribution_status, 'earnedMinor', m.earned_minor, 'paidMinor', m.paid_minor,
+    'profitSharePaidMinor', m.share_paid_minor, 'profitShareOwedMinor', m.share_owed_minor, 'revenueSharePaidMinor', m.share_paid_minor,
     'exitReason', m.exit_reason, 'offeredAt', m.offered_at, 'respondedAt', m.responded_at, 'acceptedAt', m.accepted_at, 'endedAt', m.ended_at))
+$$;
+
+CREATE FUNCTION fleet_project_lead_share_bp(p_project uuid) RETURNS integer LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  -- The lead's explicit residual of the distributable pool: 100% minus its members' agreed (and currently sharing) shares.
+  SELECT (10000 - COALESCE(sum(fleet_project_share_bp(m.terms)), 0))::integer FROM fleet_project_members m
+   WHERE m.project_id = p_project AND m.accepted_at IS NOT NULL AND m.status IN ('accepted','completed') AND m.terms ? 'profitShareBp'
+     AND (m.terms ->> 'profitShareUntil')::timestamptz > now()
 $$;
 
 CREATE FUNCTION fleet_project_json(p fleet_projects, p_detail boolean DEFAULT true) RETURNS jsonb LANGUAGE plpgsql STABLE
@@ -827,16 +1053,29 @@ BEGIN
         'fundingSource', CASE WHEN p.escrow_fleet_minor + p.fleet_paid_minor + p.fleet_returned_minor > 0 AND p.escrow_own_minor + p.own_paid_minor > 0 THEN 'mixed'
                               WHEN p.envelope_id IS NOT NULL THEN 'fleet_capital' WHEN p.escrow_own_minor + p.own_paid_minor > 0 THEN 'own_capital' ELSE 'unfunded' END,
         'envelopeId', p.envelope_id, 'escrowMinor', p.escrow_own_minor + p.escrow_fleet_minor, 'escrowOwnMinor', p.escrow_own_minor, 'escrowFleetMinor', p.escrow_fleet_minor,
-        'committedMinor', fleet_project_committed(p.project_id), 'paidMinor', (SELECT COALESCE(sum(amount_minor), 0) FROM fleet_project_payments WHERE project_id = p.project_id),
+        'committedMinor', fleet_project_committed(p.project_id),
+        'paidMinor', (SELECT COALESCE(sum(amount_minor), 0) FROM fleet_project_payments WHERE project_id = p.project_id AND kind IN ('fixed','milestone')),
+        'forecast', p.forecast,
         'justification', CASE WHEN p_detail THEN p.justification END),
     'eta', jsonb_build_object('soloHours', p.solo_hours, 'teamHours', p.team_hours, 'criticalPathHours', p.makespan_hours,
         'coordinationHours', p.coordination_hours, 'plannedTimeSavedHours', p.planned_time_saved_hours, 'criticalPath', to_jsonb(p.critical_path),
         'projectedRemainingHours', pr -> 'remainingHours', 'projectedFinishAt', pr -> 'projectedFinishAt', 'projectedTotalHours', pr -> 'projectedTotalHours',
         'actualHours', o.actual_hours, 'realisedTimeSavedHours', o.realised_time_saved_hours),
+    'distribution', jsonb_build_object('basis', 'post_sweep_distributable_profit',
+        'order', 'external revenue → project costs → tax → realised net profit → Treasury sweep → distributable pool → agreed shares',
+        'leadShareBp', fleet_project_lead_share_bp(p.project_id),
+        'memberShares', (SELECT COALESCE(jsonb_agg(jsonb_build_object('memberId', m.member_id, 'agentId', m.agent_id, 'role', m.role, 'status', m.status,
+             'shareBp', fleet_project_share_bp(m.terms), 'paidMinor', m.share_paid_minor, 'owedMinor', m.share_owed_minor) ORDER BY m.accepted_at), '[]'::jsonb)
+           FROM fleet_project_members m WHERE m.project_id = p.project_id AND m.accepted_at IS NOT NULL AND m.terms ? 'profitShareBp'),
+        'tranches', (SELECT COALESCE(jsonb_agg(jsonb_build_object('from', d.from_at, 'to', d.to_at, 'profitMinor', d.profit_minor, 'sweepRateBp', d.sweep_rate_bp,
+             'sweepAttributedMinor', d.sweep_attributed_minor, 'distributableMinor', d.distributable_minor, 'leadShareBp', d.lead_share_bp,
+             'leadResidualMinor', d.lead_residual_minor, 'allocations', d.allocations) ORDER BY d.to_at), '[]'::jsonb)
+           FROM fleet_project_distributions d WHERE d.project_id = p.project_id),
+        'distributedMinor', (SELECT COALESCE(sum(amount_minor), 0) FROM fleet_project_payments WHERE project_id = p.project_id AND kind = 'profit_share')),
     'members', (SELECT COALESCE(jsonb_agg(fleet_project_member_json(m) ORDER BY m.offered_at), '[]'::jsonb) FROM fleet_project_members m WHERE m.project_id = p.project_id
                  AND (p_detail OR m.status IN ('offered','countered','accepted','completed'))),
     'roles', CASE WHEN p_detail THEN (SELECT COALESCE(jsonb_agg(jsonb_build_object('role', r.role, 'taskScope', r.task_scope, 'requiredCapability', r.required_capability,
-                 'proposedCompensation', r.proposed_terms, 'expectedCostMinor', r.expected_cost_minor) ORDER BY r.role), '[]'::jsonb) FROM fleet_project_roles r WHERE r.project_id = p.project_id) END,
+                 'proposedCompensation', fleet_project_terms_json(r.proposed_terms), 'expectedCostMinor', r.expected_cost_minor) ORDER BY r.role), '[]'::jsonb) FROM fleet_project_roles r WHERE r.project_id = p.project_id) END,
     'tasks', (SELECT COALESCE(jsonb_agg(jsonb_strip_nulls(jsonb_build_object('key', t.task_key, 'title', t.title, 'ownerRole', t.owner_role, 'assigneeAgentId', t.assignee_agent_id,
                  'hours', t.hours, 'deps', to_jsonb(t.deps), 'status', t.status, 'progressBp', t.progress_bp, 'deliverable', t.deliverable, 'acceptance', t.acceptance,
                  'startedAt', t.started_at, 'deliveredAt', t.delivered_at, 'acceptedAt', t.accepted_at, 'reviewNote', t.review_note, 'rejections', t.rejections)) ORDER BY t.ord), '[]'::jsonb)
@@ -943,9 +1182,15 @@ BEGIN
       PERFORM fleet_econ_bad(format('role %s owns no task: recruit only for real work', v_role));
     END IF;
     v_terms := fleet_project_terms(r -> 'compensation', p.project_id, v_role);
+    IF fleet_project_terms_escrow(v_terms) > COALESCE((SELECT fleet_project_terms_escrow(proposed_terms) FROM fleet_project_roles WHERE project_id = p.project_id AND role = v_role), 0) THEN
+      PERFORM fleet_project_cost_guard(p, v_terms);
+    END IF;
     UPDATE fleet_project_roles SET proposed_terms = v_terms, expected_cost_minor = fleet_project_terms_cost(v_terms, p.expected_value_minor)
      WHERE project_id = p.project_id AND role = v_role;
   END LOOP;
+  IF (SELECT COALESCE(sum(fleet_project_share_bp(proposed_terms)), 0) FROM fleet_project_roles WHERE project_id = p.project_id) > 10000 THEN
+    RAISE EXCEPTION 'FLEET_PROJECT_SHARES_EXCEED: the roles'' proposed profit shares total more than 100%% of the distributable pool';
+  END IF;
   IF EXISTS (SELECT 1 FROM fleet_project_roles ro WHERE ro.project_id = p.project_id AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(a -> 'roles') y WHERE lower(y ->> 'role') = ro.role)) THEN
     RAISE EXCEPTION 'FLEET_PROJECT_PLAN: a role cannot be dropped from the plan (end its contract; give its tasks to another owner)';
   END IF;
@@ -962,6 +1207,24 @@ BEGIN
     'whyTeam', fleet_econ_text(j, 'whyTeam', 1200, true), 'timeToRevenue', fleet_econ_text(j, 'timeToRevenue', 600, true), 'skills', fleet_econ_text(j, 'skills', 600));
 END $$;
 
+CREATE FUNCTION fleet_project_forecast_args(a jsonb, p_prior jsonb) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE f jsonb := COALESCE(a -> 'forecast', '{}'::jsonb); v_q bigint := COALESCE(fleet_econ_int(a, 'qualityBenefitMinor', 0, 100000000000), (p_prior ->> 'qualityBenefitMinor')::bigint, 0);
+        r jsonb;
+BEGIN
+  IF jsonb_typeof(f) <> 'object' THEN PERFORM fleet_econ_bad('forecast is {qualityReasoning?, timeSavingReasoning?, evidence?}'); END IF;
+  r := COALESCE(p_prior, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object('label', 'forecast',
+    'expectedValueMinor', fleet_econ_int(a, 'expectedValueMinor', 0, 100000000000), 'expectedReturnMinor', fleet_econ_int(a, 'expectedReturnMinor', -100000000000, 100000000000),
+    'timeValueMinorPerDay', fleet_econ_int(a, 'timeValueMinorPerDay', 0, 100000000000), 'qualityBenefitMinor', v_q,
+    'qualityReasoning', fleet_econ_text(f, 'qualityReasoning', 1200), 'timeSavingReasoning', fleet_econ_text(f, 'timeSavingReasoning', 1200),
+    'evidence', CASE WHEN f ? 'evidence' THEN fleet_econ_evidence(f, 'evidence', 8) END,
+    'revisedAt', CASE WHEN p_prior IS NOT NULL THEN now() END));
+  IF v_q > 0 AND r ->> 'qualityReasoning' IS NULL THEN
+    PERFORM fleet_econ_bad('a quality / risk benefit is your forecast: give forecast.qualityReasoning (and evidence) — it is compared with the realised outcome later');
+  END IF;
+  RETURN r;
+END $$;
+
 CREATE FUNCTION fleet_econ_project_propose(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE v fleet_ventures; p fleet_projects; v_idem text := fleet_econ_text(a, 'idempotencyKey', 128, true); v_id uuid := gen_random_uuid(); v_roles integer;
@@ -974,14 +1237,14 @@ BEGIN
   IF v.state IN ('failed','closed') THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_INVALID_STATE', 'reason', 'the venture is ' || v.state); END IF;
   INSERT INTO fleet_projects (project_id, lead_agent_id, venture_id, project_key, name, objective, idempotency_key, expected_value_minor, expected_return_minor, budget_minor,
       opportunity_cost_minor, time_value_minor_per_day, quality_benefit_minor, coordination_hours, coordination_cost_minor, risk, risk_note, justification, target_completion,
-      solo_hours, team_hours, makespan_hours, planned_time_saved_hours, critical_path, benefit_minor, cost_minor)
+      solo_hours, team_hours, makespan_hours, planned_time_saved_hours, critical_path, benefit_minor, cost_minor, forecast)
     VALUES (v_id, p_agent, v.venture_id, fleet_econ_key(a, 'key'), fleet_econ_text(a, 'name', 80, true), fleet_econ_text(a, 'objective', 600, true), v_idem,
       fleet_econ_int(a, 'expectedValueMinor', 0, 100000000000, true), fleet_econ_int(a, 'expectedReturnMinor', -100000000000, 100000000000, true),
       fleet_econ_int(a, 'budgetMinor', 0, 100000000000, true), fleet_econ_int(a, 'opportunityCostMinor', 0, 100000000000, true),
       fleet_econ_int(a, 'timeValueMinorPerDay', 0, 100000000000, true), COALESCE(fleet_econ_int(a, 'qualityBenefitMinor', 0, 100000000000), 0),
       fleet_project_hours(a -> 'coordinationHours', 'coordinationHours', 100000), fleet_econ_int(a, 'coordinationCostMinor', 0, 100000000000, true),
       lower(COALESCE(fleet_econ_text(a, 'risk', 10, true), '')), fleet_econ_text(a, 'riskNote', 300), fleet_project_economics_args(a),
-      CASE WHEN a ? 'targetCompletion' THEN (a ->> 'targetCompletion')::timestamptz END, 0, 0, 0, 0, '{}', 0, 0)
+      CASE WHEN a ? 'targetCompletion' THEN (a ->> 'targetCompletion')::timestamptz END, 0, 0, 0, 0, '{}', 0, 0, fleet_project_forecast_args(a, NULL))
     RETURNING * INTO p;
   PERFORM fleet_project_set_plan(p, a);
   p := fleet_project_evaluate(v_id);
@@ -1009,6 +1272,8 @@ BEGIN
          expected_value_minor = COALESCE(fleet_econ_int(a, 'expectedValueMinor', 0, 100000000000), expected_value_minor),
          expected_return_minor = COALESCE(fleet_econ_int(a, 'expectedReturnMinor', -100000000000, 100000000000), expected_return_minor),
          time_value_minor_per_day = COALESCE(fleet_econ_int(a, 'timeValueMinorPerDay', 0, 100000000000), time_value_minor_per_day),
+         quality_benefit_minor = COALESCE(fleet_econ_int(a, 'qualityBenefitMinor', 0, 100000000000), quality_benefit_minor),
+         forecast = fleet_project_forecast_args(a, forecast),
          stage = COALESCE(fleet_project_stage(a), stage)
    WHERE project_id = p.project_id RETURNING * INTO p;
   IF a ? 'tasks' OR a ? 'roles' THEN
@@ -1088,10 +1353,14 @@ BEGIN
   IF ag.status <> 'active' OR ag.operator_hold_at IS NOT NULL OR ag.capability_scope <> 'full' OR ag.dry_run THEN
     RETURN jsonb_build_object('ok', false, 'code', 'FLEET_PROJECT_AGENT_UNAVAILABLE', 'reason', 'only a living, active, unrestricted agent can be offered work');
   END IF;
+  -- The offer states its own terms explicitly; there are no default or inherited terms.
+  IF NOT (a ? 'compensation') THEN PERFORM fleet_econ_bad('compensation is required: the terms you offer, explicitly (there are no default terms or percentages)'); END IF;
+  v_terms := fleet_project_terms(a -> 'compensation', p.project_id, ro.role);
+  PERFORM fleet_project_cost_guard(p, v_terms);
   IF EXISTS (SELECT 1 FROM fleet_project_members x WHERE x.project_id = p.project_id AND x.status IN ('offered','countered','accepted') AND (x.role = ro.role OR x.agent_id = v_target)) THEN
     RAISE EXCEPTION 'FLEET_INVALID_STATE: that role (or that agent) already has a live offer or contract in this project';
   END IF;
-  v_terms := fleet_project_terms(COALESCE(a -> 'compensation', ro.proposed_terms), p.project_id, ro.role);
+  PERFORM fleet_project_shares_check(p.project_id, NULL, fleet_project_share_bp(v_terms));
   INSERT INTO fleet_project_members (member_id, project_id, role, agent_id, task_scope, required_capability, deliverable, expected_hours, deadline, dependencies, terms, start_at)
     VALUES (gen_random_uuid(), p.project_id, ro.role, v_target, ro.task_scope, ro.required_capability, fleet_econ_text(a, 'deliverable', 300, true),
       fleet_project_hours(a -> 'expectedHours', 'expectedHours', 10000), (fleet_econ_text(a, 'deadline', 40, true))::timestamptz, fleet_econ_text(a, 'dependencies', 300), v_terms,
@@ -1132,6 +1401,10 @@ BEGIN
       'startAt', CASE WHEN (a -> 'counter') ? 'startAt' THEN ((a -> 'counter') ->> 'startAt')::timestamptz END,
       'deadline', CASE WHEN (a -> 'counter') ? 'deadline' THEN ((a -> 'counter') ->> 'deadline')::timestamptz END));
     IF v_counter = '{}'::jsonb THEN PERFORM fleet_econ_bad('a counter changes compensation, startAt or deadline'); END IF;
+    IF v_counter ? 'compensation' THEN
+      PERFORM fleet_project_shares_check(p.project_id, m.member_id, fleet_project_share_bp(v_counter -> 'compensation'));
+      IF fleet_project_terms_escrow(v_counter -> 'compensation') > fleet_project_terms_escrow(m.terms) THEN PERFORM fleet_project_cost_guard(p, v_counter -> 'compensation'); END IF;
+    END IF;
     UPDATE fleet_project_members SET status = 'countered', response = v_resp, response_reason = v_reason, counter_terms = v_counter, responded_at = now() WHERE member_id = m.member_id RETURNING * INTO m;
     PERFORM fleet_project_event(p, 'project_member_countered', p_agent, p_agent, jsonb_build_object('fromAgentId', p_agent, 'toAgentId', p.lead_agent_id, 'memberId', m.member_id, 'role', m.role, 'counter', v_counter));
     RETURN jsonb_build_object('ok', true, 'status', 'countered', 'note', 'The lead decides whether to accept your counter.');
@@ -1141,6 +1414,8 @@ BEGIN
     v_start := (fleet_econ_text(a, 'startAt', 40, true))::timestamptz;
     IF v_start <= now() THEN PERFORM fleet_econ_bad('startAt is a later time you can start'); END IF;
   END IF;
+  PERFORM fleet_project_cost_guard(p, m.terms);
+  PERFORM fleet_project_shares_check(p.project_id, m.member_id, fleet_project_share_bp(m.terms));
   v_need := fleet_project_terms_escrow(m.terms);
   v_free := p.escrow_own_minor + p.escrow_fleet_minor - fleet_project_committed(p.project_id);
   IF v_need > v_free THEN
@@ -1164,6 +1439,8 @@ BEGIN
   SELECT * INTO m FROM fleet_project_members WHERE member_id = fleet_project_uuid(a, 'memberId') AND project_id = p.project_id FOR UPDATE;
   IF NOT FOUND OR m.status <> 'countered' THEN RAISE EXCEPTION 'FLEET_INVALID_STATE: no counter-offer to accept'; END IF;
   v_terms := COALESCE(m.counter_terms -> 'compensation', m.terms);
+  PERFORM fleet_project_cost_guard(p, v_terms);
+  PERFORM fleet_project_shares_check(p.project_id, m.member_id, fleet_project_share_bp(v_terms));
   v_need := fleet_project_terms_escrow(v_terms);
   v_free := p.escrow_own_minor + p.escrow_fleet_minor - fleet_project_committed(p.project_id);
   IF v_need > v_free THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_PROJECT_UNFUNDED', 'reason', format('fund the escrow first: %s free, %s needed', v_free, v_need)); END IF;
@@ -1280,28 +1557,42 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'task', t.task_key, 'status', t.status, 'paidMinor', v_paid);
 END $$;
 
--- Revenue share owed: share of the venture's ledger net profit since the contract started (to its end date, capped),
--- less what was paid, out of the lead's spendable cash (what cannot be paid now stays owed).
-CREATE FUNCTION fleet_econ_project_settle_share(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
+-- Post-sweep distributions (callable by any party) and realised assessments.
+CREATE FUNCTION fleet_econ_project_distribute(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE m fleet_project_members; p fleet_projects; v_net bigint; v_owed bigint; v_due bigint; v_pay bigint; v_avail bigint; v_until timestamptz;
+DECLARE p fleet_projects; v_pid uuid;
 BEGIN
-  SELECT * INTO m FROM fleet_project_members WHERE member_id = fleet_project_uuid(a, 'memberId') FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no such contract'; END IF;
-  SELECT * INTO p FROM fleet_projects WHERE project_id = m.project_id FOR UPDATE;
-  IF p_agent NOT IN (m.agent_id, p.lead_agent_id) THEN RAISE EXCEPTION 'FLEET_PROJECT_NOT_PARTY: only the two parties settle a revenue share'; END IF;
-  IF NOT (m.terms ? 'revenueShareBp') OR m.accepted_at IS NULL THEN RAISE EXCEPTION 'FLEET_INVALID_STATE: no agreed revenue share in this contract'; END IF;
-  v_until := (m.terms ->> 'revenueShareUntil')::timestamptz;
-  v_net := GREATEST(0, (fleet_venture_financials(p.venture_id, GREATEST(m.start_at, m.accepted_at)) ->> 'netProfitMinor')::bigint
-                     - CASE WHEN now() > v_until THEN (fleet_venture_financials(p.venture_id, v_until) ->> 'netProfitMinor')::bigint ELSE 0 END);
-  v_owed := floor(v_net::numeric * (m.terms ->> 'revenueShareBp')::integer / 10000)::bigint;
-  IF m.terms ? 'revenueShareCapMinor' THEN v_owed := LEAST(v_owed, (m.terms ->> 'revenueShareCapMinor')::bigint); END IF;
-  v_due := GREATEST(0, v_owed - m.share_paid_minor);
-  v_avail := GREATEST(0, (fleet_agent_economics(p.lead_agent_id) ->> 'expensePurchasingCapacity')::bigint);
-  v_pay := LEAST(v_due, v_avail);
-  IF v_pay > 0 THEN PERFORM fleet_project_pay(p.project_id, m.member_id, 'revenue_share', NULL, v_pay, p_agent, format('revenue share %s bp of venture net profit %s', m.terms ->> 'revenueShareBp', v_net)); END IF;
-  RETURN jsonb_build_object('ok', true, 'ventureNetProfitMinor', v_net, 'owedMinor', v_owed, 'paidNowMinor', v_pay, 'stillOwedMinor', v_due - v_pay,
-    'note', 'Computed from the venture''s ledger net profit (external) since the contract started; internal payments are never part of it.');
+  -- Accepts {projectId} or (as the former settle_share) {memberId}.
+  IF a ? 'memberId' AND NOT (a ? 'projectId') THEN
+    SELECT project_id INTO v_pid FROM fleet_project_members WHERE member_id = fleet_project_uuid(a, 'memberId');
+  ELSE
+    v_pid := fleet_project_uuid(a, 'projectId');
+  END IF;
+  SELECT * INTO p FROM fleet_projects WHERE project_id = v_pid;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no such project'; END IF;
+  IF p_agent <> p.lead_agent_id AND NOT EXISTS (SELECT 1 FROM fleet_project_members WHERE project_id = p.project_id AND agent_id = p_agent AND accepted_at IS NOT NULL) THEN
+    RAISE EXCEPTION 'FLEET_PROJECT_NOT_PARTY: only the project''s lead and contracted members settle its distributions';
+  END IF;
+  RETURN jsonb_build_object('ok', true) || fleet_project_distribute(p.project_id, p_agent) || jsonb_build_object('note',
+    'Order: external revenue → project costs → tax → realised net profit → Treasury sweep → post-sweep distributable pool → your agreed shares. Shares are distributions, never expenses or income.');
+END $$;
+
+-- A realised assessment (quality / risk outcome) by the lead or a contracted member, with evidence — recorded as theirs, never invented.
+CREATE FUNCTION fleet_econ_project_assess(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE p fleet_projects; v_role text;
+BEGIN
+  SELECT * INTO p FROM fleet_projects WHERE project_id = fleet_project_uuid(a, 'projectId');
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no such project'; END IF;
+  IF p_agent = p.lead_agent_id THEN v_role := 'lead';
+  ELSE
+    SELECT role INTO v_role FROM fleet_project_members WHERE project_id = p.project_id AND agent_id = p_agent AND accepted_at IS NOT NULL ORDER BY offered_at DESC LIMIT 1;
+    IF v_role IS NULL THEN RAISE EXCEPTION 'FLEET_PROJECT_NOT_PARTY: only the lead and contracted members assess a project'; END IF;
+  END IF;
+  PERFORM fleet_project_event(p, 'project_assessment', p_agent, p_agent, jsonb_strip_nulls(jsonb_build_object('by', p_agent, 'role', v_role,
+    'assessment', fleet_econ_text(a, 'assessment', 1200, true), 'qualityRealisedMinor', fleet_econ_int(a, 'qualityRealisedMinor', -100000000000, 100000000000),
+    'evidence', fleet_econ_evidence(a, 'evidence', 8), 'label', 'realised_assessment')));
+  RETURN jsonb_build_object('ok', true, 'note', 'Recorded as your realised assessment; it is compared with the forecast when the project finishes.');
 END $$;
 
 -- Ending a contract early: the member exits (voluntary; accepted work stays paid, delivered work is still reviewed and paid
