@@ -491,3 +491,100 @@ Software WebGL, 12 agents:
 | Ultra | 1.3 / 1.3 / 2 fps |
 
 Virtual scale, 3D at Low, settled: 1 agent 54, 10 agents 58, 25 agents 46, 50 agents 34 fps.
+
+## V2.2: premium HQ pass, live activity choreography, skin-ready characters — 4 October 2026 (version 0.6.0)
+
+This builds on the V2.1 candidate (`f0e797a`). The economy is locked; the V2.2 backend work (sweep semantics, project
+runtime readiness, mechanics audit) is in `4f9a6ab` and `docs/design/f2-autonomous-economy.md` §40.
+
+**Information flow as a hero feature** (`hq/flow.tsx`, `flowFrame` unit-tested)
+- **One sequence per real event:** the source activates (a light column and ring); the conduit reveals itself from
+  the source; a haloed, labelled packet travels the route, and the junctions it passes pulse; the destination
+  acknowledges; the route settles back to its ambient state.
+- **Treasury:** flows that reach the Treasury make the banner's frame acknowledge them. The figure changes only with
+  the data, sliding from the old real value to the new one.
+- **Labels:** KNOWLEDGE RECORDED, PROJECT CREATED, TEAM OFFER, TEAM MEMBER JOINED, TASK DELIVERED, CAPITAL ALLOCATED,
+  SALE RECORDED, TREASURY SWEEP, PROFIT DISTRIBUTION, SECURITY ALERT and others.
+- **Reduce Motion:** the lit route, direction chevrons, both ends and the label.
+- **Data Flow off:** no route or packet, but each event is still acknowledged at its destination with its label.
+- **Truthfulness:** no event, no traffic.
+
+**People** (`hq/crowd.tsx`)
+- **Walking:** agents walk the building's routes (out through a room's opening, along the corridors in their own lane,
+  in through the destination's opening), never through walls.
+- **Motion:** speed eases in and out, they slow into turns, and sitting down and standing up take a moment.
+- **Variation:** idle weight shifts and looking around; at consoles, alternating between operating and inspecting.
+- **Truthfulness:** all of this presents the agent's real recorded state; no work is invented.
+
+**Characters are skin-ready** (`hq/appearance.ts`, `docs/COSMETICS.md`)
+- **Appearance slots:** body family, uniform, armour or tactical layer (vest, or plate carrier with pouches),
+  footwear, headgear (cap or comms headset), hair, facial hair, face (the portrait), accessories, insignia and colour
+  treatment.
+- **Defaults** come from the identity seed. Cosmetic packs can override slots, and the renderer draws only from the
+  appearance.
+- **Visual only:** cosmetics carry no economic, permission or state field, and a test enforces that.
+
+**Portraits:** more identity diversity, still 128×128: skull shape, cheekbones, eye spacing, ear size, nose bridge,
+age (lines, greying), skin marks and curly hair.
+
+**Building, materials and light**
+- **Cohesion:** a structural facade with a roof-edge beam around the whole complex, service conduits along both spines
+  at every quality level, concourse canopies, and lit entrance thresholds.
+- **Density:** +40–60% where it matters:
+  - Opportunity Lab: secondary analysis desks behind glass, storage and a signals cabinet.
+  - Agent Floor: storage and an operations bar.
+  - Venture / Dev: a prototype bench and a build cabinet.
+  - Library / Research: study carrels, side shelving and a catalogue kiosk.
+  - Everywhere: under-desk light and screen spill.
+- **The Treasury banner:** built in on pylons with a lit gantry.
+- **Materials:**
+  - brushed metal for equipment and dark metal;
+  - matte composite for desks and trims;
+  - rubber dot flooring for workstation zones;
+  - seam normal maps for floor tiles, wall panels and corridor plating.
+- **Light:**
+  - soft, fixture-shaped light under the linear fixtures (the round pools are gone);
+  - wall washes from each cornice;
+  - room lights with softer falloff.
+
+**Agent View:** the framing avoids tall furniture (partitions, shelving, racks, booths, lockers, cabinets) as well
+as people.
+
+**Performance** (no feature removed)
+
+The main cost was not the effects: about 40 live screens were being repainted and re-uploaded four times a second.
+Screens now repaint only when their data changes, scan lines are an overlay, and the banner's ticker scrolls by
+texture offset. In addition:
+- **Floor reflections:** refresh while the camera moves, otherwise every fourth frame. They compare camera matrices
+  with a tolerance, and the camera settles exactly on arrival.
+- **Ambient occlusion:** half resolution.
+- **Adaptive internal resolution** on High and Ultra.
+
+Ultra's Fleet view on the dev VM's GPU went from 13 to about 57 fps, and High from 44 to about 59.
+
+**Real-GPU benchmark:** `scripts/hq-benchmark.sh [out]` runs the matrix with Chrome's own hardware backend (shadows on).
+The dev VM's driver cannot build shadow maps, so those results are still to be measured on real hardware.
+
+**V2.2 measurements** (LIVE export, real Fleets, 1600×1000; fps shown as Fleet / Department / Agent).
+
+GPU (dev VM, shadow maps unavailable on its driver):
+
+| Agents | Low | Medium | High | Ultra |
+|---|---|---|---|---|
+| 1 | 59 / 60 / 60 | 60 / 59 / 60 | 55 / 60 / 60 | 50 / 60 / 55 |
+| 10 | 60 / 60 / 60 | 58 / 60 / 60 | 59 / 60 / 60 | 55 / 60 / 59 |
+| 25 | 60 / 60 / 60 | 59 / 60 / 58 | 58 / 60 / 60 | 54 / 60 / 58 |
+| 50 | 60 / 61 / 60 | 53 / 59 / 60 | 59 / 60 / 60 | 55 / 60 / 59 |
+
+Software WebGL, 12 agents (shadows rendered):
+
+| Quality | Fleet / Department / Agent |
+|---|---|
+| Low | 32 / 43 / 46 fps |
+| Medium | 3.7 / 5 / 5 fps |
+| High | 3.3 / 3.7 / 3.3 fps |
+| Ultra | 2 / 2 / 2 fps |
+
+**Review package:** produced by `fleet-virtual-hq-pg.test.ts` with `FLEET_HQ_SHOTS` (stills), plus `FLEET_HQ_VIDEO=1`
+for WebM recordings of the sequences. The sequences are a walk, a team offer, a task delivery, and a sweep followed by
+a distribution.

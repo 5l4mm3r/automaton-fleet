@@ -23,6 +23,7 @@ import fs from "fs";
 import path from "path";
 import { execFileSync } from "child_process";
 import { chromium, type Browser, type Page } from "playwright-core";
+import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry } from "./fixtures/economy-registry.js";
 import { totp } from "../../fleet/identity/crypto.js";
@@ -93,21 +94,25 @@ async function spreadAgents(R: EconomyRegistry) {
 }
 
 /**
- * A real team project through the agents' own operations: founder-1 proposes a venture project (the planner decides the
- * ETAs), funds it from its own capital, offers founder-2 the engineer role; founder-2 accepts itself; the project starts
- * and work begins in parallel.
+ * A real team project through the agents' own operations — setup (before the page opens): the test-only economic
+ * environment the backend suites use (a tax profile, a simulated rail, the Treasury sweep policy switched on in THIS
+ * throwaway database), founder-1's venture, and its proposal and funding. The planner decides the ETAs. Founder-2's role
+ * is negotiated explicitly (hybrid: a pre-agreed fixed project cost + a share of POST-SWEEP distributable profit).
  */
+const SHARE_TERMS = { type: "HYBRID", fixedMinor: 1_000, profitShareBp: 3_000, profitShareUntil: new Date(Date.now() + 365 * 86_400_000).toISOString() };
 async function teamProject(R: EconomyRegistry) {
-  const [A, B] = R.founders;
+  const [A] = R.founders;
   const ok = async (p: Promise<Record<string, any>>) => { const r = await p; expect(r, JSON.stringify(r)).toMatchObject({ ok: true }); return r; };
   const e = await R.one(`fleet.fleet_admin_legal_entity_add('Fleet Trading Ltd', 'GB', 'company', true, $1)`, [OWNER]);
   await R.one(`fleet.fleet_admin_tax_profile_set($1, '[{"taxKind":"profit","rateBp":2000}]'::jsonb, now() - interval '1 second', NULL, $2)`, [e.entity_id, OWNER]);
-  await R.one(`fleet.fleet_admin_rail_add('simulated', 'sim', 'shared', NULL, ARRAY['receive_payments'], 'sim checkout', NULL, 'simulated', NULL, NULL, $1)`, [OWNER]);
+  const rail = (await R.one(`fleet.fleet_admin_rail_add('simulated', 'sim', 'shared', NULL, ARRAY['receive_payments'], 'sim checkout', NULL, 'simulated', NULL, NULL, $1)`, [OWNER])).railId as string;
+  await R.one(`fleet.fleet_admin_sweep_policy_set(true, NULL, NULL, NULL, NULL, NULL, $1)`, [OWNER]);
+  await R.store.grantServiceRole();
   await ok(R.econ(A, "venture.create", { key: "client-portal", model: "software", offer: "client portal", state: "selected", channels: ["direct"] }));
   await R.econ(A, "rail.require", { ventureKey: "client-portal" });
   const p = await ok(R.econ(A, "project.propose", {
     idempotencyKey: `hq:${crypto.randomUUID()}`, key: "portal-v1", ventureKey: "client-portal", name: "Client portal", objective: "Ship the client portal sooner",
-    expectedValueMinor: 50_000, expectedReturnMinor: 30_000, budgetMinor: 3_000, opportunityCostMinor: 1_000, timeValueMinorPerDay: 4_000,
+    expectedValueMinor: 50_000, expectedReturnMinor: 30_000, budgetMinor: 3_000, opportunityCostMinor: 1_000, timeValueMinorPerDay: 40_000, // the lead's forecast: a launch-dated client contract values each day saved
     coordinationHours: 2, coordinationCostMinor: 500, risk: "medium",
     justification: { decomposition: "architecture, backend, frontend, integration", parallelism: "backend and frontend run in parallel after architecture",
       whyTeam: "an engineer takes the 20 h backend off the critical path", timeToRevenue: "revenue starts at launch; 16 h sooner" },
@@ -117,19 +122,11 @@ async function teamProject(R: EconomyRegistry) {
       { key: "frontend", title: "Frontend", ownerRole: "lead", hours: 18, deps: ["arch"], deliverable: "portal UI", acceptance: "usable" },
       { key: "integration", title: "Integration", ownerRole: "lead", hours: 6, deps: ["backend", "frontend"], deliverable: "live portal", acceptance: "end to end" },
     ],
-    roles: [{ role: "engineer", taskScope: "the backend API", requiredCapability: "backend", compensation: { type: "FIXED", fixedMinor: 1_000 } }],
+    roles: [{ role: "engineer", taskScope: "the backend API", requiredCapability: "backend", compensation: SHARE_TERMS }],
   }));
-  const P = p.project.projectId as string;
+  const P = (p.id ?? p.project?.projectId ?? p.project?.id) as string;
   await ok(R.econ(A, "project.fund", { projectId: P, amountMinor: 1_600, source: "own" }));
-  const o = await ok(R.econ(A, "project.offer", { projectId: P, role: "engineer", agentId: B.id, deliverable: "the backend API", expectedHours: 20, compensation: { type: "FIXED", fixedMinor: 1_000 }, deadline: new Date(Date.now() + 7 * 86_400_000).toISOString() }));
-  await ok(R.econ(B, "project.respond", { memberId: o.memberId, response: "ACCEPT", reason: "fits my capacity; fair pay" }));
-  await ok(R.econ(A, "project.start", { projectId: P }));
-  await ok(R.econ(A, "project.task", { projectId: P, taskKey: "arch", action: "start" }));
-  await ok(R.econ(A, "project.task", { projectId: P, taskKey: "arch", action: "deliver", evidence: [{ kind: "note", observation: "design doc" }] }));
-  await ok(R.econ(A, "project.review", { projectId: P, taskKey: "arch", verdict: "accept", reason: "meets acceptance" }));
-  await ok(R.econ(B, "project.task", { projectId: P, taskKey: "backend", action: "start" }));
-  await ok(R.econ(A, "project.task", { projectId: P, taskKey: "frontend", action: "start" }));
-  return { P, eta: p.project.eta as Record<string, number> };
+  return { P, rail, eta: (p.project?.eta ?? {}) as Record<string, number>, ok };
 }
 
 describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modules")))("Virtual HQ (LIVE export, real Fleets)", { timeout: 3_600_000 }, () => {
@@ -142,7 +139,9 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     ensureLiveUi();
     if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
     // FLEET_HQ_GPU=1 measures on the machine's GPU (ANGLE over OpenGL) instead of software WebGL.
-    const gl = process.env.FLEET_HQ_GPU ? ["--use-angle=gl", "--enable-gpu", "--ignore-gpu-blocklist"] : ["--enable-unsafe-swiftshader", "--use-angle=swiftshader"];
+    // FLEET_HQ_GPU=native: Chrome's own hardware backend (real GPUs: D3D11 / Metal / Vulkan / GL) — scripts/hq-benchmark.sh.
+    const gl = process.env.FLEET_HQ_GPU === "native" ? ["--enable-gpu", "--ignore-gpu-blocklist"]
+      : process.env.FLEET_HQ_GPU ? ["--use-angle=gl", "--enable-gpu", "--ignore-gpu-blocklist"] : ["--enable-unsafe-swiftshader", "--use-angle=swiftshader"];
     browser = await chromium.launch({ executablePath: CHROME!, headless: true, args: ["--no-sandbox", ...gl] });
     F = await signedInFleet(browser, 12);
     await spreadAgents(F.R);
@@ -159,7 +158,7 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     await page.evaluate(([k, v]) => localStorage.setItem(k, v), [PREFS, JSON.stringify({ renderer: "3d", quality, fps: 60, reduceMotion: false, ambient: true, dataFlow: true, ...extra })]);
     // On a GPU whose driver cannot build shadow maps, a real browser remembers that after the first failure; each fresh
     // test context starts with that memory, or the repeated driver resets make Chrome block WebGL for the whole run.
-    if (process.env.FLEET_HQ_GPU) await page.evaluate(() => localStorage.setItem("fleet.virtual.gpu.noShadowMaps.v1", "1"));
+    if (process.env.FLEET_HQ_GPU && process.env.FLEET_HQ_GPU !== "native") await page.evaluate(() => localStorage.setItem("fleet.virtual.gpu.noShadowMaps.v1", "1"));
     await page.goto(`${origin}/#Virtual`);
     await page.reload();
     await page.locator("canvas").first().waitFor();
@@ -185,6 +184,23 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     expect(await hint(page)).toMatch(new RegExp(`^${name}`));
   };
 
+  // Video of an animated sequence (FLEET_HQ_VIDEO=1): the scene canvas recorded in the browser (MediaRecorder → WebM).
+  const VIDEO = !!(process.env.FLEET_HQ_VIDEO && SHOTS);
+  const startRec = async (page: Page) => { if (VIDEO) await page.evaluate(() => {
+    const c = document.querySelector("canvas") as HTMLCanvasElement, rec = new MediaRecorder(c.captureStream(30), { mimeType: "video/webm;codecs=vp9", videoBitsPerSecond: 6_000_000 });
+    const w = window as unknown as { __chunks: Blob[]; __rec: MediaRecorder }; w.__chunks = []; rec.ondataavailable = (e) => w.__chunks.push(e.data); rec.start(250); w.__rec = rec;
+  }); };
+  const stopRec = async (page: Page, name: string) => {
+    if (!VIDEO) return;
+    const b64 = await page.evaluate(() => new Promise<string>((res) => {
+      const w = window as unknown as { __chunks: Blob[]; __rec: MediaRecorder };
+      w.__rec.onstop = async () => { const buf = new Uint8Array(await new Blob(w.__chunks, { type: "video/webm" }).arrayBuffer()); let s = ""; for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000)); res(btoa(s)); };
+      w.__rec.stop();
+    }));
+    fs.writeFileSync(path.join(SHOTS, `${name}.webm`), Buffer.from(b64, "base64"));
+  };
+  const ticker = (page: Page, text: string) => page.getByRole("list", { name: "Recent Fleet activity" }).getByText(text).first().waitFor({ timeout: 25_000 });
+
   it("hierarchical camera, the live agent panel, Escape steps back one level; the department views", async () => {
     const { page, origin } = F;
     await open(page, origin, "high");
@@ -204,20 +220,87 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     expect(await page.getByText("The 3D view stopped").count()).toBe(0);
   });
 
-  it("the team project: both agents in Venture / Dev at the team table, the project panel with the planner's figures", async () => {
+  it("live choreography from real events: an agent walks between departments; a team offer, acceptance and task delivery travel between the agents; a sale, the internal Treasury sweep and the post-sweep distribution", async () => {
+    const { page, R } = F;
+    const [A, B] = R.founders, walker = R.founders[5];
+    const ok = project.ok, P = project.P;
+    const svc = new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 1 });
+    try {
+      // 13. A real state change: founder-6 records research and walks from Venture / Dev to the Library, through the building.
+      await startRec(page);
+      await R.q(`SELECT fleet.fleet_event('knowledge_recorded', $1, 'agent', '{"topic":"hq-walk"}'::jsonb)`, [walker.id]);
+      await ticker(page, "founder-6 · Research recorded");
+      await page.waitForTimeout(3500); await shot(page, "13-agent-walking");
+      await page.waitForTimeout(6000); await stopRec(page, "13-agent-walking");
+      // 15. The team offer travels from founder-1 to founder-2; founder-2 answers itself; the acceptance travels back.
+      await startRec(page);
+      const o = await ok(R.econ(A, "project.offer", { projectId: P, role: "engineer", agentId: B.id, deliverable: "the backend API", expectedHours: 20, compensation: SHARE_TERMS, deadline: new Date(Date.now() + 7 * 86_400_000).toISOString() }));
+      await ticker(page, "Team offer");
+      await page.waitForTimeout(2200); await shot(page, "15-team-offer");
+      await ok(R.econ(B, "project.respond", { memberId: o.memberId, response: "ACCEPT", reason: "fits my capacity; fair terms" }));
+      await ticker(page, "Team member joined");
+      await page.waitForTimeout(5000); await stopRec(page, "15-team-offer");
+      // Work begins in parallel after the architecture task (the planner's dependency graph).
+      await ok(R.econ(A, "project.start", { projectId: P }));
+      for (const [who, k, act] of [[A, "arch", "start"], [A, "arch", "deliver"]] as const) await ok(R.econ(who, "project.task", { projectId: P, taskKey: k, action: act }));
+      await ok(R.econ(A, "project.review", { projectId: P, taskKey: "arch", verdict: "accept", reason: "meets acceptance" }));
+      await ok(R.econ(B, "project.task", { projectId: P, taskKey: "backend", action: "start" }));
+      await ok(R.econ(A, "project.task", { projectId: P, taskKey: "frontend", action: "start" }));
+      await page.waitForTimeout(8000); // both now work in Venture / Dev (their latest recorded activity is the project)
+      // 16. founder-2 delivers the backend to founder-1.
+      await startRec(page);
+      await ok(R.econ(B, "project.task", { projectId: P, taskKey: "backend", action: "deliver" }));
+      await ticker(page, "Task delivered");
+      await page.waitForTimeout(1500); await shot(page, "16-task-delivery");
+      await page.waitForTimeout(4000); await stopRec(page, "16-task-delivery");
+      await ok(R.econ(A, "project.review", { projectId: P, taskKey: "backend", verdict: "accept", reason: "tests pass" }));
+      for (const [k, act] of [["frontend", "deliver"], ["integration", "start"], ["integration", "deliver"]] as const) {
+        await ok(R.econ(A, "project.task", { projectId: P, taskKey: k, action: act }));
+        if (act === "deliver") await ok(R.econ(A, "project.review", { projectId: P, taskKey: k, verdict: "accept", reason: "done" }));
+      }
+      // 17. A real sale (test rail), the internal Treasury sweep (no external transfer), then the post-sweep distribution.
+      const vid = (await R.q(`SELECT venture_id FROM fleet.fleet_ventures WHERE agent_id = $1 AND venture_key = 'client-portal'`, [A.id]))[0].venture_id;
+      const ext = `sale:${crypto.randomUUID()}`;
+      await svc.query(`SELECT fleet.svc_settlement_ingest($1, $2, 'sale', 125000, 0, 'GBP', $3, now(), $4, NULL)`, [project.rail, ext, vid, crypto.createHash("sha256").update(ext).digest("hex")]);
+      const orders0 = Number((await R.q(`SELECT count(*) AS n FROM fleet.fleet_payment_orders`))[0].n);
+      await startRec(page);
+      const sweep = (await svc.query(`SELECT fleet.svc_sweep_run('2027-05') AS r`)).rows[0].r;
+      expect(sweep).toMatchObject({ enabled: true });
+      await ticker(page, "Profit contribution to the Treasury");
+      await page.waitForTimeout(2500); await shot(page, "17a-treasury-sweep");
+      const dist = await ok(R.econ(A, "project.distribute", { projectId: P }));
+      await ticker(page, "Profit distribution");
+      await page.waitForTimeout(2200); await shot(page, "17c-profit-distribution");
+      await page.waitForTimeout(5000); await stopRec(page, "17-sweep-then-distribution");
+      // The order the owner set: realised profit → Treasury sweep → negotiated distribution of the remainder; nothing external.
+      const t = dist.tranche ?? dist.distribution?.tranches?.at(-1);
+      // The sweep took exactly the policy rate that applied to this agent (dynamic policy; no team exemption).
+      expect(Number(t.sweepRateBp)).toBeGreaterThan(0);
+      expect(Number(t.sweepAttributedMinor)).toBe(Math.floor((Number(t.profitMinor) * Number(t.sweepRateBp)) / 10_000));
+      expect(Number(t.distributableMinor)).toBe(Number(t.profitMinor) - Number(t.sweepAttributedMinor));
+      expect(Number((await R.q(`SELECT count(*) AS n FROM fleet.fleet_payment_orders`))[0].n)).toBe(orders0); // no external payment
+      // The Treasury banner shows the authoritative figure after the sweep.
+      await toDepartment(page, "Treasury");
+      const cash = Number((await R.one(`fleet.fleet_generated_treasury_wealth()`)).treasuryCashMinor);
+      expect(cash).toBeGreaterThan(0);
+      await page.waitForTimeout(2500); await shot(page, "17b-treasury-banner-after-sweep");
+      await toFleet(page);
+    } finally { await svc.end(); }
+  });
+
+  it("the team project panel: lead, roles, negotiated terms, the post-sweep distribution and the planner's critical path", async () => {
     const { page } = F;
-    // The planner's own figures: solo 52 h, team 34 h critical path + 2 h coordination, 16 h planned saving (not 52 ÷ 2).
-    expect(project.eta).toMatchObject({ soloHours: 52, teamHours: 36, plannedTimeSavedHours: 16 });
+    // The planner's own figures: solo 52 h; team = 34 h critical path + 2 h coordination (not 52 ÷ 2).
+    expect(project.eta).toMatchObject({ soloHours: 52, teamHours: 36 });
     await toDepartment(page, "Venture / Dev");
     const p = panel(page);
     const card = p.getByRole("article", { name: "Project Client portal" });
     await card.waitFor({ timeout: 30_000 });
     const text = (await card.textContent()) ?? "";
-    // 52 h = 6.5 working days solo, 36 h = 4.5 days as a team (the panel shows working days of 8 h).
-    for (const t of ["LEAD: founder-1", "TEAM: 2", "ETA solo", "6.5 days", "ETA team", "4.5 days", "founder-2", "engineer", "£10.00 fixed"]) expect(text, t).toContain(t);
+    for (const t of ["LEAD: founder-1", "TEAM: 2", "6.5 days", "4.5 days", "founder-2", "engineer", "£10.00 fixed", "30 % of post-sweep distributable profit", "Profit distribution (after the Treasury sweep)", "Treasury sweep"]) expect(text, t).toContain(t);
     await page.waitForTimeout(3000);
-    await shot(page, "15-team-project-venture");
-    await p.screenshot({ path: SHOTS ? path.join(SHOTS, "16-project-panel.png") : path.join(process.env.TMPDIR ?? "/tmp", "hq-16.png") });
+    await shot(page, "15b-team-project-venture");
+    await p.screenshot({ path: SHOTS ? path.join(SHOTS, "18-project-panel.png") : path.join(process.env.TMPDIR ?? "/tmp", "hq-18.png") });
     await toFleet(page);
   });
 

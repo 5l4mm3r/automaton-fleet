@@ -9,7 +9,7 @@
  * Reduce Motion draw the same content statically.
  */
 import { useFrame } from "@react-three/fiber";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import { DEPARTMENT, type DepartmentId } from "../../command/departments";
 import type { ScreenSpot } from "./world-build";
@@ -95,11 +95,13 @@ function drawSign(ctx: CanvasRenderingContext2D, w: number, h: number, spot: Scr
  * The Treasury banner: FLEET TREASURY and the authoritative cash, large; the real breakdowns on a slow ticker below.
  * `change` (0..1) slides the previous real figure out and the new one in after a real change.
  */
-function drawBanner(ctx: CanvasRenderingContext2D, w: number, h: number, banner: TreasuryBanner, prev: string | null, change: number, ticker: number) {
+function drawBanner(ctx: CanvasRenderingContext2D, w: number, h: number, banner: TreasuryBanner, prev: string | null, change: number, ticker: number, ack = 0) {
   const g = ctx.createLinearGradient(0, 0, 0, h); g.addColorStop(0, "#120d04"); g.addColorStop(0.6, "#07060a"); g.addColorStop(1, "#030305");
   ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
   ctx.strokeStyle = GOLD_DIM; ctx.lineWidth = 4; ctx.strokeRect(6, 6, w - 12, h - 12);
   ctx.fillStyle = "rgba(245,196,81,0.05)"; for (let x = 0; x < w; x += 6) ctx.fillRect(x, 0, 1, h); // LED pitch
+  // A real flow has just reached the Treasury: the frame acknowledges it (the figure itself changes only with the data).
+  if (ack > 0) { ctx.strokeStyle = `rgba(255,214,120,${0.9 * ack})`; ctx.lineWidth = 10; ctx.strokeRect(5, 5, w - 10, h - 10); ctx.fillStyle = `rgba(245,196,81,${0.08 * ack})`; ctx.fillRect(0, 0, w, h); }
   const tickerH = h * 0.2, main = h - tickerH;
   ctx.textBaseline = "middle";
   ctx.font = `600 ${Math.round(main * 0.17)}px ${FONT}`; ctx.fillStyle = GOLD; ctx.globalAlpha = 0.85;
@@ -121,12 +123,27 @@ function drawBanner(ctx: CanvasRenderingContext2D, w: number, h: number, banner:
   ctx.save(); ctx.beginPath(); ctx.rect(8, main + 2, w - 16, tickerH - 8); ctx.clip();
   ctx.fillStyle = "#d9b25a";
   const ty = main + tickerH * 0.5;
-  if (ticker < 0) ctx.fillText(fit(ctx, items.join("   ·   "), w - 32), 16, ty);
+  if (ticker === -2) { /* drawn by the scrolling ticker overlay */ }
+  else if (ticker < 0) ctx.fillText(fit(ctx, items.join("   ·   "), w - 32), 16, ty);
   else { const off = -((ticker * 60) % lw); for (let x = off; x < w; x += lw) ctx.fillText(line, x + 16, ty); }
   ctx.restore();
 }
 
-const Screen = memo(function Screen({ spot, feed, q, reduceMotion }: { spot: ScreenSpot; feed: ScreenFeed; q: HQProfile; reduceMotion: boolean }) {
+/**
+ * The ticker strip as its own texture: one repeating line of the real breakdowns, scrolled by texture offset (no
+ * repaint per frame).
+ */
+function tickerTexture(banner: TreasuryBanner, h: number): { tex: THREE.CanvasTexture; width: number } {
+  const c = document.createElement("canvas"), g = c.getContext("2d")!, font = `${Math.round(h * 0.42)}px ${FONT}`;
+  g.font = font;
+  const line = banner.secondary.map(([k, v]) => `${k.toUpperCase()}  ${v}`).join("     ◆     ") + "     ◆     ";
+  c.width = Math.min(4096, Math.ceil(g.measureText(line).width)); c.height = h;
+  g.font = font; g.textBaseline = "middle"; g.fillStyle = "#d9b25a"; g.fillText(line, 0, h * 0.5);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = THREE.RepeatWrapping;
+  return { tex: t, width: c.width };
+}
+
+const Screen = memo(function Screen({ spot, feed, q, reduceMotion, receivedRef }: { spot: ScreenSpot; feed: ScreenFeed; q: HQProfile; reduceMotion: boolean; receivedRef?: MutableRefObject<Map<string, number>> }) {
   const sign = spot.kind === "sign", banner = spot.kind === "banner";
   const px = sign ? 64 : banner ? (q.textures >= 1024 ? 1536 : q.textures >= 512 ? 1024 : 768) : Math.round(Math.min(1024, Math.max(384, (q.textures || 256) * (spot.w > 2.5 ? 1.5 : 1))));
   const w = sign ? Math.round(px * spot.w / spot.h) : px, h = sign ? px : Math.round(px * spot.h / spot.w);
@@ -146,30 +163,50 @@ const Screen = memo(function Screen({ spot, feed, q, reduceMotion }: { spot: Scr
     if (s.shown !== null && s.shown !== feed.banner.cash) { s.prev = s.shown; s.at = performance.now(); }
     s.shown = feed.banner.cash;
   }, [banner, feed.banner.cash]);
-  const paint = (t: number) => {
+  // Painted only when its content changes: new data, the banner's slide after a real change, an arrival acknowledgement.
+  const paint = () => {
     if (sign) drawSign(ctx, w, h, spot);
     else if (banner) {
       const s = bannerState.current, k = animate && s.prev !== null ? Math.min(1, (performance.now() - s.at) / 1400) : 1;
-      drawBanner(ctx, w, h, feed.banner, s.prev, k, animate ? t : -1);
-    } else if (spot.kind === "board") drawBoard(ctx, w, h, spot, feed, animate ? t * 0.2 : -1);
-    else drawStatus(ctx, w, h, spot, feed, animate ? t * 0.25 : -1);
+      const at = receivedRef?.current.get(spot.dep) ?? 0, ack = Math.max(0, 1 - (Date.now() - at) / 1500);
+      drawBanner(ctx, w, h, feed.banner, s.prev, k, animate ? -2 : -1, ack);
+    } else if (spot.kind === "board") drawBoard(ctx, w, h, spot, feed, -1);
+    else drawStatus(ctx, w, h, spot, feed, -1);
     tex.needsUpdate = true;
   };
-  useEffect(() => { paint(-1); }); // every render (new data) repaints once
-  const last = useRef(0);
+  useEffect(() => { paint(); }); // every render (new data) repaints once
+  const last = useRef(0), busy = useRef(false);
   useFrame(({ clock }) => {
-    if (!animate || sign) return;
-    const fps = banner ? 12 : 4;
-    if (clock.elapsedTime - last.current < 1 / fps) return;
-    last.current = clock.elapsedTime;
-    paint(clock.elapsedTime);
+    if (!banner) return;
+    const s = bannerState.current, at = receivedRef?.current.get(spot.dep) ?? 0;
+    const active = Date.now() - at < 1600 || (animate && s.prev !== null && performance.now() - s.at < 1500);
+    if ((active || busy.current) && clock.elapsedTime - last.current > 1 / 12) { last.current = clock.elapsedTime; paint(); busy.current = active; }
   });
-  return <mesh position={[spot.x, spot.y, spot.z]} rotation={[spot.rx ?? 0, spot.ry, 0]}>
-    <planeGeometry args={[spot.w, spot.h]} />
-    <meshBasicMaterial map={tex} toneMapped={false} />
-  </mesh>;
+  // Animated levels: a scan line glides over data screens, and the banner's ticker scrolls (texture offset only).
+  const scan = useRef<THREE.Mesh>(null), ticker = useRef<THREE.Mesh>(null);
+  const tick = useMemo(() => (banner && animate ? tickerTexture(feed.banner, 64) : null), [banner, animate, feed.banner]);
+  useEffect(() => () => tick?.tex.dispose(), [tick]);
+  const tickerW = spot.w - 0.12, tickerH = spot.h * 0.2 - 0.06;
+  useFrame(({ clock }) => {
+    if (scan.current) scan.current.position.y = spot.h / 2 - ((clock.elapsedTime * 0.25) % 1) * spot.h;
+    if (tick) { tick.tex.repeat.x = (tickerW / tickerH) * 64 / tick.width; tick.tex.offset.x = (clock.elapsedTime * 60 / tick.width) % 1; }
+  });
+  return <group position={[spot.x, spot.y, spot.z]} rotation={[spot.rx ?? 0, spot.ry, 0]}>
+    <mesh>
+      <planeGeometry args={[spot.w, spot.h]} />
+      <meshBasicMaterial map={tex} toneMapped={false} />
+    </mesh>
+    {animate && !sign && !banner && <mesh ref={scan} position={[0, 0, 0.004]}>
+      <planeGeometry args={[spot.w, spot.h * 0.08]} />
+      <meshBasicMaterial color="#22d3ee" transparent opacity={0.07} depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+    </mesh>}
+    {tick && <mesh ref={ticker} position={[0, -spot.h / 2 + spot.h * 0.1, 0.004]}>
+      <planeGeometry args={[tickerW, tickerH]} />
+      <meshBasicMaterial map={tick.tex} transparent toneMapped={false} />
+    </mesh>}
+  </group>;
 });
 
-export const Screens = memo(function Screens({ spots, feed, q, reduceMotion }: { spots: ScreenSpot[]; feed: ScreenFeed; q: HQProfile; reduceMotion: boolean }) {
-  return <>{spots.map((s) => <Screen key={s.id} spot={s} feed={feed} q={q} reduceMotion={reduceMotion} />)}</>;
+export const Screens = memo(function Screens({ spots, feed, q, reduceMotion, receivedRef }: { spots: ScreenSpot[]; feed: ScreenFeed; q: HQProfile; reduceMotion: boolean; receivedRef?: MutableRefObject<Map<string, number>> }) {
+  return <>{spots.map((s) => <Screen key={s.id} spot={s} feed={feed} q={q} reduceMotion={reduceMotion} receivedRef={receivedRef} />)}</>;
 });

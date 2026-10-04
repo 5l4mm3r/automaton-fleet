@@ -35,6 +35,8 @@ export interface PortraitTraits {
   facialHair: 0 | 1 | 2 | 3 | 4;
   scar: 0 | 1 | 2 | 3;
   earpiece: -1 | 0 | 1;
+  /** Further identity (v3.1): skull shape, cheekbones, eye spacing, ear size, nose bridge, age, skin marks, curly hair. */
+  skull: 0 | 1 | 2; cheek: 0 | 1 | 2; eyeSpace: 0 | 1 | 2; ears: 0 | 1 | 2; bridge: 0 | 1; age: 0 | 1 | 2; marks: 0 | 1 | 2 | 3; curly: 0 | 1;
 }
 
 type RGB = [number, number, number];
@@ -72,12 +74,14 @@ export function seedOf(id: string): number {
 
 export function traitsOf(id: string): PortraitTraits {
   // Two independent hashes give enough bits for every trait (all indices unsigned, always in range).
-  const a = seedOf(id), b = seedOf(`${id}#face`);
+  const a = seedOf(id), b = seedOf(`${id}#face`), c = seedOf(`${id}#more`);
   const pick = (h: number, shift: number, mod: number) => ((h >>> shift) >>> 0) % mod;
   return {
     width: pick(a, 0, 3) as 0 | 1 | 2, jaw: pick(a, 3, 3) as 0 | 1 | 2, skin: pick(a, 6, SKIN.length), hair: pick(a, 10, 6) as PortraitTraits["hair"],
     hairColour: pick(a, 14, HAIR.length), brows: pick(a, 18, 3) as 0 | 1 | 2, eyes: pick(b, 0, IRIS.length), nose: pick(b, 4, 3) as 0 | 1 | 2,
     facialHair: pick(b, 8, 5) as PortraitTraits["facialHair"], scar: pick(b, 12, 4) as PortraitTraits["scar"], earpiece: (pick(b, 16, 3) - 1) as -1 | 0 | 1,
+    skull: pick(c, 0, 3) as 0 | 1 | 2, cheek: pick(c, 3, 3) as 0 | 1 | 2, eyeSpace: pick(c, 6, 3) as 0 | 1 | 2, ears: pick(c, 9, 3) as 0 | 1 | 2, bridge: pick(c, 12, 2) as 0 | 1,
+    age: pick(c, 14, 3) as 0 | 1 | 2, marks: pick(c, 17, 4) as 0 | 1 | 2 | 3, curly: pick(c, 21, 3) === 0 ? 1 : 0,
   };
 }
 
@@ -101,9 +105,9 @@ function segDist(px: number, py: number, ax: number, ay: number, bx: number, by:
 
 /** The face geometry for one identity (landmarks in pixels of the 128 grid). */
 function geometry(t: PortraitTraits) {
-  const cx = 64, cy = 57, rx = 28 + t.width * 2.0, ryTop = 43, ryBot = 39 + (t.jaw === 2 ? 2 : 0);
+  const cx = 64, cy = 57, rx = 28 + t.width * 2.0, ryTop = 41 + t.skull * 2, ryBot = 39 + (t.jaw === 2 ? 2 : 0);
   const jawP = [3.1, 2.55, 2.05][t.jaw];
-  const eyeY = 60, ex = 12.2 + t.width * 0.6, browY = eyeY - 8.5, noseY = 75 + (t.nose === 2 ? 1 : 0), mouthY = 85.5, chinY = cy + ryBot;
+  const eyeY = 60, ex = 11.6 + t.width * 0.6 + t.eyeSpace * 0.6, browY = eyeY - 8.5, noseY = 75 + (t.nose === 2 ? 1 : 0), mouthY = 85.5, chinY = cy + ryBot;
   const halfWidth = (y: number) => {
     if (y < cy) { const k = (cy - y) / ryTop; return k >= 1 ? 0 : rx * Math.pow(1 - Math.pow(k, 2.4), 1 / 2.4); } // a broad crown
     const k = (y - cy) / ryBot; return k >= 1 ? 0 : rx * Math.pow(1 - Math.pow(k, jawP), 1 / jawP);
@@ -141,7 +145,7 @@ function heightAt(x: number, y: number, g: Geo, t: PortraitTraits, c: Condition)
   if (y > 96) { const sw = 22 + (y - 96) * 2.4, nx = (x - cx) / sw; if (Math.abs(nx) < 1) h = Math.max(h, 10 * Math.sqrt(1 - nx * nx) * smooth(96, 106, y)); }
   const nw = 15 + t.width; if (y > 78 && y < 118) { const nx = (x - cx) / nw; if (Math.abs(nx) < 1) h = Math.max(h, 16 * Math.sqrt(1 - nx * nx)); }
   // Ears.
-  for (const s of [-1, 1]) { const ecx = cx + s * (g.halfWidth(eyeY + 5) + 1.5), d = ((x - ecx) / 4.2) ** 2 + ((y - (eyeY + 6)) / 8) ** 2; if (d < 1) h = Math.max(h, 12 * Math.sqrt(1 - d)); }
+  for (const s of [-1, 1]) { const er = 1 + (t.ears - 1) * 0.12, ecx = cx + s * (g.halfWidth(eyeY + 5) + 1.5), d = ((x - ecx) / (4.2 * er)) ** 2 + ((y - (eyeY + 6)) / (8 * er)) ** 2; if (d < 1) h = Math.max(h, 12 * Math.sqrt(1 - d)); }
   // The head.
   const hw = g.halfWidth(y);
   if (hw > 0 && Math.abs(x - cx) < hw) {
@@ -152,7 +156,9 @@ function heightAt(x: number, y: number, g: Geo, t: PortraitTraits, c: Condition)
     let f = 30 * Math.pow(Math.max(0, 1 - r * r), 0.55);
     f += 3.2 * (gauss(x, y, cx - 12, browY + 1, 8, 2.8) + gauss(x, y, cx + 12, browY + 1, 8, 2.8)) + 2.2 * gauss(x, y, cx, browY + 2, 5, 4);
     f -= 5.5 * (gauss(x, y, cx - ex, eyeY + 0.5, 6.5, 4.2) + gauss(x, y, cx + ex, eyeY + 0.5, 6.5, 4.2));
-    f += 2.6 * (gauss(x, y, cx - 18, eyeY + 11, 6.5, 4.5) + gauss(x, y, cx + 18, eyeY + 11, 6.5, 4.5));
+    f += (1.8 + t.cheek * 0.9) * (gauss(x, y, cx - 18, eyeY + 10 + t.cheek, 6.5, 4.5) + gauss(x, y, cx + 18, eyeY + 10 + t.cheek, 6.5, 4.5));
+    if (t.bridge) f += 1.6 * gauss(x, y, cx, eyeY + 6, 2.2, 2.2); // a bumped nose bridge
+    if (t.age) f -= 0.5 * t.age * (gauss(x, y, cx, browY - 8, 14, 1) + gauss(x, y, cx, browY - 4.5, 12, 0.8)); // forehead lines
     const nb = 2.6 + t.nose * 0.45;
     f += 6.5 * gauss(x, y, cx, (browY + noseY) / 2 + 2, nb, 10) * smooth(browY, browY + 6, y) + 4.5 * gauss(x, y, cx, noseY - 1.5, 4.2 + t.nose * 0.5, 3.4);
     f += 2.0 * (gauss(x, y, cx - 5.2, noseY + 0.5, 2.6, 2.2) + gauss(x, y, cx + 5.2, noseY + 0.5, 2.6, 2.2)) - 2.4 * (gauss(x, y, cx - 2.8, noseY + 2.4, 1.4, 1) + gauss(x, y, cx + 2.8, noseY + 2.4, 1.4, 1));
@@ -185,6 +191,7 @@ export function portraitFigure(id: string, band: HealthBand): Uint8ClampedArray 
  * the same in the browser, in tests and when generating review sheets.
  */
 /** Colours used while painting (parsed once). */
+const K_GREYING = hex("#9a9a96");
 const K_000000 = hex("#000000"), K_05080D = hex("#05080d"), K_060B15 = hex("#060b15"), K_0B0F16 = hex("#0b0f16"), K_0D1117 = hex("#0d1117"), K_14233A = hex("#14233a"), K_1A0E09 = hex("#1a0e09"), K_1B0F0A = hex("#1b0f0a"), K_1E293B = hex("#1e293b"), K_1F3C5C = hex("#1f3c5c"), K_2A1410 = hex("#2a1410"), K_2A1810 = hex("#2a1810"), K_2A3442 = hex("#2a3442"), K_3C5A3A = hex("#3c5a3a"), K_7A1818 = hex("#7a1818"), K_7A6A5C = hex("#7a6a5c"), K_8A7B6E = hex("#8a7b6e"), K_8E2020 = hex("#8e2020"), K_C0605A = hex("#c0605a"), K_D79A92 = hex("#d79a92"), K_FFFFFF = hex("#ffffff");
 
 export function portraitPixels(id: string, band: HealthBand): Uint8ClampedArray {
@@ -345,6 +352,13 @@ export function portraitPixels(id: string, band: HealthBand): Uint8ClampedArray 
         if (Math.abs(u2) < 1.05) { col = mixc(col, K_1A0E09, 0.85 * smooth(0.9, 0.2, Math.abs(py - top))); col = mixc(col, K_000000, 0.12 * smooth(1.2, 0.3, Math.abs(py - (top - 2.4)))); }
       }
 
+      // Age: crow's feet and deeper folds; skin marks: freckles or a mole.
+      if (t.age >= 1) for (const s of [-1, 1]) for (let k = 0; k < 3; k++) {
+        const d = segDist(px, py, cx + s * (g.ex + 6.5), eyeY - 1 + k * 1.6, cx + s * (g.ex + 9), eyeY - 2 + k * 2.2);
+        if (d < 0.6) col = mixc(col, mixc(skin[1], skin[0], 0.4), 0.35 * t.age * (1 - d / 0.6));
+      }
+      if (t.marks === 1 && py > eyeY + 3 && py < noseY + 4 && Math.abs(Math.abs(px - cx) - 13) < 7 && hash2(Math.floor(px / 2), Math.floor(py / 2), seed + 31) > 0.86) col = mixc(col, skin[1], 0.45);
+      if (t.marks === 2 && Math.hypot(px - (cx + (seed % 2 ? 9 : -10)), py - (mouthY - 6)) < 1.1) col = mixc(col, skin[0], 0.75);
       // Scars.
       const scar = t.scar === 1 ? segDist(px, py, cx - 14, browY - 5, cx - 11, browY + 6) : t.scar === 2 ? segDist(px, py, cx + 14, eyeY + 7, cx + 21, eyeY + 15) : t.scar === 3 ? segDist(px, py, cx + 3, chinY - 6, cx + 6, chinY - 2) : 9;
       if (scar < 1) col = mixc(col, mixc(skin[4], K_D79A92, 0.4), 0.6 * (1 - scar));
@@ -384,6 +398,8 @@ export function portraitPixels(id: string, band: HealthBand): Uint8ClampedArray 
         const dir = t.hair === 3 ? px * 0.25 + py * 1.6 : px * 1.4 + py * 0.3;
         const strand = 0.5 + 0.5 * Math.sin(dir + noise(px * 0.5, py * 0.5, seed + 13) * 5);
         let hc = mixc(hair[0], hair[1], clamp(light * 1.15));
+        if (t.curly) hc = mixc(hc, hair[0], 0.45 * (noise(px * 1.6, py * 1.6, seed + 17) > 0.55 ? 1 : 0)); // curly texture
+        if (t.age === 2) hc = mixc(hc, K_GREYING, 0.35 + 0.25 * noise(px * 2, py * 2, seed + 19)); // greying
         hc = mixc(hc, hair[2], clamp(spec * 2.2 + strand * 0.25 * light));
         hc = mixc(hc, CYAN, rim * 0.12);
         let alpha = 1;

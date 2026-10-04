@@ -8,6 +8,7 @@
  */
 import type { Point } from "../world";
 import { roomAt } from "./route";
+import type { Occluder } from "./world-build";
 
 export interface AgentFrame { cam: { x: number; y: number; z: number }; look: { x: number; y: number; z: number }; ghosts: string[]; azimuth: number }
 
@@ -38,14 +39,28 @@ export function viewable(c: Point, p: Point): boolean {
   return c.z <= z1 + 4;
 }
 
-export function frameAgent(self: string, p: Point, yaw: number, seated: boolean, others: ReadonlyMap<string, Point>, keep?: number): AgentFrame {
+/** Whether the sight line from the camera (at camY) to the agent's head (at headY) passes through a tall obstacle. */
+export function blockedByFurniture(cam: Point, camY: number, p: Point, headY: number, occluders: readonly Occluder[]): boolean {
+  for (const o of occluders) {
+    // Sample the segment (it is short): any point inside the footprint below the obstacle's height blocks it.
+    for (let i = 1; i < 24; i++) {
+      const t = i / 24, x = cam.x + (p.x - cam.x) * t, z = cam.z + (p.z - cam.z) * t, y = camY + (headY - camY) * t;
+      if (x >= o.x0 && x <= o.x1 && z >= o.z0 && z <= o.z1 && y < o.h) return true;
+    }
+  }
+  return false;
+}
+
+export function frameAgent(self: string, p: Point, yaw: number, seated: boolean, others: ReadonlyMap<string, Point>, keep?: number, occluders: readonly Occluder[] = []): AgentFrame {
   const at = (az: number) => ({ x: p.x + Math.sin(az) * DIST, z: p.z + Math.cos(az) * DIST });
   const order = keep !== undefined ? [keep - yaw, ...OFFSETS] : OFFSETS;
   let best: { az: number; score: number; ghosts: string[] } | null = null;
   order.forEach((off, rank) => {
     const az = yaw + off, c = at(az);
     if (!viewable(c, p)) return;
-    const g = blockers(c, p, others, self), score = g.length * 10 + rank * (keep !== undefined && rank === 0 ? 0 : 1) + (keep !== undefined && rank > 0 ? 0.5 : 0);
+    const headY0 = seated ? 1.1 : 1.45, near = occluders.filter((o) => Math.max(o.x0 - p.x, p.x - o.x1, o.z0 - p.z, p.z - o.z1) < DIST + 0.5);
+    const furniture = blockedByFurniture(c, headY0 + 1.35, p, headY0, near) ? 25 : 0;
+    const g = blockers(c, p, others, self), score = furniture + g.length * 10 + rank * (keep !== undefined && rank === 0 ? 0 : 1) + (keep !== undefined && rank > 0 ? 0.5 : 0);
     if (!best || score < best.score) best = { az, score, ghosts: g };
   });
   const chosen = best as { az: number; score: number; ghosts: string[] } | null;

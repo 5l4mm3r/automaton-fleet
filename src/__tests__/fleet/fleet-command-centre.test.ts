@@ -7,6 +7,8 @@
  * The LIVE integration (real gateway, step-up, real-time feed, CSP) is in fleet-codex-dashboard-e2e-pg.test.ts.
  */
 import { describe, it, expect } from "vitest";
+import fs from "fs";
+import path from "path";
 import { createElement as h } from "../../../codex-dashboard/node_modules/react/index.js";
 import { renderToStaticMarkup } from "../../../codex-dashboard/node_modules/react-dom/server.node.js";
 import { BAND_LABEL, HEALTH_THRESHOLDS, economicsFrom, healthOf, type AgentEconomics } from "../../../codex-dashboard/src/dashboard/command/economics";
@@ -28,9 +30,10 @@ import { GatewayClient } from "../../../codex-dashboard/src/dashboard/api/client
 import type { Agent, Fleet } from "../../../codex-dashboard/src/dashboard/model";
 import { hqBoardsFrom, hqDataFrom, redAlertOpen, treasuryBannerFrom } from "../../../codex-dashboard/src/dashboard/virtual/hq/data";
 import { roomAt, routeThrough } from "../../../codex-dashboard/src/dashboard/virtual/hq/route";
-import { flowDuration, flowFrame, flowLabel } from "../../../codex-dashboard/src/dashboard/virtual/hq/flow";
+import { flowDuration, flowFrame, flowLabel, LEAD_MS, SETTLE_MS } from "../../../codex-dashboard/src/dashboard/virtual/hq/flow";
 import { blockers, frameAgent, viewable } from "../../../codex-dashboard/src/dashboard/virtual/hq/framing";
 import { workTargets } from "../../../codex-dashboard/src/dashboard/virtual/hq/spots";
+import { appearanceOf, COSMETIC_SLOTS, registerCosmetic } from "../../../codex-dashboard/src/dashboard/virtual/hq/appearance";
 import { activeTeams, compensationText, hours, projectsOf } from "../../../codex-dashboard/src/dashboard/command/projects";
 import { buildWorld } from "../../../codex-dashboard/src/dashboard/virtual/hq/world-build";
 import { HQ_PROFILE } from "../../../codex-dashboard/src/dashboard/virtual/hq/quality";
@@ -314,7 +317,7 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
   });
 
   it("no event, no traffic; Reduce Motion removes travel but keeps the information (route, ends, direction, label)", () => {
-    expect(flowFrame([], 5000, false)).toEqual({ heads: [], routes: [], rings: [], chevrons: [], labels: [] });
+    expect(flowFrame([], 5000, false)).toEqual({ heads: [], routes: [], rings: [], columns: [], junctions: [], chevrons: [], labels: [], receiving: [] });
     const route = routeThrough([{ x: -18, z: -17 }, { x: 0, z: 11 }]);
     const f = { id: "f1", route, start: 1000, duration: flowDuration(route), colour: "#60a5fa", label: "KNOWLEDGE RECORDED" };
     const moving = flowFrame([f], 2000, false);
@@ -324,6 +327,30 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
     expect(still.routes).toHaveLength(1); expect(still.rings).toHaveLength(2); expect(still.chevrons.length).toBeGreaterThan(3);
     expect(still.labels).toEqual([{ id: "f1", text: "KNOWLEDGE RECORDED", p: route[route.length - 1], y: 2.6 }]);
     expect(flowFrame([f], 1000 + f.duration + 5000, false).heads).toEqual([]); // over: nothing lingers
+  });
+
+  it("the hero choreography: source activates, the conduit reveals, junctions pulse, the destination acknowledges, then settles", () => {
+    const route = routeThrough([{ x: -18, z: -17 }, { x: 0, z: 11 }]);
+    const f = { id: "f1", route, start: 0, duration: flowDuration(route), colour: "#60a5fa", label: "KNOWLEDGE RECORDED" };
+    const lead = flowFrame([f], 400, "full");
+    expect(lead.heads).toEqual([]); expect(lead.columns[0].p).toEqual(route[0]); expect(lead.routes[0].reveal).toBeCloseTo(0.5, 5);
+    // While travelling, corners already passed pulse.
+    const mid = flowFrame([f], LEAD_MS + f.duration * 0.6, "full");
+    expect(mid.heads).toHaveLength(1); expect(mid.junctions.length).toBeGreaterThanOrEqual(0);
+    const anyJunction = Array.from({ length: 40 }, (_, i) => flowFrame([f], LEAD_MS + (f.duration * i) / 40, "full").junctions.length).some((n) => n > 0);
+    expect(anyJunction).toBe(true);
+    // Receipt: the destination acknowledges (column + ring + label) and the route fades; then everything settles.
+    const rec = flowFrame([f], LEAD_MS + f.duration + 300, "full");
+    expect(rec.receiving).toEqual([{ id: "f1", p: route[route.length - 1] }]); expect(rec.routes[0].fade).toBeLessThan(1);
+    expect(flowFrame([f], LEAD_MS + f.duration + SETTLE_MS + 1, "full").routes).toEqual([]);
+    // Data Flow off: no route, packet or chevrons — the information (label + acknowledgement at the destination) remains.
+    const off = flowFrame([f], 2000, "off");
+    expect(off.heads).toEqual([]); expect(off.routes).toEqual([]); expect(off.chevrons).toEqual([]);
+    expect(off.labels[0]).toMatchObject({ text: "KNOWLEDGE RECORDED", p: route[route.length - 1] }); expect(off.receiving).toHaveLength(1);
+    // New hero labels.
+    expect(flowLabel({ kind: "TREASURY_TRANSFER", label: "Profit contribution to the Treasury", points: [] })).toBe("TREASURY SWEEP");
+    expect(flowLabel({ kind: "SYSTEM_ALERT", label: "x", points: [] })).toBe("SECURITY ALERT");
+    expect(flowLabel({ kind: "PROJECT_EVENT", label: "Profit distribution", points: [] })).toBe("PROFIT DISTRIBUTION");
   });
 
   it("Agent View keeps the selected agent unobstructed: another person in the preferred view moves the camera, never behind a wall", () => {
@@ -395,6 +422,25 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
     expect([...activeTeams(view)]).toEqual([["A", "P1"], ["B", "P1"]]); // only active projects, only accepted members
     expect(projectsOf(view, "C").map((p) => p.projectId)).toEqual(["P1"]); // the declined offer is still part of its history
     expect(hqBoardsFrom(live(), view, [])["venture:projects"]!.rows[0][0]).toContain("+1");
+  });
+
+  it("characters are skin-ready and cosmetics are visual identity only (no economic, permission or state field)", () => {
+    const a = appearanceOf("agent-1");
+    expect(Object.keys(a).sort()).toEqual([...COSMETIC_SLOTS].sort());
+    expect(a).toEqual(appearanceOf("agent-1")); // deterministic from identity
+    expect(a.face).toBe("portrait"); expect(a.hair).toBe(traitsOf("agent-1").hair);
+    registerCosmetic({ id: "test-raw-operator", name: "Raw operator (test)", overrides: { armour: "plateCarrier", headgear: "headset" } });
+    expect(appearanceOf("agent-1", ["test-raw-operator"])).toMatchObject({ armour: "plateCarrier", headgear: "headset", hair: a.hair });
+    expect(() => registerCosmetic({ id: "bad", name: "bad", overrides: { capital: 1 } as never })).toThrow(/unknown cosmetic slot/);
+    // The module cannot reach economics, permissions or Fleet state: it imports only the identity seed helpers.
+    const src = fs.readFileSync(path.resolve(__dirname, "../../../codex-dashboard/src/dashboard/virtual/hq/appearance.ts"), "utf8");
+    expect([...src.matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1])).toEqual(["../../command/portrait"]);
+  });
+
+  it("agents walk through the building (out of a room's opening, along corridors), not through walls", () => {
+    const path2 = routeThrough([{ x: 18, z: 12 }, { x: -18, z: -17 }]); // Venture → Treasury
+    expect(path2).toContainEqual({ x: 18, z: 16 }); expect(path2).toContainEqual({ x: -18, z: -12 }); // exits and enters by the openings
+    for (let i = 1; i < path2.length; i++) { const a = path2[i - 1], b = path2[i]; const ra = roomAt(a), rb = roomAt(b); if (ra && rb && ra.id === rb.id) continue; expect(Math.abs(a.x - b.x) < 1e-6 || Math.abs(a.z - b.z) < 1e-6).toBe(true); }
   });
 
   it("Ultra is materially richer than High while the world and its data stay the same", () => {

@@ -28,7 +28,7 @@ import { HQ_PROFILE, type HQProfile } from "./hq/quality";
 import { Crowd } from "./hq/crowd";
 import { Stations } from "./hq/stations";
 import { Screens, type ScreenFeed } from "./hq/screens";
-import { Atmosphere, Beacons, CommandCore, Environment, FloorReflections, LightPools, Lights, PostFX } from "./hq/effects";
+import { AdaptiveResolution, Atmosphere, Beacons, CommandCore, Environment, FloorReflections, LightPools, Lights, PostFX } from "./hq/effects";
 import { DataFlow } from "./hq/flow";
 import { workTargets } from "./hq/spots";
 import { CameraRig } from "./hq/camera";
@@ -118,6 +118,8 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
   // room's next free work spot (a desk, a console, a table), so people are at the equipment, not on an empty grid.
   // People the Agent View camera wants out of its line of sight (faded by the crowd).
   const ghosts = useRef<ReadonlySet<string>>(new Set());
+  // When a real flow last arrived at each room (the room's displays acknowledge it, e.g. the Treasury banner).
+  const received = useRef(new Map<string, number>());
   const work = useMemo(() => workTargets(models, targets, stations, plan.spots, teams), [models, targets, stations, plan.spots, teams]);
 
   return <Canvas key={`${prefs.quality}:${q.shadows}`} frameloop="never" dpr={[1, q.dpr]} shadows={q.shadows === "soft" ? "percentage" : q.shadows === "basic" ? "basic" : false}
@@ -140,19 +142,20 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
     onPointerMissed={() => { document.body.style.cursor = ""; }}>
     <Driver fps={prefs.fps} />
     <ProjectorOut projectRef={projectRef} />
-    <CameraRig focus={focus} positionsRef={positionsRef} reduceMotion={prefs.reduceMotion} spots={work.spots} stations={stations} ghostsRef={ghosts} />
+    <CameraRig focus={focus} positionsRef={positionsRef} reduceMotion={prefs.reduceMotion} spots={work.spots} stations={stations} ghostsRef={ghosts} occluders={plan.occluders} />
     <Lights q={q} lights={plan.lights} />
     <Environment q={q} />
     <Atmosphere q={q} lights={plan.lights} ambient={ambient} />
     <Building q={q} plan={plan} onRoom={onRoom} />
     <LightPools q={q} lights={plan.lights} />
     <FloorReflections q={q} />
-    <Screens spots={plan.screens} feed={screenFeed} q={q} reduceMotion={prefs.reduceMotion} />
+    <Screens spots={plan.screens} feed={screenFeed} q={q} reduceMotion={prefs.reduceMotion} receivedRef={received} />
     <CommandCore at={plan.core} q={q} ambient={ambient} />
     <Beacons spots={plan.beacons} red={redAlert} ambient={ambient} />
     <Stations models={models} stations={stations} births={births} reduceMotion={prefs.reduceMotion} q={q} />
     <Crowd models={models} targets={work.targets} spots={work.spots} meetings={work.meetings} ghostsRef={ghosts} births={births} selected={selected} q={q} reduceMotion={prefs.reduceMotion} positionsRef={positionsRef} onAgent={onAgent} stations={stations} />
-    <DataFlow packets={packets} enabled={prefs.dataFlow} reduceMotion={prefs.reduceMotion} q={q} />
+    <DataFlow packets={packets} enabled={prefs.dataFlow} reduceMotion={prefs.reduceMotion} q={q} receivedRef={received} />
+    <AdaptiveResolution q={q} />
     <PostFX q={q} />
   </Canvas>;
 }

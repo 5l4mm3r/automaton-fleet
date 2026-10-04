@@ -20,7 +20,9 @@ import { memo, useEffect, useMemo, useRef, useState, type MutableRefObject } fro
 import * as THREE from "three";
 import type { AgentModel } from "../../command/agents";
 import { DEPARTMENT } from "../../command/departments";
-import { identityColours, portraitFigure, portraitPixels, PORTRAIT_SIZE } from "../../command/portrait";
+import { identityColours, portraitFigure, portraitPixels, PORTRAIT_SIZE, seedOf } from "../../command/portrait";
+import { pathLength, routeThrough } from "./route";
+import { appearanceOf } from "./appearance";
 import { birthState, type Point } from "../world";
 import type { HQProfile } from "./quality";
 import type { WorkSpot } from "./world-build";
@@ -31,7 +33,7 @@ const POSE_KEYS = ["hipY", "lean", "head", "headYaw", "lying"] as const;
 
 export type Activity = "walk" | "fastWalk" | "idle" | "seated" | "terminal" | "seatedIdle" | "meetSeat" | "meetStand" | "dead";
 
-interface AgentState { pos: Point; yaw: number; phase: number; pose: Pose; activity: Activity; ghost: number }
+interface AgentState { pos: Point; yaw: number; phase: number; pose: Pose; activity: Activity; ghost: number; goal: Point | null; path: Point[]; speed: number; fast: boolean }
 
 const zero = (): Pose => ({ hipY: 0.95, lean: 0, head: 0, headYaw: 0, sh: [0.02, 0.02], shRoll: [0.1, -0.1], el: [0.18, 0.18], th: [0, 0], kn: [0.04, 0.04], lying: 0 });
 
@@ -44,15 +46,25 @@ function targetPose(a: Activity, t: number, phase: number, i: number, still: boo
       p.th = [-w * 0.5 * amp, w * 0.5 * amp]; p.kn = [0.1 + Math.max(0, Math.sin(phase + 1.3)) * 0.85 * amp, 0.1 + Math.max(0, Math.sin(phase + 1.3 + Math.PI)) * 0.85 * amp];
       p.sh = [w * 0.38 * amp, -w * 0.38 * amp]; p.el = [0.35, 0.35]; p.hipY = 0.95 + Math.abs(Math.cos(phase)) * 0.02; p.lean = a === "fastWalk" ? 0.09 : 0.04; break;
     }
-    case "idle":
-      p.sh = [0.04 + Math.sin(t * 1.3 + i) * 0.015 * s, 0.04 - Math.sin(t * 1.3 + i) * 0.015 * s]; p.el = [0.25, 0.25]; p.headYaw = Math.sin(t * 0.35 + i) * 0.22 * s; p.hipY = 0.95 + Math.sin(t * 1.6 + i) * 0.004 * s; break;
+    case "idle": {
+      // Weight shifts and looking around, desynchronised per person (slow cycles; still under Reduce Motion).
+      const shift = Math.sin(t * 0.21 + i * 1.9) * s, look = Math.sin(t * 0.13 + i * 2.7) > 0.6 ? 1 : 0;
+      p.sh = [0.04 + Math.sin(t * 1.3 + i) * 0.015 * s, 0.04 - Math.sin(t * 1.3 + i) * 0.015 * s]; p.el = [0.25, 0.25 + Math.max(0, shift) * 0.5];
+      p.headYaw = (Math.sin(t * 0.35 + i) * 0.22 + look * 0.5 * Math.sign(Math.sin(i * 3.1))) * s; p.hipY = 0.95 + Math.sin(t * 1.6 + i) * 0.004 * s;
+      p.th = [shift * 0.04, -shift * 0.04]; p.lean = shift * 0.02; break;
+    }
     case "seated":
       p.hipY = 0.5; p.th = [-1.48, -1.48]; p.kn = [1.42, 1.42]; p.lean = 0.12; p.head = 0.16;
       p.sh = [-0.6, -0.6]; p.shRoll = [0.14, -0.14]; p.el = [-1.0 + Math.sin(t * 13 + i) * 0.05 * s, -1.0 + Math.sin(t * 11 + i + 1) * 0.05 * s]; break;
     case "seatedIdle":
       p.hipY = 0.5; p.th = [-1.48, -1.48]; p.kn = [1.42, 1.42]; p.lean = -0.06; p.sh = [-0.22, -0.22]; p.el = [-0.95, -0.95]; p.headYaw = Math.sin(t * 0.3 + i) * 0.2 * s; break;
-    case "terminal":
-      p.sh = [-0.55 + Math.sin(t * 1.7 + i) * 0.08 * s, -0.48 - Math.sin(t * 1.3 + i) * 0.06 * s]; p.el = [-0.95, -0.9]; p.shRoll = [0.18, -0.18]; p.lean = 0.08; p.head = 0.12; p.headYaw = Math.sin(t * 0.5 + i) * 0.08 * s; break;
+    case "terminal": {
+      // Operating the console, with periods of inspecting the screen (a hand raised to the chin, leaning in).
+      const inspect = s > 0 && Math.sin(t * 0.11 + i * 1.3) > 0.55;
+      if (inspect) { p.sh = [-1.1, -0.2]; p.el = [-1.9, -0.4]; p.shRoll = [0.35, -0.1]; p.lean = 0.14; p.head = 0.18; p.headYaw = Math.sin(t * 0.4 + i) * 0.12; }
+      else { p.sh = [-0.55 + Math.sin(t * 1.7 + i) * 0.08 * s, -0.48 - Math.sin(t * 1.3 + i) * 0.06 * s]; p.el = [-0.95, -0.9]; p.shRoll = [0.18, -0.18]; p.lean = 0.08; p.head = 0.12; p.headYaw = Math.sin(t * 0.5 + i) * 0.08 * s; }
+      break;
+    }
     case "meetSeat": // at a team table with teammates (a project record says they work together): talk, gesture, listen
       p.hipY = 0.5; p.th = [-1.48, -1.48]; p.kn = [1.42, 1.42]; p.lean = 0.1 + Math.sin(t * 0.7 + i) * 0.04 * s;
       p.sh = [-0.55 + Math.max(0, Math.sin(t * 0.9 + i * 2)) * 0.35 * s, -0.45]; p.el = [-1.2 + Math.sin(t * 2.1 + i) * 0.15 * s, -1.0]; p.headYaw = Math.sin(t * 0.45 + i * 1.7) * 0.45 * s; p.head = 0.06; break;
@@ -98,6 +110,10 @@ function makeRig() {
     face: at(head, 0, 0.125, -0.008, 0.92, 1.12, 1.0), nose: at(head, 0, 0.1, 0.098),
     hair0: at(head, 0, 0.15, -0.015), hair1: at(head, 0, 0.15, -0.012), hair3: at(head, 0, 0.16, -0.02), hair4: at(head, 0, 0.165, -0.012), hair5: at(head, 0, 0.155, -0.03),
     beard: at(head, 0, 0.055, 0.03, 0.88, 0.8, 0.85), earpiece: at(head, 0.105, 0.11, 0.0),
+    // Appearance layers (appearance.ts): plate carrier with pouches, cap, comms headset.
+    plate: at(torso, 0, 0.3, 0.13), pouchL: at(torso, 0.085, 0.12, 0.15), pouchC: at(torso, 0, 0.12, 0.15), pouchR: at(torso, -0.085, 0.12, 0.15),
+    cap: at(head, 0, 0.17, -0.01, 1.0, 0.9, 1.04), brim: at(head, 0, 0.165, 0.1, 1, 1, 1, -0.15, 0, 0),
+    band: at(head, 0, 0.16, -0.005), cupL: at(head, 0.106, 0.11, -0.005), cupR: at(head, -0.106, 0.11, -0.005),
     holo: at(root, 0, 1.2, 0.55, 1, 1, 1, -0.45, 0, 0),
   };
   return { root, lie, hip, torso, head, neck, shL, shR, elL, elR, thL, thR, knL, knR, parts };
@@ -140,6 +156,9 @@ const PART_GEOMETRY: Record<PartName, (S: Seg) => THREE.BufferGeometry> = {
   hair5: (S) => new THREE.SphereGeometry(0.105, S(20), S(12), Math.PI * 0.2, Math.PI * 1.6, Math.PI * 0.2, Math.PI * 0.35), // receding (back and sides)
   beard: (S) => new THREE.SphereGeometry(0.1, S(16), S(10), 0, Math.PI * 2, Math.PI * 0.55, Math.PI * 0.35),
   earpiece: () => new THREE.BoxGeometry(0.018, 0.04, 0.026),
+  plate: () => new THREE.BoxGeometry(0.26, 0.24, 0.035), pouchL: () => new THREE.BoxGeometry(0.07, 0.08, 0.045), pouchC: () => new THREE.BoxGeometry(0.07, 0.08, 0.045), pouchR: () => new THREE.BoxGeometry(0.07, 0.08, 0.045),
+  cap: (S) => new THREE.SphereGeometry(0.108, S(18), S(10), 0, Math.PI * 2, 0, Math.PI * 0.42), brim: () => new THREE.BoxGeometry(0.15, 0.012, 0.08),
+  band: (S) => new THREE.TorusGeometry(0.108, 0.008, S(6), S(20), Math.PI).rotateY(Math.PI / 2), cupL: (S) => new THREE.CylinderGeometry(0.03, 0.03, 0.025, S(12)).rotateZ(Math.PI / 2), cupR: (S) => new THREE.CylinderGeometry(0.03, 0.03, 0.025, S(12)).rotateZ(Math.PI / 2),
   holo: () => new THREE.PlaneGeometry(0.56, 0.32),
 };
 /** Fixed colour per part, or a per-agent colour (skin, hair, uniform, the room's accent). */
@@ -149,11 +168,12 @@ const PART_COLOUR: Record<PartName, string | "skin" | "hair" | "uniform" | "trou
   insignia: "accent", deltL: "uniform", deltR: "uniform", uArmL: "uniform", uArmR: "uniform", patchL: "#22d3ee", patchR: "#22d3ee", fArmL: "uniform", fArmR: "uniform",
   cuffL: "#0b1018", cuffR: "#0b1018", handL: "skin", handR: "skin", thumbL: "skin", thumbR: "skin", neck: "skin", skull: "skin", jaw: "skin", earL: "skin", earR: "skin",
   face: "face", nose: "skin", hair0: "hair", hair1: "hair", hair3: "hair", hair4: "hair", hair5: "hair", beard: "hair", earpiece: "#0b0f16", holo: "accent",
+  plate: "vest", pouchL: "vest", pouchC: "vest", pouchR: "vest", cap: "vest", brim: "#0a0e15", band: "#0b0f16", cupL: "#0b0f16", cupR: "#0b0f16",
 };
 const GLOW: ReadonlySet<PartName> = new Set(["buckle", "pipeL", "pipeR", "patchL", "patchR", "holo", "insignia"]);
 const CLICKABLE: ReadonlySet<PartName> = new Set(["chest", "vest", "pelvis", "skull", "face", "thighL", "thighR"]);
 /** Fine details (sub-pixel from the Fleet view): not drawn while the camera is far above the building. */
-const DETAIL: ReadonlySet<PartName> = new Set(["buckle", "pipeL", "pipeR", "strapL", "strapR", "patchL", "patchR", "insignia", "cuffL", "cuffR", "thumbL", "thumbR", "earL", "earR", "nose", "kneeL", "kneeR", "collar", "earpiece", "deltL", "deltR"]);
+const DETAIL: ReadonlySet<PartName> = new Set(["pouchL", "pouchC", "pouchR", "brim", "band", "cupL", "cupR", "buckle", "pipeL", "pipeR", "strapL", "strapR", "patchL", "patchR", "insignia", "cuffL", "cuffR", "thumbL", "thumbR", "earL", "earR", "nose", "kneeL", "kneeR", "collar", "earpiece", "deltL", "deltR"]);
 const HAIR_PART: Record<number, PartName | null> = { 0: "hair0", 1: "hair1", 2: null, 3: "hair3", 4: "hair4", 5: "hair5" };
 
 // ── The face atlas: every agent's portrait (in its current condition), 8×8 cells of 128 px ─────────────────────────
@@ -226,6 +246,8 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
   useEffect(() => { positionsRef.current = own.current; }, [positionsRef]);
   const cap = Math.max(1, models.length);
   const atlas = useFaceAtlas(models);
+  // Each person's look (appearance.ts: identity-derived default, skin-ready); visual only.
+  const looks = useMemo(() => new Map(models.map((m) => [m.agent.id, appearanceOf(m.agent.id)])), [models]);
 
   const lod = q.pbr ? (q.detail >= 2 ? 1.25 : 1) : 0.5;
   const geometries = useMemo(() => {
@@ -264,7 +286,8 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
         const mesh = meshes.current.get(p);
         if (!mesh) continue;
         const kind = PART_COLOUR[p];
-        const c = kind === "skin" ? id.skin : kind === "hair" ? id.hair : kind === "uniform" ? "#2a3a52" : kind === "trousers" ? "#1b2535" : kind === "vest" ? "#141c29"
+        const look = looks.get(m.agent.id)!;
+        const c = kind === "skin" ? id.skin : kind === "hair" ? id.hair : kind === "uniform" ? look.colour.uniform : kind === "trousers" ? look.colour.trousers : kind === "vest" ? look.colour.vest
           : kind === "accent" ? DEPARTMENT[m.placement.department].accent : kind === "face" ? "#ffffff" : kind;
         colour.set(c);
         if (!GLOW.has(p) && kind !== "face") colour.multiplyScalar(lift);
@@ -275,7 +298,7 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
       }
     });
     for (const mesh of meshes.current.values()) if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [models, names, colour, deadGrey, cap, q.pbr]);
+  }, [models, names, colour, deadGrey, cap, q.pbr, looks]);
 
   const m4 = useMemo(() => new THREE.Matrix4(), []), sc = useMemo(() => new THREE.Matrix4(), []);
   const frustum = useMemo(() => new THREE.Frustum(), []), pv = useMemo(() => new THREE.Matrix4(), []), sphere = useMemo(() => new THREE.Sphere(new THREE.Vector3(), 1.3), []);
@@ -291,13 +314,34 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
       const b = birthState(births.get(id), now, reduceMotion);
       if (!st) {
         const start = b.phase !== "settled" ? { x: DEPARTMENT.command.x, z: DEPARTMENT.command.z + 6 } : { ...target };
-        st = { pos: start, yaw: Math.PI, phase: 0, pose: zero(), activity: "idle", ghost: 0 };
+        st = { pos: start, yaw: Math.PI, phase: 0, pose: zero(), activity: "idle", ghost: 0, goal: null, path: [], speed: 0, fast: false };
         states.current.set(id, st);
       }
-      // Walk towards the authoritative target (≈1.4 m/s; 2.2 m/s on long transitions between rooms).
-      const dx = target.x - st.pos.x, dz = target.z - st.pos.z, dist = Math.hypot(dx, dz), fast = dist > 10, speed = fast ? 2.2 : 1.4;
-      const step = speed * Math.min(dt, 0.1), moving = !reduceMotion && dist > 0.02;
-      if (!moving) { st.pos.x = target.x; st.pos.z = target.z; } else { const f = Math.min(1, step / dist); st.pos.x += dx * f; st.pos.z += dz * f; st.phase += (step / (fast ? 0.9 : 0.75)) * Math.PI; }
+      // Walk to the authoritative target THROUGH the building (route.ts: out of the room's opening, along the corridors
+      // in the agent's own lane, in through the destination's opening) — never through walls. Speed eases in and out;
+      // long moves between rooms are a brisk walk.
+      if (!st.goal || st.goal.x !== target.x || st.goal.z !== target.z) {
+        st.goal = { ...target };
+        const route = reduceMotion ? [target] : routeThrough([{ ...st.pos }, target]).slice(1);
+        const lane = ((seedOf(id) % 5) - 2) * 0.22; // spread people across the corridor width
+        st.path = route.map((p, k) => (k < route.length - 1 ? { x: p.x + lane, z: p.z + lane } : p));
+        st.fast = pathLength([st.pos, ...st.path]) > 12;
+      }
+      let moving = false, dx = 0, dz = 0;
+      if (reduceMotion) { st.pos.x = target.x; st.pos.z = target.z; st.path = []; st.speed = 0; }
+      else if (st.path.length) {
+        const wp = st.path[0]; dx = wp.x - st.pos.x; dz = wp.z - st.pos.z;
+        const d = Math.hypot(dx, dz), remaining = d + pathLength(st.path);
+        const cruise = st.fast ? 2.1 : 1.35, want = Math.min(cruise, 0.35 + remaining * 0.9); // slow down on arrival
+        const turn = Math.abs(Math.atan2(Math.sin(Math.atan2(dx, dz) - st.yaw), Math.cos(Math.atan2(dx, dz) - st.yaw)));
+        st.speed += ((turn > 1.2 ? want * 0.45 : want) - st.speed) * Math.min(1, dt * 3); // accelerate, ease into turns
+        const step = st.speed * Math.min(dt, 0.1);
+        if (d <= Math.max(step, 0.02)) { st.pos.x = wp.x; st.pos.z = wp.z; st.path.shift(); }
+        else { st.pos.x += (dx / d) * step; st.pos.z += (dz / d) * step; }
+        st.phase += (step / (st.fast ? 0.9 : 0.75)) * Math.PI;
+        moving = st.path.length > 0 || d > step;
+      } else st.speed = 0;
+      const fast = st.fast;
       own.current.set(id, { x: st.pos.x, z: st.pos.z });
       const station = stations.get(id), atStation = !!station && Math.hypot(station.x - st.pos.x, station.z - st.pos.z) < 0.05;
       const spot = spots.get(id), atSpot = !!spot && Math.hypot(spot.x - st.pos.x, spot.z - st.pos.z) < 0.05;
@@ -308,10 +352,12 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
         : atSpot ? "terminal" : m.placement.department === "floor" ? "idle" : "terminal";
       st.activity = activity;
       // Stationary: face the equipment (the spot's direction; workstations face north).
-      const wantYaw = moving ? Math.atan2(dx, dz) : atSpot ? spot!.yaw : Math.PI;
+      const wantYaw = moving && (dx || dz) ? Math.atan2(dx, dz) : atSpot ? spot!.yaw : Math.PI;
       let dy = wantYaw - st.yaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
-      st.yaw += dy * (reduceMotion ? 1 : Math.min(1, dt * 8));
-      blend(st.pose, targetPose(activity, t, st.phase, i, reduceMotion), k);
+      st.yaw += dy * (reduceMotion ? 1 : Math.min(1, dt * (moving ? 6 : 4)));
+      // Sitting down and standing up take a moment (slower blend while the hips change height).
+      const settling = Math.abs(targetPose(activity, t, st.phase, i, true).hipY - st.pose.hipY) > 0.05;
+      blend(st.pose, targetPose(activity, t, st.phase, i, reduceMotion), settling && !reduceMotion ? Math.min(1, dt * 3) : k);
       // Fade out of the camera's line of sight to the selected agent.
       const ghostTarget = ghosts.has(id) && id !== selected ? 1 : 0;
       st.ghost += (ghostTarget - st.ghost) * (reduceMotion ? 1 : Math.min(1, dt * 8));
@@ -335,17 +381,23 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
       r.thL.rotation.set(P.th[0], 0, 0); r.thR.rotation.set(P.th[1], 0, 0);
       r.knL.rotation.set(P.kn[0], 0, 0); r.knR.rotation.set(P.kn[1], 0, 0);
       r.parts.earpiece.position.x = ident.earpiece < 0 ? 0.105 : -0.105;
+      const boot = looks.get(id)!.footwear === "tacticalBoots" ? 1.12 : 1; r.parts.bootL.scale.set(boot, boot, boot); r.parts.bootR.scale.set(boot, boot, boot);
       r.root.updateMatrixWorld(true);
       const hairPart = HAIR_PART[ident.hairStyle], fade = 1 - st.ghost;
       if (fade < 0.999) sc.makeScale(fade, fade, fade);
       for (const p of names) {
         const mesh = meshes.current.get(p);
         if (!mesh) continue;
+        const look = looks.get(id)!;
         const show = b.visible && fade > 0.02
-          && (p !== "beard" || ident.facialHair >= 3)
+          && (p !== "beard" || look.facialHair >= 3)
           && (!p.startsWith("hair") || p === hairPart)
-          && (p !== "earpiece" || ident.earpiece !== 0)
-          && (p !== "holo" || activity === "terminal");
+          && (p !== "earpiece" || look.accessories.includes("earpiece"))
+          && (p !== "holo" || (activity === "terminal" && look.accessories.includes("holoPanel")))
+          && (p !== "vest" || look.armour !== "none")
+          && (!(p === "plate" || p.startsWith("pouch")) || look.armour === "plateCarrier")
+          && (!(p === "cap" || p === "brim") || look.headgear === "cap")
+          && (!(p === "band" || p === "cupL" || p === "cupR") || look.headgear === "headset");
         if (!show || (far && DETAIL.has(p))) continue;
         const j = drawn.get(p) ?? 0;
         drawn.set(p, j + 1);

@@ -38,8 +38,8 @@ export const Lights = memo(function Lights({ q, lights }: { q: HQProfile; lights
     <ambientLight intensity={!q.pbr ? 1.1 : room ? 0.16 : 0.5} color="#8ea6c8" />
     <hemisphereLight args={["#2c4a72", "#04070d", !q.pbr ? 1.0 : room ? 0.32 : 0.75]} />
     <directionalLight ref={sun} position={[22, 46, 34]} intensity={!q.pbr ? 1.5 : room ? 0.95 : 1.6} color="#c9d8f2" castShadow={!!q.shadows} target-position={[0, 0, 2]} />
-    {room && lights.map((l) => <pointLight key={l.dep} position={[l.x, l.y, l.z]} color={l.colour} intensity={(q.physical ? 5 : 4) * l.mood} distance={11} decay={1.7} />)}
-    {room && lights.map((l) => <pointLight key={`${l.dep}:fill`} position={[l.x, l.y + 0.2, l.z + 1.5]} color="#f1f5ff" intensity={6 * l.mood} distance={10} decay={1.9} />)}
+    {room && lights.map((l) => <pointLight key={l.dep} position={[l.x, l.y, l.z]} color={l.colour} intensity={(q.physical ? 3.4 : 2.8) * l.mood} distance={15} decay={1.3} />)}
+    {room && lights.map((l) => <pointLight key={`${l.dep}:fill`} position={[l.x, l.y + 0.2, l.z + 1.5]} color="#f1f5ff" intensity={5 * l.mood} distance={14} decay={1.4} />)}
   </>;
 });
 
@@ -65,13 +65,17 @@ export function Environment({ q }: { q: HQProfile }) {
  */
 export function PostFX({ q }: { q: HQProfile }) {
   const { gl, scene, camera, size } = useThree();
+  const dpr = useThree((s) => s.viewport.dpr);
   const composer = useMemo(() => {
     if (!q.bloom) return null;
     const c = new EffectComposer(gl);
     c.addPass(new RenderPass(scene, camera));
     if (q.physical) {
-      const ao = new GTAOPass(scene, camera, size.width, size.height);
-      ao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.5, thickness: 1.2, scale: 1.4, samples: 16 });
+      // Ambient occlusion at half resolution (it is low-frequency; the blend upsamples it).
+      const ao = new GTAOPass(scene, camera, size.width / 2, size.height / 2);
+      const setAoSize = ao.setSize.bind(ao);
+      ao.setSize = (w: number, h: number) => setAoSize(Math.max(1, Math.round(w / 2)), Math.max(1, Math.round(h / 2)));
+      ao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.5, thickness: 1.2, scale: 1.4, samples: 10 });
       ao.blendIntensity = 0.95;
       c.addPass(ao);
     }
@@ -81,9 +85,34 @@ export function PostFX({ q }: { q: HQProfile }) {
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- size handled below
   }, [gl, scene, camera, q.bloom, q.physical]);
-  useEffect(() => { composer?.setSize(size.width, size.height); composer?.setPixelRatio(gl.getPixelRatio()); }, [composer, size, gl]);
+  useEffect(() => { composer?.setPixelRatio(dpr); composer?.setSize(size.width, size.height); }, [composer, size, dpr]);
   useEffect(() => () => composer?.dispose(), [composer]);
   useFrame(() => { if (composer) composer.render(); else gl.render(scene, camera); }, 1);
+  return null;
+}
+
+/**
+ * Adaptive internal resolution (High/Ultra): the pixel ratio follows the measured frame rate within the level's range —
+ * down (to 1.0) when frames drop below the level's target, back up when there is headroom. The world and every effect
+ * stay on; only the internal resolution moves.
+ */
+export function AdaptiveResolution({ q }: { q: HQProfile }) {
+  const setDpr = useThree((s) => s.setDpr), get = useThree((s) => s.get);
+  const st = useRef({ t0: 0, frames: 0, dpr: Math.min(q.dpr, q.physical ? 1.5 : q.dpr) });
+  useEffect(() => { st.current = { t0: 0, frames: 0, dpr: Math.min(q.dpr, q.physical ? 1.5 : q.dpr) }; setDpr(st.current.dpr); }, [q, setDpr]);
+  useFrame(() => {
+    if (!q.bloom) return;
+    const s = st.current, now = performance.now();
+    if (!s.t0) { s.t0 = now; s.frames = 0; return; }
+    s.frames++;
+    if (now - s.t0 < 1500) return;
+    const fps = (s.frames * 1000) / (now - s.t0), target = q.physical ? 32 : 48;
+    let next = s.dpr;
+    if (fps < target && s.dpr > 1) next = Math.max(1, s.dpr - 0.25);
+    else if (fps > target + 22 && s.dpr < q.dpr) next = Math.min(q.dpr, s.dpr + 0.25);
+    if (next !== s.dpr) { s.dpr = next; setDpr(next); void get; }
+    s.t0 = now; s.frames = 0;
+  });
   return null;
 }
 
@@ -114,10 +143,19 @@ export function FloorReflections({ q }: { q: HQProfile }) {
   const mirror = useMemo(() => {
     if (!q.reflections) return null;
     const r = new Reflector(new THREE.PlaneGeometry(WORLD.maxX - WORLD.minX + 6, WORLD.maxZ - WORLD.minZ + 6), {
-      clipBias: 0.003, textureWidth: Math.round(size.width * 0.6), textureHeight: Math.round(size.height * 0.6), color: 0xbfd6ff, shader: FLOOR_REFLECTION, multisample: 0,
+      clipBias: 0.003, textureWidth: Math.round(size.width * 0.4), textureHeight: Math.round(size.height * 0.4), color: 0xbfd6ff, shader: FLOOR_REFLECTION, multisample: 0,
     });
     const m = r.material as THREE.ShaderMaterial;
     m.transparent = true; m.blending = THREE.AdditiveBlending; m.depthWrite = false;
+    // Cost control: the mirror view is re-rendered every frame while the camera moves (so the projection never drifts)
+    // and every third frame while it is still (people and packets still reflect at ~20 Hz).
+    // (Compared with a tolerance: a camera easing into place changes by tiny amounts every frame.)
+    const render = r.onBeforeRender.bind(r), last = new THREE.Matrix4();
+    let n = 0;
+    const moved = (m: THREE.Matrix4) => { for (let i = 0; i < 16; i++) if (Math.abs(m.elements[i] - last.elements[i]) > 2e-4) return true; return false; };
+    r.onBeforeRender = (renderer, scene, camera, ...rest) => {
+      if (moved(camera.matrixWorld) || n++ % 4 === 0) { last.copy(camera.matrixWorld); render(renderer, scene, camera, ...rest); }
+    };
     r.rotation.x = -Math.PI / 2; r.position.set((WORLD.minX + WORLD.maxX) / 2, 0.136, (WORLD.minZ + WORLD.maxZ) / 2); r.renderOrder = 2;
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- created once per level; size changes keep the texture
@@ -126,25 +164,41 @@ export function FloorReflections({ q }: { q: HQProfile }) {
   return mirror ? <primitive object={mirror} /> : null;
 }
 
-/** Pools of light on the floor under each room's ceiling fixtures (Medium and above; soft additive decals). */
+/**
+ * Architectural light (Medium and above): soft, fixture-shaped light on the floor beneath each linear ceiling fixture
+ * (no round point-light pools), and a gentle wash down each back wall from its cornice. Additive decals, subtle; the
+ * department colour only tints them.
+ */
 export const LightPools = memo(function LightPools({ q, lights }: { q: HQProfile; lights: LightSpot[] }) {
   const tex = useMemo(() => {
-    const c = document.createElement("canvas"); c.width = c.height = 128;
-    const g = c.getContext("2d")!, grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-    grd.addColorStop(0, "rgba(255,255,255,0.32)"); grd.addColorStop(0.5, "rgba(255,255,255,0.1)"); grd.addColorStop(1, "rgba(255,255,255,0)");
-    g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
-    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+    // A soft rounded rectangle (the fixture's footprint, feathered) and a vertical wash gradient.
+    const pool = document.createElement("canvas"); pool.width = 256; pool.height = 128;
+    const g = pool.getContext("2d")!;
+    for (let i = 0; i < 24; i++) { const k = i / 24; g.fillStyle = `rgba(255,255,255,${0.018 * (1 - k)})`; g.beginPath(); g.roundRect(20 + k * 90, 12 + k * 44, 216 - k * 180, 104 - k * 88, 40 * (1 - k) + 6); g.fill(); }
+    const wash = document.createElement("canvas"); wash.width = 16; wash.height = 128;
+    const w = wash.getContext("2d")!, grd = w.createLinearGradient(0, 0, 0, 128);
+    grd.addColorStop(0, "rgba(255,255,255,0.32)"); grd.addColorStop(0.35, "rgba(255,255,255,0.10)"); grd.addColorStop(1, "rgba(255,255,255,0)");
+    w.fillStyle = grd; w.fillRect(0, 0, 16, 128);
+    const mk = (c: HTMLCanvasElement) => { const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
+    return { pool: mk(pool), wash: mk(wash) };
   }, []);
-  useEffect(() => () => tex.dispose(), [tex]);
-  const pools = useMemo(() => lights.flatMap((l) => {
-    const d = DEPARTMENT[l.dep];
-    return [-1, 1].flatMap((i) => [0.3, 0.66].map((f) => ({ key: `${l.dep}:${i}:${f}`, x: d.x + (i * d.w) / 4, z: d.z - d.d / 2 + d.d * f, mood: l.mood, colour: l.colour })));
+  useEffect(() => () => { tex.pool.dispose(); tex.wash.dispose(); }, [tex]);
+  const items = useMemo(() => lights.flatMap((l) => {
+    const d = DEPARTMENT[l.dep], tint = new THREE.Color("#fff3df").lerp(new THREE.Color(l.colour), 0.18);
+    const pools = [-1, 1].flatMap((i) => [0.3, 0.66].map((f) => ({ key: `${l.dep}:${i}:${f}`, kind: "pool" as const, x: d.x + (i * d.w) / 4, z: d.z - d.d / 2 + d.d * f, w: 3.4, h: 1.5, c: tint.clone().multiplyScalar(0.17 * l.mood) })));
+    const wash = { key: `${l.dep}:wash`, kind: "wash" as const, x: d.x, z: d.z - d.d / 2 + 0.16, w: d.w - 1.2, h: 3.2, c: new THREE.Color(l.colour).lerp(new THREE.Color("#e8f1ff"), 0.6).multiplyScalar(0.5 * l.mood) };
+    return [...pools, wash];
   }), [lights]);
   if (!q.pbr) return null;
-  return <>{pools.map((p) => <mesh key={p.key} position={[p.x, 0.135, p.z]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={1}>
-    <planeGeometry args={[3.0, 2.3]} />
-    <meshBasicMaterial map={tex} color={new THREE.Color("#fff3df").lerp(new THREE.Color(p.colour), 0.25).multiplyScalar(0.4 * p.mood)} transparent depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
-  </mesh>)}</>;
+  return <>{items.map((p) => p.kind === "pool"
+    ? <mesh key={p.key} position={[p.x, 0.135, p.z]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={1}>
+        <planeGeometry args={[p.w, p.h]} />
+        <meshBasicMaterial map={tex.pool} color={p.c} transparent depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+      </mesh>
+    : <mesh key={p.key} position={[p.x, 3.6 - 0.35 - p.h / 2, p.z]} renderOrder={1}>
+        <planeGeometry args={[p.w, p.h]} />
+        <meshBasicMaterial map={tex.wash} color={p.c} transparent depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+      </mesh>)}</>;
 });
 
 /** Ultra: light shafts under ceiling fixtures, haze; High/Ultra: drifting dust (ambient, meaningless motion). */

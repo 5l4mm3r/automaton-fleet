@@ -21,6 +21,8 @@ export interface ScreenSpot { id: string; dep: DepartmentId; kind: ScreenKind; w
 export interface LightSpot { dep: DepartmentId; x: number; y: number; z: number; colour: string; mood: number }
 export interface BeaconSpot { x: number; y: number; z: number }
 /** Where an agent works in a room: position, the direction it faces (yaw, three.js about +Y) and its posture. */
+/** A tall static obstacle (footprint and height) the Agent View camera must not look through. */
+export interface Occluder { x0: number; z0: number; x1: number; z1: number; h: number }
 export interface WorkSpot { x: number; z: number; yaw: number; pose: "seat" | "stand"; /** A place at a shared table (team projects meet here). */ table?: boolean }
 
 export const WALL_H = 3.6;
@@ -28,7 +30,7 @@ const T = 0.3; // wall thickness
 
 export interface WorldPlan {
   builder: GeoBuilder; details: GeoBuilder; screens: ScreenSpot[]; lights: LightSpot[]; beacons: BeaconSpot[];
-  core: { x: number; y: number; z: number }; spots: Record<DepartmentId, WorkSpot[]>;
+  core: { x: number; y: number; z: number }; spots: Record<DepartmentId, WorkSpot[]>; occluders: Occluder[];
 }
 
 /** Yaw that faces from (x, z) towards (tx, tz). */
@@ -38,7 +40,9 @@ const MOOD: Record<DepartmentId, number> = { command: 1, treasury: 0.9, opportun
 
 export function buildWorld(): WorldPlan {
   const b = new GeoBuilder(), details = new GeoBuilder();
-  const screens: ScreenSpot[] = [], lights: LightSpot[] = [], beacons: BeaconSpot[] = [];
+  const screens: ScreenSpot[] = [], lights: LightSpot[] = [], beacons: BeaconSpot[] = [], occluders: Occluder[] = [];
+  /** Register a tall obstacle (axis-aligned footprint w × d at x, z; height h). */
+  const occ = (x: number, z: number, w: number, d: number, h: number) => { if (h >= 1.3) occluders.push({ x0: x - w / 2, z0: z - d / 2, x1: x + w / 2, z1: z + d / 2, h }); };
   const spots = Object.fromEntries(DEPARTMENTS.map((d) => [d.id, [] as WorkSpot[]])) as unknown as Record<DepartmentId, WorkSpot[]>;
   const W = WORLD, cxW = (W.minX + W.maxX) / 2, czW = (W.minZ + W.maxZ) / 2;
 
@@ -79,10 +83,29 @@ export function buildWorld(): WorldPlan {
     b.box("darkMetal", 0.5, 2.4, 0.18, sx * 14.5, 1.2, -4); b.box("glow:#22d3ee", 0.4, 0.04, 0.2, sx * 14.5, 2.3, -4);
   }
 
+  // One headquarters: a structural facade around the complex (columns, a roof-edge beam above the room height, a lit
+  // fascia), service conduits along both spines at every level, and canopies over the open concourses.
+  const fx0 = W.minX - 3, fx1 = W.maxX + 3, fz0 = W.minZ - 3, fz1 = W.maxZ + 3, FH = 4.6;
+  for (let x = fx0; x <= fx1 + 0.01; x += 6) for (const z of [fz0, fz1]) b.box("darkMetal", 0.32, FH, 0.32, x, FH / 2, z);
+  for (let z = fz0; z <= fz1 + 0.01; z += 6) for (const x of [fx0, fx1]) b.box("darkMetal", 0.32, FH, 0.32, x, FH / 2, z);
+  for (const z of [fz0, fz1]) { b.box("wallTrim", fx1 - fx0, 0.3, 0.42, (fx0 + fx1) / 2, FH, z); b.box("glow:#0e7490", fx1 - fx0, 0.04, 0.05, (fx0 + fx1) / 2, FH - 0.2, z + (z < 0 ? 0.22 : -0.22)); }
+  for (const x of [fx0, fx1]) { b.box("wallTrim", 0.42, 0.3, fz1 - fz0, x, FH, (fz0 + fz1) / 2); b.box("glow:#0e7490", 0.05, 0.04, fz1 - fz0, x + (x < 0 ? 0.22 : -0.22), FH - 0.2, (fz0 + fz1) / 2); }
+  for (const x of SPINE_X) {
+    b.box("darkMetal", 0.5, 0.1, W.maxZ - W.minZ - 4, x, WALL_H + 0.55, czW); b.box("rubber", 0.36, 0.08, W.maxZ - W.minZ - 4, x, WALL_H + 0.5, czW);
+    b.box("glow:#0e4a5c", 0.06, 0.03, W.maxZ - W.minZ - 4, x, WALL_H + 0.48, czW);
+    for (let z = W.minZ + 2; z < W.maxZ - 2; z += 6) b.box("darkMetal", 0.06, 0.9, 0.06, x, WALL_H + 0.05, z);
+  }
+  for (const sx of [-1, 1]) {
+    const cx = sx * 18, cz = -4;
+    for (const [px, pz] of [[-4, -5], [4, -5], [-4, 5], [4, 5]]) b.box("darkMetal", 0.18, 4.4, 0.18, cx + px, 2.2, cz + pz);
+    for (let i = 0; i < 9; i++) b.box("wallTrim", 8.4, 0.06, 0.24, cx, 4.45, cz - 4.4 + i * 1.1);
+    b.box("glow:#164e63", 8.2, 0.03, 0.05, cx, 4.38, cz - 5); b.box("glow:#164e63", 8.2, 0.03, 0.05, cx, 4.38, cz + 5);
+  }
+
   for (const d of DEPARTMENTS) { b.chunk = d.id; room(d); }
   b.chunk = "shell";
   gantries();
-  return { builder: b, details, screens, lights, beacons, core: { x: 0, y: 0.5, z: -31.5 }, spots };
+  return { builder: b, details, screens, lights, beacons, core: { x: 0, y: 0.5, z: -31.5 }, spots, occluders };
 
   /** A room: floor with an accent inset, walls with doorways, a cutaway front parapet, a sign, ceiling housings, cable trays. */
   function room(d: Department) {
@@ -119,8 +142,10 @@ export function buildWorld(): WorldPlan {
     for (const sx of [-1, 1]) {
       const cx = d.x + sx * (open / 2 + seg / 2);
       b.box("wallTrim", seg, 0.9, T, cx, 0.45, z1); b.box("glass", seg, 0.7, 0.04, cx, 1.25, z1); b.box(glow, seg, 0.03, 0.05, cx, 0.92, z1 + 0.12);
-      b.box("darkMetal", 0.12, 1.65, 0.12, d.x + sx * (open / 2), 0.82, z1);
+      b.box("darkMetal", 0.14, 1.65, 0.14, d.x + sx * (open / 2), 0.82, z1);
     }
+    // Entrance threshold: a lit strip across the opening in the department's colour (nothing overhead in the view).
+    b.box("darkMetal", open, 0.03, 0.5, d.x, 0.135, z1); b.box(glow, open - 0.2, 0.02, 0.06, d.x, 0.15, z1 + 0.12);
     // Sign above the back wall's centre, ceiling light housings (pools of light below them), the room light.
     screens.push({ id: `${d.id}:sign`, dep: d.id, kind: "sign", w: Math.min(7, d.w - 4), h: 0.55, x: d.x, y: WALL_H - 0.6, z: z0 + T / 2 + 0.02, ry: 0 });
     lights.push({ dep: d.id, x: d.x, y: WALL_H - 0.3, z: d.z, colour: d.accent, mood: MOOD[d.id] });
@@ -168,6 +193,9 @@ export function buildWorld(): WorldPlan {
         b.box("darkMetal", 0.05, 0.2, 0.05, stand.x, 0.88, stand.z, ry); b.box("darkMetal", 0.22, 0.015, 0.16, stand.x, 0.79, stand.z, ry);
       }
       const kb = at(0, 0.06); b.box("rubber", 0.44, 0.02, 0.14, kb.x, 0.79, kb.z, ry);
+      // Under-desk light along the front edge and the monitors' spill on the desktop.
+      const edge = at(0, 0.36); b.box("glow:#0b3d52", 1.2, 0.015, 0.02, edge.x, 0.7, edge.z, ry);
+      const spill = at(0, -0.05); b.box("glow:#0a2433", 0.9 * Math.min(1.6, monitors), 0.004, 0.22, spill.x, 0.787, spill.z, ry);
       const lamp = at(0.58, -0.22); b.cyl("darkMetal", 0.012, 0.012, 0.4, lamp.x, 0.79, lamp.z, 6); b.box("glow:#fde7c4", 0.16, 0.02, 0.06, lamp.x, 1.19, lamp.z, ry);
       const ped = at(-0.42, 0.02); b.box("darkMetal", 0.36, 0.52, 0.5, ped.x, 0.27, ped.z, ry);
       if (seat) { const s = at(0, 0.62), yaw = ry + Math.PI; chair(s.x, s.z, yaw); S.push({ x: s.x, z: s.z, yaw, pose: "seat" }); }
@@ -181,11 +209,11 @@ export function buildWorld(): WorldPlan {
       if (spot) S.push({ x: x + Math.sin(ry) * 0.75, z: z + Math.cos(ry) * 0.75, yaw: ry + Math.PI, pose: "stand" });
     };
     const rack = (x: number, z: number, led: MatKey, h = 2.2) => {
-      b.box("darkMetal", 0.7, h, 0.9, x, h / 2, z); b.box("metal", 0.66, h - 0.1, 0.02, x, h / 2, z + 0.45);
+      b.box("darkMetal", 0.7, h, 0.9, x, h / 2, z); b.box("metal", 0.66, h - 0.1, 0.02, x, h / 2, z + 0.45); occ(x, z, 0.7, 0.9, h);
       for (let r = 0; r < Math.floor(h / 0.24); r++) { b.box(r % 3 ? "rubber" : led, 0.42, 0.03, 0.01, x - 0.05, 0.3 + r * 0.21, z + 0.465); b.box(led, 0.04, 0.03, 0.01, x + 0.24, 0.3 + r * 0.21, z + 0.465); }
     };
     const shelf = (x: number, w: number, h = 2.4) => {
-      b.box("darkMetal", w, h, 0.45, x, h / 2, back + 0.25);
+      b.box("darkMetal", w, h, 0.45, x, h / 2, back + 0.25); occ(x, back + 0.25, w, 0.45, h);
       for (let r = 0; r < 4; r++) { const y = 0.35 + r * (h - 0.4) / 4; b.box("metal", w - 0.1, 0.04, 0.42, x, y, back + 0.27);
         for (let i = 0; i < Math.floor(w / 0.16); i++) { const hh = 0.24 + ((i * 37 + r * 11) % 7) * 0.02; b.box(i % 5 === 0 ? acc : "paper", 0.12, hh, 0.3, x - w / 2 + 0.12 + i * 0.16, y + hh / 2 + 0.02, back + 0.28); } }
     };
@@ -238,6 +266,9 @@ export function buildWorld(): WorldPlan {
         for (const sx of [-1, 1]) b.box("darkMetal", 0.12, 1.5, 0.12, d.x + sx * 4.3, WALL_H + 0.55, z0 + 0.05);
         b.box("darkMetal", 9.0, 1.86, 0.14, d.x, WALL_H + 0.86, z0 + 0.3, 0, -0.72);
         b.box("gold", 9.04, 0.05, 0.16, d.x, WALL_H + 0.18, z0 + 0.92, 0, -0.72);
+        // Built into the architecture: two pylons from the floor, gold-inlaid, and a lit gantry that lights the board.
+        for (const sx of [-1, 1]) { const x = d.x + sx * 4.75; b.box("darkMetal", 0.42, WALL_H + 1.9, 0.42, x, (WALL_H + 1.9) / 2, z0 + 0.45); b.box("gold", 0.05, WALL_H + 1.5, 0.05, x - sx * 0.22, (WALL_H + 1.5) / 2 + 0.2, z0 + 0.67); }
+        b.box("darkMetal", 9.9, 0.18, 0.42, d.x, WALL_H + 1.9, z0 + 0.6); b.box("glow:#fde7c4", 8.6, 0.03, 0.08, d.x, WALL_H + 1.8, z0 + 0.82);
         screens.push({ id: `${d.id}:banner`, dep: d.id, kind: "banner", w: 8.7, h: 1.6, x: d.x, y: WALL_H + 0.91, z: z0 + 0.36, ry: 0, rx: -0.72 });
         for (const sx of [-1, 1] as const) {
           const wx = sx < 0 ? x0 : x1, ry = sx < 0 ? Math.PI / 2 : -Math.PI / 2;
@@ -266,6 +297,10 @@ export function buildWorld(): WorldPlan {
         status(2.6, 1.4, d.x - 4.4, 2.2);
         for (let i = 0; i < 3; i++) { b.box("darkMetal", 0.9, 1.0, 0.5, d.x - 5.5 + i * 1.0, 0.5, back + 0.35); b.box("screen", 0.7, 0.4, 0.01, d.x - 5.5 + i * 1.0, 1.15, back + 0.5, 0, -0.3); }
         table(d.x, d.z + 1.4, 1.15, 4, "stand", "screen");
+        // Secondary analysis desks behind a glass partition, storage, and a signals cabinet.
+        for (const sx of [-1, 1] as const) { desk(d.x + sx * 4.2, z0 + 2.4, 0, 2); b.box("glass", 2.6, 1.2, 0.03, d.x + sx * 4.2, 1.35, z0 + 3.35); b.box("darkMetal", 2.6, 0.05, 0.05, d.x + sx * 4.2, 1.95, z0 + 3.35); }
+        for (let i = 0; i < 4; i++) { b.box("metal", 0.5, 0.9, 0.45, x1 - 0.45, 0.45, d.z + 4.0 - i * 0.55 - 0.2); b.box(acc, 0.02, 0.04, 0.2, x1 - 0.7, 0.75, d.z + 4.0 - i * 0.55 - 0.2); }
+        b.box("darkMetal", 0.6, 1.8, 0.5, x0 + 0.45, 0.9, d.z + 3.6); occ(x0 + 0.45, d.z + 3.6, 0.6, 0.5, 1.8); for (let r = 0; r < 6; r++) b.box(glow, 0.3, 0.02, 0.01, x0 + 0.71, 0.4 + r * 0.24, d.z + 3.6);
         // The survey display above the table: rings and signal columns (a display surface, not data).
         for (const [r, y] of [[0.9, 0.95], [0.6, 1.15], [0.32, 1.35]] as const) b.ring(glow, r, 0.012, d.x, y, d.z + 1.4, 48);
         for (let i = 0; i < 9; i++) { const a = (i / 9) * Math.PI * 2, h = 0.12 + ((i * 7) % 5) * 0.07; b.box(glow, 0.04, h, 0.04, d.x + Math.cos(a) * 0.55, 0.8 + h / 2, d.z + 1.4 + Math.sin(a) * 0.55); }
@@ -281,8 +316,11 @@ export function buildWorld(): WorldPlan {
         // board, lockers, a supervisor console and aisle markings.
         status(5.0, 1.8, d.x - 2.8, 2.25);
         wallScreen(`${d.id}:board`, "board", 3.4, 1.8, d.x + 2.0, 2.25, "floor:board");
-        for (let i = 0; i < 8; i++) { b.box("metal", 0.55, 2.0, 0.5, x0 + 0.6, 1.0, z0 + 1.2 + i * 0.6); b.box(acc, 0.04, 0.3, 0.02, x0 + 0.88, 1.6, z0 + 1.2 + i * 0.6); b.box("darkMetal", 0.02, 0.12, 0.03, x0 + 0.88, 1.1, z0 + 1.2 + i * 0.6); }
+        occ(x0 + 0.6, z0 + 1.2 + 3.5 * 0.6, 0.55, 8 * 0.6, 2.0); for (let i = 0; i < 8; i++) { b.box("metal", 0.55, 2.0, 0.5, x0 + 0.6, 1.0, z0 + 1.2 + i * 0.6); b.box(acc, 0.04, 0.3, 0.02, x0 + 0.88, 1.6, z0 + 1.2 + i * 0.6); b.box("darkMetal", 0.02, 0.12, 0.03, x0 + 0.88, 1.1, z0 + 1.2 + i * 0.6); }
         console(x1 - 1.4, z0 + 1.4, 0, 2.0, false);
+        // Storage along the right wall and an overhead operations bar.
+        for (let i = 0; i < 6; i++) { b.box("metal", 0.5, 1.1, 0.45, x1 - 0.45, 0.55, z0 + 3.2 + i * 0.6); b.box("darkMetal", 0.02, 0.06, 0.25, x1 - 0.69, 0.9, z0 + 3.2 + i * 0.6); }
+        b.box("darkMetal", d.w - 2, 0.12, 0.3, d.x, WALL_H - 0.25, z0 + 2.4); b.box(glow, d.w - 2.4, 0.02, 0.05, d.x, WALL_H - 0.32, z0 + 2.52);
         for (let z = z0 + 3.0; z < z1 - 1; z += 1.6) b.box("wallTrim", d.w - 3, 0.01, 0.03, d.x, 0.13, z - 0.8);
         break;
       }
@@ -313,6 +351,13 @@ export function buildWorld(): WorldPlan {
         for (const [zz, yy] of nodes) b.sphere(glow, 0.07, gx - 0.04, yy, d.z - 1.2 + zz, 10);
         for (let i = 1; i < nodes.length; i++) { const [za, ya] = nodes[i - 1], [zb, yb] = nodes[i], l = Math.hypot(zb - za, yb - ya); b.box("glow:#1e3a8a", 0.01, 0.015, l, gx - 0.04, (ya + yb) / 2, d.z - 1.2 + (za + zb) / 2, 0, -Math.atan2(yb - ya, zb - za)); }
         for (const sx of [-1, 1] as const) { const wx = sx < 0 ? x0 : x1; desk(wx - sx * 0.85, d.z + 2.6, sx < 0 ? Math.PI / 2 : -Math.PI / 2, 1); }
+        // Study carrels with privacy partitions, side shelving and a catalogue kiosk.
+        for (const sx of [-1, 1] as const) {
+          desk(d.x + sx * 4.6, z0 + 3.2, 0, 1); b.box("fabric", 0.05, 1.1, 0.9, d.x + sx * 4.6 + 0.72, 1.1, z0 + 2.9); b.box("fabric", 0.05, 1.1, 0.9, d.x + sx * 4.6 - 0.72, 1.1, z0 + 2.9); occ(d.x + sx * 4.6 + 0.72, z0 + 2.9, 0.05, 0.9, 1.65); occ(d.x + sx * 4.6 - 0.72, z0 + 2.9, 0.05, 0.9, 1.65);
+          const wx = sx < 0 ? x0 + 0.35 : x1 - 0.35;
+          b.box("darkMetal", 0.45, 2.2, 2.2, wx, 1.1, d.z + 0.2); occ(wx, d.z + 0.2, 0.45, 2.2, 2.2); for (let r = 0; r < 4; r++) { b.box("metal", 0.42, 0.03, 2.1, wx, 0.4 + r * 0.5, d.z + 0.2); for (let i = 0; i < 12; i++) b.box(i % 4 ? "paper" : acc, 0.3, 0.26 + (i % 3) * 0.04, 0.12, wx, 0.55 + r * 0.5, d.z - 0.75 + i * 0.16); }
+        }
+        b.box("darkMetal", 0.5, 1.2, 0.4, d.x + 2.4, 0.6, d.z + 3.3); b.box("screen", 0.4, 0.3, 0.01, d.x + 2.4, 1.05, d.z + 3.51, 0, -0.3);
         b.box("desk", 2.6, 0.05, 1.1, d.x, 0.76, d.z + 1.6); for (const sx of [-1, 1]) b.box("darkMetal", 0.06, 0.72, 0.9, d.x + sx * 1.2, 0.37, d.z + 1.6);
         for (const sx of [-0.7, 0.7]) { b.cyl("darkMetal", 0.012, 0.012, 0.35, d.x + sx, 0.79, d.z + 1.6, 6); b.box("glow:#fde7c4", 0.18, 0.02, 0.08, d.x + sx, 1.15, d.z + 1.6); }
         for (const [sx, sz] of [[-0.7, -1], [0.7, -1], [-0.7, 1], [0.7, 1]] as const) { const px = d.x + sx, pz = d.z + 1.6 + sz * 0.95, yaw = sz < 0 ? 0 : Math.PI; chair(px, pz, yaw); S.push({ x: px, z: pz, yaw, pose: "seat", table: true }); }
@@ -326,6 +371,10 @@ export function buildWorld(): WorldPlan {
         b.box("paper", 2.0, 1.0, 0.04, d.x + 4.6, 1.05, back + 0.06); for (let i = 0; i < 5; i++) b.box(i % 2 ? acc : "darkMetal", 0.35, 0.05, 0.01, d.x + 3.9 + (i % 3) * 0.6, 0.85 + Math.floor(i / 2) * 0.25, back + 0.09);
         for (const sx of [-1, 1] as const) { const wx = sx < 0 ? x0 : x1; desk(wx - sx * 0.85, d.z + 0.6, sx < 0 ? Math.PI / 2 : -Math.PI / 2, 2); desk(wx - sx * 0.85, d.z + 2.6, sx < 0 ? Math.PI / 2 : -Math.PI / 2, 2); }
         table(d.x, d.z + 1.7, 1.0, 4, "seat");
+        // Prototype bench with tools and a build-status cabinet.
+        b.box("desk", 2.4, 0.06, 0.7, d.x - 3.2, 0.92, z0 + 2.6); for (const sx of [-1.1, 1.1]) b.box("darkMetal", 0.06, 0.9, 0.6, d.x - 3.2 + sx, 0.45, z0 + 2.6);
+        for (let i = 0; i < 5; i++) b.box(i % 2 ? "metal" : acc, 0.18, 0.08 + (i % 3) * 0.05, 0.12, d.x - 4.1 + i * 0.42, 1.0, z0 + 2.5);
+        b.box("darkMetal", 0.6, 2.0, 0.6, d.x - 2.0, 1.0, z0 + 0.7); occ(d.x - 2.0, z0 + 0.7, 0.6, 0.6, 2.0); for (let r = 0; r < 8; r++) b.box(r % 3 ? "glow:#34d399" : "glow:#fbbf24", 0.08, 0.04, 0.01, d.x - 2.15 + (r % 2) * 0.3, 0.4 + r * 0.2, z0 + 1.01);
         sideScreen(`${d.id}:projects`, "board", -1, 2.6, 1.2, d.z - 1.9, 2.25, "venture:projects");
         break;
       }
@@ -334,7 +383,7 @@ export function buildWorld(): WorldPlan {
         // verification consoles.
         for (let i = 0; i < 3; i++) {
           const x = d.x - 3.6 + i * 3.6, z = z0 + 1.6;
-          b.box("wallTrim", 0.1, 2.6, 1.8, x - 0.95, 1.3, z); b.box("wallTrim", 0.1, 2.6, 1.8, x + 0.95, 1.3, z); b.box("wallTrim", 2.0, 0.14, 1.8, x, 2.6, z);
+          b.box("wallTrim", 0.1, 2.6, 1.8, x - 0.95, 1.3, z); b.box("wallTrim", 0.1, 2.6, 1.8, x + 0.95, 1.3, z); b.box("wallTrim", 2.0, 0.14, 1.8, x, 2.6, z); occ(x - 0.95, z, 0.1, 1.8, 2.6); occ(x + 0.95, z, 0.1, 1.8, 2.6);
           b.box(glow, 1.9, 0.03, 0.03, x, 2.52, z + 0.9); b.box("glass", 0.02, 2.2, 1.7, x - 0.9, 1.2, z);
           b.box("darkMetal", 0.6, 1.1, 0.3, x, 0.55, z - 0.5); b.box("screen", 0.5, 0.32, 0.01, x, 1.0, z - 0.34, 0, -0.25);
           b.ring(glow, 0.12, 0.02, x + 0.2, 0.9, z - 0.34, 24, 0);
@@ -356,7 +405,7 @@ export function buildWorld(): WorldPlan {
         wallScreen(`${d.id}:board`, "board", 2.4, 0.9, d.x, 3.05, "estate:board");
         sideScreen(`${d.id}:status`, "status", 1, 2.0, 0.7, d.z - 1.5, 2.6);
         for (const sx of [x0 + 0.9, x1 - 0.9]) {
-          b.box("darkMetal", 1.0, 0.05, 4.2, sx, 1.15, d.z + 1.2); for (const zz of [-1.6, 1.6]) b.box("darkMetal", 1.0, 2.3, 0.06, sx, 1.15, d.z + 1.2 + zz);
+          b.box("darkMetal", 1.0, 0.05, 4.2, sx, 1.15, d.z + 1.2); occ(sx, d.z + 1.2, 1.0, 4.2, 2.3); for (const zz of [-1.6, 1.6]) b.box("darkMetal", 1.0, 2.3, 0.06, sx, 1.15, d.z + 1.2 + zz);
           for (let i = 0; i < 3; i++) { b.box("paper", 0.9, 0.55, 0.9, sx, 0.3, d.z - 0.1 + i * 1.3); b.box("paper", 0.75, 0.5, 0.75, sx, 1.45, d.z - 0.1 + i * 1.3); b.box(acc, 0.02, 0.08, 0.3, sx + (sx < d.x ? 0.46 : -0.46), 0.42, d.z - 0.1 + i * 1.3); }
         }
         console(d.x + 2.4, z1 - 2.2, 0, 1.2); console(d.x - 2.4, z1 - 2.2, 0, 1.2);
