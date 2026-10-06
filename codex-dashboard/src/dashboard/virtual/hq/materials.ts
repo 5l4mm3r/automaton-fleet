@@ -32,6 +32,8 @@ const BASE: Record<string, { color: string; rough: number; metal: number; emissi
   equipment: { color: "#202a39", rough: 0.5, metal: 0.55 },
   grille: { color: "#141b27", rough: 0.55, metal: 0.7 },
   cable: { color: "#07090c", rough: 0.7, metal: 0.1 },
+  anodized: { color: "#2b3c57", rough: 0.28, metal: 0.85 },
+  enclosure: { color: "#121925", rough: 0.46, metal: 0.62 },
 };
 
 /** Procedural tiling textures (canvas), drawn once per quality level. */
@@ -106,7 +108,7 @@ function seamNormals(kind: "tiles" | "panels" | "plating", size: number): THREE.
 
 /** Which finish each material gets (department colours stay accents; finishes vary the base surfaces). */
 const FINISH: Partial<Record<string, "brushed" | "composite" | "rubberDots" | "vents">> = { metal: "brushed", darkMetal: "brushed", wallTrim: "composite", desk: "composite", concrete: "composite", floorDark: "rubberDots",
-  painted: "composite", equipment: "composite", grille: "vents", rubber: "rubberDots" };
+  painted: "composite", equipment: "composite", grille: "vents", rubber: "rubberDots", anodized: "brushed", enclosure: "composite" };
 
 export interface HQMaterials { get(key: MatKey): THREE.Material; dispose(): void }
 

@@ -30,6 +30,7 @@ import { Stations } from "./hq/stations";
 import { Screens, type ScreenFeed } from "./hq/screens";
 import { AdaptiveResolution, Atmosphere, Beacons, CommandCore, Environment, FloorReflections, LightPools, Lights, PostFX } from "./hq/effects";
 import { DataFlow, type TransportDirector } from "./hq/flow";
+import { DiagOverlay, DiagProbe, emptyDiag } from "./hq/diagnostics";
 import { workTargets } from "./hq/spots";
 import { navGrid } from "./hq/nav";
 import { stationDesks } from "./hq/choreo";
@@ -129,7 +130,10 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
   const nav = useMemo(() => navGrid([...plan.footprints, ...stationDesks(stations)], NAV_BOUNDS), [plan, stations]);
   const work = useMemo(() => workTargets(models, targets, stations, plan.spots, teams), [models, targets, stations, plan.spots, teams]);
 
-  return <Canvas key={`${prefs.quality}:${q.shadows}`} frameloop="never" dpr={[1, q.dpr]} shadows={q.shadows === "soft" ? "percentage" : q.shadows === "basic" ? "basic" : false}
+  // Owner diagnostics (Display → Diagnostics overlay).
+  const diag = useRef(emptyDiag());
+
+  return <><Canvas key={`${prefs.quality}:${q.shadows}`} frameloop="never" dpr={[1, q.dpr]} shadows={q.shadows === "soft" ? "percentage" : q.shadows === "basic" ? "basic" : false}
     camera={{ position: [0, 70, 50], fov: 42, near: 0.3, far: 400 }}
     gl={{ antialias: q.antialias, powerPreference: "high-performance", toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: q.pbr ? 1.15 : 1.5 }}
     onCreated={({ gl, scene }) => {
@@ -149,7 +153,7 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
     onPointerMissed={() => { document.body.style.cursor = ""; }}>
     <Driver fps={prefs.fps} />
     <ProjectorOut projectRef={projectRef} />
-    <CameraRig focus={focus} positionsRef={positionsRef} reduceMotion={prefs.reduceMotion} spots={work.spots} stations={stations} ghostsRef={ghosts} occluders={plan.occluders} autoFollow={prefs.autoFollow} directorRef={director} />
+    <CameraRig focus={focus} positionsRef={positionsRef} reduceMotion={prefs.reduceMotion} spots={work.spots} stations={stations} ghostsRef={ghosts} occluders={plan.occluders} cameraMode={prefs.cameraMode} directorRef={director} />
     <Lights q={q} lights={plan.lights} />
     <Environment q={q} />
     <Atmosphere q={q} lights={plan.lights} ambient={ambient} />
@@ -161,8 +165,9 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
     <Beacons spots={plan.beacons} red={redAlert} ambient={ambient} />
     <Stations models={models} stations={stations} births={births} reduceMotion={prefs.reduceMotion} q={q} receivedRef={received} />
     <Crowd models={models} targets={work.targets} spots={work.spots} meetings={work.meetings} ghostsRef={ghosts} births={births} selected={selected} q={q} reduceMotion={prefs.reduceMotion} positionsRef={positionsRef} onAgent={onAgent} stations={stations} nav={nav} teams={teams} receivedRef={received} />
-    <DataFlow packets={packets} enabled={prefs.dataFlow} reduceMotion={prefs.reduceMotion} q={q} receivedRef={received} directorRef={director} />
+    <DataFlow packets={packets} enabled={prefs.dataFlow} reduceMotion={prefs.reduceMotion} q={q} receivedRef={received} directorRef={director} statsRef={diag} />
     <AdaptiveResolution q={q} />
     <PostFX q={q} />
-  </Canvas>;
+    {prefs.diagnostics && <DiagProbe statsRef={diag} quality={prefs.quality} shadows={q.shadows ? String(q.shadows) : noShadowMaps && base.shadows ? "off (driver)" : "off"} agents={models.length} />}
+  </Canvas>{prefs.diagnostics && <DiagOverlay statsRef={diag} />}</>;
 }

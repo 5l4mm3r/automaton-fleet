@@ -20,7 +20,7 @@ export function NotConfigured({ capability, provider, demands, activation }: { c
         </div>
         <p className="text-sm">Preferred provider when activated: <strong>{provider}</strong>. {activation}</p>
         <p className="text-sm text-muted-foreground">
-          Agents that need it get an action-scoped answer (that one action is unavailable) and continue all other work; Founder 1 never depends on it.
+          Agents that need it get an action-scoped answer (that one action is unavailable) and continue all other work; Agent-1 never depends on it.
         </p>
         <DataTable rows={demands} empty="No agent has needed it yet." columns={[{ key: "agentId", label: "Agent" }, { key: "lastOp", label: "Wanted" },
           { key: "purpose", label: "Purpose" }, { key: "attempts", label: "Times" }, { key: "lastAt", label: "Last", render: (d) => when(d.lastAt) }]} />

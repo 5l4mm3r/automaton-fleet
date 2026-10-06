@@ -684,3 +684,40 @@ This builds on the V2.2 candidate (`646849c`). It makes presentation changes onl
 rates are lower than V2.2's quiet-machine figures. A paired run on the same machine minutes apart measured V2.2 at
 12–39 fps and V2.3 at 16–36 fps (12 agents, every quality and view): no measurable regression. The GPU matrix, a
 50-agent Ultra burst of 30 simultaneous events and the review package are in the V2.3 review page.
+
+## V2.4: final world polish — 6 October 2026 (version 0.8.0)
+
+This builds on V2.3 (`ea19248`) on the completion branch `fleet/final-v2.4`. It makes presentation changes only: no
+economic, payment, replication, sweep, cap, tax, custody or schema change. A V2.4 UI also runs against the schema-41
+backend: a missing `projects` read is shown as unavailable.
+
+- **Agent naming:** `naming.ts`. Registry names stored as `founder-N` (stable persisted identifiers in events,
+  ledgers and runtime units) are shown as **Agent-N** wherever a name reaches the screen. Identities are unchanged.
+- **Conduits as architecture:** the raised glass tubes are replaced by flush, recessed floor channels (rails, a dark
+  channel, a lit core, a glass floor window). Agents never step over them.
+  - The widths show the hierarchy: backbone (spines) → department branches (cross corridors) → room channels → the
+    intake.
+  - Junctions are flush round floor windows, with a vertical data trunk on the adjoining pillar.
+  - A transport is a pulse of light under the glass.
+- **Natural movement:**
+  - Pursuit steering (`nav.ts lookahead`) toward a walkable point about 1 m ahead, with a limited turn rate, gives
+    curved turns and doorways taken square-on.
+  - Speed depends on context (`choreo.ts walkSpeed`: corridor vs room, turn sharpness, stopping distance), with gentle
+    acceleration and firmer braking. The head leads into turns, and agents face the work on arrival.
+  - Waypoints are passed only when the next one is in sight. If giving way pushes an agent off its line, it re-plans.
+  - `lineClear` is now an exact grid traversal: any part of a clear segment is clear.
+- **Collaboration:** the Venture project pod (floor ring around the team table). Meetings and reactions still come
+  only from real project records and events.
+- **Materials and light:**
+  - anodized metal (console tops, rack caps) and server enclosures with perforated doors;
+  - consoles stand on recessed rubber kick plinths;
+  - low integrated wall-light strips in every room.
+- **Event camera:** Display → Event camera: Off · Major events · Important events · Cinematic. The V2.3 boolean
+  migrates to Important. Cinematic holds through the whole event and ends on the receiving Agent. User input always
+  cancels it.
+- **Rendering governor:** at sustained low frame rates the DPR is lowered first, then floor-reflection refresh, then
+  atmospheric dust. Content is never removed.
+- **Owner diagnostics overlay** (Display → Diagnostics overlay): browser, WebGL version, GPU renderer string, DPR,
+  quality, shadows, governor state, frame time/FPS, Agent count, transports (active, queued, not animated), JS heap.
+- **Preview build:** `node scripts/build.mjs preview` produces the LIVE build under `/hq-preview/`, marked
+  "PREVIEW V2.4 · UI 0.8.0" on every page. It uses the same gateway and the same sign-in.

@@ -12,8 +12,12 @@ import type { NextConfig } from "next";
 const live = process.env.NEXT_PUBLIC_FLEET_MODE === "live";
 const impl = path.resolve(process.cwd(), "src/dashboard", live ? "adapter.live.ts" : "adapter.simulation.ts");
 
+// The preview build (scripts/build.mjs preview) is served under /hq-preview/ beside the production admin.
+const basePath = process.env.FLEET_BASE_PATH === "/hq-preview" ? "/hq-preview" : undefined;
+
 const nextConfig: NextConfig = {
   output: "export",
+  ...(basePath ? { basePath } : {}),
   trailingSlash: true,
   images: { unoptimized: true },
   poweredByHeader: false,

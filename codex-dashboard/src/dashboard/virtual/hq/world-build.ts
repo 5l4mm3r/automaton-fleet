@@ -65,20 +65,25 @@ export function buildWorld(): WorldPlan {
   b.box("darkMetal", 0.5, 0.4, 4.4, W.maxX + 3, 3.5, -4); b.box("glow:#38bdf8", 0.08, 0.06, 3.6, W.maxX + 2.7, 3.25, -4);
   for (const z of [-5.6, -2.4]) { b.box("darkMetal", 0.6, 1.2, 0.3, W.maxX + 1.6, 0.6, z); b.box("glow:#38bdf8", 0.5, 0.04, 0.05, W.maxX + 1.6, 1.0, z + 0.16); }
 
-  // Data conduits: recessed channels in the deck along every cross corridor and both spines, a lit core in each —
-  // the infrastructure information packets travel along (route.ts). Ambient glow only; packets carry meaning.
+  // Data conduits — the building's nervous system, set FLUSH into the deck (nothing to step over): a dark recessed
+  // channel, a lit core and a glass floor window over it, framed by thin metal rails. Hierarchy reads in the widths:
+  // the MAIN BACKBONE runs up both service spines (wide), DEPARTMENT BRANCHES along the cross corridors (narrower),
+  // ROOM CHANNELS into each department (narrowest, below), ending at the room's intake. Junctions are round floor
+  // windows; a vertical data trunk climbs the pillar beside each one. Ambient glow only; packets carry meaning.
   const conduitZ = [...CROSS_Z], conduitX = [...SPINE_X];
-  for (const z of conduitZ) { b.box("floorDark", W.maxX - W.minX + 2, 0.03, 0.42, cxW, 0.03, z); b.box("glow:#0e4a5c", W.maxX - W.minX + 2, 0.02, 0.07, cxW, 0.05, z); }
-  for (const x of conduitX) { b.box("floorDark", 0.42, 0.03, W.maxZ - W.minZ, x, 0.03, czW); b.box("glow:#0e4a5c", 0.07, 0.02, W.maxZ - W.minZ, x, 0.05, czW); }
-  b.box("floorDark", W.maxX + 3 - 10, 0.03, 0.42, (W.maxX + 3 + 10) / 2, 0.03, -4); b.box("glow:#0e4a5c", W.maxX + 3 - 10, 0.02, 0.07, (W.maxX + 3 + 10) / 2, 0.05, -4);
-  // The conduits are protected glass tubes set into the deck (transport-skin "tube-orb" rides inside them): a clear cover,
-  // a structural collar every 2 m, and a junction hub wherever conduits meet. Low enough to step over (nav band).
-  const tubeR = 0.16, collar = (x: number, z: number, along: "x" | "z") => { b.halfTube("darkMetal", tubeR + 0.025, 0.07, x, 0.03, z, along, 14); b.box("glow:#164e63", along === "x" ? 0.02 : 0.1, 0.012, along === "x" ? 0.1 : 0.02, x, tubeR + 0.055, z); };
-  for (const z of conduitZ) { b.halfTube("glass", tubeR, W.maxX - W.minX + 2, cxW, 0.03, z, "x", 18); for (let x = W.minX; x <= W.maxX; x += 2) collar(x, z, "x"); }
-  for (const x of conduitX) { b.halfTube("glass", tubeR, W.maxZ - W.minZ, x, 0.03, czW, "z", 18); for (let z = W.minZ + 1; z <= W.maxZ - 1; z += 2) collar(x, z, "z"); }
-  b.halfTube("glass", tubeR, W.maxX + 3 - 10, (W.maxX + 3 + 10) / 2, 0.03, -4, "x", 18); for (let x = 12; x < W.maxX + 3; x += 2) collar(x, -4, "x");
+  const channel = (x: number, z: number, len: number, along: "x" | "z", wd: number, y0 = 0.03) => {
+    const W2 = (w: number) => (along === "x" ? [len, w] : [w, len]) as [number, number];
+    let [sx, sz] = W2(wd + 0.08); b.box("metal", sx, 0.012, sz, x, y0 + 0.004, z);
+    [sx, sz] = W2(wd); b.box("floorDark", sx, 0.012, sz, x, y0 + 0.006, z);
+    [sx, sz] = W2(Math.max(0.05, wd * 0.18)); b.box("glow:#0e4a5c", sx, 0.006, sz, x, y0 + 0.012, z);
+    [sx, sz] = W2(wd - 0.04); b.box("glass", sx, 0.004, sz, x, y0 + 0.017, z);
+  };
+  for (const x of conduitX) channel(x, czW, W.maxZ - W.minZ, "z", 0.62);
+  for (const z of conduitZ) channel(cxW, z, W.maxX - W.minX + 2, "x", 0.42);
+  channel((W.maxX + 3 + 10) / 2, -4, W.maxX + 3 - 10, "x", 0.42);
   for (const z of conduitZ) for (const x of conduitX) {
-    b.cyl("darkMetal", 0.42, 0.46, 0.12, x, 0.0, z, 24); b.sphere("glass", 0.3, x, 0.12, z, 20, 0.5); b.ring("glow:#22d3ee", 0.36, 0.018, x, 0.13, z, 32);
+    b.cyl("metal", 0.56, 0.56, 0.014, x, 0.03, z, 32); b.cyl("floorDark", 0.5, 0.5, 0.016, x, 0.031, z, 32);
+    b.cyl("glass", 0.46, 0.46, 0.004, x, 0.046, z, 32); b.ring("glow:#22d3ee", 0.48, 0.012, x, 0.05, z, 40);
   }
   // Edge guide lights along the corridors.
   for (const z of conduitZ.slice(0, 5)) { b.box("glow:#123d4d", W.maxX - W.minX + 2, 0.02, 0.05, cxW, 0.04, z - 0.9); b.box("glow:#123d4d", W.maxX - W.minX + 2, 0.02, 0.05, cxW, 0.04, z + 0.9); }
@@ -88,7 +93,10 @@ export function buildWorld(): WorldPlan {
     b.box("darkMetal", 0.7, WALL_H + 0.6, 0.7, px, (WALL_H + 0.6) / 2, z - 0.9);
     b.box("glow:#22d3ee", 0.72, 0.06, 0.72, px, 2.4, z - 0.9);
     b.box("wallTrim", 0.9, 0.2, 0.9, px, 0.1, z - 0.9);
-    b.box("metal", 0.6, 0.08, 0.6, x, 0.06, z); b.box("glow:#164e63", 0.3, 0.02, 0.3, x, 0.11, z);
+    // The vertical data trunk: a lit riser up the pillar face toward the junction, fed by a short floor link.
+    const face = px + (x < 0 ? 0.36 : -0.36);
+    b.box("darkMetal", 0.06, WALL_H - 0.2, 0.2, face, (WALL_H - 0.2) / 2 + 0.1, z - 0.9); b.box("glow:#0e7490", 0.02, WALL_H - 0.4, 0.06, face + (x < 0 ? 0.035 : -0.035), (WALL_H - 0.4) / 2 + 0.2, z - 0.9);
+    channel((x + face) / 2, z - 0.45, 0.9, "z", 0.12);
   }
   // The open concourses beside the Agent Floor: benches, planters and wayfinding totems.
   for (const sx of [-1, 1]) {
@@ -134,10 +142,9 @@ export function buildWorld(): WorldPlan {
     // glass tube on a dark channel, from the receiving socket at the opening to the room's intake (route.ts INTAKE).
     b.box("floorDark", 0.36, 0.02, d.d - 1.2, d.x, 0.13, d.z + 0.3); b.box(glow, 0.05, 0.02, d.d - 1.2, d.x, 0.142, d.z + 0.3);
     const intake = INTAKE[d.id], tubeLen = z1 - intake.z;
-    b.halfTube("glass", 0.14, tubeLen, d.x, 0.12, (z1 + intake.z) / 2, "z", 16);
-    for (let z = z1 - 1; z > intake.z + 0.6; z -= 1.5) b.halfTube("darkMetal", 0.16, 0.06, d.x, 0.12, z, "z", 12);
-    // Receiving socket at the opening: a collar ring set into the threshold, lit in the department's colour.
-    b.cyl("darkMetal", 0.34, 0.36, 0.05, d.x, 0.12, z1, 24); b.ring(glow, 0.3, 0.02, d.x, 0.18, z1, 32); b.halfTube("metal", 0.19, 0.16, d.x, 0.12, z1, "z", 16);
+    channel(d.x, (z1 + intake.z) / 2, tubeLen, "z", 0.3, 0.12);
+    // Receiving socket at the opening: a flush collar ring set into the threshold, lit in the department's colour.
+    b.cyl("darkMetal", 0.34, 0.34, 0.03, d.x, 0.12, z1, 24); b.ring(glow, 0.3, 0.014, d.x, 0.152, z1, 32);
     if (d.id !== "command" && d.id !== "treasury") {
       // The intake node: a low armoured socket with a glass dome where the conduit ends, a status lamp on the wall behind.
       b.cyl("darkMetal", 0.36, 0.42, 0.1, intake.x, 0.12, intake.z, 24); b.cyl("metal", 0.26, 0.3, 0.04, intake.x, 0.22, intake.z, 24);
@@ -179,6 +186,8 @@ export function buildWorld(): WorldPlan {
       const lx = d.x + i * d.w / 4, lz = z0 + d.d * (j ? 0.66 : 0.3);
       b.box("darkMetal", 1.7, 0.08, 0.42, lx, WALL_H + 0.02, lz); b.box("glow:#cfe8f7", 1.5, 0.03, 0.26, lx, WALL_H - 0.03, lz);
     }
+    // Integrated wall lights: a low recessed strip along each side wall's back segment (light from fixtures, not paint).
+    for (const sx of [x0, x1]) { const inX = sx + (sx < d.x ? 0.17 : -0.17), seg2 = (d.d - 2.4) / 2; b.box("anodized", 0.03, 0.07, seg2 - 0.4, inX, 0.42, z0 + seg2 / 2); b.box("glow:#9fb8d6", 0.012, 0.025, seg2 - 0.5, inX + (sx < d.x ? 0.016 : -0.016), 0.42, z0 + seg2 / 2); }
     interior(d, x0, x1, z0, z1, acc, glow);
   }
 
@@ -228,14 +237,14 @@ export function buildWorld(): WorldPlan {
     };
     /** A standing console (sloped top with a screen) facing `ry`; the operator's place becomes a work spot. */
     const console = (x: number, z: number, ry: number, w = 1.6, spot = true) => {
-      b.box("darkMetal", w, 0.9, 0.6, x, 0.45, z, ry);
-      b.box("metal", w, 0.06, 0.66, x, 0.92, z, ry, -0.35);
+      b.box("equipment", w, 0.84, 0.6, x, 0.48, z, ry); b.box("rubber", w - 0.06, 0.07, 0.54, x, 0.155, z, ry); // body on a recessed kick plinth
+      b.box("anodized", w, 0.06, 0.66, x, 0.92, z, ry, -0.35);
       b.box("screen", w - 0.2, 0.42, 0.02, x + Math.sin(ry) * -0.05, 1.04, z + Math.cos(ry) * -0.05, ry, -0.35);
       b.box(glow, w - 0.1, 0.03, 0.03, x + Math.sin(ry) * 0.31, 0.88, z + Math.cos(ry) * 0.31, ry);
       if (spot) S.push({ x: x + Math.sin(ry) * 0.75, z: z + Math.cos(ry) * 0.75, yaw: ry + Math.PI, pose: "stand" });
     };
     const rack = (x: number, z: number, led: MatKey, h = 2.2) => {
-      b.box("darkMetal", 0.7, h, 0.9, x, h / 2, z); b.box("metal", 0.66, h - 0.1, 0.02, x, h / 2, z + 0.45); occ(x, z, 0.7, 0.9, h);
+      b.box("enclosure", 0.7, h, 0.9, x, h / 2, z); b.box("grille", 0.66, h - 0.1, 0.02, x, h / 2, z + 0.45); b.box("anodized", 0.72, 0.04, 0.92, x, h + 0.02, z); occ(x, z, 0.7, 0.9, h);
       for (let r = 0; r < Math.floor(h / 0.24); r++) { b.box(r % 3 ? "rubber" : led, 0.42, 0.03, 0.01, x - 0.05, 0.3 + r * 0.21, z + 0.465); b.box(led, 0.04, 0.03, 0.01, x + 0.24, 0.3 + r * 0.21, z + 0.465); }
     };
     const shelf = (x: number, w: number, h = 2.4) => {
@@ -513,6 +522,7 @@ export function buildWorld(): WorldPlan {
         b.box("paper", 2.0, 1.0, 0.04, d.x + 4.6, 1.05, back + 0.06); for (let i = 0; i < 5; i++) b.box(i % 2 ? acc : "darkMetal", 0.35, 0.05, 0.01, d.x + 3.9 + (i % 3) * 0.6, 0.85 + Math.floor(i / 2) * 0.25, back + 0.09);
         for (const sx of [-1, 1] as const) { const wx = sx < 0 ? x0 : x1; desk(wx - sx * 0.85, d.z + 0.6, sx < 0 ? Math.PI / 2 : -Math.PI / 2, 2); desk(wx - sx * 0.85, d.z + 2.6, sx < 0 ? Math.PI / 2 : -Math.PI / 2, 2); }
         table(d.x, d.z + 1.7, 1.0, 4, "seat");
+        b.ring(acc, 2.25, 0.02, d.x, 0.13, d.z + 1.7, 72); b.ring(acc, 2.32, 0.008, d.x, 0.13, d.z + 1.7, 72); // the project pod
         // Prototype bench with tools and a build-status cabinet.
         b.box("desk", 2.4, 0.06, 0.7, d.x - 3.2, 0.92, z0 + 2.6); for (const sx of [-1.1, 1.1]) b.box("darkMetal", 0.06, 0.9, 0.6, d.x - 3.2 + sx, 0.45, z0 + 2.6);
         for (let i = 0; i < 5; i++) b.box(i % 2 ? "metal" : acc, 0.18, 0.08 + (i % 3) * 0.05, 0.12, d.x - 4.1 + i * 0.42, 1.0, z0 + 2.5);

@@ -13,6 +13,8 @@ export type MatKey =
   // V2.3 material classes: painted structural steel, smoked glass, illuminated acrylic, polished floor inlay, screen
   // glass (bezels over displays), equipment housings, vent grilles and cables.
   | "painted" | "smokedGlass" | "acrylic" | "polished" | "screenGlass" | "equipment" | "grille" | "cable"
+  // V2.4: anodized metal (console tops, trims) and server enclosures.
+  | "anodized" | "enclosure"
   | `accent:${string}` | `glow:${string}`;
 
 const tmp = new THREE.Object3D();

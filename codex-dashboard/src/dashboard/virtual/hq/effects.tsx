@@ -4,6 +4,7 @@
  * world itself. Also the live pieces of the architecture: the Fleet Command core and the Security beacons (whose state
  * is real: they turn red only while FleetController has unacknowledged RED alerts).
  */
+import { GOVERNOR } from "./governor";
 import { useFrame, useThree } from "@react-three/fiber";
 import { memo, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
@@ -102,16 +103,19 @@ export function PostFX({ q }: { q: HQProfile }) {
 export function AdaptiveResolution({ q }: { q: HQProfile }) {
   const setDpr = useThree((s) => s.setDpr), get = useThree((s) => s.get);
   const st = useRef({ t0: 0, frames: 0, dpr: Math.min(q.dpr, q.physical ? 1.5 : q.dpr) });
-  useEffect(() => { st.current = { t0: 0, frames: 0, dpr: Math.min(q.dpr, q.physical ? 1.5 : q.dpr) }; setDpr(st.current.dpr); }, [q, setDpr]);
+  useEffect(() => { st.current = { t0: 0, frames: 0, dpr: Math.min(q.dpr, q.physical ? 1.5 : q.dpr) }; GOVERNOR.level = 0; setDpr(st.current.dpr); }, [q, setDpr]);
   useFrame(() => {
-    if (!q.bloom) return;
+    if (!q.pbr) return;
     const s = st.current, now = performance.now();
     if (!s.t0) { s.t0 = now; s.frames = 0; return; }
     s.frames++;
     if (now - s.t0 < 1500) return;
     const fps = (s.frames * 1000) / (now - s.t0), target = q.physical ? 32 : 48;
     let next = s.dpr;
+    // Governor: lower the DPR first; at DPR 1 step render cost down (governor.ts); recover in the reverse order.
     if (fps < target && s.dpr > 1) next = Math.max(1, s.dpr - 0.25);
+    else if (fps < target && GOVERNOR.level < 2) GOVERNOR.level = (GOVERNOR.level + 1) as 1 | 2;
+    else if (fps > target + 22 && GOVERNOR.level > 0) GOVERNOR.level = (GOVERNOR.level - 1) as 0 | 1;
     else if (fps > target + 22 && s.dpr < q.dpr) next = Math.min(q.dpr, s.dpr + 0.25);
     if (next !== s.dpr) { s.dpr = next; setDpr(next); void get; }
     s.t0 = now; s.frames = 0;
@@ -157,7 +161,7 @@ export function FloorReflections({ q }: { q: HQProfile }) {
     let n = 0;
     const moved = (m: THREE.Matrix4) => { for (let i = 0; i < 16; i++) if (Math.abs(m.elements[i] - last.elements[i]) > 2e-4) return true; return false; };
     r.onBeforeRender = (renderer, scene, camera, ...rest) => {
-      if (moved(camera.matrixWorld) || n++ % 4 === 0) { last.copy(camera.matrixWorld); render(renderer, scene, camera, ...rest); }
+      if ((moved(camera.matrixWorld) && (GOVERNOR.level === 0 || n % 2 === 0)) || n++ % (4 << GOVERNOR.level) === 0) { last.copy(camera.matrixWorld); render(renderer, scene, camera, ...rest); }
     };
     r.rotation.x = -Math.PI / 2; r.position.set((WORLD.minX + WORLD.maxX) / 2, 0.136, (WORLD.minZ + WORLD.maxZ) / 2); r.renderOrder = 2;
     return r;
@@ -224,7 +228,7 @@ export const Atmosphere = memo(function Atmosphere({ q, lights, ambient }: { q: 
   }, [q.particles]);
   useEffect(() => () => dust?.dispose(), [dust]);
   const pts = useRef<THREE.Points>(null);
-  useFrame((_, dt) => { if (pts.current && ambient) pts.current.position.y = Math.sin(performance.now() / 4000) * 0.3 + dt * 0; });
+  useFrame(() => { if (!pts.current) return; pts.current.visible = GOVERNOR.level < 2; if (ambient) pts.current.position.y = Math.sin(performance.now() / 4000) * 0.3; });
   return <>
     {dust && <points ref={pts} geometry={dust}><pointsMaterial size={0.05} color="#7dd3fc" transparent opacity={0.35} depthWrite={false} /></points>}
     {q.atmosphere && lights.flatMap((l) => { const d = DEPARTMENT[l.dep]; return [-1, 1].map((i) => <mesh key={`${l.dep}:${i}`} position={[d.x + (i * d.w) / 4, 1.8, d.z - d.d / 2 + d.d * 0.3]}><coneGeometry args={[1.25, 3.6, 24, 1, true]} /><meshBasicMaterial color="#e8f1ff" transparent opacity={0.022 * l.mood} side={THREE.DoubleSide} depthWrite={false} blending={THREE.AdditiveBlending} /></mesh>); })}

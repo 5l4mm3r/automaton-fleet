@@ -45,10 +45,12 @@ function labelTexture(text: string, colour: string): THREE.CanvasTexture {
 
 export interface TransportDirector { offer(t: Transport): void }
 
-export const DataFlow = memo(function DataFlow({ packets, enabled, reduceMotion, q, receivedRef, directorRef, skin = "tube-orb" }: {
+export const DataFlow = memo(function DataFlow({ packets, enabled, reduceMotion, q, receivedRef, directorRef, skin = "tube-orb", statsRef }: {
   packets: Packet[]; enabled: boolean; reduceMotion: boolean; q: HQProfile;
   /** When a transport last reached each room ("<dept>") or agent ("agent:<id>") — their displays and people respond. */
   receivedRef?: MutableRefObject<Map<string, number>>;
+  /** Diagnostics: active / queued / not-animated transport counts. */
+  statsRef?: MutableRefObject<{ transports: number; queued: number; dropped: number }>;
   /** The optional event camera (only important transports are offered; it decides whether to follow). */
   directorRef?: MutableRefObject<TransportDirector | null>;
   skin?: string;
@@ -77,6 +79,7 @@ export const DataFlow = memo(function DataFlow({ packets, enabled, reduceMotion,
     const now = Date.now();
     const zoom = Math.min(7, Math.max(1, camera.position.y / 9)); // readable from the Fleet view
     const s = advance(schedule.current, incoming.current.splice(0), now, slotsFor(q.detail, reduceMotion));
+    if (statsRef) { statsRef.current.transports = s.active.length; statsRef.current.queued = s.queue.length; statsRef.current.dropped = s.dropped; }
     const fr = transportFrame(s.active, now, !enabled ? "off" : reduceMotion ? "reduced" : "full"), byId = new Map(s.active.map((t) => [t.id, t]));
     // Responses (after arrival only): the destination room's displays and the receiving agent react.
     if (receivedRef) {
@@ -98,7 +101,7 @@ export const DataFlow = memo(function DataFlow({ packets, enabled, reduceMotion,
     let n = 0;
     const seg = (a: { x: number; z: number }, b: { x: number; z: number }, c: THREE.Color) => {
       const l = Math.hypot(b.x - a.x, b.z - a.z); if (l < 0.01 || n >= RIBBONS) return;
-      m4.compose(p3.set((a.x + b.x) / 2, Y + 0.01, (a.z + b.z) / 2), q4.setFromAxisAngle(up, -Math.atan2(b.z - a.z, b.x - a.x)), s3.set(l, 1, look.route.width * Math.sqrt(zoom)));
+      m4.compose(p3.set((a.x + b.x) / 2, roomAt({ x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 }) ? Y + 0.02 : 0.05, (a.z + b.z) / 2), q4.setFromAxisAngle(up, -Math.atan2(b.z - a.z, b.x - a.x)), s3.set(l, 1, look.route.width * Math.sqrt(zoom)));
       ribbons.current?.setMatrixAt(n, m4); ribbons.current?.setColorAt(n, c); n++;
     };
     for (const r of fr.routes) {
@@ -132,15 +135,18 @@ export const DataFlow = memo(function DataFlow({ packets, enabled, reduceMotion,
     for (const o of fr.orbs.slice(0, CAP)) {
       // Inside the glass conduit: on the axis of the deck tubes in corridors, of the raised room tubes inside rooms
       // (lifted with its size from far views, so it never sinks into the floor).
-      const t = byId.get(o.id)!, r = look.orb.radius * zoom, y = (look.orb.inTube ? (roomAt(o.p) ? 0.16 : 0.1) : 0.32) + (zoom - 1) * look.orb.radius * 0.8;
+      // In the conduit: a pulse of light under the glass floor window (flattened into the channel, its halo a pool on
+      // the floor); from far views it grows so it stays readable, still lying in the floor.
+      const inRoom = !!roomAt(o.p), flat = look.orb.inTube ? 0.32 : 1;
+      const t = byId.get(o.id)!, r = look.orb.radius * zoom, y = look.orb.inTube ? (inRoom ? 0.145 : 0.055) + r * flat * 0.4 : 0.32 + (zoom - 1) * look.orb.radius * 0.8;
       col.set(t.colour);
-      m4.compose(p3.set(o.p.x, y, o.p.z), q4.identity(), s3.setScalar(r)); orb.current?.setMatrixAt(no, m4); orb.current?.setColorAt(no, col);
-      m4.compose(p3, q4.identity(), s3.setScalar(r * look.orb.halo)); halo.current?.setMatrixAt(no, m4); halo.current?.setColorAt(no, col); no++;
+      m4.compose(p3.set(o.p.x, y, o.p.z), q4.identity(), s3.set(r, r * flat, r)); orb.current?.setMatrixAt(no, m4); orb.current?.setColorAt(no, col);
+      m4.compose(p3, q4.identity(), s3.set(r * look.orb.halo, r * look.orb.halo * flat * 0.6, r * look.orb.halo)); halo.current?.setMatrixAt(no, m4); halo.current?.setColorAt(no, col); no++;
       for (let i = 1; i <= look.orb.trail && q.detail >= 1; i++) {
         const L = Math.max(1, pathLength(t.route)), back = (o.k - (i * 0.45 * zoom) / L), f = 1 - i / (look.orb.trail + 1);
         if (back < 0) break;
         const bp = t.route.length ? pointAt(t.route, back) : o.p;
-        m4.compose(p3.set(bp.x, y, bp.z), q4.identity(), s3.setScalar(r * 0.75 * f)); trail.current?.setMatrixAt(nt, m4); trail.current?.setColorAt(nt, tcol.copy(col).multiplyScalar(f)); nt++;
+        m4.compose(p3.set(bp.x, y, bp.z), q4.identity(), s3.set(r * 0.75 * f, r * 0.75 * f * flat, r * 0.75 * f)); trail.current?.setMatrixAt(nt, m4); trail.current?.setColorAt(nt, tcol.copy(col).multiplyScalar(f)); nt++;
       }
     }
     show(orb.current, no); show(halo.current, no); show(trail.current, nt);

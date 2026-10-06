@@ -20,6 +20,7 @@ import path from "path";
 import { execFileSync } from "child_process";
 import { chromium, type Browser, type Page } from "playwright-core";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
+import { ensureLiveUi } from "./fixtures/live-ui.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
 import { PgIdentityGateway } from "../../fleet/identity/gateway.js";
 import { IdentityBroker } from "../../fleet/identity/broker.js";
@@ -37,12 +38,6 @@ const UI = path.join(CODEX, "out");
 const FICTION = ["Atlas", "Neon Studio", "Signal intelligence", "owner@example.invalid", "Training TOTP", "DEMO-ONLY", "FICTIONAL DATA"];
 
 /** The LIVE export (rebuilt when absent or when the last build was the simulation). */
-function ensureLiveUi() {
-  const html = path.join(UI, "index.html");
-  if (!fs.existsSync(path.join(UI, "login", "index.html")) || !fs.readFileSync(html, "utf8").includes("LIVE · AUTHORITATIVE")) {
-    execFileSync(process.execPath, ["scripts/build.mjs", "live"], { cwd: CODEX, stdio: "ignore", env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" } });
-  }
-}
 
 describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modules")))("Codex dashboard LIVE export on the real v41 gateway (PostgreSQL + Chrome + virtual passkey)", { timeout: 180_000 }, () => {
   let R: EconomyRegistry;
@@ -142,7 +137,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     const text = await main();
     expect(text).toContain(gbp(w.treasuryCashMinor));
     expect(text).toContain(`Fleet-generated wealth${gbp(w.fleetGeneratedMinor)}`);
-    expect(text).toContain("founder-1");
+    expect(text).toContain("Agent-1");
     for (const f of FICTION) expect(text, f).not.toContain(f);
     await page.goto(`${ORIGIN}/#Replication`);
     await page.getByText("Fleet-generated realised wealth:").waitFor();
@@ -278,7 +273,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await page.evaluate(() => localStorage.setItem("fleet.virtual.prefs.v1", JSON.stringify({ renderer: "map", quality: "medium", fps: 30, reduceMotion: false, ambient: true, dataFlow: true })));
     await page.goto(`${ORIGIN}/#Virtual`);
     const labels = page.getByLabel("Agents", { exact: true });
-    const label = labels.getByRole("button", { name: new RegExp(`^founder-1, ${gbp(await cash(A.id)).replace(/[.£]/g, "\\$&")}, ${exp.label}, `) });
+    const label = labels.getByRole("button", { name: new RegExp(`^Agent-1, ${gbp(await cash(A.id)).replace(/[.£]/g, "\\$&")}, ${exp.label}, `) });
     await label.waitFor();
     // The Treasury room's panel shows the same Treasury cash as the Formal Treasury page.
     await page.getByRole("button", { name: /^Treasury: / }).click();
@@ -287,8 +282,8 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await R.q(`SELECT fleet.fleet_event('knowledge_recorded', $1, 'agent', '{"topic":"e2e"}'::jsonb)`, [A.id]);
     await page.getByRole("list", { name: "Recent Fleet activity" }).getByText("Research recorded").waitFor({ timeout: 20_000 });
     await page.keyboard.press("Escape"); // back to the Fleet view (the Treasury framing put the Library off-screen)
-    await labels.getByRole("button", { name: /^founder-1, .*, RESEARCHING$/ }).waitFor({ timeout: 20_000 });
-    await labels.getByRole("button", { name: /^founder-1,/ }).click();
+    await labels.getByRole("button", { name: /^Agent-1, .*, RESEARCHING$/ }).waitFor({ timeout: 20_000 });
+    await labels.getByRole("button", { name: /^Agent-1,/ }).click();
     const details = page.getByRole("complementary", { name: "Selection details" });
     expect(await details.textContent()).toContain("Library / Research");
     // The agent's own recent transactions come from its real ledger journals.
@@ -298,14 +293,14 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await page.getByRole("button", { name: "Display" }).click();
     await page.getByLabel("View").selectOption("3d");
     await page.locator("canvas").first().waitFor();
-    await labels.getByRole("button", { name: /^founder-1,/ }).waitFor();
+    await labels.getByRole("button", { name: /^Agent-1,/ }).waitFor();
     expect(await page.getByText("The 3D view stopped").count()).toBe(0);
     await page.getByLabel("View").selectOption("map");
     expect(await page.getByText("The 3D view stopped").count()).toBe(0); // leaving 3D is not a failure
     // The live feed is interrupted (reads fail), says so, keeps the last authoritative positions, then recovers.
     await page.route("**/api/read**", (r) => r.abort());
     await page.getByText("Feed interrupted — reconnecting", { exact: false }).waitFor({ timeout: 20_000 });
-    expect(await labels.getByRole("button", { name: /^founder-1,/ }).count()).toBe(1);
+    expect(await labels.getByRole("button", { name: /^Agent-1,/ }).count()).toBe(1);
     await page.unroute("**/api/read**");
     await page.getByText("Live feed", { exact: true }).waitFor({ timeout: 70_000 });
   });
@@ -316,7 +311,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await page.goto(`${ORIGIN}/#Virtual`);
     await page.reload();
     const labels = page.getByLabel("Agents", { exact: true });
-    await labels.getByRole("button", { name: /^founder-1,/ }).waitFor();
+    await labels.getByRole("button", { name: /^Agent-1,/ }).waitFor();
     const before = new Set((await R.q(`SELECT agent_id FROM fleet.fleet_agents`)).map((r) => r.agent_id));
     // A real birth (the authoritative pipeline: Admin birth order → authorize → provision → attest → fund → activate).
     await R.q(`UPDATE fleet.fleet_state SET max_agents = max_agents + 1`);

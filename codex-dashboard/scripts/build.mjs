@@ -1,14 +1,17 @@
 // Build the static export in one mode: `node scripts/build.mjs live` (the owner's production frontend: the Fleet gateway,
-// real sign-in, no fictional data) or `node scripts/build.mjs simulation` (fictional data, no network). Portable (no
-// shell env syntax), then records the artifact's digest.
+// real sign-in, no fictional data), `node scripts/build.mjs simulation` (fictional data, no network) or
+// `node scripts/build.mjs preview` (the LIVE build served under /hq-preview/ beside the production admin, marked PREVIEW
+// on every page; same gateway, same sign-in). Portable (no shell env syntax), then records the artifact's digest.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 const mode = process.argv[2];
-if (mode !== "live" && mode !== "simulation") { console.error("usage: node scripts/build.mjs live|simulation"); process.exit(2); }
-const env = { ...process.env, NEXT_PUBLIC_FLEET_MODE: mode, NEXT_TELEMETRY_DISABLED: "1" };
+if (mode !== "live" && mode !== "simulation" && mode !== "preview") { console.error("usage: node scripts/build.mjs live|simulation|preview"); process.exit(2); }
+const pkgVersion = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+const env = { ...process.env, NEXT_PUBLIC_FLEET_MODE: mode === "preview" ? "live" : mode, NEXT_TELEMETRY_DISABLED: "1",
+  ...(mode === "preview" ? { FLEET_BASE_PATH: "/hq-preview", NEXT_PUBLIC_FLEET_PREVIEW: `V2.4 · UI ${pkgVersion}` } : {}) };
 // Always from a clean cache: a warm .next from the other mode would mix the two builds' modules.
 for (const d of [".next", "out"]) fs.rmSync(d, { recursive: true, force: true });
 const r = spawnSync(process.execPath, [path.join("node_modules", "next", "dist", "bin", "next"), "build", "--webpack"], { stdio: "inherit", env });

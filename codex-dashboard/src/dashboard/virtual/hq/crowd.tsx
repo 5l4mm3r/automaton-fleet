@@ -23,9 +23,9 @@ import * as THREE from "three";
 import type { AgentModel } from "../../command/agents";
 import { DEPARTMENT } from "../../command/departments";
 import { identityColours, portraitFigure, portraitPixels, PORTRAIT_SIZE, seedOf } from "../../command/portrait";
-import { pathLength } from "./route";
-import { findPath, walkable, type NavGrid } from "./nav";
-import { chooseActivity, giveWay, reactionAt, type Activity, type Reaction } from "./choreo";
+import { pathLength, roomAt } from "./route";
+import { findPath, lineClear, lookahead, walkable, type NavGrid } from "./nav";
+import { chooseActivity, giveWay, reactionAt, walkSpeed, type Activity, type Reaction } from "./choreo";
 import { appearanceOf } from "./appearance";
 import { birthState, type Point } from "../world";
 import type { HQProfile } from "./quality";
@@ -44,7 +44,9 @@ export type { Activity } from "./choreo";
  */
 interface AgentState { pos: Point; yaw: number; phase: number; pose: Pose; activity: Activity; ghost: number; goal: Point | null; path: Point[]; speed: number; fast: boolean;
   /** Waiting for a path (and/or the stand-up) before leaving: the time it may leave (ms). */
-  departAt: number; planned: boolean }
+  departAt: number; planned: boolean;
+  /** Head yaw leading into a turn while walking (rad). */
+  look: number }
 
 const zero = (): Pose => ({ hipY: 0.95, lean: 0, head: 0, headYaw: 0, sh: [0.02, 0.02], shRoll: [0.1, -0.1], el: [0.18, 0.18], th: [0, 0], kn: [0.04, 0.04], lying: 0 });
 
@@ -355,7 +357,7 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
       const b = birthState(births.get(id), now, reduceMotion);
       if (!st) {
         const start = b.phase !== "settled" ? { x: DEPARTMENT.command.x, z: DEPARTMENT.command.z + 6 } : { ...target };
-        st = { pos: start, yaw: Math.PI, phase: 0, pose: zero(), activity: "idle", ghost: 0, goal: null, path: [], speed: 0, fast: false, departAt: 0, planned: true };
+        st = { pos: start, yaw: Math.PI, phase: 0, pose: zero(), activity: "idle", ghost: 0, goal: null, path: [], speed: 0, fast: false, departAt: 0, planned: true, look: 0 };
         states.current.set(id, st);
       }
       // A new authoritative target: finish the current activity (stand up from the seat), then walk THROUGH the
@@ -380,22 +382,39 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
       let moving = false, dx = 0, dz = 0;
       if (reduceMotion) { st.pos.x = target.x; st.pos.z = target.z; st.path = []; st.speed = 0; }
       else if (st.path.length && !waiting) {
-        const wp = st.path[0]; dx = wp.x - st.pos.x; dz = wp.z - st.pos.z;
-        const d = Math.hypot(dx, dz), remaining = d + pathLength(st.path);
-        const cruise = st.fast ? 2.1 : 1.35, want = Math.min(cruise, 0.35 + remaining * 0.9); // slow down on arrival
-        const turn = Math.abs(Math.atan2(Math.sin(Math.atan2(dx, dz) - st.yaw), Math.cos(Math.atan2(dx, dz) - st.yaw)));
-        // Give way to people close ahead (keep right; slow down), never stepping off walkable floor.
-        const dir = d > 1e-4 ? { x: dx / d, z: dz / d } : { x: 0, z: 1 };
-        const gw = remaining > 0.8 ? giveWay(id, st.pos, dir, own.current) : { push: { x: 0, z: 0 }, slow: 1 };
-        st.speed += ((turn > 1.2 ? want * 0.45 : want) * gw.slow - st.speed) * Math.min(1, dt * 3); // accelerate, ease into turns
+        // Pursuit steering: head for a walkable point ~1 m ahead on the path; the heading turns at a limited rate, so
+        // corners become curves and doorways are taken square-on. Speed follows the context (corridor or room, turn
+        // sharpness, stopping distance). The final metre is walked straight onto the spot.
+        // Pass a waypoint early only when the next one is in straight-line sight (never round a corner blind).
+        while (st.path.length > 1 && Math.hypot(st.path[0].x - st.pos.x, st.path[0].z - st.pos.z) < 0.35 && lineClear(nav, st.pos, st.path[1])) st.path.shift();
+        // Pushed off the line (giving way): re-plan from here rather than cut a corner (not on the final approach into a
+        // seat or console place, which lies inside its furniture by design).
+        if (walkable(nav, st.pos) && walkable(nav, st.path[0]) && !lineClear(nav, st.pos, st.path[0]) && budget > 0) { const t0 = performance.now(), p = findPath(nav, st.pos, st.path[st.path.length - 1]); budget -= performance.now() - t0; if (p) st.path = p; }
+        const wp = st.path[0], remaining = Math.hypot(wp.x - st.pos.x, wp.z - st.pos.z) + pathLength(st.path);
+        const final = st.path.length === 1 && remaining < 1.0;
+        const aim = final ? wp : lookahead(nav, st.pos, st.path, Math.min(1.1, 0.45 + st.speed * 0.45));
+        dx = aim.x - st.pos.x; dz = aim.z - st.pos.z;
+        const want = Math.atan2(dx, dz), err = Math.atan2(Math.sin(want - st.yaw), Math.cos(want - st.yaw));
+        const rate = final ? 8 : 4.2 - Math.min(1.8, st.speed);
+        st.yaw += Math.max(-rate * dt, Math.min(rate * dt, err));
+        const gw = remaining > 0.8 ? giveWay(id, st.pos, { x: Math.sin(st.yaw), z: Math.cos(st.yaw) }, own.current) : { push: { x: 0, z: 0 }, slow: 1 };
+        const target = walkSpeed({ fast: st.fast, inRoom: !!roomAt(st.pos), turn: err, remaining }) * gw.slow;
+        st.speed += (target - st.speed) * Math.min(1, dt * (target > st.speed ? 2.4 : 4)); // accelerate gently, brake firmer
         const step = st.speed * Math.min(dt, 0.1);
-        if (d <= Math.max(step, 0.02)) { st.pos.x = wp.x; st.pos.z = wp.z; st.path.shift(); }
-        else { st.pos.x += (dx / d) * step; st.pos.z += (dz / d) * step; }
+        const d = Math.hypot(dx, dz);
+        if (final && d <= Math.max(step, 0.02)) { st.pos.x = wp.x; st.pos.z = wp.z; st.path.shift(); }
+        else {
+          // Move along the heading (curved), or straight at the aim if the curve would leave walkable floor.
+          const hx = st.pos.x + Math.sin(st.yaw) * step, hz = st.pos.z + Math.cos(st.yaw) * step;
+          if (!final && walkable(nav, { x: hx, z: hz })) { st.pos.x = hx; st.pos.z = hz; }
+          else if (d > 1e-4) { st.pos.x += (dx / d) * Math.min(step, d); st.pos.z += (dz / d) * Math.min(step, d); }
+        }
         const sx = st.pos.x + gw.push.x * Math.min(dt, 0.1), sz = st.pos.z + gw.push.z * Math.min(dt, 0.1);
         if ((gw.push.x || gw.push.z) && walkable(nav, { x: sx, z: sz })) { st.pos.x = sx; st.pos.z = sz; }
         st.phase += (step / (st.fast ? 0.9 : 0.75)) * Math.PI;
-        moving = st.path.length > 0 || d > step;
-      } else st.speed = 0;
+        st.look = Math.max(-0.5, Math.min(0.5, err * 0.6)); // the head leads into the turn
+        moving = st.path.length > 0;
+      } else { st.speed = 0; st.look = 0; }
       const fast = st.fast;
       own.current.set(id, { x: st.pos.x, z: st.pos.z });
       const station = stations.get(id), atStation = !!station && Math.hypot(station.x - st.pos.x, station.z - st.pos.z) < 0.05;
@@ -404,12 +423,16 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
         atStation, atSpot, spotPose: spot?.pose ?? null, meeting: meetings.has(id), team: teams.has(id), seed: seedOf(id), t });
       st.activity = activity;
       // Stationary: face the equipment (the spot's direction; workstations face north).
-      const wantYaw = moving && (dx || dz) ? Math.atan2(dx, dz) : atSpot ? spot!.yaw : Math.PI;
-      let dy = wantYaw - st.yaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
-      st.yaw += dy * (reduceMotion ? 1 : Math.min(1, dt * (moving ? 6 : 4)));
+      // Standing: turn to face the work (the spot's direction; workstations face north). Walking: steering owns the heading.
+      if (!moving) {
+        const wantYaw = atSpot ? spot!.yaw : atStation ? Math.PI : st.yaw;
+        let dy = wantYaw - st.yaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
+        st.yaw += dy * (reduceMotion ? 1 : Math.min(1, dt * 4));
+      }
       // Sitting down and standing up take a moment (slower blend while the hips change height).
       const settling = Math.abs(targetPose(activity, t, st.phase, i, true).hipY - st.pose.hipY) > 0.05;
       const want = targetPose(activity, t, st.phase, i, reduceMotion);
+      if (moving) want.headYaw += st.look;
       // Reactions to the agent's own real events (not while walking, not when dead; Reduce Motion keeps them still).
       const rec = receivedRef?.current, rx = rec && !moving && activity !== "dead" && !reduceMotion
         ? reactionAt(now, { send: rec.get(`send:${id}`), done: rec.get(`done:${id}`), receive: rec.get(`agent:${id}`) }) : null;

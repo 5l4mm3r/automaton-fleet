@@ -80,10 +80,28 @@ function nearestFree(g: NavGrid, p: Point, maxR = 2.5): number {
   return best;
 }
 
-/** Whether the straight segment a→b stays on walkable floor (sampled every half cell). */
+/**
+ * Whether the straight segment a→b stays on walkable floor: every grid cell the segment touches is walkable (an exact
+ * grid traversal, not sampling — so any part of a clear segment is itself clear, and corners are never grazed).
+ */
 export function lineClear(g: NavGrid, a: Point, b: Point): boolean {
-  const L = Math.hypot(b.x - a.x, b.z - a.z), n = Math.max(1, Math.ceil(L / (g.cell * 0.5)));
-  for (let k = 0; k <= n; k++) { const t = k / n; if (g.blocked[cellOf(g, { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t })]) return false; }
+  const fx = (p: Point) => (p.x - g.x0) / g.cell, fz = (p: Point) => (p.z - g.z0) / g.cell;
+  let cx = Math.floor(fx(a)), cz = Math.floor(fz(a));
+  const ex = Math.floor(fx(b)), ez = Math.floor(fz(b));
+  const dx = fx(b) - fx(a), dz = fz(b) - fz(a);
+  const stepX = dx > 0 ? 1 : -1, stepZ = dz > 0 ? 1 : -1;
+  const tdx = dx !== 0 ? Math.abs(1 / dx) : Infinity, tdz = dz !== 0 ? Math.abs(1 / dz) : Infinity;
+  let tmx = dx !== 0 ? (dx > 0 ? cx + 1 - fx(a) : fx(a) - cx) * tdx : Infinity;
+  let tmz = dz !== 0 ? (dz > 0 ? cz + 1 - fz(a) : fz(a) - cz) * tdz : Infinity;
+  const blocked = (c: number, r: number) => c < 0 || r < 0 || c >= g.cols || r >= g.rows || g.blocked[r * g.cols + c] === 1;
+  for (let guard = 0; guard < g.cols + g.rows + 4; guard++) {
+    if (blocked(cx, cz)) return false;
+    if (cx === ex && cz === ez) return true;
+    if (Math.abs(tmx - tmz) < 1e-12) { // exactly through a corner: both neighbours count
+      if (blocked(cx + stepX, cz) || blocked(cx, cz + stepZ)) return false;
+      cx += stepX; cz += stepZ; tmx += tdx; tmz += tdz;
+    } else if (tmx < tmz) { cx += stepX; tmx += tdx; } else { cz += stepZ; tmz += tdz; }
+  }
   return true;
 }
 
@@ -158,4 +176,24 @@ export function findPath(g: NavGrid, from: Point, to: Point): Point[] | null {
   // Stepping out of a chair: go to the free floor first (never through the desk).
   if (g.blocked[cellOf(g, from)]) out.unshift(centre(g, s));
   return out;
+}
+
+/**
+ * Path following for natural walking (pure; unit-tested): the farthest point along the remaining path (`pos` →
+ * `path[0]` → …) within `reach` metres that can be walked to in a straight line. Steering toward it rounds corners and
+ * takes doorways square-on, because a point is only accepted when the straight line to it stays on walkable floor.
+ */
+export function lookahead(g: NavGrid, pos: Point, path: readonly Point[], reach: number): Point {
+  let best: Point = path[0] ?? pos, prev = pos, left = reach;
+  for (const wp of path) {
+    const seg = Math.hypot(wp.x - prev.x, wp.z - prev.z);
+    if (seg >= left) {
+      const k = left / Math.max(seg, 1e-6), p = { x: prev.x + (wp.x - prev.x) * k, z: prev.z + (wp.z - prev.z) * k };
+      if (lineClear(g, pos, p)) best = p;
+      break;
+    }
+    if (!lineClear(g, pos, wp)) break;
+    best = wp; left -= seg; prev = wp;
+  }
+  return best;
 }

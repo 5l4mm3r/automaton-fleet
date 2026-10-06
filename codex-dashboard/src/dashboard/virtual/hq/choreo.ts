@@ -90,3 +90,14 @@ export function giveWay(self: string, p: Point, dir: Point, others: ReadonlyMap<
   }
   return { push: { x: px, z: pz }, slow };
 }
+
+/**
+ * Walking speed (m/s) for the context: a brisk pace on long moves, a measured one inside rooms, slower into sharp
+ * turns, and a natural stopping distance (easing in over the last metre and a half). Pure.
+ */
+export function walkSpeed(o: { fast: boolean; inRoom: boolean; turn: number; remaining: number }): number {
+  const cruise = o.fast ? (o.inRoom ? 1.55 : 2.0) : o.inRoom ? 1.15 : 1.4;
+  const turning = Math.max(0.35, 1 - Math.min(Math.PI, Math.abs(o.turn)) / Math.PI * 1.3);
+  const arrive = Math.min(1, 0.2 + o.remaining / 1.5);
+  return cruise * turning * arrive;
+}

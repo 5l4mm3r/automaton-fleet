@@ -33,8 +33,9 @@ import { INTAKE, roomAt, routeThrough } from "../../../codex-dashboard/src/dashb
 import { flowLabel } from "../../../codex-dashboard/src/dashboard/virtual/hq/flow";
 import { advance, CATEGORY_COLOUR, categoryOf, importanceOf, newSchedule, PHASE, phaseAt, priorityOf, QUEUE_CAP, slotsFor, STALE_MS, totalTime, toTransport, transportFrame, type Transport } from "../../../codex-dashboard/src/dashboard/virtual/hq/transport";
 import { transportSkin, registerTransportSkin } from "../../../codex-dashboard/src/dashboard/virtual/hq/transport-skin";
-import { findPath, lineClear, navGrid, walkable } from "../../../codex-dashboard/src/dashboard/virtual/hq/nav";
-import { chooseActivity, giveWay, isWorking, reactionAt, stationDesks, type ActivityContext } from "../../../codex-dashboard/src/dashboard/virtual/hq/choreo";
+import { findPath, lineClear, lookahead, navGrid, walkable } from "../../../codex-dashboard/src/dashboard/virtual/hq/nav";
+import { chooseActivity, giveWay, isWorking, reactionAt, stationDesks, walkSpeed, type ActivityContext } from "../../../codex-dashboard/src/dashboard/virtual/hq/choreo";
+import { displayAgentName } from "../../../codex-dashboard/src/dashboard/naming";
 import { NAV_BOUNDS } from "../../../codex-dashboard/src/dashboard/virtual/hq/world-build";
 import { IDLE_BEFORE_SHOT_MS, interact, shotGoal, takeShot, wantShot, type DirectorState } from "../../../codex-dashboard/src/dashboard/virtual/hq/director";
 import { blockers, frameAgent, viewable } from "../../../codex-dashboard/src/dashboard/virtual/hq/framing";
@@ -421,9 +422,17 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
   it("the event camera is opt-in, high-importance first, never while an agent is selected, and any interaction cancels it", () => {
     const hi = mkT({ id: "h", importance: "high", start: 10_000 }), med = mkT({ id: "m", importance: "medium", start: 10_000 }), lo = mkT({ id: "l", importance: "low", start: 10_000 });
     const ctx = { focusLevel: "fleet" as const, reduceMotion: false };
-    const off: DirectorState = { enabled: false, shot: null, lastInteraction: 0 };
+    const off: DirectorState = { mode: "off", shot: null, lastInteraction: 0 };
     expect(wantShot(off, hi, 10_000, ctx)).toBe(false); // off by default: manual camera is primary
-    const on: DirectorState = { ...off, enabled: true };
+    const on: DirectorState = { ...off, mode: "important" };
+    // Modes: Major frames high-importance events only; Important and Cinematic also medium ones; never low.
+    expect(wantShot({ ...off, mode: "major" }, hi, 10_000, ctx)).toBe(true); expect(wantShot({ ...off, mode: "major" }, med, 10_000, ctx)).toBe(false);
+    expect(wantShot({ ...off, mode: "cinematic" }, med, 10_000, ctx)).toBe(true); expect(wantShot({ ...off, mode: "cinematic" }, lo, 10_000, ctx)).toBe(false);
+    // Cinematic tells the story to the end: after the destination responds, the receiving agent is framed.
+    const cine = takeShot({ ...off, mode: "cinematic" }, hi), recv = { x: 3, z: 4 };
+    const respondAt = 10_000 + PHASE.activate + PHASE.launch + hi.travel + PHASE.arrive + 100;
+    expect(shotGoal(cine, respondAt, recv)!.look).toMatchObject({ x: 3, z: 4 });
+    expect(shotGoal(takeShot(on, hi), respondAt, recv)!.look).toMatchObject({ x: hi.route[hi.route.length - 1].x }); // other modes stay on the destination
     expect(wantShot(on, lo, 10_000, ctx)).toBe(false);
     expect(wantShot(on, hi, 10_000, ctx)).toBe(true);
     expect(wantShot(on, hi, 10_000, { ...ctx, focusLevel: "agent" })).toBe(false); // the selected agent keeps the camera
@@ -441,6 +450,45 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
     const cancelled = interact(shooting, 10_200);
     expect(cancelled.shot).toBeNull(); expect(shotGoal(cancelled, 10_300)).toBeNull();
     expect(wantShot(cancelled, hi, 10_300, ctx)).toBe(false);
+  });
+
+  it("Agent naming: stored Genesis names (founder-N) are presented as Agent-N; identities and other names are untouched", () => {
+    expect(displayAgentName("founder-1")).toBe("Agent-1"); expect(displayAgentName("Founder-12")).toBe("Agent-12"); expect(displayAgentName("FOUNDER_3")).toBe("Agent-3");
+    expect(displayAgentName("atlas")).toBe("atlas"); expect(displayAgentName("founder-one")).toBe("founder-one");
+    expect(displayAgentName(null, "01ABC")).toBe("01ABC"); expect(displayAgentName("  ", "01ABC")).toBe("01ABC");
+  });
+
+  it("display preferences: the event camera mode (V2.3 boolean migrates), diagnostics off by default", () => {
+    const d = defaultPrefs({ width: 1600, cores: 8, memoryGb: 8, coarsePointer: false, prefersReducedMotion: false, webgl: true });
+    expect(d.cameraMode).toBe("off"); expect(d.diagnostics).toBe(false);
+    expect(sanitizePrefs({ autoFollow: true }, d).cameraMode).toBe("important");
+    expect(sanitizePrefs({ cameraMode: "cinematic" }, d).cameraMode).toBe("cinematic");
+    expect(sanitizePrefs({ cameraMode: "trailer" }, d).cameraMode).toBe("off");
+  });
+
+  it("natural walking: lookahead steering never aims through walls or furniture; speed eases into turns and stops", () => {
+    const w = buildWorld(), all = DEPARTMENTS.flatMap((d) => w.spots[d.id]);
+    for (let n = 0; n < 30; n++) {
+      const a = all[n % all.length], b = all[(n * 11 + 5) % all.length], path = findPath(w.nav, a, b)!;
+      let pos = { x: a.x, z: a.z };
+      // Walk the path by repeatedly aiming at the lookahead point: from walkable floor every aim is reachable in a straight
+      // line (from inside a seat or console spot the first move is the planned step out to free floor; the last is the
+      // short final approach into the seat or console place itself).
+      for (let i = 0; i < 400 && path.length; i++) {
+        while (path.length > 1 && Math.hypot(path[0].x - pos.x, path[0].z - pos.z) < 0.35 && lineClear(w.nav, pos, path[1])) path.shift();
+        // As the crowd does: drifted out of sight of the next waypoint → re-plan from here (never cut the corner).
+        if (walkable(w.nav, pos) && walkable(w.nav, path[0]) && !lineClear(w.nav, pos, path[0])) { const p2 = findPath(w.nav, pos, path[path.length - 1]); expect(p2).not.toBeNull(); path.splice(0, path.length, ...p2!); }
+        const aim = lookahead(w.nav, pos, path, 1.0);
+        if (walkable(w.nav, pos) && !(path.length === 1 && !walkable(w.nav, path[0]))) expect(lineClear(w.nav, pos, aim), `aim from ${pos.x.toFixed(2)},${pos.z.toFixed(2)}`).toBe(true);
+        const d = Math.hypot(aim.x - pos.x, aim.z - pos.z); if (d < 0.05) { path.shift(); continue; }
+        pos = { x: pos.x + ((aim.x - pos.x) / d) * Math.min(0.25, d), z: pos.z + ((aim.z - pos.z) / d) * Math.min(0.25, d) };
+      }
+    }
+    const straight = walkSpeed({ fast: false, inRoom: false, turn: 0, remaining: 10 }), sharp = walkSpeed({ fast: false, inRoom: false, turn: 2.5, remaining: 10 });
+    expect(sharp).toBeLessThan(straight * 0.5);
+    expect(walkSpeed({ fast: false, inRoom: true, turn: 0, remaining: 10 })).toBeLessThan(straight); // rooms are walked at a measured pace
+    expect(walkSpeed({ fast: false, inRoom: false, turn: 0, remaining: 0.1 })).toBeLessThan(straight * 0.3); // easing into the stop
+    expect(walkSpeed({ fast: true, inRoom: false, turn: 0, remaining: 10 })).toBeGreaterThan(straight);
   });
 
   it("agents walk through the building: around furniture and walls, through doorways, ending in the right room", () => {

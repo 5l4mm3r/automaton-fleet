@@ -6,14 +6,23 @@
 export type Quality = "low" | "medium" | "high" | "ultra";
 export type Renderer = "auto" | "3d" | "map";
 
+export const CAMERA_MODES = ["off", "major", "important", "cinematic"] as const;
+export type CameraMode = (typeof CAMERA_MODES)[number];
+
 export interface VirtualPrefs {
   quality: Quality;
   fps: 30 | 60;
   reduceMotion: boolean;
   ambient: boolean;
   dataFlow: boolean;
-  /** Optional event camera: important real events may briefly frame source → route → destination (off by default). */
-  autoFollow: boolean;
+  /**
+   * Optional event camera (off by default): which real events may frame source → route → destination. "major" = high
+   * importance only; "important" = high and medium; "cinematic" = the same events told end to end, ending on the
+   * receiving agent. Presentation only; any user input cancels it.
+   */
+  cameraMode: CameraMode;
+  /** Owner diagnostics overlay (renderer, GPU, frame time, counts). */
+  diagnostics: boolean;
   /** "auto" = 3D where WebGL is available on a capable device, else the 2D map; "map" never loads WebGL. */
   renderer: Renderer;
 }
@@ -46,7 +55,7 @@ export function defaultPrefs(h: DeviceHints): VirtualPrefs {
   const cls = deviceClass(h);
   const strong = (h.cores ?? 4) >= 8 && (h.memoryGb ?? 8) >= 8;
   const quality: Quality = cls === "phone" ? "low" : cls === "tablet" ? "medium" : strong ? "high" : "medium";
-  return { quality, fps: cls === "desktop" ? 60 : 30, reduceMotion: h.prefersReducedMotion, ambient: !h.prefersReducedMotion, dataFlow: true, autoFollow: false,
+  return { quality, fps: cls === "desktop" ? 60 : 30, reduceMotion: h.prefersReducedMotion, ambient: !h.prefersReducedMotion, dataFlow: true, cameraMode: "off", diagnostics: false,
     renderer: !h.webgl || cls === "phone" ? "map" : "auto" };
 }
 
@@ -59,7 +68,9 @@ export function sanitizePrefs(raw: unknown, fallback: VirtualPrefs): VirtualPref
     reduceMotion: typeof r.reduceMotion === "boolean" ? r.reduceMotion : fallback.reduceMotion,
     ambient: typeof r.ambient === "boolean" ? r.ambient : fallback.ambient,
     dataFlow: typeof r.dataFlow === "boolean" ? r.dataFlow : fallback.dataFlow,
-    autoFollow: typeof r.autoFollow === "boolean" ? r.autoFollow : fallback.autoFollow,
+    // (V2.3 stored a boolean "autoFollow": on maps to "important".)
+    cameraMode: CAMERA_MODES.includes(r.cameraMode as CameraMode) ? (r.cameraMode as CameraMode) : r.autoFollow === true ? "important" : fallback.cameraMode,
+    diagnostics: typeof r.diagnostics === "boolean" ? r.diagnostics : fallback.diagnostics,
     renderer: r.renderer === "auto" || r.renderer === "3d" || r.renderer === "map" ? r.renderer : fallback.renderer,
   };
 }

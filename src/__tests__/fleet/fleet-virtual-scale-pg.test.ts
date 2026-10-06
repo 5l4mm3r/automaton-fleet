@@ -18,6 +18,7 @@ import path from "path";
 import { execFileSync } from "child_process";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
+import { ensureLiveUi } from "./fixtures/live-ui.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry } from "./fixtures/economy-registry.js";
 import { totp } from "../../fleet/identity/crypto.js";
 import { PgDashboardGateway } from "../../fleet/dashboard/gateway.js";
@@ -29,12 +30,6 @@ const CODEX = path.resolve(__dirname, "../../../codex-dashboard");
 const UI = path.join(CODEX, "out");
 const PREFS = "fleet.virtual.prefs.v1";
 
-function ensureLiveUi() {
-  const html = path.join(UI, "index.html");
-  if (!fs.existsSync(path.join(UI, "login", "index.html")) || !fs.readFileSync(html, "utf8").includes("LIVE · AUTHORITATIVE")) {
-    execFileSync(process.execPath, ["scripts/build.mjs", "live"], { cwd: CODEX, stdio: "ignore", env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" } });
-  }
-}
 
 /** A real Fleet of n agents behind the real dashboard service, and a signed-in browser context. */
 async function fleetOf(n: number, browser: Browser) {
@@ -105,8 +100,8 @@ describe.skipIf(!process.env.FLEET_SCALE_TESTS || !PG_BIN || !CHROME || !fs.exis
             console.log("PAGE TEXT:", (await page.locator("main").textContent())?.slice(0, 600), "ERRORS:", F.errors.join(" | ").slice(0, 600));
             throw e;
           });
-          await page.waitForFunction((k) => [...document.querySelectorAll('aside[aria-label="Selection details"] li button')].filter((b) => b.textContent?.startsWith("founder-")).length === k, n, { timeout: 60_000 });
-          if (renderer === "map") expect(await page.locator('svg[aria-label="Fleet headquarters map"] g[role=button][aria-label^="founder-"]').count()).toBe(n);
+          await page.waitForFunction((k) => [...document.querySelectorAll('aside[aria-label="Selection details"] li button')].filter((b) => b.textContent?.startsWith("Agent-")).length === k, n, { timeout: 60_000 });
+          if (renderer === "map") expect(await page.locator('svg[aria-label="Fleet headquarters map"] g[role=button][aria-label^="Agent-"]').count()).toBe(n);
           // In the zoomed-out Fleet view every agent is identifiable by name and wallet (compact above 16 agents).
           const labelState = () => page.evaluate(() => {
             const layer = document.querySelector('[aria-label="Agents"]') as HTMLElement;
@@ -114,7 +109,7 @@ describe.skipIf(!process.env.FLEET_SCALE_TESTS || !PG_BIN || !CHROME || !fs.exis
             const rects = shown.map((b) => b.getBoundingClientRect());
             let overlapping = 0;
             rects.forEach((a, i) => { if (rects.some((c, j) => j !== i && a.left < c.right && a.right > c.left && a.top < c.bottom && a.bottom > c.top)) overlapping++; });
-            return { density: layer.dataset.density, shown: shown.length, withNameAndWallet: shown.filter((b) => /founder-\d+/.test(b.textContent ?? "") && /£\d/.test(b.textContent ?? "")).length, overlapping };
+            return { density: layer.dataset.density, shown: shown.length, withNameAndWallet: shown.filter((b) => /Agent-\d+/.test(b.textContent ?? "") && /£\d/.test(b.textContent ?? "")).length, overlapping };
           });
           await page.waitForFunction((k) => [...document.querySelectorAll('[aria-label="Agents"] button')].filter((b) => (b as HTMLElement).style.visibility !== "hidden" && (b as HTMLElement).style.transform).length === k, n, { timeout: 60_000 });
           await page.waitForTimeout(1500); // births settle, the layout converges
@@ -125,7 +120,7 @@ describe.skipIf(!process.env.FLEET_SCALE_TESTS || !PG_BIN || !CHROME || !fs.exis
           r[`${renderer}LabelOverlapPct`] = Math.round((ls.overlapping / n) * 100);
           expect(ls.overlapping / n, "share of labels overlapping another").toBeLessThanOrEqual(0.15);
           // Focus one agent: its label and panel appear whatever the Fleet size.
-          await panel.getByRole("button").filter({ hasText: /^founder-/ }).first().click();
+          await panel.getByRole("button").filter({ hasText: /^Agent-/ }).first().click();
           await panel.getByText("WHY THIS CONDITION", { exact: false }).waitFor();
           // While the camera eases to the agent, then once settled (the steady state a watching Admin sees).
           r[`${renderer}FpsMoving`] = Math.round(await rafRate(page, 1200));

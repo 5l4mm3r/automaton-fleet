@@ -15,18 +15,19 @@ import { focusRect, type Point } from "../world";
 import type { Focus } from "../VirtualMap";
 import { frameAgent } from "./framing";
 import { interact, shotGoal, takeShot, wantShot, type DirectorState } from "./director";
+import type { CameraMode } from "../../command/prefs";
 import type { TransportDirector } from "./flow";
 import type { Occluder, WorkSpot } from "./world-build";
 
 const NONE: ReadonlySet<string> = new Set();
 
-export function CameraRig({ focus, positionsRef, reduceMotion, spots, stations, ghostsRef, occluders = [], autoFollow = false, directorRef }: {
+export function CameraRig({ focus, positionsRef, reduceMotion, spots, stations, ghostsRef, occluders = [], cameraMode = "off", directorRef }: {
   focus: Focus; positionsRef: MutableRefObject<Map<string, Point>>; reduceMotion: boolean;
   spots: ReadonlyMap<string, WorkSpot>; stations: ReadonlyMap<string, Point>; ghostsRef: MutableRefObject<ReadonlySet<string>>;
   /** Tall furniture the Agent View must not look through (world-build). */
   occluders?: readonly Occluder[];
-  /** Auto-follow important events (off by default) and the handle the transport renderer offers them to. */
-  autoFollow?: boolean; directorRef?: MutableRefObject<TransportDirector | null>;
+  /** The event camera mode (off by default) and the handle the transport renderer offers events to. */
+  cameraMode?: CameraMode; directorRef?: MutableRefObject<TransportDirector | null>;
 }) {
   const { camera } = useThree();
   const look = useRef(new THREE.Vector3(0, 0, 2));
@@ -34,9 +35,9 @@ export function CameraRig({ focus, positionsRef, reduceMotion, spots, stations, 
   const started = useRef(false);
   const held = useRef<{ id: string; az: number; at: Point } | null>(null);
   // The event camera: optional, brief, interruptible. Any user input (pointer, wheel, key) or focus change cancels it.
-  const director = useRef<DirectorState>({ enabled: autoFollow, shot: null, lastInteraction: 0 }); // set on mount (focus effect)
+  const director = useRef<DirectorState>({ mode: cameraMode, shot: null, lastInteraction: 0 }); // set on mount (focus effect)
   const gl = useThree((s) => s.gl);
-  useEffect(() => { director.current = { ...director.current, enabled: autoFollow, shot: autoFollow ? director.current.shot : null }; }, [autoFollow]);
+  useEffect(() => { director.current = { ...director.current, mode: cameraMode, shot: cameraMode !== "off" ? director.current.shot : null }; }, [cameraMode]);
   useEffect(() => { director.current = interact(director.current, Date.now()); }, [focus]);
   useEffect(() => {
     const cancel = () => { director.current = interact(director.current, Date.now()); };
@@ -71,7 +72,7 @@ export function CameraRig({ focus, positionsRef, reduceMotion, spots, stations, 
       goalPos.current.set(r.x, height, r.z + back);
     }
     // An event shot (if one is running) frames the event instead of the user's level; it ends by itself or on any input.
-    const shot = level !== "agent" ? shotGoal(director.current, Date.now()) : null;
+    const rc = director.current.shot?.transport.counterpartId, shot = level !== "agent" ? shotGoal(director.current, Date.now(), rc ? positionsRef.current.get(rc) : null) : null;
     if (shot) { goalPos.current.set(shot.pos.x, shot.pos.y, shot.pos.z); goalLook.current.set(shot.look.x, shot.look.y, shot.look.z); }
     if (!started.current || reduceMotion) { camera.position.copy(goalPos.current); look.current.copy(goalLook.current); started.current = true; }
     else {

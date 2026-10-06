@@ -25,6 +25,7 @@ import { execFileSync } from "child_process";
 import { chromium, type Browser, type Page } from "playwright-core";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
+import { ensureLiveUi } from "./fixtures/live-ui.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry } from "./fixtures/economy-registry.js";
 import { totp } from "../../fleet/identity/crypto.js";
 import { PgDashboardGateway } from "../../fleet/dashboard/gateway.js";
@@ -38,12 +39,6 @@ const PREFS = "fleet.virtual.prefs.v1";
 const SHOTS = process.env.FLEET_HQ_SHOTS ?? "";
 const QUALITIES = ["low", "medium", "high", "ultra"] as const;
 
-function ensureLiveUi() {
-  const html = path.join(UI, "index.html");
-  if (!fs.existsSync(path.join(UI, "login", "index.html")) || !fs.readFileSync(html, "utf8").includes("LIVE · AUTHORITATIVE")) {
-    execFileSync(process.execPath, ["scripts/build.mjs", "live"], { cwd: CODEX, stdio: "ignore", env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" } });
-  }
-}
 
 const rafRate = (page: Page, ms = 3000) => page.evaluate((d) => new Promise<number>((res) => { let n = 0; const t0 = performance.now(); const f = () => { n++; if (performance.now() - t0 < d) requestAnimationFrame(f); else res((n * 1000) / d); }; requestAnimationFrame(f); }), ms);
 const round = (v: number) => Math.round(v * 10) / 10;
@@ -211,10 +206,10 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
       await shot(page, file);
       await toFleet(page);
     }
-    await toAgent(page, "founder-1");
-    await shot(page, "12-founder-1-close-up");
+    await toAgent(page, "Agent-1");
+    await shot(page, "12-Agent-1-close-up");
     await page.keyboard.press("Escape"); await page.waitForTimeout(500);
-    expect(await hint(page)).not.toMatch(/^founder-1|^Fleet view/);
+    expect(await hint(page)).not.toMatch(/^Agent-1|^Fleet view/);
     await page.keyboard.press("Escape"); await page.waitForTimeout(500);
     expect(await hint(page)).toMatch(/^Fleet view/);
     expect(await page.getByText("The 3D view stopped").count()).toBe(0);
@@ -229,7 +224,7 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
       // 13. A real state change: founder-6 records research and walks from Venture / Dev to the Library, through the building.
       await startRec(page);
       await R.q(`SELECT fleet.fleet_event('knowledge_recorded', $1, 'agent', '{"topic":"hq-walk"}'::jsonb)`, [walker.id]);
-      await ticker(page, "founder-6 · Research recorded");
+      await ticker(page, "Agent-6 · Research recorded");
       await page.waitForTimeout(3500); await shot(page, "13-agent-walking");
       await page.waitForTimeout(6000); await stopRec(page, "13-agent-walking");
       // 15. The team offer travels from founder-1 to founder-2; founder-2 answers itself; the acceptance travels back.
@@ -299,7 +294,7 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     const card = p.getByRole("article", { name: "Project Client portal" });
     await card.waitFor({ timeout: 30_000 });
     const text = (await card.textContent()) ?? "";
-    for (const t of ["LEAD: founder-1", "TEAM: 2", "6.5 days", "4.5 days", "founder-2", "engineer", "£10.00 fixed", "30 % of post-sweep distributable profit", "Profit distribution (after the Treasury sweep)", "Treasury sweep"]) expect(text, t).toContain(t);
+    for (const t of ["LEAD: Agent-1", "TEAM: 2", "6.5 days", "4.5 days", "Agent-2", "engineer", "£10.00 fixed", "30 % of post-sweep distributable profit", "Profit distribution (after the Treasury sweep)", "Treasury sweep"]) expect(text, t).toContain(t);
     await page.waitForTimeout(3000);
     await shot(page, "15b-team-project-venture");
     await p.screenshot({ path: SHOTS ? path.join(SHOTS, "18-project-panel.png") : path.join(process.env.TMPDIR ?? "/tmp", "hq-18.png") });
@@ -308,13 +303,13 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
 
   it("a real FleetController event moves the agent and travels between departments as information", async () => {
     const { page, R } = F;
-    const A = R.founders[3].id; // founder-4, recorded in the Treasury
+    const A = R.founders[3].id; // Agent-4, recorded in the Treasury
     await R.q(`SELECT fleet.fleet_event('knowledge_recorded', $1, 'agent', '{"topic":"hq-live"}'::jsonb)`, [A]);
     await page.getByRole("list", { name: "Recent Fleet activity" }).getByText("Research recorded").first().waitFor({ timeout: 20_000 });
     await page.waitForTimeout(1500); // mid-flight along the conduits
     await shot(page, "14-information-flow");
-    await page.getByLabel("Agents", { exact: true }).getByRole("button", { name: /^founder-4, .*, RESEARCHING$/ }).waitFor({ timeout: 30_000 });
-    await panel(page).getByRole("button").filter({ hasText: /^founder-4\b/ }).first().click();
+    await page.getByLabel("Agents", { exact: true }).getByRole("button", { name: /^Agent-4, .*, RESEARCHING$/ }).waitFor({ timeout: 30_000 });
+    await panel(page).getByRole("button").filter({ hasText: /^Agent-4\b/ }).first().click();
     await panel(page).getByText("WHY THIS CONDITION", { exact: false }).waitFor();
     expect(await panel(page).textContent()).toContain("Library / Research");
     await toFleet(page);
@@ -356,7 +351,7 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
       await toDepartment(page, "Agent Floor");
       const dep = round(await rafRate(page));
       await toFleet(page);
-      await toAgent(page, "founder-1");
+      await toAgent(page, "Agent-1");
       const agent = round(await rafRate(page));
       await toFleet(page);
       report[`12 agents ${q}`] = { fleet, department: dep, agent };
@@ -379,7 +374,7 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
           await toDepartment(G.page, "Agent Floor");
           const dep = round(await rafRate(G.page));
           await toFleet(G.page);
-          await toAgent(G.page, "founder-1");
+          await toAgent(G.page, "Agent-1");
           const agent = round(await rafRate(G.page));
           await toFleet(G.page);
           report[`${n} agents ${q}`] = { fleet, department: dep, agent };

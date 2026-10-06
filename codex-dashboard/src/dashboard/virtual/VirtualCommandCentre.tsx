@@ -15,7 +15,7 @@ import type { AgentModel } from "../command/agents";
 import { DEPARTMENT, DEPARTMENTS, type DepartmentId } from "../command/departments";
 import { diffReadings, visualFromEvent, type AgentReading, type VisualEvent } from "../command/events";
 import type { Control } from "../command/FleetCommandPage";
-import { defaultPrefs, deviceClass, loadPrefs, QUALITIES, readDeviceHints, savePrefs, type DeviceHints, type Quality, type VirtualPrefs } from "../command/prefs";
+import { defaultPrefs, deviceClass, loadPrefs, QUALITIES, readDeviceHints, savePrefs, type CameraMode, type DeviceHints, type Quality, type VirtualPrefs } from "../command/prefs";
 import type { FeedState } from "../command/useFleetCommand";
 import type { CommandView, Row } from "../command/view";
 import { AgentPanel, DepartmentPanel } from "./VirtualPanels";
@@ -190,7 +190,9 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
         <option value="auto">Automatic</option><option value="3d" disabled={!hints.webgl}>3D{hints.webgl ? "" : " (WebGL unavailable)"}</option><option value="map">Map (no WebGL)</option></select></label>
       <label>Virtual quality<select className={input} value={prefs.quality} onChange={(e) => setPrefs({ ...prefs, quality: e.target.value as Quality })}>{QUALITIES.map((q) => <option key={q} value={q}>{q[0].toUpperCase() + q.slice(1)}</option>)}</select></label>
       <label>Frame rate<select className={input} value={prefs.fps} onChange={(e) => setPrefs({ ...prefs, fps: Number(e.target.value) === 30 ? 30 : 60 })}><option value={30}>30</option><option value={60}>60</option></select></label>
-      {([["reduceMotion", "Reduce motion"], ["ambient", "Ambient animations"], ["dataFlow", "Data flow animations"], ["autoFollow", "Auto-follow important events"]] as const).map(([k, l]) => <label key={k} className="flex items-center gap-2 pt-6"><input type="checkbox" checked={prefs[k]} onChange={(e) => setPrefs({ ...prefs, [k]: e.target.checked })} />{l}</label>)}
+      <label>Event camera<select className={input} value={prefs.cameraMode} onChange={(e) => setPrefs({ ...prefs, cameraMode: e.target.value as CameraMode })}>
+        <option value="off">Off</option><option value="major">Major events</option><option value="important">Important events</option><option value="cinematic">Cinematic</option></select></label>
+      {([["reduceMotion", "Reduce motion"], ["ambient", "Ambient animations"], ["dataFlow", "Data flow animations"], ["diagnostics", "Diagnostics overlay"]] as const).map(([k, l]) => <label key={k} className="flex items-center gap-2 pt-6"><input type="checkbox" checked={prefs[k]} onChange={(e) => setPrefs({ ...prefs, [k]: e.target.checked })} />{l}</label>)}
       <p className="text-xs text-slate-400 sm:col-span-3 lg:col-span-6">Display preferences are kept in this browser only and never change the Fleet.{webglFailed ? " The 3D view stopped (WebGL unavailable or lost), so the map is shown." : ""}</p>
     </div>}
     <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
