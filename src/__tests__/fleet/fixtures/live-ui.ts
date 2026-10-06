@@ -21,7 +21,9 @@ function newestMtime(p: string): number {
 /** Whether the export is a LIVE build at least as new as everything it is built from. */
 export function liveUiCurrent(): boolean {
   const html = path.join(UI, "index.html"), login = path.join(UI, "login", "index.html"), manifest = path.join(CODEX, "artifact-live.json");
-  if (!fs.existsSync(login) || !fs.existsSync(html) || !fs.readFileSync(html, "utf8").includes("LIVE · AUTHORITATIVE")) return false;
+  if (!fs.existsSync(login) || !fs.existsSync(html)) return false;
+  const page = fs.readFileSync(html, "utf8");
+  if (!page.includes("LIVE · AUTHORITATIVE") || page.includes("/hq-preview/")) return false; // a LIVE build, not the preview build
   const pkg = JSON.parse(fs.readFileSync(path.join(CODEX, "package.json"), "utf8")).version;
   if (!fs.existsSync(manifest) || JSON.parse(fs.readFileSync(manifest, "utf8")).version !== pkg) return false;
   const built = fs.statSync(html).mtimeMs;
