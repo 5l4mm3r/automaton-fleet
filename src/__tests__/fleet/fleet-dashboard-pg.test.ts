@@ -132,7 +132,10 @@ describe.skipIf(!PG_BIN || !CHROME)("v38/v39 Admin control centre — Next.js (P
     await page.locator("#totp-secret").waitFor({ state: "visible" });
     totpSecret = (await page.locator("#totp-secret").textContent())!.trim();
     expect(totpSecret).toMatch(/^[A-Z2-7]{32}$/);
-    await page.fill("#totp-code", totp(totpSecret));
+    // The exact enrollment code (its time step is then used); replaying THIS code — not a recomputed one, which could
+    // fall in the next 30 s step on a slow run and be a fresh, valid code — must be refused.
+    const enrolledAt = Date.now(), enrolCode = totp(totpSecret, enrolledAt);
+    await page.fill("#totp-code", enrolCode);
     await page.click("#totp-confirm");
     await page.locator("#login-btn").waitFor();
     // The enrollment link works once.
@@ -141,12 +144,12 @@ describe.skipIf(!PG_BIN || !CHROME)("v38/v39 Admin control centre — Next.js (P
     await page.click("#login-btn");
     await page.locator("#login-code").waitFor({ state: "visible" });
     // The enrollment code's time step was used: a replay of it is refused; the next step's code works.
-    await page.fill("#login-code", totp(totpSecret));
+    await page.fill("#login-code", enrolCode);
     await page.click("#login-totp-btn");
     await page.getByRole("alert").filter({ hasText: "Code refused" }).waitFor();
     await page.click("#login-btn");
     await page.locator("#login-code").waitFor({ state: "visible" });
-    await page.fill("#login-code", totp(totpSecret, Date.now() + 30_000));
+    await page.fill("#login-code", totp(totpSecret, enrolledAt + 30_000));
     await page.click("#login-totp-btn");
     await page.locator("#fig-cash").waitFor();
     const log = (await R.q(`SELECT event, ok FROM fleet.fleet_admin_auth_log ORDER BY seq`)).map((r) => `${r.event}:${r.ok}`);
