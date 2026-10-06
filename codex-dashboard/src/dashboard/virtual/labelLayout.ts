@@ -11,7 +11,9 @@
 export type LabelDensity = "full" | "compact";
 export const COMPACT_ABOVE = 16;
 
-export const densityFor = (agents: number, fleetView: boolean): LabelDensity => (fleetView && agents > COMPACT_ABOVE ? "compact" : "full");
+/** Compact name+wallet tags in the Fleet view above 16 agents, or on a narrow viewport (a phone) at any count. */
+export const NARROW_BELOW = 700;
+export const densityFor = (agents: number, fleetView: boolean, viewportW = Infinity): LabelDensity => (fleetView && (agents > COMPACT_ABOVE || viewportW < NARROW_BELOW) ? "compact" : "full");
 
 export interface LabelItem { id: string; x: number; y: number; w: number; h: number; priority: number }
 export interface Placed { x: number; y: number; displaced: boolean; overlapping: boolean }

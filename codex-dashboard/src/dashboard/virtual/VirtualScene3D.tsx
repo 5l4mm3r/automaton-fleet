@@ -31,6 +31,8 @@ import { Screens, type ScreenFeed } from "./hq/screens";
 import { AdaptiveResolution, Atmosphere, Beacons, CommandCore, Environment, FloorReflections, LightPools, Lights, PostFX } from "./hq/effects";
 import { DataFlow, type TransportDirector } from "./hq/flow";
 import { DiagOverlay, DiagProbe, emptyDiag } from "./hq/diagnostics";
+import { clickSuppressed } from "./hq/nav-state";
+import { RoomHighlight } from "./hq/room-highlight";
 import { workTargets } from "./hq/spots";
 import { navGrid } from "./hq/nav";
 import { stationDesks } from "./hq/choreo";
@@ -42,22 +44,29 @@ const RECEIVE_ONLY: ReadonlySet<string> = new Set(["ground", "floor", "floorDark
 const WORLD_UV: ReadonlySet<MatKey> = new Set(["floor", "corridor", "wall"] as MatKey[]);
 
 /** The static building, merged per material; clicking a room's floor opens that department. */
-const Building = memo(function Building({ q, plan, onRoom }: { q: HQProfile; plan: ReturnType<typeof buildWorld>; onRoom: (id: DepartmentId) => void }) {
+const Building = memo(function Building({ q, plan, onRoom, onHoverRoom, hoveredRoom = null }: { q: HQProfile; plan: ReturnType<typeof buildWorld>; onRoom: (id: DepartmentId) => void; onHoverRoom?: (id: DepartmentId | null) => void; hoveredRoom?: DepartmentId | null }) {
   const geos = useMemo(() => plan.builder.build(WORLD_UV, 2, !q.pbr), [plan, q.pbr]);
   const details = useMemo(() => plan.details.build(WORLD_UV, 2, !q.pbr), [plan, q.pbr]);
   useEffect(() => () => { for (const g of geos.values()) g.dispose(); for (const g of details.values()) g.dispose(); }, [geos, details]);
   const mats = useMemo(() => createMaterials(q), [q]);
   useEffect(() => () => mats.dispose(), [mats]);
+  const roomOf = (p: THREE.Vector3) => DEPARTMENTS.find((r) => Math.abs(p.x - r.x) <= r.w / 2 && Math.abs(p.z - r.z) <= r.d / 2);
+  // A click that ends a drag or pinch (camera navigation) never selects a room.
   const pick = (e: ThreeEvent<MouseEvent>) => {
-    const p = e.point, d = DEPARTMENTS.find((r) => Math.abs(p.x - r.x) <= r.w / 2 && Math.abs(p.z - r.z) <= r.d / 2);
-    if (d) { e.stopPropagation(); onRoom(d.id); }
+    const d = roomOf(e.point);
+    if (d) { e.stopPropagation(); if (!clickSuppressed()) onRoom(d.id); }
   };
+  // Report hover against the SHARED hover state (a plaque may have changed it meanwhile), not a private copy.
+  const hovered = useRef<DepartmentId | null>(hoveredRoom);
+  useEffect(() => { hovered.current = hoveredRoom; }, [hoveredRoom]);
+  const hover = (e: ThreeEvent<PointerEvent>) => { const id = roomOf(e.point)?.id ?? null; if (id !== hovered.current) { hovered.current = id; onHoverRoom?.(id); } };
+  const unhover = () => { document.body.style.cursor = ""; if (hovered.current) { hovered.current = null; onHoverRoom?.(null); } };
   const meshes = (map: Map<string, THREE.BufferGeometry>, tag: string) => [...map].map(([key, g]) => {
     const mat = matOf(key), floor = mat === "floor";
     return <mesh key={`${tag}:${key}`} geometry={g} material={mats.get(mat)}
       castShadow={!!q.shadows && !RECEIVE_ONLY.has(mat) && !mat.startsWith("glow:")} receiveShadow={!!q.shadows && !mat.startsWith("glow:")}
       onClick={floor ? pick : undefined} onPointerOver={floor ? () => { document.body.style.cursor = "pointer"; } : undefined}
-      onPointerOut={floor ? () => { document.body.style.cursor = ""; } : undefined} />;
+      onPointerMove={floor ? hover : undefined} onPointerOut={floor ? unhover : undefined} />;
   });
   return <>{meshes(geos, "w")}{q.detail >= 2 && meshes(details, "d")}</>;
 });
@@ -67,11 +76,11 @@ function ProjectorOut({ projectRef }: { projectRef: MutableRefObject<Projector |
   const camera = useThree((s) => s.camera), gl = useThree((s) => s.gl);
   useEffect(() => {
     const v = new THREE.Vector3();
-    const project: Projector = (p) => {
-      v.set(p.x, 0.15, p.z).project(camera);
+    const project: Projector = (p, _lift, y) => {
+      v.set(p.x, y ?? 0.15, p.z).project(camera);
       if (v.z > 1) return null;
       const el = gl.domElement;
-      return { x: ((v.x + 1) / 2) * el.clientWidth, y: ((1 - v.y) / 2) * el.clientHeight + 6 };
+      return { x: ((v.x + 1) / 2) * el.clientWidth, y: ((1 - v.y) / 2) * el.clientHeight + (y === undefined ? 6 : 0) };
     };
     projectRef.current = project;
     return () => { if (projectRef.current === project) projectRef.current = null; };
@@ -96,7 +105,7 @@ function Driver({ fps }: { fps: number }) {
   return null;
 }
 
-export default function VirtualScene3D({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, onLost, positionsRef, projectRef, stations, births, screenFeed, redAlert, teams }: {
+export default function VirtualScene3D({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, onLost, positionsRef, projectRef, stations, births, screenFeed, redAlert, teams, hoveredRoom = null, onHoverRoom }: {
   models: AgentModel[]; targets: Map<string, Point>; packets: Packet[]; focus: Focus; prefs: VirtualPrefs; selected: string | null;
   onRoom: (id: DepartmentId) => void; onAgent: (id: string) => void; onLost: () => void;
   positionsRef: MutableRefObject<Map<string, Point>>; projectRef: MutableRefObject<Projector | null>;
@@ -105,6 +114,8 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
   screenFeed: ScreenFeed; redAlert: boolean;
   /** Agents actively collaborating on a team project (agent → project), from FleetController's project records. */
   teams: ReadonlyMap<string, string>;
+  /** Fleet view: the room under the pointer (outlined), and the hover report. */
+  hoveredRoom?: DepartmentId | null; onHoverRoom?: (id: DepartmentId | null) => void;
 }) {
   // Some GPU drivers cannot link shadow-map shaders. The first shader failure with shadows on retries the same level
   // without shadow maps (everything else kept); a failure without them hands over to the 2D map.
@@ -157,7 +168,8 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
     <Lights q={q} lights={plan.lights} />
     <Environment q={q} />
     <Atmosphere q={q} lights={plan.lights} ambient={ambient} />
-    <Building q={q} plan={plan} onRoom={onRoom} />
+    <Building q={q} plan={plan} onRoom={onRoom} onHoverRoom={onHoverRoom} hoveredRoom={hoveredRoom} />
+    <RoomHighlight id={focus.level === "fleet" ? hoveredRoom : null} />
     <LightPools q={q} lights={plan.lights} />
     <FloorReflections q={q} />
     <Screens spots={plan.screens} feed={screenFeed} q={q} reduceMotion={prefs.reduceMotion} receivedRef={received} />

@@ -721,3 +721,39 @@ backend: a missing `projects` read is shown as unavailable.
   quality, shadows, governor state, frame time/FPS, Agent count, transports (active, queued, not animated), JS heap.
 - **Preview build:** `node scripts/build.mjs preview` produces the LIVE build under `/hq-preview/`, marked
   "PREVIEW V2.4 · UI 0.8.0" on every page. It uses the same gateway and the same sign-in.
+
+### V2.4 navigation and room identity (preview, owner feedback, 7 October 2026)
+
+These are presentation and navigation changes only.
+
+- **Room plaques** (`RoomLabels.tsx`): every room's canonical name (`departments.ts`, static metadata) sits on a
+  restrained plaque at the room's top-left wall corner, in its accent colour.
+  - Plaques sit above agent labels and are clipped to their own room's on-screen width (wrapping when narrow), so
+    neighbouring plaques never collide.
+  - Hover or keyboard focus outlines the room on the floor (`hq/room-highlight.tsx`), strengthens the plaque and floats
+    the room's one-line purpose beneath it.
+  - Click or tap (floor or plaque) enters the room.
+- **Inside a room:** a prominent title and purpose at the upper left, and a secondary location line
+  (`Fleet HQ › Room [› Agent]`). The old "Esc steps back a level" text is gone.
+- **Camera fit** (`hq/viewfit.ts`, unit-tested): Fleet and room framings fit the ACTUAL viewport at any aspect ratio,
+  by projecting the box corners. The whole facility is visible by default on phones, tablets, laptops and desktops.
+- **Zoom and pan** (`hq/camera.tsx`, `hq/nav-state.ts`), over the whole HQ viewport (canvas, plaques and labels):
+  - wheel zooms toward the pointer;
+  - left- or right-drag pans;
+  - touch: one-finger pan, two-finger pinch zoom (with midpoint pan);
+  - smooth easing, zoom limits ×0.3–×1.35, pan clamped to the facility;
+  - `touch-action: none` applies only inside the HQ viewport;
+  - a drag or pinch never selects a room or agent.
+- **[−] [FIT] [+] controls:** FIT returns to the whole HQ. Entering a room saves the Fleet framing; Back/Esc restores
+  it. The event camera still yields to any user input.
+- **Agent labels:** compact on phone-width viewports (below 700 px), as above 16 agents.
+- **Acceptance test** (`fleet-virtual-hq-pg.test.ts`, "navigation", gated): at 1440×900, 1920×1080, 1366×768, tablet
+  landscape, tablet portrait and mobile portrait it checks:
+  - every room fully on screen when fitted, with legible plaques;
+  - wheel zoom (desktop) and pinch zoom (touch emulation) toward the point;
+  - drag pan (and right-drag on desktop), with no room entered by a gesture;
+  - FIT restores the whole facility;
+  - entering a room by floor and by plaque, with the title and purpose shown;
+  - Esc restores the previous zoom;
+  - hover shows the purpose (desktop);
+  - after zoom and pan, a real event still travels and diagnostics still render.

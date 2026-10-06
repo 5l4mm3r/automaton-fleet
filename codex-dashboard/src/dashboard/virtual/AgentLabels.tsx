@@ -11,7 +11,8 @@
  * requestAnimationFrame loop places the labels (transforms via CSSOM — no style attributes, the deck's strict CSP).
  * Label sizes are measured only when their content changes, never per frame.
  */
-import { memo, useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
+import { clickSuppressed } from "./hq/nav-state";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
 import { money } from "../model";
 import type { AgentModel } from "../command/agents";
 import { BAND_TEXT, type HealthBand } from "../command/economics";
@@ -19,7 +20,8 @@ import type { VirtualPrefs } from "../command/prefs";
 import { densityFor, layoutLabels, type LabelItem } from "./labelLayout";
 import type { BirthState, Point } from "./world";
 
-export type Projector = (p: Point, lift: number) => { x: number; y: number } | null;
+/** World → label-layer pixels. `y` (3D only) projects a point at that height (default: the floor). */
+export type Projector = (p: Point, lift: number, y?: number) => { x: number; y: number } | null;
 
 const PRIORITY: Readonly<Record<HealthBand, number>> = { CRITICAL: 3, WOUNDED: 2, WINNING: 1, HEALTHY: 1, UNKNOWN: 1, DEAD: 0 };
 const EDGE: Readonly<Record<HealthBand, string>> = {
@@ -39,7 +41,10 @@ export const AgentLabels = memo(function AgentLabels({ models, positionsRef, pro
   const leaders = useRef<SVGSVGElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const lastSig = useRef(""), lastPlaced = useRef<ReturnType<typeof layoutLabels> | null>(null);
-  const density = densityFor(models.length, fleetView);
+  // The label layer's width (a phone gets compact tags so the small facility stays readable).
+  const [layerW, setLayerW] = useState(Infinity);
+  useEffect(() => { const el = root.current; if (!el) return; const ro = new ResizeObserver(() => setLayerW(el.clientWidth || Infinity)); ro.observe(el); return () => ro.disconnect(); }, []);
+  const density = densityFor(models.length, fleetView, layerW);
   const live = useRef({ models, selected, hidden, fps: prefs.fps });
   useEffect(() => { live.current = { models, selected, hidden, fps: prefs.fps }; }, [models, selected, hidden, prefs.fps]);
 
@@ -100,7 +105,7 @@ export const AgentLabels = memo(function AgentLabels({ models, positionsRef, pro
       const name = `${m.agent.name}, ${money(m.agent.cash)}, ${m.health.label}, ${m.placement.activity}${isNew ? ", new" : ""}`;
       return <button key={id} type="button" data-band={band}
         ref={(el) => { if (el) { els.current.set(id, el); if (!el.style.transform) el.style.visibility = "hidden"; } else { els.current.delete(id); sizes.current.delete(id); } }}
-        onClick={() => onAgent(id)} aria-label={name}
+        onClick={() => { if (!clickSuppressed()) onAgent(id); }} aria-label={name}
         className={`pointer-events-auto absolute left-0 top-0 whitespace-nowrap rounded border leading-tight ${selected === id ? "border-slate-100 bg-slate-900 ring-1 ring-slate-100" : `${EDGE[band]} bg-slate-950/85`} ${isNew ? "outline outline-1 outline-cyan-300" : ""} focus-visible:outline-2 focus-visible:outline-cyan-300 ${density === "compact" && selected !== id ? "px-1 py-0 text-[10px]" : "px-1.5 py-0.5 text-center"}`}>
         {density === "compact" && selected !== id
           ? <span className={band === "CRITICAL" || band === "WOUNDED" ? "font-semibold" : undefined}><span className="text-slate-100">{m.agent.name.length > 14 ? `${m.agent.name.slice(0, 13)}…` : m.agent.name}</span><span className="text-slate-500"> · </span><span className={`font-mono ${band === "DEAD" ? "text-slate-500" : BAND_TEXT[band]}`}>{money(m.agent.cash)}</span></span>

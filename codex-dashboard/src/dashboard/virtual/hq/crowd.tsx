@@ -24,6 +24,7 @@ import type { AgentModel } from "../../command/agents";
 import { DEPARTMENT } from "../../command/departments";
 import { identityColours, portraitFigure, portraitPixels, PORTRAIT_SIZE, seedOf } from "../../command/portrait";
 import { pathLength, roomAt } from "./route";
+import { clickSuppressed } from "./nav-state";
 import { findPath, lineClear, lookahead, walkable, type NavGrid } from "./nav";
 import { chooseActivity, giveWay, reactionAt, walkSpeed, type Activity, type Reaction } from "./choreo";
 import { appearanceOf } from "./appearance";
@@ -499,6 +500,7 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
 
   const click = (p: PartName) => (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
+    if (clickSuppressed()) return; // the end of a drag or pinch, not a selection
     const i = e.instanceId !== undefined ? slots.current.get(p)?.[e.instanceId] : undefined, m = i !== undefined ? models[i] : undefined;
     if (m) onAgent(m.agent.id);
   };

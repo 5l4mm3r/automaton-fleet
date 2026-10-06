@@ -8,6 +8,8 @@
  * changes between two authoritative readings (events.ts). Ambient effects (lights, the core's rings, dust) carry no
  * meaning and can be switched off. Panels show the shared Fleet Command components; actions use the deck's controls.
  */
+import { RoomLabels } from "./RoomLabels";
+import { HQ_NAV } from "./hq/nav-state";
 import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Fleet } from "../model";
 import { button, input } from "../ui";
@@ -48,6 +50,8 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
   const [hints, setHints] = useState<DeviceHints | null>(null);
   const [prefs, setPrefsState] = useState<VirtualPrefs | null>(null);
   const [focus, setFocus] = useState<Focus>(focusAgent ? { level: "agent", id: focusAgent } : { level: "fleet" });
+  // Fleet view: the room under the pointer (or keyboard focus) — outlined in the scene, its plaque strengthened.
+  const [hoveredRoom, setHoveredRoom] = useState<DepartmentId | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [webglFailed, setWebglFailed] = useState(false);
   const [packets, setPackets] = useState<Packet[]>([]);
@@ -168,7 +172,11 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
   // Tablets render the scene simplified unless the Admin chose otherwise.
   const effective: VirtualPrefs = use3d && cls === "tablet" && prefs.renderer === "auto" && (prefs.quality === "high" || prefs.quality === "ultra") ? { ...prefs, quality: "medium" } : prefs;
   const selectedAgent = focus.level === "agent" ? models.find((m) => m.agent.id === focus.id) ?? null : null;
-  const onRoom = (id: DepartmentId) => setFocus({ level: "department", id });
+  const onRoom = (id: DepartmentId) => { setHoveredRoom(null); setFocus({ level: "department", id }); };
+  // Camera controls: [−] [+] zoom about the view's centre; FIT returns to the whole facility, fitted to this viewport.
+  const fit = () => { HQ_NAV.commands.push({ kind: "fit" }); setFocus({ level: "fleet" }); };
+  const zoom = (factor: number) => HQ_NAV.commands.push({ kind: "zoom", factor });
+  const room = focus.level === "department" ? DEPARTMENT[focus.id] : selectedAgent ? DEPARTMENT[selectedAgent.placement.department] : null;
   const onAgent = (id: string) => setFocus({ level: "agent", id });
   const sceneProps = { models, targets, packets, focus, prefs: effective, selected: selectedAgent?.agent.id ?? null, onRoom, onAgent, positionsRef: positions, projectRef: project,
     stations, births, birthStates };
@@ -196,15 +204,30 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
       <p className="text-xs text-slate-400 sm:col-span-3 lg:col-span-6">Display preferences are kept in this browser only and never change the Fleet.{webglFailed ? " The 3D view stopped (WebGL unavailable or lost), so the map is shown." : ""}</p>
     </div>}
     <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
-      <div className="relative h-[62vh] min-h-[360px] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950">
+      <div data-hq-viewport className={`relative h-[62vh] min-h-[360px] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 ${use3d ? "touch-none" : ""}`}>
         {use3d ? <SceneBoundary onError={() => setWebglFailed(true)}><Suspense fallback={<p className="p-5 text-sm text-slate-400">Loading the 3D facility…</p>}>
-          <Scene3D {...sceneProps} screenFeed={screenFeed} redAlert={redAlert} teams={teams} onLost={() => setWebglFailed(true)} /></Suspense></SceneBoundary>
+          <Scene3D {...sceneProps} screenFeed={screenFeed} redAlert={redAlert} teams={teams} onLost={() => setWebglFailed(true)} hoveredRoom={hoveredRoom} onHoverRoom={setHoveredRoom} /></Suspense></SceneBoundary>
           : <VirtualMap {...sceneProps} />}
         <AgentLabels models={models} positionsRef={positions} projectRef={project} prefs={effective} selected={selectedAgent?.agent.id ?? null} fleetView={focus.level === "fleet"} onAgent={onAgent} hidden={hidden} marked={birthStates} />
         <ol aria-live="polite" aria-label="Recent Fleet activity" className="pointer-events-none absolute bottom-3 left-3 z-50 max-w-[70%] space-y-1 text-xs">
           {ticker.map((v) => <li key={v.id} className="rounded bg-slate-950 px-2 py-1 text-slate-200">{utc(v.at, true).slice(11)} · {models.find((m) => m.agent.id === v.agentId)?.agent.name ?? "Fleet"} · {v.label}</li>)}
         </ol>
-        <p className="pointer-events-none absolute right-3 top-3 z-50 rounded bg-slate-950/80 px-2 py-1 text-xs text-slate-400">{focus.level === "fleet" ? "Fleet view" : focus.level === "department" ? DEPARTMENT[focus.id].name : selectedAgent?.agent.name ?? "Agent"} · Esc steps back a level</p>
+        {use3d && <RoomLabels projectRef={project} visible={focus.level === "fleet"} hovered={hoveredRoom} onHover={setHoveredRoom} onRoom={onRoom} />}
+        {/* Where you are: the location line (secondary) and, inside a room, its title and purpose (primary). */}
+        <div className="pointer-events-none absolute left-3 top-3 z-50 max-w-[min(34rem,70%)]">
+          <p aria-label="Location" className="inline-block rounded bg-slate-950/75 px-2 py-0.5 text-[11px] uppercase tracking-[0.2em] text-slate-400">
+            Fleet HQ{room ? <> › <span className="text-slate-300">{room.name}</span></> : null}{focus.level === "agent" && selectedAgent ? <> › <span className="text-slate-300">{selectedAgent.agent.name}</span></> : null}
+          </p>
+          {room && focus.level === "department" && <div role="heading" aria-level={2} aria-label={`${room.name}: ${room.purpose}`} className="mt-2 border-l-2 border-cyan-400 bg-slate-950/80 py-1.5 pl-3 pr-4 shadow-lg shadow-black/40">
+            <p className="text-xl font-semibold uppercase tracking-[0.14em] text-white sm:text-2xl">{room.name}</p>
+            <p className="mt-0.5 text-sm text-slate-300">{room.purpose}</p>
+          </div>}
+        </div>
+        {use3d && focus.level !== "agent" && <div role="group" aria-label="Camera" className="absolute right-3 top-3 z-50 flex overflow-hidden rounded border border-slate-600 bg-slate-950/85 text-sm text-slate-200 shadow">
+          <button type="button" aria-label="Zoom out" className="px-3 py-1 hover:bg-slate-800" onClick={() => zoom(1.25)}>−</button>
+          <button type="button" aria-label="Fit the whole HQ" className="border-x border-slate-600 px-3 py-1 text-xs font-semibold tracking-widest hover:bg-slate-800" onClick={fit}>FIT</button>
+          <button type="button" aria-label="Zoom in" className="px-3 py-1 hover:bg-slate-800" onClick={() => zoom(0.8)}>+</button>
+        </div>}
       </div>
       <aside aria-label="Selection details" className="max-h-[62vh] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900/95 p-5">
         {focus.level === "agent" && selectedAgent ? <AgentPanel m={selectedAgent} fleet={fleet} view={view} control={control} go={go} loadLedger={loadLedger} />

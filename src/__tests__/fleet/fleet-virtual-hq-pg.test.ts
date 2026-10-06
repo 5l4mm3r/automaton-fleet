@@ -161,7 +161,8 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     await page.waitForTimeout(6000); // births settle, people walk to their spots, the camera arrives
   };
   const shot = async (page: Page, name: string) => { if (SHOTS) await page.locator("canvas").first().screenshot({ path: path.join(SHOTS, `${name}.png`) }); };
-  const hint = (page: Page) => page.getByText(/· Esc steps back a level$/).textContent();
+  // The current level: the last segment of the Location line ("Fleet HQ" · "Fleet HQ › Treasury" · "… › Agent-1").
+  const hint = async (page: Page) => ((await page.getByLabel("Location", { exact: true }).textContent()) ?? "").split("›").map((x) => x.trim()).pop() ?? "";
   const panel = (page: Page) => page.getByRole("complementary", { name: "Selection details" });
   const toDepartment = async (page: Page, dep: string) => {
     await panel(page).getByRole("button", { name: dep, exact: true }).first().click();
@@ -169,8 +170,8 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     expect(await hint(page)).toMatch(new RegExp(`^${dep.replace("/", "\\/")}`));
   };
   const toFleet = async (page: Page) => {
-    for (let i = 0; i < 3 && !/^Fleet view/.test((await hint(page)) ?? ""); i++) { await page.keyboard.press("Escape"); await page.waitForTimeout(400); }
-    expect(await hint(page)).toMatch(/^Fleet view/);
+    for (let i = 0; i < 3 && !/^Fleet HQ$/.test((await hint(page)) ?? ""); i++) { await page.keyboard.press("Escape"); await page.waitForTimeout(400); }
+    expect(await hint(page)).toMatch(/^Fleet HQ$/);
   };
   const toAgent = async (page: Page, name: string) => {
     await panel(page).getByRole("button").filter({ hasText: new RegExp(`^${name}\\b`) }).first().click();
@@ -199,7 +200,7 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
   it("hierarchical camera, the live agent panel, Escape steps back one level; the department views", async () => {
     const { page, origin } = F;
     await open(page, origin, "high");
-    expect(await hint(page)).toMatch(/^Fleet view/);
+    expect(await hint(page)).toMatch(/^Fleet HQ$/);
     for (const [dep, file] of [["Fleet Command", "05-fleet-command"], ["Treasury", "06-treasury-banner"], ["Agent Floor", "07-agent-floor"], ["Opportunity Lab", "08-opportunity-lab"],
       ["Venture / Dev", "09-venture-dev"], ["Library / Research", "10-library-research"], ["Security / Systems", "11-security-systems"], ["Marketing", "11b-marketing"]] as const) {
       await toDepartment(page, dep);
@@ -209,9 +210,9 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     await toAgent(page, "Agent-1");
     await shot(page, "12-Agent-1-close-up");
     await page.keyboard.press("Escape"); await page.waitForTimeout(500);
-    expect(await hint(page)).not.toMatch(/^Agent-1|^Fleet view/);
+    expect(await hint(page)).not.toMatch(/^Agent-1|^Fleet HQ$/);
     await page.keyboard.press("Escape"); await page.waitForTimeout(500);
-    expect(await hint(page)).toMatch(/^Fleet view/);
+    expect(await hint(page)).toMatch(/^Fleet HQ$/);
     expect(await page.getByText("The 3D view stopped").count()).toBe(0);
   });
 
@@ -329,7 +330,7 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     await page.waitForTimeout(4500); await shot(page, "22-auto-camera");
     await page.waitForTimeout(2500); await stopRec(page, "22-auto-camera");
     await page.mouse.move(400, 300); await page.mouse.wheel(0, -200); await page.waitForTimeout(600); // interaction: manual control
-    expect(await hint(page)).toMatch(/^Fleet view/); // the camera level never changes on its own
+    expect(await hint(page)).toMatch(/^Fleet HQ$/); // the camera level never changes on its own
     // 23. Reduce Motion: no racing packet — source, route, destination and label shown together; state still updates.
     await open(page, origin, "high", { reduceMotion: true });
     await startRec(page);
@@ -340,6 +341,134 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
     expect(await page.getByText("The 3D view stopped").count()).toBe(0);
     expect(errors, errors.join("\n")).toEqual([]);
     await open(page, origin, "high");
+  });
+
+  // Room identity and camera navigation at every viewport class (owner's acceptance list). Rooms are measured through
+  // their plaques' reported on-screen footprints (data-onscreen / data-cx / data-cy / data-w), not by eye.
+  const VIEWPORTS = [
+    { name: "1440x900", w: 1440, h: 900, touch: false }, { name: "1920x1080", w: 1920, h: 1080, touch: false }, { name: "1366x768", w: 1366, h: 768, touch: false },
+    { name: "tablet-landscape", w: 1180, h: 820, touch: true }, { name: "tablet-portrait", w: 820, h: 1180, touch: true }, { name: "mobile-portrait", w: 390, h: 844, touch: true },
+  ] as const;
+  it("navigation: every room labelled and reachable, wheel/drag/pinch zoom and pan, FIT, room titles, Back/Esc history — at every viewport", async () => {
+    const { page, origin, R, errors } = F;
+    const results: Record<string, Record<string, unknown>> = {};
+    const box = async () => (await page.locator('[aria-label="Rooms"]').boundingBox())!;
+    const plaque = (id: string) => page.locator(`[data-room="${id}"]`);
+    const num = async (id: string, k: string) => Number(await plaque(id).getAttribute(`data-${k}`));
+    const onscreen = async () => page.locator('[data-room][data-onscreen="1"]').count();
+    const settle = () => page.waitForTimeout(900);
+    const loc = () => hint(page);
+    // Open floor of a room where nothing (an agent's label, a plaque) is drawn over the 3D view.
+    const openFloor = async (id: string, b: { x: number; y: number }) => {
+      const cands: Array<[number, number]> = [];
+      // A grid over the room's floor: from the entrance (fx/fy) back past the centre (cx/cy), across its width.
+      const fx = await num(id, "fx"), fy = await num(id, "fy"), cx = await num(id, "cx"), cy = await num(id, "cy"), w = await num(id, "w");
+      for (const t of [0, 1, 0.5, 1.5, 0.25, 1.25, 1.75]) for (const dx of [0, -0.3, 0.3, -0.18, 0.18, -0.4, 0.4]) cands.push([fx + (cx - fx) * t + dx * w, fy + (cy - fy) * t]);
+      const free = await page.evaluate(([pts, ox, oy]) => (pts as Array<[number, number]>).find(([x, y]) => document.elementFromPoint(ox + x, oy + y)?.tagName === "CANVAS") ?? null, [cands, b.x, b.y] as const);
+      expect(free, `an uncovered floor point in ${id}`).not.toBeNull();
+      return free;
+    };
+    const cdp = await page.context().newCDPSession(page);
+    const touch = async (type: "touchStart" | "touchMove" | "touchEnd", points: Array<{ x: number; y: number }>) =>
+      cdp.send("Input.dispatchTouchEvent", { type, touchPoints: points.map((p, i) => ({ x: p.x, y: p.y, id: i, radiusX: 4, radiusY: 4, force: 1 })) });
+    try {
+      for (const vp of VIEWPORTS) {
+        const r: Record<string, unknown> = {};
+        await page.setViewportSize({ width: vp.w, height: vp.h });
+        if (vp.touch) await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+        await open(page, origin, "high", { renderer: "3d", diagnostics: vp.name === "1440x900", cameraMode: "off" });
+        await page.locator('[aria-label="Rooms"]').scrollIntoViewIfNeeded();
+        await settle();
+        const b = await box();
+        // 1. The default view fits the whole facility: every room's floor fully on screen; every plaque legible inside.
+        r.fittedRooms = await onscreen();
+        if (r.fittedRooms !== 11) { await shot(page, `nav-${vp.name}-DEBUG`); console.log("DEBUG plaques", JSON.stringify(await page.locator("[data-room]").evaluateAll((els) => els.map((e) => ({ id: (e as HTMLElement).dataset.room, on: (e as HTMLElement).dataset.onscreen, cx: (e as HTMLElement).dataset.cx, cy: (e as HTMLElement).dataset.cy, w: (e as HTMLElement).dataset.w, t: (e as HTMLElement).style.transform }))))); }
+        expect(r.fittedRooms, `${vp.name} fit`).toBe(11);
+        for (const id of ["command", "treasury", "security", "estate"]) {
+          const pb = (await plaque(id).boundingBox())!;
+          expect(pb.x >= b.x - 1 && pb.y >= b.y - 1 && pb.x + pb.width <= b.x + b.width + 1, `${vp.name} plaque ${id} inside`).toBe(true);
+          const px = await plaque(id).locator("span").first().evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
+          expect(px, `${vp.name} plaque font`).toBeGreaterThanOrEqual(9);
+        }
+        await shot(page, `nav-${vp.name}-1-fleet-fitted`);
+        const tw0 = await num("treasury", "w"), tx0 = await num("treasury", "cx"), ty0 = await num("treasury", "cy");
+        // 2. Zoom toward a point (wheel on desktop, pinch on touch) — the point stays put, the room grows; no room entered.
+        if (!vp.touch) {
+          await page.mouse.move(b.x + tx0, b.y + ty0); await page.mouse.wheel(0, -500); await settle();
+        } else {
+          const c = { x: b.x + tx0, y: b.y + ty0 };
+          await touch("touchStart", [{ x: c.x - 30, y: c.y }, { x: c.x + 30, y: c.y }]);
+          for (let k = 1; k <= 8; k++) await touch("touchMove", [{ x: c.x - 30 - k * 12, y: c.y }, { x: c.x + 30 + k * 12, y: c.y }]);
+          await touch("touchEnd", []); await settle();
+        }
+        r.zoomGrowth = +((await num("treasury", "w")) / tw0).toFixed(2);
+        expect(r.zoomGrowth as number, `${vp.name} zoom`).toBeGreaterThan(1.25);
+        r.zoomAnchorDriftPx = Math.round(Math.hypot((await num("treasury", "cx")) - tx0, (await num("treasury", "cy")) - ty0));
+        expect(r.zoomAnchorDriftPx as number, `${vp.name} zoom toward the point`).toBeLessThan(Math.max(40, b.width * 0.08));
+        expect(await loc(), `${vp.name} zoom never enters a room`).toBe("Fleet HQ");
+        // 3. Pan (mouse drag, or one finger) — the HQ moves with the pointer; no room entered.
+        const cx1 = await num("treasury", "cx"), from = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+        if (!vp.touch) { await page.mouse.move(from.x, from.y); await page.mouse.down(); for (let k = 1; k <= 10; k++) await page.mouse.move(from.x + k * 12, from.y); await page.mouse.up(); }
+        else { await touch("touchStart", [from]); for (let k = 1; k <= 10; k++) await touch("touchMove", [{ x: from.x + k * 12, y: from.y }]); await touch("touchEnd", []); }
+        await settle();
+        r.panShiftPx = Math.round((await num("treasury", "cx")) - cx1);
+        expect(r.panShiftPx as number, `${vp.name} pan`).toBeGreaterThan(60);
+        expect(await loc(), `${vp.name} pan never enters a room`).toBe("Fleet HQ");
+        if (!vp.touch) { // right-drag pans too
+          const cx2 = await num("treasury", "cx"); await page.mouse.move(from.x, from.y); await page.mouse.down({ button: "right" });
+          for (let k = 1; k <= 6; k++) await page.mouse.move(from.x - k * 12, from.y); await page.mouse.up({ button: "right" }); await settle();
+          r.rightDragShiftPx = Math.round((await num("treasury", "cx")) - cx2); expect(r.rightDragShiftPx as number).toBeLessThan(-30);
+        }
+        await shot(page, `nav-${vp.name}-2-zoomed-panned`);
+        // 4. FIT restores the whole building.
+        await page.getByRole("button", { name: "Fit the whole HQ" }).click(); await settle(); await settle();
+        r.afterFit = await onscreen(); expect(r.afterFit, `${vp.name} FIT`).toBe(11);
+        r.fitRestoresWidth = +((await num("treasury", "w")) / tw0).toFixed(2); expect(Math.abs((r.fitRestoresWidth as number) - 1)).toBeLessThan(0.05);
+        // 5. Enter a room by clicking its floor: the camera flies in, the title and purpose appear, the location reads it.
+        const [vx, vy] = (await openFloor("venture", b))!;
+        if (!vp.touch) await page.mouse.click(b.x + vx, b.y + vy); else await page.touchscreen.tap(b.x + vx, b.y + vy).catch(async () => { await touch("touchStart", [{ x: b.x + vx, y: b.y + vy }]); await touch("touchEnd", []); });
+        await page.waitForTimeout(2500);
+        r.enteredByFloor = await loc(); expect(r.enteredByFloor, `${vp.name} room click`).toBe("Venture / Dev");
+        const title = page.getByRole("heading", { name: /^Venture \/ Dev: / });
+        expect(await title.isVisible()).toBe(true);
+        r.title = (await title.textContent())?.replace(/\s+/g, " ").trim();
+        await shot(page, `nav-${vp.name}-3-room-title`);
+        // 6. Back (Esc) returns to the Fleet framing it came from — including a user zoom made before entering.
+        await page.keyboard.press("Escape"); await page.waitForTimeout(2200);
+        expect(await loc()).toBe("Fleet HQ"); expect(await onscreen()).toBe(11);
+        await page.getByRole("button", { name: "Zoom in" }).click(); await settle();
+        const zoomedW = await num("treasury", "w");
+        await plaque("security").click(); await page.waitForTimeout(2200); // entering by the plaque works too
+        r.enteredByPlaque = await loc(); expect(r.enteredByPlaque).toBe("Security / Systems");
+        await page.keyboard.press("Escape"); await page.waitForTimeout(2500);
+        r.backRestoresZoom = +((await num("treasury", "w")) / zoomedW).toFixed(2); expect(Math.abs((r.backRestoresZoom as number) - 1)).toBeLessThan(0.05);
+        await page.getByRole("button", { name: "Fit the whole HQ" }).click(); await settle();
+        if (!vp.touch) { // hover: the plaque strengthens and shows the room's purpose
+          const [lx, ly] = (await openFloor("library", b))!;
+          await page.mouse.move(b.x + lx, b.y + ly); await page.waitForTimeout(400);
+          const purpose = plaque("library").getByRole("note");
+          expect(await purpose.isVisible(), `${vp.name} hover shows the purpose`).toBe(true);
+          r.hoverPurpose = await purpose.textContent();
+          const pb = (await purpose.boundingBox())!; expect(pb.width).toBeGreaterThan(80); // a readable line, not a squeezed column
+          await shot(page, `nav-${vp.name}-4-hover`);
+        }
+        if (vp.touch) await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+        results[vp.name] = r;
+      }
+      // Zoom/pan does not break the rest: a real event still travels and lands in the feed; diagnostics still render.
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await open(page, origin, "high", { renderer: "3d", diagnostics: true });
+      await page.mouse.wheel(0, -300); await page.waitForTimeout(500);
+      await R.q(`SELECT fleet.fleet_event('knowledge_recorded', $1, 'agent', '{"topic":"nav-check"}'::jsonb)`, [R.founders[2].id]);
+      await ticker(page, "Research recorded");
+      expect(await page.getByLabel("Diagnostics").textContent()).toMatch(/fps/);
+      expect(await page.getByText("The 3D view stopped").count()).toBe(0);
+      expect(errors, errors.join("\n")).toEqual([]);
+    } finally {
+      console.log(`hq navigation: ${JSON.stringify(results)}`);
+      await page.setViewportSize({ width: 1600, height: 1000 });
+      await cdp.detach().catch(() => {});
+    }
   });
 
   for (const [i, q] of QUALITIES.entries()) {

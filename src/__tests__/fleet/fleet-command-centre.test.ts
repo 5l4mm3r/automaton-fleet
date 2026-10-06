@@ -36,6 +36,8 @@ import { transportSkin, registerTransportSkin } from "../../../codex-dashboard/s
 import { findPath, lineClear, lookahead, navGrid, walkable } from "../../../codex-dashboard/src/dashboard/virtual/hq/nav";
 import { chooseActivity, giveWay, isWorking, reactionAt, stationDesks, walkSpeed, type ActivityContext } from "../../../codex-dashboard/src/dashboard/virtual/hq/choreo";
 import { displayAgentName } from "../../../codex-dashboard/src/dashboard/naming";
+import { applyView, clampView, FACILITY, fitBox, FLEET_PITCH, ROOM_PITCH, roomBox, ZOOM_MAX, ZOOM_MIN, zoomToward } from "../../../codex-dashboard/src/dashboard/virtual/hq/viewfit";
+import * as THREE from "../../../codex-dashboard/node_modules/three/build/three.module.js";
 import { NAV_BOUNDS } from "../../../codex-dashboard/src/dashboard/virtual/hq/world-build";
 import { IDLE_BEFORE_SHOT_MS, interact, shotGoal, takeShot, wantShot, type DirectorState } from "../../../codex-dashboard/src/dashboard/virtual/hq/director";
 import { blockers, frameAgent, viewable } from "../../../codex-dashboard/src/dashboard/virtual/hq/framing";
@@ -450,6 +452,35 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
     const cancelled = interact(shooting, 10_200);
     expect(cancelled.shot).toBeNull(); expect(shotGoal(cancelled, 10_300)).toBeNull();
     expect(wantShot(cancelled, hi, 10_300, ctx)).toBe(false);
+  });
+
+  it("camera fit and navigation: the whole facility fits ANY viewport; zoom keeps the pointer's ground point; limits hold", () => {
+    const corners = [FACILITY.x0, FACILITY.x1].flatMap((x) => [FACILITY.y0, FACILITY.y1].flatMap((y) => [FACILITY.z0, FACILITY.z1].map((z) => new THREE.Vector3(x, y, z))));
+    // Phones (portrait), tablets (both ways), laptops, desktops, ultrawide.
+    for (const [w, h] of [[390, 844], [820, 1180], [1180, 820], [1366, 768], [1440, 900], [1920, 1080], [3440, 1440]]) {
+      const f = fitBox(FACILITY, w / h, 42, FLEET_PITCH);
+      const cam = new THREE.PerspectiveCamera(42, w / h, 0.1, 4000); cam.position.copy(f.pos); cam.lookAt(f.look); cam.updateMatrixWorld();
+      for (const c of corners) { const v = c.clone().project(cam); expect(Math.abs(v.x), `${w}x${h}`).toBeLessThanOrEqual(1); expect(Math.abs(v.y), `${w}x${h}`).toBeLessThanOrEqual(1); }
+      // ...and the fit is tight (not a far-away speck): 10% closer would crop.
+      const near = new THREE.PerspectiveCamera(42, w / h, 0.1, 4000); near.position.copy(f.look).addScaledVector(f.pos.clone().sub(f.look).normalize(), f.distance * 0.9); near.lookAt(f.look); near.updateMatrixWorld();
+      expect(corners.some((c) => { const v = c.clone().project(near); return Math.abs(v.x) > 1 || Math.abs(v.y) > 1; }), `${w}x${h} tight`).toBe(true);
+    }
+    // Rooms fit too (a narrow portrait screen included).
+    for (const d of DEPARTMENTS) expect(fitBox(roomBox(d), 390 / 844, 42, ROOM_PITCH).distance).toBeLessThan(fitBox(FACILITY, 390 / 844, 42, FLEET_PITCH).distance);
+    // Zoom toward a ground point keeps that point at the same place relative to the look-at point (scaled), so it stays
+    // under the pointer; zoom is limited; pan cannot leave the facility.
+    const base = { x: 0, z: 3 }, at = { x: 12, z: -20 };
+    const v1 = zoomToward({ zoom: 1, pan: { x: 0, z: 0 } }, base, 0.5, at);
+    expect(v1.zoom).toBe(0.5);
+    const l1 = { x: base.x + v1.pan.x, z: base.z + v1.pan.z };
+    expect((at.x - l1.x) / (at.x - base.x)).toBeCloseTo(0.5, 6); expect((at.z - l1.z) / (at.z - base.z)).toBeCloseTo(0.5, 6);
+    expect(zoomToward({ zoom: 1, pan: { x: 0, z: 0 } }, base, 0.0001, null).zoom).toBe(ZOOM_MIN);
+    expect(zoomToward({ zoom: 1, pan: { x: 0, z: 0 } }, base, 1000, null).zoom).toBe(ZOOM_MAX);
+    const far = clampView({ zoom: 1, pan: { x: 500, z: -500 } }, base);
+    expect(base.x + far.pan.x).toBe(FACILITY.x1); expect(base.z + far.pan.z).toBe(FACILITY.z0);
+    // The view is applied as a pan of look and camera together and a scaling of the distance.
+    const f = fitBox(FACILITY, 16 / 9, 42, FLEET_PITCH), v = applyView(f, { zoom: 0.5, pan: { x: 2, z: -1 } });
+    expect(v.look.x - f.look.x).toBeCloseTo(2, 6); expect(v.pos.distanceTo(v.look)).toBeCloseTo(f.distance * 0.5, 4);
   });
 
   it("Agent naming: stored Genesis names (founder-N) are presented as Agent-N; identities and other names are untouched", () => {
