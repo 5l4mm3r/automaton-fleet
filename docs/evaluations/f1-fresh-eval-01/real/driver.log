@@ -1,0 +1,20 @@
+P-FRESH-1: start (remaining 1.5000 USD)
+P-FRESH-1: 1 calls, 0.02341 USD; total 0.02341 USD
+P-LEGACY-1: start (remaining 1.4766 USD)
+P-LEGACY-1: 2 calls, 0.04535 USD; total 0.06876 USD
+P-NOMEM-1: start (remaining 1.4312 USD)
+P-NOMEM-1: 2 calls, 0.03711 USD; total 0.10586 USD
+P-FRESH-2: start (remaining 1.3941 USD)
+P-FRESH-2: 1 calls, 0.02389 USD; total 0.12975 USD
+P-LEGACY-2: start (remaining 1.3702 USD)
+P-LEGACY-2: 2 calls, 0.04496 USD; total 0.17471 USD
+P-NOMEM-2: start (remaining 1.3253 USD)
+P-NOMEM-2: 2 calls, 0.03752 USD; total 0.21223 USD
+P-FRESH-3: start (remaining 1.2878 USD)
+P-FRESH-3: 1 calls, 0.02372 USD; total 0.23595 USD
+P-LEGACY-3: start (remaining 1.2641 USD)
+P-LEGACY-3: 2 calls, 0.04838 USD; total 0.28432 USD
+P-NOMEM-3: start (remaining 1.2157 USD)
+P-NOMEM-3: 2 calls, 0.03719 USD; total 0.32151 USD
+{"ran":["P-FRESH-1","P-LEGACY-1","P-NOMEM-1","P-FRESH-2","P-LEGACY-2","P-NOMEM-2","P-FRESH-3","P-LEGACY-3","P-NOMEM-3"],"stoppedAt":null,"reason":null}
+driver exit 0

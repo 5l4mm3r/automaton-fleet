@@ -1,0 +1,20 @@
+C-FRESH-1: start (remaining 2.0000 USD)
+C-FRESH-1: 10 calls, 0.23714 USD; total 0.23714 USD
+C-LEGACY-1: start (remaining 1.7629 USD)
+C-LEGACY-1: 7 calls, 0.17500 USD; total 0.41214 USD
+C-NOMEM-1: start (remaining 1.5879 USD)
+C-NOMEM-1: 2 calls, 0.03755 USD; total 0.44969 USD
+C-FRESH-2: start (remaining 1.5503 USD)
+C-FRESH-2: 8 calls, 0.18566 USD; total 0.63535 USD
+C-LEGACY-2: start (remaining 1.3646 USD)
+C-LEGACY-2: 8 calls, 0.19393 USD; total 0.82928 USD
+C-NOMEM-2: start (remaining 1.1707 USD)
+C-NOMEM-2: 2 calls, 0.03763 USD; total 0.86692 USD
+C-FRESH-3: start (remaining 1.1331 USD)
+C-FRESH-3: 9 calls, 0.20084 USD; total 1.06776 USD
+C-LEGACY-3: start (remaining 0.9322 USD)
+C-LEGACY-3: 10 calls, 0.23428 USD; total 1.30203 USD
+C-NOMEM-3: start (remaining 0.6980 USD)
+C-NOMEM-3: 2 calls, 0.03698 USD; total 1.33902 USD
+{"ran":["C-FRESH-1","C-LEGACY-1","C-NOMEM-1","C-FRESH-2","C-LEGACY-2","C-NOMEM-2","C-FRESH-3","C-LEGACY-3","C-NOMEM-3"],"stoppedAt":null,"reason":null}
+driver exit 0
