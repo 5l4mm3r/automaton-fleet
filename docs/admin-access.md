@@ -127,10 +127,11 @@ Removing a working owner sign-in method is a **breaking operational change**. An
 Four separate things: **Fleet Command** (the operational brain, above), **Fleet history** (meaningful durable
 events), **notifications** (disposable messages) and **technical diagnostics** (short-lived plumbing).
 
+- **Every event is exactly one of two kinds:** meaningful (permanent, shown in Fleet history) or temporary (hidden, deleted
+  after its retention). Nothing is hidden and kept forever.
 - **Fleet history** (Fleet Command → Full history) shows what meaningfully happened: Agents, ventures, missions,
   projects, money, Treasury, settlements, policies, the cap, releases and rollbacks, serious security incidents. It
-  does not show sign-ins, sessions, role grants, ledger-posting copies, notification housekeeping, release preparation,
-  provisioning steps, routine operator calls or routine diagnostics.
+  does not show the temporary rows below.
 - **Canonical events are permanent.** `fleet_events` refuses every UPDATE, and every DELETE except the expiry below.
   Readers that depend on it are untouched: project distribution (`treasury_sweep`), the economy hub's financial audit,
   the settlement-conflict health check, the Operator API.
@@ -140,6 +141,7 @@ events), **notifications** (disposable messages) and **technical diagnostics** (
 | Rows | Kept | Why it is safe |
 |---|---|---|
 | `session_opened`, `ledger_journal_posted`, `<role>_role_granted`, `notifications_deleted` (no longer produced) | 7 days | copies: the sessions table, the ledger journal and the database grants are the records |
+| `runtime_approved`, `founder_runtime_upgrade_prepared` / `_committed`, `operator_action`, `operator_requests_archived`, `health_challenge_requested`, `runtime_verified`, `credential_issued`, `genesis_runtime_issued` / `_evidence`, slot / reservation steps, `provisioning_started` / `_sandbox_intent` / `_sandbox_created` / `_verifying` / `_reconciled`, `fx_rate_recorded`, routine notification copies | 7 days | process steps: the runtime pins and `production_deployed`, the upgrade table and its outcome events, the immutable operator-action ledger, the Agent / credential / Genesis rows, and the immutable `fleet_fx_rates` table are the records |
 | `api_auth_failed`, `api_auth_failed_suppressed`, `db_auth_failed`, `operator_auth_failed`, `operator_stale` | 30 days | routine diagnostics, readable by explicit type and through the Operator API during the window |
 | notification suppression keys | 7 days | content-free dedupe keys |
 

@@ -24,19 +24,26 @@
  *
  * FLEET HISTORY IS MEANINGFUL MEMORY, NOT SOFTWARE PLUMBING (owner brief "final V2.4.4", same day). fleet_events keeps
  * its canonical events forever (UPDATE stays refused, and DELETE of anything canonical stays refused). Two kinds of rows
- * are not history and now EXPIRE:
- *   - routine event COPIES whose real record lives elsewhere: session_opened (the session table), ledger_journal_posted
- *     (the ledger journal itself, never touched), <role>_role_granted (the database's grants), notifications_deleted
- *     (no longer produced) — kept 7 days;
+ * are not history and now EXPIRE. Every event is exactly one of the two: MEANINGFUL (no retention: permanent, shown in
+ * Fleet history) or TEMPORARY (a retention: hidden, then deleted). There is no third, hidden-but-permanent class.
+ *   - routine event COPIES and PROCESS STEPS whose real record lives elsewhere — kept 7 days: session_opened (the
+ *     session table), ledger_journal_posted (the ledger journal itself, never touched), <role>_role_granted (the
+ *     database's grants), notifications_deleted (no longer produced), runtime_approved (the runtime pins; the release
+ *     outcome is production_deployed), founder_runtime_upgrade_prepared / _committed (fleet_founder_runtime_upgrades; the
+ *     outcome events _verified / _rolled_back / _aborted stay), operator_action (the immutable fleet_operator_actions),
+ *     operator_requests_archived, health_challenge_requested (fleet_health_challenges + operator actions),
+ *     runtime_verified / credential_issued / genesis_runtime_issued / genesis_runtime_evidence (the Agent, credential
+ *     and Genesis founder rows), slot / reservation / provisioning steps (the Agent row; provisioning_failed and
+ *     provisioning_uncertain are outcomes and stay), fx_rate_recorded (the immutable fleet_fx_rates table, which is what
+ *     every FX reader reads), and routine notification copies (notification events that do not route to Fleet Command);
  *   - routine security DIAGNOSTICS: API / database / operator authentication failures — kept 30 days.
  * Serious incidents (replay blocked, passkey clone, lockout, privilege denials, attestation / signing / custody
  * failures) are neither, so they never expire. No code reads the expiring types (verified: only the Operator API's
  * generic event listing and fleet-edge.sh's 10-minute api_auth_failed scan, both inside the windows).
  * The guard is the delete trigger itself: a DELETE succeeds only for an expiring type, only past its retention, and only
  * inside the retention pass (svc_event_retention, run hourly by the controller; it writes no event). The migration
- * purges every existing copy once. The dashboard's history (`events` read without a type) shows meaningful history only:
- * not the expiring types, not release preparation, provisioning steps, routine operator calls or routine notification
- * copies. An explicit `type` still returns that type (diagnostics stay reachable during their window, as through the
+ * purges every existing copy once. The dashboard's history (`events` read without a type) shows exactly the
+ * meaningful (non-expiring) events. An explicit `type` still returns that type (diagnostics stay reachable during their window, as through the
  * Operator API).
  */
 import { DASHBOARD_WRITE_OPS_V43 } from "./migrations-phase43.js";
@@ -56,8 +63,14 @@ export const NOTIFICATION_ROUTES: Readonly<Record<string, "P0_CRITICAL" | "P1_HI
 export const HOUSEKEEPING_OPS = ["notification_delete", "notification_delete_acknowledged", "command_clear"] as const;
 export const DASHBOARD_WRITE_OPS_V45 = [...DASHBOARD_WRITE_OPS_V43, "command_clear"] as const;
 export const COMMAND_FEED_CAP = 500;
-/** Routine event copies (the canonical record lives elsewhere): expire, never history. Plus every `<role>_role_granted`. */
-export const EVENT_COPY_TYPES = ["session_opened", "ledger_journal_posted", "notifications_deleted"] as const;
+/** Temporary (7 days): routine event copies and process steps whose canonical record lives elsewhere (see above), plus every
+ * `<role>_role_granted` and every notification event that does not route to Fleet Command. */
+export const EVENT_COPY_TYPES = ["session_opened", "ledger_journal_posted", "notifications_deleted",
+  "runtime_approved", "founder_runtime_upgrade_prepared", "founder_runtime_upgrade_committed", "operator_action", "operator_requests_archived",
+  "health_challenge_requested", "runtime_verified", "credential_issued", "genesis_runtime_issued", "genesis_runtime_evidence",
+  "slot_reserved", "slot_released", "slot_claimed", "orphan_slot_released", "reservation_expired",
+  "provisioning_started", "provisioning_sandbox_intent", "provisioning_sandbox_created", "provisioning_verifying", "provisioning_reconciled",
+  "fx_rate_recorded"] as const;
 export const ROLE_GRANT_PATTERN = "^[a-z]+_role_granted$";
 /** Routine authentication diagnostics: expire after the diagnostic window, never history. (Serious incidents are not here.) */
 // (operator_scope_denied is a privilege denial: durable security history, never here.)
@@ -65,18 +78,13 @@ export const EVENT_DIAGNOSTIC_TYPES = ["api_auth_failed", "api_auth_failed_suppr
   "operator_stale"] as const;
 export const EVENT_COPY_RETENTION_DAYS = 7;
 export const EVENT_DIAGNOSTIC_RETENTION_DAYS = 30;
-/** Durable (kept) but not Fleet history: release preparation, provisioning and registry steps, routine operator calls. */
-export const HISTORY_HIDDEN_TYPES = ["runtime_approved", "founder_runtime_upgrade_prepared", "founder_runtime_upgrade_committed", "operator_action",
-  "operator_requests_archived", "health_challenge_requested", "runtime_verified", "credential_issued", "slot_reserved", "slot_released", "slot_claimed",
-  "orphan_slot_released", "reservation_expired", "genesis_runtime_issued", "genesis_runtime_evidence", "fx_rate_recorded"] as const;
-export const HISTORY_HIDDEN_PREFIXES = ["provisioning_"] as const;
 /** Rows removed per retention pass (the pass repeats hourly). */
 export const RETENTION_BATCH = 20000;
 export const SUPPRESS_DAYS = 7;
 
 /** The one-time purge of every existing routine event copy (in the v45 migration; a tested statement on its own). */
 export const PURGE_COPIES_SQL = `SELECT set_config('fleet.event_retention', 'purge', true);
-DELETE FROM fleet_events WHERE fleet_event_retention_days(event_type) = ${EVENT_COPY_RETENTION_DAYS};
+DELETE FROM fleet_events WHERE fleet_event_retention_days(event_type, detail) = ${EVENT_COPY_RETENTION_DAYS};
 SELECT set_config('fleet.event_retention', '', true);`;
 
 const notificationCases = Object.entries(NOTIFICATION_ROUTES).map(([code, p]) => `      WHEN p_detail ->> 'code' = '${code}' THEN '${p}'`).join("\n");
@@ -256,27 +264,26 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
 $$;
 
 -- ═══ 4. Fleet history vs plumbing: expiring copies and diagnostics, a guarded delete, an hourly retention pass ═══
-CREATE FUNCTION fleet_event_retention_days(p_type text) RETURNS integer LANGUAGE sql IMMUTABLE PARALLEL SAFE
+CREATE FUNCTION fleet_event_retention_days(p_type text, p_detail jsonb) RETURNS integer LANGUAGE sql IMMUTABLE PARALLEL SAFE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT CASE
     WHEN p_type IN (${q(EVENT_COPY_TYPES)}) OR p_type ~ '${ROLE_GRANT_PATTERN}' THEN ${EVENT_COPY_RETENTION_DAYS}
+    WHEN p_type = 'notification' AND fleet_event_route(p_type, p_detail) = 'AUDIT_ONLY' THEN ${EVENT_COPY_RETENTION_DAYS}
     WHEN p_type IN (${q(EVENT_DIAGNOSTIC_TYPES)}) THEN ${EVENT_DIAGNOSTIC_RETENTION_DAYS}
     ELSE NULL END
 $$;
 
+-- Meaningful history is exactly what does not expire (no hidden-permanent class can exist).
 CREATE FUNCTION fleet_event_in_history(p_type text, p_detail jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-  SELECT fleet_event_retention_days(p_type) IS NULL
-     AND p_type NOT IN (${q(HISTORY_HIDDEN_TYPES)})
-${HISTORY_HIDDEN_PREFIXES.map((x) => `     AND NOT starts_with(p_type, '${x}')`).join("\n")}
-     AND NOT (p_type = 'notification' AND fleet_event_route(p_type, p_detail) = 'AUDIT_ONLY')
+  SELECT fleet_event_retention_days(p_type, p_detail) IS NULL
 $$;
 
 -- The history stays append-only: UPDATE is always refused; DELETE only for an expiring type past its retention, inside
 -- the retention pass ('expire'), or (once, in this migration) every existing routine copy ('purge').
 CREATE FUNCTION fleet_events_expire_guard() RETURNS trigger LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE m text := COALESCE(current_setting('fleet.event_retention', true), ''); d integer := fleet_event_retention_days(OLD.event_type);
+DECLARE m text := COALESCE(current_setting('fleet.event_retention', true), ''); d integer := fleet_event_retention_days(OLD.event_type, OLD.detail);
 BEGIN
   IF d IS NOT NULL AND ((m = 'expire' AND OLD.created_at < now() - make_interval(days => d))
                         OR (m = 'purge' AND d = ${EVENT_COPY_RETENTION_DAYS})) THEN
@@ -301,8 +308,8 @@ BEGIN
   PERFORM set_config('fleet.event_retention', 'expire', true);
   DELETE FROM fleet_events WHERE id IN (
     SELECT id FROM fleet_events WHERE created_at < now() - interval '${EVENT_COPY_RETENTION_DAYS} days'
-       AND fleet_event_retention_days(event_type) IS NOT NULL
-       AND created_at < now() - make_interval(days => fleet_event_retention_days(event_type))
+       AND fleet_event_retention_days(event_type, detail) IS NOT NULL
+       AND created_at < now() - make_interval(days => fleet_event_retention_days(event_type, detail))
      ORDER BY id LIMIT ${RETENTION_BATCH});
   GET DIAGNOSTICS n = ROW_COUNT;
   PERFORM set_config('fleet.event_retention', '', true);

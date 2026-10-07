@@ -18,7 +18,7 @@ import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry } from "./fixtures/economy-registry.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
-import { PURGE_COPIES_SQL, EVENT_DIAGNOSTIC_TYPES } from "../../fleet/postgres/migrations-phase45.js";
+import { PURGE_COPIES_SQL, EVENT_DIAGNOSTIC_TYPES, EVENT_COPY_TYPES, NOTIFICATION_ROUTES } from "../../fleet/postgres/migrations-phase45.js";
 
 const PG_BIN = findPgBin();
 const ROOT = path.resolve(__dirname, "../../..");
@@ -105,9 +105,15 @@ describe.skipIf(!PG_BIN)("Fleet history, purge and retention (PostgreSQL)", { ti
     await ev("api_auth_failed", { why: "bad token" });
     await ev("operator_replay_blocked", { code: "FLEET_OP_REPLAYED" });
     await ev("production_deployed", { commit: "abc" });
-    const copies = `(event_type IN ('session_opened','ledger_journal_posted','notifications_deleted') OR event_type ~ '^[a-z]+_role_granted$')`;
+    // Routine process steps (canonical record elsewhere) next to their meaningful outcomes.
+    for (const t of ["runtime_approved", "founder_runtime_upgrade_prepared", "founder_runtime_upgrade_committed", "operator_action", "fx_rate_recorded", "slot_reserved", "provisioning_started"]) await ev(t);
+    for (const t of ["founder_runtime_upgrade_verified", "provisioning_failed", "provisioning_uncertain"]) await ev(t);
+    await R.q(`SELECT fleet.fleet_notify('AMBER', 'ADMIN_PASSKEY_ADDED', NULL, 'passkey added', '{}'::jsonb, 'history:purge-notice')`);
+    const copies = `fleet.fleet_event_retention_days(event_type, detail) = 7`;
     const byType = Object.fromEntries((await R.q(`SELECT event_type, count(*)::int AS n FROM fleet.fleet_events WHERE ${copies} GROUP BY 1`)).map((r) => [r.event_type, r.n]));
-    expect(Object.keys(byType).sort()).toEqual(expect.arrayContaining(["agent_role_granted", "dashboard_role_granted", "ledger_journal_posted", "notifications_deleted", "session_opened"]));
+    expect(Object.keys(byType).sort()).toEqual(expect.arrayContaining(["agent_role_granted", "dashboard_role_granted", "ledger_journal_posted", "notifications_deleted", "session_opened",
+      "runtime_approved", "founder_runtime_upgrade_prepared", "founder_runtime_upgrade_committed", "operator_action", "fx_rate_recorded", "slot_reserved", "provisioning_started", "notification"]));
+    const fx = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_fx_rates)`));
     const journals = await R.q(`SELECT count(*)::int AS n, md5(string_agg(journal_id::text, ',' ORDER BY journal_id)) AS d FROM fleet.fleet_ledger_journal`);
     const sessionsBefore = await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_agent_sessions`).catch(() => [{ n: -1 }]);
 
@@ -129,7 +135,11 @@ describe.skipIf(!PG_BIN)("Fleet history, purge and retention (PostgreSQL)", { ti
     expect(await count(copies)).toBe(0);
     // Diagnostics, serious incidents and canonical history stay.
     expect(await count(`event_type = 'api_auth_failed'`)).toBeGreaterThan(0);
-    for (const t of ["operator_replay_blocked", "production_deployed", "treasury_sweep", "venture_created", "genesis_funded"]) expect(await count(`event_type = '${t}'`), t).toBeGreaterThan(0);
+    for (const t of ["operator_replay_blocked", "production_deployed", "treasury_sweep", "venture_created", "genesis_funded", "founder_runtime_upgrade_verified",
+      "provisioning_failed", "provisioning_uncertain"]) expect(await count(`event_type = '${t}'`), t).toBeGreaterThan(0);
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_fx_rates)`))).toBe(fx);   // the canonical FX record is its own table
+    // No third class: every remaining row is meaningful history or temporary (with a retention).
+    expect(await count(`NOT fleet.fleet_event_in_history(event_type, detail) AND fleet.fleet_event_retention_days(event_type, detail) IS NULL`)).toBe(0);
     // The real ledger journals and sessions were never touched.
     expect(await R.q(`SELECT count(*)::int AS n, md5(string_agg(journal_id::text, ',' ORDER BY journal_id)) AS d FROM fleet.fleet_ledger_journal`)).toEqual(journals);
     expect(await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_agent_sessions`).catch(() => [{ n: -1 }])).toEqual(sessionsBefore);
@@ -151,6 +161,9 @@ describe.skipIf(!PG_BIN)("Fleet history, purge and retention (PostgreSQL)", { ti
   it("retention: copies expire after 7 days, routine auth diagnostics after 30; serious incidents never; no event, no Fleet Command entry", async () => {
     await old("session_opened", 8); await old("ledger_journal_posted", 8); await old("custody_role_granted", 8);
     await old("session_opened", 6);
+    await old("runtime_approved", 8); await old("fx_rate_recorded", 8); await old("operator_action", 8); await old("provisioning_verifying", 8);
+    await old("notification", 8, { class: "AMBER", code: "ADMIN_PASSKEY_ADDED" });
+    await old("founder_runtime_upgrade_verified", 400); await old("provisioning_failed", 400); await old("production_deployed", 400);
     for (const t of EVENT_DIAGNOSTIC_TYPES) { await old(t, 31); await old(t, 29); }
     // Serious incidents and canonical history, a year old.
     await old("operator_replay_blocked", 400); await old("authorization_denied", 400); await old("treasury_sweep", 400);
@@ -165,7 +178,7 @@ describe.skipIf(!PG_BIN)("Fleet history, purge and retention (PostgreSQL)", { ti
     const svc = new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 1 });
     let r: Record<string, number>;
     try { r = (await svc.query("SELECT fleet.svc_event_retention() AS r")).rows[0].r; } finally { await svc.end(); }
-    expect(r.eventsExpired).toBe(3 + EVENT_DIAGNOSTIC_TYPES.length);
+    expect(r.eventsExpired).toBe(3 + 5 + EVENT_DIAGNOSTIC_TYPES.length);
     expect(r.suppressionExpired).toBe(1);
     expect(await count(`created_at < now() - interval '7 days' AND (event_type IN ('session_opened','ledger_journal_posted') OR event_type ~ '_role_granted$')`)).toBe(0);
     expect(await count(`event_type = 'session_opened' AND created_at < now() - interval '5 days'`)).toBe(1);   // the 6-day copy stays
@@ -177,7 +190,7 @@ describe.skipIf(!PG_BIN)("Fleet history, purge and retention (PostgreSQL)", { ti
     // A privilege (scope) denial is durable security history: no retention, in Fleet history, survives the pass;
     // the routine operator_auth_failed diagnostic next to it expired after 30 days.
     expect(EVENT_DIAGNOSTIC_TYPES).not.toContain("operator_scope_denied");
-    expect(await R.one(`fleet.fleet_event_retention_days('operator_scope_denied')`)).toBeNull();
+    expect(await R.one(`fleet.fleet_event_retention_days('operator_scope_denied', '{}'::jsonb)`)).toBeNull();
     expect(await R.one(`fleet.fleet_event_in_history('operator_scope_denied', '{}'::jsonb)`)).toBe(true);
     expect(await count(`event_type = 'operator_scope_denied' AND created_at < now() - interval '300 days'`)).toBe(1);
     expect(await count(`event_type = 'operator_auth_failed' AND created_at < now() - interval '30 days'`)).toBe(0);
@@ -210,5 +223,17 @@ describe.skipIf(!PG_BIN)("Fleet history, purge and retention (PostgreSQL)", { ti
     // Agent memory is not plumbing: the Agent's own activity view still has its activity.
     const agentEvents = (await dash("agent_events", { agentId: R.founders[0].id })) as Array<Record<string, any>>;
     expect(agentEvents.map((e) => e.type)).toContain("venture_created");
+  });
+});
+
+describe("the reconciliation's expiring classes match the migration's", () => {
+  it("scripts/fleet-reconcile-snapshot.sql names exactly the expiring types, diagnostics and routed notification codes", () => {
+    const sql = fs.readFileSync(path.join(ROOT, "scripts/fleet-reconcile-snapshot.sql"), "utf8");
+    const lists = [...sql.matchAll(/event_type IN \(([^)]*)\)/g)].map((m) => m[1]).filter((x) => x.includes("operator_stale"));
+    expect(lists).toHaveLength(2);
+    for (const l of lists) expect(l.split(",").map((x) => x.trim().replace(/'/g, "")).sort()).toEqual([...EVENT_COPY_TYPES, ...EVENT_DIAGNOSTIC_TYPES].sort());
+    const codes = [...sql.matchAll(/NOT IN \(([^)]*)\)/g)].map((m) => m[1]).filter((x) => x.includes("DAILY_REPORT")).map((x) => x.split(",").map((x) => x.trim().replace(/'/g, "")).sort());
+    expect(codes).toHaveLength(2);
+    for (const c of codes) expect(c).toEqual(Object.keys(NOTIFICATION_ROUTES).sort());
   });
 });
