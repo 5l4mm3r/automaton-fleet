@@ -36,6 +36,12 @@ REPORT=~/rollout-${C:0:7}-$MODE.txt
 exec > >(tee -a "$REPORT") 2>&1
 ts() { date -u +%FT%TZ; }
 live() { sudo -u postgres psql -X -At -d "$LIVE" -c "$1"; }
+# Reconciliation snapshot of <db> as JSON (scripts/fleet-reconcile-snapshot.sql from <tree>); <cutJson>: an earlier snapshot whose
+# event / journal / posting high-water marks bound the digests ("" = everything).
+ALLV=9223372036854775807
+snapshot() { local db=$1 tree=$2 cut=${3:-} e=$ALLV q=$ALLV p=$ALLV
+  if [[ -n "$cut" ]]; then read -r e q p < <(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(j.events.maxId,j.ledger.maxSeq,j.ledger.maxPosting)' "$cut"); fi
+  sudo -u postgres psql -X -q -At -v ON_ERROR_STOP=1 -v cut_event="$e" -v cut_seq="$q" -v cut_posting="$p" -d "$db" < "$tree/scripts/fleet-reconcile-snapshot.sql"; }
 flags() { for k in REAL_REPLICATION_ENABLED REAL_PAYMENTS_ENABLED OWNER_SWEEP_ENABLED FLEET_DRY_RUN_CHILD; do grep -qx "$k=false" <(sudo grep -E "^$k=" $ENVF) || die "$k is not false"; done; }
 echo "== rollout $MODE ${C:0:7} (schema $FROM -> $TO) from ${OLD:0:7} start $(ts)"
 flags
@@ -71,11 +77,16 @@ if [[ "$MODE" == rehearse ]]; then
   counts "$RH" > ~/rollout-counts-restored.txt
   diff -q ~/rollout-counts-live.txt ~/rollout-counts-restored.txt > /dev/null && echo "restore: row counts identical" || echo "restore: counts moved while dumping (live kept running)"
   H0=$(head_ "$RH"); I0=$(ident "$RH"); FP0=$(fp "$RH")
+  RC0=~/rollout-${C:0:7}-rehearsal-before.json; RC1=~/rollout-${C:0:7}-rehearsal-after.json; RC2=~/rollout-${C:0:7}-rehearsal-reconcile.json
+  snapshot "$RH" "$TOOL" > "$RC0"
   CHK=$(cli migrate-check 2>&1 | tail -1); echo "migrate-check: $CHK"; echo "$CHK" | grep -q "$WANT" || { sudo -u postgres dropdb "$RH"; die "unexpected migrate-check"; }
   cli migrate 2>&1 | tail -1
   test "$(rh 'SELECT max(version) FROM fleet.fleet_schema_migrations')" = "$TO" || { sudo -u postgres dropdb "$RH"; die "rehearsal schema is not $TO"; }
   cli audit-privileges > ~/rollout-rh-audit.txt 2>&1 || { tail -20 ~/rollout-rh-audit.txt; sudo -u postgres dropdb "$RH"; die "privilege audit failed"; }
   [[ "$(head_ "$RH")" == "$H0" ]] || { sudo -u postgres dropdb "$RH"; die "ledger head changed by the migration"; }
+  snapshot "$RH" "$TOOL" "$RC0" > "$RC1"
+  node "$TOOL/scripts/fleet-reconcile-compare.mjs" "$RC0" "$RC1" "$FROM" "$TO" > "$RC2" || { cat "$RC2"; sudo -u postgres dropdb "$RH"; die "reconciliation failed"; }
+  echo "reconciliation: OK ($(node -e 'const r=require(process.argv[1]);console.log(r.newAccounts.length+" new accounts at zero; "+r.ledger.journals+" journals; events preserved "+r.events.preserved)' "$RC2"))"
   [[ "$(ident "$RH")" == "$I0" ]] || { sudo -u postgres dropdb "$RH"; die "Founder 1 identity changed"; }
   FPCMP=$(FP0="$FP0" FP1="$(fp "$RH")" node -e 'const a=JSON.parse(process.env.FP0),b=JSON.parse(process.env.FP1);const mb=new Map(b.accounts.map(x=>[x.account,x]));const bad=[];
     for(const x of a.accounts){const y=mb.get(x.account);if(!y||y.balance!==x.balance||y.class!==x.class)bad.push(x.account)}for(const y of b.accounts)if(!a.accounts.some(x=>x.account===y.account)&&y.balance!==0)bad.push("new:"+y.account);
@@ -83,6 +94,8 @@ if [[ "$MODE" == rehearse ]]; then
   [[ "$FPCMP" == OK ]] || { sudo -u postgres dropdb "$RH"; die "Founder 1 ledger fingerprint changed: $FPCMP"; }
   echo "ledger verify: $(rh "SELECT (fleet.fleet_ledger_verify() ->> 'ok')")"; [[ "$(rh "SELECT (fleet.fleet_ledger_verify() ->> 'ok')")" == true ]] || { sudo -u postgres dropdb "$RH"; die "ledger verify failed"; }
   echo "re-run: $(cli migrate-check 2>&1 | tail -1)"; cli migrate > /dev/null 2>&1; [[ "$(head_ "$RH")" == "$H0" ]] || die "re-run changed the ledger"
+  snapshot "$RH" "$TOOL" "$RC0" > "$RC1.rerun"; node "$TOOL/scripts/fleet-reconcile-compare.mjs" "$RC0" "$RC1.rerun" "$FROM" "$TO" > /dev/null || die "re-run broke reconciliation"
+  test "$(rh 'SELECT count(*) FROM fleet.fleet_schema_migrations')" = "$(node -e 'console.log(require(process.argv[1]).migrations.length)' "$RC1")" || die "re-run applied a migration"
   sudo -u postgres dropdb "$RH"; sudo -u postgres createdb -O fleetadmin "$RH"; sudo -u postgres pg_restore -d "$RH" --exit-on-error < "$D"
   [[ "$(rh 'SELECT max(version) FROM fleet.fleet_schema_migrations')" == "$FROM" && "$(head_ "$RH")" == "$H0" ]] || die "rollback proof failed"
   echo "rollback proof: the dump restores to schema $FROM with the same ledger head"
@@ -97,8 +110,13 @@ OK=~/rollout-${C:0:7}-rehearsal.ok
 [[ -f "$OK" ]] && read -r RC RB RL RF RT RAT < "$OK" || die "no successful rehearsal of ${C:0:7} on this host"
 [[ "$RC $RB $RL $RF $RT" == "$C $B $L $FROM $TO" ]] || die "the rehearsal was for different pins or schemas"
 (( $(date +%s) - $(date -d "$RAT" +%s) < 86400 )) || die "the rehearsal is older than 24 hours: rehearse again"
-UNITS="automaton-fleet-operator-api.service automaton-fleet-chatgpt-adapter.socket automaton-fleet-chatgpt-adapter.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-fetcher.service automaton-fleet.service"
-START="automaton-fleet.service automaton-fleet-operator-api.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-chatgpt-adapter.socket"
+# Services provisioned after R35 that also run from `current` and require the exact schema (dashboard, identity broker,
+# browser worker): stopped and started with the controller-side units when they are running now, never started otherwise.
+LATE=""; for u in automaton-fleet-dashboard.service automaton-fleet-identity.service automaton-fleet-browser.service; do
+  systemctl is-active --quiet "$u" && LATE="$LATE $u"; done
+UNITS="automaton-fleet-operator-api.service automaton-fleet-chatgpt-adapter.socket automaton-fleet-chatgpt-adapter.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-fetcher.service$LATE automaton-fleet.service"
+START="automaton-fleet.service automaton-fleet-operator-api.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-chatgpt-adapter.socket$LATE"
+echo "also cycled with the controller:${LATE:- none}"
 psqlq() { live "$1"; }
 sudo test ! -e $ENVF.pre-${C:0:7} || die "a previous cutover attempt of this commit left $ENVF.pre-${C:0:7}"
 sudo cp -p $ENVF $ENVF.pre-${C:0:7}
@@ -131,21 +149,30 @@ rollback() {
   echo "== ROLLOUT ${C:0:7} ROLLED BACK"
   exit 1
 }
+RC0=~/rollout-${C:0:7}-cutover-before.json; RC1=~/rollout-${C:0:7}-cutover-after.json; RC2=~/rollout-${C:0:7}-cutover-reconcile.json
+snapshot $LIVE "$PWD" > "$RC0" || rollback "pre-migration snapshot failed"
 CHK=$(pnpm -s fleet:migrate-check 2>&1 | tail -1); echo "migrate-check: $CHK"
 echo "$CHK" | grep -q "$WANT" || rollback "unexpected migrate-check"
 MIGRATED=1
 pnpm -s fleet:migrate > ~/rollout-migrate.log 2>&1 || rollback "migration failed"
 [[ "$(psqlq 'SELECT max(version) FROM fleet.fleet_schema_migrations')" == "$TO" ]] || rollback "schema is not $TO"
 pnpm -s fleet:audit-privileges > ~/rollout-audit.txt 2>&1 || rollback "privilege audit failed"
+pnpm -s fleet:migrate > ~/rollout-migrate-rerun.log 2>&1 || rollback "migration re-run failed"
+[[ "$(psqlq 'SELECT count(*) FROM fleet.fleet_schema_migrations WHERE version > '"$TO")" == 0 ]] || rollback "unexpected migration beyond $TO"
+snapshot $LIVE "$PWD" "$RC0" > "$RC1" || rollback "post-migration snapshot failed"
+node scripts/fleet-reconcile-compare.mjs "$RC0" "$RC1" "$FROM" "$TO" > "$RC2" || { cat "$RC2"; rollback "reconciliation failed"; }
+echo "reconciliation: OK ($RC2)"
 pnpm -s fleet:admin approve-runtime > ~/rollout-approve.log 2>&1 || rollback "runtime approval failed"
 pnpm -s fleet:verify-runtime > ~/rollout-verify-runtime.log 2>&1 || rollback "runtime verification failed"
 sudo systemctl start automaton-fleet.service
 READY=0; for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8787/readyz 2>/dev/null && { READY=1; break; }; sleep 1; done
 [[ $READY == 1 ]] || rollback "controller not ready"
-sudo systemctl start automaton-fleet-operator-api.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-chatgpt-adapter.socket
+sudo systemctl start automaton-fleet-operator-api.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-chatgpt-adapter.socket$LATE
+for u in $LATE; do sleep 2; systemctl is-active --quiet "$u" || rollback "$u did not stay up on the new release"; done
 echo "OUTAGE END $(ts)"
 [[ "$(pnpm -s fleet:admin ledger-verify 2>&1 | tr -d ' \n' | grep -o '"ok":true' | head -1)" == '"ok":true' ]] || rollback "ledger verify failed after cutover"
-flags
+( flags ) || rollback "a safety flag is not false after the cutover"
+[[ "$(psqlq "SELECT max_agents || ' ' || living_agents || ' ' || reserved_slots FROM fleet.fleet_state")" == "$(node -e 'const s=require(process.argv[1]).state;console.log(s.maxAgents+" "+s.living+" "+s.reserved)' "$RC0")" ]] || rollback "cap or population changed by the cutover"
 pnpm -s fleet:doctor > ~/rollout-doctor.txt 2>&1 || true; grep -E "^DEPLOYMENT|^SAFE FOR" ~/rollout-doctor.txt || true
 sudo scripts/fleet-verify-deployment.sh > ~/rollout-vdep.txt 2>&1 || true; tail -1 ~/rollout-vdep.txt
 echo "rollback point: $ENVF.pre-${C:0:7}; releases/${OLD:0:7}; dump $D"

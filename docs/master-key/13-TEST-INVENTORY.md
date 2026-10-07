@@ -59,8 +59,8 @@ Consequences:
 | `test` | `vitest run` | Whole repository suite (hangs — see §9.1) |
 | `typecheck` | `tsc --noEmit` | Type check only |
 | `test:coverage` | `vitest run --coverage` | Whole suite with v8 coverage and the thresholds above |
-| `test:security` | `vitest run -t 'security\|injection\|policy'` | Every test whose full name (describe chain + title) matches the regex, across the whole repo |
-| `test:financial` | `vitest run -t 'financial\|spend\|treasury'` | Same mechanism for financial names |
+| `test:security` | `node scripts/test-suite.mjs 'security\|injection\|policy'` | Every FILE holding a test whose full name (describe chain + title) matches the regex, each run WHOLE |
+| `test:financial` | `node scripts/test-suite.mjs 'financial\|spend\|treasury'` | Same mechanism for financial names |
 | `test:fleet` | `vitest run src/__tests__/fleet` | All 20 files in `src/__tests__/fleet/` |
 | `test:deploy` | `vitest run src/__tests__/fleet/fleet-phase4.test.ts` | Phase 4 only |
 | `test:phase5` | `vitest run src/__tests__/fleet/fleet-phase5.test.ts` | Phase 5 only |
@@ -84,6 +84,17 @@ Notes:
 - Operator record (memory `preexisting-test-hangs.md`): `test:security` and
   `test:financial` originally used `--grep`, which vitest 2 rejects; they were
   changed to `-t` during fleet Phase 1.
+- 2026-10-07: `-t` skipped the non-matching tests INSIDE a file, including the
+  setup steps stateful suites depend on (6 false failures; a skipped prerequisite
+  could equally hide a real one). `scripts/test-suite.mjs` now asks vitest's own
+  matcher (`vitest list -t`, collection only, nothing runs) which files hold a
+  matching test, then runs those files whole — the same results as the full
+  suite. Selection: 46 security files, 31 financial files at `057ff64`. No extra
+  flags or manual file lists are needed; extra arguments pass through to `vitest run`.
+  The selected files run one at a time (`--no-file-parallelism`): `fleet-phase2..5`
+  share the development database (`FLEET_TEST_DATABASE_URL` / `.env.fleet`) and wipe
+  it per test, and the Genesis / Founder-upgrade suites are heavy, so in parallel they
+  time out on locks and hooks (111 false failures in a parallel trial, 2026-10-07).
 - Fleet operational scripts that are *not* tests but are verification tools:
   `fleet:doctor` (`tsx src/fleet/postgres/cli.ts doctor`), `fleet:verify`
   (`… doctor --checklist`), `fleet:verify-runtime`, `fleet:audit-privileges`,
