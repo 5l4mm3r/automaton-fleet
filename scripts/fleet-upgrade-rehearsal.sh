@@ -113,9 +113,10 @@ cli approve-runtime 2>&1 | tail -1 | grep -q "$B" || die "candidate not approved
 [[ "$(head_)" == "$H0" ]] || die "the migration moved the ledger head"
 echo "1. copy migrated to $TO; candidate ${C:0:7} approved in the THROWAWAY registry; ledger head unchanged"
 
-# 2. The current release refuses the new schema.
+# 2. The current release refuses the new schema (its reason read from THIS run's journal only).
+T2=$(date -u '+%Y-%m-%d %H:%M:%S')
 r=$(ctl "$OLDDIR" dist/fleet/service/main.js "$OLD" "$(sudo sed -n 's/^FLEET_RUNTIME_BUILD_ID=//p' $ENVF)" "$(sudo sed -n 's/^FLEET_RUNTIME_LOCKFILE_SHA256=//p' $ENVF)")
-why=$(sudo journalctl -u fleet-upgrade-rh-controller -o cat --no-pager -n 40 | grep -oE "schema version [0-9a-z]+ != (required )?[0-9]+|schema v[0-9]+ != required v[0-9]+" | head -1 || true)
+why=$(sudo journalctl -u fleet-upgrade-rh-controller --since "$T2" -o cat --no-pager | grep -oE "schema version [0-9a-z]+ != (required )?[0-9]+|schema v[0-9]+ != required v[0-9]+" | head -1 || true)
 stopall
 [[ "$r" == refused ]] || die "the current release ${OLD:0:7} ran on schema $TO: an application-only rollback would be possible; re-plan"
 echo "2. current release ${OLD:0:7} on schema $TO: REFUSED (${why:-not ready}) — rollback must restore the database (class B)"

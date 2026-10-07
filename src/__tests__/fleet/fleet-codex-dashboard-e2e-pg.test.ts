@@ -56,10 +56,15 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
   const csp: string[] = [];
   const cash = (who: string) => R.one<number>(`fleet.fleet_agent_cash($1)`, [who]).then(Number);
   const main = () => page.locator("main").textContent().then((t) => t ?? "");
+  /** V2.4.2: a sensitive action first asks how to confirm it ("Confirm it is you"); this owner uses the passkey. */
+  async function passkeyIfAsked() {
+    const b = page.getByRole("dialog", { name: "Confirm it is you" }).getByRole("button", { name: "Use my passkey" });
+    if (await b.waitFor({ timeout: 3000 }).then(() => true, () => false)) await b.click();
+  }
   /** Review → Confirm in the dashboard's own modal. */
   async function confirm(expectText: RegExp) {
     await page.getByRole("button", { name: "Review changes" }).click();
-    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click(); await passkeyIfAsked();
     await page.getByRole("status").filter({ hasText: expectText }).first().waitFor();
   }
 
@@ -107,7 +112,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
   it("an unauthenticated visit to the deck goes to sign-in; the export is the LIVE build", async () => {
     await page.goto(`${ORIGIN}/`);
     await page.waitForURL(/\/login\/$/);
-    await page.getByText("This Fleet has no owner passkey yet", { exact: false }).waitFor(); // after the sign-in state is read
+    await page.getByText("This Fleet has no owner sign-in yet", { exact: false }).waitFor(); // after the sign-in state is read
     expect(await main()).toContain(`hub-dashboard-enroll ${ORIGIN}`); // the origin it is served from, nothing built in
     for (const f of FICTION) expect(await page.content(), f).not.toContain(f);
   });
@@ -176,7 +181,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     expect(await until(true)).toBe(true);
     await page.getByRole("button", { name: "Resume" }).click();
     await page.getByRole("button", { name: "Review changes" }).click();
-    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click(); await passkeyIfAsked();
     expect(await until(false)).toBe(false);
   });
 
@@ -193,7 +198,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await page.reload();
     await page.getByRole("button", { name: "Reveal" }).first().click();
     await page.getByRole("button", { name: "Review changes" }).click();
-    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click(); await passkeyIfAsked();
     await page.getByText("Owner Example Legal Name").waitFor();
     expect(await page.getByText("LIVE · SEALED TO THIS BROWSER · CLEARS AFTER 60 SECONDS").count()).toBe(1);
     await page.getByRole("button", { name: "Close and clear" }).click();
@@ -244,7 +249,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
       await page.getByRole("button", { name: "Change mission behaviour" }).click();
       await page.getByLabel("Stagnation threshold (days, 1–365)").fill(String(value));
       await page.getByRole("button", { name: "Review changes" }).click();
-      await page.getByRole("button", { name: "Confirm", exact: true }).click();
+      await page.getByRole("button", { name: "Confirm", exact: true }).click(); await passkeyIfAsked();
       // The status line may still show the previous "Done", so wait for the real policy row instead.
       for (let i = 0; i < 100 && (await stagnation()) !== value; i++) await new Promise((r) => setTimeout(r, 100));
       expect(await stagnation()).toBe(value);
