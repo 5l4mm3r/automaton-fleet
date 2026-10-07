@@ -2287,3 +2287,25 @@ Release `94f09a7` (build `da053d1c…`, lockfile `1df54e35…` unchanged), ident
   2. The rollout gate compares `fleet-reconcile-snapshot.sql` before and after the migration.
   3. `fleet-upgrade-rehearsal.sh` needs the tooling tree left by `rehearse`.
   4. Claude Code's classifier blocks production cutovers: the owner runs the one guarded command.
+
+## Stage R38 — schema v43: owner sign-in resilience, notification housekeeping; V2.4.2 preview (DEPLOYED 2026-10-07)
+
+- **Release:** `db3ce41` (build `65b4bdc0…`). Owner cutover at 16:56Z, an 18 s outage, reconciliation OK.
+  - Rollback dump `~/automaton_fleet-v42-pre-v43-20261007T165651Z.dump` (`d3e7dcad…`).
+- **Preview:** `/opt/automaton-fleet/ui/0.3.0+hq-preview-0.8.2`.
+- **Owner sign-in:** password + TOTP from any browser, or passkey + TOTP. The owner set a password at 17:51Z and signed in
+  from Chrome (not Edge) at 18:02Z.
+- **Record:** `docs/evaluations/r38/`. **Procedures:** `docs/admin-access.md`.
+
+## Stage R39 — schema v44: Fleet Command event routing; V2.4.3 promoted to the admin root (DEPLOYED 2026-10-07)
+
+- **Release:** `7f65cd1` (build `dcbea07f…`), via `scripts/fleet-release.sh`: backend + UI + root verification, with one
+  outcome event.
+  - Outage 19 s (18:57:40–18:57:59Z). Reconciliation OK.
+  - Rollback dump `~/automaton_fleet-v43-pre-v44-20261007T185740Z.dump` (`76d0dcf7…`).
+- **Root:** `/opt/automaton-fleet/ui/0.8.3` (V2.4.3 at `/`, the same build at `/hq-preview/`).
+  - The previous dir `0.3.0+hq-preview-0.8.2` is kept; `dashboard.env.pre-0.8.3` switches back to it.
+- **Backend rollback:** `fleet-rollout.sh revert ~/r39-pins.txt 43 44 "<reason>"`, after rolling the UI back.
+- **Future releases:** use `scripts/fleet-release.sh <pins> <from> <to> <uiName> <ui.tgz> <sha256>`. It is atomic at
+  release level and records exactly one `production_deployed` or `production_rolled_back` event.
+- **Record:** `docs/evaluations/r39/`.

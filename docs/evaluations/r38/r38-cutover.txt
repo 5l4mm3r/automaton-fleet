@@ -1,0 +1,16 @@
+== rollout cutover db3ce41 (schema 42 -> 43) from 94f09a7 start 2026-10-07T16:56:07Z
+also cycled with the controller: automaton-fleet-dashboard.service automaton-fleet-identity.service
+Verified build 65b4bdc03b6b9540a90d2f08825a2353b6b7392d05bc0a932319c1bb90024312 staged at /home/ubuntu/.cache/automaton-fleet/stage/db3ce41ce2d025c803e8d9a810969d77139556cc
+Installed release db3ce41ce2d025c803e8d9a810969d77139556cc (build 65b4bdc03b6b9540a90d2f08825a2353b6b7392d05bc0a932319c1bb90024312). Restart the service to pick it up: systemctl restart automaton-fleet
+OUTAGE START 2026-10-07T16:56:51Z
+pre-migration dump /home/ubuntu/automaton_fleet-v42-pre-v43-20261007T165651Z.dump sha d3e7dcadf81e7506
+migrate-check: {"currentVersion":42,"resultingVersion":43,"wouldApply":[43],"requiredVersion":43,"rolledBack":true}
+reconciliation: OK (/home/ubuntu/rollout-db3ce41-cutover-reconcile.json)
+OUTAGE END 2026-10-07T16:57:09Z
+DEPLOYMENT:        OK
+SAFE FOR DRY RUN:           YES
+SAFE FOR REAL REPLICATION:  NO (3 blockers)
+SAFE FOR REAL PAYMENTS:     NO (1 blocker)
+  [PASS] public :443 served by the TLS edge (PROXY protocol to the loopback controller)
+rollback point: /etc/automaton-fleet/runtime.env.pre-db3ce41; releases/94f09a7; dump /home/ubuntu/automaton_fleet-v42-pre-v43-20261007T165651Z.dump
+== ROLLOUT db3ce41 DEPLOYED 2026-10-07T16:57:16Z: schema 43, readyz 200

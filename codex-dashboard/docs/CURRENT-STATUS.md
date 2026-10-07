@@ -912,3 +912,10 @@ under the separate **Full history** tab.
 - 56 important (mostly release approvals);
 - 5 daily-report summaries;
 - 2,750 audit-only, now kept out of the operator feed.
+
+## V2.4.3 promoted to the admin root — 7 October 2026 (Stage R39)
+
+- `https://admin.agentfleet.vip/` now serves V2.4.3 / UI 0.8.3 on schema 44; `/hq-preview/` serves the same build.
+- The previous root UI 0.3.0 directory is kept for rollback: `dashboard.env.pre-0.8.3`.
+- This happened only after the owner's visual sign-off and after password sign-in from a browser other than Edge was
+  proven.

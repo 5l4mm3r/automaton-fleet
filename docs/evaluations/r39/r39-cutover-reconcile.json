@@ -1,0 +1,59 @@
+{
+  "ok": true,
+  "from": 43,
+  "to": 44,
+  "migrationsApplied": [
+    44
+  ],
+  "population": {
+    "mode": "DEVELOPMENT",
+    "living": 1,
+    "reserved": 0,
+    "maxAgents": 2,
+    "runtimeCommit": "db3ce41ce2d025c803e8d9a810969d77139556cc"
+  },
+  "agents": [
+    {
+      "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+      "name": "founder-1",
+      "status": "active"
+    }
+  ],
+  "ledger": {
+    "head": {
+      "seq": 560,
+      "hash": "f6f5be4e8eb68669d62187f8707b716e70c82a61c6b1d028d43825ac0d9f3d00"
+    },
+    "journals": 523,
+    "postings": 1046,
+    "debitsCents": 20932,
+    "creditsCents": 20932
+  },
+  "newAccounts": [],
+  "events": {
+    "preserved": 2838,
+    "appended": {
+      "agent_role_granted": 2,
+      "custody_role_granted": 2,
+      "service_role_granted": 2,
+      "identity_role_granted": 2,
+      "operator_role_granted": 2,
+      "dashboard_role_granted": 2
+    },
+    "unexpected": {}
+  },
+  "notifications": 7,
+  "failures": [],
+  "notes": [
+    {
+      "roleGrantAuditEvents": {
+        "agent_role_granted": 2,
+        "custody_role_granted": 2,
+        "service_role_granted": 2,
+        "identity_role_granted": 2,
+        "operator_role_granted": 2,
+        "dashboard_role_granted": 2
+      }
+    }
+  ]
+}

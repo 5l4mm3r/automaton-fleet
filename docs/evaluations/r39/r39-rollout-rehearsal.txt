@@ -1,0 +1,9 @@
+== rollout rehearse 7f65cd1 (schema 43 -> 44) from db3ce41 start 2026-10-07T18:50:36Z
+dump /home/ubuntu/automaton_fleet-v43-rollout-7f65cd1-20261007T185039Z.dump sha 55df7a72a3609592
+restore: row counts identical
+migrate-check: {"currentVersion":43,"resultingVersion":44,"wouldApply":[44],"requiredVersion":44,"rolledBack":true}
+reconciliation: OK (0 new accounts at zero; 522 journals; events preserved 2836)
+ledger verify: true
+re-run: {"currentVersion":44,"resultingVersion":44,"wouldApply":[],"requiredVersion":44,"rolledBack":true}
+rollback proof: the dump restores to schema 43 with the same ledger head
+== REHEARSAL PASSED 2026-10-07T18:50:53Z — live untouched (schema 43)
