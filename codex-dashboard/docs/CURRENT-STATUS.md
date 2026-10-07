@@ -757,3 +757,67 @@ These are presentation and navigation changes only.
   - Esc restores the previous zoom;
   - hover shows the purpose (desktop);
   - after zoom and pan, a real event still travels and diagnostics still render.
+
+## V2.4.1 preview: secure writes from any tab — 7 October 2026 (version 0.8.1)
+
+**The preview's FLEET_CSRF.** This was not a subpath defect. A real-browser forensic run (gated suite
+`fleet-preview-csrf-e2e-pg.test.ts`) showed:
+- The URL (`/api/call`), method, credentials mode, Content-Type and session cookie were identical at `/` and
+  `/hq-preview/`.
+- The ONLY difference was the `X-CSRF` header. The gateway issues the CSRF token once, at sign-in, to the tab that
+  signed in (it keeps only the hash with the session), and the dashboard keeps it in that tab's `sessionStorage`.
+- Any other tab (the preview opened in a new tab, or a new tab at the production root) holds the shared session
+  cookie but no token, so its reads work and every write is refused with FLEET_CSRF.
+- The production root fails the same way in a fresh tab. The owner's production tab worked because it was the one
+  that signed in.
+
+**The fix** (client only; the gateway's checks are unchanged, `dash_call` verifies the token before anything runs):
+- `GatewayClient` takes the token from this dashboard's other open tabs over a `BroadcastChannel`. Browsers scope it
+  to this exact origin, so only same-origin script (already trusted with the session) takes part and a cross-site
+  page never can; the CSRF defence is unchanged. A tab that signs in announces its new token, so other tabs drop
+  their stale one.
+- With no tab able to answer, the gateway refuses the write (nothing applied) and the owner gets **"Verify this
+  tab"**, in the open dialog and on the page. It runs the same passkey + TOTP sign-in (`/login/#reverify`) and
+  returns to the same build.
+- A write refused with FLEET_CSRF (a stale token after a sign-in elsewhere) is retried once, only with a different,
+  current token. That refusal happened before anything ran, so it can never act twice. Network failures are still
+  never retried.
+- An ended session still answers 401 and returns to sign-in.
+- **Base path:** sign-in, sign-out, session expiry and post-sign-in returns stay inside `/hq-preview/` in the preview
+  build (`dashboard/base.ts`). Previously the preview sent the owner to the production root.
+- **Mutation inventory:** all 26 state-changing operations go through `GatewayClient.call()`, and so through the same
+  CSRF-protected write path:
+  - Agents: fund, hold, release, kill, transfer;
+  - Births: birth, Genesis capital, reseed;
+  - Estates: assign, release;
+  - Missions: assign, request, end; mail assign;
+  - Notifications: acknowledge (individual, and per item for Acknowledge all), policy;
+  - Owner identity: class set, consent set and revoke, vault upload;
+  - Treasury: owner withdrawal, wallet transfer;
+  - Security: passkey revoke, revoke all sessions, TOTP reset.
+  The sign-in steps are pre-session by design.
+
+**Tests:**
+- `fleet-codex-csrf-share.test.ts` (unit):
+  - own token;
+  - token from a peer tab;
+  - no peer, so verify this tab, nothing applied;
+  - an ended session returns to sign-in;
+  - a stale token is retried once;
+  - no endless retry;
+  - no retry on network failure;
+  - malformed channel tokens ignored;
+  - sign-in announces its token;
+  - the schema-41 degrade (projects unavailable, nothing invented).
+- `fleet-preview-csrf-e2e-pg.test.ts` (gated; real gateway, passkey + TOTP, production's layout with the LIVE root
+  and `/hq-preview/`):
+  - the signing-in tab works at both paths;
+  - a new preview tab's individual Acknowledge works and persists;
+  - Acknowledge all: history kept, Admin attribution, sidebar counter, refresh, harmless at zero;
+  - stale-token retry;
+  - a lonely tab is refused and verifies;
+  - server refusals: missing, wrong or stale token, foreign Origin, unauthenticated, invalid session;
+  - preview assets and sign-in under `/hq-preview/`;
+  - a UX sweep of every page and Virtual at 1440 px and 390 px (no errors, CSP violations, failing requests,
+    overflow, path escapes, "founder-N" text or unnamed controls; visible keyboard focus).
+- The navigation acceptance test now also covers an ultrawide 3440×1440 viewport.

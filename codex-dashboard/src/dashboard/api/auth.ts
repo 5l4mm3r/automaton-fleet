@@ -49,7 +49,7 @@ export class LiveAuth {
     const response = await this.c.webauthn.get(o.json.options);
     const v = await this.c.post("/api/auth/login/verify", { response });
     if (!v.json.ok) throw new FleetApiError(v.json.code ?? "FLEET_PASSKEY_INVALID", undefined, v.status);
-    this.c.csrf.set(String(v.json.csrf));
+    this.c.adoptToken(String(v.json.csrf)); // this tab's token; other open tabs adopt it (the session changed)
   }
 
   /** Step 2: TOTP. Completes the session. */

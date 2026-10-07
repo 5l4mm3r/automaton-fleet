@@ -1,5 +1,6 @@
 "use client";
 
+import { LOGIN_PATH } from "@/dashboard/base";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createAdapter, liveTools } from "@/dashboard/adapter";
 import { money, roles, type Agent, type Command, type Fleet } from "@/dashboard/model";
@@ -59,7 +60,8 @@ function Modal({ action, close, submit }: { action: Action; close: () => void; s
     <form onSubmit={async e => { e.preventDefault(); if (locked.current) return; if (!review) { setReview(true); return; } locked.current = true; setBusy(true); setError(""); try { await submit(args); close(); } catch (e) { setError(e instanceof Error ? e.message : "Operation failed"); } finally { locked.current = false; setBusy(false); } }}>
       <p className="text-xs tracking-widest text-amber-300">{LIVE ? "LIVE · REAL FLEET" : "SIMULATION ONLY"}</p><h2 className="my-3 text-2xl">{action.title}</h2>
       {!review ? (action.fields || []).map(f => <label key={f.key} className="my-4 block text-sm">{f.label}{f.options ? <select className={input} value={args[f.key]} onChange={e => setArgs({ ...args, [f.key]: e.target.value })}>{f.options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select> : <input className={input} required autoComplete="off" maxLength={180} value={args[f.key]} onChange={e => setArgs({ ...args, [f.key]: e.target.value })} />}</label>) : <><p className="text-sm text-slate-300">{LIVE ? "Review this change to the live Fleet." : "Review these changes to fictional Fleet data."}</p><dl className="my-4 space-y-2">{Object.entries(args).map(([k, v]) => <div key={k} className="flex justify-between gap-4 break-all text-sm"><dt className="text-slate-400">{k}</dt><dd>{v}</dd></div>)}</dl>{action.sensitive && <p className="rounded bg-amber-950 p-3 text-sm text-amber-200">{LIVE ? "Confirming asks your passkey for a fresh verification (step-up) before anything changes." : "Confirming simulates a fresh owner authentication check. No real passkey or funds are used."}</p>}</>}
-      {error && <p role="alert" className="my-3 text-red-300">{error}</p>}<div className="mt-6 flex flex-wrap gap-2"><button type="button" className={button} disabled={busy} onClick={close}>Cancel</button>{review && <button type="button" className={button} disabled={busy} onClick={() => setReview(false)}>Edit</button>}<button className={`${button} bg-cyan-900`} disabled={busy}>{busy ? "Applying…" : review ? (LIVE ? "Confirm" : "Confirm simulation") : "Review changes"}</button></div>
+      {error && <p role="alert" className="my-3 text-red-300">{error}</p>}
+      {error.includes("(FLEET_TAB_UNVERIFIED)") && <a className="my-2 inline-block rounded bg-amber-400 px-3 py-1.5 text-sm font-semibold text-slate-950" href={`${LOGIN_PATH}#reverify`}>Verify this tab</a>}<div className="mt-6 flex flex-wrap gap-2"><button type="button" className={button} disabled={busy} onClick={close}>Cancel</button>{review && <button type="button" className={button} disabled={busy} onClick={() => setReview(false)}>Edit</button>}<button className={`${button} bg-cyan-900`} disabled={busy}>{busy ? "Applying…" : review ? (LIVE ? "Confirm" : "Confirm simulation") : "Review changes"}</button></div>
     </form></dialog>;
 }
 function Reveal({ kind, close }: { kind: string; close: () => void }) {
@@ -73,6 +75,7 @@ export default function Home() {
   const [state, setFleet] = useState<Fleet | null>(null), [page, setPage] = useState("Overview"), [mode, setMode] = useState("Dashboard"), [agentId, setAgentId] = useState("");
   const [action, setAction] = useState<Action | null>(null), [reveal, setReveal] = useState<RevealTarget | null>(null);
   const [query, setQuery] = useState(""), [filter, setFilter] = useState("all"), [sort, setSort] = useState("name"), [noticeFilter, setNoticeFilter] = useState("all"), [estateQuery, setEstateQuery] = useState("");
+  const [tabUnverified, setTabUnverified] = useState(false);
   const [feedback, setFeedback] = useState(LIVE ? "Connecting to the Fleet…" : "Simulation ready. All names and balances are fictional."), [fault, setFault] = useState("none"), [loginStage, setLoginStage] = useState(0), [code, setCode] = useState("");
   const [link, setLink] = useState<{ state: "connecting" | "ok" | "unavailable"; code?: string }>({ state: "connecting" });
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -139,6 +142,7 @@ export default function Home() {
     catch (e) {
       // An unknown outcome comes with a fresh authoritative read: show it, so the owner reviews before acting again.
       const fresh = liveTools?.outcomeUnknownFleet(e);
+      if (e instanceof FleetApiError && e.code === "FLEET_TAB_UNVERIFIED") setTabUnverified(true);
       if (fresh) { setFleet(fresh); setLink({ state: "ok" }); }
       throw new Error(describe(e));
     }
@@ -188,6 +192,7 @@ export default function Home() {
       <aside className="min-w-0 border-b border-slate-800 bg-slate-900/60 p-5 lg:border-r"><p className="text-xs tracking-[.25em] text-cyan-300">AUTOMATON FLEET</p><h1 className="mt-2 text-xl font-bold">Command Deck</h1><p className="mt-1 text-xs text-slate-500">OWNER OPERATIONS / 01</p><nav aria-label="Main navigation" className="mt-6 flex gap-2 overflow-x-auto lg:flex-col">{pages.map((p, i) => <button key={p} disabled={!signedIn} aria-current={page === p && mode === "Dashboard" ? "page" : undefined} onClick={() => go(p)} className={`shrink-0 rounded-lg px-3 py-3 text-left text-sm ${page === p && mode === "Dashboard" ? "bg-cyan-950 text-cyan-200" : "text-slate-400 hover:bg-slate-800"}`}><span className="mr-3 font-mono text-xs opacity-50">{String(i + 1).padStart(2, "0")}</span>{p}{p === "Notifications" && ` (${unread.length})`}</button>)}</nav><p className="mt-8 text-xs text-slate-500">{LIVE ? <>Live Fleet<br />Polled every 45 s and on focus</> : <>Local simulation<br />Changes reset on refresh</>}</p></aside>
       <div className="min-w-0 p-5 sm:p-8"><header className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-5"><div><p className="text-xs tracking-widest text-slate-400">FLEET CONTROL CENTRE</p><h2 className="mt-2 text-3xl font-semibold">{selected && mode !== "Virtual" ? selected.name : mode === "Virtual" ? "Virtual Command Centre" : page}</h2></div><div className="flex flex-wrap gap-2">{["Dashboard", "Virtual"].map(m => <button key={m} className={`${button} ${mode === m ? "bg-cyan-900 text-cyan-100" : ""}`} disabled={!signedIn} aria-pressed={mode === m} onClick={() => go(m === "Virtual" ? "Virtual" : "Overview")}>{m}</button>)}<button className={button} onClick={() => setPrefs({ ...prefs, mute: !prefs.mute })}>{prefs.mute ? "Unmute" : "Mute"}</button></div></header>
       <p role="status" className="mb-5 rounded border border-slate-700 px-4 py-3 text-sm text-cyan-200">{feedback}</p>
+      {LIVE && tabUnverified && <div role="alert" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded border border-amber-500 bg-amber-950/60 px-4 py-3 text-sm text-amber-100"><span>This tab is signed in for reading but not yet verified for changes. Nothing was changed.</span><a className="rounded bg-amber-400 px-3 py-1.5 font-semibold text-slate-950" href={`${LOGIN_PATH}#reverify`}>Verify this tab</a></div>}
       {!LIVE && fault !== "none" && <p role="alert" className="mb-5 rounded bg-red-950 p-4 text-red-200">Scenario: {fault}. Displayed data is stale. Open Settings to recover.</p>}
       {LIVE && connection}
       {LIVE && !state ? <Panel title="Fleet connection"><p className="text-slate-300">{link.state === "connecting" ? "Reading the Fleet through the dashboard gateway…" : "No Fleet data is available."}</p></Panel> : !LIVE && !signedIn ? <Panel title="Simulated sign-in"><p className="mb-4 text-amber-200">Training flow only. No real authentication takes place.</p>{loginStage === 0 ? <button className={button} onClick={() => setLoginStage(1)}>Simulate passkey verification</button> : <form onSubmit={async e => { e.preventDefault(); if (code !== "123456") { setFeedback("Use the displayed training code 123456."); return; } try { await run("login"); setLoginStage(0); setCode(""); } catch (e) { setFeedback(String(e)); } }}><label>Training TOTP code: 123456<input className={input} inputMode="numeric" value={code} onChange={e => setCode(e.target.value)} /></label><button className={`${button} mt-4`}>Complete simulated sign-in</button></form>}</Panel> : selected && mode !== "Virtual" ? profile(selected) : mode === "Virtual" ? <Suspense fallback={<Panel title="Virtual Command Centre"><p className="text-slate-400">Loading the Virtual Command Centre…</p></Panel>}>
@@ -209,7 +214,7 @@ export default function Home() {
     {action && <Modal key={action.op + action.title} action={action} close={() => setAction(null)} submit={async args => {
       if (action.op === "reset" && !LIVE && "reset" in adapter) { setFleet(await (adapter as unknown as { reset(): Promise<Fleet> }).reset()); setFault("none"); setAgentId(""); heard.current.clear(); setFeedback("Simulation reset to the original fixture."); return; }
       if (LIVE && action.op === "reveal") { setReveal({ kind: args.kind, target: args.target, title: args.title }); return; }
-      if (LIVE && liveTools && action.op === "logout") { await liveTools.logout(); location.replace("/login/"); return; }
+      if (LIVE && liveTools && action.op === "logout") { await liveTools.logout(); location.replace(LOGIN_PATH); return; }
       await run(action.op, args); if (action.op === "reveal") setReveal({ kind: args.kind });
     }} />}
     {reveal && (LIVE ? (reveal.target && liveTools ? <liveTools.Reveal kind={reveal.kind as RevealKind} target={reveal.target} title={reveal.title ?? "Reveal"} close={() => setReveal(null)} /> : null) : <Reveal kind={reveal.kind} close={() => setReveal(null)} />)}

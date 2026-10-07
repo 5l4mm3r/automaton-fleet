@@ -347,6 +347,7 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
   // their plaques' reported on-screen footprints (data-onscreen / data-cx / data-cy / data-w), not by eye.
   const VIEWPORTS = [
     { name: "1440x900", w: 1440, h: 900, touch: false }, { name: "1920x1080", w: 1920, h: 1080, touch: false }, { name: "1366x768", w: 1366, h: 768, touch: false },
+    { name: "ultrawide", w: 3440, h: 1440, touch: false },
     { name: "tablet-landscape", w: 1180, h: 820, touch: true }, { name: "tablet-portrait", w: 820, h: 1180, touch: true }, { name: "mobile-portrait", w: 390, h: 844, touch: true },
   ] as const;
   it("navigation: every room labelled and reachable, wheel/drag/pinch zoom and pan, FIT, room titles, Back/Esc history — at every viewport", async () => {
@@ -382,7 +383,10 @@ describe.skipIf(!process.env.FLEET_HQ_TESTS || !PG_BIN || !CHROME || !fs.existsS
         const b = await box();
         // 1. The default view fits the whole facility: every room's floor fully on screen; every plaque legible inside.
         r.fittedRooms = await onscreen();
-        if (r.fittedRooms !== 11) { await shot(page, `nav-${vp.name}-DEBUG`); console.log("DEBUG plaques", JSON.stringify(await page.locator("[data-room]").evaluateAll((els) => els.map((e) => ({ id: (e as HTMLElement).dataset.room, on: (e as HTMLElement).dataset.onscreen, cx: (e as HTMLElement).dataset.cx, cy: (e as HTMLElement).dataset.cy, w: (e as HTMLElement).dataset.w, t: (e as HTMLElement).style.transform }))))); }
+        if (r.fittedRooms !== 11) { // failure diagnostics: what the plaques report, and the frame
+          await shot(page, `nav-${vp.name}-fit-failure`);
+          r.plaques = await page.locator("[data-room]").evaluateAll((els) => els.map((e) => ({ id: (e as HTMLElement).dataset.room, onscreen: (e as HTMLElement).dataset.onscreen, w: (e as HTMLElement).dataset.w })));
+        }
         expect(r.fittedRooms, `${vp.name} fit`).toBe(11);
         for (const id of ["command", "treasury", "security", "estate"]) {
           const pb = (await plaque(id).boundingBox())!;

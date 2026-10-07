@@ -5,6 +5,7 @@
  * (`fleet:admin hub-dashboard-enroll <origin>` → `<origin>/login/#enroll=<token>`): the token stays in the URL fragment
  * (never sent to a server log) and is removed from the address bar once used. There is no password and no demo code.
  */
+import { HOME_PATH, LOGIN_PATH } from "@/dashboard/base";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Panel, button, input } from "@/dashboard/ui";
@@ -24,6 +25,7 @@ export default function Login() {
   const [stage, setStage] = useState<"start" | "enroll-totp" | "totp">("start");
   const [secret, setSecret] = useState<{ totpSecret: string; otpauth: string } | null>(null);
   const [code, setCode] = useState(""), [busy, setBusy] = useState(false), [message, setMessage] = useState(""), [origin, setOrigin] = useState("");
+  const [reverify, setReverify] = useState(false);
 
   useEffect(() => {
     if (!auth) return;
@@ -32,7 +34,10 @@ export default function Login() {
     const t = setTimeout(() => {
       setOrigin(location.origin);
       readHash();
-      auth.state().then((s) => { if (s.session === "full") location.replace("/"); else setSt(s); }, (e) => setMessage(describe(e)));
+      // "#reverify": a signed-in browser verifying THIS tab for changes (the token is per tab) — stay and sign in.
+      const reverify = location.hash === "#reverify";
+      if (reverify) setReverify(true);
+      auth.state().then((s) => { if (s.session === "full" && !reverify) location.replace(HOME_PATH); else setSt(s); }, (e) => setMessage(describe(e)));
     }, 0);
     window.addEventListener("hashchange", readHash);
     return () => { clearTimeout(t); window.removeEventListener("hashchange", readHash); };
@@ -45,7 +50,7 @@ export default function Login() {
   }
   const enroll = () => step(async () => {
     const r = await auth!.enroll(token!, "owner passkey");
-    history.replaceState(null, "", "/login/"); setToken(null);
+    history.replaceState(null, "", LOGIN_PATH); setToken(null);
     if (r.next === "totp" && r.totpSecret && r.otpauth) { setSecret({ totpSecret: r.totpSecret, otpauth: r.otpauth }); setStage("enroll-totp"); }
     else { setStage("start"); setMessage("Passkey registered. Sign in with it."); setSt(await auth!.state()); }
   });
@@ -54,7 +59,7 @@ export default function Login() {
     setMessage("Authenticator confirmed. Sign in with your passkey."); setSt(await auth!.state());
   });
   const passkey = () => step(async () => { await auth!.loginPasskey(); setStage("totp"); });
-  const totp = () => step(async () => { await auth!.loginTotp(code.trim()); setCode(""); location.replace("/"); });
+  const totp = () => step(async () => { await auth!.loginTotp(code.trim()); setCode(""); location.replace(HOME_PATH); });
 
   return <main className="min-h-screen w-full bg-slate-950 text-base text-slate-100">
     {LIVE ? <div className="border-b border-emerald-800 bg-emerald-950/60 px-5 py-2 text-center text-xs tracking-widest text-emerald-200">LIVE · OWNER SIGN-IN</div> : <div className="border-b border-amber-800 bg-amber-950/60 px-5 py-2 text-center text-xs tracking-widest text-amber-200">SIMULATION · FICTIONAL DATA · NO MACHINE OR REAL MONEY CONNECTED</div>}
@@ -79,7 +84,8 @@ export default function Login() {
           </> : !st ? <p className="text-sm text-slate-400">Reading this Fleet&apos;s sign-in state…</p>
             : st.locked ? <p className="text-amber-200">Sign-in is locked after repeated failures. Wait, then try again.</p>
             : !st.enrolled ? <p className="text-sm text-slate-300">This Fleet has no owner passkey yet. On the Fleet host, run <code className="font-mono text-cyan-200">fleet:admin hub-dashboard-enroll {origin}</code> and open the one-time link it prints on this device.</p>
-            : <button className={button} disabled={busy} onClick={passkey}>{busy ? "Waiting for the passkey…" : "Sign in with passkey"}</button>}
+            : <>{reverify && <p className="mb-3 text-sm text-slate-300">Verify this tab to make changes from it: the same passkey and authenticator sign-in. Your other tabs stay signed in and receive the new verification.</p>}
+              <button className={button} disabled={busy} onClick={passkey}>{busy ? "Waiting for the passkey…" : "Sign in with passkey"}</button></>}
         </Panel>}
     </div>
   </main>;

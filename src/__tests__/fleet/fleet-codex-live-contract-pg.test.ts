@@ -170,8 +170,13 @@ describe.skipIf(!PG_BIN)("Codex dashboard LIVE contract against the real v41 gat
   });
 
   it("CSRF and origin: a write without the tab's token, or from another origin, is refused", async () => {
-    const noToken = new GatewayClient({ baseUrl: ORIGIN, fetch: fetchJar, webauthn: auth, csrf: { get: () => null, set: () => {}, clear: () => {} } });
-    expect(await code(noToken.call("agent_hold", { agentId: A.id }))).toBe("FLEET_CSRF");
+    // A tab without the token and no open dashboard tab to take it from (share: null): the gateway refuses the write
+    // (FLEET_CSRF) and the client reports that this tab must be verified...
+    const noToken = new GatewayClient({ baseUrl: ORIGIN, fetch: fetchJar, webauthn: auth, csrf: { get: () => null, set: () => {}, clear: () => {} }, share: null });
+    expect(await code(noToken.call("agent_hold", { agentId: A.id }))).toBe("FLEET_TAB_UNVERIFIED");
+    // ...and the gateway's own answer to a token-less write is FLEET_CSRF.
+    const raw = await noToken.post("/api/call", { op: "agent_hold", args: JSON.stringify({ agentId: A.id }) });
+    expect(raw.json.code).toBe("FLEET_CSRF");
     const foreign = new GatewayClient({ baseUrl: ORIGIN, fetch: Object.assign(browserLikeFetch(ORIGIN, { origin: "https://evil.example" }), {}), webauthn: auth, csrf: client.csrf });
     expect(await code(foreign.call("agent_hold", { agentId: A.id }))).toBe("FLEET_ORIGIN");
     expect((await R.q(`SELECT operator_hold_at FROM fleet.fleet_agents WHERE agent_id = $1`, [A.id]))[0].operator_hold_at).toBeNull();

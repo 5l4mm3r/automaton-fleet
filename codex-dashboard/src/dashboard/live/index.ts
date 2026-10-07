@@ -3,6 +3,7 @@
  * deck's mapping, and the session hand-off to /login. Nothing installation-specific: every request is relative (`/api/*`
  * of whatever host serves this build).
  */
+import { LOGIN_PATH } from "../base";
 import { GatewayClient } from "../api/client";
 import { LiveFleetAdapter } from "../adapters/live";
 import type { Command, Fleet } from "../model";
@@ -14,7 +15,7 @@ let client: GatewayClient | null = null;
 
 /** The tab's gateway client. A 401 anywhere sends the owner to sign-in. */
 export function liveClient(): GatewayClient {
-  client ??= new GatewayClient({ onSignedOut: () => { if (typeof window !== "undefined" && !location.pathname.startsWith("/login")) location.replace("/login/"); } });
+  client ??= new GatewayClient({ onSignedOut: () => { if (typeof window !== "undefined" && !location.pathname.startsWith(LOGIN_PATH)) location.replace(LOGIN_PATH); } });
   return client;
 }
 

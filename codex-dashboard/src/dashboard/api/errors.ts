@@ -6,7 +6,8 @@
 export type ErrorCategory =
   | "unauthenticated" | "session_expired" | "stepup_required" | "stepup_cancelled" | "forbidden" | "locked" | "rate_limited"
   | "bad_request" | "conflict" | "insufficient_funds" | "capability_not_configured" | "agent_state" | "replication_blocked"
-  | "birth_blocked" | "not_found" | "acknowledge_required" | "outcome_unknown" | "unavailable" | "unsupported" | "failed";
+  | "birth_blocked" | "not_found" | "acknowledge_required" | "outcome_unknown" | "unavailable" | "unsupported" | "failed"
+  | "tab_unverified";
 
 export class FleetApiError extends Error {
   constructor(
@@ -25,6 +26,7 @@ export class FleetApiError extends Error {
 
 const MAP: Array<[RegExp, ErrorCategory]> = [
   [/^FLEET_SESSION_INVALID$/, "session_expired"],
+  [/^FLEET_TAB_UNVERIFIED$/, "tab_unverified"],
   [/^FLEET_UNAUTHENTICATED$/, "unauthenticated"],
   [/^FLEET_STEPUP_REQUIRED$/, "stepup_required"],
   [/^FLEET_STEPUP_CANCELLED$/, "stepup_cancelled"],
@@ -72,4 +74,5 @@ export const CATEGORY_TEXT: Record<ErrorCategory, string> = {
   unavailable: "The Fleet is unreachable. Showing nothing rather than stale or fictional data.",
   unsupported: "Not available in LIVE mode.",
   failed: "The operation failed.",
+  tab_unverified: "This browser tab is not verified for changes (it was opened after you signed in elsewhere). Nothing was done. Use “Verify this tab” — passkey and authenticator — to make changes here; reading is unaffected.",
 };
