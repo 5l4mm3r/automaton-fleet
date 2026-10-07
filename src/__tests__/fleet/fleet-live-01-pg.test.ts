@@ -7,6 +7,7 @@
  * founder; nothing escalates over time; ordinary business is refused as "not an exception". A resolution still grants
  * nothing. (Founder side: fleet-f2a-autonomy.test.ts; the v25 → v26 data migration: fleet-f2a-pg.test.ts.)
  */
+import { HIBERNATE_LINE } from "../../fleet/founder/decisions.js";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import fs from "fs";
@@ -377,9 +378,10 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       const first = await next();
       expect(first.slim).toBe(false);
       expect(first.task).toMatch(/Your capabilities changed since your last turn\. Newly available: open_decision, record_external_dependency, resolve_decision, review_decision, withdraw_external_dependency\. No longer available: request_owner_decision, withdraw_owner_request\./);
-      expect(first.task).toContain("Your open goals are your execution path: take the next concrete step toward a sale.");
+      // R41.1: the legacy Gumroad record names goal g1, so only g1 is blocked; the founder is pushed to unblocked work.
+      expect(first.task).toContain(HIBERNATE_LINE);
       expect(first.task).toMatch(new RegExp(`Your survival position \\(FleetController's observation; the risk management is yours\\): survival equity ${await equity(F.id)}p`));
-      expect(line(first.task)).toEqual([`External dependency ${legacyId.slice(0, 8)} (kyc): the action "${ACTION}" is unavailable for now. This blocks only that action — not you, your goals or other work: pursue alternatives (another marketplace, direct sales that need no new account, another product, service, niche or venture).`]);
+      expect(line(first.task)).toEqual([`External dependency ${legacyId.slice(0, 8)} (kyc): the action "${ACTION}" is unavailable for now. This blocks only that action — not you, your goals or other work: pursue alternatives (another marketplace, direct sales that need no new account, another product, service, niche or venture). It is already requested: do not request it again or retry that action.`]);
       expect(first.task).not.toMatch(OWNER_DEPENDENCY);
       // 2: idle wakes are slim (the full packet already carried the next move) — no research happens because of idleness.
       expect(await next()).toMatchObject({ slim: true, idle: false });
@@ -391,12 +393,13 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       expect(Number(obs.runwayDays)).toBeCloseTo(7, 0);
       for (let i = 0; i < 3; i++) expect((await next()).slim).toBe(true); // 4 slim wakes in all…
       const recheck = await next(); // …then the same idle state is re-checked with one push toward its next move
-      expect(recheck).toMatchObject({ slim: false, idle: true });
-      expect(recheck.task).toContain("Idle wake: your open goals are your execution path");
+      // R41.1: the founder is hibernating (its only goal is blocked by Gumroad): the re-check is the hibernation check.
+      expect(recheck).toMatchObject({ slim: false });
+      expect(recheck.task).toContain(HIBERNATE_LINE);
       expect(recheck.task).toMatch(/runway ≈ 7 days at that burn\. Runway changes which opportunities are rational for you .* never your standard/);
       expect(recheck.task).not.toMatch(/revenue-first|discovery floor|allowance/);
       expect(line(recheck.task)).toHaveLength(1); // the dependency stays visible as one unavailable action
-      expect(mind.routing.idleNudges).toEqual({ decide: 0, execute: 1, opportunity: 0 });
+      expect(mind.routing.idleNudges).toEqual({ decide: 0, execute: 0, opportunity: 0, hibernate: 1 });
       // 4: a resolution (rare: the owner provides the identity) is news exactly once; it grants nothing.
       const before = await authority();
       const capsBefore = capabilityView(await gw.capabilities(F.id, F.token), true).signature;
@@ -404,7 +407,8 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       const answered = await next();
       expect(answered.slim).toBe(false);
       expect(line(answered.task)).toEqual([`External dependency ${legacyId.slice(0, 8)} (kyc) for "${ACTION}": ANSWERED, with the note: "The fleet storefront identity covers this.". This records an answer only; it grants no capability, account, money or permission by itself.`]);
-      expect((await next()).slim).toBe(true);
+      // R41.1: the answer unblocks goal g1, so the founder has executable work again: full wakes, never slim.
+      expect((await next()).slim).toBe(false);
       expect(await authority()).toEqual(before);
       expect(capabilityView(await gw.capabilities(F.id, F.token), true).signature).toBe(capsBefore);
       await genesis.experimentPolicySet(false, null, OWNER);

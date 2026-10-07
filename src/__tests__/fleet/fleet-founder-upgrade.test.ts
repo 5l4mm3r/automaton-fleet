@@ -425,7 +425,9 @@ const repoDir = process.cwd();
 /** The release Founder 1 is pinned to in production; extracted from git so the rehearsal runs its REAL runtime code. */
 const PREVIOUS = (() => {
   try {
-    return execFileSync("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", "eea1932^{commit}"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    // R41.1: FLEET_UPGRADE_FROM rehearses from another installed release (e.g. 136c4bd, the release Agent 2 runs).
+    const from = /^[0-9a-f]{7,40}$/.test(process.env.FLEET_UPGRADE_FROM ?? "") ? process.env.FLEET_UPGRADE_FROM! : "eea1932";
+    return execFileSync("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `${from}^{commit}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {
     return "";
   }
@@ -461,7 +463,8 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
     if (root) fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("the previous release really is older runtime code: no routed mode, no loop guard, no upgrade lifecycle", () => {
+  // (Specific to eea1932; skipped when FLEET_UPGRADE_FROM names a newer previous release.)
+  it.skipIf(!!process.env.FLEET_UPGRADE_FROM)("the previous release really is older runtime code: no routed mode, no loop guard, no upgrade lifecycle", () => {
     const old = path.join(releases, PREVIOUS);
     expect(fs.existsSync(path.join(old, "src/fleet/founder/upgrade.ts"))).toBe(false);
     expect(fs.existsSync(path.join(old, "src/fleet/founder/loop-guard.ts"))).toBe(false);

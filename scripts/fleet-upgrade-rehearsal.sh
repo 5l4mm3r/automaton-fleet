@@ -22,7 +22,7 @@ export PATH=/opt/automaton-fleet/node/bin:$PATH
 PINS="${1:-}"; FROM="${2:-}"; TO="${3:-}"
 die() { echo "UPGRADE REHEARSAL FAILED: $*" >&2; exit 2; }
 [[ -f "$PINS" && ! -L "$PINS" ]] || die "pins file missing"
-[[ "$FROM" =~ ^[0-9]{1,3}$ && "$TO" =~ ^[0-9]{1,3}$ && "$TO" -gt "$FROM" ]] || die "schemas are integers, to > from"
+[[ "$FROM" =~ ^[0-9]{1,3}$ && "$TO" =~ ^[0-9]{1,3}$ && "$TO" -ge "$FROM" ]] || die "schemas are integers, to >= from"
 C=$(sed -n 's/^FLEET_RUNTIME_COMMIT=\([0-9a-f]\{40\}\)$/\1/p' "$PINS"); B=$(sed -n 's/^FLEET_RUNTIME_BUILD_ID=\([0-9a-f]\{64\}\)$/\1/p' "$PINS")
 L=$(sed -n 's/^FLEET_RUNTIME_LOCKFILE_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$PINS")
 [[ -n "$C" && -n "$B" && -n "$L" ]] || die "pins file must hold the commit, build id and lockfile"
@@ -118,8 +118,14 @@ T2=$(date -u '+%Y-%m-%d %H:%M:%S')
 r=$(ctl "$OLDDIR" dist/fleet/service/main.js "$OLD" "$(sudo sed -n 's/^FLEET_RUNTIME_BUILD_ID=//p' $ENVF)" "$(sudo sed -n 's/^FLEET_RUNTIME_LOCKFILE_SHA256=//p' $ENVF)")
 why=$(sudo journalctl -u fleet-upgrade-rh-controller --since "$T2" -o cat --no-pager | grep -oE "schema version [0-9a-z]+ != (required )?[0-9]+|schema v[0-9]+ != required v[0-9]+" | head -1 || true)
 stopall
-[[ "$r" == refused ]] || die "the current release ${OLD:0:7} ran on schema $TO: an application-only rollback would be possible; re-plan"
-echo "2. current release ${OLD:0:7} on schema $TO: REFUSED (${why:-not ready}) — rollback must restore the database (class B)"
+if [[ "$TO" == "$FROM" ]]; then
+  # A code-only release (no migration): rollback stays the rehearsed one — the cutover's pre-release dump restored and the
+  # previous release switched back (steps 4–5 prove it on this copy) — never a new, unrehearsed application-only path.
+  echo "2. code-only release (schema $FROM unchanged; the previous release on the candidate-approved copy: ${r}) — rollback restores the pre-release dump and the previous release (as rehearsed below)"
+else
+  [[ "$r" == refused ]] || die "the current release ${OLD:0:7} ran on schema $TO: an application-only rollback would be possible; re-plan"
+  echo "2. current release ${OLD:0:7} on schema $TO: REFUSED (${why:-not ready}) — rollback must restore the database (class B)"
+fi
 
 # 3. Candidate services on the migrated copy.
 r=$(ctl "$TOOL" "--import tsx src/fleet/service/main.ts" "$C" "$B" "$L"); [[ "$r" == ready ]] || { sudo journalctl -u fleet-upgrade-rh-controller -o cat --no-pager | tail -8; die "candidate controller not ready"; }

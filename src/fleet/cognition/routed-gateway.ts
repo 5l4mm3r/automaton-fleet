@@ -20,7 +20,7 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_CHARTER, FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTINE_CHARTER, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
+import { FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTINE_CHARTER, ProviderError, charterFor, parseDoctrine, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
 import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, MAX_COGNITION_DEADLINE_MS, validateMessages } from "./gateway.js";
 import { founderStepTools } from "./capability-signature.js";
 import { RouteError, actionDigest, candidateFor, parseRouteRequest, route, type RouteDecision, type TierCandidate } from "./router.js";
@@ -112,6 +112,10 @@ export async function inferRouted(
   if (!status.policyEnabled || status.provider === "none") throw new CognitionError(403, "FLEET_COGNITION_DISABLED", "cognition is disabled by the owner");
   const rs = await ports.routingState(agentId);
   if (!rs || rs.routingEnabled !== true) throw new CognitionError(409, "FLEET_ROUTING_DISABLED", "routing is not enabled for this founder");
+  // R41.1: the doctrine the founder's runtime implements (absent = founder-v4, every pre-R41.1 runtime). It selects the
+  // charter text and the v5 tool vocabulary only: never the tier, the price, a permission or any capability class.
+  const doctrine = parseDoctrine(body.doctrine);
+  if (!doctrine) throw new CognitionError(400, "FLEET_DOCTRINE_UNKNOWN", "unknown founder doctrine");
 
   // 2. The router decides from the task alone.
   let decision: RouteDecision;
@@ -156,14 +160,15 @@ export async function inferRouted(
   }
   // A question-scoped escalation answers; it does not act: the charter's rules and priors, no toolbox.
   const question = decision.scope === "question";
-  const system = routine ? FOUNDER_ROUTINE_CHARTER : question ? FOUNDER_CHARTER : `${FOUNDER_CHARTER}\n${FOUNDER_ROUTED_ADDENDUM}`;
+  const charter = charterFor(doctrine);
+  const system = routine ? FOUNDER_ROUTINE_CHARTER : question ? charter : `${charter}\n${FOUNDER_ROUTED_ADDENDUM}`;
   // Reuse is evidenced inside an active tool loop on the SAME model: the request already carries an assistant turn and
   // this conversation's previous step ran on this model (a T3 action step inside a T2 loop is not reuse: it returns to T2).
   const cache = cachePolicy(decision, candidate, rs, { continuing: messages.some((m) => m.role === "assistant") && producer === candidate.model });
   const provider = providerFor(candidate, decision.effort, cache.mode);
   // Ordinary routed steps also get the cognition tools (delegate a routine chore, escalate one question); R24: the
   // experiment tools only while the owner has the pipeline on. One function builds this list and the capability signature.
-  const tools = routine || question ? [] : founderStepTools(caps, true);
+  const tools = routine || question ? [] : founderStepTools(caps, true, doctrine);
   const maxTokens = candidate.maxOutputTokens;
   const promptText = JSON.stringify({ system, messages, tools: tools.map((t) => t.name) });
   const promptSha = sha(promptText);

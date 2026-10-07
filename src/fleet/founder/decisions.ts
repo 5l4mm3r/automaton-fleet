@@ -444,3 +444,138 @@ export function depthLine(d: DepthResult): string {
     ? ` Risk complexity HIGH (${d.reasons.join("; ")}): reason this through carefully — size down, stage it, or escalate_question once — before committing.`
     : ` Risk complexity moderate (${d.reasons.join("; ")}).`;
 }
+
+// ─────────────────────────────────────────────── R41.1: blocked-action continuation, earned hibernation, economic state
+
+/** One of the founder's own goals as its runtime sees it (goals.json; the v5 marks are optional). */
+export interface GoalView { id: string; title: string; blockedBy?: string; awaiting?: string; reviewAt?: string }
+/** A dependency as the work classification needs it (the mind's DependencyView satisfies this). */
+export interface DependencyRef { requestId: string; status: string; goalRef: string | null; action: string }
+
+export interface WorkState {
+  /** Open goals with nothing marked against them: work to do now. */
+  executable: GoalView[];
+  /** Open goals only a PENDING dependency blocks (marked blockedBy, or the dependency names the goal). */
+  blocked: Array<{ goal: GoalView; dependency: DependencyRef }>;
+  /** Open goals waiting for an external event or measurement whose review time has not come. */
+  awaiting: GoalView[];
+  /** Awaiting goals whose review time has come: they are work again. */
+  due: GoalView[];
+  pendingDependencies: DependencyRef[];
+}
+
+const depMatches = (d: DependencyRef, ref: string) => d.requestId === ref || (ref.length === 8 && d.requestId.startsWith(ref));
+
+/**
+ * Pure: classify the founder's open goals. A goal is blocked only while ITS dependency is pending — a resolved, declined
+ * or withdrawn dependency makes it executable again (the founder decides what the answer means). One blocked goal never
+ * makes another goal blocked.
+ */
+export function classifyWork(goals: GoalView[], deps: DependencyRef[], now = Date.now()): WorkState {
+  const pending = deps.filter((d) => d.status === "pending");
+  const w: WorkState = { executable: [], blocked: [], awaiting: [], due: [], pendingDependencies: pending };
+  for (const g of goals) {
+    const dep = g.blockedBy ? pending.find((d) => depMatches(d, g.blockedBy!)) : pending.find((d) => d.goalRef === g.id);
+    if (dep) { w.blocked.push({ goal: g, dependency: dep }); continue; }
+    if (g.awaiting) {
+      const t = g.reviewAt ? Date.parse(g.reviewAt) : NaN;
+      if (Number.isFinite(t) && t <= now) w.due.push(g); else w.awaiting.push(g);
+      continue;
+    }
+    w.executable.push(g);
+  }
+  return w;
+}
+
+export type WorkKind = IdleKind | "hibernate";
+
+/**
+ * What the founder's next move is: decide an open decision; execute open executable (or due) goals; HIBERNATE when
+ * every open goal is blocked by a pending dependency or awaiting a future event (a legitimate rest with a wake
+ * condition); otherwise find something worth executing.
+ */
+export function workKind(list: Decision[], w: WorkState): WorkKind {
+  if (list.some((d) => d.status === "open")) return "decide";
+  if (w.executable.length + w.due.length > 0) return "execute";
+  if (w.blocked.length + w.awaiting.length > 0) return "hibernate";
+  return "opportunity";
+}
+
+/** Only this state may get slim, backed-off wake-ups: nothing open, nothing executable, everything blocked or awaiting. */
+export function mayHibernate(list: Decision[], w: WorkState): boolean {
+  return workKind(list, w) === "hibernate";
+}
+
+/** The founder's goals by work state, by id (their titles are in the packet's objective section; bounded). */
+export function workLines(w: WorkState): string[] {
+  const q = (g: GoalView) => g.id;
+  const out: string[] = [];
+  if (w.executable.length + w.due.length) {
+    out.push(`Executable now: ${[...w.due.map((g) => `${q(g)} (review due)`), ...w.executable.map(q)].slice(0, 8).join(", ")}.`);
+  }
+  for (const b of w.blocked.slice(0, 5)) {
+    out.push(`Blocked: ${q(b.goal)} — waiting on dependency ${b.dependency.requestId.slice(0, 8)} (pending). Already requested: do not request it again and do not retry the blocked action. It blocks only this goal.`);
+  }
+  for (const g of w.awaiting.slice(0, 5)) out.push(`Awaiting: ${q(g)} — until its stated event${g.reviewAt ? ` (review ${g.reviewAt.slice(0, 16)})` : ""}.`);
+  if (w.pendingDependencies.length && w.executable.length) {
+    out.push("If an executable goal also contains a step a pending dependency blocks, split it: set_goal with that goal's id for the executable part, "
+      + "and set_goal for the blocked step with blockedBy the dependency id. Blocked time is construction time: product improvement, validation, pricing, copy, assets, "
+      + "documentation, channels that need no new account, launch preparation.");
+  }
+  return out;
+}
+
+/** The hibernation check of a full packet / idle push when everything open is blocked or awaiting. */
+export const HIBERNATE_LINE = "Every open goal is blocked by a pending dependency or awaiting an external event. Hibernate only if that is the whole truth: "
+  + "if any worthwhile unblocked work remains (improve or extend the product, gather demand evidence, price, write copy, prepare assets, documentation and launch material, test an unblocked channel, build an adjacent option), "
+  + "set a goal for it and do it now; otherwise sleep with wakeOn naming the event, metric or date that should wake you.";
+
+/** The first full packet of a newborn founder (Birth Charter / Survival Field Guide bootstrap; seed, not orders). */
+export const BOOTSTRAP_LINE = "First turn of your life: read your wallet and survival state below, list the Survival Field Guide (field_guide op list) and read its bootstrap section, "
+  + "inspect existing Fleet knowledge (economic_knowledge, read_knowledge) so you do not blindly duplicate another agent's work, then generate several materially different opportunity hypotheses "
+  + "and gather enough independent evidence to reject the weak ones — never commit after one search result or one failed fetch. Choose one primary opportunity and one fallback.";
+
+export type EconomicState = "SURVIVE" | "STABILIZE" | "SURPLUS" | "EXPAND";
+export type Pressure = "CRITICAL" | "HIGH" | "ELEVATED" | "LOW";
+export const STABILITY_RESERVE_DAYS = 90;
+
+/**
+ * Advisory economic state (Birth Charter: SURVIVE → STABILIZE → SURPLUS → EXPAND) — information for the founder's own
+ * strategy, computed in its runtime from its own ledger view; never a controller permission, ration or schedule.
+ *   SURVIVE   no external revenue yet, or realised net profit ≤ 0;
+ *   STABILIZE profitable, but survival equity covers < 90 days of recent burn;
+ *   SURPLUS   profitable with ≥ 90 days of reserve;
+ *   EXPAND    SURPLUS while replication is constitutionally executable (otherwise expansion is a proposal only).
+ * Pressure: CRITICAL < 7 days of runway, HIGH < 30, ELEVATED otherwise while surviving; LOW once in surplus.
+ */
+export function economicState(economics: Record<string, unknown>, s: SurvivalView | null, replicationExecutable = false): { state: EconomicState; pressure: Pressure; runwayDays: number | null; equity: number } {
+  const n = (k: string) => { const v = Number(economics[k]); return Number.isFinite(v) ? v : 0; };
+  const revenue = n("externalCustomerRevenue"), net = n("realizedNetProfit");
+  const equity = s ? s.survivalEquityCents : n("survivalEquity") || n("cash");
+  const burn = s ? s.burnPerDayCents : 0;
+  const runwayDays = s?.runwayDays ?? (burn > 0 ? equity / burn : null);
+  const reserveDays = burn > 0 ? equity / burn : Infinity;
+  const state: EconomicState = revenue <= 0 || net <= 0 ? "SURVIVE" : reserveDays < STABILITY_RESERVE_DAYS ? "STABILIZE" : replicationExecutable ? "EXPAND" : "SURPLUS";
+  const pressure: Pressure = equity <= 0 || (runwayDays !== null && runwayDays < 7) ? "CRITICAL" : runwayDays !== null && runwayDays < 30 ? "HIGH"
+    : state === "SURVIVE" || state === "STABILIZE" ? "ELEVATED" : "LOW";
+  return { state, pressure, runwayDays, equity };
+}
+
+export function stateLine(e: ReturnType<typeof economicState>): string {
+  const head = `Economic state: ${e.state}. Existential pressure: ${e.pressure} (survival equity ${Math.round(e.equity)}p${e.runwayDays !== null ? `, runway ≈ ${Math.round(e.runwayDays)} days at your recent burn` : ""}).`;
+  const body: Record<EconomicState, string> = {
+    SURVIVE: " You are not yet self-sustaining: your existence depends on creating real external value before your capital runs out. Every turn should most improve your odds of earning — build, expose, measure — with no idle drift, no waste and no reckless or rule-breaking action.",
+    STABILIZE: " Revenue exists but your reserve is thin: make it repeatable, fund your obligations, improve reliability and quality, and keep exposing and measuring.",
+    SURPLUS: " You are profitable with a reserve: you may run event-driven with explicit wake triggers and take longer-horizon, higher-quality experiments — keep measuring and reassess the market periodically. Expansion: a proposal only — replication is disabled.",
+    EXPAND: " You are profitable with a reserve and replication is open: expansion is still a capital-allocation decision — propose it only with evidence that another agent is worth more than its cost.",
+  };
+  const critical = e.pressure === "CRITICAL" ? " Insolvency is close: favour the cheapest actions with the fastest path to real revenue and keep each turn short — never breach a rule to survive." : "";
+  return head + body[e.state] + critical;
+}
+
+/** A revenue increase since the last turn (a sale is not a finish line). */
+export function saleLine(prevRevenue: number | null, revenue: number): string | null {
+  if (prevRevenue === null || !(revenue > prevRevenue)) return null;
+  return `New external revenue since your last turn (+${Math.round(revenue - prevRevenue)}p). A sale is not a finish line: fulfil, account, inspect the evidence (who bought, through which channel, at what price), `
+    + "learn, improve, consider adjacent offers or an upsell, reinvest intelligently and keep hunting.";
+}

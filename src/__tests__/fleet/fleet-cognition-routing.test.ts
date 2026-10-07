@@ -9,7 +9,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { ACTION_MIN_TIER, RouteError, TASK_CLASSES, actionDigest, candidateFor, parseRouteRequest, route, type TierCandidate } from "../../fleet/cognition/router.js";
-import { FOUNDER_EXPERIMENT_TOOLS } from "../../fleet/cognition/types.js";
+import { FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS } from "../../fleet/cognition/types.js";
 import { inferRouted, type ProviderFactory, type RoutedCognitionPorts } from "../../fleet/cognition/routed-gateway.js";
 import { buildDecisionPacket, renderDecisionPacket, taskPacketProblems, DECISION_LIMITS } from "../../fleet/cognition/task-packet.js";
 import { AnthropicProvider } from "../../fleet/cognition/anthropic.js";
@@ -162,6 +162,36 @@ describe("routed gateway (real AnthropicProvider → fake Messages API)", () => 
       }
       await inferRouted(fakePorts({ experimentsEnabled: true }).ports, factory, "A", "t", { messages: obs });
       expect(names()).toEqual(expect.arrayContaining(experimentTools));
+    });
+  });
+
+  it("R41.1 doctrine: absent (Founder 1's runtime) keeps charter v4 and the v4 tools byte-for-byte; founder-v5 gets charter v5 and the v5 tools; the tier never changes; unknown is refused", async () => {
+    await withFake(async (factory, fake) => {
+      const body = () => fake.lastBody as { system?: unknown; tools?: Array<{ name: string; input_schema?: { properties?: Record<string, unknown> } }> };
+      const sys = () => JSON.stringify(body().system ?? "");
+      const tool = (n: string) => (body().tools ?? []).find((t) => t.name === n);
+      const v4 = await inferRouted(fakePorts().ports, factory, "A", "t", { messages: obs });
+      const v4Tools = (body().tools ?? []).map((t) => t.name);
+      const v4Sys = sys();
+      expect(v4Sys).toContain(JSON.stringify(FOUNDER_CHARTER.split("\n")[0]).slice(1, -1));
+      expect(v4Sys).not.toContain("YOU EXIST UNDER ECONOMIC PRESSURE");
+      expect(v4Tools).not.toContain("field_journal");
+      expect(Object.keys(tool("set_goal")?.input_schema?.properties ?? {}).sort()).toEqual(["rationale", "title"]);
+      expect(Object.keys(tool("sleep")?.input_schema?.properties ?? {})).toEqual(["reason"]);
+      // An explicit founder-v4 is the same request as no doctrine at all.
+      await inferRouted(fakePorts().ports, factory, "A", "t", { messages: obs, doctrine: "founder-v4" });
+      expect(sys()).toBe(v4Sys);
+      expect((body().tools ?? []).map((t) => t.name)).toEqual(v4Tools);
+      const v5 = await inferRouted(fakePorts().ports, factory, "A", "t", { messages: obs, doctrine: "founder-v5" });
+      expect(sys()).toContain("YOU EXIST UNDER ECONOMIC PRESSURE");
+      expect(sys()).toContain("A blocked dependency blocks ONE ACTION, never you or your venture");
+      expect((body().tools ?? []).map((t) => t.name).sort()).toEqual([...v4Tools, "field_journal", "field_guide"].sort()); // exactly two additions
+      expect(Object.keys(tool("set_goal")?.input_schema?.properties ?? {}).sort()).toEqual(["awaiting", "blockedBy", "id", "rationale", "reviewAt", "title"]);
+      expect(Object.keys(tool("sleep")?.input_schema?.properties ?? {}).sort()).toEqual(["reason", "wakeOn"]);
+      expect(v5.route).toEqual(v4.route); // doctrine never touches routing, tier or model
+      const { ports, seen } = fakePorts();
+      await expect(inferRouted(ports, factory, "A", "t", { messages: obs, doctrine: "founder-v9" })).rejects.toMatchObject({ code: "FLEET_DOCTRINE_UNKNOWN", status: 400 });
+      expect(seen.authorized).toEqual([]); // refused before anything is authorized or charged
     });
   });
 

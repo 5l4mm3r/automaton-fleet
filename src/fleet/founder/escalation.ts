@@ -61,7 +61,7 @@ export async function escalateQuestion(o: {
     taskClass: o.taskClass,
     ...(o.taskId ? { taskId: o.taskId } : {}),
     escalation: { reasonCode: o.decision.escalationReason, requestedTier: o.requestedTier, ...(o.parentRequestId ? { parentRequestId: o.parentRequestId } : {}) },
-  }) as Awaited<ReturnType<MindPorts["infer"]>> & { route?: EscalationResult["route"] };
+  }, "founder-v5") as Awaited<ReturnType<MindPorts["infer"]>> & { route?: EscalationResult["route"] };
   // The higher tier's answer becomes observable persistent state (never its reasoning).
   const factKey = `decision:${r.requestId}`;
   // Through the fact store (F1-FRESH-01): observedAt and provenance recorded; malformed memory is never overwritten

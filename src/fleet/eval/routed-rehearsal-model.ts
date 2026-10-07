@@ -11,7 +11,7 @@
  *   3. act on the answer: frame and decide the commitment (open_decision → resolve_decision, its own sizing), then a
  *      small spend (linked at T2) and a major spend (refused at T2) under that decision      (T2 step)
  *   4. re-issue the major spend in the step the controller runs at the critical tier         (T3 action step)
- *   5. record completion and sleep                                                           (back at T2)
+ *   5. record completion, complete the execution goal and sleep                              (back at T2)
  *
  * Afterwards every turn only sleeps. Tool-less requests (the T1 chore, the T3 question) are answered by
  * `routedRehearsalToolless`.
@@ -36,6 +36,16 @@ export function routedRehearsalToolless(r: { messages: Array<{ role: string; con
   if (first.startsWith("ROUTINE TASK")) return REHEARSAL_ROUTINE_ANSWER;
   if (first.startsWith("CRITICAL DECISION PACKET")) return REHEARSAL_DECISION_ANSWER;
   return null;
+}
+
+/** R41.1: the open goals a task packet lists (its objective section), so the walk can close them before resting. */
+function openGoalIds(packet: string): string[] {
+  try {
+    const body = JSON.parse(packet.split("\n").slice(3).join("\n")) as { objective?: Array<{ id?: unknown }> };
+    return (body.objective ?? []).map((g) => String(g.id ?? "")).filter((id) => /^g\d{1,6}$/.test(id)).slice(0, 20);
+  } catch {
+    return [];
+  }
 }
 
 export class RoutedRehearsalModel extends ScriptedProvider {
@@ -63,7 +73,10 @@ export class RoutedRehearsalModel extends ScriptedProvider {
     } else if (inTurn === 0 && first.includes('"decision:')) {
       // A later turn: the packet (persistent state, not a transcript) shows the question was decided and acted on.
       content = "The decision and the spend requests are on record.";
-      toolCalls = [call("remember_fact", { key: REHEARSAL_DONE_FACT, value: "T1 chore, T3 question, T2 spend and T3 major spend done" }), call("sleep", { reason: "routed walk complete" })];
+      // R41.1: the decision's execution goal is done (both spends were requested); with nothing executable left, the
+      // founder's later sleep-only turns are a legitimate rest, so the next bare wake-up is slim.
+      toolCalls = [call("remember_fact", { key: REHEARSAL_DONE_FACT, value: "T1 chore, T3 question, T2 spend and T3 major spend done" }),
+        ...openGoalIds(first).map((id) => ({ ...call("complete_goal", { id, outcome: "routed walk complete" }), id: `r${inTurn}-complete_goal-${id}` })), call("sleep", { reason: "routed walk complete" })];
     } else if (inTurn === 0 && has("routine_task")) {
       content = "A page needs extracting: a routine chore.";
       toolCalls = [
@@ -96,7 +109,8 @@ export class RoutedRehearsalModel extends ScriptedProvider {
       ];
     } else {
       content = "The routed walk is complete.";
-      toolCalls = [call("remember_fact", { key: REHEARSAL_DONE_FACT, value: "T1 chore, T3 question, T2 spend and T3 major spend done" }), call("sleep", { reason: "routed walk complete" })];
+      toolCalls = [call("remember_fact", { key: REHEARSAL_DONE_FACT, value: "T1 chore, T3 question, T2 spend and T3 major spend done" }),
+        ...openGoalIds(first).map((id) => ({ ...call("complete_goal", { id, outcome: "routed walk complete" }), id: `r${inTurn}-complete_goal-${id}` })), call("sleep", { reason: "routed walk complete" })];
     }
     const input = approx(req.system) + req.messages.reduce((n, m) => n + approx(m.content), 0);
     return { content, toolCalls, usage: { inputTokens: input, outputTokens: Math.min(approx(content) + approx(JSON.stringify(toolCalls)), req.maxTokens) }, usageSource: "provider", attempts: 1, responseModel: this.model };

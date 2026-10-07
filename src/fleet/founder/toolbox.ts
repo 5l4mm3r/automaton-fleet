@@ -27,6 +27,8 @@ import { runSandboxed } from "./exec-sandbox.js";
 import type { LoopGuard } from "./loop-guard.js";
 import { recallFacts, rememberFact, rememberFacts, retractFact, sourceLabel, type FactRecord, type FactResult } from "./facts.js";
 import { custodyCategory, custodyRefusalText } from "../custody-refusals.js";
+import { FIELD_GUIDE_VERSION, guideList, guideSection } from "./field-guide.js";
+import { SCOPED_CONTINUE } from "./loop-guard.js";
 import { DecisionLedgerError, cognitionDepth, commitmentCheck, depthLine, loadDecisions, noteCommitment, noteResearch, openDecision, researchCheck, resolveDecision, reviewDecision, saveDecisions, type Decision } from "./decisions.js";
 
 export interface ToolboxPorts {
@@ -46,6 +48,8 @@ export interface ToolboxPorts {
   /** Schema v26 (F2-A): record ONE action that needs a human/legal identity or a constitutional change (optional). */
   ownerRequestCreate?(r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string }): Promise<Record<string, unknown>>;
   ownerRequestWithdraw?(requestId: string): Promise<Record<string, unknown>>;
+  /** R41.1: this founder's own dependency records (to return an equivalent pending one instead of asking twice). */
+  ownerRequests?(): Promise<unknown>;
   /** Schema v28+ (F2): one of this founder's own economic operations through FleetController (optional: absent → unavailable). */
   economy?(op: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
@@ -142,7 +146,35 @@ const IMPLEMENTED = new Set([
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
   "opportunity", "venture", "wallet", "fleet_capital", "economic_knowledge", "identity", "fleet_services", "browser", "project",
+  // R41.1 (founder-v5): the founder's own field journal and the Survival Field Guide.
+  "field_journal", "field_guide",
 ]);
+/** R41.1: the founder's field journal (its own memory; append-only, bounded). */
+export const JOURNAL_FILE = "field-journal.jsonl";
+export const JOURNAL_MAX = 500;
+export const JOURNAL_FIELDS = ["observation", "hypothesis", "evidence", "cost", "decision", "outcome", "lesson", "reusability", "confidence", "nextTrigger"] as const;
+export function readJournal(memoryDir: string): Array<Record<string, unknown>> {
+  try {
+    return fs.readFileSync(path.join(memoryDir, JOURNAL_FILE), "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
+  } catch {
+    return [];
+  }
+}
+/** R41.1: two descriptions of the same blocked action (normalised words; ≥ 60% overlap). */
+export function sameAction(a: string, b: string): boolean {
+  const words = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP_WORDS.has(w)));
+  const x = words(a), y = words(b);
+  if (!x.size || !y.size) return false;
+  let both = 0;
+  for (const w of x) if (y.has(w)) both++;
+  return both / (x.size + y.size - both) >= 0.6;
+}
+const STOP_WORDS = new Set(["the", "and", "for", "with", "account", "open", "create", "this", "that", "our", "your", "via", "new"]);
+function goalStateNote(g: Record<string, unknown>): string {
+  if (g.blockedBy) return ` — BLOCKED by dependency ${String(g.blockedBy).slice(0, 8)} (only this goal; your other goals stay executable)`;
+  if (g.awaiting) return ` — AWAITING ${String(g.awaiting).slice(0, 120)}${g.reviewAt ? ` (review ${String(g.reviewAt)})` : ""}`;
+  return " — executable";
+}
 const EXPERIMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Registry refusals that are infrastructure safety ceilings (fetch quotas, the daily inference ceiling), never budgets. */
 export const INFRA_CEILING = /^FLEET_(RESEARCH_QUOTA_[A-Z]+|COGNITION_BUDGET_EXHAUSTED)$/;
@@ -223,6 +255,29 @@ export class FounderToolbox {
     return abs;
   }
 
+  /** R41.1: the id of a pending dependency equivalent to (kind, action), or null. Unknown list → null (never blocks). */
+  private async equivalentPending(kind: string, action: string): Promise<string | null> {
+    if (!this.o.ports.ownerRequests) return null;
+    let list: unknown;
+    try { list = await this.o.ports.ownerRequests(); } catch { return null; }
+    const rows = list && typeof list === "object" && Array.isArray((list as { requests?: unknown }).requests) ? (list as { requests: Array<Record<string, unknown>> }).requests : [];
+    for (const r of rows) {
+      if (r?.status !== "pending" || typeof r.requestId !== "string") continue;
+      if (String(r.kind ?? r.category ?? "") !== kind) continue;
+      if (sameAction(String(r.action ?? r.title ?? ""), action)) return r.requestId;
+    }
+    return null;
+  }
+
+  /** R41.1: mark one of the founder's own open goals as blocked by a dependency (only that goal). */
+  private markBlocked(goalId: string, requestId: string): void {
+    const goals = this.readJson<Array<Record<string, unknown>>>("goals.json", []);
+    const g = goals.find((x) => x.id === goalId && x.status === "open");
+    if (!g) return;
+    g.blockedBy = requestId;
+    this.writeJson("goals.json", goals);
+  }
+
   private readJson<T>(file: string, dflt: T): T {
     try {
       return JSON.parse(fs.readFileSync(path.join(this.memory, file), "utf8")) as T;
@@ -300,7 +355,8 @@ export class FounderToolbox {
   private async run(call: ToolCall): Promise<ToolOutcome> {
     const refuse = (code: string, why: string): ToolOutcome => ({ name: call.name, ok: false, refused: code, output: `REFUSED ${code}: ${why}` });
     const d = decideTool(call.name, this.o.manifest);
-    if (!d.allowed) return refuse(d.code, `capability ${d.capability ?? "unclassified"} is not available to this founder`);
+    // R41.1: the refusal is unchanged; its explanation is scoped to this one action.
+    if (!d.allowed) return refuse(d.code, `capability ${d.capability ?? "unclassified"} (tool ${call.name}) is not available to this founder. ${SCOPED_CONTINUE}`);
     if (!IMPLEMENTED.has(call.name)) return refuse("FLEET_TOOL_NOT_AVAILABLE", "this runtime does not provide that tool");
     const a = call.arguments ?? {};
     try {
@@ -425,13 +481,40 @@ export class FounderToolbox {
           return { name: call.name, ok: true, output: clip(JSON.stringify(out)) };
         }
         case "set_goal": {
+          // R41.1 (founder-v5): blockedBy / awaiting / reviewAt split blocked or waiting work from executable work; id updates
+          // one of the founder's own open goals. Absent fields keep the v4 behaviour exactly.
+          const goals = this.readJson<Array<Record<string, unknown>>>("goals.json", []);
+          const marks: Record<string, unknown> = {};
+          if (typeof a.blockedBy === "string") {
+            const b = a.blockedBy.trim();
+            if (b && !/^[0-9a-f]{8}(-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/.test(b)) return refuse("FLEET_BAD_REQUEST", "blockedBy is a dependency id (or its first 8 characters)");
+            marks.blockedBy = b || null;
+          }
+          if (typeof a.awaiting === "string") marks.awaiting = a.awaiting.trim().slice(0, 300) || null;
+          if (typeof a.reviewAt === "string" && a.reviewAt.trim()) {
+            const t = Date.parse(a.reviewAt);
+            if (!Number.isFinite(t)) return refuse("FLEET_BAD_REQUEST", "reviewAt is an ISO-8601 date/time");
+            marks.reviewAt = new Date(t).toISOString();
+          } else if (typeof a.reviewAt === "string") marks.reviewAt = null;
+          if (typeof a.id === "string" && a.id) {
+            const g = goals.find((x) => x.id === a.id);
+            if (!g || g.status !== "open") return refuse("FLEET_NOT_FOUND", "no such open goal");
+            if (str(a.title, 300)) g.title = str(a.title, 300);
+            if (typeof a.rationale === "string") g.rationale = a.rationale.slice(0, 2000);
+            for (const [k, v] of Object.entries(marks)) if (v === null) delete g[k]; else g[k] = v;
+            g.updatedAt = new Date().toISOString();
+            this.writeJson("goals.json", goals);
+            return { name: call.name, ok: true, output: `goal ${String(g.id)} updated${goalStateNote(g)}` };
+          }
           const title = str(a.title, 300);
           if (!title) return refuse("FLEET_BAD_REQUEST", "title required");
-          const goals = this.readJson<Array<Record<string, unknown>>>("goals.json", []);
           const id = `g${goals.length + 1}`;
-          goals.push({ id, title, rationale: typeof a.rationale === "string" ? a.rationale.slice(0, 2000) : "", status: "open", at: new Date().toISOString() });
+          const g: Record<string, unknown> = { id, title, rationale: typeof a.rationale === "string" ? a.rationale.slice(0, 2000) : "", status: "open", at: new Date().toISOString() };
+          for (const [k, v] of Object.entries(marks)) if (v !== null) g[k] = v;
+          goals.push(g);
           this.writeJson("goals.json", goals.slice(-100));
-          return { name: call.name, ok: true, output: `goal ${id} set` };
+          // (An unmarked goal answers exactly as before.)
+          return { name: call.name, ok: true, output: Object.keys(marks).some((k) => g[k] !== undefined) ? `goal ${id} set${goalStateNote(g)}` : `goal ${id} set` };
         }
         case "complete_goal": {
           const goals = this.readJson<Array<Record<string, unknown>>>("goals.json", []);
@@ -595,7 +678,37 @@ export class FounderToolbox {
         case "request_identity_fact":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.requestIdentityFact({ factKey: String(a.factKey ?? ""), purpose: String(a.purpose ?? ""), workflow: String(a.workflow ?? "") }))) };
         case "sleep":
-          return { name: call.name, ok: true, output: "sleeping" };
+          return { name: call.name, ok: true, output: typeof a.wakeOn === "string" && a.wakeOn.trim() ? `sleeping; wake on: ${a.wakeOn.trim().slice(0, 300)}` : "sleeping" };
+        // R41.1: the founder's private field journal (append-only, bounded) and the Survival Field Guide (seed knowledge).
+        case "field_journal": {
+          const file = path.join(this.memory, JOURNAL_FILE);
+          if (a.op === "add") {
+            const e = a.entry && typeof a.entry === "object" && !Array.isArray(a.entry) ? (a.entry as Record<string, unknown>) : null;
+            const entry: Record<string, unknown> = { at: new Date().toISOString() };
+            for (const k of JOURNAL_FIELDS) if (e && typeof e[k] === "string" && (e[k] as string).trim()) entry[k] = (e[k] as string).trim().slice(0, k === "cost" || k === "confidence" || k === "nextTrigger" ? 300 : 1000);
+            if (!entry.observation) return refuse("FLEET_BAD_REQUEST", "an entry needs at least an observation");
+            if (entry.reusability !== undefined && !["venture", "agent", "candidate_fleet"].includes(String(entry.reusability))) return refuse("FLEET_BAD_REQUEST", "reusability is venture, agent or candidate_fleet");
+            const lines = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+            lines.push(JSON.stringify(entry));
+            fs.writeFileSync(`${file}.tmp`, lines.slice(-JOURNAL_MAX).join("\n") + "\n", { mode: 0o600 });
+            fs.renameSync(`${file}.tmp`, file);
+            return { name: call.name, ok: true, output: `journal entry recorded (${Math.min(lines.length, JOURNAL_MAX)} kept)` };
+          }
+          if (a.op === "list") {
+            const n = Math.max(1, Math.min(50, Number(a.limit) || 10));
+            return { name: call.name, ok: true, output: clip(JSON.stringify(readJournal(this.memory).slice(-n).reverse())) };
+          }
+          return refuse("FLEET_BAD_REQUEST", "op is add or list");
+        }
+        case "field_guide": {
+          if (a.op === "list") return { name: call.name, ok: true, output: guideList() };
+          if (a.op === "read") {
+            const s = guideSection(String(a.section ?? ""));
+            if (!s) return refuse("FLEET_NOT_FOUND", `no such section; ${guideList()}`);
+            return { name: call.name, ok: true, output: clip(`${FIELD_GUIDE_VERSION} — ${s.title} [${s.kind}]\n${s.text}`) };
+          }
+          return refuse("FLEET_BAD_REQUEST", "op is list or read");
+        }
         // F2-A: an action-scoped external dependency. It makes ONE action unavailable; it never blocks the founder, a goal
         // or other work, and it grants nothing. Ordinary business choices are not valid kinds (FleetController refuses them).
         case "record_external_dependency": {
@@ -606,8 +719,16 @@ export class FounderToolbox {
           const action = str(a.action, 200);
           if (!title || !detail || !kind || !action) return refuse("FLEET_BAD_REQUEST", "kind, action, title and detail required");
           const goalRef = typeof a.goalId === "string" && /^g\d{1,6}$/.test(a.goalId) ? a.goalId : null;
+          // R41.1: an equivalent PENDING dependency is returned, never requested twice (one request per blocked action).
+          const same = await this.equivalentPending(kind, action);
+          if (same) {
+            if (goalRef) this.markBlocked(goalRef, same);
+            return { name: call.name, ok: true, output: `ALREADY REQUESTED: dependency ${same} (${kind}) for this action is pending. Do not request it again or retry the blocked action; `
+              + `keep that step as its own goal with blockedBy ${same.slice(0, 8)} and continue your unblocked work.` };
+          }
           const r = await this.o.ports.ownerRequestCreate({ idempotencyKey: `dep:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128), kind, action, goalRef, title, detail })
             .catch(ownerRefusal);
+          if (r.ok === true && goalRef && typeof r.requestId === "string") this.markBlocked(goalRef, r.requestId);
           return { name: call.name, ok: r.ok === true, ...(r.ok === true ? {} : { refused: String(r.code ?? "FLEET_REFUSED") }), output: clip(JSON.stringify(r)) };
         }
         case "withdraw_external_dependency": {

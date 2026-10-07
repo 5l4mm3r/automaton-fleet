@@ -25,7 +25,7 @@ import {
   FounderMind, MAX_IDLE_SKIP, RENUDGE_FIRST, RENUDGE_MAX, dependencyLines, parseDependencies, slimWakePacket, type MindPorts,
 } from "../../fleet/founder/mind.js";
 import {
-  CONSTANT_STANDARD, DECISION_LIMITS, DecisionLedgerError, OPPORTUNITY_CYCLE, commitmentCheck, decisionLines, idleKind, idleTask, loadDecisions, nextMoveLine, openDecision,
+  CONSTANT_STANDARD, DECISION_LIMITS, HIBERNATE_LINE, DecisionLedgerError, OPPORTUNITY_CYCLE, commitmentCheck, decisionLines, idleKind, idleTask, loadDecisions, nextMoveLine, openDecision,
   parseSurvival, researchCheck, resolveDecision, reviewDecision, survivalLine, type Decision, type SurvivalView,
 } from "../../fleet/founder/decisions.js";
 import { FounderToolbox, INFRA_CEILING } from "../../fleet/founder/toolbox.js";
@@ -194,7 +194,7 @@ describe("F2-A action-scoped dependencies (founder view)", () => {
     const [open, withdrawn, retired, declined, answered] = dependencyLines(parseDependencies({ requests: [gumroadDep(),
       gumroadDep({ status: "withdrawn", ageS: 60 }), gumroadDep({ status: "retired", ageS: 60 }), gumroadDep({ status: "declined", ageS: 60 }),
       gumroadDep({ status: "answered", ageS: 60, response: "The fleet storefront will cover this later." })] })!);
-    expect(open).toBe(`External dependency 62cbe1b7 (kyc): the action "${GUMROAD_ACTION}" is unavailable for now. This blocks only that action — not you, your goals or other work: pursue alternatives (another marketplace, direct sales that need no new account, another product, service, niche or venture).`);
+    expect(open).toBe(`External dependency 62cbe1b7 (kyc): the action "${GUMROAD_ACTION}" is unavailable for now. This blocks only that action — not you, your goals or other work: pursue alternatives (another marketplace, direct sales that need no new account, another product, service, niche or venture). It is already requested: do not request it again or retry that action.`);
     expect(withdrawn).toMatch(/: withdrawn by you\.$/);
     expect(retired).toMatch(/: retired — ordinary business decisions are yours; nothing waits on it\.$/);
     expect(declined).toMatch(/: DECLINED\. This records an answer only; it grants no capability, account, money or permission by itself\.$/);
@@ -459,7 +459,10 @@ describe("F2-A dependencies in the founder loop", () => {
     const resolved = await r.next();
     expect(resolved.slim).toBe(false);
     expect(resolved.task).toMatch(/ANSWERED, with the note: "The fleet storefront will host it\."/);
-    expect((await r.next()).slim).toBe(true);
+    // R41.1: the answer unblocks goal g1 — it is executable work again, so the next wake is full (never slim) and names it.
+    const after = await r.next();
+    expect(after.slim).toBe(false);
+    expect(after.task).toContain("Executable now: g1.");
   });
 
   it("record_external_dependency: only exception kinds, scoped to one action; the controller's refusal comes back as data", async () => {
@@ -517,7 +520,7 @@ describe("F2-A idle semantics: the next economically meaningful move, never a br
     const rest = (await fullAt(r, 64)).map((i) => i + 1);
     expect([RENUDGE_FIRST, RENUDGE_MAX]).toEqual([4, 32]);
     expect(rest).toEqual([5, 14, 31, 64]); // after 4, 8, 16 and 32 slim wakes
-    expect(r.mind.routing.idleNudges).toEqual({ decide: 0, execute: 0, opportunity: 4 });
+    expect(r.mind.routing.idleNudges).toEqual({ decide: 0, execute: 0, opportunity: 4, hibernate: 0 });
     const idle = r.parse(r.packets[5]);
     expect(idle.task).toContain(`Idle wake with no open decision and no execution path. ${OPPORTUNITY_CYCLE}`);
     expect(r.fetches).toEqual([]); // nothing was fetched just because the founder was idle
@@ -562,7 +565,7 @@ describe("F2-A idle semantics: the next economically meaningful move, never a br
   it("(7) unresolved Gumroad does not block alternative execution: the founder decides on a direct route and executes while Gumroad stays open", async () => {
     let deps = [gumroadDep()];
     const r = rig({ deps: () => ({ ok: true, requests: deps }), reply: (n, packet) => {
-      if (n === 1 && packet.includes("Your open goals are your execution path")) {
+      if (n === 1 && packet.includes("Hibernate only if that is the whole truth")) {
         return [{ id: "a1", name: "open_decision", arguments: decisionArgs({ key: "tracker-channel", purpose: "expand_venture", question: "Which channel that needs no new account sells the tracker fastest?",
           options: ["self-hosted checkout page", "Etsy listing"], stopAfterFetches: 1, stopWhen: "one channel with purchase evidence" }) },
         { id: "a2", name: "resolve_decision", arguments: resolveArgs({ key: "tracker-channel", selected: "self-hosted checkout page", rejected: [], ranking: [] }) },
@@ -572,7 +575,9 @@ describe("F2-A idle semantics: the next economically meaningful move, never a br
     } });
     const p1 = await r.next();
     expect(p1.task).toContain("This blocks only that action");
-    expect(p1.task).toContain("Your open goals are your execution path");
+    // R41.1: Gumroad blocks only goal g1 (its goalRef); the packet says so and pushes the unblocked work, never a wait.
+    expect(p1.task).toMatch(/Blocked: g1 — waiting on dependency 62cbe1b7 \(pending\)\. Already requested: do not request it again/);
+    expect(p1.task).toContain(HIBERNATE_LINE);
     const p2 = await r.next();
     expect(p2.task).toContain(`External dependency 62cbe1b7 (kyc): the action "${GUMROAD_ACTION}" is unavailable for now.`);
     expect(p2.task).toContain('Decided tracker-channel: "self-hosted checkout page"');
@@ -671,7 +676,11 @@ describe("F2-A professional self-governance (constitutional, owner-resolved 2026
       expect(p.task).not.toMatch(/urgent|emergency|hurry|panic mode|revenue-only|explore freely|plenty of runway/i);
     }
     // Only the figures differ: the guidance is word-for-word the same at 2 and 5 000 days.
-    const strip = (t: string) => t.replace(/survival equity \d+p/g, "").replace(/runway ≈ \d+ days/g, "");
+    // R41.1: the economic-state line now carries existential pressure, which rises as capital approaches zero (owner
+    // doctrine) — everything else, the guidance included, stays word-for-word the same at 2 and 5 000 days.
+    expect(b[0].task).toMatch(/Economic state: SURVIVE\. Existential pressure: CRITICAL/);
+    expect(a[0].task).toMatch(/Economic state: SURVIVE\. Existential pressure: ELEVATED/);
+    const strip = (t: string) => t.replace(/^Economic state: .*$/m, "").replace(/survival equity \d+p/g, "").replace(/runway ≈ \d+ days/g, "");
     expect(strip(a[0].task)).toBe(strip(b[0].task));
   });
 
@@ -772,7 +781,8 @@ describe("F2-A proof: owner absence cannot freeze a founder", () => {
       for (const p of today) {
         expect(p.task).toContain("This blocks only that action"); // the dependency is visible every time, as one action
         expect(p.task).not.toMatch(/keep waiting|STALE|owner decides|awaiting (the )?owner|ask the owner/i);
-        if (!p.slim) expect(p.task).toMatch(/Your open goals are your execution path|Idle wake: your open goals are your execution path/);
+        // R41.1: Gumroad blocks only g1, so the founder is hibernating — every push is the hibernation check toward unblocked work.
+        if (!p.slim) expect(p.task).toContain(HIBERNATE_LINE);
       }
     }
     expect(ownerActions).toEqual([]);
@@ -789,7 +799,7 @@ describe("F2-A proof: owner absence cannot freeze a founder", () => {
     fs.mkdirSync(path.join(root, "w"));
     const slim = slimWakePacket(buildTaskPacket({ memoryDir: path.join(root, "m"), workspaceDir: path.join(root, "w"), task: "t", economics: {},
       outputContract: { form: "analysis", mustCite: false, instructions: "Decide." } }));
-    expect(slim.task).toMatch(/If this leaves an economically meaningful move, read what you need .* and make it; if not, sleep — the same state is re-checked later, and any change brings a full packet\.$/);
+    expect(slim.task).toMatch(/ended in hibernation \(every open goal is blocked or awaiting\).*If a worthwhile unblocked action now exists, read what you need .* and take it; if not, sleep again with your wake condition — the same state is re-checked later, and any change brings a full packet\.$/);
     expect(slim.task).not.toMatch(/allowance|otherwise sleep\.$/);
   });
 });

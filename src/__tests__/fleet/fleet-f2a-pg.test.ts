@@ -189,7 +189,7 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
       source: { kind: "knowledge_proposal", ref: GUMROAD, importedBy: OWNER } });
     expect(g.staleAfterS).toBeUndefined();
     const lines = dependencyLines(parseDependencies(list)!);
-    expect(lines[0]).toBe(`External dependency 62cbe1b7 (kyc): the action "${GUMROAD_ACTION}" is unavailable for now. This blocks only that action — not you, your goals or other work: pursue alternatives (another marketplace, direct sales that need no new account, another product, service, niche or venture).`);
+    expect(lines[0]).toBe(`External dependency 62cbe1b7 (kyc): the action "${GUMROAD_ACTION}" is unavailable for now. This blocks only that action — not you, your goals or other work: pursue alternatives (another marketplace, direct sales that need no new account, another product, service, niche or venture). It is already requested: do not request it again or retry that action.`);
     expect(lines.filter((l) => /\(legacy_ordinary\) for "(Enable a Gumroad sales channel|Approve 2000p of ad spend)": retired — ordinary business decisions are yours; nothing waits on it\.$/.test(l))).toHaveLength(2);
     for (const l of lines) expect(l).not.toMatch(OWNER_DEPENDENCY);
     // New records: ordinary business is refused; an identity need is one action, recorded without any owner step.

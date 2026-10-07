@@ -14,16 +14,17 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_TOOLS, type ToolSpec } from "./types.js";
+import { FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_TOOLS, toolsForDoctrine, type FounderDoctrine, type ToolSpec } from "./types.js";
 import { toolsFor } from "./gateway.js";
 
 export const CAPABILITY_SIGNATURE_VERSION = "fleet-capabilities-v1";
 
 /** The tools a founder is offered for an ordinary step (routed: + the cognition tools), exactly as the gateways build them. */
-export function founderStepTools(caps: Record<string, unknown>, routed: boolean): ToolSpec[] {
+export function founderStepTools(caps: Record<string, unknown>, routed: boolean, doctrine: FounderDoctrine = "founder-v4"): ToolSpec[] {
   const allowed = new Set(Array.isArray(caps.allowed) ? (caps.allowed as string[]) : []);
   return [
-    ...toolsFor([...allowed]),
+    // R41.1: founder-v5 swaps in its set_goal / sleep and adds the journal and the guide; v4 is unchanged.
+    ...toolsForDoctrine(toolsFor([...allowed]), doctrine, allowed),
     ...(routed ? FOUNDER_ROUTED_TOOLS.filter((t) => allowed.has(t.capability)) : []),
     ...(caps.experimentsEnabled === true ? FOUNDER_EXPERIMENT_TOOLS.filter((t) => allowed.has(t.capability)) : []),
   ];

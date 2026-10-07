@@ -88,6 +88,9 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   orchestrator_status: "planning",
   // private memory
   remember_fact: "memory.private",
+  // R41.1 (founder-v5): the founder's own field journal and the Survival Field Guide (seed knowledge; runtime-local).
+  field_journal: "memory.private",
+  field_guide: "knowledge.read",
   remember_facts: "memory.private",
   retract_fact: "memory.private",
   recall_facts: "memory.private",

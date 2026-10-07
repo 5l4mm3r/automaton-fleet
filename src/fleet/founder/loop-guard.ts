@@ -14,8 +14,14 @@ import crypto from "crypto";
 import type { ToolCall } from "../cognition/types.js";
 import type { ToolOutcome } from "./toolbox.js";
 
+/**
+ * R41.1: what a refused action means — exactly that action, never the founder, its goals or its venture. Appended to the
+ * capability refusals and the duplicate-failure guard (the refusals themselves are unchanged). Categories, never a decision.
+ */
+export const SCOPED_CONTINUE = "This blocks only this one action — not you, your other goals or your venture. Do not retry the identical action. "
+  + "Continue another useful path: product improvement, validation, pricing, copy, assets, documentation, channels that need no new account, launch preparation.";
 const READ_ONLY = new Set(["read_file", "list_files", "recall_facts", "list_goals", "check_ledger", "read_knowledge"]);
-const MUTATING = new Set(["write_file", "remember_fact", "remember_facts", "retract_fact", "record_external_dependency", "withdraw_external_dependency", "open_decision", "resolve_decision", "review_decision", "set_goal", "complete_goal", "exec"]);
+const MUTATING = new Set(["field_journal", "write_file", "remember_fact", "remember_facts", "retract_fact", "record_external_dependency", "withdraw_external_dependency", "open_decision", "resolve_decision", "review_decision", "set_goal", "complete_goal", "exec"]);
 /** Refusal codes that describe a transient condition (bounded retry allowed). */
 const TRANSIENT = /^(RESEARCH_(TIMEOUT|UNAVAILABLE|RATE_LIMITED|UPSTREAM)|FLEET_(RATE_LIMITED|RESEARCH_QUOTA|UNAVAILABLE)|FLEET_TOOL_ERROR)/;
 
@@ -71,7 +77,7 @@ export class LoopGuard {
       if (!transient || prev.attempts > (this.o.transientRetries ?? 1)) {
         this.stats.duplicateFailuresBlocked++;
         return { name: call.name, ok: false, refused: "FLEET_DUPLICATE_FAILED_ACTION",
-          output: `NOT RE-RUN FLEET_DUPLICATE_FAILED_ACTION: this identical call already failed (${prev.refused ?? "error"}) and nothing it depends on has changed. Change the inputs or method, or gather new evidence first.` };
+          output: `NOT RE-RUN FLEET_DUPLICATE_FAILED_ACTION: this identical call already failed (${prev.refused ?? "error"}) and nothing it depends on has changed. ${SCOPED_CONTINUE}` };
       }
     }
     if (prev && prev.ok && READ_ONLY.has(call.name) && prev.stateVersion === this.stateVersion) {
