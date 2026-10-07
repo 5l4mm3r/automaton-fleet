@@ -19,6 +19,9 @@ import os from "os";
 import path from "path";
 import { execFileSync } from "child_process";
 import { chromium, type Browser, type Page } from "playwright-core";
+import { eventTitle } from "../../../codex-dashboard/src/dashboard/command/panels";
+import { toFleetEvent } from "../../../codex-dashboard/src/dashboard/command/events";
+import { codeText } from "../../../codex-dashboard/src/dashboard/notifications/report";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { ensureLiveUi } from "./fixtures/live-ui.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
@@ -229,9 +232,16 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await page.getByRole("tab", { name: "Decision Log" }).click();
     await page.getByText("agent hold set").first().waitFor();
     expect(await main()).toContain("Model reasoning is never recorded or shown");
-    // The information feed shows FleetController's own latest event types.
-    const latest = await R.q(`SELECT event_type FROM fleet.fleet_events ORDER BY created_at DESC LIMIT 5`);
+    // The information feed shows FleetController's routed events only (v44: P0–P3); audit mechanics never appear there;
+    // the full history tab shows the raw record.
+    const routed = await R.q(`SELECT event_type, detail FROM fleet.fleet_events WHERE fleet.fleet_event_route(event_type, detail) IN ('P0_CRITICAL','P1_HIGH','P2_IMPORTANT','P3_SUMMARY') ORDER BY created_at DESC LIMIT 1`);
+    const latest = await R.q(`SELECT event_type FROM fleet.fleet_events ORDER BY created_at DESC LIMIT 1`);
     await page.getByRole("tab", { name: "Information Feed" }).click();
+    const title = routed[0].event_type === "notification" ? codeText(routed[0].detail?.code) : eventTitle(toFleetEvent({ type: routed[0].event_type, at: "2026-10-07T00:00:00Z", detail: routed[0].detail })!);
+    await page.getByText(title).first().waitFor();
+    const feedText = await page.getByRole("tabpanel").or(page.locator("main")).first().textContent();
+    for (const noise of ["Session opened", "Ledger journal posted", "Runtime approved"]) expect(feedText ?? "").not.toContain(noise);
+    await page.getByRole("tab", { name: "Full history" }).click();
     await page.getByText(words(latest[0].event_type)).first().waitFor();
     await page.getByRole("tab", { name: "Safety & Capabilities" }).click();
     const caps = await main();

@@ -166,7 +166,7 @@ export function EventFeed({ events, models, onOpenAgent, limit = 100, filterable
     {shown.length === 0 && <p className="text-sm text-slate-400">No events{q ? " match" : " recorded yet"}.</p>}
     <ol className="max-h-[32rem] space-y-2 overflow-y-auto pr-1">{shown.map((e) => <li key={e.key} className="border-l-2 border-cyan-900 pl-3 text-sm">
       <p className="text-xs text-slate-400">{time(e.at)} · {e.actor ?? "—"}{e.agentId ? <> · {onOpenAgent ? <button className="text-cyan-300 underline" onClick={() => onOpenAgent(e.agentId!)}>{name.get(e.agentId) ?? e.agentId}</button> : name.get(e.agentId) ?? e.agentId}</> : null}</p>
-      <p>{words(e.type)}{factsOf(e.detail, 3).map(([k, v]) => ` · ${k}: ${v}`).join("")}</p>
+      <p className="[overflow-wrap:anywhere]">{words(e.type)}{factsOf(e.detail, 3).map(([k, v]) => ` · ${k}: ${v}`).join("")}</p>
     </li>)}</ol>
   </>;
 }
@@ -209,7 +209,7 @@ export function CommandFeed({ events, models, onOpenAgent, limit = 100 }: { even
       <h4 className={`mb-1 border-l-2 pl-2 text-xs font-semibold uppercase tracking-widest ${PRIORITY_TONE[p]}`}>{PRIORITY_TEXT[p]} · {xs.length}</h4>
       <ol className="space-y-2">{shown.map((e) => <li key={e.key} className={`border-l-2 pl-3 text-sm ${PRIORITY_TONE[p].split(" ")[0]}`}>
         <p className="text-xs text-slate-400">{time(e.at)}{e.agentId ? <> · {onOpenAgent ? <button className="text-cyan-300 underline" onClick={() => onOpenAgent(e.agentId!)}>{name.get(e.agentId) ?? e.agentId}</button> : name.get(e.agentId) ?? e.agentId}</> : null}</p>
-        <p>{e.type === "notification" ? codeText(typeof e.detail.code === "string" ? e.detail.code : undefined) : eventTitle(e)}{factsOf(e.type === "notification" ? null : e.detail, 3).map(([k, v]) => ` · ${k}: ${v}`).join("")}</p>
+        <p className="[overflow-wrap:anywhere]">{e.type === "notification" ? codeText(typeof e.detail.code === "string" ? e.detail.code : undefined) : eventTitle(e)}{factsOf(e.type === "notification" ? null : e.detail, 3).map(([k, v]) => ` · ${k}: ${v}`).join("")}</p>
       </li>)}</ol></section> : null;
   })}</div>;
 }
