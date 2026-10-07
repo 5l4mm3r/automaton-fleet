@@ -2020,6 +2020,11 @@ export class PgFleetStore {
     }));
   }
 
+  /** Schema v45: expire routine event copies and diagnostics past their retention (the guard trigger refuses anything else). */
+  async eventRetention(): Promise<{ eventsExpired: number; suppressionExpired: number }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_event_retention() AS r")).rows[0].r);
+  }
+
   /** Schema v30 (F2): FleetController's tax true-up pass (reserves follow the estimated liability; over-reserve released). */
   async taxTrueUp(limit = 100): Promise<Record<string, unknown>> {
     return this.tx(async (c) => (await c.query("SELECT svc_tax_true_up($1) AS r", [limit])).rows[0].r);

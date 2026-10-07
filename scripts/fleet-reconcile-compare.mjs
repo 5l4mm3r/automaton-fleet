@@ -10,7 +10,8 @@
  * every existing account keeps its class and balance, every new account starts at zero; each Agent's economics
  * (realised net profit, contribution, tax, cash …) and computed Treasury sweep unchanged; the Treasury ledger,
  * external transactions, owner distributions, payment orders, custody transfers and capital requests unchanged;
- * existing events and notifications unchanged and no event appended except the migrator's role-grant audit records; estates, knowledge, ventures, missions,
+ * existing canonical events and notifications unchanged (v45: routine event copies / diagnostics may only be purged, reported by type) and no
+ * event appended except the migrator's role-grant audit records; estates, knowledge, ventures, missions,
  * credentials unchanged; the owner's passkeys, authenticator and password unchanged (digests); no project or sweep
  * record invented.
  */
@@ -67,7 +68,25 @@ same("treasury ledger", B.treasuryLedger, A.treasuryLedger);
 if (B.adminAuth && A.adminAuth) same("owner sign-in state (passkeys, authenticator, password)", B.adminAuth, A.adminAuth);
 for (const k of ["externalTransactions", "ownerDistributions", "paymentOrders", "custodyTransfers", "capitalRequests", "estates", "estateItems",
   "knowledge", "ventures", "missions", "credentialRefs", "providerSecrets"]) same(k, B[k], A[k]);
-same("existing events", { count: B.events.count, maxId: B.events.maxId, digest: B.events.digest }, { count: B.events.count, maxId: B.events.maxId, digest: A.events.digest });
+// v45 purges the routine event copies (session_opened, ledger_journal_posted, role grants, notifications_deleted) and expires
+// routine diagnostics: the canonical history must be byte-identical, an expiring type may only shrink, and the purge is
+// reported by type (before − after = purged, exactly).
+const purged = {};
+if (B.events.canonical && A.events.canonical) {
+  same("existing canonical events", B.events.canonical, A.events.canonical);
+  for (const [t, n] of Object.entries(B.events.expiring ?? {})) {
+    const left = A.events.expiring?.[t] ?? 0;
+    if (left > n) failures.push({ check: "expiring events grew", type: t, before: n, after: left });
+    else if (left < n) purged[t] = n - left;
+  }
+  for (const t of Object.keys(A.events.expiring ?? {})) if (!(t in (B.events.expiring ?? {}))) failures.push({ check: "expiring events appeared", type: t });
+  const total = Object.values(purged).reduce((s, n) => s + n, 0);
+  const keptBefore = B.events.count - B.events.canonical.count;
+  must("events before = canonical + expiring", Object.values(B.events.expiring ?? {}).reduce((s, n) => s + n, 0) === keptBefore, { count: B.events.count, canonical: B.events.canonical.count });
+  if (total) notes.push({ eventsPurged: purged, total, existingBefore: B.events.count, existingAfter: B.events.count - total });
+} else {
+  same("existing events", { count: B.events.count, maxId: B.events.maxId, digest: B.events.digest }, { count: B.events.count, maxId: B.events.maxId, digest: A.events.digest });
+}
 // The migrator re-grants each restricted role and audits it (one `<role>_role_granted` event per role): expected.
 const appended = Object.entries(A.events.after ?? {});
 const grants = Object.fromEntries(appended.filter(([t]) => /^[a-z]+_role_granted$/.test(t)));
@@ -82,6 +101,6 @@ must("no sweep record invented", (A.sweepRecords ?? 0) === 0, A.sweepRecords);
 const report = { ok: failures.length === 0, from: Number(from), to: Number(to), migrationsApplied: added,
   population: A.state, agents: A.agents.map((a) => ({ agentId: a.agentId, name: a.name, status: a.status })),
   ledger: { head: L1.head, journals: L1.journals, postings: L1.postings, debitsCents: L1.debitsCents, creditsCents: L1.creditsCents },
-  newAccounts, events: { preserved: B.events.count, appended: A.events.after, unexpected }, notifications: A.notifications.count, failures, notes };
+  newAccounts, events: { existing: B.events.count, purged, preserved: B.events.count - Object.values(purged).reduce((s, n) => s + n, 0), appended: A.events.after, unexpected }, notifications: A.notifications.count, failures, notes };
 console.log(JSON.stringify(report, null, 2));
 process.exit(report.ok ? 0 : 1);

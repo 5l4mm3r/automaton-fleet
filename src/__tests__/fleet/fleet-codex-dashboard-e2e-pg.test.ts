@@ -235,7 +235,8 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     // The information feed shows FleetController's routed events only (v44: P0–P3); audit mechanics never appear there;
     // the full history tab shows the raw record.
     const routed = await R.q(`SELECT event_type, detail FROM fleet.fleet_events WHERE fleet.fleet_event_route(event_type, detail) IN ('P0_CRITICAL','P1_HIGH','P2_IMPORTANT','P3_SUMMARY') ORDER BY created_at DESC LIMIT 1`);
-    const latest = await R.q(`SELECT event_type FROM fleet.fleet_events ORDER BY created_at DESC LIMIT 1`);
+    // v45: the full history is meaningful Fleet history (no sessions, ledger copies, role grants, diagnostics, release prep).
+    const latest = await R.q(`SELECT event_type FROM fleet.fleet_events WHERE fleet.fleet_event_in_history(event_type, detail) ORDER BY created_at DESC LIMIT 1`);
     await page.getByRole("tab", { name: "Information Feed" }).click();
     const title = routed[0].event_type === "notification" ? codeText(routed[0].detail?.code) : eventTitle(toFleetEvent({ type: routed[0].event_type, at: "2026-10-07T00:00:00Z", detail: routed[0].detail })!);
     await page.getByText(title).first().waitFor();
@@ -243,6 +244,9 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     for (const noise of ["Session opened", "Ledger journal posted", "Runtime approved"]) expect(feedText ?? "").not.toContain(noise);
     await page.getByRole("tab", { name: "Full history" }).click();
     await page.getByText(words(latest[0].event_type)).first().waitFor();
+    const historyText = await page.getByRole("tabpanel").or(page.locator("main")).first().textContent();
+    expect(historyText ?? "").toContain("Fleet history");
+    for (const noise of ["session opened", "ledger journal posted", "runtime approved", "role granted", "auth failed"]) expect((historyText ?? "").toLowerCase()).not.toContain(noise);
     await page.getByRole("tab", { name: "Safety & Capabilities" }).click();
     const caps = await main();
     for (const t of ["REAL PAYMENTS", "HOST SWITCH", "NOT CONFIGURED", "not exposed to this gateway"]) expect(caps.toUpperCase()).toContain(t.toUpperCase());

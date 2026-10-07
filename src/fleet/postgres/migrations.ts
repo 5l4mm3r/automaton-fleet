@@ -1254,6 +1254,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_action_cognition_verify_ctx(text, text, bigint, text, text, bigint, text, text)",
   // v41: communications charging (number rental and usage from the agent's own cash), unpaid / idle / dead-agent numbers.
   "svc_comms_tick(integer)",
+  // v45: hourly retention of routine event copies and diagnostics (never canonical history; writes no event).
+  "svc_event_retention()",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */

@@ -52,7 +52,7 @@ export function FleetCommandPage({ fleet, view, models, feed, live, control, ope
 
     {tab === "Decision Log" && <Panel title="Decision log">{pending ?? <DecisionFeed view={view} models={models} onOpenAgent={openAgent} />}</Panel>}
     {tab === "Information Feed" && <Panel title="Information received by Fleet Command">{pending ?? <CommandFeed events={view!.commandEvents} models={models} onOpenAgent={openAgent} limit={300} onClear={clear} />}</Panel>}
-    {tab === "Full history" && <Panel title="Full event history (audit)"><p className="mb-3 text-xs text-slate-400">Every recorded Fleet event, including the audit mechanics and Agent activity Fleet Command leaves out. Sign-in and security detail is under Security.</p>
+    {tab === "Full history" && <Panel title="Fleet history"><p className="mb-3 text-xs text-slate-400">What has meaningfully happened to this Fleet: Agents, ventures, missions, projects, money, Treasury, policies, releases and serious security incidents. Sign-ins, sessions, notification housekeeping and routine diagnostics are not history; sign-in detail is under Security.</p>
       {pending ?? <EventFeed events={view!.events} models={models} onOpenAgent={openAgent} limit={300} />}</Panel>}
 
     {tab === "Behaviour" && <>

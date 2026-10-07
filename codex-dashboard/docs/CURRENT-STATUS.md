@@ -927,3 +927,6 @@ under the separate **Full history** tab.
 - **Fleet Command:**
   - a bounded feed of routed P0–P3 events, with a Clear control per priority (confirmed, Critical explicitly);
   - normal sign-in notices never appear; serious security incidents do.
+- **Fleet history** (the Full history tab): meaningful history only. Routine event copies (sessions, ledger-posting
+  copies, role grants, notification deletions) were purged once and now expire after 7 days; routine authentication
+  diagnostics expire after 30 days; canonical events and serious incidents never expire. See `docs/admin-access.md`.

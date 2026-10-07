@@ -53,6 +53,11 @@ SELECT jsonb_build_object(
     'maxId', (SELECT COALESCE(max(id), 0) FROM fleet_events),
     'digest', (SELECT md5(COALESCE(string_agg(concat_ws('|', id, event_type, agent_id, actor, detail::text, created_at), E'\n' ORDER BY id), ''))
                  FROM fleet_events WHERE id <= :cut_event),
+    -- v45: canonical history (everything but the expiring routine copies / diagnostics) and the expiring rows by type.
+    'canonical', (SELECT jsonb_build_object('count', count(*), 'digest', md5(COALESCE(string_agg(concat_ws('|', id, event_type, agent_id, actor, detail::text, created_at),
+                   E'\n' ORDER BY id), ''))) FROM fleet_events WHERE id <= :cut_event AND NOT (event_type IN ('session_opened','ledger_journal_posted','notifications_deleted','api_auth_failed','api_auth_failed_suppressed','db_auth_failed','operator_auth_failed','operator_scope_denied','operator_stale') OR event_type ~ '^[a-z]+_role_granted$')),
+    'expiring', (SELECT COALESCE(jsonb_object_agg(event_type, n), '{}'::jsonb) FROM (SELECT event_type, count(*) n FROM fleet_events
+                   WHERE id <= :cut_event AND (event_type IN ('session_opened','ledger_journal_posted','notifications_deleted','api_auth_failed','api_auth_failed_suppressed','db_auth_failed','operator_auth_failed','operator_scope_denied','operator_stale') OR event_type ~ '^[a-z]+_role_granted$') GROUP BY event_type) e),
     'after', (SELECT COALESCE(jsonb_object_agg(event_type, n), '{}'::jsonb) FROM (SELECT event_type, count(*) n FROM fleet_events WHERE id > :cut_event GROUP BY event_type) e)),
   'notifications', (SELECT jsonb_build_object('count', count(*), 'acknowledged', count(*) FILTER (WHERE acknowledged_at IS NOT NULL),
                      'digest', md5(COALESCE(string_agg(concat_ws('|', notification_id, class, code, agent_id, created_at, acknowledged_at, acknowledged_by),

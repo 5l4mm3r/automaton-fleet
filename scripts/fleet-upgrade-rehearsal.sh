@@ -147,6 +147,17 @@ if [[ -n "$(rh "SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.proname
   [[ "$(echo "$CE" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(j.nonOperational===0&&j.housekeeping===0?"ok":"bad")})')" == ok ]] || die "command_events returned non-operational rows: $CE"
   echo "3f. Fleet Command read on the copy: $CE (only P0–P3; no housekeeping; the raw history is untouched)"
 fi
+if [[ -n "$(rh "SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'fleet' AND p.proname = 'fleet_event_in_history'")" ]]; then
+  # v45: no routine copy survives the purge; the history read holds no plumbing; the retention pass runs and writes no event.
+  HC=$(rh "SELECT jsonb_build_object('events', (SELECT count(*) FROM fleet.fleet_events),
+    'copies', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type) = 7 AND created_at < now() - interval '1 hour'),
+    'history', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_in_history(event_type, detail)),
+    'diagnostics', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type) = 30),
+    'feed', (SELECT count(*) FROM fleet.fleet_command_feed), 'notifications', (SELECT count(*) FROM fleet.fleet_notifications))")
+  M0=$(rh 'SELECT max(id) FROM fleet.fleet_events'); RET=$(rh 'SELECT fleet.svc_event_retention()'); M1=$(rh 'SELECT max(id) FROM fleet.fleet_events')
+  [[ "$(echo "$HC" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{console.log(JSON.parse(s).copies===0?"ok":"bad")})')" == ok && "$M0" == "$M1" ]] || die "v45 history check failed: $HC (retention $RET, max id $M0 -> $M1)"
+  echo "3g. Fleet history on the copy: $HC; retention pass $RET, no event written"
+fi
 [[ "$(rh "SELECT (fleet.fleet_ledger_verify() ->> 'ok')")" == true && "$(head_)" == "$H0" ]] || die "ledger changed or failed verification while the candidate ran"
 [[ "$(rh "SELECT count(*) FROM fleet.fleet_agents WHERE status IN ('reserved','provisioning')")" == 0 ]] || die "a reservation appeared"
 echo "3e. ledger verify ok, head unchanged, no reservation or birth while the candidate services ran"

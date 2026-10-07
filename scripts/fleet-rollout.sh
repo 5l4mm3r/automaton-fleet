@@ -120,7 +120,7 @@ if [[ "$MODE" == rehearse ]]; then
   [[ "$(head_ "$RH")" == "$H0" ]] || { sudo -u postgres dropdb "$RH"; die "ledger head changed by the migration"; }
   snapshot "$RH" "$TOOL" "$RC0" > "$RC1"
   node "$TOOL/scripts/fleet-reconcile-compare.mjs" "$RC0" "$RC1" "$FROM" "$TO" > "$RC2" || { cat "$RC2"; sudo -u postgres dropdb "$RH"; die "reconciliation failed"; }
-  echo "reconciliation: OK ($(node -e 'const r=require(process.argv[1]);console.log(r.newAccounts.length+" new accounts at zero; "+r.ledger.journals+" journals; events preserved "+r.events.preserved)' "$RC2"))"
+  echo "reconciliation: OK ($(node -e 'const r=require(process.argv[1]);console.log(r.newAccounts.length+" new accounts at zero; "+r.ledger.journals+" journals; events "+r.events.existing+" before, purged "+JSON.stringify(r.events.purged??{})+", preserved "+r.events.preserved+"; appended "+JSON.stringify(r.events.appended??{}))' "$RC2"))"
   [[ "$(ident "$RH")" == "$I0" ]] || { sudo -u postgres dropdb "$RH"; die "Founder 1 identity changed"; }
   FPCMP=$(FP0="$FP0" FP1="$(fp "$RH")" node -e 'const a=JSON.parse(process.env.FP0),b=JSON.parse(process.env.FP1);const mb=new Map(b.accounts.map(x=>[x.account,x]));const bad=[];
     for(const x of a.accounts){const y=mb.get(x.account);if(!y||y.balance!==x.balance||y.class!==x.class)bad.push(x.account)}for(const y of b.accounts)if(!a.accounts.some(x=>x.account===y.account)&&y.balance!==0)bad.push("new:"+y.account);
@@ -197,7 +197,7 @@ pnpm -s fleet:migrate > ~/rollout-migrate-rerun.log 2>&1 || rollback "migration 
 [[ "$(psqlq 'SELECT count(*) FROM fleet.fleet_schema_migrations WHERE version > '"$TO")" == 0 ]] || rollback "unexpected migration beyond $TO"
 snapshot $LIVE "$PWD" "$RC0" > "$RC1" || rollback "post-migration snapshot failed"
 node scripts/fleet-reconcile-compare.mjs "$RC0" "$RC1" "$FROM" "$TO" > "$RC2" || { cat "$RC2"; rollback "reconciliation failed"; }
-echo "reconciliation: OK ($RC2)"
+echo "reconciliation: OK ($RC2: $(node -e 'const r=require(process.argv[1]);console.log("events "+r.events.existing+" before, purged "+JSON.stringify(r.events.purged??{})+", preserved "+r.events.preserved)' "$RC2"))"
 pnpm -s fleet:admin approve-runtime > ~/rollout-approve.log 2>&1 || rollback "runtime approval failed"
 pnpm -s fleet:verify-runtime > ~/rollout-verify-runtime.log 2>&1 || rollback "runtime verification failed"
 sudo systemctl start automaton-fleet.service

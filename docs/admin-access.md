@@ -122,6 +122,34 @@ Removing a working owner sign-in method is a **breaking operational change**. An
   - The Fleet's records are never touched: ledger, Agents, ventures, projects, missions, knowledge and the event history.
   - New events appear normally afterwards.
 
+## Fleet history and retention (schema v45)
+
+Four separate things: **Fleet Command** (the operational brain, above), **Fleet history** (meaningful durable
+events), **notifications** (disposable messages) and **technical diagnostics** (short-lived plumbing).
+
+- **Fleet history** (Fleet Command → Full history) shows what meaningfully happened: Agents, ventures, missions,
+  projects, money, Treasury, settlements, policies, the cap, releases and rollbacks, serious security incidents. It
+  does not show sign-ins, sessions, role grants, ledger-posting copies, notification housekeeping, release preparation,
+  provisioning steps, routine operator calls or routine diagnostics.
+- **Canonical events are permanent.** `fleet_events` refuses every UPDATE, and every DELETE except the expiry below.
+  Readers that depend on it are untouched: project distribution (`treasury_sweep`), the economy hub's financial audit,
+  the settlement-conflict health check, the Operator API.
+- **Expiring rows** (the delete trigger enforces type and age; the controller's hourly `svc_event_retention` pass removes
+  them and writes no event):
+
+| Rows | Kept | Why it is safe |
+|---|---|---|
+| `session_opened`, `ledger_journal_posted`, `<role>_role_granted`, `notifications_deleted` (no longer produced) | 7 days | copies: the sessions table, the ledger journal and the database grants are the records |
+| `api_auth_failed`, `api_auth_failed_suppressed`, `db_auth_failed`, `operator_auth_failed`, `operator_scope_denied`, `operator_stale` | 30 days | routine diagnostics, readable by explicit type and through the Operator API during the window |
+| notification suppression keys | 7 days | content-free dedupe keys |
+
+- **Never expire:** replay blocked, sign-in lockout, suspected passkey clone, authorization denials, attestation,
+  signing or custody failures, settlement conflicts, and every other event.
+- **One-time purge:** the v45 migration removed every existing routine copy. The cutover's reconciliation proves the
+  canonical history byte-identical and reports the purge by type.
+- **Agent memory is not affected.** Knowledge, decisions, ventures, missions, projects and money records live in their
+  own tables and are kept.
+
 ## The Fleet daily report
 
 - **Producer:** `svc_notify_tick` raises it once per UTC day, after the policy hour (07:00). The notification's `detail`

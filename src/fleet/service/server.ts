@@ -393,6 +393,7 @@ export class FleetService {
 
   /** v35: the economy-engine pass runs at most once a minute (its health window is measured in hours). */
   private lastEngineAt = 0;
+  private lastRetentionAt = 0;
 
   async reapOnce(): Promise<void> {
     if (this.reaping) return this.reaping;
@@ -426,6 +427,13 @@ export class FleetService {
             }
           } catch (err) {
             this.audit("engine_error", null, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        // v45: hourly retention of routine event copies and diagnostics (writes no event; a failure never stops the reaper).
+        if (typeof this.opts.admin.eventRetention === "function" && Date.now() - this.lastRetentionAt >= 3_600_000) {
+          this.lastRetentionAt = Date.now();
+          try { await this.opts.admin.eventRetention(); } catch (err) {
+            this.audit("retention_error", null, { error: err instanceof Error ? err.message : String(err) });
           }
         }
         this.assessRelevance();
