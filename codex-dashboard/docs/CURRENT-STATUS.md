@@ -821,3 +821,13 @@ These are presentation and navigation changes only.
   - a UX sweep of every page and Virtual at 1440 px and 390 px (no errors, CSP violations, failing requests,
     overflow, path escapes, "founder-N" text or unnamed controls; visible keyboard focus).
 - The navigation acceptance test now also covers an ultrawide 3440×1440 viewport.
+
+## Production backend on schema v42 — 7 October 2026 (Stage R37; no UI change)
+
+- The production controller now runs `94f09a7` on **schema v42** (`docs/evaluations/r37/`). Its UI source is identical to
+  V2.4.1 / 0.8.1.
+- The `projects` read is served by the production gateway (`dash_call`). The preview's project panels therefore show the
+  real state instead of "unavailable": today that is 0 projects and an all-zero summary, with nothing invented.
+- The admin root still serves UI 0.3.0, with the same served-page hash `8c125f1b…`. The V2.4.1 preview is still at
+  `/hq-preview/`. Promoting the preview to the root remains the owner's visual sign-off decision.
+- The schema-41 degrade path (projects unavailable) remains in the client and its test, for a rollback.

@@ -2260,3 +2260,29 @@ After this, privileged steps go back to the operator typing sudo, as on the loca
 - The operator account can run `pnpm fleet:*` with `admin.env` group access, and
   `automaton-fleet-service` cannot read it (`fleet-verify-deployment.sh`).
 - That the witness release (stage 21b) builds reproducibly on the VPS, and the live v6 → v7 migration applies cleanly to the restored registry.
+
+## Stage R37 — schema v42 (multi-agent team projects), controller release 94f09a7 (DEPLOYED 2026-10-07)
+
+Release `94f09a7` (build `da053d1c…`, lockfile `1df54e35…` unchanged), identical locally and on the VPS. Full record:
+`docs/evaluations/r37/`.
+
+- **Rehearsals:** `fleet-rollout.sh rehearse <pins> 41 42` PASSED, then `fleet-upgrade-rehearsal.sh <pins> 41 42` PASSED.
+  The second shows that 29cde7d refuses schema 42, that the candidate services run on it, and that the database rollback
+  restores 41 with the old release running again.
+- **Owner cutover 12:25:41Z:** a 20 s outage (12:26:25–12:26:45Z). The reconciliation gate passed; balances, events,
+  notifications, Agents, cap and flags are unchanged.
+  - Rollback snapshot `~/automaton_fleet-v41-pre-v42-20261007T122626Z.dump` (sha256 `c81a560a…`).
+  - Founder 1 kept running on b949b1c (same PID).
+- **Production now:**
+  - schema 42, controller/Operator API/custody/dashboard/identity on 94f09a7;
+  - cap 2, 1 living Agent, DEVELOPMENT;
+  - all four safety flags false;
+  - UI root 0.3.0, V2.4.1 preview at /hq-preview/.
+- **Rollback (class B; 29cde7d cannot run on 42):** stop the units, `DROP SCHEMA fleet CASCADE`, restore the
+  pre-v42 dump, then `runtime.env.pre-94f09a7`, `current` → `releases/29cde7d…`, and start in order. This is what the
+  rollout script's automatic rollback does.
+- **Procedure notes for the next schema release:**
+  1. `pnpm test:security` / `test:financial` now run whole files serially; no manual file lists.
+  2. The rollout gate compares `fleet-reconcile-snapshot.sql` before and after the migration.
+  3. `fleet-upgrade-rehearsal.sh` needs the tooling tree left by `rehearse`.
+  4. Claude Code's classifier blocks production cutovers: the owner runs the one guarded command.

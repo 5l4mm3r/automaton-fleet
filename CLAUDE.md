@@ -126,50 +126,46 @@ Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
 ## Current production deployment
 
-State after Phase C (2026-09-25), per docs/fleet-production-runbook.md.
+State after Stage R37 (2026-10-07), per docs/fleet-production-runbook.md and docs/evaluations/r37/.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
 
-Runtime commit:
-4d6a0befb97ee64e4ebc6daffe4baa64d6a4b790
+Controller runtime commit (approved, pinned and installed):
+94f09a7c44f528b8a632e16565e0fedf5ee56d2f
 
 Runtime build ID:
-54beb10104a11888446ed1d09a85f236d87b977558a88514de7600d7dcc83ced
+da053d1cd5f333925cd67c66c51ceb652e143e585a2ab9e29048f9191d6cf61c
 
 Runtime lockfile SHA256:
-eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811
-
-Previous releases kept for rollback:
-5a5469e, 03f8760 (B0), cdfd70c, 11c0c7c (v7 requires restoring the pre-v8 dump)
+1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1
 
 Database schema:
-v8
+v42 (applied 2026-10-07 12:26:30Z; previous v41)
+
+Rollback (class B: 29cde7d refuses schema 42):
+restore ~/automaton_fleet-v41-pre-v42-20261007T122626Z.dump (sha256 c81a560a…),
+runtime.env.pre-94f09a7, current → releases/29cde7d…
 
 Controller domain:
-https://api.agentfleet.vip
+https://api.agentfleet.vip  (admin UI: https://admin.agentfleet.vip)
 
 Current live topology:
 - production: OVH VPS (ssh alias agentfleet-vps), the only live controller
-- FleetController public HTTPS on 0.0.0.0:443 (Let's Encrypt certificate)
+- public :443 served by the nginx TLS edge (automaton-fleet-edge, SNI routing,
+  PROXY protocol to the loopback controller on 127.0.0.1:8443; admin.agentfleet.vip
+  to the dashboard on 127.0.0.1:8790)
 - FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
-- Operator API (read-only, signed requests) on 127.0.0.1:8788 only, enabled at boot,
-  kill switch on; reached only through the restricted SSH account fleet-op-tunnel
-- two operator principals: bridge-claude (ops.read.status, ops.read.agents,
-  ops.read.events; its signing key and SSH tunnel key live only on the dev VM)
-  and bridge-chatgpt (ops.read.status, ops.read.agents; its key lives only in
-  the ChatGPT adapter's state directory on the VPS)
-- ChatGPT adapter (Phase C): automaton-fleet-chatgpt-adapter on a private Unix
-  socket, separately pinned artifact 6691b4c (build 62336fee…); reached only via
-  the OpenAI Secure MCP Tunnel client (automaton-fleet-chatgpt-tunnel, outbound
-  only, awaiting the owner's OpenAI tunnel credentials); no new public listener
-- SSH: key-only authentication (password logins disabled globally)
-- local Ubuntu development VM: controller stopped and disabled; not a live registry
+- Operator API (signed requests) on 127.0.0.1:8788 only, reached through the
+  restricted SSH account fleet-op-tunnel; principals bridge-claude and bridge-chatgpt
+- dashboard (passkey + TOTP): root serves UI 0.3.0; the V2.4.1 preview (UI 0.8.1) is
+  at /hq-preview/ (FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.3.0+hq-preview-0.8.1)
+- identity broker, custody, fetcher and the ChatGPT adapter/tunnel run as separate units
 - registry: cap 2, DEVELOPMENT mode, replication off
-- 0 living, 0 reserved, 0 quarantined; zero agents
-- root witness OS user and unit installed; witness not enrolled, activated or started
-- fleet:doctor DEPLOYMENT OK; fleet:verify 16/16 PASS, SAFE FOR DRY RUN YES;
-  fleet:verify-runtime VERIFIED; privilege audit PASS (agent, service, operator)
+- 1 living Agent: founder-1 (01M3F50SH7PNX2E3GST13J52AS), shown as Agent-1 in the UI;
+  its own runtime is still b949b1c (Founder runtime upgrades are a separate, owner-run step)
+- SSH: key-only authentication
+- local Ubuntu development VM: not a live registry
 
 ## Known architecture
 
