@@ -154,6 +154,7 @@ describe.skipIf(!PG_BIN)("Fleet history, purge and retention (PostgreSQL)", { ti
     for (const t of EVENT_DIAGNOSTIC_TYPES) { await old(t, 31); await old(t, 29); }
     // Serious incidents and canonical history, a year old.
     await old("operator_replay_blocked", 400); await old("authorization_denied", 400); await old("treasury_sweep", 400);
+    await old("operator_scope_denied", 400, { code: "FLEET_OP_SCOPE_DENIED" });
     await old("notification", 400, { class: "RED", code: "ADMIN_AUTH_LOCKOUT" }); await old("agent_died", 400);
     await R.q(`INSERT INTO fleet.fleet_notification_suppress (dedupe_key, until) VALUES ('history:expired', now() - interval '1 minute'), ('history:live', now() + interval '6 days')`);
     const maxId = Number(await R.one(`(SELECT max(id) FROM fleet.fleet_events)`));
@@ -172,7 +173,14 @@ describe.skipIf(!PG_BIN)("Fleet history, purge and retention (PostgreSQL)", { ti
       expect(await count(`event_type = '${t}' AND created_at < now() - interval '30 days'`), t).toBe(0);
       expect(await count(`event_type = '${t}' AND created_at < now() - interval '28 days'`), t).toBe(1);
     }
-    expect(await count(`created_at < now() - interval '300 days'`)).toBe(yearOld);   // replay, denial, sweep, lockout, death: all kept
+    expect(await count(`created_at < now() - interval '300 days'`)).toBe(yearOld);   // replay, denials, sweep, lockout, death: all kept
+    // A privilege (scope) denial is durable security history: no retention, in Fleet history, survives the pass;
+    // the routine operator_auth_failed diagnostic next to it expired after 30 days.
+    expect(EVENT_DIAGNOSTIC_TYPES).not.toContain("operator_scope_denied");
+    expect(await R.one(`fleet.fleet_event_retention_days('operator_scope_denied')`)).toBeNull();
+    expect(await R.one(`fleet.fleet_event_in_history('operator_scope_denied', '{}'::jsonb)`)).toBe(true);
+    expect(await count(`event_type = 'operator_scope_denied' AND created_at < now() - interval '300 days'`)).toBe(1);
+    expect(await count(`event_type = 'operator_auth_failed' AND created_at < now() - interval '30 days'`)).toBe(0);
     expect(Number(await R.one(`(SELECT max(id) FROM fleet.fleet_events)`))).toBe(maxId); // the pass wrote no event
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_command_feed)`))).toBe(feed);
     expect((await R.q(`SELECT dedupe_key FROM fleet.fleet_notification_suppress ORDER BY 1`)).map((x) => x.dedupe_key)).toEqual(["history:live"]);

@@ -60,8 +60,9 @@ export const COMMAND_FEED_CAP = 500;
 export const EVENT_COPY_TYPES = ["session_opened", "ledger_journal_posted", "notifications_deleted"] as const;
 export const ROLE_GRANT_PATTERN = "^[a-z]+_role_granted$";
 /** Routine authentication diagnostics: expire after the diagnostic window, never history. (Serious incidents are not here.) */
+// (operator_scope_denied is a privilege denial: durable security history, never here.)
 export const EVENT_DIAGNOSTIC_TYPES = ["api_auth_failed", "api_auth_failed_suppressed", "db_auth_failed", "operator_auth_failed",
-  "operator_scope_denied", "operator_stale"] as const;
+  "operator_stale"] as const;
 export const EVENT_COPY_RETENTION_DAYS = 7;
 export const EVENT_DIAGNOSTIC_RETENTION_DAYS = 30;
 /** Durable (kept) but not Fleet history: release preparation, provisioning and registry steps, routine operator calls. */

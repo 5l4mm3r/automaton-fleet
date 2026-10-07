@@ -140,10 +140,11 @@ events), **notifications** (disposable messages) and **technical diagnostics** (
 | Rows | Kept | Why it is safe |
 |---|---|---|
 | `session_opened`, `ledger_journal_posted`, `<role>_role_granted`, `notifications_deleted` (no longer produced) | 7 days | copies: the sessions table, the ledger journal and the database grants are the records |
-| `api_auth_failed`, `api_auth_failed_suppressed`, `db_auth_failed`, `operator_auth_failed`, `operator_scope_denied`, `operator_stale` | 30 days | routine diagnostics, readable by explicit type and through the Operator API during the window |
+| `api_auth_failed`, `api_auth_failed_suppressed`, `db_auth_failed`, `operator_auth_failed`, `operator_stale` | 30 days | routine diagnostics, readable by explicit type and through the Operator API during the window |
 | notification suppression keys | 7 days | content-free dedupe keys |
 
-- **Never expire:** replay blocked, sign-in lockout, suspected passkey clone, authorization denials, attestation,
+- **Never expire:** replay blocked, sign-in lockout, suspected passkey clone, authorization and operator scope denials (`authorization_denied`,
+  `operator_scope_denied`), attestation,
   signing or custody failures, settlement conflicts, and every other event.
 - **One-time purge:** the v45 migration removed every existing routine copy. The cutover's reconciliation proves the
   canonical history byte-identical and reports the purge by type.
