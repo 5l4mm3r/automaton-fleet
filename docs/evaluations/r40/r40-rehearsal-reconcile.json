@@ -31,9 +31,13 @@
   },
   "newAccounts": [],
   "events": {
-    "existing": 2867,
+    "existing": 2868,
     "purged": {
-      "session_opened": 1698,
+      "notification": 2,
+      "session_opened": 1699,
+      "operator_action": 9,
+      "runtime_approved": 44,
+      "credential_issued": 1,
       "agent_role_granted": 33,
       "custody_role_granted": 28,
       "service_role_granted": 33,
@@ -41,9 +45,13 @@
       "ledger_journal_posted": 526,
       "notifications_deleted": 7,
       "operator_role_granted": 30,
-      "dashboard_role_granted": 8
+      "dashboard_role_granted": 8,
+      "genesis_runtime_issued": 1,
+      "genesis_runtime_evidence": 1,
+      "founder_runtime_upgrade_prepared": 8,
+      "founder_runtime_upgrade_committed": 8
     },
-    "preserved": 496,
+    "preserved": 422,
     "appended": {
       "agent_role_granted": 1,
       "custody_role_granted": 1,
@@ -59,7 +67,11 @@
   "notes": [
     {
       "eventsPurged": {
-        "session_opened": 1698,
+        "notification": 2,
+        "session_opened": 1699,
+        "operator_action": 9,
+        "runtime_approved": 44,
+        "credential_issued": 1,
         "agent_role_granted": 33,
         "custody_role_granted": 28,
         "service_role_granted": 33,
@@ -67,11 +79,15 @@
         "ledger_journal_posted": 526,
         "notifications_deleted": 7,
         "operator_role_granted": 30,
-        "dashboard_role_granted": 8
+        "dashboard_role_granted": 8,
+        "genesis_runtime_issued": 1,
+        "genesis_runtime_evidence": 1,
+        "founder_runtime_upgrade_prepared": 8,
+        "founder_runtime_upgrade_committed": 8
       },
-      "total": 2371,
-      "existingBefore": 2867,
-      "existingAfter": 496
+      "total": 2446,
+      "existingBefore": 2868,
+      "existingAfter": 422
     },
     {
       "roleGrantAuditEvents": {

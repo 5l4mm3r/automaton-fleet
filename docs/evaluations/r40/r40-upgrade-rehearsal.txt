@@ -1,15 +1,15 @@
-== upgrade rehearsal 155aac3 (schema 44 -> 45), rollback to 7f65cd1, start 2026-10-07T20:38:35Z
+== upgrade rehearsal 136c4bd (schema 44 -> 45), rollback to 7f65cd1, start 2026-10-07T20:48:04Z
 throwaway copy restored: schema 44, ledger head 563 13d692aec6882ee1d5a5…, logins: fleet_agent_login fleet_dashboard_login fleet_operator_login fleet_service_login 
 {"ok":true,"latencyMs":2,"schemaVersion":45,"countersConsistent":true}
-1. copy migrated to 45; candidate 155aac3 approved in the THROWAWAY registry; ledger head unchanged
+1. copy migrated to 45; candidate 136c4bd approved in the THROWAWAY registry; ledger head unchanged
 2. current release 7f65cd1 on schema 45: REFUSED (schema version 45 != 44) — rollback must restore the database (class B)
 3a. candidate controller ready on schema 45: {"ok":true,"checks":{"database":true,"agentApi":true,"runtimeRelease":true,"reaper":true,"sandboxTermination":true,"privileges":true}}
 3b. candidate Operator API ready on schema 45 (readyz 200)
 3c. candidate dashboard ready on schema 45: login 200, preview 200, read without session 401, call without session 401
 3d. v42 projects read (the dashboard 'projects' op): {"projects":0,"summary":{"note":"Internal payments move value between agents; they are never Fleet revenue.","active":0,"planning":0,"cancelled":0,"completed":0,"escrowMinor":0,"agentsCollaborating":0,"internalPaymentsMinor":0,"plannedTimeSavedHours":0}}
-3f. Fleet Command read on the copy: {"rows": 34, "rawEvents": 503, "housekeeping": 0, "nonOperational": 0} (only P0–P3; no housekeeping; the raw history is untouched)
-3g. Fleet history on the copy: {"feed": 34, "copies": 0, "events": 503, "history": 69, "diagnostics": 353, "notifications": 0}; retention pass {"eventsExpired": 0, "suppressionExpired": 0}, no event written
+3f. Fleet Command read on the copy: {"rows": 34, "rawEvents": 429, "housekeeping": 0, "nonOperational": 0} (only P0–P3; no housekeeping; the raw history is untouched)
+3g. Fleet history on the copy: {"feed": 34, "copies": 0, "events": 429, "history": 69, "diagnostics": 353, "temporary7d": 7, "notifications": 0, "hiddenPermanent": 0}; retention pass {"eventsExpired": 0, "suppressionExpired": 0}, no event written
 3e. ledger verify ok, head unchanged, no reservation or birth while the candidate services ran
 4. rollback restore: schema 44, ledger head identical
 5. current release 7f65cd1: controller ready, dashboard ready on the restored schema 44; ledger head identical
-== UPGRADE REHEARSAL PASSED 2026-10-07T20:38:53Z — production untouched (PIDs 585575  585597  586218 , schema 44)
+== UPGRADE REHEARSAL PASSED 2026-10-07T20:48:23Z — production untouched (PIDs 585575  585597  586218 , schema 44)

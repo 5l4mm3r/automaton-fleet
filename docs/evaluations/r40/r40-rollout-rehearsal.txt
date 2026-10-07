@@ -1,9 +1,9 @@
-== rollout rehearse 155aac3 (schema 44 -> 45) from 7f65cd1 start 2026-10-07T20:38:17Z
-dump /home/ubuntu/automaton_fleet-v44-rollout-155aac3-20261007T203821Z.dump sha 54d84f458623b75a
+== rollout rehearse 136c4bd (schema 44 -> 45) from 7f65cd1 start 2026-10-07T20:47:45Z
+dump /home/ubuntu/automaton_fleet-v44-rollout-136c4bd-20261007T204749Z.dump sha 1bf9105a6e80d4ee
 restore: row counts identical
 migrate-check: {"currentVersion":44,"resultingVersion":45,"wouldApply":[45],"requiredVersion":45,"rolledBack":true}
-reconciliation: OK (0 new accounts at zero; 526 journals; events 2867 before, purged {"session_opened":1698,"agent_role_granted":33,"custody_role_granted":28,"service_role_granted":33,"identity_role_granted":8,"ledger_journal_posted":526,"notifications_deleted":7,"operator_role_granted":30,"dashboard_role_granted":8}, preserved 496; appended {"agent_role_granted":1,"custody_role_granted":1,"service_role_granted":1,"identity_role_granted":1,"operator_role_granted":1,"dashboard_role_granted":1})
+reconciliation: OK (0 new accounts at zero; 526 journals; events 2868 before, purged {"notification":2,"session_opened":1699,"operator_action":9,"runtime_approved":44,"credential_issued":1,"agent_role_granted":33,"custody_role_granted":28,"service_role_granted":33,"identity_role_granted":8,"ledger_journal_posted":526,"notifications_deleted":7,"operator_role_granted":30,"dashboard_role_granted":8,"genesis_runtime_issued":1,"genesis_runtime_evidence":1,"founder_runtime_upgrade_prepared":8,"founder_runtime_upgrade_committed":8}, preserved 422; appended {"agent_role_granted":1,"custody_role_granted":1,"service_role_granted":1,"identity_role_granted":1,"operator_role_granted":1,"dashboard_role_granted":1})
 ledger verify: true
 re-run: {"currentVersion":45,"resultingVersion":45,"wouldApply":[],"requiredVersion":45,"rolledBack":true}
 rollback proof: the dump restores to schema 44 with the same ledger head
-== REHEARSAL PASSED 2026-10-07T20:38:35Z — live untouched (schema 44)
+== REHEARSAL PASSED 2026-10-07T20:48:04Z — live untouched (schema 44)

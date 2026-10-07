@@ -1,30 +1,38 @@
 # R40: schema v45 (V2.4.4 final: disposable notifications, clearable Fleet Command, meaningful Fleet history), PREPARED 2026-10-07
 
 **Candidate**
-- Commit `155aac3b79d68d0952b010bb131b8947916846d3` (6fe54b9 + operator_scope_denied made durable security history)
-- Build `bd9844430ba650ea685a0d212be2bd795235d0697787ec8964612b5b11e65cbc`
+- Commit `136c4bd72f8ef00cd4556ac33df7a5c3c3f9cf89`
+- Build `9823d0a39d61b01b721ee5ede9b99ffd51fa446f33a7cca3a26318ec6676be0a`
 - Lockfile `1df54e35…` (unchanged)
 - Schema 44 → **45**
-- UI **0.8.4 / V2.4.4**: `ui-0.8.4-6fe54b9.tgz`, sha256 `37a2f2cc639ee1e5ba3573553092b86ebe17528af9cce2b161dfbb37b0eff2e1`, 105 files; UI sources unchanged since 6fe54b9, so the package built there is the release package
-  (root LIVE digest `c21f2b29…`, `/hq-preview/` digest `1d152474…`)
+- UI **0.8.4 / V2.4.4**: `ui-0.8.4-136c4bd.tgz`, sha256 `35e9350c6cef493c4bf10b6367745b2d0435e50e9e9c12f95d720983fe6d1070`, 105 files.
+  Built from `136c4bd`; `artifact.json` names it. Root LIVE digest `c21f2b29…`, `/hq-preview/` digest `1d152474…`.
 
-**Rehearsal on a fresh copy of production (20:38Z, re-run on 155aac3): PASSED**
+**Invariant:** every event is meaningful (permanent, in Fleet history) or temporary (hidden, expires).
+`fleet_event_in_history` is defined as "has no retention", so there is no third class.
+
+**Rehearsal on a fresh copy of production (20:47Z): PASSED**
 - Only migration 45 applied; a re-run applies nothing; ledger verify true; ledger head unchanged.
-- **Events before:** 2,867.
+- **Events before:** 2,868.
 - **Purged (by type):**
   - `session_opened` 1,698;
   - `ledger_journal_posted` 526;
-  - `agent_role_granted` 33, `service_role_granted` 33, `operator_role_granted` 30, `custody_role_granted` 28,
-    `identity_role_granted` 8, `dashboard_role_granted` 8 (140 in total);
-  - `notifications_deleted` 7.
-  - Total 2,371.
-- **Events after:** 496 = 2,867 − 2,371, exactly. The canonical history digest is byte-identical. The migrator then
-  appended its 6 role-grant audit records, which expire after 7 days.
-- **Copy after the candidate ran:** 34 Fleet Command rows (all P0–P3); 69 history events; 353 diagnostics (30-day
-  retention); 0 notifications (the 7 v43 tombstones removed). The retention pass expired nothing and wrote no event.
-- **Reconciliation OK:** Agents, population / cap / mode, replication, ledger journals / postings / balances, economics
-  and computed sweeps, Treasury ledger, ventures, missions, knowledge, estates, credentials, and the owner's passkeys /
-  authenticator / password digests are all unchanged.
-- **Rollback proven:** `7f65cd1` refuses schema 45 (class B). The pre-migration dump restores schema 44 with the same
-  ledger head, and `7f65cd1`'s controller and dashboard run again. Production PIDs were unchanged during the
-  rehearsal.
+  - role grants 140;
+  - `notifications_deleted` 7;
+  - `runtime_approved` 44;
+  - `founder_runtime_upgrade_prepared` 8 and `_committed` 8;
+  - `operator_action` 9;
+  - `notification` (routine copies) 2;
+  - `credential_issued` 1;
+  - `genesis_runtime_issued` 1 and `genesis_runtime_evidence` 1.
+  - Total 2,446.
+- **Events after:** 422 = 2,868 − 2,446, exactly. The canonical digest is byte-identical.
+- **On the copy after the migrator and candidate:** 429 events = 69 meaningful history + 353 diagnostics (30 days) + 7
+  temporary (7 days: the migrator's 6 role grants and the throwaway approval) + **0 hidden-permanent**.
+  - Fleet Command: 34 rows, all P0–P3.
+  - Retention pass: nothing expired, no event written.
+- **Reconciliation OK:** Agents, cap / population / mode, replication, ledger journals / postings / balances, economics,
+  sweeps, Treasury ledger, ventures, missions, knowledge, estates, credentials, and the owner's sign-in digests are all
+  unchanged.
+- **Rollback proven:** `7f65cd1` refuses 45; the dump restores 44 with the same ledger head, and `7f65cd1`'s controller
+  and dashboard run again. Production PIDs were unchanged.
