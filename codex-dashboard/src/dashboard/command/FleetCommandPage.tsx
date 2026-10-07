@@ -8,14 +8,14 @@ import { useState, type ReactNode } from "react";
 import { money, type Fleet } from "../model";
 import { Panel, button } from "../ui";
 import type { AgentModel } from "./agents";
-import { CapabilityState, CommandFeed, DecisionFeed, FleetControllerStatus, TreasurySummary, AgentRow } from "./panels";
+import { CapabilityState, CommandFeed, DecisionFeed, EventFeed, FleetControllerStatus, TreasurySummary, AgentRow } from "./panels";
 import type { CommandView, Row } from "./view";
 import type { FeedState } from "./useFleetCommand";
 
 export type Field = { key: string; label: string; value?: string; options?: string[][] };
 export type Control = (label: string, op: string, fields?: Field[], args?: Record<string, string>, sensitive?: boolean) => ReactNode;
 
-const TABS = ["Overview", "Decision Log", "Information Feed", "Behaviour", "Safety & Capabilities", "Advanced"] as const;
+const TABS = ["Overview", "Decision Log", "Information Feed", "Full history", "Behaviour", "Safety & Capabilities", "Advanced"] as const;
 type Tab = (typeof TABS)[number];
 const val = (v: unknown) => (v === null || v === undefined ? "" : String(v));
 const pct = (bp: unknown) => (typeof bp === "number" ? String(bp / 100) : "");
@@ -30,6 +30,7 @@ export function FleetCommandPage({ fleet, view, models, feed, live, control, ope
   const readOnly = (rows: Array<[string, ReactNode]>) => <dl className="grid gap-3 sm:grid-cols-2">{rows.map(([k, v]) => <div key={k} className="rounded-lg border border-slate-700 p-3"><dt className="text-xs text-slate-400">{k}</dt><dd className="mt-1">{v}</dd></div>)}</dl>;
 
   return <div className="space-y-5">
+    {live && view && view.commandEvents === null && <p role="status" className="rounded border border-amber-700 bg-amber-950/40 px-3 py-2 text-sm text-amber-100">Prioritised event routing is unavailable from this Fleet gateway, so the operational feed is paused. The full record is under “Full history”.</p>}
     <div role="tablist" aria-label="Fleet Command sections" className="flex flex-wrap gap-2">{TABS.map((t) => <button key={t} role="tab" aria-selected={tab === t} className={`${button} ${tab === t ? "bg-cyan-950 text-cyan-200" : ""}`} onClick={() => setTab(t)}>{t}</button>)}</div>
     <p className="text-xs text-slate-400">Feed: {feed === "live" ? "live" : feed === "reconnecting" ? "interrupted — reconnecting (showing the last data read)" : "connecting"}{view?.fetchedAt ? ` · command data read ${view.fetchedAt.slice(11, 19)} UTC` : ""}{view?.unavailable.length ? ` · unavailable: ${view.unavailable.join(", ")}` : ""}</p>
 
@@ -37,7 +38,7 @@ export function FleetCommandPage({ fleet, view, models, feed, live, control, ope
       <Panel title="Controller status"><FleetControllerStatus fleet={fleet} view={view} models={models} /></Panel>
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title="Latest decisions">{pending ?? <DecisionFeed view={view} models={models} onOpenAgent={openAgent} compact />}<button className={`${button} mt-3`} onClick={() => setTab("Decision Log")}>Open the decision log</button></Panel>
-        <Panel title="Information received">{pending ?? <CommandFeed events={view!.commandEvents} raw={view!.events} models={models} onOpenAgent={openAgent} limit={8} live={live} />}<button className={`${button} mt-3`} onClick={() => setTab("Information Feed")}>Open the feed</button></Panel>
+        <Panel title="Information received">{pending ?? <CommandFeed events={view!.commandEvents} models={models} onOpenAgent={openAgent} limit={8} />}<button className={`${button} mt-3`} onClick={() => setTab("Information Feed")}>Open the feed</button></Panel>
       </div>
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title="Agents">{models.length ? <ul className="space-y-3">{models.map((m) => <li key={m.agent.id}><AgentRow m={m} onOpen={openAgent} /></li>)}</ul> : <p className="text-sm text-slate-400">No agents.</p>}</Panel>
@@ -48,7 +49,9 @@ export function FleetCommandPage({ fleet, view, models, feed, live, control, ope
     </>}
 
     {tab === "Decision Log" && <Panel title="Decision log">{pending ?? <DecisionFeed view={view} models={models} onOpenAgent={openAgent} />}</Panel>}
-    {tab === "Information Feed" && <Panel title="Information received by Fleet Command">{pending ?? <CommandFeed events={view!.commandEvents} raw={view!.events} models={models} onOpenAgent={openAgent} limit={300} live={live} />}</Panel>}
+    {tab === "Information Feed" && <Panel title="Information received by Fleet Command">{pending ?? <CommandFeed events={view!.commandEvents} models={models} onOpenAgent={openAgent} limit={300} />}</Panel>}
+    {tab === "Full history" && <Panel title="Full event history (audit)"><p className="mb-3 text-xs text-slate-400">Every recorded Fleet event, including the audit mechanics and Agent activity Fleet Command leaves out. Sign-in and security detail is under Security.</p>
+      {pending ?? <EventFeed events={view!.events} models={models} onOpenAgent={openAgent} limit={300} />}</Panel>}
 
     {tab === "Behaviour" && <>
       <Panel title="Replication behaviour">

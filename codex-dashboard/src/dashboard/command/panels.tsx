@@ -64,6 +64,7 @@ export function FleetControllerStatus({ fleet, view, models }: { fleet: Fleet; v
     ["Fleet-generated wealth", lv?.wealth ? money(lv.wealth.fleetGenerated) : view?.mode === "simulation" ? "simulated" : "unavailable"],
     ["Replication", rp ? `${rp.met ? "threshold met" : `${money(rp.remainingMinor)} to the next threshold`} · ${rp.blockers.length ? `blocked: ${rp.blockers.join(", ")}` : "no blockers"}` : "unavailable"],
     ["Open RED alerts", String(red)],
+    ["Event routing", !view ? "—" : view.mode === "simulation" ? "simulated" : view.commandEvents === null ? "unavailable: operational feed paused" : "prioritised (P0–P3)"],
     ["Pending dependencies", view ? String(view.dependencies.length) : "—"],
     ["Agent health", Object.entries(bands).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(" · ") || "no living agents"],
   ];
@@ -189,15 +190,16 @@ const EVENT_TEXT: Record<string, string> = {
 export const eventTitle = (e: FleetEvent) => EVENT_TEXT[e.type] ?? words(e.type).replace(/^./, (c) => c.toUpperCase());
 
 /**
- * Fleet Command's feed (V2.4.3): only what FleetController's router (schema v44) classes P0–P3 — never sessions,
- * logins, ledger postings or notification housekeeping — grouped Critical → High → Important → Summary, newest first in
- * each. Readable titles and a few stored facts; no raw payload. `events` null: the gateway has no router (older schema).
+ * Fleet Command's feed (V2.4.3): ONLY real events FleetController's router (schema v44) classes P0–P3 — never
+ * sessions, logins, ledger postings or notification housekeeping — grouped Critical → High → Important → Summary,
+ * newest first in each. Readable titles and a few stored facts; no raw payload. The list's capacity is reserved for
+ * operational events: when routing is unavailable (`events` null) the list stays empty and paused — no raw stream, no
+ * status row; that condition is shown outside the feed (Controller status, the page banner, Advanced).
  */
-export function CommandFeed({ events, raw, models, onOpenAgent, limit = 100, live = true }: { events: readonly FleetEvent[] | null; raw: readonly FleetEvent[];
-  models: AgentModel[]; onOpenAgent?: (id: string) => void; limit?: number; live?: boolean }) {
+export function CommandFeed({ events, models, onOpenAgent, limit = 100 }: { events: readonly FleetEvent[] | null;
+  models: AgentModel[]; onOpenAgent?: (id: string) => void; limit?: number }) {
   const name = useMemo(() => new Map(models.map((m) => [m.agent.id, m.agent.name])), [models]);
-  if (events === null) return <>{live && <p className="mb-2 text-xs text-amber-200">Event routing is not available from this Fleet gateway: showing the raw event stream.</p>}
-    <EventFeed events={raw} models={models} onOpenAgent={onOpenAgent} limit={limit} filterable={false} /></>;
+  if (events === null) return <ol aria-label="Operational events (paused: routing unavailable)" />;
   const all = PRIORITY_ORDER.map((p) => [p, events.filter((e) => e.priority === p).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))] as const).filter(([, xs]) => xs.length);
   // The display limit is spent in priority order (critical first), computed before rendering.
   const groups = all.map(([p, xs], i) => { const before = all.slice(0, i).reduce((n, [, ys]) => n + ys.length, 0); return [p, xs, xs.slice(0, Math.max(0, limit - before))] as const; });

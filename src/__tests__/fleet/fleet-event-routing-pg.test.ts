@@ -131,7 +131,7 @@ describe.skipIf(!PG_BIN)("Fleet Command routing in PostgreSQL (through dash_call
 describe("the Fleet Command feed (component)", () => {
   const ev = (type: string, priority: string, at: string, detail: object = {}): FleetEvent => toFleetEvent({ type, at, agentId: null, actor: "controller", detail, priority })!;
   it("groups Critical → High → Important → Summary, newest first; readable titles; no raw payload; no deleted-notification events", () => {
-    const html = renderToStaticMarkup(createElement(CommandFeed, { raw: [], models: [], events: [
+    const html = renderToStaticMarkup(createElement(CommandFeed, { models: [], events: [
       ev("capital_decision", "P1_HIGH", "2026-10-07T10:00:00Z", { outcome: "approved", nested: { x: 1 } }),
       ev("notification", "P3_SUMMARY", "2026-10-07T12:00:00Z", { class: "DAILY", code: "DAILY_REPORT" }),
       ev("agent_died", "P0_CRITICAL", "2026-10-07T09:00:00Z", { reason: "insolvent" }),
@@ -146,9 +146,15 @@ describe("the Fleet Command feed (component)", () => {
     expect(html).toContain("Fleet daily report");
     expect(html).not.toMatch(/\{&quot;|"nested"|notifications deleted|DAILY_REPORT/);
   });
-  it("an older gateway (no router): the raw stream, labelled; nothing hidden silently", () => {
-    const html = renderToStaticMarkup(createElement(CommandFeed, { events: null, raw: [toFleetEvent({ type: "venture_created", at: "2026-10-07T10:00:00Z", detail: {} })!], models: [] }));
-    expect(html).toContain("Event routing is not available");
-    expect(html).toContain("venture created");
+  it("routing unavailable: the operational list stays empty — no raw events, no status row, no capacity used; the condition shows outside the feed", async () => {
+    const html = renderToStaticMarkup(createElement(CommandFeed, { events: null, models: [] }));
+    expect(html).toBe('<ol aria-label="Operational events (paused: routing unavailable)"></ol>');
+    const { FleetControllerStatus } = await import("../../../codex-dashboard/src/dashboard/command/panels");
+    const view = { mode: "live", commandEvents: null, events: [toFleetEvent({ type: "session_opened", at: "2026-10-07T10:00:00Z", detail: {} })!], dependencies: [] };
+    const status = renderToStaticMarkup(createElement(FleetControllerStatus, { fleet: { notices: [], treasury: 0 } as never, view: view as never, models: [] }));
+    expect(status).toContain("Event routing");
+    expect(status).toContain("unavailable: operational feed paused");
+    const fine = renderToStaticMarkup(createElement(FleetControllerStatus, { fleet: { notices: [], treasury: 0 } as never, view: { ...view, commandEvents: [] } as never, models: [] }));
+    expect(fine).toContain("prioritised (P0–P3)");
   });
 });

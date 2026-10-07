@@ -54,7 +54,7 @@ export class CommandReader {
       read<Row>(c, "projects", { limit: 50 }, missing, "projects"),
     ]);
     // v44: the routed operator feed (only P0–P3). An older gateway answers FLEET_UNKNOWN_OP → null (raw stream, labelled).
-    const routed = await read<Row[]>(c, "command_events", { limit: 200 }, [], "command_events");
+    const routed = await read<Row[]>(c, "command_events", { limit: 200 }, missing, "event routing");
     const living = (agents ?? []).filter((a) => a.status !== "dead" && a.status !== "failed").map((a) => a.agentId);
     await this.refreshRisk(living, missing);
     const wallets = new Map(rows(hubAgents).map((r) => [String(r.agentId), r.wallet as Row | undefined]));
