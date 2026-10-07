@@ -21,24 +21,24 @@
   ],
   "ledger": {
     "head": {
-      "seq": 562,
-      "hash": "eecd164f8572bb409247fa8f55ff42e12322f0cb87969b1ccc4dd2a7b4ef19ff"
+      "seq": 563,
+      "hash": "13d692aec6882ee1d5a500175d195139633502f7e3978de1411e68badf5b1767"
     },
-    "journals": 525,
-    "postings": 1050,
-    "debitsCents": 20938,
-    "creditsCents": 20938
+    "journals": 526,
+    "postings": 1052,
+    "debitsCents": 20941,
+    "creditsCents": 20941
   },
   "newAccounts": [],
   "events": {
-    "existing": 2866,
+    "existing": 2867,
     "purged": {
       "session_opened": 1698,
       "agent_role_granted": 33,
       "custody_role_granted": 28,
       "service_role_granted": 33,
       "identity_role_granted": 8,
-      "ledger_journal_posted": 525,
+      "ledger_journal_posted": 526,
       "notifications_deleted": 7,
       "operator_role_granted": 30,
       "dashboard_role_granted": 8
@@ -64,13 +64,13 @@
         "custody_role_granted": 28,
         "service_role_granted": 33,
         "identity_role_granted": 8,
-        "ledger_journal_posted": 525,
+        "ledger_journal_posted": 526,
         "notifications_deleted": 7,
         "operator_role_granted": 30,
         "dashboard_role_granted": 8
       },
-      "total": 2370,
-      "existingBefore": 2866,
+      "total": 2371,
+      "existingBefore": 2867,
       "existingAfter": 496
     },
     {

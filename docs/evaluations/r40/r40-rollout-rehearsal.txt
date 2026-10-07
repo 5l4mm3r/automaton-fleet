@@ -1,9 +1,9 @@
-== rollout rehearse 6fe54b9 (schema 44 -> 45) from 7f65cd1 start 2026-10-07T20:31:36Z
-dump /home/ubuntu/automaton_fleet-v44-rollout-6fe54b9-20261007T203140Z.dump sha aebbb903ec215c29
+== rollout rehearse 155aac3 (schema 44 -> 45) from 7f65cd1 start 2026-10-07T20:38:17Z
+dump /home/ubuntu/automaton_fleet-v44-rollout-155aac3-20261007T203821Z.dump sha 54d84f458623b75a
 restore: row counts identical
 migrate-check: {"currentVersion":44,"resultingVersion":45,"wouldApply":[45],"requiredVersion":45,"rolledBack":true}
-reconciliation: OK (0 new accounts at zero; 525 journals; events 2866 before, purged {"session_opened":1698,"agent_role_granted":33,"custody_role_granted":28,"service_role_granted":33,"identity_role_granted":8,"ledger_journal_posted":525,"notifications_deleted":7,"operator_role_granted":30,"dashboard_role_granted":8}, preserved 496; appended {"agent_role_granted":1,"custody_role_granted":1,"service_role_granted":1,"identity_role_granted":1,"operator_role_granted":1,"dashboard_role_granted":1})
+reconciliation: OK (0 new accounts at zero; 526 journals; events 2867 before, purged {"session_opened":1698,"agent_role_granted":33,"custody_role_granted":28,"service_role_granted":33,"identity_role_granted":8,"ledger_journal_posted":526,"notifications_deleted":7,"operator_role_granted":30,"dashboard_role_granted":8}, preserved 496; appended {"agent_role_granted":1,"custody_role_granted":1,"service_role_granted":1,"identity_role_granted":1,"operator_role_granted":1,"dashboard_role_granted":1})
 ledger verify: true
 re-run: {"currentVersion":45,"resultingVersion":45,"wouldApply":[],"requiredVersion":45,"rolledBack":true}
 rollback proof: the dump restores to schema 44 with the same ledger head
-== REHEARSAL PASSED 2026-10-07T20:31:55Z — live untouched (schema 44)
+== REHEARSAL PASSED 2026-10-07T20:38:35Z — live untouched (schema 44)
