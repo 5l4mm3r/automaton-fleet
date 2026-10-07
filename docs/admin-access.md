@@ -86,26 +86,41 @@ Removing a working owner sign-in method is a **breaking operational change**. An
 4. an explicit release note;
 5. a rollback route.
 
-## Notifications
+## Notifications (schema v45: disposable messages)
 
-- **Acknowledge** marks a notification read. It never deletes it. **Acknowledge all** acknowledges every unread one.
-- **Delete** removes a notification from the inbox. It is a separate, owner-attributed action, with three forms:
-  - **Delete:** on one acknowledged notification. No second confirmation.
+- **Acknowledge** marks a notification read. **Acknowledge all** acknowledges every unread one.
+- **Delete means delete.** The deleting actions are:
+  - **Delete:** an acknowledged notification. No second confirmation.
   - **Select → Delete selected (n):** confirmed. If unread ones are selected, the confirmation says
-    "Acknowledge and delete n?". Unread warnings are never erased silently.
-  - **Delete all acknowledged (n):** confirmed. The count is FleetController's.
-- **What deletion keeps:** the inbox, counts, badges and Acknowledge all exclude deleted notifications. FleetController
-  keeps a minimal **tombstone**: id, class, code, created / acknowledged / deleted times, and who deleted it. The title and
-  stored detail are cleared. A `notifications_deleted` Fleet event is recorded.
+    "Acknowledge and delete".
+  - **Delete all acknowledged (n):** confirmed.
+- **What remains after deleting:** the row, title and detail are removed permanently. No tombstone, no event, no audit
+  copy and no access-log line is kept.
+- **Re-raise protection:** only a short-lived suppression key (the notification's dedupe key and an expiry, 7 days) stops
+  a periodic producer, such as the daily report or an open alert, from re-raising the very notification just deleted.
 - **Repeats are harmless.**
-- **Not re-raised:** a deleted daily report is never raised again, because its dedupe key is kept.
-- **Opening a notification** shows a detail view:
-  - kind, severity, raised time, Agent, acknowledgement;
-  - readable facts;
-  - the stored payload only under "View technical data", as inert text with secret-looking fields withheld.
-- **Test notifications:** automated tests raise `TEST_*` codes in their own throwaway databases. If one is ever seen, it
-  is labelled "TEST NOTIFICATION" and never shown as a live report. Production had none on 2026-10-07: five genuine
-  daily reports and one passkey-added alert.
+- **Opening a notification:** shows a readable detail view; the stored payload is only under "View technical data".
+- **Test notifications:** `TEST_*` notifications are labelled and never shown as a live report.
+
+## Fleet Command (schema v45: the operational brain)
+
+- **What it shows:** only events the router classes P0 Critical, P1 High, P2 Important or P3 Summary.
+- **What it never shows:**
+  - normal sign-ins (password, passkey, authenticator), sessions, logouts and CSRF mechanics;
+  - notification housekeeping;
+  - role grants, ledger plumbing, provisioning steps, release approvals, UI actions, tests.
+- **Security incidents that do appear:**
+  - sign-in lockout after repeated failures;
+  - a suspected passkey clone;
+  - replay attempts;
+  - runtime attestation failures.
+- **Its own bounded feed:** Fleet Command reads `fleet_command_feed`, filled automatically from routed events and capped
+  at 500 rows per priority. It is not the canonical record.
+- **Clearing:** each section has **Clear Critical / High / Important / Summary**. Clearing is confirmed, and Critical
+  needs an explicit acknowledgement; no step-up is asked.
+  - Cleared rows are deleted from the feed, with no replacement event.
+  - The Fleet's records are never touched: ledger, Agents, ventures, projects, missions, knowledge and the event history.
+  - New events appear normally afterwards.
 
 ## The Fleet daily report
 

@@ -919,3 +919,11 @@ under the separate **Full history** tab.
 - The previous root UI 0.3.0 directory is kept for rollback: `dashboard.env.pre-0.8.3`.
 - This happened only after the owner's visual sign-off and after password sign-in from a browser other than Edge was
   proven.
+
+## V2.4.4: disposable notifications, clearable Fleet Command — schema v45, UI 0.8.4 (prepared, not deployed)
+
+- **Notifications:** deleting one deletes it. There is no tombstone or event; only a 7-day suppression key prevents an
+  immediate re-raise.
+- **Fleet Command:**
+  - a bounded feed of routed P0–P3 events, with a Clear control per priority (confirmed, Critical explicitly);
+  - normal sign-in notices never appear; serious security incidents do.

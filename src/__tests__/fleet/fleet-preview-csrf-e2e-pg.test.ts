@@ -259,7 +259,7 @@ describe.skipIf(!RUN)("/hq-preview/ beside the production root: secure mutations
     // Every script the preview loads comes from /hq-preview/; its sign-in/out never leaves the preview.
     const srcs = await D.locator("script[src]").evaluateAll((els) => els.map((e) => (e as HTMLScriptElement).getAttribute("src") ?? ""));
     expect(srcs.length).toBeGreaterThan(0); expect(srcs.every((u) => u.startsWith("/hq-preview/"))).toBe(true);
-    expect(await D.getByText(/PREVIEW V2\.4\.3 · UI \d+\.\d+\.\d+/).count()).toBe(1);
+    expect(await D.getByText(/PREVIEW V2\.4\.4 · UI \d+\.\d+\.\d+/).count()).toBe(1);
   });
 
   it("UX readiness sweep of the preview: every page and Virtual, desktop and phone — no errors, CSP violations, failing requests, overflow, path escapes, stale naming or unnamed buttons", async () => {
@@ -372,7 +372,7 @@ describe.skipIf(!RUN)("/hq-preview/ beside the production root: secure mutations
     expect(problemsF).toEqual([]);
   });
 
-  it("V2.4.2 notifications: the daily report opens as a readable report; delete one, a selection (acknowledge and delete), all acknowledged; persisted; tombstones attributed", async () => {
+  it("V2.4.2 notifications: the daily report opens as a readable report; delete one, a selection (acknowledge and delete), all acknowledged; persisted; deleted rows are gone", async () => {
     const problems = errorsOf(F);
     await R.q(`SELECT fleet.fleet_notify('DAILY', 'DAILY_REPORT', NULL, 'Fleet daily report e2e', fleet.fleet_daily_report(), 'daily:e2e')`);
     for (const t of ["N-del-1", "N-del-2", "N-del-3"]) await notify(t);
@@ -391,8 +391,7 @@ describe.skipIf(!RUN)("/hq-preview/ beside the production root: secure mutations
     // Delete one acknowledged notification (low risk: no second confirmation).
     await F.locator("div.rounded-lg").filter({ hasText: "Fleet daily report e2e" }).first().getByRole("button", { name: "Delete" }).click();
     await F.waitForTimeout(1500);
-    const tomb = (await R.q(`SELECT deleted_at, deleted_by, title, detail FROM fleet.fleet_notifications WHERE dedupe_key = 'daily:e2e'`))[0];
-    expect(tomb).toMatchObject({ deleted_by: OWNER, title: "Deleted notification", detail: {} });
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_notifications WHERE dedupe_key = 'daily:e2e'`)).toEqual([]); // delete means delete
     // A selection with one unread: an explicit "Acknowledge and delete".
     await F.getByRole("button", { name: "Select" }).click();
     await F.getByLabel("Select N-del-1").check(); await F.getByLabel("Select N-del-3").check();
@@ -401,19 +400,19 @@ describe.skipIf(!RUN)("/hq-preview/ beside the production root: secure mutations
     await conf.getByRole("heading", { name: "Acknowledge and delete 2 notifications?" }).waitFor();
     await conf.getByRole("button", { name: "Acknowledge and delete" }).click();
     await F.waitForTimeout(1500);
-    for (const t of ["N-del-1", "N-del-3"]) expect(Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE title = $1`, [t]))[0].n)).toBe(0); // scrubbed
+    for (const t of ["N-del-1", "N-del-3"]) expect(Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE title = $1`, [t]))[0].n)).toBe(0); // gone
     // Delete all acknowledged (FleetController's count, confirmed).
-    const n = Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE acknowledged_at IS NOT NULL AND deleted_at IS NULL`))[0].n);
+    const n = Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE acknowledged_at IS NOT NULL`))[0].n);
     expect(n).toBeGreaterThan(0);
     await F.getByRole("button", { name: `Delete all acknowledged (${n})` }).click();
     await F.getByRole("dialog", { name: "Confirm deletion" }).getByRole("heading", { name: `Delete ${n} acknowledged notification${n === 1 ? "" : "s"} from your inbox?` }).waitFor();
     await F.getByRole("dialog", { name: "Confirm deletion" }).getByRole("button", { name: "Delete", exact: true }).click();
     await F.waitForTimeout(1500);
-    expect(Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE acknowledged_at IS NOT NULL AND deleted_at IS NULL`))[0].n)).toBe(0);
+    expect(Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE acknowledged_at IS NOT NULL`))[0].n)).toBe(0);
     await F.reload(); await openNotifications(F);
     expect(await F.getByText("N-del-2").count()).toBe(0);
     expect(await sidebarCount(F)).toBe(await unacked());
-    expect(Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE deleted_at IS NOT NULL AND deleted_by <> $1`, [OWNER]))[0].n)).toBe(0);
+    expect(Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_events WHERE event_type = 'notifications_deleted'`))[0].n)).toBe(0); // no event
     expect(problems).toEqual([]);
     await ctx2.close();
   });

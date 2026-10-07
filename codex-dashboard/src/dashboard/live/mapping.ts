@@ -210,6 +210,11 @@ export async function toLiveCommand(cmd: Command, last: LiveSnapshot | null, c: 
     }
     case "notification_delete_acknowledged":
       return { kind: "notification_delete_acknowledged" };
+    case "command_clear": {
+      const p = a.priority;
+      if (p !== "P0_CRITICAL" && p !== "P1_HIGH" && p !== "P2_IMPORTANT" && p !== "P3_SUMMARY") throw new FleetApiError("FLEET_BAD_REQUEST", "Unknown priority.");
+      return { kind: "command_clear", priority: p };
+    }
     case "passkey_rename":
       return { kind: "passkey_rename", credentialId: required(a, "keyId"), name: required(a, "name") };
     case "ack_all": {

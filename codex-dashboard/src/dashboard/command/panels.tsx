@@ -3,10 +3,10 @@
  * panels, from the same props, so the two can never show different facts. Display only: every value is FleetController's
  * (snapshot, command view); writes go through the deck's existing action dialog and the gateway's step-up.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { codeText } from "../notifications/report";
 import { money, type Fleet } from "../model";
-import { input } from "../ui";
+import { button, input } from "../ui";
 import { AgentPortrait, HealthTag } from "./AgentPortrait";
 import type { AgentModel } from "./agents";
 import { DEPARTMENT } from "./departments";
@@ -189,29 +189,54 @@ const EVENT_TEXT: Record<string, string> = {
 };
 export const eventTitle = (e: FleetEvent) => EVENT_TEXT[e.type] ?? words(e.type).replace(/^./, (c) => c.toUpperCase());
 
+/** "Clear <priority>": confirmed (Critical needs an explicit acknowledgement); display housekeeping, no step-up. */
+function ClearConfirm({ label, count, critical, close, confirm }: { label: string; count: number; critical: boolean; close: () => void; confirm: () => Promise<void> }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [ok, setOk] = useState(!critical), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  useEffect(() => { const el = ref.current; el?.showModal(); return () => el?.close(); }, []);
+  return <dialog ref={ref} aria-label="Confirm clearing" onCancel={close} className="fixed inset-0 m-auto w-[min(92vw,460px)] rounded-2xl border border-cyan-700 bg-slate-900 p-6 text-white backdrop:bg-black/80">
+    <h2 className="text-xl">Clear {count} {label} Fleet Command event{count === 1 ? "" : "s"}?</h2>
+    <p className="mt-3 text-sm text-slate-300">They leave the Fleet Command display. The Fleet&apos;s records (ledger, Agents, ventures, projects, missions, history) are not changed.</p>
+    {critical && <label className="mt-4 flex items-start gap-2 text-sm text-amber-100"><input type="checkbox" className="mt-1" checked={ok} onChange={(e) => setOk(e.target.checked)} />I have reviewed these critical events.</label>}
+    {error && <p role="alert" className="mt-3 text-red-300">{error}</p>}
+    <div className="mt-6 flex flex-wrap gap-2"><button className={button} disabled={busy} onClick={close}>Cancel</button>
+      <button className={`${button} bg-cyan-900`} disabled={busy || !ok} onClick={async () => { setBusy(true); setError(""); try { await confirm(); close(); } catch (e) { setError(e instanceof Error ? e.message : "Clearing failed"); } finally { setBusy(false); } }}>{busy ? "Clearing…" : `Clear ${label}`}</button></div>
+  </dialog>;
+}
+
 /**
- * Fleet Command's feed (V2.4.3): ONLY real events FleetController's router (schema v44) classes P0–P3 — never
- * sessions, logins, ledger postings or notification housekeeping — grouped Critical → High → Important → Summary,
- * newest first in each. Readable titles and a few stored facts; no raw payload. The list's capacity is reserved for
- * operational events: when routing is unavailable (`events` null) the list stays empty and paused — no raw stream, no
- * status row; that condition is infrastructure status, shown only in Controller status and Advanced.
+ * Fleet Command's feed: ONLY real events FleetController's router classes P0–P3 — never sign-ins, sessions, ledger
+ * plumbing or notification housekeeping — grouped Critical → High → Important → Summary, newest first in each. Readable
+ * titles and a few stored facts; no raw payload. Each section can be cleared (its display rows are deleted; the Fleet's
+ * records are untouched). When routing is unavailable (`events` null) the list stays empty and paused — that condition
+ * is infrastructure status, shown only in Controller status and Advanced.
  */
-export function CommandFeed({ events, models, onOpenAgent, limit = 100 }: { events: readonly FleetEvent[] | null;
-  models: AgentModel[]; onOpenAgent?: (id: string) => void; limit?: number }) {
+export function CommandFeed({ events, models, onOpenAgent, limit = 100, onClear }: { events: readonly FleetEvent[] | null;
+  models: AgentModel[]; onOpenAgent?: (id: string) => void; limit?: number; onClear?: (p: EventPriority) => Promise<void> }) {
   const name = useMemo(() => new Map(models.map((m) => [m.agent.id, m.agent.name])), [models]);
+  const [asking, setAsking] = useState<EventPriority | null>(null);
+  // Cleared sections stay hidden locally until the next read confirms them (events newer than the clear still show).
+  const [cleared, setCleared] = useState<Partial<Record<EventPriority, number>>>({});
   if (events === null) return <ol aria-label="Operational events (paused: routing unavailable)" />;
-  const all = PRIORITY_ORDER.map((p) => [p, events.filter((e) => e.priority === p).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))] as const).filter(([, xs]) => xs.length);
+  const visible = events.filter((e) => !(e.priority && cleared[e.priority] !== undefined && Date.parse(e.at) <= cleared[e.priority]!));
+  const all = PRIORITY_ORDER.map((p) => [p, visible.filter((e) => e.priority === p).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))] as const).filter(([, xs]) => xs.length);
   // The display limit is spent in priority order (critical first), computed before rendering.
   const groups = all.map(([p, xs], i) => { const before = all.slice(0, i).reduce((n, [, ys]) => n + ys.length, 0); return [p, xs, xs.slice(0, Math.max(0, limit - before))] as const; });
-  if (!groups.length) return <p className="text-sm text-slate-400">No operational events. Routine activity, sign-ins and housekeeping are kept in the audit and Agent activity records.</p>;
+  if (!groups.length) return <p className="text-sm text-slate-400">No operational events. Routine activity, sign-ins and housekeeping never appear here; the Fleet&apos;s records keep everything that matters.</p>;
   return <div className="max-h-[32rem] space-y-4 overflow-y-auto pr-1">{groups.map(([p, xs, shown]) => {
     return shown.length ? <section key={p} aria-label={`${PRIORITY_TEXT[p]} events`}>
-      <h4 className={`mb-1 border-l-2 pl-2 text-xs font-semibold uppercase tracking-widest ${PRIORITY_TONE[p]}`}>{PRIORITY_TEXT[p]} · {xs.length}</h4>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h4 className={`border-l-2 pl-2 text-xs font-semibold uppercase tracking-widest ${PRIORITY_TONE[p]}`}>{PRIORITY_TEXT[p]} · {xs.length}</h4>
+        {onClear && <button className="rounded border border-slate-700 px-2 py-0.5 text-xs text-slate-300 hover:border-cyan-400" onClick={() => setAsking(p)}>Clear {PRIORITY_TEXT[p]}</button>}
+      </div>
       <ol className="space-y-2">{shown.map((e) => <li key={e.key} className={`border-l-2 pl-3 text-sm ${PRIORITY_TONE[p].split(" ")[0]}`}>
         <p className="text-xs text-slate-400">{time(e.at)}{e.agentId ? <> · {onOpenAgent ? <button className="text-cyan-300 underline" onClick={() => onOpenAgent(e.agentId!)}>{name.get(e.agentId) ?? e.agentId}</button> : name.get(e.agentId) ?? e.agentId}</> : null}</p>
         <p className="[overflow-wrap:anywhere]">{e.type === "notification" ? codeText(typeof e.detail.code === "string" ? e.detail.code : undefined) : eventTitle(e)}{factsOf(e.type === "notification" ? null : e.detail, 3).map(([k, v]) => ` · ${k}: ${v}`).join("")}</p>
       </li>)}</ol></section> : null;
-  })}</div>;
+  })}
+    {asking && onClear && <ClearConfirm label={PRIORITY_TEXT[asking]} count={visible.filter((e) => e.priority === asking).length} critical={asking === "P0_CRITICAL"}
+      close={() => setAsking(null)} confirm={async () => { const p = asking; await onClear(p); setCleared((c) => ({ ...c, [p]: Date.now() })); }} />}
+  </div>;
 }
 
 export function DepartmentRoster({ models, dep, onOpen }: { models: AgentModel[]; dep: keyof typeof DEPARTMENT; onOpen: (id: string) => void }) {

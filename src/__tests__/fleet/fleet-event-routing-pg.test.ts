@@ -59,21 +59,56 @@ describe.skipIf(!PG_BIN)("Fleet Command routing in PostgreSQL (through dash_call
   }, 240_000);
   afterAll(async () => { await R?.close(); });
 
-  it("notification delete / delete all acknowledged / acknowledge: no Fleet Command event; the tombstone remains", async () => {
+  it("notification delete / delete all acknowledged / acknowledge: the rows are gone; no event; no Fleet Command entry; sign-in state untouched", async () => {
     await R.q(`SELECT fleet.fleet_notify('AMBER', 'HIGH_EXPOSURE_SPEND', NULL, 'route test', '{}'::jsonb, 'route:1')`);
     await R.q(`SELECT fleet.fleet_notify('AMBER', 'HIGH_EXPOSURE_SPEND', NULL, 'route test 2', '{}'::jsonb, 'route:2')`);
     const [id1, id2] = (await R.q(`SELECT notification_id FROM fleet.fleet_notifications WHERE dedupe_key IN ('route:1','route:2') ORDER BY dedupe_key`)).map((r) => r.notification_id);
+    const authBefore = await R.q(`SELECT (SELECT count(*) FROM fleet.fleet_admin_passkeys) AS k, (SELECT count(*) FROM fleet.fleet_admin_sessions WHERE ended_at IS NULL) AS s, (SELECT count(*) FROM fleet.fleet_admin_totp) AS t`);
+    const eventsBefore = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events)`));
     const before = await command();
     await R.q(`SELECT fleet.fleet_admin_notification_ack($1, $2)`, [id1, OWNER]);
     await R.q(`SELECT fleet.fleet_admin_notifications_delete(ARRAY[$1]::uuid[], false, $2)`, [id1, OWNER]);
     await R.q(`SELECT fleet.fleet_admin_notification_ack($1, $2)`, [id2, OWNER]);
     await R.q(`SELECT fleet.fleet_admin_notifications_delete_acknowledged($1)`, [OWNER]);
-    const after = await command();
-    expect(after.length).toBe(before.length);
-    expect(after.map((e) => e.type)).not.toContain("notifications_deleted");
-    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'notifications_deleted')`))).toBe(2); // audit history kept
-    expect((await R.q(`SELECT deleted_by, title FROM fleet.fleet_notifications WHERE notification_id = $1`, [id1]))[0]).toEqual({ deleted_by: OWNER, title: "Deleted notification" });
+    expect((await command()).length).toBe(before.length);
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events)`))).toBe(eventsBefore); // nothing appended
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_notifications WHERE notification_id IN ($1, $2)`, [id1, id2])).toEqual([]);
+    expect(await R.q(`SELECT (SELECT count(*) FROM fleet.fleet_admin_passkeys) AS k, (SELECT count(*) FROM fleet.fleet_admin_sessions WHERE ended_at IS NULL) AS s, (SELECT count(*) FROM fleet.fleet_admin_totp) AS t`)).toEqual(authBefore);
     expect(await route("notifications_deleted")).toBe("AUDIT_ONLY");
+  });
+
+  it("normal sign-in notices never reach Fleet Command; serious security incidents do (P0)", async () => {
+    for (const code of ["ADMIN_PASSKEY_ADDED", "ADMIN_PASSWORD_SET", "ADMIN_PASSKEY_REVOKED", "ADMIN_TOTP_RESET"]) expect(await route("notification", { class: "AMBER", code })).toBe("AUDIT_ONLY");
+    for (const t of ["session_opened", "api_auth_failed", "db_auth_failed", "runtime_approved", "ledger_journal_posted"]) expect(await route(t)).toBe("AUDIT_ONLY");
+    await R.q(`SELECT fleet.fleet_notify('AMBER', 'ADMIN_PASSKEY_ADDED', NULL, 'A new Admin passkey was registered', '{}'::jsonb, 'route:pk')`);
+    await R.q(`SELECT fleet.fleet_notify('RED', 'ADMIN_AUTH_LOCKOUT', NULL, 'Repeated failed sign-ins', '{}'::jsonb, 'route:lock')`);
+    const feed = await command();
+    expect(feed.filter((e) => e.type === "notification" && e.detail.code === "ADMIN_PASSKEY_ADDED")).toEqual([]);
+    expect(feed.find((e) => e.type === "notification" && e.detail.code === "ADMIN_AUTH_LOCKOUT")?.priority).toBe("P0_CRITICAL");
+    for (const t of ["operator_replay_blocked", "request_replayed", "genesis_runtime_auth_failed"]) expect(await route(t)).toBe("P0_CRITICAL");
+  });
+
+  it("Clear <priority>: the display rows go, nothing replaces them, new events appear afterwards; no Fleet state changes", async () => {
+    await R.q(`SELECT fleet.fleet_event('cap_set', NULL, 'operator:test', '{"max":2}'::jsonb)`);
+    const state = async () => R.q(`SELECT (SELECT row_to_json(s)::text FROM (SELECT max_agents, living_agents, reserved_slots, operating_mode FROM fleet.fleet_state) s) AS st,
+      (SELECT head_seq || head_hash FROM fleet.fleet_ledger_head) AS ledger, (SELECT count(*) FROM fleet.fleet_events) AS events,
+      (SELECT string_agg(agent_id || status, ',' ORDER BY agent_id) FROM fleet.fleet_agents) AS agents, (SELECT count(*) FROM fleet.fleet_ventures) AS ventures,
+      (SELECT count(*) FROM fleet.fleet_agent_missions) AS missions, (SELECT count(*) FROM fleet.fleet_projects) AS projects, (SELECT count(*) FROM fleet.fleet_economic_knowledge) AS knowledge,
+      (SELECT row_to_json(r)::text FROM fleet.fleet_replication_state r) AS replication`);
+    const s0 = await state();
+    for (const p of ["P0_CRITICAL", "P1_HIGH", "P2_IMPORTANT", "P3_SUMMARY"]) {
+      const n = (await command(2000)).filter((e) => e.priority === p).length;
+      const r = (await R.q(`SELECT fleet.dash_call($1, $2, 'command_clear', $3, NULL, 'test') AS r`, [sha(session), sha("csrf"), JSON.stringify({ priority: p })]))[0].r.result;
+      expect(r).toMatchObject({ ok: true, priority: p, cleared: n });
+      expect((await command(2000)).filter((e) => e.priority === p)).toEqual([]);
+    }
+    expect(await command()).toEqual([]);
+    expect(await state()).toEqual(s0); // the history, ledger, Agents, ventures, missions, projects, knowledge, replication, cap: untouched
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_admin_auth_log WHERE op = 'command_clear' AND ok)`))).toBe(0);
+    // New operational events appear normally afterwards.
+    await R.q(`SELECT fleet.fleet_event('agent_quarantined', $1, 'controller', '{"reason":"after clear"}'::jsonb)`, [A]);
+    expect((await command()).map((e) => e.type)).toEqual(["agent_quarantined"]);
+    expect(await R.code(R.q(`SELECT fleet.fleet_admin_command_clear('AUDIT_ONLY', $1)`, [OWNER]))).toBe("FLEET_BAD_REQUEST");
   });
 
   it("hold / release and missions still appear (P1)", async () => {
@@ -88,11 +123,13 @@ describe.skipIf(!PG_BIN)("Fleet Command routing in PostgreSQL (through dash_call
   it("security and safety events are P0; capital and Treasury events P1; a RED notification is P0, the daily report P3", async () => {
     await R.q(`SELECT fleet.fleet_event('runtime_verification_failed', $1, 'controller', '{"reason":"build mismatch"}'::jsonb)`, [A]);
     await R.q(`SELECT fleet.fleet_event('capital_decision', $1, 'controller', '{"outcome":"approved","amountMinor":1200}'::jsonb)`, [A]);
-    await R.q(`SELECT fleet.fleet_notify('RED', 'BREAKER_TRIPPED', NULL, 'route test red', '{}'::jsonb, 'route:red')`);
+    await R.q(`SELECT fleet.fleet_notify('RED', 'TREASURY_INSOLVENT', NULL, 'route test red', '{}'::jsonb, 'route:red')`);
     const feed = await command();
     expect(feed.find((e) => e.type === "runtime_verification_failed")?.priority).toBe("P0_CRITICAL");
     expect(feed.find((e) => e.type === "capital_decision")?.priority).toBe("P1_HIGH");
     expect(feed.find((e) => e.type === "notification" && e.detail.class === "RED")?.priority).toBe("P0_CRITICAL");
+    // The breaker's own event is the incident; its notification copy stays out of Fleet Command.
+    expect(await route("notification", { class: "RED", code: "BREAKER_TRIPPED" })).toBe("AUDIT_ONLY");
     expect(await route("spend_circuit_breaker_set", { tripped: true })).toBe("P0_CRITICAL");
     expect(await route("spend_circuit_breaker_set", { tripped: false })).toBe("P2_IMPORTANT");
     expect(await route("treasury_sweep")).toBe("P1_HIGH");
@@ -159,6 +196,13 @@ describe("the Fleet Command feed (component)", () => {
     expect(html).toContain("Agent died");
     expect(html).toContain("Fleet daily report");
     expect(html).not.toMatch(/\{&quot;|"nested"|notifications deleted|DAILY_REPORT/);
+  });
+  it("each visible priority section offers its own Clear control (and none without a clear handler)", () => {
+    const evs = [ev("agent_died", "P0_CRITICAL", "2026-10-07T09:00:00Z"), ev("cap_set", "P2_IMPORTANT", "2026-10-07T11:00:00Z")];
+    const withClear = renderToStaticMarkup(createElement(CommandFeed, { models: [], events: evs, onClear: async () => {} }));
+    expect(withClear).toContain(">Clear Critical<"); expect(withClear).toContain(">Clear Important<");
+    expect(withClear).not.toContain(">Clear High<"); // no High events: no High section
+    expect(renderToStaticMarkup(createElement(CommandFeed, { models: [], events: evs }))).not.toContain(">Clear ");
   });
   it("routing unavailable: the operational list stays empty — no raw events, no status row, no capacity used; the condition shows outside the feed", async () => {
     const html = renderToStaticMarkup(createElement(CommandFeed, { events: null, models: [] }));

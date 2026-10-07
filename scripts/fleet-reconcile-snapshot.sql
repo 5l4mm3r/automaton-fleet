@@ -57,6 +57,9 @@ SELECT jsonb_build_object(
   'notifications', (SELECT jsonb_build_object('count', count(*), 'acknowledged', count(*) FILTER (WHERE acknowledged_at IS NOT NULL),
                      'digest', md5(COALESCE(string_agg(concat_ws('|', notification_id, class, code, agent_id, created_at, acknowledged_at, acknowledged_by),
                        E'\n' ORDER BY created_at, notification_id), ''))) FROM fleet_notifications),
+  -- The owner's inbox (rows that are not v43 deletion tombstones; v45 removes tombstones, so compare this, not all rows).
+  'inbox', (SELECT jsonb_build_object('count', count(*), 'digest', md5(COALESCE(string_agg(concat_ws('|', notification_id, class, code, agent_id, created_at,
+               acknowledged_at, acknowledged_by), E'\n' ORDER BY created_at, notification_id), ''))) FROM fleet_notifications n WHERE (to_jsonb(n) ->> 'deleted_at') IS NULL),
   'estates', (SELECT count(*) FROM fleet_estates),
   'estateItems', (SELECT count(*) FROM fleet_estate_items),
   'knowledge', jsonb_build_object('entries', (SELECT count(*) FROM fleet_knowledge_entries), 'economic', (SELECT count(*) FROM fleet_economic_knowledge)),

@@ -3,8 +3,8 @@
  * The Notifications inbox (V2.4.2): rows open a readable detail view (the Fleet daily report as a report; other
  * notifications as facts; the stored payload only under "View technical data", as inert text). Acknowledge stays as it
  * was; DELETE is separate — one acknowledged notification, a selection, or all acknowledged ones (bulk deletion asks
- * first; an unread one is only deleted through an explicit "Acknowledge and delete"). Deleted notifications leave the
- * inbox; FleetController keeps a minimal record (id, kind, times, who deleted it). Every string is rendered as text.
+ * first; an unread one is only deleted through an explicit "Acknowledge and delete"). Notifications are disposable
+ * messages: a deleted one is gone (schema v45 — no record is kept). Every string is rendered as text.
  */
 import { useEffect, useRef, useState } from "react";
 import type { Notice } from "../model";
@@ -59,7 +59,7 @@ export function NotificationDetail({ n, agentName, close, run, live }: { n: Noti
       {n.acknowledged && <button className={button} disabled={busy} onClick={() => void act("notification_delete", { ids: n.id })}>Delete notification</button>}
       <button className={`${button} bg-cyan-900`} disabled={busy} onClick={close}>Close</button>
     </div>
-    {live && n.acknowledged && <p className="mt-3 text-xs text-slate-500">Deleting removes it from your inbox; a minimal security record (its id, kind and times) remains.</p>}
+    {live && n.acknowledged && <p className="mt-3 text-xs text-slate-500">Deleting removes it permanently.</p>}
   </Dialog>;
 }
 
@@ -68,7 +68,7 @@ function ConfirmDelete({ count, unread, close, confirm }: { count: number; unrea
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   return <Dialog label="Confirm deletion" close={close}>
     <h2 className="text-xl">{unread ? `Acknowledge and delete ${count} notification${count === 1 ? "" : "s"}?` : `Delete ${count} acknowledged notification${count === 1 ? "" : "s"} from your inbox?`}</h2>
-    <p className="mt-3 text-sm text-slate-300">This removes {count === 1 ? "it" : "them"} from the Notifications list. A minimal security/audit record remains.{unread ? ` ${unread} of them ${unread === 1 ? "is" : "are"} still unread and will be acknowledged first.` : ""}</p>
+    <p className="mt-3 text-sm text-slate-300">This permanently deletes {count === 1 ? "it" : "them"}.{unread ? ` ${unread} of them ${unread === 1 ? "is" : "are"} still unread.` : ""}</p>
     {error && <p role="alert" className="mt-3 text-red-300">{error}</p>}
     <div className="mt-6 flex flex-wrap gap-2"><button className={button} disabled={busy} onClick={close}>Cancel</button>
       <button className={`${button} bg-red-950`} disabled={busy} onClick={async () => { setBusy(true); setError(""); try { await confirm(); close(); } catch (e) { setError(e instanceof Error ? e.message : "Operation failed"); } finally { setBusy(false); } }}>{busy ? "Deleting…" : unread ? "Acknowledge and delete" : "Delete"}</button></div>

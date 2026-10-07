@@ -135,6 +135,7 @@ export type LiveCommand =
   | { kind: "passkey_rename"; credentialId: string; name: string }
   | { kind: "notification_delete"; ids: string[]; acknowledgeUnread: boolean }
   | { kind: "notification_delete_acknowledged" }
+  | { kind: "command_clear"; priority: "P0_CRITICAL" | "P1_HIGH" | "P2_IMPORTANT" | "P3_SUMMARY" }
   | { kind: "sessions"; action: "revoke_all" }
   | { kind: "totp"; action: "reset" }
   | { kind: "mail_assign"; messageId: string; agentId: string; ventureId?: string; accountId?: string }

@@ -96,7 +96,7 @@ describe.skipIf(!PG_BIN)("schema upgrade reconciliation snapshot and comparison 
     if (n.length) {
       await R.q(`UPDATE fleet.fleet_notifications SET acknowledged_at = now(), acknowledged_by = 'test' WHERE notification_id = $1`, [n[0].notification_id]);
       const ack = compare(base3.file, snap("ack", cuts(base3.json)).file, FLEET_PG_SCHEMA_VERSION, FLEET_PG_SCHEMA_VERSION);
-      expect(ack.report.failures.map((f: { check: string }) => f.check)).toContain("notifications");
+      expect(ack.report.failures.map((f: { check: string }) => f.check)).toContain("notifications (inbox)");
     }
   }, 120_000);
 });

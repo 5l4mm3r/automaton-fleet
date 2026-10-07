@@ -9,7 +9,7 @@
  * the owner can never remove the last way in; the authenticator cannot be removed from the dashboard; the host recovery
  * link can set a password; no password, verifier or secret ever appears in a response or a log.
  * Notifications: acknowledge stays; delete is separate, owner-attributed, acknowledged-only (or explicit acknowledge and
- * delete), idempotent, leaves a minimal tombstone, and removes the row from the inbox, its counts and Acknowledge all.
+ * delete), idempotent, and (schema v45) permanently deletes the row: no tombstone, no event, no access-log line.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import crypto from "crypto";
@@ -272,7 +272,7 @@ describe.skipIf(!PG_BIN)("v43 owner sign-in resilience + notification housekeepi
     expect(log).toMatch(/password_set/);
   });
 
-  describe("notifications: acknowledge, then delete (acknowledged only), tombstone, counts", () => {
+  describe("notifications: acknowledge, then delete (acknowledged only) — delete means delete", () => {
     let c: GatewayClient;
     const ids: string[] = [];
     const inbox = async () => (await c.read<Record<string, any>>("notifications", { limit: 500 }));
@@ -292,23 +292,24 @@ describe.skipIf(!PG_BIN)("v43 owner sign-in resilience + notification housekeepi
       await c.call("notification_ack", { id: ids[1] });
       expect(await c.call("notification_delete", { ids: [ids[1]], acknowledgeUnread: false })).toMatchObject({ deleted: 1 });
       expect(await c.call("notification_delete", { ids: [ids[0]], acknowledgeUnread: true })).toMatchObject({ deleted: 1 });
-      expect(await c.call("notification_delete", { ids: [ids[0], ids[1]], acknowledgeUnread: true })).toMatchObject({ deleted: 0, alreadyDeleted: 2 }); // idempotent
+      expect(await c.call("notification_delete", { ids: [ids[0], ids[1]], acknowledgeUnread: true })).toMatchObject({ deleted: 0, missing: 2 }); // idempotent
     });
 
-    it("deleted rows leave the inbox, its counts, Acknowledge all and the detail read; a minimal attributed tombstone remains", async () => {
+    it("deleted notifications are GONE: no row, no tombstone, no event, no access-log line; only a short-lived dedupe key", async () => {
       const box = await inbox();
       const listed = (box.notifications as Array<Record<string, any>>).map((n) => n.notification_id);
       expect(listed).not.toContain(ids[0]); expect(listed).not.toContain(ids[1]);
       expect(box.inbox.total).toBe(listed.length);
-      expect(await c.read("notification_get", { id: ids[0] })).toMatchObject({ deleted: true });
+      expect(await c.read("notification_get", { id: ids[0] })).toMatchObject({ missing: true });
       expect(await c.read<Record<string, any>>("notification_get", { id: ids[2] })).toMatchObject({ code: "TEST_HOUSEKEEPING", title: "Housekeeping test 2 <b>bold</b>" });
-      const t = (await R.q(`SELECT * FROM fleet.fleet_notifications WHERE notification_id = $1`, [ids[0]]))[0];
-      expect(t).toMatchObject({ class: "AMBER", code: "TEST_HOUSEKEEPING", title: "Deleted notification", detail: {}, deleted_by: "operator:owner", acknowledged_by: "operator:owner" });
-      expect(t.deleted_at).not.toBeNull(); expect(t.acknowledged_at).not.toBeNull(); expect(t.created_at).not.toBeNull();
-      expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'notifications_deleted')`))).toBeGreaterThan(0);
-      // The producer does not raise it again (its dedupe key is kept).
+      expect(await R.q(`SELECT * FROM fleet.fleet_notifications WHERE notification_id = ANY ($1::uuid[])`, [[ids[0], ids[1]]])).toEqual([]);
+      expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'notifications_deleted')`))).toBe(0);
+      expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_admin_auth_log WHERE op IN ('notification_delete','notification_delete_acknowledged') AND ok)`))).toBe(0);
+      // Only a short-lived suppression key (no content) stops the producer re-raising it at once; it expires in 7 days.
+      const keys = await R.q(`SELECT dedupe_key, until > now() + interval '6 days' AND until < now() + interval '8 days' AS bounded FROM fleet.fleet_notification_suppress`);
+      expect(keys).toEqual(expect.arrayContaining([{ dedupe_key: "test-housekeeping:0", bounded: true }]));
       expect(await R.one(`fleet.fleet_notify('AMBER', 'TEST_HOUSEKEEPING', NULL, 'again', '{}'::jsonb, 'test-housekeeping:0')`)).toBe(false);
-      // A deleted notification cannot be acknowledged again or emailed.
+      // A deleted notification cannot be acknowledged (it does not exist).
       expect(await c.call("notification_ack", { id: ids[0] })).toMatchObject({ ok: false });
     });
 

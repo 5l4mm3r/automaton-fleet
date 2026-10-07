@@ -13,5 +13,5 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
 /** Ordinary authenticated writes (session + CSRF, no step-up). */
 export const WRITE_OPS: ReadonlySet<string> = new Set([
   "notification_ack", "agent_hold", "agent_release", "mission_assign", "mission_end", "mission_request", "reveal_take", "mail_assign",
-  "notification_delete", "notification_delete_acknowledged", "passkey_rename",
+  "notification_delete", "notification_delete_acknowledged", "passkey_rename", "command_clear",
 ]);

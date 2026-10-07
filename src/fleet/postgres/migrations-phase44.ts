@@ -124,9 +124,10 @@ export const EVENT_PREFIX_ROUTES: ReadonlyArray<[prefix: string, priority: Event
 ] as const);
 
 const q = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(",");
-const caseExact = (Object.entries(EVENT_ROUTES) as Array<[EventPriority, readonly string[]]>)
+/** The router's generated rules (exact names, then prefixes): reused by later versions of fleet_event_route. */
+export const caseExact = (Object.entries(EVENT_ROUTES) as Array<[EventPriority, readonly string[]]>)
   .filter(([, types]) => types.length).map(([p, types]) => `    WHEN p_type IN (${q(types)}) THEN '${p}'`).join("\n");
-const casePrefix = EVENT_PREFIX_ROUTES.map(([prefix, p]) => `    WHEN starts_with(p_type, '${prefix}') THEN '${p}'`).join("\n");
+export const casePrefix = EVENT_PREFIX_ROUTES.map(([prefix, p]) => `    WHEN starts_with(p_type, '${prefix}') THEN '${p}'`).join("\n");
 
 export const DASHBOARD_READ_OPS_V44 = [...DASHBOARD_READ_OPS_V43, "command_events"] as const;
 

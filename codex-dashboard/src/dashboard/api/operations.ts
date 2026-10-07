@@ -54,9 +54,11 @@ export const OPERATIONS: Readonly<Record<string, OperationInfo>> = Object.freeze
   passkey_revoke: { kind: "passkey_revoke", ops: ["passkey_revoke"], stepUp: true, repeat: "converges", audit: "auth log" },
   passkey_rename: { kind: "passkey_rename", ops: ["passkey_rename"], stepUp: false, repeat: "converges", audit: "auth log" },
   notification_delete: { kind: "notification_delete", ops: ["notification_delete"], stepUp: false, repeat: "converges",
-    audit: "inbox tombstone (id, class, code, times, owner) + Fleet event; unacknowledged ones only with explicit acknowledge-and-delete" },
+    audit: "none: the notification is deleted (v45); unacknowledged ones only with explicit acknowledge-and-delete" },
   notification_delete_acknowledged: { kind: "notification_delete_acknowledged", ops: ["notification_delete_acknowledged"], stepUp: false, repeat: "converges",
-    audit: "inbox tombstones + Fleet event" },
+    audit: "none: deleted (v45)" },
+  command_clear: { kind: "command_clear", ops: ["command_clear"], stepUp: false, repeat: "converges",
+    audit: "none: Fleet Command display rows of one priority deleted; no Fleet state changes (v45)" },
   sessions: { kind: "sessions", ops: ["session_revoke_all"], stepUp: true, repeat: "converges", audit: "auth log (other sessions ended)" },
   totp: { kind: "totp", ops: ["totp_reset"], stepUp: true, repeat: "converges", audit: "auth log (re-enrollment required)" },
   mail_assign: { kind: "mail_assign", ops: ["mail_assign"], stepUp: false, repeat: "converges", audit: "routing + event" },
@@ -135,6 +137,8 @@ export async function executeLiveCommand(c: GatewayClient, cmd: LiveCommand): Pr
       return c.call("notification_delete", { ids: cmd.ids, acknowledgeUnread: cmd.acknowledgeUnread });
     case "notification_delete_acknowledged":
       return c.call("notification_delete_acknowledged", {});
+    case "command_clear":
+      return c.call("command_clear", { priority: cmd.priority });
     case "sessions":
       return c.call("session_revoke_all", {});
     case "totp":

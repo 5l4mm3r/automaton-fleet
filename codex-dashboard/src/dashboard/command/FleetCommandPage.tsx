@@ -9,6 +9,7 @@ import { money, type Fleet } from "../model";
 import { Panel, button } from "../ui";
 import type { AgentModel } from "./agents";
 import { CapabilityState, CommandFeed, DecisionFeed, EventFeed, FleetControllerStatus, TreasurySummary, AgentRow } from "./panels";
+import type { EventPriority } from "./events";
 import type { CommandView, Row } from "./view";
 import type { FeedState } from "./useFleetCommand";
 
@@ -20,8 +21,10 @@ type Tab = (typeof TABS)[number];
 const val = (v: unknown) => (v === null || v === undefined ? "" : String(v));
 const pct = (bp: unknown) => (typeof bp === "number" ? String(bp / 100) : "");
 
-export function FleetCommandPage({ fleet, view, models, feed, live, control, openAgent, go }: {
+export function FleetCommandPage({ fleet, view, models, feed, live, control, openAgent, go, clear }: {
   fleet: Fleet; view: CommandView | null; models: AgentModel[]; feed: FeedState; live: boolean; control: Control; openAgent: (id: string) => void; go: (page: string) => void;
+  /** Clear one priority from the Fleet Command display (LIVE; display housekeeping, no step-up). */
+  clear?: (p: EventPriority) => Promise<void>;
 }) {
   const [tab, setTab] = useState<Tab>("Overview");
   const s = view?.settings ?? null, rp = fleet.live?.replication;
@@ -37,7 +40,7 @@ export function FleetCommandPage({ fleet, view, models, feed, live, control, ope
       <Panel title="Controller status"><FleetControllerStatus fleet={fleet} view={view} models={models} /></Panel>
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title="Latest decisions">{pending ?? <DecisionFeed view={view} models={models} onOpenAgent={openAgent} compact />}<button className={`${button} mt-3`} onClick={() => setTab("Decision Log")}>Open the decision log</button></Panel>
-        <Panel title="Information received">{pending ?? <CommandFeed events={view!.commandEvents} models={models} onOpenAgent={openAgent} limit={8} />}<button className={`${button} mt-3`} onClick={() => setTab("Information Feed")}>Open the feed</button></Panel>
+        <Panel title="Information received">{pending ?? <CommandFeed events={view!.commandEvents} models={models} onOpenAgent={openAgent} limit={8} onClear={clear} />}<button className={`${button} mt-3`} onClick={() => setTab("Information Feed")}>Open the feed</button></Panel>
       </div>
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title="Agents">{models.length ? <ul className="space-y-3">{models.map((m) => <li key={m.agent.id}><AgentRow m={m} onOpen={openAgent} /></li>)}</ul> : <p className="text-sm text-slate-400">No agents.</p>}</Panel>
@@ -48,7 +51,7 @@ export function FleetCommandPage({ fleet, view, models, feed, live, control, ope
     </>}
 
     {tab === "Decision Log" && <Panel title="Decision log">{pending ?? <DecisionFeed view={view} models={models} onOpenAgent={openAgent} />}</Panel>}
-    {tab === "Information Feed" && <Panel title="Information received by Fleet Command">{pending ?? <CommandFeed events={view!.commandEvents} models={models} onOpenAgent={openAgent} limit={300} />}</Panel>}
+    {tab === "Information Feed" && <Panel title="Information received by Fleet Command">{pending ?? <CommandFeed events={view!.commandEvents} models={models} onOpenAgent={openAgent} limit={300} onClear={clear} />}</Panel>}
     {tab === "Full history" && <Panel title="Full event history (audit)"><p className="mb-3 text-xs text-slate-400">Every recorded Fleet event, including the audit mechanics and Agent activity Fleet Command leaves out. Sign-in and security detail is under Security.</p>
       {pending ?? <EventFeed events={view!.events} models={models} onOpenAgent={openAgent} limit={300} />}</Panel>}
 

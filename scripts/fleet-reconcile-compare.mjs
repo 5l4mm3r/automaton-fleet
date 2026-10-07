@@ -74,7 +74,8 @@ const grants = Object.fromEntries(appended.filter(([t]) => /^[a-z]+_role_granted
 const unexpected = Object.fromEntries(appended.filter(([t]) => !/^[a-z]+_role_granted$/.test(t)));
 same("events appended", {}, unexpected);
 if (Object.keys(grants).length) notes.push({ roleGrantAuditEvents: grants });
-same("notifications", B.notifications, A.notifications);
+// The owner's inbox (v43 deletion tombstones excluded — v45 removes them) when both snapshots have it.
+if (B.inbox && A.inbox) same("notifications (inbox)", B.inbox, A.inbox); else same("notifications", B.notifications, A.notifications);
 must("no project invented", (A.projects ?? 0) === 0, A.projects);
 must("no sweep record invented", (A.sweepRecords ?? 0) === 0, A.sweepRecords);
 
