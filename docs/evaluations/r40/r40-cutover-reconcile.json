@@ -1,0 +1,103 @@
+{
+  "ok": true,
+  "from": 44,
+  "to": 45,
+  "migrationsApplied": [
+    45
+  ],
+  "population": {
+    "mode": "DEVELOPMENT",
+    "living": 1,
+    "reserved": 0,
+    "maxAgents": 2,
+    "runtimeCommit": "7f65cd1a4824c443b1fd2d4365e0d955e6492c26"
+  },
+  "agents": [
+    {
+      "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+      "name": "founder-1",
+      "status": "active"
+    }
+  ],
+  "ledger": {
+    "head": {
+      "seq": 563,
+      "hash": "13d692aec6882ee1d5a500175d195139633502f7e3978de1411e68badf5b1767"
+    },
+    "journals": 526,
+    "postings": 1052,
+    "debitsCents": 20941,
+    "creditsCents": 20941
+  },
+  "newAccounts": [],
+  "events": {
+    "existing": 2869,
+    "purged": {
+      "notification": 2,
+      "session_opened": 1700,
+      "operator_action": 9,
+      "runtime_approved": 44,
+      "credential_issued": 1,
+      "agent_role_granted": 33,
+      "custody_role_granted": 28,
+      "service_role_granted": 33,
+      "identity_role_granted": 8,
+      "ledger_journal_posted": 526,
+      "notifications_deleted": 7,
+      "operator_role_granted": 30,
+      "dashboard_role_granted": 8,
+      "genesis_runtime_issued": 1,
+      "genesis_runtime_evidence": 1,
+      "founder_runtime_upgrade_prepared": 8,
+      "founder_runtime_upgrade_committed": 8
+    },
+    "preserved": 422,
+    "appended": {
+      "agent_role_granted": 2,
+      "custody_role_granted": 2,
+      "service_role_granted": 2,
+      "identity_role_granted": 2,
+      "operator_role_granted": 2,
+      "dashboard_role_granted": 2
+    },
+    "unexpected": {}
+  },
+  "notifications": 0,
+  "failures": [],
+  "notes": [
+    {
+      "eventsPurged": {
+        "notification": 2,
+        "session_opened": 1700,
+        "operator_action": 9,
+        "runtime_approved": 44,
+        "credential_issued": 1,
+        "agent_role_granted": 33,
+        "custody_role_granted": 28,
+        "service_role_granted": 33,
+        "identity_role_granted": 8,
+        "ledger_journal_posted": 526,
+        "notifications_deleted": 7,
+        "operator_role_granted": 30,
+        "dashboard_role_granted": 8,
+        "genesis_runtime_issued": 1,
+        "genesis_runtime_evidence": 1,
+        "founder_runtime_upgrade_prepared": 8,
+        "founder_runtime_upgrade_committed": 8
+      },
+      "total": 2447,
+      "existingBefore": 2869,
+      "existingAfter": 422
+    },
+    {
+      "roleGrantAuditEvents": {
+        "agent_role_granted": 2,
+        "custody_role_granted": 2,
+        "service_role_granted": 2,
+        "identity_role_granted": 2,
+        "operator_role_granted": 2,
+        "dashboard_role_granted": 2
+      }
+    }
+  ]
+}

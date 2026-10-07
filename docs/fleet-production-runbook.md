@@ -2309,3 +2309,15 @@ Release `94f09a7` (build `da053d1c…`, lockfile `1df54e35…` unchanged), ident
 - **Future releases:** use `scripts/fleet-release.sh <pins> <from> <to> <uiName> <ui.tgz> <sha256>`. It is atomic at
   release level and records exactly one `production_deployed` or `production_rolled_back` event.
 - **Record:** `docs/evaluations/r39/`.
+
+## Stage R40 — schema v45: V2.4.4 final (disposable notifications, clearable Fleet Command, meaningful Fleet history) (DEPLOYED 2026-10-07)
+
+- **Release:** `136c4bd` (build `9823d0a3…`), via `fleet-release.sh`. Outage 19 s (20:52:30–20:52:49Z); reconciliation
+  OK.
+  - Purged 2,447 routine event copies and process steps; the canonical history is byte-identical.
+  - Rollback dump `~/automaton_fleet-v44-pre-v45-20261007T205230Z.dump`.
+- **Root:** `/opt/automaton-fleet/ui/0.8.4` (V2.4.4, the same build at `/hq-preview/`).
+- **Every event is meaningful (permanent) or temporary** (7 days for copies and process steps, 30 days for routine
+  authentication diagnostics). The hourly `svc_event_retention` pass writes no event. See `docs/admin-access.md`.
+- **Rollback:** UI first (`dashboard.env.pre-0.8.4`), then `fleet-rollout.sh revert ~/r40-pins.txt 44 45 "<reason>"`.
+- **Record:** `docs/evaluations/r40/`. This subject is CLOSED.

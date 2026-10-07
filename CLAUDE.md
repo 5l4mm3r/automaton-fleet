@@ -126,27 +126,27 @@ Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
 ## Current production deployment
 
-State after Stage R39 (2026-10-07), per docs/fleet-production-runbook.md and docs/evaluations/r39/.
+State after Stage R40 (2026-10-07), per docs/fleet-production-runbook.md and docs/evaluations/r40/.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
 
 Controller runtime commit (approved, pinned and installed):
-7f65cd1a4824c443b1fd2d4365e0d955e6492c26
+136c4bd72f8ef00cd4556ac33df7a5c3c3f9cf89
 
 Runtime build ID:
-dcbea07f69d74f225109cef0b9b74bd7cc2508d4f4da0edd483dfd9d02d6886e
+9823d0a39d61b01b721ee5ede9b99ffd51fa446f33a7cca3a26318ec6676be0a
 
 Runtime lockfile SHA256:
 1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1
 
 Database schema:
-v44 (applied 2026-10-07 18:57Z; v43 at 16:56Z the same day)
+v45 (applied 2026-10-07 20:52Z; v44 at 18:57Z the same day)
 
 Releases: scripts/fleet-release.sh (backend cutover + UI promotion + root verification; ONE
 production_deployed / production_rolled_back event). Rollback (class B: older releases refuse newer schemas):
-UI first (dashboard.env.pre-0.8.3), then `fleet-rollout.sh revert ~/r39-pins.txt 43 44 <reason>`
-(restores ~/automaton_fleet-v43-pre-v44-20261007T185740Z.dump, runtime.env.pre-7f65cd1, releases/db3ce41…).
+UI first (dashboard.env.pre-0.8.4), then `fleet-rollout.sh revert ~/r40-pins.txt 44 45 <reason>`
+(restores ~/automaton_fleet-v44-pre-v45-20261007T205230Z.dump, runtime.env.pre-136c4bd, releases/7f65cd1…).
 
 Controller domain:
 https://api.agentfleet.vip  (admin UI: https://admin.agentfleet.vip)
@@ -157,10 +157,11 @@ Current live topology:
   127.0.0.1:8443; admin.agentfleet.vip to the dashboard on 127.0.0.1:8790)
 - FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
 - Operator API (signed requests) on 127.0.0.1:8788 only, via the restricted SSH account fleet-op-tunnel
-- Admin UI: root = V2.4.3 / UI 0.8.3 (FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.8.3), also at /hq-preview/
+- Admin UI: root = V2.4.4 / UI 0.8.4 (FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.8.4), also at /hq-preview/
 - owner sign-in: password + TOTP (any browser) or passkey + TOTP; owner access must not depend on one browser's
   passkey; methods are never silently removed (docs/admin-access.md)
-- Fleet Command shows only routed P0–P3 events (schema v44 router); audit mechanics stay in history / auth logs
+- Fleet Command: its own bounded, clearable P0–P3 feed (v45); notifications are disposable (delete = delete);
+  every fleet_events row is meaningful (permanent, Fleet history) or temporary (7 / 30-day retention). Subject CLOSED.
 - identity broker, custody, fetcher and the ChatGPT adapter/tunnel run as separate units
 - registry: cap 2, DEVELOPMENT mode, replication off; all four safety flags false
 - 1 living Agent: founder-1 (01M3F50SH7PNX2E3GST13J52AS), shown as Agent-1; runtime 94f09a7

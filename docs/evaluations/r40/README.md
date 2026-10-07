@@ -1,4 +1,4 @@
-# R40: schema v45 (V2.4.4 final: disposable notifications, clearable Fleet Command, meaningful Fleet history), PREPARED 2026-10-07
+# R40: schema v45 (V2.4.4 final: disposable notifications, clearable Fleet Command, meaningful Fleet history), DEPLOYED 2026-10-07
 
 **Candidate**
 - Commit `136c4bd72f8ef00cd4556ac33df7a5c3c3f9cf89`
@@ -36,3 +36,28 @@
   unchanged.
 - **Rollback proven:** `7f65cd1` refuses 45; the dump restores 44 with the same ledger head, and `7f65cd1`'s controller
   and dashboard run again. Production PIDs were unchanged.
+
+**Release** (owner-run `fleet-release.sh`, 20:51:47Z; `r40-cutover-reconcile.json`, `r40-cutover.txt`)
+- **Backend:** outage 19 s (20:52:30–20:52:49Z). Pre-migration dump `~/automaton_fleet-v44-pre-v45-20261007T205230Z.dump`.
+- **Reconciliation OK:** 2,869 events before; purged 2,447 (`session_opened` 1,700, the rest as rehearsed); 422 preserved.
+- **UI:** `/opt/automaton-fleet/ui/0.8.4`, the dashboard restarted only. The public root is byte-identical to the tree, and
+  an unauthenticated read is refused (401).
+- `production_deployed` was recorded once, at 20:52:59Z (P2, previous `7f65cd1`).
+
+**Verified after the release (20:55Z)**
+- **Fleet:** schema 45, `current` = `releases/136c4bd…`, runtime.env pins `136c4bd` / `9823d0a3…`; readyz 200.
+- **Services:** controller, Operator API, dashboard, identity and custody all active, with 0 restarts and no errors.
+- **Registry:** cap 2, 1 living Agent (Founder 1, heartbeat 11 s), replication off, all four safety flags false.
+- **Ledger:** verify ok, 526 journals.
+- **Events:** 439 = 71 meaningful history + 13 temporary (7 days: the migrator's role grants and the release approval) +
+  355 diagnostics (30 days) + **0 hidden-permanent**.
+- **Fleet Command:** P0 2, P1 13, P2 15, P3 6.
+- **Inbox and sign-in:** 0 notifications; your passkey, password and authenticator are intact.
+
+**Rollback**
+- **UI:** `dashboard.env.pre-0.8.4`.
+- **Backend:** `fleet-rollout.sh revert ~/r40-pins.txt 44 45 "<reason>"`. This restores the dump above,
+  `runtime.env.pre-136c4bd` and `releases/7f65cd1`.
+
+**Subject CLOSED:** Fleet Command, notifications and event-history housekeeping. Reopen only for a production defect, a
+real dependency, or a new owner request.
