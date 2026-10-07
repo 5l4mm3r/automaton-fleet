@@ -1605,3 +1605,15 @@ lived in one browser's credential provider, and no other browser could sign in.
   every inbox read and count, is never emailed, and is never re-raised.
 
 **Unchanged:** economics, the ledger, Agents, the cap, replication and safety flags. Procedures: `docs/admin-access.md`.
+
+## 43. Fleet Command event routing — schema v44 (2026-10-07)
+
+**One authoritative router** classes every Fleet event: `fleet_event_route` (pure, IMMUTABLE), built from `EVENT_ROUTES`
+in `migrations-phase44.ts`. The classes are P0 critical, P1 high, P2 important, P3 summary, audit only, and Agent
+activity only.
+- **Coverage:** an event type the router does not name routes to audit only. A test requires every type the code emits to
+  be named.
+- **Fleet Command** reads `command_events`, which returns P0–P3 only, through a partial index on the routed rows.
+- **Agent activity** excludes audit mechanics.
+- **Unchanged:** `fleet_events` remains the single append-only history. Nothing is removed. No economics, gate, cap,
+  custody or accounting semantics change.

@@ -19,6 +19,11 @@ export interface CommandView {
   economics: Record<string, AgentEconomics>;
   /** FleetController's event log, newest first (bounded). */
   events: FleetEvent[];
+  /**
+   * Fleet Command's routed feed (schema v44, `command_events`): only P0–P3 events, each with its priority — the
+   * operator view. null when the gateway has no router (older schema): the feed then shows the raw stream, labelled.
+   */
+  commandEvents: FleetEvent[] | null;
   /** Capital requests with FleetController's decision, reasons, inputs and policy version (hub capital). */
   capital: Row[];
   /** Ventures with their decision records (hub ventures). */
@@ -48,6 +53,6 @@ export interface Pulse {
 }
 
 export const emptyCommandView = (mode: CommandView["mode"]): CommandView => ({
-  mode, fetchedAt: "", genesisMinor: null, currency: "GBP", economics: {}, events: [], capital: [], ventures: [], opportunities: [], knowledge: [], projects: [], projectSummary: null,
+  mode, fetchedAt: "", genesisMinor: null, currency: "GBP", economics: {}, events: [], commandEvents: [], capital: [], ventures: [], opportunities: [], knowledge: [], projects: [], projectSummary: null,
   dependencies: [], overview: null, treasury: null, settings: null, unavailable: [],
 });

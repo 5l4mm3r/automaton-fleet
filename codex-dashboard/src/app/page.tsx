@@ -228,7 +228,7 @@ export default function Home() {
       if (LIVE && liveTools && action.op === "logout") { await liveTools.logout(); location.replace(LOGIN_PATH); return; }
       await run(action.op, args); if (action.op === "reveal") setReveal({ kind: args.kind });
     }} />}
-    {LIVE && liveTools && <StepupChooser register={liveTools.setStepupConfirm} />}
+    {LIVE && liveTools && <StepupChooser register={liveTools.setStepupConfirm} passwordConfigured={lv?.signIn?.password.configured ?? true} />}
     {reveal && (LIVE ? (reveal.target && liveTools ? <liveTools.Reveal kind={reveal.kind as RevealKind} target={reveal.target} title={reveal.title ?? "Reveal"} close={() => setReveal(null)} /> : null) : <Reveal kind={reveal.kind} close={() => setReveal(null)} />)}
   </main>;
 }

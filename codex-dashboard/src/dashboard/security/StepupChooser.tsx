@@ -11,7 +11,9 @@ import { button, input } from "../ui";
 
 type Pending = { op: string; resolve: (c: StepupChoice) => void; reject: (e: unknown) => void };
 
-export function StepupChooser({ register }: { register: (fn: ((op: string) => Promise<StepupChoice>) | null) => void }) {
+export function StepupChooser({ register, passwordConfigured }: { register: (fn: ((op: string) => Promise<StepupChoice>) | null) => void;
+  /** Offer the password route only when a password exists (false: passkey only, with a pointer to Security). */
+  passwordConfigured: boolean }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const [password, setPassword] = useState(""), [code, setCode] = useState("");
   const ref = useRef<HTMLDialogElement>(null);
@@ -30,12 +32,14 @@ export function StepupChooser({ register }: { register: (fn: ((op: string) => Pr
     <p className="text-xs tracking-widest text-amber-300">CONFIRM IT IS YOU</p>
     <h2 className="my-3 text-xl">Fresh confirmation for “{pending?.op.replace(/_/g, " ")}”</h2>
     <button className={`${button} w-full bg-cyan-900`} onClick={() => finish({ method: "passkey" })}>Use my passkey</button>
-    <p className="my-4 text-center text-xs tracking-widest text-slate-500">OR</p>
+    {!passwordConfigured ? <p className="mt-4 text-xs text-slate-400">No sign-in password is set yet, so the passkey is the only way to confirm. You can set a password under Security → Sign-in methods.</p>
+      : <><p className="my-4 text-center text-xs tracking-widest text-slate-500">OR</p>
     <form onSubmit={(e) => { e.preventDefault(); finish({ method: "password", password, code: code.trim() }); }}>
       <label className="block text-sm">Password<input className={input} type="password" autoComplete="current-password" maxLength={256} value={password} onChange={(e) => setPassword(e.target.value)} /></label>
       <label className="mt-3 block text-sm">Authenticator code<input className={input} inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={code} onChange={(e) => setCode(e.target.value)} /></label>
       <div className="mt-5 flex flex-wrap gap-2"><button type="button" className={button} onClick={() => finish(null)}>Cancel</button>
         <button className={button} disabled={!password || code.trim().length < 6}>Confirm with password</button></div>
-    </form>
+    </form></>}
+    {!passwordConfigured && <div className="mt-5"><button type="button" className={button} onClick={() => finish(null)}>Cancel</button></div>}
   </dialog>;
 }

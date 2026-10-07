@@ -53,6 +53,8 @@ export class CommandReader {
       read<AgentRow[]>(c, "agents", {}, missing, "agents"),
       read<Row>(c, "projects", { limit: 50 }, missing, "projects"),
     ]);
+    // v44: the routed operator feed (only P0–P3). An older gateway answers FLEET_UNKNOWN_OP → null (raw stream, labelled).
+    const routed = await read<Row[]>(c, "command_events", { limit: 200 }, [], "command_events");
     const living = (agents ?? []).filter((a) => a.status !== "dead" && a.status !== "failed").map((a) => a.agentId);
     await this.refreshRisk(living, missing);
     const wallets = new Map(rows(hubAgents).map((r) => [String(r.agentId), r.wallet as Row | undefined]));
@@ -65,7 +67,7 @@ export class CommandReader {
     const genesis = g && typeof g.minor === "number" ? g.minor : typeof g?.minor === "string" && /^\d+$/.test(g.minor) ? Number(g.minor) : null;
     return {
       mode: "live", fetchedAt: new Date().toISOString(), genesisMinor: genesis && genesis > 0 ? genesis : null,
-      currency: String(g?.currency ?? overview?.currency ?? "GBP"), economics, events: events(ev),
+      currency: String(g?.currency ?? overview?.currency ?? "GBP"), economics, events: events(ev), commandEvents: routed === null ? null : events(routed),
       capital: rows(capital), ventures: rows(ventures), opportunities: rows(opportunities), knowledge: rows(knowledge), dependencies: rows(dependencies),
       projects: rows(projects?.projects), projectSummary: (projects?.summary as Row | undefined) ?? null,
       overview: overview ?? null, treasury: treasury ?? null, settings: settings ?? null, unavailable: [...new Set(missing)],

@@ -873,3 +873,36 @@ one browser (Edge); from any other browser there was no way in.
 - `fleet-notification-detail.test.ts`: real components, using the production report's shape.
 - The preview e2e suite gained two browser tests: password sign-in from a browser with **no** passkey, and the
   notification flows.
+
+## V2.4.3: Fleet Command shows important things only — 7 October 2026 (version 0.8.3, schema v44)
+
+**Fleet Command = important things happening to the Fleet,** not everything the software did. It needs schema v44.
+
+**The router.** FleetController holds one router, `fleet_event_route(type, detail)` (see
+`src/fleet/postgres/migrations-phase44.ts`, `EVENT_ROUTES`). It classes every event as:
+- **P0 Critical:** security / integrity, survival, safety gates;
+- **P1 High:** lifecycle, missions, projects, Treasury, real and owner money, replication, blocking dependencies;
+- **P2 Important:** commercial / economic milestones, collaboration terms, policy / cap, production releases;
+- **P3 Summary:** the daily report;
+- **Audit only:** sessions, logins, role grants, ledger postings, notification housekeeping, configuration;
+- **Agent activity only:** research, decisions, opportunities, accounts, mail, task progress.
+
+**The feed.** Fleet Command reads `command_events`, which returns P0–P3 only. The limit is applied after routing, so
+noise can never push a critical event out of the feed. Events are grouped Critical → High → Important → Summary, newest
+first, with readable titles and no raw payload.
+
+**Other reads**
+- **Agent activity:** an Agent's activity read drops the audit mechanics.
+- **Full stream:** unchanged; Virtual HQ animates from it.
+
+**Notifications**
+- Deleting notifications never appears in Fleet Command. The inbox tombstone and the history record remain.
+- Acknowledging creates no event.
+- The "Confirm it is you" dialog offers the password route only once a password is set.
+
+**What it would have shown on 2026-10-07.** Of 2,831 production events:
+- 2 critical;
+- 15 high;
+- 56 important (mostly release approvals);
+- 5 daily-report summaries;
+- 2,750 audit-only, now kept out of the operator feed.

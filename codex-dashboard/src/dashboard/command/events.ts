@@ -27,7 +27,13 @@ export interface FleetEvent {
   actor: string | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- gateway JSON, narrowed where used
   detail: Record<string, any>;
+  /** Fleet Command priority from FleetController's router (schema v44), when read through `command_events`. */
+  priority?: EventPriority;
 }
+
+/** FleetController's event classes (fleet_event_route, schema v44). Only P0–P3 ever reach Fleet Command. */
+export type EventPriority = "P0_CRITICAL" | "P1_HIGH" | "P2_IMPORTANT" | "P3_SUMMARY" | "AUDIT_ONLY" | "AGENT_ACTIVITY_ONLY";
+export const PRIORITY_ORDER: readonly EventPriority[] = ["P0_CRITICAL", "P1_HIGH", "P2_IMPORTANT", "P3_SUMMARY"];
 
 export interface VisualEvent {
   id: string;
@@ -48,7 +54,8 @@ export function toFleetEvent(row: Record<string, any>): FleetEvent | null {
   if (!row || typeof row.type !== "string" || typeof row.at !== "string") return null;
   const agentId = typeof row.agentId === "string" ? row.agentId : null, actor = typeof row.actor === "string" ? row.actor : null;
   return { key: `${row.at}|${row.type}|${agentId ?? ""}|${actor ?? ""}`, at: row.at, type: row.type, agentId, actor,
-    detail: row.detail && typeof row.detail === "object" ? row.detail : {} };
+    detail: row.detail && typeof row.detail === "object" ? row.detail : {},
+    ...(typeof row.priority === "string" && (PRIORITY_ORDER as readonly string[]).includes(row.priority) ? { priority: row.priority as EventPriority } : {}) };
 }
 
 /** Merge newly read events into the kept list: de-duplicated, newest first, bounded (long-running sessions stay small). */

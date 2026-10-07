@@ -95,7 +95,7 @@ export class SimulationDeckAdapter {
         { commitmentsDue30dMinor: a.burn * 5, redZoneMet: a.cash >= a.burn * 10, vulnerable: a.cash < SIMULATION_GENESIS_MINOR });
     }
     return {
-      mode: "simulation", fetchedAt: new Date().toISOString(), genesisMinor: SIMULATION_GENESIS_MINOR, currency: "GBP", economics, events: this.log,
+      mode: "simulation", fetchedAt: new Date().toISOString(), genesisMinor: SIMULATION_GENESIS_MINOR, currency: "GBP", economics, events: this.log, commandEvents: null,
       capital: [{ agentId: "A-001", venture: "Signal intelligence (fictional)", purpose: "Fictional research subscription", amountMinor: 25_000, expectedNetMinor: 60_000,
         confidenceBp: 6_500, evidenceItems: 3, outcome: "approved", approvedMinor: 20_000, reasons: ["Fictional: evidence sufficient", "Fictional: within the red-zone cushion"],
         wouldChange: ["Fictional: more evidence would raise the amount"], inputs: { cushionMet: true }, policyVersion: 1, at: this.log.find((e) => e.type === "capital_decision")?.at ?? "" }],

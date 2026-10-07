@@ -259,7 +259,7 @@ describe.skipIf(!RUN)("/hq-preview/ beside the production root: secure mutations
     // Every script the preview loads comes from /hq-preview/; its sign-in/out never leaves the preview.
     const srcs = await D.locator("script[src]").evaluateAll((els) => els.map((e) => (e as HTMLScriptElement).getAttribute("src") ?? ""));
     expect(srcs.length).toBeGreaterThan(0); expect(srcs.every((u) => u.startsWith("/hq-preview/"))).toBe(true);
-    expect(await D.getByText(/PREVIEW V2\.4\.2 · UI \d+\.\d+\.\d+/).count()).toBe(1);
+    expect(await D.getByText(/PREVIEW V2\.4\.3 · UI \d+\.\d+\.\d+/).count()).toBe(1);
   });
 
   it("UX readiness sweep of the preview: every page and Virtual, desktop and phone — no errors, CSP violations, failing requests, overflow, path escapes, stale naming or unnamed buttons", async () => {

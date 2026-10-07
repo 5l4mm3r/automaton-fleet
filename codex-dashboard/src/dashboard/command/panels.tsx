@@ -10,7 +10,7 @@ import { input } from "../ui";
 import { AgentPortrait, HealthTag } from "./AgentPortrait";
 import type { AgentModel } from "./agents";
 import { DEPARTMENT } from "./departments";
-import { isDecision, type FleetEvent } from "./events";
+import { isDecision, PRIORITY_ORDER, type EventPriority, type FleetEvent } from "./events";
 import type { CommandView, Row } from "./view";
 
 /** A timestamp as UTC "YYYY-MM-DD HH:MM" (gateway timestamps can carry the database session's offset). */
@@ -168,6 +168,48 @@ export function EventFeed({ events, models, onOpenAgent, limit = 100, filterable
       <p>{words(e.type)}{factsOf(e.detail, 3).map(([k, v]) => ` · ${k}: ${v}`).join("")}</p>
     </li>)}</ol>
   </>;
+}
+
+const PRIORITY_TEXT: Record<EventPriority, string> = { P0_CRITICAL: "Critical", P1_HIGH: "High", P2_IMPORTANT: "Important", P3_SUMMARY: "Summary",
+  AUDIT_ONLY: "Audit", AGENT_ACTIVITY_ONLY: "Activity" };
+const PRIORITY_TONE: Record<EventPriority, string> = { P0_CRITICAL: "border-red-500 text-red-200", P1_HIGH: "border-amber-500 text-amber-200",
+  P2_IMPORTANT: "border-cyan-600 text-cyan-200", P3_SUMMARY: "border-slate-600 text-slate-300", AUDIT_ONLY: "border-slate-700 text-slate-400", AGENT_ACTIVITY_ONLY: "border-slate-700 text-slate-400" };
+/** Plain-language titles for the events Fleet Command shows (others read as words). */
+const EVENT_TEXT: Record<string, string> = {
+  agent_died: "Agent died", agent_orphaned: "Agent orphaned", agent_quarantined: "Agent quarantined", agent_born: "Agent born", agent_activated: "Agent activated",
+  agent_hold_set: "Agent held by the Admin", agent_hold_released: "Agent hold released", agent_unresponsive: "Agent unresponsive", agent_recovered: "Agent recovered",
+  runtime_verification_failed: "Runtime verification failed", economy_failsafe: "Economy failsafe engaged", spend_circuit_breaker_set: "Security breaker changed",
+  mission_started: "Mission started", mission_ended: "Mission ended", mission_requested: "Mission requested", capital_requested: "Capital request submitted",
+  capital_decision: "Capital request decided", treasury_sweep: "Treasury sweep", wallet_transfer: "Treasury transfer", agent_transfer: "Agent transfer",
+  admin_withdrawal_requested: "Owner withdrawal requested", runtime_approved: "Production release approved", founder_runtime_upgrade_verified: "Agent runtime upgraded",
+  cap_set: "Population cap changed", venture_created: "Venture launched", venture_state: "Venture state changed", notification: "Notification",
+  replication_requested: "Replication requested", replication_granted: "Replication granted", replication_rejected: "Replication rejected",
+  birth_ordered: "Birth ordered", birth_authorized: "Birth authorised", estate_opened: "Estate opened", estate_settled: "Estate settled",
+};
+export const eventTitle = (e: FleetEvent) => EVENT_TEXT[e.type] ?? words(e.type).replace(/^./, (c) => c.toUpperCase());
+
+/**
+ * Fleet Command's feed (V2.4.3): only what FleetController's router (schema v44) classes P0–P3 — never sessions,
+ * logins, ledger postings or notification housekeeping — grouped Critical → High → Important → Summary, newest first in
+ * each. Readable titles and a few stored facts; no raw payload. `events` null: the gateway has no router (older schema).
+ */
+export function CommandFeed({ events, raw, models, onOpenAgent, limit = 100, live = true }: { events: readonly FleetEvent[] | null; raw: readonly FleetEvent[];
+  models: AgentModel[]; onOpenAgent?: (id: string) => void; limit?: number; live?: boolean }) {
+  const name = useMemo(() => new Map(models.map((m) => [m.agent.id, m.agent.name])), [models]);
+  if (events === null) return <>{live && <p className="mb-2 text-xs text-amber-200">Event routing is not available from this Fleet gateway: showing the raw event stream.</p>}
+    <EventFeed events={raw} models={models} onOpenAgent={onOpenAgent} limit={limit} filterable={false} /></>;
+  const all = PRIORITY_ORDER.map((p) => [p, events.filter((e) => e.priority === p).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))] as const).filter(([, xs]) => xs.length);
+  // The display limit is spent in priority order (critical first), computed before rendering.
+  const groups = all.map(([p, xs], i) => { const before = all.slice(0, i).reduce((n, [, ys]) => n + ys.length, 0); return [p, xs, xs.slice(0, Math.max(0, limit - before))] as const; });
+  if (!groups.length) return <p className="text-sm text-slate-400">No operational events. Routine activity, sign-ins and housekeeping are kept in the audit and Agent activity records.</p>;
+  return <div className="max-h-[32rem] space-y-4 overflow-y-auto pr-1">{groups.map(([p, xs, shown]) => {
+    return shown.length ? <section key={p} aria-label={`${PRIORITY_TEXT[p]} events`}>
+      <h4 className={`mb-1 border-l-2 pl-2 text-xs font-semibold uppercase tracking-widest ${PRIORITY_TONE[p]}`}>{PRIORITY_TEXT[p]} · {xs.length}</h4>
+      <ol className="space-y-2">{shown.map((e) => <li key={e.key} className={`border-l-2 pl-3 text-sm ${PRIORITY_TONE[p].split(" ")[0]}`}>
+        <p className="text-xs text-slate-400">{time(e.at)}{e.agentId ? <> · {onOpenAgent ? <button className="text-cyan-300 underline" onClick={() => onOpenAgent(e.agentId!)}>{name.get(e.agentId) ?? e.agentId}</button> : name.get(e.agentId) ?? e.agentId}</> : null}</p>
+        <p>{e.type === "notification" ? codeText(typeof e.detail.code === "string" ? e.detail.code : undefined) : eventTitle(e)}{factsOf(e.type === "notification" ? null : e.detail, 3).map(([k, v]) => ` · ${k}: ${v}`).join("")}</p>
+      </li>)}</ol></section> : null;
+  })}</div>;
 }
 
 export function DepartmentRoster({ models, dep, onOpen }: { models: AgentModel[]; dep: keyof typeof DEPARTMENT; onOpen: (id: string) => void }) {
