@@ -15,7 +15,7 @@
 - Only migration 45 applied; a re-run applies nothing; ledger verify true; ledger head unchanged.
 - **Events before:** 2,868.
 - **Purged (by type):**
-  - `session_opened` 1,698;
+  - `session_opened` 1,699;
   - `ledger_journal_posted` 526;
   - role grants 140;
   - `notifications_deleted` 7;
