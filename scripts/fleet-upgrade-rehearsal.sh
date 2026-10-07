@@ -71,23 +71,24 @@ sudo -u postgres pg_restore -d "$RH" --exit-on-error < <(sudo cat $D)
 H0=$(head_); echo "throwaway copy restored: schema $(rh 'SELECT max(version) FROM fleet.fleet_schema_migrations'), ledger head ${H0:0:24}…, logins: $LOGINS"
 
 # Env copies (0600, owned by each service user; DSNs re-pointed, never printed).
-sudo install -d -m 0700 -o $SVCU -g $SVCU $R/svc; sudo install -d -m 0700 -o $OPU -g $OPU $R/op; sudo install -d -m 0700 -o $DASHU -g $DASHU $R/dash
+sudo install -d -m 0700 -o $SVCU -g $SVCU $R/svc; sudo install -d -m 0750 -o root -g $OPU $R/op; sudo install -d -m 0700 -o $DASHU -g $DASHU $R/dash
 runtime_env() { # <commit> <build> <lock> -> runtime.env for a throwaway controller (no public listener, no reaper, no cognition provider)
   sudo grep -vE '^(FLEET_RUNTIME_(COMMIT|BUILD_ID|LOCKFILE_SHA256)|FLEET_API_LISTEN|FLEET_PUBLIC_LISTEN|FLEET_PUBLIC_PROXY_PROTOCOL|FLEET_REMOTE_LISTEN_ENABLED|FLEET_REAPER_INTERVAL_MS|FLEET_TLS_(CERT|KEY)_FILE|FLEET_COGNITION_[A-Z_]*)=' $ENVF
   printf '%s\n' "FLEET_RUNTIME_COMMIT=$1" "FLEET_RUNTIME_BUILD_ID=$2" "FLEET_RUNTIME_LOCKFILE_SHA256=$3" FLEET_API_LISTEN=127.0.0.1:28787 FLEET_REMOTE_LISTEN_ENABLED=false FLEET_REAPER_INTERVAL_MS=0
 }
 { dsn $ETC/service.env FLEET_SERVICE_DATABASE_URL; dsn $ETC/service.env FLEET_AGENT_DATABASE_URL; } | sudo install -m 0600 -o $SVCU -g $SVCU /dev/stdin $R/svc/service.env
-{ sudo grep -vE '^FLEET_OPERATOR_DATABASE_URL=' $ETC/operator.env; dsn $ETC/operator.env FLEET_OPERATOR_DATABASE_URL; } | sudo install -m 0600 -o $OPU -g $OPU /dev/stdin $R/op/operator.env
+# operator.env keeps its production ownership (root:<operator group> 0640; the Operator API refuses anything else).
+{ sudo grep -vE '^FLEET_OPERATOR_DATABASE_URL=' $ETC/operator.env; dsn $ETC/operator.env FLEET_OPERATOR_DATABASE_URL; } | sudo install -m 0640 -o root -g $OPU /dev/stdin $R/op/operator.env
 { dsn $ETC/dashboard.env FLEET_DASHBOARD_DATABASE_URL; echo "FLEET_DASHBOARD_STATIC_DIR=$UI"; } | sudo install -m 0600 -o $DASHU -g $DASHU /dev/stdin $R/dash/dashboard.env
 head -c 32 /dev/urandom | base64 | sudo install -m 0600 -o $DASHU -g $DASHU /dev/stdin $R/dash/dashboard.key
 for f in $R/svc/service.env $R/op/operator.env $R/dash/dashboard.env; do
   [[ "$(sudo grep -c "/$LIVE\([?]\|\$\)" $f)" == 0 && "$(sudo grep -c "/$RH" $f)" -ge 1 ]] || die "a throwaway DSN was not re-pointed ($f)"; done
 
 ctl() { # <dir> <entry> <commit> <build> <lock>: start a throwaway controller; echoes ready|refused
-  runtime_env "$3" "$4" "$5" | sudo install -m 0600 -o $SVCU -g $SVCU /dev/stdin $R/svc/runtime.env
+  runtime_env "$3" "$4" "$5" | sudo install -m 0644 -o root -g root /dev/stdin $R/runtime.env
   sudo systemctl reset-failed fleet-upgrade-rh-controller.service 2>/dev/null || true
   sudo systemd-run --quiet --unit=fleet-upgrade-rh-controller -p User=$SVCU -p Group=$SVCU -p WorkingDirectory="$1" -p UMask=0077 -p Restart=no \
-    --setenv=NODE_ENV=production --setenv=FLEET_SERVICE_EXPECTED_USER=$SVCU --setenv=FLEET_RUNTIME_ENV_FILE=$R/svc/runtime.env \
+    --setenv=NODE_ENV=production --setenv=FLEET_SERVICE_EXPECTED_USER=$SVCU --setenv=FLEET_RUNTIME_ENV_FILE=$R/runtime.env \
     --setenv=FLEET_SERVICE_ENV_FILE=$R/svc/service.env --setenv=FLEET_AUDIT_LOG=$R/svc/audit.jsonl /opt/automaton-fleet/node/bin/node $2
   for _ in $(seq 1 60); do
     [[ "$(code http://127.0.0.1:28787/readyz)" == 200 ]] && { echo ready; return 0; }
@@ -114,7 +115,7 @@ echo "1. copy migrated to $TO; candidate ${C:0:7} approved in the THROWAWAY regi
 
 # 2. The current release refuses the new schema.
 r=$(ctl "$OLDDIR" dist/fleet/service/main.js "$OLD" "$(sudo sed -n 's/^FLEET_RUNTIME_BUILD_ID=//p' $ENVF)" "$(sudo sed -n 's/^FLEET_RUNTIME_LOCKFILE_SHA256=//p' $ENVF)")
-why=$(sudo journalctl -u fleet-upgrade-rh-controller -o cat --no-pager -n 40 | grep -oE "schema version [0-9a-z]+ != required [0-9]+|schema v[0-9]+ != required v[0-9]+" | head -1 || true)
+why=$(sudo journalctl -u fleet-upgrade-rh-controller -o cat --no-pager -n 40 | grep -oE "schema version [0-9a-z]+ != (required )?[0-9]+|schema v[0-9]+ != required v[0-9]+" | head -1 || true)
 stopall
 [[ "$r" == refused ]] || die "the current release ${OLD:0:7} ran on schema $TO: an application-only rollback would be possible; re-plan"
 echo "2. current release ${OLD:0:7} on schema $TO: REFUSED (${why:-not ready}) — rollback must restore the database (class B)"
@@ -124,13 +125,14 @@ r=$(ctl "$TOOL" "--import tsx src/fleet/service/main.ts" "$C" "$B" "$L"); [[ "$r
 RZ=$(curl -s --max-time 5 http://127.0.0.1:28787/readyz)
 echo "3a. candidate controller ready on schema $TO: $(echo "$RZ" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(JSON.stringify({ok:j.ok,checks:Object.fromEntries(Object.entries(j.checks??{}).map(([k,v])=>[k,v?.ok??v]))}))}catch{console.log(s.slice(0,200))}})')"
 sudo systemctl reset-failed fleet-upgrade-rh-operator.service 2>/dev/null || true
+sudo install -d -m 0700 -o $OPU -g $OPU $R/svc-op-audit
 sudo systemd-run --quiet --unit=fleet-upgrade-rh-operator -p User=$OPU -p Group=$OPU -p WorkingDirectory=$TOOL -p UMask=0077 -p Restart=no \
   --setenv=NODE_ENV=production --setenv=FLEET_OPERATOR_EXPECTED_USER=$OPU --setenv=FLEET_OPERATOR_LISTEN=127.0.0.1:28788 \
-  --setenv=FLEET_OPERATOR_ENV_FILE=$R/op/operator.env --setenv=FLEET_RUNTIME_ENV_FILE=$R/svc/runtime.env --setenv=FLEET_OPERATOR_AUDIT_LOG=$R/op/audit.jsonl \
+  --setenv=FLEET_OPERATOR_ENV_FILE=$R/op/operator.env --setenv=FLEET_RUNTIME_ENV_FILE=$R/runtime.env --setenv=FLEET_OPERATOR_AUDIT_LOG=$R/svc-op-audit/audit.jsonl \
   --setenv=FLEET_OPERATOR_REQUIRE_TIMESYNC=true /opt/automaton-fleet/node/bin/node --import tsx src/fleet/operator/main.ts
 OK=0; for _ in $(seq 1 40); do [[ "$(code http://127.0.0.1:28788/readyz)" == 200 ]] && { OK=1; break; }; sleep 1; done
 [[ $OK == 1 ]] || { sudo journalctl -u fleet-upgrade-rh-operator -o cat --no-pager | tail -8; die "candidate Operator API not ready"; }
-echo "3b. candidate Operator API ready on schema $TO (readyz 200; unsigned read $(code http://127.0.0.1:28788/v1/status))"
+echo "3b. candidate Operator API ready on schema $TO (readyz 200)"
 r=$(dash "$TOOL" "--import tsx src/fleet/dashboard/main.ts"); [[ "$r" == ready ]] || { sudo journalctl -u fleet-upgrade-rh-dashboard -o cat --no-pager | tail -8; die "candidate dashboard not ready"; }
 echo "3c. candidate dashboard ready on schema $TO: login $(code http://127.0.0.1:28790/login/), preview $(code http://127.0.0.1:28790/hq-preview/login/), read without session $(code 'http://127.0.0.1:28790/api/read?op=projects'), call without session $(code -X POST -H 'Origin: https://admin.agentfleet.vip' -H 'Content-Type: application/json' --data '{}' http://127.0.0.1:28790/api/call)"
 PJ=$(rh "SELECT fleet.fleet_admin_projects('{}'::jsonb)::text")
@@ -142,7 +144,7 @@ echo "3e. ledger verify ok, head unchanged, no reservation or birth while the ca
 stopall
 
 # 4. The cutover's exact rollback, on the copy: drop the migrated schema, restore the pre-migration dump.
-sudo -u postgres psql -X -q -d "$RH" -c "DROP SCHEMA fleet CASCADE"
+sudo -u postgres psql -X -q -d "$RH" -c "SET client_min_messages = warning" -c "DROP SCHEMA fleet CASCADE"
 sudo -u postgres pg_restore -d "$RH" --exit-on-error < <(sudo cat $D)
 [[ "$(rh 'SELECT max(version) FROM fleet.fleet_schema_migrations')" == "$FROM" && "$(head_)" == "$H0" ]] || die "rollback restore is not schema $FROM with the same ledger head"
 echo "4. rollback restore: schema $FROM, ledger head identical"
