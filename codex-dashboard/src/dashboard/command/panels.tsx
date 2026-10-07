@@ -194,7 +194,7 @@ export const eventTitle = (e: FleetEvent) => EVENT_TEXT[e.type] ?? words(e.type)
  * sessions, logins, ledger postings or notification housekeeping — grouped Critical → High → Important → Summary,
  * newest first in each. Readable titles and a few stored facts; no raw payload. The list's capacity is reserved for
  * operational events: when routing is unavailable (`events` null) the list stays empty and paused — no raw stream, no
- * status row; that condition is shown outside the feed (Controller status, the page banner, Advanced).
+ * status row; that condition is infrastructure status, shown only in Controller status and Advanced.
  */
 export function CommandFeed({ events, models, onOpenAgent, limit = 100 }: { events: readonly FleetEvent[] | null;
   models: AgentModel[]; onOpenAgent?: (id: string) => void; limit?: number }) {

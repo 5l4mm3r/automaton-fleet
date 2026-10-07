@@ -145,6 +145,8 @@ rollback() {
   sudo ln -sfn "releases/$OLD" /opt/automaton-fleet/current.tmp && sudo mv -T /opt/automaton-fleet/current.tmp /opt/automaton-fleet/current
   sudo systemctl start $START
   for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8787/readyz 2>/dev/null && break; sleep 1; done
+  # One operational event for Fleet Command (P0 under the v44 router; any schema has fleet_event).
+  live "SELECT fleet.fleet_event('production_rolled_back', NULL, 'operator:rollout', jsonb_build_object('commit', '${C:0:12}', 'fromSchema', $FROM, 'toSchema', $TO, 'reason', left('$(echo "$1" | tr -cd 'A-Za-z0-9 .:_-')', 200)))" > /dev/null 2>&1 || true
   echo "OUTAGE END (ROLLED BACK) $(ts): readyz $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/readyz), release $(readlink /opt/automaton-fleet/current)"
   echo "== ROLLOUT ${C:0:7} ROLLED BACK"
   exit 1
@@ -175,5 +177,7 @@ echo "OUTAGE END $(ts)"
 [[ "$(psqlq "SELECT max_agents || ' ' || living_agents || ' ' || reserved_slots FROM fleet.fleet_state")" == "$(node -e 'const s=require(process.argv[1]).state;console.log(s.maxAgents+" "+s.living+" "+s.reserved)' "$RC0")" ]] || rollback "cap or population changed by the cutover"
 pnpm -s fleet:doctor > ~/rollout-doctor.txt 2>&1 || true; grep -E "^DEPLOYMENT|^SAFE FOR" ~/rollout-doctor.txt || true
 sudo scripts/fleet-verify-deployment.sh > ~/rollout-vdep.txt 2>&1 || true; tail -1 ~/rollout-vdep.txt
+# One operational event for Fleet Command (P2): the release's approval/pin records stay audit-only.
+live "SELECT fleet.fleet_event('production_deployed', NULL, 'operator:rollout', jsonb_build_object('commit', '${C:0:12}', 'fromSchema', $FROM, 'toSchema', $TO, 'previous', '${OLD:0:12}'))" > /dev/null
 echo "rollback point: $ENVF.pre-${C:0:7}; releases/${OLD:0:7}; dump $D"
 echo "== ROLLOUT ${C:0:7} DEPLOYED $(ts): schema $TO, readyz $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/readyz)"

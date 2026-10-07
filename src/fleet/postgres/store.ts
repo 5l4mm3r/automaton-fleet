@@ -741,6 +741,15 @@ export class PgFleetStore {
   }
 
   /** Operator-only: approve the runtime children must run, with its build identity. Null clears it (blocks all replication). */
+  /**
+   * v44: ONE operational event per production cutover (scripts/fleet-rollout.sh) — what Fleet Command shows instead of
+   * the release's preparation records (approvals, pins, builds stay audit-only). Only these two types are accepted.
+   */
+  async recordProductionEvent(type: "production_deployed" | "production_rolled_back", detail: Record<string, unknown>, actor: string): Promise<void> {
+    if (type !== "production_deployed" && type !== "production_rolled_back") throw new Error("unknown production event");
+    await this.tx(async (c) => { await c.query(`SELECT ${quoteIdent(this.schema)}.fleet_event($1, NULL, $2, $3::jsonb)`, [type, actor, JSON.stringify(detail)]); });
+  }
+
   async setApprovedRuntime(pin: RuntimePin | null, actor: string, build: RuntimeBuild | null = null): Promise<void> {
     await this.tx(async (c) => {
       const prev = await this.lockState(c);

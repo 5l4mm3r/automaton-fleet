@@ -902,8 +902,8 @@ first, with readable titles and no raw payload.
 
 **When routing is unavailable** (an older gateway), the operational list stays **empty and paused**. Fleet Command
 never shows raw events or a warning row, and the list's capacity is reserved for real P0–P3 events. The condition is
-shown outside the feed: a banner above Fleet Command, "Event routing" in Controller status, and the Advanced
-unavailable-sections list. Every recorded event, including audit mechanics and Agent activity, remains available
+infrastructure status, shown only in Controller status ("Event routing") and the Advanced unavailable-sections list.
+There is no banner above the feed and nothing inside it. Every recorded event, including audit mechanics and Agent activity, remains available
 under the separate **Full history** tab.
 
 **What it would have shown on 2026-10-07.** Of 2,831 production events:

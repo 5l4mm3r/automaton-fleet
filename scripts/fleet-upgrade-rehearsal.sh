@@ -139,6 +139,14 @@ echo "3c. candidate dashboard ready on schema $TO: login $(code http://127.0.0.1
 PJ=$(rh "SELECT fleet.fleet_admin_projects('{}'::jsonb)::text")
 echo "3d. v42 projects read (the dashboard 'projects' op): $(echo "$PJ" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const r=j.result??j;console.log(JSON.stringify({projects:(r.projects??[]).length,summary:r.summary}))})')"
 [[ "$(echo "$PJ" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const r=j.result??j;console.log((r.projects??[]).length)})')" == "$(rh 'SELECT count(*) FROM fleet.fleet_projects')" ]] || die "projects read disagrees with the table"
+if [[ -n "$(rh "SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'fleet' AND p.proname = 'fleet_command_events'")" ]]; then
+  # v44+: Fleet Command's read returns only P0–P3; the raw history stays complete; notification housekeeping never routes in.
+  CE=$(rh "SELECT jsonb_build_object('rows', jsonb_array_length(r), 'nonOperational', (SELECT count(*) FROM jsonb_array_elements(r) x WHERE x ->> 'priority' NOT IN ('P0_CRITICAL','P1_HIGH','P2_IMPORTANT','P3_SUMMARY')),
+    'housekeeping', (SELECT count(*) FROM jsonb_array_elements(r) x WHERE x ->> 'type' IN ('notifications_deleted','session_opened','ledger_journal_posted','runtime_approved')),
+    'rawEvents', (SELECT count(*) FROM fleet.fleet_events)) FROM fleet.fleet_command_events(1000) r")
+  [[ "$(echo "$CE" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(j.nonOperational===0&&j.housekeeping===0?"ok":"bad")})')" == ok ]] || die "command_events returned non-operational rows: $CE"
+  echo "3f. Fleet Command read on the copy: $CE (only P0–P3; no housekeeping; the raw history is untouched)"
+fi
 [[ "$(rh "SELECT (fleet.fleet_ledger_verify() ->> 'ok')")" == true && "$(head_)" == "$H0" ]] || die "ledger changed or failed verification while the candidate ran"
 [[ "$(rh "SELECT count(*) FROM fleet.fleet_agents WHERE status IN ('reserved','provisioning')")" == 0 ]] || die "a reservation appeared"
 echo "3e. ledger verify ok, head unchanged, no reservation or birth while the candidate services ran"

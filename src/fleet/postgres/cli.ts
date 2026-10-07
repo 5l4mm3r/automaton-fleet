@@ -7,6 +7,7 @@
  *   pnpm fleet:admin set-cap <1..50>
  *   pnpm fleet:admin set-mode <DEVELOPMENT|EXPANSION|HARVEST|EMERGENCY> [reason]
  *   pnpm fleet:admin approve-runtime          (FLEET_RUNTIME_REPO / _COMMIT / _BUILD_ID / _LOCKFILE_SHA256)
+ *   pnpm fleet:admin deployment-record deployed|rolled_back <commit> <fromSchema> <toSchema> [reason]   (v44; the rollout script)
  *   pnpm fleet:admin clear-runtime
  *   pnpm fleet:admin build-identity <dir>     (build id + lockfile hash of a built runtime tree)
  *   pnpm fleet:admin set-replication on|off   (DB-level replication switch)
@@ -564,6 +565,17 @@ async function main(argv: string[]): Promise<number> {
         }
         await store.setApprovedRuntime(v.pin, actor, build);
         console.log(JSON.stringify(await store.getState()));
+        return 0;
+      }
+      case "deployment-record": {
+        // One operational event per production cutover (v44 Fleet Command routing): deployed (P2) or rolled back (P0).
+        const [outcome, commit, from, to, ...why] = rest;
+        if (!["deployed", "rolled_back"].includes(outcome ?? "") || !/^[0-9a-f]{7,40}$/.test(commit ?? "") || !/^\d{1,3}$/.test(from ?? "") || !/^\d{1,3}$/.test(to ?? "")) {
+          throw new Error("usage: deployment-record deployed|rolled_back <commit> <fromSchema> <toSchema> [reason…]");
+        }
+        await store.recordProductionEvent(outcome === "deployed" ? "production_deployed" : "production_rolled_back",
+          { commit, fromSchema: Number(from), toSchema: Number(to), ...(why.length ? { reason: why.join(" ").slice(0, 300) } : {}) }, actor);
+        console.log(JSON.stringify({ ok: true, recorded: outcome }));
         return 0;
       }
       case "set-replication": {

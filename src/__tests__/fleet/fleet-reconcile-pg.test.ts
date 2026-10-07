@@ -51,6 +51,8 @@ describe.skipIf(!PG_BIN)("schema upgrade reconciliation snapshot and comparison 
     expect(before.json.ledger.journals).toBeGreaterThan(0);
     expect(before.json.ledger.debitsCents).toBe(before.json.ledger.creditsCents);
     expect(before.json.agents).toHaveLength(2);
+    expect(Object.keys(before.json.adminAuth).sort()).toEqual(["passkeys", "password", "totp"]);
+    expect(JSON.stringify(before.json.adminAuth)).not.toMatch(/scrypt/); // digests only
     expect(Object.keys(before.json.sweepCompute)).toHaveLength(2);
     // Every Agent has the v42 project accounts (opened by the migration), all at zero.
     const projectClasses = Object.values(before.json.ledger.accounts as Record<string, { class: string; balanceCents: number }>).filter((a) => /project|distribution_(in|out)/.test(a.class));
@@ -81,6 +83,13 @@ describe.skipIf(!PG_BIN)("schema upgrade reconciliation snapshot and comparison 
     const checks = money.report.failures.map((f: { check: string }) => f.check);
     expect(checks).toContain("ledger head");
     expect(checks).toContain("account changed");
+
+    // The owner's sign-in state is part of the comparison: a revoked (or added) passkey is reported.
+    await R.q(`INSERT INTO fleet.fleet_admin_passkeys (credential_id, public_key, name) VALUES ('reconcile_key_000000', decode(repeat('00', 40), 'hex'), 'k')`);
+    const baseA = snap("baseA");
+    await R.q(`UPDATE fleet.fleet_admin_passkeys SET revoked_at = now() WHERE credential_id = 'reconcile_key_000000'`);
+    const auth = compare(baseA.file, snap("auth", cuts(baseA.json)).file, FLEET_PG_SCHEMA_VERSION, FLEET_PG_SCHEMA_VERSION);
+    expect(auth.report.failures.map((f: { check: string }) => f.check)).toContain("owner sign-in state (passkeys, authenticator, password)");
 
     const base3 = snap("base3");
     const n = await R.q(`SELECT notification_id FROM fleet.fleet_notifications WHERE acknowledged_at IS NULL LIMIT 1`);

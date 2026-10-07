@@ -11,7 +11,8 @@
  * (realised net profit, contribution, tax, cash …) and computed Treasury sweep unchanged; the Treasury ledger,
  * external transactions, owner distributions, payment orders, custody transfers and capital requests unchanged;
  * existing events and notifications unchanged and no event appended except the migrator's role-grant audit records; estates, knowledge, ventures, missions,
- * credentials unchanged; no project or sweep record invented.
+ * credentials unchanged; the owner's passkeys, authenticator and password unchanged (digests); no project or sweep
+ * record invented.
  */
 import fs from "node:fs";
 
@@ -63,6 +64,7 @@ for (const [agent, s0] of Object.entries(B.sweepCompute ?? {})) {
 }
 
 same("treasury ledger", B.treasuryLedger, A.treasuryLedger);
+if (B.adminAuth && A.adminAuth) same("owner sign-in state (passkeys, authenticator, password)", B.adminAuth, A.adminAuth);
 for (const k of ["externalTransactions", "ownerDistributions", "paymentOrders", "custodyTransfers", "capitalRequests", "estates", "estateItems",
   "knowledge", "ventures", "missions", "credentialRefs", "providerSecrets"]) same(k, B[k], A[k]);
 same("existing events", { count: B.events.count, maxId: B.events.maxId, digest: B.events.digest }, { count: B.events.count, maxId: B.events.maxId, digest: A.events.digest });

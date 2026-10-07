@@ -8,7 +8,8 @@
  *   P0_CRITICAL   security / integrity, system survival, Agent survival, safety gates
  *   P1_HIGH       Agent lifecycle, missions, projects, Treasury / shared capital, real money, owner money, replication,
  *                 infrastructure and blocking dependencies
- *   P2_IMPORTANT  commercial and economic milestones, collaboration terms, policy / cap changes, production releases
+ *   P2_IMPORTANT  commercial and economic milestones, collaboration terms, policy / cap changes, a production deployment
+ *                 (one event per cutover) and an Agent runtime upgrade actually applied
  *   P3_SUMMARY    concise summaries (the daily report)
  *   AUDIT_ONLY    accountability / security mechanics: sessions, logins, role grants, ledger postings (the ledger is
  *                 its own record), notification housekeeping (deletion keeps its inbox tombstone), admin configuration
@@ -40,6 +41,8 @@ export const EVENT_ROUTES: Readonly<Record<EventPriority, readonly string[]>> = 
     "provider_cost_reconciliation_required", "estate_freeze_failed", "project_lifecycle_failed",
     "founder_runtime_upgrade_rolled_back", "founder_runtime_upgrade_aborted", "founder_runtime_rollback_verified", "genesis_rolled_back",
     "payment_destination_activation_failed", "provisioning_failed",
+    // production survival: a cutover that had to roll back
+    "production_rolled_back",
   ],
   P1_HIGH: [
     // lifecycle
@@ -70,7 +73,9 @@ export const EVENT_ROUTES: Readonly<Record<EventPriority, readonly string[]>> = 
     // policy, cap and production
     "cap_set", "replication_policy_set", "risk_policy_set", "mission_policy_set", "sweep_policy_set", "tax_policy_set", "tax_profile_set",
     "capital_policy_set", "transfer_policy_set", "economy_policy_set", "custody_policy_set", "admin_withdrawal_policy_set", "experiment_policy_set",
-    "evidence_ladder_set", "genesis_bootstrap_capital_set", "genesis_enabled", "genesis_disabled", "runtime_approved", "founder_runtime_upgrade_verified",
+    "evidence_ladder_set", "genesis_bootstrap_capital_set", "genesis_enabled", "genesis_disabled",
+    // production lifecycle: ONE event per cutover, and an Agent runtime upgrade actually applied
+    "production_deployed", "founder_runtime_upgrade_verified",
     "estate_item_released", "estate_item_reassigned", "estate_frozen",
     "payment_rail_added", "payment_rail_assigned", "payment_rail_status", "payment_rail_required", "payment_destination_enrolled",
     "payment_destination_activated", "payment_destination_revoked", "legal_entity_added", "vendor_registered", "vendor_revoked", "phone_inherited",
@@ -83,6 +88,8 @@ export const EVENT_ROUTES: Readonly<Record<EventPriority, readonly string[]>> = 
     "dashboard_role_granted", "operator_action", "operator_actions_enabled_set", "operator_actions_disabled", "operator_principal_enrolled",
     "operator_api_enabled_set", "operator_disabled", "operator_proposal_created", "operator_proposal_approved", "operator_proposal_rejected",
     "operator_proposal_expired", "operator_requests_archived", "health_challenge_requested", "runtime_verified", "credential_issued",
+    // release preparation (approval / pin records of each release): the cutover's production_deployed carries the outcome
+    "runtime_approved",
     "credential_registered", "identity_broker_key_published", "comms_provider_registered",
     // the ledger is its own record (material movements appear through their own events)
     "ledger_journal_posted", "fx_rate_recorded", "provider_credits_recorded", "provider_cost_reconciled", "destination_reference_recorded",

@@ -111,6 +111,20 @@ describe.skipIf(!PG_BIN)("Fleet Command routing in PostgreSQL (through dash_call
     expect(activity).not.toContain("ledger_journal_posted");
   });
 
+  it("release preparation stays out (approvals, pins, upgrade steps); ONE event per cutover appears: deployed (P2) or rolled back (P0)", async () => {
+    await R.q(`SELECT fleet.fleet_event('runtime_approved', NULL, 'operator:ubuntu', '{"runtime":{"commit":"abc"}}'::jsonb)`);
+    await R.q(`SELECT fleet.fleet_event('founder_runtime_upgrade_prepared', $1, 'operator:root', '{}'::jsonb)`, [A]);
+    await R.store.recordProductionEvent("production_deployed", { commit: "dd8d276", fromSchema: 43, toSchema: 44 }, "operator:rollout");
+    await R.store.recordProductionEvent("production_rolled_back", { commit: "dd8d276", fromSchema: 43, toSchema: 44, reason: "test" }, "operator:rollout");
+    const feed = await command();
+    expect(feed.map((e) => e.type)).not.toContain("runtime_approved");
+    expect(feed.map((e) => e.type)).not.toContain("founder_runtime_upgrade_prepared");
+    expect(feed.find((e) => e.type === "production_deployed")?.priority).toBe("P2_IMPORTANT");
+    expect(feed.find((e) => e.type === "production_rolled_back")?.priority).toBe("P0_CRITICAL");
+    expect(await route("founder_runtime_upgrade_verified")).toBe("P2_IMPORTANT");
+    await expect(R.store.recordProductionEvent("runtime_approved" as never, {}, "x")).rejects.toThrow();
+  });
+
   it("P3: one daily report per day (the producer's dedupe), however often the pass runs", async () => {
     for (let i = 0; i < 3; i++) await R.q(`SELECT fleet.fleet_notify('DAILY', 'DAILY_REPORT', NULL, 'Fleet daily report', fleet.fleet_daily_report(), 'daily:route-test')`);
     expect((await command()).filter((e) => e.priority === "P3_SUMMARY").length).toBe(1);

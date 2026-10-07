@@ -5,7 +5,8 @@
 -- Taken before and after a schema migration and compared by scripts/fleet-reconcile-compare.mjs: the hashes cover the
 -- rows that existed at the earlier snapshot (ids/seqs up to the cut values), so rows appended later are reported
 -- separately instead of breaking the comparison. Pass 9223372036854775807 for "everything" on the first snapshot.
--- Only counts, balances, identifiers and digests — never a secret, credential, message body or fact value.
+-- Only counts, balances, identifiers and digests — never a secret, credential, message body or fact value (sign-in state
+-- appears only as md5 digests of digests).
 SET search_path = fleet, pg_temp;
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SELECT jsonb_build_object(
@@ -65,6 +66,12 @@ SELECT jsonb_build_object(
   'providerSecrets', (SELECT count(*) FROM fleet_provider_secrets),
   'projects', (SELECT CASE WHEN to_regclass('fleet.fleet_projects') IS NULL THEN NULL ELSE
                  (xpath('/row/n/text()', query_to_xml('SELECT count(*) AS n FROM fleet.fleet_projects', false, true, '')))[1]::text::int END),
+  -- Owner sign-in state, as digests only (never a key, verifier or secret): passkeys, authenticator, password (v43+).
+  'adminAuth', jsonb_build_object(
+    'passkeys', (SELECT md5(COALESCE(string_agg(concat_ws('|', credential_id, md5(public_key), sign_count, revoked_at, name), E'\n' ORDER BY credential_id), '')) FROM fleet_admin_passkeys),
+    'totp', (SELECT md5(COALESCE(string_agg(concat_ws('|', md5(factor_ciphertext), confirmed_at), E'\n'), '')) FROM fleet_admin_totp),
+    'password', (SELECT CASE WHEN to_regclass('fleet.fleet_admin_password') IS NULL THEN NULL ELSE
+                 (xpath('/row/d/text()', query_to_xml('SELECT md5(COALESCE(string_agg(md5(verifier) || set_at::text, ''''), '''')) AS d FROM fleet.fleet_admin_password', false, true, '')))[1]::text END)),
   'sweepRecords', (SELECT CASE WHEN to_regclass('fleet.fleet_sweep_records') IS NULL THEN NULL ELSE
                  (xpath('/row/n/text()', query_to_xml('SELECT count(*) AS n FROM fleet.fleet_sweep_records', false, true, '')))[1]::text::int END)
 );

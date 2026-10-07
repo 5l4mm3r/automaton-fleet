@@ -30,7 +30,6 @@ export function FleetCommandPage({ fleet, view, models, feed, live, control, ope
   const readOnly = (rows: Array<[string, ReactNode]>) => <dl className="grid gap-3 sm:grid-cols-2">{rows.map(([k, v]) => <div key={k} className="rounded-lg border border-slate-700 p-3"><dt className="text-xs text-slate-400">{k}</dt><dd className="mt-1">{v}</dd></div>)}</dl>;
 
   return <div className="space-y-5">
-    {live && view && view.commandEvents === null && <p role="status" className="rounded border border-amber-700 bg-amber-950/40 px-3 py-2 text-sm text-amber-100">Prioritised event routing is unavailable from this Fleet gateway, so the operational feed is paused. The full record is under “Full history”.</p>}
     <div role="tablist" aria-label="Fleet Command sections" className="flex flex-wrap gap-2">{TABS.map((t) => <button key={t} role="tab" aria-selected={tab === t} className={`${button} ${tab === t ? "bg-cyan-950 text-cyan-200" : ""}`} onClick={() => setTab(t)}>{t}</button>)}</div>
     <p className="text-xs text-slate-400">Feed: {feed === "live" ? "live" : feed === "reconnecting" ? "interrupted — reconnecting (showing the last data read)" : "connecting"}{view?.fetchedAt ? ` · command data read ${view.fetchedAt.slice(11, 19)} UTC` : ""}{view?.unavailable.length ? ` · unavailable: ${view.unavailable.join(", ")}` : ""}</p>
 
