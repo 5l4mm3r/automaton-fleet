@@ -10,7 +10,9 @@ export type Agent = {
   /** LIVE: the `agents` read's mode (NORMAL or the active temporary mission). Decides the agent's department. */
   mode?: string;
 };
-export type Notice = { id: string; title: string; level: 'RED' | 'AMBER' | 'INFO' | 'IDENTITY'; acknowledged: boolean; time: string };
+export type Notice = { id: string; title: string; level: 'RED' | 'AMBER' | 'INFO' | 'IDENTITY'; acknowledged: boolean; time: string;
+  /** LIVE: the notification's code, class, structured detail, agent and times (for the detail view). */
+  code?: string; cls?: string; detail?: Record<string, unknown>; agentId?: string | null; createdAt?: string; acknowledgedAt?: string | null };
 export type LedgerRow = { id: string; label: string; amount: number; balance: number | null; time: string };
 export type Fleet = {
   treasury: number; contributed: number; revenue: number; spend: number; tick: number;
@@ -33,6 +35,11 @@ export type Fleet = {
 
 export type LiveView = {
   fetchedAt: string;
+  /** v43: the inbox totals FleetController counts (deleted notifications excluded); null before v43. */
+  inbox?: { total: number; unacknowledged: number; acknowledged: number } | null;
+  /** v43: sign-in methods as FleetController reports them (never a password, verifier or key). */
+  signIn?: { password: { configured: boolean; setAt: string | null }; totp: boolean; method: string | null;
+    passkeys: Array<{ id: string; name: string; createdAt: string | null; lastUsedAt: string | null; current: boolean }> } | null;
   /** v39: the three Treasury figures, never collapsed. */
   wealth: { cash: number; ownerContributed: number; ownerWithdrawn: number; fleetGenerated: number } | null;
   /** Last 24 hours, as the daily report states them. */

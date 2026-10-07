@@ -10,6 +10,7 @@ import type { CommandView, Pulse, Row } from "./command/view";
 import type { LiveAuth } from "./api/auth";
 import type { loadAgentDetail } from "./api/snapshot";
 import type { RevealKind } from "./api/reveal";
+import type { StepupConfirm } from "./api/client";
 import { createAdapterImpl, liveTools as impl } from "@fleet/adapter-impl";
 
 export interface DeckAdapter {
@@ -32,6 +33,8 @@ export interface LiveTools {
   /** The fresh authoritative Fleet attached to an unknown-outcome error, if `e` is one. */
   outcomeUnknownFleet(e: unknown): Fleet | null | undefined;
   Reveal: ComponentType<{ kind: RevealKind; target: string; title: string; close: () => void }>;
+  /** v43: how this tab asks the owner to confirm a sensitive operation (passkey, or password + authenticator code). */
+  setStepupConfirm(fn: StepupConfirm | null): void;
 }
 
 export const liveTools: LiveTools | null = impl;

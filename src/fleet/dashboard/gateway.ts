@@ -1,5 +1,5 @@
 /**
- * Admin dashboard database gateway (schema v38): the restricted login fleet_dashboard_login can call only dash_* — the
+ * Admin dashboard database gateway (schema v38; v43 adds the password route): the restricted login fleet_dashboard_login can call only dash_* — the
  * authentication protocol and the single audited Admin gateway (dash_call). No owner credential, no table privilege.
  */
 import pg from "pg";
@@ -10,7 +10,7 @@ export type DashResult = { ok: true; result?: unknown; [k: string]: unknown } | 
 
 export interface DashboardGatewayPort {
   ping(): Promise<{ schemaVersion: number | null }>;
-  authState(): Promise<{ passkeys: Array<{ id: string; transports: string[] }>; totpConfigured: boolean; locked: boolean }>;
+  authState(): Promise<{ passkeys: Array<{ id: string; transports: string[] }>; passwordConfigured?: boolean; totpConfigured: boolean; locked: boolean }>;
   log(event: string, ok: boolean, code: string | null, ip: string, detail?: Record<string, unknown>): Promise<void>;
   challengeNew(sha: string, purpose: string, sessionSha: string | null, op: string | null, argsSha: string | null): Promise<void>;
   challengeUse(sha: string, purpose: string, sessionSha: string | null, op: string | null, argsSha: string | null): Promise<boolean>;
@@ -24,6 +24,14 @@ export interface DashboardGatewayPort {
   totpAccept(counter: number, confirm: boolean): Promise<boolean>;
   sessionBegin(sessionSha: string, csrfSha: string, credentialId: string, ip: string, ua: string): Promise<DashResult>;
   sessionTotp(sessionSha: string, ok: boolean, ip: string): Promise<DashResult>;
+  /** v43: a full session from the password route (the dashboard verified the password AND a fresh TOTP code). */
+  sessionBeginPassword(sessionSha: string, csrfSha: string, ip: string, ua: string): Promise<DashResult>;
+  /** v43: the session's own CSRF token (requests outside dash_call that change sign-in state). */
+  sessionCsrfOk(sessionSha: string, csrfSha: string | null): Promise<boolean>;
+  /** v43: the stored password verifier (never a password), or null. */
+  passwordGet(): Promise<{ verifier: string; setAt: string } | null>;
+  /** v43: set the password verifier — an enrollment token, or a full session with a fresh 'password_set' step-up. */
+  passwordSet(tokenSha: string | null, sessionSha: string | null, stepupSha: string | null, verifier: string, ip: string): Promise<DashResult>;
   sessionCheck(sessionSha: string): Promise<{ ok: boolean; expiresAt: string | null }>;
   sessionEnd(sessionSha: string, ip: string): Promise<void>;
   stepupRecord(sessionSha: string, stepupSha: string, op: string, argsSha: string, ip: string): Promise<DashResult>;
@@ -44,7 +52,7 @@ export class PgDashboardGateway implements DashboardGatewayPort {
     return (await this.pool.query(`SELECT ${this.s}.${fn}(${ph}) AS r`, args)).rows[0].r as T;
   }
   ping() { return this.call_<{ schemaVersion: number | null }>("dash_ping", []); }
-  authState() { return this.call_<{ passkeys: Array<{ id: string; transports: string[] }>; totpConfigured: boolean; locked: boolean }>("dash_auth_state", []); }
+  authState() { return this.call_<{ passkeys: Array<{ id: string; transports: string[] }>; passwordConfigured?: boolean; totpConfigured: boolean; locked: boolean }>("dash_auth_state", []); }
   async log(event: string, ok: boolean, code: string | null, ip: string, detail: Record<string, unknown> = {}) {
     await this.call_("dash_log", [event, ok, code, ip, JSON.stringify(detail)]);
   }
@@ -67,6 +75,14 @@ export class PgDashboardGateway implements DashboardGatewayPort {
     return this.call_<DashResult>("dash_session_begin", [sessionSha, csrfSha, credentialId, ip, ua]);
   }
   sessionTotp(sessionSha: string, ok: boolean, ip: string) { return this.call_<DashResult>("dash_session_totp", [sessionSha, ok, ip]); }
+  sessionBeginPassword(sessionSha: string, csrfSha: string, ip: string, ua: string) {
+    return this.call_<DashResult>("dash_session_begin_password", [sessionSha, csrfSha, ip, ua]);
+  }
+  sessionCsrfOk(sessionSha: string, csrfSha: string | null) { return this.call_<boolean>("dash_session_csrf_ok", [sessionSha, csrfSha]); }
+  passwordGet() { return this.call_<{ verifier: string; setAt: string } | null>("dash_password_get", []); }
+  passwordSet(tokenSha: string | null, sessionSha: string | null, stepupSha: string | null, verifier: string, ip: string) {
+    return this.call_<DashResult>("dash_password_set", [tokenSha, sessionSha, stepupSha, verifier, ip]);
+  }
   sessionCheck(sessionSha: string) { return this.call_<{ ok: boolean; expiresAt: string | null }>("dash_session_check", [sessionSha]); }
   async sessionEnd(sessionSha: string, ip: string) { await this.call_("dash_session_end", [sessionSha, ip]); }
   stepupRecord(sessionSha: string, stepupSha: string, op: string, argsSha: string, ip: string) {

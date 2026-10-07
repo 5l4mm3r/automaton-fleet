@@ -60,6 +60,7 @@ async function fleetOf(n: number, browser: Browser) {
   await page.getByLabel("Code from the authenticator").fill(totp(secret));
   await page.getByRole("button", { name: "Confirm authenticator" }).click();
   await page.getByRole("button", { name: "Sign in with passkey" }).click();
+  await page.getByRole("button", { name: "Complete sign-in" }).waitFor(); // the passkey step's own code field (V2.4.2: the start screen has one too)
   await page.getByLabel("Authenticator code").fill(totp(secret, Date.now() + 30_000));
   await page.getByRole("button", { name: "Complete sign-in" }).click();
   await page.waitForURL(`${origin}/`);

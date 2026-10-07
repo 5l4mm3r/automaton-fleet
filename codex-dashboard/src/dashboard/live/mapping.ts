@@ -68,6 +68,10 @@ export function toFleet(s: LiveSnapshot, wallets: Wallets = {}): Fleet {
   const notices: Notice[] = (((data(s.notifications) as Row | null)?.notifications ?? []) as Row[]).map((n) => ({
     id: String(n.notification_id), title: String(n.title ?? n.code ?? ""), acknowledged: Boolean(n.acknowledged_at), time: clock(n.created_at),
     level: n.class === "RED" ? "RED" : n.class === "AMBER" ? "AMBER" : n.class === "IDENTITY" ? "IDENTITY" : "INFO",
+    code: typeof n.code === "string" ? n.code : undefined, cls: typeof n.class === "string" ? n.class : undefined,
+    detail: n.detail && typeof n.detail === "object" && !Array.isArray(n.detail) ? (n.detail as Record<string, unknown>) : undefined,
+    agentId: typeof n.agent_id === "string" ? n.agent_id : null, createdAt: typeof n.created_at === "string" ? n.created_at : undefined,
+    acknowledgedAt: typeof n.acknowledged_at === "string" ? n.acknowledged_at : null,
   }));
   const vault = (identity?.ownerVault ?? {}) as Row;
   const health0 = (rep?.health ?? {}) as Row;
@@ -77,8 +81,16 @@ export function toFleet(s: LiveSnapshot, wallets: Wallets = {}): Fleet {
   const wealth = rep?.treasury as Row | undefined;
   const flows = daily?.flows as Row | undefined;
 
+  const inbox = ((data(s.notifications) as Row | null)?.inbox ?? null) as Row | null;
   const live: LiveView = {
     fetchedAt: s.fetchedAt,
+    inbox: inbox ? { total: num(inbox.total), unacknowledged: num(inbox.unacknowledged), acknowledged: num(inbox.acknowledged) } : null,
+    signIn: security ? {
+      password: { configured: Boolean((security.password as Row | null)?.configured), setAt: ((security.password as Row | null)?.setAt as string | undefined) ?? null },
+      totp: Boolean((security.totp as Row | null)?.configured ?? true), method: typeof security.method === "string" ? security.method : null,
+      passkeys: ((security.passkeys ?? []) as Row[]).filter((k) => !k.revokedAt).map((k) => ({ id: String(k.credentialId), name: String(k.name ?? "passkey"),
+        createdAt: typeof k.createdAt === "string" ? k.createdAt : null, lastUsedAt: typeof k.lastUsedAt === "string" ? k.lastUsedAt : null, current: Boolean(k.current) })),
+    } : null,
     wealth: wealth ? { cash: num(wealth.treasuryCashMinor), ownerContributed: num(wealth.ownerContributedMinor), ownerWithdrawn: num(wealth.ownerWithdrawnMinor),
       fleetGenerated: num(wealth.fleetGeneratedMinor) } : null,
     flows24h: flows ? { revenue: num(flows.revenueMinor), spend: num(flows.spendMinor), profitContributed: num(flows.profitContributionMinor),
@@ -191,6 +203,15 @@ export async function toLiveCommand(cmd: Command, last: LiveSnapshot | null, c: 
         : { kind: "estate", action: "assign", itemId: required(a, "itemId"), agentId: required(a, "target") };
     case "ack":
       return { kind: "ack", notificationId: required(a, "noticeId") };
+    case "notification_delete": {
+      const ids = (a.ids ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+      if (!ids.length) throw new FleetApiError("FLEET_BAD_REQUEST", "Choose at least one notification.");
+      return { kind: "notification_delete", ids, acknowledgeUnread: a.acknowledgeUnread === "true" };
+    }
+    case "notification_delete_acknowledged":
+      return { kind: "notification_delete_acknowledged" };
+    case "passkey_rename":
+      return { kind: "passkey_rename", credentialId: required(a, "keyId"), name: required(a, "name") };
     case "ack_all": {
       const n = (last && last.notifications.state === "ok" ? ((last.notifications.data as Row).notifications ?? []) : []) as Row[];
       return { kind: "ack_all", notificationIds: n.filter((x) => !x.acknowledged_at).map((x) => String(x.notification_id)) };

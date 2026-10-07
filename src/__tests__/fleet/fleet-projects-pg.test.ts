@@ -12,7 +12,7 @@ import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
-import { FLEET_PG_HARD_MAX_AGENTS } from "../../fleet/postgres/migrations.js";
+import { FLEET_PG_HARD_MAX_AGENTS, FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 import { schedule } from "../../fleet/projects/planner.js";
 
 const PG_BIN = findPgBin();
@@ -71,7 +71,7 @@ describe.skipIf(!PG_BIN)("v42 multi-agent project teams (PostgreSQL)", () => {
 
   it("migrates with a clean privilege audit (single writers for every project table, guards present)", async () => {
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
-    expect(Number(await R.one(`(SELECT max(version) FROM fleet.fleet_schema_migrations)`))).toBe(42);
+    expect(Number(await R.one(`(SELECT max(version) FROM fleet.fleet_schema_migrations)`))).toBe(FLEET_PG_SCHEMA_VERSION); // v42 or later
   });
 
   it("the database planner equals the TypeScript planner (random graphs)", async () => {

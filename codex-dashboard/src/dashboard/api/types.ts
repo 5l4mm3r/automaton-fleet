@@ -132,6 +132,9 @@ export type LiveCommand =
   | { kind: "consent"; purposes: string[]; providers: string[] | null; classes: string[]; statement: string }
   | { kind: "consent_revoke"; consentId: string }
   | { kind: "passkey_revoke"; credentialId: string }
+  | { kind: "passkey_rename"; credentialId: string; name: string }
+  | { kind: "notification_delete"; ids: string[]; acknowledgeUnread: boolean }
+  | { kind: "notification_delete_acknowledged" }
   | { kind: "sessions"; action: "revoke_all" }
   | { kind: "totp"; action: "reset" }
   | { kind: "mail_assign"; messageId: string; agentId: string; ventureId?: string; accountId?: string }

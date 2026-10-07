@@ -35,6 +35,7 @@ describe.skipIf(!RUN)("/hq-preview/ beside the production root: secure mutations
   let tmp = "";
   let ORIGIN = "";
   let secret = "";
+  const stateKey = crypto.randomBytes(32); // stable across a server restart (it seals the TOTP secret)
   const calls: Array<Record<string, unknown>> = [];
   let passkeys: Array<Record<string, unknown>> = [];
   // TOTP steps are single-use: every sign-in here takes the first unspent step in the server's window (±1 step).
@@ -77,7 +78,7 @@ describe.skipIf(!RUN)("/hq-preview/ beside the production root: secure mutations
     const port = (server.address() as { port: number }).port;
     server.close();
     ORIGIN = `http://localhost:${port}`;
-    server = createDashboardServer(dgw, { origin: ORIGIN, rpId: "localhost", stateKey: crypto.randomBytes(32), staticDir: path.join(tmp, "root") });
+    server = createDashboardServer(dgw, { origin: ORIGIN, rpId: "localhost", stateKey, staticDir: path.join(tmp, "root") });
     await new Promise<void>((r) => server.listen(port, "127.0.0.1", () => r()));
     browser = await chromium.launch({ executablePath: CHROME!, headless: true, args: ["--no-sandbox", "--enable-unsafe-swiftshader", "--use-angle=swiftshader"] });
     ctx = await browser.newContext();
@@ -108,7 +109,8 @@ describe.skipIf(!RUN)("/hq-preview/ beside the production root: secure mutations
   const signIn = async (page: Page, at: string) => {
     await page.goto(`${ORIGIN}${at}`);
     await page.getByRole("button", { name: "Sign in with passkey" }).click();
-    await page.getByLabel("Authenticator code").waitFor();
+    // (V2.4.2: the start screen also has the password form's code field; the passkey step's own form replaces it.)
+    await page.getByRole("button", { name: "Complete sign-in" }).waitFor();
     await page.getByLabel("Authenticator code").fill(await nextCode());
     await page.getByRole("button", { name: "Complete sign-in" }).click();
   };
@@ -247,7 +249,7 @@ describe.skipIf(!RUN)("/hq-preview/ beside the production root: secure mutations
     await D.waitForURL(`${ORIGIN}/hq-preview/login/#reverify`);
     await D.getByText("Verify this tab to make changes", { exact: false }).waitFor();
     await D.getByRole("button", { name: "Sign in with passkey" }).click();
-    await D.getByLabel("Authenticator code").waitFor();
+    await D.getByRole("button", { name: "Complete sign-in" }).waitFor();
     await D.getByLabel("Authenticator code").fill(await nextCode());
     await D.getByRole("button", { name: "Complete sign-in" }).click();
     await D.waitForURL(`${ORIGIN}/hq-preview/`);
@@ -257,7 +259,7 @@ describe.skipIf(!RUN)("/hq-preview/ beside the production root: secure mutations
     // Every script the preview loads comes from /hq-preview/; its sign-in/out never leaves the preview.
     const srcs = await D.locator("script[src]").evaluateAll((els) => els.map((e) => (e as HTMLScriptElement).getAttribute("src") ?? ""));
     expect(srcs.length).toBeGreaterThan(0); expect(srcs.every((u) => u.startsWith("/hq-preview/"))).toBe(true);
-    expect(await D.getByText(/PREVIEW V2\.4\.1 · UI \d+\.\d+\.\d+/).count()).toBe(1);
+    expect(await D.getByText(/PREVIEW V2\.4\.2 · UI \d+\.\d+\.\d+/).count()).toBe(1);
   });
 
   it("UX readiness sweep of the preview: every page and Virtual, desktop and phone — no errors, CSP violations, failing requests, overflow, path escapes, stale naming or unnamed buttons", async () => {
@@ -304,5 +306,115 @@ describe.skipIf(!RUN)("/hq-preview/ beside the production root: secure mutations
     console.log(`ux sweep: ${JSON.stringify(problems)}`);
     expect(problems).toEqual([]);
     await P.close();
+  });
+
+  // ── V2.4.2: owner access that does not depend on one browser's passkey, and notification housekeeping ──
+  const PASSWORD = "e2e owner password 2026-10-07";
+  let ctx2: BrowserContext;
+  let F: Page;
+  const errorsOf = (page: Page) => {
+    const problems: string[] = [];
+    page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
+    // (The browser's generic "Failed to load resource" line carries no URL; HTTP statuses are checked per path below.)
+    page.on("console", (m) => { if ((m.type() === "error" && !/^Failed to load resource/.test(m.text())) || /Content Security Policy|Refused to/i.test(m.text())) problems.push(`console ${m.type()}: ${m.text().slice(0, 200)}`); });
+    page.on("response", (r) => { const u = new URL(r.url()); if (r.status() >= 400 && !["/api/call", "/api/auth/login/password"].includes(u.pathname)) problems.push(`HTTP ${r.status()} ${u.pathname}`); });
+    return problems;
+  };
+
+  /**
+   * The suite signs in many times from 127.0.0.1, which the per-address sign-in limit (30 / 10 min, in the server's memory)
+   * eventually refuses — as it should. A fresh server image on the same origin resets it; sessions live in the database.
+   */
+  const restartServer = async () => {
+    const port = Number(new URL(ORIGIN).port);
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+    server = createDashboardServer(dgw, { origin: ORIGIN, rpId: "localhost", stateKey, staticDir: path.join(tmp, "root") });
+    await new Promise<void>((r) => server.listen(port, "127.0.0.1", () => r()));
+  };
+
+  it("V2.4.2 sign-in: both routes offered; the owner sets a password from Security (passkey confirmation); a SEPARATE browser with NO passkey signs in with password + code", async () => {
+    await restartServer();
+    const A = (globalThis as { __tabD?: Page }).__tabD!; // the owner's open tab (it holds the owner's passkey; earlier tests closed the others)
+    const problemsA = errorsOf(A);
+    await signIn(A, "/hq-preview/login/#reverify"); // a fresh passkey + TOTP session in this tab, whatever earlier tests left
+    await A.waitForURL(`${ORIGIN}/hq-preview/`);
+    await A.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: /^\d+Security/ }).click();
+    await A.getByRole("heading", { name: "Sign-in methods" }).waitFor();
+    expect(await A.getByText("Not set", { exact: false }).first().isVisible()).toBe(true);
+    await A.getByRole("button", { name: "Set password" }).click();
+    await A.getByLabel("New password (at least 12 characters)").fill(PASSWORD);
+    await A.getByLabel("Repeat the password").fill(PASSWORD);
+    await A.getByRole("button", { name: "Confirm and save" }).click();
+    await A.getByRole("dialog", { name: "Confirm it is you" }).getByRole("button", { name: "Use my passkey" }).click();
+    await A.getByText("Password saved.", { exact: false }).waitFor({ timeout: 30_000 });
+    expect(Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_admin_password`))[0].n)).toBe(1);
+    expect(problemsA).toEqual([]);
+    // A different browser: no virtual authenticator at all (as Firefox without the owner's Edge passkey).
+    ctx2 = await browser.newContext();
+    F = await ctx2.newPage();
+    const problemsF = errorsOf(F);
+    await F.goto(`${ORIGIN}/hq-preview/login/`);
+    await F.getByRole("form", { name: "Sign in with password" }).waitFor();
+    expect(await F.getByRole("button", { name: "Sign in with passkey" }).isVisible()).toBe(true);
+    await F.getByLabel("Password", { exact: true }).fill("not the password at all");
+    await F.getByLabel("Authenticator code").fill(await nextCode());
+    await F.getByRole("button", { name: "Sign in", exact: true }).click();
+    await F.getByText("Sign-in details were not accepted", { exact: false }).waitFor(); // one generic message
+    await F.getByLabel("Password", { exact: true }).fill(PASSWORD);
+    await F.getByLabel("Authenticator code").fill(await nextCode());
+    await F.getByRole("button", { name: "Sign in", exact: true }).click();
+    await F.waitForURL(`${ORIGIN}/hq-preview/`);
+    await F.getByText("LIVE · AUTHORITATIVE FLEET DATA", { exact: false }).waitFor();
+    // A sensitive action from the password browser: confirmed with password + code (no passkey exists here).
+    await F.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: /^\d+Security/ }).click();
+    await F.getByText("this session signed in with it", { exact: false }).waitFor();
+    expect(problemsF).toEqual([]);
+  });
+
+  it("V2.4.2 notifications: the daily report opens as a readable report; delete one, a selection (acknowledge and delete), all acknowledged; persisted; tombstones attributed", async () => {
+    const problems = errorsOf(F);
+    await R.q(`SELECT fleet.fleet_notify('DAILY', 'DAILY_REPORT', NULL, 'Fleet daily report e2e', fleet.fleet_daily_report(), 'daily:e2e')`);
+    for (const t of ["N-del-1", "N-del-2", "N-del-3"]) await notify(t);
+    for (const t of ["N-del-1", "N-del-2"]) await R.q(`SELECT fleet.fleet_admin_notification_ack(notification_id, $2) FROM fleet.fleet_notifications WHERE title = $1`, [t, OWNER]);
+    await F.reload(); await openNotifications(F);
+    // The report: a readable view, the stored payload only behind "View technical data".
+    await F.getByRole("button", { name: "Fleet daily report e2e — open the report" }).click();
+    const dlg = F.getByRole("dialog", { name: "Notification detail" });
+    await dlg.getByRole("heading", { name: /^Fleet daily report · \d{4}-\d{2}-\d{2}$/ }).waitFor();
+    for (const t of ["External revenue", "Treasury cash", "Living agents", "Agent-1"]) expect(await dlg.getByText(t, { exact: false }).first().isVisible()).toBe(true);
+    const visible = await dlg.evaluate((d) => { const c = d.cloneNode(true) as HTMLElement; c.querySelectorAll("details").forEach((x) => x.remove()); return c.textContent ?? ""; }); // all but the collapsed technical data
+    expect(visible).not.toMatch(/revenueMinor|generatedAt|\{"/);
+    await dlg.getByRole("button", { name: "Acknowledge" }).click();
+    await F.waitForTimeout(1500);
+    expect((await ackedRow("Fleet daily report e2e")).acked).toBe(true);
+    // Delete one acknowledged notification (low risk: no second confirmation).
+    await F.locator("div.rounded-lg").filter({ hasText: "Fleet daily report e2e" }).first().getByRole("button", { name: "Delete" }).click();
+    await F.waitForTimeout(1500);
+    const tomb = (await R.q(`SELECT deleted_at, deleted_by, title, detail FROM fleet.fleet_notifications WHERE dedupe_key = 'daily:e2e'`))[0];
+    expect(tomb).toMatchObject({ deleted_by: OWNER, title: "Deleted notification", detail: {} });
+    // A selection with one unread: an explicit "Acknowledge and delete".
+    await F.getByRole("button", { name: "Select" }).click();
+    await F.getByLabel("Select N-del-1").check(); await F.getByLabel("Select N-del-3").check();
+    await F.getByRole("button", { name: "Delete selected (2)" }).click();
+    const conf = F.getByRole("dialog", { name: "Confirm deletion" });
+    await conf.getByRole("heading", { name: "Acknowledge and delete 2 notifications?" }).waitFor();
+    await conf.getByRole("button", { name: "Acknowledge and delete" }).click();
+    await F.waitForTimeout(1500);
+    for (const t of ["N-del-1", "N-del-3"]) expect(Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE title = $1`, [t]))[0].n)).toBe(0); // scrubbed
+    // Delete all acknowledged (FleetController's count, confirmed).
+    const n = Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE acknowledged_at IS NOT NULL AND deleted_at IS NULL`))[0].n);
+    expect(n).toBeGreaterThan(0);
+    await F.getByRole("button", { name: `Delete all acknowledged (${n})` }).click();
+    await F.getByRole("dialog", { name: "Confirm deletion" }).getByRole("heading", { name: `Delete ${n} acknowledged notification${n === 1 ? "" : "s"} from your inbox?` }).waitFor();
+    await F.getByRole("dialog", { name: "Confirm deletion" }).getByRole("button", { name: "Delete", exact: true }).click();
+    await F.waitForTimeout(1500);
+    expect(Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE acknowledged_at IS NOT NULL AND deleted_at IS NULL`))[0].n)).toBe(0);
+    await F.reload(); await openNotifications(F);
+    expect(await F.getByText("N-del-2").count()).toBe(0);
+    expect(await sidebarCount(F)).toBe(await unacked());
+    expect(Number((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE deleted_at IS NOT NULL AND deleted_by <> $1`, [OWNER]))[0].n)).toBe(0);
+    expect(problems).toEqual([]);
+    await ctx2.close();
   });
 });

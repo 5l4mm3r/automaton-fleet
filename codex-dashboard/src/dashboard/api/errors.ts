@@ -7,7 +7,7 @@ export type ErrorCategory =
   | "unauthenticated" | "session_expired" | "stepup_required" | "stepup_cancelled" | "forbidden" | "locked" | "rate_limited"
   | "bad_request" | "conflict" | "insufficient_funds" | "capability_not_configured" | "agent_state" | "replication_blocked"
   | "birth_blocked" | "not_found" | "acknowledge_required" | "outcome_unknown" | "unavailable" | "unsupported" | "failed"
-  | "tab_unverified";
+  | "tab_unverified" | "login_invalid" | "password_weak" | "lockout_prevented";
 
 export class FleetApiError extends Error {
   constructor(
@@ -27,6 +27,9 @@ export class FleetApiError extends Error {
 const MAP: Array<[RegExp, ErrorCategory]> = [
   [/^FLEET_SESSION_INVALID$/, "session_expired"],
   [/^FLEET_TAB_UNVERIFIED$/, "tab_unverified"],
+  [/^FLEET_LOGIN_INVALID$/, "login_invalid"],
+  [/^FLEET_PASSWORD_WEAK$/, "password_weak"],
+  [/^FLEET_(LAST_SIGN_IN_METHOD|LOCKOUT_PREVENTED|LAST_PASSKEY)$/, "lockout_prevented"],
   [/^FLEET_UNAUTHENTICATED$/, "unauthenticated"],
   [/^FLEET_STEPUP_REQUIRED$/, "stepup_required"],
   [/^FLEET_STEPUP_CANCELLED$/, "stepup_cancelled"],
@@ -40,7 +43,7 @@ const MAP: Array<[RegExp, ErrorCategory]> = [
   [/^FLEET_(CAP_EXCEEDED|GENESIS_[A-Z_]+|BIRTH_[A-Z_]+)$/, "birth_blocked"],
   [/^FLEET_NOT_FOUND$/, "not_found"],
   [/^FLEET_ACKNOWLEDGE_REQUIRED$/, "acknowledge_required"],
-  [/^FLEET_(INVALID_STATE|IDEMPOTENCY_CONFLICT|STALE)$/, "conflict"],
+  [/^FLEET_(INVALID_STATE|IDEMPOTENCY_CONFLICT|STALE|PASSKEY_EXISTS)$/, "conflict"],
   [/^FLEET_(BAD_REQUEST|UNKNOWN_OP|CONTENT_TYPE|METHOD)$/, "bad_request"],
   [/^FLEET_OUTCOME_UNKNOWN$/, "outcome_unknown"],
   [/^FLEET_(UNAVAILABLE|DASHBOARD_ERROR|BAD_RESPONSE|NETWORK)$/, "unavailable"],
@@ -56,8 +59,8 @@ export function categorize(code: string): ErrorCategory {
 export const CATEGORY_TEXT: Record<ErrorCategory, string> = {
   unauthenticated: "Sign in to control the Fleet.",
   session_expired: "Your session ended. Sign in again.",
-  stepup_required: "This action needs a fresh passkey confirmation.",
-  stepup_cancelled: "Passkey confirmation was cancelled; nothing was done.",
+  stepup_required: "This action needs a fresh confirmation (passkey, or password and authenticator code).",
+  stepup_cancelled: "Confirmation was cancelled; nothing was done.",
   forbidden: "Refused by the Fleet's security checks.",
   locked: "Sign-in is locked after repeated failures. Wait, then try again.",
   rate_limited: "Too many requests. Wait a moment.",
@@ -74,5 +77,8 @@ export const CATEGORY_TEXT: Record<ErrorCategory, string> = {
   unavailable: "The Fleet is unreachable. Showing nothing rather than stale or fictional data.",
   unsupported: "Not available in LIVE mode.",
   failed: "The operation failed.",
-  tab_unverified: "This browser tab is not verified for changes (it was opened after you signed in elsewhere). Nothing was done. Use “Verify this tab” — passkey and authenticator — to make changes here; reading is unaffected.",
+  login_invalid: "Sign-in details were not accepted. Check the password and the current authenticator code.",
+  password_weak: "Choose a longer password.",
+  lockout_prevented: "Refused: this would leave you without a way to sign in.",
+  tab_unverified: "This browser tab is not verified for changes (it was opened after you signed in elsewhere). Nothing was done. Use “Verify this tab” (passkey or password, with your authenticator code) to make changes here; reading is unaffected.",
 };

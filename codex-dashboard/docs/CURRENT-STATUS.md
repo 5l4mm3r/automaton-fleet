@@ -831,3 +831,45 @@ These are presentation and navigation changes only.
 - The admin root still serves UI 0.3.0, with the same served-page hash `8c125f1b…`. The V2.4.1 preview is still at
   `/hq-preview/`. Promoting the preview to the root remains the owner's visual sign-off decision.
 - The schema-41 degrade path (projects unavailable) remains in the client and its test, for a rollback.
+
+## V2.4.2: sign-in resilience, notification housekeeping, readable daily report — 7 October 2026 (version 0.8.2)
+
+This builds on V2.4.1. The visual design, Virtual HQ, rooms, camera, navigation and project panels are unchanged. It needs
+schema v43. Full procedures: `docs/admin-access.md`.
+
+**Why:** owner access must not depend on one browser- or provider-specific passkey. The owner's only passkey lived in
+one browser (Edge); from any other browser there was no way in.
+
+**Sign-in (login page)**
+- **Password:** password + authenticator code, from any browser. Any wrong factor gives one generic message.
+- **Passkey:** "Sign in with passkey", then the code, as before.
+- **Recovery link:** the enrollment / recovery link (`#enroll=…`) offers **Register passkey** or **Set the sign-in
+  password**.
+- **"Verify this tab":** uses either route.
+
+**Confirmations:** sensitive actions open "Confirm it is you": **Use my passkey**, or the password + a current code.
+
+**Security → Sign-in methods**
+- **Password:** set / change (after a fresh confirmation).
+- **Authenticator:** status. It cannot be removed here, because that would lock every route; replacing it is a host
+  step.
+- **Passkeys:** added and last-used dates, the one this session used, Rename, Revoke (confirmed), and Add passkey on this
+  device.
+- **Lockout guard:** FleetController refuses to remove the last way in.
+
+**Notifications**
+- **Opening a row:** the title opens a detail view. The **Fleet daily report** opens as a report: money flows, Treasury,
+  activity, replication and safety, living Agents. It is built from the report stored with the notification. Other
+  notifications show readable facts. The stored payload is only under "View technical data", as inert text with secrets
+  withheld.
+- **Deleting:** Acknowledge is unchanged. The deletion actions are **Delete** (acknowledged), **Select → Delete selected
+  (n)** (unread ones only through "Acknowledge and delete"), and **Delete all acknowledged (n)**, the last two confirmed.
+  Deleted notifications leave the inbox and its counts. FleetController keeps a minimal tombstone.
+- **Test notifications:** `TEST_*` notifications are labelled TEST and are never shown as a live report.
+- **Event feeds:** a notification event reads as its kind, e.g. "kind: Fleet daily report", not as class / code values.
+
+**Tests**
+- `fleet-dashboard-v43-pg.test.ts`: real gateway, the dashboard's own client, software passkeys.
+- `fleet-notification-detail.test.ts`: real components, using the production report's shape.
+- The preview e2e suite gained two browser tests: password sign-in from a browser with **no** passkey, and the
+  notification flows.

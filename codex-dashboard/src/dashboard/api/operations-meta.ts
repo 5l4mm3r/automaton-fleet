@@ -1,5 +1,5 @@
 /**
- * The gateway's classification of operations (v41). A sensitive operation is refused without a fresh passkey step-up;
+ * The gateway's classification of operations (v41; v43 adds notification deletion and passkey rename as ordinary writes). A sensitive operation is refused without a fresh passkey step-up;
  * the gateway enforces this — the list here only tells the client to ask for one first. A contract test pins it to the
  * backend's own list (DASHBOARD_SENSITIVE_OPS_V41).
  */
@@ -13,4 +13,5 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
 /** Ordinary authenticated writes (session + CSRF, no step-up). */
 export const WRITE_OPS: ReadonlySet<string> = new Set([
   "notification_ack", "agent_hold", "agent_release", "mission_assign", "mission_end", "mission_request", "reveal_take", "mail_assign",
+  "notification_delete", "notification_delete_acknowledged", "passkey_rename",
 ]);

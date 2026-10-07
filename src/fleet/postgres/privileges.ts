@@ -985,7 +985,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       // v41: a number's rental commitment (created at provisioning, advanced when charged, cancelled at release, inherited).
       "ix_phone_record2", "fleet_phone_release_internal", "svc_comms_tick"]),
     fleet_risk_policy: new Set(["fleet_admin_risk_policy_set"]),
-    fleet_notifications: new Set(["fleet_notify", "fleet_admin_notification_ack", "ix_notification_emailed"]),
+    fleet_notifications: new Set(["fleet_notify", "fleet_admin_notification_ack", "ix_notification_emailed", "fleet_admin_notifications_delete",
+      "fleet_admin_notifications_delete_acknowledged"]),
     fleet_notification_policy: new Set(["fleet_admin_notification_policy_set", "svc_notify_tick"]),
     fleet_estate_items: new Set(["svc_estate_tick", "fleet_estate_assign_internal", "fleet_admin_estate_release"]),
     fleet_estate_policy: new Set([]),
@@ -1016,11 +1017,14 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_browser_secret_requests: new Set(["bx_secret_request", "bx_secret_take", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
     fleet_auth_message_blobs: new Set(["ix_auth_blob_store", "ix_browser_secrets_pending", "ix_browser_secret_serve", "fleet_admin_mail_assign"]),
     // v38: Admin authentication state — written only by the dashboard gateway functions (and the owner's enrollment).
-    fleet_admin_passkeys: new Set(["dash_passkey_add", "dash_passkey_used", "dash_passkey_revoke"]),
-    fleet_admin_totp: new Set(["dash_totp_set", "dash_totp_accept", "dash_totp_reset"]),
-    fleet_admin_enrollment: new Set(["dash_passkey_add", "fleet_admin_dashboard_enroll"]),
+    fleet_admin_passkeys: new Set(["dash_passkey_add", "dash_passkey_used", "dash_passkey_revoke", "dash_passkey_rename"]),
+    // v43: the password verifier — written only by dash_password_set (enrollment token, or a session with a step-up).
+    fleet_admin_password: new Set(["dash_password_set"]),
+    fleet_admin_totp: new Set(["dash_totp_set", "dash_totp_accept", "dash_totp_reset", "fleet_admin_dashboard_totp_reset"]),
+    fleet_admin_enrollment: new Set(["dash_passkey_add", "dash_password_set", "fleet_admin_dashboard_enroll"]),
     fleet_admin_challenges: new Set(["dash_challenge_new", "dash_challenge_use"]),
-    fleet_admin_sessions: new Set(["dash_session_begin", "dash_session_totp", "dash_session_live", "dash_session_end", "dash_sessions_revoke_all"]),
+    fleet_admin_sessions: new Set(["dash_session_begin", "dash_session_begin_password", "dash_session_totp", "dash_session_live", "dash_session_end",
+      "dash_sessions_revoke_all", "dash_password_set"]),
     fleet_admin_stepups: new Set(["dash_stepup_record", "dash_stepup_consume"]),
     fleet_admin_auth_log: new Set(["fleet_admin_auth_log_write"]),
     fleet_identity_releases: new Set(["ix_release_record"]),

@@ -60,7 +60,7 @@ import { V30_SQL } from "./migrations-phase30.js";
 import { V35_SQL } from "./migrations-phase35.js";
 import { DASHBOARD_READ_OPS_V41, V41_SQL } from "./migrations-phase41.js";
 
-function restate(src: string, name: string, edits: Array<[string, string]>): string {
+export function restate(src: string, name: string, edits: Array<[string, string]>): string {
   const head = Math.max(src.lastIndexOf(`CREATE FUNCTION ${name}(`), src.lastIndexOf(`CREATE OR REPLACE FUNCTION ${name}(`));
   if (head < 0) throw new Error(`v42: function ${name} not found`);
   const end = src.indexOf("$$;", src.indexOf("AS $$", head) + 5);

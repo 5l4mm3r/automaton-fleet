@@ -4,6 +4,7 @@
  * (snapshot, command view); writes go through the deck's existing action dialog and the gateway's step-up.
  */
 import { useMemo, useState } from "react";
+import { codeText } from "../notifications/report";
 import { money, type Fleet } from "../model";
 import { input } from "../ui";
 import { AgentPortrait, HealthTag } from "./AgentPortrait";
@@ -22,9 +23,15 @@ const time = (iso: unknown) => utc(iso);
 const words = (s: string) => s.replace(/_/g, " ");
 const minor = (v: unknown) => (typeof v === "number" ? money(v) : typeof v === "string" && /^-?\d+$/.test(v) ? money(Number(v)) : "—");
 
-/** A few primitive facts from an event's detail (stored facts only; long values cut). */
+/**
+ * A few primitive facts from an event's detail (stored facts only; long values cut). A notification event reads as
+ * its plain-language kind ("Fleet daily report"), never as raw class / code values.
+ */
 export function factsOf(detail: Row | null | undefined, max = 5): Array<[string, string]> {
   if (!detail) return [];
+  if (typeof detail.code === "string" && /^[A-Z][A-Z0-9_]{2,60}$/.test(detail.code) && typeof detail.class === "string" && Object.keys(detail).length <= 3) {
+    return [["kind", codeText(detail.code)], ["severity", detail.class === "DAILY" ? "report" : detail.class.toLowerCase()]];
+  }
   const out: Array<[string, string]> = [];
   for (const [k, v] of Object.entries(detail)) {
     if (out.length >= max) break;

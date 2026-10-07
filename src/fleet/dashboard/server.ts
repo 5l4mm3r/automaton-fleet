@@ -1,10 +1,14 @@
 /**
- * Admin dashboard HTTP server (schema v38). Serves the control-centre UI (the Next.js static export) and a small JSON API. Listens on loopback behind
- * the TLS front (admin.agentfleet.vip). Authentication (owner decision 2026-10-02):
+ * Admin dashboard HTTP server (schema v38; v43 sign-in resilience). Serves the control-centre UI (the Next.js static
+ * export) and a small JSON API. Listens on loopback behind the TLS front (admin.agentfleet.vip). Authentication:
  *
- *   passkey (WebAuthn, user verification required) → TOTP (replay-proof) → a session (HttpOnly, Secure, SameSite=Strict,
- *   __Host- cookie; 30-minute idle / 12-hour absolute) + a CSRF token for every state change; STEP-UP — a fresh passkey
- *   assertion bound to one operation and its exact arguments — for every sensitive operation. No password, no IP list.
+ *   ROUTE B (v38): passkey (WebAuthn, user verification required) → TOTP (replay-proof) → a full session.
+ *   ROUTE A (v43): password + TOTP in ONE request → the same full session. Either factor wrong gives the same generic
+ *   refusal (FLEET_LOGIN_INVALID); the TOTP step is accepted only when the password is right. The password is checked
+ *   against a scrypt verifier (password.ts) and never logged, stored or forwarded.
+ *   The session: HttpOnly, Secure, SameSite=Strict, __Host- cookie; 30-minute idle / 12-hour absolute; a CSRF token for
+ *   every state change. STEP-UP — a fresh passkey assertion, or a fresh password + TOTP, bound to one operation and its
+ *   exact arguments — for every sensitive operation. Owner access never depends on one browser's passkey (owner, v43).
  *
  * Every Admin operation is dash_call in the database (allow-listed, audited). Reveals and owner-identity uploads are
  * end-to-end encrypted in the Admin's browser (WebCrypto X25519): this server relays sealed bytes only. Every response
@@ -16,6 +20,7 @@ import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthe
 import fs from "fs";
 import path from "path";
 import { SecretBox, totp } from "../identity/crypto.js";
+import { hashPassword, passwordProblem, verifyPassword } from "./password.js";
 import type { DashboardGatewayPort } from "./gateway.js";
 
 export interface DashboardOptions {
@@ -116,6 +121,29 @@ export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOpti
     if (!(await gw.passkeyUsed(k.id, v.authenticationInfo.newCounter, ip))) return null;
     return k.id;
   };
+  /**
+   * Password AND a fresh TOTP code, both always checked (no early exit), the TOTP step accepted (once) only when both are
+   * right. Returns true or false — never which factor failed.
+   */
+  const passwordAndTotp = async (password: unknown, code: unknown): Promise<boolean> => {
+    const pw = await gw.passwordGet();
+    const okPw = await verifyPassword(password, pw?.verifier ?? null);
+    const t = await gw.totpGet();
+    const c = t?.confirmed ? totpCheck(box.open(Buffer.from(t.secretEncB64, "base64"), "dashboard:totp"), String(code ?? ""), Number(t.lastCounter)) : null;
+    if (!okPw || c === null) return false;
+    return gw.totpAccept(c, false);
+  };
+  /** The first TOTP factor, shown ONCE to the device that just enrolled (base32, otpauth URI). */
+  const issueTotp = async (tokenSha: string, ip: string) => {
+    const raw = crypto.randomBytes(20);
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let bits = 0, value = 0, secret = "";
+    for (const x of raw) { value = (value << 8) | x; bits += 8; while (bits >= 5) { secret += alphabet[(value >>> (bits - 5)) & 31]; bits -= 5; } }
+    const set = await gw.totpSet(tokenSha, box.seal(secret, "dashboard:totp"), ip);
+    if (!set.ok) return set;
+    return { ok: true as const, next: "totp", totpSecret: secret,
+      otpauth: `otpauth://totp/${encodeURIComponent("Automaton Fleet:owner")}?secret=${secret}&issuer=${encodeURIComponent("Automaton Fleet")}&period=30&digits=6` };
+  };
 
   // ── the static UI (Next.js export) ──
   const root = o.staticDir ? fs.realpathSync(o.staticDir) : null;
@@ -187,7 +215,7 @@ export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOpti
     if (req.method === "GET" && url.pathname === "/api/auth/state") {
       const st = await gw.authState();
       const live = sessionSha ? (await gw.sessionCheck(sessionSha)).ok : false;
-      return json(res, 200, { ok: true, enrolled: st.passkeys.length > 0 && st.totpConfigured, locked: st.locked, session: live ? "full" : "none" });
+      return json(res, 200, { ok: true, enrolled: (st.passkeys.length > 0 || Boolean(st.passwordConfigured)) && st.totpConfigured, locked: st.locked, session: live ? "full" : "none" });
     }
     if (req.method === "POST" && url.pathname === "/api/auth/enroll/options") {
       const b = await body(req);
@@ -212,15 +240,22 @@ export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOpti
       if (!add.ok) return json(res, 403, add);
       const st = await gw.authState();
       if (st.totpConfigured) return json(res, 200, { ok: true, next: "login" });
-      // First enrollment: a TOTP factor, shown ONCE to the owner's device that just enrolled (base32, otpauth URI).
-      const raw = crypto.randomBytes(20);
-      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-      let bits = 0, value = 0, secret = "";
-      for (const x of raw) { value = (value << 8) | x; bits += 8; while (bits >= 5) { secret += alphabet[(value >>> (bits - 5)) & 31]; bits -= 5; } }
-      const set = await gw.totpSet(tokenSha, box.seal(secret, "dashboard:totp"), ip);
+      const t = await issueTotp(tokenSha, ip);
+      return json(res, t.ok ? 200 : 403, t);
+    }
+    // v43 recovery: a one-time host enrollment link can set the password instead of registering a passkey.
+    if (req.method === "POST" && url.pathname === "/api/auth/enroll/password") {
+      const b = await body(req);
+      const tokenSha = sha(String(b.token ?? ""));
+      if (!(await gw.enrollValid(tokenSha))) { await gw.log("enroll", false, "FLEET_ENROLLMENT_INVALID", ip); return json(res, 403, { ok: false, code: "FLEET_ENROLLMENT_INVALID" }); }
+      const problem = passwordProblem(b.password);
+      if (problem) return json(res, 400, { ok: false, code: "FLEET_PASSWORD_WEAK", reason: problem });
+      const set = await gw.passwordSet(tokenSha, null, null, await hashPassword(String(b.password)), ip);
       if (!set.ok) return json(res, 403, set);
-      return json(res, 200, { ok: true, next: "totp", totpSecret: secret,
-        otpauth: `otpauth://totp/${encodeURIComponent("Automaton Fleet:owner")}?secret=${secret}&issuer=${encodeURIComponent("Automaton Fleet")}&period=30&digits=6` });
+      const st = await gw.authState();
+      if (st.totpConfigured) return json(res, 200, { ok: true, next: "login" });
+      const t = await issueTotp(tokenSha, ip);
+      return json(res, t.ok ? 200 : 403, t);
     }
     if (req.method === "POST" && url.pathname === "/api/auth/enroll/totp") {
       const b = await body(req);
@@ -247,6 +282,21 @@ export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOpti
       const csrf = rand();
       await gw.sessionBegin(sha(session), sha(csrf), id, ip, String(req.headers["user-agent"] ?? "").slice(0, 300));
       return json(res, 200, { ok: true, next: "totp", csrf }, { "Set-Cookie": setCookie(session, 300) });
+    }
+    // ROUTE A: password + TOTP together; one generic refusal for any wrong factor (counted by the lockout).
+    if (req.method === "POST" && url.pathname === "/api/auth/login/password") {
+      const st = await gw.authState();
+      if (st.locked) return json(res, 423, { ok: false, code: "FLEET_ADMIN_LOCKED" });
+      const b = await body(req);
+      if (!(await passwordAndTotp(b.password, b.code))) {
+        await gw.log("login", false, "FLEET_LOGIN_INVALID", ip, { method: "password" });
+        return json(res, 403, { ok: false, code: "FLEET_LOGIN_INVALID" });
+      }
+      const session = rand();
+      const csrf = rand();
+      const r = await gw.sessionBeginPassword(sha(session), sha(csrf), ip, String(req.headers["user-agent"] ?? "").slice(0, 300));
+      if (!r.ok) { await gw.log("login", false, "FLEET_LOGIN_INVALID", ip, { method: "password" }); return json(res, 403, { ok: false, code: "FLEET_LOGIN_INVALID" }); }
+      return json(res, 200, { ok: true, csrf }, { "Set-Cookie": setCookie(session, 12 * 3600) });
     }
     if (req.method === "POST" && url.pathname === "/api/auth/login/totp") {
       if (!sessionSha) return json(res, 401, { ok: false, code: "FLEET_SESSION_INVALID" });
@@ -283,6 +333,48 @@ export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOpti
       const stepup = rand();
       const r = await gw.stepupRecord(sessionSha, sha(stepup), op, sha(args), ip);
       return r.ok ? json(res, 200, { ok: true, stepup }) : json(res, 403, r);
+    }
+    // Step-up with the password route: a fresh password + TOTP bound to this operation and arguments.
+    if (req.method === "POST" && url.pathname === "/api/stepup/password") {
+      const b = await body(req);
+      const op = String(b.op ?? ""), args = String(b.args ?? "{}");
+      if (!(await passwordAndTotp(b.password, b.code))) {
+        await gw.log("stepup", false, "FLEET_LOGIN_INVALID", ip, { op, method: "password" });
+        return json(res, 403, { ok: false, code: "FLEET_LOGIN_INVALID" });
+      }
+      const stepup = rand();
+      const r = await gw.stepupRecord(sessionSha, sha(stepup), op, sha(args), ip);
+      return r.ok ? json(res, 200, { ok: true, stepup }) : json(res, 403, r);
+    }
+    // Sign-in methods (v43): state changes outside dash_call, so each checks the session's CSRF token itself.
+    if (req.method === "POST" && ["/api/account/password", "/api/passkey/options", "/api/passkey/verify"].includes(url.pathname)) {
+      const csrf = String(req.headers["x-csrf"] ?? "");
+      if (!(await gw.sessionCsrfOk(sessionSha, csrf ? sha(csrf) : null))) {
+        await gw.log("op", false, "FLEET_CSRF", ip, { path: url.pathname });
+        return json(res, 400, { ok: false, code: "FLEET_CSRF" });
+      }
+      const b = await body(req);
+      if (url.pathname === "/api/account/password") {
+        const problem = passwordProblem(b.password);
+        if (problem) return json(res, 400, { ok: false, code: "FLEET_PASSWORD_WEAK", reason: problem });
+        const r = await gw.passwordSet(null, sessionSha, b.stepup ? sha(String(b.stepup)) : null, await hashPassword(String(b.password)), ip);
+        return json(res, r.ok ? 200 : 403, r.ok ? { ok: true } : r);
+      }
+      if (url.pathname === "/api/passkey/options") {
+        const st = await gw.authState();
+        const opts = await generateRegistrationOptions({ rpName: o.rpName ?? "Automaton Fleet", rpID: o.rpId, userName: "owner", userDisplayName: "Fleet Admin",
+          userID: USER_ID, attestationType: "none", excludeCredentials: st.passkeys.map((p) => ({ id: p.id, transports: p.transports })),
+          authenticatorSelection: { residentKey: "preferred", userVerification: "required" }, supportedAlgorithmIDs: [-7, -8, -257] });
+        await gw.challengeNew(sha(opts.challenge), "passkey_add", sessionSha, null, null);
+        return json(res, 200, { ok: true, options: opts });
+      }
+      const v = await verifyRegistrationResponse({ response: b.response, expectedOrigin: o.origin, expectedRPID: o.rpId, requireUserVerification: true,
+        expectedChallenge: async (c: string) => gw.challengeUse(sha(c), "passkey_add", sessionSha, null, null) }).catch(() => null);
+      if (!v?.verified) { await gw.log("enroll", false, "FLEET_PASSKEY_INVALID", ip, { via: "session" }); return json(res, 403, { ok: false, code: "FLEET_PASSKEY_INVALID" }); }
+      const c = v.registrationInfo.credential;
+      const add = await gw.passkeyAdd(null, sessionSha, b.stepup ? sha(String(b.stepup)) : null, c.id, Buffer.from(c.publicKey), c.counter, c.transports ?? [],
+        String(b.name ?? "passkey").slice(0, 80), ip);
+      return json(res, add.ok ? 200 : 403, add.ok ? { ok: true } : add);
     }
     if (req.method === "GET" && url.pathname === "/api/read") {
       const r = await gw.call(sessionSha, null, url.searchParams.get("op") ?? "", url.searchParams.get("args") ?? "{}", null, ip);

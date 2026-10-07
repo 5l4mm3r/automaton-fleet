@@ -58,6 +58,8 @@ export function evolve(current: Fleet, command: Command): Fleet {
     case 'estate': { const item = s.estates.find(x => x.id === a.itemId); if (!item) throw new Error('Estate item missing.'); if (a.target !== 'unassigned') living('target'); item.assigned = a.target === 'unassigned' ? '' : a.target; label = `Estate ${item.assigned ? 'assigned' : 'released'}`; break; }
     case 'ack': { const n = s.notices.find(x => x.id === a.noticeId); if (!n) throw new Error('Alert missing.'); n.acknowledged = true; label = 'Notification acknowledged'; break; }
     case 'ack_all': s.notices.forEach(n => n.acknowledged = true); label = 'All notifications acknowledged'; break;
+    case 'notification_delete': { const ids = new Set((a.ids ?? '').split(',').filter(Boolean)); s.notices = s.notices.filter(n => !(ids.has(n.id) && (n.acknowledged || a.acknowledgeUnread === 'true'))); label = 'Notifications deleted from the inbox'; break; }
+    case 'notification_delete_acknowledged': s.notices = s.notices.filter(n => !n.acknowledged); label = 'Acknowledged notifications deleted'; break;
     case 'scenario': { label = a.kind === 'RED' ? 'Simulated security incident: unrecognised sign-in refused' : a.kind === 'AMBER' ? 'Simulated spending alert: review operating costs' : 'Simulated opportunity: new qualified lead'; note(label, a.kind === 'RED' ? 'RED' : a.kind === 'AMBER' ? 'AMBER' : 'INFO'); break; }
     case 'tick': { const revenue = 12600, costs = s.agents.filter(x => x.status === 'active').reduce((sum,x) => sum+x.burn,0); charge(costs); s.treasury += revenue; s.revenue += revenue; s.spend += costs; entry('Simulated trading day: revenue less costs', revenue-costs); s.agents.filter(x => x.status === 'active').forEach(x => x.events.unshift(`${now} · ${x.role} cycle completed`)); label = 'Advanced one simulated trading day'; break; }
     case 'policy': { const threshold = pence(required('amount')); const count = Number(a.maxAgents); if (!Number.isInteger(count) || count < 1 || count > 100) throw new Error('Population limit must be 1–100.'); s.policy.threshold = threshold; s.policy.maxAgents = count; s.policy.autoBirth = a.autoBirth === 'true'; label = 'Replication policy updated'; break; }
@@ -81,7 +83,7 @@ export function evolve(current: Fleet, command: Command): Fleet {
   s.processed.push(command.id);
   s.audit.unshift(`${now} · ${label}`);
   if (s.treasury !== current.treasury) s.history.push(s.treasury);
-  if (!['ack','ack_all','scenario','reveal','login','logout'].includes(command.op)) note(label);
+  if (!['ack','ack_all','notification_delete','notification_delete_acknowledged','scenario','reveal','login','logout'].includes(command.op)) note(label);
   return s;
 }
 

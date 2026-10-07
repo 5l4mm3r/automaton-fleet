@@ -31,5 +31,7 @@ Going live needs these host steps, in order (after the R35 cutover):
    → open the printed one-time link (`…/login/#enroll=…`, 15 minutes) → register the passkey → add the TOTP secret to an authenticator →
    confirm a code. Register a second passkey (e.g. a hardware key) from Security → as a recovery factor.
 
-Recovery: a new `hub-dashboard-enroll` link (owner shell on the VPS) registers a passkey on a new device; `totp_reset` (step-up)
-or a fresh enrollment re-creates the TOTP factor.
+Recovery (v43; full procedures in `docs/admin-access.md`): a new `hub-dashboard-enroll` link (owner shell on the VPS) registers a
+passkey on a new device or sets the sign-in password; the authenticator is replaced only on the host
+(`hub-dashboard-totp-reset`, then an enrollment link). Sign-in has two routes, password + code and passkey + code; neither
+factor alone is a session.

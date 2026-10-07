@@ -1,11 +1,14 @@
 /**
- * Real owner authentication (v38): passkey (WebAuthn, user verification required) → TOTP → a full session (HttpOnly
- * cookie, 30 min idle / 12 h absolute) + a per-tab CSRF token. No password, no demo codes: the simulation's training
- * sign-in must never be wired to this module.
+ * Real owner authentication: two routes to the same full session (HttpOnly cookie, 30 min idle / 12 h absolute) + a
+ * per-tab CSRF token —
+ *   passkey (WebAuthn, user verification required) → TOTP   (v38)
+ *   password + TOTP, in one request                          (v43: owner access never depends on one browser's passkey)
+ * No demo codes: the simulation's training sign-in must never be wired to this module.
  *
- * First access: the owner runs `fleet:admin hub-dashboard-enroll <origin>` on the Fleet host, which prints a one-time
- * link `<origin>/login/#enroll=<token>` (15 minutes). The dashboard reads the token from the URL fragment (never sent to
- * any server log), registers the passkey, shows the TOTP secret ONCE, and confirms a code.
+ * First access / recovery: the owner runs `fleet:admin hub-dashboard-enroll <origin>` on the Fleet host, which prints a
+ * one-time link `<origin>/login/#enroll=<token>` (15 minutes). The dashboard reads the token from the URL fragment (never
+ * sent to any server log) and registers a passkey or sets the password with it; with no authenticator yet, it shows the
+ * TOTP secret ONCE and confirms a code.
  */
 import { FleetApiError } from "./errors";
 import type { GatewayClient } from "./client";
@@ -36,6 +39,13 @@ export class LiveAuth {
     return { next: v.json.next, totpSecret: v.json.totpSecret, otpauth: v.json.otpauth };
   }
 
+  /** Recovery / first access without a passkey: set the password with the one-time enrollment token. */
+  async enrollPassword(token: string, password: string): Promise<{ next: "totp" | "login"; totpSecret?: string; otpauth?: string }> {
+    const v = await this.c.post("/api/auth/enroll/password", { token, password });
+    if (!v.json.ok) throw new FleetApiError(v.json.code ?? "FLEET_ENROLLMENT_INVALID", v.json.reason, v.status);
+    return { next: v.json.next, totpSecret: v.json.totpSecret, otpauth: v.json.otpauth };
+  }
+
   /** Confirm the authenticator app after the first enrollment. */
   async confirmTotp(code: string): Promise<void> {
     const r = await this.c.post("/api/auth/enroll/totp", { code });
@@ -50,6 +60,31 @@ export class LiveAuth {
     const v = await this.c.post("/api/auth/login/verify", { response });
     if (!v.json.ok) throw new FleetApiError(v.json.code ?? "FLEET_PASSKEY_INVALID", undefined, v.status);
     this.c.adoptToken(String(v.json.csrf)); // this tab's token; other open tabs adopt it (the session changed)
+  }
+
+  /** The password route: password AND authenticator code together; any wrong factor is one generic refusal. */
+  async loginPassword(password: string, code: string): Promise<void> {
+    const r = await this.c.post("/api/auth/login/password", { password, code });
+    if (!r.json.ok) throw new FleetApiError(r.json.code ?? "FLEET_LOGIN_INVALID", undefined, r.status);
+    this.c.adoptToken(String(r.json.csrf));
+  }
+
+  /** Set or change the password from a full session: a fresh step-up first (passkey, or the current password + code). */
+  async setPassword(password: string): Promise<void> {
+    const stepup = await this.c.stepUp("password_set", "{}");
+    const r = await this.c.write("/api/account/password", { password, stepup });
+    if (!r.json.ok) throw new FleetApiError(r.json.code ?? "FLEET_OPERATION_FAILED", r.json.reason, r.status);
+  }
+
+  /** Register another passkey on this device from a full session: a fresh step-up, then the browser creates it. */
+  async addPasskey(name: string): Promise<void> {
+    const stepup = await this.c.stepUp("passkey_add", "{}");
+    const o = await this.c.write("/api/passkey/options", {});
+    if (!o.json.ok) throw new FleetApiError(o.json.code ?? "FLEET_UNAVAILABLE", undefined, o.status);
+    let response: unknown;
+    try { response = await this.c.webauthn.create(o.json.options); } catch { throw new FleetApiError("FLEET_STEPUP_CANCELLED"); }
+    const v = await this.c.write("/api/passkey/verify", { response, name, stepup });
+    if (!v.json.ok) throw new FleetApiError(v.json.code ?? "FLEET_PASSKEY_INVALID", v.json.reason, v.status);
   }
 
   /** Step 2: TOTP. Completes the session. */

@@ -1578,3 +1578,30 @@ has no `project` tool. The steps follow the R23 lifecycle (`docs/design/r23-foun
    prove and verify, with automatic rollback on failure.
 5. The schema prerequisite (v42) must be live first. It is a separate, owner-approved migration of the production
    database.
+
+## 42. Owner sign-in resilience and notification housekeeping — schema v43 (2026-10-07)
+
+This amends §35, where Admin authentication was a passkey followed by TOTP, with no password. The owner's only passkey
+lived in one browser's credential provider, and no other browser could sign in.
+
+**Sign-in**
+- **Owner rule:** owner access must not depend on one browser- or provider-specific passkey.
+- **Routes:** two, password + TOTP and passkey + TOTP. Each gives the same session, and neither factor alone does.
+- **Password storage:** only a scrypt verifier (`fleet_admin_password`) is kept. The dashboard checks it in constant time;
+  the password never reaches the database or a log.
+- **Step-up:** accepts either route's fresh factors, bound to the exact operation and arguments.
+- **Several passkeys:** added from a session (with a step-up), renamed, revoked.
+- **Lockout guard:**
+  - the last passkey cannot be revoked without a password;
+  - TOTP, the second factor of both routes, cannot be reset from the dashboard, only on the host
+    (`fleet_admin_dashboard_totp_reset`, then an enrollment link);
+  - the enrollment / recovery link may also set the password.
+- **Lockout:** the existing 20-failures-in-15-minutes lockout counts both routes.
+
+**Notifications**
+- **Delete:** a separate, owner-attributed action (`fleet_admin_notifications_delete`, `…_delete_acknowledged`). It
+  applies to acknowledged rows only, unless the owner explicitly chooses "acknowledge and delete".
+- **Tombstone:** a deleted row keeps its id, class, code, times and deleter, with its title and detail cleared. It leaves
+  every inbox read and count, is never emailed, and is never re-raised.
+
+**Unchanged:** economics, the ledger, Agents, the cap, replication and safety flags. Procedures: `docs/admin-access.md`.

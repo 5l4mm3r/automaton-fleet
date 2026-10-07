@@ -227,6 +227,10 @@ export class PgHubAdmin {
   dashboardEnroll(tokenSha: string, actor: string) {
     return this.one(`SELECT fleet_admin_dashboard_enroll($1, $2) AS r`, [tokenSha, actor]);
   }
+  /** v43 host recovery: remove the Admin authenticator (then issue an enrollment link to register a new one). */
+  dashboardTotpReset(actor: string) {
+    return this.one(`SELECT fleet_admin_dashboard_totp_reset($1) AS r`, [actor]);
+  }
   /** v37: browser sessions, actions, credential requests and refused origins (no secret). */
   browser(agentId: string | null) {
     return this.one(`SELECT fleet_hub_browser($1) AS r`, [agentId]);

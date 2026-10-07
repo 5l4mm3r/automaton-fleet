@@ -82,7 +82,16 @@ export interface GatewayClientOptions {
   share?: TokenShare | null;
   /** Called on any 401 (session ended): the UI returns to sign-in. */
   onSignedOut?: () => void;
+  /** How the owner confirms a sensitive operation (default: the passkey). */
+  stepupConfirm?: StepupConfirm | null;
 }
+
+/**
+ * The owner's choice for one step-up (v43): a fresh passkey assertion, or a fresh password + authenticator code — the
+ * gateway binds either to the exact operation and arguments. Throwing (FLEET_STEPUP_CANCELLED) cancels the operation.
+ */
+export type StepupChoice = { method: "passkey" } | { method: "password"; password: string; code: string };
+export type StepupConfirm = (op: string) => Promise<StepupChoice>;
 
 export class GatewayClient {
   readonly mode = "live" as const;
@@ -92,6 +101,8 @@ export class GatewayClient {
   readonly csrf: TokenStore;
   private readonly share: TokenShare | null;
   private readonly signedOut: () => void;
+  /** Set by the deck's UI: asks the owner how to confirm a sensitive operation (null: the passkey). */
+  stepupConfirm: StepupConfirm | null;
 
   constructor(o: GatewayClientOptions = {}) {
     this.base = (o.baseUrl ?? "").replace(/\/+$/, "");
@@ -100,6 +111,7 @@ export class GatewayClient {
     this.csrf = o.csrf ?? tabTokenStore();
     this.share = o.share === undefined ? broadcastTokenShare(this.csrf) : o.share;
     this.signedOut = o.onSignedOut ?? (() => {});
+    this.stepupConfirm = o.stepupConfirm ?? null;
   }
 
   private async parse(r: Response): Promise<Json> {
@@ -139,6 +151,33 @@ export class GatewayClient {
     return again;
   }
 
+  /** A sign-in-method change outside dash_call (password, passkey registration): the same token rules as any write. */
+  write(path: string, body: unknown): Promise<{ status: number; json: Json }> { return this.postWrite(path, body); }
+
+  /**
+   * A fresh step-up for `op` and the exact argument string `a`: the passkey, or the password + an authenticator code,
+   * as the owner chooses. Returns the single-use step-up token the gateway consumes with the operation.
+   */
+  async stepUp(op: string, a: string): Promise<string> {
+    const choice: StepupChoice = this.stepupConfirm ? await this.stepupConfirm(op) : { method: "passkey" };
+    if (choice.method === "password") {
+      const v = await this.postWrite("/api/stepup/password", { op, args: a, password: choice.password, code: choice.code });
+      if (!v.json.ok) throw new FleetApiError(v.json.code ?? "FLEET_LOGIN_INVALID", undefined, v.status);
+      return String(v.json.stepup);
+    }
+    const o = await this.postWrite("/api/stepup/options", { op, args: a });
+    if (!o.json.ok) throw new FleetApiError(o.json.code ?? "FLEET_STEPUP_REQUIRED", undefined, o.status);
+    let assertion: Json;
+    try {
+      assertion = await this.webauthn.get(o.json.options);
+    } catch {
+      throw new FleetApiError("FLEET_STEPUP_CANCELLED");
+    }
+    const v = await this.postWrite("/api/stepup/verify", { op, args: a, response: assertion });
+    if (!v.json.ok) throw new FleetApiError(v.json.code ?? "FLEET_PASSKEY_INVALID", undefined, v.status);
+    return String(v.json.stepup);
+  }
+
   /** POST JSON; throws FleetApiError("FLEET_NETWORK") when the request may not have reached the gateway. */
   async post(path: string, body: unknown): Promise<{ status: number; json: Json }> {
     const t = this.csrf.get();
@@ -171,25 +210,12 @@ export class GatewayClient {
   }
 
   /**
-   * One state change. A sensitive operation first asks the authenticator for a fresh passkey assertion bound to this
-   * exact operation and argument string; the gateway consumes it once (a replay is refused).
+   * One state change. A sensitive operation first takes a fresh step-up (passkey, or password + authenticator code)
+   * bound to this exact operation and argument string; the gateway consumes it once (a replay is refused).
    */
   async call<T = unknown>(op: string, args: Record<string, unknown> = {}): Promise<T> {
     const a = JSON.stringify(args);
-    let stepup: string | undefined;
-    if (SENSITIVE_OPS.has(op)) {
-      const o = await this.postWrite("/api/stepup/options", { op, args: a });
-      if (!o.json.ok) throw new FleetApiError(o.json.code ?? "FLEET_STEPUP_REQUIRED", undefined, o.status);
-      let assertion: Json;
-      try {
-        assertion = await this.webauthn.get(o.json.options);
-      } catch {
-        throw new FleetApiError("FLEET_STEPUP_CANCELLED");
-      }
-      const v = await this.postWrite("/api/stepup/verify", { op, args: a, response: assertion });
-      if (!v.json.ok) throw new FleetApiError(v.json.code ?? "FLEET_PASSKEY_INVALID", undefined, v.status);
-      stepup = v.json.stepup;
-    }
+    const stepup = SENSITIVE_OPS.has(op) ? await this.stepUp(op, a) : undefined;
     let r: { status: number; json: Json };
     try {
       r = await this.postWrite("/api/call", { op, args: a, stepup });

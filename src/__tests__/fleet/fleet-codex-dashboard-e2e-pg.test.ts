@@ -122,7 +122,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await page.getByLabel("Code from the authenticator").fill(totp(secret));
     await page.getByRole("button", { name: "Confirm authenticator" }).click();
     await page.getByRole("button", { name: "Sign in with passkey" }).click();
-    await page.getByLabel("Authenticator code").waitFor();
+    await page.getByRole("button", { name: "Complete sign-in" }).waitFor(); // the passkey step's own code field (V2.4.2: the start screen has one too)
     // The enrollment code's time step is spent; the next step's code completes the session (a demo code never would).
     await page.getByLabel("Authenticator code").fill(totp(secret, Date.now() + 30_000));
     await page.getByRole("button", { name: "Complete sign-in" }).click();

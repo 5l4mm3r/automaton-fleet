@@ -15,4 +15,5 @@ export const liveTools: LiveTools = {
   logout: () => new LiveAuth(liveClient()).logout(),
   outcomeUnknownFleet: (e) => (e instanceof OutcomeUnknownError ? (e.fleet as Fleet | null) : undefined),
   Reveal: LiveReveal,
+  setStepupConfirm: (fn) => { liveClient().stepupConfirm = fn; },
 };

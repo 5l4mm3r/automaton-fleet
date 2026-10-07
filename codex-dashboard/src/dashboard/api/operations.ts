@@ -52,6 +52,11 @@ export const OPERATIONS: Readonly<Record<string, OperationInfo>> = Object.freeze
   consent: { kind: "consent", ops: ["owner_identity_consent_set"], stepUp: true, repeat: "new_record", audit: "standing consent + event" },
   consent_revoke: { kind: "consent_revoke", ops: ["owner_identity_consent_revoke"], stepUp: true, repeat: "converges", audit: "consent revoked + event" },
   passkey_revoke: { kind: "passkey_revoke", ops: ["passkey_revoke"], stepUp: true, repeat: "converges", audit: "auth log" },
+  passkey_rename: { kind: "passkey_rename", ops: ["passkey_rename"], stepUp: false, repeat: "converges", audit: "auth log" },
+  notification_delete: { kind: "notification_delete", ops: ["notification_delete"], stepUp: false, repeat: "converges",
+    audit: "inbox tombstone (id, class, code, times, owner) + Fleet event; unacknowledged ones only with explicit acknowledge-and-delete" },
+  notification_delete_acknowledged: { kind: "notification_delete_acknowledged", ops: ["notification_delete_acknowledged"], stepUp: false, repeat: "converges",
+    audit: "inbox tombstones + Fleet event" },
   sessions: { kind: "sessions", ops: ["session_revoke_all"], stepUp: true, repeat: "converges", audit: "auth log (other sessions ended)" },
   totp: { kind: "totp", ops: ["totp_reset"], stepUp: true, repeat: "converges", audit: "auth log (re-enrollment required)" },
   mail_assign: { kind: "mail_assign", ops: ["mail_assign"], stepUp: false, repeat: "converges", audit: "routing + event" },
@@ -124,6 +129,12 @@ export async function executeLiveCommand(c: GatewayClient, cmd: LiveCommand): Pr
       return c.call("owner_identity_consent_revoke", { consentId: cmd.consentId });
     case "passkey_revoke":
       return c.call("passkey_revoke", { credentialId: cmd.credentialId });
+    case "passkey_rename":
+      return c.call("passkey_rename", { credentialId: cmd.credentialId, name: cmd.name });
+    case "notification_delete":
+      return c.call("notification_delete", { ids: cmd.ids, acknowledgeUnread: cmd.acknowledgeUnread });
+    case "notification_delete_acknowledged":
+      return c.call("notification_delete_acknowledged", {});
     case "sessions":
       return c.call("session_revoke_all", {});
     case "totp":
