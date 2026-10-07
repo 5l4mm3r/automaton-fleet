@@ -13,6 +13,13 @@
 #       verify-runtime, start, readyz. ANY failure after the dump rolls back automatically: previous runtime.env and
 #       release, the pre-migration dump restored into the live database, units restarted — and reports it.
 #
+#   scripts/fleet-rollout.sh revert <pinsFile> <fromSchema> <toSchema> <reason…>
+#       undo a SUCCESSFUL cutover of the same pins (scripts/fleet-release.sh, when a later release step fails): exactly the
+#       automatic rollback — controller-side units stopped, the cutover's verified pre-migration dump restored into the
+#       live database, the previous runtime.env and release, units started — then ONE production_rolled_back event.
+#   FLEET_ROLLOUT_DEFER_EVENT=1 (cutover): do not record production_deployed (the release script records the outcome
+#       of the whole release); the cutover still records production_rolled_back if it rolls itself back.
+#
 # <pinsFile>: the four lines printed by scripts/fleet-build-runtime.sh for the candidate (REPO, COMMIT, BUILD_ID,
 # LOCKFILE_SHA256), produced on this host. Runs as the operator account (ubuntu) with sudo for the privileged steps.
 # Real payments, owner sweeps, replication and the dry-run child flag are asserted false before and after.
@@ -20,7 +27,7 @@ set -euo pipefail
 export PATH=/opt/automaton-fleet/node/bin:$PATH
 MODE="${1:-}"; PINS="${2:-}"; FROM="${3:-}"; TO="${4:-}"
 die() { echo "ROLLOUT REFUSED: $*" >&2; exit 2; }
-[[ "$MODE" == rehearse || "$MODE" == cutover ]] || die "mode is rehearse or cutover"
+[[ "$MODE" == rehearse || "$MODE" == cutover || "$MODE" == revert ]] || die "mode is rehearse, cutover or revert"
 [[ -f "$PINS" && ! -L "$PINS" ]] || die "pins file missing"
 [[ "$FROM" =~ ^[0-9]{1,3}$ && "$TO" =~ ^[0-9]{1,3}$ && "$TO" -ge "$FROM" ]] || die "schemas are integers, to >= from"
 grep -qxE 'FLEET_RUNTIME_REPO=https://github\.com/5l4mm3r/automaton-fleet\.git' "$PINS" || die "pins: unexpected repository"
@@ -30,7 +37,7 @@ L=$(sed -n 's/^FLEET_RUNTIME_LOCKFILE_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$PINS")
 LIVE=automaton_fleet; RH=automaton_fleet_rollout_rh; F=01M3F50SH7PNX2E3GST13J52AS
 ENVF=/etc/automaton-fleet/runtime.env
 OLD=$(sudo sed -n 's/^FLEET_RUNTIME_COMMIT=//p' $ENVF); [[ "$OLD" =~ ^[0-9a-f]{40}$ ]] || die "current pin unreadable"
-[[ "$OLD" != "$C" ]] || die "the candidate is already the running release"
+[[ "$MODE" == revert || "$OLD" != "$C" ]] || die "the candidate is already the running release"
 WANT="\"currentVersion\":$FROM,\"resultingVersion\":$TO,\"wouldApply\":\[$(seq -s, $((FROM + 1)) "$TO")\]"
 REPORT=~/rollout-${C:0:7}-$MODE.txt
 exec > >(tee -a "$REPORT") 2>&1
@@ -45,6 +52,33 @@ snapshot() { local db=$1 tree=$2 cut=${3:-} e=$ALLV q=$ALLV p=$ALLV
 flags() { for k in REAL_REPLICATION_ENABLED REAL_PAYMENTS_ENABLED OWNER_SWEEP_ENABLED FLEET_DRY_RUN_CHILD; do grep -qx "$k=false" <(sudo grep -E "^$k=" $ENVF) || die "$k is not false"; done; }
 echo "== rollout $MODE ${C:0:7} (schema $FROM -> $TO) from ${OLD:0:7} start $(ts)"
 flags
+
+if [[ "$MODE" == revert ]]; then
+  REASON=$(echo "${*:5}" | tr -cd 'A-Za-z0-9 .:_/-' | cut -c1-200); [[ -n "$REASON" ]] || die "revert needs a reason"
+  ST=~/rollout-${C:0:7}-cutover.state; [[ -f "$ST" && ! -L "$ST" ]] || die "no cutover state for ${C:0:7} ($ST)"
+  get() { sed -n "s/^$1=//p" "$ST" | head -1; }
+  SD=$(get DUMP); SOLD=$(get OLD); LATE=$(get LATE)
+  [[ "$(get COMMIT)" == "$C" && "$(get FROM)" == "$FROM" && "$(get TO)" == "$TO" ]] || die "the cutover state is for different pins or schemas"
+  [[ "$SOLD" =~ ^[0-9a-f]{40}$ && -d /opt/automaton-fleet/releases/$SOLD ]] || die "previous release unknown"
+  [[ "$OLD" == "$C" && "$(readlink /opt/automaton-fleet/current)" == "releases/$C" ]] || die "the running release is not ${C:0:7}"
+  test "$(live 'SELECT max(version) FROM fleet.fleet_schema_migrations')" = "$TO" || die "live schema is not $TO"
+  [[ -f "$SD" && -f "$SD.sha256" ]] && sha256sum -c --quiet "$SD.sha256" || die "the pre-migration dump is missing or does not verify"
+  for u in $LATE; do [[ "$u" =~ ^automaton-fleet-(dashboard|identity|browser)\.service$ ]] || die "unexpected unit in state"; done
+  UNITS="automaton-fleet-operator-api.service automaton-fleet-chatgpt-adapter.socket automaton-fleet-chatgpt-adapter.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-fetcher.service $LATE automaton-fleet.service"
+  START="automaton-fleet.service automaton-fleet-operator-api.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-chatgpt-adapter.socket $LATE"
+  echo "REVERT START $(ts): $REASON"; sudo systemctl stop $UNITS
+  test "$LIVE" = automaton_fleet
+  sudo -u postgres psql -X -q -d $LIVE -c "SET client_min_messages = warning" -c "DROP SCHEMA fleet CASCADE"
+  sudo -u postgres pg_restore -d $LIVE --exit-on-error < "$SD"
+  sudo cp -p $ENVF.pre-${C:0:7} $ENVF
+  sudo ln -sfn "releases/$SOLD" /opt/automaton-fleet/current.tmp && sudo mv -T /opt/automaton-fleet/current.tmp /opt/automaton-fleet/current
+  sudo systemctl start $START
+  for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8787/readyz 2>/dev/null && break; sleep 1; done
+  [[ "$(live 'SELECT max(version) FROM fleet.fleet_schema_migrations')" == "$FROM" ]] || die "after revert the schema is not $FROM: INVESTIGATE NOW"
+  live "SELECT fleet.fleet_event('production_rolled_back', NULL, 'operator:release', jsonb_build_object('commit', '${C:0:12}', 'fromSchema', $FROM, 'toSchema', $TO, 'reason', '$REASON'))" > /dev/null
+  echo "== ROLLOUT ${C:0:7} REVERTED $(ts): schema $FROM, release $(readlink /opt/automaton-fleet/current), readyz $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/readyz)"
+  exit 0
+fi
 test "$(live 'SELECT max(version) FROM fleet.fleet_schema_migrations')" = "$FROM" || die "live schema is not $FROM"
 
 if [[ "$MODE" == rehearse ]]; then
@@ -177,7 +211,12 @@ echo "OUTAGE END $(ts)"
 [[ "$(psqlq "SELECT max_agents || ' ' || living_agents || ' ' || reserved_slots FROM fleet.fleet_state")" == "$(node -e 'const s=require(process.argv[1]).state;console.log(s.maxAgents+" "+s.living+" "+s.reserved)' "$RC0")" ]] || rollback "cap or population changed by the cutover"
 pnpm -s fleet:doctor > ~/rollout-doctor.txt 2>&1 || true; grep -E "^DEPLOYMENT|^SAFE FOR" ~/rollout-doctor.txt || true
 sudo scripts/fleet-verify-deployment.sh > ~/rollout-vdep.txt 2>&1 || true; tail -1 ~/rollout-vdep.txt
-# One operational event for Fleet Command (P2): the release's approval/pin records stay audit-only.
-live "SELECT fleet.fleet_event('production_deployed', NULL, 'operator:rollout', jsonb_build_object('commit', '${C:0:12}', 'fromSchema', $FROM, 'toSchema', $TO, 'previous', '${OLD:0:12}'))" > /dev/null
+# What a later `revert` of this cutover needs (scripts/fleet-release.sh): the verified dump, the previous release, the units.
+printf '%s\n' "COMMIT=$C" "FROM=$FROM" "TO=$TO" "OLD=$OLD" "DUMP=$D" "LATE=$LATE" > ~/rollout-${C:0:7}-cutover.state; chmod 600 ~/rollout-${C:0:7}-cutover.state
+# One operational event for Fleet Command (P2): the release's approval/pin records stay audit-only. Deferred when the
+# release script records the outcome of the whole release (backend + UI + root verification).
+if [[ "${FLEET_ROLLOUT_DEFER_EVENT:-}" != 1 ]]; then
+  live "SELECT fleet.fleet_event('production_deployed', NULL, 'operator:rollout', jsonb_build_object('commit', '${C:0:12}', 'fromSchema', $FROM, 'toSchema', $TO, 'previous', '${OLD:0:12}'))" > /dev/null
+fi
 echo "rollback point: $ENVF.pre-${C:0:7}; releases/${OLD:0:7}; dump $D"
 echo "== ROLLOUT ${C:0:7} DEPLOYED $(ts): schema $TO, readyz $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/readyz)"
