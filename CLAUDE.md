@@ -163,7 +163,7 @@ Current live topology:
 - identity broker, custody, fetcher and the ChatGPT adapter/tunnel run as separate units
 - registry: cap 2, DEVELOPMENT mode, replication off
 - 1 living Agent: founder-1 (01M3F50SH7PNX2E3GST13J52AS), shown as Agent-1 in the UI;
-  its own runtime is still b949b1c (Founder runtime upgrades are a separate, owner-run step)
+  its runtime upgraded b949b1c → 94f09a7 on 2026-10-07 (upgrade d65b938d…, verified)
 - SSH: key-only authentication
 - local Ubuntu development VM: not a live registry
 

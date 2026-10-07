@@ -171,3 +171,45 @@ stability observation and the Founder runtime upgrade.
 
 This is exactly what `fleet-rollout.sh`'s automatic rollback does. Activity after the cutover would be lost, so reconcile
 first: from 12:26:45Z on, that is Founder 1's own inference charges.
+
+## Founder 1 runtime upgrade b949b1c → 94f09a7 (owner-run, 2026-10-07 12:43Z)
+
+`fleet-founders.sh upgrade-preflight` (`preflight_ok`) then `upgrade-runtime 01M3F50SH7PNX2E3GST13J52AS`
+(`r37-founder-preflight.json`, `r37-founder-upgrade.json`; credential file hashes redacted in the repository copy):
+- **Outcome `verified`**, upgrade id `d65b938d-275f-4ca0-9cf0-8e49ff92a112`.
+- **Steps**, every one ok: preflight, quiesce, stop, snapshot, prepare, backup, recheck, commit, pin, prestart, start,
+  prove, compare, verify.
+- **Founder state:**
+  - the same founder id, registry row, credential, memory, workspace and ledger accounts;
+  - no memory or workspace file lost;
+  - no ledger entry written by the upgrade.
+- **New process** 563415 from `releases/94f09a7…`, build `da053d1c…`. The registry saw a heartbeat and a passed health
+  challenge (1 passed, 0 failed) about 1.3 s after start.
+- **Founder 1's books after the upgrade:** cash 9,117, expense 883 (cents). That is the pre-cutover 9,125 / 875 minus its
+  own 8 cents of inference charges, journals 541–543.
+  - Ledger head 543, 506 journals; ledger verify ok.
+  - 0 births, 0 sweep records, 0 projects.
+- **Rollback:** `sudo scripts/fleet-founders.sh rollback-runtime 01M3F50SH7PNX2E3GST13J52AS
+  d65b938d-275f-4ca0-9cf0-8e49ff92a112 <reason>`. The b949b1c tree is intact under `releases/`.
+
+The Founder can now use the v42 `project` tool. Whether and when it does is its own decision. Recruiting needs a second
+living Agent, and the cap stays at 2 with 1 living.
+
+## Stability observation (12:40Z → 12:58Z)
+
+Four read-only rounds were taken: 12:40, 12:43, 12:49 and 12:58Z. At each round:
+- every Fleet unit, PostgreSQL and Redis was active with **0 restarts**;
+- there were **0 error or fatal log lines** in any unit since the cutover, read with `sudo journalctl`;
+- readyz, the Operator API readyz and the dashboard returned 200; Redis answered PONG; PostgreSQL was accepting;
+- the root page hash was `8c125f1b…`;
+- Founder 1's heartbeat was 15–26 s old, with nothing in flight.
+
+There was one warning: `fx_refresh_failed` at 12:26:40Z, while the socket-activated fetcher was not yet up (it started at
+12:26:50Z). It is retried by design.
+
+**Activity since the cutover:**
+- **Ledger:** 8 `inference_charge` journals by Founder 1 (seq 541–548), 20 cents in total. Cash went from 9,125 to 9,105
+  and expense from 875 to 895. Ledger verify ok.
+- **Events:** only ledger postings, sessions, the post-restart reconnect, the runtime approval and the 3 Founder-upgrade
+  audit records.
+- **Nothing else:** no birth, payment, sweep, capital decision or project.

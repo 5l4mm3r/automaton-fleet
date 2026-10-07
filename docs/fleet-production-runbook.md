@@ -2272,9 +2272,10 @@ Release `94f09a7` (build `da053d1c…`, lockfile `1df54e35…` unchanged), ident
 - **Owner cutover 12:25:41Z:** a 20 s outage (12:26:25–12:26:45Z). The reconciliation gate passed; balances, events,
   notifications, Agents, cap and flags are unchanged.
   - Rollback snapshot `~/automaton_fleet-v41-pre-v42-20261007T122626Z.dump` (sha256 `c81a560a…`).
-  - Founder 1 kept running on b949b1c (same PID).
+  - Founder 1 kept running on b949b1c (same PID) through the cutover. It was then upgraded to 94f09a7 at 12:43Z with
+    `fleet-founders.sh upgrade-runtime` (owner-run): verified, upgrade `d65b938d…`.
 - **Production now:**
-  - schema 42, controller/Operator API/custody/dashboard/identity on 94f09a7;
+  - schema 42, controller/Operator API/custody/dashboard/identity and Founder 1 on 94f09a7;
   - cap 2, 1 living Agent, DEVELOPMENT;
   - all four safety flags false;
   - UI root 0.3.0, V2.4.1 preview at /hq-preview/.
