@@ -154,9 +154,9 @@ if [[ -n "$(rh "SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.proname
   echo "3f. Fleet Command read on the copy: $CE (only P0–P3; no housekeeping; the raw history is untouched)"
 fi
 if [[ -n "$(rh "SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'fleet' AND p.proname = 'fleet_event_in_history'")" ]]; then
-  # v45: no routine copy survives the purge; the history read holds no plumbing; the retention pass runs and writes no event.
+  # v45: no routine copy outlives its 7-day retention; the history read holds no plumbing; the retention pass runs and writes no event.
   HC=$(rh "SELECT jsonb_build_object('events', (SELECT count(*) FROM fleet.fleet_events),
-    'copies', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type, detail) = 7 AND created_at < now() - interval '1 hour'),
+    'copies', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type, detail) = 7 AND created_at < now() - interval '7 days'),
     'history', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_in_history(event_type, detail)),
     'temporary7d', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type, detail) = 7),
     'diagnostics', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type, detail) = 30),
