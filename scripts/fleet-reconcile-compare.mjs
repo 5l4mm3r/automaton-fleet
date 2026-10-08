@@ -30,7 +30,12 @@ must("schema before", B.schema === Number(from), B.schema);
 must("schema after", A.schema === Number(to), A.schema);
 const added = (A.migrations ?? []).filter((v) => !(B.migrations ?? []).includes(v));
 same("migrations applied", added, Array.from({ length: Number(to) - Number(from) }, (_, i) => Number(from) + 1 + i));
-same("fleet state (population, cap, mode)", B.state, A.state);
+// A code-only revert re-approves the previous runtime (its `runtime_approved` event is allowed): the approved runtime
+// commit is then expected to change — and only it. Population, cap and mode must still be identical.
+if (ALLOW_APPENDED.has("runtime_approved") && B.state?.runtimeCommit !== A.state?.runtimeCommit) {
+  same("fleet state (population, cap, mode)", { ...B.state, runtimeCommit: null }, { ...A.state, runtimeCommit: null });
+  notes.push({ runtimeReapproved: { from: B.state?.runtimeCommit ?? null, to: A.state?.runtimeCommit ?? null } });
+} else same("fleet state (population, cap, mode)", B.state, A.state);
 same("agents", B.agents, A.agents);
 same("replication state", B.replication, A.replication);
 same("birth orders", B.birthOrders, A.birthOrders);

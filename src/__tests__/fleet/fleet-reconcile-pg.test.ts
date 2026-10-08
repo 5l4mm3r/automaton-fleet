@@ -29,8 +29,8 @@ describe.skipIf(!PG_BIN)("schema upgrade reconciliation snapshot and comparison 
     fs.writeFileSync(f, out.trim());
     return { file: f, json: JSON.parse(out.trim()) };
   };
-  const compare = (a: string, b: string, from = 41, to = FLEET_PG_SCHEMA_VERSION) => {
-    const r = spawnSync(process.execPath, [path.join(ROOT, "scripts/fleet-reconcile-compare.mjs"), a, b, String(from), String(to)], { encoding: "utf8" });
+  const compare = (a: string, b: string, from = 41, to = FLEET_PG_SCHEMA_VERSION, allow?: string) => {
+    const r = spawnSync(process.execPath, [path.join(ROOT, "scripts/fleet-reconcile-compare.mjs"), a, b, String(from), String(to), ...(allow ? [allow] : [])], { encoding: "utf8" });
     return { code: r.status, report: JSON.parse(r.stdout) };
   };
   const cuts = (s: Record<string, any>) => ({ cut_event: s.events.maxId, cut_seq: s.ledger.maxSeq, cut_posting: s.ledger.maxPosting });
@@ -99,4 +99,29 @@ describe.skipIf(!PG_BIN)("schema upgrade reconciliation snapshot and comparison 
       expect(ack.report.failures.map((f: { check: string }) => f.check)).toContain("notifications (inbox)");
     }
   }, 120_000);
+
+  it("R41.1 code-only revert: re-approving the previous runtime may change the approved runtime commit — and nothing else in the fleet state", () => {
+    const V = FLEET_PG_SCHEMA_VERSION;
+    const base = snap("rb-base");
+    const variant = (name: string, f: (j: Record<string, any>) => void) => {
+      const j = JSON.parse(JSON.stringify(base.json));
+      f(j);
+      const file = path.join(dir, `${name}.json`);
+      fs.writeFileSync(file, JSON.stringify(j));
+      return file;
+    };
+    expect(base.json.state).toHaveProperty("runtimeCommit");
+    const reapproved = variant("rb-reapproved", (j) => { j.state.runtimeCommit = "1".repeat(40); });
+    const ok = compare(base.file, reapproved, V, V, "runtime_approved");
+    expect(ok.report.failures).toEqual([]);
+    expect(ok.code).toBe(0);
+    expect(ok.report.notes).toContainEqual({ runtimeReapproved: { from: base.json.state.runtimeCommit, to: "1".repeat(40) } });
+    // Without the code-only allowance the same change is a failure.
+    expect(compare(base.file, reapproved, V, V).code).toBe(1);
+    // The allowance never covers the population, the cap or the mode.
+    const capped = variant("rb-cap", (j) => { j.state.runtimeCommit = "1".repeat(40); j.state.maxAgents = Number(j.state.maxAgents) + 1; });
+    const bad = compare(base.file, capped, V, V, "runtime_approved");
+    expect(bad.code).toBe(1);
+    expect(bad.report.failures.map((f: { check: string }) => f.check)).toContain("fleet state (population, cap, mode)");
+  });
 });
