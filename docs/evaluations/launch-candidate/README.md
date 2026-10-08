@@ -1,133 +1,219 @@
-# Launch candidate — deployment, onboarding, rollback and checklist
+# Launch candidate — deployment, onboarding, recovery and checklist (revision 2)
 
-Candidate: branch `fleet/final-v2.4`, schemas v46–v50 on top of production schema 45, dashboard UI 0.9.0.
-Specification: `docs/design/master-launch-specification.md` (status vocabulary, invariants, activation steps).
+- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v52 on top of production schema 45, dashboard UI 0.10.0.
+- **Specification:** `docs/design/master-launch-specification.md` (revision 2). It covers owner decisions vs implementation
+  choices, the requirement matrix and the external dependencies.
+- **Production is unchanged:** fda78a0, schema 45. Nothing below has been run against it. Every numbered step needs the
+  owner's explicit go-ahead and is run by the owner in their own terminal.
 
-Production (fda78a0, schema 45) is unchanged. Nothing below has been run against production. Every numbered step needs the
-owner's explicit go-ahead and is run by the owner in their own terminal.
-
-## 1. What the candidate changes in production when deployed
+## 1. What deploying changes
 
 | Schema | Content | Moves money by itself? |
 |---|---|---|
 | v46 (G1) | Truthful rail readiness, receive-only rails, settlement guards | No |
 | v47 (G2) | Provider records, cash-basis settlement (Gumroad) | No |
-| v48 | Four-key custody activation (off), PayPal receiving tables, card clearing, treasury list | No — custody stays off until §4 step 7 |
+| v48 | Four-key custody activation (off), PayPal receiving, card clearing, treasury list | No |
 | v49 | Standing identity authority (off), card holds, footprint and freeze, sealed custody credentials | No |
-| v50 | Insolvency dormancy (no automatic death), sweep reductions, knowledge library (49 entries), PII scrubbing | No |
+| v50 | Sweep reductions, knowledge library, PII scrubbing (its dormancy is retired by v51) | No |
+| v51 | Exhaustion is death; card holds reserve first; PayPal money held until available; custody pilot/ongoing; automatic capital and sweep-reduction decisions; document upload authority (off); freeze stops jobs; knowledge revision 2; mail/SMS secrets from the dashboard | No (see §1.1) |
+| v52 | Gumroad storefront gateway surface (gx_*), PayPal-evidence receipt matching, bank-feed surface (rx_*), Gumroad refused to agents directly | No |
 
-Runtime: the controller gains `POST /v1/webhooks/paypal` (stores deliveries unverified) and reaper passes:
-- the instruction issuer, a no-op without an activation;
-- card-hold and insolvency passes;
-- a daily sweep, a no-op while the sweep policy is disabled.
+### 1.1 Behaviour the two living agents will meet after deployment
 
-The custody executor gains the PayPal treasury worker. It is idle until a PayPal rail with a credential exists.
+- **Exhaustion is death.** Before cutover, `hub-wallet-measure` on the rehearsal copy must show both agents funded and not
+  exhausted.
+- **Card bypass.** Card holds reserve funds before the card can be filled. This is off until you enable the standing
+  authority.
+- **PayPal.** Captured money becomes spendable when PayPal shows it available. Receiving is off until the rail exists.
 
-## 2. Deploy (schema 45 → 50)
+### 1.2 Runtime additions
 
-The usual release path is unchanged: build on the VPS checkout, take the pins from the build output, never placeholders.
+- **Reaper passes:**
+  - the instruction issuer;
+  - card holds;
+  - PayPal availability;
+  - Gumroad-in-PayPal matching;
+  - exhaustion;
+  - sweep reductions;
+  - the daily sweep (a no-op while the sweep policy is off).
+- **Controller:** gains `POST /v1/webhooks/paypal`.
+- **Custody:** gains the PayPal treasury worker (idle without a rail).
+- **Identity broker:** serves documents, and starts mail or SMS from dashboard-sealed secrets.
+- **New unit:** `automaton-fleet-gumroad` (installed only by `scripts/fleet-gumroad-setup.sh`; dormant without a token).
 
-1. `git fetch fleet-origin && git checkout <candidate commit>` in `~/automaton-fleet-build`; build; record the pins
-   (commit, build ID, lockfile SHA) in `~/rlc-pins.txt`.
-2. Rehearse on a copy:
+## 2. Deploy (schema 45 → 52)
+
+Pins come from the build output, never from placeholders.
+
+1. In `~/automaton-fleet-build`:
+   1. run `git fetch fleet-origin && git checkout <candidate commit>`;
+   2. build;
+   3. record the commit, build ID and lockfile SHA in `~/rlc-pins.txt`;
+   4. build the dashboard LIVE export from the same commit.
+2. Rehearse on a copy of production:
    ```
-   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 50
+   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 52
    ```
-   Expect every migration to apply, the privilege audit to be clean, the ledger to verify, and both founders' books
-   to be unchanged.
+   Expect all of the following:
+   - every migration applies;
+   - the privilege audit is clean (including the new `fleet_provider` / `fleet_bankfeed` roles, if provisioned);
+   - the ledger verifies;
+   - both founders' books are unchanged;
+   - `hub-wallet-measure` shows `exhausted: false` for both.
 3. Cut over:
    ```
-   bash ~/fleet-release.sh … 45 50
+   bash ~/fleet-release.sh … 45 52
    ```
-   This is the backend cutover plus UI 0.9.0 promotion, writing ONE `production_deployed` event. The pre-migration dump
-   is `~/automaton_fleet-v45-pre-v50-<stamp>.dump`.
-4. Upgrade founders after the controller, one at a time:
+   This does the backend cutover and promotes UI 0.10.0, with one `production_deployed` event.
+4. Upgrade the founders one at a time, Agent 2 first, then Founder 1:
    ```
    fleet-founders.sh upgrade-runtime <agentId> …
    ```
-   Agent 2 first, then Founder 1.
-5. Read-only verification:
-   - `hub-paypal`, `hub-custody`, `hub-treasury-health`;
-   - `owner-identity-autonomy` shows OFF;
-   - `hub-insolvency` shows dormancy on and death never.
+   New tools (storefront, wallet survival, document upload) reach a founder only through this upgrade.
+5. Read-only checks. Each should show:
 
-## 3. Rollback (write-preserving)
+   | Command | Expected |
+   |---|---|
+   | `hub-custody` | off |
+   | `hub-paypal` | no rail |
+   | `hub-treasury-health` | money states present |
+   | `owner-identity-autonomy` | OFF |
+   | `hub-insolvency` | rule shown, no deaths |
+   | `hub-storefront` | no account |
 
-**Code problem, schema fine: roll forward.** v46–v50 are additive. A fix release on schema 50 needs no restore.
+## 3. Recovery
 
-**Schema 50 must go.** The earlier release refuses a newer schema, so run:
-```
-bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 50 <reason>
-```
-In order:
-1. **UI first.** Point the dashboard back to `dashboard.env.pre-0.9.0`.
-2. **Preserve.** The script dumps all post-cutover state (`~/automaton_fleet-v50-post-cutover-…dump`).
-3. **Refuse silent loss.** It refuses to discard journals or events written since cutover. Reconcile them first: owner
-   funding, revenue and card records are re-entered with the same references; claim keys keep them single. Then
-   confirm with `FLEET_REVERT_DISCARD_ACK=<journals>:<events>`.
-4. **Restore.** It restores the pre-migration dump and the previous release, then writes ONE `production_rolled_back`
-   event.
+Correct terminology matters here. A schema revert does **not** keep newer writes in the running system; the export it
+writes is **recovery evidence**.
 
-Founders are rolled back first if they were upgraded:
-```
-fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>
-```
+- **Fix forward (preferred).** v46–v52 only add. A code fix on schema 52 needs no restore and loses nothing.
+- **Code-only problem in the new release.** Use the release's own code-only revert. The database is untouched and all
+  writes are kept.
+- **A schema revert to 45:**
+  ```
+  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 52 <reason>
+  ```
+  1. **UI first:** point the dashboard back to `dashboard.env.pre-0.10.0`.
+  2. **Founders first**, if they were upgraded:
+     ```
+     fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>
+     ```
+     Their workspaces, memory and journals are on the host and are not touched by the database step.
+  3. **Recovery evidence.** The script dumps all post-cutover state (`~/automaton_fleet-v52-post-cutover-…dump`).
+  4. **Refusals:**
+     - It refuses to discard journals or events written since cutover until you acknowledge their exact counts with
+       `FLEET_REVERT_DISCARD_ACK=<journals>:<events>`.
+     - It **also** refuses while provider settlement evidence or liabilities exist (PayPal transactions, receipts, claims,
+       provider records, non-zero payables). It exports them first and accepts only `FLEET_REVERT_PROVIDER_EXPORT=<that
+       export's sha256>`.
+  5. **Restore.** It restores the pre-migration dump and the previous release, with one `production_rolled_back` event.
+  6. **Re-enter what must survive.** Owner funding, receipts and card records are re-entered from the evidence with the
+     same references; claims keep each one single. The running system holds only what was re-entered.
+- **After real money or provider data exists: do not revert. Freeze and fix forward:**
+  1. `systemctl disable --now automaton-fleet-gumroad`.
+  2. Remove the PayPal rail credential from `custody.env`, or revoke the sealed credential.
+  3. Run `economy-rail-status <rail> suspended`.
+  4. Correct in a forward migration with reversing journals.
+- **Deaths are permanent.** A revert never resurrects an agent; estates are history.
 
-## 4. Onboarding in the dashboard (Settings live under "Money & identity"; Treasury and agent profiles show the rest)
+## 4. Dashboard onboarding
 
-1. **PayPal app.**
-   1. In your PayPal Business account, go to developer.paypal.com → Apps & Credentials → **Live** → Create App.
-   2. Request **Payouts** access on the app; PayPal must approve it before payouts work.
-   3. Copy the client id and secret.
-2. **Seal the credentials.** Under Money & identity → 1, enter the reference `vault:paypal/treasury`, the client id and
-   the secret. They are sealed in your browser to the custody executor's key; only custody can read them.
-3. **Register the rail** on the Fleet host:
+Settings live under **Money & identity**; Treasury and agent profiles show the rest.
+
+### 4.1 PayPal treasury
+
+1. **Create the app.** In developer.paypal.com: Apps & Credentials → **Live** → Create App. Request **Payouts** on the app.
+2. **Seal the credentials.** Under Money & identity → 1, enter `vault:paypal/treasury`, the client id and the secret. They
+   are sealed in your browser to custody.
+3. **Register on the host:**
    ```
    economy-credential-register paypal vault:paypal/treasury payouts,receive_payments,refunds Treasury
-   economy-rail-add paypal shared receive_payments,refunds,payouts "PayPal treasury@…" --credential <id> --mode live PayPal treasury
+   economy-rail-add paypal shared receive_payments,refunds,payouts "PayPal treasury" --credential <id> --mode live
    ```
-   Then record the readiness evidence (`economy-rail-verify <railId> account_access …`, `sale_ingestion`,
-   `payout_reconciliation`, `refunds`). Real evidence is a sandbox/live probe or a first real use, never invented.
-4. **Webhook.**
-   1. In the PayPal app, add a webhook to `https://api.agentfleet.vip/v1/webhooks/paypal` for these events:
-      - CHECKOUT.ORDER.APPROVED
-      - PAYMENT.CAPTURE.COMPLETED / PENDING / REFUNDED / REVERSED
-   2. Paste the webhook id under Money & identity → 1.
-5. **Card (bypass).**
-   1. Under Money & identity → 2, enter the PayPal Credit card details. They are sealed to the identity broker.
-   2. Repay the card yourself in PayPal ("Make a Payment" or Direct Debit), then record each repayment under Treasury →
-      Card clearing.
-   3. Money paid to the card for an agent appears as an invoice there. Return it (minus the suggested sweep) or keep it
-      as a withdrawal.
-6. **Bank details and identity facts.**
-   - Use Money & identity → 3 for text facts.
-   - Upload identity documents on the Owner identity page. Documents are submitted by you, never by agents.
-7. **Standing authority.** Under Money & identity → 4:
-   - tick the facts agents may have filled;
-   - turn the card on, with per-charge and 24-hour maxima;
-   - list sites to exclude.
-   Every use appears in the event list and the agent's footprint.
-8. **Mail.** Optional, and dormant until done: set up Proton Bridge and `FLEET_MAIL_PROVIDER` on the host, then assign
-   aliases. They appear in each agent's footprint.
-9. **Money out**, last and separately:
-   1. Treasury → Custody activation: grant per-payment and 24-hour maxima and an expiry.
-   2. Set agents' wallet limits.
-   3. Set `REAL_PAYMENTS_ENABLED=true` in **custody.env only** and add the rail to the custody signer file. This is a
-      host step, done in your own terminal.
-   Until all four keys hold, no payment leaves.
+   Then record readiness evidence from real probes or first use (`economy-rail-verify …`), and run
+   `economy-rail-status <rail> active`.
+4. **Webhook.** In the PayPal app, add a webhook to `https://api.agentfleet.vip/v1/webhooks/paypal` for these events:
+   - `CHECKOUT.ORDER.APPROVED`
+   - `PAYMENT.CAPTURE.COMPLETED` / `PENDING` / `REFUNDED` / `REVERSED`
+
+   Paste the webhook id under Money & identity → 1.
+
+### 4.2 Card
+
+1. **Confirm the product.** UK PayPal Credit has no card number and cannot be used for the bypass. Use a PayPal Business
+   Debit Mastercard (it charges the treasury directly) or a credit card.
+2. **Upload it** under Money & identity → 2.
+3. **Repay** (credit card only): repay the issuer from the treasury and record it under Treasury → Card clearing. With the
+   debit card, record each charge's PayPal transaction as its repayment reference.
+4. **Invoices.** Money reaching the card appears as an invoice. Settle it as return or withdrawal, either "applied to the
+   card balance" or "transferred".
+
+### 4.3 Bank details, facts and documents
+
+1. Use Money & identity → 3. Documents are PDF or image files, up to 8 MB, sealed in the browser.
+2. Set the **standing authority** under Money & identity → 4:
+   1. tick the facts agents may have filled;
+   2. tick the documents agents may upload;
+   3. turn the card on, with per-charge and 24 h maxima;
+   4. list any excluded sites.
+
+   Every use appears in the event list and the agent's footprint. Live selfie/video checks, CAPTCHAs and signatures stay
+   with you.
+
+### 4.4 Mail and SMS (Money & identity → 5)
+
+1. On the Fleet host, install Proton Mail Bridge, sign in once, and export its certificate.
+2. Paste the shared address, Bridge's generated username and password, and the certificate. The broker starts mail and
+   the panel shows connection health.
+3. Optional: a Twilio API key for SMS.
+
+### 4.5 Gumroad (optional, separately)
+
+1. Install the gateway:
+   ```
+   sudo scripts/fleet-gumroad-setup.sh install --apply
+   ```
+2. Register a Gumroad OAuth application, then run `oauth-url` / `oauth-exchange` as the gateway user (stdin only).
+3. On the host, register the account and connect it:
+   1. `economy-credential-register gumroad vault:gumroad/owner edit_products,view_sales,view_payouts`
+   2. `economy-rail-add gumroad … --mode live_receive --credential <id>`
+   3. `economy-provider-account-register`
+4. Treasury → Gumroad storefront: run the probe, then attest `storefront_publication` with
+   `economy-rail-verify … owner_attested` (email confirmed, payout method set). Then run `economy-rail-assign` to the
+   ventures.
+5. If Gumroad pays out to PayPal:
+   ```
+   economy-destination-add fleet_treasury …
+   economy-destination-paypal <dest> <paypalRail>
+   economy-destination-verify-access <dest> automatic …
+   ```
+   A bank destination needs a bank-feed provider (not chosen) or the pilot attestation.
+
+### 4.6 Money out (last, separately)
+
+1. Under Treasury → Custody activation, choose **Pilot** with small maxima.
+2. Set the agents' wallet limits.
+3. Put `REAL_PAYMENTS_ENABLED=true` in **custody.env only**, and add the rail to the custody signer file. This is a host
+   step.
+4. After a clean pilot, grant an **Ongoing** activation (no renewals).
+
+Until all four keys hold, no payment leaves.
 
 ## 5. Launch checklist (in order)
 
-1. Approve and push the candidate commit (done by Claude on approval). Build on the VPS and record the pins.
-2. Rehearse 45 → 50 on the VPS copy. Review the rehearsal output.
-3. Cut over (`fleet-release.sh`). Verify read-only (§2 step 5). Upgrade Agent 2, then Founder 1.
-4. Create the PayPal Live app, seal its credentials, register the rail and the webhook (§4 steps 1–4).
-5. Verify receiving with one real low-value checkout paid by you. Check that the treasury list and the PayPal balance
-   agree (`hub-paypal`, `hub-treasury-health`, `fleet_reconcile`).
-6. Upload card, bank details and facts. Turn on the standing authority with conservative maxima (§4 steps 5–7).
-7. Only when receiving is verified and you choose to: activate custody with small maxima and short expiry, and set the
-   custody `REAL_PAYMENTS_ENABLED`. Watch the first payout settle.
-8. Optionally, separately: Proton Bridge for mail, and the sweep policy.
+1. Approve the candidate. Build on the VPS; record the pins; build the LIVE dashboard.
+2. Rehearse 45 → 52 on the VPS copy and review the output, including `hub-wallet-measure`.
+3. Cut over with `fleet-release.sh`. Run the read-only checks (§2 step 5). Upgrade Agent 2, then Founder 1.
+4. PayPal: Live app, sealed credentials, rail, webhook, readiness (§4.1).
+5. Receiving: pay one low-value checkout yourself. Watch it go captured → held → available, and check that
+   `hub-money-states` and the PayPal balance agree.
+6. Card: confirm the product, upload it, and turn on the standing authority with conservative maxima (§4.2–4.3).
+7. Facts and documents: upload them and choose the document classes (§4.3).
+8. Mail: Bridge on the host, then seal the login (§4.4).
+9. Optional: Gumroad onboarding (§4.5).
+10. Money out: pilot activation and the custody switch, then watch the first payout settle; later, ongoing (§4.6).
+11. Optional, separately: the sweep policy.
 
-Gumroad dependencies 62cbe1b7 and 6178c7bb stay pending until real readiness evidence answers them. A verified PayPal
-receiving rail can serve "receive payments" needs; it does not answer a Gumroad account request by itself.
+Gumroad dependencies 62cbe1b7 and 6178c7bb stay pending until verified readiness answers them (§4.5 step 4 on an assigned
+rail). A verified PayPal receiving rail can serve "receive payments" needs. It does not answer a Gumroad account request by
+itself.

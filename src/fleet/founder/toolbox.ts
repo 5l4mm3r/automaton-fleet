@@ -59,6 +59,8 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
   opportunity: { record: "opportunity.record", shortlist: "opportunity.shortlist", status: "opportunity.status", list: "opportunity.list" },
   venture: { create: "venture.create", transition: "venture.transition", status: "venture.status", list: "venture.list", metric: "venture.metric" },
   wallet: { view: "wallet", performance: "performance", plan: "wallet.plan", vendors: "vendor.list",
+    // v51: the authoritative wallet measure (what keeps you alive, and what does not count).
+    survival: "wallet.measure",
     // v48: receiving money through the Fleet's PayPal treasury (custody opens and captures the order).
     checkout: "paypal.checkout", checkouts: "paypal.checkouts", cancel_checkout: "paypal.cancel" },
   fleet_capital: { register_vendor: "vendor.register", revoke_vendor: "vendor.revoke", require_rail: "rail.require", request: "capital.request", list: "capital.list",
@@ -83,6 +85,9 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
     mission_status: "mission.status", request_mission: "mission.request", mission_report: "mission.report", mission_review: "mission.review",
     estate_search: "estate.search", estate_claim: "estate.claim" },
   // v42: team projects — recruit other existing living agents by internal contract when collaboration pays.
+  // v52: the Fleet's Gumroad storefront (jobs run by the gateway; a file is read from the workspace by the toolbox).
+  storefront: { products: "storefront.products", create: "storefront.product.create", update: "storefront.product.update", file: "storefront.file",
+    publish: "storefront.product.publish", unpublish: "storefront.product.unpublish", delete: "storefront.product.delete", sales: "storefront.sales", job: "storefront.job" },
   project: { propose: "project.propose", replan: "project.replan", fund: "project.fund", offer: "project.offer", respond: "project.respond",
     accept_counter: "project.counter_accept", withdraw_offer: "project.withdraw_offer", start: "project.start", task: "project.task", review: "project.review",
     distribute: "project.distribute", settle_share: "project.settle_share", assess: "project.assess", exit: "project.exit", replace: "project.replace", cancel: "project.cancel", complete: "project.complete",
@@ -94,7 +99,9 @@ const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend", "mailbox.pr
   // v42: a retried proposal or funding never doubles.
   "project.propose", "project.fund",
   // v48: a retried checkout request returns the same checkout.
-  "paypal.checkout"]);
+  "paypal.checkout",
+  // v52: a retried storefront operation queues one gateway job.
+  "storefront.product.create", "storefront.product.update", "storefront.product.publish", "storefront.product.unpublish", "storefront.product.delete", "storefront.file"]);
 
 export interface ToolOutcome {
   name: string;
@@ -153,6 +160,8 @@ const IMPLEMENTED = new Set([
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
   "opportunity", "venture", "wallet", "fleet_capital", "economic_knowledge", "identity", "fleet_services", "browser", "project",
+  // v52: the Gumroad storefront through its gateway.
+  "storefront",
   // R41.1 (founder-v5): the founder's own field journal and the Survival Field Guide.
   "field_journal", "field_guide",
 ]);
@@ -687,12 +696,22 @@ export class FounderToolbox {
         case "check_ledger":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.ledger())) };
         // F2 (schema v28+): opportunities, ventures, wallet, Fleet capital/payments and economic knowledge.
-        case "opportunity": case "venture": case "wallet": case "fleet_capital": case "economic_knowledge": case "identity": case "fleet_services": case "browser": case "project": {
+        case "opportunity": case "venture": case "wallet": case "fleet_capital": case "economic_knowledge": case "identity": case "fleet_services": case "browser": case "project":
+        case "storefront": {
           if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
           const op = ECONOMY_OPS[call.name][String(a.op)];
           if (!op) return refuse("FLEET_BAD_REQUEST", `op is one of ${Object.keys(ECONOMY_OPS[call.name]).join(", ")}`);
           const args: Record<string, unknown> = a.args && typeof a.args === "object" && !Array.isArray(a.args) ? { ...(a.args as Record<string, unknown>) } : {};
           if (IDEMPOTENT_OPS.has(op) && typeof args.idempotencyKey !== "string") args.idempotencyKey = `econ:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128).padEnd(8, "_");
+          // v52: a storefront file comes from the founder's own workspace (resolved strictly inside it; at most 15 MB).
+          if (op === "storefront.file" && typeof args.path === "string") {
+            const f = this.resolve(args.path);
+            const st = fs.statSync(f);
+            if (!st.isFile() || st.size < 1 || st.size > 15_000_000) return refuse("FLEET_BAD_REQUEST", "path is a file of 1 byte .. 15 MB in your workspace");
+            args.contentB64 = fs.readFileSync(f).toString("base64");
+            args.fileName = typeof args.fileName === "string" ? args.fileName : path.basename(f).replace(/[^A-Za-z0-9._ -]/g, "_").slice(0, 120);
+            delete args.path;
+          }
           let r = await this.o.ports.economy(op, args).catch(ownerRefusal);
           // v37: a browser action runs in the browser worker; wait (bounded) for its page result within this tool call.
           if (call.name === "browser" && (r as { ok?: unknown }).ok === true && typeof (r as { actionId?: unknown }).actionId === "string") {

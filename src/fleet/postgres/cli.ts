@@ -645,6 +645,18 @@ async function main(argv: string[]): Promise<number> {
         console.log(`granted the browser-worker API to ${rest[0] || "fleet_browser"}`);
         return 0;
       }
+      case "grant-provider-role": {
+        // v52: the Gumroad storefront gateway's role (gx_* only), for scripts/fleet-gumroad-setup.sh.
+        await store.grantProviderRole(rest[0] || undefined);
+        console.log(`granted the storefront-gateway API to ${rest[0] || "fleet_provider"}`);
+        return 0;
+      }
+      case "grant-bankfeed-role": {
+        // v52: the bank-feed receipt connector's role (rx_* only).
+        await store.grantBankfeedRole(rest[0] || undefined);
+        console.log(`granted the bank-feed API to ${rest[0] || "fleet_bankfeed"}`);
+        return 0;
+      }
       case "grant-operator-role": {
         await store.grantOperatorRole(rest[0] || store.operatorRole);
         console.log(`granted the read-only Operator API to ${rest[0] || store.operatorRole}`);

@@ -269,8 +269,10 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
     const eqG = await equity(G.id);
     expect(eqF).toBeGreaterThan(0);
     // Nothing spent yet: figures only, no runway (no burn), and no "allowed"/"reason" field at all.
+    // v51: the authoritative wallet measure and the exhaustion rule are shown (information; no gate on any action).
     expect(await survival(F)).toEqual({ survivalEquityCents: eqF, inferenceTodayCents: 0, burnPerDayCents: 0, inferenceBurnPerDayCents: 0, commitmentsPerDayCents: 0,
-      runwayDays: null, burnBasis: "inference over the last 7 days plus active recurring commitments" });
+      runwayDays: null, burnBasis: "inference over the last 7 days plus active recurring commitments",
+      wallet: expect.objectContaining({ spendableMinor: eqF, exhausted: false, rule: expect.stringMatching(/^Exhaustion means death/) }) });
     // Today's inference shows as today's spend and as burn; nothing switches off.
     await charge(F, 300);
     expect(await survival(F)).toMatchObject({ inferenceTodayCents: 300, runwayDays: expect.any(Number) });
@@ -280,7 +282,8 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
     const g = await survival(G);
     expect(g).toMatchObject({ inferenceTodayCents: 0, survivalEquityCents: eqG });
     expect(Number(g.runwayDays)).toBeCloseTo(7, 0);
-    expect(Object.keys(g).sort()).toEqual(["burnBasis", "burnPerDayCents", "commitmentsPerDayCents", "inferenceBurnPerDayCents", "inferenceTodayCents", "runwayDays", "survivalEquityCents"]);
+    expect(Object.keys(g).sort()).toEqual(["burnBasis", "burnPerDayCents", "commitmentsPerDayCents", "inferenceBurnPerDayCents", "inferenceTodayCents", "runwayDays", "survivalEquityCents", "wallet"]);
+    expect(Object.keys(g.wallet)).not.toContain("allowed");
     // The founder cannot call the observation directly (it reaches it through its own authenticated status).
     const agent = new pg.Pool({ connectionString: pgc.agentUrl, max: 1 });
     try { expect(await code(agent.query(`SELECT fleet.fleet_survival_observation($1)`, [F.id]))).toBe("permission denied"); } finally { await agent.end(); }

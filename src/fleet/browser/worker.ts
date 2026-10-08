@@ -5,7 +5,8 @@
  * snapshots never carry a value this worker filled or captured, and never read input values at all.
  *
  * Sessions live in memory (a worker restart ends them: the next action reports FLEET_BROWSER_SESSION_LOST and the agent
- * opens a new one). Every request a page makes is checked against the URL policy.
+ * opens a new one). Every request a page makes is checked against the URL policy. v51: an `upload` step sets an owner
+ * document (under the owner's standing authority) into the page's file input from memory.
  */
 import crypto from "crypto";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
@@ -132,6 +133,21 @@ export class BrowserWorker {
             await this.locator(page, step).fill(v);
           } else {
             await this.locator(page, step).fill(String(step.value ?? ""));
+          }
+          break;
+        }
+        case "upload": {
+          // v51: an owner document set straight into the provider's own file input from memory (sealed to this worker's
+          // one-time key by the broker; never written to disk, never in a snapshot, never shown to the agent).
+          const raw = await this.secret(action, lease, `owner_document:${String(step.class)}`, this.origin(page));
+          const doc = JSON.parse(raw) as { contentType: string; dataB64: string };
+          const ext = ({ "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" } as Record<string, string>)[doc.contentType];
+          if (!ext) throw new Error("FLEET_OWNER_DOCUMENT_INVALID");
+          const buffer = Buffer.from(doc.dataB64, "base64");
+          try {
+            await this.locator(page, step).setInputFiles({ name: `document.${ext}`, mimeType: doc.contentType, buffer });
+          } finally {
+            buffer.fill(0);
           }
           break;
         }

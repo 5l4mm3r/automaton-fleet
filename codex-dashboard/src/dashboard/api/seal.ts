@@ -54,3 +54,28 @@ export async function sealForCustody(c: GatewayClient, vaultRef: string, clientI
   const sealed = await sealTo(b64dec(key.publicKey), `${clientId}:${clientSecret}`, `custody:${vaultRef}`);
   return { vaultRef, sealedB64: b64enc(sealed) };
 }
+
+/** v51: owner documents (passport, licence, ID, proof of address) — PDF or image, at most 8 MB, sealed like a fact. */
+export const DOCUMENT_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp"] as const;
+export async function sealOwnerDocument(c: GatewayClient, cls: string, file: { type: string; size: number; arrayBuffer(): Promise<ArrayBuffer> }):
+  Promise<{ class: string; sealedB64: string; contentType: string }> {
+  if (!["id_document", "passport", "driving_licence", "proof_of_address"].includes(cls)) throw new FleetApiError("FLEET_BAD_REQUEST", "a document class");
+  if (!(DOCUMENT_TYPES as readonly string[]).includes(file.type)) throw new FleetApiError("FLEET_BAD_REQUEST", "a PDF, JPEG, PNG or WebP file");
+  if (file.size < 1 || file.size > 8_000_000) throw new FleetApiError("FLEET_BAD_REQUEST", "the file is 1 byte .. 8 MB");
+  const value = JSON.stringify({ contentType: file.type, dataB64: b64enc(new Uint8Array(await file.arrayBuffer())) });
+  const key = await c.read<{ ownerPub: string | null }>("broker_key");
+  if (!key?.ownerPub) throw new FleetApiError("FLEET_OWNER_VAULT_UNAVAILABLE", "the identity broker has not published its key (is it provisioned?)");
+  return { class: cls, sealedB64: b64enc(await sealTo(b64dec(key.ownerPub), value, `owner:${cls}`)), contentType: file.type };
+}
+
+/**
+ * v51: a mail / SMS provider secret (Proton Mail Bridge, Twilio) sealed to the identity broker's key (scope
+ * `provider-upload:<name>`); the broker installs it in its encrypted provider vault and connects the provider.
+ */
+export async function sealProviderSecret(c: GatewayClient, name: "proton-bridge" | "twilio", fields: Record<string, string>): Promise<{ name: string; sealedB64: string }> {
+  const clean = Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
+  if (!Object.keys(clean).length) throw new FleetApiError("FLEET_BAD_REQUEST", "the provider's fields");
+  const key = await c.read<{ ownerPub: string | null }>("broker_key");
+  if (!key?.ownerPub) throw new FleetApiError("FLEET_OWNER_VAULT_UNAVAILABLE", "the identity broker has not published its key (is it running?)");
+  return { name, sealedB64: b64enc(await sealTo(b64dec(key.ownerPub), JSON.stringify(clean), `provider-upload:${name}`)) };
+}

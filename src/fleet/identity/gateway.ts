@@ -86,6 +86,9 @@ export interface IdentityGatewayPort {
   phoneRecord2(job: string, lease: string, e164: string, provider: string, providerRef: string, monthlyMicro: number | null, currency: string | null): Promise<IxResult>;
   smsCostsPending(worker: string): Promise<Array<{ smsId: string; providerMessageId: string; provider: string }>>;
   smsCost(worker: string, smsId: string, priceMicro: number, currency: string): Promise<IxResult>;
+  // v51 (optional for in-memory test gateways): provider secrets sealed to the broker from the dashboard.
+  providerSecretInbox?(worker: string): Promise<Array<{ uploadId: string; name: string; sealedB64: string }>>;
+  providerSecretInstalled?(uploadId: string, worker: string, ok: boolean, error: string | null): Promise<IxResult>;
 }
 
 /** v41: one provider the broker is configured with (registered in the registry; none = NOT CONFIGURED). */
@@ -112,7 +115,7 @@ export interface SharedMailInput {
 
 export interface BrowserSecretRequest {
   requestId: string;
-  kind: "password" | "username" | "email" | "totp" | "email_code" | "sms_code" | "api_key" | "generate_password" | "auth_link" | "capture" | "owner_fact" | "owner_card";
+  kind: "password" | "username" | "email" | "totp" | "email_code" | "sms_code" | "api_key" | "generate_password" | "auth_link" | "capture" | "owner_fact" | "owner_card" | "owner_document";
   captureKind?: "api_key" | "password" | "recovery_codes" | "totp";
   /** v49: an owner fact or the owner's card, under the owner's standing authority (class, and the field of a structured value). */
   ownerClass?: string;
@@ -217,6 +220,10 @@ export class PgIdentityGateway implements IdentityGatewayPort {
   }
   smsCostsPending(worker: string) { return this.call<Array<{ smsId: string; providerMessageId: string; provider: string }>>("ix_sms_costs_pending", [worker]); }
   smsCost(worker: string, smsId: string, priceMicro: number, currency: string) { return this.call<IxResult>("ix_sms_cost", [worker, smsId, priceMicro, currency]); }
+  providerSecretInbox(worker: string) { return this.call<Array<{ uploadId: string; name: string; sealedB64: string }>>("ix_provider_secret_inbox", [worker]); }
+  providerSecretInstalled(uploadId: string, worker: string, ok: boolean, error: string | null) {
+    return this.call<IxResult>("ix_provider_secret_installed", [uploadId, worker, ok, error]);
+  }
   async close(): Promise<void> {
     await this.pool.end().catch(() => {});
   }

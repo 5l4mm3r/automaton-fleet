@@ -843,6 +843,12 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     for (const cls of ["cash", "reserved", "assets", "principal"]) expect(await bal(agentAcct(a, cls))).toBe(0);
     const asset = (await q(`SELECT economic_owner_account, authority_agent_id FROM fleet.fleet_assets WHERE asset_id = $1`, [assetId]))[0];
     expect(asset).toEqual({ economic_owner_account: "fleet:assets", authority_agent_id: null });
+    // Schema v51: the HTTP test's reaper pass also ended an agent whose wallet was exhausted (a custody fixture with negative
+    // survival equity); its estate is settled the same way before nothing is left to attend to.
+    for (const d of await q(`SELECT agent_id FROM fleet.fleet_agents WHERE status = 'dead' AND status_reason LIKE 'wallet exhausted%'`)) {
+      await ledger.estateOpen(d.agent_id, OWNER).catch(() => undefined);
+      await ledger.estateSettle(d.agent_id, OWNER);
+    }
     expect(await ledger.estateAttention()).toEqual({ assetsUnderDeadAgents: 0, deadAgentsWithBalances: 0, assetsWithoutOwner: 0 });
     expect(await pgCode(ledger.estateSettle(a.agentId, OWNER))).toBe("FLEET_ESTATE_INVALID");
     // A dead agent cannot spend.

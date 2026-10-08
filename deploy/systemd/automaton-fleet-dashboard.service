@@ -68,6 +68,8 @@ SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/browser.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key
 InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-identity -/var/lib/automaton-fleet-witness -/var/lib/private/automaton-founders -/var/log/automaton-fleet -/run/credentials
+# v52: the storefront gateway's database credential and token vault.
+InaccessiblePaths=-/etc/automaton-fleet/gumroad.env -/var/lib/automaton-fleet-gumroad
 
 [Install]
 WantedBy=multi-user.target

@@ -63,7 +63,7 @@ if [[ "$MODE" == revert ]]; then
   [[ "$OLD" == "$C" && "$(readlink /opt/automaton-fleet/current)" == "releases/$C" ]] || die "the running release is not ${C:0:7}"
   test "$(live 'SELECT max(version) FROM fleet.fleet_schema_migrations')" = "$TO" || die "live schema is not $TO"
   [[ -f "$SD" && -f "$SD.sha256" ]] && sha256sum -c --quiet "$SD.sha256" || die "the pre-migration dump is missing or does not verify"
-  for u in $LATE; do [[ "$u" =~ ^automaton-fleet-(dashboard|identity|browser)\.service$ ]] || die "unexpected unit in state"; done
+  for u in $LATE; do [[ "$u" =~ ^automaton-fleet-(dashboard|identity|browser|gumroad)\.service$ ]] || die "unexpected unit in state"; done
   UNITS="automaton-fleet-operator-api.service automaton-fleet-chatgpt-adapter.socket automaton-fleet-chatgpt-adapter.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-fetcher.service $LATE automaton-fleet.service"
   START="automaton-fleet.service automaton-fleet-operator-api.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-chatgpt-adapter.socket $LATE"
   # R41.1: a revert NEVER silently restores an older database over newer state.
@@ -103,6 +103,28 @@ if [[ "$MODE" == revert ]]; then
   if [[ "${FLEET_REVERT_IN_RELEASE:-0}" != 1 && ( "$NJ" != 0 || "$NE" != 0 ) && "${FLEET_REVERT_DISCARD_ACK:-}" != "$NJ:$NE" ]]; then
     sudo systemctl start $START
     die "restoring the pre-migration dump would discard $NJ journal(s) and $NE event(s) written since the cutover (kept in $PD). Reconcile them, then re-run with FLEET_REVERT_DISCARD_ACK=$NJ:$NE to confirm"
+  fi
+  # Schema v52 (Gumroad design §11): a downgrade below v46 never drops settlement evidence or provider liabilities silently.
+  # When any exist, this run exports them (CSV + sha256) and the revert needs FLEET_REVERT_PROVIDER_EXPORT=<that sha256>.
+  if (( FROM < 46 && TO >= 46 )); then
+    PROV=$(live "SELECT (SELECT count(*) FROM fleet.fleet_rail_capability_checks) + (SELECT count(*) FROM fleet.fleet_revenue_claims)
+      + (SELECT count(*) FROM fleet.fleet_settlement_receipts) + (SELECT count(*) FROM fleet.fleet_provider_sales) + (SELECT count(*) FROM fleet.fleet_provider_payouts)
+      + COALESCE((SELECT count(*) FROM fleet.fleet_paypal_transactions), 0)
+      + (SELECT count(*) FROM fleet.fleet_ledger_accounts WHERE class IN ('provider_suspense','agent_provider_payable') AND fleet.fleet_ledger_balance(account_id) <> 0)")
+    if [[ "$PROV" != 0 ]]; then
+      PX=~/automaton_fleet-v$TO-provider-export-${C:0:7}-$STAMP; ( umask 077; mkdir -p "$PX" )
+      for t in fleet_rail_capability_checks fleet_revenue_claims fleet_settlement_receipts fleet_settlement_destinations fleet_provider_accounts fleet_provider_sales \
+               fleet_provider_payouts fleet_provider_payout_lines fleet_provider_allocations fleet_paypal_transactions fleet_paypal_checkouts fleet_card_charges fleet_card_receipts; do
+        sudo -u postgres psql -X -q -d "$LIVE" -c "\\copy (SELECT * FROM fleet.$t) TO STDOUT WITH CSV HEADER" > "$PX/$t.csv" 2>/dev/null || true
+      done
+      live "SELECT a.account_id || ',' || fleet.fleet_ledger_balance(a.account_id) FROM fleet.fleet_ledger_accounts a WHERE a.class IN ('provider_suspense','agent_provider_payable','card_payable','card_cash_reserve','agent_cash_pending')" > "$PX/liabilities.csv"
+      chmod 600 "$PX"/*; PXSHA=$(cat "$PX"/*.csv | sha256sum | cut -c1-64); echo "$PXSHA" > "$PX.sha256"
+      echo "provider evidence exported: $PX ($PROV rows / balances; sha256 ${PXSHA:0:16})"
+      if [[ "${FLEET_REVERT_PROVIDER_EXPORT:-}" != "$PXSHA" ]]; then
+        sudo systemctl start $START
+        die "provider settlement evidence or liabilities exist: do not revert below v46 — freeze and fix forward (gumroad / custody units off, rails suspended). If a revert is unavoidable, re-run with FLEET_REVERT_PROVIDER_EXPORT=$PXSHA after re-entering what must survive"
+      fi
+    fi
   fi
   sudo -u postgres psql -X -q -d $LIVE -c "SET client_min_messages = warning" -c "DROP SCHEMA fleet CASCADE"
   sudo -u postgres pg_restore -d $LIVE --exit-on-error < "$SD"

@@ -133,10 +133,11 @@ describe("v41 communications configuration: dormant by default, secrets encrypte
     try {
       initIdentityState(d);
       const env = { FLEET_IDENTITY_DATABASE_URL: db, FLEET_IDENTITY_STATE_DIR: d, FLEET_MAIL_PROVIDER: "proton-bridge", FLEET_SMS_PROVIDER: "twilio" };
-      const p = identityEnvProblems(env, { uid: process.getuid!(), username: "u" }).join("\n");
-      expect(p).toMatch(/FLEET_MAIL_ADDRESS/);
-      expect(p).toMatch(/provider secret proton-bridge is not installed/);
-      expect(p).toMatch(/sms\.json/); // no twilio secret installed either
+      // v51: before its secret is installed (sealed from the dashboard, or provider-secret-set) the broker starts and waits:
+      // mail and SMS stay NOT CONFIGURED; only malformed settings refuse.
+      expect(identityEnvProblems(env, { uid: process.getuid!(), username: "u" })).toEqual([]);
+      expect(openProviders(env, d)).toEqual({ mail: null, sms: null, mailgun: null });
+      expect(identityEnvProblems({ ...env, FLEET_MAIL_ADDRESS: "Fleet@Proton.example" }, { uid: process.getuid!(), username: "u" }).join()).toMatch(/lowercase/);
       expect(identityEnvProblems({ ...env, FLEET_MAIL_ADDRESS: "fleet@proton.example", FLEET_MAIL_BRIDGE_HOST: "203.0.113.5" }, { uid: process.getuid!(), username: "u" }).join())
         .toMatch(/loopback/);
       const v = openProviderVault(d);

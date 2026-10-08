@@ -47,6 +47,8 @@ SystemCallArchitectures=native
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 InaccessiblePaths=-/etc/automaton-fleet -/etc/letsencrypt/live/api.agentfleet.vip -/etc/letsencrypt/archive/api.agentfleet.vip -/etc/letsencrypt/keys -/etc/letsencrypt/accounts
 InaccessiblePaths=-/var/lib/automaton-fleet -/var/lib/automaton-fleet-dashboard -/var/lib/automaton-fleet-identity -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-backups -/var/lib/private -/var/log/automaton-fleet -/opt/automaton-fleet -/run/credentials
+# v52: the storefront gateway's database credential and token vault.
+InaccessiblePaths=-/etc/automaton-fleet/gumroad.env -/var/lib/automaton-fleet-gumroad
 
 [Install]
 WantedBy=multi-user.target

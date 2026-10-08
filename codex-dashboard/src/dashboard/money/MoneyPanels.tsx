@@ -1,14 +1,14 @@
 "use client";
 /**
- * LIVE-only panels for the treasury (schema v48), money & identity onboarding (v49) and an agent's footprint (v49), on the
- * real dashboard gateway. Every read is a dash_call read op; every change is a dash_call operation (sensitive ones ask for a
+ * LIVE-only panels for the treasury (schema v48; v51 money states, survival, card settlement; v52 storefront), money & identity
+ * onboarding (v49; v51 documents and mail / SMS providers) and an agent's footprint (v49), on the real dashboard gateway. Every read is a dash_call read op; every change is a dash_call operation (sensitive ones ask for a
  * fresh step-up through the client). Secrets are sealed in this browser (owner facts and the card to the identity broker's
  * key, PayPal app credentials to the custody executor's key) and are never sent or shown in plaintext.
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { GatewayClient } from "../api/client";
 import { FleetApiError, CATEGORY_TEXT } from "../api/errors";
-import { sealForCustody, sealOwnerFact } from "../api/seal";
+import { sealForCustody, sealOwnerDocument, sealOwnerFact, sealProviderSecret } from "../api/seal";
 import { money } from "../model";
 import { Panel, button, input } from "../ui";
 
@@ -47,6 +47,7 @@ function Form({ title, fields, submit, note, danger }: { title: string; fields: 
     <p className="font-semibold">{title}</p>{note && <div className="mt-1 text-sm text-slate-400">{note}</div>}
     <div className="grid gap-3 sm:grid-cols-2">{fields.map((f) => <label key={f.key} className="text-sm">{f.label}{f.options
       ? <select className={input} value={v[f.key]} onChange={(e) => setV({ ...v, [f.key]: e.target.value })}>{f.options.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+      : f.type === "textarea" ? <textarea className={`${input} h-28 font-mono text-xs`} autoComplete="off" value={v[f.key]} onChange={(e) => setV({ ...v, [f.key]: e.target.value })} />
       : <input className={input} type={f.type ?? "text"} autoComplete="off" value={v[f.key]} onChange={(e) => setV({ ...v, [f.key]: e.target.value })} />}</label>)}</div>
     <button className={`${button} mt-3 ${danger ? "border-red-700" : "bg-cyan-900"}`} disabled={busy}>{busy ? "Working…" : title}</button>
     {msg && <p role="status" className="mt-2 text-sm text-amber-200">{msg}</p>}
@@ -62,7 +63,9 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
   const card = useRead<Row>(client, "card_clearing", {}, []);
   const pp = useRead<Row>(client, "paypal", {}, []);
   const custody = useRead<Row>(client, "custody", {}, []);
-  const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); };
+  const survival = useRead<Row[]>(client, "wallet_measure", {}, []);
+  const store = useRead<Row>(client, "storefront", {}, []);
+  const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); };
   const call = useCallback(async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); reloadAll(); return r; }, [client]); // eslint-disable-line react-hooks/exhaustive-deps
   const name = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
   const agentOptions = [["", "Choose an agent"], ...agents.map((a) => [a.id, a.name])];
@@ -78,6 +81,27 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
       <div className="sm:col-span-2 xl:col-span-4"><p className="mb-2 text-xs text-slate-400">Contribution by agent</p><table className="w-full text-left text-sm"><thead><tr className="text-slate-400"><th>Agent</th><th>Status</th><th>Wallet</th><th>Revenue</th><th>Contributed</th></tr></thead>
         <tbody>{(h.contributions as Row[]).map((c) => <tr key={c.agentId} className="border-t border-slate-800"><td>{c.name ?? c.agentId}</td><td>{c.status}</td><td>{money(c.cashMinor)}</td><td>{money(c.revenueMinor)}</td><td>{money(c.contributionMinor)}</td></tr>)}</tbody></table></div>
     </div> : <p className="text-sm text-slate-400">{health.error || "Reading…"}</p>}</Panel>
+
+    {h?.moneyStates && <Panel title="Money by state (what is where)">
+      <p className="mb-2 text-xs text-slate-400">The list below is evidence, not settlement: only money PayPal shows available (or a received payout) becomes spendable.</p>
+      <div className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">{[
+        ["Prospective — open checkouts", `${h.moneyStates.prospective.openCheckouts} · ${money(h.moneyStates.prospective.openCheckoutsMinor)}`],
+        ["Verified provider sales not paid out", `$${(Number(h.moneyStates.verifiedProviderSales.notPaidOutUsdMinor) / 100).toFixed(2)} · ${h.moneyStates.verifiedProviderSales.payoutsReportedNotReceived} payouts not received`],
+        ["Captured, held until PayPal shows it available", money(h.moneyStates.captured.heldUntilAvailableMinor)],
+        ["Available — agents / unallocated", `${money(h.moneyStates.available.agentCashMinor)} / ${money(h.moneyStates.available.treasuryUnallocatedMinor)}`],
+        ["PayPal observed", h.moneyStates.paypalObserved ? `${money(h.moneyStates.paypalObserved.availableMinor)} available · ${money(h.moneyStates.paypalObserved.withheldMinor)} withheld` : "no balance observed yet"],
+        ["Receipts not yet posted", String(h.moneyStates.received.receiptsHeld)]]
+        .map(([k, v]) => <div key={k} className="rounded border border-slate-700 p-3"><p className="text-xs text-slate-400">{k}</p><p className="font-mono">{v}</p></div>)}</div>
+    </Panel>}
+
+    <Panel title="Survival (exhaustion is death)">
+      <p className="mb-2 text-xs text-slate-400">When an agent has nothing spendable and none of its own money is held (card holds, payments in progress, PayPal captures awaiting availability, money paid to your card), Fleet Control ends it at the next lifecycle pass and settles its estate. Open checkouts, unsettled provider sales and envelope capital do not count. An owner hold pauses this for that agent.</p>
+      {survival.data ? <table className="w-full text-left text-sm"><thead><tr className="text-slate-400"><th>Agent</th><th>Spendable</th><th>Own money held</th><th>Survival equity</th><th>State</th></tr></thead>
+        <tbody>{survival.data.map((m) => <tr key={m.agentId} className="border-t border-slate-800"><td>{m.name ?? m.agentId}</td><td className="font-mono">{money(m.spendableMinor)}</td>
+          <td className="font-mono">{money(Object.values(m.ownHeldMinor as Record<string, number>).reduce((x, y) => x + Number(y), 0))}</td><td className="font-mono">{money(m.survivalEquityMinor)}</td>
+          <td className={m.exhausted ? "text-red-300" : ""}>{m.exhausted ? "exhausted — ends at the next pass" : "alive"}</td></tr>)}</tbody></table>
+        : <p className="text-sm text-slate-400">{survival.error || "Reading…"}</p>}
+    </Panel>
 
     <Panel title="Treasury transactions">
       <div className="mb-3 grid gap-3 sm:grid-cols-3">
@@ -102,15 +126,19 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
       {(card.data.invoices as Row[]).filter((i) => i.status === "invoiced").map((i) => <div key={i.receiptId} className="my-2 rounded border border-amber-700 p-3 text-sm">
         <p>{name(i.agentId)} · {i.kind} · {money(i.amountMinor)} · ref {i.reference}{i.note ? ` · ${i.note}` : ""}</p>
         <p className="text-amber-200">Return {money(i.returnMinor)} to the treasury (suggested sweep kept: {money(i.suggestedSweepMinor)}), or keep it all as a withdrawal.</p>
-        <Form title="Returned to the treasury" fields={[{ key: "sweep", label: "Sweep kept by you (£)", value: (i.suggestedSweepMinor / 100).toFixed(2) }, { key: "reference", label: "Transfer reference" }]}
-          submit={(v) => call("card_receipt_resolve", { receiptId: i.receiptId, resolution: "return", sweepMinor: minor(v.sweep), reference: v.reference })} />
-        <Form title="Keep as my withdrawal" danger fields={[]} submit={() => call("card_receipt_resolve", { receiptId: i.receiptId, resolution: "withdrawal" })} />
+        <p className="text-xs text-slate-400">“Applied to the card balance”: the money reduced what the fleet owes your card (you repay that much less) — nothing to transfer. “Transferred”: it reached you and you send it to the treasury PayPal.</p>
+        <Form title="Returned to the treasury" fields={[{ key: "method", label: "How", options: [["card_balance", "Applied to the card balance"], ["transfer", "Transferred to the treasury"]] },
+          { key: "sweep", label: "Sweep kept by you (£)", value: (i.suggestedSweepMinor / 100).toFixed(2) }, { key: "reference", label: "Transfer reference (if transferred)" }]}
+          submit={(v) => call("card_receipt_settle", { receiptId: i.receiptId, resolution: "return", method: v.method, sweepMinor: minor(v.sweep), reference: v.reference || null })} />
+        <Form title="Keep as my withdrawal" danger fields={[{ key: "method", label: "How", options: [["card_balance", "It reduced the card balance"], ["transfer", "It reached me"]] }]}
+          submit={(v) => call("card_receipt_settle", { receiptId: i.receiptId, resolution: "withdrawal", method: v.method })} />
       </div>)}
       {!(card.data.invoices as Row[]).some((i) => i.status === "invoiced") && <p className="text-sm text-slate-400">No open invoices.</p>}
       <details className="mt-4"><summary className="cursor-pointer text-sm text-cyan-300">Record a card charge or a card receipt from the statement</summary>
         <Form title="Record card charge" fields={[{ key: "agentId", label: "Agent", options: agentOptions }, { key: "amount", label: "Amount (£)" }, { key: "merchant", label: "Merchant" }, { key: "ref", label: "Statement reference" }]}
           submit={(v) => call("card_charge_record", { agentId: v.agentId, amountMinor: minor(v.amount), merchant: v.merchant, statementRef: v.ref })} />
-        <Form title="Record money paid to the card" fields={[{ key: "agentId", label: "Agent", options: agentOptions }, { key: "amount", label: "Amount (£)" }, { key: "kind", label: "Kind", options: [["revenue", "A sale for the agent"], ["refund", "A merchant refund"]] }, { key: "ref", label: "Statement reference" }, { key: "note", label: "Note" }]}
+        <Form title="Record money paid to the card" note="A credit card normally cannot receive customer payments: record only real credits — a merchant refund, or a provider that actually paid out to the card."
+          fields={[{ key: "agentId", label: "Agent", options: agentOptions }, { key: "amount", label: "Amount (£)" }, { key: "kind", label: "Kind", options: [["refund", "A merchant refund"], ["revenue", "A provider payout to the card"]] }, { key: "ref", label: "Statement reference" }, { key: "note", label: "Note" }]}
           submit={(v) => call("card_receipt_record", { agentId: v.agentId, amountMinor: minor(v.amount), kind: v.kind, reference: v.ref, note: v.note })} />
       </details>
       <h4 className="mt-4 font-semibold">Recent card charges</h4>
@@ -127,16 +155,28 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
     </> : <p className="text-sm text-slate-400">{pp.error || "Reading…"}</p>}</Panel>
 
     <Panel title="Custody activation (money out)">{custody.data ? <>
-      <p className="text-sm">{custody.data.activation ? <>Active until {when(custody.data.activation.expiresAt)} · per payment ≤ {money(custody.data.activation.maxInstructionMinor)} · per 24 h ≤ {money(custody.data.activation.maxDailyMinor)}</> : "Not activated: no payment can leave the treasury."} · live signers: {custody.data.liveSigners}</p>
+      <p className="text-sm">{custody.data.activation ? <>{custody.data.activation.mode === "ongoing" ? "Active (ongoing, until you end it)" : `Active until ${when(custody.data.activation.expiresAt)} (pilot)`} · per payment ≤ {money(custody.data.activation.maxInstructionMinor)} · per 24 h ≤ {money(custody.data.activation.maxDailyMinor)}</> : "Not activated: no payment can leave the treasury."} · live signers: {custody.data.liveSigners}</p>
       <p className="mt-1 text-xs text-slate-400">Money leaves only with all four keys: this activation, a verified live PayPal rail, the custody signer’s attestation, and the custody host’s real-payments switch.</p>
       {custody.data.activation ? <Form title="Deactivate now" danger fields={[{ key: "reason", label: "Reason" }]} submit={(v) => call("custody_deactivate", { reason: v.reason })} />
-        : <Form title="Activate custody" fields={[{ key: "perPayment", label: "Maximum per payment (£)" }, { key: "perDay", label: "Maximum per 24 hours (£)" }, { key: "hours", label: "Hours until it expires (≤ 2160)", value: "168" }, { key: "reason", label: "Reason" }]}
-          submit={(v) => call("custody_activate", { maxInstructionMinor: minor(v.perPayment), maxDailyMinor: minor(v.perDay), hours: Number(v.hours), reason: v.reason })} />}
+        : <Form title="Activate custody" note="A pilot expires by itself; ongoing runs until you end it (no renewals). The maxima stay as treasury risk limits either way."
+          fields={[{ key: "mode", label: "Mode", options: [["pilot", "Pilot (expires)"], ["ongoing", "Ongoing (autonomous)"]] }, { key: "perPayment", label: "Maximum per payment (£)" }, { key: "perDay", label: "Maximum per 24 hours (£)" },
+            { key: "hours", label: "Pilot: hours until it expires (≤ 2160)", value: "168" }, { key: "reason", label: "Reason" }]}
+          submit={(v) => call("custody_activate", { mode: v.mode, maxInstructionMinor: minor(v.perPayment), maxDailyMinor: minor(v.perDay), hours: v.mode === "ongoing" ? null : Number(v.hours), reason: v.reason })} />}
       <Form title="Set an agent's wallet limits" note="Blank = no agent-specific limit (the activation's limits still apply)."
         fields={[{ key: "agentId", label: "Agent", options: agentOptions }, { key: "perPayment", label: "Per payment (£)" }, { key: "perDay", label: "Per 24 h (£)" }, { key: "cardMax", label: "Card per charge (£)" }, { key: "cardDay", label: "Card per 24 h (£)" }, { key: "note", label: "Note" }]}
         submit={(v) => call("wallet_limits_set", { agentId: v.agentId, maxInstructionMinor: v.perPayment ? minor(v.perPayment) : null, maxDailyMinor: v.perDay ? minor(v.perDay) : null,
           cardMaxChargeMinor: v.cardMax ? minor(v.cardMax) : null, cardMaxDailyMinor: v.cardDay ? minor(v.cardDay) : null, note: v.note })} />
     </> : <p className="text-sm text-slate-400">{custody.error || "Reading…"}</p>}</Panel>
+
+    <Panel title="Gumroad storefront (through the gateway)">{store.data ? <>
+      {(store.data.accounts as Row[]).length ? (store.data.accounts as Row[]).map((acc) => <div key={acc.accountId} className="mb-2 text-sm">
+        <p>{acc.label} · ready: {(acc.readiness.capabilitiesReady as string[]).join(", ") || "nothing yet"}</p>
+        <p className="text-xs text-slate-400">{Object.entries(acc.readiness.checks as Record<string, Row>).map(([k, c]) => `${k.replace(/_/g, " ")}: ${c.status}`).join(" · ")}</p>
+        <Form title="Run the storefront probe (draft create / inspect / delete)" fields={[]} submit={() => call("storefront_probe", { accountId: acc.accountId })} />
+      </div>) : <p className="text-sm text-slate-400">No Gumroad account registered (economy-provider-account-register on the host; then the gateway’s OAuth onboarding).</p>}
+      <p className="mt-2 text-sm">Products: {(store.data.products as Row[]).length} · sales read back: {store.data.sales} · payouts: {store.data.payouts}</p>
+      <ul className="text-sm">{(store.data.products as Row[]).slice(0, 20).map((p) => <li key={p.productRef} className="border-t border-slate-800 py-1">{name(p.agentId)} · {p.name} · {p.state}{p.warning ? ` · ${p.warning}` : ""}{p.url ? <> · <a className="text-cyan-300 underline" href={p.url} target="_blank" rel="noopener noreferrer">open</a></> : ""}</li>)}</ul>
+    </> : <p className="text-sm text-slate-400">{store.error || "Reading…"}</p>}</Panel>
   </>;
 }
 
@@ -156,12 +196,15 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
   const auto = useRead<Row>(client, "identity_autonomy", {}, []);
   const key = useRead<Row>(client, "custody_key", {}, []);
   const pp = useRead<Row>(client, "paypal", {}, []);
-  const call = async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); auto.reload(); key.reload(); pp.reload(); return r; };
+  const comms = useRead<Row>(client, "provider_secrets", {}, []);
+  const call = async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); auto.reload(); key.reload(); pp.reload(); comms.reload(); return r; };
   const upload = async (cls: string, value: string) => call("owner_vault_upload", await sealOwnerFact(client, cls, value));
   const configured = (cls: string) => auto.data?.configured?.[cls]?.status === "configured";
   const a = auto.data;
   const [classes, setClasses] = useState<string[] | null>(null);
   const chosen = classes ?? (a?.classes as string[] | undefined) ?? [];
+  const [docs, setDocs] = useState<string[] | null>(null);
+  const docsChosen = docs ?? (a?.documentClasses as string[] | undefined) ?? [];
   return <>
     <Panel title="1 · PayPal treasury credentials">
       <p className="text-sm text-slate-300">Create a REST app in your PayPal Business account (developer.paypal.com → Apps &amp; Credentials → Live). Paste its client id and secret here: they are sealed in this browser to the custody executor’s key ({key.data?.fingerprint ? `key ${String(key.data.fingerprint).slice(0, 16)}…` : "not yet published"}) and only custody can open them.</p>
@@ -174,13 +217,14 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
     </Panel>
 
     <Panel title="2 · Your card (bypass only)">
-      <p className="text-sm text-slate-300">Used only where a checkout or provider accepts nothing else. Sealed here to the identity broker; agents never see it; every fill is logged; the agent’s balance (then the treasury) is charged and the card is repaid from the treasury. Status: {configured("payment_card") ? "on file" : "not on file"}.</p>
+      <p className="text-sm text-slate-300">Used where a merchant takes cards. Sealed here to the identity broker; agents never see it; every fill is logged. Before the card can be filled the agent’s own funds (or a Fleet envelope) are reserved for the charge; anything a merchant charges beyond what the agent can cover becomes the agent’s debt to the treasury. You repay the card from the treasury. Status: {configured("payment_card") ? "on file" : "not on file"}.</p>
       <Form title="Seal and upload card" fields={[{ key: "number", label: "Card number" }, { key: "expMonth", label: "Expiry month (MM)" }, { key: "expYear", label: "Expiry year (YYYY)" }, { key: "cvc", label: "CVC", type: "password" }, { key: "name", label: "Name on card" }, { key: "postcode", label: "Billing postcode" }]}
         submit={(v) => upload("payment_card", JSON.stringify({ number: v.number.replace(/\s/g, ""), expMonth: v.expMonth, expYear: v.expYear, cvc: v.cvc, name: v.name, postcode: v.postcode }))} />
     </Panel>
 
     <Panel title="3 · Bank details and identity facts">
-      <p className="text-sm text-slate-300">Each is sealed in this browser to the identity broker’s key. Filled into forms only where a site requires it, never shown to an agent. Identity documents (passport, licence, proof of address) are uploaded on the Owner identity page and are submitted by you, not by agents.</p>
+      <p className="text-sm text-slate-300">Each is sealed in this browser to the identity broker’s key. Filled into forms (or, for documents, uploaded) only where a provider requires it and only under your standing authority (4); never shown to an agent. A live selfie or video check stays yours.</p>
+      <DocumentUpload configured={configured} upload={async (cls, file) => call("owner_vault_upload", await sealOwnerDocument(client, cls, file))} />
       <Form title="Seal and upload bank details" note={`Status: ${configured("bank_account_owner") ? "on file" : "not on file"}`}
         fields={[{ key: "holder", label: "Account holder" }, { key: "sortCode", label: "Sort code" }, { key: "accountNumber", label: "Account number" }, { key: "bank", label: "Bank" }, { key: "iban", label: "IBAN (optional)" }]}
         submit={(v) => upload("bank_account_owner", JSON.stringify({ holder: v.holder, sort_code: v.sortCode, account_number: v.accountNumber, bank: v.bank, ...(v.iban ? { iban: v.iban } : {}) }))} />
@@ -196,6 +240,11 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
       <p className="my-2 text-sm">Now: {a.enabled ? "ON" : "OFF"} · card {a.cardEnabled ? `ON (≤ ${money(a.cardMaxChargeMinor)} per charge, ≤ ${money(a.cardMaxDailyMinor)} per 24 h)` : "OFF"}</p>
       <fieldset className="my-2 grid gap-1 text-sm sm:grid-cols-2">{FILLABLE.map(([k, l]) => <label key={k} className="flex items-center gap-2"><input type="checkbox" checked={chosen.includes(k)}
         onChange={(e) => setClasses(e.target.checked ? [...chosen, k] : chosen.filter((x) => x !== k))} />{l}{configured(k) ? "" : " (not on file)"}</label>)}</fieldset>
+      <p className="mt-3 text-sm font-semibold">Documents agents may upload into a provider’s own form</p>
+      <fieldset className="my-2 grid gap-1 text-sm sm:grid-cols-2">{DOCS.map(([k, l]) => <label key={k} className="flex items-center gap-2"><input type="checkbox" checked={docsChosen.includes(k)}
+        onChange={(e) => setDocs(e.target.checked ? [...docsChosen, k] : docsChosen.filter((x) => x !== k))} />{l}{configured(k) ? "" : " (not on file)"}</label>)}</fieldset>
+      <Form title="Save document authority" note="Documents are used truthfully, for the agent’s own account with that provider; never for a false declaration." fields={[]}
+        submit={() => call("identity_documents_set", { classes: docsChosen })} />
       <Form title="Save standing authority" fields={[{ key: "enabled", label: "Authority", options: [["true", "On"], ["false", "Off"]], value: String(a.enabled) },
         { key: "card", label: "Card", options: [["false", "Off"], ["true", "On"]], value: String(a.cardEnabled) }, { key: "cardMax", label: "Card per charge (£)", value: a.cardMaxChargeMinor ? (a.cardMaxChargeMinor / 100).toFixed(2) : "" },
         { key: "cardDaily", label: "Card per 24 h, whole fleet (£)", value: a.cardMaxDailyMinor ? (a.cardMaxDailyMinor / 100).toFixed(2) : "" },
@@ -203,7 +252,42 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
         submit={(v) => call("identity_autonomy_set", { enabled: v.enabled === "true", classes: chosen, cardEnabled: v.card === "true", cardMaxChargeMinor: v.cardMax ? minor(v.cardMax) : null,
           cardMaxDailyMinor: v.cardDaily ? minor(v.cardDaily) : null, excludedOrigins: v.excluded.split(",").map((x) => x.trim()).filter(Boolean), statement: v.statement })} />
     </> : <p className="text-sm text-slate-400">{auto.error || "Reading…"}</p>}</Panel>
+
+    <Panel title="5 · Mail and SMS">
+      <p className="text-sm text-slate-300">Mail: one Proton mailbox shared by the fleet, through Proton Mail Bridge on the Fleet host (install it there and sign in once; export its certificate). Each agent gets its own alias (address+tag), and mail is routed to the agent it belongs to. Paste Bridge’s generated IMAP/SMTP login here — never your Proton password. SMS (optional): a Twilio API key.</p>
+      {(() => {
+        const m = (comms.data?.comms as Row | undefined)?.mail, sms = (comms.data?.comms as Row | undefined)?.sms;
+        const ch = (m?.channels as Row[] | undefined)?.[0];
+        return <p className="my-2 text-sm">Mail: {m ? (m.configured ? `${ch?.provider ?? "configured"} · ${ch?.address ?? ""} · connection ${ch?.health ?? "unknown"}${ch?.lastError ? ` (${ch.lastError})` : ""} · ${ch?.routingAddresses ?? 0} agent aliases` : "not configured") : "reading…"}
+          {" · "}SMS: {sms ? (sms.configured ? `configured · ${sms.activeNumbers} numbers` : "not configured") : "reading…"}
+          {" · "}Uploads: {(comms.data?.uploads as Row[] | undefined)?.slice(0, 3).map((u) => `${u.name} ${u.status}${u.error ? ` (${u.error})` : ""}`).join(", ") || "none"}</p>;
+      })()}
+      <Form title="Seal and upload Proton Bridge login" fields={[{ key: "address", label: "Shared Proton address" }, { key: "username", label: "Bridge username" }, { key: "password", label: "Bridge password (generated by Bridge)", type: "password" },
+        { key: "certPem", label: "Bridge certificate (PEM, exported from Bridge)", type: "textarea" }]}
+        submit={async (v) => call("provider_secret_upload", await sealProviderSecret(client, "proton-bridge", { address: v.address.toLowerCase(), username: v.username, password: v.password, certPem: v.certPem.trim() }))} />
+      <Form title="Seal and upload Twilio API key" fields={[{ key: "accountSid", label: "Account SID" }, { key: "apiKeySid", label: "API key SID" }, { key: "apiKeySecret", label: "API key secret", type: "password" }]}
+        submit={async (v) => call("provider_secret_upload", await sealProviderSecret(client, "twilio", v))} />
+    </Panel>
   </>;
+}
+
+const DOCS = [["passport", "Passport"], ["driving_licence", "Driving licence"], ["id_document", "Other ID document"], ["proof_of_address", "Proof of address"]];
+
+/** v51: an identity document chosen here, sealed in this browser to the identity broker (PDF or image, ≤ 8 MB). */
+function DocumentUpload({ configured, upload }: { configured: (cls: string) => boolean; upload: (cls: string, file: File) => Promise<unknown> }) {
+  const [cls, setCls] = useState("passport"), [file, setFile] = useState<File | null>(null), [busy, setBusy] = useState(false), [msg, setMsg] = useState("");
+  return <form className="my-3 rounded-lg border border-slate-700 p-4" onSubmit={async (e) => {
+    e.preventDefault(); if (!file) { setMsg("Choose a file"); return; } setBusy(true); setMsg("");
+    try { await upload(cls, file); setMsg("Sealed and uploaded."); setFile(null); } catch (err) { setMsg(describe(err)); } finally { setBusy(false); }
+  }}>
+    <p className="font-semibold">Seal and upload a document</p>
+    <div className="grid gap-3 sm:grid-cols-2">
+      <label className="text-sm">Document<select className={input} value={cls} onChange={(e) => setCls(e.target.value)}>{DOCS.map(([k, l]) => <option key={k} value={k}>{l}{configured(k) ? " (on file)" : ""}</option>)}</select></label>
+      <label className="text-sm">File (PDF, JPEG, PNG or WebP, ≤ 8 MB)<input className={input} type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>
+    </div>
+    <button className={`${button} mt-3 bg-cyan-900`} disabled={busy}>{busy ? "Sealing…" : "Seal and upload"}</button>
+    {msg && <p role="status" className="mt-2 text-sm text-amber-200">{msg}</p>}
+  </form>;
 }
 
 // ─────────────────────────── An agent's footprint (v49) ───────────────────────────
@@ -214,7 +298,7 @@ export function AgentFootprint({ client, agentId, onReveal }: { client: GatewayC
   if (!fp.data) return <Panel title="Accounts & footprint"><p className="text-sm text-slate-400">{fp.error || "Reading…"}</p></Panel>;
   const d = fp.data;
   return <>
-    <Panel title="Accounts (freeze links)">{(d.accounts as Row[]).length ? (d.accounts as Row[]).map((acc) => <div key={acc.accountId} className="mb-3 rounded border border-slate-700 p-3 text-sm">
+    <Panel title="Accounts (freeze links)"><p className="mb-2 text-xs text-slate-400">Freeze stops the fleet’s own use (no credential, fill or session is served; queued jobs stop). It does not close or cancel the account at the provider — open the site and use the revealed credentials for that.</p>{(d.accounts as Row[]).length ? (d.accounts as Row[]).map((acc) => <div key={acc.accountId} className="mb-3 rounded border border-slate-700 p-3 text-sm">
       <p className="font-semibold">{acc.platform} · {acc.handle ?? ""} · <span className={acc.status === "frozen" ? "text-red-300" : ""}>{acc.status}</span></p>
       <p className="text-slate-400">Login email: {acc.loginEmail ?? "—"} · sites: {(acc.origins as string[]).join(", ")}{acc.lastUsedAt ? ` · last used ${when(acc.lastUsedAt)}` : ""}</p>
       <div className="mt-2 flex flex-wrap gap-2">

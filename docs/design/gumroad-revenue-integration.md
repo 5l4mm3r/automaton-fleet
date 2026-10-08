@@ -909,3 +909,56 @@ D `treasury_cash` / C `provider_suspense`.
   do.
 - **No founder tools, wake signal on the memo, or gateway yet** (G3). No bank-feed connector (G4).
 - **No provider test purchase or live pilot has run.** All evidence here is local database tests.
+
+---
+
+## 16. G3 / G4 implementation status (v52; local; not deployed)
+
+Implemented as schema **v52** (`src/fleet/postgres/migrations-phase52.ts`) with
+`src/fleet/storefront/{gumroad-client,gateway,worker,main}.ts`, `src/fleet/settlement/bankfeed.ts`,
+`deploy/systemd/automaton-fleet-gumroad.service` and `scripts/fleet-gumroad-setup.sh`. Production stays on v45.
+
+### Gateway (G3)
+
+- **Roles.** `fleet_provider(_login)` executes gx_* only; the audit verifies this.
+- **Startup refusals.** The unit refuses to start when:
+  - any of the four switches is on;
+  - another unit's credential is visible;
+  - its vault directory is not private.
+- **Token.** It comes from OAuth only (`oauth-url`, `oauth-exchange` on stdin). A token whose scopes are not exactly
+  `edit_products view_sales view_payouts` is refused at onboarding, and again at every account check. A failed check
+  records `account_access` failed and runs no job for that account.
+- **Allowlist (§6.3)** is enforced before any request is sent. Only api.gumroad.com and https *.amazonaws.com part uploads
+  are reached.
+- **Jobs.** Agents' `storefront.*` operations queue jobs bound to their venture. Crash-safe creation (§7.3): the permalink
+  is fixed first, and a lost answer is adopted by permalink. Files are attached with the full list each time. A publish
+  warning keeps the product a draft and fails `storefront_publication`.
+- **Daily reconcile.** It adopts, flags orphans and missing products, and fails stale drafts.
+- **Sales and payouts** are read back and recorded via the v47 recorders (memo). The first attributed sale verifies
+  `sale_ingestion`. Buyer data is not stored.
+- **No direct agent use.** Agents cannot register on or fill credentials into gumroad.com (`FLEET_PROVIDER_VIA_GATEWAY`).
+
+### Receipt evidence (G4)
+
+- **PayPal treasury destination** (`economy-destination-paypal`). A completed Gumroad payout is matched against custody's
+  Transaction Search records. The match needs all three:
+  - exactly one candidate;
+  - status S;
+  - a covering Balances reading.
+
+  The receipt then posts through v47 (S5) and verifies `receipt_verification` and `payout_reconciliation`. No bank transfer
+  is required when payouts go to PayPal.
+- **Bank destination.** `fleet_bankfeed(_login)` executes rx_* only. `BankFeedConnector` takes a provider-neutral
+  `BankFeedClient` and refuses any consent wider than `read_accounts` / `read_transactions`. **No account-information
+  provider is wired in.** The owner chooses one; until then the labelled pilot attestation (§4.5) remains the bank-path
+  fallback.
+
+### Recovery
+
+`fleet-rollout.sh revert` now implements the §11 guard. A downgrade below v46 while provider evidence or liabilities exist
+first exports them (CSV + sha256), then refuses unless `FLEET_REVERT_PROVIDER_EXPORT=<sha256>` is given.
+
+### Tests
+
+`fleet-storefront-gateway-pg.test.ts` (10) runs against a fake Gumroad API built from the documented payloads. Tier 2/3
+evidence (real probe, first real sale, payout and receipt) does not exist yet. 62cbe1b7 and 6178c7bb remain pending.

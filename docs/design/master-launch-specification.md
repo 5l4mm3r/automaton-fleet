@@ -1,403 +1,538 @@
-# Automaton Fleet — Master Launch Specification
+# Automaton Fleet — Master Launch Specification (revision 2)
 
-Status: AUTHORITATIVE for the launch candidate (2026-10-08). It supersedes earlier design notes where they conflict.
-It does not replace the Gumroad design (`gumroad-revenue-integration.md`, G1/G2 built). It sets that work in the
-whole system.
+Status: AUTHORITATIVE for the launch candidate (2026-10-08). It supersedes revision 1 (commit f4695f6) and earlier design
+notes where they conflict. The Gumroad design (`gumroad-revenue-integration.md`) remains the detailed reference for the
+storefront and settlement; its G3/G4 stages are now built (v52).
 
-Scope of authority (owner, 2026-10-08):
-- **Authorized:** local implementation, validation, commit and push of a reviewed candidate.
-- **Not authorized:**
-  - production migration;
-  - enabling any live flag;
-  - spending real funds;
-  - submitting identity documents;
-  - resolving 62cbe1b7 / 6178c7bb without evidence;
-  - raising the cap or creating agents.
-- Every activation in §11 is a separate, explicitly authorized step.
+**Scope of authority.** The owner authorized local implementation, validation, commit and push of a reviewed candidate.
+Not authorized yet, and not done:
+- production migration or deployment;
+- enabling any live flag (the four safety switches stay false);
+- spending real money;
+- submitting documents to real providers;
+- answering 62cbe1b7 / 6178c7bb without evidence;
+- raising the cap or creating agents.
 
-Status vocabulary, used everywhere in this document and in the final report:
+Every activation in §12 is a separate, explicitly authorized step.
+
+**Status vocabulary** (used here and in every report):
 
 | Status | Meaning |
 |---|---|
-| IMPLEMENTED | Code exists in the repository. |
-| LOCALLY VERIFIED | Tests pass against a local PostgreSQL registry. |
-| REHEARSED | Exercised end to end on a disposable copy (the rollout rehearsal). |
-| DEPLOYED | Running on the production VPS. |
-| LIVE VERIFIED | Observed working against real providers with real money or documents. |
+| IMPLEMENTED | Code exists in the repository |
+| LOCALLY VERIFIED | Tests pass against a local PostgreSQL registry (fake providers where a provider is involved) |
+| REHEARSED | Exercised end to end on a disposable production copy (`fleet-rollout.sh rehearse`) |
+| DEPLOYED | Running on the production VPS |
+| LIVE VERIFIED | Observed working against real providers with real money or documents |
+
+Nothing in this candidate is REHEARSED, DEPLOYED or LIVE VERIFIED.
 
 ---
 
-## 1. What exists (production fda78a0, schema 45) and what the candidate adds
+## 1. Owner decisions and implementation choices
 
-| Area | Production today | Candidate |
+This section separates the two. An implementation choice is not presented as owner-approved; each can be changed by a
+reviewed migration without re-opening an owner decision.
+
+### 1.1 Owner decisions (2026-10-08)
+
+| # | Decision | Source |
 |---|---|---|
-| Founder loop | Founder loop runs. Idle backoff is up to 32 slots and blind to events. | **Event probe** (9a866d3): a resting founder wakes at the next slot when its state changes. |
-| Economy ops | ~90 `api_economy` ops: opportunity, venture, capital, identity, browser, projects… | Additions: PayPal checkout ops, card-fill ops, wallet limits visible. |
-| Money out | Impossible. Two CHECK pins, no instruction issuer, and the custody flag contradiction. | Four-key activation (§4.4), a scheduled issuer, and the contradiction fixed. Default OFF. |
-| Card / checkout | Absent. | Owner card as a **bypass** with a clearing liability (§5). |
-| Money in | Manual owner revenue only. G1/G2 Gumroad schema is local (v46/v47). | PayPal treasury receiving: Orders v2, verified webhooks, Transaction Search reconciliation (§4). |
-| Treasury view | 30-day totals only. | Per-transaction treasury list with agent attribution, per-agent filter and health (§6). |
-| Identity | Owner vault exists. No connector, no browser fill of owner facts. | Agent **standing authority** to fill owner facts and card into forms, never visible to the agent. Every use logged, plus a footprint with freeze links (§7). |
-| Email | Proton shared mailbox code is dormant. | One alias per agent, shown in the agent tab with credentials (§7.4). |
-| Lifecycle | Reaper death only. No insolvency rule. Sweeps unscheduled. | Insolvency → dormancy → death with estate. Sweeps scheduled when enabled. Temporary sweep reductions with expiry (§8). |
-| Knowledge | Fleet-wide economic notes with no PII guard. | The 52-entry library with staleness rules, PII scrubbing on shared lessons, and customer-data isolation (§9). |
-| Dashboard | No onboarding for rails or credentials. | Onboarding for PayPal app credentials, card, bank and ID (sealed). Treasury list. Agent accounts / footprint / mail tab (§10). |
+| O1 | The treasury is the owner's PayPal Business account. Agent wallets are ledger balances backed by it. | Handoff answers |
+| O2 | The owner's card is a payment bypass, not extra agent capital. Charges are deducted from the agent (and/or the treasury), the card is repaid from the treasury, and money reaching the card becomes an admin invoice to return (minus the sweep) or keep as a withdrawal. Everything is logged. | Handoff answers; completion handoff ("explicitly authorized") |
+| O3 | A treasury transaction list per agent, with a filter, contribution and health. No third-party accounting software. | Handoff answers |
+| O4 | "Let agents have authority to use everything and tick the click approval — my delay shouldn't put the agents' lives at risk." Decrypted values are never shown to agents; every use is logged. | Handoff answers |
+| O5 | A per-agent footprint, every step clickable, freeze links, email/password visible to the owner. | Handoff answers |
+| O6 | Mail is one Proton shared mailbox, one alias per agent. | Handoff answers |
+| O7 | Agents must earn to survive. **Wallet exhaustion means death**, not dormancy awaiting rescue. No automatic overdraft or bailout. | Completion handoff |
+| O8 | Fleet Control is the bank: it decides capital requests automatically from evidence, economics, downside, commitments and treasury health; new agents need no profit history; it does not approve ordinary commercial decisions. | Completion handoff |
+| O9 | Shared capital is spent only under a recorded Fleet Control allocation, never per-transaction owner approval. | Completion handoff |
+| O10 | The dynamic net-profit sweep, with temporary reductions that expire and revert. No fixed own-capital thresholds, no synthetic tax deductions, no £100/order or £50/day owner thresholds. | Earlier and completion handoffs |
+| O11 | Document submission under the standing authority is wanted. Only genuine human-verification steps stay with the owner. | Completion handoff |
+| O12 | Gumroad is one channel. 62cbe1b7 and 6178c7bb stay pending until their requirements are evidenced. | Completion handoff |
+| O13 | Initial setup and live activation are separate from ordinary autonomous operation. There are no routine renewals and no recurring transaction approvals merely as a precaution. | Completion handoff |
+| O14 | No forced journaling or action, no permanent opportunity weights, no compulsory study, no arbitrary business-model restrictions. | Earlier handoffs |
+
+### 1.2 Implementation choices (reviewable)
+
+| # | Choice | Why |
+|---|---|---|
+| C1 | Agent wallets are partitions of treasury cash (`agent_cash`). Envelopes hold allocated Fleet capital separately (`agent_envelope_cash`). | Keeps own money and Fleet money distinct (O8, O9). |
+| C2 | **Four keys** release money out: an owner activation, a verified live PayPal rail, a fresh custody-signer attestation, and `REAL_PAYMENTS_ENABLED=true` in custody only. | Separates setup from operation (O13) without weakening custody. |
+| C3 | An activation is either **pilot** (expires, at most 90 days) or **ongoing** (no expiry; ends only when the owner ends it). Both keep per-payment and 24 h maxima as treasury risk limits. | O13: once ongoing is chosen, nothing needs renewing. |
+| C4 | Before the card can be filled, a hold reserves its maximum from the agent's own spendable capital or an envelope. A statement larger than the hold is **advanced against the agent's payable** (a debt that lowers its equity), never written off as a fleet expense. | O2 + O7 + no automatic overdraft: the card really was charged, so the liability is real and belongs to the agent. |
+| C5 | A card receipt is settled either **applied to the card balance** (it reduced what the fleet owes the card) or **transferred** (it reached the owner). The owner's choice of return or withdrawal is kept either way. | O2, without double-counting the card liability. |
+| C6 | A completed PayPal capture is revenue at once, but its cash is **held** (`agent_cash_pending`) until Transaction Search shows status S and the latest Balances reading covers it. | "Distinguish captures, held funds and available capital." PayPal publishes no per-transaction availability flag we rely on. |
+| C7 | One **authoritative wallet measure** (§6.1); death at the next lifecycle pass. A never-funded agent is not "exhausted". An owner hold pauses the pass for that agent. | O7. The hold is an existing, explicit owner action, not an automatic rescue. |
+| C8 | When the agent's own runway (inference plus commitments) is shorter than the plan's payback, an approval comes with bounded terms (`RUNWAY_SHORTER_THAN_PAYBACK`). | O8 ("commitments"). The test is relative to the agent's own figures, not a fixed threshold. |
+| C9 | Sweep-reduction requests are decided at once. A request is granted, bounded by the capital policy's existing reinvestment reduction and envelope term, when there is after-tax profit to retain and an active venture; otherwise it is declined with a reason. | O8, O10. |
+| C10 | Knowledge revision 2: a **hard rule** must name its basis (law, regulator code, or a platform's own terms). Everything else is a recommendation. | O14; "distinguish sourced requirements from recommendations". |
+| C11 | Gumroad payouts into the PayPal treasury are matched from PayPal's own records. Bank-directed payouts use a bank feed (provider not yet chosen) or the labelled pilot attestation. | "Do not require an external bank transfer merely because an earlier design used a bank destination." |
+| C12 | Agents cannot register accounts on, or have credentials filled into, gumroad.com; the storefront is operated only through the gateway. | One owner seller account behind a broker (Gumroad design §2). |
+| C13 | Proton and Twilio secrets can be sealed from the dashboard to the identity broker, which starts the provider without a restart. | O6: credentials are an onboarding dependency, not a reason to omit the integration. |
+| C14 | No buyer PII from Gumroad sales is stored in the registry; agents see sale ids, amounts and states. | Data minimisation. Customer contact stays inside the agent's own operations. |
 
 ---
 
-## 2. Invariants (never changed by this candidate)
+## 2. Invariants (unchanged)
 
-1. The safety switches stay false and are read only by host processes:
-   - `REAL_PAYMENTS_ENABLED`
-   - `REAL_REPLICATION_ENABLED`
-   - `OWNER_SWEEP_ENABLED`
-   - `FLEET_DRY_RUN_CHILD`
-
-   No SQL reads them.
-2. Cap 2, DEVELOPMENT mode, replication off, no new agents.
-3. The sweep is computed on **net profit**, never gross. Protected capital is obligations, runway, approved growth
-   capital and contingency. Sweep rates are dynamic, and temporary reductions expire and revert. There are no fixed
-   fleet-wide scoring weights, no work quotas, no own-capital thresholds, and no £100/order or £50/day owner
-   thresholds.
-4. Agents never approve their own capital and never see:
-   - a decrypted owner fact, card number, bank detail or PayPal secret;
+1. **Safety switches.** The four (`REAL_PAYMENTS_ENABLED`, `REAL_REPLICATION_ENABLED`, `OWNER_SWEEP_ENABLED`,
+   `FLEET_DRY_RUN_CHILD`) stay false in production and are read only by host processes. Custody accepts
+   `REAL_PAYMENTS_ENABLED` as key 4 but still refuses the other two. The storefront gateway refuses to start with any of
+   the four on.
+2. **Fleet limits.** Cap 2, DEVELOPMENT mode, replication off, no new agents.
+3. **Sweep.** The sweep is on net profit only. Protected capital is obligations, runway, approved growth capital and
+   contingency.
+4. **What agents never do or see.** They never approve their own capital. They never see:
+   - a decrypted owner fact, document, card number or bank detail;
+   - a PayPal or Gumroad secret;
    - a database or controller credential.
-5. Owner funding is never revenue. Card receipts kept by the owner are owner withdrawals, never agent expense.
-6. Agents are not forced to journal or act. No live evidence is fabricated.
-7. Runtime pinning (commit, build ID, lockfile SHA), replay protection and credential scoping are untouched.
-8. **PayPal is reached only through its REST API with the owner's app credentials.** No process ever logs into
-   paypal.com. The PayPal user agreement restricts robots on its site and the disclosure of passwords.
+5. **Money integrity.** Owner funding is never revenue. One external settlement credits once (canonical claims).
+6. **Agent freedom.** No live evidence is fabricated. Agents are not forced to journal or act.
+7. **Runtime security.** Runtime pinning, replay protection and credential scoping are untouched.
+8. **PayPal access.** PayPal is reached only through its REST API with the owner's app credentials, never by automating
+   paypal.com.
 
 ---
 
-## 3. Owner decisions (2026-10-08)
+## 3. The operating model
 
-| # | Decision | How it is realised |
+- **Agents** are born knowing they must earn to survive. They choose opportunities, build, market, deliver, take payment
+  and spend their own capital. Unchanged:
+  - their contextual opportunity ranking;
+  - hibernation, with a stated reason and a wake condition;
+  - action-scoped dependencies.
+- **Fleet Control is the bank.** It lends Fleet capital through envelopes, decided automatically by `fleet_capital_decide`
+  (deterministic, versioned, no owner branch). The possible outcomes:
+  - **REJECT** — negative expected value;
+  - **DEFER** — not enough evidence or liquidity;
+  - **PARTIAL_APPROVE** — a first tranche plus milestones;
+  - **APPROVE_WITH_LIMITS** — low confidence, a weak record, or runway shorter than payback;
+  - **APPROVE** — otherwise.
+
+  A new agent is judged on its stated confidence; a track record only calibrates later decisions. Fleet Control also
+  adjusts sweeps (envelope reinvestment reductions, and temporary reductions decided at once). It does not approve
+  ordinary commercial decisions, and there is no automatic overdraft or rescue.
+- **How treasury interests are protected:**
+  - concentration and liquidity bounds relative to the treasury;
+  - envelope stop-loss;
+  - the net-profit sweep;
+  - card and refund debts that lower the debtor agent's equity.
+
+---
+
+## 4. Treasury, wallets and capital
+
+- **Wallets.**
+  - `agent_cash` is a partition of treasury money.
+  - Spendable = `max(0, min(cash, survival equity))`.
+  - Every debit locks the agent's accounts in a fixed order. Card reservation and booking lock cash, reserved, envelope
+    and payable together.
+- **Shared capital.**
+  - It reaches an agent only through an envelope created by a recorded capital decision.
+  - A card hold may draw on an envelope (`envelopeId`), within its available capital and single-exposure bound.
+  - An envelope's position counts card reservations and charges as well as payment orders.
+- **Sweeps.**
+  - The rate is dynamic and net-profit only: population band, maturity and surplus.
+  - From it, subtract the larger of the envelope reduction and any active temporary reduction.
+  - Reductions expire and revert (recorded).
+  - Card-receipt sweep shares are recorded as the agent's contribution, so the daily sweep never takes them twice.
+
+---
+
+## 5. Card bypass (O2)
+
+### 5.1 The card product — owner dependency
+
+**Verified 2026-10-08: UK PayPal Credit is unusable for the bypass.**
+- It is a cardless credit line inside the PayPal wallet, with no card number.
+- It works only at PayPal checkout.
+- The bypass fills a card form on a merchant's site, so it needs a card number. PayPal Credit could only be used by
+  operating paypal.com, which the fleet never does.
+
+The bypass works with any card that has a number:
+
+| Card | How charges are paid | Repayment |
 |---|---|---|
-| D1 | The treasury is the owner's PayPal Business account. Agent wallets are ledger sub-balances with per-agent limits. Top-ups are Fleet Control allocations. | `agent_cash` remains a partition of treasury cash. `fleet_agent_wallet_limits` adds a per-instruction and a rolling 24 h cap per agent, set by Fleet Control (owner). Top-ups are existing allocations. |
-| D2 | The PayPal credit card is a **bypass**, not a source of spending. The amount is deducted from the agent (and/or treasury). The card is then repaid from the treasury. Card receipts produce an admin invoice to return the amount minus sweep, or to record a permanent withdrawal. Everything is logged. | Card-clearing ledger (§5). **PayPal offers no API to repay a PayPal Credit card**, so repayment is a tracked owner task: the dashboard shows what is outstanding and the owner records each repayment. |
-| D3 | A treasury transaction list attributed per agent, with a filter, showing contribution and overall health. No third-party accounting. | `fleet_treasury_transactions` view plus `fleet_treasury_health()` (§6). |
-| D4 | "Let agents have authority to use everything… my delay shouldn't put the agents' lives at risk." | A standing owner authority (`fleet_identity_autonomy`) lets agents request fills of owner facts and the card into **pinned-origin forms only**. Values are sealed to the browser worker and never reach the agent. Every use is logged with an event and a footprint entry. Revocable at any moment. |
-| D5 | Footprint per agent, every step clickable, with a "freeze link" to the provider holding email and password, so the owner can cancel or close the account. | `fleet_agent_footprint` view plus a dashboard tab. The freeze link opens the account's origin, and the owner reveals the credentials through the existing step-up reveal path. |
-| D6 | Email: Proton shared mailbox, one alias per agent, credentials visible in the agent tab. | v41 routing addresses. The agent tab shows the alias and the shared mailbox access entry (owner reveal). Dormant until the owner sets up Bridge (§11). |
+| PayPal Business Debit Mastercard | From the PayPal balance (the treasury), at once | None needed: record each charge's PayPal transaction as its repayment reference. Refunds go back to the card or the PayPal balance; settle them as "applied to the card balance". |
+| A credit card (any issuer) | Charged to the card | The owner repays the issuer from the treasury and records each repayment. No API repays a card. |
+
+**The owner must confirm which card is on file.** Nothing else changes.
+
+### 5.2 Flow
+
+1. **Hold.** `card.authorize` takes the account (the merchant site), a maximum, and optionally an envelope.
+   - Requires the standing authority and a card on file.
+   - **Reserves** the maximum from the agent's own spendable capital, or from the envelope. If neither covers it, the hold
+     is refused (`FLEET_INSUFFICIENT_FUNDS` / `FLEET_ENVELOPE_EXHAUSTED`).
+   - Wallet and owner card limits, and excluded origins, apply.
+2. **Fill.** `owner_card` fill steps are served only on that origin, while the hold is open. Each fill is logged.
+3. **Declare.** The charge is booked from the reservation and the rest is released. If the agent never declares, the
+   reaper books a used hold at its maximum and voids an unused one.
+4. **Statement correction (owner).**
+   - Larger: the difference comes from the agent's cash, then its envelope, then is advanced against its payable (P1
+     event).
+   - Smaller: the difference gives back the advance still owed, then the envelope, then cash.
+   - Expense is booked once; `card_payable` and `card_cash_reserve` move by the same amount.
+5. **Repayment (owner records it).** `card_payable` and `card_cash_reserve` both go down.
+6. **Money reaching the card** (a refund or a genuine payout) creates an owner invoice.
+   - It is settled as return or withdrawal, either applied to the card balance or transferred.
+   - The suggested sweep is the dynamic rate on net profit only (zero for refunds).
+
+A credit card generally cannot receive customer payments, and the dashboard says so. Agents take payments through PayPal
+checkouts or Gumroad.
 
 ---
 
-## 4. PayPal treasury rail
+## 6. Survival and death (O7)
 
-### 4.1 What PayPal supports (official documentation, checked 2026-10-08)
+### 6.1 The authoritative wallet measure (`fleet_agent_wallet_measure`)
 
-**Supported**
-- **Auth:** OAuth2 client credentials, token lifetime about 9 h.
-- **Receiving:** Orders v2 (create → buyer approves → capture); Invoicing v2 (guest card payment); Payment Links.
-- **Webhooks:**
-  - Signed, with verification by postback (`/v1/notifications/verify-webhook-signature`).
-  - Retried up to 25 times over 3 days.
-- **Transaction Search:**
-  - Lag up to 3 h; 31-day windows.
-  - `transaction_id` is not globally unique, so the key is (transaction_id, event code, date).
-- **Balances API.**
-- **Payouts:**
-  - Needs PayPal approval for the account.
-  - Fee 2%, capped at £10 domestic.
-  - `sender_batch_id` is idempotent for 30 days.
-- **Refunds:** the original fee is kept (UK). Dispute fee £12, chargeback £14.
+- **Spendable** = max(0, min(cash, survival equity)).
+- **Survival equity** = cash + recoverable reservations + recoverable assets + escrow + own card holds − protected
+  principal − approved obligations − payables.
+- **Own money held** (counts as the agent's):
+  - own-funded card holds;
+  - own-funded payments in progress (reserved or executing orders);
+  - PayPal captures awaiting availability;
+  - PayPal captures reported PENDING;
+  - money paid to the owner's card and invoiced.
+- **Does not count:**
+  - open or approved checkouts (prospective sales);
+  - provider sales not yet received (memo);
+  - Fleet envelope capital.
+- **Exhausted** = all three hold:
+  - the agent was funded at some point;
+  - min(cash + own holds, equity) = 0;
+  - none of its own money is held.
 
-**NOT supported**
-- Paying another merchant's checkout by API.
-- A card vault usable at arbitrary merchants.
-- Repaying a PayPal Credit card.
-- Withdrawing to a bank or card.
-- Any automation of paypal.com itself.
+### 6.2 The lifecycle pass
 
-### 4.2 Process boundary
-- **Controller.** Holds no PayPal secret. It receives webhooks on `POST /v1/webhooks/paypal` (public, size-limited,
-  rate-limited) and stores them **unverified** in `fleet_paypal_webhook_inbox` (deduplicated by PayPal event id).
-- **Custody executor.** The only holder of the PayPal app credential (custody vault, or sealed onboarding, §10.2). It:
-  1. verifies each inbox event by postback;
-  2. creates checkout orders that agents requested;
-  3. captures approved orders;
-  4. reconciles captures, refunds, reversals and fees against Transaction Search;
-  5. posts treasury receipts;
-  6. executes payouts.
+The reaper passes run in this order:
+1. card holds;
+2. PayPal availability;
+3. Gumroad-in-PayPal matching;
+4. exhaustion;
+5. sweep-reduction expiry.
 
-  Every call is audited per credential (`cx_credential_use`).
+At the exhaustion pass, each exhausted active agent is re-checked under its row and account locks. It then:
+- dies with cause `insolvent` (P1 event `agent_wallet_exhausted`);
+- has its credentials revoked;
+- goes through the estate flow, which returns principal, cash and assets.
 
-### 4.3 Receiving (agent → customer → treasury)
-1. **Agent request.** The agent calls `paypal.checkout` with: venture, description, amount, currency, and optional
-   return URL.
-2. **Row created.** A row is added to `fleet_paypal_checkouts` with status `requested`.
-3. **Order creation.** Custody creates the order with:
-   - `custom_id = <checkout id>`;
-   - `invoice_id = fleet:<checkout id>`;
-   - the treasury as payee.
+A receipt or allocation that commits first keeps the agent alive; one that arrives after death belongs to the estate.
+There is no grace period and no bailout. An owner hold pauses the pass for that agent.
 
-   It records the approval link. The checkout becomes `open`, and the agent reads the link (`paypal.checkout_status`).
-4. **Buyer approval.** On `CHECKOUT.ORDER.APPROVED` (verified), custody captures. Captures are idempotent through
-   `PayPal-Request-Id = capture:<checkout id>`.
-5. **Capture completed.** On `PAYMENT.CAPTURE.COMPLETED`, or a reconciliation match in Transaction Search, custody
-   records a **PayPal receipt** keyed by `paypal:<capture id>`. It is attributed through the checkout to the agent
-   and venture, and posts:
-   - D agent_cash (net)
-   - D agent_fees (PayPal fee)
-   - C agent_revenue (gross)
+### 6.3 What agents see
 
-   The claim key is in `fleet_revenue_claims`.
-6. **Refunds and reversals.**
-   - `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED` and disputes post a **paypal clawback**: from agent cash
-     first, with any shortfall advanced by the treasury against the agent's payable (G2 classes).
-   - A UK refund does not return the fee.
-   - Dispute and chargeback fees are agent fees.
-7. **Unattributed money.** Money with no checkout (for example a direct send to the treasury) is never revenue and is not
-   posted anywhere: it stays an unmatched PayPal transaction (reported by reconciliation and on the dashboard) until the
-   owner records it as owner funding or an agent's revenue with its reference, or closes it as not revenue.
-
-### 4.4 Spending (treasury → payee) and the four-key activation
-Payouts pay PayPal email payees through the existing signer. Instructions are issued by the reaper
-(`svc_issue_due_instructions`) for every reserved order. An instruction is issued only when **all four keys** hold:
-
-1. **Registry activation.** `fleet_custody_activation` holds an active owner activation that names:
-   - a per-instruction maximum;
-   - a rolling 24 h maximum;
-   - an expiry.
-
-   This replaces the v10 CHECK pin: `custody_execution_enabled` is now derived from an unexpired activation and can
-   be turned on by nothing else.
-2. **Live rail.** A **verified live rail**: provider `paypal`, mode `live`, every G1 readiness check for `payouts`
-   verified and unexpired. The v29 "never live" pin becomes "live only for paypal, and only after readiness".
-3. **Signer attestation.** A fresh custody signer attestation in live mode.
-4. **Host switch.** `REAL_PAYMENTS_ENABLED=true` in the **custody executor's** environment.
-   - Fix: custody previously refused to start with that flag on while live signers required it, so live custody could
-     never run.
-   - Now the custody executor accepts `REAL_PAYMENTS_ENABLED`; it still refuses `REAL_REPLICATION_ENABLED` and
-     `OWNER_SWEEP_ENABLED`.
-   - The controller's flag stays false.
-
-The agent's wallet limits (D1) and the activation limits are checked when an instruction is issued.
-
-### 4.5 Reconciliation
-Custody pulls Transaction Search in 24 h windows with an overlap of 3 h or more. It upserts
-`fleet_paypal_transactions` (keyed by transaction id, event code and date) and matches each one to a receipt, a
-payout or a card repayment. The Balances API reading is recorded as `fleet_paypal_balance_observations`.
-
-`fleet_paypal_reconcile()` reports:
-- PayPal transactions with no ledger match;
-- ledger receipts with no PayPal match after 6 h;
-- the gap between the PayPal balance and the ledger treasury total, net of the card liability and items in flight.
+Every turn's survival observation carries the wallet measure and the rule in plain words. This is information, not a gate.
+`wallet survival` returns the same. v50's dormancy is retired; its setter answers `FLEET_RETIRED`.
 
 ---
 
-## 5. Card bypass and card clearing (D2)
+## 7. Receiving and reconciliation
 
-The owner's card is used only where a checkout or provider accepts nothing else. It is **not** a source of money.
+### 7.1 PayPal (the treasury)
 
-| Event | Ledger (new kinds) | Notes |
+| State | Evidence | Ledger |
 |---|---|---|
-| Card charge (agent fill, §7) | `card_charge`: D agent_expense (a) / C agent_cash (a); D fleet_expense (t) / C treasury_cash (t), where t is the shortfall the treasury covers; D card_cash_reserve (Y) / C card_payable (Y) | Y = the charged amount the agent declares, corrected when the owner confirms the statement amount. The cash stays in the treasury, earmarked for repayment. |
-| Charge correction | `card_charge_adjust` (same lines, signed difference) | From the statement. |
-| Owner repays the card (PayPal UI "Make a Payment" or Direct Debit) | `card_repayment`: D card_payable / C card_cash_reserve | Recorded by the owner with a statement reference. Not automatable: no API exists. |
-| Money arrives on the card (refund or incoming payment) | `card_receipt`: D card_receipt_receivable / C agent_revenue (or a refund reversal of agent_expense) | Creates an **owner invoice**: return the amount minus the sweep share to the treasury. |
-| Owner returns it | `card_receipt_return`: D agent_cash (Z − s) + D treasury_cash (s, swept as a profit contribution with D agent_contributions / C fleet_profit) / C card_receipt_receivable (Z) | Sweep s = the current dynamic sweep rate × the receipt's profit share, never more than net profit. |
-| Owner keeps it | `card_receipt_withdrawal`: D owner_withdrawals / C card_receipt_receivable | A permanent owner withdrawal, logged. The agent's revenue still counts. |
+| Prospective | Checkout open or approved | Nothing |
+| Captured, held | Capture COMPLETED (verified webhook, capture response, or Transaction Search) | Revenue and fee; cash held in `agent_cash_pending` |
+| Captured, pending at PayPal | Capture PENDING | Nothing yet; counts as own money held |
+| Available capital | Transaction Search status S **and** the latest Balances reading (≤ 26 h old) covers the release | `paypal_funds_available`; payables are repaid first |
+| Refund / reversal / dispute fee | Verified event | From the held money, then cash, then an advance against the payable |
 
-- Outstanding repayment (`card_payable`) and open invoices appear in the treasury health and the dashboard.
-- A card charge refuses when the agent's spendable cash plus the allowed treasury share is below the amount, or when
-  identity autonomy or card fill is off.
+- Money with no checkout is never revenue, unless the owner attributes it or it matches a Gumroad payout (§7.2).
+- The treasury list shows the evidence and the real-cash effect of each journal; it does not prove settlement.
+- `fleet_money_states()` reports each state separately, plus PayPal's withheld balance.
 
----
+### 7.2 Gumroad (G3/G4, v52)
 
-## 6. Treasury transactions and health (D3)
+- **Gateway** — `automaton-fleet-gumroad`: role `fleet_provider`, gx_* functions only, no listener.
+  - It holds the token in its own vault, written by `oauth-exchange` from stdin, with exactly
+    `edit_products view_sales view_payouts`.
+  - Every start re-checks the exact user and scopes (`account_access`); a wider token is refused.
+  - A deny-by-default allowlist confines it to products, files, sales and payouts.
+- **Agent operations** — `storefront.*`, bound to the agent's venture:
+  - create a draft, and update it;
+  - attach files, taken from the agent's workspace by its toolbox (the full file list is sent each time);
+  - publish — a provider warning keeps the product a draft and marks `storefront_publication` failed;
+  - unpublish, delete drafts, read sales and job status.
 
-**`fleet_treasury_transactions`** is a view over ledger journals. It has one row per journal, with:
-- time, kind, direction (in / out / internal);
-- agent (attributed), venture;
-- gross, fee and net (cents);
-- external reference;
-- contribution flag.
-
-It is filterable by agent and readable by the dashboard (`treasury_transactions`) and the hub CLI.
-
-**`fleet_treasury_health()`** reports:
-- treasury cash: unallocated, agent partitions, reserved;
-- card payable and open card invoices;
-- provider suspense;
-- 30-day inflow, outflow and net;
-- contributions per agent;
-- runway (cash ÷ 30-day net burn);
-- PayPal reconciliation status.
-
----
-
-## 7. Identity, accounts, footprint and freeze (D4–D6)
-
-### 7.1 Standing authority
-`fleet_identity_autonomy` is a single owner row:
-- enabled;
-- the allowed classes;
-- card allowed;
-- per-use and 24 h card maxima;
-- origins excluded.
-
-It is set from the dashboard (step-up). **Default: disabled.** The owner turns it on during onboarding.
-
-### 7.2 Owner facts and card fill
-New browser fill kinds:
-- `owner_fact` (class: legal_name, date_of_birth, residential_address, contact_email, contact_phone, tax_identifier,
-  bank_account_owner);
-- `owner_card` (number, expiry, cvc, holder; the card is a new owner vault class, `payment_card`).
-
-Rules:
-- The broker releases the value **sealed to the browser worker's one-time key**, for the session's pinned origin
-  only, never to the agent.
-- Each release writes `fleet_identity_uses` (agent, class, origin, account, session, time) and a `fleet_event`
-  (`owner_identity_used`).
-- A card fill also opens a **card charge hold**: the agent must report the amount within 24 h. Otherwise the
-  declared maximum is charged to clearing, and the owner corrects it from the statement.
-- Document uploads (ID image, proof of address) need a browser file-upload action. **Not in this candidate:** KYC
-  document submission stays an owner action. This keeps "do not submit identity documents" true.
-
-### 7.3 Footprint and freeze links
-`fleet_agent_footprint(agent)` merges these into one timeline:
-- accounts registered;
-- browser sessions and actions (origin, step, outcome);
-- identity uses;
-- card charges;
-- mail aliases.
-
-Each account row carries a **freeze link**: the account's pinned origin (login or settings URL) plus a reveal handle.
-The dashboard opens the origin in a new tab. "Reveal" shows the email and password through the existing step-up reveal
-(sealed to the admin's ephemeral key, logged in `reveal_log`). An optional **freeze** action:
-- marks the account `frozen` in the fleet;
-- revokes the agent's use of its credential;
-- records the event.
-
-Closing the account at the provider remains the owner's click.
-
-### 7.4 Mail
-Proton shared mailbox, one routing alias per agent (v41 `mail_assign`). The agent tab shows:
-- the alias;
-- the mailbox access entry (reveal);
-- the mail feed.
-
-Dormant until the owner sets up Proton Bridge and `FLEET_MAIL_PROVIDER` (§11).
-
-### 7.5 Legacy plaintext facts
-`api_identity_fact` has refused every release since schema v34 (`FLEET_IDENTITY_BROKERED`): no owner value ever reaches an
-agent. Agents use fills instead.
+  One agent never sees another agent's products.
+- **Crash-safe creation.** The permalink is fixed before creation. If the creation response is lost, the gateway adopts
+  the product by that permalink. A daily reconcile flags orphaned and missing products.
+- **Sales and payouts.** Both are read back from the API into memo records that never move money. The first attributed
+  sale proves `sale_ingestion`.
+- **Receipt evidence:**
+  - **PayPal treasury destination.** The payout is matched from custody's Transaction Search records. It needs exactly one
+    completed payout, status S, and a covering balance. It then posts as received (S5) and proves
+    `receipt_verification` and `payout_reconciliation`.
+  - **Bank destination.** A bank-feed connector reads it: role `fleet_bankfeed`, rx_* functions only, read scopes only,
+    behind a provider-neutral client interface. **The account-information provider is an owner choice still to make;**
+    until then the labelled pilot attestation remains.
+- **No direct agent use.** Agents cannot register or fill credentials on gumroad.com (`FLEET_PROVIDER_VIA_GATEWAY`).
+- **Dependencies 62cbe1b7 and 6178c7bb stay pending.**
+  - They are answered only by verified readiness: `account_access` + `storefront_publication` on a rail assigned to the
+    venture.
+  - The answer carries the generated disclosure.
+  - This happens only after real onboarding.
 
 ---
 
-## 8. Operating loop and lifecycle
+## 8. Identity, documents, footprint and freeze (O4, O5, O11)
 
-- **Wake.** Event probe (built). `wakeOn` remains descriptive.
-- **Survival burn.** Inference plus active commitments plus phone rental, over 7 days.
-- **Insolvency.** An agent whose survival equity is ≤ 0, with no pending receipt, no open envelope and no answered
-  dependency in flight:
-  1. becomes **dormant** (cognition refused, heartbeats continue, the owner is notified as P1);
-  2. after a 72 h grace period with no change, the reaper moves it to `terminating` with cause `insolvent`;
-  3. the existing estate flow then runs.
+### Standing authority
 
-  Any receipt, allocation or owner hold cancels dormancy. This is a rule, not a quota.
-- **Sweeps.** The reaper runs `svc_sweep_run` and `svc_tax_true_up` once a day **only when** `fleet_sweep_policy.enabled`
-  (default false; enabling it is an activation step, §11).
-- **Temporary sweep reductions.** `fleet_sweep_reductions` rows: agent, basis points, reason, start, expiry, decided_by.
-  `fleet_sweep_compute` applies the largest active reduction. Expiry reverts automatically and is recorded.
-  Requestable by the agent (`sweep.reduction_request`), decided by Fleet Control (owner or deterministic policy).
-- **Replication and owner sweeps.** Still gated separately by three switches and the cap. Unchanged.
+`fleet_identity_autonomy` (default off) holds:
+- the fact classes agents may have filled;
+- the document classes agents may have uploaded (`document_classes`: passport, driving licence, ID document, proof of
+  address);
+- card use, with per-charge and fleet-wide 24 h maxima;
+- excluded origins.
 
----
+Every change is history.
 
-## 9. Knowledge library and customer data
+### Fills and uploads, never disclosure
 
-- **Library.** `fleet_knowledge_library`: the 49 researched entries (8 categories), versioned, built from
-  `docs/knowledge/foundational-library-v0.1.md` by `scripts/knowledge-library-build.mjs` and seeded by schema v50. Each entry carries:
-  - `facts_that_change` with `verify_at` and `stale_after_days`;
-  - `hard_rules`;
-  - sources with licence.
+1. The worker asks for a value on the session's pinned origin.
+2. The registry checks the authority, origin, class, freeze state and, for the card, an open hold.
+3. The broker seals the value to the worker's one-time key. A document is sent as `{contentType, dataB64}`, at most 8 MB.
+4. The worker fills the value, or sets the document into the page's own file input from memory.
+   - Nothing is written to disk and no screenshots are taken.
+   - Snapshots redact filled values.
+   - The agent never receives the value.
+5. Each use writes a `fleet_identity_uses` row and an `owner_identity_used` event.
 
-  Retrieval (`economic_knowledge op library`) is by keyword or category, top-k. It **always** returns matching hard
-  rules, and adds a "VERIFY BEFORE RELYING" banner when the entry is stale or unverified. Nothing is injected per turn.
-- **Shared lessons.** `knowledge.record` and proposals pass `fleet_scrub_pii()`, which rejects or masks:
-  - emails, phone numbers, postcodes and card-like numbers;
-  - IBANs and sort codes;
-  - street lines.
+### Human-only steps stay human
 
-  The agent's own facts are untouched.
-- **Customer data.** It stays in the agent's own state directory (per-OS-user isolation). The registry stores only
-  counterparty hashes. Shared knowledge never contains customer identifiers.
+These are marked `human_action_required` for that one action:
+- live selfie or video liveness checks;
+- CAPTCHAs;
+- fresh signatures;
+- in-person verification.
 
----
+Known examples:
+- Stripe's identity verification behind a Gumroad payout (owner-only, per Gumroad's help centre);
+- any provider asking for a live selfie or video;
+- opening a bank or PayPal account.
 
-## 10. Dashboard
+The authority never permits a false declaration; the knowledge library states this as law (Fraud Act 2006 s.2).
 
-### 10.1 Pages
-- **Treasury:** the transaction list with an agent filter, health, card clearing and invoices, and reconciliation.
-- **Agent → Accounts & footprint:** a timeline, freeze links, reveal and mail alias.
-- **Onboarding (Settings → Money & identity):**
-  1. PayPal app credentials (sealed, §10.2);
-  2. rail registration and readiness checks;
-  3. the card (owner vault `payment_card`, sealed in the browser);
-  4. bank details (`bank_account_owner`);
-  5. ID facts and documents (existing sealed upload);
-  6. standing authority (§7.1);
-  7. revocation and replacement of each item.
+### Footprint
 
-### 10.2 Sealing PayPal credentials to custody
-The custody executor publishes an X25519 public key, attested like the broker key (`fleet_custody_keys`). The dashboard:
-- seals `clientId:clientSecret` in the browser;
-- the registry stores only the ciphertext (`fleet_custody_sealed_credentials`);
-- custody unseals it into memory.
+- accounts, with their origin as the open-site link;
+- credential reveal (step-up, logged) and status;
+- mail aliases;
+- a clickable timeline of browser actions, identity uses, card charges and account events.
 
-Revocation marks the credential revoked and custody drops it. The file vault remains an alternative.
+### Freeze
+
+Freeze stops all local use:
+- no credential, owner value, document or session is served;
+- queued and waiting identity jobs stop, and new ones are refused;
+- the agent cannot change the account's status.
+
+It does **not** close or cancel the account at the provider. The result and the dashboard say so, and point to the
+provider link and the revealed credentials.
 
 ---
 
-## 11. Activation steps (each needs explicit owner authorization; nothing here is done by the candidate)
+## 9. Communication (O6)
 
-1. Deploy the candidate (schema v45 → head) with `scripts/fleet-release.sh`. Founders upgrade later.
-2. Create a PayPal REST app (Live) in the owner's Business account. Request Payouts access.
-3. Onboard credentials, card, bank and ID in the dashboard. Set the standing authority.
-4. Register the PayPal rail. Run readiness checks (account access, sale ingestion, payout reconciliation).
-5. Subscribe the PayPal webhook to `https://api.agentfleet.vip/v1/webhooks/paypal`. Record the webhook id.
-6. Receive first, with `REAL_PAYMENTS_ENABLED` still false. Checkout and receipt need no money out.
-7. Grant the registry activation (limits and expiry), then set `REAL_PAYMENTS_ENABLED=true` for **custody only**.
-8. Proton: set up Bridge and `FLEET_MAIL_PROVIDER`, and assign aliases.
-9. Optional, separately: enable the sweep policy.
+### Mail
 
-Gumroad dependencies 62cbe1b7 and 6178c7bb are answered only by readiness evidence on an assigned rail. A PayPal
-receiving rail can answer a "receive payments" requirement once its checks are verified.
+- **Shared mailbox:** Proton Mail Bridge on the Fleet host.
+- **Per-agent routing:** each agent has aliases (`base+tag@domain`). Inbound routing is deterministic: alias, then
+  conversation, then a pending verification. Outbound mail goes From the shared address, with the agent's alias as
+  Reply-To.
+- **Onboarding** (three owner steps):
+  1. Install Bridge on the host and sign in once. This is Proton's own interactive login.
+  2. Export Bridge's certificate.
+  3. In the dashboard, enter the address, Bridge's generated login and the certificate. They are sealed to the broker,
+     which then starts mail.
+- **Dashboard status:** connection health, alias count and upload status.
 
-## 12. Deferred, explicitly
+### SMS
 
-- Gumroad G3 (gateway roles, storefront tools) and G4 (bank feed).
-- Browser file upload and KYC document submission.
-- Platform connectors.
-- Persistent browser sessions.
-- Replication activation.
-- Operator API treasury scope.
+- The Twilio adapter is unchanged: live quote, cost-checked number, per-message charging.
+- Its API key can also be sealed from the dashboard.
+- Whether to rent numbers is the agents' own economic decision. Proton does not provide SMS.
+- **Dependency:** a Twilio account, with UK regulatory bundle approval if UK numbers are wanted.
 
 ---
 
-## 13. Implementation status (launch candidate)
+## 10. Knowledge and customer data (O14)
 
-| Item | Where | Status |
+### Foundational library (49 entries), revision 2 (v51)
+
+- Every hard rule names its basis: Law, Regulator code or Platform terms. Process advice moved to `recommendations`.
+- **Removed:**
+  - the invented fleet-wide "one account per platform" rule. Each platform's own account policy applies; ban evasion and
+    manipulation stay prohibited because the platforms prohibit them;
+  - "account creation / KYC needs operator approval" (superseded by O4);
+  - the legal ban on tax and mental-health advice. These are not reserved activities, so this is now a recommendation.
+- Retrieval is on request only. Nothing is injected into turns, and there is no compulsory study.
+
+### Customer data
+
+- Shared lessons are scrubbed of e-mails, phones, card and bank numbers, sort codes and postcodes.
+- Private customer records stay in the responsible agent's own state, for its invoices and operations.
+
+---
+
+## 11. Dashboard (UI 0.10.0)
+
+**Treasury**
+- health;
+- money by state;
+- survival — every agent's wallet measure;
+- transactions per agent;
+- card clearing — repayment, and invoices settled by method;
+- PayPal;
+- custody activation (pilot or ongoing) and wallet limits;
+- Gumroad storefront — readiness, probe, products.
+
+**Money & identity**
+1. PayPal credentials, sealed to custody;
+2. the card;
+3. bank details, facts and **documents** (file upload, sealed in the browser);
+4. the standing authority — facts, **documents**, card;
+5. **mail and SMS** — Bridge login and certificate, Twilio key, connection status.
+
+**Agent**
+- the footprint, with freeze and its note on provider-side closure.
+
+---
+
+## 12. Activation
+
+Each step needs explicit owner authorization; none has been done.
+
+1. **Deploy** 45 → 52 (§13). The gateway installs dormant (no token).
+2. **PayPal:**
+   1. create a Live REST app and request Payouts;
+   2. seal its credentials in the dashboard;
+   3. register the credential and the rail (`--mode live`);
+   4. subscribe the webhook and record its id;
+   5. run the readiness checks, using real probes.
+3. **Receive first.** Pay one small real checkout yourself and watch it go captured → held → available.
+4. **Card.** Confirm the product (§5.1), upload it, and set the standing authority with conservative maxima.
+5. **Facts and documents.** Upload them and choose the document classes agents may use.
+6. **Mail.** Install Bridge, sign in, and seal its login.
+7. **Gumroad** (optional, separately):
+   1. create the OAuth app and run `oauth-url` / `oauth-exchange`;
+   2. register the provider account;
+   3. run the probe and attest `storefront_publication`;
+   4. assign the rail to ventures;
+   5. link the PayPal treasury destination.
+8. **Money out:**
+   1. a pilot custody activation with small maxima;
+   2. the custody signer file;
+   3. `REAL_PAYMENTS_ENABLED=true` in **custody.env only**;
+   4. after a clean pilot, an **ongoing** activation (no renewals).
+9. **Sweeps** (optional): enable the sweep policy.
+
+---
+
+## 13. Deployment and recovery
+
+### 13.1 Compatibility
+
+- Every component refuses any schema but its own. Production runs schema 45 with fda78a0.
+- v46–v52 only **add**: new tables and columns, restated functions, and new or replaced constraints on tables with no
+  production rows yet.
+- **Behaviour changes for the two living agents after deploy:**
+  - exhaustion is death;
+  - PayPal money is held until available;
+  - card holds reserve funds first.
+- The rehearsal confirms both agents are funded and not exhausted before cutover.
+- Founders on fda78a0 keep working against v52. The new tools (`storefront`, `wallet survival`, document upload) arrive
+  with a founder runtime upgrade.
+
+### 13.2 Deploy
+
+1. Build on the VPS; take the pins from the build output.
+2. Run `fleet-rollout.sh rehearse <pins> 45 52` on the production copy. Expect:
+   - a clean audit;
+   - a verified ledger;
+   - no journal or balance change;
+   - no agent exhausted.
+3. Run `fleet-release.sh … 45 52`. It writes one `production_deployed` event and promotes UI 0.10.0.
+4. Upgrade the founders: Agent 2 first, then Founder 1.
+
+### 13.3 Recovery (correct terms)
+
+- **Preferred: fix forward.** A code fix on schema 52 needs no restore and loses nothing.
+- **A schema revert to 45 does not preserve newer writes in the running system.** `fleet-rollout.sh revert`:
+  1. exports every post-cutover row and journal as **recovery evidence** (`*-post-cutover-*.dump`);
+  2. refuses to continue until those are reconciled and acknowledged (`FLEET_REVERT_DISCARD_ACK=<journals>:<events>`);
+  3. restores the pre-migration dump.
+
+  Anything that must survive — owner funding, PayPal receipts, card records — is then **re-entered** from that evidence,
+  with the same references (claims keep it single). After the revert, the system holds only what was re-entered.
+- **After provider data exists, do not revert. Freeze and fix forward:**
+  - disable the gumroad unit and custody's PayPal worker;
+  - suspend the rails;
+  - correct with reversing journals in a forward migration.
+
+  `revert` refuses to go below v46 when provider rows exist, unless a verified provider export from the same run is named.
+- **New services:**
+  - the gateway and any bank-feed unit: disable first; their vaults keep the token;
+  - the broker's provider vault: kept;
+  - custody's sealed credentials: kept as registry ciphertext.
+- **Agent state.** Workspaces, memory and journals live on the host and are untouched by schema steps. To roll back a
+  founder runtime, use `fleet-founders.sh rollback-runtime`.
+- **Deaths are permanent.** A revert does not resurrect a dead agent.
+
+---
+
+## 14. Requirement → implementation matrix
+
+| Requirement | Where | Status |
 |---|---|---|
-| Event probe (wake on change within one slot) | `founder/mind.ts` (9a866d3) | IMPLEMENTED, LOCALLY VERIFIED |
-| Four-key custody activation; live = PayPal treasury only; issuer in the reaper; wallet limits | schema v48, `service/server.ts`, `custody/main.ts` | IMPLEMENTED, LOCALLY VERIFIED |
-| Custody start contradiction fixed (REAL_PAYMENTS_ENABLED is key 4, not a refusal) | `custody/main.ts`, `custody/signers.ts` | IMPLEMENTED, LOCALLY VERIFIED |
-| PayPal receiving: checkouts, verified webhooks, capture, refunds, Transaction Search, balances | schema v48, `custody/paypal-treasury.ts`, `POST /v1/webhooks/paypal` | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal API) |
-| Card clearing: charges, statement confirmation, repayment record, receipts → invoice → return / withdrawal | schema v48 | IMPLEMENTED, LOCALLY VERIFIED |
-| Treasury transaction list (per agent), treasury health, reconciliation findings | schema v48, dashboard Treasury | IMPLEMENTED, LOCALLY VERIFIED |
-| Standing identity authority; owner-fact and card fills; card holds; use log | schema v49, `identity/broker.ts`, `browser/worker.ts` | IMPLEMENTED, LOCALLY VERIFIED (database + broker field extraction; no real website) |
-| Footprint with freeze links and reveal; account freeze / unfreeze | schema v49, dashboard agent profile | IMPLEMENTED, LOCALLY VERIFIED |
-| PayPal credentials sealed to custody from the dashboard; webhook ids on rails | schema v49, `custody/sealed-vault.ts`, dashboard Money & identity | IMPLEMENTED, LOCALLY VERIFIED |
-| Insolvency dormancy (death only under an owner grace); commitment-aware burn | schema v50, reaper | IMPLEMENTED, LOCALLY VERIFIED |
-| Daily net-profit sweep and tax true-up (only while the sweep policy is enabled) | reaper | IMPLEMENTED (policy remains disabled) |
-| Temporary sweep reductions (request → grant → expiry) | schema v50 | IMPLEMENTED, LOCALLY VERIFIED |
-| Foundational knowledge library with hard rules and stale banners | schema v50, `knowledge.library` | IMPLEMENTED, LOCALLY VERIFIED |
-| PII scrubbing of shared knowledge and proposals | schema v50 | IMPLEMENTED, LOCALLY VERIFIED |
-| Dashboard 0.9.0: Treasury panels, Money & identity onboarding, agent footprint | `codex-dashboard` | IMPLEMENTED, built (LIVE export), contract-tested |
-| Proton per-agent aliases | v41 (existing) + footprint display | IMPLEMENTED earlier; DORMANT until Bridge is set up |
-| Gumroad G3 / G4 | — | NOT BUILT (deferred, §12) |
+| Spec separates owner decisions from implementation choices | §1 | IMPLEMENTED |
+| PayPal treasury; wallets as backed ledger balances | v48, §4 | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal) |
+| Atomic balances and commitments; shared capital only via a recorded allocation | ledger locks, envelopes, card reservations (v51) | IMPLEMENTED, LOCALLY VERIFIED |
+| Automatic capital decisions; no history required; commitments considered | `fleet_capital_decide` (v30 + v51) | IMPLEMENTED, LOCALLY VERIFIED |
+| Dynamic sweep; temporary reductions with expiry, decided automatically | v30, v50, v51 | IMPLEMENTED, LOCALLY VERIFIED |
+| Card bypass: reserve first, liability once, repayment tracked, invoice choice | v48 + v51 | IMPLEMENTED, LOCALLY VERIFIED |
+| Card product and mechanisms verified | §5.1 | PayPal Credit UK verified unusable; **owner to confirm the card** |
+| Standing authority with document upload; values never reach agents | v49 + v51, broker, browser `upload` | IMPLEMENTED, LOCALLY VERIFIED (no real provider) |
+| Human-only steps identified | §8 | IMPLEMENTED |
+| Exhaustion is death; authoritative measure; held money vs prospective sales | v51 (§6) | IMPLEMENTED, LOCALLY VERIFIED |
+| Accurate survival observations before exhaustion | survival observation + `wallet survival` | IMPLEMENTED, LOCALLY VERIFIED |
+| Revenue loop: attribution, duplicates, refunds, fees, chargebacks, liabilities | v47, v48, v51, v52 | IMPLEMENTED, LOCALLY VERIFIED |
+| PayPal availability evidence; money states distinguished | v51 (§7.1) | IMPLEMENTED, LOCALLY VERIFIED |
+| Gumroad G3 gateway | v52 + `src/fleet/storefront/*` + unit + setup script | IMPLEMENTED, LOCALLY VERIFIED (fake Gumroad) |
+| Gumroad G4 receipt evidence | PayPal match (v52); bank-feed interface (`src/fleet/settlement/bankfeed.ts`) | PayPal path LOCALLY VERIFIED; bank feed IMPLEMENTED as an interface, **provider not chosen** |
+| 62cbe1b7 / 6178c7bb stay pending | unchanged | PENDING, by design |
+| Proton per-agent aliases, isolated routing, dashboard setup and status | v41 + v51 + broker hot activation + UI | IMPLEMENTED, LOCALLY VERIFIED; Bridge is a host dependency |
+| SMS adapter preserved and visible | v41 + dashboard | IMPLEMENTED; a Twilio account is a dependency |
+| Footprint; freeze stops local use; provider-side closure distinguished | v49 + v51 | IMPLEMENTED, LOCALLY VERIFIED |
+| Knowledge: no invented rules; sourced vs recommended | revision 2 (v51) | IMPLEMENTED, LOCALLY VERIFIED |
+| Activation: pilot vs ongoing; no routine renewals | v51 (§12) | IMPLEMENTED, LOCALLY VERIFIED |
+| Correct recovery terminology and plan | §13.3 | IMPLEMENTED (documentation) |
 
-Nothing here is REHEARSED, DEPLOYED or LIVE VERIFIED until the activation steps in §11 are authorized and run.
+---
+
+## 15. Genuine external dependencies
+
+1. **The card.** Which product (§5.1), its number on file, and the issuer's repayment route.
+2. **PayPal.**
+   - a Live REST app, with Payouts approval;
+   - a webhook subscription;
+   - real readiness probes;
+   - account holds and reserves are under PayPal's control.
+3. **Proton.** Mail Bridge on the host (interactive sign-in), and a paid Proton plan for the shared address.
+4. **Twilio.** Only if SMS or numbers are wanted: an account, plus the UK regulatory bundle.
+5. **Gumroad.**
+   - a seller account in the owner's true identity;
+   - an OAuth application;
+   - email confirmed and a payout method set;
+   - Stripe identity verification (owner-only);
+   - a choice of payouts to PayPal (preferred; matched automatically) or to a bank.
+6. **Bank feed.** A read-only account-information provider, needed only if Gumroad pays out to a bank.
+7. **Live API shapes.**
+   - Gumroad: fields marked "B" in the Gumroad design are verified only by the first real probe and pilot.
+   - PayPal: verified only by the first real capture and payout.

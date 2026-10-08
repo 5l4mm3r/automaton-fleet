@@ -35,6 +35,8 @@ import {
   CUSTODY_WRITES,
   IDENTITY_API_FUNCTIONS,
   BROWSER_API_FUNCTIONS,
+  GATEWAY_API_FUNCTIONS,
+  BANKFEED_API_FUNCTIONS,
   DASHBOARD_API_FUNCTIONS,
   GENESIS_GUARDS,
   GENESIS_OPERATORS,
@@ -81,6 +83,11 @@ export interface PrivilegeAuditOptions {
   /** Schema v38 Admin dashboard roles (default fleet_dashboard + fleet_dashboard_login). */
   dashboardRoles?: string[];
   requireDashboardRoles?: boolean;
+  /** Schema v52 Gumroad storefront gateway roles (fleet_provider + _login) and bank-feed connector roles (fleet_bankfeed + _login). */
+  providerRoles?: string[];
+  requireProviderRoles?: boolean;
+  bankfeedRoles?: string[];
+  requireBankfeedRoles?: boolean;
 }
 
 /** "provisioned": every operator role exists; "not_provisioned": none exists (and not required); "incomplete": some are missing. */
@@ -107,8 +114,11 @@ export const DEFAULT_IDENTITY_ROLES = ["fleet_identity", "fleet_identity_login"]
 export const DEFAULT_BROWSER_ROLES = ["fleet_browser", "fleet_browser_login"];
 /** Schema v38 Admin dashboard roles (same provisioning rule). */
 export const DEFAULT_DASHBOARD_ROLES = ["fleet_dashboard", "fleet_dashboard_login"];
+/** Schema v52 storefront gateway and bank-feed roles (same provisioning rule). */
+export const DEFAULT_PROVIDER_ROLES = ["fleet_provider", "fleet_provider_login"];
+export const DEFAULT_BANKFEED_ROLES = ["fleet_bankfeed", "fleet_bankfeed_login"];
 
-type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser" | "dashboard";
+type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser" | "dashboard" | "provider" | "bankfeed";
 
 const TABLE_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
@@ -170,6 +180,15 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   if (dashboardState === "not_provisioned") {
     for (const r of configuredDashboardRoles) roles.push({ role: r, kind: "dashboard", exists: false, functions: [], tables: [] });
   }
+  // Schema v52: the storefront gateway and the bank-feed connector (each only when provisioned).
+  const optional = async (configured: string[], required: boolean | undefined, kind: RoleKind) => {
+    const present = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = ANY($1)`, [configured])).rows[0].n;
+    const state: OperatorRoleState = present === configured.length ? "provisioned" : present === 0 && !required ? "not_provisioned" : "incomplete";
+    if (state === "not_provisioned") for (const r of configured) roles.push({ role: r, kind, exists: false, functions: [], tables: [] });
+    return state === "not_provisioned" ? [] : configured;
+  };
+  const providerRoles = await optional(opts.providerRoles ?? DEFAULT_PROVIDER_ROLES, opts.requireProviderRoles, "provider");
+  const bankfeedRoles = await optional(opts.bankfeedRoles ?? DEFAULT_BANKFEED_ROLES, opts.requireBankfeedRoles, "bankfeed");
   const allRestricted = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES),
     ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES),
@@ -178,6 +197,8 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
     ...identityRoles,
     ...browserRoles,
     ...dashboardRoles,
+    ...providerRoles,
+    ...bankfeedRoles,
   ];
   const plan: Array<[string, RoleKind]> = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES).map((r) => [r, "agent"] as [string, RoleKind]),
@@ -187,6 +208,8 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
     ...identityRoles.map((r) => [r, "identity"] as [string, RoleKind]),
     ...browserRoles.map((r) => [r, "browser"] as [string, RoleKind]),
     ...dashboardRoles.map((r) => [r, "dashboard"] as [string, RoleKind]),
+    ...providerRoles.map((r) => [r, "provider"] as [string, RoleKind]),
+    ...bankfeedRoles.map((r) => [r, "bankfeed"] as [string, RoleKind]),
   ];
 
   const agentFns = new Set(AGENT_API_FUNCTIONS.map(normSig));
@@ -196,6 +219,8 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   const identityFns = new Set(IDENTITY_API_FUNCTIONS.map(normSig));
   const browserFns = new Set(BROWSER_API_FUNCTIONS.map(normSig));
   const dashboardFns = new Set(DASHBOARD_API_FUNCTIONS.map(normSig));
+  const providerFns = new Set(GATEWAY_API_FUNCTIONS.map(normSig));
+  const bankfeedFns = new Set(BANKFEED_API_FUNCTIONS.map(normSig));
   const operatorVolatile = new Set(OPERATOR_VOLATILE_FUNCTIONS.map(normSig));
   const serviceTables = new Set(SERVICE_READ_TABLES);
 
@@ -290,7 +315,8 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
         ORDER BY 1`,
       [role, schema],
     );
-    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : kind === "identity" ? identityFns : kind === "browser" ? browserFns : kind === "dashboard" ? dashboardFns : operatorFns;
+    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : kind === "identity" ? identityFns : kind === "browser" ? browserFns
+      : kind === "dashboard" ? dashboardFns : kind === "provider" ? providerFns : kind === "bankfeed" ? bankfeedFns : operatorFns;
     const executable: string[] = [];
     for (const f of fns.rows) {
       const sig = normSig(f.sig);
@@ -1003,7 +1029,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_rail_requirements: new Set(["fleet_rail_resolve", "fleet_econ_rail_require", "fleet_rail_requirement_assign"]),
     // v46: readiness evidence only by the owner (and simulated evidence for a simulated rail at registration); external
     // settlement claims only by the claiming recorder.
-    fleet_rail_capability_checks: new Set(["fleet_admin_rail_add", "fleet_admin_rail_verify"]),
+    fleet_rail_capability_checks: new Set(["fleet_admin_rail_add", "fleet_admin_rail_verify",
+      // v52: the gateway's and the receipt matcher's own automatic evidence.
+      "fleet_rail_check_record"]),
     fleet_revenue_claims: new Set(["fleet_admin_record_external_claimed",
       // v47: the posting transaction claims the payout and the bank transaction; a linked transfer claims the original.
       "fleet_provider_receipt_post", "fleet_receipt_process", "fleet_admin_receipt_transfer_link",
@@ -1012,13 +1040,19 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v47: provider records only through their recorders (the G3 gateway / G4 bank feed call them via their roles),
     // attribution and destinations only by the owner, allocations only by the posting functions.
     fleet_provider_accounts: new Set(["fleet_admin_provider_account_register"]),
-    fleet_provider_product_attributions: new Set(["fleet_admin_provider_product_assign"]),
+    fleet_provider_product_attributions: new Set(["fleet_admin_provider_product_assign", "gx_job_report", "gx_products_reconcile"]),
     fleet_provider_sales: new Set(["fleet_provider_sale_record"]),
     fleet_provider_payouts: new Set(["fleet_provider_payout_record"]),
     fleet_provider_payout_lines: new Set(["fleet_provider_payout_record"]),
-    fleet_settlement_destinations: new Set(["fleet_admin_settlement_destination_add", "fleet_admin_settlement_destination_verify_access"]),
+    fleet_settlement_destinations: new Set(["fleet_admin_settlement_destination_add", "fleet_admin_settlement_destination_verify_access",
+      "fleet_admin_settlement_destination_paypal"]),
     fleet_settlement_receipts: new Set(["fleet_bank_receipt_record", "fleet_receipt_process", "fleet_provider_receipt_post", "fleet_admin_receipt_attest",
-      "fleet_admin_receipt_transfer_link"]),
+      "fleet_admin_receipt_transfer_link", "svc_settlement_paypal_match"]),
+    // v52: the storefront — products and jobs by the agent operations and the gateway; uploads by the agent and the gateway.
+    fleet_provider_products: new Set(["fleet_econ_storefront_product_create", "gx_job_report", "gx_products_reconcile"]),
+    fleet_provider_jobs: new Set(["fleet_storefront_enqueue", "gx_claim_job", "gx_job_report"]),
+    fleet_provider_uploads: new Set(["fleet_econ_storefront_file", "gx_job_report"]),
+    fleet_provider_cursors: new Set(["gx_cursor_set"]),
     fleet_provider_allocations: new Set(["fleet_provider_post_share", "fleet_provider_post_suspense", "fleet_provider_receipt_post",
       "fleet_admin_provider_suspense_release", "fleet_admin_receipt_debit_assign"]),
     fleet_pilot_authorisations: new Set(["fleet_admin_pilot_authorise", "fleet_admin_pilot_revoke"]),
@@ -1051,7 +1085,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       "fleet_econ_account_register", "fleet_econ_account_add_origin", "fleet_econ_account_mark", "fleet_account_human_dependency", "ix_browser_credential_record"]),
     fleet_agent_account_credentials: new Set(["fleet_econ_account_revoke", "ix_credential_record", "ix_browser_credential_record"]),
     fleet_agent_mailboxes: new Set(["ix_mailbox_record", "fleet_estate_assign_internal", "fleet_econ_mailbox_provision"]),
-    fleet_identity_jobs: new Set(["fleet_identity_enqueue", "ix_claim_job", "ix_report_job", "fleet_estate_assign_internal", "svc_estate_tick"]),
+    fleet_identity_jobs: new Set(["fleet_identity_enqueue", "ix_claim_job", "ix_report_job", "fleet_estate_assign_internal", "svc_estate_tick",
+      // v51: freezing an account stops its queued jobs.
+      "fleet_admin_account_freeze"]),
     // v35: the economy engine. Replication state/birth orders only by the controller pass and Admin; missions by their
     // engine; commitments by the agent; notifications through fleet_notify; estate items by the estate engine.
     fleet_replication_state: new Set(["svc_replication_tick"]),
@@ -1135,16 +1171,18 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_agent_wallet_limits: new Set(["fleet_admin_wallet_limits_set"]),
     fleet_paypal_checkouts: new Set(["fleet_econ_paypal_checkout", "fleet_econ_paypal_cancel", "cx_paypal_work", "cx_paypal_checkout_update", "cx_paypal_capture_record"]),
     fleet_paypal_webhook_inbox: new Set(["svc_paypal_webhook_receive", "cx_paypal_inbox", "cx_paypal_inbox_result"]),
-    fleet_paypal_transactions: new Set(["cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute"]),
+    fleet_paypal_transactions: new Set(["cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute", "svc_settlement_paypal_match"]),
     fleet_paypal_balance_observations: new Set(["cx_paypal_balance_record"]),
     fleet_card_charges: new Set(["fleet_admin_card_charge_record", "fleet_admin_card_charge_confirm", "fleet_card_charge_post",
-      "fleet_econ_card_authorize", "fleet_econ_card_void", "svc_card_holds_expire"]),
+      "fleet_econ_card_authorize", "fleet_econ_card_void", "svc_card_holds_expire",
+      // v51: a hold's reservation is released by its helper (void, expiry, booking).
+      "fleet_card_hold_release"]),
     fleet_card_repayments: new Set(["fleet_admin_card_repayment_record"]),
-    fleet_card_receipts: new Set(["fleet_admin_card_receipt_record", "fleet_admin_card_receipt_resolve"]),
+    fleet_card_receipts: new Set(["fleet_admin_card_receipt_record", "fleet_admin_card_receipt_resolve", "fleet_admin_card_receipt_settle"]),
     // v49: the owner's standing authority and account freezes only by the owner; identity uses only by the worker's request
     // function; sealed custody credentials only by the owner, the custody key only by custody.
-    fleet_identity_autonomy: new Set(["fleet_admin_identity_autonomy_set"]),
-    fleet_identity_autonomy_history: new Set(["fleet_admin_identity_autonomy_set"]),
+    fleet_identity_autonomy: new Set(["fleet_admin_identity_autonomy_set", "fleet_admin_identity_documents_set"]),
+    fleet_identity_autonomy_history: new Set(["fleet_admin_identity_autonomy_set", "fleet_admin_identity_documents_set"]),
     fleet_identity_uses: new Set(["bx_secret_request"]),
     fleet_custody_sealed_credentials: new Set(["fleet_admin_custody_credential_upload", "fleet_admin_custody_credential_revoke"]),
     fleet_custody_keys: new Set(["cx_publish_key"]),
@@ -1152,9 +1190,15 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // knowledge library only by its loader.
     fleet_agent_insolvency: new Set(["svc_insolvency_tick"]),
     fleet_insolvency_policy: new Set(["fleet_admin_insolvency_policy_set"]),
-    fleet_sweep_rate_reductions: new Set(["fleet_admin_sweep_reduction_grant", "fleet_admin_sweep_reduction_end", "svc_sweep_reductions_expire"]),
-    fleet_sweep_rate_reduction_requests: new Set(["fleet_econ_sweep_reduction_request", "fleet_admin_sweep_reduction_grant", "fleet_admin_sweep_reduction_decline"]),
+    fleet_sweep_rate_reductions: new Set(["fleet_admin_sweep_reduction_grant", "fleet_admin_sweep_reduction_end", "svc_sweep_reductions_expire",
+      "fleet_sweep_reduction_decide"]),
+    fleet_sweep_rate_reduction_requests: new Set(["fleet_econ_sweep_reduction_request", "fleet_admin_sweep_reduction_grant", "fleet_admin_sweep_reduction_decline",
+      "fleet_sweep_reduction_decide"]),
     fleet_knowledge_library: new Set(["fleet_admin_knowledge_library_load"]),
+    // v51: held PayPal captures by the capture / refund recorders and the reaper's availability pass; provider secrets sealed
+    // to the broker by the owner, installed by the broker.
+    fleet_paypal_availability: new Set(["cx_paypal_capture_record", "cx_paypal_refund_record", "svc_paypal_availability"]),
+    fleet_provider_secret_inbox: new Set(["fleet_admin_provider_secret_upload", "ix_provider_secret_installed"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

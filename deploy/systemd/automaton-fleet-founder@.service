@@ -102,3 +102,5 @@ InaccessiblePaths=-/var/log/automaton-fleet -/var/log/automaton-fleet-operator -
 InaccessiblePaths=-/etc/automaton-fleet/cognition.key
 # The research fetcher's socket (FleetController only; founders research only through the controller).
 InaccessiblePaths=-/run/automaton-fleet-fetcher
+# v52: the storefront gateway's database credential and token vault.
+InaccessiblePaths=-/etc/automaton-fleet/gumroad.env -/var/lib/automaton-fleet-gumroad

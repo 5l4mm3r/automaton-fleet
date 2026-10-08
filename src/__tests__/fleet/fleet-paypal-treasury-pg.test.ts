@@ -6,7 +6,8 @@
  * Proven here: custody stays off until the owner grants a bounded, expiring activation (and the raw column cannot be
  * flipped); only a PayPal treasury rail can be live; the issuer pays nothing without every key and respects the activation
  * and wallet limits; a checkout becomes revenue exactly once, only for its own amount and capture, attributed to its agent
- * and venture; refunds come from the agent with any shortfall advanced and repaid first; unmatched PayPal money is never
+ * and venture (v51: its cash held until PayPal shows it available); refunds come from the held money, then the agent, with
+ * any shortfall advanced and repaid first; unmatched PayPal money is never
  * revenue; webhooks are stored unverified and only custody verifies them; card charges are the agent's expense with the
  * cash reserved for repayment, receipts are invoiced and returned (minus a net-profit-bounded sweep) or withdrawn; the
  * treasury list attributes every journal's real-cash effect.
@@ -52,6 +53,14 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury, custody activation and card clear
   const capture = (checkoutId: string, captureId: string, gross: number, fee: number, currency = "GBP", status = "COMPLETED") =>
     cx("cx_paypal_capture_record", ["custody-executor", checkoutId, captureId, status, gross, fee, currency, "webhook"]);
   const capId = () => `CAP${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
+  /** v51: PayPal's evidence that a held capture is available — Transaction Search status S, and a covering Balances reading. */
+  const release = async (checkoutId: string, captureId: string, gross: number) => {
+    await cx("cx_paypal_txn_record", ["custody-executor", rail.railId, JSON.stringify({ transactionId: captureId, eventCode: "T0006",
+      initiatedAt: new Date().toISOString(), status: "S", currency: "GBP", amountMinor: gross, feeMinor: 0, customField: checkoutId })]);
+    await cx("cx_paypal_balance_record", ["custody-executor", rail.railId, "GBP", 10_000_000, 10_000_000]);
+    return (await svc.query(`SELECT fleet.svc_paypal_availability(100) AS r`)).rows[0].r;
+  };
+  const held = (who: Founder) => R.balance(`agent:${who.id}:cash_pending`);
 
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, simulatedSettlement: false });
@@ -151,11 +160,17 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury, custody activation and card clear
     expect(await cash(F)).toBe(before);
     const cid = capId();
     const posted = await capture(id, cid, 1_500, 70);
-    expect(posted).toMatchObject({ ok: true, status: "captured", netMinor: 1_430 });
-    expect(await cash(F)).toBe(before + 1_430);
+    expect(posted).toMatchObject({ ok: true, status: "captured", netMinor: 1_430, availability: "pending" });
+    // v51: revenue at once; the cash is held until PayPal shows it available.
+    expect(await cash(F)).toBe(before);
+    expect(await held(F)).toBe(1_430);
     expect((await capture(id, cid, 1_500, 70)).replay).toBe(true);
     expect((await capture(id, capId(), 1_500, 70)).code).toBe("FLEET_PAYPAL_CONFLICT");
+    expect((await svc.query(`SELECT fleet.svc_paypal_availability(100) AS r`)).rows[0].r).toMatchObject({ released: 0 }); // no evidence yet
+    expect(await release(id, cid, 1_500)).toMatchObject({ released: 1 });
     expect(await cash(F)).toBe(before + 1_430);
+    expect(await held(F)).toBe(0);
+    expect((await svc.query(`SELECT fleet.svc_paypal_availability(100) AS r`)).rows[0].r).toMatchObject({ released: 0 }); // once
     expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_revenue_claims WHERE claim_key = $1 AND claim_kind = 'paypal_capture')`, [`paypal:capture:${cid}`])).toBe(1);
     expect(await R.one(`(SELECT cost_category FROM fleet.fleet_venture_journals WHERE journal_id = $1)`, [posted.journalId])).toBe("revenue");
     expect((await R.econ(F, "performance")).ok).toBe(true);
@@ -171,7 +186,7 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury, custody activation and card clear
     expect(await R.code(R.q(`UPDATE fleet.fleet_paypal_checkouts SET amount_minor = 1 WHERE checkout_id = $1`, [id]))).toBe("FLEET_IMMUTABLE");
   });
 
-  it("card clearing: a charge is the agent's expense with the cash reserved for repayment; the treasury covers any shortfall", async () => {
+  it("card clearing: a charge is the agent's expense with the cash reserved for repayment; a shortfall is advanced against its payable", async () => {
     const before = await cash(G);
     const treasury = await R.balance("fleet:treasury:unallocated");
     const ch = await R.one(`fleet.fleet_admin_card_charge_record($1, $2, 'Hosting Ltd', 'stmt-2026-10-01-a', $3)`, [G.id, before + 500, OWNER]);
@@ -185,6 +200,8 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury, custody activation and card clear
     const conf = await R.one(`fleet.fleet_admin_card_charge_confirm($1, $2, 'stmt-2026-10-01-a', $3)`, [ch.chargeId, before + 300, OWNER]);
     expect(conf).toMatchObject({ agentPartMinor: before, treasuryPartMinor: 300 });
     expect(await R.balance("fleet:treasury:unallocated")).toBe(treasury - 300);
+    // v51: the advance is the agent's debt (it lowers its survival equity), not a fleet expense.
+    expect(await R.balance(`agent:${G.id}:provider_payable`)).toBe(300);
     // Repayment: never more than is owed; recorded once per reference.
     expect(await R.code(R.q(`SELECT fleet.fleet_admin_card_repayment_record($1, 'pp-repay-1', $2)`, [before + 301, OWNER]))).toBe("FLEET_BAD_REQUEST");
     expect((await R.one(`fleet.fleet_admin_card_repayment_record(1000, 'pp-repay-1', $1)`, [OWNER])).outstandingMinor).toBe(before + 300 - 1000);
@@ -195,24 +212,28 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury, custody activation and card clear
   });
 
   it("a refund comes from the agent's cash; a shortfall is advanced and repaid first from its next receipt", async () => {
-    // G has no cash (the card charge above): its first sale, then a full refund.
+    // G has no cash and owes 300 (the card charge above): its first sale, then a full refund before the money was available.
     const c1 = (await checkout(G, "cv-templates", 2_000)).checkout.checkoutId;
     await openAndApprove(c1);
     const cap1 = capId();
     expect((await capture(c1, cap1, 2_000, 100)).netMinor).toBe(1_900);
-    expect(await cash(G)).toBe(1_900);
-    const ref = await cx("cx_paypal_refund_record", ["custody-executor", cap1, "REF-000001", "refund", 2_000, "GBP"]);
-    expect(ref).toMatchObject({ ok: true, fromCashMinor: 1_900, advancedMinor: 100 });
     expect(await cash(G)).toBe(0);
-    expect(await R.balance(`agent:${G.id}:provider_payable`)).toBe(100);
+    expect(await held(G)).toBe(1_900);
+    const ref = await cx("cx_paypal_refund_record", ["custody-executor", cap1, "REF-000001", "refund", 2_000, "GBP"]);
+    expect(ref).toMatchObject({ ok: true, fromHeldMinor: 1_900, fromCashMinor: 0, advancedMinor: 100 });
+    expect(await held(G)).toBe(0);
+    expect(await R.one(`(SELECT status FROM fleet.fleet_paypal_availability WHERE capture_id = $1)`, [cap1])).toBe("reversed");
+    expect(await R.balance(`agent:${G.id}:provider_payable`)).toBe(400);
     expect((await cx("cx_paypal_refund_record", ["custody-executor", cap1, "REF-000001", "refund", 2_000, "GBP"])).replay).toBe(true);
     expect((await cx("cx_paypal_refund_record", ["custody-executor", "CAPUNKNOWN01", "REF-000002", "refund", 10, "GBP"])).code).toBe("FLEET_NOT_FOUND");
     expect(await events("paypal_refund_unmatched")).toBe(1);
-    // The next receipt repays the advance first.
+    // The next receipt repays the advances first, when PayPal shows it available.
     const c2 = (await checkout(G, "cv-templates", 1_000)).checkout.checkoutId;
     await openAndApprove(c2);
-    expect((await capture(c2, capId(), 1_000, 0)).payableRepaidMinor).toBe(100);
-    expect(await cash(G)).toBe(900);
+    const cap2 = capId();
+    expect((await capture(c2, cap2, 1_000, 0)).ok).toBe(true);
+    expect(await release(c2, cap2, 1_000)).toMatchObject({ released: 1 });
+    expect(await cash(G)).toBe(600);
     expect(await R.balance(`agent:${G.id}:provider_payable`)).toBe(0);
     expect(await R.balance("fleet:provider:advances")).toBe(0);
   });

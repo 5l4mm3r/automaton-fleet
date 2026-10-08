@@ -107,7 +107,8 @@ export class PgHubAdmin {
       [railId, check, status, evidenceKind, JSON.stringify(note ? { note } : {}), expiresAt, actor]);
   }
   // ── v48: custody activation, wallet limits, card clearing, the treasury list and PayPal ──
-  custodyActivate(maxInstructionMinor: number, maxDailyMinor: number, hours: number, reason: string, actor: string) {
+  /** `hours` null: an ongoing activation (v51; no expiry, ends only when the owner ends it). */
+  custodyActivate(maxInstructionMinor: number, maxDailyMinor: number, hours: number | null, reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_custody_activate($1, $2, $3, $4, $5) AS r`, [maxInstructionMinor, maxDailyMinor, hours, reason, actor]);
   }
   custodyDeactivate(reason: string | null, actor: string) {
@@ -132,6 +133,10 @@ export class PgHubAdmin {
   cardResolve(receiptId: string, resolution: string, sweepMinor: number | null, reference: string | null, actor: string) {
     return this.one(`SELECT fleet_admin_card_receipt_resolve($1, $2, $3, $4, $5) AS r`, [receiptId, resolution, sweepMinor, reference, actor]);
   }
+  /** v51: return / withdrawal, by transfer (the money reached the owner) or applied to the card balance. */
+  cardSettle(receiptId: string, resolution: string, method: string, sweepMinor: number | null, reference: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_card_receipt_settle($1, $2, $3, $4, $5, $6) AS r`, [receiptId, resolution, method, sweepMinor, reference, actor]);
+  }
   cardClearing() { return this.one(`SELECT fleet_card_clearing() AS r`); }
   treasuryTransactions(agentId: string | null, limit: number, beforeSeq: number | null, direction: string | null) {
     return this.one(`SELECT fleet_treasury_transactions($1, $2, $3, $4) AS r`, [agentId, limit, beforeSeq, direction]);
@@ -155,9 +160,22 @@ export class PgHubAdmin {
   custodyCredentialUpload(vaultRef: string, sealed: Buffer, actor: string) { return this.one(`SELECT fleet_admin_custody_credential_upload($1, $2, $3) AS r`, [vaultRef, sealed, actor]); }
   custodyCredentialRevoke(vaultRef: string, actor: string) { return this.one(`SELECT fleet_admin_custody_credential_revoke($1, $2) AS r`, [vaultRef, actor]); }
   railWebhook(railId: string, webhookId: string, actor: string) { return this.one(`SELECT fleet_admin_rail_webhook_set($1, $2, $3) AS r`, [railId, webhookId, actor]); }
-  // ── v50: insolvency, sweep reductions, the knowledge library ──
+  // ── v50/v51: wallet exhaustion (death), sweep reductions, the knowledge library ──
   insolvency() { return this.one(`SELECT fleet_insolvency_json() AS r`); }
-  insolvencyPolicy(dormancy: boolean, deathAfterHours: number | null, actor: string) { return this.one(`SELECT fleet_admin_insolvency_policy_set($1, $2, $3) AS r`, [dormancy, deathAfterHours, actor]); }
+  walletMeasure(agentId: string | null) {
+    return agentId ? this.one(`SELECT fleet_agent_wallet_measure($1) AS r`, [agentId]) : this.one(`SELECT fleet_wallet_measures() AS r`);
+  }
+  moneyStates() { return this.one(`SELECT fleet_money_states() AS r`); }
+  // ── v51: documents under the standing authority; mail / SMS provider secrets sealed to the broker ──
+  identityDocuments(classes: string[], actor: string) { return this.one(`SELECT fleet_admin_identity_documents_set($1, $2) AS r`, [classes, actor]); }
+  providerSecretUpload(name: string, sealed: Buffer, actor: string) { return this.one(`SELECT fleet_admin_provider_secret_upload($1, $2, $3) AS r`, [name, sealed, actor]); }
+  providerSecrets() { return this.one(`SELECT fleet_provider_secrets_json() AS r`); }
+  // ── v52: the Gumroad storefront gateway and receipt evidence ──
+  storefront(agentId: string | null) { return this.one(`SELECT fleet_storefront_json($1) AS r`, [agentId]); }
+  storefrontProbe(accountId: string, actor: string) { return this.one(`SELECT fleet_admin_storefront_probe($1, $2) AS r`, [accountId, actor]); }
+  destinationPaypal(destinationId: string, railId: string, actor: string) {
+    return this.one(`SELECT fleet_admin_settlement_destination_paypal($1, $2, $3) AS r`, [destinationId, railId, actor]);
+  }
   sweepReductions(agentId: string | null) { return this.one(`SELECT fleet_sweep_rate_reductions_json($1) AS r`, [agentId]); }
   sweepReductionGrant(agentId: string, bp: number, days: number, reason: string, requestId: string | null, actor: string) {
     return this.one(`SELECT fleet_admin_sweep_reduction_grant($1, $2, $3, $4, $5, $6) AS r`, [agentId, bp, days, reason, requestId, actor]);

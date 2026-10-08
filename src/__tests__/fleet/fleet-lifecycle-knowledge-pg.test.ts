@@ -2,11 +2,11 @@
  * Schema v50 — insolvency dormancy, commitment-aware burn, temporary sweep reductions, the foundational knowledge library
  * and PII-free shared lessons (docs/design/master-launch-specification.md §§8, 9). PostgreSQL.
  *
- * Proven here: an agent with nothing spendable and nothing in flight becomes dormant (the owner told), any money clears it,
- * and it dies only if the owner set a grace (default never) — then with cause `insolvent`; an open checkout keeps it out of
- * dormancy; burn includes recurring commitments; a reduction lowers the dynamic sweep rate until it expires, reverting by
- * itself; agents may only ask; the library returns ranked entries with hard rules and a stale-fact banner, and regulated
- * topics always pull in their compliance entry; shared knowledge never stores e-mail addresses, phones or card numbers.
+ * Proven here (as amended by v51): an exhausted agent dies at the next lifecycle pass with cause `insolvent` (no dormancy, no
+ * grace; an owner hold pauses it; an open checkout does not keep it alive); burn includes recurring commitments; a
+ * reduction lowers the dynamic sweep rate until it expires, reverting by itself; an agent's request is decided by Fleet
+ * Control at once; the library returns ranked entries with hard rules and a stale-fact banner, and regulated topics always
+ * pull in their compliance entry; shared knowledge never stores e-mail addresses, phones or card numbers.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
@@ -43,50 +43,42 @@ describe.skipIf(!PG_BIN)("v50 insolvency, sweep reductions, knowledge library, P
   }, 240_000);
   afterAll(async () => { await svc?.end(); await su?.end(); await R?.close(); });
 
-  it("migrates with a clean audit and the library loaded; dormancy is on, automatic death is off by default", async () => {
+  it("migrates with a clean audit and the library loaded; v51 retired dormancy: exhaustion is death", async () => {
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
-    expect(await R.one(`fleet.fleet_insolvency_json()`)).toMatchObject({ policy: { dormancyEnabled: true, deathAfterHours: null }, episodes: [] });
+    expect(await R.one(`fleet.fleet_insolvency_json()`)).toMatchObject({ rule: expect.stringMatching(/exhaustion is death/), deaths: [] });
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_knowledge_library WHERE current)`))).toBe(KNOWLEDGE_LIBRARY_V1.entries.length);
-    expect(await tick()).toMatchObject({ dormant: 0 });
+    expect(await tick()).toMatchObject({ died: 0 });
+    expect(await R.code(R.q(`SELECT fleet.fleet_admin_insolvency_policy_set(true, 24, $1)`, [OWNER]))).toBe("FLEET_RETIRED");
   });
 
-  it("an agent with nothing spendable and nothing in flight is dormant; money clears it; it dies only under an owner grace", async () => {
+  it("an exhausted agent dies at the next pass (cause insolvent, estate flow); an owner hold pauses it; an open checkout does not keep it alive", async () => {
+    // An owner hold (an explicit owner action) pauses the reaper for that agent.
+    await R.q(`SELECT fleet.fleet_agent_hold_set($1, 'owner looking', $2)`, [F.id, OWNER]);
     await drain(F);
-    expect(await tick()).toMatchObject({ dormant: 1 });
-    expect(await tick()).toMatchObject({ dormant: 0, cleared: 0, died: 0 }); // one episode, no repeat
-    expect(await R.one(`fleet.fleet_event_route('agent_dormant_insolvent', '{}'::jsonb)`)).toBe("P1_HIGH");
-    // No grace set: still alive however long it stays dormant.
-    const c = await su.connect();
-    try { await c.query("SET session_replication_role = replica"); await c.query(`UPDATE fleet.fleet_agent_insolvency SET since = now() - interval '30 days' WHERE agent_id = $1`, [F.id]); }
-    finally { c.release(); }
-    await tick();
+    expect(await tick()).toMatchObject({ died: 0, heldByOwner: 1 });
     expect(await status(F)).toBe("active");
-    // Money arriving clears dormancy.
+    await R.q(`SELECT fleet.fleet_agent_hold_release($1, $2)`, [F.id, OWNER]);
+    // Money arriving first keeps it alive.
     await R.ledger.agentCapital({ agentId: F.id, amountCents: 100, mode: "grant", actor: OWNER });
-    expect(await tick()).toMatchObject({ cleared: 1 });
-    // An open checkout is in flight: an otherwise empty agent is not dormant while a sale may still arrive.
-    await drain(G);
+    expect(await tick()).toMatchObject({ died: 0 });
+    // A prospective sale (an open checkout) is not money: the exhausted agent dies.
+    await drain(F);
     await liveRail(R.owner, "fleet", OWNER);
-    const ck = await R.econ(G, "paypal.checkout", { venture: "g-venture", amountMinor: 900, description: "a template", idempotencyKey: `chk-${crypto.randomUUID()}` });
+    const ck = await R.econ(F, "paypal.checkout", { venture: "f-venture", amountMinor: 900, description: "a template", idempotencyKey: `chk-${crypto.randomUUID()}` });
     expect(ck.ok, JSON.stringify(ck)).toBe(true);
     const custody = new pg.Pool({ connectionString: R.pgc.custodyUrl, max: 1 });
     try {
       await R.store.grantCustodyRole();
       await custody.query(`SELECT fleet.cx_paypal_checkout_update('custody-executor', $1, 'open', 'ORD123456', 'https://www.paypal.com/checkoutnow?token=ORD123456', NULL)`, [ck.checkout.checkoutId]);
     } finally { await custody.end(); }
-    expect(await tick()).toMatchObject({ dormant: 0 });
-    await R.econ(G, "paypal.cancel", { checkoutId: ck.checkout.checkoutId }).catch(() => null);
-    // With the owner's grace set, a dormant agent past it dies with cause insolvent (and the estate flow follows).
-    await R.one(`fleet.fleet_admin_insolvency_policy_set(true, 24, $1)`, [OWNER]);
-    await drain(F);
-    await tick();
-    const c2 = await su.connect();
-    try { await c2.query("SET session_replication_role = replica"); await c2.query(`UPDATE fleet.fleet_agent_insolvency SET since = now() - interval '25 hours' WHERE agent_id = $1 AND status = 'dormant'`, [F.id]); }
-    finally { c2.release(); }
+    const m = await R.one(`fleet.fleet_agent_wallet_measure($1)`, [F.id]);
+    expect(m).toMatchObject({ spendableMinor: 0, exhausted: true, notCounted: { openCheckoutsMinor: 900 } });
     expect(await tick()).toMatchObject({ died: 1 });
     expect(await status(F)).toBe("dead");
     const died = (await R.q(`SELECT detail FROM fleet.fleet_events WHERE event_type = 'agent_died' AND agent_id = $1`, [F.id]))[0].detail;
     expect(died.cause).toBe("insolvent");
+    expect(await R.one(`fleet.fleet_event_route('agent_wallet_exhausted', '{}'::jsonb)`)).toBe("P1_HIGH");
+    expect((await R.one(`fleet.fleet_insolvency_json()`)).deaths[0]).toMatchObject({ agentId: F.id, status: "died" });
   });
 
   it("burn includes recurring commitments", async () => {
@@ -102,11 +94,12 @@ describe.skipIf(!PG_BIN)("v50 insolvency, sweep reductions, knowledge library, P
 
   it("a temporary sweep reduction lowers the dynamic rate until it expires; agents only ask; it reverts by itself", async () => {
     const base = (await R.one(`fleet.fleet_sweep_compute($1)`, [G.id])).rateBp as number;
+    // v51: Fleet Control decides at once — nothing to retain yet, so the request is declined and the rate is unchanged.
     const ask = await R.econ(G, "sweep.reduction_request", { reductionBp: 5000, days: 30, reason: "reinvest in a second product line for Q4" });
-    expect(ask).toMatchObject({ ok: true, status: "pending" });
-    expect((await R.econ(G, "sweep.reduction_request", { reductionBp: 100, days: 3, reason: "another reason here" })).code).toBe("FLEET_REQUEST_PENDING");
-    expect(Number((await R.one(`fleet.fleet_sweep_compute($1)`, [G.id])).rateBp)).toBe(base); // asking changes nothing
-    const g = await R.one(`fleet.fleet_admin_sweep_reduction_grant($1, 5000, 30, 'approved for Q4 reinvestment', $2, $3)`, [G.id, ask.requestId, OWNER]);
+    expect(ask).toMatchObject({ ok: true, status: "declined", reason: "NO_PROFIT_TO_RETAIN" });
+    expect(Number((await R.one(`fleet.fleet_sweep_compute($1)`, [G.id])).rateBp)).toBe(base);
+    // The owner can still grant one.
+    const g = await R.one(`fleet.fleet_admin_sweep_reduction_grant($1, 5000, 30, 'approved for Q4 reinvestment', NULL, $2)`, [G.id, OWNER]);
     expect(g.sweep.reinvestmentReductionBp).toBe(5000);
     expect(g.sweep.rateBp).toBe(Math.floor(base * 5000 / 10000));
     expect(await R.code(R.q(`UPDATE fleet.fleet_sweep_rate_reductions SET reduction_bp = 9000`))).toBe("FLEET_HISTORY_IMMUTABLE");

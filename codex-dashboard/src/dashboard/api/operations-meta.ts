@@ -13,6 +13,9 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "custody_activate", "custody_deactivate", "wallet_limits_set", "card_charge_record", "card_charge_confirm", "card_repayment_record", "card_receipt_record",
   "card_receipt_resolve", "identity_autonomy_set", "account_freeze", "account_unfreeze", "custody_credential_upload", "custody_credential_revoke", "rail_webhook_set",
   "insolvency_policy_set", "sweep_reduction_grant", "sweep_reduction_end", "sweep_reduction_decline", "paypal_txn_attribute",
+  // v51: card receipts settled by method, the document authority, mail / SMS provider secrets; v52: the storefront probe and the
+  // PayPal treasury as a settlement destination.
+  "card_receipt_settle", "identity_documents_set", "provider_secret_upload", "storefront_probe", "destination_paypal_link",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */

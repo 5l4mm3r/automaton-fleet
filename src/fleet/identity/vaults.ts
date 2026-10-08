@@ -35,14 +35,17 @@ function writePrivate(file: string, data: Buffer): void {
   fs.renameSync(tmp, file);
 }
 
-function readPrivate(file: string): Buffer | null {
+/** v51: the owner vault holds documents (up to ~8 MB, ~11 MB sealed); credentials and provider secrets stay small. */
+const OWNER_BLOB_MAX = 16_000_000;
+
+function readPrivate(file: string, max = 1_000_000): Buffer | null {
   let st: fs.Stats;
   try {
     st = fs.lstatSync(file);
   } catch {
     return null;
   }
-  if (!st.isFile() || st.isSymbolicLink() || (st.mode & 0o077) !== 0 || st.size > 1_000_000) return null;
+  if (!st.isFile() || st.isSymbolicLink() || (st.mode & 0o077) !== 0 || st.size > max) return null;
   return fs.readFileSync(file);
 }
 
@@ -124,6 +127,13 @@ export function sealOwnerFact(brokerPublicDer: Buffer, cls: OwnerIdentityClass, 
   return sealTo(brokerPublicDer, value, `owner:${cls}`);
 }
 
+/** v51: seal a mail / SMS provider secret (a JSON object of strings) to the broker's owner-vault key for one provider. */
+export function sealProviderSecret(brokerPublicDer: Buffer, name: string, json: string): Buffer {
+  if (!/^[a-z0-9][a-z0-9._-]{1,40}$/.test(name)) throw new Error("bad provider name");
+  if (!json || json.length > 40_000) throw new Error("a provider secret is at most 40 kB");
+  return sealTo(brokerPublicDer, json, `provider-upload:${name}`);
+}
+
 export class OwnerIdentityVault {
   constructor(private readonly dir: string, private readonly privateDer: Buffer, private readonly publicDer: Buffer) {}
 
@@ -145,6 +155,14 @@ export class OwnerIdentityVault {
     return `ovault:${cls}`;
   }
 
+  /** v51: open a mail / SMS provider secret the owner sealed to this key from the dashboard or the CLI (one provider name). */
+  openProviderUpload(sealed: Buffer, name: string): Record<string, string> {
+    if (!/^[a-z0-9][a-z0-9._-]{1,40}$/.test(name)) throw new Error("bad provider name");
+    const v = JSON.parse(openSealed(this.privateDer, this.publicDer, sealed, `provider-upload:${name}`)) as unknown;
+    if (!v || typeof v !== "object" || Array.isArray(v) || Object.values(v as Record<string, unknown>).some((x) => typeof x !== "string")) throw new Error("FLEET_BAD_REQUEST");
+    return v as Record<string, string>;
+  }
+
   /** v37: open a secret the browser worker captured from a page, sealed to this key for one account and kind. */
   openCapture(sealed: Buffer, scope: string): string {
     if (!/^capture:[0-9a-f-]{36}:(api_key|password|recovery_codes|totp)$/.test(scope)) throw new Error("bad capture scope");
@@ -159,7 +177,7 @@ export class OwnerIdentityVault {
   open(classes: readonly OwnerIdentityClass[]): Record<string, string> {
     const out: Record<string, string> = {};
     for (const c of classes) {
-      const blob = readPrivate(this.fileFor(c));
+      const blob = readPrivate(this.fileFor(c), OWNER_BLOB_MAX);
       if (!blob) throw new Error(`FLEET_OWNER_IDENTITY_MISSING: ${c}`);
       out[c] = openSealed(this.privateDer, this.publicDer, blob, `owner:${c}`);
     }

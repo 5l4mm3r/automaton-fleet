@@ -83,6 +83,8 @@ InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.
 InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/log/automaton-fleet -/run/credentials
 # The controller's inference-provider credential (owner-installed; readable by the controller only).
 InaccessiblePaths=-/etc/automaton-fleet/cognition.key
+# v52: the storefront gateway's database credential and token vault.
+InaccessiblePaths=-/etc/automaton-fleet/gumroad.env -/var/lib/automaton-fleet-gumroad
 
 [Install]
 WantedBy=multi-user.target

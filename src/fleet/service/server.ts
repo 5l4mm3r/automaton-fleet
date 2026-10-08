@@ -440,16 +440,19 @@ export class FleetService {
             this.audit("custody_pass_error", null, { error: err instanceof Error ? err.message : String(err) });
           }
         }
-        // v49/v50: undeclared card holds, insolvency dormancy (death only under the owner's grace) and lapsed sweep reductions,
-        // then — once a day, and only while the owner has enabled sweeps (a no-op otherwise) — the net-profit sweep and tax true-up.
+        // v49–v51: undeclared card holds, held PayPal captures PayPal now shows available, death on wallet exhaustion and lapsed
+        // sweep reductions, then — once a day, and only while the owner has enabled sweeps (a no-op otherwise) — the net-profit
+        // sweep and tax true-up.
         if (typeof this.opts.admin.lifecycleTick === "function" && Date.now() - this.lastLifecycleAt >= 60_000) {
           this.lastLifecycleAt = Date.now();
           try {
             const l = await this.opts.admin.lifecycleTick();
-            const i = l.insolvency as { dormant?: number; cleared?: number; died?: number };
+            const i = l.insolvency as { died?: number; heldByOwner?: number };
             const h = l.cardHolds as { bookedAtMaximum?: number; voided?: number };
-            if (i.dormant || i.cleared || i.died || h.bookedAtMaximum || h.voided || (l.reductions as { expired?: number }).expired) {
-              this.audit("lifecycle_pass", null, { insolvency: i, cardHolds: h, reductions: l.reductions });
+            const av = (l.availability ?? {}) as { released?: number; waitingForBalance?: number };
+            const st = ((l as { settlement?: unknown }).settlement ?? {}) as { matched?: number; waitingForBalance?: number };
+            if (i.died || h.bookedAtMaximum || h.voided || av.released || av.waitingForBalance || st.matched || (l.reductions as { expired?: number }).expired) {
+              this.audit("lifecycle_pass", null, { insolvency: i, cardHolds: h, availability: av, settlement: st, reductions: l.reductions });
             }
             const day = new Date().toISOString().slice(0, 10);
             if (this.lastSweepDay !== day) {

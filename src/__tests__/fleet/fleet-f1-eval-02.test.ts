@@ -131,8 +131,9 @@ describe("F1-EVAL-02 budget guard, leak and protocol checks", () => {
 
   it("stops within budget: cumulative worst case never exceeds the cap", async () => {
     // A few calls of the current toolset (F2 added five tool schemas to every request; v35/v36 added fleet_services and the
-    // mail/SMS identity ops); the invariant below is unchanged.
-    const budget = 30_000_000;
+    // mail/SMS identity ops; v52 the storefront tool and the v51 wallet/card/document descriptions); the invariant below is
+    // unchanged.
+    const budget = 40_000_000;
     const r = await runCell(cell({ phase: "B", arm: "trunk", observations: PHASE_B_OBSERVATIONS, budgetMicrocents: budget }), new FakeFounderModel());
     expect(r.stopped).toBe("budget");
     // The invariant checked before every call: spend so far + that call's worst case ≤ budget.

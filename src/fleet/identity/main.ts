@@ -19,7 +19,10 @@
  *   FLEET_MAIL_PROVIDER=proton-bridge   (v41, the preferred initial provider) ONE shared Fleet mailbox through Proton Mail
  *                                 Bridge on loopback: FLEET_MAIL_ADDRESS=<the Proton address>
  *                                 [FLEET_MAIL_BRIDGE_HOST=127.0.0.1 FLEET_MAIL_BRIDGE_IMAP_PORT=1143 FLEET_MAIL_BRIDGE_SMTP_PORT=1025
- *                                  FLEET_MAIL_BRIDGE_SECURITY=starttls|ssl]; secret "proton-bridge" {username, password, certPem}
+ *                                  FLEET_MAIL_BRIDGE_SECURITY=starttls|ssl]; secret "proton-bridge" {username, password, certPem[, address]}
+ *                                 v51: the secret may come from the dashboard (sealed to this broker): Proton then starts without a
+ *                                 restart and without FLEET_MAIL_PROVIDER (the secret's address is the shared address). With
+ *                                 FLEET_MAIL_PROVIDER=proton-bridge and no secret yet, the broker starts and waits for it.
  *   FLEET_MAIL_PROVIDER=mailgun   (optional / future) FLEET_MAIL_DOMAIN=<fleet mail domain> [FLEET_MAIL_API_BASE=…];
  *                                 secret "mailgun" {apiKey} (or the legacy <state>/mail.key)
  *   FLEET_SMS_PROVIDER=twilio     (v41, the preferred initial provider) secret "twilio" {accountSid, apiKeySid, apiKeySecret}
@@ -80,18 +83,18 @@ export function identityEnvProblems(e: Record<string, string | undefined>, opts:
       if (!/^[a-z0-9.-]{3,190}$/.test(e.FLEET_MAIL_DOMAIN?.trim() ?? "")) problems.push("FLEET_MAIL_DOMAIN (a lowercase DNS name) is required with a mail provider");
       if (!has("mailgun")) problems.push(...vaultFileProblems(path.join(dir, "mail.key"), uid));
     }
-    if (mp === "proton-bridge") {
-      if (!/^[a-z0-9._-]{1,64}@[a-z0-9.-]{3,190}$/.test(e.FLEET_MAIL_ADDRESS?.trim() ?? "")) problems.push("FLEET_MAIL_ADDRESS (the shared Proton address, lowercase) is required with proton-bridge");
+    // v51: Proton's address and secret may arrive from the dashboard (sealed to this broker); only malformed settings refuse.
+    if (mp === "proton-bridge" || !mp) {
+      if (e.FLEET_MAIL_ADDRESS?.trim() && !/^[a-z0-9._-]{1,64}@[a-z0-9.-]{3,190}$/.test(e.FLEET_MAIL_ADDRESS.trim())) problems.push("FLEET_MAIL_ADDRESS (the shared Proton address) must be lowercase");
       if (!["127.0.0.1", "::1", "localhost"].includes(e.FLEET_MAIL_BRIDGE_HOST?.trim() || "127.0.0.1")) problems.push("FLEET_MAIL_BRIDGE_HOST must be loopback (Bridge is never exposed)");
       if (e.FLEET_MAIL_BRIDGE_SECURITY && !["starttls", "ssl"].includes(e.FLEET_MAIL_BRIDGE_SECURITY.trim())) problems.push("FLEET_MAIL_BRIDGE_SECURITY is starttls or ssl");
-      if (!has("proton-bridge")) problems.push("provider secret proton-bridge is not installed (provider-secret-set proton-bridge)");
     }
     const sp = e.FLEET_SMS_PROVIDER?.trim();
     if (sp && sp !== "twilio") problems.push("FLEET_SMS_PROVIDER is twilio or unset");
-    if (sp && !has("twilio")) problems.push(...vaultFileProblems(path.join(dir, "sms.json"), uid));
+    if (sp && !has("twilio") && fs.existsSync(path.join(dir, "sms.json"))) problems.push(...vaultFileProblems(path.join(dir, "sms.json"), uid));
     const notify = e.FLEET_NOTIFY_FROM?.trim();
-    if (notify && mp === "proton-bridge" && notify !== e.FLEET_MAIL_ADDRESS?.trim()) problems.push("FLEET_NOTIFY_FROM must be the shared address FLEET_MAIL_ADDRESS");
-    if (notify && mp !== "proton-bridge" && !notify.endsWith(`@${e.FLEET_MAIL_DOMAIN?.trim()}`)) problems.push("FLEET_NOTIFY_FROM must be an address on FLEET_MAIL_DOMAIN");
+    if (notify && mp === "proton-bridge" && e.FLEET_MAIL_ADDRESS?.trim() && notify !== e.FLEET_MAIL_ADDRESS.trim()) problems.push("FLEET_NOTIFY_FROM must be the shared address FLEET_MAIL_ADDRESS");
+    if (notify && mp === "mailgun" && !notify.endsWith(`@${e.FLEET_MAIL_DOMAIN?.trim()}`)) problems.push("FLEET_NOTIFY_FROM must be an address on FLEET_MAIL_DOMAIN");
   }
   return problems;
 }
@@ -115,22 +118,35 @@ export function openProviders(e: Record<string, string | undefined>, dir: string
   if (mp === "mailgun") {
     const apiKey = secret("mailgun")?.apiKey ?? fs.readFileSync(path.join(dir, "mail.key"), "utf8").trim();
     mail = mailgun = new MailgunMailProvider({ domain: e.FLEET_MAIL_DOMAIN!.trim(), apiKey, apiBase: e.FLEET_MAIL_API_BASE?.trim() || undefined });
-  } else if (mp === "proton-bridge") {
+  } else {
+    // proton-bridge, configured on the host or onboarded from the dashboard (v51); without its secret, mail stays NOT CONFIGURED.
     const s = secret("proton-bridge");
-    if (!s?.username || !s.password || !s.certPem) throw new Error("provider secret proton-bridge needs username, password and certPem");
-    const port = (v: string | undefined, d: number) => (v && /^\d{2,5}$/.test(v.trim()) ? Number(v.trim()) : d);
-    mail = new ProtonBridgeMailProvider({ address: e.FLEET_MAIL_ADDRESS!.trim(), username: s.username, password: s.password, certPem: s.certPem,
-      host: e.FLEET_MAIL_BRIDGE_HOST?.trim() || "127.0.0.1", imapPort: port(e.FLEET_MAIL_BRIDGE_IMAP_PORT, 1143), smtpPort: port(e.FLEET_MAIL_BRIDGE_SMTP_PORT, 1025),
-      security: e.FLEET_MAIL_BRIDGE_SECURITY?.trim() === "ssl" ? "ssl" : "starttls" });
+    if (s) mail = providerFromSecret(e, "proton-bridge", s).mail ?? null;
   }
   let sms: SmsProvider | null = null;
-  if (e.FLEET_SMS_PROVIDER?.trim() === "twilio") {
-    const c = secret("twilio") ?? (JSON.parse(fs.readFileSync(path.join(dir, "sms.json"), "utf8")) as Record<string, string>);
-    sms = c.apiKeySid
-      ? new TwilioSmsProvider({ accountSid: String(c.accountSid ?? ""), apiKeySid: String(c.apiKeySid), apiKeySecret: String(c.apiKeySecret ?? "") })
-      : new TwilioSmsProvider({ accountSid: String(c.accountSid ?? ""), authToken: String(c.authToken ?? "") });
-  }
+  const tw = secret("twilio") ?? (e.FLEET_SMS_PROVIDER?.trim() === "twilio" && fs.existsSync(path.join(dir, "sms.json"))
+    ? (JSON.parse(fs.readFileSync(path.join(dir, "sms.json"), "utf8")) as Record<string, string>) : null);
+  if (tw) sms = providerFromSecret(e, "twilio", tw).sms ?? null;
   return { mail, sms, mailgun };
+}
+
+/** v51: a mail / SMS provider from its secret (host settings for Bridge's loopback ports come from the environment). */
+export function providerFromSecret(e: Record<string, string | undefined>, name: string, s: Record<string, string>): { mail?: MailProvider; sms?: SmsProvider } {
+  if (name === "proton-bridge") {
+    const address = (e.FLEET_MAIL_ADDRESS?.trim() || s.address || "").trim().toLowerCase();
+    if (!address || !s.username || !s.password || !s.certPem) return {};
+    const port = (v: string | undefined, d: number) => (v && /^\d{2,5}$/.test(v.trim()) ? Number(v.trim()) : d);
+    return { mail: new ProtonBridgeMailProvider({ address, username: s.username, password: s.password, certPem: s.certPem,
+      host: e.FLEET_MAIL_BRIDGE_HOST?.trim() || "127.0.0.1", imapPort: port(e.FLEET_MAIL_BRIDGE_IMAP_PORT, 1143), smtpPort: port(e.FLEET_MAIL_BRIDGE_SMTP_PORT, 1025),
+      security: e.FLEET_MAIL_BRIDGE_SECURITY?.trim() === "ssl" ? "ssl" : "starttls" }) };
+  }
+  if (name === "twilio") {
+    if (!s.accountSid) return {};
+    return { sms: s.apiKeySid
+      ? new TwilioSmsProvider({ accountSid: String(s.accountSid), apiKeySid: String(s.apiKeySid), apiKeySecret: String(s.apiKeySecret ?? "") })
+      : new TwilioSmsProvider({ accountSid: String(s.accountSid), authToken: String(s.authToken ?? "") }) };
+  }
+  return {};
 }
 
 /** One-time provisioning of the broker's keys and vault directories (run as the broker's user). */
@@ -173,6 +189,7 @@ export async function startIdentityBroker(e: Record<string, string | undefined>,
     notifyFrom: e.FLEET_NOTIFY_FROM?.trim() || (providers.mail?.mode === "shared" ? providers.mail.address ?? null : null),
     connectors: [], ownerVault, stateFile: path.join(dir, "pending.json"), mailCursorFile: path.join(dir, "mail-cursor.json"),
     providerVault: fs.existsSync(path.join(dir, "provider-vault")) ? openProviderVault(dir) : null,
+    providerFactory: (name, secret) => { try { return providerFromSecret(e, name, secret); } catch { return null; } },
     log: (level, event, detail) => log(level as never, event, detail) });
   const timer = setInterval(() => void broker.tick().catch((err) => log("error", "identity_tick_failed",
     { error: redactText(err instanceof Error ? err.message : String(err)) })), Math.max(5_000, opts.pollMs ?? 15_000));

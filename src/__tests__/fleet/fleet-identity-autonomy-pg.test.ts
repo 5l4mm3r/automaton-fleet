@@ -117,8 +117,11 @@ describe.skipIf(!PG_BIN)("v49 identity autonomy, card holds, footprint and freez
     expect((await R.econ(F, "card.authorize", { accountId: account, merchant: "Shop Ltd", maxMinor: 5_001 })).code).toBe("FLEET_CARD_LIMIT");
     await R.one(`fleet.fleet_admin_wallet_limits_set($1, NULL, NULL, 3_000, NULL, 'card pilot', $2)`, [F.id, OWNER]);
     expect((await R.econ(F, "card.authorize", { accountId: account, merchant: "Shop Ltd", maxMinor: 3_001 })).code).toBe("FLEET_CARD_LIMIT");
+    const cashBeforeHold = await R.balance(`agent:${F.id}:cash`);
     const h = await R.econ(F, "card.authorize", { accountId: account, merchant: "Shop Ltd", maxMinor: 3_000, purpose: "hosting plan" });
-    expect(h).toMatchObject({ ok: true, charge: { status: "held", holdMaxMinor: 3_000, origin: SHOP } });
+    expect(h).toMatchObject({ ok: true, charge: { status: "held", holdMaxMinor: 3_000, origin: SHOP, funding: "own", reservedMinor: 3_000 } });
+    // v51: the hold reserves its maximum from the agent's own capital before the card can be filled.
+    expect(await R.balance(`agent:${F.id}:cash`)).toBe(cashBeforeHold - 3_000);
     expect((await R.econ(F, "card.authorize", { accountId: account, merchant: "Shop Ltd", maxMinor: 100 })).code).toBe("FLEET_CARD_HOLD_OPEN");
     const served = await ask(a, "owner_card:number");
     expect(served).toMatchObject({ ok: true });
@@ -126,10 +129,10 @@ describe.skipIf(!PG_BIN)("v49 identity autonomy, card holds, footprint and freez
     await close(a);
     expect((await R.econ(F, "card.void", { chargeId: h.charge.chargeId })).code).toBe("FLEET_CARD_USED");
     expect((await R.econ(F, "card.declare", { chargeId: h.charge.chargeId, amountMinor: 3_001 })).code).toBe("FLEET_CARD_OVER_HOLD");
-    const cash0 = await R.balance(`agent:${F.id}:cash`);
     const d = await R.econ(F, "card.declare", { chargeId: h.charge.chargeId, amountMinor: 1_200 });
     expect(d).toMatchObject({ ok: true, charge: { status: "booked", amountMinor: 1_200, fromYourCashMinor: 1_200 } });
-    expect(await R.balance(`agent:${F.id}:cash`)).toBe(cash0 - 1_200);
+    // Booked from the reservation; the unused 1 800 came back.
+    expect(await R.balance(`agent:${F.id}:cash`)).toBe(cashBeforeHold - 1_200);
     expect(await R.balance("fleet:card:payable")).toBe(1_200);
     // An unused hold is voided by the agent; a used, undeclared one is booked at its maximum by the reaper.
     const h2 = await R.econ(F, "card.authorize", { accountId: account, merchant: "Other", maxMinor: 500 });

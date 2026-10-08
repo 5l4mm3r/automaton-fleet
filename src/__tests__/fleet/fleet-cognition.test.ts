@@ -236,7 +236,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
     // Advertised tools = compiled toolbox ∩ granted classes; nothing forbidden is ever advertised.
     const names = toolsFor(FOUNDER_MANIFEST_V1.allowed).map((t) => t.name);
     expect(names).toEqual(FOUNDER_TOOLS.filter((t) => t.capability !== "research.web").map((t) => t.name)); // founder-v1 has no research.web
-    expect(toolsFor(["planning"]).map((t) => t.name)).toEqual(["set_goal", "complete_goal", "list_goals", "open_decision", "resolve_decision", "review_decision", "record_external_dependency", "withdraw_external_dependency", "opportunity", "venture", "identity", "fleet_services", "browser", "project"]); // F2-A decisions and dependencies, F2 opportunities and ventures, v34 identity, v35 fleet_services, v37 browser, v42 project are planning
+    expect(toolsFor(["planning"]).map((t) => t.name)).toEqual(["set_goal", "complete_goal", "list_goals", "open_decision", "resolve_decision", "review_decision", "record_external_dependency", "withdraw_external_dependency", "opportunity", "venture", "identity", "fleet_services", "browser", "storefront", "project"]); // F2-A decisions and dependencies, F2 opportunities and ventures, v34 identity, v35 fleet_services, v37 browser, v52 storefront, v42 project are planning
     expect(toolsFor(["reproduction", "payment.execute"] as never)).toEqual([]);
   });
 
@@ -300,7 +300,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
       expect(r).toEqual({ content: "ok", toolCalls: [{ id: "c1", name: "set_goal", arguments: { title: "t" } }, { id: "c2", name: "sleep", arguments: {} }], usage: { inputTokens: 12, outputTokens: 3 }, usageSource: "provider", attempts: 1, responseModel: null, providerRequestId: null, stopReason: null });
       expect(auth).toBe("Bearer k-test");
       expect(seen).toMatchObject({ model: "m1", max_tokens: 64, messages: [{ role: "system", content: "CHARTER" }, { role: "user", content: "hi" }] });
-      expect((seen as unknown as { tools: unknown[] }).tools).toHaveLength(14); // the planning tools (incl. F2-A decisions and dependencies, F2 opportunity and venture, v34 identity, v35 fleet_services, v37 browser, v42 project)
+      expect((seen as unknown as { tools: unknown[] }).tools).toHaveLength(15); // the planning tools (incl. F2-A decisions and dependencies, F2 opportunity and venture, v34 identity, v35 fleet_services, v37 browser, v52 storefront, v42 project)
     } finally {
       srv.close();
     }

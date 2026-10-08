@@ -4,7 +4,8 @@
  *
  * A founder's checkout is opened by the custody worker (Orders v2, idempotent request ids); the buyer's approval arrives
  * as a webhook over the controller's public route and is stored unverified; the worker verifies it with PayPal (a forged
- * one is rejected and changes nothing), captures, and the agent is credited once, net of PayPal's fee; a refund webhook
+ * one is rejected and changes nothing), captures, and the agent is credited once, net of PayPal's fee (v51: held until
+ * PayPal's Transaction Search and Balances show the money available, then spendable); a refund webhook
  * comes back from the agent; a capture whose response was lost is found by Transaction Search and posted exactly once;
  * balances are observed. No step needs the custody activation: receiving never pays anyone.
  */
@@ -93,6 +94,9 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury worker end to end (PostgreSQL + HT
   let pp: ReturnType<typeof fakePayPal>;
   let worker: PayPalTreasuryWorker;
   const cash = () => R.balance(`agent:${F.id}:cash`);
+  const held = () => R.balance(`agent:${F.id}:cash_pending`);
+  /** v51: the reaper's availability pass (the worker has recorded Transaction Search rows and a Balances reading). */
+  const availability = async () => (await svcStore.lifecycleTick()).availability;
   const deliver = async (event: Record<string, unknown>, sig: string) => {
     const r = await fetch(`${base}/v1/webhooks/paypal`, { method: "POST", headers: { "content-type": "application/json",
       "paypal-auth-algo": "SHA256withRSA", "paypal-cert-url": "https://api.paypal.com/v1/notifications/certs/CERT-1", "paypal-transmission-id": crypto.randomUUID(),
@@ -150,6 +154,11 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury worker end to end (PostgreSQL + HT
     expect((await deliver({ id: "WH-APPROVED-0001", event_type: "CHECKOUT.ORDER.APPROVED", resource: { id: orderId } }, "good-signature")).status).toBe(200);
     await worker.tick();
     expect(await status(c)).toMatchObject({ status: "captured" });
+    // v51: revenue at once, the cash held until PayPal's own records show it available (Transaction Search S + Balances).
+    expect(await cash()).toBe(before);
+    expect(await held()).toBe(1_430);
+    await worker.tick();
+    expect(await availability()).toMatchObject({ released: 1 });
     expect(await cash()).toBe(before + 1_430);
     const hooks = await R.q(`SELECT event_id, status FROM fleet.fleet_paypal_webhook_inbox ORDER BY event_id`);
     expect(Object.fromEntries(hooks.map((h) => [h.event_id, h.status]))).toEqual({ "WH-APPROVED-0001": "processed", "WH-FORGED-0001": "rejected" });
@@ -183,8 +192,12 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury worker end to end (PostgreSQL + HT
     pp.failNextCapture();
     await worker.tick(); // capture happens at PayPal, the answer is lost; reconciliation in the same pass finds it
     expect(await status(c)).toMatchObject({ status: "captured" });
+    expect(await held()).toBe(1_930);
+    await worker.tick();
+    expect(await availability()).toMatchObject({ released: 1 });
     expect(await cash()).toBe(before + 1_930);
     await worker.tick();
+    expect(await availability()).toMatchObject({ released: 0 });
     expect(await cash()).toBe(before + 1_930);
     const bal = await R.one(`fleet.fleet_paypal_status()`);
     expect(bal.rails[0].balance).toMatchObject({ currency: "GBP", availableMinor: 12_345, totalMinor: 13_000 });

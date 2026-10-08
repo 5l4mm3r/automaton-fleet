@@ -57,6 +57,8 @@ import { migrateCheck,
   CUSTODY_API_FUNCTIONS,
   IDENTITY_API_FUNCTIONS,
   BROWSER_API_FUNCTIONS,
+  GATEWAY_API_FUNCTIONS,
+  BANKFEED_API_FUNCTIONS,
   DASHBOARD_API_FUNCTIONS,
   FLEET_PG_HARD_MAX_AGENTS,
   FLEET_PG_SCHEMA_VERSION,
@@ -85,6 +87,9 @@ export const DEFAULT_IDENTITY_ROLE = "fleet_identity";
 export const DEFAULT_BROWSER_ROLE = "fleet_browser";
 /** Schema v38: the Admin dashboard's NOLOGIN group (dash_* only). */
 export const DEFAULT_DASHBOARD_ROLE = "fleet_dashboard";
+/** Schema v52: the Gumroad storefront gateway (gx_*) and the bank-feed receipt connector (rx_*). */
+export const DEFAULT_PROVIDER_ROLE = "fleet_provider";
+export const DEFAULT_BANKFEED_ROLE = "fleet_bankfeed";
 
 export interface FleetTimeouts {
   reservationTtlS: number;
@@ -601,7 +606,8 @@ export class PgFleetStore {
       client.release();
     }
     const roles = await this.pool
-      .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole, DEFAULT_CUSTODY_ROLE, DEFAULT_IDENTITY_ROLE, DEFAULT_BROWSER_ROLE, DEFAULT_DASHBOARD_ROLE]])
+      .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole, DEFAULT_CUSTODY_ROLE, DEFAULT_IDENTITY_ROLE, DEFAULT_BROWSER_ROLE, DEFAULT_DASHBOARD_ROLE,
+        DEFAULT_PROVIDER_ROLE, DEFAULT_BANKFEED_ROLE]])
       .catch(() => null);
     const present = new Set(roles?.rows.map((r) => r.rolname) ?? []);
     if (present.has(this.agentRole)) await this.grantAgentRole(this.agentRole);
@@ -611,6 +617,8 @@ export class PgFleetStore {
     if (present.has(DEFAULT_IDENTITY_ROLE)) await this.grantIdentityRole(DEFAULT_IDENTITY_ROLE);
     if (present.has(DEFAULT_BROWSER_ROLE)) await this.grantBrowserRole(DEFAULT_BROWSER_ROLE);
     if (present.has(DEFAULT_DASHBOARD_ROLE)) await this.grantDashboardRole(DEFAULT_DASHBOARD_ROLE);
+    if (present.has(DEFAULT_PROVIDER_ROLE)) await this.grantProtocolRole(DEFAULT_PROVIDER_ROLE, GATEWAY_API_FUNCTIONS, "provider_role_granted");
+    if (present.has(DEFAULT_BANKFEED_ROLE)) await this.grantProtocolRole(DEFAULT_BANKFEED_ROLE, BANKFEED_API_FUNCTIONS, "bankfeed_role_granted");
     return applied;
   }
 
@@ -944,6 +952,34 @@ export class PgFleetStore {
       await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
       for (const fn of BROWSER_API_FUNCTIONS) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
       await this.event(c, "browser_role_granted", null, "operator", { role, functions: [...BROWSER_API_FUNCTIONS] });
+    });
+  }
+
+  /** Schema v52: the Gumroad storefront gateway's role — USAGE on the schema and EXECUTE on GATEWAY_API_FUNCTIONS only. */
+  async grantProviderRole(role: string = DEFAULT_PROVIDER_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, GATEWAY_API_FUNCTIONS, "provider_role_granted");
+  }
+
+  /** Schema v52: the bank-feed connector's role — USAGE on the schema and EXECUTE on BANKFEED_API_FUNCTIONS only. */
+  async grantBankfeedRole(role: string = DEFAULT_BANKFEED_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, BANKFEED_API_FUNCTIONS, "bankfeed_role_granted");
+  }
+
+  /** A protocol-only role: everything revoked, then USAGE on the schema and EXECUTE on exactly `functions`. */
+  private async grantProtocolRole(role: string, functions: readonly string[], event: string): Promise<void> {
+    const r = quoteIdent(role);
+    const s = quoteIdent(this.schema);
+    await this.tx(async (c) => {
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
+      const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
+      if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
+      await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
+      for (const fn of functions) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
+      await this.event(c, event, null, "operator", { role, functions: [...functions] });
     });
   }
 
@@ -2067,13 +2103,22 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_custody_activation_expire() AS r")).rows[0].r);
   }
 
-  /** Schema v49/v50: undeclared card holds, insolvency dormancy and lapsed sweep reductions (one reaper pass each). */
-  async lifecycleTick(): Promise<{ cardHolds: Record<string, unknown>; insolvency: Record<string, unknown>; reductions: Record<string, unknown> }> {
-    return this.tx(async (c) => ({
-      cardHolds: (await c.query("SELECT svc_card_holds_expire(50) AS r")).rows[0].r,
-      insolvency: (await c.query("SELECT svc_insolvency_tick() AS r")).rows[0].r,
-      reductions: (await c.query("SELECT svc_sweep_reductions_expire() AS r")).rows[0].r,
-    }));
+  /**
+   * Schema v49–v51: undeclared card holds, held PayPal captures that PayPal now shows available, deaths on wallet exhaustion
+   * and lapsed sweep reductions — each pass in its own transaction, in that order (money that became available is seen
+   * before exhaustion is judged).
+   */
+  async lifecycleTick(): Promise<{ cardHolds: Record<string, unknown>; availability: Record<string, unknown>; settlement: Record<string, unknown>;
+    insolvency: Record<string, unknown>; reductions: Record<string, unknown> }> {
+    const one = (sql: string) => this.tx(async (c) => (await c.query(sql)).rows[0].r as Record<string, unknown>);
+    return {
+      cardHolds: await one("SELECT svc_card_holds_expire(50) AS r"),
+      availability: await one("SELECT svc_paypal_availability(200) AS r"),
+      // v52: Gumroad payouts received in the PayPal treasury, matched from PayPal's own records.
+      settlement: await one("SELECT svc_settlement_paypal_match(50) AS r"),
+      insolvency: await one("SELECT svc_insolvency_tick() AS r"),
+      reductions: await one("SELECT svc_sweep_reductions_expire() AS r"),
+    };
   }
 
   /** Schema v10: expire payment orders past their TTL (releases their reservations). Returns the count. */

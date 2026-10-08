@@ -68,16 +68,19 @@
  *                                               seal a fact/document to the broker's published key (pinned by fingerprint) and upload it
  *   hub-reveal <agent_credential|owner_identity> <credentialId|class> <outFile>   Admin reveal: the broker seals the value to a
  *                                               one-time key of this command; the plaintext is written to a NEW 0600 file (never printed)
- *   economy-custody-activate <maxInstructionMinor> <maxDailyMinor> <hours ≤2160> <reason…>   (v48) key 1 of live custody: an
- *                                               owner activation (a live PayPal rail, a live signer and the custody executor's
- *                                               REAL_PAYMENTS_ENABLED are the others); expires by itself
+ *   economy-custody-activate <maxInstructionMinor> <maxDailyMinor> <hours ≤2160|ongoing> <reason…>   (v48) key 1 of live custody:
+ *                                               an owner activation (a live PayPal rail, a live signer and the custody executor's
+ *                                               REAL_PAYMENTS_ENABLED are the others). v51: a pilot expires by itself; "ongoing" runs until
+ *                                               economy-custody-deactivate (the maxima stay as treasury risk limits)
  *   economy-custody-deactivate [reason…]
  *   economy-wallet-limits <agentId> <maxInstructionMinor|-> <maxDailyMinor|-> [--card-max n] [--card-daily n] [note…]
- *   economy-card-charge <agentId> <amountMinor> <statementRef> <merchant…>   a card charge from the statement (agent first, treasury shortfall)
+ *   economy-card-charge <agentId> <amountMinor> <statementRef> <merchant…>   a card charge from the statement (the agent's cash first; any
+ *                                               shortfall is advanced against its payable — a debt it repays, v51)
  *   economy-card-confirm <chargeId> <amountMinor> <statementRef>            correct a booked charge to its statement amount
  *   economy-card-repay <amountMinor> <reference>                             the card was repaid from the treasury PayPal (manual; no API)
  *   economy-card-receipt <agentId> <amountMinor> <revenue|refund> <reference> [note…]   money paid to the card → an owner invoice
- *   economy-card-resolve <receiptId> <return|withdrawal> [--sweep n] [--reference transferRef]
+ *   economy-card-resolve <receiptId> <return|withdrawal> [--method transfer|card_balance] [--sweep n] [--reference transferRef]
+ *                                               v51: card_balance = the money reduced what the fleet owes the card (no transfer)
  *   hub-card | hub-treasury-health | hub-paypal
  *   hub-treasury-tx [agentId] [--limit n] [--before seq] [--direction in|out|internal]   per-transaction treasury list
  *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
@@ -89,7 +92,18 @@
  *   economy-custody-credential <vault:paypal/name> <file>   seal a PayPal app credential ("clientId:clientSecret", read from a file)
  *                                               to the custody executor's published key and upload it | economy-custody-credential-revoke <vaultRef>
  *   economy-rail-webhook <railId> <webhookId>    the PayPal webhook id custody verifies deliveries against
- *   hub-insolvency | economy-insolvency-policy <on|off> <deathAfterHours|never>   (v50) dormancy (default on), automatic death (default never)
+ *   hub-insolvency | hub-wallet-measure [agentId] | hub-money-states   (v51) exhaustion is death: every living agent's authoritative
+ *                                               wallet measure, past deaths, and the fleet's money by state (prospective / captured / held /
+ *                                               received / available)
+ *   owner-identity-documents <c1,c2|none>       (v51) documents agents may have UPLOADED into a provider's own form under the standing
+ *                                               authority (id_document, passport, driving_licence, proof_of_address); never shown to them
+ *   economy-provider-secret <proton-bridge|twilio> <file.json> --fingerprint <brokerKeySha256>   (v51) seal a mail / SMS provider secret
+ *                                               to the identity broker (pinned) and upload it; the broker installs it and connects
+ *   hub-provider-secrets
+ *   hub-storefront [agentId] | economy-storefront-probe <providerAccountId>   (v52) the Gumroad storefront gateway: accounts and
+ *                                               readiness, products, jobs; the owner's draft create / inspect / delete probe
+ *   economy-destination-paypal <destinationId> <paypalRailId>   (v52) a fleet-treasury destination is the owner's PayPal treasury:
+ *                                               Gumroad payouts arriving there are matched from PayPal's own records
  *   hub-sweep-reductions [agentId] | economy-sweep-reduction <agentId> <bp> <days> [--request id] <reason…>
  *   economy-sweep-reduction-end <reductionId> [reason…] | economy-sweep-reduction-decline <requestId> [reason…]
  *   hub-knowledge [query…] [--category c] | economy-knowledge-load <library.json>
@@ -100,7 +114,7 @@ import crypto from "crypto";
 import fs from "fs";
 import { HUB_SECTIONS, type HubSection, type PgHubAdmin } from "./admin.js";
 import { renderHub } from "./render.js";
-import { OWNER_IDENTITY_CLASSES, sealOwnerFact, type OwnerIdentityClass } from "../identity/vaults.js";
+import { OWNER_IDENTITY_CLASSES, sealOwnerFact, sealProviderSecret, type OwnerIdentityClass } from "../identity/vaults.js";
 import { generateX25519, openSealed, sealTo } from "../identity/crypto.js";
 
 export const HUB_COMMANDS = new Set([
@@ -118,7 +132,8 @@ export const HUB_COMMANDS = new Set([
   "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
   "economy-card-receipt", "economy-card-resolve", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
-  "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "economy-insolvency-policy", "hub-sweep-reductions", "economy-sweep-reduction",
+  "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
+  "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
   "economy-sweep-reduction-end", "economy-sweep-reduction-decline", "hub-knowledge", "economy-knowledge-load",
 ]);
 
@@ -205,7 +220,7 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "hub-custody":
       return h.custody();
     case "economy-custody-activate":
-      return h.custodyActivate(int(p[0], "maxInstructionMinor"), int(p[1], "maxDailyMinor"), int(p[2], "hours"), p.slice(3).join(" "), actor);
+      return h.custodyActivate(int(p[0], "maxInstructionMinor"), int(p[1], "maxDailyMinor"), p[2] === "ongoing" ? null : int(p[2], "hours"), p.slice(3).join(" "), actor);
     case "economy-custody-deactivate":
       return h.custodyDeactivate(p.join(" ") || null, actor);
     case "economy-wallet-limits": {
@@ -223,8 +238,8 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-card-receipt":
       return h.cardReceipt(p[0], int(p[1], "amountMinor"), p[2], p[3], p.slice(4).join(" ") || null, actor);
     case "economy-card-resolve": {
-      const q = positional(a, ["--sweep", "--reference"]);
-      return h.cardResolve(q[0], q[1], flag(a, "--sweep") ? int(flag(a, "--sweep"), "sweep") : null, flag(a, "--reference"), actor);
+      const q = positional(a, ["--sweep", "--reference", "--method"]);
+      return h.cardSettle(q[0], q[1], flag(a, "--method") ?? "transfer", flag(a, "--sweep") ? int(flag(a, "--sweep"), "sweep") : null, flag(a, "--reference"), actor);
     }
     case "hub-card":
       return h.cardClearing();
@@ -272,8 +287,30 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.railWebhook(p[0], p[1], actor);
     case "hub-insolvency":
       return h.insolvency();
-    case "economy-insolvency-policy":
-      return h.insolvencyPolicy(p[0] !== "off", !p[1] || p[1] === "never" ? null : int(p[1], "deathAfterHours"), actor);
+    case "hub-wallet-measure":
+      return h.walletMeasure(p[0] ?? null);
+    case "hub-money-states":
+      return h.moneyStates();
+    case "owner-identity-documents":
+      return h.identityDocuments(p[0] === "none" ? [] : (p[0] ?? "").split(",").map((x) => x.trim()).filter(Boolean), actor);
+    case "hub-provider-secrets":
+      return h.providerSecrets();
+    case "hub-storefront":
+      return h.storefront(p[0] ?? null);
+    case "economy-storefront-probe":
+      return h.storefrontProbe(p[0], actor);
+    case "economy-destination-paypal":
+      return h.destinationPaypal(p[0], p[1], actor);
+    case "economy-provider-secret": {
+      const [name, file] = positional(a, ["--fingerprint"]);
+      if (!name || !file) throw new Error("FLEET_BAD_REQUEST: economy-provider-secret <proton-bridge|twilio> <file.json> --fingerprint <sha256>");
+      const key = await h.brokerOwnerKey();
+      if (!key.ownerPub) throw new Error("FLEET_NOT_FOUND: the identity broker has not published its key (is it running?)");
+      if (flag(a, "--fingerprint") !== key.fingerprint) throw new Error(`FLEET_KEY_MISMATCH: the broker key fingerprint is ${key.fingerprint}; pin it with --fingerprint`);
+      const value = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+      if (!value || typeof value !== "object" || Object.values(value).some((v) => typeof v !== "string" || !v)) throw new Error("FLEET_BAD_REQUEST: the file is one JSON object of non-empty strings");
+      return h.providerSecretUpload(name, sealProviderSecret(Buffer.from(key.ownerPub, "base64"), name, JSON.stringify(value)), actor);
+    }
     case "hub-sweep-reductions":
       return h.sweepReductions(p[0] ?? null);
     case "economy-sweep-reduction": {

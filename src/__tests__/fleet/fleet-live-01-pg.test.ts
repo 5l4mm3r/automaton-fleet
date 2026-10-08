@@ -259,7 +259,8 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       expect(eq).toBeGreaterThan(0);
       // v50: burn counts active recurring commitments too (none here).
       expect(status.survival).toEqual({ survivalEquityCents: eq, inferenceTodayCents: 0, burnPerDayCents: 0, inferenceBurnPerDayCents: 0, commitmentsPerDayCents: 0,
-        runwayDays: null, burnBasis: "inference over the last 7 days plus active recurring commitments" });
+        runwayDays: null, burnBasis: "inference over the last 7 days plus active recurring commitments",
+        wallet: expect.objectContaining({ exhausted: false, rule: expect.stringMatching(/^Exhaustion means death/) }) });
       expect(status.discovery).toBeUndefined();
     } finally {
       await service.close();
