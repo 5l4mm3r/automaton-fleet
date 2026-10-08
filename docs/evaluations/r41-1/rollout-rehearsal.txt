@@ -1,9 +1,9 @@
-== rollout rehearse ae84c5b (schema 45 -> 45) from 136c4bd start 2026-10-07T23:37:49Z
-dump /home/ubuntu/automaton_fleet-v45-rollout-ae84c5b-20261007T233752Z.dump sha 0f2e5c4faa551e23
+== rollout rehearse 92c691c (schema 45 -> 45) from 136c4bd start 2026-10-08T00:18:21Z
+dump /home/ubuntu/automaton_fleet-v45-rollout-92c691c-20261008T001825Z.dump sha 482ea4f0ef10382f
 restore: row counts identical
 migrate-check: {"currentVersion":45,"resultingVersion":45,"wouldApply":[],"requiredVersion":45,"rolledBack":true}
-reconciliation: OK (0 new accounts at zero; 569 journals; events 535 before, purged {}, preserved 535; appended {"agent_role_granted":1,"custody_role_granted":1,"service_role_granted":1,"identity_role_granted":1,"operator_role_granted":1,"dashboard_role_granted":1})
+reconciliation: OK (0 new accounts at zero; 572 journals; events 546 before, purged {}, preserved 546; appended {"agent_role_granted":1,"custody_role_granted":1,"service_role_granted":1,"identity_role_granted":1,"operator_role_granted":1,"dashboard_role_granted":1})
 ledger verify: true
 re-run: {"currentVersion":45,"resultingVersion":45,"wouldApply":[],"requiredVersion":45,"rolledBack":true}
 rollback proof: the dump restores to schema 45 with the same ledger head
-== REHEARSAL PASSED 2026-10-07T23:38:06Z — live untouched (schema 45)
+== REHEARSAL PASSED 2026-10-08T00:18:39Z — live untouched (schema 45)

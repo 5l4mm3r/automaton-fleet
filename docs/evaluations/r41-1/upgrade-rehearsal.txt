@@ -1,15 +1,15 @@
-== upgrade rehearsal ae84c5b (schema 45 -> 45), rollback to 136c4bd, start 2026-10-07T23:38:06Z
-throwaway copy restored: schema 45, ledger head 606 02a0b4096645f7c147aa…, logins: fleet_agent_login fleet_dashboard_login fleet_operator_login fleet_service_login 
-{"ok":true,"latencyMs":2,"schemaVersion":45,"countersConsistent":true}
-1. copy migrated to 45; candidate ae84c5b approved in the THROWAWAY registry; ledger head unchanged
+== upgrade rehearsal 92c691c (schema 45 -> 45), rollback to 136c4bd, start 2026-10-08T00:18:39Z
+throwaway copy restored: schema 45, ledger head 609 acba452d860d6886c98a…, logins: fleet_agent_login fleet_dashboard_login fleet_operator_login fleet_service_login 
+{"ok":true,"latencyMs":3,"schemaVersion":45,"countersConsistent":true}
+1. copy migrated to 45; candidate 92c691c approved in the THROWAWAY registry; ledger head unchanged
 2. code-only release (schema 45 unchanged; the previous release on the candidate-approved copy: refused) — rollback restores the pre-release dump and the previous release (as rehearsed below)
 3a. candidate controller ready on schema 45: {"ok":true,"checks":{"database":true,"agentApi":true,"runtimeRelease":true,"reaper":true,"sandboxTermination":true,"privileges":true}}
 3b. candidate Operator API ready on schema 45 (readyz 200)
 3c. candidate dashboard ready on schema 45: login 200, preview 200, read without session 401, call without session 401
 3d. v42 projects read (the dashboard 'projects' op): {"projects":0,"summary":{"note":"Internal payments move value between agents; they are never Fleet revenue.","active":0,"planning":0,"cancelled":0,"completed":0,"escrowMinor":0,"agentsCollaborating":0,"internalPaymentsMinor":0,"plannedTimeSavedHours":0}}
-3f. Fleet Command read on the copy: {"rows": 49, "rawEvents": 542, "housekeeping": 0, "nonOperational": 0} (only P0–P3; no housekeeping; the raw history is untouched)
-3g. Fleet history on the copy: {"feed": 49, "copies": 0, "events": 542, "history": 88, "diagnostics": 357, "temporary7d": 97, "notifications": 1, "hiddenPermanent": 0}; retention pass {"eventsExpired": 0, "suppressionExpired": 0}, no event written
+3f. Fleet Command read on the copy: {"rows": 49, "rawEvents": 553, "housekeeping": 0, "nonOperational": 0} (only P0–P3; no housekeeping; the raw history is untouched)
+3g. Fleet history on the copy: {"feed": 49, "copies": 0, "events": 553, "history": 88, "diagnostics": 357, "temporary7d": 108, "notifications": 1, "hiddenPermanent": 0}; retention pass {"eventsExpired": 0, "suppressionExpired": 0}, no event written
 3e. ledger verify ok, head unchanged, no reservation or birth while the candidate services ran
 4. rollback restore: schema 45, ledger head identical
 5. current release 136c4bd: controller ready, dashboard ready on the restored schema 45; ledger head identical
-== UPGRADE REHEARSAL PASSED 2026-10-07T23:38:24Z — production untouched (PIDs 596395  596418  597039 , schema 45)
+== UPGRADE REHEARSAL PASSED 2026-10-08T00:18:56Z — production untouched (PIDs 596395  596418  597039 , schema 45)
