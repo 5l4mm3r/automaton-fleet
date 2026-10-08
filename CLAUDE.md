@@ -167,6 +167,8 @@ Current live topology:
 - registry: cap 2, DEVELOPMENT mode, replication off; all four safety flags false
 - 2 living Agents, both on runtime fda78a0, doctrine founder-v5: founder-1 (01M3F50SH7PNX2E3GST13J52AS, shown as
   Agent-1) and agent-2 (01M4C4NXT786Q4E9725N5A15KV)
+  (live-verified: v5 delivery, tools, hibernation, slim wake; event-triggered wake and field-journal persistence
+  await legitimate live activity; never provoke them; docs/evaluations/r41-1/fda78a0/deployment.md)
 - browser worker: automaton-fleet-browser (own OS user, DB roles fleet_browser(_login), bx_* only; pinned Chrome for
   Testing headless shell 153.0.8010.12)
 - SSH: key-only authentication
