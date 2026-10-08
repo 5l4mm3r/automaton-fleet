@@ -17,7 +17,9 @@
  */
 import fs from "node:fs";
 
-const [bf, af, from, to] = process.argv.slice(2);
+const [bf, af, from, to, allowArg] = process.argv.slice(2);
+// R41.1: event types a caller expects to be appended (e.g. a code-only revert re-approves the previous runtime).
+const ALLOW_APPENDED = new Set((allowArg ?? "").split(",").map((s) => s.trim()).filter(Boolean));
 if (!bf || !af || !from || !to) { console.error("usage: fleet-reconcile-compare.mjs <before.json> <after.json> <fromSchema> <toSchema>"); process.exit(2); }
 const B = JSON.parse(fs.readFileSync(bf, "utf8")), A = JSON.parse(fs.readFileSync(af, "utf8"));
 const failures = [], notes = [];
@@ -89,8 +91,9 @@ if (B.events.canonical && A.events.canonical) {
 }
 // The migrator re-grants each restricted role and audits it (one `<role>_role_granted` event per role): expected.
 const appended = Object.entries(A.events.after ?? {});
-const grants = Object.fromEntries(appended.filter(([t]) => /^[a-z]+_role_granted$/.test(t)));
-const unexpected = Object.fromEntries(appended.filter(([t]) => !/^[a-z]+_role_granted$/.test(t)));
+const expected = (t) => /^[a-z]+_role_granted$/.test(t) || ALLOW_APPENDED.has(t);
+const grants = Object.fromEntries(appended.filter(([t]) => expected(t)));
+const unexpected = Object.fromEntries(appended.filter(([t]) => !expected(t)));
 same("events appended", {}, unexpected);
 if (Object.keys(grants).length) notes.push({ roleGrantAuditEvents: grants });
 // The owner's inbox (v43 deletion tombstones excluded — v45 removes them) when both snapshots have it.

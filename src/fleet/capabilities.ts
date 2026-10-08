@@ -82,6 +82,13 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   // v42: team projects (recruit existing agents by internal contract) — the agent's own commercial planning; funding
   // goes through FleetController's custody checks (no new authority: the planning class).
   project: "planning",
+  // R41.1 (owner, 2026-10-08): the v34–v37 economy tools the controller has always advertised under "planning" were
+  // never classified here, so every call was refused. Classified within their existing authority — the database
+  // dispatch (api_economy) enforces every op; mail/SMS stay dormant (FLEET_CAPABILITY_NOT_CONFIGURED blocks only that
+  // action); browser actions run only in the isolated browser worker with broker-sealed credentials.
+  fleet_services: "planning",
+  identity: "planning",
+  browser: "planning",
   resolve_decision: "planning",
   review_decision: "planning",
   get_plan: "planning",

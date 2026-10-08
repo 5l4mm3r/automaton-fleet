@@ -508,6 +508,9 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
         "routed: cache only on evidenced reuse — T2 prefix written once inside the tool loop and read back; T1, the T3 question, the T3 action step and a turn's first step write nothing",
         "routed: a bare wake-up after a sleep-only turn uses the slim packet — still T2, one message, smaller than the full packet of the same state, no cache write without evidenced reuse",
         "routed: provider protocol holds through real founder loops — signed thinking never crosses a model boundary, nothing is edited mid-loop",
+        "R41.1: the upgraded founder is served doctrine founder-v5 and its v5 tools run end to end — field guide read, field journal written, hibernation declared with a wake condition",
+        "rollback after v5 use: the previous runtime runs healthy on the v5-written state — journal, marked goals and memory kept byte for byte, nothing restored over them",
+        "upgrade again after the v5 rollback: verified, same founder, the journal written before the rollback is still there",
         "clean teardown",
       ]));
       // The receipts carry digests and counts only.

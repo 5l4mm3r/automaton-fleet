@@ -45,6 +45,24 @@ export class BrowserWorker {
     if (!/^[a-z0-9_.-]{1,64}$/.test(this.worker)) throw new Error("worker name must match ^[a-z0-9_.-]{1,64}$");
   }
 
+  /**
+   * R41.1: prove at startup — inside the worker's own sandbox — that the pinned Chromium launches and renders a page
+   * (about:blank and a data: URL; no network). The worker refuses to start otherwise (fail closed).
+   */
+  async selfTest(): Promise<{ ok: true; version: string }> {
+    const b = await this.ensureBrowser();
+    const context = await b.newContext({ acceptDownloads: false });
+    try {
+      const page = await context.newPage();
+      await page.goto("data:text/html,<title>fleet-browser-selftest</title><p>ok</p>");
+      const title = await page.title();
+      if (title !== "fleet-browser-selftest") throw new Error("self-test page did not render");
+      return { ok: true, version: b.version() };
+    } finally {
+      await context.close();
+    }
+  }
+
   private async ensureBrowser(): Promise<Browser> {
     if (!this.browser || !this.browser.isConnected()) {
       this.browser = await chromium.launch({ executablePath: this.o.executablePath, headless: true, chromiumSandbox: this.o.chromiumSandbox ?? false,

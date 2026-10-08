@@ -171,6 +171,37 @@ fi
 echo "3e. ledger verify ok, head unchanged, no reservation or birth while the candidate services ran"
 stopall
 
+OB=$(sudo sed -n 's/^FLEET_RUNTIME_BUILD_ID=//p' $ENVF); OL=$(sudo sed -n 's/^FLEET_RUNTIME_LOCKFILE_SHA256=//p' $ENVF)
+if [[ "$TO" == "$FROM" ]]; then
+  # R41.1: a code-only release rolls back WITHOUT restoring the database — exactly what fleet-rollout.sh revert does for it:
+  # the previous runtime is re-approved and the previous release runs on the same, unrestored data. Everything the
+  # candidate wrote (approvals, role grants, sessions, any agent work, ledger entries) must still be there.
+  ALLV=9223372036854775807
+  snap() { local cut=${1:-} e=$ALLV q=$ALLV p=$ALLV
+    if [[ -n "$cut" ]]; then read -r e q p < <(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(j.events.maxId,j.ledger.maxSeq,j.ledger.maxPosting)' "$cut"); fi
+    sudo -u postgres psql -X -q -At -v ON_ERROR_STOP=1 -v cut_event="$e" -v cut_seq="$q" -v cut_posting="$p" -d "$RH" < "$TOOL/scripts/fleet-reconcile-snapshot.sql"; }
+  P0=~/upgrade-rehearsal-${C:0:7}-revert-before.json; P1=~/upgrade-rehearsal-${C:0:7}-revert-after.json; P2=~/upgrade-rehearsal-${C:0:7}-revert-reconcile.json
+  snap > "$P0"
+  H1=$(head_); E1=$(rh 'SELECT max(id) FROM fleet.fleet_events')
+  cliold() { sudo -u postgres env -i PATH="$PATH" HOME=/var/tmp FLEET_ADMIN_ENV_FILE=$EMPTY FLEET_RUNTIME_ENV_FILE=$EMPTY FLEET_ADMIN_DATABASE_URL="$RHURL" \
+    FLEET_RUNTIME_REPO=https://github.com/5l4mm3r/automaton-fleet.git FLEET_RUNTIME_COMMIT=$OLD FLEET_RUNTIME_BUILD_ID=$OB FLEET_RUNTIME_LOCKFILE_SHA256=$OL \
+    bash -c "cd $TOOL && node --import tsx src/fleet/postgres/cli.ts $*"; }
+  cliold approve-runtime 2>&1 | tail -1 | grep -q "$OB" || die "re-approving the previous runtime failed on the copy"
+  r=$(ctl "$OLDDIR" dist/fleet/service/main.js "$OLD" "$OB" "$OL")
+  [[ "$r" == ready ]] || { sudo journalctl -u fleet-upgrade-rh-controller -o cat --no-pager | tail -8; die "previous release not ready on the unrestored copy"; }
+  r2=$(dash "$OLDDIR" dist/fleet/dashboard/main.js); [[ "$r2" == ready ]] || die "previous dashboard not ready on the unrestored copy"
+  stopall
+  snap "$P0" > "$P1"
+  node "$TOOL/scripts/fleet-reconcile-compare.mjs" "$P0" "$P1" "$FROM" "$TO" "runtime_approved" > "$P2" || { cat "$P2"; die "the code-only rollback lost or changed state"; }
+  [[ "$(head_)" == "$H1" && "$(rh 'SELECT max(id) FROM fleet.fleet_events')" -ge "$E1" ]] || die "ledger or events moved backwards in the code-only rollback"
+  echo "4. code-only rollback on the copy: previous runtime ${OLD:0:7} re-approved, database NOT restored; reconciliation OK — every candidate-era write preserved (ledger head ${H1%% *}, events through #$E1)"
+  echo "5. previous release ${OLD:0:7}: controller ready and dashboard ready on the same, unrestored schema $FROM data"
+  # (The pre-release dump stays verified for the disaster path; it is never restored silently.)
+  sudo -u postgres psql -X -q -d "$RH" -c "SET client_min_messages = warning" -c "DROP SCHEMA fleet CASCADE"
+  sudo -u postgres pg_restore -d "$RH" --exit-on-error < <(sudo cat $D)
+  [[ "$(rh 'SELECT max(version) FROM fleet.fleet_schema_migrations')" == "$FROM" && "$(head_)" == "$H0" ]] || die "the pre-release dump does not restore"
+  echo "6. (disaster path only) the verified pre-release dump still restores schema $FROM with the pre-release ledger head"
+else
 # 4. The cutover's exact rollback, on the copy: drop the migrated schema, restore the pre-migration dump.
 sudo -u postgres psql -X -q -d "$RH" -c "SET client_min_messages = warning" -c "DROP SCHEMA fleet CASCADE"
 sudo -u postgres pg_restore -d "$RH" --exit-on-error < <(sudo cat $D)
@@ -178,12 +209,13 @@ sudo -u postgres pg_restore -d "$RH" --exit-on-error < <(sudo cat $D)
 echo "4. rollback restore: schema $FROM, ledger head identical"
 
 # 5. The current release runs again on the restored schema.
-r=$(ctl "$OLDDIR" dist/fleet/service/main.js "$OLD" "$(sudo sed -n 's/^FLEET_RUNTIME_BUILD_ID=//p' $ENVF)" "$(sudo sed -n 's/^FLEET_RUNTIME_LOCKFILE_SHA256=//p' $ENVF)")
+r=$(ctl "$OLDDIR" dist/fleet/service/main.js "$OLD" "$OB" "$OL")
 [[ "$r" == ready ]] || { sudo journalctl -u fleet-upgrade-rh-controller -o cat --no-pager | tail -8; die "current release not ready after the rollback"; }
 r2=$(dash "$OLDDIR" dist/fleet/dashboard/main.js); [[ "$r2" == ready ]] || die "current dashboard not ready after the rollback"
 [[ "$(head_)" == "$H0" ]] || die "ledger moved after the rollback"
 echo "5. current release ${OLD:0:7}: controller ready, dashboard ready on the restored schema $FROM; ledger head identical"
 stopall
+fi
 
 [[ "$(systemctl show -p MainPID --value automaton-fleet.service automaton-fleet-operator-api.service automaton-fleet-dashboard.service | tr '\n' ' ')" == "$LIVEPIDS" ]] || die "a production PID changed during the rehearsal"
 [[ "$(live 'SELECT max(version) FROM fleet.fleet_schema_migrations')" == "$FROM" ]] || die "live schema changed"

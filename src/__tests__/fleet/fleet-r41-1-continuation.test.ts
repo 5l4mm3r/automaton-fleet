@@ -16,7 +16,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { FounderMind, MAX_IDLE_SKIP, type MindPorts } from "../../fleet/founder/mind.js";
-import { FounderToolbox, JOURNAL_FILE, sameAction } from "../../fleet/founder/toolbox.js";
+import { FounderToolbox, JOURNAL_ARCHIVE_FILE, JOURNAL_FILE, JOURNAL_INDEX_FILE, readJournal, sameAction } from "../../fleet/founder/toolbox.js";
 import { LoopGuard, SCOPED_CONTINUE } from "../../fleet/founder/loop-guard.js";
 import { ASSESS_LINE, HIBERNATE_LINE, BOOTSTRAP_LINE, classifyWork, economicState, stateLine, type SurvivalView } from "../../fleet/founder/decisions.js";
 import { FIELD_GUIDE, OWNER_SELECTED_TITLES, READING_COLLECTION, guideSection, releaseDoctrines } from "../../fleet/founder/field-guide.js";
@@ -170,10 +170,11 @@ describe("R41.1 blocked goals and the wake rule", () => {
 describe("R41.1 scoped refusals (the security boundary itself is unchanged)", () => {
   it("(5, 6) FLEET_CAPABILITY_UNCLASSIFIED and FLEET_DUPLICATE_FAILED_ACTION explain the scope; the refusals, the manifest and the economy port are unchanged", async () => {
     const r = rig();
-    const create = call("identity", { op: "create_account", args: { provider: "payhip" } }, "same-id");
+    // (R41.1 classified identity/browser/fleet_services; an unknown tool is still unclassified and refused before anything runs.)
+    const create = call("hidden_payment_tool", { op: "create_account", args: { provider: "payhip" } }, "same-id");
     const first = await r.toolbox.execute(create);
     expect(first).toMatchObject({ ok: false, refused: "FLEET_CAPABILITY_UNCLASSIFIED" });
-    expect(first.output).toContain("(tool identity) is not available to this founder.");
+    expect(first.output).toContain("(tool hidden_payment_tool) is not available to this founder.");
     expect(first.output).toContain(SCOPED_CONTINUE);
     const second = await r.toolbox.execute({ ...create, id: "same-id-2" });
     expect(second).toMatchObject({ ok: false, refused: "FLEET_DUPLICATE_FAILED_ACTION" });
@@ -181,8 +182,8 @@ describe("R41.1 scoped refusals (the security boundary itself is unchanged)", ()
     expect(SCOPED_CONTINUE).toMatch(/blocks only this one action — not you, your other goals or your venture\. Do not retry the identical action\./);
     // Underlying behaviour unchanged: the same decisions, nothing reached FleetController, and the pinned manifest digest is
     // exactly the one Agent 2 and Founder 1 attested in production (founder-v2 30a70609…).
-    expect(decideTool("identity", FOUNDER_MANIFEST_V2)).toEqual({ allowed: false, capability: null, code: "FLEET_CAPABILITY_UNCLASSIFIED" });
-    expect(decideTool("browser", FOUNDER_MANIFEST_V2)).toMatchObject({ allowed: false, code: "FLEET_CAPABILITY_UNCLASSIFIED" });
+    expect(decideTool("hidden_payment_tool", FOUNDER_MANIFEST_V2)).toEqual({ allowed: false, capability: null, code: "FLEET_CAPABILITY_UNCLASSIFIED" });
+    expect(decideTool("identity", FOUNDER_MANIFEST_V2)).toEqual({ allowed: true, capability: "planning" });
     expect(decideTool("spawn_child", FOUNDER_MANIFEST_V2).allowed).toBe(false);
     expect(decideTool("field_journal", FOUNDER_MANIFEST_V2)).toEqual({ allowed: true, capability: "memory.private" });
     expect(decideTool("field_guide", FOUNDER_MANIFEST_V2)).toEqual({ allowed: true, capability: "knowledge.read" });
@@ -331,7 +332,35 @@ describe("R41.1 field journal, field guide, bootstrap, charter integration", () 
     const listed = JSON.parse((await r.toolbox.execute(call("field_journal", { op: "list", limit: 2 }))).output);
     expect(listed.map((e: { observation: string }) => e.observation)).toEqual(["obs 2", "obs 1"]);
     const p = await r.next();
-    expect(p.task).toContain("Field journal: 3 entries; open next triggers: trigger 0 | trigger 1 | trigger 2.");
+    expect(p.task).toContain("Field journal: 3 entries, 3 consolidated lesson(s) (field_journal op lessons); open next triggers: trigger 0 | trigger 1 | trigger 2.");
+  });
+
+  it("journal beyond the 500-entry window: evicted entries are archived (never deleted), lessons and unresolved triggers are consolidated and survive, triggers can be resolved, the archive rotates", async () => {
+    const r = rig({ goals: [] });
+    const add = (o: Record<string, unknown>) => r.toolbox.execute(call("field_journal", { op: "add", entry: o }));
+    expect((await add({ observation: "first week", lesson: "Etsy blocks fetches", nextTrigger: "marketplace API access" })).ok).toBe(true);
+    for (let i = 1; i < 520; i++) await add({ observation: `obs ${i}`, ...(i % 100 === 0 ? { lesson: "Etsy blocks fetches" } : {}), ...(i === 7 ? { nextTrigger: "Gumroad KYC done" } : {}) });
+    const window = readJournal(r.d.m);
+    expect(window).toHaveLength(500);
+    expect(window[0].observation).toBe("obs 20");
+    const archived = fs.readFileSync(path.join(r.d.m, JOURNAL_ARCHIVE_FILE), "utf8").trim().split("\n").map((l) => JSON.parse(l).observation);
+    expect(archived).toEqual(["first week", ...Array.from({ length: 19 }, (_, i) => `obs ${i + 1}`)]); // exactly the evicted entries, in order
+    const lessons = JSON.parse((await r.toolbox.execute(call("field_journal", { op: "lessons" }))).output);
+    expect(lessons.lessons).toEqual([expect.objectContaining({ lesson: "Etsy blocks fetches", count: 6 })]); // the first one left the window; the lesson did not
+    expect(lessons.openTriggers.map((t: { trigger: string }) => t.trigger)).toEqual(["marketplace API access", "Gumroad KYC done"]);
+    expect(lessons.archivedEntries).toBe(20);
+    expect((await r.toolbox.execute(call("field_journal", { op: "resolve", trigger: "marketplace api access" }))).ok).toBe(true);
+    expect((await add({ observation: "KYC completed by the owner", resolves: "Gumroad KYC done" })).ok).toBe(true);
+    expect(JSON.parse((await r.toolbox.execute(call("field_journal", { op: "lessons" }))).output).openTriggers).toEqual([]);
+    expect((await r.toolbox.execute(call("field_journal", { op: "resolve", trigger: "nothing" }))).refused).toBe("FLEET_NOT_FOUND");
+    // Rotation: a full archive is renamed, never truncated.
+    fs.appendFileSync(path.join(r.d.m, JOURNAL_ARCHIVE_FILE), "x".repeat(4 * 1024 * 1024) + "\n");
+    await add({ observation: "after rotation" });
+    expect(fs.existsSync(path.join(r.d.m, "field-journal-archive.1.jsonl"))).toBe(true);
+    expect(fs.readFileSync(path.join(r.d.m, JOURNAL_ARCHIVE_FILE), "utf8").trim().split("\n")).toHaveLength(1);
+    for (const f of [JOURNAL_ARCHIVE_FILE, JOURNAL_INDEX_FILE, "field-journal-archive.1.jsonl"]) expect(fs.statSync(path.join(r.d.m, f)).mode & 0o777, f).toBe(0o600);
+    const p = await r.next();
+    expect(p.task).toMatch(/Field journal: 500 entries \(\+22 archived\), 1 consolidated lesson\(s\) \(field_journal op lessons\)\./);
   });
 
   it("the Survival Field Guide is retrieved by section on demand (never whole in a packet); platform facts are dated and marked for re-verification", async () => {
@@ -396,6 +425,24 @@ describe("R41.1 completion — supplemental acceptance (owner clarifications 202
     expect(w2.task).toContain("You are hibernating; your stated wake condition: review at 2999-01-01T00:00:00.000Z.");
   });
 
+  it("S1b: repeated UNDECLARED sleep can never settle into indefinite automatic inactivity — at most 10 slim wakes between full assessment pushes; a DECLARED hibernation may back off to 32", async () => {
+    const streaks = async (reply?: (n: number) => ToolCall[]) => {
+      const r = rig({ goals: [], reply });
+      const ps = await seq(r, 200);
+      let longest = 0, cur = 0;
+      for (const p of ps) { cur = p.slim ? cur + 1 : 0; longest = Math.max(longest, cur); }
+      return { ps, longest };
+    };
+    const undeclared = await streaks();
+    expect(undeclared.longest).toBe(10);
+    const pushes = undeclared.ps.slice(1).filter((p) => !p.slim);
+    expect(pushes.length).toBeGreaterThanOrEqual(17);
+    for (const p of pushes) expect(p.task).toContain(ASSESS_LINE); // every re-check demands the assessment again
+    expect(pushes.at(-1)!.task).toMatch(/You have now rested \d+ time\(s\) in this state without declaring hibernation\./);
+    const declared = await streaks((n) => [call("sleep", { reason: "foundation built; waiting for results", wakeOn: "a sale" }, `d${n}`)]);
+    expect(declared.longest).toBe(32);
+  });
+
   it("S2: a prepared foundation and real marketing effort with a genuine measurement window support economical hibernation — no blocked goal needed; the review time wakes it", async () => {
     const r = rig({ goals: [] , reply: (n) => [call("sleep", { reason: "product live, listing optimised, three community posts and one outreach batch done; results need a week", wakeOn: "a sale, a reply or a listing-views change", reviewAt: "2999-01-01T00:00:00Z" }, `m${n}`)] });
     fs.writeFileSync(path.join(r.d.m, "goals.json"), JSON.stringify([{ id: "g1", title: "Launch the pack", status: "complete" }, { id: "g2", title: "First marketing batch", status: "complete" }]));
@@ -455,7 +502,7 @@ describe("R41.1 completion — supplemental acceptance (owner clarifications 202
     const infer = ports.ports.infer;
     ports.ports.infer = async (m, w, route, d) => { packet = String((m as Array<{ content: string }>)[0].content); return infer(m, w, route, d); };
     for (let i = 0; i <= MAX_IDLE_SKIP + 1 && !packet; i++) await reborn.turn(`after restart ${i}`);
-    expect(packet).toContain("Field journal: 1 entry; open next triggers: next demand check.");
+    expect(packet).toContain("Field journal: 1 entry, 1 consolidated lesson(s) (field_journal op lessons); open next triggers: next demand check.");
     expect(packet).not.toContain(BOOTSTRAP_LINE);
     // Reuse/promotion goes through the existing Fleet knowledge path (the founder's own tool), never automatically.
     expect(BOOTSTRAP_LINE).toMatch(/inspect existing Fleet knowledge \(economic_knowledge, read_knowledge\)/);
@@ -504,11 +551,11 @@ describe("R41.1 completion — supplemental acceptance (owner clarifications 202
     expect(d("../../etc")).toEqual(["founder-v4"]); // a commit is 40 hex characters, never a path
   });
 
-  it("classification drift guard: every advertised founder tool is classified with its advertised class — except the documented identity/browser/fleet_services gap (owner decision pending)", () => {
+  it("classification drift guard: every advertised founder tool is classified with exactly its advertised class (the identity/browser/fleet_services gap is closed)", () => {
     const advertised = [...FOUNDER_TOOLS, ...FOUNDER_V5_TOOLS, ...FOUNDER_ROUTED_TOOLS, ...FOUNDER_EXPERIMENT_TOOLS];
     const routedLocal = new Set(["routine_task", "escalate_question"]); // answered by the mind itself, never by the toolbox
     const unclassified = [...new Set(advertised.filter((t) => !routedLocal.has(t.name) && !(t.name in TOOL_CAPABILITIES)).map((t) => t.name))].sort();
-    expect(unclassified).toEqual(["browser", "fleet_services", "identity"]);
+    expect(unclassified).toEqual([]);
     for (const t of advertised) if (t.name in TOOL_CAPABILITIES) expect(TOOL_CAPABILITIES[t.name], t.name).toBe(t.capability);
   });
 });

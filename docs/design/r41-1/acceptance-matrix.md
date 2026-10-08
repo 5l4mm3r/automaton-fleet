@@ -3,7 +3,7 @@
 **Provenance:** the 13 cases below are recovered **verbatim** from the owner's R41.1 brief ("R41.1 — SURVIVAL INSTINCT +
 BLOCKED-ACTION CONTINUATION", section "TARGETED TESTS", 2026-10-07). They are not a reconstruction. The amendments follow
 the owner's clarifications of 2026-10-08, and each one says why. Supplemental checks S1–S12 come from the 2026-10-08
-completion handoff.
+completion handoff. Checks A1–A7 come from the owner's amendment of the same day.
 
 **Test files:**
 - `src/__tests__/fleet/fleet-r41-1-continuation.test.ts` (R)
@@ -46,6 +46,20 @@ These are additional checks, not part of the original 13.
 | S7 | A sale → fulfil, account, learn, next action; never "solved" | R "(10)" | pass |
 | S8 | Bootstrap inspects Fleet knowledge; journal and knowledge continuity across restarts | R "S8", R "the field journal persists…", R "a newborn's first full packet…" | pass |
 | S9 | Study optional; no compulsory reading loop | R "S9" | pass |
-| S10 | v4 byte-identical for legacy requests; v5 definitions; the new tools dispatch; the identity/browser gap reported, not hidden | G "R41.1 doctrine…", G "R41.1 compatibility…", R "S10", R "classification drift guard" | pass. The gap is pinned at exactly identity, browser and fleet_services (an owner decision). |
+| S10 | v4 byte-identical for legacy requests; v5 definitions; the new tools dispatch; the identity/browser gap reported, not hidden | G "R41.1 doctrine…", G "R41.1 compatibility…", R "S10", R "classification drift guard" | pass. The gap is closed in the amendment (A1); the drift guard now pins the unclassified set at empty. |
 | S11 | End-to-end scripted agent through the real gateway and runtime | U "upgrade, rollback, re-upgrade and routed cognition…" check "R41.1: the upgraded founder is served doctrine founder-v5 and its v5 tools run end to end" | see the evaluation record |
 | S12 | Transition and rollback preserve identity, memory, credentials, ledger and work | U from `94f09a7` (Founder 1's release) and `136c4bd` (Agent 2's release): upgrade, rollback, re-upgrade checks; a production-copy rehearsal | see the evaluation record |
+
+## Amendment checks (2026-10-08, later)
+
+| # | Requirement | Evidence | Outcome |
+|---|---|---|---|
+| A1 | `fleet_services`, `identity`, `browser` work within their existing authority; the manifest is unchanged | T "the three tools are classified…", T "fleet_services…", R "classification drift guard" | pass |
+| A2 | Mail/SMS dormant; a missing provider blocks only the dependent action | T "identity: personas work; mail and SMS are DORMANT…" (`FLEET_CAPABILITY_NOT_CONFIGURED`, one demand each, personas and listing continue) | pass |
+| A3 | The isolated browser worker is provisioned and tested; isolation and credential brokering preserved | T "browser: the worker self-tests Chromium…" (real page; the metadata URL refused, `FLEET_BROWSER_URL_BLOCKED`); `fleet-browser-pg.test.ts`; `scripts/fleet-browser-setup.sh`; on-host provisioning in the evaluation record | code and tests pass; host provisioning needs the owner (sudo, apt, systemd) |
+| A4 | Repeated undeclared sleep cannot bypass assessment into indefinite inactivity; hibernation stays the agent's judgement | R "S1b", A "(11, 2)" (30-day cost bound kept) | pass |
+| A5 | Journal lessons and unresolved triggers survive beyond the 500-entry window | R "journal beyond the 500-entry window…" | pass |
+| A6 | Founder rollback after v5 use preserves the v5-written state; re-upgrade works | U checks "rollback after v5 use…" and "upgrade again after the v5 rollback…", from `136c4bd` and `94f09a7` | pass |
+| A7 | Controller rollback preserves or explicitly reconciles post-cutover writes; never a silent restore | `fleet-rollout.sh revert` (code-only: no restore, reconciliation; schema: post-cutover dump plus `FLEET_REVERT_DISCARD_ACK`); `fleet-upgrade-rehearsal.sh 45 45` step 4 on a production copy | see the evaluation record |
+
+T = `src/__tests__/fleet/fleet-r41-1-tools-pg.test.ts`.

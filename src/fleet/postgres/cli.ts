@@ -639,6 +639,12 @@ async function main(argv: string[]): Promise<number> {
         console.log(`granted controller API to ${rest[0] || store.serviceRole}`);
         return 0;
       }
+      case "grant-browser-role": {
+        // R41.1: the browser worker's role (bx_* only), for scripts/fleet-browser-setup.sh.
+        await store.grantBrowserRole(rest[0] || undefined);
+        console.log(`granted the browser-worker API to ${rest[0] || "fleet_browser"}`);
+        return 0;
+      }
       case "grant-operator-role": {
         await store.grantOperatorRole(rest[0] || store.operatorRole);
         console.log(`granted the read-only Operator API to ${rest[0] || store.operatorRole}`);

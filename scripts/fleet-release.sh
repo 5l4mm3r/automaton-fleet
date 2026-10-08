@@ -49,7 +49,7 @@ fi
 backend_revert() {
   echo "!! $1 — restoring the previous UI, then reverting the backend $(ts)"
   ui_restore
-  if bash "$ROLLOUT" revert "$PINS" "$FROM" "$TO" "release step failed: $1"; then
+  if FLEET_REVERT_IN_RELEASE=1 bash "$ROLLOUT" revert "$PINS" "$FROM" "$TO" "release step failed: $1"; then
     echo "== RELEASE ${C:0:7} ROLLED BACK $(ts): UI and backend restored (production_rolled_back recorded)"; exit 1
   fi
   echo "== RELEASE ${C:0:7}: BACKEND REVERT FAILED $(ts) — INVESTIGATE NOW (rollback point in ~/rollout-${C:0:7}-cutover.state)"; exit 3

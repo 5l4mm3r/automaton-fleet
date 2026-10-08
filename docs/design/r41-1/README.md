@@ -1,6 +1,8 @@
 # R41.1: survival instinct and blocked-action continuation
 
-**Status:** built and tested locally; completed per the owner's clarifications of 2026-10-08; not deployed.
+**Status:** built and tested locally; completed per the owner's clarifications of 2026-10-08, then amended the same day
+(classification of the three economy tools, the browser worker, repeated undeclared sleep, journal archival, a
+write-preserving rollback). Not deployed. The evaluation record (`docs/evaluations/r41-1/`) holds pins and results.
 
 **Source:** the owner's "Automaton Fleet Birth Charter & Survival Field Guide v1.2" (7 October 2026). The docx sha256 is
 `ac20c467…b40a5`; its text copy is `birth-charter-and-field-guide-v1.2.txt`.
@@ -79,9 +81,13 @@ So R41.1 has a small, **version-gated** controller part:
 - **Wake rule (owner, 2026-10-08):** hibernation is the agent's own judgement, never a goal-count predicate.
   - **Declared hibernation:** a sleep with a reason and `wakeOn` and/or `reviewAt` gets slim, backed-off wake-ups at
     once. The re-check after 4, 8, 16, 32 slim wakes reminds the agent of its own reason and wake condition.
-  - **Undeclared sleep:** gets ONE full assessment push for its idle state (`ASSESS_LINE`: an empty goal list is not
-    proof there is nothing to do). If the agent sleeps again on the same state, the ordinary bounded schedule follows.
-    No blocked goal is needed to hibernate.
+  - **Undeclared sleep:** gets a full assessment push for its idle state first (`ASSESS_LINE`: an empty goal list is
+    not proof there is nothing to do). No blocked goal is needed to hibernate.
+  - **Repeated undeclared sleep (amendment):** it can never drift into indefinite automatic inactivity. While the agent
+    keeps sleeping without a reason and a wake condition, every scheduled full packet repeats the assessment ("You have
+    now rested N time(s) without declaring…"), and its slim backoff stops at `RENUDGE_UNDECLARED_MAX` = 10 wakes
+    (declared hibernation: 32). Declaring is all it takes to rest longer: the controller sets no work quota and no
+    goal-count rule. The 10-wake cap keeps the existing bound of ≤ 6 full pushes a day.
   - **Changes that bring a full packet:** a due review, a sale, a dependency status change, a capability change, or any
     change in memory, workspace or economy.
   - **Unchanged cost controls:** the idle skip, the loop guard, and the 30-simulated-day cost bound (≤ 50 calls and
@@ -99,8 +105,15 @@ So R41.1 has a small, **version-gated** controller part:
   - Advisory only, never a controller permission. The guidance otherwise stays word for word the same at any runway.
 - **Sale:** an increase in `externalCustomerRevenue` since the last turn brings a full packet with fulfil → account →
   learn → improve → forward.
-- **Field journal:** `memory/field-journal.jsonl`, 0600, append-only, the last 500 entries. It survives restarts and
-  upgrades (the memory directory is preserved). Open `nextTrigger`s are shown in full packets.
+- **Field journal:** `memory/field-journal.jsonl`, 0600, append-only, a working window of the last 500 entries. It
+  survives restarts and upgrades (the memory directory is preserved). Open `nextTrigger`s are shown in full packets.
+  - **Beyond the window (amendment):** nothing is dropped. Entries leaving the window move to
+    `memory/field-journal-archive.jsonl` (rotated at 4 MB to `.1`, `.2`, …; never deleted), and
+    `memory/field-journal-index.json` consolidates them: every lesson with its count and last date (up to 2000), every
+    still-open trigger (up to 200) and the archived count.
+  - `field_journal op lessons` reads the consolidated lessons; `op resolve` (or an entry with `resolves`) closes a
+    trigger, whether it is in the window or the archive. Full packets show "(+N archived), K consolidated lesson(s)" and
+    the open triggers from both.
 - **Bootstrap:** a newborn's first full packet carries the v1.2 §10 bootstrap line.
 
 ## Doctrine compatibility (attested, not asserted)
@@ -146,26 +159,48 @@ Each step is separate, with its own pins, rehearsal, health evidence and rollbac
 4. **Founder 1:** `fleet-founders.sh upgrade-runtime` (`94f09a7` → candidate), after Agent 2 is verified.
    - Its identity, memory (including its owner-dependent goal wording and the pending Gumroad request), workspace,
      credential, wallet and ledger are preserved by the R23 lifecycle. The rehearsal from `94f09a7` proves it.
-5. **Rollback:** per agent with `rollback-runtime`, back to its previous pinned release and v4. The controller can be
-   reverted with the dump restore (class B) only after both agents are rolled back.
+5. **Rollback:** per agent with `rollback-runtime`, back to its previous pinned release and v4. The founder's state
+   is NOT restored: the previous runtime runs on everything the v5 runtime wrote (journal, marked goals, declared
+   hibernation), proven by the rehearsal's "rollback after v5 use" check from both `136c4bd` and `94f09a7`.
+6. **Controller rollback (amendment):** this release is code only (schema 45 → 45), so `fleet-rollout.sh revert`
+   switches the code back and re-approves the previous runtime **without restoring the database**. A reconciliation
+   before and after proves every post-cutover journal, posting and event is preserved; the only new event allowed is
+   `runtime_approved`. Revert the agents first (step 5).
+   - For a schema-changing release, revert first preserves the post-cutover state in its own verified dump and refuses to
+     restore the pre-migration dump until `FLEET_REVERT_DISCARD_ACK=<journals>:<events>` confirms the exact counts. The
+     only exception is `fleet-release.sh`'s own immediate revert, which records the counts in `production_rolled_back`.
+   - `fleet-upgrade-rehearsal.sh <pins> 45 45` rehearses the code-only revert on a production copy.
 
-## Known pre-existing gap (inspected 2026-10-08; owner decision required)
+## The three economy tools (resolved in the amendment of 2026-10-08)
 
-Three tools are offered by the controller under the `planning` class (`cognition/types.ts`), which `founder-v2` allows.
-The runtime's `TOOL_CAPABILITIES` never classified them, so every call is refused as `FLEET_CAPABILITY_UNCLASSIFIED`.
-The original coverage test only checked the upstream tool list; the new drift guard pins the gap at exactly these
-three.
+Three tools were offered by the controller under the `planning` class, which `founder-v2` allows, but the runtime's
+`TOOL_CAPABILITIES` never classified them, so every call was refused as `FLEET_CAPABILITY_UNCLASSIFIED`. The owner
+ordered them resolved within their existing authority.
 
-| Tool | Added | What it does (database-enforced ops) | Infrastructure | Nature of the gap |
-|---|---|---|---|---|
-| `fleet_services` | v35 (2026-10-02) | own commitments, risk assessment, Fleet missions, estate search/claim | none external | accidental classification mismatch in already-intended authority |
-| `identity` | v34/v36 | personas, mailboxes, mail, phones/SMS, accounts (asynchronous broker jobs) | identity broker **active**; mail/SMS providers **not configured** (0 providers, 0 mailboxes) | classification mismatch plus absent provider dependencies |
-| `browser` | v37 (2026-10-02) | a real browser: sign-up, log-in, forms, listings | browser worker unit **not installed** on the VPS | classification mismatch plus an absent infrastructure dependency |
+| Tool | Added | What it does (database-enforced ops) | Resolution |
+|---|---|---|---|
+| `fleet_services` | v35 | own commitments, risk assessment, Fleet missions, estate search/claim | classified `planning`; works at once |
+| `identity` | v34/v36 | personas, mailboxes, mail, phones/SMS, accounts (broker jobs) | classified `planning`; personas and accounts work through the active broker. Mail and SMS stay **dormant** (0 providers): those ops answer `FLEET_CAPABILITY_NOT_CONFIGURED` ("only this action is unavailable"), record one capability demand for Admin, and block nothing else |
+| `browser` | v37 | a real browser: sign-up, log-in, forms, listings | classified `planning`; the isolated worker is provisioned by `scripts/fleet-browser-setup.sh` (below). A failed browser action is now a scoped refusal with its code (for example `FLEET_BROWSER_URL_BLOCKED`), never `ok` |
 
-- **Smallest repair:** add `fleet_services`, `identity` and `browser` → `planning` to `TOOL_CAPABILITIES` (runtime
-  release only). The founder-v2 manifest digest is unchanged.
-- **What it enables:**
-  - `fleet_services` at once;
-  - `identity` persona and account jobs through the broker (mail and SMS ops would report not-configured dependencies);
-  - `browser` would queue actions no worker executes until the worker is installed.
-- **Not done:** this widens what agents can actually do, so it was not repaired under R41.1.
+- The founder-v2 manifest digest is unchanged (`30a70609…`). The drift guard now pins the unclassified set at empty.
+- Test: `src/__tests__/fleet/fleet-r41-1-tools-pg.test.ts` drives all three from a founder's toolbox through the
+  restricted agent API, the identity broker (no providers) and the browser worker with the pinned Chromium.
+
+### Browser worker provisioning
+
+`sudo scripts/fleet-browser-setup.sh install --apply` (after the controller cutover; `check` is read-only):
+
+1. the shared libraries headless Chromium needs (apt, `--no-install-recommends`);
+2. Chrome for Testing headless shell 153.0.8010.12 (matches playwright-core 1.63.0), zip sha256 `a9da0288…af9d1d`,
+   root-owned under `/opt/automaton-fleet/chromium/`;
+3. OS user `automaton-fleet-browser` (system, nologin, no other group);
+4. DB roles `fleet_browser` / `fleet_browser_login` from only the browser block of `fleet-db-roles.sql`. The password is
+   fed on stdin and written only to `/etc/automaton-fleet/browser.env` (root:automaton-fleet-browser 0640);
+5. `grant-browser-role` from the installed release: USAGE plus EXECUTE on `bx_*` only;
+6. the unit, enabled and started. The worker refuses to start unless its own Chromium self-test passes
+   (`browser_selftest_ok`), and `fleet:audit-privileges` must pass afterwards.
+
+The isolation is unchanged from v37: its own OS user and DB role; no vault (a credential reaches it one fill at a time,
+sealed by the broker to a key held only in memory); public internet only (private, link-local, CGNAT and metadata ranges
+denied both at the URL layer and by systemd); every other env file and state directory inaccessible.

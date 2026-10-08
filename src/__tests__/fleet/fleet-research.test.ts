@@ -454,7 +454,13 @@ describe("capability", () => {
     expect(decideTool("web_fetch", FOUNDER_MANIFEST_V1)).toMatchObject({ allowed: false, code: "FLEET_CAPABILITY_DENIED" });
     expect(toolsFor(FOUNDER_MANIFEST_V2.allowed).map((t) => t.name)).toContain("web_fetch");
     expect(toolsFor(FOUNDER_MANIFEST_V1.allowed).map((t) => t.name)).not.toContain("web_fetch");
-    for (const t of ["curl", "wget", "http_request", "browser", "open_socket", "x402_fetch"]) expect(decideTool(t, FOUNDER_MANIFEST_V2).allowed, t).toBe(false);
+    for (const t of ["curl", "wget", "http_request", "open_socket", "x402_fetch"]) expect(decideTool(t, FOUNDER_MANIFEST_V2).allowed, t).toBe(false);
+    // R41.1 (owner amendment, 2026-10-08): `browser` is not a raw network primitive — it queues actions for the isolated,
+    // brokered browser worker (v37) and is classified under the class the controller always advertised it with.
+    expect(decideTool("browser", FOUNDER_MANIFEST_V2)).toEqual({ allowed: true, capability: "planning" });
+    // It follows that class in every manifest — no wider: a manifest without `planning` is refused.
+    expect(decideTool("browser", FOUNDER_MANIFEST_V1).allowed).toBe(FOUNDER_MANIFEST_V1.allowed.includes("planning"));
+    expect(decideTool("browser", { ...FOUNDER_MANIFEST_V2, allowed: FOUNDER_MANIFEST_V2.allowed.filter((c) => c !== "planning") })).toMatchObject({ allowed: false });
   });
 });
 

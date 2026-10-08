@@ -41,7 +41,7 @@ import type { LoopGuard } from "./loop-guard.js";
 import { escalateQuestion, priorDecision } from "./escalation.js";
 import { ASSESS_LINE, BOOTSTRAP_LINE, DECISIONS_FILE, HIBERNATE_LINE, hibernationRecheck, classifyWork, decisionLines, economicState, nextMoveLine, idleTask, loadDecisions, ownCapitalLine, parseSurvival, saleLine, stateLine,
   survivalLine, workKind, workLines, type Decision, type GoalView, type WorkKind } from "./decisions.js";
-import { readJournal } from "./toolbox.js";
+import { readJournal, readJournalIndex } from "./toolbox.js";
 import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineClass } from "./task-classifier.js";
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
 
@@ -241,8 +241,16 @@ function openGoalsOf(memoryDir: string): GoalView[] {
  */
 export const RENUDGE_FIRST = 4;
 export const RENUDGE_MAX = 32;
+/**
+ * R41.1: an UNDECLARED rest (sleep without a reason + wake condition) is never allowed to settle into indefinite
+ * automatic inactivity: every re-check of it is a full assessment push, at most this many slim wakes apart (10 keeps the
+ * existing idle cost bound: ≤ 6 full pushes a day). A declared hibernation — the founder's own economic judgement —
+ * backs off to RENUDGE_MAX.
+ */
+export const RENUDGE_UNDECLARED_MAX = 10;
 /** The idle state being re-checked: its digest, slim wakes since its last push, and when the next push is due. */
-interface IdleState { digest: string; slim: number; after: number; /** R41.1: the founder already had a full assessment push for this idle state. */ assessed?: boolean }
+interface IdleState { digest: string; slim: number; after: number; /** R41.1: the founder already had a full assessment push for this idle state. */ assessed?: boolean;
+  /** R41.1: assessment pushes this idle state has had while the founder kept resting without declaring hibernation. */ rests?: number }
 
 /** The capability view the controller reports in cognition status (null when it reports none). */
 export function parseCapabilityView(v: unknown): { policySignature: string; tools: string[]; experiments: Record<string, unknown> | null } | null {
@@ -409,7 +417,8 @@ export class FounderMind {
       const caps = c?.capabilities && typeof c.capabilities.sig === "string" && Array.isArray(c.capabilities.tools)
         ? { sig: String(c.capabilities.sig), tools: (c.capabilities.tools as unknown[]).map(String).slice(0, 100) } : null;
       const idle = c?.idle && typeof c.idle.digest === "string" && Number.isSafeInteger(c.idle.slim) && Number.isSafeInteger(c.idle.after)
-        ? { digest: String(c.idle.digest), slim: Number(c.idle.slim), after: Number(c.idle.after), ...(c.idle.assessed === true ? { assessed: true } : {}) } : null;
+        ? { digest: String(c.idle.digest), slim: Number(c.idle.slim), after: Number(c.idle.after), ...(c.idle.assessed === true ? { assessed: true } : {}),
+            ...(Number.isSafeInteger(c.idle.rests) ? { rests: Number(c.idle.rests) } : {}) } : null;
       return typeof c?.at === "string" && typeof c?.outcome === "string"
         ? { at: c.at, outcome: c.outcome, tools: Array.isArray(c.tools) ? c.tools.map(String).slice(0, 20) : [], wakeDigest: typeof c.wakeDigest === "string" ? c.wakeDigest : null, capabilities: caps, idle,
             revenue: Number.isFinite(c.revenue) ? Number(c.revenue) : null, wakeOn: typeof c.wakeOn === "string" ? c.wakeOn.slice(0, 300) : null,
@@ -520,15 +529,18 @@ export class FounderMind {
     const nudge = quiet && assessed && !!idlePrev && idlePrev.slim >= idlePrev.after;
     const bare = quiet && assessed && !nudge;
     // (An idle state recorded before F2-A, or by an older runtime, starts its schedule now: the next slim wake counts.)
+    const cap = declared ? RENUDGE_MAX : RENUDGE_UNDECLARED_MAX;
+    const rests = (idlePrev?.rests ?? 0) + (challenge || (nudge && !declared) ? 1 : 0);
     const idleNext: IdleState | null = !nowDigest ? null
-      : challenge ? { digest: nowDigest, slim: 0, after: RENUDGE_FIRST, assessed: true }
-      : nudge ? { digest: nowDigest, slim: 0, after: Math.min(RENUDGE_MAX, idlePrev!.after * 2), assessed: true }
-      : { digest: nowDigest, slim: (idlePrev?.slim ?? 0) + 1, after: idlePrev?.after ?? RENUDGE_FIRST, assessed: true };
+      : challenge ? { digest: nowDigest, slim: 0, after: RENUDGE_FIRST, assessed: true, rests }
+      : nudge ? { digest: nowDigest, slim: 0, after: Math.min(cap, idlePrev!.after * 2), assessed: true, rests }
+      : { digest: nowDigest, slim: (idlePrev?.slim ?? 0) + 1, after: Math.min(cap, idlePrev?.after ?? RENUDGE_FIRST), assessed: true, rests };
     const executableGoals = [...work.due, ...work.executable];
     const kindMove = kind === "hibernate" ? HIBERNATE_LINE : idleTask(kind, ledger, executableGoals);
     const move = bare ? null
       : challenge ? `${ASSESS_LINE}\n${kindMove}`
-      : nudge ? (declared ? `${hibernationRecheck(prev?.outcome ?? "", prev?.wakeOn ?? null, prev?.reviewAt ?? null)}\n${kindMove}` : kindMove)
+      : nudge ? (declared ? `${hibernationRecheck(prev?.outcome ?? "", prev?.wakeOn ?? null, prev?.reviewAt ?? null)}\n${kindMove}`
+        : `${ASSESS_LINE} (You have now rested ${rests} time(s) in this state without declaring hibernation.)\n${kindMove}`)
       : reviewDue ? `Your scheduled review time (${prev!.reviewAt}) has come: inspect what changed and choose the next useful action.\n${kind === "hibernate" ? HIBERNATE_LINE : nextMoveLine(kind) ?? ""}`.trim()
       : kind === "hibernate" ? HIBERNATE_LINE : nextMoveLine(kind);
     // F2-A (v26+ controller): the survival observation and the founder's own-capital position and record — information
@@ -546,10 +558,13 @@ export class FounderMind {
     const revenue = Number(economics.externalCustomerRevenue);
     const sale = Number.isFinite(revenue) ? saleLine(prev?.revenue ?? null, revenue) : null;
     const journal = bare ? [] : readJournal(R.memoryDir);
-    const triggers = journal.filter((e) => typeof e.nextTrigger === "string").slice(-3).map((e) => String(e.nextTrigger).slice(0, 120));
+    // Open triggers come from the durable index (they outlive the 500-entry working window until resolved).
+    const jix = bare ? null : readJournalIndex(R.memoryDir);
+    const triggers = (jix?.openTriggers ?? []).slice(-3).map((t) => t.trigger.slice(0, 120));
     const extra = [...(!prev ? [BOOTSTRAP_LINE] : []), ...(sale ? [sale] : []), ...(move ? [move] : []), ...(!bare ? [stateLine(econ)] : []),
       ...(!bare && survival ? [survivalLine(survival)] : []), ...(own ? [own] : []), ...(brief ? [economyLine(brief)] : []),
-      ...(!bare && journal.length ? [`Field journal: ${journal.length} entr${journal.length === 1 ? "y" : "ies"}${triggers.length ? `; open next triggers: ${triggers.join(" | ")}` : ""}.`] : []),
+      ...(!bare && (journal.length || jix?.lessons.length) ? [`Field journal: ${journal.length} entr${journal.length === 1 ? "y" : "ies"}${jix?.archived ? ` (+${jix.archived} archived)` : ""}`
+        + `${jix?.lessons.length ? `, ${jix.lessons.length} consolidated lesson(s) (field_journal op lessons)` : ""}${triggers.length ? `; open next triggers${(jix?.openTriggers.length ?? 0) > 3 ? ` (latest 3 of ${jix!.openTriggers.length})` : ""}: ${triggers.join(" | ")}` : ""}.`] : []),
       ...(bare && declared ? [`You are hibernating; your stated wake condition: ${prev?.wakeOn ?? `review at ${prev?.reviewAt}`}.`] : [])];
     let text: string;
     try {

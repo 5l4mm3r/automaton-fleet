@@ -160,6 +160,76 @@ export function readJournal(memoryDir: string): Array<Record<string, unknown>> {
     return [];
   }
 }
+/**
+ * R41.1: the journal's durable layer beyond the working window.
+ *   field-journal-index.json  every distinct lesson (count, first/last seen, reusability, confidence) and every open
+ *                             trigger until the founder resolves it (an entry with `resolves`, or op resolve);
+ *   field-journal-archive[.n].jsonl  entries that left the working window, append-only, rotated at 4 MB, never deleted.
+ */
+export const JOURNAL_INDEX_FILE = "field-journal-index.json";
+export const JOURNAL_ARCHIVE_FILE = "field-journal-archive.jsonl";
+const JOURNAL_ARCHIVE_ROTATE_BYTES = 4 * 1024 * 1024;
+export const JOURNAL_LESSONS_MAX = 2000;
+export const JOURNAL_TRIGGERS_MAX = 200;
+interface JournalIndex { lessons: Array<{ lesson: string; count: number; firstAt: string; lastAt: string; reusability?: string; confidence?: string }>;
+  openTriggers: Array<{ trigger: string; at: string; observation: string }>; archived: number }
+const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+export function readJournalIndex(memoryDir: string): JournalIndex {
+  try {
+    const x = JSON.parse(fs.readFileSync(path.join(memoryDir, JOURNAL_INDEX_FILE), "utf8"));
+    return { lessons: Array.isArray(x.lessons) ? x.lessons : [], openTriggers: Array.isArray(x.openTriggers) ? x.openTriggers : [], archived: Number(x.archived) || 0 };
+  } catch {
+    return { lessons: [], openTriggers: [], archived: 0 };
+  }
+}
+function writeJournalIndex(memoryDir: string, ix: JournalIndex): void {
+  const f = path.join(memoryDir, JOURNAL_INDEX_FILE);
+  fs.writeFileSync(`${f}.tmp`, JSON.stringify(ix), { mode: 0o600 });
+  fs.renameSync(`${f}.tmp`, f);
+}
+function consolidateJournal(memoryDir: string, e: Record<string, unknown>): void {
+  const ix = readJournalIndex(memoryDir);
+  const at = String(e.at);
+  if (typeof e.lesson === "string") {
+    const k = norm(e.lesson);
+    const hit = ix.lessons.find((l) => norm(l.lesson) === k);
+    if (hit) { hit.count++; hit.lastAt = at; if (typeof e.confidence === "string") hit.confidence = e.confidence; }
+    else ix.lessons.push({ lesson: e.lesson, count: 1, firstAt: at, lastAt: at, ...(typeof e.reusability === "string" ? { reusability: e.reusability } : {}),
+      ...(typeof e.confidence === "string" ? { confidence: e.confidence } : {}) });
+    // Bounded by distinct lessons: the most-confirmed survive; the rest stay in the archive.
+    if (ix.lessons.length > JOURNAL_LESSONS_MAX) ix.lessons = ix.lessons.sort((a, b) => a.count - b.count || a.lastAt.localeCompare(b.lastAt)).slice(-JOURNAL_LESSONS_MAX)
+      .sort((a, b) => a.lastAt.localeCompare(b.lastAt));
+  }
+  if (typeof e.resolves === "string") { const k = norm(e.resolves); ix.openTriggers = ix.openTriggers.filter((t) => norm(t.trigger) !== k); }
+  if (typeof e.nextTrigger === "string" && !ix.openTriggers.some((t) => norm(t.trigger) === norm(e.nextTrigger as string))) {
+    ix.openTriggers.push({ trigger: e.nextTrigger, at, observation: String(e.observation).slice(0, 200) });
+    if (ix.openTriggers.length > JOURNAL_TRIGGERS_MAX) ix.openTriggers = ix.openTriggers.slice(-JOURNAL_TRIGGERS_MAX);
+  }
+  writeJournalIndex(memoryDir, ix);
+}
+function archiveJournal(memoryDir: string, lines: string[]): void {
+  const f = path.join(memoryDir, JOURNAL_ARCHIVE_FILE);
+  try {
+    if (fs.statSync(f).size >= JOURNAL_ARCHIVE_ROTATE_BYTES) {
+      let n = 1;
+      while (fs.existsSync(path.join(memoryDir, `field-journal-archive.${n}.jsonl`))) n++;
+      fs.renameSync(f, path.join(memoryDir, `field-journal-archive.${n}.jsonl`));
+    }
+  } catch { /* no archive yet */ }
+  fs.appendFileSync(f, lines.join("\n") + "\n", { mode: 0o600 });
+  const ix = readJournalIndex(memoryDir);
+  ix.archived += lines.length;
+  writeJournalIndex(memoryDir, ix);
+}
+export function resolveJournalTrigger(memoryDir: string, trigger: string): number {
+  const ix = readJournalIndex(memoryDir);
+  const k = norm(trigger);
+  const before = ix.openTriggers.length;
+  ix.openTriggers = ix.openTriggers.filter((t) => norm(t.trigger) !== k);
+  writeJournalIndex(memoryDir, ix);
+  return before - ix.openTriggers.length;
+}
+
 /** R41.1: two descriptions of the same blocked action (normalised words; ≥ 60% overlap). */
 export function sameAction(a: string, b: string): boolean {
   const words = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP_WORDS.has(w)));
@@ -627,6 +697,12 @@ export class FounderToolbox {
               if ((x as { ok?: unknown }).ok === false || st === "done" || st === "failed") { r = x; break; }
             }
           }
+          // R41.1: a browser action the worker FAILED (a blocked URL, a step that failed) is a refusal of that one action, not
+          // a success with an error buried in the page result.
+          if (call.name === "browser" && (r as { status?: unknown }).status === "failed") {
+            const code = String(((r as { result?: { code?: unknown } }).result?.code) ?? "FLEET_BROWSER_ACTION_FAILED");
+            return { name: call.name, ok: false, refused: code, output: `REFUSED ${code}: ${clip(JSON.stringify(r))} ${SCOPED_CONTINUE}` };
+          }
           if ((r as { ok?: unknown }).ok === false) {
             const code = String((r as { code?: unknown }).code ?? "FLEET_TOOL_ERROR");
             const cat = custodyCategory(code);
@@ -692,17 +768,33 @@ export class FounderToolbox {
             for (const k of JOURNAL_FIELDS) if (e && typeof e[k] === "string" && (e[k] as string).trim()) entry[k] = (e[k] as string).trim().slice(0, k === "cost" || k === "confidence" || k === "nextTrigger" ? 300 : 1000);
             if (!entry.observation) return refuse("FLEET_BAD_REQUEST", "an entry needs at least an observation");
             if (entry.reusability !== undefined && !["venture", "agent", "candidate_fleet"].includes(String(entry.reusability))) return refuse("FLEET_BAD_REQUEST", "reusability is venture, agent or candidate_fleet");
+            if (typeof e?.resolves === "string" && e.resolves.trim()) entry.resolves = e.resolves.trim().slice(0, 300);
             const lines = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
             lines.push(JSON.stringify(entry));
+            // R41.1: entries leaving the working window are ARCHIVED (append-only, rotated, never deleted), and every lesson
+            // and unresolved trigger is consolidated in the index first — nothing important is lost beyond 500 entries.
+            const evicted = lines.length > JOURNAL_MAX ? lines.slice(0, lines.length - JOURNAL_MAX) : [];
+            consolidateJournal(this.memory, entry);
+            if (evicted.length) archiveJournal(this.memory, evicted);
             fs.writeFileSync(`${file}.tmp`, lines.slice(-JOURNAL_MAX).join("\n") + "\n", { mode: 0o600 });
             fs.renameSync(`${file}.tmp`, file);
-            return { name: call.name, ok: true, output: `journal entry recorded (${Math.min(lines.length, JOURNAL_MAX)} kept)` };
+            return { name: call.name, ok: true, output: `journal entry recorded (${Math.min(lines.length, JOURNAL_MAX)} in the working window${evicted.length ? `; ${evicted.length} older entr${evicted.length === 1 ? "y" : "ies"} archived` : ""})` };
           }
           if (a.op === "list") {
             const n = Math.max(1, Math.min(50, Number(a.limit) || 10));
             return { name: call.name, ok: true, output: clip(JSON.stringify(readJournal(this.memory).slice(-n).reverse())) };
           }
-          return refuse("FLEET_BAD_REQUEST", "op is add or list");
+          if (a.op === "lessons") {
+            const ix = readJournalIndex(this.memory);
+            return { name: call.name, ok: true, output: clip(JSON.stringify({ lessons: ix.lessons.slice(-50).reverse(), openTriggers: ix.openTriggers, archivedEntries: ix.archived })) };
+          }
+          if (a.op === "resolve") {
+            const t = str(a.trigger, 300);
+            if (!t) return refuse("FLEET_BAD_REQUEST", "trigger required");
+            const n = resolveJournalTrigger(this.memory, t);
+            return n ? { name: call.name, ok: true, output: `${n} open trigger(s) resolved` } : refuse("FLEET_NOT_FOUND", "no open trigger matches");
+          }
+          return refuse("FLEET_BAD_REQUEST", "op is add, list, lessons or resolve");
         }
         case "field_guide": {
           if (a.op === "list") return { name: call.name, ok: true, output: guideList() };

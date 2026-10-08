@@ -29,7 +29,9 @@ import { browserUrlAllowed } from "../../fleet/browser/policy.js";
 import { auditPrivileges } from "../../fleet/postgres/privileges.js";
 
 const PG_BIN = findPgBin();
-const CHROME = ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find((p) => fs.existsSync(p)) ?? null;
+// R41.1: FLEET_TEST_CHROME runs the suite against a specific build (e.g. the pinned Chrome-for-Testing headless shell the
+// production worker uses: scripts/fleet-browser-setup.sh).
+const CHROME = [process.env.FLEET_TEST_CHROME ?? "", "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find((p) => p && fs.existsSync(p)) ?? null;
 const OPENSSL = fs.existsSync("/usr/bin/openssl");
 
 describe("browser URL policy and worker startup (unit)", () => {

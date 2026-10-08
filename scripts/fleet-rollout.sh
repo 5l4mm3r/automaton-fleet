@@ -66,8 +66,44 @@ if [[ "$MODE" == revert ]]; then
   for u in $LATE; do [[ "$u" =~ ^automaton-fleet-(dashboard|identity|browser)\.service$ ]] || die "unexpected unit in state"; done
   UNITS="automaton-fleet-operator-api.service automaton-fleet-chatgpt-adapter.socket automaton-fleet-chatgpt-adapter.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-fetcher.service $LATE automaton-fleet.service"
   START="automaton-fleet.service automaton-fleet-operator-api.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-chatgpt-adapter.socket $LATE"
+  # R41.1: a revert NEVER silently restores an older database over newer state.
+  TOOLS=~/automaton-fleet-build; RB0=~/rollout-${C:0:7}-revert-before.json; RB1=~/rollout-${C:0:7}-revert-after.json; RB2=~/rollout-${C:0:7}-revert-reconcile.json
+  CUTAFTER=~/rollout-${C:0:7}-cutover-after.json
   echo "REVERT START $(ts): $REASON"; sudo systemctl stop $UNITS
   test "$LIVE" = automaton_fleet
+  # Writers are stopped: the state now is everything written since the cutover.
+  snapshot $LIVE "$TOOLS" > "$RB0"
+  SINCE=$(node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));let c={events:{maxId:0},ledger:{maxSeq:0}};try{c=JSON.parse(require("fs").readFileSync(process.argv[2],"utf8"))}catch{}
+    console.log(`${Math.max(0,a.ledger.maxSeq-c.ledger.maxSeq)} ${Math.max(0,a.events.maxId-c.events.maxId)}`)' "$RB0" "$CUTAFTER")
+  read -r NJ NE <<< "$SINCE"
+  echo "post-cutover writes: $NJ ledger journal(s), $NE event(s) since the cutover"
+  if [[ "$FROM" == "$TO" ]]; then
+    # Code-only release: switch the code back and re-approve the previous runtime. The database is NOT restored, so every
+    # post-cutover write (memory, work, ledger entries, events) is kept — proven by the reconciliation below.
+    sudo cp -p $ENVF.pre-${C:0:7} $ENVF
+    sudo ln -sfn "releases/$SOLD" /opt/automaton-fleet/current.tmp && sudo mv -T /opt/automaton-fleet/current.tmp /opt/automaton-fleet/current
+    (cd "$TOOLS" && pnpm -s fleet:admin approve-runtime > ~/rollout-revert-approve.log 2>&1 && pnpm -s fleet:verify-runtime > ~/rollout-revert-verify.log 2>&1) \
+      || die "re-approving the previous runtime failed: INVESTIGATE NOW (units stopped; database untouched)"
+    sudo systemctl start $START
+    for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8787/readyz 2>/dev/null && break; sleep 1; done
+    snapshot $LIVE "$TOOLS" "$RB0" > "$RB1"
+    node "$TOOLS/scripts/fleet-reconcile-compare.mjs" "$RB0" "$RB1" "$FROM" "$TO" "runtime_approved" > "$RB2" || { cat "$RB2"; die "code-only revert lost or changed state: INVESTIGATE NOW"; }
+    echo "code-only revert: database untouched; reconciliation OK ($RB2): all $NJ post-cutover journal(s) and $NE event(s) preserved"
+    live "SELECT fleet.fleet_event('production_rolled_back', NULL, 'operator:release', jsonb_build_object('commit', '${C:0:12}', 'fromSchema', $FROM, 'toSchema', $TO, 'reason', '$REASON', 'mode', 'code-only', 'preservedJournals', $NJ, 'preservedEvents', $NE))" > /dev/null
+    echo "== ROLLOUT ${C:0:7} REVERTED (code only) $(ts): schema $FROM, release $(readlink /opt/automaton-fleet/current), readyz $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/readyz)"
+    exit 0
+  fi
+  # A schema-changing release: the previous release cannot run on the new schema, so a revert means restoring the
+  # pre-migration dump. The state written since the cutover is first preserved in its own verified dump, and the discard
+  # must be acknowledged explicitly (exact counts) — except inside fleet-release.sh's own immediate revert, which records
+  # the counts in the rollback event.
+  STAMP=$(date -u +%Y%m%dT%H%M%SZ); PD=~/automaton_fleet-v$TO-post-cutover-${C:0:7}-$STAMP.dump
+  ( umask 077; sudo -u postgres pg_dump -Fc -n fleet "$LIVE" > "$PD" ); chmod 600 "$PD"; sha256sum "$PD" > "$PD.sha256"
+  echo "post-cutover state preserved: $PD ($(cut -c1-16 "$PD.sha256"))"
+  if [[ "${FLEET_REVERT_IN_RELEASE:-0}" != 1 && ( "$NJ" != 0 || "$NE" != 0 ) && "${FLEET_REVERT_DISCARD_ACK:-}" != "$NJ:$NE" ]]; then
+    sudo systemctl start $START
+    die "restoring the pre-migration dump would discard $NJ journal(s) and $NE event(s) written since the cutover (kept in $PD). Reconcile them, then re-run with FLEET_REVERT_DISCARD_ACK=$NJ:$NE to confirm"
+  fi
   sudo -u postgres psql -X -q -d $LIVE -c "SET client_min_messages = warning" -c "DROP SCHEMA fleet CASCADE"
   sudo -u postgres pg_restore -d $LIVE --exit-on-error < "$SD"
   sudo cp -p $ENVF.pre-${C:0:7} $ENVF
@@ -75,8 +111,8 @@ if [[ "$MODE" == revert ]]; then
   sudo systemctl start $START
   for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8787/readyz 2>/dev/null && break; sleep 1; done
   [[ "$(live 'SELECT max(version) FROM fleet.fleet_schema_migrations')" == "$FROM" ]] || die "after revert the schema is not $FROM: INVESTIGATE NOW"
-  live "SELECT fleet.fleet_event('production_rolled_back', NULL, 'operator:release', jsonb_build_object('commit', '${C:0:12}', 'fromSchema', $FROM, 'toSchema', $TO, 'reason', '$REASON'))" > /dev/null
-  echo "== ROLLOUT ${C:0:7} REVERTED $(ts): schema $FROM, release $(readlink /opt/automaton-fleet/current), readyz $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/readyz)"
+  live "SELECT fleet.fleet_event('production_rolled_back', NULL, 'operator:release', jsonb_build_object('commit', '${C:0:12}', 'fromSchema', $FROM, 'toSchema', $TO, 'reason', '$REASON', 'mode', 'restore', 'discardedJournals', $NJ, 'discardedEvents', $NE, 'postCutoverDump', '$PD'))" > /dev/null
+  echo "== ROLLOUT ${C:0:7} REVERTED (database restored; $NJ journal(s) / $NE event(s) since the cutover kept in $PD) $(ts): schema $FROM, release $(readlink /opt/automaton-fleet/current), readyz $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/readyz)"
   exit 0
 fi
 test "$(live 'SELECT max(version) FROM fleet.fleet_schema_migrations')" = "$FROM" || die "live schema is not $FROM"

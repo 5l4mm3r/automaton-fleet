@@ -520,16 +520,17 @@ describe("F2-A idle semantics: the next economically meaningful move, never a br
     extra.discovery = { allowed: true, budgetCents: 300, spentTodayCents: 0, runwayDays: 400, reason: "allowed" };
     const rest = (await fullAt(r, 64)).map((i) => i + 1);
     expect([RENUDGE_FIRST, RENUDGE_MAX]).toEqual([4, 32]);
-    // R41.1 (owner 2026-10-08): a sleep that declared no hibernation gets ONE assessment push first (an empty goal list is
-    // not proof there is nothing to do); then the same bounded schedule — after 4, 8 and 16 slim wakes.
-    expect(rest).toEqual([1, 6, 15, 32]);
+    // R41.1 (owner 2026-10-08): a sleep that declared no hibernation gets an assessment push first (an empty goal list is
+    // not proof there is nothing to do); undeclared rests are re-assessed after 4, 8, then every 10 slim wakes (never the
+    // 32 of a declared hibernation), so repeated undeclared sleep cannot settle into indefinite inactivity.
+    expect(rest).toEqual([1, 6, 15, 26, 37, 48, 59]);
     expect(r.parse(r.packets[1]).task).toContain(ASSESS_LINE);
-    expect(r.mind.routing.idleNudges).toEqual({ decide: 0, execute: 0, opportunity: 3, hibernate: 0 });
+    expect(r.mind.routing.idleNudges).toEqual({ decide: 0, execute: 0, opportunity: 6, hibernate: 0 });
     const idle = r.parse(r.packets[6]);
     expect(idle.task).toContain(`Idle wake with no open decision and no execution path. ${OPPORTUNITY_CYCLE}`);
     expect(r.fetches).toEqual([]); // nothing was fetched just because the founder was idle
     // Bounded: the next 32 slim wakes, then one push again (the cap holds).
-    expect((await fullAt(r, 33)).map((i) => i + 65)).toEqual([65]); // the next push after 32 slim wakes
+    expect((await fullAt(r, 33)).map((i) => i + 65)).toEqual([70, 81, 92]); // the cap holds: every 10 slim wakes
   });
 
   it("(1, 12) no runway shutdown: at 3 days or 400 days of runway the founder gets the same moves; only its own selectivity guidance is informed", async () => {
@@ -539,7 +540,7 @@ describe("F2-A idle semantics: the next economically meaningful move, never a br
       expect(first.opportunity, String(runwayDays)).toBe(true);
       expect(first.task).toMatch(runwayDays === null ? /≈ 40p\/day over 7 days\. Runway changes which opportunities/ : new RegExp(`runway ≈ ${runwayDays} days at that burn`));
       expect(first.task).not.toMatch(/revenue-first|discovery floor|may not research|allowance/);
-      expect((await fullAt(r, 5)).map((i) => i + 1)).toEqual([1]); // the same schedule at any runway: one assessment push, then slim
+      expect((await fullAt(r, 5)).map((i) => i + 1)).toEqual([1]); // the same schedule at any runway: an assessment push, then slim
     }
   });
 

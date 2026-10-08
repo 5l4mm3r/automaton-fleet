@@ -10,6 +10,7 @@
  *      (wrong pin/build) — each leaves the SAME founder healthy on its previous runtime;
  *   4. upgrade → the same founder on the target runtime (identity, credential, memory, workspace, ledger preserved);
  *   5. rollback → the same founder on the previous runtime; then upgrade again;
+ *   7. (R41.1) rollback AFTER founder-v5 use: the previous runtime keeps the v5-written journal and goals; upgrade again;
  *   6. routed cognition through fake provider paths on the upgraded runtime: tiers verified and enabled, routing on,
  *      the founder opted in — T1/T2/T3 selection, question-scoped escalation and return to T2, consequential-action
  *      linkage, tier/scope-aware caching, no thinking across model boundaries, memory and ledger continuity.
@@ -74,7 +75,7 @@ export interface UpgradeRehearsalReport {
   from: RuntimeRelease;
   to: RuntimeRelease;
   checks: RehearsalCheck[];
-  receipts: { failedStart?: UpgradeReceipt; upgrade?: UpgradeReceipt; second?: UpgradeReceipt };
+  receipts: { failedStart?: UpgradeReceipt; upgrade?: UpgradeReceipt; second?: UpgradeReceipt; third?: UpgradeReceipt };
   routed: Array<Record<string, unknown>>;
 }
 
@@ -388,7 +389,10 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
     // R41.1: the upgraded founder asks for founder-v5; the controller serves it (its attested release implements it), and the
     // v5 tools dispatch end to end through the real gateway and runtime: guide read, journal written, hibernation declared.
     const journalFile = path.join(stateNs, "memory", "field-journal.jsonl");
-    const journalLines = fs.existsSync(journalFile) ? fs.readFileSync(journalFile, "utf8").trim().split("\n").filter(Boolean).length : 0;
+    const countJournal = () => (fs.existsSync(journalFile) ? fs.readFileSync(journalFile, "utf8").trim().split("\n").filter(Boolean).length : 0);
+    // The v5 close (guide read, journal entry, declared hibernation) runs on the founder's own schedule: wait for it.
+    await waitFor(async () => (countJournal() >= 1 ? true : null), timeout, poll);
+    const journalLines = countJournal();
     const v5Tools = (() => { try {
       return fs.readFileSync(path.join(stateNs, "mind-log.jsonl"), "utf8").trim().split("\n").flatMap((l) => ((JSON.parse(l) as { tools?: Array<{ name: string; ok: boolean }> }).tools ?? []))
         .filter((t) => (t.name === "field_guide" || t.name === "field_journal") && t.ok).map((t) => t.name);
@@ -402,6 +406,29 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
     check("routed: memory and ledger continuity — pre-upgrade facts, goals and notes are still the founder's; every call is charged once to the same books",
       kept() && Boolean(facts()[REHEARSAL_TRIAGE_FACT]) && booksEnd.ok && same(await identityOf(), id0) && sumCost > 0,
       `fact "area" = ${facts().area}; ${goals().length} goal(s); cash ${booksEnd.cash} = ${alloc} − ${booksEnd.charged}; routed provider cost ${sumCost} µ¢; ledger verifies`);
+
+    // ── 7. Rollback AFTER v5 use (R41.1 amendment): the previous runtime takes over state the v5 runtime wrote — journal,
+    // marked goals, declared hibernation — and keeps it; nothing is restored over it. Then the founder is upgraded again.
+    const sha5 = fs.existsSync(journalFile) ? sha(journalFile) : null;
+    const goals5 = goals();
+    /** Every goal the v5 runtime wrote is still there with its v5 marks (blockedBy / awaiting / reviewAt) intact. */
+    const goalsKept = () => { const now = new Map(goals().map((x) => [String(x.id), x])); return goals5.every((x) => same(now.get(String(x.id)), x) || same({ ...now.get(String(x.id)), status: x.status }, x)); };
+    const rb5 = await rollbackFounderRuntime({ agentId: a, host: o.host, registry: genesis, upgradeId: again.upgradeId!, reason: "rehearsal: rollback after founder-v5 use", actor: o.actor, healthTimeoutMs: health, pollMs: poll, log });
+    const v4Before = scripted.doctrineSeen.v4;
+    const turnsRb = await turnsOf();
+    // The previous runtime keeps living on the v5-written state; routed calls it makes carry no doctrine and are served v4.
+    const livedOn = await waitFor(async () => ((await turnsOf()) > turnsRb || scripted.doctrineSeen.v4 > v4Before ? true : null), timeout, poll);
+    check("rollback after v5 use: the previous runtime runs healthy on the v5-written state — journal, marked goals and memory kept byte for byte, nothing restored over them",
+      rb5.ok && rb5.health?.commit === o.from.commit && (await registryCommit()) === o.from.commit && rb5.state?.durableLost === 0 && same(await identityOf(), id0) && kept()
+        && sha5 !== null && fs.existsSync(journalFile) && sha(journalFile) === sha5 && goalsKept() && (await booksOk()).ok && Boolean(livedOn),
+      `${rb5.ok ? "rolled back" : rb5.why}; pid ${rb5.health?.pid} on ${o.from.commit.slice(0, 7)}; journal ${sha5 ? `${String(sha5).slice(0, 12)}… unchanged` : "missing"}; ${goals().length} goal(s); `
+        + `${livedOn ? "kept working" : "no turn observed"} (${scripted.doctrineSeen.v4 - v4Before} v4 step(s) after the rollback)`);
+    const third = await upgrade();
+    report.receipts.third = third;
+    check("upgrade again after the v5 rollback: verified, same founder, the journal written before the rollback is still there",
+      third.outcome === "verified" && same(await identityOf(), id0) && kept() && (await booksOk()).ok && fs.existsSync(journalFile)
+        && fs.readFileSync(journalFile, "utf8").trim().split("\n").filter(Boolean).length >= journalLines && third.state.diff?.durableLost === 0,
+      `${third.outcome}${third.why ? `: ${third.why}` : ""}; upgrade history ${(await genesis.founderRuntimeUpgrades(a)).map((u) => u.status).reverse().join(" → ")}`);
     const secrets = [JSON.parse(fs.readFileSync(path.join(o.host.stateDir(a), FOUNDER_CREDENTIAL_FILE), "utf8")).token as string, FAKE_KEY];
     const hay = [await o.host.logText(a), JSON.stringify(audit), JSON.stringify(report.receipts), JSON.stringify((await owner.query(`SELECT before, after, rollback FROM fleet_founder_runtime_upgrades`)).rows)].join("\n");
     check("no credential in logs, audit, receipts or upgrade records", secrets.every((s) => !hay.includes(s)), `${secrets.length} secrets checked`);

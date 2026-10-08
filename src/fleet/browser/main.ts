@@ -49,6 +49,14 @@ export async function startBrowserWorker(e: Record<string, string | undefined>, 
   }
   const worker = new BrowserWorker(gw, { executablePath: e.FLEET_BROWSER_EXECUTABLE!.trim(), chromiumSandbox: e.FLEET_BROWSER_SANDBOX === "true",
     brokerPublicKey: async () => (await gw.brokerKey()).ownerPub, log: (level, event, detail) => log(level as never, event, detail) });
+  try {
+    const st = await worker.selfTest();
+    log("info", "browser_selftest_ok", { chromium: st.version });
+  } catch (err) {
+    await worker.close().catch(() => undefined);
+    await gw.close();
+    throw new Error(`browser worker startup refused: Chromium self-test failed: ${redactText(err instanceof Error ? err.message : String(err))}`);
+  }
   let busy = false;
   const timer = setInterval(() => {
     if (busy) return;
