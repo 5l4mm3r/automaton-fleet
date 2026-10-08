@@ -1,520 +1,700 @@
-# Gumroad revenue integration: implementation plan (review draft, 2026-10-08)
+# Gumroad revenue integration: design (revision 2, 2026-10-08)
 
-This is a planning document. Production is unchanged. No account, product, rail, credential or request was created,
-published, registered, stored or resolved. The deployed baseline is `fda78a0` (schema 45). The readiness findings
-it builds on are in `docs/evaluations/r41-1/fda78a0/gumroad-readiness.md`.
+**Status: a design for review. Nothing is built or deployed.**
+- Production is unchanged.
+- No account, product, rail, credential, receipt connector or dependency decision was created, stored or made.
+- No money moved.
+- Baseline: deployed `fda78a0`, schema head **v45** (`src/fleet/postgres/migrations.ts:57`). The proposed migrations
+  start at **v46**.
+- Supersedes revision 1 (`cef41ad`). Readiness context: `docs/evaluations/r41-1/fda78a0/gumroad-readiness.md`.
 
-**Sources.** Gumroad is open source (`antiwork/gumroad`, commit `6d535ea8`, 2026-10-08). Every claim below is tagged:
+**Constraints this design keeps**
+- Gumroad is the founders' **current choice** of channel, not a fleet restriction. A blocked action blocks only that
+  action.
+- Opportunities and own-capital decisions stay agent-determined. No study, journaling, activity quota, opportunity
+  weight or fixed spend-approval threshold is added.
+- R41.1's live observations are still open. Journal persistence and an event-triggered full wake await legitimate
+  activity. Event detection can be delayed by up to about 32 minutes by the existing idle skip.
+- `REAL_PAYMENTS_ENABLED`, `OWNER_SWEEP_ENABLED`, `REAL_REPLICATION_ENABLED` and `FLEET_DRY_RUN_CHILD` stay
+  **false**. Live external spending stays disabled. Cap 2 and DEVELOPMENT mode are unchanged.
 
-- **(A)** Published text: the Terms ("Last Updated September 14, 2026", binding existing accounts from 14 Oct 2026),
-  the help centre, the API docs, or the Ping page. Read from the repository files that publish them:
-  - `app/views/home/terms.html.erb` → gumroad.com/terms
-  - `app/views/help_center/articles/contents/_N-*` → gumroad.com/help/article/N-…
-  - `app/javascript/components/ApiDocumentation/**` → gumroad.com/api
-  - `app/javascript/pages/Public/Ping.tsx` → gumroad.com/ping
-- **(B)** Behaviour inferred from Gumroad's application code. It can change without notice.
+## Change summary (relative to cef41ad)
+
+1. **Settlement is automatic by design.** Owner confirmation of each payout was a permanent gate; it is replaced by a
+   read-only **receipt connector** on the fleet treasury account. Owner attestation remains only as an explicitly
+   labelled, time-limited **pilot fallback** (§4.5).
+2. **Five money states,** plus a rule that bank receipt is not agent capital unless it lands in a registered
+   **fleet-treasury destination** (§4).
+3. **Currency corrected from the source.**
+   - Payout transaction rows are **USD**.
+   - A UK bank payout is reported in the **payout currency**.
+   - Gumroad itself omits the balancing row for non-USD payouts.
+   - So the GBP allocation per sale **cannot be derived exactly**. It is a stated convention with completeness tests,
+     and anything else is quarantined (§5).
+4. **Tax corrected:** the API `price` **excludes** Gumroad-collected tax (B) (§5.1).
+5. **Receive-only security model added** as its own capability. It traces every outgoing path, with enforcement and
+   tests. Provider scope enforcement was **checked in Gumroad's code**, not assumed (§6).
+6. **Isolation added:** per-operation ownership checks, and crash-safe product creation with no orphans (§7).
+7. **Readiness capabilities split** into six independently evidenced capabilities. Each pending request's
+   satisfaction and its required disclosure are defined, with no deadlock (§8).
+8. **New ledger classes:** fleet-scoped `provider_suspense` for quarantined real money, and agent-scoped
+   `agent_provider_payable` for post-settlement reversals. Plus revenue and receipt **claims** against double credit
+   across retries, ingestion, manual recording and later owner funding (§5.6).
+9. **Stages renumbered,** with the first stage runnable locally without owner decisions (§10, §13). Rollback hardened
+   so that a downgrade can never silently drop provider evidence or liabilities (§11).
+
+---
+
+## 1. Sources and how facts are marked
+
+- **(A)** Published Gumroad text, read from the repository files that publish it: Terms ("Last Updated September
+  14, 2026"), the help centre, API docs and the Ping page. Repository: `antiwork/gumroad` at commit
+  `6d535ea88e2c3b7d2983c011d5716e0416739b1f` (2026-10-08).
+  - `app/views/home/terms.html.erb` → https://gumroad.com/terms
+  - `app/views/help_center/articles/contents/_N-*.html.erb` → https://gumroad.com/help/article/N-…
+  - `app/javascript/components/ApiDocumentation/**` → https://gumroad.com/api
+  - `app/javascript/pages/Public/Ping.tsx` → https://gumroad.com/ping
+- **(B)** Inferred from Gumroad's application code at the same commit. Not a published guarantee; may change.
 - **(F)** Fleet code at `fda78a0`. `pN` = `src/fleet/postgres/migrations-phaseN.ts`.
 
-Gumroad is the founders' **current choice** of channel, not a fleet restriction.
-- This plan imposes no opportunity weights, quotas, compulsory study or journal entries, and no new own-capital
-  approval thresholds.
-- Journaling and hibernation stay voluntary.
-- Live journal persistence and an event-triggered full wake are still awaiting observation.
-- Event detection can still be delayed by up to about 32 minutes by the idle skip.
+**Fact register.** Facts used below, with their basis:
+
+| # | Fact | Basis |
+|---|---|---|
+| F1 | "You may not share your Account or password with anyone"; no account "on behalf of someone other than yourself"; more than one account only "for genuinely separate brands or businesses" | A, Terms §4.4 |
+| F2 | "Regardless of listed currency, all transactions through the Services will settle in USD" | A, Terms §9 |
+| F3 | Gumroad is merchant of record for indirect tax; prices are "exclusive of any applicable Indirect Tax" | A, Terms §6.2, §10.7; `_121`, `_10` |
+| F4 | Sale `price` / `gumroad_fee` are "in USD cents" | A, `Ping.tsx` |
+| F5 | API `price` = `price_cents`, which **excludes** Gumroad-collected tax: charge = `price_cents + gumroad_tax_cents (+ shipping)` | B, `app/models/purchase.rb:1023, 4718-4722` |
+| F6 | Payout JSON `amount` = `amount_cents / 100` in the **payout's** `currency`; for a Stripe payout, `currency = payout_currency` | B, `app/models/payment.rb:396-407`; `app/business/payments/payouts/processor/stripe/stripe_payout_processor.rb:330-420` (assignments at +73, +84). The published example shows `"currency": "EUR"` (A, `Payouts.tsx`) |
+| F7 | Payout `transactions` rows (type, date, purchase_id, taxes, shipping, sale_price, gumroad_fees, net_total) are built from USD purchase amounts. The balancing "Technical Adjustment" is added **only for USD payouts**: "We don't include non-usd payments here since the currency mismatch…" | B, `app/services/exports/payouts/api.rb`, `…/base.rb:27-170` |
+| F8 | Row types include sale, Full/Partial Refund (with retained fee), Chargeback, Credit, Refund fee written off, Failed Refund Fee Returned/Retained, affiliate credit, Payout Fee, Technical Adjustment, and PayPal/Stripe-Connect summaries | B, `…/base.rb:50-170, 218-330` |
+| F9 | `include_sales` gives `sales[]`, `refunded_sales[]`, `disputed_sales[]` ids per payout | A, `Payouts.tsx`; B, `payment.rb:409-413` |
+| F10 | Conversion to the local payout currency happens "at the time of sale, not at the time of the payout"; ≥7-day hold; $100 minimum until verified, $10 after | A, `_13` |
+| F11 | Refunds need balance; a negative balance may be debited from the bank; chargeback = full refund plus processing fees, platform fee returned; reserve of 25% for 90 days above a 15% refund rate | A, `_47`, `_269`, `_134`; Terms §7, §11.3 |
+| F12 | Ping and resource subscriptions are **unsigned**; "treat a ping as a trigger … read the sale back through the API, and reconcile periodically"; ordering not guaranteed; dedupe on `sale_id` + `resource_name` | A, `Ping.tsx`, `ResourceSubscriptions.tsx` |
+| F13 | Every v2 scope check also accepts the legacy `account` scope | B, `app/controllers/api/v2/base_controller.rb:7-9` |
+| F14 | Refund needs `refund_sales`, `edit_sales` or `account`; sales reads need `view_sales`; payouts endpoints need `view_payouts` and are **index / show / upcoming only**; product, file and offer writes need `edit_products` | B, `sales_controller.rb:5-8`, `payouts_controller.rb:6-67`, `links_controller.rb:43`, `files_controller.rb:4` |
+| F15 | A self-generated token gets the application's scopes, and applications default to **all public scopes including `account` and `edit_sales`**. An OAuth authorisation request can ask for fewer | B, `app/models/oauth_application.rb:15, 70-74, 121-122`; `config/initializers/doorkeeper.rb:9-11, 41-42`. A, `_280`: the token exchange returns `scope` |
+| F16 | `/oauth/token/info` is routed (Doorkeeper default) | B, `config/routes.rb:43-47` |
+| F17 | No sandbox. A test purchase is buying your own product while logged in, with the "Test card". It is not in `GET /sales` and not paid out; a ping with `test: true` is sent. Real-card self-purchase "appears exactly the same as money laundering" | A, `_62`, `_281`; B, `purchase.rb` |
+| F18 | Linked "New Gumroad" accounts can "copy your existing payout setup". Each gets a **new** Stripe Connect account; identity verification is owner-only | A, `_252`, `_326`; B, `app/services/user/create_brand_account_service.rb:20` |
+| F19 | File upload: presign → PUT parts → complete → attach by `files[][url]`; URLs are S3 presigned | A, `Files.tsx`; B, `files_controller.rb:23-83` |
+| F20 | `POST /v2/products` publishes unless "email address is not confirmed or no payout method is set up", in which case it saves a draft with a `warning` | A, `Products.tsx:420-428` |
+
+**Unresolved** (none blocks stage G1; each has a safe default below)
+- U1: whether a linked account's new Connect account needs its own ID verification.
+- U2: the exact GBP `amount` and `currency` strings the API returns for a UK bank payout. F6 is B-only.
+- U3: the S3 host names in presigned URLs.
+- U4: the Stripe statement descriptor on a Gumroad bank credit.
+- U5: whether `brand_accounts` is enabled for the owner's account.
+- U6: whether any dashboard automation is acceptable. The design avoids needing it.
 
 ---
 
-## 1. Design questions
+## 2. Account arrangement (proposal)
 
-### 1.1 Separate seller accounts, or one shared account behind a broker
+**Proposed: one owner seller account, used only through a fleet broker.** Recorded as an owner decision (§12).
 
-**Facts**
-
-- **Sharing an account (A):** "You may not share your Account or password with anyone" and "You are responsible for
-  all activities that occur under your Account" (Terms §4.4).
-- **Who may hold an account (A):** "You agree not to create an Account … on behalf of someone other than yourself"
-  (§4.4).
-- **More than one account (A):** "You may hold more than one Account for genuinely separate brands or businesses"
-  (§4.4).
-- **Linked accounts (A):** "If you see New Gumroad … you must create it there, so your accounts stay linked … It can
-  copy your existing payout setup" (`_252`).
-- **What a linked account really is (B):**
-  - it is a **separate user**, with the creator added as an *admin team member*;
-  - it gets a **new Stripe Connect account**: "We deliberately create a NEW Connect account instead of pointing both
-    Gumroad accounts at the same one" (`app/services/user/create_brand_account_service.rb:20`);
-  - each account therefore has its **own balance, payout threshold and payouts**;
-  - the feature sits behind the flag `:brand_accounts`, so not every account has it.
-- **API scopes (A):** account-wide (`edit_products`, `view_sales`, `view_payouts`, `edit_sales`, `account`, …). There
-  is no per-product scope (`Scopes.tsx`).
-- **Team roles (A):** they cannot be limited to products (`_326`). An admin can mint a seller-owned token (B).
-- **Automation (A):**
-  - The API and Gumroad's CLI are endorsed for agents: the CLI is "built for humans and AI agents alike" (API docs,
-    CommandLine). Help articles suggest "Your own AI agent, such as Claude Code…" (`_353`, `_124`).
-  - The Terms forbid "automated software … to 'scrape' or download data from any web pages" and to "access, 'scrape,'
-    'crawl' or 'spider' any pages" (§14(e), (xiii)).
-  - Login uses reCAPTCHA "to tell humans and bots apart" (`_292`).
-  - Nothing explicitly permits browser automation of the dashboard. It is **unsettled and a risk**.
-
-**Comparison**
-
-| | One shared owner account + fleet broker | One linked account per venture |
+| | One shared account behind the broker | Linked account per venture |
 |---|---|---|
-| Terms fit | One account, used by its holder through the API the holder authorised | Needs "genuinely separate brands"; ventures by one owner arguably qualify, which is the owner's judgement |
-| Isolation between agents | **The broker enforces it.** Agents never hold the token; every operation is checked against a product → venture → agent mapping | The account boundary enforces it, **but only if** agents still never hold the token. Otherwise the same broker is needed anyway |
-| Payouts | One balance, one $100 threshold (until verified), one payout stream. **Per-sale allocation is possible:** `GET /payouts/:id?include_transactions=true` lists each purchase's sale price, fees, taxes and net (A) | One Connect account and threshold per venture: small ventures wait longer to reach a payout |
-| KYC | One account holder: "identity verification is owner-only" (`_326`, A) | Whether each new Connect account needs its own ID verification is **not settled** (see 1.2) |
-| Attribution | Needs the ownership mapping. The broker writes it at creation; products made by hand in the dashboard are unattributed until the owner assigns them | `seller_id` identifies the venture |
-| Public storefront | Both ventures' products appear on one profile | Separate profiles |
+| Terms (F1) | One account operated by its holder through an API the holder authorised | Needs genuinely separate brands; owner's judgement |
+| Isolation between agents | **The broker enforces it** (§7). Agents never hold a token | The account boundary enforces it, but agents must still never hold a token, so the broker is needed anyway |
+| Payouts | One balance and threshold; per-purchase allocation from payout rows (F7, F9) | One Connect account, balance and threshold per venture (F18). Each small venture waits for its own $100 |
+| Human verification | One account holder (F18, owner-only) | **U1 unresolved**: possibly once per Connect account |
+| Attribution | The broker's product mapping (§7.2) | `seller_id` |
+| Failure blast radius | One token: the broker's scopes and op allowlist limit it (§6) | One token per account |
 | Products cannot be moved between accounts (A, `_252`) | Choose before publishing | Choose before publishing |
 
-**Recommendation: one owner seller account, accessed only through a fleet broker (the "Gumroad gateway").**
-
-- Separate accounts are **not** necessary for isolation. Isolation comes from agents never holding the token, and
-  that has to be true under either arrangement.
-- The shared account avoids:
-  - the feature-flagged linking;
-  - an unsettled per-account KYC question;
-  - a payout threshold per venture.
-- Per-sale allocation of each payout is available through the API.
-- **No agent drives the Gumroad dashboard.** The `browser` worker is refused credential fills and account
-  registration on Gumroad origins. Public pages stay readable for research, as before. This keeps clear of the
-  account-sharing and automation clauses.
-- **When to revisit:** a venture needs its own brand or profile, or the owner wants separate tax or business
-  identities. Then add a linked account as a second rail; the broker design does not change.
-
-### 1.2 Account linking, payout reuse and KYC, checked separately
-
-- **Linking:** must use "New Gumroad" where it is offered; otherwise ask support (`_252`, A). It is feature-flagged
-  (B).
-- **Payout reuse:** "can copy your existing payout setup, so you do not have to go through payments onboarding again"
-  (`_252`, A).
-  - The code copies compliance info, currency, PayPal address and bank account (B).
-  - The copied bank account is reset to unverified, and a **new** Connect account is created (B).
-- **KYC:**
-  - Stripe "requires additional information to verify the identity of the account holder after a certain amount of
-    time has passed and sales accrued" (`_13`, A).
-  - Minimum payout is $100 until verified and $10 after (`_13`, A).
-  - **Correction to the earlier assessment:** "KYC happens only once" across linked accounts is **not** supported by
-    any authoritative source. Whether a linked account's new Connect account needs its own ID document is
-    **unsettled**.
-  - With one shared account the question does not arise.
-- **Ownership transfer:** needs Gumroad's written consent, and "the new owner will need to complete identity
-  verification" (`_252`, A).
-
-### 1.3 Which API operations exist (A unless marked)
-
-| Need | Endpoint | Notes |
-|---|---|---|
-| Create a product | `POST /v2/products` (`edit_products` or `account`) | `name`, `price` (minor units), `price_currency_type`, `draft`/`published`, `description`, `files[]`, … Published by default, **but "if publishing is blocked (… email address is not confirmed or no payout method is set up), the product is saved as a draft and the response includes a `warning`"** |
-| Update a product | `PUT /v2/products/:id` | `files`, `tags` and `rich_content` are **full replacements** ("any file you omit is deleted") |
-| Publish / unpublish | `PUT /v2/products/:id/enable` / `disable` | The create page also says "POST …/enable"; docs are inconsistent |
-| Delete | `DELETE /v2/products/:id` | Permanent |
-| File delivery | `POST /v2/files/presign` → `PUT` each part → `POST /v2/files/complete` ("Don't retry this call") → attach with `files[][url]` | End-to-end supported, up to 20 GB. Keep the canonical `file_url`; reads return signed URLs |
-| Read sales | `GET /v2/sales` (`after`, `before`, `product_id`, `page_key`), `GET /v2/sales/:id` (`view_sales`) | See 2.3 for what the fields mean |
-| Refund | `PUT /v2/sales/:id/refund` (`edit_sales`) | `amount_cents` in the sale's listed currency; repeated partial refunds allowed; needs enough balance |
-| Payouts | `GET /v2/payouts`, `GET /v2/payouts/:id`, `GET /v2/payouts/upcoming` (`view_payouts`) | `include_sales` (sale, refunded and disputed ids) and `include_transactions` (per purchase: sale price, gumroad fees, taxes, net, negative rows for refunds/chargebacks); `status` payable/completed/pending/failed |
-| Webhooks | `PUT/GET/DELETE /v2/resource_subscriptions`: `sale`, `refund`, `dispute`, `dispute_won`, … | **Unsigned.** "treat a ping as a trigger rather than as data … read the sale back through the API, and reconcile periodically" |
-| Seller identity | `GET /v2/user` | `user_id` equals `seller_id` in sales and pings (B) |
-| Earnings, tax forms | `GET /v2/earnings`, `/tax_forms` | **US sellers only.** Not usable for a UK seller |
-| Sandbox | none | Test purchase = buying your own product while logged in, with a "Test card" (`_62`). Not in `GET /sales`, never paid out (B), but a ping is sent with `test: true` |
-
-**Not automatable, or not to be automated, and the alternative:**
-
-- **Account creation, email confirmation, payout and bank settings, Stripe identity documents, and creating the API
-  application.** These are owner-only, on gumroad.com.
-- **Real-card purchases of your own products.** Never do this. It "appears exactly the same as money laundering … may
-  be automatically suspended" (`_62`, `_281`). The live pilot needs real third-party buyers.
-- **Refunds.** The API exists, but it moves buyers' money and needs `edit_sales`. Phase 1 keeps refunds **owner-only
-  in the Gumroad dashboard**: agents may request one, and the gateway's token has no `edit_sales`. The ledger follows
-  refunds from payout data either way.
-- **Disputes.** Responding to a chargeback happens in the Gumroad dashboard (`_134`); it is owner-only.
+**Account linking, payout reuse and human verification are separate questions:**
+- **Linking:** "New Gumroad" where offered, otherwise support (A). Feature-flagged (B, U5).
+- **Payout reuse:** copies the payout setup (A). The bank account is reset to unverified, and a **new** Connect
+  account is created (B).
+- **Human verification:** Stripe asks "after a certain amount of time has passed and sales accrued" (A, `_13`).
+  Owner-only (A, `_326`). **No source supports "KYC happens only once"** across linked accounts. That claim is
+  withdrawn.
 
 ---
 
-## 2. Architecture
+## 3. Components
 
-### 2.1 Components
+| Unit | Role |
+|---|---|
+| `automaton-fleet-gumroad` (new) | Holds the Gumroad token in its own vault. Executes allowlisted Gumroad calls (§6.3) from a job queue. Polls sales and payouts. Own OS user, own DB role `fleet_provider` with `gx_*` functions only, no inbound port. |
+| `automaton-fleet-bankfeed` (new, receipt connector) | Holds a **read-only** bank-data credential for the fleet-treasury account. Reads incoming and outgoing transactions. Own OS user, own DB role `fleet_bankfeed` with `rx_*` functions only, no inbound port. **No payment-initiation scope ever.** |
+| Controller (existing) | Agent operations `storefront.*` (capability `planning`): queues gateway jobs, enforces ownership, serves memo views. Never sees a token. |
+| Owner CLI (existing `fleet:admin`) | Rails, destinations, verification, assignments, pilot fallback, quarantine resolution. |
 
-1. **Gumroad gateway** (new unit `automaton-fleet-gumroad`):
-   - its own OS user and its own database role `fleet_provider` / `fleet_provider_login`, with `gx_*` functions only;
-   - a vault in its 0700 `StateDirectory`;
-   - outbound HTTPS to `api.gumroad.com` only, through an in-code host allowlist; **no inbound endpoint in phase 1**.
-   - Why a new unit: the controller cannot read any vault and has no egress allowlist (F). The identity broker holds
-     the owner's identity vault and should not also hold the selling token. The pattern is the browser worker's
-     (`automaton-fleet-browser`, `fleet_browser`, `bx_*`).
-2. **Polling first, webhooks optional later.**
-   - The gateway lists `GET /v2/sales?after=<watermark − 2 days>` every 5–10 minutes and does a full reconciliation
-     daily.
-   - Pings and resource subscriptions are unsigned triggers. They would need a new public route on the edge, which
-     is new network exposure and an owner decision. Polling alone meets the trust model, so phase 1 has no inbound
-     route.
-3. **Agent operations** (controller → gateway job queue, like the browser's `bx_*` queue):
-   - `storefront.product.create`, `.update`, `.publish`, `.unpublish` and `.file.attach`;
-   - `storefront.sales` (read own sales, memo);
-   - `storefront.refund.request` (files a request to the owner; executes nothing).
-   - All are capability `planning`, consistent with how R41.1 classified the browser tool. None spends fleet money.
-4. **Ownership mapping:**
-   - The gateway writes `fleet_provider_products` **only** for products it created for a calling agent's venture.
-   - Every later operation checks that (provider account, product id) maps to the caller's venture.
-   - Unmapped products, for example made by hand in the dashboard, produce **unattributed** sales until the owner
-     assigns them (`fleet:admin storefront-product-assign`, which records an event).
-5. **Files:**
-   - The founder runtime reads the file from its own workspace and sends it through the controller to the gateway,
-     which runs presign → parts → complete → attach.
-   - Phase 1 caps files at 25 MB.
-   - The gateway never reads founder state directories.
-6. **Browser policy:**
-   - `browser` refuses credential fills, `account.register` and `account.create` on `gumroad.com` and its
-     subdomains, with a new refusal code `FLEET_PROVIDER_VIA_GATEWAY`.
-   - Read-only public browsing is unchanged.
+- Separate units keep two independent secrets (the selling token and the bank-read credential) apart from each
+  other and from the controller.
+- The controller cannot read any vault today (F: the custody path is inaccessible in the controller unit, and the
+  identity broker vault is separate).
+- **Why not reuse the identity broker or the fetcher:** the broker holds the owner's identity vault, and the fetcher
+  cannot carry authorization headers (F, `research/fetcher.ts:1-16`).
+- **Polling, not webhooks, in phase 1.**
+  - The gateway lists `GET /v2/sales?after=<watermark − 2 days>` and `GET /v2/payouts?include_upcoming=true` every
+    5–10 minutes, and reconciles fully every day.
+  - Webhooks are unsigned triggers (F12). They would need a new public route on the edge, which is new exposure and a
+    separate owner decision.
 
-### 2.2 How money moves through states
+---
 
-The design is **cash-basis**: nothing reaches `agent_cash` before money is actually received.
+## 4. Money states, settlement and autonomy
 
-| State | Where it is recorded | In the GBP ledger? | Spendable? |
+### 4.1 Five states
+
+| State | Evidence that it is reached | Recorded as | Agent-spendable |
 |---|---|---|---|
-| **Verified sale** | read back by `GET /v2/sales/:id`, never from a ping | memo row `fleet_provider_sales`, in **USD** | no |
-| **In provider balance** | sale older than the 7-day hold, or included in `GET /payouts/upcoming` | memo state `in_balance` | no |
-| **In payout** | `GET /payouts/:id` with `include_transactions`, status pending or payable | memo `fleet_provider_payouts` plus allocation rows | no |
-| **Received** | payout `completed` **and** the owner confirms it **arrived in the destination account**: payout id, GBP amount and date, via `storefront-payout-confirm` | posts now | — |
-| **Spendable capital** | the allocated GBP net credited to `agent_cash` by `provider_payout_settlement` | yes | yes, through the existing `LEAST(cash, equity)` rule (p11:353-387, p42 restate) |
+| **S1 verified sale** | `GET /v2/sales/:id` read back by the gateway, never from a ping (F12) | `fleet_provider_sales` memo (USD) | no |
+| **S2 provider balance (unsettled)** | verified, not yet in a payout; includes held, reserved and withheld amounts (F10, F11) | memo state `in_balance` / `held` | no |
+| **S3 payout reported sent** | `GET /v2/payouts/:id`, status `completed`, plus membership (F9) and rows (F7) | `fleet_provider_payouts` memo | no |
+| **S4 money received** | **trusted receipt evidence** (4.3) that the payout's amount arrived in a registered destination | `fleet_settlement_receipts` | no |
+| **S5 accessible capital** | S4 in a destination of kind **`fleet_treasury`**, plus a complete allocation (§5) | ledger: agent shares to `agent_cash`; unallocated remainder to `provider_suspense` | yes, the allocated shares only, through the existing `LEAST(cash, equity)` rule (p11:353-387; p42 restate) |
 
-- **No receivable class is added to the ledger.** The ledger has one currency, GBP (p21:36, :55-66). Gumroad settles
-  in USD (Terms §9, A). The GBP figure is only known at payout.
-- **What founders see:** the wallet and economy brief gain a memo line, "pending external revenue: USD x (not
-  spendable) / in payout: USD y".
-- **Wakes:** a change in that memo is a wake signal, so a verified sale gives a full packet at the next thinking
-  slot.
+### 4.2 Destinations: owner bank receipt is not agent capital
 
-### 2.3 Accounting rules
+**Why this matters.** In the fleet's books, agent cash is backed by the treasury:
+- owner money enters as `owner_funding` (D `treasury_cash` / C `owner_capital`, p10:177);
+- it reaches an agent as `genesis_allocation` (D `agent_cash` / C `treasury_cash`, p11:262);
+- `external_revenue` credits `agent_cash` **with no treasury leg** (p10:189). That is truthful only if the money is
+  really in the fleet's custody.
 
-- **Currency.**
-  - Sale `price` and `gumroad_fee` are **USD cents** whatever the listing currency. Ping says "in USD cents" (A). The
-    sale's `currency` field is the *listing* currency (B).
-  - Payouts to a UK bank are in GBP, "converted … at the time of sale, not at the time of the payout" (`_13`, A).
-  - The fleet never converts revenue itself. It allocates the **actual GBP payout amount** across agents.
-- **Allocation of one payout.**
-  - For each transaction row (purchase id, sale price, gumroad fees, taxes, net), look up purchase → product → venture
-    → agent through `fleet_provider_products`.
-  - Each agent's GBP share = `payout_gbp × agent_net_usd / payout_net_usd`. Use largest-remainder rounding so the
-    shares sum exactly.
-  - Unattributed rows hold the payout `unallocated` until the owner assigns the product. No partial posting.
-- **Fees.** `gumroad_fees` per row, in the same proportion: D `agent_fees`. Gross = net + fees in GBP terms.
-- **Taxes collected by the platform.**
-  - Gumroad is merchant of record: "Gumroad will be treated as the seller … for purposes of any relevant Indirect
-    Tax" (§6.2, A). Prices are "exclusive of any applicable Indirect Tax" (§10.7, A).
-  - Tax is **excluded** from revenue and kept only as a memo (`taxes` per row).
-  - Whether `price` includes `tax_cents` is **unsettled** (B). The allocation uses the payout's per-row `net` and
-    `gumroad_fees`, which does not depend on it.
-  - Allocation also checks Σ net against the payout amount, within FX tolerance, before posting.
-- **Refunds, partial refunds, chargebacks, disputes.**
-  - Before payout, they reduce the memo; Gumroad nets them out.
-  - After a payout, they appear as **negative transaction rows in a later payout** (A, payouts docs; `_269`).
-  - They are allocated to the original sale's agent through the same mapping:
-    - **if the agent's share of that payout stays ≥ 0:** it is simply smaller;
-    - **if it goes below 0:** post `provider_clawback`: D `agent_revenue` / C `agent_cash`, up to the agent's
-      available cash. Any remainder goes to a new liability class **`agent_provider_payable`** (C), which reduces
-      equity and therefore spendable capacity. It is repaid automatically from that agent's next payout shares.
-  - `dispute_won` credits come back as positive rows and are allocated the same way.
-  - If the provider balance goes negative, "Our payment processor may debit your bank account" (`_269`, A). The
-    owner records that through the same confirm path as a negative payout.
-- **Test, sandbox and simulated activity.**
-  - Test purchases are absent from `GET /sales` and never paid out (B). A `test: true` ping is ignored (B).
-  - New database guard: `svc_settlement_ingest` and every provider posting function **refuse rails in `simulated` or
-    `sandbox` mode** unless `fleet_economic_model.simulated_settlement_allowed` is true.
-    - That flag defaults to false, is set only by throwaway registries for tests and rehearsals, and is checked by
-      the privilege audit on production.
-    - Today a simulated rail posts real-looking `agent_cash` (p29:716-767); this guard closes that.
-- **Manual and automated paths cannot both credit the same revenue.** New table `fleet_revenue_claims`, UNIQUE on
-  (provider, provider_account, external_settlement_id):
-  - `provider_payout_settlement` claims `gumroad:<user_id>:payout:<id>`;
-  - `fleet_admin_record_external` (`ledger-record-revenue`) gains an optional `--claims gumroad:<user_id>:payout:<id>`;
-    with it, the command claims the same key and refuses if that key is already claimed;
-  - **while a `live_receive` gumroad rail is active, `ledger-record-revenue` refuses a counterparty hash of that rail's
-    account unless `--claims` is given**;
-  - reconcile gains a `REVENUE_CLAIM_ORPHANS` check: manual Gumroad revenue without a claim, or a claimed payout
-    posted twice.
+**The design.**
+- New table `fleet_settlement_destinations`:
+  - `kind` is `fleet_treasury` or `owner_external`;
+  - a masked bank reference that is matched against the payout's `bank_account_visual` (A, `Payouts.tsx`);
+  - a legal entity;
+  - the bank-feed credential reference.
+- **Only an S4 receipt into a `fleet_treasury` destination can reach S5.**
+- A receipt into an `owner_external` account stays at S4 as "received, held by owner". It becomes S5 only when the
+  bank feed sees the matching inbound transfer into the fleet-treasury account. That posts `provider_receipt_transfer`
+  and **claims** both the original receipt and the transfer (§5.6).
+- Owner funding of the same money is refused, so it cannot be funded twice.
 
-### 2.4 Readiness lifecycle (fixes the auto-resolution)
+### 4.3 Trusted receipt evidence and the connector
 
-Today:
-- `fleet_admin_rail_add` inserts with the default `status='active'` and **immediately resolves every open
-  requirement**, answering their dependencies (p29:356, :479-496).
-- `fleet_rail_match` requires `status='active'` (p33:74).
+- **Evidence:** a bank-feed transaction on the destination account, read by `automaton-fleet-bankfeed` through a
+  read-only account-information consent the owner grants to a regulated provider (owner decision, §12).
+- **Stored per receipt:**
+  - the bank transaction id;
+  - booking date;
+  - amount and currency;
+  - counterparty descriptor;
+  - `payload_sha256`;
+  - the connector's fetch time.
+- **Matching** (`rx_receipt_match`, automatic). Exactly one candidate must satisfy **all** of:
+  - same currency as the payout;
+  - amount equal to the payout amount (an exact minor-unit match);
+  - booking date within [`processed_at`, `processed_at` + 7 business days];
+  - not already claimed;
+  - a descriptor that matches the destination's configured pattern (U4: set by the owner from the first real
+    receipt, then fixed).
+- **Outcomes:**
+  - none, or more than one, candidate → `receipt_unmatched` / `receipt_ambiguous`. The payout stays at S3 and
+    reconcile raises a WARN, and then a FAIL after 14 days;
+  - a debit matching a negative provider balance → a **negative receipt** (§5.5).
+- **No owner step is needed in steady state.** Reconciliation runs on every poll.
 
-New lifecycle:
+### 4.4 Allocation and backing at S5
 
-1. **Rails are created `pending_setup`.** `fleet_admin_rail_add` takes no status and never resolves requirements
-   while the rail is `pending_setup`.
-2. **New table `fleet_rail_capability_checks`:**
-   - columns: rail, capability, status `unverified|verified|failed|expired`, evidence jsonb, `verified_at`,
-     `verified_by`, `expires_at`;
-   - written only by `fleet_admin_rail_verify` (owner) and `gx_rail_probe_result` (gateway).
-3. **`fleet_rail_match` matches a capability only if** the rail is `active` **and** that capability's check is
-   `verified` and unexpired.
-4. **A rail becomes `active`** (`fleet_admin_rail_set_status`) only when at least one capability is verified. A
-   requirement is answered only for a capability that is verified.
-5. **Truthful answer text.** The fixed text "A compatible Fleet payment rail is now connected" is replaced by text
-   built from the verified capabilities. For example: "Storefront publishing is available for this venture. Sales
-   are recorded as pending external revenue and become spendable only after a Gumroad payout is received.
-   Payouts have not yet been proven."
+At S5, a single journal set is posted per payout receipt, idempotent on the receipt claim:
+- **Agents' shares:** `provider_revenue_receipt` per agent: D `agent_cash` (net share), D `agent_fees` (fee share),
+  C `agent_revenue` (gross share). This is the same shape as `venture_sale` (p29:222); the treasury account now really
+  holds the money.
+- **Unallocated or quarantined part:** `provider_receipt_suspense`: D `treasury_cash` / C `provider_suspense`.
+  - New fleet-scoped class, credit-normal, non-spendable.
+  - Real money in the treasury account that belongs to no agent yet.
+- **Later resolution of a quarantined part:** `provider_suspense_allocation`: D `provider_suspense` / C
+  `treasury_cash`, and D `agent_cash` / C `agent_revenue`.
+- **Conservation:** for every receipt, Σ agent net shares + suspense = the receipt amount exactly, in minor units.
 
-**What each capability means, and how it is verified**
+### 4.5 Pilot fallback: owner attestation, explicitly labelled
 
-| Capability | Meaning | Verification | Provable before the live pilot? |
+Used only if the bank-feed connector is not yet available when the live pilot starts.
+
+- `fleet:admin storefront-receipt-attest <payout> <amount> <currency> <booked-on>` records an S4 receipt with
+  `evidence_kind = 'owner_attested'`. It never records a bank transaction id.
+- **It credits `agent_cash` only while an explicit pilot authorisation is active.** That authorisation is the row
+  `fleet_pilot_authorisations(kind 'receipt_attestation', expires_at ≤ 30 days, granted_by)`, written by its own owner
+  command.
+- It also credits cash only if the amount equals the provider-reported payout exactly. Otherwise the whole amount
+  goes to `provider_suspense`.
+- Attested amounts carry provenance `owner_attested` in `fleet_revenue_provenance`. They are shown as
+  "attested, not independently verified" to founders and in the dashboard.
+- Unattested or mismatched amounts stay non-spendable.
+- **Removing the fallback:**
+  1. deploy the bank-feed connector;
+  2. run three consecutive payouts matched automatically, with the attestations agreeing;
+  3. then `storefront-receipt-attest` refuses once a `fleet_treasury` destination has an active bank-feed credential,
+     and the pilot authorisation cannot be renewed (enforced in SQL).
+
+---
+
+## 5. Currency and accounting
+
+### 5.1 Units and sources
+
+| Amount | Source | Unit / currency | Basis |
 |---|---|---|---|
-| `storefront` | the gateway can publish a product for a venture | (a) the token is valid and `GET /v2/user` → `user_id` matches the registered account; (b) the owner attests email is confirmed and a payout method is set; (c) a probe: create the product as a **draft**, then delete it; (d) the venture's **first real publish** must come back without a `warning`. If it does not, the capability drops to `failed`, the venture is told exactly why, and the rail stops matching | yes; (d) on first use |
-| `receive_payments` (sale ingestion) | verified sales are read back and recorded as memo | the gateway lists sales and reads them back; test purchases prove only the ping and trigger path, because they are not in `GET /sales` | **no.** The first real third-party sale proves it |
-| `payouts` (settlement) | payouts are allocated and posted after confirmed receipt | `GET /payouts` read-back, then one allocated, owner-confirmed payout | **no.** The live pilot proves it |
+| Sale price, Gumroad fee | `GET /v2/sales/:id` `price`, `gumroad_fee` | USD minor units | F4, F2 |
+| Listing currency | sale `currency` | ISO code, informational only | B |
+| Tax | `tax_cents`, `tax_label` | memo only; Gumroad is merchant of record, so tax is excluded from revenue | F3, F5 |
+| Payout amount | `GET /v2/payouts/:id` `amount`, `currency` | the **payout currency** as reported (GBP expected for a UK bank, U2) | F6 |
+| Payout rows | `include_transactions` | **USD**, decimal strings converted to integer minor units with an exact decimal parse | F7 |
+| Receipt | bank feed | the destination account's currency, minor units | §4.3 |
 
-**What truthfully satisfies each pending request** (neither is resolved in this plan)
+**Rules for amounts**
+- **No conversion happens in the fleet.** The GBP that reaches the ledger is always the **received** amount.
+- The `price` field must not be treated as including tax (F5).
+- Unknown currencies, unparsable amounts and missing fields → the payout is **quarantined**. Nothing is posted to
+  agents.
 
-- **6178c7bb** (Agent 2; "Open a gumroad account (storefront) for venture uk-sa-template"; rail requirement
-  `storefront`/`gumroad`):
-  - satisfied when a gumroad rail assigned to `uk-sa-template` has `storefront` **verified** per (a)–(c) above;
-  - it is then answered automatically, with the truthful text, by the new lifecycle.
-- **62cbe1b7** (Founder 1; "List the landlord compliance tracker on Gumroad (a Gumroad seller account needs a human
-  identity/KYC)"; legacy request, no requirement):
-  - satisfied when the owner's seller account exists under the owner's true identity, with email confirmed and a
-    payout method set, **and** `storefront` is verified for a rail assigned to `landlord-compliance-tracker`;
-  - Founder 1 has no requirement row, so the owner answers it by hand
-    (`owner-request-decide 62cbe1b7 answered …`) with the same factual text;
-  - the answer must state that Stripe identity verification may still be requested later for payouts, and that
-    revenue is not spendable until a payout is received;
-  - the owner may also choose to assign the rail to that venture directly. That needs a new
-    `fleet_admin_rail_assign`, which records an event and is resolved by the same verified-capability rule.
+### 5.2 Payout membership and completeness (pre-allocation checks, all required)
 
-### 2.5 The receive-only rail against the safety controls
+1. Every `sales[]` / `refunded_sales[]` / `disputed_sales[]` id and every row's `purchase_id` resolves to an S1 memo
+   row.
+2. Every row type is in the known set (F8). Each row type has a handling rule (5.4).
+3. **USD payout:** Σ row `net_total` must equal `amount` exactly. Gumroad adds a "Technical Adjustment" row for USD
+   payouts; it is treated as an unattributed row (5.4).
+4. **Non-USD payout:** the implied rate `amount / Σ net_total` must lie within ±3% of `fleet_fx_latest('USD', <payout
+   currency>)` (p21:194-198).
+   - This is a **sanity bound only**. It is never used to convert.
+   - The ±3% figure is an accounting tolerance, not a spend threshold. It is adjustable only by a reviewed migration.
+5. Σ row net > 0, or the payout is negative (5.5).
 
-- **New mode `live_receive`.** Existing CHECK `fleet_payment_rails_not_live CHECK (mode <> 'live')` (p29:366) is
-  **kept as is**. Add:
-  - `fleet_payment_rails_live_receive_scope CHECK (mode <> 'live_receive' OR (provider = 'gumroad' AND capabilities
-    <@ ARRAY['storefront','receive_payments','marketplace_listing']))`. This excludes `payouts`, `refunds`,
-    `card_spend` and `bank_transfer`.
-  - The privilege audit (`privileges.ts:926-931`) also requires the new CHECK, and fails if any `live_receive` rail
-    carries an outgoing capability.
-- **Unchanged and still enforced:**
-  - `REAL_PAYMENTS_ENABLED=false`: the spend gate, payouts and live signers (`config.ts:92`, `adapters.ts:54-57`);
-  - `custody_execution_enabled` CHECK (p10:40);
-  - payment-order execution pins (p32:242-274);
-  - `OWNER_SWEEP_ENABLED` (a no-op, `index.ts:374-376`);
-  - `REAL_REPLICATION_ENABLED`, `FLEET_DRY_RUN_CHILD`;
-  - cap 2; mode DEVELOPMENT.
-- **No outgoing path is added.** The gateway's token is requested via the OAuth flow with scopes `edit_products
-  view_sales view_payouts` only. Self-generated tokens default to *every* public scope including `account` (B), so
-  **use the OAuth flow, not "Generate access token"**. There is no `edit_sales`, so the gateway cannot issue refunds.
-- **New permissions:**
-  - DB role `fleet_provider(_login)` with `gx_*` functions only; added to the privilege-audit role maps and writer
-    maps;
-  - controller `svc_storefront_*` functions added to `SERVICE_API_FUNCTIONS` (migrations.ts:1201-1259);
-  - owner `fleet_admin_*` functions run through the admin DSN, needing the `fleet_treasury` approver as for rails
-    today (p29:485).
-  - None of this grants or changes any spend, transfer or payout function.
+If any check fails, the **whole** payout goes to `provider_suspense` when it is received. Reconcile shows the reason.
 
----
+### 5.3 Allocation convention for a non-USD payout
 
-## 3. Exact changes
+- **Why a convention is needed.** Gumroad converts each sale "at the time of sale" (F10). It does not expose the
+  per-sale local amounts in the API, and it omits the balancing row for non-USD payouts (F7). So **a per-sale GBP
+  figure cannot be derived from the published data.**
+- **The rule.** For agent *a*:
+  `share_a = R × N_a / N`
+  - R = received amount in minor units;
+  - N_a = Σ USD net of agent *a*'s rows (signed);
+  - N = Σ USD net of all attributed rows.
+  - Rounding: largest remainder, deterministic order by agent id; Σ shares = R exactly.
+- **What it implies.** It is exact in total and approximate per agent, by the FX movement between the sale dates in
+  one payout. The method is stated to founders ("allocated pro rata in USD net").
+- Fee and gross shares use the same ratio over `gumroad_fees` and `sale_price`.
+- **USD payouts** allocate exactly, by row.
 
-### 3.1 Schema v46 (`migrations-phase46.ts`, additive; no backfill, no journal)
+### 5.4 Row handling
 
-1. **`fleet_payment_rails`:**
-   - add mode `live_receive` to the mode CHECK and the scope CHECK above;
-   - change the default status to `pending_setup`;
-   - `fleet_admin_rail_add`: insert as `pending_setup`, and resolve nothing while pending;
-   - `fleet_admin_rail_set_status`: allow `pending_setup → active` only when a verified capability exists.
-2. **`fleet_rail_capability_checks`** (above) plus `fleet_admin_rail_verify(rail, capability, evidence, actor)` and
-   `gx_rail_probe_result(...)`.
-3. **`fleet_rail_match` / `fleet_rail_resolve`:**
-   - match on a verified capability;
-   - build the answer text from verified capabilities;
-   - add `fleet_admin_rail_assign(rail, venture, capability, actor)`.
-4. **`fleet_provider_accounts`:** rail, provider, provider `user_id`, masked label.
-5. **`fleet_provider_products`:** provider account, product id (unique), venture, agent, `created_via`
-   `gateway|owner_assigned`, status, file refs. Immutable owner columns; reassignment is an owner function plus an
-   event.
-6. **`fleet_provider_sales`:** memo of each verified sale.
-   - Columns: account, sale id (unique), product, venture/agent (nullable = unattributed), price and fee in USD,
-     taxes, listing currency, flags (refunded, partially refunded, chargedback, disputed, dispute won), `read_at`,
-     `payload_sha256`.
-   - Status: `verified | in_balance | in_payout | settled | reversed`.
-   - Only `gx_sales_upsert` writes it, from authenticated read-back.
-7. **`fleet_provider_payouts`** and **`fleet_provider_payout_lines`:**
-   - payout id, GBP amount and currency as reported, status, `processed_at`;
-   - lines per purchase with net, fees, taxes and sign;
-   - `confirmed_received_at` / `confirmed_by` / the confirmed GBP amount;
-   - the allocation result.
-8. **Ledger:**
-   - class `agent_provider_payable` (agent scope, liability, credit-normal);
-   - wired into `fleet_agent_economics` equity as an obligation (p42 restate), `fleet_agent_wallet` and
-     `fleet_agent_value`;
-   - `fleet_ledger_open_agent` extended, with the same backfill pattern as `agent_tax_reserve` (p29:236-251; no
-     journal);
-   - kinds: `provider_payout_settlement` (D agent_cash, D agent_fees, C agent_revenue; D agent_provider_payable when
-     repaying), `provider_clawback` (D agent_revenue, C agent_cash / C agent_provider_payable);
-   - allowed source `controller` (owner for corrections), provenance `external_customer_revenue`;
-   - kinds and rules are append-only (p10:165), so this changes the economic-policy hash (p21:68-75). That is
-     expected and recorded.
-9. **`fleet_revenue_claims`** plus the `fleet_admin_record_external` claim parameter and the active-rail refusal.
-10. **`fleet_economic_model.simulated_settlement_allowed boolean NOT NULL DEFAULT false`**, plus guards in
-    `svc_settlement_ingest`, `fleet_settlement_post` and the new posting functions.
-11. **Functions:**
-    - owner: `fleet_admin_storefront_payout_confirm(payout, gbp_amount, received_on, actor)`, which allocates and
-      posts in one transaction and refuses a mismatch beyond tolerance;
-    - owner: `fleet_admin_storefront_product_assign`;
-    - gateway: `gx_*` job claim and report, sales upsert, payout upsert, probe result;
-    - controller: `svc_storefront_*` agent ops, dispatched like p37 browser ops.
-12. **Reconcile:** `PROVIDER_UNATTRIBUTED_SALES` (WARN), `PROVIDER_PAYOUT_UNCONFIRMED` older than 14 days (WARN),
-    `PROVIDER_PAYOUT_ALLOCATION` (Σ shares = confirmed amount; FAIL), `REVENUE_CLAIM_ORPHANS` (FAIL),
-    `PROVIDER_PAYABLE_OUTSTANDING` (INFO).
-13. **Privilege audit:** new role, writer maps and required triggers. The not-live and live_receive-scope checks.
-    `simulated_settlement_allowed = false` on production.
-14. **Dashboard:** read-only `hub` sections for storefront, pending revenue and payouts. No write ops in phase 1.
+| Row | Handling |
+|---|---|
+| Sale | + to the purchase's agent |
+| Full / Partial Refund | − to the purchase's agent. Includes the retained fee, so the fee is not returned (A, `_66`) |
+| Chargeback | − to the purchase's agent; the platform fee is returned (A, `_134`) |
+| Credit with a purchase, e.g. dispute won | + to the purchase's agent |
+| Refund fee written off, Failed Refund Fee Returned/Retained | ± to the purchase's agent |
+| Affiliate credit | − to the purchase's agent (no affiliates are planned) |
+| Payout Fee | split across agents with positive shares, pro rata. Stated rule |
+| Credit without a purchase, Technical Adjustment, PayPal/Connect summary rows, unknown types | quarantine: the matching amount goes to `provider_suspense` until the owner resolves it with `storefront-suspense-allocate`, which records an event and needs a reason |
 
-### 3.2 Code
+### 5.5 Partial payouts, reserves, withheld funds and negatives
 
-- `src/fleet/storefront/` (new):
-  - `gumroad-client.ts`: fetch with host allowlist; retries on 429/5xx; pagination with `page_key`;
-  - `gateway.ts`: job loop, polling, reconciliation;
-  - `vault.ts`: same pattern as `ProviderSecretVault`, `identity/vaults.ts:178-242`;
-  - `main.ts`: the unit's entry point, plus a stdin-only `secret-set`;
-  - `allocation.ts`: pure function, largest-remainder rounding.
-- `deploy/systemd/automaton-fleet-gumroad.service` and `scripts/fleet-gumroad-setup.sh` (check / install / --apply,
-  like `fleet-browser-setup.sh`).
-- `src/fleet/founder/toolbox.ts` and `cognition/types.ts`: `storefront.*` tools (capability `planning`). Doctrine
-  stays founder-v5; this is a tool addition, so the capability signature changes and founders get a full packet.
-- `src/fleet/identity` (browser policy): `FLEET_PROVIDER_VIA_GATEWAY` on gumroad origins.
-- `src/fleet/hub/cli.ts`: `economy-rail-verify`, `economy-rail-assign`, `storefront-payout-confirm`,
-  `storefront-product-assign`, `storefront-status`.
-- `src/fleet/treasury/ledger-cli.ts`: `--claims` for `ledger-record-revenue`.
+- **Partial payouts, reserves, holds, skipped payout days:** membership comes only from F9 and rows. Verified sales
+  that are not in a payout stay S2 (`held` when Gumroad reports a reserve or review). They are never posted.
+- **A negative share for one agent within a payout:** it is netted inside the allocation.
+  - If an agent's share is < 0, post `provider_clawback`: D `agent_revenue` / C `agent_cash`, up to its cash.
+  - The remainder goes to D `agent_revenue` / C **`agent_provider_payable`**. This is a new agent-scoped liability,
+    included as an obligation in equity (p42 restate). It lowers expensePurchasingCapacity without touching other
+    agents.
+  - It is repaid first from that agent's next positive shares.
+- **A negative balance debited from the bank (F11):** the bank feed sees the debit and it becomes a **negative
+  receipt**. It is allocated by the same rules to the owning agents' cash, and to payables where cash is short. An
+  unattributable part goes D `provider_suspense` (C `treasury_cash`). If `provider_suspense` cannot absorb it, it is
+  posted as `fleet_expense` with reason `provider_debit_unattributed`.
+- **Books stay balanced:** every journal is balanced by the existing rules check (p10:272-287). Per receipt:
+  Σ agent cash deltas + Σ payable deltas + suspense delta = the signed receipt.
 
-### 3.3 Secure credential onboarding
+### 5.6 Double-credit protection
 
-No secret ever appears in chat, in the repository, or on a command line.
+New table `fleet_revenue_claims (claim_key PRIMARY KEY, kind, journal_id, created_at)`. It is immutable and is the
+single unique namespace:
 
-1. The owner, on gumroad.com: Settings → Advanced → create an application (redirect `http://127.0.0.1`).
-2. On the VPS, as the owner: `sudo scripts/fleet-gumroad-setup.sh oauth-begin`.
-   - It prints the authorise URL with `scope=edit_products view_sales view_payouts`.
-   - The owner approves in their own browser and pastes the returned **code**. The code is single-use and
-     short-lived; the access token itself never leaves the gateway.
-   - The gateway exchanges the code (`POST /oauth/token`) and writes the token into its vault.
-   - It prints only the fingerprint, the granted scopes and the `user_id`.
-   - The client secret is read from stdin, never from argv.
-3. `fleet:admin economy-credential-register gumroad vault:gumroad/main edit_products,view_sales,view_payouts …`,
-   then `economy-rail-add gumroad shared storefront,receive_payments <masked> --mode live_receive`. The rail starts
-   `pending_setup` and resolves nothing.
-4. `economy-rail-verify <rail> storefront`. The probes run; the owner's attestation is recorded.
-5. Revocation: revoke in Gumroad (this also deletes its resource subscriptions, B), plus `economy-rail-status
-   revoked`. Assignments are released (p29:498-513).
+| Claimer | Claim key |
+|---|---|
+| provider payout settlement | `gumroad:<user_id>:payout:<payout_id>` |
+| bank receipt | `bank:<destination_id>:txn:<bank_txn_id>` |
+| owner attestation | `gumroad:<user_id>:payout:<payout_id>` (the same key, so attestation and the feed cannot both post) |
+| transfer from `owner_external` into the treasury | `bank:<treasury_dest>:txn:<id>` and the original receipt key |
+| manual `ledger-record-revenue` | new required `--claims <key>` when the counterparty hash matches any active storefront destination or provider account; refused if the key is taken |
+| `ledger-record-funding` (owner capital) | refused if its external ref or bank transaction id is a claimed receipt key. Reconcile also flags owner funding within ±3 days and the same amount as an unclaimed matched receipt (`FUNDING_MATCHES_PROVIDER_RECEIPT`, WARN) |
+
+**Retries.**
+- Gateway and connector writes are idempotent on (account, sale id, kind), (payout id) and (bank transaction id).
+- The same key with a different `payload_sha256` emits `provider_conflict` and changes nothing, as with
+  `svc_settlement_ingest` today (p29:783-790).
+- Ledger journals use idem keys derived from claim keys, and the (kind, external_ref) uniqueness index (p10:243).
+
+### 5.7 Test, sandbox and simulated activity
+
+- Test purchases are absent from `GET /sales` and never paid out (F17). A `test: true` ping is ignored. In phase 1
+  there is no ping receiver anyway.
+- New `fleet_economic_model.simulated_settlement_allowed boolean NOT NULL DEFAULT false`.
+  - When it is false, `svc_settlement_ingest`, `fleet_settlement_post` and every new posting function refuse rails in
+    `simulated` or `sandbox` mode.
+  - Today a simulated rail can post to `agent_cash` (p29:716-767).
+  - Throwaway registries set it to true for the existing F2 simulation tests. The privilege audit fails if it is true
+    on a registry that has a `live_receive` rail or a `fleet_treasury` destination.
 
 ---
 
-## 4. Acceptance tests
+## 6. Receive-only security boundary (new capability `live_receive`)
 
-**Local fixtures and database tests**, no network; a fake Gumroad HTTP server built from the documented payloads:
+### 6.1 Every outgoing path, and why `live_receive` cannot reach it
 
-1. A rail is created `pending_setup` and **no requirement or dependency changes**. A dependency is answered only
-   after its capability is verified, and its text names exactly the verified capabilities. Approving through
-   `owner-request-decide` alone still assigns nothing.
-2. `live_receive` refuses `payouts`, `refunds`, `card_spend` and `bank_transfer`. `mode <> 'live'` is still enforced.
-   The audit fails on a tampered CHECK.
-3. A ping is never data: posting a forged sale through the trigger path changes nothing until read back. A read-back
-   for a `test` purchase, which is absent from `/sales`, is ignored.
-4. Duplicate pings, retries, out-of-order refund-before-sale, and a missed notification recovered by polling: every
-   case ends in exactly one memo row per (sale, kind) and **zero ledger postings**.
-5. **No money before receipt:** verified sales and `completed` payouts leave `agent_cash` and expensePurchasingCapacity
-   unchanged. Only `storefront-payout-confirm` posts.
-6. Allocation: a mixed two-venture payout with fees, taxes, a partial refund and a chargeback row sums exactly to the
-   confirmed GBP (property test with random rows). Rounding gives each agent no more than 1p.
-7. A negative share beyond cash creates `agent_provider_payable`, which reduces expensePurchasingCapacity, and is
-   repaid from the next payout. `dispute_won` restores it.
-8. Unattributed products hold the whole payout (`unallocated`). The owner's assign plus confirm then posts.
-9. Simulated or sandbox rail ingest is refused when `simulated_settlement_allowed=false`. Existing F2 simulation tests
-   set the flag on their throwaway registry.
-10. Double credit: `ledger-record-revenue --claims` and `provider_payout_settlement` on the same payout cannot both
-    post. Manual revenue against an active gumroad rail without `--claims` is refused. The reconcile orphan check
-    fires.
-11. Ownership: agent A cannot update, publish, attach to or read sales of agent B's product
-    (`FLEET_CREDENTIAL_SCOPE`). The browser refuses gumroad credential fills and registration.
-12. The token never appears in logs, events, job rows, receipts or snapshots (same pattern as the existing
-    credential-in-records check).
-13. Privilege audit clean. Migration v45 → v46 alone and from every earlier step (`fleet-f2-migration-paths-pg`).
-    `reconcile-compare` passes with no economics key, external transaction or journal change.
+| Outgoing path | Where (F) | Why `live_receive` cannot authorise it | New enforcement |
+|---|---|---|---|
+| Payment-instruction issue | p32:239-280 | Selects `mode = 'live'` and capability `payouts` or `bank_transfer`, with a fresh signer attestation (p32:266-274) | CHECK: `live_receive` capabilities ⊆ {storefront, receive_payments, marketplace_listing}; test |
+| Custody signer attestation | `cx_attest_signer` p32:158-185 | Needs `payouts` or `bank_transfer` in both the rail and the credential scope (:174-176) | Credential CHECK: provider `gumroad` scope ⊆ {edit_products, view_sales, view_payouts}; bank-feed scope ⊆ {read_accounts, read_transactions} |
+| Custody execution | `custody_execution_enabled` CHECK (p10:40); executor env check (`treasury/custody.ts:36`) | Unchanged, pinned false | none; audit re-asserted |
+| Payment-order owner route | retired (p27:20-50) | Unchanged | none |
+| Provider payout initiation | `adapters.ts:54-57, 113-116` (spend gate, then disabled) | The Gumroad payouts API has **no initiation endpoint** (F14). The gateway allowlist has none | Allowlist test |
+| Provider refunds | `PUT /v2/sales/:id/refund` | Needs `refund_sales`, `edit_sales` or `account` (F13, F14). The token is requested without them, and the gateway **verifies the granted scopes** and refuses to run if any of `account`, `edit_sales`, `refund_sales`, `edit_emails`, `edit_profile` is present (6.2). Path not in the allowlist | Startup scope check; allowlist test |
+| Transfers / funding moves | `fund_child`, `transfer_credits` (`fleet/policy.ts:170-186`); `fleet_safe_transfer_amount` (p29:940) | Agent-internal ledger only; unchanged; they draw on `agent_cash`, which only S5 credits | none |
+| Owner sweeps | `OWNER_SWEEP_ENABLED` is a no-op (`index.ts:374-376`); sweeps are the DB row `fleet_sweep_policy.enabled` | Unchanged; revenue raises net profit, but sweeps stay disabled | Audit asserts `fleet_sweep_policy.enabled = false` |
+| Bank payment initiation | none exists | Bank-feed consent is account-information only | Connector refuses any scope outside read; test |
+| `REAL_PAYMENTS_ENABLED` | spend gate (`spend-gate.ts:63-85`), signers, PayPal live | Stays false; `live_receive` never reads it, and **observing a payout is not initiating one** | Audit: both new units refuse to start if any of the four flags is true (same pattern as `operator/main.ts:46`) |
 
-**Provider test purchases**, on the real account, explicitly authorised. They **cannot prove settlement**:
+`mode <> 'live'` (p29:366) is kept as it is. `live_receive` is a distinct mode with its own CHECK, its own audit
+entries and its own tests. It is not a loophole in the old pin.
 
-14. The `storefront` probe (draft create and delete) and the first real publish return no `warning`.
-15. A logged-in test purchase with Gumroad's "Test card": a ping with `test: true` arrives if a subscription is
-    configured. It is **absent** from `GET /sales` and is ignored. Nothing is recorded.
+### 6.2 Least-privilege credentials, verified rather than assumed
 
-**Live pilot**, a separate explicit owner authorisation:
+**Gumroad token**
+- Obtained **only via the OAuth authorisation flow** with `scope=edit_products view_sales view_payouts`. A
+  self-generated token carries all public scopes, including `account` and `edit_sales` (F15).
+- At onboarding and at every gateway start, the granted scopes must equal that set exactly. They are taken from the
+  token response (A) and `/oauth/token/info` (B, F16). Any extra scope means the gateway refuses, and the rail's
+  `account_access` check is marked `failed`.
+- **What these scopes still allow:** `edit_products` permits product, offer-code, variant, file and refund-policy
+  writes (F14). The **allowlist** below, not the scope, confines the gateway to its needs.
 
-16. A real third-party sale: verified memo in the right venture, with the founder seeing the pending, not spendable,
-    memo.
-17. The first payout: allocation, the owner's receipt confirmation, `agent_cash` credited, and a clean reconcile.
-18. A real refund, partial or full, by the owner in the dashboard: reflected in the next payout's allocation.
+**Bank-feed credential**
+- An account-information consent only, for the treasury account only. Its scope is recorded and checked the same way.
 
----
+### 6.3 Gateway operation allowlist (code and test; deny by default)
 
-## 5. Migration and write-preserving rollback
-
-**Order**
-1. Ship v46 **dormant**: no gateway unit installed, no rails.
-2. Rehearse on a production copy (`fleet-rollout.sh rehearse 45 46`). `reconcile-compare` requires no new events
-   except role grants, unchanged balances and zero new journals.
-3. Cut over (`fleet-rollout.sh cutover … 45 46`). Then install the gateway unit (`fleet-gumroad-setup.sh`), in the
-   same pattern as the R41.1 browser worker.
-
-**Rollback before any storefront data exists** (no rail, credential or provider rows): the standard schema revert
-(`fleet-rollout.sh revert … 45 46`), with the post-cutover dump written first. Since no gumroad writes exist, the
-`DISCARD_ACK` counts are the journals and events since the cutover, which reconcile shows.
-
-**Rollback after storefront data exists:** **do not restore the database over it.** Older releases refuse newer
-schemas (`store.ts:512-516`), so a schema revert would discard real sales memos and payouts. Instead, freeze and fix
-forward:
-1. `systemctl disable --now automaton-fleet-gumroad` (no new provider reads or writes).
-2. `economy-rail-status <rail> suspended` (no matching; assignments kept).
-3. Agents' storefront tools return `FLEET_CAPABILITY_NOT_CONFIGURED` ("only this action is unavailable").
-4. Fix forward in a v47. Ledger postings are append-only. Any correction is a reversing journal through
-   `ledger-reverse` (owner), never a restore.
-5. A database restore stays possible only through `FLEET_REVERT_DISCARD_ACK` with the post-cutover dump preserved.
-   That is the existing explicit-discard rule, never silent.
-
-**Founder rollback** is unaffected. Founder runtimes on `fda78a0` simply lack the storefront tools. The new tools are
-gated by the capability signature, so a v46 controller serves them only to runtimes that implement them, the same
-pattern as the doctrine gate.
-
----
-
-## 6. Stages
-
-| Stage | Work | Gate |
+| Op | Method and path | Precondition |
 |---|---|---|
-| **G0** (owner, parallel) | Decisions below; create the seller account on gumroad.com; confirm email; payout method; Stripe verification when asked | none in the fleet |
-| **G1** | v46 schema, lifecycle fix, simulated-settlement guard, claims, memo tables, allocation, ledger kinds and class, reconcile, audit; tests 1–13 | local suites; `test:security` / `test:financial` (the 2 pre-existing R39 failures reported as they are) |
-| **G2** | Gateway unit, fake-Gumroad fixtures, agent tools, browser policy, setup script, onboarding CLI | tests 11–12; release-script tests |
-| **G3** | Rehearsal on a production copy; then cutover 45 → 46 dormant | owner approval (production) |
-| **G4** | Gateway install, OAuth onboarding, rail `pending_setup`, `storefront` verification; tests 14–15 | owner approval; **storefront verified → 6178c7bb auto-answered truthfully; owner answers 62cbe1b7** |
-| **G5** | Live pilot: the founders publish by their own choice; the first real sale and payout; tests 16–18 | separate explicit owner authorisation; `receive_payments` and `payouts` verified only then |
+| verify account | `GET /v2/user` | none |
+| create product | `POST /v2/products`, always `draft=true` and `custom_permalink=f<job>` | job is owned by the caller's venture |
+| update product | `PUT /v2/products/:id` | product mapped to the caller's venture; never `files`, `rich_content` or `tags` with an omission (full-replace semantics, A) |
+| publish / unpublish | `PUT /v2/products/:id/enable` / `disable` | mapped |
+| delete | `DELETE /v2/products/:id` | mapped **and** `state = 'draft_creating'` or `'draft'` only (crash recovery) |
+| files | `POST /v2/files/presign`, `/complete`, `/abort`; `PUT` to the returned part URLs | upload owned by the job; part host must match the presign response host and an `*.amazonaws.com` S3 pattern (U3: pinned after the first presign) |
+| read sales | `GET /v2/sales` (`after`, `page_key`), `GET /v2/sales/:id` | none (the gateway reads all; the controller filters per agent) |
+| read payouts | `GET /v2/payouts`, `/:id`, `/upcoming` with `include_sales`, `include_transactions` | none |
+| list products | `GET /v2/products` | for crash recovery and orphan reconcile only |
+
+**Everything else is refused:** refunds, revoke access, resend receipt, emails, offer codes, custom fields, profile,
+pages, resource subscriptions and any non-`api.gumroad.com` host except the pinned upload host.
 
 ---
 
-## 7. Minimum owner decisions before account setup
+## 7. Account and product isolation
 
-1. **Arrangement:** one shared seller account behind the broker (recommended), or linked accounts per venture.
-   Products cannot be moved between accounts later.
-2. **Seller identity:** individual or a company. Registration data must be "true, accurate, current and complete"
-   (§4.4). A business's bank must be in its country of registration (`_13`).
-3. **Account email:** an owner-controlled mailbox that is not used by any agent. The owner's mail decision currently
-   keeps fleet mail dormant.
-4. **Listing currency:** GBP or USD. Settlement is USD either way, and the payout is GBP.
-5. **Operation policy:** agents use the Gumroad API only through the broker and never the dashboard. Refunds and
-   dispute responses stay owner-only in phase 1.
-6. **Self-purchase rule:** test only with Gumroad's logged-in "Test card". **Never** buy your own product with a real
-   card (`_62`, `_281`).
+### 7.1 What agents never get
 
-**Unsettled, to confirm with Gumroad support if needed:**
-- whether a linked account's new Connect account needs its own ID verification;
-- whether `price` includes tax;
-- the `currency` and amount reported for a GBP payout in the API;
-- whether any dashboard automation is acceptable. This plan avoids needing it.
+- A Gumroad token, an owner dashboard session, or a browser credential fill on a Gumroad origin.
+- The browser refuses `account.register` and `account.create` with platform or origin `gumroad.com` / `*.gumroad.com`,
+  and refuses credential fills there, with `FLEET_PROVIDER_VIA_GATEWAY`. Public read-only browsing is unchanged.
+
+### 7.2 Ownership on every operation
+
+- `fleet_provider_products(provider_account, product_id UNIQUE, venture_id, agent_id, state, created_job, permalink,
+  file_refs)`.
+  - `state` runs: draft_creating → draft → published → unpublished → deleted.
+  - `agent_id` and `venture_id` are immutable except through `fleet_admin_storefront_product_reassign`, an owner
+    command that records an event and needs a reason. Agents cannot reassign.
+- **Every `storefront.*` op** resolves the caller to (agent, venture) and refuses with `FLEET_CREDENTIAL_SCOPE`
+  unless the product, upload or job maps to that venture. This includes reads: `storefront.sales` returns only memo
+  rows of the caller's mapped products.
+- **Uploads:** `fleet_provider_uploads(job, venture, agent, key, upload_id, state)`. A file is attachable only to a
+  product of the same venture.
+- **Products the gateway did not create** (for example made by hand in the dashboard): mapped to no one. Their sales
+  are unattributed (quarantined at S5) until the owner assigns them with `storefront-product-assign`. The gateway
+  never mutates them.
+
+### 7.3 Crash-safe product creation
+
+1. The controller inserts the job and a product row in `draft_creating` with permalink `f<job-id-12>`. Nothing has
+   happened externally yet.
+2. The gateway calls `POST /v2/products` with `draft=true` and that `custom_permalink`.
+   - If it gets an id, it records the id and moves to `draft`.
+   - On timeout or crash, it lists `GET /v2/products` for the permalink: if found, it adopts it; if not, it retries
+     once and then fails the job.
+3. Files: presign → parts → complete → attach. On failure, abort, and the product stays a draft.
+4. Publish only on the agent's explicit `storefront.product.publish`. The response must have no `warning` (F20).
+   Otherwise the product stays a draft and `storefront_publication` is marked failed (§8).
+5. **Orphan reconcile.** A daily `GET /v2/products` comparison raises:
+   - `PROVIDER_ORPHAN_PRODUCT`: on the account, not mapped;
+   - `PROVIDER_MISSING_PRODUCT`: mapped, not on the account.
+   Drafts stuck in `draft_creating` for more than 1 hour are deleted by the gateway (allowlisted only for that state).
+
+---
+
+## 8. Truthful dependency readiness
+
+### 8.1 The two stored requests and the current lifecycle (F)
+
+- **62cbe1b7** (Founder 1):
+  - kind `kyc`;
+  - action "List the landlord compliance tracker on Gumroad (a Gumroad seller account needs a human identity/KYC)";
+  - title "Owner request: enrol a Gumroad channel for zero-capex digital products";
+  - created 2026-09-26, goal `g1`;
+  - imported from a legacy knowledge proposal and re-scoped by id (p26:22, 33-36, 131-133);
+  - **no rail requirement.**
+- **6178c7bb** (Agent 2):
+  - kind `kyc`;
+  - action "Open a gumroad account (storefront) for venture uk-sa-template";
+  - title "Payment rail required: gumroad / storefront";
+  - created 2026-10-07 by `fleet_rail_resolve` (p29:461-472) for requirement `storefront`/`gumroad`.
+- **Lifecycle:**
+  - `pending` → one terminal status only (p26:50-63);
+  - `owner-request-decide` grants nothing (p25:143-150);
+  - `fleet_admin_rail_add` inserts **active** by default and answers matching dependencies at once (p29:356, 479-496),
+    because `fleet_rail_match` needs only `status = 'active'` (p33:74).
+
+### 8.2 Capabilities, each with its own evidence
+
+Stored in `fleet_rail_capability_checks(rail, capability, status unverified|verified|failed|expired, evidence jsonb,
+evidence_kind, verified_at, expires_at)`. Written only by owner and gateway functions.
+
+| Capability | Meaning | Evidence | Needs a real sale or payout? |
+|---|---|---|---|
+| `account_access` | the gateway reaches the registered account with exactly the allowed scopes | `GET /v2/user` `user_id` matches the registered account; scope check (6.2) | no |
+| `storefront_publication` | the gateway can publish for a venture | `account_access`; a draft create, attach and delete probe; the owner attests in the Gumroad dashboard that email is confirmed and a payout method is set (F20); kept only while each venture's first real publish comes back without a `warning`. A warning sets the capability to `failed` with the reason | **no** |
+| `identity_verification` | Stripe verification is complete for payouts | owner attestation from Gumroad's payments page. **No API exposes it** (A: earnings and tax forms are US-only). The $10 vs $100 threshold is not observable by API either | no |
+| `sale_ingestion` | verified sales are read back and attributed | the first real third-party sale reaches S1 and is attributed | **yes:** live pilot only |
+| `payout_reconciliation` | payout membership and rows are complete and allocatable | the first real payout passes §5.2 | **yes:** live pilot |
+| `receipt_verification` | S4 evidence by the bank feed | the first automatic receipt match (or the pilot fallback, labelled) | **yes:** live pilot |
+
+### 8.3 Lifecycle changes
+
+1. `fleet_admin_rail_add` inserts **`pending_setup`** and resolves nothing.
+2. `fleet_rail_match(..., capability)` additionally requires that capability to be `verified` and unexpired on the
+   rail.
+3. A rail becomes `active` only when at least one capability is verified.
+4. A dependency created by `fleet_rail_resolve` is answered only when the **requested** capability is verified.
+   - The answer text is generated from the evidence: "Verified: storefront publication. Not yet verified: sale
+     ingestion, payout reconciliation, receipt verification, identity verification (as applicable). Revenue is not
+     spendable until it is received into the fleet treasury."
+   - The fixed text "A compatible Fleet payment rail is now connected" (p29:455) is removed.
+5. New `fleet_admin_dependency_answer_from_capability(request, rail, capability, actor)`:
+   - for legacy requests such as 62cbe1b7, with no requirement;
+   - refuses unless the capability is verified for a rail assigned to the request's agent's venture;
+   - writes the same generated text. The owner never types the disclosure by hand.
+6. New `fleet_admin_rail_assign(rail, venture, capability, actor)`, for Founder 1's venture, which has no
+   requirement. Subject to the same verified-capability rule.
+7. **Unresolved portions are preserved, not merged.** When a request is answered on `storefront_publication` while
+   `identity_verification` is not verified, the same transaction records a **new** dependency:
+   - kind `kyc`, idempotency `capability:<rail>:identity_verification:<agent>`;
+   - action "Receive Gumroad payouts: Stripe identity verification of the account holder";
+   - one per affected agent, within the existing limit of 5 open per agent (p29:463).
+   Publishing is therefore never reported as completed KYC.
+
+**No deadlock.** `storefront_publication` needs no sale or payout, so publication can happen first. Sales and payouts
+then prove the later capabilities.
+
+### 8.4 What satisfies each original request, and what the answer must disclose
+
+- **6178c7bb:**
+  - **Satisfied when:** `account_access` + `storefront_publication` are verified on a gumroad rail assigned to
+    `uk-sa-template`.
+  - **Answered:** automatically by the new lifecycle.
+  - **The answer must disclose:** the verified list; the unverified list; "revenue is not spendable until received
+    into the fleet treasury"; and the identity-verification dependency if it was created.
+- **62cbe1b7:**
+  - **Satisfied when:** the same two capabilities are verified for a rail assigned to `landlord-compliance-tracker`.
+    That means the account exists under the owner's true identity, email is confirmed and a payout method is set.
+    The "human identity/KYC" part is satisfied only to the extent `identity_verification` is verified.
+  - **Answered:** by `fleet_admin_dependency_answer_from_capability`, with the same disclosures.
+  - **If `identity_verification` is unverified,** it says so and creates the separate dependency (8.3.7).
+- **Neither request is answered in this design task.**
+
+---
+
+## 9. Acceptance tests
+
+**Tier 1: local fixtures and database tests.** No network; a fake Gumroad and a fake bank feed are built from the
+documented payloads, with the B-only field shapes marked.
+
+*Pending readiness*
+1. A rail is created `pending_setup`; no requirement, assignment or dependency changes.
+2. `owner-request-decide` alone assigns nothing.
+3. A dependency is answered only when its requested capability is verified; the text lists exactly the verified and
+   unverified capabilities.
+4. A legacy request is answered only through `…answer_from_capability`, with a verified capability.
+5. An unresolved identity verification creates the separate dependency.
+6. `storefront_publication` becomes verified with no sale or payout.
+
+*Receive-only enforcement*
+7. `live_receive` with `payouts`, `refunds`, `card_spend` or `bank_transfer` is refused by CHECK.
+8. `cx_attest_signer` refuses a `live_receive` rail.
+9. Payment-instruction issue never selects it.
+10. The gumroad credential scope CHECK refuses `payouts`.
+11. The gateway refuses a token with `account` or `edit_sales`.
+12. Allowlist: refund, resend receipt, emails, offer codes, resource subscriptions and foreign hosts are refused.
+13. Both new units refuse to start if any of the four flags is true.
+14. Audit fails on a tampered CHECK, or on `simulated_settlement_allowed = true` alongside a live destination.
+
+*Ownership and isolation*
+15. Agent A cannot read, update, attach to, publish, delete or see the sales of agent B's product or upload.
+16. Reassignment is owner-only and records an event.
+17. The browser refuses Gumroad credential fills and registration.
+18. Crash at each step of 7.3 leaves exactly one mapped product, or none; no cross-venture attach; orphans flagged.
+
+*Credential secrecy*
+19. The token and bank credential never appear in logs, events, job rows, receipts, snapshots or errors.
+20. Both are stdin-only at onboarding, and vault files are 0600 and owned by the unit.
+
+*Duplicates, missed and reordered events*
+21. Repeated polls, overlapping windows and a refund seen before its sale give exactly one memo row per (sale, kind).
+22. A missed poll window is recovered by the daily reconcile.
+23. A conflicting payload emits `provider_conflict` with no change.
+24. Replay of a receipt, attestation or payout posts once (claims).
+
+*Currency mismatches*
+25. A non-USD payout with an implied rate outside ±3%, an unknown row type, an unresolved purchase id or an unknown
+    currency is quarantined to `provider_suspense`; agent cash is unchanged.
+26. A USD payout whose rows do not sum exactly is quarantined.
+
+*Settlement reconciliation*
+27. S1–S3 change no ledger balance.
+28. S4 into `owner_external` posts nothing until the matching treasury transfer.
+29. S5 conserves: Σ shares + suspense = the receipt exactly. Property test over random mixed two-agent payouts with
+    fees, partial refunds, chargebacks, credits and payout fees.
+30. Each agent's share differs from its exact USD-proportional value by at most one minor unit.
+31. Owner funding with a claimed receipt reference is refused; the near-match warning fires.
+32. Manual `ledger-record-revenue` without `--claims` against an active provider counterparty is refused.
+
+*Post-settlement reversals*
+33. A later chargeback or refund row gives a negative share: clawback up to cash, then `agent_provider_payable`, which
+    reduces expensePurchasingCapacity and is repaid from the next share.
+34. A negative bank debit is allocated the same way.
+35. `dispute_won` restores the amount.
+
+*Pilot fallback*
+36. Attestation credits cash only within an active pilot authorisation and only on an exact match.
+37. It is refused once an active bank-feed destination exists.
+38. Provenance is `owner_attested`.
+
+*Test isolation*
+39. Simulated and sandbox rails cannot post while the flag is false.
+40. Existing F2 simulation suites pass with the flag set on their throwaway registry.
+
+*Release*
+41. Migration v45 → v46 → … alone and from every earlier step (`fleet-f2-migration-paths-pg`).
+42. Privilege audit clean.
+43. `reconcile-compare`: no journal, balance, economics key or external-transaction change.
+44. `test:security` / `test:financial` report the two pre-existing R39 failures as they are, and nothing new.
+
+**Tier 2: provider test purchases** on the real account, explicitly authorised. **These cannot prove settlement.**
+- `account_access` and `storefront_publication` probes.
+- One logged-in "Test card" purchase: absent from `GET /sales`, nothing recorded.
+- **Never a real-card self-purchase** (F17).
+
+**Tier 3: live pilot,** under separate explicit owner authorisation, with real third-party buyers only.
+- `sale_ingestion`: the first real sale reaches S1 and is attributed; founders see the non-spendable memo.
+- `payout_reconciliation`: the first payout passes §5.2.
+- `receipt_verification`: an automatic match. The labelled pilot fallback is used only if the connector is absent.
+- The first S5 posting and a clean reconcile.
+- A real refund handled by the owner in the dashboard: reflected in the next payout's allocation.
+
+---
+
+## 10. Implementation stages
+
+| Stage | Modules and files | Schema and privileges | Checks | Acceptance |
+|---|---|---|---|---|
+| **G1 lifecycle and guards** (local; **no owner decisions needed**) | `src/fleet/postgres/migrations-phase46.ts`; `migrations.ts` (version 46); `privileges.ts` (audit entries); `hub/cli.ts` + `hub/admin.ts` (`economy-rail-verify`, `economy-rail-assign`, `dependency-answer-from-capability`); tests `fleet-f2-money-pg`, new `fleet-rail-readiness-pg` | v46: rails default `pending_setup`; `fleet_rail_capability_checks`; `fleet_rail_match` / `fleet_rail_resolve` verified-capability rule and generated text; `fleet_admin_rail_verify` / `_assign` / `dependency_answer_from_capability`; `live_receive` mode and scope CHECK; gumroad credential scope CHECK; `simulated_settlement_allowed` plus guards; `fleet_revenue_claims` plus the `ledger-record-revenue` / `-funding` claim rules | typecheck; targeted suites; `test:security` and `test:financial` serially; migration paths; audit | tests 1–14, 31–32, 39–44 |
+| **G2 provider memo and accounting** (local) | `migrations-phase47.ts`; `src/fleet/storefront/allocation.ts` (pure); new `fleet-storefront-accounting-pg` | v47: `fleet_provider_accounts`, `_products`, `_uploads`, `_sales`, `_payouts`, `_payout_lines`; `fleet_settlement_destinations`, `fleet_settlement_receipts`; `fleet_pilot_authorisations`; classes `provider_suspense` (fleet) and `agent_provider_payable` (agent; equity obligation via the p42 restate; `fleet_ledger_open_agent` backfill as in p29:236-251); kinds `provider_revenue_receipt`, `provider_receipt_suspense`, `provider_suspense_allocation`, `provider_clawback`, `provider_receipt_transfer`; reconcile checks | as G1 | tests 21–30, 33–38 |
+| **G3 gateway** (local, fake Gumroad) | `src/fleet/storefront/{gumroad-client,gateway,vault,main}.ts`; `deploy/systemd/automaton-fleet-gumroad.service`; `scripts/fleet-gumroad-setup.sh`; founder tools in `founder/toolbox.ts`, `cognition/types.ts` (`storefront.*`, capability `planning`, gated by the capability signature); browser policy in `identity/` | v48: role `fleet_provider(_login)` with `gx_*`; `svc_storefront_*` in `SERVICE_API_FUNCTIONS` (`migrations.ts:1201-1259`); audit role and writer maps | as G1 plus `release-script` tests | tests 11–12, 15–20 |
+| **G4 receipt connector** (local, fake bank feed) | `src/fleet/settlement/bankfeed/{client,matcher,main}.ts`; `automaton-fleet-bankfeed.service`; setup script | v48 (same release): role `fleet_bankfeed(_login)` with `rx_*` | as G3 | tests 24, 28, 31, 34, 36–37 |
+| **G5 release** (production, owner-approved) | `fleet-rollout.sh rehearse 45 48`, then `cutover … 45 48`; units installed dormant | none new | prod-copy rehearsal; `reconcile-compare` | no new journals, events or balances except role grants |
+| **G6 onboarding** (owner) | Account setup on gumroad.com; OAuth onboarding; destination registration; rail `pending_setup`; capability probes | none | Tier 2 | `storefront_publication` verified; dependencies answered by the lifecycle |
+| **G7 live pilot** (separate authorisation) | founders publish by their own choice | none | Tier 3 | `sale_ingestion`, `payout_reconciliation`, `receipt_verification` verified |
+
+- **Schema numbering:** current head v45 → G1 v46, G2 v47, G3/G4 v48. G1–G4 can ship in one release (migrate applies
+  versions in order).
+- **Founder compatibility:** the storefront tools are new tools behind the capability signature. Runtimes on
+  `fda78a0` are simply not offered them, the same pattern as the doctrine gate.
+
+---
+
+## 11. Release compatibility and rollback (write-preserving)
+
+**Older components cannot misread newer data.** Every component refuses a schema other than its own exactly:
+- `store.ts:512-516`
+- `browser/main.ts:45`, `dashboard/main.ts:64`, `identity/main.ts:164`, `operator/main.ts:149`
+- custody `CUSTODY_SCHEMA_VERSION`
+- `doctor.ts:279-281`
+
+An old controller therefore cannot run against v46+ and misinterpret provider rows or liabilities.
+
+**Before any provider data exists** (no destination, rail, provider, receipt, claim or payable rows):
+- the normal schema revert (`fleet-rollout.sh revert …`);
+- the post-cutover dump is written first;
+- `FLEET_REVERT_DISCARD_ACK` counts come from reconcile.
+
+**After provider data exists, freeze and fix forward:**
+1. `systemctl disable --now automaton-fleet-gumroad automaton-fleet-bankfeed`. No new reads or writes.
+2. `economy-rail-status <rail> suspended`. No matching; evidence kept.
+3. Agents' storefront tools answer `FLEET_CAPABILITY_NOT_CONFIGURED` ("only this action is unavailable").
+4. Correct in a forward migration. Ledger corrections are reversing journals only, never a restore.
+
+**New guard in `fleet-rollout.sh revert`.** A revert to a schema below 46 refuses whenever any of these exist:
+- `fleet_provider_*`, `fleet_settlement_receipts`, `fleet_revenue_claims` or `fleet_rail_capability_checks` rows;
+- a non-zero `provider_suspense` or `agent_provider_payable` balance.
+
+It refuses **even with `FLEET_REVERT_DISCARD_ACK`**, unless `FLEET_REVERT_PROVIDER_EXPORT=<file>` names a verified
+export of those rows and balances written by the same run. A downgrade can never silently drop settlement evidence or
+liabilities.
+
+**Code-only revert within v46+** (same schema) keeps the database, as today.
+
+---
+
+## 12. Minimum owner decisions before account setup
+
+1. **Arrangement:** one shared seller account behind the broker (proposed, §2), or linked accounts per venture.
+   Products cannot move between accounts later.
+2. **Seller identity:** individual or company. The registration data must be true (F1). A business's bank must be in
+   its country of registration (A, `_13`).
+3. **Payout destination:** whether Gumroad pays out into an account that will be registered as the **fleet treasury**
+   (recommended), or into an owner account (then each payout reaches agents only after a transfer into the treasury
+   account, §4.2).
+4. **Account email:** an owner-controlled mailbox used by no agent.
+5. **Listing currency:** GBP or USD. Settlement is USD either way (F2), and the payout is in the local currency.
+
+Not needed before account setup, but needed before G6 or G7: the bank-feed provider; whether to run the pilot with
+the attestation fallback.
+
+**Standing rules, not decisions:**
+- never buy your own product with a real card (F17);
+- refunds and dispute responses are handled by the owner in the dashboard in phase 1;
+- no secrets or identity documents in chat. Onboarding is stdin and browser only, on the owner's terminal.
+
+---
+
+## 13. First implementation stage that can proceed locally now: G1
+
+G1 needs none of the decisions in §12. It changes only the lifecycle and guards, all inside the fleet:
+- pending rails;
+- verified-capability matching and generated disclosures;
+- the legacy-request answer path;
+- the `live_receive` and credential-scope CHECKs;
+- the simulated-settlement guard;
+- revenue claims;
+- the audit.
+
+**Effect on production once deployed:** none. There are no rails, destinations or provider rows. The one behavioural
+change is that a future `economy-rail-add` would no longer answer 6178c7bb falsely.
+
+**Acceptance:** tests 1–14, 31–32 and 39–44, plus clean migration paths, audit and `reconcile-compare`. The two
+pre-existing R39 audit failures are reported as they are.
