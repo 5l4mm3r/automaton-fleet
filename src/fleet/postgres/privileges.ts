@@ -570,6 +570,23 @@ export async function ledgerSurfaceProblems(db: Queryable, schema: string): Prom
     [schema],
   );
   if (!model.rows[0]?.ok) problems.push("custody surface: custody execution is not pinned off by a CHECK constraint (constitutional invariant)");
+  // v48: custody execution is on only while it names an owner activation, and only the activation switch (behind its guard
+  // trigger) changes it.
+  const v48 = (await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = 'fleet_custody_activations'`, [schema])).rows[0]?.n;
+  if (v48) {
+    const act = await db.query<{ d: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS d FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = 'fleet_economic_model' AND k.conname = 'fleet_economic_model_custody_activation'`, [schema]);
+    if (!/NOT custody_execution_enabled/.test(act.rows[0]?.d ?? "") || !/custody_activation_id IS NOT NULL/.test(act.rows[0]?.d ?? "")) {
+      problems.push("custody surface: custody execution is not bound to an owner activation (CHECK missing)");
+    }
+    for (const f of fns.rows) {
+      if (/fleet\.custody_activation/.test(f.src) && !["fleet_custody_switch", "fleet_economic_model_custody_guard"].includes(f.name)) {
+        problems.push(`custody surface: ${f.name} references the custody activation guard`);
+      }
+    }
+  }
   const trig = await db.query<{ t: string }>(
     `SELECT c.relname || ':' || tg.tgname AS t FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = $1 AND NOT tg.tgisinternal AND tg.tgenabled <> 'D'`,
@@ -591,6 +608,8 @@ export async function ledgerSurfaceProblems(db: Queryable, schema: string): Prom
     "fleet_payment_instructions:fleet_instructions_guard",
     "fleet_payment_orders:fleet_orders_guard",
     "fleet_payment_destinations:fleet_destinations_guard",
+    ...(v48 ? ["fleet_economic_model:fleet_economic_model_custody_guard", "fleet_custody_activations:fleet_custody_activations_guard",
+      "fleet_custody_activations:fleet_custody_activations_no_truncate"] : []),
   ]) {
     if (!have.has(need)) problems.push(`ledger surface: trigger ${need.replace(":", ".")} is missing or disabled`);
   }
@@ -941,8 +960,17 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
   const checks = await db.query<{ n: string; d: string }>(
     `SELECT k.conname AS n, pg_get_constraintdef(k.oid) AS d FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace s ON s.oid = c.relnamespace
       WHERE s.nspname = $1 AND k.contype = 'c' AND c.relname IN ('fleet_payment_rails','fleet_capital_decisions','fleet_credential_refs')`, [schema]);
-  if (v29 && !checks.rows.some((r) => r.n === "fleet_payment_rails_not_live" && /mode <> 'live'/.test(r.d))) {
+  const v48 = await has("fleet_custody_activations");
+  if (v29 && !v48 && !checks.rows.some((r) => r.n === "fleet_payment_rails_not_live" && /mode <> 'live'/.test(r.d))) {
     problems.push("economy surface: a payment rail could be live (the not-live CHECK is missing) — real payments are constitutionally off");
+  }
+  if (v48) {
+    // v48: a live rail is only the owner's PayPal treasury, with a credential, receiving / refunding / paying out — never a
+    // card, storefront or bank-transfer capability.
+    const live = checks.rows.find((r) => r.n === "fleet_payment_rails_live_scope")?.d ?? "";
+    if (!/mode <> 'live'/.test(live) || !/'paypal'/.test(live) || !/credential_id IS NOT NULL/.test(live) || /card_spend|bank_transfer|storefront|marketplace/.test(live)) {
+      problems.push("economy surface: the live rail scope CHECK is missing or allows more than the PayPal treasury capabilities");
+    }
   }
   if (v46) {
     // v46: the receive-only mode is its own pinned capability — one provider, receiving capabilities only — and a gumroad
@@ -956,20 +984,21 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       problems.push("economy surface: the gumroad credential scope CHECK is missing or allows more than the receive-only scopes");
     }
     const sim = await db.query<{ n: string }>(
-      `SELECT count(*)::text AS n FROM ${schema}.fleet_payment_rails WHERE mode = 'live_receive' AND status <> 'revoked'
+      `SELECT count(*)::text AS n FROM ${schema}.fleet_payment_rails WHERE mode IN ('live_receive','live') AND status <> 'revoked'
           AND (SELECT simulated_settlement_allowed FROM ${schema}.fleet_economic_model WHERE id = 1)`);
-    if (Number(sim.rows[0]?.n ?? 0) > 0) problems.push("economy surface: simulated settlement is allowed on a registry with a receive-only provider rail");
+    if (Number(sim.rows[0]?.n ?? 0) > 0) problems.push("economy surface: simulated settlement is allowed on a registry with a receive-only provider rail or a live rail");
   }
   if (v30 && !checks.rows.some((r) => /decided_by = 'controller'/.test(r.d))) problems.push("economy surface: a capital decision could be made by someone other than the controller (CHECK missing)");
   const writers: Record<string, Set<string>> = {
     fleet_ventures: new Set(["fleet_econ_venture_create", "fleet_econ_venture_transition", "fleet_venture_move"]),
     fleet_venture_transitions: new Set(["fleet_econ_venture_create", "fleet_venture_move"]),
-    fleet_venture_journals: new Set(["fleet_admin_venture_attribute", "fleet_settlement_post", "cx_report_result"]),
+    fleet_venture_journals: new Set(["fleet_admin_venture_attribute", "fleet_settlement_post", "cx_report_result", "cx_paypal_capture_record", "cx_paypal_refund_record"]),
     fleet_decision_records: new Set(["fleet_econ_decision_record", "fleet_econ_decision_outcome", "fleet_econ_decision_correct"]),
     fleet_opportunities: new Set(["fleet_econ_opportunity_record", "fleet_econ_opportunity_shortlist", "fleet_econ_opportunity_status", "fleet_opportunity_expire", "fleet_econ_venture_create"]),
     fleet_economic_knowledge: new Set(["fleet_econ_knowledge_record", "fleet_econ_decision_outcome", "fleet_project_finish"]),
     fleet_economy_policy: new Set(["fleet_admin_economy_policy_set"]),
-    fleet_payment_rails: new Set(["fleet_admin_rail_add", "fleet_admin_rail_set_status", "fleet_admin_credential_set_status", "fleet_settlement_post"]),
+    fleet_payment_rails: new Set(["fleet_admin_rail_add", "fleet_admin_rail_set_status", "fleet_admin_credential_set_status", "fleet_settlement_post",
+      "fleet_admin_rail_webhook_set"]),
     fleet_rail_assignments: new Set(["fleet_rail_resolve", "fleet_admin_rail_set_status", "fleet_admin_rail_assign"]),
     fleet_rail_requirements: new Set(["fleet_rail_resolve", "fleet_econ_rail_require", "fleet_rail_requirement_assign"]),
     // v46: readiness evidence only by the owner (and simulated evidence for a simulated rail at registration); external
@@ -977,7 +1006,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_rail_capability_checks: new Set(["fleet_admin_rail_add", "fleet_admin_rail_verify"]),
     fleet_revenue_claims: new Set(["fleet_admin_record_external_claimed",
       // v47: the posting transaction claims the payout and the bank transaction; a linked transfer claims the original.
-      "fleet_provider_receipt_post", "fleet_receipt_process", "fleet_admin_receipt_transfer_link"]),
+      "fleet_provider_receipt_post", "fleet_receipt_process", "fleet_admin_receipt_transfer_link",
+      // v48: PayPal captures and refunds, and money paid to the owner's card.
+      "cx_paypal_capture_record", "cx_paypal_refund_record", "fleet_admin_card_receipt_record"]),
     // v47: provider records only through their recorders (the G3 gateway / G4 bank feed call them via their roles),
     // attribution and destinations only by the owner, allocations only by the posting functions.
     fleet_provider_accounts: new Set(["fleet_admin_provider_account_register"]),
@@ -1014,7 +1045,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v34: agent operational identity (agent ops), the broker protocol (ix_*), owner identity metadata/consent (owner).
     // (v35: an estate transfer re-owns an inherited identity/account/mailbox and queues the credential re-seal.)
     fleet_agent_identities: new Set(["fleet_econ_identity_create", "fleet_econ_identity_update", "fleet_estate_assign_internal"]),
-    fleet_agent_accounts: new Set(["fleet_econ_account_create", "fleet_econ_mailbox_provision", "fleet_econ_account_revoke", "ix_claim_job",
+    fleet_agent_accounts: new Set(["fleet_admin_account_freeze", "fleet_admin_account_unfreeze", "fleet_econ_account_create", "fleet_econ_mailbox_provision", "fleet_econ_account_revoke", "ix_claim_job",
       "ix_credential_record", "ix_mailbox_record", "ix_report_job", "fleet_estate_assign_internal",
       // v37: browser-created accounts (register / pin origins / record outcome) and broker-stored browser credentials.
       "fleet_econ_account_register", "fleet_econ_account_add_origin", "fleet_econ_account_mark", "fleet_account_human_dependency", "ix_browser_credential_record"]),
@@ -1062,7 +1093,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_identity_broker_keys: new Set(["ix_publish_owner_key"]),
     // v37: the browser operator — sessions/actions by the agent ops and the worker (bx_*); credential requests by the worker,
     // served by the broker; authentication-message blobs by the broker only.
-    fleet_browser_sessions: new Set(["fleet_econ_browser_open", "fleet_econ_browser_close", "fleet_browser_enqueue", "bx_report_action"]),
+    fleet_browser_sessions: new Set(["fleet_econ_browser_open", "fleet_econ_browser_close", "fleet_browser_enqueue", "bx_report_action", "fleet_admin_account_freeze"]),
     fleet_browser_actions: new Set(["fleet_browser_enqueue", "bx_claim_action", "bx_report_action"]),
     fleet_browser_secret_requests: new Set(["bx_secret_request", "bx_secret_take", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
     fleet_auth_message_blobs: new Set(["ix_auth_blob_store", "ix_browser_secrets_pending", "ix_browser_secret_serve", "fleet_admin_mail_assign"]),
@@ -1098,6 +1129,32 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_sweep_records: new Set(["fleet_sweep_execute"]),
     fleet_project_events: new Set(["fleet_project_event"]),
     fleet_project_outcomes: new Set(["fleet_project_finish"]),
+    // v48: custody activations only by the owner functions and the reaper's expiry; wallet limits only by the owner; PayPal
+    // records by the agent's checkout ops and the custody executor; card clearing only by the owner (and its booking helper).
+    fleet_custody_activations: new Set(["fleet_admin_custody_activate", "fleet_admin_custody_deactivate", "svc_custody_activation_expire"]),
+    fleet_agent_wallet_limits: new Set(["fleet_admin_wallet_limits_set"]),
+    fleet_paypal_checkouts: new Set(["fleet_econ_paypal_checkout", "fleet_econ_paypal_cancel", "cx_paypal_work", "cx_paypal_checkout_update", "cx_paypal_capture_record"]),
+    fleet_paypal_webhook_inbox: new Set(["svc_paypal_webhook_receive", "cx_paypal_inbox", "cx_paypal_inbox_result"]),
+    fleet_paypal_transactions: new Set(["cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute"]),
+    fleet_paypal_balance_observations: new Set(["cx_paypal_balance_record"]),
+    fleet_card_charges: new Set(["fleet_admin_card_charge_record", "fleet_admin_card_charge_confirm", "fleet_card_charge_post",
+      "fleet_econ_card_authorize", "fleet_econ_card_void", "svc_card_holds_expire"]),
+    fleet_card_repayments: new Set(["fleet_admin_card_repayment_record"]),
+    fleet_card_receipts: new Set(["fleet_admin_card_receipt_record", "fleet_admin_card_receipt_resolve"]),
+    // v49: the owner's standing authority and account freezes only by the owner; identity uses only by the worker's request
+    // function; sealed custody credentials only by the owner, the custody key only by custody.
+    fleet_identity_autonomy: new Set(["fleet_admin_identity_autonomy_set"]),
+    fleet_identity_autonomy_history: new Set(["fleet_admin_identity_autonomy_set"]),
+    fleet_identity_uses: new Set(["bx_secret_request"]),
+    fleet_custody_sealed_credentials: new Set(["fleet_admin_custody_credential_upload", "fleet_admin_custody_credential_revoke"]),
+    fleet_custody_keys: new Set(["cx_publish_key"]),
+    // v50: insolvency episodes only by the reaper; sweep reductions by the owner functions and the reaper's expiry; the
+    // knowledge library only by its loader.
+    fleet_agent_insolvency: new Set(["svc_insolvency_tick"]),
+    fleet_insolvency_policy: new Set(["fleet_admin_insolvency_policy_set"]),
+    fleet_sweep_rate_reductions: new Set(["fleet_admin_sweep_reduction_grant", "fleet_admin_sweep_reduction_end", "svc_sweep_reductions_expire"]),
+    fleet_sweep_rate_reduction_requests: new Set(["fleet_econ_sweep_reduction_request", "fleet_admin_sweep_reduction_grant", "fleet_admin_sweep_reduction_decline"]),
+    fleet_knowledge_library: new Set(["fleet_admin_knowledge_library_load"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

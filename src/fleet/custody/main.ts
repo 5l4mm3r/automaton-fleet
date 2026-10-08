@@ -16,8 +16,10 @@
  *    admin.env / service.env / operator.env / the TLS key is readable;
  *  - any custody credential is present in the environment;
  *  - the signer file or a signer's vault file is missing, malformed or insecure;
- *  - a LIVE signer is configured while REAL_PAYMENTS_ENABLED is not true;
- *  - REAL_PAYMENTS_ENABLED / REAL_REPLICATION_ENABLED / OWNER_SWEEP_ENABLED is on;
+ *  - a LIVE payout signer is configured while REAL_PAYMENTS_ENABLED is not true (v48: REAL_PAYMENTS_ENABLED is the
+ *    fourth key of live custody — the registry's owner activation, a verified live rail and a fresh attestation are the
+ *    others; a receive-only rail entry needs no payout signer and so no flag);
+ *  - REAL_REPLICATION_ENABLED / OWNER_SWEEP_ENABLED is on (neither belongs to custody);
  *  - FLEET_CUSTODY_DATABASE_URL is missing;
  *  - the pinned release is incomplete or differs from the registry approval;
  *  - the database login is the schema owner, a superuser, or a member of
@@ -43,12 +45,15 @@ import path from "path";
 import { CustodyExecutor, providersFromEnv } from "./executor.js";
 import { loadSignerConfig, PayPalPayoutSigner, type CustodySigner, type HttpPort } from "./signers.js";
 import { FileVault, vaultFileProblems } from "./vault.js";
+import { PayPalTreasuryWorker } from "./paypal-treasury.js";
+import { CompositeVault, loadOrCreateCustodyKey, SealedCredentialVault } from "./sealed-vault.js";
 import { PgCustodyGateway } from "./gateway.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../postgres/migrations.js";
 
 /** Exactly the schema this release migrates to (the custody protocol is unchanged since v10). */
 export const CUSTODY_SCHEMA_VERSION = FLEET_PG_SCHEMA_VERSION;
-const SAFETY_SWITCHES = ["REAL_REPLICATION_ENABLED", "REAL_PAYMENTS_ENABLED", "OWNER_SWEEP_ENABLED"];
+// v48: REAL_PAYMENTS_ENABLED is no longer refused here — it is required (and only meaningful) for a live payout signer.
+const SAFETY_SWITCHES = ["REAL_REPLICATION_ENABLED", "OWNER_SWEEP_ENABLED"];
 const on = (v: string | undefined) => v?.trim().toLowerCase() === "true";
 
 /** Controller, operator and witness secrets the custody executor must NOT be able to read. */
@@ -70,6 +75,8 @@ export interface CustodyStartOptions {
   secretFiles?: string[];
   installSignalHandlers?: boolean;
   pollMs?: number;
+  /** Test seam: the HTTP port the PayPal treasury worker uses (default: real fetch with a timeout). */
+  http?: HttpPort;
 }
 
 /** Startup problems that need no database. Names only, never values. */
@@ -95,7 +102,7 @@ export function custodyEnvProblems(
     }
   }
   if (!e.FLEET_CUSTODY_DATABASE_URL?.trim()) problems.push("FLEET_CUSTODY_DATABASE_URL is not configured (custody.env)");
-  for (const s of SAFETY_SWITCHES) if (on(e[s])) problems.push(`${s}=true (live custody execution needs a reviewed activation; the executor refuses to run with ${s} on)`);
+  for (const s of SAFETY_SWITCHES) if (on(e[s])) problems.push(`${s}=true (not a custody switch; the executor refuses to run with ${s} on)`);
   problems.push(...signersFromEnv(e, opts.uid === undefined ? undefined : opts.uid).problems);
   if (!loadRuntimeRelease(e)) problems.push("no complete pinned runtime release (FLEET_RUNTIME_REPO/_COMMIT/_BUILD_ID/_LOCKFILE_SHA256)");
   return problems;
@@ -109,28 +116,31 @@ const fetchHttp: HttpPort = async (url, init) => {
 
 /** The configured signers (rail-bound) and the vault, or the problems that refuse startup. */
 export function signersFromEnv(e: Record<string, string | undefined>, uid?: number | null, http: HttpPort = fetchHttp):
-  { signers: CustodySigner[]; vault: FileVault | null; problems: string[] } {
+  { signers: CustodySigner[]; vault: FileVault | null; problems: string[]; webhookIds: Record<string, string>; rails: number } {
   const file = e.FLEET_CUSTODY_SIGNERS_FILE?.trim();
-  if (!file) return { signers: [], vault: null, problems: [] };
+  if (!file) return { signers: [], vault: null, problems: [], webhookIds: {}, rails: 0 };
   const cfg = loadSignerConfig(file);
-  if (cfg.problems.length) return { signers: [], vault: null, problems: cfg.problems };
+  if (cfg.problems.length) return { signers: [], vault: null, problems: cfg.problems, webhookIds: {}, rails: 0 };
   const dir = e.FLEET_CUSTODY_VAULT_DIR?.trim() || e.CREDENTIALS_DIRECTORY?.trim();
-  if (!dir || !path.isAbsolute(dir)) return { signers: [], vault: null, problems: ["signers are configured but no custody vault directory (FLEET_CUSTODY_VAULT_DIR or $CREDENTIALS_DIRECTORY)"] };
+  if (!dir || !path.isAbsolute(dir)) return { signers: [], vault: null, problems: ["signers are configured but no custody vault directory (FLEET_CUSTODY_VAULT_DIR or $CREDENTIALS_DIRECTORY)"], webhookIds: {}, rails: 0 };
   const owner = uid === undefined ? (typeof process.getuid === "function" ? process.getuid() : null) : uid;
   const vault = new FileVault(dir, owner);
   const problems: string[] = [];
   const signers: CustodySigner[] = [];
+  const webhookIds: Record<string, string> = {};
   for (const b of cfg.entries) {
+    if (b.webhookId) webhookIds[b.railId] = b.webhookId;
     const f = vault.fileFor(b.vaultRef);
     if (!f) problems.push(`signer ${b.railId}: malformed vault reference`);
     else problems.push(...vaultFileProblems(f, owner).map((x) => `signer ${b.railId}: vault ${x}`));
+    if (b.receiveOnly) continue; // receiving and reconciliation only: no payout signer
     try {
-      signers.push(new PayPalPayoutSigner(b, http));
+      signers.push(new PayPalPayoutSigner({ railId: b.railId, provider: b.provider, mode: b.mode, credentialId: b.credentialId, vaultRef: b.vaultRef }, http));
     } catch (err) {
       problems.push(`signer ${b.railId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return problems.length ? { signers: [], vault: null, problems } : { signers, vault, problems: [] };
+  return problems.length ? { signers: [], vault: null, problems, webhookIds: {}, rails: 0 } : { signers, vault, problems: [], webhookIds, rails: cfg.entries.length };
 }
 
 export async function startCustodyFromEnv(
@@ -168,8 +178,22 @@ export async function startCustodyFromEnv(
     await gateway.close();
     throw new Error(`custody executor startup refused: ${redactText(err instanceof Error ? err.message : String(err))}`);
   }
-  const { signers, vault } = signersFromEnv(e, opts.uid);
+  const { signers, vault: fileVault, webhookIds, rails } = signersFromEnv(e, opts.uid);
   const stateDir = e.FLEET_CUSTODY_STATE_DIR?.trim() || "/var/lib/automaton-fleet-custody";
+  // v49: dashboard-onboarded PayPal credentials, sealed to this executor's own key (kept in its 0600 state directory).
+  let sealed: SealedCredentialVault | null = null;
+  if (fs.existsSync(stateDir)) {
+    try {
+      sealed = new SealedCredentialVault(gateway, loadOrCreateCustodyKey(stateDir, opts.uid === undefined ? undefined : opts.uid), "custody-executor",
+        (level, event, detail) => log(level as never, event, detail));
+      await sealed.publish();
+      await sealed.refresh();
+    } catch (err) {
+      log("warn", "custody_sealed_vault_unavailable", { error: redactText(err instanceof Error ? err.message : String(err)) });
+      sealed = null;
+    }
+  }
+  const vault = fileVault || sealed ? new CompositeVault([fileVault, sealed]) : null;
   const executor = new CustodyExecutor(gateway, [...providersFromEnv(e).providers, ...signers], {
     worker: "custody-executor",
     pollMs: opts.pollMs ?? 60_000,
@@ -180,9 +204,34 @@ export async function startCustodyFromEnv(
   // The service must stay up on its poll timer (an idle database pool alone would let Node exit 0 and
   // systemd's Restart=on-failure would not bring it back).
   executor.start({ keepAlive: true });
+  // v48: the PayPal treasury worker (receiving + reconciliation) for every rail the vault serves; it never pays anyone.
+  let treasury: PayPalTreasuryWorker | null = null;
+  let treasuryTimer: NodeJS.Timeout | null = null;
+  let treasuryRun: Promise<void> | null = null;
+  if (vault && (rails > 0 || sealed)) {
+    treasury = new PayPalTreasuryWorker(gateway, vault, opts.http ?? fetchHttp, {
+      worker: "custody-executor", webhookIds,
+      returnUrl: e.FLEET_PAYPAL_RETURN_URL?.trim() || undefined, cancelUrl: e.FLEET_PAYPAL_CANCEL_URL?.trim() || undefined,
+      log: (level, event, detail) => log(level as never, event, detail),
+    });
+    let lastRefresh = Date.now();
+    const run = () => {
+      if (treasuryRun) return;
+      treasuryRun = (async () => {
+        if (sealed && Date.now() - lastRefresh >= 300_000) { lastRefresh = Date.now(); await sealed.refresh().catch(() => 0); }
+        await treasury!.tick();
+      })().finally(() => (treasuryRun = null));
+    };
+    run();
+    treasuryTimer = setInterval(run, Math.max(5_000, opts.pollMs ?? 30_000));
+  }
+  const live = await gateway.ping().catch(() => null);
   log("info", "custody_executor_started", { schemaVersion: CUSTODY_SCHEMA_VERSION, signers: signers.map((x) => ({ railId: x.binding.railId, mode: x.binding.mode })),
-    executionEnabled: false });
+    executionEnabled: live?.executionEnabled === true, paypalTreasury: treasury !== null, webhookRails: Object.keys(webhookIds).length,
+    sealedCredentials: sealed?.refs().length ?? 0, custodyKey: sealed?.fingerprint.slice(0, 16) ?? null });
   const close = async () => {
+    if (treasuryTimer) clearInterval(treasuryTimer);
+    await treasuryRun;
     await executor.stop();
     await gateway.close();
   };

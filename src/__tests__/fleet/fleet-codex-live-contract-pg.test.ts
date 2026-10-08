@@ -27,6 +27,9 @@ import { totp } from "../../fleet/identity/crypto.js";
 import { PgDashboardGateway } from "../../fleet/dashboard/gateway.js";
 import { createDashboardServer } from "../../fleet/dashboard/server.js";
 import { DASHBOARD_SENSITIVE_OPS_V41 } from "../../fleet/postgres/migrations-phase41.js";
+import { DASHBOARD_SENSITIVE_OPS_V48 } from "../../fleet/postgres/migrations-phase48.js";
+import { DASHBOARD_SENSITIVE_OPS_V49 } from "../../fleet/postgres/migrations-phase49.js";
+import { DASHBOARD_SENSITIVE_OPS_V50 } from "../../fleet/postgres/migrations-phase50.js";
 import { DASHBOARD_WRITE_OPS_V45 } from "../../fleet/postgres/migrations-phase45.js";
 import { GatewayClient } from "../../../codex-dashboard/src/dashboard/api/client";
 import { LiveAuth } from "../../../codex-dashboard/src/dashboard/api/auth";
@@ -108,9 +111,10 @@ describe.skipIf(!PG_BIN)("Codex dashboard LIVE contract against the real v41 gat
   });
 
   it("the client's operation classes are exactly the gateway's; no live module imports a simulation", () => {
-    expect([...SENSITIVE_OPS].sort()).toEqual([...DASHBOARD_SENSITIVE_OPS_V41].sort());
+    // v48–v50: treasury, identity authority, custody credentials, lifecycle — each added to the gateway's sensitive class.
+    expect([...SENSITIVE_OPS].sort()).toEqual([...DASHBOARD_SENSITIVE_OPS_V41, ...DASHBOARD_SENSITIVE_OPS_V48, ...DASHBOARD_SENSITIVE_OPS_V49, ...DASHBOARD_SENSITIVE_OPS_V50].sort());
     expect([...WRITE_OPS].sort()).toEqual([...DASHBOARD_WRITE_OPS_V45].sort());
-    for (const f of ["adapters/live.ts", "api/client.ts", "api/auth.ts", "api/operations.ts", "api/snapshot.ts", "api/reveal.ts", "api/seal.ts", "live/mapping.ts", "live/index.ts", "adapter.live.ts"]) {
+    for (const f of ["adapters/live.ts", "api/client.ts", "api/auth.ts", "api/operations.ts", "api/snapshot.ts", "api/reveal.ts", "api/seal.ts", "live/mapping.ts", "live/index.ts", "adapter.live.ts", "money/MoneyPanels.tsx"]) {
       const src = fs.readFileSync(path.join(INTEGRATION, f), "utf8");
       expect(src, f).not.toMatch(/from\s+["'][^"']*simulat/i);
       expect(src, f).not.toMatch(/agentfleet\.vip|localhost|127\.0\.0\.1/); // nothing installation-specific

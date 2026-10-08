@@ -54,9 +54,12 @@ import { V44_SQL } from "./migrations-phase44.js";
 import { V45_SQL } from "./migrations-phase45.js";
 import { V46_SQL } from "./migrations-phase46.js";
 import { V47_SQL } from "./migrations-phase47.js";
+import { V48_SQL } from "./migrations-phase48.js";
+import { V49_SQL } from "./migrations-phase49.js";
+import { V50_SQL } from "./migrations-phase50.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 47;
+export const FLEET_PG_SCHEMA_VERSION = 50;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1199,6 +1202,9 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 45, name: "disposable_notifications_clearable_fleet_command", sql: V45_SQL },
   { version: 46, name: "truthful_rail_readiness_receive_only_settlement_guards", sql: V46_SQL },
   { version: 47, name: "provider_records_cash_basis_settlement", sql: V47_SQL },
+  { version: 48, name: "paypal_treasury_custody_activation_card_clearing", sql: V48_SQL },
+  { version: 49, name: "identity_autonomy_card_holds_footprint_sealed_custody_credentials", sql: V49_SQL },
+  { version: 50, name: "insolvency_sweep_reductions_knowledge_library_pii_scrub", sql: V50_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1260,6 +1266,15 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_comms_tick(integer)",
   // v45: hourly retention of routine event copies and diagnostics (never canonical history; writes no event).
   "svc_event_retention()",
+  // v48: PayPal webhooks are stored unverified (custody verifies them); the reaper issues due payment instructions and expires
+  // the owner's custody activation.
+  "svc_paypal_webhook_receive(text, text, text, jsonb, text)",
+  "svc_issue_due_instructions(integer)",
+  "svc_custody_activation_expire()",
+  // v49: undeclared card holds (booked at their maximum when used, else voided). v50: insolvency dormancy, lapsed sweep reductions.
+  "svc_card_holds_expire(integer)",
+  "svc_insolvency_tick()",
+  "svc_sweep_reductions_expire()",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */
@@ -1326,6 +1341,21 @@ export const CUSTODY_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v32: the custody signer attests the rails it holds a signer for, and gates each credential use under the lease.
   "cx_attest_signer(text, uuid, text, text, uuid)",
   "cx_credential_use(uuid, text, text, text, text)",
+  // v48: the PayPal treasury — webhook verification, checkout creation and capture, receipts, refunds, Transaction Search
+  // records and balance observations (custody is the only holder of the PayPal credential).
+  "cx_paypal_inbox(text, integer)",
+  "cx_paypal_inbox_result(text, text, text, text)",
+  "cx_paypal_work(text, integer)",
+  "cx_paypal_rails(text)",
+  "cx_paypal_checkout_by_order(text, text)",
+  "cx_paypal_checkout_update(text, uuid, text, text, text, text)",
+  "cx_paypal_capture_record(text, uuid, text, text, bigint, bigint, text, text)",
+  "cx_paypal_refund_record(text, text, text, text, bigint, text)",
+  "cx_paypal_txn_record(text, uuid, jsonb)",
+  "cx_paypal_balance_record(text, uuid, text, bigint, bigint)",
+  // v49: the custody key (public half) and PayPal credentials sealed to it from the dashboard.
+  "cx_publish_key(text, text, text)",
+  "cx_sealed_credentials(text)",
 ]);
 
 /** Per custody function: the only tables it may write and the only volatile fleet functions it may call. */
@@ -1338,6 +1368,21 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   },
   cx_attest_signer: { writes: ["fleet_custody_attestations"], calls: [] },
   cx_credential_use: { writes: ["fleet_credential_use_log", "fleet_credential_refs"], calls: [] },
+  cx_paypal_inbox: { writes: ["fleet_paypal_webhook_inbox"], calls: [] },
+  cx_paypal_inbox_result: { writes: ["fleet_paypal_webhook_inbox"], calls: ["fleet_event"] },
+  cx_paypal_work: { writes: ["fleet_paypal_checkouts"], calls: [] },
+  cx_paypal_rails: { writes: [], calls: [] },
+  cx_paypal_checkout_by_order: { writes: [], calls: [] },
+  cx_paypal_checkout_update: { writes: ["fleet_paypal_checkouts"], calls: ["fleet_event"] },
+  cx_paypal_capture_record: {
+    writes: ["fleet_paypal_checkouts", "fleet_revenue_claims", "fleet_venture_journals"],
+    calls: ["fleet_ledger_post", "fleet_event"],
+  },
+  cx_paypal_refund_record: { writes: ["fleet_revenue_claims", "fleet_venture_journals"], calls: ["fleet_ledger_post", "fleet_event"] },
+  cx_paypal_txn_record: { writes: ["fleet_paypal_transactions"], calls: [] },
+  cx_paypal_balance_record: { writes: ["fleet_paypal_balance_observations"], calls: [] },
+  cx_publish_key: { writes: ["fleet_custody_keys"], calls: ["fleet_event"] },
+  cx_sealed_credentials: { writes: [], calls: [] },
 });
 
 /** Schema v34: the only functions the identity broker's role may execute (fleet_identity; ix_* protocol). */

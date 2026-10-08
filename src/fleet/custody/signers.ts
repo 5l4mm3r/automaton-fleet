@@ -191,8 +191,15 @@ export class PayPalPayoutSigner implements CustodySigner {
   }
 }
 
-/** Signer configuration (non-secret): which rails this executor signs for, with which credential reference. */
-export interface SignerConfigEntry extends SignerBinding {}
+/**
+ * Signer configuration (non-secret): which rails this executor serves, with which credential reference. v48: `webhookId`
+ * (the PayPal webhook the treasury worker verifies events against) and `receiveOnly` (the rail is served for receiving and
+ * reconciliation only — no payout signer is built, so no REAL_PAYMENTS_ENABLED is needed for it).
+ */
+export interface SignerConfigEntry extends SignerBinding {
+  webhookId?: string;
+  receiveOnly?: boolean;
+}
 
 /**
  * Load the signer configuration file (JSON array). Strict: a regular file owned by root, not writable by group/other;
@@ -222,9 +229,11 @@ export function loadSignerConfig(file: string): { entries: SignerConfigEntry[]; 
   raw.forEach((e: any, i) => {
     const ok = e && typeof e === "object" && uuid.test(String(e.railId)) && uuid.test(String(e.credentialId)) && ["paypal"].includes(String(e.provider))
       && ["sandbox", "live"].includes(String(e.mode)) && /^vault:[a-z0-9][a-z0-9/._-]{2,118}$/.test(String(e.vaultRef))
-      && Object.keys(e).every((k) => ["railId", "provider", "mode", "credentialId", "vaultRef"].includes(k));
-    if (!ok) problems.push(`signer config entry ${i} is malformed (railId, provider, mode, credentialId, vaultRef; no other field)`);
-    else entries.push({ railId: e.railId, provider: e.provider, mode: e.mode, credentialId: e.credentialId, vaultRef: e.vaultRef });
+      && (e.webhookId === undefined || /^[A-Z0-9]{8,40}$/.test(String(e.webhookId))) && (e.receiveOnly === undefined || typeof e.receiveOnly === "boolean")
+      && Object.keys(e).every((k) => ["railId", "provider", "mode", "credentialId", "vaultRef", "webhookId", "receiveOnly"].includes(k));
+    if (!ok) problems.push(`signer config entry ${i} is malformed (railId, provider, mode, credentialId, vaultRef[, webhookId, receiveOnly]; no other field)`);
+    else entries.push({ railId: e.railId, provider: e.provider, mode: e.mode, credentialId: e.credentialId, vaultRef: e.vaultRef,
+      ...(e.webhookId ? { webhookId: e.webhookId } : {}), ...(e.receiveOnly ? { receiveOnly: true } : {}) });
   });
   if (new Set(entries.map((e) => e.railId)).size !== entries.length) problems.push("signer config names a rail twice");
   return { entries: problems.length ? [] : entries, problems };

@@ -2,7 +2,7 @@
  * LIVE-mode UI constants (labels, enumerations, reasons). Plain data with no network code, so both builds can use them.
  */
 export const OWNER_IDENTITY_CLASSES = ["legal_name", "date_of_birth", "residential_address", "contact_email", "contact_phone", "id_document",
-  "proof_of_address", "tax_identifier", "bank_account_owner", "other_fact", "passport", "driving_licence"] as const;
+  "proof_of_address", "tax_identifier", "bank_account_owner", "other_fact", "passport", "driving_licence", "payment_card"] as const;
 
 /** Live-only UI choices (the simulation uses its own lists). */
 export const LIVE_MISSION_KINDS: string[][] = [["marketing", "Marketing"], ["opportunity_hunt", "Opportunity hunt"], ["knowledge_data", "Research (knowledge & data)"]];

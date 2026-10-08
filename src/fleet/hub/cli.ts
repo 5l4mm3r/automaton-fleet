@@ -24,8 +24,9 @@
  *   economy-tax-profile <entityId> <rulesJson> [effectiveIso] [note…]     a new VERSION; rates are policy data
  *   economy-tax-policy 0                         RETIRED (v33): no synthetic tax; only 0 is accepted — configure a real obligation with a tax profile
  *   economy-tax-true-up <agentId> | economy-tax-payment <agentId> <minor> <externalRef>
- *   economy-rail-add <provider> <shared|dedicated> <capCsv> <maskedAccountRef> [--entity id] [--credential id] [--mode simulated|sandbox|live_receive]
- *                    [--venture id] [--max n] [label…]     (v46: a real rail starts pending_setup; simulated/sandbox only on a test registry)
+ *   economy-rail-add <provider> <shared|dedicated> <capCsv> <maskedAccountRef> [--entity id] [--credential id] [--mode simulated|sandbox|live_receive|live]
+ *                    [--venture id] [--max n] [label…]     (v46: a real rail starts pending_setup; simulated/sandbox only on a test registry;
+ *                    v48: live = the owner's PayPal treasury only, with a credential, capabilities ⊆ receive_payments,refunds,payouts)
  *   economy-rail-verify <railId> <check> <verified|failed|expired> <probe|owner_attested|first_use|automatic> [--expires iso] [note…]
  *                    checks: account_access storefront_publication identity_verification sale_ingestion payout_reconciliation receipt_verification
  *   economy-rail-readiness <railId>               evidence per check, ready capabilities and the disclosure a dependency answer carries
@@ -67,6 +68,31 @@
  *                                               seal a fact/document to the broker's published key (pinned by fingerprint) and upload it
  *   hub-reveal <agent_credential|owner_identity> <credentialId|class> <outFile>   Admin reveal: the broker seals the value to a
  *                                               one-time key of this command; the plaintext is written to a NEW 0600 file (never printed)
+ *   economy-custody-activate <maxInstructionMinor> <maxDailyMinor> <hours ≤2160> <reason…>   (v48) key 1 of live custody: an
+ *                                               owner activation (a live PayPal rail, a live signer and the custody executor's
+ *                                               REAL_PAYMENTS_ENABLED are the others); expires by itself
+ *   economy-custody-deactivate [reason…]
+ *   economy-wallet-limits <agentId> <maxInstructionMinor|-> <maxDailyMinor|-> [--card-max n] [--card-daily n] [note…]
+ *   economy-card-charge <agentId> <amountMinor> <statementRef> <merchant…>   a card charge from the statement (agent first, treasury shortfall)
+ *   economy-card-confirm <chargeId> <amountMinor> <statementRef>            correct a booked charge to its statement amount
+ *   economy-card-repay <amountMinor> <reference>                             the card was repaid from the treasury PayPal (manual; no API)
+ *   economy-card-receipt <agentId> <amountMinor> <revenue|refund> <reference> [note…]   money paid to the card → an owner invoice
+ *   economy-card-resolve <receiptId> <return|withdrawal> [--sweep n] [--reference transferRef]
+ *   hub-card | hub-treasury-health | hub-paypal
+ *   hub-treasury-tx [agentId] [--limit n] [--before seq] [--direction in|out|internal]   per-transaction treasury list
+ *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
+ *   owner-identity-autonomy [on|off] [--classes c1,c2] [--card on|off] [--card-max n] [--card-daily n] [--exclude https://a,https://b] [statement…]
+ *                                               (v49) the owner's standing authority: agents may have these facts / the card FILLED into
+ *                                               forms on their accounts' own sites (never shown to them; every use logged). No args: show it.
+ *   economy-account-freeze <accountId> [reason…] | economy-account-unfreeze <accountId> <active|suspended|closed>
+ *   hub-footprint <agentId> [--limit n] | hub-identity-uses [agentId] | hub-custody-key
+ *   economy-custody-credential <vault:paypal/name> <file>   seal a PayPal app credential ("clientId:clientSecret", read from a file)
+ *                                               to the custody executor's published key and upload it | economy-custody-credential-revoke <vaultRef>
+ *   economy-rail-webhook <railId> <webhookId>    the PayPal webhook id custody verifies deliveries against
+ *   hub-insolvency | economy-insolvency-policy <on|off> <deathAfterHours|never>   (v50) dormancy (default on), automatic death (default never)
+ *   hub-sweep-reductions [agentId] | economy-sweep-reduction <agentId> <bp> <days> [--request id] <reason…>
+ *   economy-sweep-reduction-end <reductionId> [reason…] | economy-sweep-reduction-decline <requestId> [reason…]
+ *   hub-knowledge [query…] [--category c] | economy-knowledge-load <library.json>
  *   economy-sweep-compute <agentId>
  *   economy-sweep-run <period YYYY-MM | YYYY-MM-DD>   one internal Treasury allocation pass (ledger only; no payment; idempotent per period)
  */
@@ -75,7 +101,7 @@ import fs from "fs";
 import { HUB_SECTIONS, type HubSection, type PgHubAdmin } from "./admin.js";
 import { renderHub } from "./render.js";
 import { OWNER_IDENTITY_CLASSES, sealOwnerFact, type OwnerIdentityClass } from "../identity/vaults.js";
-import { generateX25519, openSealed } from "../identity/crypto.js";
+import { generateX25519, openSealed, sealTo } from "../identity/crypto.js";
 
 export const HUB_COMMANDS = new Set([
   "hub", "hub-render", "hub-health", "hub-withdrawals", "economy-withdrawal-policy", "hub-custody", "economy-custody-policy", "hub-identity", "owner-identity-seal", "owner-identity-class", "owner-identity-consent", "owner-identity-consent-revoke", "economy-destination-reference", "economy-entity-add", "economy-tax-profile", "economy-tax-policy", "economy-tax-true-up", "economy-tax-payment",
@@ -89,6 +115,11 @@ export const HUB_COMMANDS = new Set([
   "economy-mission-assign", "economy-mission-end", "economy-mission-request", "economy-mission-policy", "economy-risk-policy",
   "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
   "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser", "hub-dashboard-enroll", "hub-dashboard-totp-reset",
+  "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
+  "economy-card-receipt", "economy-card-resolve", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
+  "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
+  "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "economy-insolvency-policy", "hub-sweep-reductions", "economy-sweep-reduction",
+  "economy-sweep-reduction-end", "economy-sweep-reduction-decline", "hub-knowledge", "economy-knowledge-load",
 ]);
 
 const flag = (a: string[], name: string): string | null => {
@@ -173,6 +204,92 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.ownerIdentityConsentRevoke(p[0], actor);
     case "hub-custody":
       return h.custody();
+    case "economy-custody-activate":
+      return h.custodyActivate(int(p[0], "maxInstructionMinor"), int(p[1], "maxDailyMinor"), int(p[2], "hours"), p.slice(3).join(" "), actor);
+    case "economy-custody-deactivate":
+      return h.custodyDeactivate(p.join(" ") || null, actor);
+    case "economy-wallet-limits": {
+      const opt = (v: string | null | undefined, what: string) => (v === undefined || v === null || v === "-" ? null : int(v, what));
+      const q = positional(a, ["--card-max", "--card-daily"]);
+      return h.walletLimits(q[0], opt(q[1], "maxInstructionMinor"), opt(q[2], "maxDailyMinor"), opt(flag(a, "--card-max"), "card-max"), opt(flag(a, "--card-daily"), "card-daily"),
+        q.slice(3).join(" ") || null, actor);
+    }
+    case "economy-card-charge":
+      return h.cardCharge(p[0], int(p[1], "amountMinor"), p.slice(3).join(" "), p[2], actor);
+    case "economy-card-confirm":
+      return h.cardConfirm(p[0], int(p[1], "amountMinor"), p[2], actor);
+    case "economy-card-repay":
+      return h.cardRepay(int(p[0], "amountMinor"), p[1], actor);
+    case "economy-card-receipt":
+      return h.cardReceipt(p[0], int(p[1], "amountMinor"), p[2], p[3], p.slice(4).join(" ") || null, actor);
+    case "economy-card-resolve": {
+      const q = positional(a, ["--sweep", "--reference"]);
+      return h.cardResolve(q[0], q[1], flag(a, "--sweep") ? int(flag(a, "--sweep"), "sweep") : null, flag(a, "--reference"), actor);
+    }
+    case "hub-card":
+      return h.cardClearing();
+    case "hub-treasury-health":
+      return h.treasuryHealth();
+    case "hub-paypal":
+      return h.paypalStatus();
+    case "hub-treasury-tx": {
+      const q = positional(a, ["--limit", "--before", "--direction"]);
+      return h.treasuryTransactions(q[0] ?? null, flag(a, "--limit") ? int(flag(a, "--limit"), "limit") : 100, flag(a, "--before") ? int(flag(a, "--before"), "before") : null,
+        flag(a, "--direction"));
+    }
+    case "economy-paypal-attribute":
+      return h.paypalAttribute(p[0], p[1], p[2], p[3], p[4] ?? null, actor);
+    case "owner-identity-autonomy": {
+      const q = positional(a, ["--classes", "--card", "--card-max", "--card-daily", "--exclude"]);
+      if (!q.length && !a.length) return h.identityAutonomy();
+      if (!["on", "off"].includes(q[0])) throw new Error("FLEET_BAD_REQUEST: owner-identity-autonomy on|off …");
+      const csv = (v: string | null) => (v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+      return h.identityAutonomySet(q[0] === "on", csv(flag(a, "--classes")), flag(a, "--card") === "on", flag(a, "--card-max") ? int(flag(a, "--card-max"), "card-max") : null,
+        flag(a, "--card-daily") ? int(flag(a, "--card-daily"), "card-daily") : null, csv(flag(a, "--exclude")), q.slice(1).join(" ") || null, actor);
+    }
+    case "economy-account-freeze":
+      return h.accountFreeze(p[0], p.slice(1).join(" ") || null, actor);
+    case "economy-account-unfreeze":
+      return h.accountUnfreeze(p[0], p[1], actor);
+    case "hub-footprint":
+      return h.footprint(p[0], flag(a, "--limit") ? int(flag(a, "--limit"), "limit") : 200);
+    case "hub-identity-uses":
+      return h.identityUses(p[0] ?? null, 200);
+    case "hub-custody-key":
+      return h.custodyKey();
+    case "economy-custody-credential": {
+      const [ref, file] = p;
+      if (!ref || !file) throw new Error("FLEET_BAD_REQUEST: economy-custody-credential <vault:paypal/name> <file>");
+      const key = (await h.custodyKey()) as { publicKey?: string | null };
+      if (!key?.publicKey) throw new Error("FLEET_CUSTODY_KEY_UNAVAILABLE: the custody executor has not published its key yet");
+      const value = fs.readFileSync(file, "utf8").trim();
+      if (!/^[^:\s]{8,}:[^:\s]{8,}$/.test(value)) throw new Error("FLEET_BAD_REQUEST: the file holds clientId:clientSecret");
+      return h.custodyCredentialUpload(ref, sealTo(Buffer.from(key.publicKey, "base64"), value, `custody:${ref}`), actor);
+    }
+    case "economy-custody-credential-revoke":
+      return h.custodyCredentialRevoke(p[0], actor);
+    case "economy-rail-webhook":
+      return h.railWebhook(p[0], p[1], actor);
+    case "hub-insolvency":
+      return h.insolvency();
+    case "economy-insolvency-policy":
+      return h.insolvencyPolicy(p[0] !== "off", !p[1] || p[1] === "never" ? null : int(p[1], "deathAfterHours"), actor);
+    case "hub-sweep-reductions":
+      return h.sweepReductions(p[0] ?? null);
+    case "economy-sweep-reduction": {
+      const q = positional(a, ["--request"]);
+      return h.sweepReductionGrant(q[0], int(q[1], "bp"), int(q[2], "days"), q.slice(3).join(" "), flag(a, "--request"), actor);
+    }
+    case "economy-sweep-reduction-end":
+      return h.sweepReductionEnd(p[0], p.slice(1).join(" ") || null, actor);
+    case "economy-sweep-reduction-decline":
+      return h.sweepReductionDecline(p[0], p.slice(1).join(" ") || null, actor);
+    case "hub-knowledge": {
+      const q = positional(a, ["--category"]);
+      return h.knowledgeLibrarySearch(q.join(" ") || null, flag(a, "--category"), 20);
+    }
+    case "economy-knowledge-load":
+      return h.knowledgeLibraryLoad(JSON.parse(fs.readFileSync(p[0], "utf8")), actor);
     case "economy-custody-policy":
       return h.custodyPolicy(int(p[0], "attestationTtlS"), actor);
     case "economy-destination-reference":

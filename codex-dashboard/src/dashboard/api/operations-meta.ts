@@ -8,6 +8,11 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "agent_transfer", "wallet_transfer", "agent_fund", "owner_withdrawal", "agent_kill", "birth", "reseed", "estate_assign", "estate_release",
   "replication_policy", "mission_policy", "risk_policy", "notification_policy", "genesis_capital", "passkey_revoke", "totp_reset", "session_revoke_all",
   "provider_credits_record",
+  // v48: custody activation, wallet limits, card clearing; v49: standing identity authority, freezes, sealed custody credentials,
+  // webhook ids; v50: insolvency policy and sweep reductions.
+  "custody_activate", "custody_deactivate", "wallet_limits_set", "card_charge_record", "card_charge_confirm", "card_repayment_record", "card_receipt_record",
+  "card_receipt_resolve", "identity_autonomy_set", "account_freeze", "account_unfreeze", "custody_credential_upload", "custody_credential_revoke", "rail_webhook_set",
+  "insolvency_policy_set", "sweep_reduction_grant", "sweep_reduction_end", "sweep_reduction_decline", "paypal_txn_attribute",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */

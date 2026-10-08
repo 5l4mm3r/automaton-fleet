@@ -94,7 +94,8 @@ const PUBLIC_HEALTH_CACHE_MS = 2_000;
  * authenticated route. Public routes identify nobody and grant no authority.
  */
 /** genesis_attest (schema v12): the single founder-runtime attestation route, authenticated by its one-time token in the database. */
-export type RouteAuth = "public" | "bearer" | "session" | "genesis_attest";
+/** provider_webhook (schema v48): a payment provider's signed delivery; stored unverified, verified by the custody executor. */
+export type RouteAuth = "public" | "bearer" | "session" | "genesis_attest" | "provider_webhook";
 export interface RoutePolicy {
   auth: RouteAuth;
   /** Opt-in for capability scope 'witness'. Irrelevant for public routes. */
@@ -103,6 +104,9 @@ export interface RoutePolicy {
 
 export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Object.freeze({
   "GET /v1/health": { auth: "public", witness: false },
+  // v48: PayPal posts webhooks here. Public, stored unverified and never acted on by the controller (the custody executor
+  // verifies each with PayPal before anything is recorded); rate-limited; identifies nobody and grants no authority.
+  "POST /v1/webhooks/paypal": { auth: "provider_webhook", witness: false },
   "GET /v1/state": { auth: "session", witness: false },
   "GET /v1/members": { auth: "session", witness: false },
   "GET /v1/self": { auth: "session", witness: true },
@@ -158,6 +162,8 @@ export function routeDecision(method: string, path: string, scope: string | null
   if (policy.auth === "public") return "allow";
   // The attestation token authenticates exactly one route, in the database; no agent scope applies.
   if (policy.auth === "genesis_attest") return "allow";
+  // A provider's signed webhook names no agent: it is only stored (unverified) and grants nothing.
+  if (policy.auth === "provider_webhook") return "allow";
   if (scope === "full") return "allow";
   // A held agent (Phase D3 operator/owner hold) keeps exactly the witness allow-list: liveness only.
   if (scope === "witness" || scope === "held") return policy.witness ? "allow" : "deny";
@@ -399,6 +405,8 @@ export class FleetService {
   /** v35: the economy-engine pass runs at most once a minute (its health window is measured in hours). */
   private lastEngineAt = 0;
   private lastRetentionAt = 0;
+  private lastLifecycleAt = 0;
+  private lastSweepDay = "";
 
   async reapOnce(): Promise<void> {
     if (this.reaping) return this.reaping;
@@ -418,6 +426,44 @@ export class FleetService {
         // ledger-verified milestones release the next tranche. (Sweeps run only when an operator enables them.)
         const capital = await this.opts.admin.reapCapital(100);
         if (capital.changed) this.audit("envelopes_reaped", null, { evaluated: capital.evaluated, changed: capital.changed });
+        // v48: an expired owner custody activation switches custody off; then every reserved agent order the four keys
+        // allow is issued to the custody signer (a no-op without an activation). Failures never stop the reaper.
+        if (typeof this.opts.admin.custodyActivationExpire === "function") {
+          try {
+            const x = await this.opts.admin.custodyActivationExpire();
+            if (x.expired) this.audit("custody_activation_expired", null, { activationId: x.expired });
+            if (x.active) {
+              const i = await this.opts.admin.issueDueInstructions(50);
+              if (i.issued || Object.keys(i.waiting ?? {}).length) this.audit("payment_instructions_pass", null, { issued: i.issued, waiting: i.waiting ?? {} });
+            }
+          } catch (err) {
+            this.audit("custody_pass_error", null, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        // v49/v50: undeclared card holds, insolvency dormancy (death only under the owner's grace) and lapsed sweep reductions,
+        // then — once a day, and only while the owner has enabled sweeps (a no-op otherwise) — the net-profit sweep and tax true-up.
+        if (typeof this.opts.admin.lifecycleTick === "function" && Date.now() - this.lastLifecycleAt >= 60_000) {
+          this.lastLifecycleAt = Date.now();
+          try {
+            const l = await this.opts.admin.lifecycleTick();
+            const i = l.insolvency as { dormant?: number; cleared?: number; died?: number };
+            const h = l.cardHolds as { bookedAtMaximum?: number; voided?: number };
+            if (i.dormant || i.cleared || i.died || h.bookedAtMaximum || h.voided || (l.reductions as { expired?: number }).expired) {
+              this.audit("lifecycle_pass", null, { insolvency: i, cardHolds: h, reductions: l.reductions });
+            }
+            const day = new Date().toISOString().slice(0, 10);
+            if (this.lastSweepDay !== day) {
+              this.lastSweepDay = day;
+              const sw = await this.opts.admin.sweepRun(day);
+              if ((sw as { enabled?: boolean }).enabled) {
+                await this.opts.admin.taxTrueUp(100);
+                this.audit("sweep_pass", null, { period: day, swept: (sw as { swept?: number }).swept ?? 0, totalMinor: (sw as { totalMinor?: number }).totalMinor ?? 0 });
+              }
+            }
+          } catch (err) {
+            this.audit("lifecycle_error", null, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
         // v35: the economy engine (replication window, missions, estates, notifications). A failure here is reported and
         // never stops the rest of the reaper.
         if (typeof this.opts.admin.engineTick === "function" && Date.now() - this.lastEngineAt >= 60_000) {
@@ -826,10 +872,18 @@ export class FleetService {
    * denial is recorded, so an invented token cannot forge scope_denied events;
    * either way the handler never runs.
    */
+  /** v48: a fixed-window limit on PayPal webhook deliveries (PayPal retries anything refused). */
+  private webhookWindow = { start: 0, n: 0 };
+  private paypalWebhookAllowed(): boolean {
+    const now = this.now();
+    if (now - this.webhookWindow.start >= 60_000) this.webhookWindow = { start: now, n: 0 };
+    return ++this.webhookWindow.n <= 120;
+  }
+
   private async authorize(method: string, path: string, req: http.IncomingMessage, ctx: RequestCtx): Promise<void> {
     const policy = ROUTE_POLICY[`${method} ${path}`];
     if (!policy) throw new HttpError(404, "FLEET_NOT_FOUND", "no such endpoint");
-    if (policy.auth === "public" || policy.auth === "genesis_attest") return;
+    if (policy.auth === "public" || policy.auth === "genesis_attest" || policy.auth === "provider_webhook") return;
     const cred = policy.auth === "bearer" ? await this.bearer(req, path, ctx) : await this.credentials(req, path, ctx);
     const scope = await this.opts.admin.capabilityScope(cred.agentId);
     // No such agent: the handler's own authentication rejects it (unchanged behaviour).
@@ -1273,6 +1327,25 @@ export class FleetService {
         const r = await agent.ownerRequestList(agentId, token);
         if (!r.ok) throw FleetService.refusal(r, "owner requests refused");
         return r;
+      }
+
+      case "/v1/webhooks/paypal": {
+        // v48: PayPal's webhook delivery. Stored as received (bounded body, the five transmission headers only) for the
+        // custody executor to verify with PayPal; the controller trusts nothing in it. A backlog answers 503 so PayPal
+        // retries (it retries for three days).
+        if (!this.paypalWebhookAllowed()) throw new HttpError(429, "FLEET_RATE_LIMITED", "too many webhook deliveries");
+        const eventId = typeof body.id === "string" ? body.id : "";
+        const eventType = typeof body.event_type === "string" ? body.event_type : "";
+        const res = body.resource && typeof body.resource === "object" ? (body.resource as Record<string, unknown>) : {};
+        const resourceId = typeof res.id === "string" && /^[A-Za-z0-9-]{3,80}$/.test(res.id) ? res.id : null;
+        const headers: Record<string, string> = {};
+        for (const n of ["paypal-auth-algo", "paypal-cert-url", "paypal-transmission-id", "paypal-transmission-sig", "paypal-transmission-time"]) {
+          const v = req.headers[n];
+          if (typeof v === "string" && v.length <= 700) headers[n] = v;
+        }
+        const r = await admin.paypalWebhookReceive(eventId, eventType, resourceId, headers, ctx.raw.toString("utf8"));
+        if (!r.ok) throw new HttpError(r.code === "FLEET_BACKLOG" ? 503 : 400, r.code ?? "FLEET_BAD_REQUEST", "webhook not stored");
+        return { received: true };
       }
 
       case "/v1/economy": {

@@ -15,6 +15,7 @@ import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
@@ -82,7 +83,7 @@ describe.skipIf(!PG_BIN)("v47 provider records and cash-basis settlement (Postgr
   afterAll(async () => { await R?.close(); });
 
   it("migrates to v47 with a clean audit; new accounts start at zero; no journal", async () => {
-    expect(await R.one(`(SELECT max(version) FROM fleet.fleet_schema_migrations)`)).toBe(47);
+    expect(await R.one(`(SELECT max(version) FROM fleet.fleet_schema_migrations)`)).toBe(FLEET_PG_SCHEMA_VERSION);
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
     for (const a of ["fleet:provider:suspense", "fleet:provider:advances", `agent:${F.id}:provider_payable`]) expect(await bal(a)).toBe(0);
     expect((await R.one(`fleet.fleet_ledger_verify()`)).ok).toBe(true);

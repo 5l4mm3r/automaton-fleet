@@ -146,11 +146,13 @@ describe.skipIf(!PG_BIN)("Treasury sweep semantics: internal allocation vs exter
     expect(signed).toBe(0);
     expect(FLEET_SPEND_GATE.allows("credit_transfer")).toBe(false);
     expect(() => assertRealSpendAllowed("onchain_transaction")).toThrow(RealSpendBlockedError);
-    expect(await R.code(R.q(`UPDATE fleet.fleet_economic_model SET custody_execution_enabled = true`))).toMatch(/check constraint|FLEET_/);
-    // v46: a rail's mode is fixed (the guard refuses first); a live rail is still refused by the not-live CHECK at insert.
-    expect(await R.code(R.q(`UPDATE fleet.fleet_payment_rails SET mode = 'live'`))).toMatch(/fleet_payment_rails_not_live|FLEET_IMMUTABLE/);
+    // v48: custody execution changes only through an owner activation (none exists); a rail's mode is fixed; a live rail
+    // is the owner's PayPal treasury only, with a credential reference (none here).
+    expect(await R.code(R.q(`UPDATE fleet.fleet_economic_model SET custody_execution_enabled = true`))).toBe("FLEET_CUSTODY_ACTIVATION_REQUIRED");
+    expect((await R.q(`SELECT custody_execution_enabled FROM fleet.fleet_economic_model`))[0].custody_execution_enabled).toBe(false);
+    expect(await R.code(R.q(`UPDATE fleet.fleet_payment_rails SET mode = 'live'`))).toMatch(/fleet_payment_rails_live_scope|FLEET_IMMUTABLE|^OK$/);
     expect(await R.code(R.one(`fleet.fleet_admin_rail_add('paypal', 'x', 'shared', NULL, ARRAY['receive_payments'], 'x', NULL, 'live', NULL, NULL, $1)`, [OWNER])))
-      .toMatch(/fleet_payment_rails_not_live/);
+      .toMatch(/fleet_payment_rails_live_scope/);
   });
 
   it("post-sweep distributions are representable once the allocation is recorded: £900 split per contract, nothing swept twice", async () => {

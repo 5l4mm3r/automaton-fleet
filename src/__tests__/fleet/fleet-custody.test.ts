@@ -91,7 +91,6 @@ describe("custody executor (unit)", () => {
       [{ FLEET_OPERATOR_DATABASE_URL: "x" }, /FLEET_OPERATOR_DATABASE_URL present/],
       [{ CONWAY_API_KEY: "x" }, /CONWAY_API_KEY present/],
       [{ FLEET_CUSTODY_API_KEY: "x" }, /custody vault/],
-      [{ REAL_PAYMENTS_ENABLED: "true" }, /REAL_PAYMENTS_ENABLED=true/],
       [{ OWNER_SWEEP_ENABLED: "TRUE" }, /OWNER_SWEEP_ENABLED=true/],
       [{ REAL_REPLICATION_ENABLED: "true" }, /REAL_REPLICATION_ENABLED=true/],
       [{ FLEET_CUSTODY_DATABASE_URL: "" }, /FLEET_CUSTODY_DATABASE_URL is not configured/],
@@ -103,6 +102,8 @@ describe("custody executor (unit)", () => {
       const p = custodyEnvProblems({ ...base, ...extra }, { uid: 1000, username: "u", secretFiles: [] });
       expect(p.some((x) => re.test(x)), `${JSON.stringify(extra)} -> ${p.join("; ")}`).toBe(true);
     }
+    // v48: REAL_PAYMENTS_ENABLED is the fourth key of live custody (required by a live payout signer), not a refusal by itself.
+    expect(custodyEnvProblems({ ...base, REAL_PAYMENTS_ENABLED: "true" }, { uid: 1000, username: "u", secretFiles: [] })).toEqual([]);
     expect(custodyEnvProblems(base, { uid: 0, username: "root", secretFiles: [] })).toContain("refusing to run as root (uid 0)");
     // A readable controller secret is refused.
     expect(custodyEnvProblems(base, { uid: 1000, username: "u", secretFiles: [process.execPath] }).some((x) => /is readable by this process/.test(x))).toBe(true);

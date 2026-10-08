@@ -192,11 +192,13 @@ describe.skipIf(!PG_BIN)("F2 accounting invariants, security boundaries and safe
     const live = loadFleetConfig(process.env);
     expect([live.realPaymentsEnabled, live.ownerSweepEnabled, live.realReplicationEnabled]).toEqual([false, false, false]);
     // Registry: custody execution and live rails are pinned off by CHECK; reproduction execution pinned off.
-    expect(await R.code(R.q(`UPDATE fleet.fleet_economic_model SET custody_execution_enabled = true`))).toMatch(/check constraint|FLEET_/);
-    // v46: a rail's mode is fixed (the guard refuses first); a live rail is still refused by the not-live CHECK at insert.
-    expect(await R.code(R.q(`UPDATE fleet.fleet_payment_rails SET mode = 'live'`))).toMatch(/fleet_payment_rails_not_live|FLEET_IMMUTABLE/);
+    // v48: custody execution changes only through an owner activation (none exists); a rail's mode is fixed; a live rail
+    // is the owner's PayPal treasury only, with a credential reference (none here).
+    expect(await R.code(R.q(`UPDATE fleet.fleet_economic_model SET custody_execution_enabled = true`))).toBe("FLEET_CUSTODY_ACTIVATION_REQUIRED");
+    expect((await R.q(`SELECT custody_execution_enabled FROM fleet.fleet_economic_model`))[0].custody_execution_enabled).toBe(false);
+    expect(await R.code(R.q(`UPDATE fleet.fleet_payment_rails SET mode = 'live'`))).toMatch(/fleet_payment_rails_live_scope|FLEET_IMMUTABLE|^OK$/);
     expect(await R.code(R.one(`fleet.fleet_admin_rail_add('paypal', 'x', 'shared', NULL, ARRAY['receive_payments'], 'x', NULL, 'live', NULL, NULL, $1)`, [OWNER])))
-      .toMatch(/fleet_payment_rails_not_live/);
+      .toMatch(/fleet_payment_rails_live_scope/);
     expect((await R.q(`SELECT execution_enabled FROM fleet.fleet_reproduction_policy WHERE id = 1`))[0].execution_enabled).toBe(false);
   });
 });

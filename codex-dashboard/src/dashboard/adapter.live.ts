@@ -16,4 +16,5 @@ export const liveTools: LiveTools = {
   outcomeUnknownFleet: (e) => (e instanceof OutcomeUnknownError ? (e.fleet as Fleet | null) : undefined),
   Reveal: LiveReveal,
   setStepupConfirm: (fn) => { liveClient().stepupConfirm = fn; },
+  gateway: () => liveClient(),
 };

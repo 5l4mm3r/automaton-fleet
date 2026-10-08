@@ -2,8 +2,10 @@
  * Custody executor database gateway (Phase E, schema v10).
  *
  * Connects as the restricted custody login (fleet_custody_login) and can only
- * call the three cx_* SECURITY DEFINER functions: ping, claim an already
- * authorized instruction under a lease, report its external result. It holds
+ * call the cx_* SECURITY DEFINER functions: ping, claim an already
+ * authorized instruction under a lease, report its external result (v32: attest
+ * signers, gate credential use; v48: the PayPal treasury's receiving and
+ * reconciliation records). It holds
  * no table privilege, cannot create, approve, re-target or resize a payment,
  * and cannot post an arbitrary journal.
  */
@@ -12,6 +14,8 @@ import pg from "pg";
 import type { Pool } from "pg";
 import { quoteIdent } from "../postgres/migrations.js";
 import { auditPrivileges, DEFAULT_CUSTODY_ROLES, type PrivilegeAuditResult } from "../postgres/privileges.js";
+import type { PayPalGatewayPort, PayPalInboxItem, PayPalRail, PayPalWorkItem } from "./paypal-treasury.js";
+import type { SealedCredentialPort } from "./sealed-vault.js";
 
 export interface CustodyPing {
   schemaVersion: number | null;
@@ -46,7 +50,7 @@ export interface ClaimedInstruction {
 
 export type CxResult = { ok: true; [k: string]: unknown } | { ok: false; code: string };
 
-export class PgCustodyGateway {
+export class PgCustodyGateway implements PayPalGatewayPort, SealedCredentialPort {
   private readonly pool: Pool;
   private readonly s: string;
 
@@ -94,6 +98,34 @@ export class PgCustodyGateway {
   async credentialUse(instructionId: string, lease: string, action: string, outcome: "ok" | "failed", detail: string | null): Promise<CxResult> {
     return (await this.pool.query(`SELECT ${this.s}.cx_credential_use($1, $2, $3, $4, $5) AS r`, [instructionId, lease, action, outcome, detail])).rows[0].r;
   }
+
+  // ── v48: the PayPal treasury (receiving and reconciliation; see paypal-treasury.ts) ──
+  private async cx<T>(fn: string, args: unknown[]): Promise<T> {
+    const ph = args.map((_, i) => `$${i + 1}`).join(", ");
+    return (await this.pool.query(`SELECT ${this.s}.${fn}(${ph}) AS r`, args)).rows[0].r as T;
+  }
+  paypalInbox(worker: string, limit: number) { return this.cx<PayPalInboxItem[]>("cx_paypal_inbox", [worker, limit]); }
+  paypalInboxResult(worker: string, eventId: string, status: string, note: string | null) { return this.cx<CxResult>("cx_paypal_inbox_result", [worker, eventId, status, note]); }
+  paypalWork(worker: string, limit: number) { return this.cx<PayPalWorkItem[]>("cx_paypal_work", [worker, limit]); }
+  paypalRails(worker: string) { return this.cx<PayPalRail[]>("cx_paypal_rails", [worker]); }
+  paypalCheckoutByOrder(worker: string, orderId: string) { return this.cx<CxResult>("cx_paypal_checkout_by_order", [worker, orderId]); }
+  paypalCheckoutUpdate(worker: string, checkoutId: string, status: string, orderId: string | null, approvalUrl: string | null, failure: string | null) {
+    return this.cx<CxResult>("cx_paypal_checkout_update", [worker, checkoutId, status, orderId, approvalUrl, failure]);
+  }
+  paypalCaptureRecord(worker: string, checkoutId: string, captureId: string, status: string, grossMinor: number, feeMinor: number, currency: string, evidence: string) {
+    return this.cx<CxResult>("cx_paypal_capture_record", [worker, checkoutId, captureId, status, grossMinor, feeMinor, currency, evidence]);
+  }
+  paypalRefundRecord(worker: string, captureId: string, refundId: string, kind: string, amountMinor: number, currency: string) {
+    return this.cx<CxResult>("cx_paypal_refund_record", [worker, captureId, refundId, kind, amountMinor, currency]);
+  }
+  paypalTxnRecord(worker: string, railId: string, txn: Record<string, unknown>) { return this.cx<CxResult>("cx_paypal_txn_record", [worker, railId, JSON.stringify(txn)]); }
+  paypalBalanceRecord(worker: string, railId: string, currency: string, availableMinor: number, totalMinor: number) {
+    return this.cx<CxResult>("cx_paypal_balance_record", [worker, railId, currency, availableMinor, totalMinor]);
+  }
+
+  // ── v49: the custody key and dashboard-sealed credentials ──
+  publishKey(worker: string, publicKeyB64: string, fingerprint: string) { return this.cx<CxResult>("cx_publish_key", [worker, publicKeyB64, fingerprint]); }
+  sealedCredentials(worker: string) { return this.cx<Array<{ vaultRef: string; sealedB64: string; fingerprint: string }>>("cx_sealed_credentials", [worker]); }
 
   async identity(): Promise<{ user: string; isOwner: boolean; superuser: boolean; memberOf: string[] }> {
     const r = await this.pool.query<{ u: string; owner: string | null; su: boolean; m: string[] | null }>(

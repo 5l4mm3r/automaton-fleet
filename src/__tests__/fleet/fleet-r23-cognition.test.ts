@@ -602,9 +602,14 @@ describe("R23.1 slim bare-wake-up packet (founder runtime)", () => {
     await rig.mind.turn("h7"); // after a working turn: full
     expect(bodyOf(rig.calls.at(-1)!).knowledge).toHaveLength(1);
     expect(rig.mind.routing.slimWakeups).toBe(2);
-    // An economy event (an order reserved) after a sleep-only turn: full packet.
+    // An economy event (an order reserved) after a sleep-only turn: full packet. Since the launch event probe the change
+    // ends the rest at the next slot (h8) instead of after the backoff; that turn is full, never slim.
     (rig.mind as unknown as { o: { ports: MindPorts } }).o.ports.ledger = async () => ({ cash, reserved: 500, externalCustomerRevenue: 0 });
-    for (let i = 0; i < 4; i++) await rig.mind.turn(`h${8 + i}`);
+    const calls = rig.calls.length;
+    await rig.mind.turn("h8");
+    expect(rig.calls.length).toBeGreaterThan(calls);
+    expect(rig.mind.routing.eventWakeups).toBe(1);
     expect(rig.mind.routing.slimWakeups).toBe(2);
+    expect(bodyOf(rig.calls.at(-1)!).knowledge).toHaveLength(1);
   });
 });

@@ -63,7 +63,8 @@ describe.skipIf(!PG_BIN)("F2 v29 money core: tax, rails, settlement, vendors, wa
   it("rails are Fleet-owned (shared or dedicated), never live, and show only a masked account reference", async () => {
     const add = (mode: string, ref: string, kind = "shared", dedicated: string | null = null) =>
       R.one(`fleet.fleet_admin_rail_add('simulated', 'Fleet sim checkout', $1, NULL, ARRAY['receive_payments','refunds'], $2, NULL, $3, $4, NULL, $5)`, [kind, ref, mode, dedicated, OWNER]);
-    expect(await R.code(add("live", "PayPal treasury"))).toMatch(/fleet_payment_rails_not_live/);
+    // v48: only the owner's PayPal treasury (with a credential) can ever be live; a simulated provider never.
+    expect(await R.code(add("live", "PayPal treasury"))).toMatch(/fleet_payment_rails_(not_live|live_scope)/);
     expect(await R.code(add("simulated", "Visa 4111 1111 1111 1111"))).toMatch(/violates check constraint/);
     const r = await add("simulated", "Visa •••• 4821");
     expect(r).toMatchObject({ kind: "shared", mode: "simulated", status: "active", accountRef: "Visa •••• 4821", legalEntity: "Fleet Trading Ltd" });

@@ -310,6 +310,17 @@ export class IdentityBroker {
             if (rec.ok) value = "stored";
             break;
           }
+          // v49: the owner's facts and card under the standing authority — sealed to the worker for one fill, never to the agent.
+          case "owner_fact": case "owner_card": {
+            if (!this.o.ownerVault || !r.ownerClass) break;
+            const facts = this.o.ownerVault.open([r.ownerClass as OwnerIdentityClass]);
+            try {
+              value = r.kind === "owner_card" ? cardField(facts[r.ownerClass] ?? "", r.ownerField ?? "") : factField(facts[r.ownerClass] ?? "", r.ownerField ?? null);
+            } finally {
+              for (const k of Object.keys(facts)) facts[k] = "";
+            }
+            break;
+          }
           case "email_code": case "sms_code": case "auth_link": {
             for (const m of r.authMessages ?? []) {
               const body = this.vault.openAux(Buffer.from(m.blobB64, "base64"), `authmsg:${m.kind}:${m.messageId}`);
@@ -656,3 +667,39 @@ export class IdentityBroker {
 }
 
 export type { MailMessage };
+
+/**
+ * v49: one field of a structured owner fact. A fact is either plain text (its whole value is filled; naming a field is
+ * refused) or a JSON object (a field must be named, its value a string or number).
+ */
+export function factField(value: string, field: string | null): string | null {
+  const v = value.trim();
+  if (!v) return null;
+  let parsed: unknown = null;
+  if (v.startsWith("{")) { try { parsed = JSON.parse(v); } catch { parsed = null; } }
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    if (!field) return null;
+    const x = (parsed as Record<string, unknown>)[field];
+    return typeof x === "string" || typeof x === "number" ? String(x) : null;
+  }
+  return field ? null : v;
+}
+
+/** v49: one field of the owner's card (JSON: number, expMonth, expYear, cvc, name, postcode); expiry is MM/YY. */
+export function cardField(value: string, field: string): string | null {
+  let c: Record<string, unknown>;
+  try { c = JSON.parse(value) as Record<string, unknown>; } catch { return null; }
+  const s = (k: string) => (typeof c[k] === "string" || typeof c[k] === "number" ? String(c[k]).trim() : "");
+  const mm = s("expMonth").padStart(2, "0");
+  const yyyy = s("expYear").length === 2 ? `20${s("expYear")}` : s("expYear");
+  switch (field) {
+    case "number": return s("number").replace(/[\s-]/g, "") || null;
+    case "exp_month": return /^\d{2}$/.test(mm) ? mm : null;
+    case "exp_year": return /^\d{4}$/.test(yyyy) ? yyyy : null;
+    case "expiry": return /^\d{2}$/.test(mm) && /^\d{4}$/.test(yyyy) ? `${mm}/${yyyy.slice(2)}` : null;
+    case "cvc": return s("cvc") || null;
+    case "name": return s("name") || null;
+    case "postcode": return s("postcode") || null;
+    default: return null;
+  }
+}

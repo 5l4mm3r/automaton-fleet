@@ -92,6 +92,8 @@ describe("Fleet security: witness route policy (default deny)", () => {
     expect(served).toEqual(Object.keys(ROUTE_POLICY).sort());
     // Every non-public route authenticates.
     for (const [k, p] of Object.entries(ROUTE_POLICY)) if (k !== "GET /v1/health") expect(p.auth, k).not.toBe("public");
+    // v48: exactly one provider webhook (PayPal's signed delivery, verified by custody, never acted on by the controller).
+    expect(Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth === "provider_webhook").map(([k]) => k)).toEqual(["POST /v1/webhooks/paypal"]);
   });
 
   it("witness is opt-in: exactly session, heartbeat, health challenge and self", () => {
@@ -109,7 +111,7 @@ describe("Fleet security: witness route policy (default deny)", () => {
       const [m, p] = k.split(" ");
       expect(routeDecision(m, p, "full"), k).toBe("allow");
       // genesis_attest is authenticated by its own one-time token in the database, never by an agent scope.
-      const open = ROUTE_POLICY[k].auth === "public" || ROUTE_POLICY[k].auth === "genesis_attest";
+      const open = ROUTE_POLICY[k].auth === "public" || ROUTE_POLICY[k].auth === "genesis_attest" || ROUTE_POLICY[k].auth === "provider_webhook";
       expect(routeDecision(m, p, "observer"), k).toBe(open ? "allow" : "deny");
       expect(routeDecision(m, p, "witness"), k).toBe(open || ROUTE_POLICY[k].witness ? "allow" : "deny");
     }
@@ -573,7 +575,9 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       "POST /v1/owner-requests/list": {},
       "POST /v1/economy": { op: "wallet", args: {} },
     };
-    const denied = Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth !== "public" && p.auth !== "genesis_attest" && !p.witness).map(([k]) => k).sort();
+    // v48: the provider webhook names no agent (stored unverified, grants nothing), so no agent scope applies to it either.
+    const denied = Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth !== "public" && p.auth !== "genesis_attest" && p.auth !== "provider_webhook" && !p.witness)
+      .map(([k]) => k).sort();
     // The founder attestation route accepts no session at all (the witness's signed session is simply unauthenticated there).
     const ga = await call(s, "POST", "/v1/genesis/runtime-evidence", {});
     expect(ga.status).toBe(401);

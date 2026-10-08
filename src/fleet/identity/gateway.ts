@@ -112,8 +112,11 @@ export interface SharedMailInput {
 
 export interface BrowserSecretRequest {
   requestId: string;
-  kind: "password" | "username" | "email" | "totp" | "email_code" | "sms_code" | "api_key" | "generate_password" | "auth_link" | "capture";
+  kind: "password" | "username" | "email" | "totp" | "email_code" | "sms_code" | "api_key" | "generate_password" | "auth_link" | "capture" | "owner_fact" | "owner_card";
   captureKind?: "api_key" | "password" | "recovery_codes" | "totp";
+  /** v49: an owner fact or the owner's card, under the owner's standing authority (class, and the field of a structured value). */
+  ownerClass?: string;
+  ownerField?: string;
   agentId: string;
   accountId: string;
   workerPub: string;

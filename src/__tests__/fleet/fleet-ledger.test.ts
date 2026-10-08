@@ -149,8 +149,8 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     const m = await ledger.model();
     expect(m).toMatchObject({ ledgerAuthoritative: true, custodyExecutionEnabled: false, strongAuthThresholdCents: 50000,
       legacyRetired: { ownerApprovalThresholdCents: 10000, agentDailySpendCents: 5000 } }); // v27: inert history, never policy
-    // Not an ordinary economic setting: even the owner cannot turn it on without a migration.
-    expect(await pgCode(owner.query(`UPDATE fleet.fleet_economic_model SET custody_execution_enabled = true`))).toMatch(/ERR:.*check constraint/);
+    // Not an ordinary economic setting: even the owner cannot flip it — only an owner custody activation (v48) can.
+    expect(await pgCode(owner.query(`UPDATE fleet.fleet_economic_model SET custody_execution_enabled = true`))).toMatch(/FLEET_CUSTODY_ACTIVATION_REQUIRED/);
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_economic_model SET ledger_authoritative = false`))).toMatch(/ERR:.*check constraint/);
     expect(await pgCode(owner.query(`DELETE FROM fleet.fleet_economic_model`))).toBe("FLEET_HISTORY_IMMUTABLE");
     const audit = await auditPrivileges(owner);
@@ -158,7 +158,13 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(audit.custodyRoles).toBe("provisioned");
     const cx = audit.roles.find((r) => r.role === "fleet_custody_login")!;
     expect(cx.functions.sort()).toEqual(["cx_attest_signer(text,uuid,text,text,uuid)", "cx_claim_instruction(text,text)", "cx_credential_use(uuid,text,text,text,text)",
-      "cx_ping()", "cx_report_result(uuid,text,text,text,bigint,text)"]);
+      // v48: the PayPal treasury's receiving and reconciliation records (custody alone holds the PayPal credential).
+      "cx_paypal_balance_record(text,uuid,text,bigint,bigint)", "cx_paypal_capture_record(text,uuid,text,text,bigint,bigint,text,text)",
+      "cx_paypal_checkout_by_order(text,text)", "cx_paypal_checkout_update(text,uuid,text,text,text,text)", "cx_paypal_inbox(text,integer)",
+      "cx_paypal_inbox_result(text,text,text,text)", "cx_paypal_rails(text)", "cx_paypal_refund_record(text,text,text,text,bigint,text)",
+      "cx_paypal_txn_record(text,uuid,jsonb)", "cx_paypal_work(text,integer)",
+      // v49: the custody key and the PayPal credentials sealed to it from the dashboard.
+      "cx_ping()", "cx_publish_key(text,text,text)", "cx_report_result(uuid,text,text,text,bigint,text)", "cx_sealed_credentials(text)"]);
     expect(cx.tables).toEqual([]);
     expect((await ledger.verify()).ok).toBe(true);
   });
@@ -641,7 +647,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_payment_orders WHERE status IN ('executing','settled')`))[0].n).toBe(0);
   });
 
-  it("the executor protocol (pin removed in a separate test schema) is lease-bound, exact and idempotent", async () => {
+  it("the executor protocol (owner activation in a separate test schema) is lease-bound, exact and idempotent", async () => {
     const X = "fleet_cx";
     const xs = new PgFleetStore({ connectionString: pgc.ownerUrl, schema: X });
     const xl = new PgLedgerAdmin({ connectionString: pgc.ownerUrl, schema: X });
@@ -654,10 +660,10 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       const reg = await xs.registerRoot({ walletAddress: `0x${crypto.randomBytes(20).toString("hex")}`, name: "cx" });
       if (!reg.ok) throw new Error(reg.reason);
       const a = { agentId: reg.agent.agentId, token: (await xs.issueCredential(reg.agent.agentId, "t")).token };
-      // Test-only constitutional change (the production path would be a reviewed migration): custody execution and live rails.
+      // v48: custody execution under an owner activation (the production path); the surface stays clean.
       expect((await ledgerSurfaceProblems(owner, X))).toEqual([]);
       await unpinCustody(owner, X);
-      expect(await ledgerSurfaceProblems(owner, X)).toContain("custody surface: custody execution is not pinned off by a CHECK constraint (constitutional invariant)");
+      expect(await ledgerSurfaceProblems(owner, X)).toEqual([]);
       // v32: a live payout rail whose signer the custody role attests.
       const armed = await liveRail(owner, X, OWNER);
       await xl.recordOwnerFunding(10_000, "bank:cx-1", OWNER);

@@ -30,6 +30,8 @@ interface Session {
   context: BrowserContext;
   page: Page;
   secrets: Set<string>;
+  /** v49: values filled from the owner's facts / card (redacted from snapshots at a shorter length). */
+  ownerValues: Set<string>;
 }
 
 const TEXT_MAX = 8000;
@@ -78,7 +80,7 @@ export class BrowserWorker {
     await context.route("**/*", (route) => (browserUrlAllowed(route.request().url(), { allowLoopback: this.o.allowLoopback }) ? route.continue() : route.abort("blockedbyclient")));
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
-    return { context, page, secrets: new Set() };
+    return { context, page, secrets: new Set(), ownerValues: new Set() };
   }
 
   private origin(page: Page): string {
@@ -120,8 +122,13 @@ export class BrowserWorker {
         case "click": await this.locator(page, step).click(); await page.waitForLoadState("domcontentloaded").catch(() => {}); break;
         case "fill": {
           if (typeof step.credential === "string") {
-            const v = await this.secret(action, lease, step.credential, this.origin(page));
+            // v49: the owner's facts and card are named by class / field (the registry checks the standing authority, the
+            // origin and, for the card, an open hold); the value is filled and forgotten like any credential.
+            const kind = step.credential === "owner_fact" ? `owner_fact:${String(step.class)}${typeof step.field === "string" ? `:${step.field}` : ""}`
+              : step.credential === "owner_card" ? `owner_card:${String(step.field)}` : step.credential;
+            const v = await this.secret(action, lease, kind, this.origin(page));
             s.secrets.add(v);
+            if (step.credential === "owner_fact" || step.credential === "owner_card") s.ownerValues.add(v);
             await this.locator(page, step).fill(v);
           } else {
             await this.locator(page, step).fill(String(step.value ?? ""));
@@ -190,7 +197,8 @@ export class BrowserWorker {
     let text = data.text;
     let linksJson = JSON.stringify(data.links);
     for (const secret of s.secrets) {
-      if (secret.length < 4) continue;
+      // Owner values are redacted from 3 characters (a card's CVC); other short values are left (too common to redact).
+      if (secret.length < (s.ownerValues.has(secret) ? 3 : 4)) continue;
       text = text.split(secret).join("[credential]");
       linksJson = linksJson.split(secret).join("[credential]");
     }

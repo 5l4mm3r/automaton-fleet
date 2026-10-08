@@ -106,6 +106,69 @@ export class PgHubAdmin {
     return this.one(`SELECT fleet_admin_rail_verify($1, $2, $3, $4, $5::jsonb, $6, $7) AS r`,
       [railId, check, status, evidenceKind, JSON.stringify(note ? { note } : {}), expiresAt, actor]);
   }
+  // ── v48: custody activation, wallet limits, card clearing, the treasury list and PayPal ──
+  custodyActivate(maxInstructionMinor: number, maxDailyMinor: number, hours: number, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_custody_activate($1, $2, $3, $4, $5) AS r`, [maxInstructionMinor, maxDailyMinor, hours, reason, actor]);
+  }
+  custodyDeactivate(reason: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_custody_deactivate($1, $2) AS r`, [reason, actor]);
+  }
+  walletLimits(agentId: string, maxInstructionMinor: number | null, maxDailyMinor: number | null, cardMaxMinor: number | null, cardDailyMinor: number | null,
+    note: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_wallet_limits_set($1, $2, $3, $4, $5, $6, $7) AS r`, [agentId, maxInstructionMinor, maxDailyMinor, cardMaxMinor, cardDailyMinor, note, actor]);
+  }
+  cardCharge(agentId: string, amountMinor: number, merchant: string, statementRef: string, actor: string) {
+    return this.one(`SELECT fleet_admin_card_charge_record($1, $2, $3, $4, $5) AS r`, [agentId, amountMinor, merchant, statementRef, actor]);
+  }
+  cardConfirm(chargeId: string, amountMinor: number, statementRef: string, actor: string) {
+    return this.one(`SELECT fleet_admin_card_charge_confirm($1, $2, $3, $4) AS r`, [chargeId, amountMinor, statementRef, actor]);
+  }
+  cardRepay(amountMinor: number, reference: string, actor: string) {
+    return this.one(`SELECT fleet_admin_card_repayment_record($1, $2, $3) AS r`, [amountMinor, reference, actor]);
+  }
+  cardReceipt(agentId: string, amountMinor: number, kind: string, reference: string, note: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_card_receipt_record($1, $2, $3, $4, $5, $6) AS r`, [agentId, amountMinor, kind, reference, note, actor]);
+  }
+  cardResolve(receiptId: string, resolution: string, sweepMinor: number | null, reference: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_card_receipt_resolve($1, $2, $3, $4, $5) AS r`, [receiptId, resolution, sweepMinor, reference, actor]);
+  }
+  cardClearing() { return this.one(`SELECT fleet_card_clearing() AS r`); }
+  treasuryTransactions(agentId: string | null, limit: number, beforeSeq: number | null, direction: string | null) {
+    return this.one(`SELECT fleet_treasury_transactions($1, $2, $3, $4) AS r`, [agentId, limit, beforeSeq, direction]);
+  }
+  treasuryHealth() { return this.one(`SELECT fleet_treasury_health() AS r`); }
+  paypalStatus() { return this.one(`SELECT fleet_paypal_status() AS r`); }
+  paypalAttribute(railId: string, txnId: string, eventCode: string, as: string, reference: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_paypal_txn_attribute($1, $2, $3, $4, $5, $6) AS r`, [railId, txnId, eventCode, as, reference, actor]);
+  }
+
+  // ── v49: standing identity authority, freezes, footprint, custody key, webhook ids ──
+  identityAutonomy() { return this.one(`SELECT fleet_identity_autonomy_json() AS r`); }
+  identityAutonomySet(enabled: boolean, classes: string[], cardEnabled: boolean, cardMax: number | null, cardDaily: number | null, excluded: string[], statement: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_identity_autonomy_set($1, $2, $3, $4, $5, $6, $7, $8) AS r`, [enabled, classes, cardEnabled, cardMax, cardDaily, excluded, statement, actor]);
+  }
+  accountFreeze(accountId: string, reason: string | null, actor: string) { return this.one(`SELECT fleet_admin_account_freeze($1, $2, $3) AS r`, [accountId, reason, actor]); }
+  accountUnfreeze(accountId: string, status: string, actor: string) { return this.one(`SELECT fleet_admin_account_unfreeze($1, $2, $3) AS r`, [accountId, status, actor]); }
+  footprint(agentId: string, limit: number) { return this.one(`SELECT fleet_agent_footprint($1, $2) AS r`, [agentId, limit]); }
+  identityUses(agentId: string | null, limit: number) { return this.one(`SELECT fleet_identity_uses_json($1, $2) AS r`, [agentId, limit]); }
+  custodyKey() { return this.one(`SELECT fleet_custody_key_json() AS r`); }
+  custodyCredentialUpload(vaultRef: string, sealed: Buffer, actor: string) { return this.one(`SELECT fleet_admin_custody_credential_upload($1, $2, $3) AS r`, [vaultRef, sealed, actor]); }
+  custodyCredentialRevoke(vaultRef: string, actor: string) { return this.one(`SELECT fleet_admin_custody_credential_revoke($1, $2) AS r`, [vaultRef, actor]); }
+  railWebhook(railId: string, webhookId: string, actor: string) { return this.one(`SELECT fleet_admin_rail_webhook_set($1, $2, $3) AS r`, [railId, webhookId, actor]); }
+  // ── v50: insolvency, sweep reductions, the knowledge library ──
+  insolvency() { return this.one(`SELECT fleet_insolvency_json() AS r`); }
+  insolvencyPolicy(dormancy: boolean, deathAfterHours: number | null, actor: string) { return this.one(`SELECT fleet_admin_insolvency_policy_set($1, $2, $3) AS r`, [dormancy, deathAfterHours, actor]); }
+  sweepReductions(agentId: string | null) { return this.one(`SELECT fleet_sweep_rate_reductions_json($1) AS r`, [agentId]); }
+  sweepReductionGrant(agentId: string, bp: number, days: number, reason: string, requestId: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_sweep_reduction_grant($1, $2, $3, $4, $5, $6) AS r`, [agentId, bp, days, reason, requestId, actor]);
+  }
+  sweepReductionEnd(reductionId: string, reason: string | null, actor: string) { return this.one(`SELECT fleet_admin_sweep_reduction_end($1, $2, $3) AS r`, [reductionId, reason, actor]); }
+  sweepReductionDecline(requestId: string, reason: string | null, actor: string) { return this.one(`SELECT fleet_admin_sweep_reduction_decline($1, $2, $3) AS r`, [requestId, reason, actor]); }
+  knowledgeLibraryLoad(library: unknown, actor: string) { return this.one(`SELECT fleet_admin_knowledge_library_load($1::jsonb, $2) AS r`, [JSON.stringify(library), actor]); }
+  knowledgeLibrarySearch(query: string | null, category: string | null, limit: number) {
+    return this.one(`SELECT fleet_knowledge_library_search($1, $2, $3, true) AS r`, [query, category, limit]);
+  }
+
   /** v46: assign an evidenced capability of a rail to a venture. */
   railAssign(railId: string, ventureId: string, capability: string, actor: string) {
     return this.one(`SELECT fleet_admin_rail_assign($1, $2, $3, $4) AS r`, [railId, ventureId, capability, actor]);

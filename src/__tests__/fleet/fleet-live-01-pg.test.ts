@@ -257,7 +257,9 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       // F2-A: the founder's survival position as FleetController observes it — figures only (no allowance, gate or floor).
       const eq = await equity(G.id);
       expect(eq).toBeGreaterThan(0);
-      expect(status.survival).toEqual({ survivalEquityCents: eq, inferenceTodayCents: 0, burnPerDayCents: 0, runwayDays: null, burnBasis: "inference, last 7 days" });
+      // v50: burn counts active recurring commitments too (none here).
+      expect(status.survival).toEqual({ survivalEquityCents: eq, inferenceTodayCents: 0, burnPerDayCents: 0, inferenceBurnPerDayCents: 0, commitmentsPerDayCents: 0,
+        runwayDays: null, burnBasis: "inference over the last 7 days plus active recurring commitments" });
       expect(status.discovery).toBeUndefined();
     } finally {
       await service.close();

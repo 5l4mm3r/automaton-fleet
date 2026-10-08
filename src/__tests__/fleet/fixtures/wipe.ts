@@ -24,6 +24,8 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_experiment_policy", "fleet_evidence_ladder", "fleet_spend_circuit_breaker",
     "fleet_economy_policy", "fleet_venture_transition_rules", "fleet_tax_policy", "fleet_transfer_policy",
     "fleet_capital_policy", "fleet_sweep_policy", "fleet_cognition_depth_policy", "fleet_admin_withdrawal_policy", "fleet_custody_policy",
+    // v49 / v50 singleton policies (defaults: standing identity authority off; dormancy on, no automatic death); the v50 library.
+    "fleet_identity_autonomy", "fleet_insolvency_policy", "fleet_knowledge_library",
     ...V35_SINGLETONS,
   ]);
   const r = await c.query<{ t: string }>(

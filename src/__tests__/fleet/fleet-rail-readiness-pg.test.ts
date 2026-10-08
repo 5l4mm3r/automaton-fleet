@@ -72,7 +72,8 @@ describe.skipIf(!PG_BIN)("v46 rail readiness, receive-only mode, settlement guar
       expect(await R.code(addRail(["storefront", cap]))).toBe('violates check constraint "fleet_payment_rails_live_receive_scope"');
     }
     expect(await R.code(addRail(["storefront"], "live_receive", "paypal"))).toBe('violates check constraint "fleet_payment_rails_live_receive_scope"');
-    expect(await R.code(addRail(["storefront"], "live"))).toBe('violates check constraint "fleet_payment_rails_not_live"');
+    // v48: live is the owner's PayPal treasury only (receive / refund / payout capabilities, with a credential).
+    expect(await R.code(addRail(["storefront"], "live"))).toBe('violates check constraint "fleet_payment_rails_live_scope"');
     // A gumroad credential reference carries only the gateway's scopes.
     for (const scope of [["edit_sales"], ["account"], ["refund_sales"], ["view_sales", "payouts"]]) {
       expect(await R.code(R.one(`fleet.fleet_admin_credential_register('gumroad', 'gateway', $1, $2, false, NULL, $3)`, [`vault:gumroad/t-${scope.join("-")}`, scope, OWNER])))

@@ -1,7 +1,8 @@
 /**
- * Test-only stand-in for the future reviewed live-activation migration, in a schema of its own: removes the two
- * constitutional pins (custody execution off, rails never live), registers a legal entity, a scoped PayPal credential
- * reference and a LIVE payout rail, and lets the custody role attest a signer for it. Production keeps both pins.
+ * Arms custody in a test schema the way the owner does on a real registry (schema v48): an owner custody activation
+ * (four-key model — the activation, a verified live PayPal rail, a fresh live signer attestation and, outside SQL, the
+ * custody executor's REAL_PAYMENTS_ENABLED), a legal entity, a scoped PayPal credential reference and a LIVE payout rail.
+ * Production keeps custody off until the owner grants an activation.
  */
 import type pg from "pg";
 
@@ -14,13 +15,12 @@ export interface ArmedCustody {
 
 const q1 = async (db: pg.Pool | pg.PoolClient, sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows[0];
 
-/** Drop the pins in `schema` (owner connection) — the activation stand-in. */
-export async function unpinCustody(owner: pg.Pool, schema: string): Promise<void> {
-  for (const [table, def] of [["fleet_economic_model", "NOT custody_execution_enabled"], ["fleet_payment_rails", "mode <> 'live'"]] as const) {
-    const c = await q1(owner, `SELECT conname FROM pg_constraint WHERE conrelid = '${schema}.${table}'::regclass AND pg_get_constraintdef(oid) ~ $1`, [def.replace(/[()]/g, "\\$&")]);
-    if (c) await owner.query(`ALTER TABLE ${schema}.${table} DROP CONSTRAINT ${c.conname}`);
-  }
-  await owner.query(`UPDATE ${schema}.fleet_economic_model SET custody_execution_enabled = true`);
+/** Grant a custody activation in `schema` (owner connection), generous limits, 24 hours. */
+export async function unpinCustody(owner: pg.Pool, schema: string, actor = "operator:owner",
+  limits: { maxInstructionMinor?: number; maxDailyMinor?: number; hours?: number } = {}): Promise<string> {
+  const r = await q1(owner, `SELECT ${schema}.fleet_admin_custody_activate($1, $2, $3, 'test activation', $4) AS r`,
+    [limits.maxInstructionMinor ?? 100_000_000, limits.maxDailyMinor ?? 1_000_000_000, limits.hours ?? 24, actor]);
+  return r.r.activationId;
 }
 
 /** A live PayPal payout rail with its credential reference (never a secret) in `schema`. */

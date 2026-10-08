@@ -10,7 +10,7 @@ import type { CommandView, Pulse, Row } from "./command/view";
 import type { LiveAuth } from "./api/auth";
 import type { loadAgentDetail } from "./api/snapshot";
 import type { RevealKind } from "./api/reveal";
-import type { StepupConfirm } from "./api/client";
+import type { GatewayClient, StepupConfirm } from "./api/client";
 import { createAdapterImpl, liveTools as impl } from "@fleet/adapter-impl";
 
 export interface DeckAdapter {
@@ -35,6 +35,8 @@ export interface LiveTools {
   Reveal: ComponentType<{ kind: RevealKind; target: string; title: string; close: () => void }>;
   /** v43: how this tab asks the owner to confirm a sensitive operation (passkey, or password + authenticator code). */
   setStepupConfirm(fn: StepupConfirm | null): void;
+  /** v48–v50: the gateway client itself, for the treasury, onboarding and footprint panels (reads and step-up operations). */
+  gateway(): GatewayClient;
 }
 
 export const liveTools: LiveTools | null = impl;

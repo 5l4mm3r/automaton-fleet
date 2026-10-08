@@ -2050,6 +2050,32 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_credential_use($1, $2, $3, $4, $5, $6) AS r", [credentialId, action, agentId, ventureId, outcome, detail])).rows[0].r);
   }
 
+  /** Schema v48: store one PayPal webhook as received (unverified; the custody executor verifies it with PayPal). */
+  async paypalWebhookReceive(eventId: string, eventType: string, resourceId: string | null, headers: Record<string, string>, body: string):
+    Promise<{ ok: boolean; duplicate?: boolean; code?: string }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_paypal_webhook_receive($1, $2, $3, $4, $5) AS r",
+      [eventId, eventType, resourceId, JSON.stringify(headers), body])).rows[0].r);
+  }
+
+  /** Schema v48: issue every reserved agent order the four keys allow (a no-op returning {enabled:false} without an activation). */
+  async issueDueInstructions(limit = 50): Promise<{ ok: boolean; enabled: boolean; issued: number; waiting?: Record<string, number> }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_issue_due_instructions($1) AS r", [limit])).rows[0].r);
+  }
+
+  /** Schema v48: an expired (or ended) owner custody activation switches custody off. */
+  async custodyActivationExpire(): Promise<{ ok: boolean; active: boolean; expired?: string }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_custody_activation_expire() AS r")).rows[0].r);
+  }
+
+  /** Schema v49/v50: undeclared card holds, insolvency dormancy and lapsed sweep reductions (one reaper pass each). */
+  async lifecycleTick(): Promise<{ cardHolds: Record<string, unknown>; insolvency: Record<string, unknown>; reductions: Record<string, unknown> }> {
+    return this.tx(async (c) => ({
+      cardHolds: (await c.query("SELECT svc_card_holds_expire(50) AS r")).rows[0].r,
+      insolvency: (await c.query("SELECT svc_insolvency_tick() AS r")).rows[0].r,
+      reductions: (await c.query("SELECT svc_sweep_reductions_expire() AS r")).rows[0].r,
+    }));
+  }
+
   /** Schema v10: expire payment orders past their TTL (releases their reservations). Returns the count. */
   async expirePaymentOrders(limit = 100): Promise<number> {
     return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_expire_payment_orders($1) AS n", [limit])).rows[0].n));

@@ -2,8 +2,8 @@
  * Schema v32 — controller custody signer (PostgreSQL, end to end; real payments off; no network).
  *
  * Genesis founders are keyless (controller custody); an agent whose runtime holds its own key is never paid; the custody
- * mode cannot be forged. In the production posture both pins hold (custody execution off, rails never live). Behind the
- * test-only activation stand-in: signers attest against the registry (rail, provider, mode, credential, scope), every
+ * mode cannot be forged. In the production posture custody is off (no owner activation) and only a PayPal treasury rail
+ * could ever be live. Behind an owner custody activation (schema v48): signers attest against the registry (rail, provider, mode, credential, scope), every
  * instruction is bound to an attested live rail, the real custody executor pays through the PayPal signer against a
  * fake PayPal API, and settlement is attributed venture → agent → wallet → Treasury. A missing signer, a revoked
  * credential or a failed payout blocks only that payment. Agents and the service role reach none of the custody surface.
@@ -22,7 +22,7 @@ import { auditPrivileges, ledgerSurfaceProblems } from "../../fleet/postgres/pri
 import { runDoctor } from "../../fleet/doctor.js";
 
 const PG_BIN = findPgBin();
-const ALLOW = { allows: () => true }; // test-only: the activation stand-in's process gate
+const ALLOW = { allows: () => true }; // test-only: the custody executor's REAL_PAYMENTS_ENABLED (the fourth key)
 const quiet = () => {};
 
 /** Fake PayPal: OAuth + payouts; `outcome` per receiver decides the batch's final state. */
@@ -70,7 +70,7 @@ describe.skipIf(!PG_BIN)("v32 controller custody signer (PostgreSQL)", () => {
     (await R.econ(who, "vendor.register", { vendorName: "Print partner", category: "manufacturer", provider: "paypal", reference, ventureKey })).destinationId as string;
 
   beforeAll(async () => {
-    R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, treasuryCents: 1_000_000 });
+    R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, treasuryCents: 1_000_000, simulatedSettlement: false });
     [A, B] = R.founders;
     await R.store.grantServiceRole();
     await R.store.grantCustodyRole();
@@ -132,7 +132,7 @@ describe.skipIf(!PG_BIN)("v32 controller custody signer (PostgreSQL)", () => {
     }
   });
 
-  describe("behind the test-only activation stand-in", () => {
+  describe("behind an owner custody activation (schema v48)", () => {
     let armed: ArmedCustody;
     let exec: CustodyExecutor;
     let gwc: PgCustodyGateway;
@@ -287,11 +287,17 @@ describe.skipIf(!PG_BIN)("v32 controller custody signer (PostgreSQL)", () => {
       }
     });
 
-    it("the privilege audit stays clean with the custody surface (owner view; the pins are reported as removed here)", async () => {
-      const problems = await ledgerSurfaceProblems(R.owner, "fleet");
-      expect(problems).toEqual(["custody surface: custody execution is not pinned off by a CHECK constraint (constitutional invariant)"]);
-      const audit = await auditPrivileges(R.owner, { schema: "fleet" });
-      expect(audit.problems.filter((p) => !/custody execution is not pinned|could be live/.test(p))).toEqual([]);
+    it("the privilege audit stays clean with the custody surface: execution is on only under the owner activation", async () => {
+      expect(await ledgerSurfaceProblems(R.owner, "fleet")).toEqual([]);
+      expect((await auditPrivileges(R.owner, { schema: "fleet" })).problems).toEqual([]);
+      // Flipping the raw column is refused; bypassing the guard is reported.
+      expect(await R.code(R.q(`UPDATE fleet.fleet_economic_model SET custody_execution_enabled = false`))).toBe("FLEET_CUSTODY_ACTIVATION_REQUIRED");
+      await R.q(`ALTER TABLE fleet.fleet_economic_model DISABLE TRIGGER fleet_economic_model_custody_guard`);
+      try { expect(await ledgerSurfaceProblems(R.owner, "fleet")).toContain("ledger surface: trigger fleet_economic_model.fleet_economic_model_custody_guard is missing or disabled"); }
+      finally { await R.q(`ALTER TABLE fleet.fleet_economic_model ENABLE TRIGGER fleet_economic_model_custody_guard`); }
+      await R.q(`CREATE FUNCTION fleet.rogue_custody() RETURNS text LANGUAGE sql AS $$ SELECT set_config('fleet.custody_activation', 'on', true) $$`);
+      try { expect(await ledgerSurfaceProblems(R.owner, "fleet")).toContain("custody surface: rogue_custody references the custody activation guard"); }
+      finally { await R.q(`DROP FUNCTION fleet.rogue_custody()`); }
     });
   });
 });

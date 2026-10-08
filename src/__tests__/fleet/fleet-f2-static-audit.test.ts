@@ -42,6 +42,10 @@ const RULES: Rule[] = [
   { cls: "legal/security", file: /src\/fleet\/(hub\/admin|treasury\/ledger|postgres\/migrations-phase32)\.ts$/, line: /owner-enrolled destination/,
     why: "v32: the payable reference of the owner's own enrolled destinations (owner/Treasury accounts; owner-only by constitution) for the custody signer" },
   { cls: "inert-legacy", file: /src\/fleet\/cognition\/capability-signature\.ts$/, why: "capability-policy signature field (data, not shown as a cap; signature compatibility)" },
+  { cls: "historical", file: /src\/fleet\/postgres\/migrations-phase44\.ts$/, line: /"payment_order_awaiting_owner"/,
+    why: "the applied v44 routing constant (history); since v48 the live route no longer names the retired type (it routes via the payment_order_ prefix)" },
+  { cls: "retirement", file: /src\/fleet\/postgres\/migrations-phase48\.ts$/, line: /^\s*\["'payment_order_cancelled','payment_order_awaiting_owner','payment_instruction_issued'", "'payment_order_cancelled','payment_instruction_issued'"\],$/,
+    why: "the v48 asserted edit that REMOVES the retired type from the live routing function" },
 ];
 
 function walk(dir: string, out: string[] = []): string[] {

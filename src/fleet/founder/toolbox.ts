@@ -58,10 +58,15 @@ export interface ToolboxPorts {
 const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
   opportunity: { record: "opportunity.record", shortlist: "opportunity.shortlist", status: "opportunity.status", list: "opportunity.list" },
   venture: { create: "venture.create", transition: "venture.transition", status: "venture.status", list: "venture.list", metric: "venture.metric" },
-  wallet: { view: "wallet", performance: "performance", plan: "wallet.plan", vendors: "vendor.list" },
+  wallet: { view: "wallet", performance: "performance", plan: "wallet.plan", vendors: "vendor.list",
+    // v48: receiving money through the Fleet's PayPal treasury (custody opens and captures the order).
+    checkout: "paypal.checkout", checkouts: "paypal.checkouts", cancel_checkout: "paypal.cancel" },
   fleet_capital: { register_vendor: "vendor.register", revoke_vendor: "vendor.revoke", require_rail: "rail.require", request: "capital.request", list: "capital.list",
-    envelopes: "envelope.list", envelope_spend: "envelope.spend" },
-  economic_knowledge: { search: "knowledge.search", record: "knowledge.record" },
+    envelopes: "envelope.list", envelope_spend: "envelope.spend",
+    // v49: the owner's card as a bypass (hold → fill → declare / void); v50: temporary sweep reductions.
+    card_authorize: "card.authorize", card_declare: "card.declare", card_void: "card.void", cards: "card.list", identity_uses: "identity.uses",
+    sweep_reductions: "sweep.reductions", sweep_reduction_request: "sweep.reduction_request" },
+  economic_knowledge: { search: "knowledge.search", record: "knowledge.record", library: "knowledge.library" },
   // v34: the agent's own operational identity and accounts (asynchronous broker jobs; statuses only).
   identity: { create_persona: "identity.create", update_persona: "identity.update", list: "identity.list", provision_mailbox: "mailbox.provision",
     inbox: "mail.inbox", create_account: "account.create", operate: "account.operate", status: "account.status", verify_identity: "account.verify_identity",
@@ -87,7 +92,9 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
 const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend", "mailbox.provision", "account.create", "account.operate", "account.verify_identity",
   "account.recover", "account.rotate", "account.revoke", "account.close", "commitment.add", "mail.send", "phone.quote", "phone.provision", "phone.release", "sms.send",
   // v42: a retried proposal or funding never doubles.
-  "project.propose", "project.fund"]);
+  "project.propose", "project.fund",
+  // v48: a retried checkout request returns the same checkout.
+  "paypal.checkout"]);
 
 export interface ToolOutcome {
   name: string;

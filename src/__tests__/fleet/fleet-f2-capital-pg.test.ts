@@ -57,14 +57,23 @@ describe.skipIf(!PG_BIN)("F2 v30 capital engine, envelopes, sweeps, cognition de
     expect(src).not.toMatch(/owner/i);
   });
 
-  it("the privilege audit enforces the economy invariants: guards, the not-live rail pin, controller-only decisions, single writers, no bypass", async () => {
+  it("the privilege audit enforces the economy invariants: guards, the live-rail scope, controller-only decisions, single writers, no bypass", async () => {
     const audit = async () => (await R.store.auditPrivileges()).problems;
     await R.q(`ALTER TABLE fleet.fleet_ventures DISABLE TRIGGER fleet_ventures_guard`);
     try { expect(await audit()).toContain("economy surface: trigger fleet_ventures.fleet_ventures_guard is missing or disabled"); }
     finally { await R.q(`ALTER TABLE fleet.fleet_ventures ENABLE TRIGGER fleet_ventures_guard`); }
-    await R.q(`ALTER TABLE fleet.fleet_payment_rails DROP CONSTRAINT fleet_payment_rails_not_live`);
-    try { expect(await audit()).toEqual(expect.arrayContaining([expect.stringMatching(/a payment rail could be live/)])); }
-    finally { await R.q(`ALTER TABLE fleet.fleet_payment_rails ADD CONSTRAINT fleet_payment_rails_not_live CHECK (mode <> 'live')`); }
+    // v48: the not-live pin became a scope (live = the owner's PayPal treasury only); dropping or widening it is reported.
+    const scope = (await R.q(`SELECT pg_get_constraintdef(oid) AS d FROM pg_constraint WHERE conname = 'fleet_payment_rails_live_scope'`))[0].d;
+    await R.q(`ALTER TABLE fleet.fleet_payment_rails DROP CONSTRAINT fleet_payment_rails_live_scope`);
+    try { expect(await audit()).toEqual(expect.arrayContaining([expect.stringMatching(/live rail scope CHECK is missing/)])); }
+    finally { await R.q(`ALTER TABLE fleet.fleet_payment_rails ADD CONSTRAINT fleet_payment_rails_live_scope ${scope}`); }
+    await R.q(`ALTER TABLE fleet.fleet_payment_rails DROP CONSTRAINT fleet_payment_rails_live_scope`);
+    await R.q(`ALTER TABLE fleet.fleet_payment_rails ADD CONSTRAINT fleet_payment_rails_live_scope CHECK (mode <> 'live' OR (provider = 'paypal' AND credential_id IS NOT NULL AND capabilities <@ ARRAY['receive_payments','card_spend']::text[]))`);
+    try { expect(await audit()).toEqual(expect.arrayContaining([expect.stringMatching(/live rail scope CHECK is missing or allows more/)])); }
+    finally {
+      await R.q(`ALTER TABLE fleet.fleet_payment_rails DROP CONSTRAINT fleet_payment_rails_live_scope`);
+      await R.q(`ALTER TABLE fleet.fleet_payment_rails ADD CONSTRAINT fleet_payment_rails_live_scope ${scope}`);
+    }
     await R.q(`CREATE FUNCTION fleet.rogue_settle() RETURNS void LANGUAGE sql AS $$ UPDATE fleet.fleet_external_transactions SET status = 'settled' WHERE false $$`);
     await R.q(`CREATE FUNCTION fleet.rogue_move() RETURNS text LANGUAGE sql AS $$ SELECT set_config('fleet.venture_move', 'x', true) $$`);
     try {
@@ -229,11 +238,11 @@ describe.skipIf(!PG_BIN)("F2 v30 capital engine, envelopes, sweeps, cognition de
     expect((await hub("profit")).length).toBe(2);
   });
 
-  it("Doctor economy health: the ledgers reconcile; envelope cash equals the envelopes' positions; rails are pinned not-live", async () => {
+  it("Doctor economy health: the ledgers reconcile; envelope cash equals the envelopes' positions; live money is scoped", async () => {
     const h = await R.one(`fleet.fleet_economy_health()`);
     const by = Object.fromEntries(h.findings.map((f: { code: string }) => [f.code, f]));
     expect(by.ENVELOPE_LEDGER).toMatchObject({ severity: "INFO", detail: { mismatchedAgents: 0 } });
-    expect(by.RAILS_NOT_LIVE_PINNED.severity).toBe("INFO");
+    expect(by.LIVE_MONEY_SCOPED).toMatchObject({ severity: "INFO", detail: { custodyActive: false } });
     expect(by.DEPENDENCIES_ACTION_SCOPED).toMatchObject({ severity: "INFO", detail: { violations: 0 } });
     expect(by.LEDGER_VERIFY.severity).toBe("INFO");
     expect(h.ok).toBe(true);

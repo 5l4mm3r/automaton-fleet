@@ -555,7 +555,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
         add("economy", fails.length ? "fail" : warns.length ? "warn" : "pass",
           fails.length || warns.length
             ? [...fails, ...warns].map((f) => `${f.severity} ${f.code} ${JSON.stringify(f.detail)}`).join("; ").slice(0, 600)
-            : `reconciled: ledger verified, settlements attributed, envelope cash = positions, rails pinned not-live, dependencies action-scoped (${eh.findings.length} check(s))`);
+            : `reconciled: ledger verified, settlements attributed, envelope cash = positions, live money scoped to the PayPal treasury, dependencies action-scoped (${eh.findings.length} check(s))`);
         if (fails.length) blockers.push(`Economy reconciliation failed (${fails.map((f) => f.code).join(", ")}): fleet:admin hub-health.`);
       }
       const est = lg.estate;
@@ -797,7 +797,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
     ...checklist.filter((c) => !c.ok && /PostgreSQL|schema|secrets|owner sweeps/.test(c.item)).map((c) => `${c.item}: ${c.detail}`),
     ...(deps.custodySignerAvailable ?? (((facts.custody as { liveSigners?: number } | null)?.liveSigners ?? 0) > 0)
       ? []
-      : ["No live controller custody signer is attested (a live payout rail with an active, scoped credential reference and the custody executor's signer); live rails and custody execution are constitutionally pinned off until a reviewed activation."]),
+      : ["No live controller custody signer is attested (a live payout rail with an active, scoped credential reference and the custody executor's signer); money leaves only under the four keys (owner custody activation, verified live PayPal rail, live signer attestation, custody REAL_PAYMENTS_ENABLED)."]),
     ...(((facts.custody as { agentHeldKeys?: number } | null)?.agentHeldKeys ?? 1) > 0
       ? [facts.custody ? "A living agent holds its own wallet key (agent-held custody); custody never pays it, but it must not exist when real payments start." : "Custody facts unavailable (registry before schema v32)."]
       : []),
