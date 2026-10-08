@@ -75,13 +75,29 @@ All run on the VPS from `~/automaton-fleet-build` (already at `fda78a0`, pins in
 
 - **A founder:** `sudo scripts/fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`. Code only. Its state
   is kept and the previous runtime runs on it (proven from both releases). Its runtime asks for no doctrine and gets v4.
-- **The controller:** roll the founders back first. `136c4bd` ignores the doctrine field, so a v5 runtime would silently
+- **The controller:** roll the founders back first, and stop the browser worker (`sudo systemctl disable --now
+  automaton-fleet-browser`): it is installed after the cutover, so the cutover state does not list it and the revert
+  would not stop or restart it. `136c4bd` ignores the doctrine field, so a v5 runtime would silently
   get v4. Then `bash scripts/fleet-rollout.sh revert ~/r411-pins.txt 45 45 <reason>`:
   - it re-approves `136c4bd` and does **not** restore the database;
   - every post-cutover write is reconciled and kept;
   - `production_rolled_back` records mode `code-only` and the preserved counts.
-- **The browser worker:** `sudo systemctl disable --now automaton-fleet-browser`. It holds no vault and no state worth
-  keeping. Its role can stay, since it grants `bx_*` only.
+- **The browser worker alone:** `sudo systemctl disable --now automaton-fleet-browser`. It holds no vault and no state
+  worth keeping. Its role can stay, since it grants `bx_*` only.
+
+## Pre-deployment verification (2026-10-08)
+
+- **Order:** cutover, then browser setup. The cutover's migrate step grants only roles that exist (the browser role does
+  not yet), and `fleet-browser-setup.sh` refuses to run until the installed release carries `grant-browser-role`.
+- **Wake limits do not restrict work:**
+  - `RENUDGE_UNDECLARED_MAX` only spaces full reassessment pushes while the state is unchanged and the founder only
+    sleeps; at 10 instead of 32 it makes them more frequent.
+  - Any working turn resets the idle backoff and gets a full packet; there is no limit on turns, steps or tools.
+  - Any change in memory, workspace, economy, capabilities or dependency status, a sale, or a due review time gives a
+    full packet.
+- **Pre-existing latency, unchanged by R41.1 (F2-A/R23):** after a sleep-only turn, the idle skip backs off up to 32
+  thinking slots (60 s each in production) without inference. An event arriving then is seen at the next slot that
+  runs, at most about 32 minutes later. It delays the wake but never suppresses it.
 
 ## Needs additional authority
 
