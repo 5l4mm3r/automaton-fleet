@@ -579,3 +579,19 @@ export function saleLine(prevRevenue: number | null, revenue: number): string | 
   return `New external revenue since your last turn (+${Math.round(revenue - prevRevenue)}p). A sale is not a finish line: fulfil, account, inspect the evidence (who bought, through which channel, at what price), `
     + "learn, improve, consider adjacent offers or an upsell, reinvest intelligently and keep hunting.";
 }
+
+/**
+ * R41.1 (owner, 2026-10-08): the assessment push after a sleep that declared no hibernation. An empty goal list is not
+ * proof there is nothing to do; waiting is legitimate when the founder judges it the better use of its capital.
+ */
+export const ASSESS_LINE = "Your last turn ended in sleep without a hibernation assessment (no wake condition, no review time). Assess your actual position now — goals, decisions, "
+  + "dependencies, wallet and commitments, evidence and your seed knowledge (field_guide) — and act on the most valuable worthwhile work: an empty goal list is not proof there is nothing to do. "
+  + "If waiting is genuinely the better use of your capital — worthwhile immediate work is exhausted, or a prepared foundation and real marketing effort now need time to produce results — "
+  + "hibernate: sleep with your reason and wakeOn (the event that should wake you) or reviewAt (when to look again).";
+
+/** The safety re-check of a declared hibernation (after 4, 8, 16, then every 32 slim wakes): never a demand to look busy. */
+export function hibernationRecheck(outcome: string, wakeOn: string | null, reviewAt: string | null): string {
+  const reason = /sleep: (.*)$/.exec(outcome)?.[1]?.slice(0, 200) ?? "";
+  return `Hibernation re-check: you chose to wait${reason ? ` ("${reason}")` : ""}${wakeOn ? `, to be woken by: ${wakeOn}` : ""}${reviewAt ? `, review at ${reviewAt}` : ""}. `
+    + "Nothing material has changed since. If that judgement still holds, sleep again with the same wake condition; act only if worthwhile work now exists.";
+}

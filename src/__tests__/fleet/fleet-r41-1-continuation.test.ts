@@ -18,10 +18,10 @@ import path from "path";
 import { FounderMind, MAX_IDLE_SKIP, type MindPorts } from "../../fleet/founder/mind.js";
 import { FounderToolbox, JOURNAL_FILE, sameAction } from "../../fleet/founder/toolbox.js";
 import { LoopGuard, SCOPED_CONTINUE } from "../../fleet/founder/loop-guard.js";
-import { HIBERNATE_LINE, BOOTSTRAP_LINE, classifyWork, economicState, stateLine, type SurvivalView } from "../../fleet/founder/decisions.js";
-import { FIELD_GUIDE, guideSection } from "../../fleet/founder/field-guide.js";
-import { FOUNDER_MANIFEST_V2, decideTool, manifestSha256 } from "../../fleet/capabilities.js";
-import { FOUNDER_CHARTER, FOUNDER_CHARTER_V5, FOUNDER_TOOLS, FOUNDER_V5_TOOLS, toolsForDoctrine, type ToolCall } from "../../fleet/cognition/types.js";
+import { ASSESS_LINE, HIBERNATE_LINE, BOOTSTRAP_LINE, classifyWork, economicState, stateLine, type SurvivalView } from "../../fleet/founder/decisions.js";
+import { FIELD_GUIDE, OWNER_SELECTED_TITLES, READING_COLLECTION, guideSection, releaseDoctrines } from "../../fleet/founder/field-guide.js";
+import { FOUNDER_MANIFEST_V2, TOOL_CAPABILITIES, decideTool, manifestSha256 } from "../../fleet/capabilities.js";
+import { FOUNDER_CHARTER, FOUNDER_CHARTER_V5, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_TOOLS, FOUNDER_TOOLS, FOUNDER_V5_TOOLS, toolsForDoctrine, type ToolCall } from "../../fleet/cognition/types.js";
 import { capabilityView, founderStepTools } from "../../fleet/cognition/capability-signature.js";
 import { taskPacketProblems } from "../../fleet/cognition/task-packet.js";
 
@@ -96,21 +96,26 @@ const seq = async (r: ReturnType<typeof rig>, k: number) => { const out = []; fo
 const call = (name: string, args: Record<string, unknown>, id = `${name}-${Math.random().toString(36).slice(2, 8)}`): ToolCall => ({ id, name, arguments: args });
 
 describe("R41.1 blocked goals and the wake rule", () => {
-  it("(1) a pending dependency + an executable open goal → FULL packets every wake, executable work named, never slim", async () => {
+  it("(1) a pending dependency + an executable open goal → full packets that name the executable work; an undeclared sleep gets an assessment push before any slim wake", async () => {
     const r = rig({ goals: [{ id: "g1", title: "Improve the template pack and its launch material", status: "open" }, { id: "g2", title: "Publish the pack on Gumroad", status: "open", blockedBy: DEP }] });
-    const ps = await seq(r, 8); // the founder (wrongly) sleeps every turn
-    expect(ps.map((p) => p.slim)).toEqual(Array(8).fill(false));
-    for (const p of ps) {
+    const ps = await seq(r, 8); // the founder sleeps every turn without declaring hibernation
+    // Owner 2026-10-08: hibernation is the founder's judgement, not a goal-count rule — after the assessment push the
+    // ordinary bounded schedule applies (re-check after 4 slim wakes).
+    expect(ps.map((p) => p.slim)).toEqual([false, false, true, true, true, true, false, true]);
+    expect(ps[1].task).toContain(ASSESS_LINE);
+    for (const p of ps.filter((x) => !x.slim)) {
       expect(p.task).toContain("Executable now: g1.");
       expect(p.task).toMatch(/Blocked: g2 — waiting on dependency 6178c7bb \(pending\)\. Already requested: do not request it again and do not retry the blocked action\. It blocks only this goal\./);
       expect(p.body.objective.map((g: { id: string; title: string }) => [g.id, g.title])).toEqual([["g1", "Improve the template pack and its launch material"], ["g2", "Publish the pack on Gumroad"]]);
     }
     expect(ps[1].task).toMatch(/^Idle wake: your open goals are your execution path \(g1 "Improve the template pack/m); // the push names the executable goal, not the blocked one
+    expect(ps[6].task).toMatch(/^Idle wake: your open goals are your execution path \(g1 "Improve the template pack/m);
     expect(r.created).toEqual([]);
   });
 
-  it("(2) every open goal blocked + no open decision → hibernation: slim wakes with the backed-off re-check (4, 8, 16, 32)", async () => {
-    const r = rig({ goals: [{ id: "g2", title: "Publish the pack on Gumroad", status: "open", blockedBy: DEP }] });
+  it("(2, amended) every open goal blocked + no decision: the packet asks for the hibernation judgement; a DECLARED hibernation gets slim wakes with the backed-off re-check (4, 8, 16, 32)", async () => {
+    const r = rig({ goals: [{ id: "g2", title: "Publish the pack on Gumroad", status: "open", blockedBy: DEP }],
+      reply: (n) => [call("sleep", { reason: "pack finished; only the Gumroad listing remains and it waits on the KYC dependency", wakeOn: "dependency 6178c7bb resolved" }, `h${n}`)] });
     const first = await r.next();
     expect(first.slim).toBe(false);
     expect(first.task).toContain(HIBERNATE_LINE);
@@ -118,7 +123,11 @@ describe("R41.1 blocked goals and the wake rule", () => {
     const full = ps.map((p, i) => (p.slim ? -1 : i + 1)).filter((i) => i > 0);
     expect(full).toEqual([5, 14, 31]); // after 4, 8 and 16 slim wakes: the same bounded schedule as before
     expect(r.mind.routing.idleNudges.hibernate).toBe(3);
-    for (const i of full) expect(ps[i - 1].task).toContain(HIBERNATE_LINE);
+    for (const i of full) {
+      expect(ps[i - 1].task).toMatch(/Hibernation re-check: you chose to wait \("pack finished; only the Gumroad listing remains .*"\), to be woken by: dependency 6178c7bb resolved\. Nothing material has changed since\./);
+      expect(ps[i - 1].task).toContain(HIBERNATE_LINE);
+    }
+    expect(ps[0].task).toContain("You are hibernating; your stated wake condition: dependency 6178c7bb resolved.");
   });
 
   it("(3) set_goal with blockedBy / awaiting / reviewAt is stored, rendered, updatable and clearable (founder-v5 vocabulary)", async () => {
@@ -193,6 +202,8 @@ describe("R41.1 replay of Agent 2's R41 situation", () => {
           call("write_file", { path: "product/README.md", content: "# UK sole-trader bookkeeping pack\nHow to use each sheet…" }), call("sleep", { reason: "split; README written" })];
       }
       if (n === 2) return [call("write_file", { path: "product/listing-copy.md", content: "Finish your self-assessment records in 15 minutes…" }), call("sleep", { reason: "copy drafted" })];
+      // Only the blocked storefront goal left: the founder judges waiting worthwhile and declares it.
+      if (packet.includes(HIBERNATE_LINE)) return [call("sleep", { reason: "pack built, copy written; only the storefront waits on KYC", wakeOn: "dependency 6178c7bb resolved" })];
       return [call("sleep", { reason: "waiting" })];
     } });
     const [p1, p2, p3, p4] = await seq(r, 4);
@@ -244,7 +255,8 @@ describe("R41.1 hibernation, sale wake, survival pressure, comfort, expansion", 
   it("(10) a sale wakes a hibernating founder into fulfil → account → learn → improve → forward", async () => {
     let revenue = 0;
     const r = rig({ goals: [{ id: "g2", title: "Sell through the storefront", status: "open", awaiting: "first sale", reviewAt: "2999-01-01T00:00:00Z" }],
-      ledger: () => ({ cash: 9_968 + revenue, survivalEquity: 9_968 + revenue, externalCustomerRevenue: revenue, realizedNetProfit: revenue - 32 }) });
+      ledger: () => ({ cash: 9_968 + revenue, survivalEquity: 9_968 + revenue, externalCustomerRevenue: revenue, realizedNetProfit: revenue - 32 }),
+      reply: (n) => [call("sleep", { reason: "listing live and promoted; waiting for buyers", wakeOn: "a sale or a buyer reply" }, `s${n}`)] });
     await r.next();
     expect((await r.next()).slim).toBe(true);
     revenue = 900;
@@ -275,7 +287,8 @@ describe("R41.1 hibernation, sale wake, survival pressure, comfort, expansion", 
     expect(line).toMatch(/You are profitable with a reserve: you may run event-driven with explicit wake triggers and take longer-horizon, higher-quality experiments — keep measuring and reassess the market periodically\./);
     expect(economicState({ externalCustomerRevenue: 60_000, realizedNetProfit: 30_000 }, SURVIVAL({ survivalEquityCents: 4_000, burnPerDayCents: 100, runwayDays: 40 })).state).toBe("STABILIZE");
     const r = rig({ goals: [{ id: "g1", title: "Maintain the pack", status: "open", awaiting: "next sale", reviewAt: "2999-01-01T00:00:00Z" }],
-      ledger: () => ({ cash: 40_000, survivalEquity: 40_000, externalCustomerRevenue: 60_000, realizedNetProfit: 30_000 }), survival: () => SURVIVAL({ survivalEquityCents: 40_000, burnPerDayCents: 100, runwayDays: 400 }) });
+      ledger: () => ({ cash: 40_000, survivalEquity: 40_000, externalCustomerRevenue: 60_000, realizedNetProfit: 30_000 }), survival: () => SURVIVAL({ survivalEquityCents: 40_000, burnPerDayCents: 100, runwayDays: 400 }),
+      reply: (n) => [call("sleep", { reason: "venture repeatable and profitable; nothing to improve before the next sales data", wakeOn: "the next sale", reviewAt: "2999-01-01T00:00:00Z" }, `p${n}`)] });
     const p = await r.next();
     expect(p.task).toMatch(/^Economic state: SURPLUS\. Existential pressure: LOW/m);
     expect((await r.next()).slim).toBe(true); // comfort = cheap event-driven wakes, not permanent full cognition
@@ -349,9 +362,153 @@ describe("R41.1 field journal, field guide, bootstrap, charter integration", () 
     for (const keep of [v4[6], v4[7], v4[8], v4[10], v4[11]]) expect(FOUNDER_CHARTER_V5).toContain(keep);
     // v4's "Sleep only when no economically meaningful move remains" is replaced by earned hibernation, not left contradictory.
     expect(FOUNDER_CHARTER_V5).not.toContain("Sleep only when no economically meaningful move remains");
-    expect(FOUNDER_CHARTER_V5).toMatch(/Hibernate only when it is rational — never merely because no sale has happened, a dependency is blocked or work is hard\./);
+    expect(FOUNDER_CHARTER_V5).toMatch(/Hibernation is your own judgement that waiting is the better use of capital — worthwhile immediate work is exhausted, or a sufficiently prepared foundation and real marketing effort need time to produce results — never merely because no sale has happened, a dependency is blocked or work is hard\./);
+    expect(FOUNDER_CHARTER_V5).toContain("An empty goal list is not proof there is nothing to do");
     for (const t of ["field_journal", "field_guide", "wakeOn", "blockedBy", "awaiting", "reviewAt"]) expect(FOUNDER_CHARTER_V5).toContain(t);
     expect(FOUNDER_V5_TOOLS.map((t) => t.name)).toEqual(["set_goal", "sleep", "field_journal", "field_guide"]);
     expect(Buffer.byteLength(FOUNDER_CHARTER_V5)).toBeLessThan(14_000);
+  });
+});
+
+// ─────────────────────────────────────────────── R41.1 completion: owner clarifications of 2026-10-08 (supplemental)
+
+describe("R41.1 completion — supplemental acceptance (owner clarifications 2026-10-08)", () => {
+  it("S1: empty goals → assessment and purposeful action, never vacuous automatic sleep; a completed assessment that supports waiting is respected", async () => {
+    // The newborn with nothing recorded gets the bootstrap and the opportunity cycle, then acts.
+    const actor = rig({ goals: [], reply: (n) => n === 1 ? [call("open_decision", { key: "first-hunt", purpose: "find_opportunity", objective: "First paying customer within 30 days",
+      question: "Which of three materially different offers has reachable demand?", hypothesis: "A narrow template beats a broad course", options: ["template", "mini-course", "fixed-scope service"],
+      stopAfterFetches: 3, stopWhen: "two independent purchase signals" }), call("sleep", { reason: "decision opened" })] : undefined });
+    const p1 = await actor.next();
+    expect(p1.slim).toBe(false);
+    expect(p1.task).toContain(BOOTSTRAP_LINE);
+    expect(p1.task).toMatch(/No open decision and no execution path\. Run ONE concise opportunity-identification cycle/);
+    expect((await actor.next()).task).toMatch(/Open decision first-hunt/); // the hunt continues from its own decision, not a slim sleep
+    // A founder that sleeps without assessing is pushed to assess once before any slim wake.
+    const idle = rig({ goals: [] });
+    const [a, b, c] = await seq(idle, 3);
+    expect([a.slim, b.slim, c.slim]).toEqual([false, false, true]);
+    expect(b.task).toContain(ASSESS_LINE);
+    expect(ASSESS_LINE).toContain("an empty goal list is not proof there is nothing to do");
+    // An assessment that supports waiting (declared) is respected at once: no new venture is demanded.
+    const waiter = rig({ goals: [], reply: (n) => [call("sleep", { reason: "assessed: tried three offers, none had reachable demand this week; waiting for the next marketplace data", reviewAt: "2999-01-01T00:00:00Z" }, `w${n}`)] });
+    const [w1, w2] = await seq(waiter, 2);
+    expect([w1.slim, w2.slim]).toEqual([false, true]);
+    expect(w2.task).toContain("You are hibernating; your stated wake condition: review at 2999-01-01T00:00:00.000Z.");
+  });
+
+  it("S2: a prepared foundation and real marketing effort with a genuine measurement window support economical hibernation — no blocked goal needed; the review time wakes it", async () => {
+    const r = rig({ goals: [] , reply: (n) => [call("sleep", { reason: "product live, listing optimised, three community posts and one outreach batch done; results need a week", wakeOn: "a sale, a reply or a listing-views change", reviewAt: "2999-01-01T00:00:00Z" }, `m${n}`)] });
+    fs.writeFileSync(path.join(r.d.m, "goals.json"), JSON.stringify([{ id: "g1", title: "Launch the pack", status: "complete" }, { id: "g2", title: "First marketing batch", status: "complete" }]));
+    const [f, s1, s2] = await seq(r, 3);
+    expect(f.slim).toBe(false);
+    expect([s1.slim, s2.slim]).toEqual([true, true]); // waiting is cheaper than looking busy
+    // The scheduled review arrives: the next wake is full and says what to do — inspect what changed.
+    const c = JSON.parse(fs.readFileSync(path.join(r.d.s, "mind-continuity.json"), "utf8"));
+    c.reviewAt = "2000-01-01T00:00:00.000Z";
+    fs.writeFileSync(path.join(r.d.s, "mind-continuity.json"), JSON.stringify(c));
+    const review = await r.next();
+    expect(review.slim).toBe(false);
+    expect(review.task).toContain("Your scheduled review time (2000-01-01T00:00:00.000Z) has come: inspect what changed and choose the next useful action.");
+  });
+
+  it("S2b: a hibernation declared at the end of a WORKING turn is recorded; a later plain sleep-only turn keeps it; a working turn ending in a plain sleep clears it", async () => {
+    const r = rig({ goals: [], reply: (n) => n === 1
+      ? [call("write_file", { path: "product/faq.md", content: "FAQ" }), call("sleep", { reason: "FAQ done; launch prepared", wakeOn: "a sale or a reply" })]
+      : n === 4 ? [call("write_file", { path: "product/faq.md", content: "FAQ v2" }), call("sleep", { reason: "small fix" })]
+      : [call("sleep", { reason: "still waiting" })] });
+    const cont = () => JSON.parse(fs.readFileSync(path.join(r.d.s, "mind-continuity.json"), "utf8"));
+    await r.next();
+    expect(cont().wakeOn).toBe("a sale or a reply");
+    const [p2, p3] = await seq(r, 2);
+    expect(p2.slim).toBe(false); // the working turn changed the workspace: one full look
+    expect(p3.slim).toBe(true); // nothing changed since and the declaration stands
+    expect(cont().wakeOn).toBe("a sale or a reply");
+    await r.next(); // n === 4 — a working turn that ends in a plain sleep
+    expect(cont().wakeOn).toBeUndefined();
+  });
+
+  it("S5: meaningful wake events prompt re-evaluation (dependency change, sale, due review); no material change keeps the economical wait", async () => {
+    let status = "pending";
+    let revenue = 0;
+    const r = rig({ goals: [{ id: "g2", title: "Publish on Gumroad", status: "open", blockedBy: DEP }], deps: () => [dep({ status })],
+      ledger: () => ({ cash: 9_968 + revenue, survivalEquity: 9_968 + revenue, externalCustomerRevenue: revenue, realizedNetProfit: revenue - 32 }),
+      reply: (n) => [call("sleep", { reason: "waiting on KYC", wakeOn: "dependency resolved or a sale" }, `e${n}`)] });
+    await r.next();
+    expect((await seq(r, 3)).map((p) => p.slim)).toEqual([true, true, true]); // nothing material changed
+    revenue = 500;
+    expect((await r.next()).task).toMatch(/New external revenue since your last turn \(\+500p\)/);
+    expect((await r.next()).slim).toBe(true); // back to waiting once the change was seen
+    status = "answered";
+    const woke = await r.next();
+    expect(woke.slim).toBe(false);
+    expect(woke.task).toContain("Executable now: g2.");
+  });
+
+  it("S8: journal continuity and knowledge reuse survive a runtime restart; the bootstrap is a newborn's only", async () => {
+    const r = rig({ goals: [{ id: "g1", title: "Improve the pack", status: "open" }] });
+    expect((await r.next()).task).toContain(BOOTSTRAP_LINE);
+    expect((await r.toolbox.execute(call("field_journal", { op: "add", entry: { observation: "Etsy blocks fetches (403)", lesson: "use marketplace search pages that allow fetching", reusability: "candidate_fleet", nextTrigger: "next demand check" } }))).ok).toBe(true);
+    // A new runtime process on the same state (a restart or an upgrade keeps the memory directory).
+    const ports = (r.mind as unknown as { o: ConstructorParameters<typeof FounderMind>[0] }).o;
+    const reborn = new FounderMind(ports);
+    let packet = "";
+    const infer = ports.ports.infer;
+    ports.ports.infer = async (m, w, route, d) => { packet = String((m as Array<{ content: string }>)[0].content); return infer(m, w, route, d); };
+    for (let i = 0; i <= MAX_IDLE_SKIP + 1 && !packet; i++) await reborn.turn(`after restart ${i}`);
+    expect(packet).toContain("Field journal: 1 entry; open next triggers: next demand check.");
+    expect(packet).not.toContain(BOOTSTRAP_LINE);
+    // Reuse/promotion goes through the existing Fleet knowledge path (the founder's own tool), never automatically.
+    expect(BOOTSTRAP_LINE).toMatch(/inspect existing Fleet knowledge \(economic_knowledge, read_knowledge\)/);
+    expect(guideSection("journal")!.text).toMatch(/Promotion rule: never turn one anecdote into Fleet doctrine/);
+  });
+
+  it("S9: study is optional — the reading collection is retrievable with provenance and licence, nothing forces reading, and a declared hibernation is not interrupted by study", async () => {
+    const r = rig({ goals: [], reply: (n) => [call("sleep", { reason: "nothing worth doing until the review", reviewAt: "2999-01-01T00:00:00Z" }, `q${n}`)] });
+    const lib = await r.toolbox.execute(call("field_guide", { op: "library", topic: "pricing" }));
+    expect(lib.ok).toBe(true);
+    expect(lib.output).toMatch(/study is optional — read only when it pays for a current decision; owner-selected books: none supplied yet/);
+    expect(lib.output).toMatch(/openstax-marketing: "Principles of Marketing" \(OpenStax \(Rice University\), 2023-01-25; durable principles; CC BY-NC-SA — free to read; do not copy into products\)/);
+    expect(READING_COLLECTION.every((s) => /^https?:\/\//.test(s.url) && s.licence && s.edition && s.topics.length)).toBe(true);
+    expect(READING_COLLECTION.filter((s) => s.kind === "dated platform/legal facts").every((s) => /re-check/.test(s.note))).toBe(true);
+    expect(OWNER_SELECTED_TITLES).toEqual([]); // none supplied: nothing invented
+    const ps = await seq(r, 4);
+    expect(ps.slice(1).every((p) => p.slim)).toBe(true);
+    for (const p of ps) expect(p.task).not.toMatch(/must (read|study)|read .* before you sleep|daily reading/i);
+    expect(FOUNDER_CHARTER_V5).toMatch(/Study \(the guide's reading collection\) only when its expected value for a current decision or capability justifies its cognition cost\./);
+  });
+
+  it("S10: the v5 tools dispatch end to end in the runtime (guide library, journal, sleep with reviewAt); malformed inputs are refused", async () => {
+    const r = rig({ goals: [] });
+    expect((await r.toolbox.execute(call("sleep", { reason: "x", reviewAt: "soon" }))).refused).toBe("FLEET_BAD_REQUEST");
+    expect((await r.toolbox.execute(call("sleep", { reason: "x", reviewAt: "2999-01-01T00:00:00Z" }))).output).toBe("hibernating; review at 2999-01-01T00:00:00.000Z");
+    expect((await r.toolbox.execute(call("sleep", { reason: "x" }))).output).toBe("sleeping");
+    expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "risk-tiers" }))).output).toMatch(/Judge the actual venture: a digital product or course is not safe merely because of its format/);
+    expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "assessment" }))).output).toMatch(/An empty goal list is not proof there is nothing to do/);
+    expect((await r.toolbox.execute(call("field_guide", { op: "nope" }))).refused).toBe("FLEET_BAD_REQUEST");
+    // Every tool the v5 gateway can offer is implemented by this runtime and classified under founder-v2.
+    const allowed = new Set(FOUNDER_MANIFEST_V2.allowed as readonly string[]);
+    for (const t of FOUNDER_V5_TOOLS) expect(decideTool(t.name, FOUNDER_MANIFEST_V2), t.name).toEqual({ allowed: true, capability: t.capability });
+    expect([...allowed]).toEqual(expect.arrayContaining(FOUNDER_V5_TOOLS.map((t) => t.capability)));
+  });
+
+  it("doctrine compatibility marker: a release implements founder-v5 only when its tree carries the v5 runtime module", () => {
+    const root = tmp();
+    const v5 = "a".repeat(40), v4 = "b".repeat(40);
+    fs.mkdirSync(path.join(root, v5, "src/fleet/founder"), { recursive: true });
+    fs.writeFileSync(path.join(root, v5, "src/fleet/founder/field-guide.ts"), "x");
+    fs.mkdirSync(path.join(root, v4, "src/fleet/founder"), { recursive: true });
+    const d = releaseDoctrines(root, (p) => fs.existsSync(p));
+    expect(d(v5)).toEqual(["founder-v4", "founder-v5"]);
+    expect(d(v4)).toEqual(["founder-v4"]);
+    expect(d(null)).toEqual(["founder-v4"]);
+    expect(d("../../etc")).toEqual(["founder-v4"]); // a commit is 40 hex characters, never a path
+  });
+
+  it("classification drift guard: every advertised founder tool is classified with its advertised class — except the documented identity/browser/fleet_services gap (owner decision pending)", () => {
+    const advertised = [...FOUNDER_TOOLS, ...FOUNDER_V5_TOOLS, ...FOUNDER_ROUTED_TOOLS, ...FOUNDER_EXPERIMENT_TOOLS];
+    const routedLocal = new Set(["routine_task", "escalate_question"]); // answered by the mind itself, never by the toolbox
+    const unclassified = [...new Set(advertised.filter((t) => !routedLocal.has(t.name) && !(t.name in TOOL_CAPABILITIES)).map((t) => t.name))].sort();
+    expect(unclassified).toEqual(["browser", "fleet_services", "identity"]);
+    for (const t of advertised) if (t.name in TOOL_CAPABILITIES) expect(TOOL_CAPABILITIES[t.name], t.name).toBe(t.capability);
   });
 });

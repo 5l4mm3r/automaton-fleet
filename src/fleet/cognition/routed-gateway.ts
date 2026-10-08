@@ -33,6 +33,11 @@ export interface RoutedCognitionPorts {
   routingState(agentId: string): Promise<Record<string, unknown> | null>;
   authorize(agentId: string, estimateUsdCents: number, route: Record<string, unknown>, promptSha256: string): Promise<Record<string, unknown> & { ok: boolean }>;
   record(agentId: string, requestId: string, r: CognitionRecord, obs: { packetBytes: number | null; thinkingTokens: number | null; promptCache: string | null; cacheReason?: string | null }): Promise<Record<string, unknown> & { ok: boolean }>;
+  /**
+   * R41.1: the doctrines the founder's ATTESTED runtime release implements (absent = not checked, e.g. tests and
+   * development). A doctrine beyond founder-v4 is served only when its release contains the matching runtime code.
+   */
+  runtimeDoctrines?(agentId: string): Promise<readonly string[]>;
 }
 
 export type PromptCachePolicy = "off" | "prefix" | "prefix+tail";
@@ -116,6 +121,11 @@ export async function inferRouted(
   // charter text and the v5 tool vocabulary only: never the tier, the price, a permission or any capability class.
   const doctrine = parseDoctrine(body.doctrine);
   if (!doctrine) throw new CognitionError(400, "FLEET_DOCTRINE_UNKNOWN", "unknown founder doctrine");
+  // A request string is not proof: the founder's registered (attested) release must implement the doctrine's tools and
+  // continuity. A mismatch is refused, never silently downgraded (it means the running code is not the pinned code).
+  if (doctrine !== "founder-v4" && ports.runtimeDoctrines && !(await ports.runtimeDoctrines(agentId)).includes(doctrine)) {
+    throw new CognitionError(409, "FLEET_DOCTRINE_INCOMPATIBLE", "this founder's attested runtime release does not implement that doctrine");
+  }
 
   // 2. The router decides from the task alone.
   let decision: RouteDecision;

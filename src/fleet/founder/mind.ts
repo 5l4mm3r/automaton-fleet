@@ -39,7 +39,7 @@ import { decideTool, type CapabilityManifest } from "../capabilities.js";
 import type { FounderToolbox, ToolOutcome } from "./toolbox.js";
 import type { LoopGuard } from "./loop-guard.js";
 import { escalateQuestion, priorDecision } from "./escalation.js";
-import { BOOTSTRAP_LINE, DECISIONS_FILE, HIBERNATE_LINE, classifyWork, decisionLines, economicState, nextMoveLine, idleTask, loadDecisions, ownCapitalLine, parseSurvival, saleLine, stateLine,
+import { ASSESS_LINE, BOOTSTRAP_LINE, DECISIONS_FILE, HIBERNATE_LINE, hibernationRecheck, classifyWork, decisionLines, economicState, nextMoveLine, idleTask, loadDecisions, ownCapitalLine, parseSurvival, saleLine, stateLine,
   survivalLine, workKind, workLines, type Decision, type GoalView, type WorkKind } from "./decisions.js";
 import { readJournal } from "./toolbox.js";
 import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineClass } from "./task-classifier.js";
@@ -242,7 +242,7 @@ function openGoalsOf(memoryDir: string): GoalView[] {
 export const RENUDGE_FIRST = 4;
 export const RENUDGE_MAX = 32;
 /** The idle state being re-checked: its digest, slim wakes since its last push, and when the next push is due. */
-interface IdleState { digest: string; slim: number; after: number }
+interface IdleState { digest: string; slim: number; after: number; /** R41.1: the founder already had a full assessment push for this idle state. */ assessed?: boolean }
 
 /** The capability view the controller reports in cognition status (null when it reports none). */
 export function parseCapabilityView(v: unknown): { policySignature: string; tools: string[]; experiments: Record<string, unknown> | null } | null {
@@ -403,16 +403,17 @@ export class FounderMind {
   // ─────────────────────────────────────────────── R23 routed mode
 
   private continuity(): { at: string; outcome: string; tools: string[]; wakeDigest: string | null; capabilities: { sig: string; tools: string[] } | null; idle: IdleState | null;
-    revenue: number | null; wakeOn: string | null } | null {
+    revenue: number | null; wakeOn: string | null; reviewAt: string | null } | null {
     try {
       const c = JSON.parse(fs.readFileSync(path.join(this.o.stateDir, CONTINUITY_FILE), "utf8"));
       const caps = c?.capabilities && typeof c.capabilities.sig === "string" && Array.isArray(c.capabilities.tools)
         ? { sig: String(c.capabilities.sig), tools: (c.capabilities.tools as unknown[]).map(String).slice(0, 100) } : null;
       const idle = c?.idle && typeof c.idle.digest === "string" && Number.isSafeInteger(c.idle.slim) && Number.isSafeInteger(c.idle.after)
-        ? { digest: String(c.idle.digest), slim: Number(c.idle.slim), after: Number(c.idle.after) } : null;
+        ? { digest: String(c.idle.digest), slim: Number(c.idle.slim), after: Number(c.idle.after), ...(c.idle.assessed === true ? { assessed: true } : {}) } : null;
       return typeof c?.at === "string" && typeof c?.outcome === "string"
         ? { at: c.at, outcome: c.outcome, tools: Array.isArray(c.tools) ? c.tools.map(String).slice(0, 20) : [], wakeDigest: typeof c.wakeDigest === "string" ? c.wakeDigest : null, capabilities: caps, idle,
-            revenue: Number.isFinite(c.revenue) ? Number(c.revenue) : null, wakeOn: typeof c.wakeOn === "string" ? c.wakeOn.slice(0, 300) : null }
+            revenue: Number.isFinite(c.revenue) ? Number(c.revenue) : null, wakeOn: typeof c.wakeOn === "string" ? c.wakeOn.slice(0, 300) : null,
+            reviewAt: typeof c.reviewAt === "string" && Number.isFinite(Date.parse(c.reviewAt)) ? c.reviewAt : null }
         : null;
     } catch {
       return null;
@@ -421,11 +422,12 @@ export class FounderMind {
 
   /** `wakeDigest`: the state digest at the END of a sleep-only turn (absent otherwise), for the next bare-wake-up test. */
   private saveContinuity(outcome: string, tools: string[], wake: string | null = null, capabilities: { sig: string; tools: string[] } | null = null, idle: IdleState | null = null,
-    extra: { revenue?: number | null; wakeOn?: string | null } = {}): void {
+    extra: { revenue?: number | null; wakeOn?: string | null; reviewAt?: string | null } = {}): void {
     const f = path.join(this.o.stateDir, CONTINUITY_FILE);
     fs.writeFileSync(`${f}.tmp`, JSON.stringify({ at: new Date().toISOString(), turn: this.turns, outcome: outcome.slice(0, 1_200), tools: tools.slice(-20), ...(wake ? { wakeDigest: wake } : {}),
       ...(capabilities ? { capabilities } : {}), ...(idle && wake ? { idle } : {}),
-      ...(typeof extra.revenue === "number" && Number.isFinite(extra.revenue) ? { revenue: extra.revenue } : {}), ...(extra.wakeOn ? { wakeOn: extra.wakeOn.slice(0, 300) } : {}) }), { mode: 0o600 });
+      ...(typeof extra.revenue === "number" && Number.isFinite(extra.revenue) ? { revenue: extra.revenue } : {}), ...(extra.wakeOn ? { wakeOn: extra.wakeOn.slice(0, 300) } : {}),
+      ...(extra.reviewAt ? { reviewAt: extra.reviewAt } : {}) }), { mode: 0o600 });
     fs.renameSync(`${f}.tmp`, f);
   }
 
@@ -504,19 +506,31 @@ export class FounderMind {
     // ration or runway threshold from FleetController enters this.
     const nowDigest = unchanged ? prev!.wakeDigest! : null;
     const idlePrev = nowDigest && prev?.idle?.digest === nowDigest ? prev.idle : null;
-    // R41.1: slim, backed-off wake-ups are earned — only while every open goal is blocked or awaiting (hibernation). With
-    // executable work, an open decision or nothing at all to wait for, a sleep-only turn is followed by a FULL packet.
-    // (No open goal and no open decision keeps the earlier schedule: slim wakes with an opportunity push after 4, 8, 16, 32.)
-    const hibernating = kind === "hibernate" || kind === "opportunity";
-    const nudge = unchanged && hibernating && !!idlePrev && idlePrev.slim >= idlePrev.after;
-    const bare = unchanged && hibernating && !nudge;
+    // R41.1 (owner, 2026-10-08): hibernation is the founder's own judgement, never a goal-count predicate. It is DECLARED by a
+    // sleep that states a wake condition or a review time (sleep wakeOn / reviewAt): then slim, backed-off wake-ups are
+    // earned at once. A sleep without that assessment gets ONE full assessment push for its idle state ("an empty goal
+    // list is not proof there is nothing to do"); only if the founder sleeps again on the same state do slim wakes follow.
+    // A due review time is a change (full packet). The re-check after 4, 8, 16, then every 32 slim wakes, the idle skip
+    // and the loop guard are unchanged cost controls.
+    const declared = !!(prev?.wakeOn || prev?.reviewAt);
+    const reviewDue = !!prev?.reviewAt && Date.parse(prev.reviewAt) <= Date.now();
+    const quiet = unchanged && !reviewDue;
+    const assessed = declared || idlePrev?.assessed === true;
+    const challenge = quiet && !assessed;
+    const nudge = quiet && assessed && !!idlePrev && idlePrev.slim >= idlePrev.after;
+    const bare = quiet && assessed && !nudge;
     // (An idle state recorded before F2-A, or by an older runtime, starts its schedule now: the next slim wake counts.)
     const idleNext: IdleState | null = !nowDigest ? null
-      : nudge ? { digest: nowDigest, slim: 0, after: Math.min(RENUDGE_MAX, idlePrev!.after * 2) }
-      : { digest: nowDigest, slim: (idlePrev?.slim ?? 0) + 1, after: idlePrev?.after ?? RENUDGE_FIRST };
+      : challenge ? { digest: nowDigest, slim: 0, after: RENUDGE_FIRST, assessed: true }
+      : nudge ? { digest: nowDigest, slim: 0, after: Math.min(RENUDGE_MAX, idlePrev!.after * 2), assessed: true }
+      : { digest: nowDigest, slim: (idlePrev?.slim ?? 0) + 1, after: idlePrev?.after ?? RENUDGE_FIRST, assessed: true };
     const executableGoals = [...work.due, ...work.executable];
-    const move = kind === "hibernate" ? (bare ? null : HIBERNATE_LINE)
-      : nudge ? idleTask(kind, ledger, executableGoals) : bare ? null : unchanged ? idleTask(kind, ledger, executableGoals) : nextMoveLine(kind);
+    const kindMove = kind === "hibernate" ? HIBERNATE_LINE : idleTask(kind, ledger, executableGoals);
+    const move = bare ? null
+      : challenge ? `${ASSESS_LINE}\n${kindMove}`
+      : nudge ? (declared ? `${hibernationRecheck(prev?.outcome ?? "", prev?.wakeOn ?? null, prev?.reviewAt ?? null)}\n${kindMove}` : kindMove)
+      : reviewDue ? `Your scheduled review time (${prev!.reviewAt}) has come: inspect what changed and choose the next useful action.\n${kind === "hibernate" ? HIBERNATE_LINE : nextMoveLine(kind) ?? ""}`.trim()
+      : kind === "hibernate" ? HIBERNATE_LINE : nextMoveLine(kind);
     // F2-A (v26+ controller): the survival observation and the founder's own-capital position and record — information
     // for its own risk management (wallet, exposure, results), never a permission, a limit or a score.
     const own = !bare && survival ? ownCapitalLine(economics, ledger) : null;
@@ -536,7 +550,7 @@ export class FounderMind {
     const extra = [...(!prev ? [BOOTSTRAP_LINE] : []), ...(sale ? [sale] : []), ...(move ? [move] : []), ...(!bare ? [stateLine(econ)] : []),
       ...(!bare && survival ? [survivalLine(survival)] : []), ...(own ? [own] : []), ...(brief ? [economyLine(brief)] : []),
       ...(!bare && journal.length ? [`Field journal: ${journal.length} entr${journal.length === 1 ? "y" : "ies"}${triggers.length ? `; open next triggers: ${triggers.join(" | ")}` : ""}.`] : []),
-      ...(bare && prev?.wakeOn ? [`You are hibernating; your stated wake condition: ${prev.wakeOn}.`] : [])];
+      ...(bare && declared ? [`You are hibernating; your stated wake condition: ${prev?.wakeOn ?? `review at ${prev?.reviewAt}`}.`] : [])];
     let text: string;
     try {
       const full = buildTaskPacket({
@@ -563,6 +577,7 @@ export class FounderMind {
     let thinkingTier: Tier | null = null;
     let outcome = "";
     let wakeOn: string | null = null;
+    let reviewAt: string | null = null;
     for (let step = 0; step < maxSteps; step++) {
       // Append-only inside a turn: a conversation that would outgrow its budget ends here instead of being trimmed.
       if (step > 0 && size() > MAX_REQUEST_BYTES) {
@@ -629,6 +644,7 @@ export class FounderMind {
       const slept = r.toolCalls.find((c) => c.name === "sleep");
       if (slept && typeof slept.arguments?.reason === "string" && slept.arguments.reason) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}sleep: ${slept.arguments.reason}`;
       if (slept && typeof slept.arguments?.wakeOn === "string" && slept.arguments.wakeOn.trim()) wakeOn = slept.arguments.wakeOn.trim();
+      if (slept && typeof slept.arguments?.reviewAt === "string" && Number.isFinite(Date.parse(slept.arguments.reviewAt))) reviewAt = new Date(Date.parse(slept.arguments.reviewAt)).toISOString();
       if (r.toolCalls.length === 0 || slept) break;
     }
     this.settle(result);
@@ -642,7 +658,12 @@ export class FounderMind {
     // A sleep-only turn starts (or continues) the re-check schedule of the state it leaves behind.
     const idleSave = !digest ? null : digest === nowDigest && idleNext ? idleNext : { digest, slim: 0, after: RENUDGE_FIRST };
     this.saveContinuity(outcome, result.toolCalls, digest, capabilities ?? prev?.capabilities ?? null, idleSave,
-      { revenue: Number.isFinite(revenue) ? revenue : null, wakeOn: sleptOnly ? (wakeOn ?? (bare ? prev?.wakeOn ?? null : null)) : null });
+      // A hibernation is declared by the sleep that ends a turn (working or not); a plain sleep-only turn keeps the previous
+      // declaration (its wake condition still stands); a working turn that ends in a plain sleep clears it. A due review
+      // is spent once it has woken the founder.
+      { revenue: Number.isFinite(revenue) ? revenue : null,
+        wakeOn: wakeOn ?? (sleptOnly ? prev?.wakeOn ?? null : null),
+        reviewAt: reviewAt ?? (sleptOnly && !reviewDue ? prev?.reviewAt ?? null : null) });
     this.o.log?.("founder_turn", { turn: this.turns, routed: true, steps: result.steps, tools: result.toolCalls.length, refusals: result.refusals.length, chargedCents: result.chargedCents });
     return result;
   }

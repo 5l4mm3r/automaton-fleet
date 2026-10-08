@@ -25,7 +25,7 @@ import {
   FounderMind, MAX_IDLE_SKIP, RENUDGE_FIRST, RENUDGE_MAX, dependencyLines, parseDependencies, slimWakePacket, type MindPorts,
 } from "../../fleet/founder/mind.js";
 import {
-  CONSTANT_STANDARD, DECISION_LIMITS, HIBERNATE_LINE, DecisionLedgerError, OPPORTUNITY_CYCLE, commitmentCheck, decisionLines, idleKind, idleTask, loadDecisions, nextMoveLine, openDecision,
+  ASSESS_LINE, CONSTANT_STANDARD, DECISION_LIMITS, HIBERNATE_LINE, DecisionLedgerError, OPPORTUNITY_CYCLE, commitmentCheck, decisionLines, idleKind, idleTask, loadDecisions, nextMoveLine, openDecision,
   parseSurvival, researchCheck, resolveDecision, reviewDecision, survivalLine, type Decision, type SurvivalView,
 } from "../../fleet/founder/decisions.js";
 import { FounderToolbox, INFRA_CEILING } from "../../fleet/founder/toolbox.js";
@@ -490,7 +490,8 @@ describe("F2-A dependencies in the founder loop", () => {
   });
 
   it("R28 semantic capability-change detection is preserved: the upgrade names the new and renamed tools exactly once", async () => {
-    const r = rig({ deps: () => ({ ok: true, requests: [gumroadDep()] }) });
+    // (R41.1: the founder declares its hibernation, so the wake after the notice is slim at once.)
+    const r = rig({ deps: () => ({ ok: true, requests: [gumroadDep()] }), reply: (n) => [{ id: `h${n}`, name: "sleep", arguments: { reason: "Gumroad pending", wakeOn: "Gumroad resolved" } }] });
     const current = capabilityView(CAPS(), true).tools;
     const r28Tools = current.filter((t) => !["open_decision", "resolve_decision", "review_decision"].includes(t))
       .map((t) => (t === "record_external_dependency" ? "request_owner_decision" : t === "withdraw_external_dependency" ? "withdraw_owner_request" : t)).sort();
@@ -519,13 +520,16 @@ describe("F2-A idle semantics: the next economically meaningful move, never a br
     extra.discovery = { allowed: true, budgetCents: 300, spentTodayCents: 0, runwayDays: 400, reason: "allowed" };
     const rest = (await fullAt(r, 64)).map((i) => i + 1);
     expect([RENUDGE_FIRST, RENUDGE_MAX]).toEqual([4, 32]);
-    expect(rest).toEqual([5, 14, 31, 64]); // after 4, 8, 16 and 32 slim wakes
-    expect(r.mind.routing.idleNudges).toEqual({ decide: 0, execute: 0, opportunity: 4, hibernate: 0 });
-    const idle = r.parse(r.packets[5]);
+    // R41.1 (owner 2026-10-08): a sleep that declared no hibernation gets ONE assessment push first (an empty goal list is
+    // not proof there is nothing to do); then the same bounded schedule — after 4, 8 and 16 slim wakes.
+    expect(rest).toEqual([1, 6, 15, 32]);
+    expect(r.parse(r.packets[1]).task).toContain(ASSESS_LINE);
+    expect(r.mind.routing.idleNudges).toEqual({ decide: 0, execute: 0, opportunity: 3, hibernate: 0 });
+    const idle = r.parse(r.packets[6]);
     expect(idle.task).toContain(`Idle wake with no open decision and no execution path. ${OPPORTUNITY_CYCLE}`);
     expect(r.fetches).toEqual([]); // nothing was fetched just because the founder was idle
     // Bounded: the next 32 slim wakes, then one push again (the cap holds).
-    expect((await fullAt(r, 33)).map((i) => i + 65)).toEqual([97]);
+    expect((await fullAt(r, 33)).map((i) => i + 65)).toEqual([65]); // the next push after 32 slim wakes
   });
 
   it("(1, 12) no runway shutdown: at 3 days or 400 days of runway the founder gets the same moves; only its own selectivity guidance is informed", async () => {
@@ -535,7 +539,7 @@ describe("F2-A idle semantics: the next economically meaningful move, never a br
       expect(first.opportunity, String(runwayDays)).toBe(true);
       expect(first.task).toMatch(runwayDays === null ? /≈ 40p\/day over 7 days\. Runway changes which opportunities/ : new RegExp(`runway ≈ ${runwayDays} days at that burn`));
       expect(first.task).not.toMatch(/revenue-first|discovery floor|may not research|allowance/);
-      expect((await fullAt(r, 5)).map((i) => i + 1)).toEqual([5]); // the same idle schedule at any runway
+      expect((await fullAt(r, 5)).map((i) => i + 1)).toEqual([1]); // the same schedule at any runway: one assessment push, then slim
     }
   });
 

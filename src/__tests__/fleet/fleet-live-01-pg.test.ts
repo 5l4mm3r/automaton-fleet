@@ -359,7 +359,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
           capabilities: capabilityView(await gw.capabilities(F.id, F.token), true) }),
         ledger: async () => economics,
         ownerRequests: () => gw.ownerRequestList(F.id, F.token),
-        infer: async (messages) => { packets.push(String((messages as Array<{ content: string }>)[0].content)); return { content: "", toolCalls: [{ id: `s${packets.length}`, name: "sleep", arguments: { reason: "considering" } }], usage: { inputTokens: 1, outputTokens: 1 }, chargedCents: 0, requestId: `r${packets.length}` }; },
+        infer: async (messages) => { packets.push(String((messages as Array<{ content: string }>)[0].content)); return { content: "", toolCalls: [{ id: `s${packets.length}`, name: "sleep", arguments: { reason: "considering", wakeOn: "Gumroad resolved" } }], usage: { inputTokens: 1, outputTokens: 1 }, chargedCents: 0, requestId: `r${packets.length}` }; },
       };
       const loopGuard = new LoopGuard();
       const toolbox = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: dirs.w, memoryDir: dirs.m, loopGuard, ports: {
@@ -407,8 +407,8 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       const answered = await next();
       expect(answered.slim).toBe(false);
       expect(line(answered.task)).toEqual([`External dependency ${legacyId.slice(0, 8)} (kyc) for "${ACTION}": ANSWERED, with the note: "The fleet storefront identity covers this.". This records an answer only; it grants no capability, account, money or permission by itself.`]);
-      // R41.1: the answer unblocks goal g1, so the founder has executable work again: full wakes, never slim.
-      expect((await next()).slim).toBe(false);
+      // The answer is news exactly once; the founder (scripted) re-declares its hibernation, which it is entitled to judge.
+      expect((await next()).slim).toBe(true);
       expect(await authority()).toEqual(before);
       expect(capabilityView(await gw.capabilities(F.id, F.token), true).signature).toBe(capsBefore);
       await genesis.experimentPolicySet(false, null, OWNER);

@@ -54,10 +54,22 @@ export class RoutedRehearsalModel extends ScriptedProvider {
     super(model);
   }
 
+  /** R41.1: which doctrine each routed task step was served (charter v5 + v5 tools, or v4). */
+  readonly doctrineSeen = { v4: 0, v5: 0 };
+
   override async chat(req: ChatRequest): Promise<ChatResult> {
     const first = req.messages[0]?.content ?? "";
     if (!first.startsWith("TASK PACKET")) return super.chat(req);
     const has = (name: string) => req.tools.some((t) => t.name === name);
+    const v5 = String(req.system ?? "").includes("YOU EXIST UNDER ECONOMIC PRESSURE") && has("field_journal") && has("field_guide");
+    this.doctrineSeen[v5 ? "v5" : "v4"]++;
+    // R41.1: a v5 founder ends the walk by consulting the guide, journaling the result and DECLARING its hibernation.
+    const rest = (reason: string): ToolCall[] => v5
+      ? [call("sleep", { reason, wakeOn: "a new decision, a dependency change or the scheduled review", reviewAt: "2999-01-01T00:00:00Z" })]
+      : [call("sleep", { reason })];
+    const v5Close = (): ToolCall[] => v5 ? [call("field_guide", { op: "list" }),
+      call("field_journal", { op: "add", entry: { observation: "Routed walk complete: T1 chore, T3 question, T2 and T3 spends", lesson: "Escalate one question, not the job",
+        reusability: "agent", nextTrigger: "the scheduled review" } })] : [];
     const inTurn = req.messages.filter((m) => m.role === "assistant").length;
     const lastTool = [...req.messages].reverse().find((m) => m.role === "tool")?.content ?? "";
     const toolText = req.messages.filter((m) => m.role === "tool").map((m) => m.content).join("\n");
@@ -69,14 +81,14 @@ export class RoutedRehearsalModel extends ScriptedProvider {
     let toolCalls: ToolCall[] = [];
     if (first.includes(`"${REHEARSAL_DONE_FACT}"`)) {
       content = "The routed walk is on record; nothing useful to do.";
-      toolCalls = [call("sleep", { reason: "routed walk complete" })];
+      toolCalls = rest("routed walk complete");
     } else if (inTurn === 0 && first.includes('"decision:')) {
       // A later turn: the packet (persistent state, not a transcript) shows the question was decided and acted on.
       content = "The decision and the spend requests are on record.";
       // R41.1: the decision's execution goal is done (both spends were requested); with nothing executable left, the
       // founder's later sleep-only turns are a legitimate rest, so the next bare wake-up is slim.
       toolCalls = [call("remember_fact", { key: REHEARSAL_DONE_FACT, value: "T1 chore, T3 question, T2 spend and T3 major spend done" }),
-        ...openGoalIds(first).map((id) => ({ ...call("complete_goal", { id, outcome: "routed walk complete" }), id: `r${inTurn}-complete_goal-${id}` })), call("sleep", { reason: "routed walk complete" })];
+        ...openGoalIds(first).map((id) => ({ ...call("complete_goal", { id, outcome: "routed walk complete" }), id: `r${inTurn}-complete_goal-${id}` })), ...v5Close(), ...rest("routed walk complete")];
     } else if (inTurn === 0 && has("routine_task")) {
       content = "A page needs extracting: a routine chore.";
       toolCalls = [
@@ -110,7 +122,7 @@ export class RoutedRehearsalModel extends ScriptedProvider {
     } else {
       content = "The routed walk is complete.";
       toolCalls = [call("remember_fact", { key: REHEARSAL_DONE_FACT, value: "T1 chore, T3 question, T2 spend and T3 major spend done" }),
-        ...openGoalIds(first).map((id) => ({ ...call("complete_goal", { id, outcome: "routed walk complete" }), id: `r${inTurn}-complete_goal-${id}` })), call("sleep", { reason: "routed walk complete" })];
+        ...openGoalIds(first).map((id) => ({ ...call("complete_goal", { id, outcome: "routed walk complete" }), id: `r${inTurn}-complete_goal-${id}` })), ...v5Close(), ...rest("routed walk complete")];
     }
     const input = approx(req.system) + req.messages.reduce((n, m) => n + approx(m.content), 0);
     return { content, toolCalls, usage: { inputTokens: input, outputTokens: Math.min(approx(content) + approx(JSON.stringify(toolCalls)), req.maxTokens) }, usageSource: "provider", attempts: 1, responseModel: this.model };

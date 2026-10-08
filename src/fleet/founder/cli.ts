@@ -374,7 +374,7 @@ async function main(argv: string[]): Promise<number> {
       let report;
       try {
         report = await runUpgradeRehearsal({
-          registry: reg, host: new SystemdFounderHost(undefined, undefined, from), from, to, actor, backupRoot, log,
+          registry: reg, host: new SystemdFounderHost(undefined, undefined, from), from, to, actor, backupRoot, log, releasesDir: RELEASES_DIR,
           pinEnvFile: (agentId) => founderPinPaths(agentId).env,
           // The shipped unit heartbeats every 30 s and thinks on every 2nd heartbeat.
           timeoutMs: 360_000, healthTimeoutMs: 120_000, pollMs: 1_000,

@@ -115,7 +115,8 @@ describe("Critical Decision Packet: the question, not the job", () => {
 });
 
 /** In-memory ports that behave like the database for the gateway (authorization snapshot, exact record). */
-function fakePorts(o: { lastModel?: string | null; lastAgeS?: number | null; authorize?: (route: Record<string, unknown>) => Record<string, unknown> & { ok: boolean }; status?: Record<string, unknown>; experimentsEnabled?: boolean } = {}) {
+function fakePorts(o: { lastModel?: string | null; lastAgeS?: number | null; authorize?: (route: Record<string, unknown>) => Record<string, unknown> & { ok: boolean }; status?: Record<string, unknown>; experimentsEnabled?: boolean;
+  doctrines?: readonly string[] } = {}) {
   const seen = { authorized: [] as Array<{ estimate: number; route: Record<string, unknown>; promptSha: string }>, recorded: [] as Array<{ r: CognitionRecord; obs: Record<string, unknown> }> };
   let n = 0;
   const ports: RoutedCognitionPorts = {
@@ -130,6 +131,7 @@ function fakePorts(o: { lastModel?: string | null; lastAgeS?: number | null; aut
       seen.recorded.push({ r, obs });
       return { ok: true, chargedCents: 0, chargedMicrocents: 0, usageSource: r.usageSource };
     },
+    ...(o.doctrines ? { runtimeDoctrines: async () => o.doctrines! } : {}),
   };
   return { ports, seen };
 }
@@ -187,11 +189,23 @@ describe("routed gateway (real AnthropicProvider → fake Messages API)", () => 
       expect(sys()).toContain("A blocked dependency blocks ONE ACTION, never you or your venture");
       expect((body().tools ?? []).map((t) => t.name).sort()).toEqual([...v4Tools, "field_journal", "field_guide"].sort()); // exactly two additions
       expect(Object.keys(tool("set_goal")?.input_schema?.properties ?? {}).sort()).toEqual(["awaiting", "blockedBy", "id", "rationale", "reviewAt", "title"]);
-      expect(Object.keys(tool("sleep")?.input_schema?.properties ?? {}).sort()).toEqual(["reason", "wakeOn"]);
+      expect(Object.keys(tool("sleep")?.input_schema?.properties ?? {}).sort()).toEqual(["reason", "reviewAt", "wakeOn"]);
       expect(v5.route).toEqual(v4.route); // doctrine never touches routing, tier or model
       const { ports, seen } = fakePorts();
       await expect(inferRouted(ports, factory, "A", "t", { messages: obs, doctrine: "founder-v9" })).rejects.toMatchObject({ code: "FLEET_DOCTRINE_UNKNOWN", status: 400 });
       expect(seen.authorized).toEqual([]); // refused before anything is authorized or charged
+    });
+  });
+
+  it("R41.1 compatibility: founder-v5 is served only when the founder's attested release implements it; a v4-only release asking for it is refused, never downgraded; v4 is always served", async () => {
+    await withFake(async (factory, fake) => {
+      const legacy = fakePorts({ doctrines: ["founder-v4"] });
+      await expect(inferRouted(legacy.ports, factory, "A", "t", { messages: obs, doctrine: "founder-v5" })).rejects.toMatchObject({ code: "FLEET_DOCTRINE_INCOMPATIBLE", status: 409 });
+      expect(legacy.seen.authorized).toEqual([]);
+      await inferRouted(legacy.ports, factory, "A", "t", { messages: obs });
+      expect(JSON.stringify((fake.lastBody as { system?: unknown }).system)).not.toContain("YOU EXIST UNDER ECONOMIC PRESSURE");
+      await inferRouted(fakePorts({ doctrines: ["founder-v4", "founder-v5"] }).ports, factory, "A", "t", { messages: obs, doctrine: "founder-v5" });
+      expect(JSON.stringify((fake.lastBody as { system?: unknown }).system)).toContain("YOU EXIST UNDER ECONOMIC PRESSURE");
     });
   });
 

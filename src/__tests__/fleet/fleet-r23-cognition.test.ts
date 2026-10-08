@@ -550,7 +550,9 @@ describe("R23.1 cache only on evidenced reuse (T2/T3 steps)", () => {
 });
 
 describe("R23.1 slim bare-wake-up packet (founder runtime)", () => {
-  const sleepy = (n: number) => ({ content: "", toolCalls: [call(`toolu_z${n}`, "sleep", { reason: "nothing to do" })] });
+  // (R41.1: the founder declares its hibernation — a wake condition — so slim wake-ups are earned at once; these tests
+  // cover the slim packet's mechanics.)
+  const sleepy = (n: number) => ({ content: "", toolCalls: [call(`toolu_z${n}`, "sleep", { reason: "nothing to do", wakeOn: "a change" })] });
   const bodyOf = (c: { messages: Array<Record<string, unknown>> }) => JSON.parse(String(c.messages[0].content).split("\n").slice(3).join("\n"));
 
   it("after a sleep-only turn with nothing changed, the next turn is a slim, still-valid packet; any change brings back the full packet", async () => {

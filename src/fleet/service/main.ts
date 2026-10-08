@@ -42,6 +42,8 @@
 
 import crypto from "crypto";
 import fs from "fs";
+import { RELEASES_DIR } from "../founder/host.js";
+import { releaseDoctrines } from "../founder/field-guide.js";
 import net from "net";
 import os from "os";
 import path from "path";
@@ -401,6 +403,8 @@ export async function startFleetServiceFromEnv(
     const service = new FleetService({
       cognitionProvider,
       cognitionProviderFactory,
+      // R41.1: founder-v5 only for founders whose attested release contains the v5 runtime code.
+      runtimeDoctrines: releaseDoctrines(RELEASES_DIR, (p) => fs.existsSync(p)),
       researchFetcher: unixFetcher(research.socket),
       researchDenyDomains: research.denyDomains,
       cognitionDeadlineMs: cognition.deadlineMs,

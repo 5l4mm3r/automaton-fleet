@@ -55,9 +55,7 @@ function rig(o: { caps?: () => Record<string, unknown> | null; owner?: () => unk
   const dirs = { w: path.join(root, "w"), s: path.join(root, "s"), m: path.join(root, "s", "memory") };
   for (const d of Object.values(dirs)) fs.mkdirSync(d, { recursive: true });
   fs.writeFileSync(path.join(dirs.m, "facts.json"), JSON.stringify({ product: "built" }));
-  // R41.1: an executable goal now earns full wakes; these capability-detection tests observe a hibernating founder (its
-  // goal awaits an external event), where slim wakes are legitimate.
-  fs.writeFileSync(path.join(dirs.m, "goals.json"), JSON.stringify([{ id: "g1", title: "Find a sales channel", status: "open", awaiting: "a marketplace reply", reviewAt: "2999-01-01T00:00:00Z" }]));
+  fs.writeFileSync(path.join(dirs.m, "goals.json"), JSON.stringify([{ id: "g1", title: "Find a sales channel", status: "open" }]));
   const calls: string[] = [];
   let n = 0;
   const ports: MindPorts = {
@@ -70,7 +68,9 @@ function rig(o: { caps?: () => Record<string, unknown> | null; owner?: () => unk
     infer: async (messages) => {
       calls.push(String((messages as Array<{ content: string }>)[0].content));
       n++;
-      return { content: "", toolCalls: o.reply?.(n) ?? [{ id: `t${n}`, name: "sleep", arguments: { reason: "waiting" } }], usage: { inputTokens: 1, outputTokens: 1 }, chargedCents: 0, requestId: `r${n}` };
+      // R41.1: the founder DECLARES its hibernation (reason + wake condition), so slim wakes are earned at once; these tests
+      // observe capability-change detection on top of that.
+      return { content: "", toolCalls: o.reply?.(n) ?? [{ id: `t${n}`, name: "sleep", arguments: { reason: "waiting", wakeOn: "a marketplace reply" } }], usage: { inputTokens: 1, outputTokens: 1 }, chargedCents: 0, requestId: `r${n}` };
     },
   };
   const loopGuard = new LoopGuard();

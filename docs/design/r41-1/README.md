@@ -1,6 +1,6 @@
 # R41.1: survival instinct and blocked-action continuation
 
-**Status:** built and tested locally; not deployed.
+**Status:** built and tested locally; completed per the owner's clarifications of 2026-10-08; not deployed.
 
 **Source:** the owner's "Automaton Fleet Birth Charter & Survival Field Guide v1.2" (7 October 2026). The docx sha256 is
 `ac20c467…b40a5`; its text copy is `birth-charter-and-field-guide-v1.2.txt`.
@@ -76,10 +76,16 @@ So R41.1 has a small, **version-gated** controller part:
     `goalRef` names the goal.
   - An answered, declined or withdrawn dependency makes the goal executable again.
   - Recording a dependency with a `goalId` marks that goal, and only that goal.
-- **Wake rule:**
-  - Full packet while there is an executable goal, a due review or an open decision.
-  - Slim, backed-off wake-ups (re-checks after 4, 8, 16, 32) only while every open goal is blocked or awaiting, or
-    when nothing is open at all (the earlier no-work schedule).
+- **Wake rule (owner, 2026-10-08):** hibernation is the agent's own judgement, never a goal-count predicate.
+  - **Declared hibernation:** a sleep with a reason and `wakeOn` and/or `reviewAt` gets slim, backed-off wake-ups at
+    once. The re-check after 4, 8, 16, 32 slim wakes reminds the agent of its own reason and wake condition.
+  - **Undeclared sleep:** gets ONE full assessment push for its idle state (`ASSESS_LINE`: an empty goal list is not
+    proof there is nothing to do). If the agent sleeps again on the same state, the ordinary bounded schedule follows.
+    No blocked goal is needed to hibernate.
+  - **Changes that bring a full packet:** a due review, a sale, a dependency status change, a capability change, or any
+    change in memory, workspace or economy.
+  - **Unchanged cost controls:** the idle skip, the loop guard, and the 30-simulated-day cost bound (≤ 50 calls and
+    ≤ 6 full pushes a day).
 - **Duplicate dependencies:** an equivalent pending dependency is returned instead of a second owner request:
   - same kind;
   - at least 60% word overlap after stop words;
@@ -97,8 +103,69 @@ So R41.1 has a small, **version-gated** controller part:
   upgrades (the memory directory is preserved). Open `nextTrigger`s are shown in full packets.
 - **Bootstrap:** a newborn's first full packet carries the v1.2 §10 bootstrap line.
 
-## Known pre-existing gap (not changed)
+## Doctrine compatibility (attested, not asserted)
 
-The controller offers the `identity` and `browser` tools, but the runtime's `TOOL_CAPABILITIES` has no entry for them,
-so every call is refused as `FLEET_CAPABILITY_UNCLASSIFIED`. Agents can never use either tool. Classifying them would
-widen Agent capability, so it is left for an owner decision. R41.1 only makes the refusal say it is one action.
+The gateway serves founder-v5 only when the authenticated founder's **registered (attested) runtime release** implements
+it.
+- **How the controller checks:** it reads the founder's `runtime_commit` and looks for the v5 runtime module in that
+  release's installed tree (`/opt/automaton-fleet/releases/<commit>/dist|src/fleet/founder/field-guide.*`). The
+  service user can read the trees under the existing sandbox; verified.
+- **Mismatch:** refused with `FLEET_DOCTRINE_INCOMPATIBLE` (409) before any authorization or charge. It is never
+  silently downgraded.
+- **founder-v4:** always served.
+
+## Field Guide additions (2026-10-08)
+
+- **`assessment`:** assess, decide, act; hibernation judgement; study economics; pressure without panic.
+- **`risk-tiers`:** lower, medium and higher risk. Advisory only. Digital products and courses are recommended starting
+  examples, never "safe by format", never a limit.
+- **Bootstrap:** framed as starting guidance, not a business assignment or a 24-hour promise.
+- **Reading collection (`field_guide op library`):** twelve free or appropriately licensed sources, each with author,
+  edition or date, URL, licence and topics. All URLs were checked to resolve on 2026-10-08.
+  - **OpenStax:** Entrepreneurship, Principles of Marketing, Principles of Accounting Vol 1, Principles of Management.
+    All are CC BY-NC-SA: free to read, never copied into products.
+  - **Essays and posts:** Paul Graham, *How to Get Startup Ideas* and *Do Things that Don't Scale*; Steve Blank, *What's
+    A Startup? First Principles*; the YC Startup Library.
+  - **Government pages:** two SBA pages (market research, business plan) and two GOV.UK pages (working for yourself,
+    sole trader). The GOV.UK pages are marked as dated legal facts to re-check.
+  - **Owner-selected books:** none supplied yet (`OWNER_SELECTED_TITLES = []`). Add them later, or promote summaries
+    through Fleet knowledge.
+  - **Use:** reading is optional and decision-driven (the founder's own `web_fetch`, under its research rules).
+    Retrieved text is untrusted information.
+
+## Transition plan: all agents to founder-v5
+
+Each step is separate, with its own pins, rehearsal, health evidence and rollback.
+
+1. **Controller release** (code only, schema 45 unchanged): `fleet-rollout.sh cutover <pins> 45 45`.
+   - Both agents keep their pinned runtimes and are served v4.
+   - The doctrine check refuses v5 to their v4-only releases.
+2. **On-host founder upgrade rehearsal** (throwaway registry, systemd host) from `136c4bd`, then from `94f09a7`.
+3. **Agent 2:** `fleet-founders.sh upgrade-runtime` (`136c4bd` → candidate). Once verified, its runtime asks for v5 and
+   is served it.
+4. **Founder 1:** `fleet-founders.sh upgrade-runtime` (`94f09a7` → candidate), after Agent 2 is verified.
+   - Its identity, memory (including its owner-dependent goal wording and the pending Gumroad request), workspace,
+     credential, wallet and ledger are preserved by the R23 lifecycle. The rehearsal from `94f09a7` proves it.
+5. **Rollback:** per agent with `rollback-runtime`, back to its previous pinned release and v4. The controller can be
+   reverted with the dump restore (class B) only after both agents are rolled back.
+
+## Known pre-existing gap (inspected 2026-10-08; owner decision required)
+
+Three tools are offered by the controller under the `planning` class (`cognition/types.ts`), which `founder-v2` allows.
+The runtime's `TOOL_CAPABILITIES` never classified them, so every call is refused as `FLEET_CAPABILITY_UNCLASSIFIED`.
+The original coverage test only checked the upstream tool list; the new drift guard pins the gap at exactly these
+three.
+
+| Tool | Added | What it does (database-enforced ops) | Infrastructure | Nature of the gap |
+|---|---|---|---|---|
+| `fleet_services` | v35 (2026-10-02) | own commitments, risk assessment, Fleet missions, estate search/claim | none external | accidental classification mismatch in already-intended authority |
+| `identity` | v34/v36 | personas, mailboxes, mail, phones/SMS, accounts (asynchronous broker jobs) | identity broker **active**; mail/SMS providers **not configured** (0 providers, 0 mailboxes) | classification mismatch plus absent provider dependencies |
+| `browser` | v37 (2026-10-02) | a real browser: sign-up, log-in, forms, listings | browser worker unit **not installed** on the VPS | classification mismatch plus an absent infrastructure dependency |
+
+- **Smallest repair:** add `fleet_services`, `identity` and `browser` → `planning` to `TOOL_CAPABILITIES` (runtime
+  release only). The founder-v2 manifest digest is unchanged.
+- **What it enables:**
+  - `fleet_services` at once;
+  - `identity` persona and account jobs through the broker (mail and SMS ops would report not-configured dependencies);
+  - `browser` would queue actions no worker executes until the worker is installed.
+- **Not done:** this widens what agents can actually do, so it was not repaired under R41.1.

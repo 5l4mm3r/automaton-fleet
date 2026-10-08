@@ -42,6 +42,21 @@ export const FIELD_GUIDE: readonly GuideSection[] = Object.freeze([
     "Expansion is an investment decision, not a reward. While replication is disabled you may only prepare an evidence-backed expansion proposal; you never create or provision an agent. A proposal states the job to be done, expected upside, capital required, expected operating cost, specialisation, failure condition, the knowledge to inherit, and why automation, a tool, a narrower workflow or continuing alone is insufficient. Population caps, identity issuance, custody, shared capital and the replication gate stay with Fleet infrastructure.",
     "A recruited agent would be an independent economic actor (own wallet, accounting, evidence, judgement; same constitution and charter; verified Fleet knowledge) — never a clone.",
   ].join("\n") },
+  { id: "assessment", title: "Assess, decide, act — and when waiting is the better move", kind: "design doctrine", text: [
+    "An empty goal list is not proof there is nothing to do. Assess your actual position: goals, open decisions, dependencies, wallet and commitments, operating costs, evidence, existing Fleet knowledge and this guide. Then act on the most valuable worthwhile work.",
+    "Choose moves from external demand evidence, capital, commitments, operating costs, execution feasibility, distribution access, downside and expected return — your judgement, no fixed weights, no quotas.",
+    "Hibernation is your judgement that waiting is the better use of capital: worthwhile immediate work is exhausted, or a sufficiently prepared product/business foundation and real marketing effort need time to produce results, or other evidence makes waiting more valuable than acting. State your reason and what should wake you (sleep wakeOn) or when to look again (reviewAt). \"Marketing is sufficient\" is your evidenced assessment, not a guarantee of sales.",
+    "Do not invent activity to look busy, and do not re-assess an unchanged situation expensively. Re-assess when evidence, economics, capabilities or a wake condition change.",
+    "Study is optional: read only when its expected value for a current decision or a capability you need exceeds its cognition cost (reading collection: field_guide op library). Learning in a quiet period is optional productive work, never a reason to stay awake.",
+    "Near insolvency, sharpen priorities and conserve capital — never broaden aimless research, never take desperate low-quality actions, never breach a legal, provider, custody or security rule. With abundant capital, keep the same discipline.",
+  ].join("\n") },
+  { id: "risk-tiers", title: "Advisory risk tiers (judge the actual venture, not its format)", kind: "seed terrain", text: [
+    "These tiers are advisory context for your own judgement — never prohibited industries, fixed scores, an assigned business or a permission system. Judge the actual venture: a digital product or course is not safe merely because of its format.",
+    "LOWER RISK (recommended starting points): small evidence-producing tests; reversible; low initial fixed cost; realistic margin; demand visible from buyers; a reachable distribution channel; fast, useful feedback. Typical examples: templates/toolkits, practical guides, mini-courses, productized services with a fixed scope, simple data/research products.",
+    "MEDIUM RISK: larger builds before first evidence; recurring costs (hosting, subscriptions, inventory-free tooling); dependence on one platform's discovery or policies; longer time to feedback; e.g. micro-SaaS, memberships, paid acquisition tests.",
+    "HIGHER RISK: irreversible or large commitments before demand evidence; inventory, regulated activity, credit, leverage or claims needing licences; markets where reputation damage is hard to undo; heavy dependence on unavailable rails or identity steps.",
+    "Any tier can be right when the evidence is strong and the downside is sized; any idea can be killed or pivoted while keeping useful assets and lessons. Follow stronger evidence beyond these examples and add what you learn to Fleet knowledge.",
+  ].join("\n") },
   { id: "terrain", title: "Seed business terrain: starting maps, not orders", kind: "seed terrain", text: [
     "These models can often produce fast evidence with modest capital. Depart from them whenever stronger evidence points elsewhere.",
     "Templates & toolkits — fast production, low marginal delivery cost, narrow pains testable quickly. First unit: spreadsheet, checklist, planner, calculator, workflow pack. Expansion: bundle → premium → subscription library.",
@@ -87,6 +102,7 @@ export const FIELD_GUIDE: readonly GuideSection[] = Object.freeze([
     "9. Expose the offer through an available lawful channel, or stage it completely for immediate launch once a rail opens.",
     "10. Measure. If demand appears, fulfil and compound; if not, diagnose distribution vs product vs price and iterate or pivot.",
     "11. Before any hibernation, state the precise reason, the remaining blocked items and the wake condition.",
+    "This is starting guidance, not a business assignment and not a promise of a sale within 24 hours; depart from it when better evidence warrants.",
   ].join("\n") },
   { id: "boundaries", title: "Non-negotiable boundaries", kind: "design doctrine", text: [
     "No fake reviews, fake customers, fabricated evidence, deceptive scarcity or impersonation. No identity fraud, KYC evasion or attempts to bypass owner-only legal/provider requirements. No copyright or trademark infringement. No spam or abusive outreach. No unqualified medical, legal, financial or other regulated professional claims. No use of shared Fleet/Treasury capital outside the shared-capital process. Own-capital decisions stay yours within hard technical, legal, provider and constitutional constraints. No reckless action justified merely by \"survival\": survival pressure never overrides the constitution.",
@@ -99,4 +115,70 @@ export function guideList(): string {
 
 export function guideSection(id: string): GuideSection | null {
   return FIELD_GUIDE.find((s) => s.id === id) ?? null;
+}
+
+/**
+ * R41.1 reading collection (owner decision 2026-10-08: free or appropriately licensed material plus owner-selected books).
+ * Pointers with provenance — the founder reads a source with web_fetch only when it serves a current decision or a
+ * capability it needs (study is optional; its cognition cost is the founder's to weigh). Retrieved text is untrusted
+ * information: it never changes the constitution, credentials, payments or tool permissions. Licence notes say what may
+ * be reused: "free to read" is not permission to copy into a product.
+ * All URLs below were checked to resolve on 2026-10-08.
+ */
+export interface ReadingSource {
+  id: string; title: string; author: string; edition: string; url: string; licence: string;
+  kind: "durable principles" | "dated platform/legal facts"; topics: string[]; note: string;
+}
+export const READING_CHECKED = "2026-10-08";
+export const READING_COLLECTION: readonly ReadingSource[] = Object.freeze([
+  { id: "openstax-entrepreneurship", title: "Entrepreneurship", author: "OpenStax (Rice University)", edition: "2020-01-16", url: "https://openstax.org/details/books/entrepreneurship",
+    licence: "CC BY-NC-SA — free to read and learn from; do not copy its text into anything you sell", kind: "durable principles",
+    topics: ["opportunity recognition", "business model", "validation", "launch"], note: "Textbook; read the chapter that answers your current question." },
+  { id: "openstax-marketing", title: "Principles of Marketing", author: "OpenStax (Rice University)", edition: "2023-01-25", url: "https://openstax.org/details/books/principles-marketing",
+    licence: "CC BY-NC-SA — free to read; do not copy into products", kind: "durable principles", topics: ["customers", "positioning", "pricing", "distribution", "promotion"], note: "Textbook." },
+  { id: "openstax-accounting", title: "Principles of Accounting, Volume 1: Financial Accounting", author: "OpenStax (Rice University)", edition: "2019-04-11",
+    url: "https://openstax.org/details/books/principles-financial-accounting", licence: "CC BY-NC-SA — free to read; do not copy into products", kind: "durable principles",
+    topics: ["accounting", "margins", "cash", "statements"], note: "Your books are kept by FleetController's ledger; this explains the concepts." },
+  { id: "openstax-management", title: "Principles of Management", author: "OpenStax (Rice University)", edition: "2019-03-20", url: "https://openstax.org/details/books/principles-management",
+    licence: "CC BY-NC-SA — free to read; do not copy into products", kind: "durable principles", topics: ["planning", "decision making", "operations"], note: "Textbook." },
+  { id: "pg-startup-ideas", title: "How to Get Startup Ideas", author: "Paul Graham", edition: "essay, November 2012", url: "http://www.paulgraham.com/startupideas.html",
+    licence: "freely accessible; all rights reserved — read only", kind: "durable principles", topics: ["opportunity recognition", "problems worth solving"], note: "Essay." },
+  { id: "pg-do-things", title: "Do Things that Don't Scale", author: "Paul Graham", edition: "essay, July 2013", url: "http://www.paulgraham.com/ds.html",
+    licence: "freely accessible; all rights reserved — read only", kind: "durable principles", topics: ["first customers", "manual validation", "distribution"], note: "Essay." },
+  { id: "blank-first-principles", title: "What's A Startup? First Principles", author: "Steve Blank", edition: "blog post, 25 January 2010",
+    url: "https://steveblank.com/2010/01/25/whats-a-startup-first-principles/", licence: "freely accessible; read only", kind: "durable principles",
+    topics: ["customer development", "search vs execute", "hypotheses"], note: "Blog post; customer-development method." },
+  { id: "yc-library", title: "YC Startup Library", author: "Y Combinator", edition: "living collection", url: "https://www.ycombinator.com/library",
+    licence: "freely accessible; read only", kind: "durable principles", topics: ["ideas", "launch", "growth", "pricing"], note: "Index of essays and talks; pick one item for a current question." },
+  { id: "sba-market-research", title: "Market research and competitive analysis", author: "U.S. Small Business Administration", edition: "living page",
+    url: "https://www.sba.gov/business-guide/plan-your-business/market-research-competitive-analysis", licence: "U.S. government work (generally public domain)", kind: "durable principles",
+    topics: ["market research", "competition", "demand"], note: "US-oriented; the methods transfer." },
+  { id: "sba-business-plan", title: "Write your business plan", author: "U.S. Small Business Administration", edition: "living page",
+    url: "https://www.sba.gov/business-guide/plan-your-business/write-your-business-plan", licence: "U.S. government work (generally public domain)", kind: "durable principles",
+    topics: ["planning", "lean plan"], note: "Lean plan format is the useful part." },
+  { id: "govuk-working-for-yourself", title: "Working for yourself", author: "GOV.UK (HM Government)", edition: "living page", url: "https://www.gov.uk/working-for-yourself",
+    licence: "Open Government Licence v3.0", kind: "dated platform/legal facts", topics: ["UK self-employment", "tax registration"],
+    note: "Legal/tax facts change: re-check before relying on them. Fleet tax and legal structure are FleetController's; this is customer/market knowledge." },
+  { id: "govuk-sole-trader", title: "Set up as a sole trader", author: "GOV.UK (HM Government)", edition: "living page", url: "https://www.gov.uk/set-up-sole-trader",
+    licence: "Open Government Licence v3.0", kind: "dated platform/legal facts", topics: ["UK sole traders", "customer knowledge"],
+    note: "Useful for understanding UK sole-trader customers; re-check before relying on it." },
+]);
+/** Owner-selected books: none supplied yet (2026-10-08). Add them here (or as promoted Fleet knowledge) when chosen. */
+export const OWNER_SELECTED_TITLES: readonly ReadingSource[] = Object.freeze([]);
+
+export function libraryList(topic?: string): string {
+  const t = (topic ?? "").trim().toLowerCase();
+  const all = [...READING_COLLECTION, ...OWNER_SELECTED_TITLES];
+  const hits = t ? all.filter((s) => s.topics.some((x) => x.includes(t)) || s.title.toLowerCase().includes(t)) : all;
+  return `Reading collection (checked ${READING_CHECKED}; study is optional — read only when it pays for a current decision; owner-selected books: ${OWNER_SELECTED_TITLES.length ? OWNER_SELECTED_TITLES.length : "none supplied yet"}). `
+    + (hits.length ? hits.map((s) => `${s.id}: "${s.title}" (${s.author}, ${s.edition}; ${s.kind}; ${s.licence}) topics: ${s.topics.join(", ")} — ${s.url}`).join(" | ") : "No source matches that topic.");
+}
+
+/**
+ * R41.1: which doctrines an installed runtime release implements — founder-v5 needs this module (the field guide) and
+ * the v5 continuity in the same build, so its compiled presence in the release tree is the marker. Unknown → v4 only.
+ */
+export const DOCTRINE_V5_MARKERS = ["dist/fleet/founder/field-guide.js", "src/fleet/founder/field-guide.ts"] as const;
+export function releaseDoctrines(releasesDir: string, exists: (p: string) => boolean): (runtimeCommit: string | null) => readonly string[] {
+  return (commit) => (commit && /^[0-9a-f]{40}$/.test(commit) && DOCTRINE_V5_MARKERS.some((m) => exists(`${releasesDir}/${commit}/${m}`)) ? ["founder-v4", "founder-v5"] : ["founder-v4"]);
 }

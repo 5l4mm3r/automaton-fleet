@@ -490,7 +490,7 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
     try {
       const r = await runUpgradeRehearsal({
         registry: { ownerUrl: reg.ownerUrl, serviceUrl: reg.serviceUrl, agentUrl: reg.agentUrl }, host, from, to, actor: OWNER,
-        backupRoot: path.join(root, "backups"), pinEnvFile: (id) => host.pinEnvFile(id), timeoutMs: 90_000, healthTimeoutMs: 45_000, pollMs: 250,
+        backupRoot: path.join(root, "backups"), pinEnvFile: (id) => host.pinEnvFile(id), timeoutMs: 90_000, healthTimeoutMs: 45_000, pollMs: 250, releasesDir: releases,
       });
       expect(r.checks.filter((c) => !c.ok)).toEqual([]);
       expect(r.pass).toBe(true);

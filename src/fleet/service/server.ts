@@ -216,6 +216,11 @@ export interface FleetServiceOptions {
   cognitionProviderFactory?: ProviderFactory | null;
   /** Pre-Genesis step 4: the isolated research fetcher (null = research unavailable on this controller). */
   researchFetcher?: FetcherPort | null;
+  /**
+   * R41.1: the doctrines a founder's attested runtime release implements, read from the installed release tree (absent =
+   * not checked). Production: releaseDoctrines(RELEASES_DIR).
+   */
+  runtimeDoctrines?: ((runtimeCommit: string | null) => readonly string[]) | null;
   /** Domains founders may never research (the fleet's own). */
   researchDenyDomains?: string[];
   /** Phase F.2 hardening (L2): one deadline for a whole inference (all attempts); founders wait this + a margin. */
@@ -1322,6 +1327,7 @@ export class FleetService {
                 routingState: (a) => admin.cognitionRoutingState(a),
                 authorize: (a, e, route, psha) => admin.cognitionRoutedAuthorize(a, e, route, psha),
                 record: (a, id, x, obs) => admin.cognitionRoutedRecord(a, id, x, obs),
+                ...(this.opts.runtimeDoctrines ? { runtimeDoctrines: async (a: string) => this.opts.runtimeDoctrines!((await admin.getAgent(a))?.runtimeCommit ?? null) } : {}),
               },
               this.opts.cognitionProviderFactory, agentId, token, body, { deadlineMs: this.cognitionDeadlineMs() },
             );

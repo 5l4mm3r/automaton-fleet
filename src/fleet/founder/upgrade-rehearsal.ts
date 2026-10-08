@@ -32,6 +32,7 @@ import { AnthropicProvider } from "../cognition/anthropic.js";
 import { REHEARSAL_AGENT_HEADER } from "../cognition/fake-openai.js";
 import { startFakeAnthropic, type FakeAnthropic } from "../cognition/fake-anthropic.js";
 import type { ProviderFactory } from "../cognition/routed-gateway.js";
+import { releaseDoctrines } from "./field-guide.js";
 import { REHEARSAL_DONE_FACT, REHEARSAL_TRIAGE_FACT, RoutedRehearsalModel, routedRehearsalToolless } from "../eval/routed-rehearsal-model.js";
 import type { RuntimeRelease } from "../runtime.js";
 import { FOUNDER_CREDENTIAL_FILE, FOUNDER_IDENTITY_FILE, type FounderIdentityFile } from "./evidence.js";
@@ -62,6 +63,8 @@ export interface UpgradeRehearsalOptions {
   healthTimeoutMs?: number;
   pollMs?: number;
   log?: (event: string, detail?: Record<string, unknown>) => void;
+  /** R41.1: the installed releases (as the production controller checks doctrine compatibility). Absent = not checked. */
+  releasesDir?: string;
 }
 
 export interface UpgradeRehearsalReport {
@@ -105,9 +108,10 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
   const genesis = new PgGenesisAdmin({ connectionString: o.registry.ownerUrl });
   const owner = new pg.Pool({ connectionString: o.registry.ownerUrl, max: 2, options: "-c search_path=fleet" });
   const audit: Array<Record<string, unknown>> = [];
+  const scripted = new RoutedRehearsalModel(UPGRADE_REHEARSAL_MODEL);
   const fake: FakeAnthropic = await startFakeAnthropic({
     apiKey: FAKE_KEY, model: UPGRADE_REHEARSAL_MODEL, models: [HAIKU, SONNET, OPUS], thinking: true, fault: () => null,
-    script: new RoutedRehearsalModel(UPGRADE_REHEARSAL_MODEL), toolless: routedRehearsalToolless, cacheMinTokens: 1024,
+    script: scripted, toolless: routedRehearsalToolless, cacheMinTokens: 1024,
   });
   const base = new AnthropicProvider({ baseUrl: fake.url, apiKey: FAKE_KEY, model: UPGRADE_REHEARSAL_MODEL, attemptTimeoutMs: 5_000, maxAttempts: 2, backoffMs: 100,
     extraHeaders: (agentId) => ({ [REHEARSAL_AGENT_HEADER]: agentId }) });
@@ -125,6 +129,7 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
       admin: svcStore, agent: gw, realReplicationEnabled: false, reaperIntervalMs: 0, release,
       audit: (e) => audit.push(e as unknown as Record<string, unknown>), terminator: new UnsupportedSandboxTerminator(),
       cognitionProvider: base, cognitionProviderFactory: factory, cognitionDeadlineMs: 12_000,
+      ...(o.releasesDir ? { runtimeDoctrines: releaseDoctrines(o.releasesDir, (p) => fs.existsSync(p)) } : {}),
     });
     const l = await service.listen(port, "127.0.0.1");
     port = Number(new URL(l.url).port);
@@ -380,6 +385,18 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
         && Number(slimRow!.packet_bytes) < Number(lastFull!.packet_bytes)
         && (slimRow!.cache_policy === "off" ? Number(slimRow!.cache_write_tokens) === 0 : /within the cache lifetime/.test(why)),
       slimRow ? `slim packet ${slimRow.packet_bytes} B vs the previous full packet ${lastFull?.packet_bytes ?? "?"} B; cache ${slimRow.cache_policy} (${why}); cost ${slimRow.cost_microcents} µ¢` : "no slim wake-up observed");
+    // R41.1: the upgraded founder asks for founder-v5; the controller serves it (its attested release implements it), and the
+    // v5 tools dispatch end to end through the real gateway and runtime: guide read, journal written, hibernation declared.
+    const journalFile = path.join(stateNs, "memory", "field-journal.jsonl");
+    const journalLines = fs.existsSync(journalFile) ? fs.readFileSync(journalFile, "utf8").trim().split("\n").filter(Boolean).length : 0;
+    const v5Tools = (() => { try {
+      return fs.readFileSync(path.join(stateNs, "mind-log.jsonl"), "utf8").trim().split("\n").flatMap((l) => ((JSON.parse(l) as { tools?: Array<{ name: string; ok: boolean }> }).tools ?? []))
+        .filter((t) => (t.name === "field_guide" || t.name === "field_journal") && t.ok).map((t) => t.name);
+    } catch { return [] as string[]; } })();
+    const cont = (() => { try { return JSON.parse(fs.readFileSync(path.join(stateNs, "mind-continuity.json"), "utf8")) as Record<string, unknown>; } catch { return {}; } })();
+    check("R41.1: the upgraded founder is served doctrine founder-v5 and its v5 tools run end to end — field guide read, field journal written, hibernation declared with a wake condition",
+      scripted.doctrineSeen.v5 > 0 && v5Tools.includes("field_guide") && v5Tools.includes("field_journal") && journalLines >= 1 && typeof cont.wakeOn === "string",
+      `${scripted.doctrineSeen.v5} v5 / ${scripted.doctrineSeen.v4} v4 routed step(s); tools ok: ${[...new Set(v5Tools)].join(", ") || "none"}; journal ${journalLines} entr${journalLines === 1 ? "y" : "ies"}; wake condition ${cont.wakeOn ? "declared" : "absent"}`);
     const booksEnd = await booksOk();
     const sumCost = routed.reduce((n, r) => n + Number(r.cost_microcents), 0);
     check("routed: memory and ledger continuity — pre-upgrade facts, goals and notes are still the founder's; every call is charged once to the same books",

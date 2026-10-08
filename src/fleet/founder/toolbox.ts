@@ -27,7 +27,7 @@ import { runSandboxed } from "./exec-sandbox.js";
 import type { LoopGuard } from "./loop-guard.js";
 import { recallFacts, rememberFact, rememberFacts, retractFact, sourceLabel, type FactRecord, type FactResult } from "./facts.js";
 import { custodyCategory, custodyRefusalText } from "../custody-refusals.js";
-import { FIELD_GUIDE_VERSION, guideList, guideSection } from "./field-guide.js";
+import { FIELD_GUIDE_VERSION, guideList, guideSection, libraryList } from "./field-guide.js";
 import { SCOPED_CONTINUE } from "./loop-guard.js";
 import { DecisionLedgerError, cognitionDepth, commitmentCheck, depthLine, loadDecisions, noteCommitment, noteResearch, openDecision, researchCheck, resolveDecision, reviewDecision, saveDecisions, type Decision } from "./decisions.js";
 
@@ -678,7 +678,11 @@ export class FounderToolbox {
         case "request_identity_fact":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.requestIdentityFact({ factKey: String(a.factKey ?? ""), purpose: String(a.purpose ?? ""), workflow: String(a.workflow ?? "") }))) };
         case "sleep":
-          return { name: call.name, ok: true, output: typeof a.wakeOn === "string" && a.wakeOn.trim() ? `sleeping; wake on: ${a.wakeOn.trim().slice(0, 300)}` : "sleeping" };
+          if (typeof a.reviewAt === "string" && a.reviewAt.trim() && !Number.isFinite(Date.parse(a.reviewAt))) return refuse("FLEET_BAD_REQUEST", "reviewAt is an ISO-8601 date/time");
+          if ((typeof a.wakeOn === "string" && a.wakeOn.trim()) || (typeof a.reviewAt === "string" && a.reviewAt.trim())) {
+            return { name: call.name, ok: true, output: `hibernating${typeof a.wakeOn === "string" && a.wakeOn.trim() ? `; wake on: ${a.wakeOn.trim().slice(0, 300)}` : ""}${typeof a.reviewAt === "string" && a.reviewAt.trim() ? `; review at ${new Date(Date.parse(a.reviewAt)).toISOString()}` : ""}` };
+          }
+          return { name: call.name, ok: true, output: "sleeping" };
         // R41.1: the founder's private field journal (append-only, bounded) and the Survival Field Guide (seed knowledge).
         case "field_journal": {
           const file = path.join(this.memory, JOURNAL_FILE);
@@ -702,12 +706,13 @@ export class FounderToolbox {
         }
         case "field_guide": {
           if (a.op === "list") return { name: call.name, ok: true, output: guideList() };
+          if (a.op === "library") return { name: call.name, ok: true, output: clip(libraryList(typeof a.topic === "string" ? a.topic : undefined)) };
           if (a.op === "read") {
             const s = guideSection(String(a.section ?? ""));
             if (!s) return refuse("FLEET_NOT_FOUND", `no such section; ${guideList()}`);
             return { name: call.name, ok: true, output: clip(`${FIELD_GUIDE_VERSION} — ${s.title} [${s.kind}]\n${s.text}`) };
           }
-          return refuse("FLEET_BAD_REQUEST", "op is list or read");
+          return refuse("FLEET_BAD_REQUEST", "op is list, read or library");
         }
         // F2-A: an action-scoped external dependency. It makes ONE action unavailable; it never blocks the founder, a goal
         // or other work, and it grants nothing. Ordinary business choices are not valid kinds (FleetController refuses them).
