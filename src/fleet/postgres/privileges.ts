@@ -905,6 +905,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
   const v30 = await has("fleet_envelopes");
   const v42 = await has("fleet_projects");
   const v46 = await has("fleet_rail_capability_checks");
+  const v47 = await has("fleet_settlement_receipts");
   const trig = await db.query<{ t: string }>(
     `SELECT c.relname || ':' || tg.tgname AS t FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = $1 AND NOT tg.tgisinternal AND tg.tgenabled <> 'D'`, [schema]);
@@ -928,6 +929,13 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     ...(v46 ? ["fleet_rail_capability_checks:fleet_rail_capability_checks_no_change", "fleet_rail_capability_checks:fleet_rail_capability_checks_no_truncate",
       "fleet_revenue_claims:fleet_revenue_claims_no_change", "fleet_revenue_claims:fleet_revenue_claims_no_truncate",
       "fleet_payment_rails:fleet_payment_rails_simulation_guard"] : []),
+    ...(v47 ? ["fleet_provider_accounts:fleet_provider_accounts_no_change", "fleet_provider_product_attributions:fleet_provider_product_attributions_no_change",
+      "fleet_provider_product_attributions:fleet_provider_product_attributions_guard", "fleet_provider_sales:fleet_provider_sales_guard",
+      "fleet_provider_sales:fleet_provider_sales_no_delete", "fleet_provider_payouts:fleet_provider_payouts_guard", "fleet_provider_payouts:fleet_provider_payouts_no_delete",
+      "fleet_provider_payout_lines:fleet_provider_payout_lines_no_change", "fleet_settlement_destinations:fleet_settlement_destinations_guard",
+      "fleet_settlement_destinations:fleet_settlement_destinations_no_delete", "fleet_settlement_receipts:fleet_settlement_receipts_guard",
+      "fleet_settlement_receipts:fleet_settlement_receipts_no_delete", "fleet_provider_allocations:fleet_provider_allocations_no_change",
+      "fleet_pilot_authorisations:fleet_pilot_authorisations_no_delete"] : []),
   ];
   for (const t of need) if (!have.has(t)) problems.push(`economy surface: trigger ${t.replace(":", ".")} is missing or disabled`);
   const checks = await db.query<{ n: string; d: string }>(
@@ -967,7 +975,22 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v46: readiness evidence only by the owner (and simulated evidence for a simulated rail at registration); external
     // settlement claims only by the claiming recorder.
     fleet_rail_capability_checks: new Set(["fleet_admin_rail_add", "fleet_admin_rail_verify"]),
-    fleet_revenue_claims: new Set(["fleet_admin_record_external_claimed"]),
+    fleet_revenue_claims: new Set(["fleet_admin_record_external_claimed",
+      // v47: the posting transaction claims the payout and the bank transaction; a linked transfer claims the original.
+      "fleet_provider_receipt_post", "fleet_receipt_process", "fleet_admin_receipt_transfer_link"]),
+    // v47: provider records only through their recorders (the G3 gateway / G4 bank feed call them via their roles),
+    // attribution and destinations only by the owner, allocations only by the posting functions.
+    fleet_provider_accounts: new Set(["fleet_admin_provider_account_register"]),
+    fleet_provider_product_attributions: new Set(["fleet_admin_provider_product_assign"]),
+    fleet_provider_sales: new Set(["fleet_provider_sale_record"]),
+    fleet_provider_payouts: new Set(["fleet_provider_payout_record"]),
+    fleet_provider_payout_lines: new Set(["fleet_provider_payout_record"]),
+    fleet_settlement_destinations: new Set(["fleet_admin_settlement_destination_add", "fleet_admin_settlement_destination_verify_access"]),
+    fleet_settlement_receipts: new Set(["fleet_bank_receipt_record", "fleet_receipt_process", "fleet_provider_receipt_post", "fleet_admin_receipt_attest",
+      "fleet_admin_receipt_transfer_link"]),
+    fleet_provider_allocations: new Set(["fleet_provider_post_share", "fleet_provider_post_suspense", "fleet_provider_receipt_post",
+      "fleet_admin_provider_suspense_release", "fleet_admin_receipt_debit_assign"]),
+    fleet_pilot_authorisations: new Set(["fleet_admin_pilot_authorise", "fleet_admin_pilot_revoke"]),
     fleet_external_transactions: new Set(["svc_settlement_ingest", "fleet_settlement_post"]),
     fleet_credential_refs: new Set(["fleet_admin_credential_register", "fleet_admin_credential_set_status", "svc_credential_use", "cx_credential_use"]),
     fleet_credential_use_log: new Set(["svc_credential_use", "cx_credential_use"]),

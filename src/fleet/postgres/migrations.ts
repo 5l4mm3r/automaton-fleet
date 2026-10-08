@@ -53,9 +53,10 @@ import { V43_SQL } from "./migrations-phase43.js";
 import { V44_SQL } from "./migrations-phase44.js";
 import { V45_SQL } from "./migrations-phase45.js";
 import { V46_SQL } from "./migrations-phase46.js";
+import { V47_SQL } from "./migrations-phase47.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 46;
+export const FLEET_PG_SCHEMA_VERSION = 47;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1197,6 +1198,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 44, name: "fleet_command_event_routing", sql: V44_SQL },
   { version: 45, name: "disposable_notifications_clearable_fleet_command", sql: V45_SQL },
   { version: 46, name: "truthful_rail_readiness_receive_only_settlement_guards", sql: V46_SQL },
+  { version: 47, name: "provider_records_cash_basis_settlement", sql: V47_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

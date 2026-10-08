@@ -31,6 +31,14 @@
  *   economy-rail-readiness <railId>               evidence per check, ready capabilities and the disclosure a dependency answer carries
  *   economy-rail-assign <railId> <ventureId> <capability>   assign an EVIDENCED capability to a venture
  *   economy-rail-status <railId> <active|degraded|suspended|revoked> [note…]   (active only once a capability is evidenced)
+ *   economy-provider-account-register <railId> <providerUserId> [--counterparty-sha256 h1,h2] <label…>   (v47; receive-only gumroad rail)
+ *   economy-provider-product-assign <accountId> <productId> <ventureId> [--effective-from iso] <reason…>  (first owner may be backdated)
+ *   economy-destination-add <fleet_treasury|owner_external> <currency> <maskedRef> [--visual v] [--descriptor regex] [--entity id] [--credential id] <label…>
+ *   economy-destination-verify-access <destinationId> <owner_attested|automatic> <evidence…>   (registration alone proves nothing)
+ *   economy-pilot-authorise <days 1..30> <reason…> | economy-pilot-revoke <pilotId>   (receipt-attestation fallback; refused once a bank feed exists)
+ *   economy-receipt-attest <destinationId> <accountId> <payoutId> <amountMinor> <currency> <bookedOn>   (labelled: not independently verified)
+ *   economy-receipt-transfer-link <ownerExternalReceiptId> <treasuryReceiptId>
+ *   economy-suspense-release <receiptId> | economy-debit-assign <receiptId> <agentId> <amountMinor> <reason…>
  *   economy-dependency-answer <requestId> <railId> <capability>   answer a pending request from a verified, assigned capability
  *   economy-credential-register <provider> <vault:ref> <scopeCsv> [--spend-limited] [--hint text] <purpose…>
  *   economy-credential-status <credentialId> <active|rotating|revoked|expired>
@@ -71,6 +79,8 @@ import { generateX25519, openSealed } from "../identity/crypto.js";
 
 export const HUB_COMMANDS = new Set([
   "hub", "hub-render", "hub-health", "hub-withdrawals", "economy-withdrawal-policy", "hub-custody", "economy-custody-policy", "hub-identity", "owner-identity-seal", "owner-identity-class", "owner-identity-consent", "owner-identity-consent-revoke", "economy-destination-reference", "economy-entity-add", "economy-tax-profile", "economy-tax-policy", "economy-tax-true-up", "economy-tax-payment",
+  "economy-provider-account-register", "economy-provider-product-assign", "economy-destination-add", "economy-destination-verify-access",
+  "economy-pilot-authorise", "economy-pilot-revoke", "economy-receipt-attest", "economy-receipt-transfer-link", "economy-suspense-release", "economy-debit-assign",
   "economy-rail-add", "economy-rail-status", "economy-rail-verify", "economy-rail-readiness", "economy-rail-assign", "economy-dependency-answer", "economy-credential-register", "economy-credential-status", "economy-settlement-attribute",
   "economy-capital-policy", "economy-sweep-policy", "economy-economy-policy", "economy-transfer-policy", "economy-cognition-depth", "economy-breaker-novelty",
   "economy-safe-transfer", "economy-wallet-transfer", "economy-sweep-compute", "economy-sweep-run",
@@ -109,7 +119,8 @@ const json = (v: string | undefined, what: string): Record<string, unknown> => {
 };
 
 export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, actor: string): Promise<unknown> {
-  const p = positional(a, ["--entity", "--credential", "--mode", "--venture", "--max", "--hint", "--role", "--beneficiaries", "--limit", "--fingerprint", "--expires"]);
+  const p = positional(a, ["--entity", "--credential", "--mode", "--venture", "--max", "--hint", "--role", "--beneficiaries", "--limit", "--fingerprint", "--expires",
+    "--counterparty-sha256", "--effective-from", "--visual", "--descriptor"]);
   const ack = a.includes("--acknowledge");
   const beneficiaries = (): unknown[] | null => {
     const v = flag(a, "--beneficiaries");
@@ -189,6 +200,27 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.railReadiness(p[0]);
     case "economy-rail-assign":
       return h.railAssign(p[0], p[1], p[2], actor);
+    case "economy-provider-account-register":
+      return h.providerAccountRegister(p[0], p[1], p.slice(2).join(" ") || p[1], (flag(a, "--counterparty-sha256") ?? "").split(",").filter(Boolean), actor);
+    case "economy-provider-product-assign":
+      return h.providerProductAssign(p[0], p[1], p[2], flag(a, "--effective-from"), p.slice(3).join(" "), actor);
+    case "economy-destination-add":
+      return h.destinationAdd({ kind: p[0], currency: p[1], maskedRef: p[2], label: p.slice(3).join(" ") || p[2], payoutVisual: flag(a, "--visual"),
+        descriptorPattern: flag(a, "--descriptor"), entityId: flag(a, "--entity"), bankfeedCredentialId: flag(a, "--credential") }, actor);
+    case "economy-destination-verify-access":
+      return h.destinationVerifyAccess(p[0], p[1], p.slice(2).join(" "), actor);
+    case "economy-pilot-authorise":
+      return h.pilotAuthorise(int(p[0], "days"), p.slice(1).join(" "), actor);
+    case "economy-pilot-revoke":
+      return h.pilotRevoke(p[0], actor);
+    case "economy-receipt-attest":
+      return h.receiptAttest(p[0], p[1], p[2], int(p[3], "amountMinor"), p[4], p[5], actor);
+    case "economy-receipt-transfer-link":
+      return h.receiptTransferLink(p[0], p[1], actor);
+    case "economy-suspense-release":
+      return h.suspenseRelease(p[0], actor);
+    case "economy-debit-assign":
+      return h.debitAssign(p[0], p[1], int(p[2], "amountMinor"), p.slice(3).join(" "), actor);
     case "economy-dependency-answer":
       return h.dependencyAnswerFromCapability(p[0], p[1], p[2], actor);
     case "economy-credential-register":

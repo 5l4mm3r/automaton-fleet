@@ -113,6 +113,40 @@ export class PgHubAdmin {
   railReadiness(railId: string) {
     return this.one(`SELECT fleet_rail_readiness($1) || jsonb_build_object('disclosure', fleet_rail_readiness_text($1)) AS r`, [railId]);
   }
+  // ── v47: provider records and cash-basis settlement (owner side) ──
+  providerAccountRegister(railId: string, providerUserId: string, label: string, extraCounterpartySha256: string[], actor: string) {
+    return this.one(`SELECT fleet_admin_provider_account_register($1, $2, $3, $4, $5) AS r`, [railId, providerUserId, label, extraCounterpartySha256, actor]);
+  }
+  providerProductAssign(accountId: string, productId: string, ventureId: string, effectiveFrom: string | null, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_provider_product_assign($1, $2, $3, $4, $5, $6) AS r`, [accountId, productId, ventureId, effectiveFrom, reason, actor]);
+  }
+  destinationAdd(d: { kind: string; label: string; maskedRef: string; payoutVisual: string | null; currency: string; descriptorPattern: string | null;
+    entityId: string | null; bankfeedCredentialId: string | null }, actor: string) {
+    return this.one(`SELECT fleet_admin_settlement_destination_add($1, $2, $3, $4, $5, $6, $7, $8, $9) AS r`,
+      [d.kind, d.label, d.maskedRef, d.payoutVisual, d.currency, d.descriptorPattern, d.entityId, d.bankfeedCredentialId, actor]);
+  }
+  destinationVerifyAccess(destinationId: string, evidenceKind: string, note: string, actor: string) {
+    return this.one(`SELECT fleet_admin_settlement_destination_verify_access($1, $2, $3::jsonb, $4) AS r`, [destinationId, evidenceKind, JSON.stringify({ note }), actor]);
+  }
+  pilotAuthorise(days: number, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_pilot_authorise('receipt_attestation', $1, $2, $3) AS r`, [days, reason, actor]);
+  }
+  pilotRevoke(pilotId: string, actor: string) {
+    return this.one(`SELECT fleet_admin_pilot_revoke($1, $2) AS r`, [pilotId, actor]);
+  }
+  receiptAttest(destinationId: string, accountId: string, payoutId: string, amountMinor: number, currency: string, bookedOn: string, actor: string) {
+    return this.one(`SELECT fleet_admin_receipt_attest($1, $2, $3, $4, $5, $6::date, $7) AS r`, [destinationId, accountId, payoutId, amountMinor, currency, bookedOn, actor]);
+  }
+  receiptTransferLink(externalReceiptId: string, treasuryReceiptId: string, actor: string) {
+    return this.one(`SELECT fleet_admin_receipt_transfer_link($1, $2, $3) AS r`, [externalReceiptId, treasuryReceiptId, actor]);
+  }
+  suspenseRelease(receiptId: string, actor: string) {
+    return this.one(`SELECT fleet_admin_provider_suspense_release($1, $2) AS r`, [receiptId, actor]);
+  }
+  debitAssign(receiptId: string, agentId: string, amountMinor: number, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_receipt_debit_assign($1, $2, $3, $4, $5) AS r`, [receiptId, agentId, amountMinor, reason, actor]);
+  }
+
   /** v46: answer a pending request from a verified capability assigned to the request's agent (the text is generated). */
   dependencyAnswerFromCapability(requestId: string, railId: string, capability: string, actor: string) {
     return this.one(`SELECT fleet_admin_dependency_answer_from_capability($1, $2, $3, $4) AS r`, [requestId, railId, capability, actor]);

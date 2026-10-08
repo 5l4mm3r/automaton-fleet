@@ -66,6 +66,17 @@ describe("F2 Fleet Hub", () => {
       ["railAssign", ["R1", "V1", "storefront", actor]],
       ["dependencyAnswerFromCapability", ["Q1", "R1", "storefront", actor]],
     ]);
+    calls.length = 0;
+    await runHubCommand("economy-provider-product-assign", ["A1", "P1", "V1", "--effective-from", "2026-01-01T00:00:00Z", "first", "owner"], h, actor);
+    await runHubCommand("economy-destination-add", ["fleet_treasury", "GBP", "Treasury ••12", "--visual", "••12", "--descriptor", "GUMROAD", "Fleet", "treasury"], h, actor);
+    await runHubCommand("economy-receipt-attest", ["D1", "A1", "PO1", "1003", "GBP", "2026-10-08"], h, actor);
+    await expect(runHubCommand("economy-receipt-attest", ["D1", "A1", "PO1", "10.03", "GBP", "2026-10-08"], h, actor)).rejects.toThrow(/integer/);
+    expect(calls).toEqual([
+      ["providerProductAssign", ["A1", "P1", "V1", "2026-01-01T00:00:00Z", "first owner", actor]],
+      ["destinationAdd", [{ kind: "fleet_treasury", currency: "GBP", maskedRef: "Treasury ••12", label: "Fleet treasury", payoutVisual: "••12", descriptorPattern: "GUMROAD",
+        entityId: null, bankfeedCredentialId: null }, actor]],
+      ["receiptAttest", ["D1", "A1", "PO1", 1003, "GBP", "2026-10-08", actor]],
+    ]);
   });
 
   it("hub-render writes one 0600 file with every section and the doctor findings", async () => {

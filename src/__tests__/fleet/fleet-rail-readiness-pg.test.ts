@@ -13,6 +13,7 @@ import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
@@ -50,7 +51,7 @@ describe.skipIf(!PG_BIN)("v46 rail readiness, receive-only mode, settlement guar
   afterAll(async () => { await svc?.end(); await custody?.end(); await R?.close(); });
 
   it("migrates to v46 with a clean privilege audit and changes no money", async () => {
-    expect(await R.one(`(SELECT max(version) FROM fleet.fleet_schema_migrations)`)).toBe(46);
+    expect(await R.one(`(SELECT max(version) FROM fleet.fleet_schema_migrations)`)).toBe(FLEET_PG_SCHEMA_VERSION);  // v46, or a later stage on top
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
     expect(await R.one(`(SELECT simulated_settlement_allowed FROM fleet.fleet_economic_model WHERE id = 1)`)).toBe(false);
     expect((await R.one(`fleet.fleet_ledger_verify()`)).ok).toBe(true);
@@ -169,7 +170,9 @@ describe.skipIf(!PG_BIN)("v46 rail readiness, receive-only mode, settlement guar
   });
 
   it("one claim per external settlement: manual revenue claims a key once; no manual revenue or owner funding may reuse it", async () => {
-    const key = `gumroad:acct1:payout:${crypto.randomUUID().slice(0, 8)}`;
+    // (a gumroad:… claim must name a registered provider account since v47 — see fleet-storefront-accounting-pg; any other
+    // settlement namespace exercises the v46 claim mechanics)
+    const key = `paypal:acct1:payout:${crypto.randomUUID().slice(0, 8)}`;
     const rec = (k: string, ref: string) => R.one(`fleet.fleet_admin_record_external_claimed('external_revenue', $1, 500, $2, $3, $4, $5, $6)`,
       [F.id, ref, sha(`buyer-${ref}`), OWNER, `rev:${crypto.randomUUID()}`, k]);
     const cashBefore = await R.balance(`agent:${F.id}:cash`);
@@ -178,7 +181,7 @@ describe.skipIf(!PG_BIN)("v46 rail readiness, receive-only mode, settlement guar
     expect(await R.code(rec(key, "gumroad-payout-1b"))).toBe("FLEET_ALREADY_CLAIMED");
     expect(await R.code(R.ledger.recordRevenue(F.id, 500, key, "buyer", OWNER))).toBe("FLEET_ALREADY_CLAIMED");
     expect(await R.code(R.ledger.recordOwnerFunding(500, key, OWNER))).toBe("FLEET_ALREADY_CLAIMED");
-    expect(await R.code(R.one(`fleet.fleet_admin_record_external_claimed('external_refund', $1, 5, 'r', $2, $3, $4, 'gumroad:x:payout:y')`,
+    expect(await R.code(R.one(`fleet.fleet_admin_record_external_claimed('external_refund', $1, 5, 'r', $2, $3, $4, 'paypal:x:payout:y')`,
       [F.id, sha("b"), OWNER, `rev:${crypto.randomUUID()}`]))).toBe("FLEET_BAD_REQUEST");
     expect(await R.balance(`agent:${F.id}:cash`)).toBe(cashBefore + 500);
     expect(await R.code(R.q(`DELETE FROM fleet.fleet_revenue_claims`))).toBe("FLEET_HISTORY_IMMUTABLE");

@@ -782,3 +782,130 @@ Gumroad account **must** carry the canonical claim. **This is a G2 requirement.*
   - `fleet-f2-hub`: CLI mapping;
   - the fixtures `economy-registry` (explicit `simulatedSettlement` opt-in, default true for throwaway registries) and
     `custody-signer` (its test rail records evidence and activates).
+
+---
+
+## 15. G2 implementation status (local; not deployed)
+
+Implemented as schema **v47** (`src/fleet/postgres/migrations-phase47.ts`, `FLEET_PG_SCHEMA_VERSION = 47`). It is
+not deployed, and production stays on v45. One deviation from §10: G2's role grants are left to G3/G4. The
+recorders exist but no restricted role may execute them yet; see "Not yet" below.
+
+### Implemented and covered by local database tests (`fleet-storefront-accounting-pg.test.ts`, 18 tests)
+
+**Distinct money states**
+- **Memo only:** verified sales (`fleet_provider_sales`) and reported payouts with all their rows
+  (`fleet_provider_payouts`, `fleet_provider_payout_lines`) post nothing.
+- **Receipts:** `fleet_settlement_receipts` records a receipt. It credits nothing unless the destination is a
+  `fleet_treasury` whose **access** has been separately evidenced (`fleet_admin_settlement_destination_verify_access`);
+  registration alone is not enough.
+- **Owner accounts:** an `owner_external` receipt is held until its transfer into the treasury is linked.
+- **Wallet memo:** `fleet_agent_wallet` gains a non-spendable `providerPending` memo in USD, plus `providerPayableMinor`.
+
+**Backing.** Agent shares credit `agent_cash`, a partition of real treasury money. The unattributable part goes
+D `treasury_cash` / C `provider_suspense`.
+- `provider_suspense` is a new fleet liability, signed.
+- A negative share is taken from the agent's cash first. The rest is advanced by the treasury: D `provider_advances` /
+  C `treasury_cash`, against `agent_provider_payable`.
+- `agent_provider_payable` is a new agent liability. It reduces survival equity, and with it spending capacity, and is
+  repaid first from the agent's next positive share.
+- Tests: real money (Σ agent cash + treasury unallocated) moves by exactly the receipt. Reconcile
+  `PROVIDER_ADVANCES_MATCH` holds advances equal to payables.
+
+**Allocation**
+- **USD payouts:** exact by provider row (`usd_exact`). Σ row net must equal the payout amount, or the whole payout is
+  quarantined.
+- **Non-USD payouts:** the received amount is split pro rata to USD net with largest-remainder rounding. Basis
+  `pro_rata_usd_net`, labelled "allocation policy … not a provider exchange rate for any sale".
+  - Exact in total, within one minor unit per bucket. A 40-case property test checks both.
+  - The implied rate must be within 300 bp of the recorded USD rate; otherwise the whole payout is quarantined.
+- **Payout fees:** pro rata to agents with a positive net, exact in USD cents.
+- **Unattributable rows** go to suspense: unknown purchases, products with no owner at the sale time, summary and
+  technical-adjustment rows, and every row of a payout with no positive agent.
+- **Release:** `fleet_admin_provider_suspense_release` moves only the difference recomputed from current attribution.
+  Nothing is guessed.
+
+**Attribution is history**
+- `fleet_provider_product_attributions` is append-only. A sale belongs to its product's owner **at the sale time**.
+- A first assignment may be backdated; a reassignment takes effect from now and never moves past sales.
+
+**One credit per external settlement**
+- **Canonical claims** `gumroad:<user_id>:payout:<id>` and `bank:<destination>:txn:<id>`. Both are claimed in the
+  posting transaction, and the primary key decides concurrent attempts.
+- **Manual first:** automated posting credits nothing and records the manual claim.
+- **Automation first:** a manual claim of the payout, whole or in parts, is refused.
+- **Mandatory claims (the G2 requirement):** manual revenue is refused (`FLEET_CLAIM_REQUIRED`) without the canonical
+  claim when its counterparty is a registered account or one of its identifiers, or when its reference is a known payout
+  or bank transaction.
+  - A manual refund or adjustment of provider revenue is refused (`FLEET_PROVIDER_AUTOMATED`).
+  - A payout is recorded manually whole or in parts, never both.
+  - Owner funding refuses any payout, receipt or canonical reference.
+- Tested: both processing orders, retries and replays, conflicting re-reads, two concurrent manual claims (one wins; the
+  other rolls back, journal included).
+
+**Negative adjustments**
+- Refunds, partial refunds and chargebacks are negative rows. A refund's retained fee is in its row net.
+- `dispute_won` and credit rows with a purchase are positive.
+- A provider **debit** (negative balance taken from the bank) is booked at once into suspense. It moves to an agent
+  only by an owner attribution with a reason (`fleet_admin_receipt_debit_assign`).
+
+**Failure is atomic**
+- A posting that cannot complete (here, a chargeback beyond lifetime revenue) leaves no journal, claim or allocation.
+- The receipt is held with the reason, and reconcile raises `PROVIDER_RECEIPTS_HELD`.
+
+**Pilot fallback, labelled**
+- `fleet_admin_receipt_attest` works only within an active pilot authorisation of at most 30 days, and only for the
+  exact reported amount.
+- It is refused once a bank-feed destination is active (`FLEET_PILOT_RETIRED`). Its claim kind is
+  `owner_attestation`, and its allocation is noted "not independently verified".
+
+**Reconcile**
+- `PROVIDER_SUSPENSE`, `PROVIDER_RECEIPTS_HELD`, `PROVIDER_RECEIPTS_UNMATCHED` (FAIL after 14 days),
+  `PROVIDER_PAYOUTS_UNRECEIVED`;
+- `PROVIDER_ALLOCATION_CONSERVATION` (FAIL), `PROVIDER_ADVANCES_MATCH` (FAIL), `PROVIDER_PAYABLE_OUTSTANDING`;
+- `FUNDING_MATCHES_PROVIDER_RECEIPT`, `PROVIDER_UNATTRIBUTED_SALES`.
+
+**Owner CLI**
+- `economy-provider-account-register`, `economy-provider-product-assign`;
+- `economy-destination-add`, `economy-destination-verify-access`;
+- `economy-pilot-authorise`, `economy-pilot-revoke`;
+- `economy-receipt-attest`, `economy-receipt-transfer-link`;
+- `economy-suspense-release`, `economy-debit-assign`.
+
+**Event routes:** in `EVENT_ROUTES_V47`.
+
+### G2 validation (2026-10-08, local)
+
+- Typecheck: clean.
+- `fleet-storefront-accounting-pg`: 18 of 18 pass. `fleet-rail-readiness-pg`: 11 of 11 pass.
+  - Updated for v47: the version check now uses the shared constant, and the claim test uses a non-provider namespace
+    because `gumroad:` claims must name a registered account.
+- Targeted suites pass:
+  - money, accounting, F2-A, autonomy simulation, capital, custody signer, migration paths, reconcile;
+  - projects (both), treasury allocation, identity, performance, launch, ledger, browser, event history;
+  - release script, identity vault, payments, hub, event routing.
+- F2-A timed out once (30 s, in migrate-check) while ten heavy suites ran in parallel. It passed alone (8 of 8). That
+  is a load timeout, not a v47 defect.
+- `pnpm test:security`: **1380 passed, 1 failed.**
+- `pnpm test:financial`: **771 passed, 1 failed.** It now includes the 18 G2 tests.
+- **Both failures are the established R39 baseline:**
+  - the F2 static audit on `payment_order_awaiting_owner` (`migrations-phase44.ts:63`);
+  - F2-A v27 (cases 1, 2, 5).
+- **The suites are not fully green.**
+
+### Not yet: G3/G4 dependencies and known limits
+
+- **Who may call the recorders.** `fleet_provider_sale_record`, `fleet_provider_payout_record` and
+  `fleet_bank_receipt_record` trust their caller. Today only the owner DSN can execute them.
+  - That a sale was *verified by authenticated read-back*, and that a receipt came from the bank feed, is enforced by
+    the G3 gateway (`gx_*`, role `fleet_provider`) and the G4 connector (`rx_*`, role `fleet_bankfeed`).
+  - Those roles and their grants are not implemented.
+- **Manual revenue that names neither the account nor a known payout or receipt** cannot be recognised as Gumroad
+  money. A reconcile warning matching such amounts to reported payouts is a follow-up.
+- **Reserves and holds** are not modelled as a separate memo state. A verified sale in no payout is simply "not paid
+  out".
+- **Clawbacks** reverse revenue by the net amount; the fee is not split out.
+- **`fleet_agent_value`** (gross assets) does not subtract a provider payable. Survival equity and spending capacity
+  do.
+- **No founder tools, wake signal on the memo, or gateway yet** (G3). No bank-feed connector (G4).
+- **No provider test purchase or live pilot has run.** All evidence here is local database tests.
