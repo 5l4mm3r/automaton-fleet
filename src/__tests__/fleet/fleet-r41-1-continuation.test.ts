@@ -559,3 +559,48 @@ describe("R41.1 completion — supplemental acceptance (owner clarifications 202
     for (const t of advertised) if (t.name in TOOL_CAPABILITIES) expect(TOOL_CAPABILITIES[t.name], t.name).toBe(t.capability);
   });
 });
+
+describe("launch: the idle event probe ends a rest at the next slot when something changed (no inference while unchanged)", () => {
+  /** Heartbeats until the next packet; returns how many slots that took. */
+  const slotsToPacket = async (r: ReturnType<typeof rig>, max = MAX_IDLE_SKIP + 2) => {
+    const before = r.packets.length;
+    for (let i = 1; i <= max; i++) { await r.mind.turn(`heartbeat ${i}`); if (r.packets.length > before) return i; }
+    return Infinity;
+  };
+  const restDeep = async (r: ReturnType<typeof rig>) => {
+    // Sleep-only turns until the backoff is long (several slim wakes on an unchanged state).
+    for (let k = 0; k < 6; k++) await r.next();
+  };
+
+  it("an unchanged state costs nothing between the scheduled wakes", async () => {
+    const r = rig({ reply: (n) => [call("sleep", { reason: "nothing changed", wakeOn: "a sale or the dependency answered" }, `s${n}`)] });
+    await restDeep(r);
+    const before = r.packets.length;
+    for (let i = 0; i < 3; i++) await r.mind.turn("hb");
+    expect(r.packets.length).toBe(before);                 // resting: no inference, probe found nothing
+    expect(r.mind.routing.eventWakeups ?? 0).toBe(0);
+  });
+
+  it("a dependency answered, a sale, or a due review time wakes the founder at the very next slot with a full packet", async () => {
+    let status = "pending";
+    let revenue = 0;
+    const r = rig({ deps: () => [dep({ status })], ledger: () => ({ cash: 9_968, survivalEquity: 9_968, genesisAllocation: 10_000, externalCustomerRevenue: revenue, realizedNetProfit: -32 }),
+      reply: (n) => [call("sleep", { reason: "waiting", wakeOn: "the storefront dependency is answered" }, `s${n}`)] });
+    await restDeep(r);
+    status = "answered";
+    expect(await slotsToPacket(r)).toBe(1);
+    expect(r.mind.routing.eventWakeups).toBe(1);
+    await restDeep(r);
+    revenue = 1_003;
+    expect(await slotsToPacket(r)).toBe(1);
+    expect(r.mind.routing.eventWakeups).toBe(2);
+  });
+
+  it("a declared review time wakes the founder as soon as it passes (not up to 32 slots later)", async () => {
+    let n = 0;
+    const r = rig({ reply: () => { n++; return [call("sleep", { reason: "review soon", reviewAt: new Date(Date.now() + 1500).toISOString() }, `s${n}`)]; } });
+    await restDeep(r);
+    await new Promise((res) => setTimeout(res, 1600));
+    expect(await slotsToPacket(r)).toBe(1);
+  });
+});

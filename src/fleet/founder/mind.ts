@@ -80,6 +80,8 @@ export interface RoutingStats {
   budgetStops: number;
   /** R23.1: turns that started from the slim bare-wake-up packet (nothing had changed since a sleep-only turn). */
   slimWakeups: number;
+  /** Launch: idle rests ended early by the event probe (a state change or a due review time). */
+  eventWakeups?: number;
   /** F2-A: idle wakes that got one push toward the next economically meaningful move (decide, execute or find one). */
   idleNudges: Record<WorkKind, number>;
   lastRoute: { tier: string; model: string; taskClass: string; scope: string } | null;
@@ -350,8 +352,18 @@ export class FounderMind {
     // Nothing useful was pending last time: rest (no inference) for the backed-off number of thinking slots.
     // Owner switches above are still observed on every slot; only paid inference is skipped.
     if (this.idleSkip > 0) {
-      this.idleSkip--;
-      return { ...result, reason: "resting: nothing useful to do" };
+      // Launch: a cheap event probe (controller reads + local files, never paid inference) ends the rest early when
+      // something the founder could act on changed since it fell asleep, or its declared review time has come. Without
+      // it an event waits up to MAX_IDLE_SKIP slots (≈ 32 min at production cadence); with it, about one slot.
+      const woke = await this.eventProbe(status);
+      if (!woke) {
+        this.idleSkip--;
+        return { ...result, reason: "resting: nothing useful to do" };
+      }
+      this.idleSkip = 0;
+      this.idleBackoff = 0;
+      this.routing.eventWakeups = (this.routing.eventWakeups ?? 0) + 1;
+      this.o.log?.("founder_event_wake", { reason: woke });
     }
     const waitMs = Number(status.founderWaitMs) || undefined;
     this.turns++;
@@ -440,6 +452,52 @@ export class FounderMind {
     fs.renameSync(`${f}.tmp`, f);
   }
 
+  /**
+   * The founder's wake signals, computed identically for a routed turn and for the idle event probe: its economy (the
+   * WAKE_LEDGER_FIELDS of the ledger view), what it can actually do now (offered by the controller AND implemented by
+   * this runtime) and its dependencies' statuses (F1-LIVE-01 / F2-A: a genuine change brings one full packet).
+   */
+  private async wakeSignals(status: Record<string, unknown>): Promise<{ economics: Record<string, unknown>; view: ReturnType<typeof parseCapabilityView>;
+    capabilities: { sig: string; tools: string[] } | null; deps: DependencyView[] | null; signals: string }> {
+    let economics: Record<string, unknown> = {};
+    try {
+      const l = await this.o.ports.ledger?.();
+      if (l && typeof l === "object") economics = l as Record<string, unknown>;
+    } catch {
+      economics = {};
+    }
+    const view = parseCapabilityView(status.capabilities);
+    const effective = view ? view.tools.filter((n) => COGNITION_TOOLS.has(n) || this.o.toolbox.implements(n)) : null;
+    // The founder's own signature: the controller's policy (no tool names) + the tools this runtime can actually execute.
+    const capabilities = view && effective ? { sig: crypto.createHash("sha256").update(`${view.policySignature}|${[...effective].sort().join(",")}`).digest("hex"), tools: effective } : null;
+    let deps: DependencyView[] | null = null;
+    try { deps = parseDependencies(await this.o.ports.ownerRequests?.()); } catch { deps = null; }
+    // F2-A: a dependency's STATUS is a signal (a resolution is news once); its age is not — nothing escalates over time.
+    const signals = [capabilities ? `caps:${capabilities.sig}` : "", ...(deps ?? []).map((r) => `dep:${r.requestId}:${r.status}`).sort()].filter(Boolean).join("|");
+    return { economics, view, capabilities, deps, signals };
+  }
+
+  /**
+   * Launch: the idle event probe. While a routed founder rests after a sleep-only turn, each skipped slot recomputes the
+   * wake digest (no inference — controller reads and local files only) and compares it with the digest the founder fell
+   * asleep on. A difference (a sale, an allocation, a dependency answered, a capability change, a file or fact change) or
+   * a due review time ends the rest at once. Returns the reason, or null to keep resting.
+   */
+  private async eventProbe(status: Record<string, unknown>): Promise<string | null> {
+    const R = this.o.routed;
+    if (!R || (status.routing as { active?: unknown } | undefined)?.active !== true) return null;
+    const prev = this.continuity();
+    if (!prev) return null;
+    if (prev.reviewAt && Date.parse(prev.reviewAt) <= Date.now()) return "review time due";
+    if (prev.wakeDigest === null) return null;
+    try {
+      const { economics, signals } = await this.wakeSignals(status);
+      return wakeDigest(R.memoryDir, R.workspaceDir, economics, signals) !== prev.wakeDigest ? "state changed" : null;
+    } catch {
+      return null;   // a probe failure never wakes (and never costs): the backoff continues as before
+    }
+  }
+
   /** Idle backoff shared by both modes: a turn that only slept backs the next wake-up off; anything else resets it. */
   private settle(result: TurnResult): void {
     const idle = result.toolCalls.length > 0 && result.toolCalls.every((n) => n === "sleep");
@@ -452,25 +510,9 @@ export class FounderMind {
     const taskId = `turn-${Date.now().toString(36)}-${this.turns}`;
     this.routing.routedTurns++;
     // T0: the economic position is exact software output, read once per turn — never reasoned about.
-    let economics: Record<string, unknown> = {};
-    try {
-      const l = await this.o.ports.ledger?.();
-      if (l && typeof l === "object") economics = l as Record<string, unknown>;
-    } catch {
-      economics = {};
-    }
+    const { economics, view, capabilities, deps, signals } = await this.wakeSignals(status);
     this.o.toolbox.noteEconomics(economics);
     const prev = this.continuity();
-    // F1-LIVE-01: what this founder can actually do now (offered by the controller AND implemented by this runtime), and
-    // its external dependencies. Both are semantic signals: a genuine change brings one full packet, then idle wake-ups resume.
-    const view = parseCapabilityView(status.capabilities);
-    const effective = view ? view.tools.filter((n) => COGNITION_TOOLS.has(n) || this.o.toolbox.implements(n)) : null;
-    // The founder's own signature: the controller's policy (no tool names) + the tools this runtime can actually execute.
-    const capabilities = view && effective ? { sig: crypto.createHash("sha256").update(`${view.policySignature}|${[...effective].sort().join(",")}`).digest("hex"), tools: effective } : null;
-    let deps: DependencyView[] | null = null;
-    try { deps = parseDependencies(await this.o.ports.ownerRequests?.()); } catch { deps = null; }
-    // F2-A: a dependency's STATUS is a signal (a resolution is news once); its age is not — nothing escalates over time.
-    const signals = [capabilities ? `caps:${capabilities.sig}` : "", ...(deps ?? []).map((r) => `dep:${r.requestId}:${r.status}`).sort()].filter(Boolean).join("|");
     // F2-A: the founder's own decision ledger and open goals decide what an idle wake is for; its survival position is
     // FleetController's observation (information for the founder's own strategy, never a permission or a ration).
     let ledger: Decision[] = [];
