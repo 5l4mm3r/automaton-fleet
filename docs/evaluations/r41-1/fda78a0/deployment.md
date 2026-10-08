@@ -180,13 +180,15 @@ state files). Agent-written text is quoted as data.
   and both declared wake conditions name exactly those dependencies. A dependency status change is part of the wake
   digest (`mind.ts:473`, `dep:<id>:<status>`), so a decision produces a full packet at the founder's next thinking slot (up to about 32 minutes later; see
   above).
-- **Concrete operational blocker: there is no payment rail.** `fleet_payment_rails` is empty fleet-wide, and the
-  only sales channel either founder has chosen needs a Gumroad seller account behind owner KYC. Every revenue path
-  therefore waits on an owner action. The founders' waiting is their own, reasoned judgement and not a defect:
-  dependencies scope only the one action, and both founders still have research, `browser`, `fleet_services` and
-  workspace tools.
-- **Not unnecessarily blocked by the system.** No capability demand or refusal is outstanding, there are no payment
-  orders, and no tool was refused after the upgrade.
+- **Verified blocker, scoped to the selected channels.** Each founder's currently selected sales path is Gumroad, and
+  both of those paths wait on owner action. No fleet payment rail is configured (`fleet_payment_rails` is empty), and
+  the deployed build has no Gumroad integration (see [`gumroad-readiness.md`](gumroad-readiness.md)). Gumroad is the
+  founders' current choice, not a fleet restriction. A dependency scopes only its one action. Other products, channels
+  and services, research, `browser`, `fleet_services` and workspace work remain open to them. Their waiting is their
+  own reasoned judgement and not a defect.
+- **No tool refusal or capability demand is outstanding**, there are no payment orders, and no tool was refused after
+  the upgrade. That does not mean the system is ready for their Gumroad paths. It is not: see the readiness
+  assessment.
 - Neither founder has used the v5 goal marks or the journal yet. That is their choice, and nothing here prompts it.
 - The owner requests `62cbe1b7` and `6178c7bb` were **not answered or altered** by this review.
 
