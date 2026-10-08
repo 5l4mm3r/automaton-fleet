@@ -138,12 +138,16 @@ idle skip.
 
 | | One shared owner account | One linked account per venture |
 |---|---|---|
-| KYC | once | once; linked accounts can copy the payout setup |
+| KYC | one account holder | **unsettled:** linked accounts copy the payout data, but each gets a new Stripe Connect account; per-account ID verification is not documented (corrected; see the plan) |
 | Attribution | needs a `product_id` → venture mapping (missing) | the account itself identifies the venture (`seller_id`, or a dedicated rail) |
 | Credential isolation | one account-wide token: any agent holding it could edit or read **every** venture's products and sales | each token reaches only its own venture's account |
 | Fleet model | `shared` rail | `dedicated` rail per venture |
 | Moving a product later | impossible (no transfer) | impossible (no transfer) |
 
+- **Superseded.** This section first recommended one linked account per venture. The implementation plan
+  ([`docs/design/gumroad-revenue-integration.md`](../../../design/gumroad-revenue-integration.md) §1.1) recommends
+  **one shared owner account accessed only through a fleet broker**. Isolation comes from agents never holding the
+  token, which is required under either arrangement. The original text follows for the record.
 - **Recommendation: one linked account per venture**, with dedicated rails. Gumroad's token scopes are account-wide,
   so per-venture accounts give real isolation between agents, and attribution then needs no new mapping.
 - A shared account is workable only if agents never hold its token, meaning all publishing goes through a controller
@@ -207,7 +211,7 @@ money has landed. It is truthful only if the owner records revenue **after** the
 - **Gumroad side:** the owner can set up the accounts on gumroad.com today.
 
 **Owner decisions (no fleet change)**
-1. **Account arrangement:** one linked Gumroad account per venture (recommended, §2) or one shared account.
+1. **Account arrangement:** one shared account behind the fleet broker (recommended in the plan, §1.1) or linked accounts per venture.
 2. **Seller identity:** individual or business. A business needs its bank in its country of registration. Record it
    later as a `fleet_legal_entities` row (`economy-entity-add`).
 3. **Agent operation of the account:** whether founders may publish to the owner's account directly through the
@@ -254,6 +258,6 @@ money has landed. It is truthful only if the owner records revenue **after** the
 
 ## Smallest next action for the owner
 
-**Decide the account arrangement** (item 1, recommended: one linked Gumroad account per venture), and optionally
+**Decide the account arrangement** (item 1; the plan now recommends one shared owner account behind the fleet broker), and optionally
 **begin items 5–6 on gumroad.com yourself**. Do not register a rail, and do not decide either request, until steps
 7–14 are done: registering a rail now would answer 6178c7bb falsely.
