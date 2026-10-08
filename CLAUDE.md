@@ -126,27 +126,28 @@ Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
 ## Current production deployment
 
-State after Stage R40 (2026-10-07), per docs/fleet-production-runbook.md and docs/evaluations/r40/.
+State after Stage R41.1 (2026-10-08), per docs/fleet-production-runbook.md and docs/evaluations/r41-1/fda78a0/deployment.md.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
 
 Controller runtime commit (approved, pinned and installed):
-136c4bd72f8ef00cd4556ac33df7a5c3c3f9cf89
+fda78a0eeaa8af87bd8725b7bf1df0c1bea315db
 
 Runtime build ID:
-9823d0a39d61b01b721ee5ede9b99ffd51fa446f33a7cca3a26318ec6676be0a
+451c91a8ce5f9a1558d5a245fd431bdf503f93f697b868d02d27a83ea137d4ae
 
 Runtime lockfile SHA256:
 1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1
 
 Database schema:
-v45 (applied 2026-10-07 20:52Z; v44 at 18:57Z the same day)
+v45 (applied 2026-10-07 20:52Z; R41.1 is code-only, 45 -> 45)
 
 Releases: scripts/fleet-release.sh (backend cutover + UI promotion + root verification; ONE
-production_deployed / production_rolled_back event). Rollback (class B: older releases refuse newer schemas):
-UI first (dashboard.env.pre-0.8.4), then `fleet-rollout.sh revert ~/r40-pins.txt 44 45 <reason>`
-(restores ~/automaton_fleet-v44-pre-v45-20261007T205230Z.dump, runtime.env.pre-136c4bd, releases/7f65cd1…).
+production_deployed / production_rolled_back event). R41.1 rollback (code-only, NO database restore):
+founders first (`fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`), then
+`systemctl disable --now automaton-fleet-browser`, then `fleet-rollout.sh revert ~/r411-pins.txt 45 45 <reason>`
+(re-approves 136c4bd; runtime.env.pre-fda78a0; every post-cutover write reconciled and kept).
 
 Controller domain:
 https://api.agentfleet.vip  (admin UI: https://admin.agentfleet.vip)
@@ -164,7 +165,10 @@ Current live topology:
   every fleet_events row is meaningful (permanent, Fleet history) or temporary (7 / 30-day retention). Subject CLOSED.
 - identity broker, custody, fetcher and the ChatGPT adapter/tunnel run as separate units
 - registry: cap 2, DEVELOPMENT mode, replication off; all four safety flags false
-- 1 living Agent: founder-1 (01M3F50SH7PNX2E3GST13J52AS), shown as Agent-1; runtime 94f09a7
+- 2 living Agents, both on runtime fda78a0, doctrine founder-v5: founder-1 (01M3F50SH7PNX2E3GST13J52AS, shown as
+  Agent-1) and agent-2 (01M4C4NXT786Q4E9725N5A15KV)
+- browser worker: automaton-fleet-browser (own OS user, DB roles fleet_browser(_login), bx_* only; pinned Chrome for
+  Testing headless shell 153.0.8010.12)
 - SSH: key-only authentication
 - local Ubuntu development VM: not a live registry
 

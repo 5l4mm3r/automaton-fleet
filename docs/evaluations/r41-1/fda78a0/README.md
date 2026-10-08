@@ -6,8 +6,8 @@
 |---|---|
 | Code complete | **yes**: `d15b76a` (amendment) + `fda78a0` (reconciliation fix found by the rehearsal), pushed to `fleet/final-v2.4` |
 | Rehearsed | **yes**: local real-process founder rehearsals; production-copy rollout and upgrade rehearsals on the VPS (below) |
-| Deployed | **no** |
-| Behaviourally verified | **no**: comes after the owner's upgrades (step 4 and 5 below) |
+| Deployed | **yes** (2026-10-08): controller 10:53Z, browser worker 10:56Z, Agent 2 11:30Z, Founder 1 11:42Z. See [`deployment.md`](deployment.md) |
+| Behaviourally verified | **partly**: v5 delivery, tools, hibernation and wake (Agent 2), and preserved identity, memory and accounting are proven live. Field-journal persistence is rehearsal-proven only, not yet live ([`deployment.md`](deployment.md)) |
 
 ## Pins (`pins.txt`, built on the VPS by `scripts/fleet-build-runtime.sh` after the build finished)
 
