@@ -82,10 +82,13 @@ describe.skipIf(!PG_BIN)("F2 v29 money core: tax, rails, settlement, vendors, wa
     expect(dep).toMatchObject({ kind: "kyc", blocks_action: true, status: "pending" });
     expect(dep.action).toMatch(/gumroad account \(marketplace_listing\) for venture tracker/i);
     expect((await R.econ(F, "venture.transition", { key: "tracker", to: "launching", reason: "storefront ready" })).venture.state).toBe("launching");
-    // Connecting a compatible rail later assigns it and answers the dependency (nobody had to decide anything).
+    // Connecting a compatible rail later assigns it and answers the dependency (nobody had to decide anything). On this
+    // test registry a sandbox rail carries simulated evidence; v46 answers with exactly what is evidenced, never "connected".
     const gr = await R.one(`fleet.fleet_admin_rail_add('gumroad', 'Fleet Gumroad', 'shared', NULL, ARRAY['marketplace_listing','receive_payments'], 'gumroad: fleet store', NULL, 'sandbox', NULL, NULL, $1)`, [OWNER]);
     expect(gr.requirementsAssigned).toBe(1);
-    expect((await R.q(`SELECT status FROM fleet.fleet_owner_requests WHERE agent_id = $1`, [F.id]))[0].status).toBe("answered");
+    const answered = (await R.q(`SELECT status, response FROM fleet.fleet_owner_requests WHERE agent_id = $1`, [F.id]))[0];
+    expect(answered.status).toBe("answered");
+    expect(answered.response).toMatch(/^Simulated \(test registry\) gumroad rail "Fleet Gumroad"\. Verified: account access \(simulated\), storefront publication \(simulated\), sale ingestion \(simulated\)\. Not yet verified: identity verification of the account holder, payout reconciliation, receipt into the fleet treasury\. Revenue is not spendable until it is received into the fleet treasury\.$/);
   });
 
   it("settlement: a sale on an assigned rail posts gross/fee/net, attributes the venture, reserves tax — and a duplicate callback never duplicates money", async () => {

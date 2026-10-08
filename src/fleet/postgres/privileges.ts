@@ -857,7 +857,10 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
       // v37: an agent marking its own account human_action_required (CAPTCHA, liveness) records ONE dependency for it.
       "fleet_account_human_dependency",
       // v34: a provider needing a non-delegable human identity act records ONE action-scoped dependency for that account.
-      "ix_report_job"]),
+      "ix_report_job",
+      // v46: a rail answers a dependency only with its evidenced readiness, and keeps unverified holder identity open as
+      // its own dependency; a legacy request is answered only from a verified, assigned capability.
+      "fleet_rail_requirement_assign", "fleet_rail_identity_dependency", "fleet_admin_dependency_answer_from_capability"]),
     // v27: the spend circuit breaker only through the owner's infrastructure control.
     fleet_spend_circuit_breaker: new Set(["fleet_admin_spend_circuit_breaker", "fleet_admin_spend_circuit_breaker_novelty"]),
   };
@@ -901,6 +904,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
   const v29 = await has("fleet_payment_rails");
   const v30 = await has("fleet_envelopes");
   const v42 = await has("fleet_projects");
+  const v46 = await has("fleet_rail_capability_checks");
   const trig = await db.query<{ t: string }>(
     `SELECT c.relname || ':' || tg.tgname AS t FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = $1 AND NOT tg.tgisinternal AND tg.tgenabled <> 'D'`, [schema]);
@@ -921,13 +925,32 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       "fleet_project_members:fleet_project_members_no_delete", "fleet_project_payments:fleet_project_payments_no_change",
       "fleet_project_events:fleet_project_events_no_change", "fleet_project_outcomes:fleet_project_outcomes_no_change",
       "fleet_project_distributions:fleet_project_distributions_no_change", "fleet_sweep_records:fleet_sweep_records_no_change"] : []),
+    ...(v46 ? ["fleet_rail_capability_checks:fleet_rail_capability_checks_no_change", "fleet_rail_capability_checks:fleet_rail_capability_checks_no_truncate",
+      "fleet_revenue_claims:fleet_revenue_claims_no_change", "fleet_revenue_claims:fleet_revenue_claims_no_truncate",
+      "fleet_payment_rails:fleet_payment_rails_simulation_guard"] : []),
   ];
   for (const t of need) if (!have.has(t)) problems.push(`economy surface: trigger ${t.replace(":", ".")} is missing or disabled`);
   const checks = await db.query<{ n: string; d: string }>(
     `SELECT k.conname AS n, pg_get_constraintdef(k.oid) AS d FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace s ON s.oid = c.relnamespace
-      WHERE s.nspname = $1 AND k.contype = 'c' AND c.relname IN ('fleet_payment_rails','fleet_capital_decisions')`, [schema]);
+      WHERE s.nspname = $1 AND k.contype = 'c' AND c.relname IN ('fleet_payment_rails','fleet_capital_decisions','fleet_credential_refs')`, [schema]);
   if (v29 && !checks.rows.some((r) => r.n === "fleet_payment_rails_not_live" && /mode <> 'live'/.test(r.d))) {
     problems.push("economy surface: a payment rail could be live (the not-live CHECK is missing) — real payments are constitutionally off");
+  }
+  if (v46) {
+    // v46: the receive-only mode is its own pinned capability — one provider, receiving capabilities only — and a gumroad
+    // credential never carries more than the gateway's scopes; a registry with such a rail never allows simulated settlement.
+    const scope = checks.rows.find((r) => r.n === "fleet_payment_rails_live_receive_scope")?.d ?? "";
+    if (!/live_receive/.test(scope) || !/gumroad/.test(scope) || !/storefront/.test(scope) || /payouts|refunds|card_spend|bank_transfer/.test(scope)) {
+      problems.push("economy surface: the receive-only rail scope CHECK is missing or allows an outgoing capability");
+    }
+    const cred = checks.rows.find((r) => r.n === "fleet_credential_refs_gumroad_scope")?.d ?? "";
+    if (!/gumroad/.test(cred) || !/view_sales/.test(cred) || /edit_sales|refund_sales|account/.test(cred)) {
+      problems.push("economy surface: the gumroad credential scope CHECK is missing or allows more than the receive-only scopes");
+    }
+    const sim = await db.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM ${schema}.fleet_payment_rails WHERE mode = 'live_receive' AND status <> 'revoked'
+          AND (SELECT simulated_settlement_allowed FROM ${schema}.fleet_economic_model WHERE id = 1)`);
+    if (Number(sim.rows[0]?.n ?? 0) > 0) problems.push("economy surface: simulated settlement is allowed on a registry with a receive-only provider rail");
   }
   if (v30 && !checks.rows.some((r) => /decided_by = 'controller'/.test(r.d))) problems.push("economy surface: a capital decision could be made by someone other than the controller (CHECK missing)");
   const writers: Record<string, Set<string>> = {
@@ -939,8 +962,12 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_economic_knowledge: new Set(["fleet_econ_knowledge_record", "fleet_econ_decision_outcome", "fleet_project_finish"]),
     fleet_economy_policy: new Set(["fleet_admin_economy_policy_set"]),
     fleet_payment_rails: new Set(["fleet_admin_rail_add", "fleet_admin_rail_set_status", "fleet_admin_credential_set_status", "fleet_settlement_post"]),
-    fleet_rail_assignments: new Set(["fleet_rail_resolve", "fleet_admin_rail_set_status"]),
-    fleet_rail_requirements: new Set(["fleet_rail_resolve", "fleet_econ_rail_require"]),
+    fleet_rail_assignments: new Set(["fleet_rail_resolve", "fleet_admin_rail_set_status", "fleet_admin_rail_assign"]),
+    fleet_rail_requirements: new Set(["fleet_rail_resolve", "fleet_econ_rail_require", "fleet_rail_requirement_assign"]),
+    // v46: readiness evidence only by the owner (and simulated evidence for a simulated rail at registration); external
+    // settlement claims only by the claiming recorder.
+    fleet_rail_capability_checks: new Set(["fleet_admin_rail_add", "fleet_admin_rail_verify"]),
+    fleet_revenue_claims: new Set(["fleet_admin_record_external_claimed"]),
     fleet_external_transactions: new Set(["svc_settlement_ingest", "fleet_settlement_post"]),
     fleet_credential_refs: new Set(["fleet_admin_credential_register", "fleet_admin_credential_set_status", "svc_credential_use", "cx_credential_use"]),
     fleet_credential_use_log: new Set(["svc_credential_use", "cx_credential_use"]),

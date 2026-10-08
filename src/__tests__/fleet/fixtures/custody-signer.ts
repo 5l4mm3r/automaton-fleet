@@ -33,7 +33,13 @@ export async function liveRail(owner: pg.Pool, schema: string, actor: string, op
   const credentialId = cred.r.credential_id;
   const rail = await q1(owner, `SELECT ${schema}.fleet_admin_rail_add('paypal', $1, 'shared', $2, ARRAY['payouts','receive_payments'], 'PayPal treasury', $3, 'live', NULL, NULL, $4) AS r`,
     [opts.label ?? "PayPal treasury", entityId, credentialId, actor]);
-  return { entityId, credentialId, railId: rail.r.railId ?? rail.r.rail_id, vaultRef };
+  const railId = rail.r.railId ?? rail.r.rail_id;
+  // v46: a real rail starts pending_setup; this test rail records the evidence its capabilities need, then goes active.
+  for (const check of ["account_access", "payout_reconciliation", "sale_ingestion"]) {
+    await q1(owner, `SELECT ${schema}.fleet_admin_rail_verify($1, $2, 'verified', 'probe', '{"note":"test fixture"}'::jsonb, NULL, $3) AS r`, [railId, check, actor]);
+  }
+  await q1(owner, `SELECT ${schema}.fleet_admin_rail_set_status($1, 'active', 'test fixture', $2) AS r`, [railId, actor]);
+  return { entityId, credentialId, railId, vaultRef };
 }
 
 /** The custody role attests a signer for the rail. */

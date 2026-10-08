@@ -214,6 +214,9 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
       "ix_phone_status",
       // v37: likewise when the agent's own browser work meets a human-only step on an account.
       "fleet_account_human_dependency",
+      // v46: the rail readiness functions record / answer their own dependencies (an evidenced answer, the open
+      // holder-identity part); they are dependency functions and gate nothing else.
+      "fleet_rail_requirement_assign", "fleet_rail_identity_dependency", "fleet_admin_dependency_answer_from_capability",
       // v30: read-only observability (the Hub's dependency list and Doctor's action-scoping check) — they gate nothing.
       "fleet_hub", "fleet_economy_health",
       // v35: reports only — the IDENTITY notification for a human-only action and the daily report's count; they gate nothing.

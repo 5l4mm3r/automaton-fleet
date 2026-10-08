@@ -612,7 +612,7 @@ documented payloads, with the B-only field shapes marked.
 
 | Stage | Modules and files | Schema and privileges | Checks | Acceptance |
 |---|---|---|---|---|
-| **G1 lifecycle and guards** (local; **no owner decisions needed**) | `src/fleet/postgres/migrations-phase46.ts`; `migrations.ts` (version 46); `privileges.ts` (audit entries); `hub/cli.ts` + `hub/admin.ts` (`economy-rail-verify`, `economy-rail-assign`, `dependency-answer-from-capability`); tests `fleet-f2-money-pg`, new `fleet-rail-readiness-pg` | v46: rails default `pending_setup`; `fleet_rail_capability_checks`; `fleet_rail_match` / `fleet_rail_resolve` verified-capability rule and generated text; `fleet_admin_rail_verify` / `_assign` / `dependency_answer_from_capability`; `live_receive` mode and scope CHECK; gumroad credential scope CHECK; `simulated_settlement_allowed` plus guards; `fleet_revenue_claims` plus the `ledger-record-revenue` / `-funding` claim rules | typecheck; targeted suites; `test:security` and `test:financial` serially; migration paths; audit | tests 1–14, 31–32, 39–44 |
+| **G1 lifecycle and guards** (local; **no owner decisions needed**) | `src/fleet/postgres/migrations-phase46.ts`; `migrations.ts` (version 46); `privileges.ts` (audit entries); `hub/cli.ts` + `hub/admin.ts` (`economy-rail-verify`, `economy-rail-assign`, `economy-dependency-answer`); tests `fleet-f2-money-pg`, new `fleet-rail-readiness-pg` | v46: rails default `pending_setup`; `fleet_rail_capability_checks`; `fleet_rail_match` / `fleet_rail_resolve` verified-capability rule and generated text; `fleet_admin_rail_verify` / `_assign` / `dependency_answer_from_capability`; `live_receive` mode and scope CHECK; gumroad credential scope CHECK; `simulated_settlement_allowed` plus guards; `fleet_revenue_claims` plus the `ledger-record-revenue` / `-funding` claim rules | typecheck; targeted suites; `test:security` and `test:financial` serially; migration paths; audit | tests 1–10, 14, 31 (claim reuse; the near-match warning is G2), 39–44. Tests 11–13 are gateway and unit behaviour (G3); test 32 needs the G2 provider accounts |
 | **G2 provider memo and accounting** (local) | `migrations-phase47.ts`; `src/fleet/storefront/allocation.ts` (pure); new `fleet-storefront-accounting-pg` | v47: `fleet_provider_accounts`, `_products`, `_uploads`, `_sales`, `_payouts`, `_payout_lines`; `fleet_settlement_destinations`, `fleet_settlement_receipts`; `fleet_pilot_authorisations`; classes `provider_suspense` (fleet) and `agent_provider_payable` (agent; equity obligation via the p42 restate; `fleet_ledger_open_agent` backfill as in p29:236-251); kinds `provider_revenue_receipt`, `provider_receipt_suspense`, `provider_suspense_allocation`, `provider_clawback`, `provider_receipt_transfer`; reconcile checks | as G1 | tests 21–30, 33–38 |
 | **G3 gateway** (local, fake Gumroad) | `src/fleet/storefront/{gumroad-client,gateway,vault,main}.ts`; `deploy/systemd/automaton-fleet-gumroad.service`; `scripts/fleet-gumroad-setup.sh`; founder tools in `founder/toolbox.ts`, `cognition/types.ts` (`storefront.*`, capability `planning`, gated by the capability signature); browser policy in `identity/` | v48: role `fleet_provider(_login)` with `gx_*`; `svc_storefront_*` in `SERVICE_API_FUNCTIONS` (`migrations.ts:1201-1259`); audit role and writer maps | as G1 plus `release-script` tests | tests 11–12, 15–20 |
 | **G4 receipt connector** (local, fake bank feed) | `src/fleet/settlement/bankfeed/{client,matcher,main}.ts`; `automaton-fleet-bankfeed.service`; setup script | v48 (same release): role `fleet_bankfeed(_login)` with `rx_*` | as G3 | tests 24, 28, 31, 34, 36–37 |
@@ -696,5 +696,89 @@ G1 needs none of the decisions in §12. It changes only the lifecycle and guards
 **Effect on production once deployed:** none. There are no rails, destinations or provider rows. The one behavioural
 change is that a future `economy-rail-add` would no longer answer 6178c7bb falsely.
 
-**Acceptance:** tests 1–14, 31–32 and 39–44, plus clean migration paths, audit and `reconcile-compare`. The two
+**Acceptance:** tests 1–10, 14, 31 (claim reuse) and 39–44, plus clean migration paths and audit. Tests 11–13 move to G3; test 32 and the funding near-match warning to G2. `reconcile-compare` is part of the production-copy rehearsal (G5). The two
 pre-existing R39 audit failures are reported as they are.
+
+---
+
+## 14. G1 implementation status (local; not deployed)
+
+Implemented as schema **v46** (`src/fleet/postgres/migrations-phase46.ts`, `FLEET_PG_SCHEMA_VERSION = 46`). It is
+not deployed, and production stays on v45.
+
+**What v46 does**
+
+- **Readiness evidence.** New table `fleet_rail_capability_checks`, append-only, where the latest row per check
+  counts. Supporting functions:
+  - `fleet_rail_required_checks`, `fleet_rail_capability_ready`, `fleet_rail_readiness`;
+  - the generated disclosure `fleet_rail_readiness_text`.
+- **Matching:** `fleet_rail_match` matches only evidenced capabilities.
+- **Real rails start `pending_setup`:**
+  - `fleet_admin_rail_add` answers nothing for them;
+  - `fleet_admin_rail_set_status('active')` refuses until a capability is evidenced, then matches waiting
+    requirements;
+  - `fleet_admin_rail_verify` records evidence and refuses `simulated` evidence for a real rail.
+- **New owner commands:** `fleet_admin_rail_assign` and `fleet_admin_dependency_answer_from_capability`.
+- **Answer text:** the fixed "connected" text is gone; answers come from `fleet_rail_readiness_text`. An unverified
+  holder identity on a `live_receive` rail is recorded as its own `kyc` dependency, through
+  `fleet_rail_identity_dependency`.
+- **`live_receive` mode:** gumroad only, capabilities within {storefront, receive_payments, marketplace_listing}.
+  - Its own CHECK, `fleet_payment_rails_live_receive_scope`; the `mode <> 'live'` pin is unchanged.
+  - The rail mode is now immutable.
+  - Gumroad credential scope CHECK: `fleet_credential_refs_gumroad_scope`.
+- **Simulated settlement flag:** `fleet_economic_model.simulated_settlement_allowed`, default false, setter
+  `fleet_admin_simulated_settlement_set`. The setter refuses while a `live_receive` rail exists, and the audit checks
+  this too.
+- **Claims:** `fleet_revenue_claims` and `fleet_admin_record_external_claimed`. `fleet_admin_record_external` and
+  `fleet_admin_record_owner_funding` refuse a claimed key as their reference.
+- **Reconcile:** the INFO codes `SIMULATED_SETTLEMENT_ALLOWED` and `RAILS_PENDING_SETUP`.
+- **Event routes,** in v46's own catalogue (`EVENT_ROUTES_V46`, restating `fleet_event_route` from v45; the applied
+  v44/v45 text is untouched): `payment_rail_check` and `revenue_claimed` → `AUDIT_ONLY` (permanent history);
+  `simulated_settlement_policy` → `P1_HIGH`.
+
+**Stricter than §5.7 / §10, by choice**
+- Simulated and sandbox rails cannot even be **created**, and cannot match, on a registry that does not allow
+  simulated settlement (`fleet_payment_rails_simulation_guard`, BEFORE INSERT).
+- `svc_settlement_ingest` and `fleet_settlement_post` post **only** simulated settlement on such a registry. On any
+  other registry nothing reaches agent cash through the direct path, including through a `live_receive` rail.
+- The superseded activation plan's sandbox PayPal rail (`f2-autonomous-economy.md` §29 step 8) is therefore not
+  possible on production.
+
+**Deferred to G2**
+- The rule that `ledger-record-revenue` must carry `--claims` when its counterparty matches a registered provider
+  account or destination needs the G2 tables. G1 provides the claim path and the reuse refusals.
+
+**Duplicate-credit protection is not complete in G1.** G1 adds the claims table, a claiming manual-revenue path, and
+refusal of a *claimed* key reused as a reference. A manual entry using a different reference for the same payout is not
+yet caught. That needs the G2 provider-account registry, and the rule that manual revenue against a registered
+Gumroad account **must** carry the canonical claim. **This is a G2 requirement.**
+
+**G1 validation (2026-10-08, local)**
+- Typecheck: clean.
+- `fleet-rail-readiness-pg`: 11 of 11 pass.
+- Targeted suites all pass:
+  - money, accounting, F2-A, autonomy simulation, capital, hub, payments, performance;
+  - custody signer, identity, projects (both), treasury allocation;
+  - migration paths, reconcile, launch, ledger, browser, identity vault, release script, event history, event routing.
+- `pnpm test:security`: **1380 passed, 1 failed.**
+- `pnpm test:financial`: **753 passed, 1 failed.**
+- **Both failures are the established R39 baseline, not new:**
+  - `fleet-f2-static-audit`: `payment_order_awaiting_owner` in the v44 catalogue (`migrations-phase44.ts:63`);
+  - `fleet-f2a-own-capital` (F2-A v27, cases 1, 2, 5), the same cause.
+- **The suites are not fully green.**
+
+**Owner CLI (`fleet:admin`)**
+- `economy-rail-verify`, `economy-rail-readiness`, `economy-rail-assign`, `economy-dependency-answer`;
+- `economy-rail-add --mode live_receive`;
+- `ledger-record-revenue … --claims <key>`.
+
+**Tests**
+- New: `fleet-rail-readiness-pg.test.ts` (11).
+- Updated because of intended behaviour changes:
+  - `fleet-f2-money-pg`: asserts the generated answer text;
+  - `fleet-f2-accounting-pg` and `fleet-treasury-allocation-pg`: the mode guard now refuses before the not-live CHECK;
+    the insert-path CHECK is still asserted;
+  - `fleet-f2a-pg`: the readiness functions are dependency functions;
+  - `fleet-f2-hub`: CLI mapping;
+  - the fixtures `economy-registry` (explicit `simulatedSettlement` opt-in, default true for throwaway registries) and
+    `custody-signer` (its test rail records evidence and activates).

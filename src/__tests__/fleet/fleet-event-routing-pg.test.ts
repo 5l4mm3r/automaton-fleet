@@ -12,6 +12,7 @@ import { renderToStaticMarkup } from "../../../codex-dashboard/node_modules/reac
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry } from "./fixtures/economy-registry.js";
 import { EVENT_PREFIX_ROUTES, EVENT_ROUTES } from "../../fleet/postgres/migrations-phase44.js";
+import { EVENT_ROUTES_V46 } from "../../fleet/postgres/migrations-phase46.js";
 import { CommandFeed } from "../../../codex-dashboard/src/dashboard/command/panels";
 import { toFleetEvent, type FleetEvent } from "../../../codex-dashboard/src/dashboard/command/events";
 
@@ -20,7 +21,7 @@ const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
 
 describe("the routing table", () => {
   it("names each event type once, and routes every event type the code emits explicitly", () => {
-    const all = Object.values(EVENT_ROUTES).flat();
+    const all = [...Object.values(EVENT_ROUTES).flat(), ...Object.values(EVENT_ROUTES_V46).flat()];
     expect(all.length).toBe(new Set(all).size);
     const dir = path.join(process.cwd(), "src", "fleet");
     const emitted = new Set<string>();

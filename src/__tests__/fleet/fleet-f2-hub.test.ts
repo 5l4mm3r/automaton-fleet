@@ -53,6 +53,21 @@ describe("F2 Fleet Hub", () => {
     expect([...HUB_COMMANDS].every((c) => c === "hub" || c.startsWith("hub-") || c.startsWith("economy-") || c.startsWith("owner-identity-"))).toBe(true);
   });
 
+  it("v46 readiness commands: evidence, readiness, assignment and an evidence-based dependency answer map onto owner functions", async () => {
+    const { h, calls } = fakeHub();
+    const actor = "operator:alice";
+    await runHubCommand("economy-rail-verify", ["R1", "storefront_publication", "verified", "owner_attested", "--expires", "2026-11-01T00:00:00Z", "email", "confirmed"], h, actor);
+    await runHubCommand("economy-rail-readiness", ["R1"], h, actor);
+    await runHubCommand("economy-rail-assign", ["R1", "V1", "storefront"], h, actor);
+    await runHubCommand("economy-dependency-answer", ["Q1", "R1", "storefront"], h, actor);
+    expect(calls).toEqual([
+      ["railVerify", ["R1", "storefront_publication", "verified", "owner_attested", "email confirmed", "2026-11-01T00:00:00Z", actor]],
+      ["railReadiness", ["R1"]],
+      ["railAssign", ["R1", "V1", "storefront", actor]],
+      ["dependencyAnswerFromCapability", ["Q1", "R1", "storefront", actor]],
+    ]);
+  });
+
   it("hub-render writes one 0600 file with every section and the doctor findings", async () => {
     const { h } = fakeHub();
     const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "hub-")), "hub.html");

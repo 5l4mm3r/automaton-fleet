@@ -36,7 +36,12 @@ export interface EconomyRegistry {
   close: () => Promise<void>;
 }
 
-export async function startEconomyRegistry(pgBin: string, opts: { founders?: number; allocationCents?: number; treasuryCents?: number } = {}): Promise<EconomyRegistry> {
+/**
+ * `simulatedSettlement` (default true): this is a THROWAWAY registry, so simulated/sandbox rails may exist and settle
+ * (schema v46 refuses them on any registry that does not explicitly allow simulated settlement). Pass false to test the
+ * production behaviour.
+ */
+export async function startEconomyRegistry(pgBin: string, opts: { founders?: number; allocationCents?: number; treasuryCents?: number; simulatedSettlement?: boolean } = {}): Promise<EconomyRegistry> {
   const n = opts.founders ?? 2;
   const pgc = await startEphemeralPg(pgBin);
   const owner = new pg.Pool({ connectionString: pgc.ownerUrl, max: 4 });
@@ -48,6 +53,7 @@ export async function startEconomyRegistry(pgBin: string, opts: { founders?: num
   const genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
   const gw = new PgAgentGateway({ connectionString: pgc.agentUrl });
   const q = async (sql: string, params: unknown[] = []) => (await owner.query(sql, params)).rows;
+  if (opts.simulatedSettlement !== false) await q(`SELECT fleet.fleet_admin_simulated_settlement_set(true, $1)`, [OWNER]);
   await q(`UPDATE fleet.fleet_state SET max_agents = $5, runtime_repo = $1, runtime_commit = $2, runtime_build_id = $3, runtime_lockfile_sha256 = $4`,
     ["https://github.com/5l4mm3r/automaton-fleet", "c".repeat(40), "d".repeat(64), "e".repeat(64), Math.max(2, n)]);
   await genesis.setEnabled(true, OWNER, "test");

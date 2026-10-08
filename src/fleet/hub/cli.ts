@@ -24,9 +24,14 @@
  *   economy-tax-profile <entityId> <rulesJson> [effectiveIso] [note…]     a new VERSION; rates are policy data
  *   economy-tax-policy 0                         RETIRED (v33): no synthetic tax; only 0 is accepted — configure a real obligation with a tax profile
  *   economy-tax-true-up <agentId> | economy-tax-payment <agentId> <minor> <externalRef>
- *   economy-rail-add <provider> <shared|dedicated> <capCsv> <maskedAccountRef> [--entity id] [--credential id] [--mode simulated|sandbox]
- *                    [--venture id] [--max n] [label…]
- *   economy-rail-status <railId> <active|degraded|suspended|revoked> [note…]
+ *   economy-rail-add <provider> <shared|dedicated> <capCsv> <maskedAccountRef> [--entity id] [--credential id] [--mode simulated|sandbox|live_receive]
+ *                    [--venture id] [--max n] [label…]     (v46: a real rail starts pending_setup; simulated/sandbox only on a test registry)
+ *   economy-rail-verify <railId> <check> <verified|failed|expired> <probe|owner_attested|first_use|automatic> [--expires iso] [note…]
+ *                    checks: account_access storefront_publication identity_verification sale_ingestion payout_reconciliation receipt_verification
+ *   economy-rail-readiness <railId>               evidence per check, ready capabilities and the disclosure a dependency answer carries
+ *   economy-rail-assign <railId> <ventureId> <capability>   assign an EVIDENCED capability to a venture
+ *   economy-rail-status <railId> <active|degraded|suspended|revoked> [note…]   (active only once a capability is evidenced)
+ *   economy-dependency-answer <requestId> <railId> <capability>   answer a pending request from a verified, assigned capability
  *   economy-credential-register <provider> <vault:ref> <scopeCsv> [--spend-limited] [--hint text] <purpose…>
  *   economy-credential-status <credentialId> <active|rotating|revoked|expired>
  *   economy-settlement-attribute <txnId> <ventureId>
@@ -66,7 +71,7 @@ import { generateX25519, openSealed } from "../identity/crypto.js";
 
 export const HUB_COMMANDS = new Set([
   "hub", "hub-render", "hub-health", "hub-withdrawals", "economy-withdrawal-policy", "hub-custody", "economy-custody-policy", "hub-identity", "owner-identity-seal", "owner-identity-class", "owner-identity-consent", "owner-identity-consent-revoke", "economy-destination-reference", "economy-entity-add", "economy-tax-profile", "economy-tax-policy", "economy-tax-true-up", "economy-tax-payment",
-  "economy-rail-add", "economy-rail-status", "economy-credential-register", "economy-credential-status", "economy-settlement-attribute",
+  "economy-rail-add", "economy-rail-status", "economy-rail-verify", "economy-rail-readiness", "economy-rail-assign", "economy-dependency-answer", "economy-credential-register", "economy-credential-status", "economy-settlement-attribute",
   "economy-capital-policy", "economy-sweep-policy", "economy-economy-policy", "economy-transfer-policy", "economy-cognition-depth", "economy-breaker-novelty",
   "economy-safe-transfer", "economy-wallet-transfer", "economy-sweep-compute", "economy-sweep-run",
   "economy-agent-transfer", "hub-engine", "hub-replication", "hub-estates", "hub-notifications", "hub-daily-report", "hub-risk",
@@ -178,6 +183,14 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
         maxVentures: flag(a, "--max") ? int(flag(a, "--max"), "max") : null }, actor);
     case "economy-rail-status":
       return h.railStatus(p[0], p[1], p.slice(2).join(" ") || null, actor);
+    case "economy-rail-verify":
+      return h.railVerify(p[0], p[1], p[2], p[3], p.slice(4).join(" ") || null, flag(a, "--expires"), actor);
+    case "economy-rail-readiness":
+      return h.railReadiness(p[0]);
+    case "economy-rail-assign":
+      return h.railAssign(p[0], p[1], p[2], actor);
+    case "economy-dependency-answer":
+      return h.dependencyAnswerFromCapability(p[0], p[1], p[2], actor);
     case "economy-credential-register":
       return h.credentialRegister(p[0], p.slice(3).join(" "), p[1], (p[2] ?? "").split(",").filter(Boolean), a.includes("--spend-limited"), flag(a, "--hint"), actor);
     case "economy-credential-status":

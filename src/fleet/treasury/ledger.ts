@@ -306,6 +306,18 @@ export class PgLedgerAdmin {
     return this.recordExternal("external_revenue", agentId, amountCents, externalRef, counterparty, actor, key);
   }
 
+  /**
+   * Schema v46: owner-recorded revenue that claims an external settlement key (e.g. `gumroad:<account>:payout:<id>`).
+   * The key is recorded once (fleet_revenue_claims); no other manual revenue or owner funding may reuse it.
+   */
+  async recordRevenueClaimed(agentId: string, amountCents: number, externalRef: string, counterparty: string, actor: string, claimKey: string,
+    key = idempotencyKey("revenue")): Promise<string> {
+    if (!counterparty) throw new Error("an external counterparty reference is required");
+    return this.one(`SELECT fleet_admin_record_external_claimed('external_revenue', $1, $2, $3, $4, $5, $6, $7) AS r`, [
+      agentId, cents(amountCents, "amount"), externalRef, sha256Hex(counterparty.trim().toLowerCase()), actor, idem(key), claimKey,
+    ]);
+  }
+
   /** Owner-only: mark a reference (e.g. a treasury account) as fleet-controlled, so value from it is never revenue. */
   async addControlledReference(reference: string, label: string, actor: string): Promise<void> {
     await this.pool.query(`SELECT fleet_controlled_reference_add($1, $2, $3)`, [sha256Hex(reference.trim().toLowerCase()), label, actor]);

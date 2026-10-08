@@ -101,6 +101,22 @@ export class PgHubAdmin {
   railStatus(railId: string, status: string, note: string | null, actor: string) {
     return this.one(`SELECT fleet_admin_rail_set_status($1, $2, $3, $4) AS r`, [railId, status, note, actor]);
   }
+  /** v46: record evidence for one readiness check of a rail (append-only; the latest row per check counts). */
+  railVerify(railId: string, check: string, status: string, evidenceKind: string, note: string | null, expiresAt: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_rail_verify($1, $2, $3, $4, $5::jsonb, $6, $7) AS r`,
+      [railId, check, status, evidenceKind, JSON.stringify(note ? { note } : {}), expiresAt, actor]);
+  }
+  /** v46: assign an evidenced capability of a rail to a venture. */
+  railAssign(railId: string, ventureId: string, capability: string, actor: string) {
+    return this.one(`SELECT fleet_admin_rail_assign($1, $2, $3, $4) AS r`, [railId, ventureId, capability, actor]);
+  }
+  railReadiness(railId: string) {
+    return this.one(`SELECT fleet_rail_readiness($1) || jsonb_build_object('disclosure', fleet_rail_readiness_text($1)) AS r`, [railId]);
+  }
+  /** v46: answer a pending request from a verified capability assigned to the request's agent (the text is generated). */
+  dependencyAnswerFromCapability(requestId: string, railId: string, capability: string, actor: string) {
+    return this.one(`SELECT fleet_admin_dependency_answer_from_capability($1, $2, $3, $4) AS r`, [requestId, railId, capability, actor]);
+  }
   credentialRegister(provider: string, purpose: string, vaultRef: string, scope: string[], spendLimited: boolean, hint: string | null, actor: string) {
     return this.one(`SELECT fleet_admin_credential_register($1, $2, $3, $4, $5, $6, $7) AS r`, [provider, purpose, vaultRef, scope, spendLimited, hint, actor]);
   }

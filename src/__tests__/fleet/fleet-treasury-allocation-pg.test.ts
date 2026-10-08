@@ -147,7 +147,10 @@ describe.skipIf(!PG_BIN)("Treasury sweep semantics: internal allocation vs exter
     expect(FLEET_SPEND_GATE.allows("credit_transfer")).toBe(false);
     expect(() => assertRealSpendAllowed("onchain_transaction")).toThrow(RealSpendBlockedError);
     expect(await R.code(R.q(`UPDATE fleet.fleet_economic_model SET custody_execution_enabled = true`))).toMatch(/check constraint|FLEET_/);
-    expect(await R.code(R.q(`UPDATE fleet.fleet_payment_rails SET mode = 'live'`))).toMatch(/fleet_payment_rails_not_live/);
+    // v46: a rail's mode is fixed (the guard refuses first); a live rail is still refused by the not-live CHECK at insert.
+    expect(await R.code(R.q(`UPDATE fleet.fleet_payment_rails SET mode = 'live'`))).toMatch(/fleet_payment_rails_not_live|FLEET_IMMUTABLE/);
+    expect(await R.code(R.one(`fleet.fleet_admin_rail_add('paypal', 'x', 'shared', NULL, ARRAY['receive_payments'], 'x', NULL, 'live', NULL, NULL, $1)`, [OWNER])))
+      .toMatch(/fleet_payment_rails_not_live/);
   });
 
   it("post-sweep distributions are representable once the allocation is recorded: £900 split per contract, nothing swept twice", async () => {

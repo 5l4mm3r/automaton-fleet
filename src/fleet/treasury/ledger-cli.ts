@@ -11,7 +11,8 @@
  *   ledger-orders [status] [agentId]
  *   ledger-record-funding <cents> <externalRef>    owner capital already received into custody
  *   ledger-record-credits <cents> <externalRef>    schema v14: prepaid inference credits the owner bought (provider invoice/receipt id)
- *   ledger-record-revenue <agentId> <cents> <externalRef> [refund|gain|loss]   counterparty reference on stdin (hashed)
+ *   ledger-record-revenue <agentId> <cents> <externalRef> [refund|gain|loss] [--claims <key>]   counterparty reference on stdin (hashed);
+ *                                                  --claims records revenue against an external settlement key once (v46)
  *   ledger-reverse <journalId> <reason…>
  *   ledger-capital <agentId> <cents> grant|principal [--ack] [reason…]
  *   ledger-spend-decision                          RETIRED (schema v27): own-capital spend is the founder's, custody-checked
@@ -85,7 +86,10 @@ export async function runLedgerCommand(
   readSecret: () => Promise<string> = () => readStdinLine(),
 ): Promise<unknown> {
   const ack = a.includes("--ack");
-  const args = a.filter((x) => x !== "--ack");
+  // v46: --claims <key> (ledger-record-revenue) claims an external settlement key, so it is recorded once.
+  const ci = a.indexOf("--claims");
+  const claims = ci >= 0 ? a[ci + 1] ?? "" : null;
+  const args = a.filter((x, i) => x !== "--ack" && !(ci >= 0 && (i === ci || i === ci + 1)));
   switch (cmd) {
     case "ledger-model":
       return l.model();
@@ -135,6 +139,10 @@ export async function runLedgerCommand(
       if (!Object.prototype.hasOwnProperty.call(kinds, which)) throw new Error(`usage: ${usage}`);
       const kind = kinds[which];
       const counterparty = await readSecret();
+      if (claims !== null) {
+        if (kind !== "external_revenue" || !claims) throw new Error("usage: --claims <key> records revenue (not a refund, gain or loss) against one external settlement key");
+        return { journalId: await l.recordRevenueClaimed(need(args[0], usage), cents(args[1]), need(args[2], usage), counterparty, actor, claims) };
+      }
       return { journalId: await l.recordExternal(kind, need(args[0], usage), cents(args[1]), need(args[2], usage), counterparty, actor) };
     }
     case "ledger-reverse":

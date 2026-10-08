@@ -193,7 +193,10 @@ describe.skipIf(!PG_BIN)("F2 accounting invariants, security boundaries and safe
     expect([live.realPaymentsEnabled, live.ownerSweepEnabled, live.realReplicationEnabled]).toEqual([false, false, false]);
     // Registry: custody execution and live rails are pinned off by CHECK; reproduction execution pinned off.
     expect(await R.code(R.q(`UPDATE fleet.fleet_economic_model SET custody_execution_enabled = true`))).toMatch(/check constraint|FLEET_/);
-    expect(await R.code(R.q(`UPDATE fleet.fleet_payment_rails SET mode = 'live'`))).toMatch(/fleet_payment_rails_not_live/);
+    // v46: a rail's mode is fixed (the guard refuses first); a live rail is still refused by the not-live CHECK at insert.
+    expect(await R.code(R.q(`UPDATE fleet.fleet_payment_rails SET mode = 'live'`))).toMatch(/fleet_payment_rails_not_live|FLEET_IMMUTABLE/);
+    expect(await R.code(R.one(`fleet.fleet_admin_rail_add('paypal', 'x', 'shared', NULL, ARRAY['receive_payments'], 'x', NULL, 'live', NULL, NULL, $1)`, [OWNER])))
+      .toMatch(/fleet_payment_rails_not_live/);
     expect((await R.q(`SELECT execution_enabled FROM fleet.fleet_reproduction_policy WHERE id = 1`))[0].execution_enabled).toBe(false);
   });
 });
