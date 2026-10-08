@@ -1,0 +1,12 @@
+== rollout rehearse fda78a0 (schema 45 -> 45) from 136c4bd start 2026-10-08T01:36:33Z
+Note: switching to 'fda78a0eeaa8af87bd8725b7bf1df0c1bea315db'.
+state without impacting any branches by switching back to a branch.
+dump /home/ubuntu/automaton_fleet-v45-rollout-fda78a0-20261008T013637Z.dump sha b58a871e89118f46
+restore: row counts identical
+migrate-check: {"currentVersion":45,"resultingVersion":45,"wouldApply":[],"requiredVersion":45,"rolledBack":true}
+{"ok":true,"latencyMs":3,"schemaVersion":45,"countersConsistent":true}
+reconciliation: OK (0 new accounts at zero; 577 journals; events 569 before, purged {}, preserved 569; appended {"agent_role_granted":1,"custody_role_granted":1,"service_role_granted":1,"identity_role_granted":1,"operator_role_granted":1,"dashboard_role_granted":1})
+ledger verify: true
+re-run: {"currentVersion":45,"resultingVersion":45,"wouldApply":[],"requiredVersion":45,"rolledBack":true}
+rollback proof: the dump restores to schema 45 with the same ledger head
+== REHEARSAL PASSED 2026-10-08T01:36:50Z — live untouched (schema 45)

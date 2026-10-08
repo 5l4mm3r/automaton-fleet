@@ -1,0 +1,16 @@
+== upgrade rehearsal fda78a0 (schema 45 -> 45), rollback to 136c4bd, start 2026-10-08T01:36:50Z
+throwaway copy restored: schema 45, ledger head 614 965105492c48481dee79…, logins: fleet_agent_login fleet_dashboard_login fleet_operator_login fleet_service_login 
+{"ok":true,"latencyMs":2,"schemaVersion":45,"countersConsistent":true}
+1. copy migrated to 45; candidate fda78a0 approved in the THROWAWAY registry; ledger head unchanged
+2. code-only release (schema 45 unchanged; the previous release on the candidate-approved copy: refused) — rollback restores the pre-release dump and the previous release (as rehearsed below)
+3a. candidate controller ready on schema 45: {"ok":true,"checks":{"database":true,"agentApi":true,"runtimeRelease":true,"reaper":true,"sandboxTermination":true,"privileges":true}}
+3b. candidate Operator API ready on schema 45 (readyz 200)
+3c. candidate dashboard ready on schema 45: login 200, preview 200, read without session 401, call without session 401
+3d. v42 projects read (the dashboard 'projects' op): {"projects":0,"summary":{"note":"Internal payments move value between agents; they are never Fleet revenue.","active":0,"planning":0,"cancelled":0,"completed":0,"escrowMinor":0,"agentsCollaborating":0,"internalPaymentsMinor":0,"plannedTimeSavedHours":0}}
+3f. Fleet Command read on the copy: {"rows": 49, "rawEvents": 576, "housekeeping": 0, "nonOperational": 0} (only P0–P3; no housekeeping; the raw history is untouched)
+3g. Fleet history on the copy: {"feed": 49, "copies": 0, "events": 576, "history": 88, "diagnostics": 357, "temporary7d": 131, "notifications": 1, "hiddenPermanent": 0}; retention pass {"eventsExpired": 0, "suppressionExpired": 0}, no event written
+3e. ledger verify ok, head unchanged, no reservation or birth while the candidate services ran
+4. code-only rollback on the copy: previous runtime 136c4bd re-approved, database NOT restored; reconciliation OK — every candidate-era write preserved (ledger head 614, events through #3433)
+5. previous release 136c4bd: controller ready and dashboard ready on the same, unrestored schema 45 data
+6. (disaster path only) the verified pre-release dump still restores schema 45 with the pre-release ledger head
+== UPGRADE REHEARSAL PASSED 2026-10-08T01:37:08Z — production untouched (PIDs 596395  596418  597039 , schema 45)
