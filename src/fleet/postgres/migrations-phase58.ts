@@ -84,7 +84,7 @@ const DELIVERY_FOLLOW = restate(V56_SQL, "fleet_order_delivery_follow", [
   [`      'code', (CASE WHEN NEW.send_error ~ '^[A-Z0-9_]{2,64}$' THEN NEW.send_error ELSE 'FLEET_MAIL_SEND_FAILED' END), 'note', 'delivery failed five times; try another channel or deliver again later'));`,
    `      'code', (CASE WHEN NEW.send_error ~ '^[A-Z0-9_]{2,64}$' THEN NEW.send_error ELSE 'FLEET_MAIL_SEND_FAILED' END), 'note', 'delivery failed five times; try another channel or deliver again later'));
     PERFORM fleet_event('order_needs_owner', o.agent_id, 'controller', jsonb_build_object('orderId', o.order_id, 'reason', 'delivery_failed',
-      'note', 'a paid order could not be delivered by mail after five attempts: the agent may deliver it another way or try again; if it cannot, refund the buyer (the agent's wallet refund, or Orders → Refund in the dashboard)'));`],
+      'note', 'a paid order could not be delivered by mail after five attempts: the agent may deliver it another way or try again; if it cannot, refund the buyer (the agent''s wallet refund, or Orders → Refund in the dashboard)'));`],
 ]);
 
 const BUYER = restate(V56_SQL, "cx_paypal_buyer_record", [
