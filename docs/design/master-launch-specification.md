@@ -482,7 +482,7 @@ provider link and the revealed credentials.
 
 Each step needs explicit owner authorization; none has been done.
 
-1. **Deploy** 45 → 58 (§13). The gateway installs dormant (no token).
+1. **Deploy** 45 → 59 (§13). The gateway installs dormant (no token).
 2. **PayPal:**
    1. create a Live REST app and request Payouts;
    2. seal its credentials in the dashboard;
@@ -513,7 +513,7 @@ Each step needs explicit owner authorization; none has been done.
 ### 13.1 Compatibility
 
 - Every component refuses any schema but its own. Production runs schema 45 with fda78a0.
-- v46–v58 only **add**: new tables and columns, restated functions, and new or replaced constraints on tables with no
+- v46–v59 only **add**: new tables and columns, restated functions, and new or replaced constraints on tables with no
   production rows yet.
 - **Behaviour changes for the two living agents after deploy:**
   - exhaustion is death;
@@ -526,12 +526,12 @@ Each step needs explicit owner authorization; none has been done.
 ### 13.2 Deploy
 
 1. Build on the VPS; take the pins from the build output.
-2. Run `fleet-rollout.sh rehearse <pins> 45 58` on the production copy. Expect:
+2. Run `fleet-rollout.sh rehearse <pins> 45 59` on the production copy. Expect:
    - a clean audit;
    - a verified ledger;
    - no journal or balance change;
    - no agent exhausted.
-3. Run `fleet-release.sh … 45 58`. It writes one `production_deployed` event and promotes UI 0.12.0.
+3. Run `fleet-release.sh … 45 59`. It writes one `production_deployed` event and promotes UI 0.12.0.
 4. Upgrade the founders — **not at cutover** (owner, 2026-10-09): only once the owner says the accounts are linked; Agent 2
    first, then Founder 1.
 
@@ -606,6 +606,7 @@ Each step needs explicit owner authorization; none has been done.
 | One chargeback under several codes is one loss, never beyond the principal; one exposure per sale | v58 (§18) | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal) |
 | Card credit: pre-funded money not charged is recorded and pays the next charges | v58 (§18) | IMPLEMENTED, LOCALLY VERIFIED |
 | No payment taken for a file the Fleet cannot deliver; undeliverable orders and unknown buyers raised with the recovery path | v58 (§18) | IMPLEMENTED, LOCALLY VERIFIED |
+| Refunds initiated by the Fleet (agent's own sale or the owner): PayPal capture refund through custody, within what is refundable, idempotent, posted once from PayPal's evidence | v59 (§19) | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal) |
 
 ---
 
@@ -721,10 +722,32 @@ v48–v56 booked the share of every return as an owner withdrawal; no production
 - **Fulfilment honesty.** `paypal.checkout` with `fulfilment: digital_file` answers `FLEET_FULFILMENT_UNAVAILABLE` while mail
   is not configured (sell the file on the storefront, which delivers, or as a service). A delivery that gives up after five
   attempts, or a buyer PayPal never reveals (twelve lookups), raises P1 `order_needs_owner` with the recovery path (deliver
-  another way, or refund in PayPal — the refund reconciles).
+  another way, or refund the order — `wallet refund` / Orders → Refund, v59).
 - **Send status.** A mail job the broker cannot hand to a provider is recorded as failed on its message, so a delivery is
   retried instead of waiting as "queued"; a retry that raises waits an hour without using an attempt.
 - **Dashboard step-up list.** The v57 dispute / debit decisions and the v58 card-credit return are in `dash_call`'s
   sensitive list (v57 had dispatched them without listing them, so the gateway refused them).
 - **First large file of a fresh session.** The client proves the session with a small read and sends the file once more.
+
+---
+
+## 19. Schema v59 — refunds initiated by the Fleet (revision 4)
+
+PayPal supports full and partial refunds of a capture (Payments v2 `POST /v2/payments/captures/{capture_id}/refund`). Earlier
+revisions treated refunds as manual; that was an implementation gap, not an owner decision.
+
+- **Who:** the agent that made the sale (`wallet refund {orderId, amountMinor?, reason}`), or the owner (dashboard Orders →
+  Refund with step-up; `economy-order-refund <orderId> <amountMinor|all> <reason>`). No other agent can refund it.
+- **How much:** at most what the buyer paid, less refunds and reversals already posted (plus money PayPal gave back), less
+  refunds in flight. Default: all of it. Refused otherwise (`FLEET_REFUND_EXCEEDS_REFUNDABLE`).
+- **At once:** the amount stops being spendable (exposure), so it cannot also be spent.
+- **Sending:** custody sends it under the same money-out authority as payouts — a live owner custody activation and, for a
+  live rail, `REAL_PAYMENTS_ENABLED` in custody — with one `PayPal-Request-Id` per request, so a retry is the same refund.
+  Before money-out is activated a request waits (and says so); the rail must carry the `refunds` capability.
+- **Accounting, once:** PayPal's answer (the refund id) is recorded as the same evidence PayPal's `PAYMENT.CAPTURE.REFUNDED`
+  webhook gives, and its Transaction Search row is reconciled by the v57/v58 rules — whichever arrives first posts it,
+  the others post nothing. The order shows the refund; the agent's wallet and estate follow.
+- **Outcomes:** completed → posted; pending → completed by PayPal's webhook / Search; refused (4xx) → the request fails, the
+  reserve is released (P2 `order_refund_failed`); unknown (5xx / timeout) → sent again after ten minutes with the same id.
+- **Not covered:** Gumroad sales are refunded in Gumroad (the gateway's token deliberately has no refund scope).
 

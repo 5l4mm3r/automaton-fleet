@@ -137,6 +137,14 @@ export class PgCustodyGateway implements PayPalGatewayPort, SealedCredentialPort
     return this.cx<CxResult>("cx_paypal_dispute_record", [worker, disputeId, captureId, status, outcome, amountMinor, currency]);
   }
 
+  paypalRefundWork(worker: string, limit: number) {
+    return this.cx<Array<{ refundRequestId: string; captureId: string; amountMinor: number; currency: string; note: string; invoiceId: string; railId: string;
+      railMode: "live" | "sandbox"; vaultRef: string }>>("cx_paypal_refund_work", [worker, limit]);
+  }
+  paypalRefundResult(worker: string, requestId: string, outcome: string, refundId: string | null, amountMinor: number | null, currency: string | null, failure: string | null) {
+    return this.cx<CxResult>("cx_paypal_refund_result", [worker, requestId, outcome, refundId, amountMinor, currency, failure]);
+  }
+
   // ── v49: the custody key and dashboard-sealed credentials ──
   publishKey(worker: string, publicKeyB64: string, fingerprint: string) { return this.cx<CxResult>("cx_publish_key", [worker, publicKeyB64, fingerprint]); }
   sealedCredentials(worker: string) { return this.cx<Array<{ vaultRef: string; sealedB64: string; fingerprint: string }>>("cx_sealed_credentials", [worker]); }

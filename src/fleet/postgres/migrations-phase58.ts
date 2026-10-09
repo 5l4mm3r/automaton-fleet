@@ -15,8 +15,8 @@
  *     treasury or owner each time (applied to the card balance it can only stay in the treasury).
  *  5. Fulfilment honesty. A checkout promising a file by mail is refused while the Fleet's mail is not configured (the agent
  *     is told to sell it on the storefront, which delivers, or as a service); an order whose delivery gave up, or whose buyer
- *     PayPal never reveals, is raised for the owner (P1) with the recovery path (deliver another way, or refund in PayPal —
- *     the refund then reconciles).
+ *     PayPal never reveals, is raised for the owner (P1) with the recovery path (deliver another way, or refund the buyer —
+ *     the agent's wallet refund or the dashboard's Orders → Refund (v59) — which reconciles).
  */
 import { V53_SQL } from "./migrations-phase53.js";
 import { V56_SQL } from "./migrations-phase56.js";
@@ -84,7 +84,7 @@ const DELIVERY_FOLLOW = restate(V56_SQL, "fleet_order_delivery_follow", [
   [`      'code', (CASE WHEN NEW.send_error ~ '^[A-Z0-9_]{2,64}$' THEN NEW.send_error ELSE 'FLEET_MAIL_SEND_FAILED' END), 'note', 'delivery failed five times; try another channel or deliver again later'));`,
    `      'code', (CASE WHEN NEW.send_error ~ '^[A-Z0-9_]{2,64}$' THEN NEW.send_error ELSE 'FLEET_MAIL_SEND_FAILED' END), 'note', 'delivery failed five times; try another channel or deliver again later'));
     PERFORM fleet_event('order_needs_owner', o.agent_id, 'controller', jsonb_build_object('orderId', o.order_id, 'reason', 'delivery_failed',
-      'note', 'a paid order could not be delivered by mail after five attempts: the agent may deliver it another way or try again; if it cannot, refund the buyer in PayPal (the refund reconciles automatically)'));`],
+      'note', 'a paid order could not be delivered by mail after five attempts: the agent may deliver it another way or try again; if it cannot, refund the buyer (the agent's wallet refund, or Orders → Refund in the dashboard)'));`],
 ]);
 
 const BUYER = restate(V56_SQL, "cx_paypal_buyer_record", [
@@ -94,7 +94,7 @@ const BUYER = restate(V56_SQL, "cx_paypal_buyer_record", [
            buyer_next_lookup = now() + LEAST(interval '1 minute' * power(2, buyer_lookups), interval '12 hours') WHERE order_id = o.order_id;
     IF o.buyer_lookups + 1 = 12 THEN
       PERFORM fleet_event('order_needs_owner', o.agent_id, 'custody', jsonb_build_object('orderId', o.order_id, 'reason', 'buyer_unknown',
-        'note', 'PayPal has not revealed this buyer''s e-mail after twelve lookups: find the buyer in PayPal''s activity, deliver or refund there (the agent keeps trying)'));
+        'note', 'PayPal has not revealed this buyer''s e-mail after twelve lookups: find the buyer in PayPal''s activity and deliver, or refund the order (Orders → Refund); the agent keeps trying'));
     END IF;`],
 ]);
 

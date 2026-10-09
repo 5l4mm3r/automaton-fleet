@@ -163,6 +163,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       "cx_paypal_checkout_by_order(text,text)", "cx_paypal_checkout_update(text,uuid,text,text,text,text)",
       "cx_paypal_clawback_evidence(text,text,text,text,text,bigint,text)", "cx_paypal_dispute_record(text,text,text,text,text,bigint,text)", "cx_paypal_inbox(text,integer)",
       "cx_paypal_inbox_result(text,text,text,text)", "cx_paypal_rails(text)", "cx_paypal_refund_record(text,text,text,text,bigint,text)",
+      "cx_paypal_refund_result(text,uuid,text,text,bigint,text,text)", "cx_paypal_refund_work(text,integer)",
       "cx_paypal_txn_record(text,uuid,jsonb)", "cx_paypal_work(text,integer)",
       // v49: the custody key and the PayPal credentials sealed to it from the dashboard.
       "cx_ping()", "cx_publish_key(text,text,text)", "cx_report_result(uuid,text,text,text,bigint,text)", "cx_sealed_credentials(text)"]);

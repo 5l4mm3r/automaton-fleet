@@ -1,7 +1,8 @@
 /**
  * PayPal treasury worker (schema v48), inside the custody executor — the only process that can read the PayPal
- * credential. It receives money for agents' checkouts and keeps the registry reconciled with PayPal; it never pays anyone
- * (payouts are the signer's, behind the four-key activation).
+ * credential. It receives money for agents' checkouts and keeps the registry reconciled with PayPal. It pays nobody except
+ * a buyer being refunded (v59: a refund the agent or owner requested, sent only while money-out is activated and, on a
+ * live rail, REAL_PAYMENTS_ENABLED; payouts remain the signer's, behind the four-key activation).
  *
  * Each pass:
  *  1. webhooks the controller stored unverified are verified with PayPal (postback to verify-webhook-signature, with the
@@ -17,6 +18,7 @@
  */
 import { SecretHandle, type SecretVault } from "../payments/credential-broker.js";
 import type { HttpPort } from "./signers.js";
+import { assertRealSpendAllowed, FLEET_SPEND_GATE, type SpendGate } from "../spend-gate.js";
 import type { CxResult } from "./gateway.js";
 
 export interface PayPalInboxItem { eventId: string; eventType: string; status: "received" | "verified"; headers: Record<string, string>; body: string }
@@ -48,6 +50,11 @@ export interface PayPalGatewayPort {
   /** v57: a webhook's refund / reversal as evidence (reconciled with Transaction Search; never posted twice), and a dispute's state. */
   paypalClawbackEvidence?(worker: string, ref: string, group: "refund" | "reversal", captureId: string, amountMinor: number, currency: string): Promise<CxResult>;
   paypalDisputeRecord?(worker: string, disputeId: string, captureId: string, status: string, outcome: string | null, amountMinor: number, currency: string): Promise<CxResult>;
+  /** v59: refunds the Fleet requested (only while money-out is activated), and PayPal's answer to each. */
+  paypalRefundWork?(worker: string, limit: number): Promise<Array<{ refundRequestId: string; captureId: string; amountMinor: number; currency: string; note: string;
+    invoiceId: string; railId: string; railMode: "live" | "sandbox"; vaultRef: string }>>;
+  paypalRefundResult?(worker: string, requestId: string, outcome: "completed" | "pending" | "failed" | "unknown", refundId: string | null, amountMinor: number | null,
+    currency: string | null, failure: string | null): Promise<CxResult>;
 }
 
 export interface PayPalTreasuryOptions {
@@ -59,6 +66,8 @@ export interface PayPalTreasuryOptions {
   cancelUrl?: string;
   reconcileEveryMs?: number;
   balanceEveryMs?: number;
+  /** v59: the money-out gate for a live refund (REAL_PAYMENTS_ENABLED, as for payouts). */
+  spendGate?: SpendGate;
   now?: () => number;
   log?: (level: string, event: string, detail?: Record<string, unknown>) => void;
 }
@@ -145,6 +154,7 @@ export class PayPalTreasuryWorker {
       await this.inbox(rails);
       await this.work();
       await this.buyers();
+      await this.refunds();
       for (const r of rails) {
         if (this.now() - (this.lastReconcile.get(r.railId) ?? 0) >= (this.opts.reconcileEveryMs ?? 15 * 60_000)) await this.reconcile(r);
         if (this.now() - (this.lastBalance.get(r.railId) ?? 0) >= (this.opts.balanceEveryMs ?? 60 * 60_000)) await this.balance(r);
@@ -330,6 +340,36 @@ export class PayPalTreasuryWorker {
   }
 
   // ── 3. Reconciliation and balances ──
+  // ── v59: refunds the Fleet initiates (Payments v2 capture refund; the PayPal-Request-Id makes a retry the same refund) ──
+  private async refunds(): Promise<void> {
+    if (!this.gw.paypalRefundWork || !this.gw.paypalRefundResult) return;
+    for (const r of await this.gw.paypalRefundWork(this.worker, 10)) {
+      if (!PAYPAL_ID.test(r.captureId)) continue;
+      if (r.railMode === "live") {
+        try { assertRealSpendAllowed("credit_transfer", this.opts.spendGate ?? FLEET_SPEND_GATE); }
+        catch { this.log("warn", "paypal_refund_gated", { refundRequestId: r.refundRequestId }); continue; } // stays queued until money-out is enabled
+      }
+      const res = await this.call(r, "POST", `/v2/payments/captures/${r.captureId}/refund`,
+        { amount: { value: decimal(r.amountMinor), currency_code: r.currency }, invoice_id: r.invoiceId.slice(0, 127), note_to_payer: r.note.slice(0, 255) },
+        `refund:${r.refundRequestId}`).catch(() => null);
+      if (!res || res.status >= 500 || res.status === 429) { await this.gw.paypalRefundResult(this.worker, r.refundRequestId, "unknown", null, null, null, null); continue; }
+      if (res.status === 200 || res.status === 201) {
+        const st = String(res.json?.status ?? "");
+        const id = typeof res.json?.id === "string" ? res.json.id : null;
+        const amount = toMinor(res.json?.amount?.value) ?? r.amountMinor;
+        const cur = String(res.json?.amount?.currency_code ?? r.currency);
+        if (st === "COMPLETED" && id) { await this.gw.paypalRefundResult(this.worker, r.refundRequestId, "completed", id, amount, cur, null); this.stats.refunds++; }
+        else if (st === "PENDING" && id) await this.gw.paypalRefundResult(this.worker, r.refundRequestId, "pending", id, amount, cur, null);
+        else if (st === "CANCELLED" || st === "FAILED") await this.gw.paypalRefundResult(this.worker, r.refundRequestId, "failed", id, null, null, `PAYPAL_REFUND_${st}`);
+        else await this.gw.paypalRefundResult(this.worker, r.refundRequestId, "unknown", null, null, null, null);
+        continue;
+      }
+      // 4xx: PayPal refused it (e.g. REFUND_AMOUNT_EXCEEDED, CAPTURE_FULLY_REFUNDED, REFUND_TIME_LIMIT_EXCEEDED).
+      const issue = Array.isArray(res.json?.details) && typeof res.json.details[0]?.issue === "string" ? res.json.details[0].issue : `HTTP_${res.status}`;
+      await this.gw.paypalRefundResult(this.worker, r.refundRequestId, "failed", null, null, null, String(issue).toUpperCase().replace(/[^A-Z0-9_]/g, "_").slice(0, 64));
+    }
+  }
+
   /** v57: evidence where the gateway records it (the registry reconciles); the v48 direct record otherwise. */
   private clawback(ref: string, group: "refund" | "reversal", captureId: string, amountMinor: number, currency: string): Promise<CxResult> {
     return this.gw.paypalClawbackEvidence

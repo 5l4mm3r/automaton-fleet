@@ -24,15 +24,15 @@ export async function unpinCustody(owner: pg.Pool, schema: string, actor = "oper
 }
 
 /** A live PayPal payout rail with its credential reference (never a secret) in `schema`. */
-export async function liveRail(owner: pg.Pool, schema: string, actor: string, opts: { vaultRef?: string; scope?: string[]; label?: string } = {}): Promise<ArmedCustody> {
+export async function liveRail(owner: pg.Pool, schema: string, actor: string, opts: { vaultRef?: string; scope?: string[]; label?: string; capabilities?: string[] } = {}): Promise<ArmedCustody> {
   const vaultRef = opts.vaultRef ?? `vault:paypal/treasury-${Math.random().toString(36).slice(2, 8)}`;
   const ent = await q1(owner, `SELECT ${schema}.fleet_admin_legal_entity_add($1, 'GB', 'company', false, $2) AS r`, [`Fleet Ltd ${vaultRef.slice(-6)}`, actor]);
   const entityId = ent.r.entityId ?? ent.r.entity_id;
   const cred = await q1(owner, `SELECT ${schema}.fleet_admin_credential_register('paypal', 'Treasury payouts', $1, $2, false, NULL, $3) AS r`,
     [vaultRef, opts.scope ?? ["payouts"], actor]);
   const credentialId = cred.r.credential_id;
-  const rail = await q1(owner, `SELECT ${schema}.fleet_admin_rail_add('paypal', $1, 'shared', $2, ARRAY['payouts','receive_payments'], 'PayPal treasury', $3, 'live', NULL, NULL, $4) AS r`,
-    [opts.label ?? "PayPal treasury", entityId, credentialId, actor]);
+  const rail = await q1(owner, `SELECT ${schema}.fleet_admin_rail_add('paypal', $1, 'shared', $2, $5::text[], 'PayPal treasury', $3, 'live', NULL, NULL, $4) AS r`,
+    [opts.label ?? "PayPal treasury", entityId, credentialId, actor, opts.capabilities ?? ["payouts", "receive_payments"]]);
   const railId = rail.r.railId ?? rail.r.rail_id;
   // v46: a real rail starts pending_setup; this test rail records the evidence its capabilities need, then goes active.
   for (const check of ["account_access", "payout_reconciliation", "sale_ingestion"]) {

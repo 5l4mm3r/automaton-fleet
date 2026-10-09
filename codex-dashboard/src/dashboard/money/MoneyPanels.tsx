@@ -291,7 +291,9 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
         <td>{o.payment.replace(/_/g, " ")}{o.refundedMinor ? ` (${o.currency} ${(o.refundedMinor / 100).toFixed(2)} back)` : ""}</td>
         <td>{o.buyer ? `${o.buyer.email}${o.buyer.country ? ` · ${o.buyer.country}` : ""}` : o.buyerPending ? "buyer: reading from PayPal" : "—"}</td>
         <td className={o.status === "delivery_failed" ? "text-red-300" : o.status === "delivered" || o.status === "fulfilled" ? "text-emerald-300" : ""}>
-          {o.status.replace(/_/g, " ")}{o.delivery && o.status !== "delivered" ? ` · delivery ${o.delivery.status}${o.delivery.attempts > 1 ? ` (attempt ${o.delivery.attempts})` : ""}${o.delivery.lastError ? ` · ${o.delivery.lastError}` : ""}` : ""}</td></tr>)}</tbody></table>
+          {o.status.replace(/_/g, " ")}{o.delivery && o.status !== "delivered" ? ` · delivery ${o.delivery.status}${o.delivery.attempts > 1 ? ` (attempt ${o.delivery.attempts})` : ""}${o.delivery.lastError ? ` · ${o.delivery.lastError}` : ""}` : ""}</td>
+        <td>{(o.payment === "paid" || o.payment === "partially_refunded") && <Form title="Refund through PayPal" fields={[{ key: "amount", label: `Amount (${o.currency}; empty = all still refundable)` }, { key: "reason", label: "Reason" }]}
+          submit={(v) => call("order_refund", { orderId: o.orderId, amountMinor: v.amount ? minor(v.amount) : null, reason: v.reason })} />}</td></tr>)}</tbody></table>
         : null}
     </> : <p className="text-sm text-slate-400">{orders.error || "Reading…"}</p>}</Panel>
   </>;

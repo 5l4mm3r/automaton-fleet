@@ -1225,6 +1225,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_paypal_clawback_posts: new Set(["cx_paypal_refund_record", "fleet_paypal_clawback_return"]),
     fleet_paypal_disputes: new Set(["cx_paypal_dispute_record", "fleet_admin_paypal_dispute_resolve"]),
     fleet_paypal_debit_classifications: new Set(["fleet_admin_paypal_debit_classify"]),
+    // v59: refund requests by the one request function (agent or owner), custody's result and PayPal's evidence.
+    fleet_paypal_refund_requests: new Set(["fleet_order_refund_request", "cx_paypal_refund_result", "fleet_refund_request_completed"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

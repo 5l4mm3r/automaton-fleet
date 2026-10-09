@@ -150,7 +150,7 @@ describe.skipIf(!PG_BIN)("v58: principal caps, one exposure per sale, fulfilment
     expect(o).toMatchObject({ status: "delivery_failed", delivery: { status: "gave_up", attempts: 5 } });
     const ev = (await R.q(`SELECT detail FROM fleet.fleet_events WHERE event_type = 'order_needs_owner' ORDER BY id DESC LIMIT 1`))[0].detail;
     expect(ev).toMatchObject({ orderId: s.orderId, reason: "delivery_failed" });
-    expect(ev.note).toMatch(/refund the buyer in PayPal/);
+    expect(ev.note).toMatch(/refund the buyer/);
     // A buyer PayPal never reveals: raised once, at the twelfth lookup.
     const u = await sale(500);
     for (let i = 0; i < 12; i++) await cx("cx_paypal_buyer_record", [W, u.checkoutId, null]);

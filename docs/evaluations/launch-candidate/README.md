@@ -1,6 +1,6 @@
 # Launch candidate — deployment, onboarding, recovery and checklist (revision 3)
 
-- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v58 on top of production schema 45, dashboard UI 0.12.0 (0.11.0 + the v54 card requests and the v55 survival switch).
+- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v59 on top of production schema 45, dashboard UI 0.12.0 (0.11.0 + the v54 card requests and the v55 survival switch).
 - **Revision 3 (2026-10-09)** follows the owner's decisions of 2026-10-08:
   - the treasury PayPal stays the owner's own account, **upgraded to Business as an individual** (no company);
   - the card is the owner's **credit card**, repaid **weekly** from the treasury.
@@ -28,6 +28,7 @@
 | v56 | Customer orders (buyer from PayPal, agent-isolated) and delivery by mail with retries; storefront ops over HTTP; truthful account creation; estates for the newer money states; refunds caught by Transaction Search | No |
 | v57 | Refunds, reversals, chargebacks, dispute holds and fees reconciled from webhook + Transaction Search evidence (never posted twice); open disputes and unclassified debits held back from spendable money; a returned card receipt's swept share stays in the treasury unless you explicitly keep it | No |
 | v58 | One chargeback under several codes is one loss (never beyond the principal); one exposure per sale; card credit for pre-funded money not charged; the swept share's destination is your choice each time; a file is not sold by checkout without mail; undeliverable orders raised for you | No |
+| v59 | Refunds initiated by the Fleet: an agent (or you) refunds a PayPal sale through custody — within what is refundable, once, posted from PayPal's evidence | No |
 
 ### 1.1 Behaviour the two living agents will meet after deployment
 
@@ -60,7 +61,7 @@
   attachments and publishes its (empty) connector list (v56).
 - **New unit:** `automaton-fleet-gumroad` (installed only by `scripts/fleet-gumroad-setup.sh`; dormant without a token).
 
-## 2. Deploy (schema 45 → 58)
+## 2. Deploy (schema 45 → 59)
 
 Pins come from the build output, never from placeholders.
 
@@ -71,7 +72,7 @@ Pins come from the build output, never from placeholders.
    4. build the dashboard LIVE export from the same commit.
 2. Rehearse on a copy of production:
    ```
-   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 58
+   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 59
    ```
    Expect all of the following:
    - every migration applies;
@@ -81,7 +82,7 @@ Pins come from the build output, never from placeholders.
    - `hub-wallet-measure` shows `exhausted: false` for both.
 3. Cut over:
    ```
-   bash ~/fleet-release.sh … 45 58
+   bash ~/fleet-release.sh … 45 59
    ```
    This does the backend cutover and promotes UI 0.12.0, with one `production_deployed` event.
 4. **Not at cutover (owner, 2026-10-09):** the founders stay on fda78a0 until you say the accounts are linked. Then
@@ -106,12 +107,12 @@ Pins come from the build output, never from placeholders.
 Correct terminology matters here. A schema revert does **not** keep newer writes in the running system; the export it
 writes is **recovery evidence**.
 
-- **Fix forward (preferred).** v46–v58 only add. A code fix on schema 58 needs no restore and loses nothing.
+- **Fix forward (preferred).** v46–v59 only add. A code fix on schema 58 needs no restore and loses nothing.
 - **Code-only problem in the new release.** Use the release's own code-only revert. The database is untouched and all
   writes are kept.
 - **A schema revert to 45:**
   ```
-  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 58 <reason>
+  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 59 <reason>
   ```
   1. **UI first:** point the dashboard back to `dashboard.env.pre-0.12.0`.
   2. **Founders first**, if they were upgraded:
@@ -292,7 +293,7 @@ Every production step runs in the owner's own terminal on the VPS (`ssh agentfle
 | A2 | **Done**: the candidate's release scripts in `~/rlc58/` (`~/fleet-rollout.sh` kept for the R41.1 rollback) | Claude |
 | A3 | **Done**: `~/rlc58/ui-0.12.0-8e71fd6.tgz`, SHA-256 verified on the VPS | Claude |
 | A4 | **Passed 2026-10-09 18:55Z** on a production copy (+ wallet / protection / Agent 2 checks); valid until 2026-10-10 18:55:43Z | Claude |
-| A5 | Cut over (authorization required; within the rehearsal window): `bash ~/rlc58/fleet-release.sh ~/rlc58/pins.txt 45 58 0.12.0 ~/rlc58/ui-0.12.0-8e71fd6.tgz 9c7474f554c4f59bfcbfaf0df53d401cc578dbfca6653e659cff02f58c4ced79`; read-only checks (§2 step 5) | Owner (or Claude on authorization) |
+| A5 | Cut over (authorization required; within the rehearsal window): `bash ~/rlc58/fleet-release.sh ~/rlc58/pins.txt 45 59 0.12.0 ~/rlc58/ui-0.12.0-8e71fd6.tgz 9c7474f554c4f59bfcbfaf0df53d401cc578dbfca6653e659cff02f58c4ced79`; read-only checks (§2 step 5) | Owner (or Claude on authorization) |
 
 ### B. Provider setup and onboarding (still no spending; agents not yet upgraded)
 

@@ -26,6 +26,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "paypal_dispute_resolve", "paypal_debit_classify",
   // v58: card credit moved back to the treasury.
   "card_credit_return",
+  // v59: refund a sale's buyer through PayPal.
+  "order_refund",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */

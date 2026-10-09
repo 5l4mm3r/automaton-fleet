@@ -65,9 +65,10 @@ import { V55_SQL } from "./migrations-phase55.js";
 import { V56_SQL } from "./migrations-phase56.js";
 import { V57_SQL } from "./migrations-phase57.js";
 import { V58_SQL } from "./migrations-phase58.js";
+import { V59_SQL } from "./migrations-phase59.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 58;
+export const FLEET_PG_SCHEMA_VERSION = 59;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1221,6 +1222,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 56, name: "customer_orders_delivery_connectors", sql: V56_SQL },
   { version: 57, name: "paypal_clawback_reconciliation_card_sweep_destination", sql: V57_SQL },
   { version: 58, name: "principal_caps_card_credit_fulfilment_honesty", sql: V58_SQL },
+  { version: 59, name: "brokered_paypal_refunds", sql: V59_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1388,6 +1390,9 @@ export const CUSTODY_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v57: refunds / reversals from webhooks as evidence (reconciled with Transaction Search, never posted twice); disputes.
   "cx_paypal_clawback_evidence(text, text, text, text, text, bigint, text)",
   "cx_paypal_dispute_record(text, text, text, text, text, bigint, text)",
+  // v59: refunds the Fleet initiates (agent or owner), sent under the money-out authority; posted from PayPal's evidence.
+  "cx_paypal_refund_work(text, integer)",
+  "cx_paypal_refund_result(text, uuid, text, text, bigint, text, text)",
 ]);
 
 /** Per custody function: the only tables it may write and the only volatile fleet functions it may call. */
@@ -1416,14 +1421,16 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
     calls: ["fleet_ledger_post", "fleet_event", "fleet_order_refunded"] },
   // v56: a reversal seen only in Transaction Search is raised for the owner.
   // v57: Transaction Search rows of a sale become clawback evidence, reconciled at once.
-  cx_paypal_txn_record: { writes: ["fleet_paypal_transactions", "fleet_paypal_clawback_evidence"], calls: ["fleet_event", "fleet_paypal_clawback_reconcile"] },
+  cx_paypal_txn_record: { writes: ["fleet_paypal_transactions", "fleet_paypal_clawback_evidence"], calls: ["fleet_event", "fleet_paypal_clawback_reconcile", "fleet_refund_request_completed"] },
   cx_paypal_balance_record: { writes: ["fleet_paypal_balance_observations"], calls: [] },
   cx_publish_key: { writes: ["fleet_custody_keys"], calls: ["fleet_event"] },
   cx_sealed_credentials: { writes: [], calls: [] },
   cx_paypal_buyer_work: { writes: [], calls: [] },
   // v58: a buyer PayPal never reveals is raised for the owner.
   cx_paypal_buyer_record: { writes: ["fleet_customer_orders"], calls: ["fleet_event"] },
-  cx_paypal_clawback_evidence: { writes: ["fleet_paypal_clawback_evidence"], calls: ["fleet_event", "fleet_paypal_clawback_reconcile", "cx_paypal_refund_record"] },
+  cx_paypal_clawback_evidence: { writes: ["fleet_paypal_clawback_evidence"], calls: ["fleet_event", "fleet_paypal_clawback_reconcile", "cx_paypal_refund_record", "fleet_refund_request_completed"] },
+  cx_paypal_refund_work: { writes: [], calls: [] },
+  cx_paypal_refund_result: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event", "cx_paypal_clawback_evidence"] },
   cx_paypal_dispute_record: { writes: ["fleet_paypal_disputes"], calls: ["fleet_event"] },
 });
 

@@ -138,6 +138,10 @@ export class PgHubAdmin {
   cardSettle(receiptId: string, resolution: string, method: string, sweepMinor: number | null, reference: string | null, actor: string, sweepTo: "treasury" | "owner" | null = null) {
     return this.one(`SELECT fleet_admin_card_receipt_settle($1, $2, $3, $4, $5, $6, $7) AS r`, [receiptId, resolution, method, sweepMinor, reference, actor, sweepTo]);
   }
+  /** v59: refund a sale's buyer (all that is still refundable when amountMinor is null). */
+  orderRefund(orderId: string, amountMinor: number | null, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_order_refund($1, $2, $3, $4) AS r`, [orderId, amountMinor, reason, actor]);
+  }
   /** v58: card credit (pre-funded, unused) moved back to the treasury PayPal account. */
   cardCreditReturn(amountMinor: number, reference: string, actor: string) {
     return this.one(`SELECT fleet_admin_card_credit_return($1, $2, $3) AS r`, [amountMinor, reference, actor]);

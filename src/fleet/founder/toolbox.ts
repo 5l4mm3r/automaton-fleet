@@ -64,7 +64,9 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
     // v48: receiving money through the Fleet's PayPal treasury (custody opens and captures the order).
     checkout: "paypal.checkout", checkouts: "paypal.checkouts", cancel_checkout: "paypal.cancel",
     // v56: the orders behind checkouts (buyer contact, payment, fulfilment): a file delivered by mail, a service recorded.
-    orders: "order.list", deliver: "order.deliver", fulfil: "order.fulfil" },
+    orders: "order.list", deliver: "order.deliver", fulfil: "order.fulfil",
+    // v59: refund the buyer of one of your sales (custody sends it to PayPal; posted when PayPal confirms it).
+    refund: "order.refund" },
   fleet_capital: { register_vendor: "vendor.register", revoke_vendor: "vendor.revoke", require_rail: "rail.require", request: "capital.request", list: "capital.list",
     envelopes: "envelope.list", envelope_spend: "envelope.spend",
     // v49: the owner's card as a bypass (hold → fill → declare / void); v50: temporary sweep reductions.
@@ -113,8 +115,8 @@ const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend", "mailbox.pr
   "paypal.checkout",
   // v52: a retried storefront operation queues one gateway job.
   "storefront.product.create", "storefront.product.update", "storefront.product.publish", "storefront.product.unpublish", "storefront.product.delete", "storefront.file",
-  // v56: a retried delivery sends the buyer one message.
-  "order.deliver"]);
+  // v56: a retried delivery sends the buyer one message. v59: a retried refund request is one refund.
+  "order.deliver", "order.refund"]);
 
 export interface ToolOutcome {
   name: string;

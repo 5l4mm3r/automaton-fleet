@@ -204,7 +204,7 @@ export async function startCustodyFromEnv(
   // The service must stay up on its poll timer (an idle database pool alone would let Node exit 0 and
   // systemd's Restart=on-failure would not bring it back).
   executor.start({ keepAlive: true });
-  // v48: the PayPal treasury worker (receiving + reconciliation) for every rail the vault serves; it never pays anyone.
+  // v48: the PayPal treasury worker (receiving + reconciliation; v59: requested refunds under the money-out authority).
   let treasury: PayPalTreasuryWorker | null = null;
   let treasuryTimer: NodeJS.Timeout | null = null;
   let treasuryRun: Promise<void> | null = null;
