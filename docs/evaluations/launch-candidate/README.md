@@ -288,11 +288,11 @@ Every production step runs in the owner's own terminal on the VPS (`ssh agentfle
 
 | # | Step | Who |
 |---|---|---|
-| A1 | Build the candidate and write the pins: `cd ~/automaton-fleet-build && git fetch fleet-origin && git checkout --detach <SHA> && mkdir -p ~/rlc && bash scripts/fleet-build-runtime.sh https://github.com/5l4mm3r/automaton-fleet.git <SHA> > ~/rlc/pins.txt` | Owner |
-| A2 | Use the candidate's release scripts (the rollback script changed; `~/fleet-rollout.sh` stays for the R41.1 rollback): `install -m 0755 scripts/fleet-rollout.sh scripts/fleet-release.sh scripts/fleet-ui-deploy.sh ~/rlc/` | Owner |
-| A3 | Copy the dashboard package Claude built: `scp <ui.tgz> agentfleet-vps:rlc/` and check its SHA-256 | Owner (from this VM) |
-| A4 | Rehearse on a copy of production: `bash ~/rlc/fleet-rollout.sh rehearse ~/rlc/pins.txt 45 58` → Claude reviews `~/rollout-<sha7>-rehearse.txt` | Owner → Claude |
-| A5 | Cut over (within 24 h of the rehearsal): `bash ~/rlc/fleet-release.sh ~/rlc/pins.txt 45 58 0.12.0 ~/rlc/<ui.tgz> <uiSha>`; read-only checks (§2 step 5) | Owner |
+| A1 | **Done 2026-10-09** (8e71fd6): build and pins in `~/rlc58/pins.txt` — see `release-8e71fd6.md` | Claude |
+| A2 | **Done**: the candidate's release scripts in `~/rlc58/` (`~/fleet-rollout.sh` kept for the R41.1 rollback) | Claude |
+| A3 | **Done**: `~/rlc58/ui-0.12.0-8e71fd6.tgz`, SHA-256 verified on the VPS | Claude |
+| A4 | **Passed 2026-10-09 18:55Z** on a production copy (+ wallet / protection / Agent 2 checks); valid until 2026-10-10 18:55:43Z | Claude |
+| A5 | Cut over (authorization required; within the rehearsal window): `bash ~/rlc58/fleet-release.sh ~/rlc58/pins.txt 45 58 0.12.0 ~/rlc58/ui-0.12.0-8e71fd6.tgz 9c7474f554c4f59bfcbfaf0df53d401cc578dbfca6653e659cff02f58c4ced79`; read-only checks (§2 step 5) | Owner (or Claude on authorization) |
 
 ### B. Provider setup and onboarding (still no spending; agents not yet upgraded)
 
