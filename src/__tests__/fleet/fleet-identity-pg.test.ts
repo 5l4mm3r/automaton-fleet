@@ -232,10 +232,11 @@ describe.skipIf(!PG_BIN)("v34 agent-owned identity and owner identity broker (Po
     const d = await ok(R.econ(A, "account.create", { platform: "sim-down", kind: "service", handle: "axiom-down", idempotencyKey: idem() }));
     await broker.tick();
     expect(await account(A, d.accountId)).toMatchObject({ status: "failed" });
-    // An unknown platform has no adapter yet: a clear refusal for that job only.
-    const u = await ok(R.econ(A, "account.create", { platform: "unknown-platform", kind: "social", handle: "axiom-social", idempotencyKey: idem() }));
-    await broker.tick();
-    expect((await ok(R.econ(A, "account.status", { accountId: u.accountId }))).jobs[0].result).toMatchObject({ code: "FLEET_NO_CONNECTOR" });
+    // An unknown platform has no adapter: v56 refuses that one action at once (no job that can only fail), naming the
+    // connectors the broker published and the working path (register_account + browser).
+    const u = await R.econ(A, "account.create", { platform: "unknown-platform", kind: "social", handle: "axiom-social", idempotencyKey: idem() });
+    expect(u).toMatchObject({ ok: false, code: "FLEET_NO_CONNECTOR" });
+    expect(u.reason).toMatch(/connectors: sim-down, .*register_account/);
     expect(await ok(R.econ(A, "venture.list", {}))).toMatchObject({ ok: true });
     // v11's raw release of organisation identity is retired; nothing can store owner identity in the database.
     expect(await R.gw.identityFact(A.id, A.token, crypto.randomUUID())).toMatchObject({ ok: false, code: "FLEET_IDENTITY_BROKERED" });

@@ -159,7 +159,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     const cx = audit.roles.find((r) => r.role === "fleet_custody_login")!;
     expect(cx.functions.sort()).toEqual(["cx_attest_signer(text,uuid,text,text,uuid)", "cx_claim_instruction(text,text)", "cx_credential_use(uuid,text,text,text,text)",
       // v48: the PayPal treasury's receiving and reconciliation records (custody alone holds the PayPal credential).
-      "cx_paypal_balance_record(text,uuid,text,bigint,bigint)", "cx_paypal_capture_record(text,uuid,text,text,bigint,bigint,text,text)",
+      "cx_paypal_balance_record(text,uuid,text,bigint,bigint)", "cx_paypal_buyer_record(text,uuid,jsonb)", "cx_paypal_buyer_work(text,integer)", "cx_paypal_capture_record(text,uuid,text,text,bigint,bigint,text,text)",
       "cx_paypal_checkout_by_order(text,text)", "cx_paypal_checkout_update(text,uuid,text,text,text,text)", "cx_paypal_inbox(text,integer)",
       "cx_paypal_inbox_result(text,text,text,text)", "cx_paypal_rails(text)", "cx_paypal_refund_record(text,text,text,text,bigint,text)",
       "cx_paypal_txn_record(text,uuid,jsonb)", "cx_paypal_work(text,integer)",
