@@ -96,3 +96,24 @@ Pre-flight 22:04Z: pins, package checksum, release scripts and the build checkou
 Rollback (only if needed, and never once real money or provider data exists): UI `sudo cp -p
 /etc/automaton-fleet/dashboard.env.pre-0.12.0 /etc/automaton-fleet/dashboard.env && sudo systemctl restart
 automaton-fleet-dashboard.service`; backend `bash ~/rlc59/fleet-rollout.sh revert ~/rlc59/pins.txt 45 59 <reason>`.
+
+## Host change after deployment — custody unit state directory (commit 3f0eae6, owner-authorized, 2026-10-09)
+
+Found when the owner's first PayPal credential upload was refused (`FLEET_CUSTODY_KEY_UNAVAILABLE`): the custody unit
+never declared `/var/lib/automaton-fleet-custody`, so under `ProtectSystem=strict` the executor had no state directory,
+skipped its sealed vault and published no key (startup log `custodyKey: null`). Present since v49; not caused by f021673.
+
+- Before (22:49:33Z): no state directory, no `custody-x25519.json` anywhere on the disk, 0 published keys (nothing to
+  preserve); `REAL_PAYMENTS_ENABLED=false`; custody execution off, 0 activations; live unit sha256 `c3e35575…8dc4`.
+- Applied 22:50:48Z: previous unit kept as `/etc/systemd/system/automaton-fleet-custody.service.pre-3f0eae6.bak`;
+  `deploy/systemd/automaton-fleet-custody.service` from 3f0eae6 installed (sha256 `a393e2f3…2c63`; adds
+  `StateDirectory=automaton-fleet-custody`, `StateDirectoryMode=0700`, `FLEET_CUSTODY_STATE_DIR`, and the v52 Gumroad
+  `InaccessiblePaths` line the live unit lacked); `daemon-reload`; custody restarted alone (active, 0 restarts).
+- Verified: directory `drwx------ automaton-fleet-custody`; key file `-rw------- automaton-fleet-custody` (not readable by
+  the operator account); startup `custodyKey 4fee40f2…`, execution off, no signers; registry `fleet_custody_keys`
+  fingerprint `4fee40f2c10ba13908138b8108a0c7efb59cbaa986758b007ce3a2b120bf9d82` equals the key file's public half; one
+  `custody_key_published` event. Flags all false; 0 rails; protection on; founders unchanged on fda78a0 and heartbeating;
+  controller, dashboard and identity not restarted.
+- Rollback (only if needed): reinstall the `.pre-3f0eae6.bak` unit, `daemon-reload`, restart custody (the key file stays;
+  credentials sealed to it remain readable once the directory is declared again).
+- Evidence (build VM): `~/fleet-release-evidence/custody-unit-3f0eae6/{pre,apply,verify,post}.txt`.
