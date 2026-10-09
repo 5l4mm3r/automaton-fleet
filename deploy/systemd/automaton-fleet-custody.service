@@ -34,6 +34,11 @@ Environment=NODE_ENV=production
 Environment=FLEET_CUSTODY_EXPECTED_USER=automaton-fleet-custody
 Environment=FLEET_CUSTODY_ENV_FILE=/etc/automaton-fleet/custody.env
 Environment=FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/runtime.env
+# v49: the executor's own X25519 key (custody-x25519.json, 0600), to which the owner's dashboard seals PayPal app
+# credentials. systemd creates the directory (0700, owned by the custody user); every other unit has it inaccessible.
+Environment=FLEET_CUSTODY_STATE_DIR=/var/lib/automaton-fleet-custody
+StateDirectory=automaton-fleet-custody
+StateDirectoryMode=0700
 UMask=0077
 
 Restart=on-failure
