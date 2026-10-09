@@ -1,7 +1,7 @@
 # Release package — candidate f021673 (schema 45 → 59, dashboard 0.12.0)
 
-Prepared and rehearsed 2026-10-09; **not deployed**. Production remains `fda78a0`, schema 45, UI 0.8.4, all four safety
-flags false. Supersedes `release-8e71fd6.md` (that package lacks v59 and its v58 note fails to apply once v59's wording is in).
+Prepared and rehearsed 2026-10-09; **DEPLOYED 2026-10-09 22:06:31Z** on the owner's authorization (see the end). Founders
+remain on `fda78a0`; all four safety flags false; survival protection ON. Supersedes `release-8e71fd6.md` (that package lacks v59 and its v58 note fails to apply once v59's wording is in).
 
 ## Identity
 
@@ -60,7 +60,7 @@ an 8 GB VM without swap); the run itself completed. Logs are kept outside the re
   no connectors, orders, card credit or refund requests; registry cap 2 with 2 living. Ledger verify true.
 - Afterwards: live schema 45, runtime fda78a0, UI 0.8.4, flags false, only `automaton_fleet` present.
 
-## Cutover (needs the owner's authorization; runs within the rehearsal window)
+## Cutover command (as run)
 
 ```
 bash ~/rlc59/fleet-release.sh ~/rlc59/pins.txt 45 59 0.12.0 ~/rlc59/ui-0.12.0-f021673.tgz 9f1742fe071a1c42c97632545741ca01e10746630fdbfcefadc57d387e6db7f0
@@ -68,3 +68,31 @@ bash ~/rlc59/fleet-release.sh ~/rlc59/pins.txt 45 59 0.12.0 ~/rlc59/ui-0.12.0-f0
 
 Founders are not upgraded by it; protection is on from the migration. Rollback: `~/rlc59/fleet-rollout.sh revert
 ~/rlc59/pins.txt 45 59 <reason>` (UI first: `dashboard.env.pre-0.12.0`); see README §3.
+
+## Deployment (2026-10-09, owner-authorized) — DEPLOYED
+
+Pre-flight 22:04Z: pins, package checksum, release scripts and the build checkout matched this record; rehearsal stamp
+21:49:54Z (14 min old). Founder baseline taken at 22:04:33Z (`founder-baseline.sh`, read-only).
+
+- `fleet-release.sh` 22:04:47–22:06:31Z, exit 0. Outage 22:05:35–22:06:19Z (44 s). Pre-migration dump
+  `~/automaton_fleet-v45-pre-v59-20261009T220555Z.dump` (SHA-256 `c0143688…`); migrate 46–59; reconciliation OK (1,329
+  events before, none purged, all preserved). UI 0.12.0 unpacked to `/opt/automaton-fleet/ui/0.12.0`; root, `/login/`
+  and `/hq-preview/login/` byte-identical through the public edge; unauthenticated read 401; one `production_deployed`.
+- Runtime: `FLEET_RUNTIME_COMMIT=f021673…`, build `0f7c6a6f…1da5`; `/opt/automaton-fleet/current` → the f021673 release.
+  Flags: REAL_REPLICATION_ENABLED, REAL_PAYMENTS_ENABLED (runtime and custody), OWNER_SWEEP_ENABLED, FLEET_DRY_RUN_CHILD
+  all false. readyz 200 (loopback); public `/readyz` 404 by design.
+- Founders: both active, identity hashes unchanged, runtime still `fda78a0`, units running, heartbeats current (22:07:54Z).
+  Ledger: verify ok, 752 journals before and after (no posting during the cutover), each founder 20 accounts (17 + 3
+  new at zero); only cash and expense non-zero (8,743 + 1,257 and 9,638 + 362 = the 10,000 funding each).
+- Events since the baseline: the role grants (x2 each: migration and re-run), `runtime_approved`, `production_deployed`,
+  and two `api_auth_failed` heartbeats at 22:06:25Z while the controller restarted (the same pair follows every earlier
+  controller restart; none since).
+- Read-only checks (README §2 step 5): `hub-custody` off (no activation, 0 rails/signers, both keyless); `hub-paypal` no
+  rail; `hub-treasury-health` money states present, cash 18,381 all in agent partitions; `owner-identity-autonomy` OFF;
+  `hub-insolvency` rule shown, no deaths, both protected, funded, not exhausted; `hub-storefront` no account; `status`
+  cap 2, 2 living, DEVELOPMENT, replication off.
+- Evidence (build VM): `~/fleet-release-evidence/f021673/{release.log, founder-baseline-pre.txt, post-cutover-*.txt}`.
+
+Rollback (only if needed, and never once real money or provider data exists): UI `sudo cp -p
+/etc/automaton-fleet/dashboard.env.pre-0.12.0 /etc/automaton-fleet/dashboard.env && sudo systemctl restart
+automaton-fleet-dashboard.service`; backend `bash ~/rlc59/fleet-rollout.sh revert ~/rlc59/pins.txt 45 59 <reason>`.

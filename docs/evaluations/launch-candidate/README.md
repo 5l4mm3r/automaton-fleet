@@ -8,7 +8,7 @@
   It adds schema v53 (the weekly card statement and the owner's receiving test) and the Proton Bridge setup script.
 - **Specification:** `docs/design/master-launch-specification.md` (revision 2). It covers owner decisions vs implementation
   choices, the requirement matrix and the external dependencies.
-- **Production is unchanged:** fda78a0, schema 45. Nothing below has been run against it. Every numbered step needs the
+- **Production (2026-10-09 22:06Z):** f021673, schema 59, UI 0.12.0 (stage A done); founders still on fda78a0. Every numbered step needs the
   owner's explicit go-ahead and is run by the owner in their own terminal.
 
 ## 1. What deploying changes
@@ -293,7 +293,7 @@ Every production step runs in the owner's own terminal on the VPS (`ssh agentfle
 | A2 | **Done**: the candidate's release scripts in `~/rlc59/` (`~/fleet-rollout.sh` kept for the R41.1 rollback) | Claude |
 | A3 | **Done**: `~/rlc59/ui-0.12.0-f021673.tgz`, SHA-256 verified on the VPS | Claude |
 | A4 | **Passed 2026-10-09 21:49Z** on a production copy (+ wallet / protection / founder checks); valid until 2026-10-10 21:49:54Z | Claude |
-| A5 | Cut over (authorization required; within the rehearsal window): `bash ~/rlc59/fleet-release.sh ~/rlc59/pins.txt 45 59 0.12.0 ~/rlc59/ui-0.12.0-f021673.tgz 9f1742fe071a1c42c97632545741ca01e10746630fdbfcefadc57d387e6db7f0`; read-only checks (§2 step 5) | Owner (or Claude on authorization) |
+| A5 | **Done 2026-10-09 22:06:31Z** (owner-authorized): `fleet-release.sh` 45 → 59 + UI 0.12.0; read-only checks passed — see `release-f021673.md` § Deployment | Claude |
 
 ### B. Provider setup and onboarding (still no spending; agents not yet upgraded)
 
