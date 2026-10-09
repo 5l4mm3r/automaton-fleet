@@ -79,7 +79,11 @@
  *   economy-card-confirm <chargeId> <amountMinor> <statementRef>            correct a booked charge to its statement amount
  *   economy-card-repay <amountMinor> <reference>                             the card was repaid from the treasury PayPal (manual; no API)
  *   economy-card-receipt <agentId> <amountMinor> <revenue|refund> <reference> [note…]   money paid to the card → an owner invoice
- *   economy-card-resolve <receiptId> <return|withdrawal> [--method transfer|card_balance] [--sweep n] [--reference transferRef]
+ *   economy-card-resolve <receiptId> <return|withdrawal> [--method transfer|card_balance] [--sweep n] [--reference transferRef] [--sweep-to treasury|owner]
+ *                                               (v57) a return's swept share stays in the treasury; --sweep-to owner = you keep it (an owner withdrawal)
+ *   hub-paypal-disputes                                                       (v57) disputes, unclassified PayPal debits, exposure per agent
+ *   economy-paypal-dispute-resolve <disputeId> won|lost [note…]               (v57) a dispute PayPal left without a plain outcome
+ *   economy-paypal-debit-classify <refId> refund|reversal|fee|not_this_sale [note…]
  *                                               v51: card_balance = the money reduced what the fleet owes the card (no transfer)
  *   hub-card | hub-treasury-health | hub-paypal
  *   economy-card-statement-issue                                              (v53) issue the card statement now (outside the weekly schedule)
@@ -142,7 +146,7 @@ export const HUB_COMMANDS = new Set([
   "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
   "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser", "hub-dashboard-enroll", "hub-dashboard-totp-reset",
   "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
-  "economy-card-receipt", "economy-card-resolve", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
+  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -252,9 +256,17 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-card-receipt":
       return h.cardReceipt(p[0], int(p[1], "amountMinor"), p[2], p[3], p.slice(4).join(" ") || null, actor);
     case "economy-card-resolve": {
-      const q = positional(a, ["--sweep", "--reference", "--method"]);
-      return h.cardSettle(q[0], q[1], flag(a, "--method") ?? "transfer", flag(a, "--sweep") ? int(flag(a, "--sweep"), "sweep") : null, flag(a, "--reference"), actor);
+      const q = positional(a, ["--sweep", "--reference", "--method", "--sweep-to"]);
+      const to = flag(a, "--sweep-to") ?? "treasury";
+      if (to !== "treasury" && to !== "owner") throw new Error("FLEET_BAD_REQUEST: --sweep-to treasury|owner");
+      return h.cardSettle(q[0], q[1], flag(a, "--method") ?? "transfer", flag(a, "--sweep") ? int(flag(a, "--sweep"), "sweep") : null, flag(a, "--reference"), actor, to);
     }
+    case "hub-paypal-disputes":
+      return h.paypalDisputes();
+    case "economy-paypal-dispute-resolve":
+      return h.paypalDisputeResolve(p[0], p[1], p.slice(2).join(" ") || null, actor);
+    case "economy-paypal-debit-classify":
+      return h.paypalDebitClassify(p[0], p[1], p.slice(2).join(" ") || null, actor);
     case "hub-card":
       return h.cardClearing();
     case "hub-treasury-health":

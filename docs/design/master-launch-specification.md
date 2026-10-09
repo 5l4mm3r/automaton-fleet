@@ -111,7 +111,7 @@ Scope as built (v55):
 | C2 | **Four keys** release money out: an owner activation, a verified live PayPal rail, a fresh custody-signer attestation, and `REAL_PAYMENTS_ENABLED=true` in custody only. | Separates setup from operation (O13) without weakening custody. |
 | C3 | An activation is either **pilot** (expires, at most 90 days) or **ongoing** (no expiry; ends only when the owner ends it). Both keep per-payment and 24 h maxima as treasury risk limits. | O13: once ongoing is chosen, nothing needs renewing. |
 | C4 | Before the card can be filled, a hold reserves its maximum from the agent's own spendable capital or an envelope. A statement larger than the hold is **advanced against the agent's payable** (a debt that lowers its equity), never written off as a fleet expense. | O2 + O7 + no automatic overdraft: the card really was charged, so the liability is real and belongs to the agent. |
-| C5 | A card receipt is settled either **applied to the card balance** (it reduced what the fleet owes the card) or **transferred** (it reached the owner). The owner's choice of return or withdrawal is kept either way. | O2, without double-counting the card liability. |
+| C5 | A card receipt is settled either **applied to the card balance** (it reduced what the fleet owes the card) or **transferred** (it reached the owner). The owner's choice of return or withdrawal is kept either way. **v57:** on a return the swept share stays in the treasury (`fleet:treasury:unallocated`) unless the owner explicitly keeps it (an owner withdrawal; refused for card_balance). See §17. | O2, without double-counting the card liability; the existing internal sweep policy. |
 | C6 | A completed PayPal capture is revenue at once, but its cash is **held** (`agent_cash_pending`) until Transaction Search shows status S and the latest Balances reading covers it. | "Distinguish captures, held funds and available capital." PayPal publishes no per-transaction availability flag we rely on. |
 | C7 | One **authoritative wallet measure** (§6.1); death at the next lifecycle pass. A never-funded agent is not "exhausted". An owner hold pauses the pass for that agent. | O7. The hold is an existing, explicit owner action, not an automatic rescue. |
 | C8 | When the agent's own runway (inference plus commitments) is shorter than the plan's payback, an approval comes with bounded terms (`RUNWAY_SHORTER_THAN_PAYBACK`). | O8 ("commitments"). The test is relative to the agent's own figures, not a fixed threshold. |
@@ -482,7 +482,7 @@ provider link and the revealed credentials.
 
 Each step needs explicit owner authorization; none has been done.
 
-1. **Deploy** 45 → 56 (§13). The gateway installs dormant (no token).
+1. **Deploy** 45 → 57 (§13). The gateway installs dormant (no token).
 2. **PayPal:**
    1. create a Live REST app and request Payouts;
    2. seal its credentials in the dashboard;
@@ -513,7 +513,7 @@ Each step needs explicit owner authorization; none has been done.
 ### 13.1 Compatibility
 
 - Every component refuses any schema but its own. Production runs schema 45 with fda78a0.
-- v46–v56 only **add**: new tables and columns, restated functions, and new or replaced constraints on tables with no
+- v46–v57 only **add**: new tables and columns, restated functions, and new or replaced constraints on tables with no
   production rows yet.
 - **Behaviour changes for the two living agents after deploy:**
   - exhaustion is death;
@@ -526,18 +526,18 @@ Each step needs explicit owner authorization; none has been done.
 ### 13.2 Deploy
 
 1. Build on the VPS; take the pins from the build output.
-2. Run `fleet-rollout.sh rehearse <pins> 45 56` on the production copy. Expect:
+2. Run `fleet-rollout.sh rehearse <pins> 45 57` on the production copy. Expect:
    - a clean audit;
    - a verified ledger;
    - no journal or balance change;
    - no agent exhausted.
-3. Run `fleet-release.sh … 45 56`. It writes one `production_deployed` event and promotes UI 0.12.0.
+3. Run `fleet-release.sh … 45 57`. It writes one `production_deployed` event and promotes UI 0.12.0.
 4. Upgrade the founders — **not at cutover** (owner, 2026-10-09): only once the owner says the accounts are linked; Agent 2
    first, then Founder 1.
 
 ### 13.3 Recovery (correct terms)
 
-- **Preferred: fix forward.** A code fix on schema 56 needs no restore and loses nothing.
+- **Preferred: fix forward.** A code fix on schema 57 needs no restore and loses nothing.
 - **A schema revert to 45 does not preserve newer writes in the running system.** `fleet-rollout.sh revert`:
   1. exports every post-cutover row and journal as **recovery evidence** (`*-post-cutover-*.dump`);
   2. refuses to continue until those are reconciled and acknowledged (`FLEET_REVERT_DISCARD_ACK=<journals>:<events>`);
@@ -600,6 +600,9 @@ Each step needs explicit owner authorization; none has been done.
 | Estates settle the v48+ money states (held money, holds, payables, late money) | v56 | IMPLEMENTED, LOCALLY VERIFIED |
 | Refunds missed by webhooks posted from Transaction Search (shortfall only); reversals raised | v56 | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal) |
 | Dashboard: orders; Gumroad sales, payouts and settlement | UI (MoneyPanels) | IMPLEMENTED (typecheck/lint/build) |
+| Refunds / reversals / chargebacks / fees posted once from webhook + Transaction Search evidence; returns credited once | v57 (§17.1) | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal) |
+| Disputes, PayPal holds and unclassified debits held back from spendable (exposure), never a death on their own; ambiguity to the owner | v57 (§17.1) | IMPLEMENTED, LOCALLY VERIFIED |
+| A returned card receipt's swept share stays in the treasury; the owner keeping it is explicit and labelled | v57 (§17.2) | IMPLEMENTED, LOCALLY VERIFIED |
 
 ---
 
@@ -654,7 +657,46 @@ Each step needs explicit owner authorization; none has been done.
 - **Refunds.** Transaction Search posts a refund (T1107) no webhook reported, for the shortfall only; a reversal or
   chargeback seen only there is raised (P1 `paypal_reversal_seen`). A REVERSED webhook linking "up" to its capture is matched.
 - **Reaper.** Each lifecycle pass is isolated; a failed pass is reported; a failed sweep run is retried.
-- **Open for review (not changed):** settling a card receipt by `card_balance` books the swept share as an owner withdrawal
-  (`fleet_admin_card_receipt_settle`); whether the treasury should hold that share instead is an accounting-policy question.
-  Dispute / chargeback fees are not yet posted automatically (no `CUSTOMER.DISPUTE.*` handling).
+- The two items left open here are closed by v57 (§17).
+
+---
+
+## 17. Schema v57 — clawbacks from evidence; the card receipt's sweep (revision 4)
+
+### 17.1 Refunds, reversals, chargebacks, dispute holds and fees
+
+- **Evidence, not events.** Each source records what it saw for a sale: webhooks (`PAYMENT.CAPTURE.REFUNDED` / `REVERSED`, by
+  PayPal's resource id) and Transaction Search (by transaction id and code: T1107 refund; T1106 / T1201 reversal or
+  chargeback; T1202 chargeback reversed; T0106 chargeback fee; T1108 fee reversed; T1110 / T1111 dispute hold / release).
+- **Posted once.** Per sale and group, what must have been posted is the larger of the two sources' totals (the same money
+  reported by both counts once), plus the owner's classifications; only the difference from what is posted is posted
+  (`fleet_paypal_clawback_reconcile`, deterministic keys). Money given back (a chargeback won, a fee reversed) is credited
+  once, repaying the agent's payable first. Clawbacks posted before v57 are counted as posted.
+- **Exposure, never overstated spending.** An open, lost-but-not-yet-reversed or unresolved dispute, PayPal's dispute hold,
+  and a debit under a code the Fleet does not classify are **exposure**: deducted from survival equity (so spendable falls),
+  and shown as the agent's own money held (`paypalDisputedMinor`), so a dispute alone never ends an agent. Exposure ends
+  when the reversal is posted, the dispute is won, PayPal releases the hold, or the owner classifies the debit.
+- **Ambiguity goes to the owner.** A dispute PayPal closes without a plain outcome is `unresolved` (P1) until the owner
+  resolves it (`economy-paypal-dispute-resolve`, dashboard); an unclassified debit (P1) until the owner classifies it
+  (`economy-paypal-debit-classify`). Custody cannot overturn the owner's resolution, and a final outcome is not reopened.
+- **Setup:** subscribe the webhook also to `CUSTOMER.DISPUTE.CREATED`, `UPDATED`, `RESOLVED`.
+- **Verified only against a fake PayPal:** the dispute payload fields, the code list and whether T1106 and T1201 can both
+  appear for one chargeback (if they do, the reversal would be over-deducted — conservative, never overstated); checked at
+  first live use.
+
+### 17.2 Where a card receipt's swept share goes
+
+The owner's recorded words (2026-10-08): "When money is paid to the card, an invoice goes to the admin to transfer the
+amount, minus sweep, back to the treasury"; and (same day) "Apply the existing sweep/accounting policy without duplicate
+revenue or duplicate sweeps". The existing policy makes the sweep an internal contribution that stays in the treasury
+(`OWNER_SWEEP_ENABLED` stays false), so v57 settles a return this way:
+
+| Settlement | Owner transfers | Agent credited | Swept share goes to |
+|---|---|---|---|
+| Return, transferred (default) | the full amount | amount − share | the treasury (`fleet:treasury:unallocated`; `fleet:profit` credited) |
+| Return, transferred, "kept by me" (explicit) | amount − share | amount − share | the owner — booked as an owner withdrawal, labelled |
+| Return, applied to the card balance | nothing (the card owes less) | amount − share | the treasury ("kept by me" refused) |
+| Withdrawal | nothing | nothing (its contribution) | the owner — an owner withdrawal of the whole amount |
+
+v48–v56 booked the share of every return as an owner withdrawal; no production rows exist (schema 45).
 

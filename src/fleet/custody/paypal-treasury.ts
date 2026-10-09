@@ -45,6 +45,9 @@ export interface PayPalGatewayPort {
   /** v56: paid orders whose buyer contact is not recorded yet, and the record of PayPal's payer object (NULL: not readable now). */
   paypalBuyerWork?(worker: string, limit: number): Promise<Array<{ checkoutId: string; paypalOrderId: string; railMode: "live" | "sandbox"; vaultRef: string }>>;
   paypalBuyerRecord?(worker: string, checkoutId: string, payer: Record<string, unknown> | null): Promise<CxResult>;
+  /** v57: a webhook's refund / reversal as evidence (reconciled with Transaction Search; never posted twice), and a dispute's state. */
+  paypalClawbackEvidence?(worker: string, ref: string, group: "refund" | "reversal", captureId: string, amountMinor: number, currency: string): Promise<CxResult>;
+  paypalDisputeRecord?(worker: string, disputeId: string, captureId: string, status: string, outcome: string | null, amountMinor: number, currency: string): Promise<CxResult>;
 }
 
 export interface PayPalTreasuryOptions {
@@ -227,7 +230,7 @@ export class PayPalTreasuryWorker {
         const captureId = up ? /\/captures\/([A-Z0-9]+)$/.exec(up.href)?.[1] : undefined;
         const amount = toMinor(res.amount?.value);
         if (!captureId || amount === null || typeof res.id !== "string") return false;
-        const r = await this.gw.paypalRefundRecord(this.worker, captureId, res.id, "refund", amount, String(res.amount?.currency_code ?? ""));
+        const r = await this.clawback(res.id, "refund", captureId, amount, String(res.amount?.currency_code ?? ""));
         if (r.ok) this.stats.refunds++;
         return true;
       }
@@ -239,9 +242,24 @@ export class PayPalTreasuryWorker {
         const up = (Array.isArray(res.links) ? res.links : []).find((l: any) => l?.rel === "up" && typeof l.href === "string");
         const linked = up ? /\/captures\/([A-Z0-9]+)$/.exec(up.href)?.[1] : undefined;
         const captureId = linked ?? res.id;
-        const r = await this.gw.paypalRefundRecord(this.worker, captureId, `REV-${res.id}`.slice(0, 64), "reversal", Math.abs(amount), String(res.amount?.currency_code ?? ""));
+        const r = await this.clawback(res.id, "reversal", captureId, Math.abs(amount), String(res.amount?.currency_code ?? ""));
         if (r.ok) this.stats.refunds++;
         return true;
+      }
+      // v57: a dispute holds the disputed amount back from the agent until PayPal resolves it.
+      case "CUSTOMER.DISPUTE.CREATED":
+      case "CUSTOMER.DISPUTE.UPDATED":
+      case "CUSTOMER.DISPUTE.RESOLVED": {
+        if (!this.gw.paypalDisputeRecord) return false;
+        const id = typeof res.dispute_id === "string" ? res.dispute_id : null;
+        const tx = Array.isArray(res.disputed_transactions) ? res.disputed_transactions[0] : null;
+        const captureId = typeof tx?.seller_transaction_id === "string" ? tx.seller_transaction_id : null;
+        const amount = toMinor(res.dispute_amount?.value);
+        const status = typeof res.status === "string" ? res.status : w.eventType === "CUSTOMER.DISPUTE.RESOLVED" ? "RESOLVED" : "OPEN";
+        if (!id || !captureId || amount === null || amount <= 0) return false;
+        const outcome = typeof res.dispute_outcome?.outcome_code === "string" ? res.dispute_outcome.outcome_code : null;
+        const r = await this.gw.paypalDisputeRecord(this.worker, id, captureId, status, outcome, amount, String(res.dispute_amount?.currency_code ?? ""));
+        return r.ok ? true : false;
       }
       default:
         return false;
@@ -312,6 +330,13 @@ export class PayPalTreasuryWorker {
   }
 
   // ── 3. Reconciliation and balances ──
+  /** v57: evidence where the gateway records it (the registry reconciles); the v48 direct record otherwise. */
+  private clawback(ref: string, group: "refund" | "reversal", captureId: string, amountMinor: number, currency: string): Promise<CxResult> {
+    return this.gw.paypalClawbackEvidence
+      ? this.gw.paypalClawbackEvidence(this.worker, ref, group, captureId, amountMinor, currency)
+      : this.gw.paypalRefundRecord(this.worker, captureId, group === "reversal" ? `REV-${ref}`.slice(0, 64) : ref, group, amountMinor, currency);
+  }
+
   // ── v56: the buyer of a paid order (for its delivery and invoice), from PayPal's own order record ──
   private async buyers(): Promise<void> {
     if (!this.gw.paypalBuyerWork || !this.gw.paypalBuyerRecord) return;
@@ -344,12 +369,8 @@ export class PayPalTreasuryWorker {
           referenceId: typeof t.paypal_reference_id === "string" ? t.paypal_reference_id : null };
         const rec = await this.gw.paypalTxnRecord(this.worker, r.railId, txn);
         this.stats.transactions++;
-        // v56: a refund PayPal shows but no webhook reported (only the shortfall; the transaction id is its claim).
-        const short = Number((rec as any).refundShortfallMinor ?? 0);
-        if (rec.ok && short > 0 && typeof (rec as any).captureId === "string") {
-          const rr = await this.gw.paypalRefundRecord(this.worker, (rec as any).captureId, t.transaction_id, "refund", short, String(t.transaction_amount?.currency_code ?? ""));
-          if (rr.ok) this.stats.refunds++;
-        }
+        // v57: refunds, reversals, fees and dispute holds of a sale are reconciled by the registry as it records the row.
+        if (rec.ok && (rec as any).reconciled && Object.keys((rec as any).reconciled).length) this.stats.refunds++;
         if (rec.ok && (rec as any).needsCapturePost === true) {
           await this.gw.paypalCaptureRecord(this.worker, String((rec as any).checkoutId), t.transaction_id, "COMPLETED", amount, Math.abs(fee),
             String(t.transaction_amount?.currency_code ?? ""), "transaction_search");

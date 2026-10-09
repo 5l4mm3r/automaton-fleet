@@ -22,6 +22,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "card_request_decide", "card_request_policy_set",
   // v55: the owner's survival protection switch.
   "survival_protection_set", "survival_protection_agent_set",
+  // v57: a PayPal dispute's outcome and an unclassified debit, decided by the owner.
+  "paypal_dispute_resolve", "paypal_debit_classify",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */

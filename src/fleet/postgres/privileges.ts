@@ -1018,7 +1018,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
   const writers: Record<string, Set<string>> = {
     fleet_ventures: new Set(["fleet_econ_venture_create", "fleet_econ_venture_transition", "fleet_venture_move"]),
     fleet_venture_transitions: new Set(["fleet_econ_venture_create", "fleet_venture_move"]),
-    fleet_venture_journals: new Set(["fleet_admin_venture_attribute", "fleet_settlement_post", "cx_report_result", "cx_paypal_capture_record", "cx_paypal_refund_record"]),
+    fleet_venture_journals: new Set(["fleet_admin_venture_attribute", "fleet_settlement_post", "cx_report_result", "cx_paypal_capture_record", "cx_paypal_refund_record",
+      // v57: money PayPal gave back to a sale is attributed to its venture.
+      "fleet_paypal_clawback_return"]),
     fleet_decision_records: new Set(["fleet_econ_decision_record", "fleet_econ_decision_outcome", "fleet_econ_decision_correct"]),
     fleet_opportunities: new Set(["fleet_econ_opportunity_record", "fleet_econ_opportunity_shortlist", "fleet_econ_opportunity_status", "fleet_opportunity_expire", "fleet_econ_venture_create"]),
     fleet_economic_knowledge: new Set(["fleet_econ_knowledge_record", "fleet_econ_decision_outcome", "fleet_project_finish"]),
@@ -1212,11 +1214,17 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v56: customer orders by the checkout wrapper, the checkout-state follower, the refund recorder, custody's buyer record and the
     // agent's own delivery / fulfilment; deliveries and their files by delivery, the mail-outcome follower and the reaper's retry;
     // the broker's connector list only by the broker.
-    fleet_customer_orders: new Set(["fleet_econ_paypal_checkout_order", "fleet_customer_orders_follow", "fleet_order_refunded", "cx_paypal_buyer_record",
+    fleet_customer_orders: new Set(["fleet_econ_paypal_checkout_order", "fleet_customer_orders_follow", "fleet_order_refunded", "cx_paypal_buyer_record", "fleet_paypal_clawback_return",
       "fleet_econ_order_deliver", "fleet_econ_order_fulfil", "fleet_order_delivery_follow", "svc_order_deliveries_retry"]),
     fleet_order_deliveries: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded"]),
     fleet_order_delivery_files: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded"]),
     fleet_identity_connectors: new Set(["ix_connectors_publish"]),
+    // v57: clawback evidence only from custody's sources and the owner's classification; posts only by the posting functions;
+    // disputes by custody's record and the owner's resolution.
+    fleet_paypal_clawback_evidence: new Set(["cx_paypal_clawback_evidence", "cx_paypal_txn_record", "fleet_admin_paypal_debit_classify"]),
+    fleet_paypal_clawback_posts: new Set(["cx_paypal_refund_record", "fleet_paypal_clawback_return"]),
+    fleet_paypal_disputes: new Set(["cx_paypal_dispute_record", "fleet_admin_paypal_dispute_resolve"]),
+    fleet_paypal_debit_classifications: new Set(["fleet_admin_paypal_debit_classify"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

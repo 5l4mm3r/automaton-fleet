@@ -134,8 +134,17 @@ export class PgHubAdmin {
     return this.one(`SELECT fleet_admin_card_receipt_resolve($1, $2, $3, $4, $5) AS r`, [receiptId, resolution, sweepMinor, reference, actor]);
   }
   /** v51: return / withdrawal, by transfer (the money reached the owner) or applied to the card balance. */
-  cardSettle(receiptId: string, resolution: string, method: string, sweepMinor: number | null, reference: string | null, actor: string) {
-    return this.one(`SELECT fleet_admin_card_receipt_settle($1, $2, $3, $4, $5, $6) AS r`, [receiptId, resolution, method, sweepMinor, reference, actor]);
+  /** v57: the swept share of a return goes to the treasury unless sweepTo = owner (an explicit owner withdrawal). */
+  cardSettle(receiptId: string, resolution: string, method: string, sweepMinor: number | null, reference: string | null, actor: string, sweepTo: "treasury" | "owner" = "treasury") {
+    return this.one(`SELECT fleet_admin_card_receipt_settle($1, $2, $3, $4, $5, $6, $7) AS r`, [receiptId, resolution, method, sweepMinor, reference, actor, sweepTo]);
+  }
+  // ── v57: PayPal disputes and debits Transaction Search could not classify ──
+  paypalDisputes() { return this.one(`SELECT fleet_paypal_disputes_json() AS r`); }
+  paypalDisputeResolve(disputeId: string, outcome: string, note: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_paypal_dispute_resolve($1, $2, $3, $4) AS r`, [disputeId, outcome, note, actor]);
+  }
+  paypalDebitClassify(refId: string, as: string, note: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_paypal_debit_classify($1, $2, $3, $4) AS r`, [refId, as, note, actor]);
   }
   cardClearing() { return this.one(`SELECT fleet_card_clearing() AS r`); }
   treasuryTransactions(agentId: string | null, limit: number, beforeSeq: number | null, direction: string | null) {

@@ -186,7 +186,9 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury worker end to end (PostgreSQL + HT
       links: [{ rel: "up", href: `https://api.paypal.com/v2/payments/captures/${o.capture!.id}` }] } }, "good-signature");
     await worker.tick();
     expect(await cash()).toBe(before - 500);
-    expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_revenue_claims WHERE claim_key = 'paypal:refund:RF0000000001')`)).toBe(1);
+    // v57: the webhook's refund is evidence, posted once by reconciliation (whatever reports it later).
+    expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_paypal_clawback_evidence WHERE source = 'webhook' AND ref_id = 'RF0000000001')`)).toBe(1);
+    expect(await R.one(`(SELECT sum(amount_minor)::int FROM fleet.fleet_paypal_clawback_posts WHERE grp = 'refund')`)).toBe(500);
   });
 
   it("v56: the buyer returns from PayPal to a static page (nothing read, nothing recorded)", async () => {
@@ -222,13 +224,13 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury worker end to end (PostgreSQL + HT
     await worker.tick();
     await worker.tick();
     expect(await cash()).toBe(before - 300);
-    expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_revenue_claims WHERE claim_key LIKE 'paypal:refund:RFSEARCH%')`)).toBe(1);
+    expect(await R.one(`(SELECT sum(amount_minor)::int FROM fleet.fleet_paypal_clawback_posts WHERE checkout_id = $1 AND grp = 'refund')`, [o.checkoutId])).toBe(800);
     // A reversal whose resource links "up" to the capture is recorded against that capture.
     await deliver({ id: "WH-REVERSED-0001", event_type: "PAYMENT.CAPTURE.REVERSED", resource: { id: "RV0000000001", amount: { value: "-1.00", currency_code: "GBP" },
       links: [{ rel: "up", href: `https://api.paypal.com/v2/payments/captures/${o.capture!.id}` }] } }, "good-signature");
     await worker.tick();
     expect(await cash()).toBe(before - 400);
-    expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_revenue_claims WHERE claim_key = 'paypal:refund:REV-RV0000000001')`)).toBe(1);
+    expect(await R.one(`(SELECT sum(amount_minor)::int FROM fleet.fleet_paypal_clawback_posts WHERE checkout_id = $1 AND grp = 'reversal')`, [o.checkoutId])).toBe(100);
     expect((await R.econ(F, "order.list", {})).orders.find((x: any) => x.checkoutId === o.checkoutId)).toMatchObject({ refundedMinor: 900 });
   });
 

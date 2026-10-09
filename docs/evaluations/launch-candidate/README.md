@@ -1,6 +1,6 @@
 # Launch candidate — deployment, onboarding, recovery and checklist (revision 3)
 
-- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v56 on top of production schema 45, dashboard UI 0.12.0 (0.11.0 + the v54 card requests and the v55 survival switch).
+- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v57 on top of production schema 45, dashboard UI 0.12.0 (0.11.0 + the v54 card requests and the v55 survival switch).
 - **Revision 3 (2026-10-09)** follows the owner's decisions of 2026-10-08:
   - the treasury PayPal stays the owner's own account, **upgraded to Business as an individual** (no company);
   - the card is the owner's **credit card**, repaid **weekly** from the treasury.
@@ -26,6 +26,7 @@
 | v54 | The card rule: PayPal first; the card only by request (Fleet Control approves up to £100 within the agent's wallet; the owner decides above, funding the card first) | No |
 | v55 | Survival protection switch, **ON from the migration**: no agent is ended for an exhausted wallet (you are told) until you go live from the header switch (step-up). Shown on every page; Settings can hide it | No |
 | v56 | Customer orders (buyer from PayPal, agent-isolated) and delivery by mail with retries; storefront ops over HTTP; truthful account creation; estates for the newer money states; refunds caught by Transaction Search | No |
+| v57 | Refunds, reversals, chargebacks, dispute holds and fees reconciled from webhook + Transaction Search evidence (never posted twice); open disputes and unclassified debits held back from spendable money; a returned card receipt's swept share stays in the treasury unless you explicitly keep it | No |
 
 ### 1.1 Behaviour the two living agents will meet after deployment
 
@@ -58,7 +59,7 @@
   attachments and publishes its (empty) connector list (v56).
 - **New unit:** `automaton-fleet-gumroad` (installed only by `scripts/fleet-gumroad-setup.sh`; dormant without a token).
 
-## 2. Deploy (schema 45 → 56)
+## 2. Deploy (schema 45 → 57)
 
 Pins come from the build output, never from placeholders.
 
@@ -69,7 +70,7 @@ Pins come from the build output, never from placeholders.
    4. build the dashboard LIVE export from the same commit.
 2. Rehearse on a copy of production:
    ```
-   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 56
+   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 57
    ```
    Expect all of the following:
    - every migration applies;
@@ -79,7 +80,7 @@ Pins come from the build output, never from placeholders.
    - `hub-wallet-measure` shows `exhausted: false` for both.
 3. Cut over:
    ```
-   bash ~/fleet-release.sh … 45 56
+   bash ~/fleet-release.sh … 45 57
    ```
    This does the backend cutover and promotes UI 0.12.0, with one `production_deployed` event.
 4. **Not at cutover (owner, 2026-10-09):** the founders stay on fda78a0 until you say the accounts are linked. Then
@@ -104,12 +105,12 @@ Pins come from the build output, never from placeholders.
 Correct terminology matters here. A schema revert does **not** keep newer writes in the running system; the export it
 writes is **recovery evidence**.
 
-- **Fix forward (preferred).** v46–v56 only add. A code fix on schema 56 needs no restore and loses nothing.
+- **Fix forward (preferred).** v46–v57 only add. A code fix on schema 57 needs no restore and loses nothing.
 - **Code-only problem in the new release.** Use the release's own code-only revert. The database is untouched and all
   writes are kept.
 - **A schema revert to 45:**
   ```
-  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 56 <reason>
+  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 57 <reason>
   ```
   1. **UI first:** point the dashboard back to `dashboard.env.pre-0.12.0`.
   2. **Founders first**, if they were upgraded:
@@ -160,6 +161,7 @@ Settings live under **Money & identity**; Treasury and agent profiles show the r
 4. **Webhook.** In the PayPal app, add a webhook to `https://api.agentfleet.vip/v1/webhooks/paypal` for these events:
    - `CHECKOUT.ORDER.APPROVED`
    - `PAYMENT.CAPTURE.COMPLETED` / `PENDING` / `REFUNDED` / `REVERSED`
+   - `CUSTOMER.DISPUTE.CREATED` / `UPDATED` / `RESOLVED` (v57: a disputed amount is held back from the agent until resolved)
 
    Paste the webhook id under Money & identity → 1.
 5. **Buyer return pages (v56).** In `/etc/automaton-fleet/custody.env` set
@@ -197,7 +199,14 @@ Settings live under **Money & identity**; Treasury and agent profiles show the r
       <reference>`). This records the card repayment and releases the reserve.
 6. **A newer statement replaces an unpaid older one.** The amount owed is always the whole card balance at issue.
 7. **Invoices.** Money reaching the card (a merchant refund) appears as an invoice. Settle it as return or withdrawal,
-   either "applied to the card balance" or "transferred".
+   either "applied to the card balance" or "transferred". Where the swept share goes (v57):
+   - **Return, transferred:** you transfer the **full** amount to the treasury. The agent is credited the amount minus the
+     swept share; the swept share (net profit only) stays in the treasury as the Fleet's share
+     (`fleet:treasury:unallocated` debit, `fleet:profit` credit). Only if you explicitly choose "kept by me"
+     (`--sweep-to owner`) do you transfer the amount minus the share, and the share is booked as an **owner withdrawal**.
+   - **Return, applied to the card balance:** nothing reaches you; the swept share stays in the treasury ("kept by me" is
+     refused).
+   - **Withdrawal:** you keep all of it; booked as an owner withdrawal (the agent's contribution).
 
 ### 4.3 Bank details, facts and documents
 
@@ -276,8 +285,8 @@ Live activation and every production step are separately authorized and run by t
 |---|---|---|---|
 | A | **In parallel, now (no deploy needed):** PayPal Live REST app + request Payouts; buy Proton Mail Plus; Gumroad seller account (email confirmed, check which payout methods the account offers — PayPal preferred), Stripe identity check, OAuth app | Owner (provider sites) | — |
 | 1 | Build at the pushed candidate in `~/automaton-fleet-build`; record commit / build ID / lockfile SHA in `~/rlc-pins.txt`; build the canonical LIVE UI 0.12.0 tgz at the fixed build path | Owner runs, Claude prepares commands | push |
-| 2 | `bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 56` on the production copy; Claude reviews audit, ledger, `hub-wallet-measure` | Owner → Claude | 1 |
-| 3 | `bash ~/fleet-release.sh ~/rlc-pins.txt 45 56 0.12.0 <tgz> <sha>` (protection ON; founders stay on fda78a0); read-only checks §2 step 5 | Owner | 2 |
+| 2 | `bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 57` on the production copy; Claude reviews audit, ledger, `hub-wallet-measure` | Owner → Claude | 1 |
+| 3 | `bash ~/fleet-release.sh ~/rlc-pins.txt 45 57 0.12.0 <tgz> <sha>` (protection ON; founders stay on fda78a0); read-only checks §2 step 5 | Owner | 2 |
 | 4 | PayPal: seal credentials (Money & identity → 1); `economy-credential-register …`; `economy-rail-add paypal … --mode live`; webhook + id; `economy-rail-verify` from real probes; return URLs in custody.env (§4.1) | Owner | 3, A |
 | 5 | Receiving test: `economy-paypal-test 100`, pay it, watch `hub-paypal-test` reach "in the balance" | Owner | 4 |
 | 6 | Card upload; standing authority with maxima; facts and documents (§4.2–4.3) | Owner (dashboard) | 3 |

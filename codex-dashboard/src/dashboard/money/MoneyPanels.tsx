@@ -124,6 +124,8 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
   const creq = useRead<Row>(client, "card_requests", {}, []);
   // v56: customer orders (buyer masked; the agent keeps the contact) — payment, fulfilment, delivery.
   const orders = useRead<Row>(client, "customer_orders", {}, []);
+  // v57: disputes and unclassified PayPal debits (held back from the agents' spendable money until settled).
+  const disputes = useRead<Row>(client, "paypal_disputes", {}, []);
   const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); creq.reload(); };
   const call = useCallback(async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); reloadAll(); return r; }, [client]); // eslint-disable-line react-hooks/exhaustive-deps
   const name = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
@@ -186,11 +188,13 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
       <h4 className="mt-4 font-semibold">Invoices — money paid to your card for an agent</h4>
       {(card.data.invoices as Row[]).filter((i) => i.status === "invoiced").map((i) => <div key={i.receiptId} className="my-2 rounded border border-amber-700 p-3 text-sm">
         <p>{name(i.agentId)} · {i.kind} · {money(i.amountMinor)} · ref {i.reference}{i.note ? ` · ${i.note}` : ""}</p>
-        <p className="text-amber-200">Return {money(i.returnMinor)} to the treasury (suggested sweep kept: {money(i.suggestedSweepMinor)}), or keep it all as a withdrawal.</p>
+        <p className="text-amber-200">Return all {money(i.amountMinor)} to the treasury: {money(i.amountMinor - i.suggestedSweepMinor)} is credited to the agent, and the suggested sweep {money(i.suggestedSweepMinor)} (net profit only) stays in the treasury as the Fleet&apos;s share. Or keep it all as a withdrawal.</p>
         <p className="text-xs text-slate-400">“Applied to the card balance”: the money reduced what the fleet owes your card (you repay that much less) — nothing to transfer. “Transferred”: it reached you and you send it to the treasury PayPal.</p>
         <Form title="Returned to the treasury" fields={[{ key: "method", label: "How", options: [["card_balance", "Applied to the card balance"], ["transfer", "Transferred to the treasury"]] },
-          { key: "sweep", label: "Sweep kept by you (£)", value: (i.suggestedSweepMinor / 100).toFixed(2) }, { key: "reference", label: "Transfer reference (if transferred)" }]}
-          submit={(v) => call("card_receipt_settle", { receiptId: i.receiptId, resolution: "return", method: v.method, sweepMinor: minor(v.sweep), reference: v.reference || null })} />
+          { key: "sweep", label: "Swept share (£, net profit only)", value: (i.suggestedSweepMinor / 100).toFixed(2) },
+          { key: "sweepTo", label: "The swept share", options: [["treasury", "Stays in the treasury (you transfer the full amount)"], ["owner", "Kept by me — an owner withdrawal (transfer only)"]] },
+          { key: "reference", label: "Transfer reference (if transferred)" }]}
+          submit={(v) => call("card_receipt_settle", { receiptId: i.receiptId, resolution: "return", method: v.method, sweepMinor: minor(v.sweep), sweepTo: v.sweepTo, reference: v.reference || null })} />
         <Form title="Keep as my withdrawal" danger fields={[{ key: "method", label: "How", options: [["card_balance", "It reduced the card balance"], ["transfer", "It reached me"]] }]}
           submit={(v) => call("card_receipt_settle", { receiptId: i.receiptId, resolution: "withdrawal", method: v.method })} />
       </div>)}
@@ -260,6 +264,21 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
         <td className={x.settlement.startsWith("received") ? "text-emerald-300" : "text-slate-400"}>{x.settlement}{x.receipt ? ` (${x.receipt.evidence}, ${x.receipt.status})` : ""}</td></tr>)}</tbody></table>
         : <p className="text-sm text-slate-400">No payouts yet.</p>}
     </> : <p className="text-sm text-slate-400">{store.error || "Reading…"}</p>}</Panel>
+
+    <Panel title="PayPal disputes and unexplained debits">{disputes.data ? <>
+      <p className="text-xs text-slate-400">A disputed amount, money PayPal holds for a dispute, or a debit the Fleet cannot classify is held back from that agent&apos;s spendable money (and counts as its own money held, so it is not ended for it). Reversals and fees are posted once from PayPal&apos;s evidence. Subscribe the webhook to: {(disputes.data.webhookEvents as string[]).join(", ")}.</p>
+      {(disputes.data.disputes as Row[]).length ? <table className="mt-2 w-full text-sm"><tbody>{(disputes.data.disputes as Row[]).map((d) => <tr key={d.disputeId} className="border-t border-slate-800">
+        <td>{String(d.openedAt).slice(0, 10)}</td><td>{name(d.agentId)}</td><td>{d.currency} {(d.amountMinor / 100).toFixed(2)}</td>
+        <td className={d.status === "unresolved" ? "text-red-300" : ""}>{d.status}{d.outcome ? ` (${d.outcome})` : ""} · held back {d.currency} {(d.exposureMinor / 100).toFixed(2)}</td>
+        <td>{(d.status === "unresolved" || d.status === "open") && <Form title="Resolve" fields={[{ key: "outcome", label: "Outcome", options: [["won", "Won (release)"], ["lost", "Lost (reversal follows)"]] }, { key: "note", label: "Note" }]}
+          submit={(v) => call("paypal_dispute_resolve", { disputeId: d.disputeId, outcome: v.outcome, note: v.note || null })} />}</td></tr>)}</tbody></table>
+        : <p className="mt-2 text-sm text-slate-400">No disputes.</p>}
+      {(disputes.data.unclassified as Row[]).map((u) => <div key={u.refId} className="my-2 rounded border border-red-800 p-3 text-sm">
+        <p>{name(u.agentId)} · PayPal debit {u.refId} · {(u.amountMinor / 100).toFixed(2)}</p>
+        <Form title="Classify" fields={[{ key: "as", label: "This was", options: [["refund", "A refund"], ["reversal", "A reversal / chargeback"], ["fee", "A fee"], ["not_this_sale", "Not this sale"]] }, { key: "note", label: "Note" }]}
+          submit={(v) => call("paypal_debit_classify", { refId: u.refId, as: v.as, note: v.note || null })} />
+      </div>)}
+    </> : <p className="text-sm text-slate-400">{disputes.error || "Reading…"}</p>}</Panel>
 
     <Panel title="Customer orders (PayPal checkouts)">{orders.data ? <>
       <p className="text-sm">{Object.entries(orders.data.counts as Record<string, number>).map(([k, n]) => `${k.replace(/_/g, " ")}: ${n}`).join(" · ") || "No orders yet."}</p>
