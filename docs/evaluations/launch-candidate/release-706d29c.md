@@ -1,5 +1,7 @@
 # Release package — 706d29c (schema 59 → 60, dashboard 0.12.1): Agents' names + PayPal readiness probe
 
+**Superseded by `release-b0ac910.md` (adds v61, the owner receiving test); do not cut over from `~/rlc60b`.**
+
 Prepared and rehearsed 2026-10-09; **not deployed** (needs the owner's authorization). **Supersedes `release-6e1bf5b.md`**
 (same migration and dashboard; adds the probe and carries the custody unit fix). Production is `f021673`, schema 59,
 UI 0.12.0. No economics, permissions, money states or launch settings change; founders are not touched.
