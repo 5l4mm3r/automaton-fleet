@@ -1,5 +1,7 @@
 # Release package — 6e1bf5b, the Agents' names (schema 59 → 60, dashboard 0.12.1)
 
+**Superseded by `release-706d29c.md` (same migration and dashboard + the PayPal probe); do not cut over from `~/rlc60`.**
+
 Prepared and rehearsed 2026-10-09; **not deployed** (needs the owner's authorization). Production is `f021673`, schema
 59, UI 0.12.0. Display only: no economics, permissions, money states or launch settings change, and founders are not
 touched. It does not block onboarding (PayPal and the rest run on 59).
