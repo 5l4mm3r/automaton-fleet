@@ -109,7 +109,7 @@ export function custodyEnvProblems(
 }
 
 /** Real HTTP for provider calls (custody executor only), with a timeout; nothing is logged. */
-const fetchHttp: HttpPort = async (url, init) => {
+export const fetchHttp: HttpPort = async (url, init) => {
   const r = await fetch(url, { ...init, signal: AbortSignal.timeout(20_000) });
   return { status: r.status, json: () => r.json() };
 };

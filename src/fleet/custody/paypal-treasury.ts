@@ -73,6 +73,20 @@ export interface PayPalTreasuryOptions {
 }
 
 const PAYPAL_ID = /^[A-Z0-9]{5,40}$/;
+
+/** The events the treasury webhook must deliver (README §4.1): orders, captures, refunds / reversals, disputes. */
+export const PAYPAL_REQUIRED_WEBHOOK_EVENTS: readonly string[] = Object.freeze([
+  "CHECKOUT.ORDER.APPROVED", "PAYMENT.CAPTURE.COMPLETED", "PAYMENT.CAPTURE.PENDING", "PAYMENT.CAPTURE.REFUNDED", "PAYMENT.CAPTURE.REVERSED",
+  "CUSTOMER.DISPUTE.CREATED", "CUSTOMER.DISPUTE.UPDATED", "CUSTOMER.DISPUTE.RESOLVED",
+]);
+
+/** A readiness probe's answer: statuses and names only — never a token, secret or amount. */
+export interface PayPalProbe {
+  authenticated: boolean;
+  balances: { status: number | null; currencies: string[] };
+  transactionSearch: { status: number | null };
+  webhook: { status: number | null; urlMatches: boolean; missingEvents: string[] };
+}
 const base = (mode: string) => (mode === "live" ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com");
 const decimal = (minor: number) => `${minor < 0 ? "-" : ""}${Math.trunc(Math.abs(minor) / 100)}.${String(Math.abs(minor) % 100).padStart(2, "0")}`;
 
@@ -421,6 +435,33 @@ export class PayPalTreasuryWorker {
       page++;
     }
     this.lastReconcile.set(r.railId, this.now());
+  }
+
+  /**
+   * Readiness probe for a rail (read-only; nothing is created, sent or recorded). PayPal is asked for an access token,
+   * the balance list, an empty one-hour Transaction Search window and the rail's webhook; the answer carries only
+   * non-secret facts — HTTP statuses, currency codes (never amounts), whether the webhook points at `webhookUrl` and
+   * which required events it lacks. Payouts are not probed: their readiness is a separate, evidenced step.
+   */
+  async probe(r: { railMode: "live" | "sandbox"; vaultRef: string }, webhookId: string | null, webhookUrl: string): Promise<PayPalProbe> {
+    const authenticated = (await this.token(r).catch(() => null)) !== null;
+    const out: PayPalProbe = { authenticated, balances: { status: null, currencies: [] }, transactionSearch: { status: null },
+      webhook: { status: null, urlMatches: false, missingEvents: [...PAYPAL_REQUIRED_WEBHOOK_EVENTS] } };
+    if (!authenticated) return out;
+    const bal = await this.call(r, "GET", "/v1/reporting/balances").catch(() => null);
+    out.balances = { status: bal?.status ?? null, currencies: bal?.status === 200 && Array.isArray(bal.json?.balances)
+      ? [...new Set((bal.json.balances as Array<{ currency?: unknown }>).map((b) => b?.currency).filter((c): c is string => typeof c === "string" && /^[A-Z]{3}$/.test(c)))].sort() : [] };
+    const end = new Date(Math.floor(this.now() / 1000) * 1000), start = new Date(end.getTime() - 3_600_000);
+    const qs = new URLSearchParams({ start_date: start.toISOString().replace(/\.\d{3}Z$/, "Z"), end_date: end.toISOString().replace(/\.\d{3}Z$/, "Z"),
+      fields: "transaction_info", page_size: "1", page: "1" });
+    out.transactionSearch = { status: (await this.call(r, "GET", `/v1/reporting/transactions?${qs}`).catch(() => null))?.status ?? null };
+    if (webhookId && PAYPAL_ID.test(webhookId)) {
+      const wh = await this.call(r, "GET", `/v1/notifications/webhooks/${webhookId}`).catch(() => null);
+      const types = wh?.status === 200 && Array.isArray(wh.json?.event_types) ? (wh.json.event_types as Array<{ name?: unknown }>).map((e) => e?.name) : [];
+      out.webhook = { status: wh?.status ?? null, urlMatches: wh?.status === 200 && wh.json?.url === webhookUrl,
+        missingEvents: types.includes("*") ? [] : PAYPAL_REQUIRED_WEBHOOK_EVENTS.filter((e) => !types.includes(e)) };
+    }
+    return out;
   }
 
   private async balance(r: PayPalRail): Promise<void> {
