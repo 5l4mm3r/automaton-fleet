@@ -20,6 +20,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "card_statement_issue", "card_statement_paid", "card_statement_policy_set", "paypal_test_checkout",
   // v54: card requests above the owner's threshold, and the threshold.
   "card_request_decide", "card_request_policy_set",
+  // v55: the owner's survival protection switch.
+  "survival_protection_set", "survival_protection_agent_set",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */

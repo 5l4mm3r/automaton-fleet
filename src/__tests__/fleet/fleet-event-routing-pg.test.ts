@@ -21,6 +21,7 @@ import { EVENT_ROUTES_V51 } from "../../fleet/postgres/migrations-phase51.js";
 import { EVENT_ROUTES_V52 } from "../../fleet/postgres/migrations-phase52.js";
 import { EVENT_ROUTES_V53 } from "../../fleet/postgres/migrations-phase53.js";
 import { EVENT_ROUTES_V54 } from "../../fleet/postgres/migrations-phase54.js";
+import { EVENT_ROUTES_V55 } from "../../fleet/postgres/migrations-phase55.js";
 import { CommandFeed } from "../../../codex-dashboard/src/dashboard/command/panels";
 import { toFleetEvent, type FleetEvent } from "../../../codex-dashboard/src/dashboard/command/events";
 
@@ -31,7 +32,7 @@ describe("the routing table", () => {
   it("names each event type once, and routes every event type the code emits explicitly", () => {
     const all = [...Object.values(EVENT_ROUTES).flat(), ...Object.values(EVENT_ROUTES_V46).flat(), ...Object.values(EVENT_ROUTES_V47).flat(),
       ...Object.values(EVENT_ROUTES_V48).flat(), ...Object.values(EVENT_ROUTES_V49).flat(), ...Object.values(EVENT_ROUTES_V50).flat(),
-      ...Object.values(EVENT_ROUTES_V51).flat(), ...Object.values(EVENT_ROUTES_V52).flat(), ...Object.values(EVENT_ROUTES_V53).flat(), ...Object.values(EVENT_ROUTES_V54).flat()];
+      ...Object.values(EVENT_ROUTES_V51).flat(), ...Object.values(EVENT_ROUTES_V52).flat(), ...Object.values(EVENT_ROUTES_V53).flat(), ...Object.values(EVENT_ROUTES_V54).flat(), ...Object.values(EVENT_ROUTES_V55).flat()];
     expect(all.length).toBe(new Set(all).size);
     const dir = path.join(process.cwd(), "src", "fleet");
     const emitted = new Set<string>();

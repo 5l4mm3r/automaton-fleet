@@ -1,6 +1,6 @@
 # Launch candidate — deployment, onboarding, recovery and checklist (revision 3)
 
-- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v54 on top of production schema 45, dashboard UI 0.11.0.
+- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v55 on top of production schema 45, dashboard UI 0.11.0.
 - **Revision 3 (2026-10-09)** follows the owner's decisions of 2026-10-08:
   - the treasury PayPal stays the owner's own account, **upgraded to Business as an individual** (no company);
   - the card is the owner's **credit card**, repaid **weekly** from the treasury.
@@ -22,12 +22,17 @@
 | v50 | Sweep reductions, knowledge library, PII scrubbing (its dormancy is retired by v51) | No |
 | v51 | Exhaustion is death; card holds reserve first; PayPal money held until available; custody pilot/ongoing; automatic capital and sweep-reduction decisions; document upload authority (off); freeze stops jobs; knowledge revision 2; mail/SMS secrets from the dashboard | No (see §1.1) |
 | v52 | Gumroad storefront gateway surface (gx_*), PayPal-evidence receipt matching, bank-feed surface (rx_*), Gumroad refused to agents directly | No |
+| v55 | Survival protection switch, **ON from the migration**: no agent is ended for an exhausted wallet (you are told) until you go live from the header switch (step-up). Shown on every page; Settings can hide it | No |
 | v54 | The card rule: PayPal first; the card only by request (Fleet Control approves up to £100 within the agent's wallet; the owner decides above, funding the card first) | No |
 | v53 | Weekly card statement (default Monday 09:00 Europe/London) with "Mark as paid"; the owner's PayPal receiving test (at most £10; booked as owner capital, never revenue) | No |
 
 ### 1.1 Behaviour the two living agents will meet after deployment
 
-- **Exhaustion is death.** Before cutover, `hub-wallet-measure` on the rehearsal copy must show both agents funded and not
+- **Survival protection is ON** from the cutover (v55). An agent whose wallet is exhausted is not ended; you are told
+  (P1) and decide. The rule applies only after you go live from the header switch.
+- **Founders are not upgraded at cutover.** Both keep running on fda78a0; their upgrade to the new tools is a separate
+  step you start when the accounts are linked.
+- **Exhaustion is death** (once live). Before cutover, `hub-wallet-measure` on the rehearsal copy must show both agents funded and not
   exhausted.
 - **Card bypass.** Card holds reserve funds before the card can be filled. This is off until you enable the standing
   authority.
@@ -49,7 +54,7 @@
 - **Identity broker:** serves documents, and starts mail or SMS from dashboard-sealed secrets.
 - **New unit:** `automaton-fleet-gumroad` (installed only by `scripts/fleet-gumroad-setup.sh`; dormant without a token).
 
-## 2. Deploy (schema 45 → 54)
+## 2. Deploy (schema 45 → 55)
 
 Pins come from the build output, never from placeholders.
 
@@ -60,7 +65,7 @@ Pins come from the build output, never from placeholders.
    4. build the dashboard LIVE export from the same commit.
 2. Rehearse on a copy of production:
    ```
-   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 54
+   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 55
    ```
    Expect all of the following:
    - every migration applies;
@@ -70,7 +75,7 @@ Pins come from the build output, never from placeholders.
    - `hub-wallet-measure` shows `exhausted: false` for both.
 3. Cut over:
    ```
-   bash ~/fleet-release.sh … 45 54
+   bash ~/fleet-release.sh … 45 55
    ```
    This does the backend cutover and promotes UI 0.11.0, with one `production_deployed` event.
 4. Upgrade the founders one at a time, Agent 2 first, then Founder 1:
@@ -94,12 +99,12 @@ Pins come from the build output, never from placeholders.
 Correct terminology matters here. A schema revert does **not** keep newer writes in the running system; the export it
 writes is **recovery evidence**.
 
-- **Fix forward (preferred).** v46–v54 only add. A code fix on schema 54 needs no restore and loses nothing.
+- **Fix forward (preferred).** v46–v55 only add. A code fix on schema 55 needs no restore and loses nothing.
 - **Code-only problem in the new release.** Use the release's own code-only revert. The database is untouched and all
   writes are kept.
 - **A schema revert to 45:**
   ```
-  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 54 <reason>
+  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 55 <reason>
   ```
   1. **UI first:** point the dashboard back to `dashboard.env.pre-0.11.0`.
   2. **Founders first**, if they were upgraded:
@@ -107,7 +112,7 @@ writes is **recovery evidence**.
      fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>
      ```
      Their workspaces, memory and journals are on the host and are not touched by the database step.
-  3. **Recovery evidence.** The script dumps all post-cutover state (`~/automaton_fleet-v54-post-cutover-…dump`).
+  3. **Recovery evidence.** The script dumps all post-cutover state (`~/automaton_fleet-v55-post-cutover-…dump`).
   4. **Refusals:**
      - It refuses to discard journals or events written since cutover until you acknowledge their exact counts with
        `FLEET_REVERT_DISCARD_ACK=<journals>:<events>`.
@@ -257,7 +262,7 @@ Until all four keys hold, no payment leaves.
 ## 5. Launch checklist (in order)
 
 1. Approve the candidate. Build on the VPS; record the pins; build the LIVE dashboard.
-2. Rehearse 45 → 54 on the VPS copy and review the output, including `hub-wallet-measure`.
+2. Rehearse 45 → 55 on the VPS copy and review the output, including `hub-wallet-measure`.
 3. Cut over with `fleet-release.sh`. Run the read-only checks (§2 step 5). Upgrade Agent 2, then Founder 1.
 4. PayPal: Live app, sealed credentials, rail, webhook, readiness (§4.1).
 5. **Receiving test.** Open a £1 test under Treasury → Receiving test (or `economy-paypal-test 100`), pay it from

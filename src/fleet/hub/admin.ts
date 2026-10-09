@@ -180,6 +180,14 @@ export class PgHubAdmin {
     return this.one(`SELECT fleet_admin_card_statement_policy_set($1, $2, $3, $4, $5) AS r`, [enabled, weekday, hour, timeZone, actor]);
   }
   paypalTestCheckout(amountMinor: number, actor: string) { return this.one(`SELECT fleet_admin_paypal_test_checkout($1, $2) AS r`, [amountMinor, actor]); }
+  // ── v55: the owner's survival protection switch ──
+  survivalProtection() { return this.one(`SELECT fleet_survival_protection_json() AS r`); }
+  survivalProtectionSet(enabled: boolean, reason: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_survival_protection_set($1, $2, $3) AS r`, [enabled, reason, actor]);
+  }
+  survivalProtectionAgent(agentId: string, mode: string, reason: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_survival_protection_agent_set($1, $2, $3, $4) AS r`, [agentId, mode, reason, actor]);
+  }
   // ── v54: card requests (PayPal first; the owner decides above the threshold) ──
   cardRequests(agentId: string | null) { return this.one(`SELECT fleet_card_requests_json($1) AS r`, [agentId]); }
   cardRequestDecide(requestId: string, decision: string, reference: string | null, note: string | null, actor: string) {

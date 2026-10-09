@@ -33,6 +33,8 @@ describe.skipIf(!PG_BIN)("v50 insolvency, sweep reductions, knowledge library, P
 
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 5_000, simulatedSettlement: false });
+    // v55: survival protection is on by default; these tests exercise the live rule (exhaustion is death).
+    await R.one(`fleet.fleet_admin_survival_protection_set(false, 'tests of the live survival rule', $1)`, [OWNER]);
     [F, G] = R.founders;
     await R.store.grantServiceRole();
     svc = new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 2 });

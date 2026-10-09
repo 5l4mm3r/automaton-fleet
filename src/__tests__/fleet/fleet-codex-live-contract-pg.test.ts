@@ -34,6 +34,7 @@ import { DASHBOARD_SENSITIVE_OPS_V51 } from "../../fleet/postgres/migrations-pha
 import { DASHBOARD_SENSITIVE_OPS_V52 } from "../../fleet/postgres/migrations-phase52.js";
 import { DASHBOARD_SENSITIVE_OPS_V53 } from "../../fleet/postgres/migrations-phase53.js";
 import { DASHBOARD_SENSITIVE_OPS_V54 } from "../../fleet/postgres/migrations-phase54.js";
+import { DASHBOARD_SENSITIVE_OPS_V55 } from "../../fleet/postgres/migrations-phase55.js";
 import { DASHBOARD_WRITE_OPS_V45 } from "../../fleet/postgres/migrations-phase45.js";
 import { GatewayClient } from "../../../codex-dashboard/src/dashboard/api/client";
 import { LiveAuth } from "../../../codex-dashboard/src/dashboard/api/auth";
@@ -117,7 +118,7 @@ describe.skipIf(!PG_BIN)("Codex dashboard LIVE contract against the real v41 gat
   it("the client's operation classes are exactly the gateway's; no live module imports a simulation", () => {
     // v48–v50: treasury, identity authority, custody credentials, lifecycle — each added to the gateway's sensitive class.
     expect([...SENSITIVE_OPS].sort()).toEqual([...DASHBOARD_SENSITIVE_OPS_V41, ...DASHBOARD_SENSITIVE_OPS_V48, ...DASHBOARD_SENSITIVE_OPS_V49, ...DASHBOARD_SENSITIVE_OPS_V50,
-      ...DASHBOARD_SENSITIVE_OPS_V51, ...DASHBOARD_SENSITIVE_OPS_V52, ...DASHBOARD_SENSITIVE_OPS_V53, ...DASHBOARD_SENSITIVE_OPS_V54].sort());
+      ...DASHBOARD_SENSITIVE_OPS_V51, ...DASHBOARD_SENSITIVE_OPS_V52, ...DASHBOARD_SENSITIVE_OPS_V53, ...DASHBOARD_SENSITIVE_OPS_V54, ...DASHBOARD_SENSITIVE_OPS_V55].sort());
     expect([...WRITE_OPS].sort()).toEqual([...DASHBOARD_WRITE_OPS_V45].sort());
     for (const f of ["adapters/live.ts", "api/client.ts", "api/auth.ts", "api/operations.ts", "api/snapshot.ts", "api/reveal.ts", "api/seal.ts", "live/mapping.ts", "live/index.ts", "adapter.live.ts", "money/MoneyPanels.tsx"]) {
       const src = fs.readFileSync(path.join(INTEGRATION, f), "utf8");

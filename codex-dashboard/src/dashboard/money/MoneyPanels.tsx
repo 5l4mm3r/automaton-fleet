@@ -156,7 +156,7 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
       {survival.data ? <table className="w-full text-left text-sm"><thead><tr className="text-slate-400"><th>Agent</th><th>Spendable</th><th>Own money held</th><th>Survival equity</th><th>State</th></tr></thead>
         <tbody>{survival.data.map((m) => <tr key={m.agentId} className="border-t border-slate-800"><td>{m.name ?? m.agentId}</td><td className="font-mono">{money(m.spendableMinor)}</td>
           <td className="font-mono">{money(Object.values(m.ownHeldMinor as Record<string, number>).reduce((x, y) => x + Number(y), 0))}</td><td className="font-mono">{money(m.survivalEquityMinor)}</td>
-          <td className={m.exhausted ? "text-red-300" : ""}>{m.exhausted ? "exhausted — ends at the next pass" : "alive"}</td></tr>)}</tbody></table>
+          <td className={m.exhausted ? (m.protected ? "text-amber-300" : "text-red-300") : ""}>{m.exhausted ? (m.protected ? "exhausted — protected (not ended; fund or hold it)" : "exhausted — ends at the next pass") : m.protected === false ? "alive · live" : "alive"}</td></tr>)}</tbody></table>
         : <p className="text-sm text-slate-400">{survival.error || "Reading…"}</p>}
     </Panel>
 

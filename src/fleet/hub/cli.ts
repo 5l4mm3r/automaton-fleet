@@ -86,6 +86,9 @@
  *   economy-card-statement-paid <statementId> <transferReference>             the statement's total was moved from the treasury PayPal to the card
  *   economy-card-statement-policy [--enabled on|off] [--weekday 1-7] [--hour 0-23] [--tz Europe/London]   when the weekly statement is issued
  *   economy-paypal-test [amountMinor]                                         (v53) open a receiving test (default 100 = 1.00; at most 1000); pay it yourself
+ *   hub-protection | economy-protection on|off [reason…]                     (v55) survival protection: ON = no agent is ended for an
+ *                                               exhausted wallet (the owner is told); OFF = live (exhaustion is death)
+ *   economy-protection-agent <agentId> protected|live|follow [reason…]       (v55, advanced) one agent overriding the fleet switch
  *   hub-card-requests [agentId]                                               (v54) card requests (PayPal first; yours to decide above the threshold)
  *   economy-card-request-decide <requestId> approve <transferReference> [note…] | <requestId> decline [note…]
  *                                               approve only after moving the amount from the treasury PayPal to the card
@@ -145,7 +148,7 @@ export const HUB_COMMANDS = new Set([
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
   "economy-sweep-reduction-end", "economy-sweep-reduction-decline", "hub-knowledge", "economy-knowledge-load",
   "economy-card-statement-issue", "economy-card-statement-paid", "economy-card-statement-policy", "economy-paypal-test", "hub-paypal-test",
-  "hub-card-requests", "economy-card-request-decide", "economy-card-request-policy",
+  "hub-card-requests", "economy-card-request-decide", "economy-card-request-policy", "hub-protection", "economy-protection", "economy-protection-agent",
 ]);
 
 const flag = (a: string[], name: string): string | null => {
@@ -318,6 +321,13 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     }
     case "economy-paypal-test":
       return h.paypalTestCheckout(p[0] ? int(p[0], "amountMinor") : 100, actor);
+    case "hub-protection":
+      return h.survivalProtection();
+    case "economy-protection":
+      if (!["on", "off"].includes(p[0])) throw new Error("FLEET_BAD_REQUEST: economy-protection on|off [reason…]");
+      return h.survivalProtectionSet(p[0] === "on", p.slice(1).join(" ") || null, actor);
+    case "economy-protection-agent":
+      return h.survivalProtectionAgent(p[0], p[1], p.slice(2).join(" ") || null, actor);
     case "hub-card-requests":
       return h.cardRequests(p[0] ?? null);
     case "economy-card-request-decide":
