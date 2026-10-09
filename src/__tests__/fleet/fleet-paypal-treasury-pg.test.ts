@@ -292,7 +292,9 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury, custody activation and card clear
     const e1 = await R.one(`fleet.fleet_agent_economics($1)`, [F.id]);
     expect(Number(e1.externalCustomerRevenue) - Number(e0.externalCustomerRevenue)).toBe(2_000);
     expect(await R.code(R.q(`SELECT fleet.fleet_admin_card_receipt_resolve($1, 'return', 2_001, 'pp-in-1', $2)`, [inv.receiptId, OWNER]))).toBe("FLEET_BAD_REQUEST");
-    const ret = await R.one(`fleet.fleet_admin_card_receipt_resolve($1, 'return', 300, 'pp-in-1', $2)`, [inv.receiptId, OWNER]);
+    // v58: a swept share needs the owner's choice of destination each time.
+    expect(await R.code(R.q(`SELECT fleet.fleet_admin_card_receipt_resolve($1, 'return', 300, 'pp-in-1', $2)`, [inv.receiptId, OWNER]))).toBe("FLEET_BAD_REQUEST");
+    const ret = await R.one(`fleet.fleet_admin_card_receipt_settle($1, 'return', 'transfer', 300, 'pp-in-1', $2, 'treasury')`, [inv.receiptId, OWNER]);
     expect(ret).toMatchObject({ status: "returned", returnedMinor: 1_700, sweepMinor: 300 });
     expect(await cash(F)).toBe(before + 1_700);
     const e2 = await R.one(`fleet.fleet_agent_economics($1)`, [F.id]);

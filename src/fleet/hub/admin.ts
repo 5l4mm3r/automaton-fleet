@@ -134,9 +134,13 @@ export class PgHubAdmin {
     return this.one(`SELECT fleet_admin_card_receipt_resolve($1, $2, $3, $4, $5) AS r`, [receiptId, resolution, sweepMinor, reference, actor]);
   }
   /** v51: return / withdrawal, by transfer (the money reached the owner) or applied to the card balance. */
-  /** v57: the swept share of a return goes to the treasury unless sweepTo = owner (an explicit owner withdrawal). */
-  cardSettle(receiptId: string, resolution: string, method: string, sweepMinor: number | null, reference: string | null, actor: string, sweepTo: "treasury" | "owner" = "treasury") {
+  /** v57/v58: a return's swept share goes where the owner says each time (treasury, or owner = an owner withdrawal). */
+  cardSettle(receiptId: string, resolution: string, method: string, sweepMinor: number | null, reference: string | null, actor: string, sweepTo: "treasury" | "owner" | null = null) {
     return this.one(`SELECT fleet_admin_card_receipt_settle($1, $2, $3, $4, $5, $6, $7) AS r`, [receiptId, resolution, method, sweepMinor, reference, actor, sweepTo]);
+  }
+  /** v58: card credit (pre-funded, unused) moved back to the treasury PayPal account. */
+  cardCreditReturn(amountMinor: number, reference: string, actor: string) {
+    return this.one(`SELECT fleet_admin_card_credit_return($1, $2, $3) AS r`, [amountMinor, reference, actor]);
   }
   // ── v57: PayPal disputes and debits Transaction Search could not classify ──
   paypalDisputes() { return this.one(`SELECT fleet_paypal_disputes_json() AS r`); }

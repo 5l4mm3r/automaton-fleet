@@ -182,19 +182,22 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
     <Panel title="Card clearing (your card used as a bypass)">{card.data ? <>
       {creq.data && <CardRequests data={creq.data} call={call} name={name} />}
       <CardStatements card={card.data} call={call} name={name} />
+      {card.data.creditMinor > 0 && <><p className="mt-4 text-sm text-cyan-200">Card credit: {money(card.data.creditMinor)} — money you moved to the card ahead of charges and not used yet. It pays the next charges automatically.</p>
+        <Form title="I moved card credit back to the treasury" fields={[{ key: "amount", label: "Amount (£)" }, { key: "reference", label: "Transfer reference" }]}
+          submit={(v) => call("card_credit_return", { amountMinor: minor(v.amount), reference: v.reference })} /></>}
       <p className="mt-4 text-sm">Owed on the card: <span className="font-mono">{money(card.data.outstandingMinor)}</span> (reserved in the treasury: {money(card.data.reserveMinor)}). Repay it from the treasury PayPal account with PayPal’s “Make a Payment” (there is no API for this), then record it.</p>
       <Form title="Record card repayment" fields={[{ key: "amount", label: "Amount repaid (£)" }, { key: "reference", label: "PayPal transaction / statement reference" }]}
         submit={(v) => call("card_repayment_record", { amountMinor: minor(v.amount), reference: v.reference })} />
       <h4 className="mt-4 font-semibold">Invoices — money paid to your card for an agent</h4>
       {(card.data.invoices as Row[]).filter((i) => i.status === "invoiced").map((i) => <div key={i.receiptId} className="my-2 rounded border border-amber-700 p-3 text-sm">
         <p>{name(i.agentId)} · {i.kind} · {money(i.amountMinor)} · ref {i.reference}{i.note ? ` · ${i.note}` : ""}</p>
-        <p className="text-amber-200">Return all {money(i.amountMinor)} to the treasury: {money(i.amountMinor - i.suggestedSweepMinor)} is credited to the agent, and the suggested sweep {money(i.suggestedSweepMinor)} (net profit only) stays in the treasury as the Fleet&apos;s share. Or keep it all as a withdrawal.</p>
+        <p className="text-amber-200">Return it to the treasury: {money(i.amountMinor - i.suggestedSweepMinor)} is credited to the agent; the suggested swept share {money(i.suggestedSweepMinor)} (net profit only) goes where you choose — the treasury (you transfer the full {money(i.amountMinor)}) or you (an owner withdrawal; you transfer {money(i.amountMinor - i.suggestedSweepMinor)}). Or keep it all as a withdrawal.</p>
         <p className="text-xs text-slate-400">“Applied to the card balance”: the money reduced what the fleet owes your card (you repay that much less) — nothing to transfer. “Transferred”: it reached you and you send it to the treasury PayPal.</p>
         <Form title="Returned to the treasury" fields={[{ key: "method", label: "How", options: [["card_balance", "Applied to the card balance"], ["transfer", "Transferred to the treasury"]] },
           { key: "sweep", label: "Swept share (£, net profit only)", value: (i.suggestedSweepMinor / 100).toFixed(2) },
-          { key: "sweepTo", label: "The swept share", options: [["treasury", "Stays in the treasury (you transfer the full amount)"], ["owner", "Kept by me — an owner withdrawal (transfer only)"]] },
+          { key: "sweepTo", label: "The swept share (your choice)", options: [["", "— choose —"], ["treasury", "Stays in the treasury (you transfer the full amount)"], ["owner", "Kept by me — an owner withdrawal (transfer only)"]] },
           { key: "reference", label: "Transfer reference (if transferred)" }]}
-          submit={(v) => call("card_receipt_settle", { receiptId: i.receiptId, resolution: "return", method: v.method, sweepMinor: minor(v.sweep), sweepTo: v.sweepTo, reference: v.reference || null })} />
+          submit={(v) => call("card_receipt_settle", { receiptId: i.receiptId, resolution: "return", method: v.method, sweepMinor: minor(v.sweep), sweepTo: v.sweepTo || null, reference: v.reference || null })} />
         <Form title="Keep as my withdrawal" danger fields={[{ key: "method", label: "How", options: [["card_balance", "It reduced the card balance"], ["transfer", "It reached me"]] }]}
           submit={(v) => call("card_receipt_settle", { receiptId: i.receiptId, resolution: "withdrawal", method: v.method })} />
       </div>)}

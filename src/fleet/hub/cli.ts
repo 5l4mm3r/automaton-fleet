@@ -80,7 +80,9 @@
  *   economy-card-repay <amountMinor> <reference>                             the card was repaid from the treasury PayPal (manual; no API)
  *   economy-card-receipt <agentId> <amountMinor> <revenue|refund> <reference> [note…]   money paid to the card → an owner invoice
  *   economy-card-resolve <receiptId> <return|withdrawal> [--method transfer|card_balance] [--sweep n] [--reference transferRef] [--sweep-to treasury|owner]
- *                                               (v57) a return's swept share stays in the treasury; --sweep-to owner = you keep it (an owner withdrawal)
+ *                                               (v58) a return with a swept share needs --sweep-to: treasury (you transfer the full amount)
+ *                                               or owner (you keep the share: an owner withdrawal); applied to the card balance it stays in the treasury
+ *   economy-card-credit-return <amountMinor> <transferReference>                (v58) card credit moved back to the treasury PayPal
  *   hub-paypal-disputes                                                       (v57) disputes, unclassified PayPal debits, exposure per agent
  *   economy-paypal-dispute-resolve <disputeId> won|lost [note…]               (v57) a dispute PayPal left without a plain outcome
  *   economy-paypal-debit-classify <refId> refund|reversal|fee|not_this_sale [note…]
@@ -146,7 +148,7 @@ export const HUB_COMMANDS = new Set([
   "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
   "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser", "hub-dashboard-enroll", "hub-dashboard-totp-reset",
   "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
-  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
+  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -257,10 +259,12 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.cardReceipt(p[0], int(p[1], "amountMinor"), p[2], p[3], p.slice(4).join(" ") || null, actor);
     case "economy-card-resolve": {
       const q = positional(a, ["--sweep", "--reference", "--method", "--sweep-to"]);
-      const to = flag(a, "--sweep-to") ?? "treasury";
-      if (to !== "treasury" && to !== "owner") throw new Error("FLEET_BAD_REQUEST: --sweep-to treasury|owner");
+      const to = flag(a, "--sweep-to");
+      if (to !== null && to !== "treasury" && to !== "owner") throw new Error("FLEET_BAD_REQUEST: --sweep-to treasury|owner");
       return h.cardSettle(q[0], q[1], flag(a, "--method") ?? "transfer", flag(a, "--sweep") ? int(flag(a, "--sweep"), "sweep") : null, flag(a, "--reference"), actor, to);
     }
+    case "economy-card-credit-return":
+      return h.cardCreditReturn(int(p[0], "amountMinor"), p[1], actor);
     case "hub-paypal-disputes":
       return h.paypalDisputes();
     case "economy-paypal-dispute-resolve":

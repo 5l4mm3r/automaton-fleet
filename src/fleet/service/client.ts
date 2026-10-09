@@ -378,7 +378,15 @@ export class FleetApiClient implements FleetBackend {
    */
   async economy(op: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     try {
-      return await this.call<Record<string, unknown>>("POST", "/v1/economy", { op, args });
+      try {
+        return await this.call<Record<string, unknown>>("POST", "/v1/economy", { op, args });
+      } catch (err) {
+        // v58: a file-sized body is accepted only for a session the controller has already seen accepted; the first such
+        // call of a fresh session proves it with a small read, then is sent once more.
+        if (!(err instanceof ApiError && err.status === 413) || op === "brief") throw err;
+        await this.call<Record<string, unknown>>("POST", "/v1/economy", { op: "brief", args: {} });
+        return await this.call<Record<string, unknown>>("POST", "/v1/economy", { op, args });
+      }
     } catch (err) {
       // A business refusal (HTTP 200, ok:false) is DATA the founder acts on — keep its code and reason. Authentication,
       // transport and availability failures still raise.

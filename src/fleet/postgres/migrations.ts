@@ -64,9 +64,10 @@ import { V54_SQL } from "./migrations-phase54.js";
 import { V55_SQL } from "./migrations-phase55.js";
 import { V56_SQL } from "./migrations-phase56.js";
 import { V57_SQL } from "./migrations-phase57.js";
+import { V58_SQL } from "./migrations-phase58.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 57;
+export const FLEET_PG_SCHEMA_VERSION = 58;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1219,6 +1220,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 55, name: "owner_survival_protection_switch", sql: V55_SQL },
   { version: 56, name: "customer_orders_delivery_connectors", sql: V56_SQL },
   { version: 57, name: "paypal_clawback_reconciliation_card_sweep_destination", sql: V57_SQL },
+  { version: 58, name: "principal_caps_card_credit_fulfilment_honesty", sql: V58_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1419,7 +1421,8 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   cx_publish_key: { writes: ["fleet_custody_keys"], calls: ["fleet_event"] },
   cx_sealed_credentials: { writes: [], calls: [] },
   cx_paypal_buyer_work: { writes: [], calls: [] },
-  cx_paypal_buyer_record: { writes: ["fleet_customer_orders"], calls: [] },
+  // v58: a buyer PayPal never reveals is raised for the owner.
+  cx_paypal_buyer_record: { writes: ["fleet_customer_orders"], calls: ["fleet_event"] },
   cx_paypal_clawback_evidence: { writes: ["fleet_paypal_clawback_evidence"], calls: ["fleet_event", "fleet_paypal_clawback_reconcile", "cx_paypal_refund_record"] },
   cx_paypal_dispute_record: { writes: ["fleet_paypal_disputes"], calls: ["fleet_event"] },
 });

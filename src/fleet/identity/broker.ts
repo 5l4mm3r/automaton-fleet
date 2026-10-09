@@ -594,9 +594,16 @@ export class IdentityBroker {
         return r.outcome === "succeeded" ? { outcome: "succeeded", result: { status: "closed" }, account: { status: "closed" } } : this.fromAccountOutcome(r);
       }
       case "mail.send": {
-        if (!this.mail) return failed("FLEET_NO_MAIL_PROVIDER");
+        // v58: a send that cannot reach a provider records its outcome on the message too (an order delivery waits on it).
+        if (!this.mail) {
+          await this.gw.mailSent2(job.jobId, lease, null, null, false, "FLEET_NO_MAIL_PROVIDER");
+          return failed("FLEET_NO_MAIL_PROVIDER");
+        }
         const m = job.message;
-        if (!m) return failed("FLEET_NOT_FOUND", "the message is gone");
+        if (!m) {
+          await this.gw.mailSent2(job.jobId, lease, null, null, false, "FLEET_NOT_FOUND");
+          return failed("FLEET_NOT_FOUND", "the message is gone");
+        }
         // v41: a Fleet Message-ID (known before sending, so replies thread back) and, on the shared mailbox, the agent's
         // routing address as Reply-To.
         const domain = (this.mail.address ?? m.from).split("@")[1] ?? "fleet.invalid";

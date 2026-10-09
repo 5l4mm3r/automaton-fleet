@@ -164,7 +164,9 @@ describe.skipIf(!PG_BIN)("v57: clawbacks reconciled from evidence; disputes held
     const tr0 = await R.balance("fleet:treasury:unallocated");
     const wd0 = await R.balance("fleet:owner:withdrawals");
     const a = await R.one(`fleet.fleet_admin_card_receipt_record($1, 2_000, 'revenue', 'card-in-v57-1', NULL, $2)`, [F.id, OWNER]);
-    const ra = await R.one(`fleet.fleet_admin_card_receipt_settle($1, 'return', 'transfer', 100, 'pp-in-v57-1', $2)`, [a.receiptId, OWNER]);
+    // v58: no default destination — the owner chooses each time.
+    expect(await R.code(R.q(`SELECT fleet.fleet_admin_card_receipt_settle($1, 'return', 'transfer', 100, 'pp-in-v57-1', $2)`, [a.receiptId, OWNER]))).toBe("FLEET_BAD_REQUEST");
+    const ra = await R.one(`fleet.fleet_admin_card_receipt_settle($1, 'return', 'transfer', 100, 'pp-in-v57-1', $2, 'treasury')`, [a.receiptId, OWNER]);
     expect(ra).toMatchObject({ status: "returned", returnedMinor: 1_900, sweepMinor: 100, sweepTo: "treasury", ownerTransferMinor: 2_000 });
     expect(await R.balance("fleet:owner:withdrawals")).toBe(wd0);
     expect(await R.balance("fleet:treasury:unallocated")).toBe(tr0 + 100);

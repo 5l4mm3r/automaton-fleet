@@ -113,9 +113,13 @@ describe.skipIf(!PG_BIN)("v54: card requests — PayPal first, the card last (Po
     // Booked (+14 400 on the card) and repaid by the owner's prior transfer (−14 400): nothing new owed.
     expect(await R.balance("fleet:card:payable")).toBe(pay0);
     expect((await R.q(`SELECT amount_minor, reference FROM fleet.fleet_card_repayments WHERE reference = 'prefund:pp-to-card-1'`))).toEqual([{ amount_minor: "14400", reference: "prefund:pp-to-card-1" }]);
-    // A statement correction upwards is not covered twice by the same transfer.
+    // v58: the 600 funded but not charged left the treasury: it is card credit, not lost from the books.
+    expect(await R.balance("fleet:card:credit")).toBe(600);
+    // A statement correction upwards is not covered twice by the same transfer: the card credit pays it (v58).
     await R.one(`fleet.fleet_admin_card_charge_confirm($1, 14_600, 'stmt-hosting', $2)`, [h.charge.chargeId, OWNER]);
-    expect(await R.balance("fleet:card:payable")).toBe(pay0 + 200);
+    expect(await R.balance("fleet:card:payable")).toBe(pay0);
+    expect(await R.balance("fleet:card:credit")).toBe(400);
+    expect(await R.balance("fleet:card:reserve")).toBe(await R.balance("fleet:card:payable"));
     expect(Number((await R.q(`SELECT count(*) AS n FROM fleet.fleet_card_repayments WHERE reference LIKE 'prefund:%'`))[0].n)).toBe(1);
     // The same transfer reference cannot fund another request.
     const r2 = (await ask({ amountMinor: 12_000 })).request;
@@ -132,6 +136,12 @@ describe.skipIf(!PG_BIN)("v54: card requests — PayPal first, the card last (Po
     const t = (await svc.query(`SELECT fleet.svc_card_requests_expire() AS r`)).rows[0].r;
     expect(t.expired).toBeGreaterThanOrEqual(1);
     expect(await events("card_request_expired")).toBe(1);
+    // v58: the unused transfer is card credit (it pays the next charges; the owner can record moving it back).
+    expect(await R.balance("fleet:card:credit")).toBe(400 + 11_000);
+    expect(await R.code(R.q(`SELECT fleet.fleet_admin_card_credit_return(99_999, 'pp-back-1', $1)`, [OWNER]))).toBe("FLEET_BAD_REQUEST");
+    expect((await R.one(`fleet.fleet_admin_card_credit_return(11_000, 'pp-back-1', $1)`, [OWNER])).creditMinor).toBe(400);
+    expect(await R.code(R.q(`SELECT fleet.fleet_admin_card_credit_return(100, 'pp-back-1', $1)`, [OWNER]))).toBe("FLEET_ALREADY_CLAIMED");
+    expect((await R.one(`fleet.fleet_ledger_verify()`)).ok).toBe(true);
     expect(await R.code(R.q(`UPDATE fleet.fleet_card_requests SET amount_minor = 1 WHERE request_id = $1`, [r.requestId]))).toMatch(/FLEET_HISTORY_IMMUTABLE|permission denied/);
     expect(await R.code(R.q(`SELECT fleet.fleet_admin_card_request_policy_set(-1, NULL, $1)`, [OWNER]))).toBe("FLEET_BAD_REQUEST");
     expect(await R.one(`fleet.fleet_admin_card_request_policy_set(20_000, 24, $1)`, [OWNER])).toMatchObject({ ok: true, ownerReviewAboveMinor: 20_000, validHours: 24 });
