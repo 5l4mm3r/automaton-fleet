@@ -107,7 +107,7 @@ Pins come from the build output, never from placeholders.
 Correct terminology matters here. A schema revert does **not** keep newer writes in the running system; the export it
 writes is **recovery evidence**.
 
-- **Fix forward (preferred).** v46–v59 only add. A code fix on schema 58 needs no restore and loses nothing.
+- **Fix forward (preferred).** v46–v59 only add. A code fix on schema 59 needs no restore and loses nothing.
 - **Code-only problem in the new release.** Use the release's own code-only revert. The database is untouched and all
   writes are kept.
 - **A schema revert to 45:**
@@ -289,11 +289,11 @@ Every production step runs in the owner's own terminal on the VPS (`ssh agentfle
 
 | # | Step | Who |
 |---|---|---|
-| A1 | **Done 2026-10-09** (8e71fd6): build and pins in `~/rlc58/pins.txt` — see `release-8e71fd6.md` | Claude |
-| A2 | **Done**: the candidate's release scripts in `~/rlc58/` (`~/fleet-rollout.sh` kept for the R41.1 rollback) | Claude |
-| A3 | **Done**: `~/rlc58/ui-0.12.0-8e71fd6.tgz`, SHA-256 verified on the VPS | Claude |
-| A4 | **Passed 2026-10-09 18:55Z** on a production copy (+ wallet / protection / Agent 2 checks); valid until 2026-10-10 18:55:43Z | Claude |
-| A5 | Cut over (authorization required; within the rehearsal window): `bash ~/rlc58/fleet-release.sh ~/rlc58/pins.txt 45 59 0.12.0 ~/rlc58/ui-0.12.0-8e71fd6.tgz 9c7474f554c4f59bfcbfaf0df53d401cc578dbfca6653e659cff02f58c4ced79`; read-only checks (§2 step 5) | Owner (or Claude on authorization) |
+| A1 | **Done 2026-10-09** (f021673): build and pins in `~/rlc59/pins.txt` — see `release-f021673.md` (supersedes `release-8e71fd6.md`) | Claude |
+| A2 | **Done**: the candidate's release scripts in `~/rlc59/` (`~/fleet-rollout.sh` kept for the R41.1 rollback) | Claude |
+| A3 | **Done**: `~/rlc59/ui-0.12.0-f021673.tgz`, SHA-256 verified on the VPS | Claude |
+| A4 | **Passed 2026-10-09 21:49Z** on a production copy (+ wallet / protection / founder checks); valid until 2026-10-10 21:49:54Z | Claude |
+| A5 | Cut over (authorization required; within the rehearsal window): `bash ~/rlc59/fleet-release.sh ~/rlc59/pins.txt 45 59 0.12.0 ~/rlc59/ui-0.12.0-f021673.tgz 9f1742fe071a1c42c97632545741ca01e10746630fdbfcefadc57d387e6db7f0`; read-only checks (§2 step 5) | Owner (or Claude on authorization) |
 
 ### B. Provider setup and onboarding (still no spending; agents not yet upgraded)
 

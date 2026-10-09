@@ -1,5 +1,7 @@
 # Release package — candidate 8e71fd6 (schema 45 → 58, dashboard 0.12.0)
 
+**Superseded by `release-f021673.md` (schema 45 → 59); do not cut over from `~/rlc58`.**
+
 Prepared and rehearsed 2026-10-09; **not deployed**. Production remains `fda78a0`, schema 45, all four safety flags false.
 
 ## Identity
