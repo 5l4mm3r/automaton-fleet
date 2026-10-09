@@ -117,3 +117,19 @@ skipped its sealed vault and published no key (startup log `custodyKey: null`). 
 - Rollback (only if needed): reinstall the `.pre-3f0eae6.bak` unit, `daemon-reload`, restart custody (the key file stays;
   credentials sealed to it remain readable once the directory is declared again).
 - Evidence (build VM): `~/fleet-release-evidence/custody-unit-3f0eae6/{pre,apply,verify,post}.txt`.
+
+## Onboarding B1 on production (owner-run / owner-authorized, 2026-10-09)
+
+- 23:01:52Z owner sealed `vault:paypal/treasury` in the dashboard (active, sealed to custody key `4fee40f2…`).
+- 23:03Z `economy-credential-register paypal vault:paypal/treasury payouts,receive_payments,refunds` → credential
+  `1b8d9039-c87f-4baa-918e-4cc1c79dbd65`; `economy-rail-add paypal shared receive_payments,refunds,payouts <masked
+  account> PayPal treasury --credential … --mode live` → rail `b71b3f3c-901c-4f22-818b-3e1b1269f420`, **pending_setup**,
+  every readiness check unverified.
+- 23:12:51Z owner set the rail's PayPal webhook id (`rail_webhook_set`).
+- 23:13:44Z (owner "go"): `/etc/automaton-fleet/custody.env` backed up as `custody.env.pre-return-urls.bak`; appended
+  `FLEET_PAYPAL_RETURN_URL=https://api.agentfleet.vip/v1/paypal/return` and `FLEET_PAYPAL_CANCEL_URL=…/v1/paypal/cancel`
+  (2 lines; still 0640 root:automaton-fleet-custody); custody restarted alone (active, 0 restarts, same key, execution
+  off, no signers). Both pages answer 200 through the public edge.
+- Throughout: flags false, custody execution off, 0 activations; founders unchanged. Next: readiness evidence from real
+  read-only probes (`economy-rail-verify`), then `economy-rail-status … active`, then the £1 receiving test (B2).
+- Evidence (build VM): `~/fleet-release-evidence/paypal-onboarding/`.
