@@ -27,6 +27,13 @@ import { gumroadAllowed, partUploadAllowed, centsOf, payoutRowType, type Storefr
 import { storefrontEnvProblems, oauthUrl, oauthExchange } from "../../fleet/storefront/main.js";
 import { BankFeedConnector, type BankFeedClient } from "../../fleet/settlement/bankfeed.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
+import { PgFleetStore } from "../../fleet/postgres/store.js";
+import { FleetService } from "../../fleet/service/server.js";
+import { FleetApiClient } from "../../fleet/service/client.js";
+import { UnsupportedSandboxTerminator } from "../../fleet/service/terminator.js";
+import { FounderToolbox } from "../../fleet/founder/toolbox.js";
+import { FOUNDER_MANIFEST_V2 } from "../../fleet/capabilities.js";
+import { LoopGuard } from "../../fleet/founder/loop-guard.js";
 
 const PG_BIN = findPgBin();
 const SELLER = "SELLERuser01";
@@ -295,6 +302,52 @@ describe.skipIf(!PG_BIN)("v52 storefront gateway (G3) and receipt evidence (G4) 
       expect(fs.statSync(path.join(dir, "gumroad~owner")).mode & 0o777).toBe(0o600);
       expect(JSON.stringify(ok)).not.toContain("gumroad-token-xyz");
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("over the real runtime path (founder toolbox → client → HTTP controller → database): storefront.product.* and a real file reach the registry", async () => {
+    const svcStore = new PgFleetStore({ connectionString: R.pgc.serviceUrl });
+    const service = new FleetService({ admin: svcStore, agent: R.gw, realReplicationEnabled: false, reaperIntervalMs: 0,
+      release: { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40), buildId: "d".repeat(64), lockfileSha256: "e".repeat(64) },
+      terminator: new UnsupportedSandboxTerminator(), cognitionProviderFactory: () => { throw new Error("no inference in this test"); } });
+    const url = (await service.listen(0, "127.0.0.1")).url;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sf-http-"));
+    try {
+      const client = new FleetApiClient({ baseUrl: url, agentId: F.id, token: F.token });
+      const ws = path.join(root, "w"), mem = path.join(root, "m");
+      fs.mkdirSync(ws); fs.mkdirSync(mem);
+      const box = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: ws, memoryDir: mem, loopGuard: new LoopGuard(), selfGovernance: true, ports: {
+        ledger: async () => ({}), spendOrder: async () => ({}), proposeKnowledge: async () => ({}), knowledge: async () => [], requestIdentityFact: async () => ({}),
+        economy: (op: string, args: Record<string, unknown>) => client.economy(op, args) } as never });
+      let n = 0;
+      const run = async (op: string, args: Record<string, unknown>) => {
+        const r = await box.execute({ id: `sfh${++n}`, name: "storefront", arguments: { op, args } });
+        return JSON.parse(r.output.slice(r.output.indexOf("{")));
+      };
+      // A three-part op through the controller: a real gateway job for this founder's venture (not FLEET_BAD_REQUEST at the edge).
+      const c = await run("create", { ventureKey: "printables", name: "Budget planner", priceMinor: 700, description: "A printable budget planner" });
+      expect(c, JSON.stringify(c)).toMatchObject({ ok: true, product: { state: "draft_creating" } });
+      expect((await R.q(`SELECT agent_id, kind FROM fleet.fleet_provider_jobs WHERE job_id = $1`, [c.jobId]))[0]).toMatchObject({ agent_id: F.id });
+      await worker.tick();
+      expect((await job(c.jobId)).status).toBe("succeeded");
+      // A real workspace file larger than the default 64 KB body: accepted for a session the database already accepted.
+      fs.writeFileSync(path.join(ws, "planner.pdf"), Buffer.concat([Buffer.from("%PDF-1.4 "), crypto.randomBytes(300_000)]));
+      const f = await run("file", { productRef: c.product.productRef, path: "planner.pdf" });
+      expect(f, JSON.stringify(f)).toMatchObject({ ok: true });
+      await worker.tick();
+      expect((await job(f.jobId)).status).toBe("succeeded");
+      const pub = await run("publish", { productRef: c.product.productRef });
+      expect(pub).toMatchObject({ ok: true });
+      // Unknown three-part names and anything longer still stop at the controller or the database.
+      expect(await client.economy("storefront.product.refund", {})).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+      expect(await client.economy("storefront.product.create.x", {})).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+      // An unproven session keeps the 64 KB body limit.
+      const stranger = new FleetApiClient({ baseUrl: url, agentId: G.id, token: G.token.replace(/.$/, (ch) => (ch === "a" ? "b" : "a")) });
+      await expect(stranger.economy("storefront.file", { contentB64: "A".repeat(200_000) })).rejects.toThrow();
+    } finally {
+      await service.close();
+      await svcStore.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("the audit stays clean; the ledger verifies", async () => {

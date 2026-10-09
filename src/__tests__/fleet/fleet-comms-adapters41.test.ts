@@ -136,6 +136,25 @@ describe("Proton Mail Bridge adapter (shared mailbox)", () => {
     await expect(p.send({ from: "someone@else.example", to: ["a@b.test"], subject: "s", body: "b" })).rejects.toThrow(/FLEET_MAIL_FOREIGN_SENDER/);
   });
 
+  it.skipIf(!HAS_OPENSSL)("v56: an order delivery's files go as attachments; a Bcc'd message is routed by its Delivered-To (ours only)", async () => {
+    const stream = nodemailer.createTransport({ streamTransport: true, buffer: true, newline: "unix" });
+    let raw = "";
+    const p = new ProtonBridgeMailProvider({ ...base(), smtpFactory: () => ({ sendMail: async (m) => {
+      const info = await stream.sendMail(m as never); raw = (info.message as Buffer).toString("utf8"); return { messageId: info.messageId }; } }) });
+    await p.send({ from: "fleet@proton.example", to: ["buyer@customer.test"], subject: "Your order", body: "Attached.",
+      attachments: [{ fileName: "planner-pack.pdf", contentType: "application/pdf", content: Buffer.from("%PDF-1.4 planner") }] });
+    expect(raw).toMatch(/Content-Type: application\/pdf; name=planner-pack\.pdf/);
+    expect(raw).toMatch(/Content-Disposition: attachment; filename=planner-pack\.pdf/);
+    expect(raw).toContain(Buffer.from("%PDF-1.4 planner").toString("base64"));
+    const bcc = Buffer.from(["Delivered-To: fleet+abc123def0@proton.example", "X-Original-To: someone@elsewhere.test", "From: List <list@news.test>",
+      "To: subscribers@news.test", "Subject: Digest", "Message-ID: <d1@news.test>", "Date: Thu, 01 Oct 2026 10:00:00 +0000", "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8", "", "digest body", ""].join("\r\n"));
+    const q = new ProtonBridgeMailProvider({ ...base(), imapFactory: fakeImap({ uidValidity: 3n, messages: [{ uid: 1, source: bcc }], log: [] }) });
+    const got = (await q.fetchShared(null)).messages[0];
+    expect(got.to).toEqual(["subscribers@news.test"]);
+    expect(got.cc).toEqual(["fleet+abc123def0@proton.example"]);
+  });
+
   it.skipIf(!HAS_OPENSSL)("errors are codes: an authentication failure never carries the password or the server's text", async () => {
     const authErr = Object.assign(new Error("AUTHENTICATIONFAILED bridge-generated-pw-123 rejected for fleet@proton.example"), { authenticationFailed: true });
     const p = new ProtonBridgeMailProvider({ ...base(), imapFactory: fakeImap({ uidValidity: 1n, messages: [], log: [], failConnect: authErr }),

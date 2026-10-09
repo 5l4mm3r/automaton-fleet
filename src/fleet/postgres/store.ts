@@ -2109,8 +2109,11 @@ export class PgFleetStore {
    * before exhaustion is judged).
    */
   async lifecycleTick(): Promise<{ cardHolds: Record<string, unknown>; availability: Record<string, unknown>; settlement: Record<string, unknown>;
-    insolvency: Record<string, unknown>; reductions: Record<string, unknown>; cardStatement: Record<string, unknown>; cardRequests: Record<string, unknown> }> {
-    const one = (sql: string) => this.tx(async (c) => (await c.query(sql)).rows[0].r as Record<string, unknown>);
+    insolvency: Record<string, unknown>; reductions: Record<string, unknown>; cardStatement: Record<string, unknown>; cardRequests: Record<string, unknown>;
+    deliveries: Record<string, unknown> }> {
+    // v56: each pass is isolated — one failing pass is reported in its own result and never skips the passes after it.
+    const one = (sql: string) => this.tx(async (c) => (await c.query(sql)).rows[0].r as Record<string, unknown>)
+      .catch((err: unknown) => ({ ok: false, error: (err instanceof Error ? err.message : String(err)).slice(0, 200) }) as Record<string, unknown>);
     return {
       cardHolds: await one("SELECT svc_card_holds_expire(50) AS r"),
       availability: await one("SELECT svc_paypal_availability(200) AS r"),
@@ -2122,6 +2125,8 @@ export class PgFleetStore {
       cardStatement: await one("SELECT svc_card_statement_tick() AS r"),
       // v54: card requests past their time expire.
       cardRequests: await one("SELECT svc_card_requests_expire() AS r"),
+      // v56: failed order deliveries are sent again with back-off.
+      deliveries: await one("SELECT svc_order_deliveries_retry(20) AS r"),
     };
   }
 

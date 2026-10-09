@@ -62,9 +62,10 @@ import { V52_SQL } from "./migrations-phase52.js";
 import { V53_SQL } from "./migrations-phase53.js";
 import { V54_SQL } from "./migrations-phase54.js";
 import { V55_SQL } from "./migrations-phase55.js";
+import { V56_SQL } from "./migrations-phase56.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 55;
+export const FLEET_PG_SCHEMA_VERSION = 56;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1215,6 +1216,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 53, name: "weekly_card_statement_owner_receiving_test", sql: V53_SQL },
   { version: 54, name: "card_rule_paypal_first_card_requests", sql: V54_SQL },
   { version: 55, name: "owner_survival_protection_switch", sql: V55_SQL },
+  { version: 56, name: "customer_orders_delivery_connectors", sql: V56_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1293,6 +1295,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_card_statement_tick()",
   // v54: open card requests past their time expire.
   "svc_card_requests_expire()",
+  // v56: failed order deliveries are sent again with back-off (never after a refund).
+  "svc_order_deliveries_retry(integer)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */
@@ -1374,6 +1378,9 @@ export const CUSTODY_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v49: the custody key (public half) and PayPal credentials sealed to it from the dashboard.
   "cx_publish_key(text, text, text)",
   "cx_sealed_credentials(text)",
+  // v56: the buyer's contact of a paid order, read from PayPal's own order record.
+  "cx_paypal_buyer_work(text, integer)",
+  "cx_paypal_buyer_record(text, uuid, jsonb)",
 ]);
 
 /** Per custody function: the only tables it may write and the only volatile fleet functions it may call. */
@@ -1397,11 +1404,15 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
     writes: ["fleet_paypal_checkouts", "fleet_revenue_claims", "fleet_venture_journals", "fleet_paypal_availability"],
     calls: ["fleet_ledger_post", "fleet_event"],
   },
-  cx_paypal_refund_record: { writes: ["fleet_revenue_claims", "fleet_venture_journals", "fleet_paypal_availability"], calls: ["fleet_ledger_post", "fleet_event"] },
-  cx_paypal_txn_record: { writes: ["fleet_paypal_transactions"], calls: [] },
+  // v56: a refund / reversal also reaches the customer order (fleet_order_refunded).
+  cx_paypal_refund_record: { writes: ["fleet_revenue_claims", "fleet_venture_journals", "fleet_paypal_availability"], calls: ["fleet_ledger_post", "fleet_event", "fleet_order_refunded"] },
+  // v56: a reversal seen only in Transaction Search is raised for the owner.
+  cx_paypal_txn_record: { writes: ["fleet_paypal_transactions"], calls: ["fleet_event"] },
   cx_paypal_balance_record: { writes: ["fleet_paypal_balance_observations"], calls: [] },
   cx_publish_key: { writes: ["fleet_custody_keys"], calls: ["fleet_event"] },
   cx_sealed_credentials: { writes: [], calls: [] },
+  cx_paypal_buyer_work: { writes: [], calls: [] },
+  cx_paypal_buyer_record: { writes: ["fleet_customer_orders"], calls: [] },
 });
 
 /** Schema v34: the only functions the identity broker's role may execute (fleet_identity; ix_* protocol). */
@@ -1454,6 +1465,9 @@ export const IDENTITY_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v51: mail / SMS provider secrets sealed to the broker from the dashboard (onboarding).
   "ix_provider_secret_inbox(text)",
   "ix_provider_secret_installed(uuid, text, boolean, text)",
+  // v56: an order delivery's files (sent as attachments), and the dedicated account connectors the broker has.
+  "ix_mail_attachments(uuid, text)",
+  "ix_connectors_publish(text, jsonb)",
 ]);
 
 /** Schema v37: the browser worker's whole database surface (bx_*): claim an action, report it, ask for / take a sealed secret. */

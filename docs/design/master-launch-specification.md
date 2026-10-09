@@ -11,7 +11,11 @@ storefront and settlement; its G3/G4 stages are now built (v52).
 It adds schema v53 (the weekly card statement, the owner's receiving test) and UI 0.11.0.
 
 Revision 3 also adds O17 (2026-10-09: PayPal first, the card by request) and schema v54, and O18 (the survival protection
-switch, schema v55). Nothing else changes.
+switch, schema v55).
+
+**Revision 4 (2026-10-09 evening)** records the owner's exact words for O17 / O18 (§1.3) and adds schema v56: customer orders
+and delivery, the storefront path over HTTP, truthful account creation, estates for the newer money states, refunds caught by
+Transaction Search, isolated reaper passes and stricter scrubbing (§16). No owner decision changes.
 
 **Scope of authority.** The owner authorized local implementation, validation, commit and push of a reviewed candidate.
 Not authorized yet, and not done:
@@ -55,16 +59,49 @@ reviewed migration without re-opening an owner decision.
 | O6 | Mail is one Proton shared mailbox, one alias per agent. | Handoff answers |
 | O7 | Agents must earn to survive. **Wallet exhaustion means death**, not dormancy awaiting rescue. No automatic overdraft or bailout. | Completion handoff |
 | O8 | Fleet Control is the bank: it decides capital requests automatically from evidence, economics, downside, commitments and treasury health; new agents need no profit history; it does not approve ordinary commercial decisions. | Completion handoff |
-| O9 | Shared capital is spent only under a recorded Fleet Control allocation, never per-transaction owner approval. | Completion handoff |
+| O9 | Shared capital is spent only under a recorded Fleet Control allocation, never per-transaction owner approval. (The one owner step in spending is O17's card exception, §1.3.) | Completion handoff |
 | O10 | The dynamic net-profit sweep, with temporary reductions that expire and revert. No fixed own-capital thresholds, no synthetic tax deductions, no £100/order or £50/day owner thresholds. | Earlier and completion handoffs |
 | O11 | Document submission under the standing authority is wanted. Only genuine human-verification steps stay with the owner. | Completion handoff |
 | O12 | Gumroad is one channel. 62cbe1b7 and 6178c7bb stay pending until their requirements are evidenced. | Completion handoff |
-| O13 | Initial setup and live activation are separate from ordinary autonomous operation. There are no routine renewals and no recurring transaction approvals merely as a precaution. | Completion handoff |
+| O13 | Initial setup and live activation are separate from ordinary autonomous operation. There are no routine renewals and no recurring transaction approvals merely as a precaution. **Exception (O17, card only):** a card request above £100 waits for the owner, who funds the card from the treasury first. Ordinary agent spending (PayPal payouts, envelope spend, own-capital decisions) has no owner approval and no £100 threshold. | Completion handoff |
 | O14 | No forced journaling or action, no permanent opportunity weights, no compulsory study, no arbitrary business-model restrictions. | Earlier handoffs |
 | O15 | The treasury PayPal stays the owner's own account — **upgraded to Business as an individual**. This is an experiment, not a company: no company, VAT or business-admin gates (live API keys and selling need a Business account; an individual one is enough). | Owner, 2026-10-08 evening |
-| O18 | **Survival protection switch.** A fleet-wide owner fail-safe over "exhaustion is death": ON by default (from the cutover) — an exhausted agent is reported, not ended — until the owner goes live; shown on every dashboard page, hideable in Settings. | Owner, 2026-10-09 |
+| O18 | **Survival protection switch.** A fleet-wide owner fail-safe over "exhaustion is death": ON by default (from the cutover) — an exhausted agent is reported, not ended — until the owner goes live; shown on every dashboard page, hideable in Settings. **A setup safeguard, not the operating model:** the intended live model is O7 — actual wallet exhaustion means death. Protection is turned off ("Live") by the owner once the accounts are linked. | Owner, 2026-10-09 |
 | O17 | **PayPal first; the card is the last option.** An agent asks Fleet Control for the card only when PayPal truly cannot pay, within its own wallet. Fleet Control approves up to £100; above that the owner decides and funds the card from the treasury first. This replaces the earlier "no £100/order owner threshold" note (O10) for card use only. | Owner, 2026-10-09 |
 | O16 | The card on file is the owner's **credit card**. Charges are taken from the treasury (agent wallets / allocations) at once. A **weekly card statement** lists the charges and the amount owed; the owner moves that amount from the treasury PayPal to the card and marks it paid. | Owner, 2026-10-08 evening |
+
+### 1.3 The owner's own words (verbatim, from the session record) and their exact scope
+
+**O17 — the card and its £100 threshold** (owner, 2026-10-09, 10:07Z; earlier the same morning: "card limits is to be weighed up
+against the agents wallet, its not an open cash pool - its the last option otherwise they use their fleet.treasury paypal
+accounts", and "cap is limited to the agents wallet, if wallet is higher than the requested card spendature then ill withdraw
+funds from treasury/agents wallet so the card can be used"):
+
+> "for spendatures, yes - its only if paypal is truly not available then it can reuqest to fleet control to use the card where
+> fleet control will submit that to me if its more than 100gbp where ill have to withdraw from treasury before the card can be
+> used - so to prevent the delay, prioritise paypal unless its the only way to proceed with a survival opportunity which then
+> ill be happy to assist them with thier survival and withdraw from treasury so they can use the encrypted card"
+
+Scope as built (v54), and nothing wider:
+- it applies **only to use of the owner's card**, and only when PayPal cannot pay;
+- the amount must be within the agent's own wallet (or its envelope) — the card is never an open pool;
+- up to £100 Fleet Control approves at once; above £100 the owner decides and funds the card from the treasury first;
+- it is **not** extended to ordinary agent spending: PayPal payouts, envelope spend and own-capital decisions have no owner
+  approval and no £100 threshold (O9, O10, O13 unchanged).
+
+**O18 — the survival protection switch and deferred founder upgrades** (owner, 2026-10-09, 10:54Z):
+
+> "push - just update admin.agentfleet.vip - dont set agents in motion as they will die - i need to link the account and we can
+> have a live toggle on and off feature that will protect agents dying with the users control which should be visible on all
+> pages but not an eye sore - but visible enough to be a fail safe if the user chooses to use it"
+
+Scope as built (v55):
+- a fleet-wide owner toggle, ON from the migration (an exhausted agent is reported, not ended), shown in the header of every
+  page and hideable in Settings; per-agent overrides added at the owner's request in the same session;
+- the founders are **not** upgraded at cutover ("dont set agents in motion"); they stay on fda78a0 until the owner says the
+  accounts are linked;
+- **setup protection is not the operating model.** The intended live model is O7: actual wallet exhaustion means death. The
+  owner switches protection to "Live" when the accounts are linked; from then the reaper ends an exhausted agent.
 
 ### 1.2 Implementation choices (reviewable)
 
@@ -417,7 +454,7 @@ provider link and the revealed credentials.
 
 ---
 
-## 11. Dashboard (UI 0.11.0; v53 adds the weekly statement and the receiving test)
+## 11. Dashboard (UI 0.12.0; v53 adds the weekly statement and the receiving test, v54 card requests, v55 the survival switch)
 
 **Treasury**
 - health;
@@ -445,7 +482,7 @@ provider link and the revealed credentials.
 
 Each step needs explicit owner authorization; none has been done.
 
-1. **Deploy** 45 → 55 (§13). The gateway installs dormant (no token).
+1. **Deploy** 45 → 56 (§13). The gateway installs dormant (no token).
 2. **PayPal:**
    1. create a Live REST app and request Payouts;
    2. seal its credentials in the dashboard;
@@ -476,7 +513,7 @@ Each step needs explicit owner authorization; none has been done.
 ### 13.1 Compatibility
 
 - Every component refuses any schema but its own. Production runs schema 45 with fda78a0.
-- v46–v55 only **add**: new tables and columns, restated functions, and new or replaced constraints on tables with no
+- v46–v56 only **add**: new tables and columns, restated functions, and new or replaced constraints on tables with no
   production rows yet.
 - **Behaviour changes for the two living agents after deploy:**
   - exhaustion is death;
@@ -489,17 +526,18 @@ Each step needs explicit owner authorization; none has been done.
 ### 13.2 Deploy
 
 1. Build on the VPS; take the pins from the build output.
-2. Run `fleet-rollout.sh rehearse <pins> 45 55` on the production copy. Expect:
+2. Run `fleet-rollout.sh rehearse <pins> 45 56` on the production copy. Expect:
    - a clean audit;
    - a verified ledger;
    - no journal or balance change;
    - no agent exhausted.
-3. Run `fleet-release.sh … 45 55`. It writes one `production_deployed` event and promotes UI 0.11.0.
-4. Upgrade the founders: Agent 2 first, then Founder 1.
+3. Run `fleet-release.sh … 45 56`. It writes one `production_deployed` event and promotes UI 0.12.0.
+4. Upgrade the founders — **not at cutover** (owner, 2026-10-09): only once the owner says the accounts are linked; Agent 2
+   first, then Founder 1.
 
 ### 13.3 Recovery (correct terms)
 
-- **Preferred: fix forward.** A code fix on schema 55 needs no restore and loses nothing.
+- **Preferred: fix forward.** A code fix on schema 56 needs no restore and loses nothing.
 - **A schema revert to 45 does not preserve newer writes in the running system.** `fleet-rollout.sh revert`:
   1. exports every post-cutover row and journal as **recovery evidence** (`*-post-cutover-*.dump`);
   2. refuses to continue until those are reconciled and acknowledged (`FLEET_REVERT_DISCARD_ACK=<journals>:<events>`);
@@ -554,6 +592,14 @@ Each step needs explicit owner authorization; none has been done.
 | Knowledge: no invented rules; sourced vs recommended | revision 2 (v51) | IMPLEMENTED, LOCALLY VERIFIED |
 | Activation: pilot vs ongoing; no routine renewals | v51 (§12) | IMPLEMENTED, LOCALLY VERIFIED |
 | Correct recovery terminology and plan | §13.3 | IMPLEMENTED (documentation) |
+| Storefront product operations reach the registry over HTTP (controller allow-list of the three-part ops; workspace files beyond 32 kB) | v56 + `src/fleet/service/server.ts` | IMPLEMENTED, LOCALLY VERIFIED (founder toolbox → client → HTTP → database) |
+| Customer orders: agent-isolated, buyer from PayPal's order record, payment only on PayPal's evidence, refunds reach the order | v56 (`fleet_customer_orders`, `cx_paypal_buyer_*`) | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal) |
+| Delivery of digital orders by mail with attachments; delivered only on provider acceptance; retries; duplicate protection | v56 + identity broker + Proton adapter | IMPLEMENTED, LOCALLY VERIFIED (simulated shared mailbox) |
+| Service orders fulfilled only with evidence | v56 `order.fulfil` | IMPLEMENTED, LOCALLY VERIFIED |
+| account.create truthful without a connector | v56 (`fleet_identity_connectors`) | IMPLEMENTED, LOCALLY VERIFIED |
+| Estates settle the v48+ money states (held money, holds, payables, late money) | v56 | IMPLEMENTED, LOCALLY VERIFIED |
+| Refunds missed by webhooks posted from Transaction Search (shortfall only); reversals raised | v56 | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal) |
+| Dashboard: orders; Gumroad sales, payouts and settlement | UI (MoneyPanels) | IMPLEMENTED (typecheck/lint/build) |
 
 ---
 
@@ -561,20 +607,54 @@ Each step needs explicit owner authorization; none has been done.
 
 1. **The card.** The owner's credit card (O16): its number on file, and the weekly repayment (bank → card).
 2. **PayPal.**
-   - the treasury account upgraded to Business as an individual (O15);
+   - the treasury account upgraded to Business as an individual (O15) — **done 2026-10-09** (account type only, not API
+     readiness);
    - a Live REST app, with Payouts approval;
    - a webhook subscription;
    - real readiness probes;
    - account holds and reserves are under PayPal's control.
-3. **Proton.** Mail Bridge on the host (interactive sign-in), and a paid Proton plan for the shared address.
+3. **Proton.** Mail Bridge on the host (interactive sign-in), and a paid Proton plan for the shared address. Order delivery and
+   every agent e-mail depend on it: without Bridge, `order.deliver` answers `FLEET_CAPABILITY_NOT_CONFIGURED` and the order
+   waits.
 4. **Twilio.** Only if SMS or numbers are wanted: an account, plus the UK regulatory bundle.
 5. **Gumroad.**
    - a seller account in the owner's true identity;
    - an OAuth application;
    - email confirmed and a payout method set;
    - Stripe identity verification (owner-only);
-   - a choice of payouts to PayPal (preferred; matched automatically) or to a bank.
+   - a choice of payouts to PayPal (preferred; matched automatically) or to a bank. **Whether this owner's Gumroad account can
+     pay out to PayPal is not yet checked** (it depends on Gumroad's current payout methods for the account's country); if it
+     cannot, Gumroad payouts need the bank-feed provider or the labelled pilot attestation.
 6. **Bank feed.** A read-only account-information provider, needed only if Gumroad pays out to a bank.
 7. **Live API shapes.**
    - Gumroad: fields marked "B" in the Gumroad design are verified only by the first real probe and pilot.
    - PayPal: verified only by the first real capture and payout.
+
+---
+
+## 16. Schema v56 (revision 4)
+
+- **Orders.** `paypal.checkout` takes `fulfilment` (`digital_file` | `service`) and creates the agent's order. Payment follows
+  PayPal's evidence (captured → paid; refund / reversal → refunded). Custody reads the buyer (payer e-mail, name, country)
+  from PayPal's order record after capture (`cx_paypal_buyer_work` / `cx_paypal_buyer_record`).
+- **Privacy.** Only the agent's own `order.list` shows the buyer; the owner's dashboard masks it; no event carries it; shared
+  knowledge is scrubbed of e-mails, phones, cards, bank numbers and postcodes in any letter case.
+- **Delivery.** `order.deliver` mails 1–5 workspace files (15 MB together) to the buyer from the shared address through the
+  broker's ordinary `mail.send` job. The order becomes `delivered` only when the provider accepted the message. A failed send
+  is retried by the reaper (15 min, 1 h, 4 h, 16 h; five attempts), one message at a time, never after a full refund.
+  Duplicates are refused (an active delivery, or an already delivered order without `resendReason`).
+- **Service orders.** `order.fulfil` needs a sent message to the buyer or a note of what was delivered.
+- **Transport.** The controller allows the storefront's three-part op names by an explicit list; a proven session may send a
+  body of up to 21 MB to `/v1/economy`; `api_economy` allows file-carrying ops a 21 MB argument (others keep 32 kB).
+- **Accounts.** `account.create` answers `FLEET_NO_CONNECTOR` at once unless the broker has published a connector for that
+  platform (none ships); the tool text points to `register_account` + browser.
+- **Estates.** Settlement waits for held PayPal money, pending captures and open card holds; repays the payable from cash;
+  writes off the rest against the treasury's advance (`estate_payable_writeoff`); money reaching a settled estate later goes
+  to the treasury.
+- **Refunds.** Transaction Search posts a refund (T1107) no webhook reported, for the shortfall only; a reversal or
+  chargeback seen only there is raised (P1 `paypal_reversal_seen`). A REVERSED webhook linking "up" to its capture is matched.
+- **Reaper.** Each lifecycle pass is isolated; a failed pass is reported; a failed sweep run is retried.
+- **Open for review (not changed):** settling a card receipt by `card_balance` books the swept share as an owner withdrawal
+  (`fleet_admin_card_receipt_settle`); whether the treasury should hold that share instead is an accounting-policy question.
+  Dispute / chargeback fees are not yet posted automatically (no `CUSTOMER.DISPUTE.*` handling).
+

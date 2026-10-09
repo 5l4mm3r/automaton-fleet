@@ -156,7 +156,7 @@ export class ProtonBridgeMailProvider implements MailProvider {
             const files = (p.attachments ?? []).map((x) => `${x.filename ?? "attachment"} (${Math.ceil((x.size ?? 0) / 1024)} KB)`);
             const text = (p.text ?? (typeof p.html === "string" ? p.html.replace(/<[^>]+>/g, " ") : "") ?? "").replace(/\s+$/, "").slice(0, 98_000);
             messages.push({ providerId, messageId: p.messageId ?? null, inReplyTo: p.inReplyTo ?? null, references: refs.filter(Boolean).slice(0, 50),
-              from: String(p.from?.text ?? "(unknown sender)").slice(0, 200), to: addresses(p.to), cc: addresses(p.cc), subject: String(p.subject ?? "").slice(0, 300),
+              from: String(p.from?.text ?? "(unknown sender)").slice(0, 200), to: addresses(p.to), cc: [...addresses(p.cc), ...this.envelopeRecipients(p.headers)], subject: String(p.subject ?? "").slice(0, 300),
               body: files.length ? `${text}\n\n[attachments: ${files.join(", ").slice(0, 1500)}]` : text, at: (p.date ?? new Date(at)).toISOString() });
           }
           last = Math.max(last, uid);
@@ -170,6 +170,27 @@ export class ProtonBridgeMailProvider implements MailProvider {
     }
   }
 
+  /**
+   * v56: a Bcc'd or list-relayed message names our routing address only in the envelope headers (Delivered-To / X-Original-To);
+   * those of our own mailbox are added so the registry can still attribute it (others are ignored).
+   */
+  private envelopeRecipients(headers: Map<string, unknown> | undefined): string[] {
+    if (!headers) return [];
+    const [bl, bd] = this.address.split("@");
+    const out: string[] = [];
+    for (const h of ["delivered-to", "x-original-to"]) {
+      const v = headers.get(h);
+      // mailparser gives a string, or an address object ({ text, value }) for headers it recognises.
+      const vals = (Array.isArray(v) ? v : v === undefined ? [] : [v])
+        .flatMap((x: any) => (x && typeof x === "object" && Array.isArray(x.value) ? x.value.map((a: any) => String(a?.address ?? "")) : [String(x?.text ?? x)]));
+      for (const raw of vals.map((x) => x.trim().toLowerCase())) {
+        const m = /^<?([^<>\s@]+)@([^<>\s@]+)>?$/.exec(raw);
+        if (m && m[2] === bd && (m[1] === bl || m[1].startsWith(`${bl}+`)) && !out.includes(`${m[1]}@${m[2]}`)) out.push(`${m[1]}@${m[2]}`);
+      }
+    }
+    return out.slice(0, 10);
+  }
+
   async send(input: OutgoingMail): Promise<{ providerMessageId: string; externalMessageId: string }> {
     if (input.from.trim().toLowerCase() !== this.address) throw new Error("FLEET_MAIL_FOREIGN_SENDER");
     const messageId = input.messageId ?? `<${crypto.randomUUID()}@${this.address.split("@")[1]}>`;
@@ -178,6 +199,7 @@ export class ProtonBridgeMailProvider implements MailProvider {
       const info = await t.sendMail({ from: this.address, to: input.to, subject: input.subject, text: input.body,
         replyTo: input.replyTo ?? undefined, messageId, inReplyTo: input.inReplyTo ?? undefined,
         references: input.references && input.references.length ? input.references : input.inReplyTo ? [input.inReplyTo] : undefined,
+        attachments: input.attachments?.length ? input.attachments.map((a) => ({ filename: a.fileName, contentType: a.contentType, content: a.content })) : undefined,
         envelope: { from: this.address, to: input.to }, disableFileAccess: true, disableUrlAccess: true });
       return { providerMessageId: String(info.messageId ?? messageId), externalMessageId: messageId };
     } catch (err) {

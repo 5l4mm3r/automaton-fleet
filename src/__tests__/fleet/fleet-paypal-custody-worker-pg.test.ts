@@ -74,6 +74,14 @@ function fakePayPal() {
       const b = JSON.parse(init.body!);
       return json(200, { verification_status: b.transmission_sig === "good-signature" && b.webhook_id === "WH1234567890ABCD" ? "SUCCESS" : "FAILURE" });
     }
+    // v56: the order record, with the payer (the buyer's contact for delivery).
+    const ord = /^\/v2\/checkout\/orders\/([A-Z0-9]+)$/.exec(u.pathname);
+    if (init.method === "GET" && ord) {
+      const o = orders.get(ord[1]);
+      if (!o) return json(404, {});
+      return json(200, { id: o.id, status: o.capture ? "COMPLETED" : "APPROVED", payer: { email_address: "Ada.Buyer@Example.test", name: { given_name: "Ada", surname: "Buyer" },
+        address: { country_code: "GB" }, payer_id: "PAYERADA0001" } });
+    }
     if (init.method === "GET" && u.pathname === "/v1/reporting/transactions") return json(200, { transaction_details: txns, total_pages: 1 });
     if (init.method === "GET" && u.pathname === "/v1/reporting/balances") {
       return json(200, { balances: [{ currency: "GBP", primary: true, available_balance: { value: "123.45", currency_code: "GBP" }, total_balance: { value: "130.00", currency_code: "GBP" } }] });
@@ -179,6 +187,49 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury worker end to end (PostgreSQL + HT
     await worker.tick();
     expect(await cash()).toBe(before - 500);
     expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_revenue_claims WHERE claim_key = 'paypal:refund:RF0000000001')`)).toBe(1);
+  });
+
+  it("v56: the buyer returns from PayPal to a static page (nothing read, nothing recorded)", async () => {
+    for (const [p, text] of [["/v1/paypal/return?token=X&PayerID=Y", "Thank you for your order"], ["/v1/paypal/cancel", "Payment cancelled"]] as const) {
+      const r = await fetch(`${base}${p}`);
+      expect(r.status).toBe(200);
+      expect(r.headers.get("content-type")).toMatch(/^text\/html/);
+      expect(r.headers.get("content-security-policy")).toMatch(/default-src 'none'/);
+      expect(await r.text()).toContain(text);
+    }
+  });
+
+  it("v56: the order behind a paid checkout learns its buyer from PayPal's order record — visible to the agent only, never in events", async () => {
+    const orders = (await R.econ(F, "order.list", {})).orders;
+    const paid = orders.find((o: any) => o.payment === "partially_refunded" || o.payment === "paid");
+    expect(paid).toMatchObject({ fulfilment: "service", refundedMinor: 500 }); // the refund above reached the order
+    expect(paid.buyer).toMatchObject({ email: "ada.buyer@example.test", name: "Ada Buyer", country: "GB" });
+    expect(pp.calls.filter((c) => /^GET \/v2\/checkout\/orders\/O/.test(c)).length).toBe(1); // read once
+    expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_events WHERE detail::text ILIKE '%ada.buyer%')`)).toBe(0);
+  });
+
+  it("v56: Transaction Search posts a refund no webhook reported — only the shortfall, once; a reversal linking 'up' reaches its capture", async () => {
+    const [o] = [...pp.orders.values()];
+    const refundRow = (tid: string, value: string) => ({ transaction_info: { transaction_id: tid, transaction_event_code: "T1107", transaction_initiation_date: new Date().toISOString(),
+      transaction_status: "S", transaction_amount: { value, currency_code: "GBP" }, fee_amount: { value: "0.00", currency_code: "GBP" }, paypal_reference_id: o.capture!.id } });
+    // The 5.00 refund the webhook already posted (another id in Search): nothing more is posted.
+    pp.txns.push(refundRow("RFSEARCH0001", "-5.00"));
+    const before = await cash();
+    await worker.tick();
+    expect(await cash()).toBe(before);
+    // A further 3.00 refund only Search shows: posted once, under its transaction id.
+    pp.txns.push(refundRow("RFSEARCH0002", "-3.00"));
+    await worker.tick();
+    await worker.tick();
+    expect(await cash()).toBe(before - 300);
+    expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_revenue_claims WHERE claim_key LIKE 'paypal:refund:RFSEARCH%')`)).toBe(1);
+    // A reversal whose resource links "up" to the capture is recorded against that capture.
+    await deliver({ id: "WH-REVERSED-0001", event_type: "PAYMENT.CAPTURE.REVERSED", resource: { id: "RV0000000001", amount: { value: "-1.00", currency_code: "GBP" },
+      links: [{ rel: "up", href: `https://api.paypal.com/v2/payments/captures/${o.capture!.id}` }] } }, "good-signature");
+    await worker.tick();
+    expect(await cash()).toBe(before - 400);
+    expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_revenue_claims WHERE claim_key = 'paypal:refund:REV-RV0000000001')`)).toBe(1);
+    expect((await R.econ(F, "order.list", {})).orders.find((x: any) => x.checkoutId === o.checkoutId)).toMatchObject({ refundedMinor: 900 });
   });
 
   it("a capture whose response was lost is found by Transaction Search and posted exactly once; balances are observed", async () => {

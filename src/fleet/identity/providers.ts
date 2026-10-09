@@ -46,6 +46,8 @@ export interface OutgoingMail {
   replyTo?: string | null;
   messageId?: string | null;
   references?: string[] | null;
+  /** v56: files sent with the message (an order's delivery). */
+  attachments?: Array<{ fileName: string; contentType: string; content: Buffer }> | null;
 }
 
 /** v41: one inbound message of a shared mailbox (the registry attributes it). */

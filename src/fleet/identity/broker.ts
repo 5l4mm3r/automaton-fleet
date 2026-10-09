@@ -108,6 +108,8 @@ export class IdentityBroker {
     this.mailChannel = providers.find((p) => p.capability === "mail")?.providerId ?? null;
     this.smsChannel = providers.find((p) => p.capability === "sms")?.providerId ?? null;
     if (this.o.providerVault) await this.gw.providerSecretsPublish(this.worker, this.o.providerVault.list());
+    // v56: account.create is offered only for the platforms this broker has a dedicated connector for (none ships today).
+    if (this.gw.connectorsPublish) await this.gw.connectorsPublish(this.worker, [...this.connectors.keys()]);
     this.registered = true;
     this.log("info", "comms_providers_registered", { mail: this.mail ? `${this.mail.name}/${this.mail.mode ?? "dedicated"}` : "NOT_CONFIGURED",
       sms: this.sms?.name ?? "NOT_CONFIGURED" });
@@ -600,8 +602,15 @@ export class IdentityBroker {
         const domain = (this.mail.address ?? m.from).split("@")[1] ?? "fleet.invalid";
         const messageId = `<${crypto.randomUUID()}@${domain}>`;
         try {
+          // v56: an order delivery carries its files; all of them, or the send fails (and is retried by the registry).
+          let attachments: Array<{ fileName: string; contentType: string; content: Buffer }> | null = null;
+          if (job.attachments?.length) {
+            const a = this.gw.mailAttachments ? await this.gw.mailAttachments(job.jobId, lease) : null;
+            if (!a?.ok || (a.attachments ?? []).length !== job.attachments.length) throw new Error("FLEET_MAIL_ATTACHMENT_MISSING");
+            attachments = a.attachments!.map((x) => ({ fileName: x.fileName, contentType: x.contentType, content: Buffer.from(x.contentB64, "base64") }));
+          }
           const r = await this.mail.send({ from: m.from, to: m.to, subject: m.subject, body: m.body, inReplyTo: m.inReplyTo,
-            replyTo: m.shared ? m.replyTo ?? null : null, messageId, references: m.references ?? null });
+            replyTo: m.shared ? m.replyTo ?? null : null, messageId, references: m.references ?? null, attachments });
           await this.gw.mailSent2(job.jobId, lease, r.providerMessageId, r.externalMessageId ?? messageId, true, null);
           return { outcome: "succeeded", result: { status: "sent", data: { messageId: m.messageId } }, account: {} };
         } catch (err) {

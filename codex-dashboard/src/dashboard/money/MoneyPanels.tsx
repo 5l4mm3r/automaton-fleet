@@ -122,6 +122,8 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
   const store = useRead<Row>(client, "storefront", {}, []);
   const ptest = useRead<Row>(client, "paypal_test", {}, []);
   const creq = useRead<Row>(client, "card_requests", {}, []);
+  // v56: customer orders (buyer masked; the agent keeps the contact) — payment, fulfilment, delivery.
+  const orders = useRead<Row>(client, "customer_orders", {}, []);
   const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); creq.reload(); };
   const call = useCallback(async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); reloadAll(); return r; }, [client]); // eslint-disable-line react-hooks/exhaustive-deps
   const name = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
@@ -246,7 +248,30 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
       </div>) : <p className="text-sm text-slate-400">No Gumroad account registered (economy-provider-account-register on the host; then the gateway’s OAuth onboarding).</p>}
       <p className="mt-2 text-sm">Products: {(store.data.products as Row[]).length} · sales read back: {store.data.sales} · payouts: {store.data.payouts}</p>
       <ul className="text-sm">{(store.data.products as Row[]).slice(0, 20).map((p) => <li key={p.productRef} className="border-t border-slate-800 py-1">{name(p.agentId)} · {p.name} · {p.state}{p.warning ? ` · ${p.warning}` : ""}{p.url ? <> · <a className="text-cyan-300 underline" href={p.url} target="_blank" rel="noopener noreferrer">open</a></> : ""}</li>)}</ul>
+      <p className="mt-3 text-xs tracking-widest text-slate-400">SALES (memo until Gumroad pays out; Gumroad delivers the files)</p>
+      {(store.data.recentSales as Row[] ?? []).length ? <table className="w-full text-sm"><tbody>{(store.data.recentSales as Row[]).slice(0, 20).map((x) => <tr key={x.saleId} className="border-t border-slate-800">
+        <td>{String(x.at).slice(0, 10)}</td><td>{x.agentId ? name(x.agentId) : "unattributed"}</td><td>{x.product ?? "—"}</td>
+        <td>${(x.priceMinor / 100).toFixed(2)} (fee ${(x.feeMinor / 100).toFixed(2)})</td>
+        <td className={x.refunded || x.chargedback || x.disputed ? "text-amber-300" : ""}>{x.refunded ? "refunded" : x.partiallyRefunded ? "partly refunded" : x.chargedback ? "charged back" : x.disputed ? "disputed" : x.fulfilment}</td></tr>)}</tbody></table>
+        : <p className="text-sm text-slate-400">No sales read back yet.</p>}
+      <p className="mt-3 text-xs tracking-widest text-slate-400">PAYOUTS AND SETTLEMENT</p>
+      {(store.data.recentPayouts as Row[] ?? []).length ? <table className="w-full text-sm"><tbody>{(store.data.recentPayouts as Row[]).map((x) => <tr key={x.payoutId} className="border-t border-slate-800">
+        <td>{x.processedAt ? String(x.processedAt).slice(0, 10) : "—"}</td><td>{x.currency} {(x.amountMinor / 100).toFixed(2)} · {x.lines} line(s)</td><td>{x.status}</td>
+        <td className={x.settlement.startsWith("received") ? "text-emerald-300" : "text-slate-400"}>{x.settlement}{x.receipt ? ` (${x.receipt.evidence}, ${x.receipt.status})` : ""}</td></tr>)}</tbody></table>
+        : <p className="text-sm text-slate-400">No payouts yet.</p>}
     </> : <p className="text-sm text-slate-400">{store.error || "Reading…"}</p>}</Panel>
+
+    <Panel title="Customer orders (PayPal checkouts)">{orders.data ? <>
+      <p className="text-sm">{Object.entries(orders.data.counts as Record<string, number>).map(([k, n]) => `${k.replace(/_/g, " ")}: ${n}`).join(" · ") || "No orders yet."}</p>
+      <p className="mt-1 text-xs text-slate-400">An order is fulfilled only by its agent: a file delivered by mail (once the provider accepted it; failed sends retry automatically) or a service recorded with evidence. Buyers are masked here; each agent keeps its own customers&apos; contacts.</p>
+      {(orders.data.orders as Row[]).length ? <table className="mt-2 w-full text-sm"><tbody>{(orders.data.orders as Row[]).slice(0, 30).map((o) => <tr key={o.orderId} className="border-t border-slate-800">
+        <td>{String(o.createdAt).slice(0, 10)}</td><td>{name(o.agentId)}</td><td>{o.item}</td><td>{o.currency} {(o.amountMinor / 100).toFixed(2)}</td>
+        <td>{o.payment.replace(/_/g, " ")}{o.refundedMinor ? ` (${o.currency} ${(o.refundedMinor / 100).toFixed(2)} back)` : ""}</td>
+        <td>{o.buyer ? `${o.buyer.email}${o.buyer.country ? ` · ${o.buyer.country}` : ""}` : o.buyerPending ? "buyer: reading from PayPal" : "—"}</td>
+        <td className={o.status === "delivery_failed" ? "text-red-300" : o.status === "delivered" || o.status === "fulfilled" ? "text-emerald-300" : ""}>
+          {o.status.replace(/_/g, " ")}{o.delivery && o.status !== "delivered" ? ` · delivery ${o.delivery.status}${o.delivery.attempts > 1 ? ` (attempt ${o.delivery.attempts})` : ""}${o.delivery.lastError ? ` · ${o.delivery.lastError}` : ""}` : ""}</td></tr>)}</tbody></table>
+        : null}
+    </> : <p className="text-sm text-slate-400">{orders.error || "Reading…"}</p>}</Panel>
   </>;
 }
 

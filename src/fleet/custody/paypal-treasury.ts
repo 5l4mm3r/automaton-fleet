@@ -42,6 +42,9 @@ export interface PayPalGatewayPort {
     currency: string): Promise<CxResult>;
   paypalTxnRecord(worker: string, railId: string, txn: Record<string, unknown>): Promise<CxResult>;
   paypalBalanceRecord(worker: string, railId: string, currency: string, availableMinor: number, totalMinor: number): Promise<CxResult>;
+  /** v56: paid orders whose buyer contact is not recorded yet, and the record of PayPal's payer object (NULL: not readable now). */
+  paypalBuyerWork?(worker: string, limit: number): Promise<Array<{ checkoutId: string; paypalOrderId: string; railMode: "live" | "sandbox"; vaultRef: string }>>;
+  paypalBuyerRecord?(worker: string, checkoutId: string, payer: Record<string, unknown> | null): Promise<CxResult>;
 }
 
 export interface PayPalTreasuryOptions {
@@ -138,6 +141,7 @@ export class PayPalTreasuryWorker {
       const rails = await this.gw.paypalRails(this.worker);
       await this.inbox(rails);
       await this.work();
+      await this.buyers();
       for (const r of rails) {
         if (this.now() - (this.lastReconcile.get(r.railId) ?? 0) >= (this.opts.reconcileEveryMs ?? 15 * 60_000)) await this.reconcile(r);
         if (this.now() - (this.lastBalance.get(r.railId) ?? 0) >= (this.opts.balanceEveryMs ?? 60 * 60_000)) await this.balance(r);
@@ -228,9 +232,14 @@ export class PayPalTreasuryWorker {
         return true;
       }
       case "PAYMENT.CAPTURE.REVERSED": {
+        // The resource is either the reversed capture itself or a refund-shaped object linking "up" to it (PayPal's
+        // documented sample); the capture is taken from that link when present.
         const amount = toMinor(res.amount?.value);
         if (typeof res.id !== "string" || amount === null) return false;
-        const r = await this.gw.paypalRefundRecord(this.worker, res.id, `REV-${res.id}`.slice(0, 64), "reversal", Math.abs(amount), String(res.amount?.currency_code ?? ""));
+        const up = (Array.isArray(res.links) ? res.links : []).find((l: any) => l?.rel === "up" && typeof l.href === "string");
+        const linked = up ? /\/captures\/([A-Z0-9]+)$/.exec(up.href)?.[1] : undefined;
+        const captureId = linked ?? res.id;
+        const r = await this.gw.paypalRefundRecord(this.worker, captureId, `REV-${res.id}`.slice(0, 64), "reversal", Math.abs(amount), String(res.amount?.currency_code ?? ""));
         if (r.ok) this.stats.refunds++;
         return true;
       }
@@ -303,6 +312,18 @@ export class PayPalTreasuryWorker {
   }
 
   // ── 3. Reconciliation and balances ──
+  // ── v56: the buyer of a paid order (for its delivery and invoice), from PayPal's own order record ──
+  private async buyers(): Promise<void> {
+    if (!this.gw.paypalBuyerWork || !this.gw.paypalBuyerRecord) return;
+    for (const b of await this.gw.paypalBuyerWork(this.worker, 20)) {
+      if (!PAYPAL_ID.test(b.paypalOrderId)) continue;
+      const res = await this.call(b, "GET", `/v2/checkout/orders/${b.paypalOrderId}`).catch(() => null);
+      if (!res) continue; // credential unavailable: next pass
+      const payer = res.status === 200 && res.json && typeof res.json.payer === "object" ? (res.json.payer as Record<string, unknown>) : null;
+      await this.gw.paypalBuyerRecord(this.worker, b.checkoutId, payer);
+    }
+  }
+
   private async reconcile(r: PayPalRail): Promise<void> {
     const end = new Date(this.now());
     const since = r.lastSyncAt ? Date.parse(r.lastSyncAt) - 3 * 3_600_000 : this.now() - 3 * 86_400_000;
@@ -319,9 +340,16 @@ export class PayPalTreasuryWorker {
         if (typeof t.transaction_id !== "string" || !PAYPAL_ID.test(t.transaction_id) || !/^T\d{4}$/.test(String(t.transaction_event_code)) || amount === null) continue;
         const fee = toMinor(t.fee_amount?.value) ?? 0;
         const txn = { transactionId: t.transaction_id, eventCode: t.transaction_event_code, initiatedAt: t.transaction_initiation_date, status: t.transaction_status,
-          amountMinor: amount, feeMinor: fee, currency: t.transaction_amount?.currency_code, invoiceId: t.invoice_id ?? null, customField: t.custom_field ?? null };
+          amountMinor: amount, feeMinor: fee, currency: t.transaction_amount?.currency_code, invoiceId: t.invoice_id ?? null, customField: t.custom_field ?? null,
+          referenceId: typeof t.paypal_reference_id === "string" ? t.paypal_reference_id : null };
         const rec = await this.gw.paypalTxnRecord(this.worker, r.railId, txn);
         this.stats.transactions++;
+        // v56: a refund PayPal shows but no webhook reported (only the shortfall; the transaction id is its claim).
+        const short = Number((rec as any).refundShortfallMinor ?? 0);
+        if (rec.ok && short > 0 && typeof (rec as any).captureId === "string") {
+          const rr = await this.gw.paypalRefundRecord(this.worker, (rec as any).captureId, t.transaction_id, "refund", short, String(t.transaction_amount?.currency_code ?? ""));
+          if (rr.ok) this.stats.refunds++;
+        }
         if (rec.ok && (rec as any).needsCapturePost === true) {
           await this.gw.paypalCaptureRecord(this.worker, String((rec as any).checkoutId), t.transaction_id, "COMPLETED", amount, Math.abs(fee),
             String(t.transaction_amount?.currency_code ?? ""), "transaction_search");

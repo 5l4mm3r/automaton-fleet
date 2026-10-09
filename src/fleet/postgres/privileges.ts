@@ -1209,6 +1209,14 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // to the broker by the owner, installed by the broker.
     fleet_paypal_availability: new Set(["cx_paypal_capture_record", "cx_paypal_refund_record", "svc_paypal_availability"]),
     fleet_provider_secret_inbox: new Set(["fleet_admin_provider_secret_upload", "ix_provider_secret_installed"]),
+    // v56: customer orders by the checkout wrapper, the checkout-state follower, the refund recorder, custody's buyer record and the
+    // agent's own delivery / fulfilment; deliveries and their files by delivery, the mail-outcome follower and the reaper's retry;
+    // the broker's connector list only by the broker.
+    fleet_customer_orders: new Set(["fleet_econ_paypal_checkout_order", "fleet_customer_orders_follow", "fleet_order_refunded", "cx_paypal_buyer_record",
+      "fleet_econ_order_deliver", "fleet_econ_order_fulfil", "fleet_order_delivery_follow", "svc_order_deliveries_retry"]),
+    fleet_order_deliveries: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded"]),
+    fleet_order_delivery_files: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded"]),
+    fleet_identity_connectors: new Set(["ix_connectors_publish"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

@@ -62,7 +62,9 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
     // v51: the authoritative wallet measure (what keeps you alive, and what does not count).
     survival: "wallet.measure",
     // v48: receiving money through the Fleet's PayPal treasury (custody opens and captures the order).
-    checkout: "paypal.checkout", checkouts: "paypal.checkouts", cancel_checkout: "paypal.cancel" },
+    checkout: "paypal.checkout", checkouts: "paypal.checkouts", cancel_checkout: "paypal.cancel",
+    // v56: the orders behind checkouts (buyer contact, payment, fulfilment): a file delivered by mail, a service recorded.
+    orders: "order.list", deliver: "order.deliver", fulfil: "order.fulfil" },
   fleet_capital: { register_vendor: "vendor.register", revoke_vendor: "vendor.revoke", require_rail: "rail.require", request: "capital.request", list: "capital.list",
     envelopes: "envelope.list", envelope_spend: "envelope.spend",
     // v49: the owner's card as a bypass (hold → fill → declare / void); v50: temporary sweep reductions.
@@ -95,6 +97,13 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
     distribute: "project.distribute", settle_share: "project.settle_share", assess: "project.assess", exit: "project.exit", replace: "project.replace", cancel: "project.cancel", complete: "project.complete",
     list: "project.list", status: "project.status", offers: "project.offers", talent: "project.talent" },
 });
+/** v56: a delivered file's content type from its extension (the registry accepts the storefront's file types). */
+function contentTypeOf(f: string): string | null {
+  const ext = path.extname(f).toLowerCase();
+  return ({ ".pdf": "application/pdf", ".zip": "application/zip", ".epub": "application/epub+zip", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".txt": "text/plain", ".csv": "text/csv", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" } as Record<string, string>)[ext] ?? null;
+}
 /** Registry ops that move or commit money get a deterministic idempotency key from the tool call (a retry never doubles). */
 const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend", "mailbox.provision", "account.create", "account.operate", "account.verify_identity",
   "account.recover", "account.rotate", "account.revoke", "account.close", "commitment.add", "mail.send", "phone.quote", "phone.provision", "phone.release", "sms.send",
@@ -103,7 +112,9 @@ const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend", "mailbox.pr
   // v48: a retried checkout request returns the same checkout.
   "paypal.checkout",
   // v52: a retried storefront operation queues one gateway job.
-  "storefront.product.create", "storefront.product.update", "storefront.product.publish", "storefront.product.unpublish", "storefront.product.delete", "storefront.file"]);
+  "storefront.product.create", "storefront.product.update", "storefront.product.publish", "storefront.product.unpublish", "storefront.product.delete", "storefront.file",
+  // v56: a retried delivery sends the buyer one message.
+  "order.deliver"]);
 
 export interface ToolOutcome {
   name: string;
@@ -713,6 +724,25 @@ export class FounderToolbox {
             args.contentB64 = fs.readFileSync(f).toString("base64");
             args.fileName = typeof args.fileName === "string" ? args.fileName : path.basename(f).replace(/[^A-Za-z0-9._ -]/g, "_").slice(0, 120);
             delete args.path;
+          }
+          // v56: an order's files come from the workspace too (1..5 files, 15 MB together).
+          if (op === "order.deliver" && Array.isArray(args.paths)) {
+            const paths = args.paths as unknown[];
+            if (paths.length < 1 || paths.length > 5 || paths.some((p) => typeof p !== "string")) return refuse("FLEET_BAD_REQUEST", "paths: 1..5 files in your workspace");
+            let total = 0;
+            const files: Array<Record<string, string>> = [];
+            for (const p of paths as string[]) {
+              const f = this.resolve(p);
+              const st = fs.statSync(f);
+              total += st.size;
+              if (!st.isFile() || st.size < 1 || total > 15_000_000) return refuse("FLEET_BAD_REQUEST", "paths are files in your workspace, 15 MB together");
+              const type = contentTypeOf(f);
+              if (!type) return refuse("FLEET_BAD_REQUEST", "a delivered file is .pdf .zip .epub .png .jpg .txt .csv .docx or .xlsx");
+              files.push({ fileName: path.basename(f).replace(/[^A-Za-z0-9._ -]/g, "_").replace(/^[^A-Za-z0-9]+/, "").slice(0, 120) || "file",
+                contentType: type, contentB64: fs.readFileSync(f).toString("base64") });
+            }
+            args.files = files;
+            delete args.paths;
           }
           let r = await this.o.ports.economy(op, args).catch(ownerRefusal);
           // v37: a browser action runs in the browser worker; wait (bounded) for its page result within this tool call.

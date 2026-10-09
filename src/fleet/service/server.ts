@@ -47,6 +47,7 @@ import {
 } from "../postgres/store.js";
 import type { PgAgentGateway } from "../postgres/agent-gateway.js";
 import { UnsupportedSandboxTerminator, type SandboxTerminator } from "./terminator.js";
+import { STOREFRONT_OPS } from "../postgres/migrations-phase52.js";
 import { RateLimiter, type RateLimit } from "./rate-limit.js";
 import { readProxyV1, type ProxiedPeer } from "./proxy-protocol.js";
 
@@ -60,6 +61,12 @@ import { RelevanceAssessor } from "../experiments/relevance.js";
 import { actionDigest } from "../cognition/router.js";
 import { ResearchError, research as researchFetch } from "../research/gateway.js";
 import type { FetcherPort } from "../research/client.js";
+
+/**
+ * Economy op names are `domain.verb`; the only three-part names are the v52 storefront product ops, allowed by name (an
+ * explicit list, not a wider pattern). The database still allow-lists, authenticates and capability-checks every op.
+ */
+const ECONOMY_THREE_PART_OPS: ReadonlySet<string> = new Set(STOREFRONT_OPS.filter((o) => o.split(".").length === 3));
 
 interface RequestCtx {
   raw: Buffer;
@@ -186,6 +193,11 @@ export interface FleetServiceOptions {
   reaperIntervalMs?: number;
   audit?: (entry: AuditEntry) => void;
   maxBodyBytes?: number;
+  /**
+   * The body limit for POST /v1/economy from a session the database has already accepted (a storefront file or an order
+   * delivery carries a workspace file, base64). Every other request, and any unproven session, keeps maxBodyBytes.
+   */
+  maxEconomyBodyBytes?: number;
   /**
    * The runtime release this service instance runs. Claims and activations
    * of leases expecting any other runtime are refused; null refuses them all.
@@ -344,6 +356,12 @@ export class FleetService {
     return crypto.createHash("sha256").update(token).digest("hex");
   }
 
+  /** A FleetSession credential the database already accepted (cache only; the request is still fully authenticated). */
+  private provenSession(req: http.IncomingMessage): boolean {
+    const m = /^FleetSession (\S{1,256})$/.exec(req.headers.authorization ?? "");
+    return m !== null && this.isKnownCred(FleetService.credHash(m[1]));
+  }
+
   private isKnownCred(hash: string): boolean {
     const exp = this.knownCreds.get(hash);
     if (exp === undefined) return false;
@@ -451,13 +469,18 @@ export class FleetService {
             const h = l.cardHolds as { bookedAtMaximum?: number; voided?: number };
             const av = (l.availability ?? {}) as { released?: number; waitingForBalance?: number };
             const st = ((l as { settlement?: unknown }).settlement ?? {}) as { matched?: number; waitingForBalance?: number };
-            if (i.died || h.bookedAtMaximum || h.voided || av.released || av.waitingForBalance || st.matched || (l.reductions as { expired?: number }).expired) {
-              this.audit("lifecycle_pass", null, { insolvency: i, cardHolds: h, availability: av, settlement: st, reductions: l.reductions });
+            const dl = ((l as { deliveries?: unknown }).deliveries ?? {}) as { resent?: number };
+            if (i.died || h.bookedAtMaximum || h.voided || av.released || av.waitingForBalance || st.matched || (l.reductions as { expired?: number }).expired || dl.resent) {
+              this.audit("lifecycle_pass", null, { insolvency: i, cardHolds: h, availability: av, settlement: st, reductions: l.reductions, deliveries: dl });
             }
+            // v56: a pass that failed is reported (the others ran).
+            const failed = Object.entries(l as Record<string, unknown>).filter(([, v]) => (v as { ok?: unknown } | null)?.ok === false && typeof (v as { error?: unknown }).error === "string");
+            if (failed.length) this.audit("lifecycle_error", null, { passes: Object.fromEntries(failed) });
             const day = new Date().toISOString().slice(0, 10);
             if (this.lastSweepDay !== day) {
-              this.lastSweepDay = day;
               const sw = await this.opts.admin.sweepRun(day);
+              // v56: the day counts as swept only once the run returned (a failed run is retried at the next pass).
+              this.lastSweepDay = day;
               if ((sw as { enabled?: boolean }).enabled) {
                 await this.opts.admin.taxTrueUp(100);
                 this.audit("sweep_pass", null, { period: day, swept: (sw as { swept?: number }).swept ?? 0, totalMinor: (sw as { totalMinor?: number }).totalMinor ?? 0 });
@@ -722,8 +745,9 @@ export class FleetService {
     throw new HttpError(409, "FLEET_RUNTIME_UNVERIFIED", `Runtime release mismatch: ${reason}`);
   }
 
-  private async readRaw(req: http.IncomingMessage): Promise<Buffer> {
-    const max = this.opts.maxBodyBytes ?? 64 * 1024;
+  private async readRaw(req: http.IncomingMessage, path: string): Promise<Buffer> {
+    const max = req.method === "POST" && path === "/v1/economy" && this.provenSession(req)
+      ? this.opts.maxEconomyBodyBytes ?? 21 * 1024 * 1024 : this.opts.maxBodyBytes ?? 64 * 1024;
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of req) {
@@ -937,6 +961,18 @@ export class FleetService {
         return;
       }
     }
+    // v56: where PayPal returns a buyer (FLEET_PAYPAL_RETURN_URL / _CANCEL_URL in custody's environment). A static page: no
+    // parameter is read, nothing is recorded — the payment itself is confirmed only by PayPal's evidence through custody.
+    if (req.method === "GET" && (path === "/v1/paypal/return" || path === "/v1/paypal/cancel")) {
+      const done = path === "/v1/paypal/return";
+      const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${done ? "Thank you" : "Payment cancelled"}</title></head>`
+        + `<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5"><h1>${done ? "Thank you for your order" : "Payment cancelled"}</h1>`
+        + `<p>${done ? "Your payment is being completed with PayPal. The seller will deliver or be in touch at the e-mail address of your PayPal account." : "No payment was taken. You can close this page."}</p></body></html>`;
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'", "referrer-policy": "no-referrer" });
+      res.end(body);
+      return;
+    }
     if (req.method === "GET" && path === "/healthz") {
       this.send(res, this.draining ? 503 : 200, {
         ok: !this.draining,
@@ -976,7 +1012,7 @@ export class FleetService {
       this.send(res, status, body, { "x-request-id": ctx.requestId, ...headers });
     };
     try {
-      ctx.raw = await this.readRaw(req);
+      ctx.raw = await this.readRaw(req, path);
       const out = await this.route(req.method ?? "GET", path, req, ctx);
       // Phase D3.1: the handler succeeded, so the database accepted this credential.
       if (ctx.credHash) this.markKnownCred(ctx.credHash);
@@ -1357,7 +1393,7 @@ export class FleetService {
         // op is authenticated and capability-checked there; arguments are a bounded JSON object validated by the database.
         const { agentId, token } = await this.credentials(req, path, ctx);
         const op = str(body, "op", 40);
-        if (!/^[a-z]+(\.[a-z_]+)?$/.test(op)) return { ok: false, code: "FLEET_BAD_REQUEST" };
+        if (!/^[a-z]+(\.[a-z_]+)?$/.test(op) && !ECONOMY_THREE_PART_OPS.has(op)) return { ok: false, code: "FLEET_BAD_REQUEST" };
         const args = body.args && typeof body.args === "object" && !Array.isArray(body.args) ? (body.args as Record<string, unknown>) : {};
         const r = await agent.economy(agentId, token, op, args);
         if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "economy refused");

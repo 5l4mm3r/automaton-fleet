@@ -1,6 +1,6 @@
 # Launch candidate — deployment, onboarding, recovery and checklist (revision 3)
 
-- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v55 on top of production schema 45, dashboard UI 0.11.0.
+- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v56 on top of production schema 45, dashboard UI 0.12.0 (0.11.0 + the v54 card requests and the v55 survival switch).
 - **Revision 3 (2026-10-09)** follows the owner's decisions of 2026-10-08:
   - the treasury PayPal stays the owner's own account, **upgraded to Business as an individual** (no company);
   - the card is the owner's **credit card**, repaid **weekly** from the treasury.
@@ -22,9 +22,10 @@
 | v50 | Sweep reductions, knowledge library, PII scrubbing (its dormancy is retired by v51) | No |
 | v51 | Exhaustion is death; card holds reserve first; PayPal money held until available; custody pilot/ongoing; automatic capital and sweep-reduction decisions; document upload authority (off); freeze stops jobs; knowledge revision 2; mail/SMS secrets from the dashboard | No (see §1.1) |
 | v52 | Gumroad storefront gateway surface (gx_*), PayPal-evidence receipt matching, bank-feed surface (rx_*), Gumroad refused to agents directly | No |
-| v55 | Survival protection switch, **ON from the migration**: no agent is ended for an exhausted wallet (you are told) until you go live from the header switch (step-up). Shown on every page; Settings can hide it | No |
-| v54 | The card rule: PayPal first; the card only by request (Fleet Control approves up to £100 within the agent's wallet; the owner decides above, funding the card first) | No |
 | v53 | Weekly card statement (default Monday 09:00 Europe/London) with "Mark as paid"; the owner's PayPal receiving test (at most £10; booked as owner capital, never revenue) | No |
+| v54 | The card rule: PayPal first; the card only by request (Fleet Control approves up to £100 within the agent's wallet; the owner decides above, funding the card first) | No |
+| v55 | Survival protection switch, **ON from the migration**: no agent is ended for an exhausted wallet (you are told) until you go live from the header switch (step-up). Shown on every page; Settings can hide it | No |
+| v56 | Customer orders (buyer from PayPal, agent-isolated) and delivery by mail with retries; storefront ops over HTTP; truthful account creation; estates for the newer money states; refunds caught by Transaction Search | No |
 
 ### 1.1 Behaviour the two living agents will meet after deployment
 
@@ -49,12 +50,15 @@
   - sweep reductions;
   - the daily sweep (a no-op while the sweep policy is off);
   - the weekly card statement (issues nothing when nothing was charged and nothing is owed).
-- **Controller:** gains `POST /v1/webhooks/paypal`.
-- **Custody:** gains the PayPal treasury worker (idle without a rail).
-- **Identity broker:** serves documents, and starts mail or SMS from dashboard-sealed secrets.
+- **Controller:** gains `POST /v1/webhooks/paypal`; allows the storefront's three-part ops and file-sized economy bodies for
+  proven sessions (v56).
+- **Reaper (v56):** retries failed order deliveries; each lifecycle pass runs on its own.
+- **Custody:** gains the PayPal treasury worker (idle without a rail); it reads each paid order's buyer from PayPal (v56).
+- **Identity broker:** serves documents, and starts mail or SMS from dashboard-sealed secrets; sends order files as
+  attachments and publishes its (empty) connector list (v56).
 - **New unit:** `automaton-fleet-gumroad` (installed only by `scripts/fleet-gumroad-setup.sh`; dormant without a token).
 
-## 2. Deploy (schema 45 → 55)
+## 2. Deploy (schema 45 → 56)
 
 Pins come from the build output, never from placeholders.
 
@@ -65,7 +69,7 @@ Pins come from the build output, never from placeholders.
    4. build the dashboard LIVE export from the same commit.
 2. Rehearse on a copy of production:
    ```
-   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 55
+   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 56
    ```
    Expect all of the following:
    - every migration applies;
@@ -75,10 +79,11 @@ Pins come from the build output, never from placeholders.
    - `hub-wallet-measure` shows `exhausted: false` for both.
 3. Cut over:
    ```
-   bash ~/fleet-release.sh … 45 55
+   bash ~/fleet-release.sh … 45 56
    ```
-   This does the backend cutover and promotes UI 0.11.0, with one `production_deployed` event.
-4. Upgrade the founders one at a time, Agent 2 first, then Founder 1:
+   This does the backend cutover and promotes UI 0.12.0, with one `production_deployed` event.
+4. **Not at cutover (owner, 2026-10-09):** the founders stay on fda78a0 until you say the accounts are linked. Then
+   upgrade them one at a time, Agent 2 first, then Founder 1:
    ```
    fleet-founders.sh upgrade-runtime <agentId> …
    ```
@@ -99,14 +104,14 @@ Pins come from the build output, never from placeholders.
 Correct terminology matters here. A schema revert does **not** keep newer writes in the running system; the export it
 writes is **recovery evidence**.
 
-- **Fix forward (preferred).** v46–v55 only add. A code fix on schema 55 needs no restore and loses nothing.
+- **Fix forward (preferred).** v46–v56 only add. A code fix on schema 56 needs no restore and loses nothing.
 - **Code-only problem in the new release.** Use the release's own code-only revert. The database is untouched and all
   writes are kept.
 - **A schema revert to 45:**
   ```
-  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 55 <reason>
+  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 56 <reason>
   ```
-  1. **UI first:** point the dashboard back to `dashboard.env.pre-0.11.0`.
+  1. **UI first:** point the dashboard back to `dashboard.env.pre-0.12.0`.
   2. **Founders first**, if they were upgraded:
      ```
      fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>
@@ -135,7 +140,8 @@ Settings live under **Money & identity**; Treasury and agent profiles show the r
 
 ### 4.1 PayPal treasury
 
-0. **Account type.** PayPal gives live API keys only to Business accounts, and its UK terms require a Business account
+0. **Account type — DONE (owner, 2026-10-09): the account is Business.** This is the account type only; API readiness
+   (steps 1–4) is separate. For the record: PayPal gives live API keys only to Business accounts, and its UK terms require a Business account
    for selling. Upgrade the fleet-treasury PayPal **as an individual / sole trader**:
    - Account settings → Upgrade to a Business account;
    - business type **Individual**; your own name as the business name.
@@ -156,6 +162,9 @@ Settings live under **Money & identity**; Treasury and agent profiles show the r
    - `PAYMENT.CAPTURE.COMPLETED` / `PENDING` / `REFUNDED` / `REVERSED`
 
    Paste the webhook id under Money & identity → 1.
+5. **Buyer return pages (v56).** In `/etc/automaton-fleet/custody.env` set
+   `FLEET_PAYPAL_RETURN_URL=https://api.agentfleet.vip/v1/paypal/return` and
+   `FLEET_PAYPAL_CANCEL_URL=https://api.agentfleet.vip/v1/paypal/cancel`, then restart custody (host step, sudo).
 
 ### 4.2 Card (your credit card, repaid weekly)
 
@@ -259,23 +268,28 @@ Settings live under **Money & identity**; Treasury and agent profiles show the r
 
 Until all four keys hold, no payment leaves.
 
-## 5. Launch checklist (in order)
+## 5. Launch checklist (dependency order; who does what)
 
-1. Approve the candidate. Build on the VPS; record the pins; build the LIVE dashboard.
-2. Rehearse 45 → 55 on the VPS copy and review the output, including `hub-wallet-measure`.
-3. Cut over with `fleet-release.sh`. Run the read-only checks (§2 step 5). Upgrade Agent 2, then Founder 1.
-4. PayPal: Live app, sealed credentials, rail, webhook, readiness (§4.1).
-5. **Receiving test.** Open a £1 test under Treasury → Receiving test (or `economy-paypal-test 100`), pay it from
-   the approval link, and watch it reach "captured, completed and in the balance: receiving works" (`hub-paypal-test`).
-   The money is your capital in the treasury, not revenue. Don't refund it.
-6. Card: upload your credit card, check the weekly statement schedule, and turn on the standing authority with
-   conservative maxima (§4.2–4.3).
-7. Facts and documents: upload them and choose the document classes (§4.3).
-8. Mail: Bridge on the host, then seal the login (§4.4).
-9. Optional: Gumroad onboarding (§4.5).
-10. Money out: pilot activation and the custody switch, then watch the first payout settle; later, ongoing (§4.6).
-11. Optional, separately: the sweep policy.
+Live activation and every production step are separately authorized and run by the owner in their own terminal.
 
-Gumroad dependencies 62cbe1b7 and 6178c7bb stay pending until verified readiness answers them (§4.5 step 4 on an assigned
+| # | Step | Who | Needs |
+|---|---|---|---|
+| A | **In parallel, now (no deploy needed):** PayPal Live REST app + request Payouts; buy Proton Mail Plus; Gumroad seller account (email confirmed, check which payout methods the account offers — PayPal preferred), Stripe identity check, OAuth app | Owner (provider sites) | — |
+| 1 | Build at the pushed candidate in `~/automaton-fleet-build`; record commit / build ID / lockfile SHA in `~/rlc-pins.txt`; build the canonical LIVE UI 0.12.0 tgz at the fixed build path | Owner runs, Claude prepares commands | push |
+| 2 | `bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 56` on the production copy; Claude reviews audit, ledger, `hub-wallet-measure` | Owner → Claude | 1 |
+| 3 | `bash ~/fleet-release.sh ~/rlc-pins.txt 45 56 0.12.0 <tgz> <sha>` (protection ON; founders stay on fda78a0); read-only checks §2 step 5 | Owner | 2 |
+| 4 | PayPal: seal credentials (Money & identity → 1); `economy-credential-register …`; `economy-rail-add paypal … --mode live`; webhook + id; `economy-rail-verify` from real probes; return URLs in custody.env (§4.1) | Owner | 3, A |
+| 5 | Receiving test: `economy-paypal-test 100`, pay it, watch `hub-paypal-test` reach "in the balance" | Owner | 4 |
+| 6 | Card upload; standing authority with maxima; facts and documents (§4.2–4.3) | Owner (dashboard) | 3 |
+| 7 | Proton Bridge on the host, sign in, seal the login (§4.4). Without it no agent mail and no order delivery | Owner (sudo) | 3, A |
+| 8 | Gumroad gateway install, OAuth exchange, account register, probe, attest `storefront_publication`, assign the rail; PayPal destination if Gumroad pays out to PayPal (§4.5). Answers 62cbe1b7 / 6178c7bb only with this evidence | Owner | 3, A |
+| 9 | Money out: pilot custody activation, signer file, `REAL_PAYMENTS_ENABLED=true` in custody.env only (§4.6) — after the phrase AUTHORIZE LIVE FINANCIAL ACTIVATION | Owner | 4, 5 |
+| 10 | Founder runtime upgrades (Agent 2, verify, then Founder 1) — the new tools (orders, delivery, checkout, card, storefront, survival) reach founders only now | Owner (Claude rehearses first) | 4–9 ("accounts linked") |
+| 11 | Survival protection → **Live** (header switch): from then, actual wallet exhaustion is death | Owner | 10 |
+| 12 | Optional: sweep policy on (internal net-profit contribution; no external transfer) | Owner | 10 |
+
+Steps 6, 7 and 8 can run in parallel after 3; step 5 needs 4.
+
+Gumroad dependencies 62cbe1b7 and 6178c7bb stay pending until verified readiness answers them (step 8 on an assigned
 rail). A verified PayPal receiving rail can serve "receive payments" needs. It does not answer a Gumroad account request by
 itself.

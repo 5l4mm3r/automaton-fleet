@@ -21,6 +21,8 @@ export interface IdentityJob {
   message?: { messageId: string; from: string; to: string[]; subject: string; body: string; inReplyTo: string | null;
     /** v41: on the shared mailbox, the agent's routing address (Reply-To) and the conversation's Message-IDs. */
     replyTo?: string | null; shared?: boolean; references?: string[] | null } | null;
+  /** v56: a mail.send job's order-delivery files (names and sizes; the bytes come from mailAttachments under the job's lease). */
+  attachments?: Array<{ fileName: string; contentType: string; sizeBytes: number }> | null;
   sms?: { smsId: string; from: string; to: string; body: string } | null;
   number?: { numberId: string; e164: string | null; providerRef: string | null; country: string } | null;
 }
@@ -57,6 +59,9 @@ export interface IdentityGatewayPort {
   // v36
   mailDeliver2(worker: string, address: string, sender: string, subject: string, body: string, withheld: boolean, providerId: string | null): Promise<IxResult>;
   mailSent(job: string, lease: string, providerId: string | null, ok: boolean): Promise<IxResult>;
+  /** v56: an order delivery's files for this mail.send job, and the dedicated account connectors this broker has. */
+  mailAttachments?(job: string, lease: string): Promise<{ ok: boolean; attachments?: Array<{ fileName: string; contentType: string; contentB64: string }> }>;
+  connectorsPublish?(worker: string, platforms: string[]): Promise<IxResult>;
   phoneRecord(job: string, lease: string, e164: string, provider: string, providerRef: string, monthlyMinor: number | null, currency: string | null): Promise<IxResult>;
   phoneStatus(job: string, lease: string, status: "released" | "failed" | "human_action_required", reason: string | null): Promise<IxResult>;
   numbers(worker: string): Promise<Array<{ numberId: string; e164: string; provider: string; since: string }>>;
@@ -208,6 +213,10 @@ export class PgIdentityGateway implements IdentityGatewayPort {
     return this.call<IxResult & { replay?: boolean; deliveries?: Array<{ messageId: string; agentId: string | null; routing: string; address?: string | null }> }>(
       "ix_mail_ingest", [worker, channelId, JSON.stringify(message), withheld]);
   }
+  mailAttachments(job: string, lease: string) {
+    return this.call<{ ok: boolean; attachments?: Array<{ fileName: string; contentType: string; contentB64: string }> }>("ix_mail_attachments", [job, lease]);
+  }
+  connectorsPublish(worker: string, platforms: string[]) { return this.call<IxResult>("ix_connectors_publish", [worker, JSON.stringify(platforms)]); }
   mailSent2(job: string, lease: string, providerId: string | null, externalId: string | null, ok: boolean, error: string | null) {
     return this.call<IxResult>("ix_mail_sent2", [job, lease, providerId, externalId, ok, error]);
   }

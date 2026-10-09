@@ -53,8 +53,10 @@ export class MailgunMailProvider implements MailProvider {
     return { address: `${local}@${this.o.domain}` };
   }
 
-  async send(input: { from: string; to: string[]; subject: string; body: string; inReplyTo?: string | null }): Promise<{ providerMessageId: string }> {
+  async send(input: { from: string; to: string[]; subject: string; body: string; inReplyTo?: string | null; attachments?: unknown[] | null }): Promise<{ providerMessageId: string }> {
     if (!input.from.toLowerCase().endsWith(`@${this.o.domain}`)) throw new Error("FLEET_MAIL_FOREIGN_SENDER");
+    // v56: this optional adapter sends text only; an order delivery with files fails truthfully (retried, then reported).
+    if (input.attachments?.length) throw new Error("FLEET_MAIL_ATTACHMENTS_UNSUPPORTED");
     const form = new URLSearchParams();
     form.set("from", input.from);
     for (const t of input.to) form.append("to", t);
