@@ -28,7 +28,9 @@ export interface PayPalWorkItem {
 }
 export interface PayPalRail { railId: string; railMode: "live" | "sandbox"; credentialId: string; vaultRef: string; lastSyncAt: string | null;
   /** v49: the rail's PayPal webhook id as the owner registered it (non-secret). */
-  webhookId?: string | null }
+  webhookId?: string | null;
+  /** v61: a not-yet-active rail in view only for the owner's receiving test (its webhooks, reconciliation, balance). */
+  testOnly?: boolean }
 
 export interface PayPalGatewayPort {
   paypalInbox(worker: string, limit: number): Promise<PayPalInboxItem[]>;

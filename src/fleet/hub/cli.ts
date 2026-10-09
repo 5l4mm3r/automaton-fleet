@@ -28,6 +28,8 @@
  *                    [--venture id] [--max n] [label…]     (v46: a real rail starts pending_setup; simulated/sandbox only on a test registry;
  *                    v48: live = the owner's PayPal treasury only, with a credential, capabilities ⊆ receive_payments,refunds,payouts)
  *   economy-rail-verify <railId> <check> <verified|failed|expired> <probe|owner_attested|first_use|automatic> [--expires iso] [note…]
+ *                                               (v61) check webhook_configuration: PayPal receiving rails, probe evidence only, bound to the rail's webhook id;
+ *                                               with account_access it allows only the owner's receiving test (economy-paypal-test) — never agents' use
  *                    checks: account_access storefront_publication identity_verification sale_ingestion payout_reconciliation receipt_verification
  *   economy-rail-readiness <railId>               evidence per check, ready capabilities and the disclosure a dependency answer carries
  *   economy-rail-assign <railId> <ventureId> <capability>   assign an EVIDENCED capability to a venture

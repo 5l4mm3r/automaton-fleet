@@ -158,8 +158,15 @@ Settings live under **Money & identity**; Treasury and agent profiles show the r
    economy-credential-register paypal vault:paypal/treasury payouts,receive_payments,refunds Treasury
    economy-rail-add paypal shared receive_payments,refunds,payouts "PayPal treasury" --credential <id> --mode live
    ```
-   Then record readiness evidence from real probes or first use (`economy-rail-verify …`), and run
-   `economy-rail-status <rail> active`.
+   Readiness, in this order (v61; nothing is claimed before it is evidenced):
+   1. after the webhook (step 4), run the read-only probe as the custody user from the pinned runtime
+      (`dist/fleet/custody/paypal-probe.js live vault:paypal/treasury <webhookId> https://api.agentfleet.vip/v1/webhooks/paypal`)
+      and record what it shows: `account_access` (sign-in + balances) and `webhook_configuration` (URL and the eight
+      events; probe evidence only, bound to the rail's webhook id). These allow **only** the owner's receiving test;
+      the rail stays `pending_setup`, no capability is ready, agents cannot use it;
+   2. the £1 receiving test (§5 B2) on that rail;
+   3. once it reaches "in the balance", `economy-rail-verify <rail> sale_ingestion verified first_use …`, then
+      `economy-rail-status <rail> active`. Refunds and Payouts stay unverified until evidenced by their own use.
 4. **Webhook.** In the PayPal app, add a webhook to `https://api.agentfleet.vip/v1/webhooks/paypal` for these events:
    - `CHECKOUT.ORDER.APPROVED`
    - `PAYMENT.CAPTURE.COMPLETED` / `PENDING` / `REFUNDED` / `REVERSED`
@@ -300,7 +307,7 @@ Every production step runs in the owner's own terminal on the VPS (`ssh agentfle
 | # | Step | Who | After |
 |---|---|---|---|
 | B1 | PayPal: Live REST app (+ request Payouts); seal the credentials (Money & identity → 1); `economy-credential-register …`; `economy-rail-add paypal … --mode live`; webhook to `https://api.agentfleet.vip/v1/webhooks/paypal` with CAPTURE COMPLETED/PENDING/REFUNDED/REVERSED, CHECKOUT.ORDER.APPROVED, CUSTOMER.DISPUTE CREATED/UPDATED/RESOLVED; webhook id; return URLs in custody.env (§4.1); `economy-rail-verify` from real probes | Owner | A5 |
-| B2 | Receiving test: `economy-paypal-test 100`, pay it, `hub-paypal-test` reaches "in the balance" | Owner | B1 |
+| B2 | Receiving test (v61: on the `pending_setup` rail once `account_access` + `webhook_configuration` are probed): `economy-paypal-test 100`, pay it, `hub-paypal-test` reaches "in the balance"; then record `sale_ingestion` from first use and activate the rail | Owner | B1 |
 | B3 | Proton: paid plan (Mail Plus+), Bridge install + one interactive sign-in, seal the login (§4.4); then an **actual check**: an agent-side `mail.send` to the owner's address and a reply back to its routing address (Claude scripts it), and one order delivery to an owner-controlled buyer address with a £1 test sale | Owner (+ Claude) | A5 |
 | B4 | Card, facts, documents; standing authority with maxima (§4.2–4.3) | Owner | A5 |
 | B5 | Gumroad (included): gateway install, OAuth, account register, probe, attest `storefront_publication`, assign; check the account's payout method (PayPal preferred) and link the PayPal destination (§4.5). 62cbe1b7 / 6178c7bb are answered only by this verified evidence | Owner | A5, B1 |
