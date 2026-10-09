@@ -58,6 +58,34 @@ function Form({ title, fields, submit, note, danger }: { title: string; fields: 
 
 const WEEKDAYS = [["1", "Monday"], ["2", "Tuesday"], ["3", "Wednesday"], ["4", "Thursday"], ["5", "Friday"], ["6", "Saturday"], ["7", "Sunday"]];
 
+const PAYPAL_UNAVAILABLE: Record<string, string> = { card_only_merchant: "the merchant takes cards only", paypal_needs_login: "its PayPal option needs a PayPal login",
+  payee_no_paypal: "the payee cannot receive PayPal", payouts_unavailable: "treasury PayPal payments are not switched on" };
+
+/** v54: PayPal first — card requests; Fleet Control approves small ones, you decide the rest (fund the card first). */
+function CardRequests({ data, call, name }: { data: Row; call: (op: string, args: Record<string, unknown>) => Promise<unknown>; name: (id: string) => string }) {
+  const list = (data.requests ?? []) as Row[];
+  const waiting = list.filter((r) => r.status === "pending_owner" && String(r.expiresAt) > new Date().toISOString());
+  return <div className="mb-4">
+    <h4 className="font-semibold">Card requests (PayPal first)</h4>
+    <p className="text-xs text-slate-400">Agents pay through the treasury PayPal. They ask for the card only when PayPal cannot pay, and only within their own wallet. Fleet Control approves up to {money(data.ownerReviewAboveMinor)}; above that it waits for you. Treasury PayPal payments: {data.paypalPayoutsAvailable ? "on" : "off"}.</p>
+    {waiting.length ? waiting.map((r) => <div key={r.requestId} className="my-2 rounded border border-red-700 p-3 text-sm">
+      <p className="font-semibold">{r.agentName ?? name(r.agentId)} · {r.merchant} · {money(r.amountMinor)}</p>
+      <p className="text-xs text-slate-300">Why not PayPal: {PAYPAL_UNAVAILABLE[r.paypalUnavailable] ?? r.paypalUnavailable} · For: {r.purpose} · {r.origin} · expires {when(r.expiresAt)}</p>
+      <p className="mt-1 text-xs text-amber-200">To approve: first move {money(r.amountMinor)} from the treasury PayPal to the card, then approve with that transfer’s reference.</p>
+      <Form title="Approve (card funded)" fields={[{ key: "reference", label: "Treasury → card transfer reference" }, { key: "note", label: "Note (optional)" }]}
+        submit={(v) => call("card_request_decide", { requestId: r.requestId, decision: "approve", reference: v.reference, note: v.note || null })} />
+      <Form title="Decline" danger fields={[{ key: "note", label: "Reason (the agent sees it)" }]}
+        submit={(v) => call("card_request_decide", { requestId: r.requestId, decision: "decline", note: v.note || null })} />
+    </div>) : <p className="my-2 text-sm text-slate-400">No card request is waiting for you.</p>}
+    <details className="mt-2"><summary className="cursor-pointer text-sm text-cyan-300">Recent card requests and your threshold</summary>
+      <ul className="text-sm">{list.filter((r) => !waiting.includes(r)).slice(0, 30).map((r) => <li key={r.requestId} className="border-t border-slate-800 py-1">{when(r.createdAt)} · {r.agentName ?? name(r.agentId)} · {r.merchant} · {money(r.amountMinor)} · {r.status}{r.decidedBy ? ` (${r.decidedBy})` : ""}</li>)}</ul>
+      <Form title="Save threshold" fields={[{ key: "above", label: "You decide requests above (£)", value: (Number(data.ownerReviewAboveMinor) / 100).toFixed(2) },
+        { key: "hours", label: "Approved requests valid for (hours)", value: String(data.validHours ?? 48) }]}
+        submit={(v) => call("card_request_policy_set", { ownerReviewAboveMinor: minor(v.above), validHours: Number(v.hours) })} />
+    </details>
+  </div>;
+}
+
 /** v53: the weekly card statement — what agents charged to your card and what to move from the treasury PayPal to the card. */
 function CardStatements({ card, call, name }: { card: Row; call: (op: string, args: Record<string, unknown>) => Promise<unknown>; name: (id: string) => string }) {
   const p = card.statementPolicy as Row | undefined, list = (card.statements ?? []) as Row[];
@@ -93,7 +121,8 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
   const survival = useRead<Row[]>(client, "wallet_measure", {}, []);
   const store = useRead<Row>(client, "storefront", {}, []);
   const ptest = useRead<Row>(client, "paypal_test", {}, []);
-  const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); };
+  const creq = useRead<Row>(client, "card_requests", {}, []);
+  const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); creq.reload(); };
   const call = useCallback(async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); reloadAll(); return r; }, [client]); // eslint-disable-line react-hooks/exhaustive-deps
   const name = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
   const agentOptions = [["", "Choose an agent"], ...agents.map((a) => [a.id, a.name])];
@@ -147,6 +176,7 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
     </Panel>
 
     <Panel title="Card clearing (your card used as a bypass)">{card.data ? <>
+      {creq.data && <CardRequests data={creq.data} call={call} name={name} />}
       <CardStatements card={card.data} call={call} name={name} />
       <p className="mt-4 text-sm">Owed on the card: <span className="font-mono">{money(card.data.outstandingMinor)}</span> (reserved in the treasury: {money(card.data.reserveMinor)}). Repay it from the treasury PayPal account with PayPal’s “Make a Payment” (there is no API for this), then record it.</p>
       <Form title="Record card repayment" fields={[{ key: "amount", label: "Amount repaid (£)" }, { key: "reference", label: "PayPal transaction / statement reference" }]}

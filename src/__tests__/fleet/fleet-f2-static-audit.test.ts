@@ -6,7 +6,8 @@
  * Allowed classes (each with its reason):
  *   historical      — migrations ≤ v27 (superseded by later CREATE OR REPLACE; the live functions are checked in the PG suites)
  *   sealed          — the frozen sealed-evaluation instruments (charter v2, R23 addendum, eval drivers)
- *   legal/security  — genuine non-delegable controls: identity facts, operator D3 proposals, internet egress, admin auth
+ *   legal/security  — genuine non-delegable controls: identity facts, operator D3 proposals, internet egress, admin auth,
+ *                     and (v54, owner decision O17) the owner's personal credit card above the owner's own threshold
  *   retirement      — text that states a retirement / negation (LEGACY, retired, no owner …) or detects a retired route
  *   inert-legacy    — setters/readers of columns kept only for history (no decision reads them)
  */
@@ -44,6 +45,8 @@ const RULES: Rule[] = [
   { cls: "inert-legacy", file: /src\/fleet\/cognition\/capability-signature\.ts$/, why: "capability-policy signature field (data, not shown as a cap; signature compatibility)" },
   { cls: "historical", file: /src\/fleet\/postgres\/migrations-phase44\.ts$/, line: /"payment_order_awaiting_owner"/,
     why: "the applied v44 routing constant (history); since v48 the live route no longer names the retired type (it routes via the payment_order_ prefix)" },
+  { cls: "legal/security", file: /src\/fleet\/(hub\/admin|postgres\/migrations-phase54)\.ts$/, line: /card request|card_requests|pre-funded request|funds the card first/i,
+    why: "v54 (owner decision O17, 2026-10-09): the owner's personal credit card is the last-resort payment instrument; above the owner's own threshold the owner funds the card and decides. Ordinary spending (PayPal, wallets, envelopes) has no owner gate" },
   { cls: "retirement", file: /src\/fleet\/postgres\/migrations-phase48\.ts$/, line: /^\s*\["'payment_order_cancelled','payment_order_awaiting_owner','payment_instruction_issued'", "'payment_order_cancelled','payment_instruction_issued'"\],$/,
     why: "the v48 asserted edit that REMOVES the retired type from the live routing function" },
 ];

@@ -66,6 +66,8 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
   fleet_capital: { register_vendor: "vendor.register", revoke_vendor: "vendor.revoke", require_rail: "rail.require", request: "capital.request", list: "capital.list",
     envelopes: "envelope.list", envelope_spend: "envelope.spend",
     // v49: the owner's card as a bypass (hold → fill → declare / void); v50: temporary sweep reductions.
+    // v54: PayPal first — the card only under an approved request (Fleet Control; the owner above the threshold).
+    card_request: "card.request", card_requests: "card.requests",
     card_authorize: "card.authorize", card_declare: "card.declare", card_void: "card.void", cards: "card.list", identity_uses: "identity.uses",
     sweep_reductions: "sweep.reductions", sweep_reduction_request: "sweep.reduction_request" },
   economic_knowledge: { search: "knowledge.search", record: "knowledge.record", library: "knowledge.library" },

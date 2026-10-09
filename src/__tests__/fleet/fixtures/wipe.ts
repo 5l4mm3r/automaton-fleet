@@ -27,7 +27,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     // v49 / v50 singleton policies (defaults: standing identity authority off; dormancy on, no automatic death); the v50 library.
     "fleet_identity_autonomy", "fleet_insolvency_policy", "fleet_knowledge_library",
     // v53: the weekly card statement schedule (a singleton; tests that change it restore it).
-    "fleet_card_statement_policy",
+    "fleet_card_statement_policy", "fleet_card_request_policy",
     ...V35_SINGLETONS,
   ]);
   const r = await c.query<{ t: string }>(

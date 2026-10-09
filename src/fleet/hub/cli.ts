@@ -86,6 +86,10 @@
  *   economy-card-statement-paid <statementId> <transferReference>             the statement's total was moved from the treasury PayPal to the card
  *   economy-card-statement-policy [--enabled on|off] [--weekday 1-7] [--hour 0-23] [--tz Europe/London]   when the weekly statement is issued
  *   economy-paypal-test [amountMinor]                                         (v53) open a receiving test (default 100 = 1.00; at most 1000); pay it yourself
+ *   hub-card-requests [agentId]                                               (v54) card requests (PayPal first; yours to decide above the threshold)
+ *   economy-card-request-decide <requestId> approve <transferReference> [note…] | <requestId> decline [note…]
+ *                                               approve only after moving the amount from the treasury PayPal to the card
+ *   economy-card-request-policy [--above <minor>] [--valid-hours n]           the owner-review threshold (default 10000 = £100)
  *   hub-paypal-test                                                           the test's progress: approval link, capture, Transaction Search, balance
  *   hub-treasury-tx [agentId] [--limit n] [--before seq] [--direction in|out|internal]   per-transaction treasury list
  *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
@@ -141,6 +145,7 @@ export const HUB_COMMANDS = new Set([
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
   "economy-sweep-reduction-end", "economy-sweep-reduction-decline", "hub-knowledge", "economy-knowledge-load",
   "economy-card-statement-issue", "economy-card-statement-paid", "economy-card-statement-policy", "economy-paypal-test", "hub-paypal-test",
+  "hub-card-requests", "economy-card-request-decide", "economy-card-request-policy",
 ]);
 
 const flag = (a: string[], name: string): string | null => {
@@ -313,6 +318,14 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     }
     case "economy-paypal-test":
       return h.paypalTestCheckout(p[0] ? int(p[0], "amountMinor") : 100, actor);
+    case "hub-card-requests":
+      return h.cardRequests(p[0] ?? null);
+    case "economy-card-request-decide":
+      if (p[1] === "approve") return h.cardRequestDecide(p[0], "approve", p[2] ?? null, p.slice(3).join(" ") || null, actor);
+      return h.cardRequestDecide(p[0], p[1], null, p.slice(2).join(" ") || null, actor);
+    case "economy-card-request-policy":
+      return h.cardRequestPolicy(flag(a, "--above") !== null ? int(flag(a, "--above"), "above") : null,
+        flag(a, "--valid-hours") !== null ? int(flag(a, "--valid-hours"), "valid-hours") : null, actor);
     case "hub-paypal-test":
       return h.paypalTest();
     case "hub-storefront":

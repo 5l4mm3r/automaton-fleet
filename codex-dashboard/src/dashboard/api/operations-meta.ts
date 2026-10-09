@@ -18,6 +18,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "card_receipt_settle", "identity_documents_set", "provider_secret_upload", "storefront_probe", "destination_paypal_link",
   // v53: the weekly card statement and the owner's PayPal receiving test.
   "card_statement_issue", "card_statement_paid", "card_statement_policy_set", "paypal_test_checkout",
+  // v54: card requests above the owner's threshold, and the threshold.
+  "card_request_decide", "card_request_policy_set",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */

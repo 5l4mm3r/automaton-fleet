@@ -60,6 +60,15 @@ describe.skipIf(!PG_BIN)("v49 identity autonomy, card holds, footprint and freez
       [o.enabled ?? true, o.classes ?? ["residential_address", "legal_name"], o.card ?? false, o.max ?? null, o.daily ?? null, o.excluded ?? [], OWNER]);
   const configure = (cls: string) => R.one(`fleet.fleet_admin_owner_identity_class_set($1, $2, NULL, 'configured', $3)`, [cls, `ovault:${cls}`, OWNER]);
 
+  // v54: the card only under an approved request (PayPal first); small amounts are approved by Fleet Control at once.
+  const approved = async (who: Founder, args: Record<string, any>) => {
+    const r = await R.econ(who, "card.request", { accountId: args.accountId, merchant: args.merchant, amountMinor: args.maxMinor, paypalUnavailable: "card_only_merchant",
+      purpose: args.purpose ?? "a purchase the treasury PayPal cannot pay", ...(args.envelopeId ? { envelopeId: args.envelopeId } : {}) });
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    expect(r.request.status).toBe("approved");
+    return { ...args, requestId: r.request.requestId };
+  };
+
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 1, allocationCents: 10_000, simulatedSettlement: false });
     [F] = R.founders;
@@ -118,7 +127,7 @@ describe.skipIf(!PG_BIN)("v49 identity autonomy, card holds, footprint and freez
     await R.one(`fleet.fleet_admin_wallet_limits_set($1, NULL, NULL, 3_000, NULL, 'card pilot', $2)`, [F.id, OWNER]);
     expect((await R.econ(F, "card.authorize", { accountId: account, merchant: "Shop Ltd", maxMinor: 3_001 })).code).toBe("FLEET_CARD_LIMIT");
     const cashBeforeHold = await R.balance(`agent:${F.id}:cash`);
-    const h = await R.econ(F, "card.authorize", { accountId: account, merchant: "Shop Ltd", maxMinor: 3_000, purpose: "hosting plan" });
+    const h = await R.econ(F, "card.authorize", await approved(F, { accountId: account, merchant: "Shop Ltd", maxMinor: 3_000, purpose: "hosting plan" }));
     expect(h).toMatchObject({ ok: true, charge: { status: "held", holdMaxMinor: 3_000, origin: SHOP, funding: "own", reservedMinor: 3_000 } });
     // v51: the hold reserves its maximum from the agent's own capital before the card can be filled.
     expect(await R.balance(`agent:${F.id}:cash`)).toBe(cashBeforeHold - 3_000);
@@ -135,9 +144,9 @@ describe.skipIf(!PG_BIN)("v49 identity autonomy, card holds, footprint and freez
     expect(await R.balance(`agent:${F.id}:cash`)).toBe(cashBeforeHold - 1_200);
     expect(await R.balance("fleet:card:payable")).toBe(1_200);
     // An unused hold is voided by the agent; a used, undeclared one is booked at its maximum by the reaper.
-    const h2 = await R.econ(F, "card.authorize", { accountId: account, merchant: "Other", maxMinor: 500 });
+    const h2 = await R.econ(F, "card.authorize", await approved(F, { accountId: account, merchant: "Other", maxMinor: 500 }));
     expect((await R.econ(F, "card.void", { chargeId: h2.charge.chargeId })).charge.status).toBe("void");
-    const h3 = await R.econ(F, "card.authorize", { accountId: account, merchant: "Third", maxMinor: 700 });
+    const h3 = await R.econ(F, "card.authorize", await approved(F, { accountId: account, merchant: "Third", maxMinor: 700 }));
     const b = await claim();
     expect(await ask(b, "owner_card:cvc")).toMatchObject({ ok: true });
     await close(b);

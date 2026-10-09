@@ -1181,6 +1181,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v53: card statements only by their issuer (the reaper's tick or the owner) and the owner's "paid"; the schedule only by the owner.
     fleet_card_statements: new Set(["fleet_card_statement_issue", "fleet_admin_card_statement_paid"]),
     fleet_card_statement_policy: new Set(["fleet_admin_card_statement_policy_set"]),
+    // v54: card requests by the agent's request, its hold (uses it up), the owner's decision and the reaper's expiry; the threshold only by the owner.
+    fleet_card_requests: new Set(["fleet_econ_card_request", "fleet_econ_card_authorize", "fleet_admin_card_request_decide", "svc_card_requests_expire"]),
+    fleet_card_request_policy: new Set(["fleet_admin_card_request_policy_set"]),
     fleet_card_receipts: new Set(["fleet_admin_card_receipt_record", "fleet_admin_card_receipt_resolve", "fleet_admin_card_receipt_settle"]),
     // v49: the owner's standing authority and account freezes only by the owner; identity uses only by the worker's request
     // function; sealed custody credentials only by the owner, the custody key only by custody.

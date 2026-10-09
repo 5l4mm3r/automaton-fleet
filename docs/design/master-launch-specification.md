@@ -8,7 +8,9 @@ storefront and settlement; its G3/G4 stages are now built (v52).
 - O15: PayPal Business as an individual;
 - O16: the credit card, repaid weekly.
 
-It adds schema v53 (the weekly card statement, the owner's receiving test) and UI 0.11.0. Nothing else changes.
+It adds schema v53 (the weekly card statement, the owner's receiving test) and UI 0.11.0.
+
+Revision 3 also adds O17 (2026-10-09: PayPal first, the card by request) and schema v54. Nothing else changes.
 
 **Scope of authority.** The owner authorized local implementation, validation, commit and push of a reviewed candidate.
 Not authorized yet, and not done:
@@ -59,6 +61,7 @@ reviewed migration without re-opening an owner decision.
 | O13 | Initial setup and live activation are separate from ordinary autonomous operation. There are no routine renewals and no recurring transaction approvals merely as a precaution. | Completion handoff |
 | O14 | No forced journaling or action, no permanent opportunity weights, no compulsory study, no arbitrary business-model restrictions. | Earlier handoffs |
 | O15 | The treasury PayPal stays the owner's own account — **upgraded to Business as an individual**. This is an experiment, not a company: no company, VAT or business-admin gates (live API keys and selling need a Business account; an individual one is enough). | Owner, 2026-10-08 evening |
+| O17 | **PayPal first; the card is the last option.** An agent asks Fleet Control for the card only when PayPal truly cannot pay, within its own wallet. Fleet Control approves up to £100; above that the owner decides and funds the card from the treasury first. This replaces the earlier "no £100/order owner threshold" note (O10) for card use only. | Owner, 2026-10-09 |
 | O16 | The card on file is the owner's **credit card**. Charges are taken from the treasury (agent wallets / allocations) at once. A **weekly card statement** lists the charges and the amount owed; the owner moves that amount from the treasury PayPal to the card and marks it paid. | Owner, 2026-10-08 evening |
 
 ### 1.2 Implementation choices (reviewable)
@@ -181,6 +184,17 @@ PayPal cannot pay a credit card directly, so the owner withdraws to the bank and
 
 ### 5.2 Flow
 
+0. **Request (v54, O17).** PayPal first. `card.request` names the merchant account and site, the amount,
+   `paypalUnavailable` (`card_only_merchant` | `paypal_needs_login` | `payee_no_paypal` | `payouts_unavailable`) and the
+   purpose.
+   - `payouts_unavailable` is refused while the treasury can pay out (`FLEET_PAYPAL_FIRST`).
+   - The agent's own spendable capital (or the named envelope) must cover the whole amount.
+   - Up to `owner_review_above_minor` (default 10000 = £100), Fleet Control approves at once. Above it the request waits
+     for the owner (P1), who funds the card from the treasury first and approves with the transfer reference.
+   - A hold needs an approved request on the same account, site and envelope, for no more than the approved amount; it
+     uses the request up.
+   - Booking a pre-funded charge records the owner's transfer as that charge's card repayment, once.
+   - Unused requests expire (default 48 h once approved; 72 h awaiting the owner).
 1. **Hold.** `card.authorize` takes the account (the merchant site), a maximum, and optionally an envelope.
    - Requires the standing authority and a card on file.
    - **Reserves** the maximum from the agent's own spendable capital, or from the envelope. If neither covers it, the hold
@@ -429,7 +443,7 @@ provider link and the revealed credentials.
 
 Each step needs explicit owner authorization; none has been done.
 
-1. **Deploy** 45 → 53 (§13). The gateway installs dormant (no token).
+1. **Deploy** 45 → 54 (§13). The gateway installs dormant (no token).
 2. **PayPal:**
    1. create a Live REST app and request Payouts;
    2. seal its credentials in the dashboard;
@@ -460,7 +474,7 @@ Each step needs explicit owner authorization; none has been done.
 ### 13.1 Compatibility
 
 - Every component refuses any schema but its own. Production runs schema 45 with fda78a0.
-- v46–v53 only **add**: new tables and columns, restated functions, and new or replaced constraints on tables with no
+- v46–v54 only **add**: new tables and columns, restated functions, and new or replaced constraints on tables with no
   production rows yet.
 - **Behaviour changes for the two living agents after deploy:**
   - exhaustion is death;
@@ -473,17 +487,17 @@ Each step needs explicit owner authorization; none has been done.
 ### 13.2 Deploy
 
 1. Build on the VPS; take the pins from the build output.
-2. Run `fleet-rollout.sh rehearse <pins> 45 53` on the production copy. Expect:
+2. Run `fleet-rollout.sh rehearse <pins> 45 54` on the production copy. Expect:
    - a clean audit;
    - a verified ledger;
    - no journal or balance change;
    - no agent exhausted.
-3. Run `fleet-release.sh … 45 53`. It writes one `production_deployed` event and promotes UI 0.11.0.
+3. Run `fleet-release.sh … 45 54`. It writes one `production_deployed` event and promotes UI 0.11.0.
 4. Upgrade the founders: Agent 2 first, then Founder 1.
 
 ### 13.3 Recovery (correct terms)
 
-- **Preferred: fix forward.** A code fix on schema 53 needs no restore and loses nothing.
+- **Preferred: fix forward.** A code fix on schema 54 needs no restore and loses nothing.
 - **A schema revert to 45 does not preserve newer writes in the running system.** `fleet-rollout.sh revert`:
   1. exports every post-cutover row and journal as **recovery evidence** (`*-post-cutover-*.dump`);
   2. refuses to continue until those are reconciled and acknowledged (`FLEET_REVERT_DISCARD_ACK=<journals>:<events>`);
@@ -519,6 +533,7 @@ Each step needs explicit owner authorization; none has been done.
 | Card bypass: reserve first, liability once, repayment tracked, invoice choice | v48 + v51 | IMPLEMENTED, LOCALLY VERIFIED |
 | Card product and mechanisms verified | §5.1 | PayPal Credit UK verified unusable; owner chose a credit card (O16) |
 | Weekly card statement, "Mark as paid" | v53 (§5.1) | IMPLEMENTED, LOCALLY VERIFIED |
+| PayPal first; card by request (≤ £100 Fleet Control, above: owner, card pre-funded and repaid once) | v54 (`card.request`, `fleet_card_requests`) | IMPLEMENTED, LOCALLY VERIFIED |
 | Owner receiving test (owner capital, never revenue) | v53, `economy-paypal-test`, Treasury → Receiving test | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal) |
 | Proton Bridge host setup | `scripts/fleet-proton-bridge-setup.sh` | IMPLEMENTED (syntax-checked; runs only on the host with sudo) |
 | Standing authority with document upload; values never reach agents | v49 + v51, broker, browser `upload` | IMPLEMENTED, LOCALLY VERIFIED (no real provider) |

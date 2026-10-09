@@ -2109,7 +2109,7 @@ export class PgFleetStore {
    * before exhaustion is judged).
    */
   async lifecycleTick(): Promise<{ cardHolds: Record<string, unknown>; availability: Record<string, unknown>; settlement: Record<string, unknown>;
-    insolvency: Record<string, unknown>; reductions: Record<string, unknown>; cardStatement: Record<string, unknown> }> {
+    insolvency: Record<string, unknown>; reductions: Record<string, unknown>; cardStatement: Record<string, unknown>; cardRequests: Record<string, unknown> }> {
     const one = (sql: string) => this.tx(async (c) => (await c.query(sql)).rows[0].r as Record<string, unknown>);
     return {
       cardHolds: await one("SELECT svc_card_holds_expire(50) AS r"),
@@ -2120,6 +2120,8 @@ export class PgFleetStore {
       reductions: await one("SELECT svc_sweep_reductions_expire() AS r"),
       // v53: the weekly card statement, at the owner's weekday and hour.
       cardStatement: await one("SELECT svc_card_statement_tick() AS r"),
+      // v54: card requests past their time expire.
+      cardRequests: await one("SELECT svc_card_requests_expire() AS r"),
     };
   }
 

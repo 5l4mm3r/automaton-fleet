@@ -1,6 +1,6 @@
 # Launch candidate — deployment, onboarding, recovery and checklist (revision 3)
 
-- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v53 on top of production schema 45, dashboard UI 0.11.0.
+- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v54 on top of production schema 45, dashboard UI 0.11.0.
 - **Revision 3 (2026-10-09)** follows the owner's decisions of 2026-10-08:
   - the treasury PayPal stays the owner's own account, **upgraded to Business as an individual** (no company);
   - the card is the owner's **credit card**, repaid **weekly** from the treasury.
@@ -22,6 +22,7 @@
 | v50 | Sweep reductions, knowledge library, PII scrubbing (its dormancy is retired by v51) | No |
 | v51 | Exhaustion is death; card holds reserve first; PayPal money held until available; custody pilot/ongoing; automatic capital and sweep-reduction decisions; document upload authority (off); freeze stops jobs; knowledge revision 2; mail/SMS secrets from the dashboard | No (see §1.1) |
 | v52 | Gumroad storefront gateway surface (gx_*), PayPal-evidence receipt matching, bank-feed surface (rx_*), Gumroad refused to agents directly | No |
+| v54 | The card rule: PayPal first; the card only by request (Fleet Control approves up to £100 within the agent's wallet; the owner decides above, funding the card first) | No |
 | v53 | Weekly card statement (default Monday 09:00 Europe/London) with "Mark as paid"; the owner's PayPal receiving test (at most £10; booked as owner capital, never revenue) | No |
 
 ### 1.1 Behaviour the two living agents will meet after deployment
@@ -48,7 +49,7 @@
 - **Identity broker:** serves documents, and starts mail or SMS from dashboard-sealed secrets.
 - **New unit:** `automaton-fleet-gumroad` (installed only by `scripts/fleet-gumroad-setup.sh`; dormant without a token).
 
-## 2. Deploy (schema 45 → 53)
+## 2. Deploy (schema 45 → 54)
 
 Pins come from the build output, never from placeholders.
 
@@ -59,7 +60,7 @@ Pins come from the build output, never from placeholders.
    4. build the dashboard LIVE export from the same commit.
 2. Rehearse on a copy of production:
    ```
-   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 53
+   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 54
    ```
    Expect all of the following:
    - every migration applies;
@@ -69,7 +70,7 @@ Pins come from the build output, never from placeholders.
    - `hub-wallet-measure` shows `exhausted: false` for both.
 3. Cut over:
    ```
-   bash ~/fleet-release.sh … 45 53
+   bash ~/fleet-release.sh … 45 54
    ```
    This does the backend cutover and promotes UI 0.11.0, with one `production_deployed` event.
 4. Upgrade the founders one at a time, Agent 2 first, then Founder 1:
@@ -93,12 +94,12 @@ Pins come from the build output, never from placeholders.
 Correct terminology matters here. A schema revert does **not** keep newer writes in the running system; the export it
 writes is **recovery evidence**.
 
-- **Fix forward (preferred).** v46–v53 only add. A code fix on schema 53 needs no restore and loses nothing.
+- **Fix forward (preferred).** v46–v54 only add. A code fix on schema 54 needs no restore and loses nothing.
 - **Code-only problem in the new release.** Use the release's own code-only revert. The database is untouched and all
   writes are kept.
 - **A schema revert to 45:**
   ```
-  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 53 <reason>
+  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 54 <reason>
   ```
   1. **UI first:** point the dashboard back to `dashboard.env.pre-0.11.0`.
   2. **Founders first**, if they were upgraded:
@@ -106,7 +107,7 @@ writes is **recovery evidence**.
      fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>
      ```
      Their workspaces, memory and journals are on the host and are not touched by the database step.
-  3. **Recovery evidence.** The script dumps all post-cutover state (`~/automaton_fleet-v53-post-cutover-…dump`).
+  3. **Recovery evidence.** The script dumps all post-cutover state (`~/automaton_fleet-v54-post-cutover-…dump`).
   4. **Refusals:**
      - It refuses to discard journals or events written since cutover until you acknowledge their exact counts with
        `FLEET_REVERT_DISCARD_ACK=<journals>:<events>`.
@@ -155,10 +156,19 @@ Settings live under **Money & identity**; Treasury and agent profiles show the r
 
 1. **Upload it** under Money & identity → 2: number, expiry and CVC. UK PayPal Credit has no card number and cannot be
    used.
-2. **How spending works:**
+2. **PayPal first (v54).** Agents pay through the treasury PayPal wherever the payee takes it. They ask Fleet Control
+   for the card only when PayPal truly cannot pay, naming why and what the purchase is for:
+   - the amount must be covered by the agent's own wallet (or its envelope);
+   - up to £100 Fleet Control approves at once;
+   - above £100 the request waits for you under Treasury → Card clearing → Card requests. Move the amount from the
+     treasury PayPal to the card, then approve with that transfer's reference, or decline. When the charge is booked,
+     your transfer is recorded as its repayment, so the weekly statement does not ask for it again.
+
+   To change the £100 threshold: the same panel, or `economy-card-request-policy --above <minor>`.
+3. **How spending works:**
    - When an agent uses the card, the amount leaves that agent's wallet (or a Fleet Control allocation) at once.
    - The money stays in the treasury PayPal, set aside in the card reserve.
-3. **Weekly statement.** Every Monday at 09:00 (UK time), Treasury → Card clearing shows the statement:
+4. **Weekly statement.** Every Monday at 09:00 (UK time), Treasury → Card clearing shows the statement:
    - every charge (agent, merchant, amount);
    - the total owed on the card.
 
@@ -166,13 +176,13 @@ Settings live under **Money & identity**; Treasury and agent profiles show the r
 
    To change the day or time: Card clearing → "Earlier statements, issue one now, schedule", or
    `economy-card-statement-policy --weekday 1-7 --hour 0-23`.
-4. **Pay it.**
+5. **Pay it.**
    1. Move the total from the treasury PayPal to the card. PayPal cannot pay a credit card directly, so withdraw to your
       bank, then pay the card.
    2. Press **Mark as paid** with the transfer reference (or run `economy-card-statement-paid <statementId>
       <reference>`). This records the card repayment and releases the reserve.
-5. **A newer statement replaces an unpaid older one.** The amount owed is always the whole card balance at issue.
-6. **Invoices.** Money reaching the card (a merchant refund) appears as an invoice. Settle it as return or withdrawal,
+6. **A newer statement replaces an unpaid older one.** The amount owed is always the whole card balance at issue.
+7. **Invoices.** Money reaching the card (a merchant refund) appears as an invoice. Settle it as return or withdrawal,
    either "applied to the card balance" or "transferred".
 
 ### 4.3 Bank details, facts and documents
@@ -247,7 +257,7 @@ Until all four keys hold, no payment leaves.
 ## 5. Launch checklist (in order)
 
 1. Approve the candidate. Build on the VPS; record the pins; build the LIVE dashboard.
-2. Rehearse 45 → 53 on the VPS copy and review the output, including `hub-wallet-measure`.
+2. Rehearse 45 → 54 on the VPS copy and review the output, including `hub-wallet-measure`.
 3. Cut over with `fleet-release.sh`. Run the read-only checks (§2 step 5). Upgrade Agent 2, then Founder 1.
 4. PayPal: Live app, sealed credentials, rail, webhook, readiness (§4.1).
 5. **Receiving test.** Open a £1 test under Treasury → Receiving test (or `economy-paypal-test 100`), pay it from
