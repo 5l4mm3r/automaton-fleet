@@ -34,4 +34,6 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
 export const WRITE_OPS: ReadonlySet<string> = new Set([
   "notification_ack", "agent_hold", "agent_release", "mission_assign", "mission_end", "mission_request", "reveal_take", "mail_assign",
   "notification_delete", "notification_delete_acknowledged", "passkey_rename", "command_clear",
+  // v60: the owner names an Agent (display only; the registry name and identity are unchanged).
+  "agent_rename",
 ]);

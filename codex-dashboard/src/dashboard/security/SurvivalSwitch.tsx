@@ -8,13 +8,14 @@ import { useCallback, useEffect, useState } from "react";
 import type { GatewayClient } from "../api/client";
 import { FleetApiError, CATEGORY_TEXT } from "../api/errors";
 import { button, input } from "../ui";
+import { displayAgentName } from "../naming";
 
 type Protection = { enabled: boolean; reason: string; setBy: string; setAt: string; exhaustedAgents: Array<{ agentId: string; name: string; protected: boolean }>;
   agents: Array<{ agentId: string; name: string; override?: "protected" | "live"; protected: boolean }> };
 
 const describe = (e: unknown) => e instanceof FleetApiError ? `${CATEGORY_TEXT[e.category]} (${e.code})` : e instanceof Error ? e.message : "Operation failed";
 
-export function SurvivalSwitch({ client }: { client: GatewayClient }) {
+export function SurvivalSwitch({ client, agentName = (_id, stored) => displayAgentName(stored) }: { client: GatewayClient; agentName?: (id: string, stored: string) => string }) {
   const [p, setP] = useState<Protection | null>(null), [open, setOpen] = useState(false), [reason, setReason] = useState(""), [busy, setBusy] = useState(false), [msg, setMsg] = useState("");
   const load = useCallback(() => { client.read<Protection>("survival_protection", {}).then(setP, () => setP(null)); }, [client]);
   useEffect(() => { load(); const t = setInterval(load, 60_000); return () => clearInterval(t); }, [load]);
@@ -43,7 +44,7 @@ export function SurvivalSwitch({ client }: { client: GatewayClient }) {
       <p className="mt-1 text-xs text-slate-400">{p.enabled
         ? "No agent is ended for an exhausted wallet. You are told instead, so you can fund or hold it."
         : "The survival rule applies: an agent with nothing spendable and none of its own money held dies at the next lifecycle pass."}</p>
-      {p.exhaustedAgents.length > 0 && <p className="mt-2 text-xs text-red-200">Exhausted now: {p.exhaustedAgents.map((a) => `${a.name}${a.protected ? " (protected)" : " (live: dies at the next pass)"}`).join(", ")}</p>}
+      {p.exhaustedAgents.length > 0 && <p className="mt-2 text-xs text-red-200">Exhausted now: {p.exhaustedAgents.map((a) => `${agentName(a.agentId, a.name)}${a.protected ? " (protected)" : " (live: dies at the next pass)"}`).join(", ")}</p>}
       <p className="mt-2 text-xs text-slate-500">Last set {at} UTC by {p.setBy}: {p.reason}</p>
       <label className="mt-3 block text-xs">Reason (optional)<input className={input} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
       <button type="button" className={`${button} mt-3 w-full ${p.enabled ? "border-amber-600" : "bg-emerald-900"}`} disabled={busy} onClick={flip}>
@@ -51,7 +52,7 @@ export function SurvivalSwitch({ client }: { client: GatewayClient }) {
       </button>
       <details className="mt-3 border-t border-slate-800 pt-2"><summary className="cursor-pointer text-xs text-cyan-300">Advanced: per agent{overrides.length ? ` (${overrides.length} set)` : ""}</summary>
         <p className="mt-1 text-xs text-slate-500">An agent can follow the fleet switch (default), always be protected, or be live on its own.</p>
-        {(p.agents ?? []).map((a) => <label key={a.agentId} className="mt-2 flex items-center justify-between gap-2 text-xs"><span className="truncate">{a.name} <span className={a.protected ? "text-emerald-400" : "text-amber-400"}>{a.protected ? "◆" : "●"}</span></span>
+        {(p.agents ?? []).map((a) => <label key={a.agentId} className="mt-2 flex items-center justify-between gap-2 text-xs"><span className="truncate">{agentName(a.agentId, a.name)} <span className={a.protected ? "text-emerald-400" : "text-amber-400"}>{a.protected ? "◆" : "●"}</span></span>
           <select className="rounded border border-slate-700 bg-slate-900 px-2 py-1" disabled={busy} value={a.override ?? "follow"} onChange={(e) => setAgent(a.agentId, e.target.value)}>
             <option value="follow">Follow fleet</option><option value="protected">Always protected</option><option value="live">Live</option>
           </select></label>)}

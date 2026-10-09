@@ -7,7 +7,7 @@
  * of that day — no second lookup, nothing invented. A payload without the report's shape is "Report unavailable".
  */
 import { money } from "../model";
-import { displayAgentName } from "../naming";
+import { agentLabel } from "../naming";
 
 export type Row = Record<string, unknown>;
 export type Fact = [label: string, value: string];
@@ -53,7 +53,7 @@ export function dailyReport(detail: unknown): DailyReport | null {
   ];
   return {
     date: utcText(detail.generatedAt).slice(0, 10), generatedAt: utcText(detail.generatedAt), window: text(detail.window, 10), sections,
-    agents: agents.map((a) => ({ name: displayAgentName(typeof a.name === "string" ? a.name : null, text(a.agentId, 26)), status: text(a.status, 20),
+    agents: agents.map((a) => ({ name: agentLabel({ name: typeof a.name === "string" ? a.name : null, label: typeof a.label === "string" ? a.label : null }, text(a.agentId, 26)), status: text(a.status, 20),
       mode: text(a.mode, 20), cash: amount(a.cashMinor), value: amount(a.valueMinor) })),
   };
 }

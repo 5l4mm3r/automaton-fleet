@@ -11,6 +11,7 @@ import { FleetApiError, CATEGORY_TEXT } from "../api/errors";
 import { sealForCustody, sealOwnerDocument, sealOwnerFact, sealProviderSecret } from "../api/seal";
 import { money } from "../model";
 import { Panel, button, input } from "../ui";
+import { displayAgentName } from "../naming";
 
 type Row = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 type AgentRef = { id: string; name: string };
@@ -62,14 +63,14 @@ const PAYPAL_UNAVAILABLE: Record<string, string> = { card_only_merchant: "the me
   payee_no_paypal: "the payee cannot receive PayPal", payouts_unavailable: "treasury PayPal payments are not switched on" };
 
 /** v54: PayPal first — card requests; Fleet Control approves small ones, you decide the rest (fund the card first). */
-function CardRequests({ data, call, name }: { data: Row; call: (op: string, args: Record<string, unknown>) => Promise<unknown>; name: (id: string) => string }) {
+function CardRequests({ data, call, name }: { data: Row; call: (op: string, args: Record<string, unknown>) => Promise<unknown>; name: (id: string, stored?: string | null) => string }) {
   const list = (data.requests ?? []) as Row[];
   const waiting = list.filter((r) => r.status === "pending_owner" && String(r.expiresAt) > new Date().toISOString());
   return <div className="mb-4">
     <h4 className="font-semibold">Card requests (PayPal first)</h4>
     <p className="text-xs text-slate-400">Agents pay through the treasury PayPal. They ask for the card only when PayPal cannot pay, and only within their own wallet. Fleet Control approves up to {money(data.ownerReviewAboveMinor)}; above that it waits for you. Treasury PayPal payments: {data.paypalPayoutsAvailable ? "on" : "off"}.</p>
     {waiting.length ? waiting.map((r) => <div key={r.requestId} className="my-2 rounded border border-red-700 p-3 text-sm">
-      <p className="font-semibold">{r.agentName ?? name(r.agentId)} · {r.merchant} · {money(r.amountMinor)}</p>
+      <p className="font-semibold">{name(r.agentId, r.agentName)} · {r.merchant} · {money(r.amountMinor)}</p>
       <p className="text-xs text-slate-300">Why not PayPal: {PAYPAL_UNAVAILABLE[r.paypalUnavailable] ?? r.paypalUnavailable} · For: {r.purpose} · {r.origin} · expires {when(r.expiresAt)}</p>
       <p className="mt-1 text-xs text-amber-200">To approve: first move {money(r.amountMinor)} from the treasury PayPal to the card, then approve with that transfer’s reference.</p>
       <Form title="Approve (card funded)" fields={[{ key: "reference", label: "Treasury → card transfer reference" }, { key: "note", label: "Note (optional)" }]}
@@ -78,7 +79,7 @@ function CardRequests({ data, call, name }: { data: Row; call: (op: string, args
         submit={(v) => call("card_request_decide", { requestId: r.requestId, decision: "decline", note: v.note || null })} />
     </div>) : <p className="my-2 text-sm text-slate-400">No card request is waiting for you.</p>}
     <details className="mt-2"><summary className="cursor-pointer text-sm text-cyan-300">Recent card requests and your threshold</summary>
-      <ul className="text-sm">{list.filter((r) => !waiting.includes(r)).slice(0, 30).map((r) => <li key={r.requestId} className="border-t border-slate-800 py-1">{when(r.createdAt)} · {r.agentName ?? name(r.agentId)} · {r.merchant} · {money(r.amountMinor)} · {r.status}{r.decidedBy ? ` (${r.decidedBy})` : ""}</li>)}</ul>
+      <ul className="text-sm">{list.filter((r) => !waiting.includes(r)).slice(0, 30).map((r) => <li key={r.requestId} className="border-t border-slate-800 py-1">{when(r.createdAt)} · {name(r.agentId, r.agentName)} · {r.merchant} · {money(r.amountMinor)} · {r.status}{r.decidedBy ? ` (${r.decidedBy})` : ""}</li>)}</ul>
       <Form title="Save threshold" fields={[{ key: "above", label: "You decide requests above (£)", value: (Number(data.ownerReviewAboveMinor) / 100).toFixed(2) },
         { key: "hours", label: "Approved requests valid for (hours)", value: String(data.validHours ?? 48) }]}
         submit={(v) => call("card_request_policy_set", { ownerReviewAboveMinor: minor(v.above), validHours: Number(v.hours) })} />
@@ -87,7 +88,7 @@ function CardRequests({ data, call, name }: { data: Row; call: (op: string, args
 }
 
 /** v53: the weekly card statement — what agents charged to your card and what to move from the treasury PayPal to the card. */
-function CardStatements({ card, call, name }: { card: Row; call: (op: string, args: Record<string, unknown>) => Promise<unknown>; name: (id: string) => string }) {
+function CardStatements({ card, call, name }: { card: Row; call: (op: string, args: Record<string, unknown>) => Promise<unknown>; name: (id: string, stored?: string | null) => string }) {
   const p = card.statementPolicy as Row | undefined, list = (card.statements ?? []) as Row[];
   const open = list.find((s) => s.status === "issued");
   return <div>
@@ -95,7 +96,7 @@ function CardStatements({ card, call, name }: { card: Row; call: (op: string, ar
     <p className="text-xs text-slate-400">{p?.enabled ? `Issued every ${WEEKDAYS[(p.weekday ?? 1) - 1][1]} at ${String(p.hour).padStart(2, "0")}:00 (${p.timeZone}); next ${when(p.nextAt)}.` : "The weekly statement is switched off."} Agents’ card spending already left their wallets; it waits in the card reserve until you pay the card.</p>
     {open ? <div className="my-2 rounded border border-amber-700 p-3 text-sm">
       <p>{when(open.periodStart)} → {when(open.periodEnd)} · {open.chargeCount} charge{open.chargeCount === 1 ? "" : "s"} ({money(open.chargesMinor)}) · <span className="font-semibold text-amber-200">owed on the card: {money(open.dueMinor)}</span></p>
-      <ul className="mt-1 text-xs text-slate-300">{(open.lines as Row[]).map((l) => <li key={l.chargeId}>{when(l.bookedAt)} · {l.agentName ?? name(l.agentId)} · {l.merchant} · {money(l.amountMinor)}</li>)}</ul>
+      <ul className="mt-1 text-xs text-slate-300">{(open.lines as Row[]).map((l) => <li key={l.chargeId}>{when(l.bookedAt)} · {name(l.agentId, l.agentName)} · {l.merchant} · {money(l.amountMinor)}</li>)}</ul>
       {open.dueMinor > 0 && <p className="mt-2 text-xs text-slate-400">Move {money(open.dueMinor)} from the treasury PayPal to the card (PayPal cannot pay a credit card directly: withdraw to your bank, then pay the card), then mark it paid.</p>}
       <Form title="Mark as paid" fields={[{ key: "reference", label: "Transfer / payment reference" }]}
         submit={(v) => call("card_statement_paid", { statementId: open.statementId, reference: v.reference })} />
@@ -128,7 +129,8 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
   const disputes = useRead<Row>(client, "paypal_disputes", {}, []);
   const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); creq.reload(); };
   const call = useCallback(async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); reloadAll(); return r; }, [client]); // eslint-disable-line react-hooks/exhaustive-deps
-  const name = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
+  // One name per agent everywhere: the agent list's (the owner's label or the default), never the registry's raw name.
+  const name = (id: string, stored?: string | null) => agents.find((a) => a.id === id)?.name ?? displayAgentName(stored, id);
   const agentOptions = [["", "Choose an agent"], ...agents.map((a) => [a.id, a.name])];
   const h = health.data;
   return <>
@@ -171,7 +173,7 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
       </div>
       {tx.data ? <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="text-slate-400"><th>When</th><th>Agent</th><th>Kind</th><th>Direction</th><th className="text-right">Amount</th><th className="text-right">Fees</th><th className="text-right">Contribution</th><th>Reference</th></tr></thead>
         <tbody>{(tx.data.items as Row[]).map((i) => <tr key={i.journalId} className="border-t border-slate-800" title={i.reason}>
-          <td className="whitespace-nowrap">{when(i.at)}</td><td>{i.agentId ? (i.agentName ?? name(i.agentId)) : "Fleet"}</td><td>{String(i.kind).replace(/_/g, " ")}</td>
+          <td className="whitespace-nowrap">{when(i.at)}</td><td>{i.agentId ? (name(i.agentId, i.agentName)) : "Fleet"}</td><td>{String(i.kind).replace(/_/g, " ")}</td>
           <td className={i.direction === "in" ? "text-emerald-300" : i.direction === "out" ? "text-red-300" : "text-slate-400"}>{i.direction}</td>
           <td className="text-right font-mono">{i.direction === "internal" ? "—" : money(i.amountMinor)}</td><td className="text-right font-mono">{i.feesMinor ? money(i.feesMinor) : ""}</td>
           <td className="text-right font-mono">{i.contributionMinor ? money(i.contributionMinor) : ""}</td><td className="max-w-48 truncate">{i.reference ?? ""}</td></tr>)}</tbody></table>

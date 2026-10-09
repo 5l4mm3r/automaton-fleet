@@ -53,6 +53,7 @@ export const OPERATIONS: Readonly<Record<string, OperationInfo>> = Object.freeze
   consent_revoke: { kind: "consent_revoke", ops: ["owner_identity_consent_revoke"], stepUp: true, repeat: "converges", audit: "consent revoked + event" },
   passkey_revoke: { kind: "passkey_revoke", ops: ["passkey_revoke"], stepUp: true, repeat: "converges", audit: "auth log" },
   passkey_rename: { kind: "passkey_rename", ops: ["passkey_rename"], stepUp: false, repeat: "converges", audit: "auth log" },
+  rename: { kind: "rename", ops: ["agent_rename"], stepUp: false, repeat: "converges", audit: "agent_renamed event (the registry name and identity are unchanged)" },
   notification_delete: { kind: "notification_delete", ops: ["notification_delete"], stepUp: false, repeat: "converges",
     audit: "none: the notification is deleted (v45); unacknowledged ones only with explicit acknowledge-and-delete" },
   notification_delete_acknowledged: { kind: "notification_delete_acknowledged", ops: ["notification_delete_acknowledged"], stepUp: false, repeat: "converges",
@@ -133,6 +134,8 @@ export async function executeLiveCommand(c: GatewayClient, cmd: LiveCommand): Pr
       return c.call("passkey_revoke", { credentialId: cmd.credentialId });
     case "passkey_rename":
       return c.call("passkey_rename", { credentialId: cmd.credentialId, name: cmd.name });
+    case "rename":
+      return c.call("agent_rename", { agentId: cmd.agentId, name: cmd.name });
     case "notification_delete":
       return c.call("notification_delete", { ids: cmd.ids, acknowledgeUnread: cmd.acknowledgeUnread });
     case "notification_delete_acknowledged":

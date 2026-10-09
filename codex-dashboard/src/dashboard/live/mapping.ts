@@ -8,7 +8,7 @@
  *  toLiveCommand — turns the deck's `{ op, args }` into the audited gateway command (operations.ts). Controls with no
  *                  legitimate live contract are refused here, with the reason, before any request is made.
  */
-import { displayAgentName } from "../naming";
+import { agentLabel } from "../naming";
 import { FleetApiError } from "../api/errors";
 import type { GatewayClient } from "../api/client";
 import type { AgentRow, Json, LiveCommand, LiveSnapshot, MissionBeneficiary, Section } from "../api/types";
@@ -41,7 +41,7 @@ function agentStatus(status: string, held: boolean): Agent["status"] {
 /** One `agents` row (plus the agent's wallet, when read) as the deck's Agent. Shared by the snapshot and the pulse. */
 export function toAgent(a: AgentRow, w?: Row): Agent {
   return {
-    id: a.agentId, name: displayAgentName(a.name, a.agentId), role: words(a.mode ?? "NORMAL"), mode: a.mode ?? "NORMAL", status: agentStatus(a.status, a.held), cash: num(a.cashMinor),
+    id: a.agentId, name: agentLabel(a, a.agentId), role: words(a.mode ?? "NORMAL"), mode: a.mode ?? "NORMAL", status: agentStatus(a.status, a.held), cash: num(a.cashMinor),
     burn: num(w?.runway?.burnPerDayMinor), runwayDays: w?.runway ? (w.runway.days ?? null) : null, colour: colourOf(a.agentId), venture: "", events: [],
   };
 }
@@ -62,7 +62,7 @@ export function toFleet(s: LiveSnapshot, wallets: Wallets = {}): Fleet {
   const names = new Map<string, string>();
 
   const agents: Agent[] = (data(s.agents) ?? []).map((a) => {
-    names.set(a.agentId, displayAgentName(a.name, a.agentId));
+    names.set(a.agentId, agentLabel(a, a.agentId));
     return toAgent(a, wallets[a.agentId]);
   });
   const notices: Notice[] = (((data(s.notifications) as Row | null)?.notifications ?? []) as Row[]).map((n) => ({
@@ -217,6 +217,8 @@ export async function toLiveCommand(cmd: Command, last: LiveSnapshot | null, c: 
     }
     case "passkey_rename":
       return { kind: "passkey_rename", credentialId: required(a, "keyId"), name: required(a, "name") };
+    case "rename":
+      return { kind: "rename", agentId: required(a, "agentId"), name: (a.name ?? "").trim() };
     case "ack_all": {
       const n = (last && last.notifications.state === "ok" ? ((last.notifications.data as Row).notifications ?? []) : []) as Row[];
       return { kind: "ack_all", notificationIds: n.filter((x) => !x.acknowledged_at).map((x) => String(x.notification_id)) };

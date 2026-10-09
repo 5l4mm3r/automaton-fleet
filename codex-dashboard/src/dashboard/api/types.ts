@@ -50,6 +50,8 @@ export interface ReplicationStatus {
 export interface AgentRow {
   agentId: string;
   name: string | null;
+  /** v60: the name the owner sees (their own name for the Agent, or the default). */
+  label?: string | null;
   status: string;
   createdAt: string;
   cashMinor: number;
@@ -133,6 +135,8 @@ export type LiveCommand =
   | { kind: "consent_revoke"; consentId: string }
   | { kind: "passkey_revoke"; credentialId: string }
   | { kind: "passkey_rename"; credentialId: string; name: string }
+  /** v60: the owner's name for an Agent; empty returns it to the default (`Agent-N`). Display only. */
+  | { kind: "rename"; agentId: string; name: string }
   | { kind: "notification_delete"; ids: string[]; acknowledgeUnread: boolean }
   | { kind: "notification_delete_acknowledged" }
   | { kind: "command_clear"; priority: "P0_CRITICAL" | "P1_HIGH" | "P2_IMPORTANT" | "P3_SUMMARY" }
