@@ -171,6 +171,16 @@ export class PgHubAdmin {
   providerSecretUpload(name: string, sealed: Buffer, actor: string) { return this.one(`SELECT fleet_admin_provider_secret_upload($1, $2, $3) AS r`, [name, sealed, actor]); }
   providerSecrets() { return this.one(`SELECT fleet_provider_secrets_json() AS r`); }
   // ── v52: the Gumroad storefront gateway and receipt evidence ──
+  // ── v53: the weekly card statement; the owner's PayPal receiving test ──
+  cardStatementIssue(actor: string) { return this.one(`SELECT fleet_admin_card_statement_issue($1) AS r`, [actor]); }
+  cardStatementPaid(statementId: string, reference: string, actor: string) {
+    return this.one(`SELECT fleet_admin_card_statement_paid($1, $2, $3) AS r`, [statementId, reference, actor]);
+  }
+  cardStatementPolicy(enabled: boolean | null, weekday: number | null, hour: number | null, timeZone: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_card_statement_policy_set($1, $2, $3, $4, $5) AS r`, [enabled, weekday, hour, timeZone, actor]);
+  }
+  paypalTestCheckout(amountMinor: number, actor: string) { return this.one(`SELECT fleet_admin_paypal_test_checkout($1, $2) AS r`, [amountMinor, actor]); }
+  paypalTest() { return this.one(`SELECT fleet_paypal_test_json() AS r`); }
   storefront(agentId: string | null) { return this.one(`SELECT fleet_storefront_json($1) AS r`, [agentId]); }
   storefrontProbe(accountId: string, actor: string) { return this.one(`SELECT fleet_admin_storefront_probe($1, $2) AS r`, [accountId, actor]); }
   destinationPaypal(destinationId: string, railId: string, actor: string) {

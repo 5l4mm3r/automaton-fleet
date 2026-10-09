@@ -16,6 +16,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   // v51: card receipts settled by method, the document authority, mail / SMS provider secrets; v52: the storefront probe and the
   // PayPal treasury as a settlement destination.
   "card_receipt_settle", "identity_documents_set", "provider_secret_upload", "storefront_probe", "destination_paypal_link",
+  // v53: the weekly card statement and the owner's PayPal receiving test.
+  "card_statement_issue", "card_statement_paid", "card_statement_policy_set", "paypal_test_checkout",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */

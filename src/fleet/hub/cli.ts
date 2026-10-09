@@ -82,6 +82,11 @@
  *   economy-card-resolve <receiptId> <return|withdrawal> [--method transfer|card_balance] [--sweep n] [--reference transferRef]
  *                                               v51: card_balance = the money reduced what the fleet owes the card (no transfer)
  *   hub-card | hub-treasury-health | hub-paypal
+ *   economy-card-statement-issue                                              (v53) issue the card statement now (outside the weekly schedule)
+ *   economy-card-statement-paid <statementId> <transferReference>             the statement's total was moved from the treasury PayPal to the card
+ *   economy-card-statement-policy [--enabled on|off] [--weekday 1-7] [--hour 0-23] [--tz Europe/London]   when the weekly statement is issued
+ *   economy-paypal-test [amountMinor]                                         (v53) open a receiving test (default 100 = 1.00; at most 1000); pay it yourself
+ *   hub-paypal-test                                                           the test's progress: approval link, capture, Transaction Search, balance
  *   hub-treasury-tx [agentId] [--limit n] [--before seq] [--direction in|out|internal]   per-transaction treasury list
  *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
  *   owner-identity-autonomy [on|off] [--classes c1,c2] [--card on|off] [--card-max n] [--card-daily n] [--exclude https://a,https://b] [statement…]
@@ -135,6 +140,7 @@ export const HUB_COMMANDS = new Set([
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
   "economy-sweep-reduction-end", "economy-sweep-reduction-decline", "hub-knowledge", "economy-knowledge-load",
+  "economy-card-statement-issue", "economy-card-statement-paid", "economy-card-statement-policy", "economy-paypal-test", "hub-paypal-test",
 ]);
 
 const flag = (a: string[], name: string): string | null => {
@@ -295,6 +301,20 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.identityDocuments(p[0] === "none" ? [] : (p[0] ?? "").split(",").map((x) => x.trim()).filter(Boolean), actor);
     case "hub-provider-secrets":
       return h.providerSecrets();
+    case "economy-card-statement-issue":
+      return h.cardStatementIssue(actor);
+    case "economy-card-statement-paid":
+      return h.cardStatementPaid(p[0], p.slice(1).join(" "), actor);
+    case "economy-card-statement-policy": {
+      const en = flag(a, "--enabled");
+      if (en !== null && !["on", "off"].includes(en)) throw new Error("FLEET_BAD_REQUEST: --enabled on|off");
+      return h.cardStatementPolicy(en === null ? null : en === "on", flag(a, "--weekday") ? int(flag(a, "--weekday"), "weekday") : null,
+        flag(a, "--hour") !== null ? int(flag(a, "--hour"), "hour") : null, flag(a, "--tz"), actor);
+    }
+    case "economy-paypal-test":
+      return h.paypalTestCheckout(p[0] ? int(p[0], "amountMinor") : 100, actor);
+    case "hub-paypal-test":
+      return h.paypalTest();
     case "hub-storefront":
       return h.storefront(p[0] ?? null);
     case "economy-storefront-probe":

@@ -59,9 +59,10 @@ import { V49_SQL } from "./migrations-phase49.js";
 import { V50_SQL } from "./migrations-phase50.js";
 import { V51_SQL } from "./migrations-phase51.js";
 import { V52_SQL } from "./migrations-phase52.js";
+import { V53_SQL } from "./migrations-phase53.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 52;
+export const FLEET_PG_SCHEMA_VERSION = 53;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1209,6 +1210,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 50, name: "insolvency_sweep_reductions_knowledge_library_pii_scrub", sql: V50_SQL },
   { version: 51, name: "exhaustion_death_card_reservations_paypal_availability_documents_knowledge_r2", sql: V51_SQL },
   { version: 52, name: "gumroad_storefront_gateway_receipt_evidence", sql: V52_SQL },
+  { version: 53, name: "weekly_card_statement_owner_receiving_test", sql: V53_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1283,6 +1285,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_paypal_availability(integer)",
   // v52: Gumroad payouts received in the PayPal treasury are matched from PayPal's own records.
   "svc_settlement_paypal_match(integer)",
+  // v53: the weekly card statement (issued at the owner's weekday and hour; nothing to report issues nothing).
+  "svc_card_statement_tick()",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */

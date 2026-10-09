@@ -1,8 +1,14 @@
-# Automaton Fleet — Master Launch Specification (revision 2)
+# Automaton Fleet — Master Launch Specification (revision 3)
 
 Status: AUTHORITATIVE for the launch candidate (2026-10-08). It supersedes revision 1 (commit f4695f6) and earlier design
 notes where they conflict. The Gumroad design (`gumroad-revenue-integration.md`) remains the detailed reference for the
 storefront and settlement; its G3/G4 stages are now built (v52).
+
+**Revision 3 (2026-10-09)** records two owner decisions made on 2026-10-08 after revision 2:
+- O15: PayPal Business as an individual;
+- O16: the credit card, repaid weekly.
+
+It adds schema v53 (the weekly card statement, the owner's receiving test) and UI 0.11.0. Nothing else changes.
 
 **Scope of authority.** The owner authorized local implementation, validation, commit and push of a reviewed candidate.
 Not authorized yet, and not done:
@@ -52,6 +58,8 @@ reviewed migration without re-opening an owner decision.
 | O12 | Gumroad is one channel. 62cbe1b7 and 6178c7bb stay pending until their requirements are evidenced. | Completion handoff |
 | O13 | Initial setup and live activation are separate from ordinary autonomous operation. There are no routine renewals and no recurring transaction approvals merely as a precaution. | Completion handoff |
 | O14 | No forced journaling or action, no permanent opportunity weights, no compulsory study, no arbitrary business-model restrictions. | Earlier handoffs |
+| O15 | The treasury PayPal stays the owner's own account — **upgraded to Business as an individual**. This is an experiment, not a company: no company, VAT or business-admin gates (live API keys and selling need a Business account; an individual one is enough). | Owner, 2026-10-08 evening |
+| O16 | The card on file is the owner's **credit card**. Charges are taken from the treasury (agent wallets / allocations) at once. A **weekly card statement** lists the charges and the amount owed; the owner moves that amount from the treasury PayPal to the card and marks it paid. | Owner, 2026-10-08 evening |
 
 ### 1.2 Implementation choices (reviewable)
 
@@ -157,7 +165,19 @@ The bypass works with any card that has a number:
 | PayPal Business Debit Mastercard | From the PayPal balance (the treasury), at once | None needed: record each charge's PayPal transaction as its repayment reference. Refunds go back to the card or the PayPal balance; settle them as "applied to the card balance". |
 | A credit card (any issuer) | Charged to the card | The owner repays the issuer from the treasury and records each repayment. No API repays a card. |
 
-**The owner must confirm which card is on file.** Nothing else changes.
+**Owner decision O16 (2026-10-08): a credit card.**
+
+**Weekly statement (v53).** `fleet_card_statements` holds one statement per scheduled time:
+- **Schedule:** `fleet_card_statement_policy`, default Monday 09:00 Europe/London. The reaper's `svc_card_statement_tick`
+  issues it; the owner can also issue one at any time.
+- **Contents:** an immutable snapshot of the charges booked in the period, and the amount owed, which is the whole
+  `card_payable` at issue.
+- **Paying:** "Mark as paid" (`fleet_admin_card_statement_paid`) records the v48 card repayment of that amount (never
+  more than is owed now) with the owner's transfer reference.
+- **Supersession:** a newer statement supersedes an unpaid older one, and only the newest can be paid.
+- **Quiet weeks:** nothing charged and nothing owed issues nothing.
+
+PayPal cannot pay a credit card directly, so the owner withdraws to the bank and pays the card from there.
 
 ### 5.2 Flow
 
@@ -381,7 +401,7 @@ provider link and the revealed credentials.
 
 ---
 
-## 11. Dashboard (UI 0.10.0)
+## 11. Dashboard (UI 0.11.0; v53 adds the weekly statement and the receiving test)
 
 **Treasury**
 - health;
@@ -409,7 +429,7 @@ provider link and the revealed credentials.
 
 Each step needs explicit owner authorization; none has been done.
 
-1. **Deploy** 45 → 52 (§13). The gateway installs dormant (no token).
+1. **Deploy** 45 → 53 (§13). The gateway installs dormant (no token).
 2. **PayPal:**
    1. create a Live REST app and request Payouts;
    2. seal its credentials in the dashboard;
@@ -440,7 +460,7 @@ Each step needs explicit owner authorization; none has been done.
 ### 13.1 Compatibility
 
 - Every component refuses any schema but its own. Production runs schema 45 with fda78a0.
-- v46–v52 only **add**: new tables and columns, restated functions, and new or replaced constraints on tables with no
+- v46–v53 only **add**: new tables and columns, restated functions, and new or replaced constraints on tables with no
   production rows yet.
 - **Behaviour changes for the two living agents after deploy:**
   - exhaustion is death;
@@ -453,17 +473,17 @@ Each step needs explicit owner authorization; none has been done.
 ### 13.2 Deploy
 
 1. Build on the VPS; take the pins from the build output.
-2. Run `fleet-rollout.sh rehearse <pins> 45 52` on the production copy. Expect:
+2. Run `fleet-rollout.sh rehearse <pins> 45 53` on the production copy. Expect:
    - a clean audit;
    - a verified ledger;
    - no journal or balance change;
    - no agent exhausted.
-3. Run `fleet-release.sh … 45 52`. It writes one `production_deployed` event and promotes UI 0.10.0.
+3. Run `fleet-release.sh … 45 53`. It writes one `production_deployed` event and promotes UI 0.11.0.
 4. Upgrade the founders: Agent 2 first, then Founder 1.
 
 ### 13.3 Recovery (correct terms)
 
-- **Preferred: fix forward.** A code fix on schema 52 needs no restore and loses nothing.
+- **Preferred: fix forward.** A code fix on schema 53 needs no restore and loses nothing.
 - **A schema revert to 45 does not preserve newer writes in the running system.** `fleet-rollout.sh revert`:
   1. exports every post-cutover row and journal as **recovery evidence** (`*-post-cutover-*.dump`);
   2. refuses to continue until those are reconciled and acknowledged (`FLEET_REVERT_DISCARD_ACK=<journals>:<events>`);
@@ -497,7 +517,10 @@ Each step needs explicit owner authorization; none has been done.
 | Automatic capital decisions; no history required; commitments considered | `fleet_capital_decide` (v30 + v51) | IMPLEMENTED, LOCALLY VERIFIED |
 | Dynamic sweep; temporary reductions with expiry, decided automatically | v30, v50, v51 | IMPLEMENTED, LOCALLY VERIFIED |
 | Card bypass: reserve first, liability once, repayment tracked, invoice choice | v48 + v51 | IMPLEMENTED, LOCALLY VERIFIED |
-| Card product and mechanisms verified | §5.1 | PayPal Credit UK verified unusable; **owner to confirm the card** |
+| Card product and mechanisms verified | §5.1 | PayPal Credit UK verified unusable; owner chose a credit card (O16) |
+| Weekly card statement, "Mark as paid" | v53 (§5.1) | IMPLEMENTED, LOCALLY VERIFIED |
+| Owner receiving test (owner capital, never revenue) | v53, `economy-paypal-test`, Treasury → Receiving test | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal) |
+| Proton Bridge host setup | `scripts/fleet-proton-bridge-setup.sh` | IMPLEMENTED (syntax-checked; runs only on the host with sudo) |
 | Standing authority with document upload; values never reach agents | v49 + v51, broker, browser `upload` | IMPLEMENTED, LOCALLY VERIFIED (no real provider) |
 | Human-only steps identified | §8 | IMPLEMENTED |
 | Exhaustion is death; authoritative measure; held money vs prospective sales | v51 (§6) | IMPLEMENTED, LOCALLY VERIFIED |
@@ -518,8 +541,9 @@ Each step needs explicit owner authorization; none has been done.
 
 ## 15. Genuine external dependencies
 
-1. **The card.** Which product (§5.1), its number on file, and the issuer's repayment route.
+1. **The card.** The owner's credit card (O16): its number on file, and the weekly repayment (bank → card).
 2. **PayPal.**
+   - the treasury account upgraded to Business as an individual (O15);
    - a Live REST app, with Payouts approval;
    - a webhook subscription;
    - real readiness probes;

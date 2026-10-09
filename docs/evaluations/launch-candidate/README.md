@@ -1,6 +1,11 @@
-# Launch candidate — deployment, onboarding, recovery and checklist (revision 2)
+# Launch candidate — deployment, onboarding, recovery and checklist (revision 3)
 
-- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v52 on top of production schema 45, dashboard UI 0.10.0.
+- **Candidate:** branch `fleet/final-v2.4`, schemas v46–v53 on top of production schema 45, dashboard UI 0.11.0.
+- **Revision 3 (2026-10-09)** follows the owner's decisions of 2026-10-08:
+  - the treasury PayPal stays the owner's own account, **upgraded to Business as an individual** (no company);
+  - the card is the owner's **credit card**, repaid **weekly** from the treasury.
+
+  It adds schema v53 (the weekly card statement and the owner's receiving test) and the Proton Bridge setup script.
 - **Specification:** `docs/design/master-launch-specification.md` (revision 2). It covers owner decisions vs implementation
   choices, the requirement matrix and the external dependencies.
 - **Production is unchanged:** fda78a0, schema 45. Nothing below has been run against it. Every numbered step needs the
@@ -17,6 +22,7 @@
 | v50 | Sweep reductions, knowledge library, PII scrubbing (its dormancy is retired by v51) | No |
 | v51 | Exhaustion is death; card holds reserve first; PayPal money held until available; custody pilot/ongoing; automatic capital and sweep-reduction decisions; document upload authority (off); freeze stops jobs; knowledge revision 2; mail/SMS secrets from the dashboard | No (see §1.1) |
 | v52 | Gumroad storefront gateway surface (gx_*), PayPal-evidence receipt matching, bank-feed surface (rx_*), Gumroad refused to agents directly | No |
+| v53 | Weekly card statement (default Monday 09:00 Europe/London) with "Mark as paid"; the owner's PayPal receiving test (at most £10; booked as owner capital, never revenue) | No |
 
 ### 1.1 Behaviour the two living agents will meet after deployment
 
@@ -35,13 +41,14 @@
   - Gumroad-in-PayPal matching;
   - exhaustion;
   - sweep reductions;
-  - the daily sweep (a no-op while the sweep policy is off).
+  - the daily sweep (a no-op while the sweep policy is off);
+  - the weekly card statement (issues nothing when nothing was charged and nothing is owed).
 - **Controller:** gains `POST /v1/webhooks/paypal`.
 - **Custody:** gains the PayPal treasury worker (idle without a rail).
 - **Identity broker:** serves documents, and starts mail or SMS from dashboard-sealed secrets.
 - **New unit:** `automaton-fleet-gumroad` (installed only by `scripts/fleet-gumroad-setup.sh`; dormant without a token).
 
-## 2. Deploy (schema 45 → 52)
+## 2. Deploy (schema 45 → 53)
 
 Pins come from the build output, never from placeholders.
 
@@ -52,7 +59,7 @@ Pins come from the build output, never from placeholders.
    4. build the dashboard LIVE export from the same commit.
 2. Rehearse on a copy of production:
    ```
-   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 52
+   bash ~/fleet-rollout.sh rehearse ~/rlc-pins.txt 45 53
    ```
    Expect all of the following:
    - every migration applies;
@@ -62,9 +69,9 @@ Pins come from the build output, never from placeholders.
    - `hub-wallet-measure` shows `exhausted: false` for both.
 3. Cut over:
    ```
-   bash ~/fleet-release.sh … 45 52
+   bash ~/fleet-release.sh … 45 53
    ```
-   This does the backend cutover and promotes UI 0.10.0, with one `production_deployed` event.
+   This does the backend cutover and promotes UI 0.11.0, with one `production_deployed` event.
 4. Upgrade the founders one at a time, Agent 2 first, then Founder 1:
    ```
    fleet-founders.sh upgrade-runtime <agentId> …
@@ -86,20 +93,20 @@ Pins come from the build output, never from placeholders.
 Correct terminology matters here. A schema revert does **not** keep newer writes in the running system; the export it
 writes is **recovery evidence**.
 
-- **Fix forward (preferred).** v46–v52 only add. A code fix on schema 52 needs no restore and loses nothing.
+- **Fix forward (preferred).** v46–v53 only add. A code fix on schema 53 needs no restore and loses nothing.
 - **Code-only problem in the new release.** Use the release's own code-only revert. The database is untouched and all
   writes are kept.
 - **A schema revert to 45:**
   ```
-  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 52 <reason>
+  bash ~/fleet-rollout.sh revert ~/rlc-pins.txt 45 53 <reason>
   ```
-  1. **UI first:** point the dashboard back to `dashboard.env.pre-0.10.0`.
+  1. **UI first:** point the dashboard back to `dashboard.env.pre-0.11.0`.
   2. **Founders first**, if they were upgraded:
      ```
      fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>
      ```
      Their workspaces, memory and journals are on the host and are not touched by the database step.
-  3. **Recovery evidence.** The script dumps all post-cutover state (`~/automaton_fleet-v52-post-cutover-…dump`).
+  3. **Recovery evidence.** The script dumps all post-cutover state (`~/automaton_fleet-v53-post-cutover-…dump`).
   4. **Refusals:**
      - It refuses to discard journals or events written since cutover until you acknowledge their exact counts with
        `FLEET_REVERT_DISCARD_ACK=<journals>:<events>`.
@@ -122,6 +129,12 @@ Settings live under **Money & identity**; Treasury and agent profiles show the r
 
 ### 4.1 PayPal treasury
 
+0. **Account type.** PayPal gives live API keys only to Business accounts, and its UK terms require a Business account
+   for selling. Upgrade the fleet-treasury PayPal **as an individual / sole trader**:
+   - Account settings → Upgrade to a Business account;
+   - business type **Individual**; your own name as the business name.
+
+   It's free, and needs no company or VAT number. The email, bank and linked card stay the same.
 1. **Create the app.** In developer.paypal.com: Apps & Credentials → **Live** → Create App. Request **Payouts** on the app.
 2. **Seal the credentials.** Under Money & identity → 1, enter `vault:paypal/treasury`, the client id and the secret. They
    are sealed in your browser to custody.
@@ -138,15 +151,29 @@ Settings live under **Money & identity**; Treasury and agent profiles show the r
 
    Paste the webhook id under Money & identity → 1.
 
-### 4.2 Card
+### 4.2 Card (your credit card, repaid weekly)
 
-1. **Confirm the product.** UK PayPal Credit has no card number and cannot be used for the bypass. Use a PayPal Business
-   Debit Mastercard (it charges the treasury directly) or a credit card.
-2. **Upload it** under Money & identity → 2.
-3. **Repay** (credit card only): repay the issuer from the treasury and record it under Treasury → Card clearing. With the
-   debit card, record each charge's PayPal transaction as its repayment reference.
-4. **Invoices.** Money reaching the card appears as an invoice. Settle it as return or withdrawal, either "applied to the
-   card balance" or "transferred".
+1. **Upload it** under Money & identity → 2: number, expiry and CVC. UK PayPal Credit has no card number and cannot be
+   used.
+2. **How spending works:**
+   - When an agent uses the card, the amount leaves that agent's wallet (or a Fleet Control allocation) at once.
+   - The money stays in the treasury PayPal, set aside in the card reserve.
+3. **Weekly statement.** Every Monday at 09:00 (UK time), Treasury → Card clearing shows the statement:
+   - every charge (agent, merchant, amount);
+   - the total owed on the card.
+
+   You also get a Fleet Command notification.
+
+   To change the day or time: Card clearing → "Earlier statements, issue one now, schedule", or
+   `economy-card-statement-policy --weekday 1-7 --hour 0-23`.
+4. **Pay it.**
+   1. Move the total from the treasury PayPal to the card. PayPal cannot pay a credit card directly, so withdraw to your
+      bank, then pay the card.
+   2. Press **Mark as paid** with the transfer reference (or run `economy-card-statement-paid <statementId>
+      <reference>`). This records the card repayment and releases the reserve.
+5. **A newer statement replaces an unpaid older one.** The amount owed is always the whole card balance at issue.
+6. **Invoices.** Money reaching the card (a merchant refund) appears as an invoice. Settle it as return or withdrawal,
+   either "applied to the card balance" or "transferred".
 
 ### 4.3 Bank details, facts and documents
 
@@ -162,10 +189,28 @@ Settings live under **Money & identity**; Treasury and agent profiles show the r
 
 ### 4.4 Mail and SMS (Money & identity → 5)
 
-1. On the Fleet host, install Proton Mail Bridge, sign in once, and export its certificate.
-2. Paste the shared address, Bridge's generated username and password, and the certificate. The broker starts mail and
-   the panel shows connection health.
-3. Optional: a Twilio API key for SMS.
+1. **Plan.** You need a paid Proton plan (Mail Plus or above); the free plan has no Bridge.
+2. **Install the packages.** On the Fleet host, install Proton's signed Bridge package for Ubuntu
+   (<https://proton.me/support/bridge-for-linux>), then run `sudo apt install pass gnupg`.
+3. **Set Bridge up:**
+   ```
+   sudo scripts/fleet-proton-bridge-setup.sh install --apply
+   ```
+   This creates Bridge's own user and keychain and installs the unit (not started yet).
+4. **Sign in once, interactively:**
+   ```
+   sudo -u automaton-fleet-mailbridge -H protonmail-bridge --cli
+   ```
+   Run `login`, then `info` (note the Bridge-generated username and password), then `exit`.
+5. **Start Bridge and print its certificate:**
+   ```
+   sudo scripts/fleet-proton-bridge-setup.sh enable --apply
+   sudo scripts/fleet-proton-bridge-setup.sh cert
+   ```
+6. **Seal the login.** Paste the shared address, the Bridge username and password, and the certificate into Money &
+   identity → 5. The broker starts mail itself and the panel shows connection health. `… check` re-verifies the host at
+   any time, including that Bridge listens on loopback only.
+7. **Optional:** a Twilio API key for SMS.
 
 ### 4.5 Gumroad (optional, separately)
 
@@ -202,12 +247,14 @@ Until all four keys hold, no payment leaves.
 ## 5. Launch checklist (in order)
 
 1. Approve the candidate. Build on the VPS; record the pins; build the LIVE dashboard.
-2. Rehearse 45 → 52 on the VPS copy and review the output, including `hub-wallet-measure`.
+2. Rehearse 45 → 53 on the VPS copy and review the output, including `hub-wallet-measure`.
 3. Cut over with `fleet-release.sh`. Run the read-only checks (§2 step 5). Upgrade Agent 2, then Founder 1.
 4. PayPal: Live app, sealed credentials, rail, webhook, readiness (§4.1).
-5. Receiving: pay one low-value checkout yourself. Watch it go captured → held → available, and check that
-   `hub-money-states` and the PayPal balance agree.
-6. Card: confirm the product, upload it, and turn on the standing authority with conservative maxima (§4.2–4.3).
+5. **Receiving test.** Open a £1 test under Treasury → Receiving test (or `economy-paypal-test 100`), pay it from
+   the approval link, and watch it reach "captured, completed and in the balance: receiving works" (`hub-paypal-test`).
+   The money is your capital in the treasury, not revenue. Don't refund it.
+6. Card: upload your credit card, check the weekly statement schedule, and turn on the standing authority with
+   conservative maxima (§4.2–4.3).
 7. Facts and documents: upload them and choose the document classes (§4.3).
 8. Mail: Bridge on the host, then seal the login (§4.4).
 9. Optional: Gumroad onboarding (§4.5).

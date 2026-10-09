@@ -56,6 +56,33 @@ function Form({ title, fields, submit, note, danger }: { title: string; fields: 
 
 // ─────────────────────────────── Treasury (v48) ───────────────────────────────
 
+const WEEKDAYS = [["1", "Monday"], ["2", "Tuesday"], ["3", "Wednesday"], ["4", "Thursday"], ["5", "Friday"], ["6", "Saturday"], ["7", "Sunday"]];
+
+/** v53: the weekly card statement — what agents charged to your card and what to move from the treasury PayPal to the card. */
+function CardStatements({ card, call, name }: { card: Row; call: (op: string, args: Record<string, unknown>) => Promise<unknown>; name: (id: string) => string }) {
+  const p = card.statementPolicy as Row | undefined, list = (card.statements ?? []) as Row[];
+  const open = list.find((s) => s.status === "issued");
+  return <div>
+    <h4 className="font-semibold">Weekly card statement</h4>
+    <p className="text-xs text-slate-400">{p?.enabled ? `Issued every ${WEEKDAYS[(p.weekday ?? 1) - 1][1]} at ${String(p.hour).padStart(2, "0")}:00 (${p.timeZone}); next ${when(p.nextAt)}.` : "The weekly statement is switched off."} Agents’ card spending already left their wallets; it waits in the card reserve until you pay the card.</p>
+    {open ? <div className="my-2 rounded border border-amber-700 p-3 text-sm">
+      <p>{when(open.periodStart)} → {when(open.periodEnd)} · {open.chargeCount} charge{open.chargeCount === 1 ? "" : "s"} ({money(open.chargesMinor)}) · <span className="font-semibold text-amber-200">owed on the card: {money(open.dueMinor)}</span></p>
+      <ul className="mt-1 text-xs text-slate-300">{(open.lines as Row[]).map((l) => <li key={l.chargeId}>{when(l.bookedAt)} · {l.agentName ?? name(l.agentId)} · {l.merchant} · {money(l.amountMinor)}</li>)}</ul>
+      {open.dueMinor > 0 && <p className="mt-2 text-xs text-slate-400">Move {money(open.dueMinor)} from the treasury PayPal to the card (PayPal cannot pay a credit card directly: withdraw to your bank, then pay the card), then mark it paid.</p>}
+      <Form title="Mark as paid" fields={[{ key: "reference", label: "Transfer / payment reference" }]}
+        submit={(v) => call("card_statement_paid", { statementId: open.statementId, reference: v.reference })} />
+    </div> : <p className="my-2 text-sm text-slate-400">No unpaid statement.</p>}
+    <details className="mt-2"><summary className="cursor-pointer text-sm text-cyan-300">Earlier statements, issue one now, schedule</summary>
+      <ul className="text-sm">{list.filter((s) => s !== open).map((s) => <li key={s.statementId} className="border-t border-slate-800 py-1">{when(s.periodEnd)} · {s.chargeCount} charges · owed {money(s.dueMinor)} · {s.status}{s.paidReference ? ` · ref ${s.paidReference}` : ""}</li>)}</ul>
+      <Form title="Issue a statement now" fields={[]} submit={() => call("card_statement_issue", {})} />
+      <Form title="Save schedule" fields={[{ key: "enabled", label: "Weekly statement", options: [["true", "On"], ["false", "Off"]], value: String(p?.enabled ?? true) },
+        { key: "weekday", label: "Day", options: WEEKDAYS, value: String(p?.weekday ?? 1) }, { key: "hour", label: "Hour (0–23)", value: String(p?.hour ?? 9) },
+        { key: "timeZone", label: "Time zone", value: p?.timeZone ?? "Europe/London" }]}
+        submit={(v) => call("card_statement_policy_set", { enabled: v.enabled === "true", weekday: Number(v.weekday), hour: Number(v.hour), timeZone: v.timeZone })} />
+    </details>
+  </div>;
+}
+
 export function TreasuryPanels({ client, agents }: { client: GatewayClient; agents: AgentRef[] }) {
   const [agent, setAgent] = useState(""), [direction, setDirection] = useState(""), [before, setBefore] = useState<number | null>(null);
   const health = useRead<Row>(client, "treasury_health", {}, []);
@@ -65,7 +92,8 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
   const custody = useRead<Row>(client, "custody", {}, []);
   const survival = useRead<Row[]>(client, "wallet_measure", {}, []);
   const store = useRead<Row>(client, "storefront", {}, []);
-  const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); };
+  const ptest = useRead<Row>(client, "paypal_test", {}, []);
+  const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); };
   const call = useCallback(async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); reloadAll(); return r; }, [client]); // eslint-disable-line react-hooks/exhaustive-deps
   const name = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
   const agentOptions = [["", "Choose an agent"], ...agents.map((a) => [a.id, a.name])];
@@ -119,7 +147,8 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
     </Panel>
 
     <Panel title="Card clearing (your card used as a bypass)">{card.data ? <>
-      <p className="text-sm">Owed on the card: <span className="font-mono">{money(card.data.outstandingMinor)}</span> (reserved in the treasury: {money(card.data.reserveMinor)}). Repay it from the treasury PayPal account with PayPal’s “Make a Payment” (there is no API for this), then record it.</p>
+      <CardStatements card={card.data} call={call} name={name} />
+      <p className="mt-4 text-sm">Owed on the card: <span className="font-mono">{money(card.data.outstandingMinor)}</span> (reserved in the treasury: {money(card.data.reserveMinor)}). Repay it from the treasury PayPal account with PayPal’s “Make a Payment” (there is no API for this), then record it.</p>
       <Form title="Record card repayment" fields={[{ key: "amount", label: "Amount repaid (£)" }, { key: "reference", label: "PayPal transaction / statement reference" }]}
         submit={(v) => call("card_repayment_record", { amountMinor: minor(v.amount), reference: v.reference })} />
       <h4 className="mt-4 font-semibold">Invoices — money paid to your card for an agent</h4>
@@ -153,6 +182,17 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
         {(pp.data.unmatched as Row[]).map((t) => <div key={t.transactionId + t.eventCode} className="my-2 rounded border border-slate-700 p-3 text-sm"><p>{when(t.at)} · {money(t.amountMinor)} {t.currency} · {t.transactionId} ({t.eventCode})</p>
           <Form title="Not revenue (close it)" fields={[]} submit={() => call("paypal_txn_attribute", { railId: t.railId, transactionId: t.transactionId, eventCode: t.eventCode, as: "not_revenue" })} /></div>)}</>}
     </> : <p className="text-sm text-slate-400">{pp.error || "Reading…"}</p>}</Panel>
+
+    <Panel title="Receiving test (you pay a small checkout yourself)">{ptest.data ? <>
+      <p className="mb-2 text-xs text-slate-400">Proves the whole receiving path with your own money: PayPal order, your payment, capture, verified webhook, Transaction Search and the balance. The money is recorded as your capital in the treasury, never as an agent’s revenue. Do not refund it (a refund is reported to you, not posted).</p>
+      <Form title="Open a receiving test" fields={[{ key: "amount", label: `Amount (£, at most ${money(ptest.data.maxMinor)})`, value: "1.00" }]}
+        submit={(v) => call("paypal_test_checkout", { amountMinor: minor(v.amount) })} />
+      {(ptest.data.tests as Row[]).map((t) => <div key={t.checkoutId} className="my-2 rounded border border-slate-700 p-3 text-sm">
+        <p>{when(t.createdAt)} · {money(t.amountMinor)} · {t.mode} · <span className="text-amber-200">{t.stage}</span></p>
+        {t.approvalUrl && <p className="mt-1">Pay it here: <a className="text-cyan-300 underline" href={t.approvalUrl} target="_blank" rel="noopener noreferrer">PayPal checkout</a></p>}
+        {t.captureId && <p className="text-xs text-slate-400">Capture {t.captureId}{t.ownerCapitalMinor ? ` · ${money(t.ownerCapitalMinor)} added to your capital (net of PayPal’s fee)` : ""}{t.balance ? ` · balance ${money(t.balance.availableMinor)} (${when(t.balance.observedAt)})` : ""}</p>}
+      </div>)}
+    </> : <p className="text-sm text-slate-400">{ptest.error || "Reading…"}</p>}</Panel>
 
     <Panel title="Custody activation (money out)">{custody.data ? <>
       <p className="text-sm">{custody.data.activation ? <>{custody.data.activation.mode === "ongoing" ? "Active (ongoing, until you end it)" : `Active until ${when(custody.data.activation.expiresAt)} (pilot)`} · per payment ≤ {money(custody.data.activation.maxInstructionMinor)} · per 24 h ≤ {money(custody.data.activation.maxDailyMinor)}</> : "Not activated: no payment can leave the treasury."} · live signers: {custody.data.liveSigners}</p>

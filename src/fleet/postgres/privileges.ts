@@ -1169,7 +1169,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // records by the agent's checkout ops and the custody executor; card clearing only by the owner (and its booking helper).
     fleet_custody_activations: new Set(["fleet_admin_custody_activate", "fleet_admin_custody_deactivate", "svc_custody_activation_expire"]),
     fleet_agent_wallet_limits: new Set(["fleet_admin_wallet_limits_set"]),
-    fleet_paypal_checkouts: new Set(["fleet_econ_paypal_checkout", "fleet_econ_paypal_cancel", "cx_paypal_work", "cx_paypal_checkout_update", "cx_paypal_capture_record"]),
+    fleet_paypal_checkouts: new Set(["fleet_admin_paypal_test_checkout", "fleet_econ_paypal_checkout", "fleet_econ_paypal_cancel", "cx_paypal_work", "cx_paypal_checkout_update", "cx_paypal_capture_record"]),
     fleet_paypal_webhook_inbox: new Set(["svc_paypal_webhook_receive", "cx_paypal_inbox", "cx_paypal_inbox_result"]),
     fleet_paypal_transactions: new Set(["cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute", "svc_settlement_paypal_match"]),
     fleet_paypal_balance_observations: new Set(["cx_paypal_balance_record"]),
@@ -1178,6 +1178,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       // v51: a hold's reservation is released by its helper (void, expiry, booking).
       "fleet_card_hold_release"]),
     fleet_card_repayments: new Set(["fleet_admin_card_repayment_record"]),
+    // v53: card statements only by their issuer (the reaper's tick or the owner) and the owner's "paid"; the schedule only by the owner.
+    fleet_card_statements: new Set(["fleet_card_statement_issue", "fleet_admin_card_statement_paid"]),
+    fleet_card_statement_policy: new Set(["fleet_admin_card_statement_policy_set"]),
     fleet_card_receipts: new Set(["fleet_admin_card_receipt_record", "fleet_admin_card_receipt_resolve", "fleet_admin_card_receipt_settle"]),
     // v49: the owner's standing authority and account freezes only by the owner; identity uses only by the worker's request
     // function; sealed custody credentials only by the owner, the custody key only by custody.
