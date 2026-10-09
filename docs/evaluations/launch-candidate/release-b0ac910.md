@@ -1,6 +1,6 @@
 # Release package — b0ac910 (schema 59 → 61, dashboard 0.12.1): names, PayPal probe, owner receiving test
 
-Prepared and rehearsed 2026-10-09; **not deployed** (needs the owner's authorization). **Supersedes `release-706d29c.md`
+Prepared and rehearsed 2026-10-09; **DEPLOYED 2026-10-10 11:59:53Z** on the owner's authorization (see the end). **Supersedes `release-706d29c.md`
 and `release-6e1bf5b.md`** — do not cut over from `~/rlc60` or `~/rlc60b`. Production is `f021673`, schema 59, UI 0.12.0.
 No economics, permissions, money-out or launch settings change; founders are not touched.
 
@@ -83,3 +83,39 @@ then `bash ~/rlc61/fleet-rollout.sh revert ~/rlc61/pins.txt 59 61 <reason>`; fix
    probe). Transaction Search access is reported in the evidence note. Nothing else.
 3. With the owner's go: `economy-paypal-test 100`; the owner pays it; `hub-paypal-test` reaches "in the balance".
 4. Then `sale_ingestion` from first use, and the rail may be activated. Refunds and Payouts remain unverified.
+
+## Deployment (2026-10-10, owner-authorized) — DEPLOYED
+
+Pre-flight 11:57Z (VPS clock): pins `0a42ef80…`, package `f26fde1f…`, scripts and build checkout matched; rehearsal
+stamp 2026-10-09 23:36:59Z (valid). Production f021673 / 59 / UI 0.12.0, flags false, custody off, protection on, key
+`4fee40f2…`, sealed credential active, rail pending_setup. (The build VM's clock was ~12 h slow; nothing ran on it.)
+
+- `fleet-release.sh` 11:58:12–11:59:53Z, exit 0; outage 11:59:00–11:59:42Z (42 s). Pre-migration dump
+  `~/automaton_fleet-v59-pre-v61-20261010T115920Z.dump` (`567f49ce…`); migrate 60, 61; reconciliation OK (1,581 events,
+  none purged). UI 0.12.1 at `/opt/automaton-fleet/ui/0.12.1`, root verified through the public edge, unauthenticated
+  read 401; one `production_deployed`.
+- Runtime b0ac910 / `dde2e197…3621`; `/opt/automaton-fleet/current` → b0ac910; flags all false; custody execution off,
+  0 activations; protection on.
+- Founders: identity hashes AND ledger fingerprints identical to the 11:57:59Z baseline; 802 journals before and after;
+  20 accounts each, cash + expense = 10,000; both on fda78a0, heartbeating. Events since the baseline: role grants,
+  `runtime_approved`, `production_deployed`, one `session_opened`, the usual two restart-time `api_auth_failed` heartbeats.
+- Custody restarted on schema 61 with the same key `4fee40f2c10ba139` (key file unchanged); sealed credential active;
+  rail pending_setup; owner-test gate closed. `dist/fleet/custody/paypal-probe.js` present in the pinned release.
+- Hub checks: custody off (no activation, 0 signers, both keyless); PayPal one rail pending_setup, not receiving;
+  treasury 18,184 all in agent partitions; identity authority off; insolvency no deaths, both protected / funded / not
+  exhausted; no storefront; status cap 2, 2 living, DEVELOPMENT, replication off.
+
+## PayPal probe (2026-10-10 12:00:41Z, pinned runtime, as automaton-fleet-custody) — readiness NOT recorded
+
+| Probe | Result |
+|---|---|
+| sealed credential opened by custody | yes |
+| OAuth client-credentials sign-in (live) | **authenticated** |
+| `GET /v1/reporting/balances` | **403** |
+| `GET /v1/reporting/transactions` (empty one-hour window) | **403** |
+| `GET /v1/notifications/webhooks/4JR443408B058674D` | **404** (not a webhook of this app); 0/8 events confirmed |
+
+Nothing recorded: `account_access` needs the account's data readable (balances refused), and `webhook_configuration`
+failed. The rail stays `pending_setup`; the owner-test gate stays closed; no £1 test created. Owner actions: enable the
+app's reporting ("Transaction search") feature; create / confirm the webhook under THIS Live app and record its id;
+then re-run the probe. Evidence: `~/fleet-release-evidence/b0ac910/paypal-probe.json` (build VM).

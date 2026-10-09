@@ -126,29 +126,29 @@ Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
 ## Current production deployment
 
-State after release f021673 (2026-10-09 22:06Z, schema 45 -> 59, UI 0.12.0), per
-docs/evaluations/launch-candidate/release-f021673.md and docs/fleet-production-runbook.md.
+State after release b0ac910 (2026-10-10 11:59Z, schema 59 -> 61, UI 0.12.1), per
+docs/evaluations/launch-candidate/release-b0ac910.md and docs/fleet-production-runbook.md.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
 
 Controller runtime commit (approved, pinned and installed):
-f021673167effb9d619f41f39e9d3d9b9c262eab
+b0ac910322c8c72d992c4b3c7a1c6a90d4ed3201
 
 Runtime build ID:
-0f7c6a6f0c716730f5dd1ec3e3639126b1888c02ab525765e0d2bc6281991da5
+dde2e1977ac57cb299280759763ce4c4f01b8b40d71f7a012daeb3ae22973621
 
 Runtime lockfile SHA256:
 1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1
 
 Database schema:
-v59 (applied 2026-10-09 22:06Z by the f021673 release, 45 -> 59)
+v61 (applied 2026-10-10 11:59Z by the b0ac910 release, 59 -> 61)
 
 Releases: scripts/fleet-release.sh (backend cutover + UI promotion + root verification; ONE
-production_deployed / production_rolled_back event). f021673 rollback: prefer fixing forward (v46–v59 only add).
-Schema revert: UI first (`dashboard.env.pre-0.12.0`), then `~/rlc59/fleet-rollout.sh revert ~/rlc59/pins.txt 45 59
-<reason>` (pre-migration dump ~/automaton_fleet-v45-pre-v59-20261009T220555Z.dump; runtime.env.pre-f021673;
-releases/fda78a0). Never revert once real money or provider data exists — freeze and fix forward (README §3).
+production_deployed / production_rolled_back event). b0ac910 rollback: prefer fixing forward (v60–v61 only add).
+Schema revert: UI first (`dashboard.env.pre-0.12.1`), then `~/rlc61/fleet-rollout.sh revert ~/rlc61/pins.txt 59 61
+<reason>` (pre-migration dump ~/automaton_fleet-v59-pre-v61-20261010T115920Z.dump; runtime.env.pre-b0ac910;
+releases/f021673). Never revert once real money or provider data exists — freeze and fix forward (README §3).
 
 Controller domain:
 https://api.agentfleet.vip  (admin UI: https://admin.agentfleet.vip)
@@ -159,14 +159,18 @@ Current live topology:
   127.0.0.1:8443; admin.agentfleet.vip to the dashboard on 127.0.0.1:8790)
 - FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
 - Operator API (signed requests) on 127.0.0.1:8788 only, via the restricted SSH account fleet-op-tunnel
-- Admin UI: root = UI 0.12.0 (FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.12.0), also at /hq-preview/
+- Admin UI: root = UI 0.12.1 (FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.12.1), also at /hq-preview/; agents shown as
+  Agent-1 / Agent-2 (owner Rename, v60)
 - owner sign-in: password + TOTP (any browser) or passkey + TOTP; owner access must not depend on one browser's
   passkey; methods are never silently removed (docs/admin-access.md)
 - Fleet Command: its own bounded, clearable P0–P3 feed (v45); notifications are disposable (delete = delete);
   every fleet_events row is meaningful (permanent, Fleet history) or temporary (7 / 30-day retention). Subject CLOSED.
 - identity broker, custody, fetcher and the ChatGPT adapter/tunnel run as separate units
 - registry: cap 2, DEVELOPMENT mode, replication off; all four safety flags false; survival protection ON (v55,
-  set by the migration); custody execution off, no rails, standing identity authority off, sweep policy off
+  set by the migration); custody execution off, standing identity authority off, sweep policy off
+- PayPal treasury (onboarding B1, in progress): custody key 4fee40f2… (/var/lib/automaton-fleet-custody, 0600);
+  vault:paypal/treasury sealed; rail b71b3f3c… pending_setup, 0 readiness checks recorded (probe 2026-10-10:
+  sign-in OK, reporting 403, webhook 404 — owner to fix in the PayPal app); no £1 test yet
 - 2 living Agents, both still on runtime fda78a0 (not upgraded at cutover; upgrade is launch step C1), doctrine founder-v5: founder-1 (01M3F50SH7PNX2E3GST13J52AS, shown as
   Agent-1) and agent-2 (01M4C4NXT786Q4E9725N5A15KV)
   (live-verified: v5 delivery, tools, hibernation, slim wake; event-triggered wake and field-journal persistence
