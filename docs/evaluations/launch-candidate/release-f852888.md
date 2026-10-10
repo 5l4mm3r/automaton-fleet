@@ -204,3 +204,24 @@ tree since 0.12.x; 404 before and after).
   - unified Saved / Saved and encrypted / Connected states;
   - an owner email field on Notifications;
   - log the provider-start failure reason.
+
+## UI 0.13.2 (2026-10-10 23:13Z, dashboard only)
+
+`0e0a0de`. Contents:
+- Saved / saved-and-encrypted states with Change on every stored item.
+- Pre-seal Proton Bridge checks.
+- Receiving health and the last send result.
+- A Mail page over the existing `mail_feed` read, with `mail_assign`; agent addresses link to their mail.
+- An owner email field in Delivery policy.
+- A readable Virtual HQ Treasury banner: the plaque moved above it, the balance centred.
+
+Package and deploy:
+- Package `ui-0.13.2-0e0a0de.tgz`, sha256 `cea6d58cdf27f833d2352f0f7d95185dbc392c769061438f21d8a5bc69f33d7b`. Two builds
+  were byte-identical (tree `84e0d153…e9a4`).
+- Staged in `~/rlc0132/` and deployed by the owner at 23:13:43Z. A repeat run was refused (the directory is immutable).
+
+Checks:
+- Live `/` and `/login/` are byte-identical to the build.
+- Tests: 72/72 (0.13.2 unit, codex mapping, command centre), plus the live contract 13/13 and the simulation tests.
+- The banner was verified by headless screenshots at 1024–1600 px; phone width was not verified.
+- Rollback: `dashboard.env.pre-0.13.2`.
