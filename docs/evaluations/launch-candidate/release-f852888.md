@@ -174,3 +174,33 @@ owner: `sudo bash ~/rlc0131/fleet-ui-deploy.sh 0.13.1 …` → DONE 21:18:04Z, d
 live `/` and `/login/` byte-identical to the build; CSP present; dashboard, controller and custody active. No schema,
 controller, runtime or money change. Rollback: `dashboard.env.pre-0.13.1`. `/hq-preview/` is not served (no preview
 tree since 0.12.x; 404 before and after).
+
+## £1 test complete; PayPal rail active; mail live (2026-10-10, evening)
+
+- **£1 test:** `hub-paypal-test` → "captured, completed and in the balance: receiving works" (Transaction Search status
+  S) by 22:26Z.
+- **Rail `b71b3f3c…` (owner-run):** `economy-rail-verify … sale_ingestion verified first_use` (the £1 test), then
+  `economy-rail-status … active`. Readiness: `account_access` + `webhook_configuration` (probe), `sale_ingestion`
+  (first_use); `capabilitiesReady` = `[receive_payments]`; rail `paypal | live | active`. Refunds, payouts, card spend
+  and bank transfer remain unverified. Money out is still off: `REAL_PAYMENTS_ENABLED=false`, custody execution off.
+  Agents are paused, and no venture is assigned to the rail yet.
+- **Mail (B3, partly):**
+  - Install: Proton Bridge 3.27.1 (debsig verified, key `E2C75D68E6234B07`), installed with
+    `fleet-proton-bridge-setup.sh install/enable` (own user, loopback only).
+  - Login seals and the fixes needed:
+    - The first seal lacked the PEM BEGIN/END lines, so mail was NOT_CONFIGURED; this was silent.
+    - The next address was `@gmail.com`, then `@proton.com`, so Bridge refused every send with "invalid return path".
+    - The final address is `fleet.treasury@proton.me`, picked up after an identity restart at 22:19:56Z.
+    - A running provider is not replaced live; the replacement only takes effect on restart.
+  - Owner notification email: `economy-notification-policy - <owner address>` (22:04Z).
+  - Inbound: the owner's test mail was ingested at 22:33:52Z (unassigned, as expected).
+  - Outbound: the 4 stale DAILY reports exhausted 5 attempts on the wrong address. The first real send is the
+    07:00Z daily report.
+  - Still open: the agent mail.send/reply test and the £1 order-delivery test (needs resumed agents).
+- **Follow-ups (UI 0.13.2 + identity):**
+  - pre-seal validation: PEM and an address the Bridge account owns;
+  - send-side health;
+  - live provider replacement;
+  - unified Saved / Saved and encrypted / Connected states;
+  - an owner email field on Notifications;
+  - log the provider-start failure reason.
