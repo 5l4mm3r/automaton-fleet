@@ -15,7 +15,7 @@
 # Operator API.
 
 [Unit]
-Description=Automaton Fleet custody executor (inert in schema v10; no listener, no custody credential)
+Description=Automaton Fleet custody executor (PayPal treasury worker; no listener)
 Documentation=file:///opt/automaton-fleet/current/docs/design/phase-e-treasury-ledger.md
 Wants=postgresql.service
 After=postgresql.service automaton-fleet.service
@@ -52,8 +52,13 @@ SyslogIdentifier=automaton-fleet-custody
 
 # Network: loopback only (PostgreSQL on 127.0.0.1). No egress until a provider
 # integration is designed, reviewed and approved in its own phase.
-IPAddressDeny=any
+# The PayPal treasury worker (v48+) and payout signers call PayPal's public API (api-m.paypal.com). Public internet only:
+# loopback is allowed for PostgreSQL; private, link-local, multicast and reserved ranges stay denied (as the browser and
+# Gumroad units). Until 2026-10-10 this unit kept the schema-v10 "localhost only" rule, which silently stopped every
+# PayPal call from the service (the probe, run outside the unit, succeeded).
 IPAddressAllow=localhost
+IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/4 240.0.0.0/4
+IPAddressDeny=fc00::/7 fe80::/10 ff00::/8
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 # Sandboxing
