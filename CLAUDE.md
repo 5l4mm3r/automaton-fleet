@@ -159,7 +159,8 @@ Current live topology:
   127.0.0.1:8443; admin.agentfleet.vip to the dashboard on 127.0.0.1:8790)
 - FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
 - Operator API (signed requests) on 127.0.0.1:8788 only, via the restricted SSH account fleet-op-tunnel
-- Admin UI: root = UI 0.13.0 (FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.13.0), also at /hq-preview/; agents shown as
+- Admin UI: root = UI 0.13.1 (4ed4122, deployed 2026-10-10 21:18Z via ~/rlc0131; FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.13.1;
+  UI rollback `dashboard.env.pre-0.13.1`); /hq-preview/ is NOT served (no preview tree since 0.12.x); agents shown as
   Agent-1 / Agent-2 (owner Rename, v60; v62: 200-character Unicode names, duplicates tagged, key / account labels);
   v62 owner ↔ agent conversations (thread, files, request answers, card approvals; owner turns treasury-paid) —
   replies need the agents resumed

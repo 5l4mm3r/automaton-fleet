@@ -164,3 +164,13 @@ receiving test on the owner's go.
 - Status at 20:43Z: `captured (waiting for Transaction Search)`; the 20:34Z Balances reading showed £0.00 available
   (likely pending/held on PayPal's side). Next: `hub-paypal-test` reaches "in the balance" → record `sale_ingestion`
   from first use → activate the rail (owner's go). Agents remain paused and cannot use the rail.
+
+## UI 0.13.1 (2026-10-10 21:18Z, dashboard only)
+
+`4ed4122` (saved PayPal keys read as saved). Package `ui-0.13.1-4ed4122.tgz` sha256
+`0fd25d7d067d3c260775625e29d80b2c4435e22a033cfa1ab4a5c6e85e43c695` (two builds byte-identical; live tree digest
+`396a05c9…b069`, 52 files), staged in `~/rlc0131/` with `fleet-ui-deploy.sh` (`5bef3755…`, unchanged). Deployed by the
+owner: `sudo bash ~/rlc0131/fleet-ui-deploy.sh 0.13.1 …` → DONE 21:18:04Z, dashboard pid 755191 → 770799. Checks:
+live `/` and `/login/` byte-identical to the build; CSP present; dashboard, controller and custody active. No schema,
+controller, runtime or money change. Rollback: `dashboard.env.pre-0.13.1`. `/hq-preview/` is not served (no preview
+tree since 0.12.x; 404 before and after).
