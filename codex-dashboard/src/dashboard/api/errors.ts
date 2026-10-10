@@ -61,24 +61,46 @@ export const CATEGORY_TEXT: Record<ErrorCategory, string> = {
   session_expired: "Your session ended. Sign in again.",
   stepup_required: "This action needs a fresh confirmation (passkey, or password and authenticator code).",
   stepup_cancelled: "Confirmation was cancelled; nothing was done.",
-  forbidden: "Refused by the Fleet's security checks.",
+  forbidden: "This was blocked by a security check. Sign in again and retry; if it keeps happening, it may not be allowed.",
   locked: "Sign-in is locked after repeated failures. Wait, then try again.",
   rate_limited: "Too many requests. Wait a moment.",
-  bad_request: "The request was not valid.",
-  conflict: "The Fleet's state changed; refresh and review.",
+  bad_request: "Some details were not accepted. Check the highlighted fields and try again.",
+  conflict: "Something changed while you were working. Refresh the page and check before trying again.",
   insufficient_funds: "Not enough real funds for this.",
-  capability_not_configured: "Not configured for this Fleet (a deliberate state, not a failure).",
+  capability_not_configured: "This feature has not been set up yet.",
   agent_state: "The agent's state does not allow this.",
   replication_blocked: "Replication is blocked by policy or switches.",
   birth_blocked: "A birth is not possible now.",
-  not_found: "Not found.",
+  not_found: "That item could not be found. It may have been removed.",
   acknowledge_required: "Above the advised safe amount: confirm you acknowledge the risk.",
   outcome_unknown: "The connection failed mid-operation. The Fleet was re-read; check the result before trying again.",
   unavailable: "The Fleet is unreachable. Showing nothing rather than stale or fictional data.",
-  unsupported: "Not available in LIVE mode.",
-  failed: "The operation failed.",
+  unsupported: "This isn’t available on the live Fleet.",
+  failed: "That didn’t work. Nothing was changed.",
   login_invalid: "Sign-in details were not accepted. Check the password and the current authenticator code.",
   password_weak: "Choose a longer password.",
   lockout_prevented: "Refused: this would leave you without a way to sign in.",
   tab_unverified: "This browser tab is not verified for changes (it was opened after you signed in elsewhere). Nothing was done. Use “Verify this tab” (passkey or password, with your authenticator code) to make changes here; reading is unaffected.",
 };
+
+/**
+ * Messages for specific codes where the category alone would be vague (what happened, then what to do). Checked
+ * before the category text.
+ */
+export const CODE_TEXT: Readonly<Record<string, string>> = Object.freeze({
+  FLEET_CUSTODY_KEY_UNAVAILABLE: "The secure payments service is not ready to accept keys yet. Nothing was uploaded. Try again in a minute; if it persists, the payments service needs attention.",
+  FLEET_OWNER_VAULT_UNAVAILABLE: "The secure identity service is not ready to accept documents yet. Nothing was uploaded.",
+  FLEET_NO_RECEIVING_RAIL: "PayPal is not ready to receive payments yet. Finish the PayPal checks first.",
+  FLEET_RAIL_NOT_READY: "This payment account has not passed its checks yet, so it cannot be switched on.",
+  FLEET_CONFLICT: "That name is already in use. Choose a different one.",
+  FLEET_INVALID_STATE: "This cannot be done in the current state. Refresh the page and check before trying again.",
+  FLEET_STEPUP_REQUIRED: "Please confirm it’s you (passkey, or password and authenticator code) to continue.",
+});
+
+/** The owner-facing sentence for an error: the specific message or the category's, the Fleet's reason, then the code. */
+export function describeError(e: unknown, fallback = "Something went wrong. Nothing was changed."): string {
+  if (!(e instanceof FleetApiError)) return e instanceof Error && e.message ? e.message : fallback;
+  const head = CODE_TEXT[e.code] ?? CATEGORY_TEXT[e.category];
+  const reason = e.reason && !CODE_TEXT[e.code] ? ` ${e.reason.replace(/^./, (c) => c.toUpperCase()).replace(/([^.!?])$/, "$1.")}` : "";
+  return `${head}${reason} (Error code: ${e.code.replace(/^FLEET_/, "")})`;
+}

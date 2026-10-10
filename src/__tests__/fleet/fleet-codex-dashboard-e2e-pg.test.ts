@@ -11,6 +11,7 @@
  * behaviour change through a fresh passkey step-up; portraits and health identical in Agents and Virtual; a real event
  * moving an agent in real time; the 3D scene and the 2D map; an interrupted feed recovering.
  */
+import { displayAgentName } from "../../../codex-dashboard/src/dashboard/naming";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import fs from "fs";
@@ -172,15 +173,15 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await page.getByRole("button", { name: "Fund agent" }).click();
     await page.getByLabel("Amount in GBP").fill("12.34");
     await page.getByLabel("Reason").fill("e2e funding");
-    await confirm(/Done: fund/);
+    await confirm(/Money sent to the agent\./);
     expect(await cash(A.id)).toBe(before + 1234);
     expect((await R.q(`SELECT op, ok FROM fleet.fleet_admin_auth_log WHERE event = 'stepup' ORDER BY seq DESC LIMIT 1`))[0]).toMatchObject({ ok: true });
-    // Hold and Resume both report "Done: hold", so the second confirmation can match the first status line: wait for
+    // Hold and Resume each report their own line ("Agent paused." / "Agent resumed."); the resume still waits for
     // the real agent row instead.
     const held = async () => (await R.q(`SELECT operator_hold_at FROM fleet.fleet_agents WHERE agent_id = $1`, [A.id]))[0].operator_hold_at !== null;
     const until = async (want: boolean) => { for (let i = 0; i < 100 && (await held()) !== want; i++) await new Promise((r) => setTimeout(r, 100)); return held(); };
     await page.getByRole("button", { name: "Hold" }).click();
-    await confirm(/Done: hold/);
+    await confirm(/Agent paused\./);
     expect(await until(true)).toBe(true);
     await page.getByRole("button", { name: "Resume" }).click();
     await page.getByRole("button", { name: "Review changes" }).click();
@@ -193,7 +194,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await page.getByRole("button", { name: "Add identity fact" }).click();
     await page.getByLabel("Identity class").selectOption("legal_name");
     await page.getByLabel("Value (sealed in this browser before sending)").fill("Owner Example Legal Name");
-    await confirm(/Done: document/);
+    await confirm(/Document uploaded\./);
     const row = await R.q(`SELECT status, sealed FROM fleet.fleet_owner_vault_inbox ORDER BY created_at DESC LIMIT 1`);
     expect(JSON.stringify(row)).not.toContain("Owner Example Legal Name"); // only sealed bytes ever reached the server
     // The broker installs it; the class appears; Reveal opens it in this tab only.
@@ -230,7 +231,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     expect(text).toContain("Fleet-generated wealth");
     // The decision log holds the Admin's earlier hold / resume (stored decisions only).
     await page.getByRole("tab", { name: "Decision Log" }).click();
-    await page.getByText("agent hold set").first().waitFor();
+    await page.getByText("Agent paused by you").first().waitFor();
     expect(await main()).toContain("Model reasoning is never recorded or shown");
     // The information feed shows FleetController's routed events only (v44: P0–P3); audit mechanics never appear there;
     // the full history tab shows the raw record.
@@ -249,7 +250,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     for (const noise of ["session opened", "ledger journal posted", "runtime approved", "role granted", "auth failed"]) expect((historyText ?? "").toLowerCase()).not.toContain(noise);
     await page.getByRole("tab", { name: "Safety & Capabilities" }).click();
     const caps = await main();
-    for (const t of ["REAL PAYMENTS", "HOST SWITCH", "NOT CONFIGURED", "not exposed to this gateway"]) expect(caps.toUpperCase()).toContain(t.toUpperCase());
+    for (const t of ["Real payments", "Set on the server", "Not set up", "cannot see or change"]) expect(caps.toUpperCase()).toContain(t.toUpperCase());
     expect(await page.locator("table button, table input, table select").count()).toBe(0); // nothing editable there
   });
 
@@ -276,7 +277,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
   it("Agents show original portraits with the shared health state (text, not colour alone)", async () => {
     await page.goto(`${ORIGIN}/#Agents`);
     const exp = await expectedBand(A.id);
-    const row = page.locator("tr", { hasText: A.id });
+    const row = page.locator("tr", { has: page.getByRole("button", { name: displayAgentName((await R.q(`SELECT name FROM fleet.fleet_agents WHERE agent_id = $1`, [A.id]))[0].name), exact: true }) });
     await row.getByText(`${exp.label} · ${exp.pct}%`).waitFor();
     // The painted 128×128 portrait (a data: PNG under the CSP), with its state in text and data.
     await row.locator("img[data-band]").waitFor();
@@ -351,7 +352,7 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
         const st = document.querySelector(`rect[data-station="${id}"]`);
         const g = [...document.querySelectorAll('svg[aria-label="Fleet headquarters map"] g[role=button]')].find((e) => e.getAttribute("aria-label")?.startsWith(`${name},`));
         return { power: Number(st?.getAttribute("fill-opacity") ?? 0), agentShown: !!g && g.getAttribute("visibility") !== "hidden" };
-      }, [born.agent_id, born.name]));
+      }, [born.agent_id, displayAgentName(born.name)])); // the map shows the display name (v60: agent-N → Agent-N)
       await page.waitForTimeout(100);
     }
     // While the station is still dark the agent is not shown; once it is online the agent is.
@@ -359,9 +360,9 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     expect(samples.at(-1)!.agentShown).toBe(true);
     expect(Math.min(...samples.map((s) => s.power)), "station starts dormant / powering").toBeLessThan(0.4);
     expect(samples.at(-1)!.power, "station fully online").toBeCloseTo(0.56, 2);
-    await labels.getByRole("button", { name: new RegExp(`^${born.name}, £100\.00, `) }).waitFor({ timeout: 20_000 });
+    await labels.getByRole("button", { name: new RegExp(`^${displayAgentName(born.name)}, £100\.00, `) }).waitFor({ timeout: 20_000 });
     // It then goes to its first destination: its birth mission (Marketing).
-    await labels.getByRole("button", { name: new RegExp(`^${born.name}, .*, MARKETING$`) }).waitFor({ timeout: 20_000 });
+    await labels.getByRole("button", { name: new RegExp(`^${displayAgentName(born.name)}, .*, MARKETING$`) }).waitFor({ timeout: 20_000 });
     await page.getByRole("list", { name: "Recent Fleet activity" }).getByText("Agent born — station online").first().waitFor({ timeout: 20_000 });
   });
 

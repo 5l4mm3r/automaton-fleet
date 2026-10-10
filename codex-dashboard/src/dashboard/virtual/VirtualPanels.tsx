@@ -4,6 +4,7 @@
  * (review + passkey step-up on the gateway). Nothing here holds state of its own.
  */
 import { ProjectCard, projectsOf } from "../command/projects";
+import { eventTitle } from "../copy";
 import { useEffect, useState, type ReactNode } from "react";
 import { money, type Fleet } from "../model";
 import { button } from "../ui";
@@ -110,10 +111,10 @@ export function AgentPanel({ m, fleet, view, control, go, loadLedger }: { m: Age
     <Section title="Venture">{ventures.length ? ventures.map((v, i) => <p key={i} className="text-sm">{String(v.key ?? "venture")}{v.offer ? ` — ${String(v.offer).slice(0, 80)}` : ""} · {String(v.state ?? "")}</p>) : <p className="text-sm text-slate-400">No venture recorded.</p>}</Section>
     <Section title="Recent transactions">{ledger === null ? <p className="text-sm text-slate-400">Reading the agent&apos;s ledger…</p> : ledger.length ? <ol className="space-y-1 text-sm">{ledger.slice(0, 8).map((j, i) => <li key={i}>{time(j.at)} · {String(j.kind ?? "").replace(/_/g, " ")}{j.reason ? ` · ${String(j.reason).slice(0, 60)}` : ""}{Array.isArray(j.postings) && j.postings.length ? ` · ${money(Math.max(...j.postings.map((p: Row) => Number(p.amountMinor) || 0)))}` : ""}</li>)}</ol> : <p className="text-sm text-slate-400">No ledger journals for this agent.</p>}</Section>
     <Section title="Assets">{assets.length ? assets.map((x) => <p key={x.id} className="text-sm">{x.name} · {x.size} MB (inherited from {x.owner})</p>) : <p className="text-sm text-slate-400">No estate assets assigned.</p>}</Section>
-    <Section title="Warnings and dependencies">{[...m.health.band === "CRITICAL" || m.health.band === "WOUNDED" ? [m.health.reasons.join(" ")] : [], ...deps.map((d) => `${String(d.title ?? d.kind ?? "dependency")} · ${String(d.status ?? "")}${d.blocking ? " · blocking" : ""}`)].map((w, i) => <p key={i} className="text-sm text-amber-200">{w}</p>)}
+    <Section title="Warnings and requests">{[...m.health.band === "CRITICAL" || m.health.band === "WOUNDED" ? [m.health.reasons.join(" ")] : [], ...deps.map((d) => `Awaiting your reply: ${String(d.title ?? d.summary ?? d.kind ?? "a request")}${d.blocking ? " (this is holding up its work)" : ""}`)].map((w, i) => <p key={i} className="text-sm text-amber-200">{w}</p>)}
       {m.health.band !== "CRITICAL" && m.health.band !== "WOUNDED" && !deps.length && <p className="text-sm text-slate-400">None.</p>}</Section>
     <Section title="Recent decisions">{decisions.length ? decisions.slice(0, 5).map((c, i) => <p key={i} className="text-sm">{time(c.at)} · capital {minor(c.amountMinor)} → {String(c.outcome ?? "—")}</p>) : <p className="text-sm text-slate-400">No capital decisions.</p>}</Section>
-    <Section title="Recent actions">{events.length ? <ol className="space-y-1 text-sm">{events.slice(0, 10).map((x) => <li key={x.key}>{time(x.at)} · {x.type.replace(/_/g, " ")}{factsOf(x.detail, 2).map(([k, v]) => ` · ${k}: ${v}`).join("")}</li>)}</ol> : <p className="text-sm text-slate-400">No recorded activity.</p>}</Section>
+    <Section title="Recent actions">{events.length ? <ol className="space-y-1 text-sm">{events.slice(0, 10).map((x) => <li key={x.key}>{time(x.at)} · {eventTitle(String(x.type))}{factsOf(x.detail, 2).map(([k, v]) => ` · ${k}: ${v}`).join("")}</li>)}</ol> : <p className="text-sm text-slate-400">No recorded activity.</p>}</Section>
     <div className="mt-5 flex flex-wrap gap-2">
       <button className={button} onClick={() => go("Agents", a.id)}>View full agent</button>
       <button className={button} onClick={() => go("Fleet Command")}>Decisions</button>

@@ -8,6 +8,7 @@
  *  - the Treasury banner: the Treasury's cash and the breakdowns the gateway actually supplies (treasuryBannerFrom).
  */
 import { money, type Fleet } from "../../model";
+import { eventTitle } from "../../copy";
 import type { AgentModel } from "../../command/agents";
 import { BAND_LABEL } from "../../command/economics";
 import { DEPARTMENT } from "../../command/departments";
@@ -72,7 +73,7 @@ export function hqBoardsFrom(fleet: Fleet, view: CommandView | null, models: rea
   const boards: HQBoards = {
     "command:agents": { title: "Agents · condition · room", empty: "No agents", rows: living.slice(0, 12).map((m) => [`${str(m.agent.name, 14)} · ${DEPARTMENT[m.placement.department].name}`, BAND_LABEL[m.health.band], TONE[m.health.band]]) },
     "command:missions": { title: "Missions", empty: "No active missions", rows: fleet.missions.filter((m) => m.status === "active").slice(0, 8).map((m) => [`${name(m.agentId)} · ${str(words(m.kind), 18)}`, m.status, "ok"]) },
-    "treasury:ledger": { title: "Treasury events", empty: "No Treasury events recorded yet", rows: treasuryEvents.slice(0, 8).map((e) => [`${str(words(e.type), 22)} · ${name(e.agentId)}`, amount(e as unknown as Row) || e.at.slice(11, 16)]) },
+    "treasury:ledger": { title: "Treasury events", empty: "No Treasury events recorded yet", rows: treasuryEvents.slice(0, 8).map((e) => [`${str(eventTitle(e.type), 22)} · ${name(e.agentId)}`, amount(e as unknown as Row) || e.at.slice(11, 16)]) },
     "opportunity:board": { title: "Opportunities", empty: "No opportunities under investigation", rows: (view?.opportunities ?? []).slice(0, 8).map((o) => [`${str(o.offer ?? o.key ?? "opportunity", 22)} · ${name(o.agentId)}`, str(o.status ?? "", 12), o.status === "shortlisted" ? "ok" : undefined]) },
     "venture:board": { title: "Ventures", empty: "No ventures yet", rows: (view?.ventures ?? []).slice(0, 8).map((v) => [`${str(v.key ?? "venture", 22)} · ${name(v.agentId)}`, str(v.state ?? "", 12), v.state === "operating" ? "ok" : undefined]) },
     "library:board": { title: "Knowledge records", empty: "No recorded knowledge yet", rows: (view?.knowledge ?? []).slice(0, 8).map((k) => [str(k.subject ?? k.topic ?? "record", 26), name(k.agentId)]) },

@@ -788,10 +788,10 @@ describe("Formal Fleet Command and Virtual panels (rendered)", () => {
     const page = html(h(FleetCommandPage, { fleet: fleet(), view: view(), models, feed: "live", live: true, control, openAgent: () => {}, go: () => {} }));
     for (const t of ["Overview", "Decision Log", "Information Feed", "Behaviour", "Safety &amp; Capabilities", "Advanced", "Controller status", "Healthy", "1 / cap 2", "Founder 1"]) expect(page).toContain(t);
     const caps = capabilitiesOf(fleet(), view());
-    expect(caps.find((c) => c.name === "Real payments")).toMatchObject({ state: "host switch", tone: "unknown" });
-    expect(caps.find((c) => c.name === "Mail")).toMatchObject({ state: "NOT CONFIGURED", tone: "dormant" });
-    expect(caps.find((c) => c.name === "Automatic replication — policy")).toMatchObject({ state: "off" });
-    expect(html(h(CapabilityState, { fleet: fleet(), view: view() }))).toContain("not exposed to this gateway");
+    expect(caps.find((c) => c.name === "Real payments")).toMatchObject({ state: "set on the server", tone: "unknown" });
+    expect(caps.find((c) => c.name === "Email")).toMatchObject({ state: "not set up", tone: "dormant" });
+    expect(caps.find((c) => c.name === "Automatic new agents (your rule)")).toMatchObject({ state: "off" });
+    expect(html(h(CapabilityState, { fleet: fleet(), view: view() }))).toContain("cannot see or change");
   });
 
   it("decision log shows stored decisions and reasons only; the event feed shows what Fleet Command received", () => {
@@ -809,7 +809,7 @@ describe("Formal Fleet Command and Virtual panels (rendered)", () => {
     expect(d).toContain("Would change: More evidence");
     expect(d).toContain("Model reasoning is never recorded or shown");
     const f = html(h(EventFeed, { events: view().events, models }));
-    expect(f).toContain("knowledge recorded");
+    expect(f).toContain("Knowledge recorded");
     expect(html(h(DecisionFeed, { view: null, models }))).toContain("Reading decisions");
   });
 

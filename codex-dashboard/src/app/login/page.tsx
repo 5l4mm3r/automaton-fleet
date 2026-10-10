@@ -13,13 +13,13 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Panel, button, input } from "@/dashboard/ui";
 import { LiveAuth } from "@/dashboard/api/auth";
-import { CATEGORY_TEXT, FleetApiError } from "@/dashboard/api/errors";
+import { describeError } from "@/dashboard/api/errors";
 import type { AuthState } from "@/dashboard/api/types";
 import { liveTools } from "@/dashboard/adapter";
 
 /** Build-time constant (inlined by the bundler). */
 const LIVE = process.env.NEXT_PUBLIC_FLEET_MODE === "live";
-const describe = (e: unknown) => (e instanceof FleetApiError ? `${CATEGORY_TEXT[e.category]} (${e.code})` : "The step failed. Try again.");
+const describe = (e: unknown) => describeError(e, "That step didn’t work. Please try again.");
 
 export default function Login() {
   const [auth] = useState(() => (LIVE && liveTools ? liveTools.auth() : null));

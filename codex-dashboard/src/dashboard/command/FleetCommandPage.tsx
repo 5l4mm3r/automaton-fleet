@@ -45,7 +45,14 @@ export function FleetCommandPage({ fleet, view, models, feed, live, control, ope
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title="Agents">{models.length ? <ul className="space-y-3">{models.map((m) => <li key={m.agent.id}><AgentRow m={m} onOpen={openAgent} /></li>)}</ul> : <p className="text-sm text-slate-400">No agents.</p>}</Panel>
         <Panel title="Team projects">{pending ?? <ProjectsOverview view={view} models={models} onOpenAgent={openAgent} />}</Panel>
-        <Panel title="Pending dependencies">{pending ?? (view!.dependencies.length ? <ul className="space-y-2 text-sm">{view!.dependencies.map((d, i) => <li key={i} className="rounded border border-slate-700 p-2">{val(d.title ?? d.kind ?? d.summary ?? "dependency")} · {val(d.status)}{d.agentId ? ` · ${models.find((m) => m.agent.id === d.agentId)?.agent.name ?? d.agentId}` : ""}</li>)}</ul> : <p className="text-sm text-slate-400">No pending dependencies.</p>)}</Panel>
+        <Panel title="Awaiting reply">{pending ?? (view!.dependencies.length ? <ul className="space-y-2 text-sm">{view!.dependencies.map((d, i) => {
+          const who = d.agentId ? models.find((m) => m.agent.id === d.agentId)?.agent.name ?? "An agent" : "An agent";
+          const since = typeof (d.createdAt ?? d.at) === "string" ? String(d.createdAt ?? d.at).slice(0, 10) : null;
+          return <li key={i} className="rounded border border-amber-700/60 p-3"><p className="font-semibold text-amber-100">{who} is awaiting your reply</p>
+            <p className="mt-1">{val(d.title ?? d.summary ?? d.kind ?? "A request")}</p>
+            {typeof d.action === "string" && d.action && <p className="mt-1 text-slate-300">What it needs from you: {d.action}</p>}
+            <p className="mt-1 text-xs text-slate-400">{since ? `Waiting since ${since}. ` : ""}Replying from the dashboard is not available yet; clearing Fleet Command does not remove this request.</p></li>;
+        })}</ul> : <p className="text-sm text-slate-400">No agent is awaiting your reply.</p>)}</Panel>
       </div>
       <Panel title="Treasury"><TreasurySummary fleet={fleet} view={view} /><button className={`${button} mt-4`} onClick={() => go("Treasury")}>Treasury controls</button></Panel>
     </>}

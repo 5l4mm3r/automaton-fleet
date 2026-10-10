@@ -6,14 +6,14 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import type { GatewayClient } from "../api/client";
-import { FleetApiError, CATEGORY_TEXT } from "../api/errors";
+import { describeError } from "../api/errors";
 import { button, input } from "../ui";
 import { displayAgentName } from "../naming";
 
 type Protection = { enabled: boolean; reason: string; setBy: string; setAt: string; exhaustedAgents: Array<{ agentId: string; name: string; protected: boolean }>;
   agents: Array<{ agentId: string; name: string; override?: "protected" | "live"; protected: boolean }> };
 
-const describe = (e: unknown) => e instanceof FleetApiError ? `${CATEGORY_TEXT[e.category]} (${e.code})` : e instanceof Error ? e.message : "Operation failed";
+const describe = (e: unknown) => describeError(e);
 
 export function SurvivalSwitch({ client, agentName = (_id, stored) => displayAgentName(stored) }: { client: GatewayClient; agentName?: (id: string, stored: string) => string }) {
   const [p, setP] = useState<Protection | null>(null), [open, setOpen] = useState(false), [reason, setReason] = useState(""), [busy, setBusy] = useState(false), [msg, setMsg] = useState("");

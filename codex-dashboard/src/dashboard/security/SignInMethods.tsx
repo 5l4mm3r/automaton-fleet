@@ -8,12 +8,12 @@
  */
 import { useState } from "react";
 import type { LiveView } from "../model";
-import { CATEGORY_TEXT, FleetApiError } from "../api/errors";
+import { describeError } from "../api/errors";
 import type { LiveAuth } from "../api/auth";
 import { button, input } from "../ui";
 import { utcText } from "../notifications/report";
 
-const describe = (e: unknown) => (e instanceof FleetApiError ? `${CATEGORY_TEXT[e.category]} (${e.code})${e.reason ? ` — ${e.reason}` : ""}` : e instanceof Error ? e.message : "The change failed.");
+const describe = (e: unknown) => describeError(e, "The change didn’t go through. Nothing was changed.");
 
 export function SignInMethods({ signIn, auth, run, onRevoke, refresh }: {
   signIn: NonNullable<LiveView["signIn"]> | null; auth: LiveAuth; run: (op: string, args: Record<string, string>) => Promise<unknown>;

@@ -6,7 +6,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { reveal, type RevealHandle, type RevealKind } from "../api/reveal";
-import { CATEGORY_TEXT, FleetApiError } from "../api/errors";
+import { describeError } from "../api/errors";
 import { button } from "../ui";
 import { liveClient } from "./index";
 
@@ -24,7 +24,7 @@ export function LiveReveal({ kind, target, title, close }: { kind: RevealKind; t
     let cancelled = false;
     reveal(liveClient(), kind, target, { onClear: () => { setValue(null); closeRef.current(); } })
       .then((h) => { if (cancelled) { h.clear(); return; } handle.current = h; setValue(h.value); setState(""); })
-      .catch((e) => setState(e instanceof FleetApiError ? `${CATEGORY_TEXT[e.category]} (${e.code})` : "The reveal failed."));
+      .catch((e) => setState(describeError(e, "The secure view could not be opened. Nothing was shown.")));
     return () => { cancelled = true; handle.current?.clear(); el?.close(); };
   }, [kind, target]);
   return <dialog ref={ref} onCancel={close} className="fixed inset-0 m-auto w-[min(92vw,520px)] rounded-xl border border-cyan-700 bg-slate-900 p-6 text-white backdrop:bg-black/80">

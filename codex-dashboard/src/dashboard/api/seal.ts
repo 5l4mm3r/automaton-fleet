@@ -47,10 +47,10 @@ export async function sealOwnerFact(c: GatewayClient, cls: string, value: string
  * `custody:<vaultRef>`); only the custody executor can open it. Returns the upload fields; never sends plaintext.
  */
 export async function sealForCustody(c: GatewayClient, vaultRef: string, clientId: string, clientSecret: string): Promise<{ vaultRef: string; sealedB64: string }> {
-  if (!/^vault:paypal\/[a-z0-9/._-]{1,100}$/.test(vaultRef)) throw new FleetApiError("FLEET_BAD_REQUEST", "the reference is vault:paypal/<name> (lower-case)");
-  if (!/^[^:\s]{8,}$/.test(clientId) || !/^[^:\s]{8,}$/.test(clientSecret)) throw new FleetApiError("FLEET_BAD_REQUEST", "the client id and secret from your PayPal REST app");
+  if (!/^vault:paypal\/[a-z0-9/._-]{1,100}$/.test(vaultRef)) throw new FleetApiError("FLEET_BAD_REQUEST", "Choose a name for these keys.");
+  if (!/^[^:\s]{8,}$/.test(clientId) || !/^[^:\s]{8,}$/.test(clientSecret)) throw new FleetApiError("FLEET_BAD_REQUEST", "Paste the Client ID and Secret exactly as PayPal shows them, without spaces.");
   const key = await c.read<{ publicKey: string | null }>("custody_key");
-  if (!key?.publicKey) throw new FleetApiError("FLEET_CUSTODY_KEY_UNAVAILABLE", "the custody executor has not published its key yet (is it running?)");
+  if (!key?.publicKey) throw new FleetApiError("FLEET_CUSTODY_KEY_UNAVAILABLE", "The secure payments service is not ready yet.");
   const sealed = await sealTo(b64dec(key.publicKey), `${clientId}:${clientSecret}`, `custody:${vaultRef}`);
   return { vaultRef, sealedB64: b64enc(sealed) };
 }

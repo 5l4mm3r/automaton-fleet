@@ -4,6 +4,7 @@
  * (snapshot, command view); writes go through the deck's existing action dialog and the gateway's step-up.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { actorText, eventFacts, eventTitle as titleOf } from "../copy";
 import { codeText } from "../notifications/report";
 import { money, type Fleet } from "../model";
 import { button, input } from "../ui";
@@ -58,14 +59,14 @@ export function FleetControllerStatus({ fleet, view, models }: { fleet: Fleet; v
   const bands = living.reduce<Record<string, number>>((acc, m) => ({ ...acc, [m.health.label]: (acc[m.health.label] ?? 0) + 1 }), {});
   const red = fleet.notices.filter((n) => n.level === "RED" && !n.acknowledged).length;
   const cells: Array<[string, string]> = [
-    ["Controller", lv ? (lv.health ? (lv.health.ok ? "Healthy" : `${lv.health.findings} finding(s)`) : "health unavailable") : view?.mode === "simulation" ? "Simulated" : "—"],
+    ["Fleet status", lv ? (lv.health ? (lv.health.ok ? "Healthy" : `${lv.health.findings} finding(s)`) : "health unavailable") : view?.mode === "simulation" ? "Simulated" : "—"],
     ["Living agents", `${living.length}${rp?.maxAgents != null ? ` / cap ${rp.maxAgents}` : ""}${rp?.ceiling != null ? ` (ceiling ${rp.ceiling})` : ""}`],
     ["Treasury cash", money(lv?.wealth?.cash ?? fleet.treasury)],
     ["Fleet-generated wealth", lv?.wealth ? money(lv.wealth.fleetGenerated) : view?.mode === "simulation" ? "simulated" : "unavailable"],
     ["Replication", rp ? `${rp.met ? "threshold met" : `${money(rp.remainingMinor)} to the next threshold`} · ${rp.blockers.length ? `blocked: ${rp.blockers.join(", ")}` : "no blockers"}` : "unavailable"],
     ["Open RED alerts", String(red)],
-    ["Event routing", !view ? "—" : view.mode === "simulation" ? "simulated" : view.commandEvents === null ? "unavailable: operational feed paused" : "prioritised (P0–P3)"],
-    ["Pending dependencies", view ? String(view.dependencies.length) : "—"],
+    ["Fleet Command feed", !view ? "—" : view.mode === "simulation" ? "Simulated" : view.commandEvents === null ? "Paused (temporarily unavailable)" : "Live, sorted by priority"],
+    ["Awaiting reply", view ? (view.dependencies.length ? `${view.dependencies.length} request${view.dependencies.length === 1 ? "" : "s"}` : "None") : "—"],
     ["Agent health", Object.entries(bands).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(" · ") || "no living agents"],
   ];
   return <dl className="grid gap-3 sm:grid-cols-2">{cells.map(([k, v]) => <div key={k} className="rounded-lg border border-slate-700 p-3"><dt className="text-xs text-slate-400">{k}</dt><dd className="mt-1">{v}</dd></div>)}</dl>;
@@ -82,23 +83,23 @@ export function capabilitiesOf(fleet: Fleet, view: CommandView | null): Capabili
   const sweeps = s?.sweeps ?? view?.treasury?.sweepPolicy ?? null, capital = s?.capital ?? view?.treasury?.capitalPolicy ?? null;
   const yesNo = (v: unknown, on: string, off: string): Pick<Capability, "state" | "tone"> => (v === true ? { state: on, tone: "on" } : v === false ? { state: off, tone: "off" } : { state: "unavailable", tone: "unknown" });
   return [
-    { name: "Real payments", state: "host switch", tone: "unknown", detail: "REAL_PAYMENTS_ENABLED is a FleetController host setting, not exposed to this gateway (fleet:doctor reports it on the host). Withdrawals only record instructions while live money is off." },
-    { name: "Owner sweep", state: "host switch", tone: "unknown", detail: "OWNER_SWEEP_ENABLED is a FleetController host setting, not exposed to this gateway." },
-    { name: "Automatic replication — policy", ...yesNo(lv?.replication?.autoBirthEnabled ?? s?.replication?.auto_birth_enabled, "on", "off"), detail: "Replication policy auto-birth (Admin, step-up)." },
-    { name: "Automatic replication — registry switch", ...yesNo(lv?.replication?.registrySwitch ?? s?.flags?.registryReplicationSwitch, "on", "off"), detail: "Registry replication switch (host operator CLI)." },
-    { name: "Treasury profit sweeps", ...yesNo(sweeps?.enabled, "enabled", "disabled"), detail: "Agent net-profit sweeps into the Treasury (sweep policy)." },
-    { name: "Capital engine", ...yesNo(capital?.enabled, "enabled", "disabled"), detail: "FleetController's capital-request decisions (capital policy)." },
-    { name: "Mail", state: (lv?.mail ?? "unavailable").replace("_", " "), tone: lv?.mail === "CONFIGURED" ? "on" : lv?.mail === "NOT_CONFIGURED" ? "dormant" : "unknown", detail: "Shared mailbox capability. NOT CONFIGURED is the deliberate dormant state." },
-    { name: "SMS", state: (lv?.sms ?? "unavailable").replace("_", " "), tone: lv?.sms === "CONFIGURED" ? "on" : lv?.sms === "NOT_CONFIGURED" ? "dormant" : "unknown", detail: "SMS capability. NOT CONFIGURED is the deliberate dormant state." },
-    { name: "Recorded agent needs", state: String(lv?.recordedNeeds ?? 0), tone: "unknown", detail: "Open communication needs agents recorded (mail/SMS stay dormant until justified)." },
+    { name: "Real payments", state: "set on the server", tone: "unknown", detail: "Whether money can actually leave the Fleet is a server safety switch that this dashboard cannot see or change. While it is off, withdrawals and payouts are recorded but nothing is paid." },
+    { name: "Profit sent to you", state: "set on the server", tone: "unknown", detail: "Automatic transfers of profit to you are controlled by a server safety switch that this dashboard cannot see or change." },
+    { name: "Automatic new agents (your rule)", ...yesNo(lv?.replication?.autoBirthEnabled ?? s?.replication?.auto_birth_enabled, "on", "off"), detail: "Whether agents may be created automatically once the rules are met. You change this under Replication; it asks you to confirm." },
+    { name: "Automatic new agents (server switch)", ...yesNo(lv?.replication?.registrySwitch ?? s?.flags?.registryReplicationSwitch, "on", "off"), detail: "A second, server-side safety switch. Both must be on before any agent is created automatically." },
+    { name: "Profit sharing to the treasury", ...yesNo(sweeps?.enabled, "on", "off"), detail: "Whether a share of each agent’s net profit moves to the treasury." },
+    { name: "Automatic funding decisions", ...yesNo(capital?.enabled, "on", "off"), detail: "Whether the Fleet decides agents’ requests for money by its rules, instead of waiting for you." },
+    { name: "Email", state: lv?.mail === "CONFIGURED" ? "set up" : lv?.mail === "NOT_CONFIGURED" ? "not set up" : "unavailable", tone: lv?.mail === "CONFIGURED" ? "on" : lv?.mail === "NOT_CONFIGURED" ? "dormant" : "unknown", detail: "The shared mailbox agents use. “Not set up” is expected until you connect one under Money & identity." },
+    { name: "Text messages", state: lv?.sms === "CONFIGURED" ? "set up" : lv?.sms === "NOT_CONFIGURED" ? "not set up" : "unavailable", tone: lv?.sms === "CONFIGURED" ? "on" : lv?.sms === "NOT_CONFIGURED" ? "dormant" : "unknown", detail: "SMS for agents. “Not set up” is expected until you connect a provider." },
+    { name: "Agent requests for email or SMS", state: String(lv?.recordedNeeds ?? 0), tone: "unknown", detail: "How many times agents have asked for email or SMS. These stay off until there is a real need." },
   ];
 }
 
 export function CapabilityState({ fleet, view }: { fleet: Fleet; view: CommandView | null }) {
   const tone = { on: "text-amber-200", off: "text-slate-300", dormant: "text-slate-300", unknown: "text-slate-400" } as const;
-  return <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-slate-400"><tr><th className="p-2">Capability</th><th className="p-2">State</th><th className="p-2">Meaning</th></tr></thead>
-    <tbody>{capabilitiesOf(fleet, view).map((c) => <tr key={c.name} className="border-t border-slate-800"><td className="p-2">{c.name}</td><td className={`p-2 font-mono ${tone[c.tone]}`}>{c.state.toUpperCase()}</td><td className="p-2 text-slate-400">{c.detail}</td></tr>)}</tbody></table>
-    <p className="mt-2 text-xs text-slate-400">Read-only here. These states are not changed by this dashboard; automatic births are a Replication policy setting with step-up.</p></div>;
+  return <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-slate-400"><tr><th className="p-2">Setting</th><th className="p-2">Status</th><th className="p-2">What it means</th></tr></thead>
+    <tbody>{capabilitiesOf(fleet, view).map((c) => <tr key={c.name} className="border-t border-slate-800"><td className="p-2">{c.name}</td><td className={`p-2 font-medium ${tone[c.tone]}`}>{c.state.replace(/^./, (x) => x.toUpperCase())}</td><td className="p-2 text-slate-400">{c.detail}</td></tr>)}</tbody></table>
+    <p className="mt-2 text-xs text-slate-400">For information. Only the automatic-new-agents rule can be changed from this dashboard, under Replication.</p></div>;
 }
 
 export function TreasurySummary({ fleet, view }: { fleet: Fleet; view: CommandView | null }) {
@@ -140,7 +141,7 @@ export function DecisionFeed({ view, models, onOpenAgent, compact = false }: { v
     reasons: Array.isArray(x.lessons) ? x.lessons.map(String) : [], source: "venture decision record" })));
   const fromEvents: D[] = view.events.filter((e) => isDecision(e.type) && e.type !== "capital_decision").map((e) => ({ key: e.key, at: e.at, agentId: e.agentId,
     kind: e.type.startsWith("replication_") || e.type.startsWith("birth_") ? "replication" : e.type.startsWith("mission_") ? "mission" : e.type.startsWith("estate_") ? "estate" : e.type.endsWith("_policy_set") ? "policy" : e.type.startsWith("agent_hold") ? "intervention" : "other",
-    title: words(e.type), facts: [["actor", e.actor ?? "—"], ...factsOf(e.detail)], reasons: Array.isArray(e.detail.reasons) ? e.detail.reasons.map(String) : [], source: "events" }));
+    title: titleOf(e.type), facts: [["By", actorText(e.actor)], ...eventFacts(e.detail, 5)], reasons: Array.isArray(e.detail.reasons) ? e.detail.reasons.map(String) : [], source: "events" }));
   const all = [...capital, ...ventureDecisions, ...fromEvents].filter((d) => (kind === "all" || d.kind === kind) && (!q || `${d.title} ${name.get(d.agentId ?? "") ?? ""} ${d.facts.map((f) => f.join(" ")).join(" ")}`.toLowerCase().includes(q.toLowerCase())))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, compact ? 6 : 200);
   return <>
@@ -165,8 +166,8 @@ export function EventFeed({ events, models, onOpenAgent, limit = 100, filterable
     {filterable && <label className="mb-3 block text-sm">Filter events<input className={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Type, agent or actor" /></label>}
     {shown.length === 0 && <p className="text-sm text-slate-400">No events{q ? " match" : " recorded yet"}.</p>}
     <ol className="max-h-[32rem] space-y-2 overflow-y-auto pr-1">{shown.map((e) => <li key={e.key} className="border-l-2 border-cyan-900 pl-3 text-sm">
-      <p className="text-xs text-slate-400">{time(e.at)} · {e.actor ?? "—"}{e.agentId ? <> · {onOpenAgent ? <button className="text-cyan-300 underline" onClick={() => onOpenAgent(e.agentId!)}>{name.get(e.agentId) ?? e.agentId}</button> : name.get(e.agentId) ?? e.agentId}</> : null}</p>
-      <p className="[overflow-wrap:anywhere]">{words(e.type)}{factsOf(e.detail, 3).map(([k, v]) => ` · ${k}: ${v}`).join("")}</p>
+      <p className="text-xs text-slate-400">{time(e.at)} · {actorText(e.actor, (id) => name.get(id))}{e.agentId ? <> · {onOpenAgent ? <button className="text-cyan-300 underline" onClick={() => onOpenAgent(e.agentId!)}>{name.get(e.agentId) ?? e.agentId}</button> : name.get(e.agentId) ?? e.agentId}</> : null}</p>
+      <p className="[overflow-wrap:anywhere]">{e.type === "notification" ? codeText(typeof e.detail.code === "string" ? e.detail.code : undefined) : titleOf(e.type)}{eventFacts(e.type === "notification" ? null : e.detail, 3, (id) => name.get(id)).map(([k, v]) => ` · ${k}: ${v}`).join("")}</p>
     </li>)}</ol>
   </>;
 }
@@ -175,19 +176,8 @@ const PRIORITY_TEXT: Record<EventPriority, string> = { P0_CRITICAL: "Critical", 
   AUDIT_ONLY: "Audit", AGENT_ACTIVITY_ONLY: "Activity" };
 const PRIORITY_TONE: Record<EventPriority, string> = { P0_CRITICAL: "border-red-500 text-red-200", P1_HIGH: "border-amber-500 text-amber-200",
   P2_IMPORTANT: "border-cyan-600 text-cyan-200", P3_SUMMARY: "border-slate-600 text-slate-300", AUDIT_ONLY: "border-slate-700 text-slate-400", AGENT_ACTIVITY_ONLY: "border-slate-700 text-slate-400" };
-/** Plain-language titles for the events Fleet Command shows (others read as words). */
-const EVENT_TEXT: Record<string, string> = {
-  agent_died: "Agent died", agent_orphaned: "Agent orphaned", agent_quarantined: "Agent quarantined", agent_born: "Agent born", agent_activated: "Agent activated",
-  agent_hold_set: "Agent held by the Admin", agent_hold_released: "Agent hold released", agent_unresponsive: "Agent unresponsive", agent_recovered: "Agent recovered",
-  runtime_verification_failed: "Runtime verification failed", economy_failsafe: "Economy failsafe engaged", spend_circuit_breaker_set: "Security breaker changed",
-  mission_started: "Mission started", mission_ended: "Mission ended", mission_requested: "Mission requested", capital_requested: "Capital request submitted",
-  capital_decision: "Capital request decided", treasury_sweep: "Treasury sweep", wallet_transfer: "Treasury transfer", agent_transfer: "Agent transfer",
-  admin_withdrawal_requested: "Owner withdrawal requested", runtime_approved: "Production release approved", founder_runtime_upgrade_verified: "Agent runtime upgraded",
-  cap_set: "Population cap changed", venture_created: "Venture launched", venture_state: "Venture state changed", notification: "Notification",
-  replication_requested: "Replication requested", replication_granted: "Replication granted", replication_rejected: "Replication rejected",
-  birth_ordered: "Birth ordered", birth_authorized: "Birth authorised", estate_opened: "Estate opened", estate_settled: "Estate settled",
-};
-export const eventTitle = (e: FleetEvent) => EVENT_TEXT[e.type] ?? words(e.type).replace(/^./, (c) => c.toUpperCase());
+/** Plain-language titles: the shared catalogue (dashboard/copy.ts). */
+export const eventTitle = (e: FleetEvent) => titleOf(e.type);
 
 /** "Clear <priority>": confirmed (Critical needs an explicit acknowledgement); display housekeeping, no step-up. */
 function ClearConfirm({ label, count, critical, close, confirm }: { label: string; count: number; critical: boolean; close: () => void; confirm: () => Promise<void> }) {
@@ -231,7 +221,7 @@ export function CommandFeed({ events, models, onOpenAgent, limit = 100, onClear 
       </div>
       <ol className="space-y-2">{shown.map((e) => <li key={e.key} className={`border-l-2 pl-3 text-sm ${PRIORITY_TONE[p].split(" ")[0]}`}>
         <p className="text-xs text-slate-400">{time(e.at)}{e.agentId ? <> · {onOpenAgent ? <button className="text-cyan-300 underline" onClick={() => onOpenAgent(e.agentId!)}>{name.get(e.agentId) ?? e.agentId}</button> : name.get(e.agentId) ?? e.agentId}</> : null}</p>
-        <p className="[overflow-wrap:anywhere]">{e.type === "notification" ? codeText(typeof e.detail.code === "string" ? e.detail.code : undefined) : eventTitle(e)}{factsOf(e.type === "notification" ? null : e.detail, 3).map(([k, v]) => ` · ${k}: ${v}`).join("")}</p>
+        <p className="[overflow-wrap:anywhere]">{e.type === "notification" ? codeText(typeof e.detail.code === "string" ? e.detail.code : undefined) : eventTitle(e)}{eventFacts(e.type === "notification" ? null : e.detail, 3, (id) => name.get(id)).map(([k, v]) => ` · ${k}: ${v}`).join("")}</p>
       </li>)}</ol></section> : null;
   })}
     {asking && onClear && <ClearConfirm label={PRIORITY_TEXT[asking]} count={visible.filter((e) => e.priority === asking).length} critical={asking === "P0_CRITICAL"}

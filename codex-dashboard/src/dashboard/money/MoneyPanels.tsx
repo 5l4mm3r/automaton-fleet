@@ -7,16 +7,17 @@
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { GatewayClient } from "../api/client";
-import { FleetApiError, CATEGORY_TEXT } from "../api/errors";
+import { describeError } from "../api/errors";
 import { sealForCustody, sealOwnerDocument, sealOwnerFact, sealProviderSecret } from "../api/seal";
 import { money } from "../model";
 import { Panel, button, input } from "../ui";
 import { displayAgentName } from "../naming";
+import { credentialName, credentialRef, eventTitle } from "../copy";
 
 type Row = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 type AgentRef = { id: string; name: string };
 
-const describe = (e: unknown) => e instanceof FleetApiError ? `${CATEGORY_TEXT[e.category]} (${e.code})${e.reason ? ` — ${e.reason}` : ""}` : e instanceof Error ? e.message : "Operation failed";
+const describe = (e: unknown) => describeError(e);
 const minor = (v: string): number => {
   if (!/^\d+(\.\d{1,2})?$/.test(v.trim())) throw new Error("Enter an amount in pounds, e.g. 12.50");
   const [w, f = ""] = v.trim().split(".");
@@ -327,14 +328,16 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
   const [docs, setDocs] = useState<string[] | null>(null);
   const docsChosen = docs ?? (a?.documentClasses as string[] | undefined) ?? [];
   return <>
-    <Panel title="1 · PayPal treasury credentials">
-      <p className="text-sm text-slate-300">Create a REST app in your PayPal Business account (developer.paypal.com → Apps &amp; Credentials → Live). Paste its client id and secret here: they are sealed in this browser to the custody executor’s key ({key.data?.fingerprint ? `key ${String(key.data.fingerprint).slice(0, 16)}…` : "not yet published"}) and only custody can open them.</p>
-      <Form title="Seal and upload PayPal credentials" fields={[{ key: "ref", label: "Reference", value: "vault:paypal/treasury" }, { key: "id", label: "Client id" }, { key: "secret", label: "Client secret", type: "password" }]}
-        submit={async (v) => call("custody_credential_upload", await sealForCustody(client, v.ref, v.id.trim(), v.secret.trim()))} />
-      {(key.data?.credentials as Row[] | undefined)?.map((c) => <p key={c.vaultRef} className="text-sm">{c.vaultRef} · {c.status}{c.currentKey ? "" : " · sealed to an older key: re-upload"}{c.status === "active" && <button className={`${button} ml-2`} onClick={() => void call("custody_credential_revoke", { vaultRef: c.vaultRef })}>Revoke</button>}</p>)}
-      <p className="mt-3 text-sm text-slate-400">Then on the Fleet host: register the credential reference and the PayPal rail, run its readiness checks (economy-credential-register / economy-rail-add --mode live / economy-rail-verify).</p>
-      {(pp.data?.rails as Row[] | undefined)?.map((r) => <Form key={r.railId} title={`Webhook id for ${r.label}`} note={`Subscribe a webhook in your PayPal app to ${typeof location === "undefined" ? "https://<api domain>" : location.origin.replace("://admin.", "://api.")}/v1/webhooks/paypal and paste its id.`}
-        fields={[{ key: "id", label: "PayPal webhook id" }]} submit={(v) => call("rail_webhook_set", { railId: r.railId, webhookId: v.id.trim() })} />)}
+    <Panel title="1 · PayPal account">
+      <p className="text-sm text-slate-300">Connect the PayPal Business account the Fleet uses as its treasury. In developer.paypal.com, open Apps &amp; Credentials, switch to <strong>Live</strong>, and copy your app’s Client ID and Secret. They are encrypted in this browser before they leave it, and only the Fleet’s payments service can read them.</p>
+      <p className="mt-2 text-xs text-slate-400">Secure payments service: {key.data?.fingerprint ? <span className="text-emerald-300">ready</span> : <span className="text-amber-300">not ready yet — saving keys will be refused until it is</span>}</p>
+      <Form title="Save PayPal keys" fields={[{ key: "name", label: "Name", value: "Treasury" }, { key: "id", label: "Client ID" }, { key: "secret", label: "Secret", type: "password" }]}
+        note="The name is your label for these keys. Saving under an existing name replaces those keys; a new name stores a separate set."
+        submit={async (v) => call("custody_credential_upload", await sealForCustody(client, credentialRef(v.name), v.id.trim(), v.secret.trim()))} />
+      {(key.data?.credentials as Row[] | undefined)?.map((c) => <p key={c.vaultRef} className="text-sm">{credentialName(String(c.vaultRef))} · {c.status === "active" ? "Active" : c.status === "revoked" ? "Withdrawn" : String(c.status)}{c.currentKey ? "" : " · saved for an older security key, please save these keys again"}{c.status === "active" && <button className={`${button} ml-2`} onClick={() => void call("custody_credential_revoke", { vaultRef: c.vaultRef })}>Withdraw</button>}</p>)}
+      <p className="mt-3 text-sm text-slate-400">Next, the Fleet operator links these keys to the treasury and runs PayPal’s checks. Progress appears under Treasury.</p>
+      {(pp.data?.rails as Row[] | undefined)?.map((r) => <Form key={r.railId} title={`PayPal notifications · ${r.label}`} note={`In the same Live app, open Webhooks, add ${typeof location === "undefined" ? "https://<api domain>" : location.origin.replace("://admin.", "://api.")}/v1/webhooks/paypal with the payment, refund and dispute events, then paste the Webhook ID PayPal shows.${r.webhookId ? ` Current: ${String(r.webhookId)}.` : ""}`}
+        fields={[{ key: "id", label: "Webhook ID" }]} submit={(v) => call("rail_webhook_set", { railId: r.railId, webhookId: v.id.trim() })} />)}
     </Panel>
 
     <Panel title="2 · Your card (bypass only)">
@@ -434,7 +437,7 @@ export function AgentFootprint({ client, agentId, onReveal }: { client: GatewayC
       const x = t.detail as Row, link = x.url ?? x.pageUrl ?? x.origin;
       return <li key={i} className="border-l-2 border-cyan-800 pl-3"><span className="text-slate-400">{when(t.at)}</span> · {t.kind === "browser" ? `browser ${x.action} (${x.status})${x.platform ? ` on ${x.platform}` : ""}`
         : t.kind === "identity_use" ? `your ${String(x.class).replace(/_/g, " ")}${x.field ? ` (${x.field})` : ""} filled on ${x.origin}`
-        : t.kind === "card" ? `card ${x.status} · ${x.merchant} · ${x.amountMinor ? money(x.amountMinor) : `hold ${money(x.holdMaxMinor)}`}` : String(x.type ?? "").replace(/_/g, " ")}
+        : t.kind === "card" ? `card ${x.status} · ${x.merchant} · ${x.amountMinor ? money(x.amountMinor) : `hold ${money(x.holdMaxMinor)}`}` : eventTitle(String(x.type ?? ""))}
         {link && <> · <a className="text-cyan-300 underline" href={String(link)} target="_blank" rel="noopener noreferrer">{String(link).slice(0, 60)}</a></>}</li>;
     })}</ol></Panel>
   </>;

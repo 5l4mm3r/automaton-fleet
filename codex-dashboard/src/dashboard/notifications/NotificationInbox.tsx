@@ -6,6 +6,7 @@
  * first; an unread one is only deleted through an explicit "Acknowledge and delete"). Notifications are disposable
  * messages: a deleted one is gone (schema v45 — no record is kept). Every string is rendered as text.
  */
+import { LEVEL_TEXT } from "../copy";
 import { useEffect, useRef, useState } from "react";
 import type { Notice } from "../model";
 import { button } from "../ui";
@@ -102,7 +103,7 @@ export function NotificationInbox({ notices, filter, compact, run, agentName, li
     {shown.map((n) => <div key={n.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-700 p-3">
       <div className="flex min-w-0 items-start gap-3">
         {selecting && !compact && <input type="checkbox" className="mt-1.5" aria-label={`Select ${n.title}`} checked={picked.has(n.id)} onChange={() => toggle(n.id)} />}
-        <div className="min-w-0"><span className={tone(n.level)}>{n.level}</span>{isTestNotice(n.code) && <span className="ml-2 rounded border border-slate-600 px-1 text-xs text-slate-400">TEST</span>}
+        <div className="min-w-0"><span className={tone(n.level)}>{LEVEL_TEXT[n.level] ?? n.level}</span>{isTestNotice(n.code) && <span className="ml-2 rounded border border-slate-600 px-1 text-xs text-slate-400">TEST</span>}
           <button className="my-1 block text-left text-sm hover:text-cyan-200 hover:underline" onClick={() => setOpen(n)}>{n.code === "DAILY_REPORT" ? `${n.title} — open the report` : n.title}</button>
           <small className="text-slate-400">{n.time} · {n.acknowledged ? "Acknowledged" : "Unread"}</small></div>
       </div>

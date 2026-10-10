@@ -5,6 +5,7 @@
  * real event or a real state change. Unknown event types are kept in the feeds but are not animated.
  */
 import { DEPARTMENT, type DepartmentId } from "./departments";
+import { eventTitle } from "../copy";
 import type { HealthBand } from "./economics";
 
 export type VisualKind =
@@ -77,13 +78,13 @@ const RULES: Rule[] = [
   [/^capital_decision$/, (e) => ({ kind: "CAPITAL_REQUEST_DECIDED", path: ok(e.detail) ? ["command", "treasury", "agent"] : ["command", "agent"],
     label: `Capital decision: ${String(e.detail.outcome ?? e.detail.decision ?? "decided")}` })],
   [/^(settlement_|venture_attribution|experiment_revenue_attributed)/, (e) => (e.type === "settlement_failed" || e.type === "settlement_conflict"
-    ? { kind: "SYSTEM_ALERT", path: ["treasury", "security"], label: words(e.type) }
+    ? { kind: "SYSTEM_ALERT", path: ["treasury", "security"], label: eventTitle(e.type) }
     : { kind: "REVENUE_EVENT", path: ["external", "venture", "agent"], label: "Revenue settled" })],
   [/^treasury_sweep$/, () => ({ kind: "TREASURY_TRANSFER", path: ["agent", "treasury"], label: "Profit contribution to the Treasury" })],
   [/^genesis_funded$/, () => ({ kind: "TREASURY_TRANSFER", path: ["treasury", "agent"], label: "Genesis capital" })],
   [/^(wallet_transfer|agent_transfer)$/, (e) => ({ kind: "TREASURY_TRANSFER",
     path: String(e.detail.to ?? e.detail.target ?? "") === "treasury" ? ["agent", "treasury"] : ["treasury", "agent"], label: "Transfer" })],
-  [/^(payment_order_settled|commitment_added|provider_cost_reconciled|provider_credits_recorded)$/, (e) => ({ kind: "EXPENSE_EVENT", path: ["agent", "external"], label: words(e.type) })],
+  [/^(payment_order_settled|commitment_added|provider_cost_reconciled|provider_credits_recorded)$/, (e) => ({ kind: "EXPENSE_EVENT", path: ["agent", "external"], label: eventTitle(e.type) })],
   [/^mission_started$/, (e) => {
     const k = String(e.detail.kind ?? e.detail.missionKind ?? "").toLowerCase();
     return { kind: k.includes("market") ? "MARKETING_EVENT" : "MISSION_STARTED", path: ["command", "agent"], label: `Mission started${k ? `: ${words(k)}` : ""}` };
@@ -91,25 +92,25 @@ const RULES: Rule[] = [
   [/^mission_ended$/, () => ({ kind: "MISSION_COMPLETED", path: ["agent", "command"], label: "Mission completed" })],
   [/^mission_requested$/, () => ({ kind: "MISSION_STARTED", path: ["command"], label: "Mission requested" })],
   [/^knowledge_/, () => ({ kind: "RESEARCH_EVENT", path: ["library", "agent", "command"], label: "Research recorded" })],
-  [/^opportunity_/, (e) => ({ kind: "OPPORTUNITY_EVENT", path: ["opportunity", "agent"], label: words(e.type) })],
+  [/^opportunity_/, (e) => ({ kind: "OPPORTUNITY_EVENT", path: ["opportunity", "agent"], label: eventTitle(e.type) })],
   // Team projects: two-agent events travel between the two agents (fromAgentId → toAgentId as recorded); the others are
   // the project's own record in Venture / Dev.
-  [/^project_/, (e) => ({ kind: "PROJECT_EVENT", label: PROJECT_LABEL[e.type] ?? words(e.type),
+  [/^project_/, (e) => ({ kind: "PROJECT_EVENT", label: PROJECT_LABEL[e.type] ?? eventTitle(e.type),
     path: typeof e.detail.fromAgentId === "string" && typeof e.detail.toAgentId === "string"
       ? (e.detail.fromAgentId === e.agentId ? ["agent", "counterpart"] : ["counterpart", "agent"])
       : ["agent", "venture"] })],
-  [/^(venture_|decision_(recorded|measured|corrected)|experiment_)/, (e) => ({ kind: "VENTURE_EVENT", path: ["agent", "venture"], label: words(e.type) })],
+  [/^(venture_|decision_(recorded|measured|corrected)|experiment_)/, (e) => ({ kind: "VENTURE_EVENT", path: ["agent", "venture"], label: eventTitle(e.type) })],
   [/^agent_died$/, () => ({ kind: "AGENT_DIED", path: ["agent", "estate"], label: "Agent died" })],
-  [/^estate_/, (e) => ({ kind: "ESTATE_TRANSFER", path: ["agent", "estate"], label: words(e.type) })],
+  [/^estate_/, (e) => ({ kind: "ESTATE_TRANSFER", path: ["agent", "estate"], label: eventTitle(e.type) })],
   [/^(agent_born|genesis_activated)$/, () => ({ kind: "AGENT_BORN", path: ["command", "floor"], label: "Agent born" })],
-  [/^(replication_|birth_)/, (e) => ({ kind: "REPLICATION_EVENT", path: ["command"], label: words(e.type) })],
-  [/^(identity_|account_|agent_identity_created|browser_credential_|agent_credential_revoked)/, (e) => ({ kind: "IDENTITY_EVENT", path: ["agent", "identity"], label: words(e.type) })],
-  [/^(mail_|comms_provider|phone_)/, (e) => ({ kind: "COMMS_EVENT", path: ["comms"], label: words(e.type) })],
-  [/^(owner_request_|external_dependency_recorded|capability_dependency)/, (e) => ({ kind: "DEPENDENCY_EVENT", path: ["agent", "command"], label: words(e.type) })],
+  [/^(replication_|birth_)/, (e) => ({ kind: "REPLICATION_EVENT", path: ["command"], label: eventTitle(e.type) })],
+  [/^(identity_|account_|agent_identity_created|browser_credential_|agent_credential_revoked)/, (e) => ({ kind: "IDENTITY_EVENT", path: ["agent", "identity"], label: eventTitle(e.type) })],
+  [/^(mail_|comms_provider|phone_)/, (e) => ({ kind: "COMMS_EVENT", path: ["comms"], label: eventTitle(e.type) })],
+  [/^(owner_request_|external_dependency_recorded|capability_dependency)/, (e) => ({ kind: "DEPENDENCY_EVENT", path: ["agent", "command"], label: eventTitle(e.type) })],
   [/^(economy_failsafe|health_challenge_failed|runtime_verification_failed|agent_quarantined|agent_unresponsive|scope_denied|authorization_denied|spend_circuit_breaker_set)$/,
-    (e) => ({ kind: "SYSTEM_ALERT", path: ["security", "command"], label: words(e.type) })],
+    (e) => ({ kind: "SYSTEM_ALERT", path: ["security", "command"], label: eventTitle(e.type) })],
   [/^notification$/, (e) => (String(e.detail.class ?? "") === "RED" ? { kind: "SYSTEM_ALERT", path: ["security", "command"], label: String(e.detail.title ?? "RED alert") } : null)],
-  [/_policy_set$|^(cognition_|comms_provider_registered|economy_policy_set)/, (e) => ({ kind: "CAPABILITY_CHANGED", path: ["command"], label: words(e.type) })],
+  [/_policy_set$|^(cognition_|comms_provider_registered|economy_policy_set)/, (e) => ({ kind: "CAPABILITY_CHANGED", path: ["command"], label: eventTitle(e.type) })],
   [/^agent_hold_(set|released)$/, (e) => ({ kind: "AGENT_STATE_CHANGED", path: ["command", "agent"], label: e.type === "agent_hold_set" ? "Held by the Admin" : "Hold released" })],
 ];
 

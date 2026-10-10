@@ -209,7 +209,8 @@ describe("the Fleet Command feed (component)", () => {
     const order = ["Critical", "High", "Important", "Summary"].map((h) => html.indexOf(`>${h} · `));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    expect(html.indexOf("Agent held by the Admin")).toBeLessThan(html.indexOf("Capital request decided")); // newest first within High
+    expect(html.indexOf("Agent paused by you")).toBeGreaterThanOrEqual(0);
+    expect(html.indexOf("Agent paused by you")).toBeLessThan(html.indexOf("Money request decided")); // newest first within High
     expect(html).toContain("Agent died");
     expect(html).toContain("Fleet daily report");
     expect(html).not.toMatch(/\{&quot;|"nested"|notifications deleted|DAILY_REPORT/);
@@ -227,9 +228,9 @@ describe("the Fleet Command feed (component)", () => {
     const { FleetControllerStatus } = await import("../../../codex-dashboard/src/dashboard/command/panels");
     const view = { mode: "live", commandEvents: null, events: [toFleetEvent({ type: "session_opened", at: "2026-10-07T10:00:00Z", detail: {} })!], dependencies: [] };
     const status = renderToStaticMarkup(createElement(FleetControllerStatus, { fleet: { notices: [], treasury: 0 } as never, view: view as never, models: [] }));
-    expect(status).toContain("Event routing");
-    expect(status).toContain("unavailable: operational feed paused");
+    expect(status).toContain("Fleet Command feed");
+    expect(status).toContain("Paused (temporarily unavailable)");
     const fine = renderToStaticMarkup(createElement(FleetControllerStatus, { fleet: { notices: [], treasury: 0 } as never, view: { ...view, commandEvents: [] } as never, models: [] }));
-    expect(fine).toContain("prioritised (P0–P3)");
+    expect(fine).toContain("Live, sorted by priority");
   });
 });
