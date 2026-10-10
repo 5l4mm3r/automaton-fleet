@@ -38,4 +38,6 @@ export const WRITE_OPS: ReadonlySet<string> = new Set([
   "agent_rename",
   // v62: conversations, request replies, labels for PayPal keys and payment accounts, pause / resume.
   "agent_message_send", "agent_message_retry", "owner_request_reply", "label_set", "agent_cognition_set",
+  // v63: mail housekeeping — dismiss / restore and permanent delete (confirmed in the page; no step-up, owner decision).
+  "mail_dismiss", "mail_delete",
 ]);

@@ -2065,7 +2065,7 @@ export class PgFleetStore {
   }
 
   /** Schema v45: expire routine event copies and diagnostics past their retention (the guard trigger refuses anything else). */
-  async eventRetention(): Promise<{ eventsExpired: number; suppressionExpired: number }> {
+  async eventRetention(): Promise<{ eventsExpired: number; suppressionExpired: number; mailCleared?: number; mailFreedBytes?: number }> {
     return this.tx(async (c) => (await c.query("SELECT svc_event_retention() AS r")).rows[0].r);
   }
 

@@ -198,7 +198,7 @@ describe.skipIf(!PG_BIN)("Fleet history, purge and retention (PostgreSQL)", { ti
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_command_feed)`))).toBe(feed);
     expect((await R.q(`SELECT dedupe_key FROM fleet.fleet_notification_suppress ORDER BY 1`)).map((x) => x.dedupe_key)).toEqual(["history:live"]);
     // A second pass finds nothing.
-    expect(await R.store.eventRetention()).toEqual({ eventsExpired: 0, suppressionExpired: 0 });
+    expect(await R.store.eventRetention()).toEqual({ eventsExpired: 0, suppressionExpired: 0, mailCleared: 0, mailFreedBytes: 0 }); // v63: the pass also clears stored mail
     // The service role may run the pass, and the privilege surface is still exact.
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });

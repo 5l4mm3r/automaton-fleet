@@ -32,9 +32,10 @@ export interface BrokerOptions {
   log?: (level: string, event: string, detail?: Record<string, unknown>) => void;
   /**
    * v51: builds a mail / SMS provider from a secret the owner sealed to this broker (dashboard onboarding), so the provider
-   * starts without a restart. Returns null when the secret cannot make a provider (it is still installed).
+   * starts without a restart. v63: `error` = the plain reason the secret cannot start its provider — the upload is then
+   * refused with that reason and the running provider is kept; a usable secret replaces the running provider.
    */
-  providerFactory?: (name: string, secret: Record<string, string>) => { mail?: MailProvider; sms?: SmsProvider } | null;
+  providerFactory?: (name: string, secret: Record<string, string>) => { mail?: MailProvider; sms?: SmsProvider; error?: string } | null;
 }
 
 /** v51: the fields a dashboard-sealed provider secret must carry. */
@@ -256,14 +257,17 @@ export class IdentityBroker {
         const v = ov.openProviderUpload(Buffer.from(u.sealedB64, "base64"), u.name);
         const shapes = PROVIDER_SECRET_FIELDS[u.name];
         if (!shapes || !shapes.some((fields) => fields.every((f) => typeof v[f] === "string" && v[f].length > 0))) throw new Error("FLEET_PROVIDER_SECRET_FIELDS");
-        pv.put(u.name, v);
+        // v63: build the provider BEFORE installing: an unusable login is refused with its reason and a working one stays;
+        // a usable one replaces the running provider at once (no restart).
         const made = this.o.providerFactory?.(u.name, v) ?? null;
-        if (made?.mail && !this.mail) { this.mail = made.mail; this.registered = false; }
-        if (made?.sms && !this.sms) { this.sms = made.sms; this.registered = false; }
+        if (made?.error) throw new Error(`FLEET_PROVIDER_SECRET_UNUSABLE: ${made.error}`);
+        pv.put(u.name, v);
+        if (made?.mail) { this.mail = made.mail; this.registered = false; }
+        if (made?.sms) { this.sms = made.sms; this.registered = false; }
         if (!made?.mail && !made?.sms) this.registered = false; // republish the secret names
         n++;
       } catch (err) {
-        error = /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "not sealed to this broker's key for that provider";
+        error = /FLEET_[A-Z_]+(: [^\n]{1,160})?/.exec(err instanceof Error ? err.message : "")?.[0] ?? "not sealed to this broker's key for that provider";
       }
       await this.gw.providerSecretInstalled(u.uploadId, this.worker, error === null, error);
       this.log(error ? "error" : "info", "provider_secret_install", { name: u.name, ok: error === null, code: error });

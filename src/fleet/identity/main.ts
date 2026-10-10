@@ -130,6 +130,16 @@ export function openProviders(e: Record<string, string | undefined>, dir: string
   return { mail, sms, mailgun };
 }
 
+/** v63: the broker's provider factory — a provider, or the plain reason the sealed secret cannot make one. */
+export function providerFactoryFor(e: Record<string, string | undefined>) {
+  return (name: string, secret: Record<string, string>): { mail?: MailProvider; sms?: SmsProvider; error?: string } => {
+    try {
+      const made = providerFromSecret(e, name, secret);
+      return made.mail || made.sms ? made : { error: "the saved details are incomplete" };
+    } catch (err) { return { error: (err instanceof Error ? err.message : String(err)).slice(0, 160) }; }
+  };
+}
+
 /** v51: a mail / SMS provider from its secret (host settings for Bridge's loopback ports come from the environment). */
 export function providerFromSecret(e: Record<string, string | undefined>, name: string, s: Record<string, string>): { mail?: MailProvider; sms?: SmsProvider } {
   if (name === "proton-bridge") {
@@ -189,7 +199,7 @@ export async function startIdentityBroker(e: Record<string, string | undefined>,
     notifyFrom: e.FLEET_NOTIFY_FROM?.trim() || (providers.mail?.mode === "shared" ? providers.mail.address ?? null : null),
     connectors: [], ownerVault, stateFile: path.join(dir, "pending.json"), mailCursorFile: path.join(dir, "mail-cursor.json"),
     providerVault: fs.existsSync(path.join(dir, "provider-vault")) ? openProviderVault(dir) : null,
-    providerFactory: (name, secret) => { try { return providerFromSecret(e, name, secret); } catch { return null; } },
+    providerFactory: providerFactoryFor(e),
     log: (level, event, detail) => log(level as never, event, detail) });
   const timer = setInterval(() => void broker.tick().catch((err) => log("error", "identity_tick_failed",
     { error: redactText(err instanceof Error ? err.message : String(err)) })), Math.max(5_000, opts.pollMs ?? 15_000));

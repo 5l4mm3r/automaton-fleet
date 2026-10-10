@@ -1113,7 +1113,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // created for a number's monthly fee, owner vault installation, reveal serving/taking, notification email status.
     fleet_agent_mail: new Set(["ix_mail_deliver", "ix_mail_consumed", "ix_mail_deliver2", "ix_mail_sent", "fleet_econ_mail_send",
       // v41: shared-mailbox ingestion (attribution), outbound status, Admin routing of unassigned mail.
-      "fleet_mail_store_in", "ix_mail_sent2", "fleet_admin_mail_assign"]),
+      "fleet_mail_store_in", "ix_mail_sent2", "fleet_admin_mail_assign",
+      // v63: the owner's dismiss / delete and the retention pass (one delete path, keep rules applied).
+      "fleet_admin_mail_dismiss", "fleet_mail_delete_internal"]),
     fleet_agent_phone_numbers: new Set(["fleet_econ_phone_provision", "fleet_econ_phone_release", "ix_phone_record", "ix_phone_status",
       "ix_phone_record2", "fleet_phone_release_internal", "svc_comms_tick"]),
     fleet_agent_sms: new Set(["fleet_econ_sms_send", "ix_sms_deliver", "ix_sms_sent", "ix_sms_cost", "svc_comms_tick"]),
@@ -1134,7 +1136,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_browser_sessions: new Set(["fleet_econ_browser_open", "fleet_econ_browser_close", "fleet_browser_enqueue", "bx_report_action", "fleet_admin_account_freeze"]),
     fleet_browser_actions: new Set(["fleet_browser_enqueue", "bx_claim_action", "bx_report_action"]),
     fleet_browser_secret_requests: new Set(["bx_secret_request", "bx_secret_take", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
-    fleet_auth_message_blobs: new Set(["ix_auth_blob_store", "ix_browser_secrets_pending", "ix_browser_secret_serve", "fleet_admin_mail_assign"]),
+    fleet_auth_message_blobs: new Set(["ix_auth_blob_store", "ix_browser_secrets_pending", "ix_browser_secret_serve", "fleet_admin_mail_assign",
+      "fleet_mail_delete_internal"]),
     // v38: Admin authentication state — written only by the dashboard gateway functions (and the owner's enrollment).
     fleet_admin_passkeys: new Set(["dash_passkey_add", "dash_passkey_used", "dash_passkey_revoke", "dash_passkey_rename"]),
     // v45: Fleet Command's bounded feed (copied from routed events; cleared by the owner) and the short-lived suppression

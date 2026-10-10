@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { protonLoginProblem } from "../../../codex-dashboard/src/dashboard/money/MoneyPanels";
-import { mailStatus, MAIL_VIEWS } from "../../../codex-dashboard/src/dashboard/mail/MailPage";
+import { mailStatus, MAIL_VIEWS, kb, deleteQuestion } from "../../../codex-dashboard/src/dashboard/mail/MailPage";
 
 const PEM = "-----BEGIN CERTIFICATE-----\nMIIDkjCCAnqgAwIBAgIQ\n-----END CERTIFICATE-----";
 const good = { address: "fleet.treasury@proton.me", username: "fleet.treasury@proton.me", password: "bridge-generated-pw", certPem: PEM };
@@ -41,7 +41,12 @@ describe("mailStatus", () => {
     expect(mailStatus({ direction: "out", sendStatus: "failed", sendError: "FLEET_MAIL_PROVIDER_AUTH" })).toEqual({ text: "Send failed: FLEET_MAIL_PROVIDER_AUTH", tone: "bad" });
     expect(mailStatus({ direction: "out" }).tone).toBe("wait");
   });
-  it("offers exactly the views the mail_feed read accepts", () => {
-    expect(MAIL_VIEWS.map(([k]) => k).sort()).toEqual(["all", "inbox", "outbox", "security", "unassigned"]);
+  it("offers exactly the views the mail_feed read accepts (v63 adds Dismissed)", () => {
+    expect(MAIL_VIEWS.map(([k]) => k).sort()).toEqual(["all", "dismissed", "inbox", "outbox", "security", "unassigned"]);
+  });
+  it("0.14.0: the permanent-delete question says how many, that it cannot be undone and that Proton is untouched; sizes read plainly", () => {
+    expect(deleteQuestion(1)).toBe("Permanently delete 1 email from the fleet's storage? This cannot be undone. (Your Proton mailbox is not touched.)");
+    expect(deleteQuestion(12)).toMatch(/^Permanently delete 12 emails .*cannot be undone/);
+    expect([kb(512), kb(2048), kb(3 * 1048576)]).toEqual(["512 B", "2.0 KB", "3.0 MB"]);
   });
 });

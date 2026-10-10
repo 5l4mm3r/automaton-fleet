@@ -105,6 +105,7 @@ export const EVENT_TITLE: Readonly<Record<string, string>> = Object.freeze({
   reaper_resumed: "Fleet maintenance resumed", notification: "Notification",
   // v62: conversations and names
   agent_replied: "Agent replied to you", owner_message_sent: "You sent a message", owner_label_set: "Name changed",
+  mail_deleted: "Stored emails deleted",
   conversation_cost_unfunded: "Treasury could not fully pay for a conversation", founder_cognition_paused: "Agent paused (AI off)",
   founder_cognition_enabled: "Agent's AI switched on", founder_cognition_disabled: "Agent's AI switched off",
 });
