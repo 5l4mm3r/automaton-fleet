@@ -36,4 +36,6 @@ export const WRITE_OPS: ReadonlySet<string> = new Set([
   "notification_delete", "notification_delete_acknowledged", "passkey_rename", "command_clear",
   // v60: the owner names an Agent (display only; the registry name and identity are unchanged).
   "agent_rename",
+  // v62: conversations, request replies, labels for PayPal keys and payment accounts, pause / resume.
+  "agent_message_send", "agent_message_retry", "owner_request_reply", "label_set", "agent_cognition_set",
 ]);

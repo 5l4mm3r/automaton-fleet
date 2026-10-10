@@ -103,6 +103,10 @@ export const EVENT_TITLE: Readonly<Record<string, string>> = Object.freeze({
   // The Fleet itself
   production_deployed: "Fleet update installed", production_rolled_back: "Fleet update undone", runtime_approved: "New Fleet software approved",
   reaper_resumed: "Fleet maintenance resumed", notification: "Notification",
+  // v62: conversations and names
+  agent_replied: "Agent replied to you", owner_message_sent: "You sent a message", owner_label_set: "Name changed",
+  conversation_cost_unfunded: "Treasury could not fully pay for a conversation", founder_cognition_paused: "Agent paused (AI off)",
+  founder_cognition_enabled: "Agent's AI switched on", founder_cognition_disabled: "Agent's AI switched off",
 });
 
 export function eventTitle(type: string): string {
@@ -177,14 +181,7 @@ export function actorText(actor: string | null | undefined, agentName?: (id: str
   return "Fleet";
 }
 
-/**
- * PayPal key names: the owner types any name ("Fleet Treasury", "PayPal – main"); the internal reference the payments
- * service stores it under is derived from it (lower-case, letters, digits and dashes) and never needs typing.
- */
-export function credentialRef(name: string | undefined): string {
-  const slug = (name ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
-  return `vault:paypal/${slug || "treasury"}`;
-}
+/** The default name of a saved set of PayPal keys (its reference, in words) — used until the owner names it. */
 export function credentialName(ref: string): string {
   const slug = ref.replace(/^vault:paypal\//, "");
   return slug.split(/[-_./]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ") || ref;

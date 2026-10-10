@@ -1437,7 +1437,7 @@ export class FleetService {
                 capabilities: (a, t) => agent.capabilities(a, t),
                 cognitionStatus: (a, t) => agent.cognitionStatus(a, t),
                 routingState: (a) => admin.cognitionRoutingState(a),
-                authorize: (a, e, route, psha) => admin.cognitionRoutedAuthorize(a, e, route, psha),
+                authorize: (a, e, route, psha, turn) => turn ? admin.cognitionConversationAuthorize(a, e, route, psha, turn) : admin.cognitionRoutedAuthorize(a, e, route, psha),
                 record: (a, id, x, obs) => admin.cognitionRoutedRecord(a, id, x, obs),
                 ...(this.opts.runtimeDoctrines ? { runtimeDoctrines: async (a: string) => this.opts.runtimeDoctrines!((await admin.getAgent(a))?.runtimeCommit ?? null) } : {}),
               },

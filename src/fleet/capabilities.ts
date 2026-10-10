@@ -71,6 +71,7 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   complete_task: "planning",
   list_goals: "planning",
   record_external_dependency: "planning",
+  reply_to_owner: "planning",
   withdraw_external_dependency: "planning",
   open_decision: "planning",
   // F2 (schema v28+): the founder's own economic records and Fleet capital (no new authority: existing classes)

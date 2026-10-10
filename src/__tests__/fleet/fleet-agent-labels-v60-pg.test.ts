@@ -3,8 +3,8 @@
  *
  * Proven here: by default every legacy name (`founder-N`, `agent-N`) is shown as `Agent-N`; the owner renames an Agent
  * with an ordinary write (session + CSRF, no step-up) and every `agents` read carries the new name; the registry name and
- * the identity are untouched; two Agents never show the same name (case-insensitive, including another's default); names
- * are 1–40 printable characters; an empty name returns to the default; a rename is one permanent P3 event, a repeat is
+ * the identity are untouched; (v62) two Agents may share a name and names are up to 200 characters — superseding v60's
+ * uniqueness and 40-character rule; an empty name returns to the default; a rename is one permanent P3 event, a repeat is
  * no event; only the owner renames.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -47,7 +47,7 @@ describe.skipIf(!PG_BIN)("v60: the owner names the Agents (PostgreSQL)", { timeo
     expect(await R.one(`fleet.fleet_agent_default_label('Atlas')`)).toBe("Atlas");
     expect(DASHBOARD_WRITE_OPS_V60).toContain("agent_rename");
     expect(EVENT_ROUTES_V60.P3_INFO).toEqual(["agent_renamed"]);
-    expect(await R.one(`fleet.fleet_event_route('agent_renamed', '{}'::jsonb)`)).toBe("P3_INFO");
+    expect(await R.one(`fleet.fleet_event_route('agent_renamed', '{}'::jsonb)`)).toBe("P3_SUMMARY"); // v62: P3_INFO never reached Fleet Command
   });
 
   it("the owner renames an Agent with an ordinary write: CSRF required, no step-up; identity untouched; one P3 event", async () => {
@@ -55,7 +55,9 @@ describe.skipIf(!PG_BIN)("v60: the owner names the Agents (PostgreSQL)", { timeo
     expect(await raw("agent_rename", { agentId: A, name: "Scout" }, null)).toMatchObject({ ok: false, code: "FLEET_CSRF" });
     expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_agent_labels)`)).toBe(0);
 
-    const r = await rename(A, "  Scout\u0007 ");
+    // v62: hidden control characters are refused (v60 stripped them silently).
+    expect(await rename(A, "  Scout\u0007 ")).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+    const r = await rename(A, "  Scout ");
     expect(r, JSON.stringify(r)).toMatchObject({ ok: true, result: { agentId: A, label: "Scout", changed: true } });
     expect(await shown()).toEqual({ [A]: "Scout", [B]: "Agent-2" });
     expect(await R.one(`(SELECT name FROM fleet.fleet_agents WHERE agent_id = $1)`, [A])).toBe("founder-1");
@@ -68,14 +70,13 @@ describe.skipIf(!PG_BIN)("v60: the owner names the Agents (PostgreSQL)", { timeo
     expect(await renames(A)).toHaveLength(1);
   });
 
-  it("two Agents never show the same name, and a name is 1–40 printable characters", async () => {
-    expect(await rename(B, "scout")).toMatchObject({ ok: false, code: "FLEET_CONFLICT" });
-    expect(await rename(A, "agent-2")).toMatchObject({ ok: false, code: "FLEET_CONFLICT" });   // B's default
-    expect(await rename(A, "Agent-2")).toMatchObject({ ok: false, code: "FLEET_CONFLICT" });
-    expect(await rename(B, "x".repeat(41))).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+  it("(v62) two Agents may share a name; a name is 1–200 characters", async () => {
+    expect(await rename(B, "scout")).toMatchObject({ ok: true, result: { label: "scout" } });
+    expect(await shown()).toEqual({ [A]: "Scout", [B]: "scout" });
+    expect(await rename(B, "x".repeat(201))).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
     expect(await rename("01NOSUCHAGENT0000000000000", "Ghost")).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
-    expect(await rename(B, "x".repeat(40))).toMatchObject({ ok: true, result: { label: "x".repeat(40) } });
-    expect(await shown()).toEqual({ [A]: "Scout", [B]: "x".repeat(40) });
+    expect(await rename(B, "x".repeat(200))).toMatchObject({ ok: true, result: { label: "x".repeat(200) } });
+    expect(await shown()).toEqual({ [A]: "Scout", [B]: "x".repeat(200) });
   });
 
   it("an empty name returns to the default; only the owner renames", async () => {

@@ -5,5 +5,5 @@ export const button = "rounded-lg border border-slate-600 px-3 py-2 text-sm hove
 export const input = "mt-2 w-full rounded-lg border border-slate-600 bg-slate-950 p-3 text-slate-100";
 
 export function Panel({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="rounded-xl border border-slate-700 bg-slate-900/90 p-5"><h3 className="mb-4 text-lg font-semibold">{title}</h3>{children}</section>;
+  return <section className="rounded-xl border border-slate-700 bg-slate-900/90 p-5"><h3 className="mb-4 text-lg font-semibold [overflow-wrap:anywhere]">{title}</h3>{children}</section>;
 }

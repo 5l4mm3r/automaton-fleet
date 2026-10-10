@@ -1139,7 +1139,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_admin_passkeys: new Set(["dash_passkey_add", "dash_passkey_used", "dash_passkey_revoke", "dash_passkey_rename"]),
     // v45: Fleet Command's bounded feed (copied from routed events; cleared by the owner) and the short-lived suppression
     // keys of deleted notifications.
-    fleet_command_feed: new Set(["fleet_command_feed_capture", "fleet_admin_command_clear"]),
+    fleet_command_feed: new Set(["fleet_command_feed_capture", "fleet_admin_command_clear", "fleet_command_feed_backfill_p3"]),
     fleet_notification_suppress: new Set(["fleet_notify", "fleet_admin_notifications_delete", "fleet_admin_notifications_delete_acknowledged", "svc_event_retention"]),
     // v43: the password verifier — written only by dash_password_set (enrollment token, or a session with a step-up).
     fleet_admin_password: new Set(["dash_password_set"]),

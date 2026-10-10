@@ -12,7 +12,7 @@ import { sealForCustody, sealOwnerDocument, sealOwnerFact, sealProviderSecret } 
 import { money } from "../model";
 import { Panel, button, input } from "../ui";
 import { displayAgentName } from "../naming";
-import { credentialName, credentialRef, eventTitle } from "../copy";
+import { credentialName, eventTitle } from "../copy";
 
 type Row = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 type AgentRef = { id: string; name: string };
@@ -34,6 +34,37 @@ function useRead<T>(client: GatewayClient, op: string, args: Record<string, unkn
     return () => { live = false; };
   }, [client, op, key, n, ...deps]); // eslint-disable-line react-hooks/exhaustive-deps
   return { data, error, reload: () => setN((x) => x + 1) };
+}
+
+/** Rename a display label in place (empty = back to the default). The underlying reference never changes. */
+function Rename({ what, current, save }: { what: string; current: string; save: (name: string) => Promise<unknown> }) {
+  const [open, setOpen] = useState(false), [v, setV] = useState(current), [busy, setBusy] = useState(false), [msg, setMsg] = useState("");
+  if (!open) return <button className="ml-2 text-xs text-cyan-300 underline" onClick={() => { setV(current); setOpen(true); setMsg(""); }}>Rename</button>;
+  return <form className="my-2 flex flex-wrap items-end gap-2" onSubmit={async (e) => {
+    e.preventDefault(); setBusy(true); setMsg("");
+    try { await save(v.trim()); setOpen(false); } catch (err) { setMsg(describe(err)); } finally { setBusy(false); }
+  }}>
+    <label className="text-xs">New name for this {what}<input className={input} maxLength={200} value={v} onChange={(e) => setV(e.target.value)} /></label>
+    <button className={button} disabled={busy}>{busy ? "Saving…" : "Save name"}</button><button type="button" className={button} onClick={() => setOpen(false)}>Cancel</button>
+    <p className="w-full text-xs text-slate-400">Up to 200 characters, any language. Renaming changes only the name you see; nothing it is linked to changes.</p>
+    {msg && <p role="alert" className="w-full text-sm text-red-300">{msg}</p>}
+  </form>;
+}
+
+/** One saved set of PayPal keys: its name (renameable), status, Replace keys (same reference, same links) and Withdraw. */
+function KeySet({ c, client, call }: { c: Row; client: GatewayClient; call: (op: string, a: Record<string, unknown>) => Promise<unknown> }) {
+  const [replace, setReplace] = useState(false);
+  const name = c.label ? String(c.label) : credentialName(String(c.vaultRef));
+  return <div className="my-2 rounded border border-slate-700 p-3 text-sm">
+    <p className="[overflow-wrap:anywhere]"><span className="font-semibold">{name}</span> · {c.status === "active" ? "Active" : c.status === "revoked" ? "Withdrawn" : String(c.status)}
+      {c.currentKey ? "" : " · saved for an older security key: replace the keys"}
+      <Rename what="set of keys" current={name} save={(n) => call("label_set", { kind: "paypal_credential", id: c.vaultRef, name: n })} />
+      <button className="ml-2 text-xs text-cyan-300 underline" onClick={() => setReplace(!replace)}>{replace ? "Cancel" : "Replace keys"}</button>
+      {c.status === "active" && <button className="ml-2 text-xs text-red-300 underline" onClick={() => void call("custody_credential_revoke", { vaultRef: c.vaultRef })}>Withdraw</button>}</p>
+    {replace && <Form title="Replace these keys" fields={[{ key: "id", label: "Client ID" }, { key: "secret", label: "Secret", type: "password" }]}
+      note="The new keys take the place of these ones; everything linked to this set stays linked."
+      submit={async (v) => { const r = await call("custody_credential_upload", await sealForCustody(client, String(c.vaultRef), v.id.trim(), v.secret.trim())); setReplace(false); return r; }} />}
+  </div>;
 }
 
 /** A small inline form: labelled fields, one submit, the gateway result or error shown under it. */
@@ -219,7 +250,8 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
 
     <Panel title="PayPal treasury">{pp.data ? <>
       <p className="text-sm">Receiving: {pp.data.readiness.paypalReceiving ? "ready" : "not ready"} · Payouts: {pp.data.readiness.payoutsLive ? "live" : "off"} · Custody: {pp.data.readiness.custodyActive ? "activated" : "not activated"}</p>
-      {(pp.data.rails as Row[]).map((r) => <p key={r.railId} className="mt-2 text-sm">{r.label} · {r.mode} · {r.status} · {(r.capabilities as string[]).join(", ")}{r.balance ? ` · ${money(r.balance.availableMinor)} available (${when(r.balance.at)})` : ""}</p>)}
+      {(pp.data.rails as Row[]).map((r) => <div key={r.railId}><p className="mt-2 text-sm [overflow-wrap:anywhere]" title={r.registryLabel && r.registryLabel !== r.label ? `Registered as ${r.registryLabel}` : undefined}>{r.label} · {r.mode} · {r.status} · {(r.capabilities as string[]).join(", ")}{r.balance ? ` · ${money(r.balance.availableMinor)} available (${when(r.balance.at)})` : ""}</p>
+        <Rename what="payment account" current={String(r.label)} save={(name) => call("label_set", { kind: "payment_rail", id: r.railId, name })} /></div>)}
       {(pp.data.unmatched as Row[]).length > 0 && <><h4 className="mt-4 font-semibold">Unmatched PayPal money (never counted as revenue until you say what it was)</h4>
         {(pp.data.unmatched as Row[]).map((t) => <div key={t.transactionId + t.eventCode} className="my-2 rounded border border-slate-700 p-3 text-sm"><p>{when(t.at)} · {money(t.amountMinor)} {t.currency} · {t.transactionId} ({t.eventCode})</p>
           <Form title="Not revenue (close it)" fields={[]} submit={() => call("paypal_txn_attribute", { railId: t.railId, transactionId: t.transactionId, eventCode: t.eventCode, as: "not_revenue" })} /></div>)}</>}
@@ -331,10 +363,16 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
     <Panel title="1 · PayPal account">
       <p className="text-sm text-slate-300">Connect the PayPal Business account the Fleet uses as its treasury. In developer.paypal.com, open Apps &amp; Credentials, switch to <strong>Live</strong>, and copy your app’s Client ID and Secret. They are encrypted in this browser before they leave it, and only the Fleet’s payments service can read them.</p>
       <p className="mt-2 text-xs text-slate-400">Secure payments service: {key.data?.fingerprint ? <span className="text-emerald-300">ready</span> : <span className="text-amber-300">not ready yet — saving keys will be refused until it is</span>}</p>
-      <Form title="Save PayPal keys" fields={[{ key: "name", label: "Name", value: "Treasury" }, { key: "id", label: "Client ID" }, { key: "secret", label: "Secret", type: "password" }]}
-        note="The name is your label for these keys. Saving under an existing name replaces those keys; a new name stores a separate set."
-        submit={async (v) => call("custody_credential_upload", await sealForCustody(client, credentialRef(v.name), v.id.trim(), v.secret.trim()))} />
-      {(key.data?.credentials as Row[] | undefined)?.map((c) => <p key={c.vaultRef} className="text-sm">{credentialName(String(c.vaultRef))} · {c.status === "active" ? "Active" : c.status === "revoked" ? "Withdrawn" : String(c.status)}{c.currentKey ? "" : " · saved for an older security key, please save these keys again"}{c.status === "active" && <button className={`${button} ml-2`} onClick={() => void call("custody_credential_revoke", { vaultRef: c.vaultRef })}>Withdraw</button>}</p>)}
+      {(key.data?.credentials as Row[] | undefined)?.map((c) => <KeySet key={c.vaultRef} c={c} client={client} call={call} />)}
+      <Form title={(key.data?.credentials as Row[] | undefined)?.length ? "Add another set of PayPal keys" : "Save PayPal keys"}
+        fields={[{ key: "name", label: "Name (your label; you can change it later)", value: (key.data?.credentials as Row[] | undefined)?.length ? "" : "Treasury" }, { key: "id", label: "Client ID" }, { key: "secret", label: "Secret", type: "password" }]}
+        note="To replace the keys of an existing set, use Replace keys on that set instead: a new set is stored separately and must be linked by the operator."
+        submit={async (v) => {
+          const ref = (key.data?.credentials as Row[] | undefined)?.length ? `vault:paypal/keys-${crypto.randomUUID().slice(0, 8)}` : "vault:paypal/treasury";
+          const r = await call("custody_credential_upload", await sealForCustody(client, ref, v.id.trim(), v.secret.trim()));
+          if (v.name.trim()) await call("label_set", { kind: "paypal_credential", id: ref, name: v.name.trim() });
+          return r;
+        }} />
       <p className="mt-3 text-sm text-slate-400">Next, the Fleet operator links these keys to the treasury and runs PayPal’s checks. Progress appears under Treasury.</p>
       {(pp.data?.rails as Row[] | undefined)?.map((r) => <Form key={r.railId} title={`PayPal notifications · ${r.label}`} note={`In the same Live app, open Webhooks, add ${typeof location === "undefined" ? "https://<api domain>" : location.origin.replace("://admin.", "://api.")}/v1/webhooks/paypal with the payment, refund and dispute events, then paste the Webhook ID PayPal shows.${r.webhookId ? ` Current: ${String(r.webhookId)}.` : ""}`}
         fields={[{ key: "id", label: "Webhook ID" }]} submit={(v) => call("rail_webhook_set", { railId: r.railId, webhookId: v.id.trim() })} />)}

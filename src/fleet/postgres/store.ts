@@ -1913,6 +1913,14 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_cognition_routed_authorize($1, $2, $3, $4) AS r", [agentId, estimateUsdCents, JSON.stringify(route), promptSha256])).rows[0].r);
   }
 
+  /**
+   * Schema v62: a model call inside an owner conversation turn. The treasury pays while the turn is this founder's,
+   * open and within its anti-abuse bound; otherwise exactly cognitionRoutedAuthorize (the founder pays).
+   */
+  async cognitionConversationAuthorize(agentId: string, estimateUsdCents: number, route: Record<string, unknown>, promptSha256: string, turnId: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_cognition_conversation_authorize($1, $2, $3, $4, $5) AS r", [agentId, estimateUsdCents, JSON.stringify(route), promptSha256, turnId])).rows[0].r);
+  }
+
   /** Schema v22: record a routed call at its snapshot prices, with routing observability. */
   async cognitionRoutedRecord(agentId: string, requestId: string, r: CognitionRecord, obs: { packetBytes?: number | null; thinkingTokens?: number | null; promptCache?: string | null; cacheReason?: string | null }): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.tx(async (c) =>

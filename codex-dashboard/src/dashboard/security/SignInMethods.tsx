@@ -13,7 +13,7 @@ import type { LiveAuth } from "../api/auth";
 import { button, input } from "../ui";
 import { utcText } from "../notifications/report";
 
-const describe = (e: unknown) => describeError(e, "The change didn’t go through. Nothing was changed.");
+const describe = (e: unknown) => describeError(e, "The change didn’t go through. Refresh to check the current state.");
 
 export function SignInMethods({ signIn, auth, run, onRevoke, refresh }: {
   signIn: NonNullable<LiveView["signIn"]> | null; auth: LiveAuth; run: (op: string, args: Record<string, string>) => Promise<unknown>;

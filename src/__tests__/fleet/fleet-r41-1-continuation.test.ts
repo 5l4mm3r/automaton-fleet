@@ -15,7 +15,7 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { FounderMind, MAX_IDLE_SKIP, type MindPorts } from "../../fleet/founder/mind.js";
+import { FounderMind, MAX_IDLE_SKIP, type MindPorts, HIBERNATION_SAFETY_MS } from "../../fleet/founder/mind.js";
 import { FounderToolbox, JOURNAL_ARCHIVE_FILE, JOURNAL_FILE, JOURNAL_INDEX_FILE, readJournal, sameAction } from "../../fleet/founder/toolbox.js";
 import { LoopGuard, SCOPED_CONTINUE } from "../../fleet/founder/loop-guard.js";
 import { ASSESS_LINE, HIBERNATE_LINE, BOOTSTRAP_LINE, classifyWork, economicState, stateLine, type SurvivalView } from "../../fleet/founder/decisions.js";
@@ -40,7 +40,7 @@ const SURVIVAL = (o: Partial<SurvivalView> = {}): SurvivalView => ({ survivalEqu
 
 type Reply = (n: number, packet: string) => ToolCall[] | undefined;
 function rig(o: { goals?: unknown[]; deps?: () => unknown[]; reply?: Reply; ledger?: () => Record<string, unknown>; survival?: () => SurvivalView | null;
-  caps?: () => Record<string, unknown> } = {}) {
+  caps?: () => Record<string, unknown>; /** v62: the declared-hibernation safety re-check (0 = timer backoff only, for packet-content tests). */ safetyMs?: number } = {}) {
   const root = tmp();
   const d = { w: path.join(root, "w"), s: path.join(root, "s"), m: path.join(root, "s", "memory") };
   for (const x of Object.values(d)) fs.mkdirSync(x, { recursive: true });
@@ -76,7 +76,7 @@ function rig(o: { goals?: unknown[]; deps?: () => unknown[]; reply?: Reply; ledg
     ownerRequestWithdraw: async () => ({ ok: true }),
     economy: async (op: string) => { economy.push(op); return { ok: true }; },
   } as never });
-  const mind = new FounderMind({ ports, toolbox, stateDir: d.s, routed: { memoryDir: d.m, workspaceDir: d.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
+  const mind = new FounderMind({ ports, toolbox, stateDir: d.s, hibernationSafetyMs: o.safetyMs ?? 0 /* v62: 0 = the timer backoff only (slim-packet mechanics) */, routed: { memoryDir: d.m, workspaceDir: d.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
   const parse = (text: string) => {
     const body = JSON.parse(text.split("\n").slice(3).join("\n"));
     expect(taskPacketProblems(body)).toEqual([]);
@@ -567,16 +567,14 @@ describe("launch: the idle event probe ends a rest at the next slot when somethi
     for (let i = 1; i <= max; i++) { await r.mind.turn(`heartbeat ${i}`); if (r.packets.length > before) return i; }
     return Infinity;
   };
-  const restDeep = async (r: ReturnType<typeof rig>) => {
-    // Sleep-only turns until the backoff is long (several slim wakes on an unchanged state).
-    for (let k = 0; k < 6; k++) await r.next();
-  };
+  // v62: with the real safety interval one DECLARED sleep starts the hibernation: nothing more is paid until an event.
+  const restDeep = async (r: ReturnType<typeof rig>) => { await r.next(); };
 
   it("an unchanged state costs nothing between the scheduled wakes", async () => {
-    const r = rig({ reply: (n) => [call("sleep", { reason: "nothing changed", wakeOn: "a sale or the dependency answered" }, `s${n}`)] });
+    const r = rig({ safetyMs: HIBERNATION_SAFETY_MS, reply: (n) => [call("sleep", { reason: "nothing changed", wakeOn: "a sale or the dependency answered" }, `s${n}`)] });
     await restDeep(r);
     const before = r.packets.length;
-    for (let i = 0; i < 3; i++) await r.mind.turn("hb");
+    for (let i = 0; i < 3 * MAX_IDLE_SKIP; i++) await r.mind.turn("hb");   // v62: no timer wake-ups while hibernating
     expect(r.packets.length).toBe(before);                 // resting: no inference, probe found nothing
     expect(r.mind.routing.eventWakeups ?? 0).toBe(0);
   });
@@ -584,13 +582,12 @@ describe("launch: the idle event probe ends a rest at the next slot when somethi
   it("a dependency answered, a sale, or a due review time wakes the founder at the very next slot with a full packet", async () => {
     let status = "pending";
     let revenue = 0;
-    const r = rig({ deps: () => [dep({ status })], ledger: () => ({ cash: 9_968, survivalEquity: 9_968, genesisAllocation: 10_000, externalCustomerRevenue: revenue, realizedNetProfit: -32 }),
+    const r = rig({ safetyMs: HIBERNATION_SAFETY_MS, deps: () => [dep({ status })], ledger: () => ({ cash: 9_968, survivalEquity: 9_968, genesisAllocation: 10_000, externalCustomerRevenue: revenue, realizedNetProfit: -32 }),
       reply: (n) => [call("sleep", { reason: "waiting", wakeOn: "the storefront dependency is answered" }, `s${n}`)] });
     await restDeep(r);
     status = "answered";
     expect(await slotsToPacket(r)).toBe(1);
-    expect(r.mind.routing.eventWakeups).toBe(1);
-    await restDeep(r);
+    expect(r.mind.routing.eventWakeups).toBe(1);   // that turn declared its hibernation again
     revenue = 1_003;
     expect(await slotsToPacket(r)).toBe(1);
     expect(r.mind.routing.eventWakeups).toBe(2);
@@ -598,7 +595,7 @@ describe("launch: the idle event probe ends a rest at the next slot when somethi
 
   it("a declared review time wakes the founder as soon as it passes (not up to 32 slots later)", async () => {
     let n = 0;
-    const r = rig({ reply: () => { n++; return [call("sleep", { reason: "review soon", reviewAt: new Date(Date.now() + 1500).toISOString() }, `s${n}`)]; } });
+    const r = rig({ safetyMs: HIBERNATION_SAFETY_MS, reply: () => { n++; return [call("sleep", { reason: "review soon", reviewAt: new Date(Date.now() + 1500).toISOString() }, `s${n}`)]; } });
     await restDeep(r);
     await new Promise((res) => setTimeout(res, 1600));
     expect(await slotsToPacket(r)).toBe(1);

@@ -366,6 +366,47 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await page.getByRole("list", { name: "Recent Fleet activity" }).getByText("Agent born — station online").first().waitFor({ timeout: 20_000 });
   });
 
+  it("v62 conversation: the owner writes (with a file), the agent's reply appears in the thread, a request is answered in place, a secret is refused", async () => {
+    const nm = displayAgentName((await R.q(`SELECT name FROM fleet.fleet_agents WHERE agent_id = $1`, [A.id]))[0].name);
+    await page.goto(`${ORIGIN}/#Agents/${A.id}`);
+    const convo = page.locator("section", { has: page.getByRole("heading", { name: "Conversation" }) });
+    await convo.getByText(`reads new messages at its next turn`).waitFor();
+    // A likely secret never leaves the browser.
+    await convo.getByLabel(`Message to ${nm}`).fill("my card is 4111 1111 1111 1111");
+    await convo.getByText("It will not be sent").waitFor();
+    expect(await convo.getByRole("button", { name: "Send" }).isDisabled()).toBe(true);
+    // A real message with a working file.
+    await convo.getByLabel(`Message to ${nm}`).fill("Here is the price list for the poster shop.");
+    await convo.locator('input[type="file"]').setInputFiles({ name: "prices.csv", mimeType: "text/csv", buffer: Buffer.from("product,price\nposter,9.00\n") });
+    await convo.getByRole("button", { name: "Send" }).click();
+    await convo.getByText(`Waiting for ${nm}`).first().waitFor();
+    const m = (await R.q(`SELECT message_id, status FROM fleet.fleet_agent_messages WHERE agent_id = $1 AND author = 'owner' ORDER BY created_at DESC LIMIT 1`, [A.id]))[0];
+    expect(m.status).toBe("pending");
+    expect((await R.q(`SELECT name, content_type FROM fleet.fleet_agent_files WHERE message_id = $1`, [m.message_id]))[0]).toEqual({ name: "prices.csv", content_type: "text/csv" });
+    // The agent (its own API) claims the message, reads the file and replies.
+    const claim = await R.econ(A, "owner.claim");
+    const f = await R.econ(A, "owner.file", { fileId: claim.messages[0].files[0].fileId });
+    expect(Buffer.from(String(f.dataB64), "base64").toString()).toContain("poster,9.00");
+    expect((await R.econ(A, "owner.reply", { turnId: claim.turnId, body: "Got it — the poster will be £9." })).ok).toBe(true);
+    await convo.getByText("Got it — the poster will be £9.").waitFor({ timeout: 20_000 });
+    await convo.getByText("Answered").first().waitFor();
+    // An agent request, answered from the thread: the answer is recorded and grants nothing.
+    const req = await R.gw.ownerRequestCreate(A.id, A.token, { idempotencyKey: `e2e-dep-${crypto.randomUUID()}`, kind: "kyc", action: "Open a Gumroad account",
+      goalRef: null, title: "Payment rail required: gumroad", detail: "needs a human identity" }) as Record<string, any>;
+    const requestId = String(req.request?.requestId ?? req.requestId);
+    await page.reload();
+    const card = convo.locator("div", { hasText: "is awaiting your reply" }).filter({ hasText: "Payment rail required: gumroad" }).last();
+    await card.waitFor({ timeout: 20_000 });
+    await card.getByPlaceholder(/Your answer/).fill("Use PayPal checkout for now; I will set up Gumroad later.");
+    await card.getByRole("button", { name: "Reply", exact: true }).click();
+    for (let i = 0; i < 50 && (await R.q(`SELECT status FROM fleet.fleet_owner_requests WHERE request_id = $1`, [requestId]))[0].status === "pending"; i++) await new Promise((r) => setTimeout(r, 100));
+    expect((await R.q(`SELECT status, response FROM fleet.fleet_owner_requests WHERE request_id = $1`, [requestId]))[0])
+      .toEqual({ status: "answered", response: "Use PayPal checkout for now; I will set up Gumroad later." });
+    // The thread shows the recorded answer, and the request is no longer awaiting a reply.
+    await convo.getByText("You: Use PayPal checkout for now; I will set up Gumroad later.").waitFor({ timeout: 20_000 });
+    expect(await convo.locator("div", { hasText: "is awaiting your reply" }).filter({ hasText: "Payment rail required: gumroad" }).count()).toBe(0);
+  });
+
   it("an unreachable gateway is shown as unreachable — never fictional data", async () => {
     await page.route("**/api/read**", (r) => r.abort());
     await page.goto(`${ORIGIN}/`);

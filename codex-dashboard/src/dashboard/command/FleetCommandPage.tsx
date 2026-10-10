@@ -51,7 +51,8 @@ export function FleetCommandPage({ fleet, view, models, feed, live, control, ope
           return <li key={i} className="rounded border border-amber-700/60 p-3"><p className="font-semibold text-amber-100">{who} is awaiting your reply</p>
             <p className="mt-1">{val(d.title ?? d.summary ?? d.kind ?? "A request")}</p>
             {typeof d.action === "string" && d.action && <p className="mt-1 text-slate-300">What it needs from you: {d.action}</p>}
-            <p className="mt-1 text-xs text-slate-400">{since ? `Waiting since ${since}. ` : ""}Replying from the dashboard is not available yet; clearing Fleet Command does not remove this request.</p></li>;
+            <p className="mt-1 text-xs text-slate-400">{since ? `Waiting since ${since}. ` : ""}Clearing Fleet Command never removes this request.</p>
+            {d.agentId && <button className={`${button} mt-2 bg-cyan-900`} onClick={() => { openAgent(String(d.agentId)); setTimeout(() => document.getElementById("conversation")?.scrollIntoView({ behavior: "smooth", block: "start" }), 400); }}>Open conversation and reply</button>}</li>;
         })}</ul> : <p className="text-sm text-slate-400">No agent is awaiting your reply.</p>)}</Panel>
       </div>
       <Panel title="Treasury"><TreasurySummary fleet={fleet} view={view} /><button className={`${button} mt-4`} onClick={() => go("Treasury")}>Treasury controls</button></Panel>

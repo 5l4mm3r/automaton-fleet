@@ -76,7 +76,7 @@ export const CATEGORY_TEXT: Record<ErrorCategory, string> = {
   outcome_unknown: "The connection failed mid-operation. The Fleet was re-read; check the result before trying again.",
   unavailable: "The Fleet is unreachable. Showing nothing rather than stale or fictional data.",
   unsupported: "This isn’t available on the live Fleet.",
-  failed: "That didn’t work. Nothing was changed.",
+  failed: "That didn’t work. Check the details and try again; if it keeps failing, the Fleet may need attention.",
   login_invalid: "Sign-in details were not accepted. Check the password and the current authenticator code.",
   password_weak: "Choose a longer password.",
   lockout_prevented: "Refused: this would leave you without a way to sign in.",
@@ -95,10 +95,14 @@ export const CODE_TEXT: Readonly<Record<string, string>> = Object.freeze({
   FLEET_CONFLICT: "That name is already in use. Choose a different one.",
   FLEET_INVALID_STATE: "This cannot be done in the current state. Refresh the page and check before trying again.",
   FLEET_STEPUP_REQUIRED: "Please confirm it’s you (passkey, or password and authenticator code) to continue.",
+  FLEET_SECRET_DETECTED: "This looks like it contains a password, key or card number, so it was not sent. Use Money & identity for anything sensitive.",
+  FLEET_TREASURY_INSUFFICIENT: "The treasury does not have enough money to pay for this. Add funds to the treasury first.",
+  FLEET_AGENT_DEAD: "This agent has died. Its conversation is kept as history.",
+  FLEET_COGNITION_PAUSED: "The agent is paused. Resume it to let it act.",
 });
 
 /** The owner-facing sentence for an error: the specific message or the category's, the Fleet's reason, then the code. */
-export function describeError(e: unknown, fallback = "Something went wrong. Nothing was changed."): string {
+export function describeError(e: unknown, fallback = "Something went wrong. Refresh to see the current state before trying again."): string {
   if (!(e instanceof FleetApiError)) return e instanceof Error && e.message ? e.message : fallback;
   const head = CODE_TEXT[e.code] ?? CATEGORY_TEXT[e.category];
   const reason = e.reason && !CODE_TEXT[e.code] ? ` ${e.reason.replace(/^./, (c) => c.toUpperCase()).replace(/([^.!?])$/, "$1.")}` : "";

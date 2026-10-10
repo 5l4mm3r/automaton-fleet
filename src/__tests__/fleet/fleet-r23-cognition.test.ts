@@ -293,7 +293,7 @@ function mindRig(o: { routing?: boolean; replies: Array<Reply | ((call: { messag
     spendOrder: async (r) => { spends.push(r as never); const v = o.spend?.(r as never); if (v instanceof Error) throw v; return v ?? { ok: true, order: { status: "reserved" } }; },
     proposeKnowledge: async () => ({}), knowledge: async () => [], requestIdentityFact: async () => ({}),
   } });
-  const mind = new FounderMind({ ports, toolbox, stateDir: dirs.s, maxStepsPerTurn: o.maxSteps, routed: { memoryDir: dirs.m, workspaceDir: dirs.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
+  const mind = new FounderMind({ ports, toolbox, stateDir: dirs.s, hibernationSafetyMs: 0 /* v62: 0 = the timer backoff only (slim-packet mechanics) */, maxStepsPerTurn: o.maxSteps, routed: { memoryDir: dirs.m, workspaceDir: dirs.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
   return { mind, calls, spends, dirs, loopGuard };
 }
 const call = (id: string, name: string, args: Record<string, unknown> = {}): ToolCall => ({ id, name, arguments: args });

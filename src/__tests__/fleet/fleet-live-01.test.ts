@@ -77,7 +77,7 @@ function rig(o: { caps?: () => Record<string, unknown> | null; owner?: () => unk
   const toolbox = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: dirs.w, memoryDir: dirs.m, loopGuard, ports: {
     ledger: async () => ({}), spendOrder: async () => ({}), proposeKnowledge: async () => ({}), knowledge: async () => [], requestIdentityFact: async () => ({}),
   } });
-  const mind = new FounderMind({ ports, toolbox, stateDir: dirs.s, routed: { memoryDir: dirs.m, workspaceDir: dirs.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
+  const mind = new FounderMind({ ports, toolbox, stateDir: dirs.s, hibernationSafetyMs: 0 /* v62: 0 = the timer backoff only (slim-packet mechanics) */, routed: { memoryDir: dirs.m, workspaceDir: dirs.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
   /** Turn until the next inference call happens (thinking slots skipped by the idle backoff cost nothing). */
   const next = async () => {
     const before = calls.length;

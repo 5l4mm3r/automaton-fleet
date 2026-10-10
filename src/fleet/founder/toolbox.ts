@@ -170,7 +170,7 @@ function memoryRecord(call: ToolCall, out: ToolOutcome, r: FactResult | null): M
   };
 }
 const IMPLEMENTED = new Set([
-  "read_file", "list_files", "write_file", "exec", "remember_fact", "remember_facts", "retract_fact", "record_external_dependency", "withdraw_external_dependency", "recall_facts", "set_goal", "complete_goal", "list_goals",
+  "read_file", "list_files", "write_file", "exec", "remember_fact", "remember_facts", "retract_fact", "record_external_dependency", "withdraw_external_dependency", "reply_to_owner", "recall_facts", "set_goal", "complete_goal", "list_goals",
   "open_decision", "resolve_decision", "review_decision",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
   "propose_experiment", "add_experiment_evidence", "start_experiment", "record_experiment", "list_experiments",
@@ -323,6 +323,12 @@ const str = (v: unknown, max: number): string | null => (typeof v === "string" &
 export class FounderToolbox {
   private readonly workspace: string;
   private readonly memory: string;
+  /** v62: the owner conversation turn this mind is answering (null = none); reply_to_owner is refused outside one. */
+  private ownerTurn: string | null = null;
+  private ownerReplied = false;
+  setOwnerTurn(turnId: string | null): void { this.ownerTurn = turnId; this.ownerReplied = false; }
+  /** v62: whether reply_to_owner completed the current owner turn. */
+  ownerTurnReplied(): boolean { return this.ownerReplied; }
 
   constructor(private readonly o: { manifest: CapabilityManifest; workspaceDir: string; memoryDir: string; ports: ToolboxPorts; execTimeoutMs?: number; /** tests only */ sandboxPython?: string;
     /** v22 phase: loop/duplication economics (absent = unchanged behaviour). */ loopGuard?: LoopGuard;
@@ -868,6 +874,18 @@ export class FounderToolbox {
         }
         // F2-A: an action-scoped external dependency. It makes ONE action unavailable; it never blocks the founder, a goal
         // or other work, and it grants nothing. Ordinary business choices are not valid kinds (FleetController refuses them).
+        // v62: the founder's reply to its owner's dashboard messages (the open conversation turn is set by the mind).
+        case "reply_to_owner": {
+          if (!this.ownerTurn) return refuse("FLEET_NO_OWNER_MESSAGE", "no message from your owner is waiting for a reply in this turn");
+          if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "owner conversations are not available to this runtime");
+          const body = str(a.message, 8000);
+          if (!body) return refuse("FLEET_BAD_REQUEST", "message required");
+          const final = a.final !== false;
+          const r = await this.o.ports.economy("owner.reply", { turnId: this.ownerTurn, body, final }).catch(ownerRefusal);
+          if (r.ok === true && final) this.ownerReplied = true;
+          return { name: call.name, ok: r.ok === true, ...(r.ok === true ? {} : { refused: String(r.code ?? "FLEET_REFUSED") }),
+            output: r.ok === true ? `Delivered to your owner${final ? "; the conversation turn is complete" : ""}.` : clip(JSON.stringify(r)) };
+        }
         case "record_external_dependency": {
           if (!this.o.ports.ownerRequestCreate) return refuse("FLEET_TOOL_NOT_AVAILABLE", "external dependencies are not available to this runtime");
           const title = str(a.title, 200);

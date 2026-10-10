@@ -31,7 +31,11 @@ export interface RoutedCognitionPorts {
   capabilities(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }>;
   cognitionStatus(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }>;
   routingState(agentId: string): Promise<Record<string, unknown> | null>;
-  authorize(agentId: string, estimateUsdCents: number, route: Record<string, unknown>, promptSha256: string): Promise<Record<string, unknown> & { ok: boolean }>;
+  /**
+   * v62: `conversationTurn` set = a call inside an owner conversation turn (the controller's SQL decides who pays: the
+   * treasury while the turn is this founder's, open and within its bound; otherwise the founder, exactly as without it).
+   */
+  authorize(agentId: string, estimateUsdCents: number, route: Record<string, unknown>, promptSha256: string, conversationTurn?: string | null): Promise<Record<string, unknown> & { ok: boolean }>;
   record(agentId: string, requestId: string, r: CognitionRecord, obs: { packetBytes: number | null; thinkingTokens: number | null; promptCache: string | null; cacheReason?: string | null }): Promise<Record<string, unknown> & { ok: boolean }>;
   /**
    * R41.1: the doctrines the founder's ATTESTED runtime release implements (absent = not checked, e.g. tests and
@@ -191,10 +195,12 @@ export async function inferRouted(
     ...(req.actionClass ? { actionClass: req.actionClass } : {}),
     thinking: candidate.thinking, effort: decision.effort ?? candidate.effort,
   };
-  const auth = await ports.authorize(agentId, Math.max(1, Math.ceil(estimateMicro / 1_000_000)), snapshot, promptSha);
+  const turn = typeof body.conversationTurn === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body.conversationTurn) ? body.conversationTurn : null;
+  const auth = await ports.authorize(agentId, Math.max(1, Math.ceil(estimateMicro / 1_000_000)), snapshot, promptSha, turn);
   if (!auth.ok) {
     const code = String(auth.code);
-    throw new CognitionError(code === "FLEET_COGNITION_BUSY" || code === "FLEET_COGNITION_RATE_LIMITED" ? 429 : code === "FLEET_COGNITION_DUPLICATE_FAILURE" ? 409 : 403, code, "inference not authorized");
+    throw new CognitionError(code === "FLEET_COGNITION_BUSY" || code === "FLEET_COGNITION_RATE_LIMITED" ? 429 : code === "FLEET_COGNITION_DUPLICATE_FAILURE" ? 409 : 403, code,
+      code === "FLEET_TREASURY_INSUFFICIENT" ? `the treasury cannot pay for this owner conversation turn (available ${auth.availableMinor ?? "?"}, needed ${auth.neededMinor ?? "?"})` : "inference not authorized");
   }
   const requestId = String(auth.requestId);
   const deadlineMs = Math.min(MAX_COGNITION_DEADLINE_MS, Math.max(1_000, opts.deadlineMs ?? DEFAULT_COGNITION_DEADLINE_MS));

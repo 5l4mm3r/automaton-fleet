@@ -68,9 +68,10 @@ import { V58_SQL } from "./migrations-phase58.js";
 import { V59_SQL } from "./migrations-phase59.js";
 import { V60_SQL } from "./migrations-phase60.js";
 import { V61_SQL } from "./migrations-phase61.js";
+import { V62_SQL } from "./migrations-phase62.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 61;
+export const FLEET_PG_SCHEMA_VERSION = 62;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1227,6 +1228,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 59, name: "brokered_paypal_refunds", sql: V59_SQL },
   { version: 60, name: "agent_labels", sql: V60_SQL },
   { version: 61, name: "owner_receiving_test", sql: V61_SQL },
+  { version: 62, name: "conversations_and_names", sql: V62_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1266,6 +1268,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v22: neutral cognition routing (inert until enabled): routed authorize/record, routing state, action boundary.
   "svc_cognition_routing_state(text)",
   "svc_cognition_routed_authorize(text, bigint, jsonb, text)",
+  // v62: an owner conversation turn's model call (the treasury pays inside an open turn; otherwise as routed_authorize).
+  "svc_cognition_conversation_authorize(text, bigint, jsonb, text, uuid)",
   "svc_cognition_routed_record(text, uuid, text, integer, integer, text, text, jsonb, text, text, integer, integer, text, integer, integer, integer, text, text, jsonb)",
   "svc_action_cognition_verify(text, text, bigint, text, text)",
   // v24: experiment expiry / run windows (reaper).

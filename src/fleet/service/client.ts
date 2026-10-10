@@ -329,11 +329,13 @@ export class FleetApiClient implements FleetBackend {
    * `waitMs` must exceed the controller's inference deadline (cognition status `founderWaitMs`), so a reply the
    * controller records and charges is always delivered (L2). Bounded to 5 s–330 s.
    */
-  async infer(messages: unknown[], waitMs = 150_000, route?: Record<string, unknown>, doctrine?: string) {
+  async infer(messages: unknown[], waitMs = 150_000, route?: Record<string, unknown>, doctrine?: string, opts: { conversationTurn?: string | null } = {}) {
     return this.call<{ content: string; toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>; usage: { inputTokens: number; outputTokens: number }; usageSource: string; chargedCents: number; requestId: string; route?: { tier: string; model: string; taskClass: string; scope: string } }>(
       // v22: the task's routing request (a request only: FleetController decides). Omitted = the legacy request body.
       // R41.1: the founder doctrine this runtime implements (routed calls only; absent = founder-v4).
-      "POST", "/v1/cognition/infer", route ? { messages, route, ...(doctrine ? { doctrine } : {}) } : { messages }, false, Math.min(330_000, Math.max(5_000, waitMs)),
+      // v62: a call inside an owner conversation turn names it (FleetController decides who pays; absent = the founder).
+      "POST", "/v1/cognition/infer", route ? { messages, route, ...(doctrine ? { doctrine } : {}), ...(opts.conversationTurn ? { conversationTurn: opts.conversationTurn } : {}) } : { messages },
+      false, Math.min(330_000, Math.max(5_000, waitMs)),
     );
   }
 

@@ -414,7 +414,7 @@ function rig(o: { deps?: () => unknown; survival?: () => SurvivalView | null; ex
     },
     ...(o.toolboxPorts ?? {}),
   } as never });
-  const mind = new FounderMind({ ports, toolbox, stateDir: dirs.s, routed: { memoryDir: dirs.m, workspaceDir: dirs.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
+  const mind = new FounderMind({ ports, toolbox, stateDir: dirs.s, hibernationSafetyMs: 0 /* v62: 0 = the timer backoff only (slim-packet mechanics) */, routed: { memoryDir: dirs.m, workspaceDir: dirs.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
   const parse = (text: string) => {
     const body = JSON.parse(text.split("\n").slice(3).join("\n"));
     expect(taskPacketProblems(body)).toEqual([]);

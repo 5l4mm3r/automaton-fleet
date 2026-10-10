@@ -38,7 +38,7 @@ import { DASHBOARD_SENSITIVE_OPS_V55 } from "../../fleet/postgres/migrations-pha
 import { DASHBOARD_SENSITIVE_OPS_V57 } from "../../fleet/postgres/migrations-phase57.js";
 import { DASHBOARD_SENSITIVE_OPS_V58 } from "../../fleet/postgres/migrations-phase58.js";
 import { DASHBOARD_SENSITIVE_OPS_V59 } from "../../fleet/postgres/migrations-phase59.js";
-import { DASHBOARD_WRITE_OPS_V60 } from "../../fleet/postgres/migrations-phase60.js";
+import { DASHBOARD_WRITE_OPS_V62 } from "../../fleet/postgres/migrations-phase62.js";
 import { GatewayClient } from "../../../codex-dashboard/src/dashboard/api/client";
 import { LiveAuth } from "../../../codex-dashboard/src/dashboard/api/auth";
 import { FleetApiError } from "../../../codex-dashboard/src/dashboard/api/errors";
@@ -122,13 +122,13 @@ describe.skipIf(!PG_BIN)("Codex dashboard LIVE contract against the real v41 gat
     // v48–v50: treasury, identity authority, custody credentials, lifecycle — each added to the gateway's sensitive class.
     expect([...SENSITIVE_OPS].sort()).toEqual([...DASHBOARD_SENSITIVE_OPS_V41, ...DASHBOARD_SENSITIVE_OPS_V48, ...DASHBOARD_SENSITIVE_OPS_V49, ...DASHBOARD_SENSITIVE_OPS_V50,
       ...DASHBOARD_SENSITIVE_OPS_V51, ...DASHBOARD_SENSITIVE_OPS_V52, ...DASHBOARD_SENSITIVE_OPS_V53, ...DASHBOARD_SENSITIVE_OPS_V54, ...DASHBOARD_SENSITIVE_OPS_V55, ...DASHBOARD_SENSITIVE_OPS_V57, ...DASHBOARD_SENSITIVE_OPS_V58, ...DASHBOARD_SENSITIVE_OPS_V59].sort());
-    expect([...WRITE_OPS].sort()).toEqual([...DASHBOARD_WRITE_OPS_V60].sort());
+    expect([...WRITE_OPS].sort()).toEqual([...DASHBOARD_WRITE_OPS_V62].sort());
     for (const f of ["adapters/live.ts", "api/client.ts", "api/auth.ts", "api/operations.ts", "api/snapshot.ts", "api/reveal.ts", "api/seal.ts", "live/mapping.ts", "live/index.ts", "adapter.live.ts", "money/MoneyPanels.tsx"]) {
       const src = fs.readFileSync(path.join(INTEGRATION, f), "utf8");
       expect(src, f).not.toMatch(/from\s+["'][^"']*simulat/i);
       expect(src, f).not.toMatch(/agentfleet\.vip|localhost|127\.0\.0\.1/); // nothing installation-specific
     }
-    for (const op of Object.values(OPERATIONS).flatMap((o) => o.ops)) expect(DASHBOARD_SENSITIVE_OPS_V41.includes(op as never) || DASHBOARD_WRITE_OPS_V60.includes(op as never), op).toBe(true);
+    for (const op of Object.values(OPERATIONS).flatMap((o) => o.ops)) expect(DASHBOARD_SENSITIVE_OPS_V41.includes(op as never) || DASHBOARD_WRITE_OPS_V62.includes(op as never), op).toBe(true);
     for (const o of Object.values(OPERATIONS)) expect(o.stepUp, o.kind).toBe(o.ops.every((op) => SENSITIVE_OPS.has(op)));
   });
 

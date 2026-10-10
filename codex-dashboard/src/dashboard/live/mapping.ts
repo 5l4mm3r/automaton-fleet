@@ -61,9 +61,14 @@ export function toFleet(s: LiveSnapshot, wallets: Wallets = {}): Fleet {
   const health = data(s.health) as Row | null;
   const names = new Map<string, string>();
 
-  const agents: Agent[] = (data(s.agents) ?? []).map((a) => {
-    names.set(a.agentId, agentLabel(a, a.agentId));
-    return toAgent(a, wallets[a.agentId]);
+  // v62: names are the owner's and may repeat; where two agents share one, a short id tag tells them apart everywhere.
+  const rows = data(s.agents) ?? [];
+  const count = new Map<string, number>();
+  for (const a of rows) { const k = agentLabel(a, a.agentId).toLowerCase(); count.set(k, (count.get(k) ?? 0) + 1); }
+  const shown = (a: AgentRow) => { const l = agentLabel(a, a.agentId); return (count.get(l.toLowerCase()) ?? 0) > 1 ? `${l} · ${a.agentId.slice(0, 6)}` : l; };
+  const agents: Agent[] = rows.map((a) => {
+    names.set(a.agentId, shown(a));
+    return { ...toAgent(a, wallets[a.agentId]), name: shown(a) };
   });
   const notices: Notice[] = (((data(s.notifications) as Row | null)?.notifications ?? []) as Row[]).map((n) => ({
     id: String(n.notification_id), title: String(n.title ?? n.code ?? ""), acknowledged: Boolean(n.acknowledged_at), time: clock(n.created_at),
