@@ -1,6 +1,6 @@
 # Owner conversations, customisable names and plain language — specification (revision 2)
 
-Status: **implemented and validated on the candidate; not deployed.** Supersedes revision 1 (2026-10-10 draft), whose
+Status: **implemented and validated on candidate f852888 (`docs/evaluations/launch-candidate/release-f852888.md`); not deployed.** Supersedes revision 1 (2026-10-10 draft), whose
 proposed caps (five wakes / five replies per agent per day) and 80-character limit the owner rejected.
 
 Owner decisions (2026-10-10): names are customisable without technical reference formats; direct owner ↔ agent
