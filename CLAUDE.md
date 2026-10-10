@@ -162,7 +162,7 @@ Current live topology:
 - Admin UI: root = UI 0.13.0 (FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.13.0), also at /hq-preview/; agents shown as
   Agent-1 / Agent-2 (owner Rename, v60; v62: 200-character Unicode names, duplicates tagged, key / account labels);
   v62 owner ↔ agent conversations (thread, files, request answers, card approvals; owner turns treasury-paid) —
-  replies need the agents' runtime upgrade
+  replies need the agents resumed
 - owner sign-in: password + TOTP (any browser) or passkey + TOTP; owner access must not depend on one browser's
   passkey; methods are never silently removed (docs/admin-access.md)
 - Fleet Command: its own bounded, clearable P0–P3 feed (v45); notifications are disposable (delete = delete);
@@ -173,8 +173,9 @@ Current live topology:
 - PayPal treasury (onboarding B1, in progress): custody key 4fee40f2… (/var/lib/automaton-fleet-custody, 0600);
   vault:paypal/treasury sealed; rail b71b3f3c… pending_setup, 0 readiness checks recorded (probe 2026-10-10:
   sign-in OK, reporting 403, webhook 404 — owner to fix in the PayPal app); no £1 test yet
-- 2 living Agents, both still on runtime fda78a0 (not upgraded at cutover; upgrade is launch step C1), both PAUSED by
-  the owner since 2026-10-10 12:37Z (founder-cognition pause; resume only on the owner's word), doctrine founder-v5: founder-1 (01M3F50SH7PNX2E3GST13J52AS, shown as
+- 2 living Agents, both on runtime f852888 (upgraded 2026-10-10 16:3xZ, upgrades f48d9854… / 901d5c95…; previous
+  fda78a0), both PAUSED by the owner since 2026-10-10 12:37Z (founder-cognition pause; resume only on the owner's
+  word), doctrine founder-v5: founder-1 (01M3F50SH7PNX2E3GST13J52AS, shown as
   Agent-1) and agent-2 (01M4C4NXT786Q4E9725N5A15KV)
   (live-verified: v5 delivery, tools, hibernation, slim wake; event-triggered wake and field-journal persistence
   await legitimate live activity; never provoke them; docs/evaluations/r41-1/fda78a0/deployment.md)

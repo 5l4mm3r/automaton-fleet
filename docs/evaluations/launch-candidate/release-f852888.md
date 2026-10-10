@@ -122,3 +122,22 @@ production b0ac910 / 61 / UI 0.12.1, both agents paused, founder baseline taken.
 - Rollback: UI `dashboard.env.pre-0.13.0`; backend `bash ~/rlc62b/fleet-rollout.sh revert ~/rlc62b/pins.txt 61 62 <reason>`.
 
 Next, each on the owner's word: the agents' runtime upgrade (step 2 above), resuming them, and PayPal readiness.
+
+## Agents' runtime upgrade (2026-10-10, owner-authorized): DONE, both still paused
+
+- On-host `fleet-founders.sh upgrade-rehearsal fda78a0…` (throwaway registry, fake provider), 16:1x–16:3xZ:
+  **`pass: true`, 27/27** — includes slim wake-up (3,270 B vs 7,499 B full), v5 served (8 v5 / 0 v4 steps),
+  `field_guide` + `field_journal` run, journal written, wake condition declared, rollback after v5 use keeps the journal,
+  upgrade again verified. Production untouched by it.
+- Agent-2 (`01M4C4NXT786Q4E9725N5A15KV`): preflight ok; `upgrade-runtime` **verified**, upgrade
+  `f48d9854-b1ee-47bc-a389-530f6810323a`; fda78a0 → f852888; pid 757524, same uid 62577; downtime 2,051 ms; 1 challenge
+  passed; state identical (0 lost / changed / added).
+- Agent-1 (`01M3F50SH7PNX2E3GST13J52AS`): preflight ok; `upgrade-runtime` **verified**, upgrade
+  `901d5c95-c2ea-4366-8150-4546f924a8cd`; fda78a0 → f852888; pid 757816, same uid 65037; downtime 1,995 ms; 1 challenge
+  passed; state identical.
+- After: identity hashes and ledger fingerprints identical to the 16:06:32Z baseline; 804 journals; cash 8,641 / 9,536;
+  **both paused**; no AI call since 12:19:54Z; 0 in flight.
+- Rollback per agent: `sudo scripts/fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`.
+
+Next, each on the owner's word: resume the agents (Pause / Resume on each conversation); fund the treasury so owner
+turns can be paid; PayPal re-probe after the owner fixes the app.
