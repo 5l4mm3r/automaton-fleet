@@ -126,29 +126,29 @@ Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
 ## Current production deployment
 
-State after release f852888 (2026-10-10 16:08Z, schema 61 -> 62, UI 0.13.0), per
-docs/evaluations/launch-candidate/release-f852888.md and docs/fleet-production-runbook.md.
+State after release ad92320 (2026-10-10 23:52Z, schema 62 -> 63, UI 0.14.0), per
+docs/evaluations/launch-candidate/release-ad92320.md (and release-f852888.md before it) and docs/fleet-production-runbook.md.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
 
 Controller runtime commit (approved, pinned and installed):
-f85288880ef01346b6c084f378af02a0f8cdc537
+ad92320179b9740c2186993bbad100aed028c11d
 
 Runtime build ID:
-00f67293ae92240f91d8f571b13824fd33911b8526093092d37edf22d673e52c
+0b79500a895e15028d59408684453823081cdedef3d2e97d88384cda805cefa4
 
 Runtime lockfile SHA256:
 1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1
 
 Database schema:
-v62 (applied 2026-10-10 16:08Z by the f852888 release, 61 -> 62)
+v63 (applied 2026-10-10 23:52Z by the ad92320 release, 62 -> 63; mail housekeeping)
 
 Releases: scripts/fleet-release.sh (backend cutover + UI promotion + root verification; ONE
-production_deployed / production_rolled_back event). f852888 rollback: prefer fixing forward (v62 only adds).
-Schema revert: UI first (`dashboard.env.pre-0.13.0`), then `~/rlc62b/fleet-rollout.sh revert ~/rlc62b/pins.txt 61 62
-<reason>` (pre-migration dump ~/automaton_fleet-v61-pre-v62-20261010T160754Z.dump; runtime.env.pre-f852888;
-releases/b0ac910). Never revert once real money or provider data exists — freeze and fix forward (README §3).
+production_deployed / production_rolled_back event). ad92320 rollback: prefer fixing forward (v63 only adds; deleted
+mail is gone either way). Schema revert: UI first (`dashboard.env.pre-0.14.0`), then `~/rlc63/fleet-rollout.sh revert
+~/rlc63/pins.txt 62 63 <reason>` (pre-migration dump ~/automaton_fleet-v62-pre-v63-20261010T235156Z.dump;
+runtime.env.pre-ad92320; releases/f852888). Never revert once real money or provider data exists — freeze and fix forward (README §3).
 
 Controller domain:
 https://api.agentfleet.vip  (admin UI: https://admin.agentfleet.vip)
@@ -159,8 +159,10 @@ Current live topology:
   127.0.0.1:8443; admin.agentfleet.vip to the dashboard on 127.0.0.1:8790)
 - FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
 - Operator API (signed requests) on 127.0.0.1:8788 only, via the restricted SSH account fleet-op-tunnel
-- Admin UI: root = UI 0.13.2 (0e0a0de, deployed 2026-10-10 23:13Z via ~/rlc0132; FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.13.2;
-  UI rollback `dashboard.env.pre-0.13.2`; adds the Mail page, Saved states, pre-seal Proton checks, owner email field); /hq-preview/ is NOT served (no preview tree since 0.12.x); agents shown as
+- Admin UI: root = UI 0.14.0 (ad92320, deployed 2026-10-10 23:52Z by the release; FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.14.0;
+  UI rollback `dashboard.env.pre-0.14.0`; Mail page with dismiss / delete permanently (confirm, no step-up), Saved states, Proton checks)
+- Mail: Proton Bridge 3.27.1 (own unit, loopback), shared address fleet.treasury@proton.me, owner notifications to the owner's
+  separate Proton address; PayPal rail b71b3f3c… ACTIVE for receiving (£1 test complete); money out still off; /hq-preview/ is NOT served (no preview tree since 0.12.x); agents shown as
   Agent-1 / Agent-2 (owner Rename, v60; v62: 200-character Unicode names, duplicates tagged, key / account labels);
   v62 owner ↔ agent conversations (thread, files, request answers, card approvals; owner turns treasury-paid) —
   replies need the agents resumed

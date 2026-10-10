@@ -1,6 +1,6 @@
 # Release ad92320 — schema 62 → 63 + UI 0.14.0 (mail housekeeping)
 
-Status: **rehearsed, not deployed** (2026-10-10 23:42:46Z).
+Status: **DEPLOYED 2026-10-10 23:52:28Z** (owner-run; rehearsed 23:42:46Z).
 
 ## Contents
 - **Schema v63:**
@@ -55,3 +55,22 @@ bash ~/rlc63/fleet-release.sh ~/rlc63/pins.txt 62 63 0.14.0 ~/rlc63/ui-0.14.0-ad
   - UI: `dashboard.env.pre-0.14.0`.
   - Backend: `bash ~/rlc63/fleet-rollout.sh revert ~/rlc63/pins.txt 62 63 <reason>`, using the cutover's verified
     pre-migration dump.
+
+## Deployment (2026-10-10, owner-run `fleet-release.sh`)
+- Cutover from f852888.
+  - Outage 23:51:36Z → 23:52:18Z (42 s).
+  - Pre-migration dump `automaton_fleet-v62-pre-v63-20261010T235156Z.dump` (sha `8659918e…`).
+  - Reconciliation OK: 1807 events preserved.
+  - Rollback point: `runtime.env.pre-ad92320`, `releases/f852888`.
+- UI 0.14.0 at 23:52:28Z; one `production_deployed`.
+- Post-checks:
+  - Operator API: runtime ad92320 / build 0b79500a…, schema 63, all four safety switches false, readiness green.
+  - Lifecycle: 2 active, 0 held or stale.
+  - Live `/` and `/login/` are byte-identical to the build.
+  - Services active: controller, identity, dashboard, custody, browser, Proton Bridge.
+  - The ledger verifies.
+  - Mail `fleet.treasury@proton.me` active (re-registered 23:52:27Z).
+  - Both agents still paused; PayPal rail active.
+  - The first retention pass ran at start: stored mail went 28 → 24, verification codes 5 → 2 (older than 7 days;
+    all unassigned).
+- Next on the owner's word: resume the agents, rail assignment, funding.
