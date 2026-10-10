@@ -141,3 +141,12 @@ Next, each on the owner's word: the agents' runtime upgrade (step 2 above), resu
 
 Next, each on the owner's word: resume the agents (Pause / Resume on each conversation); fund the treasury so owner
 turns can be paid; PayPal re-probe after the owner fixes the app.
+
+## PayPal readiness (2026-10-10, pinned runtime, as automaton-fleet-custody)
+
+The owner re-sealed `vault:paypal/treasury` from the Live app that holds the webhook (17:18:27Z; the earlier keys were
+from another app), added the two missing events and ticked Transaction search. Probe 17:20:07Z: sign-in ok; balances
+**200** (GBP, USD); webhook `4JR443408B058674D` **200**, URL matches, **8/8** events; Transaction Search **404** (feature
+just enabled; re-probe later). Recorded as probe evidence: `account_access` verified, `webhook_configuration` verified.
+Owner-test gate **open**; rail still `pending_setup`; `capabilitiesReady` `[]`; agents cannot use the rail. Next: the £1
+receiving test on the owner's go.
