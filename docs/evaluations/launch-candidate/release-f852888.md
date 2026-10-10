@@ -150,3 +150,17 @@ from another app), added the two missing events and ticked Transaction search. P
 just enabled; re-probe later). Recorded as probe evidence: `account_access` verified, `webhook_configuration` verified.
 Owner-test gate **open**; rail still `pending_setup`; `capabilitiesReady` `[]`; agents cannot use the rail. Next: the £1
 receiving test on the owner's go.
+
+## £1 receiving test (2026-10-10, live)
+
+- Checkout `e5bd5e23-c7ff-4dee-85d6-8c9267a8c342` (PayPal order `5B4220784C699793H`, £1.00 GBP) created 17:26:43Z; the
+  owner paid it. The approval did not reach the Fleet through a verified `CHECKOUT.ORDER.APPROVED` webhook (custody
+  could not reach PayPal's API until the unit fix in `768dc0a`); PayPal's own order record showed APPROVED.
+- Owner-approved one-off (option A): a script run as `automaton-fleet-custody` on the pinned runtime called custody's
+  own `paypalCheckoutByOrder` / `paypalCheckoutUpdate(…, "approved")`, refusing unless the checkout was exactly this one
+  and still `open`. Result `{"ok":true,"status":"approved"}` (~19:58Z, run by the owner). No other state was changed.
+- Custody captured through its normal path at 19:58:26Z: capture `19C47714VJ327730R`, journal `dc303ba5…`, owner
+  capital **£0.67** (net of PayPal's £0.33 fee). The owner confirmed £0.67 in the treasury PayPal account.
+- Status at 20:43Z: `captured (waiting for Transaction Search)`; the 20:34Z Balances reading showed £0.00 available
+  (likely pending/held on PayPal's side). Next: `hub-paypal-test` reaches "in the balance" → record `sale_ingestion`
+  from first use → activate the rail (owner's go). Agents remain paused and cannot use the rail.

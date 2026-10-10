@@ -53,7 +53,7 @@ function Rename({ what, current, save }: { what: string; current: string; save: 
 
 /** One saved set of PayPal keys: its name (renameable), status, Replace keys (same reference, same links) and Withdraw. */
 function KeySet({ c, client, call }: { c: Row; client: GatewayClient; call: (op: string, a: Record<string, unknown>) => Promise<unknown> }) {
-  const [replace, setReplace] = useState(false);
+  const [replace, setReplace] = useState(false), [replaced, setReplaced] = useState("");
   const name = c.label ? String(c.label) : credentialName(String(c.vaultRef));
   return <div className="my-2 rounded border border-slate-700 p-3 text-sm">
     <p className="[overflow-wrap:anywhere]"><span className="font-semibold">{name}</span> · {c.status === "active" ? "Active" : c.status === "revoked" ? "Withdrawn" : String(c.status)}
@@ -61,20 +61,28 @@ function KeySet({ c, client, call }: { c: Row; client: GatewayClient; call: (op:
       <Rename what="set of keys" current={name} save={(n) => call("label_set", { kind: "paypal_credential", id: c.vaultRef, name: n })} />
       <button className="ml-2 text-xs text-cyan-300 underline" onClick={() => setReplace(!replace)}>{replace ? "Cancel" : "Replace keys"}</button>
       {c.status === "active" && <button className="ml-2 text-xs text-red-300 underline" onClick={() => void call("custody_credential_revoke", { vaultRef: c.vaultRef })}>Withdraw</button>}</p>
+    {c.status === "active" && <p className="mt-1 text-xs text-emerald-300">Saved and encrypted{c.uploadedAt ? ` · last updated ${when(String(c.uploadedAt))} UTC` : ""}. These keys stay saved: enter them again only if you change or revoke them in PayPal. For security they are never shown back.</p>}
+    {replaced && <p role="status" className="mt-1 text-xs text-emerald-300">{replaced}</p>}
     {replace && <Form title="Replace these keys" fields={[{ key: "id", label: "Client ID" }, { key: "secret", label: "Secret", type: "password" }]}
       note="The new keys take the place of these ones; everything linked to this set stays linked."
-      submit={async (v) => { const r = await call("custody_credential_upload", await sealForCustody(client, String(c.vaultRef), v.id.trim(), v.secret.trim())); setReplace(false); return r; }} />}
+      submit={async (v) => { const r = await call("custody_credential_upload", await sealForCustody(client, String(c.vaultRef), v.id.trim(), v.secret.trim()));
+        setReplace(false); setReplaced(`Keys replaced and encrypted at ${new Date().toLocaleTimeString()}. Nothing else needs re-entering.`); return r; }} />}
   </div>;
 }
 
 /** A small inline form: labelled fields, one submit, the gateway result or error shown under it. */
-function Form({ title, fields, submit, note, danger }: { title: string; fields: Array<{ key: string; label: string; value?: string; type?: string; options?: string[][] }>;
-  submit: (v: Record<string, string>) => Promise<unknown>; note?: ReactNode; danger?: boolean }) {
-  const [v, setV] = useState<Record<string, string>>(Object.fromEntries(fields.map((f) => [f.key, f.value ?? f.options?.[0]?.[0] ?? ""])));
+function Form({ title, fields, submit, note, danger, done, clearOnDone }: { title: string; fields: Array<{ key: string; label: string; value?: string; type?: string; options?: string[][] }>;
+  submit: (v: Record<string, string>) => Promise<unknown>; note?: ReactNode; danger?: boolean; done?: string; clearOnDone?: boolean }) {
+  const initial = () => Object.fromEntries(fields.map((f) => [f.key, f.value ?? f.options?.[0]?.[0] ?? ""]));
+  const [v, setV] = useState<Record<string, string>>(initial);
   const [busy, setBusy] = useState(false), [msg, setMsg] = useState("");
   return <form className="my-3 rounded-lg border border-slate-700 p-4" onSubmit={async (e) => {
     e.preventDefault(); setBusy(true); setMsg("");
-    try { const r = await submit(v); setMsg(`Done${r && typeof r === "object" && "note" in (r as Row) ? ` — ${(r as Row).note}` : ""}.`); }
+    try {
+      const r = await submit(v);
+      if (clearOnDone) setV(initial());
+      setMsg(done ?? `Done${r && typeof r === "object" && "note" in (r as Row) ? ` — ${(r as Row).note}` : ""}.`);
+    }
     catch (err) { setMsg(describe(err)); } finally { setBusy(false); }
   }}>
     <p className="font-semibold">{title}</p>{note && <div className="mt-1 text-sm text-slate-400">{note}</div>}
@@ -352,6 +360,7 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
   const pp = useRead<Row>(client, "paypal", {}, []);
   const comms = useRead<Row>(client, "provider_secrets", {}, []);
   const call = async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); auto.reload(); key.reload(); pp.reload(); comms.reload(); return r; };
+  const [addKeys, setAddKeys] = useState(false);
   const upload = async (cls: string, value: string) => call("owner_vault_upload", await sealOwnerFact(client, cls, value));
   const configured = (cls: string) => auto.data?.configured?.[cls]?.status === "configured";
   const a = auto.data;
@@ -364,15 +373,18 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
       <p className="text-sm text-slate-300">Connect the PayPal Business account the Fleet uses as its treasury. In developer.paypal.com, open Apps &amp; Credentials, switch to <strong>Live</strong>, and copy your app’s Client ID and Secret. They are encrypted in this browser before they leave it, and only the Fleet’s payments service can read them.</p>
       <p className="mt-2 text-xs text-slate-400">Secure payments service: {key.data?.fingerprint ? <span className="text-emerald-300">ready</span> : <span className="text-amber-300">not ready yet — saving keys will be refused until it is</span>}</p>
       {(key.data?.credentials as Row[] | undefined)?.map((c) => <KeySet key={c.vaultRef} c={c} client={client} call={call} />)}
-      <Form title={(key.data?.credentials as Row[] | undefined)?.length ? "Add another set of PayPal keys" : "Save PayPal keys"}
+      {(key.data?.credentials as Row[] | undefined)?.length && !addKeys
+        ? <button className="mt-2 text-xs text-cyan-300 underline" onClick={() => setAddKeys(true)}>Add another set of PayPal keys (a different PayPal app)</button>
+        : <Form title={(key.data?.credentials as Row[] | undefined)?.length ? "Add another set of PayPal keys" : "Save PayPal keys"} clearOnDone done="Saved and encrypted. You will not need to enter these keys again."
         fields={[{ key: "name", label: "Name (your label; you can change it later)", value: (key.data?.credentials as Row[] | undefined)?.length ? "" : "Treasury" }, { key: "id", label: "Client ID" }, { key: "secret", label: "Secret", type: "password" }]}
         note="To replace the keys of an existing set, use Replace keys on that set instead: a new set is stored separately and must be linked by the operator."
         submit={async (v) => {
           const ref = (key.data?.credentials as Row[] | undefined)?.length ? `vault:paypal/keys-${crypto.randomUUID().slice(0, 8)}` : "vault:paypal/treasury";
           const r = await call("custody_credential_upload", await sealForCustody(client, ref, v.id.trim(), v.secret.trim()));
           if (v.name.trim()) await call("label_set", { kind: "paypal_credential", id: ref, name: v.name.trim() });
+          setAddKeys(false);
           return r;
-        }} />
+        }} />}
       <p className="mt-3 text-sm text-slate-400">Next, the Fleet operator links these keys to the treasury and runs PayPal’s checks. Progress appears under Treasury.</p>
       {(pp.data?.rails as Row[] | undefined)?.map((r) => <Form key={r.railId} title={`PayPal notifications · ${r.label}`} note={`In the same Live app, open Webhooks, add ${typeof location === "undefined" ? "https://<api domain>" : location.origin.replace("://admin.", "://api.")}/v1/webhooks/paypal with the payment, refund and dispute events, then paste the Webhook ID PayPal shows.${r.webhookId ? ` Current: ${String(r.webhookId)}.` : ""}`}
         fields={[{ key: "id", label: "Webhook ID" }]} submit={(v) => call("rail_webhook_set", { railId: r.railId, webhookId: v.id.trim() })} />)}

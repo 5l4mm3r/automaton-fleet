@@ -1,5 +1,19 @@
 # Gumroad revenue integration: design (revision 2, 2026-10-08)
 
+> **Owner decision 2026-10-10: Gumroad is NOT a launch channel.** Gumroad holds sales in USD until a $100 minimum and
+> pays out weekly; sales are not agent cash until the payout lands (S1–S4 below are not spendable). With live survival
+> rules (exhaustion is death) that delay could starve an agent that is genuinely selling. Launch sells through the
+> treasury PayPal checkout only (instant settlement; proven by the £1 receiving test). Gumroad returns later as a side
+> channel, once agents' wallets are healthy enough to carry the payout delay. The code (v46/v47/v52, storefront
+> gateway) stays in the release, unused: the gateway is not installed, no OAuth token exists, no rail is registered.
+> The owner's seller account exists but is not connected. Requests 62cbe1b7 / 6178c7bb (approved) must be redirected
+> to the PayPal checkout in the owner's conversations once the agents are resumed.
+>
+> **Unlock rule (owner, 2026-10-10):** Gumroad becomes available to an agent the first time that agent's wallet balance
+> (its `agent_cash` ledger balance) reaches **£500**. The unlock is per agent and **permanent**: falling back below £500
+> afterwards does not lock it again. The fleet evaluates it (never the agent). Not built yet; low priority, to be
+> finished together with the rest of the Gumroad onboarding (gateway install, OAuth, rail, probe).
+
 **Status: a design for review. Nothing is built or deployed.**
 - Production is unchanged.
 - No account, product, rail, credential, receipt connector or dependency decision was created, stored or made.
