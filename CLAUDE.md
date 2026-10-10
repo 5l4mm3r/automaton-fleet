@@ -126,29 +126,29 @@ Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
 ## Current production deployment
 
-State after release b0ac910 (2026-10-10 11:59Z, schema 59 -> 61, UI 0.12.1), per
-docs/evaluations/launch-candidate/release-b0ac910.md and docs/fleet-production-runbook.md.
+State after release f852888 (2026-10-10 16:08Z, schema 61 -> 62, UI 0.13.0), per
+docs/evaluations/launch-candidate/release-f852888.md and docs/fleet-production-runbook.md.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
 
 Controller runtime commit (approved, pinned and installed):
-b0ac910322c8c72d992c4b3c7a1c6a90d4ed3201
+f85288880ef01346b6c084f378af02a0f8cdc537
 
 Runtime build ID:
-dde2e1977ac57cb299280759763ce4c4f01b8b40d71f7a012daeb3ae22973621
+00f67293ae92240f91d8f571b13824fd33911b8526093092d37edf22d673e52c
 
 Runtime lockfile SHA256:
 1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1
 
 Database schema:
-v61 (applied 2026-10-10 11:59Z by the b0ac910 release, 59 -> 61)
+v62 (applied 2026-10-10 16:08Z by the f852888 release, 61 -> 62)
 
 Releases: scripts/fleet-release.sh (backend cutover + UI promotion + root verification; ONE
-production_deployed / production_rolled_back event). b0ac910 rollback: prefer fixing forward (v60–v61 only add).
-Schema revert: UI first (`dashboard.env.pre-0.12.1`), then `~/rlc61/fleet-rollout.sh revert ~/rlc61/pins.txt 59 61
-<reason>` (pre-migration dump ~/automaton_fleet-v59-pre-v61-20261010T115920Z.dump; runtime.env.pre-b0ac910;
-releases/f021673). Never revert once real money or provider data exists — freeze and fix forward (README §3).
+production_deployed / production_rolled_back event). f852888 rollback: prefer fixing forward (v62 only adds).
+Schema revert: UI first (`dashboard.env.pre-0.13.0`), then `~/rlc62b/fleet-rollout.sh revert ~/rlc62b/pins.txt 61 62
+<reason>` (pre-migration dump ~/automaton_fleet-v61-pre-v62-20261010T160754Z.dump; runtime.env.pre-f852888;
+releases/b0ac910). Never revert once real money or provider data exists — freeze and fix forward (README §3).
 
 Controller domain:
 https://api.agentfleet.vip  (admin UI: https://admin.agentfleet.vip)
@@ -159,8 +159,10 @@ Current live topology:
   127.0.0.1:8443; admin.agentfleet.vip to the dashboard on 127.0.0.1:8790)
 - FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
 - Operator API (signed requests) on 127.0.0.1:8788 only, via the restricted SSH account fleet-op-tunnel
-- Admin UI: root = UI 0.12.1 (FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.12.1), also at /hq-preview/; agents shown as
-  Agent-1 / Agent-2 (owner Rename, v60)
+- Admin UI: root = UI 0.13.0 (FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.13.0), also at /hq-preview/; agents shown as
+  Agent-1 / Agent-2 (owner Rename, v60; v62: 200-character Unicode names, duplicates tagged, key / account labels);
+  v62 owner ↔ agent conversations (thread, files, request answers, card approvals; owner turns treasury-paid) —
+  replies need the agents' runtime upgrade
 - owner sign-in: password + TOTP (any browser) or passkey + TOTP; owner access must not depend on one browser's
   passkey; methods are never silently removed (docs/admin-access.md)
 - Fleet Command: its own bounded, clearable P0–P3 feed (v45); notifications are disposable (delete = delete);
@@ -171,7 +173,8 @@ Current live topology:
 - PayPal treasury (onboarding B1, in progress): custody key 4fee40f2… (/var/lib/automaton-fleet-custody, 0600);
   vault:paypal/treasury sealed; rail b71b3f3c… pending_setup, 0 readiness checks recorded (probe 2026-10-10:
   sign-in OK, reporting 403, webhook 404 — owner to fix in the PayPal app); no £1 test yet
-- 2 living Agents, both still on runtime fda78a0 (not upgraded at cutover; upgrade is launch step C1), doctrine founder-v5: founder-1 (01M3F50SH7PNX2E3GST13J52AS, shown as
+- 2 living Agents, both still on runtime fda78a0 (not upgraded at cutover; upgrade is launch step C1), both PAUSED by
+  the owner since 2026-10-10 12:37Z (founder-cognition pause; resume only on the owner's word), doctrine founder-v5: founder-1 (01M3F50SH7PNX2E3GST13J52AS, shown as
   Agent-1) and agent-2 (01M4C4NXT786Q4E9725N5A15KV)
   (live-verified: v5 delivery, tools, hibernation, slim wake; event-triggered wake and field-journal persistence
   await legitimate live activity; never provoke them; docs/evaluations/r41-1/fda78a0/deployment.md)

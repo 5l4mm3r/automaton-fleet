@@ -1,6 +1,6 @@
 # Release package — f852888 (schema 61 → 62, dashboard 0.13.0): owner ↔ agent conversations, customisable names, treasury-paid owner turns, event-driven hibernation
 
-Prepared and rehearsed 2026-10-10. **NOT deployed.** Production is `b0ac910`, schema 61, UI 0.12.1; both agents run
+Prepared and rehearsed 2026-10-10; **DEPLOYED 2026-10-10 16:08:28Z** on the owner's authorization (see the end). Before it, production was `b0ac910`, schema 61, UI 0.12.1; both agents run
 `fda78a0` and are **paused** (since 12:37Z; no AI call after 12:19:54Z). Supersedes the 3b456cd build in `~/rlc62`:
 do not cut over from it. The specification and its acceptance matrix are in
 `docs/design/owner-replies-and-plain-language.md` (revision 2).
@@ -100,3 +100,25 @@ Evidence: `~/fleet-release-evidence/3b456cd/validation/` and `~/fleet-release-ev
 3. Resuming the agents is a separate decision, with Pause / Resume on each conversation. Before that, the treasury must
    be able to pay for owner turns: it holds £0 outside the agents' partitions, so owner messages wait with "treasury
    short" until it is funded.
+
+## Deployment (2026-10-10, owner-authorized): DEPLOYED
+
+Pre-flight 16:06:32Z: pins, package `27cfff7d…`, scripts and build checkout matched; rehearsal stamp 15:25:55Z (valid);
+production b0ac910 / 61 / UI 0.12.1, both agents paused, founder baseline taken.
+
+- `fleet-release.sh` 16:06:44–16:08:28Z, exit 0; outage 16:07:34–16:08:17Z (43 s). Pre-migration dump
+  `~/automaton_fleet-v61-pre-v62-20261010T160754Z.dump` (`a56d9fb2…`); migrate 62; reconciliation OK (1,655 events,
+  none purged). UI 0.13.0 at `/opt/automaton-fleet/ui/0.13.0` (52 files), root verified, unauthenticated read 401; one
+  `production_deployed`.
+- Runtime f852888 / `00f67293…e52c`; `/opt/automaton-fleet/current` → f852888; the four flags false; protection on;
+  custody execution off; identity authority off; sweep off; registry 2/2 DEVELOPMENT.
+- Founders: identity hashes and ledger fingerprints identical to the 16:06:32Z baseline; 804 journals before and after;
+  cash 8,641 / 9,536; both on fda78a0, units running, **both still paused**; no AI call since 12:19:54Z. Shown as
+  Agent-1 / Agent-2; each thread shows its one pending request.
+- PayPal unchanged: key `4fee40f2c10ba139`, sealed credential active, rail `pending_setup`, webhook `4JR443408B058674D`,
+  0 checks. v62: 0 messages, `owner_conversation_charge` registered, ledger verify true.
+- Events since the start: role grants, `runtime_approved`, `production_deployed`, one `session_opened`, the usual two
+  restart-time `api_auth_failed` heartbeats. Public `/healthz` and `/v1/health` 200 (`/readyz` is loopback-only: 200).
+- Rollback: UI `dashboard.env.pre-0.13.0`; backend `bash ~/rlc62b/fleet-rollout.sh revert ~/rlc62b/pins.txt 61 62 <reason>`.
+
+Next, each on the owner's word: the agents' runtime upgrade (step 2 above), resuming them, and PayPal readiness.
