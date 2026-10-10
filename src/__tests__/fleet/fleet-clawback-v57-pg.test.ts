@@ -72,7 +72,7 @@ describe.skipIf(!PG_BIN)("v57: clawbacks reconciled from evidence; disputes held
     expect(FLEET_PG_SCHEMA_VERSION).toBeGreaterThanOrEqual(57);
     expect(await R.one(`(SELECT max(version) FROM fleet.fleet_schema_migrations)`)).toBe(FLEET_PG_SCHEMA_VERSION);
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
-    for (const [p, ts] of Object.entries(EVENT_ROUTES_V57)) for (const t of ts) expect(await R.one(`fleet.fleet_event_route($1, '{}'::jsonb)`, [t]), t).toBe(p);
+    for (const [p, ts] of Object.entries(EVENT_ROUTES_V57)) for (const t of ts) expect(await R.one(`fleet.fleet_event_route($1, '{}'::jsonb)`, [t]), t).toBe(p === "P3_INFO" ? "P3_SUMMARY" : p); // v62: P3_INFO never reached Fleet Command
   });
 
   it("a refund reported by the webhook and by Transaction Search (different ids) is posted once; one only Search shows is posted", async () => {

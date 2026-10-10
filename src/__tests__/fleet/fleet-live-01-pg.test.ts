@@ -368,7 +368,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
       const toolbox = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: dirs.w, memoryDir: dirs.m, loopGuard, ports: {
         ledger: async () => economics, spendOrder: async () => ({}), proposeKnowledge: async () => ({}), knowledge: async () => [], requestIdentityFact: async () => ({}),
       } });
-      const mind = new FounderMind({ ports, toolbox, stateDir: dirs.s, routed: { memoryDir: dirs.m, workspaceDir: dirs.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
+      const mind = new FounderMind({ ports, toolbox, stateDir: dirs.s, hibernationSafetyMs: 0 /* 0 = the timer backoff only */, routed: { memoryDir: dirs.m, workspaceDir: dirs.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
       const next = async () => {
         const n = packets.length;
         for (let i = 0; i <= MAX_IDLE_SKIP + 1 && packets.length === n; i++) await mind.turn(`heartbeat ${i}`);

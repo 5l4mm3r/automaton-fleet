@@ -94,7 +94,7 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
     expect(FLEET_PG_SCHEMA_VERSION).toBeGreaterThanOrEqual(56);
     expect(await R.one(`(SELECT max(version) FROM fleet.fleet_schema_migrations)`)).toBe(FLEET_PG_SCHEMA_VERSION);
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
-    for (const [p, ts] of Object.entries(EVENT_ROUTES_V56)) for (const t of ts) expect(await R.one(`fleet.fleet_event_route($1, '{}'::jsonb)`, [t]), t).toBe(p);
+    for (const [p, ts] of Object.entries(EVENT_ROUTES_V56)) for (const t of ts) expect(await R.one(`fleet.fleet_event_route($1, '{}'::jsonb)`, [t]), t).toBe(p === "P3_INFO" ? "P3_SUMMARY" : p); // v62: P3_INFO never reached Fleet Command
   });
 
   it("a paid digital order is delivered by mail with its file — delivered only once the provider accepted it; the buyer is the agent's alone", async () => {

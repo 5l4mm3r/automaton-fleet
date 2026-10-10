@@ -103,7 +103,7 @@ describe.skipIf(!PG_BIN)("v59: refunds initiated by the Fleet (PostgreSQL + cust
   afterAll(async () => { await gw?.close(); await svc?.end(); await custody?.end(); await R?.close(); });
 
   it("routes the refund events; only the seller refunds its sale, within what is refundable, once per key; the amount stops being spendable", async () => {
-    for (const [p, ts] of Object.entries(EVENT_ROUTES_V59)) for (const t of ts) expect(await R.one(`fleet.fleet_event_route($1, '{}'::jsonb)`, [t]), t).toBe(p);
+    for (const [p, ts] of Object.entries(EVENT_ROUTES_V59)) for (const t of ts) expect(await R.one(`fleet.fleet_event_route($1, '{}'::jsonb)`, [t]), t).toBe(p === "P3_INFO" ? "P3_SUMMARY" : p); // v62: P3_INFO never reached Fleet Command
     const s = await sale(1_000);
     expect(await R.econ(G, "order.refund", { orderId: s.orderId, reason: "not mine", idempotencyKey: idem() })).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
     expect(await R.econ(F, "order.refund", { orderId: s.orderId, amountMinor: 1_001, reason: "too much", idempotencyKey: idem() }))

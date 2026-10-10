@@ -13,7 +13,8 @@
  *   4. re-issue the major spend in the step the controller runs at the critical tier         (T3 action step)
  *   5. record completion, complete the execution goal and sleep                              (back at T2)
  *
- * Afterwards every turn only sleeps. Tool-less requests (the T1 chore, the T3 question) are answered by
+ * Afterwards every turn only sleeps; at the first slim wake-up a v5 founder reads its guide, journals the walk and declares
+ * its hibernation (v62: declared hibernation then waits for an event, never a timer). Tool-less requests (the T1 chore, the T3 question) are answered by
  * `routedRehearsalToolless`.
  */
 
@@ -79,16 +80,24 @@ export class RoutedRehearsalModel extends ScriptedProvider {
       decisionKey: REHEARSAL_DECISION_KEY }), id: `r${inTurn}-request_spend-${amountCents}` });
     let content = "";
     let toolCalls: ToolCall[] = [];
-    if (first.includes(`"${REHEARSAL_DONE_FACT}"`)) {
+    // v62: the bare (slim) wake-up after the founder has rested on the finished walk. A v5 founder consults its guide,
+    // journals the walk and DECLARES its hibernation here — within the per-step tool-call limit, so every call runs (a
+    // declared sleep that the limit cut off would still end the turn and hibernate, leaving the journal unwritten).
+    if (inTurn === 0 && first.includes("Nothing has changed since your last turn")) {
+      content = "Hibernating: the routed walk is on record.";
+      toolCalls = [...v5Close(), ...rest("routed walk complete")];
+    } else if (first.includes(`"${REHEARSAL_DONE_FACT}"`)) {
       content = "The routed walk is on record; nothing useful to do.";
-      toolCalls = rest("routed walk complete");
+      // An undeclared rest (no wake condition): the bounded timer re-assessment brings the next, slim, wake-up. v62 keeps a
+      // DECLARED hibernation asleep until an event, its review time or the daily safety re-check, so only the close declares.
+      toolCalls = [call("sleep", { reason: "routed walk complete" })];
     } else if (inTurn === 0 && first.includes('"decision:')) {
       // A later turn: the packet (persistent state, not a transcript) shows the question was decided and acted on.
       content = "The decision and the spend requests are on record.";
       // R41.1: the decision's execution goal is done (both spends were requested); with nothing executable left, the
       // founder's later sleep-only turns are a legitimate rest, so the next bare wake-up is slim.
       toolCalls = [call("remember_fact", { key: REHEARSAL_DONE_FACT, value: "T1 chore, T3 question, T2 spend and T3 major spend done" }),
-        ...openGoalIds(first).map((id) => ({ ...call("complete_goal", { id, outcome: "routed walk complete" }), id: `r${inTurn}-complete_goal-${id}` })), ...v5Close(), ...rest("routed walk complete")];
+        ...openGoalIds(first).map((id) => ({ ...call("complete_goal", { id, outcome: "routed walk complete" }), id: `r${inTurn}-complete_goal-${id}` })), call("sleep", { reason: "routed walk complete" })];
     } else if (inTurn === 0 && has("routine_task")) {
       content = "A page needs extracting: a routine chore.";
       toolCalls = [
@@ -122,7 +131,7 @@ export class RoutedRehearsalModel extends ScriptedProvider {
     } else {
       content = "The routed walk is complete.";
       toolCalls = [call("remember_fact", { key: REHEARSAL_DONE_FACT, value: "T1 chore, T3 question, T2 spend and T3 major spend done" }),
-        ...openGoalIds(first).map((id) => ({ ...call("complete_goal", { id, outcome: "routed walk complete" }), id: `r${inTurn}-complete_goal-${id}` })), ...v5Close(), ...rest("routed walk complete")];
+        ...openGoalIds(first).map((id) => ({ ...call("complete_goal", { id, outcome: "routed walk complete" }), id: `r${inTurn}-complete_goal-${id}` })), call("sleep", { reason: "routed walk complete" })];
     }
     const input = approx(req.system) + req.messages.reduce((n, m) => n + approx(m.content), 0);
     return { content, toolCalls, usage: { inputTokens: input, outputTokens: Math.min(approx(content) + approx(JSON.stringify(toolCalls)), req.maxTokens) }, usageSource: "provider", attempts: 1, responseModel: this.model };

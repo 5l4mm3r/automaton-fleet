@@ -530,7 +530,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       const r = await spend(a, Math.floor(cash / 2) + 1);
       expect(r).toMatchObject({ ok: false, code: "FLEET_INFRASTRUCTURE_CIRCUIT_BREAKER", custody: "INFRASTRUCTURE_CIRCUIT_BREAKER",
         order: { status: "rejected", decisionReason: "infrastructure circuit breaker: order_wallet_share" } });
-      expect(JSON.stringify(r)).not.toMatch(/5000|order_wallet_bp|velocity_wallet_bp/); // the configuration never reaches the agent
+      expect(JSON.stringify(r).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>")).not.toMatch(/5000|order_wallet_bp|velocity_wallet_bp/); // the configuration never reaches the agent
       expect(order(await spend(a, Math.floor(cash / 2)))).toMatchObject({ status: "reserved" }); // proportionate, not nominal
       // A manual trip (an incident) refuses every own-capital order, names only "tripped", and is audited.
       await q(`SELECT fleet.fleet_admin_spend_circuit_breaker($1, true, 'provider anomaly under investigation', NULL, NULL, NULL)`, [OWNER]);

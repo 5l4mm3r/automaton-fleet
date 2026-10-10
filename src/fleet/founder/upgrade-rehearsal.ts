@@ -391,13 +391,14 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
     const journalFile = path.join(stateNs, "memory", "field-journal.jsonl");
     const countJournal = () => (fs.existsSync(journalFile) ? fs.readFileSync(journalFile, "utf8").trim().split("\n").filter(Boolean).length : 0);
     // The v5 close (guide read, journal entry, declared hibernation) runs on the founder's own schedule: wait for it.
-    await waitFor(async () => (countJournal() >= 1 ? true : null), timeout, poll);
+    const continuity = () => { try { return JSON.parse(fs.readFileSync(path.join(stateNs, "mind-continuity.json"), "utf8")) as Record<string, unknown>; } catch { return {}; } };
+    await waitFor(async () => (countJournal() >= 1 && typeof continuity().wakeOn === "string" ? true : null), timeout, poll);
     const journalLines = countJournal();
     const v5Tools = (() => { try {
       return fs.readFileSync(path.join(stateNs, "mind-log.jsonl"), "utf8").trim().split("\n").flatMap((l) => ((JSON.parse(l) as { tools?: Array<{ name: string; ok: boolean }> }).tools ?? []))
         .filter((t) => (t.name === "field_guide" || t.name === "field_journal") && t.ok).map((t) => t.name);
     } catch { return [] as string[]; } })();
-    const cont = (() => { try { return JSON.parse(fs.readFileSync(path.join(stateNs, "mind-continuity.json"), "utf8")) as Record<string, unknown>; } catch { return {}; } })();
+    const cont = continuity();
     check("R41.1: the upgraded founder is served doctrine founder-v5 and its v5 tools run end to end — field guide read, field journal written, hibernation declared with a wake condition",
       scripted.doctrineSeen.v5 > 0 && v5Tools.includes("field_guide") && v5Tools.includes("field_journal") && journalLines >= 1 && typeof cont.wakeOn === "string",
       `${scripted.doctrineSeen.v5} v5 / ${scripted.doctrineSeen.v4} v4 routed step(s); tools ok: ${[...new Set(v5Tools)].join(", ") || "none"}; journal ${journalLines} entr${journalLines === 1 ? "y" : "ies"}; wake condition ${cont.wakeOn ? "declared" : "absent"}`);
