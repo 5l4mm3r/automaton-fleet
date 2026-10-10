@@ -275,7 +275,9 @@ export async function toLiveCommand(cmd: Command, last: LiveSnapshot | null, c: 
     case "delivery": {
       const hour = Number(a.hour);
       if (!Number.isInteger(hour) || hour < 0 || hour > 23) throw new FleetApiError("FLEET_BAD_REQUEST", "Hour must be 0–23 UTC.");
-      const email = (last && last.settings.state === "ok" ? ((last.settings.data as Row).notifications?.admin_email ?? null) : null) as string | null;
+      const typed = typeof a.email === "string" ? a.email.trim().toLowerCase() : "";
+      if (typed && !/^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/.test(typed)) throw new FleetApiError("FLEET_BAD_REQUEST", "Enter a valid email address, e.g. you@proton.me.");
+      const email = (typed || (last && last.settings.state === "ok" ? ((last.settings.data as Row).notifications?.admin_email ?? null) : null)) as string | null;
       return { kind: "delivery", dailyHourUtc: hour, adminEmail: email };
     }
     case "document": {

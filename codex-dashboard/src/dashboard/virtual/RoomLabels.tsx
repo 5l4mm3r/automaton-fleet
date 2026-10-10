@@ -34,7 +34,9 @@ export const RoomLabels = memo(function RoomLabels({ projectRef, visible, hovere
       for (const d of DEPARTMENTS) {
         const el = els.current.get(d.id); if (!el) continue;
         const x0 = d.x - d.w / 2, x1 = d.x + d.w / 2, z0 = d.z - d.d / 2, z1 = d.z + d.d / 2;
-        const a = proj({ x: x0 + 0.3, z: z0 }, 0, WALL_H + 0.25);
+        // The Treasury's plaque sits above its banner (gantry top ≈ WALL_H + 2.0, tilted face up to ≈ WALL_H + 1.5 behind
+        // the wall line), not on it: at the usual wall-head height it covered the banner's balance.
+        const a = proj({ x: x0 + 0.3, z: z0 }, 0, WALL_H + (d.id === "treasury" ? 2.35 : 0.25));
         const cs = [proj({ x: x0, z: z0 }, 0, 0.12), proj({ x: x1, z: z0 }, 0, 0.12), proj({ x: x0, z: z1 }, 0, 0.12), proj({ x: x1, z: z1 }, 0, 0.12)];
         const c = proj({ x: d.x, z: d.z }, 0, 0.12), fl = proj({ x: d.x + 1.1, z: z1 - 0.7 }, 0, 0.12); // fl: open floor inside the entrance
         const on = cs.every((p) => p && p.x >= 0 && p.x <= W && p.y >= 0 && p.y <= H) ? "1" : "0";

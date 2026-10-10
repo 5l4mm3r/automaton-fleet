@@ -214,7 +214,8 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
         </ol>
         {use3d && <RoomLabels projectRef={project} visible={focus.level === "fleet"} hovered={hoveredRoom} onHover={setHoveredRoom} onRoom={onRoom} />}
         {/* Where you are: the location line (secondary) and, inside a room, its title and purpose (primary). */}
-        <div className="pointer-events-none absolute left-3 top-3 z-50 max-w-[min(34rem,70%)]">
+        {/* In the Treasury the card stays left of the banner's centred balance (the banner spans the back wall's top). */}
+        <div className={`pointer-events-none absolute left-3 top-3 z-50 ${room?.id === "treasury" && focus.level === "department" ? "max-w-[min(34rem,36%)]" : "max-w-[min(34rem,70%)]"}`}>
           <p aria-label="Location" className="inline-block rounded bg-slate-950/75 px-2 py-0.5 text-[11px] uppercase tracking-[0.2em] text-slate-400">
             Fleet HQ{room ? <> › <span className="text-slate-300">{room.name}</span></> : null}{focus.level === "agent" && selectedAgent ? <> › <span className="text-slate-300">{selectedAgent.agent.name}</span></> : null}
           </p>

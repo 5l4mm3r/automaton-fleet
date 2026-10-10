@@ -104,17 +104,19 @@ function drawBanner(ctx: CanvasRenderingContext2D, w: number, h: number, banner:
   if (ack > 0) { ctx.strokeStyle = `rgba(255,214,120,${0.9 * ack})`; ctx.lineWidth = 10; ctx.strokeRect(5, 5, w - 10, h - 10); ctx.fillStyle = `rgba(245,196,81,${0.08 * ack})`; ctx.fillRect(0, 0, w, h); }
   const tickerH = h * 0.2, main = h - tickerH;
   ctx.textBaseline = "middle";
+  // Title and figure centred: the room's title card (top left, in the Treasury room view) never covers the balance.
+  ctx.textAlign = "center";
   ctx.font = `600 ${Math.round(main * 0.17)}px ${FONT}`; ctx.fillStyle = GOLD; ctx.globalAlpha = 0.85;
-  ctx.fillText("FLEET TREASURY", w * 0.04, main * 0.24); ctx.globalAlpha = 1;
+  ctx.fillText("FLEET TREASURY", w / 2, main * 0.24); ctx.globalAlpha = 1;
   ctx.font = `bold ${Math.round(main * 0.5)}px ${FONT}`;
   ctx.save(); ctx.beginPath(); ctx.rect(0, main * 0.38, w, main * 0.6); ctx.clip();
   const y = main * 0.68, shift = main * 0.6;
   if (prev !== null && change < 1) {
     const k = change * change * (3 - 2 * change);
-    ctx.fillStyle = "#f8e7b0"; ctx.globalAlpha = 1 - k; ctx.fillText(prev, w * 0.04, y - shift * k);
-    ctx.globalAlpha = k; ctx.fillStyle = "#fff4cf"; ctx.fillText(banner.cash, w * 0.04, y + shift * (1 - k)); ctx.globalAlpha = 1;
-  } else { ctx.fillStyle = "#fff1c2"; ctx.fillText(banner.cash, w * 0.04, y); }
-  ctx.restore();
+    ctx.fillStyle = "#f8e7b0"; ctx.globalAlpha = 1 - k; ctx.fillText(prev, w / 2, y - shift * k);
+    ctx.globalAlpha = k; ctx.fillStyle = "#fff4cf"; ctx.fillText(banner.cash, w / 2, y + shift * (1 - k)); ctx.globalAlpha = 1;
+  } else { ctx.fillStyle = "#fff1c2"; ctx.fillText(banner.cash, w / 2, y); }
+  ctx.restore(); ctx.textAlign = "left";
   // The breakdown ticker (static when `ticker` < 0).
   ctx.fillStyle = "rgba(245,196,81,0.12)"; ctx.fillRect(0, main, w, 2);
   ctx.font = `${Math.round(tickerH * 0.42)}px ${FONT}`;

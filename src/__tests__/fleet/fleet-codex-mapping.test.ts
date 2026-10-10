@@ -95,6 +95,9 @@ describe("Codex dashboard LIVE mapping", () => {
     expect(await map("policy", { autoBirth: "false", populationCeiling: "50", windowHours: "24" })).toEqual({ kind: "policy", area: "replication",
       patch: { autoBirthEnabled: false, populationCeiling: 50, windowHours: 24 } });
     expect(await map("delivery", { hour: "8" })).toEqual({ kind: "delivery", dailyHourUtc: 8, adminEmail: null });
+    // 0.13.2: the owner's own email can be set from Delivery policy (trimmed, lower-cased); a malformed one is refused.
+    expect(await map("delivery", { hour: "7", email: "  Owner@Proton.me " })).toEqual({ kind: "delivery", dailyHourUtc: 7, adminEmail: "owner@proton.me" });
+    await expect(map("delivery", { hour: "7", email: "not an email" })).rejects.toThrow(/valid email/);
     expect(await map("document_status", { documentId: "legal_name", action: "revoke" })).toMatchObject({ kind: "document_status", class: "legal_name", status: "revoked" });
     expect(await map("consent", { purposes: "account_verification, seller_verification", classes: "legal_name", statement: "s" })).toEqual({ kind: "consent",
       purposes: ["account_verification", "seller_verification"], providers: null, classes: ["legal_name"], statement: "s" });

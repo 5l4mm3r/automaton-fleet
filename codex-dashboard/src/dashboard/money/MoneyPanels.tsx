@@ -70,9 +70,26 @@ function KeySet({ c, client, call }: { c: Row; client: GatewayClient; call: (op:
   </div>;
 }
 
+/**
+ * 0.13.2: one look for everything already stored — "✓ Saved" (or "Saved and encrypted" for sealed secrets), when, any live
+ * status, and Change. The form appears only when nothing is stored yet or the owner chooses Change; a successful save
+ * closes it again. Sealed values are never shown back.
+ */
+function SavedOr({ saved, what, encrypted, at, detail, form }: { saved: boolean; what: string; encrypted?: boolean; at?: unknown; detail?: ReactNode;
+  form: (close: () => void) => ReactNode }) {
+  const [edit, setEdit] = useState(false);
+  if (!saved || edit) return <>{saved && <button className="mt-2 text-xs text-cyan-300 underline" onClick={() => setEdit(false)}>Keep the saved {what}</button>}{form(() => setEdit(false))}</>;
+  return <div className="my-3 rounded-lg border border-emerald-900 bg-emerald-950/30 p-3 text-sm">
+    <p className="text-emerald-300">✓ {what}: {encrypted ? "saved and encrypted" : "saved"}{at ? ` · last updated ${when(at)} UTC` : ""}
+      <button className="ml-3 text-xs text-cyan-300 underline" onClick={() => setEdit(true)}>Change</button></p>
+    {detail && <div className="mt-1 text-xs text-slate-300 [overflow-wrap:anywhere]">{detail}</div>}
+    {encrypted && <p className="mt-1 text-xs text-slate-400">Stays saved: enter it again only if it changes. For security it is never shown back.</p>}
+  </div>;
+}
+
 /** A small inline form: labelled fields, one submit, the gateway result or error shown under it. */
-function Form({ title, fields, submit, note, danger, done, clearOnDone }: { title: string; fields: Array<{ key: string; label: string; value?: string; type?: string; options?: string[][] }>;
-  submit: (v: Record<string, string>) => Promise<unknown>; note?: ReactNode; danger?: boolean; done?: string; clearOnDone?: boolean }) {
+function Form({ title, fields, submit, note, danger, done, clearOnDone, after }: { title: string; fields: Array<{ key: string; label: string; value?: string; type?: string; options?: string[][] }>;
+  submit: (v: Record<string, string>) => Promise<unknown>; note?: ReactNode; danger?: boolean; done?: string; clearOnDone?: boolean; after?: () => void }) {
   const initial = () => Object.fromEntries(fields.map((f) => [f.key, f.value ?? f.options?.[0]?.[0] ?? ""]));
   const [v, setV] = useState<Record<string, string>>(initial);
   const [busy, setBusy] = useState(false), [msg, setMsg] = useState("");
@@ -82,6 +99,7 @@ function Form({ title, fields, submit, note, danger, done, clearOnDone }: { titl
       const r = await submit(v);
       if (clearOnDone) setV(initial());
       setMsg(done ?? `Done${r && typeof r === "object" && "note" in (r as Row) ? ` — ${(r as Row).note}` : ""}.`);
+      after?.();
     }
     catch (err) { setMsg(describe(err)); } finally { setBusy(false); }
   }}>
@@ -351,6 +369,25 @@ function ConfirmCharge({ c, call }: { c: Row; call: (op: string, a: Record<strin
 
 // ─────────────────────────── Money & identity setup (v49) ───────────────────────────
 
+const NOT_PROTON = /@(gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|mac|aol|gmx|mail|yandex|zoho)\.[a-z.]+$/;
+
+/**
+ * 0.13.2: checked in this browser before the Bridge login is sealed (the broker cannot report why a login it opened is
+ * unusable, and Bridge refuses to send from an address its account does not own). Returns the problem in plain words.
+ */
+export function protonLoginProblem(v: { address: string; username: string; password: string; certPem: string }): string | null {
+  const address = v.address.trim().toLowerCase();
+  if (!/^[a-z0-9._-]{1,64}@[a-z0-9.-]{3,190}$/.test(address)) return "Enter the fleet's Proton address, e.g. fleet@proton.me (letters, digits, . _ - before the @).";
+  if (address.endsWith("@proton.com")) return "Proton addresses end in @proton.me, @protonmail.com or @pm.me, not @proton.com.";
+  if (NOT_PROTON.test(address)) return "Bridge can only send from your Proton account's own addresses (e.g. …@proton.me), not from Gmail, Outlook or other providers.";
+  if (!v.username.trim()) return "Enter the Bridge username shown by Bridge's info command.";
+  if (v.password.length < 8) return "Enter the password Bridge generated (shown by its info command), not your Proton password.";
+  const pem = v.certPem.trim();
+  if (!pem.startsWith("-----BEGIN CERTIFICATE-----") || !pem.includes("-----END CERTIFICATE-----"))
+    return "Paste the whole certificate, including the -----BEGIN CERTIFICATE----- and -----END CERTIFICATE----- lines.";
+  return null;
+}
+
 const FILLABLE = [["legal_name", "Legal name"], ["date_of_birth", "Date of birth"], ["residential_address", "Residential address"], ["contact_email", "Contact email"],
   ["contact_phone", "Contact phone"], ["tax_identifier", "Tax identifier (UTR / NI)"], ["bank_account_owner", "Bank details"], ["other_fact", "Other fact"]];
 
@@ -361,8 +398,11 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
   const comms = useRead<Row>(client, "provider_secrets", {}, []);
   const call = async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); auto.reload(); key.reload(); pp.reload(); comms.reload(); return r; };
   const [addKeys, setAddKeys] = useState(false);
+  const sent = useRead<Row[]>(client, "mail_feed", { view: "outbox", limit: 1 }, []);
   const upload = async (cls: string, value: string) => call("owner_vault_upload", await sealOwnerFact(client, cls, value));
   const configured = (cls: string) => auto.data?.configured?.[cls]?.status === "configured";
+  const expiry = (cls: string) => auto.data?.configured?.[cls]?.expiresAt ? <>Valid until {when(auto.data.configured[cls].expiresAt)} UTC.</> : undefined;
+  const installed = (name: string) => (comms.data?.uploads as Row[] | undefined)?.find((u) => u.name === name && u.status === "installed");
   const a = auto.data;
   const [classes, setClasses] = useState<string[] | null>(null);
   const chosen = classes ?? (a?.classes as string[] | undefined) ?? [];
@@ -386,26 +426,34 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
           return r;
         }} />}
       <p className="mt-3 text-sm text-slate-400">Next, the Fleet operator links these keys to the treasury and runs PayPal’s checks. Progress appears under Treasury.</p>
-      {(pp.data?.rails as Row[] | undefined)?.map((r) => <Form key={r.railId} title={`PayPal notifications · ${r.label}`} note={`In the same Live app, open Webhooks, add ${typeof location === "undefined" ? "https://<api domain>" : location.origin.replace("://admin.", "://api.")}/v1/webhooks/paypal with the payment, refund and dispute events, then paste the Webhook ID PayPal shows.${r.webhookId ? ` Current: ${String(r.webhookId)}.` : ""}`}
-        fields={[{ key: "id", label: "Webhook ID" }]} submit={(v) => call("rail_webhook_set", { railId: r.railId, webhookId: v.id.trim() })} />)}
+      {(pp.data?.rails as Row[] | undefined)?.map((r) => <SavedOr key={r.railId} saved={Boolean(r.webhookId)} what={`PayPal notifications webhook · ${r.label}`}
+        detail={<>Webhook ID {String(r.webhookId)}. One per PayPal account; it is an identifier, not a secret. Change it only if you create a new webhook in PayPal.</>}
+        form={(close) => <Form title={`PayPal notifications · ${r.label}`} note={`In the same Live app, open Webhooks, add ${typeof location === "undefined" ? "https://<api domain>" : location.origin.replace("://admin.", "://api.")}/v1/webhooks/paypal with the payment, refund and dispute events, then paste the Webhook ID PayPal shows.`}
+          fields={[{ key: "id", label: "Webhook ID" }]} done="Saved." after={close} submit={(v) => call("rail_webhook_set", { railId: r.railId, webhookId: v.id.trim() })} />} />)}
     </Panel>
 
     <Panel title="2 · Your card (bypass only)">
-      <p className="text-sm text-slate-300">Used where a merchant takes cards. Sealed here to the identity broker; agents never see it; every fill is logged. Before the card can be filled the agent’s own funds (or a Fleet envelope) are reserved for the charge; anything a merchant charges beyond what the agent can cover becomes the agent’s debt to the treasury. You repay the card from the treasury. Status: {configured("payment_card") ? "on file" : "not on file"}.</p>
-      <Form title="Seal and upload card" fields={[{ key: "number", label: "Card number" }, { key: "expMonth", label: "Expiry month (MM)" }, { key: "expYear", label: "Expiry year (YYYY)" }, { key: "cvc", label: "CVC", type: "password" }, { key: "name", label: "Name on card" }, { key: "postcode", label: "Billing postcode" }]}
-        submit={(v) => upload("payment_card", JSON.stringify({ number: v.number.replace(/\s/g, ""), expMonth: v.expMonth, expYear: v.expYear, cvc: v.cvc, name: v.name, postcode: v.postcode }))} />
+      <p className="text-sm text-slate-300">Used where a merchant takes cards. Sealed here to the identity broker; agents never see it; every fill is logged. Before the card can be filled the agent’s own funds (or a Fleet envelope) are reserved for the charge; anything a merchant charges beyond what the agent can cover becomes the agent’s debt to the treasury. You repay the card from the treasury.</p>
+      <SavedOr saved={configured("payment_card")} what="Card" encrypted detail={expiry("payment_card")}
+        form={(close) => <Form title="Seal and upload card" done="Saved and encrypted." clearOnDone after={close} fields={[{ key: "number", label: "Card number" }, { key: "expMonth", label: "Expiry month (MM)" }, { key: "expYear", label: "Expiry year (YYYY)" }, { key: "cvc", label: "CVC", type: "password" }, { key: "name", label: "Name on card" }, { key: "postcode", label: "Billing postcode" }]}
+          submit={(v) => upload("payment_card", JSON.stringify({ number: v.number.replace(/\s/g, ""), expMonth: v.expMonth, expYear: v.expYear, cvc: v.cvc, name: v.name, postcode: v.postcode }))} />} />
     </Panel>
 
     <Panel title="3 · Bank details and identity facts">
       <p className="text-sm text-slate-300">Each is sealed in this browser to the identity broker’s key. Filled into forms (or, for documents, uploaded) only where a provider requires it and only under your standing authority (4); never shown to an agent. A live selfie or video check stays yours.</p>
+      <OnFile title="Documents" items={DOCS} configured={configured} />
       <DocumentUpload configured={configured} upload={async (cls, file) => call("owner_vault_upload", await sealOwnerDocument(client, cls, file))} />
-      <Form title="Seal and upload bank details" note={`Status: ${configured("bank_account_owner") ? "on file" : "not on file"}`}
-        fields={[{ key: "holder", label: "Account holder" }, { key: "sortCode", label: "Sort code" }, { key: "accountNumber", label: "Account number" }, { key: "bank", label: "Bank" }, { key: "iban", label: "IBAN (optional)" }]}
-        submit={(v) => upload("bank_account_owner", JSON.stringify({ holder: v.holder, sort_code: v.sortCode, account_number: v.accountNumber, bank: v.bank, ...(v.iban ? { iban: v.iban } : {}) }))} />
-      <Form title="Seal and upload address" note={`Status: ${configured("residential_address") ? "on file" : "not on file"}`}
-        fields={[{ key: "line1", label: "Line 1" }, { key: "line2", label: "Line 2" }, { key: "city", label: "Town / city" }, { key: "postcode", label: "Postcode" }, { key: "country", label: "Country", value: "United Kingdom" }]}
-        submit={(v) => upload("residential_address", JSON.stringify(v))} />
-      <Form title="Seal and upload one fact" fields={[{ key: "cls", label: "Fact", options: FILLABLE.filter(([k]) => !["residential_address", "bank_account_owner"].includes(k)) }, { key: "value", label: "Value" }]}
+      <SavedOr saved={configured("bank_account_owner")} what="Bank details" encrypted detail={expiry("bank_account_owner")}
+        form={(close) => <Form title="Seal and upload bank details" done="Saved and encrypted." clearOnDone after={close}
+          fields={[{ key: "holder", label: "Account holder" }, { key: "sortCode", label: "Sort code" }, { key: "accountNumber", label: "Account number" }, { key: "bank", label: "Bank" }, { key: "iban", label: "IBAN (optional)" }]}
+          submit={(v) => upload("bank_account_owner", JSON.stringify({ holder: v.holder, sort_code: v.sortCode, account_number: v.accountNumber, bank: v.bank, ...(v.iban ? { iban: v.iban } : {}) }))} />} />
+      <SavedOr saved={configured("residential_address")} what="Address" encrypted detail={expiry("residential_address")}
+        form={(close) => <Form title="Seal and upload address" done="Saved and encrypted." clearOnDone after={close}
+          fields={[{ key: "line1", label: "Line 1" }, { key: "line2", label: "Line 2" }, { key: "city", label: "Town / city" }, { key: "postcode", label: "Postcode" }, { key: "country", label: "Country", value: "United Kingdom" }]}
+          submit={(v) => upload("residential_address", JSON.stringify(v))} />} />
+      <OnFile title="Facts" items={FILLABLE.filter(([k]) => !["residential_address", "bank_account_owner"].includes(k))} configured={configured} />
+      <Form title="Seal and upload one fact" done="Saved and encrypted." clearOnDone note="Saving a fact that is already on file replaces it."
+        fields={[{ key: "cls", label: "Fact", options: FILLABLE.filter(([k]) => !["residential_address", "bank_account_owner"].includes(k)).map(([k, l]) => [k, configured(k) ? `${l} (saved)` : l]) }, { key: "value", label: "Value" }]}
         submit={(v) => upload(v.cls, v.value)} />
     </Panel>
 
@@ -431,21 +479,53 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
       <p className="text-sm text-slate-300">Mail: one Proton mailbox shared by the fleet, through Proton Mail Bridge on the Fleet host (install it there and sign in once; export its certificate). Each agent gets its own alias (address+tag), and mail is routed to the agent it belongs to. Paste Bridge’s generated IMAP/SMTP login here — never your Proton password. SMS (optional): a Twilio API key.</p>
       {(() => {
         const m = (comms.data?.comms as Row | undefined)?.mail, sms = (comms.data?.comms as Row | undefined)?.sms;
-        const ch = (m?.channels as Row[] | undefined)?.[0];
-        return <p className="my-2 text-sm">Mail: {m ? (m.configured ? `${ch?.provider ?? "configured"} · ${ch?.address ?? ""} · connection ${ch?.health ?? "unknown"}${ch?.lastError ? ` (${ch.lastError})` : ""} · ${ch?.routingAddresses ?? 0} agent aliases` : "not configured") : "reading…"}
-          {" · "}SMS: {sms ? (sms.configured ? `configured · ${sms.activeNumbers} numbers` : "not configured") : "reading…"}
-          {" · "}Uploads: {(comms.data?.uploads as Row[] | undefined)?.slice(0, 3).map((u) => `${u.name} ${u.status}${u.error ? ` (${u.error})` : ""}`).join(", ") || "none"}</p>;
+        const ch = (m?.channels as Row[] | undefined)?.find((c) => c.status === "active") ?? (m?.channels as Row[] | undefined)?.[0];
+        const last = sent.data?.[0], latest = (comms.data?.uploads as Row[] | undefined)?.[0], failedUpload = latest?.status === "failed" ? latest : undefined;
+        const bridge = installed("proton-bridge"), twilio = installed("twilio");
+        return <>
+          {failedUpload && <p role="alert" className="my-2 text-sm text-red-300">The last {failedUpload.name} login was refused{failedUpload.error ? `: ${failedUpload.error}` : ""}. Enter it again below.</p>}
+          <SavedOr saved={Boolean(bridge)} what="Proton Bridge login" encrypted at={bridge?.installedAt}
+            detail={m?.configured && ch ? <>
+              <p>Fleet address <MailLink address={String(ch.address ?? "")} /> · {Number(ch.routingAddresses ?? 0)} agent addresses</p>
+              <p>Receiving: {ch.health === "ok" ? <span className="text-emerald-300">Connected</span> : <span className="text-amber-300">Not connected ({String(ch.health).replace("_", " ")}{ch.lastError ? `: ${ch.lastError}` : ""})</span>}
+                {ch.lastOkAt ? ` · last checked ${when(ch.lastOkAt)} UTC` : ""}</p>
+              <p>Sending: {!last ? "nothing sent yet" : last.sendStatus === "failed"
+                ? <span className="text-red-300">last send failed {when(last.at)} UTC{last.sendError ? ` (${last.sendError})` : ""}</span>
+                : last.sendStatus === "sent" ? <span className="text-emerald-300">last send OK {when(last.sentAt ?? last.at)} UTC</span> : `last send ${last.sendStatus ?? "queued"} ${when(last.at)} UTC`}</p>
+            </> : <p className="text-amber-300">Saved, but mail has not started yet. If this lasts more than a minute, check the address, the Bridge password and the certificate.</p>}
+            form={(close) => <Form title="Seal and upload Proton Bridge login" done="Saved and encrypted." clearOnDone after={close}
+              note={<>Use the fleet’s own Proton address and the login Bridge generated (its info command), never your Proton password. {bridge ? "If mail is already running, the new login takes effect when the identity service restarts." : ""}</>}
+              fields={[{ key: "address", label: "Fleet Proton address (e.g. …@proton.me)" }, { key: "username", label: "Bridge username" }, { key: "password", label: "Bridge password (generated by Bridge)", type: "password" },
+                { key: "certPem", label: "Bridge certificate (the whole block, BEGIN and END lines included)", type: "textarea" }]}
+              submit={async (v) => {
+                const problem = protonLoginProblem({ address: v.address, username: v.username, password: v.password, certPem: v.certPem });
+                if (problem) throw new Error(problem);
+                return call("provider_secret_upload", await sealProviderSecret(client, "proton-bridge", { address: v.address.trim().toLowerCase(), username: v.username.trim(), password: v.password, certPem: v.certPem.trim() }));
+              }} />} />
+          <p className="my-2 text-sm">SMS: {sms ? (sms.configured ? `configured · ${sms.activeNumbers} numbers` : "not configured (optional)") : "reading…"}</p>
+          <SavedOr saved={Boolean(twilio)} what="Twilio API key" encrypted at={twilio?.installedAt}
+            form={(close) => <Form title="Seal and upload Twilio API key" done="Saved and encrypted." clearOnDone after={close} fields={[{ key: "accountSid", label: "Account SID" }, { key: "apiKeySid", label: "API key SID" }, { key: "apiKeySecret", label: "API key secret", type: "password" }]}
+              submit={async (v) => call("provider_secret_upload", await sealProviderSecret(client, "twilio", v))} />} />
+        </>;
       })()}
-      <Form title="Seal and upload Proton Bridge login" fields={[{ key: "address", label: "Shared Proton address" }, { key: "username", label: "Bridge username" }, { key: "password", label: "Bridge password (generated by Bridge)", type: "password" },
-        { key: "certPem", label: "Bridge certificate (PEM, exported from Bridge)", type: "textarea" }]}
-        submit={async (v) => call("provider_secret_upload", await sealProviderSecret(client, "proton-bridge", { address: v.address.toLowerCase(), username: v.username, password: v.password, certPem: v.certPem.trim() }))} />
-      <Form title="Seal and upload Twilio API key" fields={[{ key: "accountSid", label: "Account SID" }, { key: "apiKeySid", label: "API key SID" }, { key: "apiKeySecret", label: "API key secret", type: "password" }]}
-        submit={async (v) => call("provider_secret_upload", await sealProviderSecret(client, "twilio", v))} />
     </Panel>
   </>;
 }
 
 const DOCS = [["passport", "Passport"], ["driving_licence", "Driving licence"], ["id_document", "Other ID document"], ["proof_of_address", "Proof of address"]];
+
+/** 0.13.2: an email address that opens the Mail page (an agent's own mail when the agent is known). */
+export function MailLink({ address, agentId }: { address: string; agentId?: string | null }) {
+  return <a className="text-cyan-300 underline [overflow-wrap:anywhere]" href={`#${encodeURIComponent(`Mail${agentId ? `/${agentId}` : ""}`)}`}
+    title={agentId ? "Open this agent's mail" : "Open the fleet's mail"}>{address}</a>;
+}
+
+/** 0.13.2: which sealed items of a kind are on file, at a glance. */
+function OnFile({ title, items, configured }: { title: string; items: string[][]; configured: (cls: string) => boolean }) {
+  const on = items.filter(([k]) => configured(k));
+  return <p className="mt-3 text-sm">{title} on file: {on.length
+    ? <span className="text-emerald-300">{on.map(([, l]) => `✓ ${l}`).join(" · ")} (saved and encrypted)</span> : <span className="text-slate-400">none yet</span>}</p>;
+}
 
 /** v51: an identity document chosen here, sealed in this browser to the identity broker (PDF or image, ≤ 8 MB). */
 function DocumentUpload({ configured, upload }: { configured: (cls: string) => boolean; upload: (cls: string, file: File) => Promise<unknown> }) {
@@ -474,14 +554,15 @@ export function AgentFootprint({ client, agentId, onReveal }: { client: GatewayC
   return <>
     <Panel title="Accounts (freeze links)"><p className="mb-2 text-xs text-slate-400">Freeze stops the fleet’s own use (no credential, fill or session is served; queued jobs stop). It does not close or cancel the account at the provider — open the site and use the revealed credentials for that.</p>{(d.accounts as Row[]).length ? (d.accounts as Row[]).map((acc) => <div key={acc.accountId} className="mb-3 rounded border border-slate-700 p-3 text-sm">
       <p className="font-semibold">{acc.platform} · {acc.handle ?? ""} · <span className={acc.status === "frozen" ? "text-red-300" : ""}>{acc.status}</span></p>
-      <p className="text-slate-400">Login email: {acc.loginEmail ?? "—"} · sites: {(acc.origins as string[]).join(", ")}{acc.lastUsedAt ? ` · last used ${when(acc.lastUsedAt)}` : ""}</p>
+      <p className="text-slate-400">Login email: {acc.loginEmail ? <MailLink address={String(acc.loginEmail)} agentId={agentId} /> : "—"} · sites: {(acc.origins as string[]).join(", ")}{acc.lastUsedAt ? ` · last used ${when(acc.lastUsedAt)}` : ""}</p>
       <div className="mt-2 flex flex-wrap gap-2">
         {acc.freezeUrl && <a className={button} href={acc.freezeUrl} target="_blank" rel="noopener noreferrer">Open site ↗</a>}
         {(acc.credentials as Row[] | undefined)?.map((c) => <button key={c.credentialId} className={button} onClick={() => onReveal(String(c.credentialId), `${acc.platform} · ${c.kind}`)}>Reveal {c.kind}</button>)}
         {acc.status === "frozen" ? <button className={button} onClick={() => void call("account_unfreeze", { accountId: acc.accountId, status: "active" })}>Unfreeze</button>
           : <button className={`${button} border-red-700`} onClick={() => void call("account_freeze", { accountId: acc.accountId, reason: "frozen from the footprint" })}>Freeze</button>}
       </div></div>) : <p className="text-sm text-slate-400">No accounts yet.</p>}
-      {(d.mailboxes as Row[]).length > 0 && <p className="mt-2 text-sm">Mail aliases: {(d.mailboxes as Row[]).map((m) => `${m.address} (${m.status})`).join(", ")}</p>}
+      {(d.mailboxes as Row[]).length > 0 && <p className="mt-2 text-sm">Email addresses: {(d.mailboxes as Row[]).map((m, i) => <span key={String(m.address)}>{i ? ", " : ""}
+        <MailLink address={String(m.address)} agentId={agentId} /> ({String(m.status)})</span>)} · <a className="text-cyan-300 underline" href={`#${encodeURIComponent(`Mail/${agentId}`)}`}>Open this agent’s mail</a></p>}
     </Panel>
     <Panel title="Footprint (every step)"><ol className="max-h-[32rem] space-y-2 overflow-y-auto text-sm">{(d.timeline as Row[]).map((t, i) => {
       const x = t.detail as Row, link = x.url ?? x.pageUrl ?? x.origin;
