@@ -106,6 +106,10 @@ export const EVENT_TITLE: Readonly<Record<string, string>> = Object.freeze({
   // v62: conversations and names
   agent_replied: "Agent replied to you", owner_message_sent: "You sent a message", owner_label_set: "Name changed",
   mail_deleted: "Stored emails deleted",
+  spend_review_opened: "Fleet Control is reviewing a commitment", spend_review_approved: "Fleet Control cleared a commitment",
+  spend_review_held: "Fleet Control held a commitment", spend_review_stalled: "A spend review could not run (waiting)",
+  spend_review_overridden: "You allowed a held commitment to be resubmitted", spend_review_cost_unfunded: "Treasury could not cover a spend review",
+  payment_revalidation_failed: "A payment was stopped just before execution",
   conversation_cost_unfunded: "Treasury could not fully pay for a conversation", founder_cognition_paused: "Agent paused (AI off)",
   founder_cognition_enabled: "Agent's AI switched on", founder_cognition_disabled: "Agent's AI switched off",
 });

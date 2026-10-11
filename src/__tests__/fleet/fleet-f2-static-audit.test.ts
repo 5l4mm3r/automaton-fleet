@@ -32,6 +32,10 @@ const RULES: Rule[] = [
   { cls: "legal/security", file: /src\/fleet\/cognition\/egress\.ts$/, why: "infrastructure: internet egress of the cognition provider" },
   { cls: "retirement", file: /src\/fleet\/postgres\/migrations-phase(2[89]|3[0-9])\.ts$/, line: /LEGACY|retire|owner-enrolled destinations unchanged/, why: "retirement statements / guard documentation" },
   { cls: "retirement", file: /src\/fleet\/founder\/(decisions|toolbox)\.ts$/, line: /no owner approval route/, why: "negation" },
+  // v64 (owner decision O19): the card's owner threshold is retired. Line 1 states the retirement; line 2 is the v54 text
+  // the migration must quote verbatim to replace it (a restatement anchor, not live behaviour).
+  { cls: "retirement", file: /src\/fleet\/postgres\/migrations-phase64\.ts$/, line: /No caps, thresholds or routine owner approvals|'above the owner''s threshold: the owner decides/,
+    why: "O19 retires the card's owner threshold; the second match is the replaced v54 text (restatement anchor)" },
   { cls: "retirement", file: /src\/fleet\/postgres\/store\.ts$/, line: /status = 'awaiting_owner'/, why: "doctor detector: FAILs if any order is in the retired owner route" },
   { cls: "retirement", file: /src\/fleet\/treasury\/ledger\.ts$/, line: /legacyRetired/, why: "the retired figures reported as history" },
   { cls: "retirement", file: /src\/fleet\/genesis\/cli\.ts$/, line: /LEGACY since schema v30/, why: "help text of an inert legacy setter" },

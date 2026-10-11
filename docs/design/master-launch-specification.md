@@ -17,6 +17,10 @@ switch, schema v55).
 and delivery, the storefront path over HTTP, truthful account creation, estates for the newer money states, refunds caught by
 Transaction Search, isolated reaper passes and stricter scrubbing (§16). No owner decision changes.
 
+**Revision 5 (2026-10-11)** records owner decision **O19** — autonomous agent spending with automated Fleet Control review
+(schema v64; detailed in `autonomous-spending-review.md`). It supersedes the owner step in O9 / O13 / O17 (the £100 card
+gate) and the maxima in C3 / §8 / §12, which become optional owner levers, unset by default.
+
 **Scope of authority.** The owner authorized local implementation, validation, commit and push of a reviewed candidate.
 Not authorized yet, and not done:
 - production migration or deployment;
@@ -59,16 +63,17 @@ reviewed migration without re-opening an owner decision.
 | O6 | Mail is one Proton shared mailbox, one alias per agent. | Handoff answers |
 | O7 | Agents must earn to survive. **Wallet exhaustion means death**, not dormancy awaiting rescue. No automatic overdraft or bailout. | Completion handoff |
 | O8 | Fleet Control is the bank: it decides capital requests automatically from evidence, economics, downside, commitments and treasury health; new agents need no profit history; it does not approve ordinary commercial decisions. | Completion handoff |
-| O9 | Shared capital is spent only under a recorded Fleet Control allocation, never per-transaction owner approval. (The one owner step in spending is O17's card exception, §1.3.) | Completion handoff |
+| O9 | Shared capital is spent only under a recorded Fleet Control allocation, never per-transaction owner approval. (O17's card exception, §1.3, was retired by O19: Fleet Control decides every properly funded card request.) | Completion handoff |
 | O10 | The dynamic net-profit sweep, with temporary reductions that expire and revert. No fixed own-capital thresholds, no synthetic tax deductions, no £100/order or £50/day owner thresholds. | Earlier and completion handoffs |
 | O11 | Document submission under the standing authority is wanted. Only genuine human-verification steps stay with the owner. | Completion handoff |
 | O12 | Gumroad is one channel. 62cbe1b7 and 6178c7bb stay pending until their requirements are evidenced. | Completion handoff |
-| O13 | Initial setup and live activation are separate from ordinary autonomous operation. There are no routine renewals and no recurring transaction approvals merely as a precaution. **Exception (O17, card only):** a card request above £100 waits for the owner, who funds the card from the treasury first. Ordinary agent spending (PayPal payouts, envelope spend, own-capital decisions) has no owner approval and no £100 threshold. | Completion handoff |
+| O13 | Initial setup and live activation are separate from ordinary autonomous operation. There are no routine renewals and no recurring transaction approvals merely as a precaution. **Exception (O17, card only; retired by O19 on 2026-10-11):** a card request above £100 waits for the owner, who funds the card from the treasury first. Ordinary agent spending (PayPal payouts, envelope spend, own-capital decisions) has no owner approval and no £100 threshold. | Completion handoff |
 | O14 | No forced journaling or action, no permanent opportunity weights, no compulsory study, no arbitrary business-model restrictions. | Earlier handoffs |
 | O15 | The treasury PayPal stays the owner's own account — **upgraded to Business as an individual**. This is an experiment, not a company: no company, VAT or business-admin gates (live API keys and selling need a Business account; an individual one is enough). | Owner, 2026-10-08 evening |
 | O18 | **Survival protection switch.** A fleet-wide owner fail-safe over "exhaustion is death": ON by default (from the cutover) — an exhausted agent is reported, not ended — until the owner goes live; shown on every dashboard page, hideable in Settings. **A setup safeguard, not the operating model:** the intended live model is O7 — actual wallet exhaustion means death. Protection is turned off ("Live") by the owner once the accounts are linked. | Owner, 2026-10-09 |
-| O17 | **PayPal first; the card is the last option.** An agent asks Fleet Control for the card only when PayPal truly cannot pay, within its own wallet. Fleet Control approves up to £100; above that the owner decides and funds the card from the treasury first. This replaces the earlier "no £100/order owner threshold" note (O10) for card use only. | Owner, 2026-10-09 |
+| O17 | **PayPal first; the card is the last option.** *(The £100 owner step below is superseded by O19.)* An agent asks Fleet Control for the card only when PayPal truly cannot pay, within its own wallet. Fleet Control approves up to £100; above that the owner decides and funds the card from the treasury first. This replaces the earlier "no £100/order owner threshold" note (O10) for card use only. | Owner, 2026-10-09 |
 | O16 | The card on file is the owner's **credit card**. Charges are taken from the treasury (agent wallets / allocations) at once. A **weekly card statement** lists the charges and the amount owed; the owner moves that amount from the treasury PayPal to the card and marks it paid. | Owner, 2026-10-08 evening |
+| O19 | **Autonomous spending, automated oversight** (2026-10-11): "run it uncapped and see how much of the leash we need to tighten". No fixed caps, wallet-percentage permission thresholds, minimum-runway rules or routine owner approvals; the £100 card gate is retired for properly funded purchases. Material or suspicious commitments get a prompt automated Fleet Control review before irreversible execution — not an owner queue; only that action is held, and only on credible evidence (risk substantially outweighing the opportunity, fraud, an invalid payment, insufficient funds). Uncertainty is not grounds to block. Reviews are treasury-paid overhead. Initial owner activation and standing authority stay. | Owner, 2026-10-11 |
 
 ### 1.3 The owner's own words (verbatim, from the session record) and their exact scope
 
@@ -109,7 +114,7 @@ Scope as built (v55):
 |---|---|---|
 | C1 | Agent wallets are partitions of treasury cash (`agent_cash`). Envelopes hold allocated Fleet capital separately (`agent_envelope_cash`). | Keeps own money and Fleet money distinct (O8, O9). |
 | C2 | **Four keys** release money out: an owner activation, a verified live PayPal rail, a fresh custody-signer attestation, and `REAL_PAYMENTS_ENABLED=true` in custody only. | Separates setup from operation (O13) without weakening custody. |
-| C3 | An activation is either **pilot** (expires, at most 90 days) or **ongoing** (no expiry; ends only when the owner ends it). Both keep per-payment and 24 h maxima as treasury risk limits. | O13: once ongoing is chosen, nothing needs renewing. |
+| C3 | An activation is either **pilot** (expires, at most 90 days) or **ongoing** (no expiry; ends only when the owner ends it). Maxima per payment and per 24 h are **optional** since v64 (O19): unset = no maximum; the owner may set them as a leash. | O13: once ongoing is chosen, nothing needs renewing. |
 | C4 | Before the card can be filled, a hold reserves its maximum from the agent's own spendable capital or an envelope. A statement larger than the hold is **advanced against the agent's payable** (a debt that lowers its equity), never written off as a fleet expense. | O2 + O7 + no automatic overdraft: the card really was charged, so the liability is real and belongs to the agent. |
 | C5 | A card receipt is settled either **applied to the card balance** (it reduced what the fleet owes the card) or **transferred** (it reached the owner). The owner's choice of return or withdrawal is kept either way. **v57:** on a return the swept share stays in the treasury (`fleet:treasury:unallocated`) unless the owner explicitly keeps it (an owner withdrawal; refused for card_balance). See §17. | O2, without double-counting the card liability; the existing internal sweep policy. |
 | C6 | A completed PayPal capture is revenue at once, but its cash is **held** (`agent_cash_pending`) until Transaction Search shows status S and the latest Balances reading covers it. | "Distinguish captures, held funds and available capital." PayPal publishes no per-transaction availability flag we rely on. |
@@ -228,8 +233,11 @@ PayPal cannot pay a credit card directly, so the owner withdraws to the bank and
    purpose.
    - `payouts_unavailable` is refused while the treasury can pay out (`FLEET_PAYPAL_FIRST`).
    - The agent's own spendable capital (or the named envelope) must cover the whole amount.
-   - Up to `owner_review_above_minor` (default 10000 = £100), Fleet Control approves at once. Above it the request waits
-     for the owner (P1), who funds the card from the treasury first and approves with the transfer reference.
+   - **v64 (O19):** Fleet Control decides every properly funded request. A routine request is approved at once; a material
+     or suspicious one is `pending_review` until the automated review clears or holds it (a hold declines only that
+     request, with its reason and evidence). `owner_review_above_minor` is retired (inert). *(v54–v63: up to £100 Fleet
+     Control approved at once; above it the request waited for the owner, who funded the card first — such requests
+     are still decided by the owner.)*
    - A hold needs an approved request on the same account, site and envelope, for no more than the approved amount; it
      uses the request up.
    - Booking a pre-funded charge records the owner's transfer as that charge's card repayment, once.
@@ -361,7 +369,7 @@ Every turn's survival observation carries the wallet measure and the rule in pla
 - the fact classes agents may have filled;
 - the document classes agents may have uploaded (`document_classes`: passport, driving licence, ID document, proof of
   address);
-- card use, with per-charge and fleet-wide 24 h maxima;
+- card use, with optional per-charge and fleet-wide 24 h maxima (v64, O19: unset = no maximum);
 - excluded origins.
 
 Every change is history.
@@ -500,7 +508,8 @@ Each step needs explicit owner authorization; none has been done.
    4. assign the rail to ventures;
    5. link the PayPal treasury destination.
 8. **Money out:**
-   1. a pilot custody activation with small maxima;
+   1. a pilot custody activation (maxima optional since v64 / O19; unset = no maximum — Fleet Control reviews material
+      or suspicious commitments instead, `autonomous-spending-review.md`);
    2. the custody signer file;
    3. `REAL_PAYMENTS_ENABLED=true` in **custody.env only**;
    4. after a clean pilot, an **ongoing** activation (no renewals).
@@ -591,6 +600,7 @@ Each step needs explicit owner authorization; none has been done.
 | Footprint; freeze stops local use; provider-side closure distinguished | v49 + v51 | IMPLEMENTED, LOCALLY VERIFIED |
 | Knowledge: no invented rules; sourced vs recommended | revision 2 (v51) | IMPLEMENTED, LOCALLY VERIFIED |
 | Activation: pilot vs ongoing; no routine renewals | v51 (§12) | IMPLEMENTED, LOCALLY VERIFIED |
+| O19 autonomous spending: no caps or owner gates; contextual flags; automated Fleet Control review (hold only on credible evidence, uncertainty clears); bounded reviewer failure (stays pending, never approved); treasury-paid reviews; revalidation before execution | v64 + `src/fleet/spend/review.ts` | IMPLEMENTED, LOCALLY VERIFIED (scripted model provider); not deployed; agents see the new tool text after a founder runtime upgrade |
 | Correct recovery terminology and plan | §13.3 | IMPLEMENTED (documentation) |
 | Storefront product operations reach the registry over HTTP (controller allow-list of the three-part ops; workspace files beyond 32 kB) | v56 + `src/fleet/service/server.ts` | IMPLEMENTED, LOCALLY VERIFIED (founder toolbox → client → HTTP → database) |
 | Customer orders: agent-isolated, buyer from PayPal's order record, payment only on PayPal's evidence, refunds reach the order | v56 (`fleet_customer_orders`, `cx_paypal_buyer_*`) | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal) |

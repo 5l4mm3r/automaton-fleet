@@ -30,6 +30,8 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_card_statement_policy", "fleet_card_request_policy",
     // v55: the survival protection switch (on by default; tests of the death rule turn it off).
     "fleet_survival_protection",
+    // v64: the spend review policy and its cost accrual (singletons).
+    "fleet_spend_review_policy", "fleet_spend_review_accrual",
     ...V35_SINGLETONS,
   ]);
   const r = await c.query<{ t: string }>(

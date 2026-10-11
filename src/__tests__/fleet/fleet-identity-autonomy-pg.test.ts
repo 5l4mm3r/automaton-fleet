@@ -71,6 +71,9 @@ describe.skipIf(!PG_BIN)("v49 identity autonomy, card holds, footprint and freez
 
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 1, allocationCents: 10_000, simulatedSettlement: false });
+    // v64 (O19): these cases exercise holds / issuing / execution, not Fleet Control review — with £100 test wallets every
+    // purchase would be "material". Review triggers off here; fleet-spend-review-v64-pg proves the review itself.
+    await R.q(`UPDATE fleet.fleet_spend_review_policy SET material_share_bp = 10000, material_aggregate_bp = 100000, low_runway_days = 0, new_payee_hours = 0, duplicate_window_h = 1`);
     [F] = R.founders;
     for (const g of ["grantServiceRole", "grantBrowserRole", "grantIdentityRole", "grantCustodyRole"] as const) await R.store[g]();
     browser = new pg.Pool({ connectionString: R.pgc.browserUrl, max: 2 });

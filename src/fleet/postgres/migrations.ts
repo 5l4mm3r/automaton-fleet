@@ -70,9 +70,10 @@ import { V60_SQL } from "./migrations-phase60.js";
 import { V61_SQL } from "./migrations-phase61.js";
 import { V62_SQL } from "./migrations-phase62.js";
 import { V63_SQL } from "./migrations-phase63.js";
+import { V64_SQL } from "./migrations-phase64.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 63;
+export const FLEET_PG_SCHEMA_VERSION = 64;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1231,6 +1232,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 61, name: "owner_receiving_test", sql: V61_SQL },
   { version: 62, name: "conversations_and_names", sql: V62_SQL },
   { version: 63, name: "mail_housekeeping", sql: V63_SQL },
+  { version: 64, name: "autonomous_spending_review", sql: V64_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1279,6 +1281,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_research_artifact_record(text, uuid, text, text, text, text, integer, boolean, integer)",
   "svc_experiment_relevance_pending(integer)",
   "svc_experiment_relevance_record(uuid, uuid, text, text, text, jsonb, jsonb)",
+  // v64: Fleet Control spend reviews (the controller's reviewer).
+  "svc_spend_reviews_claim(integer, text)", "svc_spend_review_record(uuid, text, jsonb)", "svc_spend_review_failed(uuid, text, text, jsonb)",
   "svc_relevance_call_failed(uuid, uuid, jsonb)",
   // v29 (F2): the rail adapter reports external transactions (settled idempotently into the attributed venture) and the
   // credential broker audits every use of a credential reference (never the secret).
@@ -1408,7 +1412,9 @@ export const CUSTODY_API_FUNCTIONS: readonly string[] = Object.freeze([
 /** Per custody function: the only tables it may write and the only volatile fleet functions it may call. */
 export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]; calls: readonly string[] }>> = Object.freeze({
   cx_ping: { writes: [], calls: [] },
-  cx_claim_instruction: { writes: ["fleet_payment_instructions"], calls: [] },
+  // v64: revalidation immediately before execution may fail a stale instruction and release its reservation — the same
+  // release and event the executor's own failure report (cx_report_result) uses.
+  cx_claim_instruction: { writes: ["fleet_payment_instructions"], calls: ["fleet_order_release", "fleet_event"] },
   cx_report_result: {
     writes: ["fleet_payment_instructions", "fleet_payment_orders", "fleet_assets", "fleet_venture_journals"],
     calls: ["fleet_ledger_post", "fleet_order_release", "fleet_event"],

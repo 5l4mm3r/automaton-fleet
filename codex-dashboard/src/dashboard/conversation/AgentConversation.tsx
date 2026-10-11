@@ -175,8 +175,8 @@ export function AgentConversation({ client, agentId, agentName }: { client: Gate
       {items.map((i) => i.itemType === "request" ? <RequestCard key={`r${i.requestId}`} r={i} call={call} agent={agentName} />
         : i.itemType === "card_request" ? <CardCard key={`c${i.requestId}`} r={i} call={call} agent={agentName} />
         : <div key={String(i.messageId)} className={`my-2 flex ${i.author === "owner" ? "justify-end" : "justify-start"}`}>
-          <div className={`max-w-[85%] rounded-xl p-3 text-sm ${i.author === "owner" ? "bg-cyan-950/70" : "bg-slate-800"}`}>
-            <p className="text-xs text-slate-400">{i.author === "owner" ? "You" : agentName} · {when(i.at)}</p>
+          <div className={`max-w-[85%] rounded-xl p-3 text-sm ${i.author === "owner" ? "bg-cyan-950/70" : i.author === "fleet_control" ? "border border-amber-800 bg-amber-950/30" : "bg-slate-800"}`}>
+            <p className="text-xs text-slate-400">{i.author === "owner" ? "You" : i.author === "fleet_control" ? "Fleet Control (automatic notice)" : agentName} · {when(i.at)}</p>
             <p className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{String(i.body)}</p>
             {(i.files ?? []).length > 0 && <ul className="mt-2 text-xs text-slate-300">{(i.files as Row[]).map((f) => <li key={String(f.fileId)}>📎 {String(f.name)} · {FILE_TYPES[String(f.contentType)] ?? "file"} · {size(Number(f.sizeBytes))}{f.fetchedAt ? ` · opened by ${agentName}` : ""}</li>)}</ul>}
             {i.author === "owner" && <div className="mt-1 flex flex-wrap items-center gap-2"><StatusChip m={i} agent={agentName} />

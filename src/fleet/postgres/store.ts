@@ -2041,6 +2041,21 @@ export class PgFleetStore {
       [experimentId, attemptId, verdict, tier, reason, JSON.stringify(refs), JSON.stringify(calls)])).rows[0].r);
   }
 
+  /** Schema v64: Fleet Control spend reviews due now (claimed for this worker), with the tiers the reviewer may use. */
+  async spendReviewsClaim(limit: number, worker: string): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_spend_reviews_claim($1, $2) AS r", [limit, worker])).rows[0].r);
+  }
+
+  /** Schema v64: the reviewer's answer (a hold needs a category, reason and evidence; anything else clears) and its call cost. */
+  async spendReviewRecord(reviewId: string, worker: string, result: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_spend_review_record($1, $2, $3) AS r", [reviewId, worker, JSON.stringify(result)])).rows[0].r);
+  }
+
+  /** Schema v64: a failed review attempt (bounded retry with backoff; never an approval). */
+  async spendReviewFailed(reviewId: string, worker: string, error: string, calls: unknown[]): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_spend_review_failed($1, $2, $3, $4) AS r", [reviewId, worker, error, JSON.stringify(calls)])).rows[0].r);
+  }
+
   /** Schema v24: expire experiment proposals/approvals and conclude experiments past their run window. Returns the count. */
   async reapExperiments(limit = 50): Promise<number> {
     return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_experiment_reap($1) AS n", [limit])).rows[0].n));

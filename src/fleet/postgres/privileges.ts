@@ -892,7 +892,8 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_founder_research: new Set(["fleet_founder_research_set"]),
     // v21: rates only through the validated insert; provider credit only through the owner recorder and inference recording.
     fleet_fx_rates: new Set(["fleet_fx_insert"]),
-    fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile"]),
+    fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile",
+      "fleet_spend_review_charge"]),
     // v25/v26: dependency records only through the founder API and the owner's resolve/import.
     fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import",
       // v29: PAYMENT_RAIL_REQUIRED records ONE action-scoped kyc dependency (and answers it when a rail is connected).
@@ -1187,7 +1188,15 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_card_statements: new Set(["fleet_card_statement_issue", "fleet_admin_card_statement_paid"]),
     fleet_card_statement_policy: new Set(["fleet_admin_card_statement_policy_set"]),
     // v54: card requests by the agent's request, its hold (uses it up), the owner's decision and the reaper's expiry; the threshold only by the owner.
-    fleet_card_requests: new Set(["fleet_econ_card_request", "fleet_econ_card_authorize", "fleet_admin_card_request_decide", "svc_card_requests_expire"]),
+    fleet_card_requests: new Set(["fleet_econ_card_request", "fleet_econ_card_authorize", "fleet_admin_card_request_decide", "svc_card_requests_expire",
+      // v64: Fleet Control's review decides a flagged request (approve / decline).
+      "fleet_spend_review_apply"]),
+    // v64: spend reviews — opened by the request functions, decided by the reviewer or the owner, costed by the charge; the
+    // policy only by migration; the review cost accrual only by the charge.
+    fleet_spend_reviews: new Set(["fleet_spend_review_open", "fleet_spend_review_decide_internal", "svc_spend_reviews_claim", "fleet_spend_review_failed_internal",
+      "fleet_spend_review_charge", "fleet_admin_spend_review_decide", "fleet_spend_review_use_override"]),
+    fleet_spend_review_policy: new Set([]),
+    fleet_spend_review_accrual: new Set(["fleet_spend_review_charge"]),
     fleet_card_request_policy: new Set(["fleet_admin_card_request_policy_set"]),
     // v55: the owner's survival protection switch, only by the owner.
     fleet_survival_protection: new Set(["fleet_admin_survival_protection_set"]),

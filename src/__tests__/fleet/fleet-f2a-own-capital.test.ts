@@ -288,8 +288,12 @@ describe("F2-A v27: FleetController is the custodian — precise refusals that r
     expect(await t.run("request_spend", { amountCents: 30_000, category: "expense", destinationId: "dst_forum", purpose: "sponsorship", decisionKey: "tracker-ads" })).toMatchObject({ ok: true });
     expect(t.calls.ownerRequest).toBe(0);
     // In the registry an own-capital order ends reserved or rejected in the same call; no state waits on a person.
+    // v64 (O19): a material or suspicious order is reserved and its REVIEW is pending — an automated Fleet Control review,
+    // never an owner queue (fleet-spend-review-v64-pg proves it is decided by the reviewer and never approved by default).
     const spend = code(fn("api_spend_request"));
-    expect(new Set([...spend.matchAll(/status = '([a-z_]+)'/g)].map((m) => m[1]))).toEqual(new Set(["rejected"]));
+    expect(new Set([...spend.matchAll(/(?<!review_)status = '([a-z_]+)'/g)].map((m) => m[1]))).toEqual(new Set(["rejected"]));
+    expect(new Set([...spend.matchAll(/review_status = '([a-z_]+)'/g)].map((m) => m[1]))).toEqual(new Set(["pending"]));
+    expect(spend).toMatch(/fleet_spend_review_open\('payment_order'/);
     expect(spend).not.toMatch(/'requested','awaiting_owner'|awaiting/);
     // The owner's legacy command is retired without touching the database.
     const never = new Proxy({}, { get: () => { throw new Error("the retired command must not reach the ledger"); } }) as unknown as PgLedgerAdmin;

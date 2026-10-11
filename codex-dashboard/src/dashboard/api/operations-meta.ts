@@ -28,6 +28,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "card_credit_return",
   // v59: refund a sale's buyer through PayPal.
   "order_refund",
+  // v64: the owner's decision on a Fleet Control spend review (approve / hold / retry / allow a resubmission).
+  "spend_review_decide",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */

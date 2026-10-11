@@ -120,13 +120,49 @@ const WEEKDAYS = [["1", "Monday"], ["2", "Tuesday"], ["3", "Wednesday"], ["4", "
 const PAYPAL_UNAVAILABLE: Record<string, string> = { card_only_merchant: "the merchant takes cards only", paypal_needs_login: "its PayPal option needs a PayPal login",
   payee_no_paypal: "the payee cannot receive PayPal", payouts_unavailable: "treasury PayPal payments are not switched on" };
 
+const HOLD_TEXT: Record<string, string> = { risk_outweighs_opportunity: "risk outweighs the opportunity", fraud: "possible fraud", invalid_payment: "invalid payment",
+  insufficient_funds: "insufficient funds", owner: "held by you" };
+
+/**
+ * v64 (O19): Fleet Control's spend reviews. Agents decide their own spending; only material or suspicious commitments are
+ * reviewed, and only credible evidence holds one. You see every review; you can retry or decide one that is waiting
+ * (a stalled review never approves itself), and allow a held one to be resubmitted once — never creating funds.
+ */
+export function SpendReviews({ data, call, name }: { data: Row; call: (op: string, args: Record<string, unknown>) => Promise<unknown>; name: (id: string, stored?: string | null) => string }) {
+  const list = (data.reviews ?? []) as Row[];
+  const open = list.filter((r) => r.status === "pending"), held = list.filter((r) => r.status === "held");
+  const decide = (r: Row, decision: string, note?: string) => call("spend_review_decide", { reviewId: r.reviewId, decision, note: note || null });
+  const line = (r: Row) => <>{name(r.agentId)} · {r.kind === "card_request" ? "card purchase" : "payment"} {money(r.amountMinor)} · {String(r.signals?.summary ?? "")}</>;
+  return <div>
+    <p className="text-xs text-slate-400">Agents spend on their own judgement. Fleet Control reviews only material or suspicious commitments (large against funds, little runway left, a likely duplicate, a brand-new payee) and holds only on credible evidence; uncertainty never blocks. Reviews are paid by the treasury. Waiting now: {Number(data.pending ?? 0)}{Number(data.stalled ?? 0) ? ` (${Number(data.stalled)} stalled — the reviewer could not run)` : ""}.</p>
+    {open.map((r) => <div key={r.reviewId} className={`my-2 rounded border p-3 text-sm ${r.stalled ? "border-red-700" : "border-amber-700"}`}>
+      <p className="font-semibold">{line(r)}</p>
+      <p className="text-xs text-slate-300">{r.stalled ? `Stalled after ${r.attempts} attempts${r.lastError ? ` (${r.lastError})` : ""}: this one action waits; the agent keeps working.` : "Fleet Control is reviewing it."} {r.request?.purpose ? `Agent's case: ${String(r.request.purpose)}` : ""}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button className={button} onClick={() => void decide(r, "retry")}>Retry the review</button>
+        <button className={`${button} bg-cyan-900`} onClick={() => void decide(r, "approve", "approved by the owner")}>Approve</button>
+        <button className={`${button} border-red-700`} onClick={() => void decide(r, "hold", "held by the owner")}>Hold</button>
+      </div>
+    </div>)}
+    {held.slice(0, 10).map((r) => <div key={r.reviewId} className="my-2 rounded border border-red-900 p-3 text-sm">
+      <p className="font-semibold">Held · {line(r)}</p>
+      <p className="text-xs text-slate-300">{HOLD_TEXT[r.holdCategory] ?? r.holdCategory}: {String(r.reason ?? "")}{(r.evidence as string[] | undefined)?.length ? ` Evidence: ${(r.evidence as string[]).join("; ")}.` : ""} The funds were released; the agent can revise, resubmit or take another route.</p>
+      <button className={`${button} mt-2`} onClick={() => void decide(r, "approve", "allowed by the owner")}>Allow a resubmission</button>
+    </div>)}
+    {!open.length && !held.length && <p className="my-2 text-sm text-slate-400">Nothing waiting or held.</p>}
+    <details className="mt-2"><summary className="cursor-pointer text-sm text-cyan-300">All recent reviews</summary>
+      <ul className="text-sm">{list.slice(0, 50).map((r) => <li key={r.reviewId} className="border-t border-slate-800 py-1">{when(r.createdAt)} · {line(r)} · {r.status}{r.decidedBy ? ` (${r.decidedBy})` : ""}{r.reason ? ` — ${String(r.reason)}` : ""}</li>)}</ul>
+    </details>
+  </div>;
+}
+
 /** v54: PayPal first — card requests; Fleet Control approves small ones, you decide the rest (fund the card first). */
 function CardRequests({ data, call, name }: { data: Row; call: (op: string, args: Record<string, unknown>) => Promise<unknown>; name: (id: string, stored?: string | null) => string }) {
   const list = (data.requests ?? []) as Row[];
   const waiting = list.filter((r) => r.status === "pending_owner" && String(r.expiresAt) > new Date().toISOString());
   return <div className="mb-4">
     <h4 className="font-semibold">Card requests (PayPal first)</h4>
-    <p className="text-xs text-slate-400">Agents pay through the treasury PayPal. They ask for the card only when PayPal cannot pay, and only within their own wallet. Fleet Control approves up to {money(data.ownerReviewAboveMinor)}; above that it waits for you. Treasury PayPal payments: {data.paypalPayoutsAvailable ? "on" : "off"}.</p>
+    <p className="text-xs text-slate-400">Agents pay through the treasury PayPal. They ask for the card only when PayPal cannot pay, and only within their own wallet. Fleet Control decides every funded request: routine ones at once; material or suspicious ones after an automated review (see Spend reviews), held only on credible evidence. Treasury PayPal payments: {data.paypalPayoutsAvailable ? "on" : "off"}.</p>
     {waiting.length ? waiting.map((r) => <div key={r.requestId} className="my-2 rounded border border-red-700 p-3 text-sm">
       <p className="font-semibold">{name(r.agentId, r.agentName)} · {r.merchant} · {money(r.amountMinor)}</p>
       <p className="text-xs text-slate-300">Why not PayPal: {PAYPAL_UNAVAILABLE[r.paypalUnavailable] ?? r.paypalUnavailable} · For: {r.purpose} · {r.origin} · expires {when(r.expiresAt)}</p>
@@ -135,12 +171,10 @@ function CardRequests({ data, call, name }: { data: Row; call: (op: string, args
         submit={(v) => call("card_request_decide", { requestId: r.requestId, decision: "approve", reference: v.reference, note: v.note || null })} />
       <Form title="Decline" danger fields={[{ key: "note", label: "Reason (the agent sees it)" }]}
         submit={(v) => call("card_request_decide", { requestId: r.requestId, decision: "decline", note: v.note || null })} />
-    </div>) : <p className="my-2 text-sm text-slate-400">No card request is waiting for you.</p>}
-    <details className="mt-2"><summary className="cursor-pointer text-sm text-cyan-300">Recent card requests and your threshold</summary>
+    </div>) : null}
+    <details className="mt-2"><summary className="cursor-pointer text-sm text-cyan-300">Recent card requests</summary>
       <ul className="text-sm">{list.filter((r) => !waiting.includes(r)).slice(0, 30).map((r) => <li key={r.requestId} className="border-t border-slate-800 py-1">{when(r.createdAt)} · {name(r.agentId, r.agentName)} · {r.merchant} · {money(r.amountMinor)} · {r.status}{r.decidedBy ? ` (${r.decidedBy})` : ""}</li>)}</ul>
-      <Form title="Save threshold" fields={[{ key: "above", label: "You decide requests above (£)", value: (Number(data.ownerReviewAboveMinor) / 100).toFixed(2) },
-        { key: "hours", label: "Approved requests valid for (hours)", value: String(data.validHours ?? 48) }]}
-        submit={(v) => call("card_request_policy_set", { ownerReviewAboveMinor: minor(v.above), validHours: Number(v.hours) })} />
+      {/* v64 (O19): the owner threshold is retired; Fleet Control decides every funded request. */}
     </details>
   </div>;
 }
@@ -181,11 +215,13 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
   const store = useRead<Row>(client, "storefront", {}, []);
   const ptest = useRead<Row>(client, "paypal_test", {}, []);
   const creq = useRead<Row>(client, "card_requests", {}, []);
+  // v64 (O19): Fleet Control's spend reviews (material or suspicious commitments only).
+  const reviews = useRead<Row>(client, "spend_reviews", { limit: 50 }, []);
   // v56: customer orders (buyer masked; the agent keeps the contact) — payment, fulfilment, delivery.
   const orders = useRead<Row>(client, "customer_orders", {}, []);
   // v57: disputes and unclassified PayPal debits (held back from the agents' spendable money until settled).
   const disputes = useRead<Row>(client, "paypal_disputes", {}, []);
-  const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); creq.reload(); };
+  const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); creq.reload(); reviews.reload(); };
   const call = useCallback(async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); reloadAll(); return r; }, [client]); // eslint-disable-line react-hooks/exhaustive-deps
   // One name per agent everywhere: the agent list's (the owner's label or the default), never the registry's raw name.
   const name = (id: string, stored?: string | null) => agents.find((a) => a.id === id)?.name ?? displayAgentName(stored, id);
@@ -238,6 +274,9 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
         <div className="mt-3 flex gap-2">{before && <button className={button} onClick={() => setBefore(null)}>Newest</button>}{tx.data.nextBeforeSeq && (tx.data.items as Row[]).length >= 50 && <button className={button} onClick={() => setBefore(tx.data!.nextBeforeSeq)}>Older</button>}</div>
       </div> : <p className="text-sm text-slate-400">{tx.error || "Reading…"}</p>}
     </Panel>
+
+    <Panel title="Spend reviews (Fleet Control)">{reviews.data ? <SpendReviews data={reviews.data} call={call} name={name} />
+      : <p className="text-sm text-slate-400">{reviews.error || "Reading…"}</p>}</Panel>
 
     <Panel title="Card clearing (your card used as a bypass)">{card.data ? <>
       {creq.data && <CardRequests data={creq.data} call={call} name={name} />}
@@ -295,14 +334,14 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
     </> : <p className="text-sm text-slate-400">{ptest.error || "Reading…"}</p>}</Panel>
 
     <Panel title="Custody activation (money out)">{custody.data ? <>
-      <p className="text-sm">{custody.data.activation ? <>{custody.data.activation.mode === "ongoing" ? "Active (ongoing, until you end it)" : `Active until ${when(custody.data.activation.expiresAt)} (pilot)`} · per payment ≤ {money(custody.data.activation.maxInstructionMinor)} · per 24 h ≤ {money(custody.data.activation.maxDailyMinor)}</> : "Not activated: no payment can leave the treasury."} · live signers: {custody.data.liveSigners}</p>
+      <p className="text-sm">{custody.data.activation ? <>{custody.data.activation.mode === "ongoing" ? "Active (ongoing, until you end it)" : `Active until ${when(custody.data.activation.expiresAt)} (pilot)`} · per payment {custody.data.activation.maxInstructionMinor ? `≤ ${money(custody.data.activation.maxInstructionMinor)}` : "no maximum"} · per 24 h {custody.data.activation.maxDailyMinor ? `≤ ${money(custody.data.activation.maxDailyMinor)}` : "no maximum"}</> : "Not activated: no payment can leave the treasury."} · live signers: {custody.data.liveSigners}</p>
       <p className="mt-1 text-xs text-slate-400">Money leaves only with all four keys: this activation, a verified live PayPal rail, the custody signer’s attestation, and the custody host’s real-payments switch.</p>
       {custody.data.activation ? <Form title="Deactivate now" danger fields={[{ key: "reason", label: "Reason" }]} submit={(v) => call("custody_deactivate", { reason: v.reason })} />
-        : <Form title="Activate custody" note="A pilot expires by itself; ongoing runs until you end it (no renewals). The maxima stay as treasury risk limits either way."
-          fields={[{ key: "mode", label: "Mode", options: [["pilot", "Pilot (expires)"], ["ongoing", "Ongoing (autonomous)"]] }, { key: "perPayment", label: "Maximum per payment (£)" }, { key: "perDay", label: "Maximum per 24 hours (£)" },
+        : <Form title="Activate custody" note="A pilot expires by itself; ongoing runs until you end it (no renewals). Maxima are optional (blank = no maximum): Fleet Control reviews material or suspicious payments instead."
+          fields={[{ key: "mode", label: "Mode", options: [["pilot", "Pilot (expires)"], ["ongoing", "Ongoing (autonomous)"]] }, { key: "perPayment", label: "Maximum per payment (£, optional)" }, { key: "perDay", label: "Maximum per 24 hours (£, optional)" },
             { key: "hours", label: "Pilot: hours until it expires (≤ 2160)", value: "168" }, { key: "reason", label: "Reason" }]}
-          submit={(v) => call("custody_activate", { mode: v.mode, maxInstructionMinor: minor(v.perPayment), maxDailyMinor: minor(v.perDay), hours: v.mode === "ongoing" ? null : Number(v.hours), reason: v.reason })} />}
-      <Form title="Set an agent's wallet limits" note="Blank = no agent-specific limit (the activation's limits still apply)."
+          submit={(v) => call("custody_activate", { mode: v.mode, maxInstructionMinor: v.perPayment ? minor(v.perPayment) : null, maxDailyMinor: v.perDay ? minor(v.perDay) : null, hours: v.mode === "ongoing" ? null : Number(v.hours), reason: v.reason })} />}
+      <Form title="Set an agent's wallet limits" note="Optional leash, unset by default: blank = no limit. Agents judge their own spending; Fleet Control reviews material or suspicious commitments."
         fields={[{ key: "agentId", label: "Agent", options: agentOptions }, { key: "perPayment", label: "Per payment (£)" }, { key: "perDay", label: "Per 24 h (£)" }, { key: "cardMax", label: "Card per charge (£)" }, { key: "cardDay", label: "Card per 24 h (£)" }, { key: "note", label: "Note" }]}
         submit={(v) => call("wallet_limits_set", { agentId: v.agentId, maxInstructionMinor: v.perPayment ? minor(v.perPayment) : null, maxDailyMinor: v.perDay ? minor(v.perDay) : null,
           cardMaxChargeMinor: v.cardMax ? minor(v.cardMax) : null, cardMaxDailyMinor: v.cardDay ? minor(v.cardDay) : null, note: v.note })} />

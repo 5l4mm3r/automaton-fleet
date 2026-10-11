@@ -97,6 +97,9 @@ describe.skipIf(!PG_BIN)("v51 completion: exhaustion, card reservations, PayPal 
 
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 3, allocationCents: 10_000, simulatedSettlement: false });
+    // v64 (O19): these cases exercise holds / issuing / execution, not Fleet Control review — with £100 test wallets every
+    // purchase would be "material". Review triggers off here; fleet-spend-review-v64-pg proves the review itself.
+    await R.q(`UPDATE fleet.fleet_spend_review_policy SET material_share_bp = 10000, material_aggregate_bp = 100000, low_runway_days = 0, new_payee_hours = 0, duplicate_window_h = 1`);
     // v55: survival protection is on by default; these tests exercise the live rule (exhaustion is death).
     await R.one(`fleet.fleet_admin_survival_protection_set(false, 'tests of the live survival rule', $1)`, [OWNER]);
     [F, G, H] = R.founders;
