@@ -807,3 +807,13 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
   latest verified PayPal balance and the difference (PayPal − (books − unbacked); 0 = reconciled). After full backing,
   further provider-paid AI costs show as a positive difference (PayPal holds money the books no longer count): repaying the
   owner's provider credit from the treasury is not modelled.
+- **Open — the missing connection for owner-prepaid AI credit (identified 2026-10-12; not built).** An AI charge posts two
+  legs (`agent_expense` D / `agent_cash` C). The communications path (v41) posts four for the same situation
+  (`provider_usage_charge`: also `treasury_cash` D / `provider_credits` C), with the purchase an asset swap
+  (`provider_credits_purchase`: `provider_credits` D / `treasury_cash` C). Anthropic credit has no GBP asset; its purchases
+  exist only as USD `fleet_provider_credit_events`. So each AI charge removes cash from the books while PayPal keeps it,
+  and nothing records whose money paid. Connection to add: an AI prepaid-credit asset account; the owner's purchase posted to
+  it (owner capital contribution, or a liability owed to the owner — the owner's choice); the treasury and credit legs on
+  each AI charge (as `provider_usage_charge`); FX differences between purchase and use posted explicitly; the v66
+  provider-paid term then counts only charges without the treasury leg. The expense is recognised once, at use; a purchase
+  is never expensed.

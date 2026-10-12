@@ -59,24 +59,32 @@ Steps 1 and 2 are DONE (release 973e0c1 deployed 14:20Z; both agents upgraded 14
 
 Cross-check: Anthropic credit recorded $69.97 bought, $24.17 consumed (≈ £18.24), $4.63 adjustments → **$41.17** left.
 
-1. [ ] **Schema v66 (capital backing) + UI 0.17.0** — build, rehearse 65 → 66, cut over on the owner's go (~45 s outage;
+1. [ ] **Schema v66 (capital backing) + UI 0.17.0** — built and rehearsed 15:07Z (`release-befae84.md`); cut over on the owner's go (~45 s outage;
        agents stay paused). Without it, a deposit can only be recorded as new owner capital (counted twice).
 2. [ ] **Anthropic credit** — $41.17 left; AI costs are paid from it, not from PayPal. Top up before resuming (owner's
        amount), then record the receipt: `provider-credits-record anthropic purchase <usd> <receipt ref>`.
-3. [ ] **Deposit £181.76** into the treasury PayPal (fleet.treasury@proton.me) from the owner's own account. A personal
-       transfer carries no fee; a goods-and-services payment arrives net of PayPal's fee (the backing uses the net amount,
-       so cover the fee or back the remainder with a later deposit).
-4. [ ] Wait until it appears under Treasury → *Unmatched PayPal money* (custody reads Transaction Search and the balance
-       about every 30 minutes), then **"My deposit: back the existing capital"** (step-up) or
-       `economy-capital-back <railId> <txnId> <eventCode>`. Check the *Capital backing* panel: still to back £0.00,
-       difference £0.00.
-5. [ ] **Optional new capital** (owner's amounts): a further deposit is ordinary owner funding
+3. [ ] **Refresh the amount** in the *Capital backing* panel (or `economy-capital-backing`) right before sending: it was
+       £181.76 at 15:06Z on 10-12 and falls by every AI cost paid from Anthropic credit before the deposit.
+4. [ ] **Deposit** that amount into the treasury PayPal account. What the Fleet supports: any **completed GBP credit**
+       into that account that PayPal's Transaction Search reports (custody ingests every event code). Whether a given
+       route is available, and its fee, depends on the account — check in PayPal before sending, in this order:
+       - *Add money / transfer in* from a UK bank account linked to the treasury PayPal account (a bank funding entry);
+       - a payment from the owner's own PayPal account to the treasury address (personal or goods-and-services, as PayPal
+         offers it);
+       PayPal shows any fee before you confirm. The backing uses the **net** amount received: a shortfall stays unbacked
+       (back it with a further deposit); an excess becomes ordinary owner funding. **Not** this way: the receiving-test
+       checkout (it records new capital itself — the double count — and is capped at £10), or any agent checkout (revenue).
+5. [ ] Custody reads Transaction Search and the balance **hourly** (Transaction Search itself can lag by up to a few hours).
+       When the deposit appears under Treasury → *Unmatched PayPal money*: **"My deposit: back the existing capital"**
+       (step-up) or `economy-capital-back <railId> <txnId> <eventCode>`. Check the panel: still to back £0.00, difference
+       £0.00.
+6. [ ] **Optional new capital** (owner's amounts): a further deposit is ordinary owner funding
        (`ledger-record-funding <pence> paypal:txn:<id>` + `economy-paypal-attribute … owner_funding paypal:txn:<id>`), then
        allocated to an agent (Agent → Fund). Example only: to bring both wallets to £250 and keep a £50 treasury reserve
        would take £318.23 + £49.34 = £367.57 more.
-6. [ ] **AI budgets unchanged** unless the owner decides: Agent-1 754p/day, 20 turns/h; Agent-2 3000p/day, 60 turns/h
+7. [ ] **AI failure fuses unchanged** unless the owner decides: Agent-1 754p/day, 20 turns/h; Agent-2 3000p/day, 60 turns/h
        (runaway fuses, not allowances; see the report of 2026-10-12). The earlier "£5/day" suggestion is withdrawn.
-7. [ ] **Money out (not needed to resume):** refunds / payouts capability checks unverified; no custody activation;
+8. [ ] **Money out (not needed to resume):** refunds / payouts capability checks unverified; no custody activation;
        `REAL_PAYMENTS_ENABLED=false` (changing it needs the owner's explicit approval). PayPal webhook registered and its URL
        matches, but no PayPal delivery has ever reached the controller (the £1 test was confirmed by capture and Transaction
        Search) — verify with PayPal's webhook simulator or the first real sale.
