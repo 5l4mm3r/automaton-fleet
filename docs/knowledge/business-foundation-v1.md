@@ -195,11 +195,12 @@ Your wallet's available figure (wallet survival, the wallet measure) is the auth
 
 ## bf-ai-costs
 Title: What your AI use costs and who pays
+Version: 2
 Category: business-foundation
 Tags: ai, cognition, tokens, inference, cost, fuse, budget, wallet
 Related: bf-unit-economics, bf-execution-quality, fleet-capability-status
 Body:
-Every model call you make is charged to your own wallet at its actual provider cost, converted to pounds at the Fleet's controlled rate and recorded with the call. It is a real business cost: include it in venture economics like any other (bf-unit-economics).
+Every model call you make is charged to your own wallet at its actual cost: the provider's price, converted to pounds at the Fleet's controlled rate and recorded with the call, plus its share of the unrecoverable tax and fees paid when that credit was bought (taken from the purchase receipt, charged shortly after the call). It is a real business cost: include it in venture economics like any other (bf-unit-economics).
 
 - Work costs money even when nothing reaches a customer: research, drafts, retries, verification and failed attempts all count.
 - Re-reading large material every turn is expensive; keep a short summary of what you learned and retrieve the detail when a decision needs it.
@@ -635,8 +636,8 @@ Apply these questions proportionately. They are aids to judgement, not a compuls
 Your objective is neither maximum activity nor minimum spending. It is the best evidenced use of capital, attention, tools and time to create sustainable value.
 
 ## fleet-capability-status
-Title: Fleet capability status (dated 2026-10-12, v3) — what works today
-Version: 3
+Title: Fleet capability status (dated 2026-10-12, v4) — what works today
+Version: 4
 Category: fleet-status
 Tags: status, capabilities, paypal, checkout, payout, card, gumroad, mail, sms, research, wake, sweep, ai-credit, onboarding
 Related: bf-cash-and-settlement, bf-delivery-commitments, bf-tax-worldwide, bf-venture-types, bf-ai-costs
@@ -653,7 +654,7 @@ Facts:
 - Sweeps: the sweep policy is off | checked 2026-10-12 | verified
 - Survival protection: on — an owner setting during setup, not a business strategy or a promise of rescue; actual exhaustion follows the Fleet's lifecycle rule | checked 2026-10-12 | verified
 - Waking from hibernation (runtime b60e262 and later): owner messages, revenue and refunds booked to you, capital changes, answered owner requests, your review time, inbound email, card-request and spend-review decisions, lesson reviews, superseded lessons and dispute changes wake you within about a minute; the wake packet lists what happened and the tool that retrieves each | checked 2026-10-12 | verified
-- AI cost attribution: your own autonomous work (every model call you make) is charged to your wallet at cost; turns that process the owner's messages to you are paid by the treasury, not by you. How the Fleet bought its provider credit (the owner's or the treasury's money) does not change this. A provider credit shortage can stop AI calls Fleet-wide until credit is bought | checked 2026-10-12 | verified
+- AI cost attribution: your own autonomous work (every model call you make) is charged to your wallet at cost — the provider's price plus the unrecoverable tax / fees on the credit it used (from the purchase receipt); turns that process the owner's messages to you are paid by the treasury, not by you. How the Fleet bought its provider credit (the owner's or the treasury's money) does not change this. A provider credit shortage can stop AI calls Fleet-wide until credit is bought | checked 2026-10-12 | verified
 Body:
 This entry is dated status, not enduring guidance. It changes as the Fleet is onboarded: re-read it (economic_knowledge library, id fleet-capability-status) when a decision depends on a capability, and never treat today's onboarding gaps as permanent limits on what you may build.
 

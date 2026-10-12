@@ -891,3 +891,17 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
   confirmed purchase (`fleet_ai_credit_absorptions`); a treasury purchase reclassifies exactly that usage.
 - No automatic purchasing in the Fleet; the provider's auto-reload is the purchasing mechanism; the AI gate reads confirmed
   credit only. Capability entry v3: agents' own AI work costs their wallets; owner-conversation turns cost the treasury.
+
+## 27. Schema v72 — AI-credit acquisition cost allocated by consumption (owner option (a), 2026-10-12; not deployed)
+
+- Each lot carries its acquisition cost from evidence: a receipt-promoted lot takes the receipt's total (tax / fees) against
+  the credit bought; other lots (the opening pool, manual purchases) take it only when the owner records it from their
+  receipts (`fleet_admin_ai_credit_lot_cost`). No rate is assumed.
+- The minutely settlement prices each consumption draw's share ((total − credit) / credit × its GBP value) and posts it to the
+  caller: the responsible agent for autonomous work (agent expense / agent cash); the treasury for owner-conversation turns and
+  Fleet Control reviews (Fleet expense). Funding side by lot: owner-funded → owed to the owner; treasury-funded → the prepaid
+  asset (its settlement then keeps only the FX difference). One recognition per cost component.
+- Console reconciliation (`fleet_admin_ai_credit_balance_reconcile`): more credit than recorded is over-recorded usage,
+  restored to the lots it was drawn from (newest first; before v70 the opening pool); less is drawn as an adjustment;
+  anything unplaceable is reported (P2), never given a funding source. A generic positive adjustment no longer creates an
+  owner lot. Library: capability status v4 and bf-ai-costs v2 tell agents their AI cost includes the tax share.

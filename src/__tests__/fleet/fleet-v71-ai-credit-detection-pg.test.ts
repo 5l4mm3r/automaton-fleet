@@ -130,6 +130,7 @@ describe.skipIf(!PG_BIN)("v71: AI-credit purchases — provisional observations,
 
   it("treasury route: one receipt ↔ one debit promotes the purchase; usage it paid for leaves the owner payable", async () => {
     await policy("treasury_paypal");
+    await settle();   // v72: the tax on the previous test's usage (owner-funded) is posted first
     const p0 = await bal("fleet:owner:payable");
     await charge(5 * USD);                                                       // runs beyond confirmed credit
     expect(await bal("fleet:owner:payable")).toBe(p0 + 500);
@@ -146,7 +147,7 @@ describe.skipIf(!PG_BIN)("v71: AI-credit purchases — provisional observations,
     expect(await attributed(off)).toBeNull();
     expect(s.reclassifiedMinor).toBe(500);
     expect(await bal("fleet:owner:payable")).toBe(p0);                           // no false owner payable
-    expect(await bal("fleet:ai_credits")).toBe(2_940 - 500);   // cost incl. VAT; usage at the pre-tax price
+    expect(await bal("fleet:ai_credits")).toBe(2_940 - 500 - 100);   // cost incl. tax; the $5 used at its price + its tax (v72)
     expect((await settle()).detection).toMatchObject({ promoted: 0 });
   });
 

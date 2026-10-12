@@ -165,6 +165,29 @@ PayPal balance cannot be evidenced as treasury money (no bank/card feed is conne
 - Policy command (after the cutover): `economy-ai-credit-policy anthropic owner_card --receipt-sender support@anthropic.com`.
 
 
+## Onboarding to launch — one ordered list (2026-10-12; candidate 69 → 72, not deployed)
+Each step needs the owner's go; agents stay paused until step 12.
+1. **Cut over** the coordinated release (v70 – v72; custody restarts with it). Health and preservation checks after.
+2. **Policy:** `economy-ai-credit-policy anthropic owner_card --receipt-sender support@anthropic.com`.
+3. **Reconcile the console balance:** `economy-ai-credit-reconcile anthropic 4129` ($41.29). The $0.12 is usage the Fleet
+   over-recorded (it rounds each call up); it returns to the opening owner pool it was drawn from — no new funding source.
+4. **Tax on the opening pool:** from the receipts of the earlier purchases ($50 and $19.97 of credit), the total charged:
+   `economy-ai-credit-lot-cost <openingLotId> 6997 <totalChargedCents> "receipts <nos>"` (`economy-ai-credits` shows the id).
+   Until then that pool carries no tax share (none is assumed).
+5. **AI-credit opening** (v69): `economy-ai-credit-opening` — £18.24 of past AI costs becomes owed to you.
+6. **Receipts:** optionally a forwarding filter (support@anthropic.com → fleet.treasury@proton.me); then confirm each
+   observed receipt (`economy-ai-credit-confirm <receiptId> owner`). Without forwarding: one `provider-credits-record` per
+   purchase.
+7. **Auto-reload** (optional, Console → Billing): threshold and reload-to amount; it charges your saved card.
+8. **Funding:** deposit £200.00 into the treasury PayPal by a supported GBP route; back it (Treasury → Capital backing).
+9. **Money out:** verify the refunds and payouts checks, a pilot custody activation, the webhook delivery, and your decision
+   on `REAL_PAYMENTS_ENABLED`.
+10. **Later, the treasury route:** a PayPal Business Debit Mastercard saved in the Console (PayPal bank top-up OFF), then
+    `economy-ai-credit-policy anthropic treasury_paypal --receipt-sender support@anthropic.com --counterparty <text from its
+    first debit>`.
+11. **Gumroad** onboarding and the £500 / EU decision.
+12. **Resume Agent-1** (your word); Agent-2 stays a paused reserve.
+
 ## Step 4 — Gumroad (EU/UK consumer digital sales via a merchant of record)
 Verified 2026-10-12 (Gumroad help 13, 10, 70): Gumroad is merchant of record for EU and UK **digital** sales (collects
 and remits VAT; physical goods not covered). A UK seller is paid to a **UK bank account** in GBP (min $100, weekly /

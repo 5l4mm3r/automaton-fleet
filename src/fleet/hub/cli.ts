@@ -109,6 +109,8 @@
  *   economy-ai-credit-purchase <provider> <usdCents> <railId> <txnId> <eventCode> <receiptRef>  (v70) credit bought with treasury money (the PayPal debit is the evidence)
  *   economy-ai-credit-policy <provider> owner_card|treasury_paypal [--receipt-sender …] [--counterparty …]  (v71) how credit is bought; enables detection
  *   economy-ai-credit-confirm <receiptId> owner | treasury <railId> <txnId> <eventCode>  (v71) confirm an observed purchase and who paid
+ *   economy-ai-credit-reconcile <provider> <consoleBalanceUsdCents>           (v72) reconcile with the console; over-recorded usage restored, never assigned
+ *   economy-ai-credit-lot-cost <lotId> <creditUsdCents> <totalChargedUsdCents> <evidence…>  (v72) a lot's tax / fees from its receipts
  *   economy-ai-credit-reject <receiptId> <reason…>                             (v71) an observation that is not a purchase
  *   economy-ai-credit-opening                                                (v69) once after the cutover: AI costs charged before v69 become owed to the owner
  *   economy-capital-backing                                                  (v66) the existing capital: virtual, provider-paid, backed, unbacked; books vs PayPal
@@ -316,6 +318,12 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
         throw new Error("usage: economy-ai-credit-confirm <receiptId> owner | economy-ai-credit-confirm <receiptId> treasury <railId> <txnId> <eventCode>");
       }
       return h.aiCreditConfirm(p[0], p[1], p[2] ?? null, p[3] ?? null, p[4] ?? null, actor);
+    case "economy-ai-credit-reconcile":
+      if (p.length !== 2 || !/^\d{1,9}$/.test(p[1])) throw new Error("usage: economy-ai-credit-reconcile <provider> <consoleBalanceUsdCents>");
+      return h.aiCreditReconcile(p[0], Number(p[1]), actor);
+    case "economy-ai-credit-lot-cost":
+      if (p.length < 4 || !/^\d{1,9}$/.test(p[1]) || !/^\d{1,9}$/.test(p[2])) throw new Error("usage: economy-ai-credit-lot-cost <lotId> <creditUsdCents> <totalChargedUsdCents> <evidence…>");
+      return h.aiCreditLotCost(p[0], Number(p[1]), Number(p[2]), p.slice(3).join(" "), actor);
     case "economy-ai-credit-reject":
       if (p.length < 2) throw new Error("usage: economy-ai-credit-reject <receiptId> <reason…>");
       return h.aiCreditReject(p[0], p.slice(1).join(" "), actor);

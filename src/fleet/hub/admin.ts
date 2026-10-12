@@ -175,6 +175,13 @@ export class PgHubAdmin {
   aiCreditConfirm(receiptId: string, source: string, railId: string | null, txnId: string | null, eventCode: string | null, actor: string) {
     return this.one(`SELECT fleet_admin_ai_credit_confirm($1, $2, $3, $4, $5, $6) AS r`, [receiptId, source, railId, txnId, eventCode, actor]);
   }
+  // v72: reconcile with the console balance; a lot's acquisition cost (tax / fees) from evidence.
+  aiCreditReconcile(provider: string, consoleUsdCents: number, actor: string) {
+    return this.one(`SELECT fleet_admin_ai_credit_balance_reconcile($1, $2, $3) AS r`, [provider, consoleUsdCents, actor]);
+  }
+  aiCreditLotCost(lotId: string, creditUsdCents: number, totalUsdCents: number, evidence: string, actor: string) {
+    return this.one(`SELECT fleet_admin_ai_credit_lot_cost($1, $2, $3, $4, $5) AS r`, [lotId, creditUsdCents, totalUsdCents, evidence, actor]);
+  }
   aiCreditReject(receiptId: string, reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_ai_credit_reject($1, $2, $3) AS r`, [receiptId, reason, actor]);
   }
