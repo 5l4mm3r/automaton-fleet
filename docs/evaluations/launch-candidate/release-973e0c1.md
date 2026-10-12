@@ -47,3 +47,28 @@ bash ~/rlc65/fleet-release.sh ~/rlc65/pins.txt 63 65 0.16.0 ~/rlc65/ui-0.16.0-97
 - First Fleet Control lesson review ran at 14:20:52Z: the 3 waiting proposals were rejected with reasons (single anecdotes,
   an owner request rather than knowledge, overlap with the library); cost 6176 (knowledge_review_charge, treasury overhead).
 - Rollback point: `runtime.env.pre-973e0c1`, `releases/ad92320`, the dump above; UI `dashboard.env.pre-0.16.0`.
+
+## Agents' runtime upgrade f852888 → 973e0c1 (2026-10-12, owner-authorised): DONE, both still paused
+- Rehearsal `fleet-founders.sh upgrade-rehearsal f852888…` (throwaway registry, fake provider), 14:25–14:36Z: **pass, 27/27**,
+  including "R41.1 / v6": the upgraded founder was served founder-v6 (8 v6 / 0 v4 routed steps), `field_guide` and
+  `field_journal` ran, journal written, wake condition declared; rollback after v6 use kept the journal; re-upgrade verified;
+  no credential in logs or records. The three `ok: false` lines in the log are the deliberate mis-pinned-runtime case
+  (fails closed, rolled back). Production unchanged; living founders untouched.
+- Agent-2 (`01M4C4NXT786Q4E9725N5A15KV`): preflight ok (13 state files); `upgrade-runtime` **verified**, upgrade
+  `4352d6e9-7c57-465f-b927-81498d4a71fc`; pid 757524 → 852468, same uid 62577; downtime 2,022 ms; 1 challenge passed;
+  state identical.
+- Agent-1 (`01M3F50SH7PNX2E3GST13J52AS`): preflight ok (26 state files); `upgrade-runtime` **verified**, upgrade
+  `48dbdb79-73cc-49df-94bb-895036af38ea`; pid 757816 → 852716, same uid 65037; downtime 2,022 ms; 1 challenge passed;
+  state identical.
+- Preservation (baseline 14:25:07Z vs 14:38Z): identity hashes, ledger fingerprints and cash (8,641 / 9,536) identical;
+  ledger verifies; 806 journals, none posted since the baseline; one registry credential each; memory (facts, goals,
+  decisions, continuity, mind log) and workspace files carried byte-identical (backups exclude the credential). Neither
+  agent has written a field journal yet (awaits live activity).
+- Compatibility: the release tree carries `dist/fleet/founder/doctrine-v6.js`, `mind.js` asks for founder-v6 and the guide
+  is survival-field-guide-v2.0, so the controller serves Charter v6 with toolset-2 (`spend_reviews`, `field_guide all`).
+- After: both paused, 0 in flight, no AI call since 10-10; AI budgets unchanged (754 / 3000 pence a day; no new caps);
+  survival protection on; custody execution off; cap 2/2 DEVELOPMENT; all safety flags unchanged. Events: upgrade
+  prepared / committed / verified ×2, session_opened ×2.
+- Lesson-review charge (14:20:52Z): 3 reviews, 464,800 + 431,400 + 434,000 = 1,330,200 USD microcents = **US$0.0133**;
+  at the recorded USD→GBP rate = 1,006,176 GBP microcents = 1.006p, of which **£0.01 posted** (D `fleet:expense` /
+  C `fleet:treasury:unallocated`) and 0.006p carried in the accrual until it reaches a whole penny.
