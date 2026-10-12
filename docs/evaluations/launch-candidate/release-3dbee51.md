@@ -1,6 +1,6 @@
 # Release 3dbee51 — coordinated: schema 65 → 68 + UI 0.17.0, then the founder runtime upgrade
 
-Status: **rehearsed, not deployed** (2026-10-12 16:13:11Z). Supersedes `release-befae84.md` (v66 alone is not deployed
+Status: **SUPERSEDED by release-b60e262.md (65 → 69)** — rehearsed 2026-10-12 16:13:11Z, not deployed. Supersedes `release-befae84.md` (v66 alone is not deployed
 separately — owner, 2026-10-12). No money moved; agents paused; live settings unchanged.
 
 ## Contents
