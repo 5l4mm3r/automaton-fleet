@@ -1,6 +1,6 @@
 # Release 973e0c1 — schema 63 → 65 + UI 0.16.0 (consolidated: O19 spending review, v65 completion, Charter v6, Field Guide v2)
 
-Status: **rehearsed, not deployed** (2026-10-12 14:16:20Z). Supersedes the 9b62ef1 package (`~/rlc64`, not deployed).
+Status: **DEPLOYED 2026-10-12 14:20:53Z** (rehearsed 14:16:20Z; outage 14:19:57–14:20:41Z, 44 s). Supersedes the 9b62ef1 package (`~/rlc64`, not deployed).
 Checklist: `launch-checklist-v65.md`.
 
 ## Pins (VPS build `~/rlc65/build.log`; an independent local build is identical)
@@ -38,3 +38,12 @@ bash ~/rlc65/fleet-release.sh ~/rlc65/pins.txt 63 65 0.16.0 ~/rlc65/ui-0.16.0-97
 - Rollback: UI `dashboard.env.pre-0.16.0`; backend `bash ~/rlc65/fleet-rollout.sh revert ~/rlc65/pins.txt 63 65 <reason>`.
   v64 and v65 only add — prefer fixing forward; never revert once real money or provider data exists.
 - Charter v6, toolset-2 and Field Guide v2 reach the agents only through the founder runtime upgrade (checklist step 2).
+
+## Deployment (2026-10-12 14:19:06–14:20:53Z, owner go)
+- Pre-migration dump `~/automaton_fleet-v63-pre-v65-20261012T142018Z.dump` (sha `4688be81…`); migrate 63 → 65; reconciliation
+  OK (2311 events preserved); readyz 200; UI 0.16.0 at root (52 files); one `production_deployed` event.
+- Post-checks: schema 65; runtime 973e0c1 / build 77284506…; all four safety flags false; cap 2, DEVELOPMENT, replication
+  off; controller, dashboard, identity, browser and custody units active; both agents alive and **still paused** on f852888.
+- First Fleet Control lesson review ran at 14:20:52Z: the 3 waiting proposals were rejected with reasons (single anecdotes,
+  an owner request rather than knowledge, overlap with the library); cost 6176 (knowledge_review_charge, treasury overhead).
+- Rollback point: `runtime.env.pre-973e0c1`, `releases/ad92320`, the dump above; UI `dashboard.env.pre-0.16.0`.
