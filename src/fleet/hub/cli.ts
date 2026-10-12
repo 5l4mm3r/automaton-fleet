@@ -162,6 +162,9 @@ export const HUB_COMMANDS = new Set([
   "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser", "hub-dashboard-enroll", "hub-dashboard-totp-reset",
   "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
   "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
+  // v66 – v72 (missing until 2026-10-12: these were unreachable from fleet:admin)
+  "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
+  "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",

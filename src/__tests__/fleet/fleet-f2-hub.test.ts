@@ -53,6 +53,14 @@ describe("F2 Fleet Hub", () => {
     expect([...HUB_COMMANDS].every((c) => c === "hub" || c.startsWith("hub-") || c.startsWith("economy-") || c.startsWith("owner-identity-"))).toBe(true);
   });
 
+  it("every command runHubCommand handles is routed from fleet:admin (HUB_COMMANDS), and nothing routed is unhandled", () => {
+    // 2026-10-12: the v66 – v72 capital-backing and AI-credit commands had cases but were never routed.
+    const src = fs.readFileSync(path.join(process.cwd(), "src", "fleet", "hub", "cli.ts"), "utf8");
+    const cases = [...src.matchAll(/case "([a-z0-9-]+)":/g)].map((m) => m[1]);
+    expect(cases.filter((c) => !HUB_COMMANDS.has(c))).toEqual([]);
+    expect([...HUB_COMMANDS].filter((c) => !cases.includes(c))).toEqual([]);
+  });
+
   it("v46 readiness commands: evidence, readiness, assignment and an evidence-based dependency answer map onto owner functions", async () => {
     const { h, calls } = fakeHub();
     const actor = "operator:alice";

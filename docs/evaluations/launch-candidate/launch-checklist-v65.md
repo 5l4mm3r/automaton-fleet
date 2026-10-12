@@ -170,15 +170,21 @@ Each step needs the owner's go; agents stay paused until step 12.
 1. ~~**Cut over** the coordinated release (v70 – v72; custody restarts with it). Health and preservation checks after.~~
    **DONE** 2026-10-12 19:54:33Z: d63a595 (= e641872's application code + fixed release tooling), schema 72, UI 0.17.1;
    preservation and health verified (release-d63a595.md).
-2. **Policy:** `economy-ai-credit-policy anthropic owner_card --receipt-sender support@anthropic.com`.
-3. **Reconcile the console balance:** `economy-ai-credit-reconcile anthropic 4129` ($41.29). The $0.12 is usage the Fleet
-   over-recorded (it rounds each call up); it returns to the opening owner pool it was drawn from — no new funding source.
-4. **Tax on the opening pool:** from the receipts of the earlier purchases ($50 and $19.97 of credit), the total charged:
-   `economy-ai-credit-lot-cost <openingLotId> 6997 <totalChargedCents> "receipts <nos>"` (`economy-ai-credits` shows the id).
-   Until then that pool carries no tax share (none is assumed).
-5. **AI-credit opening** (v69): `economy-ai-credit-opening` — past AI costs become owed to you.
-   → After steps 2 – 5, the actual owner payable and the capital-backing requirement are calculated read-only from the
-     live books and reported **before** any deposit is requested (the earlier £18.24 / £200.00 are estimates, not assumed).
+2–5. **DONE 2026-10-12 20:14–20:16Z** (owner instruction with receipt figures; actor operator:ubuntu; pre-change dump
+   `~/automaton_fleet-v72-pre-ai-credit-setup-20261012T201439Z.dump`). The v66 – v72 commands were not routed from
+   `fleet:admin` in d63a595 (fixed in the repo, not yet deployed), so the same owner SQL functions were called directly as
+   `fleetadmin`:
+   - policy: anthropic `owner_card`, receipt sender `support@anthropic.com` (no counterparty, no auto-reload values).
+   - reconcile to the Console's $41.29: +$0.11863830 over-recorded usage restored to the opening pool; nothing unplaced.
+   - acquisition cost of the opening pool from the owner's receipts: $20 + $4 tax = $24 and $50 + $10 tax = $60 →
+     credit 7000, charged 8400 USD cents, ratio 1.2; the pool's $41.29 carries an acquisition total of $49.55. (An earlier
+     note said $19.97 for the first purchase; the owner's receipt figures, $20.00, were used.)
+   - AI-credit opening (v69): journal `003b0f6a…`, **£18.24 owed to the owner**.
+   Result (read-only, `fleet_capital_backing()` after the opening): **owner payable £18.24**; virtual capital £200.00, backed
+   £0.00, **unbacked £200.00** (the provider-paid £18.24 that previously reduced it is now the owner's payable); books cash
+   £200.67 = £200.00 capital + £0.67 real PayPal balance; difference £0.00. Agents unchanged and paused; ledger verifies.
+   - **Not covered by any function — owner decision:** the 20 % tax on the credit used *before* v70 (the £18.24 was booked at
+     the pre-tax price; tax share ≈ £3.65). The lot ratio applies only to usage from now on. Nothing has been posted for it.
 6. **Receipts:** optionally a forwarding filter (support@anthropic.com → fleet.treasury@proton.me); then confirm each
    observed receipt (`economy-ai-credit-confirm <receiptId> owner`). Without forwarding: one `provider-credits-record` per
    purchase.
