@@ -18,6 +18,7 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import crypto from "crypto";
 import { FounderMind, MAX_IDLE_SKIP, HIBERNATION_SAFETY_MS, type MindPorts } from "../../fleet/founder/mind.js";
 import { FounderToolbox } from "../../fleet/founder/toolbox.js";
 import { LoopGuard } from "../../fleet/founder/loop-guard.js";
@@ -29,7 +30,7 @@ const FILE = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const call = (name: string, args: Record<string, unknown>, id = `c-${name}`): ToolCall => ({ id, name, arguments: args });
 
 function rig(o: { paused?: () => boolean; pending?: () => number; reply?: (n: number, convo: string | null) => ToolCall[]; inferError?: () => string | null;
-  deps?: () => unknown[]; safetyMs?: number; stateDir?: string; workspaceDir?: string } = {}) {
+  deps?: () => unknown[]; safetyMs?: number; stateDir?: string; workspaceDir?: string; events?: () => string } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "convo-"));
   const dirs = { w: o.workspaceDir ?? path.join(root, "w"), s: o.stateDir ?? path.join(root, "s") };
   const m = path.join(dirs.s, "memory");
@@ -40,7 +41,7 @@ function rig(o: { paused?: () => boolean; pending?: () => number; reply?: (n: nu
   let open = false;
   const ports: MindPorts = {
     cognitionStatus: async () => ({ policyEnabled: true, provider: "anthropic", founderEnabled: true, paused: o.paused?.() ?? false, routing: { active: true },
-      attention: { ownerPending: o.pending?.() ?? 0, openTurn: open ? TURN : null } }),
+      attention: { ownerPending: o.pending?.() ?? 0, openTurn: open ? TURN : null, ...(o.events ? { eventsDigest: o.events() } : {}) } }),
     ledger: async () => ({ cash: 9_000, genesisAllocation: 10_000 }),
     ...(o.deps ? { ownerRequests: async () => ({ ok: true, requests: o.deps!() }) } : {}),
     infer: async (messages, _w, _route, _doctrine, opts) => {
@@ -131,6 +132,28 @@ describe("v62 event-driven hibernation (founder runtime)", () => {
     await r.slots(1);
     expect(r.infers).toHaveLength(2);
     expect(r.mind.routing.eventWakeups).toBe(1);
+  });
+
+  it("v67: a customer email, a review decision or another agent-facing event wakes a hibernation at the next slot; the owner's pause still holds", async () => {
+    const md5 = (s: string) => crypto.createHash("md5").update(s).digest("hex");
+    let events = md5("mail:0"), paused = false;
+    const r = rig({ events: () => events, paused: () => paused });
+    await r.slots(1);                                   // declared sleep: hibernating
+    await r.slots(4 * MAX_IDLE_SKIP);
+    expect(r.infers).toHaveLength(1);                   // nothing changed: no paid call
+    events = md5("mail:1");                             // an inbound customer email (controller's eventsDigest)
+    await r.slots(1);
+    expect(r.infers).toHaveLength(2);
+    expect(r.mind.routing.eventWakeups).toBe(1);
+    await r.slots(2 * MAX_IDLE_SKIP);                   // asleep again on the new digest
+    expect(r.infers).toHaveLength(2);
+    paused = true;                                      // the owner's explicit pause: nothing wakes it
+    events = md5("mail:2|review:held");
+    await r.slots(2 * MAX_IDLE_SKIP);
+    expect(r.infers).toHaveLength(2);
+    paused = false;                                     // on resume the change is seen at once
+    await r.slots(1);
+    expect(r.infers).toHaveLength(3);
   });
 
   it("a restart on a hibernating state keeps waiting; an undeclared sleep keeps the bounded timer backoff", async () => {

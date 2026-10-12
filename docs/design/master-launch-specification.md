@@ -817,3 +817,26 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
   each AI charge (as `provider_usage_charge`); FX differences between purchase and use posted explicitly; the v66
   provider-paid term then counts only charges without the treasury leg. The expense is recognised once, at use; a purchase
   is never expensed.
+
+## 22. Schema v67 — the business foundation and prompt wake-ups (revision 6, 2026-10-12)
+
+- **One authoritative business source.** `docs/knowledge/business-foundation-v1.md` (owner text §3–§23 integrated with the
+  Field Guide v2 doctrine it overlapped, plus cash and settlement states, AI-cost attribution and failure fuses, net-profit
+  sweeps, fraud, untrusted content, delivery commitments and evidence-based stop/pivot/scale) generates 30
+  `business-foundation` entries and one dated `fleet-status` entry (`fleet-capability-status`, facts stale after 14 days; the
+  Gumroad £500 / EU-route question labelled UNRESOLVED). Stable ids, cross-references, dated primary sources, examples
+  labelled HYPOTHETICAL. §1 and §2 are pending the owner's text (not invented).
+- **Reading.** Agents read the whole foundation once (at birth and when its version changes) through
+  `knowledge.library {path: "foundation", part}` — whole entries in order, ≤ 7 000 characters per part — keep a short
+  summary with `remember_fact`, and retrieve sections by query or id afterwards. Charter v6 carries that standing summary
+  and the version; reading is never described as permanent learning.
+- **Field Guide v2.1** keeps Fleet operating orientation; its business doctrine sections (survival cycle, tactics, venture
+  types, customers/ads, refunds, scams) are pointers to the library, so each rule is maintained once. Runtime change.
+- **Wake-ups.** `fleet_agent_attention.eventsDigest` covers inbound mail, card requests, spend reviews, Fleet Control notices,
+  lesson reviews and disputes; the v67 founder runtime adds it to its wake digest, so these wake a hibernating agent within
+  one thinking slot (previously up to the 24 h safety re-check). The owner's pause is unchanged: a paused agent wakes for
+  nothing; changes are seen on the first slot after resume.
+- **Open — retiring promoted lessons.** Curated library entries are corrected by new versions. Promoted agent lessons
+  (`fleet_knowledge_entries`) have no superseded state, and runtimes sync them incrementally, so a correction would sit
+  beside the outdated lesson. Connection to add: a reviewer-set `superseded_by`, exposed in `api_knowledge_list`, and a
+  runtime that re-reads superseded markers.

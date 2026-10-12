@@ -366,8 +366,9 @@ describe("R41.1 field journal, field guide, bootstrap, charter integration", () 
   it("the Survival Field Guide is retrieved by section on demand (never whole in a packet); platform facts are dated and marked for re-verification", async () => {
     const r = rig({ goals: [] });
     const list = await r.toolbox.execute(call("field_guide", { op: "list" }));
-    // v2.0 (2026-10-12, owner decisions): orientation first; v1.2's survival cycle kept.
-    expect(list.output).toMatch(/^survival-field-guide-v2\.0 \(2026-10-12\) — sections: orientation .*survival-cycle/);
+    // v2.1 (2026-10-12): orientation first; business doctrine (survival cycle, venture types, customers, tactics) lives in the
+    // library's business foundation and the guide points there.
+    expect(list.output).toMatch(/^survival-field-guide-v2\.1 \(2026-10-12\) — sections: orientation .*survival-cycle \[pointer\]/);
     const plat = await r.toolbox.execute(call("field_guide", { op: "read", section: "platforms" }));
     expect(plat.output).toMatch(/source-checked 2026-10-07; re-verify before relying on them/);
     expect(plat.output).toMatch(/never attempt to bypass it/);
@@ -531,10 +532,10 @@ describe("R41.1 completion — supplemental acceptance (owner clarifications 202
     expect((await r.toolbox.execute(call("sleep", { reason: "x", reviewAt: "soon" }))).refused).toBe("FLEET_BAD_REQUEST");
     expect((await r.toolbox.execute(call("sleep", { reason: "x", reviewAt: "2999-01-01T00:00:00Z" }))).output).toBe("hibernating; review at 2999-01-01T00:00:00.000Z");
     expect((await r.toolbox.execute(call("sleep", { reason: "x" }))).output).toBe("sleeping");
-    // v2.0 folds the advisory tiers into contextual venture choices (judge the actual venture's capital, fulfilment, timing).
-    expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "ventures" }))).output).toMatch(/Judge the actual venture against its real capital, fulfilment and timing requirements/);
+    // v2.1: contextual venture choices moved to the business foundation (bf-venture-types); the guide section points there.
+    expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "ventures" }))).output).toMatch(/never unlocked by a stage: economic_knowledge op library \{id: "bf-venture-types"\}/);
     const whole = await r.toolbox.execute(call("field_guide", { op: "all", part: 1 }));
-    expect(whole.output).toMatch(/^survival-field-guide-v2\.0 — part 1 of \d+ \(next: op all part 2\)/);
+    expect(whole.output).toMatch(/^survival-field-guide-v2\.1 — part 1 of \d+ \(next: op all part 2\)/);
     expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "assessment" }))).output).toMatch(/An empty goal list is not proof there is nothing to do/);
     expect((await r.toolbox.execute(call("field_guide", { op: "nope" }))).refused).toBe("FLEET_BAD_REQUEST");
     // Every tool the v5 gateway can offer is implemented by this runtime and classified under founder-v2.

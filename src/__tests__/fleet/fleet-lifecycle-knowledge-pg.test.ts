@@ -48,7 +48,8 @@ describe.skipIf(!PG_BIN)("v50 insolvency, sweep reductions, knowledge library, P
   it("migrates with a clean audit and the library loaded; v51 retired dormancy: exhaustion is death", async () => {
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
     expect(await R.one(`fleet.fleet_insolvency_json()`)).toMatchObject({ rule: expect.stringMatching(/exhaustion is death/), deaths: [] });
-    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_knowledge_library WHERE current)`))).toBe(KNOWLEDGE_LIBRARY_V1.entries.length);
+    // v67 adds the business foundation (its own categories) beside the researched library.
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_knowledge_library WHERE current AND category NOT IN ('business-foundation','fleet-status'))`))).toBe(KNOWLEDGE_LIBRARY_V1.entries.length);
     expect(await tick()).toMatchObject({ died: 0 });
     expect(await R.code(R.q(`SELECT fleet.fleet_admin_insolvency_policy_set(true, 24, $1)`, [OWNER]))).toBe("FLEET_RETIRED");
   });

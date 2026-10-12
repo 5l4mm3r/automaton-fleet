@@ -528,7 +528,11 @@ export class FounderMind {
     let deps: DependencyView[] | null = null;
     try { deps = parseDependencies(await this.o.ports.ownerRequests?.()); } catch { deps = null; }
     // F2-A: a dependency's STATUS is a signal (a resolution is news once); its age is not — nothing escalates over time.
-    const signals = [capabilities ? `caps:${capabilities.sig}` : "", ...(deps ?? []).map((r) => `dep:${r.requestId}:${r.status}`).sort()].filter(Boolean).join("|");
+    // v67: the controller's digest of what the agent acts on beyond its ledger (inbound mail, card and spend-review decisions,
+    // Fleet Control notices, lesson reviews, disputes): a change wakes a hibernating founder within one thinking slot.
+    const events = (status.attention as { eventsDigest?: unknown } | undefined)?.eventsDigest;
+    const signals = [capabilities ? `caps:${capabilities.sig}` : "", typeof events === "string" && /^[0-9a-f]{32}$/.test(events) ? `events:${events}` : "",
+      ...(deps ?? []).map((r) => `dep:${r.requestId}:${r.status}`).sort()].filter(Boolean).join("|");
     return { economics, view, capabilities, deps, signals };
   }
 

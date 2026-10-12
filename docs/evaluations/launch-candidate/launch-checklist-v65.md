@@ -89,6 +89,13 @@ Cross-check: Anthropic credit recorded $69.97 bought, $24.17 consumed (≈ £18.
        matches, but no PayPal delivery has ever reached the controller (the £1 test was confirmed by capture and Transaction
        Search) — verify with PayPal's webhook simulator or the first real sale.
 
+## Next coordinated candidate (prepared in code, not built or deployed)
+- Controller: schema v66 (capital backing) + v67 (business foundation, wake digest), Charter v6 standing summary,
+  library tool text; UI 0.17.0. If v66 is cut over first from `~/rlc66`, v67 follows as 66 → 67; otherwise one 65 → 67.
+- Founder runtime: Field Guide v2.1 and the wake fix (inbound mail and decisions wake a hibernating agent) — a runtime
+  upgrade per agent after the controller release (rehearse; Agent-2 then Agent-1; agents stay paused).
+- Owner text still needed: business foundation §1 "How to use this guide" and §2 "Your economic position".
+
 ## Step 4 — Gumroad (EU/UK consumer digital sales via a merchant of record)
 Verified 2026-10-12 (Gumroad help 13, 10, 70): Gumroad is merchant of record for EU and UK **digital** sales (collects
 and remits VAT; physical goods not covered). A UK seller is paid to a **UK bank account** in GBP (min $100, weekly /
