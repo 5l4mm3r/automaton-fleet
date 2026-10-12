@@ -141,15 +141,29 @@ smallest manual action is one record per purchase (`provider-credits-record anth
 the treasury route `economy-ai-credit-attribute` / `economy-ai-credit-purchase`. A card that does not draw on the treasury
 PayPal balance cannot be evidenced as treasury money (no bank/card feed is connected).
 
-**Inputs needed from you:**
-1. In the Console → Billing: which payment methods it accepts (does it take the treasury PayPal, or only cards?).
-2. The Console's current credit balance (the Fleet records **$41.17**) — any difference is recorded first.
-3. Your choice of route: `owner_card` or `treasury_paypal`.
-4. Set the Console's billing e-mail to a Fleet mailbox (e.g. fleet.treasury@proton.me), and give the receipt sender address
-   or domain from one real receipt (to set `--receipt-sender`).
-5. For `treasury_paypal`: the counterparty text the debit shows in PayPal (from one real debit) for `--counterparty`.
-6. Whether to enable auto-reload, with the threshold and reload-to amounts (recorded in the policy for reference).
-Then: `economy-ai-credit-policy anthropic <route> --receipt-sender … [--counterparty …] [--threshold-usd-cents N --reload-to-usd-cents N]`.
+**Owner's Console answers (2026-10-12):**
+- Console balance **$41.29**; the Fleet records $41.17 → after the cutover record `+12` cents
+  (`provider-credits-record anthropic adjustment 12 "console balance 41.29 on 2026-10-12"`).
+- Payment: **credit/debit cards only** (no PayPal). Saved card: the owner's.
+- Receipts go to the owner's **personal e-mail**; sender `support@anthropic.com`; subject "Your receipt from Anthropic Ireland,
+  Limited #<order no.>"; amounts include **20 % tax** ($50 of credit charged as $60). The reader records the credit BEFORE tax
+  (subtotal, or total − tax) and keeps tax and total; a total alone is never used.
+- Auto-reload: **off**.
+
+**What this means:**
+- Route now: **`owner_card`** (the owner's card). Receipts reach the Fleet only if forwarded from the personal mailbox to a
+  Fleet mailbox (a filter on `support@anthropic.com` → fleet.treasury@proton.me); each still needs the owner's one-step
+  confirmation. Without forwarding: one `provider-credits-record` per purchase.
+- Route later (self-sustaining): a **PayPal Business Debit Mastercard** (UK; spends the PayPal business balance, per PayPal's
+  July 2026 terms) saved in the Console makes each purchase a treasury PayPal debit → `treasury_paypal` with automatic
+  matching. Keep PayPal's automatic top-up from a bank OFF, or such top-ups are unrecorded owner money.
+- **Owner decision needed — tax on AI credit:** the 20 % tax is a real cost the Fleet does not reclaim (not VAT-registered).
+  Today agents are charged the provider's pre-tax price; on the owner_card route the owner bears the tax, on the treasury
+  route it ends as a Fleet expense when a lot is used up. Options: (a) charge agents the tax-inclusive cost (their wallets
+  bear it), (b) keep agent charges pre-tax and record the tax as Fleet overhead owed to whoever paid, (c) leave as is. This
+  is an economic-policy change; nothing is changed until you decide.
+- Policy command (after the cutover): `economy-ai-credit-policy anthropic owner_card --receipt-sender support@anthropic.com`.
+
 
 ## Step 4 — Gumroad (EU/UK consumer digital sales via a merchant of record)
 Verified 2026-10-12 (Gumroad help 13, 10, 70): Gumroad is merchant of record for EU and UK **digital** sales (collects

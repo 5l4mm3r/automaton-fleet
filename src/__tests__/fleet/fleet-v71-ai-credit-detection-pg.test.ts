@@ -25,7 +25,7 @@ import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const USD = 100_000_000;
-const SENDER = "Anthropic, PBC <invoice+statements@mail.anthropic.test>";
+const SENDER = "Anthropic <support@anthropic.test>";
 
 describe.skipIf(!PG_BIN)("v71: AI-credit purchases — provisional observations, verified promotion (PostgreSQL)", { timeout: 300_000 }, () => {
   let R: EconomyRegistry;
@@ -45,10 +45,13 @@ describe.skipIf(!PG_BIN)("v71: AI-credit purchases — provisional observations,
   const charge = (usd: number) => R.one(`fleet.fleet_control_charge('knowledge_review_charge', $1, $2::jsonb)`,
     [crypto.randomUUID(), JSON.stringify([{ provider: "anthropic", requestId: crypto.randomUUID(), usdMicrocents: usd }])]);
   const settle = () => R.one<Record<string, any>>(`fleet.svc_ai_credit_settle(20)`);
-  const policy = (route: string) => R.one(`fleet.fleet_admin_ai_credit_policy_set('anthropic', $1, '@mail.anthropic.test', $2, 1000, 5000, true, $3)`,
+  const policy = (route: string) => R.one(`fleet.fleet_admin_ai_credit_policy_set('anthropic', $1, 'support@anthropic.test', $2, 1000, 5000, true, $3)`,
     [route, route === "treasury_paypal" ? "anthropic" : null, OWNER]);
+  // The real shape (owner, 2026-10-12): "Your receipt from Anthropic Ireland, Limited #<order>", amounts with 20 % VAT on top.
   const receipt = async (no: string, usd: string, sender = SENDER) => {
-    shared.deliver({ from: sender, to: [shared.address], subject: `Your receipt from Anthropic, PBC #${no}`, body: `Receipt #${no}\nAmount paid $${usd}\nDate paid Oct 12, 2026` });
+    const net = Number(usd), vat = Math.round(net * 20) / 100, total = net + vat;
+    shared.deliver({ from: sender, to: [shared.address], subject: `Your receipt from Anthropic Ireland, Limited #${no}`,
+      body: `Receipt #${no}\nAPI credits\nSubtotal $${net.toFixed(2)}\nVAT (20%) $${vat.toFixed(2)}\nTotal $${total.toFixed(2)}\nAmount paid $${total.toFixed(2)}\nDate paid Oct 12, 2026` });
     await broker.tick();
   };
   const debit = async (gbpMinor: number, counterparty: string | null, at = new Date()) => {
@@ -96,13 +99,18 @@ describe.skipIf(!PG_BIN)("v71: AI-credit purchases — provisional observations,
     await receipt("2741-6510", "25.00");
     await receipt("2741-6510", "25.00");                                         // the same receipt again
     await receipt("9999-0001", "25.00", "Someone <billing@elsewhere.test>");     // not the provider's sender
-    shared.deliver({ from: SENDER, to: [shared.address], subject: "Your receipt from Anthropic, PBC", body: "Thanks." });
+    shared.deliver({ from: SENDER, to: [shared.address], subject: "Your receipt from Anthropic Ireland, Limited", body: "Thanks." });
+    // a total alone is never taken as the credit: reported, not guessed
+    shared.deliver({ from: SENDER, to: [shared.address], subject: "Your receipt from Anthropic Ireland, Limited #5555-0005", body: "Amount paid $60.00" });
     await broker.tick();
     await settle();
     expect(await obs("2741-6510")).toMatchObject({ state: "provisional", lot_id: null });
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ai_credit_receipts WHERE receipt_no = '2741-6510')`))).toBe(1);
     expect(await obs("9999-0001")).toBeUndefined();
-    expect(await events("ai_credit_receipt_unparsed")).toBe(1);
+    expect(await events("ai_credit_receipt_unparsed")).toBe(2);
+    // the credit recorded is the amount before tax; tax and total are kept as shown
+    expect((await R.q(`SELECT usd_cents::int AS u, tax_cents::int AS t, total_cents::int AS tot FROM fleet.fleet_ai_credit_receipts WHERE receipt_no = '2741-6510'`))[0])
+      .toEqual({ u: 2_500, t: 500, tot: 3_000 });
     expect(await credit()).toBe(c0);
     expect(await lotCount()).toBe(0);
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ledger_journal)`))).toBe(j0);
@@ -126,10 +134,10 @@ describe.skipIf(!PG_BIN)("v71: AI-credit purchases — provisional observations,
     await charge(5 * USD);                                                       // runs beyond confirmed credit
     expect(await bal("fleet:owner:payable")).toBe(p0 + 500);
     await receipt("3001-0001", "25.00");
-    const wrong = await debit(2_450, "Some other merchant");                     // counterparty does not match
-    const off = await debit(4_000, "Anthropic, PBC");                            // implied rate far off
+    const wrong = await debit(2_940, "Some other merchant");                     // counterparty does not match
+    const off = await debit(4_500, "Anthropic, PBC");                            // implied rate far off
     expect((await settle()).detection).toMatchObject({ promoted: 0 });           // the right debit has not arrived yet
-    const tid = await debit(2_450, "billing@anthropic.com | Anthropic, PBC");
+    const tid = await debit(2_940, "Anthropic Ireland, Limited");
     const s = await settle();
     expect(s.detection).toMatchObject({ promoted: 1 });
     expect(await obs("3001-0001")).toMatchObject({ state: "promoted" });
@@ -138,13 +146,13 @@ describe.skipIf(!PG_BIN)("v71: AI-credit purchases — provisional observations,
     expect(await attributed(off)).toBeNull();
     expect(s.reclassifiedMinor).toBe(500);
     expect(await bal("fleet:owner:payable")).toBe(p0);                           // no false owner payable
-    expect(await bal("fleet:ai_credits")).toBe(2_450 - 500);
+    expect(await bal("fleet:ai_credits")).toBe(2_940 - 500);   // cost incl. VAT; usage at the pre-tax price
     expect((await settle()).detection).toMatchObject({ promoted: 0 });
   });
 
   it("a debit first and its receipt later: promoted once; a repeated receipt changes nothing", async () => {
     const n0 = await lotCount();
-    const tid = await debit(980, "Anthropic, PBC");
+    const tid = await debit(1_180, "Anthropic, PBC");
     expect((await settle()).detection).toMatchObject({ promoted: 0 });           // a debit alone is never credit
     expect(await lotCount()).toBe(n0);
     await receipt("3002-0002", "10.00");
@@ -158,15 +166,15 @@ describe.skipIf(!PG_BIN)("v71: AI-credit purchases — provisional observations,
   it("ambiguity and missing evidence go to reconciliation, never to a guess; the owner resolves them", async () => {
     const n0 = await lotCount(), c0 = await credit();
     // two debits could match one receipt → ambiguous; nothing promoted
-    const a = await debit(1_500, "Anthropic, PBC");
-    const b = await debit(1_500, "Anthropic, PBC");
+    const a = await debit(1_800, "Anthropic, PBC");
+    const b = await debit(1_800, "Anthropic, PBC");
     await receipt("3003-0003", "15.00");
     await settle();
     expect(await obs("3003-0003")).toMatchObject({ state: "ambiguous" });
     expect(await events("ai_credit_reconcile", "ambiguous")).toBe(1);
     expect(await lotCount()).toBe(n0);
     const r = await obs("3003-0003");
-    expect(await R.one(`fleet.fleet_admin_ai_credit_confirm($1, 'treasury', $2, $3, 'T0006', $4)`, [r.receipt_id, rail.railId, b, OWNER])).toMatchObject({ ok: true, gbpMinor: 1_500 });
+    expect(await R.one(`fleet.fleet_admin_ai_credit_confirm($1, 'treasury', $2, $3, 'T0006', $4)`, [r.receipt_id, rail.railId, b, OWNER])).toMatchObject({ ok: true, gbpMinor: 1_800 });
     expect(await attributed(b)).toBe("ai_credit_purchase");
     expect(await attributed(a)).toBeNull();
     // a receipt with no debit after the window, and a debit with no receipt after the window: reported, never credit

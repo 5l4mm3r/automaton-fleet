@@ -41,7 +41,7 @@ const RATE = `COALESCE((SELECT rate_micro FROM fleet_fx_rates WHERE base = 'USD'
 const CANDIDATE = (d: string, r: string, p: string) => `(${d}.status = 'S' AND ${d}.currency = v_ccy AND ${d}.amount_minor < 0 AND ${d}.attributed_at IS NULL AND ${d}.checkout_id IS NULL
      AND position(lower(${p}.counterparty_pattern) IN lower(COALESCE(${d}.counterparty, ''))) > 0
      AND ${d}.initiated_at BETWEEN ${r}.observed_at - make_interval(hours => ${p}.match_window_hours) AND ${r}.observed_at + make_interval(hours => ${p}.match_window_hours)
-     AND abs((-(${d}.amount_minor + ${d}.fee_minor))::numeric * 1000000000000 / (${r}.usd_cents * 1000000) - v_rate) <= v_rate::numeric * ${p}.rate_tolerance_bp / 10000)`;
+     AND abs((-(${d}.amount_minor + ${d}.fee_minor))::numeric * 1000000000000 / (COALESCE(${r}.total_cents, ${r}.usd_cents) * 1000000) - v_rate) <= v_rate::numeric * ${p}.rate_tolerance_bp / 10000)`;
 
 // Every draw records its GBP value; USD beyond every confirmed lot is recorded as an unallocated draw (lot_id NULL).
 const DRAW = restateRaw(V70_SQL, "fleet_ai_credit_draw", [
@@ -96,7 +96,9 @@ CREATE TABLE fleet_ai_credit_receipts (
   receipt_id   uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   provider     text        NOT NULL,
   receipt_no   text        NOT NULL CHECK (receipt_no ~ '^[A-Z0-9][A-Z0-9-]{3,39}$'),
-  usd_cents    bigint      NOT NULL CHECK (usd_cents > 0 AND usd_cents <= 10000000),
+  usd_cents    bigint      NOT NULL CHECK (usd_cents > 0 AND usd_cents <= 10000000),   -- the credit bought (before tax)
+  tax_cents    bigint      CHECK (tax_cents >= 0),                                    -- tax on the receipt (e.g. VAT), as shown
+  total_cents  bigint      CHECK (total_cents > 0),                                   -- what was charged, as shown
   message_id   uuid,
   observed_at  timestamptz NOT NULL DEFAULT now(),
   state        text        NOT NULL DEFAULT 'provisional' CHECK (state IN ('provisional','ambiguous','unmatched','promoted','rejected')),
@@ -151,30 +153,41 @@ END $$;
 -- A provider receipt in a Fleet mailbox → a provisional observation only (parsed conservatively; never guessed).
 CREATE FUNCTION fleet_ai_credit_receipt_trigger() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE p fleet_ai_credit_policy; v_from text := lower(COALESCE(NEW.sender_address, NEW.sender, '')); v_amt text; v_no text; v_usd bigint;
+DECLARE p fleet_ai_credit_policy; v_from text := lower(COALESCE(NEW.sender_address, NEW.sender, '')); v_no text; v_usd bigint;
+        v_sub text; v_tax text; v_total text; v_tax_c bigint; v_total_c bigint;
 BEGIN
   IF NEW.direction <> 'in' THEN RETURN NULL; END IF;
   FOR p IN SELECT * FROM fleet_ai_credit_policy WHERE enabled AND receipt_sender IS NOT NULL LOOP
     CONTINUE WHEN NOT (CASE WHEN left(p.receipt_sender, 1) = '@' THEN v_from LIKE '%' || p.receipt_sender || '%' ELSE position(p.receipt_sender IN v_from) > 0 END);
     CONTINUE WHEN NOT (NEW.subject ~* '(receipt|invoice|payment)');
-    v_no := upper(substring(NEW.subject || ' ' || NEW.body FROM '(?i)(?:receipt|invoice)\\s*(?:number|no\\.?|#)\\s*[:#]?\\s*([A-Z0-9][A-Z0-9-]{3,39})'));
-    v_amt := substring(NEW.body FROM '(?i)(?:amount paid|total|amount)[^$0-9]{0,40}\\$\\s?([0-9]{1,6}(?:,[0-9]{3})*\\.[0-9]{2})');
-    IF v_no IS NULL OR v_amt IS NULL THEN
+    -- the order / receipt number: "#…" in the subject (e.g. "Your receipt from Anthropic Ireland, Limited #2741-6510"), else
+    -- a labelled number in the body
+    v_no := upper(COALESCE(substring(NEW.subject FROM '#\\s*([A-Za-z0-9][A-Za-z0-9-]{3,39})'),
+                           substring(NEW.body FROM '(?i)(?:receipt|invoice|order)\\s*(?:number|no\\.?|#)\\s*[:#]?\\s*([A-Za-z0-9][A-Za-z0-9-]{3,39})')));
+    -- amounts: the credit bought is the amount BEFORE tax (a receipt's total includes tax, e.g. 20 % VAT)
+    v_sub := substring(NEW.body FROM '(?i)(?:subtotal|amount excluding (?:tax|vat)|excl(?:\\.|uding)? (?:tax|vat))[^$0-9\\n]{0,40}\\$\\s?([0-9]{1,6}(?:,[0-9]{3})*\\.[0-9]{2})');
+    v_tax := substring(NEW.body FROM '(?i)(?:^|\\n)\\s*(?:vat|tax)[^$\\n]{0,40}\\$\\s?([0-9]{1,6}(?:,[0-9]{3})*\\.[0-9]{2})');
+    v_total := substring(NEW.body FROM '(?i)(?:amount paid|\\mtotal)[^$0-9\\n]{0,40}\\$\\s?([0-9]{1,6}(?:,[0-9]{3})*\\.[0-9]{2})');
+    v_tax_c := (replace(v_tax, ',', '')::numeric * 100)::bigint;
+    v_total_c := (replace(v_total, ',', '')::numeric * 100)::bigint;
+    v_usd := CASE WHEN v_sub IS NOT NULL THEN (replace(v_sub, ',', '')::numeric * 100)::bigint
+                  WHEN v_total_c IS NOT NULL AND v_tax_c IS NOT NULL THEN v_total_c - v_tax_c END;   -- never the total alone
+    IF v_no IS NULL OR v_usd IS NULL THEN
       PERFORM fleet_event('ai_credit_receipt_unparsed', NULL, 'identity', jsonb_build_object('provider', p.provider, 'messageId', NEW.message_id,
-        'note', 'a mail from the provider''s receipt sender could not be read as a purchase: confirm it by hand if it is one'));
+        'note', 'a mail from the provider''s receipt sender could not be read as a purchase (order number and the amount before tax are needed; a total alone is never used): confirm it by hand if it is one'));
       CONTINUE;
     END IF;
-    v_usd := (replace(v_amt, ',', '')::numeric * 100)::bigint;
     CONTINUE WHEN v_usd <= 0 OR v_usd > 10000000;
-    INSERT INTO fleet_ai_credit_receipts (provider, receipt_no, usd_cents, message_id,
+    INSERT INTO fleet_ai_credit_receipts (provider, receipt_no, usd_cents, tax_cents, total_cents, message_id,
         state, lot_id, decided_by, decided_at, note)
-      SELECT p.provider, v_no, v_usd, NEW.message_id,
+      SELECT p.provider, v_no, v_usd, v_tax_c, v_total_c, NEW.message_id,
         CASE WHEN l.lot_id IS NULL THEN 'provisional' ELSE 'promoted' END, l.lot_id,
         CASE WHEN l.lot_id IS NULL THEN NULL ELSE 'recorded before the receipt arrived' END, CASE WHEN l.lot_id IS NULL THEN NULL ELSE now() END, NULL
         FROM (SELECT NULL) x LEFT JOIN fleet_ai_credit_lots l ON l.external_ref = 'receipt:' || p.provider || ':' || v_no
     ON CONFLICT (provider, receipt_no) DO NOTHING;
     IF FOUND THEN
       PERFORM fleet_event('ai_credit_receipt_observed', NULL, 'identity', jsonb_build_object('provider', p.provider, 'receipt', v_no, 'usdCents', v_usd,
+        'taxCents', v_tax_c, 'totalCents', v_total_c,
         'route', p.funding_route, 'state', 'provisional'));
     END IF;
   END LOOP;
