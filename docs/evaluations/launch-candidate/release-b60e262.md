@@ -1,6 +1,6 @@
 # Release b60e262 — the coordinated candidate: schema 65 → 69 + UI 0.17.1, then the founder runtime upgrade
 
-Status: **rehearsed, not deployed** (2026-10-12 16:42:25Z). Supersedes `release-3dbee51.md` and `release-befae84.md`.
+Status: **DEPLOYED 2026-10-12 16:59:40Z** (owner go; outage 16:58:46–16:59:28Z, 42 s; rehearsed 16:42:25Z). Supersedes `release-3dbee51.md` and `release-befae84.md`.
 No deployment, money movement, reimbursement, funding, resume or live activation is authorised by this record. Agents stay
 paused; all live flags, the cap, the mode, survival protection and the AI failure fuses (754p / 3000p a day) are unchanged.
 
@@ -87,3 +87,18 @@ fleet-identity-pg (estate transfer with credential re-seal) and fleet-births-pg 
 - **Gumroad:** account, payout settings, PayPal connection, OAuth app, gateway install, rail/attestation; the £500 unlock vs
   the EU route is UNRESOLVED; card-paid sales need a bank feed to count.
 - **Resume:** only on your word, after the above you choose to complete.
+
+## Deployment (2026-10-12 16:57:58–16:59:40Z, owner go)
+- Pre-migration dump `~/automaton_fleet-v65-pre-v69-20261012T165906Z.dump` (sha `04e4d334…`); migrate 65 → 69; reconciliation OK
+  (2373 events preserved); readyz 200; UI 0.17.1 at root (52 files); one `production_deployed`.
+- Preserved: identity hashes, ledger fingerprints and cash (8,641 / 9,536) identical; 806 journals; ledger head 843 unchanged;
+  ledger verifies.
+- Unchanged: both agents paused on 973e0c1; AI fuses 754/20 and 3000/60; survival protection on; custody execution off;
+  cap 2/2 DEVELOPMENT; REAL_REPLICATION / REAL_PAYMENTS / OWNER_SWEEP / DRY_RUN_CHILD false; remote listen true.
+- Health: controller, dashboard, custody, identity, browser, operator API and both founder units active; admin 200; unauthenticated
+  dashboard read 403; library 32 business-foundation + 1 fleet-status; attention carries eventsDigest and recentEvents. Two
+  `api_auth_failed` heartbeat retries at the restart (as at every earlier release); founders heartbeating since.
+- Not done (not authorised): AI-credit opening (backing shows £181.76 unbacked, owner payable £0 until it is recorded),
+  funding, reimbursement, agent runtime upgrades, resume.
+- Rollback: UI `dashboard.env.pre-0.17.1`; backend `bash ~/rlc69/fleet-rollout.sh revert ~/rlc69/pins.txt 65 69 <reason>`
+  (runtime.env.pre-b60e262; releases/973e0c1).

@@ -126,31 +126,31 @@ Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
 ## Current production deployment
 
-State after release 973e0c1 (2026-10-12 14:20Z, schema 63 -> 65, UI 0.16.0), per
-docs/evaluations/launch-candidate/release-973e0c1.md (launch-checklist-v65.md; release-ad92320.md before it) and
+State after release b60e262 (2026-10-12 16:59Z, schema 65 -> 69, UI 0.17.1), per
+docs/evaluations/launch-candidate/release-b60e262.md (launch-checklist-v65.md; release-973e0c1.md before it) and
 docs/fleet-production-runbook.md.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
 
 Controller runtime commit (approved, pinned and installed):
-973e0c117da29c90d5dd2648fac09c9c508d326b
+b60e262bf7393e0ea2cca3b491199987f830cb3b
 
 Runtime build ID:
-77284506a0d34a737719df35a940715fe21a97f0cff540ef5692e04b48a39861
+5a1d695d95d03749f0ebb48107624c37e0ab823a8322068f31838a188a4846a1
 
 Runtime lockfile SHA256:
 1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1
 
 Database schema:
-v65 (applied 2026-10-12 14:20Z by the 973e0c1 release, 63 -> 65: v64 autonomous spending review (O19), v65 ads review,
-Fleet Control lesson review, Gumroad £500 unlock, business folders, Charter v6 / attested toolsets)
+v69 (applied 2026-10-12 16:59Z by the b60e262 release, 65 -> 69: v66 capital backing, v67 business foundation + wake digest,
+v68 lesson supersession + event list, v69 reimbursable owner-funded AI credit — AI-credit opening NOT yet recorded)
 
 Releases: scripts/fleet-release.sh (backend cutover + UI promotion + root verification; ONE
-production_deployed / production_rolled_back event). 973e0c1 rollback: prefer fixing forward (v64/v65 only add).
-Schema revert: UI first (`dashboard.env.pre-0.16.0`), then `~/rlc65/fleet-rollout.sh revert ~/rlc65/pins.txt 63 65
-<reason>` (pre-migration dump ~/automaton_fleet-v63-pre-v65-20261012T142018Z.dump; runtime.env.pre-973e0c1;
-releases/ad92320). Never revert once real money or provider data exists — freeze and fix forward (README §3).
+production_deployed / production_rolled_back event). b60e262 rollback: prefer fixing forward (v66-v69 only add).
+Schema revert: UI first (`dashboard.env.pre-0.17.1`), then `~/rlc69/fleet-rollout.sh revert ~/rlc69/pins.txt 65 69
+<reason>` (pre-migration dump ~/automaton_fleet-v65-pre-v69-20261012T165906Z.dump; runtime.env.pre-b60e262;
+releases/973e0c1). Never revert once real money or provider data exists — freeze and fix forward (README §3).
 
 Controller domain:
 https://api.agentfleet.vip  (admin UI: https://admin.agentfleet.vip)
@@ -161,8 +161,8 @@ Current live topology:
   127.0.0.1:8443; admin.agentfleet.vip to the dashboard on 127.0.0.1:8790)
 - FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
 - Operator API (signed requests) on 127.0.0.1:8788 only, via the restricted SSH account fleet-op-tunnel
-- Admin UI: root = UI 0.16.0 (973e0c1, deployed 2026-10-12 14:20Z by the release; FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.16.0;
-  UI rollback `dashboard.env.pre-0.16.0`; Spend reviews, business project folders + lessons panel; Mail page with dismiss / delete permanently (confirm, no step-up), Saved states, Proton checks)
+- Admin UI: root = UI 0.17.1 (b60e262, deployed 2026-10-12 16:59Z by the release; FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.17.1;
+  UI rollback `dashboard.env.pre-0.17.1`; Capital backing panel (AI-credit opening pending); Spend reviews, business project folders + lessons panel; Mail page with dismiss / delete permanently (confirm, no step-up), Saved states, Proton checks)
 - Mail: Proton Bridge 3.27.1 (own unit, loopback), shared address fleet.treasury@proton.me, owner notifications to the owner's
   separate Proton address; PayPal rail b71b3f3c… ACTIVE for receiving (£1 test complete); money out still off; /hq-preview/ is NOT served (no preview tree since 0.12.x); agents shown as
   Agent-1 / Agent-2 (owner Rename, v60; v62: 200-character Unicode names, duplicates tagged, key / account labels);
