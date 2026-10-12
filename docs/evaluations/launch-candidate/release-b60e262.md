@@ -102,3 +102,20 @@ fleet-identity-pg (estate transfer with credential re-seal) and fleet-births-pg 
   funding, reimbursement, agent runtime upgrades, resume.
 - Rollback: UI `dashboard.env.pre-0.17.1`; backend `bash ~/rlc69/fleet-rollout.sh revert ~/rlc69/pins.txt 65 69 <reason>`
   (runtime.env.pre-b60e262; releases/973e0c1).
+
+## Agents' runtime upgrade 973e0c1 → b60e262 (2026-10-12, owner-authorised): DONE, both still paused
+- Rehearsal `upgrade-rehearsal 973e0c1…` (throwaway registry): pass, 27/27 checks, none failed — same founder, byte-identical
+  state, v6 doctrine served with field_guide / field_journal working, no credential in any log.
+- Agent-2 `01M4C4NXT786Q4E9725N5A15KV`: verified, upgrade `b4548dbd-947a-4b36-a522-9d9ba06fe0fb`; pid → 866408, same uid
+  62577; downtime 1,956 ms; 1 challenge passed; state identical (13 files).
+- Agent-1 `01M3F50SH7PNX2E3GST13J52AS`: verified, upgrade `39b55b87-134e-4db9-aeba-f150a4446bae`; pid → 866528, same uid
+  65037; downtime 1,961 ms; 1 challenge passed; state identical (26 files).
+- Installed identity (both): commit b60e262bf7393e0ea2cca3b491199987f830cb3b, build
+  5a1d695d95d03749f0ebb48107624c37e0ab823a8322068f31838a188a4846a1.
+- Preserved: identity hashes, ledger fingerprints and cash identical; 806 journals; head 843; ledger verifies; one registry
+  credential each; memory and workspace byte-identical (backups exclude the credential).
+- Unchanged: both paused; fuses 754/20, 3000/60; survival protection on; custody off, 0 activations; cap 2/2 DEVELOPMENT;
+  live flags false; owner payable 0 (opening not recorded); no AI call since 2026-10-10.
+- Compatibility (installed tree + controller): doctrine-v6 marker; mind asks founder-v6; survival-field-guide-v2.1; events
+  digest in the wake signal and the "since your last turn" line; read_knowledge client passes retired lessons; controller
+  reading path (6 parts), supersessions table and attention.eventsDigest present.

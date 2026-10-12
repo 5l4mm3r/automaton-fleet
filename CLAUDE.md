@@ -178,10 +178,10 @@ Current live topology:
 - PayPal treasury (onboarding B1, in progress): custody key 4fee40f2… (/var/lib/automaton-fleet-custody, 0600);
   vault:paypal/treasury sealed; rail b71b3f3c… pending_setup, 0 readiness checks recorded (probe 2026-10-10:
   sign-in OK, reporting 403, webhook 404 — owner to fix in the PayPal app); no £1 test yet
-- 2 living Agents, both on runtime 973e0c1 (upgraded 2026-10-12 14:37Z, upgrades 4352d6e9… Agent-2 / 48dbdb79…
-  Agent-1; previous f852888; rollback `fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`), both PAUSED
+- 2 living Agents, both on runtime b60e262 (upgraded 2026-10-12 17:2xZ, upgrades b4548dbd… Agent-2 / 39b55b87…
+  Agent-1; previous 973e0c1; rollback `fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`), both PAUSED
   by the owner since 2026-10-10 12:37Z (founder-cognition pause; resume only on the owner's word), doctrine founder-v6
-  (Charter v6, toolset-2, Field Guide v2.0; attested by the release tree's doctrine-v6 marker): founder-1 (01M3F50SH7PNX2E3GST13J52AS, shown as
+  (Charter v6, toolset-2, Field Guide v2.1, event wake + "since your last turn", retired lessons in read_knowledge): founder-1 (01M3F50SH7PNX2E3GST13J52AS, shown as
   Agent-1) and agent-2 (01M4C4NXT786Q4E9725N5A15KV)
   (live-verified: v5 delivery, tools, hibernation, slim wake; event-triggered wake and field-journal persistence
   await legitimate live activity; never provoke them; docs/evaluations/r41-1/fda78a0/deployment.md)
