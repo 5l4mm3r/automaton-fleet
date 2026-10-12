@@ -75,32 +75,20 @@ describe.skipIf(!PG_BIN)("F2 migration paths: v25 → v30 step by step on a Foun
   afterAll(async () => { await owner?.end(); pgc?.stop(); });
 
   it("each step v26 … current applies alone, loses nothing, posts no journal and keeps the ledger verifiable", async () => {
-    let base = await fingerprint();
+    const base = await fingerprint();
     expect(await version()).toBe(25);
     for (let v = 26; v <= FLEET_PG_SCHEMA_VERSION; v++) {
       await migrateUpTo(pgc.ownerUrl, "fleet", v);
       expect(await version()).toBe(v);
-      let now = await fingerprint();
-      if (v === 69) {
-        // v69 (owner decision: owner-funded AI credit is reimbursable) posts exactly ONE journal by design: the AI costs
-        // charged before it become owed to the owner. Nothing else changes; the next steps compare against this state.
-        const opening = await q(`SELECT j.kind, (SELECT sum(amount_cents)::bigint FROM fleet.fleet_ledger_postings p WHERE p.journal_id = j.journal_id AND p.side = 'D') AS amount
-          FROM fleet.fleet_ledger_journal j ORDER BY seq DESC LIMIT 1`);
-        const past = (await q(`SELECT COALESCE(sum(p.amount_cents), 0)::bigint AS s FROM fleet.fleet_ledger_postings p JOIN fleet.fleet_ledger_journal j ON j.journal_id = p.journal_id
-          WHERE j.kind = 'inference_charge' AND p.account_id LIKE 'agent:%:cash' AND p.side = 'C'`))[0].s;
-        expect(now.journals, "v69: exactly the opening journal").toBe(base.journals + 1);
-        expect(opening[0]).toEqual({ kind: "ai_credit_owner_payable_opening", amount: past });
-        expect(Number(past)).toBeGreaterThan(0);
-        expect(now.agents).toEqual(base.agents);
-        expect(now.cognition).toEqual(base.cognition);
-        expect((await q(`SELECT fleet.fleet_ledger_verify() AS r`))[0].r.ok).toBe(true);
-        base = now;
-        now = await fingerprint();
-      }
+      const now = await fingerprint();
       expect(now.agents, `v${v}: agents`).toEqual(base.agents);
       expect(now.journals, `v${v}: no journal posted`).toBe(base.journals);
       expect(now.head, `v${v}: hash-chain head`).toEqual(base.head);
-      expect(now.balances, `v${v}: balances`).toEqual(base.balances);
+      // Existing accounts keep their balances exactly; an account a migration adds starts at zero (v69: the owner-reimbursable
+      // treasury partition). Nothing moves money.
+      const known = new Set(base.balances.map((b: { account_id: string }) => b.account_id));
+      expect(now.balances.filter((b: { account_id: string }) => known.has(b.account_id)), `v${v}: balances`).toEqual(base.balances);
+      expect(now.balances.filter((b: { account_id: string; b: string }) => !known.has(b.account_id) && Number(b.b) !== 0), `v${v}: new accounts at zero`).toEqual([]);
       expect(now.cognition, `v${v}: cognition history`).toEqual(base.cognition);
       expect(now.requests, `v${v}: dependency records kept`).toBe(base.requests);
       expect((await q(`SELECT fleet.fleet_ledger_verify() AS r`))[0].r.ok, `v${v}: ledger verifies`).toBe(true);

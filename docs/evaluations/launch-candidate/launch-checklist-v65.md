@@ -62,8 +62,9 @@ $4.63 adjustments → $41.17 left.
        agents stay paused). Without it, a deposit can only be recorded as new owner capital (counted twice).
 2. [ ] **Anthropic credit** — $41.17 left; AI costs are paid from it, not from PayPal. Top up before resuming (owner's
        amount), then record the receipt: `provider-credits-record anthropic purchase <usd> <receipt ref>`.
-3. [ ] **Refresh the amount** in the *Capital backing* panel (or `economy-capital-backing`) right before sending: £200.00
-       after v69 (AI costs no longer change it; they add to what the Fleet owes you).
+3. [ ] **Record the AI-credit opening** once after the cutover (Capital backing panel, or `economy-ai-credit-opening`):
+       £18.24 becomes owed to you; the amount to back becomes £200.00. Then **refresh the amount** right before sending
+       (AI costs no longer change it; they add to what the Fleet owes you).
 4. [ ] **Deposit** that amount into the treasury PayPal account. What the Fleet supports: any **completed GBP credit**
        into that account that PayPal's Transaction Search reports (custody ingests every event code). Whether a given
        route is available, and its fee, depends on the account — check in PayPal before sending, in this order:

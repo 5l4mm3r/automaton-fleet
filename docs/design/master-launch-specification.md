@@ -852,7 +852,9 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
   `fleet:owner:payable` (liability `owner_payable`): the money stays in the treasury and is owed to the owner. The expense is
   recognised once, at use; purchases stay USD provider events (never expensed, no GBP asset, no revaluation — the owner is
   owed the GBP cost charged at each call's controlled rate).
-- One opening journal (`ai_credit_owner_payable_opening`) brings in the AI costs charged before v69 (production: 1,824p).
+- One opening journal (`ai_credit_owner_payable_opening`) brings in the AI costs charged before v69 (production: 1,824p). The
+  owner records it once after the cutover (`economy-ai-credit-opening` or the Capital backing panel, step-up): a migration
+  never posts a journal, and the rollout refuses one that moves the ledger head.
 - v66 backing: AI costs no longer reduce what must be backed; unbacked = capital recorded without money − backed (production:
-  £200.00), and the backing view shows the owner payable (£18.24). Books, PayPal and the payable reconcile.
+  £200.00 once the opening is recorded; £181.76 before it), and the backing view shows the owner payable (£18.24).
 - Not included: paying the owner back (a separate, authorised owner withdrawal from the reimbursable partition).

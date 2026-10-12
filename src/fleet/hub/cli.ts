@@ -105,6 +105,7 @@
  *   hub-paypal-test                                                           the test's progress: approval link, capture, Transaction Search, balance
  *   hub-treasury-tx [agentId] [--limit n] [--before seq] [--direction in|out|internal]   per-transaction treasury list
  *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
+ *   economy-ai-credit-opening                                                (v69) once after the cutover: AI costs charged before v69 become owed to the owner
  *   economy-capital-backing                                                  (v66) the existing capital: virtual, provider-paid, backed, unbacked; books vs PayPal
  *   economy-capital-back <railId> <txnId> <eventCode>                        (v66) a PayPal deposit backs the existing capital (no second credit; any excess is owner funding)
  *   owner-identity-autonomy [on|off] [--classes c1,c2] [--card on|off] [--card-max n] [--card-daily n] [--exclude https://a,https://b] [statement…]
@@ -291,6 +292,8 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     }
     case "economy-paypal-attribute":
       return h.paypalAttribute(p[0], p[1], p[2], p[3], p[4] ?? null, actor);
+    case "economy-ai-credit-opening":
+      return h.aiCreditOpening(actor);
     case "economy-capital-backing":
       return h.capitalBacking();
     case "economy-capital-back":

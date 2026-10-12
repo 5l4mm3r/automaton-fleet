@@ -1,6 +1,7 @@
 /**
  * Schema v69 — owner-funded AI credit is reimbursable (PostgreSQL; no model, no money moves, no reimbursement):
- *  - AI costs charged before v69 are brought in once, as owed to the owner (opening journal), from the actual history;
+ *  - the migration posts no journal (the rollout refuses a moved ledger head); the owner then records, once, the AI costs
+ *    charged before v69 as owed to the owner (opening journal), from the actual history — idempotent, owner-only;
  *  - every AI charge after v69 keeps its cash in the treasury's reimbursable partition and owes it to the owner — the expense
  *    is recognised once (no purchase is ever expensed); unallocated treasury money is not inflated by what the owner is owed;
  *  - the capital backing no longer treats AI costs as backing: unbacked = capital recorded without money − backed, and the
@@ -41,8 +42,16 @@ describe.skipIf(!PG_BIN)("v69: owner-funded AI credit is reimbursable (PostgreSQ
   }, 300_000);
   afterAll(async () => { await owner?.end(); await pgc?.stop?.(); });
 
-  it("migrates with a clean audit; past AI costs become owed to the owner once (opening journal)", async () => {
+  it("migrates with a clean audit and no journal; the owner's opening action brings past AI costs in once", async () => {
     expect((await new PgFleetStore({ connectionString: pgc.ownerUrl }).auditPrivileges()).problems).toEqual([]);
+    expect(Number(await one(`(SELECT count(*) FROM fleet.fleet_ledger_journal WHERE kind = 'ai_credit_owner_payable_opening')`))).toBe(0);
+    expect(await bal(OWNER_PAYABLE_ACCOUNT)).toBe(0);
+    // Until it is recorded, the backing view keeps the pre-v69 picture (AI costs reduce what must be backed).
+    expect(await one(`fleet.fleet_capital_backing()`)).toMatchObject({ providerPaidMinor: 300, unbackedMinor: 19_700, ownerPayableMinor: 0 });
+    expect((await owner.query(`SELECT fleet.fleet_admin_ai_credit_opening('agent:x') AS r`).catch((e: Error) => e.message)) as string).toMatch(/FLEET_APPROVAL_REQUIRED/);
+    expect(await one(`fleet.fleet_admin_ai_credit_opening($1)`, [OWNER])).toMatchObject({ ok: true, amountMinor: 300, ownerPayableMinor: 300 });
+    expect(await one(`fleet.fleet_admin_ai_credit_opening($1)`, [OWNER])).toMatchObject({ ok: true, already: true, ownerPayableMinor: 300 });
+    expect(await one(`fleet.fleet_event_route('ai_credit_owner_payable_opened', '{}'::jsonb)`)).toBe("P3_SUMMARY");
     expect(await bal(OWNER_PAYABLE_ACCOUNT)).toBe(300);
     expect(await bal(REIMBURSABLE_ACCOUNT)).toBe(300);
     expect(await bal("fleet:treasury:unallocated")).toBe(19_700);           // nothing owed to the owner is allocatable

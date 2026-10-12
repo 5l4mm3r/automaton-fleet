@@ -32,6 +32,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "spend_review_decide",
   // v66: a PayPal deposit backs the existing capital (no second credit).
   "capital_back",
+  // v69: record (once) the AI costs charged before v69 as owed to the owner.
+  "ai_credit_opening",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */

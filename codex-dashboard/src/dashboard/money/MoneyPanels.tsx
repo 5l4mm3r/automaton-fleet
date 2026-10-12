@@ -336,6 +336,9 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
           ["Difference", backing.data.differenceMinor == null ? "—" : money(backing.data.differenceMinor)]]
           .map(([k, v]) => <div key={k} className="rounded border border-slate-700 p-3"><p className="text-xs text-slate-400">{k}</p><p className="font-mono">{v}</p></div>)}
       </div>
+      {Number(backing.data.providerPaidMinor) > 0 && <Form title={`Record the AI costs paid from your credit before this release as owed to you (${money(Number(backing.data.providerPaidMinor))})`}
+        note="Once, after the upgrade: the treasury keeps this money and the books show it as owed to you. Nothing is paid out." fields={[]}
+        submit={() => call("ai_credit_opening", {})} />}
       <p className="mt-2 text-xs text-slate-400">Difference = PayPal − (cash in the books − still to back). 0 means reconciled. Above 0: AI costs paid from provider credit after the capital was fully backed, or a deposit not yet recorded. Below 0: money missing.</p>
       {(backing.data.backings as Row[]).length > 0 && <ul className="mt-2 text-sm">{(backing.data.backings as Row[]).map((k) => <li key={k.backingId} className="border-t border-slate-800 py-1">
         {when(k.at)} · {k.transactionId} · {money(k.netMinor)} received · {money(k.backedMinor)} backed{k.excessMinor > 0 ? ` · ${money(k.excessMinor)} new owner funding` : ""}</li>)}</ul>}
