@@ -35,3 +35,22 @@ bash ~/rlc72/fleet-release.sh ~/rlc72/pins.txt 69 72 0.17.1 ~/rlc72/ui-0.17.1-e6
 ```
 Rollback: `bash ~/rlc72/fleet-rollout.sh revert ~/rlc72/pins.txt 69 72 <reason>` (fix forward once anything is recorded).
 Then the ordered list in `launch-checklist-v65.md` ("Onboarding to launch").
+
+## Deployment attempt 2026-10-12 19:27–19:31Z (owner go) — ROLLED BACK; production restored and verified
+- `fleet-release.sh`: the backend cutover succeeded (schema 72, readyz 200, 19:28:29–19:29:12Z), then the UI step refused
+  ("/opt/automaton-fleet/ui/0.17.1 exists — UI directories are immutable": the UI was unchanged and already live). The
+  release rolled itself back as designed: database restored from the verified pre-migration dump
+  (`automaton_fleet-v69-pre-v72-20261012T192849Z.dump`; 0 journals / 3 events after the cutover kept in
+  `automaton_fleet-v72-post-cutover-e641872-20261012T192939Z.dump`), backend to b60e262, `production_rolled_back` recorded.
+- Tooling defects found: (1) the release requires a NEW UI directory even when the UI is unchanged; (2) its UI rollback
+  restored `dashboard.env.pre-0.17.1` (= 0.16.0) instead of the UI live before the release; (3) a retried backend cutover
+  is refused because `releases/<commit>` from the failed attempt exists (immutable), after it has already rewritten
+  `runtime.env`'s pins.
+- Repairs (within the deployment authorisation, restoring the pre-deploy state): UI pointer back to 0.17.1 (root serves the
+  0.17.1 tree); `runtime.env` restored to the pre-deploy file (b60e262) after the refused retry; the two leftover backups kept as
+  `runtime.env.pre-e641872.reverted-20261012T1929Z` and `.attempt3-20261012T1931Z`.
+- Verified after: identity hashes, ledger fingerprints and cash identical; 806 journals; head 843; ledger verifies; schema
+  69; both agents paused on b60e262; credit, owner payable (0), survival protection, custody (off, 0 activations), cap 2/2
+  DEVELOPMENT and all live flags unchanged; all units active; readyz 200.
+- Remaining before a retry: the stale `/opt/automaton-fleet/releases/e641872…` (installed by the failed attempt, never served)
+  blocks a backend-only cutover — removal needs the owner's approval — and the tooling defects above.
