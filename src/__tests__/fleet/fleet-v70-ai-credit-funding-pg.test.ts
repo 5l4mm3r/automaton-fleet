@@ -55,7 +55,8 @@ describe.skipIf(!PG_BIN)("v70: AI provider credit by funding source (PostgreSQL)
     const audit = (await R.store.auditPrivileges()).problems;
     expect(audit, JSON.stringify(audit)).toEqual([]);
     expect(await R.one(`fleet.fleet_event_route('ai_credit_treasury_purchase', '{}'::jsonb)`)).toBe("P3_SUMMARY");
-    expect(Number(await R.one(`(SELECT version FROM fleet.fleet_knowledge_library WHERE entry_id = 'fleet-capability-status' AND current)`))).toBe(2);
+    // v2 here; v71 corrects the AI cost wording (v3).
+    expect(Number(await R.one(`(SELECT version FROM fleet.fleet_knowledge_library WHERE entry_id = 'fleet-capability-status' AND current)`))).toBeGreaterThanOrEqual(2);
   });
 
   it("owner-funded and treasury-funded credit: the right party is owed, the asset is used up, the expense is recognised once", async () => {

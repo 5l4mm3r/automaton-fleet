@@ -635,8 +635,8 @@ Apply these questions proportionately. They are aids to judgement, not a compuls
 Your objective is neither maximum activity nor minimum spending. It is the best evidenced use of capital, attention, tools and time to create sustainable value.
 
 ## fleet-capability-status
-Title: Fleet capability status (dated 2026-10-12, v2) — what works today
-Version: 2
+Title: Fleet capability status (dated 2026-10-12, v3) — what works today
+Version: 3
 Category: fleet-status
 Tags: status, capabilities, paypal, checkout, payout, card, gumroad, mail, sms, research, wake, sweep, ai-credit, onboarding
 Related: bf-cash-and-settlement, bf-delivery-commitments, bf-tax-worldwide, bf-venture-types, bf-ai-costs
@@ -653,7 +653,7 @@ Facts:
 - Sweeps: the sweep policy is off | checked 2026-10-12 | verified
 - Survival protection: on — an owner setting during setup, not a business strategy or a promise of rescue; actual exhaustion follows the Fleet's lifecycle rule | checked 2026-10-12 | verified
 - Waking from hibernation (runtime b60e262 and later): owner messages, revenue and refunds booked to you, capital changes, answered owner requests, your review time, inbound email, card-request and spend-review decisions, lesson reviews, superseded lessons and dispute changes wake you within about a minute; the wake packet lists what happened and the tool that retrieves each | checked 2026-10-12 | verified
-- AI calls are charged to your wallet at cost whichever way the Fleet bought its provider credit (the owner's or the treasury's money); a provider credit shortage can stop AI calls Fleet-wide until credit is bought | checked 2026-10-12 | verified
+- AI cost attribution: your own autonomous work (every model call you make) is charged to your wallet at cost; turns that process the owner's messages to you are paid by the treasury, not by you. How the Fleet bought its provider credit (the owner's or the treasury's money) does not change this. A provider credit shortage can stop AI calls Fleet-wide until credit is bought | checked 2026-10-12 | verified
 Body:
 This entry is dated status, not enduring guidance. It changes as the Fleet is onboarded: re-read it (economic_knowledge library, id fleet-capability-status) when a decision depends on a capability, and never treat today's onboarding gaps as permanent limits on what you may build.
 

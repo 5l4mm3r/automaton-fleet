@@ -77,9 +77,10 @@ import { V67_SQL } from "./migrations-phase67.js";
 import { V68_SQL } from "./migrations-phase68.js";
 import { V69_SQL } from "./migrations-phase69.js";
 import { V70_SQL } from "./migrations-phase70.js";
+import { V71_SQL } from "./migrations-phase71.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 70;
+export const FLEET_PG_SCHEMA_VERSION = 71;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1245,6 +1246,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 68, name: "lesson_supersession_and_event_feed", sql: V68_SQL },
   { version: 69, name: "ai_credit_reimbursable", sql: V69_SQL },
   { version: 70, name: "ai_credit_funding_sources", sql: V70_SQL },
+  { version: 71, name: "ai_credit_auto_detection", sql: V71_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1411,6 +1413,8 @@ export const CUSTODY_API_FUNCTIONS: readonly string[] = Object.freeze([
   "cx_paypal_refund_record(text, text, text, text, bigint, text)",
   "cx_paypal_txn_record(text, uuid, jsonb)",
   "cx_paypal_balance_record(text, uuid, text, bigint, bigint)",
+  // v71: the counterparty PayPal reports for a transaction (AI-credit purchase detection).
+  "cx_paypal_txn_counterparty(text, uuid, text, text, text)",
   // v49: the custody key (public half) and PayPal credentials sealed to it from the dashboard.
   "cx_publish_key(text, text, text)",
   "cx_sealed_credentials(text)",
@@ -1455,6 +1459,7 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   // v57: Transaction Search rows of a sale become clawback evidence, reconciled at once.
   cx_paypal_txn_record: { writes: ["fleet_paypal_transactions", "fleet_paypal_clawback_evidence"], calls: ["fleet_event", "fleet_paypal_clawback_reconcile", "fleet_refund_request_completed"] },
   cx_paypal_balance_record: { writes: ["fleet_paypal_balance_observations"], calls: [] },
+  cx_paypal_txn_counterparty: { writes: ["fleet_paypal_transactions"], calls: [] },
   cx_publish_key: { writes: ["fleet_custody_keys"], calls: ["fleet_event"] },
   cx_sealed_credentials: { writes: [], calls: [] },
   cx_paypal_buyer_work: { writes: [], calls: [] },

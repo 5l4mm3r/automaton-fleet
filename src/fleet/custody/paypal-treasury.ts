@@ -45,6 +45,8 @@ export interface PayPalGatewayPort {
   paypalRefundRecord(worker: string, captureId: string, refundId: string, kind: "refund" | "reversal" | "dispute_fee" | "chargeback_fee", amountMinor: number,
     currency: string): Promise<CxResult>;
   paypalTxnRecord(worker: string, railId: string, txn: Record<string, unknown>): Promise<CxResult>;
+  /** v71: the counterparty of a transaction (optional: an older registry has no such function). */
+  paypalTxnCounterparty?(worker: string, railId: string, txnId: string, eventCode: string, counterparty: string): Promise<CxResult>;
   paypalBalanceRecord(worker: string, railId: string, currency: string, availableMinor: number, totalMinor: number): Promise<CxResult>;
   /** v56: paid orders whose buyer contact is not recorded yet, and the record of PayPal's payer object (NULL: not readable now). */
   paypalBuyerWork?(worker: string, limit: number): Promise<Array<{ checkoutId: string; paypalOrderId: string; railMode: "live" | "sandbox"; vaultRef: string }>>;
@@ -412,7 +414,8 @@ export class PayPalTreasuryWorker {
     let page = 1;
     for (;;) {
       const qs = new URLSearchParams({ start_date: start.toISOString().replace(/\.\d{3}Z$/, "Z"), end_date: end.toISOString().replace(/\.\d{3}Z$/, "Z"),
-        fields: "transaction_info", page_size: "500", page: String(page) });
+        // v71: payer_info too — a debit's counterparty (who the treasury paid) for AI-credit purchase detection.
+        fields: "transaction_info,payer_info", page_size: "500", page: String(page) });
       const res = await this.call(r, "GET", `/v1/reporting/transactions?${qs}`).catch(() => null);
       if (!res || res.status !== 200) return; // retried at the next interval
       for (const d of Array.isArray(res.json?.transaction_details) ? res.json.transaction_details : []) {
@@ -425,6 +428,14 @@ export class PayPalTreasuryWorker {
           referenceId: typeof t.paypal_reference_id === "string" ? t.paypal_reference_id : null };
         const rec = await this.gw.paypalTxnRecord(this.worker, r.railId, txn);
         this.stats.transactions++;
+        // v71: for money leaving the treasury, what PayPal says about the other side (names, e-mail, subject, note).
+        // Which of these fields names the payee of an outgoing payment is verified on the first live debit.
+        if (rec.ok && amount < 0 && this.gw.paypalTxnCounterparty) {
+          const p = d?.payer_info ?? {};
+          const who = [p.email_address, p.payer_name?.alternate_full_name, [p.payer_name?.given_name, p.payer_name?.surname].filter(Boolean).join(" "),
+            t.transaction_subject, t.transaction_note].filter((x: unknown) => typeof x === "string" && x.trim()).join(" | ").slice(0, 200);
+          if (who) await this.gw.paypalTxnCounterparty(this.worker, r.railId, t.transaction_id, String(t.transaction_event_code), who).catch(() => undefined);
+        }
         // v57: refunds, reversals, fees and dispute holds of a sale are reconciled by the registry as it records the row.
         if (rec.ok && (rec as any).reconciled && Object.keys((rec as any).reconciled).length) this.stats.refunds++;
         if (rec.ok && (rec as any).needsCapturePost === true) {

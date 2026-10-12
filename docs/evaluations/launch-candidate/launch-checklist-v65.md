@@ -114,27 +114,42 @@ capital recorded without money) would change it; none exists or is authorised. A
 - Founder runtime upgrade per agent after the controller release (rehearse; Agent-2 then Agent-1; agents stay paused):
   Field Guide v2.1, wake on agent-facing events with the "since your last turn" line, retired lessons in read_knowledge.
 
-## Treasury-funded AI credit (self-sustaining model) — accounting built in v70 (not deployed)
-- **Built (schema v70, in code, not deployed):** provider credit is held in lots by funding source. *Owner* lots (purchases
-  recorded with `provider-credits-record`, and the opening balance) are owed to the owner as used (v69). *Treasury* lots are
-  recorded with `economy-ai-credit-purchase <provider> <usdCents> <railId> <txnId> <eventCode> <receiptRef>`, which requires
-  the treasury PayPal account's own completed GBP debit as evidence (one purchase per transaction and per receipt) and
-  books a prepaid asset (`fleet:ai_credits`) out of treasury cash. Consumption draws lots oldest first; the treasury part
-  leaves the owner payable and uses up the asset (minutely settlement); a used-up lot's cost difference (exchange rate) is
-  posted explicitly; a negative balance adjustment on a treasury lot is expensed at cost. Expense recognised once; no false
-  owner payable. `economy-ai-credits` shows lots, the asset and the payable.
-- **The provider's actual payment mechanism (checked 2026-10-12):** Anthropic API credit is prepaid, bought on the Console
-  Billing page; the official help describes paying by card ("Enter your new card details") and an optional **auto-reload**
-  that charges the saved card when the balance falls below a threshold. No official page lists PayPal, and third-party
-  guides report PayPal is declined — **check the Console Billing page before planning to pay from the treasury PayPal.**
-  - If the Console accepts the treasury PayPal (or a card that draws from the treasury PayPal balance), each purchase,
-    including each auto-reload, appears as a treasury PayPal debit and can be recorded as treasury-funded.
-  - If only the owner's own card is accepted, purchases are owner-funded (v69); the treasury can settle them later through
-    the owner payable — an authorised reimbursement, not yet built.
-- **Not automatic:** nothing in the Fleet buys or tops up credit. Auto-reload, if enabled, happens at the provider; every
-  purchase (manual or auto-reload) must be recorded by the owner.
-- **Remaining:** deploy v70 (with the next controller release); verify the payment method in the Console; if the treasury
-  pays, record each purchase from its PayPal debit; optionally build the owner-payable reimbursement.
+## AI credit funding (v70 + v71, in code, not deployed)
+**Automatic purchasing** (buying credit when it runs low) happens only at the provider: Anthropic's own **auto-reload**,
+which you enable in the Console (threshold + reload-to amount) and which charges the payment method saved there. The Fleet
+never buys credit itself.
+
+**Automatic accounting** (built, v71): once your policy is set, each purchase — manual or auto-reload — is detected and
+booked without you recording it:
+- *Receipt detection:* Anthropic's purchase receipt e-mailed to a Fleet mailbox (the Console's billing e-mail set to it) is
+  read for the amount and receipt number → recorded once per receipt. A receipt is unauthenticated text, so on its own it
+  only ever records owner-funded credit (no money moves in the books).
+- *Treasury debit detection:* custody reads the treasury PayPal's Transaction Search hourly, now with the counterparty; a
+  debit matching your counterparty pattern, in the window and within 8 % of the controlled rate, is the evidence that
+  treasury money paid.
+- **Route `owner_card`** (your own card saved in the Console): every receipt is owner-funded credit, owed to you as used
+  (v69). Fully automatic. Settling what is owed (reimbursement) is a separate, authorised step, not built.
+- **Route `treasury_paypal`** (the treasury PayPal, or a card drawing on its balance — only if the Console accepts it): a
+  receipt is matched to its debit and becomes treasury-funded (prepaid asset; consumption already drawn leaves the owner
+  payable). A receipt with no debit after 72 h stays owner-funded and raises P1 (`economy-ai-credit-attribute` resolves it);
+  a debit with no receipt after 72 h becomes treasury credit with its USD estimated at the controlled rate.
+- *Cost attribution unchanged:* agents' own AI work costs their wallets; owner-conversation turns cost the treasury.
+
+**Missing provider interface:** Anthropic offers no API for credit balance, purchases or auto-reload events (its Admin API
+reports usage and cost only, and is unavailable to individual accounts). Without receipt e-mails to a Fleet mailbox the
+smallest manual action is one record per purchase (`provider-credits-record anthropic purchase <cents> <receipt>`), or for
+the treasury route `economy-ai-credit-attribute` / `economy-ai-credit-purchase`. A card that does not draw on the treasury
+PayPal balance cannot be evidenced as treasury money (no bank/card feed is connected).
+
+**Inputs needed from you:**
+1. In the Console → Billing: which payment methods it accepts (does it take the treasury PayPal, or only cards?).
+2. The Console's current credit balance (the Fleet records **$41.17**) — any difference is recorded first.
+3. Your choice of route: `owner_card` or `treasury_paypal`.
+4. Set the Console's billing e-mail to a Fleet mailbox (e.g. fleet.treasury@proton.me), and give the receipt sender address
+   or domain from one real receipt (to set `--receipt-sender`).
+5. For `treasury_paypal`: the counterparty text the debit shows in PayPal (from one real debit) for `--counterparty`.
+6. Whether to enable auto-reload, with the threshold and reload-to amounts (recorded in the policy for reference).
+Then: `economy-ai-credit-policy anthropic <route> --receipt-sender … [--counterparty …] [--threshold-usd-cents N --reload-to-usd-cents N]`.
 
 ## Step 4 — Gumroad (EU/UK consumer digital sales via a merchant of record)
 Verified 2026-10-12 (Gumroad help 13, 10, 70): Gumroad is merchant of record for EU and UK **digital** sales (collects

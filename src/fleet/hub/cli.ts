@@ -107,6 +107,8 @@
  *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
  *   economy-ai-credits                                                       (v70) AI credit by funding source: lots, prepaid asset, owner payable
  *   economy-ai-credit-purchase <provider> <usdCents> <railId> <txnId> <eventCode> <receiptRef>  (v70) credit bought with treasury money (the PayPal debit is the evidence)
+ *   economy-ai-credit-policy <provider> owner_card|treasury_paypal [--receipt-sender …] [--counterparty …]  (v71) how credit is bought; enables detection
+ *   economy-ai-credit-attribute <lotId> <railId> <txnId> <eventCode>           (v71) this treasury debit paid for that purchase
  *   economy-ai-credit-opening                                                (v69) once after the cutover: AI costs charged before v69 become owed to the owner
  *   economy-capital-backing                                                  (v66) the existing capital: virtual, provider-paid, backed, unbacked; books vs PayPal
  *   economy-capital-back <railId> <txnId> <eventCode>                        (v66) a PayPal deposit backs the existing capital (no second credit; any excess is owner funding)
@@ -300,6 +302,17 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       if (p.length !== 6 || !/^[1-9]\d{0,7}$/.test(p[1])) throw new Error("usage: economy-ai-credit-purchase <provider> <usdCents> <railId> <txnId> <eventCode> <receiptRef>");
       return h.aiCreditTreasuryPurchase(p[0], Number(p[1]), p[2], p[3], p[4], p[5], actor);
     }
+    case "economy-ai-credit-policy": {
+      const q = positional(a, ["--receipt-sender", "--counterparty", "--threshold-usd-cents", "--reload-to-usd-cents"]);
+      if (q.length !== 2 || !["owner_card", "treasury_paypal"].includes(q[1]) || !/^[a-z0-9_-]{2,40}$/.test(q[0])) {
+        throw new Error("usage: economy-ai-credit-policy <provider> owner_card|treasury_paypal [--receipt-sender <addr|@domain>] [--counterparty <text>] [--threshold-usd-cents N] [--reload-to-usd-cents N] [--disabled]");
+      }
+      const n = (k: string) => flag(a, k) ? int(flag(a, k), k) : null;
+      return h.aiCreditPolicySet(q[0], q[1], flag(a, "--receipt-sender"), flag(a, "--counterparty"), n("--threshold-usd-cents"), n("--reload-to-usd-cents"), !a.includes("--disabled"), actor);
+    }
+    case "economy-ai-credit-attribute":
+      if (p.length !== 4) throw new Error("usage: economy-ai-credit-attribute <lotId> <railId> <txnId> <eventCode>");
+      return h.aiCreditAttribute(p[0], p[1], p[2], p[3], actor);
     case "economy-ai-credit-opening":
       return h.aiCreditOpening(actor);
     case "economy-capital-backing":

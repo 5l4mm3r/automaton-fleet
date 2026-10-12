@@ -876,3 +876,16 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
 - Not automatic: purchases and the provider's auto-reload happen at the provider (card per its official help; PayPal not
   confirmed) and are recorded by the owner. The capability entry v2 (agents on the event-waking runtime; AI cost wording)
   loads with v70.
+
+## 26. Schema v71 — AI-credit purchases detected and accounted for automatically (2026-10-12; in code, not deployed)
+
+- The provider exposes no credit-balance, purchase or auto-reload interface (Admin API: usage and cost only; unavailable to
+  individual accounts). Detection uses (1) provider purchase receipts e-mailed to a Fleet mailbox (owner-configured sender;
+  amount + receipt number; one purchase per receipt; unauthenticated, so owner-funded only) and (2) treasury PayPal debits
+  from Transaction Search with their counterparty (custody now requests `payer_info`; the only evidence of treasury money).
+- Owner policy per provider (`fleet_admin_ai_credit_policy_set`, history kept): route `owner_card` (receipts → owner lots;
+  v69 payable) or `treasury_paypal` (receipt + matching debit within the window and rate tolerance → treasury lot, drawn
+  consumption reclassified; receipt without debit → owner-funded + P1; debit without receipt → estimated treasury lot).
+  `fleet_admin_ai_credit_attribute` resolves a missing match. Matching runs in the minutely settlement.
+- No automatic purchasing in the Fleet; the provider's auto-reload is the purchasing mechanism. Capability entry v3: agents'
+  own AI work costs their wallets; owner-conversation turns cost the treasury.

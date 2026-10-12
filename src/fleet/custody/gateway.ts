@@ -118,6 +118,9 @@ export class PgCustodyGateway implements PayPalGatewayPort, SealedCredentialPort
   paypalRefundRecord(worker: string, captureId: string, refundId: string, kind: string, amountMinor: number, currency: string) {
     return this.cx<CxResult>("cx_paypal_refund_record", [worker, captureId, refundId, kind, amountMinor, currency]);
   }
+  paypalTxnCounterparty(worker: string, railId: string, txnId: string, eventCode: string, counterparty: string) {
+    return this.cx<CxResult>("cx_paypal_txn_counterparty", [worker, railId, txnId, eventCode, counterparty]);
+  }
   paypalTxnRecord(worker: string, railId: string, txn: Record<string, unknown>) { return this.cx<CxResult>("cx_paypal_txn_record", [worker, railId, JSON.stringify(txn)]); }
   paypalBalanceRecord(worker: string, railId: string, currency: string, availableMinor: number, totalMinor: number) {
     return this.cx<CxResult>("cx_paypal_balance_record", [worker, railId, currency, availableMinor, totalMinor]);
