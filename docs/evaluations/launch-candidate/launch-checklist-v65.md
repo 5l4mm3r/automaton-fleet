@@ -60,7 +60,13 @@ $4.63 adjustments → $41.17 left.
 
 1. [ ] **Schema v66 (capital backing)** — ships in the coordinated 65 → 68 release (not separately); cut over on the owner's go (~45 s outage;
        agents stay paused). Without it, a deposit can only be recorded as new owner capital (counted twice).
-2. [ ] **Anthropic credit** — $41.17 left; AI costs are paid from it, not from PayPal. Top up before resuming (owner's
+2. [ ] **AI credit must be bought by the owner, personally — treasury-funded top-ups are UNSUPPORTED.** v69 records
+       every AI charge as owed to the owner (it assumes all Anthropic credit is owner-funded). `provider-credits-record`
+       stores the USD purchase only (no ledger entry, no funding source). If treasury money (the PayPal treasury, or a card
+       charge settled from it) paid for Anthropic credit, nothing would record the outflow and the owner would still be shown
+       as owed for its use — the books would be wrong. (The dashboard's treasury-funded `provider_credits_record` is for
+       communications credit only; it is never consumed by AI charges.)
+   [ ] **Anthropic credit** — $41.17 left; AI costs are paid from it, not from PayPal. Top up before resuming (owner's
        amount), then record the receipt: `provider-credits-record anthropic purchase <usd> <receipt ref>`.
 3. [ ] **Record the AI-credit opening** once after the cutover (Capital backing panel, or `economy-ai-credit-opening`):
        £18.24 becomes owed to you; the amount to back becomes £200.00. Then **refresh the amount** right before sending

@@ -40,6 +40,20 @@ history, owner opening before/after, per-charge legs), founder wake/pause 7/7; r
 owes exactly its cash; migration paths strict (no journal from any migration; added accounts start at zero); dashboard
 contract and real-Chrome e2e; tsc and lint clean. Pre-existing and unchanged: engine-pg ×2 and the f2a-pg structural proof.
 
+### Funding assumption (v69)
+v69 assumes all Anthropic (AI provider) credit is bought by the owner: every AI charge posts the owner payable,
+unconditionally. Treasury-funded AI credit purchases are not supported — no path records one, and using treasury money for
+it would leave an unrecorded outflow and a payable the owner is not owed. The only treasury-funded credit path
+(`fleet_admin_provider_credits_record` → `fleet:provider_credits`) is communications credit, consumed only by communications
+charges, never by AI.
+
+### Remaining test failures (exact; confirmed on eaa8863 — engine-pg 2, f2a-pg 1; identical on 5cebd3f, before this work)
+| Test | Failure | Cause | Deployment impact |
+|---|---|---|---|
+| fleet-engine-pg › estate: inventory at death … | `account.create` on `sim-registrar` → `FLEET_NO_CONNECTOR` | The v35 test creates accounts through a simulated dedicated connector; since the browser operator (v37) the broker refuses platforms without a configured connector and agents use `register_account`. Test fixture drift. | None to the release. The estate-at-death flow has no passing coverage in this test while it fails. |
+| fleet-engine-pg › notifications: DAILY … | `DELETE FROM fleet_notifications` succeeds; the test expects `FLEET_HISTORY_IMMUTABLE` | Owner decision (v45): notifications are disposable — delete = delete. The v35 expectation predates it. | None; production behaviour is the intended one. |
+| fleet-f2a-pg › structural proof: nothing outside the dependency functions reads dependency records | Readers `fleet_admin_agent_thread`, `fleet_agent_attention` | v62: the owner's thread view shows requests, and the attention signal digests request statuses so an answered request wakes the agent. Both are read-only and gate no action. v67/v68 restate `fleet_agent_attention` with the same read; no new reader. | None; the property the proof protects (an open dependency gates no other action) still holds. |
+
 ## B. Steps that need the owner's go (in order)
 1. Cutover (~45 s; agents stay paused):
    `bash ~/rlc69/fleet-release.sh ~/rlc69/pins.txt 65 69 0.17.1 ~/rlc69/ui-0.17.1-b60e262.tgz c4e97e1535f75a4609ec355ec73c8377729c431b1434f662b13b8124a6071160`
