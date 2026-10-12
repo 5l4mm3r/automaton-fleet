@@ -221,7 +221,9 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
   const orders = useRead<Row>(client, "customer_orders", {}, []);
   // v57: disputes and unclassified PayPal debits (held back from the agents' spendable money until settled).
   const disputes = useRead<Row>(client, "paypal_disputes", {}, []);
-  const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); creq.reload(); reviews.reload(); };
+  // v66: the existing capital recorded without money, and real deposits that back it (no second credit).
+  const backing = useRead<Row>(client, "capital_backing", {}, []);
+  const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); creq.reload(); reviews.reload(); backing.reload(); };
   const call = useCallback(async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); reloadAll(); return r; }, [client]); // eslint-disable-line react-hooks/exhaustive-deps
   // One name per agent everywhere: the agent list's (the owner's label or the default), never the registry's raw name.
   const name = (id: string, stored?: string | null) => agents.find((a) => a.id === id)?.name ?? displayAgentName(stored, id);
@@ -319,8 +321,25 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
         <Rename what="payment account" current={String(r.label)} save={(name) => call("label_set", { kind: "payment_rail", id: r.railId, name })} /></div>)}
       {(pp.data.unmatched as Row[]).length > 0 && <><h4 className="mt-4 font-semibold">Unmatched PayPal money (never counted as revenue until you say what it was)</h4>
         {(pp.data.unmatched as Row[]).map((t) => <div key={t.transactionId + t.eventCode} className="my-2 rounded border border-slate-700 p-3 text-sm"><p>{when(t.at)} · {money(t.amountMinor)} {t.currency} · {t.transactionId} ({t.eventCode})</p>
+          {Number(backing.data?.unbackedMinor ?? 0) > 0 && t.amountMinor > 0 && <Form title={`My deposit: back the existing capital (${money(Number(backing.data?.unbackedMinor))} unbacked)`}
+            note="Records this money against the capital already in the books, without crediting it again. Any part beyond what is unbacked becomes ordinary owner funding." fields={[]}
+            submit={() => call("capital_back", { railId: t.railId, transactionId: t.transactionId, eventCode: t.eventCode })} />}
           <Form title="Not revenue (close it)" fields={[]} submit={() => call("paypal_txn_attribute", { railId: t.railId, transactionId: t.transactionId, eventCode: t.eventCode, as: "not_revenue" })} /></div>)}</>}
     </> : <p className="text-sm text-slate-400">{pp.error || "Reading…"}</p>}</Panel>
+
+    <Panel title="Capital backing (real money behind the books)">{backing.data ? <>
+      <p className="text-xs text-slate-400">The first agents were funded with capital recorded before any money moved. Their AI costs were paid from your prepaid provider credit, outside these books. A deposit you back below is matched to that capital instead of being counted twice.</p>
+      <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
+        {[["Capital recorded without money", money(backing.data.virtualCapitalMinor)], ["AI costs paid from provider credit", money(backing.data.providerPaidMinor)],
+          ["Backed by deposits", money(backing.data.backedMinor)], ["Still to back", money(backing.data.unbackedMinor)],
+          ["Cash in the books", money(backing.data.booksCashMinor)], ["PayPal (verified)", backing.data.paypal ? `${money(backing.data.paypal.totalMinor)} (${when(backing.data.paypal.observedAt)})` : "no balance observed"],
+          ["Difference", backing.data.differenceMinor == null ? "—" : money(backing.data.differenceMinor)]]
+          .map(([k, v]) => <div key={k} className="rounded border border-slate-700 p-3"><p className="text-xs text-slate-400">{k}</p><p className="font-mono">{v}</p></div>)}
+      </div>
+      <p className="mt-2 text-xs text-slate-400">Difference = PayPal − (cash in the books − still to back). 0 means reconciled. Above 0: AI costs paid from provider credit after the capital was fully backed, or a deposit not yet recorded. Below 0: money missing.</p>
+      {(backing.data.backings as Row[]).length > 0 && <ul className="mt-2 text-sm">{(backing.data.backings as Row[]).map((k) => <li key={k.backingId} className="border-t border-slate-800 py-1">
+        {when(k.at)} · {k.transactionId} · {money(k.netMinor)} received · {money(k.backedMinor)} backed{k.excessMinor > 0 ? ` · ${money(k.excessMinor)} new owner funding` : ""}</li>)}</ul>}
+    </> : <p className="text-sm text-slate-400">{backing.error || "Reading…"}</p>}</Panel>
 
     <Panel title="Receiving test (you pay a small checkout yourself)">{ptest.data ? <>
       <p className="mb-2 text-xs text-slate-400">Proves the whole receiving path with your own money: PayPal order, your payment, capture, verified webhook, Transaction Search and the balance. The money is recorded as your capital in the treasury, never as an agent’s revenue. Do not refund it (a refund is reported to you, not posted).</p>

@@ -21,6 +21,7 @@ import { IdentityBroker } from "../../fleet/identity/broker.js";
 import { SimulatedSharedMailProvider } from "../../fleet/identity/providers.js";
 import { initIdentityState, openIdentityState, openProviderVault } from "../../fleet/identity/main.js";
 import { EVENT_ROUTES_V58 } from "../../fleet/postgres/migrations-phase58.js";
+import { P3_INFO_FIXED } from "../../fleet/postgres/migrations-phase62.js";
 
 const PG_BIN = findPgBin();
 
@@ -86,7 +87,10 @@ describe.skipIf(!PG_BIN)("v58: principal caps, one exposure per sale, fulfilment
   });
 
   it("routes the new events; a file is not sold by checkout while mail is not configured (a service is)", async () => {
-    for (const [p, ts] of Object.entries(EVENT_ROUTES_V58)) for (const t of ts) expect(await R.one(`fleet.fleet_event_route($1, '{}'::jsonb)`, [t]), t).toBe(p);
+    // v62 moved the P3_INFO kinds (a class Fleet Command never accepted) to P3_SUMMARY (P3_INFO_FIXED).
+    for (const [p, ts] of Object.entries(EVENT_ROUTES_V58)) for (const t of ts) {
+      expect(await R.one(`fleet.fleet_event_route($1, '{}'::jsonb)`, [t]), t).toBe(p === "P3_INFO" && (P3_INFO_FIXED as readonly string[]).includes(t) ? "P3_SUMMARY" : p);
+    }
     const r = await R.econ(F, "paypal.checkout", { venture: "prints", amountMinor: 900, description: "Planner PDF", fulfilment: "digital_file", idempotencyKey: idem() });
     expect(r).toMatchObject({ ok: false, code: "FLEET_FULFILMENT_UNAVAILABLE", capability: "mail" });
     expect(r.reason).toMatch(/storefront/);

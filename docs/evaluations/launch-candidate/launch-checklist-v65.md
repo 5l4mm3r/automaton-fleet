@@ -40,13 +40,46 @@ Secrets: folder views list credential ids and kinds only; values come only throu
 - [ ] Owner go → upgrade Agent-2 first; verify doctrine founder-v6 attested, toolset-2, guide v2.0; then Agent-1.
 - [ ] The agents stay paused through the upgrade.
 
-## Step 3 — Funding (owner decides the numbers; nothing moves without the owner)
-- [ ] **Bootstrap gap.** Wallets show £181.77 while the treasury PayPal holds £0.67 of real money; the £200 bootstrap
-      was booked before PayPal existed. An ordinary owner-funding attribution would count it twice. A "back existing
-      capital" entry (real money in, no new wallet credit) is **not built yet** — decide before adding PayPal funds.
-- [ ] Proposed: £250 wallet per agent, £5/day AI cap each (now £7.54 and £30), £50 treasury reserve → about £550 into
-      PayPal.
-- [ ] Anthropic prepaid credit $41.18 (about 10 days at current pace) → top up about $100.
+## Step 3 — Funding and money readiness (2026-10-12; each step on the owner's word; nothing moves without the owner)
+
+Steps 1 and 2 are DONE (release 973e0c1 deployed 14:20Z; both agents upgraded 14:37Z, still paused).
+
+**Reconciliation (read-only, production, 2026-10-12 ~14:45Z):**
+
+| | £ |
+|---|---|
+| Owner capital recorded with no money (`owner-authorized-virtual:`, 09-26 and 10-07) | 200.00 |
+| AI costs booked against it, paid in reality from the owner's Anthropic credit (800 inference charges) | −18.23 (Agent-1 13.59, Agent-2 4.64) |
+| = agents' wallets (86.41 + 95.36) | 181.77 |
+| Real money in: the £1 receiving test, net of PayPal's 33p fee | +0.67 |
+| Fleet Control lesson review (also Anthropic credit) | −0.01 |
+| = cash in the books (wallets + treasury 0.66) | 182.43 |
+| Verified PayPal balance (custody observation 14:20:37Z; USD balance 0) | 0.67 |
+| **Real money required to back the books** | **181.76** |
+
+Cross-check: Anthropic credit recorded $69.97 bought, $24.17 consumed (≈ £18.24), $4.63 adjustments → **$41.17** left.
+
+1. [ ] **Schema v66 (capital backing) + UI 0.17.0** — build, rehearse 65 → 66, cut over on the owner's go (~45 s outage;
+       agents stay paused). Without it, a deposit can only be recorded as new owner capital (counted twice).
+2. [ ] **Anthropic credit** — $41.17 left; AI costs are paid from it, not from PayPal. Top up before resuming (owner's
+       amount), then record the receipt: `provider-credits-record anthropic purchase <usd> <receipt ref>`.
+3. [ ] **Deposit £181.76** into the treasury PayPal (fleet.treasury@proton.me) from the owner's own account. A personal
+       transfer carries no fee; a goods-and-services payment arrives net of PayPal's fee (the backing uses the net amount,
+       so cover the fee or back the remainder with a later deposit).
+4. [ ] Wait until it appears under Treasury → *Unmatched PayPal money* (custody reads Transaction Search and the balance
+       about every 30 minutes), then **"My deposit: back the existing capital"** (step-up) or
+       `economy-capital-back <railId> <txnId> <eventCode>`. Check the *Capital backing* panel: still to back £0.00,
+       difference £0.00.
+5. [ ] **Optional new capital** (owner's amounts): a further deposit is ordinary owner funding
+       (`ledger-record-funding <pence> paypal:txn:<id>` + `economy-paypal-attribute … owner_funding paypal:txn:<id>`), then
+       allocated to an agent (Agent → Fund). Example only: to bring both wallets to £250 and keep a £50 treasury reserve
+       would take £318.23 + £49.34 = £367.57 more.
+6. [ ] **AI budgets unchanged** unless the owner decides: Agent-1 754p/day, 20 turns/h; Agent-2 3000p/day, 60 turns/h
+       (runaway fuses, not allowances; see the report of 2026-10-12). The earlier "£5/day" suggestion is withdrawn.
+7. [ ] **Money out (not needed to resume):** refunds / payouts capability checks unverified; no custody activation;
+       `REAL_PAYMENTS_ENABLED=false` (changing it needs the owner's explicit approval). PayPal webhook registered and its URL
+       matches, but no PayPal delivery has ever reached the controller (the £1 test was confirmed by capture and Transaction
+       Search) — verify with PayPal's webhook simulator or the first real sale.
 
 ## Step 4 — Gumroad (EU/UK consumer digital sales via a merchant of record)
 Verified 2026-10-12 (Gumroad help 13, 10, 70): Gumroad is merchant of record for EU and UK **digital** sales (collects

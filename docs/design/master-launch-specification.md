@@ -791,3 +791,19 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
   on evidence; refunds within customer rights and provider rules; regulated activities follow their real authorisation
   requirements; accurate memory model (no claim of permanent model learning); sealed owner details only within standing
   authority; human-only blockers escalated with priority matched to urgency.
+
+## 21. Schema v66 — backing the existing capital (revision 6, 2026-10-12)
+
+- The first agents' capital (2 × £100) was recorded before any money moved (`owner-authorized-virtual:` owner funding); their
+  AI costs were paid from the owner's prepaid provider credit, outside the GBP ledger (v21). The books therefore hold cash
+  the treasury does not: **unbacked = virtual owner capital − provider-paid charges (inference, owner conversation, Fleet
+  Control reviews) − backed**, never below zero (£181.76 on 2026-10-12).
+- `fleet_admin_capital_back` (owner; dashboard step-up `capital_back`; CLI `economy-capital-back`): a completed PayPal deposit
+  in the books' currency backs that capital. The backed part posts nothing (the money is already in the books); any part
+  beyond the unbacked amount is ordinary owner funding (one journal, same key). The transaction closes as
+  `capital_backing`; its key `paypal:txn:<id>` can never be recorded again (funding, attribution, a second backing). Backings
+  are append-only history; P3 `capital_backed`.
+- `fleet_capital_backing()` / dashboard *Capital backing*: virtual, provider-paid, backed, unbacked, cash in the books, the
+  latest verified PayPal balance and the difference (PayPal − (books − unbacked); 0 = reconciled). After full backing,
+  further provider-paid AI costs show as a positive difference (PayPal holds money the books no longer count): repaying the
+  owner's provider credit from the treasury is not modelled.

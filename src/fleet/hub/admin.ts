@@ -163,6 +163,11 @@ export class PgHubAdmin {
   paypalAttribute(railId: string, txnId: string, eventCode: string, as: string, reference: string | null, actor: string) {
     return this.one(`SELECT fleet_admin_paypal_txn_attribute($1, $2, $3, $4, $5, $6) AS r`, [railId, txnId, eventCode, as, reference, actor]);
   }
+  // v66: a real PayPal deposit backs the existing (virtual) capital instead of crediting it twice; and the reconciliation.
+  capitalBacking() { return this.one(`SELECT fleet_capital_backing() AS r`); }
+  capitalBack(railId: string, txnId: string, eventCode: string, actor: string) {
+    return this.one(`SELECT fleet_admin_capital_back($1, $2, $3, $4) AS r`, [railId, txnId, eventCode, actor]);
+  }
 
   // ── v49: standing identity authority, freezes, footprint, custody key, webhook ids ──
   identityAutonomy() { return this.one(`SELECT fleet_identity_autonomy_json() AS r`); }

@@ -105,6 +105,8 @@
  *   hub-paypal-test                                                           the test's progress: approval link, capture, Transaction Search, balance
  *   hub-treasury-tx [agentId] [--limit n] [--before seq] [--direction in|out|internal]   per-transaction treasury list
  *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
+ *   economy-capital-backing                                                  (v66) the existing capital: virtual, provider-paid, backed, unbacked; books vs PayPal
+ *   economy-capital-back <railId> <txnId> <eventCode>                        (v66) a PayPal deposit backs the existing capital (no second credit; any excess is owner funding)
  *   owner-identity-autonomy [on|off] [--classes c1,c2] [--card on|off] [--card-max n] [--card-daily n] [--exclude https://a,https://b] [statement…]
  *                                               (v49) the owner's standing authority: agents may have these facts / the card FILLED into
  *                                               forms on their accounts' own sites (never shown to them; every use logged). No args: show it.
@@ -289,6 +291,11 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     }
     case "economy-paypal-attribute":
       return h.paypalAttribute(p[0], p[1], p[2], p[3], p[4] ?? null, actor);
+    case "economy-capital-backing":
+      return h.capitalBacking();
+    case "economy-capital-back":
+      if (p.length !== 3) throw new Error("usage: economy-capital-back <railId> <txnId> <eventCode>");
+      return h.capitalBack(p[0], p[1], p[2], actor);
     case "owner-identity-autonomy": {
       const q = positional(a, ["--classes", "--card", "--card-max", "--card-daily", "--exclude"]);
       if (!q.length && !a.length) return h.identityAutonomy();

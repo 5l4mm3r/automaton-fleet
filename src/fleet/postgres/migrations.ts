@@ -72,9 +72,10 @@ import { V62_SQL } from "./migrations-phase62.js";
 import { V63_SQL } from "./migrations-phase63.js";
 import { V64_SQL } from "./migrations-phase64.js";
 import { V65_SQL } from "./migrations-phase65.js";
+import { V66_SQL } from "./migrations-phase66.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 65;
+export const FLEET_PG_SCHEMA_VERSION = 66;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1235,6 +1236,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 63, name: "mail_housekeeping", sql: V63_SQL },
   { version: 64, name: "autonomous_spending_review", sql: V64_SQL },
   { version: 65, name: "owner_decisions_completion", sql: V65_SQL },
+  { version: 66, name: "capital_backing", sql: V66_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
