@@ -80,7 +80,7 @@ if [[ "$MODE" == revert ]]; then
   if [[ "$FROM" == "$TO" ]]; then
     # Code-only release: switch the code back and re-approve the previous runtime. The database is NOT restored, so every
     # post-cutover write (memory, work, ledger entries, events) is kept — proven by the reconciliation below.
-    sudo cp -p $ENVF.pre-${C:0:7} $ENVF
+    sudo cp -p $ENVF.pre-${C:0:7} $ENVF && sudo mv $ENVF.pre-${C:0:7} $ENVF.pre-${C:0:7}.reverted-$(date -u +%Y%m%dT%H%M%SZ)
     sudo ln -sfn "releases/$SOLD" /opt/automaton-fleet/current.tmp && sudo mv -T /opt/automaton-fleet/current.tmp /opt/automaton-fleet/current
     (cd "$TOOLS" && pnpm -s fleet:admin approve-runtime > ~/rollout-revert-approve.log 2>&1 && pnpm -s fleet:verify-runtime > ~/rollout-revert-verify.log 2>&1) \
       || die "re-approving the previous runtime failed: INVESTIGATE NOW (units stopped; database untouched)"
@@ -128,7 +128,7 @@ if [[ "$MODE" == revert ]]; then
   fi
   sudo -u postgres psql -X -q -d $LIVE -c "SET client_min_messages = warning" -c "DROP SCHEMA fleet CASCADE"
   sudo -u postgres pg_restore -d $LIVE --exit-on-error < "$SD"
-  sudo cp -p $ENVF.pre-${C:0:7} $ENVF
+  sudo cp -p $ENVF.pre-${C:0:7} $ENVF && sudo mv $ENVF.pre-${C:0:7} $ENVF.pre-${C:0:7}.reverted-$(date -u +%Y%m%dT%H%M%SZ)
   sudo ln -sfn "releases/$SOLD" /opt/automaton-fleet/current.tmp && sudo mv -T /opt/automaton-fleet/current.tmp /opt/automaton-fleet/current
   sudo systemctl start $START
   for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8787/readyz 2>/dev/null && break; sleep 1; done
@@ -210,14 +210,42 @@ UNITS="automaton-fleet-operator-api.service automaton-fleet-chatgpt-adapter.sock
 START="automaton-fleet.service automaton-fleet-operator-api.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-chatgpt-adapter.socket$LATE"
 echo "also cycled with the controller:${LATE:- none}"
 psqlq() { live "$1"; }
-sudo test ! -e $ENVF.pre-${C:0:7} || die "a previous cutover attempt of this commit left $ENVF.pre-${C:0:7}"
-sudo cp -p $ENVF $ENVF.pre-${C:0:7}
-sudo sed -i -e "s/^FLEET_RUNTIME_COMMIT=.*/FLEET_RUNTIME_COMMIT=$C/" -e "s/^FLEET_RUNTIME_BUILD_ID=.*/FLEET_RUNTIME_BUILD_ID=$B/" -e "s/^FLEET_RUNTIME_LOCKFILE_SHA256=.*/FLEET_RUNTIME_LOCKFILE_SHA256=$L/" $ENVF
+# Every retry guard runs BEFORE runtime.env or `current` is changed: a refused retry leaves production exactly as it was.
+REL=/opt/automaton-fleet/releases; DEST=$REL/$C; STAGE=~/.cache/automaton-fleet/stage/$C
+sudo test ! -e $ENVF.pre-${C:0:7} || die "a previous cutover attempt of this commit left $ENVF.pre-${C:0:7} (compare it with $ENVF, then move it aside)"
+[[ "$(readlink /opt/automaton-fleet/current)" == "releases/$OLD" && -d "$REL/$OLD" ]] || die "current is not releases/${OLD:0:7} (the rollback target)"
+# The candidate's own tooling, then its verified build staged from the PINS FILE (runtime.env is not read or touched).
 cd ~/automaton-fleet-build
-scripts/fleet-deploy-release.sh build > ~/rollout-stage.log 2>&1; tail -1 ~/rollout-stage.log
 git fetch -q origin "$C"; git checkout -q --detach "$C"; test "$(git rev-parse HEAD)" = "$C"; CI=true pnpm install --frozen-lockfile > ~/rollout-tooling.log 2>&1
-sudo scripts/fleet-deploy-release.sh install 2>&1 | tail -1
+FLEET_RUNTIME_ENV_FILE="$PINS" scripts/fleet-deploy-release.sh build > ~/rollout-stage.log 2>&1 || { tail -3 ~/rollout-stage.log; die "the candidate build failed or does not match the pins (nothing was changed)"; }
+tail -1 ~/rollout-stage.log
+# An existing releases/<commit> (an earlier attempt) is reused only when verified identical to that build; otherwise it is
+# quarantined with its evidence (never deleted) and installed fresh.
+REUSE=0
+if sudo test -e "$DEST" -o -L "$DEST" -o -e "$DEST.tmp" -o -L "$DEST.tmp"; then
+  RR=0; sudo bash scripts/fleet-release-reuse.sh "$DEST" "$STAGE" "$B" "$L" || RR=$?
+  case $RR in 0) REUSE=1 ;; 10) ;; *) die "the existing $DEST could not be verified or quarantined (nothing was changed)" ;; esac
+fi
+# ── first change: runtime.env pins (backed up), then the release; a failure before the outage restores both ──
+sudo cp -p $ENVF $ENVF.pre-${C:0:7}
+preabort() {
+  trap - ERR
+  echo "!! FAILURE before the outage — restoring runtime.env and releases/${OLD:0:7} $(ts)"
+  sudo cp -p $ENVF.pre-${C:0:7} $ENVF && sudo mv $ENVF.pre-${C:0:7} $ENVF.pre-${C:0:7}.aborted-$(date -u +%Y%m%dT%H%M%SZ)
+  sudo ln -sfn "releases/$OLD" /opt/automaton-fleet/current.tmp && sudo mv -T /opt/automaton-fleet/current.tmp /opt/automaton-fleet/current
+  echo "== ROLLOUT ${C:0:7} ABORTED before the outage: nothing else changed (current $(readlink /opt/automaton-fleet/current))"
+  exit 1
+}
+trap preabort ERR
+sudo sed -i -e "s/^FLEET_RUNTIME_COMMIT=.*/FLEET_RUNTIME_COMMIT=$C/" -e "s/^FLEET_RUNTIME_BUILD_ID=.*/FLEET_RUNTIME_BUILD_ID=$B/" -e "s/^FLEET_RUNTIME_LOCKFILE_SHA256=.*/FLEET_RUNTIME_LOCKFILE_SHA256=$L/" $ENVF
+if [[ $REUSE == 1 ]]; then
+  sudo ln -sfn "releases/$C" /opt/automaton-fleet/current.tmp && sudo mv -T /opt/automaton-fleet/current.tmp /opt/automaton-fleet/current
+  echo "reused verified release $DEST"
+else
+  sudo scripts/fleet-deploy-release.sh install 2>&1 | tail -1
+fi
 test "$(readlink /opt/automaton-fleet/current)" = "releases/$C"
+trap - ERR
 for i in $(seq 1 90); do [ "$(psqlq 'SELECT count(*) FROM fleet.fleet_cognition_inflight')" = 0 ] && break; sleep 2; done
 echo "OUTAGE START $(ts)"; sudo systemctl stop $UNITS
 STAMP=$(date -u +%Y%m%dT%H%M%SZ); D=~/automaton_fleet-v$FROM-pre-v$TO-$STAMP.dump
@@ -233,7 +261,7 @@ rollback() {
     sudo -u postgres pg_restore -d $LIVE --exit-on-error < "$D"
     echo "database restored from $D: schema $(psqlq 'SELECT max(version) FROM fleet.fleet_schema_migrations')"
   fi
-  sudo cp -p $ENVF.pre-${C:0:7} $ENVF
+  sudo cp -p $ENVF.pre-${C:0:7} $ENVF && sudo mv $ENVF.pre-${C:0:7} $ENVF.pre-${C:0:7}.reverted-$(date -u +%Y%m%dT%H%M%SZ)
   sudo ln -sfn "releases/$OLD" /opt/automaton-fleet/current.tmp && sudo mv -T /opt/automaton-fleet/current.tmp /opt/automaton-fleet/current
   sudo systemctl start $START
   for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8787/readyz 2>/dev/null && break; sleep 1; done

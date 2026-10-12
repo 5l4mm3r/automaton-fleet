@@ -3,17 +3,22 @@
 #
 #   bash scripts/fleet-release.sh <pinsFile> <fromSchema> <toSchema> <uiName> <ui.tgz> <uiSha256>
 #
+#   0. preflight, before anything changes: the UI step's own checks (fleet-ui-deploy.sh --check: an unchanged UI that is
+#      already served or present byte-identical is a success; a served directory that differs is refused), then a
+#      snapshot of dashboard.env exactly as it is live now (dashboard.env.before-release-<commit7>-<stamp>).
 #   1. backend: scripts/fleet-rollout.sh cutover (fresh verified dump, migrate, re-run, reconciliation, approval,
 #      services; it rolls itself back on any failure and then records production_rolled_back). Its own
 #      production_deployed is DEFERRED: the release is not done yet.
-#   2. UI: scripts/fleet-ui-deploy.sh <uiName> (a new immutable directory, only FLEET_DASHBOARD_STATIC_DIR changes, only
-#      the dashboard restarts; it restores the previous UI itself if the dashboard does not serve the new tree).
+#   2. UI: scripts/fleet-ui-deploy.sh <uiName> (an immutable directory, only FLEET_DASHBOARD_STATIC_DIR changes, only
+#      the dashboard restarts; it restores the previous UI itself if the dashboard does not serve the new tree; an
+#      unchanged, already-served UI is verified and nothing is switched).
 #   3. root verification through the PUBLIC edge (https://admin.agentfleet.vip via the local nginx): /, /login/ and
 #      /hq-preview/login/ are byte-identical to the new tree, an unauthenticated read is refused, the controller is
 #      ready on schema <toSchema>.
 #   4. ONLY THEN one production_deployed event (P2 in Fleet Command).
-# If step 2 or 3 fails after the backend succeeded: the previous UI is restored, then the backend is reverted with the
-# rehearsed restore (fleet-rollout.sh revert: the cutover's verified pre-migration dump, the previous runtime.env and
+# If step 2 or 3 fails after the backend succeeded: the UI that was live immediately before this release (the step-0
+# snapshot — never an older dashboard.env.pre-<name> from an earlier deployment) is restored and verified, then the
+# backend is reverted with the rehearsed restore (fleet-rollout.sh revert: the cutover's verified pre-migration dump, the previous runtime.env and
 # release), and only after that completes ONE production_rolled_back event is recorded (P0). Fleet Command sees exactly
 # one outcome per release.
 set -euo pipefail
@@ -37,11 +42,23 @@ verify_root() {
   [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8787/readyz)" == 200 ]] || { echo "controller not ready"; return 1; }
   [[ "$(sudo -u postgres psql -X -At -d automaton_fleet -c 'SELECT max(version) FROM fleet.fleet_schema_migrations')" == "$TO" ]] || { echo "schema is not $TO"; return 1; }
 }
-ui_restore() { if sudo test -f "$ENVD.pre-$UINAME" && sudo grep -qx "FLEET_DASHBOARD_STATIC_DIR=$UIDIR" "$ENVD"; then sudo cp -p "$ENVD.pre-$UINAME" "$ENVD"; sudo systemctl restart automaton-fleet-dashboard.service; echo "previous UI restored ($(sudo sed -n 's/^FLEET_DASHBOARD_STATIC_DIR=//p' "$ENVD"))"; fi; }
+# The UI exactly as it was live before this release: the step-0 snapshot of dashboard.env is put back (only if it changed;
+# then only the dashboard restarts) and the loopback listener must serve that directory's index.html again.
+served_sha() { curl -s --max-time 10 http://127.0.0.1:8790/ | sha256sum | cut -c1-64; }
+ui_restore() {
+  if ! sudo cmp -s "$ENV_BEFORE" "$ENVD"; then sudo cp -p "$ENV_BEFORE" "$ENVD"; sudo systemctl restart automaton-fleet-dashboard.service; fi
+  local ok=0; for _ in $(seq 1 20); do [[ "$(served_sha)" == "$(sudo sha256sum "$UI_BEFORE/index.html" | cut -c1-64)" ]] && { ok=1; break; }; sleep 1; done
+  if [[ $ok == 1 ]]; then echo "UI restored to $UI_BEFORE (live immediately before this release)"; else echo "!! the dashboard does not serve $UI_BEFORE after the restore — INVESTIGATE"; fi
+}
 # (tests only: replace the functions above with stubs)
 if [[ -n "${FLEET_RELEASE_STUBS:-}" ]]; then source "$FLEET_RELEASE_STUBS"; fi
 
 echo "== RELEASE ${C:0:7} (schema $FROM -> $TO, UI $UINAME) start $(ts)"
+# 0. Preflight (nothing changes if refused), then the snapshot of the UI live now.
+sudo bash "$UIDEPLOY" --check "$UINAME" "$UITGZ" "$UISHA" || die "the UI step would refuse (nothing was changed)"
+UI_BEFORE=$(sudo sed -n 's/^FLEET_DASHBOARD_STATIC_DIR=//p' "$ENVD"); [[ -n "$UI_BEFORE" ]] || die "the live UI directory is unreadable"
+ENV_BEFORE="$ENVD.before-release-${C:0:7}-$(date -u +%Y%m%dT%H%M%SZ)"; sudo test ! -e "$ENV_BEFORE" || die "$ENV_BEFORE exists"
+sudo cp -p "$ENVD" "$ENV_BEFORE"; echo "UI live now: $UI_BEFORE (dashboard.env snapshot $ENV_BEFORE)"
 # 1. Backend (rolls itself back and records production_rolled_back on its own failure).
 if ! FLEET_ROLLOUT_DEFER_EVENT=1 bash "$ROLLOUT" cutover "$PINS" "$FROM" "$TO"; then
   echo "== RELEASE ${C:0:7} FAILED at the backend cutover (it rolled back by itself); UI unchanged $(ts)"; exit 1
@@ -60,6 +77,6 @@ sudo bash "$UIDEPLOY" "$UINAME" "$UITGZ" "$UISHA" || backend_revert "UI promotio
 WHY=$(verify_root) || backend_revert "root verification failed: $WHY"
 # 4. One outcome for Fleet Command.
 record production_deployed ", 'previous', '$(sed -n 's/^OLD=//p' ~/rollout-${C:0:7}-cutover.state 2>/dev/null | cut -c1-12)'"
-echo "UI rollback: sudo cp -p $ENVD.pre-$UINAME $ENVD && sudo systemctl restart automaton-fleet-dashboard.service"
+echo "UI rollback (to the UI live before this release): sudo cp -p $ENV_BEFORE $ENVD && sudo systemctl restart automaton-fleet-dashboard.service"
 echo "backend rollback: bash $ROLLOUT revert $PINS $FROM $TO <reason>  (pre-migration dump: $(sed -n 's/^DUMP=//p' ~/rollout-${C:0:7}-cutover.state 2>/dev/null))"
 echo "== RELEASE ${C:0:7} DEPLOYED $(ts): schema $TO, root UI $UINAME (production_deployed recorded)"

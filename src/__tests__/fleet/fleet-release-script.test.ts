@@ -32,11 +32,24 @@ fi
 if [[ "$1" == revert ]]; then [[ "\${REVERT_OK:-1}" == 1 ]] || exit 2; echo "event production_rolled_back (\${*:5})" >> "${log}"; exit 0; fi
 exit 9
 `);
-    fs.writeFileSync(path.join(dir, "uideploy.sh"), `#!/usr/bin/env bash\necho "uideploy $1" >> "${log}"; [[ "\${UI_OK:-1}" == 1 ]]\n`);
+    // The UI live now: 0.8.2. An OLDER backup from an earlier deployment points at 0.8.1 (the 2026-10-12 defect restored that).
+    for (const v of ["0.8.1", "0.8.2", "0.8.3"]) { fs.mkdirSync(path.join(dir, "ui", v), { recursive: true }); fs.writeFileSync(path.join(dir, "ui", v, "index.html"), `ui ${v}`); }
+    fs.writeFileSync(path.join(dir, "dashboard.env"), `FLEET_DASHBOARD_LOGIN=x\nFLEET_DASHBOARD_STATIC_DIR=${dir}/ui/0.8.2\n`);
+    fs.writeFileSync(path.join(dir, "dashboard.env.pre-0.8.3"), `FLEET_DASHBOARD_LOGIN=x\nFLEET_DASHBOARD_STATIC_DIR=${dir}/ui/0.8.1\n`);
+    // Stub UI step: --check as the environment says; a real attempt switches the env to 0.8.3, then fails or succeeds.
+    fs.writeFileSync(path.join(dir, "uideploy.sh"), `#!/usr/bin/env bash
+echo "uideploy $1" >> "${log}"
+if [[ "$1" == --check ]]; then [[ "\${UICHECK_OK:-1}" == 1 ]]; exit; fi
+sed -i "s#^FLEET_DASHBOARD_STATIC_DIR=.*#FLEET_DASHBOARD_STATIC_DIR=${dir}/ui/0.8.3#" "${dir}/dashboard.env"
+[[ "\${UI_OK:-1}" == 1 ]]
+`);
     fs.writeFileSync(path.join(dir, "stubs.sh"), `sudo() { "$@"; }
+systemctl() { echo "systemctl $*" >> "${log}"; }
+ENVD="${dir}/dashboard.env"
 record() { echo "event $1" >> "${log}"; }
 verify_root() { [[ "\${VERIFY_OK:-1}" == 1 ]] || { echo "root / is not the new UI"; return 1; }; }
-ui_restore() { echo "ui_restore" >> "${log}"; }
+# the dashboard serves whatever dashboard.env names
+served_sha() { sha256sum "$(sed -n 's/^FLEET_DASHBOARD_STATIC_DIR=//p' "$ENVD")/index.html" | cut -c1-64; }
 `);
   });
   afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
@@ -53,26 +66,29 @@ ui_restore() { echo "ui_restore" >> "${log}"; }
   it("backend, UI and root all succeed: production_deployed once, recorded LAST", () => {
     const r = run();
     expect(r.code).toBe(0);
-    expect(r.steps).toEqual(["rollout cutover defer=1", "uideploy 0.8.3", "event production_deployed"]);
+    expect(r.steps).toEqual(["uideploy --check", "rollout cutover defer=1", "uideploy 0.8.3", "event production_deployed"]);
   });
 
   it("the backend cutover fails: it rolls itself back (one rolled_back); the UI is never touched; never 'deployed'", () => {
     const r = run({ CUTOVER_OK: "0" });
     expect(r.code).toBe(1);
-    expect(r.steps).toEqual(["rollout cutover defer=1", "event production_rolled_back (cutover self-rollback)"]);
+    expect(r.steps).toEqual(["uideploy --check", "rollout cutover defer=1", "event production_rolled_back (cutover self-rollback)"]);
   });
 
   it("the UI promotion fails after the backend succeeded: UI restored, backend reverted, THEN one rolled_back; never 'deployed'", () => {
     const r = run({ UI_OK: "0" });
     expect(r.code).toBe(1);
-    expect(r.steps).toEqual(["rollout cutover defer=1", "uideploy 0.8.3", "ui_restore", "rollout revert defer=0", "event production_rolled_back (release step failed: UI promotion failed)"]);
+    expect(r.steps).toEqual(["uideploy --check", "rollout cutover defer=1", "uideploy 0.8.3", "systemctl restart automaton-fleet-dashboard.service", "rollout revert defer=0", "event production_rolled_back (release step failed: UI promotion failed)"]);
     expect(events(r.steps)).toHaveLength(1);
+    // The UI live immediately before the attempt (0.8.2) — not the older 0.8.1 named by dashboard.env.pre-0.8.3.
+    expect(fs.readFileSync(path.join(dir, "dashboard.env"), "utf8")).toContain(`FLEET_DASHBOARD_STATIC_DIR=${dir}/ui/0.8.2\n`);
+    expect(r.out).toContain(`UI restored to ${dir}/ui/0.8.2 (live immediately before this release)`);
   });
 
   it("the public root does not serve the new UI: the same full rollback; never 'deployed'", () => {
     const r = run({ VERIFY_OK: "0" });
     expect(r.code).toBe(1);
-    expect(r.steps.slice(2)).toEqual(["ui_restore", "rollout revert defer=0", "event production_rolled_back (release step failed: root verification failed: root / is not the new UI)"]);
+    expect(r.steps.slice(3)).toEqual(["systemctl restart automaton-fleet-dashboard.service", "rollout revert defer=0", "event production_rolled_back (release step failed: root verification failed: root / is not the new UI)"]);
     expect(r.steps).not.toContain("event production_deployed");
   });
 
@@ -81,6 +97,21 @@ ui_restore() { echo "ui_restore" >> "${log}"; }
     expect(r.code).toBe(3);
     expect(events(r.steps)).toEqual([]);
     expect(r.out).toContain("BACKEND REVERT FAILED");
+  });
+
+  it("an unchanged UI (the step itself switches nothing) that then fails root verification: no restart needed, the live UI is kept", () => {
+    fs.writeFileSync(path.join(dir, "uideploy.sh"), `#!/usr/bin/env bash\necho "uideploy $1" >> "${log}"\n`);
+    const r = run({ VERIFY_OK: "0" });
+    expect(r.code).toBe(1);
+    expect(r.steps).toEqual(["uideploy --check", "rollout cutover defer=1", "uideploy 0.8.3", "rollout revert defer=0", "event production_rolled_back (release step failed: root verification failed: root / is not the new UI)"]);
+    expect(fs.readFileSync(path.join(dir, "dashboard.env"), "utf8")).toContain(`FLEET_DASHBOARD_STATIC_DIR=${dir}/ui/0.8.2\n`);
+  });
+
+  it("the UI step's preflight refuses: nothing runs, nothing changes (no backend cutover, no env snapshot)", () => {
+    const r = run({ UICHECK_OK: "0" });
+    expect(r.code).toBe(2);
+    expect(r.steps).toEqual(["uideploy --check"]);
+    expect(fs.readdirSync(dir).filter((f) => f.includes("before-release"))).toEqual([]);
   });
 
   it("a wrong UI checksum is refused before anything runs", () => {
