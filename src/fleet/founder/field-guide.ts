@@ -21,7 +21,7 @@ export interface GuideSection { id: string; title: string; kind: "design doctrin
 export const FIELD_GUIDE: readonly GuideSection[] = Object.freeze([
   { id: "orientation", title: "How to use this guide", kind: "design doctrine", text: [
     "This guide is orientation: read it in full when you start or when it changes (op all, in parts) to get the whole picture of how this Fleet works and how to win in it.",
-    "Your memory is not your model. Reading this once does not permanently change you: in a later turn you know what is in your context — your charter, your packet and whatever you retrieve. What persists is what you keep: concise lessons in your field journal and Fleet knowledge.",
+    "How reading and memory work (reading informs the turn; what persists is what you keep and retrieve): economic_knowledge op library {id: \"bf-how-to-use\"}.",
     "This guide is how THIS Fleet works. How to build a business — demand, offers, economics, cash, marketing, customers, risk — is the business foundation in the Fleet library: read it in full once (economic_knowledge op library {path: \"foundation\", part: 1, 2, …}), keep a short summary with remember_fact, then retrieve sections when a decision needs them.",
     "When you need a part again, retrieve that section (op read) rather than relying on recollection — especially figures, rules and platform facts. Platform and legal facts are dated: re-verify them at the source before relying on them.",
   ].join("\n") },

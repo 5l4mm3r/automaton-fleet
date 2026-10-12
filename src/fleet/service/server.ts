@@ -1554,7 +1554,8 @@ export class FleetService {
         if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, "FLEET_BAD_REQUEST", "after must be a non-negative integer");
         const r = await agent.knowledgeList(agentId, token, after, 50);
         if (!r.ok) throw FleetService.refusal(r, "knowledge refused");
-        return { entries: r.entries };
+        // v68: also the recently retired (superseded) lessons and their replacement; older runtimes read entries only.
+        return { entries: r.entries, ...(r.retired !== undefined ? { retired: r.retired } : {}), ...(typeof r.note === "string" ? { note: r.note } : {}) };
       }
 
       case "/v1/identity/request": {

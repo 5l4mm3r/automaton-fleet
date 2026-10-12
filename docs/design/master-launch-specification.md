@@ -822,21 +822,34 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
 
 - **One authoritative business source.** `docs/knowledge/business-foundation-v1.md` (owner text §3–§23 integrated with the
   Field Guide v2 doctrine it overlapped, plus cash and settlement states, AI-cost attribution and failure fuses, net-profit
-  sweeps, fraud, untrusted content, delivery commitments and evidence-based stop/pivot/scale) generates 30
+  sweeps, fraud, untrusted content, delivery commitments and evidence-based stop/pivot/scale) generates 32
   `business-foundation` entries and one dated `fleet-status` entry (`fleet-capability-status`, facts stale after 14 days; the
   Gumroad £500 / EU-route question labelled UNRESOLVED). Stable ids, cross-references, dated primary sources, examples
-  labelled HYPOTHETICAL. §1 and §2 are pending the owner's text (not invented).
-- **Reading.** Agents read the whole foundation once (at birth and when its version changes) through
-  `knowledge.library {path: "foundation", part}` — whole entries in order, ≤ 7 000 characters per part — keep a short
-  summary with `remember_fact`, and retrieve sections by query or id afterwards. Charter v6 carries that standing summary
-  and the version; reading is never described as permanent learning.
+  labelled HYPOTHETICAL. §1 and §2 (owner text, 2026-10-12) open the reading path.
+- **Reading (instructed, not tracked).** Charter v6 and the Field Guide instruct agents to read the whole foundation once (at
+  birth and when its version changes) through `knowledge.library {path: "foundation", part}` — whole entries in order,
+  ≤ 7 000 characters per part — to keep a short summary with `remember_fact`, and to retrieve sections afterwards. The
+  runtime does not record whether an agent did so: this is instructed behaviour, not guaranteed execution. Reading is never
+  described as permanent learning.
 - **Field Guide v2.1** keeps Fleet operating orientation; its business doctrine sections (survival cycle, tactics, venture
   types, customers/ads, refunds, scams) are pointers to the library, so each rule is maintained once. Runtime change.
 - **Wake-ups.** `fleet_agent_attention.eventsDigest` covers inbound mail, card requests, spend reviews, Fleet Control notices,
   lesson reviews and disputes; the v67 founder runtime adds it to its wake digest, so these wake a hibernating agent within
   one thinking slot (previously up to the 24 h safety re-check). The owner's pause is unchanged: a paused agent wakes for
   nothing; changes are seen on the first slot after resume.
-- **Open — retiring promoted lessons.** Curated library entries are corrected by new versions. Promoted agent lessons
-  (`fleet_knowledge_entries`) have no superseded state, and runtimes sync them incrementally, so a correction would sit
-  beside the outdated lesson. Connection to add: a reviewer-set `superseded_by`, exposed in `api_knowledge_list`, and a
-  runtime that re-reads superseded markers.
+- Retiring promoted lessons: closed by v68 (§23).
+
+## 23. Schema v68 — correcting promoted lessons; telling a woken agent what happened (revision 6, 2026-10-12)
+
+- **Supersession through the lesson-review path.** Fleet Control's reviewer sees the current shared lessons with their ids and,
+  when it promotes a correction, names the lessons it replaces (`supersedes`). Promoted lessons stay immutable; an
+  append-only `fleet_knowledge_supersessions` row records old → new with the reason (P3 `knowledge_superseded`). Current =
+  not superseded. `read_knowledge` returns the latest current lessons (each with what it replaced) and the recently retired
+  ones with their replacement, so the agent sees a correction without rereading anything; a supersession wakes every agent
+  (it may have copied the old lesson into its own notes). The owner's CLI review does not supersede.
+- **What woke you.** `fleet_agent_attention.recentEvents` (14 days, ≤ 20): kind, id, status, time and the retrieving tool for
+  inbound mail, card requests, spend reviews, lesson reviews, superseded lessons and disputes — no subjects or bodies. The
+  runtime adds one line to the wake packet with the events since its last turn. Verified through the real event paths
+  (broker mail, a spend review opened and decided, an owner card decision, a PayPal dispute, a lesson review and a
+  supersession).
+- Ships as one coordinated release with v66 and v67 (65 → 68) plus the founder runtime upgrade.

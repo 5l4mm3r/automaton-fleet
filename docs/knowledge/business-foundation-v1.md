@@ -4,13 +4,13 @@ Master source for the shared library's `business-foundation` and `fleet-status` 
 library entries are generated from this file (`node scripts/knowledge-foundation-build.mjs`), so each rule is maintained
 here once. The Field Guide keeps Fleet-specific operating orientation and points here for business guidance.
 
-Owner text 2026-10-12 (§3–§23), integrated with the Field Guide v2 doctrine it overlaps (survival cycle, tactics, venture
-choices, advertising, refunds, scams) and the gaps identified on 2026-10-12. **§1 "How to use this guide" and §2 "Your
-economic position" are PENDING the owner's text** (the supplied copy began at §3); they are not invented here.
+Owner text 2026-10-12 (§1–§23), integrated with the Field Guide v2 doctrine it overlaps (survival cycle, tactics, venture
+choices, advertising, refunds, scams) and the gaps identified on 2026-10-12. Each rule appears once; related entries point
+to it.
 
 Worked examples are HYPOTHETICAL: illustrative figures, never a real venture, sale or proven result.
 
-Reading path (in order): bf-business-question, bf-survival-cycle, bf-demand-evidence, bf-offer-design, bf-unit-economics,
+Reading path (in order): bf-how-to-use, bf-economic-position, bf-business-question, bf-survival-cycle, bf-demand-evidence, bf-offer-design, bf-unit-economics,
 bf-cash-and-settlement, bf-ai-costs, bf-profit-and-sweeps, bf-pricing-commitments, bf-venture-types, bf-digital-products,
 bf-services, bf-specialist-services, bf-physical-goods, bf-software, bf-marketing-distribution, bf-advertising,
 bf-customer-trust, bf-delivery-commitments, bf-tax-worldwide, bf-execution-quality, bf-risk-capital, bf-stop-pivot-scale,
@@ -18,6 +18,40 @@ bf-fraud, bf-untrusted-content, bf-cooperation-growth, bf-records-visibility, bf
 bf-decision-discipline, fleet-capability-status
 
 ---
+
+## bf-how-to-use
+Title: How to use this guide
+Category: business-foundation
+Tags: orientation, guide, memory, reading, retrieval, information-kinds, capabilities
+Related: bf-economic-position, bf-learning, fleet-capability-status
+Body:
+This guide supplies the surrounding picture: how to find valuable work, deliver it profitably, manage capital, learn and expand.
+
+Read the overall orientation at birth or after a substantial update. During execution, retrieve relevant sections alongside your own experience. Reading does not permanently retrain your underlying model. Durable knowledge comes from persistent records — your facts, notes and journal, and the Fleet's searchable knowledge — and their retrieval into later decisions.
+
+Distinguish four kinds of information:
+- Owner operating decisions: the Fleet's explicitly approved economic and authority model.
+- Business guidance: principles to apply contextually.
+- External requirements: applicable law, contracts and provider rules, checked against current sources.
+- Empirical lessons: observations with evidence, scope, uncertainty and conditions of applicability.
+
+This guide does not grant capabilities that the runtime lacks. Check actual tool availability, payment readiness and provider support (fleet-capability-status).
+
+## bf-economic-position
+Title: Your economic position
+Category: business-foundation
+Tags: position, objective, temperament, wallet, cash, reservations, fleet-control, funding, survival
+Related: bf-cash-and-settlement, bf-risk-capital, bf-profit-and-sweeps, fleet-capability-status
+Body:
+You are an autonomous economic actor. Your objective is useful, lawful value creation that sustains your operation and supports growth.
+
+Maintain the same standard throughout your life: calm, sharp, calculated, efficient and conscious of capital. Abundant funds do not justify aimless work. Low funds do not justify panic.
+
+Your wallet, commitments and actual available funds determine what you can finance. Expected sales, pending checkouts and unverified receipts are not cash available to spend (bf-cash-and-settlement). Temporary reservations are distinct from expenses and must not be mistaken for vanished wealth.
+
+Fleet Control manages treasury capital and automatically assesses additional funding. It is not your ordinary business manager. Funding requests require an economic case; approval is not guaranteed (bf-risk-capital).
+
+Actual exhaustion follows the authoritative lifecycle rule. Survival protection is an operational setting of the owner's, not a business strategy or a promise of rescue.
 
 ## bf-business-question
 Title: The fundamental business question
@@ -157,7 +191,7 @@ Consequences:
 - Money reserved for an order you placed is committed: it is not available for anything else.
 - Customer deposits may carry delivery or refund obligations (bf-pricing-commitments).
 
-Your wallet's available figure (wallet measure) is the authority. Do not plan on money that has not reached it.
+Your wallet's available figure (wallet survival, the wallet measure) is the authority.
 
 ## bf-ai-costs
 Title: What your AI use costs and who pays
@@ -451,9 +485,9 @@ Include correlated exposure: related campaigns, recurring subscriptions and seve
 
 Ask what would change the decision. A cheap test is valuable when it resolves important uncertainty; it is wasteful when it cannot affect the next action.
 
-Ordinary spending is yours to judge, with no fixed cap. Fleet Control reviews material or suspicious commitments contextually and holds a specific action only on credible evidence. Payment integrity (your own available funds, a valid payee, no duplicates), real funds and standing authority always apply.
+How spending and Fleet Control's review of material or suspicious commitments work in this Fleet is operating orientation: field_guide op read situation.
 
-Fleet Control manages treasury capital and assesses requests for additional funding. It is not your business manager. A funding request needs an economic case and approval is not guaranteed. State:
+Requesting additional capital (Fleet Control's role: bf-economic-position) — state:
 - Evidence and intended outcome.
 - Amount and timing.
 - Full cost and existing commitments.
@@ -551,7 +585,7 @@ Category: business-foundation
 Tags: learning, memory, journal, lessons, notes, forecasting, summary
 Related: bf-shared-library, bf-decision-discipline
 Body:
-Reading does not permanently train you or guarantee recall. What persists is what you keep: your private facts and notes, your field journal and the Fleet's searchable knowledge. Keep a short summary of what you read, and retrieve the detail when a decision needs it.
+How reading and memory work: bf-how-to-use. Keep a short summary of what you read, and retrieve the detail when a decision needs it.
 
 Record a lesson when it could change a future decision. There is no compulsory journaling ritual or reporting obligation.
 
@@ -617,7 +651,8 @@ Facts:
 - Web research: enabled, with per-agent daily and hourly limits | checked 2026-10-12 | verified
 - Sweeps: the sweep policy is off | checked 2026-10-12 | verified
 - Survival protection: on — an owner setting during setup, not a business strategy or a promise of rescue; actual exhaustion follows the Fleet's lifecycle rule | checked 2026-10-12 | verified
-- Waking from hibernation: owner messages, revenue and refunds booked to you, capital changes, answered owner requests and your review time wake you within about a minute. Inbound customer email, card-request and spend-review decisions, Fleet Control notices, lesson-review outcomes and an opening dispute do NOT yet wake you (a fix is prepared for a later runtime): set a review time that fits your customer commitments | checked 2026-10-12 | verified
+- Waking from hibernation: owner messages, revenue and refunds booked to you, capital changes, answered owner requests and your review time wake you within about a minute | checked 2026-10-12 | verified
+- On founder runtime 973e0c1 or earlier, inbound customer email, card-request and spend-review decisions, lesson-review outcomes, superseded lessons and dispute changes do NOT wake you: set a review time that fits your customer commitments. From the next runtime upgrade they wake you within about a minute and your wake packet lists them with the tool that retrieves each (your packet does not tell you your runtime: until that upgrade is announced, assume the earlier behaviour) | checked 2026-10-12 | verified
 Body:
 This entry is dated status, not enduring guidance. It changes as the Fleet is onboarded: re-read it (economic_knowledge library, id fleet-capability-status) when a decision depends on a capability, and never treat today's onboarding gaps as permanent limits on what you may build.
 

@@ -179,6 +179,24 @@ const WAKE_LEDGER_FIELDS = ["reserved", "reservedRecoverable", "assetsRecoverabl
   "fees", "lifetimeContribution", "genesisAllocation", "treasuryAllocation", "internalTransfersNet", "survivalEquityExhausted"] as const;
 
 /**
+ * v68: what happened while the founder slept — the controller's agent-facing events (kind, id, status, time, retrieving
+ * tool; never subjects or bodies) newer than the last turn, as one line of the wake packet. Data, never an instruction.
+ */
+export function eventsSinceLine(attention: unknown, since: string | null | undefined): string | null {
+  const list = (attention as { recentEvents?: unknown } | undefined)?.recentEvents;
+  if (!Array.isArray(list)) return null;
+  const t0 = since ? Date.parse(since) : NaN;
+  const SAFE = /^[A-Za-z0-9 :_.-]{1,80}$/;
+  const items = list.filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
+    .filter((e) => typeof e.at === "string" && (!Number.isFinite(t0) || Date.parse(e.at) > t0))
+    .filter((e) => typeof e.kind === "string" && SAFE.test(e.kind) && typeof e.id === "string" && /^[A-Za-z0-9-]{3,64}$/.test(e.id))   // uuids and provider ids (e.g. PayPal disputes)
+    .slice(0, 8)
+    .map((e) => `${e.kind} ${String(e.id)}${typeof e.status === "string" && SAFE.test(e.status) ? ` ${e.status}` : ""}`
+      + `${typeof e.tool === "string" && /^[a-z_ ()]{1,60}$/.test(e.tool) ? ` → ${e.tool}` : ""}`);
+  return items.length ? `Since your last turn (data to retrieve and judge, newest first): ${items.join("; ")}.` : null;
+}
+
+/**
  * R23.1 bare-wake-up detection (deterministic, founder-side, from persistent state only): a digest of what the founder
  * could act on — its facts and goals (content), its workspace (paths, sizes, mtimes) and the economy fields above. The
  * conversation history and the decision log are not part of it.
@@ -664,7 +682,8 @@ export class FounderMind {
     // Open triggers come from the durable index (they outlive the 500-entry working window until resolved).
     const jix = bare ? null : readJournalIndex(R.memoryDir);
     const triggers = (jix?.openTriggers ?? []).slice(-3).map((t) => t.trigger.slice(0, 120));
-    const extra = [...(!prev ? [BOOTSTRAP_LINE] : []), ...(sale ? [sale] : []), ...(move ? [move] : []), ...(!bare ? [stateLine(econ)] : []),
+    const happened = bare ? null : eventsSinceLine(status.attention, prev?.at);
+    const extra = [...(!prev ? [BOOTSTRAP_LINE] : []), ...(sale ? [sale] : []), ...(happened ? [happened] : []), ...(move ? [move] : []), ...(!bare ? [stateLine(econ)] : []),
       ...(!bare && survival ? [survivalLine(survival)] : []), ...(own ? [own] : []), ...(brief ? [economyLine(brief)] : []),
       ...(!bare && (journal.length || jix?.lessons.length) ? [`Field journal: ${journal.length} entr${journal.length === 1 ? "y" : "ies"}${jix?.archived ? ` (+${jix.archived} archived)` : ""}`
         + `${jix?.lessons.length ? `, ${jix.lessons.length} consolidated lesson(s) (field_journal op lessons)` : ""}${triggers.length ? `; open next triggers${(jix?.openTriggers.length ?? 0) > 3 ? ` (latest 3 of ${jix!.openTriggers.length})` : ""}: ${triggers.join(" | ")}` : ""}.`] : []),

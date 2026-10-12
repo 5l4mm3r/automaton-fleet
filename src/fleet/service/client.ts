@@ -422,7 +422,10 @@ export class FleetApiClient implements FleetBackend {
   }
 
   async knowledge(after = 0) {
-    return (await this.call<{ entries: Array<Record<string, unknown>> }>("POST", "/v1/knowledge/list", { after })).entries;
+    // v68: the current lessons, plus (from a v68 controller) the retired ones with their replacement — so a copied lesson
+    // that was corrected is visible as such. An older controller returns entries only.
+    const r = await this.call<{ entries: Array<Record<string, unknown>>; retired?: Array<Record<string, unknown>>; note?: string }>("POST", "/v1/knowledge/list", { after });
+    return r.retired !== undefined ? { entries: r.entries, retired: r.retired, ...(r.note ? { note: r.note } : {}) } : r.entries;
   }
 
   /** Request one Organisation Identity fact for a named workflow; released only after owner approval. */

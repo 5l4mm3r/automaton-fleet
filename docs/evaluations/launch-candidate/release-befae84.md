@@ -1,6 +1,6 @@
 # Release befae84 — schema 65 → 66 + UI 0.17.0 (capital backing)
 
-Status: **rehearsed, not deployed** (2026-10-12 15:07:02Z). No money moved.
+Status: **SUPERSEDED — not to be deployed separately** (owner, 2026-10-12): v66 ships in the coordinated 65 → 68 release. Rehearsed 2026-10-12 15:07:02Z; no money moved.
 
 ## Contents
 - **Schema v66.** `fleet_admin_capital_back` / `fleet_capital_backing()`: a real PayPal deposit backs the capital recorded

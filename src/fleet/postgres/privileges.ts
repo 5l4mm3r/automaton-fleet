@@ -1205,6 +1205,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_channel_unlocks: new Set(["fleet_channel_unlocked"]),
     // v66: backings of the existing capital only by the owner's backing function.
     fleet_capital_backings: new Set(["fleet_admin_capital_back"]),
+    // v68: lesson supersessions only by Fleet Control's review record.
+    fleet_knowledge_supersessions: new Set(["svc_knowledge_review_record"]),
     fleet_card_request_policy: new Set(["fleet_admin_card_request_policy_set"]),
     // v55: the owner's survival protection switch, only by the owner.
     fleet_survival_protection: new Set(["fleet_admin_survival_protection_set"]),

@@ -59,7 +59,7 @@ Steps 1 and 2 are DONE (release 973e0c1 deployed 14:20Z; both agents upgraded 14
 
 Cross-check: Anthropic credit recorded $69.97 bought, $24.17 consumed (≈ £18.24), $4.63 adjustments → **$41.17** left.
 
-1. [ ] **Schema v66 (capital backing) + UI 0.17.0** — built and rehearsed 15:07Z (`release-befae84.md`); cut over on the owner's go (~45 s outage;
+1. [ ] **Schema v66 (capital backing)** — ships in the coordinated 65 → 68 release (not separately); cut over on the owner's go (~45 s outage;
        agents stay paused). Without it, a deposit can only be recorded as new owner capital (counted twice).
 2. [ ] **Anthropic credit** — $41.17 left; AI costs are paid from it, not from PayPal. Top up before resuming (owner's
        amount), then record the receipt: `provider-credits-record anthropic purchase <usd> <receipt ref>`.
@@ -89,12 +89,11 @@ Cross-check: Anthropic credit recorded $69.97 bought, $24.17 consumed (≈ £18.
        matches, but no PayPal delivery has ever reached the controller (the £1 test was confirmed by capture and Transaction
        Search) — verify with PayPal's webhook simulator or the first real sale.
 
-## Next coordinated candidate (prepared in code, not built or deployed)
-- Controller: schema v66 (capital backing) + v67 (business foundation, wake digest), Charter v6 standing summary,
-  library tool text; UI 0.17.0. If v66 is cut over first from `~/rlc66`, v67 follows as 66 → 67; otherwise one 65 → 67.
-- Founder runtime: Field Guide v2.1 and the wake fix (inbound mail and decisions wake a hibernating agent) — a runtime
-  upgrade per agent after the controller release (rehearse; Agent-2 then Agent-1; agents stay paused).
-- Owner text still needed: business foundation §1 "How to use this guide" and §2 "Your economic position".
+## Next coordinated candidate (in code; owner instruction 2026-10-12: one release, v66 is not deployed separately)
+- Controller: schema 65 → 68 in one cutover — v66 capital backing, v67 business foundation + wake digest, v68 lesson
+  supersession + event list; Charter v6 standing summary; library tool text; UI 0.17.0. `~/rlc66` (v66 alone) is superseded.
+- Founder runtime upgrade per agent after the controller release (rehearse; Agent-2 then Agent-1; agents stay paused):
+  Field Guide v2.1, wake on agent-facing events with the "since your last turn" line, retired lessons in read_knowledge.
 
 ## Step 4 — Gumroad (EU/UK consumer digital sales via a merchant of record)
 Verified 2026-10-12 (Gumroad help 13, 10, 70): Gumroad is merchant of record for EU and UK **digital** sales (collects
