@@ -1,6 +1,7 @@
 /**
  * Schema v66 — backing the existing capital with real money (PostgreSQL; no money moves):
- *  - the reconciliation: capital recorded without money, minus AI costs paid from provider credit, minus backed = unbacked;
+ *  - the reconciliation: capital recorded without money, minus backed = unbacked (since v69 AI costs paid from the owner's
+ *    provider credit are owed to the owner, not backing);
  *  - a real PayPal deposit backs it without a second ledger credit; only the part beyond the unbacked amount is new owner
  *    funding; the transaction is closed and its key can never be recorded again (funding, attribution, a second backing);
  *  - only completed money in the books' currency, received into the treasury, by the owner; backings are history.
@@ -62,13 +63,14 @@ describe.skipIf(!PG_BIN)("v66: backing the existing capital (PostgreSQL)", { tim
 
   it("reconciles: capital without money − AI costs paid from provider credit = what still needs real money", async () => {
     const s = await status();
-    expect(s).toMatchObject({ currency: "GBP", virtualCapitalMinor: 20_000, providerPaidMinor: 500, backedMinor: 0, unbackedMinor: 19_500 });
+    // v69 (reimbursable): the £5 AI cost stays in the treasury owed to the owner; it does not back the capital.
+    expect(s).toMatchObject({ currency: "GBP", virtualCapitalMinor: 20_000, providerPaidMinor: 0, backedMinor: 0, unbackedMinor: 20_000, ownerPayableMinor: 500 });
     // The books hold the £100 real funding (agent wallet) plus the £200 virtual less the £5 cost; PayPal shows nothing yet.
-    expect(s.booksCashMinor).toBe(10_000 + 20_000 - 500);
+    expect(s.booksCashMinor).toBe(10_000 + 20_000);
     expect(s.differenceMinor).toBe(0 - (s.booksCashMinor - s.unbackedMinor));
     const view = await dash("capital_backing", {});
     expect(view.ok, JSON.stringify(view)).toBe(true);
-    expect(view.result.unbackedMinor).toBe(19_500);
+    expect(view.result.unbackedMinor).toBe(20_000);
   });
 
   it("refuses what cannot back capital: not the owner, not completed, another currency, money out", async () => {
@@ -84,7 +86,7 @@ describe.skipIf(!PG_BIN)("v66: backing the existing capital (PostgreSQL)", { tim
     const before = { journals: await journals(), capital: await capital(), treasury: await R.balance("fleet:treasury:unallocated") };
     const t = await deposit(10_000);
     const r = await back(t);
-    expect(r).toMatchObject({ ok: true, netMinor: 10_000, backedMinor: 10_000, excessMinor: 0, excessJournalId: null, unbackedAfterMinor: 9_500 });
+    expect(r).toMatchObject({ ok: true, netMinor: 10_000, backedMinor: 10_000, excessMinor: 0, excessJournalId: null, unbackedAfterMinor: 10_000 });
     // No ledger entry: the money was already in the books.
     expect(await journals()).toBe(before.journals);
     expect(await capital()).toBe(before.capital);
@@ -102,17 +104,17 @@ describe.skipIf(!PG_BIN)("v66: backing the existing capital (PostgreSQL)", { tim
     // PayPal now shows the deposit: the difference closes by exactly the backed amount.
     await cx("cx_paypal_balance_record", [W, rail.railId, "GBP", 10_000, 10_000]);
     const s = await status();
-    expect(s).toMatchObject({ backedMinor: 10_000, unbackedMinor: 9_500 });
-    expect(s.differenceMinor).toBe(10_000 - (s.booksCashMinor - 9_500));
+    expect(s).toMatchObject({ backedMinor: 10_000, unbackedMinor: 10_000 });
+    expect(s.differenceMinor).toBe(10_000 - (s.booksCashMinor - 10_000));
     expect(await R.code(R.q(`UPDATE fleet.fleet_capital_backings SET backed_minor = 1`))).toMatch(/FLEET_HISTORY_IMMUTABLE|permission denied/);
   });
 
   it("only the part beyond what is unbacked becomes new owner funding (net of PayPal's fee); then nothing is left to back", async () => {
     const before = { journals: await journals(), capital: await capital() };
     const r = await back(await deposit(12_000, -300));
-    expect(r).toMatchObject({ ok: true, netMinor: 11_700, backedMinor: 9_500, excessMinor: 2_200, unbackedAfterMinor: 0 });
+    expect(r).toMatchObject({ ok: true, netMinor: 11_700, backedMinor: 10_000, excessMinor: 1_700, unbackedAfterMinor: 0 });
     expect(await journals()).toBe(before.journals + 1);
-    expect(await capital()).toBe(before.capital + 2_200);
+    expect(await capital()).toBe(before.capital + 1_700);
     expect(await R.one(`(SELECT kind FROM fleet.fleet_ledger_journal WHERE journal_id = $1)`, [r.excessJournalId])).toBe("owner_funding");
     expect((await status()).unbackedMinor).toBe(0);
     expect(await R.code(back(await deposit(1_000)))).toBe("FLEET_NOTHING_TO_BACK");

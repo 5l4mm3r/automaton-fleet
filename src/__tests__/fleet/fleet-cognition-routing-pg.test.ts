@@ -147,6 +147,11 @@ describe.skipIf(!PG_BIN)("schema v22 neutral cognition routing (PostgreSQL)", ()
     expect(row).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5-5", tier: "T2", task_class: "opportunity_research", task_id: "opp-1", route_version: 1,
       packet_bytes: 1234, thinking_tokens: 77, cache_read_tokens: 4_000, c: String(want) });
     expect(row.reasoning).toMatchObject({ thinking: "adaptive", effort: "medium", promptCache: "prefix" });
+    // v69 (owner-funded AI credit is reimbursable): every AI charge journal owes the owner exactly the cash it charged.
+    const mismatched = await q(`SELECT j.journal_id FROM fleet.fleet_ledger_journal j WHERE j.kind IN ('inference_charge','owner_conversation_charge','spend_review_charge','knowledge_review_charge')
+      AND (SELECT COALESCE(sum(amount_cents), 0) FROM fleet.fleet_ledger_postings p WHERE p.journal_id = j.journal_id AND p.side = 'C' AND p.account_id <> 'fleet:owner:payable')
+       <> (SELECT COALESCE(sum(amount_cents), 0) FROM fleet.fleet_ledger_postings p WHERE p.journal_id = j.journal_id AND p.account_id = 'fleet:owner:payable')`);
+    expect(mismatched).toEqual([]);
     const legacy = await svc.cognitionAuthorize(a, 5);
     expect(await svc.cognitionRoutedRecord(a, String(legacy.requestId), rec(), {})).toMatchObject({ ok: false, code: "FLEET_ROUTE_NOT_AUTHORIZED" });
     expect((await ledger.verify()).ok).toBe(true);

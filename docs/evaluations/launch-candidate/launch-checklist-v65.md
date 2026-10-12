@@ -44,27 +44,26 @@ Secrets: folder views list credential ids and kinds only; values come only throu
 
 Steps 1 and 2 are DONE (release 973e0c1 deployed 14:20Z; both agents upgraded 14:37Z, still paused).
 
-**Reconciliation (read-only, production, 2026-10-12 ~14:45Z):**
+**Reconciliation (read-only, production, 2026-10-12) under the owner's reimbursable choice (v69):**
 
 | | £ |
 |---|---|
 | Owner capital recorded with no money (`owner-authorized-virtual:`, 09-26 and 10-07) | 200.00 |
-| AI costs booked against it, paid in reality from the owner's Anthropic credit (800 inference charges) | −18.23 (Agent-1 13.59, Agent-2 4.64) |
-| = agents' wallets (86.41 + 95.36) | 181.77 |
-| Real money in: the £1 receiving test, net of PayPal's 33p fee | +0.67 |
-| Fleet Control lesson review (also Anthropic credit) | −0.01 |
-| = cash in the books (wallets + treasury 0.66) | 182.43 |
-| Verified PayPal balance (custody observation 14:20:37Z; USD balance 0) | 0.67 |
-| **Real money required to back the books** | **181.76** |
+| AI costs so far (agents 18.23 + lesson review 0.01), paid from the owner's Anthropic credit | 18.24 → **owed to the owner** |
+| Cash in the books after v69 (wallets 181.77 + treasury 0.66 + reimbursable partition 18.24) | 200.67 |
+| Verified PayPal balance (USD balance 0) | 0.67 |
+| **Real money required to back the books (unbacked)** | **200.00** |
 
-Cross-check: Anthropic credit recorded $69.97 bought, $24.17 consumed (≈ £18.24), $4.63 adjustments → **$41.17** left.
+Net of what the owner is owed (£18.24) this is the same £181.76 as before; it is now shown as a deposit of £200.00 plus a
+recorded £18.24 owed back (no reimbursement is made or authorised). Anthropic credit recorded: $69.97 bought, $24.17 used,
+$4.63 adjustments → $41.17 left.
 
 1. [ ] **Schema v66 (capital backing)** — ships in the coordinated 65 → 68 release (not separately); cut over on the owner's go (~45 s outage;
        agents stay paused). Without it, a deposit can only be recorded as new owner capital (counted twice).
 2. [ ] **Anthropic credit** — $41.17 left; AI costs are paid from it, not from PayPal. Top up before resuming (owner's
        amount), then record the receipt: `provider-credits-record anthropic purchase <usd> <receipt ref>`.
-3. [ ] **Refresh the amount** in the *Capital backing* panel (or `economy-capital-backing`) right before sending: it was
-       £181.76 at 15:06Z on 10-12 and falls by every AI cost paid from Anthropic credit before the deposit.
+3. [ ] **Refresh the amount** in the *Capital backing* panel (or `economy-capital-backing`) right before sending: £200.00
+       after v69 (AI costs no longer change it; they add to what the Fleet owes you).
 4. [ ] **Deposit** that amount into the treasury PayPal account. What the Fleet supports: any **completed GBP credit**
        into that account that PayPal's Transaction Search reports (custody ingests every event code). Whether a given
        route is available, and its fee, depends on the account — check in PayPal before sending, in this order:
@@ -90,8 +89,8 @@ Cross-check: Anthropic credit recorded $69.97 bought, $24.17 consumed (≈ £18.
        Search) — verify with PayPal's webhook simulator or the first real sale.
 
 ## Next coordinated candidate (in code; owner instruction 2026-10-12: one release, v66 is not deployed separately)
-- Controller: schema 65 → 68 in one cutover — v66 capital backing, v67 business foundation + wake digest, v68 lesson
-  supersession + event list; Charter v6 standing summary; library tool text; UI 0.17.0. `~/rlc66` (v66 alone) is superseded.
+- Controller: schema 65 → 69 in one cutover — v66 capital backing, v67 business foundation + wake digest, v68 lesson
+  supersession + event list, v69 reimbursable owner-funded AI credit; Charter v6 standing summary; library tool text; UI 0.17.1. `~/rlc66` (v66 alone) is superseded.
 - Founder runtime upgrade per agent after the controller release (rehearse; Agent-2 then Agent-1; agents stay paused):
   Field Guide v2.1, wake on agent-facing events with the "since your last turn" line, retired lessons in read_knowledge.
 

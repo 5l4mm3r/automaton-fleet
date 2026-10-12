@@ -807,16 +807,7 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
   latest verified PayPal balance and the difference (PayPal − (books − unbacked); 0 = reconciled). After full backing,
   further provider-paid AI costs show as a positive difference (PayPal holds money the books no longer count): repaying the
   owner's provider credit from the treasury is not modelled.
-- **Open — the missing connection for owner-prepaid AI credit (identified 2026-10-12; not built).** An AI charge posts two
-  legs (`agent_expense` D / `agent_cash` C). The communications path (v41) posts four for the same situation
-  (`provider_usage_charge`: also `treasury_cash` D / `provider_credits` C), with the purchase an asset swap
-  (`provider_credits_purchase`: `provider_credits` D / `treasury_cash` C). Anthropic credit has no GBP asset; its purchases
-  exist only as USD `fleet_provider_credit_events`. So each AI charge removes cash from the books while PayPal keeps it,
-  and nothing records whose money paid. Connection to add: an AI prepaid-credit asset account; the owner's purchase posted to
-  it (owner capital contribution, or a liability owed to the owner — the owner's choice); the treasury and credit legs on
-  each AI charge (as `provider_usage_charge`); FX differences between purchase and use posted explicitly; the v66
-  provider-paid term then counts only charges without the treasury leg. The expense is recognised once, at use; a purchase
-  is never expensed.
+- The owner-prepaid AI credit connection is closed by v69 (§24, reimbursable).
 
 ## 22. Schema v67 — the business foundation and prompt wake-ups (revision 6, 2026-10-12)
 
@@ -853,3 +844,15 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
   (broker mail, a spend review opened and decided, an owner card decision, a PayPal dispute, a lesson review and a
   supersession).
 - Ships as one coordinated release with v66 and v67 (65 → 68) plus the founder runtime upgrade.
+
+## 24. Schema v69 — owner-funded AI credit is reimbursable (owner decision, 2026-10-12)
+
+- Every AI charge (inference, owner conversation, spend review, lesson review — all five posting paths, including the legacy
+  unrouted one) also posts D `fleet:treasury:owner_reimbursable` (a treasury-cash partition, never allocatable) / C
+  `fleet:owner:payable` (liability `owner_payable`): the money stays in the treasury and is owed to the owner. The expense is
+  recognised once, at use; purchases stay USD provider events (never expensed, no GBP asset, no revaluation — the owner is
+  owed the GBP cost charged at each call's controlled rate).
+- One opening journal (`ai_credit_owner_payable_opening`) brings in the AI costs charged before v69 (production: 1,824p).
+- v66 backing: AI costs no longer reduce what must be backed; unbacked = capital recorded without money − backed (production:
+  £200.00), and the backing view shows the owner payable (£18.24). Books, PayPal and the payable reconcile.
+- Not included: paying the owner back (a separate, authorised owner withdrawal from the reimbursable partition).

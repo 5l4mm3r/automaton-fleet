@@ -328,9 +328,9 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
     </> : <p className="text-sm text-slate-400">{pp.error || "Reading…"}</p>}</Panel>
 
     <Panel title="Capital backing (real money behind the books)">{backing.data ? <>
-      <p className="text-xs text-slate-400">The first agents were funded with capital recorded before any money moved. Their AI costs were paid from your prepaid provider credit, outside these books. A deposit you back below is matched to that capital instead of being counted twice.</p>
+      <p className="text-xs text-slate-400">The first agents were funded with capital recorded before any money moved. A deposit you back below is matched to that capital instead of being counted twice. AI costs are paid from the provider credit you buy: the treasury keeps that money and owes it to you (reimbursable; nothing is paid back without your separate decision).</p>
       <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
-        {[["Capital recorded without money", money(backing.data.virtualCapitalMinor)], ["AI costs paid from provider credit", money(backing.data.providerPaidMinor)],
+        {[["Capital recorded without money", money(backing.data.virtualCapitalMinor)], ["Owed to you for AI credit used", money(Number(backing.data.ownerPayableMinor ?? 0))],
           ["Backed by deposits", money(backing.data.backedMinor)], ["Still to back", money(backing.data.unbackedMinor)],
           ["Cash in the books", money(backing.data.booksCashMinor)], ["PayPal (verified)", backing.data.paypal ? `${money(backing.data.paypal.totalMinor)} (${when(backing.data.paypal.observedAt)})` : "no balance observed"],
           ["Difference", backing.data.differenceMinor == null ? "—" : money(backing.data.differenceMinor)]]
