@@ -896,8 +896,8 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
       "fleet_spend_review_charge", "fleet_control_charge",
       // v70: a treasury-funded AI-credit purchase records its USD purchase.
       "fleet_admin_ai_credit_treasury_purchase",
-      // v71: a detected receipt or an estimated debit lot records its USD purchase.
-      "fleet_ai_credit_receipt_trigger", "fleet_ai_credit_match"]),
+      // v71: a confirmed purchase records its USD purchase (observations never do).
+      "fleet_ai_credit_promote"]),
     // v25/v26: dependency records only through the founder API and the owner's resolve/import.
     fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import",
       // v29: PAYMENT_RAIL_REQUIRED records ONE action-scoped kyc dependency (and answers it when a rail is connected).
@@ -1187,7 +1187,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       // v70: a treasury debit evidencing an AI-credit purchase closes its transaction.
       "fleet_admin_ai_credit_treasury_purchase",
       // v71: the counterparty from custody, and a debit attributed to an AI-credit purchase.
-      "cx_paypal_txn_counterparty", "fleet_ai_credit_lot_to_treasury"]),
+      "cx_paypal_txn_counterparty", "fleet_ai_credit_promote"]),
     fleet_paypal_balance_observations: new Set(["cx_paypal_balance_record"]),
     fleet_card_charges: new Set(["fleet_admin_card_charge_record", "fleet_admin_card_charge_confirm", "fleet_card_charge_post",
       "fleet_econ_card_authorize", "fleet_econ_card_void", "svc_card_holds_expire",
@@ -1217,8 +1217,11 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_knowledge_supersessions: new Set(["svc_knowledge_review_record"]),
     // v70: AI-credit lots and draws — by the provider-credit event trigger, the draw, the treasury purchase and the settlement.
     fleet_ai_credit_lots: new Set(["fleet_ai_credit_draw", "fleet_ai_credit_events_trigger", "fleet_admin_ai_credit_treasury_purchase", "svc_ai_credit_settle",
-      // v71: receipts, debit matching (incl. estimated lots) and the owner's attribution.
-      "fleet_ai_credit_receipt_trigger", "fleet_ai_credit_match", "fleet_ai_credit_lot_to_treasury"]),
+      // v71: a confirmed purchase (matched pair or the owner's confirmation) creates its lot.
+      "fleet_ai_credit_promote"]),
+    fleet_ai_credit_receipts: new Set(["fleet_ai_credit_receipt_trigger", "fleet_ai_credit_promote", "fleet_ai_credit_match", "fleet_admin_ai_credit_reject"]),
+    fleet_ai_credit_absorptions: new Set(["fleet_ai_credit_promote"]),
+    fleet_ai_credit_debit_notices: new Set(["fleet_ai_credit_match"]),
     fleet_ai_credit_policy: new Set(["fleet_admin_ai_credit_policy_set"]),
     fleet_ai_credit_policy_history: new Set(["fleet_admin_ai_credit_policy_set"]),
     fleet_ai_credit_draws: new Set(["fleet_ai_credit_draw"]),

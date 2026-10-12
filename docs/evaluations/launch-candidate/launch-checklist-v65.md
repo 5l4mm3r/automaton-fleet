@@ -119,20 +119,20 @@ capital recorded without money) would change it; none exists or is authorised. A
 which you enable in the Console (threshold + reload-to amount) and which charges the payment method saved there. The Fleet
 never buys credit itself.
 
-**Automatic accounting** (built, v71): once your policy is set, each purchase — manual or auto-reload — is detected and
-booked without you recording it:
-- *Receipt detection:* Anthropic's purchase receipt e-mailed to a Fleet mailbox (the Console's billing e-mail set to it) is
-  read for the amount and receipt number → recorded once per receipt. A receipt is unauthenticated text, so on its own it
-  only ever records owner-funded credit (no money moves in the books).
-- *Treasury debit detection:* custody reads the treasury PayPal's Transaction Search hourly, now with the counterparty; a
-  debit matching your counterparty pattern, in the window and within 8 % of the controlled rate, is the evidence that
-  treasury money paid.
-- **Route `owner_card`** (your own card saved in the Console): every receipt is owner-funded credit, owed to you as used
-  (v69). Fully automatic. Settling what is owed (reimbursement) is a separate, authorised step, not built.
-- **Route `treasury_paypal`** (the treasury PayPal, or a card drawing on its balance — only if the Console accepts it): a
-  receipt is matched to its debit and becomes treasury-funded (prepaid asset; consumption already drawn leaves the owner
-  payable). A receipt with no debit after 72 h stays owner-funded and raises P1 (`economy-ai-credit-attribute` resolves it);
-  a debit with no receipt after 72 h becomes treasury credit with its USD estimated at the controlled rate.
+**Automatic accounting** (built, v71) — evidence first:
+- *Receipt e-mails* (Anthropic's receipt to a Fleet mailbox) and *treasury debits* (PayPal Transaction Search, now with the
+  counterparty) are **provisional observations**. On their own they add no provider credit, no lot, no owner liability and
+  no estimated amount.
+- **Route `treasury_paypal`:** a purchase is promoted automatically only when exactly ONE receipt and exactly ONE treasury
+  debit match each other (counterparty, 72 h window and 8 % implied-rate tolerance are matching aids). The receipt gives the
+  purchase number and USD; the PayPal debit gives the funding source and GBP. Either order works, once. Several candidates,
+  or no partner after 72 h → a P2 reconciliation item, resolved by `economy-ai-credit-confirm` / `economy-ai-credit-reject`.
+- **Route `owner_card`:** a receipt cannot show who paid, so each one waits for your one-step confirmation
+  (`economy-ai-credit-confirm <receiptId> owner`).
+- *Usage beyond confirmed credit* is owed to you (as before) and recorded as unallocated; the next confirmed purchase absorbs
+  it oldest first (a treasury purchase then takes exactly that usage back out of what is owed to you).
+- *The AI gate uses confirmed credit only:* if Anthropic auto-reloads but the purchase is not yet confirmed, the Fleet's
+  recorded balance can reach zero and AI calls stop until it is — the safe direction.
 - *Cost attribution unchanged:* agents' own AI work costs their wallets; owner-conversation turns cost the treasury.
 
 **Missing provider interface:** Anthropic offers no API for credit balance, purchases or auto-reload events (its Admin API

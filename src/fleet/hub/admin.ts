@@ -168,12 +168,15 @@ export class PgHubAdmin {
   // v69: bring in the AI costs charged before v69 as owed to the owner (once; owner action after the cutover).
   // v70: AI credit by funding source; a treasury-funded purchase evidenced by the treasury PayPal debit.
   aiCredits() { return this.one(`SELECT fleet_ai_credit_status() AS r`); }
-  // v71: the owner's funding route / detection settings, and attributing a treasury debit to a purchase.
+  // v71: the owner's funding route / detection settings; confirming or rejecting an observed purchase.
   aiCreditPolicySet(provider: string, route: string, receiptSender: string | null, counterparty: string | null, thresholdUsdCents: number | null, reloadToUsdCents: number | null, enabled: boolean, actor: string) {
     return this.one(`SELECT fleet_admin_ai_credit_policy_set($1, $2, $3, $4, $5, $6, $7, $8) AS r`, [provider, route, receiptSender, counterparty, thresholdUsdCents, reloadToUsdCents, enabled, actor]);
   }
-  aiCreditAttribute(lotId: string, railId: string, txnId: string, eventCode: string, actor: string) {
-    return this.one(`SELECT fleet_admin_ai_credit_attribute($1, $2, $3, $4, $5) AS r`, [lotId, railId, txnId, eventCode, actor]);
+  aiCreditConfirm(receiptId: string, source: string, railId: string | null, txnId: string | null, eventCode: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_ai_credit_confirm($1, $2, $3, $4, $5, $6) AS r`, [receiptId, source, railId, txnId, eventCode, actor]);
+  }
+  aiCreditReject(receiptId: string, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_ai_credit_reject($1, $2, $3) AS r`, [receiptId, reason, actor]);
   }
   aiCreditTreasuryPurchase(provider: string, usdCents: number, railId: string, txnId: string, eventCode: string, receipt: string, actor: string) {
     return this.one(`SELECT fleet_admin_ai_credit_treasury_purchase($1, $2, $3, $4, $5, $6, $7) AS r`, [provider, usdCents, railId, txnId, eventCode, receipt, actor]);

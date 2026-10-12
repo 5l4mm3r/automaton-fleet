@@ -1,12 +1,12 @@
 /**
- * Schema v71 — AI-credit purchases detected and accounted for automatically (PostgreSQL; simulated mailbox and custody
+ * Schema v71 — AI-credit purchases: provisional observations, verified promotion (PostgreSQL; simulated mailbox and custody
  * worker; no provider, no money moves):
- *  - owner_card route: a provider receipt arriving in the Fleet mailbox becomes owner-funded credit (once per receipt
- *    number); nothing is posted to the books; an unreadable receipt is reported, never guessed;
- *  - treasury_paypal route: a receipt waits for the treasury's own debit (counterparty, window, implied rate); matched →
- *    treasury-funded, with the consumption already drawn taken back out of the owner payable; a receipt with no debit stays
- *    owner-funded and raises P1; the owner can attribute a debit; a debit with no receipt becomes an estimated treasury lot;
- *  - no duplicate lots, purchases or expenses; the ledger verifies.
+ *  - a receipt e-mail and an unmatched treasury debit are provisional observations: no provider credit, no lot, no owner
+ *    liability, no estimated amount;
+ *  - treasury route: exactly one receipt ↔ exactly one debit (counterparty, window, rate are matching aids) promotes the
+ *    purchase — in either order, once; ambiguity or no match → reconciliation (P2), never a guess;
+ *  - owner_card route: a receipt is promoted only by the owner's confirmation;
+ *  - usage beyond confirmed credit is absorbed by the purchase that paid for it (treasury: taken out of the owner payable).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
@@ -27,7 +27,7 @@ const PG_BIN = findPgBin();
 const USD = 100_000_000;
 const SENDER = "Anthropic, PBC <invoice+statements@mail.anthropic.test>";
 
-describe.skipIf(!PG_BIN)("v71: AI-credit purchases detected and accounted for automatically (PostgreSQL)", { timeout: 300_000 }, () => {
+describe.skipIf(!PG_BIN)("v71: AI-credit purchases — provisional observations, verified promotion (PostgreSQL)", { timeout: 300_000 }, () => {
   let R: EconomyRegistry;
   let custody: pg.Pool;
   let rail: ArmedCustody;
@@ -38,14 +38,17 @@ describe.skipIf(!PG_BIN)("v71: AI-credit purchases detected and accounted for au
   const W = "custody-executor";
   const cx = async (fn: string, args: unknown[]) => (await custody.query(`SELECT fleet.${fn}(${args.map((_, i) => `$${i + 1}`).join(", ")}) AS r`, args)).rows[0].r;
   const bal = async (a: string) => Number(await R.one(`fleet.fleet_ledger_balance($1)`, [a]));
-  const lots = () => R.q(`SELECT lot_id, source, usd_purchased::bigint AS usd, usd_remaining::bigint AS rem, gbp_cost_minor, awaiting_debit_until, usd_estimated, external_ref FROM fleet.fleet_ai_credit_lots ORDER BY purchased_at`);
+  const credit = async () => Number(await R.one(`fleet.fleet_provider_credit_balance('anthropic')`));
+  let lots0 = 0;   // lots the fixture's own recorded credit created
+  const lotCount = async () => Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ai_credit_lots)`)) - lots0;
+  const obs = async (no: string) => (await R.q(`SELECT receipt_id, state, lot_id FROM fleet.fleet_ai_credit_receipts WHERE receipt_no = $1`, [no]))[0];
   const charge = (usd: number) => R.one(`fleet.fleet_control_charge('knowledge_review_charge', $1, $2::jsonb)`,
     [crypto.randomUUID(), JSON.stringify([{ provider: "anthropic", requestId: crypto.randomUUID(), usdMicrocents: usd }])]);
   const settle = () => R.one<Record<string, any>>(`fleet.svc_ai_credit_settle(20)`);
-  const policy = (route: string, extra: string[] = []) => R.one(`fleet.fleet_admin_ai_credit_policy_set('anthropic', $1, '@mail.anthropic.test', $2, 1000, 5000, true, $3)`,
-    [route, extra[0] ?? (route === "treasury_paypal" ? "anthropic" : null), OWNER]);
+  const policy = (route: string) => R.one(`fleet.fleet_admin_ai_credit_policy_set('anthropic', $1, '@mail.anthropic.test', $2, 1000, 5000, true, $3)`,
+    [route, route === "treasury_paypal" ? "anthropic" : null, OWNER]);
   const receipt = async (no: string, usd: string, sender = SENDER) => {
-    shared.deliver({ from: sender, to: [shared.address], subject: `Your receipt from Anthropic, PBC #${no}`, body: `Receipt #${no}\nAmount paid $${usd}\nDate paid Oct 12, 2026\nCredit purchase` });
+    shared.deliver({ from: sender, to: [shared.address], subject: `Your receipt from Anthropic, PBC #${no}`, body: `Receipt #${no}\nAmount paid $${usd}\nDate paid Oct 12, 2026` });
     await broker.tick();
   };
   const debit = async (gbpMinor: number, counterparty: string | null, at = new Date()) => {
@@ -55,7 +58,8 @@ describe.skipIf(!PG_BIN)("v71: AI-credit purchases detected and accounted for au
     if (counterparty) expect((await cx("cx_paypal_txn_counterparty", [W, rail.railId, tid, "T0006", counterparty])).ok).toBe(true);
     return tid;
   };
-  const events = async (type: string) => Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = $1)`, [type]));
+  const events = async (type: string, reason?: string) => Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = $1 AND ($2::text IS NULL OR detail ->> 'reason' = $2))`, [type, reason ?? null]));
+  const attributed = async (tid: string) => (await R.q(`SELECT attributed_as FROM fleet.fleet_paypal_transactions WHERE transaction_id = $1`, [tid]))[0].attributed_as;
 
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 1, allocationCents: 10_000, treasuryCents: 100_000, simulatedSettlement: false });
@@ -70,6 +74,7 @@ describe.skipIf(!PG_BIN)("v71: AI-credit purchases detected and accounted for au
     broker = new IdentityBroker(gw, vault, { mail: shared, ownerVault, providerVault: openProviderVault(dir), stateFile: path.join(dir, "pending.json") });
     await broker.tick();
     await R.q(`UPDATE fleet.fleet_ai_credit_lots SET usd_remaining = 0`);   // the fixture's opening credit is set aside (no ledger effect)
+    lots0 = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ai_credit_lots)`));
   }, 300_000);
   afterAll(async () => {
     await gw?.close(); await custody?.end(); await R?.close();
@@ -82,72 +87,103 @@ describe.skipIf(!PG_BIN)("v71: AI-credit purchases detected and accounted for au
     expect(audit, JSON.stringify(audit)).toEqual([]);
     expect(await R.code(R.one(`fleet.fleet_admin_ai_credit_policy_set('anthropic', 'owner_card', NULL, NULL, NULL, NULL, true, 'agent:x')`))).toBe("FLEET_APPROVAL_REQUIRED");
     expect(await R.code(R.one(`fleet.fleet_admin_ai_credit_policy_set('anthropic', 'treasury_paypal', NULL, NULL, NULL, NULL, true, $1)`, [OWNER]))).toMatch(/check constraint|violates/);
-    expect(await R.one(`fleet.fleet_event_route('ai_credit_evidence_missing', '{}'::jsonb)`)).toBe("P1_HIGH");
-    expect(Number(await R.one(`(SELECT version FROM fleet.fleet_knowledge_library WHERE entry_id = 'fleet-capability-status' AND current)`))).toBe(3);
+    expect(await R.one(`fleet.fleet_event_route('ai_credit_reconcile', '{}'::jsonb)`)).toBe("P2_IMPORTANT");
   });
 
-  it("owner_card: a receipt becomes owner-funded credit once; nothing is posted; unreadable or foreign mail is never guessed", async () => {
+  it("owner_card: a receipt is a provisional observation — no credit, lot, journal or liability — until the owner confirms it", async () => {
     await policy("owner_card");
-    const j0 = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ledger_journal)`));
+    const c0 = await credit(), j0 = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ledger_journal)`)), p0 = await bal("fleet:owner:payable");
     await receipt("2741-6510", "25.00");
     await receipt("2741-6510", "25.00");                                         // the same receipt again
     await receipt("9999-0001", "25.00", "Someone <billing@elsewhere.test>");     // not the provider's sender
-    shared.deliver({ from: SENDER, to: [shared.address], subject: "Your receipt from Anthropic, PBC", body: "Thanks for your purchase." });
+    shared.deliver({ from: SENDER, to: [shared.address], subject: "Your receipt from Anthropic, PBC", body: "Thanks." });
     await broker.tick();
-    const l = await lots();
-    const mine = l.filter((x) => x.external_ref === "receipt:anthropic:2741-6510");
-    expect(mine).toHaveLength(1);
-    expect(mine[0]).toMatchObject({ source: "owner", usd: String(25 * USD), awaiting_debit_until: null });
-    expect(l.some((x) => String(x.external_ref).includes("9999-0001"))).toBe(false);
-    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ledger_journal)`))).toBe(j0);
+    await settle();
+    expect(await obs("2741-6510")).toMatchObject({ state: "provisional", lot_id: null });
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ai_credit_receipts WHERE receipt_no = '2741-6510')`))).toBe(1);
+    expect(await obs("9999-0001")).toBeUndefined();
     expect(await events("ai_credit_receipt_unparsed")).toBe(1);
-    // used by AI: owed to the owner (v69), automatically
-    const p0 = await bal("fleet:owner:payable");
+    expect(await credit()).toBe(c0);
+    expect(await lotCount()).toBe(0);
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ledger_journal)`))).toBe(j0);
+    expect(await bal("fleet:owner:payable")).toBe(p0);
+    // actual usage beyond confirmed credit is owed to the owner (v69 default) and recorded as unallocated
     await charge(5 * USD);
     expect(await bal("fleet:owner:payable")).toBe(p0 + 500);
+    // the owner confirms: owner-funded credit of $25, which absorbs the $5 already used
+    const r = await obs("2741-6510");
+    expect(await R.one(`fleet.fleet_admin_ai_credit_confirm($1, 'owner', NULL, NULL, NULL, $2)`, [r.receipt_id, OWNER])).toMatchObject({ ok: true, source: "owner", usdCents: 2_500 });
+    expect(await credit()).toBe(c0 - 5 * USD + 25 * USD);   // the $5 used was already recorded as consumption
+    expect(Number(await R.one(`(SELECT usd_remaining FROM fleet.fleet_ai_credit_lots WHERE external_ref = 'receipt:anthropic:2741-6510')`))).toBe(20 * USD);
+    expect(await bal("fleet:owner:payable")).toBe(p0 + 500);
+    expect(await R.one(`fleet.fleet_admin_ai_credit_confirm($1, 'owner', NULL, NULL, NULL, $2)`, [r.receipt_id, OWNER])).toMatchObject({ ok: false, code: "FLEET_ALREADY_CLAIMED" });
     await R.q(`UPDATE fleet.fleet_ai_credit_lots SET usd_remaining = 0`);
   });
 
-  it("treasury_paypal: the receipt is matched to the treasury's debit; consumption already drawn leaves the owner payable", async () => {
+  it("treasury route: one receipt ↔ one debit promotes the purchase; usage it paid for leaves the owner payable", async () => {
     await policy("treasury_paypal");
-    await receipt("3001-0001", "25.00");
-    const [lot] = (await lots()).filter((x) => x.external_ref === "receipt:anthropic:3001-0001");
-    expect(lot).toMatchObject({ source: "owner" });
-    expect(lot.awaiting_debit_until).not.toBeNull();
     const p0 = await bal("fleet:owner:payable");
-    await charge(5 * USD);                                                       // drawn before the debit is seen
+    await charge(5 * USD);                                                       // runs beyond confirmed credit
     expect(await bal("fleet:owner:payable")).toBe(p0 + 500);
-    await debit(2_450, "Some other merchant");                                   // wrong counterparty: ignored
-    await debit(4_000, "Anthropic, PBC");                                         // implied rate far off: ignored
-    await debit(2_450, "billing@anthropic.com | Anthropic, PBC");                 // within 8% of the 1:1 controlled rate
+    await receipt("3001-0001", "25.00");
+    const wrong = await debit(2_450, "Some other merchant");                     // counterparty does not match
+    const off = await debit(4_000, "Anthropic, PBC");                            // implied rate far off
+    expect((await settle()).detection).toMatchObject({ promoted: 0 });           // the right debit has not arrived yet
+    const tid = await debit(2_450, "billing@anthropic.com | Anthropic, PBC");
     const s = await settle();
-    expect(s.detection).toMatchObject({ matched: 1 });
-    const [now] = (await lots()).filter((x) => x.lot_id === lot.lot_id);
-    expect(now).toMatchObject({ source: "treasury", gbp_cost_minor: "2450", awaiting_debit_until: null });
+    expect(s.detection).toMatchObject({ promoted: 1 });
+    expect(await obs("3001-0001")).toMatchObject({ state: "promoted" });
+    expect(await attributed(tid)).toBe("ai_credit_purchase");
+    expect(await attributed(wrong)).toBeNull();
+    expect(await attributed(off)).toBeNull();
     expect(s.reclassifiedMinor).toBe(500);
     expect(await bal("fleet:owner:payable")).toBe(p0);                           // no false owner payable
     expect(await bal("fleet:ai_credits")).toBe(2_450 - 500);
-    expect((await settle()).detection).toMatchObject({ matched: 0, estimated: 0 });   // idempotent
-    expect(await R.one(`fleet.fleet_ledger_verify() ->> 'ok'`)).toBe("true");
+    expect((await settle()).detection).toMatchObject({ promoted: 0 });
   });
 
-  it("no debit: the receipt stays owner-funded with a P1; the owner attributes a debit; a debit without receipt is estimated", async () => {
+  it("a debit first and its receipt later: promoted once; a repeated receipt changes nothing", async () => {
+    const n0 = await lotCount();
+    const tid = await debit(980, "Anthropic, PBC");
+    expect((await settle()).detection).toMatchObject({ promoted: 0 });           // a debit alone is never credit
+    expect(await lotCount()).toBe(n0);
     await receipt("3002-0002", "10.00");
-    const [lot] = (await lots()).filter((x) => x.external_ref === "receipt:anthropic:3002-0002");
-    await R.q(`UPDATE fleet.fleet_ai_credit_lots SET awaiting_debit_until = now() - interval '1 minute' WHERE lot_id = $1`, [lot.lot_id]);
-    expect((await settle()).detection).toMatchObject({ expired: 1 });
-    expect(await events("ai_credit_evidence_missing")).toBe(1);
-    expect((await lots()).find((x) => x.lot_id === lot.lot_id)).toMatchObject({ source: "owner", awaiting_debit_until: null });
-    // The owner knows the treasury paid it after all: attributes the debit.
-    const tid = await debit(980, null);
-    expect(await R.one(`fleet.fleet_admin_ai_credit_attribute($1, $2, $3, 'T0006', $4)`, [lot.lot_id, rail.railId, tid, OWNER])).toMatchObject({ ok: true, gbpMinor: 980 });
-    expect(await R.code(R.one(`fleet.fleet_admin_ai_credit_attribute($1, $2, $3, 'T0006', $4)`, [lot.lot_id, rail.railId, tid, OWNER]))).toBe("FLEET_BAD_REQUEST");
-    // A matching debit with no receipt for longer than the window: treasury credit with its USD estimated.
-    const old = await debit(1_500, "Anthropic, PBC", new Date(Date.now() - 4 * 86_400_000));
-    expect((await settle()).detection).toMatchObject({ estimated: 1 });
-    const est = (await lots()).find((x) => x.external_ref === `debit:${old}`);
-    expect(est).toMatchObject({ source: "treasury", usd_estimated: true, gbp_cost_minor: "1500", usd: String(15 * USD) });
-    expect((await settle()).detection).toMatchObject({ estimated: 0 });        // once
+    expect((await settle()).detection).toMatchObject({ promoted: 1 });
+    await receipt("3002-0002", "10.00");
+    await settle();
+    expect(await lotCount()).toBe(n0 + 1);
+    expect(await attributed(tid)).toBe("ai_credit_purchase");
+  });
+
+  it("ambiguity and missing evidence go to reconciliation, never to a guess; the owner resolves them", async () => {
+    const n0 = await lotCount(), c0 = await credit();
+    // two debits could match one receipt → ambiguous; nothing promoted
+    const a = await debit(1_500, "Anthropic, PBC");
+    const b = await debit(1_500, "Anthropic, PBC");
+    await receipt("3003-0003", "15.00");
+    await settle();
+    expect(await obs("3003-0003")).toMatchObject({ state: "ambiguous" });
+    expect(await events("ai_credit_reconcile", "ambiguous")).toBe(1);
+    expect(await lotCount()).toBe(n0);
+    const r = await obs("3003-0003");
+    expect(await R.one(`fleet.fleet_admin_ai_credit_confirm($1, 'treasury', $2, $3, 'T0006', $4)`, [r.receipt_id, rail.railId, b, OWNER])).toMatchObject({ ok: true, gbpMinor: 1_500 });
+    expect(await attributed(b)).toBe("ai_credit_purchase");
+    expect(await attributed(a)).toBeNull();
+    // a receipt with no debit after the window, and a debit with no receipt after the window: reported, never credit
+    await receipt("3004-0004", "20.00");
+    await R.q(`UPDATE fleet.fleet_ai_credit_receipts SET observed_at = now() - interval '4 days' WHERE receipt_no = '3004-0004'`);
+    await debit(1_234, "Anthropic, PBC", new Date(Date.now() - 4 * 86_400_000));
+    await settle(); await settle();
+    expect(await obs("3004-0004")).toMatchObject({ state: "unmatched", lot_id: null });
+    expect(await events("ai_credit_reconcile", "no_debit")).toBe(1);
+    expect(await events("ai_credit_reconcile", "debit_without_receipt")).toBeGreaterThanOrEqual(1);
+    const before = await events("ai_credit_reconcile", "debit_without_receipt");
+    await settle();
+    expect(await events("ai_credit_reconcile", "debit_without_receipt")).toBe(before);   // reported once each
+    expect(await lotCount()).toBe(n0 + 1);
+    expect(await credit()).toBe(c0 + 15 * USD);
+    // a rejected observation stays history
+    expect(await R.one(`fleet.fleet_admin_ai_credit_reject($1, 'test purchase refunded', $2)`, [(await obs("3004-0004")).receipt_id, OWNER])).toMatchObject({ ok: true });
     expect(await R.one(`fleet.fleet_ledger_verify() ->> 'ok'`)).toBe("true");
   });
 });

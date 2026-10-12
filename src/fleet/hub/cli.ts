@@ -108,7 +108,8 @@
  *   economy-ai-credits                                                       (v70) AI credit by funding source: lots, prepaid asset, owner payable
  *   economy-ai-credit-purchase <provider> <usdCents> <railId> <txnId> <eventCode> <receiptRef>  (v70) credit bought with treasury money (the PayPal debit is the evidence)
  *   economy-ai-credit-policy <provider> owner_card|treasury_paypal [--receipt-sender …] [--counterparty …]  (v71) how credit is bought; enables detection
- *   economy-ai-credit-attribute <lotId> <railId> <txnId> <eventCode>           (v71) this treasury debit paid for that purchase
+ *   economy-ai-credit-confirm <receiptId> owner | treasury <railId> <txnId> <eventCode>  (v71) confirm an observed purchase and who paid
+ *   economy-ai-credit-reject <receiptId> <reason…>                             (v71) an observation that is not a purchase
  *   economy-ai-credit-opening                                                (v69) once after the cutover: AI costs charged before v69 become owed to the owner
  *   economy-capital-backing                                                  (v66) the existing capital: virtual, provider-paid, backed, unbacked; books vs PayPal
  *   economy-capital-back <railId> <txnId> <eventCode>                        (v66) a PayPal deposit backs the existing capital (no second credit; any excess is owner funding)
@@ -310,9 +311,14 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       const n = (k: string) => flag(a, k) ? int(flag(a, k), k) : null;
       return h.aiCreditPolicySet(q[0], q[1], flag(a, "--receipt-sender"), flag(a, "--counterparty"), n("--threshold-usd-cents"), n("--reload-to-usd-cents"), !a.includes("--disabled"), actor);
     }
-    case "economy-ai-credit-attribute":
-      if (p.length !== 4) throw new Error("usage: economy-ai-credit-attribute <lotId> <railId> <txnId> <eventCode>");
-      return h.aiCreditAttribute(p[0], p[1], p[2], p[3], actor);
+    case "economy-ai-credit-confirm":
+      if (!(p.length === 2 && p[1] === "owner") && !(p.length === 5 && p[1] === "treasury")) {
+        throw new Error("usage: economy-ai-credit-confirm <receiptId> owner | economy-ai-credit-confirm <receiptId> treasury <railId> <txnId> <eventCode>");
+      }
+      return h.aiCreditConfirm(p[0], p[1], p[2] ?? null, p[3] ?? null, p[4] ?? null, actor);
+    case "economy-ai-credit-reject":
+      if (p.length < 2) throw new Error("usage: economy-ai-credit-reject <receiptId> <reason…>");
+      return h.aiCreditReject(p[0], p.slice(1).join(" "), actor);
     case "economy-ai-credit-opening":
       return h.aiCreditOpening(actor);
     case "economy-capital-backing":
