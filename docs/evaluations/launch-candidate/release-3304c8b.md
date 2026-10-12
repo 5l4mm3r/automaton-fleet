@@ -1,6 +1,6 @@
 # Release 3304c8b — schema 69 → 71 (AI credit by funding source; automatic purchase accounting), UI 0.17.1 unchanged
 
-Status: **rehearsed, not deployed** (2026-10-12 18:29:09Z). Production remains b60e262 / schema 69; both agents paused on
+Status: **SUPERSEDED by release-c311925.md** (evidence fix) — rehearsed 2026-10-12 18:29:09Z, not deployed. Production remains b60e262 / schema 69; both agents paused on
 b60e262 (Agent-2 kept as a paused reserve); no balance changed; no money moved.
 
 ## Contents
