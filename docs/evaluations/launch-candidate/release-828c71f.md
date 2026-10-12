@@ -1,6 +1,6 @@
 # Release 828c71f (was c311925) — schema 69 → 71 (AI credit by funding source; evidence-first purchase accounting), UI 0.17.1 unchanged
 
-Status: **implemented and rehearsed, not deployed** (828c71f, 2026-10-12 19:07:00Z; supersedes the c311925 package of 18:41Z — receipts now record the credit before tax). **Not yet verified with the real payment method
+Status: **SUPERSEDED by release-e641872.md** (v72 added) — rehearsed 2026-10-12 19:07Z, not deployed.
 or a real receipt.** Supersedes `release-3304c8b.md`. Production: b60e262 / schema 69; both agents paused on b60e262 (Agent-2
 a paused reserve); no balance changed; no money moved.
 
