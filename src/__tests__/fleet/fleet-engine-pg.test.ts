@@ -275,8 +275,9 @@ describe.skipIf(!PG_BIN)("v35 Fleet economy engine (PostgreSQL)", () => {
   it("estate: inventory at death, dead recurring costs stop, reuse with a credential re-seal job, capacity pruning", async () => {
     // A owns a persona, a domain account with a renewal commitment, and knowledge; then dies.
     const persona = await ok(R.econ(A, "identity.create", { displayName: "Maya Hart", kind: "persona" }));
-    const dom = await ok(R.econ(A, "account.create", { platform: "sim-registrar", kind: "domain", handle: "maya-hart-shop.example", idempotencyKey: key("acct") }));
-    const used = await ok(R.econ(A, "account.create", { platform: "sim-store", kind: "storefront", handle: "mayahart", idempotencyKey: key("acct") }));
+    // Accounts are registered by the agent itself (v37 browser operator; dedicated broker connectors are not configured).
+    const dom = await ok(R.econ(A, "account.register", { platform: "sim-registrar", kind: "domain", handle: "maya-hart-shop.example", origin: "https://sim-registrar.example" }));
+    const used = await ok(R.econ(A, "account.register", { platform: "sim-store", kind: "storefront", handle: "mayahart", origin: "https://sim-store.example" }));
     await R.q(`UPDATE fleet.fleet_agent_accounts SET status = 'active', verification = 'email_verified' WHERE account_id = $1`, [used.accountId]);
     await R.q(`INSERT INTO fleet.fleet_agent_account_credentials (credential_id, account_id, agent_id, kind, vault_ref) VALUES (gen_random_uuid(), $1, $2, 'password', $3)`,
       [used.accountId, A.id, `avault:${crypto.randomUUID()}`]);
@@ -341,9 +342,12 @@ describe.skipIf(!PG_BIN)("v35 Fleet economy engine (PostgreSQL)", () => {
     await R.q(`UPDATE fleet.fleet_spend_circuit_breaker SET tripped = false, trip_reason = NULL`);
     const list = await R.one<any>(`fleet.fleet_admin_notifications(50, true)`);
     expect(list.unacknowledged.IDENTITY).toBe(1);
-    // Agents read none of it; the notification store is append-only.
+    // Agents can neither read nor remove any of it. The owner can (v45: notifications are disposable — delete means delete).
     expect(await R.code(agentDb.query(`SELECT * FROM fleet.fleet_notifications`))).toBe("permission denied");
-    expect(await R.code(R.q(`DELETE FROM fleet.fleet_notifications`))).toBe("FLEET_HISTORY_IMMUTABLE");
+    expect(await R.code(agentDb.query(`DELETE FROM fleet.fleet_notifications`))).toBe("permission denied");
+    const red = (await R.q(`SELECT notification_id FROM fleet.fleet_notifications WHERE class = 'RED' AND code = 'BREAKER_TRIPPED'`))[0].notification_id;
+    expect(await R.one(`fleet.fleet_admin_notifications_delete(ARRAY[$1]::uuid[], true, $2)`, [red, OWNER])).toMatchObject({ ok: true });
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE notification_id = $1`, [red]))[0].n).toBe(0);
   });
 
   it("the privilege audit passes with the v35 surface", async () => {

@@ -220,8 +220,15 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
       // v30: read-only observability (the Hub's dependency list and Doctor's action-scoping check) — they gate nothing.
       "fleet_hub", "fleet_economy_health",
       // v35: reports only — the IDENTITY notification for a human-only action and the daily report's count; they gate nothing.
-      "svc_notify_tick", "fleet_daily_report"]);
+      "svc_notify_tick", "fleet_daily_report",
+      // v62: the owner's conversation thread shows the agent's requests, and the attention signal digests their statuses so an
+      // answered request wakes the agent — read-only observers; they gate nothing (asserted STABLE below).
+      "fleet_admin_agent_thread", "fleet_agent_attention"]);
     expect(readers.length).toBeGreaterThan(0);
+    for (const fn of ["fleet_admin_agent_thread", "fleet_agent_attention"]) {
+      expect((await q(`SELECT p.provolatile AS v FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'fleet' AND p.proname = $1`, [fn])).map((r) => r.v), fn)
+        .toEqual(["s"]);
+    }
     expect(readers.filter((n) => !family.has(n))).toEqual([]);
     // In particular the spend, experiment, capability, cognition and lifecycle paths never consult it.
     for (const fn of ["api_spend_request", "api_capabilities", "api_cognition_status", "api_experiment_propose", "svc_cognition_authorize", "fleet_survival_observation",

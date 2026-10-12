@@ -60,7 +60,8 @@ $4.63 adjustments → $41.17 left.
 
 1. [ ] **Schema v66 (capital backing)** — ships in the coordinated 65 → 68 release (not separately); cut over on the owner's go (~45 s outage;
        agents stay paused). Without it, a deposit can only be recorded as new owner capital (counted twice).
-2. [ ] **AI credit must be bought by the owner, personally — treasury-funded top-ups are UNSUPPORTED.** v69 records
+2. [ ] **For initial setup, AI credit is bought by the owner personally; treasury-funded top-ups are NOT YET SUPPORTED**
+       (a remaining completion requirement — see below — not a permanent owner-only rule). v69 records
        every AI charge as owed to the owner (it assumes all Anthropic credit is owner-funded). `provider-credits-record`
        stores the USD purchase only (no ledger entry, no funding source). If treasury money (the PayPal treasury, or a card
        charge settled from it) paid for Anthropic credit, nothing would record the outflow and the owner would still be shown
@@ -100,6 +101,16 @@ $4.63 adjustments → $41.17 left.
   supersession + event list, v69 reimbursable owner-funded AI credit; Charter v6 standing summary; library tool text; UI 0.17.1. `~/rlc66` (v66 alone) is superseded.
 - Founder runtime upgrade per agent after the controller release (rehearse; Agent-2 then Agent-1; agents stay paused):
   Field Guide v2.1, wake on agent-facing events with the "since your last turn" line, retired lessons in read_knowledge.
+
+## Remaining completion requirement — treasury-funded AI credit (self-sustaining model)
+The owner-funded, reimbursable arrangement (v69) is the initial-setup model. Before the Fleet funds its own AI:
+- [ ] Accounting: an AI-credit purchase paid from treasury money is recorded as an asset (prepaid AI credit, GBP at the
+      purchase rate) out of treasury cash; AI charges consume that asset instead of creating an owner payable; owner-funded
+      purchases keep the v69 treatment; the funding source of each purchase is explicit; exchange-rate differences between
+      purchase and use are posted explicitly; one expense recognition at use.
+- [ ] Top-up mechanism: an actual, evidenced way for treasury money to reach the provider (the provider's accepted payment
+      methods; e.g. a card funded from the treasury under custody, with its statement settled) — with its owner activation.
+- [ ] Optional: settling the owner payable (reimbursement) as an authorised owner withdrawal from the reimbursable partition.
 
 ## Step 4 — Gumroad (EU/UK consumer digital sales via a merchant of record)
 Verified 2026-10-12 (Gumroad help 13, 10, 70): Gumroad is merchant of record for EU and UK **digital** sales (collects

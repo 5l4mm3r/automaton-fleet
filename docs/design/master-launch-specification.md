@@ -858,3 +858,6 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
 - v66 backing: AI costs no longer reduce what must be backed; unbacked = capital recorded without money − backed (production:
   £200.00 once the opening is recorded; £181.76 before it), and the backing view shows the owner payable (£18.24).
 - Not included: paying the owner back (a separate, authorised owner withdrawal from the reimbursable partition).
+- Scope: owner-funded credit is the initial-setup model. Treasury-funded AI credit (a prepaid-credit asset bought from treasury
+  cash, consumed by AI charges instead of an owner payable, with an actual evidenced top-up mechanism) is a remaining
+  completion requirement for the self-sustaining Fleet, not a permanent owner-only rule.
