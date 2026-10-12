@@ -1,6 +1,6 @@
 # Release e641872 — schema 69 → 72 (AI credit: funding sources, evidence-first purchase accounting, acquisition cost), UI 0.17.1 unchanged
 
-Status: **implemented and rehearsed, not deployed** (2026-10-12 19:20:03Z). **Not yet verified with a real forwarded receipt
+Status: **FROZEN candidate — implemented and rehearsed, not deployed** (2026-10-12 19:20:03Z). **Not yet verified with a real forwarded receipt
 or a real treasury debit.** Supersedes `release-828c71f.md`. Production: b60e262 / schema 69; both agents paused on b60e262
 (Agent-2 a paused reserve); no balance changed; no money moved.
 
