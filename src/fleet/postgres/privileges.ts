@@ -893,7 +893,9 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     // v21: rates only through the validated insert; provider credit only through the owner recorder and inference recording.
     fleet_fx_rates: new Set(["fleet_fx_insert"]),
     fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile",
-      "fleet_spend_review_charge", "fleet_control_charge"]),
+      "fleet_spend_review_charge", "fleet_control_charge",
+      // v70: a treasury-funded AI-credit purchase records its USD purchase.
+      "fleet_admin_ai_credit_treasury_purchase"]),
     // v25/v26: dependency records only through the founder API and the owner's resolve/import.
     fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import",
       // v29: PAYMENT_RAIL_REQUIRED records ONE action-scoped kyc dependency (and answers it when a rail is connected).
@@ -1179,7 +1181,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_paypal_webhook_inbox: new Set(["svc_paypal_webhook_receive", "cx_paypal_inbox", "cx_paypal_inbox_result"]),
     fleet_paypal_transactions: new Set(["cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute", "svc_settlement_paypal_match",
       // v66: a deposit backing the existing capital closes its transaction.
-      "fleet_admin_capital_back"]),
+      "fleet_admin_capital_back",
+      // v70: a treasury debit evidencing an AI-credit purchase closes its transaction.
+      "fleet_admin_ai_credit_treasury_purchase"]),
     fleet_paypal_balance_observations: new Set(["cx_paypal_balance_record"]),
     fleet_card_charges: new Set(["fleet_admin_card_charge_record", "fleet_admin_card_charge_confirm", "fleet_card_charge_post",
       "fleet_econ_card_authorize", "fleet_econ_card_void", "svc_card_holds_expire",
@@ -1207,6 +1211,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_capital_backings: new Set(["fleet_admin_capital_back"]),
     // v68: lesson supersessions only by Fleet Control's review record.
     fleet_knowledge_supersessions: new Set(["svc_knowledge_review_record"]),
+    // v70: AI-credit lots and draws — by the provider-credit event trigger, the draw, the treasury purchase and the settlement.
+    fleet_ai_credit_lots: new Set(["fleet_ai_credit_draw", "fleet_ai_credit_events_trigger", "fleet_admin_ai_credit_treasury_purchase", "svc_ai_credit_settle"]),
+    fleet_ai_credit_draws: new Set(["fleet_ai_credit_draw"]),
     fleet_card_request_policy: new Set(["fleet_admin_card_request_policy_set"]),
     // v55: the owner's survival protection switch, only by the owner.
     fleet_survival_protection: new Set(["fleet_admin_survival_protection_set"]),

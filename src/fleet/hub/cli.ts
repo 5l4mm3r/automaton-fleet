@@ -105,6 +105,8 @@
  *   hub-paypal-test                                                           the test's progress: approval link, capture, Transaction Search, balance
  *   hub-treasury-tx [agentId] [--limit n] [--before seq] [--direction in|out|internal]   per-transaction treasury list
  *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
+ *   economy-ai-credits                                                       (v70) AI credit by funding source: lots, prepaid asset, owner payable
+ *   economy-ai-credit-purchase <provider> <usdCents> <railId> <txnId> <eventCode> <receiptRef>  (v70) credit bought with treasury money (the PayPal debit is the evidence)
  *   economy-ai-credit-opening                                                (v69) once after the cutover: AI costs charged before v69 become owed to the owner
  *   economy-capital-backing                                                  (v66) the existing capital: virtual, provider-paid, backed, unbacked; books vs PayPal
  *   economy-capital-back <railId> <txnId> <eventCode>                        (v66) a PayPal deposit backs the existing capital (no second credit; any excess is owner funding)
@@ -292,6 +294,12 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     }
     case "economy-paypal-attribute":
       return h.paypalAttribute(p[0], p[1], p[2], p[3], p[4] ?? null, actor);
+    case "economy-ai-credits":
+      return h.aiCredits();
+    case "economy-ai-credit-purchase": {
+      if (p.length !== 6 || !/^[1-9]\d{0,7}$/.test(p[1])) throw new Error("usage: economy-ai-credit-purchase <provider> <usdCents> <railId> <txnId> <eventCode> <receiptRef>");
+      return h.aiCreditTreasuryPurchase(p[0], Number(p[1]), p[2], p[3], p[4], p[5], actor);
+    }
     case "economy-ai-credit-opening":
       return h.aiCreditOpening(actor);
     case "economy-capital-backing":

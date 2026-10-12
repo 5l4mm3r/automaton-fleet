@@ -858,6 +858,21 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
 - v66 backing: AI costs no longer reduce what must be backed; unbacked = capital recorded without money − backed (production:
   £200.00 once the opening is recorded; £181.76 before it), and the backing view shows the owner payable (£18.24).
 - Not included: paying the owner back (a separate, authorised owner withdrawal from the reimbursable partition).
-- Scope: owner-funded credit is the initial-setup model. Treasury-funded AI credit (a prepaid-credit asset bought from treasury
-  cash, consumed by AI charges instead of an owner payable, with an actual evidenced top-up mechanism) is a remaining
-  completion requirement for the self-sustaining Fleet, not a permanent owner-only rule.
+- Scope: owner-funded credit is the initial-setup model; treasury-funded AI credit is §25 (v70).
+
+## 25. Schema v70 — AI provider credit by funding source (2026-10-12; in code, not deployed)
+
+- Lots by source: owner (recorded purchases, positive adjustments, the opening balance) and treasury (recorded only with the
+  treasury PayPal account's completed GBP debit as evidence — one purchase per transaction and per provider receipt — booked
+  D `fleet:ai_credits` / C treasury cash). Every provider-credit consumption event draws lots oldest first (a trigger, so
+  every AI charge path is covered without restating it).
+- Treasury-drawn consumption is reclassified minutely (lifecycle pass `svc_ai_credit_settle`): D owner payable / C
+  owner-reimbursable partition and D treasury unallocated / C `fleet:ai_credits`, at the charge's controlled rate, in whole
+  pence, bounded by what charges have posted. A used-up lot's GBP cost against consumption is posted as
+  `ai_credit_cost_settlement` (FX); a negative adjustment on a treasury lot is `ai_credit_unexplained_usage` at cost.
+- Invariants: the expense is recognised once (at charge; purchases never expensed); the owner payable equals owner-funded use;
+  the asset returns to zero when a lot is used up. The capital-backing identity is unaffected (a purchase lowers books cash and
+  PayPal by the same amount).
+- Not automatic: purchases and the provider's auto-reload happen at the provider (card per its official help; PayPal not
+  confirmed) and are recorded by the owner. The capability entry v2 (agents on the event-waking runtime; AI cost wording)
+  loads with v70.

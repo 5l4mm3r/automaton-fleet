@@ -2148,7 +2148,7 @@ export class PgFleetStore {
    */
   async lifecycleTick(): Promise<{ cardHolds: Record<string, unknown>; availability: Record<string, unknown>; settlement: Record<string, unknown>;
     insolvency: Record<string, unknown>; reductions: Record<string, unknown>; cardStatement: Record<string, unknown>; cardRequests: Record<string, unknown>;
-    deliveries: Record<string, unknown> }> {
+    deliveries: Record<string, unknown>; aiCredits: Record<string, unknown> }> {
     // v56: each pass is isolated — one failing pass is reported in its own result and never skips the passes after it.
     const one = (sql: string) => this.tx(async (c) => (await c.query(sql)).rows[0].r as Record<string, unknown>)
       .catch((err: unknown) => ({ ok: false, error: (err instanceof Error ? err.message : String(err)).slice(0, 200) }) as Record<string, unknown>);
@@ -2165,6 +2165,8 @@ export class PgFleetStore {
       cardRequests: await one("SELECT svc_card_requests_expire() AS r"),
       // v56: failed order deliveries are sent again with back-off.
       deliveries: await one("SELECT svc_order_deliveries_retry(20) AS r"),
+      // v70: AI credit drawn from treasury-funded lots leaves the owner payable (whole pence; used-up lots settled).
+      aiCredits: await one("SELECT svc_ai_credit_settle(20) AS r"),
     };
   }
 

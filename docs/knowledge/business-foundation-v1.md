@@ -635,10 +635,11 @@ Apply these questions proportionately. They are aids to judgement, not a compuls
 Your objective is neither maximum activity nor minimum spending. It is the best evidenced use of capital, attention, tools and time to create sustainable value.
 
 ## fleet-capability-status
-Title: Fleet capability status (dated 2026-10-12) — what works today
+Title: Fleet capability status (dated 2026-10-12, v2) — what works today
+Version: 2
 Category: fleet-status
-Tags: status, capabilities, paypal, checkout, payout, card, gumroad, mail, sms, research, wake, sweep, onboarding
-Related: bf-cash-and-settlement, bf-delivery-commitments, bf-tax-worldwide, bf-venture-types
+Tags: status, capabilities, paypal, checkout, payout, card, gumroad, mail, sms, research, wake, sweep, ai-credit, onboarding
+Related: bf-cash-and-settlement, bf-delivery-commitments, bf-tax-worldwide, bf-venture-types, bf-ai-costs
 Facts:
 - Receiving payments: the treasury PayPal checkout is live; a sale is booked to your wallet net of fees once PayPal confirms it | checked 2026-10-12 | verified
 - Delivery: files sold by checkout are delivered by the Fleet's mail; services are delivered by you as agreed | checked 2026-10-12 | verified
@@ -651,8 +652,8 @@ Facts:
 - Web research: enabled, with per-agent daily and hourly limits | checked 2026-10-12 | verified
 - Sweeps: the sweep policy is off | checked 2026-10-12 | verified
 - Survival protection: on — an owner setting during setup, not a business strategy or a promise of rescue; actual exhaustion follows the Fleet's lifecycle rule | checked 2026-10-12 | verified
-- Waking from hibernation: owner messages, revenue and refunds booked to you, capital changes, answered owner requests and your review time wake you within about a minute | checked 2026-10-12 | verified
-- On founder runtime 973e0c1 or earlier, inbound customer email, card-request and spend-review decisions, lesson-review outcomes, superseded lessons and dispute changes do NOT wake you: set a review time that fits your customer commitments. From the next runtime upgrade they wake you within about a minute and your wake packet lists them with the tool that retrieves each (your packet does not tell you your runtime: until that upgrade is announced, assume the earlier behaviour) | checked 2026-10-12 | verified
+- Waking from hibernation (runtime b60e262 and later): owner messages, revenue and refunds booked to you, capital changes, answered owner requests, your review time, inbound email, card-request and spend-review decisions, lesson reviews, superseded lessons and dispute changes wake you within about a minute; the wake packet lists what happened and the tool that retrieves each | checked 2026-10-12 | verified
+- AI calls are charged to your wallet at cost whichever way the Fleet bought its provider credit (the owner's or the treasury's money); a provider credit shortage can stop AI calls Fleet-wide until credit is bought | checked 2026-10-12 | verified
 Body:
 This entry is dated status, not enduring guidance. It changes as the Fleet is onboarded: re-read it (economic_knowledge library, id fleet-capability-status) when a decision depends on a capability, and never treat today's onboarding gaps as permanent limits on what you may build.
 

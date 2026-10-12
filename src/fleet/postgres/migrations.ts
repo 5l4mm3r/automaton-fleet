@@ -76,9 +76,10 @@ import { V66_SQL } from "./migrations-phase66.js";
 import { V67_SQL } from "./migrations-phase67.js";
 import { V68_SQL } from "./migrations-phase68.js";
 import { V69_SQL } from "./migrations-phase69.js";
+import { V70_SQL } from "./migrations-phase70.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 69;
+export const FLEET_PG_SCHEMA_VERSION = 70;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1243,6 +1244,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 67, name: "business_foundation_and_wake", sql: V67_SQL },
   { version: 68, name: "lesson_supersession_and_event_feed", sql: V68_SQL },
   { version: 69, name: "ai_credit_reimbursable", sql: V69_SQL },
+  { version: 70, name: "ai_credit_funding_sources", sql: V70_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1317,6 +1319,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_custody_activation_expire()",
   // v49: undeclared card holds (booked at their maximum when used, else voided). v50: insolvency dormancy, lapsed sweep reductions.
   "svc_card_holds_expire(integer)",
+  // v70: settle AI credit drawn from treasury-funded lots (minutely lifecycle pass).
+  "svc_ai_credit_settle(integer)",
   "svc_insolvency_tick()",
   "svc_sweep_reductions_expire()",
   // v51: held PayPal captures become available capital on PayPal's evidence (Transaction Search status S + Balances).

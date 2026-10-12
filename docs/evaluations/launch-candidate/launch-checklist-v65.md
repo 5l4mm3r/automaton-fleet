@@ -55,8 +55,20 @@ Steps 1 and 2 are DONE (release 973e0c1 deployed 14:20Z; both agents upgraded 14
 | **Real money required to back the books (unbacked)** | **200.00** |
 
 Net of what the owner is owed (£18.24) this is the same £181.76 as before; it is now shown as a deposit of £200.00 plus a
-recorded £18.24 owed back (no reimbursement is made or authorised). Anthropic credit recorded: $69.97 bought, $24.17 used,
-$4.63 adjustments → $41.17 left.
+recorded £18.24 owed back (no reimbursement is made or authorised).
+
+**How the backing amount is calculated (correction, 2026-10-12):** from the books' actual assets and liabilities, not from
+which agents exist. Real money the treasury must hold = cash in the books held at the treasury (agents' wallets + treasury
+partitions) − the verified PayPal balance; liabilities inside that cash (the owner payable) are shown separately. Read-only
+production, 2026-10-12 ~18:00Z: wallets 86.41 + 95.36, treasury 0.66 → books £182.43; PayPal £0.67 → **£181.76** to back
+now; after the AI-credit opening (+£18.24 held for the owner, payable £18.24) → **£200.00**, of which £18.24 is owed to the
+owner. **Retiring or pausing an agent does not change this:** its wallet moves to the treasury inside the books (the estate),
+so the cash to back is the same. Only an explicitly authorised adjustment (for example an owner-approved reduction of the
+capital recorded without money) would change it; none exists or is authorised. Agent-2 is kept as a paused reserve.
+
+**Anthropic credit — check before any top-up:** the Fleet's record shows **$41.17** (bought $69.97, used $24.17, adjustments
+−$4.63; no AI call since 2026-10-10). Compare it with the Console's balance first; if they differ, record the difference
+(`provider-credits-record anthropic adjustment <±cents> <reason>`) before deciding whether a top-up is needed.
 
 1. [ ] **Schema v66 (capital backing)** — ships in the coordinated 65 → 68 release (not separately); cut over on the owner's go (~45 s outage;
        agents stay paused). Without it, a deposit can only be recorded as new owner capital (counted twice).
@@ -102,15 +114,27 @@ $4.63 adjustments → $41.17 left.
 - Founder runtime upgrade per agent after the controller release (rehearse; Agent-2 then Agent-1; agents stay paused):
   Field Guide v2.1, wake on agent-facing events with the "since your last turn" line, retired lessons in read_knowledge.
 
-## Remaining completion requirement — treasury-funded AI credit (self-sustaining model)
-The owner-funded, reimbursable arrangement (v69) is the initial-setup model. Before the Fleet funds its own AI:
-- [ ] Accounting: an AI-credit purchase paid from treasury money is recorded as an asset (prepaid AI credit, GBP at the
-      purchase rate) out of treasury cash; AI charges consume that asset instead of creating an owner payable; owner-funded
-      purchases keep the v69 treatment; the funding source of each purchase is explicit; exchange-rate differences between
-      purchase and use are posted explicitly; one expense recognition at use.
-- [ ] Top-up mechanism: an actual, evidenced way for treasury money to reach the provider (the provider's accepted payment
-      methods; e.g. a card funded from the treasury under custody, with its statement settled) — with its owner activation.
-- [ ] Optional: settling the owner payable (reimbursement) as an authorised owner withdrawal from the reimbursable partition.
+## Treasury-funded AI credit (self-sustaining model) — accounting built in v70 (not deployed)
+- **Built (schema v70, in code, not deployed):** provider credit is held in lots by funding source. *Owner* lots (purchases
+  recorded with `provider-credits-record`, and the opening balance) are owed to the owner as used (v69). *Treasury* lots are
+  recorded with `economy-ai-credit-purchase <provider> <usdCents> <railId> <txnId> <eventCode> <receiptRef>`, which requires
+  the treasury PayPal account's own completed GBP debit as evidence (one purchase per transaction and per receipt) and
+  books a prepaid asset (`fleet:ai_credits`) out of treasury cash. Consumption draws lots oldest first; the treasury part
+  leaves the owner payable and uses up the asset (minutely settlement); a used-up lot's cost difference (exchange rate) is
+  posted explicitly; a negative balance adjustment on a treasury lot is expensed at cost. Expense recognised once; no false
+  owner payable. `economy-ai-credits` shows lots, the asset and the payable.
+- **The provider's actual payment mechanism (checked 2026-10-12):** Anthropic API credit is prepaid, bought on the Console
+  Billing page; the official help describes paying by card ("Enter your new card details") and an optional **auto-reload**
+  that charges the saved card when the balance falls below a threshold. No official page lists PayPal, and third-party
+  guides report PayPal is declined — **check the Console Billing page before planning to pay from the treasury PayPal.**
+  - If the Console accepts the treasury PayPal (or a card that draws from the treasury PayPal balance), each purchase,
+    including each auto-reload, appears as a treasury PayPal debit and can be recorded as treasury-funded.
+  - If only the owner's own card is accepted, purchases are owner-funded (v69); the treasury can settle them later through
+    the owner payable — an authorised reimbursement, not yet built.
+- **Not automatic:** nothing in the Fleet buys or tops up credit. Auto-reload, if enabled, happens at the provider; every
+  purchase (manual or auto-reload) must be recorded by the owner.
+- **Remaining:** deploy v70 (with the next controller release); verify the payment method in the Console; if the treasury
+  pays, record each purchase from its PayPal debit; optionally build the owner-payable reimbursement.
 
 ## Step 4 — Gumroad (EU/UK consumer digital sales via a merchant of record)
 Verified 2026-10-12 (Gumroad help 13, 10, 70): Gumroad is merchant of record for EU and UK **digital** sales (collects

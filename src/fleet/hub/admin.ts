@@ -166,6 +166,11 @@ export class PgHubAdmin {
   // v66: a real PayPal deposit backs the existing (virtual) capital instead of crediting it twice; and the reconciliation.
   capitalBacking() { return this.one(`SELECT fleet_capital_backing() AS r`); }
   // v69: bring in the AI costs charged before v69 as owed to the owner (once; owner action after the cutover).
+  // v70: AI credit by funding source; a treasury-funded purchase evidenced by the treasury PayPal debit.
+  aiCredits() { return this.one(`SELECT fleet_ai_credit_status() AS r`); }
+  aiCreditTreasuryPurchase(provider: string, usdCents: number, railId: string, txnId: string, eventCode: string, receipt: string, actor: string) {
+    return this.one(`SELECT fleet_admin_ai_credit_treasury_purchase($1, $2, $3, $4, $5, $6, $7) AS r`, [provider, usdCents, railId, txnId, eventCode, receipt, actor]);
+  }
   aiCreditOpening(actor: string) { return this.one(`SELECT fleet_admin_ai_credit_opening($1) AS r`, [actor]); }
   capitalBack(railId: string, txnId: string, eventCode: string, actor: string) {
     return this.one(`SELECT fleet_admin_capital_back($1, $2, $3, $4) AS r`, [railId, txnId, eventCode, actor]);

@@ -5,7 +5,7 @@
  *
  *   node scripts/knowledge-foundation-build.mjs [source.md] [out.ts]
  *
- * Each "## <id>" section becomes one library entry: Title, Category, Tags, Related (cross-references, appended to the body),
+ * Each "## <id>" section becomes one library entry: Title, Version (default 1; a corrected entry loads as a new version), Category, Tags, Related (cross-references, appended to the body),
  * Sources ("url | what | checked YYYY-MM-DD"), Facts ("fact | checked YYYY-MM-DD | confidence" — dated status, stale after
  * 14 days) and Body. The "Reading path" line fixes the order of a full read. Hard rules stay empty: this is guidance; law,
  * platform terms and Fleet rules live in the charter and the legal entries. Deterministic: the same source gives the same file.
@@ -52,7 +52,9 @@ for (const block of md.split(/^(?=## )/m).slice(1)) {
     if (!fact || !d || !["verified", "unverified"].includes(confidence)) fail(`${id}: fact ${l}`);
     return { fact, lastChecked: d, confidence: confidence === "verified" ? "verified-official" : "unverified", staleAfterDays: 14, verifyAt: [] };
   });
-  entries.push({ id, version: 1, category, title, body, tags: (field("Tags") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+  const version = Number(field("Version") ?? 1);
+  if (!Number.isInteger(version) || version < 1) fail(`${id}: version`);
+  entries.push({ id, version, category, title, body, tags: (field("Tags") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     keywords: [], factsThatChange: facts, hardRules: [], sources, lastReviewed: REVIEWED, recommendations: [] });
 }
 const ids = new Set(entries.map((e) => e.id));
