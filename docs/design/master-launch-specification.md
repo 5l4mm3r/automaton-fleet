@@ -905,3 +905,20 @@ Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-can
   restored to the lots it was drawn from (newest first; before v70 the opening pool); less is drawn as an adjustment;
   anything unplaceable is reported (P2), never given a funding source. A generic positive adjustment no longer creates an
   owner lot. Library: capability status v4 and bf-ai-costs v2 tell agents their AI cost includes the tax share.
+
+## 28. Schema v73 — one-time historical acquisition-cost correction (owner instruction, 2026-10-12)
+v72 prices the tax / fees only on consumption drawn from a lot. AI charges made before the lots existed (the calls the v69
+opening owes to the owner at the pre-tax price) had no tax share. `fleet_admin_ai_credit_historical_cost <provider> <credit>
+<total> <evidence>` recognises it once:
+- rate: the opening pool's evidenced ratio (receipts' total vs credit), which must reproduce the acquisition cost already
+  recorded on that lot; refused before the lot's cost and before the v69 opening;
+- base: each historical AI-charge journal's recognised pre-tax expense; the pre-tax charge is never recognised again;
+- payer: the original attribution — agent inference → that agent (postings, agent and its cognition records agree, and the
+  call is the lot's provider); Fleet Control reviews and treasury-paid owner turns → the treasury (cognition records, or
+  for a review the controller's own consumption of that provider within the hour before it). Anything else is reported
+  (`unattributed`, plus a P2 `ai_credit_reconcile` reason `historical_unattributed`), never posted;
+- posting: each share joins the opening pool's per-payer accrual and v72's cost pass posts whole pence (D payer expense /
+  C payer cash; D treasury owner-reimbursable / C owner payable), remainders carried as for any draw;
+- once: `fleet_ai_credit_historical_costs` (one row per corrected journal) and `fleet_ai_credit_historical_runs` (a single
+  row); a second call returns the first run. `fleet_ai_credit_historical_preview` is read-only.
+- Also: the v66 – v72 capital-backing and AI-credit commands are routed from `fleet:admin` (they had handlers but no route).

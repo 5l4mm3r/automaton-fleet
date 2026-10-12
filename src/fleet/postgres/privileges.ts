@@ -1228,7 +1228,11 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_ai_credit_debit_notices: new Set(["fleet_ai_credit_match"]),
     // v72: acquisition cost pricing and accrual; console reconciliations.
     fleet_ai_credit_draw_costs: new Set(["fleet_ai_credit_cost_pass"]),
-    fleet_ai_credit_cost_accrual: new Set(["fleet_ai_credit_cost_pass"]),
+    fleet_ai_credit_cost_accrual: new Set(["fleet_ai_credit_cost_pass",
+      // v73: the one-time historical correction adds each historical charge's share to the opening pool's accrual.
+      "fleet_admin_ai_credit_historical_cost"]),
+    fleet_ai_credit_historical_costs: new Set(["fleet_admin_ai_credit_historical_cost"]),
+    fleet_ai_credit_historical_runs: new Set(["fleet_admin_ai_credit_historical_cost"]),
     fleet_ai_credit_reconciliations: new Set(["fleet_admin_ai_credit_balance_reconcile"]),
     fleet_ai_credit_policy: new Set(["fleet_admin_ai_credit_policy_set"]),
     fleet_ai_credit_policy_history: new Set(["fleet_admin_ai_credit_policy_set"]),
