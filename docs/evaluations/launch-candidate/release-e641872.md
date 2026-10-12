@@ -1,6 +1,7 @@
 # Release e641872 — schema 69 → 72 (AI credit: funding sources, evidence-first purchase accounting, acquisition cost), UI 0.17.1 unchanged
 
-Status: **FROZEN candidate — implemented and rehearsed, not deployed** (2026-10-12 19:20:03Z). **Not yet verified with a real forwarded receipt
+Status: **SUPERSEDED by release-d63a595.md** (same application code + corrected release tooling; deployed 2026-10-12
+19:54:33Z). This commit was never served: its one attempt was rolled back (below). Originally: implemented and rehearsed (2026-10-12 19:20:03Z). **Not yet verified with a real forwarded receipt
 or a real treasury debit.** Supersedes `release-828c71f.md`. Production: b60e262 / schema 69; both agents paused on b60e262
 (Agent-2 a paused reserve); no balance changed; no money moved.
 
@@ -53,4 +54,5 @@ Then the ordered list in `launch-checklist-v65.md` ("Onboarding to launch").
   69; both agents paused on b60e262; credit, owner payable (0), survival protection, custody (off, 0 activations), cap 2/2
   DEVELOPMENT and all live flags unchanged; all units active; readyz 200.
 - Remaining before a retry: the stale `/opt/automaton-fleet/releases/e641872…` (installed by the failed attempt, never served)
-  blocks a backend-only cutover — removal needs the owner's approval — and the tooling defects above.
+  blocks a backend-only cutover — removal needs the owner's approval — and the tooling defects above. **Resolved by
+  release-d63a595.md** (the defects fixed in d63a595; a new commit, so the stale directory blocks nothing and is left in place).

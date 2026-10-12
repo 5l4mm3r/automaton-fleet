@@ -165,9 +165,11 @@ PayPal balance cannot be evidenced as treasury money (no bank/card feed is conne
 - Policy command (after the cutover): `economy-ai-credit-policy anthropic owner_card --receipt-sender support@anthropic.com`.
 
 
-## Onboarding to launch — one ordered list (2026-10-12; candidate e641872 FROZEN, 69 → 72, not deployed)
+## Onboarding to launch — one ordered list (2026-10-12; step 1 DONE: d63a595 deployed 19:54:33Z, schema 72)
 Each step needs the owner's go; agents stay paused until step 12.
-1. **Cut over** the coordinated release (v70 – v72; custody restarts with it). Health and preservation checks after.
+1. ~~**Cut over** the coordinated release (v70 – v72; custody restarts with it). Health and preservation checks after.~~
+   **DONE** 2026-10-12 19:54:33Z: d63a595 (= e641872's application code + fixed release tooling), schema 72, UI 0.17.1;
+   preservation and health verified (release-d63a595.md).
 2. **Policy:** `economy-ai-credit-policy anthropic owner_card --receipt-sender support@anthropic.com`.
 3. **Reconcile the console balance:** `economy-ai-credit-reconcile anthropic 4129` ($41.29). The $0.12 is usage the Fleet
    over-recorded (it rounds each call up); it returns to the opening owner pool it was drawn from — no new funding source.
