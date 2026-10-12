@@ -183,8 +183,9 @@ Each step needs the owner's go; agents stay paused until step 12.
    Result (read-only, `fleet_capital_backing()` after the opening): **owner payable £18.24**; virtual capital £200.00, backed
    £0.00, **unbacked £200.00** (the provider-paid £18.24 that previously reduced it is now the owner's payable); books cash
    £200.67 = £200.00 capital + £0.67 real PayPal balance; difference £0.00. Agents unchanged and paused; ledger verifies.
-   - **Not covered by any function — owner decision:** the 20 % tax on the credit used *before* v70 (the £18.24 was booked at
-     the pre-tax price; tax share ≈ £3.65). The lot ratio applies only to usage from now on. Nothing has been posted for it.
+   - ~~Not covered by any function~~ **DONE 2026-10-12 20:32Z (v73, e54ee56):** the tax on the credit used before the lots,
+     by original attribution — Agent-1 £2.71, Agent-2 £0.92 (owed to the owner), 1p review 0.2p carried; none unattributed.
+     **Now: owner payable £21.87; wallets £83.70 / £94.44; unbacked £200.00** (release-e54ee56.md).
 6. **Receipts:** optionally a forwarding filter (support@anthropic.com → fleet.treasury@proton.me); then confirm each
    observed receipt (`economy-ai-credit-confirm <receiptId> owner`). Without forwarding: one `provider-credits-record` per
    purchase.
