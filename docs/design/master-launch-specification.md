@@ -761,3 +761,33 @@ revisions treated refunds as manual; that was an implementation gap, not an owne
   reserve is released (P2 `order_refund_failed`); unknown (5xx / timeout) → sent again after ten minutes with the same id.
 - **Not covered:** Gumroad sales are refunded in Gumroad (the gateway's token deliberately has no refund scope).
 
+
+---
+
+## 20. Schema v65, Charter v6, Field Guide v2 (revision 6, 2026-10-12)
+
+Consolidated with v64 into one 63 → 65 candidate (`docs/evaluations/launch-candidate/launch-checklist-v65.md`). Not deployed.
+
+- **Advertising review (contextual, no fixed gate).** An ad commitment (payee category `advertising`, or a card charge at
+  an ad platform's origin) raises the review signal `advertising_beyond_experiment` only when the agent has not been
+  profitable over 60 days and the commitment plus its 30-day ad spend exceeds `ad_experiment_bp` (default 5 %) of its
+  available funds. The signal asks Fleet Control to weigh campaign evidence, aggregate commitment, profitability, downside
+  and runway; it is not a cap, and it holds only on credible evidence (O19). The 2.5–5 % range is guidance in the Field Guide.
+- **Shared-lesson review.** Fleet Control reviews each knowledge proposal against the promotion rule (repeated evidence,
+  reliable sources or a generalisable mechanism; nothing unlawful, deceptive, personal or secret; no duplicates) and promotes
+  or rejects it with a reason (`promoted_by = 'fleet_control'`). The proposal is fenced as untrusted text. Failures back off;
+  after the policy's attempts the proposal is visibly stalled (P1 `knowledge_review_stalled`) — never decided by default.
+  Costs are treasury overhead (`knowledge_review_charge`). The owner's CLI review still works.
+- **Gumroad unlock.** Per agent, the first time its wallet reaches £500, permanently (`fleet_channel_unlocks`, immutable;
+  P3 `channel_unlocked`). Before that `fleet_storefront_enqueue` refuses with `FLEET_STOREFRONT_LOCKED`.
+- **Business project folders.** `fleet_admin_business_folders(agent)`: wallet and peak, unlocks, one folder per venture
+  (financials, accounts with credential ids and kinds only, mail, products, orders, payees) and general records. Values only
+  through the existing protected owner reveal; nothing secret is read into the folder, a model input or a log.
+- **Charter v6 and attested toolsets.** Doctrine `founder-v6` (charter v5 + edits B1–B6: one steady, wallet-conscious standard;
+  no reports or journaling rituals). The controller serves `founder-v6` only to a runtime whose pinned release tree contains the
+  `doctrine-v6` marker; otherwise `FLEET_DOCTRINE_INCOMPATIBLE`. Tools follow the doctrine: toolset-1 (v5 runtimes) withholds
+  `fleet_capital spend_reviews` and `field_guide all`, which those runtimes cannot execute; toolset-2 (v6) offers both.
+- **Field Guide v2.0** (founder runtime): 18 sections; venture types as contextual choices; ads as small experiments that scale
+  on evidence; refunds within customer rights and provider rules; regulated activities follow their real authorisation
+  requirements; accurate memory model (no claim of permanent model learning); sealed owner details only within standing
+  authority; human-only blockers escalated with priority matched to urgency.

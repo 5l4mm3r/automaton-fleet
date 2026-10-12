@@ -32,6 +32,8 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_survival_protection",
     // v64: the spend review policy and its cost accrual (singletons).
     "fleet_spend_review_policy", "fleet_spend_review_accrual",
+    // v65: Fleet Control review costs per kind (singleton rows).
+    "fleet_control_accrual",
     ...V35_SINGLETONS,
   ]);
   const r = await c.query<{ t: string }>(

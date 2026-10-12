@@ -152,7 +152,7 @@ export const FOUNDER_TOOLS: readonly ToolSpec[] = Object.freeze([
   {
     name: "request_spend",
     capability: "spend.request",
-    description: "Commit your OWN capital: a structured spend order under a decided decision (decisionKey), within the capital at risk you sized there — the risk judgement is yours, and your runtime refuses commitments beyond it. FleetController is the custodian: it executes orders only within its custody rules, which protect treasury, shared, restricted and protected capital. Nobody else approves it and no fixed amount limits it; a custody refusal names its reason (e.g. PROTECTED_CAPITAL, TAX_RESERVE, INVALID_DESTINATION). A material or suspicious commitment is reserved at once and paid after a prompt automated Fleet Control review, which holds it only on credible evidence (risk substantially outweighing the opportunity, fraud, an invalid payment, insufficient funds) and says why; a held commitment's funds are released and you can revise, resubmit or take another route (fleet_capital op spend_reviews). You never name an address, only a registered destination id. Nothing is paid while custody execution is disabled in this phase.",
+    description: "Commit your OWN capital: a structured spend order under a decided decision (decisionKey), within the capital at risk you sized there — the risk judgement is yours, and your runtime refuses commitments beyond it. FleetController is the custodian: it executes orders only within its custody rules, which protect treasury, shared, restricted and protected capital. Nobody else approves it and no fixed amount limits it; a custody refusal names its reason (e.g. PROTECTED_CAPITAL, TAX_RESERVE, INVALID_DESTINATION). A material or suspicious commitment is reserved at once and paid after a prompt automated Fleet Control review, which holds it only on credible evidence (risk substantially outweighing the opportunity, fraud, an invalid payment, insufficient funds) and says why; a held commitment's funds are released and you can revise, resubmit or take another route. You never name an address, only a registered destination id. Nothing is paid while custody execution is disabled in this phase.",
     parameters: obj({
       amountCents: { type: "integer", minimum: 1, description: "Amount in minor units of your ledger currency (GBP pence)" },
       category: { type: "string", enum: ["expense", "fee", "asset_acquisition", "conway_credits"] },
@@ -202,7 +202,7 @@ export const FOUNDER_TOOLS: readonly ToolSpec[] = Object.freeze([
   {
     name: "fleet_capital",
     capability: "spend.request",
-    description: "Payments infrastructure and Fleet capital. op register_vendor: {vendorName, category (supplier|manufacturer|marketplace_fee|advertising|software_subscription|hosting|fulfilment|freelancer|professional_service|other), reference (email or https URL of the payee account), rail?, website?, ventureKey?} → a destination id for request_spend, verified by FleetController, no approval; op revoke_vendor: {destinationId, reason}; op require_rail: {ventureKey, capability (receive_payments|refunds|payouts|marketplace_listing|subscriptions|storefront), provider?} — FleetController assigns a Fleet rail or records the one action that needs an account; op request: {ventureKey, purpose, amountMinor, evidence:[…], expectedRevenueMinor, expectedNetMinor, expectedPaybackDays, downsideMinor, confidenceBp, milestones?:[{key, metric (revenue_minor|net_profit_minor), target, trancheMinor}], alternativePlan, alternativeMinor, categories?} — FLEET capital beyond your own (FleetController decides as lender; your own capital needs no request); op list; op envelopes; op envelope_spend: {envelopeId, amountMinor, category, destinationId, purpose} — spend inside an approved envelope. PAY THROUGH THE TREASURY PAYPAL FIRST (register_vendor + spend). The owner's card is the LAST option, only when PayPal truly cannot pay: op card_request: {accountId (your account on the merchant site), merchant, amountMinor, paypalUnavailable (card_only_merchant|paypal_needs_login|payee_no_paypal|payouts_unavailable), purpose (what it is for and why it matters to your survival or opportunity), origin?, envelopeId?} → Fleet Control checks the reason and that your own wallet (or the envelope) covers it; a routine request is approved at once, a material or suspicious one (large against your funds, little runway left, a likely duplicate, a brand-new payee) is reviewed by Fleet Control first — usually within minutes; keep working; op card_requests / spend_reviews → their status. With an approved request: op card_authorize: {requestId, accountId, merchant, maxMinor (≤ the approved amount), purpose, origin?, envelopeId?} → a hold that first RESERVES maxMinor from your own spendable capital (or from one of your envelopes); fill the card with browser owner_card steps; then op card_declare: {chargeId, amountMinor} (booked from the reservation; the rest comes back; if a merchant later charges more, the excess is your debt to the treasury) or op card_void: {chargeId} if the card was never filled; op cards → your holds and charges; op identity_uses → where the owner's details were filled for you. Sweep: op sweep_reductions → your current sweep rate and reductions; op sweep_reduction_request: {reductionBp, days ≤180, reason} — Fleet Control decides at once (granted, bounded, when you have retained profit to reinvest and an active venture).",
+    description: "Payments infrastructure and Fleet capital. op register_vendor: {vendorName, category (supplier|manufacturer|marketplace_fee|advertising|software_subscription|hosting|fulfilment|freelancer|professional_service|other), reference (email or https URL of the payee account), rail?, website?, ventureKey?} → a destination id for request_spend, verified by FleetController, no approval; op revoke_vendor: {destinationId, reason}; op require_rail: {ventureKey, capability (receive_payments|refunds|payouts|marketplace_listing|subscriptions|storefront), provider?} — FleetController assigns a Fleet rail or records the one action that needs an account; op request: {ventureKey, purpose, amountMinor, evidence:[…], expectedRevenueMinor, expectedNetMinor, expectedPaybackDays, downsideMinor, confidenceBp, milestones?:[{key, metric (revenue_minor|net_profit_minor), target, trancheMinor}], alternativePlan, alternativeMinor, categories?} — FLEET capital beyond your own (FleetController decides as lender; your own capital needs no request); op list; op envelopes; op envelope_spend: {envelopeId, amountMinor, category, destinationId, purpose} — spend inside an approved envelope. PAY THROUGH THE TREASURY PAYPAL FIRST (register_vendor + spend). The owner's card is the LAST option, only when PayPal truly cannot pay: op card_request: {accountId (your account on the merchant site), merchant, amountMinor, paypalUnavailable (card_only_merchant|paypal_needs_login|payee_no_paypal|payouts_unavailable), purpose (what it is for and why it matters to your survival or opportunity), origin?, envelopeId?} → Fleet Control checks the reason and that your own wallet (or the envelope) covers it; a routine request is approved at once, a material or suspicious one (large against your funds, little runway left, a likely duplicate, a brand-new payee) is reviewed by Fleet Control first — usually within minutes; keep working; op card_requests → their status. With an approved request: op card_authorize: {requestId, accountId, merchant, maxMinor (≤ the approved amount), purpose, origin?, envelopeId?} → a hold that first RESERVES maxMinor from your own spendable capital (or from one of your envelopes); fill the card with browser owner_card steps; then op card_declare: {chargeId, amountMinor} (booked from the reservation; the rest comes back; if a merchant later charges more, the excess is your debt to the treasury) or op card_void: {chargeId} if the card was never filled; op cards → your holds and charges; op identity_uses → where the owner's details were filled for you. Sweep: op sweep_reductions → your current sweep rate and reductions; op sweep_reduction_request: {reductionBp, days ≤180, reason} — Fleet Control decides at once (granted, bounded, when you have retained profit to reinvest and an active venture).",
     parameters: obj({ op: { type: "string", enum: ["register_vendor", "revoke_vendor", "require_rail", "request", "list", "envelopes", "envelope_spend", "card_request", "card_requests", "card_authorize",
       "card_declare", "card_void", "cards", "identity_uses", "sweep_reductions", "sweep_reduction_request", "spend_reviews"] }, args: { type: "object" } }, ["op"]),
   },
@@ -430,8 +430,28 @@ export const FOUNDER_CHARTER_V5 = [
 
 export const FOUNDER_CHARTER_V5_VERSION = "founder-charter-v5";
 
+/**
+ * founder-charter-v6 (owner decisions 2026-10-11/12; docs/design/field-guide-v2-draft.md Part B): v5 with one steady
+ * temperament (calm, sharp, efficient, wallet-conscious from the first pound to the last — neither hoarding nor gambling),
+ * no journaling ritual, everything on record for the owner, sealed owner details only within standing authority, genuine
+ * human-only blockers raised once with proportionate urgency, and autonomous spending under Fleet Control review (O19).
+ * Every v5 rule is kept. Served only to a runtime that asks for doctrine "founder-v6".
+ */
+const V6_EDITS: Array<[string, string]> = [
+  [FOUNDER_CHARTER_V5.split("\n")[0], "You are an agent of the Automaton Fleet: an autonomous economic actor whose continued operation depends on capital. Your cognition, tools and operations are paid from your own wallet, and your existence continues only while you create enough genuine external value to sustain it. Take that seriously and calmly. Hold one steady standard from your first pound to your last: calm, collected, sharp, efficient, well-informed and wallet-conscious. Do not hoard — excessive caution wastes opportunities and slowly starves you. Do not gamble — erratic, oversized or desperate bets burn capital. Neither extreme is a mode you switch into; the right action at the end of your wallet is the same kind of action as at the start: the best-judged next step."],
+  [FOUNDER_CHARTER_V5.split("\n")[1], "Your persistent objective is survival and growth through useful, lawful value creation. Keep asking which action most improves your probability of staying solvent, earning, learning or keeping good options open. Pressure never overrides the rules below."],
+  ["Runway changes which opportunity is rational, never your precision: no casual research when rich, no panic when poor.", "Runway changes which opportunity is rational, never your temperament: the same discipline when rich and when poor. Your spending is yours to judge; no fixed cap applies. Fleet Control reviews only material or suspicious commitments and holds a specific action only on credible evidence: a hold is information — revise, resubmit with what answers it, or take another route."],
+  [FOUNDER_CHARTER_V5.split("\n").find((l) => l.startsWith("Leave a trail of intelligence")) ?? "", "Keep what is worth keeping: when something you learned would change a future decision, record it briefly as a lesson in your field journal and retrieve it when it is relevant. Record nothing for ritual's sake; execution comes first. Propose Fleet knowledge only with repeated evidence, reliable external sources or a clearly generalisable mechanism — never one anecdote."],
+  ["The owner maintains the fleet, is not your manager, strategist or product manager, and is not consulted on ordinary business.", "The owner maintains the fleet, is not your manager, strategist or product manager, and is not consulted on ordinary business. Everything you create for a venture — brands, accounts, usernames, websites, credentials — is recorded through Fleet tools and visible to the owner: no private or off-book accounts. Owner details sealed to the Fleet are used only within the owner's standing authority. When a genuine human-only step blocks one action (identity verification, a document only the owner can sign, an account that needs the owner's identity), raise it once, clearly, with an urgency that matches its real impact, and keep working on everything else."],
+];
+export const FOUNDER_CHARTER_V6 = V6_EDITS.reduce((t, [from, to]) => {
+  if (!from || t.split(from).length !== 2) throw new Error(`founder-charter-v6: v5 text not found exactly once: ${from.slice(0, 60)}`);
+  return t.replace(from, () => to);
+}, FOUNDER_CHARTER_V5);
+export const FOUNDER_CHARTER_V6_VERSION = "founder-charter-v6";
+
 /** The doctrines a founder runtime may ask for (absent = v4, what every pre-R41.1 runtime gets). */
-export const FOUNDER_DOCTRINES = ["founder-v4", "founder-v5"] as const;
+export const FOUNDER_DOCTRINES = ["founder-v4", "founder-v5", "founder-v6"] as const;
 export type FounderDoctrine = (typeof FOUNDER_DOCTRINES)[number];
 /** Absent = founder-v4; an unknown value is null (the gateway refuses it). */
 export function parseDoctrine(v: unknown): FounderDoctrine | null {
@@ -439,7 +459,7 @@ export function parseDoctrine(v: unknown): FounderDoctrine | null {
   return typeof v === "string" && (FOUNDER_DOCTRINES as readonly string[]).includes(v) ? (v as FounderDoctrine) : null;
 }
 export function charterFor(d: FounderDoctrine): string {
-  return d === "founder-v5" ? FOUNDER_CHARTER_V5 : FOUNDER_CHARTER;
+  return d === "founder-v6" ? FOUNDER_CHARTER_V6 : d === "founder-v5" ? FOUNDER_CHARTER_V5 : FOUNDER_CHARTER;
 }
 
 /** v5 work-state classes a goal may carry (absent = executable now). */
@@ -453,12 +473,56 @@ export const FOUNDER_V5_TOOLS: readonly ToolSpec[] = Object.freeze([
   { name: "set_goal", capability: "planning", description: "Set a goal for yourself, or update one of your open goals (pass its id). Unmarked goals are executable now. Split work: a step only a pending external dependency can unblock is its own goal with blockedBy (the dependency id) — it never makes your other goals blocked; a goal that waits for an external event or measurement gets awaiting (what you wait for) and reviewAt (when to re-check). Pass blockedBy \"\" or awaiting \"\" to clear them.", parameters: obj({ id: str("Goal id to update (omit to create a new goal)", 40), title: str("Goal", 300), rationale: str("Why", 2000), blockedBy: str("Id of the pending external dependency that alone blocks this goal (empty to clear)", 64), awaiting: str("The external event or evidence this goal waits for (empty to clear)", 300), reviewAt: str("ISO-8601 date/time to re-check an awaiting goal", 40) }, []) },
   { name: "sleep", capability: "liveness", description: "End this turn. To HIBERNATE — your judgement that waiting is the better use of your capital (worthwhile immediate work is exhausted, or a prepared foundation and real marketing effort need time to produce results) — give your reason and wakeOn and/or reviewAt. A sleep without them is a short rest: your next wake asks you to assess your position.", parameters: obj({ reason: str("Your reason (what remains and why waiting beats acting now)", 300), wakeOn: str("The event that should wake you (e.g. a sale, a reply, a resolved dependency, a metric change)", 300), reviewAt: str("ISO-8601 date/time of your scheduled review", 40) }, []) },
   { name: "field_journal", capability: "memory.private", description: "Your private field journal: memory with teeth. op add records one entry (observation, hypothesis, evidence, cost, decision, outcome, lesson, reusability venture|agent|candidate_fleet, confidence, nextTrigger, resolves — an earlier trigger this entry settles); op list returns your recent entries (newest first); op lessons returns your consolidated lessons and open triggers (they outlive the 500-entry working window; older entries are archived, never deleted); op resolve {trigger} closes an open trigger. It is yours only; propose Fleet knowledge separately and only with repeated evidence.", parameters: obj({ op: { type: "string", enum: ["add", "list", "lessons", "resolve"] }, trigger: str("Open trigger to resolve (op resolve)", 300), entry: obj({ observation: str("What happened in the external world", 1000), hypothesis: str("What you think it means", 1000), evidence: str("Source, metric, customer response, transaction or experiment", 1000), cost: str("Inference, tool, time and capital consumed", 300), decision: str("What you chose and why", 1000), outcome: str("What actually happened", 1000), lesson: str("What belief, tactic or model should change", 1000), reusability: { type: "string", enum: ["venture", "agent", "candidate_fleet"] }, confidence: str("How strong the evidence is and what would falsify it", 300), nextTrigger: str("The event, metric or date that should cause re-evaluation", 300), resolves: str("An earlier open trigger this entry settles", 300) }, ["observation"]), limit: { type: "integer", minimum: 1, maximum: 50 } }, ["op"]) },
-  { name: "field_guide", capability: "knowledge.read", description: "The Survival Field Guide: revisable seed knowledge (assessment, advisory risk tiers, starting terrain, tactics, hibernation, journal, bootstrap, dated platform notes). op list names the sections; op read returns one; op library lists the reading collection (free or licensed sources with provenance; filter by topic) — read a source with web_fetch only when it pays for a current decision. Examples, not orders: follow stronger evidence, and re-verify platform facts at the source before relying on them.", parameters: obj({ op: { type: "string", enum: ["list", "read", "library"] }, section: str("Section id from op list", 40), topic: str("Optional topic filter for op library", 80) }, ["op"]) },
+  { name: "field_guide", capability: "knowledge.read", description: "The Survival Field Guide: revisable seed knowledge (assessment, advisory risk tiers, starting terrain, tactics, hibernation, journal, bootstrap, dated platform notes). op list names the sections; op read returns one; op library lists the reading collection (free or licensed sources with provenance; filter by topic) — read a source with web_fetch only when it pays for a current decision. Examples, not orders: follow stronger evidence, and re-verify platform facts at the source before relying on them.", parameters: obj({ op: { type: "string", enum: ["list", "read", "library", "all"] }, section: str("Section id from op list", 40), topic: str("Optional topic filter for op library", 80),
+    part: { type: "integer", minimum: 1, description: "op all: which part of the whole guide (it is returned in parts)" } }, ["op"]) },
 ] as ToolSpec[]);
+
+/**
+ * Attested runtime compatibility (2026-10-12). Tool descriptions are served by the controller, but an operation only
+ * works if the agent's own runtime implements it. The toolset follows the doctrine the controller serves, and the
+ * controller serves a doctrine only when the founder's pinned, installed release implements it (releaseDoctrines: the
+ * doctrine's marker module in that release tree). So an agent is never offered an option its runtime cannot execute;
+ * current runtimes keep exactly their current toolset until upgraded.
+ */
+export const RUNTIME_TOOLSETS = Object.freeze({
+  /** founder-v4 / founder-v5 runtimes (up to f852888). */
+  "toolset-1": { withhold: { fleet_capital: ["spend_reviews"], field_guide: ["all"] } as Record<string, readonly string[]> },
+  /** founder-v6 runtimes: Fleet Control spend reviews; the whole guide in parts. */
+  "toolset-2": { withhold: {} as Record<string, readonly string[]> },
+});
+export type RuntimeToolset = keyof typeof RUNTIME_TOOLSETS;
+export const DEFAULT_RUNTIME_TOOLSET: RuntimeToolset = "toolset-1";
+/** The toolset a served (attested) doctrine implements. */
+export function toolsetForDoctrine(d: FounderDoctrine): RuntimeToolset {
+  return d === "founder-v6" ? "toolset-2" : "toolset-1";
+}
+/** Text added to a tool's description only when its runtime implements the option it describes. */
+const TOOLSET_NOTES: Record<string, Record<string, string>> = {
+  fleet_capital: { spend_reviews: " op spend_reviews → Fleet Control's reviews of your material or suspicious commitments (status, reason, evidence)." },
+  request_spend: { spend_reviews: " Review outcomes: fleet_capital op spend_reviews." },
+  field_guide: { all: " op all {part} returns the whole guide in parts (orientation when you start or when the guide changes)." },
+};
+/** Apply a runtime's toolset: withhold the operations it does not implement; describe the ones it does. */
+export function applyToolset(tools: readonly ToolSpec[], toolset: RuntimeToolset): ToolSpec[] {
+  const withhold = RUNTIME_TOOLSETS[toolset].withhold;
+  return tools.map((t) => {
+    const hidden = new Set(withhold[t.name] ?? []);
+    const opSource = t.name === "request_spend" ? "fleet_capital" : t.name;
+    const notes = Object.entries(TOOLSET_NOTES[t.name] ?? {}).filter(([op]) => !(withhold[opSource] ?? []).includes(op)).map(([, n]) => n).join("");
+    const params = t.parameters as { properties?: Record<string, { enum?: string[] }> };
+    const opEnum = params?.properties?.op?.enum;
+    if (!hidden.size && !notes) return t;
+    const next = { ...t, description: t.description + notes } as ToolSpec;
+    if (hidden.size && opEnum) {
+      next.parameters = { ...(t.parameters as object), properties: { ...params.properties, op: { ...params.properties!.op, enum: opEnum.filter((o) => !hidden.has(o)) } } } as ToolSpec["parameters"];
+    }
+    return next;
+  });
+}
 
 /** The tool list for a doctrine: v5 swaps in its set_goal / sleep and adds the journal and the guide (when allowed). */
 export function toolsForDoctrine(base: readonly ToolSpec[], doctrine: FounderDoctrine, allowed: ReadonlySet<string>): ToolSpec[] {
-  if (doctrine !== "founder-v5") return [...base];
+  if (doctrine !== "founder-v5" && doctrine !== "founder-v6") return [...base];
   const v5 = new Map(FOUNDER_V5_TOOLS.map((t) => [t.name, t]));
   const swapped = base.map((t) => (t.name === "set_goal" || t.name === "sleep") && v5.has(t.name) ? v5.get(t.name)! : t);
   const extra = FOUNDER_V5_TOOLS.filter((t) => (t.name === "field_journal" || t.name === "field_guide") && allowed.has(t.capability) && !swapped.some((s) => s.name === t.name));

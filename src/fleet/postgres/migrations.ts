@@ -71,9 +71,10 @@ import { V61_SQL } from "./migrations-phase61.js";
 import { V62_SQL } from "./migrations-phase62.js";
 import { V63_SQL } from "./migrations-phase63.js";
 import { V64_SQL } from "./migrations-phase64.js";
+import { V65_SQL } from "./migrations-phase65.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 64;
+export const FLEET_PG_SCHEMA_VERSION = 65;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1233,6 +1234,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 62, name: "conversations_and_names", sql: V62_SQL },
   { version: 63, name: "mail_housekeeping", sql: V63_SQL },
   { version: 64, name: "autonomous_spending_review", sql: V64_SQL },
+  { version: 65, name: "owner_decisions_completion", sql: V65_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1283,6 +1285,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_experiment_relevance_record(uuid, uuid, text, text, text, jsonb, jsonb)",
   // v64: Fleet Control spend reviews (the controller's reviewer).
   "svc_spend_reviews_claim(integer, text)", "svc_spend_review_record(uuid, text, jsonb)", "svc_spend_review_failed(uuid, text, text, jsonb)",
+  // v65: Fleet Control review of shared lessons.
+  "svc_knowledge_proposals_claim(integer, text)", "svc_knowledge_review_record(uuid, text, jsonb)", "svc_knowledge_review_failed(uuid, text, text, jsonb)",
   "svc_relevance_call_failed(uuid, uuid, jsonb)",
   // v29 (F2): the rail adapter reports external transactions (settled idempotently into the attributed venture) and the
   // credential broker audits every use of a credential reference (never the secret).

@@ -27,7 +27,7 @@ import { runSandboxed } from "./exec-sandbox.js";
 import type { LoopGuard } from "./loop-guard.js";
 import { recallFacts, rememberFact, rememberFacts, retractFact, sourceLabel, type FactRecord, type FactResult } from "./facts.js";
 import { custodyCategory, custodyRefusalText } from "../custody-refusals.js";
-import { FIELD_GUIDE_VERSION, guideList, guideSection, libraryList } from "./field-guide.js";
+import { FIELD_GUIDE_VERSION, guideList, guideSection, libraryList, guidePart } from "./field-guide.js";
 import { SCOPED_CONTINUE } from "./loop-guard.js";
 import { DecisionLedgerError, cognitionDepth, commitmentCheck, depthLine, loadDecisions, noteCommitment, noteResearch, openDecision, researchCheck, resolveDecision, reviewDecision, saveDecisions, type Decision } from "./decisions.js";
 
@@ -870,7 +870,12 @@ export class FounderToolbox {
             if (!s) return refuse("FLEET_NOT_FOUND", `no such section; ${guideList()}`);
             return { name: call.name, ok: true, output: clip(`${FIELD_GUIDE_VERSION} — ${s.title} [${s.kind}]\n${s.text}`) };
           }
-          return refuse("FLEET_BAD_REQUEST", "op is list, read or library");
+          if (a.op === "all") {
+            const g = guidePart(typeof a.part === "number" ? a.part : 1);
+            if (!g) return refuse("FLEET_NOT_FOUND", "part is a number from 1");
+            return { name: call.name, ok: true, output: clip(`${FIELD_GUIDE_VERSION} — part ${g.part} of ${g.parts}${g.part < g.parts ? ` (next: op all part ${g.part + 1})` : " (end)"}\n\n${g.text}`) };
+          }
+          return refuse("FLEET_BAD_REQUEST", "op is list, read, library or all");
         }
         // F2-A: an action-scoped external dependency. It makes ONE action unavailable; it never blocks the founder, a goal
         // or other work, and it grants nothing. Ordinary business choices are not valid kinds (FleetController refuses them).

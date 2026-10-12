@@ -110,6 +110,7 @@ export const EVENT_TITLE: Readonly<Record<string, string>> = Object.freeze({
   spend_review_held: "Fleet Control held a commitment", spend_review_stalled: "A spend review could not run (waiting)",
   spend_review_overridden: "You allowed a held commitment to be resubmitted", spend_review_cost_unfunded: "Treasury could not cover a spend review",
   payment_revalidation_failed: "A payment was stopped just before execution",
+  channel_unlocked: "A sales channel unlocked for an agent", knowledge_promoted: "A lesson joined the shared knowledge", knowledge_rejected: "A proposed lesson was not added", knowledge_review_stalled: "A shared-lesson review could not run (waiting)",
   conversation_cost_unfunded: "Treasury could not fully pay for a conversation", founder_cognition_paused: "Agent paused (AI off)",
   founder_cognition_enabled: "Agent's AI switched on", founder_cognition_disabled: "Agent's AI switched off",
 });

@@ -105,6 +105,9 @@ describe.skipIf(!PG_BIN)("v52 storefront gateway (G3) and receipt evidence (G4) 
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, simulatedSettlement: false });
     [F, G] = R.founders;
+    // v65: Gumroad opens for an agent once its wallet first reaches £500 (proven in fleet-v65-completion-pg). These cases
+    // exercise the storefront gateway itself, so both test agents start with the channel unlocked.
+    for (const f of [F, G]) await R.q(`INSERT INTO fleet.fleet_channel_unlocks (agent_id, channel, wallet_minor) VALUES ($1, 'gumroad', 50000)`, [f.id]);
     for (const [who, key] of [[F, "printables"], [G, "planners"]] as const) {
       expect((await R.econ(who, "venture.create", { key, model: "digital_product", offer: key, state: "selected" })).ok).toBe(true);
     }

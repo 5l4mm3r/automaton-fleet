@@ -2051,6 +2051,21 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_spend_review_record($1, $2, $3) AS r", [reviewId, worker, JSON.stringify(result)])).rows[0].r);
   }
 
+  /** Schema v65: shared-lesson proposals due for Fleet Control review (claimed for this worker). */
+  async knowledgeProposalsClaim(limit: number, worker: string): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_knowledge_proposals_claim($1, $2) AS r", [limit, worker])).rows[0].r);
+  }
+
+  /** Schema v65: the shared-lesson reviewer's decision (promote / reject with reason) and its call cost. */
+  async knowledgeReviewRecord(proposalId: string, worker: string, result: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_knowledge_review_record($1, $2, $3) AS r", [proposalId, worker, JSON.stringify(result)])).rows[0].r);
+  }
+
+  /** Schema v65: a failed shared-lesson review attempt (bounded retry; never a decision). */
+  async knowledgeReviewFailed(proposalId: string, worker: string, error: string, calls: unknown[]): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_knowledge_review_failed($1, $2, $3, $4) AS r", [proposalId, worker, error, JSON.stringify(calls)])).rows[0].r);
+  }
+
   /** Schema v64: a failed review attempt (bounded retry with backoff; never an approval). */
   async spendReviewFailed(reviewId: string, worker: string, error: string, calls: unknown[]): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.tx(async (c) => (await c.query("SELECT svc_spend_review_failed($1, $2, $3, $4) AS r", [reviewId, worker, error, JSON.stringify(calls)])).rows[0].r);

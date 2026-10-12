@@ -12,7 +12,7 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_TOOLS, MAX_TOOL_CALLS_PER_RESPONSE, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock, type ToolSpec } from "./types.js";
+import { DEFAULT_RUNTIME_TOOLSET, FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_TOOLS, MAX_TOOL_CALLS_PER_RESPONSE, applyToolset, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock, type ToolSpec } from "./types.js";
 import type { CognitionRecord } from "../postgres/store.js";
 
 export class CognitionError extends Error {
@@ -145,7 +145,8 @@ export async function infer(
   if (status.model !== provider.model) throw new CognitionError(409, "FLEET_COGNITION_MODEL_MISMATCH", "registry model differs from the controller's");
   const allowed = Array.isArray(caps.allowed) ? (caps.allowed as string[]) : [];
   // R24: the experiment tools only while the owner has the pipeline on (otherwise the legacy prompt is byte-identical).
-  const tools = [...toolsFor(allowed), ...(caps.experimentsEnabled === true ? FOUNDER_EXPERIMENT_TOOLS.filter((t) => allowed.includes(t.capability)) : [])];
+  // Legacy (unrouted) path: the conservative runtime toolset (attested compatibility is resolved on the routed path).
+  const tools = applyToolset([...toolsFor(allowed), ...(caps.experimentsEnabled === true ? FOUNDER_EXPERIMENT_TOOLS.filter((t) => allowed.includes(t.capability)) : [])], DEFAULT_RUNTIME_TOOLSET);
   const maxTokens = Number(status.maxOutputTokens) || 1024;
   const promptText = JSON.stringify({ system: FOUNDER_CHARTER, messages, tools: tools.map((t) => t.name) });
   const inTok = approxTokens(promptText);

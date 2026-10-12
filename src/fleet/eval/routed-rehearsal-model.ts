@@ -56,14 +56,18 @@ export class RoutedRehearsalModel extends ScriptedProvider {
   }
 
   /** R41.1: which doctrine each routed task step was served (charter v5 + v5 tools, or v4). */
-  readonly doctrineSeen = { v4: 0, v5: 0 };
+  readonly doctrineSeen = { v4: 0, v5: 0, v6: 0 };
 
   override async chat(req: ChatRequest): Promise<ChatResult> {
     const first = req.messages[0]?.content ?? "";
     if (!first.startsWith("TASK PACKET")) return super.chat(req);
     const has = (name: string) => req.tools.some((t) => t.name === name);
-    const v5 = String(req.system ?? "").includes("YOU EXIST UNDER ECONOMIC PRESSURE") && has("field_journal") && has("field_guide");
+    // founder-v6 (2026-10-12) builds on v5 (same tools, charter v6): it counts in the v5 lineage and separately as v6.
+    const sys = String(req.system ?? "");
+    const v6 = sys.includes("Hold one steady standard from your first pound to your last") && has("field_journal") && has("field_guide");
+    const v5 = (v6 || sys.includes("YOU EXIST UNDER ECONOMIC PRESSURE")) && has("field_journal") && has("field_guide");
     this.doctrineSeen[v5 ? "v5" : "v4"]++;
+    if (v6) this.doctrineSeen.v6++;
     // R41.1: a v5 founder ends the walk by consulting the guide, journaling the result and DECLARING its hibernation.
     const rest = (reason: string): ToolCall[] => v5
       ? [call("sleep", { reason, wakeOn: "a new decision, a dependency change or the scheduled review", reviewAt: "2999-01-01T00:00:00Z" })]

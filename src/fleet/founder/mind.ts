@@ -164,8 +164,11 @@ export interface OwnerTurn { turnId: string; messages: Array<Record<string, unkn
 const OWNER_WAIT_CODES = new Set(["FLEET_COGNITION_PAUSED", "FLEET_TREASURY_INSUFFICIENT", "FLEET_COGNITION_RATE_LIMITED", "FLEET_COGNITION_BUSY",
   "FLEET_COGNITION_PROVIDER_RATE_LIMITED", "FLEET_COGNITION_CREDITS_EXHAUSTED", "FLEET_COGNITION_DISABLED", "FLEET_COGNITION_FOUNDER_DISABLED",
   "FLEET_AGENT_HELD", "FLEET_FX_UNAVAILABLE", "FLEET_ROUTING_DISABLED"]);
-/** R41.1: the doctrine this runtime implements and asks FleetController for (charter v5 + the v5 tool vocabulary). */
-export const FOUNDER_RUNTIME_DOCTRINE = "founder-v5";
+/**
+ * The doctrine this runtime implements and asks FleetController for: v6 (2026-10-12) = charter v6 + the v5 tool
+ * vocabulary + Field Guide v2. (R41.1 runtimes asked for founder-v5.)
+ */
+export const FOUNDER_RUNTIME_DOCTRINE = "founder-v6";
 
 /**
  * Ledger fields that signal something happened to the founder's economy (an order, revenue, an allocation, a transfer,

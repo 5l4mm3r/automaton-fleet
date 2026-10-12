@@ -893,7 +893,7 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     // v21: rates only through the validated insert; provider credit only through the owner recorder and inference recording.
     fleet_fx_rates: new Set(["fleet_fx_insert"]),
     fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile",
-      "fleet_spend_review_charge"]),
+      "fleet_spend_review_charge", "fleet_control_charge"]),
     // v25/v26: dependency records only through the founder API and the owner's resolve/import.
     fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import",
       // v29: PAYMENT_RAIL_REQUIRED records ONE action-scoped kyc dependency (and answers it when a rail is connected).
@@ -1197,6 +1197,10 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       "fleet_spend_review_charge", "fleet_admin_spend_review_decide", "fleet_spend_review_use_override"]),
     fleet_spend_review_policy: new Set([]),
     fleet_spend_review_accrual: new Set(["fleet_spend_review_charge"]),
+    // v65: shared-lesson reviews (state by the claim / record / failure path), Fleet Control review costs, channel unlocks.
+    fleet_knowledge_review_state: new Set(["svc_knowledge_proposals_claim", "svc_knowledge_review_failed", "svc_knowledge_review_record", "fleet_knowledge_review_failed_internal"]),
+    fleet_control_accrual: new Set(["fleet_control_charge"]),
+    fleet_channel_unlocks: new Set(["fleet_channel_unlocked"]),
     fleet_card_request_policy: new Set(["fleet_admin_card_request_policy_set"]),
     // v55: the owner's survival protection switch, only by the owner.
     fleet_survival_protection: new Set(["fleet_admin_survival_protection_set"]),

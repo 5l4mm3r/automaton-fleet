@@ -399,9 +399,9 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
         .filter((t) => (t.name === "field_guide" || t.name === "field_journal") && t.ok).map((t) => t.name);
     } catch { return [] as string[]; } })();
     const cont = continuity();
-    check("R41.1: the upgraded founder is served doctrine founder-v5 and its v5 tools run end to end — field guide read, field journal written, hibernation declared with a wake condition",
-      scripted.doctrineSeen.v5 > 0 && v5Tools.includes("field_guide") && v5Tools.includes("field_journal") && journalLines >= 1 && typeof cont.wakeOn === "string",
-      `${scripted.doctrineSeen.v5} v5 / ${scripted.doctrineSeen.v4} v4 routed step(s); tools ok: ${[...new Set(v5Tools)].join(", ") || "none"}; journal ${journalLines} entr${journalLines === 1 ? "y" : "ies"}; wake condition ${cont.wakeOn ? "declared" : "absent"}`);
+    check("R41.1 / v6: the upgraded founder is served its attested doctrine (founder-v6: charter v6 + the v5 tools) and its tools run end to end — field guide read, field journal written, hibernation declared with a wake condition",
+      scripted.doctrineSeen.v5 > 0 && scripted.doctrineSeen.v6 > 0 && v5Tools.includes("field_guide") && v5Tools.includes("field_journal") && journalLines >= 1 && typeof cont.wakeOn === "string",
+      `${scripted.doctrineSeen.v5} v5-lineage (${scripted.doctrineSeen.v6} v6) / ${scripted.doctrineSeen.v4} v4 routed step(s); tools ok: ${[...new Set(v5Tools)].join(", ") || "none"}; journal ${journalLines} entr${journalLines === 1 ? "y" : "ies"}; wake condition ${cont.wakeOn ? "declared" : "absent"}`);
     const booksEnd = await booksOk();
     const sumCost = routed.reduce((n, r) => n + Number(r.cost_microcents), 0);
     check("routed: memory and ledger continuity — pre-upgrade facts, goals and notes are still the founder's; every call is charged once to the same books",

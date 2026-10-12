@@ -366,7 +366,8 @@ describe("R41.1 field journal, field guide, bootstrap, charter integration", () 
   it("the Survival Field Guide is retrieved by section on demand (never whole in a packet); platform facts are dated and marked for re-verification", async () => {
     const r = rig({ goals: [] });
     const list = await r.toolbox.execute(call("field_guide", { op: "list" }));
-    expect(list.output).toMatch(/^survival-field-guide-v1\.2 \(2026-10-07\) — sections: survival-cycle/);
+    // v2.0 (2026-10-12, owner decisions): orientation first; v1.2's survival cycle kept.
+    expect(list.output).toMatch(/^survival-field-guide-v2\.0 \(2026-10-12\) — sections: orientation .*survival-cycle/);
     const plat = await r.toolbox.execute(call("field_guide", { op: "read", section: "platforms" }));
     expect(plat.output).toMatch(/source-checked 2026-10-07; re-verify before relying on them/);
     expect(plat.output).toMatch(/never attempt to bypass it/);
@@ -506,7 +507,8 @@ describe("R41.1 completion — supplemental acceptance (owner clarifications 202
     expect(packet).not.toContain(BOOTSTRAP_LINE);
     // Reuse/promotion goes through the existing Fleet knowledge path (the founder's own tool), never automatically.
     expect(BOOTSTRAP_LINE).toMatch(/inspect existing Fleet knowledge \(economic_knowledge, read_knowledge\)/);
-    expect(guideSection("journal")!.text).toMatch(/Promotion rule: never turn one anecdote into Fleet doctrine/);
+    // v2.0 keeps the promotion rule (no ritual journaling; lessons only when they change a future decision).
+    expect(guideSection("journal")!.text).toMatch(/Propose Fleet knowledge only with repeated evidence, reliable sources or a clearly generalisable mechanism — never one anecdote/);
   });
 
   it("S9: study is optional — the reading collection is retrievable with provenance and licence, nothing forces reading, and a declared hibernation is not interrupted by study", async () => {
@@ -529,7 +531,10 @@ describe("R41.1 completion — supplemental acceptance (owner clarifications 202
     expect((await r.toolbox.execute(call("sleep", { reason: "x", reviewAt: "soon" }))).refused).toBe("FLEET_BAD_REQUEST");
     expect((await r.toolbox.execute(call("sleep", { reason: "x", reviewAt: "2999-01-01T00:00:00Z" }))).output).toBe("hibernating; review at 2999-01-01T00:00:00.000Z");
     expect((await r.toolbox.execute(call("sleep", { reason: "x" }))).output).toBe("sleeping");
-    expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "risk-tiers" }))).output).toMatch(/Judge the actual venture: a digital product or course is not safe merely because of its format/);
+    // v2.0 folds the advisory tiers into contextual venture choices (judge the actual venture's capital, fulfilment, timing).
+    expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "ventures" }))).output).toMatch(/Judge the actual venture against its real capital, fulfilment and timing requirements/);
+    const whole = await r.toolbox.execute(call("field_guide", { op: "all", part: 1 }));
+    expect(whole.output).toMatch(/^survival-field-guide-v2\.0 — part 1 of \d+ \(next: op all part 2\)/);
     expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "assessment" }))).output).toMatch(/An empty goal list is not proof there is nothing to do/);
     expect((await r.toolbox.execute(call("field_guide", { op: "nope" }))).refused).toBe("FLEET_BAD_REQUEST");
     // Every tool the v5 gateway can offer is implemented by this runtime and classified under founder-v2.

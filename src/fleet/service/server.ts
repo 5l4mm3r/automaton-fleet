@@ -59,6 +59,7 @@ import type { CognitionProvider } from "../cognition/types.js";
 import { inferRouted, type ProviderFactory } from "../cognition/routed-gateway.js";
 import { RelevanceAssessor } from "../experiments/relevance.js";
 import { SpendReviewer } from "../spend/review.js";
+import { KnowledgeReviewer } from "../spend/knowledge-review.js";
 import { actionDigest } from "../cognition/router.js";
 import { ResearchError, research as researchFetch } from "../research/gateway.js";
 import type { FetcherPort } from "../research/client.js";
@@ -314,6 +315,8 @@ export class FleetService {
   readonly relevance: RelevanceAssessor | null;
   /** v64: Fleet Control's spend reviewer (material or suspicious commitments only; holds only on credible evidence). */
   readonly spendReviewer: SpendReviewer | null;
+  /** v65: Fleet Control's shared-lesson reviewer (promotion rule; bounded; treasury-paid). */
+  readonly knowledgeReviewer: KnowledgeReviewer | null;
   private lastReapOkAt: number | null = null;
   private lastReapError: string | null = null;
   private inFlight = 0;
@@ -349,6 +352,15 @@ export class FleetService {
       ? new SpendReviewer({
         ports: { spendReviewsClaim: (n, w) => opts.admin.spendReviewsClaim(n, w), spendReviewRecord: (...a) => opts.admin.spendReviewRecord(...a),
           spendReviewFailed: (...a) => opts.admin.spendReviewFailed(...a) },
+        providerFactory: opts.cognitionProviderFactory,
+        audit: (event, detail) => this.audit(event, null, detail),
+        deadlineMs: this.cognitionDeadlineMs(),
+      })
+      : null;
+    this.knowledgeReviewer = opts.cognitionProviderFactory && typeof opts.admin.knowledgeProposalsClaim === "function"
+      ? new KnowledgeReviewer({
+        ports: { knowledgeProposalsClaim: (n, w) => opts.admin.knowledgeProposalsClaim(n, w), knowledgeReviewRecord: (...a) => opts.admin.knowledgeReviewRecord(...a),
+          knowledgeReviewFailed: (...a) => opts.admin.knowledgeReviewFailed(...a) },
         providerFactory: opts.cognitionProviderFactory,
         audit: (event, detail) => this.audit(event, null, detail),
         deadlineMs: this.cognitionDeadlineMs(),
@@ -529,6 +541,9 @@ export class FleetService {
         // v64: Fleet Control spend reviews (single-flight, off the request path; a failure is bounded and never approves).
         if (this.spendReviewer) void this.spendReviewer.tick(3).then((r) => {
           if (r.reviewed || r.failed) this.audit("spend_review_pass", null, { ...r });
+        });
+        if (this.knowledgeReviewer) void this.knowledgeReviewer.tick(2).then((r) => {
+          if (r.reviewed || r.failed) this.audit("knowledge_review_pass", null, { ...r });
         });
         await this.processTerminations();
         this.lastReapOkAt = Date.now();
