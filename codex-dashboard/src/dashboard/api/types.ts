@@ -59,6 +59,11 @@ export interface AgentRow {
   held: boolean;
   /** NORMAL or the active temporary mission (MARKETING, OPPORTUNITY_HUNT, KNOWLEDGE_DATA). */
   mode: string;
+  /** Optional (read when FleetController supplies them; absent = not reported, never inferred): the OWNER's cognition
+   * pause, a hibernation the agent itself REPORTED, and the time of death. */
+  paused?: boolean | null;
+  hibernating?: boolean | null;
+  deathTime?: string | null;
 }
 
 /** `comms_status` read (v41). NOT_CONFIGURED is a deliberate, healthy state. */

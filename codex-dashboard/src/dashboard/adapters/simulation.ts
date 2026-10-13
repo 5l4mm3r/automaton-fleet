@@ -2,17 +2,24 @@
  * The SIMULATION engine (moved unchanged from the original src/app/page.tsx). Fictional data only: no network, no
  * gateway, no real money. A LIVE build never constructs this adapter (see ../adapter.ts).
  */
-import { money, pence, roles, type Command, type Fleet, type Notice } from "../model";
+import { money, pence, roles, type Agent, type Command, type Fleet, type Notice } from "../model";
+
+/** Fictional creation / death times for the simulated agents (levels and the Hall of Survivors; days before now). */
+const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
 
 export function initialFleet(): Fleet {
   return {
     treasury: 1248200, contributed: 1000000, revenue: 432800, spend: 184600, tick: 0,
-    agents: [
+    agents: ([
       { id: 'A-001', name: 'Atlas', role: 'Research', status: 'active', cash: 148200, burn: 4200, colour: 'cyan', venture: 'Signal intelligence', events: ['Research brief compiled', 'Browser: public market research', 'Evidence sources indexed'] },
       { id: 'A-002', name: 'Vega', role: 'Marketing', status: 'active', cash: 73200, burn: 3100, colour: 'violet', venture: 'Neon Studio', events: ['Campaign draft prepared', 'Business mailbox reviewed', 'Audience research completed'] },
       { id: 'A-003', name: 'Rook', role: 'Operations', status: 'active', cash: 9650, burn: 2200, colour: 'amber', venture: 'Relay Services', events: ['Runway below seven days', 'Supplier browser session completed', 'Service checklist updated'] },
       { id: 'A-004', name: 'Nova', role: 'Opportunity hunt', status: 'held', cash: 42900, burn: 1800, colour: 'green', venture: 'Frontier Labs', events: ['Owner placed agent on hold', 'Opportunity dossier saved'] },
-    ],
+      // Simulation demonstrations of sleep (fictional): an agent the owner paused, and one that reported a hibernation.
+      { id: 'A-005', name: 'Lyra', role: 'Research', status: 'active', cash: 51800, burn: 900, colour: 'violet', venture: 'Quiet Ledger', events: ['Reported hibernation: waiting for a supplier reply (fictional)'], sleep: 'hibernating' },
+      // A retired agent (fictional), for the Hall of Survivors: it lived 35 days.
+      { id: 'A-000', name: 'Echo', role: 'Research', status: 'dead', cash: 0, burn: 0, colour: 'cyan', venture: 'Echo research', events: ['Retired (fictional)'], createdAt: daysAgo(60), diedAt: daysAgo(25) },
+    ] as Agent[]).map((a): Agent => ({ createdAt: daysAgo(({ 'A-001': 38.4, 'A-002': 21.2, 'A-003': 9.6, 'A-004': 4.1, 'A-005': 2.3 } as Record<string, number>)[a.id] ?? 1), ...a, ...(a.id === 'A-002' ? { sleep: 'owner_pause' as const } : {}) })),
     notices: [
       { id: 'N-1', title: 'Rook has fewer than 7 days of runway', level: 'AMBER', acknowledged: false, time: '14:32' },
       { id: 'N-2', title: 'New opportunity dossier from Nova', level: 'INFO', acknowledged: false, time: '14:18' },
@@ -51,11 +58,11 @@ export function evolve(current: Fleet, command: Command): Fleet {
     case 'hold': { const target = living(); target.status = target.status === 'held' ? 'active' : 'held'; label = `${target.name} ${target.status === 'held' ? 'held' : 'resumed'}`; target.events.unshift(`${now} · ${label}`); break; }
     case 'rename': { const target = agent(); const name = (a.name ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim(); if (name.length > 40) throw new Error('An agent name is at most 40 characters.'); if (!name) throw new Error('Enter a name.'); if (s.agents.some(x => x.id !== target.id && x.name.toLowerCase() === name.toLowerCase())) throw new Error(`Another agent is already called ${name}.`); label = `${target.name} renamed ${name}`; target.events.unshift(`${now} · ${label}`); target.name = name; break; }
     case 'role': { const target = living(); if (!roles.includes(a.role)) throw new Error('Choose a supported demo role.'); target.role = a.role; label = `${target.name} assigned ${a.role}`; target.events.unshift(`${now} · ${label}`); break; }
-    case 'kill': { const target = living(); required('reason'); s.treasury += target.cash; entry(`${target.name} estate cash recovered`, target.cash); target.cash = 0; target.status = 'dead'; s.estates.push({ id: uid('E'), name: `${target.name} operational archive`, owner: target.name, size: 96, assigned: '' }); s.missions.filter(m => m.agentId === target.id && m.status === 'active').forEach(m => { m.status = 'ended'; m.history.push('Closed on agent retirement'); }); label = `${target.name} retired; estate created`; target.events.unshift(`${now} · ${label}`); break; }
+    case 'kill': { const target = living(); required('reason'); s.treasury += target.cash; entry(`${target.name} estate cash recovered`, target.cash); target.cash = 0; target.status = 'dead'; target.diedAt = new Date().toISOString(); target.sleep = null; s.estates.push({ id: uid('E'), name: `${target.name} operational archive`, owner: target.name, size: 96, assigned: '' }); s.missions.filter(m => m.agentId === target.id && m.status === 'active').forEach(m => { m.status = 'ended'; m.history.push('Closed on agent retirement'); }); label = `${target.name} retired; estate created`; target.events.unshift(`${now} · ${label}`); break; }
     case 'mission': { const target = living(); if (s.missions.filter(m => m.agentId === target.id && m.status === 'active').length >= s.policy.missionLimit) throw new Error('Demo mission limit reached.'); const brief = required('brief'); if (!roles.includes(a.role)) throw new Error('Choose a mission kind.'); s.missions.unshift({ id: uid('M'), agentId: target.id, kind: a.role, brief, status: 'active', history: [`${now} · Assigned to ${target.name}`] }); target.events.unshift(`${now} · Mission: ${brief}`); label = `Mission assigned to ${target.name}`; break; }
     case 'mission_end': { const m = s.missions.find(x => x.id === a.missionId); if (!m || m.status !== 'active') throw new Error('Mission is no longer active.'); m.status = 'completed'; m.history.push(`${now} · ${required('outcome')}`); label = 'Mission completed'; break; }
     case 'birth': case 'reseed': { const funding = positive(); if (s.agents.filter(x => x.status !== 'dead').length + s.births.filter(x => x.status === 'queued').length >= s.policy.maxAgents) throw new Error('Demo population limit reached.'); if (!roles.includes(a.role)) throw new Error('Choose a role.'); if (command.op === 'reseed' && agent().status !== 'dead') throw new Error('Reseeding requires a retired agent.'); charge(funding); const name = required('name'); s.births.push({ id: uid('B'), name, role: a.role, funding, status: 'queued' }); label = `${name} birth queued; funds reserved`; entry(label, -funding); break; }
-    case 'provision': { const birth = s.births.find(x => x.id === a.birthId); if (!birth || birth.status !== 'queued') throw new Error('Order already provisioned or missing.'); birth.status = 'provisioned'; s.agents.push({ id: uid('A'), name: birth.name, role: birth.role, status: 'active', cash: birth.funding, burn: 1500, colour: ['cyan','violet','amber','green'][s.agents.length % 4], venture: 'New venture', events: [`${now} · Simulated provisioning completed`] }); label = `${birth.name} provisioned in simulation`; break; }
+    case 'provision': { const birth = s.births.find(x => x.id === a.birthId); if (!birth || birth.status !== 'queued') throw new Error('Order already provisioned or missing.'); birth.status = 'provisioned'; s.agents.push({ id: uid('A'), name: birth.name, role: birth.role, status: 'active', createdAt: new Date().toISOString(), cash: birth.funding, burn: 1500, colour: ['cyan','violet','amber','green'][s.agents.length % 4], venture: 'New venture', events: [`${now} · Simulated provisioning completed`] }); label = `${birth.name} provisioned in simulation`; break; }
     case 'estate': { const item = s.estates.find(x => x.id === a.itemId); if (!item) throw new Error('Estate item missing.'); if (a.target !== 'unassigned') living('target'); item.assigned = a.target === 'unassigned' ? '' : a.target; label = `Estate ${item.assigned ? 'assigned' : 'released'}`; break; }
     case 'ack': { const n = s.notices.find(x => x.id === a.noticeId); if (!n) throw new Error('Alert missing.'); n.acknowledged = true; label = 'Notification acknowledged'; break; }
     case 'ack_all': s.notices.forEach(n => n.acknowledged = true); label = 'All notifications acknowledged'; break;

@@ -20,13 +20,14 @@ import { DEPARTMENTS, type DepartmentId } from "../command/departments";
 import type { VirtualPrefs } from "../command/prefs";
 import type { Projector } from "./AgentLabels";
 import type { Focus } from "./VirtualMap";
-import type { BirthState, Packet, Point } from "./world";
+import { bedIndex, bedPoint, type Bed, type BirthState, type Packet, type Point } from "./world";
 import { buildWorld } from "./hq/world-build";
 import { createMaterials } from "./hq/materials";
 import { matOf, type MatKey } from "./hq/builder";
 import { HQ_PROFILE, type HQProfile } from "./hq/quality";
 import { Crowd } from "./hq/crowd";
 import { Stations } from "./hq/stations";
+import { Beds } from "./hq/beds";
 import { Screens, type ScreenFeed } from "./hq/screens";
 import { AdaptiveResolution, Atmosphere, Beacons, CommandCore, Environment, FloorReflections, LightPools, Lights, PostFX } from "./hq/effects";
 import { DataFlow, type TransportDirector } from "./hq/flow";
@@ -140,11 +141,13 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
   // The walkable floor: the building's own obstacles plus this Fleet's Agent Floor desks (nav.ts, choreo.ts).
   const nav = useMemo(() => navGrid([...plan.footprints, ...stationDesks(stations)], NAV_BOUNDS), [plan, stations]);
   const work = useMemo(() => workTargets(models, targets, stations, plan.spots, teams), [models, targets, stations, plan.spots, teams]);
+  // Every living agent's own bed in Quarters (sleepers lie on theirs).
+  const beds = useMemo(() => new Map<string, Bed>([...bedIndex(models)].map(([id, i]) => [id, bedPoint(i)])), [models]);
 
   // Owner diagnostics (Display → Diagnostics overlay).
   const diag = useRef(emptyDiag());
 
-  return <><Canvas key={`${prefs.quality}:${q.shadows}`} frameloop="never" dpr={[1, q.dpr]} shadows={q.shadows === "soft" ? "percentage" : q.shadows === "basic" ? "basic" : false}
+  return <><Canvas key={`${prefs.quality}:${q.shadows}`} frameloop="never" dpr={q.pixel ? q.dpr : [1, q.dpr]} className={q.pixel ? "hq-pixel" : undefined} shadows={q.shadows === "soft" ? "percentage" : q.shadows === "basic" ? "basic" : false}
     camera={{ position: [0, 70, 50], fov: 42, near: 0.3, far: 400 }}
     gl={{ antialias: q.antialias, powerPreference: "high-performance", toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: q.pbr ? 1.15 : 1.5 }}
     onCreated={({ gl, scene }) => {
@@ -176,7 +179,8 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
     <CommandCore at={plan.core} q={q} ambient={ambient} />
     <Beacons spots={plan.beacons} red={redAlert} ambient={ambient} />
     <Stations models={models} stations={stations} births={births} reduceMotion={prefs.reduceMotion} q={q} receivedRef={received} />
-    <Crowd models={models} targets={work.targets} spots={work.spots} meetings={work.meetings} ghostsRef={ghosts} births={births} selected={selected} q={q} reduceMotion={prefs.reduceMotion} positionsRef={positionsRef} onAgent={onAgent} stations={stations} nav={nav} teams={teams} receivedRef={received} />
+    <Beds models={models} q={q} />
+    <Crowd models={models} targets={work.targets} spots={work.spots} meetings={work.meetings} ghostsRef={ghosts} births={births} selected={selected} q={q} reduceMotion={prefs.reduceMotion} positionsRef={positionsRef} onAgent={onAgent} stations={stations} nav={nav} teams={teams} receivedRef={received} beds={beds} />
     <DataFlow packets={packets} enabled={prefs.dataFlow} reduceMotion={prefs.reduceMotion} q={q} receivedRef={received} directorRef={director} statsRef={diag} />
     <AdaptiveResolution q={q} />
     <PostFX q={q} />

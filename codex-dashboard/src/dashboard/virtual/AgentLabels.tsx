@@ -16,6 +16,12 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type MutableRefObje
 import { money } from "../model";
 import type { AgentModel } from "../command/agents";
 import { BAND_TEXT, type HealthBand } from "../command/economics";
+import { levelOf } from "../command/departments";
+
+/** Asleep: the owner's pause (a pause bar, amber) and a reported hibernation (a moon, indigo) look different everywhere. */
+export const SLEEP_MARK: Readonly<Record<"owner_pause" | "hibernating", { glyph: string; text: string }>> = Object.freeze({
+  owner_pause: { glyph: "⏸", text: "text-amber-300" }, hibernating: { glyph: "☾", text: "text-indigo-300" },
+});
 import type { VirtualPrefs } from "../command/prefs";
 import { densityFor, layoutLabels, type LabelItem } from "./labelLayout";
 import type { BirthState, Point } from "./world";
@@ -101,7 +107,9 @@ export const AgentLabels = memo(function AgentLabels({ models, positionsRef, pro
       {models.map((m) => <line key={m.agent.id} data-id={m.agent.id} stroke="#475569" strokeWidth={1} visibility="hidden" />)}
     </svg>
     {models.map((m) => {
-      const id = m.agent.id, band = m.health.band, isNew = marked.get(id)?.mark ?? false;
+      const id = m.agent.id, band = m.health.band, isNew = marked.get(id)?.mark ?? false, lv = levelOf(m.agent.createdAt);
+      const sleep = m.placement.basis === "sleep" && m.agent.sleep ? SLEEP_MARK[m.agent.sleep] : null;
+      // The accessible name keeps its established form (name, wallet, condition, activity); the level is shown on the tag.
       const name = `${m.agent.name}, ${money(m.agent.cash)}, ${m.health.label}, ${m.placement.activity}${isNew ? ", new" : ""}`;
       return <button key={id} type="button" data-band={band}
         ref={(el) => { if (el) { els.current.set(id, el); if (!el.style.transform) el.style.visibility = "hidden"; } else { els.current.delete(id); sizes.current.delete(id); } }}
@@ -110,9 +118,9 @@ export const AgentLabels = memo(function AgentLabels({ models, positionsRef, pro
         {density === "compact" && selected !== id
           ? <span className={band === "CRITICAL" || band === "WOUNDED" ? "font-semibold" : undefined}><span className="text-slate-100">{m.agent.name.length > 14 ? `${m.agent.name.slice(0, 13)}…` : m.agent.name}</span><span className="text-slate-500"> · </span><span className={`font-mono ${band === "DEAD" ? "text-slate-500" : BAND_TEXT[band]}`}>{money(m.agent.cash)}</span></span>
           : <>
-            <span className="block max-w-[9rem] truncate text-[11px] text-slate-100">{m.agent.name}{isNew ? " · NEW" : ""}</span>
+            <span className="block max-w-[11rem] truncate text-[11px] text-slate-100">{m.agent.name}{lv ? <span className="ml-1 font-mono text-[10px] text-fuchsia-300">Lv {lv}</span> : null}{isNew ? " · NEW" : ""}</span>
             <span className="block font-mono text-[11px] text-cyan-300">{money(m.agent.cash)}</span>
-            <span className={`block font-mono text-[9px] tracking-wider ${band === "DEAD" ? "text-slate-500" : BAND_TEXT[band]}`}>{m.placement.activity}</span>
+            <span className={`block font-mono text-[9px] tracking-wider ${sleep ? sleep.text : band === "DEAD" ? "text-slate-500" : BAND_TEXT[band]}`}>{sleep ? `${sleep.glyph} ` : ""}{m.placement.activity}</span>
           </>}
       </button>;
     })}

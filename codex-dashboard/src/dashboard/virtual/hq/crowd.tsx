@@ -9,9 +9,11 @@
  * Animation states come from the agent's real state and position, never from decoration (choreo.ts): standing up and
  *   walking (brisk on long moves) along nav-grid paths to the spot its FleetController state puts it · typing, reading
  *   or seated idle at a desk · operating, reading or inspecting at a console · meeting (seated, standing, pointing at
- *   the shared table) with teammates · watching a crowded room's displays · waiting · lying when dead — and reactions to
- *   the agent's own recorded events (confirm as it sends, complete on a delivery, look up as something arrives). Agents
- *   with nothing recent never mime work. Poses blend; Reduce Motion snaps positions and stills the motion.
+ *   the shared table) with teammates · watching a crowded room's displays · waiting · lying when dead · ASLEEP on its own
+ *   bed in Quarters (the owner's pause or a reported hibernation) — and reactions to the agent's own recorded events
+ *   (confirm as it sends, complete on a delivery, look up as something arrives). Agents with nothing recent never mime
+ *   work; they may stroll inside the room they are in (wander.ts — cosmetic, never a change of room). Poses blend; Reduce
+ *   Motion snaps positions and stills the motion.
  *
  * Rendering: each body part is ONE instanced mesh for the whole crowd (≈40 draw calls for 50 people); a reusable rig
  * of joints poses each agent in turn and writes the part matrices. Agents the camera reports as standing between it
@@ -28,7 +30,8 @@ import { clickSuppressed } from "./nav-state";
 import { findPath, lineClear, lookahead, walkable, type NavGrid } from "./nav";
 import { chooseActivity, giveWay, reactionAt, walkSpeed, type Activity, type Reaction } from "./choreo";
 import { appearanceOf } from "./appearance";
-import { birthState, type Point } from "../world";
+import { BED_TOP, birthState, type Bed, type Point } from "../world";
+import { mayWander, wanderPoint } from "./wander";
 import type { HQProfile } from "./quality";
 import type { WorkSpot } from "./world-build";
 import { bakeShade } from "./builder";
@@ -97,6 +100,8 @@ function targetPose(a: Activity, t: number, phase: number, i: number, still: boo
       p.sh = [-0.3 + Math.max(0, Math.sin(t * 0.9 + i * 2)) * 0.45 * s, 0.05]; p.el = [-1.1 + Math.sin(t * 2.1 + i) * 0.15 * s, -0.35]; p.headYaw = Math.sin(t * 0.45 + i * 1.7) * 0.4 * s; p.head = 0.08; break;
     case "dead":
       p.lying = 1; p.hipY = 0.14; p.sh = [0, 0]; p.el = [0, 0]; break;
+    case "sleep": // asleep on its bed: lying, arms relaxed, slow breathing (still under Reduce Motion)
+      p.lying = 1; p.hipY = 0.14 + Math.sin(t * 1.1 + i) * 0.006 * s; p.sh = [0.05, 0.05]; p.shRoll = [0.12, -0.12]; p.el = [-0.2, -0.2]; p.head = -0.05; break;
   }
   return p;
 }
@@ -271,7 +276,7 @@ function faceMaterial(map: THREE.Texture, pbr: boolean): THREE.Material {
 /** Seated agents sit a little behind their spot (in the chair), facing the desk. */
 const SEAT_BACK = 0.1;
 
-export const Crowd = memo(function Crowd({ models, targets, spots, meetings, births, selected, q, reduceMotion, positionsRef, ghostsRef, onAgent, stations, nav, teams, receivedRef }: {
+export const Crowd = memo(function Crowd({ models, targets, spots, meetings, births, selected, q, reduceMotion, positionsRef, ghostsRef, onAgent, stations, nav, teams, receivedRef, beds }: {
   models: AgentModel[]; targets: ReadonlyMap<string, Point>; spots: ReadonlyMap<string, WorkSpot>; meetings: ReadonlySet<string>; births: ReadonlyMap<string, number>; selected: string | null; q: HQProfile; reduceMotion: boolean;
   positionsRef: MutableRefObject<Map<string, Point>>; ghostsRef: MutableRefObject<ReadonlySet<string>>; onAgent: (id: string) => void; stations: ReadonlyMap<string, Point>;
   /** The walkable floor (nav.ts), with the Agent Floor's desks. */
@@ -280,6 +285,8 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
   teams: ReadonlyMap<string, string>;
   /** When each agent last sent / completed / received a real event (flow.tsx), for its reactions. */
   receivedRef?: MutableRefObject<Map<string, number>>;
+  /** Each living agent's own bed in Quarters (world.ts bedPoint). */
+  beds?: ReadonlyMap<string, Bed>;
 }) {
   const rig = useMemo(() => makeRig(), []);
   const names = useMemo(() => Object.keys(rig.parts) as PartName[], [rig]);
@@ -352,8 +359,12 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
     let budget = 4; // ms of path planning per frame (moves queue up and leave over the next frames)
     const drawn = new Map<PartName, number>();
     models.forEach((m, i) => {
-      const id = m.agent.id, target = targets.get(id);
-      if (!target) return;
+      const id = m.agent.id, home = targets.get(id);
+      if (!home) return;
+      // Nothing real to do: a cosmetic stroll inside the room its state puts it in (never another room; never on
+      // Reduce Motion); the goal changes only at a stroll's start and end.
+      const room = !reduceMotion && mayWander(m.agent.status, m.placement.basis, teams.has(id)) ? roomAt(home) : undefined;
+      const target = room ? wanderPoint(id, home, room, now, (p) => walkable(nav, p) && roomAt(p)?.id === room.id) : home;
       let st = states.current.get(id);
       const b = birthState(births.get(id), now, reduceMotion);
       if (!st) {
@@ -420,13 +431,14 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
       own.current.set(id, { x: st.pos.x, z: st.pos.z });
       const station = stations.get(id), atStation = !!station && Math.hypot(station.x - st.pos.x, station.z - st.pos.z) < 0.05;
       const spot = spots.get(id), atSpot = !!spot && Math.hypot(spot.x - st.pos.x, spot.z - st.pos.z) < 0.05;
+      const bed = beds?.get(id), atBed = m.placement.basis === "sleep" && !!bed && Math.hypot(bed.x - st.pos.x, bed.z - st.pos.z) < 0.05;
       const activity = chooseActivity({ status: m.agent.status, basis: m.placement.basis, department: m.placement.department, moving, fast, rising: waiting && (st.path.length > 0 || !st.planned),
-        atStation, atSpot, spotPose: spot?.pose ?? null, meeting: meetings.has(id), team: teams.has(id), seed: seedOf(id), t });
+        atStation, atSpot, spotPose: spot?.pose ?? null, meeting: meetings.has(id), team: teams.has(id), seed: seedOf(id), t, atBed });
       st.activity = activity;
       // Stationary: face the equipment (the spot's direction; workstations face north).
       // Standing: turn to face the work (the spot's direction; workstations face north). Walking: steering owns the heading.
       if (!moving) {
-        const wantYaw = atSpot ? spot!.yaw : atStation ? Math.PI : st.yaw;
+        const wantYaw = atBed ? 0 : atSpot ? spot!.yaw : atStation ? Math.PI : st.yaw; // asleep: head at the bed's head, feet to the south
         let dy = wantYaw - st.yaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
         st.yaw += dy * (reduceMotion ? 1 : Math.min(1, dt * 4));
       }
@@ -449,7 +461,8 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
       // Pose the rig.
       const P = st.pose, r = rig, seated = activity === "seated" || activity === "seatedIdle" || activity === "seatedRead" || activity === "meetSeat";
       const back = seated ? SEAT_BACK : 0;
-      r.root.position.set(st.pos.x - Math.sin(st.yaw) * back, 0.12, st.pos.z - Math.cos(st.yaw) * back);
+      const lift = activity === "sleep" && bed ? BED_TOP[bed.level] - 0.02 : 0; // on the mattress (lower or upper bunk)
+      r.root.position.set(st.pos.x - Math.sin(st.yaw) * back, 0.12 + lift, st.pos.z - Math.cos(st.yaw) * back);
       r.root.rotation.set(0, st.yaw, 0);
       const ident = identityColours(id), wide = [0.97, 1, 1.04][ident.width];
       r.root.scale.set(wide, 1, wide);

@@ -12,7 +12,11 @@ import type { AgentModel } from "../command/agents";
 import { DEPARTMENT, DEPARTMENTS, type DepartmentId } from "../command/departments";
 import { usePortraitUrl } from "../command/AgentPortrait";
 import type { VirtualPrefs } from "../command/prefs";
-import { birthState, focusRect, livePackets, packetAt, WORLD, type BirthState, type Packet, type Point } from "./world";
+import { BED_LENGTH, BED_WIDTH, bedIndex, bedPoint, birthState, focusRect, livePackets, WORLD, type BirthState, type Packet, type Point } from "./world";
+import { along, roomAt, routeThrough, toHub } from "./hq/route";
+import { mayWander, wanderPoint } from "./hq/wander";
+import { HQ_PROFILE } from "./hq/quality";
+import { SLEEP_LAMP } from "./hq/beds";
 
 /** The floor grid as one path (cheaper to repaint than a pattern fill). */
 const GRID = (() => {
@@ -61,6 +65,9 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
   const svg = useRef<SVGSVGElement>(null);
   const agentEls = useRef(new Map<string, SVGGElement>());
   const packetEls = useRef<SVGCircleElement[]>([]);
+  /** The ceiling pipe each travelling packet is in (one path per packet slot): drawn only while it travels. */
+  const pipeEls = useRef<SVGPathElement[]>([]);
+  const routes = useRef(new Map<string, Point[]>());
   const pos = useRef(new Map<string, Point>());
   /** The element each agent's current transform was written to (a remounted element is redrawn). */
   const drawn = useRef(new Map<string, SVGGElement>());
@@ -106,10 +113,14 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
         if (el) put(el, "visibility", b.visible ? "visible" : "hidden");
       }
       // Only what changes is written to the DOM: a still Fleet costs no repaint (large Fleets stay smooth).
-      // Agents walk towards their department slot (about 4 units per second; snap with reduced motion).
+      // Agents walk towards their department slot (about 4 units per second; snap with reduced motion). An agent with
+      // nothing real to do strolls inside its room (cosmetic, wander.ts); never on Reduce Motion.
+      const byId = new Map(live.current.models.map((m) => [m.agent.id, m]));
       for (const [id, el] of agentEls.current) {
-        const target = tg.get(id);
-        if (!target) continue;
+        const home = tg.get(id), m = byId.get(id);
+        if (!home) continue;
+        const room = !snap && m && mayWander(m.agent.status, m.placement.basis, false) ? roomAt(home) : undefined;
+        const target = room ? wanderPoint(id, home, room, nowMs) : home;
         const cur = pos.current.get(id);
         if (cur && cur.x === target.x && cur.z === target.z && drawn.current.get(id) === el) continue;
         const from = cur ?? { ...target };
@@ -119,15 +130,20 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
         drawn.current.set(id, el);
         el.setAttribute("transform", `translate(${next.x.toFixed(3)} ${next.z.toFixed(3)})`);
       }
-      // Packets (data flows), only when enabled and motion is allowed; idle circles are written once.
+      // Packets travel the pipes through the Fleet Command hub (route.ts), only when enabled and motion is allowed; the
+      // pipe a packet is in is drawn while it travels and nowhere else. Idle elements are written once.
       const now = Date.now();
       const shown = pr.dataFlow && !snap ? livePackets(pk, now, 60) : [];
       if (shown.length || packetsOn.current) {
         packetsOn.current = shown.length > 0;
         packetEls.current.forEach((c, i) => {
-          const p = shown[i], at = p ? packetAt(p, now) : null;
-          if (!p || !at) { if (c.getAttribute("r") !== "0") c.setAttribute("r", "0"); return; }
+          const p = shown[i], pipe = pipeEls.current[i], f = p ? (now - p.start) / p.duration : -1;
+          if (!p || f < 0 || f >= 1) { if (c.getAttribute("r") !== "0") c.setAttribute("r", "0"); if (pipe && pipe.getAttribute("d") !== "") pipe.setAttribute("d", ""); return; }
+          let route = routes.current.get(p.id);
+          if (!route) { route = routeThrough(p.points); routes.current.set(p.id, route); if (routes.current.size > 240) routes.current.delete(routes.current.keys().next().value!); }
+          const at = along(route, f).p;
           c.setAttribute("cx", at.x.toFixed(3)); c.setAttribute("cy", at.z.toFixed(3)); c.setAttribute("r", "0.28"); c.setAttribute("fill", p.colour);
+          if (pipe) { pipe.setAttribute("d", route.map((q, k) => `${k ? "L" : "M"}${q.x.toFixed(2)} ${q.z.toFixed(2)}`).join("")); pipe.setAttribute("stroke", p.colour); pipe.setAttribute("stroke-opacity", (0.25 + 0.5 * Math.sin(Math.PI * f)).toFixed(2)); }
         });
       }
       // Camera: ease the viewBox towards the focus; stop writing once it has arrived.
@@ -146,11 +162,12 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
   }, [positionsRef, projectRef]);
 
 
-  return <svg ref={svg} viewBox={`${WORLD.minX} ${WORLD.minZ} ${WORLD.maxX - WORLD.minX} ${WORLD.maxZ - WORLD.minZ}`} className="h-full w-full select-none" role="group" aria-label="Fleet headquarters map">
+  const beds = bedIndex(models), sleeping = new Map(models.filter((m) => m.placement.basis === "sleep").map((m) => [m.agent.id, m.agent.sleep ?? null]));
+  return <svg ref={svg} viewBox={`${WORLD.minX} ${WORLD.minZ} ${WORLD.maxX - WORLD.minX} ${WORLD.maxZ - WORLD.minZ}`} className={`h-full w-full select-none ${HQ_PROFILE[prefs.quality].pixel ? "hq-pixel-map" : ""}`} role="group" aria-label="Fleet headquarters map">
     <rect x={WORLD.minX - 5} y={WORLD.minZ - 5} width={WORLD.maxX - WORLD.minX + 10} height={WORLD.maxZ - WORLD.minZ + 10} fill="#030712" />
     <path d={GRID} fill="none" stroke="#0f2236" strokeWidth={0.05} />
-    {/* Corridors from Fleet Command to every department (where information travels). */}
-    {DEPARTMENTS.filter((d) => d.id !== "command").map((d) => <line key={`c-${d.id}`} x1={0} y1={-15} x2={d.x} y2={d.z} stroke="#0e2a3d" strokeWidth={0.12} />)}
+    {/* Every department's own corridor to the Fleet Command hub (the pipes information travels in run along them). */}
+    {DEPARTMENTS.filter((d) => d.id !== "command").map((d) => <path key={`c-${d.id}`} d={toHub({ x: d.x, z: d.z }).map((q, k) => `${k ? "L" : "M"}${q.x} ${q.z}`).join("")} fill="none" stroke="#0e2a3d" strokeWidth={0.14} />)}
     {DEPARTMENTS.map((d) => <g key={d.id} role="button" tabIndex={0} aria-label={`${d.name}: ${d.purpose}`} className="cursor-pointer outline-none focus-visible:opacity-80" {...activate(() => onRoom(d.id))}>
       <rect x={d.x - d.w / 2} y={d.z - d.d / 2} width={d.w} height={d.d} rx={0.4} fill={d.id === "command" ? "#06182a" : "#071322"} stroke={d.accent} strokeOpacity={focus.level === "department" && focus.id === d.id ? 1 : 0.55} strokeWidth={d.id === "command" ? 0.16 : 0.08} />
       {/* No continuous ambient animation on the map: any animation inside the SVG repaints the whole map every frame. */}
@@ -160,6 +177,12 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
     {/* One workstation per agent on the Agent Floor (a dark bar until it is powered). */}
     {models.map((m) => { const st = stations.get(m.agent.id); return st ? <rect key={`st-${m.agent.id}`} ref={(el) => { if (el) stationEls.current.set(m.agent.id, el); else stationEls.current.delete(m.agent.id); }}
       x={st.x - 0.45} y={st.z - 1.42} width={0.9} height={0.24} rx={0.05} fill="#22d3ee" fillOpacity={0.06} stroke="#155e75" strokeWidth={0.04} data-station={m.agent.id} /> : null; })}
+    {/* Quarters: a bed for every living agent; its lamp shows who sleeps there and why (owner's pause / hibernation). */}
+    {[...beds].map(([id, i]) => { const b = bedPoint(i), s = sleeping.get(id); return <g key={`bed-${id}`} data-bed={id}>
+      <rect x={b.x - BED_WIDTH / 2 + (b.level ? 0.12 : 0)} y={b.z + (b.level ? 0.12 : 0)} width={BED_WIDTH} height={BED_LENGTH} rx={0.08} fill="#202c52" stroke="#6272a8" strokeWidth={0.05} />
+      <rect x={b.x - 0.12} y={b.z + 0.1} width={0.24} height={0.16} fill={s === "owner_pause" ? SLEEP_LAMP.owner_pause : s === "hibernating" ? SLEEP_LAMP.hibernating : SLEEP_LAMP.empty} />
+    </g>; })}
+    {Array.from({ length: 60 }, (_, i) => <path key={`pipe${i}`} ref={(el) => { if (el) pipeEls.current[i] = el; }} d="" fill="none" strokeWidth={0.22} strokeLinejoin="round" />)}
     {models.map((m) => <MapAgent key={m.agent.id} m={m} selected={selected === m.agent.id} newborn={(birthStates.get(m.agent.id)?.phase ?? "settled") !== "settled"} mark={birthStates.get(m.agent.id)?.mark ?? false} register={register} onAgent={onAgent} />)}
     {Array.from({ length: 60 }, (_, i) => <circle key={`p${i}`} ref={(el) => { if (el) packetEls.current[i] = el; }} r={0} />)}
   </svg>;

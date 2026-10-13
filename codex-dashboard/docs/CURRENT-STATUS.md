@@ -930,3 +930,34 @@ under the separate **Full history** tab.
 - **Fleet history** (the Full history tab): meaningful history only. Routine event copies (sessions, ledger-posting
   copies, role grants, notification deletions) were purged once and now expire after 7 days; routine authentication
   diagnostics expire after 30 days; canonical events and serious incidents never expire. See `docs/admin-access.md`.
+
+## Virtual HQ — central Fleet Command (owner-approved 13 October 2026; branch virtual/central-command, not released)
+
+One coherent pass on the Virtual presentation layer; the FleetController bindings, the shared command model, Formal pages,
+step-up and actions are unchanged.
+
+- **Layout.** Fleet Command is the hub at the centre of the complex (rows: Opportunity Lab · Library · Marketing /
+  Treasury · FLEET COMMAND · Venture-Dev / Identity · Agent Floor · Comms / Quarters · Estate · Security). Every room is
+  one corridor from the hub; the hub opens on all four sides; its live core sits at its centre and its plaque shows the
+  Fleet's display level (days since the first agent was created + 1).
+- **Ceiling data pipes.** Information travels in pipes under the corridor ceilings, through the hub's core (every route
+  between two rooms passes it), and drops to the receiving intake or agent. A pipe has no opacity of its own: it is lit only
+  while an orb travels in it and fades as the transport settles (transport.ts `pipesOf`). Reduce Motion / Data flow off
+  behave as before. The 2D map routes packets through the same pipes and draws a pipe only while its packet travels.
+- **Quarters.** A bunk for every living agent (count follows the living agents; 54 beds for the constitutional 50). The
+  OWNER'S PAUSE ("PAUSED BY OWNER", amber lamp, ⏸) and a REPORTED HIBERNATION ("HIBERNATING", indigo lamp, ☾) both sleep there
+  and are shown differently everywhere (labels, side list, Quarters board). Death and an operator hold outrank sleep.
+- **Idle wandering (cosmetic).** An awake, free agent with nothing real to do strolls inside the room its state puts it in
+  (seeded, deterministic, never on Reduce Motion, never a change of room, never shown as work — hq/wander.ts).
+- **Side list.** Every living agent: portrait, name, Lv, activity and room, time on it (since the event or state that placed
+  it; — when unknown), time alive. Longest survivors first; selecting one uses the existing focus (the camera flies to it).
+- **Levels and the Hall of Survivors.** Lv = whole days alive + 1, from the reading's creation time — display only, no
+  unlocks. Estate shows the Hall of Survivors (every dead agent and its lifespan; — when a time is unknown).
+- **Pixel look.** Low and Medium render at a reduced internal scale (0.42 / 0.6) upscaled with hard pixel edges (CSS
+  `image-rendering: pixelated`), same world and cyberpunk palette; High and Ultra unchanged.
+
+**Backend follow-ups (not in this pass; the UI reads them only if supplied):** the `agents` read does not yet carry the
+owner's cognition pause (`paused`), a reported hibernation (`hibernating`, which today lives only in each agent's local
+continuity), or the time of death (`deathTime`). Until it does, LIVE agents are never shown asleep and the Hall shows —
+for lifespans; nothing is inferred. The simulation demonstrates both sleep states (Vega paused, Lyra hibernating) and a
+retired agent (Echo), all fictional.

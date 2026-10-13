@@ -11,9 +11,9 @@ import { INTAKE } from "./hq/route";
 export interface Point { x: number; z: number }
 
 /** The facility's bounds (world units) — the 2D map's viewBox and the 3D camera's "Fleet view". */
-export const WORLD = Object.freeze({ minX: -27, maxX: 27, minZ: -37, maxZ: 43 });
-/** Where outside information (customers, providers) enters the facility: its east gate. */
-export const EXTERNAL: Point = Object.freeze({ x: 29, z: -4 });
+export const WORLD = Object.freeze({ minX: -31, maxX: 31, minZ: -33, maxZ: 36 });
+/** Where outside information (customers, providers) enters the facility: its east gate, on the hub's south corridor. */
+export const EXTERNAL: Point = Object.freeze({ x: 33, z: -3 });
 
 /** Each agent's target spot: its department, then a deterministic slot by order of id within that department. */
 export function agentTargets(models: readonly AgentModel[]): Map<string, Point & { department: DepartmentId }> {
@@ -137,16 +137,37 @@ export function birthState(bornAt: number | undefined, now: number, reduceMotion
   return { phase: "settled", power: 1, visible: true, atStation: false, mark: false };
 }
 
-/** Agents' targets including stations and birth sequences (an entering newborn heads for its own station first). */
+/** Agents' targets including stations, bunks and birth sequences (an entering newborn heads for its own station first). */
 export function agentTargetsWithStations(models: readonly AgentModel[], births: ReadonlyMap<string, number>, now: number, reduceMotion: boolean): Map<string, Point & { department: DepartmentId }> {
-  const base = agentTargets(models), stations = stationIndex(models);
+  const base = agentTargets(models), stations = stationIndex(models), beds = bedIndex(models);
   for (const m of models) {
     const i = stations.get(m.agent.id)!;
     const b = birthState(births.get(m.agent.id), now, reduceMotion);
     if (b.atStation || m.placement.department === "floor") base.set(m.agent.id, { ...stationPoint(i), department: "floor" });
+    else if (m.placement.basis === "sleep" && beds.has(m.agent.id)) { const p = bedPoint(beds.get(m.agent.id)!); base.set(m.agent.id, { x: p.x, z: p.z, department: "quarters" }); }
   }
   return base;
 }
+
+// ── Quarters: a bunk for every living agent ─────────────────────────────────────────────────────────────────────
+// Every LIVING agent has its own bed (stable order by agent id); the number of beds is the number of living agents. An
+// agent asleep — the owner's pause or a reported hibernation (departments.ts) — lies on its own bed. Bunks: 9 columns ×
+// 3 rows, lower beds first, then the upper ones (54 beds ≥ the constitutional 50).
+export const BUNK_COLS = 9, BUNK_ROWS = 3, BUNKS = BUNK_COLS * BUNK_ROWS;
+export const BED_LENGTH = 2.0, BED_WIDTH = 0.95, BUNK_DX = 1.55, BUNK_DZ = 3.4;
+/** Mattress tops (m above the floor) of the lower and upper bed. */
+export const BED_TOP = [0.5, 1.55] as const;
+export interface Bed { x: number; z: number; level: 0 | 1 }
+export function bedIndex(models: readonly AgentModel[]): Map<string, number> {
+  return new Map(models.filter((m) => m.agent.status !== "dead").map((m) => m.agent.id).sort().map((id, i) => [id, i]));
+}
+/** The i-th bed: (x, z) is its head end (where a sleeper's head rests; the bed runs south from there). */
+export function bedPoint(i: number): Bed {
+  const d = DEPARTMENT.quarters, b = i % BUNKS, col = b % BUNK_COLS, row = Math.floor(b / BUNK_COLS);
+  return { x: d.x + (col - (BUNK_COLS - 1) / 2) * BUNK_DX, z: d.z - d.d / 2 + 1.0 + row * BUNK_DZ, level: i >= BUNKS ? 1 : 0 };
+}
+/** How many bunk frames n living agents need, and how many of them carry an upper bed. */
+export const bunksFor = (n: number) => ({ frames: Math.min(BUNKS, Math.max(0, n)), uppers: Math.max(0, Math.min(BUNKS, n - BUNKS)) });
 
 /** Birth event types that mark when an agent came into being (authoritative; nothing else starts a sequence). */
 export const BIRTH_EVENTS = new Set(["agent_born", "genesis_activated"]);

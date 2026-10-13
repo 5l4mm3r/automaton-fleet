@@ -38,11 +38,18 @@ function agentStatus(status: string, held: boolean): Agent["status"] {
   return "provisioning";
 }
 
+/** Asleep only when the reading says so: the owner's pause wins over a reported hibernation; absent fields → null. */
+export function sleepOf(a: Pick<AgentRow, "paused" | "hibernating">): Agent["sleep"] {
+  return a.paused === true ? "owner_pause" : a.hibernating === true ? "hibernating" : null;
+}
+const isoOrNull = (v: unknown) => (typeof v === "string" && Number.isFinite(Date.parse(v)) ? v : null);
+
 /** One `agents` row (plus the agent's wallet, when read) as the deck's Agent. Shared by the snapshot and the pulse. */
 export function toAgent(a: AgentRow, w?: Row): Agent {
   return {
     id: a.agentId, name: agentLabel(a, a.agentId), role: words(a.mode ?? "NORMAL"), mode: a.mode ?? "NORMAL", status: agentStatus(a.status, a.held), cash: num(a.cashMinor),
     burn: num(w?.runway?.burnPerDayMinor), runwayDays: w?.runway ? (w.runway.days ?? null) : null, colour: colourOf(a.agentId), venture: "", events: [],
+    createdAt: isoOrNull(a.createdAt), diedAt: isoOrNull(a.deathTime ?? (a as unknown as Row).death_time), sleep: sleepOf(a),
   };
 }
 

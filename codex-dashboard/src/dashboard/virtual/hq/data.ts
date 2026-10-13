@@ -11,7 +11,8 @@ import { money, type Fleet } from "../../model";
 import { eventTitle } from "../../copy";
 import type { AgentModel } from "../../command/agents";
 import { BAND_LABEL } from "../../command/economics";
-import { DEPARTMENT } from "../../command/departments";
+import { DEPARTMENT, span } from "../../command/departments";
+import { hallOfSurvivors } from "../../command/survival";
 import type { CommandView, Row } from "../../command/view";
 import type { HQData } from "./screens";
 
@@ -46,6 +47,8 @@ export function hqDataFrom(fleet: Fleet, view: CommandView | null, models: reado
     identity: [["Agents here", here("identity")], ["Values shown", "never here"]],
     estate: [["Estate items", count(fleet.estates)], ["Store", lv?.storage ? `${Math.round(lv.storage.heldBytes / 1_048_576)} / ${Math.round(lv.storage.capacityBytes / 1_048_576)} MB` : DASH]],
     comms: [["Mail", (lv?.mail ?? DASH).replace("_", " ")], ["SMS", (lv?.sms ?? DASH).replace("_", " ")], ["Recorded needs", String(lv?.recordedNeeds ?? 0)]],
+    quarters: [["Beds", String(living.length)], ["Paused by owner", String(living.filter((m) => m.agent.sleep === "owner_pause").length)],
+      ["Hibernating", String(living.filter((m) => m.agent.sleep === "hibernating").length)]],
     security: [["RED alerts open", String(redOpen)], ["AMBER open", String(fleet.notices.filter((n) => n.level === "AMBER" && !n.acknowledged).length)],
       ["Fleet health", lv?.health ? (lv.health.ok ? "ok" : `${lv.health.findings} finding(s)`) : DASH], ["Treasury withdrawn", minor(lv?.wealth?.ownerWithdrawn)]],
   };
@@ -84,6 +87,8 @@ export function hqBoardsFrom(fleet: Fleet, view: CommandView | null, models: rea
     "floor:board": { title: "Workstations", empty: "No workstations", rows: [["Online", String(living.filter((m) => m.agent.status === "active").length), "ok"], ["Held", String(living.filter((m) => m.agent.status === "held").length), "warn"], ["Provisioning", String(living.filter((m) => m.agent.status === "provisioning").length)], ["Powered down", String(models.length - living.length), "muted"]] },
     "command:projects": { title: "Team projects", empty: "No team projects in progress", rows: projectRows(view, name) },
     "venture:projects": { title: "Team projects · ETA solo → team", empty: "No team projects in progress", rows: projectRows(view, name, true) },
+    "quarters:board": { title: "Asleep", empty: "Nobody asleep", rows: living.filter((m) => m.agent.sleep).slice(0, 8).map((m) => [str(m.agent.name, 18), m.agent.sleep === "owner_pause" ? "PAUSED BY OWNER" : "HIBERNATING", m.agent.sleep === "owner_pause" ? "warn" : "muted"]) },
+    "estate:hall": { title: "Hall of Survivors", empty: "No agent has died", rows: hallOfSurvivors(models.map((m) => m.agent)).slice(0, 8).map((s) => [str(s.name, 18), s.lifespanMs == null ? DASH : `${span(s.lifespanMs)} · Lv ${s.level}`, "muted"]) },
     "identity:board": { title: "Identity desk", empty: "", rows: [["Agents here", String(models.filter((m) => m.placement.department === "identity").length)], ["Credential values", "never displayed", "muted"]] },
   };
   return boards;

@@ -29,7 +29,7 @@ import { toLiveCommand } from "../../../codex-dashboard/src/dashboard/live/mappi
 import { GatewayClient } from "../../../codex-dashboard/src/dashboard/api/client";
 import type { Agent, Fleet } from "../../../codex-dashboard/src/dashboard/model";
 import { hqBoardsFrom, hqDataFrom, redAlertOpen, treasuryBannerFrom } from "../../../codex-dashboard/src/dashboard/virtual/hq/data";
-import { INTAKE, roomAt, routeThrough } from "../../../codex-dashboard/src/dashboard/virtual/hq/route";
+import { HUB, INTAKE, roomAt, routeThrough } from "../../../codex-dashboard/src/dashboard/virtual/hq/route";
 import { flowLabel } from "../../../codex-dashboard/src/dashboard/virtual/hq/flow";
 import { advance, CATEGORY_COLOUR, categoryOf, importanceOf, newSchedule, PHASE, phaseAt, priorityOf, QUEUE_CAP, slotsFor, STALE_MS, totalTime, toTransport, transportFrame, type Transport } from "../../../codex-dashboard/src/dashboard/virtual/hq/transport";
 import { transportSkin, registerTransportSkin } from "../../../codex-dashboard/src/dashboard/virtual/hq/transport-skin";
@@ -307,7 +307,7 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
     for (const s of buildWorld().screens.filter((x) => x.kind === "board")) expect(boards[s.board!], s.id).toBeDefined();
   });
 
-  it("a real Fleet event becomes a packet routed through the building's conduits (never through walls)", () => {
+  it("a real Fleet event becomes a packet routed through the building's pipes and the Fleet Command hub (never through walls)", () => {
     const e = { key: "k1", type: "knowledge_recorded", agentId: "A1", at: "2026-10-04T12:00:00Z", detail: {} } as FleetEvent;
     const v = visualFromEvent(e)!;
     const pk = packetFor(v, new Map([["A1", { x: 0, z: -4 }]]), 1000)!;
@@ -320,13 +320,15 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
       expect(Math.abs(a.x - b.x) < 1e-6 || Math.abs(a.z - b.z) < 1e-6, `${JSON.stringify(a)}→${JSON.stringify(b)}`).toBe(true);
     }
     expect(flowLabel(pk)).toBe("KNOWLEDGE RECORDED");
-    // Treasury → Library goes out of the Treasury's front opening and in through the Library's.
-    const t2l = routeThrough([{ x: -18, z: -17 }, { x: 0, z: 11 }]);
-    expect(t2l).toContainEqual({ x: -18, z: -12 }); expect(t2l).toContainEqual({ x: 0, z: 16 });
+    // Treasury → Library goes out of the Treasury's front opening, through the hub's core, and in through the Library's.
+    const T = DEPARTMENT.treasury, Lb = DEPARTMENT.library;
+    const t2l = routeThrough([{ x: T.x, z: T.z }, { x: Lb.x, z: Lb.z }]);
+    expect(t2l).toContainEqual({ x: T.x, z: T.z + T.d / 2 }); expect(t2l).toContainEqual({ x: Lb.x, z: Lb.z + Lb.d / 2 });
+    expect(t2l).toContainEqual(HUB);
   });
 
   const mkT = (over: Partial<Transport> & { id: string }): Transport => {
-    const route = routeThrough([{ x: -18, z: -17 }, { x: 0, z: 11 }]);
+    const route = routeThrough([{ x: DEPARTMENT.treasury.x, z: DEPARTMENT.treasury.z }, { x: DEPARTMENT.library.x, z: DEPARTMENT.library.z }]);
     return { route, eventAt: 0, start: 0, travel: 4000, category: "information", colour: CATEGORY_COLOUR.information, priority: 5, importance: "low", label: "KNOWLEDGE RECORDED", agentId: "A1", counterpartId: null, sourceAgentId: "A1", ...over };
   };
 
@@ -604,12 +606,13 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
 
   it("team members in different rooms: a delivery travels from one agent to the other through the building", () => {
     const e = { key: "d1", type: "project_task_delivered", agentId: "A1", at: "2026-10-04T12:00:00Z", detail: { fromAgentId: "A1", toAgentId: "B2" } } as FleetEvent;
-    const a1 = { x: -18, z: 11 }, b2 = { x: 18, z: 11 }; // Marketing and Venture / Dev
+    const a1 = { x: DEPARTMENT.marketing.x, z: DEPARTMENT.marketing.z }, b2 = { x: DEPARTMENT.venture.x, z: DEPARTMENT.venture.z }; // Marketing and Venture / Dev
     const pk = packetFor(visualFromEvent(e)!, new Map([["A1", a1], ["B2", b2]]), 0)!;
     const tr = toTransport(pk, 0);
     expect(tr.route[0]).toEqual(a1); expect(tr.route[tr.route.length - 1]).toEqual(b2);
     expect(tr.sourceAgentId).toBe("A1"); expect(tr.counterpartId).toBe("B2"); expect(tr.label).toBe("TASK DELIVERED");
     expect(roomAt(tr.route[0])?.id).toBe("marketing"); expect(roomAt(tr.route[tr.route.length - 1])?.id).toBe("venture");
+    expect(tr.route).toContainEqual(HUB); // agent to agent, through FleetController's hub
     // The sender's terminal completes as it launches; the receiver reacts after arrival.
     expect(transportFrame([tr], 100, "full").activating).toEqual([{ id: tr.id, agentId: "A1", done: true }]);
     const resp = transportFrame([tr], PHASE.activate + PHASE.launch + tr.travel + PHASE.arrive + 50, "full");
@@ -617,7 +620,7 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
   });
 
   it("Agent View keeps the selected agent unobstructed: another person in the preferred view moves the camera, never behind a wall", () => {
-    const p = { x: 18, z: 12 }, yaw = Math.PI; // facing north in Venture / Dev
+    const p = { x: DEPARTMENT.venture.x, z: DEPARTMENT.venture.z + 1 }, yaw = Math.PI; // facing north in Venture / Dev
     const free = frameAgent("me", p, yaw, false, new Map([["me", p]]));
     expect(free.ghosts).toEqual([]);
     // Put someone exactly between that camera and the agent.
@@ -638,17 +641,18 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
     for (const d of DEPARTMENTS) if (d.id !== "floor") expect(plan.spots[d.id].length, d.id).toBeGreaterThanOrEqual(2);
     const ag = (id: string, status = "active") => ({ agent: { id, status } } as unknown as Parameters<typeof workTargets>[0][number]);
     const models = [ag("a"), ag("b"), ag("c", "dead"), ag("d")];
-    const targets = new Map([["a", { x: 18, z: 11 }], ["b", { x: 18, z: 12 }], ["c", { x: 0, z: 24 }], ["d", { x: 1, z: -4 }]]);
-    const stations = new Map([["d", { x: 1, z: -4 }]]);
+    const V = DEPARTMENT.venture, E = DEPARTMENT.estate, F = DEPARTMENT.floor;
+    const targets = new Map([["a", { x: V.x, z: V.z }], ["b", { x: V.x, z: V.z + 1 }], ["c", { x: E.x, z: E.z }], ["d", { x: F.x + 1, z: F.z }]]);
+    const stations = new Map([["d", { x: F.x + 1, z: F.z }]]);
     const w = workTargets(models, targets, stations, plan.spots);
     for (const id of ["a", "b"]) { expect(roomAt(w.targets.get(id)!)!.id).toBe("venture"); expect(w.spots.get(id)).toBeDefined(); }
     expect(w.targets.get("a")).not.toEqual(w.targets.get("b"));
-    expect(w.targets.get("c")).toEqual({ x: 0, z: 24 }); expect(w.targets.get("d")).toEqual({ x: 1, z: -4 });
+    expect(w.targets.get("c")).toEqual({ x: E.x, z: E.z }); expect(w.targets.get("d")).toEqual({ x: F.x + 1, z: F.z });
     expect(workTargets(models, targets, stations, plan.spots).targets).toEqual(w.targets); // stable
     // Team projects: teammates in the same room meet at its table; an agent on no team is not seated there while its own
     // desk or console is free (no implied collaboration).
     const team = [ag("lead"), ag("member"), ag("solo")];
-    const inVenture = new Map(team.map((m, i) => [m.agent.id, { x: 18 + i * 0.1, z: 11 }]));
+    const inVenture = new Map(team.map((m, i) => [m.agent.id, { x: V.x + i * 0.1, z: V.z }]));
     const t2 = workTargets(team, inVenture, new Map(), plan.spots, new Map([["lead", "P1"], ["member", "P1"]]));
     expect(t2.spots.get("lead")!.table).toBe(true); expect(t2.spots.get("member")!.table).toBe(true);
     expect([...t2.meetings].sort()).toEqual(["lead", "member"]);
@@ -701,8 +705,10 @@ describe("Virtual HQ v2.1: Treasury banner, boards, information flow, framing (p
   });
 
   it("agents walk through the building (out of a room's opening, along corridors), not through walls", () => {
-    const path2 = routeThrough([{ x: 18, z: 12 }, { x: -18, z: -17 }]); // Venture → Treasury
-    expect(path2).toContainEqual({ x: 18, z: 16 }); expect(path2).toContainEqual({ x: -18, z: -12 }); // exits and enters by the openings
+    const V = DEPARTMENT.venture, T = DEPARTMENT.treasury;
+    const path2 = routeThrough([{ x: V.x, z: V.z + 1 }, { x: T.x, z: T.z }]); // Venture → Treasury
+    expect(path2).toContainEqual({ x: V.x, z: V.z + V.d / 2 }); expect(path2).toContainEqual({ x: T.x, z: T.z + T.d / 2 }); // exits and enters by the openings
+    expect(path2).toContainEqual(HUB); // via the Fleet Command hub
     for (let i = 1; i < path2.length; i++) { const a = path2[i - 1], b = path2[i]; const ra = roomAt(a), rb = roomAt(b); if (ra && rb && ra.id === rb.id) continue; expect(Math.abs(a.x - b.x) < 1e-6 || Math.abs(a.z - b.z) < 1e-6).toBe(true); }
   });
 

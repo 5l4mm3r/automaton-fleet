@@ -9,6 +9,7 @@
  *    held or provisioning sits at its station with subtle life — never typing, never "busy".
  *  - Reactions only to the agent's own recorded events: CONFIRM as its event launches from its terminal, COMPLETE when
  *    that event is a delivery or completion, RECEIVE when an event arrives at it (transport.ts response phase).
+ *  - Sleep (the owner's pause or a reported hibernation): lying on the agent's own bed in Quarters — never work.
  */
 import type { Placement } from "../../command/departments";
 import type { Point } from "../world";
@@ -20,12 +21,13 @@ export type Activity =
   | "seated" | "seatedRead" | "seatedIdle"
   | "terminal" | "reading" | "inspect"
   | "meetSeat" | "meetStand" | "pointing"
+  | "sleep"
   | "dead";
 
 export type Reaction = "confirm" | "complete" | "receive";
 
 /** Is this agent doing real work right now (by FleetController state), as opposed to idling? */
-export const isWorking = (status: string, basis: Placement["basis"]) => status !== "dead" && status !== "held" && status !== "provisioning" && basis !== "default" && basis !== "dead";
+export const isWorking = (status: string, basis: Placement["basis"]) => status !== "dead" && status !== "held" && status !== "provisioning" && basis !== "default" && basis !== "dead" && basis !== "sleep" && basis !== "held";
 
 /** Slow deterministic cycles between related work animations (every ~15–25 s, desynchronised per person). */
 const cycle = (t: number, seed: number, n: number) => Math.floor((t + (seed % 97) * 3.1) / (15 + (seed % 11))) % n;
@@ -35,12 +37,15 @@ export interface ActivityContext {
   moving: boolean; fast: boolean; rising: boolean;
   atStation: boolean; atSpot: boolean; spotPose: "seat" | "stand" | null; meeting: boolean; team: boolean;
   seed: number; t: number;
+  /** At its own bed in Quarters (sleepers only). */
+  atBed?: boolean;
 }
 
 export function chooseActivity(c: ActivityContext): Activity {
   if (c.status === "dead") return "dead";
   if (c.moving) return c.fast ? "fastWalk" : "walk";
   if (c.rising) return "rise";
+  if (c.basis === "sleep") return c.atBed ? "sleep" : "waiting";
   const working = isWorking(c.status, c.basis) || c.team;
   if (c.atSpot && c.meeting) return c.spotPose === "seat" ? "meetSeat" : (["meetStand", "meetStand", "pointing"] as const)[cycle(c.t, c.seed, 3)];
   if (c.atStation || (c.atSpot && c.spotPose === "seat")) return working ? (["seated", "seated", "seatedRead"] as const)[cycle(c.t, c.seed, 3)] : "seatedIdle";

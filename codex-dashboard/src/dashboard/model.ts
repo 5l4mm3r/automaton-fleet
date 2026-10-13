@@ -9,6 +9,12 @@ export type Agent = {
   runwayDays?: number | null;
   /** LIVE: the `agents` read's mode (NORMAL or the active temporary mission). Decides the agent's department. */
   mode?: string;
+  /** When the agent came into being and, if dead, when it died (ISO; null/absent = not supplied). Levels and the Hall of
+   * Survivors are computed from these only — display, never economics. */
+  createdAt?: string | null;
+  diedAt?: string | null;
+  /** The owner's pause or a hibernation the agent reported (null/absent = awake or not reported; never inferred). */
+  sleep?: "owner_pause" | "hibernating" | null;
 };
 export type Notice = { id: string; title: string; level: 'RED' | 'AMBER' | 'INFO' | 'IDENTITY'; acknowledged: boolean; time: string;
   /** LIVE: the notification's code, class, structured detail, agent and times (for the detail view). */

@@ -204,5 +204,13 @@ export function transportFrame(active: readonly Transport[], now: number, mode: 
   return out;
 }
 
+/**
+ * The ceiling data pipes (owner-approved 2026-10-13): a pipe has NO opacity of its own — it is visible only along the
+ * route of a transport being presented, lit up to the orb (`lit`), with the transport's glow as its opacity; it fades
+ * out as the transport settles and is gone when it is done. No transport, no pipe.
+ */
+export interface PipeView { id: string; lit: number; opacity: number }
+export const pipesOf = (fr: Pick<TransportFrame, "routes">): PipeView[] => fr.routes.map((r) => ({ id: r.id, lit: r.lit, opacity: Math.max(0, Math.min(1, r.glow)) })).filter((p) => p.opacity > 0.001);
+
 /** How many transports may play at once (readability over spectacle; never an economic limit). */
 export const slotsFor = (detail: number, reduced: boolean) => (reduced ? 4 : detail >= 2 ? 8 : detail >= 1 ? 6 : 3);

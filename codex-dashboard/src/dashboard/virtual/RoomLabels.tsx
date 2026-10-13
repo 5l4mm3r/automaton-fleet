@@ -16,9 +16,11 @@ import type { Projector } from "./AgentLabels";
 import { WALL_H } from "./hq/world-build";
 import { clickSuppressed } from "./hq/nav-state";
 
-export const RoomLabels = memo(function RoomLabels({ projectRef, visible, hovered, onHover, onRoom }: {
+export const RoomLabels = memo(function RoomLabels({ projectRef, visible, hovered, onHover, onRoom, commandLevel = null }: {
   projectRef: MutableRefObject<Projector | null>; visible: boolean; hovered: DepartmentId | null;
   onHover: (id: DepartmentId | null) => void; onRoom: (id: DepartmentId) => void;
+  /** Fleet Command's display level (days since the Fleet's first agent + 1; departments.ts fleetLevel). */
+  commandLevel?: number | null;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const els = useRef(new Map<DepartmentId, HTMLButtonElement>());
@@ -69,7 +71,7 @@ export const RoomLabels = memo(function RoomLabels({ projectRef, visible, hovere
         onClick={() => { if (!clickSuppressed()) onRoom(d.id); }} onPointerEnter={() => onHover(d.id)} onPointerLeave={() => onHover(null)}
         onFocus={() => onHover(d.id)} onBlur={() => onHover(null)}
         className={`group pointer-events-auto absolute left-0 top-0 max-w-[16rem] select-none rounded-sm border-l-2 px-2 py-0.5 text-left shadow-md shadow-black/40 transition-colors data-[compact=1]:px-1.5 ${on ? "bg-slate-900/95 ring-1 ring-slate-500/60" : "bg-slate-950/70"}`}>
-        <span className={`block font-semibold uppercase leading-4 tracking-[0.16em] group-data-[compact=1]:text-[9px] group-data-[compact=1]:leading-3 group-data-[compact=1]:tracking-[0.08em] ${on ? "text-white text-[12px]" : "text-slate-200 text-[11px]"}`}>{d.name}</span>
+        <span className={`block font-semibold uppercase leading-4 tracking-[0.16em] group-data-[compact=1]:text-[9px] group-data-[compact=1]:leading-3 group-data-[compact=1]:tracking-[0.08em] ${on ? "text-white text-[12px]" : "text-slate-200 text-[11px]"}`}>{d.name}{d.id === "command" && commandLevel ? <span className="ml-1.5 font-mono tracking-normal text-fuchsia-300">Lv {commandLevel}</span> : null}</span>
         {/* The purpose floats under the plaque (not limited to the room's width), shown on hover/focus at every size. */}
         {on && <span role="note" className="absolute left-0 top-full z-10 mt-1 w-max max-w-[18rem] rounded-sm border border-slate-700 bg-slate-950/95 px-2 py-1 text-[11px] font-normal normal-case leading-4 tracking-normal text-slate-200 shadow-lg shadow-black/50">{d.purpose}</span>}
       </button>;

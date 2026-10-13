@@ -22,17 +22,18 @@ export function deriveAgents(agents: readonly Agent[], view: CommandView | null,
       agent, econ,
       // Without the command view the baseline is unknown: the band says so instead of guessing.
       health: healthOf({ status: agent.status, cash: agent.cash }, econ, view?.genesisMinor ?? null),
-      placement: placeAgent({ id: agent.id, status: agent.status, mode: agent.mode, role: agent.role }, latest.get(agent.id), now),
+      placement: placeAgent({ id: agent.id, status: agent.status, mode: agent.mode, role: agent.role, sleep: agent.sleep ?? null }, latest.get(agent.id), now),
     };
   });
 }
 
-/** Merge a pulse's agents into the deck's agents: current status, mode and cash; the snapshot's wallet runway is kept. */
+/** Merge a pulse's agents into the deck's agents: current status, mode, cash and sleep; the snapshot's wallet runway is kept. */
 export function mergePulseAgents(current: readonly Agent[], pulse: readonly Agent[] | null): Agent[] {
   if (!pulse) return [...current];
   const prev = new Map(current.map((a) => [a.id, a]));
   return pulse.map((a) => {
     const p = prev.get(a.id);
-    return p ? { ...p, status: a.status, cash: a.cash, mode: a.mode, role: a.role, name: a.name } : a;
+    return p ? { ...p, status: a.status, cash: a.cash, mode: a.mode, role: a.role, name: a.name, sleep: a.sleep ?? null,
+      createdAt: a.createdAt ?? p.createdAt ?? null, diedAt: a.diedAt ?? p.diedAt ?? null } : a;
   });
 }

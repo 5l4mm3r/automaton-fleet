@@ -1,75 +1,97 @@
 /**
  * Information routes through the building. A packet's stops (departments, an agent, the outside) come from a real
- * recorded event (world.ts packetFor); this turns its straight hops into a path along the HQ's data conduits — out of
- * the source room through its front opening, along the cross corridor in front of it, up or down a spine conduit,
- * along the destination's cross corridor and in through its opening — so information visibly travels through the
- * infrastructure instead of through walls. Pure geometry, unit-tested.
+ * recorded event (world.ts packetFor); this turns its straight hops into a path through the HQ's CEILING DATA PIPES.
+ *
+ * Fleet Command is the hub (approved 2026-10-13): information between two departments leaves the source room through its
+ * front opening, follows the corridor pipes to the hub's nearest opening (north onto the corridor in front of the top row,
+ * south onto the corridor in front of the hub; the other rows join the south corridor along a spine), passes through the
+ * live core at the centre of Fleet Command, and goes out the same way to its destination — so every avenue visibly runs
+ * through FleetController, and nothing travels through walls. Inside one room it crosses the room directly. Pure
+ * geometry, unit-tested.
  */
-import { DEPARTMENTS, type Department, type DepartmentId } from "../../command/departments";
+import { DEPARTMENT, DEPARTMENTS, type Department, type DepartmentId } from "../../command/departments";
 import type { Point } from "../world";
 
-/** Cross-corridor conduit lines (z) and the two spine conduits (x), as built by world-build. */
-export const CROSS_Z = [-23.5, -11.5, 4.5, 17.5, 30.75, 42.6] as const;
-export const SPINE_X = [-10, 10] as const;
-/** Where outside information enters the conduit network (the east gate's spine junction). */
-const GATE_NODE: Point = { x: 10, z: -4 };
+/** Cross-corridor pipe lines (z: in front of each row) and the two spine pipes (x), as built by world-build. */
+export const CROSS_Z = [-19, -3, 17, 33] as const;
+export const SPINE_X = [-11, 11] as const;
+/** The facility's east edge, where outside information enters the pipe network (the gate's junction). */
+export const GATE_X = 31;
+const HUB_ROOM = DEPARTMENT.command;
+/** The hub's openings onto the corridor network: north (back wall) and south (front), with the in-room point behind each. */
+export const HUB_NORTH: Point = Object.freeze({ x: HUB_ROOM.x, z: CROSS_Z[0] });
+export const HUB_SOUTH: Point = Object.freeze({ x: HUB_ROOM.x, z: CROSS_Z[1] });
+const HUB_NORTH_IN: Point = { x: HUB_ROOM.x, z: HUB_ROOM.z - HUB_ROOM.d / 2 };
+const HUB_SOUTH_IN: Point = { x: HUB_ROOM.x, z: HUB_ROOM.z + HUB_ROOM.d / 2 };
+
+/** The pipes run under the ceiling; at a route's ends they drop to the intake or the agent (presentation height, m). */
+export const PIPE_Y = 3.95;
+export const PIPE_END_Y = 0.6;
+/** How far along the path (m) a pipe drops from the ceiling to its end point. */
+export const PIPE_DROP = 1.6;
 
 /**
- * Each department's INTAKE: the physical point where information for that department arrives and leaves — the end of
- * the room's conduit (world-build builds the installation there). Fleet Command: the live core on its dais. Treasury:
- * the capital intake on the gold seal under the hub displays. Elsewhere: the intake node in the equipment band.
+ * Each department's INTAKE: where information for that department arrives and leaves (the end of its pipe drop). Fleet
+ * Command: the live core at the centre of the hub. Treasury: the capital intake on the gold seal under the hub displays.
+ * Elsewhere: the intake node in the equipment band.
  */
 export const INTAKE: Readonly<Record<DepartmentId, Point>> = Object.freeze(Object.fromEntries(DEPARTMENTS.map((d) => {
   const z0 = d.z - d.d / 2;
-  return [d.id, d.id === "command" ? { x: d.x, z: z0 + 3.5 } : d.id === "treasury" ? { x: d.x, z: d.z + 1.4 } : { x: d.x, z: z0 + 1.6 }];
+  return [d.id, d.id === "command" ? { x: d.x, z: d.z } : d.id === "treasury" ? { x: d.x, z: d.z + 1.4 } : { x: d.x, z: z0 + 1.6 }];
 })) as Record<DepartmentId, Point>);
+/** The live core at the centre of Fleet Command — every route between departments passes it. */
+export const HUB: Point = INTAKE.command;
 
 export const roomAt = (p: Point): Department | undefined => DEPARTMENTS.find((d) => Math.abs(p.x - d.x) <= d.w / 2 && Math.abs(p.z - d.z) <= d.d / 2);
 
-/** The conduit in front of a room: the first cross corridor south of its front opening. */
+/** The corridor in front of a room: the first cross corridor south of its front opening. */
 export function frontLine(d: Department): number {
   const z1 = d.z + d.d / 2;
   return CROSS_Z.find((z) => z > z1) ?? z1 + 1.2;
 }
 
-/** The conduit node a point joins the network at, and the in-room approach to it. */
-function access(p: Point): { inner: Point[]; node: Point } {
+const same = (a: Point, b: Point) => Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.z - b.z) < 1e-6;
+
+/**
+ * The pipe path from a point to the hub's core (both ends included). `side` picks the spine for points on the centre
+ * line (−1 west, +1 east) — the side the other end of the route is on, so a route never doubles back.
+ */
+export function toHub(p: Point, side: -1 | 1 = 1): Point[] {
   const d = roomAt(p);
-  if (d) { const z1 = d.z + d.d / 2; return { inner: [{ x: d.x, z: z1 }], node: { x: d.x, z: frontLine(d) } }; }
-  if (p.x > 20) return { inner: [], node: GATE_NODE }; // the outside, through the east gate
-  // Already in a corridor: join the nearest cross corridor.
-  const z = CROSS_Z.reduce((a, b) => (Math.abs(b - p.z) < Math.abs(a - p.z) ? b : a));
-  return { inner: [], node: { x: p.x, z } };
+  if (d?.id === "command") return same(p, HUB) ? [HUB] : [p, HUB];
+  const out: Point[] = [p];
+  let node: Point;
+  if (d) { const z1 = d.z + d.d / 2; out.push({ x: d.x, z: z1 }); node = { x: d.x, z: frontLine(d) }; }
+  else if (p.x > GATE_X) node = { x: GATE_X, z: HUB_SOUTH.z }; // the outside, through the east gate
+  else node = { x: p.x, z: CROSS_Z.reduce((a, b) => (Math.abs(b - p.z) < Math.abs(a - p.z) ? b : a)) }; // in a corridor: its nearest cross corridor
+  out.push(node);
+  if (node.z === HUB_NORTH.z) out.push(HUB_NORTH, HUB_NORTH_IN);
+  else if (node.z === HUB_SOUTH.z) out.push(HUB_SOUTH, HUB_SOUTH_IN);
+  else {
+    const sx = node.x < -1e-6 ? SPINE_X[0] : node.x > 1e-6 ? SPINE_X[1] : side < 0 ? SPINE_X[0] : SPINE_X[1];
+    // Along the cross corridor to the spine, along the spine to the hub's south corridor, along it to the hub.
+    out.push({ x: sx, z: node.z }, { x: sx, z: HUB_SOUTH.z }, HUB_SOUTH, HUB_SOUTH_IN);
+  }
+  out.push(HUB);
+  return dedupe(out);
 }
 
-function spineFor(ax: number, bx: number): number {
-  const side = (x: number) => (x < -1 ? -1 : x > 1 ? 1 : 0);
-  const sa = side(ax), sb = side(bx);
-  if (sa !== 0 && (sa === sb || sb === 0)) return sa * 10;
-  if (sb !== 0) return sb * 10;
-  return 10;
+function dedupe(pts: Point[]): Point[] {
+  return pts.filter((p, i) => i === 0 || Math.hypot(p.x - pts[i - 1].x, p.z - pts[i - 1].z) > 0.01);
 }
 
-/** The path between two network nodes along the conduits (Manhattan through a spine when the corridors differ). */
-function between(a: Point, b: Point): Point[] {
-  if (Math.abs(a.z - b.z) < 0.01) return [b];
-  const onSpine = SPINE_X.some((x) => Math.abs(a.x - x) < 0.01) && SPINE_X.some((x) => Math.abs(b.x - x) < 0.01) && Math.abs(a.x - b.x) < 0.01;
-  if (onSpine) return [b];
-  const sx = Math.abs(a.x - 10) < 0.01 || Math.abs(a.x + 10) < 0.01 ? a.x : spineFor(a.x, b.x);
-  return [{ x: sx, z: a.z }, { x: sx, z: b.z }, b];
-}
-
-/** Turn a packet's stops into a conduit path (consecutive duplicates removed). */
+/** Turn a packet's stops into a pipe path: within one room straight across it, otherwise through the hub. */
 export function routeThrough(stops: readonly Point[]): Point[] {
   if (stops.length < 2) return stops.slice();
   const out: Point[] = [stops[0]];
   for (let i = 1; i < stops.length; i++) {
     const a = stops[i - 1], b = stops[i], ra = roomAt(a), rb = roomAt(b);
-    if (ra && rb && ra.id === rb.id) { out.push(b); continue; } // within one room: straight across it
-    const A = access(a), B = access(b);
-    out.push(...A.inner, A.node, ...between(A.node, B.node), ...B.inner.slice().reverse(), b);
+    if (ra && rb && ra.id === rb.id) { out.push(b); continue; }
+    const sideOf = (p: Point): -1 | 1 => (p.x < 0 ? -1 : 1);
+    const up = toHub(a, sideOf(b)), down = toHub(b, sideOf(a)).reverse();
+    out.push(...up.slice(1), ...down.slice(1));
   }
-  return out.filter((p, i) => i === 0 || Math.hypot(p.x - out[i - 1].x, p.z - out[i - 1].z) > 0.01);
+  return dedupe(out);
 }
 
 /** Total length of a path (m). */
@@ -85,4 +107,14 @@ export function along(pts: readonly Point[], f: number): { p: Point; dir: Point 
     left -= l;
   }
   return { p: pts[pts.length - 1] ?? { x: 0, z: 0 }, dir: { x: 0, z: 1 } };
+}
+
+/**
+ * The pipe's height at a distance `s` (m) along a route of length `L`: under the ceiling, dropping to the end points over
+ * the first and last PIPE_DROP metres (where the intake or the agent is). A route shorter than two drops never reaches
+ * the ceiling (it arcs between its ends).
+ */
+export function pipeHeight(s: number, L: number): number {
+  const f = Math.max(0, Math.min(1, Math.min(s, L - s) / PIPE_DROP));
+  return PIPE_END_Y + (PIPE_Y - PIPE_END_Y) * f;
 }

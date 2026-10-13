@@ -18,7 +18,7 @@ export function workTargets(models: readonly AgentModel[], targets: ReadonlyMap<
   const byRoom = new Map<DepartmentId, string[]>();
   for (const m of [...models].sort((a, b) => (a.agent.id < b.agent.id ? -1 : 1))) {
     const id = m.agent.id, t = targets.get(id), st = stations.get(id);
-    if (!t || m.agent.status === "dead") continue;
+    if (!t || m.agent.status === "dead" || m.placement?.basis === "sleep") continue; // the dead and sleepers keep their own place (a bed)
     if (st && Math.hypot(st.x - t.x, st.z - t.z) < 0.05) continue; // at its own workstation
     const room = roomAt(t);
     if (!room || !spots[room.id]?.length) continue;

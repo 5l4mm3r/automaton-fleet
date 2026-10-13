@@ -28,6 +28,8 @@ import { VirtualMap, type Focus } from "./VirtualMap";
 import { INTAKE } from "./hq/route";
 import { agentTargetsWithStations, birthState, BIRTH_ENTER_MS, BIRTH_EVENTS, BIRTH_FUNDING_EVENTS, BIRTH_MARK_MS, BIRTH_POWER_MS, livePackets, packetFor, stationIndex, stationPoint, type Packet, type Point } from "./world";
 import { AgentLabels, type Projector } from "./AgentLabels";
+import { AgentRail } from "./AgentRail";
+import { fleetLevel } from "../command/departments";
 
 const Scene3D = lazy(() => import("./VirtualScene3D"));
 /** On first opening, events this recent still animate ("current events begin animating"); older ones are history. */
@@ -64,6 +66,9 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
   // Births (presentation only): agent id → when it came into being, from an authoritative new reading or birth event.
   const [births, setBirths] = useState<Map<string, number>>(() => new Map());
   const [clock, setClock] = useState(() => Date.now());
+  // The side list's durations ("on it", "alive") and levels advance with a slow clock (presentation only).
+  const [railNow, setRailNow] = useState(() => Date.now());
+  useEffect(() => { const t = setInterval(() => setRailNow(Date.now()), 30_000); return () => clearInterval(t); }, []);
 
   useEffect(() => {
     const t = setTimeout(() => { const h = readDeviceHints(); setHints(h); setPrefsState(loadPrefs(defaultPrefs(h))); }, 0);
@@ -203,7 +208,9 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
       {([["reduceMotion", "Reduce motion"], ["ambient", "Ambient animations"], ["dataFlow", "Data flow animations"], ["diagnostics", "Diagnostics overlay"]] as const).map(([k, l]) => <label key={k} className="flex items-center gap-2 pt-6"><input type="checkbox" checked={prefs[k]} onChange={(e) => setPrefs({ ...prefs, [k]: e.target.checked })} />{l}</label>)}
       <p className="text-xs text-slate-400 sm:col-span-3 lg:col-span-6">Display preferences are kept in this browser only and never change the Fleet.{webglFailed ? " The 3D view stopped (WebGL unavailable or lost), so the map is shown." : ""}</p>
     </div>}
-    <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
+    <div className="grid gap-4 xl:grid-cols-[17rem_1fr_380px]">
+      {/* The side list: every living agent; selecting one flies the camera to it (the same focus as clicking it). */}
+      <div className="order-2 xl:order-none"><AgentRail models={models} all={fleet.agents} selected={selectedAgent?.agent.id ?? null} now={railNow} onAgent={onAgent} onCommand={() => setFocus({ level: "department", id: "command" })} /></div>
       <div data-hq-viewport className={`relative h-[62vh] min-h-[360px] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 ${use3d ? "touch-none" : ""}`}>
         {use3d ? <SceneBoundary onError={() => setWebglFailed(true)}><Suspense fallback={<p className="p-5 text-sm text-slate-400">Loading the 3D facility…</p>}>
           <Scene3D {...sceneProps} screenFeed={screenFeed} redAlert={redAlert} teams={teams} onLost={() => setWebglFailed(true)} hoveredRoom={hoveredRoom} onHoverRoom={setHoveredRoom} /></Suspense></SceneBoundary>
@@ -212,7 +219,7 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
         <ol aria-live="polite" aria-label="Recent Fleet activity" className="pointer-events-none absolute bottom-3 left-3 z-50 max-w-[70%] space-y-1 text-xs">
           {ticker.map((v) => <li key={v.id} className="rounded bg-slate-950 px-2 py-1 text-slate-200">{utc(v.at, true).slice(11)} · {models.find((m) => m.agent.id === v.agentId)?.agent.name ?? "Fleet"} · {v.label}</li>)}
         </ol>
-        {use3d && <RoomLabels projectRef={project} visible={focus.level === "fleet"} hovered={hoveredRoom} onHover={setHoveredRoom} onRoom={onRoom} />}
+        {use3d && <RoomLabels projectRef={project} visible={focus.level === "fleet"} hovered={hoveredRoom} onHover={setHoveredRoom} onRoom={onRoom} commandLevel={fleetLevel(fleet.agents, railNow)} />}
         {/* Where you are: the location line (secondary) and, inside a room, its title and purpose (primary). */}
         {/* In the Treasury the card stays left of the banner's centred balance (the banner spans the back wall's top). */}
         <div className={`pointer-events-none absolute left-3 top-3 z-50 ${room?.id === "treasury" && focus.level === "department" ? "max-w-[min(34rem,36%)]" : "max-w-[min(34rem,70%)]"}`}>
@@ -230,11 +237,11 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
           <button type="button" aria-label="Zoom in" className="px-3 py-1 hover:bg-slate-800" onClick={() => zoom(0.8)}>+</button>
         </div>}
       </div>
-      <aside aria-label="Selection details" className="max-h-[62vh] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900/95 p-5">
+      <aside aria-label="Selection details" className="order-3 max-h-[62vh] overflow-y-auto xl:order-none rounded-2xl border border-slate-700 bg-slate-900/95 p-5">
         {focus.level === "agent" && selectedAgent ? <AgentPanel m={selectedAgent} fleet={fleet} view={view} control={control} go={go} loadLedger={loadLedger} />
           : focus.level === "department" ? <DepartmentPanel dep={focus.id} fleet={fleet} view={view} models={models} openAgent={onAgent} go={go} />
           : <div><p className="text-xs tracking-widest text-cyan-300">FLEET VIEW</p><h3 className="text-xl font-semibold">The Fleet, as it is</h3>
-            <p className="mt-2 text-sm text-slate-300">Select a room or an agent. Agents stand where their real work is (their mission, or their latest recorded activity); information travels between rooms only when FleetController records it.</p>
+            <p className="mt-2 text-sm text-slate-300">Select a room or an agent. Agents stand where their real work is (their mission, or their latest recorded activity); paused and hibernating agents sleep in Quarters. Information travels through the ceiling pipes and the Fleet Command hub only when FleetController records it. Agents with nothing to do stroll inside their room — that movement is cosmetic.</p>
             <ul className="mt-4 space-y-2 text-sm">{models.map((m) => <li key={m.agent.id}><button className="text-cyan-300 underline" onClick={() => onAgent(m.agent.id)}>{m.agent.name}</button> · {m.health.label} · {DEPARTMENT[m.placement.department].name}</li>)}</ul>
             {!models.length && <p className="text-sm text-slate-400">No agents in the Fleet.</p>}
             <h4 className="mt-5 text-xs tracking-widest text-cyan-300">DEPARTMENTS</h4>

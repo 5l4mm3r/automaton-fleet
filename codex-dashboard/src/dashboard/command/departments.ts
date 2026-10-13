@@ -8,6 +8,8 @@
  *   1. dead                      → Estate (its assets and data are inventoried there)
  *   2. provisioning              → Agent Floor (arriving)
  *   3. held by the Admin         → Agent Floor (HELD)
+ *   3a. asleep — the OWNER'S PAUSE (FleetController's cognition switch) → Quarters, "PAUSED BY OWNER"; a hibernation the
+ *      agent REPORTED → Quarters, "HIBERNATING". Two different states, never inferred: only the reading's own fields.
  *   4. an active temporary mission (the `agents` read's mode): MARKETING → Marketing, OPPORTUNITY_HUNT → Opportunity Lab,
  *      KNOWLEDGE_DATA → Library / Research   (simulation builds: the fictional role, mapped the same way)
  *   5. its most recent own event in the last ACTIVITY_WINDOW_MS, by event type (EVENT_DEPARTMENT)
@@ -15,7 +17,7 @@
  * An unknown mode or event type falls through to the next rule; it never throws.
  */
 
-export type DepartmentId = "command" | "treasury" | "opportunity" | "floor" | "marketing" | "library" | "venture" | "identity" | "estate" | "comms" | "security";
+export type DepartmentId = "command" | "treasury" | "opportunity" | "floor" | "marketing" | "library" | "venture" | "identity" | "estate" | "comms" | "security" | "quarters";
 
 export interface Department {
   id: DepartmentId;
@@ -34,22 +36,32 @@ export interface Department {
 }
 
 /**
- * The headquarters floor plan (world units ≈ metres): a connected complex — rooms on a grid with 3 m corridors between
- * them, Fleet Command at the head of the central spine, Security / Systems at its foot. Room sizes leave space for up to
- * 50 adult-scale operators and their furniture.
+ * The headquarters floor plan (world units ≈ metres), approved by the owner 2026-10-13: FLEET COMMAND IS THE HUB at the
+ * centre of the complex — every department is one corridor away from it, and information between departments passes
+ * through it (route.ts). Three columns (x = −21, 0, 21) and four rows with 4 m corridors between them; the hub opens on
+ * every side (north and south openings, side doors onto both spines).
+ *
+ *   Opportunity Lab   ·   Library            ·   Marketing
+ *   Treasury          ·   FLEET COMMAND      ·   Venture / Dev
+ *   Identity          ·   Agent Floor        ·   Comms
+ *   Quarters          ·   Estate (+ Hall)    ·   Security / Systems
+ *
+ * Room sizes leave space for up to 50 adult-scale operators and their furniture (the Agent Floor: 50 workstations;
+ * Quarters: 50 bunks).
  */
 export const DEPARTMENTS: readonly Department[] = Object.freeze([
-  { id: "command", name: "Fleet Command", x: 0, z: -30, w: 18, d: 10, purpose: "FleetController: decisions, policy and the control plane", accent: "#38bdf8", slotTop: 8.0 },
-  { id: "treasury", name: "Treasury", x: -18, z: -17, w: 14, d: 10, purpose: "Treasury cash, flows, allocations and contributions", accent: "#fbbf24" },
-  { id: "opportunity", name: "Opportunity Lab", x: 18, z: -17, w: 14, d: 10, purpose: "Opportunity hunting and signals under investigation", accent: "#a78bfa", slotTop: 3.8 },
-  { id: "floor", name: "Agent Floor", x: 0, z: -4, w: 18, d: 14, purpose: "Agents operating their businesses", accent: "#22d3ee" },
-  { id: "marketing", name: "Marketing", x: -18, z: 11, w: 14, d: 10, purpose: "Marketing missions and campaigns", accent: "#f472b6" },
-  { id: "library", name: "Library / Research", x: 0, z: 11, w: 16, d: 10, purpose: "Research missions and the Fleet's knowledge", accent: "#60a5fa" },
-  { id: "venture", name: "Venture / Dev", x: 18, z: 11, w: 14, d: 10, purpose: "Ventures being built, launched and operated", accent: "#34d399" },
-  { id: "identity", name: "Identity", x: -18, z: 24, w: 14, d: 10, purpose: "Agent identities and accounts (metadata only)", accent: "#c084fc" },
-  { id: "estate", name: "Estate Storage", x: 0, z: 24, w: 16, d: 10, purpose: "Assets and data of agents that died", accent: "#94a3b8" },
-  { id: "comms", name: "Comms", x: 18, z: 24, w: 14, d: 10, purpose: "Mail and SMS capability", accent: "#2dd4bf" },
-  { id: "security", name: "Security / Systems", x: 0, z: 37, w: 18, d: 9, purpose: "Health, alerts, runtime and capability state", accent: "#f87171" },
+  { id: "opportunity", name: "Opportunity Lab", x: -21, z: -26, w: 16, d: 10, purpose: "Opportunity hunting and signals under investigation", accent: "#a78bfa", slotTop: 3.8 },
+  { id: "library", name: "Library / Research", x: 0, z: -26, w: 18, d: 10, purpose: "Research missions and the Fleet's knowledge", accent: "#60a5fa" },
+  { id: "marketing", name: "Marketing", x: 21, z: -26, w: 16, d: 10, purpose: "Marketing missions and campaigns", accent: "#f472b6" },
+  { id: "treasury", name: "Treasury", x: -21, z: -11, w: 16, d: 12, purpose: "Treasury cash, flows, allocations and contributions", accent: "#fbbf24" },
+  { id: "command", name: "Fleet Command", x: 0, z: -11, w: 18, d: 12, purpose: "FleetController: the hub — decisions, policy and the control plane", accent: "#38bdf8", slotTop: 8.0 },
+  { id: "venture", name: "Venture / Dev", x: 21, z: -11, w: 16, d: 12, purpose: "Ventures being built, launched and operated", accent: "#34d399" },
+  { id: "identity", name: "Identity", x: -21, z: 7, w: 16, d: 16, purpose: "Agent identities and accounts (metadata only)", accent: "#c084fc" },
+  { id: "floor", name: "Agent Floor", x: 0, z: 7, w: 18, d: 16, purpose: "Agents operating their businesses", accent: "#22d3ee" },
+  { id: "comms", name: "Comms", x: 21, z: 7, w: 16, d: 16, purpose: "Mail and SMS capability", accent: "#2dd4bf" },
+  { id: "quarters", name: "Quarters", x: -21, z: 25, w: 16, d: 12, purpose: "Rest: a bunk for every living agent; paused and hibernating agents sleep here", accent: "#818cf8", slotTop: 2.0 },
+  { id: "estate", name: "Estate Storage", x: 0, z: 25, w: 18, d: 12, purpose: "Assets and data of agents that died — and the Hall of Survivors", accent: "#94a3b8" },
+  { id: "security", name: "Security / Systems", x: 21, z: 25, w: 16, d: 12, purpose: "Health, alerts, runtime and capability state", accent: "#f87171" },
 ]);
 
 export const DEPARTMENT: Readonly<Record<DepartmentId, Department>> = Object.freeze(Object.fromEntries(DEPARTMENTS.map((d) => [d.id, d])) as Record<DepartmentId, Department>);
@@ -85,13 +97,20 @@ export function eventDepartment(type: string): DepartmentId | null {
 export const ACTIVITY: Readonly<Record<DepartmentId, string>> = Object.freeze({
   command: "AT FLEET COMMAND", treasury: "SETTLING", opportunity: "OPPORTUNITY HUNT", floor: "OPERATING", marketing: "MARKETING",
   library: "RESEARCHING", venture: "BUILDING", identity: "IDENTITY SETUP", estate: "DEAD", comms: "COMMUNICATING", security: "SECURITY CHECK",
+  quarters: "RESTING",
 });
+
+/** Why an agent sleeps (from the reading itself; null = awake or not reported). The owner's pause outranks a hibernation. */
+export type SleepState = "owner_pause" | "hibernating";
+export const SLEEP_ACTIVITY: Readonly<Record<SleepState, string>> = Object.freeze({ owner_pause: "PAUSED BY OWNER", hibernating: "HIBERNATING" });
 
 export interface Placement {
   department: DepartmentId;
   activity: string;
   /** Which rule placed the agent (for the panel's "why here"). */
-  basis: "dead" | "provisioning" | "held" | "mission" | "event" | "default";
+  basis: "dead" | "provisioning" | "held" | "sleep" | "mission" | "event" | "default";
+  /** Since when the agent has been doing this (ms), when the reading shows it; null = not known (shown as —, never guessed). */
+  since?: number | null;
 }
 
 export interface PlaceableAgent {
@@ -100,6 +119,8 @@ export interface PlaceableAgent {
   /** LIVE: the `agents` read's mode (NORMAL or the mission). Simulation: its fictional role. */
   mode?: string | null;
   role?: string;
+  /** The owner's pause or a reported hibernation (only when the reading supplies it). */
+  sleep?: SleepState | null;
 }
 
 export interface AgentEventLike {
@@ -123,6 +144,7 @@ export function placeAgent(a: PlaceableAgent, latest: AgentEventLike | undefined
   if (a.status === "dead" || a.status === "failed") return { department: "estate", activity: ACTIVITY.estate, basis: "dead" };
   if (a.status === "provisioning") return { department: "floor", activity: "PROVISIONING", basis: "provisioning" };
   if (a.status === "held") return { department: "floor", activity: "HELD", basis: "held" };
+  if (a.sleep === "owner_pause" || a.sleep === "hibernating") return { department: "quarters", activity: SLEEP_ACTIVITY[a.sleep], basis: "sleep", since: null };
   const key = String(a.mode ?? a.role ?? "").trim().toUpperCase();
   const byMode = MODE_DEPARTMENT[key] ?? MODE_DEPARTMENT[key.replace(/ /g, "_")] ?? MODE_DEPARTMENT[key.replace(/_/g, " ")];
   if (byMode) return { department: byMode, activity: ACTIVITY[byMode], basis: "mission" };
@@ -130,10 +152,33 @@ export function placeAgent(a: PlaceableAgent, latest: AgentEventLike | undefined
     const t = Date.parse(latest.at);
     const dep = eventDepartment(latest.type);
     if (dep && dep !== "estate" && Number.isFinite(t) && now - t <= ACTIVITY_WINDOW_MS && t <= now + 60_000) {
-      return { department: dep, activity: ACTIVITY[dep], basis: "event" };
+      return { department: dep, activity: ACTIVITY[dep], basis: "event", since: t };
     }
+    // Back on the Agent Floor once that event's window closed (known only because the event itself is known).
+    if (dep && dep !== "estate" && Number.isFinite(t) && t + ACTIVITY_WINDOW_MS <= now) return { department: "floor", activity: ACTIVITY.floor, basis: "default", since: t + ACTIVITY_WINDOW_MS };
   }
-  return { department: "floor", activity: ACTIVITY.floor, basis: "default" };
+  return { department: "floor", activity: ACTIVITY.floor, basis: "default", since: null };
+}
+
+// ── Levels (display only) ────────────────────────────────────────────────────────────────────────────────────────
+// A level is how long an agent has survived: Lv = whole days alive + 1 (Lv 1 on its first day). It DISPLAYS real elapsed
+// time only — no unlock, permission, economic or state effect anywhere. Unknown creation time → null (shown —).
+export const DAY_MS = 86_400_000;
+export function levelOf(createdAt: string | null | undefined, until: number = Date.now()): number | null {
+  const t = createdAt ? Date.parse(createdAt) : NaN;
+  if (!Number.isFinite(t) || !Number.isFinite(until) || until < t) return null;
+  return Math.floor((until - t) / DAY_MS) + 1;
+}
+/** Fleet Command's level: days since the Fleet's first agent was created + 1 (null without any creation time). */
+export function fleetLevel(agents: ReadonlyArray<{ createdAt?: string | null }>, now: number = Date.now()): number | null {
+  const ts = agents.map((a) => (a.createdAt ? Date.parse(a.createdAt) : NaN)).filter(Number.isFinite);
+  return ts.length ? levelOf(new Date(Math.min(...ts)).toISOString(), now) : null;
+}
+/** A duration for people: "3d 4h", "5h 12m", "42m" — or "—" when unknown. */
+export function span(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "—";
+  const m = Math.floor(ms / 60_000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  return d > 0 ? `${d}d ${h % 24}h` : h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
 }
 
 /**
