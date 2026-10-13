@@ -115,6 +115,7 @@
  *   economy-ai-credit-opening                                                (v69) once after the cutover: AI costs charged before v69 become owed to the owner
  *   economy-ai-credit-historical-preview <provider> <credit> <total>        (v73) read-only: the tax share of AI charges made before the lots, by payer; unattributed ones
  *   economy-ai-credit-historical-cost <provider> <credit> <total> <evidence…>  (v73) once: post it (agent / treasury as originally attributed; owed to the owner)
+ *   economy-ai-credit-test-period-preview | economy-ai-credit-test-period-writeoff  (v74) once, all agents paused: pre-launch AI cost → the Fleet; owner payable → contribution
  *   economy-capital-backing                                                  (v66) the existing capital: virtual, provider-paid, backed, unbacked; books vs PayPal
  *   economy-capital-back <railId> <txnId> <eventCode>                        (v66) a PayPal deposit backs the existing capital (no second credit; any excess is owner funding)
  *   owner-identity-autonomy [on|off] [--classes c1,c2] [--card on|off] [--card-max n] [--card-daily n] [--exclude https://a,https://b] [statement…]
@@ -167,7 +168,7 @@ export const HUB_COMMANDS = new Set([
   // v66 – v72 (missing until 2026-10-12: these were unreachable from fleet:admin)
   "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
-  "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost",
+  "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -339,6 +340,10 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-ai-credit-historical-cost":
       if (p.length < 4 || !/^\d{1,9}$/.test(p[1]) || !/^\d{1,9}$/.test(p[2])) throw new Error("usage: economy-ai-credit-historical-cost <provider> <creditUsdCents> <totalChargedUsdCents> <evidence…>");
       return h.aiCreditHistoricalCost(p[0], Number(p[1]), Number(p[2]), p.slice(3).join(" "), actor);
+    case "economy-ai-credit-test-period-preview":
+      return h.aiCreditTestPeriodPreview();
+    case "economy-ai-credit-test-period-writeoff":
+      return h.aiCreditTestPeriodWriteoff(actor);
     case "economy-ai-credit-opening":
       return h.aiCreditOpening(actor);
     case "economy-capital-backing":

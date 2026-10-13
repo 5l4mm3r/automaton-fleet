@@ -195,6 +195,9 @@ export class PgHubAdmin {
   aiCreditHistoricalCost(provider: string, creditUsdCents: number, totalUsdCents: number, evidence: string, actor: string) {
     return this.one(`SELECT fleet_admin_ai_credit_historical_cost($1, $2, $3, $4, $5) AS r`, [provider, creditUsdCents, totalUsdCents, evidence, actor]);
   }
+  // v74: pre-launch test costs written off once (preview is read-only).
+  aiCreditTestPeriodPreview() { return this.one(`SELECT fleet_ai_credit_test_period_preview() AS r`); }
+  aiCreditTestPeriodWriteoff(actor: string) { return this.one(`SELECT fleet_admin_ai_credit_test_period_writeoff($1) AS r`, [actor]); }
   aiCreditOpening(actor: string) { return this.one(`SELECT fleet_admin_ai_credit_opening($1) AS r`, [actor]); }
   capitalBack(railId: string, txnId: string, eventCode: string, actor: string) {
     return this.one(`SELECT fleet_admin_capital_back($1, $2, $3, $4) AS r`, [railId, txnId, eventCode, actor]);

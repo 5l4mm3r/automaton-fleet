@@ -922,3 +922,13 @@ opening owes to the owner at the pre-tax price) had no tax share. `fleet_admin_a
 - once: `fleet_ai_credit_historical_costs` (one row per corrected journal) and `fleet_ai_credit_historical_runs` (a single
   row); a second call returns the first run. `fleet_ai_credit_historical_preview` is read-only.
 - Also: the v66 – v72 capital-backing and AI-credit commands are routed from `fleet:admin` (they had handlers but no route).
+
+## 29. Schema v74 — pre-launch test costs written off (owner decision, 2026-10-13)
+"Agents don't owe me anything for testing fees"; "Nothing is owed and withdrawal of fees will always solve that for future
+expenses". `economy-ai-credit-test-period-writeoff` (once; refused unless every living agent is paused — resuming is the
+launch): each agent's AI cost so far (pre-tax charges and their v73 tax share) moves to the Fleet (D agent cash / C agent
+expense; D Fleet expense / C treasury unallocated — recognised once, now as the Fleet's launch cost); the owner payable for
+that credit becomes the owner's contribution (D owner payable / C owner capital) and the cash held for it is released
+(D treasury unallocated / C owner-reimbursable); carried sub-penny tax is waived. The capital to back is unchanged. After
+launch: v69 (owner-funded credit owed to the owner, settled by fee withdrawals) and v72 (agents bear their own work) apply.
+`economy-ai-credit-test-period-preview` is read-only.

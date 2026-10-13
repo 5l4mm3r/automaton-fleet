@@ -38,6 +38,7 @@ import { EVENT_ROUTES_V70 } from "../../fleet/postgres/migrations-phase70.js";
 import { EVENT_ROUTES_V71 } from "../../fleet/postgres/migrations-phase71.js";
 import { EVENT_ROUTES_V72 } from "../../fleet/postgres/migrations-phase72.js";
 import { EVENT_ROUTES_V73 } from "../../fleet/postgres/migrations-phase73.js";
+import { EVENT_ROUTES_V74 } from "../../fleet/postgres/migrations-phase74.js";
 import { CommandFeed } from "../../../codex-dashboard/src/dashboard/command/panels";
 import { toFleetEvent, type FleetEvent } from "../../../codex-dashboard/src/dashboard/command/events";
 
@@ -48,7 +49,7 @@ describe("the routing table", () => {
   it("names each event type once, and routes every event type the code emits explicitly", () => {
     const all = [...Object.values(EVENT_ROUTES).flat(), ...Object.values(EVENT_ROUTES_V46).flat(), ...Object.values(EVENT_ROUTES_V47).flat(),
       ...Object.values(EVENT_ROUTES_V48).flat(), ...Object.values(EVENT_ROUTES_V49).flat(), ...Object.values(EVENT_ROUTES_V50).flat(),
-      ...Object.values(EVENT_ROUTES_V51).flat(), ...Object.values(EVENT_ROUTES_V52).flat(), ...Object.values(EVENT_ROUTES_V53).flat(), ...Object.values(EVENT_ROUTES_V54).flat(), ...Object.values(EVENT_ROUTES_V55).flat(), ...Object.values(EVENT_ROUTES_V56).flat(), ...Object.values(EVENT_ROUTES_V57).flat(), ...Object.values(EVENT_ROUTES_V58).flat(), ...Object.values(EVENT_ROUTES_V59).flat(), ...Object.values(EVENT_ROUTES_V60).flat(), ...Object.values(EVENT_ROUTES_V62).flat(), ...Object.values(EVENT_ROUTES_V63).flat(), ...Object.values(EVENT_ROUTES_V64).flat(), ...Object.values(EVENT_ROUTES_V65).flat(), ...Object.values(EVENT_ROUTES_V66).flat(), ...Object.values(EVENT_ROUTES_V68).flat(), ...Object.values(EVENT_ROUTES_V69).flat(), ...Object.values(EVENT_ROUTES_V70).flat(), ...Object.values(EVENT_ROUTES_V71).flat(), ...Object.values(EVENT_ROUTES_V72).flat(), ...Object.values(EVENT_ROUTES_V73).flat()];
+      ...Object.values(EVENT_ROUTES_V51).flat(), ...Object.values(EVENT_ROUTES_V52).flat(), ...Object.values(EVENT_ROUTES_V53).flat(), ...Object.values(EVENT_ROUTES_V54).flat(), ...Object.values(EVENT_ROUTES_V55).flat(), ...Object.values(EVENT_ROUTES_V56).flat(), ...Object.values(EVENT_ROUTES_V57).flat(), ...Object.values(EVENT_ROUTES_V58).flat(), ...Object.values(EVENT_ROUTES_V59).flat(), ...Object.values(EVENT_ROUTES_V60).flat(), ...Object.values(EVENT_ROUTES_V62).flat(), ...Object.values(EVENT_ROUTES_V63).flat(), ...Object.values(EVENT_ROUTES_V64).flat(), ...Object.values(EVENT_ROUTES_V65).flat(), ...Object.values(EVENT_ROUTES_V66).flat(), ...Object.values(EVENT_ROUTES_V68).flat(), ...Object.values(EVENT_ROUTES_V69).flat(), ...Object.values(EVENT_ROUTES_V70).flat(), ...Object.values(EVENT_ROUTES_V71).flat(), ...Object.values(EVENT_ROUTES_V72).flat(), ...Object.values(EVENT_ROUTES_V73).flat(), ...Object.values(EVENT_ROUTES_V74).flat()];
     expect(all.length).toBe(new Set(all).size);
     const dir = path.join(process.cwd(), "src", "fleet");
     const emitted = new Set<string>();
