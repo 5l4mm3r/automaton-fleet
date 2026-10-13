@@ -115,7 +115,8 @@
  *   economy-ai-credit-opening                                                (v69) once after the cutover: AI costs charged before v69 become owed to the owner
  *   economy-ai-credit-historical-preview <provider> <credit> <total>        (v73) read-only: the tax share of AI charges made before the lots, by payer; unattributed ones
  *   economy-ai-credit-historical-cost <provider> <credit> <total> <evidence…>  (v73) once: post it (agent / treasury as originally attributed; owed to the owner)
- *   economy-ai-credit-test-period-preview | economy-ai-credit-test-period-writeoff  (v74) once, all agents paused: pre-launch AI cost → the Fleet; owner payable → contribution
+ *   economy-ai-credit-test-period-preview | economy-ai-credit-test-period-writeoff  (v74) pre-launch AI cost → the Fleet; owner payable waived as contributed capital (each journal once; never past the launch)
+ *   economy-launch-boundary | economy-launch-boundary-record <note…>         (v74) the explicit launch boundary (owner, once)
  *   economy-capital-backing                                                  (v66) the existing capital: virtual, provider-paid, backed, unbacked; books vs PayPal
  *   economy-capital-back <railId> <txnId> <eventCode>                        (v66) a PayPal deposit backs the existing capital (no second credit; any excess is owner funding)
  *   owner-identity-autonomy [on|off] [--classes c1,c2] [--card on|off] [--card-max n] [--card-daily n] [--exclude https://a,https://b] [statement…]
@@ -169,6 +170,7 @@ export const HUB_COMMANDS = new Set([
   "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
+  "economy-launch-boundary", "economy-launch-boundary-record",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -344,6 +346,11 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.aiCreditTestPeriodPreview();
     case "economy-ai-credit-test-period-writeoff":
       return h.aiCreditTestPeriodWriteoff(actor);
+    case "economy-launch-boundary":
+      return (await h.launchBoundary()) ?? { recorded: false };
+    case "economy-launch-boundary-record":
+      if (p.length < 1) throw new Error("usage: economy-launch-boundary-record <note…>  (once: the moment the Fleet launched; independent of pausing or resuming agents)");
+      return h.launchBoundaryRecord(p.join(" "), actor);
     case "economy-ai-credit-opening":
       return h.aiCreditOpening(actor);
     case "economy-capital-backing":

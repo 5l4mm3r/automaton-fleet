@@ -1,10 +1,10 @@
 /**
- * Schema v74 — pre-launch test costs written off once (PostgreSQL; no provider, no money moves):
- *  - refused while any living agent is not paused (resuming is the launch);
- *  - each agent's AI cost so far (pre-tax charges + the v73 tax share) moves to the Fleet: the agent's cash is whole again,
- *    the expense is recognised once (now Fleet expense);
- *  - the owner payable for that credit becomes the owner's contribution; the cash held for it returns to the treasury;
- *  - carried sub-penny tax is waived; the capital to back does not change; once only.
+ * Schema v74 — pre-launch test costs written off (PostgreSQL; no provider, no money moves):
+ *  - the launch boundary is an explicit owner record (once, immutable), independent of pausing or resuming agents;
+ *  - the write-off covers AI-cost journals recorded before the boundary (or before now while none is recorded), each at
+ *    most once: agents' AI cost moves to the Fleet (recognised once), the owner payable for it is waived as contributed
+ *    capital and its held cash released, carried sub-penny tax for that usage waived; the capital to back is unchanged;
+ *  - nothing after the boundary is ever covered.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
@@ -59,8 +59,9 @@ describe.skipIf(!PG_BIN)("v74: pre-launch test costs written off (PostgreSQL)", 
   }, 300_000);
   afterAll(async () => { await su?.end(); await R?.close(); });
 
-  const pausedAll = (paused: boolean) => R.one(`fleet.fleet_founder_cognition_set($1, true, $2, NULL, NULL, 'test', $3)`, [F.id, paused, OWNER]);
   const writeoff = () => R.one<Record<string, any>>(`fleet.fleet_admin_ai_credit_test_period_writeoff($1)`, [OWNER]);
+  const tpPreview = () => R.one<Record<string, any>>(`fleet.fleet_ai_credit_test_period_preview()`);
+  const resume = (paused: boolean) => R.one(`fleet.fleet_founder_cognition_set($1, true, $2, NULL, NULL, 'test', $3)`, [F.id, paused, OWNER]);
 
   it("migrates to v74 with a clean audit; the pre-launch history is costed as in production (v69 opening, v73 tax share)", async () => {
     expect(FLEET_PG_SCHEMA_VERSION).toBeGreaterThanOrEqual(74);
@@ -73,20 +74,13 @@ describe.skipIf(!PG_BIN)("v74: pre-launch test costs written off (PostgreSQL)", 
     expect(await bal("fleet:owner:payable")).toBe(1_088 + 201);
   });
 
-  it("is refused while an agent is not paused (resuming is the launch)", async () => {
-    await pausedAll(false);
-    const p = await R.one<Record<string, any>>(`fleet.fleet_ai_credit_test_period_preview()`);
-    expect(p.refused).toMatch(/must still be paused/);
-    expect(await R.code(writeoff())).toBe("FLEET_BAD_REQUEST");
-    await pausedAll(true);
-    expect((await R.one<Record<string, any>>(`fleet.fleet_ai_credit_test_period_preview()`)).refused).toBeNull();
-  });
-
-  it("moves the agents' pre-launch AI cost to the Fleet and writes the owner payable off as contribution — once", async () => {
+  it("before launch: agents made whole, the payable waived as contributed capital, backing unchanged — each journal once (resuming is not launch)", async () => {
+    await resume(false);                                                       // an agent resumed: NOT a launch boundary
+    expect((await tpPreview()).launchBoundary).toBeNull();
     const cash0 = await bal(`agent:${F.id}:cash`), fexp0 = await bal("fleet:expense"), cap0 = await bal("fleet:owner:capital");
     const unalloc0 = await bal("fleet:treasury:unallocated"), back0 = await R.one<Record<string, any>>(`fleet.fleet_capital_backing()`);
     const r = await writeoff();
-    expect(r).toMatchObject({ ok: true, agentsMinor: { [F.id]: 1_258 }, agentsTotalMinor: 1_258, ownerPayableWrittenOffMinor: 1_289, waivedCarriedMicro: 600_000 });
+    expect(r).toMatchObject({ ok: true, boundary: false, agentsMinor: { [F.id]: 1_258 }, agentsTotalMinor: 1_258, ownerPayableWaivedMinor: 1_289, waivedCarriedMicro: 600_000 });
     expect(await bal(`agent:${F.id}:cash`)).toBe(cash0 + 1_258);
     expect(await bal(`agent:${F.id}:expense`)).toBe(0);
     expect(await bal("fleet:expense")).toBe(fexp0 + 1_258);                     // recognised once: moved, not added
@@ -98,11 +92,27 @@ describe.skipIf(!PG_BIN)("v74: pre-launch test costs written off (PostgreSQL)", 
     const back1 = await R.one<Record<string, any>>(`fleet.fleet_capital_backing()`);
     expect([back1.unbackedMinor, back1.booksCashMinor]).toEqual([back0.unbackedMinor, back0.booksCashMinor]);
     expect(await R.one(`fleet.fleet_ledger_verify() ->> 'ok'`)).toBe("true");
-    // once
-    const again = await writeoff();
-    expect(again).toMatchObject({ ok: true, already: true, agentsTotalMinor: 1_258 });
+    // again: nothing new to cover
+    expect(await writeoff()).toMatchObject({ ok: true, nothingToCover: true });
     expect(await bal(`agent:${F.id}:cash`)).toBe(cash0 + 1_258);
-    expect((await R.one<Record<string, any>>(`fleet.fleet_ai_credit_test_period_preview()`)).refused).toBe("already written off");
+    expect(await R.code(R.q(`UPDATE fleet.fleet_ai_credit_test_period_items SET agent_minor = 0`))).toMatch(/FLEET_/);
+  });
+
+  it("a later pre-launch cost is covered by a second run; after the recorded launch nothing is — and the boundary never moves", async () => {
+    const pre = await charge("inference_charge", 40, F.id); await cognition(pre);
+    expect(await writeoff()).toMatchObject({ ok: true, journalsCovered: 1, agentsTotalMinor: 40, ownerPayableWaivedMinor: 0 });
+    const b = await R.one<Record<string, any>>(`fleet.fleet_admin_launch_boundary_record('Agent-1 resumed: launch', $1)`, [OWNER]);
+    expect(b).toMatchObject({ ok: true });
+    expect(await R.one(`fleet.fleet_admin_launch_boundary_record('again', $1)`, [OWNER])).toMatchObject({ already: true, launchedAt: b.launchedAt });
+    expect(await R.code(R.q(`UPDATE fleet.fleet_launch_boundary SET launched_at = now() + interval '1 day'`))).toMatch(/FLEET_/);
+    const cash0 = await bal(`agent:${F.id}:cash`);
+    const post = await charge("inference_charge", 25, F.id); await cognition(post);     // after launch: the agent's own work
+    const p = await tpPreview();
+    expect(p).toMatchObject({ journals: 0, agentsTotalMinor: 0, launchBoundary: { note: "Agent-1 resumed: launch" } });
+    expect(await writeoff()).toMatchObject({ ok: true, nothingToCover: true });
+    expect(await bal(`agent:${F.id}:cash`)).toBe(cash0 - 25);
+    expect(await bal(`agent:${F.id}:expense`)).toBe(25);
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'fleet_launch_boundary_recorded')`))).toBe(1);
     expect([reviewJ, agentJ, otherProviderJ, noEvidenceJ].every(Boolean)).toBe(true);
   });
 });

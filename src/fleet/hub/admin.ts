@@ -198,6 +198,8 @@ export class PgHubAdmin {
   // v74: pre-launch test costs written off once (preview is read-only).
   aiCreditTestPeriodPreview() { return this.one(`SELECT fleet_ai_credit_test_period_preview() AS r`); }
   aiCreditTestPeriodWriteoff(actor: string) { return this.one(`SELECT fleet_admin_ai_credit_test_period_writeoff($1) AS r`, [actor]); }
+  launchBoundaryRecord(note: string, actor: string) { return this.one(`SELECT fleet_admin_launch_boundary_record($1, $2) AS r`, [note, actor]); }
+  launchBoundary() { return this.one(`SELECT to_jsonb(b) - 'id' AS r FROM fleet_launch_boundary b WHERE id = 1`); }
   aiCreditOpening(actor: string) { return this.one(`SELECT fleet_admin_ai_credit_opening($1) AS r`, [actor]); }
   capitalBack(railId: string, txnId: string, eventCode: string, actor: string) {
     return this.one(`SELECT fleet_admin_capital_back($1, $2, $3, $4) AS r`, [railId, txnId, eventCode, actor]);

@@ -923,12 +923,16 @@ opening owes to the owner at the pre-tax price) had no tax share. `fleet_admin_a
   row); a second call returns the first run. `fleet_ai_credit_historical_preview` is read-only.
 - Also: the v66 – v72 capital-backing and AI-credit commands are routed from `fleet:admin` (they had handlers but no route).
 
-## 29. Schema v74 — pre-launch test costs written off (owner decision, 2026-10-13)
-"Agents don't owe me anything for testing fees"; "Nothing is owed and withdrawal of fees will always solve that for future
-expenses". `economy-ai-credit-test-period-writeoff` (once; refused unless every living agent is paused — resuming is the
-launch): each agent's AI cost so far (pre-tax charges and their v73 tax share) moves to the Fleet (D agent cash / C agent
-expense; D Fleet expense / C treasury unallocated — recognised once, now as the Fleet's launch cost); the owner payable for
-that credit becomes the owner's contribution (D owner payable / C owner capital) and the cash held for it is released
-(D treasury unallocated / C owner-reimbursable); carried sub-penny tax is waived. The capital to back is unchanged. After
-launch: v69 (owner-funded credit owed to the owner, settled by fee withdrawals) and v72 (agents bear their own work) apply.
-`economy-ai-credit-test-period-preview` is read-only.
+## 29. Schema v74 — pre-launch test costs written off; explicit launch boundary (owner decisions, 2026-10-13)
+"Agents don't owe me anything for testing fees"; the £21.87 AI-credit payable is waived as contributed capital; future
+reimbursement stays separate from fee withdrawals; an explicit launch boundary rather than "any resume".
+- Launch boundary: `economy-launch-boundary-record <note>` (owner, once, immutable; P2 event). Pausing or resuming an agent
+  never sets or moves it.
+- `economy-ai-credit-test-period-writeoff` covers the AI-cost journals recorded before the boundary (before now while none
+  is recorded), each journal at most once (it may run again before launch; never past the boundary): agents' AI cost →
+  Fleet expense (D agent cash / C agent expense; D Fleet expense / C treasury unallocated — recognised once, moved); the
+  owner payable those journals created → contributed capital (D owner payable / C owner capital) with the held cash
+  released (D treasury unallocated / C owner-reimbursable); sub-penny tax carried for that usage waived (recorded).
+  `economy-ai-credit-test-period-preview` is read-only. The capital to back is unchanged.
+- After the boundary: owner-funded AI credit is owed to the owner as used (v69) and reimbursed only by its own authorised
+  owner payment — never netted against fee withdrawals; agents bear their own work (v72).

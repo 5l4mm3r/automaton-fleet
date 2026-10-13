@@ -1236,6 +1236,10 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_ai_credit_historical_costs: new Set(["fleet_admin_ai_credit_historical_cost"]),
     fleet_ai_credit_historical_runs: new Set(["fleet_admin_ai_credit_historical_cost"]),
     fleet_ai_credit_test_period_runs: new Set(["fleet_admin_ai_credit_test_period_writeoff"]),
+    fleet_ai_credit_test_period_items: new Set(["fleet_admin_ai_credit_test_period_writeoff"]),
+    fleet_ai_credit_test_period_waivers: new Set(["fleet_admin_ai_credit_test_period_writeoff"]),
+    // v74: the launch boundary, recorded once by the owner (independent of any agent's pause or resume).
+    fleet_launch_boundary: new Set(["fleet_admin_launch_boundary_record"]),
     fleet_ai_credit_reconciliations: new Set(["fleet_admin_ai_credit_balance_reconcile"]),
     fleet_ai_credit_policy: new Set(["fleet_admin_ai_credit_policy_set"]),
     fleet_ai_credit_policy_history: new Set(["fleet_admin_ai_credit_policy_set"]),
