@@ -7,7 +7,7 @@
  *    passes an acceptance case (inputs → expected totals), is reviewed, published, bought and delivered byte-identical.
  * 2. Downloadable course (a ZIP of PDF lessons + a workbook): a placeholder inside one lesson fails the bundle with the
  *    member and the reason; the fixed course is reviewed, sold and delivered intact. Recorded limitation: a technically
- *    clean but thin PDF also inspects clean — the inspector does not judge substance.
+ *    clean but thin PDF passes — it is flagged (sparse_pages, advisory) but the inspector does not judge substance.
  * 3. Service: a real work sample's review publishes it; the buyer's CSV reaches the workspace (path, never bytes); the
  *    workbook is built from it and an acceptance case checks the buyer's own numbers; delivered; a revision request makes
  *    the earlier review stale; the revised work is delivered on a fresh review; both versions stay on the order page.
@@ -151,6 +151,8 @@ describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: product, course
     const i2 = JSON.parse((await tool("deliverable", { op: "inspect", args: { paths: ["deliver/cashflow.xlsx"], cases } })).output);
     expect(i2, JSON.stringify(i2)).toMatchObject({ ok: true, files: [{ type: "xlsx", ok: true }] });
     expect(i2.files[0].issues.join(" ")).not.toMatch(/FAIL/);
+    // Advisory presentation findings on this deliberately plain workbook (no number formats, plain headers); not a failure.
+    expect(i2.files[0].issues.join(" ")).toMatch(/WARN presentation: every number and formula cell is in General format/);
     const bytes = fs.readFileSync(path.join(ws, "deliver/cashflow.xlsx"));
 
     // 3. The offer, its file from the workspace, the review of exactly those bytes, publication.
@@ -277,6 +279,8 @@ print("BUILT")
     expect((await tool("exec", { command: "python3 thin.py" })).output).toContain("BUILT");
     const thin = JSON.parse((await tool("deliverable", { op: "inspect", args: { paths: ["deliver/thin.pdf"] } })).output);
     expect(thin.ok).toBe(true);
+    // …but it is flagged (advisory): content fills a sliver of the page. Flagged, not blocked — the judgement stays the agent's.
+    expect(thin.files[0].issues.join(" ")).toMatch(/WARN sparse_pages/);
   });
 
   it("a service: sample review publishes it; the buyer's file reaches the workspace; the work is built from it, checked against the buyer's numbers, delivered; a revision needs a fresh review", async (ctx) => {

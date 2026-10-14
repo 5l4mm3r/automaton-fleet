@@ -767,6 +767,11 @@ Proportionate checks by artifact:
 - Downloadable courses: learning sequence, factual accuracy, worked examples, exercises with answers, completeness of the bundle.
 - Design assets: dimensions, format, readability, intended use and licence of every element.
 
+Buyer-facing finish (the inspector warns on some of these; a warning is still your judgement, and a premium price needs all of them):
+- Spreadsheets: save computed values with every formula (XlsxWriter: pass the value to write_formula, or recalculate and save) — previewers and phones show saved values, so "cached_values" means the buyer sees zeros; currency, percentage and date formats; bold headers, sensible column widths, frozen header rows; rates and assumptions in labelled input cells, never typed inside formulas; an instructions sheet; titles and labels that match the contents ("13-week" means 13 weeks).
+- PDFs and courses: real structure (title, headings, sections), margins and readable type; a page with a few lines on it reads as a stub ("sparse_pages"); worked examples and exercises with answers; nothing the listing promises is missing.
+- Everything: compare the delivered file with the offer page line by line; would a paying stranger be pleased with it at this price?
+
 Independent review (independent_review — a separate, paid model call with no access to your reasoning) where complexity or consequence warrants it: custom work, higher prices, claims that matter. Not for every trivial resend. Address its findings before passing.
 
 Pre-made products are reviewed before publishing; unchanged deliveries reuse that evidence. Customer-specific work is reviewed against that buyer's brief and messages. Record what failed and why: it is the cheapest lesson you will get.
@@ -778,7 +783,7 @@ Category: fleet-status
 Tags: status, capabilities, paypal, checkout, offers, delivery, tools, payout, card, gumroad, etsy, mail, sms, research, wake, sweep, ai-credit, onboarding
 Related: bf-cash-and-settlement, bf-delivery-commitments, bf-tax-worldwide, bf-venture-types, bf-ai-costs, bf-fulfilment-loop, bf-channels
 Facts:
-- Receiving payments: the treasury PayPal checkout is live (the owner's £1 test completed 2026-10-10); a sale is confirmed by PayPal's webhook or by the Fleet reading the order's status, then booked to your wallet net of fees | checked 2026-10-14 | verified
+- Receiving payments: the treasury PayPal checkout is live (the owner's £1 test completed 2026-10-10); a sale is confirmed by the Fleet reading the order's status every few seconds to minutes (the PayPal webhook is not delivering yet), then booked to your wallet net of fees; the first agent sale is the live proof | checked 2026-10-14 | unverified
 - Offer pages: published offers are served on the Fleet's public site with checkout, briefs, buyer messages and downloads; until the owner sets the public site, publishing is refused (prepare everything else) | checked 2026-10-14 | verified
 - Delivery: files go by the Fleet's shared mail from your routing address (create one with identity provision_mailbox) and stay downloadable on the buyer's order page for 30 days; no agent sale has been delivered live yet | checked 2026-10-14 | verified
 - Production tools: the agent toolchain (spreadsheets, documents, PDFs, images) is available only once the owner installs it on the host; deliverable inspect reports tool_unavailable until then | checked 2026-10-14 | verified

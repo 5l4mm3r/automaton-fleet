@@ -266,6 +266,36 @@ def cases_not_run(r, cases, status, why):
         r.check("case:%s" % (cs.get("name") or i + 1), status, "not run: " + why)
 
 
+HARDCODED = re.compile(r"(?<![A-Za-z$:!])[*/]\s*\d+(?:\.\d+)?(?![\d:A-Za-z(])")
+
+
+def presentation(r, wb, formulas_at):
+    """Advisory only (warn): what a buyer sees before any number is checked. Never blocks a review on its own."""
+    notes = []
+    nums = general = 0
+    plain_headers = []
+    for ws in wb.worksheets:
+        if ws.sheet_state != "visible":
+            continue
+        for row in ws.iter_rows():
+            for c in row:
+                if isinstance(c.value, (int, float)) and not isinstance(c.value, bool) or c.data_type == "f":
+                    nums += 1
+                    if c.number_format == "General":
+                        general += 1
+        first = [c for c in next(ws.iter_rows(min_row=1, max_row=1), []) if isinstance(c.value, str) and c.value.strip()]
+        if len(first) >= 2 and not any(c.font is not None and c.font.b for c in first):
+            plain_headers.append(ws.title)
+    if nums >= 4 and general == nums:
+        notes.append("every number and formula cell is in General format (no currency, percentage or date formats)")
+    if plain_headers:
+        notes.append("header row not bold on: " + ", ".join(plain_headers[:10]))
+    hard = ["%s!%s %s" % (k[0], k[1], f[:40]) for k, f in formulas_at.items() if HARDCODED.search(f)]
+    if hard:
+        notes.append("%d formula(s) multiply/divide by a typed constant (put rates in a labelled input cell): %s" % (len(hard), "; ".join(hard[:10])))
+    r.check("presentation", "warn" if notes else "pass", " | ".join(notes) if notes else "number formats, headers and formula inputs look deliberate")
+
+
 def inspect_xlsx(r, path, cases):
     with zipfile.ZipFile(path) as z:
         if not zip_safety(r, z):
@@ -325,6 +355,7 @@ def inspect_xlsx(r, path, cases):
         dn = [d.name for d in getattr(wb.defined_names, "definedName", [])]
     r.facts.update({"sheets": sheets, "formulaCount": len(formulas_at), "definedNames": dn[:100],
                     "chartCount": sum(s["charts"] for s in sheets), "dataValidationCount": sum(s["dataValidations"] for s in sheets)})
+    presentation(r, wb, formulas_at)
     scan_placeholders(r, "\n".join(text))
     if not formulas_at:
         r.check("formula_errors", "fail" if cached_err else "pass", ("error values: " + ", ".join(cached_err[:50])) if cached_err else "no formulas")
@@ -577,19 +608,26 @@ def inspect_pdf(r, path, render_dir, tag):
     try:
         doc = pdfium.PdfDocument(path)
         n = min(3, len(doc))
-        blank, rendered = [], []
+        blank, rendered, sparse = [], [], []
         os.makedirs(render_dir, exist_ok=True)
         for i in range(n):
             img = doc[i].render(scale=1).to_pil()
             out = os.path.join(render_dir, "%s-p%d.png" % (tag, i + 1))
             img.save(out)
             rendered.append(os.path.relpath(out, ROOT))
-            lo, hi = img.convert("L").getextrema()
+            g = img.convert("L")
+            lo, hi = g.getextrema()
             if lo >= 250:
                 blank.append(i + 1)
+            else:
+                box = g.point(lambda v: 255 if v < 250 else 0).getbbox()
+                if box and (box[3] - box[1]) < 0.25 * g.size[1]:
+                    sparse.append("p%d %d%%" % (i + 1, round(100.0 * (box[3] - box[1]) / g.size[1])))
         doc.close()
         r.facts["renders"] = rendered
         r.check("blank_pages", "fail" if blank else "pass", ("visually blank page(s): %s" % blank) if blank else "%d page(s) rendered, none blank" % n)
+        # Advisory: content filling under a quarter of the page height reads as a stub, not a finished page.
+        r.check("sparse_pages", "warn" if sparse else "pass", ("content fills under a quarter of the page height: " + ", ".join(sparse)) if sparse else "pages carry substantial content")
     except Exception as e:
         r.check("render", "warn", "rendering failed: %s: %s" % (type(e).__name__, e))
 
