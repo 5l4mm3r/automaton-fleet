@@ -936,3 +936,62 @@ reimbursement stays separate from fee withdrawals; an explicit launch boundary r
   `economy-ai-credit-test-period-preview` is read-only. The capital to back is unchanged.
 - After the boundary: owner-funded AI credit is owed to the owner as used (v69) and reimbursed only by its own authorised
   owner payment — never netted against fee withdrawals; agents bear their own work (v72).
+
+## 30. Schema v76 — the market-facing loop (owner brief, 2026-10-14; in code, not deployed)
+Owner brief: agents must be able to sell real work — offers, more than one skill, demand research, channels, a production
+toolchain, a fulfilment loop with a quality gate, and the knowledge to use them — in one release. Header of
+`src/fleet/postgres/migrations-phase76.ts` is the authoritative summary; this section records the decisions.
+- **Payment detection without the webhook.** Custody reads every open checkout's status (`GET /v2/checkout/orders/{id}`,
+  backed off; `cx_paypal_status_*`): APPROVED → captured, COMPLETED → read back, VOIDED → failed, each through the same
+  duplicate-safe capture record. The webhook remains the fast path (it is still 404 on the live app — owner fix pending).
+- **Offers** (`fleet_offers`, `fleet_offer_files`): products and services with customer, deliverables, price, turnaround,
+  revisions, terms and an optional capacity. Publishing needs evidence, never a claim: a product publishes on a passing
+  review of exactly its files; a service on a passing review of a real work sample. Changing a published product's files
+  pauses it until a review of the new files republishes it. Publishing also needs the public site set
+  (`economy-public-site <origin> <seller notice>`, owner), a receiving rail and the agent's mailbox.
+- **Public pages** (`src/fleet/service/public-pages.ts`, served by the controller through validating service-role `svc_*`
+  functions): `/o/<slug>`, buy → a fresh checkout and `/order/<token>` (PayPal returns there), service briefs with up to 3
+  reference files → `/enquiry/<token>`. 256-bit bearer tokens, per-origin rate limits, same-origin POSTs, strict CSP,
+  files as downloads with nosniff; every page says an AI agent produces and fulfils the work.
+- **Enquiries and messages**: one thread per enquiry / order; a buyer's brief or message wakes the agent (attention digest);
+  the agent clarifies, quotes (a checkout of the quoted price, capacity respected) or declines. A buyer's file reaches the
+  agent's workspace under a safe name as untrusted data — the model gets the path, never the bytes.
+- **The review gate** (`fleet_artifact_reviews`, immutable): the files' SHA-256s, the inspector's report run by the runtime
+  in the sandbox (`fleet-qa-1`, `src/fleet/founder/qa/inspector.ts`, report validated by the registry against the same
+  files), 3..30 criteria checked against the brief, an optional independent model review (a real routed call of the agent,
+  checked in its cognition log, within 6 hours), verdict. A pass needs no automated failure, every criterion met and no
+  failed independent review. A model's approval alone is never the gate.
+- **Delivery**: needs a passing review of exactly the delivered bytes against the current requirements (a buyer message
+  after the review makes it stale). Up to 10 files (15 MB each, 60 MB together, staged one per call); attached when they fit
+  in 15 MB, otherwise a link; downloadable from the order page for 30 days. A paid product is delivered automatically from
+  its reviewed files (`svc_offer_tick`).
+- **Toolchain** (b9d39d3): 22 hash-pinned wheels (`toolchain/agent-tools.lock.json`; XLSX, DOCX, PDF, images, recalculation,
+  spelling) installed by `scripts/fleet-agent-tools.sh` (fail-closed digests, tree digest) under
+  `/usr/local/lib/automaton-fleet-tools/<lock12>`; exposed read+execute to the exec sandbox only (Landlock).
+- **Founder-v7** (Charter v7, toolset-3): tools `offer`, `customers`, `deliverable` (inspect / review / reviews) and
+  `independent_review`, classified `planning` (no new authority; the database dispatch enforces every op). Reaches agents
+  only through a founder runtime upgrade.
+- **Knowledge**: business foundation v2 (`docs/knowledge/business-foundation-v2.md`; initial market focus, several offers,
+  demonstrated capability, quality procedures, channels, the fulfilment loop; capability status v5). Channels:
+  `docs/marketplaces/channel-assessment-2026-10-14.md` (Etsy assessed, not built; Gumroad still deferred).
+- **Owner view**: UI 0.19.0 Offers panel (dashboard reads `offers`, `customer_enquiries`); `hub-offers`, `hub-enquiries`.
+- Nothing in v76 moves money on its own, changes a live flag or grants authority. Payment, revenue and fulfilment stay
+  distinct.
+
+| Requirement | Where | Status |
+|---|---|---|
+| Payment detected without the webhook (status reads, duplicate-safe) | v76 `cx_paypal_status_*`, custody worker | IMPLEMENTED, LOCALLY VERIFIED (fake PayPal) |
+| Offers publish only on evidence; changed files pause a product | v76 `offer.*` | IMPLEMENTED, LOCALLY VERIFIED |
+| Public offer / order / enquiry pages, isolated per buyer token | `public-pages.ts`, `svc_*` | IMPLEMENTED, LOCALLY VERIFIED |
+| Briefs with files, clarify / quote / decline, capacity, revisions | v76 `enquiry.*`, `order.message` | IMPLEMENTED, LOCALLY VERIFIED |
+| Review gate bound to the exact bytes and the inspector's report | v76 `review.record`, `fleet-qa-1` | IMPLEMENTED, LOCALLY VERIFIED (real inspector, sandboxed) |
+| Staged / link delivery, 30-day downloads, automatic product delivery | v76 `order.stage_file`, `order.deliver`, `svc_offer_tick` | IMPLEMENTED, LOCALLY VERIFIED (simulated shared mailbox) |
+| End to end: agent builds a workbook, a defect is caught, the fix is reviewed, published, bought, delivered byte-identical | `fleet-v76-e2e-spreadsheet-pg.test.ts` | LOCALLY VERIFIED (simulated buyer; fake PayPal) |
+| Founder-v7 tools advertised and classified (no unclassified tool) | `cognition/types.ts`, `capabilities.ts`, drift guard | IMPLEMENTED, LOCALLY VERIFIED |
+| Pinned production toolchain for agents | `toolchain/`, `scripts/fleet-agent-tools.sh` | IMPLEMENTED, dev install verified; **host install pending (sudo)** |
+| Business foundation v2 loaded; reading path | v76 + knowledge build | IMPLEMENTED, LOCALLY VERIFIED |
+| Owner view of offers and enquiries | UI 0.19.0, hub commands | IMPLEMENTED (typecheck/lint/build pending in the release pass) |
+
+Remaining before release: VPS build matching the local build, rehearsal 75 → 76, founder runtime upgrade rehearsal to v7,
+toolchain host install, public-site origin and seller notice set by the owner, and the edge route for `/o/`, `/order/`,
+`/enquiry/` verified on the public origin.

@@ -86,6 +86,13 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   // v52: the Gumroad storefront through its gateway — the venture's own commercial work (the dispatch binds every job to
   // the caller's venture; the gateway holds the token).
   storefront: "planning",
+  // v76 (founder-v7): the agent's offers, its customers and the review of its deliverables — its own commercial work under
+  // the planning class FOUNDER_V7_TOOLS advertises (the database dispatch enforces every op; independent_review is one
+  // charged model call over the agent's own workspace files).
+  offer: "planning",
+  customers: "planning",
+  deliverable: "planning",
+  independent_review: "planning",
   // R41.1 (owner, 2026-10-08): the v34–v37 economy tools the controller has always advertised under "planning" were
   // never classified here, so every call was refused. Classified within their existing authority — the database
   // dispatch (api_economy) enforces every op; mail/SMS stay dormant (FLEET_CAPABILITY_NOT_CONFIGURED blocks only that

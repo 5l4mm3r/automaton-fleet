@@ -21,7 +21,7 @@ import { LoopGuard, SCOPED_CONTINUE } from "../../fleet/founder/loop-guard.js";
 import { ASSESS_LINE, HIBERNATE_LINE, BOOTSTRAP_LINE, classifyWork, economicState, stateLine, type SurvivalView } from "../../fleet/founder/decisions.js";
 import { FIELD_GUIDE, OWNER_SELECTED_TITLES, READING_COLLECTION, guideSection, releaseDoctrines } from "../../fleet/founder/field-guide.js";
 import { FOUNDER_MANIFEST_V2, TOOL_CAPABILITIES, decideTool, manifestSha256 } from "../../fleet/capabilities.js";
-import { FOUNDER_CHARTER, FOUNDER_CHARTER_V5, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_TOOLS, FOUNDER_TOOLS, FOUNDER_V5_TOOLS, toolsForDoctrine, type ToolCall } from "../../fleet/cognition/types.js";
+import { FOUNDER_CHARTER, FOUNDER_CHARTER_V5, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_TOOLS, FOUNDER_TOOLS, FOUNDER_V5_TOOLS, FOUNDER_V7_TOOLS, toolsForDoctrine, type ToolCall } from "../../fleet/cognition/types.js";
 import { capabilityView, founderStepTools } from "../../fleet/cognition/capability-signature.js";
 import { taskPacketProblems } from "../../fleet/cognition/task-packet.js";
 
@@ -558,7 +558,7 @@ describe("R41.1 completion — supplemental acceptance (owner clarifications 202
   });
 
   it("classification drift guard: every advertised founder tool is classified with exactly its advertised class (the identity/browser/fleet_services gap is closed)", () => {
-    const advertised = [...FOUNDER_TOOLS, ...FOUNDER_V5_TOOLS, ...FOUNDER_ROUTED_TOOLS, ...FOUNDER_EXPERIMENT_TOOLS];
+    const advertised = [...FOUNDER_TOOLS, ...FOUNDER_V5_TOOLS, ...FOUNDER_ROUTED_TOOLS, ...FOUNDER_EXPERIMENT_TOOLS, ...FOUNDER_V7_TOOLS]; // v76: the founder-v7 tools too (they shipped unclassified once)
     const routedLocal = new Set(["routine_task", "escalate_question"]); // answered by the mind itself, never by the toolbox
     const unclassified = [...new Set(advertised.filter((t) => !routedLocal.has(t.name) && !(t.name in TOOL_CAPABILITIES)).map((t) => t.name))].sort();
     expect(unclassified).toEqual([]);
