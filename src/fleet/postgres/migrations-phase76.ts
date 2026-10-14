@@ -30,6 +30,7 @@
 import { V64_SQL } from "./migrations-phase64.js";
 import { V68_SQL } from "./migrations-phase68.js";
 import { V75_SQL } from "./migrations-phase75.js";
+import { V53_SQL } from "./migrations-phase53.js";
 import { V74_SQL } from "./migrations-phase74.js";
 import { V61_SQL } from "./migrations-phase61.js";
 import { V58_SQL } from "./migrations-phase58.js";
@@ -60,8 +61,8 @@ export const DELIVERY_RETENTION_DAYS = 30;
 export const OFFER_PREVIEW_MAX_BYTES = 3_000_000;
 export const QA_INSPECTOR_VERSIONS = ["fleet-qa-1"] as const;
 export const EVENT_ROUTES_V76 = Object.freeze({
-  P2_IMPORTANT: ["customer_enquiry_received", "customer_message_received", "order_needs_attention"],
-  P3_SUMMARY: ["offer_published", "offer_paused", "offer_retired", "enquiry_quoted", "enquiry_declined", "order_auto_delivered", "paypal_status_fallback"],
+  P2_IMPORTANT: ["customer_enquiry_received", "customer_message_received", "order_needs_attention", "offer_proof_captured"],
+  P3_SUMMARY: ["offer_published", "offer_paused", "offer_retired", "enquiry_quoted", "enquiry_declined", "order_auto_delivered", "paypal_status_fallback", "offer_proof_requested"],
 } as const);
 export const FOUNDATION_VERSION_V2 = KNOWLEDGE_FOUNDATION_V2.version;
 const FOUNDATION_PART_CHARS = 7_000;
@@ -139,7 +140,34 @@ const ORDER_JSON = restate(V56_SQL, "fleet_customer_order_json", [
     'dueAt', (SELECT c.captured_at + make_interval(days => o.turnaround_days) FROM fleet_paypal_checkouts c WHERE c.checkout_id = o.checkout_id AND o.turnaround_days IS NOT NULL),
     'page', CASE WHEN p_private THEN fleet_public_url('/order/' || o.access_token) END,
     'buyerMessages', NULLIF((SELECT count(*) FROM fleet_customer_messages m WHERE m.order_id = o.order_id AND m.author = 'buyer'), 0),
+    'ownerProof', CASE WHEN o.owner_proof THEN true END,
     'createdAt', o.created_at))`],
+]);
+
+/** The largest owner proof purchase of an agent's offer (minor units of the accounting currency). */
+export const OFFER_PROOF_MAX_MINOR = 5_000;
+// ── The owner's live proof purchase of an agent's offer: the real checkout, capture and delivery, booked as the owner's own
+//    money (owner capital in the treasury, net of PayPal's fee, exactly like the v53 receiving test) — never the agent's revenue,
+//    no Fleet fee, no performance credit. A refund of it is reported, never posted against the agent. ──
+const PROOF_CAPTURE = restate(V53_SQL, "cx_paypal_capture_record", [
+  [`  IF c.purpose = 'owner_test' THEN`,
+   `  IF EXISTS (SELECT 1 FROM fleet_customer_orders z WHERE z.checkout_id = c.checkout_id AND z.owner_proof) THEN
+    v_j := fleet_ledger_post('owner_funding', v_key, 'custody:' || p_worker, 'owner proof purchase of an agent offer (PayPal capture, net of fee; not agent revenue)',
+      'executor', NULL, NULL, NULL, v_key, NULL, now(), jsonb_build_array(
+        jsonb_build_object('account', 'fleet:treasury:unallocated', 'side', 'D', 'amount', p_gross - p_fee),
+        jsonb_build_object('account', 'fleet:owner:capital', 'side', 'C', 'amount', p_gross - p_fee)));
+    INSERT INTO fleet_revenue_claims (claim_key, claim_kind, journal_id, claimed_by) VALUES (v_key, 'paypal_capture', v_j, 'custody:' || p_worker);
+    UPDATE fleet_paypal_checkouts SET status = 'captured', capture_id = p_capture_id, captured_at = now(), journal_id = v_j WHERE checkout_id = c.checkout_id;
+    PERFORM fleet_event('offer_proof_captured', c.agent_id, 'custody', jsonb_build_object('checkoutId', c.checkout_id, 'captureId', p_capture_id,
+      'grossMinor', p_gross, 'feeMinor', p_fee, 'evidence', p_evidence, 'ownerCapitalMinor', p_gross - p_fee,
+      'note', 'the owner''s proof purchase: owner capital, not the agent''s revenue; the order is delivered as any paid order'));
+    RETURN jsonb_build_object('ok', true, 'status', 'captured', 'journalId', v_j, 'netMinor', p_gross - p_fee, 'ownerProof', true);
+  END IF;
+  IF c.purpose = 'owner_test' THEN`],
+]);
+const PROOF_REFUND = restate(V53_SQL, "cx_paypal_refund_record", [
+  [`  IF c.purpose = 'owner_test' THEN`,
+   `  IF c.purpose = 'owner_test' OR EXISTS (SELECT 1 FROM fleet_customer_orders z WHERE z.checkout_id = c.checkout_id AND z.owner_proof) THEN`],
 ]);
 
 // ── Wake-ups: a brief, a buyer's message or a new paid order wakes a hibernating agent; the packet names the tool ──
@@ -198,6 +226,8 @@ BEGIN
 END $$;
 
 -- ═══ 1. Checkout status fallback (custody) ═══
+-- The owner's live proof purchase of an agent's offer (§10): fixed at creation, booked as owner capital at capture.
+ALTER TABLE fleet_customer_orders ADD COLUMN owner_proof boolean NOT NULL DEFAULT false;
 ALTER TABLE fleet_paypal_checkouts ADD COLUMN status_checks integer NOT NULL DEFAULT 0, ADD COLUMN next_status_check timestamptz,
   ADD COLUMN last_status_seen text CHECK (last_status_seen ~ '^[A-Z_]{2,32}$');
 CREATE INDEX fleet_paypal_checkouts_open ON fleet_paypal_checkouts (next_status_check) WHERE status = 'open';
@@ -1295,6 +1325,44 @@ BEGIN
       THEN 'end of the foundation: keep a short summary of what will guide your decisions (remember_fact, with this version); retrieve sections by id or query when a decision needs them'
       ELSE format('continue with part %s', p_part + 1) END);
 END $$;
+
+-- ═══ 10. The owner's live proof purchase of an agent's offer (owner capital, not agent revenue) ═══
+CREATE FUNCTION fleet_customer_orders_proof_guard() RETURNS trigger LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+BEGIN
+  IF NEW.owner_proof IS DISTINCT FROM OLD.owner_proof THEN RAISE EXCEPTION 'FLEET_HISTORY_IMMUTABLE: an order''s owner-proof flag is fixed at creation'; END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER fleet_customer_orders_proof_guard BEFORE UPDATE ON fleet_customer_orders FOR EACH ROW EXECUTE FUNCTION fleet_customer_orders_proof_guard();
+
+CREATE FUNCTION fleet_admin_offer_proof_buy(p_slug text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE o fleet_offers; r jsonb; c fleet_paypal_checkouts; x fleet_customer_orders; v_token text := ${TOKEN};
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  PERFORM fleet_require_operator_approver(substr(p_actor, 10), 'fleet_treasury');
+  SELECT * INTO o FROM fleet_offers WHERE slug = p_slug AND status = 'published' AND kind = 'product' FOR SHARE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_OFFER_UNAVAILABLE: a published product offer (by its slug)'; END IF;
+  IF o.price_minor > ${OFFER_PROOF_MAX_MINOR} THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: a proof purchase is at most ${OFFER_PROOF_MAX_MINOR} minor units'; END IF;
+  SELECT z.* INTO x FROM fleet_customer_orders z JOIN fleet_paypal_checkouts k ON k.checkout_id = z.checkout_id
+   WHERE z.owner_proof AND z.offer_id = o.offer_id AND k.status IN ('requested','open','approved','capture_pending') ORDER BY z.created_at DESC LIMIT 1;
+  IF FOUND THEN RETURN jsonb_build_object('ok', true, 'replay', true, 'page', fleet_public_url('/order/' || x.access_token)); END IF;
+  r := fleet_econ_paypal_checkout(o.agent_id, jsonb_build_object('venture', (SELECT venture_key FROM fleet_ventures WHERE venture_id = o.venture_id),
+         'amountMinor', o.price_minor, 'description', left(o.title, 127), 'idempotencyKey', 'proof:' || left(v_token, 32)));
+  IF NOT COALESCE((r ->> 'ok')::boolean, false) THEN RAISE EXCEPTION '%: the checkout could not be opened', COALESCE(r ->> 'code', 'FLEET_OFFER_UNAVAILABLE'); END IF;
+  SELECT * INTO c FROM fleet_paypal_checkouts WHERE checkout_id = (r #>> '{checkout,checkoutId}')::uuid;
+  INSERT INTO fleet_customer_orders (agent_id, venture_id, checkout_id, item, amount_minor, currency, fulfilment, offer_id, access_token, origin_hash, owner_proof)
+    VALUES (o.agent_id, c.venture_id, c.checkout_id, c.description, c.amount_minor, c.currency, 'digital_file', o.offer_id, v_token,
+            encode(sha256(convert_to('owner-proof:' || p_actor, 'UTF8')), 'hex'), true) RETURNING * INTO x;
+  PERFORM fleet_event('offer_proof_requested', o.agent_id, p_actor, jsonb_build_object('offerId', o.offer_id, 'orderId', x.order_id, 'checkoutId', c.checkout_id,
+    'amountMinor', c.amount_minor));
+  RETURN jsonb_build_object('ok', true, 'page', fleet_public_url('/order/' || x.access_token), 'amountMinor', c.amount_minor, 'currency', c.currency,
+    'note', 'open the order page, pay with PayPal yourself; the capture is booked to owner capital (not the agent''s revenue) and the reviewed files are delivered to you');
+END $$;
+
+${PROOF_CAPTURE}
+
+${PROOF_REFUND}
 
 REVOKE ALL ON ALL TABLES IN SCHEMA @@SCHEMA@@ FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA @@SCHEMA@@ FROM PUBLIC;

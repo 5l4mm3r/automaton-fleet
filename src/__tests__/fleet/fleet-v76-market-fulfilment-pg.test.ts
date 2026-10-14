@@ -212,6 +212,36 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect(ord).toMatchObject({ payment: "paid", status: "delivered", offerId: off.offerId, evidence: { kind: "mail", reviewId: off.reviewId } });
   });
 
+  it("the owner's proof purchase: real checkout and delivery, booked as owner capital net of fee — never the agent's revenue", async () => {
+    const off = (await R.econ(F, "offer.list", {})).offers.find((x: any) => x.kind === "product");
+    await expect(R.q(`SELECT fleet.fleet_admin_offer_proof_buy($1, 'svc')`, [off.slug])).rejects.toThrow(/FLEET_APPROVAL_REQUIRED/);
+    await expect(svc.query(`SELECT fleet.fleet_admin_offer_proof_buy($1, $2)`, [off.slug, OWNER])).rejects.toThrow(/permission denied/);
+    const p = (await R.q(`SELECT fleet.fleet_admin_offer_proof_buy($1, $2) AS r`, [off.slug, OWNER]))[0].r;
+    expect(p, JSON.stringify(p)).toMatchObject({ ok: true, page: expect.stringMatching(/^https:\/\/shop\.fleet\.test\/order\/[0-9a-f]{64}$/), amountMinor: 1_500 });
+    expect((await R.q(`SELECT fleet.fleet_admin_offer_proof_buy($1, $2) AS r`, [off.slug, OWNER]))[0].r).toMatchObject({ ok: true, replay: true, page: p.page });
+    const token = p.page.split("/").pop();
+    const checkoutId = await checkoutOf(token);
+    await expect(R.q(`UPDATE fleet.fleet_customer_orders SET owner_proof = false WHERE access_token = $1`, [token])).rejects.toThrow(/FLEET_HISTORY_IMMUTABLE/);
+    const capital0 = Number(await R.one(`fleet.fleet_ledger_balance('fleet:owner:capital')`));
+    const agentPostings = () => R.one(`(SELECT count(*) FROM fleet.fleet_ledger_postings WHERE account_id LIKE '%' || $1 || '%')`, [F.id]).then(Number);
+    const agent0 = await agentPostings();
+    await open(checkoutId);
+    await pay(checkoutId, 1_500, "owner@example.test");
+    expect(Math.abs(Number(await R.one(`fleet.fleet_ledger_balance('fleet:owner:capital')`)) - Math.abs(capital0))).toBe(1_500 - 60); // net of PayPal's fee
+    expect(await agentPostings()).toBe(agent0); // nothing posted to the agent: no revenue, no fee share
+    expect(await events("offer_proof_captured")).toBe(1);
+    expect(await pub("svc_offer_tick", [20])).toMatchObject({ ok: true, delivered: 1 });
+    await broker.tick();
+    expect(shared.outbox.at(-1)!.to).toEqual(["owner@example.test"]);
+    const ord = (await R.econ(F, "order.list", {})).orders.find((x: any) => x.page === p.page);
+    expect(ord).toMatchObject({ ownerProof: true, payment: "paid", status: "delivered" });
+    // A refund of the proof is reported to the owner, never posted against the agent.
+    const cap = await R.one<string>(`(SELECT capture_id FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1)`, [checkoutId]);
+    const rf = await cx("cx_paypal_refund_record", ["custody-executor", cap, `RF${crypto.randomBytes(6).toString("hex").toUpperCase()}`, "refund", 1_500, "GBP"]);
+    expect(rf).toMatchObject({ ok: true, ownerTest: true, posted: false });
+    expect(await agentPostings()).toBe(agent0);
+  });
+
   it("changing a published product's files pauses it until a review of the new files republishes it", async () => {
     const off = (await R.econ(F, "offer.list", {})).offers.find((x: any) => x.kind === "product");
     const wb2 = Buffer.from("PK workbook bytes v2 (fixed)");

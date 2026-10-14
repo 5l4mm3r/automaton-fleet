@@ -1277,7 +1277,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_customer_orders: new Set(["fleet_econ_paypal_checkout_order", "fleet_customer_orders_follow", "fleet_order_refunded", "cx_paypal_buyer_record", "fleet_paypal_clawback_return",
       "fleet_econ_order_deliver", "fleet_econ_order_fulfil", "fleet_order_delivery_follow", "svc_order_deliveries_retry",
       // v76: orders from an offer page (svc_offer_buy) or a quote (fleet_econ_enquiry_quote); a delivery's dispatch.
-      "svc_offer_buy", "fleet_econ_enquiry_quote", "fleet_order_delivery_dispatch"]),
+      "svc_offer_buy", "fleet_econ_enquiry_quote", "fleet_order_delivery_dispatch",
+      // v76: the owner's live proof purchase of a published product (booked as owner capital at capture).
+      "fleet_admin_offer_proof_buy"]),
     fleet_order_deliveries: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded",
       "fleet_order_delivery_dispatch", "svc_offer_tick"]),
     fleet_order_delivery_files: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded",
