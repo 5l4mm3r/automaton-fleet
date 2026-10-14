@@ -98,10 +98,11 @@
  *   hub-protection | economy-protection on|off [reason…]                     (v55) survival protection: ON = no agent is ended for an
  *                                               exhausted wallet (the owner is told); OFF = live (exhaustion is death)
  *   economy-protection-agent <agentId> protected|live|follow [reason…]       (v55, advanced) one agent overriding the fleet switch
- *   hub-card-requests [agentId]                                               (v54) card requests (PayPal first; yours to decide above the threshold)
+ *   hub-card-requests [agentId]                                               (v54) card requests (PayPal first; since v64 decided by Fleet Control's automated review)
  *   economy-card-request-decide <requestId> approve <transferReference> [note…] | <requestId> decline [note…]
- *                                               approve only after moving the amount from the treasury PayPal to the card
- *   economy-card-request-policy [--above <minor>] [--valid-hours n]           the owner-review threshold (default 10000 = £100)
+ *                                               only for a request created before v64 (pending_owner); approve after moving the amount to the card
+ *   economy-card-request-policy [--above <minor>] [--valid-hours n]           --above is RETIRED (v64 / O19: no owner threshold; kept as history);
+ *                                                                             --valid-hours: how long an approved request stays usable
  *   hub-paypal-test                                                           the test's progress: approval link, capture, Transaction Search, balance
  *   hub-treasury-tx [agentId] [--limit n] [--before seq] [--direction in|out|internal]   per-transaction treasury list
  *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
@@ -118,6 +119,8 @@
  *   economy-ai-credit-test-period-preview | economy-ai-credit-test-period-writeoff  (v74) pre-launch AI cost → the Fleet; owner payable waived as contributed capital (each journal once; never past the launch)
  *   economy-launch-boundary | economy-launch-boundary-record <note…>         (v74) the explicit launch boundary (owner, once)
  *   economy-public-site <https://origin> [seller notice…]                  (v76) where offer / order pages are served, and who the seller is
+ *   economy-ai-credit-reimbursed <amountMinor> <paypalTxnId>                (v76) you paid yourself back from the treasury PayPal for AI credit
+ *                                                                           your card paid: records it (once per reference, at most what is owed)
  *   economy-sales open|closed                                               (v76) sales to the public (closed by default: offer pages hidden,
  *                                                                           no buys or briefs; order pages and economy-offer-proof work)
  *   economy-offer-proof <slug>                                              (v76) your live proof purchase of an agent's product: pay it yourself;
@@ -176,7 +179,7 @@ export const HUB_COMMANDS = new Set([
   "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
-  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-sales", "economy-offer-proof", "hub-offers", "hub-enquiries",
+  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-sales", "economy-ai-credit-reimbursed", "economy-offer-proof", "hub-offers", "hub-enquiries",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -356,6 +359,9 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.aiCreditTestPeriodWriteoff(actor);
     case "economy-launch-boundary":
       return (await h.launchBoundary()) ?? { recorded: false };
+    case "economy-ai-credit-reimbursed":
+      if (p.length !== 2) throw new Error("usage: economy-ai-credit-reimbursed <amountMinor> <paypalTxnId>");
+      return h.ownerPayableReimbursed(int(p[0], "amountMinor"), p[1], actor);
     case "economy-sales":
       if (p.length !== 1 || !["open", "closed"].includes(p[0])) throw new Error("usage: economy-sales open|closed");
       return h.salesSet(p[0] === "open", actor);

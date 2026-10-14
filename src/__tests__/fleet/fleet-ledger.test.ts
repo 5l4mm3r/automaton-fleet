@@ -164,6 +164,8 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       "cx_paypal_clawback_evidence(text,text,text,text,text,bigint,text)", "cx_paypal_dispute_record(text,text,text,text,text,bigint,text)", "cx_paypal_inbox(text,integer)",
       "cx_paypal_inbox_result(text,text,text,text)", "cx_paypal_rails(text)", "cx_paypal_refund_record(text,text,text,text,bigint,text)",
       "cx_paypal_refund_result(text,uuid,text,text,bigint,text,text)", "cx_paypal_refund_work(text,integer)",
+      // v76: payment detection without the webhook — custody reads open checkouts' order status.
+      "cx_paypal_status_checked(text,uuid,text)", "cx_paypal_status_work(text,integer)",
       "cx_paypal_txn_counterparty(text,uuid,text,text,text)", "cx_paypal_txn_record(text,uuid,jsonb)", "cx_paypal_work(text,integer)",
       // v49: the custody key and the PayPal credentials sealed to it from the dashboard.
       "cx_ping()", "cx_publish_key(text,text,text)", "cx_report_result(uuid,text,text,text,bigint,text)", "cx_sealed_credentials(text)"]);
@@ -678,6 +680,8 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       await xl.activateDestination(e.destinationId, e.activationCode, OWNER);
       await xl.destinationReferenceSet(e.destinationId, "paypal:vendor@example.com", OWNER);
       expect((await attest(xc, X, armed)).ok).toBe(true);
+      // v76: real outflows fit the PayPal cash actually available — custody has read the treasury's balance.
+      expect((await xc.query(`SELECT ${X}.cx_paypal_balance_record('custody-executor', $1, 'GBP', 1000000, 1000000) AS r`, [armed.railId])).rows[0].r.ok).toBe(true);
       const s1 = await xg.spendRequest(a.agentId, a.token, { idempotencyKey: key(), amountCents: 700, category: "expense", destinationId: e.destinationId, purpose: "api" });
       const s2 = await xg.spendRequest(a.agentId, a.token, { idempotencyKey: key(), amountCents: 400, category: "asset_acquisition", destinationId: e.destinationId, purpose: "domain", recoverableCents: 100 });
       const xsvc = new pg.Pool({ connectionString: pgc.serviceUrl, max: 1, options: `-c search_path=${X}` });

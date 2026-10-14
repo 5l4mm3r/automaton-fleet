@@ -203,6 +203,10 @@ export class PgHubAdmin {
   // v76: the public site for offer and order pages (owner), and the owner's read of offers and enquiries.
   publicSiteSet(url: string, notice: string | null, actor: string) { return this.one(`SELECT fleet_admin_public_site_set($1, $2, $3) AS r`, [url, notice, actor]); }
   /** v76: the owner's live proof purchase of an agent's published product (owner capital at capture, never agent revenue). */
+  /** v76: the owner reimbursed themselves from the treasury PayPal for AI credit their card paid (records the v69 payable as settled). */
+  ownerPayableReimbursed(amountMinor: number, reference: string, actor: string) {
+    return this.one(`SELECT fleet_admin_owner_payable_reimbursed($1, $2, $3) AS r`, [amountMinor, reference, actor]);
+  }
   /** v76: open or close sales to the public (closed: offer pages not public, no buys or briefs; order pages and the proof purchase work). */
   salesSet(open: boolean, actor: string) { return this.one(`SELECT fleet_admin_sales_set($1, $2) AS r`, [open, actor]); }
   offerProofBuy(slug: string, actor: string) { return this.one(`SELECT fleet_admin_offer_proof_buy($1, $2) AS r`, [slug, actor]); }

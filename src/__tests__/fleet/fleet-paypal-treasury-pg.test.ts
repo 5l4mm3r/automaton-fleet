@@ -130,6 +130,9 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury, custody activation and card clear
     await unpinCustody(R.owner, "fleet", OWNER, { maxInstructionMinor: 5_000, maxDailyMinor: 6_000 });
     expect(await issueDue()).toMatchObject({ enabled: true, issued: 0, waiting: { FLEET_NO_CUSTODY_SIGNER: 1 } }); // key 3 missing: no signer
     expect((await attest(custody, "fleet", rail)).ok).toBe(true);
+    // v76: key 4 — real cash. With no PayPal balance read yet, the payment waits (still reserved); with one, it is issued.
+    expect(await issueDue()).toMatchObject({ issued: 0, waiting: { FLEET_TREASURY_LIQUIDITY: 1 } });
+    await cx("cx_paypal_balance_record", ["custody-executor", rail.railId, "GBP", 10_000_000, 10_000_000]);
     expect(await issueDue()).toMatchObject({ issued: 1 });
     expect((await R.q(`SELECT status FROM fleet.fleet_payment_orders WHERE order_id = $1`, [o1]))[0].status).toBe("executing");
     // The activation's per-instruction maximum, then the agent's own daily wallet limit.

@@ -151,6 +151,8 @@ describe.skipIf(!PG_BIN)("v32 controller custody signer (PostgreSQL)", () => {
       signer = new PayPalPayoutSigner({ railId: armed.railId, provider: "paypal", mode: "live", credentialId: armed.credentialId, vaultRef: armed.vaultRef }, pp.http, ALLOW);
       gwc = new PgCustodyGateway({ connectionString: R.pgc.custodyUrl });
       exec = new CustodyExecutor(gwc, [signer], { log: quiet, vault, attestEveryMs: 0 });
+      // v76: real outflows fit the PayPal cash actually available — custody has read the treasury's balance (ample here).
+      expect((await gwc.paypalBalanceRecord("custody-executor", armed.railId, "GBP", 10_000_000, 10_000_000)).ok).toBe(true);
     }, 60_000);
     afterAll(async () => { await gwc?.close(); });
 

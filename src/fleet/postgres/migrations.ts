@@ -83,9 +83,10 @@ import { V73_SQL } from "./migrations-phase73.js";
 import { V74_SQL } from "./migrations-phase74.js";
 import { V75_SQL } from "./migrations-phase75.js";
 import { V76_SQL } from "./migrations-phase76.js";
+import { V77_SQL } from "./migrations-phase77.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 76;
+export const FLEET_PG_SCHEMA_VERSION = 77;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1257,6 +1258,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 74, name: "ai_credit_test_period_writeoff", sql: V74_SQL },
   { version: 75, name: "virtual_agent_presence", sql: V75_SQL },
   { version: 76, name: "market_fulfilment", sql: V76_SQL },
+  { version: 77, name: "treasury_integrity", sql: V77_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1492,7 +1494,8 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   // v58: a buyer PayPal never reveals is raised for the owner.
   cx_paypal_buyer_record: { writes: ["fleet_customer_orders"], calls: ["fleet_event"] },
   cx_paypal_clawback_evidence: { writes: ["fleet_paypal_clawback_evidence"], calls: ["fleet_event", "fleet_paypal_clawback_reconcile", "cx_paypal_refund_record", "fleet_refund_request_completed"] },
-  cx_paypal_refund_work: { writes: [], calls: [] },
+  // v76: a new refund leaves only within available treasury cash; a refund that must wait is noted once.
+  cx_paypal_refund_work: { writes: [], calls: ["fleet_treasury_liquidity_wait"] },
   cx_paypal_refund_result: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event", "cx_paypal_clawback_evidence"] },
   cx_paypal_dispute_record: { writes: ["fleet_paypal_disputes"], calls: ["fleet_event"] },
   // v76: reading an open checkout's PayPal status (backed off), failing a voided one.
