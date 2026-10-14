@@ -223,8 +223,9 @@ const EVIDENCE_FEE_RETURN = restate(V59_SQL, "cx_paypal_clawback_evidence", [
   IF c.purpose = 'owner_test' THEN RETURN jsonb_build_object('ok', true, 'ownerTest', true, 'posted', false); END IF;`],
 ]);
 
-// A proof's fee return may give back the fee PayPal took at capture (derived exactly: the gross less what the capture credited
-// to owner capital), not only fees clawed back later. Agent sales keep v58's cap (a pre-existing gap reported for owner review).
+// A fee return may give back the fee PayPal took at capture, not only fees clawed back later (v58 capped it at the latter, so a
+// refunded capture fee never reached the books). The capture fee is read exactly from the capture journal: an agent sale's
+// agent-fees debit; for the owner's proof, the gross less what the capture credited to owner capital.
 const PROOF_RECONCILE = restate(V58_SQL, "fleet_paypal_clawback_reconcile", [
   [`        v_refund bigint := 0; v_reversal bigint := 0; v_fee bigint := 0; v_over bigint := 0;`,
    `        v_refund bigint := 0; v_reversal bigint := 0; v_fee bigint := 0; v_over bigint := 0; v_capfee bigint := 0;`],
@@ -232,9 +233,24 @@ const PROOF_RECONCILE = restate(V58_SQL, "fleet_paypal_clawback_reconcile", [
    `  IF EXISTS (SELECT 1 FROM fleet_customer_orders z WHERE z.checkout_id = p_checkout AND z.owner_proof) THEN
     v_capfee := GREATEST(0, c.amount_minor - COALESCE((SELECT sum(p.amount_cents) FROM fleet_ledger_postings p
                                                          WHERE p.journal_id = c.journal_id AND p.account_id = 'fleet:owner:capital'), c.amount_minor));
+  ELSE
+    v_capfee := COALESCE((SELECT sum(p.amount_cents) FROM fleet_ledger_postings p
+                           WHERE p.journal_id = c.journal_id AND p.account_id = fleet_ledger_account(c.agent_id, 'agent_fees') AND p.side = 'D'), 0);
   END IF;
   FOREACH g IN ARRAY ARRAY['refund','reversal','fee','reversal_return','fee_return'] LOOP`],
   [`                       WHEN 'fee_return' THEN LEAST(v_ev, v_fee)`, `                       WHEN 'fee_return' THEN LEAST(v_ev, v_fee + v_capfee)`],
+]);
+
+// Transaction Search may report the fee PayPal gave back on the refund row itself (T1107's fee_amount) rather than as a T1108 row:
+// that portion is fee-return evidence from Search too (ref "<txn>:<code>:fee"); webhook and Search still count once (the larger).
+// Latest definition: v59.
+const TXN_FEE_RETURN = restate(V59_SQL, "cx_paypal_txn_record", [
+  [`        VALUES ('search', t.transaction_id || ':' || t.event_code, v_grp, t.checkout_id, v_amt) ON CONFLICT DO NOTHING;`,
+   `        VALUES ('search', t.transaction_id || ':' || t.event_code, v_grp, t.checkout_id, v_amt) ON CONFLICT DO NOTHING;
+      IF v_grp = 'refund' AND t.fee_minor > 0 THEN
+        INSERT INTO fleet_paypal_clawback_evidence (source, ref_id, grp, checkout_id, amount_minor)
+          VALUES ('search', t.transaction_id || ':' || t.event_code || ':fee', 'fee_return', t.checkout_id, t.fee_minor) ON CONFLICT DO NOTHING;
+      END IF;`],
 ]);
 
 // Restated from the LATEST definition (v57 over v56 over v53): its clawback record, the order follow-up and the owner-test branch stay.
@@ -1520,6 +1536,8 @@ ${PROOF_REFUND}
 ${PROOF_RETURN}
 
 ${PROOF_RECONCILE}
+
+${TXN_FEE_RETURN}
 
 ${EVIDENCE_FEE_RETURN}
 

@@ -108,7 +108,7 @@ export class PgHubAdmin {
   }
   // ── v48: custody activation, wallet limits, card clearing, the treasury list and PayPal ──
   /** `hours` null: an ongoing activation (v51; no expiry, ends only when the owner ends it). */
-  custodyActivate(maxInstructionMinor: number, maxDailyMinor: number, hours: number | null, reason: string, actor: string) {
+  custodyActivate(maxInstructionMinor: number | null, maxDailyMinor: number | null, hours: number | null, reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_custody_activate($1, $2, $3, $4, $5) AS r`, [maxInstructionMinor, maxDailyMinor, hours, reason, actor]);
   }
   custodyDeactivate(reason: string | null, actor: string) {

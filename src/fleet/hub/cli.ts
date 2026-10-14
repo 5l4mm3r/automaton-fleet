@@ -70,7 +70,7 @@
  *                                               seal a fact/document to the broker's published key (pinned by fingerprint) and upload it
  *   hub-reveal <agent_credential|owner_identity> <credentialId|class> <outFile>   Admin reveal: the broker seals the value to a
  *                                               one-time key of this command; the plaintext is written to a NEW 0600 file (never printed)
- *   economy-custody-activate <maxInstructionMinor> <maxDailyMinor> <hours ≤2160|ongoing> <reason…>   (v48) key 1 of live custody:
+ *   economy-custody-activate <maxInstructionMinor|-> <maxDailyMinor|-> <hours ≤2160|ongoing> <reason…>   (v48) key 1 of live custody ("-": no maximum, v64):
  *                                               an owner activation (a live PayPal rail, a live signer and the custody executor's
  *                                               REAL_PAYMENTS_ENABLED are the others). v51: a pilot expires by itself; "ongoing" runs until
  *                                               economy-custody-deactivate (the maxima stay as treasury risk limits)
@@ -268,7 +268,9 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "hub-custody":
       return h.custody();
     case "economy-custody-activate":
-      return h.custodyActivate(int(p[0], "maxInstructionMinor"), int(p[1], "maxDailyMinor"), p[2] === "ongoing" ? null : int(p[2], "hours"), p.slice(3).join(" "), actor);
+      // v64 (O19): maxima are optional — "-" = no maximum (Fleet Control reviews material or suspicious commitments instead).
+      return h.custodyActivate(p[0] === "-" ? null : int(p[0], "maxInstructionMinor"), p[1] === "-" ? null : int(p[1], "maxDailyMinor"),
+        p[2] === "ongoing" ? null : int(p[2], "hours"), p.slice(3).join(" "), actor);
     case "economy-custody-deactivate":
       return h.custodyDeactivate(p.join(" ") || null, actor);
     case "economy-wallet-limits": {

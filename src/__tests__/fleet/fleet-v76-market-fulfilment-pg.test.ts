@@ -236,6 +236,10 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
 
   it("the owner's proof purchase: real checkout and delivery, booked as owner capital net of fee — never the agent's revenue", async () => {
     const off = (await R.econ(F, "offer.list", {})).offers.find((x: any) => x.kind === "product");
+    // The proof runs in the preparation window: sales closed, so the hold is on — promotion is refused, the proof is not.
+    expect((await R.q(`SELECT fleet.fleet_admin_sales_set(false, $1) AS r`, [OWNER]))[0].r).toMatchObject({ ok: true, salesOpen: false });
+    expect(await R.econ(F, "mail.send", { to: "prospect@example.test", subject: "New workbook", body: "Buy it", idempotencyKey: idem() })).toMatchObject({ ok: false, code: "FLEET_PREPARATION_HOLD" });
+    expect(await pub("svc_offer_buy", [off.slug, sha("public-in-window")])).toMatchObject({ ok: false, code: "FLEET_SALES_CLOSED" });
     await expect(R.q(`SELECT fleet.fleet_admin_offer_proof_buy($1, 'svc')`, [off.slug])).rejects.toThrow(/FLEET_APPROVAL_REQUIRED/);
     await expect(svc.query(`SELECT fleet.fleet_admin_offer_proof_buy($1, $2)`, [off.slug, OWNER])).rejects.toThrow(/permission denied/);
     const p = (await R.q(`SELECT fleet.fleet_admin_offer_proof_buy($1, $2) AS r`, [off.slug, OWNER]))[0].r;
@@ -256,7 +260,10 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     await broker.tick();
     expect(shared.outbox.at(-1)!.to).toEqual(["owner@example.test"]);
     const ord = (await R.econ(F, "order.list", {})).orders.find((x: any) => x.page === p.page);
-    expect(ord).toMatchObject({ ownerProof: true, payment: "paid", status: "delivered" });
+    expect(ord).toMatchObject({ ownerProof: true, payment: "paid", status: "delivered" });  // delivered to the buyer during the hold
+    // The agent can still answer its (proof) buyer on the order thread while outward promotion is held; the buyer's page works.
+    expect((await R.econ(F, "order.message", { orderId: ord.orderId, message: "Thanks — the files are on your order page too." })).ok).toBe(true);
+    expect((await pub("svc_order_page", [token])).order).toMatchObject({ payment: "paid", status: "delivered" });
     // Refund of the proof, through the real evidence path: the webhook's refund, then the fee PayPal gave back with it, then the
     // same money again from Transaction Search (T1107 refund, T1108 fee reversal). Owner capital and treasury follow exactly what
     // PayPal took: gross refund − fee given back; net effect of the whole proof on owner capital = −the fee PayPal retained.
@@ -291,7 +298,39 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect(await capital()).toBe(c1 - 1_460);
     expect(await events("offer_proof_returned")).toBe(2);      // the refund and the fee given back
     await expect(R.q(`UPDATE fleet.fleet_offer_proof_returns SET amount_minor = 0`)).rejects.toThrow(/immutable|HISTORY/i);
+    // End of the window (the later tests sell to the public).
+    await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
     expect(await agentPostings()).toBe(agent0);
+  });
+
+  it("an agent sale's refund: the capture fee PayPal gives back reaches the agent's books once (webhook and Search), capped at the fee actually paid", async () => {
+    const fees = () => R.one(`fleet.fleet_ledger_balance(fleet.fleet_ledger_account($1, 'agent_fees'))`, [F.id]).then(Number);
+    const ck = await R.econ(F, "paypal.checkout", { venture: "sheets", amountMinor: 2_000, description: "Agent sale (fee return)", idempotencyKey: idem() });
+    const checkoutId = ck.checkout.checkoutId as string;
+    await open(checkoutId);
+    const f0 = await fees();
+    const capId = `CAP${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
+    expect((await cx("cx_paypal_capture_record", ["custody-executor", checkoutId, capId, "COMPLETED", 2_000, 80, "GBP", "capture_response"])).ok).toBe(true);
+    expect((await fees()) - f0).toBe(80);
+    const RF = `RF${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
+    expect(await cx("cx_paypal_clawback_evidence", ["custody-executor", "webhook", RF, "refund", capId, 2_000, "GBP"])).toMatchObject({ ok: true, posted: { refund: 2_000 } });
+    // The refund webhook: PayPal gave back 50 of the 80 fee.
+    expect(await cx("cx_paypal_clawback_evidence", ["custody-executor", "webhook", `FR-${RF}`, "fee_return", capId, 50, "GBP"])).toMatchObject({ ok: true, posted: { fee_return: 50 } });
+    expect((await fees()) - f0).toBe(30);                       // the agent bears only the fee PayPal kept
+    const ret = await R.one<any>(`(SELECT jsonb_build_object('agent', j.agent_id, 'kind', j.kind) FROM fleet.fleet_paypal_clawback_posts p JOIN fleet.fleet_ledger_journal j ON j.journal_id = p.journal_id
+                                  WHERE p.checkout_id = $1 AND p.grp = 'fee_return')`, [checkoutId]);
+    expect(ret).toMatchObject({ agent: F.id, kind: "paypal_clawback_return" }); // attributed to this sale's agent
+    // Transaction Search reports the same refund with the returned fee on the refund row: nothing more is posted.
+    const tsRow = await cx("cx_paypal_txn_record", ["custody-executor", rail.railId, JSON.stringify({ transactionId: RF, eventCode: "T1107", initiatedAt: new Date().toISOString(),
+      status: "S", currency: "GBP", amountMinor: -2_000, feeMinor: 50, referenceId: capId })]);
+    expect(tsRow.ok).toBe(true);
+    expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_paypal_clawback_evidence WHERE checkout_id = $1 AND grp = 'fee_return' AND source = 'search')`, [checkoutId])).toBe(1);
+    expect((await fees()) - f0).toBe(30);
+    // More evidence than the fee ever paid (a second report): capped at the 80 PayPal actually charged.
+    await cx("cx_paypal_clawback_evidence", ["custody-executor", "webhook", `FR2-${RF}`.slice(0, 64), "fee_return", capId, 70, "GBP"]);
+    expect((await fees()) - f0).toBe(0);
+    expect(Number(await R.one(`(SELECT sum(amount_minor) FROM fleet.fleet_paypal_clawback_posts WHERE checkout_id = $1 AND grp = 'fee_return')`, [checkoutId]))).toBe(80);
+    expect(await events("paypal_evidence_over_principal")).toBeGreaterThanOrEqual(1);
   });
 
   it("changing a published product's files pauses it until a review of the new files republishes it", async () => {

@@ -504,7 +504,7 @@ export class PayPalTreasuryWorker {
   /**
    * Readiness probe for a rail (read-only; nothing is created, sent or recorded). PayPal is asked for an access token,
    * the balance list, an empty one-hour Transaction Search window and the rail's webhook; the answer carries only
-   * non-secret facts — HTTP statuses, currency codes (never amounts), whether the webhook points at `webhookUrl` and
+   * non-secret facts — HTTP statuses (Transaction Search over the last 24 h), currency codes (never amounts), whether the webhook points at `webhookUrl` and
    * which required events it lacks. Payouts are not probed: their readiness is a separate, evidenced step.
    */
   async probe(r: { railMode: "live" | "sandbox"; vaultRef: string }, webhookId: string | null, webhookUrl: string): Promise<PayPalProbe> {
@@ -515,7 +515,9 @@ export class PayPalTreasuryWorker {
     const bal = await this.call(r, "GET", "/v1/reporting/balances").catch(() => null);
     out.balances = { status: bal?.status ?? null, currencies: bal?.status === 200 && Array.isArray(bal.json?.balances)
       ? [...new Set((bal.json.balances as Array<{ currency?: unknown }>).map((b) => b?.currency).filter((c): c is string => typeof c === "string" && /^[A-Z]{3}$/.test(c)))].sort() : [] };
-    const end = new Date(Math.floor(this.now() / 1000) * 1000), start = new Date(end.getTime() - 3_600_000);
+    // v76: a 24-hour window. Transaction Search publishes with a lag of hours and answers 404 INVALID_REQUEST for a window lying
+    // wholly after its last refresh — the old one-hour window reported access as broken when it was not.
+    const end = new Date(Math.floor(this.now() / 1000) * 1000), start = new Date(end.getTime() - 24 * 3_600_000);
     const qs = new URLSearchParams({ start_date: start.toISOString().replace(/\.\d{3}Z$/, "Z"), end_date: end.toISOString().replace(/\.\d{3}Z$/, "Z"),
       fields: "transaction_info", page_size: "1", page: "1" });
     out.transactionSearch = { status: (await this.call(r, "GET", `/v1/reporting/transactions?${qs}`).catch(() => null))?.status ?? null };

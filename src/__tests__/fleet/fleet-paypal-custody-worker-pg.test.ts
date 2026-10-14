@@ -186,12 +186,13 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury worker end to end (PostgreSQL + HT
       seller_payable_breakdown: { gross_amount: { value: "5.00", currency_code: "GBP" }, paypal_fee: { value: "0.10", currency_code: "GBP" }, net_amount: { value: "4.90", currency_code: "GBP" } },
       links: [{ rel: "up", href: `https://api.paypal.com/v2/payments/captures/${o.capture!.id}` }] } }, "good-signature");
     await worker.tick();
-    expect(await cash()).toBe(before - 500);
+    // v76: the 0.10 of the capture fee PayPal gave back with the refund (gross 5.00 − net 4.90) comes back to the agent too —
+    // what left the treasury is 4.90 (before v76 the returned fee never reached the books).
+    expect(await cash()).toBe(before - 500 + 10);
     // v57: the webhook's refund is evidence, posted once by reconciliation (whatever reports it later).
     expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_paypal_clawback_evidence WHERE source = 'webhook' AND ref_id = 'RF0000000001')`)).toBe(1);
     expect(await R.one(`(SELECT sum(amount_minor)::int FROM fleet.fleet_paypal_clawback_posts WHERE grp = 'refund')`)).toBe(500);
-    // v76: the fee PayPal gave back with the refund (gross 5.00 − net 4.90) is evidence too. (How much of it posts for an agent sale is
-    // v58's cap, unchanged here — a pre-existing gap reported for owner review; for the owner's proof the capture fee is included.)
+    // v76: the fee PayPal gave back with the refund (gross 5.00 − net 4.90) is evidence too, posted once (capped at the capture fee).
     expect(await R.one(`(SELECT amount_minor::int FROM fleet.fleet_paypal_clawback_evidence WHERE source = 'webhook' AND ref_id = 'FR-RF0000000001' AND grp = 'fee_return')`)).toBe(10);
   });
 
