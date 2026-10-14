@@ -1495,7 +1495,7 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   cx_paypal_buyer_record: { writes: ["fleet_customer_orders"], calls: ["fleet_event"] },
   cx_paypal_clawback_evidence: { writes: ["fleet_paypal_clawback_evidence"], calls: ["fleet_event", "fleet_paypal_clawback_reconcile", "cx_paypal_refund_record", "fleet_refund_request_completed"] },
   // v76: a new refund leaves only within available treasury cash; a refund that must wait is noted once.
-  cx_paypal_refund_work: { writes: [], calls: ["fleet_treasury_liquidity_wait"] },
+  cx_paypal_refund_work: { writes: [], calls: ["fleet_treasury_liquidity_wait", "fleet_treasury_lock"] },
   cx_paypal_refund_result: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event", "cx_paypal_clawback_evidence"] },
   cx_paypal_dispute_record: { writes: ["fleet_paypal_disputes"], calls: ["fleet_event"] },
   // v76: reading an open checkout's PayPal status (backed off), failing a voided one.

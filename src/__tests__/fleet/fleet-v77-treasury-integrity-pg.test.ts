@@ -137,6 +137,60 @@ describe.skipIf(!PG_BIN)("v77 treasury liquidity: real outflows fit available Pa
     expect(work[0]).toMatchObject({ amountMinor: 1_500 });
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
+
+  it("after a PayPal reading, money that has left since — a settled payout, a completed refund, a card repayment, an owner reimbursement — is not counted as available again; every rail record of the account shares one balance", async () => {
+    const sha256Hex = (x: string) => crypto.createHash("sha256").update(x).digest("hex");
+    await balance(30_000);
+    const L0 = await liquidity();
+    expect(L0.leftSinceReading).toEqual({ paymentsSettledMinor: 0, refundsMinor: 0, cardRepaidMinor: 0, ownerReimbursedMinor: 0 });
+    // 1. A payout settles after the reading: it moves from "in flight" to "left since the reading" — free cash is unchanged.
+    const claimed = (await cx("cx_claim_instruction", [W, sha256Hex("lease-after-reading")])).instruction;
+    expect(claimed, "an issued payout to claim").toBeTruthy();
+    expect((await cx("cx_report_result", [claimed.instructionId, "lease-after-reading", "settled", "PAYOUTX0001", claimed.amountCents, null])).ok).toBe(true);
+    const L1 = await liquidity();
+    expect(L1.leftSinceReading.paymentsSettledMinor).toBe(claimed.amountCents);
+    expect(L1.committed.paymentsInFlightMinor).toBe(L0.committed.paymentsInFlightMinor - claimed.amountCents);
+    expect(L1.freeMinor).toBe(L0.freeMinor);
+    // 2. A card charge (owed to the card), then its repayment by hand after the reading: free cash falls once, and stays fallen.
+    await R.q(`SELECT fleet.fleet_ledger_post('card_charge', 'test-card-charge-1', $1, 'test card charge', 'owner', NULL, NULL, NULL, 'test-card-charge-1', NULL, now(),
+      jsonb_build_array(jsonb_build_object('account', 'fleet:expense', 'side', 'D', 'amount', 250), jsonb_build_object('account', 'fleet:treasury:unallocated', 'side', 'C', 'amount', 250),
+                        jsonb_build_object('account', 'fleet:card:reserve', 'side', 'D', 'amount', 250), jsonb_build_object('account', 'fleet:card:payable', 'side', 'C', 'amount', 250)))`, [OWNER]);
+    const L2 = await liquidity();
+    expect(L2.committed.cardToRepayMinor).toBe(250);
+    expect(L2.freeMinor).toBe(L1.freeMinor - 250);
+    expect((await R.q(`SELECT fleet.fleet_admin_card_repayment_record(250, 'CARDREPAY0001', $1) AS r`, [OWNER]))[0].r).toMatchObject({ ok: true });
+    const L3 = await liquidity();
+    expect(L3.committed.cardToRepayMinor).toBe(0);
+    expect(L3.leftSinceReading.cardRepaidMinor).toBe(250);
+    expect(L3.freeMinor).toBe(L2.freeMinor);
+    // 3. The owner reimburses themselves after the reading: owed falls, left-since-reading rises — free cash unchanged.
+    expect((await R.q(`SELECT fleet.fleet_admin_owner_payable_reimbursed(100, 'PAYTXN00003', $1) AS r`, [OWNER]))[0].r).toMatchObject({ ok: true });
+    const L4 = await liquidity();
+    expect(L4.leftSinceReading.ownerReimbursedMinor).toBe(100);
+    expect(L4.freeMinor).toBe(L3.freeMinor);
+    // 4. A refund PayPal completes after the reading: requested → completed, still deducted until a fresh reading.
+    const req = (await R.q(`SELECT request_id FROM fleet.fleet_paypal_refund_requests WHERE status = 'requested' ORDER BY created_at LIMIT 1`))[0];
+    expect(req, "the refund requested earlier").toBeTruthy();
+    expect((await cx("cx_paypal_refund_result", [W, req.request_id, "completed", "RFDAFTER0001", 1_500, "GBP", null])).ok).toBe(true);
+    const L5 = await liquidity();
+    expect(L5.committed.refundsRequestedMinor).toBe(L4.committed.refundsRequestedMinor - 1_500);
+    expect(L5.leftSinceReading.refundsMinor).toBe(1_500);
+    expect(L5.freeMinor).toBe(L4.freeMinor);
+    // 5. Another rail record for the SAME PayPal account (same credential): it sees the same reading and the same commitments.
+    const r1 = (await R.q(`SELECT legal_entity_id, account_ref, credential_id FROM fleet.fleet_payment_rails WHERE rail_id = $1`, [rail.railId]))[0];
+    const added = (await R.q(`SELECT fleet.fleet_admin_rail_add('paypal', 'Second record, same account', 'shared', $1, ARRAY['payouts'], $2, $3, 'live', NULL, NULL, $4) AS r`,
+      [r1.legal_entity_id, r1.account_ref, r1.credential_id, OWNER]))[0].r;
+    expect(added, JSON.stringify(added)).toMatchObject({ railId: expect.any(String), provider: "paypal" });
+    const other = await R.one<any>(`fleet.fleet_treasury_liquidity($1)`, [added.railId ?? added.rail_id]);
+    expect(other.accountRails).toEqual(expect.arrayContaining([rail.railId]));
+    expect(other).toMatchObject({ availableMinor: L5.availableMinor, freeMinor: L5.freeMinor });
+    // 6. A fresh reading that shows what left: nothing is "left since the reading" any more, and free cash is consistent.
+    const left = L5.leftSinceReading.paymentsSettledMinor + L5.leftSinceReading.refundsMinor + L5.leftSinceReading.cardRepaidMinor + L5.leftSinceReading.ownerReimbursedMinor;
+    await balance(30_000 - left);
+    const L6 = await liquidity();
+    expect(L6.leftSinceReading).toEqual({ paymentsSettledMinor: 0, refundsMinor: 0, cardRepaidMinor: 0, ownerReimbursedMinor: 0 });
+    expect(L6.freeMinor).toBe(L5.freeMinor);
+  });
 });
 
 describe.skipIf(!PG_BIN)("v77 envelope spending: the same contextual Fleet Control review as own capital (PostgreSQL)", { timeout: 240_000 }, () => {

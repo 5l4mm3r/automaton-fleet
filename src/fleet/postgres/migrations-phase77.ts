@@ -3,9 +3,10 @@
  * edited; what the integrity review found is completed here:
  *
  *  1. Treasury liquidity. Every real outflow the Fleet starts — a payout instruction, a refund — fits the PayPal cash actually
- *     AVAILABLE (custody's latest Balances reading, at most 3 hours old), less what is already committed to leave: issued /
- *     claimed payouts, refunds requested or sent, the card balance still to repay, and what is owed to the owner for AI credit
- *     their card paid. Ledger wallets (which may hold unbacked owner capital) never authorise real cash on their own; a row
+ *     AVAILABLE in the PayPal ACCOUNT (custody's latest Balances reading for any rail on that account, at most 3 hours old),
+ *     less what is committed to leave (payouts issued / claimed, refunds requested / sent, the card balance still to repay, what
+ *     is owed to the owner for AI credit their card paid) and less what already left after that reading (payouts settled,
+ *     refunds accepted or completed, card repayments and owner reimbursements recorded) — the reading does not show those yet. Ledger wallets (which may hold unbacked owner capital) never authorise real cash on their own; a row
  *     lock on the treasury rail serialises payouts and refunds, so two agents cannot spend the same cash. Short of cash the
  *     payment WAITS — still reserved, which is the agent's own money and never exhaustion — and is noted once (P2).
  *  2. Envelope spending (Fleet-allocated capital) gets the same contextual assessment and automated Fleet Control review as
@@ -31,7 +32,7 @@ export const EVENT_ROUTES_V77 = Object.freeze({
 // ── Treasury liquidity: every real outflow the Fleet starts (a payout instruction, a refund) fits the PayPal cash actually
 //    AVAILABLE, less what is already committed to leave (issued / claimed payouts, refunds requested or sent, the card balance
 //    still to repay). Ledger wallets (which may hold unbacked capital) never authorise real cash on their own. Serialised by a
-//    row lock on the treasury rail (payouts and refunds alike), so two agents cannot spend the same cash. Short of cash, the payment WAITS (still reserved —
+//    lock on every rail record of the PayPal account (payouts and refunds alike), so two agents cannot spend the same cash. Short of cash, the payment WAITS (still reserved —
 //    a reservation is the agent's own money, never exhaustion); nothing fails. A balance older than 3 hours is not relied on. ──
 // Envelope spending (Fleet-allocated capital) gets the same contextual assessment and, when flagged, the same automated Fleet
 // Control review as own-capital orders (v64 covered only own capital). No cap is added: routine orders pass straight through.
@@ -61,7 +62,7 @@ const ISSUE_LIQUIDITY = restate(V64_SQL, "svc_issue_payment_instruction", [
 `, `  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NO_CUSTODY_SIGNER'); END IF;
   -- v76: real cash. The order stays reserved and is tried again on the next pass.
   IF r.provider = 'paypal' THEN
-    PERFORM 1 FROM fleet_payment_rails WHERE rail_id = r.rail_id FOR UPDATE;   -- one treasury, one decision at a time
+    PERFORM fleet_treasury_lock(r.rail_id);   -- one PayPal account, one decision at a time
     v_liq := fleet_treasury_liquidity(r.rail_id);
     IF (v_liq ->> 'stale')::boolean OR (v_liq ->> 'freeMinor')::bigint < o.amount_cents THEN
       PERFORM fleet_treasury_liquidity_wait(o.agent_id, 'payment', o.order_id::text, o.amount_cents, v_liq);
@@ -78,7 +79,7 @@ const REFUND_WORK_LIQUIDITY = restate(V59_SQL, "cx_paypal_refund_work", [
   FOR q IN SELECT x.request_id, x.amount_minor, x.agent_id, c.rail_id FROM fleet_paypal_refund_requests x JOIN fleet_paypal_checkouts c ON c.checkout_id = x.checkout_id
             WHERE x.status = 'requested' ORDER BY x.created_at LOOP
     IF v_free IS NULL THEN
-      PERFORM 1 FROM fleet_payment_rails WHERE rail_id = q.rail_id FOR UPDATE;   -- the same lock the payout issuer takes
+      PERFORM fleet_treasury_lock(q.rail_id);   -- the same lock the payout issuer takes
       v_liq := fleet_treasury_liquidity(q.rail_id);
       v_stale := (v_liq ->> 'stale')::boolean;
       -- Requested refunds are counted as committed by fleet_treasury_liquidity; they are the candidates here.
@@ -102,22 +103,51 @@ export const V77_SQL = `
 -- ═══ 1. Treasury liquidity (real outflows fit the PayPal cash actually available) ═══
 CREATE FUNCTION fleet_treasury_liquidity(p_rail uuid) RETURNS jsonb LANGUAGE plpgsql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE b fleet_paypal_balance_observations; v_cur text := (SELECT accounting_currency FROM fleet_economic_model WHERE id = 1);
-        v_ins bigint; v_req bigint; v_sent bigint; v_card bigint; v_owner bigint; v_avail bigint;
+DECLARE r fleet_payment_rails; b fleet_paypal_balance_observations; v_cur text := (SELECT accounting_currency FROM fleet_economic_model WHERE id = 1);
+        v_rails uuid[]; v_at timestamptz; v_ins bigint; v_settled bigint; v_req bigint; v_sent bigint; v_refunded bigint; v_card bigint; v_owner bigint;
+        v_card_paid bigint; v_owner_paid bigint; v_avail bigint;
 BEGIN
-  SELECT * INTO b FROM fleet_paypal_balance_observations WHERE rail_id = p_rail AND currency = v_cur ORDER BY observed_at DESC LIMIT 1;
+  SELECT * INTO r FROM fleet_payment_rails WHERE rail_id = p_rail;
+  -- One PayPal ACCOUNT, however many rail records point at it (the same credential, or the same masked account of the same entity).
+  SELECT array_agg(x.rail_id) INTO v_rails FROM fleet_payment_rails x
+   WHERE x.provider = r.provider AND (x.rail_id = r.rail_id OR x.credential_id = r.credential_id
+          OR (x.account_ref = r.account_ref AND x.legal_entity_id = r.legal_entity_id));
+  SELECT * INTO b FROM fleet_paypal_balance_observations WHERE rail_id = ANY (v_rails) AND currency = v_cur ORDER BY observed_at DESC LIMIT 1;
   v_avail := COALESCE(b.available_minor, 0);
-  SELECT COALESCE(sum(amount_cents), 0) INTO v_ins FROM fleet_payment_instructions WHERE payment_rail_id = p_rail AND status IN ('issued','claimed');
-  SELECT COALESCE(sum(x.amount_minor) FILTER (WHERE x.status = 'requested'), 0), COALESCE(sum(x.amount_minor) FILTER (WHERE x.status = 'sent'), 0)
-    INTO v_req, v_sent FROM fleet_paypal_refund_requests x JOIN fleet_paypal_checkouts c ON c.checkout_id = x.checkout_id WHERE c.rail_id = p_rail;
+  v_at := COALESCE(b.observed_at, '-infinity'::timestamptz);
+  -- Still to leave: payouts issued / claimed; refunds requested / sent.
+  SELECT COALESCE(sum(amount_cents) FILTER (WHERE status IN ('issued','claimed')), 0),
+         -- Already left, but after the reading: PayPal's available balance does not show it yet.
+         COALESCE(sum(COALESCE(settled_cents, amount_cents)) FILTER (WHERE status = 'settled' AND finished_at > v_at), 0)
+    INTO v_ins, v_settled FROM fleet_payment_instructions WHERE payment_rail_id = ANY (v_rails);
+  SELECT COALESCE(sum(x.amount_minor) FILTER (WHERE x.status = 'requested'), 0), COALESCE(sum(x.amount_minor) FILTER (WHERE x.status = 'sent'), 0),
+         COALESCE(sum(x.amount_minor) FILTER (WHERE x.status IN ('pending','completed') AND x.updated_at > v_at), 0)
+    INTO v_req, v_sent, v_refunded FROM fleet_paypal_refund_requests x JOIN fleet_paypal_checkouts c ON c.checkout_id = x.checkout_id WHERE c.rail_id = ANY (v_rails);
+  -- Owed and not yet paid from the account: the card balance, and AI credit the owner's card paid (v69).
   v_card := GREATEST(0, fleet_ledger_balance('fleet:card:payable'));
-  -- Owed to the owner for AI credit their card paid (v69): reimbursed only by the owner's own payment, never spent by agents.
   v_owner := GREATEST(0, fleet_ledger_balance('fleet:owner:payable'));
-  RETURN jsonb_build_object('railId', p_rail, 'currency', v_cur, 'availableMinor', v_avail, 'observedAt', b.observed_at,
+  -- Paid by hand from the account after the reading (the owner's card repayment and reimbursement transfers).
+  SELECT COALESCE(sum(p.amount_cents) FILTER (WHERE j.kind = 'card_repayment' AND p.account_id = 'fleet:card:payable' AND p.side = 'D'), 0),
+         COALESCE(sum(p.amount_cents) FILTER (WHERE j.kind = 'owner_payable_reimbursed' AND p.account_id = 'fleet:owner:payable' AND p.side = 'D'), 0)
+    INTO v_card_paid, v_owner_paid FROM fleet_ledger_journal j JOIN fleet_ledger_postings p ON p.journal_id = j.journal_id
+   WHERE j.kind IN ('card_repayment','owner_payable_reimbursed') AND j.recorded_at > v_at;
+  RETURN jsonb_build_object('railId', p_rail, 'accountRails', to_jsonb(v_rails), 'currency', v_cur, 'availableMinor', v_avail, 'observedAt', b.observed_at,
     'stale', b.observation_id IS NULL OR b.observed_at < now() - interval '${LIQUIDITY_MAX_AGE_HOURS} hours',
     'committed', jsonb_build_object('paymentsInFlightMinor', v_ins, 'refundsRequestedMinor', v_req, 'refundsSentMinor', v_sent, 'cardToRepayMinor', v_card,
       'owedToOwnerMinor', v_owner),
-    'freeMinor', v_avail - v_ins - v_req - v_sent - v_card - v_owner);
+    'leftSinceReading', jsonb_build_object('paymentsSettledMinor', v_settled, 'refundsMinor', v_refunded, 'cardRepaidMinor', v_card_paid, 'ownerReimbursedMinor', v_owner_paid),
+    'freeMinor', v_avail - v_ins - v_req - v_sent - v_card - v_owner - v_settled - v_refunded - v_card_paid - v_owner_paid);
+END $$;
+
+-- Serialise every real-cash decision on one PayPal account: lock all its rail records, always in the same order.
+CREATE FUNCTION fleet_treasury_lock(p_rail uuid) RETURNS void LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE r fleet_payment_rails;
+BEGIN
+  SELECT * INTO r FROM fleet_payment_rails WHERE rail_id = p_rail;
+  PERFORM 1 FROM fleet_payment_rails x
+   WHERE x.provider = r.provider AND (x.rail_id = r.rail_id OR x.credential_id = r.credential_id OR (x.account_ref = r.account_ref AND x.legal_entity_id = r.legal_entity_id))
+   ORDER BY x.rail_id FOR UPDATE;
 END $$;
 
 -- One P2 notice per waiting payment or refund (not on every pass): what waits, how much, and the cash picture.

@@ -1026,8 +1026,10 @@ rehearsal on the VPS · **L** live production evidence. A running service is not
 | 12 | Owner proof purchase is owner capital, never agent revenue; its refunds reverse exactly once | v76 | C T | Implemented; awaiting the live proof |
 | 13 | Card bypass: reserve first, liability once, manual repayment visible, receipt return/withdrawal choice | v48/v51/v53/v54/v57/v58/v64 | C T | Implemented; **awaiting the card sealed + `--card on`** |
 | 14 | Standing identity authority: sealed facts, revocable, logged, brokered, documents uploaded, never in model input / logs | v49/v51, broker, browser worker redaction | C T | Implemented; **awaiting facts sealed + `owner-identity-autonomy on`** |
-| 15 | Dynamic sweeps from net profit with reserves, growth, reductions | v30/v42/v50/v51; daily reaper | C T | Implemented, **disabled** (`economy-sweep-policy`) |
-| 16 | Self-sustaining AI cost: owner-funded credit → reimbursement only; treasury lots; no double count | v69–v74; **v77 reimbursement record** | C T | Implemented (reimbursement record was missing — added); purchase is **manual** (§31.4) |
+| 15a | Dynamic sweeps from net profit with reserves, growth, reductions (internal: agent cash → treasury) | v30/v42/v50/v51; daily reaper | C T | Implemented, **disabled** (`economy-sweep-policy`) |
+| 15b | **Paying sweeps / profit out to the owner (external)** | `OWNER_SWEEP_ENABLED` ignored (src/index.ts:375); `ledger-withdraw` places an **inert** order custody never executes | C | **NOT IMPLEMENTED — no automation, and no command records a manual withdrawal** (§31.10) |
+| 16a | AI-cost accounting: owner-funded credit → reimbursement only; treasury lots; no double count | v69–v74; v77 reimbursement record | C T | Implemented |
+| 16b | **Automatic AI-credit replenishment** | none | C | **NOT IMPLEMENTED in code**; provider limitation too: no purchase API, console takes cards only. Manual steps §31.10 |
 | 17 | Offers, enquiries, files, review gate, delivery, revisions, buyer pages, wake-ups, owner view | v76 + UI 0.19.0 | C T **L: deployed a0e0ac0** | Implemented; no live sale yet |
 | 18 | Quality: real substance, saved values, promises checked | inspector fleet-qa-1, review gate, sale-ready demos | C T **L: sandbox + inspector on the production kernel** | Implemented; premium quality remains the agent's work |
 | 19 | Proton per-agent routing; SMS adapter | v41, Bridge in production | C T **L (Bridge running)** | Implemented; agent `mail.send` not yet live-tested; SMS dormant (Twilio dependency) |
@@ -1039,9 +1041,11 @@ rehearsal on the VPS · **L** live production evidence. A running service is not
 ### 31.2 Treasury integrity (v77)
 Found: payouts (`svc_issue_payment_instruction` → custody → PayPal Payouts) and Fleet refunds were bounded only by ledger
 balances — agent cash, envelopes, `treasury:unallocated` — which include unbacked virtual capital; agents were serialised only per
-agent; PayPal's own INSUFFICIENT_FUNDS was the only real backstop. v77: each real outflow needs a Balances reading ≤ 3 h old and
-`available − (payouts issued/claimed + refunds requested/sent + card payable + owed to owner) ≥ amount`, under a row lock on the
-treasury rail; otherwise it waits reserved (P2 `treasury_liquidity_wait`, once). Not a deposit gate: nothing else waits on funding.
+agent; PayPal's own INSUFFICIENT_FUNDS was the only real backstop. v77: each real outflow needs a Balances reading ≤ 3 h old for
+the PayPal **account** (every rail record sharing its credential or masked account) and `available − still to leave (payouts
+issued/claimed, refunds requested/sent, card payable, owed to owner) − already left after that reading (payouts settled, refunds
+accepted/completed, card repayments and owner reimbursements recorded) ≥ amount`, under a lock on all of the account's rail records;
+otherwise it waits reserved (P2 `treasury_liquidity_wait`, once). Not a deposit gate: nothing else waits on funding.
 Remaining, documented: `svc_paypal_availability` (v51) releases held captures against the account's available balance per pass
 (weak, but harmless now that outflows are gated); card charges above a hold are advanced in the ledger (the card, not PayPal, pays
 the merchant; repayment is then committed cash).
@@ -1064,10 +1068,10 @@ treasury capital; since v77 real cash is protected separately by the liquidity g
 | Owner withdrawal / reimbursement | owner, by hand in PayPal; recorded (`economy-ai-credit-reimbursed`) | — | — |
 | Buy AI credit | provider console (cards only): auto-reload or manual | owner card (route `owner_card`, in place); a treasury-linked card only by owner decision (unverified) | record receipts; reimbursement as above |
 
-### 31.5 Sweeps, survival, AI fuses
+### 31.5 Sweeps, survival, AI fuses (corrected: see 15b / 16b)
 Sweeps: `economy-sweep-policy '{"enabled":true,…}'` → the controller reaper runs one internal pass daily (ledger: agent cash →
 treasury), from realised after-tax net profit above runway, cushion, commitments and growth reserve; reductions expire and revert.
-`OWNER_SWEEP_ENABLED` is not implemented — paying the owner is a manual PayPal transfer. Survival protection stays ON until launch
+`OWNER_SWEEP_ENABLED` is not implemented, and there is no command to record a manual owner withdrawal (§31.10). Survival protection stays ON until launch
 (`economy-protection off <reason>`, or per agent). AI runaway fuses (`founder-cognition --daily-budget/--turns-per-hour`; 754p / 20 h,
 3000p / 60 h) are failsafes, separate from economic limits.
 
@@ -1088,3 +1092,40 @@ older dump over live financial records.
 The trader buyers deal with (as registered with PayPal Business): legal name (individual or company); trading name if any; a
 geographic postal address; a contact email; VAT number if VAT-registered; company number and registered office if a company.
 Agents' venture brands are shown separately and may be anything truthful.
+
+### 31.9 Capital policy matching the owner's decisions (proposal for the owner's approval — replaces the v30 defaults)
+The decision engine is already contextual: it rejects a negative expected value; defers without evidence (not without history);
+discounts expected net by stated confidence until a track record exists, then by measured calibration; part-funds a first tranche
+when the request exceeds room; attaches limits for low confidence, a weak record, or runway shorter than payback (v51); funds
+otherwise. The numbers below are the treasury-health bounds it decides within. Since v77, real cash already excludes obligations,
+card liabilities, money owed to the owner and in-flight payments, so the ledger reserve only needs to hold **contingency**.
+```
+economy-capital-policy '{"enabled":true,"treasuryReserveBp":2500,"maxRequestTreasuryBp":2500,"maxAgentExposureBp":5000,
+  "partialTrancheBp":5000,"minConfidenceBp":3000,"minEvidenceItems":2,"minTrackRecord":3,"calibrationFloorBp":2500,
+  "limitedStopLossBp":5000,"limitedMaxSingleBp":5000,"envelopeDays":30,"limitedEnvelopeDays":14,"highRoiBp":5000,
+  "reinvestmentReductionBp":2500,"reapplyCooldownS":3600}'
+```
+| Setting | Value | Owner decision it implements |
+|---|---|---|
+| treasuryReserveBp | 25 % | protected capital = obligations + runway + growth + contingency; obligations and owed money are now excluded at the real-cash level (v77) and runway lives in each agent's own wallet, so the lender reserve is contingency only (was 50 %) |
+| maxRequestTreasuryBp | 25 % | one decision may fund a real venture step; larger asks are part-funded and continue on evidence (was 10 %) |
+| maxAgentExposureBp | 50 % | Agent-1 launches alone; half the lendable treasury stays available for Agent-2 (the reserve) and contingencies (was 25 %) |
+| minEvidenceItems | 2 | evidence-based, not history-based: new agents qualify |
+| minTrackRecord | 3 | not an entry gate — after 3 measured forecasts, measured calibration replaces stated confidence |
+| minConfidenceBp / calibrationFloorBp | 30 % / 25 % | low confidence attaches limits rather than refusing |
+| partialTrancheBp, limited*, envelope*, highRoiBp | unchanged | partial funding, bounded envelopes with stop-loss and expiry, high-return fast path |
+| reinvestmentReductionBp | 25 % | temporary sweep reductions for growth, decided automatically, expiring and reverting |
+Code limit, stated plainly: the reserve and exposure terms are fixed fractions; contextual factors decide within them. A reserve
+computed from live obligations would be a further code change, not configuration.
+
+### 31.10 Supported manual steps (no automation exists for these)
+- **AI credit**: (1) the owner turns on auto-reload in the provider console on their card (provider: cards only, no purchase API);
+  (2) receipts reach the Fleet mailbox and appear as observations; (3) `economy-ai-credit-confirm <receiptId> owner`; (4) usage
+  accrues as owed to the owner; (5) the owner transfers the owed amount to themselves in PayPal; (6) `economy-ai-credit-reimbursed
+  <amountMinor> <paypalTxnId>`. A treasury-funded route needs a card drawing on the treasury account (owner decision; unverified).
+- **Card**: the owner repays the card by hand (PayPal → bank → card) and records `economy-card-repay <amount> <ref>` or
+  `economy-card-statement-paid <statementId> <ref>`; the weekly statement is optional (`economy-card-statement-policy --enabled off`).
+- **Owner withdrawals / external sweeps**: **not supported**. A transfer out of the treasury PayPal other than the two above cannot
+  be recorded, so the books would no longer match PayPal (visible as a backing difference). Until a recorder is designed (how a
+  withdrawal draws on Fleet profit versus owner capital is an owner decision), make no such transfers.
+
