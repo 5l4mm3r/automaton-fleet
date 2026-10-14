@@ -1004,3 +1004,87 @@ toolchain, a fulfilment loop with a quality gate, and the knowledge to use them 
 Remaining before release: VPS build matching the local build, rehearsal 75 → 76, founder runtime upgrade rehearsal to v7,
 toolchain host install, public-site origin and seller notice set by the owner, and the edge route for `/o/`, `/order/`,
 `/enquiry/` verified on the public origin.
+
+## 31. Completion against the agreed operating model (2026-10-14; schema v77 in code, production a0e0ac0 / v76)
+Evidence kinds: **C** code inspection · **T** automated tests (local PostgreSQL, fake PayPal / simulated mailbox) · **R** disposable
+rehearsal on the VPS · **L** live production evidence. A running service is not readiness.
+
+### 31.1 Requirement → implementation matrix
+| # | Requirement (agreed model) | Where | Evidence | Status |
+|---|---|---|---|---|
+| 1 | Agents research, choose, build, market, deliver and earn; ranking and risk sizing are the agent's | founder-v7 tools, foundation v2, decisions ledger | C T (founder-tools, demonstrations) | Implemented; **live only after Agent-1 upgrade + resume** |
+| 2 | Digital products, courses, productised services as initial focus (guidance, not a stage gate); several offers within capacity | foundation v2 `bf-initial-focus`, offers `capacity` | C T | Implemented |
+| 3 | Fleet Control reviews material / suspicious spending automatically; routine work never waits on the owner | v64 review; **v77: envelope spending too** | C T (v64 11/11, v77) | Implemented (defect fixed in v77) |
+| 4 | Capital allocation decided by Fleet Control: reject / partial / fund / limits; temporary sweep reductions with expiry | v30 + v51 `fleet_capital_decide`, v50/v51 reductions | C T (f2-capital, v77 new-agent case) | Implemented; thresholds are **migration defaults, not owner policy** (§31.3) |
+| 5 | New agents eligible for evidence-backed capital without profit history | `min_track_record` only discounts confidence (v30:343) | C T (v77) | Implemented |
+| 6 | No fixed ordinary spending caps; no overdrafts; no rescue | v64 optional maxima; CLI `economy-custody-activate - -` | C T | Implemented |
+| 7 | **Every real outflow bounded by actually available treasury cash** | **v77 liquidity gate** (payouts, refunds) | C T (v77 6/6) | **Was defective; fixed in v77** (not yet deployed) |
+| 8 | Temporary reservation never causes death; prospective revenue never keeps an exhausted agent alive | `fleet_agent_wallet_measure` (v51/v57) | C T (v77 asserts reservation ≠ exhaustion) | Implemented (held captures and disputed money count as the agent's; open checkouts do not) |
+| 9 | Death on actual exhaustion + estate settlement after launch | `svc_insolvency_tick`, `svc_settle_estates`; survival protection ON | C T | Implemented; **awaiting activation** (`economy-protection off` at launch) |
+| 10 | Customer payment → attribution → fees → held/available → agent cash | v48/v51/v76 | C T; **L: £1 owner test captured 2026-10-10** | Implemented; agent sale not yet live |
+| 11 | Refund / reversal / dispute detection; duplicates across webhook and Search; returned fees | v57/v58/v59/v76 (a0e0ac0) | C T | Implemented; **webhook delivery never observed live (§31.6)** |
+| 12 | Owner proof purchase is owner capital, never agent revenue; its refunds reverse exactly once | v76 | C T | Implemented; awaiting the live proof |
+| 13 | Card bypass: reserve first, liability once, manual repayment visible, receipt return/withdrawal choice | v48/v51/v53/v54/v57/v58/v64 | C T | Implemented; **awaiting the card sealed + `--card on`** |
+| 14 | Standing identity authority: sealed facts, revocable, logged, brokered, documents uploaded, never in model input / logs | v49/v51, broker, browser worker redaction | C T | Implemented; **awaiting facts sealed + `owner-identity-autonomy on`** |
+| 15 | Dynamic sweeps from net profit with reserves, growth, reductions | v30/v42/v50/v51; daily reaper | C T | Implemented, **disabled** (`economy-sweep-policy`) |
+| 16 | Self-sustaining AI cost: owner-funded credit → reimbursement only; treasury lots; no double count | v69–v74; **v77 reimbursement record** | C T | Implemented (reimbursement record was missing — added); purchase is **manual** (§31.4) |
+| 17 | Offers, enquiries, files, review gate, delivery, revisions, buyer pages, wake-ups, owner view | v76 + UI 0.19.0 | C T **L: deployed a0e0ac0** | Implemented; no live sale yet |
+| 18 | Quality: real substance, saved values, promises checked | inspector fleet-qa-1, review gate, sale-ready demos | C T **L: sandbox + inspector on the production kernel** | Implemented; premium quality remains the agent's work |
+| 19 | Proton per-agent routing; SMS adapter | v41, Bridge in production | C T **L (Bridge running)** | Implemented; agent `mail.send` not yet live-tested; SMS dormant (Twilio dependency) |
+| 20 | Channels | own offer pages (v76, live); Gumroad (v52, fake-tested); Etsy | C T | Own pages: ready behind the sales gate · Gumroad: owner onboarding · **Etsy: not implemented** |
+| 21 | Public sales and promotion controlled until launch | v76 sales gate + preparation hold | C T **L: pages 404 in production** | Implemented |
+| 22 | Agent-1 first; Agent-2 paused reserve | founder upgrade lifecycle | C T R (local rehearsal) | Ready; both paused on b60e262 (L) |
+| 23 | Recovery preserves financial history | rollout `revert` safeguards; freeze-and-fix-forward | C | Documented §31.7 |
+
+### 31.2 Treasury integrity (v77)
+Found: payouts (`svc_issue_payment_instruction` → custody → PayPal Payouts) and Fleet refunds were bounded only by ledger
+balances — agent cash, envelopes, `treasury:unallocated` — which include unbacked virtual capital; agents were serialised only per
+agent; PayPal's own INSUFFICIENT_FUNDS was the only real backstop. v77: each real outflow needs a Balances reading ≤ 3 h old and
+`available − (payouts issued/claimed + refunds requested/sent + card payable + owed to owner) ≥ amount`, under a row lock on the
+treasury rail; otherwise it waits reserved (P2 `treasury_liquidity_wait`, once). Not a deposit gate: nothing else waits on funding.
+Remaining, documented: `svc_paypal_availability` (v51) releases held captures against the account's available balance per pass
+(weak, but harmless now that outflows are gated); card charges above a hold are advanced in the ledger (the card, not PayPal, pays
+the merchant; repayment is then committed cash).
+
+### 31.3 Capital-policy provenance
+`fleet_capital_policy` v1 (`updated_by = migration`, v30): treasury reserve 50 %, request ≤ 10 % of treasury, agent exposure
+≤ 25 %, evidence ≥ 2 items, track record 3 (calibration switch, **not** an entry gate), stop-loss 50 %, envelopes 30 / 14 days,
+reinvestment reduction ≤ 25 %. **These are implementation defaults, never owner-approved.** The reserve is computed on ledger
+treasury capital; since v77 real cash is protected separately by the liquidity gate. Change with `economy-capital-policy <json>`.
+
+### 31.4 Payment operations and their real prerequisites
+| Operation | Mechanism | Provider prerequisite | Fleet prerequisite |
+|---|---|---|---|
+| Receive a sale | Orders v2 create + capture | Live REST app (in place) | rail active (L) |
+| Detect payment | status polling; webhook; Search | reporting permission (works, L); webhook delivery (unverified) | custody running (L) |
+| Refund a buyer (Fleet-initiated) | Payments v2 capture refund | REST app (in place) — **no Payouts approval needed** | custody activation + `REAL_PAYMENTS_ENABLED` (custody.env) + liquidity |
+| Pay a supplier who accepts PayPal | Payouts v1 | **Payouts enabled on the live app (PayPal approval)**; recipient PayPal account | as above + destination enrolled/activated |
+| Pay a card-only merchant (ads, SaaS, domains, most tools) | owner credit card filled by the broker | the card itself | card sealed + `owner-identity-autonomy on --card on`; agent cash reserved |
+| Repay the card | owner, by hand (PayPal → bank → card); `economy-card-statement-paid` | — | statement policy optional (configurable/off) |
+| Owner withdrawal / reimbursement | owner, by hand in PayPal; recorded (`economy-ai-credit-reimbursed`) | — | — |
+| Buy AI credit | provider console (cards only): auto-reload or manual | owner card (route `owner_card`, in place); a treasury-linked card only by owner decision (unverified) | record receipts; reimbursement as above |
+
+### 31.5 Sweeps, survival, AI fuses
+Sweeps: `economy-sweep-policy '{"enabled":true,…}'` → the controller reaper runs one internal pass daily (ledger: agent cash →
+treasury), from realised after-tax net profit above runway, cushion, commitments and growth reserve; reductions expire and revert.
+`OWNER_SWEEP_ENABLED` is not implemented — paying the owner is a manual PayPal transfer. Survival protection stays ON until launch
+(`economy-protection off <reason>`, or per agent). AI runaway fuses (`founder-cognition --daily-budget/--turns-per-hour`; 754p / 20 h,
+3000p / 60 h) are failsafes, separate from economic limits.
+
+### 31.6 Webhook evidence
+Subscription correct (L: 10 events incl. the 8 required, URL ours); endpoint reachable (L: outside POST → 400 from the controller);
+DNS IPv4-only, TLS chain valid, firewall open. No PayPal delivery ever reached the controller (L: controller and edge logs, 0 inbox
+rows), including a resend accepted by PayPal (202) on 2026-10-14. PayPal's event API exposes no delivery attempts for live events;
+its Developer Dashboard (owner login) shows them. Purchases are still detected by status polling (T); refunds by Search (L access).
+The proof purchase creates fresh events after the subscription exists and settles it.
+
+### 31.7 Recovery that preserves financial history
+Before live money: `fleet-rollout.sh revert` (code-only reverts keep every write; a schema revert dumps the post-cutover state and
+refuses without `FLEET_REVERT_DISCARD_ACK`). Once real money or provider data exists: **freeze and fix forward** — sales closed
+(`economy-sales closed`), custody deactivated (`economy-custody-deactivate`), agents paused, then a corrective release; never restore an
+older dump over live financial records.
+
+### 31.8 Seller facts the owner must supply (`economy-public-site https://api.agentfleet.vip "<notice>"`)
+The trader buyers deal with (as registered with PayPal Business): legal name (individual or company); trading name if any; a
+geographic postal address; a contact email; VAT number if VAT-registered; company number and registered office if a company.
+Agents' venture brands are shown separately and may be anything truthful.
