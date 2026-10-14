@@ -6,6 +6,9 @@
  *
  * Inside the domain the command can:
  *   - read and execute system software (/usr, /bin, /sbin, /lib*, /etc, /proc);
+ *   - read and execute the pinned agent toolchain when the caller passes
+ *     `toolsDir` (scripts/fleet-agent-tools.sh: Python wheels for XLSX, DOCX,
+ *     PDF and images); it is on PYTHONPATH and PATH, never writable;
  *   - use /dev/null, /dev/zero and /dev/urandom;
  *   - read, write and delete only inside the founder's own workspace (TMPDIR
  *     is <workspace>/.tmp; /tmp itself is not reachable).
@@ -36,6 +39,7 @@ def fail(msg):
     sys.stderr.write("FLEET_EXEC_SANDBOX_UNAVAILABLE: " + msg + "\n")
     os._exit(97)
 workspace, command = sys.argv[1], sys.argv[2]
+tools = sys.argv[3] if len(sys.argv) > 3 else ""
 abi = libc.syscall(SYS_CREATE, None, ctypes.c_size_t(0), ctypes.c_uint32(1))
 if abi < 1:
     fail("landlock unavailable (errno %d)" % ctypes.get_errno())
@@ -70,6 +74,10 @@ for p in ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc"
     allow(p, ro)
 for p in ("/dev/null", "/dev/zero", "/dev/urandom", "/dev/random"):
     allow(p, READ_FILE | WRITE_FILE)
+if tools:
+    if not os.path.isdir(tools):
+        fail("tools dir missing: " + tools)
+    allow(tools, ro)
 allow(workspace, fs_all)
 PR_SET_NO_NEW_PRIVS = 38
 if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
@@ -88,13 +96,42 @@ export interface SandboxedResult {
   sandboxUnavailable: boolean;
 }
 
-/** Run `command` with /bin/sh inside the founder's workspace under the Landlock domain. */
-export function runSandboxed(workspace: string, command: string, opts: { timeoutMs: number; maxOutput: number; python?: string }): Promise<SandboxedResult> {
+/**
+ * The agent toolchain to expose, or null. Only an install (it has `site/`) outside the workspace counts; the path
+ * is resolved once so a `current` symlink swapped mid-run cannot change what this command sees. The caller reads
+ * FLEET_AGENT_TOOLS_DIR.
+ */
+function resolveToolsDir(toolsDir: string | undefined, workspace: string): string | null {
+  if (!toolsDir) return null;
+  try {
+    const real = fs.realpathSync(toolsDir);
+    const ws = fs.realpathSync(workspace);
+    if (real === ws || real.startsWith(`${ws}/`)) return null; // never code the founder itself can rewrite
+    return fs.statSync(`${real}/site`).isDirectory() ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run `command` with /bin/sh inside the founder's workspace under the Landlock domain. With `toolsDir` (an agent
+ * toolchain from scripts/fleet-agent-tools.sh) the command also sees its wheels: PYTHONPATH=<toolsDir>/site, and
+ * <toolsDir>/bin (fleet-python) first on PATH; the domain grants read+execute there, nothing more. The helper itself
+ * runs `python3 -I -S`, so PYTHONPATH reaches only the sandboxed command, never the helper.
+ */
+export function runSandboxed(workspace: string, command: string, opts: { timeoutMs: number; maxOutput: number; python?: string; toolsDir?: string }): Promise<SandboxedResult> {
   fs.mkdirSync(`${workspace}/.tmp`, { recursive: true, mode: 0o700 });
+  const tools = resolveToolsDir(opts.toolsDir, workspace);
+  const env: Record<string, string> = { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: workspace, TMPDIR: `${workspace}/.tmp`, LANG: "C.UTF-8" };
+  if (tools) {
+    env.PATH = `${tools}/bin:${env.PATH}`;
+    env.PYTHONPATH = `${tools}/site`;
+    env.PYTHONDONTWRITEBYTECODE = "1"; // the toolchain is read-only in the domain anyway; skip the doomed writes
+  }
   return new Promise((resolve) => {
-    const child = spawn(opts.python ?? "/usr/bin/python3", ["-I", "-S", "-c", LANDLOCK_HELPER, workspace, command], {
+    const child = spawn(opts.python ?? "/usr/bin/python3", ["-I", "-S", "-c", LANDLOCK_HELPER, workspace, command, ...(tools ? [tools] : [])], {
       cwd: workspace,
-      env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: workspace, TMPDIR: `${workspace}/.tmp`, LANG: "C.UTF-8" },
+      env,
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     });
