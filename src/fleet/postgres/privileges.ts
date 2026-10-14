@@ -1295,7 +1295,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       "fleet_econ_order_message"]),
     fleet_customer_files: new Set(["fleet_customer_files_add", "svc_offer_tick"]),
     fleet_order_staged_files: new Set(["fleet_econ_order_stage_file", "fleet_econ_order_deliver", "svc_offer_tick"]),
-    fleet_public_site: new Set(["fleet_admin_public_site_set"]),
+    fleet_public_site: new Set(["fleet_admin_public_site_set", "fleet_admin_sales_set"]),
+    // v76: refunds / reversals / fees of the owner's proof purchase, only by custody's refund recorder.
+    fleet_offer_proof_returns: new Set(["cx_paypal_refund_record"]),
     fleet_identity_connectors: new Set(["ix_connectors_publish"]),
     // v57: clawback evidence only from custody's sources and the owner's classification; posts only by the posting functions;
     // disputes by custody's record and the owner's resolution.

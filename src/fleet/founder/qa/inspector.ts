@@ -13,8 +13,9 @@
  *     placeholder text (lorem ipsum, TODO, TBD, FIXME, [INSERT, {{, XXX, "your name here") → fail;
  *   - xlsx: macros / external links / data connections → fail; sheets, dimensions, formula / chart / validation
  *     counts, defined names; recalculation with `formulas`: error cells (#REF!, #DIV/0!, …) → fail, functions the
- *     engine lacks → warn (their #NAME? is not counted as a failure), saved values that differ from (or are
- *     missing for) the recalculated ones → warn (previewers show saved values); spec "cases" ({file?, name?,
+ *     engine lacks → warn (their #NAME? is not counted as a failure), saved values that differ from the recalculated
+ *     ones → fail (previewers show the wrong number), missing ones → warn (shown blank); presentation (General formats,
+ *     plain headers, constants typed inside formulas) → advisory warn; spec "cases" ({file?, name?,
  *     sheet, inputs, expect, tolerance}) set inputs, recalculate and compare — each a pass/fail check "case:<name>";
  *   - docx: outline, counts, empty headings, consecutive duplicates, hyperlinks, spelling (advisory warn);
  *   - pdf: encrypted → fail, pages without text → warn, non-embedded fonts other than the standard 14 → warn,
@@ -436,7 +437,8 @@ def inspect_xlsx(r, path, cases):
     if not_eval:
         r.check("formula_not_evaluated", "warn", "%d formula cell(s) the engine did not evaluate: %s" % (len(not_eval), ", ".join(not_eval[:50])))
     if mismatch:
-        r.check("cached_values", "warn", "%d cell(s) whose saved value differs from the recalculated one (viewers that do not recalculate show the saved value): %s" % (len(mismatch), "; ".join(mismatch[:50])))
+        # A wrong saved number is a broken deliverable: previewers, phones and mail clients show it as the answer.
+        r.check("cached_values", "fail", "%d cell(s) whose saved value differs from the recalculated one (previewers, phones and mail clients show the saved, wrong value): %s — save the computed values (XlsxWriter: pass value= to write_formula)" % (len(mismatch), "; ".join(mismatch[:50])))
     elif missing_cache:
         r.check("cached_values", "warn", "%d formula cell(s) saved without a value (previewers show them blank): %s" % (len(missing_cache), ", ".join(missing_cache[:50])))
     else:

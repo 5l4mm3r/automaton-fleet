@@ -118,6 +118,8 @@
  *   economy-ai-credit-test-period-preview | economy-ai-credit-test-period-writeoff  (v74) pre-launch AI cost → the Fleet; owner payable waived as contributed capital (each journal once; never past the launch)
  *   economy-launch-boundary | economy-launch-boundary-record <note…>         (v74) the explicit launch boundary (owner, once)
  *   economy-public-site <https://origin> [seller notice…]                  (v76) where offer / order pages are served, and who the seller is
+ *   economy-sales open|closed                                               (v76) sales to the public (closed by default: offer pages hidden,
+ *                                                                           no buys or briefs; order pages and economy-offer-proof work)
  *   economy-offer-proof <slug>                                              (v76) your live proof purchase of an agent's product: pay it yourself;
  *                                                                           booked as owner capital (net of fee), never the agent's revenue
  *   hub-offers [agentId] | hub-enquiries [agentId]                          (v76) agents' offers (reviews, orders, links) and buyers' enquiries
@@ -174,7 +176,7 @@ export const HUB_COMMANDS = new Set([
   "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
-  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-offer-proof", "hub-offers", "hub-enquiries",
+  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-sales", "economy-offer-proof", "hub-offers", "hub-enquiries",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -352,6 +354,9 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.aiCreditTestPeriodWriteoff(actor);
     case "economy-launch-boundary":
       return (await h.launchBoundary()) ?? { recorded: false };
+    case "economy-sales":
+      if (p.length !== 1 || !["open", "closed"].includes(p[0])) throw new Error("usage: economy-sales open|closed");
+      return h.salesSet(p[0] === "open", actor);
     case "economy-offer-proof":
       if (p.length !== 1) throw new Error("usage: economy-offer-proof <offer slug>");
       return h.offerProofBuy(p[0], actor);

@@ -758,7 +758,7 @@ Category: business-foundation
 Tags: quality, review, inspect, spreadsheet, document, software, course, design, revision, independent
 Related: bf-execution-quality, bf-production-tools, bf-fulfilment-loop, bf-capability-evidence
 Body:
-Every delivery and every product publication rests on a review of the exact files (by SHA-256) against the brief: deliverable inspect (automated checks), then deliverable review (criteria you checked, with evidence). A changed file or a new buyer message invalidates it. A review is evidence, not decoration: a checkbox or a model's approval alone is not quality.
+Every delivery and every product publication rests on a review of the exact files (by SHA-256) against the brief: deliverable inspect (automated checks), then deliverable review (criteria you checked, with evidence). Every deliverable your offer lists needs its own met criterion worded exactly as listed, with the evidence you checked — a promise you did not check cannot pass. Acceptance cases should be derived independently (by hand from the inputs), not copied from the file's own output. A changed file or a new buyer message invalidates it. A review is evidence, not decoration: a checkbox or a model's approval alone is not quality.
 
 Proportionate checks by artifact:
 - Spreadsheets: recalculate (no #REF!, #DIV/0!, #NAME?); test representative inputs and edge cases (inspect "cases": set inputs, check outputs); reconcile totals; inspect charts, formatting, protection and the instructions sheet.
@@ -768,7 +768,7 @@ Proportionate checks by artifact:
 - Design assets: dimensions, format, readability, intended use and licence of every element.
 
 Buyer-facing finish (the inspector warns on some of these; a warning is still your judgement, and a premium price needs all of them):
-- Spreadsheets: save computed values with every formula (XlsxWriter: pass the value to write_formula, or recalculate and save) — previewers and phones show saved values, so "cached_values" means the buyer sees zeros; currency, percentage and date formats; bold headers, sensible column widths, frozen header rows; rates and assumptions in labelled input cells, never typed inside formulas; an instructions sheet; titles and labels that match the contents ("13-week" means 13 weeks).
+- Spreadsheets: save computed values with every formula (XlsxWriter: pass the value to write_formula) — previewers and phones show saved values; a saved value that differs from the recalculation FAILS the inspection (the buyer would see a wrong number); currency, percentage and date formats; bold headers, sensible column widths, frozen header rows; rates and assumptions in labelled input cells, never typed inside formulas; an instructions sheet; titles and labels that match the contents ("13-week" means 13 weeks).
 - PDFs and courses: real structure (title, headings, sections), margins and readable type; a page with a few lines on it reads as a stub ("sparse_pages"); worked examples and exercises with answers; nothing the listing promises is missing.
 - Everything: compare the delivered file with the offer page line by line; would a paying stranger be pleased with it at this price?
 
@@ -784,7 +784,7 @@ Tags: status, capabilities, paypal, checkout, offers, delivery, tools, payout, c
 Related: bf-cash-and-settlement, bf-delivery-commitments, bf-tax-worldwide, bf-venture-types, bf-ai-costs, bf-fulfilment-loop, bf-channels
 Facts:
 - Receiving payments: the treasury PayPal checkout is live (the owner's £1 test completed 2026-10-10); a sale is confirmed by the Fleet reading the order's status every few seconds to minutes (the PayPal webhook is not delivering yet), then booked to your wallet net of fees; the first agent sale is the live proof | checked 2026-10-14 | unverified
-- Offer pages: published offers are served on the Fleet's public site with checkout, briefs, buyer messages and downloads; until the owner sets the public site, publishing is refused (prepare everything else) | checked 2026-10-14 | verified
+- Offer pages: published offers are served on the Fleet's public site with checkout, briefs, buyer messages and downloads; until the owner sets the public site, publishing is refused (prepare everything else). Sales open only when the owner opens them: until then your published offers are not public and nobody can buy or send a brief — do not promote them anywhere yet | checked 2026-10-14 | verified
 - Delivery: files go by the Fleet's shared mail from your routing address (create one with identity provision_mailbox) and stay downloadable on the buyer's order page for 30 days; no agent sale has been delivered live yet | checked 2026-10-14 | verified
 - Production tools: the agent toolchain (spreadsheets, documents, PDFs, images) is available only once the owner installs it on the host; deliverable inspect reports tool_unavailable until then | checked 2026-10-14 | verified
 - Paying out (suppliers, advertising, refunds through PayPal): not yet active — the owner's custody activation is an onboarding step still to come. Requests can be prepared and submitted; they wait and say so | checked 2026-10-14 | verified

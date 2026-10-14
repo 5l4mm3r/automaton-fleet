@@ -34,6 +34,7 @@ import { V53_SQL } from "./migrations-phase53.js";
 import { V74_SQL } from "./migrations-phase74.js";
 import { V61_SQL } from "./migrations-phase61.js";
 import { V58_SQL } from "./migrations-phase58.js";
+import { V57_SQL } from "./migrations-phase57.js";
 import { V56_SQL } from "./migrations-phase56.js";
 import { STOREFRONT_FILE_TYPES } from "./migrations-phase52.js";
 import { KNOWLEDGE_FOUNDATION_V2 } from "./knowledge-foundation-v2.js";
@@ -61,7 +62,8 @@ export const DELIVERY_RETENTION_DAYS = 30;
 export const OFFER_PREVIEW_MAX_BYTES = 3_000_000;
 export const QA_INSPECTOR_VERSIONS = ["fleet-qa-1"] as const;
 export const EVENT_ROUTES_V76 = Object.freeze({
-  P2_IMPORTANT: ["customer_enquiry_received", "customer_message_received", "order_needs_attention", "offer_proof_captured"],
+  P2_IMPORTANT: ["customer_enquiry_received", "customer_message_received", "order_needs_attention", "offer_proof_captured", "offer_proof_returned",
+    "sales_opened", "sales_closed"],
   P3_SUMMARY: ["offer_published", "offer_paused", "offer_retired", "enquiry_quoted", "enquiry_declined", "order_auto_delivered", "paypal_status_fallback", "offer_proof_requested"],
 } as const);
 export const FOUNDATION_VERSION_V2 = KNOWLEDGE_FOUNDATION_V2.version;
@@ -165,9 +167,36 @@ const PROOF_CAPTURE = restate(V53_SQL, "cx_paypal_capture_record", [
   END IF;
   IF c.purpose = 'owner_test' THEN`],
 ]);
-const PROOF_REFUND = restate(V53_SQL, "cx_paypal_refund_record", [
+// A refund / reversal of the owner's proof returns the owner's money: D owner capital / C treasury, the refunded amount (capped
+// at what was captured across refunds and reversals), exactly once per PayPal refund id; PayPal's dispute / chargeback fees on
+// it are the owner's too. Never posted against the agent.
+// Restated from the LATEST definition (v57 over v56 over v53): its clawback record, the order follow-up and the owner-test branch stay.
+const PROOF_REFUND = restate(V57_SQL, "cx_paypal_refund_record", [
+  [`DECLARE `, `DECLARE v_px bigint; v_pj uuid; `],
   [`  IF c.purpose = 'owner_test' THEN`,
-   `  IF c.purpose = 'owner_test' OR EXISTS (SELECT 1 FROM fleet_customer_orders z WHERE z.checkout_id = c.checkout_id AND z.owner_proof) THEN`],
+   `  IF EXISTS (SELECT 1 FROM fleet_customer_orders z WHERE z.checkout_id = c.checkout_id AND z.owner_proof) THEN
+    IF EXISTS (SELECT 1 FROM fleet_offer_proof_returns WHERE refund_id = p_refund_id AND kind = p_kind) THEN RETURN jsonb_build_object('ok', true, 'replay', true); END IF;
+    PERFORM 1 FROM fleet_paypal_checkouts WHERE checkout_id = c.checkout_id FOR UPDATE;
+    v_px := CASE WHEN p_kind IN ('refund','reversal')
+                 THEN LEAST(p_amount, c.amount_minor - COALESCE((SELECT sum(amount_minor) FROM fleet_offer_proof_returns
+                                                                  WHERE capture_id = p_capture_id AND kind IN ('refund','reversal')), 0))
+                 ELSE p_amount END;
+    IF v_px > 0 THEN
+      v_pj := fleet_ledger_post('owner_proof_return', 'paypal:proof:' || p_kind || ':' || p_refund_id, 'custody:' || p_worker,
+        'PayPal ' || replace(p_kind, '_', ' ') || ' of the owner''s proof purchase (owner capital returned)', 'executor', NULL, NULL, NULL,
+        'paypal:proof:' || p_kind || ':' || p_refund_id, NULL, now(), jsonb_build_array(
+          jsonb_build_object('account', 'fleet:owner:capital', 'side', 'D', 'amount', v_px),
+          jsonb_build_object('account', 'fleet:treasury:unallocated', 'side', 'C', 'amount', v_px)));
+    END IF;
+    INSERT INTO fleet_offer_proof_returns (refund_id, kind, capture_id, checkout_id, amount_minor, journal_id)
+      VALUES (p_refund_id, p_kind, p_capture_id, c.checkout_id, GREATEST(v_px, 0), v_pj);
+    -- The order records it too (as for any sale), so Transaction Search's shortfall check never posts the same refund again.
+    IF p_kind IN ('refund','reversal') THEN PERFORM fleet_order_refunded(c.checkout_id, p_kind, p_amount); END IF;
+    PERFORM fleet_event('offer_proof_returned', c.agent_id, 'custody', jsonb_build_object('checkoutId', c.checkout_id, 'captureId', p_capture_id,
+      'refundId', p_refund_id, 'kind', p_kind, 'reportedMinor', p_amount, 'postedMinor', GREATEST(v_px, 0), 'journalId', v_pj));
+    RETURN jsonb_build_object('ok', true, 'ownerProof', true, 'posted', v_px > 0, 'postedMinor', GREATEST(v_px, 0), 'journalId', v_pj);
+  END IF;
+  IF c.purpose = 'owner_test' THEN`],
 ]);
 
 // ── Wake-ups: a brief, a buyer's message or a new paid order wakes a hibernating agent; the packet names the tool ──
@@ -209,11 +238,31 @@ CREATE TABLE fleet_public_site (
   base_url text        NOT NULL CHECK (base_url ~ '^https://[a-z0-9.-]{3,190}(:[0-9]{2,5})?$'),
   -- Who the buyer is dealing with (trading name, contact, address as the owner chooses): shown on every public page.
   seller_notice text    CHECK (length(seller_notice) BETWEEN 10 AND 1000),
+  -- Sales open (owner switch, closed until the owner opens them): while closed, offer pages are not public and nobody can
+  -- buy or send a brief; order pages (and the owner's proof purchase) work.
+  sales_open boolean    NOT NULL DEFAULT false,
   set_by   text        NOT NULL,
   set_at   timestamptz NOT NULL DEFAULT now()
 );
 CREATE FUNCTION fleet_public_url(p_path text) RETURNS text LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$ SELECT (SELECT base_url FROM fleet_public_site WHERE id = 1) || p_path $$;
+CREATE FUNCTION fleet_sales_open() RETURNS boolean LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$ SELECT COALESCE((SELECT sales_open FROM fleet_public_site WHERE id = 1), false) $$;
+-- Owner: open or close sales to the public (the proof window keeps them closed; the owner's proof purchase works either way).
+CREATE FUNCTION fleet_admin_sales_set(p_open boolean, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_was boolean;
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  PERFORM fleet_require_operator_approver(substr(p_actor, 10), 'fleet_treasury');
+  IF p_open IS NULL THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: open or closed'; END IF;
+  SELECT sales_open INTO v_was FROM fleet_public_site WHERE id = 1 FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_PUBLIC_SITE_UNSET: set the public site (and seller notice) first'; END IF;
+  IF v_was = p_open THEN RETURN jsonb_build_object('ok', true, 'salesOpen', p_open, 'changed', false); END IF;
+  UPDATE fleet_public_site SET sales_open = p_open, set_by = p_actor, set_at = now() WHERE id = 1;
+  PERFORM fleet_event(CASE WHEN p_open THEN 'sales_opened' ELSE 'sales_closed' END, NULL, p_actor, jsonb_build_object('salesOpen', p_open));
+  RETURN jsonb_build_object('ok', true, 'salesOpen', p_open, 'changed', true);
+END $$;
 CREATE FUNCTION fleet_admin_public_site_set(p_url text, p_notice text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 BEGIN
@@ -774,7 +823,7 @@ CREATE FUNCTION fleet_econ_review_record(p_agent text, a jsonb) RETURNS jsonb LA
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE v_subject text := fleet_econ_text(a, 'subject', 10, true); v_files jsonb := a -> 'files'; v_auto jsonb := a -> 'automated'; v_crit jsonb := a -> 'criteria';
         v_offer uuid; v_order uuid; v_enquiry uuid; v_brief text; v_auto_ok boolean; v_req uuid; v_iv text := fleet_econ_text(a, 'independentVerdict', 10);
-        v_verdict text := fleet_econ_text(a, 'verdict', 10, true); r fleet_artifact_reviews; c jsonb; v_reported jsonb;
+        v_verdict text := fleet_econ_text(a, 'verdict', 10, true); r fleet_artifact_reviews; c jsonb; v_reported jsonb; v_promises text[]; v_missing text[];
 BEGIN
   IF v_subject NOT IN ('offer','order','enquiry','sample') THEN PERFORM fleet_econ_bad('subject is offer, order, enquiry or sample'); END IF;
   IF v_subject = 'offer' THEN
@@ -825,6 +874,16 @@ BEGIN
   END IF;
   IF v_verdict = 'pass' AND EXISTS (SELECT 1 FROM jsonb_array_elements(v_crit) k WHERE NOT (k ->> 'met')::boolean) THEN
     RAISE EXCEPTION 'FLEET_REVIEW_CRITERIA_UNMET: a criterion is not met; a pass needs every criterion met';
+  END IF;
+  -- Every promise the offer makes (its listed deliverables) is checked explicitly: a met criterion worded as the promise.
+  v_promises := CASE WHEN v_offer IS NOT NULL THEN (SELECT deliverables FROM fleet_offers WHERE offer_id = v_offer)
+                     WHEN v_order IS NOT NULL THEN (SELECT f.deliverables FROM fleet_customer_orders z JOIN fleet_offers f ON f.offer_id = z.offer_id WHERE z.order_id = v_order) END;
+  IF v_verdict = 'pass' AND v_promises IS NOT NULL THEN
+    SELECT array_agg(d) INTO v_missing FROM unnest(v_promises) d
+     WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_crit) k WHERE lower(btrim(k ->> 'criterion')) = lower(btrim(d)) AND (k ->> 'met')::boolean);
+    IF v_missing IS NOT NULL THEN
+      RAISE EXCEPTION 'FLEET_REVIEW_PROMISE_UNCOVERED: add a met criterion worded exactly as each listed deliverable, with the evidence you checked: %', array_to_string(v_missing, ' | ');
+    END IF;
   END IF;
   IF v_verdict = 'pass' AND v_iv = 'fail' THEN RAISE EXCEPTION 'FLEET_REVIEW_INDEPENDENT_FAILED: the independent review failed the work; address its findings first'; END IF;
   INSERT INTO fleet_artifact_reviews (agent_id, subject, offer_id, order_id, enquiry_id, files, files_digest, brief_sha256, inspector, automated, automated_ok, criteria,
@@ -1055,6 +1114,7 @@ CREATE FUNCTION svc_offer_page(p_slug text) RETURNS jsonb LANGUAGE plpgsql STABL
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE o fleet_offers;
 BEGIN
+  IF NOT fleet_sales_open() THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND'); END IF;
   SELECT * INTO o FROM fleet_offers WHERE slug = p_slug AND status IN ('published','paused');
   IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND'); END IF;
   RETURN jsonb_build_object('ok', true, 'offer', fleet_offer_public_json(o), 'seller', (SELECT seller_notice FROM fleet_public_site WHERE id = 1));
@@ -1077,6 +1137,7 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE o fleet_offers; r jsonb; c fleet_paypal_checkouts; x fleet_customer_orders; v_token text := ${TOKEN};
 BEGIN
   IF p_origin IS NULL OR p_origin !~ '^[0-9a-f]{64}$' THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST'); END IF;
+  IF NOT fleet_sales_open() THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_SALES_CLOSED'); END IF;
   SELECT * INTO o FROM fleet_offers WHERE slug = p_slug AND status = 'published' AND kind = 'product' FOR SHARE;
   IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_OFFER_UNAVAILABLE'); END IF;
   IF (SELECT count(*) FROM fleet_customer_orders z JOIN fleet_paypal_checkouts k ON k.checkout_id = z.checkout_id
@@ -1117,6 +1178,7 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE o fleet_offers; e fleet_offer_enquiries; m fleet_customer_messages;
 BEGIN
   IF p_origin IS NULL OR p_origin !~ '^[0-9a-f]{64}$' THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST'); END IF;
+  IF NOT fleet_sales_open() THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_SALES_CLOSED'); END IF;
   SELECT * INTO o FROM fleet_offers WHERE slug = p_slug AND status = 'published' AND kind = 'service';
   IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_OFFER_UNAVAILABLE'); END IF;
   IF o.capacity IS NOT NULL AND fleet_offer_load(o) >= o.capacity THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_OFFER_AT_CAPACITY'); END IF;
@@ -1334,6 +1396,24 @@ BEGIN
   RETURN NEW;
 END $$;
 CREATE TRIGGER fleet_customer_orders_proof_guard BEFORE UPDATE ON fleet_customer_orders FOR EACH ROW EXECUTE FUNCTION fleet_customer_orders_proof_guard();
+
+-- Refunds / reversals / fees of a proof purchase: one row per PayPal id and kind (the exactly-once record), append-only.
+CREATE TABLE fleet_offer_proof_returns (
+  refund_id    text        NOT NULL CHECK (refund_id ~ '^[A-Za-z0-9-]{5,64}$'),
+  kind         text        NOT NULL CHECK (kind IN ('refund','reversal','dispute_fee','chargeback_fee')),
+  capture_id   text        NOT NULL,
+  checkout_id  uuid        NOT NULL REFERENCES fleet_paypal_checkouts(checkout_id),
+  amount_minor bigint      NOT NULL CHECK (amount_minor >= 0),
+  journal_id   uuid        REFERENCES fleet_ledger_journal(journal_id),
+  recorded_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (refund_id, kind)
+);
+CREATE TRIGGER fleet_offer_proof_returns_immutable BEFORE UPDATE OR DELETE ON fleet_offer_proof_returns FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+ALTER TABLE fleet_ledger_kinds DISABLE TRIGGER fleet_ledger_kinds_no_change;
+INSERT INTO fleet_ledger_kinds (kind, requires_external_ref, allowed_sources, multi_agent, description, provenance) VALUES
+  ('owner_proof_return', true, ARRAY['executor'], false, 'A refund, reversal or PayPal fee on the owner''s own proof purchase: owner capital returned from the treasury', 'owner_funding');
+ALTER TABLE fleet_ledger_kinds ENABLE TRIGGER fleet_ledger_kinds_no_change;
+INSERT INTO fleet_ledger_rules (kind, class, side) VALUES ('owner_proof_return','owner_capital','D'), ('owner_proof_return','treasury_cash','C');
 
 CREATE FUNCTION fleet_admin_offer_proof_buy(p_slug text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$

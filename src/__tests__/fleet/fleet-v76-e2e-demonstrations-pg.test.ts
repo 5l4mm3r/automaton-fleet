@@ -3,15 +3,18 @@
  * toolchain) against PostgreSQL, custody's cx_* calls and the identity broker on a simulated shared mailbox. SIMULATED
  * evidence: the buyer, PayPal (custody calls recorded directly) and the mailbox are fakes; nothing here touches production.
  *
- * 1. Spreadsheet product: a #DIV/0! in the first build is caught and a passing review is refused by the registry; the fix
- *    passes an acceptance case (inputs → expected totals), is reviewed, published, bought and delivered byte-identical.
- * 2. Downloadable course (a ZIP of PDF lessons + a workbook): a placeholder inside one lesson fails the bundle with the
- *    member and the reason; the fixed course is reviewed, sold and delivered intact. Recorded limitation: a technically
- *    clean but thin PDF passes — it is flagged (sparse_pages, advisory) but the inspector does not judge substance.
- * 3. Service: a real work sample's review publishes it; the buyer's CSV reaches the workspace (path, never bytes); the
- *    workbook is built from it and an acceptance case checks the buyer's own numbers; delivered; a revision request makes
- *    the earlier review stale; the revised work is delivered on a fresh review; both versions stay on the order page.
- * Skips without PostgreSQL, the dev toolchain or Landlock.
+ * Each demonstration shows the gate rejecting real defects and passing a sale-ready product (fixtures/sale-ready/*.py,
+ * run by the agent's exec exactly as it would run its own scripts):
+ * 1. Spreadsheet product — a #DIV/0! fails; a "valid" plain workbook whose saved values are wrong (cached 0, what previewers
+ *    show) now FAILS; the sale-ready 12-month forecast + guide passes substantive acceptance cases; a review that leaves a
+ *    listed deliverable unchecked is refused (FLEET_REVIEW_PROMISE_UNCOVERED); sold; delivered byte-identical.
+ * 2. Downloadable course — a placeholder inside a lesson fails the bundle with its reason; the sale-ready course (three
+ *    illustrated lessons with exercises and answers, a genuine 13-week workbook) passes its cases; sold; delivered intact.
+ *    Recorded limitation: a thin but clean PDF is flagged (sparse_pages, advisory) but not blocked.
+ * 3. Service — a reviewed work sample publishes it; the buyer's CSV reaches the workspace (path, never bytes); the tracker is
+ *    built from it and an acceptance case checks the buyer's own totals; delivered; a revision request makes the review
+ *    stale; the revised tracker is delivered on a fresh review.
+ * Sales are opened by the owner first (closed by default). Skips without PostgreSQL, the dev toolchain or Landlock.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
@@ -35,29 +38,38 @@ import { QA_INSPECTOR_VERSION } from "../../fleet/founder/qa/inspector.js";
 const PG_BIN = findPgBin();
 const DEV_TOOLS = path.join(os.homedir(), ".cache/automaton-fleet-tools/dev");
 const HAVE_TOOLS = fs.existsSync(path.join(DEV_TOOLS, "site")) && fs.existsSync(path.join(DEV_TOOLS, "bin/fleet-python"));
+const SALE_READY = path.join(path.dirname(new URL(import.meta.url).pathname), "fixtures", "sale-ready");
 const sha = (b: Buffer | string) => crypto.createHash("sha256").update(b).digest("hex");
 
-/** The agent's own build script: a 3-month cash-flow workbook; `broken` leaves the divisor of the margin empty. */
-const buildWorkbook = (broken: boolean) => String.raw`
+/** Defective drafts an agent might write first. */
+const DIV0 = String.raw`
 import xlsxwriter
-wb = xlsxwriter.Workbook("deliver/cashflow.xlsx")
-ws = wb.add_worksheet("Forecast")
-ws.write_row("A1", ["Month", "Income", "Costs", "Net", "Closing", "Margin"])
-ws.write("G1", "Opening")
-ws.write("H1", 1000)
-for i, (m, inc, cost) in enumerate([("Jan", 2000, 1500), ("Feb", 2200, 1600), ("Mar", 1800, 1900)]):
+wb = xlsxwriter.Workbook("deliver/draft.xlsx"); ws = wb.add_worksheet("Forecast")
+ws.write_row("A1", ["Month", "Income", "Costs", "Net", "Margin"])
+ws.write_row("A2", ["Jan", 2000, 1500]); ws.write_formula("D2", "=B2-C2", None, 500); ws.write_formula("E2", "=D2/F2")
+wb.close(); print("BUILT")
+`;
+/** Opens, recalculates without an error cell — but every formula is saved with 0, which is what previewers show. */
+const STALE = String.raw`
+import xlsxwriter
+wb = xlsxwriter.Workbook("deliver/plain.xlsx"); ws = wb.add_worksheet("Forecast")
+ws.write_row("A1", ["Month", "Income", "Costs", "Net", "Closing"]); ws.write("G1", 1000)
+for i, (m, a, b) in enumerate([("Jan", 2000, 1500), ("Feb", 2200, 1600), ("Mar", 1800, 1900)]):
     r = i + 2
-    ws.write_row("A%d" % r, [m, inc, cost])
-    ws.write_formula("D%d" % r, "=B%d-C%d" % (r, r), None, inc - cost)
-    prev = "H1" if r == 2 else "E%d" % (r - 1)
-    ws.write_formula("E%d" % r, "=%s+D%d" % (prev, r))
-    ws.write_formula("F%d" % r, "=D%d/${broken ? "I1" : "B%d"}" % (r, ${broken ? "" : "r"}))
-ws.write_formula("D5", "=SUM(D2:D4)")
-wb.close()
+    ws.write_row("A%d" % r, [m, a, b]); ws.write_formula("D%d" % r, "=B%d-C%d" % (r, r))
+    ws.write_formula("E%d" % r, "=%s+D%d" % ("G1" if r == 2 else "E%d" % (r - 1), r))
+wb.close(); print("BUILT")
+`;
+const DRAFT_COURSE = String.raw`
+import zipfile
+from reportlab.pdfgen import canvas
+c = canvas.Canvas("deliver/l2.pdf"); c.drawString(60, 780, "Lesson 2: Building a 13-week forecast.")
+c.drawString(60, 760, "TODO: write the worked example."); c.showPage(); c.save()
+with zipfile.ZipFile("deliver/draft-course.zip", "w") as z: z.write("deliver/l2.pdf", "course/02-forecasting.pdf")
 print("BUILT")
 `;
 
-describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: product, course and service from the agent's workspace to a simulated buyer (real inspector)", { timeout: 300_000 }, () => {
+describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: sale-ready product, course and service from the agent's workspace to a simulated buyer (real inspector)", { timeout: 300_000 }, () => {
   let R: EconomyRegistry;
   let F: Founder;
   let svc: pg.Pool;
@@ -71,6 +83,9 @@ describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: product, course
   const shared = new SimulatedSharedMailProvider("fleet@shared.fleet-mail.test");
   let callNo = 0;
   const tool = (name: string, args: Record<string, unknown>) => box.execute({ id: `e2e${++callNo}`, name, arguments: args });
+  const json = async (name: string, args: Record<string, unknown>) => { const r = await tool(name, args); expect(r.ok, r.output).toBe(true); return JSON.parse(r.output); };
+  const exec = async (command: string, want = "BUILT") => { const r = await tool("exec", { command }); expect(r.output, r.output).toContain(want); return r.output; };
+  const script = (name: string, body?: string) => body !== undefined ? fs.writeFileSync(path.join(ws, name), body) : fs.copyFileSync(path.join(SALE_READY, name), path.join(ws, name));
   const call = async (pool: pg.Pool, fn: string, args: unknown[]) => {
     const ph = args.map((_, i) => `$${i + 1}`).join(", ");
     return (await pool.query(`SELECT fleet.${fn}(${ph}) AS r`, args)).rows[0].r;
@@ -85,12 +100,18 @@ describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: product, course
   };
   const checkoutOf = (token: string) => R.one<string>(`(SELECT checkout_id::text FROM fleet.fleet_customer_orders WHERE access_token = $1)`, [token]);
   const attBytes = (a: { content?: Buffer; contentB64?: string }) => a.content ?? Buffer.from(a.contentB64 ?? "", "base64");
-  const criteria = [
-    { criterion: "Projects month-end cash from the opening balance", met: true, evidence: "acceptance case: opening 1000 → Mar closing 2000" },
-    { criterion: "Totals reconcile", met: true, evidence: "D5 = sum of monthly net; recalculated clean" },
-    { criterion: "Matches the listing: month-end cash and margin per month", met: true, evidence: "columns E and F for Jan..Mar" },
-  ];
-  const cases = [{ name: "forecast", file: "deliver/cashflow.xlsx", sheet: "Forecast", inputs: { H1: 500 }, expect: { E4: 1500, D5: 1000, F2: 0.25 } }];
+  const issues = (r: any, i = 0) => (r.files[i].issues as string[]).join(" ");
+  /** Sell a published product to a simulated buyer; returns the delivered attachments. */
+  const sell = async (slug: string, price: number, email: string) => {
+    const buy = await call(svc, "svc_offer_buy", [slug, sha(email)]);
+    expect(buy, JSON.stringify(buy)).toMatchObject({ ok: true });
+    await buyerPays(await checkoutOf(buy.token), price, email);
+    expect(await call(svc, "svc_offer_tick", [20])).toMatchObject({ ok: true, delivered: 1 });
+    await broker.tick();
+    const mail = shared.outbox.at(-1)!;
+    expect(mail.to).toEqual([email]);
+    return { token: buy.token as string, attachments: (mail.attachments ?? []) as Array<{ fileName: string; content?: Buffer; contentB64?: string }> };
+  };
 
   beforeAll(async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fleet-v76e2e-")));
@@ -105,9 +126,10 @@ describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: product, course
     await R.store.grantCustodyRole();
     svc = new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 2, options: "-c search_path=fleet" });
     custody = new pg.Pool({ connectionString: R.pgc.custodyUrl, max: 2, options: "-c search_path=fleet" });
-    expect((await R.econ(F, "venture.create", { key: "sheets", model: "digital_product", offer: "cash-flow workbook", state: "selected" })).ok).toBe(true);
+    expect((await R.econ(F, "venture.create", { key: "sheets", model: "digital_product", offer: "cash-flow tools", state: "selected" })).ok).toBe(true);
     await liveRail(R.owner, "fleet", OWNER);
-    await R.q(`SELECT fleet.fleet_admin_public_site_set('https://shop.fleet.test', 'Automaton Fleet (test trading name), contact via your order page', 'operator:test')`);
+    await R.q(`SELECT fleet.fleet_admin_public_site_set('https://shop.fleet.test', 'Automaton Fleet (test trading name), contact via your order page', $1)`, [OWNER]);
+    await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-v76e2e-id-"));
     fs.chmodSync(dir, 0o700);
     initIdentityState(dir);
@@ -118,7 +140,7 @@ describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: product, course
     const mb = await R.econ(F, "mailbox.provision", { idempotencyKey: `k-${crypto.randomUUID()}` });
     expect(mb.ok, JSON.stringify(mb)).toBe(true);
     box = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: ws, memoryDir: path.join(root, "m"), loopGuard: new LoopGuard(), selfGovernance: true,
-      toolsDir: DEV_TOOLS, execTimeoutMs: 60_000, ports: {
+      toolsDir: DEV_TOOLS, execTimeoutMs: 90_000, ports: {
         ledger: async () => ({ cash: 10_000, expensePurchasingCapacity: 10_000 }),
         spendOrder: async () => ({ ok: true }), proposeKnowledge: async () => ({}), knowledge: async () => [], requestIdentityFact: async () => ({}),
         economy: (op: string, args: Record<string, unknown>) => R.econ(F, op, args),
@@ -130,249 +152,156 @@ describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: product, course
     if (ws) fs.rmSync(path.dirname(ws), { recursive: true, force: true });
   });
 
-  it("build → inspect (fails, then passes) → review → offer → buyer purchase → automatic delivery of the reviewed bytes", async (ctx) => {
-    if (!sandboxed) { console.warn("Landlock unavailable: the e2e spreadsheet path is not exercised on this host"); ctx.skip(); }
-    // 1. The agent builds a first version with its own toolchain; the margin divides by an empty cell.
-    fs.writeFileSync(path.join(ws, "build.py"), buildWorkbook(true));
-    const b1 = await tool("exec", { command: "python3 build.py" });
-    expect(b1.output, b1.output).toContain("BUILT");
-    const i1 = await tool("deliverable", { op: "inspect", args: { paths: ["deliver/cashflow.xlsx"] } });
-    expect(i1.ok).toBe(true);
-    const r1 = JSON.parse(i1.output);
-    expect(r1).toMatchObject({ inspector: QA_INSPECTOR_VERSION, ok: false });
-    expect(r1.files[0].issues.join(" ")).toMatch(/#DIV\/0!.*F2|F2.*#DIV\/0!/);
-    // A passing review of a failing file is refused by the registry, not just discouraged.
-    const rv1 = await tool("deliverable", { op: "review", args: { paths: ["deliver/cashflow.xlsx"], subject: "sample", criteria, verdict: "pass" } });
-    expect(rv1, rv1.output).toMatchObject({ ok: false, refused: "FLEET_REVIEW_AUTOMATED_FAILED" });
+  it("spreadsheet product: #DIV/0! and wrong saved values fail; the sale-ready forecast passes substantive cases, every promise is checked; sold and delivered", async (ctx) => {
+    if (!sandboxed) { console.warn("Landlock unavailable: the e2e demonstrations are not exercised on this host"); ctx.skip(); }
+    script("div0.py", DIV0); await exec("python3 div0.py");
+    const d0 = await json("deliverable", { op: "inspect", args: { paths: ["deliver/draft.xlsx"] } });
+    expect(d0).toMatchObject({ inspector: QA_INSPECTOR_VERSION, ok: false });
+    expect(issues(d0)).toMatch(/FAIL formula_errors.*(E2.*#DIV\/0!|#DIV\/0!.*E2)/);
+    script("plain.py", STALE); await exec("python3 plain.py");
+    const st = await json("deliverable", { op: "inspect", args: { paths: ["deliver/plain.xlsx"] } });
+    expect(st.ok).toBe(false); // valid file, recalculates cleanly — but the numbers a buyer's preview shows are wrong
+    expect(issues(st)).toMatch(/FAIL cached_values: \d+ cell\(s\).*E2 cached 0, recalculated 1500/); // (the agent sees each issue clipped to 400 characters)
 
-    // 2. Fixed: the margin divides by income. Clean, and the acceptance case drives the model with other inputs.
-    fs.writeFileSync(path.join(ws, "build.py"), buildWorkbook(false));
-    expect((await tool("exec", { command: "python3 build.py" })).output).toContain("BUILT");
-    const i2 = JSON.parse((await tool("deliverable", { op: "inspect", args: { paths: ["deliver/cashflow.xlsx"], cases } })).output);
-    expect(i2, JSON.stringify(i2)).toMatchObject({ ok: true, files: [{ type: "xlsx", ok: true }] });
-    expect(i2.files[0].issues.join(" ")).not.toMatch(/FAIL/);
-    // Advisory presentation findings on this deliberately plain workbook (no number formats, plain headers); not a failure.
-    expect(i2.files[0].issues.join(" ")).toMatch(/WARN presentation: every number and formula cell is in General format/);
-    const bytes = fs.readFileSync(path.join(ws, "deliver/cashflow.xlsx"));
-
-    // 3. The offer, its file from the workspace, the review of exactly those bytes, publication.
-    const o = JSON.parse((await tool("offer", { op: "create", args: { venture: "sheets", kind: "product", title: "Three-month cash-flow workbook",
-      summary: "A small cash-flow forecast in Excel.", description: "Enter your opening balance, income and costs; it projects month-end cash and margin.",
-      deliverables: ["Cash-flow workbook (.xlsx)"], priceMinor: 900, terms: "Digital download; refunds if the file does not open or does not match the description." } })).output);
+    script("cashflow.py"); await exec("python3 cashflow.py", "BUILT 1080 Apr,May,Sep,Oct");
+    const paths = ["deliver/cashflow-forecast.xlsx", "deliver/cashflow-quick-start.pdf"];
+    // Acceptance cases derived independently of the workbook: opening £500 lowers every closing by £1,500.
+    const cases = [
+      { name: "opening-500", file: paths[0], sheet: "Inputs", inputs: { B3: 500 }, expect: { "Forecast!F15": 720, "Forecast!G4": "Below buffer", "Forecast!F18": -420 } },
+      { name: "buffer-1000", file: paths[0], sheet: "Inputs", inputs: { B4: 1000 }, expect: { "Forecast!G7": "OK", "Forecast!F18": 1080 } },
+      { name: "supplied", file: paths[0], sheet: "Inputs", inputs: {}, expect: { "Forecast!C16": 44500, "Forecast!D16": 44280, "Forecast!F15": 2220, "Forecast!G7": "Below buffer" } },
+    ];
+    const ok = await json("deliverable", { op: "inspect", args: { paths, cases } });
+    expect(ok, JSON.stringify(ok)).toMatchObject({ ok: true, files: [{ type: "xlsx", ok: true, issues: [] }, { type: "pdf", ok: true, issues: [] }] });
+    const deliverables = ["12-month cash-flow workbook (.xlsx) with a Start here sheet", "Below-buffer warning for every month", "Quick-start guide with a worked example (PDF)"];
+    const o = await json("offer", { op: "create", args: { venture: "sheets", kind: "product", title: "12-month cash-flow forecast for sole traders",
+      summary: "See your bank balance month by month and get warned before it drops below your buffer.",
+      description: "Enter your opening balance, buffer, income and costs; the forecast rolls the balance forward, flags every month below your buffer and charts the year. Includes a quick-start guide.",
+      deliverables, priceMinor: 1_200, terms: "Digital download; refunds if the files do not open or do not match the description." } });
     const offerId = o.offer.offerId;
-    const f = await tool("offer", { op: "file", args: { offerId, role: "deliverable", path: "deliver/cashflow.xlsx" } });
-    expect(f.ok, f.output).toBe(true);
-    const rv2 = await tool("deliverable", { op: "review", args: { paths: ["deliver/cashflow.xlsx"], cases, subject: "offer", offerId, criteria, verdict: "pass" } });
-    expect(rv2.ok, rv2.output).toBe(true);
-    const review = JSON.parse(rv2.output);
-    expect(review).toMatchObject({ verdict: "pass", automatedOk: true });
-    const stored = await R.one<any>(`(SELECT jsonb_build_object('files', files, 'automated', automated) FROM fleet.fleet_artifact_reviews WHERE review_id = $1)`, [review.reviewId]);
-    expect(JSON.stringify(stored)).toContain(sha(bytes));
-    expect(stored.automated.inspector).toBe(QA_INSPECTOR_VERSION);
-    const p = JSON.parse((await tool("offer", { op: "publish", args: { offerId, reviewId: review.reviewId } })).output);
-    expect(p).toMatchObject({ ok: true, offer: { status: "published" } });
-
-    // 4. A simulated buyer: public buy → custody opens and captures → the offer tick delivers the reviewed workbook.
-    const buy = await call(svc, "svc_offer_buy", [p.offer.slug, sha("buyer-e2e")]);
-    expect(buy).toMatchObject({ ok: true });
-    const checkoutId = await R.one<string>(`(SELECT checkout_id::text FROM fleet.fleet_customer_orders WHERE access_token = $1)`, [buy.token]);
-    const ppOrder = `ORD${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
-    expect((await call(custody, "cx_paypal_checkout_update", ["custody-executor", checkoutId, "open", ppOrder, `https://www.paypal.com/checkoutnow?token=${ppOrder}`, null])).ok).toBe(true);
-    expect((await call(custody, "cx_paypal_capture_record", ["custody-executor", checkoutId, `CAP${crypto.randomBytes(6).toString("hex").toUpperCase()}`, "COMPLETED", 900, 40, "GBP", "capture_response"])).ok).toBe(true);
-    expect((await call(custody, "cx_paypal_buyer_record", ["custody-executor", checkoutId, JSON.stringify({ email_address: "bea@example.test",
-      name: { given_name: "Bea", surname: "Buyer" }, address: { country_code: "GB" }, payer_id: "PAYERBEAE2E01" })])).recorded).toBe(true);
-    expect(await call(svc, "svc_offer_tick", [20])).toMatchObject({ ok: true, delivered: 1 });
-    await broker.tick();
-    const mail = shared.outbox.at(-1)!;
-    expect(mail.to).toEqual(["bea@example.test"]);
-    const att = (mail.attachments ?? []) as Array<{ fileName: string; content?: Buffer; contentB64?: string }>;
-    expect(att.map((a) => a.fileName)).toEqual(["cashflow.xlsx"]);
-    const attBytes = att[0].content ?? Buffer.from(att[0].contentB64 ?? "", "base64");
-    expect(sha(attBytes)).toBe(sha(bytes));
-    const page = await call(svc, "svc_order_page", [buy.token]);
-    expect(page.order).toMatchObject({ payment: "paid", status: "delivered" });
-    const dl = await call(svc, "svc_order_file", [buy.token, page.downloads[0].deliveryId, page.downloads[0].fileNo]);
-    expect(dl.ok).toBe(true);
-    expect(sha(Buffer.from(dl.contentB64, "base64"))).toBe(sha(bytes));
-    // No inspector residue in the agent's workspace.
+    for (const p of paths) await json("offer", { op: "file", args: { offerId, role: "deliverable", path: p } });
+    const criteria = [
+      { criterion: deliverables[0], met: true, evidence: "Start here (6 steps), Inputs (blue input cells), Forecast (12 months, chart); all £-formatted; saved values match recalculation" },
+      { criterion: deliverables[1], met: true, evidence: "case opening-500: G4 'Below buffer'; supplied: Apr/May/Sep/Oct flagged; case buffer-1000 clears G7" },
+      { criterion: deliverables[2], met: true, evidence: "1-page guide rendered; worked example reconciles: £44,500 in − £44,280 out = £220; £2,000 → £2,220" },
+      { criterion: "Totals reconcile with the inputs", met: true, evidence: "case supplied: C16 44500, D16 44280, F15 2220" },
+    ];
+    // Leaving a listed deliverable unchecked is refused, whatever else passes.
+    expect(await tool("deliverable", { op: "review", args: { paths, cases, subject: "offer", offerId, criteria: criteria.filter((_, i) => i !== 1), verdict: "pass" } }))
+      .toMatchObject({ ok: false, refused: "FLEET_REVIEW_PROMISE_UNCOVERED" });
+    const rv = await json("deliverable", { op: "review", args: { paths, cases, subject: "offer", offerId, criteria, verdict: "pass" } });
+    expect(rv).toMatchObject({ verdict: "pass", automatedOk: true });
+    expect(await json("offer", { op: "publish", args: { offerId, reviewId: rv.reviewId } })).toMatchObject({ offer: { status: "published" } });
+    const sold = await sell(o.offer.slug, 1_200, "bea@example.test");
+    expect(sold.attachments.map((a) => a.fileName).sort()).toEqual(["cashflow-forecast.xlsx", "cashflow-quick-start.pdf"]);
+    for (const a of sold.attachments) expect(sha(attBytes(a))).toBe(sha(fs.readFileSync(path.join(ws, "deliver", a.fileName))));
     expect(fs.readdirSync(path.join(ws, ".tmp")).filter((x) => /^(fleet-qa-|qa-spec-)/.test(x))).toEqual([]);
   });
 
-  it("a downloadable course: a placeholder inside a lesson is caught through the bundle; the fixed course is reviewed, sold and delivered intact", async (ctx) => {
+  it("downloadable course: a placeholder inside a lesson fails the bundle with its reason; the sale-ready course passes its cases; sold and delivered intact", async (ctx) => {
     if (!sandboxed) ctx.skip();
-    const course = (draft: boolean) => String.raw`
-import zipfile, xlsxwriter
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-lessons = [
-  ("01-why-cash-flow.pdf", ["Lesson 1: Why cash flow, not profit, keeps a small business alive.", "Profit is an opinion; cash is a fact.",
-                            "Exercise: list every payment you expect in the next 30 days."]),
-  ("02-forecasting.pdf", ["Lesson 2: Building a 13-week forecast.", "${draft ? "TODO: write the worked example." : "Worked example: opening 1,000; receipts 2,000; payments 1,500; closing 1,500."}",
-                          "Exercise: fill in the workbook's first four weeks."]),
-  ("03-acting-early.pdf", ["Lesson 3: Acting before the shortfall.", "Chase invoices at day 7, not day 30; agree supplier terms early.",
-                           "Exercise: mark the first week your closing balance drops below your buffer."]),
-]
-for name, lines in lessons:
-    c = canvas.Canvas("course/" + name, pagesize=A4)
-    c.setFont("Helvetica", 12)
-    y = 780
-    for ln in lines:
-        c.drawString(60, y, ln); y -= 22
-    c.showPage(); c.save()
-wb = xlsxwriter.Workbook("course/13-week-forecast.xlsx")
-ws = wb.add_worksheet("Weeks")
-ws.write_row("A1", ["Week", "Receipts", "Payments", "Closing"])
-ws.write("F1", "Opening"); ws.write("G1", 1000)
-for w in range(1, 5):
-    r = w + 1
-    ws.write_row("A%d" % r, [w, 500, 400])
-    ws.write_formula("D%d" % r, "=%s+B%d-C%d" % ("G1" if r == 2 else "D%d" % (r - 1), r, r))
-wb.close()
-with zipfile.ZipFile("deliver/cash-flow-course.zip", "w", zipfile.ZIP_DEFLATED) as z:
-    for name, _ in lessons:
-        z.write("course/" + name, "cash-flow-course/" + name)
-    z.write("course/13-week-forecast.xlsx", "cash-flow-course/13-week-forecast.xlsx")
-print("BUILT")
-`;
-    fs.mkdirSync(path.join(ws, "course"), { recursive: true });
-    fs.writeFileSync(path.join(ws, "course.py"), course(true));
-    expect((await tool("exec", { command: "python3 course.py" })).output).toContain("BUILT");
-    const i1 = JSON.parse((await tool("deliverable", { op: "inspect", args: { paths: ["deliver/cash-flow-course.zip"] } })).output);
-    expect(i1, JSON.stringify(i1)).toMatchObject({ ok: false, files: [{ type: "zip", ok: false }] });
-    expect(i1.files[0].issues.join(" ")).toMatch(/placeholder.*TODO/i);
+    script("draft.py", DRAFT_COURSE); await exec("python3 draft.py");
+    const dr = await json("deliverable", { op: "inspect", args: { paths: ["deliver/draft-course.zip"] } });
+    expect(dr).toMatchObject({ ok: false, files: [{ type: "zip", ok: false }] });
+    expect(issues(dr)).toMatch(/failing members: course\/02-forecasting\.pdf \(placeholders: placeholder text: .*TODO/);
 
-    fs.writeFileSync(path.join(ws, "course.py"), course(false));
-    expect((await tool("exec", { command: "python3 course.py" })).output).toContain("BUILT");
-    const i2 = JSON.parse((await tool("deliverable", { op: "inspect", args: { paths: ["deliver/cash-flow-course.zip"] } })).output);
-    expect(i2, JSON.stringify(i2)).toMatchObject({ ok: true, files: [{ type: "zip", ok: true }] });
-    const bytes = fs.readFileSync(path.join(ws, "deliver/cash-flow-course.zip"));
-
-    const o = JSON.parse((await tool("offer", { op: "create", args: { venture: "sheets", kind: "product", title: "Cash-flow basics: a three-lesson course",
-      summary: "Three short PDF lessons and a 13-week forecast workbook.", description: "Learn why cash, not profit, decides survival; build a 13-week forecast; act before a shortfall.",
-      deliverables: ["Three PDF lessons", "13-week forecast workbook (.xlsx)"], priceMinor: 1_200, terms: "Digital download; refunds if the files do not open or do not match the description." } })).output);
-    expect((await tool("offer", { op: "file", args: { offerId: o.offer.offerId, role: "deliverable", path: "deliver/cash-flow-course.zip" } })).ok).toBe(true);
-    const courseCriteria = [
-      { criterion: "Three lessons as described", met: true, evidence: "bundle holds 01..03 PDFs, each opened and read" },
-      { criterion: "Worked example present and correct", met: true, evidence: "lesson 2: 1,000 + 2,000 − 1,500 = 1,500" },
-      { criterion: "Workbook rolls the closing balance forward", met: true, evidence: "Weeks!D2..D5 recalculated clean" },
+    script("course.py"); await exec("python3 course.py", "BUILT 350 10");
+    // The bundle passes clean, and the workbook inside it is driven: 13 weeks, opening £600 lowers every week by £600.
+    const cases = [{ name: "opening-600", file: "course/13-week-forecast.xlsx", sheet: "Forecast", inputs: { I3: 600 },
+      expect: { E16: 400, F4: "Below buffer", F5: "OK", F6: "Below buffer", I8: -250 } }];
+    const ok = await json("deliverable", { op: "inspect", args: { paths: ["deliver/cash-flow-course.zip", "course/13-week-forecast.xlsx"], cases } });
+    expect(ok, JSON.stringify(ok)).toMatchObject({ ok: true, files: [{ type: "zip", ok: true, issues: [] }, { type: "xlsx", ok: true, issues: [] }] });
+    expect(ok.files[0].facts.nested.map((n: any) => n.name)).toEqual(["cash-flow-course/01-why-cash-flow.pdf", "cash-flow-course/02-forecasting.pdf",
+      "cash-flow-course/03-acting-early.pdf", "cash-flow-course/13-week-forecast.xlsx"]);
+    const deliverables = ["Three illustrated PDF lessons with exercises and answers", "13-week cash-flow forecast workbook (.xlsx)"];
+    const o = await json("offer", { op: "create", args: { venture: "sheets", kind: "product", title: "Cash-flow basics: a three-lesson course",
+      summary: "Why cash beats profit, how to build a 13-week forecast, and how to act before a shortfall.",
+      description: "Three illustrated PDF lessons with worked examples, exercises and answers, plus the 13-week forecast workbook used in lesson 2.",
+      deliverables, priceMinor: 1_500, terms: "Digital download; refunds if the files do not open or do not match the description." } });
+    await json("offer", { op: "file", args: { offerId: o.offer.offerId, role: "deliverable", path: "deliver/cash-flow-course.zip" } });
+    const criteria = [
+      { criterion: deliverables[0], met: true, evidence: "3 lessons rendered (2–3 pages each): headings, worked examples, a chart (lesson 2), 3 exercises each with an answers page" },
+      { criterion: deliverables[1], met: true, evidence: "W1..W13 present; case opening-600: W13 £400, lowest −£250, W1 and W3 below buffer; saved values match recalculation" },
+      { criterion: "Lesson figures match the workbook", met: true, evidence: "lesson 2 table and text (lowest W10 £350; W8, W9, W10 below £800) equal the workbook's example" },
     ];
-    const rv = await tool("deliverable", { op: "review", args: { paths: ["deliver/cash-flow-course.zip"], subject: "offer", offerId: o.offer.offerId, criteria: courseCriteria, verdict: "pass" } });
-    expect(rv.ok, rv.output).toBe(true);
-    const p = JSON.parse((await tool("offer", { op: "publish", args: { offerId: o.offer.offerId, reviewId: JSON.parse(rv.output).reviewId } })).output);
-    expect(p).toMatchObject({ ok: true, offer: { status: "published" } });
+    const rv = await json("deliverable", { op: "review", args: { paths: ["deliver/cash-flow-course.zip"], subject: "offer", offerId: o.offer.offerId, criteria, verdict: "pass" } });
+    expect((await json("offer", { op: "publish", args: { offerId: o.offer.offerId, reviewId: rv.reviewId } })).offer.status).toBe("published");
+    const sold = await sell(o.offer.slug, 1_500, "cal@example.test");
+    expect(sha(attBytes(sold.attachments[0]))).toBe(sha(fs.readFileSync(path.join(ws, "deliver/cash-flow-course.zip"))));
 
-    const buy = await call(svc, "svc_offer_buy", [p.offer.slug, sha("buyer-course")]);
-    await buyerPays(await checkoutOf(buy.token), 1_200, "cal@example.test");
-    expect(await call(svc, "svc_offer_tick", [20])).toMatchObject({ ok: true, delivered: 1 });
-    await broker.tick();
-    const mail = shared.outbox.at(-1)!;
-    expect(mail.to).toEqual(["cal@example.test"]);
-    expect(sha(attBytes((mail.attachments as any[])[0]))).toBe(sha(bytes));
-
-    // Limitation, recorded on purpose: a technically clean but thin "course" (one line per lesson) also inspects clean.
-    // The inspector proves the files open, render, recalculate and hold no placeholders; it does not judge substance.
-    fs.writeFileSync(path.join(ws, "thin.py"), String.raw`
+    // Limitation, recorded on purpose: a thin but clean PDF passes; it is flagged (advisory), not blocked.
+    script("thin.py", String.raw`
 from reportlab.pdfgen import canvas
 c = canvas.Canvas("deliver/thin.pdf"); c.drawString(60, 780, "Lesson 1: Cash matters."); c.showPage(); c.save()
 print("BUILT")
 `);
-    expect((await tool("exec", { command: "python3 thin.py" })).output).toContain("BUILT");
-    const thin = JSON.parse((await tool("deliverable", { op: "inspect", args: { paths: ["deliver/thin.pdf"] } })).output);
+    await exec("python3 thin.py");
+    const thin = await json("deliverable", { op: "inspect", args: { paths: ["deliver/thin.pdf"] } });
     expect(thin.ok).toBe(true);
-    // …but it is flagged (advisory): content fills a sliver of the page. Flagged, not blocked — the judgement stays the agent's.
-    expect(thin.files[0].issues.join(" ")).toMatch(/WARN sparse_pages/);
+    expect(issues(thin)).toMatch(/WARN sparse_pages/);
   });
 
-  it("a service: sample review publishes it; the buyer's file reaches the workspace; the work is built from it, checked against the buyer's numbers, delivered; a revision needs a fresh review", async (ctx) => {
+  it("service: sample review publishes; the buyer's CSV is built into a tracker checked against the buyer's own totals; delivered; a revision needs a fresh review", async (ctx) => {
     if (!sandboxed) ctx.skip();
-    // A real work sample, inspected and reviewed, publishes the service.
-    const invoiceBuild = (src: string, out: string, paidCol: boolean) => String.raw`
-import csv, xlsxwriter
-rows = list(csv.DictReader(open("${src}")))
-wb = xlsxwriter.Workbook("${out}")
-ws = wb.add_worksheet("Invoices")
-hdr = ["Client", "Net", "VAT", "Gross"] + (["Paid on"] if ${paidCol ? "True" : "False"} else [])
-ws.write_row("A1", hdr)
-for i, r in enumerate(rows):
-    n = i + 2
-    ws.write("A%d" % n, r["client"]); ws.write_number("B%d" % n, float(r["net"]))
-    ws.write_formula("C%d" % n, "=B%d*0.2" % n); ws.write_formula("D%d" % n, "=B%d+C%d" % (n, n))
-    if ${paidCol ? "True" : "False"}: ws.write("E%d" % n, r.get("paid", ""))
-last = len(rows) + 1
-ws.write("A%d" % (last + 1), "Total"); ws.write_formula("D%d" % (last + 1), "=SUM(D2:D%d)" % last)
-wb.close()
-print("BUILT", len(rows))
-`;
+    script("invoice_tracker.py");
     fs.mkdirSync(path.join(ws, "samples"), { recursive: true });
-    fs.writeFileSync(path.join(ws, "samples/demo.csv"), "client,net,paid\nAcme,100,2026-10-01\nBeta,250,\n");
-    fs.writeFileSync(path.join(ws, "sample.py"), invoiceBuild("samples/demo.csv", "samples/invoice-tracker-sample.xlsx", false));
-    expect((await tool("exec", { command: "python3 sample.py" })).output).toContain("BUILT 2");
-    const svcOffer = JSON.parse((await tool("offer", { op: "create", args: { venture: "sheets", kind: "service", title: "Invoice tracker built from your data",
-      summary: "Send your invoice list; I build a VAT-ready Excel tracker.", description: "Send a CSV export; I confirm scope and price before you pay.",
-      deliverables: ["A tested .xlsx tracker"], priceMinor: 5_000, turnaroundDays: 3, revisions: 1, capacity: 1,
-      terms: "One revision included; refunds if I cannot deliver what was agreed." } })).output);
+    fs.writeFileSync(path.join(ws, "samples/demo.csv"), "client,net,invoice_date,paid\nAcme Ltd,100,2026-09-01,2026-09-20\nBeta LLP,250,2026-09-05,\n");
+    await exec("python3 invoice_tracker.py samples/demo.csv samples/invoice-tracker-sample.xlsx --paid-date", "BUILT 2 420.0");
+    const deliverables = ["VAT invoice tracker workbook (.xlsx) built from your data", "Totals by client"];
+    const svcOffer = await json("offer", { op: "create", args: { venture: "sheets", kind: "service", title: "VAT invoice tracker built from your data",
+      summary: "Send your invoice export; I build a VAT-ready Excel tracker with totals by client.", description: "Send a CSV export; I confirm scope and price before you pay.",
+      deliverables, priceMinor: 5_000, turnaroundDays: 3, revisions: 1, capacity: 1, terms: "One revision included; refunds if I cannot deliver what was agreed." } });
+    const sampleCases = [{ name: "sample", file: "samples/invoice-tracker-sample.xlsx", sheet: "Invoices", inputs: {}, expect: { D4: 20, E4: 120, E6: 420, "Summary!D5": 300, G5: "Unpaid" } }];
     const sampleCriteria = [
-      { criterion: "VAT at 20% per row", met: true, evidence: "case: Acme net 100 → VAT 20, gross 120" },
-      { criterion: "Total gross reconciles", met: true, evidence: "case: total 420" },
-      { criterion: "Opens and recalculates", met: true, evidence: "inspector: recalculated clean" },
+      { criterion: deliverables[0], met: true, evidence: "built from samples/demo.csv: 2 rows, VAT from the G1 rate cell, real dates, £ formats" },
+      { criterion: deliverables[1], met: true, evidence: "Summary sheet: Beta LLP gross £300 (case)" },
+      { criterion: "Totals reconcile", met: true, evidence: "case: gross total £420 = (100 + 250) × 1.2" },
     ];
-    const sampleCases = [{ name: "sample", file: "samples/invoice-tracker-sample.xlsx", sheet: "Invoices", inputs: {}, expect: { C2: 20, D2: 120, D4: 420 } }];
-    const sr = await tool("deliverable", { op: "review", args: { paths: ["samples/invoice-tracker-sample.xlsx"], cases: sampleCases, subject: "sample", criteria: sampleCriteria, verdict: "pass" } });
-    expect(sr.ok, sr.output).toBe(true);
-    const pub = JSON.parse((await tool("offer", { op: "publish", args: { offerId: svcOffer.offer.offerId, reviewId: JSON.parse(sr.output).reviewId } })).output);
-    expect(pub).toMatchObject({ ok: true, offer: { status: "published" } });
+    const sr = await json("deliverable", { op: "review", args: { paths: ["samples/invoice-tracker-sample.xlsx"], cases: sampleCases, subject: "sample", criteria: sampleCriteria, verdict: "pass" } });
+    const pub = await json("offer", { op: "publish", args: { offerId: svcOffer.offer.offerId, reviewId: sr.reviewId } });
+    expect(pub.offer.status).toBe("published");
 
-    // The buyer's brief with their data; the agent fetches the file into its workspace (path only, never bytes).
-    const buyerCsv = "client,net,paid\nNorth Ltd,1200,\nSouth LLP,800,2026-10-02\nEast & Co,500,\n";
-    const e = await call(svc, "svc_offer_enquire", [pub.offer.slug, sha("buyer-svc"), "Dee Buyer", "dee@example.test", "Please build a VAT tracker from my invoice export, with a total.",
+    const buyerCsv = "client,net,invoice_date,paid\nNorth Ltd,1200,2026-09-03,\nSouth LLP,800,2026-09-10,2026-10-02\nEast & Co,500,2026-09-18,\nNorth Ltd,350.50,2026-09-29,2026-10-08\n";
+    const e = await call(svc, "svc_offer_enquire", [pub.offer.slug, sha("buyer-svc"), "Dee Buyer", "dee@example.test", "Please build a VAT tracker from my invoice export, with totals by client.",
       JSON.stringify([{ fileName: "invoices.csv", contentType: "text/csv", contentB64: Buffer.from(buyerCsv).toString("base64") }])]);
     expect(e, JSON.stringify(e)).toMatchObject({ ok: true });
-    const enquiries = JSON.parse((await tool("customers", { op: "enquiries", args: {} })).output);
-    const enquiryId = enquiries.enquiries.find((x: any) => x.status !== "accepted")?.enquiryId ?? enquiries.enquiries[0].enquiryId;
-    const read = JSON.parse((await tool("customers", { op: "read", args: { enquiryId } })).output);
-    const msg = read.thread.find((m: any) => m.files);
+    const enquiryId = (await json("customers", { op: "enquiries", args: {} })).enquiries[0].enquiryId;
+    const msg = (await json("customers", { op: "read", args: { enquiryId } })).thread.find((m: any) => m.files);
     const got = await tool("customers", { op: "fetch_file", args: { messageId: msg.messageId, fileNo: 1 } });
     expect(got.ok, got.output).toBe(true);
-    const fetched = JSON.parse(got.output);
     expect(got.output).not.toContain(Buffer.from(buyerCsv).toString("base64"));
+    const fetched = JSON.parse(got.output);
     expect(fs.readFileSync(path.join(ws, fetched.path), "utf8")).toBe(buyerCsv);
-
-    const q = JSON.parse((await tool("customers", { op: "quote", args: { enquiryId, scope: "VAT tracker for 3 invoices with a gross total", priceMinor: 5_000, turnaroundDays: 3 } })).output);
-    expect(q).toMatchObject({ ok: true, order: { fulfilment: "service" } });
+    const q = await json("customers", { op: "quote", args: { enquiryId, scope: "VAT tracker for your 4 invoices with totals by client", priceMinor: 5_000, turnaroundDays: 3 } });
     const orderId = q.order.orderId;
     const token = (await call(svc, "svc_enquiry_page", [e.token])).enquiry.orderToken as string;
     await buyerPays(await checkoutOf(token), 5_000, "dee@example.test");
     await call(svc, "svc_offer_tick", [20]);
 
-    // Built from the buyer's own file; the acceptance case checks the buyer's numbers (2500 net → 3000 gross).
-    fs.writeFileSync(path.join(ws, "build-order.py"), invoiceBuild(fetched.path, "deliver/invoice-tracker.xlsx", false));
-    expect((await tool("exec", { command: "python3 build-order.py" })).output).toContain("BUILT 3");
-    const orderCases = [{ name: "buyer-data", file: "deliver/invoice-tracker.xlsx", sheet: "Invoices", inputs: {}, expect: { D2: 1440, D5: 3000 } }];
+    // Built from the buyer's own file; expectations computed by hand from the CSV: net 2,850.50; VAT 570.10; gross 3,420.60.
+    await exec(`python3 invoice_tracker.py ${fetched.path} deliver/invoice-tracker.xlsx`, "BUILT 4 3420.6");
+    const orderCases = [{ name: "buyer-totals", file: "deliver/invoice-tracker.xlsx", sheet: "Invoices", inputs: {}, expect: { C8: 2850.5, D8: 570.1, E8: 3420.6, "Summary!D4": 1860.6 } }];
     const orderCriteria = [
-      { criterion: "Every invoice from the buyer's export", met: true, evidence: "3 rows = 3 rows in invoices.csv" },
-      { criterion: "VAT and gross per invoice", met: true, evidence: "case: North Ltd 1200 → 1440" },
-      { criterion: "A total", met: true, evidence: "case: total gross 3000 (2500 net × 1.2)" },
+      { criterion: deliverables[0], met: true, evidence: "4 rows = 4 invoices in invoices.csv; case buyer-totals: net £2,850.50, VAT £570.10, gross £3,420.60" },
+      { criterion: deliverables[1], met: true, evidence: "Summary: North Ltd gross £1,860.60 (1,200 + 350.50, × 1.2)" },
+      { criterion: "Matches the agreed scope", met: true, evidence: "quote: VAT tracker for the 4 invoices with totals by client — delivered as quoted" },
     ];
-    const r1 = await tool("deliverable", { op: "review", args: { paths: ["deliver/invoice-tracker.xlsx"], cases: orderCases, subject: "order", orderId, criteria: orderCriteria, verdict: "pass" } });
-    expect(r1.ok, r1.output).toBe(true);
-    const r1id = JSON.parse(r1.output).reviewId;
-    const d1 = await tool("wallet", { op: "deliver", args: { orderId, paths: ["deliver/invoice-tracker.xlsx"], reviewId: r1id, message: "Your tracker is attached." } });
-    expect(d1.ok, d1.output).toBe(true);
+    const r1 = await json("deliverable", { op: "review", args: { paths: ["deliver/invoice-tracker.xlsx"], cases: orderCases, subject: "order", orderId, criteria: orderCriteria, verdict: "pass" } });
+    await json("wallet", { op: "deliver", args: { orderId, paths: ["deliver/invoice-tracker.xlsx"], reviewId: r1.reviewId, message: "Your tracker is attached." } });
     await broker.tick();
     const v1 = fs.readFileSync(path.join(ws, "deliver/invoice-tracker.xlsx"));
     expect(sha(attBytes((shared.outbox.at(-1)!.attachments as any[])[0]))).toBe(sha(v1));
 
-    // A revision: the buyer asks for the paid date; the old review is stale for the revised work.
+    // Revision: the buyer asks for paid dates; the earlier review is stale for any further delivery.
     expect((await call(svc, "svc_customer_message", ["order", token, sha("buyer-svc"), "Please add the date each invoice was paid.", JSON.stringify([])])).ok).toBe(true);
-    fs.writeFileSync(path.join(ws, "build-order.py"), invoiceBuild(fetched.path, "deliver/invoice-tracker.xlsx", true));
-    expect((await tool("exec", { command: "python3 build-order.py" })).output).toContain("BUILT 3");
-    const stale = await tool("wallet", { op: "deliver", args: { orderId, paths: ["deliver/invoice-tracker.xlsx"], reviewId: r1id, resendReason: "revision: paid date" } });
-    expect(stale).toMatchObject({ ok: false, refused: "FLEET_REVIEW_STALE" });
-    const r2 = await tool("deliverable", { op: "review", args: { paths: ["deliver/invoice-tracker.xlsx"], cases: orderCases, subject: "order", orderId,
-      criteria: [...orderCriteria, { criterion: "Paid date column (revision)", met: true, evidence: "column E from the export's paid field" }], verdict: "pass" } });
-    expect(r2.ok, r2.output).toBe(true);
-    const d2 = await tool("wallet", { op: "deliver", args: { orderId, paths: ["deliver/invoice-tracker.xlsx"], reviewId: JSON.parse(r2.output).reviewId, resendReason: "revision: paid date column" } });
-    expect(d2.ok, d2.output).toBe(true);
+    await exec(`python3 invoice_tracker.py ${fetched.path} deliver/invoice-tracker.xlsx --paid-date`, "BUILT 4 3420.6");
+    expect(await tool("wallet", { op: "deliver", args: { orderId, paths: ["deliver/invoice-tracker.xlsx"], reviewId: r1.reviewId, resendReason: "revision: paid date" } }))
+      .toMatchObject({ ok: false, refused: "FLEET_REVIEW_STALE" });
+    const revCases = [{ ...orderCases[0], name: "revision", expect: { ...orderCases[0].expect, G4: "Unpaid", G5: "Paid", G7: "Paid" } }];
+    const r2 = await json("deliverable", { op: "review", args: { paths: ["deliver/invoice-tracker.xlsx"], cases: revCases, subject: "order", orderId,
+      criteria: [...orderCriteria, { criterion: "Paid date and status per invoice (revision)", met: true, evidence: "case revision: South LLP and the second North Ltd invoice Paid, others Unpaid" }],
+      verdict: "pass" } });
+    await json("wallet", { op: "deliver", args: { orderId, paths: ["deliver/invoice-tracker.xlsx"], reviewId: r2.reviewId, resendReason: "revision: paid date column" } });
     await broker.tick();
     const v2 = fs.readFileSync(path.join(ws, "deliver/invoice-tracker.xlsx"));
     expect(sha(v2)).not.toBe(sha(v1));

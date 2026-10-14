@@ -37,11 +37,14 @@ export const autoReport = (files: Array<{ name: string; bytes: Buffer }>, fail: 
   files: files.map((f, i) => ({ path: f.name, sha256: sha(f.bytes), sizeBytes: f.bytes.length, detectedType: "pdf", ok: !(fail && i === 0),
     checks: [{ id: "nonempty", status: "pass", detail: "ok" }, ...(fail && i === 0 ? [{ id: fail, status: "fail", detail: "found" }] : [])] })),
 });
-export const criteria = (met = true) => [
+const basicCriteria = (met = true) => [
   { criterion: "Covers everything the brief asks for", met, evidence: "checked each requested item against the file" },
   { criterion: "Calculations and totals reconcile", met: true, evidence: "recalculated the totals sheet; matches" },
   { criterion: "Clear instructions for the buyer", met: true, evidence: "read the instructions page start to finish" },
 ];
+/** The basic criteria plus one met criterion per deliverable the offers in this file promise (v76: every promise is checked). */
+export const criteria = (met = true) => [...basicCriteria(met),
+  ...["Cash-flow workbook (.xlsx)", "Quick-start guide (.pdf)", "A tested .xlsx workbook", "A one-page guide"].map((d) => ({ criterion: d, met: true, evidence: "opened and checked against the listing" }))];
 
 describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)", { timeout: 300_000 }, () => {
   let R: EconomyRegistry;
@@ -157,6 +160,9 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect(await review(F, { subject: "offer", offerId }, files, { met: false })).toMatchObject({ ok: false, code: "FLEET_REVIEW_CRITERIA_UNMET" });
     expect(await R.econ(F, "review.record", { subject: "offer", offerId, files: files.map((f) => ({ name: f.name, sha256: sha(f.bytes) })), automated: autoReport(files),
       criteria: criteria(), independentRequestId: crypto.randomUUID(), independentVerdict: "pass", verdict: "pass" })).toMatchObject({ ok: false, code: "FLEET_REVIEW_INDEPENDENT" });
+    // Every listed deliverable must be checked explicitly (a met criterion worded as the promise).
+    expect(await R.econ(F, "review.record", { subject: "offer", offerId, files: files.map((f) => ({ name: f.name, sha256: sha(f.bytes), sizeBytes: f.bytes.length })),
+      automated: autoReport(files), criteria: basicCriteria(), verdict: "pass" })).toMatchObject({ ok: false, code: "FLEET_REVIEW_PROMISE_UNCOVERED", reason: expect.stringContaining("Quick-start guide (.pdf)") });
     const failed = await review(F, { subject: "offer", offerId }, files, { verdict: "fail", met: false });
     expect(failed).toMatchObject({ ok: true, verdict: "fail" });
     const rv = await review(F, { subject: "offer", offerId }, files);
@@ -172,6 +178,12 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     await expect(R.q(`UPDATE fleet.fleet_artifact_reviews SET verdict = 'pass' WHERE review_id = $1`, [failed.reviewId])).rejects.toThrow(/immutable|HISTORY/i);
     // Another agent cannot touch it.
     expect(await R.econ(G, "offer.update", { offerId, priceMinor: 100 })).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
+    // Sales are closed until the owner opens them: no public page, no buy, no brief (the proof purchase is the exception).
+    expect(await pub("svc_offer_page", [p.offer.slug])).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
+    expect(await pub("svc_offer_buy", [p.offer.slug, origin])).toMatchObject({ ok: false, code: "FLEET_SALES_CLOSED" });
+    await expect(svc.query(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER])).rejects.toThrow(/permission denied/);
+    expect((await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1) AS r`, [OWNER]))[0].r).toMatchObject({ ok: true, salesOpen: true, changed: true });
+    expect(await events("sales_opened")).toBe(1);
     // The public page: the offer, its files' names, the seller notice; nothing about the agent's books or buyers.
     const page = await pub("svc_offer_page", [p.offer.slug]);
     expect(page).toMatchObject({ ok: true, seller: expect.stringContaining("Automaton Fleet"), offer: { kind: "product", available: true, priceMinor: 1_500, title: "Small business cash-flow workbook" } });
@@ -235,10 +247,32 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect(shared.outbox.at(-1)!.to).toEqual(["owner@example.test"]);
     const ord = (await R.econ(F, "order.list", {})).orders.find((x: any) => x.page === p.page);
     expect(ord).toMatchObject({ ownerProof: true, payment: "paid", status: "delivered" });
-    // A refund of the proof is reported to the owner, never posted against the agent.
+    // Refund of the proof: the owner's money goes back — D owner capital / C treasury, the refunded gross, exactly once; never the agent.
     const cap = await R.one<string>(`(SELECT capture_id FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1)`, [checkoutId]);
-    const rf = await cx("cx_paypal_refund_record", ["custody-executor", cap, `RF${crypto.randomBytes(6).toString("hex").toUpperCase()}`, "refund", 1_500, "GBP"]);
-    expect(rf).toMatchObject({ ok: true, ownerTest: true, posted: false });
+    const capital = () => R.one(`fleet.fleet_ledger_balance('fleet:owner:capital')`).then((x) => Math.abs(Number(x)));
+    const treasury = () => R.one(`fleet.fleet_ledger_balance('fleet:treasury:unallocated')`).then((x) => Number(x));
+    const [c1, t1] = [await capital(), await treasury()];
+    const refundId = `RF${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
+    const rf = await cx("cx_paypal_refund_record", ["custody-executor", cap, refundId, "refund", 1_500, "GBP"]);
+    expect(rf).toMatchObject({ ok: true, ownerProof: true, posted: true, postedMinor: 1_500 });
+    expect(await capital()).toBe(c1 - 1_500);                    // net effect of the proof on owner capital: −60, PayPal's fee
+    expect(Math.abs((await treasury()) - t1)).toBe(1_500);
+    // The order records it, so Transaction Search's refund-shortfall check (refunds beyond refunded_minor) posts nothing again.
+    expect(Number(await R.one(`(SELECT refunded_minor FROM fleet.fleet_customer_orders WHERE access_token = $1)`, [token]))).toBe(1_500);
+    // v76 restates the LATEST refund recorder: v56's order follow-up and v57's clawback record are still in it.
+    const src = await R.one<string>(`(SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'fleet' AND p.proname = 'cx_paypal_refund_record')`);
+    expect(src).toContain("fleet_paypal_clawback_posts");
+    expect(src).toContain("fleet_order_refunded(c.checkout_id, p_kind, p_amount)");
+    expect(await cx("cx_paypal_refund_record", ["custody-executor", cap, refundId, "refund", 1_500, "GBP"])).toMatchObject({ ok: true, replay: true });
+    expect(await capital()).toBe(c1 - 1_500);                    // the same PayPal refund again (webhook + Transaction Search): once
+    // A reversal of an already fully refunded proof posts nothing beyond the captured amount; a dispute fee is the owner's.
+    expect(await cx("cx_paypal_refund_record", ["custody-executor", cap, `RV${crypto.randomBytes(6).toString("hex").toUpperCase()}`, "reversal", 1_500, "GBP"]))
+      .toMatchObject({ ok: true, posted: false, postedMinor: 0 });
+    expect(await cx("cx_paypal_refund_record", ["custody-executor", cap, `DF${crypto.randomBytes(6).toString("hex").toUpperCase()}`, "dispute_fee", 1_400, "GBP"]))
+      .toMatchObject({ ok: true, posted: true, postedMinor: 1_400 });
+    expect(await capital()).toBe(c1 - 2_900);
+    expect(await events("offer_proof_returned")).toBe(3);
+    await expect(R.q(`UPDATE fleet.fleet_offer_proof_returns SET amount_minor = 0`)).rejects.toThrow(/immutable|HISTORY/i);
     expect(await agentPostings()).toBe(agent0);
   });
 

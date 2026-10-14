@@ -1477,7 +1477,9 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
     calls: ["fleet_ledger_post", "fleet_event"],
   },
   // v56: a refund / reversal also reaches the customer order (fleet_order_refunded).
-  cx_paypal_refund_record: { writes: ["fleet_revenue_claims", "fleet_venture_journals", "fleet_paypal_availability", "fleet_paypal_clawback_posts"],
+  cx_paypal_refund_record: { writes: ["fleet_revenue_claims", "fleet_venture_journals", "fleet_paypal_availability", "fleet_paypal_clawback_posts",
+    // v76: refunds / reversals / fees of the owner's proof purchase (owner capital returned, exactly once per PayPal id).
+    "fleet_offer_proof_returns"],
     calls: ["fleet_ledger_post", "fleet_event", "fleet_order_refunded"] },
   // v56: a reversal seen only in Transaction Search is raised for the owner.
   // v57: Transaction Search rows of a sale become clawback evidence, reconciled at once.
