@@ -13,17 +13,22 @@ import { memo, useEffect, useRef } from "react";
 import type { MutableRefObject } from "react";
 import { DEPARTMENTS, type DepartmentId } from "../command/departments";
 import type { Projector } from "./AgentLabels";
+import type { Rect } from "./labelLayout";
 import { WALL_H } from "./hq/world-build";
 import { clickSuppressed } from "./hq/nav-state";
 
-export const RoomLabels = memo(function RoomLabels({ projectRef, visible, hovered, onHover, onRoom, commandLevel = null }: {
+export const RoomLabels = memo(function RoomLabels({ projectRef, visible, hovered, onHover, onRoom, commandLevel = null, rectsRef }: {
   projectRef: MutableRefObject<Projector | null>; visible: boolean; hovered: DepartmentId | null;
   onHover: (id: DepartmentId | null) => void; onRoom: (id: DepartmentId) => void;
   /** Fleet Command's display level (days since the Fleet's first agent + 1; departments.ts fleetLevel). */
   commandLevel?: number | null;
+  /** Receives the plaques' on-screen boxes (label-layer pixels; empty while hidden) so agent labels keep clear of them. */
+  rectsRef?: MutableRefObject<Rect[]>;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const els = useRef(new Map<DepartmentId, HTMLButtonElement>());
+  const visibleRef = useRef(visible);
+  useEffect(() => { visibleRef.current = visible; }, [visible]);
   useEffect(() => { for (const d of DEPARTMENTS) { const el = els.current.get(d.id); if (el) el.style.borderLeftColor = d.accent; } }, []);
   useEffect(() => {
     let raf = 0, last = "";
@@ -31,7 +36,8 @@ export const RoomLabels = memo(function RoomLabels({ projectRef, visible, hovere
       raf = requestAnimationFrame(loop);
       const proj = projectRef.current, W = root.current?.clientWidth ?? 0, H = root.current?.clientHeight ?? 0;
       if (!proj || !W) return;
-      let sig = `${W}x${H}`;
+      if (rectsRef && !visibleRef.current) rectsRef.current = [];
+      let sig = `${W}x${H}|${visibleRef.current ? 1 : 0}`;
       const placed: Array<[HTMLButtonElement, number, number, string, string, string, string, string, string]> = [];
       for (const d of DEPARTMENTS) {
         const el = els.current.get(d.id); if (!el) continue;
@@ -58,10 +64,11 @@ export const RoomLabels = memo(function RoomLabels({ projectRef, visible, hovere
         // A plaque never extends past its own room on screen (wrapping instead), so neighbours never collide.
         el.style.maxWidth = `${Math.max(44, Number(w) - 4)}px`;
       }
+      if (rectsRef) rectsRef.current = visibleRef.current ? placed.filter(([, x]) => x > -9999).map(([el, x, y]) => ({ x, y: y - el.offsetHeight, w: el.offsetWidth, h: el.offsetHeight })) : [];
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [projectRef]);
+  }, [projectRef, rectsRef]);
 
   return <div ref={root} aria-label="Rooms" className={`pointer-events-none absolute inset-0 z-40 overflow-hidden ${visible ? "" : "invisible"}`}>
     {DEPARTMENTS.map((d) => {

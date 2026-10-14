@@ -13,8 +13,16 @@ export type Agent = {
    * Survivors are computed from these only — display, never economics. */
   createdAt?: string | null;
   diedAt?: string | null;
-  /** The owner's pause or a hibernation the agent reported (null/absent = awake or not reported; never inferred). */
-  sleep?: "owner_pause" | "hibernating" | null;
+  /** The OWNER's pause and since when (absent = not supplied). */
+  paused?: boolean | null;
+  pausedSince?: string | null;
+  /** What the agent itself last reported about its rest, with the report's time (absent = never reported). A stale or
+   * missing report is shown as unknown (command/rest.ts); inactivity and the owner's pause never make a hibernation. */
+  hibernation?: { state: "hibernating" | "awake"; reportedAt: string; since?: string | null } | null;
+  /** When the active mission started (absent = not supplied). */
+  missionSince?: string | null;
+  /** When the operator hold began (absent = not supplied). */
+  heldSince?: string | null;
 };
 export type Notice = { id: string; title: string; level: 'RED' | 'AMBER' | 'INFO' | 'IDENTITY'; acknowledged: boolean; time: string;
   /** LIVE: the notification's code, class, structured detail, agent and times (for the detail view). */

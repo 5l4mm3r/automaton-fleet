@@ -24,9 +24,3 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
-
-/* Virtual HQ, Low / Medium quality: the pixel look. The scene renders at a low internal resolution (hq/quality.ts `pixel`)
-   and is upscaled with hard pixel edges — same world, same cyberpunk palette, an early-PC era look. */
-.hq-pixel canvas { image-rendering: crisp-edges; image-rendering: pixelated; }
-.hq-pixel-map { shape-rendering: crispEdges; }
-.hq-pixel-map image { image-rendering: pixelated; }

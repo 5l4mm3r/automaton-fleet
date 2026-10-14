@@ -23,7 +23,7 @@ export const SLEEP_MARK: Readonly<Record<"owner_pause" | "hibernating", { glyph:
   owner_pause: { glyph: "⏸", text: "text-amber-300" }, hibernating: { glyph: "☾", text: "text-indigo-300" },
 });
 import type { VirtualPrefs } from "../command/prefs";
-import { densityFor, layoutLabels, type LabelItem } from "./labelLayout";
+import { densityFor, layoutLabels, type LabelItem, type Rect } from "./labelLayout";
 import type { BirthState, Point } from "./world";
 
 /** World → label-layer pixels. `y` (3D only) projects a point at that height (default: the floor). */
@@ -34,13 +34,15 @@ const EDGE: Readonly<Record<HealthBand, string>> = {
   CRITICAL: "border-red-500", WOUNDED: "border-amber-500", WINNING: "border-emerald-700", HEALTHY: "border-slate-700", UNKNOWN: "border-slate-700", DEAD: "border-slate-800",
 };
 
-export const AgentLabels = memo(function AgentLabels({ models, positionsRef, projectRef, prefs, selected, fleetView, onAgent, hidden, marked }: {
+export const AgentLabels = memo(function AgentLabels({ models, positionsRef, projectRef, prefs, selected, fleetView, onAgent, hidden, marked, avoidRef }: {
   models: AgentModel[]; positionsRef: MutableRefObject<Map<string, Point>>; projectRef: MutableRefObject<Projector | null>; prefs: VirtualPrefs;
   selected: string | null; fleetView: boolean; onAgent: (id: string) => void;
   /** Agents not shown yet (a newborn while its station powers up). */
   hidden: ReadonlySet<string>;
   /** Birth states (the static "new" marker when motion is reduced). */
   marked: ReadonlyMap<string, BirthState>;
+  /** Boxes agent labels keep clear of (the room plaques, drawn above them). */
+  avoidRef?: MutableRefObject<Rect[]>;
 }) {
   const els = useRef(new Map<string, HTMLButtonElement>());
   const sizes = useRef(new Map<string, { w: number; h: number }>());
@@ -76,10 +78,11 @@ export const AgentLabels = memo(function AgentLabels({ models, positionsRef, pro
         items.push({ id, x: s.x, y: s.y, w: size.w, h: size.h, priority: id === L.selected ? 9 : PRIORITY[m.health.band] });
       }
       // Re-layout only when an anchor moved, a size changed or the view resized (a still Fleet costs nothing).
-      const sig = `${view.w}x${view.h}|${L.selected}|` + items.map((i) => `${i.id}:${Math.round(i.x)},${Math.round(i.y)},${i.w},${i.h}`).join(";");
+      const avoid = avoidRef?.current ?? [];
+      const sig = `${view.w}x${view.h}|${L.selected}|` + avoid.map((r) => `${Math.round(r.x)},${Math.round(r.y)},${r.w},${r.h}`).join(";") + "|" + items.map((i) => `${i.id}:${Math.round(i.x)},${Math.round(i.y)},${i.w},${i.h}`).join(";");
       if (sig === lastSig.current && lastPlaced.current) return;
       lastSig.current = sig;
-      const placed = layoutLabels(items, view);
+      const placed = layoutLabels(items, view, avoid);
       lastPlaced.current = placed;
       const anchors = new Map(items.map((i) => [i.id, i]));
       for (const [id, el] of els.current) {
@@ -100,7 +103,7 @@ export const AgentLabels = memo(function AgentLabels({ models, positionsRef, pro
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [positionsRef, projectRef]);
+  }, [positionsRef, projectRef, avoidRef]);
 
   return <div ref={root} className="pointer-events-none absolute inset-0 overflow-hidden" aria-label="Agents" data-density={density}>
     <svg ref={leaders} className="absolute inset-0 h-full w-full" aria-hidden="true">
@@ -108,7 +111,7 @@ export const AgentLabels = memo(function AgentLabels({ models, positionsRef, pro
     </svg>
     {models.map((m) => {
       const id = m.agent.id, band = m.health.band, isNew = marked.get(id)?.mark ?? false, lv = levelOf(m.agent.createdAt);
-      const sleep = m.placement.basis === "sleep" && m.agent.sleep ? SLEEP_MARK[m.agent.sleep] : null;
+      const sleep = m.placement.basis === "sleep" && m.rest.sleep ? SLEEP_MARK[m.rest.sleep] : null;
       // The accessible name keeps its established form (name, wallet, condition, activity); the level is shown on the tag.
       const name = `${m.agent.name}, ${money(m.agent.cash)}, ${m.health.label}, ${m.placement.activity}${isNew ? ", new" : ""}`;
       return <button key={id} type="button" data-band={band}

@@ -38,18 +38,24 @@ function agentStatus(status: string, held: boolean): Agent["status"] {
   return "provisioning";
 }
 
-/** Asleep only when the reading says so: the owner's pause wins over a reported hibernation; absent fields → null. */
-export function sleepOf(a: Pick<AgentRow, "paused" | "hibernating">): Agent["sleep"] {
-  return a.paused === true ? "owner_pause" : a.hibernating === true ? "hibernating" : null;
-}
 const isoOrNull = (v: unknown) => (typeof v === "string" && Number.isFinite(Date.parse(v)) ? v : null);
+
+/** The agent's own last rest report, only when well-formed (anything else = never reported → shown as unknown). */
+export function hibernationOf(h: AgentRow["hibernation"]): Agent["hibernation"] {
+  if (!h || typeof h !== "object" || (h.state !== "hibernating" && h.state !== "awake")) return null;
+  const reportedAt = isoOrNull(h.reportedAt);
+  return reportedAt ? { state: h.state, reportedAt, since: h.state === "hibernating" ? isoOrNull(h.since) : null } : null;
+}
 
 /** One `agents` row (plus the agent's wallet, when read) as the deck's Agent. Shared by the snapshot and the pulse. */
 export function toAgent(a: AgentRow, w?: Row): Agent {
   return {
     id: a.agentId, name: agentLabel(a, a.agentId), role: words(a.mode ?? "NORMAL"), mode: a.mode ?? "NORMAL", status: agentStatus(a.status, a.held), cash: num(a.cashMinor),
     burn: num(w?.runway?.burnPerDayMinor), runwayDays: w?.runway ? (w.runway.days ?? null) : null, colour: colourOf(a.agentId), venture: "", events: [],
-    createdAt: isoOrNull(a.createdAt), diedAt: isoOrNull(a.deathTime ?? (a as unknown as Row).death_time), sleep: sleepOf(a),
+    createdAt: isoOrNull(a.createdAt), diedAt: isoOrNull(a.deathTime),
+    // The owner's pause only when the reading says so (true); its start, the rest report and the mission start as read.
+    paused: a.paused === true ? true : a.paused === false ? false : null, pausedSince: a.paused === true ? isoOrNull(a.pausedSince) : null,
+    hibernation: hibernationOf(a.hibernation), missionSince: isoOrNull(a.modeSince), heldSince: a.held ? isoOrNull(a.heldSince) : null,
   };
 }
 

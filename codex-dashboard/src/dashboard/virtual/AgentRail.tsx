@@ -11,6 +11,7 @@ import type { AgentModel } from "../command/agents";
 import { AgentPortrait } from "../command/AgentPortrait";
 import { DEPARTMENT, fleetLevel, span } from "../command/departments";
 import { railOrder } from "../command/survival";
+import { hibernationText } from "../command/rest";
 import type { Agent } from "../model";
 import { SLEEP_MARK } from "./AgentLabels";
 
@@ -31,16 +32,17 @@ export const AgentRail = memo(function AgentRail({ models, all, selected, now, o
     <p className="border-b border-slate-800 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-400">{rows.length} alive · longest survivors first</p>
     <ol className="flex-1 overflow-y-auto">
       {rows.map(({ m, e }) => {
-        const a = m.agent, sleep = m.placement.basis === "sleep" && a.sleep ? SLEEP_MARK[a.sleep] : null, on = selected === a.id;
+        const a = m.agent, sleep = m.placement.basis === "sleep" && m.rest.sleep ? SLEEP_MARK[m.rest.sleep] : null, on = selected === a.id;
         return <li key={a.id}>
           <button type="button" data-agent={a.id} aria-current={on ? "true" : undefined} onClick={() => onAgent(a.id)}
-            aria-label={`${a.name}${e.level ? `, level ${e.level}` : ""}, ${m.placement.activity} in ${DEPARTMENT[m.placement.department].name}, for ${span(e.onActivityMs)}, alive ${span(e.aliveMs)}`}
+            aria-label={`${a.name}${e.level ? `, level ${e.level}` : ""}, ${m.placement.activity} in ${DEPARTMENT[m.placement.department].name}, for ${span(e.onActivityMs)}, alive ${span(e.aliveMs)}, hibernation ${hibernationText(m.rest, now)}`}
             className={`flex w-full items-center gap-2 border-b border-slate-900 px-2 py-1.5 text-left ${on ? "bg-fuchsia-950/60 ring-1 ring-inset ring-fuchsia-400/70" : "hover:bg-slate-900"}`}>
             <AgentPortrait id={a.id} name={a.name} band={m.health.band} size={40} />
             <span className="min-w-0 flex-1">
               <span className="flex items-baseline justify-between gap-2"><span className="truncate text-[12px] font-semibold text-slate-100">{a.name}</span><span className="shrink-0 font-mono text-[11px] text-fuchsia-300">{e.level ? `Lv ${e.level}` : "Lv —"}</span></span>
               <span className={`block truncate font-mono text-[10px] tracking-wider ${sleep ? sleep.text : "text-cyan-300"}`}>{sleep ? `${sleep.glyph} ` : ""}{m.placement.activity} · {DEPARTMENT[m.placement.department].name}</span>
               <span className="flex justify-between gap-2 font-mono text-[10px] text-slate-400"><span>on it {span(e.onActivityMs)}</span><span>alive {span(e.aliveMs)}</span></span>
+              <span className={`block truncate font-mono text-[10px] ${m.rest.hibernation === "unknown" ? "text-slate-500" : "text-indigo-300"}`}>☾ {hibernationText(m.rest, now)}</span>
             </span>
           </button>
         </li>;

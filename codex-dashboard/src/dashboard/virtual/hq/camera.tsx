@@ -16,9 +16,9 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
-import { focusRect, type Point } from "../world";
+import { focusRect, type Bed, type Point } from "../world";
 import type { Focus } from "../VirtualMap";
-import { frameAgent } from "./framing";
+import { frameAgent, frameSleeper } from "./framing";
 import { interact, shotGoal, takeShot, wantShot, type DirectorState } from "./director";
 import type { CameraMode } from "../../command/prefs";
 import type { TransportDirector } from "./flow";
@@ -29,11 +29,13 @@ import { HQ_NAV, resetNav } from "./nav-state";
 
 const NONE: ReadonlySet<string> = new Set();
 
-export function CameraRig({ focus, positionsRef, reduceMotion, spots, stations, ghostsRef, occluders = [], cameraMode = "off", directorRef }: {
+export function CameraRig({ focus, positionsRef, reduceMotion, spots, stations, ghostsRef, occluders = [], cameraMode = "off", directorRef, sleepers }: {
   focus: Focus; positionsRef: MutableRefObject<Map<string, Point>>; reduceMotion: boolean;
   spots: ReadonlyMap<string, WorkSpot>; stations: ReadonlyMap<string, Point>; ghostsRef: MutableRefObject<ReadonlySet<string>>;
   /** Tall furniture the Agent View must not look through (world-build). */
   occluders?: readonly Occluder[];
+  /** The beds of the agents asleep in Quarters (framed from the foot of the bed, never through a bunk frame). */
+  sleepers?: ReadonlyMap<string, Bed & { covered: boolean }>;
   /** The event camera mode (off by default) and the handle the transport renderer offers events to. */
   cameraMode?: CameraMode; directorRef?: MutableRefObject<TransportDirector | null>;
 }) {
@@ -164,7 +166,8 @@ export function CameraRig({ focus, positionsRef, reduceMotion, spots, stations, 
       const yaw = spot ? spot.yaw : Math.PI, seated = atStation || spot?.pose === "seat";
       // Keep the chosen angle while the agent is where it was; recompose when it moves or a new agent is selected.
       const h = held.current, keep = h && h.id === id && Math.hypot(h.at.x - p.x, h.at.z - p.z) < 0.3 ? h.az : undefined;
-      const f = frameAgent(id, p, yaw, seated, positionsRef.current, keep, occluders);
+      const bed = sleepers?.get(id), asleep = !!bed && Math.hypot(bed.x - p.x, bed.z - p.z) < 0.05;
+      const f = asleep ? frameSleeper(id, p, bed!.level, positionsRef.current, bed!.covered) : frameAgent(id, p, yaw, seated, positionsRef.current, keep, occluders);
       held.current = { id, az: f.azimuth, at: { x: p.x, z: p.z } };
       ghostsRef.current = new Set(f.ghosts);
       goalPos.current.set(f.cam.x, f.cam.y, f.cam.z); goalLook.current.set(f.look.x, f.look.y, f.look.z);

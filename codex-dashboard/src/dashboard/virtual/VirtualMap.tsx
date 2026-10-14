@@ -15,7 +15,6 @@ import type { VirtualPrefs } from "../command/prefs";
 import { BED_LENGTH, BED_WIDTH, bedIndex, bedPoint, birthState, focusRect, livePackets, WORLD, type BirthState, type Packet, type Point } from "./world";
 import { along, roomAt, routeThrough, toHub } from "./hq/route";
 import { mayWander, wanderPoint } from "./hq/wander";
-import { HQ_PROFILE } from "./hq/quality";
 import { SLEEP_LAMP } from "./hq/beds";
 
 /** The floor grid as one path (cheaper to repaint than a pattern fill). */
@@ -162,8 +161,8 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
   }, [positionsRef, projectRef]);
 
 
-  const beds = bedIndex(models), sleeping = new Map(models.filter((m) => m.placement.basis === "sleep").map((m) => [m.agent.id, m.agent.sleep ?? null]));
-  return <svg ref={svg} viewBox={`${WORLD.minX} ${WORLD.minZ} ${WORLD.maxX - WORLD.minX} ${WORLD.maxZ - WORLD.minZ}`} className={`h-full w-full select-none ${HQ_PROFILE[prefs.quality].pixel ? "hq-pixel-map" : ""}`} role="group" aria-label="Fleet headquarters map">
+  const beds = bedIndex(models), sleeping = new Map(models.filter((m) => m.placement.basis === "sleep").map((m) => [m.agent.id, m.rest.sleep]));
+  return <svg ref={svg} viewBox={`${WORLD.minX} ${WORLD.minZ} ${WORLD.maxX - WORLD.minX} ${WORLD.maxZ - WORLD.minZ}`} className="h-full w-full select-none" role="group" aria-label="Fleet headquarters map">
     <rect x={WORLD.minX - 5} y={WORLD.minZ - 5} width={WORLD.maxX - WORLD.minX + 10} height={WORLD.maxZ - WORLD.minZ + 10} fill="#030712" />
     <path d={GRID} fill="none" stroke="#0f2236" strokeWidth={0.05} />
     {/* Every department's own corridor to the Fleet Command hub (the pipes information travels in run along them). */}

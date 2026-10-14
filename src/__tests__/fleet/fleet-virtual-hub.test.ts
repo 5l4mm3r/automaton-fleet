@@ -3,31 +3,39 @@
  *   hub connectivity (every room one corridor from Fleet Command; every route between rooms passes its core), the ceiling
  *   pipes (visible only while information travels), Quarters (a bed for every living agent), the owner's pause vs a
  *   reported hibernation, the side list (order and focus), levels (display only), the Hall of Survivors, idle
- *   wandering (cosmetic, inside the room), and the pixel look (Low / Medium only; the world never changes).
+ *   wandering (cosmetic, inside the room), the live presence (v75: owner pause and its start, the agent's own rest
+ *   report with freshness — unknown when stale or missing —, death time, mission start, the activity run's start), the
+ *   sleeper camera (never through a bunk frame) and agent labels kept clear of the room plaques. The art is unchanged.
  */
 import { describe, it, expect } from "vitest";
 import { createElement as h, isValidElement, type ReactElement, type ReactNode } from "../../../codex-dashboard/node_modules/react/index.js";
 import { renderToStaticMarkup } from "../../../codex-dashboard/node_modules/react-dom/server.node.js";
-import { DAY_MS, DEPARTMENT, DEPARTMENTS, fleetLevel, levelOf, placeAgent, span } from "../../../codex-dashboard/src/dashboard/command/departments";
+import { ACTIVITY_WINDOW_MS, activityByAgent, DAY_MS, DEPARTMENT, DEPARTMENTS, fleetLevel, levelOf, placeAgent, span } from "../../../codex-dashboard/src/dashboard/command/departments";
+import { HIBERNATION_REPORT_FRESH_MS, hibernationText, pauseText, restOf } from "../../../codex-dashboard/src/dashboard/command/rest";
+import { blockedByFurniture, bunkOccluders, BUNK_H, frameSleeper } from "../../../codex-dashboard/src/dashboard/virtual/hq/framing";
+import { layoutLabels } from "../../../codex-dashboard/src/dashboard/virtual/labelLayout";
 import { deriveAgents, mergePulseAgents } from "../../../codex-dashboard/src/dashboard/command/agents";
 import { hallOfSurvivors, railEntry, railOrder } from "../../../codex-dashboard/src/dashboard/command/survival";
 import { emptyCommandView } from "../../../codex-dashboard/src/dashboard/command/view";
 import { CROSS_Z, HUB, INTAKE, PIPE_END_Y, PIPE_Y, pipeHeight, roomAt, routeThrough, SPINE_X, toHub } from "../../../codex-dashboard/src/dashboard/virtual/hq/route";
 import { CATEGORY_COLOUR, PHASE, pipesOf, totalTime, transportFrame, type Transport } from "../../../codex-dashboard/src/dashboard/virtual/hq/transport";
-import { agentTargetsWithStations, BED_LENGTH, BED_WIDTH, bedIndex, bedPoint, BUNKS, bunksFor } from "../../../codex-dashboard/src/dashboard/virtual/world";
+import { agentTargetsWithStations, BED_LENGTH, BED_TOP, BED_WIDTH, bedIndex, bedPoint, BUNKS, bunksFor } from "../../../codex-dashboard/src/dashboard/virtual/world";
 import { chooseActivity, isWorking, type ActivityContext } from "../../../codex-dashboard/src/dashboard/virtual/hq/choreo";
 import { mayWander, WANDER_DWELL, WANDER_MARGIN, WANDER_SLOT_MS, wanderPoint } from "../../../codex-dashboard/src/dashboard/virtual/hq/wander";
 import { HQ_PROFILE } from "../../../codex-dashboard/src/dashboard/virtual/hq/quality";
 import { buildWorld, NAV_BOUNDS } from "../../../codex-dashboard/src/dashboard/virtual/hq/world-build";
 import { findPath, navGrid } from "../../../codex-dashboard/src/dashboard/virtual/hq/nav";
 import { hqBoardsFrom } from "../../../codex-dashboard/src/dashboard/virtual/hq/data";
-import { sleepOf, toAgent } from "../../../codex-dashboard/src/dashboard/live/mapping";
+import { hibernationOf, toAgent } from "../../../codex-dashboard/src/dashboard/live/mapping";
 import { AgentRail } from "../../../codex-dashboard/src/dashboard/virtual/AgentRail";
 import type { Agent, Fleet } from "../../../codex-dashboard/src/dashboard/model";
 import type { AgentRow } from "../../../codex-dashboard/src/dashboard/api/types";
 
 const NOW = Date.parse("2026-10-13T12:00:00Z");
 const ago = (days: number) => new Date(NOW - days * DAY_MS).toISOString();
+const hAgo = (hours: number) => ago(hours / 24);
+const PAUSED: Partial<Agent> = { paused: true };
+const HIB: Partial<Agent> = { hibernation: { state: "hibernating", reportedAt: hAgo(1), since: hAgo(5) } };
 const agent = (id: string, o: Partial<Agent> = {}): Agent => ({ id, name: `Agent ${id}`, role: "Normal", mode: "NORMAL", status: "active", cash: 9_000, burn: 10, colour: "cyan", venture: "", events: [], ...o });
 const view = () => ({ ...emptyCommandView("live"), genesisMinor: 10_000 });
 const inRoom = (p: { x: number; z: number }, d: { x: number; z: number; w: number; d: number }, m = 0) => Math.abs(p.x - d.x) <= d.w / 2 - m + 1e-9 && Math.abs(p.z - d.z) <= d.d / 2 - m + 1e-9;
@@ -125,19 +133,64 @@ describe("Quarters: a bed for every living agent; the owner's pause vs a reporte
   });
 
   it("the reading decides — the owner's pause wins over a reported hibernation; absent fields are never inferred", () => {
-    expect(sleepOf({ paused: true, hibernating: true })).toBe("owner_pause");
-    expect(sleepOf({ paused: false, hibernating: true })).toBe("hibernating");
-    expect(sleepOf({})).toBeNull(); expect(sleepOf({ paused: null, hibernating: null })).toBeNull();
     const row = { agentId: "01X", name: "founder-1", status: "active", createdAt: "2026-09-26T15:23:26Z", cashMinor: 8641, valueMinor: 8641, held: false, mode: "NORMAL" } as AgentRow;
-    expect(toAgent(row)).toMatchObject({ sleep: null, createdAt: "2026-09-26T15:23:26Z", diedAt: null });
-    expect(toAgent({ ...row, paused: true })).toMatchObject({ sleep: "owner_pause" });
+    expect(toAgent(row)).toMatchObject({ paused: null, pausedSince: null, hibernation: null, missionSince: null, createdAt: "2026-09-26T15:23:26Z", diedAt: null });
+    expect(restOf(toAgent(row), NOW)).toEqual({ sleep: null, since: null, hibernation: "unknown", reportedAt: null });
+    const paused = toAgent({ ...row, paused: true, pausedSince: "2026-10-10T12:37:00Z" });
+    expect(restOf(paused, NOW)).toMatchObject({ sleep: "owner_pause", since: Date.parse("2026-10-10T12:37:00Z"), hibernation: "unknown" });
+    // A pause start is read only with the pause itself.
+    expect(toAgent({ ...row, paused: false, pausedSince: "2026-10-10T12:37:00Z" })).toMatchObject({ paused: false, pausedSince: null });
     expect(toAgent({ ...row, status: "dead", deathTime: "2026-10-01T00:00:00Z" })).toMatchObject({ status: "dead", diedAt: "2026-10-01T00:00:00Z" });
-    // A pulse carries the sleep state (and keeps the creation time).
-    expect(mergePulseAgents([agent("A", { createdAt: ago(3) })], [agent("A", { sleep: "owner_pause" })])[0]).toMatchObject({ sleep: "owner_pause", createdAt: ago(3) });
+    expect(toAgent({ ...row, modeSince: "2026-10-12T00:00:00Z" })).toMatchObject({ missionSince: "2026-10-12T00:00:00Z" });
+    expect(toAgent({ ...row, held: true, heldSince: "2026-10-11T00:00:00Z" })).toMatchObject({ status: "held", heldSince: "2026-10-11T00:00:00Z" });
+    expect(toAgent({ ...row, held: false, heldSince: "2026-10-11T00:00:00Z" })).toMatchObject({ heldSince: null });
+    // Malformed rest reports are no report.
+    expect(hibernationOf({ state: "asleep", reportedAt: "2026-10-13T00:00:00Z" } as never)).toBeNull();
+    expect(hibernationOf({ state: "hibernating", reportedAt: "nope" })).toBeNull();
+    expect(hibernationOf({ state: "awake", reportedAt: "2026-10-13T00:00:00Z", since: "2026-10-12T00:00:00Z" })).toEqual({ state: "awake", reportedAt: "2026-10-13T00:00:00Z", since: null });
+    // A pulse carries the presence (and keeps the creation time).
+    expect(mergePulseAgents([agent("A", { createdAt: ago(3) })], [agent("A", { paused: true, pausedSince: hAgo(2) })])[0]).toMatchObject({ paused: true, pausedSince: hAgo(2), createdAt: ago(3) });
+  });
+
+  it("hibernation is the agent's own FRESH report: stale or missing reads unknown; inactivity and the owner's pause never make one", () => {
+    const rep = (state: "hibernating" | "awake", hours: number) => ({ hibernation: { state, reportedAt: hAgo(hours), since: state === "hibernating" ? hAgo(hours + 4) : null } });
+    expect(restOf(rep("hibernating", 2), NOW)).toEqual({ sleep: "hibernating", since: Date.parse(hAgo(6)), hibernation: "hibernating", reportedAt: Date.parse(hAgo(2)) });
+    expect(restOf(rep("awake", 2), NOW)).toMatchObject({ sleep: null, hibernation: "awake" });
+    // Older than the freshness window (a running agent reports every turn; a hibernating one at least daily): unknown.
+    const stale = restOf(rep("hibernating", HIBERNATION_REPORT_FRESH_MS / 3_600_000 + 0.1), NOW);
+    expect(stale).toMatchObject({ sleep: null, hibernation: "unknown" });
+    expect(hibernationText(stale, NOW)).toBe("unknown · last report 1d 2h ago");
+    expect(hibernationText(restOf({}, NOW), NOW)).toBe("unknown · never reported");
+    expect(hibernationText(restOf(rep("hibernating", 3), NOW), NOW)).toBe("hibernating · reported 3h 0m ago");
+    // The owner's pause outranks a fresh hibernation, which stays visible as the agent's own report.
+    const both = restOf({ paused: true, pausedSince: hAgo(30), ...rep("hibernating", 1) }, NOW);
+    expect(both).toMatchObject({ sleep: "owner_pause", since: Date.parse(hAgo(30)), hibernation: "hibernating" });
+    expect(pauseText({ paused: true }, both, NOW)).toBe("paused · for 1d 6h");
+    expect(pauseText({ paused: true }, restOf({ paused: true }, NOW), NOW)).toBe("paused · for —");
+    expect(pauseText({}, restOf({}, NOW), NOW)).toBe("—");
+    // Paused for days with no report: asleep for the pause, hibernation unknown — never "hibernating".
+    const quiet = deriveAgents([agent("A", { paused: true, pausedSince: ago(4) })], view(), NOW)[0];
+    expect(quiet.rest).toMatchObject({ sleep: "owner_pause", hibernation: "unknown" });
+    // No events for days, not paused, nothing reported: awake on the Floor, hibernation unknown.
+    const idle = deriveAgents([agent("A")], view(), NOW)[0];
+    expect(idle.placement).toMatchObject({ department: "floor", basis: "default", since: null }); expect(idle.rest.hibernation).toBe("unknown");
+  });
+
+  it("time on the activity comes from its authoritative transition: pause start, hibernation start, mission start, the event run's first event", () => {
+    const ev = (agentId: string, type: string, hours: number) => ({ key: `${agentId}${type}${hours}`, type, agentId, at: hAgo(hours), detail: {} });
+    const v = { ...view(), events: [ev("E", "venture_state", 1), ev("E", "venture_state", 3), ev("E", "venture_state", 5), ev("E", "knowledge_recorded", 6),
+      ev("G", "venture_state", 1), ev("G", "venture_state", 1 + ACTIVITY_WINDOW_MS / 3_600_000 + 1)] } as never;
+    const ms = deriveAgents([agent("P", { paused: true, pausedSince: hAgo(30) }), agent("H", HIB), agent("M", { mode: "MARKETING", missionSince: hAgo(50) }), agent("E"), agent("G")], v, NOW);
+    const on = (id: string) => ms.find((m) => m.agent.id === id)!.placement.since;
+    expect(deriveAgents([agent("Q", { status: "held", heldSince: hAgo(7) })], view(), NOW)[0].placement).toMatchObject({ activity: "HELD", since: Date.parse(hAgo(7)) });
+    expect(on("P")).toBe(Date.parse(hAgo(30))); expect(on("H")).toBe(Date.parse(hAgo(5))); expect(on("M")).toBe(Date.parse(hAgo(50)));
+    expect(on("E")).toBe(Date.parse(hAgo(5)));   // three venture events in a row; the Library event before them ends the run
+    expect(on("G")).toBe(Date.parse(hAgo(1)));   // a gap longer than the window: back on the Floor in between
+    expect(activityByAgent([ev("Z", "unmapped_thing", 1), ev("Z", "venture_state", 2)]).get("Z")!.runStart).toBe(Date.parse(hAgo(1)));
   });
 
   it("sleepers head for their own bed and lie on it; sleep is never work, never a stroll", () => {
-    const models = deriveAgents([agent("A", { sleep: "owner_pause" }), agent("B", { sleep: "hibernating" }), agent("C")], view(), NOW);
+    const models = deriveAgents([agent("A", PAUSED), agent("B", HIB), agent("C")], view(), NOW);
     const t = agentTargetsWithStations(models, new Map(), NOW, false), beds = bedIndex(models);
     expect(t.get("A")).toMatchObject({ ...{ x: bedPoint(beds.get("A")!).x, z: bedPoint(beds.get("A")!).z }, department: "quarters" });
     expect(t.get("B")!.department).toBe("quarters");
@@ -150,7 +203,7 @@ describe("Quarters: a bed for every living agent; the owner's pause vs a reporte
   });
 
   it("Quarters' boards show who sleeps and why (and nothing else)", () => {
-    const models = deriveAgents([agent("A", { name: "Vega", sleep: "owner_pause" }), agent("B", { name: "Lyra", sleep: "hibernating" }), agent("C")], view(), NOW);
+    const models = deriveAgents([agent("A", { name: "Vega", ...PAUSED }), agent("B", { name: "Lyra", ...HIB }), agent("C")], view(), NOW);
     const fleet = { agents: models.map((m) => m.agent), missions: [], notices: [], estates: [], live: null } as unknown as Fleet;
     expect(hqBoardsFrom(fleet, view(), models)["quarters:board"]!.rows).toEqual([["Vega", "PAUSED BY OWNER", "warn"], ["Lyra", "HIBERNATING", "muted"]]);
   });
@@ -185,7 +238,7 @@ describe("levels (display only) and the Hall of Survivors", () => {
 
 describe("the side list: living agents, longest survivors first; selecting one focuses it", () => {
   const models = () => deriveAgents([
-    agent("B", { name: "Vega", createdAt: ago(21.2), sleep: "owner_pause" }), agent("A", { name: "Atlas", createdAt: ago(38.4), mode: "MARKETING" }),
+    agent("B", { name: "Vega", createdAt: ago(21.2), ...PAUSED }), agent("A", { name: "Atlas", createdAt: ago(38.4), mode: "MARKETING" }),
     agent("C", { name: "Rook", createdAt: ago(9.6) }), agent("X", { name: "Echo", status: "dead", createdAt: ago(60) }), agent("N", { name: "New" }),
   ], { ...view(), events: [{ key: "e1", type: "venture_state", agentId: "C", at: new Date(NOW - 3_600_000).toISOString(), detail: {} }] } as never, NOW);
 
@@ -195,7 +248,9 @@ describe("the side list: living agents, longest survivors first; selecting one f
     expect(rows[0].e).toMatchObject({ level: 39 }); expect(rows[3].e).toMatchObject({ level: null, aliveMs: null });
     const rook = railEntry(models().find((m) => m.agent.id === "C")!, NOW);
     expect(rook.onActivityMs).toBe(3_600_000); // since its latest recorded event placed it
-    expect(railEntry(models().find((m) => m.agent.id === "B")!, NOW).onActivityMs).toBeNull(); // the pause's start is not in the reading
+    expect(railEntry(models().find((m) => m.agent.id === "B")!, NOW).onActivityMs).toBeNull(); // the pause's start is not in this reading
+    const since = deriveAgents([agent("B", { createdAt: ago(21.2), paused: true, pausedSince: hAgo(30) })], view(), NOW)[0];
+    expect(railEntry(since, NOW).onActivityMs).toBe(30 * 3_600_000);
   });
 
   it("renders each entry with its level, activity and room; clicking calls the existing focus with that agent", () => {
@@ -203,6 +258,7 @@ describe("the side list: living agents, longest survivors first; selecting one f
     const html = renderToStaticMarkup(h(AgentRail, { models: ms, all: ms.map((m) => m.agent), selected: "B", now: NOW, onAgent: (id: string) => picked.push(id), onCommand: () => picked.push("command") }));
     expect([...html.matchAll(/data-agent="([^"]+)"/g)].map((m) => m[1])).toEqual(["A", "B", "C", "N"]);
     expect(html).toContain("Lv 39"); expect(html).toContain("PAUSED BY OWNER"); expect(html).toContain("Quarters"); expect(html).toContain("Fleet Command");
+    expect(html).toContain("unknown · never reported");
     expect(html).toMatch(/aria-current="true"[^>]*data-agent="B"|data-agent="B"[^>]*aria-current="true"/);
     // The click handlers: walk the element tree and press each entry.
     const tree = (AgentRail as unknown as { type: (p: unknown) => ReactElement }).type({ models: ms, all: ms.map((m) => m.agent), selected: null, now: NOW, onAgent: (id: string) => picked.push(id), onCommand: () => picked.push("command") });
@@ -238,12 +294,43 @@ describe("idle wandering: cosmetic, inside the room, deterministic", () => {
   });
 });
 
-describe("the pixel look: Low and Medium only; the world never changes", () => {
-  it("renders Low and Medium at a reduced internal scale with hard pixel edges; High and Ultra stay smooth", () => {
-    expect(HQ_PROFILE.low.pixel && HQ_PROFILE.medium.pixel).toBe(true);
-    expect(HQ_PROFILE.high.pixel || HQ_PROFILE.ultra.pixel).toBe(false);
-    expect(HQ_PROFILE.low.dpr).toBeLessThan(HQ_PROFILE.medium.dpr); expect(HQ_PROFILE.medium.dpr).toBeLessThan(1);
-    // The same world at every quality: the plan takes no quality input.
+describe("the art is unchanged: no pixel mode", () => {
+  it("every quality renders the same world at its usual resolution", () => {
+    for (const q of ["low", "medium", "high", "ultra"] as const) { expect("pixel" in HQ_PROFILE[q]).toBe(false); expect(HQ_PROFILE[q].dpr).toBeGreaterThanOrEqual(1); }
     expect(buildWorld.length).toBe(0);
+  });
+});
+
+describe("the Quarters camera never looks through a bunk frame", () => {
+  it("bunk frames are camera obstacles, one per frame, as tall as the posts", () => {
+    expect(bunkOccluders(0)).toEqual([]);
+    expect(bunkOccluders(5)).toHaveLength(5); expect(bunkOccluders(50)).toHaveLength(BUNKS);
+    const b = bedPoint(3), o = bunkOccluders(5)[3];
+    expect(o).toEqual({ x0: b.x - BED_WIDTH / 2, x1: b.x + BED_WIDTH / 2, z0: b.z, z1: b.z + BED_LENGTH, h: BUNK_H });
+  });
+  it("a sleeper is framed from the aisle at its bed's foot, outside every frame, with nothing between", () => {
+    for (const n of [2, 50]) for (let i = 0; i < n; i++) {
+      const occ = bunkOccluders(n), covered = i < bunksFor(n).uppers;
+      const bed = bedPoint(i), p = { x: bed.x, z: bed.z }, f = frameSleeper("S", p, bed.level, new Map(), covered);
+      // The camera stands in no bunk (below its top), inside Quarters, and looks at the sleeper's head.
+      for (const o of occ) expect(f.cam.x >= o.x0 && f.cam.x <= o.x1 && f.cam.z >= o.z0 && f.cam.z <= o.z1 && f.cam.y < o.h, `bed ${i}`).toBe(false);
+      expect(roomAt(f.cam)?.id).toBe("quarters");
+      expect(f.look.y).toBeCloseTo(BED_TOP[bed.level] + 0.1); expect(f.look.x).toBe(p.x);
+      // No OTHER bunk on the line of sight (its own bunk frames it; nothing crosses its posts).
+      expect(blockedByFurniture(f.cam, f.cam.y, p, f.look.y, occ)).toBe(false);
+      // A lower bed under an upper one: between the mattress and the bunk above; otherwise over the top rails.
+      if (covered) { expect(f.cam.y).toBeGreaterThan(BED_TOP[0]); expect(f.cam.y).toBeLessThan(BED_TOP[1] - 0.2); } else expect(f.cam.y).toBeGreaterThan(BUNK_H);
+    }
+  });
+});
+
+describe("agent labels keep clear of the room plaques", () => {
+  it("a label whose natural spot is under a plaque moves off it; without the plaque it stays", () => {
+    const item = { id: "A", x: 200, y: 100, w: 80, h: 30, priority: 1 }, plaque = { x: 150, y: 95, w: 120, h: 40 };
+    const free = layoutLabels([item], { w: 800, h: 600 }).get("A")!;
+    expect(free).toMatchObject({ x: 160, y: 100, displaced: false });
+    const moved = layoutLabels([item], { w: 800, h: 600 }, [plaque]).get("A")!;
+    const overlaps = moved.x < plaque.x + plaque.w && moved.x + item.w > plaque.x && moved.y < plaque.y + plaque.h && moved.y + item.h > plaque.y;
+    expect(overlaps).toBe(false); expect(moved.displaced).toBe(true);
   });
 });

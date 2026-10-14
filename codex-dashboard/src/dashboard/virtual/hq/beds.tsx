@@ -44,8 +44,8 @@ export const Beds = memo(function Beds({ models, q }: { models: AgentModel[]; q:
   useEffect(() => {
     const o = new THREE.Object3D(), c = new THREE.Color();
     const set = (p: Part, i: number, x: number, y: number, z: number) => { const m = meshes.current.get(p); if (!m) return; o.position.set(x, y, z); o.updateMatrix(); m.setMatrixAt(i, o.matrix); };
-    const sleepAt = new Map<number, AgentModel["agent"]["sleep"]>();
-    for (const m of models) { const i = beds.get(m.agent.id); if (i !== undefined && m.placement.basis === "sleep") sleepAt.set(i, m.agent.sleep ?? null); }
+    const sleepAt = new Map<number, AgentModel["rest"]["sleep"]>();
+    for (const m of models) { const i = beds.get(m.agent.id); if (i !== undefined && m.placement.basis === "sleep") sleepAt.set(i, m.rest.sleep); }
     for (let f = 0; f < frames; f++) {
       const b = bedPoint(f), cz = b.z + BED_LENGTH / 2, y0 = 0.12;
       let k = 0;

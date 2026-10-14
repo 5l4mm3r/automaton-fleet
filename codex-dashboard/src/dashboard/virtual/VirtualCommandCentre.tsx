@@ -9,6 +9,7 @@
  * meaning and can be switched off. Panels show the shared Fleet Command components; actions use the deck's controls.
  */
 import { RoomLabels } from "./RoomLabels";
+import type { Rect } from "./labelLayout";
 import { HQ_NAV } from "./hq/nav-state";
 import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Fleet } from "../model";
@@ -62,6 +63,8 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
   // Shared with the label layer: the renderer's animated positions and its world → screen projection.
   const positions = useRef(new Map<string, Point>());
   const project = useRef<Projector | null>(null);
+  // The room plaques' on-screen boxes: agent labels are laid out clear of them (the plaques sit above the labels).
+  const plaqueRects = useRef<Rect[]>([]);
   const readings = useRef<AgentReading[] | null>(null);
   // Births (presentation only): agent id → when it came into being, from an authoritative new reading or birth event.
   const [births, setBirths] = useState<Map<string, number>>(() => new Map());
@@ -215,11 +218,11 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
         {use3d ? <SceneBoundary onError={() => setWebglFailed(true)}><Suspense fallback={<p className="p-5 text-sm text-slate-400">Loading the 3D facility…</p>}>
           <Scene3D {...sceneProps} screenFeed={screenFeed} redAlert={redAlert} teams={teams} onLost={() => setWebglFailed(true)} hoveredRoom={hoveredRoom} onHoverRoom={setHoveredRoom} /></Suspense></SceneBoundary>
           : <VirtualMap {...sceneProps} />}
-        <AgentLabels models={models} positionsRef={positions} projectRef={project} prefs={effective} selected={selectedAgent?.agent.id ?? null} fleetView={focus.level === "fleet"} onAgent={onAgent} hidden={hidden} marked={birthStates} />
+        <AgentLabels models={models} positionsRef={positions} projectRef={project} prefs={effective} selected={selectedAgent?.agent.id ?? null} fleetView={focus.level === "fleet"} onAgent={onAgent} hidden={hidden} marked={birthStates} avoidRef={plaqueRects} />
         <ol aria-live="polite" aria-label="Recent Fleet activity" className="pointer-events-none absolute bottom-3 left-3 z-50 max-w-[70%] space-y-1 text-xs">
           {ticker.map((v) => <li key={v.id} className="rounded bg-slate-950 px-2 py-1 text-slate-200">{utc(v.at, true).slice(11)} · {models.find((m) => m.agent.id === v.agentId)?.agent.name ?? "Fleet"} · {v.label}</li>)}
         </ol>
-        {use3d && <RoomLabels projectRef={project} visible={focus.level === "fleet"} hovered={hoveredRoom} onHover={setHoveredRoom} onRoom={onRoom} commandLevel={fleetLevel(fleet.agents, railNow)} />}
+        {use3d && <RoomLabels projectRef={project} visible={focus.level === "fleet"} hovered={hoveredRoom} onHover={setHoveredRoom} onRoom={onRoom} commandLevel={fleetLevel(fleet.agents, railNow)} rectsRef={plaqueRects} />}
         {/* Where you are: the location line (secondary) and, inside a room, its title and purpose (primary). */}
         {/* In the Treasury the card stays left of the banner's centred balance (the banner spans the back wall's top). */}
         <div className={`pointer-events-none absolute left-3 top-3 z-50 ${room?.id === "treasury" && focus.level === "department" ? "max-w-[min(34rem,36%)]" : "max-w-[min(34rem,70%)]"}`}>

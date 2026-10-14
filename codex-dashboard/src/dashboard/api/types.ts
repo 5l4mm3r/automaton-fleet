@@ -59,12 +59,19 @@ export interface AgentRow {
   held: boolean;
   /** NORMAL or the active temporary mission (MARKETING, OPPORTUNITY_HUNT, KNOWLEDGE_DATA). */
   mode: string;
-  /** Optional (read when FleetController supplies them; absent = not reported, never inferred): the OWNER's cognition
-   * pause, a hibernation the agent itself REPORTED, and the time of death. */
+  /** v75 presence (absent = not known, never inferred): the OWNER's cognition pause and since when; the agent's own last
+   * REPORTED rest (its freshness is `reportedAt`); the time of death; when the active mission and the operator hold began. */
   paused?: boolean | null;
-  hibernating?: boolean | null;
+  pausedSince?: string | null;
+  hibernation?: HibernationReport | null;
   deathTime?: string | null;
+  modeSince?: string | null;
+  heldSince?: string | null;
 }
+
+/** What the agent last reported about its rest (v75): hibernating (its turn ended in a sleep with a wake condition or a
+ * review time) or awake, when it reported it, and when the current hibernation began. */
+export interface HibernationReport { state: "hibernating" | "awake"; reportedAt: string; since?: string | null }
 
 /** `comms_status` read (v41). NOT_CONFIGURED is a deliberate, healthy state. */
 export interface CommsStatus {

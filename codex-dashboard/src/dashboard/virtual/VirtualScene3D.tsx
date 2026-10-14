@@ -20,7 +20,7 @@ import { DEPARTMENTS, type DepartmentId } from "../command/departments";
 import type { VirtualPrefs } from "../command/prefs";
 import type { Projector } from "./AgentLabels";
 import type { Focus } from "./VirtualMap";
-import { bedIndex, bedPoint, type Bed, type BirthState, type Packet, type Point } from "./world";
+import { bedIndex, bedPoint, bunksFor, type Bed, type BirthState, type Packet, type Point } from "./world";
 import { buildWorld } from "./hq/world-build";
 import { createMaterials } from "./hq/materials";
 import { matOf, type MatKey } from "./hq/builder";
@@ -39,6 +39,7 @@ import { navGrid } from "./hq/nav";
 import { stationDesks } from "./hq/choreo";
 import { NAV_BOUNDS } from "./hq/world-build";
 import { CameraRig } from "./hq/camera";
+import { bunkOccluders } from "./hq/framing";
 
 const NO_SHADOW_MAPS_KEY = "fleet.virtual.gpu.noShadowMaps.v1";
 const RECEIVE_ONLY: ReadonlySet<string> = new Set(["ground", "floor", "floorDark", "corridor", "polished", "acrylic", "smokedGlass"]);
@@ -143,11 +144,19 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
   const work = useMemo(() => workTargets(models, targets, stations, plan.spots, teams), [models, targets, stations, plan.spots, teams]);
   // Every living agent's own bed in Quarters (sleepers lie on theirs).
   const beds = useMemo(() => new Map<string, Bed>([...bedIndex(models)].map(([id, i]) => [id, bedPoint(i)])), [models]);
+  // The camera: bunk frames are obstacles; a sleeper is framed from the foot of its own bed.
+  const sleepers = useMemo(() => {
+    const idx = bedIndex(models), { uppers } = bunksFor(idx.size);
+    return new Map(models.filter((m) => m.placement.basis === "sleep" && idx.has(m.agent.id)).map((m) => {
+      const i = idx.get(m.agent.id)!; return [m.agent.id, { ...bedPoint(i), covered: i < uppers }] as const;
+    }));
+  }, [models]);
+  const occluders = useMemo(() => [...plan.occluders, ...bunkOccluders(beds.size)], [plan.occluders, beds.size]);
 
   // Owner diagnostics (Display → Diagnostics overlay).
   const diag = useRef(emptyDiag());
 
-  return <><Canvas key={`${prefs.quality}:${q.shadows}`} frameloop="never" dpr={q.pixel ? q.dpr : [1, q.dpr]} className={q.pixel ? "hq-pixel" : undefined} shadows={q.shadows === "soft" ? "percentage" : q.shadows === "basic" ? "basic" : false}
+  return <><Canvas key={`${prefs.quality}:${q.shadows}`} frameloop="never" dpr={[1, q.dpr]} shadows={q.shadows === "soft" ? "percentage" : q.shadows === "basic" ? "basic" : false}
     camera={{ position: [0, 70, 50], fov: 42, near: 0.3, far: 400 }}
     gl={{ antialias: q.antialias, powerPreference: "high-performance", toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: q.pbr ? 1.15 : 1.5 }}
     onCreated={({ gl, scene }) => {
@@ -167,7 +176,7 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
     onPointerMissed={() => { document.body.style.cursor = ""; }}>
     <Driver fps={prefs.fps} />
     <ProjectorOut projectRef={projectRef} />
-    <CameraRig focus={focus} positionsRef={positionsRef} reduceMotion={prefs.reduceMotion} spots={work.spots} stations={stations} ghostsRef={ghosts} occluders={plan.occluders} cameraMode={prefs.cameraMode} directorRef={director} />
+    <CameraRig focus={focus} positionsRef={positionsRef} reduceMotion={prefs.reduceMotion} spots={work.spots} stations={stations} ghostsRef={ghosts} occluders={occluders} sleepers={sleepers} cameraMode={prefs.cameraMode} directorRef={director} />
     <Lights q={q} lights={plan.lights} />
     <Environment q={q} />
     <Atmosphere q={q} lights={plan.lights} ambient={ambient} />

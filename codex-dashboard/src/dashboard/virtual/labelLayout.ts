@@ -7,6 +7,8 @@
  * natural spot under its agent, then staggered spots around it, then the nearest free cell of a coarse grid over the whole
  * view, and takes the first that overlaps nothing already placed. A label that still cannot avoid every overlap shows at
  * its natural spot (never hidden for crowding); only an agent off-screen is culled. Displaced labels are reported so a leader line can join them to their agent.
+ * Obstacles (the room plaques, which sit above the agent labels) are treated as already placed, so no agent label is hidden
+ * under a plaque.
  */
 export type LabelDensity = "full" | "compact";
 export const COMPACT_ABOVE = 16;
@@ -17,6 +19,7 @@ export const densityFor = (agents: number, fleetView: boolean, viewportW = Infin
 
 export interface LabelItem { id: string; x: number; y: number; w: number; h: number; priority: number }
 export interface Placed { x: number; y: number; displaced: boolean; overlapping: boolean }
+export interface Rect { x: number; y: number; w: number; h: number }
 
 const GAP = 2;
 /** Candidate offsets (top-left relative to the natural spot) in preference order. */
@@ -36,9 +39,9 @@ function candidates(w: number, h: number): Array<[number, number]> {
   return out;
 }
 
-export function layoutLabels(items: readonly LabelItem[], view: { w: number; h: number }): Map<string, Placed | null> {
+export function layoutLabels(items: readonly LabelItem[], view: { w: number; h: number }, obstacles: readonly Rect[] = []): Map<string, Placed | null> {
   const out = new Map<string, Placed | null>();
-  const placed: Array<{ x: number; y: number; w: number; h: number }> = [];
+  const placed: Rect[] = obstacles.filter((r) => r.w > 0 && r.h > 0).map((r) => ({ ...r }));
   const hit = (x: number, y: number, w: number, h: number) => placed.some((p) => x < p.x + p.w + GAP && x + w + GAP > p.x && y < p.y + p.h + GAP && y + h + GAP > p.y);
   const order = [...items].sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id));
   for (const it of order) {

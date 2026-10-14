@@ -10,6 +10,7 @@ import { money, type Fleet } from "../model";
 import { button } from "../ui";
 import { AgentPortrait, HealthTag } from "../command/AgentPortrait";
 import type { AgentModel } from "../command/agents";
+import { hibernationText, pauseText } from "../command/rest";
 import { DEPARTMENT, type DepartmentId } from "../command/departments";
 import { eventDepartment } from "../command/departments";
 import { CapabilityState, DecisionFeed, DepartmentRoster, EventFeed, FleetControllerStatus, TreasurySummary, factsOf, utc } from "../command/panels";
@@ -104,9 +105,10 @@ export function AgentPanel({ m, fleet, view, control, go, loadLedger }: { m: Age
       {stat("Revenue (lifetime)", e?.revenueMinor != null ? money(e.revenueMinor) : "—")}{stat("Expenses (lifetime)", e?.expensesMinor != null ? money(e.expensesMinor) : "—")}
       {stat("Net profit (lifetime)", e?.netProfitMinor != null ? money(e.netProfitMinor) : "—")}{stat("Net, last 30 days", e?.recentNetMinor != null ? money(e.recentNetMinor) : "—")}
       {stat("Runway", e?.runwayDays != null ? `${e.runwayDays} days` : a.runwayDays != null ? `${a.runwayDays} days` : "—")}{stat("Red-zone cushion", e?.redZoneMet == null ? "—" : e.redZoneMet ? "met" : "below")}
+      {stat("Owner pause", pauseText(a, m.rest))}{stat("Hibernation (its own report)", hibernationText(m.rest))}
     </dl>
     <Section title="Why this condition"><ul className="list-disc pl-5 text-sm text-slate-300">{m.health.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
-      <p className="mt-1 text-xs text-slate-400">Placed in {DEPARTMENT[m.placement.department].name}: {m.placement.basis === "mission" ? "its active mission" : m.placement.basis === "event" ? "its latest recorded activity" : m.placement.basis}.</p></Section>
+      <p className="mt-1 text-xs text-slate-400">Placed in {DEPARTMENT[m.placement.department].name}: {m.placement.basis === "mission" ? "its active mission" : m.placement.basis === "event" ? "its latest recorded activity" : m.placement.basis === "sleep" ? (m.rest.sleep === "owner_pause" ? "the owner's pause" : "the hibernation it reported") : m.placement.basis}.</p></Section>
     <Section title="Team projects">{projectsOf(view, a.id).length ? <div className="space-y-2">{projectsOf(view, a.id).map((p) => <ProjectCard key={String(p.projectId)} p={p} models={fleet.agents.map((x) => ({ agent: x }) as unknown as AgentModel)} />)}</div> : <p className="text-sm text-slate-400">Not on a team project.</p>}</Section>
     <Section title="Venture">{ventures.length ? ventures.map((v, i) => <p key={i} className="text-sm">{String(v.key ?? "venture")}{v.offer ? ` — ${String(v.offer).slice(0, 80)}` : ""} · {String(v.state ?? "")}</p>) : <p className="text-sm text-slate-400">No venture recorded.</p>}</Section>
     <Section title="Recent transactions">{ledger === null ? <p className="text-sm text-slate-400">Reading the agent&apos;s ledger…</p> : ledger.length ? <ol className="space-y-1 text-sm">{ledger.slice(0, 8).map((j, i) => <li key={i}>{time(j.at)} · {String(j.kind ?? "").replace(/_/g, " ")}{j.reason ? ` · ${String(j.reason).slice(0, 60)}` : ""}{Array.isArray(j.postings) && j.postings.length ? ` · ${money(Math.max(...j.postings.map((p: Row) => Number(p.amountMinor) || 0)))}` : ""}</li>)}</ol> : <p className="text-sm text-slate-400">No ledger journals for this agent.</p>}</Section>

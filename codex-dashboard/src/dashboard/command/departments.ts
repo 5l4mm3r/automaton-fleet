@@ -119,14 +119,20 @@ export interface PlaceableAgent {
   /** LIVE: the `agents` read's mode (NORMAL or the mission). Simulation: its fictional role. */
   mode?: string | null;
   role?: string;
-  /** The owner's pause or a reported hibernation (only when the reading supplies it). */
+  /** The owner's pause or a fresh reported hibernation (command/rest.ts), and when it began (ms; null = not known). */
   sleep?: SleepState | null;
+  sleepSince?: number | null;
+  /** When the active mission started and when the hold began (ms; null = not known). */
+  missionSince?: number | null;
+  heldSince?: number | null;
 }
 
 export interface AgentEventLike {
   at: string;
   type: string;
   agentId: string | null;
+  /** Set by activityByAgent: when the agent's current run of events in this event's department began (ms). */
+  runStart?: number;
 }
 
 /** Latest event per agent (events may arrive in any order). */
@@ -140,23 +146,45 @@ export function latestEventByAgent(events: readonly AgentEventLike[]): Map<strin
   return out;
 }
 
+/**
+ * Latest event per agent, carrying when the activity it shows BEGAN: the earliest of the unbroken run of that agent's
+ * events in the same department, each within ACTIVITY_WINDOW_MS of the next (a longer gap means the agent was back on the
+ * Floor in between; an event of another department, or of none, ends the run).
+ */
+export function activityByAgent(events: readonly AgentEventLike[]): Map<string, AgentEventLike> {
+  const by = new Map<string, Array<{ e: AgentEventLike; t: number }>>();
+  for (const e of events) {
+    const t = Date.parse(e.at);
+    if (!e.agentId || !Number.isFinite(t)) continue;
+    const xs = by.get(e.agentId) ?? []; xs.push({ e, t }); by.set(e.agentId, xs);
+  }
+  const out = new Map<string, AgentEventLike>();
+  for (const [id, xs] of by) {
+    xs.sort((a, b) => b.t - a.t);
+    const dep = eventDepartment(xs[0].e.type);
+    let start = xs[0].t;
+    for (let i = 1; dep && i < xs.length && eventDepartment(xs[i].e.type) === dep && start - xs[i].t <= ACTIVITY_WINDOW_MS; i++) start = xs[i].t;
+    out.set(id, { ...xs[0].e, runStart: start });
+  }
+  return out;
+}
+
 export function placeAgent(a: PlaceableAgent, latest: AgentEventLike | undefined, now: number = Date.now()): Placement {
   if (a.status === "dead" || a.status === "failed") return { department: "estate", activity: ACTIVITY.estate, basis: "dead" };
   if (a.status === "provisioning") return { department: "floor", activity: "PROVISIONING", basis: "provisioning" };
-  if (a.status === "held") return { department: "floor", activity: "HELD", basis: "held" };
-  if (a.sleep === "owner_pause" || a.sleep === "hibernating") return { department: "quarters", activity: SLEEP_ACTIVITY[a.sleep], basis: "sleep", since: null };
+  if (a.status === "held") return { department: "floor", activity: "HELD", basis: "held", since: a.heldSince ?? null };
+  if (a.sleep === "owner_pause" || a.sleep === "hibernating") return { department: "quarters", activity: SLEEP_ACTIVITY[a.sleep], basis: "sleep", since: a.sleepSince ?? null };
   const key = String(a.mode ?? a.role ?? "").trim().toUpperCase();
   const byMode = MODE_DEPARTMENT[key] ?? MODE_DEPARTMENT[key.replace(/ /g, "_")] ?? MODE_DEPARTMENT[key.replace(/_/g, " ")];
-  if (byMode) return { department: byMode, activity: ACTIVITY[byMode], basis: "mission" };
+  if (byMode) return { department: byMode, activity: ACTIVITY[byMode], basis: "mission", since: a.missionSince ?? null };
   if (latest) {
     const t = Date.parse(latest.at);
     const dep = eventDepartment(latest.type);
     if (dep && dep !== "estate" && Number.isFinite(t) && now - t <= ACTIVITY_WINDOW_MS && t <= now + 60_000) {
-      return { department: dep, activity: ACTIVITY[dep], basis: "event", since: t };
+      return { department: dep, activity: ACTIVITY[dep], basis: "event", since: latest.runStart != null && latest.runStart <= t ? latest.runStart : t };
     }
-    // Back on the Agent Floor once that event's window closed (known only because the event itself is known).
-    if (dep && dep !== "estate" && Number.isFinite(t) && t + ACTIVITY_WINDOW_MS <= now) return { department: "floor", activity: ACTIVITY.floor, basis: "default", since: t + ACTIVITY_WINDOW_MS };
   }
+  // The Agent Floor is the default when no recorded activity is current: no transition marks it, so its time is unknown.
   return { department: "floor", activity: ACTIVITY.floor, basis: "default", since: null };
 }
 

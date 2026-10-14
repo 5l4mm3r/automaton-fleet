@@ -6,7 +6,7 @@
  * among valid candidates the one with the fewest people on the line of sight wins, ties going to the preferred
  * angle. People still on the line of sight are returned as `ghosts` (faded out while the view holds). Pure; unit-tested.
  */
-import type { Point } from "../world";
+import { BED_LENGTH, BED_TOP, BED_WIDTH, bedPoint, bunksFor, type Point } from "../world";
 import { roomAt } from "./route";
 import type { Occluder } from "./world-build";
 
@@ -42,6 +42,8 @@ export function viewable(c: Point, p: Point): boolean {
 /** Whether the sight line from the camera (at camY) to the agent's head (at headY) passes through a tall obstacle. */
 export function blockedByFurniture(cam: Point, camY: number, p: Point, headY: number, occluders: readonly Occluder[]): boolean {
   for (const o of occluders) {
+    // The obstacle the agent itself is in (its own bunk) frames it; it does not hide it.
+    if (p.x >= o.x0 && p.x <= o.x1 && p.z >= o.z0 && p.z <= o.z1) continue;
     // Sample the segment (it is short): any point inside the footprint below the obstacle's height blocks it.
     for (let i = 1; i < 24; i++) {
       const t = i / 24, x = cam.x + (p.x - cam.x) * t, z = cam.z + (p.z - cam.z) * t, y = camY + (headY - camY) * t;
@@ -67,4 +69,28 @@ export function frameAgent(self: string, p: Point, yaw: number, seated: boolean,
   const az = chosen?.az ?? yaw, c = at(az);
   const headY = seated ? 1.1 : 1.45;
   return { cam: { x: c.x, y: headY + 1.35, z: c.z }, look: { x: p.x, y: headY - 0.2, z: p.z }, ghosts: chosen?.ghosts ?? blockers(c, p, others, self), azimuth: az };
+}
+
+/** The Quarters bunk frames as camera obstacles (posts to the top rails), one per frame for n living agents. */
+export const BUNK_H = 0.12 + 2.0;
+export function bunkOccluders(n: number): Occluder[] {
+  const out: Occluder[] = [];
+  for (let f = 0; f < bunksFor(n).frames; f++) {
+    const b = bedPoint(f);
+    out.push({ x0: b.x - BED_WIDTH / 2, x1: b.x + BED_WIDTH / 2, z0: b.z, z1: b.z + BED_LENGTH, h: BUNK_H });
+  }
+  return out;
+}
+
+/**
+ * A sleeper's close-up: from the aisle at the foot of its bed, looking along the bed — never from inside a bunk or across
+ * one (the generic orbit would put the camera inside a neighbouring bunk or behind its posts). The bunks have no foot
+ * boards and their posts stand at the corners, so this line of sight passes no frame. An open bed (no bunk above) is seen
+ * from over the top rails, looking down; a lower bed under an upper one from the height between its mattress and the bunk
+ * above; an upper bed from over the rails.
+ */
+export function frameSleeper(self: string, p: Point, level: 0 | 1, others: ReadonlyMap<string, Point>, covered = false): AgentFrame {
+  const low = level === 0 && covered;
+  const cam = { x: p.x, y: low ? BED_TOP[0] + 0.5 : BUNK_H + 0.55, z: p.z + BED_LENGTH + (low ? 1.25 : 1.15) };
+  return { cam, look: { x: p.x, y: BED_TOP[level] + 0.1, z: p.z + (low ? 0.3 : 0.75) }, ghosts: blockers(cam, p, others, self), azimuth: 0 };
 }

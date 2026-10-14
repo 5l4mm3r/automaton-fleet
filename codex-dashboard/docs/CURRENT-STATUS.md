@@ -953,11 +953,44 @@ step-up and actions are unchanged.
   it; — when unknown), time alive. Longest survivors first; selecting one uses the existing focus (the camera flies to it).
 - **Levels and the Hall of Survivors.** Lv = whole days alive + 1, from the reading's creation time — display only, no
   unlocks. Estate shows the Hall of Survivors (every dead agent and its lifespan; — when a time is unknown).
-- **Pixel look.** Low and Medium render at a reduced internal scale (0.42 / 0.6) upscaled with hard pixel edges (CSS
-  `image-rendering: pixelated`), same world and cyberpunk palette; High and Ultra unchanged.
+- **Art unchanged.** The owner's reference pictures showed the LAYOUT and liveliness to follow (agents roaming at idle,
+  moving between departments along corridors as they act, the clickable side list), not an art style: there is no pixel
+  mode; every quality renders the existing world as before. Remaining art work for the designer:
+  docs/VIRTUAL-ART-TREATMENT.md.
 
-**Backend follow-ups (not in this pass; the UI reads them only if supplied):** the `agents` read does not yet carry the
-owner's cognition pause (`paused`), a reported hibernation (`hibernating`, which today lives only in each agent's local
-continuity), or the time of death (`deathTime`). Until it does, LIVE agents are never shown asleep and the Hall shows —
-for lifespans; nothing is inferred. The simulation demonstrates both sleep states (Vega paused, Lyra hibernating) and a
-retired agent (Echo), all fictional.
+### Live data (owner, 14 October 2026; schema v75, read-only; branch virtual/live-data, not released)
+
+The dashboard's `agents` read now carries, per agent (absent = not known; nothing is inferred):
+- **Owner pause** (`paused`, `pausedSince`): an operator's cognition pause and the first pause event after the last
+  enable/disable. The agent sleeps in Quarters ("PAUSED BY OWNER"); "on it" counts from the pause.
+- **The agent's own rest report** (`hibernation`: state, `reportedAt`, `since`): from the runtime's per-turn report
+  (`fleet_agent_mind_reports`; hibernating = the turn ended in a sleep with a wake condition or review time). A report
+  older than 26 hours (a running agent reports every turn; a hibernating one re-checks at least daily), or none, is shown
+  as **unknown** with its age ("unknown · last report 4d 6h ago", "unknown · never reported"). Only a fresh report puts an
+  agent in Quarters as "HIBERNATING". Inactivity and the owner's pause never make a hibernation; the owner's pause
+  outranks a fresh report, which stays visible in the agent panel. The agent's own wording is not exposed.
+- **Death time** (`deathTime`) for the Hall of Survivors; **mission start** (`modeSince`); **hold start** (`heldSince`).
+- **Time on the activity** comes from the authoritative transition: the pause start, the hibernation's first report,
+  the mission start, the hold start, or the first event of the current unbroken run of events in the same department.
+  An agent on the Agent Floor by default (no current activity recorded) shows —: no transition marks it.
+
+Also fixed: a sleeper's close-up is framed from the aisle at the foot of its own bed (over the rails, or between mattress
+and upper bunk when one is above), and bunk frames are camera obstacles — the camera never looks through a frame. Agent
+labels are laid out clear of the room plaques (the plaques sit above them), so no label is hidden under the Fleet Command
+plaque.
+
+Production (read-only check, 14 October 2026): both agents are owner-paused by an operator since 2026-10-10 12:37Z and
+neither has recorded a rest report yet — after release both would sleep in Quarters ("PAUSED BY OWNER", on it since the
+pause) with hibernation "unknown · never reported".
+
+**Reporting dependency (verified 14 October 2026 against the installed agent runtime b60e262).** The hibernation state
+exists only if the agent's runtime sends it: `founder/mind.ts` posts `mind.report` (outcome, `wakeOn`, `reviewAt`) through
+`POST /v1/economy` at the end of every routed turn, best-effort (a failed post is dropped, never retried). A declared
+hibernation is woken by an event, its review time or the 24-hour safety re-check (`HIBERNATION_SAFETY_MS`, anchored to the
+last turn and restored across restarts), and that wake runs a turn that reports again — so consecutive reports from a
+hibernating agent are at most ~24 hours plus one thinking slot and the turn apart, inside the 26-hour window. The path is
+installed (v62, both agents' runtime b60e262) but has never run live: both agents were paused at 2026-10-10 12:37Z, before
+v62 existed, so production holds no reports and both read **unknown · never reported** until the owner resumes them. Gaps
+that make the reading unknown (never falsely hibernating): the owner's pause (no turns), a dropped report, a provider
+rate-limit rest or a failed turn longer than the margin, and any agent runtime older than v62. No runtime change or agent
+upgrade is part of this release.
