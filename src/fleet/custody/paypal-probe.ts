@@ -4,7 +4,7 @@
  *
  *   sudo -u automaton-fleet-custody env FLEET_CUSTODY_ENV_FILE=/etc/automaton-fleet/custody.env \
  *     FLEET_RUNTIME_ENV_FILE=/etc/automaton-fleet/runtime.env node dist/fleet/custody/paypal-probe.js \
- *     <live|sandbox> <vault:paypal/name> <webhookId> <webhookUrl>
+ *     <live|sandbox> <vault:paypal/name> <webhookId> <webhookUrl> [--events]
  *
  * Read-only: it signs in to PayPal and reads the balance list, an empty Transaction Search window and the webhook
  * (PayPalTreasuryWorker.probe). It writes nothing to the registry, never creates or publishes a custody key, and prints
@@ -18,15 +18,16 @@ import { CUSTODY_KEY_FILE, loadOrCreateCustodyKey, SealedCredentialVault } from 
 import { PayPalTreasuryWorker, type PayPalGatewayPort, type PayPalProbe } from "./paypal-treasury.js";
 import type { HttpPort } from "./signers.js";
 
-export interface ProbeArgs { mode: "live" | "sandbox"; vaultRef: string; webhookId: string; webhookUrl: string }
+export interface ProbeArgs { mode: "live" | "sandbox"; vaultRef: string; webhookId: string; webhookUrl: string; events?: boolean }
 
 export function parseProbeArgs(argv: string[]): ProbeArgs {
-  const [mode, vaultRef, webhookId, webhookUrl] = argv;
+  const events = argv.includes("--events");
+  const [mode, vaultRef, webhookId, webhookUrl] = argv.filter((a) => a !== "--events");
   if (mode !== "live" && mode !== "sandbox") throw new Error("usage: paypal-probe <live|sandbox> <vault:paypal/name> <webhookId> <https webhook url>");
   if (!/^vault:paypal\/[a-z0-9/._-]{1,100}$/.test(vaultRef ?? "")) throw new Error("the vault reference is vault:paypal/<name>");
   if (!/^[A-Z0-9]{5,40}$/.test(webhookId ?? "")) throw new Error("a PayPal webhook id");
   if (!/^https:\/\/[a-z0-9.-]+(:\d+)?\/[\x21-\x7e]*$/.test(webhookUrl ?? "")) throw new Error("an https webhook url");
-  return { mode, vaultRef, webhookId, webhookUrl };
+  return { mode, vaultRef, webhookId, webhookUrl, ...(events ? { events } : {}) };
 }
 
 /** Open the sealed credential with the existing custody key (never created here) and probe. */
@@ -40,6 +41,8 @@ export async function runProbe(args: ProbeArgs, deps: {
   // The worker is used for its PayPal client only: no pass runs, and its registry port is never called by probe().
   const worker = new PayPalTreasuryWorker({} as PayPalGatewayPort, vault, deps.http);
   const p = await worker.probe({ railMode: args.mode, vaultRef: args.vaultRef }, args.webhookId, args.webhookUrl);
+  // v76 --events: the webhook diagnosis (read-only; ids, types, times and delivery statuses only).
+  if (args.events && p.authenticated) p.diagnosis = await worker.diagnoseWebhooks({ railMode: args.mode, vaultRef: args.vaultRef }, args.webhookUrl);
   return { credentialOpened, ...p };
 }
 

@@ -25,6 +25,18 @@ export interface PayPalInboxItem { eventId: string; eventType: string; status: "
 export interface PayPalWorkItem {
   checkoutId: string; status: "requested" | "approved"; amountMinor: number; currency: string; description: string;
   paypalOrderId: string | null; railId: string; railMode: "live" | "sandbox"; credentialId: string; vaultRef: string;
+  /** v76: the buyer's order page token (PayPal returns the buyer to that page). */
+  returnToken?: string | null;
+}
+/** v76: an open checkout whose PayPal order status is due to be read (the webhook may never come). */
+/** v76: PayPal returns a buyer to their own order page (same origin as the configured return page) when the checkout has one. */
+export function returnUrlFor(returnUrl: string, token: string | null | undefined): string {
+  if (!token || !/^[0-9a-f]{64}$/.test(token)) return returnUrl;
+  try { return `${new URL(returnUrl).origin}/order/${token}`; } catch { return returnUrl; }
+}
+export interface PayPalStatusItem {
+  checkoutId: string; status: "open"; amountMinor: number; currency: string; paypalOrderId: string; railId: string; railMode: "live" | "sandbox";
+  credentialId: string; vaultRef: string;
 }
 export interface PayPalRail { railId: string; railMode: "live" | "sandbox"; credentialId: string; vaultRef: string; lastSyncAt: string | null;
   /** v49: the rail's PayPal webhook id as the owner registered it (non-secret). */
@@ -57,6 +69,9 @@ export interface PayPalGatewayPort {
   /** v59: refunds the Fleet requested (only while money-out is activated), and PayPal's answer to each. */
   paypalRefundWork?(worker: string, limit: number): Promise<Array<{ refundRequestId: string; captureId: string; amountMinor: number; currency: string; note: string;
     invoiceId: string; railId: string; railMode: "live" | "sandbox"; vaultRef: string }>>;
+  /** v76: open checkouts due a status read, and what PayPal said (optional: an older registry has no such functions). */
+  paypalStatusWork?(worker: string, limit: number): Promise<PayPalStatusItem[]>;
+  paypalStatusChecked?(worker: string, checkoutId: string, seen: string): Promise<CxResult>;
   paypalRefundResult?(worker: string, requestId: string, outcome: "completed" | "pending" | "failed" | "unknown", refundId: string | null, amountMinor: number | null,
     currency: string | null, failure: string | null): Promise<CxResult>;
 }
@@ -90,6 +105,12 @@ export interface PayPalProbe {
   balances: { status: number | null; currencies: string[] };
   transactionSearch: { status: number | null };
   webhook: { status: number | null; urlMatches: boolean; missingEvents: string[] };
+  /** v76 (--events): the app's registered webhooks and PayPal's recent webhook events with their delivery state — the
+   *  diagnosis of "no webhook ever arrived". Ids, types, times and statuses only; never a resource or a payer. */
+  diagnosis?: {
+    webhooks: { status: number | null; items: Array<{ id: string; urlMatches: boolean; eventTypes: number }> };
+    events: { status: number | null; items: Array<{ id: string; type: string; created: string; status: string | null; transmissions: Array<{ status: string | null; httpStatus: number | null }> }> };
+  };
 }
 const base = (mode: string) => (mode === "live" ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com");
 const decimal = (minor: number) => `${minor < 0 ? "-" : ""}${Math.trunc(Math.abs(minor) / 100)}.${String(Math.abs(minor) % 100).padStart(2, "0")}`;
@@ -117,7 +138,7 @@ export class PayPalTreasuryWorker {
   private lastReconcile = new Map<string, number>();
   private lastBalance = new Map<string, number>();
   private readonly now: () => number;
-  readonly stats = { verified: 0, rejected: 0, opened: 0, captured: 0, refunds: 0, transactions: 0, errors: 0, lastError: null as string | null };
+  readonly stats = { verified: 0, rejected: 0, opened: 0, captured: 0, refunds: 0, transactions: 0, statusFound: 0, errors: 0, lastError: null as string | null };
 
   constructor(
     private readonly gw: PayPalGatewayPort,
@@ -171,6 +192,7 @@ export class PayPalTreasuryWorker {
       const rails = await this.gw.paypalRails(this.worker);
       await this.inbox(rails);
       await this.work();
+      await this.statusChecks();
       await this.buyers();
       await this.refunds();
       for (const r of rails) {
@@ -308,7 +330,7 @@ export class PayPalTreasuryWorker {
       purchase_units: [{ reference_id: c.checkoutId, custom_id: c.checkoutId, invoice_id: `fleet:${c.checkoutId}`, description: c.description.slice(0, 127),
         amount: { currency_code: c.currency, value: decimal(c.amountMinor) } }],
       payment_source: { paypal: { experience_context: { shipping_preference: "NO_SHIPPING", user_action: "PAY_NOW",
-        ...(this.opts.returnUrl ? { return_url: this.opts.returnUrl } : {}), ...(this.opts.cancelUrl ? { cancel_url: this.opts.cancelUrl } : {}) } } },
+        ...(this.opts.returnUrl ? { return_url: returnUrlFor(this.opts.returnUrl, c.returnToken) } : {}), ...(this.opts.cancelUrl ? { cancel_url: this.opts.cancelUrl } : {}) } } },
     };
     const res = await this.call(c, "POST", "/v2/checkout/orders", body, `order:${c.checkoutId}`).catch(() => null);
     if (!res) return; // auth or network: next pass (the request id returns the same order if it was created)
@@ -325,6 +347,28 @@ export class PayPalTreasuryWorker {
     if (res.status >= 400 && res.status < 500 && res.status !== 401 && res.status !== 429) {
       const name = String(res.json?.name ?? `http_${res.status}`).toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 60);
       await this.gw.paypalCheckoutUpdate(this.worker, c.checkoutId, "failed", null, null, `paypal_${name}`.slice(0, 64));
+    }
+  }
+
+  // ── v76: payment detection without the webhook — read each open checkout's order status, backed off by the registry ──
+  // APPROVED is captured (the same duplicate-safe capture as the webhook path), COMPLETED is read back through the capture
+  // (ORDER_ALREADY_CAPTURED → the order record), VOIDED fails the checkout; anything else is just checked again later.
+  private async statusChecks(): Promise<void> {
+    if (!this.gw.paypalStatusWork || !this.gw.paypalStatusChecked) return;
+    let due: PayPalStatusItem[];
+    try { due = await this.gw.paypalStatusWork(this.worker, 20); }
+    catch (err) { this.log("warn", "paypal_status_work_failed", { error: err instanceof Error ? err.message.slice(0, 200) : "error" }); return; }
+    for (const c of due) {
+      if (!PAYPAL_ID.test(c.paypalOrderId)) continue;
+      const res = await this.call(c, "GET", `/v2/checkout/orders/${c.paypalOrderId}`).catch(() => null);
+      if (!res) continue; // credential or network unavailable: the next pass
+      const seen = res.status === 200 && typeof res.json?.status === "string" && /^[A-Z_]{2,32}$/.test(res.json.status) ? String(res.json.status)
+        : res.status === 404 ? "NOT_FOUND" : "UNKNOWN";
+      await this.gw.paypalStatusChecked(this.worker, c.checkoutId, seen);
+      if (seen === "APPROVED") await this.gw.paypalCheckoutUpdate(this.worker, c.checkoutId, "approved", null, null, null);
+      if (seen === "APPROVED" || seen === "COMPLETED") {
+        if (await this.capture(c)) this.stats.statusFound++;
+      }
     }
   }
 
@@ -475,6 +519,23 @@ export class PayPalTreasuryWorker {
         missingEvents: types.includes("*") ? [] : PAYPAL_REQUIRED_WEBHOOK_EVENTS.filter((e) => !types.includes(e)) };
     }
     return out;
+  }
+
+  /** v76: read-only webhook diagnosis — which webhooks this app (credential) has, and the events PayPal generated for them in
+   *  the last `days` with each one's delivery state. Events exist only for the app whose credential created the orders. */
+  async diagnoseWebhooks(r: { railMode: "live" | "sandbox"; vaultRef: string }, webhookUrl: string, days = 7): Promise<NonNullable<PayPalProbe["diagnosis"]>> {
+    const str = (v: unknown, re: RegExp) => (typeof v === "string" && re.test(v) ? v : null);
+    const wl = await this.call(r, "GET", "/v1/notifications/webhooks").catch(() => null);
+    const webhooks = { status: wl?.status ?? null, items: (wl?.status === 200 && Array.isArray(wl.json?.webhooks) ? wl.json.webhooks : []).slice(0, 10)
+      .map((w: any) => ({ id: str(w?.id, /^[A-Z0-9]{5,40}$/) ?? "?", urlMatches: w?.url === webhookUrl, eventTypes: Array.isArray(w?.event_types) ? w.event_types.length : 0 })) };
+    const start = new Date(this.now() - days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const ev = await this.call(r, "GET", `/v1/notifications/webhooks-events?page_size=50&start_time=${encodeURIComponent(start)}`).catch(() => null);
+    const events = { status: ev?.status ?? null, items: (ev?.status === 200 && Array.isArray(ev.json?.events) ? ev.json.events : []).slice(0, 50).map((e: any) => ({
+      id: str(e?.id, /^WH-[A-Z0-9-]{5,60}$/) ?? "?", type: str(e?.event_type, /^[A-Z0-9._-]{3,60}$/) ?? "?", created: str(e?.create_time, /^[0-9T:.Z+-]{10,40}$/) ?? "?",
+      status: str(e?.status, /^[A-Z_]{2,30}$/),
+      transmissions: (Array.isArray(e?.transmissions) ? e.transmissions : []).slice(0, 5).map((t: any) => ({ status: str(t?.status, /^[A-Z_]{2,30}$/),
+        httpStatus: Number.isInteger(t?.http_status) ? t.http_status : null })) })) };
+    return { webhooks, events };
   }
 
   private async balance(r: PayPalRail): Promise<void> {

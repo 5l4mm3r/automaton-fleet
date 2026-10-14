@@ -1181,7 +1181,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // records by the agent's checkout ops and the custody executor; card clearing only by the owner (and its booking helper).
     fleet_custody_activations: new Set(["fleet_admin_custody_activate", "fleet_admin_custody_deactivate", "svc_custody_activation_expire"]),
     fleet_agent_wallet_limits: new Set(["fleet_admin_wallet_limits_set"]),
-    fleet_paypal_checkouts: new Set(["fleet_admin_paypal_test_checkout", "fleet_econ_paypal_checkout", "fleet_econ_paypal_cancel", "cx_paypal_work", "cx_paypal_checkout_update", "cx_paypal_capture_record"]),
+    fleet_paypal_checkouts: new Set(["fleet_admin_paypal_test_checkout", "fleet_econ_paypal_checkout", "fleet_econ_paypal_cancel", "cx_paypal_work", "cx_paypal_checkout_update", "cx_paypal_capture_record",
+      "cx_paypal_status_checked"]),
     fleet_paypal_webhook_inbox: new Set(["svc_paypal_webhook_receive", "cx_paypal_inbox", "cx_paypal_inbox_result"]),
     fleet_paypal_transactions: new Set(["cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute", "svc_settlement_paypal_match",
       // v66: a deposit backing the existing capital closes its transaction.
@@ -1274,9 +1275,25 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // agent's own delivery / fulfilment; deliveries and their files by delivery, the mail-outcome follower and the reaper's retry;
     // the broker's connector list only by the broker.
     fleet_customer_orders: new Set(["fleet_econ_paypal_checkout_order", "fleet_customer_orders_follow", "fleet_order_refunded", "cx_paypal_buyer_record", "fleet_paypal_clawback_return",
-      "fleet_econ_order_deliver", "fleet_econ_order_fulfil", "fleet_order_delivery_follow", "svc_order_deliveries_retry"]),
-    fleet_order_deliveries: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded"]),
-    fleet_order_delivery_files: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded"]),
+      "fleet_econ_order_deliver", "fleet_econ_order_fulfil", "fleet_order_delivery_follow", "svc_order_deliveries_retry",
+      // v76: orders from an offer page (svc_offer_buy) or a quote (fleet_econ_enquiry_quote); a delivery's dispatch.
+      "svc_offer_buy", "fleet_econ_enquiry_quote", "fleet_order_delivery_dispatch"]),
+    fleet_order_deliveries: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded",
+      "fleet_order_delivery_dispatch", "svc_offer_tick"]),
+    fleet_order_delivery_files: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded",
+      "fleet_order_delivery_dispatch", "svc_offer_tick", "svc_order_file"]),
+    // v76: reviews only by the agent's review record; offers and their files only by the agent's offer functions (and the
+    // owner nowhere: they are the agent's commercial decisions); enquiries and buyer messages by the public intake and the
+    // agent's own replies, quotes and declines (and the reaper's expiry / follow-up).
+    fleet_artifact_reviews: new Set(["fleet_econ_review_record"]),
+    fleet_offers: new Set(["fleet_econ_offer_create", "fleet_econ_offer_update", "fleet_econ_offer_file", "fleet_econ_offer_publish", "fleet_econ_offer_status"]),
+    fleet_offer_files: new Set(["fleet_econ_offer_file"]),
+    fleet_offer_enquiries: new Set(["svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline", "svc_offer_tick"]),
+    fleet_customer_messages: new Set(["svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline",
+      "fleet_econ_order_message"]),
+    fleet_customer_files: new Set(["fleet_customer_files_add", "svc_offer_tick"]),
+    fleet_order_staged_files: new Set(["fleet_econ_order_stage_file", "fleet_econ_order_deliver", "svc_offer_tick"]),
+    fleet_public_site: new Set(["fleet_admin_public_site_set"]),
     fleet_identity_connectors: new Set(["ix_connectors_publish"]),
     // v57: clawback evidence only from custody's sources and the owner's classification; posts only by the posting functions;
     // disputes by custody's record and the owner's resolution.

@@ -219,6 +219,9 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
   const reviews = useRead<Row>(client, "spend_reviews", { limit: 50 }, []);
   // v56: customer orders (buyer masked; the agent keeps the contact) — payment, fulfilment, delivery.
   const orders = useRead<Row>(client, "customer_orders", {}, []);
+  // v76: the agents' public offers (with the review each rests on) and buyers' enquiries.
+  const offers = useRead<Row>(client, "offers", {}, []);
+  const enquiries = useRead<Row>(client, "customer_enquiries", {}, []);
   // v57: disputes and unclassified PayPal debits (held back from the agents' spendable money until settled).
   const disputes = useRead<Row>(client, "paypal_disputes", {}, []);
   // v66: the existing capital recorded without money, and real deposits that back it (no second credit).
@@ -418,6 +421,21 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
           submit={(v) => call("order_refund", { orderId: o.orderId, amountMinor: v.amount ? minor(v.amount) : null, reason: v.reason })} />}</td></tr>)}</tbody></table>
         : null}
     </> : <p className="text-sm text-slate-400">{orders.error || "Reading…"}</p>}</Panel>
+
+    <Panel title="Offers and enquiries">{offers.data ? <>
+      <p className="text-xs text-slate-400">Each agent&apos;s public offers on {offers.data.publicSite ?? "the public site (not set yet: economy-public-site)"}. A product is published only on a passing review of exactly its files; a service on a passing review of a real work sample. Reviews: {offers.data.reviews?.total ?? 0} recorded, {offers.data.reviews?.passed ?? 0} passed, {offers.data.reviews?.independent ?? 0} with an independent review.</p>
+      {(offers.data.offers as Row[]).length ? <table className="mt-2 w-full text-sm"><thead><tr className="text-slate-400"><th>Agent</th><th>Offer</th><th>Kind</th><th>Price</th><th>Status</th><th>Review</th><th>Sales</th></tr></thead>
+        <tbody>{(offers.data.offers as Row[]).map((o) => <tr key={o.offerId} className="border-t border-slate-800">
+          <td>{name(o.agentId)}</td><td>{o.url ? <a className="underline" href={o.url} target="_blank" rel="noreferrer">{o.title}</a> : o.title}</td><td>{o.kind}</td>
+          <td>{money(o.priceMinor)}{o.kind === "service" ? "+" : ""}</td>
+          <td className={o.status === "published" ? "text-emerald-300" : o.status === "paused" ? "text-amber-300" : ""}>{o.status}{o.statusNote ? ` — ${o.statusNote}` : ""}{o.capacity ? ` · ${o.openWork ?? 0}/${o.capacity} open` : ""}</td>
+          <td>{o.review ? `${o.review.subject}${o.review.independent ? ` · independent ${o.review.independent}` : ""} · ${when(o.review.at)}` : "—"}</td>
+          <td>{o.orders?.paid ?? 0} · {money(o.orders?.revenueMinor ?? 0)}{o.orders?.refunded ? ` · ${o.orders.refunded} refunded` : ""}</td></tr>)}</tbody></table>
+        : <p className="mt-2 text-sm text-slate-400">No offers yet.</p>}
+      {enquiries.data && (enquiries.data.enquiries as Row[]).length ? <><h4 className="mt-4 font-semibold">Enquiries (buyers masked)</h4><table className="mt-2 w-full text-sm"><tbody>
+        {(enquiries.data.enquiries as Row[]).slice(0, 30).map((e) => <tr key={e.enquiryId} className="border-t border-slate-800"><td>{when(e.updatedAt)}</td><td>{name(e.agentId)}</td><td>{e.offer}</td>
+          <td>{e.buyer?.name} · {e.buyer?.email}</td><td>{e.status}</td><td>{e.messages ?? 0} messages</td></tr>)}</tbody></table></> : null}
+    </> : <p className="text-sm text-slate-400">{offers.error || "Reading…"}</p>}</Panel>
   </>;
 }
 

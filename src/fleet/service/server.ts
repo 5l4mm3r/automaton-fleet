@@ -49,6 +49,7 @@ import type { PgAgentGateway } from "../postgres/agent-gateway.js";
 import { UnsupportedSandboxTerminator, type SandboxTerminator } from "./terminator.js";
 import { STOREFRONT_OPS } from "../postgres/migrations-phase52.js";
 import { RateLimiter, type RateLimit } from "./rate-limit.js";
+import { PublicPages } from "./public-pages.js";
 import { readProxyV1, type ProxiedPeer } from "./proxy-protocol.js";
 
 export { SIG_HEADERS, canonicalRequest, signRequest } from "./server-signing.js";
@@ -188,6 +189,8 @@ export interface AuditEntry {
 
 export interface FleetServiceOptions {
   admin: PgFleetStore;
+  /** v76: the public offer and order pages (absent: not served). */
+  publicPages?: PublicPages;
   agent: PgAgentGateway;
   /** Service-level REAL_REPLICATION_ENABLED; false rejects every replication request. */
   realReplicationEnabled: boolean;
@@ -976,6 +979,11 @@ export class FleetService {
     res.setHeader("x-content-type-options", "nosniff");
     if (tls) res.setHeader("strict-transport-security", "max-age=31536000");
     // Phase 6: browsers may only call from explicitly allowed origins; agents send no Origin.
+    // v76: the public offer / order pages (their own rate limits, same-origin POSTs and CSP; no agent credential involved).
+    if (this.opts.publicPages && PublicPages.matches(path)) {
+      await this.opts.publicPages.handle(req, res, path, this.clientIp(req));
+      return;
+    }
     const origin = req.headers.origin;
     if (origin !== undefined) {
       if (!(this.opts.allowedOrigins ?? []).includes(origin)) {

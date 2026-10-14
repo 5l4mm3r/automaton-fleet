@@ -14,7 +14,7 @@ import pg from "pg";
 import type { Pool } from "pg";
 import { quoteIdent } from "../postgres/migrations.js";
 import { auditPrivileges, DEFAULT_CUSTODY_ROLES, type PrivilegeAuditResult } from "../postgres/privileges.js";
-import type { PayPalGatewayPort, PayPalInboxItem, PayPalRail, PayPalWorkItem } from "./paypal-treasury.js";
+import type { PayPalGatewayPort, PayPalInboxItem, PayPalRail, PayPalWorkItem, PayPalStatusItem } from "./paypal-treasury.js";
 import type { SealedCredentialPort } from "./sealed-vault.js";
 
 export interface CustodyPing {
@@ -144,6 +144,9 @@ export class PgCustodyGateway implements PayPalGatewayPort, SealedCredentialPort
     return this.cx<Array<{ refundRequestId: string; captureId: string; amountMinor: number; currency: string; note: string; invoiceId: string; railId: string;
       railMode: "live" | "sandbox"; vaultRef: string }>>("cx_paypal_refund_work", [worker, limit]);
   }
+  // v76: open checkouts due a status read (no webhook reported them) and what PayPal said.
+  paypalStatusWork(worker: string, limit: number) { return this.cx<PayPalStatusItem[]>("cx_paypal_status_work", [worker, limit]); }
+  paypalStatusChecked(worker: string, checkoutId: string, seen: string) { return this.cx<CxResult>("cx_paypal_status_checked", [worker, checkoutId, seen]); }
   paypalRefundResult(worker: string, requestId: string, outcome: string, refundId: string | null, amountMinor: number | null, currency: string | null, failure: string | null) {
     return this.cx<CxResult>("cx_paypal_refund_result", [worker, requestId, outcome, refundId, amountMinor, currency, failure]);
   }

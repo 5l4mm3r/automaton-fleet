@@ -18,6 +18,8 @@ import { startEconomyRegistry, type EconomyRegistry, type Founder } from "./fixt
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 import { FOUNDATION_PART_CHARS } from "../../fleet/postgres/migrations-phase67.js";
 import { KNOWLEDGE_FOUNDATION_V1 } from "../../fleet/postgres/knowledge-foundation-v1.js";
+// v76: the deployed foundation is v2 (v1 unchanged plus the market-facing entries); the live library and reading path follow it.
+import { KNOWLEDGE_FOUNDATION_V2 as LIVE_FOUNDATION } from "../../fleet/postgres/knowledge-foundation-v2.js";
 import { FOUNDATION_LIBRARY_VERSION, FOUNDER_CHARTER_V6 } from "../../fleet/cognition/types.js";
 
 const PG_BIN = findPgBin();
@@ -46,12 +48,16 @@ describe.skipIf(!PG_BIN)("v67: business foundation in the library; wake-up signa
     const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bf-")), "out.ts");
     execFileSync("node", ["scripts/knowledge-foundation-build.mjs", "docs/knowledge/business-foundation-v1.md", tmp], { cwd: ROOT });
     expect(fs.readFileSync(tmp, "utf8")).toBe(fs.readFileSync(path.join(ROOT, "src/fleet/postgres/knowledge-foundation-v1.ts"), "utf8"));
+    execFileSync("node", ["scripts/knowledge-foundation-build.mjs", "docs/knowledge/business-foundation-v2.md", tmp], { cwd: ROOT });
+    expect(fs.readFileSync(tmp, "utf8")).toBe(fs.readFileSync(path.join(ROOT, "src/fleet/postgres/knowledge-foundation-v2.ts"), "utf8"));
+    // v2 keeps every v1 entry's text (only the dated status is a new version).
+    for (const e of KNOWLEDGE_FOUNDATION_V1.entries) if (e.id !== "fleet-capability-status") expect(LIVE_FOUNDATION.entries.find((x) => x.id === e.id)?.body, e.id).toBe(e.body);
     expect(FOUNDATION_LIBRARY_VERSION).toBe(KNOWLEDGE_FOUNDATION_V1.version);
     expect(FOUNDER_CHARTER_V6).toContain(`Business foundation (${KNOWLEDGE_FOUNDATION_V1.version})`);
     const counts = await R.q(`SELECT category, count(*)::int AS n FROM fleet.fleet_knowledge_library WHERE current AND category IN ('business-foundation','fleet-status') GROUP BY 1 ORDER BY 1`);
-    expect(counts).toEqual([{ category: "business-foundation", n: KNOWLEDGE_FOUNDATION_V1.entries.length - 1 }, { category: "fleet-status", n: 1 }]);
+    expect(counts).toEqual([{ category: "business-foundation", n: LIVE_FOUNDATION.entries.length - 1 }, { category: "fleet-status", n: 1 }]);
     // Worked examples are labelled hypothetical wherever figures illustrate a case.
-    for (const e of KNOWLEDGE_FOUNDATION_V1.entries) if (/EXAMPLE/.test(e.body)) expect(e.body, e.id).toMatch(/HYPOTHETICAL EXAMPLE/);
+    for (const e of LIVE_FOUNDATION.entries) if (/EXAMPLE/.test(e.body)) expect(e.body, e.id).toMatch(/HYPOTHETICAL EXAMPLE/);
   });
 
   it("a full read follows the reading path: every entry, in order, whole, in bounded parts", async () => {
@@ -60,18 +66,18 @@ describe.skipIf(!PG_BIN)("v67: business foundation in the library; wake-up signa
     for (;;) {
       const r = await R.econ(F, "knowledge.library", { path: "foundation", part });
       expect(r.ok, JSON.stringify(r).slice(0, 300)).toBe(true);
-      expect(r.version).toBe(KNOWLEDGE_FOUNDATION_V1.version);
+      expect(r.version).toBe(LIVE_FOUNDATION.version);
       parts = r.parts;
       const bodies = (r.entries as Array<{ id: string; body: string }>);
       expect(bodies.reduce((n, e) => n + e.body.length, 0)).toBeLessThanOrEqual(FOUNDATION_PART_CHARS);
       for (const e of bodies) {
         seen.push(e.id);
-        expect(e.body).toBe(KNOWLEDGE_FOUNDATION_V1.entries.find((x) => x.id === e.id)!.body);   // never truncated
+        expect(e.body).toBe(LIVE_FOUNDATION.entries.find((x) => x.id === e.id)!.body);   // never truncated
       }
       if (part === parts) { expect(r.note).toMatch(/remember_fact/); break; }
       part++;
     }
-    expect(seen).toEqual([...KNOWLEDGE_FOUNDATION_V1.readingPath]);
+    expect(seen).toEqual([...LIVE_FOUNDATION.readingPath]);
     expect((await R.econ(F, "knowledge.library", { path: "foundation", part: parts + 1 })).code).toBe("FLEET_NOT_FOUND");
     expect((await R.econ(F, "knowledge.library", { path: "everything" })).code).toBe("FLEET_BAD_REQUEST");
   });
@@ -83,7 +89,7 @@ describe.skipIf(!PG_BIN)("v67: business foundation in the library; wake-up signa
     expect(st.ok).toBe(true);
     expect(st.entry.category).toBe("fleet-status");
     const facts = st.entry.factsThatChange as Array<{ fact: string; lastChecked: string; stale: boolean }>;
-    expect(facts.every((f) => f.lastChecked === "2026-10-12")).toBe(true);
+    expect(facts.every((f) => f.lastChecked === "2026-10-14")).toBe(true); // v76: capability status v5
     expect(facts.some((f) => /^UNRESOLVED/.test(f.fact) && /£500/.test(f.fact))).toBe(true);
     expect(st.entry.body).toMatch(/never treat today's onboarding gaps as permanent/);
   });

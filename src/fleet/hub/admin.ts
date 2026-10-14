@@ -200,6 +200,10 @@ export class PgHubAdmin {
   aiCreditTestPeriodWriteoff(actor: string) { return this.one(`SELECT fleet_admin_ai_credit_test_period_writeoff($1) AS r`, [actor]); }
   launchBoundaryRecord(note: string, actor: string) { return this.one(`SELECT fleet_admin_launch_boundary_record($1, $2) AS r`, [note, actor]); }
   launchBoundary() { return this.one(`SELECT to_jsonb(b) - 'id' AS r FROM fleet_launch_boundary b WHERE id = 1`); }
+  // v76: the public site for offer and order pages (owner), and the owner's read of offers and enquiries.
+  publicSiteSet(url: string, notice: string | null, actor: string) { return this.one(`SELECT fleet_admin_public_site_set($1, $2, $3) AS r`, [url, notice, actor]); }
+  offers(agentId: string | null) { return this.one(`SELECT fleet_offers_admin_json($1) AS r`, [agentId]); }
+  enquiries(agentId: string | null) { return this.one(`SELECT fleet_enquiries_admin_json($1) AS r`, [agentId]); }
   aiCreditOpening(actor: string) { return this.one(`SELECT fleet_admin_ai_credit_opening($1) AS r`, [actor]); }
   capitalBack(railId: string, txnId: string, eventCode: string, actor: string) {
     return this.one(`SELECT fleet_admin_capital_back($1, $2, $3, $4) AS r`, [railId, txnId, eventCode, actor]);

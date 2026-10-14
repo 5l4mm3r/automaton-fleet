@@ -208,11 +208,14 @@ export function libraryList(topic?: string): string {
 export const DOCTRINE_V5_MARKERS = ["dist/fleet/founder/field-guide.js", "src/fleet/founder/field-guide.ts"] as const;
 /** 2026-10-12: founder-v6 is attested by the v6 marker module in the same release tree (doctrine-v6.ts). */
 export const DOCTRINE_V6_MARKERS = ["dist/fleet/founder/doctrine-v6.js", "src/fleet/founder/doctrine-v6.ts"] as const;
+/** 2026-10-14 (v76): founder-v7 — the market-facing toolset — is attested by doctrine-v7.ts in the same release tree. */
+export const DOCTRINE_V7_MARKERS = ["dist/fleet/founder/doctrine-v7.js", "src/fleet/founder/doctrine-v7.ts"] as const;
 export function releaseDoctrines(releasesDir: string, exists: (p: string) => boolean): (runtimeCommit: string | null) => readonly string[] {
   return (commit) => {
     if (!commit || !/^[0-9a-f]{40}$/.test(commit)) return ["founder-v4"];
     const has = (markers: readonly string[]) => markers.some((m) => exists(`${releasesDir}/${commit}/${m}`));
     if (!has(DOCTRINE_V5_MARKERS)) return ["founder-v4"];
-    return has(DOCTRINE_V6_MARKERS) ? ["founder-v4", "founder-v5", "founder-v6"] : ["founder-v4", "founder-v5"];
+    if (!has(DOCTRINE_V6_MARKERS)) return ["founder-v4", "founder-v5"];
+    return has(DOCTRINE_V7_MARKERS) ? ["founder-v4", "founder-v5", "founder-v6", "founder-v7"] : ["founder-v4", "founder-v5", "founder-v6"];
   };
 }

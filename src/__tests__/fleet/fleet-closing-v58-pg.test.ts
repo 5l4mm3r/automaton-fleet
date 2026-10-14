@@ -14,6 +14,7 @@ import os from "os";
 import path from "path";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
+import { reviewOrderFiles } from "./fixtures/reviews.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
 import { liveRail, type ArmedCustody } from "./fixtures/custody-signer.js";
 import { PgIdentityGateway } from "../../fleet/identity/gateway.js";
@@ -135,7 +136,7 @@ describe.skipIf(!PG_BIN)("v58: principal caps, one exposure per sale, fulfilment
     const s = await sale(800, "digital_file");
     expect((await cx("cx_paypal_buyer_record", [W, s.checkoutId, JSON.stringify({ email_address: "buyer@example.test" })])).recorded).toBe(true);
     const files = [{ fileName: "pack.pdf", contentType: "application/pdf", contentB64: Buffer.from("%PDF-1.4 x").toString("base64") }];
-    expect((await R.econ(F, "order.deliver", { orderId: s.orderId, files, idempotencyKey: idem() })).ok).toBe(true);
+    expect((await R.econ(F, "order.deliver", { orderId: s.orderId, files, reviewId: await reviewOrderFiles(R, F, s.orderId, files), idempotencyKey: idem() })).ok).toBe(true);
     // A broker that has no mail provider: the send is recorded as failed, so the delivery is retried rather than stuck.
     const lone = broker(null);
     (lone as unknown as { registered: boolean }).registered = true; // the provider registry stays as it is (only this job runs without one)

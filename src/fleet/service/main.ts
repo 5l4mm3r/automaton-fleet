@@ -44,6 +44,7 @@ import crypto from "crypto";
 import fs from "fs";
 import { RELEASES_DIR } from "../founder/host.js";
 import { releaseDoctrines } from "../founder/field-guide.js";
+import { PublicPages } from "./public-pages.js";
 import net from "net";
 import os from "os";
 import path from "path";
@@ -409,6 +410,8 @@ export async function startFleetServiceFromEnv(
       researchDenyDomains: research.denyDomains,
       cognitionDeadlineMs: cognition.deadlineMs,
       admin: controller,
+      // v76: the public offer and order pages (each answer comes from a validating service-role function).
+      publicPages: new PublicPages(controller, { log: (event, detail) => console.log(JSON.stringify({ level: "warn", event, ...detail, ts: new Date().toISOString() })) }),
       agent,
       realReplicationEnabled,
       reaperIntervalMs: e.FLEET_REAPER_INTERVAL_MS ? Number(e.FLEET_REAPER_INTERVAL_MS) : undefined,

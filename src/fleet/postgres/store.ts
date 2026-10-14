@@ -2148,7 +2148,7 @@ export class PgFleetStore {
    */
   async lifecycleTick(): Promise<{ cardHolds: Record<string, unknown>; availability: Record<string, unknown>; settlement: Record<string, unknown>;
     insolvency: Record<string, unknown>; reductions: Record<string, unknown>; cardStatement: Record<string, unknown>; cardRequests: Record<string, unknown>;
-    deliveries: Record<string, unknown>; aiCredits: Record<string, unknown> }> {
+    deliveries: Record<string, unknown>; aiCredits: Record<string, unknown>; offers: Record<string, unknown> }> {
     // v56: each pass is isolated — one failing pass is reported in its own result and never skips the passes after it.
     const one = (sql: string) => this.tx(async (c) => (await c.query(sql)).rows[0].r as Record<string, unknown>)
       .catch((err: unknown) => ({ ok: false, error: (err instanceof Error ? err.message : String(err)).slice(0, 200) }) as Record<string, unknown>);
@@ -2167,7 +2167,16 @@ export class PgFleetStore {
       deliveries: await one("SELECT svc_order_deliveries_retry(20) AS r"),
       // v70: AI credit drawn from treasury-funded lots leaves the owner payable (whole pence; used-up lots settled).
       aiCredits: await one("SELECT svc_ai_credit_settle(20) AS r"),
+      // v76: paid products delivered from their reviewed files; enquiry and retention housekeeping.
+      offers: await one("SELECT svc_offer_tick(20) AS r"),
     };
+  }
+
+  /** v76: the public offer / order pages' reads and buyer actions (service role; arguments validated by each function). */
+  async publicCall(fn: PublicPageFunction, args: unknown[]): Promise<Record<string, unknown>> {
+    if (!PUBLIC_PAGE_FUNCTIONS.includes(fn)) throw new Error("not a public page function");
+    const ph = args.map((_, i) => `$${i + 1}`).join(", ");
+    return this.tx(async (c) => (await c.query(`SELECT ${fn}(${ph}) AS r`, args.map((a) => (a !== null && typeof a === "object" ? JSON.stringify(a) : a)))).rows[0].r as Record<string, unknown>);
   }
 
   /** Schema v10: expire payment orders past their TTL (releases their reservations). Returns the count. */
@@ -2344,3 +2353,8 @@ export class PgFleetStore {
     });
   }
 }
+
+/** v76: the public page functions the controller may call (each is a service-role SECURITY DEFINER function). */
+export const PUBLIC_PAGE_FUNCTIONS = ["svc_offer_page", "svc_offer_preview", "svc_offer_buy", "svc_offer_enquire", "svc_enquiry_page", "svc_order_page",
+  "svc_order_file", "svc_customer_message"] as const;
+export type PublicPageFunction = (typeof PUBLIC_PAGE_FUNCTIONS)[number];

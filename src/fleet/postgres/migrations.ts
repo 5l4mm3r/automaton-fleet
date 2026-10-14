@@ -82,9 +82,10 @@ import { V72_SQL } from "./migrations-phase72.js";
 import { V73_SQL } from "./migrations-phase73.js";
 import { V74_SQL } from "./migrations-phase74.js";
 import { V75_SQL } from "./migrations-phase75.js";
+import { V76_SQL } from "./migrations-phase76.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 75;
+export const FLEET_PG_SCHEMA_VERSION = 76;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1255,6 +1256,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 73, name: "ai_credit_historical_cost", sql: V73_SQL },
   { version: 74, name: "ai_credit_test_period_writeoff", sql: V74_SQL },
   { version: 75, name: "virtual_agent_presence", sql: V75_SQL },
+  { version: 76, name: "market_fulfilment", sql: V76_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1343,6 +1345,17 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_card_requests_expire()",
   // v56: failed order deliveries are sent again with back-off (never after a refund).
   "svc_order_deliveries_retry(integer)",
+  // v76: the public offer and order pages (rate-limited by the controller) and the offer pass (automatic product
+  // delivery from reviewed files, enquiry and retention housekeeping).
+  "svc_offer_page(text)",
+  "svc_offer_preview(text, integer)",
+  "svc_offer_buy(text, text)",
+  "svc_offer_enquire(text, text, text, text, text, jsonb)",
+  "svc_enquiry_page(text)",
+  "svc_order_page(text)",
+  "svc_order_file(text, uuid, integer)",
+  "svc_customer_message(text, text, text, text, jsonb)",
+  "svc_offer_tick(integer)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */
@@ -1435,6 +1448,9 @@ export const CUSTODY_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v59: refunds the Fleet initiates (agent or owner), sent under the money-out authority; posted from PayPal's evidence.
   "cx_paypal_refund_work(text, integer)",
   "cx_paypal_refund_result(text, uuid, text, text, bigint, text, text)",
+  // v76: the status of open checkouts, read from PayPal when no webhook reported them.
+  "cx_paypal_status_work(text, integer)",
+  "cx_paypal_status_checked(text, uuid, text)",
 ]);
 
 /** Per custody function: the only tables it may write and the only volatile fleet functions it may call. */
@@ -1477,6 +1493,9 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   cx_paypal_refund_work: { writes: [], calls: [] },
   cx_paypal_refund_result: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event", "cx_paypal_clawback_evidence"] },
   cx_paypal_dispute_record: { writes: ["fleet_paypal_disputes"], calls: ["fleet_event"] },
+  // v76: reading an open checkout's PayPal status (backed off), failing a voided one.
+  cx_paypal_status_work: { writes: [], calls: [] },
+  cx_paypal_status_checked: { writes: ["fleet_paypal_checkouts"], calls: ["fleet_event"] },
 });
 
 /** Schema v34: the only functions the identity broker's role may execute (fleet_identity; ix_* protocol). */

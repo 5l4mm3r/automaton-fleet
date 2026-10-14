@@ -24,6 +24,7 @@ import { SimulatedSharedMailProvider } from "../../fleet/identity/providers.js";
 import { initIdentityState, openIdentityState, openProviderVault } from "../../fleet/identity/main.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 import { EVENT_ROUTES_V56 } from "../../fleet/postgres/migrations-phase56.js";
+import { reviewOrderFiles } from "./fixtures/reviews.js";
 
 const PG_BIN = findPgBin();
 
@@ -108,7 +109,10 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
     // A 120 kB file: well beyond the general 32 kB argument limit.
     const pdf = Buffer.concat([Buffer.from("%PDF-1.4 planner "), crypto.randomBytes(120_000)]);
     const key = idem();
-    const d = await R.econ(F, "order.deliver", { orderId: s.order, files: [{ fileName: "planner-pack.pdf", contentType: "application/pdf", contentB64: pdf.toString("base64") }],
+    const packFiles = [{ fileName: "planner-pack.pdf", contentType: "application/pdf", contentB64: pdf.toString("base64") }];
+    // v76: no delivery without a passing review of exactly these files.
+    expect(await R.econ(F, "order.deliver", { orderId: s.order, files: packFiles, idempotencyKey: idem() })).toMatchObject({ ok: false, code: "FLEET_REVIEW_REQUIRED" });
+    const d = await R.econ(F, "order.deliver", { orderId: s.order, files: packFiles, reviewId: await reviewOrderFiles(R, F, s.order, packFiles),
       message: "Thank you! Your planner pack is attached.", idempotencyKey: key });
     expect(d, JSON.stringify(d)).toMatchObject({ ok: true, order: { status: "delivering", delivery: { status: "queued", attempts: 1 } } });
     // Not delivered by payment, nor by queuing: only the provider's acceptance.
@@ -123,7 +127,8 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
     const done = await order(F, s.order);
     expect(done).toMatchObject({ status: "delivered", delivery: { status: "sent", files: [{ fileName: "planner-pack.pdf", sha256: crypto.createHash("sha256").update(pdf).digest("hex") }] },
       evidence: { kind: "mail" } });
-    expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_order_delivery_files WHERE blob IS NOT NULL)`)).toBe(0); // bytes erased once sent
+    // v76: the bytes stay downloadable from the buyer's order page for 30 days (then the offer pass erases them).
+    expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_order_delivery_files WHERE blob IS NOT NULL AND retained_until > now() + interval '29 days')`)).toBe(1);
     expect(await R.econ(F, "order.deliver", { orderId: s.order, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_ALREADY_DELIVERED" });
     // The buyer's contact never reaches an event.
@@ -135,8 +140,8 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
   it("a failed send is retried by the reaper with back-off — one message at a time — then delivered", async () => {
     const s = await sell(F, "planners", 900, "digital_file", "second@example.test");
     shared.down = true;
-    expect((await R.econ(F, "order.deliver", { orderId: s.order, files: [{ fileName: "pack.zip", contentType: "application/zip", contentB64: Buffer.from("PK zip").toString("base64") }],
-      idempotencyKey: idem() })).ok).toBe(true);
+    const zip = [{ fileName: "pack.zip", contentType: "application/zip", contentB64: Buffer.from("PK zip").toString("base64") }];
+    expect((await R.econ(F, "order.deliver", { orderId: s.order, files: zip, reviewId: await reviewOrderFiles(R, F, s.order, zip), idempotencyKey: idem() })).ok).toBe(true);
     await broker.tick();
     let o = await order(F, s.order);
     expect(o).toMatchObject({ status: "delivering", delivery: { status: "failed", attempts: 1 } });
