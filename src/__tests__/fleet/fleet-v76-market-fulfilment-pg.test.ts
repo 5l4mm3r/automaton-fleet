@@ -181,9 +181,19 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     // Sales are closed until the owner opens them: no public page, no buy, no brief (the proof purchase is the exception).
     expect(await pub("svc_offer_page", [p.offer.slug])).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
     expect(await pub("svc_offer_buy", [p.offer.slug, origin])).toMatchObject({ ok: false, code: "FLEET_SALES_CLOSED" });
+    // Preparation hold: outward actions wait while sales are closed; preparation (offers, reviews, reading) does not.
+    for (const [op, a] of [["mail.send", { to: "someone@example.test", subject: "Our new workbook", body: "Buy it", idempotencyKey: idem() }],
+                           ["browser.act", { sessionId: crypto.randomUUID(), steps: [{ type: "click", selector: "#post" }] }],
+                           ["account.create", { platform: "forum.example", idempotencyKey: idem() }],
+                           ["card.request", { amountMinor: 500, purpose: "ads", idempotencyKey: idem() }]] as const) {
+      expect(await R.econ(F, op, a), op).toMatchObject({ ok: false, code: "FLEET_PREPARATION_HOLD" });
+    }
+    expect((await R.econ(F, "offer.list", {})).ok).toBe(true);
     await expect(svc.query(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER])).rejects.toThrow(/permission denied/);
     expect((await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1) AS r`, [OWNER]))[0].r).toMatchObject({ ok: true, salesOpen: true, changed: true });
     expect(await events("sales_opened")).toBe(1);
+    // Once open, the hold no longer answers (the operation's own rules do).
+    expect((await R.econ(F, "mail.send", { to: "someone@example.test", subject: "Hello", body: "Hi", idempotencyKey: idem() })).code).not.toBe("FLEET_PREPARATION_HOLD");
     // The public page: the offer, its files' names, the seller notice; nothing about the agent's books or buyers.
     const page = await pub("svc_offer_page", [p.offer.slug]);
     expect(page).toMatchObject({ ok: true, seller: expect.stringContaining("Automaton Fleet"), offer: { kind: "product", available: true, priceMinor: 1_500, title: "Small business cash-flow workbook" } });
@@ -247,31 +257,39 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect(shared.outbox.at(-1)!.to).toEqual(["owner@example.test"]);
     const ord = (await R.econ(F, "order.list", {})).orders.find((x: any) => x.page === p.page);
     expect(ord).toMatchObject({ ownerProof: true, payment: "paid", status: "delivered" });
-    // Refund of the proof: the owner's money goes back — D owner capital / C treasury, the refunded gross, exactly once; never the agent.
+    // Refund of the proof, through the real evidence path: the webhook's refund, then the fee PayPal gave back with it, then the
+    // same money again from Transaction Search (T1107 refund, T1108 fee reversal). Owner capital and treasury follow exactly what
+    // PayPal took: gross refund − fee given back; net effect of the whole proof on owner capital = −the fee PayPal retained.
     const cap = await R.one<string>(`(SELECT capture_id FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1)`, [checkoutId]);
     const capital = () => R.one(`fleet.fleet_ledger_balance('fleet:owner:capital')`).then((x) => Math.abs(Number(x)));
     const treasury = () => R.one(`fleet.fleet_ledger_balance('fleet:treasury:unallocated')`).then((x) => Number(x));
-    const [c1, t1] = [await capital(), await treasury()];
-    const refundId = `RF${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
-    const rf = await cx("cx_paypal_refund_record", ["custody-executor", cap, refundId, "refund", 1_500, "GBP"]);
-    expect(rf).toMatchObject({ ok: true, ownerProof: true, posted: true, postedMinor: 1_500 });
-    expect(await capital()).toBe(c1 - 1_500);                    // net effect of the proof on owner capital: −60, PayPal's fee
-    expect(Math.abs((await treasury()) - t1)).toBe(1_500);
-    // The order records it, so Transaction Search's refund-shortfall check (refunds beyond refunded_minor) posts nothing again.
+    const [c1, t1] = [await capital(), await treasury()];      // after capture: capital0 + 1,440 (1,500 − 60 fee)
+    const RF = `RF${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
+    expect(await cx("cx_paypal_clawback_evidence", ["custody-executor", "webhook", RF, "refund", cap, 1_500, "GBP"])).toMatchObject({ ok: true, posted: { refund: 1_500 } });
+    expect(await capital()).toBe(c1 - 1_500);
+    expect(t1 - (await treasury())).toBe(1_500);
+    // PayPal gave back 40 of the 60 fee (the refund webhook's gross − net); it retains 20.
+    expect(await cx("cx_paypal_clawback_evidence", ["custody-executor", "webhook", `FR-${RF}`, "fee_return", cap, 40, "GBP"])).toMatchObject({ ok: true, posted: { fee_return: 40 } });
+    expect(await capital()).toBe(c1 - 1_460);
+    expect(Math.abs(await capital() - Math.abs(capital0))).toBe(20);      // the retained fee is the owner's cost of the proof — nothing else
+    expect(t1 - (await treasury())).toBe(1_460);                // the treasury fell by what PayPal actually debited (1,500 − 40)
+    // The same refund and fee again from Transaction Search: the larger source counts once — nothing more is posted.
+    const ts = (code: string, amt: number) => cx("cx_paypal_txn_record", ["custody-executor", rail.railId, JSON.stringify({ transactionId: `T${crypto.randomBytes(6).toString("hex").toUpperCase()}`,
+      eventCode: code, initiatedAt: new Date().toISOString(), status: "S", currency: "GBP", amountMinor: amt, feeMinor: 0, referenceId: cap })]);
+    expect((await ts("T1107", -1_500)).ok).toBe(true);
+    expect((await ts("T1108", 40)).ok).toBe(true);
+    expect(await capital()).toBe(c1 - 1_460);
+    // The order knows it was refunded (Transaction Search's shortfall check sees nothing to post).
     expect(Number(await R.one(`(SELECT refunded_minor FROM fleet.fleet_customer_orders WHERE access_token = $1)`, [token]))).toBe(1_500);
     // v76 restates the LATEST refund recorder: v56's order follow-up and v57's clawback record are still in it.
     const src = await R.one<string>(`(SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'fleet' AND p.proname = 'cx_paypal_refund_record')`);
     expect(src).toContain("fleet_paypal_clawback_posts");
     expect(src).toContain("fleet_order_refunded(c.checkout_id, p_kind, p_amount)");
-    expect(await cx("cx_paypal_refund_record", ["custody-executor", cap, refundId, "refund", 1_500, "GBP"])).toMatchObject({ ok: true, replay: true });
-    expect(await capital()).toBe(c1 - 1_500);                    // the same PayPal refund again (webhook + Transaction Search): once
-    // A reversal of an already fully refunded proof posts nothing beyond the captured amount; a dispute fee is the owner's.
-    expect(await cx("cx_paypal_refund_record", ["custody-executor", cap, `RV${crypto.randomBytes(6).toString("hex").toUpperCase()}`, "reversal", 1_500, "GBP"]))
-      .toMatchObject({ ok: true, posted: false, postedMinor: 0 });
-    expect(await cx("cx_paypal_refund_record", ["custody-executor", cap, `DF${crypto.randomBytes(6).toString("hex").toUpperCase()}`, "dispute_fee", 1_400, "GBP"]))
-      .toMatchObject({ ok: true, posted: true, postedMinor: 1_400 });
-    expect(await capital()).toBe(c1 - 2_900);
-    expect(await events("offer_proof_returned")).toBe(3);
+    // A reversal of an already fully refunded proof posts nothing beyond the captured amount.
+    expect(await cx("cx_paypal_clawback_evidence", ["custody-executor", "webhook", `RV${crypto.randomBytes(6).toString("hex").toUpperCase()}`, "reversal", cap, 1_500, "GBP"]))
+      .toMatchObject({ ok: true });
+    expect(await capital()).toBe(c1 - 1_460);
+    expect(await events("offer_proof_returned")).toBe(2);      // the refund and the fee given back
     await expect(R.q(`UPDATE fleet.fleet_offer_proof_returns SET amount_minor = 0`)).rejects.toThrow(/immutable|HISTORY/i);
     expect(await agentPostings()).toBe(agent0);
   });

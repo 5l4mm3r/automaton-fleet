@@ -64,7 +64,7 @@ export interface PayPalGatewayPort {
   paypalBuyerWork?(worker: string, limit: number): Promise<Array<{ checkoutId: string; paypalOrderId: string; railMode: "live" | "sandbox"; vaultRef: string }>>;
   paypalBuyerRecord?(worker: string, checkoutId: string, payer: Record<string, unknown> | null): Promise<CxResult>;
   /** v57: a webhook's refund / reversal as evidence (reconciled with Transaction Search; never posted twice), and a dispute's state. */
-  paypalClawbackEvidence?(worker: string, ref: string, group: "refund" | "reversal", captureId: string, amountMinor: number, currency: string): Promise<CxResult>;
+  paypalClawbackEvidence?(worker: string, ref: string, group: "refund" | "reversal" | "fee_return", captureId: string, amountMinor: number, currency: string): Promise<CxResult>;
   paypalDisputeRecord?(worker: string, disputeId: string, captureId: string, status: string, outcome: string | null, amountMinor: number, currency: string): Promise<CxResult>;
   /** v59: refunds the Fleet requested (only while money-out is activated), and PayPal's answer to each. */
   paypalRefundWork?(worker: string, limit: number): Promise<Array<{ refundRequestId: string; captureId: string; amountMinor: number; currency: string; note: string;
@@ -282,6 +282,13 @@ export class PayPalTreasuryWorker {
         if (!captureId || amount === null || typeof res.id !== "string") return false;
         const r = await this.clawback(res.id, "refund", captureId, amount, String(res.amount?.currency_code ?? ""));
         if (r.ok) this.stats.refunds++;
+        // v76: the part of the original PayPal fee PayPal gave back with this refund (gross − the net it debited; else its
+        // paypal_fee) is evidence too, so the books follow what PayPal actually took. The larger of this and Search's T1108 counts once.
+        const net = toMinor(res.seller_payable_breakdown?.net_amount?.value);
+        const back = net !== null ? amount - Math.abs(net) : Math.abs(toMinor(res.seller_payable_breakdown?.paypal_fee?.value) ?? 0);
+        if (back > 0 && back < amount && this.gw.paypalClawbackEvidence) {
+          await this.gw.paypalClawbackEvidence(this.worker, `FR-${res.id}`.slice(0, 64), "fee_return", captureId, back, String(res.amount?.currency_code ?? ""));
+        }
         return true;
       }
       case "PAYMENT.CAPTURE.REVERSED": {

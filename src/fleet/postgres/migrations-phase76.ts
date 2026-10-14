@@ -35,6 +35,7 @@ import { V74_SQL } from "./migrations-phase74.js";
 import { V61_SQL } from "./migrations-phase61.js";
 import { V58_SQL } from "./migrations-phase58.js";
 import { V57_SQL } from "./migrations-phase57.js";
+import { V59_SQL } from "./migrations-phase59.js";
 import { V56_SQL } from "./migrations-phase56.js";
 import { STOREFRONT_FILE_TYPES } from "./migrations-phase52.js";
 import { KNOWLEDGE_FOUNDATION_V2 } from "./knowledge-foundation-v2.js";
@@ -75,6 +76,9 @@ const TOKEN = `replace(gen_random_uuid()::text, '-', '') || replace(gen_random_u
 const WORKER = `IF p_worker IS NULL OR p_worker !~ '^[a-z0-9-]{3,40}$' THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: worker name'; END IF;`;
 
 // ── The dispatcher: the new operations (planning class), larger bodies for the file-carrying ones, their error codes ──
+/** v76: agent operations that act outward, held while sales are closed (the preparation window). */
+export const PREPARATION_HOLD_OPS = ["mail.send", "sms.send", "phone.provision", "browser.act", "account.create", "account.operate", "account.register",
+  "storefront.product.create", "storefront.product.update", "storefront.product.publish", "storefront.file", "card.request"] as const;
 const DISPATCH = restate(V64_SQL, "api_economy", [
   [`WHEN 'order.refund' THEN 'planning'`, `WHEN 'order.refund' THEN 'planning' ${AGENT_OPS_V76.map((o) => `WHEN '${o}' THEN 'planning'`).join(" ")}`],
   [`IF jsonb_typeof(a) <> 'object' OR length(a::text) > (CASE WHEN p_op IN ('storefront.file','order.deliver') THEN 21000000 ELSE 32000 END) THEN
@@ -103,6 +107,17 @@ const DISPATCH = restate(V64_SQL, "api_economy", [
       WHEN 'review.record' THEN fleet_econ_review_record(p_agent, a)
       WHEN 'review.list' THEN fleet_econ_review_list(p_agent, a)`],
   [`|STOREFRONT_[A-Z_]+):'`, `|STOREFRONT_[A-Z_]+|OFFER_[A-Z_]+|REVIEW_[A-Z_]+|ENQUIRY_[A-Z_]+|ORDER_[A-Z_]+|DELIVERY_[A-Z_]+|BUYER_[A-Z_]+|NO_RECEIVING_RAIL|PUBLIC_SITE_[A-Z_]+):'`],
+  // Preparation hold: until the owner opens sales, the operations that act outward (send, post, sign up, buy promotion) wait.
+  // Reading, research, building, reviewing, publishing (not yet public) and the owner's proof purchase are unaffected.
+  [`  END IF;
+  BEGIN
+    RETURN CASE p_op`, `  END IF;
+  IF p_op IN (${q(PREPARATION_HOLD_OPS)}) AND fleet_preparation_hold() THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_PREPARATION_HOLD',
+      'reason', 'sales are not open yet (owner): outward actions — sending mail or SMS, acting on websites, creating or operating accounts, storefront publishing, card requests — wait until they are; reading, research, building and reviewing continue');
+  END IF;
+  BEGIN
+    RETURN CASE p_op`],
 ]);
 
 // ── Custody: open checkouts carry their order page's token (PayPal returns the buyer there) ──
@@ -170,6 +185,58 @@ const PROOF_CAPTURE = restate(V53_SQL, "cx_paypal_capture_record", [
 // A refund / reversal of the owner's proof returns the owner's money: D owner capital / C treasury, the refunded amount (capped
 // at what was captured across refunds and reversals), exactly once per PayPal refund id; PayPal's dispute / chargeback fees on
 // it are the owner's too. Never posted against the agent.
+// Money PayPal gives back on the owner's proof (a fee refunded with a refund, a reversal reversed): D treasury / C owner capital,
+// once per reconciliation key — never the agent's revenue or fees. Latest definition: v57.
+const PROOF_RETURN = restate(V57_SQL, "fleet_paypal_clawback_return", [
+  [`  SELECT * INTO c FROM fleet_paypal_checkouts WHERE checkout_id = p_checkout;
+`, `  SELECT * INTO c FROM fleet_paypal_checkouts WHERE checkout_id = p_checkout;
+  IF EXISTS (SELECT 1 FROM fleet_customer_orders z WHERE z.checkout_id = p_checkout AND z.owner_proof) THEN
+    v_j := fleet_ledger_post('owner_proof_return', p_key, 'custody:' || p_worker,
+      CASE p_grp WHEN 'reversal_return' THEN 'PayPal reversal given back' ELSE 'PayPal fee given back' END || ' on the owner''s proof purchase (owner capital)',
+      'executor', NULL, NULL, NULL, p_key, NULL, now(), jsonb_build_array(
+        jsonb_build_object('account', 'fleet:treasury:unallocated', 'side', 'D', 'amount', p_amount),
+        jsonb_build_object('account', 'fleet:owner:capital', 'side', 'C', 'amount', p_amount)));
+    INSERT INTO fleet_paypal_clawback_posts (claim_key, checkout_id, grp, amount_minor, journal_id) VALUES (p_key, p_checkout, p_grp, p_amount, v_j);
+    IF p_grp = 'reversal_return' THEN
+      UPDATE fleet_customer_orders SET refunded_minor = GREATEST(0, refunded_minor - p_amount),
+             payment_status = CASE WHEN GREATEST(0, refunded_minor - p_amount) = 0 THEN 'paid' ELSE 'partially_refunded' END
+       WHERE checkout_id = p_checkout;
+    END IF;
+    PERFORM fleet_event('offer_proof_returned', c.agent_id, 'custody', jsonb_build_object('checkoutId', p_checkout, 'kind', p_grp, 'postedMinor', p_amount,
+      'journalId', v_j, 'note', 'given back by PayPal: owner capital'));
+    RETURN jsonb_build_object('ok', true, 'ownerProof', true, 'journalId', v_j);
+  END IF;
+`],
+]);
+// v76: a refund webhook's returned PayPal fee (gross − the net PayPal debited) is evidence too (as Search's T1108 row is);
+// the larger source counts once. Latest definition: v59.
+const EVIDENCE_FEE_RETURN = restate(V59_SQL, "cx_paypal_clawback_evidence", [
+  [`p_grp NOT IN ('refund','reversal')`, `p_grp NOT IN ('refund','reversal','fee_return')`],
+  [`  IF c.purpose = 'owner_test' THEN`, `  IF c.purpose = 'owner_test' AND p_grp IN ('refund','reversal') THEN`],
+  [`  IF c.purpose = 'owner_test' AND p_grp IN ('refund','reversal') THEN
+    -- The owner's receiving test: reported once, never posted (v53).
+    RETURN cx_paypal_refund_record(p_worker, p_capture, p_ref, p_grp, p_amount, p_currency);
+  END IF;`, `  IF c.purpose = 'owner_test' AND p_grp IN ('refund','reversal') THEN
+    -- The owner's receiving test: reported once, never posted (v53).
+    RETURN cx_paypal_refund_record(p_worker, p_capture, p_ref, p_grp, p_amount, p_currency);
+  END IF;
+  IF c.purpose = 'owner_test' THEN RETURN jsonb_build_object('ok', true, 'ownerTest', true, 'posted', false); END IF;`],
+]);
+
+// A proof's fee return may give back the fee PayPal took at capture (derived exactly: the gross less what the capture credited
+// to owner capital), not only fees clawed back later. Agent sales keep v58's cap (a pre-existing gap reported for owner review).
+const PROOF_RECONCILE = restate(V58_SQL, "fleet_paypal_clawback_reconcile", [
+  [`        v_refund bigint := 0; v_reversal bigint := 0; v_fee bigint := 0; v_over bigint := 0;`,
+   `        v_refund bigint := 0; v_reversal bigint := 0; v_fee bigint := 0; v_over bigint := 0; v_capfee bigint := 0;`],
+  [`  FOREACH g IN ARRAY ARRAY['refund','reversal','fee','reversal_return','fee_return'] LOOP`,
+   `  IF EXISTS (SELECT 1 FROM fleet_customer_orders z WHERE z.checkout_id = p_checkout AND z.owner_proof) THEN
+    v_capfee := GREATEST(0, c.amount_minor - COALESCE((SELECT sum(p.amount_cents) FROM fleet_ledger_postings p
+                                                         WHERE p.journal_id = c.journal_id AND p.account_id = 'fleet:owner:capital'), c.amount_minor));
+  END IF;
+  FOREACH g IN ARRAY ARRAY['refund','reversal','fee','reversal_return','fee_return'] LOOP`],
+  [`                       WHEN 'fee_return' THEN LEAST(v_ev, v_fee)`, `                       WHEN 'fee_return' THEN LEAST(v_ev, v_fee + v_capfee)`],
+]);
+
 // Restated from the LATEST definition (v57 over v56 over v53): its clawback record, the order follow-up and the owner-test branch stay.
 const PROOF_REFUND = restate(V57_SQL, "cx_paypal_refund_record", [
   [`DECLARE `, `DECLARE v_px bigint; v_pj uuid; `],
@@ -187,6 +254,8 @@ const PROOF_REFUND = restate(V57_SQL, "cx_paypal_refund_record", [
         'paypal:proof:' || p_kind || ':' || p_refund_id, NULL, now(), jsonb_build_array(
           jsonb_build_object('account', 'fleet:owner:capital', 'side', 'D', 'amount', v_px),
           jsonb_build_object('account', 'fleet:treasury:unallocated', 'side', 'C', 'amount', v_px)));
+      INSERT INTO fleet_paypal_clawback_posts (claim_key, checkout_id, grp, amount_minor, journal_id)
+        VALUES ('paypal:proof:' || p_kind || ':' || p_refund_id, c.checkout_id, CASE p_kind WHEN 'refund' THEN 'refund' WHEN 'reversal' THEN 'reversal' ELSE 'fee' END, v_px, v_pj);
     END IF;
     INSERT INTO fleet_offer_proof_returns (refund_id, kind, capture_id, checkout_id, amount_minor, journal_id)
       VALUES (p_refund_id, p_kind, p_capture_id, c.checkout_id, GREATEST(v_px, 0), v_pj);
@@ -248,6 +317,9 @@ CREATE FUNCTION fleet_public_url(p_path text) RETURNS text LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$ SELECT (SELECT base_url FROM fleet_public_site WHERE id = 1) || p_path $$;
 CREATE FUNCTION fleet_sales_open() RETURNS boolean LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$ SELECT COALESCE((SELECT sales_open FROM fleet_public_site WHERE id = 1), false) $$;
+-- The preparation window: the public site is set (offers can publish) but the owner has not opened sales. Outward actions wait.
+CREATE FUNCTION fleet_preparation_hold() RETURNS boolean LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$ SELECT EXISTS (SELECT 1 FROM fleet_public_site WHERE id = 1 AND NOT sales_open) $$;
 -- Owner: open or close sales to the public (the proof window keeps them closed; the owner's proof purchase works either way).
 CREATE FUNCTION fleet_admin_sales_set(p_open boolean, p_actor text) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
@@ -1413,7 +1485,8 @@ ALTER TABLE fleet_ledger_kinds DISABLE TRIGGER fleet_ledger_kinds_no_change;
 INSERT INTO fleet_ledger_kinds (kind, requires_external_ref, allowed_sources, multi_agent, description, provenance) VALUES
   ('owner_proof_return', true, ARRAY['executor'], false, 'A refund, reversal or PayPal fee on the owner''s own proof purchase: owner capital returned from the treasury', 'owner_funding');
 ALTER TABLE fleet_ledger_kinds ENABLE TRIGGER fleet_ledger_kinds_no_change;
-INSERT INTO fleet_ledger_rules (kind, class, side) VALUES ('owner_proof_return','owner_capital','D'), ('owner_proof_return','treasury_cash','C');
+INSERT INTO fleet_ledger_rules (kind, class, side) VALUES ('owner_proof_return','owner_capital','D'), ('owner_proof_return','treasury_cash','C'),
+  ('owner_proof_return','treasury_cash','D'), ('owner_proof_return','owner_capital','C');
 
 CREATE FUNCTION fleet_admin_offer_proof_buy(p_slug text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
@@ -1443,6 +1516,12 @@ END $$;
 ${PROOF_CAPTURE}
 
 ${PROOF_REFUND}
+
+${PROOF_RETURN}
+
+${PROOF_RECONCILE}
+
+${EVIDENCE_FEE_RETURN}
 
 REVOKE ALL ON ALL TABLES IN SCHEMA @@SCHEMA@@ FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA @@SCHEMA@@ FROM PUBLIC;
