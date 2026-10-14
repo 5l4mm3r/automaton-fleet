@@ -961,6 +961,13 @@ toolchain, a fulfilment loop with a quality gate, and the knowledge to use them 
   files), 3..30 criteria checked against the brief, an optional independent model review (a real routed call of the agent,
   checked in its cognition log, within 6 hours), verdict. A pass needs no automated failure, every criterion met and no
   failed independent review. A model's approval alone is never the gate.
+- **What the gate proves, and what it does not.** The hashes bind every delivery to the exact bytes that were reviewed, and
+  the automated report is re-run by the runtime on those bytes, so an agent cannot deliver different files from the ones
+  reviewed, nor record a pass over an automated failure. Substantive quality is a different matter: the inspector proves
+  files open, render, recalculate, carry no placeholders or error cells and meet any acceptance cases the agent wrote; the
+  criteria and their evidence are the agent's own statements. A technically clean but thin deliverable passes (recorded in
+  the course demonstration). Quality therefore rests on meaningful acceptance cases, specific evidence, the optional
+  independent review, buyer messages / revisions / refunds, and owner sampling of reviews (`hub-offers`) — not on the gate.
 - **Delivery**: needs a passing review of exactly the delivered bytes against the current requirements (a buyer message
   after the review makes it stale). Up to 10 files (15 MB each, 60 MB together, staged one per call); attached when they fit
   in 15 MB, otherwise a link; downloadable from the order page for 30 days. A paid product is delivered automatically from
@@ -986,7 +993,9 @@ toolchain, a fulfilment loop with a quality gate, and the knowledge to use them 
 | Briefs with files, clarify / quote / decline, capacity, revisions | v76 `enquiry.*`, `order.message` | IMPLEMENTED, LOCALLY VERIFIED |
 | Review gate bound to the exact bytes and the inspector's report | v76 `review.record`, `fleet-qa-1` | IMPLEMENTED, LOCALLY VERIFIED (real inspector, sandboxed) |
 | Staged / link delivery, 30-day downloads, automatic product delivery | v76 `order.stage_file`, `order.deliver`, `svc_offer_tick` | IMPLEMENTED, LOCALLY VERIFIED (simulated shared mailbox) |
-| End to end: agent builds a workbook, a defect is caught, the fix is reviewed, published, bought, delivered byte-identical | `fleet-v76-e2e-spreadsheet-pg.test.ts` | LOCALLY VERIFIED (simulated buyer; fake PayPal) |
+| Demonstration — spreadsheet product: defect caught, fix reviewed with an acceptance case, published, bought, delivered byte-identical | `fleet-v76-e2e-demonstrations-pg.test.ts` | LOCALLY VERIFIED — SIMULATED buyer, PayPal and mailbox |
+| Demonstration — downloadable course (ZIP of lessons + workbook): a placeholder in one lesson fails the bundle with its reason; fixed course sold and delivered | same | LOCALLY VERIFIED — SIMULATED |
+| Demonstration — service: sample review publishes; buyer's file → workspace; built from it; buyer's numbers checked; delivered; revision needs a fresh review | same | LOCALLY VERIFIED — SIMULATED |
 | Founder-v7 tools advertised and classified (no unclassified tool) | `cognition/types.ts`, `capabilities.ts`, drift guard | IMPLEMENTED, LOCALLY VERIFIED |
 | Pinned production toolchain for agents | `toolchain/`, `scripts/fleet-agent-tools.sh` | IMPLEMENTED, dev install verified; **host install pending (sudo)** |
 | Business foundation v2 loaded; reading path | v76 + knowledge build | IMPLEMENTED, LOCALLY VERIFIED |

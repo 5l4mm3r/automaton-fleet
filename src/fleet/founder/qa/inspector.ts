@@ -729,11 +729,16 @@ def inspect_zip(r, path, render_dir, tag, depth):
             sub = inspect_file(os.path.relpath(out, ROOT), render_dir, [], depth + 1, label=info.filename)
             nested.append({"name": info.filename, "detectedType": sub["detectedType"], "ok": sub["ok"],
                            "failed": [c["id"] for c in sub["checks"] if c["status"] == "fail"],
+                           "failDetails": ["%s: %s" % (c["id"], c["detail"]) for c in sub["checks"] if c["status"] == "fail"],
                            "warned": [c["id"] for c in sub["checks"] if c["status"] == "warn"], "facts": sub["facts"]})
         r.facts["nested"] = nested
         if nested:
             badn = [x["name"] for x in nested if not x["ok"]]
-            r.check("nested_files", "fail" if badn else "pass", ("failing members: " + ", ".join(badn)) if badn else "%d member(s) inspected, all ok" % len(nested))
+            # Each failing member with its failures' details (bounded), so the fix does not need a re-inspection of the member.
+            why = ["%s (%s)" % (x["name"], "; ".join(d[:200] for d in x["failDetails"])[:400]) for x in nested if not x["ok"]]
+            r.check("nested_files", "fail" if badn else "pass", ("failing members: " + " | ".join(why)) if badn else "%d member(s) inspected, all ok" % len(nested))
+        for x in nested:
+            x.pop("failDetails", None)
 
 
 # ---------------------------------------------------------------- driver
