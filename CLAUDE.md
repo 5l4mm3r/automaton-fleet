@@ -147,7 +147,8 @@ v75 (1945915, 2026-10-14 10:19Z: v74 pre-launch write-off + launch boundary INST
 it authorises nothing; v75 read-only Virtual presence). Before: v73 (v70-v72 AI credit by funding source / evidence-first purchases / acquisition cost: d63a595, 2026-10-12 19:54Z;
 v73 one-time historical acquisition cost: e54ee56, 20:32Z). AI-credit setup recorded 20:14-20:32Z: policy owner_card,
 reconciled $41.29, opening lot cost 7000/8400, opening £18.24, historical correction applied once (801 journals) —
-owner payable £21.87, unbacked capital £200.00, nothing reimbursed
+owner payable £21.87, unbacked capital £200.00, nothing reimbursed. v74 write-off APPLIED once 2026-10-14 10:33Z (no
+launch boundary yet): owner payable £0 (£21.87 contributed capital), wallets £100.00 / £100.00, unbacked £200.00
 
 Releases: scripts/fleet-release.sh (backend cutover + UI promotion + root verification; ONE
 production_deployed / production_rolled_back event; an unchanged UI is reused; rollback restores the UI live before
