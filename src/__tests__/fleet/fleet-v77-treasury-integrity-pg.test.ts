@@ -142,7 +142,7 @@ describe.skipIf(!PG_BIN)("v77 treasury liquidity: real outflows fit available Pa
     const sha256Hex = (x: string) => crypto.createHash("sha256").update(x).digest("hex");
     await balance(30_000);
     const L0 = await liquidity();
-    expect(L0.leftSinceReading).toEqual({ paymentsSettledMinor: 0, refundsMinor: 0, cardRepaidMinor: 0, ownerReimbursedMinor: 0 });
+    expect(L0.leftSinceReading).toEqual({ paymentsSettledMinor: 0, refundsMinor: 0, cardRepaidMinor: 0, ownerReimbursedMinor: 0, ownerWithdrawnMinor: 0 });
     // 1. A payout settles after the reading: it moves from "in flight" to "left since the reading" — free cash is unchanged.
     const claimed = (await cx("cx_claim_instruction", [W, sha256Hex("lease-after-reading")])).instruction;
     expect(claimed, "an issued payout to claim").toBeTruthy();
@@ -188,8 +188,42 @@ describe.skipIf(!PG_BIN)("v77 treasury liquidity: real outflows fit available Pa
     const left = L5.leftSinceReading.paymentsSettledMinor + L5.leftSinceReading.refundsMinor + L5.leftSinceReading.cardRepaidMinor + L5.leftSinceReading.ownerReimbursedMinor;
     await balance(30_000 - left);
     const L6 = await liquidity();
-    expect(L6.leftSinceReading).toEqual({ paymentsSettledMinor: 0, refundsMinor: 0, cardRepaidMinor: 0, ownerReimbursedMinor: 0 });
+    expect(L6.leftSinceReading).toEqual({ paymentsSettledMinor: 0, refundsMinor: 0, cardRepaidMinor: 0, ownerReimbursedMinor: 0, ownerWithdrawnMinor: 0 });
     expect(L6.freeMinor).toBe(L5.freeMinor);
+  });
+
+  it("owner withdrawals are recorded, not executed: profit distribution vs capital return, evidence from Transaction Search, once per PayPal id, never more than is the owner's", async () => {
+    const assess = (kind: string, amt: number) => R.one<any>(`fleet.fleet_admin_owner_withdrawal_assess($1, $2)`, [kind, amt]);
+    const record = (kind: string, amt: number, txn: string) => R.q(`SELECT fleet.fleet_admin_owner_withdrawal_record($1, $2, $3, 'test', $4) AS r`, [kind, amt, txn, OWNER]).then((x) => x[0].r);
+    const tsRow = (txn: string, amt: number) => cx("cx_paypal_txn_record", [W, rail.railId, JSON.stringify({ transactionId: txn, eventCode: "T0400", initiatedAt: new Date().toISOString(),
+      status: "S", currency: "GBP", amountMinor: amt, feeMinor: 0 })]);
+    // No Fleet profit has been contributed yet: nothing can be recorded as a profit distribution.
+    expect(await assess("profit_distribution", 100)).toMatchObject({ withdrawableMinor: 0, safe: false, how: expect.stringContaining("withdraw to your bank") });
+    await expect(record("profit_distribution", 100, "WDPROFIT0001")).rejects.toThrow(/at most 0 minor units can be recorded as profit_distribution/);
+    // A capital return with Transaction Search's own row: matched and attributed.
+    await balance(30_000);
+    const L0 = await liquidity();
+    const a = await assess("capital_return", 500);
+    expect(a.withdrawableMinor).toBeGreaterThan(500);
+    expect(typeof a.safe).toBe("boolean");
+    expect((await tsRow("WDCAPITAL0001", -500)).ok).toBe(true);
+    expect(await record("capital_return", 500, "WDCAPITAL0001")).toMatchObject({ ok: true, evidence: "transaction_search" });
+    expect((await R.q(`SELECT attributed_as FROM fleet.fleet_paypal_transactions WHERE transaction_id = 'WDCAPITAL0001'`))[0].attributed_as).toBe("owner_withdrawal");
+    expect(await record("capital_return", 500, "WDCAPITAL0001")).toMatchObject({ ok: true, replay: true });
+    await expect(record("profit_distribution", 500, "WDCAPITAL0001")).rejects.toThrow(/FLEET_ALREADY_CLAIMED/);
+    // Wrong evidence is refused: money received is not a withdrawal; an amount PayPal does not show is refused.
+    expect((await tsRow("WDIN00000001", 700)).ok).toBe(true);
+    await expect(record("capital_return", 700, "WDIN00000001")).rejects.toThrow(/money received, not a withdrawal/);
+    expect((await tsRow("WDCAPITAL0002", -300)).ok).toBe(true);
+    await expect(record("capital_return", 400, "WDCAPITAL0002")).rejects.toThrow(/PayPal shows 300 GBP/);
+    // Before Transaction Search has the row (it lags hours): recorded on the owner's word, evidence says so.
+    expect(await record("capital_return", 200, "WDCAPITAL0003")).toMatchObject({ ok: true, evidence: "owner_attested" });
+    // Money withdrawn after the reading is not available any more.
+    const L1 = await liquidity();
+    expect(L1.leftSinceReading.ownerWithdrawnMinor).toBe(700);
+    expect(L1.freeMinor).toBe(L0.freeMinor - 700);
+    await expect(svc.query(`SELECT fleet.fleet_admin_owner_withdrawal_record('capital_return', 1, 'WDSVC000001', NULL, $1)`, [OWNER])).rejects.toThrow(/permission denied/);
+    expect(await R.one(`fleet.fleet_event_route('owner_withdrawal_recorded', '{}'::jsonb)`)).toBe("P2_IMPORTANT");
   });
 });
 
@@ -227,3 +261,44 @@ describe.skipIf(!PG_BIN)("v77 envelope spending: the same contextual Fleet Contr
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
 });
+
+describe.skipIf(!PG_BIN)("v77 contextual capital sizing: Fleet Control lends what the treasury can actually release (PostgreSQL)", { timeout: 240_000 }, () => {
+  let R: EconomyRegistry;
+  let F: Founder;
+  let custody: pg.Pool;
+  let rail: ArmedCustody;
+  const ev = (n: number) => Array.from({ length: n }, (_, i) => ({ kind: "sales", observation: `evidence ${i}`, source: "https://example.test" }));
+  const request = (amountMinor: number) => R.econ(F, "capital.request", { idempotencyKey: `cr:${crypto.randomUUID()}`, ventureKey: "planners", purpose: "validated product run",
+    amountMinor, evidence: ev(3), expectedRevenueMinor: amountMinor * 3, expectedNetMinor: amountMinor, expectedPaybackDays: 30, downsideMinor: amountMinor, confidenceBp: 7000 });
+  beforeAll(async () => {
+    // £10,000 of ledger treasury capital — virtual (unbacked). With fixed fractions it would all look lendable.
+    R = await startEconomyRegistry(PG_BIN!, { founders: 1, allocationCents: 10_000, treasuryCents: 1_000_000, simulatedSettlement: false });
+    [F] = R.founders;
+    await R.store.grantServiceRole();
+    await R.store.grantCustodyRole();
+    custody = new pg.Pool({ connectionString: R.pgc.custodyUrl, max: 1, options: "-c search_path=fleet" });
+    await R.econ(F, "venture.create", { key: "planners", model: "digital_product", offer: "planners", state: "selected", channels: ["direct"] });
+    await R.econ(F, "rail.require", { ventureKey: "planners" });
+    rail = await liveRail(R.owner, "fleet", OWNER);
+    expect((await R.q(`SELECT fleet.fleet_admin_capital_policy_set($1::jsonb, $2) AS r`, [JSON.stringify({ sizing: "contextual", reapplyCooldownS: 0 }), OWNER]))[0].r).toMatchObject({ sizing: "contextual" });
+  });
+  afterAll(async () => { await custody?.end(); await R?.close(); });
+
+  it("no reading: no lending; with a reading: real cash less the agents' own money bounds the grant — unbacked ledger capital never counts; evidence still decides", async () => {
+    expect(await request(1_000)).toMatchObject({ outcome: "DEFER", reasons: ["TREASURY_LIQUIDITY"] });
+    // PayPal really holds £120. The agent's own £100 is its money, not the Fleet's to lend: £20 is lendable.
+    await custody.query(`SELECT fleet.cx_paypal_balance_record('custody-executor', $1, 'GBP', 12000, 12000)`, [rail.railId]);
+    const lend = await R.one<any>(`fleet.fleet_treasury_lendable()`);
+    expect(lend).toMatchObject({ known: true, agentsMoneyMinor: 10_000, lendableMinor: 2_000 });
+    const partial = await request(5_000);
+    expect(partial, JSON.stringify(partial)).toMatchObject({ outcome: "PARTIAL_APPROVE", approvedMinor: 2_000 });
+    // Within what is lendable, the evidence decides — no fixed share of the treasury applies.
+    await custody.query(`SELECT fleet.cx_paypal_balance_record('custody-executor', $1, 'GBP', 1000000, 1000000)`, [rail.railId]);
+    expect(await request(4_000)).toMatchObject({ outcome: "APPROVE", approvedMinor: 4_000 });
+    const neg = await R.econ(F, "capital.request", { idempotencyKey: `cr:${crypto.randomUUID()}`, ventureKey: "planners", purpose: "a bad bet", amountMinor: 1_000,
+      evidence: ev(3), expectedRevenueMinor: 500, expectedNetMinor: -500, expectedPaybackDays: 30, downsideMinor: 1_000, confidenceBp: 7000 });
+    expect(neg).toMatchObject({ outcome: "REJECT", reasons: ["NEGATIVE_EXPECTED_VALUE"] });
+    expect((await R.store.auditPrivileges()).problems).toEqual([]);
+  });
+});
+

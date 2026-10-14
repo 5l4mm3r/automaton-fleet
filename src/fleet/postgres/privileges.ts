@@ -1187,6 +1187,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_paypal_transactions: new Set(["cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute", "svc_settlement_paypal_match",
       // v66: a deposit backing the existing capital closes its transaction.
       "fleet_admin_capital_back",
+      // v77: a treasury debit evidencing an owner withdrawal is attributed by the owner's record.
+      "fleet_admin_owner_withdrawal_record",
       // v70: a treasury debit evidencing an AI-credit purchase closes its transaction.
       "fleet_admin_ai_credit_treasury_purchase",
       // v71: the counterparty from custody, and a debit attributed to an AI-credit purchase.
@@ -1298,6 +1300,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_public_site: new Set(["fleet_admin_public_site_set", "fleet_admin_sales_set"]),
     // v76: refunds / reversals / fees of the owner's proof purchase, only by custody's refund recorder.
     fleet_offer_proof_returns: new Set(["cx_paypal_refund_record"]),
+    // v77: owner withdrawals (profit distribution / capital return) only by the owner's record.
+    fleet_owner_withdrawal_records: new Set(["fleet_admin_owner_withdrawal_record"]),
     fleet_identity_connectors: new Set(["ix_connectors_publish"]),
     // v57: clawback evidence only from custody's sources and the owner's classification; posts only by the posting functions;
     // disputes by custody's record and the owner's resolution.

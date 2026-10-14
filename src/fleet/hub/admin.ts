@@ -207,6 +207,12 @@ export class PgHubAdmin {
   ownerPayableReimbursed(amountMinor: number, reference: string, actor: string) {
     return this.one(`SELECT fleet_admin_owner_payable_reimbursed($1, $2, $3) AS r`, [amountMinor, reference, actor]);
   }
+  /** v77: is an owner withdrawal of this kind and amount free cash now (before moving it in PayPal)? */
+  ownerWithdrawalAssess(kind: string, amountMinor: number) { return this.one(`SELECT fleet_admin_owner_withdrawal_assess($1, $2) AS r`, [kind, amountMinor]); }
+  /** v77: record an owner withdrawal made in PayPal (profit distribution or capital return), once per PayPal transaction id. */
+  ownerWithdrawalRecord(kind: string, amountMinor: number, txn: string, note: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_owner_withdrawal_record($1, $2, $3, $4, $5) AS r`, [kind, amountMinor, txn, note, actor]);
+  }
   /** v76: open or close sales to the public (closed: offer pages not public, no buys or briefs; order pages and the proof purchase work). */
   salesSet(open: boolean, actor: string) { return this.one(`SELECT fleet_admin_sales_set($1, $2) AS r`, [open, actor]); }
   offerProofBuy(slug: string, actor: string) { return this.one(`SELECT fleet_admin_offer_proof_buy($1, $2) AS r`, [slug, actor]); }

@@ -119,6 +119,10 @@
  *   economy-ai-credit-test-period-preview | economy-ai-credit-test-period-writeoff  (v74) pre-launch AI cost → the Fleet; owner payable waived as contributed capital (each journal once; never past the launch)
  *   economy-launch-boundary | economy-launch-boundary-record <note…>         (v74) the explicit launch boundary (owner, once)
  *   economy-public-site <https://origin> [seller notice…]                  (v76) where offer / order pages are served, and who the seller is
+ *   economy-owner-withdrawal-assess <profit_distribution|capital_return> <amountMinor>   (v77) is it free cash now? (before moving it)
+ *   economy-owner-withdrawal <profit_distribution|capital_return|reimbursement> <amountMinor> <paypalTxnId> [note…]
+ *                                                                           (v77) record what you withdrew in PayPal: once per id, never more than
+ *                                                                           undistributed profit / your capital / what is owed (reimbursement)
  *   economy-ai-credit-reimbursed <amountMinor> <paypalTxnId>                (v76) you paid yourself back from the treasury PayPal for AI credit
  *                                                                           your card paid: records it (once per reference, at most what is owed)
  *   economy-sales open|closed                                               (v76) sales to the public (closed by default: offer pages hidden,
@@ -179,7 +183,7 @@ export const HUB_COMMANDS = new Set([
   "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
-  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-sales", "economy-ai-credit-reimbursed", "economy-offer-proof", "hub-offers", "hub-enquiries",
+  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -359,6 +363,16 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.aiCreditTestPeriodWriteoff(actor);
     case "economy-launch-boundary":
       return (await h.launchBoundary()) ?? { recorded: false };
+    case "economy-owner-withdrawal-assess":
+      if (p.length !== 2) throw new Error("usage: economy-owner-withdrawal-assess <profit_distribution|capital_return> <amountMinor>");
+      return h.ownerWithdrawalAssess(p[0], int(p[1], "amountMinor"));
+    case "economy-owner-withdrawal":
+      if (p.length < 3 || !["profit_distribution", "capital_return", "reimbursement"].includes(p[0])) {
+        throw new Error("usage: economy-owner-withdrawal <profit_distribution|capital_return|reimbursement> <amountMinor> <paypalTxnId> [note…]");
+      }
+      // A reimbursement (AI credit your card paid) is its own record; the other two are withdrawals of profit or capital.
+      return p[0] === "reimbursement" ? h.ownerPayableReimbursed(int(p[1], "amountMinor"), p[2], actor)
+        : h.ownerWithdrawalRecord(p[0], int(p[1], "amountMinor"), p[2], p.slice(3).join(" ") || null, actor);
     case "economy-ai-credit-reimbursed":
       if (p.length !== 2) throw new Error("usage: economy-ai-credit-reimbursed <amountMinor> <paypalTxnId>");
       return h.ownerPayableReimbursed(int(p[0], "amountMinor"), p[1], actor);
