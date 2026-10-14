@@ -126,24 +126,25 @@ Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
 ## Current production deployment
 
-State after release e54ee56 (2026-10-12 20:32Z, schema 72 -> 73, UI 0.17.1 unchanged), per
-docs/evaluations/launch-candidate/release-e54ee56.md (release-d63a595.md, 69 -> 72, before it; launch-checklist-v65.md) and
+State after release 1945915 (2026-10-14 10:19Z, schema 73 -> 75, UI 0.17.1 -> 0.18.0), per
+docs/evaluations/launch-candidate/release-1945915.md (release-e54ee56.md, 72 -> 73, and release-d63a595.md, 69 -> 72, before it; launch-checklist-v65.md) and
 docs/fleet-production-runbook.md.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
 
 Controller runtime commit (approved, pinned and installed):
-e54ee56e2a1e97ab0dcb0493d2e50d64b494025c
+1945915ee10e81271a9ae66793d7e22aa63eabd5
 
 Runtime build ID:
-a86aa31bb5ea6f7e9ade8e63ce64456e9124933d467565f2c2ee2a2d12c5e4fb
+5db374f6b61314db25f52e79052369d9b615837cc11f9da2cfbc2c12be02863a
 
 Runtime lockfile SHA256:
 1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1
 
 Database schema:
-v73 (v70-v72 AI credit by funding source / evidence-first purchases / acquisition cost: d63a595, 2026-10-12 19:54Z;
+v75 (1945915, 2026-10-14 10:19Z: v74 pre-launch write-off + launch boundary INSTALLED, NOT APPLIED — owner-only, installing
+it authorises nothing; v75 read-only Virtual presence). Before: v73 (v70-v72 AI credit by funding source / evidence-first purchases / acquisition cost: d63a595, 2026-10-12 19:54Z;
 v73 one-time historical acquisition cost: e54ee56, 20:32Z). AI-credit setup recorded 20:14-20:32Z: policy owner_card,
 reconciled $41.29, opening lot cost 7000/8400, opening £18.24, historical correction applied once (801 journals) —
 owner payable £21.87, unbacked capital £200.00, nothing reimbursed
@@ -163,7 +164,7 @@ Current live topology:
   127.0.0.1:8443; admin.agentfleet.vip to the dashboard on 127.0.0.1:8790)
 - FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
 - Operator API (signed requests) on 127.0.0.1:8788 only, via the restricted SSH account fleet-op-tunnel
-- Admin UI: root = UI 0.17.1 (deployed 2026-10-12 16:59Z with b60e262; reused unchanged by d63a595 and e54ee56; FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.17.1;
+- Admin UI: root = UI 0.18.0 (deployed 2026-10-14 10:19Z with 1945915: Virtual Command Centre with live presence; hibernation shown only from a report < 26 h old, else unknown; FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.18.0, UI rollback `dashboard.env.before-release-1945915-*`). Before: 0.17.1 (2026-10-12 16:59Z with b60e262;
   UI rollback `dashboard.env.pre-0.17.1`; Capital backing panel (AI-credit opening pending); Spend reviews, business project folders + lessons panel; Mail page with dismiss / delete permanently (confirm, no step-up), Saved states, Proton checks)
 - Mail: Proton Bridge 3.27.1 (own unit, loopback), shared address fleet.treasury@proton.me, owner notifications to the owner's
   separate Proton address; PayPal rail b71b3f3c… ACTIVE for receiving (£1 test complete); money out still off; /hq-preview/ is NOT served (no preview tree since 0.12.x); agents shown as
