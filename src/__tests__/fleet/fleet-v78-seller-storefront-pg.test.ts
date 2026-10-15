@@ -83,6 +83,34 @@ describe.skipIf(!PG_BIN)("v78 legal seller + agent storefronts (PostgreSQL)", { 
     expect((await R.q(`SELECT company_number, registered_office FROM fleet.fleet_seller_identity`))[0]).toEqual({ company_number: null, registered_office: null });
   });
 
+  it("a legal-entity suffix is allowed only when the brand IS the legal seller company; any other brand is free", async () => {
+    const refusal = (name: string) => R.one<string | null>(`fleet.fleet_brand_refusal($1)`, [name]);
+    // Ordinary brands, including words that merely contain or start with a suffix, are free whoever the seller is.
+    for (const ok of ["Ledgerline", "Limited Edition Prints", "Incline Studio", "Help Desk Pro", "Corporate Templates Co"]) expect(await refusal(ok), ok).toBeNull();
+    // An individual seller: no brand may claim to be a company.
+    expect(await refusal("Test Holdings Ltd")).toMatch(/legal seller is not a company/);
+    expect(await refusal("Northwind LLC")).toMatch(/legal seller is not a company/);
+    expect((await R.econ(F, "venture.create", { key: "agency", model: "service", offer: "bookkeeping", state: "selected" })).ok).toBe(true);
+    const agency = await R.one<string>(`(SELECT venture_id::text FROM fleet.fleet_ventures WHERE venture_key = 'agency')`);
+    expect((await R.econ(F, "identity.create", { kind: "venture_identity", ventureKey: "agency", displayName: "Test Holdings Ltd",
+      bio: "Bookkeeping and month-end reporting for small firms, done carefully." })).ok).toBe(true);
+    expect(await R.one(`fleet.fleet_storefront($1::uuid)`, [agency])).toMatchObject({ brandRefused: expect.stringContaining("not a company") });
+    expect(await R.one(`fleet.fleet_storefront($1::uuid)`, [agency])).not.toHaveProperty("brand");
+    expect(await notice(agency)).not.toMatch(/Test Holdings|under the brand/);
+    // The seller is that company: its registered name (Ltd = Limited, spacing and a final dot ignored) or registered trading name.
+    expect(await set({ legalForm: "company", legalName: "Test Holdings Limited", tradingName: "Northwind LLC", companyNumber: "12345678",
+      registeredOffice: "9 Office Road, Testcity, TC9 9TC" })).toMatchObject({ ok: true });
+    for (const ok of ["Test Holdings Ltd", "test  holdings limited.", "Northwind LLC"]) expect(await refusal(ok), ok).toBeNull();
+    expect(await R.one(`fleet.fleet_storefront($1::uuid)`, [agency])).toMatchObject({ brand: "Test Holdings Ltd" });
+    expect(await notice(agency)).toContain("under the brand Test Holdings Ltd.");
+    // Another company name is still a false claim, as is a different suffix on the seller's name.
+    expect(await refusal("Acme Ltd")).toMatch(/not the legal seller \(Test Holdings Limited\)/);
+    expect(await refusal("Test Holdings Inc")).toMatch(/not the legal seller/);
+    // The seller becomes an individual again: the brand is no longer shown as a brand (no false company on any page).
+    expect(await set({ legalForm: "individual", legalName: "Test Owner", tradingName: null })).toMatchObject({ ok: true });
+    expect(await R.one(`fleet.fleet_storefront($1::uuid)`, [agency])).not.toHaveProperty("brand");
+  });
+
   it("buyer emails carry the statement (the delivery body and the agent's replies)", async () => {
     const body = await R.one<string>(`fleet.fleet_order_delivery_body(NULL::fleet.fleet_customer_orders, 'Here is your workbook.', 1)`);
     expect(body).toBe("Here is your workbook.\n\n--\nSold by Test Owner.\nAddress: 1 Test Street, Testtown, TT1 1TT\nVAT no. GB123456789\nComplaints: use your order page.");

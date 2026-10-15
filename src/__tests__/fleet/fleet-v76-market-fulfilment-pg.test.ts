@@ -447,4 +447,63 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect(owner.offers.length).toBe(2);
     expect(owner.reviews.passed).toBeGreaterThanOrEqual(5);
   });
+  it("v78: one agent, two ventures — each offer, order and buyer email carries its own venture's brand and routing address", async () => {
+    await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
+    const vid = (key: string) => R.one<string>(`(SELECT venture_id::text FROM fleet.fleet_ventures WHERE venture_key = $1)`, [key]);
+    const sheetsAddr = (await R.one<any>(`fleet.fleet_storefront($1::uuid)`, [await vid("sheets")])).supportEmail as string;
+    expect((await R.econ(F, "venture.create", { key: "courses", model: "digital_product", offer: "courses", state: "selected" })).ok).toBe(true);
+    // A general (venture-less) address of the agent: the second venture uses it until it has its own — never the first venture's.
+    const general = await R.econ(F, "mailbox.provision", { idempotencyKey: idem() });
+    expect(general.ok).toBe(true);
+    expect((await R.econ(F, "identity.create", { kind: "venture_identity", ventureKey: "courses", displayName: "Coursewise",
+      bio: "Short practical courses that teach small-business owners to run their numbers." })).ok).toBe(true);
+    const o = await R.econ(F, "offer.create", { venture: "courses", kind: "product", title: "Cash-flow basics course", summary: "A short course on forecasting cash for small firms.",
+      description: "Five lessons with worked examples and a workbook to practise forecasting month-end cash.", deliverables: ["Cash-flow workbook (.xlsx)", "Quick-start guide (.pdf)"],
+      priceMinor: 1_500, terms: "Digital download; refunds if the files do not open or do not match the description." });
+    const offerId = o.offer.offerId;
+    const wb = Buffer.from("PK course workbook"), guide = Buffer.from("%PDF-1.4 course guide");
+    for (const [n, b, t] of [["cashflow.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"], ["guide.pdf", guide, "application/pdf"]] as const) {
+      expect((await R.econ(F, "offer.file", { offerId, role: "deliverable", fileName: n, contentType: t, contentB64: b.toString("base64") })).ok).toBe(true);
+    }
+    const rv = await review(F, { subject: "offer", offerId }, [{ name: "cashflow.xlsx", bytes: wb }, { name: "guide.pdf", bytes: guide }]);
+    const p = await R.econ(F, "offer.publish", { offerId, reviewId: rv.reviewId });
+    expect(p.ok, JSON.stringify(p)).toBe(true);
+    expect((await pub("svc_offer_page", [p.offer.slug])).offer).toMatchObject({ brand: "Coursewise", supportEmail: general.address });
+    expect(general.address).not.toBe(sheetsAddr);
+    // Its own routing address takes over; the first venture keeps its own.
+    const own = await R.econ(F, "mailbox.provision", { ventureKey: "courses", idempotencyKey: idem() });
+    const page = await pub("svc_offer_page", [p.offer.slug]);
+    expect(page.offer).toMatchObject({ brand: "Coursewise", supportEmail: own.address });
+    expect(page.seller).toContain("under the brand Coursewise.");
+    expect(page.seller).toContain(`Customer support: ${own.address}`);
+    expect(page.seller).not.toMatch(/Ledgerline|sheets/);
+    const sheetsOffer = (await R.econ(F, "offer.list", {})).offers.find((x: any) => x.title === "Small business cash-flow workbook");
+    expect((await pub("svc_offer_page", [sheetsOffer.slug])).offer).toMatchObject({ brand: "Ledgerline", supportEmail: sheetsAddr });
+    // A purchase: the order is the venture's; the delivery email replies to the venture's address and names its brand.
+    const b = await pub("svc_offer_buy", [p.offer.slug, sha("buyer-courses")]);
+    expect(await R.one(`(SELECT venture_id::text FROM fleet.fleet_customer_orders WHERE access_token = $1)`, [b.token])).toBe(await vid("courses"));
+    const checkoutId = await checkoutOf(b.token);
+    await open(checkoutId);
+    await pay(checkoutId, 1_500, "learner@example.test");
+    expect(await pub("svc_offer_tick", [20])).toMatchObject({ ok: true, delivered: 1 });
+    await broker.tick();
+    const delivery = shared.outbox.at(-1)!;
+    expect(delivery.to).toEqual(["learner@example.test"]);
+    expect(delivery.replyTo).toBe(own.address);
+    expect(delivery.body).toContain("under the brand Coursewise.");
+    expect(delivery.body).toContain(`Customer support: ${own.address}`);
+    expect(delivery.body).not.toMatch(/Ledgerline/);
+    expect((await pub("svc_order_page", [b.token])).seller).toContain("under the brand Coursewise.");
+    // The agent's message about that order: same venture, same address, same brand.
+    const ord = (await R.econ(F, "order.list", {})).orders.find((x: any) => x.page === `https://shop.fleet.test/order/${b.token}`);
+    expect((await R.econ(F, "order.message", { orderId: ord.orderId, message: "Lesson 3 has an extra worked example now." })).ok).toBe(true);
+    await broker.tick();
+    const msg = shared.outbox.at(-1)!;
+    expect(msg).toMatchObject({ to: ["learner@example.test"], replyTo: own.address });
+    expect(msg.body).toContain("under the brand Coursewise.");
+    // The first venture's earlier delivery went out under its own brand and address.
+    const first = shared.outbox.find((m) => m.to.includes("buyer@example.test") && /Ledgerline/.test(m.body))!;
+    expect(first.replyTo).toBe(sheetsAddr);
+    expect(first.body).not.toMatch(/Coursewise/);
+  });
 });

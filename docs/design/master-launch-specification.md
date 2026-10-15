@@ -1104,8 +1104,13 @@ profile and chooses no business name.
 VAT number, then the owner's optional extra notice (`economy-public-site <origin> [extra notice]`). The offer page also shows
 "About <brand>" with the agent's description and support address.
 **Publishing needs**: the public site, the legal seller (`FLEET_PUBLIC_SITE_SELLER_UNSET`), the venture's storefront identity with a
-description of 40+ characters (`FLEET_STOREFRONT_PROFILE`), a brand name without a legal-entity suffix such as Ltd / Inc
-(`FLEET_STOREFRONT_NAME`), a routing address, a receiving rail and a passing review.
+description of 40+ characters (`FLEET_STOREFRONT_PROFILE`), a routing address, a receiving rail and a passing review.
+**Company names**: any brand is free unless it carries a legal-entity suffix (Ltd, Limited, LLP, PLC, Inc, LLC, GmbH, Corp…). Such a
+brand must BE the legal seller — the seller is a company and the brand is its registered name or registered trading name (Ltd =
+Limited, Inc = Incorporated, Corp = Corporation; spacing / final dot ignored) — otherwise publishing answers `FLEET_STOREFRONT_NAME`.
+If the seller later changes so a published brand no longer matches, that brand is simply not shown as a brand (never a false company).
+**Several ventures per agent**: each venture's pages, orders and buyer emails use that venture's own identity and its own routing
+address (Reply-To and "Customer support"); without one, the agent's general (venture-less) address — never another venture's.
 
 ### 31.9 Capital allocation: which bounds are fixed, which can be disabled, and contextual sizing (v77)
 | v30 parameter | Mandatory? | Effect | Under `sizing: contextual` |

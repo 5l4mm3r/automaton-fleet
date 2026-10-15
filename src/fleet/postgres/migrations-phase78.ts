@@ -14,10 +14,14 @@
  *     as the trading style, the postal address, the support address and the VAT / company details — composed from 1 and 2
  *     (fleet_seller_notice). The owner's optional free-text notice (economy-public-site) is appended, no longer required.
  *  4. Publishing an offer needs the legal seller recorded (FLEET_PUBLIC_SITE_SELLER_UNSET) and the venture's storefront identity with a real
- *     description (FLEET_STOREFRONT_PROFILE); a brand name cannot carry a legal-entity suffix (FLEET_STOREFRONT_NAME): the legal
- *     seller is shown separately, and a brand must not claim to be a company it is not.
+ *     description (FLEET_STOREFRONT_PROFILE). A brand carrying a legal-entity suffix (Ltd, LLC, GmbH…) must BE the legal seller —
+ *     its registered name or registered trading name, the company being the seller (FLEET_STOREFRONT_NAME); any other brand is
+ *     free. A brand that stops matching (the owner changes the seller) is not shown as a brand at all — never a false company.
+ *  5. Several ventures per agent: each venture's storefront, pages and buyer emails use that venture's own identity and its own
+ *     routing address — else the agent's general (venture-less) address, never another venture's (fleet_venture_mailbox).
  * Nothing here moves money, changes a live flag, opens sales or grants authority.
  */
+import { V56_SQL } from "./migrations-phase56.js";
 import { V76_SQL } from "./migrations-phase76.js";
 import { V77_SQL } from "./migrations-phase77.js";
 import { restate as restateRaw } from "./migrations-phase42.js";
@@ -34,6 +38,10 @@ export const SELLER_FIELDS = ["legalForm", "legalName", "tradingName", "postalAd
 export const STOREFRONT_MIN_BIO = 40;
 /** v78: legal-entity suffixes a brand (trading style) may not carry — the legal seller is stated separately. */
 export const LEGAL_SUFFIX_RE = "(^|[^a-z])(ltd|limited|llp|plc|inc|incorporated|llc|gmbh|corp|corporation|cic|lp|sarl|bv|pty)\\.?$";
+/** v78: equivalent spellings of one suffix (a brand "Acme Ltd" is the company "Acme Limited"). */
+const SUFFIX_CANON = "regexp_replace(regexp_replace(regexp_replace(regexp_replace(lower(btrim(regexp_replace(%s, '\\s+', ' ', 'g'))), '\\.$', ''), "
+  + "'(^|[^a-z])limited$', '\\1ltd'), '(^|[^a-z])incorporated$', '\\1inc'), '(^|[^a-z])corporation$', '\\1corp')";
+const canon = (x: string) => SUFFIX_CANON.replace("%s", x);
 
 const PUBLISH = restate(V76_SQL, "fleet_econ_offer_publish", [
   [`  IF NOT EXISTS (SELECT 1 FROM fleet_public_site WHERE id = 1) THEN RAISE EXCEPTION 'FLEET_PUBLIC_SITE_UNSET: the owner has not set the public site yet; prepare everything else and publish later'; END IF;
@@ -43,11 +51,11 @@ const PUBLISH = restate(V76_SQL, "fleet_econ_offer_publish", [
     RAISE EXCEPTION 'FLEET_PUBLIC_SITE_SELLER_UNSET: the owner has not recorded the legal seller details yet; prepare everything else and publish later';
   END IF;
   v_store := fleet_storefront(o.venture_id);
+  IF v_store ? 'brandRefused' THEN
+    RAISE EXCEPTION 'FLEET_STOREFRONT_NAME: %', v_store ->> 'brandRefused';
+  END IF;
   IF v_store ->> 'brand' IS NULL OR length(COALESCE(v_store ->> 'about', '')) < ${STOREFRONT_MIN_BIO} THEN
     RAISE EXCEPTION 'FLEET_STOREFRONT_PROFILE: give this venture its storefront first — identity create_persona {kind: venture_identity, ventureKey, displayName (your brand name), bio (who it serves and what it offers, ${STOREFRONT_MIN_BIO}+ characters)}; update_persona changes the bio';
-  END IF;
-  IF lower(trim(v_store ->> 'brand')) ~ '${LEGAL_SUFFIX_RE}' THEN
-    RAISE EXCEPTION 'FLEET_STOREFRONT_NAME: a brand name cannot carry a legal-entity suffix (Ltd, Limited, LLP, PLC, Inc, LLC, GmbH…): the legal seller is stated separately on every page; create a venture identity without it';
   END IF;
 `],
   [`  IF NOT EXISTS (SELECT 1 FROM fleet_agent_mailboxes WHERE agent_id = p_agent AND status = 'active') THEN`,
@@ -66,16 +74,22 @@ const ORDER_PAGE = restate(V76_SQL, "svc_order_page", [
 ]);
 const OFFER_PUBLIC_JSON = restate(V76_SQL, "fleet_offer_public_json", [
   [`    'brand', (SELECT initcap(translate(v.venture_key, '-_.', '   ')) FROM fleet_ventures v WHERE v.venture_id = o.venture_id),`,
-   `    'brand', COALESCE(fleet_storefront(o.venture_id) ->> 'brand', (SELECT initcap(translate(v.venture_key, '-_.', '   ')) FROM fleet_ventures v WHERE v.venture_id = o.venture_id)),
+   `    'brand', COALESCE(fleet_storefront(o.venture_id) ->> 'brand', (SELECT initcap(translate(v.venture_key, '-_.', '   ')) FROM fleet_ventures v WHERE v.venture_id = o.venture_id
+                                                                     AND fleet_brand_refusal(initcap(translate(v.venture_key, '-_.', '   '))) IS NULL)),
     'about', fleet_storefront(o.venture_id) ->> 'about', 'supportEmail', fleet_storefront(o.venture_id) ->> 'supportEmail',`],
 ]);
 // Buyer emails carry the same seller statement (a durable record of who sold what).
 const CUSTOMER_MAIL = restate(V76_SQL, "fleet_customer_mail", [
   [`'body', p_body, 'ventureId'`, `'body', p_body || COALESCE(E'\\n\\n--\\n' || fleet_seller_notice(p_venture), ''), 'ventureId'`],
+  [`'idempotencyKey', left(p_idem, 128)))`, `'idempotencyKey', left(p_idem, 128)) || jsonb_strip_nulls(jsonb_build_object('from', fleet_venture_mailbox(p_venture))))`],
 ]);
 const DELIVERY_BODY = restate(V76_SQL, "fleet_order_delivery_body", [
   [`      || fleet_public_url('/order/' || o.access_token) END)`, `      || fleet_public_url('/order/' || o.access_token) END,
     '--' || E'\\n' || fleet_seller_notice(o.venture_id))`],
+]);
+const DELIVERY_SEND = restate(V56_SQL, "fleet_order_delivery_send", [
+  [`'idempotencyKey', left('order-delivery:' || d.delivery_id || ':' || p_attempt, 128)))`,
+   `'idempotencyKey', left('order-delivery:' || d.delivery_id || ':' || p_attempt, 128)) || jsonb_strip_nulls(jsonb_build_object('from', fleet_venture_mailbox(o.venture_id))))`],
 ]);
 const EVENT_ROUTE = restate(V77_SQL, "fleet_event_route", [
   ["    WHEN p_type = 'spend_circuit_breaker_set' THEN", (Object.entries(EVENT_ROUTES_V78) as Array<[string, readonly string[]]>)
@@ -101,14 +115,36 @@ CREATE TABLE fleet_seller_identity (
 );
 
 -- ═══ 2. A venture's storefront: the agent's own venture identity and its routing address ═══
+-- The routing address a venture's buyers deal with: the venture's own, else the agent's general (venture-less) one — never the
+-- address of another venture, so replies and support stay with the brand the buyer bought from.
+CREATE FUNCTION fleet_venture_mailbox(p_venture uuid) RETURNS text LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT b.address FROM fleet_agent_mailboxes b JOIN fleet_ventures v ON v.venture_id = p_venture AND v.agent_id = b.agent_id
+   WHERE b.status = 'active' AND (b.venture_id = p_venture OR b.venture_id IS NULL)
+     AND (b.channel_id IS NULL OR EXISTS (SELECT 1 FROM fleet_comms_providers c WHERE c.provider_id = b.channel_id AND c.status = 'active'))
+   ORDER BY (b.venture_id IS NOT DISTINCT FROM p_venture) DESC, b.created_at DESC LIMIT 1
+$$;
+
+-- A legal-entity suffix in a brand claims a registered company: allowed only when the brand IS the legal seller (a company) —
+-- its registered name or registered trading name (Ltd = Limited, Inc = Incorporated, Corp = Corporation). NULL = allowed.
+CREATE FUNCTION fleet_brand_refusal(p_name text) RETURNS text LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT CASE
+    WHEN p_name IS NULL OR NOT (lower(btrim(p_name)) ~ '${LEGAL_SUFFIX_RE}') THEN NULL
+    WHEN s.legal_form = 'company' AND ${canon("p_name")} IN (${canon("s.legal_name")}, COALESCE(${canon("s.trading_name")}, '')) THEN NULL
+    WHEN s.legal_form = 'company' THEN '"' || p_name || '" carries a legal-entity suffix but is not the legal seller (' || s.legal_name
+      || '): a brand may use a suffix only as the seller''s own registered name; choose a brand name without one'
+    ELSE '"' || p_name || '" carries a legal-entity suffix (Ltd, LLC, GmbH…) but the legal seller is not a company: choose a brand name without one'
+  END
+  FROM (SELECT 1) one LEFT JOIN fleet_seller_identity s ON s.id = 1
+$$;
+
 CREATE FUNCTION fleet_storefront(p_venture uuid) RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT jsonb_strip_nulls(jsonb_build_object(
-    'brand', i.display_name, 'about', i.bio,
-    'supportEmail', COALESCE(
-      (SELECT b.address FROM fleet_agent_mailboxes b WHERE b.venture_id = p_venture AND b.status = 'active' ORDER BY b.created_at DESC LIMIT 1),
-      (SELECT b.address FROM fleet_agent_mailboxes b JOIN fleet_ventures v ON v.agent_id = b.agent_id
-        WHERE v.venture_id = p_venture AND b.status = 'active' ORDER BY b.created_at DESC LIMIT 1))))
+    'brand', CASE WHEN fleet_brand_refusal(i.display_name) IS NULL THEN i.display_name END, 'about', i.bio,
+    'brandRefused', fleet_brand_refusal(i.display_name),
+    'supportEmail', fleet_venture_mailbox(p_venture)))
   FROM (SELECT 1) one
   LEFT JOIN LATERAL (SELECT x.display_name, x.bio FROM fleet_agent_identities x JOIN fleet_ventures v ON v.venture_id = x.venture_id AND v.agent_id = x.agent_id
                       WHERE x.venture_id = p_venture AND x.status = 'active' AND x.kind IN ('venture_identity','brand')
@@ -200,5 +236,6 @@ ${ENQUIRY_PAGE}
 ${ORDER_PAGE}
 ${CUSTOMER_MAIL}
 ${DELIVERY_BODY}
+${DELIVERY_SEND}
 ${EVENT_ROUTE}
 `;
