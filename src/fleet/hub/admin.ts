@@ -219,6 +219,12 @@ export class PgHubAdmin {
   seller() { return this.one(`SELECT fleet_admin_seller() AS r`, []); }
   offerProofBuy(slug: string, actor: string) { return this.one(`SELECT fleet_admin_offer_proof_buy($1, $2) AS r`, [slug, actor]); }
   offers(agentId: string | null) { return this.one(`SELECT fleet_offers_admin_json($1) AS r`, [agentId]); }
+  /** v79: each agent's business beyond the offer pages (channels, live presence, leads, obligations, outreach, payouts awaiting the owner). */
+  business(agentId: string | null) { return this.one(`SELECT fleet_business_admin_json($1) AS r`, [agentId]); }
+  /** v79: book a channel payout against a named treasury PayPal credit, or reject the claim. */
+  channelPayoutDecide(payoutId: string, decision: "book" | "reject", paypalTxn: string | null, note: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_channel_payout_decide($1::uuid, $2, $3, $4, $5) AS r`, [payoutId, decision, paypalTxn, note, actor]);
+  }
   enquiries(agentId: string | null) { return this.one(`SELECT fleet_enquiries_admin_json($1) AS r`, [agentId]); }
   aiCreditOpening(actor: string) { return this.one(`SELECT fleet_admin_ai_credit_opening($1) AS r`, [actor]); }
   capitalBack(railId: string, txnId: string, eventCode: string, actor: string) {

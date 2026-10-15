@@ -64,7 +64,7 @@ function fakePayPal() {
         o.capture = { id: id("C"), fee: "0.70" };
         txns.push({ transaction_info: { transaction_id: o.capture.id, transaction_event_code: "T0006", transaction_initiation_date: new Date().toISOString(),
           transaction_status: "S", transaction_amount: { value: o.amount, currency_code: o.currency }, fee_amount: { value: `-${o.capture.fee}`, currency_code: o.currency },
-          custom_field: o.checkoutId, invoice_id: `fleet:${o.checkoutId}` } });
+          custom_field: o.checkoutId, invoice_id: `fleet:${o.checkoutId}` }, payer_info: { email_address: "ada.buyer@example.test", payer_name: { alternate_full_name: "Ada Buyer" } } });
       }
       if (failCaptureOnce) { failCaptureOnce = false; return json(500, {}); } // captured at PayPal, answer lost
       return json(201, { id: o.id, status: "COMPLETED", purchase_units: [{ payments: { captures: [{ id: o.capture.id, status: "COMPLETED",
@@ -237,6 +237,20 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury worker end to end (PostgreSQL + HT
     expect(await cash()).toBe(before - 400);
     expect(await R.one(`(SELECT sum(amount_minor)::int FROM fleet.fleet_paypal_clawback_posts WHERE checkout_id = $1 AND grp = 'reversal')`, [o.checkoutId])).toBe(100);
     expect((await R.econ(F, "order.list", {})).orders.find((x: any) => x.checkoutId === o.checkoutId)).toMatchObject({ refundedMinor: 900 });
+  });
+
+  it("v79: Transaction Search records the payer of an incoming credit that is not a checkout capture (a channel payout); it books nothing", async () => {
+    const before = await cash();
+    pp.txns.push({ transaction_info: { transaction_id: "ETSYPAYOUT001", transaction_event_code: "T0000", transaction_initiation_date: new Date().toISOString(),
+      transaction_status: "S", transaction_amount: { value: "13.60", currency_code: "GBP" }, fee_amount: { value: "-0.45", currency_code: "GBP" } },
+      payer_info: { email_address: "payouts@etsy.example", payer_name: { alternate_full_name: "Etsy Ireland UC" } } });
+    await worker.tick();
+    expect(await R.one(`(SELECT counterparty FROM fleet.fleet_paypal_transactions WHERE transaction_id = 'ETSYPAYOUT001')`)).toMatch(/Etsy Ireland UC/);
+    expect(await R.one(`(SELECT attributed_as FROM fleet.fleet_paypal_transactions WHERE transaction_id = 'ETSYPAYOUT001')`)).toBeNull();
+    expect(await cash()).toBe(before);
+    // A checkout capture's credit keeps no payer record (the buyer is recorded on the order, visible to its agent only).
+    const [o] = [...pp.orders.values()];
+    expect(await R.one(`(SELECT counterparty FROM fleet.fleet_paypal_transactions WHERE transaction_id = $1)`, [o.capture!.id])).toBeNull();
   });
 
   it("a capture whose response was lost is found by Transaction Search and posted exactly once; balances are observed", async () => {

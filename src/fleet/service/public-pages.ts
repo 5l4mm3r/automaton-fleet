@@ -10,6 +10,11 @@
  *   POST /order/<token>/message             a buyer message (+ files) about the order
  *   GET  /enquiry/<token>                   the buyer's request: brief, thread, quote → order page
  *   POST /enquiry/<token>/message           a buyer message (+ files) about the request
+ *   GET  /u/<token>, POST /u/<token>        v79: an outreach recipient's opt-out (GET asks, POST records — a link scanner
+ *                                           never opts anyone out); never written to first again by any agent
+ *
+ * v79: an offer link with ?ref=<channel code> carries the agent's channel onto the order / enquiry it brings (attribution
+ * only: a code of another agent or venture attributes nothing); image samples are shown on the offer page.
  *
  * Nothing here authenticates an agent or reaches agent state beyond the service-role svc_* functions, which validate every
  * argument, rate-limit per buyer origin and expose only what the token holder's own page needs. Tokens are 256-bit random
@@ -93,7 +98,7 @@ export class PublicPages {
 
   /** True when the path is a public page (handled here, whatever the outcome). */
   static matches(path: string): boolean {
-    return /^\/(o|order|enquiry)\//.test(path);
+    return /^\/(o|order|enquiry|u)\//.test(path);
   }
 
   async handle(req: http.IncomingMessage, res: http.ServerResponse, path: string, ip: string): Promise<void> {
@@ -103,13 +108,16 @@ export class PublicPages {
     if (!(isPost ? this.writes : this.reads).take(origin)) { page(res, 429, "Too many requests", "<h1>Too many requests</h1><p>Please wait a few minutes and try again.</p>", null); return; }
     // Same-origin POSTs only (the page's own form or script): a cross-site form cannot buy, brief or message on a buyer's behalf.
     if (isPost && !this.sameOrigin(req)) { this.json(res, 403, { ok: false, reason: "cross-site request refused" }); return; }
+    // v79: the channel attribution code of the link the buyer followed (12 hex characters; anything else is ignored).
+    const ref = /[?&]ref=([0-9a-f]{12})(?:&|$)/.exec(req.url ?? "")?.[1] ?? null;
     try {
       const p = path.split("/").filter(Boolean);
+      if (p[0] === "u" && TOKEN.test(p[1] ?? "") && p.length === 2) return await this.optOut(res, p[1], isPost);
       if (p[0] === "o" && SLUG.test(p[1] ?? "")) {
-        if (p.length === 2 && !isPost) return await this.offer(res, p[1]);
+        if (p.length === 2 && !isPost) return await this.offer(res, p[1], ref);
         if (p.length === 4 && p[2] === "preview" && /^[1-4]$/.test(p[3]) && !isPost) return await this.preview(res, p[1], Number(p[3]));
-        if (p.length === 3 && p[2] === "buy" && isPost) return await this.buy(req, res, p[1], origin);
-        if (p.length === 3 && p[2] === "enquire" && isPost) return await this.enquire(req, res, p[1], origin);
+        if (p.length === 3 && p[2] === "buy" && isPost) return await this.buy(req, res, p[1], origin, ref);
+        if (p.length === 3 && p[2] === "enquire" && isPost) return await this.enquire(req, res, p[1], origin, ref);
       }
       if (p[0] === "order" && TOKEN.test(p[1] ?? "")) {
         if (p.length === 2 && !isPost) return await this.order(res, p[1]);
@@ -155,7 +163,17 @@ export class PublicPages {
     return Object.fromEntries(new URLSearchParams(raw));
   }
 
-  private async offer(res: http.ServerResponse, slug: string): Promise<void> {
+  /** v79: an outreach recipient's opt-out: GET explains and asks; POST (this page's own button) records it. */
+  private async optOut(res: http.ServerResponse, token: string, confirm: boolean): Promise<void> {
+    const r = await this.port.publicCall("svc_outreach_optout", [token, confirm]);
+    if (!r.ok) { page(res, 404, "Not found", "<h1>Not found</h1><p>This link is not valid.</p>", null); return; }
+    const who = r.brand ? esc(r.brand) : "us";
+    if (r.optedOut) { page(res, 200, "Unsubscribed", `<h1>You will not hear from ${who} again</h1><p>Your address is on our do-not-contact list for all of our businesses.</p>`, null); return; }
+    page(res, 200, "Unsubscribe", `<h1>Stop messages from ${who}?</h1><p>We wrote to you once about something we thought useful. Confirm and no business of ours will write to you first again.</p>`
+      + `<form method="post" action="/u/${esc(token)}"><button type="submit">Yes, stop all messages</button></form>`, null);
+  }
+
+  private async offer(res: http.ServerResponse, slug: string, ref: string | null = null): Promise<void> {
     const r = await this.port.publicCall("svc_offer_page", [slug]);
     if (!r.ok) { page(res, 404, "Not found", "<h1>Not found</h1><p>This offer is not available.</p>", null); return; }
     const o = r.offer as Record<string, any>;
@@ -164,16 +182,20 @@ export class PublicPages {
       o.revisions != null ? `${esc(o.revisions)} revision${o.revisions === 1 ? "" : "s"} included` : ""].filter(Boolean);
     const previews = Array.isArray(o.previews) ? o.previews as Array<Record<string, unknown>> : [];
     let action = "";
+    const q = ref ? `?ref=${ref}` : "";
     if (!o.available) action = `<p class="warn">${o.atCapacity ? "Fully booked right now — please check back soon." : "Not available right now."}</p>`;
-    else if (o.kind === "product") action = `<form method="post" action="/o/${esc(o.slug)}/buy"><button type="submit">Buy with PayPal — ${money(o.priceMinor, o.currency)}</button></form>`;
-    else action = `<p class="muted">Send your brief first: the seller confirms the scope, price and delivery date before you pay.</p>${messageForm(`/o/${o.slug}/enquire`, nonce, { brief: true })}`;
+    else if (o.kind === "product") action = `<form method="post" action="/o/${esc(o.slug)}/buy${q}"><button type="submit">Buy with PayPal — ${money(o.priceMinor, o.currency)}</button></form>`;
+    else action = `<p class="muted">Send your brief first: the seller confirms the scope, price and delivery date before you pay.</p>${messageForm(`/o/${o.slug}/enquire${q}`, nonce, { brief: true })}`;
     page(res, 200, o.title, `<p class="muted">${esc(o.brand)}</p><h1>${esc(o.title)}</h1><p>${esc(o.summary)}</p>`
       + `<div class="card"><div class="price">${o.kind === "service" ? "From " : ""}${money(o.priceMinor, o.currency)}</div><p class="muted">${facts.join(" · ")}</p>${o.kind === "product" ? action : ""}</div>`
       + (o.audience ? `<p><strong>For:</strong> ${esc(o.audience)}</p>` : "")
       + `<div class="card"><h2>What you get</h2><ul>${(o.deliverables as string[]).map((d) => `<li>${esc(d)}</li>`).join("")}</ul>`
       + (Array.isArray(o.files) && o.files.length ? `<p class="muted">Files: ${(o.files as Array<Record<string, unknown>>).map((f) => `${esc(f.fileName)} (${kb(f.sizeBytes)})`).join(", ")}</p>` : "") + `</div>`
       + `<div class="card"><h2>Details</h2>${para(o.description)}</div>`
-      + (previews.length ? `<div class="card"><h2>Samples</h2><ul>${previews.map((f) => `<li><a href="/o/${esc(o.slug)}/preview/${esc(f.n)}">${esc(f.fileName)}</a> (${kb(f.sizeBytes)})</li>`).join("")}</ul></div>` : "")
+      + (previews.length ? `<div class="card"><h2>Samples</h2>`
+        // v79: image samples (the agent's listing graphics, mockups) are shown; other samples are links.
+        + previews.filter((f) => /^image\/(png|jpeg)$/.test(String(f.contentType))).map((f) => `<p><img src="/o/${esc(o.slug)}/preview/${esc(f.n)}" alt="${esc(f.fileName)}" style="max-width:100%;border-radius:8px"></p>`).join("")
+        + `<ul>${previews.map((f) => `<li><a href="/o/${esc(o.slug)}/preview/${esc(f.n)}">${esc(f.fileName)}</a> (${kb(f.sizeBytes)})</li>`).join("")}</ul></div>` : "")
       + `<div class="card"><h2>Terms</h2>${para(o.terms)}</div>` + (o.kind === "service" ? action : "")
       // v78: the agent's own storefront (its venture identity) and its support address.
       + (o.about || o.supportEmail ? `<div class="card"><h2>About ${esc(o.brand)}</h2>${o.about ? para(o.about) : ""}`
@@ -193,17 +215,18 @@ export class PublicPages {
     res.end(Buffer.from(b64, "base64"));
   }
 
-  private async buy(req: http.IncomingMessage, res: http.ServerResponse, slug: string, origin: string): Promise<void> {
+  private async buy(req: http.IncomingMessage, res: http.ServerResponse, slug: string, origin: string, ref: string | null = null): Promise<void> {
     await this.body(req);
     const r = await this.port.publicCall("svc_offer_buy", [slug, origin]);
     if (!r.ok) {
       page(res, r.code === "FLEET_BUSY" ? 429 : 409, "Not available", `<h1>Not available right now</h1><p>${r.code === "FLEET_BUSY" ? "Too many open checkouts — please try again later." : "This offer cannot be bought at the moment."}</p><p><a href="/o/${esc(slug)}">Back to the offer</a></p>`, null);
       return;
     }
+    if (ref) await this.port.publicCall("svc_attribute", ["order", String(r.token), ref]).catch(() => undefined);
     res.writeHead(303, { location: `/order/${r.token}`, "cache-control": "no-store", "referrer-policy": "no-referrer" }).end();
   }
 
-  private async enquire(req: http.IncomingMessage, res: http.ServerResponse, slug: string, origin: string): Promise<void> {
+  private async enquire(req: http.IncomingMessage, res: http.ServerResponse, slug: string, origin: string, ref: string | null = null): Promise<void> {
     const b = await this.body(req);
     if (!b) { this.json(res, 413, { ok: false, reason: "too large (files are 5 MB each, 3 at most)" }); return; }
     if (b.website) { this.json(res, 200, { ok: true }); return; } // a bot filled the hidden field
@@ -213,6 +236,7 @@ export class PublicPages {
         : r.code === "FLEET_BUSY" ? "Too many requests — please try again later." : typeof r.reason === "string" ? r.reason : "This request could not be sent." });
       return;
     }
+    if (ref) await this.port.publicCall("svc_attribute", ["enquiry", String(r.token), ref]).catch(() => undefined);
     this.json(res, 200, { ok: true, next: `/enquiry/${r.token}` });
   }
 

@@ -133,6 +133,11 @@
  *   economy-offer-proof <slug>                                              (v76) your live proof purchase of an agent's product: pay it yourself;
  *                                                                           booked as owner capital (net of fee), never the agent's revenue
  *   hub-offers [agentId] | hub-enquiries [agentId]                          (v76) agents' offers (reviews, orders, links) and buyers' enquiries
+ *   hub-business [agentId]                                                 (v79) agents' channels, live presence, leads, obligations, outreach and
+ *                                                                           channel payouts waiting for you
+ *   economy-channel-payout-decide <payoutId> book <paypalTxnId> | reject [note…]
+ *                                                                           (v79) book a channel payout against the treasury PayPal credit it arrived
+ *                                                                           as (a bank payout: move it into PayPal first), or reject the claim
  *   economy-capital-backing                                                  (v66) the existing capital: virtual, provider-paid, backed, unbacked; books vs PayPal
  *   economy-capital-back <railId> <txnId> <eventCode>                        (v66) a PayPal deposit backs the existing capital (no second credit; any excess is owner funding)
  *   owner-identity-autonomy [on|off] [--classes c1,c2] [--card on|off] [--card-max n] [--card-daily n] [--exclude https://a,https://b] [statement…]
@@ -186,7 +191,7 @@ export const HUB_COMMANDS = new Set([
   "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
-  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries",
+  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -395,6 +400,14 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     }
     case "economy-seller":
       return h.seller();
+    case "hub-business":
+      return h.business(p[0] ?? null);
+    case "economy-channel-payout-decide":
+      if (p.length < 2 || !["book", "reject"].includes(p[1]) || (p[1] === "book" && !p[2])) {
+        throw new Error("usage: economy-channel-payout-decide <payoutId> book <paypalTxnId> | <payoutId> reject [note…]");
+      }
+      return p[1] === "book" ? h.channelPayoutDecide(p[0], "book", p[2], p.slice(3).join(" ") || null, actor)
+        : h.channelPayoutDecide(p[0], "reject", null, p.slice(2).join(" ") || null, actor);
     case "economy-public-site":
       if (p.length < 1) throw new Error("usage: economy-public-site <https://origin> [extra seller notice…] (the legal seller: economy-seller-set)");
       return h.publicSiteSet(p[0], p.slice(1).join(" ") || null, actor);

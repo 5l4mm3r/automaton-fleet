@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Agent document toolchain: a pinned, hash-verified set of Python wheels (toolchain/agent-tools.lock.json) that lets
 # a founder's sandboxed `exec` produce AND verify customer deliverables — XLSX (openpyxl, XlsxWriter, formulas
-# recalculation), DOCX (python-docx), PDF (reportlab, pypdf, pypdfium2), images (Pillow), spelling (pyspellchecker).
+# recalculation), DOCX (python-docx), PDF (reportlab, pypdf, pypdfium2), images (Pillow), spelling (pyspellchecker),
+# v79: slide decks (python-pptx) for courses and pitches.
 # The hosts' system python3 (3.12, stdlib only, no pip / ensurepip / venv) is enough: a wheel is a zip, so it is
 # unpacked with the stdlib zipfile module. Nothing is compiled, no installer runs, no package code runs at install.
 #
@@ -189,7 +190,7 @@ mods = {"openpyxl": "openpyxl", "et_xmlfile": "et-xmlfile", "xlsxwriter": "xlsxw
         "charset_normalizer": "charset-normalizer", "pypdf": "pypdf", "pypdfium2": "pypdfium2", "PIL": "pillow",
         "spellchecker": "pyspellchecker", "numpy": "numpy", "scipy": "scipy", "numpy_financial": "numpy-financial",
         "regex": "regex", "schedula": "schedula", "dateutil": "python-dateutil", "six": "six", "tqdm": "tqdm",
-        "click": "click", "formulas": "formulas"}
+        "click": "click", "formulas": "formulas", "pptx": "python-pptx"}
 out, ok = {}, tree == want
 for m, dist in mods.items():
     try:

@@ -481,7 +481,10 @@ export class PayPalTreasuryWorker {
         this.stats.transactions++;
         // v71: for money leaving the treasury, what PayPal says about the other side (names, e-mail, subject, note).
         // Which of these fields names the payee of an outgoing payment is verified on the first live debit.
-        if (rec.ok && amount < 0 && this.gw.paypalTxnCounterparty) {
+        // v79: for money arriving that is not a checkout capture, the payer too — a channel's payout (e.g. a marketplace
+        // paying into the treasury PayPal) is matched to the agent whose channel names that payer. Never a checkout's credit:
+        // a buyer's details stay on their order, visible to its agent only.
+        if (rec.ok && (amount < 0 || (amount > 0 && !(rec as any).checkoutId)) && this.gw.paypalTxnCounterparty) {
           const p = d?.payer_info ?? {};
           const who = [p.email_address, p.payer_name?.alternate_full_name, [p.payer_name?.given_name, p.payer_name?.surname].filter(Boolean).join(" "),
             t.transaction_subject, t.transaction_note].filter((x: unknown) => typeof x === "string" && x.trim()).join(" | ").slice(0, 200);

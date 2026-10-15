@@ -89,8 +89,11 @@ describe.skipIf(!PG_BIN)("v67: business foundation in the library; wake-up signa
     expect(st.ok).toBe(true);
     expect(st.entry.category).toBe("fleet-status");
     const facts = st.entry.factsThatChange as Array<{ fact: string; lastChecked: string; stale: boolean }>;
-    expect(facts.every((f) => f.lastChecked === "2026-10-14")).toBe(true); // v76: capability status v5
-    expect(facts.some((f) => /^UNRESOLVED/.test(f.fact) && /£500/.test(f.fact))).toBe(true);
+    expect(facts.every((f) => f.lastChecked === "2026-10-15")).toBe(true); // v79: capability status v6
+    // v79 (owner, 2026-10-15: channels are the agent's choice): the EU consumer route is a merchant-of-record platform the
+    // agent operates where its terms permit — no longer an unresolved owner decision; the £500 rule stays Gumroad's gateway's.
+    expect(facts.some((f) => /^EU consumer digital sales: through a merchant-of-record platform/.test(f.fact) && /£500/.test(f.fact))).toBe(true);
+    expect(facts.some((f) => /^UNRESOLVED/.test(f.fact))).toBe(false);
     expect(st.entry.body).toMatch(/never treat today's onboarding gaps as permanent/);
   });
 

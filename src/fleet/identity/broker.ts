@@ -337,7 +337,8 @@ export class IdentityBroker {
       let error: string | null = null;
       let used: string | null = null;
       const scope = (kind: string) => ({ agentId: r.agentId, accountId: r.accountId, kind });
-      const cred = (kind: string) => r.credentials.find((c) => c.kind === kind) ?? null;
+      // v79: only an active credential is served as the account's own; a pending password only as new_password.
+      const cred = (kind: string) => r.credentials.find((c) => c.kind === kind && (c.status ?? "active") === "active") ?? null;
       try {
         switch (r.kind) {
           case "username": value = r.handle ?? null; break;
@@ -350,6 +351,12 @@ export class IdentityBroker {
           case "totp": {
             const c = cred("totp");
             if (c) value = await this.vault.withSecret(c.vaultRef, scope("totp"), async (seed) => totp(seed));
+            break;
+          }
+          // v79: the new password of a change / reset again (a "confirm new password" field).
+          case "new_password": {
+            const c = r.credentials.find((x) => x.kind === "password" && x.status === "pending");
+            if (c) value = await this.vault.withSecret(c.vaultRef, scope("password"), async (x) => x);
             break;
           }
           case "generate_password": {

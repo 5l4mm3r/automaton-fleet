@@ -7,12 +7,22 @@
  * Sessions live in memory (a worker restart ends them: the next action reports FLEET_BROWSER_SESSION_LOST and the agent
  * opens a new one). Every request a page makes is checked against the URL policy. v51: an `upload` step sets an owner
  * document (under the owner's standing authority) into the page's file input from memory.
+ *
+ * v79 — the general operator's missing hands: `upload_file` sets files the agent staged from its own workspace (a logo, a
+ * listing image, a product file) into a page's file input; `download` saves what a page offers for the agent; `screenshot`
+ * and `pdf` capture the page (inputs masked; refused once the session has handled the owner's card / facts or captured a
+ * secret); `set_content` renders an HTML file the agent staged (brand images, listing graphics, mockups — then screenshot
+ * or pdf), only in a session without an account; `hover`, `scroll`, `uncheck`, `wait_idle`, `tab` (popups and new tabs
+ * become the current tab), `dialog` (accept or dismiss the next alert / confirm / prompt) and a `frame` on any element
+ * step (embedded editors, hosted card fields). A name that resolves to a private or loopback address is refused on every
+ * request (HostResolutionPolicy) — this closes a gap: the unit allows loopback for PostgreSQL.
  */
 import crypto from "crypto";
+import fs from "fs";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { generateX25519, openSealed, sealTo } from "../identity/crypto.js";
 import type { BrowserAction, BrowserGatewayPort } from "./gateway.js";
-import { browserUrlAllowed } from "./policy.js";
+import { HostResolutionPolicy } from "./policy.js";
 
 export interface BrowserWorkerOptions {
   worker?: string;
@@ -25,6 +35,8 @@ export interface BrowserWorkerOptions {
   /** Chromium's own sandbox (off only where the host cannot provide it; the service's isolation remains). */
   chromiumSandbox?: boolean;
   log?: (level: string, event: string, detail?: Record<string, unknown>) => void;
+  /** v79: the resolution policy (tests inject a resolver). */
+  hostPolicy?: HostResolutionPolicy;
 }
 
 interface Session {
@@ -33,19 +45,40 @@ interface Session {
   secrets: Set<string>;
   /** v49: values filled from the owner's facts / card (redacted from snapshots at a shorter length). */
   ownerValues: Set<string>;
+  /** v79: every tab of the session (popups included); `page` is the current one. */
+  pages: Page[];
+  /** v79: a captured secret was shown on a page of this session (no image of it may leave the worker). */
+  captured: boolean;
+  /** v79: the decision for the next dialog (otherwise dismissed), and the last dialog's text. */
+  dialog: { accept: boolean; text?: string } | null;
+  lastDialog: string | null;
+  /** v79: files the page produced during the current action. */
+  produced: Array<{ fileId: string; kind: string; fileName: string; sizeBytes: number }>;
+  /** v79: make a new tab (popup) part of the session and the current tab. */
+  adopt: (p: Page) => void;
 }
 
 const TEXT_MAX = 8000;
+/** v79: the largest file a page may hand over (download / screenshot / pdf). */
+export const BROWSER_FILE_MAX_BYTES = 25_000_000;
+const EXT_TYPES: Record<string, string> = { pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif",
+  svg: "image/svg+xml", csv: "text/csv", txt: "text/plain", json: "application/json", zip: "application/zip", html: "text/html", md: "text/markdown",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", mp4: "video/mp4", mp3: "audio/mpeg" };
+/** v79: a download whose name says it carries credentials never reaches the agent (a shown secret is captured into the vault instead). */
+const CREDENTIAL_FILE = /recovery|backup[ _-]?codes|secret|credential|private[ _-]?key|\.pem$|\.key$/i;
 
 export class BrowserWorker {
   private readonly worker: string;
   private browser: Browser | null = null;
   private readonly sessions = new Map<string, Session>();
   private readonly key = generateX25519();
+  private readonly hosts: HostResolutionPolicy;
 
   constructor(private readonly gw: BrowserGatewayPort, private readonly o: BrowserWorkerOptions) {
     this.worker = o.worker ?? "browser-worker";
     if (!/^[a-z0-9_.-]{1,64}$/.test(this.worker)) throw new Error("worker name must match ^[a-z0-9_.-]{1,64}$");
+    this.hosts = o.hostPolicy ?? new HostResolutionPolicy();
   }
 
   /**
@@ -76,12 +109,31 @@ export class BrowserWorker {
 
   private async newSession(): Promise<Session> {
     const b = await this.ensureBrowser();
-    const context = await b.newContext({ ignoreHTTPSErrors: Boolean(this.o.ignoreHttpsErrors), acceptDownloads: false,
+    // v79: downloads are accepted (into the service's private temporary directory) and handed over only by a download step.
+    const context = await b.newContext({ ignoreHTTPSErrors: Boolean(this.o.ignoreHttpsErrors), acceptDownloads: true, viewport: { width: 1280, height: 900 },
       userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36" });
-    await context.route("**/*", (route) => (browserUrlAllowed(route.request().url(), { allowLoopback: this.o.allowLoopback }) ? route.continue() : route.abort("blockedbyclient")));
+    const allow = { allowLoopback: this.o.allowLoopback };
+    await context.route("**/*", async (route) => ((await this.hosts.allowed(route.request().url(), allow).catch(() => false)) ? route.continue() : route.abort("blockedbyclient")));
     const page = await context.newPage();
-    page.setDefaultTimeout(15_000);
-    return { context, page, secrets: new Set(), ownerValues: new Set() };
+    const s: Session = { context, page, secrets: new Set(), ownerValues: new Set(), pages: [page], captured: false, dialog: null, lastDialog: null, produced: [], adopt: () => {} };
+    const watch = (p: Page) => {
+      p.setDefaultTimeout(15_000);
+      p.on("dialog", (d) => {
+        s.lastDialog = `${d.type()}: ${d.message().slice(0, 300)}`;
+        const plan = s.dialog;
+        s.dialog = null;
+        void (plan?.accept ? d.accept(plan.text) : d.dismiss()).catch(() => {});
+      });
+      p.on("close", () => {
+        s.pages = s.pages.filter((x) => x !== p);
+        if (s.page === p && s.pages.length) s.page = s.pages[s.pages.length - 1];
+      });
+    };
+    watch(page);
+    // A popup or a new tab becomes the current tab (sign-in windows, links that open a new tab).
+    s.adopt = (p: Page) => { if (!s.pages.includes(p)) { s.pages.push(p); watch(p); } s.page = p; };
+    context.on("page", (p) => { if (!s.pages.includes(p)) s.adopt(p); });
+    return s;
   }
 
   private origin(page: Page): string {
@@ -103,8 +155,26 @@ export class BrowserWorker {
   }
 
   private locator(page: Page, step: Record<string, unknown>) {
-    if (typeof step.selector === "string") return page.locator(step.selector).first();
-    return page.getByText(String(step.text), { exact: false }).first();
+    // v79: an element inside an embedded frame (hosted card fields, embedded editors).
+    const root = typeof step.frame === "string" ? page.frameLocator(step.frame).first() : page;
+    if (typeof step.selector === "string") return root.locator(step.selector).first();
+    return root.getByText(String(step.text), { exact: false }).first();
+  }
+
+  /** v79: store a file the page produced for the acting agent (bounded); its id is reported with the action. */
+  private async produce(s: Session, action: BrowserAction, lease: string, kind: "download" | "screenshot" | "pdf", fileName: string, data: Buffer): Promise<void> {
+    if (data.length < 1 || data.length > BROWSER_FILE_MAX_BYTES) throw new Error("FLEET_BROWSER_FILE_TOO_LARGE");
+    const ext = /\.([a-z0-9]{1,5})$/i.exec(fileName)?.[1]?.toLowerCase() ?? "";
+    const type = EXT_TYPES[ext] ?? "application/octet-stream";
+    const name = fileName.replace(/[^A-Za-z0-9._ -]/g, "_").replace(/^[^A-Za-z0-9]+/, "").slice(0, 120) || `${kind}.bin`;
+    const r = await this.gw.filePut(action.actionId, lease, kind, name, type, data);
+    if (!r.ok) throw new Error(String(r.code));
+    s.produced.push({ fileId: String(r.fileId), kind, fileName: name, sizeBytes: data.length });
+  }
+
+  /** v79: an image of the page leaves the worker only if nothing secret of the owner's was put into this session. */
+  private imageAllowed(s: Session): void {
+    if (s.ownerValues.size || s.captured) throw new Error("FLEET_BROWSER_CAPTURE_REFUSED");
   }
 
   private async run(s: Session, action: BrowserAction, lease: string, progress: { done: number }): Promise<number> {
@@ -115,12 +185,20 @@ export class BrowserWorker {
       switch (a) {
         case "goto": {
           const url = String(step.url);
-          if (!browserUrlAllowed(url, { allowLoopback: this.o.allowLoopback })) throw new Error("FLEET_BROWSER_URL_BLOCKED");
+          if (!(await this.hosts.allowed(url, { allowLoopback: this.o.allowLoopback }))) throw new Error("FLEET_BROWSER_URL_BLOCKED");
           await page.goto(url, { waitUntil: "domcontentloaded" });
           break;
         }
         case "back": await page.goBack({ waitUntil: "domcontentloaded" }); break;
-        case "click": await this.locator(page, step).click(); await page.waitForLoadState("domcontentloaded").catch(() => {}); break;
+        case "click": {
+          // v79: a click that opens a tab (target=_blank, window.open) moves the session to it.
+          const popup = page.waitForEvent("popup", { timeout: 1_500 }).catch(() => null);
+          await this.locator(page, step).click();
+          const p = await Promise.race([popup, new Promise<null>((r) => setTimeout(() => r(null), 500))]);
+          if (p) { s.adopt(p); await p.waitForLoadState("domcontentloaded").catch(() => {}); }
+          else await page.waitForLoadState("domcontentloaded").catch(() => {});
+          break;
+        }
         case "fill": {
           if (typeof step.credential === "string") {
             // v49: the owner's facts and card are named by class / field (the registry checks the standing authority, the
@@ -158,7 +236,7 @@ export class BrowserWorker {
         case "wait_for": await this.locator(page, step).waitFor(); break;
         case "open_auth_link": {
           const link = await this.secret(action, lease, "auth_link", this.origin(page));
-          if (!browserUrlAllowed(link, { allowLoopback: this.o.allowLoopback })) throw new Error("FLEET_BROWSER_URL_BLOCKED");
+          if (!(await this.hosts.allowed(link, { allowLoopback: this.o.allowLoopback }))) throw new Error("FLEET_BROWSER_URL_BLOCKED");
           s.secrets.add(link);
           await page.goto(link, { waitUntil: "domcontentloaded" });
           break;
@@ -169,12 +247,80 @@ export class BrowserWorker {
           const value = (await this.locator(page, step).innerText()).trim();
           if (!value) throw new Error("FLEET_CAPTURE_EMPTY");
           s.secrets.add(value);
+          s.captured = true;
           const kind = String(step.kind);
           const sealed = sealTo(Buffer.from(pub, "base64"), value, `capture:${action.accountId}:${kind}`);
           const ack = await this.secret(action, lease, `capture:${kind}`, this.origin(page), sealed);
           if (ack !== "stored") throw new Error("FLEET_CAPTURE_FAILED");
           break;
         }
+        // ── v79 ──
+        case "upload_file": {
+          // Files the agent staged from its own workspace (browser stage_file), read for this action only.
+          const ids = Array.isArray(step.fileIds) ? step.fileIds.map(String) : [String(step.fileId)];
+          const files: Array<{ name: string; mimeType: string; buffer: Buffer }> = [];
+          for (const id of ids) {
+            const f = await this.gw.fileTake(action.actionId, lease, id);
+            if (!f.ok) throw new Error(f.code);
+            files.push({ name: f.fileName, mimeType: f.contentType, buffer: f.data });
+          }
+          await this.locator(page, step).setInputFiles(files.length === 1 ? files[0] : files);
+          break;
+        }
+        case "set_content": {
+          // Render an HTML (or SVG) file the agent staged; the session has no account; subresources pass the URL policy.
+          const f = await this.gw.fileTake(action.actionId, lease, String(step.fileId));
+          if (!f.ok) throw new Error(f.code);
+          if (f.contentType !== "text/html" && f.contentType !== "image/svg+xml") throw new Error("FLEET_BROWSER_NOT_HTML");
+          await page.setContent(f.data.toString("utf8"), { waitUntil: "load", timeout: 20_000 });
+          break;
+        }
+        case "download": {
+          const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 30_000 }), this.locator(page, step).click()]);
+          const name = dl.suggestedFilename() || "download.bin";
+          try {
+            if (CREDENTIAL_FILE.test(name)) throw new Error("FLEET_BROWSER_DOWNLOAD_CREDENTIAL");
+            const file = await dl.path();
+            if (!file) throw new Error("FLEET_BROWSER_DOWNLOAD_FAILED");
+            if ((await fs.promises.stat(file)).size > BROWSER_FILE_MAX_BYTES) throw new Error("FLEET_BROWSER_FILE_TOO_LARGE");
+            await this.produce(s, action, lease, "download", name, await fs.promises.readFile(file));
+          } finally {
+            await dl.delete().catch(() => {});
+          }
+          break;
+        }
+        case "screenshot": {
+          this.imageAllowed(s);
+          const mask = [page.locator("input, textarea, select")];
+          const data = typeof step.selector === "string"
+            ? await this.locator(page, step).screenshot({ type: "png", mask, timeout: 20_000 })
+            : await page.screenshot({ type: "png", fullPage: step.fullPage === true, mask, timeout: 20_000 });
+          await this.produce(s, action, lease, "screenshot", `screenshot-${Date.now().toString(36)}.png`, data);
+          break;
+        }
+        case "pdf": {
+          this.imageAllowed(s);
+          const data = await page.pdf({ printBackground: true, format: step.format === "Letter" ? "Letter" : "A4", landscape: step.landscape === true });
+          await this.produce(s, action, lease, "pdf", `page-${Date.now().toString(36)}.pdf`, data);
+          break;
+        }
+        case "hover": await this.locator(page, step).hover(); break;
+        case "uncheck": await this.locator(page, step).uncheck(); break;
+        case "scroll": {
+          if (typeof step.selector === "string") await this.locator(page, step).scrollIntoViewIfNeeded();
+          else await page.evaluate((to) => window.scrollTo(0, to === "top" ? 0 : document.body.scrollHeight), String(step.to));
+          await page.waitForTimeout(300);
+          break;
+        }
+        case "wait_idle": await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {}); break;
+        case "tab": {
+          const p = s.pages[Number(step.index)];
+          if (!p) throw new Error("FLEET_BROWSER_NO_TAB");
+          s.page = p;
+          await p.bringToFront().catch(() => {});
+          break;
+        }
+        case "dialog": s.dialog = { accept: step.accept === true, ...(typeof step.text === "string" ? { text: step.text } : {}) }; break;
         default:
           throw new Error("FLEET_BAD_REQUEST");
       }
@@ -221,8 +367,11 @@ export class BrowserWorker {
     // Origin + path only: query strings and fragments can carry tokens.
     let url = "";
     try { const u = new URL(page.url()); url = u.protocol === "about:" ? page.url() : `${u.origin}${u.pathname}`; } catch { url = ""; }
+    const where = (p: Page) => { try { const x = new URL(p.url()); return x.protocol === "about:" ? p.url() : `${x.origin}${x.pathname}`; } catch { return ""; } };
+    const tabs = s.pages.length > 1 ? s.pages.map((p, i) => ({ index: i, current: p === s.page, url: where(p) })) : undefined;
     return { url, title: data.title, text: text.slice(0, TEXT_MAX),
       truncated: text.length > TEXT_MAX, fields: data.fields, links: JSON.parse(linksJson), buttons: data.buttons, captcha: data.captcha,
+      ...(tabs ? { tabs } : {}), ...(s.lastDialog ? { lastDialog: s.lastDialog } : {}),
       ...(data.captcha ? { note: "A CAPTCHA is present: a human-only step. account.mark {status: human_action_required} keeps every other action going." } : {}) };
   }
 
@@ -243,6 +392,7 @@ export class BrowserWorker {
       this.sessions.set(action.sessionId, s);
     }
     const progress = { done: 0 };
+    s.produced = [];
     let error: string | null = null;
     try {
       await this.run(s, action, lease, progress);
@@ -253,7 +403,7 @@ export class BrowserWorker {
     let snap: Record<string, unknown> = {};
     try { snap = await this.snapshot(s); } catch { snap = { url: null }; }
     const steps = progress.done;
-    const result = { ...snap, stepsDone: steps, ...(error ? { code: error, failedStep: steps } : {}) };
+    const result = { ...snap, stepsDone: steps, ...(s.produced.length ? { files: s.produced } : {}), ...(error ? { code: error, failedStep: steps } : {}) };
     await this.gw.report(action.actionId, lease, !error, result, typeof snap.url === "string" ? snap.url : null);
     this.o.log?.("info", "browser_action", { actionId: action.actionId, kind: action.kind, steps, code: error });
     return !error;

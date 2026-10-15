@@ -85,9 +85,10 @@ import { V75_SQL } from "./migrations-phase75.js";
 import { V76_SQL } from "./migrations-phase76.js";
 import { V77_SQL } from "./migrations-phase77.js";
 import { V78_SQL } from "./migrations-phase78.js";
+import { V79_SQL } from "./migrations-phase79.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 78;
+export const FLEET_PG_SCHEMA_VERSION = 79;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1261,6 +1262,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 76, name: "market_fulfilment", sql: V76_SQL },
   { version: 77, name: "treasury_integrity", sql: V77_SQL },
   { version: 78, name: "seller_storefronts", sql: V78_SQL },
+  { version: 79, name: "business_operator", sql: V79_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1358,6 +1360,9 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_enquiry_page(text)",
   "svc_order_page(text)",
   "svc_order_file(text, uuid, integer)",
+  // v79: a channel's attribution code carried onto an order / enquiry; the public outreach opt-out page.
+  "svc_attribute(text, text, text)",
+  "svc_outreach_optout(text, boolean)",
   "svc_customer_message(text, text, text, text, jsonb)",
   "svc_offer_tick(integer)",
 ]);
@@ -1568,6 +1573,9 @@ export const BROWSER_API_FUNCTIONS: readonly string[] = Object.freeze([
   "bx_secret_request(uuid, text, text, text, text, bytea)",
   "bx_secret_take(uuid, uuid, text)",
   "bx_broker_key()",
+  // v79: files the agent staged for a page; files a page produced for the agent.
+  "bx_file_take(uuid, text, uuid)",
+  "bx_file_put(uuid, text, text, text, text, bytea)",
 ]);
 
 /** Schema v52: the Gumroad storefront gateway's whole database surface (gx_*; role fleet_provider). */

@@ -1,6 +1,6 @@
 # Automaton Fleet — Business Survival and Compounding Knowledge Guide (business foundation v2)
 
-Library: business-foundation-v2 (reviewed 2026-10-14)
+Library: business-foundation-v2 (reviewed 2026-10-15)
 
 Master source for the shared library's `business-foundation` and `fleet-status` entries. One authoritative text: the
 library entries are generated from this file (`node scripts/knowledge-foundation-build.mjs`), so each rule is maintained
@@ -709,8 +709,9 @@ No arbitrary limit applies to the number of offers or advertisements; each shoul
 
 ## bf-channels
 Title: Selling channels and advertising channels
+Version: 2
 Category: business-foundation
-Tags: channels, etsy, gumroad, payhip, fiverr, upwork, linkedin, reddit, pinterest, seo, outreach, marketplace
+Tags: channels, etsy, gumroad, payhip, fiverr, upwork, linkedin, reddit, pinterest, seo, outreach, marketplace, browser, attribution, payouts
 Related: bf-marketing-distribution, bf-advertising, bf-records-visibility, fleet-capability-status
 Sources:
 - https://developer.paypal.com/api/rest/webhooks/ | PayPal webhooks are per app | checked 2026-10-14
@@ -718,7 +719,7 @@ Sources:
 Body:
 A SELLING channel is where an order and payment happen; an ADVERTISING channel sends people to an offer. A social post is not an order integration.
 
-Selling, today: the Fleet's own offer pages (treasury PayPal checkout, buyer briefs and messages, delivery, accounting). Not connected today: Etsy (needs the owner's verified shop, a bank payout rail — Etsy pays only to a bank — and an API connector; no buyer messaging API), Gumroad (owner onboarding; the £500 wallet unlock), Payhip and Lemon Squeezy (no product API; services excluded by Lemon Squeezy). Fiverr and Upwork require one identity-verified human per account and do not allow an autonomous agent to operate it.
+You choose the channels, from research; the platforms named here are examples, never a list. The Fleet's own offer pages are built in (treasury PayPal checkout, buyer briefs and messages, delivery, accounting). Any other platform you operate yourself through the browser — sign up, build the profile, upload your images and files, publish listings, answer customers — where its terms permit an automated or AI-operated account; no per-platform connector is needed, and a missing API is not a ban. Record each channel (business add_channel) with the rules you checked; link your offer pages from it (channel_link) so enquiries and orders are attributed. Where a platform pays out to the treasury PayPal, report its sales (report_sale) and claim the payout (claim_payout) — it becomes your cash when the credit is matched; a platform that pays only to a bank (Etsy pays sellers to a bank) is the owner_bank route, booked when the owner moves the money into the treasury PayPal. Seller accounts that need the owner's identity, tax or payout details, or a live identity check, are a genuine owner step (once, without blocking other work). Gumroad is operated only through the Fleet's gateway (owner onboarding; the £500 wallet unlock). Fiverr and Upwork require one identity-verified human per account and do not allow an autonomous agent to operate it — an example of a platform whose rules close it.
 
 Advertising and discovery: marketplace search and listing quality; useful content and search-engine discovery; LinkedIn and professional communities; relevant Reddit communities and specialist forums; Pinterest, Instagram, YouTube where the audience and format fit; lawful business outreach (B2B under PECR); paid ads where evidence and economics support them. These are options, not a mandate to open every account.
 
@@ -746,7 +747,9 @@ Category: business-foundation
 Tags: tools, python, spreadsheet, xlsx, docx, pdf, images, zip, sandbox, rendering, recalculation
 Related: bf-quality-procedures, bf-execution-quality, bf-ai-costs, fleet-capability-status
 Body:
-Your exec sandbox runs Python with the Fleet's agent toolchain when the owner has installed it (check: python3 -c "import openpyxl, docx, reportlab, pypdf, PIL"): openpyxl and XlsxWriter (spreadsheets with formulas, charts, data validation, formatting), python-docx (Word documents), reportlab (PDFs), pypdf and pypdfium2 (read and render PDFs), Pillow (images), a formula engine (recalculation), a spelling checker, and the standard library (zip, csv, json). No network inside the sandbox.
+Your exec sandbox runs Python with the Fleet's agent toolchain when the owner has installed it (check: python3 -c "import openpyxl, docx, reportlab, pypdf, PIL"): openpyxl and XlsxWriter (spreadsheets with formulas, charts, data validation, formatting), python-docx (Word documents), python-pptx (slide decks; once the updated toolchain is installed), reportlab (PDFs), pypdf and pypdfium2 (read and render PDFs), Pillow (images), a formula engine (recalculation), a spelling checker, and the standard library (zip, csv, json). No network inside the sandbox.
+
+Design and visuals: write a brand image, listing graphic or mockup as HTML/CSS or SVG, render it in the browser (browser stage_file, then set_content and screenshot or pdf, in a session without an account), fetch the result into your workspace (browser fetch_file) and look at it (view_image) — fix what looks wrong before it is published. Pillow draws and composites raster images. There is no image-generation model: photographic imagery is out of reach unless you make or licence it. Upload your files to any site with upload_file.
 
 Write deterministic generation scripts and keep them in your workspace: a product can be rebuilt, corrected and versioned. Generate, then verify: deliverable inspect recalculates spreadsheets, renders PDF pages, checks images, archives and documents, and finds placeholders and errors.
 
@@ -777,27 +780,32 @@ Independent review (independent_review — a separate, paid model call with no a
 Pre-made products are reviewed before publishing; unchanged deliveries reuse that evidence. Customer-specific work is reviewed against that buyer's brief and messages. Record what failed and why: it is the cheapest lesson you will get.
 
 ## fleet-capability-status
-Title: Fleet capability status (dated 2026-10-14, v5) — what works today
-Version: 5
+Title: Fleet capability status (dated 2026-10-15, v6) — what works today
+Version: 6
 Category: fleet-status
-Tags: status, capabilities, paypal, checkout, offers, delivery, tools, payout, card, gumroad, etsy, mail, sms, research, wake, sweep, ai-credit, onboarding
-Related: bf-cash-and-settlement, bf-delivery-commitments, bf-tax-worldwide, bf-venture-types, bf-ai-costs, bf-fulfilment-loop, bf-channels
+Tags: status, capabilities, paypal, checkout, offers, delivery, tools, payout, card, gumroad, etsy, mail, sms, research, wake, sweep, ai-credit, onboarding, browser, channels, leads, outreach
+Related: bf-cash-and-settlement, bf-delivery-commitments, bf-tax-worldwide, bf-venture-types, bf-ai-costs, bf-fulfilment-loop, bf-channels, bf-production-tools
 Facts:
-- Receiving payments: the treasury PayPal checkout is live (the owner's £1 test completed 2026-10-10); a sale is confirmed by the Fleet reading the order's status every few seconds to minutes (the PayPal webhook is not delivering yet), then booked to your wallet net of fees; the first agent sale is the live proof | checked 2026-10-14 | unverified
-- Offer pages: published offers are served on the Fleet's public site with checkout, briefs, buyer messages and downloads; until the owner sets the public site, publishing is refused (prepare everything else). Sales open only when the owner opens them: until then your published offers are not public and nobody can buy or send a brief, and outward actions (sending mail or SMS, acting on websites, creating or operating accounts, storefront publishing, card requests) are held — prepare, build, review and publish; promote nothing yet | checked 2026-10-14 | verified
-- Delivery: files go by the Fleet's shared mail from your routing address (create one with identity provision_mailbox) and stay downloadable on the buyer's order page for 30 days; no agent sale has been delivered live yet | checked 2026-10-14 | verified
-- Production tools: the agent toolchain (spreadsheets, documents, PDFs, images) is available only once the owner installs it on the host; deliverable inspect reports tool_unavailable until then | checked 2026-10-14 | verified
-- Paying out (suppliers, advertising, refunds through PayPal): not yet active — the owner's custody activation is an onboarding step still to come. Requests can be prepared and submitted; they wait and say so | checked 2026-10-14 | verified
-- Card purchases: unavailable until the owner turns on standing authority for the card | checked 2026-10-14 | verified
-- Gumroad storefront: not yet connected (owner onboarding); unlocked for an agent the first time its wallet reaches £500 (owner decision 2026-10-10) | checked 2026-10-14 | verified
-- Etsy: not connected (assessed 2026-10-14: needs the owner's verified shop, a bank payout rail and an API connector); Fiverr and Upwork do not allow autonomous agent accounts | checked 2026-10-14 | verified
-- UNRESOLVED (owner decision pending): the route for EU consumer digital sales. Until decided, an agent below £500 has no supported route for EU consumer digital sales | checked 2026-10-14 | verified
-- SMS: not configured | checked 2026-10-14 | verified
-- Web research: enabled, with per-agent daily and hourly limits | checked 2026-10-14 | verified
-- Sweeps: the sweep policy is off | checked 2026-10-14 | verified
-- Survival protection: on — an owner setting during setup, not a business strategy or a promise of rescue; actual exhaustion follows the Fleet's lifecycle rule | checked 2026-10-14 | verified
-- Waking from hibernation: owner messages, revenue and refunds, paid orders to fulfil, buyers' briefs and messages, capital changes, answered owner requests, your review time, inbound email, card-request and spend-review decisions, lesson reviews and dispute changes wake you within about a minute | checked 2026-10-14 | verified
-- AI cost attribution: your own autonomous work is charged to your wallet at cost (the provider's price plus the unrecoverable tax on the credit used); turns that process the owner's messages are paid by the treasury. Pre-launch AI costs were written off on 2026-10-14 (wallets restored) | checked 2026-10-14 | verified
+- Receiving payments: the treasury PayPal checkout is live (the owner's £1 test completed 2026-10-10); a sale is confirmed by the Fleet reading the order's status every few seconds to minutes (the PayPal webhook is not delivering yet), then booked to your wallet net of fees; the first agent sale is the live proof | checked 2026-10-15 | unverified
+- Offer pages: published offers are served on the Fleet's public site with checkout, briefs, buyer messages, downloads and image samples; until the owner sets the public site and records the legal seller, publishing is refused (prepare everything else). Sales open only when the owner opens them: until then your published offers are not public and outward actions (sending mail or SMS, acting on websites, creating or operating accounts, storefront publishing, card requests) are held — prepare, build, review and publish; promote nothing yet | checked 2026-10-15 | verified
+- Other channels: any platform you choose, operated through the browser where its terms permit it (sign-up, profile, images and files uploaded, listings, posts, messages); record it with business add_channel (its rules first), what you publish with record_presence, and link your offer pages with channel_link for attribution. No platform has an API connector apart from Gumroad's gateway | checked 2026-10-15 | verified
+- Browser: forms, logins with vault credentials, dynamic pages, popups and tabs, embedded frames, file uploads of your own files, downloads, screenshots and printed PDFs, rendering your own HTML / SVG; sessions end after 30 minutes idle (log in again). CAPTCHAs, live selfies and codes sent to the owner's phone are human-only | checked 2026-10-15 | verified
+- Sales elsewhere: report each one (report_sale, a memo); a payout into the treasury PayPal becomes your cash when matched to the credit from the channel's payer (claim_payout); a payout to the owner's bank is booked when the owner moves it into the treasury PayPal | checked 2026-10-15 | verified
+- Leads, obligations and deadlines: kept with business; a lead's next action, an obligation and a paid order's due date wake you when due | checked 2026-10-15 | verified
+- Outreach email: personal, one recipient, with its lawful basis; the Fleet adds the legal seller and an opt-out link; an address that opted out is closed to every agent | checked 2026-10-15 | verified
+- Delivery: files go by the Fleet's shared mail from your routing address (create one with identity provision_mailbox) and stay downloadable on the buyer's order page for 30 days; no agent sale has been delivered live yet | checked 2026-10-15 | verified
+- Production tools: the agent toolchain (spreadsheets, documents, PDFs, images; slide decks once the updated toolchain is installed) is available only once the owner installs it on the host; deliverable inspect reports tool_unavailable until then. No image-generation model; view_image shows you your own images | checked 2026-10-15 | verified
+- Paying out (suppliers, advertising, refunds through PayPal): not yet active — the owner's custody activation is an onboarding step still to come. Requests can be prepared and submitted; they wait and say so | checked 2026-10-15 | verified
+- Card purchases: unavailable until the owner turns on standing authority for the card | checked 2026-10-15 | verified
+- Gumroad storefront: not yet connected (owner onboarding); operated only through the Fleet's gateway, unlocked for an agent the first time its wallet reaches £500 (owner decision 2026-10-10) | checked 2026-10-15 | verified
+- Etsy and other marketplaces: no API connector; operate a shop through the browser where the platform's terms allow it; a seller account needing the owner's identity or payout details is an owner step; Etsy pays sellers to a bank (the owner_bank payout route). Fiverr and Upwork do not allow autonomous agent accounts | checked 2026-10-15 | verified
+- EU consumer digital sales: through a merchant-of-record platform you operate where its terms permit (Gumroad through the gateway once your wallet has reached £500) | checked 2026-10-15 | verified
+- SMS: not configured | checked 2026-10-15 | verified
+- Web research: enabled, with per-agent daily and hourly limits; no search-engine API (use the browser on sites' own search pages where permitted) | checked 2026-10-15 | verified
+- Sweeps: the sweep policy is off | checked 2026-10-15 | verified
+- Survival protection: on — an owner setting during setup, not a business strategy or a promise of rescue; actual exhaustion follows the Fleet's lifecycle rule | checked 2026-10-15 | verified
+- Waking from hibernation: owner messages, revenue and refunds, paid orders to fulfil or coming due, buyers' briefs and messages, leads and obligations coming due, capital changes, answered owner requests, your review time, inbound email, card-request and spend-review decisions, lesson reviews and dispute changes wake you within about a minute | checked 2026-10-15 | verified
+- AI cost attribution: your own autonomous work is charged to your wallet at cost (the provider's price plus the unrecoverable tax on the credit used); turns that process the owner's messages are paid by the treasury. Pre-launch AI costs were written off on 2026-10-14 (wallets restored) | checked 2026-10-15 | verified
 Body:
 This entry is dated status, not enduring guidance. It changes as the Fleet is onboarded: re-read it (economic_knowledge library, id fleet-capability-status) when a decision depends on a capability, and never treat today's onboarding gaps as permanent limits on what you may build.
 

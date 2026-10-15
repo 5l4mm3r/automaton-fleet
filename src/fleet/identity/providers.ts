@@ -138,7 +138,12 @@ export interface PlatformConnector {
 
 /** Verification links and codes in a message (consumed by the broker). */
 export function findVerification(body: string): { link: string | null; code: string | null } {
-  const link = /https?:\/\/[^\s"'<>]*(verif|confirm|activate)[^\s"'<>]*/i.exec(body)?.[0] ?? null;
+  // v79: sign-in (magic) links and password-reset / recovery links are account-authentication links too; an unsubscribe
+  // link never is. A verification / confirmation link is preferred when a message carries several.
+  const links = body.match(/https?:\/\/[^\s"'<>]+/gi) ?? [];
+  const usable = links.filter((l) => !/unsub|opt-?out|preferences/i.test(l));
+  const link = usable.find((l) => /verif|confirm|activate/i.test(l))
+    ?? usable.find((l) => /reset|recover|password|magic|sign-?in|log-?in|auth/i.test(l)) ?? null;
   const code = /\b(?:code|pin)[^0-9]{0,20}(\d{4,8})\b/i.exec(body)?.[1] ?? null;
   return { link, code };
 }

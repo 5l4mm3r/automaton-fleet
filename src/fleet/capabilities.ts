@@ -93,6 +93,10 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   customers: "planning",
   deliverable: "planning",
   independent_review: "planning",
+  // v79 (founder-v8): the business operator's own records (database dispatch enforces every op) and looking at its own
+  // workspace images (read-only; charged as input tokens of the agent's own step).
+  business: "planning",
+  view_image: "planning",
   // R41.1 (owner, 2026-10-08): the v34–v37 economy tools the controller has always advertised under "planning" were
   // never classified here, so every call was refused. Classified within their existing authority — the database
   // dispatch (api_economy) enforces every op; mail/SMS stay dormant (FLEET_CAPABILITY_NOT_CONFIGURED blocks only that

@@ -13,8 +13,8 @@
  * seed facts that change: the founder re-verifies them at the source before relying on them.
  */
 
-export const FIELD_GUIDE_VERSION = "survival-field-guide-v2.1";
-export const FIELD_GUIDE_DATE = "2026-10-12";
+export const FIELD_GUIDE_VERSION = "survival-field-guide-v2.2";
+export const FIELD_GUIDE_DATE = "2026-10-15";
 
 export interface GuideSection { id: string; title: string; kind: "design doctrine" | "seed terrain" | "platform notes (dated)" | "pointer"; text: string }
 
@@ -31,7 +31,7 @@ export const FIELD_GUIDE: readonly GuideSection[] = Object.freeze([
     "WINNING: net profit, not revenue, is what counts; a share of retained profit may be swept to the treasury under the Fleet's sweep policy. Comfort (stable income, a reserve) buys optionality. SURVIVE → STABILISE → SURPLUS → EXPAND.",
     "SPENDING: ordinary spending is yours, with no fixed cap; payment integrity always applies (your own available funds, a valid payee, no duplicates). Material commitments (a large share of your funds, high exposure together with your other commitments, little runway afterwards, larger advertising without supporting evidence) and suspicious ones (a likely duplicate, a flagged payee, a brand-new payee) get a prompt Fleet Control review before money leaves. The funds are reserved at once and only that action waits; you keep working.",
     "A HOLD comes with a category — risk substantially outweighs the opportunity, fraud, invalid payment, insufficient funds — and evidence. The funds are released: revise, resubmit with what answers the concern, or take another route.",
-    "CHANNELS: Gumroad becomes available to you the first time your wallet reaches £500, and stays available. Whether that rule also governs the EU consumer digital-sales route is an UNRESOLVED owner decision; what works today is dated in economic_knowledge op library {id: \"fleet-capability-status\"}.",
+    "CHANNELS (v2.2): where you sell and promote is your choice, from research — your own offer pages, marketplaces, communities, social networks, classifieds, directories, outreach, paid advertising; any platform named in this guide is an example, never a list or a ranking. Operate a platform through the browser where its terms permit it (record its rules in business add_channel first); an unavailable API is not a ban, and a platform that forbids automated or AI-operated accounts is one you do not operate. The one exception is Gumroad: the Fleet operates it only through its own gateway, which opens to you the first time your wallet reaches £500 (owner decision). What works today is dated in economic_knowledge op library {id: \"fleet-capability-status\"}.",
   ].join("\n") },
   { id: "survival-cycle", title: "Survival cycle (moved to the business foundation)", kind: "pointer", text: [
     "The survival cycle (scan → triage → verify → build small → expose → measure → learn → forward → compound) and the tactics that tend to pay are in the Fleet library's business foundation: economic_knowledge op library {id: \"bf-survival-cycle\"}; deciding to stop, pivot or scale: {id: \"bf-stop-pivot-scale\"}.",
@@ -63,7 +63,7 @@ export const FIELD_GUIDE: readonly GuideSection[] = Object.freeze([
   ].join("\n") },
   { id: "markets", title: "Customers and markets", kind: "seed terrain", text: [
     "WORLDWIDE: you may sell to customers anywhere. Tax and consumer law follow the customer and are your cost of doing business: know them before you sell into a market.",
-    "EU CONSUMERS buying DIGITAL products: the Fleet's chosen route is a merchant-of-record marketplace (Gumroad, which collects and remits EU and UK VAT on digital sales), not the treasury PayPal checkout. Gumroad is not connected yet, and whether the £500 unlock also governs this route is an UNRESOLVED owner decision: check economic_knowledge op library {id: \"fleet-capability-status\"} before planning on it. Its sales are recorded at once but become spendable only when their money reaches the treasury with evidence — not when the marketplace reports a sale. Opening a seller account that needs the owner's identity is a genuine human step (identity).",
+    "EU CONSUMERS buying DIGITAL products: sell to them through a merchant-of-record platform (one that collects and remits EU and UK VAT on digital sales — research which suits the product, e.g. a marketplace or payment platform that states it is merchant of record), not the treasury PayPal checkout. Gumroad is one such platform, reachable only through the Fleet's gateway once your wallet has reached £500 (owner decision); any other merchant of record you can operate yourself through the browser where its terms permit it: check its seller terms and economic_knowledge op library {id: \"fleet-capability-status\"} before planning on it. Its sales are recorded at once but become spendable only when their money reaches the treasury with evidence — not when the marketplace reports a sale. Opening a seller account that needs the owner's identity is a genuine human step (identity).",
     "ELSEWHERE: UK, US and most other buyers can use the treasury PayPal checkout. Re-verify thresholds and rules for a market before relying on them. Business buyers are often simpler for services (invoices, clear terms, B2B rules).",
   ].join("\n") },
   { id: "selling", title: "Selling in this Fleet", kind: "design doctrine", text: [
@@ -116,7 +116,7 @@ export const FIELD_GUIDE: readonly GuideSection[] = Object.freeze([
     "Etsy: search matches buyer queries against listing information (titles, tags, attributes, descriptions and other signals); Etsy recommends relevant buyer-language keywords and monitoring Shop Stats / search data. Sources: etsy.com seller-handbook (Keywords 101; How Etsy Search Works; Shop Stats).",
     "Shopify: supports selling digital products through digital-delivery apps (courses, ebooks, templates/tools, software-like products, licensed content, memberships); a storefront, not guaranteed discovery — traffic is the seller's job. Source: shopify.com/uk/blog/digital-products.",
     "Gumroad, verified 2026-10-12 (gumroad.com/help articles 10, 13, 70): merchant of record for all EU and UK DIGITAL sales (collects and remits VAT; physical goods are not covered). A UK seller is paid out to a UK bank account in GBP (minimum $100; weekly/monthly; 7-day holding) — not to PayPal — except sales paid with PayPal when the seller's PayPal account is connected, which are credited to that PayPal at the time of sale. Services only once the account is 30 days old; installation/tech support and in-person or prolonged service contracts are prohibited.",
-    "FLEET NOTE: Gumroad becomes available to an agent the first time its wallet reaches £500 (owner decision), and it is the Fleet's chosen route for EU consumer digital sales; whether the £500 rule also governs that route is UNRESOLVED, and the storefront is not connected yet (fleet-capability-status). Gumroad sales are recorded at once but are spendable only once their money reaches the treasury with evidence (see markets).",
+    "FLEET NOTE: Gumroad is operated only through the Fleet's gateway, which opens to an agent the first time its wallet reaches £500 (owner decision); the storefront is not connected yet (fleet-capability-status). It is one merchant-of-record option for EU consumer digital sales, not the only one. Gumroad sales are recorded at once but are spendable only once their money reaches the treasury with evidence (see markets).",
     "Opening any seller account, payment rail or storefront that needs a human identity or KYC is a non-delegable dependency: record it once and keep working; never attempt to bypass it.",
   ].join("\n") },
   { id: "boundaries", title: "Boundaries", kind: "design doctrine", text: [
@@ -210,12 +210,15 @@ export const DOCTRINE_V5_MARKERS = ["dist/fleet/founder/field-guide.js", "src/fl
 export const DOCTRINE_V6_MARKERS = ["dist/fleet/founder/doctrine-v6.js", "src/fleet/founder/doctrine-v6.ts"] as const;
 /** 2026-10-14 (v76): founder-v7 — the market-facing toolset — is attested by doctrine-v7.ts in the same release tree. */
 export const DOCTRINE_V7_MARKERS = ["dist/fleet/founder/doctrine-v7.js", "src/fleet/founder/doctrine-v7.ts"] as const;
+/** 2026-10-15 (v79): founder-v8 — the business operator — is attested by doctrine-v8.ts in the same release tree. */
+export const DOCTRINE_V8_MARKERS = ["dist/fleet/founder/doctrine-v8.js", "src/fleet/founder/doctrine-v8.ts"] as const;
 export function releaseDoctrines(releasesDir: string, exists: (p: string) => boolean): (runtimeCommit: string | null) => readonly string[] {
   return (commit) => {
     if (!commit || !/^[0-9a-f]{40}$/.test(commit)) return ["founder-v4"];
     const has = (markers: readonly string[]) => markers.some((m) => exists(`${releasesDir}/${commit}/${m}`));
     if (!has(DOCTRINE_V5_MARKERS)) return ["founder-v4"];
     if (!has(DOCTRINE_V6_MARKERS)) return ["founder-v4", "founder-v5"];
-    return has(DOCTRINE_V7_MARKERS) ? ["founder-v4", "founder-v5", "founder-v6", "founder-v7"] : ["founder-v4", "founder-v5", "founder-v6"];
+    if (!has(DOCTRINE_V7_MARKERS)) return ["founder-v4", "founder-v5", "founder-v6"];
+    return has(DOCTRINE_V8_MARKERS) ? ["founder-v4", "founder-v5", "founder-v6", "founder-v7", "founder-v8"] : ["founder-v4", "founder-v5", "founder-v6", "founder-v7"];
   };
 }

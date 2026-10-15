@@ -120,7 +120,7 @@ export interface SharedMailInput {
 
 export interface BrowserSecretRequest {
   requestId: string;
-  kind: "password" | "username" | "email" | "totp" | "email_code" | "sms_code" | "api_key" | "generate_password" | "auth_link" | "capture" | "owner_fact" | "owner_card" | "owner_document";
+  kind: "password" | "username" | "email" | "totp" | "email_code" | "sms_code" | "api_key" | "generate_password" | "new_password" | "auth_link" | "capture" | "owner_fact" | "owner_card" | "owner_document";
   captureKind?: "api_key" | "password" | "recovery_codes" | "totp";
   /** v49: an owner fact or the owner's card, under the owner's standing authority (class, and the field of a structured value). */
   ownerClass?: string;
@@ -131,7 +131,8 @@ export interface BrowserSecretRequest {
   sealedInB64?: string;
   handle?: string;
   loginEmail?: string;
-  credentials: Array<{ kind: string; vaultRef: string }>;
+  /** v79: status active (served) or pending (a new password the site has not yet been confirmed to accept). */
+  credentials: Array<{ kind: string; vaultRef: string; status?: "active" | "pending" }>;
   authMessages?: Array<{ kind: "mail" | "sms"; messageId: string; blobB64: string }>;
 }
 

@@ -1025,7 +1025,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
   const writers: Record<string, Set<string>> = {
     fleet_ventures: new Set(["fleet_econ_venture_create", "fleet_econ_venture_transition", "fleet_venture_move"]),
     fleet_venture_transitions: new Set(["fleet_econ_venture_create", "fleet_venture_move"]),
-    fleet_venture_journals: new Set(["fleet_admin_venture_attribute", "fleet_settlement_post", "cx_report_result", "cx_paypal_capture_record", "cx_paypal_refund_record",
+    fleet_venture_journals: new Set(["fleet_channel_payout_book", "fleet_admin_venture_attribute", "fleet_settlement_post", "cx_report_result", "cx_paypal_capture_record", "cx_paypal_refund_record",
       // v57: money PayPal gave back to a sale is attributed to its venture.
       "fleet_paypal_clawback_return"]),
     fleet_decision_records: new Set(["fleet_econ_decision_record", "fleet_econ_decision_outcome", "fleet_econ_decision_correct"]),
@@ -1041,7 +1041,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_rail_capability_checks: new Set(["fleet_admin_rail_add", "fleet_admin_rail_verify",
       // v52: the gateway's and the receipt matcher's own automatic evidence.
       "fleet_rail_check_record"]),
-    fleet_revenue_claims: new Set(["fleet_admin_record_external_claimed",
+    fleet_revenue_claims: new Set(["fleet_channel_payout_book", "fleet_admin_record_external_claimed",
       // v47: the posting transaction claims the payout and the bank transaction; a linked transfer claims the original.
       "fleet_provider_receipt_post", "fleet_receipt_process", "fleet_admin_receipt_transfer_link",
       // v48: PayPal captures and refunds, and money paid to the owner's card.
@@ -1092,7 +1092,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       "ix_credential_record", "ix_mailbox_record", "ix_report_job", "fleet_estate_assign_internal",
       // v37: browser-created accounts (register / pin origins / record outcome) and broker-stored browser credentials.
       "fleet_econ_account_register", "fleet_econ_account_add_origin", "fleet_econ_account_mark", "fleet_account_human_dependency", "ix_browser_credential_record"]),
-    fleet_agent_account_credentials: new Set(["fleet_econ_account_revoke", "ix_credential_record", "ix_browser_credential_record"]),
+    fleet_agent_account_credentials: new Set(["fleet_econ_account_password_confirm", "fleet_econ_account_password_discard", "fleet_econ_account_revoke", "ix_credential_record", "ix_browser_credential_record"]),
     fleet_agent_mailboxes: new Set(["ix_mailbox_record", "fleet_estate_assign_internal", "fleet_econ_mailbox_provision"]),
     fleet_identity_jobs: new Set(["fleet_identity_enqueue", "ix_claim_job", "ix_report_job", "fleet_estate_assign_internal", "svc_estate_tick",
       // v51: freezing an account stops its queued jobs.
@@ -1184,7 +1184,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_paypal_checkouts: new Set(["fleet_admin_paypal_test_checkout", "fleet_econ_paypal_checkout", "fleet_econ_paypal_cancel", "cx_paypal_work", "cx_paypal_checkout_update", "cx_paypal_capture_record",
       "cx_paypal_status_checked"]),
     fleet_paypal_webhook_inbox: new Set(["svc_paypal_webhook_receive", "cx_paypal_inbox", "cx_paypal_inbox_result"]),
-    fleet_paypal_transactions: new Set(["cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute", "svc_settlement_paypal_match",
+    fleet_paypal_transactions: new Set(["fleet_channel_payout_book", "cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute", "svc_settlement_paypal_match",
       // v66: a deposit backing the existing capital closes its transaction.
       "fleet_admin_capital_back",
       // v77: a treasury debit evidencing an owner withdrawal is attributed by the owner's record.
@@ -1276,7 +1276,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v56: customer orders by the checkout wrapper, the checkout-state follower, the refund recorder, custody's buyer record and the
     // agent's own delivery / fulfilment; deliveries and their files by delivery, the mail-outcome follower and the reaper's retry;
     // the broker's connector list only by the broker.
-    fleet_customer_orders: new Set(["fleet_econ_paypal_checkout_order", "fleet_customer_orders_follow", "fleet_order_refunded", "cx_paypal_buyer_record", "fleet_paypal_clawback_return",
+    fleet_customer_orders: new Set(["svc_attribute", "fleet_econ_paypal_checkout_order", "fleet_customer_orders_follow", "fleet_order_refunded", "cx_paypal_buyer_record", "fleet_paypal_clawback_return",
       "fleet_econ_order_deliver", "fleet_econ_order_fulfil", "fleet_order_delivery_follow", "svc_order_deliveries_retry",
       // v76: orders from an offer page (svc_offer_buy) or a quote (fleet_econ_enquiry_quote); a delivery's dispatch.
       "svc_offer_buy", "fleet_econ_enquiry_quote", "fleet_order_delivery_dispatch",
@@ -1292,7 +1292,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_artifact_reviews: new Set(["fleet_econ_review_record"]),
     fleet_offers: new Set(["fleet_econ_offer_create", "fleet_econ_offer_update", "fleet_econ_offer_file", "fleet_econ_offer_publish", "fleet_econ_offer_status"]),
     fleet_offer_files: new Set(["fleet_econ_offer_file"]),
-    fleet_offer_enquiries: new Set(["svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline", "svc_offer_tick"]),
+    fleet_offer_enquiries: new Set(["svc_attribute", "svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline", "svc_offer_tick"]),
     fleet_customer_messages: new Set(["svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline",
       "fleet_econ_order_message"]),
     fleet_customer_files: new Set(["fleet_customer_files_add", "svc_offer_tick"]),
@@ -1300,6 +1300,18 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_public_site: new Set(["fleet_admin_public_site_set", "fleet_admin_sales_set"]),
     // v78: the legal seller only by the owner.
     fleet_seller_identity: new Set(["fleet_admin_seller_set"]),
+    // v79: the business operator — browser files (agent staging, worker output, expiry), the agent's channels / presence /
+    // leads / business obligations, outreach records and opt-outs, external sales and payout claims (booked only by the
+    // payout booking on a real PayPal credit, the controller's unambiguous match or the owner's decision).
+    fleet_browser_files: new Set(["fleet_econ_browser_stage_file", "bx_file_put", "fleet_browser_files_expire"]),
+    fleet_venture_channels: new Set(["fleet_econ_channel_add", "fleet_econ_channel_update"]),
+    fleet_presence_items: new Set(["fleet_econ_presence_record", "fleet_econ_presence_update"]),
+    fleet_leads: new Set(["fleet_econ_lead_add", "fleet_econ_lead_update", "fleet_leads_retention", "fleet_econ_mail_send", "svc_outreach_optout"]),
+    fleet_business_obligations: new Set(["fleet_econ_obligation_add", "fleet_econ_obligation_done", "fleet_econ_obligation_cancel"]),
+    fleet_outreach_suppressions: new Set(["fleet_econ_outreach_suppress", "svc_outreach_optout"]),
+    fleet_outreach_messages: new Set(["fleet_econ_mail_send", "svc_outreach_optout"]),
+    fleet_channel_sales: new Set(["fleet_econ_sale_report", "fleet_econ_sale_update", "fleet_econ_payout_claim", "fleet_channel_payout_book", "fleet_admin_channel_payout_decide"]),
+    fleet_channel_payouts: new Set(["fleet_econ_payout_claim", "fleet_channel_payout_try", "fleet_channel_payout_book", "fleet_admin_channel_payout_decide"]),
     // v76: refunds / reversals / fees of the owner's proof purchase, only by custody's refund recorder.
     fleet_offer_proof_returns: new Set(["cx_paypal_refund_record"]),
     // v77: owner withdrawals (profit distribution / capital return) only by the owner's record.

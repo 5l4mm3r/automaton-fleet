@@ -1034,7 +1034,7 @@ rehearsal on the VPS · **L** live production evidence. A running service is not
 | 17 | Offers, enquiries, files, review gate, delivery, revisions, buyer pages, wake-ups, owner view | v76 + UI 0.19.0 | C T **L: deployed a0e0ac0** | Implemented; no live sale yet |
 | 18 | Quality: real substance, saved values, promises checked | inspector fleet-qa-1, review gate, sale-ready demos | C T **L: sandbox + inspector on the production kernel** | Implemented; premium quality remains the agent's work |
 | 19 | Proton per-agent routing; SMS adapter | v41, Bridge in production | C T **L (Bridge running)** | Implemented; agent `mail.send` not yet live-tested; SMS dormant (Twilio dependency) |
-| 20 | Channels | own offer pages (v76, live); Gumroad (v52, fake-tested); Etsy | C T | Own pages: ready behind the sales gate · Gumroad: owner onboarding · **Etsy: not implemented** |
+| 20 | Channels | own offer pages (v76, live); any platform through the browser, recorded per venture (v79 §32); Gumroad gateway (v52) | C T | Own pages: ready behind the sales gate · other platforms: the agent's choice where their terms permit (§32) · Gumroad: owner onboarding |
 | 21 | Public sales and promotion controlled until launch | v76 sales gate + preparation hold | C T **L: pages 404 in production** | Implemented |
 | 22 | Agent-1 first; Agent-2 paused reserve | founder upgrade lifecycle | C T R (local rehearsal) | Ready; both paused on b60e262 (L) |
 | 23 | Recovery preserves financial history | rollout `revert` safeguards; freeze-and-fix-forward | C | Documented §31.7 |
@@ -1147,3 +1147,114 @@ unless the owner changes them.
   (`reimbursement` kind) is the AI-credit record above. Sweeps themselves stay internal (agent → treasury); nothing pays you
   automatically.
 
+
+## 32. The autonomous business operator (owner brief, 2026-10-15; schema v79 + founder-v8, in code, not deployed)
+**Scope, corrected.** The Fleet builds an autonomous business operator, not a storefront agent or a platform-specific seller. The
+finish line is an agent that finds a commercially worthwhile gap and establishes, operates and markets the business that serves
+it — not one that fulfils orders arriving at a preconfigured shop. Agents choose opportunities, channels and venture brands and
+may run several offers where capacity and economics support them. There is no platform list, no level gate, no fixed opportunity
+weighting and no owner approval for ordinary posts or business actions. Platforms named anywhere in this specification are
+examples. Limits come from the law, each platform's own rules, the review of spending (§31.1 row 3) and genuine human-only steps.
+
+**The loop:** research demand → identify an opportunity → assess economics and runway → select channels → create a venture
+identity and business presence → market → handle leads and quote → produce and review → deliver → support → reconcile →
+improve or pivot.
+
+### 32.1 Selling infrastructure versus operator capabilities
+- **Selling infrastructure — built before v79, deployed in 31ffef8 / v78:**
+  - offers and public offer pages, with the legal seller and the agent's storefront (§30, §31.8);
+  - treasury PayPal checkout with detection that does not depend on the webhook;
+  - briefs, quotes and order threads;
+  - the review gate, then delivery and downloads;
+  - refunds and fees;
+  - ledger attribution to the venture.
+
+  This serves buyers who reach the agent's own pages.
+- **Operator capabilities — what lets the agent build and run the business anywhere:**
+  - demand research;
+  - the economics records;
+  - venture identities and routing addresses;
+  - the general browser and accounts;
+  - creative production and seeing its own work;
+  - channel, presence, lead and obligation records;
+  - lawful outreach;
+  - attribution;
+  - sales and payouts on other channels;
+  - reconciliation.
+
+  The audit below (2026-10-15, code inspection with file:line evidence) found most of the selling infrastructure built and these
+  operator capabilities partly missing. v79 adds them.
+
+### 32.2 Audit: concrete supported operations (after v79)
+Evidence kinds: **C** code inspection · **T** automated tests · **R** disposable rehearsal on the VPS · **L** live evidence.
+
+| Loop stage | Supported operations | Evidence | Status |
+|---|---|---|---|
+| Research demand | `web_fetch` of any public page (GET, 2 MB, extracted text, hourly / daily quotas, tied to an open decision in research mode). The real browser opens and reads any public site, including sites' own search pages. Opportunity records hold typed evidence and economics. | C T | Working. **No search-engine API** (provider onboarding, §32.4) |
+| Identify the opportunity; assess economics and runway | `opportunity record/shortlist`; the agent's own ranking (no fixed weights). `wallet view/survival/plan`; `fleet_services assess_risk`; capital requests decided by Fleet Control; decisions with capital at risk. | C T | Working |
+| Select channels | `business add_channel` with any name and kind. The platform's rules on automated / AI-operated accounts are recorded before a third-party channel goes active (`FLEET_CHANNEL_RULES`). Fees, payout route and payer are recorded too. | C T (v79) | **v79** |
+| Venture identity and presence | `identity create_persona {venture_identity}`; a routing address per venture; `register_account` + browser sign-up (vault password, email-link verification, origin pinning). Profile editing through the browser. Your own files uploaded (`upload_file`). Presence recorded with its URL and evidence (`record_presence`). | C T (browser, real Chrome) | Working; uploads **v79** |
+| Market | Listings, service ads, posts and pages on any site whose terms permit it, through the browser. Lawful outreach email (one recipient; lawful basis; legal seller and opt-out appended; fleet-wide suppression). Paid ads through the ordinary spending tools and their review. `channel_link` attribution. | C T (v79) | **v79**. Ads spending waits for money-out activation (§12) |
+| Leads and quotes | `business add_lead` (source, lawful basis, stage, value, next action — due leads wake the agent). Enquiries, clarification, quotes and capacity on the agent's pages (v76). | C T | **v79** leads |
+| Produce and review | Exec sandbox with the pinned toolchain: XLSX, DOCX, PDF, images, ZIP, and **PPTX (v79 lock)**. The agent renders its own HTML / SVG designs in the browser (`set_content` → `screenshot` / `pdf`). **`view_image`**: the agent sees its renders and screenshots (Anthropic image blocks; seen once; bounded). The inspector and review gate apply on the agent's pages. | C T | **v79** rendering + vision. **No image-generation model** (provider onboarding) |
+| Deliver | Own pages: reviewed files, mail attachment or link, 30-day downloads. Other channels: through the channel's own delivery, in the browser (file upload). | C T | Working |
+| Support | Routing mailbox per venture; inbound mail wakes the agent; order and enquiry threads; refunds. **Obligations** (renewals, retainers, follow-ups) and orders near or past their due date wake the agent. | C T | **v79** obligations / deadlines |
+| Reconcile | Own pages: captures, fees, refunds, held → available, all in the ledger (live £1 test). Other channels: `report_sale` (memo, never cash) and `claim_payout`. A payout is booked as cash **only against a real treasury PayPal credit**: automatically when the transaction, amount and payer (the channel's payout counterparty) match unambiguously, otherwise by the owner. A bank payout is booked once the owner has moved it into PayPal. Custody records the payer of non-checkout credits. Venture P&L: PayPal refunds counted as refunds; processor fees are their own category. | C T | **v79** |
+| Improve or pivot | `business performance` per channel: presence, leads, enquiries, paid orders, revenue, refunds, external sales, payouts, recorded costs. Decisions are reviewed against outcomes; field journal and lessons. | C T | **v79** performance |
+
+**Browser, precisely (after v79):**
+- **Navigation:** any public http(s) site. Private and loopback addresses are refused by name, and v79 also refuses names that resolve to them.
+- **Interaction:** click (popups and new tabs become the current tab), fill (also `contenteditable`), select, check / uncheck, press, hover, scroll, wait, `wait_for`, `wait_idle`, dialogs (`accept` / `dismiss`), and elements inside frames.
+- **Dynamic pages:** handled (real Chromium).
+- **Sessions:** cookies last per session while used (30 minutes idle; lost on a worker restart, so the agent logs in again with vault credentials).
+- **Downloads:** saved for the agent (≤ 15 MB, 24 h; a file whose name says it holds credentials is refused).
+- **Uploads:** the agent's staged files (≤ 10 per step); owner documents under standing authority.
+- **Captures:** screenshots and PDFs, with form fields masked. Refused in a session that used the owner's card or details or captured a secret.
+- **Rendering:** the agent's own HTML / SVG, in a session opened without an account.
+- **Credentials:** username, email, password (vault), TOTP, email / SMS codes, sign-up / sign-in / reset links (v79: reset and magic links recognised, never unsubscribe links), API-key capture. All only on pinned origins.
+- **Password change or recovery:** the new password stays **pending** until the agent confirms the site accepted it (v79; fixes a lock-out).
+- **CAPTCHA:** detected, never solved; the step goes to `human_action_required`.
+
+**Accounts:** registration, login, email verification, recovery through the reset link, profile editing, account records (status, verification, origins, credentials by kind, never values), the owner's freeze, footprint and reveal. The broker has no per-platform connectors; `create_account`, `recover`, `rotate` and `close` through connectors answer `FLEET_NO_CONNECTOR`, and the browser does the same work.
+
+**Brokered identity and payment use** (standing authority; built, nothing switched on):
+- **Owner facts:** filled into a site's own form by class (legal name, date of birth, address, contact, tax id, bank account owner).
+- **Owner documents:** uploaded into the provider's own file input (id document, passport, driving licence, proof of address).
+- **The owner's card:** filled after an approved card request and an open hold, with charges declared or voided.
+- **Logging:** every use is logged and the agent never sees a value.
+- **v79:** card fields inside a hosted iframe (Stripe Elements and similar) can now be addressed with `frame`; the hold stays bound to the merchant's (top) origin.
+- **Human-only, precisely:** CAPTCHAs; live selfie / video liveness; fresh signatures and in-person checks; codes sent to the owner's own phone or email; 3-D Secure approval in the owner's bank app; opening a bank or PayPal account; the Stripe identity check behind Gumroad payouts. The authority never permits a false declaration.
+
+### 32.3 What v79 built (general, not platform-specific)
+Schema v79 (`migrations-phase79.ts`, header authoritative), founder-v8 (Charter v8, toolset-4: `business`, `view_image`, browser
+`stage_file`/`files`/`fetch_file` and new steps, `confirm_password`/`discard_password`), browser worker (files, captures, rendering,
+frames, tabs, dialogs, DNS check), cognition (images on tool results), public pages (`?ref=` attribution, image samples, `/u/<token>`
+opt-out), custody (payer of non-checkout credits), toolchain (python-pptx 1.0.2), Field Guide v2.2 and library entries bf-channels v2,
+bf-production-tools v2, fleet-capability-status v6. Tests: v79 business operator 7/7, v79 public pages 2/2, v79 vision/tools 4/4,
+browser (real Chrome: four interface kinds — sign-up/login forms; a listing editor with photo upload, embedded editor, dialog,
+download, popup tab, screenshot, the agent's own design rendered; a JavaScript profile wizard with a hidden drop-zone input; a
+social composer with a rich editor and image) 10/10, custody worker 8/8, v76 market 9/9, v78 6/6, v67 foundation 4/4, founder tools,
+routing, identity units, migration paths, demonstrations — see the release record.
+
+**Security fix found by the audit:** the browser unit allows loopback (PostgreSQL over TCP), so a public name resolving to
+127.0.0.1 could reach the controller's loopback services. v79 refuses such names on every request. The remaining DNS-rebinding
+window closes only at the network layer: PostgreSQL over its unix socket for the browser login, then loopback denied in the
+unit — a host change in the activation package.
+
+### 32.4 What remains, by kind
+| Kind | Item | Why / what it takes |
+|---|---|---|
+| Missing general capability | Image **generation** (photographic imagery) | Needs an image model provider (none routed; Anthropic has none). Agents compose with HTML/CSS/SVG + Pillow and see the result. Add only on demonstrated need, with its cost visible |
+| Missing general capability | Search-engine API | Agents browse sites' own search and fetch pages. A search API (e.g. a paid web-search API) is provider onboarding with a per-query cost |
+| Missing general capability | Video / audio production (no ffmpeg) | Not demonstrated as needed; courses ship as PDF / slides / ZIP |
+| Missing general capability | Persistent logged-in sessions across worker restarts | Sessions are memory-only; the agent logs in again (vault credentials). Persisting cookies safely means sealing them like credentials — next if logins prove costly |
+| Missing general capability | Recurring customer billing (subscriptions) | Obligations remind the agent to invoice each period through a new checkout; automatic PayPal subscriptions are not built |
+| Missing general capability | Revision counting and cross-offer workload view | The text of the quote records revisions; capacity is per offer |
+| Platform-specific integration | Gumroad gateway | Built (v52), owner onboarding; the £500 unlock is an owner decision |
+| Platform-specific integration | Any other platform API (Etsy, social, ads platforms) | Not needed for operation (browser); only where an API is materially better and permitted |
+| Owner / provider onboarding | Legal seller facts; public site; sales open | §31.8, §12 |
+| Owner / provider onboarding | Money-out (custody signer, `REAL_PAYMENTS_ENABLED` in custody.env), card and identity seals with standing authority | Needed for paid ads, supplier payments, card purchases and refunds through PayPal |
+| Owner / provider onboarding | Seller accounts that need the owner's identity, tax or payout details | Done by the agent with the brokered authority, once it is on; a live check is human |
+| Owner / provider onboarding | Toolchain host install (new lock `a2d5c9f11557`) | sudo |
+| Owner / provider onboarding | Browser host hardening (PostgreSQL socket, loopback deny) | sudo / `/etc` |
+| Genuinely unavailable under platform rules | Fiverr, Upwork (one verified human per account, no autonomous operation). Any platform whose terms forbid automated or AI-operated accounts, the agent records and does not operate. | The rules, not missing code |
