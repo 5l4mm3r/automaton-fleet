@@ -26,6 +26,7 @@ import { PgBrowserGateway } from "../../fleet/browser/gateway.js";
 import { BrowserWorker } from "../../fleet/browser/worker.js";
 import { browserEnvProblems } from "../../fleet/browser/main.js";
 import { browserUrlAllowed, HostResolutionPolicy, addressPrivate } from "../../fleet/browser/policy.js";
+import { totp } from "../../fleet/identity/crypto.js";
 import { auditPrivileges } from "../../fleet/postgres/privileges.js";
 
 const PG_BIN = findPgBin();
@@ -90,7 +91,8 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
   let PHISH = "";
   let loop: NodeJS.Timeout;
   const mail = new SimulatedMailProvider();
-  const users = new Map<string, { email: string; password: string; verified: boolean }>();
+  const users = new Map<string, { email: string; password: string; verified: boolean; totpSeed?: string; totpOn?: boolean; loginCode?: string }>();
+  const pending2fa = new Map<string, string>();
   const tokens = new Map<string, string>();
   const API_KEY = `sk_live_${crypto.randomBytes(16).toString("hex")}`;
   const results: unknown[] = [];
@@ -145,8 +147,53 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
       if (u.pathname === "/login" && req.method === "POST") {
         const f = await form(req);
         const x = users.get(f.get("user") ?? "");
+        // v79: an account with an authenticator asks for its code after the password.
+        if (x && x.verified && x.password === f.get("pass") && x.totpOn) {
+          const t = crypto.randomBytes(8).toString("hex");
+          pending2fa.set(t, f.get("user")!);
+          return send("", 302, { Location: "/login/2fa", "Set-Cookie": `p2fa=${t}; Path=/; Secure; HttpOnly` });
+        }
         if (x && x.verified && x.password === f.get("pass")) return send("", 302, { Location: "/dashboard", "Set-Cookie": `sid=${f.get("user")}; Secure; HttpOnly` });
         return send(page("Log in", "<p>Wrong credentials</p>"), 401);
+      }
+      if (u.pathname === "/login/2fa" && req.method === "GET") return send(page("Two-step verification", `<form method=post action=/login/2fa><label for=otp>Authenticator code</label><input id=otp name=otp><button>Verify</button></form>`));
+      if (u.pathname === "/login/2fa" && req.method === "POST") {
+        const f = await form(req);
+        const name = pending2fa.get(/p2fa=([a-f0-9]+)/.exec(req.headers.cookie ?? "")?.[1] ?? "");
+        const x = users.get(name ?? "");
+        if (!x || !x.totpSeed || f.get("otp") !== totp(x.totpSeed)) return send(page("Two-step verification", "<p>Wrong code</p>"), 401);
+        return send("", 302, { Location: "/dashboard", "Set-Cookie": `sid=${name}; Path=/; Secure; HttpOnly` });
+      }
+      if (u.pathname === "/security" && req.method === "GET") {
+        const x = users.get(who ?? "");
+        if (!x) return send("", 302, { Location: "/login" });
+        x.totpSeed ??= "JBSWY3DPEHPK3PXP" + crypto.randomBytes(5).toString("hex").toUpperCase().replace(/[^A-Z2-7]/g, "Q").slice(0, 8);
+        return send(page("Security", `<p>Set up your authenticator. Key: <code id=seed>${x.totpSeed}</code></p><form method=post action=/security/totp><input id=code name=code><button>Enable</button></form>`));
+      }
+      if (u.pathname === "/security/totp" && req.method === "POST") {
+        const x = users.get(who ?? "");
+        const f = await form(req);
+        if (!x || !x.totpSeed || f.get("code") !== totp(x.totpSeed)) return send(page("Security", "<p>Code not accepted</p>"), 400);
+        x.totpOn = true;
+        return send(page("Security", "<p>Two-step verification enabled</p>"));
+      }
+      // v79: passwordless sign-in by an emailed one-time code.
+      if (u.pathname === "/login/email" && req.method === "GET") return send(page("Sign in by email", `<form method=post action=/login/email><input id=em name=em type=email><button>Send code</button></form>`));
+      if (u.pathname === "/login/email" && req.method === "POST") {
+        const f = await form(req);
+        const name = [...users.entries()].find(([, v]) => v.email === f.get("em"))?.[0];
+        if (name) {
+          users.get(name)!.loginCode = String(crypto.randomInt(100000, 999999));
+          mail.deliver({ to: f.get("em")!, from: "noreply@sim-shop.test", subject: "Your sign-in code", body: `Your one-time sign-in code is ${users.get(name)!.loginCode}. It expires in 10 minutes.` });
+        }
+        return send(page("Enter your code", `<form method=post action=/login/email/verify><input type=hidden name=em value="${f.get("em")}"><input id=code name=code><button>Sign in</button></form>`));
+      }
+      if (u.pathname === "/login/email/verify" && req.method === "POST") {
+        const f = await form(req);
+        const name = [...users.entries()].find(([, v]) => v.email === f.get("em"))?.[0];
+        if (!name || !users.get(name)!.loginCode || users.get(name)!.loginCode !== f.get("code")) return send(page("Enter your code", "<p>Wrong code</p>"), 401);
+        users.get(name)!.loginCode = undefined;
+        return send("", 302, { Location: "/dashboard", "Set-Cookie": `sid=${name}; Path=/; Secure; HttpOnly` });
       }
       if (u.pathname === "/dashboard") {
         if (!who || !users.get(who)) return send("", 302, { Location: "/login" });
@@ -389,7 +436,42 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
     expect(JSON.stringify(results)).not.toContain(now);
   });
 
+  it("v79 account continuity: after the browser worker restarts, the agent regains its account from the vault — password + authenticator, or an emailed code — never seeing either", async () => {
+    // Set up an authenticator on the agent's own account: the key shown on the page is captured into the vault.
+    const setup = await browse(A, "browser.act", { sessionId, steps: [{ action: "goto", url: `${SITE}/security` }, { action: "capture", selector: "#seed", kind: "totp" },
+      { action: "fill", selector: "#code", credential: "totp" }, { action: "click", text: "Enable" }] });
+    expect(setup.result.text, JSON.stringify(setup.result)).toContain("Two-step verification enabled");
+    // The worker restarts (deploy, crash): every in-memory browser session is gone.
+    await worker.close();
+    worker = new BrowserWorker(bgw, { executablePath: CHROME!, allowLoopback: true, ignoreHttpsErrors: true, brokerPublicKey: async () => (await bgw.brokerKey()).ownerPub });
+    const lost = await browse(A, "browser.act", { sessionId, steps: [{ action: "goto", url: `${SITE}/dashboard` }] });
+    expect(lost.result.code).toBe("FLEET_BROWSER_SESSION_LOST");
+    expect((await R.econ(A, "browser.observe", { sessionId })).code).toBe("FLEET_BROWSER_CLOSED");
+    // A fresh session for the same account: password from the vault, then the authenticator code generated by the broker.
+    const o = await browse(A, "browser.open", { url: `${SITE}/login`, accountId });
+    const back = await browse(A, "browser.act", { sessionId: o.sessionId, steps: [{ action: "fill", selector: "#user", credential: "username" },
+      { action: "fill", selector: "#pass", credential: "password" }, { action: "click", text: "Log in" }, { action: "fill", selector: "#otp", credential: "totp" },
+      { action: "click", text: "Verify" }, { action: "wait_for", selector: "#key" }] });
+    expect(back.status, JSON.stringify(back.result)).toBe("done");
+    expect(back.result.title).toBe("Dashboard");
+    // Or by an emailed one-time code to the account's routing address (withheld from the agent, served by the broker).
+    const e = await browse(A, "browser.act", { sessionId: o.sessionId, steps: [{ action: "goto", url: `${SITE}/login/email` },
+      { action: "fill", selector: "#em", credential: "email" }, { action: "click", text: "Send code" }] });
+    expect(e.result.title).toBe("Enter your code");
+    for (let i = 0; i < 40 && !(await R.q(`SELECT 1 FROM fleet.fleet_auth_message_blobs WHERE used_at IS NULL AND blob IS NOT NULL`)).length; i++) await new Promise((r) => setTimeout(r, 100));
+    const code = await browse(A, "browser.act", { sessionId: o.sessionId, steps: [{ action: "fill", selector: "#code", credential: "email_code" }, { action: "click", text: "Sign in" },
+      { action: "wait_for", selector: "#key" }] });
+    expect(code.status, JSON.stringify(code.result)).toBe("done");
+    const seed = users.get("mayahart")!.totpSeed!;
+    expect(JSON.stringify(results)).not.toContain(seed);
+    expect(JSON.stringify(await R.q(`SELECT jsonb_agg(result) r FROM fleet.fleet_browser_actions`))).not.toContain(seed);
+    expect((await R.q(`SELECT kind FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND status = 'active' ORDER BY kind`, [accountId])).map((x) => x.kind))
+      .toEqual(["api_key", "password", "totp"]);
+    await browse(A, "browser.close", { sessionId: o.sessionId });
+  });
+
   it("scope and reach: sessions are per agent; private addresses are unreachable; roles are least-privilege", async () => {
+    sessionId = (await browse(A, "browser.open", { url: `${SITE}/login`, accountId })).sessionId; // the old one ended with the worker restart
     expect((await R.econ(B, "browser.act", { sessionId, steps: [{ action: "goto", url: SITE }] })).code).toBe("FLEET_BROWSER_NONE");
     expect((await R.econ(B, "browser.open", { url: SITE, accountId })).code).toBe("FLEET_NOT_FOUND");
     const x = await browse(A, "browser.act", { sessionId, steps: [{ action: "goto", url: "http://10.11.12.13/admin" }] });

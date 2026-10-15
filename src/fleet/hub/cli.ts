@@ -133,11 +133,17 @@
  *   economy-offer-proof <slug>                                              (v76) your live proof purchase of an agent's product: pay it yourself;
  *                                                                           booked as owner capital (net of fee), never the agent's revenue
  *   hub-offers [agentId] | hub-enquiries [agentId]                          (v76) agents' offers (reviews, orders, links) and buyers' enquiries
+ *   economy-outward <agentId> release <why…> | hold                        (v79) outward actions are held while sales are closed; release one
+ *                                                                           agent for a controlled proof (nothing becomes public), or hold it again
  *   hub-business [agentId]                                                 (v79) agents' channels, live presence, leads, obligations, outreach and
  *                                                                           channel payouts waiting for you
  *   economy-channel-payout-decide <payoutId> book <paypalTxnId> | reject [note…]
- *                                                                           (v79) book a channel payout against the treasury PayPal credit it arrived
- *                                                                           as (a bank payout: move it into PayPal first), or reject the claim
+ *                                                                           (v79) a payout paid INTO the treasury PayPal: book it against its credit
+ *                                                                           (when the automatic match was ambiguous), or reject the claim
+ *   economy-channel-payout-bank <payoutId> <bankRef> <YYYY-MM-DD> <amountMinor>
+ *                                                                           (v79) a payout paid to your bank: its bank statement line (one per payout)
+ *   economy-channel-payout-transfer <paypalTxnId> <payoutId> [payoutId…]  (v79) the PayPal credit that moved those bank payouts into the treasury
+ *                                                                           (its amount = exactly their total); books each payout once
  *   economy-capital-backing                                                  (v66) the existing capital: virtual, provider-paid, backed, unbacked; books vs PayPal
  *   economy-capital-back <railId> <txnId> <eventCode>                        (v66) a PayPal deposit backs the existing capital (no second credit; any excess is owner funding)
  *   owner-identity-autonomy [on|off] [--classes c1,c2] [--card on|off] [--card-max n] [--card-daily n] [--exclude https://a,https://b] [statement…]
@@ -191,7 +197,7 @@ export const HUB_COMMANDS = new Set([
   "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
-  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide",
+  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide", "economy-channel-payout-bank", "economy-channel-payout-transfer", "economy-outward",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -400,6 +406,15 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     }
     case "economy-seller":
       return h.seller();
+    case "economy-channel-payout-bank":
+      if (p.length !== 4 || !/^\d{4}-\d{2}-\d{2}$/.test(p[2]) || !/^\d+$/.test(p[3])) throw new Error("usage: economy-channel-payout-bank <payoutId> <bankRef> <YYYY-MM-DD> <amountMinor>");
+      return h.channelPayoutBank(p[0], p[1], p[2], Number(p[3]), actor);
+    case "economy-channel-payout-transfer":
+      if (p.length < 2) throw new Error("usage: economy-channel-payout-transfer <paypalTxnId> <payoutId> [payoutId…]");
+      return h.channelPayoutTransfer(p[0], p.slice(1), actor);
+    case "economy-outward":
+      if (p.length < 2 || !["release", "hold"].includes(p[1]) || (p[1] === "release" && p.length < 3)) throw new Error("usage: economy-outward <agentId> release <why…> | <agentId> hold");
+      return h.outwardSet(p[0], p[1] === "release", p.slice(2).join(" ") || null, actor);
     case "hub-business":
       return h.business(p[0] ?? null);
     case "economy-channel-payout-decide":

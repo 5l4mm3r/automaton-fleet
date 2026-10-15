@@ -41,7 +41,8 @@ export interface EconomyRegistry {
  * (schema v46 refuses them on any registry that does not explicitly allow simulated settlement). Pass false to test the
  * production behaviour.
  */
-export async function startEconomyRegistry(pgBin: string, opts: { founders?: number; allocationCents?: number; treasuryCents?: number; simulatedSettlement?: boolean } = {}): Promise<EconomyRegistry> {
+export async function startEconomyRegistry(pgBin: string, opts: { founders?: number; allocationCents?: number; treasuryCents?: number; simulatedSettlement?: boolean;
+  /** v79: keep the founders under the preparation hold (default: the owner releases them, as for a controlled proof). */ outwardHeld?: boolean } = {}): Promise<EconomyRegistry> {
   const n = opts.founders ?? 2;
   const pgc = await startEphemeralPg(pgBin);
   const owner = new pg.Pool({ connectionString: pgc.ownerUrl, max: 4 });
@@ -66,6 +67,9 @@ export async function startEconomyRegistry(pgBin: string, opts: { founders?: num
   await genesis.fund(g.genesisId, OWNER);
   const founders = p.founderIds!.map((id) => ({ id, token: mintAgentToken(id) }));
   await genesis.activateWithHashes(g.genesisId, g.authSha256, founders.map((t) => hashAgentToken(t.token)), OWNER);
+  // v79: outward actions are held while sales are closed; suites that exercise them release their founders the way the
+  // owner releases an agent for a controlled proof (economy-outward). outwardHeld keeps the production default.
+  if (opts.outwardHeld !== true) for (const f of founders) await q(`SELECT fleet.fleet_admin_outward_set($1, true, 'test registry: outward actions exercised', $2)`, [f.id, OWNER]);
   const one = async <T = any>(expr: string, params: unknown[] = []) => (await owner.query(`SELECT ${expr} AS r`, params)).rows[0].r as T;
   return {
     pgc, owner, store, gw, ledger, genesis, founders, q, one,

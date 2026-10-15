@@ -1194,7 +1194,7 @@ Evidence kinds: **C** code inspection · **T** automated tests · **R** disposab
 | Identify the opportunity; assess economics and runway | `opportunity record/shortlist`; the agent's own ranking (no fixed weights). `wallet view/survival/plan`; `fleet_services assess_risk`; capital requests decided by Fleet Control; decisions with capital at risk. | C T | Working |
 | Select channels | `business add_channel` with any name and kind. The platform's rules on automated / AI-operated accounts are recorded before a third-party channel goes active (`FLEET_CHANNEL_RULES`). Fees, payout route and payer are recorded too. | C T (v79) | **v79** |
 | Venture identity and presence | `identity create_persona {venture_identity}`; a routing address per venture; `register_account` + browser sign-up (vault password, email-link verification, origin pinning). Profile editing through the browser. Your own files uploaded (`upload_file`). Presence recorded with its URL and evidence (`record_presence`). | C T (browser, real Chrome) | Working; uploads **v79** |
-| Market | Listings, service ads, posts and pages on any site whose terms permit it, through the browser. Lawful outreach email (one recipient; lawful basis; legal seller and opt-out appended; fleet-wide suppression). Paid ads through the ordinary spending tools and their review. `channel_link` attribution. | C T (v79) | **v79**. Ads spending waits for money-out activation (§12) |
+| Market | Listings, service ads, posts and pages through the browser **only where the platform's terms permit automated operation** (§32.6: the large platforms checked mostly do not; there the routes are an official API or the agent preparing content for the owner). Lawful outreach email (one recipient; lawful basis; legal seller and opt-out appended; fleet-wide suppression). Paid ads through the ordinary spending tools and their review. `channel_link` attribution. | C T (v79) | **v79**. Ads spending waits for money-out activation (§12) |
 | Leads and quotes | `business add_lead` (source, lawful basis, stage, value, next action — due leads wake the agent). Enquiries, clarification, quotes and capacity on the agent's pages (v76). | C T | **v79** leads |
 | Produce and review | Exec sandbox with the pinned toolchain: XLSX, DOCX, PDF, images, ZIP, and **PPTX (v79 lock)**. The agent renders its own HTML / SVG designs in the browser (`set_content` → `screenshot` / `pdf`). **`view_image`**: the agent sees its renders and screenshots (Anthropic image blocks; seen once; bounded). The inspector and review gate apply on the agent's pages. | C T | **v79** rendering + vision. **No image-generation model** (provider onboarding) |
 | Deliver | Own pages: reviewed files, mail attachment or link, 30-day downloads. Other channels: through the channel's own delivery, in the browser (file upload). | C T | Working |
@@ -1251,10 +1251,89 @@ unit — a host change in the activation package.
 | Missing general capability | Recurring customer billing (subscriptions) | Obligations remind the agent to invoice each period through a new checkout; automatic PayPal subscriptions are not built |
 | Missing general capability | Revision counting and cross-offer workload view | The text of the quote records revisions; capacity is per offer |
 | Platform-specific integration | Gumroad gateway | Built (v52), owner onboarding; the £500 unlock is an owner decision |
-| Platform-specific integration | Any other platform API (Etsy, social, ads platforms) | Not needed for operation (browser); only where an API is materially better and permitted |
+| Platform-specific integration | Official APIs where the platform permits automation only through them: LinkedIn (company page products), X API, Meta Graph API (business accounts), Pinterest API (business), Etsy Open API v3, Reddit API | Not built. Needed to operate those platforms autonomously at all (§32.6). Add per platform on demonstrated need, under an account the owner holds |
 | Owner / provider onboarding | Legal seller facts; public site; sales open | §31.8, §12 |
 | Owner / provider onboarding | Money-out (custody signer, `REAL_PAYMENTS_ENABLED` in custody.env), card and identity seals with standing authority | Needed for paid ads, supplier payments, card purchases and refunds through PayPal |
 | Owner / provider onboarding | Seller accounts that need the owner's identity, tax or payout details | Done by the agent with the brokered authority, once it is on; a live check is human |
 | Owner / provider onboarding | Toolchain host install (new lock `a2d5c9f11557`) | sudo |
 | Owner / provider onboarding | Browser host hardening (PostgreSQL socket, loopback deny) | sudo / `/etc` |
-| Genuinely unavailable under platform rules | Fiverr, Upwork (one verified human per account, no autonomous operation). Any platform whose terms forbid automated or AI-operated accounts, the agent records and does not operate. | The rules, not missing code |
+| Genuinely unavailable under platform rules | Fiverr, Upwork (one verified human per account, no autonomous operation). Scripted (browser) operation of LinkedIn and X accounts; automated account creation on Instagram; any platform whose terms forbid automated or AI-operated accounts — the agent records it and does not operate it (assistance only: it prepares content for the owner). | The rules, not missing code |
+
+### 32.5 The preparation hold is the default (corrected 2026-10-15, before deployment)
+v76 held outward actions only once a public site was set, so with no site an agent could act outward. v79 corrects this:
+- **Default:** outward actions are held whenever sales are closed, with or without a public site. That covers mail, SMS, phones, websites (click, fill, upload, download), account creation / operation, storefront publishing and card requests.
+- **The two exits, both the owner's:**
+  - open sales (launch);
+  - `economy-outward <agentId> release <why>`, a per-agent release for a controlled proof. Nothing becomes public (sales stay closed). `economy-outward <agentId> hold` ends it.
+- **What continues under the hold:**
+  - reading and rendering in the browser (goto, back, wait, wait_for, wait_idle, scroll, hover, tab, set_content, screenshot, pdf);
+  - research, building, reviewing and private publishing;
+  - internal records;
+  - fulfilling orders, the owner's proof purchase included (delivery and order messages are not outward promotion).
+
+Evidence: v79 test "the preparation hold is the default" (T).
+
+### 32.6 Platform coverage, qualified (2026-10-15)
+v79 provides **general browser capabilities, tested on representative interfaces**: classic forms, a listing editor (uploads, an embedded editor, dialogs, downloads, popups), a JavaScript wizard and a social composer. It does **not** establish that any given channel works, or that any platform permits agent operation.
+
+`docs/marketplaces/channel-rules-2026-10-15.md` checks the intended workflow on each platform against three questions: permitted assistance, account ownership, automated operation. Findings:
+- LinkedIn prohibits bots and automated posting, connecting and engagement, and requires one real person per account.
+- X prohibits non-API automation, including scripting the website.
+- Instagram / Facebook, Pinterest and Etsy restrict automated access and route automation through their APIs.
+- Etsy and LinkedIn require the owner as the identified account holder (Etsy: government ID + selfie).
+- Gumtree prohibits scraping; automated posting is unaddressed.
+- Fiverr and Upwork are closed to autonomous accounts.
+
+**Consequence:** on those platforms the lawful routes are an official API (not built) or assistance (the agent prepares, the owner posts). The library and Charter v8 say so; `add_channel` requires the rules recorded before a third-party channel goes active.
+
+### 32.7 Account continuity (2026-10-15)
+- **A browser session is temporary:** in memory only, ending after 30 minutes idle or on any worker restart. It is not account management.
+- **The account is durable:** `fleet_agent_accounts` holds the platform, origins (pinned), status and verification; vault credentials by kind (never values).
+- **After a restart:**
+  1. The agent's next action reports `FLEET_BROWSER_SESSION_LOST`; the old session closes.
+  2. The agent opens a new session with its `accountId` and logs in from the vault: username / email, password, an authenticator code (once the agent captured the key the site showed it), or an emailed one-time code (the account's routing address; served by the broker, withheld from the agent). Reset and sign-in links work the same way.
+  3. A password change stays pending until confirmed.
+- **Evidence:** browser test "v79 account continuity" (T, real Chrome). Authenticator setup, worker restart, a new session, password + authenticator; then an emailed code. No secret reaches the agent.
+- **Remaining human dependencies:**
+  - CAPTCHAs and risk challenges on a new device or IP;
+  - a live selfie or video ID check;
+  - passkeys / hardware security keys (WebAuthn is not supported);
+  - push approvals in a mobile app;
+  - SMS codes (Twilio is not configured; codes to the owner's own phone are never readable);
+  - an authenticator key shown only as a QR code (capture reads text; most sites also offer the key as text).
+- **Known cost:** every new session logs in again. Frequent logins can trigger a platform's new-device checks. Persisting session cookies (sealed like credentials) is not built.
+
+### 32.8 Payout evidence (2026-10-15)
+A bank-to-PayPal transfer alone cannot show which marketplace payout or which agent it carries. The chain is recorded link by link:
+1. **The agent's claim:** the marketplace's own payout reference (unique per channel; a duplicate is refused), its date, the amount received and the sales it pays (their net by currency is shown against it).
+2. **For a bank payout, the owner's bank statement line** (`economy-channel-payout-bank`): reference (unique: one line evidences one payout), date, amount equal to the claim.
+3. **The owner's treasury transfer** (`economy-channel-payout-transfer <paypalTxnId> <payoutId…>`). The PayPal credit must be:
+   - completed;
+   - in GBP;
+   - unattributed and not a checkout;
+   - exactly the total of the payouts it carries, each with its bank line.
+
+**What booking does:**
+- Each payout's revenue posts once (claim key `chpayout:bank:<payoutId>`, kind `bank_receipt`).
+- The credit is attributed once (`channel_payout`), so it can never also back capital (`FLEET_ALREADY_CLAIMED`) or carry another payout.
+- Payouts paid straight into the treasury PayPal keep the automatic match (transaction, amount, the channel's payer), with the owner deciding ambiguous ones; a bank payout can never book through that path.
+
+Evidence: v79 payout test (T).
+
+### 32.9 Browser network isolation (host step, before any real browsing)
+The worker refuses names that resolve to loopback or private addresses (v79 code). Closing the DNS-rebinding window needs the network layer: `scripts/fleet-browser-isolation.sh`.
+- **plan:** read-only.
+- **apply:**
+  1. Back up `pg_hba.conf` and `browser.env`.
+  2. Add one `pg_hba` line (`local <db> fleet_browser_login scram-sha-256`) and reload. No PostgreSQL restart: the socket `/var/run/postgresql/.s.PGSQL.5432` exists.
+  3. Run a socket login probe before switching.
+  4. Point `browser.env` at the socket.
+  5. Install the drop-in `20-no-loopback.conf`: `IPAddressAllow=` reset, `IPAddressDeny=127.0.0.0/8 ::1/128`.
+  6. Restart the unit.
+- **verify:**
+  - the unit's effective policy;
+  - a throwaway probe under exactly that policy, as the browser user: TCP to 5432 / 6379 / 8443 / 8787 / 8788 / 8790 on 127.0.0.1 and ::1 must all fail; the public internet must work; `bx_ping` over the socket must succeed;
+  - the restarted worker's Chromium self-test and start.
+- **rollback:** restores both files and removes the drop-in.
+
+Local evidence: `selftest` (the file transforms), the probe run locally. Host evidence comes only from `apply` / `verify` on the VPS, which needs sudo and the owner's go.

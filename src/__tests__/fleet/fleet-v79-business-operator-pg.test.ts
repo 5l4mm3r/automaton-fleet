@@ -61,7 +61,7 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
   const cash = async (who: Founder) => Number(await R.one(`fleet.fleet_ledger_balance(fleet.fleet_ledger_account($1, 'agent_cash'))`, [who.id]));
 
   beforeAll(async () => {
-    R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, simulatedSettlement: false });
+    R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, simulatedSettlement: false, outwardHeld: true });
     [F, G] = R.founders;
     await R.store.grantServiceRole();
     await R.store.grantCustodyRole();
@@ -94,6 +94,36 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
       await expect(agent.query(`SELECT fleet.fleet_admin_channel_payout_decide(gen_random_uuid(), 'reject', NULL, NULL, $1)`, [OWNER])).rejects.toThrow(/permission denied/);
     } finally { await agent.end(); }
     expect(await pub("svc_attribute", ["order", "0".repeat(64), "abcdefabcdef"])).toMatchObject({ ok: false });
+  });
+
+  it("the preparation hold is the default: no public site and sales closed hold outward actions; reading and rendering continue; the owner releases one agent", async () => {
+    expect(await R.one(`fleet.fleet_preparation_hold()`)).toBe(true); // no public site at all
+    const held = { ok: false, code: "FLEET_PREPARATION_HOLD" };
+    expect(await R.econ(F, "mail.send", { to: "someone@example.test", subject: "Hi", body: "Hello", idempotencyKey: idem() })).toMatchObject(held);
+    expect(await R.econ(F, "account.register", { platform: "example.com", kind: "marketplace", origin: "https://example.com" })).toMatchObject(held);
+    const s = await ok(R.econ(F, "browser.open", { url: "https://example.com/" })); // reading is preparation
+    expect((await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "goto", url: "https://example.com/a" }, { action: "scroll", to: "bottom" },
+      { action: "screenshot" }, { action: "wait_idle" }] })).ok).toBe(true);
+    for (const outward of [[{ action: "click", text: "Sign up" }], [{ action: "fill", selector: "#q", value: "x" }], [{ action: "download", text: "CSV" }],
+      [{ action: "goto", url: "https://example.com/" }, { action: "upload_file", selector: "#f", fileId: crypto.randomUUID() }]]) {
+      expect(await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: outward }), JSON.stringify(outward)).toMatchObject(held);
+    }
+    // Internal records are preparation, never held.
+    expect((await R.econ(F, "channel.add", { ventureKey: "ledgers", name: "Prep channel", kind: "community" })).ok).toBe(true);
+    // The owner releases one agent for a controlled proof: that agent only; nothing becomes public (sales stay closed).
+    const agent = new pg.Pool({ connectionString: R.pgc.agentUrl, max: 1 });
+    try { await expect(agent.query(`SELECT fleet.fleet_admin_outward_set($1, true, 'x x x', $2)`, [F.id, OWNER])).rejects.toThrow(/permission denied/); } finally { await agent.end(); }
+    expect((await R.q(`SELECT fleet.fleet_admin_outward_set($1, true, NULL, $2) AS r`, [F.id, OWNER]).catch((e) => [{ r: e.message }]))[0].r).toMatch(/say why/);
+    expect((await R.q(`SELECT fleet.fleet_admin_outward_set($1, true, 'controlled proof: account creation on its chosen channel', $2) AS r`, [F.id, OWNER]))[0].r)
+      .toMatchObject({ ok: true, released: true, salesOpen: false, outwardHeld: false });
+    expect((await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "click", text: "Sign up" }] })).ok).toBe(true);
+    expect(await R.econ(G, "mail.send", { to: "someone@example.test", subject: "Hi", body: "Hello", idempotencyKey: idem() })).toMatchObject(held);
+    expect(await R.one(`fleet.fleet_sales_open()`)).toBe(false);
+    await R.q(`SELECT fleet.fleet_admin_outward_set($1, false, NULL, $2)`, [F.id, OWNER]);
+    expect(await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "click", text: "Sign up" }] })).toMatchObject(held);
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type IN ('outward_released','outward_held'))`))).toBe(2);
+    // The rest of this suite exercises outward operations: both founders released (as for a controlled proof).
+    for (const who of [F, G]) await R.q(`SELECT fleet.fleet_admin_outward_set($1, true, 'suite exercises outward operations', $2)`, [who.id, OWNER]);
   });
 
   it("the browser step grammar: staged files, rendering only without an account, frames, tabs, dialogs; files are the agent's own", async () => {
@@ -145,7 +175,7 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     }
     expect((await R.econ(G, "channel.update", { channelId: channel, status: "paused" })).code).toBe("FLEET_NOT_FOUND");
     expect((await R.econ(F, "channel.add", { ventureKey: "prints", name: "x", kind: "social" })).code).toBe("FLEET_BAD_REQUEST");
-    expect((await ok(R.econ(F, "channel.list", { ventureKey: "ledgers" }))).channels.length).toBe(4);
+    expect((await ok(R.econ(F, "channel.list", { ventureKey: "ledgers" }))).channels.length).toBe(5); // + the one recorded under the hold
   });
 
   it("attribution: a channel's code carries onto the order it brings; another agent's code attributes nothing", async () => {
@@ -193,7 +223,8 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
 
   it("outreach is lawful, personal and identifiable, with an opt-out that holds across agents", async () => {
     await R.q(`SELECT fleet.fleet_admin_public_site_set('https://shop.fleet.test', NULL, $1)`, [OWNER]);
-    // While sales are closed every outward action waits (the preparation hold) — outreach included.
+    // While sales are closed every outward action of an unreleased agent waits (the preparation hold) — outreach included.
+    await R.q(`SELECT fleet.fleet_admin_outward_set($1, false, NULL, $2)`, [F.id, OWNER]);
     expect((await R.econ(F, "mail.send", { ventureKey: "ledgers", to: "x@studio-nine.test", subject: "s", body: "b", idempotencyKey: idem() })).code).toBe("FLEET_PREPARATION_HOLD");
     await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
     await ok(R.econ(F, "mailbox.provision", { ventureKey: "ledgers", idempotencyKey: idem() }));
@@ -231,7 +262,7 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     const c0 = await cash(F);
     // The credit is not there yet: the claim waits; then PayPal shows it and the claim books on the next look.
     const pendingTxn = txnId();
-    const p0 = await ok(R.econ(F, "payout.claim", { channelId: channel, route: "treasury_paypal", paypalTransactionId: pendingTxn, amountMinor: 1_360, saleIds: [s1.sale.saleId] }));
+    const p0 = await ok(R.econ(F, "payout.claim", { platformPayoutRef: "ETSY-PO-0001", channelId: channel, route: "treasury_paypal", paypalTransactionId: pendingTxn, amountMinor: 1_360, saleIds: [s1.sale.saleId] }));
     expect(p0.payout.status).toBe("pending_match");
     expect(await cash(F)).toBe(c0);
     const id = await credit(1_360, 45, "Etsy Ireland UC | Etsy payout");
@@ -243,17 +274,17 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     expect((await R.q(`SELECT attributed_as FROM fleet.fleet_paypal_transactions WHERE transaction_id = $1`, [id]))[0].attributed_as).toBe("channel_payout");
     expect((await R.q(`SELECT fleet.fleet_ledger_verify() AS v`))[0].v).toMatchObject({ ok: true, unbalanced: 0 });
     // The same credit again: already attributed → the owner's decision, never a second booking.
-    const dup = await ok(R.econ(F, "payout.claim", { channelId: channel, route: "treasury_paypal", paypalTransactionId: id, amountMinor: 1_360 }));
+    const dup = await ok(R.econ(F, "payout.claim", { platformPayoutRef: "ETSY-PO-0002", channelId: channel, route: "treasury_paypal", paypalTransactionId: id, amountMinor: 1_360 }));
     expect(dup.payout).toMatchObject({ status: "needs_owner", reason: expect.stringContaining("already attributed") });
     // A wrong amount, a payer that is not the channel's, and a payer two agents share all go to the owner.
     const wrong = await credit(900, 0, "Etsy Ireland UC");
-    expect((await ok(R.econ(F, "payout.claim", { channelId: channel, route: "treasury_paypal", paypalTransactionId: wrong, amountMinor: 950 }))).payout.status).toBe("needs_owner");
+    expect((await ok(R.econ(F, "payout.claim", { platformPayoutRef: "ETSY-PO-0003", channelId: channel, route: "treasury_paypal", paypalTransactionId: wrong, amountMinor: 950 }))).payout.status).toBe("needs_owner");
     const stranger = await credit(500, 0, "Someone Else Ltd");
-    expect((await ok(R.econ(F, "payout.claim", { channelId: channel, route: "treasury_paypal", paypalTransactionId: stranger, amountMinor: 500 }))).payout.reason).toMatch(/payer/);
+    expect((await ok(R.econ(F, "payout.claim", { platformPayoutRef: "ETSY-PO-0004", channelId: channel, route: "treasury_paypal", paypalTransactionId: stranger, amountMinor: 500 }))).payout.reason).toMatch(/payer/);
     const gc = await ok(R.econ(G, "channel.add", { ventureKey: "prints", name: "Etsy", kind: "marketplace", payoutRoute: "treasury_paypal", payoutCounterparty: "Etsy" }));
     expect(gc.ok).toBe(true);
     const shared = await credit(700, 20, "Etsy Ireland UC");
-    const amb = await ok(R.econ(F, "payout.claim", { channelId: channel, route: "treasury_paypal", paypalTransactionId: shared, amountMinor: 700 }));
+    const amb = await ok(R.econ(F, "payout.claim", { platformPayoutRef: "ETSY-PO-0005", channelId: channel, route: "treasury_paypal", paypalTransactionId: shared, amountMinor: 700 }));
     expect(amb.payout).toMatchObject({ status: "needs_owner", reason: expect.stringContaining("another agent") });
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'channel_payout_needs_owner')`))).toBe(4);
     // The owner books the ambiguous one (they know whose it is) and rejects the duplicate.
@@ -261,11 +292,38 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     expect((await R.q(`SELECT fleet.fleet_admin_channel_payout_decide($1, 'book', $2, NULL, $3) AS r`, [amb.payout.payoutId, shared, OWNER]))[0].r).toMatchObject({ ok: true, status: "booked" });
     expect(await cash(F)).toBe(c1 + 680);
     expect((await R.q(`SELECT fleet.fleet_admin_channel_payout_decide($1, 'reject', NULL, 'duplicate', $2) AS r`, [dup.payout.payoutId, OWNER]))[0].r).toMatchObject({ status: "rejected" });
-    // A payout to the owner's bank books only once the owner has moved it into the treasury PayPal (against that credit).
-    const bank = await ok(R.econ(F, "payout.claim", { channelId: channel, route: "owner_bank", amountMinor: 2_000, reference: "ETSY PAYOUT 14 OCT" }));
-    expect(bank.payout).toMatchObject({ status: "needs_owner", reason: expect.stringContaining("bank") });
+    // The same marketplace payout cannot be claimed twice.
+    expect((await R.econ(F, "payout.claim", { platformPayoutRef: "etsy-po-0001", channelId: channel, route: "treasury_paypal", paypalTransactionId: txnId(), amountMinor: 1_360 })).code)
+      .toBe("FLEET_PAYOUT_DUPLICATE");
+    // A payout to the owner's bank: marketplace payout → bank statement line → treasury transfer, each linked once.
+    const s2 = await ok(R.econ(F, "sale.report", { channelId: channel, externalRef: "etsy-order-1002", occurredAt: new Date().toISOString(), currency: "GBP", grossMinor: 1_300, feeMinor: 100 }));
+    const s3 = await ok(R.econ(F, "sale.report", { channelId: channel, externalRef: "etsy-order-1003", occurredAt: new Date().toISOString(), currency: "GBP", grossMinor: 900, feeMinor: 100 }));
+    const bank1 = await ok(R.econ(F, "payout.claim", { platformPayoutRef: "ETSY-PO-B1", platformPaidOn: "2026-10-14", channelId: channel, route: "owner_bank", amountMinor: 1_200, saleIds: [s2.sale.saleId] }));
+    const bank2 = await ok(R.econ(F, "payout.claim", { platformPayoutRef: "ETSY-PO-B2", channelId: channel, route: "owner_bank", amountMinor: 800, saleIds: [s3.sale.saleId] }));
+    expect(bank1.payout).toMatchObject({ status: "needs_owner", reason: expect.stringContaining("bank line"), salesNetByCurrency: { GBP: 1_200 } });
+    const owner = (sql: string, args: unknown[]) => R.q(sql, args).then((r) => r[0].r, (e: Error) => e.message);
+    // The transfer cannot book before each payout's bank line is recorded.
     const moved = await credit(2_000, 0, "Test Owner");
-    expect((await R.q(`SELECT fleet.fleet_admin_channel_payout_decide($1, 'book', $2, NULL, $3) AS r`, [bank.payout.payoutId, moved, OWNER]))[0].r).toMatchObject({ ok: true });
+    expect(await owner(`SELECT fleet.fleet_admin_channel_payout_transfer($1, $2::uuid[], $3) AS r`, [moved, [bank1.payout.payoutId, bank2.payout.payoutId], OWNER])).toMatch(/FLEET_PAYOUT_EVIDENCE/);
+    expect(await owner(`SELECT fleet.fleet_admin_channel_payout_bank($1, 'BACS ETSY 0001', '2026-10-15', 1300, $2) AS r`, [bank1.payout.payoutId, OWNER])).toMatch(/FLEET_PAYOUT_AMOUNT/);
+    expect(await owner(`SELECT fleet.fleet_admin_channel_payout_bank($1, 'BACS ETSY 0001', '2026-10-15', 1200, $2) AS r`, [bank1.payout.payoutId, OWNER])).toMatchObject({ ok: true });
+    expect(await owner(`SELECT fleet.fleet_admin_channel_payout_bank($1, 'bacs etsy 0001', '2026-10-15', 800, $2) AS r`, [bank2.payout.payoutId, OWNER])).toMatch(/FLEET_PAYOUT_BANK_USED/);
+    expect(await owner(`SELECT fleet.fleet_admin_channel_payout_bank($1, 'BACS ETSY 0002', '2026-10-15', 800, $2) AS r`, [bank2.payout.payoutId, OWNER])).toMatchObject({ ok: true });
+    // A bank payout never books through the treasury-credit path; the transfer must equal exactly what the bank lines received.
+    expect(await owner(`SELECT fleet.fleet_admin_channel_payout_decide($1, 'book', $2, NULL, $3) AS r`, [bank1.payout.payoutId, moved, OWNER])).toMatch(/FLEET_PAYOUT_ROUTE/);
+    expect(await owner(`SELECT fleet.fleet_admin_channel_payout_transfer($1, $2::uuid[], $3) AS r`, [moved, [bank1.payout.payoutId], OWNER])).toMatch(/FLEET_PAYOUT_AMOUNT/);
+    const cBank = await cash(F);
+    expect(await owner(`SELECT fleet.fleet_admin_channel_payout_transfer($1, $2::uuid[], $3) AS r`, [moved, [bank1.payout.payoutId, bank2.payout.payoutId], OWNER]))
+      .toMatchObject({ ok: true, creditMinor: 2_000 });
+    expect(await cash(F)).toBe(cBank + 2_000);
+    // Each payout's revenue posted once; the credit is attributed once and can neither carry another payout nor back capital.
+    expect(await owner(`SELECT fleet.fleet_admin_channel_payout_transfer($1, $2::uuid[], $3) AS r`, [moved, [bank1.payout.payoutId, bank2.payout.payoutId], OWNER])).toMatch(/FLEET_ALREADY_CLAIMED/);
+    expect(await owner(`SELECT fleet.fleet_admin_capital_back($1, $2, 'T0000', $3) AS r`, [rail.railId, moved, OWNER])).toMatch(/FLEET_ALREADY_CLAIMED/);
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_revenue_claims WHERE claim_key LIKE 'chpayout:bank:%')`))).toBe(2);
+    const linked = await R.q(`SELECT platform_payout_ref, bank_ref, transfer_txn, status FROM fleet.fleet_channel_payouts WHERE route = 'owner_bank' ORDER BY platform_payout_ref`);
+    expect(linked).toEqual([{ platform_payout_ref: "ETSY-PO-B1", bank_ref: "BACS ETSY 0001", transfer_txn: moved, status: "booked" },
+      { platform_payout_ref: "ETSY-PO-B2", bank_ref: "BACS ETSY 0002", transfer_txn: moved, status: "booked" }]);
+    expect((await R.q(`SELECT status FROM fleet.fleet_channel_sales WHERE sale_id = ANY($1::uuid[]) ORDER BY 1`, [[s2.sale.saleId, s3.sale.saleId]])).map((x) => x.status)).toEqual(["paid_out", "paid_out"]);
     // Venture P&L: the payout fee is a processor fee, not "revenue" costs.
     const fin = (await ok(R.econ(F, "venture.status", { key: "ledgers" })));
     const f = fin.financials ?? fin.venture?.financials;

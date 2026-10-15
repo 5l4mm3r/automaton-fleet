@@ -51,6 +51,11 @@ const RULES: Rule[] = [
     why: "the applied v44 routing constant (history); since v48 the live route no longer names the retired type (it routes via the payment_order_ prefix)" },
   { cls: "legal/security", file: /src\/fleet\/(hub\/admin|postgres\/migrations-phase54)\.ts$/, line: /card request|card_requests|pre-funded request|funds the card first/i,
     why: "v54 (owner decision O17, 2026-10-09): the owner's personal credit card is the last-resort payment instrument; above the owner's own threshold the owner funds the card and decides. Ordinary spending (PayPal, wallets, envelopes) has no owner gate" },
+  // v79: money from another channel reaches an agent only against a real treasury PayPal credit; when the evidence is
+  // ambiguous (a payer two agents share, a wrong amount, a bank payout) the owner attributes it — treasury integrity, not
+  // a gate on any business action (channels, posts, leads and sales records need no owner).
+  { cls: "legal/security", file: /src\/fleet\/(cognition\/types|hub\/admin)\.ts$/, line: /payout|payouts awaiting the owner/,
+    why: "v79: attribution of ambiguous incoming money to an agent (treasury evidence), not an ordinary business approval" },
   { cls: "retirement", file: /src\/fleet\/postgres\/migrations-phase48\.ts$/, line: /^\s*\["'payment_order_cancelled','payment_order_awaiting_owner','payment_instruction_issued'", "'payment_order_cancelled','payment_instruction_issued'"\],$/,
     why: "the v48 asserted edit that REMOVES the retired type from the live routing function" },
 ];

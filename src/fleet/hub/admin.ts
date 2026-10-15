@@ -219,8 +219,18 @@ export class PgHubAdmin {
   seller() { return this.one(`SELECT fleet_admin_seller() AS r`, []); }
   offerProofBuy(slug: string, actor: string) { return this.one(`SELECT fleet_admin_offer_proof_buy($1, $2) AS r`, [slug, actor]); }
   offers(agentId: string | null) { return this.one(`SELECT fleet_offers_admin_json($1) AS r`, [agentId]); }
+  /** v79: release one agent from the preparation hold for a controlled proof (nothing becomes public), or hold it again. */
+  outwardSet(agentId: string, release: boolean, note: string | null, actor: string) { return this.one(`SELECT fleet_admin_outward_set($1, $2, $3, $4) AS r`, [agentId, release, note, actor]); }
   /** v79: each agent's business beyond the offer pages (channels, live presence, leads, obligations, outreach, payouts awaiting the owner). */
   business(agentId: string | null) { return this.one(`SELECT fleet_business_admin_json($1) AS r`, [agentId]); }
+  /** v79: the bank statement line that received a marketplace payout (owner_bank route). */
+  channelPayoutBank(payoutId: string, bankRef: string, receivedOn: string, amountMinor: number, actor: string) {
+    return this.one(`SELECT fleet_admin_channel_payout_bank($1::uuid, $2, $3::date, $4, $5) AS r`, [payoutId, bankRef, receivedOn, amountMinor, actor]);
+  }
+  /** v79: the treasury transfer (one PayPal credit from your bank) carrying exactly these bank payouts. */
+  channelPayoutTransfer(paypalTxn: string, payoutIds: string[], actor: string) {
+    return this.one(`SELECT fleet_admin_channel_payout_transfer($1, $2::uuid[], $3) AS r`, [paypalTxn, payoutIds, actor]);
+  }
   /** v79: book a channel payout against a named treasury PayPal credit, or reject the claim. */
   channelPayoutDecide(payoutId: string, decision: "book" | "reject", paypalTxn: string | null, note: string | null, actor: string) {
     return this.one(`SELECT fleet_admin_channel_payout_decide($1::uuid, $2, $3, $4, $5) AS r`, [payoutId, decision, paypalTxn, note, actor]);

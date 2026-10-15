@@ -28,16 +28,28 @@
  *     (an individual needs consent or an existing customer relationship), goes to one recipient, states the legal seller
  *     and carries a working opt-out link (/u/<token> on the public site); an address that opted out is never written to
  *     first again by any agent (replies and its own orders excepted).
- *  7. Sales and payouts on other channels: the agent reports each external sale (memo, never cash); a payout is cash only
- *     when matched to a real credit in the treasury PayPal — automatically when the transaction, its amount and its
- *     counterparty (the channel's payout payer) match unambiguously; otherwise the owner decides (a bank receipt must first
- *     reach the treasury PayPal). Booked as provider_revenue_receipt, attributed to the venture.
+ *  7. Sales and payouts on other channels: the agent reports each external sale (memo, never cash) and claims each payout
+ *     with the marketplace's own payout reference (unique per channel; its sales linked). A payout is cash only against a
+ *     real credit in the treasury PayPal:
+ *     - paid into the treasury PayPal: automatically when the transaction, its amount and its counterparty (the channel's
+ *       payout payer) match unambiguously; otherwise the owner names the credit;
+ *     - paid into the owner's bank: an evidence chain the owner completes — the bank statement line (reference, date,
+ *       amount = the payout; one line per payout), then the treasury transfer: one PayPal credit from the owner's bank
+ *       whose amount is exactly the payouts it carries. Each payout's revenue posts once (its own claim key); the credit is
+ *       attributed once (channel_payout) and can never also back capital or count as owner funding.
+ *     Booked as provider_revenue_receipt, attributed to the venture.
  *  8. Venture P&L: PayPal refunds count as refunds (not reduced revenue); processor fees are their own category.
  *  9. The shared library: bf-channels v2 (channels are the agent's choice; the browser operates any platform whose terms
  *     permit it — a missing API is not a ban), bf-production-tools v2 (decks, rendering, uploads, view_image) and the dated
  *     capability status v6.
- * Nothing here moves money on its own, changes a live flag, opens sales or grants authority. Outward actions stay under the
- * preparation hold while sales are closed.
+ * 10. The preparation hold by default (owner, 2026-10-15): outward actions (mail, SMS, phones, acting on websites, accounts,
+ *     storefront publishing, card requests) are held whenever sales are closed — also before any public site is set (v76 held
+ *     them only once a site was set). Two ways out, both the owner's: open sales (launch), or release one named agent for a
+ *     controlled proof (economy-outward <agentId> release|hold) without making anything public. Under the hold an agent still
+ *     prepares: it reads and renders in the browser (goto, back, wait, wait_for, wait_idle, scroll, hover, tab, set_content,
+ *     screenshot, pdf — no click, fill, upload or download), builds, reviews, publishes offers that stay private, and fulfils
+ *     the owner's proof purchase (delivery and order messages are not outward promotion).
+ * Nothing here moves money on its own, changes a live flag, opens sales or grants authority.
  */
 import { V28_SQL } from "./migrations-phase28.js";
 import { V37_SQL } from "./migrations-phase37.js";
@@ -56,8 +68,8 @@ const lit = (v: unknown) => `'${JSON.stringify(v).replace(/'/g, "''")}'`;
 export const LIBRARY_ENTRIES_V79 = ["bf-channels", "bf-production-tools", "fleet-capability-status"] as const;
 
 export const EVENT_ROUTES_V79 = Object.freeze({
-  P2_IMPORTANT: ["channel_payout_needs_owner"],
-  P3_SUMMARY: ["channel_payout_booked", "outreach_opt_out"],
+  P2_IMPORTANT: ["channel_payout_needs_owner", "outward_released", "outward_held"],
+  P3_SUMMARY: ["channel_payout_booked", "outreach_opt_out", "channel_payout_bank_recorded"],
 } as const);
 
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -82,6 +94,8 @@ export const OUTREACH_BASES = ["consent", "existing_customer", "b2b_legitimate_i
 export const OBLIGATION_RECUR = ["none", "daily", "weekly", "monthly", "quarterly", "yearly"] as const;
 export const LEAD_RETENTION_DAYS = 365;
 
+/** v79: browser steps that only read or render (allowed under the preparation hold). */
+export const BROWSER_READ_STEPS = ["goto", "back", "wait", "wait_for", "wait_idle", "scroll", "hover", "tab", "set_content", "screenshot", "pdf"] as const;
 export const AGENT_OPS_V79 = ["browser.stage_file", "browser.files", "browser.fetch_file", "account.password_confirm", "account.password_discard",
   "channel.add", "channel.update", "channel.list", "channel.link", "presence.record", "presence.update", "presence.list",
   "lead.add", "lead.update", "lead.list", "obligation.add", "obligation.done", "obligation.cancel", "obligation.list",
@@ -259,6 +273,14 @@ const DISPATCH = restate(V76_SQL, "api_economy", [
   [`      WHEN 'order.refund' THEN fleet_econ_order_refund(p_agent, a)`,
    `      WHEN 'order.refund' THEN fleet_econ_order_refund(p_agent, a)
       ${AGENT_OPS_V79.map((o) => `WHEN '${o}' THEN fleet_econ_${o.replace(".", "_")}(p_agent, a)`).join("\n      ")}`],
+  // v79: the preparation hold by default — sales closed (with or without a public site) holds outward actions unless the
+  // owner released this agent; read / render browser steps stay available for preparation.
+  [`AND fleet_preparation_hold() THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_PREPARATION_HOLD',
+      'reason', 'sales are not open yet (owner): outward actions — sending mail or SMS, acting on websites, creating or operating accounts, storefront publishing, card requests — wait until they are; reading, research, building and reviewing continue');`,
+   `AND fleet_outward_held(p_agent) AND NOT (p_op = 'browser.act' AND fleet_browser_steps_read_only(a -> 'steps')) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_PREPARATION_HOLD',
+      'reason', 'outward actions are held until the owner opens sales or releases you for a controlled proof: sending mail or SMS, acting on websites (clicking, filling, uploading, downloading), creating or operating accounts, storefront publishing, card requests wait; reading and rendering in the browser, research, building, reviewing, publishing private offers and fulfilling orders continue');`],
   [`|NO_RECEIVING_RAIL|PUBLIC_SITE_[A-Z_]+):'`, `|NO_RECEIVING_RAIL|PUBLIC_SITE_[A-Z_]+|CHANNEL_[A-Z_]+|PRESENCE_[A-Z_]+|LEAD_[A-Z_]+|OBLIGATION_[A-Z_]+|OUTREACH_[A-Z_]+|SALE_[A-Z_]+|PAYOUT_[A-Z_]+|CREDENTIAL_[A-Z_]+):'`],
 ]);
 
@@ -268,6 +290,43 @@ const EVENT_ROUTE = restate(V78_SQL, "fleet_event_route", [
 ]);
 
 export const V79_SQL = `
+-- ═══ 0. The preparation hold by default; the owner's per-agent release for a controlled proof ═══
+CREATE TABLE fleet_outward_release (
+  agent_id     text        PRIMARY KEY REFERENCES fleet_agents(agent_id),
+  note         text        NOT NULL CHECK (length(note) BETWEEN 3 AND 300),
+  released_by  text        NOT NULL,
+  released_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE OR REPLACE FUNCTION fleet_preparation_hold() RETURNS boolean LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$ SELECT NOT fleet_sales_open() $$;
+CREATE FUNCTION fleet_outward_held(p_agent text) RETURNS boolean LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT NOT fleet_sales_open() AND NOT EXISTS (SELECT 1 FROM fleet_outward_release WHERE agent_id = p_agent)
+$$;
+CREATE FUNCTION fleet_browser_steps_read_only(p_steps jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_typeof(p_steps) = 'array' AND jsonb_array_length(p_steps) > 0
+     AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(p_steps) e WHERE COALESCE(e ->> 'action', '') NOT IN (${q(BROWSER_READ_STEPS)}))
+$$;
+CREATE FUNCTION fleet_admin_outward_set(p_agent text, p_release boolean, p_note text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE n integer;
+BEGIN
+  ${OWNER_ACTOR}
+  PERFORM fleet_require_operator_approver(substr(p_actor, 10), 'fleet_treasury');
+  IF NOT EXISTS (SELECT 1 FROM fleet_agents WHERE agent_id = p_agent) THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no such agent'; END IF;
+  IF p_release THEN
+    IF p_note IS NULL OR length(btrim(p_note)) NOT BETWEEN 3 AND 300 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: say why (3..300 characters)'; END IF;
+    INSERT INTO fleet_outward_release (agent_id, note, released_by) VALUES (p_agent, btrim(p_note), p_actor)
+      ON CONFLICT (agent_id) DO UPDATE SET note = EXCLUDED.note, released_by = EXCLUDED.released_by, released_at = now();
+  ELSE
+    DELETE FROM fleet_outward_release WHERE agent_id = p_agent;
+  END IF;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  PERFORM fleet_event(CASE WHEN p_release THEN 'outward_released' ELSE 'outward_held' END, p_agent, p_actor, jsonb_build_object('note', left(p_note, 300)));
+  RETURN jsonb_build_object('ok', true, 'agentId', p_agent, 'released', p_release, 'salesOpen', fleet_sales_open(),
+    'outwardHeld', fleet_outward_held(p_agent));
+END $$;
+
 -- ═══ 1. Browser files: staged by the agent for a page, or produced by a page for the agent (24 h) ═══
 CREATE TABLE fleet_browser_files (
   file_id       uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -925,10 +984,17 @@ CREATE TABLE fleet_channel_payouts (
   venture_id            uuid        NOT NULL REFERENCES fleet_ventures(venture_id),
   channel_id            uuid        NOT NULL REFERENCES fleet_venture_channels(channel_id),
   route                 text        NOT NULL CHECK (route IN ('treasury_paypal','owner_bank')),
+  platform_payout_ref   text        NOT NULL CHECK (length(platform_payout_ref) BETWEEN 1 AND 120),
+  platform_paid_on      date,
   amount_minor          bigint      NOT NULL CHECK (amount_minor > 0),
   currency              text        NOT NULL CHECK (currency = 'GBP'),
   paypal_transaction_id text        CHECK (paypal_transaction_id ~ '^[A-Z0-9]{5,40}$'),
   reference             text        CHECK (length(reference) <= 200),
+  -- owner_bank: the owner's bank statement line, then the treasury transfer that carried it into PayPal.
+  bank_ref              text        CHECK (length(bank_ref) BETWEEN 1 AND 120),
+  bank_received_on      date,
+  bank_recorded_by      text,
+  transfer_txn          text        CHECK (transfer_txn ~ '^[A-Z0-9]{5,40}$'),
   status                text        NOT NULL DEFAULT 'pending_match' CHECK (status IN ('pending_match','needs_owner','booked','rejected')),
   journal_id            uuid        REFERENCES fleet_ledger_journal(journal_id),
   reason                text        CHECK (length(reason) <= 500),
@@ -936,8 +1002,14 @@ CREATE TABLE fleet_channel_payouts (
   decided_at            timestamptz,
   created_at            timestamptz NOT NULL DEFAULT now(),
   CHECK (route <> 'treasury_paypal' OR paypal_transaction_id IS NOT NULL),
-  CHECK ((status = 'booked') = (journal_id IS NOT NULL))
+  CHECK (route <> 'owner_bank' OR paypal_transaction_id IS NULL),
+  CHECK ((status = 'booked') = (journal_id IS NOT NULL)),
+  CHECK (route <> 'owner_bank' OR status <> 'booked' OR (bank_ref IS NOT NULL AND transfer_txn IS NOT NULL)),
+  CHECK ((bank_ref IS NULL) = (bank_received_on IS NULL))
 );
+-- One claim per marketplace payout, one payout per bank line (rejected claims free their references).
+CREATE UNIQUE INDEX fleet_channel_payouts_platform_ref ON fleet_channel_payouts (channel_id, lower(platform_payout_ref)) WHERE status <> 'rejected';
+CREATE UNIQUE INDEX fleet_channel_payouts_bank_ref ON fleet_channel_payouts (lower(bank_ref)) WHERE bank_ref IS NOT NULL AND status <> 'rejected';
 CREATE INDEX fleet_channel_payouts_agent ON fleet_channel_payouts (agent_id, status);
 CREATE TABLE fleet_channel_sales (
   sale_id        uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -973,7 +1045,10 @@ $$;
 CREATE FUNCTION fleet_payout_json(p fleet_channel_payouts) RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT jsonb_strip_nulls(jsonb_build_object('payoutId', p.payout_id, 'channelId', p.channel_id, 'route', p.route, 'amountMinor', p.amount_minor, 'currency', p.currency,
-    'paypalTransactionId', p.paypal_transaction_id, 'reference', p.reference, 'status', p.status, 'journalId', p.journal_id, 'reason', p.reason,
+    'platformPayoutRef', p.platform_payout_ref, 'platformPaidOn', p.platform_paid_on, 'paypalTransactionId', p.paypal_transaction_id, 'reference', p.reference,
+    'bankRef', p.bank_ref, 'bankReceivedOn', p.bank_received_on, 'transferTxn', p.transfer_txn, 'status', p.status,
+    'salesNetByCurrency', (SELECT jsonb_object_agg(currency, n) FROM (SELECT currency, sum(gross_minor - fee_minor - refunded_minor) n FROM fleet_channel_sales s
+       WHERE s.payout_id = p.payout_id GROUP BY currency) z), 'journalId', p.journal_id, 'reason', p.reason,
     'sales', (SELECT count(*) FROM fleet_channel_sales s WHERE s.payout_id = p.payout_id), 'createdAt', p.created_at, 'decidedAt', p.decided_at))
 $$;
 
@@ -1024,36 +1099,114 @@ BEGIN
      ORDER BY occurred_at DESC LIMIT 300) s), '[]'::jsonb));
 END $$;
 
--- Book a payout against a real treasury PayPal credit (the controller on an unambiguous match, or the owner).
+-- Post one payout's revenue (once: its own claim key) — shared by both routes.
+CREATE FUNCTION fleet_channel_payout_post(p fleet_channel_payouts, p_fee bigint, p_key text, p_claim_kind text, p_actor text, p_source text) RETURNS uuid LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE c fleet_venture_channels; v_lines jsonb; v_j uuid;
+BEGIN
+  IF fleet_claim_taken(p_key) THEN RAISE EXCEPTION 'FLEET_ALREADY_CLAIMED: % is already booked', p_key; END IF;
+  SELECT * INTO c FROM fleet_venture_channels WHERE channel_id = p.channel_id;
+  v_lines := jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(p.agent_id, 'agent_revenue'), 'side', 'C', 'amount', p.amount_minor));
+  IF p.amount_minor - p_fee > 0 THEN v_lines := v_lines || jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(p.agent_id, 'agent_cash'), 'side', 'D', 'amount', p.amount_minor - p_fee)); END IF;
+  IF p_fee > 0 THEN v_lines := v_lines || jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(p.agent_id, 'agent_fees'), 'side', 'D', 'amount', p_fee)); END IF;
+  v_j := fleet_ledger_post('provider_revenue_receipt', p_key, p_actor, left('payout ' || p.platform_payout_ref || ' from ' || c.name || ' received into the treasury PayPal', 300),
+    p_source, p.agent_id, NULL, NULL, p_key, NULL, now(), v_lines);
+  INSERT INTO fleet_revenue_claims (claim_key, claim_kind, journal_id, claimed_by) VALUES (p_key, p_claim_kind, v_j, p_actor);
+  INSERT INTO fleet_venture_journals (journal_id, venture_id, agent_id, cost_category, attributed_by) VALUES (v_j, p.venture_id, p.agent_id, 'revenue', p_actor);
+  UPDATE fleet_channel_sales SET status = 'paid_out', updated_at = now() WHERE payout_id = p.payout_id AND status = 'reported';
+  PERFORM fleet_event('channel_payout_booked', p.agent_id, p_actor, jsonb_build_object('payoutId', p.payout_id, 'channel', c.name, 'platformPayoutRef', p.platform_payout_ref,
+    'route', p.route, 'amountMinor', p.amount_minor, 'feeMinor', p_fee, 'journalId', v_j));
+  RETURN v_j;
+END $$;
+
+-- Book a payout paid INTO the treasury PayPal against its credit (the controller on an unambiguous match, or the owner).
 CREATE FUNCTION fleet_channel_payout_book(p_payout uuid, p_txn text, p_actor text, p_source text) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE p fleet_channel_payouts; t fleet_paypal_transactions; c fleet_venture_channels; v_key text; v_fee bigint; v_lines jsonb; v_j uuid;
+DECLARE p fleet_channel_payouts; t fleet_paypal_transactions; v_fee bigint; v_j uuid;
 BEGIN
   SELECT * INTO p FROM fleet_channel_payouts WHERE payout_id = p_payout FOR UPDATE;
   IF p.status IN ('booked','rejected') THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_PAYOUT_DECIDED'); END IF;
+  IF p.route <> 'treasury_paypal' THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_PAYOUT_ROUTE', 'reason', 'a bank payout books through its bank line and treasury transfer'); END IF;
   SELECT * INTO t FROM fleet_paypal_transactions WHERE transaction_id = p_txn AND status = 'S' AND amount_minor > 0 AND currency = 'GBP'
      AND checkout_id IS NULL AND attributed_as IS NULL ORDER BY initiated_at LIMIT 1 FOR UPDATE;
   IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_PAYOUT_NO_CREDIT'); END IF;
   IF t.amount_minor <> p.amount_minor THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_PAYOUT_AMOUNT', 'creditMinor', t.amount_minor); END IF;
-  v_key := 'chpayout:' || t.transaction_id;
-  IF fleet_claim_taken(v_key) THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_ALREADY_CLAIMED'); END IF;
-  SELECT * INTO c FROM fleet_venture_channels WHERE channel_id = p.channel_id;
   v_fee := LEAST(abs(t.fee_minor), t.amount_minor);
-  v_lines := jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(p.agent_id, 'agent_revenue'), 'side', 'C', 'amount', t.amount_minor));
-  IF t.amount_minor - v_fee > 0 THEN v_lines := v_lines || jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(p.agent_id, 'agent_cash'), 'side', 'D', 'amount', t.amount_minor - v_fee)); END IF;
-  IF v_fee > 0 THEN v_lines := v_lines || jsonb_build_array(jsonb_build_object('account', fleet_ledger_account(p.agent_id, 'agent_fees'), 'side', 'D', 'amount', v_fee)); END IF;
-  v_j := fleet_ledger_post('provider_revenue_receipt', v_key, p_actor, left('payout from ' || c.name || ' received into the treasury PayPal', 300), p_source, p.agent_id,
-    NULL, NULL, v_key, NULL, now(), v_lines);
-  INSERT INTO fleet_revenue_claims (claim_key, claim_kind, journal_id, claimed_by) VALUES (v_key, 'provider_payout', v_j, p_actor);
-  INSERT INTO fleet_venture_journals (journal_id, venture_id, agent_id, cost_category, attributed_by) VALUES (v_j, p.venture_id, p.agent_id, 'revenue', p_actor);
+  v_j := fleet_channel_payout_post(p, v_fee, 'chpayout:' || t.transaction_id, 'provider_payout', p_actor, p_source);
   UPDATE fleet_paypal_transactions SET attributed_as = 'channel_payout', attributed_ref = 'payout:' || p.payout_id, attributed_by = p_actor, attributed_at = now(), updated_at = now()
    WHERE rail_id = t.rail_id AND transaction_id = t.transaction_id AND event_code = t.event_code AND initiated_at = t.initiated_at;
   UPDATE fleet_channel_payouts SET status = 'booked', journal_id = v_j, paypal_transaction_id = t.transaction_id, decided_by = p_actor, decided_at = now()
    WHERE payout_id = p.payout_id;
-  UPDATE fleet_channel_sales SET status = 'paid_out', updated_at = now() WHERE payout_id = p.payout_id AND status = 'reported';
-  PERFORM fleet_event('channel_payout_booked', p.agent_id, p_actor, jsonb_build_object('payoutId', p.payout_id, 'channel', c.name, 'amountMinor', t.amount_minor,
-    'feeMinor', v_fee, 'journalId', v_j));
   RETURN jsonb_build_object('ok', true, 'status', 'booked', 'journalId', v_j, 'cashMinor', t.amount_minor - v_fee, 'feeMinor', v_fee);
+END $$;
+
+-- Owner: the bank statement line that received a marketplace payout (one line per payout, amount = the payout).
+CREATE FUNCTION fleet_admin_channel_payout_bank(p_payout uuid, p_bank_ref text, p_received_on date, p_amount bigint, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE p fleet_channel_payouts;
+BEGIN
+  ${OWNER_ACTOR}
+  SELECT * INTO p FROM fleet_channel_payouts WHERE payout_id = p_payout FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no such payout claim'; END IF;
+  IF p.route <> 'owner_bank' THEN RAISE EXCEPTION 'FLEET_PAYOUT_ROUTE: only a bank payout has a bank line'; END IF;
+  IF p.status IN ('booked','rejected') THEN RAISE EXCEPTION 'FLEET_PAYOUT_DECIDED: it is %', p.status; END IF;
+  IF p.bank_ref IS NOT NULL THEN RAISE EXCEPTION 'FLEET_PAYOUT_BANK_RECORDED: its bank line is already recorded (%)', p.bank_ref; END IF;
+  IF p_bank_ref IS NULL OR length(btrim(p_bank_ref)) NOT BETWEEN 1 AND 120 OR p_received_on IS NULL OR p_received_on > current_date THEN
+    RAISE EXCEPTION 'FLEET_BAD_REQUEST: the bank line''s reference and date (not in the future)';
+  END IF;
+  IF p_amount IS DISTINCT FROM p.amount_minor THEN
+    RAISE EXCEPTION 'FLEET_PAYOUT_AMOUNT: the bank line is % but the claim is % — reject the claim and let the agent claim what arrived', p_amount, p.amount_minor;
+  END IF;
+  IF EXISTS (SELECT 1 FROM fleet_channel_payouts WHERE lower(bank_ref) = lower(btrim(p_bank_ref)) AND status <> 'rejected') THEN
+    RAISE EXCEPTION 'FLEET_PAYOUT_BANK_USED: that bank line already evidences another payout';
+  END IF;
+  UPDATE fleet_channel_payouts SET bank_ref = btrim(p_bank_ref), bank_received_on = p_received_on, bank_recorded_by = p_actor,
+         reason = 'bank line recorded; books when its treasury transfer is recorded' WHERE payout_id = p.payout_id;
+  PERFORM fleet_event('channel_payout_bank_recorded', p.agent_id, p_actor, jsonb_build_object('payoutId', p.payout_id));
+  RETURN jsonb_build_object('ok', true, 'payoutId', p.payout_id, 'next', 'move it into the treasury PayPal, then economy-channel-payout-transfer <paypalTxnId> <payoutId…>');
+END $$;
+
+-- Owner: the treasury transfer — one PayPal credit from the owner's bank, exactly the payouts it carries. Each payout's
+-- revenue posts once; the credit is attributed once (never also capital backing or owner funding).
+CREATE FUNCTION fleet_admin_channel_payout_transfer(p_txn text, p_payouts uuid[], p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE t fleet_paypal_transactions; p fleet_channel_payouts; v_total bigint; v_fee bigint; v_left bigint; v_share bigint; v_n integer; v_i integer := 0;
+        v_j uuid; v_out jsonb := '[]'::jsonb;
+BEGIN
+  ${OWNER_ACTOR}
+  IF p_txn IS NULL OR p_txn !~ '^[A-Z0-9]{5,40}$' OR p_payouts IS NULL OR cardinality(p_payouts) NOT BETWEEN 1 AND 100
+     OR (SELECT count(DISTINCT x) FROM unnest(p_payouts) x) <> cardinality(p_payouts) THEN
+    RAISE EXCEPTION 'FLEET_BAD_REQUEST: the PayPal transaction id and 1..100 distinct payout claims';
+  END IF;
+  SELECT * INTO t FROM fleet_paypal_transactions WHERE transaction_id = p_txn AND amount_minor > 0 ORDER BY initiated_at LIMIT 1 FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_PAYOUT_NO_CREDIT: PayPal has not shown that credit yet (Transaction Search)'; END IF;
+  IF t.status <> 'S' OR t.currency <> 'GBP' THEN RAISE EXCEPTION 'FLEET_PAYOUT_NO_CREDIT: the credit is % in % (completed GBP only)', t.status, t.currency; END IF;
+  IF t.checkout_id IS NOT NULL OR t.attributed_as IS NOT NULL THEN
+    RAISE EXCEPTION 'FLEET_ALREADY_CLAIMED: that credit is already accounted for (%)', COALESCE(t.attributed_as, 'a checkout');
+  END IF;
+  SELECT count(*), COALESCE(sum(amount_minor), 0) INTO v_n, v_total FROM fleet_channel_payouts WHERE payout_id = ANY (p_payouts)
+     AND route = 'owner_bank' AND status = 'needs_owner' AND bank_ref IS NOT NULL AND transfer_txn IS NULL;
+  IF v_n <> cardinality(p_payouts) THEN
+    RAISE EXCEPTION 'FLEET_PAYOUT_EVIDENCE: every payout must be an open bank payout with its bank line recorded and no transfer yet';
+  END IF;
+  IF v_total <> t.amount_minor THEN
+    RAISE EXCEPTION 'FLEET_PAYOUT_AMOUNT: the credit is % but the payouts total % — transfer exactly what the bank lines received', t.amount_minor, v_total;
+  END IF;
+  -- PayPal's fee on the credit (normally none) is shared in proportion; the last payout takes the rounding.
+  v_fee := LEAST(abs(t.fee_minor), t.amount_minor); v_left := v_fee;
+  FOR p IN SELECT * FROM fleet_channel_payouts WHERE payout_id = ANY (p_payouts) ORDER BY created_at, payout_id FOR UPDATE LOOP
+    v_i := v_i + 1;
+    v_share := CASE WHEN v_i = v_n THEN v_left ELSE (v_fee * p.amount_minor) / v_total END;
+    v_left := v_left - v_share;
+    v_j := fleet_channel_payout_post(p, v_share, 'chpayout:bank:' || p.payout_id, 'bank_receipt', p_actor, 'owner');
+    UPDATE fleet_channel_payouts SET status = 'booked', journal_id = v_j, transfer_txn = t.transaction_id, decided_by = p_actor, decided_at = now(),
+           reason = NULL WHERE payout_id = p.payout_id;
+    v_out := v_out || jsonb_build_array(jsonb_build_object('payoutId', p.payout_id, 'amountMinor', p.amount_minor, 'feeMinor', v_share, 'journalId', v_j));
+  END LOOP;
+  UPDATE fleet_paypal_transactions SET attributed_as = 'channel_payout', attributed_ref = left('transfer:' || v_n || ' payouts', 200), attributed_by = p_actor,
+         attributed_at = now(), updated_at = now()
+   WHERE rail_id = t.rail_id AND transaction_id = t.transaction_id AND event_code = t.event_code AND initiated_at = t.initiated_at;
+  RETURN jsonb_build_object('ok', true, 'transferTxn', t.transaction_id, 'creditMinor', t.amount_minor, 'booked', v_out);
 END $$;
 
 -- An unambiguous match books at once; anything else is the owner's decision (never a guess).
@@ -1065,7 +1218,7 @@ BEGIN
   IF p.status <> 'pending_match' THEN RETURN fleet_payout_json(p); END IF;
   SELECT * INTO c FROM fleet_venture_channels WHERE channel_id = p.channel_id;
   IF p.route = 'owner_bank' THEN
-    v_reason := 'paid to the owner''s bank: the owner moves it into the treasury PayPal and books it against that credit';
+    v_reason := 'paid to the owner''s bank: the owner records the bank line (economy-channel-payout-bank), moves it into the treasury PayPal and records that transfer (economy-channel-payout-transfer)';
   ELSE
     SELECT * INTO t FROM fleet_paypal_transactions WHERE transaction_id = p.paypal_transaction_id AND amount_minor > 0 ORDER BY initiated_at LIMIT 1;
     IF NOT FOUND OR t.status <> 'S' THEN
@@ -1095,18 +1248,25 @@ END $$;
 CREATE FUNCTION fleet_econ_payout_claim(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE c fleet_venture_channels; p fleet_channel_payouts; v_route text := fleet_econ_text(a, 'route', 20, true); v_ids uuid[]; v_txn text := upper(fleet_econ_text(a, 'paypalTransactionId', 40));
+        v_ref text := fleet_econ_text(a, 'platformPayoutRef', 120);
 BEGIN
   SELECT * INTO c FROM fleet_venture_channels WHERE channel_id = fleet_identity_uuid(a, 'channelId') AND agent_id = p_agent;
   IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no such channel of yours'; END IF;
   IF v_route NOT IN ('treasury_paypal','owner_bank') THEN PERFORM fleet_econ_bad('route is treasury_paypal (the platform paid the Fleet''s PayPal) | owner_bank'); END IF;
   IF v_route = 'treasury_paypal' AND (v_txn IS NULL OR v_txn !~ '^[A-Z0-9]{5,40}$') THEN PERFORM fleet_econ_bad('paypalTransactionId is the PayPal transaction of the payout'); END IF;
+  IF v_route = 'owner_bank' THEN v_txn := NULL; END IF;
+  IF v_ref IS NULL THEN PERFORM fleet_econ_bad('platformPayoutRef is the marketplace''s own reference for this payout (its payout statement)'); END IF;
+  IF EXISTS (SELECT 1 FROM fleet_channel_payouts WHERE channel_id = c.channel_id AND lower(platform_payout_ref) = lower(v_ref) AND status <> 'rejected') THEN
+    RAISE EXCEPTION 'FLEET_PAYOUT_DUPLICATE: payout % of this channel is already claimed', v_ref;
+  END IF;
   IF jsonb_typeof(a -> 'saleIds') = 'array' THEN
     SELECT array_agg(s.sale_id) INTO v_ids FROM fleet_channel_sales s WHERE s.agent_id = p_agent AND s.channel_id = c.channel_id AND s.payout_id IS NULL
        AND s.sale_id::text IN (SELECT jsonb_array_elements_text(a -> 'saleIds'));
     IF COALESCE(cardinality(v_ids), 0) <> jsonb_array_length(a -> 'saleIds') THEN PERFORM fleet_econ_bad('saleIds are this channel''s reported sales not yet in a payout'); END IF;
   END IF;
-  INSERT INTO fleet_channel_payouts (agent_id, venture_id, channel_id, route, amount_minor, currency, paypal_transaction_id, reference)
-    VALUES (p_agent, c.venture_id, c.channel_id, v_route, fleet_econ_int(a, 'amountMinor', 1, 100000000000, true), 'GBP', v_txn, fleet_econ_text(a, 'reference', 200))
+  INSERT INTO fleet_channel_payouts (agent_id, venture_id, channel_id, route, platform_payout_ref, platform_paid_on, amount_minor, currency, paypal_transaction_id, reference)
+    VALUES (p_agent, c.venture_id, c.channel_id, v_route, v_ref, NULLIF(a ->> 'platformPaidOn', '')::date, fleet_econ_int(a, 'amountMinor', 1, 100000000000, true), 'GBP', v_txn,
+            fleet_econ_text(a, 'reference', 200))
     RETURNING * INTO p;
   IF v_ids IS NOT NULL THEN UPDATE fleet_channel_sales SET payout_id = p.payout_id, updated_at = now() WHERE sale_id = ANY (v_ids); END IF;
   RETURN jsonb_build_object('ok', true, 'payout', fleet_channel_payout_try(p.payout_id));
@@ -1138,6 +1298,7 @@ BEGIN
     PERFORM fleet_event('channel_payout_rejected', p.agent_id, p_actor, jsonb_build_object('payoutId', p.payout_id));
     RETURN jsonb_build_object('ok', true, 'status', 'rejected');
   ELSIF p_decision = 'book' THEN
+    IF p.route <> 'treasury_paypal' THEN RAISE EXCEPTION 'FLEET_PAYOUT_ROUTE: a bank payout books through economy-channel-payout-bank then economy-channel-payout-transfer'; END IF;
     IF p_txn IS NULL OR p_txn !~ '^[A-Z0-9]{5,40}$' THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: name the treasury PayPal credit (transaction id) the payout arrived as'; END IF;
     RETURN fleet_channel_payout_book(p.payout_id, p_txn, p_actor, 'owner');
   END IF;
