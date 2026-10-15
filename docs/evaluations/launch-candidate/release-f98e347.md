@@ -1,4 +1,4 @@
-# Release f98e347 — schema 78 → 79 (the autonomous business operator) · CANDIDATE, VPS-prepared, not deployed
+# Release f98e347 — SUPERSEDED by release-96016c9.md (same schema v79, five closing points added; never deployed)
 
 **Production now** (verified live 2026-10-15 13:54Z; see release-31ffef8.md):
 - 31ffef8, schema 78, UI 0.19.0.
