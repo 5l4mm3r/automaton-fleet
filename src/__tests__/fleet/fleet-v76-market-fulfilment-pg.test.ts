@@ -170,8 +170,20 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect(await R.econ(F, "offer.publish", { offerId, reviewId: failed.reviewId })).toMatchObject({ ok: false, code: "FLEET_REVIEW_FAILED" });
     expect(await R.econ(F, "offer.publish", { offerId, reviewId: rv.reviewId })).toMatchObject({ ok: false, code: "FLEET_PUBLIC_SITE_UNSET" });
     expect(await R.q(`SELECT fleet.fleet_admin_public_site_set('https://shop.fleet.test', 'Automaton Fleet (test trading name), contact via your order page', 'operator:test')`)).toBeTruthy();
+    // v78: the legal seller (owner facts) first, then the venture's own storefront (the agent's venture identity + routing address).
+    expect(await R.econ(F, "offer.publish", { offerId, reviewId: rv.reviewId })).toMatchObject({ ok: false, code: "FLEET_PUBLIC_SITE_SELLER_UNSET" });
+    expect((await R.q(`SELECT fleet.fleet_admin_seller_set($1::jsonb, 'operator:test') AS r`, [JSON.stringify({ legalForm: "individual", legalName: "Test Owner",
+      postalAddress: "1 Test Street, Testtown, TT1 1TT, United Kingdom" })]))[0].r).toMatchObject({ ok: true, version: 1 });
+    expect(await R.econ(F, "offer.publish", { offerId, reviewId: rv.reviewId })).toMatchObject({ ok: false, code: "FLEET_STOREFRONT_PROFILE" });
+    const ltd = await R.econ(F, "identity.create", { kind: "venture_identity", ventureKey: "sheets", displayName: "Ledgerline Ltd",
+      bio: "Spreadsheet tools that small businesses can trust to forecast their cash." });
+    expect(ltd.ok).toBe(true);
+    expect(await R.econ(F, "offer.publish", { offerId, reviewId: rv.reviewId })).toMatchObject({ ok: false, code: "FLEET_STOREFRONT_NAME" });
+    expect((await R.econ(F, "identity.update", { identityId: ltd.identity.identity_id, status: "retired" })).ok).toBe(true);
+    expect((await R.econ(F, "identity.create", { kind: "venture_identity", ventureKey: "sheets", displayName: "Ledgerline",
+      bio: "Spreadsheet tools that small businesses can trust to forecast their cash." })).ok).toBe(true);
     expect(await R.econ(F, "offer.publish", { offerId, reviewId: rv.reviewId })).toMatchObject({ ok: false, code: "FLEET_MAIL_MAILBOX" });
-    expect((await R.econ(F, "mailbox.provision", { idempotencyKey: idem() })).ok).toBe(true);
+    expect((await R.econ(F, "mailbox.provision", { ventureKey: "sheets", idempotencyKey: idem() })).ok).toBe(true);
     const p = await R.econ(F, "offer.publish", { offerId, reviewId: rv.reviewId });
     expect(p, JSON.stringify(p)).toMatchObject({ ok: true, offer: { status: "published", url: expect.stringMatching(/^https:\/\/shop\.fleet\.test\/o\/small-business-cash-flow-workbook-[0-9a-f]{6}$/) } });
     // Reviews are history.
@@ -196,7 +208,13 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect((await R.econ(F, "mail.send", { to: "someone@example.test", subject: "Hello", body: "Hi", idempotencyKey: idem() })).code).not.toBe("FLEET_PREPARATION_HOLD");
     // The public page: the offer, its files' names, the seller notice; nothing about the agent's books or buyers.
     const page = await pub("svc_offer_page", [p.offer.slug]);
-    expect(page).toMatchObject({ ok: true, seller: expect.stringContaining("Automaton Fleet"), offer: { kind: "product", available: true, priceMinor: 1_500, title: "Small business cash-flow workbook" } });
+    expect(page).toMatchObject({ ok: true, seller: expect.stringContaining("Automaton Fleet"), offer: { kind: "product", available: true, priceMinor: 1_500, title: "Small business cash-flow workbook",
+      brand: "Ledgerline", about: expect.stringContaining("small businesses"), supportEmail: expect.stringMatching(/^[a-z0-9._-]+\+[0-9a-f]{10}@/) } });
+    // v78: the legal seller behind the agent's brand, the address and the venture's own support address, then the owner's extra notice.
+    expect(page.seller).toContain("Sold by Test Owner under the brand Ledgerline.");
+    expect(page.seller).toContain("Address: 1 Test Street, Testtown, TT1 1TT, United Kingdom");
+    expect(page.seller).toContain(`Customer support: ${page.offer.supportEmail}`);
+    expect(page.seller).not.toMatch(/VAT|company no/);
     expect(JSON.stringify(page)).not.toMatch(/agent_id|agentId|venture_id|reviewId|sha256/);
   });
 

@@ -118,7 +118,10 @@
  *   economy-ai-credit-historical-cost <provider> <credit> <total> <evidence…>  (v73) once: post it (agent / treasury as originally attributed; owed to the owner)
  *   economy-ai-credit-test-period-preview | economy-ai-credit-test-period-writeoff  (v74) pre-launch AI cost → the Fleet; owner payable waived as contributed capital (each journal once; never past the launch)
  *   economy-launch-boundary | economy-launch-boundary-record <note…>         (v74) the explicit launch boundary (owner, once)
- *   economy-public-site <https://origin> [seller notice…]                  (v76) where offer / order pages are served, and who the seller is
+ *   economy-public-site <https://origin> [extra notice…]                   (v76) where offer / order pages are served (+ optional extra seller text)
+ *   economy-seller-set <json>                                              (v78) the legal seller behind every agent brand: {legalForm (individual|company),
+ *                                                                           legalName, tradingName?, postalAddress, vatNumber?, companyNumber?, registeredOffice?}
+ *   economy-seller                                                         (v78) the legal seller and each selling venture's storefront (brand, support address)
  *   economy-owner-withdrawal-assess <profit_distribution|capital_return> <amountMinor>   (v77) is it free cash now? (before moving it)
  *   economy-owner-withdrawal <profit_distribution|capital_return|reimbursement> <amountMinor> <paypalTxnId> [note…]
  *                                                                           (v77) record what you withdrew in PayPal: once per id, never more than
@@ -183,7 +186,7 @@ export const HUB_COMMANDS = new Set([
   "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
-  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries",
+  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -382,8 +385,18 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-offer-proof":
       if (p.length !== 1) throw new Error("usage: economy-offer-proof <offer slug>");
       return h.offerProofBuy(p[0], actor);
+    case "economy-seller-set": {
+      let fields: unknown;
+      try { fields = JSON.parse(p.join(" ")); } catch { fields = null; }
+      if (!fields || typeof fields !== "object" || Array.isArray(fields)) {
+        throw new Error("usage: economy-seller-set '{\"legalForm\":\"individual\",\"legalName\":\"…\",\"postalAddress\":\"…\",\"vatNumber\":null}'");
+      }
+      return h.sellerSet(fields as Record<string, unknown>, actor);
+    }
+    case "economy-seller":
+      return h.seller();
     case "economy-public-site":
-      if (p.length < 1) throw new Error("usage: economy-public-site <https://origin> [seller notice: trading name, contact, address…]");
+      if (p.length < 1) throw new Error("usage: economy-public-site <https://origin> [extra seller notice…] (the legal seller: economy-seller-set)");
       return h.publicSiteSet(p[0], p.slice(1).join(" ") || null, actor);
     case "hub-offers":
       return h.offers(p[0] ?? null);

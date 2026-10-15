@@ -215,6 +215,8 @@ export class PgHubAdmin {
   }
   /** v76: open or close sales to the public (closed: offer pages not public, no buys or briefs; order pages and the proof purchase work). */
   salesSet(open: boolean, actor: string) { return this.one(`SELECT fleet_admin_sales_set($1, $2) AS r`, [open, actor]); }
+  sellerSet(fields: Record<string, unknown>, actor: string) { return this.one(`SELECT fleet_admin_seller_set($1::jsonb, $2) AS r`, [JSON.stringify(fields), actor]); }
+  seller() { return this.one(`SELECT fleet_admin_seller() AS r`, []); }
   offerProofBuy(slug: string, actor: string) { return this.one(`SELECT fleet_admin_offer_proof_buy($1, $2) AS r`, [slug, actor]); }
   offers(agentId: string | null) { return this.one(`SELECT fleet_offers_admin_json($1) AS r`, [agentId]); }
   enquiries(agentId: string | null) { return this.one(`SELECT fleet_enquiries_admin_json($1) AS r`, [agentId]); }

@@ -1089,10 +1089,23 @@ refuses without `FLEET_REVERT_DISCARD_ACK`). Once real money or provider data ex
 (`economy-sales closed`), custody deactivated (`economy-custody-deactivate`), agents paused, then a corrective release; never restore an
 older dump over live financial records.
 
-### 31.8 Seller facts the owner must supply (`economy-public-site https://api.agentfleet.vip "<notice>"`)
-The trader buyers deal with (as registered with PayPal Business): legal name (individual or company); trading name if any; a
-geographic postal address; a contact email; VAT number if VAT-registered; company number and registered office if a company.
-Agents' venture brands are shown separately and may be anything truthful.
+### 31.8 The legal seller and the agents' storefronts (v78)
+**Owner, once** (`economy-seller-set <json>`; `economy-seller` shows it and each selling venture's storefront): only the facts that
+cannot be invented — `legalForm` (individual | company), `legalName`, `tradingName` (your own registered trading name, if any),
+`postalAddress` (a geographic address where you can be reached), `vatNumber` (only if VAT-registered), and for a company
+`companyNumber` + `registeredOffice`. The event records which fields changed, never their values. The same legal seller stands
+behind every agent brand.
+**Agents, on their own**: each venture's brand name and description are the agent's venture identity (`identity create_persona
+{kind: venture_identity, ventureKey, displayName, bio}`); customer support is that venture's routing address on the shared mailbox
+(`identity provision_mailbox {ventureKey}` — mail to it reaches that agent, unrouted mail is kept for Admin). The owner writes no
+profile and chooses no business name.
+**Shown to buyers** on every offer / request / order page and appended to every buyer email: "Sold by <legal name> [trading as
+<trading name>] [(company no. …)] under the brand <brand>." + address, registered office (company), customer-support address,
+VAT number, then the owner's optional extra notice (`economy-public-site <origin> [extra notice]`). The offer page also shows
+"About <brand>" with the agent's description and support address.
+**Publishing needs**: the public site, the legal seller (`FLEET_PUBLIC_SITE_SELLER_UNSET`), the venture's storefront identity with a
+description of 40+ characters (`FLEET_STOREFRONT_PROFILE`), a brand name without a legal-entity suffix such as Ltd / Inc
+(`FLEET_STOREFRONT_NAME`), a routing address, a receiving rail and a passing review.
 
 ### 31.9 Capital allocation: which bounds are fixed, which can be disabled, and contextual sizing (v77)
 | v30 parameter | Mandatory? | Effect | Under `sizing: contextual` |

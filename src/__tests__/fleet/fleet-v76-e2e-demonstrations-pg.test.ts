@@ -130,6 +130,10 @@ describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: sale-ready prod
     await liveRail(R.owner, "fleet", OWNER);
     await R.q(`SELECT fleet.fleet_admin_public_site_set('https://shop.fleet.test', 'Automaton Fleet (test trading name), contact via your order page', $1)`, [OWNER]);
     await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
+    // v78: the legal seller (owner facts) and the venture's storefront (the agent's own venture identity).
+    await R.q(`SELECT fleet.fleet_admin_seller_set($1::jsonb, $2)`, [JSON.stringify({ legalForm: "individual", legalName: "Test Owner", postalAddress: "1 Test Street, Testtown, TT1 1TT" }), OWNER]);
+    expect((await R.econ(F, "identity.create", { kind: "venture_identity", ventureKey: "sheets", displayName: "Ledgerline",
+      bio: "Cash-flow spreadsheets, courses and services for small businesses." })).ok).toBe(true);
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-v76e2e-id-"));
     fs.chmodSync(dir, 0o700);
     initIdentityState(dir);

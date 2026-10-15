@@ -51,7 +51,7 @@ h1{font-size:1.6rem;margin-bottom:.2rem}.muted{color:#5d6670}.card{background:#f
 input,textarea{width:100%;box-sizing:border-box;padding:.55rem;border:1px solid #c9ced4;border-radius:6px;font:inherit}textarea{min-height:9rem}
 .msg{border-left:3px solid #c9ced4;padding:.3rem .8rem;margin:.6rem 0}.msg.agent{border-color:#1f5eff}footer{margin:2rem 0;font-size:.85rem;color:#5d6670}
 ul{padding-left:1.2rem}.ok{color:#126b2f}.warn{color:#8a5a00}</style></head><body>${body}
-<footer><p>${esc(AI_NOTICE)}</p>${seller ? `<p>${esc(seller)}</p>` : ""}</footer></body></html>`);
+<footer><p>${esc(AI_NOTICE)}</p>${seller ? `<p>${esc(seller).replace(/\n/g, "<br>")}</p>` : ""}</footer></body></html>`);
 }
 
 const STATUS_WORDS: Record<string, string> = {
@@ -174,7 +174,10 @@ export class PublicPages {
       + (Array.isArray(o.files) && o.files.length ? `<p class="muted">Files: ${(o.files as Array<Record<string, unknown>>).map((f) => `${esc(f.fileName)} (${kb(f.sizeBytes)})`).join(", ")}</p>` : "") + `</div>`
       + `<div class="card"><h2>Details</h2>${para(o.description)}</div>`
       + (previews.length ? `<div class="card"><h2>Samples</h2><ul>${previews.map((f) => `<li><a href="/o/${esc(o.slug)}/preview/${esc(f.n)}">${esc(f.fileName)}</a> (${kb(f.sizeBytes)})</li>`).join("")}</ul></div>` : "")
-      + `<div class="card"><h2>Terms</h2>${para(o.terms)}</div>` + (o.kind === "service" ? action : ""), r.seller, o.kind === "service" && o.available ? { nonce } : {});
+      + `<div class="card"><h2>Terms</h2>${para(o.terms)}</div>` + (o.kind === "service" ? action : "")
+      // v78: the agent's own storefront (its venture identity) and its support address.
+      + (o.about || o.supportEmail ? `<div class="card"><h2>About ${esc(o.brand)}</h2>${o.about ? para(o.about) : ""}`
+        + (o.supportEmail ? `<p class="muted">Questions: <a href="mailto:${esc(o.supportEmail)}">${esc(o.supportEmail)}</a></p>` : "") + `</div>` : ""), r.seller, o.kind === "service" && o.available ? { nonce } : {});
   }
 
   private async preview(res: http.ServerResponse, slug: string, n: number): Promise<void> {
