@@ -407,23 +407,56 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     expect(await convo.locator("div", { hasText: "is awaiting your reply" }).filter({ hasText: "Payment rail required: gumroad" }).count()).toBe(0);
   });
 
-  it("Launch & channels (v81): the owner saves the seller with a passkey step-up and sees each channel, the releases and what stays with them", async () => {
+  it("Launch & channels (UI 0.20.1): the guided set-up — status and next step, field help with a live notice preview, the address recorded with the details, platforms explained, plain proof permissions", async () => {
     expect((await R.econ(A, "venture.create", { key: "ledgers", model: "digital_product", offer: "cash-flow tools", state: "selected" })).ok).toBe(true);
     expect((await R.econ(A, "channel.add", { ventureKey: "ledgers", name: "Etsy", kind: "marketplace", status: "active", url: "https://www.etsy.com/shop/ledgerline",
       rulesSource: "https://www.etsy.com/legal/api", rulesSummary: "Own-shop management through the Open API is permitted; browser automation is not." })).ok).toBe(true);
+    await R.q(`DELETE FROM fleet.fleet_public_site`); // the production default: no address recorded yet
     await page.goto(`${ORIGIN}/#Launch & channels`);
-    await page.getByText("What stays with you").waitFor({ timeout: 20_000 });
-    const text = await main();
-    expect(text).toContain("Etsy has no messaging API");
-    expect(text).toContain("Sales OPEN"); // the test registry is launched
-    expect(text).toContain("No API account connected.");
-    expect(text).not.toContain("economy-sales close");
-    await page.getByLabel("Legal name").fill("Alex Example");
-    await page.getByLabel("Postal address").fill("1 High Street, Exampletown, EX1 2AB, United Kingdom");
-    await page.getByRole("button", { name: "Save the seller facts" }).click(); await passkeyIfAsked();
-    await page.getByText("✓ Saved (version").waitFor({ timeout: 20_000 });
+    await page.getByRole("heading", { name: "Launch & channels: set-up status" }).waitFor({ timeout: 20_000 });
+    expect(await main()).toContain("Next: Enter your business details");
+    // Validation in words before any step-up; the preview follows the fields; company fields only for a company.
+    await page.getByRole("button", { name: "Save business details" }).click();
+    expect(await main()).toContain("Enter your full legal name");
+    expect(await page.getByLabel("Company number").count()).toBe(0);
+    await page.getByLabel("Your full legal name").fill("Alex Example");
+    await page.getByLabel("Postal address", { exact: true }).fill("1 High Street, Exampletown, EX1 2AB, United Kingdom");
+    expect(await main()).toContain("Sold by Alex Example under the brand [the agent’s brand].");
+    // A partial save: the details are confirmed, the address confirmation is cancelled — the page says exactly that, and retries.
+    await page.getByRole("button", { name: "Save business details" }).click(); await passkeyIfAsked();
+    await page.getByRole("dialog", { name: "Confirm it is you" }).getByRole("button", { name: "Cancel" }).click();
+    await page.getByText("Your business details are saved. The Fleet public address is not recorded yet", { exact: false }).waitFor({ timeout: 20_000 });
     expect((await R.q(`SELECT legal_name, set_by FROM fleet.fleet_seller_identity WHERE id = 1`))[0]).toEqual({ legal_name: "Alex Example", set_by: "operator:owner" });
-    expect((await R.q(`SELECT op, ok FROM fleet.fleet_admin_auth_log WHERE event = 'stepup' ORDER BY seq DESC LIMIT 1`))[0]).toMatchObject({ op: "seller_set", ok: true });
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_public_site`)).toEqual([]);
+    const partial = await main();
+    expect(partial).toContain("Next: Record the Fleet public address (one confirmation)");
+    expect(partial).toContain("Not recorded yet: your business details are saved");
+    expect(partial).toContain("✓ Saved");
+    await page.getByRole("button", { name: "Record the public address" }).click(); await passkeyIfAsked();
+    await expect.poll(main, { timeout: 20_000 }).toContain("served at https://api.agentfleet.vip. Recorded.");
+    expect((await R.q(`SELECT base_url, sales_open FROM fleet.fleet_public_site WHERE id = 1`))[0]).toEqual({ base_url: "https://api.agentfleet.vip", sales_open: false });
+    expect((await R.q(`SELECT op FROM fleet.fleet_admin_auth_log WHERE event = 'stepup' AND ok ORDER BY seq DESC LIMIT 2`)).map((r) => r.op).sort()).toEqual(["public_site_set", "seller_set"]);
+    // Platforms: optional, what stays manual, the server step with Claude; technical detail only under Advanced.
+    await page.getByRole("tab", { name: "Connected platforms" }).click();
+    const text = await main();
+    for (const s of ["Optional. Connect it only if an agent chooses Etsy", "Etsy has no messaging API", "Authorise the app for the Fleet", "Connect Etsy · "]) expect(text).toContain(s);
+    expect(await page.getByText("listings_r listings_w shops_r transactions_r").isVisible()).toBe(false);
+    // Proof permission: plain choices, a review with consequences, no JSON to write.
+    await page.getByRole("tab", { name: "Launch readiness" }).click();
+    expect(await main()).toContain("Ready for live proof");
+    expect(await page.locator("main textarea").count()).toBe(0);
+    await page.getByRole("checkbox", { name: /^Send messages/ }).check();
+    await page.getByPlaceholder("you@example.com, @example.org").fill("owner@example.com");
+    await page.getByRole("button", { name: "Review before confirming" }).click();
+    expect(await main()).toContain("Emails are real and go only to the recipients named.");
+    await page.getByRole("button", { name: "Confirm and allow" }).click(); await passkeyIfAsked();
+    await page.getByText("Permission given").waitFor({ timeout: 20_000 });
+    const given = await R.q(`SELECT agent_id, scope, released_by FROM fleet.fleet_outward_release WHERE expires_at > now()`);
+    expect(given).toEqual([{ agent_id: expect.any(String), scope: { actions: ["mail"], mailTo: ["owner@example.com"] }, released_by: "operator:owner" }]);
+    await page.getByRole("button", { name: "End now" }).click();
+    await page.getByText("None. Every outward action is held.").waitFor();
+    expect((await R.q(`SELECT count(*)::int n FROM fleet.fleet_outward_release WHERE expires_at > now()`))[0].n).toBe(0);
+    expect(await main()).not.toContain("economy-sales close");
   });
 
   it("an unreachable gateway is shown as unreachable — never fictional data", async () => {
