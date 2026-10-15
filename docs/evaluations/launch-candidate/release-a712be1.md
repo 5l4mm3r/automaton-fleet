@@ -1,14 +1,105 @@
-# Release a712be1 — schema 78 → 81 (v79 business operator + v80 acquisition channels + v81 launch & channels in the dashboard) · ONE APPROVAL PACKAGE, VPS-prepared, not deployed
+# Release a712be1 — schema 78 → 81 (v79 business operator + v80 acquisition channels + v81 launch & channels in the dashboard) · DEPLOYED 2026-10-15 18:16Z; D2 host installations done
 
-**This is the one deployment path from production.** Production is at schema 78; this candidate applies v79, v80 and v81 in one release. `7c35383` (release-7c35383.md, the consolidated v79+v80 candidate) and `96016c9` (release-96016c9.md, v79) are preserved unchanged as fallbacks; neither needs to be deployed first.
+## Deployment (owner's instruction, 2026-10-15: "Authorize D1 deployment of a712be1 and the exact D2 host installations in its release record")
+Not authorised by that instruction: account creation, posting, email outreach, real payments, proof releases, final activation.
+None of these has happened.
 
-**Production now (unchanged):**
-- 31ffef8, schema 78, UI 0.19.0 (deployed 2026-10-15 13:53Z).
-- Agent-1 and Agent-2 paused on b60e262.
-- Seller not set; no public site; sales closed.
-- Custody inactive; real payments off; survival protection on; sizing `fixed`; no launch boundary.
+### D1: release
+- **Run:** `fleet-release.sh` started 18:14:32Z and **DEPLOYED at 18:16:20Z**. One `production_deployed` event.
+- **Outage:** 18:15:23–18:16:08Z (45 s).
+- **Live now:**
+  - commit a712be1;
+  - build `366dabe7…07f1` (= pins = local build);
+  - lockfile `1df54e35…a2c1`;
+  - schema **81** (applied 79, 80, 81);
+  - root UI **0.20.0** (`/opt/automaton-fleet/ui/0.20.0`, 52 files, tarball `fd05dd6c…8212`).
+- **Cutover reconciliation:** OK (3025 events preserved).
+- **Rollback points:**
+  - pre-migration dump `~/automaton_fleet-v78-pre-v81-20261015T181543Z.dump`;
+  - `runtime.env.pre-a712be1`; release 31ffef8;
+  - UI: `dashboard.env.before-release-a712be1-20261015T181432Z` (UI 0.19.0).
+  - Before live money: `bash ~/rlc81/fleet-rollout.sh revert ~/rlc81/pins.txt 78 81 <reason>`. After real money or provider data: freeze and fix forward.
 
-Nothing here is authorised by this record. Nothing has been deployed, published or resumed.
+### D2: host installations (run in the record's order)
+**Path correction.** The scripts find their inputs relative to their own `scripts/` directory. The staged copies in `~/rlc81/` would therefore have looked in the home directory. Every D2 step was run from the installed, build-verified a712be1 tree at `/opt/automaton-fleet/current/scripts/`. Same commit, same files.
+
+1. **Browser network isolation:**
+   - `plan`: the unit allowed loopback; the database was reached over TCP 127.0.0.1:5432.
+   - `apply`: backups `browser.env.pre-isolation-20261015T181723Z` and `pg_hba.conf.pre-isolation-20261015T181723Z`; one pg_hba line inserted (reload only); `browser.env` moved to the socket; drop-in installed; unit restarted.
+   - Separate `verify`: **`ISOLATION VERIFIED` 2026-10-15T18:19:04Z**.
+     - Effective policy: allow = [], deny includes 127.0.0.0/8 and ::1/128.
+     - A probe under that policy found 0 of 12 loopback services open (v4 + v6); the public internet is reachable; database schema 81 over the socket.
+     - Chromium self-test passed; the worker started.
+   - Rollback: `sudo bash /opt/automaton-fleet/current/scripts/fleet-browser-isolation.sh rollback`.
+2. **Channel gateway**, only after step 1 was verified:
+   - `check`: everything was missing.
+   - `install` plan: as recorded.
+   - `install --apply`:
+     - OS user `automaton-fleet-channels`;
+     - roles `fleet_channels(_login)`; `channels.env` root:automaton-fleet-channels 0640 (socket URL);
+     - one pg_hba line;
+     - `grant-channels-role`, privilege audit **PASS**;
+     - unit installed, enabled and started (`channel_gateway_started` 18:19:36Z).
+   - `check`: all present; `enabled / active`.
+   - Effective unit policy:
+     - IPAddressDeny covers loopback, RFC1918, CGNAT, link-local, multicast and reserved ranges;
+     - `User=automaton-fleet-channels`, `ProtectSystem=strict`, `NoNewPrivileges=yes`.
+   - Idle: 0 connections, 0 jobs, 0 discovery pings.
+   - Undo: `systemctl disable --now automaton-fleet-channels`.
+3. **Agent toolchain:**
+   - `install /usr/local/lib/automaton-fleet-tools/a2d5c9f11557`: 23 wheels, every hash verified.
+   - `verify`: ok, tree `9e38483d…4abd` matches, python-pptx 1.0.2 present.
+   - `current` switched from `8d67c30121df` (kept) to `a2d5c9f11557`, and verified again through the link.
+   - Rollback: `sudo ln -sfn /usr/local/lib/automaton-fleet-tools/8d67c30121df /usr/local/lib/automaton-fleet-tools/current`.
+
+### Preservation and health
+Before / after snapshots: `~/rlc81/{pre,post}-tables.txt` (row count + content hash of every table) and `~/rlc81/{pre,post,final}-settings.txt`.
+
+**Settings** (taken before D1, after D1, and after D2): identical, except the replication evaluator's timestamp. This covers:
+- cap 2, DEVELOPMENT, replication off;
+- both agents active, not held, cognition **paused** with their fuses (754p/20h, 3000p/60h);
+- no public site; sales closed; no seller;
+- survival protection ON;
+- the economic model (custody execution off);
+- capital policy v1, sizing `fixed`;
+- sweep, insolvency, card-request, Genesis and identity-autonomy policies;
+- 0 custody activations; no launch boundary;
+- rail b71b3f3c live / active;
+- agent wallets £100.00 / £100.00.
+
+**Tables:** identical, except the expected changes:
+- migrations 79–81, giving new, empty v79 / v80 tables;
+- `fleet_discovery` 1 row (the IndexNow key);
+- the knowledge library +2 (migration entries);
+- runtime identity 31ffef8 → a712be1 (`fleet_state`);
+- heartbeats and timestamps (agents' `last_heartbeat` / `last_challenge_ok_at`, mail sync, notification scan watermark, replication evaluation, nonces, +4 health challenges, sessions);
+- +2 PayPal balance readings;
+- Fleet Command +1 (deploy).
+
+**Events since 18:14Z:**
+- 16 role grants (incl. `channels_role_granted`);
+- `runtime_approved`, `production_deployed`;
+- 2 `session_opened`;
+- the usual 2 heartbeat `api_auth_failed` refused across the outage (replay protection).
+
+The only new P0–P3 alert is `production_deployed` (P2).
+
+**Ledger:** verifies; 812 journals, 0 unbalanced; head `723c7ea3…3e81`, the same as at the v78 deployment (no journal written).
+
+**Health:**
+- Loopback readyz 200: schema v81, runtime a712be1, realReplicationEnabled false.
+- Public `healthz` 200; admin 200.
+- Public `sitemap.xml` is empty (sales closed).
+- All units active, incl. the new `automaton-fleet-channels`.
+- Flags: `REAL_PAYMENTS_ENABLED`, `REAL_REPLICATION_ENABLED`, `OWNER_SWEEP_ENABLED` and `FLEET_DRY_RUN_CHILD` false; remote listen true.
+
+**Dashboard:** `FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.20.0`, and the bundle contains Launch & channels. The `launch` view reads: seller null, site unset, sales closed, 0 channels, no releases, 4 dependencies.
+
+**Still with the owner** (not done, not authorised here):
+- onboarding inputs (seller facts, public site, Etsy / Pinterest accounts and app authorisation);
+- Agent-1 upgrade / resume;
+- every release and real-provider proof;
+- final activation.
 
 ## What a712be1 adds to 7c35383 (the demonstrated gap)
 The seller facts, the public site, channel connections and controlled-proof releases existed only as command-line operations. They now have a dashboard page, **Launch & channels** (UI 0.20.0, schema v81 — v80 is not edited):
@@ -132,12 +223,12 @@ An agent must first record a channel, with that platform's rules, before it can 
 ### D1. Deploy (your go): the command above.
 
 ### D2. Host installation (sudo; your go), before any real browsing or API publishing
-1. **Browser network isolation:**
-   1. `sudo bash ~/rlc81/fleet-browser-isolation.sh plan`
+1. **Browser network isolation** (run from `/opt/automaton-fleet/current/scripts/`, see the path correction above):
+   1. `sudo bash /opt/automaton-fleet/current/scripts/fleet-browser-isolation.sh plan`
    2. `… apply`
    3. `… verify`, which must print `ISOLATION VERIFIED`.
 2. **Channel gateway:**
-   1. `sudo bash ~/rlc81/fleet-channels-setup.sh install` (plan)
+   1. `sudo bash /opt/automaton-fleet/current/scripts/fleet-channels-setup.sh install` (plan)
    2. `… install --apply` (OS user, `fleet_channels` role with chx_* only, `channels.env`, one `pg_hba` line with reload only, the unit)
    3. `… check`
 3. **Agent toolchain:** `fleet-agent-tools.sh install` / `verify` (lock a2d5c9f11557).
