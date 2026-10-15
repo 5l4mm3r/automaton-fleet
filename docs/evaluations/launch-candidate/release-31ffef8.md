@@ -1,6 +1,26 @@
-# Release 31ffef8 — schema 77 → 78 (legal seller + agent storefronts) · CANDIDATE, VPS-prepared, not deployed
+# Release 31ffef8 — schema 77 → 78 (legal seller + agent storefronts) · DEPLOYED 2026-10-15 13:53Z
 
-Production now (verified live 2026-10-15 11:53Z, release-12c9f67.md): 12c9f67, schema 77, UI 0.19.0; Agent-1 and Agent-2 paused
+## Deployment (owner's instruction, 2026-10-15: "Deploy the rehearsed 31ffef8 package, schema 77→78, using its verified pins")
+- `fleet-release.sh` 13:51:50Z → **DEPLOYED 13:53:37Z**; outage 13:52:43–13:53:28Z (45 s); one `production_deployed` event.
+  Live: commit 31ffef8, build `94a1bf2b…aeb8` (= pins, = local), lockfile `1df54e35…a2c1`, schema **78**, UI 0.19.0 reused (no switch).
+  Cutover reconciliation OK (3019 events preserved).
+- Rollback points: pre-migration dump `~/automaton_fleet-v77-pre-v78-20261015T135303Z.dump`, `runtime.env.pre-31ffef8`, release
+  12c9f67; UI `dashboard.env.before-release-31ffef8-20261015T135150Z`. Before live money: `bash ~/rlc78/fleet-rollout.sh revert
+  ~/rlc78/pins.txt 77 78 <reason>`; after real money: freeze and fix forward.
+- **Preservation** (row count + content hash of every table, `~/rlc78/{pre,post}-tables.txt`, 13:51Z vs 13:54Z): identical except
+  the expected — migration 78 (new empty `fleet_seller_identity`); runtime identity 12c9f67 → 31ffef8 (`fleet_state`); heartbeats /
+  timestamps (agents, mail providers, notification scan watermark, replication evaluation, nonces, +4 health challenges); +2 PayPal
+  balance readings; Fleet Command +1 (deploy). Events 3019 → 3037: 22 added (14 role grants, `runtime_approved`,
+  `production_deployed`, 4 `session_opened`, the usual 2 heartbeat `api_auth_failed` refused across the outage — replay
+  protection), 4 temporary rows aged out by 7-day retention. Ledger verifies: 812 journals, 0 unbalanced, head `723c7ea3…3e81`.
+  Capital policy unchanged (version 1, `sizing` = `fixed`; contextual NOT applied).
+- **State after**: Agent-1 / Agent-2 cognition paused (754p/20h, 3000p/60h unchanged) on b60e262; seller not set; no public site
+  (sales closed, 0 storefronts); 0 custody activations; custody execution off; no signer file; `REAL_PAYMENTS_ENABLED` /
+  `REAL_REPLICATION_ENABLED` / `OWNER_SWEEP_ENABLED` / `FLEET_DRY_RUN_CHILD` false, remote listen true; survival protection ON;
+  sweep policy off; no launch boundary; cap 2, DEVELOPMENT. Loopback readyz 200 (schema v78, runtime 31ffef8), public healthz 200,
+  admin 200; all units active.
+
+Before deployment (verified live 2026-10-15 11:53Z, release-12c9f67.md): 12c9f67, schema 77, UI 0.19.0; Agent-1 and Agent-2 paused
 on b60e262; no public site (sales closed); 0 custody activations; real payments off; survival protection on; capital sizing
 `fixed`; no launch boundary. Nothing here is authorised by this record.
 
@@ -42,7 +62,7 @@ FLEET_RUNTIME_LOCKFILE_SHA256=1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b
 - **Publishing needs**: public site, legal seller (`FLEET_PUBLIC_SITE_SELLER_UNSET`), the venture's identity with a 40+ character
   description (`FLEET_STOREFRONT_PROFILE`), allowed brand name, routing address, receiving rail, passing review.
 
-## Deployment package (owner's go)
+## Deployment package (deployed 13:53Z — see above)
 1. Deploy: `bash ~/rlc78/fleet-release.sh ~/rlc78/pins.txt 77 78 0.19.0 ~/rlc78/ui-0.19.0-31ffef8.tgz 890f7b078ca2106dbb6151126716162113a72ed7d60ea7f9c44d32b6af7b244e`
    (rehearsals valid until **2026-10-16 12:29Z**; re-rehearse after). Changes nothing else: agents stay paused, sales closed, money-out off.
 2. After your seller facts arrive (separately): `economy-seller-set '<json>'`, then `economy-public-site https://api.agentfleet.vip`
@@ -51,6 +71,6 @@ FLEET_RUNTIME_LOCKFILE_SHA256=1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b
    freeze and fix forward.
 
 ## Remaining (unchanged from release-12c9f67.md §B–E)
-Seller facts (yours, pending); webhook delivery log; Payouts approval (only for PayPal-paid suppliers); card / identity seals;
+Seller facts (yours, pending → then `economy-seller-set`, `economy-public-site`); webhook delivery log; Payouts approval (only for PayPal-paid suppliers); card / identity seals;
 AI auto-reload; controlled proof (Agent-1: upgrade to 31ffef8, resume, it creates its venture identity + routing address,
 publishes, you `economy-offer-proof`, pay, refund); funding; final activation incl. `economy-capital-policy '{"sizing":"contextual"}'`.
