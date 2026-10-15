@@ -1,9 +1,28 @@
-# Release 12c9f67 — schema 76 → 77 (treasury integrity, owner withdrawals, contextual capital sizing) · COMPLETION CANDIDATE, VPS-prepared, not deployed
+# Release 12c9f67 — schema 76 → 77 (treasury integrity, owner withdrawals, contextual capital sizing) · **DEPLOYED 2026-10-15 11:50:26Z**
 
 Supersedes `release-709c091.md` (and a2b3745). Adds: owner withdrawal records (profit distribution / capital return / reimbursement)
 and opt-in contextual capital sizing from real lendable cash (spec §31.9, §31.10). Liquidity fixes of 709c091 included.
 
-Production now (verified live 2026-10-14): a0e0ac0, schema 76, UI 0.19.0, agent toolchain installed; Agent-1 and Agent-2 paused on
+## Deployment (owner's typed authorisation, 2026-10-15: "deployment of the prepared 12c9f67 candidate only")
+- `fleet-release.sh` 11:48:44Z → **DEPLOYED 11:50:26Z**; outage 11:49:34–11:50:18Z (44 s); one `production_deployed` event.
+  Live: commit 12c9f67, build `8f358d76…0fb8be`, lockfile `1df54e35…a2c1`, schema **77**, UI 0.19.0 reused (unchanged, no switch).
+- Rollback points: pre-migration dump `~/automaton_fleet-v76-pre-v77-20261015T114955Z.dump`, `runtime.env.pre-12c9f67`, release
+  a0e0ac0; UI `dashboard.env.before-release-12c9f67-20261015T114844Z`.
+- **Preservation** (per-table row count + content hash of all 271 tables before vs after, `~/rlc77c/{pre,post}-tables.txt`):
+  identical except the expected: migration 77 (+3 ledger kinds, +6 rules, new empty `fleet_owner_withdrawal_records`, capital policy
+  gained `sizing` = `fixed` — version 1 and timestamp unchanged, **contextual NOT applied**); runtime identity a0e0ac0 → 12c9f67;
+  heartbeats / timestamps (agents, mail provider, notification and replication state, nonces, health challenges); +2 PayPal balance
+  readings; Fleet Command +1 (deploy). Events: 27 temporary rows from 2026-10-08 10:56–11:49Z expired by 7-day retention; 18 added
+  (role grants, runtime_approved, production_deployed, and the usual 2 heartbeat `api_auth_failed` refused across the outage —
+  replay protection, as at every cutover). Ledger 812 journals unchanged.
+- **State after**: Agent-1 / Agent-2 cognition paused (754p/20h, 3000p/60h unchanged) on b60e262; no public site (sales closed);
+  0 custody activations; no signer file; `REAL_PAYMENTS_ENABLED` / `REAL_REPLICATION_ENABLED` / `OWNER_SWEEP_ENABLED` /
+  `FLEET_DRY_RUN_CHILD` false, remote listen true; survival protection ON; sweep policy off; identity / card authority off; no
+  launch boundary; cap 2, DEVELOPMENT. Readyz 200, public healthz 200, admin 200; all units active; no warnings in the logs.
+- **v77 live** (read-only transaction): `fleet_treasury_liquidity` — PayPal £0.67 available (reading 11:50Z, fresh), nothing
+  committed, free £0.67; `fleet_treasury_lendable` — £0.00 (agents' £200.00 exceeds real cash): nothing can be lent or paid out.
+
+Before deployment (verified live 2026-10-14): a0e0ac0, schema 76, UI 0.19.0, agent toolchain installed; Agent-1 and Agent-2 paused on
 b60e262; no public site (sales closed); 0 custody activations; real payments off; survival protection on; no launch boundary.
 Master specification §31 holds the requirement-to-implementation matrix. Nothing here is authorised by this record.
 
@@ -31,11 +50,11 @@ the owner's AI-credit reimbursement can be recorded (was: no path). Details: §3
 1. a0e0ac0 deployed (v76 market loop, sales gate, preparation hold, proof accounting, refund-fee fixes), toolchain installed.
 2. v77 built, frozen, rehearsed on the VPS (this record). Webhook subscription verified; reachability verified; Transaction Search
    access verified; custody return URL verified; every outflow path verified closed today.
+3. **v77 deployed 2026-10-15 11:50:26Z** (section Deployment): liquidity gate, envelope review, withdrawal records live.
 
 ### B. Owner inputs and provider setup (no money)
 | Input | Why | How |
 |---|---|---|
-| **Go to deploy v77** | the liquidity gate must be live before any money-out | command 1 below |
 | **Seller facts** (§31.8) | public site; required before Agent-1 can publish | `economy-public-site https://api.agentfleet.vip "<notice>"` |
 | PayPal Developer Dashboard → Webhooks → event deliveries | the only place PayPal shows why nothing was delivered | owner looks; tell me what it shows |
 | Capital policy | v30 fixed fractions are defaults, never approved | contextual sizing: `economy-capital-policy '{"sizing":"contextual"}'` at launch (spec §31.9) — no new percentages |
@@ -90,13 +109,12 @@ the owner's AI-credit reimbursement can be recorded (was: no path). Details: §3
 ## Remaining blockers
 | Blocker | Cause | Resolution |
 |---|---|---|
-| v77 not deployed | owner go pending | command 1 |
 | No public site | seller facts not supplied | §31.8 facts → `economy-public-site` |
 | Webhook delivery never observed | not visible from the Fleet (PayPal side) | owner checks the dashboard delivery log; proof creates fresh events |
 | No live agent sale / refund evidence | requires the proof | section C |
 | Money-out keys absent | by design until launch | section E.2 (+ Payouts approval if needed) |
 | Card / identity not sealed | owner facts | section B |
-| Capital-policy thresholds unapproved | defaults since v30 | owner keeps or sets |
+| Capital sizing still `fixed` (v30 defaults, never approved) | contextual is opt-in | section E.4 at launch |
 | Sweeps off; protection on | by design until launch | section E |
 | Automatic payment of sweeps / profit to the owner not implemented | by design: custody pays only agents; Payouts cannot pay the account itself | manual PayPal withdrawal, recorded (v77) |
 | Automatic AI-credit replenishment not implemented | provider: console, cards only, no purchase API | manual steps §31.10 |
