@@ -25,7 +25,7 @@ const minor = (v: string): number => {
 };
 const when = (s: unknown) => String(s ?? "").slice(0, 16).replace("T", " ");
 
-function useRead<T>(client: GatewayClient, op: string, args: Record<string, unknown>, deps: unknown[]): { data: T | null; error: string; reload: () => void } {
+export function useRead<T>(client: GatewayClient, op: string, args: Record<string, unknown>, deps: unknown[]): { data: T | null; error: string; reload: () => void } {
   const [data, setData] = useState<T | null>(null), [error, setError] = useState(""), [n, setN] = useState(0);
   const key = JSON.stringify(args);
   useEffect(() => {
@@ -88,7 +88,7 @@ function SavedOr({ saved, what, encrypted, at, detail, form }: { saved: boolean;
 }
 
 /** A small inline form: labelled fields, one submit, the gateway result or error shown under it. */
-function Form({ title, fields, submit, note, danger, done, clearOnDone, after }: { title: string; fields: Array<{ key: string; label: string; value?: string; type?: string; options?: string[][] }>;
+export function Form({ title, fields, submit, note, danger, done, clearOnDone, after }: { title: string; fields: Array<{ key: string; label: string; value?: string; type?: string; options?: string[][] }>;
   submit: (v: Record<string, string>) => Promise<unknown>; note?: ReactNode; danger?: boolean; done?: string; clearOnDone?: boolean; after?: () => void }) {
   const initial = () => Object.fromEntries(fields.map((f) => [f.key, f.value ?? f.options?.[0]?.[0] ?? ""]));
   const [v, setV] = useState<Record<string, string>>(initial);

@@ -407,6 +407,25 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     expect(await convo.locator("div", { hasText: "is awaiting your reply" }).filter({ hasText: "Payment rail required: gumroad" }).count()).toBe(0);
   });
 
+  it("Launch & channels (v81): the owner saves the seller with a passkey step-up and sees each channel, the releases and what stays with them", async () => {
+    expect((await R.econ(A, "venture.create", { key: "ledgers", model: "digital_product", offer: "cash-flow tools", state: "selected" })).ok).toBe(true);
+    expect((await R.econ(A, "channel.add", { ventureKey: "ledgers", name: "Etsy", kind: "marketplace", status: "active", url: "https://www.etsy.com/shop/ledgerline",
+      rulesSource: "https://www.etsy.com/legal/api", rulesSummary: "Own-shop management through the Open API is permitted; browser automation is not." })).ok).toBe(true);
+    await page.goto(`${ORIGIN}/#Launch & channels`);
+    await page.getByText("What stays with you").waitFor({ timeout: 20_000 });
+    const text = await main();
+    expect(text).toContain("Etsy has no messaging API");
+    expect(text).toContain("Sales OPEN"); // the test registry is launched
+    expect(text).toContain("No API account connected.");
+    expect(text).not.toContain("economy-sales close");
+    await page.getByLabel("Legal name").fill("Alex Example");
+    await page.getByLabel("Postal address").fill("1 High Street, Exampletown, EX1 2AB, United Kingdom");
+    await page.getByRole("button", { name: "Save the seller facts" }).click(); await passkeyIfAsked();
+    await page.getByText("✓ Saved (version").waitFor({ timeout: 20_000 });
+    expect((await R.q(`SELECT legal_name, set_by FROM fleet.fleet_seller_identity WHERE id = 1`))[0]).toEqual({ legal_name: "Alex Example", set_by: "operator:owner" });
+    expect((await R.q(`SELECT op, ok FROM fleet.fleet_admin_auth_log WHERE event = 'stepup' ORDER BY seq DESC LIMIT 1`))[0]).toMatchObject({ op: "seller_set", ok: true });
+  });
+
   it("an unreachable gateway is shown as unreachable — never fictional data", async () => {
     await page.route("**/api/read**", (r) => r.abort());
     await page.goto(`${ORIGIN}/`);

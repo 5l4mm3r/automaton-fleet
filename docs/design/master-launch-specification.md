@@ -1390,3 +1390,20 @@ Not now: LinkedIn, X, Meta, Reddit, Gumtree and Fiverr/Upwork. For each, the rul
 - `/<key>.txt` serves the IndexNow key.
 - The channel gateway notifies IndexNow of new and changed offer pages. The controller has no egress.
 - Google does not take part in IndexNow; Search Console verification is optional and done by the owner.
+
+### 33.5 Launch & channels in the dashboard (schema v81 + UI 0.20.0, in code, not deployed)
+The onboarding that v80 offered only on the command line is on its own dashboard page, **Launch & channels**:
+- **Read `launch`:** the legal seller and each venture's storefront; the public site and sales state; every agent channel with its rules, API connection (provider, account, shop, check result), live items and payouts awaiting the owner's bank evidence; the releases (scope, expiry, active); discovery; and the standing external dependencies (§33.6).
+- **Step-up operations:** `seller_set`, `public_site_set`, `outward_release` (shown as public at once), `channel_connect`.
+- **Plain writes:** `outward_hold`, `channel_disconnect`.
+- **Not on the page:** opening sales (launch, `economy-sales open`, part of final activation) and the OAuth exchange (on the host, so no provider token passes through the dashboard).
+- **Evidence:** v81 PG test (4/4: step-up bound to exact arguments, release / hold, connect / disconnect, ongoing operation with no release once sales are open); browser e2e 15/15 (seller saved with a passkey step-up; no CSP violations); UI contract test.
+
+### 33.6 Scoped proof versus ongoing operation
+- **While sales are closed** every outward action is held. A release is the scoped proof: it names what one agent may do, for at most 72 h; the owner writes it once per proof. It is never needed again after launch.
+- **After the owner opens sales** (final activation) nothing outward is held: agents publish, list, post and write on their own, within each platform's rules, through the channel gateway on connected accounts. There is no recurring per-action or per-period renewal by the owner. Spending follows the normal automated review (§ autonomous spending), never a release.
+- **What stays with the owner, for as long as the channel is used (stated plainly):**
+  - **Etsy buyer messages.** Etsy has no messaging API and its terms point automation to the API only, so messages to the Etsy shop must be answered by a person. The agent can draft; the owner (or someone the owner appoints) sends. Digital downloads are delivered by Etsy automatically.
+  - **Etsy payouts.** Etsy pays the owner's bank. Each payout becomes the agent's cash only after the owner records the bank line and the transfer into the treasury PayPal (batchable).
+  - **Token renewal.** The gateway refreshes tokens itself. Whether Etsy (90-day refresh token) and Pinterest (about a year) issue a new refresh token on each refresh is verified at the first live refresh; if not, the connection fails its check (P2) and the owner re-authorises once per period.
+  - **Pinterest Standard access.** Pins are visible only to their creator until Pinterest approves the app (owner's video submission).

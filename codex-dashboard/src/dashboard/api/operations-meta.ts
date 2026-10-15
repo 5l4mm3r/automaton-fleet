@@ -34,6 +34,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "capital_back",
   // v69: record (once) the AI costs charged before v69 as owed to the owner.
   "ai_credit_opening",
+  // v81: the legal seller, the public site, a controlled-proof release (permits public external actions), a channel's API connection.
+  "seller_set", "public_site_set", "outward_release", "channel_connect",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */
@@ -46,4 +48,6 @@ export const WRITE_OPS: ReadonlySet<string> = new Set([
   "agent_message_send", "agent_message_retry", "owner_request_reply", "label_set", "agent_cognition_set",
   // v63: mail housekeeping — dismiss / restore and permanent delete (confirmed in the page; no step-up, owner decision).
   "mail_dismiss", "mail_delete",
+  // v81: end a controlled-proof release; disconnect a channel's API account.
+  "outward_hold", "channel_disconnect",
 ]);
