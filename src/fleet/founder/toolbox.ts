@@ -115,7 +115,9 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
     obligations: "obligation.list", add_obligation: "obligation.add", obligation_done: "obligation.done", cancel_obligation: "obligation.cancel",
     suppress: "outreach.suppress", check_address: "outreach.check",
     sales: "sale.list", report_sale: "sale.report", update_sale: "sale.update", payouts: "payout.list", claim_payout: "payout.claim",
-    performance: "business.performance" },
+    performance: "business.performance",
+    // v80 (founder-v9): official-API channel publishing through the channel gateway.
+    api: "channel.api", api_jobs: "channel.api_jobs" },
   customers: { enquiries: "enquiry.list", read: "enquiry.read", fetch_file: "enquiry.file", reply: "enquiry.reply", quote: "enquiry.quote", decline: "enquiry.decline",
     order_thread: "order.thread", order_message: "order.message" },
 });
@@ -190,7 +192,9 @@ const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend", "mailbox.pr
   // v52: a retried storefront operation queues one gateway job.
   "storefront.product.create", "storefront.product.update", "storefront.product.publish", "storefront.product.unpublish", "storefront.product.delete", "storefront.file",
   // v56: a retried delivery sends the buyer one message. v59: a retried refund request is one refund.
-  "order.deliver", "order.refund"]);
+  "order.deliver", "order.refund",
+  // v80: a retried channel API job is one job.
+  "channel.api"]);
 /** v76: what the toolbox may save from a buyer (a name it makes safe) and a delivered / offered file's type. */
 const safeName = (n: string) => n.replace(/[^A-Za-z0-9._ -]/g, "_").replace(/^[^A-Za-z0-9]+/, "").slice(0, 120) || "file";
 
@@ -961,6 +965,18 @@ export class FounderToolbox {
             if (!st.isFile() || st.size < 1 || st.size > 15_000_000) return refuse("FLEET_BAD_REQUEST", "path is a file of 1 byte .. 15 MB in your workspace");
             const type = stageTypeOf(f);
             if (!type) return refuse("FLEET_BAD_REQUEST", "a staged file is an image, .pdf .txt .csv .html .md .json .zip .docx .xlsx .pptx .mp4 or .mp3");
+            args.contentB64 = fs.readFileSync(f).toString("base64");
+            args.contentType = type;
+            args.fileName = typeof args.fileName === "string" ? args.fileName : safeName(path.basename(f));
+            delete args.path;
+          }
+          // v80: a channel API job's file (an image or a product file) from the workspace (at most 15 MB).
+          if (op === "channel.api" && typeof args.path === "string") {
+            const f = this.resolve(args.path);
+            const st = fs.statSync(f);
+            if (!st.isFile() || st.size < 1 || st.size > 15_000_000) return refuse("FLEET_BAD_REQUEST", "path is a file of 1 byte .. 15 MB in your workspace");
+            const type = stageTypeOf(f);
+            if (!type) return refuse("FLEET_BAD_REQUEST", "the file is an image, .pdf .zip .docx .xlsx .pptx or another stageable type");
             args.contentB64 = fs.readFileSync(f).toString("base64");
             args.contentType = type;
             args.fileName = typeof args.fileName === "string" ? args.fileName : safeName(path.basename(f));

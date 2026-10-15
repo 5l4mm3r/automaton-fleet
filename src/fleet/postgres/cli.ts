@@ -651,6 +651,12 @@ async function main(argv: string[]): Promise<number> {
         console.log(`granted the storefront-gateway API to ${rest[0] || "fleet_provider"}`);
         return 0;
       }
+      case "grant-channels-role": {
+        // v80: the channel gateway's role (chx_* only), for scripts/fleet-channels-setup.sh.
+        await store.grantChannelsRole(rest[0] || undefined);
+        console.log(`granted the channel-gateway API to ${rest[0] || "fleet_channels"}`);
+        return 0;
+      }
       case "grant-bankfeed-role": {
         // v52: the bank-feed receipt connector's role (rx_* only).
         await store.grantBankfeedRole(rest[0] || undefined);

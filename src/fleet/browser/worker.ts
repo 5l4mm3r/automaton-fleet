@@ -65,6 +65,8 @@ const EXT_TYPES: Record<string, string> = { pdf: "application/pdf", png: "image/
   svg: "image/svg+xml", csv: "text/csv", txt: "text/plain", json: "application/json", zip: "application/zip", html: "text/html", md: "text/markdown",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", mp4: "video/mp4", mp3: "audio/mpeg" };
+/** v80: steps that act outward (anything but reading / rendering) — confined to a release's origins while sales are closed. */
+const OUTWARD_STEPS = new Set(["click", "fill", "select", "check", "uncheck", "press", "upload", "upload_file", "download", "capture", "open_auth_link", "dialog"]);
 /** v79: a download whose name says it carries credentials never reaches the agent (a shown secret is captured into the vault instead). */
 const CREDENTIAL_FILE = /recovery|backup[ _-]?codes|secret|credential|private[ _-]?key|\.pem$|\.key$/i;
 
@@ -182,6 +184,8 @@ export class BrowserWorker {
     for (const step of action.steps) {
       const a = String(step.action);
       const page = s.page;
+      // v80: an owner's release names its origins; an outward step on any other page is refused (a click may have navigated away).
+      if (Array.isArray(action.outwardOrigins) && OUTWARD_STEPS.has(a) && !action.outwardOrigins.includes(this.origin(page))) throw new Error("FLEET_OUTWARD_SCOPE");
       switch (a) {
         case "goto": {
           const url = String(step.url);

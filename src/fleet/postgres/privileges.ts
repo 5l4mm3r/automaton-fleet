@@ -37,6 +37,7 @@ import {
   BROWSER_API_FUNCTIONS,
   GATEWAY_API_FUNCTIONS,
   BANKFEED_API_FUNCTIONS,
+  CHANNELS_API_FUNCTIONS,
   DASHBOARD_API_FUNCTIONS,
   GENESIS_GUARDS,
   GENESIS_OPERATORS,
@@ -88,6 +89,9 @@ export interface PrivilegeAuditOptions {
   requireProviderRoles?: boolean;
   bankfeedRoles?: string[];
   requireBankfeedRoles?: boolean;
+  /** Schema v80 channel gateway roles (fleet_channels + _login). */
+  channelsRoles?: string[];
+  requireChannelsRoles?: boolean;
 }
 
 /** "provisioned": every operator role exists; "not_provisioned": none exists (and not required); "incomplete": some are missing. */
@@ -117,8 +121,9 @@ export const DEFAULT_DASHBOARD_ROLES = ["fleet_dashboard", "fleet_dashboard_logi
 /** Schema v52 storefront gateway and bank-feed roles (same provisioning rule). */
 export const DEFAULT_PROVIDER_ROLES = ["fleet_provider", "fleet_provider_login"];
 export const DEFAULT_BANKFEED_ROLES = ["fleet_bankfeed", "fleet_bankfeed_login"];
+export const DEFAULT_CHANNELS_ROLES = ["fleet_channels", "fleet_channels_login"];
 
-type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser" | "dashboard" | "provider" | "bankfeed";
+type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser" | "dashboard" | "provider" | "bankfeed" | "channels";
 
 const TABLE_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
@@ -189,6 +194,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   };
   const providerRoles = await optional(opts.providerRoles ?? DEFAULT_PROVIDER_ROLES, opts.requireProviderRoles, "provider");
   const bankfeedRoles = await optional(opts.bankfeedRoles ?? DEFAULT_BANKFEED_ROLES, opts.requireBankfeedRoles, "bankfeed");
+  const channelsRoles = await optional(opts.channelsRoles ?? DEFAULT_CHANNELS_ROLES, opts.requireChannelsRoles, "channels");
   const allRestricted = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES),
     ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES),
@@ -199,6 +205,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
     ...dashboardRoles,
     ...providerRoles,
     ...bankfeedRoles,
+    ...channelsRoles,
   ];
   const plan: Array<[string, RoleKind]> = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES).map((r) => [r, "agent"] as [string, RoleKind]),
@@ -210,6 +217,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
     ...dashboardRoles.map((r) => [r, "dashboard"] as [string, RoleKind]),
     ...providerRoles.map((r) => [r, "provider"] as [string, RoleKind]),
     ...bankfeedRoles.map((r) => [r, "bankfeed"] as [string, RoleKind]),
+    ...channelsRoles.map((r) => [r, "channels"] as [string, RoleKind]),
   ];
 
   const agentFns = new Set(AGENT_API_FUNCTIONS.map(normSig));
@@ -221,6 +229,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   const dashboardFns = new Set(DASHBOARD_API_FUNCTIONS.map(normSig));
   const providerFns = new Set(GATEWAY_API_FUNCTIONS.map(normSig));
   const bankfeedFns = new Set(BANKFEED_API_FUNCTIONS.map(normSig));
+  const channelsFns = new Set(CHANNELS_API_FUNCTIONS.map(normSig));
   const operatorVolatile = new Set(OPERATOR_VOLATILE_FUNCTIONS.map(normSig));
   const serviceTables = new Set(SERVICE_READ_TABLES);
 
@@ -316,7 +325,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
       [role, schema],
     );
     const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : kind === "identity" ? identityFns : kind === "browser" ? browserFns
-      : kind === "dashboard" ? dashboardFns : kind === "provider" ? providerFns : kind === "bankfeed" ? bankfeedFns : operatorFns;
+      : kind === "dashboard" ? dashboardFns : kind === "provider" ? providerFns : kind === "bankfeed" ? bankfeedFns : kind === "channels" ? channelsFns : operatorFns;
     const executable: string[] = [];
     for (const f of fns.rows) {
       const sig = normSig(f.sig);
@@ -1303,16 +1312,22 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v79: the business operator — browser files (agent staging, worker output, expiry), the agent's channels / presence /
     // leads / business obligations, outreach records and opt-outs, external sales and payout claims (booked only by the
     // payout booking on a real PayPal credit, the controller's unambiguous match or the owner's decision).
-    fleet_outward_release: new Set(["fleet_admin_outward_set"]),
+    fleet_outward_release: new Set(["fleet_admin_outward_set", "fleet_admin_outward_release", "fleet_admin_outward_hold"]),
+    // v80: discovery notifications; owner-connected API channels, agents' jobs, the channel gateway's evidence and cursors.
+    fleet_discovery: new Set(["chx_indexnow_done", "fleet_discovery_key"]),
+    fleet_discovery_pings: new Set(["chx_indexnow_done"]),
+    fleet_channel_connections: new Set(["fleet_admin_channel_connect", "fleet_admin_channel_disconnect", "chx_connection_check"]),
+    fleet_channel_jobs: new Set(["fleet_econ_channel_api", "chx_claim_job", "chx_job_report", "fleet_admin_channel_disconnect"]),
+    fleet_channel_cursors: new Set(["chx_cursor_set"]),
     fleet_browser_files: new Set(["fleet_econ_browser_stage_file", "bx_file_put", "fleet_browser_files_expire"]),
     fleet_venture_channels: new Set(["fleet_econ_channel_add", "fleet_econ_channel_update"]),
-    fleet_presence_items: new Set(["fleet_econ_presence_record", "fleet_econ_presence_update"]),
+    fleet_presence_items: new Set(["fleet_econ_presence_record", "fleet_econ_presence_update", "chx_job_report"]),
     fleet_leads: new Set(["fleet_econ_lead_add", "fleet_econ_lead_update", "fleet_leads_retention", "fleet_econ_mail_send", "svc_outreach_optout"]),
     fleet_business_obligations: new Set(["fleet_econ_obligation_add", "fleet_econ_obligation_done", "fleet_econ_obligation_cancel"]),
     fleet_outreach_suppressions: new Set(["fleet_econ_outreach_suppress", "svc_outreach_optout"]),
     fleet_outreach_messages: new Set(["fleet_econ_mail_send", "svc_outreach_optout"]),
-    fleet_channel_sales: new Set(["fleet_econ_sale_report", "fleet_econ_sale_update", "fleet_econ_payout_claim", "fleet_channel_payout_post", "fleet_admin_channel_payout_decide"]),
-    fleet_channel_payouts: new Set(["fleet_econ_payout_claim", "fleet_channel_payout_try", "fleet_channel_payout_book", "fleet_admin_channel_payout_decide",
+    fleet_channel_sales: new Set(["chx_sale_record", "fleet_econ_sale_report", "fleet_econ_sale_update", "fleet_econ_payout_claim", "fleet_channel_payout_post", "fleet_admin_channel_payout_decide"]),
+    fleet_channel_payouts: new Set(["chx_payout_record", "fleet_econ_payout_claim", "fleet_channel_payout_try", "fleet_channel_payout_book", "fleet_admin_channel_payout_decide",
       "fleet_admin_channel_payout_bank", "fleet_admin_channel_payout_transfer"]),
     // v76: refunds / reversals / fees of the owner's proof purchase, only by custody's refund recorder.
     fleet_offer_proof_returns: new Set(["cx_paypal_refund_record"]),

@@ -174,6 +174,28 @@ ALTER ROLE fleet_provider_login IN DATABASE :"dbname" SET lock_timeout = '5s';
 ALTER ROLE fleet_provider_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '30s';
 \endif
 
+-- Schema v80: the channel gateway (chx_* only: official-API channels) (optional; provisioned only when channels_password is supplied).
+--   fleet_channels        NOLOGIN group: USAGE on fleet + EXECUTE on its own protocol functions only
+--   fleet_channels_login  LOGIN member of fleet_channels, held by that process only
+\if :{?channels_password}
+SELECT 'CREATE ROLE fleet_channels NOLOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_channels') \gexec
+SELECT 'CREATE ROLE fleet_channels_login LOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_channels_login') \gexec
+ALTER ROLE fleet_channels       NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+ALTER ROLE fleet_channels_login LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4;
+SELECT format('ALTER ROLE fleet_channels_login PASSWORD %L', :'channels_password') \gexec
+GRANT fleet_channels TO fleet_channels_login;
+SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname)
+  FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
+ WHERE m.rolname IN ('fleet_channels_login', 'fleet_channels') AND NOT (m.rolname = 'fleet_channels_login' AND r.rolname = 'fleet_channels') \gexec
+REVOKE ALL ON DATABASE :"dbname" FROM fleet_channels, fleet_channels_login;
+GRANT CONNECT ON DATABASE :"dbname" TO fleet_channels_login;
+ALTER ROLE fleet_channels_login IN DATABASE :"dbname" SET statement_timeout = '30s';
+ALTER ROLE fleet_channels_login IN DATABASE :"dbname" SET lock_timeout = '5s';
+ALTER ROLE fleet_channels_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '30s';
+\endif
+
 -- Schema v52: the bank-feed receipt connector (rx_* only) (optional; provisioned only when bankfeed_password is supplied).
 --   fleet_bankfeed        NOLOGIN group: USAGE on fleet + EXECUTE on its own protocol functions only
 --   fleet_bankfeed_login  LOGIN member of fleet_bankfeed, held by that process only

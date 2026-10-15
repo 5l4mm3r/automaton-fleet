@@ -32,6 +32,7 @@ export interface EphemeralPg {
   /** Schema v52 Gumroad storefront gateway login (gx_* only) and bank-feed connector login (rx_* only). */
   providerUrl: string;
   bankfeedUrl: string;
+  channelsUrl: string;
   /** Schema v38 Admin dashboard login (dash_* only). */
   dashboardUrl: string;
   superUrl: string;
@@ -85,6 +86,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
   const dashboardPw = randomBytes(12).toString("hex");
   const providerPw = randomBytes(12).toString("hex");
   const bankfeedPw = randomBytes(12).toString("hex");
+  const channelsPw = randomBytes(12).toString("hex");
   const pwfile = path.join(dir, "pw");
   fs.writeFileSync(pwfile, superPw + "\n", { mode: 0o600 });
   execFileSync(path.join(bin, "initdb"), ["-D", data, "-U", "postgres", "--pwfile", pwfile, "--auth=scram-sha-256", "-E", "UTF8"], {
@@ -118,7 +120,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       psql(
         superUrl,
         ["-v", `dbname=${dbname}`, "-v", "owner=fleet_owner", "-f", "-"],
-        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n\\set custody_password ${custodyPw}\n\\set identity_password ${identityPw}\n\\set browser_password ${browserPw}\n\\set dashboard_password ${dashboardPw}\n\\set provider_password ${providerPw}\n\\set bankfeed_password ${bankfeedPw}\n` +
+        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n\\set custody_password ${custodyPw}\n\\set identity_password ${identityPw}\n\\set browser_password ${browserPw}\n\\set dashboard_password ${dashboardPw}\n\\set provider_password ${providerPw}\n\\set bankfeed_password ${bankfeedPw}\n\\set channels_password ${channelsPw}\n` +
           fs.readFileSync(path.resolve("scripts/fleet-db-roles.sql"), "utf8"),
       );
     // Owner: like production fleetadmin — not a superuser, cannot create roles.
@@ -139,6 +141,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       dashboardUrl: `postgresql://fleet_dashboard_login:${dashboardPw}@127.0.0.1:${port}/${dbname}`,
       providerUrl: `postgresql://fleet_provider_login:${providerPw}@127.0.0.1:${port}/${dbname}`,
       bankfeedUrl: `postgresql://fleet_bankfeed_login:${bankfeedPw}@127.0.0.1:${port}/${dbname}`,
+      channelsUrl: `postgresql://fleet_channels_login:${channelsPw}@127.0.0.1:${port}/${dbname}`,
       applyRoles,
       stop,
     };

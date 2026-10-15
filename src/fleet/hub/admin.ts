@@ -220,7 +220,18 @@ export class PgHubAdmin {
   offerProofBuy(slug: string, actor: string) { return this.one(`SELECT fleet_admin_offer_proof_buy($1, $2) AS r`, [slug, actor]); }
   offers(agentId: string | null) { return this.one(`SELECT fleet_offers_admin_json($1) AS r`, [agentId]); }
   /** v79: release one agent from the preparation hold for a controlled proof (nothing becomes public), or hold it again. */
-  outwardSet(agentId: string, release: boolean, note: string | null, actor: string) { return this.one(`SELECT fleet_admin_outward_set($1, $2, $3, $4) AS r`, [agentId, release, note, actor]); }
+  /** v80: a scoped, expiring release for a controlled proof — permits EXTERNAL actions within its scope (public at once). */
+  outwardRelease(agentId: string, scope: Record<string, unknown>, note: string, actor: string) {
+    return this.one(`SELECT fleet_admin_outward_release($1, $2::jsonb, $3, $4) AS r`, [agentId, JSON.stringify(scope), note, actor]);
+  }
+  outwardHold(agentId: string, actor: string) { return this.one(`SELECT fleet_admin_outward_hold($1, $2) AS r`, [agentId, actor]); }
+  outwardList() { return this.one(`SELECT fleet_admin_outward_list() AS r`, []); }
+  /** v80: connect one of an agent's channels to the API account the owner authorised (token in the channel gateway's vault). */
+  channelConnect(channelId: string, provider: string, vaultRef: string, expectedAccount: string, shopId: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_channel_connect($1::uuid, $2, $3, $4, $5, $6) AS r`, [channelId, provider, vaultRef, expectedAccount, shopId, actor]);
+  }
+  channelDisconnect(channelId: string, actor: string) { return this.one(`SELECT fleet_admin_channel_disconnect($1::uuid, $2) AS r`, [channelId, actor]); }
+  channelApi() { return this.one(`SELECT fleet_channel_api_admin_json() AS r`, []); }
   /** v79: each agent's business beyond the offer pages (channels, live presence, leads, obligations, outreach, payouts awaiting the owner). */
   business(agentId: string | null) { return this.one(`SELECT fleet_business_admin_json($1) AS r`, [agentId]); }
   /** v79: the bank statement line that received a marketplace payout (owner_bank route). */

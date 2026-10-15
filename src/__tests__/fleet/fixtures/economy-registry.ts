@@ -42,7 +42,7 @@ export interface EconomyRegistry {
  * production behaviour.
  */
 export async function startEconomyRegistry(pgBin: string, opts: { founders?: number; allocationCents?: number; treasuryCents?: number; simulatedSettlement?: boolean;
-  /** v79: keep the founders under the preparation hold (default: the owner releases them, as for a controlled proof). */ outwardHeld?: boolean } = {}): Promise<EconomyRegistry> {
+  /** v79/v80: keep the production default — no public site, sales closed, outward actions held (default: launched). */ outwardHeld?: boolean } = {}): Promise<EconomyRegistry> {
   const n = opts.founders ?? 2;
   const pgc = await startEphemeralPg(pgBin);
   const owner = new pg.Pool({ connectionString: pgc.ownerUrl, max: 4 });
@@ -67,9 +67,12 @@ export async function startEconomyRegistry(pgBin: string, opts: { founders?: num
   await genesis.fund(g.genesisId, OWNER);
   const founders = p.founderIds!.map((id) => ({ id, token: mintAgentToken(id) }));
   await genesis.activateWithHashes(g.genesisId, g.authSha256, founders.map((t) => hashAgentToken(t.token)), OWNER);
-  // v79: outward actions are held while sales are closed; suites that exercise them release their founders the way the
-  // owner releases an agent for a controlled proof (economy-outward). outwardHeld keeps the production default.
-  if (opts.outwardHeld !== true) for (const f of founders) await q(`SELECT fleet.fleet_admin_outward_set($1, true, 'test registry: outward actions exercised', $2)`, [f.id, OWNER]);
+  // v79/v80: outward actions are held while sales are closed. Suites that exercise them run on a LAUNCHED test registry (a
+  // test public site, sales open — the owner's launch switch); outwardHeld keeps the production default (held, no site).
+  if (opts.outwardHeld !== true) {
+    await q(`SELECT fleet.fleet_admin_public_site_set('https://shop.fleet.test', NULL, $1)`, [OWNER]);
+    await q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
+  }
   const one = async <T = any>(expr: string, params: unknown[] = []) => (await owner.query(`SELECT ${expr} AS r`, params)).rows[0].r as T;
   return {
     pgc, owner, store, gw, ledger, genesis, founders, q, one,

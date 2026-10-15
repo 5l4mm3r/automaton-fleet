@@ -13,6 +13,11 @@
  *   GET  /u/<token>, POST /u/<token>        v79: an outreach recipient's opt-out (GET asks, POST records — a link scanner
  *                                           never opts anyone out); never written to first again by any agent
  *
+ *   GET  /sitemap.xml, /robots.txt          v80: published offer pages (only while sales are open) for search engines
+ *   GET  /<indexnow key>.txt                v80: the IndexNow key file (proves the site's notifications are its own)
+ *   GET  /oauth/callback                    v80: shows the owner the one-time authorisation code a provider returned (useless without
+ *                                           the PKCE verifier kept in the channel gateway's vault); nothing is stored
+ *
  * v79: an offer link with ?ref=<channel code> carries the agent's channel onto the order / enquiry it brings (attribution
  * only: a code of another agent or venture attributes nothing); image samples are shown on the offer page.
  *
@@ -43,13 +48,13 @@ const para = (t: unknown) => esc(t).split(/\n{2,}/).map((p) => `<p>${p.replace(/
 const kb = (n: unknown) => (Number(n) >= 1_000_000 ? `${(Number(n) / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(Number(n) / 1000))} kB`);
 
 /** A page: strict CSP (scripts only with this response's nonce), no referrer, no framing. */
-function page(res: http.ServerResponse, status: number, title: string, body: string, seller: unknown, o: { nonce?: string; refreshS?: number } = {}): void {
+function page(res: http.ServerResponse, status: number, title: string, body: string, seller: unknown, o: { nonce?: string; refreshS?: number; head?: string } = {}): void {
   const csp = `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
     + (o.nonce ? `; script-src 'nonce-${o.nonce}'; connect-src 'self'` : "");
   res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff",
     "content-security-policy": csp, "referrer-policy": "no-referrer", "x-frame-options": "DENY" });
   res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`
-    + (o.refreshS ? `<meta http-equiv="refresh" content="${o.refreshS}">` : "") + `<title>${esc(title)}</title><style>
+    + (o.refreshS ? `<meta http-equiv="refresh" content="${o.refreshS}">` : "") + (o.head ?? "") + `<title>${esc(title)}</title><style>
 body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:44rem;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1d232b;background:#fbfbfa}
 h1{font-size:1.6rem;margin-bottom:.2rem}.muted{color:#5d6670}.card{background:#fff;border:1px solid #e3e5e8;border-radius:10px;padding:1rem 1.2rem;margin:1rem 0}
 .price{font-size:1.4rem;font-weight:650}button,.btn{display:inline-block;background:#1f5eff;color:#fff;border:0;border-radius:8px;padding:.65rem 1.1rem;font-size:1rem;text-decoration:none;cursor:pointer}
@@ -87,6 +92,21 @@ var res=await fetch(${JSON.stringify(action)},{method:'POST',headers:{'content-t
 if(j.ok&&j.next){location.href=j.next}else if(j.ok){location.reload()}else{s.textContent=j.reason||'Could not send it. Please try again later.'}}catch(err){s.textContent='Could not send it.'}});</script>`;
 }
 
+/**
+ * v80: what search engines and link previews read — a description, Open Graph tags and schema.org Product / Offer data
+ * (a data block: not executed, so the page's CSP is unchanged). Only the offer's own public fields.
+ */
+export function discoveryHead(o: Record<string, any>, previews: Array<Record<string, unknown>>): string {
+  const img = previews.find((f) => /^image\/(png|jpeg)$/.test(String(f.contentType)));
+  const ld = { "@context": "https://schema.org", "@type": "Product", name: o.title, description: o.summary, brand: o.brand ? { "@type": "Brand", name: o.brand } : undefined,
+    ...(img ? { image: `/o/${o.slug}/preview/${img.n}` } : {}),
+    offers: { "@type": "Offer", price: (Number(o.priceMinor) / 100).toFixed(2), priceCurrency: o.currency, availability: o.available ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
+      url: `/o/${o.slug}` } };
+  return `<meta name="description" content="${esc(o.summary)}"><meta property="og:type" content="product"><meta property="og:title" content="${esc(o.title)}">`
+    + `<meta property="og:description" content="${esc(o.summary)}">${img ? `<meta property="og:image" content="/o/${esc(o.slug)}/preview/${esc(img.n)}">` : ""}`
+    + `<script type="application/ld+json">${JSON.stringify(ld).replace(/</g, "\\u003c")}</script>`;
+}
+
 export class PublicPages {
   private readonly reads: RateLimiter;
   private readonly writes: RateLimiter;
@@ -98,7 +118,7 @@ export class PublicPages {
 
   /** True when the path is a public page (handled here, whatever the outcome). */
   static matches(path: string): boolean {
-    return /^\/(o|order|enquiry|u)\//.test(path);
+    return /^\/(o|order|enquiry|u)\//.test(path) || /^\/(sitemap\.xml|robots\.txt|[0-9a-f]{32}\.txt|oauth\/callback)$/.test(path);
   }
 
   async handle(req: http.IncomingMessage, res: http.ServerResponse, path: string, ip: string): Promise<void> {
@@ -113,6 +133,10 @@ export class PublicPages {
     try {
       const p = path.split("/").filter(Boolean);
       if (p[0] === "u" && TOKEN.test(p[1] ?? "") && p.length === 2) return await this.optOut(res, p[1], isPost);
+      if (!isPost && path === "/robots.txt") return this.text(res, 200, "text/plain", `User-agent: *\nAllow: /o/\nDisallow: /order/\nDisallow: /enquiry/\nDisallow: /u/\nDisallow: /oauth/\nSitemap: ${await this.base(req)}/sitemap.xml\n`);
+      if (!isPost && path === "/sitemap.xml") return await this.sitemap(res);
+      if (!isPost && /^\/[0-9a-f]{32}\.txt$/.test(path)) return await this.indexNowKey(res, path.slice(1, 33));
+      if (!isPost && path === "/oauth/callback") return this.oauthCallback(req, res);
       if (p[0] === "o" && SLUG.test(p[1] ?? "")) {
         if (p.length === 2 && !isPost) return await this.offer(res, p[1], ref);
         if (p.length === 4 && p[2] === "preview" && /^[1-4]$/.test(p[3]) && !isPost) return await this.preview(res, p[1], Number(p[3]));
@@ -163,6 +187,39 @@ export class PublicPages {
     return Object.fromEntries(new URLSearchParams(raw));
   }
 
+  private text(res: http.ServerResponse, status: number, type: string, body: string): void {
+    res.writeHead(status, { "content-type": `${type}; charset=utf-8`, "cache-control": "public, max-age=600", "x-content-type-options": "nosniff" });
+    res.end(body);
+  }
+  private async base(req: http.IncomingMessage): Promise<string> {
+    const r = await this.port.publicCall("svc_sitemap", []);
+    return typeof r.base === "string" ? r.base : `https://${String(req.headers.host ?? "").replace(/[^A-Za-z0-9.:-]/g, "")}`;
+  }
+  /** v80: the published offer pages (sales open only; the Fleet's other pages are private by design). */
+  private async sitemap(res: http.ServerResponse): Promise<void> {
+    const r = await this.port.publicCall("svc_sitemap", []);
+    const offers = Array.isArray(r.offers) ? (r.offers as Array<{ slug: string; lastmod: string }>) : [];
+    const base = typeof r.base === "string" ? r.base : "";
+    this.text(res, 200, "application/xml", `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n`
+      + offers.filter((o) => SLUG.test(o.slug)).map((o) => `<url><loc>${esc(base)}/o/${esc(o.slug)}</loc><lastmod>${esc(String(o.lastmod).slice(0, 10))}</lastmod></url>`).join("\n")
+      + `\n</urlset>\n`);
+  }
+  private async indexNowKey(res: http.ServerResponse, key: string): Promise<void> {
+    const r = await this.port.publicCall("svc_indexnow_key", []);
+    if (r.key !== key) { page(res, 404, "Not found", "<h1>Not found</h1>", null); return; }
+    this.text(res, 200, "text/plain", key);
+  }
+  /** v80: the owner copies this code into the channel gateway's oauth-exchange (it is worthless without the vault's verifier). */
+  private oauthCallback(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const u = new URL(req.url ?? "/", "https://x");
+    const code = (u.searchParams.get("code") ?? "").slice(0, 512);
+    const state = (u.searchParams.get("state") ?? "").slice(0, 128);
+    const err = (u.searchParams.get("error") ?? "").slice(0, 200);
+    page(res, 200, "Authorisation", err ? `<h1>Not authorised</h1><p>${esc(err)}</p>`
+      : `<h1>Authorisation code</h1><p>Copy both values into the channel gateway's <code>oauth-exchange</code> within 30 minutes. They are useless without the verifier the gateway kept.</p>`
+        + `<p><strong>code</strong><br><code>${esc(code)}</code></p><p><strong>state</strong><br><code>${esc(state)}</code></p>`, null);
+  }
+
   /** v79: an outreach recipient's opt-out: GET explains and asks; POST (this page's own button) records it. */
   private async optOut(res: http.ServerResponse, token: string, confirm: boolean): Promise<void> {
     const r = await this.port.publicCall("svc_outreach_optout", [token, confirm]);
@@ -199,7 +256,8 @@ export class PublicPages {
       + `<div class="card"><h2>Terms</h2>${para(o.terms)}</div>` + (o.kind === "service" ? action : "")
       // v78: the agent's own storefront (its venture identity) and its support address.
       + (o.about || o.supportEmail ? `<div class="card"><h2>About ${esc(o.brand)}</h2>${o.about ? para(o.about) : ""}`
-        + (o.supportEmail ? `<p class="muted">Questions: <a href="mailto:${esc(o.supportEmail)}">${esc(o.supportEmail)}</a></p>` : "") + `</div>` : ""), r.seller, o.kind === "service" && o.available ? { nonce } : {});
+        + (o.supportEmail ? `<p class="muted">Questions: <a href="mailto:${esc(o.supportEmail)}">${esc(o.supportEmail)}</a></p>` : "") + `</div>` : ""), r.seller,
+      { ...(o.kind === "service" && o.available ? { nonce } : {}), head: discoveryHead(o, previews) });
   }
 
   private async preview(res: http.ServerResponse, slug: string, n: number): Promise<void> {

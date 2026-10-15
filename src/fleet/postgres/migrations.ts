@@ -86,9 +86,10 @@ import { V76_SQL } from "./migrations-phase76.js";
 import { V77_SQL } from "./migrations-phase77.js";
 import { V78_SQL } from "./migrations-phase78.js";
 import { V79_SQL } from "./migrations-phase79.js";
+import { V80_SQL } from "./migrations-phase80.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 79;
+export const FLEET_PG_SCHEMA_VERSION = 80;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1263,6 +1264,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 77, name: "treasury_integrity", sql: V77_SQL },
   { version: 78, name: "seller_storefronts", sql: V78_SQL },
   { version: 79, name: "business_operator", sql: V79_SQL },
+  { version: 80, name: "acquisition_channels", sql: V80_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1363,6 +1365,9 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v79: a channel's attribution code carried onto an order / enquiry; the public outreach opt-out page.
   "svc_attribute(text, text, text)",
   "svc_outreach_optout(text, boolean)",
+  // v80: search discovery of the own offer pages (sitemap; IndexNow key, due pages, notifications done).
+  "svc_sitemap()",
+  "svc_indexnow_key()",
   "svc_customer_message(text, text, text, text, jsonb)",
   "svc_offer_tick(integer)",
 ]);
@@ -1576,6 +1581,22 @@ export const BROWSER_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v79: files the agent staged for a page; files a page produced for the agent.
   "bx_file_take(uuid, text, uuid)",
   "bx_file_put(uuid, text, text, text, text, bytea)",
+]);
+
+/** Schema v80: the channel gateway's whole database surface (chx_*; role fleet_channels): connections, jobs, provider evidence. */
+export const CHANNELS_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "chx_ping()",
+  "chx_connections(text)",
+  "chx_connection_check(text, uuid, text, text[], text)",
+  "chx_claim_job(text, text)",
+  "chx_job_blob(uuid, text)",
+  "chx_job_report(uuid, text, boolean, jsonb, text, text, text)",
+  "chx_sale_record(text, uuid, jsonb)",
+  "chx_payout_record(text, uuid, jsonb)",
+  "chx_cursor(text, uuid, text)",
+  "chx_cursor_set(text, uuid, text, text)",
+  "chx_indexnow_due(text, integer)",
+  "chx_indexnow_done(text, jsonb, integer)",
 ]);
 
 /** Schema v52: the Gumroad storefront gateway's whole database surface (gx_*; role fleet_provider). */

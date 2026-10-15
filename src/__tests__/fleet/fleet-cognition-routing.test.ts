@@ -192,7 +192,7 @@ describe("routed gateway (real AnthropicProvider → fake Messages API)", () => 
       expect(Object.keys(tool("sleep")?.input_schema?.properties ?? {}).sort()).toEqual(["reason", "reviewAt", "wakeOn"]);
       expect(v5.route).toEqual(v4.route); // doctrine never touches routing, tier or model
       const { ports, seen } = fakePorts();
-      await expect(inferRouted(ports, factory, "A", "t", { messages: obs, doctrine: "founder-v9" })).rejects.toMatchObject({ code: "FLEET_DOCTRINE_UNKNOWN", status: 400 });
+      await expect(inferRouted(ports, factory, "A", "t", { messages: obs, doctrine: "founder-v99" })).rejects.toMatchObject({ code: "FLEET_DOCTRINE_UNKNOWN", status: 400 });
       expect(seen.authorized).toEqual([]); // refused before anything is authorized or charged
     });
   });

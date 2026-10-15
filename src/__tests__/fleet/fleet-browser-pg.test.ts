@@ -17,7 +17,7 @@ import os from "os";
 import path from "path";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
 import { PgIdentityGateway } from "../../fleet/identity/gateway.js";
 import { IdentityBroker } from "../../fleet/identity/broker.js";
 import { SimulatedMailProvider } from "../../fleet/identity/providers.js";
@@ -209,6 +209,7 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
         <script>document.getElementById('photo').addEventListener('change',e=>{document.getElementById('picked').textContent=[...e.target.files].map(f=>f.name+':'+f.size+':'+f.type).join(',')});
         document.getElementById('del').addEventListener('click',()=>{document.getElementById('deleted').textContent=confirm('Delete this draft?')?'deleted':'kept'});</script>`));
       if (u.pathname === "/listing/export.csv") { res.writeHead(200, { "Content-Type": "text/csv", "Content-Disposition": 'attachment; filename="listings.csv"' }); res.end("id,title,price\n1,Cash-flow workbook,12.00\n"); return; }
+      if (u.pathname === "/out") return send(page("Links", `<a id=away href="${PHISH}/">away</a>`));
       if (u.pathname === "/listing/preview") return send(page("Listing preview", "<h1>Cash-flow workbook</h1><p>Preview as buyers see it</p>"));
       // v79: a JavaScript-rendered profile wizard (content arrives after load; a hidden file input behind a drop zone; a
       // button enabled only after validation) and a social composer (contenteditable editor, image attach, character count).
@@ -468,6 +469,21 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
     expect((await R.q(`SELECT kind FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND status = 'active' ORDER BY kind`, [accountId])).map((x) => x.kind))
       .toEqual(["api_key", "password", "totp"]);
     await browse(A, "browser.close", { sessionId: o.sessionId });
+  });
+
+  it("v80: under a scoped release the worker refuses an outward step on a page outside the released origins (a click navigated away)", async () => {
+    await R.q(`SELECT fleet.fleet_admin_sales_set(false, $1)`, [OWNER]);
+    try {
+      await R.q(`SELECT fleet.fleet_admin_outward_release($1, $2::jsonb, 'proof: the shop only', $3)`, [A.id, JSON.stringify({ actions: ["browser"], accounts: [accountId], origins: [SITE], expiresHours: 1 }), OWNER]);
+      const o = await browse(A, "browser.open", { url: `${SITE}/out`, accountId });
+      const r = await browse(A, "browser.act", { sessionId: o.sessionId, steps: [{ action: "click", selector: "#away" }, { action: "click", text: "Continue" }] });
+      expect(r.status).toBe("failed");
+      expect(r.result).toMatchObject({ code: "FLEET_OUTWARD_SCOPE", stepsDone: 1 });
+      await browse(A, "browser.close", { sessionId: o.sessionId });
+    } finally {
+      await R.q(`SELECT fleet.fleet_admin_outward_hold($1, $2)`, [A.id, OWNER]);
+      await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
+    }
   });
 
   it("scope and reach: sessions are per agent; private addresses are unreachable; roles are least-privilege", async () => {

@@ -110,20 +110,27 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     }
     // Internal records are preparation, never held.
     expect((await R.econ(F, "channel.add", { ventureKey: "ledgers", name: "Prep channel", kind: "community" })).ok).toBe(true);
-    // The owner releases one agent for a controlled proof: that agent only; nothing becomes public (sales stay closed).
+    // v80: the owner releases one agent for a named controlled proof — scoped (actions, origins, accounts) and expiring.
     const agent = new pg.Pool({ connectionString: R.pgc.agentUrl, max: 1 });
-    try { await expect(agent.query(`SELECT fleet.fleet_admin_outward_set($1, true, 'x x x', $2)`, [F.id, OWNER])).rejects.toThrow(/permission denied/); } finally { await agent.end(); }
-    expect((await R.q(`SELECT fleet.fleet_admin_outward_set($1, true, NULL, $2) AS r`, [F.id, OWNER]).catch((e) => [{ r: e.message }]))[0].r).toMatch(/say why/);
-    expect((await R.q(`SELECT fleet.fleet_admin_outward_set($1, true, 'controlled proof: account creation on its chosen channel', $2) AS r`, [F.id, OWNER]))[0].r)
-      .toMatchObject({ ok: true, released: true, salesOpen: false, outwardHeld: false });
-    expect((await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "click", text: "Sign up" }] })).ok).toBe(true);
+    try { await expect(agent.query(`SELECT fleet.fleet_admin_outward_release($1, '{}'::jsonb, 'x x x', $2)`, [F.id, OWNER])).rejects.toThrow(/permission denied/); } finally { await agent.end(); }
+    const release = (scope: unknown) => R.q(`SELECT fleet.fleet_admin_outward_release($1, $2::jsonb, 'controlled proof: account on example.com', $3) AS r`, [F.id, JSON.stringify(scope), OWNER])
+      .then((r) => r[0].r, (e: Error) => e.message);
+    expect(await release({ actions: ["browser"], expiresHours: 2 })).toMatch(/name their origins/);
+    expect(await release({ actions: ["account_register"], origins: ["https://example.com"], expiresHours: 200 })).toMatch(/expiresHours/);
+    expect(await release({ actions: ["card"], origins: ["https://example.com"], expiresHours: 2 })).toMatch(/never released/);
+    expect(await release({ actions: ["account_register"], origins: ["https://example.com"], expiresHours: 2 })).toMatchObject({ ok: true, salesOpen: false, warning: expect.stringMatching(/EXTERNAL/) });
+    const reg = await ok(R.econ(F, "account.register", { platform: "example.com", kind: "marketplace", origin: "https://example.com" }));
+    expect(await R.econ(F, "account.register", { platform: "other.example", kind: "marketplace", origin: "https://other.example" })).toMatchObject(held);
+    expect(await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "click", text: "Sign up" }] })).toMatchObject(held); // browser not in scope
     expect(await R.econ(G, "mail.send", { to: "someone@example.test", subject: "Hi", body: "Hello", idempotencyKey: idem() })).toMatchObject(held);
     expect(await R.one(`fleet.fleet_sales_open()`)).toBe(false);
-    await R.q(`SELECT fleet.fleet_admin_outward_set($1, false, NULL, $2)`, [F.id, OWNER]);
-    expect(await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "click", text: "Sign up" }] })).toMatchObject(held);
+    await R.q(`SELECT fleet.fleet_admin_outward_hold($1, $2)`, [F.id, OWNER]);
+    expect(await R.econ(F, "account.register", { platform: "example.com", kind: "marketplace", origin: "https://example.com" })).toMatchObject(held);
+    void reg;
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type IN ('outward_released','outward_held'))`))).toBe(2);
-    // The rest of this suite exercises outward operations: both founders released (as for a controlled proof).
-    for (const who of [F, G]) await R.q(`SELECT fleet.fleet_admin_outward_set($1, true, 'suite exercises outward operations', $2)`, [who.id, OWNER]);
+    // The rest of this suite exercises outward operations on a launched registry (test public site, sales open).
+    await R.q(`SELECT fleet.fleet_admin_public_site_set('https://shop.fleet.test', NULL, $1)`, [OWNER]);
+    await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
   });
 
   it("the browser step grammar: staged files, rendering only without an account, frames, tabs, dialogs; files are the agent's own", async () => {
@@ -224,7 +231,7 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
   it("outreach is lawful, personal and identifiable, with an opt-out that holds across agents", async () => {
     await R.q(`SELECT fleet.fleet_admin_public_site_set('https://shop.fleet.test', NULL, $1)`, [OWNER]);
     // While sales are closed every outward action of an unreleased agent waits (the preparation hold) — outreach included.
-    await R.q(`SELECT fleet.fleet_admin_outward_set($1, false, NULL, $2)`, [F.id, OWNER]);
+    await R.q(`SELECT fleet.fleet_admin_sales_set(false, $1)`, [OWNER]);
     expect((await R.econ(F, "mail.send", { ventureKey: "ledgers", to: "x@studio-nine.test", subject: "s", body: "b", idempotencyKey: idem() })).code).toBe("FLEET_PREPARATION_HOLD");
     await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
     await ok(R.econ(F, "mailbox.provision", { ventureKey: "ledgers", idempotencyKey: idem() }));

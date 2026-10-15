@@ -1264,7 +1264,7 @@ v76 held outward actions only once a public site was set, so with no site an age
 - **Default:** outward actions are held whenever sales are closed, with or without a public site. That covers mail, SMS, phones, websites (click, fill, upload, download), account creation / operation, storefront publishing and card requests.
 - **The two exits, both the owner's:**
   - open sales (launch);
-  - `economy-outward <agentId> release <why>`, a per-agent release for a controlled proof. Nothing becomes public (sales stay closed). `economy-outward <agentId> hold` ends it.
+  - `economy-outward <agentId> release …`, a per-agent release for a controlled proof. **Corrected in §33.1 (v80):** a release permits external actions, so anything the agent publishes within it is public at once. Only the Fleet's own offer pages stay private while sales are closed. v80 makes every release name its scope and expire.
 - **What continues under the hold:**
   - reading and rendering in the browser (goto, back, wait, wait_for, wait_idle, scroll, hover, tab, set_content, screenshot, pdf);
   - research, building, reviewing and private publishing;
@@ -1337,3 +1337,56 @@ The worker refuses names that resolve to loopback or private addresses (v79 code
 - **rollback:** restores both files and removes the drop-in.
 
 Local evidence: `selftest` (the file transforms), the probe run locally. Host evidence comes only from `apply` / `verify` on the VPS, which needs sudo and the owner's go.
+
+## 33. Acquisition channels and scoped releases (owner brief, 2026-10-15; schema v80 + founder-v9, in code, not deployed)
+
+### 33.1 A release is a specific, expiring authorisation of external actions
+Closed sales keep only the Fleet's own offer pages private. A release lets the agent act outward, so a listing, post, account or message it makes is public immediately.
+
+**What `economy-outward <agentId> release '<scope>' <what the proof is>` names:**
+- `actions`: browser | account_register | account_connector | mail | sms | storefront | channel_api. Spending is never released.
+- `accounts`: the agent's accounts that browser / connector work may use.
+- `origins`: the https sites for browser work and registration.
+- `mailTo`: addresses or @domains.
+- `channels` and optional `apiOps`: for API publishing.
+- `expiresHours`: 1–72. A new release replaces the previous one.
+
+**How it is enforced:**
+- **The dispatcher** refuses anything outside the scope with `FLEET_PREPARATION_HOLD` and the reason. Browser work is allowed only in a session of a named account, on named origins (including `goto` targets).
+- **The browser worker** also refuses an outward step on any other page (`FLEET_OUTWARD_SCOPE`), because a click can navigate away.
+- **Card requests** before launch are refused outright.
+- **v79's unscoped releases** end at the migration.
+
+Owner commands: `economy-outward … hold`, `economy-outward list`. Evidence: v80 test (T), browser test "scoped release" (T, real Chrome).
+
+### 33.2 The smallest practical channel set (docs/marketplaces/acquisition-channels-2026-10-15.md)
+| Channel | Role | Operated by |
+|---|---|---|
+| Own offer pages + search discovery | conversion; organic discovery | the Fleet (sitemap, structured data, IndexNow) |
+| Etsy (owner's shop) | existing marketplace demand | the official Open API through the channel gateway |
+| Pinterest (owner's business account) | visual discovery | the official API v5 through the channel gateway (Standard access decides publicity; PROVISIONAL on its automation guideline) |
+| B2B email | direct reach for services | the Fleet's mailbox (v79 lawful outreach) |
+
+Not now: LinkedIn, X, Meta, Reddit, Gumtree and Fiverr/Upwork. For each, the rules or required approvals are listed in the document.
+
+**Distinction kept throughout:** a human-owned account using permitted AI assistance is a different thing from automated account operation. Silence in a platform's terms is not permission.
+
+### 33.3 The channel gateway (v80)
+- **What it is:** a separate unit (`automaton-fleet-channels`) with its own OS user and DB role `fleet_channels` (chx_* only).
+  - **Vault:** its own; one 0600 JSON per connection token; refreshed in place.
+  - **Network:** public internet only (api.etsy.com, api.pinterest.com, api.indexnow.org; enforced in code). No loopback or private ranges; database over the unix socket.
+- **Connections:** the owner connects one agent channel to the API account they authorised (`oauth-url`, then `oauth-exchange`, then `economy-channel-connect`).
+  - Before any job runs, the gateway checks the exact provider account (and the Etsy shop, or a Pinterest business account) and the exact scopes. A failed check runs nothing.
+- **Agent side:** jobs through `business api` (outward: held unless released or sales are open).
+  - Results become presence automatically.
+  - Etsy listings carry the AI-use disclosure.
+  - Etsy receipts become sale memos (source provider). Etsy payouts become payout claims on the owner's bank evidence chain (§32.8).
+- **Never:** it never pays, and never holds another unit's credential.
+- **Evidence:** v80 test with fake Etsy / Pinterest (T). Verified on the first live call: the payout ledger-entry type mapping, the token-scopes endpoint shape, Pinterest's account field.
+
+### 33.4 Search discovery (v80)
+- `/sitemap.xml` and `/robots.txt` list published offer pages, only while sales are open.
+- Offer pages carry schema.org Product/Offer data and Open Graph tags.
+- `/<key>.txt` serves the IndexNow key.
+- The channel gateway notifies IndexNow of new and changed offer pages. The controller has no egress.
+- Google does not take part in IndexNow; Search Console verification is optional and done by the owner.

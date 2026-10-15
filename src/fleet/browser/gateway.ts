@@ -18,6 +18,8 @@ export interface BrowserAction {
   sessionStatus: string;
   accountId?: string;
   origins?: string[];
+  /** v80: under an owner's scoped release (sales closed), outward steps run only on these origins; absent = unrestricted. */
+  outwardOrigins?: string[];
 }
 
 export type BxResult = { ok: true; [k: string]: unknown } | { ok: false; code: string; [k: string]: unknown };

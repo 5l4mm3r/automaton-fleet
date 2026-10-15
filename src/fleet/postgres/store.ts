@@ -59,6 +59,7 @@ import { migrateCheck,
   BROWSER_API_FUNCTIONS,
   GATEWAY_API_FUNCTIONS,
   BANKFEED_API_FUNCTIONS,
+  CHANNELS_API_FUNCTIONS,
   DASHBOARD_API_FUNCTIONS,
   FLEET_PG_HARD_MAX_AGENTS,
   FLEET_PG_SCHEMA_VERSION,
@@ -90,6 +91,7 @@ export const DEFAULT_DASHBOARD_ROLE = "fleet_dashboard";
 /** Schema v52: the Gumroad storefront gateway (gx_*) and the bank-feed receipt connector (rx_*). */
 export const DEFAULT_PROVIDER_ROLE = "fleet_provider";
 export const DEFAULT_BANKFEED_ROLE = "fleet_bankfeed";
+export const DEFAULT_CHANNELS_ROLE = "fleet_channels";
 
 export interface FleetTimeouts {
   reservationTtlS: number;
@@ -607,7 +609,7 @@ export class PgFleetStore {
     }
     const roles = await this.pool
       .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole, DEFAULT_CUSTODY_ROLE, DEFAULT_IDENTITY_ROLE, DEFAULT_BROWSER_ROLE, DEFAULT_DASHBOARD_ROLE,
-        DEFAULT_PROVIDER_ROLE, DEFAULT_BANKFEED_ROLE]])
+        DEFAULT_PROVIDER_ROLE, DEFAULT_BANKFEED_ROLE, DEFAULT_CHANNELS_ROLE]])
       .catch(() => null);
     const present = new Set(roles?.rows.map((r) => r.rolname) ?? []);
     if (present.has(this.agentRole)) await this.grantAgentRole(this.agentRole);
@@ -619,6 +621,7 @@ export class PgFleetStore {
     if (present.has(DEFAULT_DASHBOARD_ROLE)) await this.grantDashboardRole(DEFAULT_DASHBOARD_ROLE);
     if (present.has(DEFAULT_PROVIDER_ROLE)) await this.grantProtocolRole(DEFAULT_PROVIDER_ROLE, GATEWAY_API_FUNCTIONS, "provider_role_granted");
     if (present.has(DEFAULT_BANKFEED_ROLE)) await this.grantProtocolRole(DEFAULT_BANKFEED_ROLE, BANKFEED_API_FUNCTIONS, "bankfeed_role_granted");
+    if (present.has(DEFAULT_CHANNELS_ROLE)) await this.grantProtocolRole(DEFAULT_CHANNELS_ROLE, CHANNELS_API_FUNCTIONS, "channels_role_granted");
     return applied;
   }
 
@@ -961,6 +964,11 @@ export class PgFleetStore {
   }
 
   /** Schema v52: the bank-feed connector's role — USAGE on the schema and EXECUTE on BANKFEED_API_FUNCTIONS only. */
+  /** Schema v80: the channel gateway's role — USAGE on the schema and EXECUTE on CHANNELS_API_FUNCTIONS only. */
+  async grantChannelsRole(role: string = DEFAULT_CHANNELS_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, CHANNELS_API_FUNCTIONS, "channels_role_granted");
+  }
+
   async grantBankfeedRole(role: string = DEFAULT_BANKFEED_ROLE): Promise<void> {
     await this.grantProtocolRole(role, BANKFEED_API_FUNCTIONS, "bankfeed_role_granted");
   }
@@ -2358,5 +2366,7 @@ export class PgFleetStore {
 export const PUBLIC_PAGE_FUNCTIONS = ["svc_offer_page", "svc_offer_preview", "svc_offer_buy", "svc_offer_enquire", "svc_enquiry_page", "svc_order_page",
   "svc_order_file", "svc_customer_message",
   // v79: a channel's attribution code on the order / enquiry it brought; the outreach opt-out page.
-  "svc_attribute", "svc_outreach_optout"] as const;
+  "svc_attribute", "svc_outreach_optout",
+  // v80: search discovery (sitemap, IndexNow key) — read only.
+  "svc_sitemap", "svc_indexnow_key"] as const;
 export type PublicPageFunction = (typeof PUBLIC_PAGE_FUNCTIONS)[number];

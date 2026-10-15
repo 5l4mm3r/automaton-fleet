@@ -133,8 +133,18 @@
  *   economy-offer-proof <slug>                                              (v76) your live proof purchase of an agent's product: pay it yourself;
  *                                                                           booked as owner capital (net of fee), never the agent's revenue
  *   hub-offers [agentId] | hub-enquiries [agentId]                          (v76) agents' offers (reviews, orders, links) and buyers' enquiries
- *   economy-outward <agentId> release <why…> | hold                        (v79) outward actions are held while sales are closed; release one
- *                                                                           agent for a controlled proof (nothing becomes public), or hold it again
+ *   economy-outward <agentId> release '<scope json>' <what the proof is…> | <agentId> hold | list
+ *                                                                           (v79/v80) outward actions are held while sales are closed. A release
+ *                                                                           PERMITS EXTERNAL ACTIONS: whatever the agent publishes in scope is public at
+ *                                                                           once (closed sales only keep the Fleet's own offer pages private). The scope
+ *                                                                           names exactly what is allowed and expires: {"actions": [browser |
+ *                                                                           account_register | account_connector | mail | sms | storefront | channel_api],
+ *                                                                           "accounts": [accountId…], "origins": ["https://host"…], "mailTo": ["a@b" |
+ *                                                                           "@domain"…], "channels": [channelId…], "apiOps": [op…]?, "expiresHours": 1..72}
+ *                                                                           — never spending
+ *   economy-channel-connect <channelId> <etsy|pinterest> <vault:provider/name> <providerAccountId> [etsyShopId]
+ *   economy-channel-disconnect <channelId> | hub-channel-api                (v80) the API account you authorised for one agent channel (the token is
+ *                                                                           in the channel gateway's vault, never the agent's); checked before use
  *   hub-business [agentId]                                                 (v79) agents' channels, live presence, leads, obligations, outreach and
  *                                                                           channel payouts waiting for you
  *   economy-channel-payout-decide <payoutId> book <paypalTxnId> | reject [note…]
@@ -197,7 +207,7 @@ export const HUB_COMMANDS = new Set([
   "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
-  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide", "economy-channel-payout-bank", "economy-channel-payout-transfer", "economy-outward",
+  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide", "economy-channel-payout-bank", "economy-channel-payout-transfer", "economy-outward", "economy-channel-connect", "economy-channel-disconnect", "hub-channel-api",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -412,9 +422,24 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-channel-payout-transfer":
       if (p.length < 2) throw new Error("usage: economy-channel-payout-transfer <paypalTxnId> <payoutId> [payoutId…]");
       return h.channelPayoutTransfer(p[0], p.slice(1), actor);
-    case "economy-outward":
-      if (p.length < 2 || !["release", "hold"].includes(p[1]) || (p[1] === "release" && p.length < 3)) throw new Error("usage: economy-outward <agentId> release <why…> | <agentId> hold");
-      return h.outwardSet(p[0], p[1] === "release", p.slice(2).join(" ") || null, actor);
+    case "economy-outward": {
+      if (p[0] === "list") return h.outwardList();
+      if (p.length === 2 && p[1] === "hold") return h.outwardHold(p[0], actor);
+      let scope: unknown = null;
+      try { scope = JSON.parse(p[2] ?? ""); } catch { scope = null; }
+      if (p[1] !== "release" || !scope || typeof scope !== "object" || Array.isArray(scope) || p.length < 4) {
+        throw new Error(`usage: economy-outward <agentId> release '{"actions":["browser"],"accounts":["<accountId>"],"origins":["https://www.example.com"],"expiresHours":24}' <what the proof is…> | <agentId> hold | list`);
+      }
+      return h.outwardRelease(p[0], scope as Record<string, unknown>, p.slice(3).join(" "), actor);
+    }
+    case "economy-channel-connect":
+      if (p.length < 4 || p.length > 5) throw new Error("usage: economy-channel-connect <channelId> <etsy|pinterest> <vault:provider/name> <providerAccountId> [etsyShopId]");
+      return h.channelConnect(p[0], p[1], p[2], p[3], p[4] ?? null, actor);
+    case "economy-channel-disconnect":
+      if (p.length !== 1) throw new Error("usage: economy-channel-disconnect <channelId>");
+      return h.channelDisconnect(p[0], actor);
+    case "hub-channel-api":
+      return h.channelApi();
     case "hub-business":
       return h.business(p[0] ?? null);
     case "economy-channel-payout-decide":
