@@ -43,18 +43,18 @@ passes against a simulated provider.
 - its push unit needs the fix in the next package (§1);
 - open item: a dedicated PayPal limitation alert (PayPal gives no API signal today).
 
-**P2** (complete except):
-1. Several cards (R9).
-2. A provisional chargeback later reversed (shows as an unexplained line).
-3. The PayPal limitation signal (shared with P1).
+**Implementation gaps** (the same list as release-05cbe4e.md §6; any fix goes on a separate branch, rehearsed on its own):
+1. **Unfunded card shortfall.** A late or larger card charge beyond the agent's cash, with no unallocated treasury cash,
+   is rejected instead of recorded. Both card paths; a mismatch with "actual liabilities must be recorded".
+2. **Software maintenance** must be made unavailable to sell until its prerequisites exist (the library still lists it).
+   The prerequisites (scoped repository grant, build sandbox) are not built.
+3. Several cards (R9).
+4. A provisional chargeback credit reversed by the bank: not modelled.
+5. Support burden and AI cost per order and venture (per agent only today).
+6. A PayPal limitation signal.
+7. If you choose it: a media overrun charged to the agent instead of the Fleet.
 
-**P3** (remaining):
-- support-burden and AI-cost attribution per order and venture (AI cost is per agent today);
-- the software-maintenance prerequisites (scoped repository grant, build sandbox): assessed, not built; maintenance is not
-  banned;
-- the office renderer and OCR on the server: `scripts/fleet-office-tools-setup.sh` (check / plan / apply) is ready; the OS
-  package install needs your approval;
-- provider keys: search, images, bank token (your accounts).
+Host installation, provider onboarding and live proof: §3, §4 and release-05cbe4e.md §6.
 
 ## 3. Your setup and provider choices (only the indispensable ones)
 
