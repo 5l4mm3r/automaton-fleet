@@ -1427,6 +1427,11 @@ the owner personally); and record the buyer's legally required consent for immed
 - Two factors every time; never a session; every session ends; RED notification on each use; failures count towards the
   lockout; nothing spent by a failed attempt. Password change (signed in) is unchanged: Security → Change password
   after a fresh confirmation. Losing every factor stays a host recovery.
+- Host recovery (`hub-dashboard-totp-reset`, `hub-dashboard-enroll`, owner connection) ends the old access as part of the
+  operation (`fleet_admin_host_recovery_end_access`): every session ends, every unused recovery code is retired, an
+  unfinished authenticator replacement and any earlier unused link stop working. Keeping sessions or codes is explicit
+  (`--keep-sessions` / `--keep-recovery-codes`), recorded (`host_recovery_access_ended`) and RED; a misspelt option is
+  refused. Notifications: `ADMIN_TOTP_RESET`, `ADMIN_ENROLLMENT_LINK_ISSUED`.
 
 ### 34.2 Buyer consent and the confirmation, per purchase route (v82)
 - **The wording.** It is versioned and immutable (`fleet_buyer_consent_wordings`, `src/fleet/storefront/consent.ts`). The
@@ -1446,8 +1451,8 @@ the owner personally); and record the buyer's legally required consent for immed
 | Quoted service (enquiry → quote) | order page, before the PayPal link | "Order confirmation" after payment | v76 service; v82 6/6 |
 | Agent's own checkout (`paypal.checkout`) | order page: every such order now has one; the agent is given the page, never the PayPal link (no agent read carries it) | "Order confirmation" after payment | v82 5/6 |
 | Owner's proof purchase | order page (before payment or download) | confirmation after the buyer confirms (the earlier delivery email could not carry it) | v82 3–4/6 |
-| Etsy (owner's shop; Etsy's checkout) | **cannot be recorded.** Etsy's checkout has no consent box and the Fleet must not automate the website. Buyers keep the 14-day right to cancel a download (refund on request within 14 days) | Etsy's own receipt | — (owner decision: accept, or sell downloads on the own pages only) |
-| Gumroad (merchant of record; locked until £500 per agent) | Gumroad's checkout, under Gumroad's terms as the seller | Gumroad's | — (verify Gumroad's EU/UK withdrawal handling before unlock) |
+| Etsy (owner's shop; Etsy's checkout) | **unresolved — platform evidence not established.** The checkout is Etsy's page, so the Fleet cannot add its own boxes, and it works on Etsy only through the official API (never by automating the website). What Etsy's own checkout shows and records for UK/EU buyers of downloads, and what follows for their cancellation rights, has not been established either way. | Etsy's own receipt | open: Etsy's official seller/buyer documentation and a controlled test purchase, before the first Etsy digital listing |
+| Gumroad (merchant of record; locked until £500 per agent) | **unresolved — platform evidence not established.** Gumroad's checkout, under Gumroad's terms as merchant of record (verified 2026-10-12 for EU/UK VAT only) | Gumroad's | open: Gumroad's official handling of the consent and withdrawal, before unlock |
 | Orders created before v82 without a page | none | — | delivered as before; buyer keeps the right |
 
 ### 34.3 Helper jobs and the specialist crew (v82 + UI 0.21.0)

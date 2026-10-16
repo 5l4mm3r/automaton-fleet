@@ -1165,14 +1165,15 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_admin_totp: new Set(["dash_totp_set", "dash_totp_accept", "dash_totp_reset", "fleet_admin_dashboard_totp_reset", "dash_recovery_totp_confirm"]),
     // v82: recovery codes (issued from a session with a step-up, spent by a recovery) and a replacement authenticator awaiting
     // its first code.
-    fleet_admin_recovery_codes: new Set(["dash_recovery_codes_issue", "fleet_admin_recovery_spend"]),
-    fleet_admin_totp_pending: new Set(["dash_recovery_totp_begin", "dash_recovery_totp_confirm"]),
+    fleet_admin_recovery_codes: new Set(["dash_recovery_codes_issue", "fleet_admin_recovery_spend", "fleet_admin_host_recovery_end_access"]),
+    fleet_admin_totp_pending: new Set(["dash_recovery_totp_begin", "dash_recovery_totp_confirm", "fleet_admin_host_recovery_end_access"]),
     // v82: helper jobs — opened by the reservation's route snapshot, closed by the call's result or the reservation's end.
     fleet_helper_jobs: new Set(["fleet_helper_job_open", "fleet_helper_job_close", "fleet_helper_job_end"]),
-    fleet_admin_enrollment: new Set(["dash_passkey_add", "dash_password_set", "fleet_admin_dashboard_enroll"]),
+    fleet_admin_enrollment: new Set(["dash_passkey_add", "dash_password_set", "fleet_admin_dashboard_enroll", "fleet_admin_host_recovery_end_access"]),
     fleet_admin_challenges: new Set(["dash_challenge_new", "dash_challenge_use"]),
     fleet_admin_sessions: new Set(["dash_session_begin", "dash_session_begin_password", "dash_session_totp", "dash_session_live", "dash_session_end",
-      "dash_sessions_revoke_all", "dash_password_set", "dash_recovery_password_reset", "dash_recovery_totp_confirm"]),
+      "dash_sessions_revoke_all", "dash_password_set", "dash_recovery_password_reset", "dash_recovery_totp_confirm",
+      "fleet_admin_host_recovery_end_access"]),
     fleet_admin_stepups: new Set(["dash_stepup_record", "dash_stepup_consume"]),
     fleet_admin_auth_log: new Set(["fleet_admin_auth_log_write"]),
     fleet_identity_releases: new Set(["ix_release_record"]),

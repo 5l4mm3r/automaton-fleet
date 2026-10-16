@@ -17,12 +17,12 @@
  *      then revoked and the password replaced from the new session.
  *   d. the host commands are owner-only: the dashboard database role cannot call them, a non-Admin actor is refused, and
  *      nothing in the dashboard API removes the authenticator (FLEET_LOCKOUT_PREVENTED).
- *   f. recovery codes issued before a host reset SURVIVE it (the host commands never touch them) and still work afterwards;
- *      issuing a new set from a session retires them.
+ *   Each host command ENDS THE OLD ACCESS as part of the operation (a–c assert it on sessions and codes): every signed-in
+ *   session ends and every unused recovery code is retired — the owner has no separate clean-up to remember. The rest of
+ *   that clean-up and the explicit keep options are proven in fleet-v82-host-recovery-cleanup-pg.test.ts (a separate
+ *   registry: this scenario's deliberate failures already sit just under the 15-minute sign-in lockout).
  *   e. every host recovery leaves an audit and notification trace; no link token, password or secret appears in a response
  *      after it is shown once, in the audit log or in a notification.
- * Also recorded (actual behaviour, asserted): a host reset does NOT end sessions that are already signed in, a link that sets
- * the password ends the other PASSWORD sessions only, and a link that adds a passkey ends none — "Sign out elsewhere" ends them.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import crypto from "crypto";
@@ -171,10 +171,12 @@ describe.skipIf(!PG_BIN)("v82 host recovery of the owner sign-in (PostgreSQL + g
     await pk.auth.loginPasskey(); // only the 5-minute half session; the authenticator step cannot complete it
     expect(await code(pk.auth.loginTotp(totp(lost)))).toBe("FLEET_TOTP_STATE");
     expect(await code(pk.c.read("agents"))).toBe("FLEET_SESSION_INVALID");
-    // ACTUAL BEHAVIOUR: a host reset does not end a session that was already fully signed in.
-    expect(await code(before.c.read("agents"))).toBe("OK");
-    // Recovery codes issued before the reset are untouched by it (see f).
-    expect(await remaining()).toBe(10);
+    // The reset itself ended every signed-in session (this one and the owner's original) and retired the unused codes.
+    expect(reset).toMatchObject({ sessionsEnded: expect.any(Number), recoveryCodesRetired: 10, kept: [] });
+    expect(reset.sessionsEnded).toBeGreaterThanOrEqual(2);
+    expect(await code(before.c.read("agents"))).toBe("FLEET_SESSION_INVALID");
+    expect(await code(edgeB.c.read("agents"))).toBe("FLEET_SESSION_INVALID");
+    expect(await remaining()).toBe(0);
 
     // Host: a one-time link. It sets the password (or registers a passkey) and, with no authenticator, shows a new one ONCE.
     const { token, out } = await hostEnroll();
@@ -202,12 +204,8 @@ describe.skipIf(!PG_BIN)("v82 host recovery of the owner sign-in (PostgreSQL + g
     // The link worked once.
     expect(await code(browser(null).auth.enrollPassword(token, PASSWORD3))).toBe("FLEET_ENROLLMENT_INVALID");
 
-    // The passkey session from before the loss is still alive; "Sign out elsewhere" (step-up) ends it.
-    expect(await code(before.c.read("agents"))).toBe("OK");
-    s.c.stepupConfirm = passwordChoice(PASSWORD2);
-    expect(await s.c.call("session_revoke_all", {})).toMatchObject({ ok: true });
+    // The session from before the loss stayed ended; nothing else to clean up.
     expect(await code(before.c.read("agents"))).toBe("FLEET_SESSION_INVALID");
-    expect(await code(s.c.read("agents"))).toBe("OK");
   });
 
   it("b. lost the password and every passkey (authenticator kept): link → new password, authenticator not reshown; used/expired links refused", async () => {
@@ -216,15 +214,17 @@ describe.skipIf(!PG_BIN)("v82 host recovery of the owner sign-in (PostgreSQL + g
     const pkBefore = browser(edge);
     await pkBefore.auth.loginPasskey(); await pkBefore.auth.loginTotp(await nextCode());
 
-    const { token } = await hostEnroll();
+    const { token, out } = await hostEnroll();
+    // Issuing the link ended both sessions at once (a passkey session included), before the link is even used.
+    expect(out).toMatchObject({ sessionsEnded: expect.any(Number), recoveryCodesRetired: 0, kept: [] });
+    expect(out.sessionsEnded).toBeGreaterThanOrEqual(2);
+    expect(await code(pwBefore.c.read("agents"))).toBe("FLEET_SESSION_INVALID");
+    expect(await code(pkBefore.c.read("agents"))).toBe("FLEET_SESSION_INVALID");
     const b = browser(null);
     const r = await b.auth.enrollPassword(token, PASSWORD3);
     expect(r).toEqual({ next: "login", totpSecret: undefined, otpauth: undefined }); // the existing authenticator stays; nothing reshown
     expect(b.jar.cookies.size).toBe(0);
     expect(await R.one(`(SELECT set_via FROM fleet.fleet_admin_password WHERE id = 1)`)).toBe("enrollment");
-    // ACTUAL BEHAVIOUR: a password set by the link ends every other PASSWORD session; a passkey session is not ended.
-    expect(await code(pwBefore.c.read("agents"))).toBe("FLEET_SESSION_INVALID");
-    expect(await code(pkBefore.c.read("agents"))).toBe("OK");
 
     // The new password + the existing authenticator sign in; the old password is refused.
     expect(await code(browser(null).auth.loginPassword(PASSWORD2, await nextCode()))).toBe("FLEET_LOGIN_INVALID");
@@ -235,8 +235,8 @@ describe.skipIf(!PG_BIN)("v82 host recovery of the owner sign-in (PostgreSQL + g
     // The link works once — for a password or a passkey alike.
     expect(await code(browser(null).auth.enrollPassword(token, PASSWORD4))).toBe("FLEET_ENROLLMENT_INVALID");
     expect(await code(browser(new SoftAuthenticator(ORIGIN)).auth.enroll(token, "x"))).toBe("FLEET_ENROLLMENT_INVALID");
-    // A link expires after 15 minutes (simulated by moving its expiry into the past): refused, nothing changes.
     const late = await hostEnroll();
+    // A link expires after 15 minutes (simulated by moving its expiry into the past): refused, nothing changes.
     expect(Number(await R.one(`(SELECT extract(epoch FROM expires_at - created_at) FROM fleet.fleet_admin_enrollment WHERE token_sha = $1)`, [sha(late.token)]))).toBeCloseTo(900, 0);
     await R.q(`UPDATE fleet.fleet_admin_enrollment SET expires_at = now() - interval '1 second' WHERE token_sha = $1`, [sha(late.token)]);
     expect(await code(browser(null).auth.enrollPassword(late.token, PASSWORD4))).toBe("FLEET_ENROLLMENT_INVALID");
@@ -244,14 +244,15 @@ describe.skipIf(!PG_BIN)("v82 host recovery of the owner sign-in (PostgreSQL + g
     expect(await R.one(`(SELECT used_at FROM fleet.fleet_admin_enrollment WHERE token_sha = $1)`, [sha(late.token)])).toBeNull();
     const s2 = browser(null);
     await s2.auth.loginPassword(PASSWORD3, await nextCode()); // still PASSWORD3
-    // The owner then revokes the sessions of the lost devices.
-    s2.c.stepupConfirm = passwordChoice(PASSWORD3);
-    await s2.c.call("session_revoke_all", {});
-    expect(await code(pkBefore.c.read("agents"))).toBe("FLEET_SESSION_INVALID");
+    expect(await code(s2.c.read("agents"))).toBe("OK");
+    expect(await code(s.c.read("agents"))).toBe("FLEET_SESSION_INVALID"); // ended by the later links
   });
 
   it("c. lost everything: host reset + link → a passkey on a new device + a new authenticator → signed in; then clean up", async () => {
+    const left = browser(null);
+    await left.auth.loginPassword(PASSWORD3, await nextCode());
     await hostTotpReset();
+    expect(await code(left.c.read("agents"))).toBe("FLEET_SESSION_INVALID");
     oldSecrets.push(totpSecret);
     expect(await totpRows()).toBe(0);
     const { token } = await hostEnroll();
@@ -311,37 +312,13 @@ describe.skipIf(!PG_BIN)("v82 host recovery of the owner sign-in (PostgreSQL + g
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_admin_totp WHERE confirmed_at IS NOT NULL)`))).toBe(1);
   });
 
-  it("f. recovery codes issued before a host reset survive it and still work; a new set from a session retires them", async () => {
-    // Two host resets and four links later, all ten codes from before are unused and not retired.
-    expect(await remaining()).toBe(10);
-    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_admin_recovery_codes WHERE revoked_at IS NOT NULL OR used_at IS NOT NULL)`))).toBe(0);
-    // One of them, with the current password, still replaces the authenticator from the sign-in page.
-    const p = browser(null);
-    const fresh = await p.auth.recoverAuthenticator(codes[0], PASSWORD4);
-    shown.push({ value: fresh.totpSecret, at: responses.length });
-    expect(fresh.codesLeft).toBe(9);
-    await p.auth.confirmRecoveredAuthenticator(fresh.ticket, totp(fresh.totpSecret));
-    oldSecrets.push(totpSecret);
-    totpSecret = fresh.totpSecret; lastStep = Math.max(lastStep, Math.floor(Date.now() / 30_000));
-    // So after a host recovery the owner issues a new set: every earlier unused code stops working.
-    const s = browser(null);
-    await s.auth.loginPassword(PASSWORD4, await nextCode());
-    s.c.stepupConfirm = passwordChoice(PASSWORD4);
-    const newCodes = await s.auth.issueRecoveryCodes();
-    for (const c of newCodes) shown.push({ value: c, at: responses.length });
-    expect(await remaining()).toBe(10);
-    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_admin_recovery_codes WHERE revoked_at IS NOT NULL)`))).toBe(9);
-    expect(await code(browser(null).auth.recoverAuthenticator(codes[1], PASSWORD4))).toBe("FLEET_RECOVERY_INVALID");
-    codes = [...codes, ...newCodes];
-  });
-
   it("e. every host recovery leaves an audit and notification trace; no token, password or secret leaks", async () => {
     const log = await R.q(`SELECT event, ok, op, code, ip, detail FROM fleet.fleet_admin_auth_log ORDER BY seq`);
     const host = log.filter((l) => l.event === "totp_reset");
     expect(host).toHaveLength(2);
     for (const l of host) expect(l).toMatchObject({ ok: true, code: "host", detail: { by: OWNER } });
     const issued = log.filter((l) => l.event === "enroll_issued");
-    expect(issued).toHaveLength(tokens.length); // every link the host printed (5), attributed
+    expect(issued).toHaveLength(tokens.length); // every link the host printed, attributed
     for (const l of issued) expect(l).toMatchObject({ ok: true, detail: { by: OWNER } });
     expect(log.filter((l) => l.event === "password_set" && l.ok && l.code === "enrollment")).toHaveLength(2); // a and b
     expect(log.filter((l) => l.event === "passkey_added" && l.ok).map((l) => l.detail.name)).toEqual(["Desktop Edge", "Replacement phone"]);
@@ -350,6 +327,13 @@ describe.skipIf(!PG_BIN)("v82 host recovery of the owner sign-in (PostgreSQL + g
     const count = (c: string) => notes.filter((n) => n.code === c).length;
     expect(notes.filter((n) => n.code === "ADMIN_TOTP_RESET").every((n) => n.class === "AMBER")).toBe(true);
     expect(count("ADMIN_TOTP_RESET")).toBe(2);
+    for (const n of notes.filter((n) => n.code === "ADMIN_TOTP_RESET")) expect(n.title).toMatch(/^Authenticator reset on the Fleet host: \d+ session\(s\) signed out, \d+ unused recovery code\(s\) retired$/);
+    // Every host command recorded what it ended (or kept); each link raised a notification (RED only when something was kept).
+    const ended = log.filter((l) => l.event === "host_recovery_access_ended");
+    expect(ended).toHaveLength(tokens.length + 2);
+    for (const l of ended) expect(l).toMatchObject({ ok: true, code: "host", detail: { by: OWNER, op: expect.stringMatching(/^(enroll|totp_reset)$/), kept: [] } });
+    expect(count("ADMIN_ENROLLMENT_LINK_ISSUED")).toBe(tokens.length);
+    expect(notes.filter((n) => n.code === "ADMIN_ENROLLMENT_LINK_ISSUED").every((n) => n.class === "AMBER")).toBe(true);
     expect(count("ADMIN_PASSWORD_SET")).toBeGreaterThanOrEqual(3); // first set, link in a, link in b (and the change in c)
     expect(count("ADMIN_PASSKEY_ADDED")).toBe(2);
     expect(count("ADMIN_PASSKEY_REVOKED")).toBe(1);

@@ -264,6 +264,65 @@ BEGIN
   RETURN jsonb_build_object('ok', true);
 END $$;
 
+-- HOST recovery (owner connection: fleet:admin hub-dashboard-totp-reset / hub-dashboard-enroll) ends the old access as part
+-- of the operation, so nothing depends on the owner remembering a clean-up afterwards: every signed-in session is ended,
+-- every unused recovery code is retired, and an unfinished authenticator replacement and any earlier unused set-up link stop
+-- working. Keeping sessions or codes is an exceptional, explicit choice (--keep-sessions / --keep-recovery-codes), recorded
+-- in the sign-in log and the notification.
+CREATE FUNCTION fleet_admin_host_recovery_end_access(p_actor text, p_op text, p_keep_sessions boolean, p_keep_codes boolean) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE ns integer := 0; nc integer := 0; kept text[] := '{}';
+BEGIN
+  PERFORM fleet_require_admin(p_actor, 'fleet_dashboard');
+  IF p_keep_sessions IS NULL OR p_keep_codes IS NULL THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: keep choices must be explicit'; END IF;
+  IF p_keep_sessions THEN kept := kept || 'sessions'::text;
+  ELSE UPDATE fleet_admin_sessions SET ended_at = now() WHERE ended_at IS NULL; GET DIAGNOSTICS ns = ROW_COUNT; END IF;
+  IF p_keep_codes THEN kept := kept || 'recovery_codes'::text;
+  ELSE UPDATE fleet_admin_recovery_codes SET revoked_at = now() WHERE used_at IS NULL AND revoked_at IS NULL; GET DIAGNOSTICS nc = ROW_COUNT; END IF;
+  UPDATE fleet_admin_totp_pending SET expires_at = LEAST(expires_at, now()) WHERE used_at IS NULL;
+  UPDATE fleet_admin_enrollment SET expires_at = LEAST(expires_at, now()) WHERE used_at IS NULL;
+  PERFORM fleet_admin_auth_log_write('host_recovery_access_ended', true, NULL, 'host', NULL,
+    jsonb_build_object('by', p_actor, 'op', p_op, 'sessionsEnded', ns, 'recoveryCodesRetired', nc, 'kept', to_jsonb(kept)));
+  RETURN jsonb_build_object('sessionsEnded', ns, 'recoveryCodesRetired', nc, 'kept', to_jsonb(kept));
+END $$;
+
+CREATE FUNCTION fleet_admin_host_recovery_summary(e jsonb) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT (e->>'sessionsEnded') || ' session(s) signed out, ' || (e->>'recoveryCodesRetired') || ' unused recovery code(s) retired'
+    || CASE WHEN jsonb_array_length(e->'kept') > 0
+            THEN ' (KEPT on purpose: ' || (SELECT string_agg(k, ', ') FROM jsonb_array_elements_text(e->'kept') k) || ')' ELSE '' END
+$$;
+
+-- Host recovery commands, as before plus the step above (the keep choices default to false: everything ends).
+DROP FUNCTION fleet_admin_dashboard_totp_reset(text);
+CREATE FUNCTION fleet_admin_dashboard_totp_reset(p_actor text, p_keep_sessions boolean DEFAULT false, p_keep_codes boolean DEFAULT false) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE e jsonb;
+BEGIN
+  PERFORM fleet_require_admin(p_actor, 'fleet_dashboard');
+  DELETE FROM fleet_admin_totp WHERE id = 1;
+  PERFORM fleet_admin_auth_log_write('totp_reset', true, NULL, 'host', NULL, jsonb_build_object('by', p_actor));
+  e := fleet_admin_host_recovery_end_access(p_actor, 'totp_reset', p_keep_sessions, p_keep_codes);
+  PERFORM fleet_notify(CASE WHEN jsonb_array_length(e->'kept') > 0 THEN 'RED' ELSE 'AMBER' END, 'ADMIN_TOTP_RESET', NULL,
+    'Authenticator reset on the Fleet host: ' || fleet_admin_host_recovery_summary(e),
+    e || jsonb_build_object('next', 'enroll a new authenticator with a set-up link, then create new recovery codes'), 'totp-reset:' || now());
+  RETURN jsonb_build_object('ok', true, 'next', 'issue an enrollment link (fleet:admin hub-dashboard-enroll) and register the new authenticator') || e;
+END $$;
+
+DROP FUNCTION fleet_admin_dashboard_enroll(text, text);
+CREATE FUNCTION fleet_admin_dashboard_enroll(p_token_sha text, p_actor text, p_keep_sessions boolean DEFAULT false, p_keep_codes boolean DEFAULT false) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE e jsonb;
+BEGIN
+  PERFORM fleet_require_admin(p_actor, 'fleet_dashboard');
+  e := fleet_admin_host_recovery_end_access(p_actor, 'enroll', p_keep_sessions, p_keep_codes);
+  INSERT INTO fleet_admin_enrollment (token_sha, created_by, expires_at) VALUES (p_token_sha, p_actor, now() + interval '15 minutes');
+  PERFORM fleet_admin_auth_log_write('enroll_issued', true, NULL, NULL, NULL, jsonb_build_object('by', p_actor));
+  PERFORM fleet_notify(CASE WHEN jsonb_array_length(e->'kept') > 0 THEN 'RED' ELSE 'AMBER' END, 'ADMIN_ENROLLMENT_LINK_ISSUED', NULL,
+    'Sign-in set-up link issued on the Fleet host: ' || fleet_admin_host_recovery_summary(e),
+    e || jsonb_build_object('next', 'once signed in, create new recovery codes'), 'enroll-issued:' || gen_random_uuid());
+  RETURN jsonb_build_object('ok', true, 'expiresAt', now() + interval '15 minutes') || e;
+END $$;
+
 -- ═══ 2. The buyer's consent to immediate supply (CCR 2013 regs 36 and 37) ═══
 CREATE TABLE fleet_buyer_consent_wordings (
   version    text        NOT NULL CHECK (version ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[.]v[0-9]{1,3}$'),

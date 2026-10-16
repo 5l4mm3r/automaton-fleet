@@ -17,10 +17,10 @@ Valid from schema v43 / UI V2.4.2 (2026-10-07). Recovery from the sign-in page: 
 - **Lost everything** (no recovery code either): recovery happens on the Fleet server from your own terminal (below).
 - A recovery from the sign-in page never signs you in by itself, never works with just one thing, **signs out every
   session** and **emails you a security alert**. Afterwards you sign in normally.
-- A recovery on the server (the runbook below) is different. It does **not** end sessions that are already signed in, and
-  it does not cancel your recovery codes. Afterwards, use Security → **Sign out elsewhere**, revoke lost passkeys and
-  create a new set of recovery codes. Creating a link is logged (`enroll_issued`) but raises no alert; resetting the
-  authenticator raises the AMBER alert `ADMIN_TOTP_RESET`.
+- A recovery on the server (the runbook below) also cleans up by itself: each command **signs out every session** and
+  **cancels every unused recovery code** (and any unfinished authenticator replacement or unused earlier link). Keeping
+  sessions or codes happens only if you add `--keep-sessions` / `--keep-recovery-codes`, and that raises a RED alert.
+  Afterwards you only set yourself up again: create new recovery codes and revoke the passkeys of lost devices.
 
 ## Why this changed
 
@@ -142,14 +142,23 @@ ssh agentfleet-vps 'cd /opt/automaton-fleet/current && PATH=/opt/automaton-fleet
   secret **once**, which only works after you confirm a code from it.
 - Run the command in your own terminal. The link is a credential: do not paste it into a chat.
 
-**What a host recovery does NOT do (verified behaviour)**
-- `hub-dashboard-totp-reset` does **not** sign out a session that is already signed in. A password set through the link
-  signs out the other **password** sessions only; a passkey added through the link signs out nothing. That is why the
-  runbook ends with **Sign out elsewhere**.
-- Neither command touches your **recovery codes**. Codes issued before a host recovery keep working after it. If they may
-  be in someone else's hands, create a new set (that is the only thing that cancels them).
-- Issuing a link raises no notification. It is recorded in the sign-in log (`enroll_issued`, by `operator:ubuntu`). The
-  reset raises an AMBER `ADMIN_TOTP_RESET` notification; using the link raises `ADMIN_PASSWORD_SET` or `ADMIN_PASSKEY_ADDED`.
+**What a host recovery ends by itself (from release v82; tested)**
+
+Each of the two commands, as part of the same operation:
+- **signs out every session**, on every device, passkey sessions included;
+- **cancels every unused recovery code**;
+- **cancels an unfinished authenticator replacement** (one started with a recovery code and not yet confirmed);
+- **cancels any earlier set-up link** that was not used.
+
+So there is no separate security clean-up to remember. The command's output says what it ended, for example
+`"sessionsEnded": 2, "recoveryCodesRetired": 10, "kept": []`. It is also recorded in the sign-in log
+(`host_recovery_access_ended`, by `operator:ubuntu`) and as a notification: `ADMIN_TOTP_RESET` for the reset and
+`ADMIN_ENROLLMENT_LINK_ISSUED` for a link. Both are AMBER, and they turn RED when something was kept.
+
+**Keeping something (exceptional).** Add `--keep-sessions` and/or `--keep-recovery-codes` to either command only when you are
+sure the sessions or codes are still safe in your hands (for example: you are still signed in on your desktop and only want a
+link to set up a new phone). The choice shows in the output (`"kept": [...]`), the sign-in log and a RED notification. Any
+other option, or a misspelt one, is refused and nothing happens.
 
 ## Runbook: when you have lost your normal sign-in factors
 
@@ -172,11 +181,14 @@ do this for you, and nothing is sent by email.
    assistant): the link in step 3 is as good as your password for 15 minutes.
 2. **A and C only — remove the old authenticator.** Run the `hub-dashboard-totp-reset` command above. You will see
    `{"ok": true, "next": "issue an enrollment link (fleet:admin hub-dashboard-enroll) and register the new authenticator"}`.
-   From now on nobody can complete a new sign-in until you finish step 5: the old app's codes are dead, and Fleet HQ
-   shows "not enrolled". Fleet HQ records an AMBER `ADMIN_TOTP_RESET` notification. (B: skip this step. Your
-   authenticator stays.)
+   It also prints what it ended, for example `"sessionsEnded": 1, "recoveryCodesRetired": 10, "kept": []`: every session
+   is now signed out and every old recovery code is cancelled. From now on nobody can complete a new sign-in until you
+   finish step 5: the old app's codes are dead, and Fleet HQ shows "not enrolled". Fleet HQ records an AMBER
+   `ADMIN_TOTP_RESET` notification. (B: skip this step. Your authenticator stays.)
 3. **Get a one-time link.** Run the `hub-dashboard-enroll` command above. You will see something like
-   `{"ok": true, "expiresAt": "…", "link": "https://admin.agentfleet.vip/login/#enroll=…", "note": "open this link on the device to sign in from: …"}`.
+   `{"ok": true, "expiresAt": "…", "sessionsEnded": 0, "recoveryCodesRetired": 0, "kept": [], "link": "https://admin.agentfleet.vip/login/#enroll=…", "note": "open this link on the device to sign in from: …"}`.
+   Like the reset, it signs out every session and cancels the unused recovery codes (in A and C step 2 already did; in B
+   this is where it happens).
    - It works **once**, for **15 minutes** (see `expiresAt`).
    - **It is a credential.** Copy it straight into the browser's address bar. Never paste it into a chat, an email, a
      ticket or a screenshot. If it might have been seen, let it expire, or use it yourself at once, and issue a new one.
@@ -192,17 +204,18 @@ do this for you, and nothing is sent by email.
    codes keep working.)
 6. **Sign in normally**: the password or passkey you just set up, plus a code from the authenticator app. The link alone
    never signs you in.
-7. **Afterwards, in Fleet HQ → Security:**
-   1. **Sessions → Sign out elsewhere.** A host recovery does not end sessions that were already signed in (a password set
-      through the link ends only the other password sessions). This ends every session but the one you are using.
-   2. **Sign-in methods → Revoke** every passkey on a device you lost.
-   3. **Create recovery codes.** You get a new set of ten, shown once; every older unused code stops working. Do this even
-      if you think the old codes are safe: a host recovery does not cancel them.
-   4. **Add a passkey on a second device** (for example phone and desktop), and make sure a password is set. With two
+7. **Afterwards, in Fleet HQ → Security.** Sessions and old recovery codes were already ended by the commands; what is left
+   is setting yourself up again:
+   1. **Create recovery codes.** The old ones no longer work, so you have none until you do this. You get a new set of ten,
+      shown once.
+   2. **Sign-in methods → Revoke** every passkey on a device you lost. (A passkey is a sign-in method, not a session: the
+      commands do not remove passkeys, because a passkey alone never signs anyone in without the authenticator code.)
+   3. **Add a passkey on a second device** (for example phone and desktop), and make sure a password is set. With two
       ways in, one lost device never needs the server again.
-   5. In C, if you registered only a passkey, set a new password too (Change password).
-   6. **Check Notifications.** `ADMIN_TOTP_RESET`, `ADMIN_PASSWORD_SET` and `ADMIN_PASSKEY_ADDED` should all be yours. If
-      one is not, sign out elsewhere and repeat this runbook at once.
+   4. In C, if you registered only a passkey, set a new password too (Change password).
+   5. **Check Notifications.** `ADMIN_TOTP_RESET`, `ADMIN_ENROLLMENT_LINK_ISSUED`, `ADMIN_PASSWORD_SET` and
+      `ADMIN_PASSKEY_ADDED` should all be yours. If one is not, run the runbook again at once: every new link signs
+      everyone out again.
 
 **If something goes wrong**
 - **"Locked"**: 20 failed sign-in attempts in 15 minutes lock every sign-in route. Wait 15 minutes. The host commands

@@ -66,6 +66,9 @@
  *   hub-dashboard-enroll <https://admin origin>    a one-time (15 min) Admin dashboard enrollment link: register a passkey or set the
  *                                                  password (+ TOTP when none is set) — first access and owner recovery
  *   hub-dashboard-totp-reset                       remove the Admin authenticator (host recovery; then hub-dashboard-enroll)
+ *                                                  Both END every signed-in session and RETIRE every unused recovery code (and any
+ *                                                  earlier unused link or unfinished authenticator replacement); keeping either
+ *                                                  is explicit: [--keep-sessions] [--keep-recovery-codes] (recorded)
  *   owner-identity-upload <class> <file> <text/plain|application/pdf|image/jpeg|image/png|image/webp> --fingerprint <brokerKeySha256> [--expires iso]
  *                                               seal a fact/document to the broker's published key (pinned by fingerprint) and upload it
  *   hub-reveal <agent_credential|owner_identity> <credentialId|class> <outFile>   Admin reveal: the broker seals the value to a
@@ -228,6 +231,14 @@ const positional = (a: string[], flags: string[]): string[] => {
     out.push(a[i]);
   }
   return out;
+};
+/** Host recovery ends every session and retires every unused recovery code unless the owner keeps them explicitly. A
+ *  misspelt option is refused rather than ignored, so a keep choice is never assumed. */
+const HOST_RECOVERY_KEEP = ["--keep-sessions", "--keep-recovery-codes"];
+const hostRecoveryKeep = (cmd: string, a: string[]): { sessions: boolean; recoveryCodes: boolean } => {
+  const bad = a.filter((x) => x.startsWith("--") && !HOST_RECOVERY_KEEP.includes(x));
+  if (bad.length) throw new Error(`FLEET_BAD_REQUEST: ${cmd} accepts only ${HOST_RECOVERY_KEEP.join(" / ")} (got ${bad.join(" ")})`);
+  return { sessions: a.includes("--keep-sessions"), recoveryCodes: a.includes("--keep-recovery-codes") };
 };
 const int = (v: string | undefined | null, what: string): number => {
   if (!v || !/^-?\d{1,15}$/.test(v)) throw new Error(`FLEET_BAD_REQUEST: ${what} is an integer`);
@@ -683,12 +694,13 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "hub-comms":
       return h.comms(p[0] ?? null);
     case "hub-dashboard-totp-reset":
-      return h.dashboardTotpReset(actor);
+      return h.dashboardTotpReset(actor, hostRecoveryKeep(cmd, a));
     case "hub-dashboard-enroll": {
+      const keep = hostRecoveryKeep(cmd, a);
       const origin = p[0] ?? "";
       if (!/^https?:\/\/[a-z0-9.-]+(:\d+)?$/.test(origin)) throw new Error("FLEET_BAD_REQUEST: hub-dashboard-enroll <https://admin origin>");
       const token = crypto.randomBytes(32).toString("base64url");
-      const r = await h.dashboardEnroll(crypto.createHash("sha256").update(token, "utf8").digest("hex"), actor);
+      const r = await h.dashboardEnroll(crypto.createHash("sha256").update(token, "utf8").digest("hex"), actor, keep);
       return { ...(r as object), link: `${origin}/login/#enroll=${token}`, note: "open this link on the device to sign in from: register a passkey or set your password there; it works once, for 15 minutes" };
     }
     case "hub-browser":

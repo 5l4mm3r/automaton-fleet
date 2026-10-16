@@ -10,6 +10,8 @@ import pg from "pg";
 export const HUB_SECTIONS = ["overview", "agents", "wallet", "ventures", "treasury", "rails", "tax", "capital", "envelopes", "opportunities", "profit",
   "dependencies", "credentials", "audit", "reconcile"] as const;
 export type HubSection = (typeof HUB_SECTIONS)[number];
+/** v82 host recovery: what a host recovery command keeps on purpose (by default it ends sessions and retires recovery codes). */
+export interface HostRecoveryKeep { sessions: boolean; recoveryCodes: boolean }
 
 export class PgHubAdmin {
   private readonly pool: pg.Pool;
@@ -485,13 +487,14 @@ export class PgHubAdmin {
   revealTake(requestId: string, actor: string) {
     return this.one<{ ok: boolean; status?: string; sealedB64?: string; code?: string }>(`SELECT fleet_admin_reveal_take($1, $2) AS r`, [requestId, actor]);
   }
-  /** v38: a one-time dashboard enrollment token (first passkey + TOTP, or recovery); the database keeps its digest only. */
-  dashboardEnroll(tokenSha: string, actor: string) {
-    return this.one(`SELECT fleet_admin_dashboard_enroll($1, $2) AS r`, [tokenSha, actor]);
+  /** v38: a one-time dashboard enrollment token (first passkey + TOTP, or recovery); the database keeps its digest only.
+   *  v82: it ends every session and retires every unused recovery code unless `keep` says otherwise. */
+  dashboardEnroll(tokenSha: string, actor: string, keep: HostRecoveryKeep = { sessions: false, recoveryCodes: false }) {
+    return this.one(`SELECT fleet_admin_dashboard_enroll($1, $2, $3, $4) AS r`, [tokenSha, actor, keep.sessions, keep.recoveryCodes]);
   }
-  /** v43 host recovery: remove the Admin authenticator (then issue an enrollment link to register a new one). */
-  dashboardTotpReset(actor: string) {
-    return this.one(`SELECT fleet_admin_dashboard_totp_reset($1) AS r`, [actor]);
+  /** v43 host recovery: remove the Admin authenticator (then issue an enrollment link to register a new one). v82: as above. */
+  dashboardTotpReset(actor: string, keep: HostRecoveryKeep = { sessions: false, recoveryCodes: false }) {
+    return this.one(`SELECT fleet_admin_dashboard_totp_reset($1, $2, $3) AS r`, [actor, keep.sessions, keep.recoveryCodes]);
   }
   /** v37: browser sessions, actions, credential requests and refused origins (no secret). */
   browser(agentId: string | null) {
