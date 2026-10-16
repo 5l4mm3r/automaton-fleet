@@ -91,9 +91,14 @@ Steps 4–6 are described in `docs/operations/monitoring-and-alerts.md` and `bac
 owner-approved host step (`fleet-push-setup.sh`) that the rehearsals do not install.
 
 **The fix** (also for the media unit):
-- each service allows its own credentials directory;
-- each `LoadCredential=` has an empty `SetCredential=` fallback;
-- regression test: `fleet-location-feed` › systemd credentials.
+- each service allows its own credentials directory (11c3456; in 05cbe4e);
+- each `LoadCredential=` needs a placeholder `SetCredential=<id>:unset`, which each service rejects as a key and so reads
+  as "not configured".
+
+**Correction:** 11c3456 / 05cbe4e used an EMPTY `SetCredential=<id>:`. systemd ignores that as invalid syntax, so in
+05cbe4e the push and media units still fail (exit 243) when their key files are absent. They run when the keys are
+present. The placeholder fix is on branch `fleet/final-v2.5`, with a regression test that runs `systemd-analyze verify`
+and checks that each service reads `unset` as not configured.
 
 **Consequence:** deploy f47ee1c as frozen if you choose, but install the push unit from the next package (or deploy that
 package instead).
