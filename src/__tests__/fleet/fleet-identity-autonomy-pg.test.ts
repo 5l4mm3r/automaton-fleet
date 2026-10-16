@@ -232,6 +232,31 @@ describe.skipIf(!PG_BIN)("v49 identity autonomy, card holds, footprint and freez
       .toEqual(["4111111111111111", "03/29", "03", "2029", "123", null]);
   });
 
+  it("v90: several cards — the hold records its card, and the browser fills exactly that card (never another)", async () => {
+    await configure("payment_card_2");
+    await autonomy({ card: true, max: 5_000, daily: 50_000 });
+    // Card 2 (credit) first by priority; card 1 second.
+    expect(await R.one(`fleet.fleet_admin_card_slot_set('payment_card_2', 'Second card', 'credit', NULL, 1, 'active', $1)`, [OWNER])).toMatchObject({ ok: true });
+    expect(await R.one(`fleet.fleet_admin_card_slot_set('payment_card', 'Card 1', 'credit', NULL, 2, 'active', $1)`, [OWNER])).toMatchObject({ ok: true });
+    const h = await R.econ(F, "card.authorize", await approved(F, { accountId: account, merchant: "Slot Two Shop", maxMinor: 90, purpose: "two-card test" }));
+    expect(h, JSON.stringify(h)).toMatchObject({ ok: true });
+    expect(await R.one(`(SELECT card_slot FROM fleet.fleet_card_charges WHERE charge_id = $1)`, [h.charge.chargeId])).toBe("payment_card_2");
+    const a = await claim();
+    const served = await ask(a, "owner_card:number");
+    expect(served).toMatchObject({ ok: true });
+    expect((await R.q(`SELECT owner_class FROM fleet.fleet_browser_secret_requests WHERE request_id = $1`, [served.requestId]))[0].owner_class).toBe("payment_card_2");
+    expect((await R.q(`SELECT class_key FROM fleet.fleet_identity_uses WHERE request_id = $1`, [served.requestId]))[0].class_key).toBe("payment_card_2");
+    await close(a);
+    expect((await R.econ(F, "card.declare", { chargeId: h.charge.chargeId, amountMinor: 90 })).ok).toBe(true);
+    // A disabled card is never chosen; naming it is refused.
+    await R.one(`fleet.fleet_admin_card_slot_set('payment_card_2', 'Second card', 'credit', NULL, 1, 'disabled', $1)`, [OWNER]);
+    const named = await R.econ(F, "card.authorize", { ...(await approved(F, { accountId: account, merchant: "Named Card Shop", maxMinor: 70, purpose: "named card" })), card: "payment_card_2" });
+    expect(named).toMatchObject({ ok: false, code: "FLEET_OWNER_FACT_UNAVAILABLE" });
+    const h2 = await R.econ(F, "card.authorize", await approved(F, { accountId: account, merchant: "Card One Shop", maxMinor: 60, purpose: "card one again" }));
+    expect(await R.one(`(SELECT card_slot FROM fleet.fleet_card_charges WHERE charge_id = $1)`, [h2.charge.chargeId])).toBe("payment_card");
+    expect((await R.econ(F, "card.void", { chargeId: h2.charge.chargeId })).charge.status).toBe("void");
+  });
+
   it("the audit stays clean; the ledger verifies", async () => {
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
     expect((await R.one(`fleet.fleet_ledger_verify()`)).ok).toBe(true);

@@ -64,7 +64,7 @@ export const DASHBOARD_WRITE_OPS_V86_ADDED = ["location_status", "bank_txn_class
 export const BANKFEED_API_FUNCTIONS_V86 = ["rx_location_balance(text, uuid, bigint, bigint, bigint, text)", "rx_location_txn(text, uuid, jsonb)", "rx_locations(text)"] as const;
 
 // ── Card: debit mode on a bank location ──
-const DEBIT_GATE = `
+export const DEBIT_GATE = `
   -- v86: debit mode — the hold must also fit the bank location's fresh spendable cash (under that location's lock).
   SELECT * INTO loc FROM fleet_money_locations WHERE card_drawn ORDER BY created_at LIMIT 1;
   IF FOUND THEN

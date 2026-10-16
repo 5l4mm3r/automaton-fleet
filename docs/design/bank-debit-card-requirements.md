@@ -295,11 +295,20 @@ or connected, no token exists.
 - **With statement imports only**, debit-card spending is **not autonomous**. A purchase books only after you import a
   statement. Until then its money stays reserved, and with a stale balance new card holds on that bank are refused.
 
-**Not built (remaining):**
-1. Several cards (R9): one card binds to one bank location.
-2. A "PayPal limited" signal from PayPal itself (you mark the location limited).
-3. A provisional chargeback credit later reversed by the bank: the reversal is an unexplained line for you; it is not
-   modelled as a dispute state.
+**Added on branch `fleet/final-v2.5`** (v88 – v90; built and tested, not deployed):
+- **Money that has left is always on the books (v88):**
+  - a bank line is recorded even when booking fails (kept with its error, alerted, retried);
+  - an unfunded charge is the agent's debt, plus a visible negative shortfall that later money fills first; nobody is
+    funded;
+  - statement imports go row by row.
+- **Several cards (v90):** up to three card slots, each credit or debit on its own bank, with a priority and a status. A
+  hold uses the first card that can carry it, and the browser fills exactly that card.
+- **A provisional chargeback reversed (v90):** the bank taking a dispute credit back puts the charge up again against the
+  agent. It is matched when the bank names it, otherwise you attribute it.
+- **A PayPal limitation signal (v90):**
+  - PayPal's own failure codes about our account mark the PayPal location limited, so outflows wait (RED PAYPAL_LIMITED);
+  - PayPal has no limitation API, so this works from evidence;
+  - you re-activate the location when PayPal lifts it.
 
 **Your choices before connecting** (§8.4):
 - the bank and legal form;

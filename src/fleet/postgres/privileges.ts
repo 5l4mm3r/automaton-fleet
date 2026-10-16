@@ -1219,14 +1219,19 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_media_providers: new Set(["mx_report"]),
     // v86: money locations and their evidence — locations by the owner (and the migration's PayPal rows), evidence through
     // the bank-feed connector or the owner's CSV, transfers by the owner, matching and classification.
-    fleet_money_locations: new Set(["fleet_admin_location_add", "fleet_admin_location_status", "fleet_admin_location_bind_card", "fleet_money_location_for_rail"]),
+    fleet_money_locations: new Set(["fleet_admin_location_add", "fleet_admin_location_status", "fleet_admin_location_bind_card", "fleet_money_location_for_rail",
+      // v90: PayPal's own failure codes mark the PayPal location limited (the hourly watch); the card registry keeps card_drawn true.
+      "svc_operations_watch", "fleet_admin_card_slot_set"]),
+    fleet_cards: new Set(["fleet_admin_card_slot_set", "fleet_admin_location_bind_card"]),
     fleet_bank_balance_observations: new Set(["fleet_location_balance_record"]),
     fleet_bank_transactions: new Set(["fleet_location_txn_record", "fleet_location_match", "fleet_admin_location_contribution", "fleet_admin_bank_txn_classify",
       "fleet_location_transfer_arrive", "fleet_location_transfers_evidence", "fleet_admin_transfer_arrival", "fleet_card_dispute_credit",
       // v88: a line whose booking failed keeps its error (recorded, retried, listed).
-      "fleet_location_match_safe"]),
+      "fleet_location_match_safe",
+      // v90: a provisional dispute credit the bank took back.
+      "fleet_card_dispute_reverse"]),
     fleet_location_transfers: new Set(["fleet_admin_location_transfer", "fleet_location_transfer_arrive", "fleet_location_transfers_evidence"]),
-    fleet_card_disputes: new Set(["fleet_admin_card_dispute_open", "fleet_card_dispute_credit", "fleet_admin_card_dispute_resolve"]),
+    fleet_card_disputes: new Set(["fleet_admin_card_dispute_open", "fleet_card_dispute_credit", "fleet_admin_card_dispute_resolve", "fleet_card_dispute_reverse"]),
     fleet_admin_enrollment: new Set(["dash_passkey_add", "dash_password_set", "fleet_admin_dashboard_enroll", "fleet_admin_host_recovery_end_access"]),
     fleet_admin_challenges: new Set(["dash_challenge_new", "dash_challenge_use"]),
     fleet_admin_sessions: new Set(["dash_session_begin", "dash_session_begin_password", "dash_session_totp", "dash_session_live", "dash_session_end",

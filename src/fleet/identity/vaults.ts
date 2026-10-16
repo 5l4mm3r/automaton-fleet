@@ -116,7 +116,9 @@ export class AgentCredentialVault {
 export const OWNER_IDENTITY_CLASSES = ["legal_name", "date_of_birth", "residential_address", "contact_email", "contact_phone", "id_document",
   "proof_of_address", "tax_identifier", "bank_account_owner", "other_fact", "passport", "driving_licence",
   // v49: the owner's payment card (a JSON value: number, expMonth, expYear, cvc, name, postcode) — filled into checkouts, never shown.
-  "payment_card"] as const;
+  "payment_card",
+  // v90: further card slots (each credit or debit on its own bank; fleet_cards decides which a hold uses).
+  "payment_card_2", "payment_card_3"] as const;
 export type OwnerIdentityClass = (typeof OWNER_IDENTITY_CLASSES)[number];
 
 /** Owner CLI side: seal one class to the broker's public key. The CLI can never read it back. */

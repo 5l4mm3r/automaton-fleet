@@ -35,6 +35,10 @@ passes against a simulated provider.
 | **Paid media (v87):** the requesting agent pays: the most a job can cost is reserved first (no cash → no job; no cost limit → no job); settled once at its ACTUAL cost (image tokens at the owner's prices / a search's flat price / the limit, labelled), rest returned, owed to the owner (provider on the owner's card, like AI credit); beyond the limit a Fleet expense + alert; provider error releases it; gateway stopped → cost UNKNOWN, reservation kept until the owner resolves it; provider statements post the difference; mission work names the mission (its beneficiaries pay at its end, v35) | P3 (v87) | `fleet-v87-media-capabilities-pg`, `fleet-v85-capabilities-pg` |
 | **P2 (v86, corrected):** money locations in one ledger; transfers are the same money and complete only on evidence they are THAT transfer (reference in the bank line, or PayPal's withdrawal record + the bank line naming PayPal; never an equal amount alone — negative case tested); owner deposit = owner funding once; stale = nothing spendable; debit mode (hold fits the bank under lock; declaration books nothing; bank settlement books, no card payable); a used hold with no bank record after 7 days is OVERDUE (still reserved, alerted), released only on the bank's evidence or your stated check, and a late charge is still booked (never spendable twice); disputes; full refunds; venture on each charge; whole-treasury reconciliation (incomplete while any location is stale); 3-D Secure challenge → RED alert (founder-v10 only); statement import; **bank feed service** (unit + setup script; read-only tokens only; Starling host only) | P2 (c0998ce + 11c3456) | `fleet-v86-locations-pg`, `fleet-v86-bankfeed-service-pg`, `fleet-bank-statement`, `fleet-location-feed`; regressions in `bank-debit-card-requirements.md` §9 |
 | **Defect found in frozen P1:** the push (and media) unit would not run when installed (its own credentials directory refused; a missing key file fails the unit). Fixed with `SetCredential=` fallbacks; regression test | P1 fix (11c3456) | `release-f47ee1c.md` §6; `fleet-location-feed` › systemd credentials |
+| **v88: money that has left is always on the books.** A bank line is recorded even when booking fails (kept with its error, alerted, retried; statement imports row by row). An unfunded card charge (debit or owner card) is the agent's debt plus a visible negative shortfall, filled first by later money (repayments, funding, refunds); the agent's card is frozen meanwhile. On death the debt is written off and any shortfall stays visible. Media overruns are the agent's (cash, then debt) | P2 / P3 (fleet/final-v2.5) | `fleet-v88-shortfall-pg` (the reproduced 05cbe4e rejection, replay, freeze / thaw, funding, refund, estate, forced booking failure + retry, owner-card path), `fleet-v87-media-capabilities-pg` |
+| **v89: software maintenance on demonstrated scope.** Customer consent on their own page (exact repository; wording kept). Scoped access through the Fleet GitHub App (one repository per token, only the permissions needed; a new fleet/ branch + pull request only). An isolated build environment (no credentials; Landlock sandbox with one port, the registry-only egress proxy). PR-only recovery after a passing build of exactly that patch. Quoting needs active access + a passing baseline for THAT enquiry. Guidance corrected | P3 (fleet/final-v2.5) | `fleet-v89-code-maintenance-pg` (simulated GitHub, real sandboxed builds), `fleet-v89-code-units`, `fleet-v89-public-repo-consent`, runtime tool in `fleet-v85-founder-tools` |
+| **v90: several cards, reversed chargebacks, PayPal limitation, unit economics.** Up to three card slots (credit, or debit on its own bank; priority; the browser fills the hold's card). A provisional dispute credit taken back puts the charge up again. PayPal's own failure codes about our account mark the PayPal location limited. AI cost per order / venture comes from the calls that acted on it, with support burden | P2 / P3 (fleet/final-v2.5) | `fleet-v90-cards-reversals-economics-pg`, `fleet-identity-autonomy-pg` (slot-2 fill) |
+| **Defect found in the credentials fix:** an empty `SetCredential=` is invalid systemd syntax, so the 05cbe4e push / media units still exit 243 without keys. Fixed with a non-empty placeholder, checked with `systemd-analyze verify` | P1 fix (fleet/final-v2.5) | `fleet-location-feed` › systemd credentials; release-f47ee1c.md §6 |
 
 ## 2. Implementation remaining
 
@@ -43,18 +47,33 @@ passes against a simulated provider.
 - its push unit needs the fix in the next package (§1);
 - open item: a dedicated PayPal limitation alert (PayPal gives no API signal today).
 
-**Implementation gaps** (the same list as release-05cbe4e.md §6; any fix goes on a separate branch, rehearsed on its own):
-1. **Unfunded card shortfall.** A late or larger card charge beyond the agent's cash, with no unallocated treasury cash,
-   is rejected instead of recorded. Both card paths; a mismatch with "actual liabilities must be recorded".
-2. **Software maintenance** must be made unavailable to sell until its prerequisites exist (the library still lists it).
-   The prerequisites (scoped repository grant, build sandbox) are not built.
-3. Several cards (R9).
-4. A provisional chargeback credit reversed by the bank: not modelled.
-5. Support burden and AI cost per order and venture (per agent only today).
-6. A PayPal limitation signal.
-7. If you choose it: a media overrun charged to the agent instead of the Fleet.
+**Implementation gaps:** none known in the planned scope after `fleet/final-v2.5` (v88 – v90). Limits that stay by design:
+- AI-cost attribution starts with v90's records (earlier calls are general);
+- the PayPal limitation signal works from PayPal's failure codes, because PayPal has no limitation API;
+- builds can use only the toolchains the host provides (python3 today).
 
-Host installation, provider onboarding and live proof: §3, §4 and release-05cbe4e.md §6.
+**Host installation (each your go; sudo):**
+1. The release (81 → 90 + UI 0.22.0).
+2. Agent toolchain agent-tools-2, then Agent-1's runtime upgrade (paused).
+3. Edge file.
+4. Push.
+5. Heartbeat and `OnFailure`.
+6. Backups (restic).
+7. Bank feed.
+8. Media gateway.
+9. Code gateway, build environment and egress proxy (`fleet-code-setup.sh`).
+10. Office renderer and OCR (`fleet-office-tools-setup.sh`).
+11. Optional: `nodejs` for JavaScript builds.
+
+**Provider onboarding (your accounts):**
+- Pushover;
+- Healthchecks.io and UptimeRobot;
+- Backblaze B2 and the restic escrow password;
+- the bank account (subject to seller eligibility), its read-only token and who approves 3-D Secure;
+- Brave Search and OpenAI Images, with their cost settings;
+- the Fleet GitHub App (id, slug, private key);
+- the legal seller and public site;
+- money out (custody execution), for refunds.
 
 ## 3. Your setup and provider choices (only the indispensable ones)
 
@@ -103,6 +122,13 @@ Also needed:
    the bank feed connected.
 8. **Paid media:** one real search and one real image charged at their actual cost, then a provider statement that
    reconciles to zero.
+9. **Software maintenance:** one of your own repositories as the "customer":
+   - consent and install the app;
+   - snapshot;
+   - a failing, then passing build;
+   - a pull request you review and close;
+   - access ended by uninstalling.
+10. **Card slots:** a second card filled on a real checkout under its own hold (with the bank rail, item 7).
 
 ## 5. Next releasable package
 
@@ -113,9 +139,12 @@ heartbeat and `OnFailure`, backup / drill, the edge change, capability guidance 
 **bbfb24a (P0) stays frozen and ready.** Its rehearsals are valid until **2026-10-17 16:46Z** (production unchanged since:
 a712be1, schema 81).
 
-**Next to freeze: v84 – v87 with UI 0.22.0** (P1 follow-ups and the push-unit fix, P2, P3), on top of f47ee1c, with
-rehearsals of its own (record: release of that commit).
-- **What it carries:** agent runtime founder-v10. After the controller cutover, Agent-1's runtime is upgraded while it stays
-  paused. Agent-2 stays paused on its current runtime.
-- **What it is not:** it does not connect anything.
-- **Separate host steps (each its own go):** push, monitor, backups, bank feed, media, office tools.
+**05cbe4e (v84 – v87) is frozen and rehearsed, but must NOT be deployed as the money-handling release** (the shortfall
+blocker; release-05cbe4e.md §5).
+
+**Next to freeze: `fleet/final-v2.5` (v84 – v90 + UI 0.22.0):**
+- **Contents:** everything in 05cbe4e, plus the shortfall fix, agent-attributed media, software maintenance on
+  demonstrated scope, several cards, reversed chargebacks, the PayPal limitation signal, unit economics and the systemd
+  credential fixes.
+- **Then:** its own rehearsals (81 → 90).
+- **Still separate:** the host installations and every live proof. Nothing is connected or funded by deploying it.

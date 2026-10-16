@@ -513,9 +513,10 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
 
     <Panel title="2 · Your card (bypass only)">
       <p className="text-sm text-slate-300">Used where a merchant takes cards. Sealed here to the identity broker; agents never see it; every fill is logged. Before the card can be filled the agent’s own funds (or a Fleet envelope) are reserved for the charge; anything a merchant charges beyond what the agent can cover becomes the agent’s debt to the treasury. You repay the card from the treasury.</p>
-      <SavedOr saved={configured("payment_card")} what="Card" encrypted detail={expiry("payment_card")}
-        form={(close) => <Form title="Seal and upload card" done="Saved and encrypted." clearOnDone after={close} fields={[{ key: "number", label: "Card number" }, { key: "expMonth", label: "Expiry month (MM)" }, { key: "expYear", label: "Expiry year (YYYY)" }, { key: "cvc", label: "CVC", type: "password" }, { key: "name", label: "Name on card" }, { key: "postcode", label: "Billing postcode" }]}
-          submit={(v) => upload("payment_card", JSON.stringify({ number: v.number.replace(/\s/g, ""), expMonth: v.expMonth, expYear: v.expYear, cvc: v.cvc, name: v.name, postcode: v.postcode }))} />} />
+      {/* v90: up to three cards (each credit, or debit on its own bank: Treasury → Money locations → Cards). */}
+      {(["payment_card", "payment_card_2", "payment_card_3"] as const).map((slot, i) => <SavedOr key={slot} saved={configured(slot)} what={`Card ${i + 1}`} encrypted detail={expiry(slot)}
+        form={(close) => <Form title={`Seal and upload card ${i + 1}`} done="Saved and encrypted." clearOnDone after={close} fields={[{ key: "number", label: "Card number" }, { key: "expMonth", label: "Expiry month (MM)" }, { key: "expYear", label: "Expiry year (YYYY)" }, { key: "cvc", label: "CVC", type: "password" }, { key: "name", label: "Name on card" }, { key: "postcode", label: "Billing postcode" }]}
+          submit={(v) => upload(slot, JSON.stringify({ number: v.number.replace(/\s/g, ""), expMonth: v.expMonth, expYear: v.expYear, cvc: v.cvc, name: v.name, postcode: v.postcode }))} />} />)}
     </Panel>
 
     <Panel title="3 · Bank details and identity facts">

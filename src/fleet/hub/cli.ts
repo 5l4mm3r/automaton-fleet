@@ -124,6 +124,11 @@
  *                                                                           (a late charge is still booked against the agent)
  *   economy-card-dispute-open <chargeId> <amountMinor> <reason…> | economy-card-dispute-resolve <disputeId> won <txnId> | lost | withdrawn [note…]
  *   hub-treasury-reconciliation                                              every location's evidence + money in transit against the books
+ *   economy-card-slot <payment_card|payment_card_2|payment_card_3> <credit|debit> [--location id] [--priority 1..9] [--disabled] <label…>
+ *                                                                           (v90) a card and how holds use it; upload the card itself as that identity class
+ *   economy-card-dispute-reversal <txnId> <disputeId>                       (v90) this bank line takes back that dispute's provisional credit
+ *   hub-unit-economics [agentId] [--days n]                                 (v90) per order and venture: revenue, AI cost of the calls that acted on it, support
+ *   hub-code-access | economy-repo-access-revoke <authorizationId> [reason…] (v89) customers' repository access; end one
  *   hub-treasury-tx [agentId] [--limit n] [--before seq] [--direction in|out|internal]   per-transaction treasury list
  *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
  *   economy-ai-credits                                                       (v70) AI credit by funding source: lots, prepaid asset, owner payable
@@ -237,7 +242,8 @@ export const HUB_COMMANDS = new Set([
   "hub-card-requests", "economy-card-request-decide", "economy-card-request-policy", "hub-protection", "economy-protection", "economy-protection-agent",
   "hub-locations", "economy-location-add", "economy-location-status", "economy-location-bind-card", "economy-location-transfer", "economy-location-import",
   "economy-location-contribution", "economy-bank-txn-classify", "economy-transfer-arrival", "economy-card-hold-release", "economy-card-dispute-open",
-  "economy-card-dispute-resolve", "hub-treasury-reconciliation",
+  "economy-card-dispute-resolve", "hub-treasury-reconciliation", "economy-card-slot", "economy-card-dispute-reversal", "hub-unit-economics", "hub-code-access",
+  "economy-repo-access-revoke",
 ]);
 
 const flag = (a: string[], name: string): string | null => {
@@ -592,6 +598,19 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
         : h.cardDisputeResolve(p[0], p[1], null, p.slice(2).join(" ") || null, actor);
     case "hub-treasury-reconciliation":
       return h.treasuryReconciliation();
+    case "economy-card-slot": {
+      const q2 = positional(a, ["--location", "--priority"]);
+      return h.cardSlotSet(q2[0], q2.slice(2).join(" ") || q2[0], q2[1], flag(a, "--location"), flag(a, "--priority") ? int(flag(a, "--priority"), "priority") : 1,
+        a.includes("--disabled") ? "disabled" : "active", actor);
+    }
+    case "economy-card-dispute-reversal":
+      return h.cardDisputeReversal(p[0], p[1], actor);
+    case "hub-unit-economics":
+      return h.unitEconomics(positional(a, ["--days"])[0] ?? null, flag(a, "--days") ? int(flag(a, "--days"), "days") : 90);
+    case "hub-code-access":
+      return h.codeAccess();
+    case "economy-repo-access-revoke":
+      return h.repoAccessRevoke(p[0], p.slice(1).join(" ") || "ended by the owner", actor);
     case "economy-location-import": {
       const [loc, file] = positional(a, ["--balance", "--cleared"]);
       if (!loc || !file) throw new Error("FLEET_BAD_REQUEST: economy-location-import <locationId> <statement.csv> [--balance <availableMinor>] [--cleared <minor>] [--dry-run]");

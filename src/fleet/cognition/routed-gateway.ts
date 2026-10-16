@@ -237,7 +237,8 @@ export async function inferRouted(
   // Per tool call: id + argument digest + (for consequential actions) the canonical action digest the boundary checks.
   const loggedCalls = result.toolCalls.slice(0, 10).map((t) => {
     const a = actionDigest(t.name, t.arguments);
-    return { id: t.id, name: t.name, argsSha256: sha(JSON.stringify(t.arguments)), ...(a ? { actionSha256: a } : {}) };
+    const refs = businessRefs(t.arguments);
+    return { id: t.id, name: t.name, argsSha256: sha(JSON.stringify(t.arguments)), ...(a ? { actionSha256: a } : {}), ...(refs.length ? { refs } : {}) };
   });
   const rec = await ports.record(agentId, requestId, {
     outcome: "ok", inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens,
@@ -256,3 +257,24 @@ export async function inferRouted(
 }
 
 export { TASK_PACKET_VERSION, DECISION_PACKET_VERSION };
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const VENTURE_RE = /^[a-z0-9][a-z0-9._-]{1,47}$/;
+/**
+ * v90: which business objects a tool call acted on (order, enquiry, offer, venture, repository access), for unit economics
+ * (the cost of the AI call is shared among them). Only these ids are kept — never the arguments themselves.
+ */
+export function businessRefs(args: unknown): string[] {
+  const out = new Set<string>();
+  const scan = (o: unknown, depth: number) => {
+    if (!o || typeof o !== "object" || Array.isArray(o) || depth > 1) return;
+    const x = o as Record<string, unknown>;
+    for (const [k, kind] of [["orderId", "order"], ["enquiryId", "enquiry"], ["offerId", "offer"], ["authorizationId", "repo"]] as const) {
+      if (typeof x[k] === "string" && UUID_RE.test(x[k] as string)) out.add(`${kind}:${x[k]}`);
+    }
+    for (const k of ["venture", "ventureKey"]) if (typeof x[k] === "string" && VENTURE_RE.test(x[k] as string)) out.add(`venture:${x[k]}`);
+    scan(x.args, depth + 1);
+  };
+  scan(args, 0);
+  return [...out].slice(0, 6);
+}

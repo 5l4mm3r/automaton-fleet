@@ -45,6 +45,8 @@ export function MoneyLocations({ client, agents }: { client: GatewayClient; agen
   const disputes = (d.disputes as Row[]) ?? [];
   const rec = d.reconciliation as Row | undefined;
   const short = d.shortfall as Row | undefined;
+  const cards = (d.cards as Row[]) ?? [];
+  const wonDisputes = disputes.filter((x) => x.state === "won");
   const pence = Math.round(Number(amount) * 100);
   return <Panel title="Money locations">
     <p className="text-xs text-slate-400">Where the treasury’s money is. Each location spends only what its own latest evidence shows, after the Fleet’s open holds and transfers out. Moving money between your own accounts is the same money: it is not income and not a cost.</p>
@@ -87,10 +89,17 @@ export function MoneyLocations({ client, agents }: { client: GatewayClient; agen
           {t.direction === "in" && t.status === "settled" && inTransit.filter((x) => x.to === t.locationId && Number(x.amountMinor) === Number(t.amountMinor)).map((x) =>
             <button key={x.transferId} className={button} disabled={busy} onClick={() => { if (window.confirm(`This credit is your transfer “${x.reference}” (${gbp(x.amountMinor)} from ${labelOf(x.from)})?`)) void act("transfer_arrival", { txnId: t.txnId, transferId: x.transferId }, "Recorded as the transfer’s arrival."); }}>Transfer “{x.reference}”</button>)}
           {t.direction === "out" && t.status === "settled" && <button className={button} disabled={busy} onClick={() => act("bank_txn_classify", { txnId: t.txnId, as: "fee", note: "bank fee" }, "Recorded as a bank fee (a Fleet expense).")}>Bank fee</button>}
+          {t.direction === "out" && t.status === "settled" && wonDisputes.map((x) => <button key={x.disputeId} className={button} disabled={busy}
+            onClick={() => { if (window.confirm(`This line takes back the dispute credit for ${x.merchant}? The charge then stands again against the agent.`)) void act("card_dispute_reversal", { txnId: t.txnId, disputeId: x.disputeId }, "Recorded: the dispute credit was taken back."); }}>Takes back dispute: {x.merchant}</button>)}
           <button className={button} disabled={busy} onClick={() => { const note = window.prompt("What is it? (at least a few words)"); if (note) void act("bank_txn_classify", { txnId: t.txnId, as: "explained", note }, "Explained."); }}>Explain…</button>
         </div>
       </li>)}</ul>
     </div>}
+    {cards.length > 0 && <>
+      <h3 className="mt-4 text-sm font-semibold">Cards</h3>
+      <p className="text-xs text-slate-400">A hold uses the first active card by priority that can carry it (a debit card only from its bank’s free cash). Upload each card itself in Money &amp; identity.</p>
+      <ul className="mt-2 space-y-1 text-sm">{cards.map((c) => <li key={c.slot}>{c.priority}. {c.label} <span className="text-xs text-slate-400">({c.slot})</span> · {c.mode === "debit" ? `debit on ${labelOf(c.locationId)}` : "credit (you repay)"} · {c.status}{c.configured ? "" : <span className="text-amber-200"> · card not uploaded</span>}{" "}
+        <button className={button} disabled={busy} onClick={() => act("card_slot_set", { slot: c.slot, label: c.label, mode: c.mode, locationId: c.locationId ?? "", priority: c.priority, status: c.status === "active" ? "disabled" : "active" }, c.status === "active" ? "Card disabled." : "Card enabled.")}>{c.status === "active" ? "Disable" : "Enable"}</button></li>)}</ul></>}
     {((d.debitCharges as Row[]) ?? []).length > 0 && <>
       <h3 className="mt-4 text-sm font-semibold">Debit-card purchases</h3>
       <ul className="mt-2 space-y-1 text-sm">{(d.debitCharges as Row[]).map((c) => <li key={c.chargeId}>

@@ -96,9 +96,10 @@ import { V86_SQL, BANKFEED_API_FUNCTIONS_V86 } from "./migrations-phase86.js";
 import { V87_SQL, MEDIA_API_FUNCTIONS_V87 } from "./migrations-phase87.js";
 import { V88_SQL } from "./migrations-phase88.js";
 import { V89_SQL, CODE_API_FUNCTIONS_V89, BUILD_API_FUNCTIONS_V89 } from "./migrations-phase89.js";
+import { V90_SQL } from "./migrations-phase90.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 89;
+export const FLEET_PG_SCHEMA_VERSION = 90;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1283,6 +1284,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 87, name: "paid_media_and_capability_coverage", sql: V87_SQL },
   { version: 88, name: "money_that_left_is_on_the_books", sql: V88_SQL },
   { version: 89, name: "software_maintenance_prerequisites", sql: V89_SQL },
+  { version: 90, name: "cards_reversals_limits_unit_economics", sql: V90_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

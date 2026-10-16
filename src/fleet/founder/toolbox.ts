@@ -117,6 +117,8 @@ const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
     suppress: "outreach.suppress", check_address: "outreach.check",
     sales: "sale.list", report_sale: "sale.report", update_sale: "sale.update", payouts: "payout.list", claim_payout: "payout.claim",
     performance: "business.performance",
+    // v90 (founder-v10): unit economics per order and venture (AI cost shared by what each call acted on; support burden).
+    economics: "business.economics",
     // v80 (founder-v9): official-API channel publishing through the channel gateway.
     api: "channel.api", api_jobs: "channel.api_jobs" },
   customers: { enquiries: "enquiry.list", read: "enquiry.read", fetch_file: "enquiry.file", reply: "enquiry.reply", quote: "enquiry.quote", decline: "enquiry.decline",

@@ -44,6 +44,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "card_hold_release",
   // v87: record a media provider's statement (posts what the Fleet did not record).
   "media_statement",
+  // v90: a card slot (credit, or debit on a bank), its priority and status.
+  "card_slot_set",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */
@@ -66,4 +68,6 @@ export const WRITE_OPS: ReadonlySet<string> = new Set([
   "media_job_resolve",
   // v89: end a customer's repository access (the customer can also uninstall the app).
   "repo_access_revoke",
+  // v90: this bank line takes back a dispute credit (when the bank did not name it).
+  "card_dispute_reversal",
 ]);
