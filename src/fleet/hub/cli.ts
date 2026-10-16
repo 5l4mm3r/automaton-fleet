@@ -124,8 +124,9 @@
  *                                                                           (a late charge is still booked against the agent)
  *   economy-card-dispute-open <chargeId> <amountMinor> <reason…> | economy-card-dispute-resolve <disputeId> won <txnId> | lost | withdrawn [note…]
  *   hub-treasury-reconciliation                                              every location's evidence + money in transit against the books
- *   economy-card-slot <payment_card|payment_card_2|payment_card_3> <credit|debit> [--location id] [--priority 1..9] [--disabled] <label…>
- *                                                                           (v90) a card and how holds use it; upload the card itself as that identity class
+ *   economy-card-slot <payment_card|payment_card_2|payment_card_3> <credit|debit> [--location id] [--priority 1..9] [--disabled] [--fallback] <label…>
+ *                                                                           (v90) a card and how holds use it (--fallback: it may carry a hold the first card
+ *                                                                           could not — off by default); upload the card itself as that identity class
  *   economy-card-dispute-reversal <txnId> <disputeId>                       (v90) this bank line takes back that dispute's provisional credit
  *   hub-unit-economics [agentId] [--days n]                                 (v90) per order and venture: revenue, AI cost of the calls that acted on it, support
  *   hub-code-access | economy-repo-access-revoke <authorizationId> [reason…] (v89) customers' repository access; end one
@@ -601,7 +602,7 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-card-slot": {
       const q2 = positional(a, ["--location", "--priority"]);
       return h.cardSlotSet(q2[0], q2.slice(2).join(" ") || q2[0], q2[1], flag(a, "--location"), flag(a, "--priority") ? int(flag(a, "--priority"), "priority") : 1,
-        a.includes("--disabled") ? "disabled" : "active", actor);
+        a.includes("--disabled") ? "disabled" : "active", a.includes("--fallback"), actor);
     }
     case "economy-card-dispute-reversal":
       return h.cardDisputeReversal(p[0], p[1], actor);

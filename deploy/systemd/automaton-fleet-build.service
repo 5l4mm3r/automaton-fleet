@@ -64,7 +64,9 @@ LockPersonality=yes
 RemoveIPC=yes
 SystemCallArchitectures=native
 MemoryDenyWriteExecute=false
-InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/browser.env -/etc/automaton-fleet/gumroad.env -/etc/automaton-fleet/channels.env -/etc/automaton-fleet/push.env -/etc/automaton-fleet/media.env -/etc/automaton-fleet/bankfeed.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key -/etc/automaton-fleet/push -/etc/automaton-fleet/media -/etc/automaton-fleet/bankfeed -/etc/automaton-fleet/code -/etc/automaton-fleet/code.env -/etc/automaton-fleet/build.env
+# The whole configuration directory is hidden: systemd itself reads this unit's EnvironmentFile
+# before the namespace applies, so nothing under it — another service's env file or key, or a file added later — is visible.
+InaccessiblePaths=-/etc/automaton-fleet
 InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-identity -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-gumroad -/var/lib/automaton-fleet-channels -/var/lib/private/automaton-founders -/var/log/automaton-fleet
 
 [Install]

@@ -56,24 +56,26 @@ describe.skipIf(!PG_BIN)("v90 several cards, reversed chargebacks, PayPal limita
 
   it("several cards: the first active card by priority that can carry the hold; a debit card only from its bank's free cash; a named card or a refusal", async () => {
     // Card 2 is a debit card on the bank (priority 1); card 1 the owner's credit card (priority 2).
-    expect(await R.one<any>(`fleet.fleet_admin_card_slot_set('payment_card_2', 'Bank debit', 'debit', $1, 1, 'active', $2)`, [bank, OWNER])).toMatchObject({ ok: true });
-    expect(await R.one<any>(`fleet.fleet_admin_card_slot_set('payment_card', 'Owner credit', 'credit', NULL, 2, 'active', $1)`, [OWNER])).toMatchObject({ ok: true });
-    expect(await R.one<any>(`fleet.fleet_admin_card_slot_set('payment_card_3', 'x', 'debit', NULL, 1, 'active', $1)`, [OWNER])).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+    expect(await R.one<any>(`fleet.fleet_admin_card_slot_set('payment_card_2', 'Bank debit', 'debit', $1, 1, 'active', false, $2)`, [bank, OWNER])).toMatchObject({ ok: true });
+    expect(await R.one<any>(`fleet.fleet_admin_card_slot_set('payment_card', 'Owner credit', 'credit', NULL, 2, 'active', false, $1)`, [OWNER])).toMatchObject({ ok: true });
+    expect(await R.one<any>(`fleet.fleet_admin_card_slot_set('payment_card_3', 'x', 'debit', NULL, 1, 'active', false, $1)`, [OWNER])).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
     const a = await hold(400);
     expect(a.ok, JSON.stringify(a)).toBe(true);
     expect(await slotOf(a.charge.chargeId)).toBe(`payment_card_2/${bank}`); // the bank had 1 000 free
     expect((await R.econ(F, "card.declare", { chargeId: a.charge.chargeId, amountMinor: 400 })).ok).toBe(true);
     await txn({ externalId: "D-1", status: "settled", direction: "out", kind: "card", amountMinor: 400, descriptor: "SHOP LTD", settledAt: now() });
     await rx("rx_location_balance", ["feed", bank, 600, 600, 0, "simulated"]);
-    // Beyond the bank's 600 free: the next card by priority (the credit card) carries it.
-    const b = await hold(700, { merchant: "Other Shop" });
+    // Beyond the bank's 600 free: refused — the credit card is not a fallback until the owner says so (no silent credit).
+    expect(await hold(700, { merchant: "Other Shop" })).toMatchObject({ ok: false, code: "FLEET_LOCATION_INSUFFICIENT", freeMinor: 600 });
+    await R.one(`fleet.fleet_admin_card_slot_set('payment_card', 'Owner credit', 'credit', NULL, 2, 'active', true, $1)`, [OWNER]);
+    const b = await hold(710, { merchant: "Other Shop" });
     expect(b.ok, JSON.stringify(b)).toBe(true);
     expect(await slotOf(b.charge.chargeId)).toBe("payment_card/credit");
     expect((await R.econ(F, "card.void", { chargeId: b.charge.chargeId })).charge.status).toBe("void");
     // Naming the debit card for more than its bank holds is refused with the bank's reason.
     expect(await hold(650, { card: "payment_card_2" })).toMatchObject({ ok: false, code: "FLEET_LOCATION_INSUFFICIENT", freeMinor: 600 });
     const cards = (await R.one<any>(`fleet.fleet_locations_json()`)).cards;
-    expect(cards.map((c: any) => [c.slot, c.mode, c.configured])).toEqual([["payment_card_2", "debit", true], ["payment_card", "credit", true]]);
+    expect(cards.map((c: any) => [c.slot, c.mode, c.configured, c.fallback])).toEqual([["payment_card_2", "debit", true, false], ["payment_card", "credit", true, true]]);
   });
 
   it("a provisional chargeback the bank takes back puts the charge back up against the agent", async () => {
@@ -124,8 +126,9 @@ describe.skipIf(!PG_BIN)("v90 several cards, reversed chargebacks, PayPal limita
     const e = await R.econ(F, "business.economics", { days: 30 });
     expect(e.ok).toBe(true);
     const o = e.orders.find((x: any) => x.orderId === order);
-    expect(o).toMatchObject({ venture: "f-shop", aiCostMinor: 40, buyerMessages: 2, agentMessages: 1, deliveries: 0, revisions: 0 });
-    expect(e.ventures.find((v: any) => v.venture === "f-shop")).toMatchObject({ aiCostMinor: 50 });
+    // Direct (measured): the 30 call acted on the order alone. Allocated (estimate): half of the 20 call.
+    expect(o).toMatchObject({ venture: "f-shop", aiCostMinor: 40, aiDirectMinor: 30, aiAllocatedMinor: 10, buyerMessages: 2, agentMessages: 1, deliveries: 0, revisions: 0 });
+    expect(e.ventures.find((v: any) => v.venture === "f-shop")).toMatchObject({ aiCostMinor: 50, aiDirectMinor: 30, aiAllocatedMinor: 20 });
     expect(Number(e.generalAiCostMinor)).toBeGreaterThanOrEqual(7);
     const owner = await R.one<any>(`fleet.fleet_unit_economics(NULL, 30)`);
     expect(owner.orders.length).toBeGreaterThan(0);

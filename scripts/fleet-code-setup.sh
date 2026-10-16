@@ -118,5 +118,12 @@ if (( APPLY )); then
   for u in "${UNITS[@]}"; do systemctl enable --now "$u" >/dev/null 2>&1; done
   sleep 5
   for u in "${UNITS[@]}"; do printf '  %-40s %s\n' "$u" "$(systemctl is-active "$u")"; done
+  say "5. proof: inside each unit the configuration directory is empty (its env file and key were read by systemd first)"
+  for u in "${UNITS[@]}"; do
+    pid="$(systemctl show -p MainPID --value "$u")"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || { echo "  $u is not running — cannot prove its view" >&2; exit 1; }
+    seen="$(ls -A "/proc/$pid/root/etc/automaton-fleet" 2>/dev/null | wc -l)"
+    [[ "$seen" == 0 ]] && printf '  %-40s %s\n' "$u" "/etc/automaton-fleet hidden" || { echo "  $u SEES $seen entries in /etc/automaton-fleet — stop it and investigate" >&2; exit 1; }
+  done
 fi
 say "done$( (( APPLY )) || echo ' (plan only)')"

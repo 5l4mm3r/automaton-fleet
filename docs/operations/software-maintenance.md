@@ -53,6 +53,8 @@
 - It reaches only loopback (systemd `IPAddressDeny=any`).
 - Each command runs in the Landlock sandbox. It sees read-only system files and its own throwaway directory, and the only
   port it may connect to is the egress proxy's.
+- The unit hides the whole `/etc/automaton-fleet` (systemd reads the unit's own env file before hiding it), the Fleet's
+  state directories and `/home`; `fleet-code-setup.sh` checks each running unit's view at installation.
 - The proxy opens HTTPS tunnels to package registries on port 443 only: npm, PyPI, crates, Go, RubyGems and Maven by
   default (`FLEET_BUILD_EGRESS_ALLOW`).
 - Snapshots are unpacked safely (no links, absolute paths or `..`).
@@ -63,6 +65,25 @@
 - The pull request states its base commit and that reverting it undoes the change.
 - The Fleet never merges.
 
+## Evidence and limits
+**Tested** (`fleet-v89-code-maintenance-pg`, real sandboxed builds on this host; `fleet-v89-code-units`):
+- a build command that tries to read secrets gets nothing:
+  - its environment holds no credential variable, and not a variable of the worker that runs it;
+  - the worker's own environment (`/proc/<pid>/environ`) is refused;
+  - a world-readable file outside its directory is refused;
+- network: no TCP port at all without the proxy; with it, only the proxy's port;
+- access that passes its agreed days ends at the operations watch;
+- snapshots and builds still queued under ended access fail without running; nothing new can be asked for;
+- access also ends when the customer uninstalls the app or the owner revokes it (earlier tests).
+
+**Limits (stated, not hidden):**
+- `/etc` is readable inside a build, because toolchains need it:
+  - the Fleet's configuration is hidden by the unit;
+  - any other secret under `/etc` relies on its file permissions (the build user is in no other group);
+- a build already running when access ends finishes (at most 30 minutes); only queued work is stopped;
+- the hiding of `/etc/automaton-fleet` could not be proven on the development VM (its user manager applies no mount
+  namespaces), so it is proven per unit at installation.
+
 ## Set-up (each step is yours)
 1. Create a GitHub App owned by your account. Settings:
    - repository permissions: Contents read & write, Pull requests read & write, Metadata read;
@@ -72,7 +93,8 @@
 3. Deploy the release with v89. Then `sudo …/fleet-code-setup.sh install --apply`.
 4. In `/etc/automaton-fleet/code.env`, set `FLEET_CODE_GITHUB_APP_ID` and `FLEET_CODE_GITHUB_APP_SLUG`. Then `sudo …/fleet-code-setup.sh set-key --apply` (paste the PEM, then Ctrl-D).
 5. Optional: install the distribution's `nodejs` package if agents should build JavaScript projects.
-6. Fleet HQ → Agents → Code access shows both services connected.
+6. Fleet HQ → Agents → Code access shows both services connected. The install step has already shown, for each unit,
+   "/etc/automaton-fleet hidden"; if any unit can see it, the step stops.
 
 **Live proof (not done):** one real repository of yours, used as the "customer":
 - consent;

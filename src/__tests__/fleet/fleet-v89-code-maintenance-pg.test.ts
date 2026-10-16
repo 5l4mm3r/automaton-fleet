@@ -9,6 +9,11 @@
  * patch, writes a NEW fleet/ branch and a pull request to the consented base — never the base branch, never an update or a
  * merge; the capability check for a pull_request deliverable is ready only with the services, active access for THAT
  * enquiry and a passing baseline; the owner sees and can revoke; the roles reach only their own functions.
+ * v2.5 evidence: a build command that TRIES to read secrets (the worker's environment, a file outside its directory, its
+ * variables) or to reach the network gets nothing — only the egress proxy's port is reachable, and only when configured;
+ * access that expires ends at the watch, and work still queued under it (snapshot, build) fails without running.
+ * Not covered here: /etc stays readable inside the sandbox (toolchains need it) — the units hide /etc/automaton-fleet
+ * (InaccessiblePaths; proven per unit at installation by fleet-code-setup.sh) and other secrets rely on file permissions.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
@@ -16,6 +21,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { execFileSync } from "child_process";
+import net from "net";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, READY_RUNTIME, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
@@ -73,7 +79,7 @@ describe.skipIf(!PG_BIN)("v89 software maintenance on demonstrated scope (Postgr
   let gw: PgCodeGateway;
   let bp: PgBuildPort;
   let enquiry = "", token = "", auth = "";
-  let haveSandbox = false;
+  let haveSandbox = false, netDenied = false;
   const installed = { repos: [] as string[] };
   const gh = simulatedGitHub(installed);
   const key = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();
@@ -90,7 +96,8 @@ describe.skipIf(!PG_BIN)("v89 software maintenance on demonstrated scope (Postgr
     gw = new PgCodeGateway({ connectionString: R.pgc.codeUrl });
     bp = new PgBuildPort({ connectionString: R.pgc.buildUrl });
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), "v89-sb-"));
-    haveSandbox = (await sandboxSelfTest(ws, path.join(ws, "x"), 1)).available;
+    const st = await sandboxSelfTest(ws, path.join(ws, "x"), 1);
+    haveSandbox = st.available; netDenied = st.networkDenied;
     console.log(`v89: Landlock sandbox ${haveSandbox ? "available — real builds run" : "UNAVAILABLE — build steps skipped"}`);
     fs.rmSync(ws, { recursive: true, force: true });
     expect((await R.econ(F, "venture.create", { key: "fixes", model: "service", offer: "python fixes", state: "selected" })).ok).toBe(true);
@@ -198,6 +205,102 @@ describe.skipIf(!PG_BIN)("v89 software maintenance on demonstrated scope (Postgr
       await expect(p.query(sql), sql).rejects.toThrow(/permission denied/);
       await p.end();
     }
+    expect((await R.store.auditPrivileges()).problems).toEqual([]);
+  });
+
+  // A second access to the same repository for the probes below (and then its expiry).
+  let auth2 = "", snap2 = "";
+  const activate = async () => {
+    const r = await R.econ(F, "code.request_access", { enquiryId: enquiry, repo: REPO, baseBranch: "main", purpose: "Fix the add function and its test", durationDays: 1 });
+    expect(await pub("svc_repo_consent", ["enquiry", token, r.authorizationId, REPO, "Ada Customer", "f".repeat(64)])).toMatchObject({ ok: true });
+    installed.repos = [REPO];
+    await gateway().tick();
+    const s = await R.econ(F, "code.snapshot", { authorizationId: r.authorizationId, idempotencyKey: idem() });
+    await gateway().tick();
+    expect((await R.econ(F, "code.job", { jobId: s.jobId })).status).toBe("done");
+    return [r.authorizationId as string, s.jobId as string];
+  };
+
+  it("a build command that tries to read secrets or reach the network gets nothing: no credentials in its environment, not the worker's, no file outside its directory, no port but the proxy's", async (ctx) => {
+    [auth2, snap2] = await activate();
+    if (!haveSandbox) return ctx.skip();
+    const marker = `v89-secret-${crypto.randomBytes(8).toString("hex")}`;
+    const secretFile = path.join(os.tmpdir(), `${marker}.env`);
+    fs.writeFileSync(secretFile, `FLEET_SERVICE_TOKEN=${marker}\n`, { mode: 0o644 }); // world-readable: only the sandbox stands in the way
+    // Two loopback listeners: one plays the egress proxy, the other anything else on the host.
+    const servers = await Promise.all([0, 1].map(() => new Promise<net.Server>((r) => { const sv = net.createServer((c) => c.end()); sv.listen(0, "127.0.0.1", () => r(sv)); })));
+    const [proxyPort, otherPort] = servers.map((sv) => (sv.address() as net.AddressInfo).port);
+    const probe = [
+      "import os, socket, sys",
+      "def rd(p):",
+      "    try:",
+      "        open(p, 'rb').read(64); return 'READ'",
+      "    except Exception as e: return type(e).__name__",
+      "def conn(port):",
+      "    s = socket.socket(); s.settimeout(3)",
+      "    try:",
+      "        s.connect(('127.0.0.1', port)); return 'CONNECTED'",
+      "    except Exception as e: return type(e).__name__",
+      "    finally: s.close()",
+      "print('ENV ' + ' '.join(sorted(os.environ)))",
+      "print('VALUES ' + ' '.join(os.environ.values()))",
+      "print('WORKER_ENVIRON ' + rd('/proc/%s/environ' % sys.argv[1]))",
+      "print('SECRET_FILE ' + rd(sys.argv[2]))",
+      "print('ETC_PASSWD ' + rd('/etc/passwd'))",
+      "for p in sys.argv[3:]: print('CONNECT %s %s' % (p, conn(int(p))))",
+    ];
+    const probePatch = ["--- /dev/null", "+++ b/probe.py", `@@ -0,0 +1,${probe.length} @@`, ...probe.map((l) => "+" + l), ""].join("\n");
+    const run = async (proxy: number | null) => {
+      const b = await R.econ(F, "code.build", { authorizationId: auth2, snapshotJobId: snap2, patch: probePatch,
+        commands: [`python3 probe.py ${process.pid} ${secretFile} ${proxyPort} ${otherPort}`], idempotencyKey: idem() });
+      expect(b.ok, JSON.stringify(b)).toBe(true);
+      expect(await new BuildWorker(bp, { proxyPort: proxy }).tick()).toEqual({ done: 1, failed: 0 });
+      const out: string = (await R.econ(F, "code.job", { jobId: b.jobId })).result.steps[0].output;
+      return Object.fromEntries(out.trim().split("\n").map((l) => [l.split(" ")[0] + (l.startsWith("CONNECT") ? " " + l.split(" ")[1] : ""), l.split(" ").slice(l.startsWith("CONNECT") ? 2 : 1).join(" ")]));
+    };
+    // The worker itself holds a secret in its environment while it runs the build.
+    process.env.FLEET_V89_PROBE_SECRET = marker;
+    try {
+      const closed = await run(null);
+      expect(closed.ENV.split(" ").filter((k: string) => /FLEET|TOKEN|SECRET|PASSWORD|DATABASE|CREDENTIAL|GITHUB|NPM_|AWS_/i.test(k))).toEqual([]);
+      expect(closed.VALUES).not.toContain(marker);
+      expect(closed.WORKER_ENVIRON).not.toBe("READ"); // another process's environment (Landlock's ptrace scope)
+      expect(closed.SECRET_FILE).toBe("PermissionError"); // world-readable, outside its directory: denied
+      expect(closed.ETC_PASSWD).toBe("READ"); // the stated limitation: /etc is readable (the units hide /etc/automaton-fleet)
+      if (netDenied) {
+        expect([closed[`CONNECT ${proxyPort}`], closed[`CONNECT ${otherPort}`]]).toEqual(["PermissionError", "PermissionError"]); // no network at all
+        const open = await run(proxyPort);
+        expect([open[`CONNECT ${proxyPort}`], open[`CONNECT ${otherPort}`]]).toEqual(["CONNECTED", "PermissionError"]); // the proxy's port only
+        expect(open.ENV.split(" ")).toEqual(expect.arrayContaining(["HTTPS_PROXY", "PIP_PROXY"]));
+        expect(open.SECRET_FILE).toBe("PermissionError");
+      } else console.log("v89: this kernel's Landlock has no network rules (ABI < 4) — the network probes are skipped");
+    } finally {
+      delete process.env.FLEET_V89_PROBE_SECRET;
+      fs.rmSync(secretFile, { force: true });
+      for (const sv of servers) await new Promise((r) => sv.close(r));
+    }
+  });
+
+  it("access past its agreed days ends at the watch; work still queued under it (snapshot, build) fails without running; nothing new starts", async () => {
+    if (!auth2) [auth2, snap2] = await activate();
+    expect((await R.econ(F, "code.access", {})).access.find((a: any) => a.authorizationId === auth2)).toMatchObject({ status: "active" });
+    if (haveSandbox) await builder().tick(); // the build environment has reported in
+    const queued = [(await R.econ(F, "code.snapshot", { authorizationId: auth2, idempotencyKey: idem() })).jobId];
+    if (haveSandbox) queued.push((await R.econ(F, "code.build", { authorizationId: auth2, snapshotJobId: snap2, commands: ["python3 -c \"import calc\""], idempotencyKey: idem() })).jobId);
+    expect(queued.every(Boolean)).toBe(true);
+    // The agreed day passes (test clock: the expiry moved into the past).
+    await R.q(`UPDATE fleet.fleet_repo_authorizations SET expires_at = now() - interval '1 minute' WHERE authorization_id = $1`, [auth2]);
+    const svc = new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 1 });
+    try { await svc.query(`SELECT fleet.svc_operations_watch()`); } finally { await svc.end(); }
+    expect((await R.econ(F, "code.access", {})).access.find((a: any) => a.authorizationId === auth2)).toMatchObject({ status: "expired" });
+    for (const id of queued) expect(await R.econ(F, "code.job", { jobId: id }), id).toMatchObject({ status: "failed", code: "FLEET_CODE_JOB_FAILED", reason: "the customer's access ended" });
+    // Nothing reaches the gateway or the build environment, and nothing new can be asked for.
+    const before = gh.calls.length;
+    await gateway().tick();
+    expect(gh.calls.slice(before).filter((c) => c.path.includes(`/repos/${REPO}/`))).toEqual([]);
+    if (haveSandbox) expect(await builder().tick()).toEqual({ done: 0, failed: 0 });
+    expect(await R.econ(F, "code.snapshot", { authorizationId: auth2, idempotencyKey: idem() })).toMatchObject({ ok: false, code: "FLEET_REPO_ACCESS_INACTIVE" });
+    expect(await R.econ(F, "code.build", { authorizationId: auth2, snapshotJobId: snap2, commands: ["true"], idempotencyKey: idem() })).toMatchObject({ ok: false });
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
 });

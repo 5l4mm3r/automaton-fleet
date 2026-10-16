@@ -1,7 +1,8 @@
 /**
  * Unit economics (schema v90): per order and per venture — revenue, the AI cost of the calls that acted on it, and the
- * support burden (buyer and agent messages, deliveries, revisions, days open). AI calls that touched no order or venture are
- * shown as general. Information only.
+ * support burden (buyer and agent messages, deliveries, revisions, days open). AI cost is shown as direct (calls on that one
+ * order / venture: measured) and allocated (equal shares of calls that acted on several: an estimate); calls that touched no
+ * order or venture are general. Information only.
  */
 "use client";
 
@@ -21,13 +22,13 @@ export function UnitEconomicsPanel({ client, agents }: { client: GatewayClient; 
   const d = v.data;
   const ventures = ((d.ventures as Row[]) ?? []).filter((x) => Number(x.revenueMinor) > 0 || Number(x.aiCostMinor) > 0 || Number(x.orders) > 0);
   return <Panel title="Unit economics (90 days)">
-    <p className="text-xs text-slate-400">AI cost per order or venture is the cost of the AI calls that acted on it (shared when a call acted on several). {gbp(d.generalAiCostMinor ?? 0)} of AI cost touched no order or venture.</p>
+    <p className="text-xs text-slate-400">AI cost = direct (calls that acted on that order or venture alone — measured) + allocated (an equal share of calls that acted on several — an estimate). {gbp(d.generalAiCostMinor ?? 0)} of AI cost touched no order or venture (not attributed).</p>
     {ventures.length === 0 ? <p className="mt-3 text-sm text-slate-400">No sales or attributed AI cost yet.</p> : <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm">
-      <thead><tr>{["Venture", "Agent", "Orders", "Revenue", "AI cost", "Buyer messages"].map((x) => <th key={x} className="p-2">{x}</th>)}</tr></thead>
+      <thead><tr>{["Venture", "Agent", "Orders", "Revenue", "AI direct", "AI allocated (est.)", "Buyer messages"].map((x) => <th key={x} className="p-2">{x}</th>)}</tr></thead>
       <tbody>{ventures.map((x) => <tr key={x.ventureId} className="border-t border-slate-700"><td className="p-2 font-mono">{x.venture}</td><td className="p-2">{name(x.agentId)}</td>
-        <td className="p-2">{x.orders}</td><td className="p-2 font-mono">{gbp(x.revenueMinor)}</td><td className="p-2 font-mono">{gbp(x.aiCostMinor)}</td><td className="p-2">{x.buyerMessages}</td></tr>)}</tbody>
+        <td className="p-2">{x.orders}</td><td className="p-2 font-mono">{gbp(x.revenueMinor)}</td><td className="p-2 font-mono">{gbp(x.aiDirectMinor ?? 0)}</td><td className="p-2 font-mono">{gbp(x.aiAllocatedMinor ?? 0)}</td><td className="p-2">{x.buyerMessages}</td></tr>)}</tbody>
     </table></div>}
     {((d.orders as Row[]) ?? []).length > 0 && <details className="mt-3"><summary className="cursor-pointer text-sm text-cyan-300">Orders</summary>
-      <ul className="mt-2 space-y-1 text-xs text-slate-300">{(d.orders as Row[]).slice(0, 30).map((o) => <li key={o.orderId}>{o.item} · {o.venture ?? "—"} · {o.payment} · revenue {gbp(o.revenueMinor)} · AI {gbp(o.aiCostMinor)} · {o.buyerMessages} buyer / {o.agentMessages} agent messages · {o.deliveries} deliveries ({o.revisions} revisions) · {o.daysOpen} days</li>)}</ul></details>}
+      <ul className="mt-2 space-y-1 text-xs text-slate-300">{(d.orders as Row[]).slice(0, 30).map((o) => <li key={o.orderId}>{o.item} · {o.venture ?? "—"} · {o.payment} · revenue {gbp(o.revenueMinor)} · AI {gbp(o.aiDirectMinor ?? 0)} direct + {gbp(o.aiAllocatedMinor ?? 0)} allocated · {o.buyerMessages} buyer / {o.agentMessages} agent messages · {o.deliveries} deliveries ({o.revisions} revisions) · {o.daysOpen} days</li>)}</ul></details>}
   </Panel>;
 }

@@ -93,4 +93,19 @@ describe("v89 code maintenance units", () => {
     }
     expect(buildEnvProblems({ FLEET_BUILD_DATABASE_URL: "postgresql://x", REAL_PAYMENTS_ENABLED: "true" }, u).join()).toMatch(/REAL_PAYMENTS_ENABLED/);
   });
+
+  it("the code, build and proxy units hide the whole configuration directory and the Fleet's state; the build environment reaches loopback only", async () => {
+    const fs = await import("fs");
+    for (const unit of ["automaton-fleet-code.service", "automaton-fleet-build.service", "automaton-fleet-build-proxy.service"]) {
+      const t = fs.readFileSync(`deploy/systemd/${unit}`, "utf8");
+      expect(t, unit).toMatch(/^InaccessiblePaths=-\/etc\/automaton-fleet$/m); // every env file and key, including ones added later
+      expect(t, unit).toMatch(/^InaccessiblePaths=-\/home .*-\/var\/lib\/automaton-fleet-custody /m);
+      expect(t, unit).toMatch(/^ProtectProc=invisible$/m);
+      expect(t, unit).toMatch(/^NoNewPrivileges=true$/m);
+    }
+    const b = fs.readFileSync("deploy/systemd/automaton-fleet-build.service", "utf8");
+    expect(b).toMatch(/^IPAddressDeny=any$/m);
+    expect(b).toMatch(/^IPAddressAllow=localhost$/m);
+    expect(b).not.toMatch(/^(LoadCredential|SetCredential)=/m);
+  });
 });

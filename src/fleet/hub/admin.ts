@@ -329,8 +329,8 @@ export class PgHubAdmin {
     return this.one(`SELECT fleet_admin_card_dispute_resolve($1, $2, $3, $4, $5) AS r`, [disputeId, outcome, txnId, note, actor]);
   }
   treasuryReconciliation() { return this.one(`SELECT fleet_treasury_reconciliation() AS r`); }
-  cardSlotSet(slot: string, label: string, mode: string, locationId: string | null, priority: number, status: string, actor: string) {
-    return this.one(`SELECT fleet_admin_card_slot_set($1, $2, $3, $4, $5, $6, $7) AS r`, [slot, label, mode, locationId, priority, status, actor]);
+  cardSlotSet(slot: string, label: string, mode: string, locationId: string | null, priority: number, status: string, fallback: boolean, actor: string) {
+    return this.one(`SELECT fleet_admin_card_slot_set($1, $2, $3, $4, $5, $6, $7, $8) AS r`, [slot, label, mode, locationId, priority, status, fallback, actor]);
   }
   cardDisputeReversal(txnId: string, disputeId: string, actor: string) { return this.one(`SELECT fleet_admin_card_dispute_reversal($1, $2, $3) AS r`, [txnId, disputeId, actor]); }
   unitEconomics(agentId: string | null, days: number) { return this.one(`SELECT fleet_unit_economics($1, $2) AS r`, [agentId, days]); }

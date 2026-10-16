@@ -302,7 +302,11 @@ or connected, no token exists.
     funded;
   - statement imports go row by row.
 - **Several cards (v90):** up to three card slots, each credit or debit on its own bank, with a priority and a status. A
-  hold uses the first card that can carry it, and the browser fills exactly that card.
+  hold uses the card the agent names, else the first active card by priority, and the browser fills exactly that card.
+- **No silent move to credit (v90):** if the first card cannot carry a hold (a debit card whose bank lacks the free cash),
+  the hold is refused (FLEET_LOCATION_INSUFFICIENT). A later card stands in only if you marked it as a fallback
+  (`economy-card-slot … --fallback`, or "Allow as fallback" in Money locations; off by default). A fallback purchase is
+  still an ordinary purchase under the standing authority you already gave, with the same Fleet Control review.
 - **A provisional chargeback reversed (v90):** the bank taking a dispute credit back puts the charge up again against the
   agent. It is matched when the bank names it, otherwise you attribute it.
 - **A PayPal limitation signal (v90):**
