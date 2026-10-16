@@ -183,7 +183,7 @@ const OWNER_WAIT_CODES = new Set(["FLEET_COGNITION_PAUSED", "FLEET_TREASURY_INSU
  * The doctrine this runtime implements and asks FleetController for: v6 (2026-10-12) = charter v6 + the v5 tool
  * vocabulary + Field Guide v2. (R41.1 runtimes asked for founder-v5.)
  */
-export const FOUNDER_RUNTIME_DOCTRINE = "founder-v9";
+export const FOUNDER_RUNTIME_DOCTRINE = "founder-v10";
 
 /**
  * Ledger fields that signal something happened to the founder's economy (an order, revenue, an allocation, a transfer,

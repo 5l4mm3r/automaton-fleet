@@ -190,7 +190,11 @@ mods = {"openpyxl": "openpyxl", "et_xmlfile": "et-xmlfile", "xlsxwriter": "xlsxw
         "charset_normalizer": "charset-normalizer", "pypdf": "pypdf", "pypdfium2": "pypdfium2", "PIL": "pillow",
         "spellchecker": "pyspellchecker", "numpy": "numpy", "scipy": "scipy", "numpy_financial": "numpy-financial",
         "regex": "regex", "schedula": "schedula", "dateutil": "python-dateutil", "six": "six", "tqdm": "tqdm",
-        "click": "click", "formulas": "formulas", "pptx": "python-pptx"}
+        "click": "click", "formulas": "formulas", "pptx": "python-pptx",
+        # agent-tools-2 (2026-10-16): chart images, EPUB e-books, and the OCR wrapper (needs the tesseract system binary).
+        "matplotlib": "matplotlib", "contourpy": "contourpy", "cycler": "cycler", "fontTools": "fonttools",
+        "kiwisolver": "kiwisolver", "packaging": "packaging", "pyparsing": "pyparsing", "ebooklib": "ebooklib",
+        "pytesseract": "pytesseract"}
 out, ok = {}, tree == want
 for m, dist in mods.items():
     try:

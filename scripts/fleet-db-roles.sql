@@ -218,6 +218,28 @@ ALTER ROLE fleet_push_login IN DATABASE :"dbname" SET lock_timeout = '5s';
 ALTER ROLE fleet_push_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '30s';
 \endif
 
+-- Schema v85: the media provider gateway (mx_* only: search and image providers) (optional; provisioned only when media_password is supplied).
+--   fleet_media            NOLOGIN group: USAGE on fleet + EXECUTE on its own protocol functions only
+--   fleet_media_login      LOGIN member of fleet_media, held by that process only
+\if :{?media_password}
+SELECT 'CREATE ROLE fleet_media NOLOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_media') \gexec
+SELECT 'CREATE ROLE fleet_media_login LOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_media_login') \gexec
+ALTER ROLE fleet_media       NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+ALTER ROLE fleet_media_login LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2;
+SELECT format('ALTER ROLE fleet_media_login PASSWORD %L', :'media_password') \gexec
+GRANT fleet_media TO fleet_media_login;
+SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname)
+  FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
+ WHERE m.rolname IN ('fleet_media_login', 'fleet_media') AND NOT (m.rolname = 'fleet_media_login' AND r.rolname = 'fleet_media') \gexec
+REVOKE ALL ON DATABASE :"dbname" FROM fleet_media, fleet_media_login;
+GRANT CONNECT ON DATABASE :"dbname" TO fleet_media_login;
+ALTER ROLE fleet_media_login IN DATABASE :"dbname" SET statement_timeout = '30s';
+ALTER ROLE fleet_media_login IN DATABASE :"dbname" SET lock_timeout = '5s';
+ALTER ROLE fleet_media_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '30s';
+\endif
+
 -- Schema v52: the bank-feed receipt connector (rx_* only) (optional; provisioned only when bankfeed_password is supplied).
 --   fleet_bankfeed        NOLOGIN group: USAGE on fleet + EXECUTE on its own protocol functions only
 --   fleet_bankfeed_login  LOGIN member of fleet_bankfeed, held by that process only

@@ -73,6 +73,8 @@ describe.skipIf(!PG_BIN)("v82: buyer consent to immediate supply; the helpers re
 
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, simulatedSettlement: false, outwardHeld: true });
+    // v85: an agent checks what it can deliver before it quotes or publishes (valid 7 days).
+    for (const f of R.founders) expect((await R.econ(f, "capabilities.check", { runtime: {} })).ok).toBe(true);
     [F, G] = R.founders;
     await R.store.grantServiceRole();
     await R.store.grantCustodyRole();

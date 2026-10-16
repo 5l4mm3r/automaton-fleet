@@ -122,6 +122,8 @@ describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: sale-ready prod
     sandboxed = !(await runSandboxed(ws, "echo up", { timeoutMs: 15_000, maxOutput: 4_000 })).sandboxUnavailable;
     if (!sandboxed) return;
     R = await startEconomyRegistry(PG_BIN!, { founders: 1, allocationCents: 10_000, simulatedSettlement: false });
+    // v85: an agent checks what it can deliver before it quotes or publishes (valid 7 days).
+    for (const f of R.founders) expect((await R.econ(f, "capabilities.check", { runtime: {} })).ok).toBe(true);
     [F] = R.founders;
     await R.store.grantServiceRole();
     await R.store.grantCustodyRole();

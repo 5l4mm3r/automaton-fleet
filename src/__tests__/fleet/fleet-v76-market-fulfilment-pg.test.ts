@@ -87,6 +87,8 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
 
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, simulatedSettlement: false, outwardHeld: true });
+    // v85: an agent checks what it can deliver before it quotes or publishes (valid 7 days).
+    for (const f of R.founders) expect((await R.econ(f, "capabilities.check", { runtime: {} })).ok).toBe(true);
     [F, G] = R.founders;
     await R.store.grantServiceRole();
     await R.store.grantCustodyRole();
@@ -118,8 +120,8 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     const all: string[] = [];
     for (let i = 1; i <= Number(part1.parts); i++) all.push(...(await R.econ(F, "knowledge.library", { path: "foundation", part: i })).entries.map((e: any) => e.id));
     for (const id of ["bf-initial-focus", "bf-capability-evidence", "bf-offer-portfolio", "bf-quality-procedures", "bf-fulfilment-loop", "bf-channels", "fleet-capability-status"]) expect(all).toContain(id);
-    // v83 loads the dated capability status v9 (v76 loaded v5, v79 v6, v80 v7, v82 v8).
-    expect((await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entries?.[0]?.version ?? (await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entry?.version).toBe(9);
+    // v85 loads the dated capability status v10 (v76 loaded v5, v79 v6, v80 v7, v82 v8, v83 v9).
+    expect((await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entries?.[0]?.version ?? (await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entry?.version).toBe(10);
   });
 
   it("custody reads open checkouts' status: APPROVED is captured, COMPLETED read back, VOIDED fails; backed off", async () => {

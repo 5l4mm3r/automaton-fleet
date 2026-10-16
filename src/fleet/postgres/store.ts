@@ -61,6 +61,7 @@ import { migrateCheck,
   BANKFEED_API_FUNCTIONS,
   CHANNELS_API_FUNCTIONS,
   PUSH_API_FUNCTIONS,
+  MEDIA_API_FUNCTIONS,
   DASHBOARD_API_FUNCTIONS,
   FLEET_PG_HARD_MAX_AGENTS,
   FLEET_PG_SCHEMA_VERSION,
@@ -95,6 +96,8 @@ export const DEFAULT_BANKFEED_ROLE = "fleet_bankfeed";
 export const DEFAULT_CHANNELS_ROLE = "fleet_channels";
 /** Schema v83: the phone-push sender (px_* only). */
 export const DEFAULT_PUSH_ROLE = "fleet_push";
+/** Schema v85: the media provider gateway (mx_* only). */
+export const DEFAULT_MEDIA_ROLE = "fleet_media";
 
 export interface FleetTimeouts {
   reservationTtlS: number;
@@ -612,7 +615,7 @@ export class PgFleetStore {
     }
     const roles = await this.pool
       .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole, DEFAULT_CUSTODY_ROLE, DEFAULT_IDENTITY_ROLE, DEFAULT_BROWSER_ROLE, DEFAULT_DASHBOARD_ROLE,
-        DEFAULT_PROVIDER_ROLE, DEFAULT_BANKFEED_ROLE, DEFAULT_CHANNELS_ROLE, DEFAULT_PUSH_ROLE]])
+        DEFAULT_PROVIDER_ROLE, DEFAULT_BANKFEED_ROLE, DEFAULT_CHANNELS_ROLE, DEFAULT_PUSH_ROLE, DEFAULT_MEDIA_ROLE]])
       .catch(() => null);
     const present = new Set(roles?.rows.map((r) => r.rolname) ?? []);
     if (present.has(this.agentRole)) await this.grantAgentRole(this.agentRole);
@@ -626,6 +629,7 @@ export class PgFleetStore {
     if (present.has(DEFAULT_BANKFEED_ROLE)) await this.grantProtocolRole(DEFAULT_BANKFEED_ROLE, BANKFEED_API_FUNCTIONS, "bankfeed_role_granted");
     if (present.has(DEFAULT_CHANNELS_ROLE)) await this.grantProtocolRole(DEFAULT_CHANNELS_ROLE, CHANNELS_API_FUNCTIONS, "channels_role_granted");
     if (present.has(DEFAULT_PUSH_ROLE)) await this.grantProtocolRole(DEFAULT_PUSH_ROLE, PUSH_API_FUNCTIONS, "push_role_granted");
+    if (present.has(DEFAULT_MEDIA_ROLE)) await this.grantProtocolRole(DEFAULT_MEDIA_ROLE, MEDIA_API_FUNCTIONS, "media_role_granted");
     return applied;
   }
 
@@ -968,6 +972,11 @@ export class PgFleetStore {
   }
 
   /** Schema v52: the bank-feed connector's role — USAGE on the schema and EXECUTE on BANKFEED_API_FUNCTIONS only. */
+  /** Schema v85: the media provider gateway's role — EXECUTE on MEDIA_API_FUNCTIONS only. */
+  async grantMediaRole(role: string = DEFAULT_MEDIA_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, MEDIA_API_FUNCTIONS, "media_role_granted");
+  }
+
   /** Schema v83: the phone-push sender's role — USAGE on the schema and EXECUTE on PUSH_API_FUNCTIONS only. */
   async grantPushRole(role: string = DEFAULT_PUSH_ROLE): Promise<void> {
     await this.grantProtocolRole(role, PUSH_API_FUNCTIONS, "push_role_granted");

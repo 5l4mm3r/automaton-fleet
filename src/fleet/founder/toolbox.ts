@@ -31,6 +31,7 @@ import { recallFacts, rememberFact, rememberFacts, retractFact, sourceLabel, typ
 import { custodyCategory, custodyRefusalText } from "../custody-refusals.js";
 import { FIELD_GUIDE_VERSION, guideList, guideSection, libraryList, guidePart } from "./field-guide.js";
 import { SCOPED_CONTINUE } from "./loop-guard.js";
+import { FOUNDER_V10_RELEASE } from "./doctrine-v10.js";
 import { DecisionLedgerError, cognitionDepth, commitmentCheck, depthLine, loadDecisions, noteCommitment, noteResearch, openDecision, researchCheck, resolveDecision, reviewDecision, saveDecisions, type Decision } from "./decisions.js";
 
 export interface ToolboxPorts {
@@ -153,6 +154,20 @@ for p in json.load(open(sys.argv[1]))["files"]:
         elif low.endswith(".pdf"):
             import pypdf
             t = "\n".join((pg.extract_text() or "") for pg in pypdf.PdfReader(p).pages[:40])
+        elif low.endswith(".pptx"):
+            import pptx
+            prs = pptx.Presentation(p)
+            parts = []
+            for i, sl in enumerate(prs.slides, 1):
+                parts.append("## slide %d" % i)
+                for sh in sl.shapes:
+                    if sh.has_text_frame and sh.text_frame.text.strip():
+                        parts.append(sh.text_frame.text)
+                    if getattr(sh, "has_table", False) and sh.has_table:
+                        parts.extend(" | ".join(c.text for c in r.cells) for r in sh.table.rows)
+                if sl.has_notes_slide and sl.notes_slide.notes_text_frame.text.strip():
+                    parts.append("[notes] " + sl.notes_slide.notes_text_frame.text)
+            t = "\n".join(parts)
         elif low.endswith(".zip"):
             z = zipfile.ZipFile(p)
             t = "archive: " + ", ".join(i.filename + " (" + str(i.file_size) + " bytes)" for i in z.infolist()[:200])
@@ -168,8 +183,29 @@ function contentTypeOf(f: string): string | null {
   const ext = path.extname(f).toLowerCase();
   return ({ ".pdf": "application/pdf", ".zip": "application/zip", ".epub": "application/epub+zip", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".txt": "text/plain", ".csv": "text/csv", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" } as Record<string, string>)[ext] ?? null;
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    // v85: presentations are deliverable (verified by the inspector's presentation checks).
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation" } as Record<string, string>)[ext] ?? null;
 }
+/** v85: the runtime's own capability probe, run in the sandbox (what imports, what binaries exist) — never a network call. */
+const CAPABILITY_PROBE_PY = String.raw`
+import importlib, json, shutil, sys
+mods = {"spreadsheets": ["openpyxl", "xlsxwriter", "formulas"], "documents": ["docx"], "presentations": ["pptx"], "pdf": ["reportlab", "pypdf", "pypdfium2"],
+        "images": ["PIL"], "charts": ["matplotlib"], "ebooks": ["ebooklib"], "spelling": ["spellchecker"], "ocr_wrapper": ["pytesseract"], "maths": ["numpy", "scipy"]}
+out = {}
+for area, names in mods.items():
+    ok = []
+    for n in names:
+        try:
+            m = importlib.import_module(n)
+            ok.append(n + " " + str(getattr(m, "__version__", "")).strip())
+        except Exception:
+            ok.append(n + " MISSING")
+    out[area] = ok
+renderer = shutil.which("soffice") or shutil.which("libreoffice") or ""
+ocr = shutil.which("tesseract") or ""
+print(json.dumps({"python": sys.version.split()[0], "libraries": out, "renderer": renderer, "ocr": ocr}))
+`;
 /** v79: what a workspace file may be staged as for a page (upload) or for rendering (.html / .svg). */
 function stageTypeOf(f: string): string | null {
   const ext = path.extname(f).toLowerCase();
@@ -263,6 +299,8 @@ const IMPLEMENTED = new Set([
   "offer", "customers", "deliverable",
   // v79 (founder-v8): the business operator's records, and seeing its own images.
   "business", "view_image",
+  // v85 (founder-v10): capabilities before commitment; search and images through the provider gateway.
+  "capabilities", "web_search", "generate_image",
   // R41.1 (founder-v5): the founder's own field journal and the Survival Field Guide.
   "field_journal", "field_guide",
 ]);
@@ -558,6 +596,90 @@ export class FounderToolbox {
   noteIndependentReview(requestId: string): void {
     this.independentReviews.set(requestId, Date.now());
     for (const [k, at] of this.independentReviews) if (Date.now() - at > 6 * 3_600_000) this.independentReviews.delete(k);
+  }
+
+  /** v85: how each deliverable type is verified by this runtime's inspector (stated so the agent promises only that). */
+  static readonly VERIFICATION: Readonly<Record<string, string>> = Object.freeze({
+    xlsx: "recalculated (formula errors and saved values that differ from the recalculation fail); your input→output cases run; charts counted, not drawn",
+    pdf: "text and fonts checked; first pages rendered to images (a blank page fails); encrypted files refused",
+    docx: "structure, placeholders and spelling checked; rendered to page images when a renderer is installed",
+    pptx: "slides, titles, leftover placeholder text, spelling, empty slides, text likely to overflow its box, pictures without alt text; rendered to slide images when a renderer is installed",
+    images: "dimensions and blank / uniform images checked; look at them yourself with view_image",
+    zip: "safe paths, integrity, each member inspected one level deep",
+    epub: "container, package and navigation checked",
+  });
+
+  /** v85: capabilities op check | request | requests. */
+  private async capabilities(call: ToolCall, a: Record<string, unknown>): Promise<ToolOutcome> {
+    const refuse = (code: string, why: string): ToolOutcome => ({ name: call.name, ok: false, refused: code, output: `NOT DONE ${code}: ${why}` });
+    if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
+    const args: Record<string, unknown> = a.args && typeof a.args === "object" && !Array.isArray(a.args) ? { ...(a.args as Record<string, unknown>) } : {};
+    if (a.op === "request") return this.econOut(call, await this.o.ports.economy("capabilities.request", args).catch(ownerRefusal));
+    if (a.op === "requests") return this.econOut(call, await this.o.ports.economy("capabilities.requests", {}).catch(ownerRefusal));
+    if (a.op !== "check") return refuse("FLEET_BAD_REQUEST", "op is check, request or requests");
+    // This runtime's own facts: its toolset, what imports in the sandbox, and whether a renderer / OCR binary exists.
+    const tmp = path.join(this.workspace, ".tmp");
+    fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
+    const id = crypto.randomBytes(6).toString("hex");
+    fs.writeFileSync(path.join(tmp, `fleet-probe-${id}.py`), CAPABILITY_PROBE_PY, { mode: 0o600 });
+    const r = await runSandboxed(this.workspace, `python3 -P -s .tmp/fleet-probe-${id}.py`, { timeoutMs: 60_000, maxOutput: 20_000, python: this.o.sandboxPython, toolsDir: this.toolsDir });
+    fs.rmSync(path.join(tmp, `fleet-probe-${id}.py`), { force: true });
+    let probe: Record<string, unknown> = {};
+    try { probe = JSON.parse(r.output.split("\n").reverse().find((l) => l.startsWith("{")) ?? "{}"); } catch { probe = {}; }
+    const runtime = { doctrine: FOUNDER_V10_RELEASE.doctrine, toolset: FOUNDER_V10_RELEASE.toolset, inspector: QA_INSPECTOR_VERSION,
+      sandbox: r.sandboxUnavailable ? "unavailable" : "ok", execTimeoutS: Math.round((this.o.execTimeoutMs ?? 30_000) / 1000), network: "none inside exec",
+      libraries: probe.libraries ?? "unknown (the probe did not run)", renderer: typeof probe.renderer === "string" ? probe.renderer : "",
+      ocr: typeof probe.ocr === "string" ? probe.ocr : "", verification: FounderToolbox.VERIFICATION };
+    const forOffer = typeof args.forOffer === "string" ? args.forOffer.slice(0, 200) : undefined;
+    const fleet = await this.o.ports.economy("capabilities.check", { runtime, ...(forOffer ? { forOffer } : {}) }).catch(ownerRefusal);
+    const fileTypes = Array.isArray(args.fileTypes) ? (args.fileTypes as unknown[]).filter((x): x is string => typeof x === "string").map((x) => x.toLowerCase()) : [];
+    const deliverable = new Set(((fleet as { fleet?: { deliverableTypes?: string[] } }).fleet?.deliverableTypes) ?? []);
+    const typeVerdict = fileTypes.map((t) => { const ct = contentTypeOf(`x${t.startsWith(".") ? t : "." + t}`); return { type: t, deliverable: !!ct && deliverable.has(ct) }; });
+    return { name: call.name, ok: (fleet as { ok?: unknown }).ok !== false, output: clip(JSON.stringify({ runtime, ...(fleet as object), ...(typeVerdict.length ? { yourFileTypes: typeVerdict } : {}),
+      note: "Promise only what this report and your own demonstrated work support. Ask for a missing capability with capabilities op request." })) };
+  }
+
+  /** v85: web_search / generate_image — a job for the Fleet's provider gateway, waited for here (bounded). */
+  private async mediaJob(call: ToolCall, a: Record<string, unknown>): Promise<ToolOutcome> {
+    const refuse = (code: string, why: string): ToolOutcome => ({ name: call.name, ok: false, refused: code, output: `NOT DONE ${code}: ${why}` });
+    if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
+    const isImage = call.name === "generate_image";
+    let target = "";
+    if (isImage) {
+      const p = String(a.path ?? "");
+      if (!/\.png$/i.test(p)) return refuse("FLEET_BAD_REQUEST", "path is a workspace .png file to write");
+      target = this.resolve(p);
+    }
+    const req = isImage ? { kind: "image", prompt: String(a.prompt ?? ""), size: a.size ?? "1024x1024" }
+      : { kind: "search", query: String(a.query ?? ""), count: a.count ?? 5, purpose: a.purpose ?? "research" };
+    const job = await this.o.ports.economy("media.request", { ...req, idempotencyKey: `media:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128) }).catch(ownerRefusal) as Record<string, unknown>;
+    if (job.ok === false) return this.econOut(call, job);
+    for (let i = 0; i < 60; i++) {
+      const x = await this.o.ports.economy("media.result", { jobId: job.jobId }).catch(ownerRefusal) as Record<string, unknown>;
+      if (x.status === "done") {
+        if (isImage) {
+          const b64 = String((x.result as { imageB64?: string } | undefined)?.imageB64 ?? "");
+          const bytes = Buffer.from(b64, "base64");
+          if (bytes.length < 8 || bytes.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") return refuse("FLEET_PROVIDER_BAD_RESULT", "the provider did not return a PNG");
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.writeFileSync(target, bytes, { mode: 0o600 });
+          return { name: call.name, ok: true, output: clip(JSON.stringify({ path: path.relative(this.workspace, target), bytes: bytes.length, costUsdCents: x.costUsdCents ?? null,
+            note: "AI-generated: inspect it with view_image; disclose AI generation where a platform or the law requires it" })) };
+        }
+        return { name: call.name, ok: true, output: clip(JSON.stringify({ results: (x.result as { results?: unknown } | undefined)?.results ?? [], costUsdCents: x.costUsdCents ?? null,
+          note: "results are leads, not evidence: fetch and check a page (web_fetch) before you rely on it" })) };
+      }
+      if (x.status === "failed" || x.ok === false) return this.econOut(call, x);
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+    return refuse("FLEET_PROVIDER_TIMEOUT", "the provider did not answer within a minute; try again later");
+  }
+
+  private econOut(call: ToolCall, r: unknown): ToolOutcome {
+    const ok = (r as { ok?: unknown }).ok !== false;
+    const code = (r as { code?: string }).code;
+    return ok ? { name: call.name, ok: true, output: clip(JSON.stringify(r)) }
+      : { name: call.name, ok: false, refused: code ?? "FLEET_REFUSED", output: `NOT DONE ${code ?? "FLEET_REFUSED"}: ${clip(JSON.stringify(r))}` };
   }
 
   private async deliverable(call: ToolCall, a: Record<string, unknown>): Promise<ToolOutcome> {
@@ -897,6 +1019,12 @@ export class FounderToolbox {
         // F2 (schema v28+): opportunities, ventures, wallet, Fleet capital/payments and economic knowledge.
         case "deliverable":
           return await this.deliverable(call, a);
+        // v85 (founder-v10): what this agent can actually deliver today, and asking for what it cannot.
+        case "capabilities":
+          return await this.capabilities(call, a);
+        // v85: search and image generation through the Fleet's provider gateway (a job the gateway runs; polled here).
+        case "web_search": case "generate_image":
+          return await this.mediaJob(call, a);
         // v79: look at an image of your own (a render, a screenshot, a graphic): shown to you in your next step only.
         case "view_image": {
           const f = this.resolve(String(a.path ?? ""));

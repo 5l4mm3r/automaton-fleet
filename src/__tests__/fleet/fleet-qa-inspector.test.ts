@@ -1,5 +1,5 @@
 /**
- * Deliverable QA inspector (fleet-qa-1) under the agent toolchain.
+ * Deliverable QA inspector (fleet-qa-1 checks, still run by fleet-qa-2) under the agent toolchain.
  *
  * Proves, end to end inside the founder exec sandbox (runSandboxed + toolsDir): fixtures built with the pinned
  * wheels (XlsxWriter, python-docx, reportlab, Pillow) are judged correctly — a good workbook recalculates clean
@@ -114,7 +114,7 @@ const file = (p: string): QaFileReport => {
 const status = (p: string, id: string) => file(p).checks.filter((c) => c.id === id).map((c) => c.status);
 const detail = (p: string, id: string) => file(p).checks.filter((c) => c.id === id).map((c) => c.detail).join(" | ");
 
-describe.skipIf(!HAVE_TOOLS)("deliverable QA inspector (fleet-qa-1)", () => {
+describe.skipIf(!HAVE_TOOLS)("deliverable QA inspector (fleet-qa-1 checks)", () => {
   beforeAll(async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fleet-qa-")));
     ws = path.join(root, "workspace");
@@ -228,7 +228,7 @@ describe.skipIf(!HAVE_TOOLS)("deliverable QA inspector (fleet-qa-1)", () => {
 
 describe("parseInspectorReport", () => {
   const good = {
-    inspector: "fleet-qa-1",
+    inspector: QA_INSPECTOR_VERSION,
     files: [{ path: "a.png", sha256: "a".repeat(64), sizeBytes: 3, detectedType: "png", extensionMatches: true, ok: true, checks: [{ id: "size", status: "pass", detail: "3 bytes" }], facts: {} }],
     ok: true,
   };
@@ -241,7 +241,7 @@ describe("parseInspectorReport", () => {
   it("rejects unknown keys, bad enums, inconsistent ok and missing reports", () => {
     expect(() => parseInspectorReport("")).toThrow(/no report line/);
     expect(() => parseInspectorReport(line({ ...good, extra: 1 }))).toThrow(/unknown key extra/);
-    expect(() => parseInspectorReport(line({ ...good, inspector: "fleet-qa-0" }))).toThrow(/is not fleet-qa-1/);
+    expect(() => parseInspectorReport(line({ ...good, inspector: "fleet-qa-0" }))).toThrow(new RegExp(`is not ${QA_INSPECTOR_VERSION}`));
     const f0 = good.files[0];
     expect(() => parseInspectorReport(line({ ...good, files: [{ ...f0, detectedType: "exe" }] }))).toThrow(/detectedType/);
     expect(() => parseInspectorReport(line({ ...good, files: [{ ...f0, checks: [{ id: "x", status: "ok", detail: "" }] }] }))).toThrow(/status/);

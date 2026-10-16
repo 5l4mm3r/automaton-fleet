@@ -1,11 +1,11 @@
 /**
- * Deliverable QA inspector (fleet-qa-1): a Python program that runs INSIDE the founder's exec sandbox, under the
+ * Deliverable QA inspector (fleet-qa-2; fleet-qa-1 plus presentations, office rendering, OCR, EPUB package checks): a Python program that runs INSIDE the founder's exec sandbox, under the
  * agent toolchain (scripts/fleet-agent-tools.sh; runSandboxed with `toolsDir`), and checks customer deliverables
  * before they ship — XLSX, DOCX, PDF, images, SVG, ZIP bundles, EPUB, CSV/TXT/MD.
  *
  * Usage inside the sandbox: `python3 <script> <spec.json>`, spec = {"files": ["rel/path", ...], "cases": [...],
  * "renderDir": ".tmp/qa-render"}. It prints ONE JSON line on stdout (library noise is swallowed):
- *   {"inspector":"fleet-qa-1","files":[{path, sha256, sizeBytes, detectedType, extensionMatches, ok,
+ *   {"inspector":"fleet-qa-2","files":[{path, sha256, sizeBytes, detectedType, extensionMatches, ok,
  *     checks:[{id, status: pass|warn|fail, detail}], facts:{...}}], "ok": bool, "error"?: string}
  *
  * What it checks:
@@ -35,13 +35,13 @@
  * placeholder opener; Python spells the backtick as chr(96).
  */
 
-export const QA_INSPECTOR_VERSION = "fleet-qa-1";
+export const QA_INSPECTOR_VERSION = "fleet-qa-2";
 
 export const QA_INSPECTOR_PY = String.raw`
-import csv, hashlib, io, json, os, re, signal, stat, sys, time, traceback, warnings, zipfile
+import csv, hashlib, io, json, os, re, shutil, signal, stat, subprocess, sys, time, traceback, warnings, zipfile
 import xml.etree.ElementTree as ET
 
-VERSION = "fleet-qa-1"
+VERSION = "fleet-qa-2"
 MAX_FILES, MAX_BYTES, ZIP_EXTRACT_CAP, NESTED_MAX = 20, 100 * 1024 * 1024, 200 * 1024 * 1024, 20
 BUDGET_S = 100.0
 T0 = time.monotonic()
@@ -535,6 +535,10 @@ def inspect_docx(r, path):
     r.check("duplicate_paragraphs", "warn" if dups else "pass", ("consecutive duplicates: " + " | ".join(dups[:10])) if dups else "none")
     scan_placeholders(r, alltext)
     spelling(r, alltext)
+    render_office(r, path, RENDER_DIR_FOR_DOCX[0], TAG_FOR_DOCX[0], "docx")
+
+
+RENDER_DIR_FOR_DOCX, TAG_FOR_DOCX = [".tmp/qa-render"], ["docx"]
 
 
 # ---------------------------------------------------------------- pdf
@@ -627,11 +631,195 @@ def inspect_pdf(r, path, render_dir, tag):
                     sparse.append("p%d %d%%" % (i + 1, round(100.0 * (box[3] - box[1]) / g.size[1])))
         doc.close()
         r.facts["renders"] = rendered
+        ocr_pages(r, rendered, empty_pages_of(r))
         r.check("blank_pages", "fail" if blank else "pass", ("visually blank page(s): %s" % blank) if blank else "%d page(s) rendered, none blank" % n)
         # Advisory: content filling under a quarter of the page height reads as a stub, not a finished page.
         r.check("sparse_pages", "warn" if sparse else "pass", ("content fills under a quarter of the page height: " + ", ".join(sparse)) if sparse else "pages carry substantial content")
     except Exception as e:
         r.check("render", "warn", "rendering failed: %s: %s" % (type(e).__name__, e))
+
+
+def empty_pages_of(r):
+    m = re.search(r"page\(s\) \[([0-9, ]*)\]", next((c["detail"] for c in r.d["checks"] if c["id"] == "pages_without_text" and c["status"] != "pass"), ""))
+    return [int(x) for x in m.group(1).split(",") if x.strip()] if m else []
+
+
+def ocr_pages(r, rendered, pages):
+    """fleet-qa-2: text from image-only pages, when the tesseract binary is installed (pytesseract is the wrapper)."""
+    if not pages:
+        return
+    pt = lib("pytesseract")
+    if pt is None or not shutil.which("tesseract"):
+        r.check("ocr", "warn", "page(s) %s have no text layer and OCR is not installed: their words were not checked" % pages[:10])
+        return
+    try:
+        from PIL import Image
+        words = 0
+        texts = []
+        for i, rel in enumerate(rendered):
+            if (i + 1) in pages:
+                t = pt.image_to_string(Image.open(os.path.join(ROOT, rel)))
+                texts.append(t)
+                words += len(t.split())
+        r.facts["ocrWords"] = words
+        r.check("ocr", "pass" if words else "warn", ("%d word(s) recognised on image-only page(s)" % words) if words else "OCR found no words on the image-only page(s)")
+        if words:
+            scan_placeholders(r, "\n".join(texts))
+            spelling(r, "\n".join(texts))
+    except Exception as e:
+        r.check("ocr", "warn", "OCR failed: %s: %s" % (type(e).__name__, str(e)[:200]))
+
+
+def office_renderer():
+    return shutil.which("soffice") or shutil.which("libreoffice") or ""
+
+
+def render_office(r, path, render_dir, tag, label):
+    """fleet-qa-2: render a .docx / .pptx to page images through a headless office renderer when one is installed."""
+    exe = office_renderer()
+    if not exe:
+        r.facts["rendered"] = False
+        r.check(label + "_render", "warn", "not rendered: no office renderer is installed, so the layout was not checked (export a PDF too and inspect it)")
+        return
+    out_dir = os.path.join(render_dir, tag + "-office")
+    os.makedirs(out_dir, exist_ok=True)
+    home = os.path.join(render_dir, ".office-home")
+    os.makedirs(home, exist_ok=True)
+    try:
+        p = subprocess.run([exe, "--headless", "--norestore", "--nolockcheck", "--convert-to", "pdf", "--outdir", out_dir, path],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90, env={"HOME": home, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TMPDIR": home})
+    except subprocess.TimeoutExpired:
+        r.check(label + "_render", "warn", "rendering took longer than 90 s and was stopped")
+        return
+    pdf = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0] + ".pdf")
+    if p.returncode != 0 or not os.path.exists(pdf):
+        r.check(label + "_render", "warn", "the office renderer could not convert the file (exit %s)" % p.returncode)
+        return
+    pdfium = lib("pypdfium2")
+    if pdfium is None:
+        r.unavailable("pypdfium2 (rendering)")
+        return
+    doc = pdfium.PdfDocument(pdf)
+    n = min(6, len(doc))
+    blank, rendered = [], []
+    for i in range(n):
+        img = doc[i].render(scale=1).to_pil()
+        out = os.path.join(out_dir, "%s-p%d.png" % (tag, i + 1))
+        img.save(out)
+        rendered.append(os.path.relpath(out, ROOT))
+        lo, hi = img.convert("L").getextrema()
+        if hi - lo < 8:
+            blank.append(i + 1)
+    total = len(doc)
+    doc.close()
+    r.facts["rendered"] = True
+    r.facts["renders"] = rendered
+    r.facts["renderedPages"] = total
+    r.check(label + "_render", "fail" if blank else "pass", ("visually blank page(s) / slide(s) when rendered: %s" % blank) if blank else "%d of %d page(s) rendered, none blank: look at them (view_image)" % (n, total))
+
+
+# ---------------------------------------------------------------- presentations (fleet-qa-2)
+
+EMU_PER_PT = 12700
+CLICK_TO_ADD = re.compile(r"click to (add|edit) (text|title|subtitle|notes)", re.I)
+GENERIC_ALT = re.compile(r"^((picture|image|graphic|photo|chart)\s*\d*|[^\s]+\.(png|jpe?g|gif|webp|svg|bmp|tiff?))$", re.I)
+
+
+def inspect_pptx(r, path, render_dir, tag):
+    with zipfile.ZipFile(path) as z:
+        if not zip_safety(r, z):
+            return
+        active_content(r, z, "pptx")
+    px = lib("pptx")
+    if px is None:
+        r.unavailable("python-pptx")
+        return
+    try:
+        prs = px.Presentation(path)
+    except Exception as e:
+        r.check("pptx_load", "fail", "python-pptx could not open it: %s: %s" % (type(e).__name__, e))
+        return
+    r.check("pptx_load", "pass", "opened")
+    from pptx.util import Pt
+    from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
+    from pptx.enum.text import MSO_AUTO_SIZE
+    slides = list(prs.slides)
+    titles, empty, untitled, overflow, no_alt, prompts = [], [], [], [], [], []
+    alltext, notes, pictures, tables, charts = [], 0, 0, 0, 0
+    for i, sl in enumerate(slides, 1):
+        has_content = False
+        title = ""
+        for sh in sl.shapes:
+            if sh.is_placeholder and sh.placeholder_format.type in (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE) and sh.has_text_frame:
+                title = sh.text_frame.text.strip()
+            if sh.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                pictures += 1
+                has_content = True
+                descr = sh._element.xpath("./p:nvPicPr/p:cNvPr/@descr")
+                d0 = descr[0].strip() if descr else ""
+                # A file name or a generic label ("Picture 3", tools fill these in) is not a description.
+                if not d0 or GENERIC_ALT.match(d0):
+                    no_alt.append(i)
+            if getattr(sh, "has_table", False) and sh.has_table:
+                tables += 1
+                has_content = True
+                alltext.extend(c.text for row in sh.table.rows for c in row.cells)
+            if getattr(sh, "has_chart", False) and sh.has_chart:
+                charts += 1
+                has_content = True
+            if sh.has_text_frame:
+                t = sh.text_frame.text
+                if t.strip():
+                    has_content = True
+                    alltext.append(t)
+                    if CLICK_TO_ADD.search(t):
+                        prompts.append(i)
+                    # Overflow estimate: lines needed at the text's size vs the lines the box holds (advisory).
+                    if sh.width and sh.height and sh.width > 0 and sh.height > 0:
+                        size = None
+                        for para in sh.text_frame.paragraphs:
+                            for run in para.runs:
+                                if run.font.size:
+                                    size = max(size or 0, run.font.size.pt)
+                        size = size or 18.0
+                        width_pt, height_pt = sh.width / EMU_PER_PT, sh.height / EMU_PER_PT
+                        left_pt, top_pt = (sh.left or 0) / EMU_PER_PT, (sh.top or 0) / EMU_PER_PT
+                        slide_w, slide_h = (prs.slide_width or 0) / EMU_PER_PT, (prs.slide_height or 0) / EMU_PER_PT
+                        auto, wrap = sh.text_frame.auto_size, sh.text_frame.word_wrap
+                        if wrap is False:
+                            # No wrapping: each paragraph is one line as long as its text.
+                            longest = max((len(p.text) for p in sh.text_frame.paragraphs), default=0) * size * 0.5
+                            if slide_w and left_pt + longest > slide_w * 1.02:
+                                overflow.append("slide %d (a %gpt line about %dpt long runs off the %dpt-wide slide)" % (i, size, longest, slide_w))
+                        else:
+                            chars_per_line = max(1.0, width_pt / (size * 0.5))
+                            lines = sum(max(1, -(-len(p.text) // int(chars_per_line))) for p in sh.text_frame.paragraphs)
+                            need = lines * size * 1.2
+                            if auto == MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT:
+                                if slide_h and top_pt + need > slide_h * 1.02:
+                                    overflow.append("slide %d (the box grows to %dpt and runs off the %dpt-tall slide)" % (i, need, slide_h))
+                            elif auto != MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE and need > height_pt * 1.15:
+                                overflow.append("slide %d (%d lines of %gpt in a %dpt box)" % (i, lines, size, height_pt))
+        if sl.has_notes_slide and sl.notes_slide.notes_text_frame.text.strip():
+            notes += 1
+        if title:
+            titles.append(title[:120])
+        else:
+            untitled.append(i)
+        if not has_content:
+            empty.append(i)
+    r.facts.update({"slides": len(slides), "titles": titles[:60], "pictures": pictures, "tables": tables, "charts": charts, "slidesWithNotes": notes,
+                    "words": len("\n".join(alltext).split()),
+                    "slideSizePt": [round(prs.slide_width / EMU_PER_PT), round(prs.slide_height / EMU_PER_PT)] if prs.slide_width else None})
+    r.check("slides", "fail" if not slides else "pass", "%d slide(s)" % len(slides) if slides else "no slides")
+    r.check("empty_slides", "fail" if empty else "pass", ("slide(s) with no text, picture, table or chart: %s" % empty[:20]) if empty else "every slide has content")
+    r.check("placeholder_prompts", "fail" if prompts else "pass", ("leftover \"Click to add …\" text on slide(s) %s" % prompts[:20]) if prompts else "no leftover template prompts")
+    r.check("slide_titles", "warn" if untitled else "pass", ("slide(s) without a title: %s" % untitled[:20]) if untitled else "every slide has a title")
+    r.check("text_overflow", "warn" if overflow else "pass", ("text likely to overflow its box: " + "; ".join(overflow[:10])) if overflow else "no text box looks overfull")
+    r.check("alt_text", "warn" if no_alt else "pass", ("picture(s) without alt text on slide(s) %s" % sorted(set(no_alt))[:20]) if no_alt else "every picture has alt text")
+    scan_placeholders(r, "\n".join(alltext))
+    spelling(r, "\n".join(alltext))
+    render_office(r, path, render_dir, tag, "pptx")
 
 
 # ---------------------------------------------------------------- images
@@ -731,8 +919,31 @@ def inspect_epub(r, path):
         ok = first is not None and first.filename == "mimetype" and z.read("mimetype").strip() == b"application/epub+zip"
         r.check("epub_mimetype", "pass" if ok and first.compress_type == zipfile.ZIP_STORED else "warn" if ok else "fail",
                 "mimetype first and stored" if ok and first.compress_type == zipfile.ZIP_STORED else "mimetype must be the first, uncompressed member")
-        has = "META-INF/container.xml" in z.namelist()
+        names = set(z.namelist())
+        has = "META-INF/container.xml" in names
         r.check("epub_container", "pass" if has else "fail", "META-INF/container.xml present" if has else "META-INF/container.xml missing")
+        if not has:
+            return
+        # fleet-qa-2: the package (OPF) the container names, every manifest item present, and a navigation document.
+        try:
+            c = ET.fromstring(z.read("META-INF/container.xml"))
+            rf = [e.get("full-path") for e in c.iter() if e.tag.endswith("rootfile")]
+            opf = rf[0] if rf else None
+            if not opf or opf not in names:
+                r.check("epub_package", "fail", "the container names no package document that exists")
+                return
+            pkg = ET.fromstring(z.read(opf))
+            base = os.path.dirname(opf)
+            items = [e for e in pkg.iter() if e.tag.endswith("}item")]
+            missing = [e.get("href") for e in items if e.get("href") and os.path.normpath(os.path.join(base, e.get("href"))).replace(os.sep, "/") not in names]
+            nav = any("nav" in (e.get("properties") or "").split() for e in items) or any((e.get("media-type") or "") == "application/x-dtbncx+xml" for e in items)
+            spine = [e for e in pkg.iter() if e.tag.endswith("}itemref")]
+            r.facts.update({"epubItems": len(items), "epubSpine": len(spine)})
+            r.check("epub_package", "fail" if missing else "pass", ("manifest items missing from the archive: " + ", ".join(missing[:10])) if missing else "%d manifest item(s) present" % len(items))
+            r.check("epub_navigation", "pass" if nav else "fail", "a navigation document is present" if nav else "no navigation document (nav or NCX)")
+            r.check("epub_spine", "pass" if spine else "fail", "%d reading-order item(s)" % len(spine) if spine else "empty reading order (spine)")
+        except Exception as e:
+            r.check("epub_package", "fail", "the package document could not be read: %s" % type(e).__name__)
 
 
 def inspect_zip(r, path, render_dir, tag, depth):
@@ -828,6 +1039,7 @@ def inspect_file(rel, render_dir, cases, depth=0, label=None):
         if kind == "xlsx":
             inspect_xlsx(r, real, cases)
         elif kind == "docx":
+            RENDER_DIR_FOR_DOCX[0], TAG_FOR_DOCX[0] = render_dir, tag
             inspect_docx(r, real)
         elif kind == "pdf":
             inspect_pdf(r, real, render_dir, tag)
@@ -838,10 +1050,9 @@ def inspect_file(rel, render_dir, cases, depth=0, label=None):
                 inspect_svg(r, real, f.read())
         elif kind == "epub":
             inspect_epub(r, real)
-        elif kind in ("zip", "pptx"):
-            if kind == "pptx":
-                with zipfile.ZipFile(real) as z:
-                    active_content(r, z, "pptx")
+        elif kind == "pptx":
+            inspect_pptx(r, real, render_dir, tag)
+        elif kind == "zip":
             inspect_zip(r, real, render_dir, tag, depth)
         elif kind == "text":
             with open(real, "rb") as f:

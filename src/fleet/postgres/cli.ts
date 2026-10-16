@@ -657,6 +657,12 @@ async function main(argv: string[]): Promise<number> {
         console.log(`granted the channel-gateway API to ${rest[0] || "fleet_channels"}`);
         return 0;
       }
+      case "grant-media-role": {
+        // v85: the media provider gateway's role (mx_* only), for scripts/fleet-media-setup.sh.
+        await store.grantMediaRole(rest[0] || undefined);
+        console.log(`granted the media-gateway API to ${rest[0] || "fleet_media"}`);
+        return 0;
+      }
       case "grant-push-role": {
         // v83: the phone-push sender's role (px_* only), for scripts/fleet-push-setup.sh.
         await store.grantPushRole(rest[0] || undefined);

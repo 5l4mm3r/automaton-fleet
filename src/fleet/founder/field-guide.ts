@@ -214,6 +214,8 @@ export const DOCTRINE_V7_MARKERS = ["dist/fleet/founder/doctrine-v7.js", "src/fl
 export const DOCTRINE_V8_MARKERS = ["dist/fleet/founder/doctrine-v8.js", "src/fleet/founder/doctrine-v8.ts"] as const;
 /** 2026-10-15 (v80): founder-v9 — official-API channels — is attested by doctrine-v9.ts in the same release tree. */
 export const DOCTRINE_V9_MARKERS = ["dist/fleet/founder/doctrine-v9.js", "src/fleet/founder/doctrine-v9.ts"] as const;
+/** 2026-10-16 (v85): founder-v10 — capabilities before commitment, search, images, presentations — is attested by doctrine-v10.ts. */
+export const DOCTRINE_V10_MARKERS = ["dist/fleet/founder/doctrine-v10.js", "src/fleet/founder/doctrine-v10.ts"] as const;
 export function releaseDoctrines(releasesDir: string, exists: (p: string) => boolean): (runtimeCommit: string | null) => readonly string[] {
   return (commit) => {
     if (!commit || !/^[0-9a-f]{40}$/.test(commit)) return ["founder-v4"];
@@ -222,6 +224,8 @@ export function releaseDoctrines(releasesDir: string, exists: (p: string) => boo
     if (!has(DOCTRINE_V6_MARKERS)) return ["founder-v4", "founder-v5"];
     if (!has(DOCTRINE_V7_MARKERS)) return ["founder-v4", "founder-v5", "founder-v6"];
     if (!has(DOCTRINE_V8_MARKERS)) return ["founder-v4", "founder-v5", "founder-v6", "founder-v7"];
-    return has(DOCTRINE_V9_MARKERS) ? ["founder-v4", "founder-v5", "founder-v6", "founder-v7", "founder-v8", "founder-v9"] : ["founder-v4", "founder-v5", "founder-v6", "founder-v7", "founder-v8"];
+    if (!has(DOCTRINE_V9_MARKERS)) return ["founder-v4", "founder-v5", "founder-v6", "founder-v7", "founder-v8"];
+    return has(DOCTRINE_V10_MARKERS) ? ["founder-v4", "founder-v5", "founder-v6", "founder-v7", "founder-v8", "founder-v9", "founder-v10"]
+      : ["founder-v4", "founder-v5", "founder-v6", "founder-v7", "founder-v8", "founder-v9"];
   };
 }

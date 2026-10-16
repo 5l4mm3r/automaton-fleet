@@ -97,6 +97,12 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   // workspace images (read-only; charged as input tokens of the agent's own step).
   business: "planning",
   view_image: "planning",
+  // v85 (founder-v10): checking and requesting its own capabilities (database dispatch); search through the Fleet's
+  // provider gateway (research class, like web_fetch); image generation through the gateway (its own commercial work, cost
+  // recorded against the agent; no new authority).
+  capabilities: "planning",
+  web_search: "research.web",
+  generate_image: "planning",
   // R41.1 (owner, 2026-10-08): the v34–v37 economy tools the controller has always advertised under "planning" were
   // never classified here, so every call was refused. Classified within their existing authority — the database
   // dispatch (api_economy) enforces every op; mail/SMS stay dormant (FLEET_CAPABILITY_NOT_CONFIGURED blocks only that
