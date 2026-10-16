@@ -57,7 +57,7 @@ passes against a simulated provider.
 - a build already running when access ends finishes (at most 30 minutes); only queued work is stopped.
 
 **Host installation (each your go; sudo):**
-1. The release (81 → 90 + UI 0.22.0).
+1. The release (81 → 90 + UI 0.23.0).
 2. Agent toolchain agent-tools-2, then Agent-1's runtime upgrade (paused).
 3. Edge file.
 4. Push.
@@ -146,7 +146,7 @@ a712be1, schema 81).
 **05cbe4e (v84 – v87) is frozen and rehearsed, but must NOT be deployed as the money-handling release** (the shortfall
 blocker; release-05cbe4e.md §5).
 
-**Next to freeze: `fleet/final-v2.5` (v84 – v90 + UI 0.22.0):**
+**Next to freeze: `fleet/final-v2.5` (v84 – v90 + UI 0.23.0; 05cbe4e's UI was 0.22.0):**
 - **Contents:** everything in 05cbe4e, plus the shortfall fix, agent-attributed media, software maintenance on
   demonstrated scope, several cards, reversed chargebacks, the PayPal limitation signal, unit economics and the systemd
   credential fixes.
