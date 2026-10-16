@@ -1205,7 +1205,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_money_locations: new Set(["fleet_admin_location_add", "fleet_admin_location_status", "fleet_admin_location_bind_card", "fleet_money_location_for_rail"]),
     fleet_bank_balance_observations: new Set(["fleet_location_balance_record"]),
     fleet_bank_transactions: new Set(["fleet_location_txn_record", "fleet_location_match", "fleet_admin_location_contribution", "fleet_admin_bank_txn_classify",
-      "fleet_location_transfer_arrive", "fleet_location_transfers_evidence", "fleet_admin_transfer_arrival", "fleet_card_dispute_credit"]),
+      "fleet_location_transfer_arrive", "fleet_location_transfers_evidence", "fleet_admin_transfer_arrival", "fleet_card_dispute_credit",
+      // v88: a line whose booking failed keeps its error (recorded, retried, listed).
+      "fleet_location_match_safe"]),
     fleet_location_transfers: new Set(["fleet_admin_location_transfer", "fleet_location_transfer_arrive", "fleet_location_transfers_evidence"]),
     fleet_card_disputes: new Set(["fleet_admin_card_dispute_open", "fleet_card_dispute_credit", "fleet_admin_card_dispute_resolve"]),
     fleet_admin_enrollment: new Set(["dash_passkey_add", "dash_password_set", "fleet_admin_dashboard_enroll", "fleet_admin_host_recovery_end_access"]),

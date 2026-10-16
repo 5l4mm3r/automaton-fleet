@@ -71,7 +71,7 @@ describe.skipIf(!PG_BIN)("v87 paid media and capability checks that name the wor
     await verify();
   });
 
-  it("no rescue and no untracked spend: no cash, no job; no cost limit, no job; beyond the limit the Fleet bears it, alerted; an error costs nothing", async () => {
+  it("no rescue and no untracked spend: no cash, no job; no cost limit, no job; beyond the limit the agent pays (v88: its cash, then its debt), alerted; an error costs nothing", async () => {
     await worker({ imageCents: 2_000_000 }).tick();
     expect(await R.econ(F, "media.request", { kind: "image", prompt: "Too expensive an illustration", idempotencyKey: key() }))
       .toMatchObject({ ok: false, code: "FLEET_INSUFFICIENT_FUNDS", reservedMinor: 1_600_000 });
@@ -83,17 +83,31 @@ describe.skipIf(!PG_BIN)("v87 paid media and capability checks that name the wor
     await worker().tick();
     const o = await R.econ(F, "media.request", { kind: "image", prompt: "An illustration that costs more than its limit", idempotencyKey: key() });
     await worker({ prices: { input: 5, output: 100 } }).tick();
-    expect(await job(o.jobId)).toMatchObject({ cost_state: "charged", charged_minor: "16", overrun_minor: "17", cost_usd_cents: 41 });
-    expect(await cash()).toBe(c0 - 16); // never more from the agent than it reserved
-    expect((await bal("fleet:expense")) - exp0).toBe(17);
+    // v88: agent-benefiting work is the agent's — the whole 33 pence from its cash; nothing borne by the Fleet.
+    expect(await job(o.jobId)).toMatchObject({ cost_state: "charged", charged_minor: "33", overrun_minor: "17", cost_usd_cents: 41 });
+    expect(await cash()).toBe(c0 - 33);
+    expect((await bal("fleet:expense")) - exp0).toBe(0);
     expect(await R.q(`SELECT class FROM fleet.fleet_notifications WHERE code = 'MEDIA_COST_OVERRUN'`)).toEqual([{ class: "AMBER" }]);
+    // An overrun beyond the agent's cash is its DEBT (its payable, repaid first from its receipts): no wallet credit, no subsidy.
+    const payable = () => R.one(`fleet.fleet_ledger_balance(fleet.fleet_ledger_account($1, 'agent_provider_payable'))`, [F.id]).then(Number);
+    const pay0 = await payable();
+    const keep = 16;
+    await R.q(`SELECT fleet.fleet_admin_wallet_transfer($1, $2, 'operating_pool', 'test: leave only one reservation', $3, 'media-drain-key-0001', true)`, [F.id, (await cash()) - keep, OWNER]);
+    const d = await R.econ(F, "media.request", { kind: "image", prompt: "An illustration beyond the agent's cash", idempotencyKey: key() });
+    expect(d).toMatchObject({ ok: true, reservedMinor: 16 });
+    await worker({ prices: { input: 5, output: 100 } }).tick();
+    expect(await cash()).toBe(0);
+    expect((await payable()) - pay0).toBe(17); // 33 cost − 16 reserved: owed by the agent
+    expect((await bal("fleet:expense")) - exp0).toBe(0);
+    await R.one(`fleet.fleet_admin_agent_capital($1, 2000, 'grant', $2, 'test: back to work', true, 'media-grant-key-0001')`, [F.id, OWNER]);
+    const c1 = await cash();
     // A provider error: nothing charged, the reservation back.
     imageStatus = 500;
     const e = await R.econ(F, "media.request", { kind: "image", prompt: "An illustration the provider fails", idempotencyKey: key() });
     await worker().tick();
     imageStatus = 200;
     expect(await job(e.jobId)).toMatchObject({ status: "failed", cost_state: "released", charged_minor: "0" });
-    expect(await cash()).toBe(c0 - 16);
+    expect(await cash()).toBe(c1);
     await verify();
   });
 
