@@ -89,10 +89,22 @@ describe.skipIf(!PG_BIN)("v67: business foundation in the library; wake-up signa
     expect(st.ok).toBe(true);
     expect(st.entry.category).toBe("fleet-status");
     const facts = st.entry.factsThatChange as Array<{ fact: string; lastChecked: string; stale: boolean }>;
-    expect(facts.every((f) => f.lastChecked === "2026-10-15")).toBe(true); // v79: capability status v6
+    expect(facts.every((f) => f.lastChecked === "2026-10-16")).toBe(true); // v82: capability status v8
     // v79 (owner, 2026-10-15: channels are the agent's choice): the EU consumer route is a merchant-of-record platform the
     // agent operates where its terms permit — no longer an unresolved owner decision; the £500 rule stays Gumroad's gateway's.
-    expect(facts.some((f) => /^EU consumer digital sales: through a merchant-of-record platform/.test(f.fact) && /£500/.test(f.fact))).toBe(true);
+    expect(facts.some((f) => /^EU consumer digital sales — through a merchant-of-record platform/.test(f.fact) && /£500/.test(f.fact))).toBe(true);
+    // v82 (owner, 2026-10-16): built, installed, connected, enabled and live-proven are stated separately, and the entry no
+    // longer contradicts itself about API connectors or operating Etsy through the browser.
+    expect(st.entry.body).toMatch(/BUILT .*INSTALLED .*CONNECTED .*ENABLED .*LIVE-PROVEN/s);
+    const fact = (re: RegExp) => facts.filter((f) => re.test(f.fact));
+    expect(fact(/^API channels/)).toHaveLength(1);
+    expect(fact(/^API channels/)[0].fact).toMatch(/Etsy.*Pinterest.*BUILT, INSTALLED .*NOT CONNECTED .*NOT LIVE-PROVEN/s);
+    expect(fact(/^Gumroad/)[0].fact).toMatch(/BUILT, NOT INSTALLED on the host, NOT CONNECTED/);
+    expect(fact(/no platform has an API connector apart from Gumroad|Etsy and other marketplaces: no API connector|operate a shop through the browser/i)).toEqual([]);
+    expect(fact(/^Production tools/)[0].fact).toMatch(/INSTALLED .*python-pptx/s);
+    expect(fact(/^Choosing channels — your choice, from research; no platform is required and none is excluded/)).toHaveLength(1);
+    expect(fact(/^Platform findings/)[0].fact).toMatch(/re-verify at the source.*provisional.*None of these is a ranking or a list of allowed channels/s);
+    for (const s of ["Paying out", "Card purchases", "Fleet offer pages"]) expect(fact(new RegExp(`^${s}`))[0].fact, s).toMatch(/NOT ENABLED/);
     expect(facts.some((f) => /^UNRESOLVED/.test(f.fact))).toBe(false);
     expect(st.entry.body).toMatch(/never treat today's onboarding gaps as permanent/);
   });

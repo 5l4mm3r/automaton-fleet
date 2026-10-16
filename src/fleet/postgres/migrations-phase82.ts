@@ -40,6 +40,7 @@ import { PASSWORD_VERIFIER_RE } from "./migrations-phase43.js";
 import { ROUTINE_TASK_CLASSES } from "../cognition/types.js";
 import { HELPER_PURPOSES, ROUTINE_PURPOSES } from "../cognition/router.js";
 import { BUYER_CONSENT_VERSION, BUYER_CONSENT_WORDING } from "../storefront/consent.js";
+import { KNOWLEDGE_FOUNDATION_V2 } from "./knowledge-foundation-v2.js";
 
 export { BUYER_CONSENT_VERSION, BUYER_CONSENT_WORDING };
 
@@ -48,6 +49,9 @@ const q = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(",");
 const lit = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
 export const DASHBOARD_READ_OPS_V82 = ["helpers"] as const;
+/** The shared library entries this release corrects: capability status v8 (built / installed / connected / enabled /
+ *  live-proven, stated separately; no contradictions about API connectors or browser operation) and production tools v2. */
+export const LIBRARY_ENTRIES_V82 = ["fleet-capability-status", "bf-production-tools"] as const;
 /** The step-up operation that issues a new set of recovery codes (args '{}'). */
 export const RECOVERY_CODES_OP = "recovery_codes_issue";
 export const RECOVERY_CODE_COUNT = 10;
@@ -579,6 +583,9 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
       'fleetReview', (SELECT count(*) FROM fleet_spend_reviews, today WHERE decided_at >= today.t0 AND (decided_by IS NULL OR decided_by NOT LIKE 'operator:%'))
                      + (SELECT count(*) FROM fleet_helper_jobs, today WHERE started_at >= today.t0 AND kind = 'fleet_review')))
 $$;
+
+-- ═══ 4. The shared library: capability status v8, production tools v2 ═══
+SELECT fleet_admin_knowledge_library_load(${lit(JSON.stringify({ entries: KNOWLEDGE_FOUNDATION_V2.entries.filter((e) => (LIBRARY_ENTRIES_V82 as readonly string[]).includes(e.id)) }))}::jsonb, 'migration');
 
 ${DASH_CALL}
 `;
