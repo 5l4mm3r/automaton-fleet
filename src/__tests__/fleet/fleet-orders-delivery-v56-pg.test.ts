@@ -10,6 +10,7 @@
  * is repaid / written off at settlement and money reaching a settled estate goes to the treasury.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { BUYER_CONSENT_VERSION } from "../../fleet/storefront/consent.js";
 import crypto from "crypto";
 import fs from "fs";
 import os from "os";
@@ -106,6 +107,9 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
     expect((await R.econ(G, "order.list", {})).orders).toEqual([]);
     expect(await R.econ(G, "order.deliver", { orderId: s.order, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
+    // v82: the order has a page; the buyer confirms immediate access there (CCR 2013 reg 37) before the files are sent.
+    const token = String(o.page).split("/").pop();
+    expect((await R.q(`SELECT fleet.svc_order_consent($1, $2, $3) AS r`, [token, crypto.createHash("sha256").update("buyer.one").digest("hex"), BUYER_CONSENT_VERSION]))[0].r).toMatchObject({ ok: true });
     // A 120 kB file: well beyond the general 32 kB argument limit.
     const pdf = Buffer.concat([Buffer.from("%PDF-1.4 planner "), crypto.randomBytes(120_000)]);
     const key = idem();
@@ -122,7 +126,9 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
     expect(await R.econ(F, "order.deliver", { orderId: s.order, idempotencyKey: key })).toMatchObject({ ok: true, replay: true });
     await broker.tick();
     const sent = shared.outbox.at(-1)!;
-    expect(sent).toMatchObject({ from: shared.address, to: ["buyer.one@example.test"], subject: "Your order: Printable planner pack", body: "Thank you! Your planner pack is attached." });
+    expect(sent).toMatchObject({ from: shared.address, to: ["buyer.one@example.test"], subject: "Your order: Printable planner pack" });
+    expect(sent.body.startsWith("Thank you! Your planner pack is attached.")).toBe(true);
+    expect(sent.body).toContain("Your confirmation (recorded "); // v82: the consent repeated on a durable medium
     expect(sent.attachments?.map((a) => [a.fileName, a.contentType, a.content.equals(pdf)])).toEqual([["planner-pack.pdf", "application/pdf", true]]);
     const done = await order(F, s.order);
     expect(done).toMatchObject({ status: "delivered", delivery: { status: "sent", files: [{ fileName: "planner-pack.pdf", sha256: crypto.createHash("sha256").update(pdf).digest("hex") }] },

@@ -15,13 +15,15 @@ import { hibernationText } from "../command/rest";
 import type { Agent } from "../model";
 import { SLEEP_MARK } from "./AgentLabels";
 
-export const AgentRail = memo(function AgentRail({ models, all, selected, now, onAgent, onCommand }: {
+export const AgentRail = memo(function AgentRail({ models, all, selected, now, onAgent, onCommand, strolling }: {
   /** The derived agents (living ones are listed). */
   models: readonly AgentModel[];
   /** Every agent ever recorded (the dead included) — for Fleet Command's age. */
   all: readonly Agent[];
   selected: string | null; now: number;
   onAgent: (id: string) => void; onCommand: () => void;
+  /** Idle agents on a cosmetic stroll right now (tagged; their recorded activity and room are unchanged). */
+  strolling?: ReadonlySet<string>;
 }) {
   const rows = railOrder(models, now), hub = fleetLevel(all, now);
   return <nav aria-label="Living agents" className="flex max-h-[62vh] flex-col overflow-hidden rounded-2xl border border-fuchsia-900/60 bg-slate-950/95">
@@ -35,12 +37,13 @@ export const AgentRail = memo(function AgentRail({ models, all, selected, now, o
         const a = m.agent, sleep = m.placement.basis === "sleep" && m.rest.sleep ? SLEEP_MARK[m.rest.sleep] : null, on = selected === a.id;
         return <li key={a.id}>
           <button type="button" data-agent={a.id} aria-current={on ? "true" : undefined} onClick={() => onAgent(a.id)}
-            aria-label={`${a.name}${e.level ? `, level ${e.level}` : ""}, ${m.placement.activity} in ${DEPARTMENT[m.placement.department].name}, for ${span(e.onActivityMs)}, alive ${span(e.aliveMs)}, hibernation ${hibernationText(m.rest, now)}`}
+            aria-label={`${a.name}${e.level ? `, level ${e.level}` : ""}, ${m.placement.activity} in ${DEPARTMENT[m.placement.department].name}, for ${span(e.onActivityMs)}, alive ${span(e.aliveMs)}, hibernation ${hibernationText(m.rest, now)}${strolling?.has(a.id) ? ", idle — strolling" : ""}`}
             className={`flex w-full items-center gap-2 border-b border-slate-900 px-2 py-1.5 text-left ${on ? "bg-fuchsia-950/60 ring-1 ring-inset ring-fuchsia-400/70" : "hover:bg-slate-900"}`}>
             <AgentPortrait id={a.id} name={a.name} band={m.health.band} size={40} />
             <span className="min-w-0 flex-1">
               <span className="flex items-baseline justify-between gap-2"><span className="truncate text-[12px] font-semibold text-slate-100">{a.name}</span><span className="shrink-0 font-mono text-[11px] text-fuchsia-300">{e.level ? `Lv ${e.level}` : "Lv —"}</span></span>
               <span className={`block truncate font-mono text-[10px] tracking-wider ${sleep ? sleep.text : "text-cyan-300"}`}>{sleep ? `${sleep.glyph} ` : ""}{m.placement.activity} · {DEPARTMENT[m.placement.department].name}</span>
+              {strolling?.has(a.id) ? <span className="block font-mono text-[10px] text-slate-400">idle · strolling (nothing to do right now)</span> : null}
               <span className="flex justify-between gap-2 font-mono text-[10px] text-slate-400"><span>on it {span(e.onActivityMs)}</span><span>alive {span(e.aliveMs)}</span></span>
               <span className={`block truncate font-mono text-[10px] ${m.rest.hibernation === "unknown" ? "text-slate-500" : "text-indigo-300"}`}>☾ {hibernationText(m.rest, now)}</span>
             </span>

@@ -2,7 +2,9 @@
 /**
  * Security → Sign-in methods (v43). Owner access must not depend on one browser- or provider-specific passkey:
  *   Password       set / change (a fresh confirmation first); always used with the authenticator code
- *   Authenticator  the second factor of every route; replaced only on the Fleet host (it cannot be removed here)
+ *   Authenticator  the second factor of every route; it cannot be removed here — replaced with a recovery code from the
+ *                  sign-in page ("Lost your authenticator?", v82) or on the Fleet host
+ *   Recovery codes (v82) ten one-time codes, created here after a fresh confirmation and shown once
  *   Passkeys       several devices; add (fresh confirmation, then this device creates it), rename, revoke (confirmed)
  * FleetController refuses any change that would leave no way in. Nothing secret is shown or stored here.
  */
@@ -12,6 +14,7 @@ import { describeError } from "../api/errors";
 import type { LiveAuth } from "../api/auth";
 import { button, input } from "../ui";
 import { utcText } from "../notifications/report";
+import { RecoveryCodes } from "./Recovery";
 
 const describe = (e: unknown) => describeError(e, "The change didn’t go through. Refresh to check the current state.");
 
@@ -44,12 +47,14 @@ export function SignInMethods({ signIn, auth, run, onRevoke, refresh }: {
             <button className={`${button} bg-cyan-900`} disabled={busy || pw.length < 12}>{busy ? "Saving…" : "Confirm and save"}</button></div>
           <p className="mt-2 text-xs text-slate-400">You will be asked for a fresh confirmation (passkey, or current password and code) first.</p>
         </form>}
+      <p className="mt-2 text-xs text-slate-400">Forgotten it while signed out? Use <strong>Forgot password?</strong> on the sign-in page (your authenticator code and a recovery code).</p>
     </section>
     <section>
       <h4 className="font-semibold">Authenticator</h4>
       <p className="text-sm text-slate-300">{signIn.totp ? "Active" : "Not set"} · the second factor of every sign-in route</p>
-      <p className="mt-1 text-xs text-slate-400">It cannot be removed here (that would lock every route). To replace it, on the Fleet host run <code className="font-mono">fleet:admin hub-dashboard-totp-reset</code>, then open a new <code className="font-mono">hub-dashboard-enroll</code> link.</p>
+      <p className="mt-1 text-xs text-slate-400">It cannot be removed here (that would lock every route). Lost the phone that holds it? Use <strong>Lost your authenticator?</strong> on the sign-in page with your password (or a passkey) and a recovery code. Without a recovery code: on the Fleet host run <code className="font-mono">fleet:admin hub-dashboard-totp-reset</code>, then open a new <code className="font-mono">hub-dashboard-enroll</code> link.</p>
     </section>
+    <RecoveryCodes auth={auth} />
     <section>
       <h4 className="font-semibold">Passkeys</h4>
       {keys.length === 0 && <p className="text-sm text-slate-400">No passkeys. You sign in with the password and your authenticator code.</p>}

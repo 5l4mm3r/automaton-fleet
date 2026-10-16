@@ -17,6 +17,7 @@
  * Sales are opened by the owner first (closed by default). Skips without PostgreSQL, the dev toolchain or Landlock.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { BUYER_CONSENT_VERSION } from "../../fleet/storefront/consent.js";
 import crypto from "crypto";
 import fs from "fs";
 import os from "os";
@@ -103,7 +104,7 @@ describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: sale-ready prod
   const issues = (r: any, i = 0) => (r.files[i].issues as string[]).join(" ");
   /** Sell a published product to a simulated buyer; returns the delivered attachments. */
   const sell = async (slug: string, price: number, email: string) => {
-    const buy = await call(svc, "svc_offer_buy", [slug, sha(email)]);
+    const buy = await call(svc, "svc_offer_buy", [slug, sha(email), BUYER_CONSENT_VERSION]);
     expect(buy, JSON.stringify(buy)).toMatchObject({ ok: true });
     await buyerPays(await checkoutOf(buy.token), price, email);
     expect(await call(svc, "svc_offer_tick", [20])).toMatchObject({ ok: true, delivered: 1 });
@@ -279,6 +280,8 @@ print("BUILT")
     const q = await json("customers", { op: "quote", args: { enquiryId, scope: "VAT tracker for your 4 invoices with totals by client", priceMinor: 5_000, turnaroundDays: 3 } });
     const orderId = q.order.orderId;
     const token = (await call(svc, "svc_enquiry_page", [e.token])).enquiry.orderToken as string;
+    // v82: the buyer asks for the work to start now on the order page (CCR 2013 reg 36) before paying.
+    expect(await call(svc, "svc_order_consent", [token, sha("dee@example.test"), BUYER_CONSENT_VERSION])).toMatchObject({ ok: true });
     await buyerPays(await checkoutOf(token), 5_000, "dee@example.test");
     await call(svc, "svc_offer_tick", [20]);
 

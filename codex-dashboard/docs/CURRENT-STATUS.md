@@ -994,3 +994,44 @@ v62 existed, so production holds no reports and both read **unknown · never rep
 that make the reading unknown (never falsely hibernating): the owner's pause (no turns), a dropped report, a provider
 rate-limit rest or a failed turn longer than the margin, and any agent runtime older than v62. No runtime change or agent
 upgrade is part of this release.
+
+## Virtual: facility-wide idle strolls and the specialist crew (2026-10-16, uncommitted, not deployed)
+
+Owner decisions implemented in the Virtual Command Centre (3D and 2D map); placement rules, sleep handling, portraits,
+birth/death sequences, packets and money figures are unchanged.
+
+**Idle strolls (cosmetic).** An awake agent with nothing real to do (`mayWander`: active, placement basis `default`, not
+on a team project) now strolls through the whole facility — other rooms and the corridors (`wander.ts` `roamCandidates`
+/ `roamPoint`, deterministic per agent and 80 s slot, home 45 % of the time) — never Quarters (sleepers' dorms) or Estate
+Storage (the dead), never within 1.2 m of an agent workstation, a room work spot, a specialist desk or an intake. In 3D
+targets are filtered to walkable, wall-clear, reachable nav-grid floor and walked at a stroll (never the brisk "busy"
+pace); the 2D map walks along the corridors (`corridorRoute`). Sleepers (owner pause / reported hibernation) stay on their
+Quarters bunk; held, provisioning, dead, mission, recent-event and team agents never stroll; Reduce Motion keeps everyone
+home. The recorded placement (department, activity, "on it" timer, roster, room counts, panels) is untouched; a strolling
+agent's label and roster entry add only "idle · strolling", and away from its station the body shows only idle poses.
+
+**Specialist crew.** Specialists are a picture of REAL helper activity, read from the new gateway op `helpers` (pulse,
+every 5 s, plus the 30 s command view): routine T1 chores, critical T3 questions, independent deliverable reviews, QA
+inspections and Fleet Control's spend reviews. Each role has fixed desks with nameplates — researchers in Library /
+Research, marketers in Marketing, producers in Venture / Dev, support in Comms, reviewers and the critical-tier advisor
+(gold) either side of the command dais — `clamp(living agents, 2, 4)` desks per role (`crew-layout.ts`; placed on free
+floor of the built HQ, proven by tests to keep every room, spot and door reachable). Asleep by default (slumped, dark
+screen, a small "z Z"); a desk wakes while a job of its role is in flight and stays lit 25 s after it finished (labelled
+"finished … ago", or "failed" / "ended without a result" from the job's recorded `state`); reviews/inspections are shown
+from when they became known. Role mapping (`command/helpers.ts` `helperRole`, owner decision 2026-10-16: record, never
+guess): ONLY the `purpose` the agent recorded for the job — research → researcher, marketing → marketer, production →
+producer, customer_support → support, quality_review / evidence_check / spend_review / inspection → reviewer, decision →
+advisor. No room or task-class guessing remains. A job without a recorded purpose (an agent on an older runtime; also an
+unknown purpose string or a gateway without the field) wakes no desk: the Fleet view and Fleet Command summaries say "N
+helper job(s) without a recorded purpose (agent on an older runtime)" while any run or linger, and the today line adds
+`today.unrecorded`. Desk text says the purpose in plain words ("Research chore (page interpretation) for Agent-1",
+"Spend review for Agent-1 (Fleet Control)"). An older gateway's jobs parse as purpose null, state from `finishedAt`,
+unrecorded 0. A job recorded as over without an end time lingers from `knownAt`. Concurrent jobs wake
+several desks (stable by job id); jobs beyond the desks are counted ("+N more in progress"). An older gateway
+(`FLEET_UNKNOWN_OP`, re-asked after 5 minutes), a failed read, or a read older than 60 s wakes nobody and the panels say
+"helper activity unavailable" / "not current". Specialists are not agents: no wallet, level, bunk or station, never in the
+roster or any count. The simulation build produces fictional jobs only when the operator runs simulated commands
+(mission, mission end, money commands, a trading day), labelled simulated, each with the purpose the command implies (the
+mission's role, quality review / inspection, spend review, decision) and state running → finished.
+
+Tests: `src/__tests__/fleet/fleet-virtual-crew.test.ts`, `src/__tests__/fleet/fleet-virtual-roam.test.ts`.

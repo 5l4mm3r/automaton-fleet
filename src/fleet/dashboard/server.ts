@@ -9,6 +9,12 @@
  *   The session: HttpOnly, Secure, SameSite=Strict, __Host- cookie; 30-minute idle / 12-hour absolute; a CSRF token for
  *   every state change. STEP-UP — a fresh passkey assertion, or a fresh password + TOTP, bound to one operation and its
  *   exact arguments — for every sensitive operation. Owner access never depends on one browser's passkey (owner, v43).
+ *   RECOVERY (v82) — always two factors, never a session (the normal sign-in follows):
+ *     forgot password      a current authenticator code + an unused recovery code → a new password; every session ends;
+ *     lost authenticator   the password or a passkey + an unused recovery code → a new authenticator, which replaces the
+ *                          old one only once a code from it is confirmed; every session ends.
+ *   Recovery codes (ten, one-time) are issued from a full session with a fresh confirmation and shown once; only a keyed
+ *   digest of each is stored. Failures count towards the sign-in lockout; each use is a RED notification.
  *
  * Every Admin operation is dash_call in the database (allow-listed, audited). Reveals and owner-identity uploads are
  * end-to-end encrypted in the Admin's browser (WebCrypto X25519): this server relays sealed bytes only. Every response
@@ -44,6 +50,26 @@ export interface DashboardOptions {
 const sha = (s: string) => crypto.createHash("sha256").update(s, "utf8").digest("hex");
 const rand = () => crypto.randomBytes(32).toString("base64url");
 const USER_ID = new Uint8Array(Buffer.from("automaton-fleet-admin-owner"));
+/** v82: how many recovery codes a set has (= RECOVERY_CODE_COUNT in migrations-phase82.ts; the database checks it). */
+export const RECOVERY_CODE_COUNT = 10;
+/** Recovery codes: 16 characters from an alphabet without look-alikes (no 0/O, 1/I/L), ≈79 bits, shown as 4 groups of 4. */
+const RECOVERY_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+export function newRecoveryCode(): string {
+  let c = "";
+  while (c.length < 16) { const b = crypto.randomBytes(1)[0]; if (b < 248) c += RECOVERY_ALPHABET[b % 31]; } // 248 = 8 × 31: unbiased
+  return c.match(/.{4}/g)!.join("-");
+}
+/** What the owner typed, reduced to the code's characters (case, spaces and dashes do not matter). */
+export const normaliseRecoveryCode = (s: unknown) => (typeof s === "string" ? s.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 64) : "");
+/** A new authenticator secret (20 random bytes, base32) and its otpauth URI. */
+function newTotpSecret(): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0, value = 0, secret = "";
+  for (const x of crypto.randomBytes(20)) { value = (value << 8) | x; bits += 8; while (bits >= 5) { secret += alphabet[(value >>> (bits - 5)) & 31]; bits -= 5; } }
+  return secret;
+}
+const otpauthFor = (secret: string) =>
+  `otpauth://totp/${encodeURIComponent("Automaton Fleet:owner")}?secret=${secret}&issuer=${encodeURIComponent("Automaton Fleet")}&period=30&digits=6`;
 const MAX_BODY = 22 * 1024 * 1024;
 
 class RateLimiter {
@@ -62,6 +88,9 @@ class RateLimiter {
 
 export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOptions): http.Server {
   const box = new SecretBox(o.stateKey);
+  // v82: recovery codes are stored as keyed digests (a database copy alone cannot be checked against guesses).
+  const recoveryKey = Buffer.from(crypto.hkdfSync("sha256", o.stateKey, Buffer.alloc(0), "fleet-admin-recovery-code-v1", 32));
+  const recoverySha = (code: unknown) => crypto.createHmac("sha256", recoveryKey).update(normaliseRecoveryCode(code), "utf8").digest("hex");
   const secure = o.origin.startsWith("https://");
   const cookieName = secure ? "__Host-fleet_session" : "fleet_session";
   const authLimit = new RateLimiter(30, 10 * 60_000);
@@ -135,14 +164,10 @@ export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOpti
   };
   /** The first TOTP factor, shown ONCE to the device that just enrolled (base32, otpauth URI). */
   const issueTotp = async (tokenSha: string, ip: string) => {
-    const raw = crypto.randomBytes(20);
-    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-    let bits = 0, value = 0, secret = "";
-    for (const x of raw) { value = (value << 8) | x; bits += 8; while (bits >= 5) { secret += alphabet[(value >>> (bits - 5)) & 31]; bits -= 5; } }
+    const secret = newTotpSecret();
     const set = await gw.totpSet(tokenSha, box.seal(secret, "dashboard:totp"), ip);
     if (!set.ok) return set;
-    return { ok: true as const, next: "totp", totpSecret: secret,
-      otpauth: `otpauth://totp/${encodeURIComponent("Automaton Fleet:owner")}?secret=${secret}&issuer=${encodeURIComponent("Automaton Fleet")}&period=30&digits=6` };
+    return { ok: true as const, next: "totp", totpSecret: secret, otpauth: otpauthFor(secret) };
   };
 
   // ── the static UI (Next.js export) ──
@@ -310,6 +335,59 @@ export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOpti
       if (!r.ok) return json(res, 403, r);
       return json(res, 200, { ok: true }, { "Set-Cookie": setCookie(tok, 12 * 3600) });
     }
+    // ── v82 recovery: two factors each, never a session (the normal sign-in follows); failures count towards the lockout ──
+    if (req.method === "POST" && url.pathname.startsWith("/api/auth/recover/")) {
+      const st = await gw.authState();
+      if (st.locked) return json(res, 423, { ok: false, code: "FLEET_ADMIN_LOCKED" });
+      const refuse = async (what: string) => {
+        await gw.log("login", false, "FLEET_RECOVERY_INVALID", ip, { method: "recovery", for: what });
+        return json(res, 403, { ok: false, code: "FLEET_RECOVERY_INVALID" });
+      };
+      if (url.pathname === "/api/auth/recover/options") {
+        const opts = await generateAuthenticationOptions({ rpID: o.rpId, userVerification: "required", allowCredentials: st.passkeys.map((p) => ({ id: p.id, transports: p.transports })) });
+        await gw.challengeNew(sha(opts.challenge), "recover", null, null, null);
+        return json(res, 200, { ok: true, options: opts });
+      }
+      const b = await body(req);
+      // Forgot password: a current authenticator code AND an unused recovery code (both always checked).
+      if (url.pathname === "/api/auth/recover/password") {
+        const problem = passwordProblem(b.password);
+        if (problem) return json(res, 400, { ok: false, code: "FLEET_PASSWORD_WEAK", reason: problem });
+        const codeSha = recoverySha(b.recoveryCode);
+        const t = await gw.totpGet();
+        const c = t?.confirmed ? totpCheck(box.open(Buffer.from(t.secretEncB64, "base64"), "dashboard:totp"), String(b.code ?? ""), Number(t.lastCounter)) : null;
+        const valid = await gw.recoveryValid(codeSha);
+        if (c === null || !valid || !(await gw.totpAccept(c, false))) return refuse("password_reset");
+        const r = await gw.recoveryPasswordReset(codeSha, await hashPassword(String(b.password)), ip);
+        if (!r.ok) return json(res, 403, { ok: false, code: "FLEET_RECOVERY_INVALID" });
+        return json(res, 200, { ok: true, next: "login", codesLeft: r.codesLeft }, { "Set-Cookie": setCookie(null, 0) });
+      }
+      // Lost authenticator, step 1: the password OR a passkey AND an unused recovery code. The new authenticator's secret is
+      // shown once; it replaces the old one only when step 2 confirms a code from it.
+      if (url.pathname === "/api/auth/recover/authenticator") {
+        const codeSha = recoverySha(b.recoveryCode);
+        let primary = false;
+        if (b.response) primary = (await verifyAssertion(b.response, "recover", null, null, null, ip)) !== null;
+        else { const pw = await gw.passwordGet(); primary = await verifyPassword(b.password, pw?.verifier ?? null); }
+        const valid = await gw.recoveryValid(codeSha);
+        if (!primary || !valid) return refuse("authenticator_reset");
+        const secret = newTotpSecret(), ticket = rand();
+        const r = await gw.recoveryTotpBegin(codeSha, sha(ticket), box.seal(secret, "dashboard:totp"), ip);
+        if (!r.ok) return json(res, 403, { ok: false, code: "FLEET_RECOVERY_INVALID" });
+        return json(res, 200, { ok: true, next: "confirm", ticket, totpSecret: secret, otpauth: otpauthFor(secret), codesLeft: r.codesLeft });
+      }
+      // Lost authenticator, step 2: a code from the NEW authenticator.
+      if (url.pathname === "/api/auth/recover/authenticator/confirm") {
+        const ticketSha = sha(String(b.ticket ?? ""));
+        const p = await gw.recoveryTotpPending(ticketSha);
+        const c = p ? totpCheck(box.open(Buffer.from(p.secretEncB64, "base64"), "dashboard:totp"), String(b.code ?? ""), 0) : null;
+        if (c === null) return refuse("authenticator_confirm");
+        const r = await gw.recoveryTotpConfirm(ticketSha, c, ip);
+        if (!r.ok) return json(res, 403, { ok: false, code: "FLEET_RECOVERY_INVALID" });
+        return json(res, 200, { ok: true, next: "login" }, { "Set-Cookie": setCookie(null, 0) });
+      }
+      return json(res, 404, { ok: false, code: "FLEET_NOT_FOUND" });
+    }
     if (req.method === "POST" && url.pathname === "/api/auth/logout") {
       if (sessionSha) await gw.sessionEnd(sessionSha, ip);
       return json(res, 200, { ok: true }, { "Set-Cookie": setCookie(null, 0) });
@@ -347,7 +425,12 @@ export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOpti
       return r.ok ? json(res, 200, { ok: true, stepup }) : json(res, 403, r);
     }
     // Sign-in methods (v43): state changes outside dash_call, so each checks the session's CSRF token itself.
-    if (req.method === "POST" && ["/api/account/password", "/api/passkey/options", "/api/passkey/verify"].includes(url.pathname)) {
+    // v82: how many recovery codes are left (never the codes).
+    if (req.method === "GET" && url.pathname === "/api/account/recovery") {
+      const r = await gw.recoveryCodesState(sessionSha);
+      return json(res, r.ok ? 200 : 401, r);
+    }
+    if (req.method === "POST" && ["/api/account/password", "/api/account/recovery-codes", "/api/passkey/options", "/api/passkey/verify"].includes(url.pathname)) {
       const csrf = String(req.headers["x-csrf"] ?? "");
       if (!(await gw.sessionCsrfOk(sessionSha, csrf ? sha(csrf) : null))) {
         await gw.log("op", false, "FLEET_CSRF", ip, { path: url.pathname });
@@ -359,6 +442,12 @@ export function createDashboardServer(gw: DashboardGatewayPort, o: DashboardOpti
         if (problem) return json(res, 400, { ok: false, code: "FLEET_PASSWORD_WEAK", reason: problem });
         const r = await gw.passwordSet(null, sessionSha, b.stepup ? sha(String(b.stepup)) : null, await hashPassword(String(b.password)), ip);
         return json(res, r.ok ? 200 : 403, r.ok ? { ok: true } : r);
+      }
+      // v82: a new set of recovery codes (a fresh confirmation first); the codes are shown once and never stored.
+      if (url.pathname === "/api/account/recovery-codes") {
+        const codes = Array.from({ length: RECOVERY_CODE_COUNT }, newRecoveryCode);
+        const r = await gw.recoveryCodesIssue(sessionSha, b.stepup ? sha(String(b.stepup)) : null, codes.map(recoverySha), ip);
+        return json(res, r.ok ? 200 : 403, r.ok ? { ok: true, codes } : r);
       }
       if (url.pathname === "/api/passkey/options") {
         const st = await gw.authState();

@@ -148,7 +148,9 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury worker end to end (PostgreSQL + HT
     await worker.tick();
     const open = await status(c);
     expect(open).toMatchObject({ status: "open" });
-    expect(open.approvalUrl).toMatch(/^https:\/\/www\.paypal\.com\/checkoutnow\?token=O/);
+    // v82: the order behind it has a page (the buyer's consent step); the agent is given the page, never the PayPal link.
+    expect(open.approvalUrl).toBeUndefined();
+    expect(await R.one(`(SELECT approval_url FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1)`, [c])).toMatch(/^https:\/\/www\.paypal\.com\/checkoutnow\?token=O/);
     await worker.tick(); // idempotent: the same request id, no second order
     expect(pp.orders.size).toBe(1);
     const orderId = [...pp.orders.keys()][0];

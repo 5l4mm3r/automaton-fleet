@@ -347,9 +347,9 @@ describe("R23 founder mind: routed mode", () => {
 
   it("routine_task hands one bounded chore to T1 (inline material or a workspace file) and the step continues at T2", async () => {
     const rig = mindRig({ replies: [
-      { content: "Triage the saved page.", toolCalls: [call("toolu_a", "routine_task", { taskClass: "page_interpretation", instructions: "List the prices as JSON.", path: "research/page.txt" })] },
+      { content: "Triage the saved page.", toolCalls: [call("toolu_a", "routine_task", { taskClass: "page_interpretation", purpose: "research", instructions: "List the prices as JSON.", path: "research/page.txt" })] },
       { content: "T1-RESULT: [12, 15]" },
-      { content: "Noted.", toolCalls: [call("toolu_b", "routine_task", { taskClass: "classification", instructions: "spam or not?", material: "BUY NOW" }), call("toolu_c", "sleep")] },
+      { content: "Noted.", toolCalls: [call("toolu_b", "routine_task", { taskClass: "classification", purpose: "customer_support", instructions: "spam or not?", material: "BUY NOW" }), call("toolu_c", "sleep")] },
       { content: "spam" },
     ] });
     fs.mkdirSync(path.join(rig.dirs.w, "research"));
@@ -357,7 +357,7 @@ describe("R23 founder mind: routed mode", () => {
     const t = await rig.mind.turn("Heartbeat 2.");
     expect(t).toMatchObject({ steps: 2, toolCalls: ["routine_task", "routine_task", "sleep"], chargedCents: 4 });
     const [, chore] = rig.calls;
-    expect(chore.route).toMatchObject({ taskClass: "page_interpretation" });
+    expect(chore.route).toMatchObject({ taskClass: "page_interpretation", helper: { kind: "routine", purpose: "research" } }); // v82: recorded with the call
     expect(chore.messages).toHaveLength(1);
     expect(String(chore.messages[0].content)).toMatch(/^ROUTINE TASK \(page_interpretation\)\.\nInstructions: List the prices as JSON\.\n---BEGIN MATERIAL/);
     expect(String(chore.messages[0].content)).toContain("Template A £12");
@@ -365,12 +365,22 @@ describe("R23 founder mind: routed mode", () => {
     // Control returns to T2 with only the result.
     expect(rig.calls[2].route).toMatchObject({ taskClass: "agent_step" });
     expect(String(rig.calls[2].messages.at(-1)!.content)).toContain("T1-RESULT: [12, 15]");
-    expect(rig.calls[3].route).toMatchObject({ taskClass: "classification" });
+    expect(rig.calls[3].route).toMatchObject({ taskClass: "classification", helper: { kind: "routine", purpose: "customer_support" } });
     expect(rig.mind.routing).toMatchObject({ routineCalls: 2, steps: { T2: 2, T3: 0 } });
   });
 
+  it("v82: a routine chore must say what it is for; without a purpose nothing is sent", async () => {
+    const rig = mindRig({ replies: [
+      { toolCalls: [call("toolu_p1", "routine_task", { taskClass: "extraction", instructions: "x", material: "y" }),
+                    call("toolu_p2", "routine_task", { taskClass: "extraction", purpose: "gossip", instructions: "x", material: "z" }), call("toolu_p3", "sleep")] },
+    ] });
+    const t = await rig.mind.turn("Heartbeat 2.");
+    expect(t.refusals).toEqual([{ tool: "routine_task", code: "FLEET_BAD_REQUEST" }, { tool: "routine_task", code: "FLEET_BAD_REQUEST" }]);
+    expect(rig.calls.map((c) => (c.route as { taskClass: string }).taskClass)).toEqual(["agent_step"]); // no T1 request was made
+  });
+
   it("routine_task fails closed: unknown class, path escape, per-turn limit and an unavailable T1 are refused — never run at a higher tier", async () => {
-    const chore = (id: string, args: Record<string, unknown>) => call(id, "routine_task", { instructions: "x", material: "y", ...args });
+    const chore = (id: string, args: Record<string, unknown>) => call(id, "routine_task", { purpose: "research", instructions: "x", material: "y", ...args });
     const rig = mindRig({ maxSteps: 3, replies: [
       { toolCalls: [chore("toolu_1", { taskClass: "failure_diagnosis" }), chore("toolu_2", { taskClass: "extraction", path: "../../etc/passwd", material: undefined }), chore("toolu_3", { taskClass: "extraction" })] },
       { fail: "FLEET_COGNITION_TIER_UNAVAILABLE" },
@@ -406,7 +416,8 @@ describe("R23 founder mind: routed mode", () => {
     expect(esc.messages).toHaveLength(1);
     expect(String(esc.messages[0].content)).toMatch(/^CRITICAL DECISION PACKET \(fleet-decision-v1\)/);
     expect(JSON.stringify(esc.messages)).not.toMatch(/sig-|TASK PACKET|Conflicting fee evidence|PRIVATE-UNRELATED/);
-    expect(esc.route).toEqual({ taskClass: "agent_step", taskId: expect.any(String), escalation: { reasonCode: "EVIDENCE_CONFLICT", requestedTier: "T3", parentRequestId: uuid(1) } });
+    expect(esc.route).toEqual({ taskClass: "agent_step", taskId: expect.any(String), escalation: { reasonCode: "EVIDENCE_CONFLICT", requestedTier: "T3", parentRequestId: uuid(1) },
+      helper: { kind: "escalation", purpose: "decision" } }); // v82: recorded with the call
     expect(route(esc.route as never)).toMatchObject({ tier: "T3", scope: "question" });
     // Back down: the next step is an ordinary T2 step again, carrying only the observable answer.
     expect(step2.route).toEqual({ taskClass: "agent_step", taskId: expect.any(String) });

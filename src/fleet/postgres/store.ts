@@ -2368,5 +2368,7 @@ export const PUBLIC_PAGE_FUNCTIONS = ["svc_offer_page", "svc_offer_preview", "sv
   // v79: a channel's attribution code on the order / enquiry it brought; the outreach opt-out page.
   "svc_attribute", "svc_outreach_optout",
   // v80: search discovery (sitemap, IndexNow key) — read only.
-  "svc_sitemap", "svc_indexnow_key"] as const;
+  "svc_sitemap", "svc_indexnow_key",
+  // v82: the buyer's consent to immediate supply, given on the order page.
+  "svc_order_consent"] as const;
 export type PublicPageFunction = (typeof PUBLIC_PAGE_FUNCTIONS)[number];

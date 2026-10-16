@@ -12,8 +12,9 @@
  *   the shared table) with teammates · watching a crowded room's displays · waiting · lying when dead · ASLEEP on its own
  *   bed in Quarters (the owner's pause or a reported hibernation) — and reactions to the agent's own recorded events
  *   (confirm as it sends, complete on a delivery, look up as something arrives). Agents with nothing recent never mime
- *   work; they may stroll inside the room they are in (wander.ts — cosmetic, never a change of room). Poses blend; Reduce
- *   Motion snaps positions and stills the motion.
+ *   work; awake and idle, they may stroll through the facility's rooms and corridors at a leisurely pace (wander.ts —
+ *   cosmetic: never Quarters or Estate, never onto someone's desk, never a work pose away from home, never a change of
+ *   the recorded room). Poses blend; Reduce Motion snaps positions and stills the motion.
  *
  * Rendering: each body part is ONE instanced mesh for the whole crowd (≈40 draw calls for 50 people); a reusable rig
  * of joints poses each agent in turn and writes the part matrices. Agents the camera reports as standing between it
@@ -31,7 +32,7 @@ import { findPath, lineClear, lookahead, walkable, type NavGrid } from "./nav";
 import { chooseActivity, giveWay, reactionAt, walkSpeed, type Activity, type Reaction } from "./choreo";
 import { appearanceOf } from "./appearance";
 import { BED_TOP, birthState, type Bed, type Point } from "../world";
-import { mayWander, wanderPoint } from "./wander";
+import { mayWander, roamPoint } from "./wander";
 import type { HQProfile } from "./quality";
 import type { WorkSpot } from "./world-build";
 import { bakeShade } from "./builder";
@@ -276,7 +277,7 @@ function faceMaterial(map: THREE.Texture, pbr: boolean): THREE.Material {
 /** Seated agents sit a little behind their spot (in the chair), facing the desk. */
 const SEAT_BACK = 0.1;
 
-export const Crowd = memo(function Crowd({ models, targets, spots, meetings, births, selected, q, reduceMotion, positionsRef, ghostsRef, onAgent, stations, nav, teams, receivedRef, beds }: {
+export const Crowd = memo(function Crowd({ models, targets, spots, meetings, births, selected, q, reduceMotion, positionsRef, ghostsRef, onAgent, stations, nav, teams, receivedRef, beds, roam = [] }: {
   models: AgentModel[]; targets: ReadonlyMap<string, Point>; spots: ReadonlyMap<string, WorkSpot>; meetings: ReadonlySet<string>; births: ReadonlyMap<string, number>; selected: string | null; q: HQProfile; reduceMotion: boolean;
   positionsRef: MutableRefObject<Map<string, Point>>; ghostsRef: MutableRefObject<ReadonlySet<string>>; onAgent: (id: string) => void; stations: ReadonlyMap<string, Point>;
   /** The walkable floor (nav.ts), with the Agent Floor's desks. */
@@ -287,6 +288,8 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
   receivedRef?: MutableRefObject<Map<string, number>>;
   /** Each living agent's own bed in Quarters (world.ts bedPoint). */
   beds?: ReadonlyMap<string, Bed>;
+  /** Where an idle agent may stroll (wander.ts roamCandidates: walkable, reachable, off everyone's desks). */
+  roam?: readonly Point[];
 }) {
   const rig = useMemo(() => makeRig(), []);
   const names = useMemo(() => Object.keys(rig.parts) as PartName[], [rig]);
@@ -361,10 +364,10 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
     models.forEach((m, i) => {
       const id = m.agent.id, home = targets.get(id);
       if (!home) return;
-      // Nothing real to do: a cosmetic stroll inside the room its state puts it in (never another room; never on
-      // Reduce Motion); the goal changes only at a stroll's start and end.
-      const room = !reduceMotion && mayWander(m.agent.status, m.placement.basis, teams.has(id)) ? roomAt(home) : undefined;
-      const target = room ? wanderPoint(id, home, room, now, (p) => walkable(nav, p) && roomAt(p)?.id === room.id) : home;
+      // Nothing real to do: a cosmetic stroll through the facility (never on Reduce Motion); the goal changes only at a
+      // stroll's start and end, and the recorded room never changes.
+      const idle = !reduceMotion && mayWander(m.agent.status, m.placement.basis, teams.has(id));
+      const target = idle ? roamPoint(id, home, roam, now) : home;
       let st = states.current.get(id);
       const b = birthState(births.get(id), now, reduceMotion);
       if (!st) {
@@ -387,7 +390,8 @@ export const Crowd = memo(function Crowd({ models, targets, spots, meetings, bir
           const t0 = performance.now(), path = findPath(nav, st.pos, st.goal);
           budget -= performance.now() - t0;
           if (path) st.path = path; else { st.pos.x = st.goal.x; st.pos.z = st.goal.z; st.path = []; } // fallback only
-          st.fast = pathLength([st.pos, ...st.path]) > 12;
+          // A stroll is never hurried (a brisk walk would read as work); real moves keep their pace.
+          st.fast = !idle && pathLength([st.pos, ...st.path]) > 12;
         }
       }
       const waiting = !st.planned || now < st.departAt;

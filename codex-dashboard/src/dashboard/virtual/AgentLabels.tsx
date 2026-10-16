@@ -34,7 +34,7 @@ const EDGE: Readonly<Record<HealthBand, string>> = {
   CRITICAL: "border-red-500", WOUNDED: "border-amber-500", WINNING: "border-emerald-700", HEALTHY: "border-slate-700", UNKNOWN: "border-slate-700", DEAD: "border-slate-800",
 };
 
-export const AgentLabels = memo(function AgentLabels({ models, positionsRef, projectRef, prefs, selected, fleetView, onAgent, hidden, marked, avoidRef }: {
+export const AgentLabels = memo(function AgentLabels({ models, positionsRef, projectRef, prefs, selected, fleetView, onAgent, hidden, marked, avoidRef, strolling }: {
   models: AgentModel[]; positionsRef: MutableRefObject<Map<string, Point>>; projectRef: MutableRefObject<Projector | null>; prefs: VirtualPrefs;
   selected: string | null; fleetView: boolean; onAgent: (id: string) => void;
   /** Agents not shown yet (a newborn while its station powers up). */
@@ -43,6 +43,8 @@ export const AgentLabels = memo(function AgentLabels({ models, positionsRef, pro
   marked: ReadonlyMap<string, BirthState>;
   /** Boxes agent labels keep clear of (the room plaques, drawn above them). */
   avoidRef?: MutableRefObject<Rect[]>;
+  /** Idle agents away from their own place on a cosmetic stroll: their tag says so (the activity itself is unchanged). */
+  strolling?: ReadonlySet<string>;
 }) {
   const els = useRef(new Map<string, HTMLButtonElement>());
   const sizes = useRef(new Map<string, { w: number; h: number }>());
@@ -111,19 +113,20 @@ export const AgentLabels = memo(function AgentLabels({ models, positionsRef, pro
     </svg>
     {models.map((m) => {
       const id = m.agent.id, band = m.health.band, isNew = marked.get(id)?.mark ?? false, lv = levelOf(m.agent.createdAt);
-      const sleep = m.placement.basis === "sleep" && m.rest.sleep ? SLEEP_MARK[m.rest.sleep] : null;
+      const sleep = m.placement.basis === "sleep" && m.rest.sleep ? SLEEP_MARK[m.rest.sleep] : null, strolls = strolling?.has(id) ?? false;
       // The accessible name keeps its established form (name, wallet, condition, activity); the level is shown on the tag.
-      const name = `${m.agent.name}, ${money(m.agent.cash)}, ${m.health.label}, ${m.placement.activity}${isNew ? ", new" : ""}`;
+      const name = `${m.agent.name}, ${money(m.agent.cash)}, ${m.health.label}, ${m.placement.activity}${isNew ? ", new" : ""}${strolls ? ", idle — strolling" : ""}`;
       return <button key={id} type="button" data-band={band}
         ref={(el) => { if (el) { els.current.set(id, el); if (!el.style.transform) el.style.visibility = "hidden"; } else { els.current.delete(id); sizes.current.delete(id); } }}
         onClick={() => { if (!clickSuppressed()) onAgent(id); }} aria-label={name}
         className={`pointer-events-auto absolute left-0 top-0 whitespace-nowrap rounded border leading-tight ${selected === id ? "border-slate-100 bg-slate-900 ring-1 ring-slate-100" : `${EDGE[band]} bg-slate-950/85`} ${isNew ? "outline outline-1 outline-cyan-300" : ""} focus-visible:outline-2 focus-visible:outline-cyan-300 ${density === "compact" && selected !== id ? "px-1 py-0 text-[10px]" : "px-1.5 py-0.5 text-center"}`}>
         {density === "compact" && selected !== id
-          ? <span className={band === "CRITICAL" || band === "WOUNDED" ? "font-semibold" : undefined}><span className="text-slate-100">{m.agent.name.length > 14 ? `${m.agent.name.slice(0, 13)}…` : m.agent.name}</span><span className="text-slate-500"> · </span><span className={`font-mono ${band === "DEAD" ? "text-slate-500" : BAND_TEXT[band]}`}>{money(m.agent.cash)}</span></span>
+          ? <span className={band === "CRITICAL" || band === "WOUNDED" ? "font-semibold" : undefined}><span className="text-slate-100">{m.agent.name.length > 14 ? `${m.agent.name.slice(0, 13)}…` : m.agent.name}</span><span className="text-slate-500"> · </span><span className={`font-mono ${band === "DEAD" ? "text-slate-500" : BAND_TEXT[band]}`}>{money(m.agent.cash)}</span>{strolls ? <span className="text-slate-400"> · idle</span> : null}</span>
           : <>
             <span className="block max-w-[11rem] truncate text-[11px] text-slate-100">{m.agent.name}{lv ? <span className="ml-1 font-mono text-[10px] text-fuchsia-300">Lv {lv}</span> : null}{isNew ? " · NEW" : ""}</span>
             <span className="block font-mono text-[11px] text-cyan-300">{money(m.agent.cash)}</span>
             <span className={`block font-mono text-[9px] tracking-wider ${sleep ? sleep.text : band === "DEAD" ? "text-slate-500" : BAND_TEXT[band]}`}>{sleep ? `${sleep.glyph} ` : ""}{m.placement.activity}</span>
+            {strolls ? <span className="block font-mono text-[9px] tracking-wider text-slate-400">IDLE · strolling</span> : null}
           </>}
       </button>;
     })}

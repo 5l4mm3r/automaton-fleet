@@ -194,6 +194,8 @@ export async function inferRouted(
     requestedTier: decision.requestedTier, escalationReason: decision.escalationReason, ...(req.escalation?.parentRequestId ? { parentRequestId: req.escalation.parentRequestId } : {}),
     source: decision.source, scope: decision.scope, minTier: decision.minTier, maxTier: decision.maxTier,
     ...(req.actionClass ? { actionClass: req.actionClass } : {}),
+    // v82: the helper call's own record (kind and stated purpose), kept with the reservation and the log — never routing input.
+    ...(req.helper ? { helper: req.helper } : {}),
     thinking: candidate.thinking, effort: decision.effort ?? candidate.effort,
   };
   const turn = typeof body.conversationTurn === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body.conversationTurn) ? body.conversationTurn : null;

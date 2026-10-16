@@ -280,13 +280,14 @@ export const FOUNDER_ROUTED_TOOLS: readonly ToolSpec[] = Object.freeze([
   {
     name: "routine_task",
     capability: "planning",
-    description: "Hand ONE bounded routine chore (extract, classify, summarise, triage, format, compare) to the cheap routine tier instead of doing it yourself. Give the material inline or name a workspace file (e.g. a saved research page); you get back only the result. Use it for bulk reading; keep judgement for yourself.",
+    description: "Hand ONE bounded routine chore (extract, classify, summarise, triage, format, compare) to the cheap routine tier instead of doing it yourself. Give the material inline or name a workspace file (e.g. a saved research page); you get back only the result. Use it for bulk reading; keep judgement for yourself. Say what the chore is for (purpose): it is recorded with the call.",
     parameters: obj({
       taskClass: { type: "string", enum: [...ROUTINE_TASK_CLASSES] },
+      purpose: { type: "string", enum: ["research", "marketing", "production", "customer_support"], description: "What this chore is for: research (markets, buyers, sources), marketing (promotion, listings, posts), production (building the product or service), customer_support (buyers' messages and orders)" },
       instructions: str("Exactly what to produce, and in what format", 1200),
       material: str("The text to work on (omit when `path` is given)", 12_000),
       path: str("Workspace-relative file to work on instead of inline material", 400),
-    }, ["taskClass", "instructions"]),
+    }, ["taskClass", "purpose", "instructions"]),
   },
   {
     name: "escalate_question",

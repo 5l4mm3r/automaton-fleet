@@ -6,6 +6,7 @@
 import type { Agent } from "../model";
 import type { AgentEconomics } from "./economics";
 import type { FleetEvent } from "./events";
+import type { HelperRead } from "./helpers";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- gateway JSON rows, narrowed where rendered
 export type Row = Record<string, any>;
@@ -43,6 +44,12 @@ export interface CommandView {
   /** All policies, population and registry flags (settings). */
   settings: Row | null;
   unavailable: string[];
+  /**
+   * Real helper activity (the `helpers` read: routine chores, critical questions, reviews, inspections, Fleet Control's
+   * spend reviews) — what wakes the Virtual specialists. null = unavailable (an older gateway or a failed read); absent =
+   * not read yet. Never filled in.
+   */
+  helpers?: HelperRead | null;
 }
 
 /** The light real-time read: the agents' current state and the latest events. */
@@ -50,6 +57,8 @@ export interface Pulse {
   fetchedAt: string;
   agents: Agent[] | null;
   events: FleetEvent[];
+  /** The `helpers` read (null = unavailable). */
+  helpers?: HelperRead | null;
 }
 
 export const emptyCommandView = (mode: CommandView["mode"]): CommandView => ({

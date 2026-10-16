@@ -13,6 +13,7 @@
  * show only their own order; another agent sees and acts on nothing; the privilege audit stays clean.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { BUYER_CONSENT_VERSION } from "../../fleet/storefront/consent.js";
 import crypto from "crypto";
 import fs from "fs";
 import os from "os";
@@ -221,9 +222,9 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
 
   it("a buyer's purchase: a fresh checkout and order page; PayPal returns there; paid → delivered automatically from the reviewed files; downloadable", async () => {
     const off = (await R.econ(F, "offer.list", {})).offers.find((x: any) => x.kind === "product");
-    const b = await pub("svc_offer_buy", [off.slug, origin]);
+    const b = await pub("svc_offer_buy", [off.slug, origin, BUYER_CONSENT_VERSION]);
     expect(b).toMatchObject({ ok: true, token: expect.stringMatching(/^[0-9a-f]{64}$/) });
-    const b2 = await pub("svc_offer_buy", [off.slug, sha("buyer-ip-2")]);
+    const b2 = await pub("svc_offer_buy", [off.slug, sha("buyer-ip-2"), BUYER_CONSENT_VERSION]);
     expect(b2.token).not.toBe(b.token); // one checkout per buyer
     const checkoutId = await checkoutOf(b.token);
     const work = await cx("cx_paypal_work", ["custody-executor", 50]);
@@ -408,6 +409,10 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     const token = (await pub("svc_enquiry_page", [e.token])).enquiry.orderToken as string;
     const checkoutId = await checkoutOf(token);
     await open(checkoutId);
+    // v82: the buyer asks for the work to start now (CCR 2013 reg 36) on the order page before the payment link appears.
+    expect((await pub("svc_order_page", [token])).order.approvalUrl).toBeUndefined();
+    expect(await pub("svc_order_consent", [token, origin, BUYER_CONSENT_VERSION])).toMatchObject({ ok: true });
+    expect((await pub("svc_order_page", [token])).order).toMatchObject({ approvalUrl: expect.stringMatching(/^https:\/\/www\.paypal\.com\//), consent: { kind: "service_start", recorded: true } });
     await pay(checkoutId, 7_500, "bea@example.test");
     await pub("svc_offer_tick", [20]);
     expect(await R.one(`(SELECT status FROM fleet.fleet_offer_enquiries WHERE enquiry_id = $1)`, [enquiryId])).toBe("accepted");
@@ -481,7 +486,7 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     const sheetsOffer = (await R.econ(F, "offer.list", {})).offers.find((x: any) => x.title === "Small business cash-flow workbook");
     expect((await pub("svc_offer_page", [sheetsOffer.slug])).offer).toMatchObject({ brand: "Ledgerline", supportEmail: sheetsAddr });
     // A purchase: the order is the venture's; the delivery email replies to the venture's address and names its brand.
-    const b = await pub("svc_offer_buy", [p.offer.slug, sha("buyer-courses")]);
+    const b = await pub("svc_offer_buy", [p.offer.slug, sha("buyer-courses"), BUYER_CONSENT_VERSION]);
     expect(await R.one(`(SELECT venture_id::text FROM fleet.fleet_customer_orders WHERE access_token = $1)`, [b.token])).toBe(await vid("courses"));
     const checkoutId = await checkoutOf(b.token);
     await open(checkoutId);

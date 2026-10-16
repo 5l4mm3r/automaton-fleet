@@ -34,6 +34,8 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_spend_review_policy", "fleet_spend_review_accrual",
     // v65: Fleet Control review costs per kind (singleton rows).
     "fleet_control_accrual",
+    // v82: the buyer-consent wordings (immutable reference rows the orders point to).
+    "fleet_buyer_consent_wordings",
     ...V35_SINGLETONS,
   ]);
   const r = await c.query<{ t: string }>(

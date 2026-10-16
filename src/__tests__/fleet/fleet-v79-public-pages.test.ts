@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import http from "http";
 import { PublicPages, type PublicPagesPort } from "../../fleet/service/public-pages.js";
+import { BUYER_CONSENT_VERSION } from "../../fleet/storefront/consent.js";
 
 describe("v79 public pages: attribution, image samples, opt-out", () => {
   const calls: Array<{ fn: string; args: unknown[] }> = [];
@@ -42,7 +43,9 @@ describe("v79 public pages: attribution, image samples, opt-out", () => {
     const svc = await (await fetch(`${base}/o/svc-brief-abc123?ref=0123456789ab`)).text();
     expect(svc).toContain(`/o/svc-brief-abc123/enquire?ref=0123456789ab`);
     expect(await (await fetch(`${base}/o/${slug}?ref=<script>`)).text()).not.toContain("?ref=");
-    const buy = await fetch(`${base}/o/${slug}/buy?ref=0123456789ab`, { method: "POST", redirect: "manual", headers: { origin: base } });
+    // v82: the buyer's two consent ticks travel with the purchase (refused without them: fleet-v82-public-consent.test.ts).
+    const buy = await fetch(`${base}/o/${slug}/buy?ref=0123456789ab`, { method: "POST", redirect: "manual", headers: { origin: base, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ c1: "yes", c2: "yes", consent: BUYER_CONSENT_VERSION }).toString() });
     expect(buy.status).toBe(303);
     expect(calls.find((c) => c.fn === "svc_attribute")?.args).toEqual(["order", "a".repeat(64), "0123456789ab"]);
     const enq = await fetch(`${base}/o/svc-brief-abc123/enquire?ref=0123456789ab`, { method: "POST", headers: { origin: base, "content-type": "application/json" },

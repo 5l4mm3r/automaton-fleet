@@ -14,12 +14,20 @@ import type { DeckAdapter } from "../adapter";
 import type { Agent } from "../model";
 import { mergeEvents } from "./events";
 import type { CommandView } from "./view";
+import type { HelperRead } from "./helpers";
 
 export const PULSE_MS = 5_000;
 export const COMMAND_MS = 30_000;
 const BACKOFF = [5_000, 10_000, 20_000, 60_000];
 
 export type FeedState = "idle" | "connecting" | "live" | "reconnecting";
+
+/** The more recently received of two helper readings (null — unavailable — counts as a reading when it is the newer answer). */
+function newer(a: HelperRead | null | undefined, b: HelperRead | null | undefined): HelperRead | null | undefined {
+  if (b === undefined) return a;
+  if (b === null || a == null) return b;
+  return b.receivedAt >= a.receivedAt ? b : a;
+}
 
 export function useFleetCommand(adapter: DeckAdapter, opts: { enabled: boolean; fast: boolean; onAgents?: (agents: Agent[]) => void }) {
   const [view, setView] = useState<CommandView | null>(null);
@@ -32,8 +40,8 @@ export function useFleetCommand(adapter: DeckAdapter, opts: { enabled: boolean; 
   const loadCommand = useCallback(async () => {
     try {
       const v = await adapter.command();
-      // Keep events already seen (the pulse may have read newer ones than this view).
-      setView((prev) => (prev ? { ...v, events: mergeEvents(prev.events, v.events) } : v));
+      // Keep events already seen (the pulse may have read newer ones than this view), and the fresher helper reading.
+      setView((prev) => (prev ? { ...v, events: mergeEvents(prev.events, v.events), helpers: newer(prev.helpers, v.helpers) } : v));
       failures.current = 0;
       setFeed("live");
     } catch {
@@ -45,7 +53,7 @@ export function useFleetCommand(adapter: DeckAdapter, opts: { enabled: boolean; 
   const pulse = useCallback(async () => {
     try {
       const p = await adapter.pulse();
-      setView((prev) => (prev ? { ...prev, events: mergeEvents(prev.events, p.events) } : prev));
+      setView((prev) => (prev ? { ...prev, events: mergeEvents(prev.events, p.events), helpers: p.helpers === undefined ? prev.helpers : p.helpers } : prev));
       if (p.agents) onAgents.current?.(p.agents);
       setLastPulse(p.fetchedAt);
       failures.current = 0;

@@ -16,6 +16,8 @@ import { eventDepartment } from "../command/departments";
 import { CapabilityState, DecisionFeed, DepartmentRoster, EventFeed, FleetControllerStatus, TreasurySummary, factsOf, utc } from "../command/panels";
 import type { Control } from "../command/FleetCommandPage";
 import type { CommandView, Row } from "../command/view";
+import type { Crew } from "../command/helpers";
+import { CrewSection } from "./Crew";
 
 const time = (iso: unknown) => utc(iso);
 const minor = (v: unknown) => (typeof v === "number" ? money(v) : "—");
@@ -25,7 +27,9 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 const list = (rows: Row[], render: (r: Row) => ReactNode, empty: string) => rows.length ? <ul className="space-y-2 text-sm">{rows.slice(0, 30).map((r, i) => <li key={i} className="rounded border border-slate-800 p-2">{render(r)}</li>)}</ul> : <p className="text-sm text-slate-400">{empty}</p>;
 
-export function DepartmentPanel({ dep, fleet, view, models, openAgent, go }: { dep: DepartmentId; fleet: Fleet; view: CommandView | null; models: AgentModel[]; openAgent: (id: string) => void; go: (page: string) => void }) {
+export function DepartmentPanel({ dep, fleet, view, models, openAgent, go, crew }: { dep: DepartmentId; fleet: Fleet; view: CommandView | null; models: AgentModel[]; openAgent: (id: string) => void; go: (page: string) => void;
+  /** The specialist crew (its desks in this room, and the honest summary); not agents. */
+  crew?: Crew }) {
   const d = DEPARTMENT[dep];
   const name = (id: unknown) => models.find((m) => m.agent.id === id)?.agent.name ?? String(id ?? "—");
   const events = (view?.events ?? []).filter((e) => eventDepartment(e.type) === dep);
@@ -77,7 +81,7 @@ export function DepartmentPanel({ dep, fleet, view, models, openAgent, go }: { d
     default:
       body = <>{roster}{feed}</>;
   }
-  return <div><p className="text-xs tracking-widest" style={{ color: d.accent }}>DEPARTMENT</p><h3 className="text-xl font-semibold">{d.name}</h3><p className="text-sm text-slate-400">{d.purpose}</p>{body}</div>;
+  return <div><p className="text-xs tracking-widest" style={{ color: d.accent }}>DEPARTMENT</p><h3 className="text-xl font-semibold">{d.name}</h3><p className="text-sm text-slate-400">{d.purpose}</p>{body}{crew && <CrewSection crew={crew} dep={dep} />}</div>;
 }
 
 export function AgentPanel({ m, fleet, view, control, go, loadLedger }: { m: AgentModel; fleet: Fleet; view: CommandView | null; control: Control; go: (page: string, id?: string) => void; loadLedger?: (agentId: string) => Promise<Row[]> }) {

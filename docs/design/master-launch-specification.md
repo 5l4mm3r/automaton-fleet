@@ -1407,3 +1407,74 @@ The onboarding that v80 offered only on the command line is on its own dashboard
   - **Etsy payouts.** Etsy pays the owner's bank. Each payout becomes the agent's cash only after the owner records the bank line and the transfer into the treasury PayPal (batchable).
   - **Token renewal.** The gateway refreshes tokens itself. Whether Etsy (90-day refresh token) and Pinterest (about a year) issue a new refresh token on each refresh is verified at the first live refresh; if not, the connection fails its check (P2) and the owner re-authorises once per period.
   - **Pinterest Standard access.** Pins are visible only to their creator until Pinterest approves the app (owner's video submission).
+
+## 34. Sign-in recovery, buyer consent, specialist crew and roaming (owner decisions, 2026-10-16; schema v82 + UI 0.21.0, in code, not deployed)
+
+**Owner decisions (verbatim intent):** idle awake agents may wander rooms and corridors without changing their recorded
+task; sleepers stay in the dorms (owner pause and agent sleep kept distinct); specialist helpers get assigned workstations,
+asleep until a real helper job needs them, never a running chargeable session; the station stays behind login; add
+"Forgot password?", an authenticated password change and lost-device recovery that never silently bypasses
+verification; the owner's standing authority stays (agents research, choose channels, build brands, market, produce,
+review and deliver within capital and platform rules, and ask only for genuinely new owner decisions or steps that need
+the owner personally); and record the buyer's legally required consent for immediate digital supply.
+
+### 34.1 Sign-in recovery (v82; docs/admin-access.md)
+- Recovery codes: ten one-time codes, issued from a full session after a fresh confirmation (`recovery_codes_issue`),
+  shown once, stored only as keyed digests; a new set retires the old.
+- Forgot password: authenticator code + recovery code → new password (`dash_recovery_password_reset`).
+- Lost authenticator: password or passkey + recovery code → new authenticator, active only once a code from it is
+  confirmed (`dash_recovery_totp_begin` / `_confirm`).
+- Two factors every time; never a session; every session ends; RED notification on each use; failures count towards the
+  lockout; nothing spent by a failed attempt. Password change (signed in) is unchanged: Security → Change password
+  after a fresh confirmation. Losing every factor stays a host recovery.
+
+### 34.2 Buyer consent and the confirmation, per purchase route (v82)
+- **The wording.** It is versioned and immutable (`fleet_buyer_consent_wordings`, `src/fleet/storefront/consent.ts`). The
+  buyer sees two separate, unticked, required boxes:
+  - **digital_immediate:** immediate access, and losing the 14-day right to cancel once the download is made available
+    (reg 37);
+  - **service_start:** start the work now, what cancelling costs, and when the right ends (reg 36).
+- **The record.** Each order stores the wording version, the time and the hashed origin. A recorded consent never changes.
+- **Without consent:** no payment link, no download (the file route refuses too), and no email attachment.
+- **The confirmation** is sent on a durable medium: either a delivery email made after the consent, or an "Order
+  confirmation" email sent by the offer pass once the order is paid. It contains the item and price, scope and due date,
+  the consent text, the order page link and the seller statement. It is sent once.
+
+| Route | Where the consent is given | Confirmation | Test |
+|---|---|---|---|
+| Offer page (product) | with the purchase (`svc_offer_buy(slug, origin, consent)`) | automatic delivery email | v82 2/6, browser unit 3/3 |
+| Quoted service (enquiry → quote) | order page, before the PayPal link | "Order confirmation" after payment | v76 service; v82 6/6 |
+| Agent's own checkout (`paypal.checkout`) | order page: every such order now has one; the agent is given the page, never the PayPal link (no agent read carries it) | "Order confirmation" after payment | v82 5/6 |
+| Owner's proof purchase | order page (before payment or download) | confirmation after the buyer confirms (the earlier delivery email could not carry it) | v82 3–4/6 |
+| Etsy (owner's shop; Etsy's checkout) | **cannot be recorded.** Etsy's checkout has no consent box and the Fleet must not automate the website. Buyers keep the 14-day right to cancel a download (refund on request within 14 days) | Etsy's own receipt | — (owner decision: accept, or sell downloads on the own pages only) |
+| Gumroad (merchant of record; locked until £500 per agent) | Gumroad's checkout, under Gumroad's terms as the seller | Gumroad's | — (verify Gumroad's EU/UK withdrawal handling before unlock) |
+| Orders created before v82 without a page | none | — | delivered as before; buyer keeps the right |
+
+### 34.3 Helper jobs and the specialist crew (v82 + UI 0.21.0)
+- **Recorded when the call is made.** Each helper call records its kind, the purpose the agent stated, its start and its
+  end (`fleet_helper_jobs`). Triggers on the reservation and the result fill it: running → finished / failed, or ended
+  with no result.
+  - A routine chore must state its purpose: research, marketing, production or customer_support. The founder runtime
+    refuses a chore without one.
+  - A critical question is recorded as a decision.
+  - An independent review is recorded as a quality review, known while it runs.
+  - Fleet Control's evidence checks and automated spend reviews, and the QA inspector, are recorded as themselves.
+- **Older agent runtimes.** A chore from an older runtime records no purpose and is shown as such, never guessed. The
+  agents are on b60e262 until their founder-runtime upgrade.
+- **The read.** `helpers` returns classes, purposes, states and times only.
+- **The desks.** Each desk takes its role only from the recorded purpose: researcher, marketer, producer, support,
+  reviewer, or advisor (the Opus tier). A desk is a picture of a real job; asleep, nothing runs. No persistent crew, hiring
+  cost or separate memory was introduced.
+
+### 34.4 Roaming (UI 0.21.0)
+- Idle awake agents (no mission, recent event or team) stroll rooms and corridors on a seeded schedule. They avoid
+  Quarters, Estate, desks and intakes, and are labelled "idle · strolling".
+- The recorded placement, activity, timers, room counts and orbs are unchanged. Sleepers stay on their own bunk (owner
+  pause ⏸ and reported hibernation ☾ distinct).
+
+### 34.5 Standing authority (checked, unchanged)
+- The doctrine already says "Never ask the owner for ordinary business decisions".
+- `record_external_dependency` accepts only human identity, KYC, legal signature, constitutional change or a
+  non-delegable credential, and states that niche, product, channel, marketing, pivots, experiments, spending and capital
+  are the agent's own.
+- After sales open, connected-channel API work needs no release (v81, tested). Nothing was changed.

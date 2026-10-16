@@ -5,7 +5,7 @@
  * their targets, carries packets and frames the focus by setting SVG attributes directly: no React render per frame, no
  * style attributes (the deck's strict CSP), capped to the chosen frame rate and paused while the tab is hidden.
  */
-import { memo, useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { Projector } from "./AgentLabels";
 import { money } from "../model";
 import type { AgentModel } from "../command/agents";
@@ -13,9 +13,11 @@ import { DEPARTMENT, DEPARTMENTS, type DepartmentId } from "../command/departmen
 import { usePortraitUrl } from "../command/AgentPortrait";
 import type { VirtualPrefs } from "../command/prefs";
 import { BED_LENGTH, BED_WIDTH, bedIndex, bedPoint, birthState, focusRect, livePackets, WORLD, type BirthState, type Packet, type Point } from "./world";
-import { along, roomAt, routeThrough, toHub } from "./hq/route";
-import { mayWander, wanderPoint } from "./hq/wander";
+import { along, INTAKE, routeThrough, toHub } from "./hq/route";
+import { corridorRoute, mayWander, roamCandidates, roamPoint } from "./hq/wander";
 import { SLEEP_LAMP } from "./hq/beds";
+import { ALL_CREW_SEATS, CREW_DESK, type PlacedDesk } from "./hq/crew-layout";
+import { DONE_WORDS, ROLE_COLOUR, ROLE_NAME } from "../command/helpers";
 
 /** The floor grid as one path (cheaper to repaint than a pattern fill). */
 const GRID = (() => {
@@ -53,13 +55,34 @@ const MapAgent = memo(function MapAgent({ m, selected, newborn, mark, register, 
   </g>;
 });
 
-export function VirtualMap({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, positionsRef, projectRef, stations, births, birthStates }: {
+/**
+ * A specialist's desk on the map (crew.ts in 3D): the desk, its monitor bar and the specialist's head — lit in the role's
+ * colour while a real helper job is on it, dark with a small static "z" while asleep. Not an agent: never in the roster.
+ */
+const MapDesk = memo(function MapDesk({ d, onRoom }: { d: PlacedDesk; onRoom: (id: DepartmentId) => void }) {
+  const D = CREW_DESK, on = !!d.desk.job, colour = ROLE_COLOUR[d.desk.role];
+  const j = d.desk.job, label = `${ROLE_NAME[d.desk.role]} ${d.desk.seat} (specialist, not an agent): ${j ? `${j.phase === "working" ? "working" : j.phase === "finished" ? "just finished" : DONE_WORDS[j.phase]} — ${j.text}` : "asleep, no job"}`;
+  return <g transform={`translate(${d.bay.x} ${d.bay.z}) rotate(${-d.bay.q * 90})`} data-crew-desk={d.desk.key} data-awake={on ? "1" : "0"} role="button" tabIndex={0} aria-label={label}
+    className="cursor-pointer outline-none" {...activate(() => onRoom(d.desk.department))}>
+    <title>{label}</title>
+    <rect x={-D.deskW / 2} y={D.deskZ0} width={D.deskW} height={D.deskZ1 - D.deskZ0} rx={0.05} fill="#1b2638" stroke="#475569" strokeWidth={0.03} />
+    <rect x={-0.3} y={D.deskZ0 + 0.04} width={0.6} height={0.09} fill={on ? colour : "#0b1220"} />
+    <circle cx={0} cy={D.seatZ} r={0.2} fill={on ? colour : "#334155"} stroke={on ? "#e2e8f0" : "#1e293b"} strokeWidth={0.03} />
+    {!on && <text x={0.18} y={D.seatZ - 0.2} fontSize={0.34} fill="#94a3b8" className="font-mono" transform={`rotate(${d.bay.q * 90} 0.18 ${D.seatZ - 0.2})`}>z</text>}
+  </g>;
+});
+
+export function VirtualMap({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, positionsRef, projectRef, stations, births, birthStates, teams, crew = [] }: {
   models: AgentModel[]; targets: Map<string, Point>; packets: Packet[]; focus: Focus; prefs: VirtualPrefs; selected: string | null;
   onRoom: (id: DepartmentId) => void; onAgent: (id: string) => void;
   /** Published for the label layer: animated positions and world → screen projection. */
   positionsRef: MutableRefObject<Map<string, Point>>; projectRef: MutableRefObject<Projector | null>;
   /** Each agent's workstation on the Agent Floor, and births (presentation only). */
   stations: ReadonlyMap<string, Point>; births: ReadonlyMap<string, number>; birthStates: ReadonlyMap<string, BirthState>;
+  /** Agents on an active team project (they are working: they never stroll). */
+  teams?: ReadonlyMap<string, string>;
+  /** The specialist crew's desks with their real helper jobs (command/helpers.ts crewOf → crew-layout placeDesks). */
+  crew?: readonly PlacedDesk[];
 }) {
   const svg = useRef<SVGSVGElement>(null);
   const agentEls = useRef(new Map<string, SVGGElement>());
@@ -72,8 +95,13 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
   const drawn = useRef(new Map<string, SVGGElement>());
   const packetsOn = useRef(true);
   const view = useRef<{ x: number; z: number; w: number; d: number }>({ x: WORLD.minX, z: WORLD.minZ, w: WORLD.maxX - WORLD.minX, d: WORLD.maxZ - WORLD.minZ });
-  const live = useRef({ targets, packets, focus, prefs, births, models });
-  useEffect(() => { live.current = { targets, packets, focus, prefs, births, models }; }, [targets, packets, focus, prefs, births, models]);
+  // Where an idle agent may stroll on the map: rooms (not Quarters or Estate) and corridors, off every workstation, crew
+  // desk and intake (wander.ts). The map has no furniture to walk around, so walks follow the corridors (corridorRoute).
+  const roam = useMemo(() => roamCandidates([...stations.values(), ...ALL_CREW_SEATS, ...Object.values(INTAKE)]), [stations]);
+  const live = useRef({ targets, packets, focus, prefs, births, models, teams, roam });
+  useEffect(() => { live.current = { targets, packets, focus, prefs, births, models, teams, roam }; }, [targets, packets, focus, prefs, births, models, teams, roam]);
+  /** A strolling agent's corridor route (recomputed only when its stroll goal changes). */
+  const strolls = useRef(new Map<string, { to: Point; pts: Point[] }>());
   const stationEls = useRef(new Map<string, SVGRectElement>());
   /** Set an attribute only when its value changes (a still Fleet costs no repaint); cached per element. */
   const put = (el: Element, attr: string, value: string) => { if (el.getAttribute(attr) !== value) el.setAttribute(attr, value); };
@@ -113,18 +141,26 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
       }
       // Only what changes is written to the DOM: a still Fleet costs no repaint (large Fleets stay smooth).
       // Agents walk towards their department slot (about 4 units per second; snap with reduced motion). An agent with
-      // nothing real to do strolls inside its room (cosmetic, wander.ts); never on Reduce Motion.
-      const byId = new Map(live.current.models.map((m) => [m.agent.id, m]));
+      // nothing real to do strolls through the facility at a gentler pace, along the corridors (cosmetic, wander.ts) —
+      // never on Reduce Motion; its recorded placement is unchanged.
+      const byId = new Map(live.current.models.map((m) => [m.agent.id, m])), teamsNow = live.current.teams, roamNow = live.current.roam;
       for (const [id, el] of agentEls.current) {
         const home = tg.get(id), m = byId.get(id);
         if (!home) continue;
-        const room = !snap && m && mayWander(m.agent.status, m.placement.basis, false) ? roomAt(home) : undefined;
-        const target = room ? wanderPoint(id, home, room, nowMs) : home;
+        const idle = !snap && !!m && mayWander(m.agent.status, m.placement.basis, teamsNow?.has(id) ?? false);
+        const target = idle ? roamPoint(id, home, roamNow, nowMs) : home;
         const cur = pos.current.get(id);
         if (cur && cur.x === target.x && cur.z === target.z && drawn.current.get(id) === el) continue;
         const from = cur ?? { ...target };
-        const dx = target.x - from.x, dz = target.z - from.z, dist = Math.hypot(dx, dz), step = 4 * dt;
-        const next = snap || dist <= step ? { ...target } : { x: from.x + (dx / dist) * step, z: from.z + (dz / dist) * step };
+        let goal = target;
+        if (idle && cur) {
+          let r = strolls.current.get(id);
+          if (!r || r.to.x !== target.x || r.to.z !== target.z) { r = { to: { ...target }, pts: corridorRoute(cur, target) }; strolls.current.set(id, r); }
+          while (r.pts.length > 1 && Math.hypot(r.pts[0].x - from.x, r.pts[0].z - from.z) < 1e-3) r.pts.shift();
+          goal = r.pts[0] ?? target;
+        } else strolls.current.delete(id);
+        const dx = goal.x - from.x, dz = goal.z - from.z, dist = Math.hypot(dx, dz), step = (idle ? 2.4 : 4) * dt;
+        const next = snap || dist <= step ? { ...goal } : { x: from.x + (dx / dist) * step, z: from.z + (dz / dist) * step };
         pos.current.set(id, next);
         drawn.current.set(id, el);
         el.setAttribute("transform", `translate(${next.x.toFixed(3)} ${next.z.toFixed(3)})`);
@@ -181,6 +217,8 @@ export function VirtualMap({ models, targets, packets, focus, prefs, selected, o
       <rect x={b.x - BED_WIDTH / 2 + (b.level ? 0.12 : 0)} y={b.z + (b.level ? 0.12 : 0)} width={BED_WIDTH} height={BED_LENGTH} rx={0.08} fill="#202c52" stroke="#6272a8" strokeWidth={0.05} />
       <rect x={b.x - 0.12} y={b.z + 0.1} width={0.24} height={0.16} fill={s === "owner_pause" ? SLEEP_LAMP.owner_pause : s === "hibernating" ? SLEEP_LAMP.hibernating : SLEEP_LAMP.empty} />
     </g>; })}
+    {/* The specialist crew's desks (not agents): lit only while a real helper job is on them. */}
+    {crew.map((d) => <MapDesk key={d.desk.key} d={d} onRoom={onRoom} />)}
     {Array.from({ length: 60 }, (_, i) => <path key={`pipe${i}`} ref={(el) => { if (el) pipeEls.current[i] = el; }} d="" fill="none" strokeWidth={0.22} strokeLinejoin="round" />)}
     {models.map((m) => <MapAgent key={m.agent.id} m={m} selected={selected === m.agent.id} newborn={(birthStates.get(m.agent.id)?.phase ?? "settled") !== "settled"} mark={birthStates.get(m.agent.id)?.mark ?? false} register={register} onAgent={onAgent} />)}
     {Array.from({ length: 60 }, (_, i) => <circle key={`p${i}`} ref={(el) => { if (el) packetEls.current[i] = el; }} r={0} />)}

@@ -7,6 +7,8 @@
  * First access and recovery use the one-time enrollment link the Fleet host prints (`fleet:admin hub-dashboard-enroll
  * <origin>` → `<origin>/login/#enroll=<token>`): it registers a passkey or sets the password on this device. The token
  * stays in the URL fragment (never sent to a server log) and is removed from the address bar once used. No demo code.
+ * v82: "Forgot password?" and "Lost your authenticator?" — recovery with a recovery code plus one other factor
+ * (dashboard/security/Recovery.tsx); neither signs in by itself.
  */
 import { HOME_PATH, LOGIN_PATH } from "@/dashboard/base";
 import Link from "next/link";
@@ -16,6 +18,7 @@ import { LiveAuth } from "@/dashboard/api/auth";
 import { describeError } from "@/dashboard/api/errors";
 import type { AuthState } from "@/dashboard/api/types";
 import { liveTools } from "@/dashboard/adapter";
+import { ForgotPassword, LostAuthenticator } from "@/dashboard/security/Recovery";
 
 /** Build-time constant (inlined by the bundler). */
 const LIVE = process.env.NEXT_PUBLIC_FLEET_MODE === "live";
@@ -25,7 +28,7 @@ export default function Login() {
   const [auth] = useState(() => (LIVE && liveTools ? liveTools.auth() : null));
   const [st, setSt] = useState<AuthState | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [stage, setStage] = useState<"start" | "enroll-totp" | "totp">("start");
+  const [stage, setStage] = useState<"start" | "enroll-totp" | "totp" | "forgot" | "lost-device">("start");
   const [secret, setSecret] = useState<{ totpSecret: string; otpauth: string } | null>(null);
   const [code, setCode] = useState(""), [busy, setBusy] = useState(false), [message, setMessage] = useState(""), [origin, setOrigin] = useState("");
   const [reverify, setReverify] = useState(false);
@@ -74,6 +77,7 @@ export default function Login() {
     setPassword(""); setCode(""); location.replace(HOME_PATH);
   });
   const passkey = () => step(async () => { await auth!.loginPasskey(); setStage("totp"); });
+  const recovered = (m: string) => { setStage("start"); setCode(""); setPassword(""); setMessage(m); void auth!.state().then(setSt, () => undefined); };
   const totp = () => step(async () => { await auth!.loginTotp(code.trim()); setCode(""); location.replace(HOME_PATH); });
 
   return <main className="min-h-screen w-full bg-slate-950 text-base text-slate-100">
@@ -81,7 +85,7 @@ export default function Login() {
     <div className="mx-auto max-w-xl p-5 sm:p-8">
       <p className="text-xs tracking-[.25em] text-cyan-300">AUTOMATON FLEET</p><h1 className="mt-2 text-xl font-bold">Command Deck</h1><p className="mb-8 mt-1 text-xs text-slate-500">OWNER OPERATIONS / 01</p>
       {!LIVE ? <Panel title="Simulated sign-in"><p className="mb-4 text-amber-200">This is a simulation build: its training sign-in is inside the deck. No real authentication takes place.</p><Link className={button} href="/">Open the simulated deck</Link></Panel>
-        : <Panel title={stage === "enroll-totp" ? "Add your authenticator" : token ? "Add a way to sign in" : "Owner sign-in"}>
+        : <Panel title={stage === "enroll-totp" ? "Add your authenticator" : token ? "Add a way to sign in" : stage === "forgot" || stage === "lost-device" ? "Account recovery" : "Owner sign-in"}>
           {message && <p role="status" className="mb-4 rounded border border-slate-700 px-4 py-3 text-sm text-cyan-200">{message}</p>}
           {stage === "enroll-totp" && secret ? <>
             <p className="mb-3 text-sm text-slate-300">Add this secret to your authenticator app now. It is shown once and never again.</p>
@@ -99,7 +103,9 @@ export default function Login() {
               <label className="mt-3 block text-sm">Repeat the password<input className={input} type="password" autoComplete="new-password" maxLength={256} value={password2} onChange={(e) => setPassword2(e.target.value)} /></label>
               <button className={`${button} mt-4`} disabled={busy || password.length < 12}>{busy ? "Setting…" : "Set password"}</button>
             </form>
-          </> : stage === "totp" ? <>
+          </> : stage === "forgot" && auth ? <ForgotPassword auth={auth} origin={origin} onBack={() => setStage("start")} onDone={recovered} onPasskey={() => { setStage("start"); void passkey(); }} />
+          : stage === "lost-device" && auth ? <LostAuthenticator auth={auth} origin={origin} onBack={() => setStage("start")} onDone={recovered} />
+          : stage === "totp" ? <>
             <p className="mb-3 text-sm text-slate-300">Passkey verified. Enter the current code from your authenticator.</p>
             <label className="text-sm">Authenticator code<input className={input} inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={code} onChange={(e) => setCode(e.target.value)} /></label>
             <button className={`${button} mt-4`} disabled={busy || code.trim().length < 6} onClick={totp}>{busy ? "Checking…" : "Complete sign-in"}</button>
@@ -113,6 +119,10 @@ export default function Login() {
                 <label className="mt-3 block text-sm">Authenticator code<input className={input} inputMode="numeric" name="code" autoComplete="one-time-code" maxLength={8} value={code} onChange={(e) => setCode(e.target.value)} /></label>
                 <button className={`${button} mt-4`} disabled={busy || !password || code.trim().length < 6}>{busy ? "Checking…" : "Sign in"}</button>
               </form>
+              <p className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm">
+                <button type="button" className="text-cyan-300 underline-offset-4 hover:underline" onClick={() => { setMessage(""); setStage("forgot"); }}>Forgot password?</button>
+                <button type="button" className="text-cyan-300 underline-offset-4 hover:underline" onClick={() => { setMessage(""); setStage("lost-device"); }}>Lost your authenticator?</button>
+              </p>
               <p className="my-5 text-center text-xs tracking-widest text-slate-500">OR</p>
               <button className={button} disabled={busy} onClick={passkey}>{busy ? "Waiting for the passkey…" : "Sign in with passkey"}</button>
               <p className="mt-2 text-xs text-slate-400">A passkey is followed by your authenticator code.</p></>}

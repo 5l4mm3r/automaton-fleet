@@ -61,6 +61,7 @@ export async function escalateQuestion(o: {
     taskClass: o.taskClass,
     ...(o.taskId ? { taskId: o.taskId } : {}),
     escalation: { reasonCode: o.decision.escalationReason, requestedTier: o.requestedTier, ...(o.parentRequestId ? { parentRequestId: o.parentRequestId } : {}) },
+    helper: { kind: "escalation", purpose: "decision" }, // v82: recorded with the call (the Virtual advisor's desk)
   }, "founder-v5") as Awaited<ReturnType<MindPorts["infer"]>> & { route?: EscalationResult["route"] };
   // The higher tier's answer becomes observable persistent state (never its reasoning).
   const factKey = `decision:${r.requestId}`;

@@ -35,7 +35,12 @@ import { DiagOverlay, DiagProbe, emptyDiag } from "./hq/diagnostics";
 import { clickSuppressed } from "./hq/nav-state";
 import { RoomHighlight } from "./hq/room-highlight";
 import { workTargets } from "./hq/spots";
-import { navGrid } from "./hq/nav";
+import { clearanceAt, navGrid, reachableFrom, walkable } from "./hq/nav";
+import { CrewDesks } from "./hq/crew";
+import { ALL_CREW_SEATS, crewFootprints, shownBays, type PlacedDesk } from "./hq/crew-layout";
+import { roamCandidates } from "./hq/wander";
+import { HUB_SOUTH, INTAKE } from "./hq/route";
+import { HELPER_ROLES } from "../command/helpers";
 import { stationDesks } from "./hq/choreo";
 import { NAV_BOUNDS } from "./hq/world-build";
 import { CameraRig } from "./hq/camera";
@@ -107,7 +112,7 @@ function Driver({ fps }: { fps: number }) {
   return null;
 }
 
-export default function VirtualScene3D({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, onLost, positionsRef, projectRef, stations, births, screenFeed, redAlert, teams, hoveredRoom = null, onHoverRoom }: {
+export default function VirtualScene3D({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, onLost, positionsRef, projectRef, stations, births, screenFeed, redAlert, teams, hoveredRoom = null, onHoverRoom, crew = [] }: {
   models: AgentModel[]; targets: Map<string, Point>; packets: Packet[]; focus: Focus; prefs: VirtualPrefs; selected: string | null;
   onRoom: (id: DepartmentId) => void; onAgent: (id: string) => void; onLost: () => void;
   positionsRef: MutableRefObject<Map<string, Point>>; projectRef: MutableRefObject<Projector | null>;
@@ -118,6 +123,8 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
   teams: ReadonlyMap<string, string>;
   /** Fleet view: the room under the pointer (outlined), and the hover report. */
   hoveredRoom?: DepartmentId | null; onHoverRoom?: (id: DepartmentId | null) => void;
+  /** The specialist crew's desks with their real helper jobs (not agents). */
+  crew?: readonly PlacedDesk[];
 }) {
   // Some GPU drivers cannot link shadow-map shaders. The first shader failure with shadows on retries the same level
   // without shadow maps (everything else kept); a failure without them hands over to the 2D map.
@@ -140,7 +147,16 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
   // The optional event camera's handle (the transport renderer offers it important real events).
   const director = useRef<TransportDirector | null>(null);
   // The walkable floor: the building's own obstacles plus this Fleet's Agent Floor desks (nav.ts, choreo.ts).
-  const nav = useMemo(() => navGrid([...plan.footprints, ...stationDesks(stations)], NAV_BOUNDS), [plan, stations]);
+  // The specialists' desks are furniture too (their count per role changes only with the number of living agents).
+  const perRole = Math.round(crew.length / HELPER_ROLES.length);
+  const nav = useMemo(() => navGrid([...plan.footprints, ...stationDesks(stations), ...crewFootprints(shownBays(perRole).map((b) => b.bay))], NAV_BOUNDS), [plan, stations, perRole]);
+  // Where an idle agent may stroll: rooms (not Quarters or Estate) and corridors, on reachable floor clear of the walls,
+  // never onto a workstation, a room's work spot, a specialist's desk or an intake (wander.ts).
+  const roam = useMemo(() => {
+    const reach = reachableFrom(nav, HUB_SOUTH);
+    const avoid = [...stations.values(), ...Object.values(plan.spots).flat(), ...ALL_CREW_SEATS, ...Object.values(INTAKE)];
+    return roamCandidates(avoid, (p) => walkable(nav, p) && clearanceAt(nav, p) >= 0.5 && reach(p));
+  }, [nav, stations, plan.spots]);
   const work = useMemo(() => workTargets(models, targets, stations, plan.spots, teams), [models, targets, stations, plan.spots, teams]);
   // Every living agent's own bed in Quarters (sleepers lie on theirs).
   const beds = useMemo(() => new Map<string, Bed>([...bedIndex(models)].map(([id, i]) => [id, bedPoint(i)])), [models]);
@@ -189,7 +205,8 @@ export default function VirtualScene3D({ models, targets, packets, focus, prefs,
     <Beacons spots={plan.beacons} red={redAlert} ambient={ambient} />
     <Stations models={models} stations={stations} births={births} reduceMotion={prefs.reduceMotion} q={q} receivedRef={received} />
     <Beds models={models} q={q} />
-    <Crowd models={models} targets={work.targets} spots={work.spots} meetings={work.meetings} ghostsRef={ghosts} births={births} selected={selected} q={q} reduceMotion={prefs.reduceMotion} positionsRef={positionsRef} onAgent={onAgent} stations={stations} nav={nav} teams={teams} receivedRef={received} beds={beds} />
+    <CrewDesks desks={crew} q={q} reduceMotion={prefs.reduceMotion} />
+    <Crowd models={models} targets={work.targets} spots={work.spots} meetings={work.meetings} ghostsRef={ghosts} births={births} selected={selected} q={q} reduceMotion={prefs.reduceMotion} positionsRef={positionsRef} onAgent={onAgent} stations={stations} nav={nav} teams={teams} receivedRef={received} beds={beds} roam={roam} />
     <DataFlow packets={packets} enabled={prefs.dataFlow} reduceMotion={prefs.reduceMotion} q={q} receivedRef={received} directorRef={director} statsRef={diag} />
     <AdaptiveResolution q={q} />
     <PostFX q={q} />

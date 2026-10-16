@@ -197,3 +197,29 @@ export function lookahead(g: NavGrid, pos: Point, path: readonly Point[], reach:
   }
   return best;
 }
+
+/** Clearance (m) at p: the distance from its cell to the nearest blocked cell (capped at 1 m; 0 when blocked). */
+export const clearanceAt = (g: NavGrid, p: Point) => g.clear[cellOf(g, p)];
+
+/**
+ * The walkable floor connected to `from` (4-way flood fill, once): a test for whether a point can be walked to at all,
+ * so a destination is never on an island a path cannot reach (which would make a walker jump).
+ */
+export function reachableFrom(g: NavGrid, from: Point): (p: Point) => boolean {
+  const seen = new Uint8Array(g.cols * g.rows), s = nearestFree(g, from);
+  if (s >= 0) {
+    const q = new Int32Array(g.cols * g.rows); let head = 0, tail = 0;
+    seen[s] = 1; q[tail++] = s;
+    while (head < tail) {
+      const i = q[head++], r = (i / g.cols) | 0, c = i - r * g.cols;
+      for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const rr = r + dr, cc = c + dc;
+        if (rr < 0 || cc < 0 || rr >= g.rows || cc >= g.cols) continue;
+        const j = rr * g.cols + cc;
+        if (g.blocked[j] || seen[j]) continue;
+        seen[j] = 1; q[tail++] = j;
+      }
+    }
+  }
+  return (p) => seen[cellOf(g, p)] === 1;
+}

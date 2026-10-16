@@ -31,6 +31,7 @@ import crypto from "crypto";
 import type http from "http";
 import { RateLimiter } from "./rate-limit.js";
 import type { PublicPageFunction } from "../postgres/store.js";
+import { BUYER_CONSENT_VERSION, BUYER_CONSENT_WORDING } from "../storefront/consent.js";
 
 export interface PublicPagesPort {
   publicCall(fn: PublicPageFunction, args: unknown[]): Promise<Record<string, unknown>>;
@@ -77,6 +78,21 @@ function threadHtml(thread: unknown): string {
 }
 
 /** The message / brief form: files are read in the browser and sent as JSON with base64 content (no multipart parser server-side). */
+/**
+ * v82: the buyer's consent to immediate supply (CCR 2013 regs 36/37) — two separate, unticked boxes; the form is refused
+ * unless both are ticked (the browser asks first; the server checks again; the database records the wording's version).
+ */
+function consentBoxes(statements: readonly string[]): string {
+  return statements.map((t, i) => `<p><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="c${i + 1}" value="yes" required style="width:auto;margin-top:4px"><span>${esc(t)}</span></label></p>`).join("")
+    + `<input type="hidden" name="consent" value="${esc(BUYER_CONSENT_VERSION)}">`;
+}
+/** Both boxes ticked and the current wording's version: the version to record, or null. */
+function consentGiven(b: Record<string, unknown> | null, n: number): string | null {
+  if (!b) return null;
+  for (let i = 1; i <= n; i++) if (b[`c${i}`] !== "yes") return null;
+  return b.consent === BUYER_CONSENT_VERSION ? BUYER_CONSENT_VERSION : null;
+}
+
 function messageForm(action: string, nonce: string, o: { brief?: boolean } = {}): string {
   return `<div class="card"><h2>${o.brief ? "Send your brief" : "Send a message"}</h2><form id="f">`
     + (o.brief ? `<p><label>Your name<input name="name" maxlength="140" required></label></p><p><label>Your email<input name="email" type="email" maxlength="254" required></label></p>` : "")
@@ -147,6 +163,7 @@ export class PublicPages {
         if (p.length === 2 && !isPost) return await this.order(res, p[1]);
         if (p.length === 5 && p[2] === "file" && UUID.test(p[3]) && /^([1-9]|10)$/.test(p[4]) && !isPost) return await this.file(res, p[1], p[3], Number(p[4]));
         if (p.length === 3 && p[2] === "message" && isPost) return await this.message(req, res, "order", p[1], origin);
+        if (p.length === 3 && p[2] === "consent" && isPost) return await this.consent(req, res, p[1], origin);
       }
       if (p[0] === "enquiry" && TOKEN.test(p[1] ?? "")) {
         if (p.length === 2 && !isPost) return await this.enquiry(res, p[1]);
@@ -241,7 +258,7 @@ export class PublicPages {
     let action = "";
     const q = ref ? `?ref=${ref}` : "";
     if (!o.available) action = `<p class="warn">${o.atCapacity ? "Fully booked right now — please check back soon." : "Not available right now."}</p>`;
-    else if (o.kind === "product") action = `<form method="post" action="/o/${esc(o.slug)}/buy${q}"><button type="submit">Buy with PayPal — ${money(o.priceMinor, o.currency)}</button></form>`;
+    else if (o.kind === "product") action = `<form method="post" action="/o/${esc(o.slug)}/buy${q}">${consentBoxes(BUYER_CONSENT_WORDING.digital_immediate)}<button type="submit">Buy with PayPal — ${money(o.priceMinor, o.currency)}</button></form>`;
     else action = `<p class="muted">Send your brief first: the seller confirms the scope, price and delivery date before you pay.</p>${messageForm(`/o/${o.slug}/enquire${q}`, nonce, { brief: true })}`;
     page(res, 200, o.title, `<p class="muted">${esc(o.brand)}</p><h1>${esc(o.title)}</h1><p>${esc(o.summary)}</p>`
       + `<div class="card"><div class="price">${o.kind === "service" ? "From " : ""}${money(o.priceMinor, o.currency)}</div><p class="muted">${facts.join(" · ")}</p>${o.kind === "product" ? action : ""}</div>`
@@ -274,8 +291,12 @@ export class PublicPages {
   }
 
   private async buy(req: http.IncomingMessage, res: http.ServerResponse, slug: string, origin: string, ref: string | null = null): Promise<void> {
-    await this.body(req);
-    const r = await this.port.publicCall("svc_offer_buy", [slug, origin]);
+    const consent = consentGiven(await this.body(req), BUYER_CONSENT_WORDING.digital_immediate.length);
+    if (!consent) {
+      page(res, 400, "Please confirm", `<h1>Please confirm before buying</h1><p>To get your download straight away, tick both boxes on the offer page: that you want immediate access, and that you understand you lose the 14-day right to cancel once the download is made available.</p><p><a href="/o/${esc(slug)}">Back to the offer</a></p>`, null);
+      return;
+    }
+    const r = await this.port.publicCall("svc_offer_buy", [slug, origin, consent]);
     if (!r.ok) {
       page(res, r.code === "FLEET_BUSY" ? 429 : 409, "Not available", `<h1>Not available right now</h1><p>${r.code === "FLEET_BUSY" ? "Too many open checkouts — please try again later." : "This offer cannot be bought at the moment."}</p><p><a href="/o/${esc(slug)}">Back to the offer</a></p>`, null);
       return;
@@ -318,14 +339,43 @@ export class PublicPages {
     else if (o.checkout === "approved" || o.checkout === "capture_pending") pay = `<p>Confirming your payment with PayPal…</p>`;
     else if (o.checkout === "expired" || o.checkout === "cancelled" || o.checkout === "failed") pay = `<p class="warn">This checkout is no longer open; no payment was taken.</p>`;
     const downloads = Array.isArray(r.downloads) ? r.downloads as Array<Record<string, unknown>> : [];
+    // v82: the buyer's consent to immediate supply: asked before the payment link and the downloads; repeated once recorded.
+    const c = (o.consent ?? {}) as Record<string, any>;
+    const statements = Array.isArray(c.statements) ? (c.statements as unknown[]).map(String) : [];
+    const closed = ["refunded", "reversed", "cancelled"].includes(o.payment) || ["expired", "cancelled", "failed"].includes(o.checkout);
+    const askConsent = !c.recorded && !closed && statements.length > 0;
+    if (askConsent) pay = "";
+    const consentCard = askConsent
+      ? `<div class="card"><h2>${o.payment === "paid" || o.payment === "partially_refunded" ? "Before you download" : "Before you pay"}</h2>`
+        + `<form method="post" action="/order/${esc(token)}/consent">${statements.map((t, i) => `<p><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="c${i + 1}" value="yes" required style="width:auto;margin-top:4px"><span>${esc(t)}</span></label></p>`).join("")}`
+        + `<input type="hidden" name="consent" value="${esc(c.version)}"><button type="submit">Confirm</button></form></div>`
+      : c.recorded && statements.length ? `<div class="card"><h2>Your confirmation</h2><p class="muted">Recorded ${esc(String(c.at).slice(0, 16).replace("T", " "))} UTC</p><ul>${statements.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : "";
     page(res, 200, `Your order — ${o.item}`, `<h1>Your order</h1><p class="muted">${esc(o.item)}</p>`
       + `<div class="card"><div class="price">${money(o.amountMinor, o.currency)}</div><p><strong>${esc(STATUS_WORDS[o.status] ?? o.status)}</strong>${o.dueAt ? ` · due by ${esc(String(o.dueAt).slice(0, 10))}` : ""}</p>${pay}</div>`
+      + (askConsent ? consentCard : "")
       + (o.scope ? `<div class="card"><h2>Agreed scope</h2>${para(o.scope)}</div>` : "")
       + (downloads.length ? `<div class="card"><h2>Your files</h2><ul>${downloads.map((f) => `<li><a href="/order/${esc(token)}/file/${esc(f.deliveryId)}/${esc(f.fileNo)}">${esc(f.fileName)}</a> (${kb(f.sizeBytes)})${f.until ? ` <span class="muted">until ${esc(String(f.until).slice(0, 10))}</span>` : ""}</li>`).join("")}</ul></div>` : "")
       + threadHtml(r.thread)
       + (o.payment === "paid" || o.payment === "partially_refunded" ? messageForm(`/order/${token}/message`, nonce) : "")
-      + (o.offer?.terms ? `<div class="card"><h2>Terms</h2>${para(o.offer.terms)}</div>` : ""),
-      r.seller, { ...(o.payment === "paid" || o.payment === "partially_refunded" ? { nonce } : {}), ...(waiting ? { refreshS: o.checkout === "open" ? 15 : 4 } : {}) });
+      + (o.offer?.terms ? `<div class="card"><h2>Terms</h2>${para(o.offer.terms)}</div>` : "")
+      + (askConsent ? "" : consentCard),
+      r.seller, { ...(o.payment === "paid" || o.payment === "partially_refunded" ? { nonce } : {}), ...(waiting && !askConsent ? { refreshS: o.checkout === "open" ? 15 : 4 } : {}) });
+  }
+
+  /** v82: the buyer's consent given on the order page (a quoted service, or an order made outside an offer page). */
+  private async consent(req: http.IncomingMessage, res: http.ServerResponse, token: string, origin: string): Promise<void> {
+    const b = await this.body(req);
+    const version = b && b.c1 === "yes" && b.c2 === "yes" && b.consent === BUYER_CONSENT_VERSION ? BUYER_CONSENT_VERSION : null;
+    if (!version) {
+      page(res, 400, "Please confirm", `<h1>Please tick both boxes</h1><p>Both statements need your confirmation before we can continue.</p><p><a href="/order/${esc(token)}">Back to your order</a></p>`, null);
+      return;
+    }
+    const r = await this.port.publicCall("svc_order_consent", [token, origin, version]);
+    if (!r.ok) {
+      page(res, r.code === "FLEET_NOT_FOUND" ? 404 : 409, "Not available", `<h1>Not available</h1><p>${r.code === "FLEET_ORDER_CLOSED" ? "This order is closed." : "This confirmation could not be recorded."}</p><p><a href="/order/${esc(token)}">Back to your order</a></p>`, null);
+      return;
+    }
+    res.writeHead(303, { location: `/order/${token}`, "cache-control": "no-store", "referrer-policy": "no-referrer" }).end();
   }
 
   private async file(res: http.ServerResponse, token: string, delivery: string, n: number): Promise<void> {

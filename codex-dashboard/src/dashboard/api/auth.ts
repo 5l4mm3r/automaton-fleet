@@ -9,6 +9,11 @@
  * one-time link `<origin>/login/#enroll=<token>` (15 minutes). The dashboard reads the token from the URL fragment (never
  * sent to any server log) and registers a passkey or sets the password with it; with no authenticator yet, it shows the
  * TOTP secret ONCE and confirms a code.
+ *
+ * Recovery from the sign-in page (v82; two factors each; never a session — the normal sign-in follows):
+ *   forgot password      authenticator code + one recovery code → a new password;
+ *   lost authenticator   password (or a passkey) + one recovery code → a new authenticator, confirmed with a code from it.
+ * Recovery codes are issued in Security (a fresh confirmation first) and shown once.
  */
 import { FleetApiError } from "./errors";
 import type { GatewayClient } from "./client";
@@ -91,6 +96,52 @@ export class LiveAuth {
   async loginTotp(code: string): Promise<void> {
     const r = await this.c.post("/api/auth/login/totp", { code });
     if (!r.json.ok) throw new FleetApiError(r.json.code ?? "FLEET_TOTP_INVALID", undefined, r.status);
+  }
+
+  /** Forgot password: a current authenticator code and one unused recovery code set a new password (every session ends). */
+  async recoverPassword(code: string, recoveryCode: string, password: string): Promise<{ codesLeft: number | null }> {
+    const r = await this.c.post("/api/auth/recover/password", { code, recoveryCode, password });
+    if (!r.json.ok) throw new FleetApiError(r.json.code ?? "FLEET_RECOVERY_INVALID", r.json.reason, r.status);
+    this.c.csrf.clear();
+    return { codesLeft: typeof r.json.codesLeft === "number" ? r.json.codesLeft : null };
+  }
+
+  /**
+   * Lost authenticator, step 1: the password (or this device's passkey, when `password` is null) and one unused recovery
+   * code. Returns the NEW authenticator's secret, shown once, and a ticket for step 2.
+   */
+  async recoverAuthenticator(recoveryCode: string, password: string | null): Promise<{ ticket: string; totpSecret: string; otpauth: string; codesLeft: number | null }> {
+    let response: unknown = undefined;
+    if (password === null) {
+      const o = await this.c.post("/api/auth/recover/options", {});
+      if (!o.json.ok) throw new FleetApiError(o.json.code ?? "FLEET_UNAVAILABLE", undefined, o.status);
+      response = await this.c.webauthn.get(o.json.options);
+    }
+    const r = await this.c.post("/api/auth/recover/authenticator", password === null ? { recoveryCode, response } : { recoveryCode, password });
+    if (!r.json.ok) throw new FleetApiError(r.json.code ?? "FLEET_RECOVERY_INVALID", undefined, r.status);
+    return { ticket: String(r.json.ticket), totpSecret: String(r.json.totpSecret), otpauth: String(r.json.otpauth), codesLeft: typeof r.json.codesLeft === "number" ? r.json.codesLeft : null };
+  }
+
+  /** Lost authenticator, step 2: a code from the NEW authenticator replaces the old one (every session ends). */
+  async confirmRecoveredAuthenticator(ticket: string, code: string): Promise<void> {
+    const r = await this.c.post("/api/auth/recover/authenticator/confirm", { ticket, code });
+    if (!r.json.ok) throw new FleetApiError(r.json.code ?? "FLEET_RECOVERY_INVALID", undefined, r.status);
+    this.c.csrf.clear();
+  }
+
+  /** How many unused recovery codes are left (never the codes themselves). */
+  async recoveryState(): Promise<{ remaining: number; issuedAt: string | null; lastUsedAt: string | null }> {
+    const { status, json } = await this.c.getJson("/api/account/recovery");
+    if (!json.ok) throw new FleetApiError(json.code ?? "FLEET_SESSION_INVALID", undefined, status);
+    return { remaining: Number(json.remaining ?? 0), issuedAt: json.issuedAt ?? null, lastUsedAt: json.lastUsedAt ?? null };
+  }
+
+  /** A new set of recovery codes (a fresh confirmation first): shown ONCE; earlier unused codes stop working. */
+  async issueRecoveryCodes(): Promise<string[]> {
+    const stepup = await this.c.stepUp("recovery_codes_issue", "{}");
+    const r = await this.c.write("/api/account/recovery-codes", { stepup });
+    if (!r.json.ok) throw new FleetApiError(r.json.code ?? "FLEET_OPERATION_FAILED", r.json.reason, r.status);
+    return Array.isArray(r.json.codes) ? r.json.codes.map(String) : [];
   }
 
   async logout(): Promise<void> {

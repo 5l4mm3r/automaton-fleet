@@ -311,11 +311,11 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await details.getByText(words(j[0].kind), { exact: false }).first().waitFor();
     // The 3D scene (WebGL through SwiftShader) renders the same agents.
     await page.getByRole("button", { name: "Display" }).click();
-    await page.getByLabel("View").selectOption("3d");
+    await page.getByRole("combobox", { name: /^View/ }).selectOption("3d");
     await page.locator("canvas").first().waitFor();
     await labels.getByRole("button", { name: /^Agent-1,/ }).waitFor();
     expect(await page.getByText("The 3D view stopped").count()).toBe(0);
-    await page.getByLabel("View").selectOption("map");
+    await page.getByRole("combobox", { name: /^View/ }).selectOption("map");
     expect(await page.getByText("The 3D view stopped").count()).toBe(0); // leaving 3D is not a failure
     // The live feed is interrupted (reads fail), says so, keeps the last authoritative positions, then recovers.
     await page.route("**/api/read**", (r) => r.abort());
@@ -457,6 +457,96 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await page.getByText("None. Every outward action is held.").waitFor();
     expect((await R.q(`SELECT count(*)::int n FROM fleet.fleet_outward_release WHERE expires_at > now()`))[0].n).toBe(0);
     expect(await main()).not.toContain("economy-sales close");
+  });
+
+  it("Virtual (UI 0.21.0): a specialist wakes at its desk from a real helper job, then sleeps; specialists are not agents", async () => {
+    await page.evaluate(() => localStorage.setItem("fleet.virtual.prefs.v1", JSON.stringify({ renderer: "map", quality: "medium", fps: 30, reduceMotion: false, ambient: true, dataFlow: true })));
+    await page.goto(`${ORIGIN}/#Virtual`);
+    const labels = page.getByLabel("Agents", { exact: true });
+    await labels.getByRole("button", { name: /^Agent-1,/ }).waitFor();
+    const agentsBefore = await labels.getByRole("button").count();
+    await page.getByRole("button", { name: /^Library \/ Research: / }).click();
+    const details = page.getByRole("complementary", { name: "Selection details" });
+    const crew = details.getByRole("region", { name: "Specialists" }).or(details.getByLabel("Specialists"));
+    await crew.getByText(/Helpers: 0 working/).first().waitFor({ timeout: 20_000 });
+    // A real routine chore in flight, reserved as FleetController does (the route snapshot carries the purpose the agent
+    // stated): a researcher wakes for Agent-1 (v82: the role is the recorded purpose, never the room).
+    const request = crypto.randomUUID();
+    await R.q(`INSERT INTO fleet.fleet_cognition_inflight (agent_id, request_id, estimate_cents) VALUES ($1, $2, 1)`, [A.id, request]);
+    await R.q(`UPDATE fleet.fleet_cognition_inflight SET route_tier = 'T1', route = $2::jsonb WHERE request_id = $1`,
+      [request, JSON.stringify({ taskClass: "page_interpretation", scope: "task_step", tier: "T1", helper: { kind: "routine", purpose: "research" } })]);
+    await crew.getByText("Research chore (page interpretation) for Agent-1", { exact: false }).first().waitFor({ timeout: 20_000 });
+    expect(await crew.textContent()).toMatch(/Helpers: 1 working/);
+    expect(await crew.textContent()).toContain("SPECIALISTS (NOT AGENTS)");
+    // The reservation ends with no result: the desk says so for the linger, then the specialist goes back to sleep.
+    await R.q(`DELETE FROM fleet.fleet_cognition_inflight WHERE request_id = $1`, [request]);
+    expect(await R.one(`(SELECT state FROM fleet.fleet_helper_jobs WHERE request_id = $1)`, [request])).toBe("ended");
+    await crew.getByText(/ended without a result/i).first().waitFor({ timeout: 20_000 });
+    await crew.getByText(/Helpers: 0 working/).first().waitFor({ timeout: 45_000 });
+    await page.keyboard.press("Escape");
+    // Back in the Fleet view, the agent labels are exactly the agents (a specialist is never an agent label).
+    await labels.getByRole("button", { name: /^Agent-1,/ }).waitFor();
+    await expect.poll(() => labels.getByRole("button").count(), { timeout: 15_000 }).toBe(agentsBefore);
+  });
+
+  it("account recovery (v82) in the browser: recovery codes from Security; Forgot password? and Lost your authenticator? on the sign-in page", async () => {
+    const NEWPW = "an e2e recovery passphrase 82";
+    /** A code for a time step after the last accepted one (waits for the next step when needed). */
+    const fresh = async (s: string) => {
+      for (;;) {
+        const last = Number(await R.one(`(SELECT last_counter FROM fleet.fleet_admin_totp WHERE id = 1)`));
+        const now = Math.floor(Date.now() / 30_000);
+        const step = Math.max(last + 1, now - 1);
+        if (step <= now + 1) return totp(s, step * 30_000);
+        await new Promise((r) => setTimeout(r, 30_000 - (Date.now() % 30_000) + 300));
+      }
+    };
+    // Security → Sign-in methods → Recovery codes: a fresh passkey confirmation, then ten codes shown once.
+    await page.goto(`${ORIGIN}/#Security`);
+    await page.getByRole("button", { name: "Create recovery codes" }).click();
+    await passkeyIfAsked();
+    await page.getByRole("button", { name: "I have saved them" }).waitFor();
+    const codes = (await page.locator("ol.font-mono li").allTextContents()).map((c) => c.trim());
+    expect(codes).toHaveLength(10);
+    await page.getByRole("button", { name: "I have saved them" }).click();
+    await page.getByText("10 unused codes left", { exact: false }).waitFor();
+    expect(await page.content()).not.toContain(codes[0]);
+    // Signed out: "Forgot password?" — authenticator code + recovery code → a new password (it does not sign in).
+    await page.context().clearCookies();
+    await page.goto(`${ORIGIN}/login/`);
+    await page.getByRole("button", { name: "Forgot password?" }).click();
+    await page.getByRole("heading", { name: "Forgot your password?" }).waitFor();
+    await page.getByLabel("Authenticator code").fill("000000");
+    await page.getByLabel("Recovery code").fill(codes[0]);
+    await page.getByLabel("New password (at least 12 characters)").fill(NEWPW);
+    await page.getByLabel("Repeat the new password").fill(NEWPW);
+    await page.getByRole("button", { name: "Set new password" }).click();
+    await page.getByRole("alert").filter({ hasText: "Those details were not accepted" }).waitFor();
+    await page.getByLabel("Authenticator code").fill(await fresh(secret));
+    await page.getByRole("button", { name: "Set new password" }).click();
+    await page.getByRole("status").filter({ hasText: "Your new password is set" }).waitFor();
+    expect(await page.getByText("9 recovery codes left", { exact: false }).count()).toBe(1);
+    expect(page.url()).toMatch(/\/login\/$/); // still signed out
+    // "Lost your authenticator?" — password + recovery code → a new authenticator, confirmed with a code from it.
+    await page.getByRole("button", { name: "Lost your authenticator?" }).click();
+    await page.getByLabel("Recovery code").fill(codes[1]);
+    await page.getByLabel("Password", { exact: true }).fill(NEWPW);
+    await page.getByRole("button", { name: "Continue with password" }).click();
+    await page.getByRole("button", { name: "Confirm new authenticator" }).waitFor();
+    const newSecret = (await page.locator("p.font-mono").first().textContent())!.trim();
+    expect(newSecret).toMatch(/^[A-Z2-7]{32}$/);
+    expect(newSecret).not.toBe(secret);
+    await page.getByLabel("Code from the NEW authenticator").fill(totp(newSecret));
+    await page.getByRole("button", { name: "Confirm new authenticator" }).click();
+    await page.getByRole("status").filter({ hasText: "Your new authenticator is active" }).waitFor();
+    secret = newSecret;
+    // The normal sign-in with the new password and the new authenticator.
+    await page.getByLabel("Password", { exact: true }).fill(NEWPW);
+    await page.getByLabel("Authenticator code").fill(await fresh(secret));
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.waitForURL(`${ORIGIN}/`);
+    await page.getByText("LIVE · AUTHORITATIVE FLEET DATA", { exact: false }).waitFor();
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_notifications WHERE class = 'RED' AND code IN ('ADMIN_PASSWORD_RESET_RECOVERY','ADMIN_AUTHENTICATOR_REPLACED'))`))).toBe(2);
   });
 
   it("an unreachable gateway is shown as unreachable — never fictional data", async () => {

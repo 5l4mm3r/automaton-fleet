@@ -102,7 +102,24 @@ export interface RouteRequest {
   escalation?: { reasonCode: string; requestedTier: Tier; parentRequestId?: string };
   /** The consequential action this output may directly lead to (router-forced minimum). */
   actionClass?: string;
+  /**
+   * v82: a helper call's own record — what kind of helper call it is and what the agent says it is FOR. Observability only
+   * (the Virtual station's specialist desks): it never influences the tier or the price.
+   */
+  helper?: { kind: HelperCallKind; purpose: HelperPurpose };
 }
+
+/** v82: the helper calls a founder makes besides its own steps. */
+export const HELPER_CALL_KINDS = Object.freeze(["routine", "escalation", "review"] as const);
+export type HelperCallKind = (typeof HELPER_CALL_KINDS)[number];
+/** v82: what a helper call is for, as the agent records it (a routine chore names one of the first four). */
+export const ROUTINE_PURPOSES = Object.freeze(["research", "marketing", "production", "customer_support"] as const);
+export const HELPER_PURPOSES = Object.freeze([...ROUTINE_PURPOSES, "quality_review", "decision"] as const);
+export type HelperPurpose = (typeof HELPER_PURPOSES)[number];
+/** Which purposes each kind may carry (an escalation is a decision; an independent review is a quality review). */
+const HELPER_KIND_PURPOSES: Readonly<Record<HelperCallKind, readonly string[]>> = Object.freeze({
+  routine: ROUTINE_PURPOSES, escalation: ["decision"], review: ["quality_review"],
+});
 
 export interface RouteDecision {
   tier: Tier;
@@ -129,7 +146,7 @@ export class RouteError extends Error {
   }
 }
 
-const ALLOWED_KEYS = new Set(["taskClass", "taskId", "escalation", "actionClass"]);
+const ALLOWED_KEYS = new Set(["taskClass", "taskId", "escalation", "actionClass", "helper"]);
 const ALLOWED_ESCALATION_KEYS = new Set(["reasonCode", "requestedTier", "parentRequestId"]);
 const UUIDISH = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -159,6 +176,14 @@ export function parseRouteRequest(raw: unknown): RouteRequest {
     if (typeof e.requestedTier !== "string" || !(TIER_ORDER as readonly string[]).includes(e.requestedTier) || e.requestedTier === "T0") throw new RouteError("FLEET_ROUTE_INVALID", "requestedTier must be T1..T3");
     if (e.parentRequestId !== undefined && (typeof e.parentRequestId !== "string" || !UUIDISH.test(e.parentRequestId))) throw new RouteError("FLEET_ROUTE_INVALID", "parentRequestId must be a request id");
     out.escalation = { reasonCode: e.reasonCode, requestedTier: e.requestedTier as Tier, ...(typeof e.parentRequestId === "string" ? { parentRequestId: e.parentRequestId } : {}) };
+  }
+  if (x.helper !== undefined) {
+    const h = x.helper as Record<string, unknown>;
+    if (!h || typeof h !== "object" || Array.isArray(h) || Object.keys(h).some((k) => k !== "kind" && k !== "purpose")) throw new RouteError("FLEET_ROUTE_INVALID", "helper is { kind, purpose }");
+    if (typeof h.kind !== "string" || !(HELPER_CALL_KINDS as readonly string[]).includes(h.kind)) throw new RouteError("FLEET_ROUTE_INVALID", "helper.kind is routine, escalation or review");
+    if (typeof h.purpose !== "string" || !HELPER_KIND_PURPOSES[h.kind as HelperCallKind].includes(h.purpose)) throw new RouteError("FLEET_ROUTE_INVALID", `helper.purpose for ${h.kind}: ${HELPER_KIND_PURPOSES[h.kind as HelperCallKind].join(", ")}`);
+    if (h.kind === "escalation" && !out.escalation) throw new RouteError("FLEET_ROUTE_INVALID", "an escalation helper record needs the escalation itself");
+    out.helper = { kind: h.kind as HelperCallKind, purpose: h.purpose as HelperPurpose };
   }
   return out;
 }

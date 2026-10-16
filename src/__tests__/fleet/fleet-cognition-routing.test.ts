@@ -87,6 +87,22 @@ describe("router: tier from the task only", () => {
   });
 });
 
+describe("v82: a helper call's own record (kind and stated purpose) — validated, never a routing input", () => {
+  it("accepts the closed kinds and purposes, refuses anything else, and never changes the tier", () => {
+    const plain = route(parseRouteRequest({ taskClass: "page_interpretation" }));
+    const tagged = parseRouteRequest({ taskClass: "page_interpretation", helper: { kind: "routine", purpose: "marketing" } });
+    expect(tagged.helper).toEqual({ kind: "routine", purpose: "marketing" });
+    expect(route(tagged)).toEqual(plain);
+    expect(parseRouteRequest({ taskClass: "agent_step", escalation: { reasonCode: "HIGH_CONSEQUENCE", requestedTier: "T3" }, helper: { kind: "escalation", purpose: "decision" } }).helper)
+      .toEqual({ kind: "escalation", purpose: "decision" });
+    expect(parseRouteRequest({ taskClass: "agent_step", helper: { kind: "review", purpose: "quality_review" } }).helper).toEqual({ kind: "review", purpose: "quality_review" });
+    for (const bad of [{ kind: "routine", purpose: "decision" }, { kind: "routine" }, { kind: "crew", purpose: "research" }, { kind: "routine", purpose: "research", wealth: 1 },
+                       { kind: "escalation", purpose: "decision" }, "research", [{ kind: "routine", purpose: "research" }]]) {
+      expect(() => parseRouteRequest({ taskClass: "agent_step", helper: bad }), JSON.stringify(bad)).toThrow(RouteError);
+    }
+  });
+});
+
 describe("Critical Decision Packet: the question, not the job", () => {
   function state() {
     const root = tmp();
@@ -476,7 +492,8 @@ describe("founder runtime: task classes and escalation (new runtimes only)", () 
     expect(sent).toHaveLength(1);
     expect(sent[0].messages).toHaveLength(1);
     expect(String((sent[0].messages[0] as { content: string }).content)).toMatch(/^CRITICAL DECISION PACKET \(fleet-decision-v1\)/);
-    expect(sent[0].route).toEqual({ taskClass: "evidence_conflict_resolution", escalation: { reasonCode: "EVIDENCE_CONFLICT", requestedTier: "T3", parentRequestId: "22222222-2222-4222-8222-222222222222" } });
+    expect(sent[0].route).toEqual({ taskClass: "evidence_conflict_resolution", escalation: { reasonCode: "EVIDENCE_CONFLICT", requestedTier: "T3", parentRequestId: "22222222-2222-4222-8222-222222222222" },
+      helper: { kind: "escalation", purpose: "decision" } }); // v82: recorded with the call
     const facts = JSON.parse(fs.readFileSync(path.join(mem, "facts.json"), "utf8"));
     expect(JSON.parse(facts[r.factKey])).toMatchObject({ answer: "Decision: still run it; margin £10.24", tier: "T3", model: OPUS, reason: "EVIDENCE_CONFLICT" });
     expect(r.packetBytes).toBeGreaterThan(0);

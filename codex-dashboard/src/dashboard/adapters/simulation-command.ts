@@ -3,12 +3,21 @@
  * whole build says so. Events are recorded only when the operator runs a simulated command (plus a few fixture events
  * describing the fixture agents), so the simulated Virtual Command Centre moves only because something "happened" in
  * the simulation — the same rule as LIVE. A LIVE build never includes this module (adapter.simulation.ts only).
+ *
+ * Helper activity (the Virtual specialists) follows the same rule: a fictional helper job exists only when the operator
+ * runs a simulated command for a fictional agent (a mission → a routine chore; ending one → a deliverable review and its
+ * inspection; a money command → a spend review; a trading day → each working agent's routine chore and one critical
+ * question). Each fictional job carries the purpose the simulated command implies (a mission's role → research / marketing /
+ * production / customer support; a review → quality review; an inspection; a money command → spend review; a critical
+ * question → decision) and its state (running, then finished) — never guessed from a room. The read is marked simulated
+ * and every job's outcome says "simulated".
  */
 import { SimulationAdapter } from "./simulation";
 import type { Command, Fleet } from "../model";
 import { economicsFrom } from "../command/economics";
 import { mergeEvents, toFleetEvent, type FleetEvent } from "../command/events";
 import type { CommandView, Pulse, Row } from "../command/view";
+import type { HelperJob, HelperKind, HelperPurpose, HelperRead, HelperTier } from "../command/helpers";
 
 /** Fictional Genesis allocation (100 % wallet health) for the simulation fixture. */
 export const SIMULATION_GENESIS_MINOR = 100_000;
@@ -36,11 +45,50 @@ const SIMULATION_PROJECT = (at: string): Row => ({
   events: [],
 });
 
+/** A fictional agent's routine chore by its fictional role (the same task classes the real T1 tier runs). */
+const ROLE_TASK: Readonly<Record<string, string>> = Object.freeze({ Research: "research_triage", Marketing: "formatting", "Opportunity hunt": "query_formulation", Operations: "basic_summary", Communications: "classification" });
+/** The purpose a fictional agent's chore is recorded with, by its fictional role (default: production). */
+const ROLE_PURPOSE: Readonly<Record<string, HelperPurpose>> = Object.freeze({ Research: "research", Marketing: "marketing", "Opportunity hunt": "research", Operations: "production", Communications: "customer_support" });
+const KIND_PURPOSE: Readonly<Record<Exclude<HelperKind, "routine">, HelperPurpose>> = Object.freeze({ escalation: "decision", review: "quality_review", inspection: "inspection", fleet_review: "spend_review" });
+const HELPER_WINDOW_S = 600;
+
+interface SimJob { id: string; agentId: string; kind: HelperKind; taskClass: string | null; purpose: HelperPurpose; tier: HelperTier | null; startedAt: number | null; durationMs: number; knownAt: number }
+
 export class SimulationDeckAdapter {
   readonly mode = "simulation" as const;
   private readonly engine = new SimulationAdapter();
   private log: FleetEvent[] = [];
   private fleet: Fleet | null = null;
+  private jobs: SimJob[] = [];
+  private jobSeq = 0;
+  private jobsToday = { day: "", routine: 0, escalation: 0, review: 0, inspection: 0, fleetReview: 0 };
+
+  /** Record one fictional helper job (in flight for a few seconds, or — a review / inspection — known after the fact). */
+  private job(agentId: string, kind: HelperKind, taskClass: string | null = null, routinePurpose: HelperPurpose = "production") {
+    const now = Date.now(), id = `sim-h${++this.jobSeq}`, after = kind === "review" || kind === "inspection";
+    const tier: HelperTier | null = kind === "routine" ? "T1" : kind === "escalation" ? "T3" : kind === "review" ? "T2" : null;
+    const purpose = kind === "routine" ? routinePurpose : KIND_PURPOSE[kind];
+    this.jobs.unshift({ id, agentId, kind, taskClass, purpose, tier, startedAt: after ? null : now, durationMs: 8_000 + (this.jobSeq * 3_700) % 16_000, knownAt: now });
+    const day = new Date(now).toISOString().slice(0, 10);
+    if (this.jobsToday.day !== day) this.jobsToday = { day, routine: 0, escalation: 0, review: 0, inspection: 0, fleetReview: 0 };
+    // Every fictional job records its purpose: today's unrecorded count stays 0 in the simulation.
+    this.jobsToday[kind === "fleet_review" ? "fleetReview" : kind]++;
+    this.jobs = this.jobs.slice(0, 200);
+  }
+
+  /** The `helpers` read over the fictional jobs (same shape and window as LIVE; marked simulated). */
+  private helpers(): HelperRead {
+    const now = Date.now(), iso = (t: number) => new Date(t).toISOString();
+    const jobs: HelperJob[] = this.jobs.flatMap((j) => {
+      const end = j.startedAt === null ? j.knownAt : j.startedAt + j.durationMs, running = j.startedAt !== null && end > now;
+      if (!running && now - end > HELPER_WINDOW_S * 1000) return [];
+      return [{ id: j.id, agentId: j.agentId, kind: j.kind, taskClass: j.taskClass, tier: j.tier, purpose: j.purpose, state: running ? "running" as const : "finished" as const, startedAt: j.startedAt === null ? null : iso(j.startedAt),
+        finishedAt: running ? null : iso(end), knownAt: iso(j.knownAt), outcome: running ? null : "simulated" }];
+    });
+    const day = new Date(now).toISOString().slice(0, 10), t = this.jobsToday.day === day ? this.jobsToday : { routine: 0, escalation: 0, review: 0, inspection: 0, fleetReview: 0 };
+    return { asOf: iso(now), windowS: HELPER_WINDOW_S, jobs, receivedAt: now, simulated: true,
+      today: { routine: t.routine, escalation: t.escalation, review: t.review, inspection: t.inspection, fleetReview: t.fleetReview, unrecorded: 0 } };
+  }
 
   constructor() {
     const t = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
@@ -71,6 +119,20 @@ export class SimulationDeckAdapter {
       if (command.op === "tick") {
         const extra = after.agents.filter((a) => a.status === "active").map((a) => toFleetEvent({ at: new Date().toISOString(), type: "settlement_recorded", agentId: a.id, actor: "simulation", detail: {} }));
         this.log = mergeEvents(this.log, extra.filter((x): x is FleetEvent => x !== null));
+      }
+      // Fictional helper jobs, only for what the operator just ran.
+      const subject = agentId ? after.agents.find((a) => a.id === agentId) : undefined;
+      if (command.op === "mission" && subject) {
+        const role = String(command.args.role ?? "");
+        this.job(subject.id, "routine", ROLE_TASK[role] ?? "basic_summary", ROLE_PURPOSE[role] ?? "production");
+        if (role === "Research") this.job(subject.id, "routine", "page_interpretation", "research");
+      } else if (command.op === "mission_end" && subject) { this.job(subject.id, "review"); this.job(subject.id, "inspection"); }
+      else if ((command.op === "fund" || command.op === "transfer" || command.op === "topup") && subject) this.job(subject.id, "fleet_review");
+      else if (command.op === "tick") {
+        const working = after.agents.filter((a) => a.status === "active" && !a.paused && a.hibernation?.state !== "hibernating");
+        for (const a of working.slice(0, 3)) this.job(a.id, "routine", ROLE_TASK[a.role] ?? "basic_summary", ROLE_PURPOSE[a.role] ?? "production");
+        const lowest = [...working].sort((a, b) => a.cash - b.cash)[0];
+        if (lowest) this.job(lowest.id, "escalation");
       }
     }
     this.fleet = after;
@@ -104,7 +166,7 @@ export class SimulationDeckAdapter {
       projects: [SIMULATION_PROJECT(this.log.find((e) => e.type === "project_created")?.at ?? "")], projectSummary: { active: 1, planning: 0, completed: 0, cancelled: 0, agentsCollaborating: 2, plannedTimeSavedHours: 14, note: "Simulation: fictional project." },
       knowledge: [{ agentId: "A-001", topic: "demand", subject: "Independent research services (fictional)", claim: "Fictional claim for the simulation.", observedAt: this.log.at(-1)?.at }],
       dependencies: [], overview: { currency: "GBP", activeVentures: f.agents.filter((a) => a.status !== "dead").length },
-      treasury: { unallocatedMinor: f.treasury, lifetimeContributionMinor: 0, flows30d: {} },
+      treasury: { unallocatedMinor: f.treasury, lifetimeContributionMinor: 0, flows30d: {} }, helpers: this.helpers(),
       settings: { genesisCapital: { currency: "GBP", minor: SIMULATION_GENESIS_MINOR }, replication: { auto_birth_enabled: f.policy.autoBirth, population_ceiling: f.policy.maxAgents, window_hours: 24 },
         missions: null, risk: null, flags: { registryReplicationSwitch: false, maxAgents: f.policy.maxAgents } },
       unavailable: ["risk policy (simulation)", "mission policy (simulation)"],
@@ -116,6 +178,6 @@ export class SimulationDeckAdapter {
 
   async pulse(): Promise<Pulse> {
     const f = await this.snapshot();
-    return { fetchedAt: new Date().toISOString(), agents: f.agents, events: this.log.slice(0, 60) };
+    return { fetchedAt: new Date().toISOString(), agents: f.agents, events: this.log.slice(0, 60), helpers: this.helpers() };
   }
 }

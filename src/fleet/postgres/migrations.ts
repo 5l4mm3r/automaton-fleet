@@ -88,9 +88,10 @@ import { V78_SQL } from "./migrations-phase78.js";
 import { V79_SQL } from "./migrations-phase79.js";
 import { V80_SQL } from "./migrations-phase80.js";
 import { V81_SQL } from "./migrations-phase81.js";
+import { V82_SQL } from "./migrations-phase82.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 81;
+export const FLEET_PG_SCHEMA_VERSION = 82;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1267,6 +1268,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 79, name: "business_operator", sql: V79_SQL },
   { version: 80, name: "acquisition_channels", sql: V80_SQL },
   { version: 81, name: "launch_dashboard", sql: V81_SQL },
+  { version: 82, name: "recovery_consent_helpers", sql: V82_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1359,7 +1361,9 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   // delivery from reviewed files, enquiry and retention housekeeping).
   "svc_offer_page(text)",
   "svc_offer_preview(text, integer)",
-  "svc_offer_buy(text, text)",
+  // v82: the buyer's consent to immediate supply travels with the purchase; an order page records it for other orders.
+  "svc_offer_buy(text, text, text)",
+  "svc_order_consent(text, text, text)",
   "svc_offer_enquire(text, text, text, text, text, jsonb)",
   "svc_enquiry_page(text)",
   "svc_order_page(text)",
@@ -1647,6 +1651,14 @@ export const DASHBOARD_API_FUNCTIONS: readonly string[] = Object.freeze([
   "dash_session_end(text, text)",
   "dash_stepup_record(text, text, text, text, text)",
   "dash_call(text, text, text, text, text, text)",
+  // v82: owner sign-in recovery (recovery codes; forgot password; lost authenticator).
+  "dash_recovery_valid(text)",
+  "dash_recovery_codes_issue(text, text, text[], text)",
+  "dash_recovery_codes_state(text)",
+  "dash_recovery_password_reset(text, text, text)",
+  "dash_recovery_totp_begin(text, text, bytea, text)",
+  "dash_recovery_totp_pending(text)",
+  "dash_recovery_totp_confirm(text, bigint, text)",
 ]);
 
 /** Schema v10: the only functions whose bodies may write the ledger tables (append-only double entry). */

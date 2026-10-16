@@ -1,11 +1,12 @@
 /**
- * LIVE reads for Fleet Command and the Virtual Command Centre — existing gateway read operations only (no new backend):
+ * LIVE reads for Fleet Command and the Virtual Command Centre — gateway read operations only:
  *   settings (Genesis allocation, policies, flags) · hub agents (each agent's wallet) · risk (per living agent) ·
  *   events (FleetController's event log) · hub capital / ventures / opportunities / dependencies / overview / treasury ·
- *   knowledge · projects (multi-agent team projects).
+ *   knowledge · projects (multi-agent team projects) · helpers (real helper activity, the newest read: what wakes the
+ *   Virtual specialists; an older gateway answers FLEET_UNKNOWN_OP and the specialists are shown asleep, labelled).
  * Same rules as the snapshot: each section is the backend's answer or listed unavailable; a signed-out session throws.
  * Rate: one command view is ~10 reads plus one `risk` read per living agent, the risk part at most every RISK_TTL_MS
- * (50 agents stay far inside the gateway's 600 requests/minute). The pulse is two reads.
+ * (50 agents stay far inside the gateway's 600 requests/minute). The pulse is three reads.
  */
 import { FleetApiError } from "./errors";
 import type { GatewayClient } from "./client";
@@ -14,10 +15,13 @@ import { economicsFrom, type AgentEconomics } from "../command/economics";
 import { toFleetEvent, type FleetEvent } from "../command/events";
 import type { CommandView, Pulse, Row } from "../command/view";
 import { toAgent } from "../live/mapping";
+import { toHelperRead, type HelperRead } from "../command/helpers";
 
 const RISK_TTL_MS = 90_000;
 const EVENT_LIMIT = 300;
 const PULSE_EVENT_LIMIT = 60;
+/** After an older gateway answers FLEET_UNKNOWN_OP for `helpers`, ask again only this much later (a deploy may add it). */
+const HELPERS_RETRY_MS = 5 * 60_000;
 
 async function read<T>(c: GatewayClient, op: string, args: Record<string, unknown>, missing: string[], name: string): Promise<T | null> {
   try {
@@ -34,12 +38,32 @@ const events = (x: unknown): FleetEvent[] => rows(x).map(toFleetEvent).filter((e
 
 export class CommandReader {
   private risk = new Map<string, { at: number; data: Row | null }>();
+  private helpersUnsupportedAt = 0;
+
+  /**
+   * The `helpers` read: real helper jobs of the last window plus any in flight, each with the purpose the agent recorded
+   * and its recorded state (a gateway without them parses as "purpose not recorded": no desk wakes). null = unavailable
+   * (an older gateway answers FLEET_UNKNOWN_OP — then not asked again for HELPERS_RETRY_MS — or the read failed); never filled in.
+   */
+  private async helpers(missing: string[]): Promise<HelperRead | null> {
+    if (Date.now() - this.helpersUnsupportedAt < HELPERS_RETRY_MS) { missing.push("helper activity"); return null; }
+    try {
+      const r = toHelperRead(await this.c.read<unknown>("helpers", {}), Date.now());
+      if (!r) missing.push("helper activity");
+      return r;
+    } catch (e) {
+      if (e instanceof FleetApiError && e.code === "FLEET_SESSION_INVALID") throw e;
+      if (e instanceof FleetApiError && e.code === "FLEET_UNKNOWN_OP") this.helpersUnsupportedAt = Date.now();
+      missing.push("helper activity");
+      return null;
+    }
+  }
 
   constructor(private readonly c: GatewayClient) {}
 
   async load(): Promise<CommandView> {
     const c = this.c, missing: string[] = [];
-    const [settings, hubAgents, ev, capital, ventures, opportunities, dependencies, overview, treasury, knowledge, agents, projects] = await Promise.all([
+    const [settings, hubAgents, ev, capital, ventures, opportunities, dependencies, overview, treasury, knowledge, agents, projects, helpers] = await Promise.all([
       read<Row>(c, "settings", {}, missing, "settings"),
       read<Row[]>(c, "hub", { section: "agents" }, missing, "economics"),
       read<Row[]>(c, "events", { limit: EVENT_LIMIT }, missing, "events"),
@@ -52,6 +76,7 @@ export class CommandReader {
       read<Row[]>(c, "knowledge", { limit: 100 }, missing, "knowledge"),
       read<AgentRow[]>(c, "agents", {}, missing, "agents"),
       read<Row>(c, "projects", { limit: 50 }, missing, "projects"),
+      this.helpers(missing),
     ]);
     // v44: the routed operator feed (only P0–P3). An older gateway answers FLEET_UNKNOWN_OP → null (raw stream, labelled).
     const routed = await read<Row[]>(c, "command_events", { limit: 200 }, missing, "event routing");
@@ -70,7 +95,7 @@ export class CommandReader {
       currency: String(g?.currency ?? overview?.currency ?? "GBP"), economics, events: events(ev), commandEvents: routed === null ? null : events(routed),
       capital: rows(capital), ventures: rows(ventures), opportunities: rows(opportunities), knowledge: rows(knowledge), dependencies: rows(dependencies),
       projects: rows(projects?.projects), projectSummary: (projects?.summary as Row | undefined) ?? null,
-      overview: overview ?? null, treasury: treasury ?? null, settings: settings ?? null, unavailable: [...new Set(missing)],
+      overview: overview ?? null, treasury: treasury ?? null, settings: settings ?? null, unavailable: [...new Set(missing)], helpers,
     };
   }
 
@@ -80,15 +105,16 @@ export class CommandReader {
     return rows(r?.history);
   }
 
-  /** Two reads: current agents and the latest events (what the Virtual Command Centre animates). */
+  /** Three reads: current agents, the latest events and helper activity (what the Virtual Command Centre animates). */
   async pulse(): Promise<Pulse> {
     const missing: string[] = [];
-    const [agents, ev] = await Promise.all([
+    const [agents, ev, helpers] = await Promise.all([
       read<AgentRow[]>(this.c, "agents", {}, missing, "agents"),
       read<Row[]>(this.c, "events", { limit: PULSE_EVENT_LIMIT }, missing, "events"),
+      this.helpers([]),
     ]);
     if (missing.length === 2) throw new FleetApiError("FLEET_UNAVAILABLE");
-    return { fetchedAt: new Date().toISOString(), agents: agents ? agents.map((a) => toAgent(a)) : null, events: events(ev) };
+    return { fetchedAt: new Date().toISOString(), agents: agents ? agents.map((a) => toAgent(a)) : null, events: events(ev), helpers };
   }
 
   private async refreshRisk(living: string[], missing: string[]): Promise<void> {

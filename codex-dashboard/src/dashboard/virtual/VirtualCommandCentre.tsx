@@ -31,6 +31,8 @@ import { agentTargetsWithStations, birthState, BIRTH_ENTER_MS, BIRTH_EVENTS, BIR
 import { AgentLabels, type Projector } from "./AgentLabels";
 import { AgentRail } from "./AgentRail";
 import { fleetLevel } from "../command/departments";
+import { crewSummary } from "../command/helpers";
+import { CrewLabels, useCrew, useStrolling } from "./Crew";
 
 const Scene3D = lazy(() => import("./VirtualScene3D"));
 /** On first opening, events this recent still animate ("current events begin animating"); older ones are history. */
@@ -174,6 +176,10 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
   // What the HQ's screens show: FleetController's figures and items, recomputed only when the data changes.
   const teams = useMemo(() => activeTeams(view), [view]);
   const screenFeed = useMemo(() => ({ data: hqDataFrom(fleet, view, models), boards: hqBoardsFrom(fleet, view, models), banner: treasuryBannerFrom(fleet, view) }), [fleet, view, models]);
+  // The specialist crew: desks woken only by real helper jobs (the `helpers` read, with the pulse); not agents.
+  const { crew, placed: crewDesks } = useCrew(view?.helpers, models);
+  // Idle agents away from their own place on a cosmetic stroll (their labels say so; their recorded activity is unchanged).
+  const strolling = useStrolling(models, targets, positions, teams, reduce);
   if (!prefs || !hints) return <p className="text-sm text-slate-400">Preparing the Virtual Command Centre…</p>;
   const cls = deviceClass(hints);
   const use3d = !webglFailed && hints.webgl && (prefs.renderer === "3d" || (prefs.renderer === "auto" && cls !== "phone"));
@@ -187,7 +193,7 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
   const room = focus.level === "department" ? DEPARTMENT[focus.id] : selectedAgent ? DEPARTMENT[selectedAgent.placement.department] : null;
   const onAgent = (id: string) => setFocus({ level: "agent", id });
   const sceneProps = { models, targets, packets, focus, prefs: effective, selected: selectedAgent?.agent.id ?? null, onRoom, onAgent, positionsRef: positions, projectRef: project,
-    stations, births, birthStates };
+    stations, births, birthStates, teams, crew: crewDesks };
   const redAlert = redAlertOpen(fleet);
 
   return <section aria-label="Virtual Command Centre" className="space-y-3">
@@ -213,12 +219,13 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
     </div>}
     <div className="grid gap-4 xl:grid-cols-[17rem_1fr_380px]">
       {/* The side list: every living agent; selecting one flies the camera to it (the same focus as clicking it). */}
-      <div className="order-2 xl:order-none"><AgentRail models={models} all={fleet.agents} selected={selectedAgent?.agent.id ?? null} now={railNow} onAgent={onAgent} onCommand={() => setFocus({ level: "department", id: "command" })} /></div>
+      <div className="order-2 xl:order-none"><AgentRail models={models} all={fleet.agents} selected={selectedAgent?.agent.id ?? null} now={railNow} onAgent={onAgent} onCommand={() => setFocus({ level: "department", id: "command" })} strolling={strolling} /></div>
       <div data-hq-viewport className={`relative h-[62vh] min-h-[360px] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 ${use3d ? "touch-none" : ""}`}>
         {use3d ? <SceneBoundary onError={() => setWebglFailed(true)}><Suspense fallback={<p className="p-5 text-sm text-slate-400">Loading the 3D facility…</p>}>
-          <Scene3D {...sceneProps} screenFeed={screenFeed} redAlert={redAlert} teams={teams} onLost={() => setWebglFailed(true)} hoveredRoom={hoveredRoom} onHoverRoom={setHoveredRoom} /></Suspense></SceneBoundary>
+          <Scene3D {...sceneProps} screenFeed={screenFeed} redAlert={redAlert} onLost={() => setWebglFailed(true)} hoveredRoom={hoveredRoom} onHoverRoom={setHoveredRoom} /></Suspense></SceneBoundary>
           : <VirtualMap {...sceneProps} />}
-        <AgentLabels models={models} positionsRef={positions} projectRef={project} prefs={effective} selected={selectedAgent?.agent.id ?? null} fleetView={focus.level === "fleet"} onAgent={onAgent} hidden={hidden} marked={birthStates} avoidRef={plaqueRects} />
+        <CrewLabels desks={crewDesks} room={focus.level === "department" ? focus.id : null} projectRef={project} fps={effective.fps} />
+        <AgentLabels models={models} positionsRef={positions} projectRef={project} prefs={effective} selected={selectedAgent?.agent.id ?? null} fleetView={focus.level === "fleet"} onAgent={onAgent} hidden={hidden} marked={birthStates} avoidRef={plaqueRects} strolling={strolling} />
         <ol aria-live="polite" aria-label="Recent Fleet activity" className="pointer-events-none absolute bottom-3 left-3 z-50 max-w-[70%] space-y-1 text-xs">
           {ticker.map((v) => <li key={v.id} className="rounded bg-slate-950 px-2 py-1 text-slate-200">{utc(v.at, true).slice(11)} · {models.find((m) => m.agent.id === v.agentId)?.agent.name ?? "Fleet"} · {v.label}</li>)}
         </ol>
@@ -242,9 +249,10 @@ export default function VirtualCommandCentre({ fleet, view, models, feed, live, 
       </div>
       <aside aria-label="Selection details" className="order-3 max-h-[62vh] overflow-y-auto xl:order-none rounded-2xl border border-slate-700 bg-slate-900/95 p-5">
         {focus.level === "agent" && selectedAgent ? <AgentPanel m={selectedAgent} fleet={fleet} view={view} control={control} go={go} loadLedger={loadLedger} />
-          : focus.level === "department" ? <DepartmentPanel dep={focus.id} fleet={fleet} view={view} models={models} openAgent={onAgent} go={go} />
+          : focus.level === "department" ? <DepartmentPanel dep={focus.id} fleet={fleet} view={view} models={models} openAgent={onAgent} go={go} crew={crew} />
           : <div><p className="text-xs tracking-widest text-cyan-300">FLEET VIEW</p><h3 className="text-xl font-semibold">The Fleet, as it is</h3>
-            <p className="mt-2 text-sm text-slate-300">Select a room or an agent. Agents stand where their real work is (their mission, or their latest recorded activity); paused and hibernating agents sleep in Quarters. Information travels through the ceiling pipes and the Fleet Command hub only when FleetController records it. Agents with nothing to do stroll inside their room — that movement is cosmetic.</p>
+            <p className="mt-2 text-sm text-slate-300">Select a room or an agent. Agents stand where their real work is (their mission, or their latest recorded activity); paused and hibernating agents sleep in Quarters. Information travels through the ceiling pipes and the Fleet Command hub only when FleetController records it. Awake agents with nothing to do may stroll through the rooms and corridors — that movement is cosmetic and never changes what they are recorded as doing. Specialists (not agents) sleep at their desks and wake only while a real helper job of their kind runs.</p>
+            <p className="mt-2 text-sm text-slate-200" aria-label="Helper summary">{crewSummary(crew)}</p>
             <ul className="mt-4 space-y-2 text-sm">{models.map((m) => <li key={m.agent.id}><button className="text-cyan-300 underline" onClick={() => onAgent(m.agent.id)}>{m.agent.name}</button> · {m.health.label} · {DEPARTMENT[m.placement.department].name}</li>)}</ul>
             {!models.length && <p className="text-sm text-slate-400">No agents in the Fleet.</p>}
             <h4 className="mt-5 text-xs tracking-widest text-cyan-300">DEPARTMENTS</h4>

@@ -1,6 +1,7 @@
 /**
  * Admin dashboard database gateway (schema v38; v43 adds the password route): the restricted login fleet_dashboard_login can call only dash_* — the
  * authentication protocol and the single audited Admin gateway (dash_call). No owner credential, no table privilege.
+ * v82: owner sign-in recovery (recovery codes, forgot password, lost authenticator).
  */
 import pg from "pg";
 import type { Pool } from "pg";
@@ -36,6 +37,17 @@ export interface DashboardGatewayPort {
   sessionEnd(sessionSha: string, ip: string): Promise<void>;
   stepupRecord(sessionSha: string, stepupSha: string, op: string, argsSha: string, ip: string): Promise<DashResult>;
   call(sessionSha: string, csrfSha: string | null, op: string, args: string, stepupSha: string | null, ip: string): Promise<DashResult>;
+  /** v82: is this keyed recovery-code digest an unused, current recovery code? */
+  recoveryValid(codeSha: string): Promise<boolean>;
+  /** v82: a new set of recovery codes (their keyed digests) — a full session with a fresh 'recovery_codes_issue' step-up. */
+  recoveryCodesIssue(sessionSha: string, stepupSha: string | null, codeShas: string[], ip: string): Promise<DashResult>;
+  recoveryCodesState(sessionSha: string): Promise<DashResult>;
+  /** v82: forgot password — the dashboard checked a current authenticator code; the recovery code is spent in the database. */
+  recoveryPasswordReset(codeSha: string, verifier: string, ip: string): Promise<DashResult>;
+  /** v82: lost authenticator — the dashboard checked the password or a passkey; the code is spent, the new factor waits. */
+  recoveryTotpBegin(codeSha: string, ticketSha: string, secretEnc: Buffer, ip: string): Promise<DashResult>;
+  recoveryTotpPending(ticketSha: string): Promise<{ secretEncB64: string } | null>;
+  recoveryTotpConfirm(ticketSha: string, counter: number, ip: string): Promise<DashResult>;
 }
 
 export class PgDashboardGateway implements DashboardGatewayPort {
@@ -91,6 +103,17 @@ export class PgDashboardGateway implements DashboardGatewayPort {
   call(sessionSha: string, csrfSha: string | null, op: string, args: string, stepupSha: string | null, ip: string) {
     return this.call_<DashResult>("dash_call", [sessionSha, csrfSha, op, args, stepupSha, ip]);
   }
+  recoveryValid(codeSha: string) { return this.call_<boolean>("dash_recovery_valid", [codeSha]); }
+  recoveryCodesIssue(sessionSha: string, stepupSha: string | null, codeShas: string[], ip: string) {
+    return this.call_<DashResult>("dash_recovery_codes_issue", [sessionSha, stepupSha, codeShas, ip]);
+  }
+  recoveryCodesState(sessionSha: string) { return this.call_<DashResult>("dash_recovery_codes_state", [sessionSha]); }
+  recoveryPasswordReset(codeSha: string, verifier: string, ip: string) { return this.call_<DashResult>("dash_recovery_password_reset", [codeSha, verifier, ip]); }
+  recoveryTotpBegin(codeSha: string, ticketSha: string, secretEnc: Buffer, ip: string) {
+    return this.call_<DashResult>("dash_recovery_totp_begin", [codeSha, ticketSha, secretEnc, ip]);
+  }
+  recoveryTotpPending(ticketSha: string) { return this.call_<{ secretEncB64: string } | null>("dash_recovery_totp_pending", [ticketSha]); }
+  recoveryTotpConfirm(ticketSha: string, counter: number, ip: string) { return this.call_<DashResult>("dash_recovery_totp_confirm", [ticketSha, counter, ip]); }
   async close(): Promise<void> {
     await this.pool.end().catch(() => {});
   }
