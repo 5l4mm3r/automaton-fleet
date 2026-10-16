@@ -1035,3 +1035,41 @@ roster or any count. The simulation build produces fictional jobs only when the 
 mission's role, quality review / inspection, spend review, decision) and state running → finished.
 
 Tests: `src/__tests__/fleet/fleet-virtual-crew.test.ts`, `src/__tests__/fleet/fleet-virtual-roam.test.ts`.
+
+## 0.21.1: the dashboard works on phones (2026-10-16, prepared, not deployed)
+
+**The defect, reproduced.** A signed-in phone returning from another app (for example after reading the authenticator)
+fired `blur`, `visibilitychange` and `focus` together, and each one started a full refresh: about 48 reads at once.
+
+The production edge allows 10 requests a second with a burst of 40 per address. It refused the excess with 503s (HTML).
+A single refused read failed the whole refresh, and the page showed "The Fleet is unreachable".
+
+**Evidence:**
+- the edge's previous error log held 903 rate-limit refusals in 12 days;
+- an emulated replay: one app switch → 48 reads, 5 refused; two switches 1.5 s apart → 38 refused.
+
+**Fixed (authentication and the edge's protection unchanged):**
+- one refresh in flight at a time;
+- no refresh when the page is hidden;
+- a refresh on return at most every 15 s (the 45-second poll and explicit actions are unaffected);
+- at most 6 reads in flight;
+- a read refused as busy (429 or 503) is retried with backoff, Retry-After honoured, at most 3 times, then fails as
+  `FLEET_BUSY`; writes are never retried;
+- reads queued behind a 401 are not sent;
+- compact header on phones.
+
+After the fix, an app switch sends one refresh (16 reads), and none is refused in the replay.
+
+**Edge (prepared in `deploy/nginx/automaton-fleet-edge.conf`; needs a host install):**
+- a refusal answers 429 with `Retry-After: 1`;
+- static build files get their own allowance (30 r/s, burst 120). The data and sign-in budget is unchanged;
+- refusals are logged with the real client address and the path only (the error log shows only the loopback hop).
+
+**Tests:**
+- `fleet-mobile-dashboard-e2e-pg` (iPhone 13 emulation in Chrome, not a real device or WebKit): sign-in with password and
+  authenticator, the deck, the app-switch burst replayed through the edge rule, and all ten administration pages at
+  390 px (no sideways overflow, no script errors);
+- `fleet-codex-client-busy` (unit).
+
+**Still unproven on a real phone.** The live bundle targets Safari 16.4 or later, so an older iPhone would get a blank
+page. The owner's device and browser are not yet known.

@@ -18,7 +18,11 @@
  *  • no fallback to anything — an unreachable gateway is an error the UI must show;
  *  • writes are NEVER retried automatically (a retry after an unknown outcome could act twice): a network failure on a
  *    write is FLEET_OUTCOME_UNKNOWN, and the adapter re-reads the Fleet so the owner sees what actually happened;
- *  • reads are retried once on a network error only.
+ *  • reads are retried once on a network error only — and, being side-effect free, when the edge says it is busy
+ *    (429 / 503: the per-address request limit), after a short backoff (Retry-After honoured, capped), at most
+ *    READ_BUSY_RETRIES times;
+ *  • at most READ_CONCURRENCY reads are in flight per client: a refresh's dozens of reads are paced instead of arriving
+ *    as one burst (a phone switching apps used to send ~48 at once and trip the edge's burst limit).
  */
 import { FleetApiError } from "./errors";
 import type { Json } from "./types";
@@ -93,6 +97,13 @@ export interface GatewayClientOptions {
 export type StepupChoice = { method: "passkey" } | { method: "password"; password: string; code: string };
 export type StepupConfirm = (op: string) => Promise<StepupChoice>;
 
+/** Reads in flight at once, per client (the edge allows a burst of 40 at 10 r/s per address). */
+export const READ_CONCURRENCY = 6;
+/** Retries of a read the edge refused as busy (429 / 503). */
+export const READ_BUSY_RETRIES = 3;
+const BUSY_STATUS = new Set([429, 503]);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export class GatewayClient {
   readonly mode = "live" as const;
   private readonly base: string;
@@ -101,6 +112,10 @@ export class GatewayClient {
   readonly csrf: TokenStore;
   private readonly share: TokenShare | null;
   private readonly signedOut: () => void;
+  private readsInFlight = 0;
+  /** Set by a 401: reads still queued behind it are not sent (the session is gone; the UI returns to sign-in). */
+  private sessionEnded = false;
+  private readonly readQueue: Array<() => void> = [];
   /** Set by the deck's UI: asks the owner how to confirm a sensitive operation (null: the passkey). */
   stepupConfirm: StepupConfirm | null;
 
@@ -116,12 +131,12 @@ export class GatewayClient {
 
   private async parse(r: Response): Promise<Json> {
     const j = (await r.json().catch(() => ({ ok: false, code: "FLEET_BAD_RESPONSE" }))) as Json;
-    if (r.status === 401) { this.csrf.clear(); this.signedOut(); }
+    if (r.status === 401) { this.sessionEnded = true; this.csrf.clear(); this.signedOut(); }
     return j;
   }
 
   /** A new token from signing in, in this tab: keep it and let the other tabs adopt it. */
-  adoptToken(token: string): void { this.csrf.set(token); this.share?.announce(token); }
+  adoptToken(token: string): void { this.sessionEnded = false; this.csrf.set(token); this.share?.announce(token); }
 
   /** The token for a write: this tab's, else one from another open tab; null when this tab must be verified. */
   private async writeToken(): Promise<string | null> {
@@ -191,14 +206,38 @@ export class GatewayClient {
     return { status: r.status, json: await this.parse(r) };
   }
 
+  /** A slot among READ_CONCURRENCY reads in flight; released by the returned function. */
+  private async readSlot(): Promise<() => void> {
+    if (this.readsInFlight >= READ_CONCURRENCY) await new Promise<void>((r) => this.readQueue.push(r));
+    this.readsInFlight++;
+    let done = false;
+    return () => { if (done) return; done = true; this.readsInFlight--; this.readQueue.shift()?.(); };
+  }
+
   async getJson(path: string): Promise<{ status: number; json: Json }> {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const r = await this.f(`${this.base}${path}`, { credentials: "same-origin", cache: "no-store" });
+    const queued = this.readsInFlight >= READ_CONCURRENCY;
+    const release = await this.readSlot();
+    try {
+      if (queued && this.sessionEnded && path.startsWith("/api/read")) return { status: 401, json: { ok: false, code: "FLEET_SESSION_INVALID" } as Json };
+      for (let attempt = 0, busy = 0; ; attempt++) {
+        let r: Response;
+        try {
+          r = await this.f(`${this.base}${path}`, { credentials: "same-origin", cache: "no-store" });
+        } catch {
+          if (attempt >= 1) throw new FleetApiError("FLEET_UNAVAILABLE");
+          continue;
+        }
+        if (BUSY_STATUS.has(r.status) && busy < READ_BUSY_RETRIES) {
+          busy++;
+          const after = Number(r.headers.get("Retry-After"));
+          await sleep(Number.isFinite(after) && after > 0 ? Math.min(after * 1000, 5_000) : 400 * 2 ** (busy - 1) + Math.random() * 200);
+          continue;
+        }
+        if (BUSY_STATUS.has(r.status)) return { status: r.status, json: { ok: false, code: "FLEET_BUSY" } as Json };
         return { status: r.status, json: await this.parse(r) };
-      } catch {
-        if (attempt >= 1) throw new FleetApiError("FLEET_UNAVAILABLE");
       }
+    } finally {
+      release();
     }
   }
 

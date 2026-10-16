@@ -33,6 +33,8 @@ const VirtualCommandCentre = lazy(() => import("@/dashboard/virtual/VirtualComma
 
 /** Build-time constant (inlined by the bundler), so the other mode's branches are removed from the build. */
 const LIVE = process.env.NEXT_PUBLIC_FLEET_MODE === "live";
+/** A return to the page refreshes at most this often (the 45 s poll and explicit actions are unaffected). */
+const FOCUS_REFRESH_MIN_MS = 15_000;
 const pages = ["Overview", "Fleet Command", "Agents", "Treasury", ...(LIVE ? ["Money & identity", "Launch & channels", "Mail"] : []), "Replication", "Missions", "Estates", "Owner identity", "Notifications", "Security", "Settings"];
 type Field = { key: string; label: string; value?: string; options?: string[][] };
 type Action = { op: string; title: string; args?: Record<string, string>; fields?: Field[]; sensitive?: boolean };
@@ -112,16 +114,28 @@ export default function Home() {
   const missionKind: Field = { key: "role", label: "Mission kind", options: LIVE_MISSION_KINDS };
   const beneficiary: Field = { key: "beneficiary", label: "Beneficiary (pays the mission's cost)", options: [["fleet", "The Fleet"], ...agentOptions] };
   const funding: Field = { key: "amount", label: "Funding in GBP from the Treasury (0 for none)", value: "0" };
-  const refresh = useCallback(async () => {
-    try { const next = await adapter.snapshot(); setFleet(next); setLink({ state: "ok" }); if (LIVE) setFeedback(`Live Fleet read at ${next.live?.fetchedAt.slice(11, 19) ?? ""} UTC.`); }
-    catch (e) { setLink({ state: "unavailable", code: e instanceof FleetApiError ? e.code : "FLEET_UNAVAILABLE" }); }
+  // One refresh at a time: a focus, a visibility change and a poll arriving together share the refresh in flight.
+  const inFlight = useRef<Promise<void> | null>(null);
+  const lastRefresh = useRef(0);
+  const refresh = useCallback(() => {
+    if (inFlight.current) return inFlight.current;
+    lastRefresh.current = Date.now();
+    const run = (async () => {
+      try { const next = await adapter.snapshot(); setFleet(next); setLink({ state: "ok" }); if (LIVE) setFeedback(`Live Fleet read at ${next.live?.fetchedAt.slice(11, 19) ?? ""} UTC.`); }
+      catch (e) { setLink({ state: "unavailable", code: e instanceof FleetApiError ? e.code : "FLEET_UNAVAILABLE" }); }
+      finally { inFlight.current = null; }
+    })();
+    inFlight.current = run;
+    return run;
   }, [adapter]);
   useEffect(() => {
     const first = setTimeout(() => { void refresh(); }, 0);
     if (!LIVE) return () => clearTimeout(first);
     // LIVE: controlled polling plus focus / visibility refresh (no push infrastructure).
     const timer = setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 45_000);
-    const onFocus = () => { void refresh(); };
+    // Returning to the page refreshes once (not on hiding, not again within FOCUS_REFRESH_MIN_MS): a phone switching apps
+    // fires blur / visibilitychange / focus together, and each used to start a full refresh.
+    const onFocus = () => { if (document.visibilityState === "visible" && Date.now() - lastRefresh.current >= FOCUS_REFRESH_MIN_MS) void refresh(); };
     window.addEventListener("focus", onFocus); document.addEventListener("visibilitychange", onFocus);
     return () => { clearTimeout(first); clearInterval(timer); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onFocus); };
   }, [refresh]);
@@ -203,7 +217,7 @@ export default function Home() {
   return <main className={`${prefs.contrast ? "bg-black text-white" : "bg-slate-950 text-slate-100"} min-h-screen w-full ${prefs.large ? "text-lg" : "text-base"}`}>
     {LIVE ? <div className="border-b border-emerald-800 bg-emerald-950/60 px-5 py-2 text-center text-xs tracking-widest text-emerald-200">LIVE · AUTHORITATIVE FLEET DATA{lv ? ` · READ ${lv.fetchedAt.slice(11, 19)} UTC` : ""}</div> : <div className="border-b border-amber-800 bg-amber-950/60 px-5 py-2 text-center text-xs tracking-widest text-amber-200">SIMULATION · FICTIONAL DATA · NO MACHINE OR REAL MONEY CONNECTED</div>}
     <div className="mx-auto grid max-w-screen-2xl grid-cols-[minmax(0,1fr)] lg:min-h-screen lg:grid-cols-[220px_minmax(0,1fr)]">
-      <aside className="min-w-0 border-b border-slate-800 bg-slate-900/60 p-5 lg:border-r"><p className="text-xs tracking-[.25em] text-cyan-300">AUTOMATON FLEET</p><h1 className="mt-2 text-xl font-bold">Command Deck</h1><p className="mt-1 text-xs text-slate-500">OWNER OPERATIONS / 01</p><nav aria-label="Main navigation" className="mt-6 flex gap-2 overflow-x-auto lg:flex-col">{pages.map((p, i) => <button key={p} disabled={!signedIn} aria-current={page === p && mode === "Dashboard" ? "page" : undefined} onClick={() => go(p)} className={`shrink-0 rounded-lg px-3 py-3 text-left text-sm ${page === p && mode === "Dashboard" ? "bg-cyan-950 text-cyan-200" : "text-slate-400 hover:bg-slate-800"}`}><span className="mr-3 font-mono text-xs opacity-50">{String(i + 1).padStart(2, "0")}</span>{p}{p === "Notifications" && ` (${unread.length})`}</button>)}</nav><p className="mt-8 text-xs text-slate-500">{LIVE ? <>Live Fleet<br />Polled every 45 s and on focus</> : <>Local simulation<br />Changes reset on refresh</>}</p></aside>
+      <aside className="min-w-0 border-b border-slate-800 bg-slate-900/60 px-4 py-3 lg:border-r lg:p-5"><p className="text-xs tracking-[.25em] text-cyan-300">AUTOMATON FLEET</p><h1 className="mt-1 text-lg font-bold lg:mt-2 lg:text-xl">Command Deck</h1><p className="mt-1 hidden text-xs text-slate-500 lg:block">OWNER OPERATIONS / 01</p><nav aria-label="Main navigation" className="mt-3 flex gap-2 overflow-x-auto lg:mt-6 lg:flex-col">{pages.map((p, i) => <button key={p} disabled={!signedIn} aria-current={page === p && mode === "Dashboard" ? "page" : undefined} onClick={() => go(p)} className={`shrink-0 rounded-lg px-3 py-3 text-left text-sm ${page === p && mode === "Dashboard" ? "bg-cyan-950 text-cyan-200" : "text-slate-400 hover:bg-slate-800"}`}><span className="mr-3 font-mono text-xs opacity-50">{String(i + 1).padStart(2, "0")}</span>{p}{p === "Notifications" && ` (${unread.length})`}</button>)}</nav><p className="mt-8 hidden text-xs text-slate-500 lg:block">{LIVE ? <>Live Fleet<br />Polled every 45 s and on focus</> : <>Local simulation<br />Changes reset on refresh</>}</p></aside>
       <div className="min-w-0 p-5 sm:p-8"><header className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-5"><div><p className="text-xs tracking-widest text-slate-400">FLEET CONTROL CENTRE</p><h2 className="mt-2 text-3xl font-semibold">{selected && mode !== "Virtual" ? selected.name : mode === "Virtual" ? "Virtual Command Centre" : page}</h2></div><div className="flex flex-wrap items-center gap-2">{LIVE && liveTools && signedIn && prefs.showSurvival !== false && <SurvivalSwitch client={liveTools.gateway()} agentName={(id, stored) => fleet.agents.find(x => x.id === id)?.name ?? displayAgentName(stored)} />}{["Dashboard", "Virtual"].map(m => <button key={m} className={`${button} ${mode === m ? "bg-cyan-900 text-cyan-100" : ""}`} disabled={!signedIn} aria-pressed={mode === m} onClick={() => go(m === "Virtual" ? "Virtual" : "Overview")}>{m}</button>)}<button className={button} onClick={() => setPrefs({ ...prefs, mute: !prefs.mute })}>{prefs.mute ? "Unmute" : "Mute"}</button></div></header>
       <p role="status" className="mb-5 rounded border border-slate-700 px-4 py-3 text-sm text-cyan-200">{feedback}</p>
       {LIVE && tabUnverified && <div role="alert" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded border border-amber-500 bg-amber-950/60 px-4 py-3 text-sm text-amber-100"><span>This tab is signed in for reading but not yet verified for changes. Nothing was changed.</span><a className="rounded bg-amber-400 px-3 py-1.5 font-semibold text-slate-950" href={`${LOGIN_PATH}#reverify`}>Verify this tab</a></div>}
