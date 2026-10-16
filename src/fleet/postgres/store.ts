@@ -62,6 +62,8 @@ import { migrateCheck,
   CHANNELS_API_FUNCTIONS,
   PUSH_API_FUNCTIONS,
   MEDIA_API_FUNCTIONS,
+  CODE_API_FUNCTIONS,
+  BUILD_API_FUNCTIONS,
   DASHBOARD_API_FUNCTIONS,
   FLEET_PG_HARD_MAX_AGENTS,
   FLEET_PG_SCHEMA_VERSION,
@@ -98,6 +100,8 @@ export const DEFAULT_CHANNELS_ROLE = "fleet_channels";
 export const DEFAULT_PUSH_ROLE = "fleet_push";
 /** Schema v85: the media provider gateway (mx_* only). */
 export const DEFAULT_MEDIA_ROLE = "fleet_media";
+export const DEFAULT_CODE_ROLE = "fleet_code";
+export const DEFAULT_BUILD_ROLE = "fleet_build";
 
 export interface FleetTimeouts {
   reservationTtlS: number;
@@ -615,7 +619,7 @@ export class PgFleetStore {
     }
     const roles = await this.pool
       .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole, DEFAULT_CUSTODY_ROLE, DEFAULT_IDENTITY_ROLE, DEFAULT_BROWSER_ROLE, DEFAULT_DASHBOARD_ROLE,
-        DEFAULT_PROVIDER_ROLE, DEFAULT_BANKFEED_ROLE, DEFAULT_CHANNELS_ROLE, DEFAULT_PUSH_ROLE, DEFAULT_MEDIA_ROLE]])
+        DEFAULT_PROVIDER_ROLE, DEFAULT_BANKFEED_ROLE, DEFAULT_CHANNELS_ROLE, DEFAULT_PUSH_ROLE, DEFAULT_MEDIA_ROLE, DEFAULT_CODE_ROLE, DEFAULT_BUILD_ROLE]])
       .catch(() => null);
     const present = new Set(roles?.rows.map((r) => r.rolname) ?? []);
     if (present.has(this.agentRole)) await this.grantAgentRole(this.agentRole);
@@ -630,6 +634,8 @@ export class PgFleetStore {
     if (present.has(DEFAULT_CHANNELS_ROLE)) await this.grantProtocolRole(DEFAULT_CHANNELS_ROLE, CHANNELS_API_FUNCTIONS, "channels_role_granted");
     if (present.has(DEFAULT_PUSH_ROLE)) await this.grantProtocolRole(DEFAULT_PUSH_ROLE, PUSH_API_FUNCTIONS, "push_role_granted");
     if (present.has(DEFAULT_MEDIA_ROLE)) await this.grantProtocolRole(DEFAULT_MEDIA_ROLE, MEDIA_API_FUNCTIONS, "media_role_granted");
+    if (present.has(DEFAULT_CODE_ROLE)) await this.grantProtocolRole(DEFAULT_CODE_ROLE, CODE_API_FUNCTIONS, "code_role_granted");
+    if (present.has(DEFAULT_BUILD_ROLE)) await this.grantProtocolRole(DEFAULT_BUILD_ROLE, BUILD_API_FUNCTIONS, "build_role_granted");
     return applied;
   }
 
@@ -972,6 +978,14 @@ export class PgFleetStore {
   }
 
   /** Schema v52: the bank-feed connector's role — USAGE on the schema and EXECUTE on BANKFEED_API_FUNCTIONS only. */
+  /** Schema v89: the code gateway's role — EXECUTE on CODE_API_FUNCTIONS only. */
+  async grantCodeRole(role: string = DEFAULT_CODE_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, CODE_API_FUNCTIONS, "code_role_granted");
+  }
+  /** Schema v89: the build environment's role — EXECUTE on BUILD_API_FUNCTIONS only. */
+  async grantBuildRole(role: string = DEFAULT_BUILD_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, BUILD_API_FUNCTIONS, "build_role_granted");
+  }
   /** Schema v85: the media provider gateway's role — EXECUTE on MEDIA_API_FUNCTIONS only. */
   async grantMediaRole(role: string = DEFAULT_MEDIA_ROLE): Promise<void> {
     await this.grantProtocolRole(role, MEDIA_API_FUNCTIONS, "media_role_granted");
@@ -2393,5 +2407,7 @@ export const PUBLIC_PAGE_FUNCTIONS = ["svc_offer_page", "svc_offer_preview", "sv
   // v80: search discovery (sitemap, IndexNow key) — read only.
   "svc_sitemap", "svc_indexnow_key",
   // v82: the buyer's consent to immediate supply, given on the order page.
-  "svc_order_consent"] as const;
+  "svc_order_consent",
+  // v89: the customer's consent to repository access, on their own enquiry / order page.
+  "svc_repo_requests", "svc_repo_consent"] as const;
 export type PublicPageFunction = (typeof PUBLIC_PAGE_FUNCTIONS)[number];

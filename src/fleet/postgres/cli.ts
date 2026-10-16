@@ -657,6 +657,18 @@ async function main(argv: string[]): Promise<number> {
         console.log(`granted the channel-gateway API to ${rest[0] || "fleet_channels"}`);
         return 0;
       }
+      case "grant-code-role": {
+        // v89: the code gateway's role (cgx_* only).
+        await store.grantCodeRole(rest[0] || undefined);
+        console.log(`granted the code-gateway API to ${rest[0] || "fleet_code"}`);
+        return 0;
+      }
+      case "grant-build-role": {
+        // v89: the build environment's role (bbx_* only).
+        await store.grantBuildRole(rest[0] || undefined);
+        console.log(`granted the build-environment API to ${rest[0] || "fleet_build"}`);
+        return 0;
+      }
       case "grant-media-role": {
         // v85: the media provider gateway's role (mx_* only), for scripts/fleet-media-setup.sh.
         await store.grantMediaRole(rest[0] || undefined);

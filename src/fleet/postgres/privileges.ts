@@ -40,6 +40,8 @@ import {
   CHANNELS_API_FUNCTIONS,
   PUSH_API_FUNCTIONS,
   MEDIA_API_FUNCTIONS,
+  CODE_API_FUNCTIONS,
+  BUILD_API_FUNCTIONS,
   DASHBOARD_API_FUNCTIONS,
   GENESIS_GUARDS,
   GENESIS_OPERATORS,
@@ -100,6 +102,11 @@ export interface PrivilegeAuditOptions {
   /** Schema v85 media provider gateway roles (fleet_media + _login). */
   mediaRoles?: string[];
   requireMediaRoles?: boolean;
+  /** Schema v89 code gateway and build environment roles. */
+  codeRoles?: string[];
+  requireCodeRoles?: boolean;
+  buildRoles?: string[];
+  requireBuildRoles?: boolean;
 }
 
 /** "provisioned": every operator role exists; "not_provisioned": none exists (and not required); "incomplete": some are missing. */
@@ -132,8 +139,10 @@ export const DEFAULT_BANKFEED_ROLES = ["fleet_bankfeed", "fleet_bankfeed_login"]
 export const DEFAULT_CHANNELS_ROLES = ["fleet_channels", "fleet_channels_login"];
 export const DEFAULT_PUSH_ROLES = ["fleet_push", "fleet_push_login"];
 export const DEFAULT_MEDIA_ROLES = ["fleet_media", "fleet_media_login"];
+export const DEFAULT_CODE_ROLES = ["fleet_code", "fleet_code_login"];
+export const DEFAULT_BUILD_ROLES = ["fleet_build", "fleet_build_login"];
 
-type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser" | "dashboard" | "provider" | "bankfeed" | "channels" | "push" | "media";
+type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser" | "dashboard" | "provider" | "bankfeed" | "channels" | "push" | "media" | "code" | "build";
 
 const TABLE_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
@@ -207,6 +216,8 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   const channelsRoles = await optional(opts.channelsRoles ?? DEFAULT_CHANNELS_ROLES, opts.requireChannelsRoles, "channels");
   const pushRoles = await optional(opts.pushRoles ?? DEFAULT_PUSH_ROLES, opts.requirePushRoles, "push");
   const mediaRoles = await optional(opts.mediaRoles ?? DEFAULT_MEDIA_ROLES, opts.requireMediaRoles, "media");
+  const codeRoles = await optional(opts.codeRoles ?? DEFAULT_CODE_ROLES, opts.requireCodeRoles, "code");
+  const buildRoles = await optional(opts.buildRoles ?? DEFAULT_BUILD_ROLES, opts.requireBuildRoles, "build");
   const allRestricted = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES),
     ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES),
@@ -220,6 +231,8 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
     ...channelsRoles,
     ...pushRoles,
     ...mediaRoles,
+    ...codeRoles,
+    ...buildRoles,
   ];
   const plan: Array<[string, RoleKind]> = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES).map((r) => [r, "agent"] as [string, RoleKind]),
@@ -234,6 +247,8 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
     ...channelsRoles.map((r) => [r, "channels"] as [string, RoleKind]),
     ...pushRoles.map((r) => [r, "push"] as [string, RoleKind]),
     ...mediaRoles.map((r) => [r, "media"] as [string, RoleKind]),
+    ...codeRoles.map((r) => [r, "code"] as [string, RoleKind]),
+    ...buildRoles.map((r) => [r, "build"] as [string, RoleKind]),
   ];
 
   const agentFns = new Set(AGENT_API_FUNCTIONS.map(normSig));
@@ -248,6 +263,8 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   const channelsFns = new Set(CHANNELS_API_FUNCTIONS.map(normSig));
   const pushFns = new Set(PUSH_API_FUNCTIONS.map(normSig));
   const mediaFns = new Set(MEDIA_API_FUNCTIONS.map(normSig));
+  const codeFns = new Set(CODE_API_FUNCTIONS.map(normSig));
+  const buildFns = new Set(BUILD_API_FUNCTIONS.map(normSig));
   const operatorVolatile = new Set(OPERATOR_VOLATILE_FUNCTIONS.map(normSig));
   const serviceTables = new Set(SERVICE_READ_TABLES);
 
@@ -343,7 +360,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
       [role, schema],
     );
     const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : kind === "identity" ? identityFns : kind === "browser" ? browserFns
-      : kind === "dashboard" ? dashboardFns : kind === "provider" ? providerFns : kind === "bankfeed" ? bankfeedFns : kind === "channels" ? channelsFns : kind === "push" ? pushFns : kind === "media" ? mediaFns : operatorFns;
+      : kind === "dashboard" ? dashboardFns : kind === "provider" ? providerFns : kind === "bankfeed" ? bankfeedFns : kind === "channels" ? channelsFns : kind === "push" ? pushFns : kind === "media" ? mediaFns : kind === "code" ? codeFns : kind === "build" ? buildFns : operatorFns;
     const executable: string[] = [];
     for (const f of fns.rows) {
       const sig = normSig(f.sig);

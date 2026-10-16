@@ -44,9 +44,15 @@ export function MoneyLocations({ client, agents }: { client: GatewayClient; agen
   const inTransit = ((d.transfers as Row[]) ?? []).filter((t) => t.state === "in_transit");
   const disputes = (d.disputes as Row[]) ?? [];
   const rec = d.reconciliation as Row | undefined;
+  const short = d.shortfall as Row | undefined;
   const pence = Math.round(Number(amount) * 100);
   return <Panel title="Money locations">
     <p className="text-xs text-slate-400">Where the treasury’s money is. Each location spends only what its own latest evidence shows, after the Fleet’s open holds and transfers out. Moving money between your own accounts is the same money: it is not income and not a cost.</p>
+    {short && Number(short.minor) > 0 && <div role="alert" className="mt-3 rounded-lg border border-red-500 bg-red-950/40 p-3 text-sm">
+      <p className="font-semibold text-red-200">Treasury shortfall {gbp(short.minor)}</p>
+      <p className="mt-1 text-xs text-red-100">A card charge took more money than the agent and the unallocated treasury held. It is on the books as the agent’s debt; the agent’s card is frozen until it is settled. Money arriving in unallocated cash (the agent’s repayments, your funding, a refund) fills it first. Nothing has been funded.</p>
+      <ul className="mt-2 space-y-1 text-xs text-red-100">{(short.charges as Row[]).map((c) => <li key={c.chargeId}>{name(c.agentId)} · {c.merchant} · {gbp(c.shortfallMinor)}</li>)}</ul>
+    </div>}
     {rec && <div className={`mt-3 rounded-lg border p-3 text-sm ${rec.state === "reconciled" ? "border-emerald-700" : rec.state === "difference" ? "border-red-600" : "border-amber-600"}`}>
       <p className="font-semibold">{rec.state === "reconciled" ? "Accounts match the books" : rec.state === "difference" ? `Accounts differ from the books by ${gbp(rec.differenceMinor)}` : "Reconciliation incomplete: a location has no fresh reading"}</p>
       <p className="mt-1 text-xs text-slate-400">In your accounts {gbp(rec.locationsMinor)} + on its way between them {gbp(rec.inTransitMinor)}, against the books {gbp(rec.expectedMinor)} (the books less capital not yet backed by money). Above zero: money the books do not record yet; below zero: money missing.</p>
@@ -75,6 +81,7 @@ export function MoneyLocations({ client, agents }: { client: GatewayClient; agen
       <p className="mt-1 text-xs text-slate-400">The Fleet matched everything it could (card purchases, refunds, your transfers). These are left for you; nothing is guessed.</p>
       <ul className="mt-2 space-y-2 text-sm">{unexplained.map((t) => <li key={t.txnId} className="border-t border-slate-700 pt-2">
         <p>{when(t.at)} · {labelOf(t.locationId)} · <span className="font-mono">{t.direction === "in" ? "+" : "−"}{gbp(t.amountMinor)}</span> · {t.descriptor ?? t.kind} · {t.status}</p>
+        {t.matchError && <p className="text-xs text-red-300">Recorded but not booked: {t.matchError} (retried every hour)</p>}
         <div className="mt-1 flex flex-wrap gap-2">
           {t.direction === "in" && t.status === "settled" && <button className={button} disabled={busy} onClick={() => act("location_contribution", { txnId: t.txnId }, "Recorded as your deposit (owner funding).")}>My deposit</button>}
           {t.direction === "in" && t.status === "settled" && inTransit.filter((x) => x.to === t.locationId && Number(x.amountMinor) === Number(t.amountMinor)).map((x) =>

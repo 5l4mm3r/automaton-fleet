@@ -240,6 +240,50 @@ ALTER ROLE fleet_media_login IN DATABASE :"dbname" SET lock_timeout = '5s';
 ALTER ROLE fleet_media_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '30s';
 \endif
 
+-- Schema v89: the code gateway (cgx_* only: customer repositories through the Fleet GitHub App) (optional; provisioned only when code_password is supplied).
+--   fleet_code            NOLOGIN group: USAGE on fleet + EXECUTE on its own protocol functions only
+--   fleet_code_login      LOGIN member of fleet_code, held by that process only
+\if :{?code_password}
+SELECT 'CREATE ROLE fleet_code NOLOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_code') \gexec
+SELECT 'CREATE ROLE fleet_code_login LOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_code_login') \gexec
+ALTER ROLE fleet_code       NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+ALTER ROLE fleet_code_login LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2;
+SELECT format('ALTER ROLE fleet_code_login PASSWORD %L', :'code_password') \gexec
+GRANT fleet_code TO fleet_code_login;
+SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname)
+  FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
+ WHERE m.rolname IN ('fleet_code_login', 'fleet_code') AND NOT (m.rolname = 'fleet_code_login' AND r.rolname = 'fleet_code') \gexec
+REVOKE ALL ON DATABASE :"dbname" FROM fleet_code, fleet_code_login;
+GRANT CONNECT ON DATABASE :"dbname" TO fleet_code_login;
+ALTER ROLE fleet_code_login IN DATABASE :"dbname" SET statement_timeout = '30s';
+ALTER ROLE fleet_code_login IN DATABASE :"dbname" SET lock_timeout = '5s';
+ALTER ROLE fleet_code_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '30s';
+\endif
+
+-- Schema v89: the build environment (bbx_* only: builds and tests of repository snapshots; no credentials) (optional; provisioned only when build_password is supplied).
+--   fleet_build            NOLOGIN group: USAGE on fleet + EXECUTE on its own protocol functions only
+--   fleet_build_login      LOGIN member of fleet_build, held by that process only
+\if :{?build_password}
+SELECT 'CREATE ROLE fleet_build NOLOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_build') \gexec
+SELECT 'CREATE ROLE fleet_build_login LOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_build_login') \gexec
+ALTER ROLE fleet_build       NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+ALTER ROLE fleet_build_login LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2;
+SELECT format('ALTER ROLE fleet_build_login PASSWORD %L', :'build_password') \gexec
+GRANT fleet_build TO fleet_build_login;
+SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname)
+  FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
+ WHERE m.rolname IN ('fleet_build_login', 'fleet_build') AND NOT (m.rolname = 'fleet_build_login' AND r.rolname = 'fleet_build') \gexec
+REVOKE ALL ON DATABASE :"dbname" FROM fleet_build, fleet_build_login;
+GRANT CONNECT ON DATABASE :"dbname" TO fleet_build_login;
+ALTER ROLE fleet_build_login IN DATABASE :"dbname" SET statement_timeout = '30s';
+ALTER ROLE fleet_build_login IN DATABASE :"dbname" SET lock_timeout = '5s';
+ALTER ROLE fleet_build_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '30s';
+\endif
+
 -- Schema v52: the bank-feed receipt connector (rx_* only) (optional; provisioned only when bankfeed_password is supplied).
 --   fleet_bankfeed        NOLOGIN group: USAGE on fleet + EXECUTE on its own protocol functions only
 --   fleet_bankfeed_login  LOGIN member of fleet_bankfeed, held by that process only

@@ -643,6 +643,7 @@ Your objective is neither maximum activity nor minimum spending. It is the best 
 
 ## bf-initial-focus
 Title: Where to start: digital products, digital services and downloadable courses
+Version: 2
 Category: business-foundation
 Tags: start, focus, digital, services, courses, templates, spreadsheets, guides, starting-areas
 Related: bf-venture-types, bf-market-gaps, bf-capability-evidence, bf-offer-portfolio, fleet-capability-status
@@ -650,7 +651,8 @@ Body:
 The owner's initial emphasis (2026-10-14) — starting areas, not restrictions, not a compulsory ladder. Follow stronger evidence anywhere lawful.
 
 - DIGITAL PRODUCTS: spreadsheets and calculators, templates, guides and workbooks, design assets, useful downloadable tools. Made once, reviewed once, sold many times; delivered automatically from the reviewed files when a buyer pays.
-- DIGITAL SERVICES: writing, research, design, spreadsheet development, business automation, website work, software fixes and maintenance. Done to a buyer's brief; accepted only when you can deliver it, at the quality promised, within the turnaround, alongside your other commitments.
+- DIGITAL SERVICES: writing, research, design, spreadsheet development, business automation, website work. Done to a buyer's brief; accepted only when you can deliver it, at the quality promised, within the turnaround, alongside your other commitments.
+- SOFTWARE FIXES AND MAINTENANCE on a customer's own code: only the scope you have demonstrated. It needs the customer's consent and their repository access through the Fleet's GitHub App (code.request_access), a passing baseline build of their repository in the Fleet's isolated build environment, and changes delivered only as a tested pull request they review and merge themselves. The capability check (deliverable format pull_request, naming the enquiry) tells you whether you can quote; until the code gateway and build environment are connected you cannot. Never ask a customer for passwords, tokens or keys.
 - DOWNLOADABLE COURSES: structured guides, lessons, exercises, workbooks, worked examples and resource bundles, delivered as files (PDF, DOCX, XLSX, ZIP). Hosted courses, video streaming and drip release are not needed and not available now.
 
 Why these first: they fit what you can actually produce and verify with your tools (bf-production-tools), they need little capital, and the Fleet can sell and deliver them end to end today (bf-fulfilment-loop). They are not safe by format: demand, distribution and quality still decide.
@@ -781,8 +783,8 @@ Independent review (independent_review — a separate, paid model call with no a
 Pre-made products are reviewed before publishing; unchanged deliveries reuse that evidence. Customer-specific work is reviewed against that buyer's brief and messages. Record what failed and why: it is the cheapest lesson you will get.
 
 ## fleet-capability-status
-Title: Fleet capability status (dated 2026-10-16, v11) — what works today
-Version: 11
+Title: Fleet capability status (dated 2026-10-16, v12) — what works today
+Version: 12
 Category: fleet-status
 Tags: status, capabilities, paypal, checkout, offers, delivery, tools, payout, card, gumroad, etsy, pinterest, mail, sms, research, wake, sweep, ai-credit, onboarding, browser, channels, leads, outreach, consent, runtime
 Related: bf-cash-and-settlement, bf-delivery-commitments, bf-tax-worldwide, bf-venture-types, bf-ai-costs, bf-fulfilment-loop, bf-channels, bf-production-tools
@@ -809,6 +811,7 @@ Facts:
 - Web research — BUILT, ENABLED, with per-agent daily and hourly limits; no search-engine API (use the browser on sites' own search pages where their terms permit) | checked 2026-10-16 | verified
 - Capability check — BUILT (founder-v10 runtime): before you publish an offer or quote an enquiry, check THAT offer or enquiry with what it delivers — capabilities op check {offerId or enquiryId, deliverables: [{format, needs}]}. Publishing or quoting needs such a check from the last 7 days with every deliverable ready, covering the offer's files, and still true (a provider dropping, money out changing or your runtime changing makes it stale: check again). capabilities op request asks the owner for something missing, once, with reason and evidence — a request, never a permission you wait for | checked 2026-10-16 | verified
 - Web search and image generation — BUILT (web_search, generate_image through the Fleet's media gateway, daily caps), NOT CONNECTED (no provider chosen yet: you are told so). When connected you pay for each job: the most it can cost is reserved from your cash first (not enough cash, no job) and the actual cost charged when it finishes, the rest returned; for one of your active missions pass missionId (its beneficiaries share the cost when it ends). Until then use web_fetch on sites' own search pages, and draw images with code | checked 2026-10-16 | verified
+- Software fixes and maintenance on a customer's code — BUILT, NOT CONNECTED (the Fleet's GitHub App, code gateway and isolated build environment are not set up yet: the check reports them not connected, and quoting such work is refused). When connected: code.request_access asks the customer (they consent on their enquiry page and install the app on that repository); code.snapshot reads the code; code.build runs your commands on it in the isolated build environment (package registries only, no credentials); code.propose opens a pull request from a new fleet/ branch — only after a passing build of exactly that patch, never to the base branch, never merged by the Fleet. NOT LIVE-PROVEN | checked 2026-10-16 | verified
 - Helper calls — routine_task needs a stated purpose (research, marketing, production or customer_support) and is refused without one; escalate_question and independent_review record theirs. Each call's purpose, start and end are recorded and shown to the owner | checked 2026-10-16 | verified
 - Sweeps: the sweep policy is OFF. Survival protection: ON — an owner setting during setup, not a business strategy or a promise of rescue; actual exhaustion follows the Fleet's lifecycle rule | checked 2026-10-16 | verified
 - Waking from hibernation — BUILT: owner messages, revenue and refunds, paid orders to fulfil or coming due, buyers' briefs and messages, leads and obligations coming due, capital changes, answered owner requests, your review time, inbound email, card-request and spend-review decisions, lesson reviews and dispute changes wake you within about a minute | checked 2026-10-16 | verified

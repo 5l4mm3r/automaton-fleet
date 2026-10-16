@@ -40,6 +40,7 @@ def fail(msg):
     os._exit(97)
 workspace, command = sys.argv[1], sys.argv[2]
 tools = sys.argv[3] if len(sys.argv) > 3 else ""
+connect_port = int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else 0
 abi = libc.syscall(SYS_CREATE, None, ctypes.c_size_t(0), ctypes.c_uint32(1))
 if abi < 1:
     fail("landlock unavailable (errno %d)" % ctypes.get_errno())
@@ -79,6 +80,11 @@ if tools:
         fail("tools dir missing: " + tools)
     allow(tools, ro)
 allow(workspace, fs_all)
+# v89 (the build environment only): one TCP port it may connect to — the Fleet's egress proxy. Founders never pass one.
+if connect_port and net_all:
+    rule = ctypes.create_string_buffer(struct.pack("=QQ", 2, connect_port), 16)
+    if libc.syscall(SYS_ADD, ctypes.c_int(rs), ctypes.c_int(2), rule, ctypes.c_uint32(0)) < 0:
+        fail("add_net_rule errno %d" % ctypes.get_errno())
 PR_SET_NO_NEW_PRIVS = 38
 if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
     fail("no_new_privs errno %d" % ctypes.get_errno())
@@ -119,7 +125,9 @@ function resolveToolsDir(toolsDir: string | undefined, workspace: string): strin
  * <toolsDir>/bin (fleet-python) first on PATH; the domain grants read+execute there, nothing more. The helper itself
  * runs `python3 -I -S`, so PYTHONPATH reaches only the sandboxed command, never the helper.
  */
-export function runSandboxed(workspace: string, command: string, opts: { timeoutMs: number; maxOutput: number; python?: string; toolsDir?: string }): Promise<SandboxedResult> {
+export function runSandboxed(workspace: string, command: string, opts: { timeoutMs: number; maxOutput: number; python?: string; toolsDir?: string;
+  /** v89, the build environment only: the one TCP port the command may connect to (the egress proxy), and its proxy env. */
+  connectPort?: number; extraEnv?: Record<string, string> }): Promise<SandboxedResult> {
   fs.mkdirSync(`${workspace}/.tmp`, { recursive: true, mode: 0o700 });
   const tools = resolveToolsDir(opts.toolsDir, workspace);
   const env: Record<string, string> = { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: workspace, TMPDIR: `${workspace}/.tmp`, LANG: "C.UTF-8" };
@@ -128,8 +136,10 @@ export function runSandboxed(workspace: string, command: string, opts: { timeout
     env.PYTHONPATH = `${tools}/site`;
     env.PYTHONDONTWRITEBYTECODE = "1"; // the toolchain is read-only in the domain anyway; skip the doomed writes
   }
+  for (const [k, v] of Object.entries(opts.extraEnv ?? {})) if (/^[A-Za-z_][A-Za-z0-9_]{0,60}$/.test(k) && !(k in env)) env[k] = v;
+  const port = opts.connectPort !== undefined && Number.isInteger(opts.connectPort) && opts.connectPort > 0 && opts.connectPort < 65536 ? String(opts.connectPort) : "";
   return new Promise((resolve) => {
-    const child = spawn(opts.python ?? "/usr/bin/python3", ["-I", "-S", "-c", LANDLOCK_HELPER, workspace, command, ...(tools ? [tools] : [])], {
+    const child = spawn(opts.python ?? "/usr/bin/python3", ["-I", "-S", "-c", LANDLOCK_HELPER, workspace, command, ...(tools || port ? [tools ?? ""] : []), ...(port ? [port] : [])], {
       cwd: workspace,
       env,
       stdio: ["ignore", "pipe", "pipe"],

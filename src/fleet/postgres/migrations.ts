@@ -95,9 +95,10 @@ import { V85_SQL } from "./migrations-phase85.js";
 import { V86_SQL, BANKFEED_API_FUNCTIONS_V86 } from "./migrations-phase86.js";
 import { V87_SQL, MEDIA_API_FUNCTIONS_V87 } from "./migrations-phase87.js";
 import { V88_SQL } from "./migrations-phase88.js";
+import { V89_SQL, CODE_API_FUNCTIONS_V89, BUILD_API_FUNCTIONS_V89 } from "./migrations-phase89.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 88;
+export const FLEET_PG_SCHEMA_VERSION = 89;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1281,6 +1282,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 86, name: "money_locations", sql: V86_SQL },
   { version: 87, name: "paid_media_and_capability_coverage", sql: V87_SQL },
   { version: 88, name: "money_that_left_is_on_the_books", sql: V88_SQL },
+  { version: 89, name: "software_maintenance_prerequisites", sql: V89_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1606,6 +1608,12 @@ export const BROWSER_API_FUNCTIONS: readonly string[] = Object.freeze([
 /** Schema v85: the media provider gateway's whole database surface (mx_*; role fleet_media). */
 /** v87: mx_result also says how the cost was measured (the old five-argument form is dropped). */
 export const MEDIA_API_FUNCTIONS: readonly string[] = Object.freeze([...MEDIA_API_FUNCTIONS_V87]);
+
+/** Schema v89: the code gateway's whole database surface (cgx_*; role fleet_code). */
+export const CODE_API_FUNCTIONS: readonly string[] = Object.freeze([...CODE_API_FUNCTIONS_V89]);
+
+/** Schema v89: the build environment's whole database surface (bbx_*; role fleet_build). */
+export const BUILD_API_FUNCTIONS: readonly string[] = Object.freeze([...BUILD_API_FUNCTIONS_V89]);
 
 /** Schema v83: the phone-push sender's whole database surface (px_*; role fleet_push). */
 export const PUSH_API_FUNCTIONS: readonly string[] = Object.freeze([...PUSH_API_FUNCTIONS_V83]);

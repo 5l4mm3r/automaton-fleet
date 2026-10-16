@@ -37,6 +37,9 @@ export interface EphemeralPg {
   pushUrl: string;
   /** Schema v85: the media provider gateway (mx_* only). */
   mediaUrl: string;
+  /** Schema v89: the code gateway (cgx_* only) and the build environment (bbx_* only). */
+  codeUrl: string;
+  buildUrl: string;
   /** Schema v38 Admin dashboard login (dash_* only). */
   dashboardUrl: string;
   superUrl: string;
@@ -93,6 +96,8 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
   const channelsPw = randomBytes(12).toString("hex");
   const pushPw = randomBytes(12).toString("hex");
   const mediaPw = randomBytes(12).toString("hex");
+  const codePw = randomBytes(12).toString("hex");
+  const buildPw = randomBytes(12).toString("hex");
   const pwfile = path.join(dir, "pw");
   fs.writeFileSync(pwfile, superPw + "\n", { mode: 0o600 });
   execFileSync(path.join(bin, "initdb"), ["-D", data, "-U", "postgres", "--pwfile", pwfile, "--auth=scram-sha-256", "-E", "UTF8"], {
@@ -126,7 +131,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       psql(
         superUrl,
         ["-v", `dbname=${dbname}`, "-v", "owner=fleet_owner", "-f", "-"],
-        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n\\set custody_password ${custodyPw}\n\\set identity_password ${identityPw}\n\\set browser_password ${browserPw}\n\\set dashboard_password ${dashboardPw}\n\\set provider_password ${providerPw}\n\\set bankfeed_password ${bankfeedPw}\n\\set channels_password ${channelsPw}\n\\set push_password ${pushPw}\n\\set media_password ${mediaPw}\n` +
+        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n\\set custody_password ${custodyPw}\n\\set identity_password ${identityPw}\n\\set browser_password ${browserPw}\n\\set dashboard_password ${dashboardPw}\n\\set provider_password ${providerPw}\n\\set bankfeed_password ${bankfeedPw}\n\\set channels_password ${channelsPw}\n\\set push_password ${pushPw}\n\\set media_password ${mediaPw}\n\\set code_password ${codePw}\n\\set build_password ${buildPw}\n` +
           fs.readFileSync(path.resolve("scripts/fleet-db-roles.sql"), "utf8"),
       );
     // Owner: like production fleetadmin — not a superuser, cannot create roles.
@@ -150,6 +155,8 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       channelsUrl: `postgresql://fleet_channels_login:${channelsPw}@127.0.0.1:${port}/${dbname}`,
       pushUrl: `postgresql://fleet_push_login:${pushPw}@127.0.0.1:${port}/${dbname}`,
       mediaUrl: `postgresql://fleet_media_login:${mediaPw}@127.0.0.1:${port}/${dbname}`,
+      codeUrl: `postgresql://fleet_code_login:${codePw}@127.0.0.1:${port}/${dbname}`,
+      buildUrl: `postgresql://fleet_build_login:${buildPw}@127.0.0.1:${port}/${dbname}`,
       applyRoles,
       stop,
     };
