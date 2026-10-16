@@ -42,6 +42,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "location_add", "location_bind_card", "location_transfer", "location_contribution",
   // v86: release a used debit-card hold the bank never showed (your check; a late charge is still booked).
   "card_hold_release",
+  // v87: record a media provider's statement (posts what the Fleet did not record).
+  "media_statement",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */
@@ -60,4 +62,6 @@ export const WRITE_OPS: ReadonlySet<string> = new Set([
   "push_device_revoke", "push_test", "push_test_received",
   // v86: a location's status (limited / unavailable stops only its own actions); explain a bank line.
   "location_status", "bank_txn_classify", "transfer_arrival", "card_dispute_open", "card_dispute_resolve",
+  // v87: resolve a search / image job whose cost is unknown (from the provider's usage page).
+  "media_job_resolve",
 ]);

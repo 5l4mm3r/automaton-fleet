@@ -77,6 +77,18 @@ describe("v85 founder-v10 tools", () => {
     expect(view.runtime.verification.pptx).toMatch(/leftover placeholder text/);
   });
 
+  it("v87: a check names its offer / enquiry and deliverables, passed through bounded; web_search / generate_image pass a missionId", async () => {
+    const r = rig(async (op) => (op === "capabilities.check" ? { ok: true, fleet: { deliverableTypes: [] } } : op === "media.request" ? { ok: false, code: "FLEET_INSUFFICIENT_FUNDS" } : { ok: true }));
+    await r.run("capabilities", { op: "check", args: { offerId: "11111111-2222-3333-4444-555555555555", deliverables: [{ format: ".xlsx", needs: ["render", 7] }, ...Array(12).fill({ format: "pdf" })] } });
+    const sent = r.calls.find((c) => c.op === "capabilities.check")!.args as Record<string, any>;
+    expect(sent.offerId).toBe("11111111-2222-3333-4444-555555555555");
+    expect(sent.deliverables).toHaveLength(10);
+    expect(sent.deliverables[0]).toEqual({ format: "xlsx", needs: ["render"] });
+    const out = await r.run("web_search", { query: "suppliers", purpose: "research", missionId: "66666666-7777-8888-9999-000000000000" });
+    expect(out.refused).toBe("FLEET_INSUFFICIENT_FUNDS"); // the reservation was refused: no job
+    expect((r.calls.find((c) => c.op === "media.request")!.args as Record<string, any>).missionId).toBe("66666666-7777-8888-9999-000000000000");
+  });
+
   it("capabilities op request passes the request through; an unknown op is refused locally", async () => {
     const r = rig(async () => ({ ok: true, requestId: "r1", repeat: false }));
     expect((await r.run("capabilities", { op: "request", args: { capability: "ocr", reason: "scanned receipts from buyers", evidence: "3 enquiries" } })).ok).toBe(true);

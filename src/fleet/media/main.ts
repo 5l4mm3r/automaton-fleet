@@ -3,8 +3,11 @@
  * no inbound port, outbound HTTPS to the chosen providers' API hosts only.
  *
  *   FLEET_MEDIA_DATABASE_URL          the fleet_media_login connection (mx_* only)
- *   FLEET_MEDIA_SEARCH_PROVIDER       brave | none        FLEET_MEDIA_SEARCH_COST_CENTS  the owner's per-search cost estimate (USD cents)
- *   FLEET_MEDIA_IMAGE_PROVIDER        openai | none       FLEET_MEDIA_IMAGE_COST_CENTS   the owner's per-image cost estimate (USD cents)
+ *   FLEET_MEDIA_SEARCH_PROVIDER       brave | none        FLEET_MEDIA_SEARCH_COST_CENTS  a search's price (USD cents; v87: reserved, then charged)
+ *   FLEET_MEDIA_IMAGE_PROVIDER        openai | none       FLEET_MEDIA_IMAGE_COST_CENTS   the most one image may cost (USD cents; reserved
+ *                                                         from the agent before it runs; a provider without a limit takes no jobs)
+ *   FLEET_MEDIA_IMAGE_TOKEN_PRICES    "<input>,<output>" USD per million tokens (the provider's price list): the actual image
+ *                                                         cost from the tokens the provider reports; absent → the limit is charged
  *   FLEET_MEDIA_IMAGE_MODEL           gpt-image-1 (default) or a newer gpt-image-* model
  *   $CREDENTIALS_DIRECTORY/search-key, image-key          systemd credentials; never in the environment, the repository or a log
  *
@@ -50,6 +53,11 @@ const readKey = (dir: string | undefined, name: string): string | null => {
 };
 /** The image model (default gpt-image-1; the owner may name a newer gpt-image model). */
 const imageModel = (v: string | undefined) => (/^gpt-image-[a-z0-9.-]{1,30}$/.test(v?.trim() ?? "") ? v!.trim() : "gpt-image-1");
+/** "5,40" → USD per million input / output tokens; anything else → none (the per-image limit is charged). */
+export const tokenPrices = (v: string | undefined) => {
+  const m = /^\s*(\d{1,4}(?:\.\d{1,4})?)\s*,\s*(\d{1,4}(?:\.\d{1,4})?)\s*$/.exec(v ?? "");
+  return m ? { input: Number(m[1]), output: Number(m[2]) } : null;
+};
 const cents = (v: string | undefined) => { const n = Number(v ?? ""); return Number.isInteger(n) && n >= 0 && n <= 10_000 ? n : 0; };
 
 /** The providers this gateway may call, each limited to its own API host; no redirects; a timeout. */
@@ -65,7 +73,8 @@ export function mediaConfig(e: Record<string, string | undefined>, http: MediaHt
   const ik = ip === "none" ? null : readKey(e.CREDENTIALS_DIRECTORY, "image-key");
   return {
     search: sp === "brave" && sk ? { provider: new BraveSearch(sk, http), unitCostCents: cents(e.FLEET_MEDIA_SEARCH_COST_CENTS) } : null,
-    image: ip === "openai" && ik ? { provider: new OpenAiImages(ik, http, undefined, imageModel(e.FLEET_MEDIA_IMAGE_MODEL)), unitCostCents: cents(e.FLEET_MEDIA_IMAGE_COST_CENTS) } : null,
+    image: ip === "openai" && ik ? { provider: new OpenAiImages(ik, http, undefined, imageModel(e.FLEET_MEDIA_IMAGE_MODEL)), unitCostCents: cents(e.FLEET_MEDIA_IMAGE_COST_CENTS),
+      tokenPricesUsdPerM: tokenPrices(e.FLEET_MEDIA_IMAGE_TOKEN_PRICES) } : null,
     names: { search: sp, image: ip },
   };
 }

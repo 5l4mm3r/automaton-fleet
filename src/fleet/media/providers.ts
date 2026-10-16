@@ -15,7 +15,9 @@ export interface SearchResult { title: string; url: string; snippet: string; age
 export interface MediaOutcome<T> { ok: boolean; value?: T; error?: string; retryable?: boolean }
 
 export interface SearchProvider { readonly name: string; search(q: { query: string; count: number }): Promise<MediaOutcome<SearchResult[]>> }
-export interface ImageProvider { readonly name: string; generate(r: { prompt: string; size: string }): Promise<MediaOutcome<{ pngB64: string }>> }
+/** v87: the provider's own usage for the call, when it reports it (OpenAI image tokens): the job's actual cost is computed from it. */
+export interface ImageUsage { inputTokens: number; outputTokens: number }
+export interface ImageProvider { readonly name: string; generate(r: { prompt: string; size: string }): Promise<MediaOutcome<{ pngB64: string; usage?: ImageUsage }>> }
 
 const clean = (s: unknown, n: number) => String(s ?? "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim().slice(0, n);
 
@@ -38,7 +40,7 @@ export class BraveSearch implements SearchProvider {
 export class OpenAiImages implements ImageProvider {
   readonly name = "openai";
   constructor(private readonly key: string, private readonly http: MediaHttp, private readonly base = OPENAI_IMAGES_API, private readonly model = "gpt-image-1") {}
-  async generate(req: { prompt: string; size: string }): Promise<MediaOutcome<{ pngB64: string }>> {
+  async generate(req: { prompt: string; size: string }): Promise<MediaOutcome<{ pngB64: string; usage?: ImageUsage }>> {
     let r: Awaited<ReturnType<MediaHttp>>;
     try {
       r = await this.http(this.base, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.key}` },
@@ -48,11 +50,13 @@ export class OpenAiImages implements ImageProvider {
       const j = (await r.json().catch(() => ({}))) as { error?: { code?: string } };
       return { ok: false, retryable: r.status === 429 || r.status >= 500, error: `provider ${r.status}${j.error?.code ? " " + clean(j.error.code, 60) : ""}` };
     }
-    const j = (await r.json().catch(() => ({}))) as { data?: Array<{ b64_json?: string }> };
+    const j = (await r.json().catch(() => ({}))) as { data?: Array<{ b64_json?: string }>; usage?: { input_tokens?: unknown; output_tokens?: unknown } };
     const b64 = j.data?.[0]?.b64_json ?? "";
     if (!/^[A-Za-z0-9+/=]{100,}$/.test(b64) || !Buffer.from(b64.slice(0, 16), "base64").subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) {
       return { ok: false, error: "the provider did not return a PNG" };
     }
-    return { ok: true, value: { pngB64: b64 } };
+    const tok = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 && (v as number) < 10_000_000 ? (v as number) : null);
+    const it = tok(j.usage?.input_tokens), ot = tok(j.usage?.output_tokens);
+    return { ok: true, value: { pngB64: b64, ...(it !== null && ot !== null ? { usage: { inputTokens: it, outputTokens: ot } } : {}) } };
   }
 }

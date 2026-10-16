@@ -91,11 +91,12 @@ import { V81_SQL } from "./migrations-phase81.js";
 import { V82_SQL } from "./migrations-phase82.js";
 import { V83_SQL, PUSH_API_FUNCTIONS_V83 } from "./migrations-phase83.js";
 import { V84_SQL } from "./migrations-phase84.js";
-import { V85_SQL, MEDIA_API_FUNCTIONS_V85 } from "./migrations-phase85.js";
+import { V85_SQL } from "./migrations-phase85.js";
 import { V86_SQL, BANKFEED_API_FUNCTIONS_V86 } from "./migrations-phase86.js";
+import { V87_SQL, MEDIA_API_FUNCTIONS_V87 } from "./migrations-phase87.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 86;
+export const FLEET_PG_SCHEMA_VERSION = 87;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1277,6 +1278,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 84, name: "unresolved_alerts", sql: V84_SQL },
   { version: 85, name: "agent_capabilities", sql: V85_SQL },
   { version: 86, name: "money_locations", sql: V86_SQL },
+  { version: 87, name: "paid_media_and_capability_coverage", sql: V87_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1600,7 +1602,8 @@ export const BROWSER_API_FUNCTIONS: readonly string[] = Object.freeze([
 ]);
 
 /** Schema v85: the media provider gateway's whole database surface (mx_*; role fleet_media). */
-export const MEDIA_API_FUNCTIONS: readonly string[] = Object.freeze([...MEDIA_API_FUNCTIONS_V85]);
+/** v87: mx_result also says how the cost was measured (the old five-argument form is dropped). */
+export const MEDIA_API_FUNCTIONS: readonly string[] = Object.freeze([...MEDIA_API_FUNCTIONS_V87]);
 
 /** Schema v83: the phone-push sender's whole database surface (px_*; role fleet_push). */
 export const PUSH_API_FUNCTIONS: readonly string[] = Object.freeze([...PUSH_API_FUNCTIONS_V83]);

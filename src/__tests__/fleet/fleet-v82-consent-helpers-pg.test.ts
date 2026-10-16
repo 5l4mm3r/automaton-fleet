@@ -16,7 +16,7 @@ import os from "os";
 import path from "path";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, autoCapabilityChecks, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
 import { liveRail } from "./fixtures/custody-signer.js";
 import { PgIdentityGateway } from "../../fleet/identity/gateway.js";
 import { IdentityBroker } from "../../fleet/identity/broker.js";
@@ -74,7 +74,8 @@ describe.skipIf(!PG_BIN)("v82: buyer consent to immediate supply; the helpers re
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, simulatedSettlement: false, outwardHeld: true });
     // v85: an agent checks what it can deliver before it quotes or publishes (valid 7 days).
-    for (const f of R.founders) expect((await R.econ(f, "capabilities.check", { runtime: {} })).ok).toBe(true);
+    // v87: each publish / quote is preceded by a check naming it (the gate itself: fleet-v87-media-capabilities-pg).
+    autoCapabilityChecks(R);
     [F, G] = R.founders;
     await R.store.grantServiceRole();
     await R.store.grantCustodyRole();

@@ -631,7 +631,17 @@ export class FounderToolbox {
       libraries: probe.libraries ?? "unknown (the probe did not run)", renderer: typeof probe.renderer === "string" ? probe.renderer : "",
       ocr: typeof probe.ocr === "string" ? probe.ocr : "", verification: FounderToolbox.VERIFICATION };
     const forOffer = typeof args.forOffer === "string" ? args.forOffer.slice(0, 200) : undefined;
-    const fleet = await this.o.ports.economy("capabilities.check", { runtime, ...(forOffer ? { forOffer } : {}) }).catch(ownerRefusal);
+    // v87: the work the check is for — an offer or an enquiry, and what it delivers (format and what each needs).
+    const target: Record<string, unknown> = {};
+    for (const k of ["offerId", "enquiryId"]) if (typeof args[k] === "string") target[k] = (args[k] as string).slice(0, 40);
+    if (Array.isArray(args.deliverables)) {
+      target.deliverables = (args.deliverables as unknown[]).slice(0, 10).map((d) => {
+        const x = (d && typeof d === "object" ? d : {}) as Record<string, unknown>;
+        return { format: String(x.format ?? "").replace(/^\./, "").slice(0, 10),
+          needs: Array.isArray(x.needs) ? (x.needs as unknown[]).filter((n): n is string => typeof n === "string").slice(0, 7).map((n) => n.slice(0, 30)) : [] };
+      });
+    }
+    const fleet = await this.o.ports.economy("capabilities.check", { runtime, ...(forOffer ? { forOffer } : {}), ...target }).catch(ownerRefusal);
     const fileTypes = Array.isArray(args.fileTypes) ? (args.fileTypes as unknown[]).filter((x): x is string => typeof x === "string").map((x) => x.toLowerCase()) : [];
     const deliverable = new Set(((fleet as { fleet?: { deliverableTypes?: string[] } }).fleet?.deliverableTypes) ?? []);
     const typeVerdict = fileTypes.map((t) => { const ct = contentTypeOf(`x${t.startsWith(".") ? t : "." + t}`); return { type: t, deliverable: !!ct && deliverable.has(ct) }; });
@@ -652,7 +662,8 @@ export class FounderToolbox {
     }
     const req = isImage ? { kind: "image", prompt: String(a.prompt ?? ""), size: a.size ?? "1024x1024" }
       : { kind: "search", query: String(a.query ?? ""), count: a.count ?? 5, purpose: a.purpose ?? "research" };
-    const job = await this.o.ports.economy("media.request", { ...req, idempotencyKey: `media:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128) }).catch(ownerRefusal) as Record<string, unknown>;
+    const mission = typeof a.missionId === "string" ? { missionId: a.missionId.slice(0, 40) } : {};
+    const job = await this.o.ports.economy("media.request", { ...req, ...mission, idempotencyKey: `media:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128) }).catch(ownerRefusal) as Record<string, unknown>;
     if (job.ok === false) return this.econOut(call, job);
     for (let i = 0; i < 60; i++) {
       const x = await this.o.ports.economy("media.result", { jobId: job.jobId }).catch(ownerRefusal) as Record<string, unknown>;
@@ -663,10 +674,10 @@ export class FounderToolbox {
           if (bytes.length < 8 || bytes.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") return refuse("FLEET_PROVIDER_BAD_RESULT", "the provider did not return a PNG");
           fs.mkdirSync(path.dirname(target), { recursive: true });
           fs.writeFileSync(target, bytes, { mode: 0o600 });
-          return { name: call.name, ok: true, output: clip(JSON.stringify({ path: path.relative(this.workspace, target), bytes: bytes.length, costUsdCents: x.costUsdCents ?? null,
+          return { name: call.name, ok: true, output: clip(JSON.stringify({ path: path.relative(this.workspace, target), bytes: bytes.length, costUsdCents: x.costUsdCents ?? null, chargedMinor: x.chargedMinor ?? null,
             note: "AI-generated: inspect it with view_image; disclose AI generation where a platform or the law requires it" })) };
         }
-        return { name: call.name, ok: true, output: clip(JSON.stringify({ results: (x.result as { results?: unknown } | undefined)?.results ?? [], costUsdCents: x.costUsdCents ?? null,
+        return { name: call.name, ok: true, output: clip(JSON.stringify({ results: (x.result as { results?: unknown } | undefined)?.results ?? [], costUsdCents: x.costUsdCents ?? null, chargedMinor: x.chargedMinor ?? null,
           note: "results are leads, not evidence: fetch and check a page (web_fetch) before you rely on it" })) };
       }
       if (x.status === "failed" || x.ok === false) return this.econOut(call, x);

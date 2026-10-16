@@ -78,3 +78,22 @@ Steps 4–6 are described in `docs/operations/monitoring-and-alerts.md` and `bac
 - **Outside monitor and backups:** not installed or connected; no production backup or drill yet.
 - **PayPal limitation:** there is no dedicated alert. It surfaces only as a degraded rail, failing credentials or stale
   captures.
+
+## 6. Defect found after the freeze (2026-10-16 evening; fixed in 11c3456, not in this package)
+
+**The phone-push unit as frozen here would not run once installed:**
+- **Keys present:** `push/main.ts` refuses `CREDENTIALS_DIRECTORY`, which is on the shared forbidden list. systemd sets it
+  whenever `LoadCredential=` is used.
+- **Keys absent:** a missing `LoadCredential=` file fails the unit outright (exit 243, `EXIT_CREDENTIALS`; reproduced
+  with a user-level unit on systemd 255). So "runs not configured without keys" was not true either.
+
+**What is not affected:** the database, the controller, the UI and every rehearsed path. The push unit is a separate,
+owner-approved host step (`fleet-push-setup.sh`) that the rehearsals do not install.
+
+**The fix** (also for the media unit):
+- each service allows its own credentials directory;
+- each `LoadCredential=` has an empty `SetCredential=` fallback;
+- regression test: `fleet-location-feed` › systemd credentials.
+
+**Consequence:** deploy f47ee1c as frozen if you choose, but install the push unit from the next package (or deploy that
+package instead).

@@ -36,6 +36,8 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_control_accrual",
     // v82: the buyer-consent wordings (immutable reference rows the orders point to).
     "fleet_buyer_consent_wordings",
+    // v87: the deliverable formats a capability check can name (immutable reference rows).
+    "fleet_deliverable_formats",
     ...V35_SINGLETONS,
   ]);
   const r = await c.query<{ t: string }>(

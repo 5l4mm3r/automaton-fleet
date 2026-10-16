@@ -258,38 +258,54 @@ Evidence: Starling developer docs and OpenAPI, sole-trader page, fee schedule, 3
 webhooks, tokens, UK pricing); Monzo and Wise API docs; TrueLayer connection docs. All checked 2026-10-16. Links:
 `docs/design/provider-research-2026-10-16.md`.
 
-## 9. Implementation status (schema v86, 2026-10-16; built, NOT deployed, NOT connected)
+## 9. Implementation status (schema v86, corrected 2026-10-16 evening; built, NOT deployed, NOT connected)
 
-**Built and tested** (`fleet-v86-locations-pg`, `fleet-bank-statement`, `fleet-location-feed`; regressions: card v53/v54,
-v51, v58, v64, v77, PayPal treasury, push / operations watch, migration paths, live dashboard contract, privilege audit):
+**State:** built and tested against a SIMULATED bank and a simulated Starling API. Nothing is deployed, no account is opened
+or connected, no token exists.
+
+**Tests:**
+- `fleet-v86-locations-pg` (7 tests);
+- `fleet-v86-bankfeed-service-pg` (the service end to end);
+- `fleet-bank-statement`, `fleet-location-feed`;
+- regressions: card v51 / v53 / v54, v58, v64, v77, PayPal treasury, push / operations watch, migration paths, live
+  dashboard contract, privilege audit.
+
+**How each requirement is met:**
 
 | Requirement | How v86 does it |
 |---|---|
-| §8.3 one ledger, several locations | `fleet_money_locations`: the PayPal account (one per rail, created automatically) and bank accounts. Treasury cash stays ONE ledger total; a location says where it is, from that provider's own evidence |
-| Transfers are the same money | `location_transfer` records a transfer you made: **no journal**. The source's spendable cash drops at once; the destination's only when its bank shows the credit (matched to the one transfer in transit to that account with that amount; two alike wait for you; then `arrived`) |
-| Owner deposit into the bank | `location_contribution` on the bank line: owner funding posted once against that line (a second attempt is refused) |
-| R1 available-balance evidence | Balance readings (available, cleared, pending) with their age; older than the location's limit (default 24 h) = stale = **nothing spendable there**. Debits the bank shows after a reading are subtracted until the next reading |
-| R2 reservation before a hold | With the card bound to a bank (`location_bind_card`), a hold must fit that bank's fresh free cash (balance − Fleet holds the bank has not shown − transfers out − later debits), under the location's lock, on top of the agent's own wallet check |
-| R3 lifecycle, no booking at maximum | Debit mode: the agent's declaration records the amount and books **nothing**. The bank's pending line links the hold; its settled line books the bank's amount (FX kept) with **no card payable** (the money left the bank). A decline releases the hold. A hold the bank never shows is released after 7 days — never booked at its maximum |
-| R4 refunds | A card credit reduces the one booked charge it fits (never more than was charged); otherwise it waits to be explained |
-| R5 reconciliation | Every bank line is matched (card purchase, refund, your transfer) or listed as unexplained in Fleet HQ (Treasury → Money locations) and `hub-locations`; you mark it your deposit, a bank fee (posted as a Fleet expense) or explained. Hourly watch: `LOCATION_UNAVAILABLE`, `LOCATION_EVIDENCE_STALE`, `BANK_TRANSACTIONS_UNEXPLAINED` (> 24 h), `LOCATION_DRIFT` (balance moved by more than its transactions), `LOCATION_NEGATIVE` |
-| R7 3-D Secure (§8.1) | `card_declare` records frictionless / challenged / exempt. A challenge: the agent reports `card_awaiting_approval` → a RED `CARD_APPROVAL_NEEDED` to your phone; the agent waits and never works around it; the hold's own expiry is the timeout. Only founder-v10 runtimes are offered the op |
-| Limited / unavailable | Marking a location limited or unavailable stops only that location: card holds on a limited bank are refused (`FLEET_LOCATION_UNAVAILABLE`); a limited PayPal location has nothing spendable for PayPal outflows |
-| Evidence import | `economy-location-import <locationId> <statement.csv> [--balance n] [--dry-run]`: Starling or generic exports; ids from content, so an overlapping re-export records nothing twice; `--balance` is what the bank's app shows now, never the statement's closing figure |
-| Read adapter | `LocationFeedConnector` + Starling client (API v2 shapes): refuses a token with any scope that is not `…:read`; records transactions, then the balance. Role `fleet_bankfeed` may feed only API-fed bank locations (never a statement-only or PayPal one) |
-| Credit mode unchanged | With no bank bound, the owner-card path (v48–v64: reserve, payable, statement) is exactly as before |
+| §8.3 one ledger, several locations | `fleet_money_locations`: the PayPal account (one per rail, automatic) and bank accounts. Treasury cash stays ONE ledger total; a location says where it is, from that provider's own evidence |
+| Transfers are the same money | `location_transfer` records a transfer you made: **no journal**. The source's spendable cash drops at once. The destination's rises only when evidence shows **that** transfer arrived: (a) its reference in the bank line, or (b) PayPal's own withdrawal record (T0400, the same amount, not used by another transfer) **and** the bank line naming PayPal. Bank → PayPal: the bank's outgoing line with the reference, then PayPal's funding record (T0300). **An unrelated credit of the same amount never completes a transfer** (tested). Anything else goes to you: "this credit is transfer X" |
+| Owner deposit into the bank | `location_contribution` on the bank line: owner funding, posted once against that line |
+| R1 available-balance evidence | Balance readings (available, cleared, pending) with their age. Older than the location's limit (default 24 h) = stale = **nothing spendable there**. Debits seen after a reading are subtracted until the next reading |
+| R2 reservation before a hold | With the card bound to a bank, a hold must fit that bank's fresh free cash (balance − Fleet holds the bank has not shown − transfers out − later debits), under the location's lock, on top of the agent's wallet check |
+| R3 lifecycle, never booked at maximum | The agent's declaration books **nothing**; the bank's settled line books the bank's amount (FX kept), with **no card payable**. A decline or reversal releases the hold. After declaring, the agent can no longer void the hold |
+| **Unresolved exposure** | A used hold (card filled or amount declared) the bank has not shown after 7 days is **OVERDUE, not gone**: still reserved, still counted against the bank's free cash, AMBER alert (and daily while any remain). It is released only on evidence: the bank's decline / reversal, or **your stated check** ("bank app: nothing pending; merchant cancelled"). If the merchant presents it after a release (**late settlement**, within 60 days), it is still booked, from the agent's cash, any shortfall an advance it repays, with an AMBER alert. The same money is never spendable twice. An unused hold expires at 24 h as before |
+| R4 refunds and disputes | A card credit reduces the one booked charge it fits, to zero for a full refund. **Disputes:** you record one on a booked charge (nothing booked then). The bank's credit of that amount settles it (matched, or attributed by you), and the charge is reduced. Lost / withdrawn are recorded. AMBER after 30 days open |
+| R5 reconciliation | Every bank line is matched or listed as unexplained (deposit / bank fee posted as a Fleet expense / explained). **Whole treasury:** each location's latest evidence (PayPal total, bank cleared) plus money in transit, against the books less unbacked capital. "Incomplete", never "reconciled", while any location is stale. AMBER `TREASURY_UNRECONCILED` when it differs by more than £1. Hourly alerts also cover stale, unexplained (> 24 h), drift, negative and limited |
+| R6 attribution | Every debit charge carries agent, merchant, account, purpose and the **venture** of the merchant account |
+| R7 3-D Secure (§8.1) | `card_declare` records frictionless / challenged / exempt. A challenge: the agent reports `card_awaiting_approval`, a RED `CARD_APPROVAL_NEEDED` goes to your phone, and the agent waits and never works around it. Only founder-v10 runtimes are offered the op |
+| Limited / unavailable | Stops only that location (card holds on a limited bank are refused; a limited PayPal location has nothing spendable) |
+| Evidence import | `economy-location-import`: Starling or generic exports. Ids come from content, so an overlapping re-export records nothing twice. `--balance` is what the bank's app shows now, never the statement's |
+| **Bank feed service** | `location-feed-main` + `automaton-fleet-bankfeed.service` + `scripts/fleet-bankfeed-setup.sh` (check / install / set-token). Role `fleet_bankfeed` (rx_* only): API-fed bank locations only, never statement-only or PayPal ones. HTTPS to `api.starlingbank.com` only. A token with any non-read scope is refused before any data is read. Records lines, then the balance |
+| Credit mode unchanged | With no bank bound, the owner-card path (v48–v64) is as before |
 
-**Not built yet (P2 remaining):**
-1. The feed's service: an entry point, systemd unit and setup script for `LocationFeedConnector` (the adapter exists and is
-   tested; nothing runs it). Starling endpoints and the token's scopes must be checked against the real account at setup.
-2. A whole-treasury reconciliation: the sum of location balances (plus transfers in transit) against the ledger's treasury
-   cash, with an alert when they differ. Today each bank location is checked against its own transactions.
-3. Disputes / chargebacks on bank-card charges (a dispute state and its alert). PayPal's own refund and dispute obligations
-   are unchanged (v48 clawbacks).
-4. Several cards (R9): one card can be bound to one bank location; a second card is not modelled.
-5. Venture on a debit charge: the charge carries agent, merchant, account and purpose; per-venture attribution follows the
-   account, not the charge.
-6. A "PayPal limited" signal from PayPal itself: today you mark the PayPal location limited (P1 open item).
+**Autonomy depends on the evidence path:**
+- **With the bank feed** (connected, polling every 15 min), card purchases book from the bank's own record without you.
+- **With statement imports only**, debit-card spending is **not autonomous**. A purchase books only after you import a
+  statement. Until then its money stays reserved, and with a stale balance new card holds on that bank are refused.
 
-**Your choices before connecting** (§8.4): the bank and legal form, float size, read-only token scopes, who approves 3-D
-Secure and how fast. Then the controlled live proof in the master checklist §4 item 7.
+**Not built (remaining):**
+1. Several cards (R9): one card binds to one bank location.
+2. A "PayPal limited" signal from PayPal itself (you mark the location limited).
+3. A provisional chargeback credit later reversed by the bank: the reversal is an unexplained line for you; it is not
+   modelled as a dispute state.
+
+**Your choices before connecting** (§8.4):
+- the bank and legal form;
+- float size;
+- read-only token scopes;
+- who approves 3-D Secure and how fast.
+
+Then `fleet-bankfeed-setup.sh install --apply` (sudo) and `set-token`. Then the controlled live proof (master checklist
+§4 item 7).

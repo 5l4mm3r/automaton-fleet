@@ -1,7 +1,8 @@
 /**
  * v85 agent capabilities (PostgreSQL + the real media gateway against SIMULATED providers — no account, no network).
  *
- * Proven: a quote or an offer publication is refused until the agent has checked its capabilities in the last 7 days; the
+ * Proven: a quote or an offer publication is refused without a capability check (v87: one that names that offer / enquiry —
+ * a generic check no longer opens the gate; fleet-v87-media-capabilities-pg covers the rest); the
  * check returns the Fleet's states with an explicit not-available list and is recorded; a capability request is recorded
  * once (repeats update it) and tells the owner once (AMBER CAPABILITY_REQUESTED → phone push); .pptx is a deliverable and an
  * uploadable type; web search and image generation are refused as "not connected" until a provider reports in, then run as
@@ -53,10 +54,9 @@ describe.skipIf(!PG_BIN)("v85 agent capabilities (PostgreSQL + media gateway, si
     expect(c.fleet.deliverableTypes).toContain(PPTX_TYPE);
     expect(c.notAvailable).toEqual(expect.arrayContaining([expect.stringMatching(/^refunds and paying out/), expect.stringMatching(/^web_search/), expect.stringMatching(/^generate_image/),
       expect.stringMatching(/^rendering Word and PowerPoint/), expect.stringMatching(/^OCR/)]));
-    // With a check on record the gate opens (the calls now fail on their own merits, not on the check).
+    // v87: a recent GENERIC check no longer opens the gate — the check must name the offer / enquiry (and its deliverables).
     for (const [op, args] of [["offer.publish", { offerId: "00000000-0000-0000-0000-000000000000" }], ["enquiry.quote", { enquiryId: "00000000-0000-0000-0000-000000000000" }]] as const) {
-      const r = await R.econ(F, op, args).catch((e: Error) => ({ ok: false, code: e.message }));
-      expect((r as { code?: string }).code).not.toBe("FLEET_CAPABILITY_CHECK_REQUIRED");
+      expect(await R.econ(F, op, args)).toMatchObject({ ok: false, code: "FLEET_CAPABILITY_CHECK_REQUIRED", reason: expect.stringMatching(/generic check is not enough/) });
     }
     // Older than 7 days no longer counts (and checks are immutable: the test moves the clock by inserting an old row's twin).
     expect(await R.econ(G, "offer.publish", { offerId: "00000000-0000-0000-0000-000000000000" })).toMatchObject({ code: "FLEET_CAPABILITY_CHECK_REQUIRED" });
@@ -100,7 +100,7 @@ describe.skipIf(!PG_BIN)("v85 agent capabilities (PostgreSQL + media gateway, si
     await worker.tick();
     expect((await R.econ(F, "capabilities.check", { runtime: {} })).fleet).toMatchObject({ search: "connected", imageGeneration: "connected" });
     const s = await R.econ(F, "media.request", { kind: "search", query: "cash flow template", count: 5, idempotencyKey: "media-k-0002" });
-    expect(s).toMatchObject({ ok: true, unitCostUsdCents: 1 });
+    expect(s).toMatchObject({ ok: true, reservedMinor: 1 }); // v87: reserved from the agent's cash before it runs
     expect(await R.econ(F, "media.result", { jobId: s.jobId })).toMatchObject({ ok: true, status: "queued" });
     expect(await worker.tick()).toEqual({ done: 1, failed: 0 });
     const sr = await R.econ(F, "media.result", { jobId: s.jobId });

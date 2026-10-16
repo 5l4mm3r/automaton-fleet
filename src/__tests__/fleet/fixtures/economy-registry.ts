@@ -3,6 +3,7 @@
  * for the F2 economy suites. Founders are created through the real Genesis state machine, so their ledger accounts,
  * capability manifests and credentials are exactly what production founders get.
  */
+import { DELIVERABLE_FORMATS } from "../../../fleet/postgres/migrations-phase87.js";
 import crypto from "crypto";
 import pg from "pg";
 import { PgFleetStore, hashAgentToken, mintAgentToken } from "../../../fleet/postgres/store.js";
@@ -82,5 +83,30 @@ export async function startEconomyRegistry(pgBin: string, opts: { founders?: num
     close: async () => {
       await genesis.close(); await ledger.close(); await gw.close(); await store.close(); await owner.end(); pgc.stop();
     },
+  };
+}
+
+/** A runtime probe with every deliverable library present (renderer / OCR not installed), as a founder-v10 runtime reports it. */
+export const READY_RUNTIME = Object.freeze({ toolset: "toolset-6", renderer: "", ocr: "", libraries: {
+  spreadsheets: ["openpyxl 3.1.5"], documents: ["docx 1.1.2"], presentations: ["pptx 1.0.2"], pdf: ["reportlab 4.2.5"], ebooks: ["ebooklib 0.20"], images: ["PIL 11.0.0"] } });
+
+/**
+ * v87: publishing an offer or quoting an enquiry needs a capability check that names it and covers its deliverables. Suites
+ * that are not about that gate call this once: before each publish / quote, the agent checks that offer / enquiry (its
+ * deliverable files' formats; a PDF for an enquiry) exactly as a runtime would. The gate itself is tested in
+ * fleet-v87-media-capabilities-pg.
+ */
+export function autoCapabilityChecks(R: EconomyRegistry): void {
+  const econ = R.econ;
+  const formatOf: Record<string, string> = Object.fromEntries(Object.entries(DELIVERABLE_FORMATS).map(([f, [ct]]) => [ct, f]));
+  R.econ = async (who, op, args = {}) => {
+    if (op === "offer.publish" || op === "enquiry.quote") {
+      const key = op === "offer.publish" ? "offerId" : "enquiryId";
+      const types = op === "offer.publish" ? (await R.q(`SELECT DISTINCT content_type FROM fleet.fleet_offer_files WHERE offer_id::text = $1 AND role = 'deliverable' AND removed_at IS NULL`,
+        [String(args.offerId ?? "")])).map((r: any) => formatOf[r.content_type]).filter(Boolean) : [];
+      const deliverables = (types.length ? types : ["pdf"]).map((format: string) => ({ format }));
+      await econ(who, "capabilities.check", { runtime: READY_RUNTIME, [key]: args[key], deliverables }).catch(() => undefined);
+    }
+    return econ(who, op, args);
   };
 }

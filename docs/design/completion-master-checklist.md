@@ -30,29 +30,31 @@ passes against a simulated provider.
 | Pushover limits documented (retry every 72 s, expiry 1 h; Pushover allows at most 3 h and 50 repeats); an alarm that expired unanswered, a failed push or one waiting > 15 min stays listed as **unresolved** until acknowledged (v84) | P1 follow-up (751e0c8) | `fleet-v83-push-pg` (v84 cases); `monitoring-and-alerts.md` |
 | Recovery drill restores sample workspace / product files (up to 40, checksummed) as well as schema and ledger; separate key-recovery procedure (which secret restores what, where each copy lives) | P1 follow-up (751e0c8) | `fleet-backup-heartbeat` (real restic); `backup-and-recovery.md` key table |
 | 3-D Secure statement corrected: frictionless / supported recurring / challenge that needs you — never bypassed; bank comparison against the full autonomous-spending and reconciliation workflow, conditional on seller eligibility | P2 research (751e0c8) | `bank-debit-card-requirements.md` §8.1, §8.2 |
-| **P3 core (v85, runtime founder-v10):** capability check before quoting / publishing (enforced: offer.publish and enquiry.quote need a check in the last 7 days); justified capability requests (reason, evidence, what it holds up, urgency); .pptx as a real deliverable (inspector fleet-qa-2: structure, alt text, overflow, placeholders, rendering + OCR when installed; EPUB checks); toolchain agent-tools-2 (matplotlib, EPUB, OCR bindings); media gateway with Brave Search and OpenAI Images adapters, per-agent daily caps and recorded cost; Capabilities panel | P3 (57d41b4) | `fleet-v85-capabilities-pg`, `fleet-v85-founder-tools`, `fleet-qa-inspector-v2`, `fleet-qa-inspector` (simulated providers; real renderer / OCR binaries not installed) |
-| **P2 core (v86):** money locations in one ledger (PayPal + bank); transfers are the same money (no journal; source drops at once, destination on the bank's evidence; plain statement credits match, oldest first); owner deposit into the bank = owner funding once; evidence age (stale = nothing spendable); debit mode: hold fits the bank's free cash under lock, declaration books nothing, bank settlement books with no card payable, decline releases, refund reduces, no evidence in 7 days releases (never booked at maximum); 3-D Secure challenge → RED `CARD_APPROVAL_NEEDED` (founder-v10 only); unexplained lines queue (deposit / fee / explained); hourly alerts for stale, unexplained, drift, negative, limited; statement CSV import (Starling + generic; replays record nothing); read-only Starling adapter (refuses any non-read scope); Money locations panel | P2 (this commit) | `fleet-v86-locations-pg`, `fleet-bank-statement`, `fleet-location-feed`; regressions listed in `bank-debit-card-requirements.md` §9 |
+| **P3 core (v85, runtime founder-v10):** justified capability requests (reason, evidence, what it holds up, urgency); .pptx as a real deliverable (inspector fleet-qa-2: structure, alt text, overflow, placeholders, rendering + OCR when installed; EPUB checks); toolchain agent-tools-2 (matplotlib, EPUB, OCR bindings); media gateway with Brave Search and OpenAI Images adapters, per-agent daily caps; Capabilities panel | P3 (57d41b4) | `fleet-v85-capabilities-pg`, `fleet-v85-founder-tools`, `fleet-qa-inspector-v2`, `fleet-qa-inspector` (simulated providers; real renderer / OCR binaries not installed) |
+| **Capability checks name the work (v87):** publishing an offer or quoting an enquiry needs a check, in 7 days, that NAMES it, finds every deliverable (format + needs: search, images, render, OCR, refunds, card, mailbox) ready against the runtime's own probe, covers the offer's files, and whose fingerprint (the Fleet's states + the agent's runtime commit) still matches. A generic check, a stale one, or one taken before a provider dropped or the runtime changed is refused | P3 (v87) | `fleet-v87-media-capabilities-pg` (generic refused, uncovered PDF, render missing, library missing, provider dropped, runtime changed, > 7 days); `fleet-v85-founder-tools` (runtime passes target + deliverables) |
+| **Paid media (v87):** the requesting agent pays: the most a job can cost is reserved first (no cash → no job; no cost limit → no job); settled once at its ACTUAL cost (image tokens at the owner's prices / a search's flat price / the limit, labelled), rest returned, owed to the owner (provider on the owner's card, like AI credit); beyond the limit a Fleet expense + alert; provider error releases it; gateway stopped → cost UNKNOWN, reservation kept until the owner resolves it; provider statements post the difference; mission work names the mission (its beneficiaries pay at its end, v35) | P3 (v87) | `fleet-v87-media-capabilities-pg`, `fleet-v85-capabilities-pg` |
+| **P2 (v86, corrected):** money locations in one ledger; transfers are the same money and complete only on evidence they are THAT transfer (reference in the bank line, or PayPal's withdrawal record + the bank line naming PayPal; never an equal amount alone — negative case tested); owner deposit = owner funding once; stale = nothing spendable; debit mode (hold fits the bank under lock; declaration books nothing; bank settlement books, no card payable); a used hold with no bank record after 7 days is OVERDUE (still reserved, alerted), released only on the bank's evidence or your stated check, and a late charge is still booked (never spendable twice); disputes; full refunds; venture on each charge; whole-treasury reconciliation (incomplete while any location is stale); 3-D Secure challenge → RED alert (founder-v10 only); statement import; **bank feed service** (unit + setup script; read-only tokens only; Starling host only) | P2 (c0998ce + 11c3456) | `fleet-v86-locations-pg`, `fleet-v86-bankfeed-service-pg`, `fleet-bank-statement`, `fleet-location-feed`; regressions in `bank-debit-card-requirements.md` §9 |
+| **Defect found in frozen P1:** the push (and media) unit would not run when installed (its own credentials directory refused; a missing key file fails the unit). Fixed with `SetCredential=` fallbacks; regression test | P1 fix (11c3456) | `release-f47ee1c.md` §6; `fleet-location-feed` › systemd credentials |
 
 ## 2. Implementation remaining
 
-**P1:** frozen as f47ee1c; rehearsals passed (release-f47ee1c.md). Open item: a dedicated PayPal limitation alert (no
-PayPal API signal today).
+**P1:**
+- frozen as f47ee1c, rehearsals passed (release-f47ee1c.md);
+- its push unit needs the fix in the next package (§1);
+- open item: a dedicated PayPal limitation alert (PayPal gives no API signal today).
 
-**P2: treasury** — core built in v86 (above). Remaining:
-1. The bank feed's service (entry point, unit, setup script) — the adapter exists; nothing runs it yet.
-2. A whole-treasury reconciliation: location balances plus transfers in transit against the ledger's treasury cash.
-3. Disputes / chargebacks on bank-card charges.
-4. Several cards (R9) and per-charge venture attribution.
-5. Freezing v86 into a package and rehearsing it (it sits on v85; see §5).
+**P2** (complete except):
+1. Several cards (R9).
+2. A provisional chargeback later reversed (shows as an unexplained line).
+3. The PayPal limitation signal (shared with P1).
 
-**P3: agent capabilities** — core built in v85 (above). Remaining:
-- support-burden and AI-cost attribution per order and venture;
-- media cost booked to agent wallets (needs your decision: the same funding question as AI credit; today recorded and
-  shown, not booked);
-- the software-maintenance prerequisites (scoped repository grant, build sandbox) — assessed in the capability map, not
-  built; maintenance is not banned;
-- the office renderer and Tesseract binaries on the server (an OS package install: needs your approval), so .pptx / .docx
-  rendering and OCR checks run there and not only where installed.
+**P3** (remaining):
+- support-burden and AI-cost attribution per order and venture (AI cost is per agent today);
+- the software-maintenance prerequisites (scoped repository grant, build sandbox): assessed, not built; maintenance is not
+  banned;
+- the office renderer and OCR on the server: `scripts/fleet-office-tools-setup.sh` (check / plan / apply) is ready; the OS
+  package install needs your approval;
+- provider keys: search, images, bank token (your accounts).
 
 ## 3. Your setup and provider choices (only the indispensable ones)
 
@@ -64,6 +66,11 @@ PayPal API signal today).
 | Bank/card rail | Conditional on seller eligibility: Starling sole-trader account first (read-only API; 3DS in your app); a limited company only if you later want Revolut / Airwallex (`bank-debit-card-requirements.md` §8.2) | £0 a month |
 | Web search / images (optional) | Brave Search API; OpenAI Images (`docs/operations/media-providers.md`) | Brave $5 per 1,000 searches ($5 free monthly); images priced per token |
 | Your phone | which phone and OS version (the live bundle needs iOS Safari 16.4+) | — |
+
+Media cost settings once a provider is chosen:
+- `FLEET_MEDIA_SEARCH_COST_CENTS`;
+- `FLEET_MEDIA_IMAGE_COST_CENTS` (the per-image limit);
+- `FLEET_MEDIA_IMAGE_TOKEN_PRICES`.
 
 Also needed:
 - each deploy and host installation (sudo);
@@ -85,8 +92,17 @@ Also needed:
    4. support message and revision;
    5. refund (needs PayPal money-out).
 6. **Spending, separately:** an amount and purpose you name in advance; reconciled to provider evidence.
-7. **Bank rail** (after P2): funding transfer matched, one purchase with 3DS, one decline, one refund, reconciliation with
-   zero drift.
+7. **Bank rail** (after P2):
+   - a funding transfer matched on evidence;
+   - one purchase with 3DS;
+   - one decline;
+   - one refund;
+   - the whole treasury reconciled with zero drift.
+
+   With statement imports only, card spending is **not autonomous**: purchases book when you import. Live autonomy needs
+   the bank feed connected.
+8. **Paid media:** one real search and one real image charged at their actual cost, then a provider statement that
+   reconciles to zero.
 
 ## 5. Next releasable package
 
@@ -97,7 +113,9 @@ heartbeat and `OnFailure`, backup / drill, the edge change, capability guidance 
 **bbfb24a (P0) stays frozen and ready.** Its rehearsals are valid until **2026-10-17 16:46Z** (production unchanged since:
 a712be1, schema 81).
 
-**Next to freeze: v84 – v86 (P1 follow-ups, P3 core, P2 core) with UI 0.22.0**, on top of f47ee1c. It carries the agent
-runtime founder-v10, so after the controller cutover Agent-1's runtime is upgraded while it stays paused (Agent-2 stays
-paused on its current runtime). Before freezing: the remaining P2 item 1 (feed service) can wait for your bank choice; the
-package is releasable without it (bank locations then take statement imports only).
+**Next to freeze: v84 – v87 with UI 0.22.0** (P1 follow-ups and the push-unit fix, P2, P3), on top of f47ee1c, with
+rehearsals of its own (record: release of that commit).
+- **What it carries:** agent runtime founder-v10. After the controller cutover, Agent-1's runtime is upgraded while it stays
+  paused. Agent-2 stays paused on its current runtime.
+- **What it is not:** it does not connect anything.
+- **Separate host steps (each its own go):** push, monitor, backups, bank feed, media, office tools.

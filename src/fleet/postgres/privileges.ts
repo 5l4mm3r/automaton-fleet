@@ -1195,7 +1195,10 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_push_sender: new Set(["px_push_heartbeat"]),
     // v85: capability checks are written by the agent's own op only.
     fleet_capability_checks: new Set(["fleet_econ_capabilities_check"]),
-    fleet_media_jobs: new Set(["fleet_econ_media_request", "fleet_econ_media_result", "mx_claim", "mx_result"]),
+    fleet_media_jobs: new Set(["fleet_econ_media_request", "fleet_econ_media_result", "mx_claim", "mx_result",
+      // v87: the one settlement per job (reservation → actual cost) and the owner's resolution of a job of unknown cost.
+      "fleet_media_settle", "fleet_admin_media_job_resolve"]),
+    fleet_media_provider_statements: new Set(["fleet_admin_media_statement"]),
     fleet_media_providers: new Set(["mx_report"]),
     // v86: money locations and their evidence — locations by the owner (and the migration's PayPal rows), evidence through
     // the bank-feed connector or the owner's CSV, transfers by the owner, matching and classification.
