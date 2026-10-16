@@ -5,7 +5,7 @@
 # notification code, a short id and a link to the authenticated dashboard; never a notification's text, a customer or a
 # document. Database: fleet_push_login (px_* only) over PostgreSQL's unix socket, from push.env.
 #
-# Credentials (an absent file falls back to an empty SetCredential=, so the unit starts "not configured"): the Pushover application token and the owner's user key as systemd credentials (root-owned 0600 files under
+# Credentials (an absent file falls back to a placeholder SetCredential= ("unset", rejected as a key), so the unit starts "not configured"): the Pushover application token and the owner's user key as systemd credentials (root-owned 0600 files under
 # /etc/automaton-fleet/push/, handed to this unit only, never in its environment). Without them the sender runs "not
 # configured": the dashboard says so and nothing is sent.
 #
@@ -31,9 +31,9 @@ Environment=FLEET_PUSH_EXPECTED_USER=automaton-fleet-push
 Environment=FLEET_PUSH_DASHBOARD_ORIGIN=https://admin.agentfleet.vip
 Environment=HOME=/var/lib/automaton-fleet-push
 LoadCredential=pushover-token:/etc/automaton-fleet/push/pushover-token
-SetCredential=pushover-token:
+SetCredential=pushover-token:unset
 LoadCredential=pushover-user:/etc/automaton-fleet/push/pushover-user
-SetCredential=pushover-user:
+SetCredential=pushover-user:unset
 StateDirectory=automaton-fleet-push
 StateDirectoryMode=0700
 UMask=0077
@@ -69,7 +69,7 @@ LockPersonality=yes
 RemoveIPC=yes
 SystemCallArchitectures=native
 MemoryDenyWriteExecute=false
-InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/browser.env -/etc/automaton-fleet/gumroad.env -/etc/automaton-fleet/channels.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key -/etc/automaton-fleet/push -/etc/automaton-fleet/bankfeed
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/browser.env -/etc/automaton-fleet/gumroad.env -/etc/automaton-fleet/channels.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key -/etc/automaton-fleet/push -/etc/automaton-fleet/bankfeed -/etc/automaton-fleet/code.env -/etc/automaton-fleet/build.env -/etc/automaton-fleet/code -/etc/automaton-fleet/bankfeed.env -/etc/automaton-fleet/media
 InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-identity -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-gumroad -/var/lib/automaton-fleet-channels -/var/lib/private/automaton-founders -/var/log/automaton-fleet
 
 [Install]

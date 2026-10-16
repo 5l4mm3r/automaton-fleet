@@ -112,11 +112,27 @@ describe("systemd credentials (push, media, bank feed)", () => {
     expect(pushEnvProblems({ ...cd, FLEET_PUSH_DATABASE_URL: "postgresql://x", FLEET_PUSH_DASHBOARD_ORIGIN: "https://admin.example.com" }, { uid: 1000, username: "u" })).toEqual([]);
     expect(mediaEnvProblems({ ...cd, FLEET_MEDIA_DATABASE_URL: "postgresql://x" }, { uid: 1000, username: "u" }).join()).not.toMatch(/CREDENTIALS_DIRECTORY/);
     expect(feedEnvProblems({ ...cd, FLEET_BANKFEED_DATABASE_URL: "postgresql://x", FLEET_LOCATION_FEED_ACCOUNTS: "[]" }, { uid: 1000, username: "u" })).toEqual([]);
-    for (const unit of ["automaton-fleet-push.service", "automaton-fleet-media.service"]) {
+    for (const unit of ["automaton-fleet-push.service", "automaton-fleet-media.service", "automaton-fleet-code.service"]) {
       const text = fs.readFileSync(`deploy/systemd/${unit}`, "utf8");
       const ids = [...text.matchAll(/^LoadCredential=([a-z-]+):\/etc\/[^\n]+$/gm)].map((m) => m[1]);
       expect(ids.length, unit).toBeGreaterThan(0);
-      for (const id of ids) expect(text, `${unit} ${id}`).toMatch(new RegExp(`^SetCredential=${id}:$`, "m"));
+      // A non-empty placeholder (systemd ignores an empty SetCredential= as invalid syntax, so the unit would fail with 243).
+      for (const id of ids) expect(text, `${unit} ${id}`).toMatch(new RegExp(`^SetCredential=${id}:unset$`, "m"));
+      const { spawnSync } = await import("child_process");
+      const v = spawnSync("systemd-analyze", ["verify", `deploy/systemd/${unit}`], { encoding: "utf8" });
+      if (!v.error) expect(`${v.stdout}${v.stderr}`, unit).not.toMatch(/Invalid syntax|Unknown key/);
     }
+    // The placeholder is never taken for a key: each service reads it as "not configured".
+    const os = await import("os"), path = await import("path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cred-unset-"));
+    for (const n of ["pushover-token", "pushover-user", "search-key", "image-key", "github-app-key"]) fs.writeFileSync(path.join(dir, n), "unset");
+    const { pushCredentials } = await import("../../fleet/push/main.js");
+    const { appKey } = await import("../../fleet/code/main.js");
+    const { mediaConfig } = await import("../../fleet/media/main.js");
+    expect(pushCredentials(dir)).toBeNull();
+    expect(appKey(dir)).toBeNull();
+    const cfg = mediaConfig({ CREDENTIALS_DIRECTORY: dir, FLEET_MEDIA_SEARCH_PROVIDER: "brave", FLEET_MEDIA_IMAGE_PROVIDER: "openai" }, (async () => ({})) as never);
+    expect([cfg.search, cfg.image]).toEqual([null, null]);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

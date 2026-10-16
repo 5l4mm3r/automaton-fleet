@@ -1,0 +1,61 @@
+# Automaton Fleet build egress proxy — schema v89 (the build environment's only way out).
+#
+# NOT INSTALLED by default (owner-approved host step: scripts/fleet-code-setup.sh). Runs dist/fleet/build/egress-proxy.js as
+# its own system user (automaton-fleet-build-proxy). Listens on 127.0.0.1:3129 only and opens HTTPS CONNECT tunnels to the
+# allow-listed package registries on port 443 (FLEET_BUILD_EGRESS_ALLOW, default npm, PyPI, crates, Go, RubyGems, Maven);
+# plain HTTP, other ports, IP literals and other hosts are refused. No credentials; nothing is decrypted or cached.
+
+[Unit]
+Description=Automaton Fleet build egress proxy (loopback listener; registries only)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-build-proxy
+Group=automaton-fleet-build-proxy
+SupplementaryGroups=
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/build/egress-proxy.js
+Environment=NODE_ENV=production
+Environment=FLEET_BUILD_PROXY_PORT=3129
+UMask=0077
+MemoryMax=256M
+TasksMax=64
+
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=20s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-build-proxy
+
+IPAddressDeny=::1/128 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/4 240.0.0.0/4
+IPAddressDeny=fc00::/7 fe80::/10 ff00::/8
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=false
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/browser.env -/etc/automaton-fleet/gumroad.env -/etc/automaton-fleet/channels.env -/etc/automaton-fleet/push.env -/etc/automaton-fleet/media.env -/etc/automaton-fleet/bankfeed.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key -/etc/automaton-fleet/push -/etc/automaton-fleet/media -/etc/automaton-fleet/bankfeed -/etc/automaton-fleet/code -/etc/automaton-fleet/code.env -/etc/automaton-fleet/build.env
+InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-identity -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-gumroad -/var/lib/automaton-fleet-channels -/var/lib/private/automaton-founders -/var/log/automaton-fleet
+
+[Install]
+WantedBy=multi-user.target

@@ -46,6 +46,7 @@ import { DASHBOARD_SENSITIVE_OPS_V81, DASHBOARD_WRITE_OPS_V81_ADDED } from "../.
 import { DASHBOARD_SENSITIVE_OPS_V83, DASHBOARD_WRITE_OPS_V83_ADDED } from "../../fleet/postgres/migrations-phase83.js";
 import { DASHBOARD_SENSITIVE_OPS_V86, DASHBOARD_WRITE_OPS_V86_ADDED } from "../../fleet/postgres/migrations-phase86.js";
 import { DASHBOARD_SENSITIVE_OPS_V87, DASHBOARD_WRITE_OPS_V87_ADDED } from "../../fleet/postgres/migrations-phase87.js";
+import { DASHBOARD_WRITE_OPS_V89_ADDED } from "../../fleet/postgres/migrations-phase89.js";
 import { GatewayClient } from "../../../codex-dashboard/src/dashboard/api/client";
 import { LiveAuth } from "../../../codex-dashboard/src/dashboard/api/auth";
 import { FleetApiError } from "../../../codex-dashboard/src/dashboard/api/errors";
@@ -129,7 +130,7 @@ describe.skipIf(!PG_BIN)("Codex dashboard LIVE contract against the real v41 gat
     // v48–v50: treasury, identity authority, custody credentials, lifecycle — each added to the gateway's sensitive class.
     expect([...SENSITIVE_OPS].sort()).toEqual([...DASHBOARD_SENSITIVE_OPS_V41, ...DASHBOARD_SENSITIVE_OPS_V48, ...DASHBOARD_SENSITIVE_OPS_V49, ...DASHBOARD_SENSITIVE_OPS_V50,
       ...DASHBOARD_SENSITIVE_OPS_V51, ...DASHBOARD_SENSITIVE_OPS_V52, ...DASHBOARD_SENSITIVE_OPS_V53, ...DASHBOARD_SENSITIVE_OPS_V54, ...DASHBOARD_SENSITIVE_OPS_V55, ...DASHBOARD_SENSITIVE_OPS_V57, ...DASHBOARD_SENSITIVE_OPS_V58, ...DASHBOARD_SENSITIVE_OPS_V59, ...DASHBOARD_SENSITIVE_OPS_V64, ...DASHBOARD_SENSITIVE_OPS_V66, ...DASHBOARD_SENSITIVE_OPS_V69, ...DASHBOARD_SENSITIVE_OPS_V81, ...DASHBOARD_SENSITIVE_OPS_V83, ...DASHBOARD_SENSITIVE_OPS_V86, ...DASHBOARD_SENSITIVE_OPS_V87].sort());
-    expect([...WRITE_OPS].sort()).toEqual([...DASHBOARD_WRITE_OPS_V63, ...DASHBOARD_WRITE_OPS_V81_ADDED, ...DASHBOARD_WRITE_OPS_V83_ADDED, ...DASHBOARD_WRITE_OPS_V86_ADDED, ...DASHBOARD_WRITE_OPS_V87_ADDED].sort());
+    expect([...WRITE_OPS].sort()).toEqual([...DASHBOARD_WRITE_OPS_V63, ...DASHBOARD_WRITE_OPS_V81_ADDED, ...DASHBOARD_WRITE_OPS_V83_ADDED, ...DASHBOARD_WRITE_OPS_V86_ADDED, ...DASHBOARD_WRITE_OPS_V87_ADDED, ...DASHBOARD_WRITE_OPS_V89_ADDED].sort());
     for (const f of ["adapters/live.ts", "api/client.ts", "api/auth.ts", "api/operations.ts", "api/snapshot.ts", "api/reveal.ts", "api/seal.ts", "live/mapping.ts", "live/index.ts", "adapter.live.ts", "money/MoneyPanels.tsx"]) {
       const src = fs.readFileSync(path.join(INTEGRATION, f), "utf8");
       expect(src, f).not.toMatch(/from\s+["'][^"']*simulat/i);

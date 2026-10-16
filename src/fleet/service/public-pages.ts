@@ -164,10 +164,12 @@ export class PublicPages {
         if (p.length === 5 && p[2] === "file" && UUID.test(p[3]) && /^([1-9]|10)$/.test(p[4]) && !isPost) return await this.file(res, p[1], p[3], Number(p[4]));
         if (p.length === 3 && p[2] === "message" && isPost) return await this.message(req, res, "order", p[1], origin);
         if (p.length === 3 && p[2] === "consent" && isPost) return await this.consent(req, res, p[1], origin);
+        if (p.length === 3 && p[2] === "repo-consent" && isPost) return await this.repoConsent(req, res, "order", p[1], origin);
       }
       if (p[0] === "enquiry" && TOKEN.test(p[1] ?? "")) {
         if (p.length === 2 && !isPost) return await this.enquiry(res, p[1]);
         if (p.length === 3 && p[2] === "message" && isPost) return await this.message(req, res, "enquiry", p[1], origin);
+        if (p.length === 3 && p[2] === "repo-consent" && isPost) return await this.repoConsent(req, res, "enquiry", p[1], origin);
       }
       page(res, 404, "Not found", "<h1>Not found</h1><p>This page does not exist or is no longer available.</p>", null);
     } catch (err) {
@@ -355,6 +357,7 @@ export class PublicPages {
       + (askConsent ? consentCard : "")
       + (o.scope ? `<div class="card"><h2>Agreed scope</h2>${para(o.scope)}</div>` : "")
       + (downloads.length ? `<div class="card"><h2>Your files</h2><ul>${downloads.map((f) => `<li><a href="/order/${esc(token)}/file/${esc(f.deliveryId)}/${esc(f.fileNo)}">${esc(f.fileName)}</a> (${kb(f.sizeBytes)})${f.until ? ` <span class="muted">until ${esc(String(f.until).slice(0, 10))}</span>` : ""}</li>`).join("")}</ul></div>` : "")
+      + await this.repoHtml("order", token)
       + threadHtml(r.thread)
       + (o.payment === "paid" || o.payment === "partially_refunded" ? messageForm(`/order/${token}/message`, nonce) : "")
       + (o.offer?.terms ? `<div class="card"><h2>Terms</h2>${para(o.offer.terms)}</div>` : "")
@@ -384,6 +387,35 @@ export class PublicPages {
     this.sendFile(res, String(r.fileName), String(r.contentType), String(r.contentB64), false);
   }
 
+  /** v89: requests for access to the customer's repository, with the exact terms and a consent form (no script needed). */
+  private async repoHtml(kind: "enquiry" | "order", token: string): Promise<string> {
+    const r = await this.port.publicCall("svc_repo_requests", [kind, token]);
+    const reqs = (r.requests as Array<Record<string, any>> | undefined) ?? [];
+    if (!reqs.length) return "";
+    const install = typeof r.installUrl === "string" ? r.installUrl : null;
+    return reqs.map((q) => `<div class="card"><h2>Access to your code: ${esc(q.repo)}</h2><p>${esc(q.wording)}</p>`
+      + (q.status === "requested"
+        ? `<form method="post" action="/${kind}/${esc(token)}/repo-consent"><input type="hidden" name="authorizationId" value="${esc(q.authorizationId)}">`
+          + `<p><label>Type the repository name to confirm (${esc(q.repo)})<br><input name="repo" required maxlength="140" autocomplete="off"></label></p>`
+          + `<p><label>Your name<br><input name="name" required maxlength="140"></label></p>`
+          + `<p><button class="btn" type="submit">I authorise this access</button></p><p class="muted">Never send passwords, tokens or keys: access is only through the app you install.</p></form>`
+        : q.status === "consented"
+          ? `<p><strong>You authorised this.</strong> Now install the app on <strong>${esc(q.repo)}</strong> only${install ? `: <a class="btn" href="${esc(install)}" rel="noopener">Install the GitHub App</a>` : " (the install link is not available yet)."}</p>`
+          : `<p><strong>Access is active</strong> until ${esc(String(q.expiresAt ?? "").slice(0, 10))}. To end it at any time, uninstall the app or remove this repository from it.</p>`)
+      + `</div>`).join("");
+  }
+
+  private async repoConsent(req: http.IncomingMessage, res: http.ServerResponse, kind: "enquiry" | "order", token: string, origin: string): Promise<void> {
+    const b = await this.body(req);
+    const back = `<p><a class="btn" href="/${kind}/${esc(token)}">Back to your page</a></p>`;
+    if (!b || !UUID.test(String(b.authorizationId ?? ""))) { page(res, 400, "Not accepted", `<h1>Not accepted</h1><p>The form was incomplete.</p>${back}`, null); return; }
+    const r = await this.port.publicCall("svc_repo_consent", [kind, token, String(b.authorizationId), String(b.repo ?? "").slice(0, 200), String(b.name ?? "").slice(0, 200), origin]);
+    if (!r.ok) { page(res, 400, "Not accepted", `<h1>Not accepted</h1><p>${esc(r.reason ?? "This request is no longer open.")}</p>${back}`, null); return; }
+    const install = typeof r.installUrl === "string" ? r.installUrl : null;
+    page(res, 200, "Authorised", `<h1>Thank you</h1><p>You authorised access to this repository on the terms shown. Next, install the app on that repository only.</p>`
+      + (install ? `<p><a class="btn" href="${esc(install)}" rel="noopener">Install the GitHub App</a></p>` : "<p>The install link is not available yet; the seller will tell you.</p>") + back, null);
+  }
+
   private async enquiry(res: http.ServerResponse, token: string): Promise<void> {
     const r = await this.port.publicCall("svc_enquiry_page", [token]);
     if (!r.ok) { page(res, 404, "Not found", "<h1>Not found</h1><p>This request page does not exist.</p>", null); return; }
@@ -393,7 +425,7 @@ export class PublicPages {
       accepted: "Accepted", declined: "Declined", expired: "Closed" };
     page(res, 200, `Your request — ${e.offer?.title ?? ""}`, `<h1>Your request</h1><p class="muted">${esc(e.offer?.title)}</p>`
       + `<div class="card"><p><strong>${esc(words[e.status] ?? e.status)}</strong></p>${e.orderToken ? `<p><a class="btn" href="/order/${esc(e.orderToken)}">Open your order page</a></p>` : ""}</div>`
-      + `<div class="card"><h2>Your brief</h2>${para(e.brief)}</div>` + threadHtml(r.thread)
+      + `<div class="card"><h2>Your brief</h2>${para(e.brief)}</div>` + await this.repoHtml("enquiry", token) + threadHtml(r.thread)
       + (["new", "clarifying", "quoted"].includes(e.status) ? messageForm(`/enquiry/${token}/message`, nonce) : ""), r.seller,
       ["new", "clarifying", "quoted"].includes(e.status) ? { nonce } : {});
   }

@@ -301,6 +301,8 @@ const IMPLEMENTED = new Set([
   "business", "view_image",
   // v85 (founder-v10): capabilities before commitment; search and images through the provider gateway.
   "capabilities", "web_search", "generate_image",
+  // v89: software maintenance on a customer's repository (consent, snapshot, isolated build, pull request).
+  "code",
   // R41.1 (founder-v5): the founder's own field journal and the Survival Field Guide.
   "field_journal", "field_guide",
 ]);
@@ -647,6 +649,58 @@ export class FounderToolbox {
     const typeVerdict = fileTypes.map((t) => { const ct = contentTypeOf(`x${t.startsWith(".") ? t : "." + t}`); return { type: t, deliverable: !!ct && deliverable.has(ct) }; });
     return { name: call.name, ok: (fleet as { ok?: unknown }).ok !== false, output: clip(JSON.stringify({ runtime, ...(fleet as object), ...(typeVerdict.length ? { yourFileTypes: typeVerdict } : {}),
       note: "Promise only what this report and your own demonstrated work support. Ask for a missing capability with capabilities op request." })) };
+  }
+
+  /** v89: the code tool. Snapshots land unpacked in the workspace; patches are read from workspace files (≤ 1 MB). */
+  private async code(call: ToolCall, a: Record<string, unknown>): Promise<ToolOutcome> {
+    const refuse = (code: string, why: string): ToolOutcome => ({ name: call.name, ok: false, refused: code, output: `NOT DONE ${code}: ${why}` });
+    if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
+    const op = String(a.op ?? "");
+    const args: Record<string, unknown> = a.args && typeof a.args === "object" && !Array.isArray(a.args) ? { ...(a.args as Record<string, unknown>) } : {};
+    const idem = `code:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128);
+    const econ = (o: string, x: Record<string, unknown>) => this.o.ports.economy!(o, x).catch(ownerRefusal) as Promise<Record<string, unknown>>;
+    const unpack = async (jobId: string, b64: string, auth: string) => {
+      const dir = path.join(this.workspace, "code", auth.slice(0, 8), jobId.slice(0, 8));
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const tgz = path.join(dir, ".snapshot.tar.gz");
+      fs.writeFileSync(tgz, Buffer.from(b64, "base64"), { mode: 0o600 });
+      const r = await runSandboxed(dir, "tar -xzf .snapshot.tar.gz --strip-components=1 --no-same-owner && rm -f .snapshot.tar.gz", { timeoutMs: 120_000, maxOutput: 4_000, python: this.o.sandboxPython });
+      return { path: path.relative(this.workspace, dir), ok: r.code === 0, detail: r.code === 0 ? undefined : r.output.slice(0, 400) };
+    };
+    if (op === "request_access") return this.econOut(call, await econ("code.request_access", args));
+    if (op === "access") return this.econOut(call, await econ("code.access", args));
+    if (op === "build" || op === "propose") {
+      if (args.patchPath !== undefined) {
+        const f = this.resolve(String(args.patchPath));
+        if (!fs.existsSync(f) || fs.statSync(f).size > 1_000_000) return refuse("FLEET_BAD_REQUEST", "patchPath is a workspace file of at most 1 MB (a unified diff, e.g. git diff > fix.patch)");
+        args.patch = fs.readFileSync(f, "utf8");
+        delete args.patchPath;
+      }
+      return this.econOut(call, await econ(op === "build" ? "code.build" : "code.propose", { ...args, idempotencyKey: idem }));
+    }
+    if (op === "snapshot" || op === "job") {
+      let jobId = String(args.jobId ?? "");
+      if (op === "snapshot") {
+        const r = await econ("code.snapshot", { ...args, idempotencyKey: idem });
+        if (r.ok === false) return this.econOut(call, r);
+        jobId = String(r.jobId);
+      }
+      for (let i = 0; i < (op === "snapshot" ? 90 : 1); i++) {
+        const x = await econ("code.job", { jobId });
+        if (x.ok === false || x.status === "done") {
+          if (typeof x.tarballB64 === "string") {
+            const u = await unpack(jobId, x.tarballB64, String(args.authorizationId ?? jobId));
+            delete x.tarballB64;
+            return { name: call.name, ok: u.ok, output: clip(JSON.stringify({ ...x, workspacePath: u.path, ...(u.detail ? { unpackError: u.detail } : {}),
+              note: "the customer's code: work on it here; build with op build (baseline first, then your patch); propose only a patch that passed" })) };
+          }
+          return this.econOut(call, x);
+        }
+        if (op === "snapshot") await new Promise((res) => setTimeout(res, 2_000));
+      }
+      return { name: call.name, ok: true, output: clip(JSON.stringify({ jobId, status: "running", note: "check it later with op job" })) };
+    }
+    return refuse("FLEET_BAD_REQUEST", "op is request_access | access | snapshot | build | propose | job");
   }
 
   /** v85: web_search / generate_image — a job for the Fleet's provider gateway, waited for here (bounded). */
@@ -1036,6 +1090,9 @@ export class FounderToolbox {
         // v85: search and image generation through the Fleet's provider gateway (a job the gateway runs; polled here).
         case "web_search": case "generate_image":
           return await this.mediaJob(call, a);
+        // v89: a customer's repository — consent, snapshot, isolated build, pull request (database dispatch).
+        case "code":
+          return await this.code(call, a);
         // v79: look at an image of your own (a render, a screenshot, a graphic): shown to you in your next step only.
         case "view_image": {
           const f = this.resolve(String(a.path ?? ""));

@@ -64,4 +64,6 @@ export const WRITE_OPS: ReadonlySet<string> = new Set([
   "location_status", "bank_txn_classify", "transfer_arrival", "card_dispute_open", "card_dispute_resolve",
   // v87: resolve a search / image job whose cost is unknown (from the provider's usage page).
   "media_job_resolve",
+  // v89: end a customer's repository access (the customer can also uninstall the app).
+  "repo_access_revoke",
 ]);

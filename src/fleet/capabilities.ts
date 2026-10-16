@@ -101,6 +101,9 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   // provider gateway (research class, like web_fetch); image generation through the gateway (its own commercial work, cost
   // recorded against the agent; no new authority).
   capabilities: "planning",
+  // v89: a customer's repository through the code gateway and the isolated build environment (database dispatch; the
+  // customer's consent and the app installation are enforced there).
+  code: "planning",
   web_search: "research.web",
   generate_image: "planning",
   // R41.1 (owner, 2026-10-08): the v34–v37 economy tools the controller has always advertised under "planning" were

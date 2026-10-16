@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import fs from "fs";
+import { execFileSync } from "child_process";
 import os from "os";
 import path from "path";
 import { FounderToolbox } from "../../fleet/founder/toolbox.js";
@@ -87,6 +88,33 @@ describe("v85 founder-v10 tools", () => {
     const out = await r.run("web_search", { query: "suppliers", purpose: "research", missionId: "66666666-7777-8888-9999-000000000000" });
     expect(out.refused).toBe("FLEET_INSUFFICIENT_FUNDS"); // the reservation was refused: no job
     expect((r.calls.find((c) => c.op === "media.request")!.args as Record<string, any>).missionId).toBe("66666666-7777-8888-9999-000000000000");
+  });
+
+  it("v89: the code tool unpacks a snapshot into the workspace, reads a patch from a workspace file, and passes the rest through", async () => {
+    const top = fs.mkdtempSync(path.join(os.tmpdir(), "v89t-"));
+    fs.mkdirSync(path.join(top, "acme-calc-abc"));
+    fs.writeFileSync(path.join(top, "acme-calc-abc", "calc.py"), "def add(a, b):\n    return a - b\n");
+    execFileSync("tar", ["-czf", path.join(top, "t.tgz"), "-C", top, "acme-calc-abc"]);
+    const tgz = fs.readFileSync(path.join(top, "t.tgz")).toString("base64");
+    const r = rig(async (op, x) => op === "code.snapshot" ? { ok: true, jobId: "11111111-2222-3333-4444-555555555555" }
+      : op === "code.job" ? { ok: true, status: "done", kind: "snapshot", result: { sha: "a".repeat(40) }, tarballB64: tgz }
+      : op === "code.build" ? { ok: true, jobId: "j-build", received: typeof x.patch === "string" } : { ok: true });
+    const out = await r.run("code", { op: "snapshot", args: { authorizationId: "99999999-0000-0000-0000-000000000000" } });
+    expect(out.ok, out.output).toBe(true);
+    const view = JSON.parse(out.output);
+    expect(view.workspacePath).toBe("code/99999999/11111111");
+    expect(view.tarballB64).toBeUndefined();
+    if (fs.existsSync(path.join(r.dirs.w, view.workspacePath, "calc.py"))) expect(fs.readFileSync(path.join(r.dirs.w, view.workspacePath, "calc.py"), "utf8")).toContain("return a - b");
+    fs.writeFileSync(path.join(r.dirs.w, "fix.patch"), "--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a - b\n+    return a + b\n");
+    const b = await r.run("code", { op: "build", args: { authorizationId: "99999999-0000-0000-0000-000000000000", snapshotJobId: "s", commands: ["python3 test_calc.py"], patchPath: "fix.patch" } });
+    expect(JSON.parse(b.output)).toMatchObject({ ok: true, received: true });
+    const sent = r.calls.find((c) => c.op === "code.build")!.args;
+    expect(sent.patch).toContain("+    return a + b");
+    expect(sent.patchPath).toBeUndefined();
+    expect(String(sent.idempotencyKey)).toMatch(/^code:/);
+    expect((await r.run("code", { op: "build", args: { patchPath: "../../etc/passwd" } })).ok).toBe(false);
+    expect((await r.run("code", { op: "delete_repo", args: {} })).refused).toBe("FLEET_BAD_REQUEST");
+    fs.rmSync(top, { recursive: true, force: true });
   });
 
   it("capabilities op request passes the request through; an unknown op is refused locally", async () => {
