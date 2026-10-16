@@ -427,10 +427,13 @@ CREATE INDEX fleet_helper_jobs_started ON fleet_helper_jobs (started_at DESC);
 CREATE INDEX fleet_helper_jobs_running ON fleet_helper_jobs (request_id) WHERE state = 'running';
 CREATE TRIGGER fleet_helper_jobs_no_delete BEFORE DELETE ON fleet_helper_jobs FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
 
+-- The three triggers run as the schema owner (SECURITY DEFINER, fixed search_path): the roles that reserve and record calls
+-- have no access to fleet_helper_jobs, and the end check runs at commit, outside any definer function. They write only
+-- fleet_helper_jobs, from the triggering row.
 -- Opened when FleetController reserves the call (its route snapshot): the kind and purpose the founder stated, or what the
 -- route itself proves (an escalation is a decision question; evidence_relevance is Fleet Control's evidence check). A
 -- routine chore from an older runtime that stated no purpose is recorded with purpose NULL — never guessed.
-CREATE FUNCTION fleet_helper_job_open() RETURNS trigger LANGUAGE plpgsql
+CREATE FUNCTION fleet_helper_job_open() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE r jsonb := NEW.route; v_kind text; v_purpose text;
 BEGIN
@@ -451,7 +454,7 @@ END $$;
 CREATE TRIGGER fleet_helper_job_open AFTER UPDATE OF route ON fleet_cognition_inflight FOR EACH ROW EXECUTE FUNCTION fleet_helper_job_open();
 
 -- Closed by the call's recorded result.
-CREATE FUNCTION fleet_helper_job_close() RETURNS trigger LANGUAGE plpgsql
+CREATE FUNCTION fleet_helper_job_close() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 BEGIN
   UPDATE fleet_helper_jobs SET finished_at = NEW.at, state = CASE WHEN NEW.outcome = 'ok' THEN 'finished' ELSE 'failed' END
@@ -461,7 +464,7 @@ END $$;
 CREATE TRIGGER fleet_helper_job_close AFTER INSERT ON fleet_cognition_log FOR EACH ROW EXECUTE FUNCTION fleet_helper_job_close();
 
 -- A reservation that ended with no recorded result (expired, released): checked at commit, after any result was written.
-CREATE FUNCTION fleet_helper_job_end() RETURNS trigger LANGUAGE plpgsql
+CREATE FUNCTION fleet_helper_job_end() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 BEGIN
   UPDATE fleet_helper_jobs SET finished_at = now(), state = 'ended' WHERE request_id = OLD.request_id AND state = 'running';

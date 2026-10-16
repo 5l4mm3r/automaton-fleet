@@ -106,7 +106,7 @@ export class RoutedRehearsalModel extends ScriptedProvider {
       content = "A page needs extracting: a routine chore.";
       toolCalls = [
         call("write_file", { path: "notes/rehearsal-page.txt", content: "Groomer Income Tracker — £12 — 14 sales\n" }),
-        call("routine_task", { taskClass: "extraction", instructions: "Return the product name and price as JSON {name, priceGBP}.", path: "notes/rehearsal-page.txt" }),
+        call("routine_task", { taskClass: "extraction", purpose: "research", instructions: "Return the product name and price as JSON {name, priceGBP}.", path: "notes/rehearsal-page.txt" }),
       ];
     } else if (lastTool.includes("must be decided at the critical tier") || (toolText.includes("must be decided at the critical tier") && inTurn === 3)) {
       content = "At the critical tier the major spend is still justified by the recorded decision.";
