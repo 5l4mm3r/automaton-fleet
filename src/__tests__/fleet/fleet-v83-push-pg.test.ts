@@ -13,7 +13,7 @@ import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry } from "./fixtures/economy-registry.js";
 import { PgPushGateway, PushSender, pushMessage } from "../../fleet/push/sender.js";
-import { PushoverProvider, type PushHttp } from "../../fleet/push/pushover.js";
+import { ALARM_EXPIRE_S, ALARM_RETRY_S, PUSHOVER_LIMITS, PushoverProvider, type PushHttp } from "../../fleet/push/pushover.js";
 import { pushCredentials, pushEnvProblems } from "../../fleet/push/main.js";
 
 const PG_BIN = findPgBin();
@@ -119,7 +119,7 @@ describe.skipIf(!PG_BIN)("v83 phone push (PostgreSQL + sender, simulated provide
     await notify("RED", "TREASURY_INSOLVENT", "k-p0");
     await sender.tick();
     const alarm = calls.find((c) => c.url.endsWith("/messages.json"))!;
-    expect(alarm.body).toMatchObject({ priority: "2", retry: "60", expire: "3600", title: "Automaton Fleet · URGENT", device: "iphone" });
+    expect(alarm.body).toMatchObject({ priority: "2", retry: "72", expire: "3600", title: "Automaton Fleet · URGENT", device: "iphone" });
     const id = await nid("k-p0");
     expect((await deliveries(`notification_id = '${id}'`))[0]).toMatchObject({ state: "sent", receipt: "rcpt1234567890", alarm_cancelled_at: null });
     await sender.tick();
@@ -180,6 +180,32 @@ describe.skipIf(!PG_BIN)("v83 phone push (PostgreSQL + sender, simulated provide
     const dash = new pg.Pool({ connectionString: R.pgc.dashboardUrl, max: 1 });
     dash.on("error", () => {});
     try { expect(await R.code(dash.query(`SELECT fleet.svc_operations_watch()`))).toBe("permission denied"); } finally { await dash.end(); }
+  });
+
+  it("v84: an alert whose phone push is over without an answer stays visibly unresolved until acknowledged (expired alarm, failed push, long wait)", async () => {
+    // Pushover's caps: repeat interval >= 30 s, at most 3 h, at most 50 repeats — our alarm stays inside all three.
+    expect(ALARM_RETRY_S).toBeGreaterThanOrEqual(PUSHOVER_LIMITS.minRetryS);
+    expect(ALARM_EXPIRE_S).toBeLessThanOrEqual(PUSHOVER_LIMITS.maxExpireS);
+    expect(Math.ceil(ALARM_EXPIRE_S / ALARM_RETRY_S)).toBeLessThanOrEqual(PUSHOVER_LIMITS.maxRepeats);
+    respond = (url) => (url.endsWith("/messages.json") ? { status: 200, json: { status: 1, request: "r", receipt: "rcptexpired0001" } } : { status: 200, json: { status: 1 } });
+    await notify("RED", "TREASURY_INSOLVENT", "k-p0-expired");
+    await sender.tick();
+    const id = await nid("k-p0-expired");
+    const unresolved = async () => (await R.one<any>(`fleet.fleet_push_json()`)).unresolved as Array<{ notificationId: string; reason: string }>;
+    expect((await unresolved()).find((u) => u.notificationId === id)).toBeUndefined(); // still ringing: not yet "over"
+    await R.q(`UPDATE fleet.fleet_push_deliveries SET sent_at = now() - interval '2 hours' WHERE notification_id = $1`, [id]);
+    expect((await unresolved()).find((u) => u.notificationId === id)).toMatchObject({ reason: "alarm_expired" });
+    // Failed on every device, and waiting too long to be sent, are unresolved too.
+    const perm = await nid("k-perm");
+    expect((await unresolved()).find((u) => u.notificationId === perm)).toMatchObject({ reason: "push_failed" });
+    await notify("RED", "HIGH_EXPOSURE_SPEND", "k-wait-long"); // queued, never sent (no tick)
+    const wait = await nid("k-wait-long");
+    await R.q(`UPDATE fleet.fleet_push_deliveries SET created_at = now() - interval '20 minutes' WHERE notification_id = $1`, [wait]);
+    expect((await unresolved()).find((u) => u.notificationId === wait)).toMatchObject({ reason: "push_waiting" });
+    // Acknowledging clears it.
+    await R.q(`SELECT fleet.fleet_admin_notification_ack($1::uuid, $2)`, [id, OWNER]);
+    expect((await unresolved()).find((u) => u.notificationId === id)).toBeUndefined();
+    respond = () => ({ status: 200, json: { status: 1, request: "r" } });
   });
 
   it("the push role can call its own protocol only; it cannot read notifications or act as the owner", async () => {

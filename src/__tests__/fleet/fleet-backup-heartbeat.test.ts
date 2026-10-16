@@ -89,6 +89,9 @@ describe.skipIf(!PG_BIN || !RESTIC || !fs.existsSync(RESTIC ?? ""))("backups (re
     expect(files).toMatch(/\/MANIFEST$/m);
     expect(files).toContain("product.xlsx");
     expect(files).not.toContain("custody.key");
+    const manifest = restic("dump", "latest", files.split("\n").find((l) => l.endsWith("/FILES.sha256"))!);
+    expect(manifest).toMatch(/^[0-9a-f]{64}  .*\/state\/workspace\/product\.xlsx$/m);
+    expect(manifest).not.toContain("custody.key"); // escrowed key material is neither backed up nor listed
     const globals = restic("dump", "latest", files.split("\n").find((l) => l.endsWith("/globals.sql"))!);
     expect(globals).toMatch(/CREATE ROLE/);
     expect(globals).not.toMatch(/PASSWORD '|SCRAM-SHA-256\$/);
@@ -99,10 +102,24 @@ describe.skipIf(!PG_BIN || !RESTIC || !fs.existsSync(RESTIC ?? ""))("backups (re
     pings.length = 0;
     const r = await backup("drill");
     expect(r.status, r.stdout + r.stderr).toBe(0);
-    expect(r.stdout).toMatch(/drill ok: snapshot \w+ restored, schema \d+, ledger verifies \(\d+ journals\)/);
+    expect(r.stdout).toMatch(/drill ok: snapshot \w+ restored, schema \d+, ledger verifies \(\d+ journals\), [1-9]\d* sample files verified/);
     expect(pings.at(-1)!.path).toBe("/backup");
     const left = execFileSync("psql", ["-X", "-tA", "-d", "postgres", "-c", "SELECT count(*) FROM pg_database WHERE datname LIKE 'fleet_restore_drill_%'"], { env, encoding: "utf8" }).trim();
     expect(left).toBe("0");
+  });
+
+  it("key recovery: the owner's separate escrow password (restic key add) restores everything without the server's password", async () => {
+    fs.mkdirSync(path.join(dir, "escrow-secrets"), { mode: 0o700 });
+    const escrow = "the owner's offline escrow password, kept on paper";
+    fs.writeFileSync(path.join(dir, "escrow-secrets/restic-password"), escrow, { mode: 0o600 });
+    fs.writeFileSync(path.join(dir, "new-key"), escrow, { mode: 0o600 });
+    restic("key", "add", "--new-password-file", path.join(dir, "new-key"));
+    fs.rmSync(path.join(dir, "new-key"));
+    pings.length = 0;
+    const r = await backup("drill", { FLEET_BACKUP_SECRETS: path.join(dir, "escrow-secrets") });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/sample files verified/);
+    expect(r.stdout + r.stderr).not.toContain(escrow);
   });
 
   it("a wrong password or a broken repository fails loudly to the monitor, never silently", async () => {

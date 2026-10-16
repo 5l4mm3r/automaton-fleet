@@ -14,6 +14,7 @@
 | Part | Built | Installed | Connected | Enabled | Live-proven |
 |---|---|---|---|---|---|
 | Push queue (v83): one push per notification per phone, severity, retries, acknowledgement | yes (tested, simulated provider) | no (needs deploy) | no | no | no |
+| Unresolved alerts (v84): expired alarm / failed / long-waiting push stays listed until acknowledged | yes (tested) | no (needs deploy) | n/a | after deploy | no |
 | Push sender service | yes (tested, simulated provider) | no (`fleet-push-setup.sh`) | no (Pushover keys) | no | no |
 | Phone alerts panel (Notifications page) | yes (browser-tested, emulated phone) | no (UI 0.21.1) | no | no | no |
 | Hourly operations watch (health failures, payment trouble, overdue paid orders, low AI credit) | yes (tested) | no (needs deploy) | n/a | after deploy | no |
@@ -71,6 +72,19 @@ document. Healthchecks and UptimeRobot see only "ok" or the names of failed chec
 9. **Prove it:**
    - Stop the heartbeat timer for 15 minutes (or block its ping). Your phone should ring.
    - Fail a test check (Healthchecks "send test notification").
+
+## Pushover's limits, and what happens when an alarm runs out (v84)
+- **An urgent alarm** (Pushover "emergency" priority) repeats every **72 seconds for at most one hour** until you acknowledge
+  it on the phone, then it stops. Pushover's own caps: a repeat interval of at least 30 seconds, at most 3 hours of
+  repeating, and at most 50 repeats. 72 s × 50 = 1 hour sits inside all three.
+- **Acknowledging on the phone only silences the alarm.** The Fleet's acknowledgement is in Fleet HQ (signed in);
+  acknowledging there also cancels the alarm.
+- **When the alarm runs out unanswered, or every push to your phones failed, or a push has waited more than 15 minutes to
+  be sent** (no Pushover keys yet, sender down), the notification is listed in red under **"alerts still unresolved"** on
+  the Phone alerts panel. It stays there until you acknowledge it. Nothing is re-sent automatically and nothing is
+  approved for you.
+- Pushover rate-limits applications (HTTP 429). The sender honours its Retry-After and backs off. A rejected token, user
+  or device fails at once and shows as "the phone alert could not be delivered".
 
 ## What each alert means
 

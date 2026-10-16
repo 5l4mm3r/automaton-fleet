@@ -173,45 +173,77 @@ Sealing the card and turning on `--card on` stay the owner's own steps. They are
 | Overdraft | none arranged; an unarranged negative balance is possible (late or offline charges) | — | — | — | — |
 | Export fallback | CSV feed export through the API | app export (unverified) | web app | app | app |
 
-**Where a human stays unavoidable, at every provider checked:**
-1. Opening the account, KYC and liveness checks: the owner.
-2. **3-D Secure for online card purchases: the cardholder (the owner), in the bank's app or with an SMS / email code.**
-   No provider documents programmatic or delegated 3DS. Reading Airwallex's emailed codes automatically is technically
-   possible but would hand the cardholder's authentication factor to software; it is **not** recommended.
-3. Creating the API token, and any IP allow-list.
-4. New payees and outbound payments through the API (where offered), which usually need in-app approval.
-5. Open-banking consents, if that read route were used: re-confirm every 90 days.
+### 8.1 Authenticating a purchase (3-D Secure / SCA): three different outcomes
+Owners should not expect to approve every purchase, but nothing here bypasses authentication the card scheme requires.
 
-Ways to see 3DS less often, without bypassing it:
-- Revolut's trusted merchants;
-- merchant-requested exemptions (low value, transaction-risk analysis, follow-on subscription charges).
+1. **Frictionless.** The merchant sends EMV 3-D Secure data; the card issuer approves on its own risk assessment and nobody
+   is asked. Common for familiar merchants, small amounts and consistent behaviour. Neither the Fleet nor the owner decides
+   this; the issuer does each time.
+2. **Exempt or out of scope:**
+   - **merchant-initiated transactions** after one authenticated setup (subscriptions, renewals, metered SaaS billing): later
+     charges are started by the merchant under the agreement and are usually not challenged;
+   - **low-value** and **transaction-risk-analysis** exemptions requested by the merchant's payment provider (the issuer may
+     still challenge);
+   - **trusted beneficiaries:** a merchant the cardholder has whitelisted, where the issuer supports it (Revolut Business
+     "trusted merchants").
+3. **Challenged.** The issuer asks the cardholder: a push in the bank app (Starling, Revolut), or a one-time code by SMS or
+   email (Airwallex). **This is the only case that needs the owner.**
+   - The Fleet records it as "awaiting owner approval" (R7) with a phone alert and a timeout. The hold is never booked
+     without evidence.
+   - The Fleet never reads the cardholder's codes or app on the owner's behalf.
 
-Each prompt that does appear becomes the R7 "awaiting owner approval" state, with a P1 phone alert.
+**Measured, not assumed.** Each charge records which of the three it was, where the provider's data shows it. So the owner
+sees the real share of purchases that needed them, per merchant. A one-off setup approval for a subscription is expected;
+repeated challenges at one merchant are a signal to change merchant or payment route, never to work around authentication.
 
-**Recommendation.**
+**Other human steps (all providers):** opening the account and KYC; creating API credentials and any IP allow-list;
+approving new payees or payments where the provider requires in-app approval; open-banking re-consent every 90 days, if
+that route is used.
 
-*Phase 1: Starling, sole-trader account* (eligible for an individual today, £0 a month, no arranged overdraft, the best
-documented read data). The Fleet's side:
-- a **read-only** adapter in its own service: balance, feed and CSV-export scopes, optionally card lock as a kill switch,
-  **no payment scopes**;
-- **polling first** (about every 2 minutes, within the daily limit), which needs no new public endpoint. Signed webhooks
-  later, if a public route is approved; polling stays as the safety net;
-- Fleet-side holds (R2) and attribution by matching (R5/R6) on transaction id, amount, source amount, merchant and date;
-- 3DS approved by the owner in the Starling app (R7).
+### 8.2 Against the complete autonomous-spending and reconciliation requirements (not read access alone)
 
-*Phase 2, only if exact per-agent attribution or network-level limits become necessary:*
-- **Revolut Business Grow** (a virtual card per agent, with references; likely needs a limited company); or
-- **Airwallex** (single-use cards and remote authorisation, so a Fleet hold is enforced at the card network). 3DS still
-  goes to the owner.
+| Requirement (R1–R9) | Starling (sole trader) | Revolut Business (Grow) | Airwallex (Explore) |
+|---|---|---|---|
+| Eligible for the legal seller as an individual sole trader | **yes** | registered business required; assume a limited company (UK sole trader unverified) | sole traders and companies (issuing for a UK sole trader: **verify with Airwallex**) |
+| R1 available vs pending balance | yes (cleared / effective / pending) | one balance; pending from transactions | yes |
+| R2 reservation enforced at the card network | **no**: Fleet-side holds only; card lock is the only control | per-card limits and merchant lists on agent cards (limits, not exact holds) | **yes: remote authorisation**: the Fleet approves or declines each authorisation in real time against its own hold (Airwallex must enable it) |
+| A card per agent / per purchase | no API card creation | **virtual cards per agent or venture**, references copied to transactions | **virtual and single-use cards** |
+| R3 authorisation → settlement, FX, fees, reversal, decline | yes (statuses, source amount, FX, settlement time) | yes (states; amount and billed amount; MCC) | yes (lifecycle: authorised → cleared / reversed / expired / declined) |
+| R4 refunds linked to the charge | refund status on the feed (linking by matching) | `card_refund` type (linking by matching) | refunds linked by `lifecycle_id` |
+| R5 reconciliation feed + missed-event recovery | signed webhooks (retries ~14 min) + polling `changesSince`; CSV export by API | webhooks + failed-events endpoint + `/transactions` backfill | HMAC webhooks, re-sendable; list endpoints |
+| R6 attribution | by matching only (one card) | exact (card references) | exact (card per agent / purchase) |
+| R7 challenges | owner's Starling app | owner's Revolut app; trusted merchants | SMS / email code to the cardholder |
+| Supplier payments by bank transfer via API | to existing payees only, signed; may need review | PAY scope; drafts under approval rules need the app | available (not examined) |
+| Overdraft / borrowing | none arranged; an unarranged negative balance is possible (the Fleet's drift check flags it) | — | — |
+| Cost | £0/month | £35/month | £0 (or £19) /month |
 
-**Open owner choices for this rail:**
-1. Provider and legal form: Starling now as a sole trader, or a limited company for Revolut / Airwallex.
-2. Whether the bank balance is Fleet treasury or owner money held for the Fleet (R8; an economic-policy review).
-3. Float size and top-up trigger. Top-ups from PayPal stay **manual**: no automatic personal top-ups, no overdraft.
-4. Token scopes: read-only, or also card lock.
-5. Polling only, or webhooks as well (a new public route needs approval).
-6. Who approves 3DS and how fast, plus the timeout and any trusted merchants.
-7. Reconciliation cadence, and a sample CSV export.
+**Conditional recommendation:**
+- **If the legal seller stays an individual sole trader:**
+  1. Airwallex, **if** it confirms issuing and remote authorisation for this seller. It is the only option where the Fleet's
+     hold is enforced at the network (a single-use or per-agent card that cannot be overspent), with exact attribution.
+  2. Otherwise **Starling**: read access, Fleet-side holds, attribution by matching, one shared card. Workable, but less
+     autonomous: the Fleet cannot stop an over-hold charge at the network; it can only detect it and lock the card.
+- **If a limited company is formed:** Airwallex as above, or Revolut Business Grow (per-agent virtual cards with references
+  and limits) where its card controls suit better.
+- **In every case:** PayPal stays supported and first (O17), with no automatic top-ups and no borrowing.
+
+### 8.3 Ledger rule (owner direction 2026-10-16)
+- Bank funds are **another treasury location** in the existing ledger. Agent wallets stay ledger sub-balances, attributed
+  across locations.
+- A **transfer** PayPal ↔ bank moves the same money: one location goes down, then (after it is in transit) the other goes
+  up. It never creates capital or revenue.
+- Money the **owner pays into the bank directly** is a capital contribution, recorded once with its bank reference, like
+  any other owner funding.
+- A location's balance is spendable only when the provider's evidence is fresh and matches the ledger. A held, stale or
+  drifting location blocks spending from that location only.
+
+### 8.4 Open owner choices for this rail
+1. Legal form (sole trader now, or a limited company), then the provider: the conditional recommendation in 8.2.
+2. Float size, and the top-up trigger. Top-ups stay manual: no automatic personal top-ups, no overdraft.
+3. Token scopes: read-only (+ card lock); payments by API stay off unless separately approved.
+4. Polling only, or webhooks as well (a new public route needs approval).
+5. Who approves 3-D Secure challenges, how fast, and any trusted merchants.
+6. Reconciliation cadence, and a sample CSV export.
 
 **What continues during a PayPal hold or limitation:**
 - Bank-funded card spending continues, within the bank balance. Nothing PayPal holds becomes spendable.

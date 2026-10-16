@@ -72,6 +72,12 @@ run)
   read -r -a paths <<< "${FLEET_BACKUP_PATHS:-}"
   existing=(); for p in "${paths[@]}"; do [[ -e "$p" ]] && existing+=("$p") || log "skipping absent path $p"; done
   excl=(); read -r -a ex <<< "${FLEET_BACKUP_EXCLUDES:-}"; for p in "${ex[@]}"; do excl+=(--exclude "$p"); done
+  # A checksum of every file backed up (excluded paths left out), so a drill can prove files come back byte for byte.
+  if (( ${#existing[@]} )); then
+    find "${existing[@]}" -type f -print0 2>/dev/null | xargs -0 -r sha256sum 2>/dev/null \
+      | awk -v ex="${FLEET_BACKUP_EXCLUDES:-}" 'BEGIN { n = split(ex, X, " ") } { p = substr($0, 67); skip = 0; for (i = 1; i <= n; i++) if (X[i] != "" && index(p, X[i]) == 1) skip = 1; if (!skip) print }' \
+      > "$work/FILES.sha256"
+  else : > "$work/FILES.sha256"; fi
   "$RESTIC" backup --quiet --tag fleet --tag "schema-$ver" --host fleet "${excl[@]}" "$work" "${existing[@]}" || die "restic backup"
   "$RESTIC" forget --quiet --tag fleet --host fleet --keep-daily 14 --keep-weekly 8 --keep-monthly 12 $( [[ "$(date -u +%u)" == 7 ]] && echo --prune ) >/dev/null || die "restic forget"
   if [[ "$(date -u +%u)" == 7 ]]; then "$RESTIC" check --read-data-subset=5% >/dev/null 2>&1 || die "restic check"; fi
@@ -88,7 +94,7 @@ drill)
   snap="$("$RESTIC" snapshots --json --tag fleet --host fleet --latest 1 | python3 -I -c 'import json,sys; s=json.load(sys.stdin); print(s[-1]["short_id"] if s else "")')" \
     || die "repository not readable (password or repository)"
   [[ -n "$snap" ]] || die "no snapshot to restore"
-  "$RESTIC" restore "$snap" --target "$work" --include '**/db.dump' --include '**/MANIFEST' >/dev/null || die "restic restore"
+  "$RESTIC" restore "$snap" --target "$work" --include '**/db.dump' --include '**/MANIFEST' --include '**/FILES.sha256' >/dev/null || die "restic restore"
   dump="$(find "$work" -name db.dump | head -1)"; man="$(dirname "$dump")/MANIFEST"
   [[ -f "$dump" && -f "$man" ]] || die "dump or manifest missing in snapshot $snap"
   (cd "$(dirname "$dump")" && grep ' db.dump$' MANIFEST | sha256sum -c --quiet -) || die "dump checksum mismatch"
@@ -101,8 +107,22 @@ drill)
   [[ "$got" == "$want" ]] || die "restored schema $got != manifest $want"
   [[ "$($PSQL -d "$scratch" -c "SELECT (fleet.fleet_ledger_verify() ->> 'ok')")" == true ]] || die "the restored ledger does not verify"
   journals="$($PSQL -d "$scratch" -c "SELECT count(*) FROM fleet.fleet_ledger_journal")"
-  log "drill ok: snapshot $snap restored, schema $got, ledger verifies ($journals journals)"
-  ping_monitor ok "drill $snap schema $got journals $journals"
+  # Files: restore a random sample (up to 40) of the backed-up workspace / product / configuration files and check each
+  # against the checksum taken at backup time.
+  fman="$(find "$work" -name FILES.sha256 | head -1)"; nf=0
+  if [[ -n "$fman" && -s "$fman" ]]; then
+    sample="$work/sample.sha256"; shuf -n 40 "$fman" > "$sample"
+    inc=(); while IFS= read -r line; do inc+=(--include "${line:66}"); done < "$sample"
+    "$RESTIC" restore "$snap" --target "$work/files" "${inc[@]}" >/dev/null || die "restic restore of sample files"
+    while IFS= read -r line; do
+      want_sum="${line:0:64}"; f="${line:66}"
+      [[ -f "$work/files$f" ]] || die "sample file missing after restore: $f"
+      [[ "$(sha256sum "$work/files$f" | cut -c1-64)" == "$want_sum" ]] || die "sample file differs after restore: $f"
+      nf=$((nf + 1))
+    done < "$sample"
+  fi
+  log "drill ok: snapshot $snap restored, schema $got, ledger verifies ($journals journals), $nf sample files verified"
+  ping_monitor ok "drill $snap schema $got journals $journals files $nf"
   ;;
 *) echo "unknown command $CMD" >&2; exit 2 ;;
 esac

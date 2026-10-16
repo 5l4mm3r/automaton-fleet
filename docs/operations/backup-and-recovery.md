@@ -84,11 +84,33 @@ first: agents paused, sales closed.
 `restic restore latest --target /root/restore --include /var/lib/private/automaton-founders/<agent>`, then copy back with
 the original owner and permissions.
 
+## Key recovery (separate from the backup; your procedure)
+The backup is useless without its password, and some secrets are deliberately **not** in the backup. Each has its own
+escrow and recovery path:
+
+| Key | Where it lives | Escrow (you, offline) | How to recover | How to check it worked |
+|---|---|---|---|---|
+| **Backup password** (restic) | `/etc/automaton-fleet/backup/restic-password` (server credential) | a **second, independent password** you add once with `restic key add` and keep on paper and in your password manager | put your escrow password in a 0600 file and point `FLEET_BACKUP_SECRETS` at its directory; `restic snapshots` lists the backups | `fleet-backup.sh drill` with your escrow password passes (tested: the escrow password alone restores the database and sample files) |
+| **Custody key** (signs money movements) | `/var/lib/automaton-fleet-custody` (custody user, 0600) | an encrypted copy of the key file (e.g. a password-manager attachment) plus a paper note of its fingerprint | restore the file to the same path with owner `automaton-fleet-custody` and mode 0600; start the custody unit | `fleet:admin hub-custody-key` shows the same fingerprint as your note (today 4fee40f2…); a custody attestation succeeds |
+| **Identity vault keys** (`agent.key`, `owner.key`, provider keys) | the identity broker's state directory (`FLEET_IDENTITY_STATE_DIR`, 0700) | encrypted copies of the key files | restore the files with the broker's owner and 0600; start the identity unit | the broker starts with no vault-file problem reported, and a stored credential can be revealed (`hub-reveal`) |
+| **Cognition key** | `/etc/automaton-fleet/cognition.key` | an encrypted copy | restore with its original owner and mode | the controller and founder units start and the cognition probe answers |
+| **TLS keys** | `/etc/letsencrypt` | none needed | re-issue with certbot | the admin site loads with a valid certificate |
+| **Backblaze master key** | Backblaze account | your password manager (2FA on the account) | sign in to Backblaze; create a new bucket-scoped key | `restic snapshots` with the new key works |
+
+**Rules:**
+- Escrow copies are made when each key is first created or rotated, never from the backup.
+- Keep them in two places: a password manager, plus paper or an encrypted USB key kept elsewhere.
+- Check once a year that you can still open them.
+- A restore attempted with a wrong or missing key fails at once, and the monitor reports it (tested). Nothing is half
+  restored.
+
 **Tested here:**
 - init only on request;
 - a backup with the excluded key folder left out;
 - the roles without passwords;
-- a drill restore with the ledger verifying;
+- a drill restore with the ledger verifying, plus a random sample of workspace and product files restored and checked
+  byte for byte against the checksums taken at backup time;
+- your escrow password alone restoring everything (key recovery);
 - a wrong password failing loudly to the monitor.
 
 **Not yet proven:** a drill on the production server (needs installation), and a full rebuild on a fresh server (B), which

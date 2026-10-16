@@ -21,9 +21,14 @@ export interface PushProvider {
 }
 export type PushHttp = (url: string, body: URLSearchParams) => Promise<{ status: number; headers: { get(name: string): string | null }; json(): Promise<unknown> }>;
 
-/** Repeat an alarm every 60 s for at most an hour, until acknowledged on the phone (Pushover's emergency priority). */
-export const ALARM_RETRY_S = 60;
+/**
+ * An alarm (Pushover emergency priority) repeats every ALARM_RETRY_S until acknowledged on the phone or until ALARM_EXPIRE_S.
+ * Pushover's limits: retry at least 30 s, expire at most 10800 s (3 h), and at most 50 repeats — 72 s × 50 = 1 hour, inside
+ * all three. After that the phone stops ringing; the notification stays unresolved on the dashboard until acknowledged.
+ */
+export const ALARM_RETRY_S = 72;
 export const ALARM_EXPIRE_S = 3600;
+export const PUSHOVER_LIMITS = { minRetryS: 30, maxExpireS: 10800, maxRepeats: 50 } as const;
 
 export class PushoverProvider implements PushProvider {
   readonly name = "pushover" as const;

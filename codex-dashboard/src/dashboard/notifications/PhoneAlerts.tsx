@@ -34,9 +34,21 @@ export function PhoneAlerts({ client, highlightTest }: { client: GatewayClient; 
     : !sender.alive ? { tone: "text-red-300", text: `Not responding since ${when(sender.lastSeenAt)}. Alerts are waiting; email alerts continue.` }
     : !sender.configured ? { tone: "text-amber-200", text: "Running, but not connected: the server has no Pushover keys yet. Alerts are queued and nothing is sent." }
     : { tone: "text-emerald-300", text: "Connected to Pushover." };
+  const unresolved = (d.unresolved as Row[] | undefined) ?? [];
+  const why: Record<string, string> = {
+    alarm_expired: "your phone rang for an hour and stopped (Pushover's limit) without an answer",
+    push_failed: "the phone alert could not be delivered",
+    push_waiting: "the phone alert has not been sent yet",
+  };
   return <Panel title="Phone alerts">
+    {unresolved.length > 0 && <div role="alert" className="mb-4 rounded-lg border border-red-500 bg-red-950/40 p-3">
+      <p className="font-semibold text-red-200">{unresolved.length} alert{unresolved.length === 1 ? "" : "s"} still unresolved</p>
+      <ul className="mt-2 space-y-1 text-sm text-red-100">{unresolved.map((u) => <li key={u.notificationId}>
+        <span className="font-mono">{u.code}</span> · {when(u.createdAt)} · {why[u.reason] ?? u.reason}</li>)}</ul>
+      <p className="mt-2 text-xs text-red-200">Each stays here until you acknowledge it in the alert feed below.</p>
+    </div>}
     <p className={`text-sm ${status.tone}`}>{status.text}</p>
-    <p className="mt-2 text-xs text-slate-400">Urgent alerts ring until you acknowledge them here. Your lock screen only ever shows the alert’s level, a short code and a link: never the message, customer details or documents. Email alerts continue as before.</p>
+    <p className="mt-2 text-xs text-slate-400">Urgent alerts ring for up to an hour until you acknowledge them here; after that they stay listed above as unresolved. Your lock screen only ever shows the alert’s level, a short code and a link: never the message, customer details or documents. Email alerts continue as before.</p>
     {d.deliveries24h && <p className="mt-2 text-xs text-slate-400">Last 24 hours: {d.deliveries24h.sent} sent · {d.deliveries24h.pending} waiting · {d.deliveries24h.failed} failed</p>}
     {d.lastFailure && <p className="mt-1 text-xs text-amber-200">Last failure {when(d.lastFailure.at)}: {d.lastFailure.error}</p>}
     <ul className="mt-4 space-y-3">
