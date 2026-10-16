@@ -36,6 +36,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "ai_credit_opening",
   // v81: the legal seller, the public site, a controlled-proof release (permits public external actions), a channel's API connection.
   "seller_set", "public_site_set", "outward_release", "channel_connect",
+  // v83: add a phone that receives alerts (it decides where alerts go).
+  "push_device_add",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */
@@ -50,4 +52,6 @@ export const WRITE_OPS: ReadonlySet<string> = new Set([
   "mail_dismiss", "mail_delete",
   // v81: end a controlled-proof release; disconnect a channel's API account.
   "outward_hold", "channel_disconnect",
+  // v83: phone alerts — remove a phone, send a test, confirm a test arrived.
+  "push_device_revoke", "push_test", "push_test_received",
 ]);

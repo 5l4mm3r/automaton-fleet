@@ -657,6 +657,12 @@ async function main(argv: string[]): Promise<number> {
         console.log(`granted the channel-gateway API to ${rest[0] || "fleet_channels"}`);
         return 0;
       }
+      case "grant-push-role": {
+        // v83: the phone-push sender's role (px_* only), for scripts/fleet-push-setup.sh.
+        await store.grantPushRole(rest[0] || undefined);
+        console.log(`granted the phone-push API to ${rest[0] || "fleet_push"}`);
+        return 0;
+      }
       case "grant-bankfeed-role": {
         // v52: the bank-feed receipt connector's role (rx_* only).
         await store.grantBankfeedRole(rest[0] || undefined);

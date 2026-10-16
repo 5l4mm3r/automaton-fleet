@@ -196,6 +196,28 @@ ALTER ROLE fleet_channels_login IN DATABASE :"dbname" SET lock_timeout = '5s';
 ALTER ROLE fleet_channels_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '30s';
 \endif
 
+-- Schema v83: the phone-push sender (px_* only) (optional; provisioned only when push_password is supplied).
+--   fleet_push            NOLOGIN group: USAGE on fleet + EXECUTE on its own protocol functions only
+--   fleet_push_login      LOGIN member of fleet_push, held by that process only
+\if :{?push_password}
+SELECT 'CREATE ROLE fleet_push NOLOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_push') \gexec
+SELECT 'CREATE ROLE fleet_push_login LOGIN'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fleet_push_login') \gexec
+ALTER ROLE fleet_push       NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+ALTER ROLE fleet_push_login LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2;
+SELECT format('ALTER ROLE fleet_push_login PASSWORD %L', :'push_password') \gexec
+GRANT fleet_push TO fleet_push_login;
+SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname)
+  FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
+ WHERE m.rolname IN ('fleet_push_login', 'fleet_push') AND NOT (m.rolname = 'fleet_push_login' AND r.rolname = 'fleet_push') \gexec
+REVOKE ALL ON DATABASE :"dbname" FROM fleet_push, fleet_push_login;
+GRANT CONNECT ON DATABASE :"dbname" TO fleet_push_login;
+ALTER ROLE fleet_push_login IN DATABASE :"dbname" SET statement_timeout = '30s';
+ALTER ROLE fleet_push_login IN DATABASE :"dbname" SET lock_timeout = '5s';
+ALTER ROLE fleet_push_login IN DATABASE :"dbname" SET idle_in_transaction_session_timeout = '30s';
+\endif
+
 -- Schema v52: the bank-feed receipt connector (rx_* only) (optional; provisioned only when bankfeed_password is supplied).
 --   fleet_bankfeed        NOLOGIN group: USAGE on fleet + EXECUTE on its own protocol functions only
 --   fleet_bankfeed_login  LOGIN member of fleet_bankfeed, held by that process only

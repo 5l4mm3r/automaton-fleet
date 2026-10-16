@@ -1,0 +1,27 @@
+# Automaton Fleet heartbeat to the OUTSIDE monitor (scripts/fleet-heartbeat.sh). Oneshot, run by the .timer every 5 minutes
+# and at once by OnFailure= when a critical unit gives up restarting (deploy/systemd/automaton-fleet-onfailure.conf).
+# NOT INSTALLED by default (owner-approved host step, docs/operations/monitoring-and-alerts.md).
+# Reads only loopback endpoints and local state; sends one ping (names of failed checks only) to the monitor URL, a systemd
+# credential. Network: loopback and the public internet; no private range.
+
+[Unit]
+Description=Automaton Fleet heartbeat to the outside monitor
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+ExecStart=/opt/automaton-fleet/current/scripts/fleet-heartbeat.sh
+LoadCredential=heartbeat-url:/etc/automaton-fleet/monitor/heartbeat-url
+TimeoutStartSec=60s
+IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/4 240.0.0.0/4 fc00::/7 fe80::/10 ff00::/8
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/browser.env -/etc/automaton-fleet/channels.env -/etc/automaton-fleet/push.env -/etc/automaton-fleet/push -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key -/var/lib/automaton-fleet-custody -/var/lib/private

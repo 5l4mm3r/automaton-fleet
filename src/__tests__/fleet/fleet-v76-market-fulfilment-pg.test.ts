@@ -118,8 +118,8 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     const all: string[] = [];
     for (let i = 1; i <= Number(part1.parts); i++) all.push(...(await R.econ(F, "knowledge.library", { path: "foundation", part: i })).entries.map((e: any) => e.id));
     for (const id of ["bf-initial-focus", "bf-capability-evidence", "bf-offer-portfolio", "bf-quality-procedures", "bf-fulfilment-loop", "bf-channels", "fleet-capability-status"]) expect(all).toContain(id);
-    // v82 loads the dated capability status v8 (v76 loaded v5, v79 v6, v80 v7).
-    expect((await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entries?.[0]?.version ?? (await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entry?.version).toBe(8);
+    // v83 loads the dated capability status v9 (v76 loaded v5, v79 v6, v80 v7, v82 v8).
+    expect((await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entries?.[0]?.version ?? (await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entry?.version).toBe(9);
   });
 
   it("custody reads open checkouts' status: APPROVED is captured, COMPLETED read back, VOIDED fails; backed off", async () => {
@@ -416,6 +416,13 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     await pay(checkoutId, 7_500, "bea@example.test");
     await pub("svc_offer_tick", [20]);
     expect(await R.one(`(SELECT status FROM fleet.fleet_offer_enquiries WHERE enquiry_id = $1)`, [enquiryId])).toBe("accepted");
+    // v83: a paid order past its due date (turnaround 5 days; captured 6 days ago) and not delivered alerts the owner once.
+    await R.q(`UPDATE fleet.fleet_paypal_checkouts SET captured_at = now() - interval '6 days' WHERE checkout_id = $1`, [checkoutId]);
+    await svc.query(`SELECT fleet.svc_operations_watch()`);
+    await svc.query(`SELECT fleet.svc_operations_watch()`);
+    expect(await R.q(`SELECT class, agent_id FROM fleet.fleet_notifications WHERE code = 'ORDER_OVERDUE' AND detail ->> 'orderId' = $1`, [orderId]))
+      .toEqual([{ class: "RED", agent_id: F.id }]);
+    await R.q(`UPDATE fleet.fleet_paypal_checkouts SET captured_at = now() WHERE checkout_id = $1`, [checkoutId]);
     // Delivery needs a review of exactly these files for this order.
     const v1 = Buffer.from("PK invoice tracker v1");
     expect((await R.econ(F, "order.stage_file", { orderId, fileName: "invoice-tracker.xlsx", contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

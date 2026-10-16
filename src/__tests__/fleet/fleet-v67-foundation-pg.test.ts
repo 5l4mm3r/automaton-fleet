@@ -102,6 +102,8 @@ describe.skipIf(!PG_BIN)("v67: business foundation in the library; wake-up signa
     expect(fact(/^Gumroad/)[0].fact).toMatch(/BUILT, NOT INSTALLED on the host, NOT CONNECTED/);
     expect(fact(/no platform has an API connector apart from Gumroad|Etsy and other marketplaces: no API connector|operate a shop through the browser/i)).toEqual([]);
     expect(fact(/^Production tools/)[0].fact).toMatch(/INSTALLED .*python-pptx/s);
+    // v83: a presentation is delivered as a PDF (or zipped with it) until .pptx is a deliverable type.
+    expect(fact(/^Production tools/)[0].fact).toMatch(/do not promise a bare \.pptx/);
     expect(fact(/^Choosing channels — your choice, from research; no platform is required and none is excluded/)).toHaveLength(1);
     expect(fact(/^Platform findings/)[0].fact).toMatch(/re-verify at the source.*provisional.*None of these is a ranking or a list of allowed channels/s);
     for (const s of ["Paying out", "Card purchases", "Fleet offer pages"]) expect(fact(new RegExp(`^${s}`))[0].fact, s).toMatch(/NOT ENABLED/);

@@ -60,6 +60,7 @@ import { migrateCheck,
   GATEWAY_API_FUNCTIONS,
   BANKFEED_API_FUNCTIONS,
   CHANNELS_API_FUNCTIONS,
+  PUSH_API_FUNCTIONS,
   DASHBOARD_API_FUNCTIONS,
   FLEET_PG_HARD_MAX_AGENTS,
   FLEET_PG_SCHEMA_VERSION,
@@ -92,6 +93,8 @@ export const DEFAULT_DASHBOARD_ROLE = "fleet_dashboard";
 export const DEFAULT_PROVIDER_ROLE = "fleet_provider";
 export const DEFAULT_BANKFEED_ROLE = "fleet_bankfeed";
 export const DEFAULT_CHANNELS_ROLE = "fleet_channels";
+/** Schema v83: the phone-push sender (px_* only). */
+export const DEFAULT_PUSH_ROLE = "fleet_push";
 
 export interface FleetTimeouts {
   reservationTtlS: number;
@@ -609,7 +612,7 @@ export class PgFleetStore {
     }
     const roles = await this.pool
       .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole, DEFAULT_CUSTODY_ROLE, DEFAULT_IDENTITY_ROLE, DEFAULT_BROWSER_ROLE, DEFAULT_DASHBOARD_ROLE,
-        DEFAULT_PROVIDER_ROLE, DEFAULT_BANKFEED_ROLE, DEFAULT_CHANNELS_ROLE]])
+        DEFAULT_PROVIDER_ROLE, DEFAULT_BANKFEED_ROLE, DEFAULT_CHANNELS_ROLE, DEFAULT_PUSH_ROLE]])
       .catch(() => null);
     const present = new Set(roles?.rows.map((r) => r.rolname) ?? []);
     if (present.has(this.agentRole)) await this.grantAgentRole(this.agentRole);
@@ -622,6 +625,7 @@ export class PgFleetStore {
     if (present.has(DEFAULT_PROVIDER_ROLE)) await this.grantProtocolRole(DEFAULT_PROVIDER_ROLE, GATEWAY_API_FUNCTIONS, "provider_role_granted");
     if (present.has(DEFAULT_BANKFEED_ROLE)) await this.grantProtocolRole(DEFAULT_BANKFEED_ROLE, BANKFEED_API_FUNCTIONS, "bankfeed_role_granted");
     if (present.has(DEFAULT_CHANNELS_ROLE)) await this.grantProtocolRole(DEFAULT_CHANNELS_ROLE, CHANNELS_API_FUNCTIONS, "channels_role_granted");
+    if (present.has(DEFAULT_PUSH_ROLE)) await this.grantProtocolRole(DEFAULT_PUSH_ROLE, PUSH_API_FUNCTIONS, "push_role_granted");
     return applied;
   }
 
@@ -964,6 +968,11 @@ export class PgFleetStore {
   }
 
   /** Schema v52: the bank-feed connector's role — USAGE on the schema and EXECUTE on BANKFEED_API_FUNCTIONS only. */
+  /** Schema v83: the phone-push sender's role — USAGE on the schema and EXECUTE on PUSH_API_FUNCTIONS only. */
+  async grantPushRole(role: string = DEFAULT_PUSH_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, PUSH_API_FUNCTIONS, "push_role_granted");
+  }
+
   /** Schema v80: the channel gateway's role — USAGE on the schema and EXECUTE on CHANNELS_API_FUNCTIONS only. */
   async grantChannelsRole(role: string = DEFAULT_CHANNELS_ROLE): Promise<void> {
     await this.grantProtocolRole(role, CHANNELS_API_FUNCTIONS, "channels_role_granted");
@@ -2103,6 +2112,11 @@ export class PgFleetStore {
   }
 
   /** Schema v45: expire routine event copies and diagnostics past their retention (the guard trigger refuses anything else). */
+  /** v83: the hourly operations watch — health findings, overdue paid orders and low AI credit become notifications. */
+  async operationsWatch(): Promise<{ ok: boolean; raised: number }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_operations_watch() AS r")).rows[0].r);
+  }
+
   async eventRetention(): Promise<{ eventsExpired: number; suppressionExpired: number; mailCleared?: number; mailFreedBytes?: number }> {
     return this.tx(async (c) => (await c.query("SELECT svc_event_retention() AS r")).rows[0].r);
   }

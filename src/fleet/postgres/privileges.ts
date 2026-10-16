@@ -38,6 +38,7 @@ import {
   GATEWAY_API_FUNCTIONS,
   BANKFEED_API_FUNCTIONS,
   CHANNELS_API_FUNCTIONS,
+  PUSH_API_FUNCTIONS,
   DASHBOARD_API_FUNCTIONS,
   GENESIS_GUARDS,
   GENESIS_OPERATORS,
@@ -92,6 +93,9 @@ export interface PrivilegeAuditOptions {
   /** Schema v80 channel gateway roles (fleet_channels + _login). */
   channelsRoles?: string[];
   requireChannelsRoles?: boolean;
+  /** Schema v83 phone-push sender roles (fleet_push + _login). */
+  pushRoles?: string[];
+  requirePushRoles?: boolean;
 }
 
 /** "provisioned": every operator role exists; "not_provisioned": none exists (and not required); "incomplete": some are missing. */
@@ -122,8 +126,9 @@ export const DEFAULT_DASHBOARD_ROLES = ["fleet_dashboard", "fleet_dashboard_logi
 export const DEFAULT_PROVIDER_ROLES = ["fleet_provider", "fleet_provider_login"];
 export const DEFAULT_BANKFEED_ROLES = ["fleet_bankfeed", "fleet_bankfeed_login"];
 export const DEFAULT_CHANNELS_ROLES = ["fleet_channels", "fleet_channels_login"];
+export const DEFAULT_PUSH_ROLES = ["fleet_push", "fleet_push_login"];
 
-type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser" | "dashboard" | "provider" | "bankfeed" | "channels";
+type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser" | "dashboard" | "provider" | "bankfeed" | "channels" | "push";
 
 const TABLE_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
@@ -195,6 +200,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   const providerRoles = await optional(opts.providerRoles ?? DEFAULT_PROVIDER_ROLES, opts.requireProviderRoles, "provider");
   const bankfeedRoles = await optional(opts.bankfeedRoles ?? DEFAULT_BANKFEED_ROLES, opts.requireBankfeedRoles, "bankfeed");
   const channelsRoles = await optional(opts.channelsRoles ?? DEFAULT_CHANNELS_ROLES, opts.requireChannelsRoles, "channels");
+  const pushRoles = await optional(opts.pushRoles ?? DEFAULT_PUSH_ROLES, opts.requirePushRoles, "push");
   const allRestricted = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES),
     ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES),
@@ -206,6 +212,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
     ...providerRoles,
     ...bankfeedRoles,
     ...channelsRoles,
+    ...pushRoles,
   ];
   const plan: Array<[string, RoleKind]> = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES).map((r) => [r, "agent"] as [string, RoleKind]),
@@ -218,6 +225,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
     ...providerRoles.map((r) => [r, "provider"] as [string, RoleKind]),
     ...bankfeedRoles.map((r) => [r, "bankfeed"] as [string, RoleKind]),
     ...channelsRoles.map((r) => [r, "channels"] as [string, RoleKind]),
+    ...pushRoles.map((r) => [r, "push"] as [string, RoleKind]),
   ];
 
   const agentFns = new Set(AGENT_API_FUNCTIONS.map(normSig));
@@ -230,6 +238,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   const providerFns = new Set(GATEWAY_API_FUNCTIONS.map(normSig));
   const bankfeedFns = new Set(BANKFEED_API_FUNCTIONS.map(normSig));
   const channelsFns = new Set(CHANNELS_API_FUNCTIONS.map(normSig));
+  const pushFns = new Set(PUSH_API_FUNCTIONS.map(normSig));
   const operatorVolatile = new Set(OPERATOR_VOLATILE_FUNCTIONS.map(normSig));
   const serviceTables = new Set(SERVICE_READ_TABLES);
 
@@ -325,7 +334,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
       [role, schema],
     );
     const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : kind === "identity" ? identityFns : kind === "browser" ? browserFns
-      : kind === "dashboard" ? dashboardFns : kind === "provider" ? providerFns : kind === "bankfeed" ? bankfeedFns : kind === "channels" ? channelsFns : operatorFns;
+      : kind === "dashboard" ? dashboardFns : kind === "provider" ? providerFns : kind === "bankfeed" ? bankfeedFns : kind === "channels" ? channelsFns : kind === "push" ? pushFns : operatorFns;
     const executable: string[] = [];
     for (const f of fns.rows) {
       const sig = normSig(f.sig);
@@ -1169,6 +1178,12 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_admin_totp_pending: new Set(["dash_recovery_totp_begin", "dash_recovery_totp_confirm", "fleet_admin_host_recovery_end_access"]),
     // v82: helper jobs — opened by the reservation's route snapshot, closed by the call's result or the reservation's end.
     fleet_helper_jobs: new Set(["fleet_helper_job_open", "fleet_helper_job_close", "fleet_helper_job_end"]),
+    // v83: phone push — devices by the owner; deliveries queued by the notification trigger and the owner's test, advanced
+    // only by the sender's protocol (px_*) and the owner's controls.
+    fleet_push_devices: new Set(["fleet_admin_push_device_add", "fleet_admin_push_device_revoke"]),
+    fleet_push_deliveries: new Set(["fleet_push_enqueue", "px_push_claim", "px_push_result", "px_push_cancelled", "fleet_admin_push_test",
+      "fleet_admin_push_device_revoke", "fleet_admin_push_test_received"]),
+    fleet_push_sender: new Set(["px_push_heartbeat"]),
     fleet_admin_enrollment: new Set(["dash_passkey_add", "dash_password_set", "fleet_admin_dashboard_enroll", "fleet_admin_host_recovery_end_access"]),
     fleet_admin_challenges: new Set(["dash_challenge_new", "dash_challenge_use"]),
     fleet_admin_sessions: new Set(["dash_session_begin", "dash_session_begin_password", "dash_session_totp", "dash_session_live", "dash_session_end",

@@ -89,9 +89,10 @@ import { V79_SQL } from "./migrations-phase79.js";
 import { V80_SQL } from "./migrations-phase80.js";
 import { V81_SQL } from "./migrations-phase81.js";
 import { V82_SQL } from "./migrations-phase82.js";
+import { V83_SQL, PUSH_API_FUNCTIONS_V83 } from "./migrations-phase83.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 82;
+export const FLEET_PG_SCHEMA_VERSION = 83;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1269,6 +1270,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 80, name: "acquisition_channels", sql: V80_SQL },
   { version: 81, name: "launch_dashboard", sql: V81_SQL },
   { version: 82, name: "recovery_consent_helpers", sql: V82_SQL },
+  { version: 83, name: "phone_push", sql: V83_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1336,6 +1338,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_comms_tick(integer)",
   // v45: hourly retention of routine event copies and diagnostics (never canonical history; writes no event).
   "svc_event_retention()",
+  // v83: the hourly operations watch (health findings, overdue paid orders, low AI credit → notifications).
+  "svc_operations_watch()",
   // v48: PayPal webhooks are stored unverified (custody verifies them); the reaper issues due payment instructions and expires
   // the owner's custody activation.
   "svc_paypal_webhook_receive(text, text, text, jsonb, text)",
@@ -1588,6 +1592,9 @@ export const BROWSER_API_FUNCTIONS: readonly string[] = Object.freeze([
   "bx_file_take(uuid, text, uuid)",
   "bx_file_put(uuid, text, text, text, text, bytea)",
 ]);
+
+/** Schema v83: the phone-push sender's whole database surface (px_*; role fleet_push). */
+export const PUSH_API_FUNCTIONS: readonly string[] = Object.freeze([...PUSH_API_FUNCTIONS_V83]);
 
 /** Schema v80: the channel gateway's whole database surface (chx_*; role fleet_channels): connections, jobs, provider evidence. */
 export const CHANNELS_API_FUNCTIONS: readonly string[] = Object.freeze([

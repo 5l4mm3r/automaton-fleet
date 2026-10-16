@@ -69,6 +69,16 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
   }, 300_000);
   afterAll(async () => { await browser?.close(); server?.close(); await dgw?.close(); await R?.close(); });
 
+  /** A fresh, never-used authenticator code (each 30 s step is accepted once; the gateway accepts the previous, current and next step). */
+  let lastStep = 0;
+  const nextCode = async (): Promise<string> => {
+    for (;;) {
+      const now = Math.floor(Date.now() / 30_000);
+      const step = Math.max(lastStep + 1, now - 1);
+      if (step <= now + 1) { lastStep = step; return totp(secret, step * 30_000); }
+      await new Promise((r) => setTimeout(r, 30_000 - (Date.now() % 30_000) + 300));
+    }
+  };
   const windowMax = (rows: typeof log, ms: number) => {
     let best = 0;
     for (const a of rows) best = Math.max(best, rows.filter((b) => b.t >= a.t && b.t < a.t + ms).length);
@@ -82,10 +92,10 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     await page.getByRole("button", { name: "Set password" }).click();
     await page.getByRole("button", { name: "Confirm authenticator" }).waitFor();
     secret = (await page.locator("p.font-mono").first().textContent())!.trim();
-    await page.getByLabel("Code from the authenticator").fill(totp(secret));
+    await page.getByLabel("Code from the authenticator").fill(await nextCode());
     await page.getByRole("button", { name: "Confirm authenticator" }).click();
     await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
-    await page.getByLabel("Authenticator code").first().fill(totp(secret, Date.now() + 30_000));
+    await page.getByLabel("Authenticator code").first().fill(await nextCode());
     const before = log.length;
     const tSign = Date.now();
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -169,5 +179,28 @@ describe.skipIf(!PG_BIN || !CHROME || !fs.existsSync(path.join(CODEX, "node_modu
     console.log("MOBILE-PAGES " + JSON.stringify(seen));
     expect(errors).toEqual([]);
     for (const [name, over] of Object.entries(seen)) expect(over, name).toBeLessThanOrEqual(0);
+  });
+
+  it("phone alerts on a phone (v83): the honest state, adding a phone takes a confirmation, a test is queued, a push link opens Notifications", async () => {
+    const nav = page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: /^\d+Notifications/ });
+    await nav.scrollIntoViewIfNeeded(); await nav.click();
+    const panel = page.locator("section, div").filter({ has: page.getByRole("heading", { name: "Phone alerts" }) }).last();
+    await page.getByText("Not running: the push service has not started on the server yet.").waitFor();
+    await page.getByLabel("Name", { exact: true }).fill("Owner phone");
+    await page.getByRole("button", { name: "Add phone" }).click();
+    const dlg = page.getByRole("dialog", { name: "Confirm it is you" });
+    await dlg.getByLabel("Password").fill(PASSWORD);
+    await dlg.getByLabel("Authenticator code").fill(await nextCode());
+    await dlg.getByRole("button", { name: "Confirm with password" }).click();
+    await page.getByRole("status").filter({ hasText: "Phone added; a test is on its way." }).waitFor();
+    await page.getByText("Test waiting to be sent (not connected yet)").waitFor();
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_push_deliveries WHERE kind = 'test' AND state = 'pending')`))).toBe(1);
+    expect(await panel.count()).toBeGreaterThan(0);
+    // A push link: /?notification=<id> lands on Notifications (signed in), and the address bar loses the id.
+    await page.goto(`${ORIGIN}/?notification=00000000-0000-0000-0000-000000000000`);
+    await page.getByRole("heading", { name: "Phone alerts" }).waitFor();
+    expect(new URL(page.url()).hash).toBe("#Notifications");
+    expect(page.url()).not.toContain("notification=");
+    expect(errors).toEqual([]);
   });
 });

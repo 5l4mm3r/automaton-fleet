@@ -539,6 +539,12 @@ export class FleetService {
           try { await this.opts.admin.eventRetention(); } catch (err) {
             this.audit("retention_error", null, { error: err instanceof Error ? err.message : String(err) });
           }
+          // v83: the operations watch rides the same hourly pass (a failure is audited and never stops the reaper).
+          if (typeof this.opts.admin.operationsWatch === "function") {
+            try { await this.opts.admin.operationsWatch(); } catch (err) {
+              this.audit("operations_watch_error", null, { error: err instanceof Error ? err.message : String(err) });
+            }
+          }
         }
         this.assessRelevance();
         // v64: Fleet Control spend reviews (single-flight, off the request path; a failure is bounded and never approves).

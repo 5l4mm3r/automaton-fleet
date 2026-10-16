@@ -1,0 +1,11 @@
+# Every 5 minutes (the outside monitor's period: 5 min, grace 10 min). NOT INSTALLED by default.
+[Unit]
+Description=Automaton Fleet heartbeat every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
