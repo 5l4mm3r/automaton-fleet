@@ -30,9 +30,8 @@ passes against a simulated provider.
 
 ## 2. Implementation remaining
 
-**P1 (finish before freezing):**
-- a dedicated PayPal limitation alert (no PayPal API signal today);
-- rehearse the release.
+**P1:** frozen as f47ee1c; rehearsals passed (release-f47ee1c.md). Open item: a dedicated PayPal limitation alert (no
+PayPal API signal today).
 
 **P2: treasury (provider-independent first, simulated adapter labelled as such):**
 1. Money locations in one ledger: a bank-account rail, a bank cash asset and an in-transit account. A PayPal ↔ bank transfer
