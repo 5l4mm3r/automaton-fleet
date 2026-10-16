@@ -1197,6 +1197,12 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_capability_checks: new Set(["fleet_econ_capabilities_check"]),
     fleet_media_jobs: new Set(["fleet_econ_media_request", "fleet_econ_media_result", "mx_claim", "mx_result"]),
     fleet_media_providers: new Set(["mx_report"]),
+    // v86: money locations and their evidence — locations by the owner (and the migration's PayPal rows), evidence through
+    // the bank-feed connector or the owner's CSV, transfers by the owner, matching and classification.
+    fleet_money_locations: new Set(["fleet_admin_location_add", "fleet_admin_location_status", "fleet_admin_location_bind_card", "fleet_money_location_for_rail"]),
+    fleet_bank_balance_observations: new Set(["fleet_location_balance_record"]),
+    fleet_bank_transactions: new Set(["fleet_location_txn_record", "fleet_location_match", "fleet_admin_location_contribution", "fleet_admin_bank_txn_classify"]),
+    fleet_location_transfers: new Set(["fleet_admin_location_transfer", "fleet_location_match"]),
     fleet_admin_enrollment: new Set(["dash_passkey_add", "dash_password_set", "fleet_admin_dashboard_enroll", "fleet_admin_host_recovery_end_access"]),
     fleet_admin_challenges: new Set(["dash_challenge_new", "dash_challenge_use"]),
     fleet_admin_sessions: new Set(["dash_session_begin", "dash_session_begin_password", "dash_session_totp", "dash_session_live", "dash_session_end",
@@ -1241,7 +1247,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_card_charges: new Set(["fleet_admin_card_charge_record", "fleet_admin_card_charge_confirm", "fleet_card_charge_post",
       "fleet_econ_card_authorize", "fleet_econ_card_void", "svc_card_holds_expire",
       // v51: a hold's reservation is released by its helper (void, expiry, booking).
-      "fleet_card_hold_release"]),
+      "fleet_card_hold_release",
+      // v86: debit mode — the agent's declaration, the bank evidence matcher, a 3-D Secure wait.
+      "fleet_econ_card_declare", "fleet_location_match", "fleet_econ_card_awaiting_approval"]),
     fleet_card_repayments: new Set(["fleet_admin_card_repayment_record"]),
     // v53: card statements only by their issuer (the reaper's tick or the owner) and the owner's "paid"; the schedule only by the owner.
     fleet_card_statements: new Set(["fleet_card_statement_issue", "fleet_admin_card_statement_paid"]),

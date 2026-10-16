@@ -1,4 +1,4 @@
-# Master completion checklist (one list for all packages; updated 2026-10-16)
+# Master completion checklist (one list for all packages; updated 2026-10-16 evening)
 
 **Packages:**
 - **P0:** bbfb24a, frozen. Recovery, consent, helper jobs, capability guidance v8.
@@ -27,35 +27,32 @@ passes against a simulated provider.
 | Encrypted off-site backups (restic): init / run / drill; key material excluded; failures reach the monitor | P1 | `fleet-backup-heartbeat` (real restic 0.17.3 + PostgreSQL) |
 | Capability guidance v9 (no bare .pptx promise) | P1 | `fleet-v67-foundation-pg` assertion |
 | Research: push, monitoring and backup providers; UK bank/card providers; workflow → capability map | P1/P2/P3 | `docs/operations/*`, `bank-debit-card-requirements.md` §8, `agent-capability-map-2026-10-16.md` |
+| Pushover limits documented (retry every 72 s, expiry 1 h; Pushover allows at most 3 h and 50 repeats); an alarm that expired unanswered, a failed push or one waiting > 15 min stays listed as **unresolved** until acknowledged (v84) | P1 follow-up (751e0c8) | `fleet-v83-push-pg` (v84 cases); `monitoring-and-alerts.md` |
+| Recovery drill restores sample workspace / product files (up to 40, checksummed) as well as schema and ledger; separate key-recovery procedure (which secret restores what, where each copy lives) | P1 follow-up (751e0c8) | `fleet-backup-heartbeat` (real restic); `backup-and-recovery.md` key table |
+| 3-D Secure statement corrected: frictionless / supported recurring / challenge that needs you — never bypassed; bank comparison against the full autonomous-spending and reconciliation workflow, conditional on seller eligibility | P2 research (751e0c8) | `bank-debit-card-requirements.md` §8.1, §8.2 |
+| **P3 core (v85, runtime founder-v10):** capability check before quoting / publishing (enforced: offer.publish and enquiry.quote need a check in the last 7 days); justified capability requests (reason, evidence, what it holds up, urgency); .pptx as a real deliverable (inspector fleet-qa-2: structure, alt text, overflow, placeholders, rendering + OCR when installed; EPUB checks); toolchain agent-tools-2 (matplotlib, EPUB, OCR bindings); media gateway with Brave Search and OpenAI Images adapters, per-agent daily caps and recorded cost; Capabilities panel | P3 (57d41b4) | `fleet-v85-capabilities-pg`, `fleet-v85-founder-tools`, `fleet-qa-inspector-v2`, `fleet-qa-inspector` (simulated providers; real renderer / OCR binaries not installed) |
+| **P2 core (v86):** money locations in one ledger (PayPal + bank); transfers are the same money (no journal; source drops at once, destination on the bank's evidence; plain statement credits match, oldest first); owner deposit into the bank = owner funding once; evidence age (stale = nothing spendable); debit mode: hold fits the bank's free cash under lock, declaration books nothing, bank settlement books with no card payable, decline releases, refund reduces, no evidence in 7 days releases (never booked at maximum); 3-D Secure challenge → RED `CARD_APPROVAL_NEEDED` (founder-v10 only); unexplained lines queue (deposit / fee / explained); hourly alerts for stale, unexplained, drift, negative, limited; statement CSV import (Starling + generic; replays record nothing); read-only Starling adapter (refuses any non-read scope); Money locations panel | P2 (this commit) | `fleet-v86-locations-pg`, `fleet-bank-statement`, `fleet-location-feed`; regressions listed in `bank-debit-card-requirements.md` §9 |
 
 ## 2. Implementation remaining
 
 **P1:** frozen as f47ee1c; rehearsals passed (release-f47ee1c.md). Open item: a dedicated PayPal limitation alert (no
 PayPal API signal today).
 
-**P2: treasury (provider-independent first, simulated adapter labelled as such):**
-1. Money locations in one ledger: a bank-account rail, a bank cash asset and an in-transit account. A PayPal ↔ bank transfer
-   moves the same money and never creates capital or revenue.
-2. Balance observations with their age; stale or unverified balances are never spendable; a P1 alert on drift.
-3. Account-level reservation before a card hold (bank balance − open holds − unsettled), under a lock, plus a per-location
-   check so a PayPal hold blocks only PayPal-paid actions.
-4. Charge lifecycle: authorised / settled / declined / reversed / partially captured, FX, fees, descriptor, external id,
-   venture. No booking at maximum without evidence.
-5. Provider evidence import (CSV first, then the read adapter): matcher plus an unmatched queue. An agent's statement alone
-   books nothing.
-6. Refunds linked to charges; dispute state; PayPal refund and dispute obligations kept as liabilities.
-7. SCA "awaiting owner approval" state with a phone alert and timeout.
-8. Starling read-only adapter (polling), simulated until you connect it.
-9. The existing owner-card clearing path stays unchanged; PayPal stays first (O17).
+**P2: treasury** — core built in v86 (above). Remaining:
+1. The bank feed's service (entry point, unit, setup script) — the adapter exists; nothing runs it yet.
+2. A whole-treasury reconciliation: location balances plus transfers in transit against the ledger's treasury cash.
+3. Disputes / chargebacks on bank-card charges.
+4. Several cards (R9) and per-charge venture attribution.
+5. Freezing v86 into a package and rehearsing it (it sits on v85; see §5).
 
-**P3: agent capabilities:**
-- capability check before quoting;
-- justified capability request;
-- .pptx as a real deliverable (inspector, review, rendering);
-- toolchain additions (matplotlib, OCR, EPUB);
+**P3: agent capabilities** — core built in v85 (above). Remaining:
 - support-burden and AI-cost attribution per order and venture;
-- web-search and image-generation adapters with setup screens (not connected);
-- the software-maintenance prerequisites (scoped repository grant, build sandbox).
+- media cost booked to agent wallets (needs your decision: the same funding question as AI credit; today recorded and
+  shown, not booked);
+- the software-maintenance prerequisites (scoped repository grant, build sandbox) — assessed in the capability map, not
+  built; maintenance is not banned;
+- the office renderer and Tesseract binaries on the server (an OS package install: needs your approval), so .pptx / .docx
+  rendering and OCR checks run there and not only where installed.
 
 ## 3. Your setup and provider choices (only the indispensable ones)
 
@@ -64,7 +61,8 @@ PayPal API signal today).
 | Phone push | Pushover (account + app; app token and user key) | $4.99 once per platform |
 | Outside monitor | Healthchecks.io (heartbeat and backup checks) + UptimeRobot (HTTPS check), both to Pushover | free (UptimeRobot's free tier: check its terms for your use) |
 | Off-site backup | Backblaze B2, EU, Object Lock 30 days, bucket-scoped key; you keep the restic password offline | pennies a month at this size |
-| Bank/card rail | Starling sole-trader account first (read-only API; 3DS in your app); a limited company only if you later want Revolut / Airwallex | £0 a month |
+| Bank/card rail | Conditional on seller eligibility: Starling sole-trader account first (read-only API; 3DS in your app); a limited company only if you later want Revolut / Airwallex (`bank-debit-card-requirements.md` §8.2) | £0 a month |
+| Web search / images (optional) | Brave Search API; OpenAI Images (`docs/operations/media-providers.md`) | Brave $5 per 1,000 searches ($5 free monthly); images priced per token |
 | Your phone | which phone and OS version (the live bundle needs iOS Safari 16.4+) | — |
 
 Also needed:
@@ -92,17 +90,14 @@ Also needed:
 
 ## 5. Next releasable package
 
-**P1: UI 0.21.1 + schema v83 + host files.** Contents:
-- the mobile fix;
-- phone push (queue, sender, Phone alerts panel);
-- the operations watch;
-- heartbeat and `OnFailure`;
-- backup / drill scripts and units;
-- the edge change;
-- capability guidance v9.
-
-It is built on P0 (v82), so it deploys after bbfb24a, or with it as one 81 → 83 cutover (your choice). After freezing it
-needs its own rehearsals.
+**P1 is frozen as f47ee1c** (UI 0.21.1 + schema v83 + host files: the mobile fix, phone push, the operations watch,
+heartbeat and `OnFailure`, backup / drill, the edge change, capability guidance v9). Rehearsals passed 18:28:59Z /
+19:16:57Z, valid until **2026-10-17 18:28Z**. It deploys after bbfb24a, or with it as one 81 → 83 cutover (your choice).
 
 **bbfb24a (P0) stays frozen and ready.** Its rehearsals are valid until **2026-10-17 16:46Z** (production unchanged since:
 a712be1, schema 81).
+
+**Next to freeze: v84 – v86 (P1 follow-ups, P3 core, P2 core) with UI 0.22.0**, on top of f47ee1c. It carries the agent
+runtime founder-v10, so after the controller cutover Agent-1's runtime is upgraded while it stays paused (Agent-2 stays
+paused on its current runtime). Before freezing: the remaining P2 item 1 (feed service) can wait for your bank choice; the
+package is releasable without it (bank locations then take statement imports only).

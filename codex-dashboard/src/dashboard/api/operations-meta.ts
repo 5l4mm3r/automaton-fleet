@@ -38,6 +38,8 @@ export const SENSITIVE_OPS: ReadonlySet<string> = new Set([
   "seller_set", "public_site_set", "outward_release", "channel_connect",
   // v83: add a phone that receives alerts (it decides where alerts go).
   "push_device_add",
+  // v86: money locations — add a bank, bind the card to it, record a transfer between locations, record an owner deposit.
+  "location_add", "location_bind_card", "location_transfer", "location_contribution",
 ]);
 
 /** Ordinary authenticated writes (session + CSRF, no step-up). */
@@ -54,4 +56,6 @@ export const WRITE_OPS: ReadonlySet<string> = new Set([
   "outward_hold", "channel_disconnect",
   // v83: phone alerts — remove a phone, send a test, confirm a test arrived.
   "push_device_revoke", "push_test", "push_test_received",
+  // v86: a location's status (limited / unavailable stops only its own actions); explain a bank line.
+  "location_status", "bank_txn_classify",
 ]);

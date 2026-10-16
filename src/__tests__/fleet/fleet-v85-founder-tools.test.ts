@@ -14,7 +14,7 @@ import path from "path";
 import { FounderToolbox } from "../../fleet/founder/toolbox.js";
 import { LoopGuard } from "../../fleet/founder/loop-guard.js";
 import { FOUNDER_MANIFEST_V2, decideTool } from "../../fleet/capabilities.js";
-import { FOUNDER_V10_TOOLS, toolsForDoctrine, toolsetForDoctrine } from "../../fleet/cognition/types.js";
+import { FOUNDER_TOOLS, FOUNDER_V10_TOOLS, applyToolset, toolsForDoctrine, toolsetForDoctrine } from "../../fleet/cognition/types.js";
 import { runSandboxed } from "../../fleet/founder/exec-sandbox.js";
 import { QA_INSPECTOR_VERSION } from "../../fleet/founder/qa/inspector.js";
 
@@ -44,6 +44,15 @@ describe("v85 founder-v10 tools", () => {
       expect(names("founder-v9"), t).not.toContain(t);
     }
     expect(toolsetForDoctrine("founder-v10")).toBe("toolset-6");
+    // v86: reporting a bank's approval request is offered only to runtimes that implement it (descriptions are served to older ones too).
+    const capital = (d: Parameters<typeof toolsForDoctrine>[1]) => applyToolset(FOUNDER_TOOLS, toolsetForDoctrine(d)).find((t) => t.name === "fleet_capital")!;
+    const ops = (d: Parameters<typeof toolsForDoctrine>[1]) => (capital(d).parameters as { properties: { op: { enum: string[] } } }).properties.op.enum;
+    expect(ops("founder-v10")).toContain("card_awaiting_approval");
+    expect(capital("founder-v10").description).toMatch(/never retry, split the payment or switch route/);
+    for (const d of ["founder-v6", "founder-v9"] as const) {
+      expect(ops(d), d).not.toContain("card_awaiting_approval");
+      expect(capital(d).description, d).not.toMatch(/card_awaiting_approval/);
+    }
     for (const t of FOUNDER_V10_TOOLS) expect(decideTool(t.name, FOUNDER_MANIFEST_V2), t.name).toEqual({ allowed: true, capability: t.capability });
   });
 

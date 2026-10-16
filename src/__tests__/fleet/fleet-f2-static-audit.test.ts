@@ -56,6 +56,10 @@ const RULES: Rule[] = [
   // a gate on any business action (channels, posts, leads and sales records need no owner).
   { cls: "legal/security", file: /src\/fleet\/(cognition\/types|hub\/admin)\.ts$/, line: /payout|payouts awaiting the owner/,
     why: "v79: attribution of ambiguous incoming money to an agent (treasury evidence), not an ordinary business approval" },
+  // v86: a bank line the Fleet cannot match to its own records (an unknown deposit, a fee) is explained by the owner — the
+  // reconciliation of the owner's bank account, like v79's attribution; no agent's purchase or business action waits for it.
+  { cls: "legal/security", file: /src\/fleet\/postgres\/migrations-phase86\.ts$/, line: /Ambiguous or unknown items wait for the owner/,
+    why: "v86: unexplained bank lines are reconciled by the owner (treasury evidence), not an ordinary business approval" },
   { cls: "retirement", file: /src\/fleet\/postgres\/migrations-phase48\.ts$/, line: /^\s*\["'payment_order_cancelled','payment_order_awaiting_owner','payment_instruction_issued'", "'payment_order_cancelled','payment_instruction_issued'"\],$/,
     why: "the v48 asserted edit that REMOVES the retired type from the live routing function" },
 ];

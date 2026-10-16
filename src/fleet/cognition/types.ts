@@ -217,7 +217,7 @@ export const FOUNDER_TOOLS: readonly ToolSpec[] = Object.freeze([
     capability: "spend.request",
     description: "Payments infrastructure and Fleet capital. op register_vendor: {vendorName, category (supplier|manufacturer|marketplace_fee|advertising|software_subscription|hosting|fulfilment|freelancer|professional_service|other), reference (email or https URL of the payee account), rail?, website?, ventureKey?} → a destination id for request_spend, verified by FleetController, no approval; op revoke_vendor: {destinationId, reason}; op require_rail: {ventureKey, capability (receive_payments|refunds|payouts|marketplace_listing|subscriptions|storefront), provider?} — FleetController assigns a Fleet rail or records the one action that needs an account; op request: {ventureKey, purpose, amountMinor, evidence:[…], expectedRevenueMinor, expectedNetMinor, expectedPaybackDays, downsideMinor, confidenceBp, milestones?:[{key, metric (revenue_minor|net_profit_minor), target, trancheMinor}], alternativePlan, alternativeMinor, categories?} — FLEET capital beyond your own (FleetController decides as lender; your own capital needs no request); op list; op envelopes; op envelope_spend: {envelopeId, amountMinor, category, destinationId, purpose} — spend inside an approved envelope. PAY THROUGH THE TREASURY PAYPAL FIRST (register_vendor + spend). The owner's card is the LAST option, only when PayPal truly cannot pay: op card_request: {accountId (your account on the merchant site), merchant, amountMinor, paypalUnavailable (card_only_merchant|paypal_needs_login|payee_no_paypal|payouts_unavailable), purpose (what it is for and why it matters to your survival or opportunity), origin?, envelopeId?} → Fleet Control checks the reason and that your own wallet (or the envelope) covers it; a routine request is approved at once, a material or suspicious one (large against your funds, little runway left, a likely duplicate, a brand-new payee) is reviewed by Fleet Control first — usually within minutes; keep working; op card_requests → their status. With an approved request: op card_authorize: {requestId, accountId, merchant, maxMinor (≤ the approved amount), purpose, origin?, envelopeId?} → a hold that first RESERVES maxMinor from your own spendable capital (or from one of your envelopes); fill the card with browser owner_card steps; then op card_declare: {chargeId, amountMinor} (booked from the reservation; the rest comes back; if a merchant later charges more, the excess is your debt to the treasury) or op card_void: {chargeId} if the card was never filled; op cards → your holds and charges; op identity_uses → where the owner's details were filled for you. Sweep: op sweep_reductions → your current sweep rate and reductions; op sweep_reduction_request: {reductionBp, days ≤180, reason} — Fleet Control decides at once (granted, bounded, when you have retained profit to reinvest and an active venture).",
     parameters: obj({ op: { type: "string", enum: ["register_vendor", "revoke_vendor", "require_rail", "request", "list", "envelopes", "envelope_spend", "card_request", "card_requests", "card_authorize",
-      "card_declare", "card_void", "cards", "identity_uses", "sweep_reductions", "sweep_reduction_request", "spend_reviews"] }, args: { type: "object" } }, ["op"]),
+      "card_declare", "card_void", "card_awaiting_approval", "cards", "identity_uses", "sweep_reductions", "sweep_reduction_request", "spend_reviews"] }, args: { type: "object" } }, ["op"]),
   },
   {
     name: "identity",
@@ -553,18 +553,21 @@ export const FOUNDER_V5_TOOLS: readonly ToolSpec[] = Object.freeze([
  * current runtimes keep exactly their current toolset until upgraded.
  */
 const V8_OPS = { browser: ["stage_file", "files", "fetch_file"], identity: ["confirm_password", "discard_password"] } as const;
+/** Operations only founder-v10 runtimes implement (v86): reporting a bank's approval request for a card purchase. */
+const V10_OPS = { fleet_capital: ["card_awaiting_approval"] } as const;
 export const RUNTIME_TOOLSETS = Object.freeze({
   /** founder-v4 / founder-v5 runtimes (up to f852888). */
-  "toolset-1": { withhold: { fleet_capital: ["spend_reviews"], field_guide: ["all"], ...V8_OPS } as Record<string, readonly string[]> },
+  "toolset-1": { withhold: { fleet_capital: ["spend_reviews", ...V10_OPS.fleet_capital], field_guide: ["all"], browser: V8_OPS.browser, identity: V8_OPS.identity } as Record<string, readonly string[]> },
   /** founder-v6 runtimes: Fleet Control spend reviews; the whole guide in parts. */
-  "toolset-2": { withhold: { ...V8_OPS } as Record<string, readonly string[]> },
+  "toolset-2": { withhold: { ...V8_OPS, ...V10_OPS } as Record<string, readonly string[]> },
   /** founder-v7 runtimes (v76): offers, customers (briefs, quotes, threads), deliverable inspection and review, independent review. */
-  "toolset-3": { withhold: { ...V8_OPS } as Record<string, readonly string[]> },
+  "toolset-3": { withhold: { ...V8_OPS, ...V10_OPS } as Record<string, readonly string[]> },
   /** founder-v8 runtimes (v79): the business operator — browser files, pending passwords, business records, view_image. */
-  "toolset-4": { withhold: { business: ["api", "api_jobs"] } as Record<string, readonly string[]> },
+  "toolset-4": { withhold: { business: ["api", "api_jobs"], ...V10_OPS } as Record<string, readonly string[]> },
   /** founder-v9 runtimes (v80): official-API channel publishing through the channel gateway. */
-  "toolset-5": { withhold: {} as Record<string, readonly string[]> },
-  /** founder-v10 runtimes (v85): capabilities (check before committing; request with evidence), web_search, generate_image. */
+  "toolset-5": { withhold: { ...V10_OPS } as Record<string, readonly string[]> },
+  /** founder-v10 runtimes (v85): capabilities (check before committing; request with evidence), web_search, generate_image;
+   *  (v86) card_awaiting_approval when the bank asks the owner to approve a card purchase. */
   "toolset-6": { withhold: {} as Record<string, readonly string[]> },
 });
 export type RuntimeToolset = keyof typeof RUNTIME_TOOLSETS;
@@ -575,7 +578,8 @@ export function toolsetForDoctrine(d: FounderDoctrine): RuntimeToolset {
 }
 /** Text added to a tool's description only when its runtime implements the option it describes. */
 const TOOLSET_NOTES: Record<string, Record<string, string>> = {
-  fleet_capital: { spend_reviews: " op spend_reviews → Fleet Control's reviews of your material or suspicious commitments (status, reason, evidence)." },
+  fleet_capital: { spend_reviews: " op spend_reviews → Fleet Control's reviews of your material or suspicious commitments (status, reason, evidence).",
+    card_awaiting_approval: " Card approvals (3-D Secure): most purchases need none (frictionless); a saved card for a subscription may need it only the first time. When the checkout shows the bank asking for approval, op card_awaiting_approval: {chargeId} — the owner is alerted to approve it in the bank's app; wait on that page; never retry, split the payment or switch route to avoid it; void the hold if it is not approved in time. card_declare may carry authentication (frictionless|challenged|exempt). When the card draws on a bank account, your declaration books nothing: the bank's own record of the charge does." },
   request_spend: { spend_reviews: " Review outcomes: fleet_capital op spend_reviews." },
   field_guide: { all: " op all {part} returns the whole guide in parts (orientation when you start or when the guide changes)." },
   browser: { stage_file: " op stage_file: {path (a workspace image, .pdf .txt .csv .html .md .json .zip .docx .xlsx .pptx .mp4 or .mp3, <= 15 MB), fileName?} → a fileId (kept 24 h); op files → your staged files and what pages gave you; op fetch_file: {fileId} → saves a page's download, screenshot or PDF into your workspace (browser/…). More steps: {action: upload_file, selector (the file input), fileIds: [...]} (your staged files — a logo, listing images, a product file) | {action: download, selector | text} (saves the file the page offers) | {action: screenshot, fullPage?, selector?} and {action: pdf, landscape?} (form fields are masked; refused in a session that used the owner's card or details or captured a secret) | {action: set_content, fileId} (renders your staged .html / .svg — a brand image, listing graphic or mockup — in a session opened without an account; then screenshot or pdf) | {action: hover | uncheck, selector | text} | {action: scroll, to: top|bottom} or {action: scroll, selector} | {action: wait_idle} | {action: tab, index} (a popup or new tab becomes the current one; the page lists tabs) | {action: dialog, accept, text?} (for the next alert / confirm / prompt) | any element step may carry frame: \"<iframe selector>\" (embedded editors, hosted card fields) | {action: fill, selector, credential: new_password} (the password generate_password just created, again — a confirm field). The result lists the files a step produced (fileId)." },

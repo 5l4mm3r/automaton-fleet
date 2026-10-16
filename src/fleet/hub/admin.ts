@@ -304,6 +304,26 @@ export class PgHubAdmin {
     return this.one(`SELECT fleet_admin_card_request_policy_set($1, $2, $3) AS r`, [thresholdMinor, validHours, actor]);
   }
   paypalTest() { return this.one(`SELECT fleet_paypal_test_json() AS r`); }
+  // ── v86: money locations (PayPal and bank accounts; transfers between them are the same money) ──
+  locations() { return this.one(`SELECT fleet_locations_json() AS r`); }
+  locationAdd(provider: string, label: string, actor: string) {
+    return this.one(`SELECT fleet_admin_location_add('bank', $1, $2, NULL, $3) AS r`, [provider, label, actor]);
+  }
+  locationStatus(locationId: string, status: string, note: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_location_status($1, $2, $3, $4) AS r`, [locationId, status, note, actor]);
+  }
+  locationBindCard(locationId: string | null, actor: string) { return this.one(`SELECT fleet_admin_location_bind_card($1, $2) AS r`, [locationId, actor]); }
+  locationTransfer(from: string, to: string, amountMinor: number, reference: string, actor: string) {
+    return this.one(`SELECT fleet_admin_location_transfer($1, $2, $3, $4, $5) AS r`, [from, to, amountMinor, reference, actor]);
+  }
+  locationContribution(txnId: string, actor: string) { return this.one(`SELECT fleet_admin_location_contribution($1, $2) AS r`, [txnId, actor]); }
+  bankTxnClassify(txnId: string, as: string, note: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_bank_txn_classify($1, $2, $3, $4) AS r`, [txnId, as, note, actor]);
+  }
+  /** A statement export's lines (and optionally the balance the bank's app shows now), recorded in one transaction. */
+  locationImport(locationId: string, lines: unknown[], balance: { availableMinor: number; clearedMinor: number | null } | null, actor: string) {
+    return this.one(`SELECT fleet_admin_location_import($1, $2::jsonb, $3::jsonb, $4) AS r`, [locationId, JSON.stringify(lines), balance ? JSON.stringify(balance) : null, actor]);
+  }
   storefront(agentId: string | null) { return this.one(`SELECT fleet_storefront_json($1) AS r`, [agentId]); }
   storefrontProbe(accountId: string, actor: string) { return this.one(`SELECT fleet_admin_storefront_probe($1, $2) AS r`, [accountId, actor]); }
   destinationPaypal(destinationId: string, railId: string, actor: string) {

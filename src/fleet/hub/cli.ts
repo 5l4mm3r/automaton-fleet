@@ -107,6 +107,17 @@
  *   economy-card-request-policy [--above <minor>] [--valid-hours n]           --above is RETIRED (v64 / O19: no owner threshold; kept as history);
  *                                                                             --valid-hours: how long an approved request stays usable
  *   hub-paypal-test                                                           the test's progress: approval link, capture, Transaction Search, balance
+ *   hub-locations                                                            (v86) money locations: PayPal and bank accounts, what each can spend now
+ *                                                                           and its evidence, transfers, bank lines to explain, debit-card purchases
+ *   economy-location-add <starling|airwallex|revolut|csv> <label…>          (v86) a bank account (pending until active and evidenced)
+ *   economy-location-status <locationId> <active|limited|unavailable> [note…]   limited / unavailable stops only that location's actions
+ *   economy-location-bind-card <locationId|none>                             the card draws on this bank account (debit mode; none = credit mode)
+ *   economy-location-transfer <fromId> <toId> <amountMinor> <reference>     a transfer YOU made between your accounts (same money, no journal)
+ *   economy-location-import <locationId> <statement.csv> [--balance <availableMinor>] [--cleared <minor>] [--dry-run]
+ *                                                                           a bank statement export (Starling or generic); replays are no-ops.
+ *                                                                           --balance: what the bank's app shows NOW (never the statement's)
+ *   economy-location-contribution <txnId>                                    a deposit into the bank is your funding (posted once)
+ *   economy-bank-txn-classify <txnId> <fee|transfer_out|explained> [note…]  explain a bank line (a fee is posted as a Fleet expense)
  *   hub-treasury-tx [agentId] [--limit n] [--before seq] [--direction in|out|internal]   per-transaction treasury list
  *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
  *   economy-ai-credits                                                       (v70) AI credit by funding source: lots, prepaid asset, owner payable
@@ -191,6 +202,7 @@ import { HUB_SECTIONS, type HubSection, type PgHubAdmin } from "./admin.js";
 import { renderHub } from "./render.js";
 import { OWNER_IDENTITY_CLASSES, sealOwnerFact, sealProviderSecret, type OwnerIdentityClass } from "../identity/vaults.js";
 import { generateX25519, openSealed, sealTo } from "../identity/crypto.js";
+import { parseStatement } from "../treasury/bank-statement.js";
 
 export const HUB_COMMANDS = new Set([
   "hub", "hub-render", "hub-health", "hub-withdrawals", "economy-withdrawal-policy", "hub-custody", "economy-custody-policy", "hub-identity", "owner-identity-seal", "owner-identity-class", "owner-identity-consent", "owner-identity-consent-revoke", "economy-destination-reference", "economy-entity-add", "economy-tax-profile", "economy-tax-policy", "economy-tax-true-up", "economy-tax-payment",
@@ -217,6 +229,8 @@ export const HUB_COMMANDS = new Set([
   "economy-sweep-reduction-end", "economy-sweep-reduction-decline", "hub-knowledge", "economy-knowledge-load",
   "economy-card-statement-issue", "economy-card-statement-paid", "economy-card-statement-policy", "economy-paypal-test", "hub-paypal-test",
   "hub-card-requests", "economy-card-request-decide", "economy-card-request-policy", "hub-protection", "economy-protection", "economy-protection-agent",
+  "hub-locations", "economy-location-add", "economy-location-status", "economy-location-bind-card", "economy-location-transfer", "economy-location-import",
+  "economy-location-contribution", "economy-bank-txn-classify",
 ]);
 
 const flag = (a: string[], name: string): string | null => {
@@ -546,6 +560,31 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
         flag(a, "--valid-hours") !== null ? int(flag(a, "--valid-hours"), "valid-hours") : null, actor);
     case "hub-paypal-test":
       return h.paypalTest();
+    case "hub-locations":
+      return h.locations();
+    case "economy-location-add":
+      return h.locationAdd(p[0], p.slice(1).join(" "), actor);
+    case "economy-location-status":
+      return h.locationStatus(p[0], p[1], p.slice(2).join(" ") || null, actor);
+    case "economy-location-bind-card":
+      return h.locationBindCard(p[0] === "none" ? null : p[0], actor);
+    case "economy-location-transfer":
+      return h.locationTransfer(p[0], p[1], int(p[2], "amountMinor"), p[3], actor);
+    case "economy-location-contribution":
+      return h.locationContribution(p[0], actor);
+    case "economy-bank-txn-classify":
+      return h.bankTxnClassify(p[0], p[1], p.slice(2).join(" ") || null, actor);
+    case "economy-location-import": {
+      const [loc, file] = positional(a, ["--balance", "--cleared"]);
+      if (!loc || !file) throw new Error("FLEET_BAD_REQUEST: economy-location-import <locationId> <statement.csv> [--balance <availableMinor>] [--cleared <minor>] [--dry-run]");
+      const st = parseStatement(fs.readFileSync(file, "utf8"));
+      const bal = flag(a, "--balance");
+      const balance = bal !== null ? { availableMinor: int(bal, "balance"), clearedMinor: flag(a, "--cleared") !== null ? int(flag(a, "--cleared"), "cleared") : null } : null;
+      const summary = { lines: st.lines.length, skipped: st.skipped, currency: st.currency, statementClosingBalanceMinor: st.closingBalanceMinor,
+        byKind: st.lines.reduce<Record<string, number>>((m, l) => ({ ...m, [l.kind]: (m[l.kind] ?? 0) + 1 }), {}) };
+      if (a.includes("--dry-run")) return { dryRun: true, ...summary };
+      return { ...summary, recorded: await h.locationImport(loc, st.lines, balance, actor) };
+    }
     case "hub-storefront":
       return h.storefront(p[0] ?? null);
     case "economy-storefront-probe":

@@ -1,6 +1,7 @@
-# A separate bank debit card for agent spending: integration requirements (prepared 2026-10-16, not built)
+# A separate bank debit card for agent spending: integration requirements (prepared 2026-10-16; core BUILT in schema v86, not deployed, not connected)
 
-**Status:** requirements only. Nothing here is implemented, and the payment priority is unchanged. PayPal stays supported
+**Status:** the core is built and tested against a simulated bank (schema v86; §9 lists what is built and what is not).
+Nothing is deployed, no account is opened or connected, and the payment priority is unchanged. PayPal stays supported
 and stays first (O17). The card standing authority stays off. No card is recommended for "card first" until the work below
 is built and proven.
 
@@ -256,3 +257,39 @@ Evidence: Starling developer docs and OpenAPI, sole-trader page, fee schedule, 3
 (revolut-engineering), business terms, fees, 3DS help; Airwallex issuing (lifecycle, remote authorisation, controls, 3DS,
 webhooks, tokens, UK pricing); Monzo and Wise API docs; TrueLayer connection docs. All checked 2026-10-16. Links:
 `docs/design/provider-research-2026-10-16.md`.
+
+## 9. Implementation status (schema v86, 2026-10-16; built, NOT deployed, NOT connected)
+
+**Built and tested** (`fleet-v86-locations-pg`, `fleet-bank-statement`, `fleet-location-feed`; regressions: card v53/v54,
+v51, v58, v64, v77, PayPal treasury, push / operations watch, migration paths, live dashboard contract, privilege audit):
+
+| Requirement | How v86 does it |
+|---|---|
+| §8.3 one ledger, several locations | `fleet_money_locations`: the PayPal account (one per rail, created automatically) and bank accounts. Treasury cash stays ONE ledger total; a location says where it is, from that provider's own evidence |
+| Transfers are the same money | `location_transfer` records a transfer you made: **no journal**. The source's spendable cash drops at once; the destination's only when its bank shows the credit (matched to the one transfer in transit to that account with that amount; two alike wait for you; then `arrived`) |
+| Owner deposit into the bank | `location_contribution` on the bank line: owner funding posted once against that line (a second attempt is refused) |
+| R1 available-balance evidence | Balance readings (available, cleared, pending) with their age; older than the location's limit (default 24 h) = stale = **nothing spendable there**. Debits the bank shows after a reading are subtracted until the next reading |
+| R2 reservation before a hold | With the card bound to a bank (`location_bind_card`), a hold must fit that bank's fresh free cash (balance − Fleet holds the bank has not shown − transfers out − later debits), under the location's lock, on top of the agent's own wallet check |
+| R3 lifecycle, no booking at maximum | Debit mode: the agent's declaration records the amount and books **nothing**. The bank's pending line links the hold; its settled line books the bank's amount (FX kept) with **no card payable** (the money left the bank). A decline releases the hold. A hold the bank never shows is released after 7 days — never booked at its maximum |
+| R4 refunds | A card credit reduces the one booked charge it fits (never more than was charged); otherwise it waits to be explained |
+| R5 reconciliation | Every bank line is matched (card purchase, refund, your transfer) or listed as unexplained in Fleet HQ (Treasury → Money locations) and `hub-locations`; you mark it your deposit, a bank fee (posted as a Fleet expense) or explained. Hourly watch: `LOCATION_UNAVAILABLE`, `LOCATION_EVIDENCE_STALE`, `BANK_TRANSACTIONS_UNEXPLAINED` (> 24 h), `LOCATION_DRIFT` (balance moved by more than its transactions), `LOCATION_NEGATIVE` |
+| R7 3-D Secure (§8.1) | `card_declare` records frictionless / challenged / exempt. A challenge: the agent reports `card_awaiting_approval` → a RED `CARD_APPROVAL_NEEDED` to your phone; the agent waits and never works around it; the hold's own expiry is the timeout. Only founder-v10 runtimes are offered the op |
+| Limited / unavailable | Marking a location limited or unavailable stops only that location: card holds on a limited bank are refused (`FLEET_LOCATION_UNAVAILABLE`); a limited PayPal location has nothing spendable for PayPal outflows |
+| Evidence import | `economy-location-import <locationId> <statement.csv> [--balance n] [--dry-run]`: Starling or generic exports; ids from content, so an overlapping re-export records nothing twice; `--balance` is what the bank's app shows now, never the statement's closing figure |
+| Read adapter | `LocationFeedConnector` + Starling client (API v2 shapes): refuses a token with any scope that is not `…:read`; records transactions, then the balance. Role `fleet_bankfeed` may feed only API-fed bank locations (never a statement-only or PayPal one) |
+| Credit mode unchanged | With no bank bound, the owner-card path (v48–v64: reserve, payable, statement) is exactly as before |
+
+**Not built yet (P2 remaining):**
+1. The feed's service: an entry point, systemd unit and setup script for `LocationFeedConnector` (the adapter exists and is
+   tested; nothing runs it). Starling endpoints and the token's scopes must be checked against the real account at setup.
+2. A whole-treasury reconciliation: the sum of location balances (plus transfers in transit) against the ledger's treasury
+   cash, with an alert when they differ. Today each bank location is checked against its own transactions.
+3. Disputes / chargebacks on bank-card charges (a dispute state and its alert). PayPal's own refund and dispute obligations
+   are unchanged (v48 clawbacks).
+4. Several cards (R9): one card can be bound to one bank location; a second card is not modelled.
+5. Venture on a debit charge: the charge carries agent, merchant, account and purpose; per-venture attribution follows the
+   account, not the charge.
+6. A "PayPal limited" signal from PayPal itself: today you mark the PayPal location limited (P1 open item).
+
+**Your choices before connecting** (§8.4): the bank and legal form, float size, read-only token scopes, who approves 3-D
+Secure and how fast. Then the controlled live proof in the master checklist §4 item 7.
