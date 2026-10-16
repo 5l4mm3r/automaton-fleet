@@ -41,9 +41,16 @@ export function MoneyLocations({ client, agents }: { client: GatewayClient; agen
   const locations = (d.locations as Row[]) ?? [];
   const labelOf = (id: string) => locations.find((l) => l.locationId === id)?.label ?? "unknown location";
   const unexplained = (d.unexplained as Row[]) ?? [];
+  const inTransit = ((d.transfers as Row[]) ?? []).filter((t) => t.state === "in_transit");
+  const disputes = (d.disputes as Row[]) ?? [];
+  const rec = d.reconciliation as Row | undefined;
   const pence = Math.round(Number(amount) * 100);
   return <Panel title="Money locations">
     <p className="text-xs text-slate-400">Where the treasury’s money is. Each location spends only what its own latest evidence shows, after the Fleet’s open holds and transfers out. Moving money between your own accounts is the same money: it is not income and not a cost.</p>
+    {rec && <div className={`mt-3 rounded-lg border p-3 text-sm ${rec.state === "reconciled" ? "border-emerald-700" : rec.state === "difference" ? "border-red-600" : "border-amber-600"}`}>
+      <p className="font-semibold">{rec.state === "reconciled" ? "Accounts match the books" : rec.state === "difference" ? `Accounts differ from the books by ${gbp(rec.differenceMinor)}` : "Reconciliation incomplete: a location has no fresh reading"}</p>
+      <p className="mt-1 text-xs text-slate-400">In your accounts {gbp(rec.locationsMinor)} + on its way between them {gbp(rec.inTransitMinor)}, against the books {gbp(rec.expectedMinor)} (the books less capital not yet backed by money). Above zero: money the books do not record yet; below zero: money missing.</p>
+    </div>}
     <ul className="mt-4 space-y-3">
       {locations.length === 0 && <li className="text-sm text-slate-300">No location yet: the PayPal treasury appears here once its rail exists.</li>}
       {locations.map((l) => {
@@ -70,6 +77,8 @@ export function MoneyLocations({ client, agents }: { client: GatewayClient; agen
         <p>{when(t.at)} · {labelOf(t.locationId)} · <span className="font-mono">{t.direction === "in" ? "+" : "−"}{gbp(t.amountMinor)}</span> · {t.descriptor ?? t.kind} · {t.status}</p>
         <div className="mt-1 flex flex-wrap gap-2">
           {t.direction === "in" && t.status === "settled" && <button className={button} disabled={busy} onClick={() => act("location_contribution", { txnId: t.txnId }, "Recorded as your deposit (owner funding).")}>My deposit</button>}
+          {t.direction === "in" && t.status === "settled" && inTransit.filter((x) => x.to === t.locationId && Number(x.amountMinor) === Number(t.amountMinor)).map((x) =>
+            <button key={x.transferId} className={button} disabled={busy} onClick={() => { if (window.confirm(`This credit is your transfer “${x.reference}” (${gbp(x.amountMinor)} from ${labelOf(x.from)})?`)) void act("transfer_arrival", { txnId: t.txnId, transferId: x.transferId }, "Recorded as the transfer’s arrival."); }}>Transfer “{x.reference}”</button>)}
           {t.direction === "out" && t.status === "settled" && <button className={button} disabled={busy} onClick={() => act("bank_txn_classify", { txnId: t.txnId, as: "fee", note: "bank fee" }, "Recorded as a bank fee (a Fleet expense).")}>Bank fee</button>}
           <button className={button} disabled={busy} onClick={() => { const note = window.prompt("What is it? (at least a few words)"); if (note) void act("bank_txn_classify", { txnId: t.txnId, as: "explained", note }, "Explained."); }}>Explain…</button>
         </div>
@@ -80,7 +89,21 @@ export function MoneyLocations({ client, agents }: { client: GatewayClient; agen
       <ul className="mt-2 space-y-1 text-sm">{(d.debitCharges as Row[]).map((c) => <li key={c.chargeId}>
         {when(c.createdAt)} · {name(c.agentId)} · {c.merchant} · hold {gbp(c.holdMaxMinor)}{c.amountMinor ? ` · charged ${gbp(c.amountMinor)}` : c.declaredMinor ? ` · agent says ${gbp(c.declaredMinor)}` : ""} · {c.status}, bank evidence {c.evidence}
         {c.awaitingApprovalSince && c.status === "held" ? <span className="text-red-300"> · waiting for your approval in the bank’s app since {when(c.awaitingApprovalSince)}</span> : null}
+        {c.venture ? <span className="text-slate-400"> · venture {c.venture}</span> : null}
+        {c.status === "held" && c.evidence === "overdue" && <> <span className="text-amber-200">· no bank record yet: its money stays reserved</span>{" "}
+          <button className={button} disabled={busy} onClick={() => { const ev = window.prompt("What did you check? (e.g. bank app: nothing pending; merchant cancelled). If it is charged later, it is still booked against the agent."); if (ev) void act("card_hold_release", { chargeId: c.chargeId, evidence: ev }, "Released."); }}>Release (I checked)</button></>}
+        {c.status === "booked" && Number(c.amountMinor) > 0 && !disputes.some((x) => x.chargeId === c.chargeId && x.state === "open") && <>{" "}
+          <button className={button} disabled={busy} onClick={() => { const reason = window.prompt("The reason you gave the bank for disputing this charge:"); if (reason) void act("card_dispute_open", { chargeId: c.chargeId, amountMinor: Number(c.amountMinor), reason }, "Dispute recorded: nothing is booked until the bank credits it."); }}>Record a dispute</button></>}
       </li>)}</ul></>}
+    {disputes.length > 0 && <>
+      <h3 className="mt-4 text-sm font-semibold">Card disputes</h3>
+      <ul className="mt-2 space-y-1 text-sm">{disputes.map((x) => <li key={x.disputeId}>
+        {when(x.openedAt)} · {x.merchant} · {gbp(x.amountMinor)} · {x.reason} · <span className={x.state === "open" ? "text-amber-200" : "text-slate-300"}>{x.state}</span>{x.outcomeNote ? ` · ${x.outcomeNote}` : ""}
+        {x.state === "open" && <>{" "}
+          <button className={button} disabled={busy} onClick={() => act("card_dispute_resolve", { disputeId: x.disputeId, outcome: "lost", note: "" }, "Recorded as lost.")}>Bank decided against</button>{" "}
+          <button className={button} disabled={busy} onClick={() => act("card_dispute_resolve", { disputeId: x.disputeId, outcome: "withdrawn", note: "" }, "Recorded as withdrawn.")}>Withdrawn</button></>}
+      </li>)}</ul>
+      <p className="mt-1 text-xs text-slate-400">A dispute the bank decides for you is recorded when its credit appears in the bank’s lines.</p></>}
     {((d.transfers as Row[]) ?? []).length > 0 && <>
       <h3 className="mt-4 text-sm font-semibold">Transfers between your accounts</h3>
       <ul className="mt-2 space-y-1 text-sm">{(d.transfers as Row[]).map((t) => <li key={t.transferId}>

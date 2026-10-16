@@ -17,8 +17,18 @@
  * when no location is bound. In debit mode a hold must also fit the bank location's fresh spendable cash (under the
  * location's lock); an agent's declared amount books nothing — a charge is booked only when the bank's own transaction
  * for it settles (matched by amount, time and merchant), with no card payable (the money left the bank); a decline or a
- * reversal releases the hold; a merchant refund reduces the charge; a hold the bank never shows is released after 7 days,
- * never booked at its maximum. Bank transactions nothing explains wait in the owner's queue.
+ * reversal releases the hold; a merchant refund (or a dispute the bank decides for the owner) reduces the charge. A used
+ * hold the bank has not shown after 7 days is OVERDUE, not gone: it stays reserved and the owner is told; it is released
+ * only on evidence (the bank's decline / reversal, or the owner's own check), and a charge the bank presents after a
+ * release is still booked (late settlement: from the agent's cash, any shortfall an advance it repays) — the same money is
+ * never spendable twice. Never booked at its maximum. Bank transactions nothing explains wait in the owner's queue.
+ *
+ * A TRANSFER completes only on evidence that it is THAT transfer: its reference in the bank line, or the source
+ * provider's own record of the money leaving (PayPal's withdrawal) together with the source named on the bank line. An
+ * unrelated credit of the same amount never completes one; the owner attributes anything else explicitly.
+ *
+ * WHOLE-TREASURY RECONCILIATION: every location's latest evidence plus money in transit, against what the books say the
+ * treasury holds (fleet_capital_backing: books less unbacked capital).
  */
 import { V49_SQL } from "./migrations-phase49.js";
 import { V51_SQL } from "./migrations-phase51.js";
@@ -35,14 +45,21 @@ export const LOCATION_PROVIDERS = ["paypal", "starling", "airwallex", "revolut",
 export const LOCATION_STATUSES = ["pending_setup", "active", "limited", "unavailable"] as const;
 export const BANK_TXN_STATUSES = ["pending", "settled", "declined", "reversed"] as const;
 export const BANK_TXN_KINDS = ["card", "card_refund", "transfer", "fee", "interest", "other"] as const;
-/** A debit-card hold the bank never shows is released after this many days (never booked at its maximum). */
+/** A used debit-card hold (card filled or amount declared) the bank has not shown after this many days is OVERDUE: still
+ *  reserved, the owner is told; released only on evidence. Never booked at its maximum. */
 export const DEBIT_EVIDENCE_DAYS = 7;
+/** A charge the bank presents after its hold was released (late settlement) is still matched for this many days. */
+export const LATE_SETTLEMENT_DAYS = 60;
+/** Whole-treasury reconciliation: a difference beyond this (minor units) is reported. */
+export const RECONCILE_TOLERANCE_MINOR = 100;
+/** A transfer leaves its source (PayPal's withdrawal record) no earlier than this before it was recorded. */
+export const TRANSFER_SOURCE_WINDOW_DAYS = 3;
 /** A bank amount may exceed the hold by this share for FX / tips before it is not a match (basis points). */
 export const DEBIT_MATCH_TOLERANCE_BP = 1000;
 export const AGENT_OPS_V86 = ["card.awaiting_approval"] as const;
 export const DASHBOARD_READ_OPS_V86 = ["locations"] as const;
-export const DASHBOARD_SENSITIVE_OPS_V86 = ["location_add", "location_bind_card", "location_transfer", "location_contribution"] as const;
-export const DASHBOARD_WRITE_OPS_V86_ADDED = ["location_status", "bank_txn_classify"] as const;
+export const DASHBOARD_SENSITIVE_OPS_V86 = ["location_add", "location_bind_card", "location_transfer", "location_contribution", "card_hold_release"] as const;
+export const DASHBOARD_WRITE_OPS_V86_ADDED = ["location_status", "bank_txn_classify", "transfer_arrival", "card_dispute_open", "card_dispute_resolve"] as const;
 /** The bank-feed connector's added surface (role fleet_bankfeed: read-only bank data in, nothing out). */
 export const BANKFEED_API_FUNCTIONS_V86 = ["rx_location_balance(text, uuid, bigint, bigint, bigint, text)", "rx_location_txn(text, uuid, jsonb)", "rx_locations(text)"] as const;
 
@@ -72,9 +89,10 @@ const CARD_AUTHORIZE = restate(V64_SQL, "fleet_econ_card_authorize", [
     VALUES (p_agent, left(fleet_scrub(v_merchant), 120), v_origin, 'held', 'agent', v_max, now() + interval '24 hours',
             CASE WHEN v_env IS NULL THEN 'own' ELSE 'envelope' END, v_env, v_max) RETURNING * INTO c;`,
    `${DEBIT_GATE}
-  INSERT INTO fleet_card_charges (agent_id, merchant, origin, status, source, hold_max_minor, declare_by, funding, envelope_id, reserved_minor, location_id, evidence_status)
+  INSERT INTO fleet_card_charges (agent_id, merchant, origin, status, source, hold_max_minor, declare_by, funding, envelope_id, reserved_minor, location_id, evidence_status, venture_id)
     VALUES (p_agent, left(fleet_scrub(v_merchant), 120), v_origin, 'held', 'agent', v_max, now() + interval '24 hours',
-            CASE WHEN v_env IS NULL THEN 'own' ELSE 'envelope' END, v_env, v_max, loc.location_id, CASE WHEN loc.location_id IS NOT NULL THEN 'awaiting' END) RETURNING * INTO c;`],
+            CASE WHEN v_env IS NULL THEN 'own' ELSE 'envelope' END, v_env, v_max, loc.location_id, CASE WHEN loc.location_id IS NOT NULL THEN 'awaiting' END,
+            acc.venture_id) RETURNING * INTO c;`],
 ]);
 const CARD_DECLARE = restate(V49_SQL, "fleet_econ_card_declare", [
   [`  r := fleet_card_charge_post(c.charge_id, v_amount, 'card:' || c.charge_id || ':book', 'controller', 'agent:' || p_agent);`,
@@ -92,18 +110,31 @@ const CARD_DECLARE = restate(V49_SQL, "fleet_econ_card_declare", [
 const HOLDS_EXPIRE = restate(V51_SQL, "svc_card_holds_expire", [
   [`  FOR c IN SELECT * FROM fleet_card_charges WHERE status = 'held' AND declare_by <= now() ORDER BY declare_by LIMIT LEAST(GREATEST(COALESCE(p_limit, 50), 1), 500) FOR UPDATE SKIP LOCKED LOOP`,
    `  FOR c IN SELECT * FROM fleet_card_charges WHERE status = 'held' AND declare_by <= now() ORDER BY declare_by LIMIT LEAST(GREATEST(COALESCE(p_limit, 50), 1), 500) FOR UPDATE SKIP LOCKED LOOP
-    -- v86: debit mode — never booked at its maximum: it waits for the bank's evidence; released when none comes.
+    -- v86: debit mode — never booked at its maximum. A hold the card was never used for is released as before; a used one
+    -- (card filled or amount declared) waits for the bank's evidence, and after ${DEBIT_EVIDENCE_DAYS} days without it is OVERDUE:
+    -- still reserved (the money may still leave), the owner told; released only on evidence (fleet_admin_card_hold_release).
     IF c.location_id IS NOT NULL THEN
-      IF c.evidence_status = 'awaiting' AND c.created_at < now() - interval '${DEBIT_EVIDENCE_DAYS} days' THEN
+      IF c.declared_minor IS NULL AND NOT EXISTS (SELECT 1 FROM fleet_identity_uses u WHERE u.charge_id = c.charge_id) THEN
         PERFORM fleet_card_hold_release(c.charge_id, c.reserved_minor, 'controller', 'controller');
         UPDATE fleet_card_charges SET status = 'void', evidence_status = 'none' WHERE charge_id = c.charge_id;
-        PERFORM fleet_event('card_hold_voided', c.agent_id, 'controller', jsonb_build_object('chargeId', c.charge_id, 'reason', 'the bank showed no charge within ${DEBIT_EVIDENCE_DAYS} days'));
+        PERFORM fleet_event('card_hold_voided', c.agent_id, 'controller', jsonb_build_object('chargeId', c.charge_id, 'reason', 'expired unused'));
         nv := nv + 1;
+      ELSIF c.evidence_status IN ('awaiting','authorised') AND c.created_at < now() - interval '${DEBIT_EVIDENCE_DAYS} days' THEN
+        UPDATE fleet_card_charges SET evidence_status = 'overdue' WHERE charge_id = c.charge_id;
+        PERFORM fleet_notify('AMBER', 'CARD_HOLD_UNRESOLVED', c.agent_id, 'A card purchase at ' || c.merchant || ' has no bank record after ${DEBIT_EVIDENCE_DAYS} days: its money stays reserved',
+          jsonb_build_object('chargeId', c.charge_id, 'merchant', c.merchant, 'holdMaxMinor', c.hold_max_minor, 'declaredMinor', c.declared_minor,
+            'next', 'check the bank app: if nothing was or will be charged, release it (Treasury → Money locations); otherwise it books when the bank shows it'),
+          'card-overdue:' || c.charge_id);
       END IF;
       CONTINUE;
     END IF;`],
 ]);
 const CHARGE_POST = restate(V54_SQL, "fleet_card_charge_post", [
+  [`  IF p_amount IS NULL OR p_amount <= 0 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: a positive amount'; END IF;`,
+   `  -- v86: a debit charge refunded in full (by the merchant, or a dispute the bank decided) goes to zero; nothing else may.
+  IF p_amount IS NULL OR p_amount < 0 OR (p_amount = 0 AND (ch.location_id IS NULL OR ch.status NOT IN ('booked','confirmed'))) THEN
+    RAISE EXCEPTION 'FLEET_BAD_REQUEST: a positive amount';
+  END IF;`],
   [`    v_lines := v_lines || jsonb_build_array(jsonb_build_object('account', 'fleet:card:reserve', 'side', 'D', 'amount', d),
                                             jsonb_build_object('account', 'fleet:card:payable', 'side', 'C', 'amount', d));`,
    `    -- v86: a debit-card charge left the bank at once — no card payable to repay later.
@@ -117,6 +148,25 @@ const CHARGE_POST = restate(V54_SQL, "fleet_card_charge_post", [
       v_lines := v_lines || jsonb_build_array(jsonb_build_object('account', 'fleet:card:payable', 'side', 'D', 'amount', -d),
                                               jsonb_build_object('account', 'fleet:card:reserve', 'side', 'C', 'amount', -d));
     END IF;`],
+]);
+
+// A debit charge released earlier and presented late by the merchant is booked after all (the only way back from void).
+const CHARGES_GUARD = restate(V51_SQL, "fleet_card_charges_guard", [
+  [`  IF NEW.status <> OLD.status AND NOT ((OLD.status = 'held' AND NEW.status IN ('booked','void','confirmed')) OR (OLD.status = 'booked' AND NEW.status = 'confirmed')) THEN`,
+   `  IF NEW.status <> OLD.status AND NOT ((OLD.status = 'held' AND NEW.status IN ('booked','void','confirmed')) OR (OLD.status = 'booked' AND NEW.status = 'confirmed')
+     OR (OLD.status = 'void' AND NEW.status = 'booked' AND OLD.location_id IS NOT NULL AND OLD.evidence_status = 'late')) THEN`],
+]);
+
+// Debit mode: once the agent has declared what was charged, the hold is no longer the agent's to void (only the bank's
+// evidence or the owner's check releases it); an unused hold voids as before.
+const CARD_VOID = restate(V51_SQL, "fleet_econ_card_void", [
+  [`  PERFORM fleet_card_hold_release(c.charge_id, c.reserved_minor, 'agent:' || p_agent, 'controller');
+  UPDATE fleet_card_charges SET status = 'void' WHERE charge_id = c.charge_id RETURNING * INTO c;`,
+   `  IF c.location_id IS NOT NULL AND c.declared_minor IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_CARD_USED', 'reason', 'you declared a charge for this hold: it books when the bank shows it (or is released if the bank never takes it)');
+  END IF;
+  PERFORM fleet_card_hold_release(c.charge_id, c.reserved_minor, 'agent:' || p_agent, 'controller');
+  UPDATE fleet_card_charges SET status = 'void', evidence_status = CASE WHEN location_id IS NOT NULL THEN 'none' END WHERE charge_id = c.charge_id RETURNING * INTO c;`],
 ]);
 
 // ── PayPal: a location like any other — transfers out of it leave its spendable cash at once; a limitation blocks it ──
@@ -149,17 +199,34 @@ const DASH_CALL = restate(V85_SQL, "dash_call", [
   [`'outward_hold','channel_disconnect','push_device_revoke','push_test','push_test_received');`, `'outward_hold','channel_disconnect','push_device_revoke','push_test','push_test_received',${q(DASHBOARD_WRITE_OPS_V86_ADDED)});`],
   [`      WHEN 'push_device_revoke' THEN`, `      WHEN 'location_status' THEN fleet_admin_location_status((a ->> 'locationId')::uuid, a ->> 'status', a ->> 'note', 'operator:owner')
       WHEN 'bank_txn_classify' THEN fleet_admin_bank_txn_classify((a ->> 'txnId')::uuid, a ->> 'as', a ->> 'note', 'operator:owner')
+      WHEN 'transfer_arrival' THEN fleet_admin_transfer_arrival((a ->> 'txnId')::uuid, (a ->> 'transferId')::uuid, 'operator:owner')
+      WHEN 'card_dispute_open' THEN fleet_admin_card_dispute_open((a ->> 'chargeId')::uuid, (a ->> 'amountMinor')::bigint, a ->> 'reason', 'operator:owner')
+      WHEN 'card_dispute_resolve' THEN fleet_admin_card_dispute_resolve((a ->> 'disputeId')::uuid, a ->> 'outcome', NULLIF(a ->> 'txnId', '')::uuid, a ->> 'note', 'operator:owner')
       WHEN 'push_device_revoke' THEN`],
   [`      WHEN 'push_device_add' THEN`, `      WHEN 'location_add' THEN fleet_admin_location_add(a ->> 'kind', a ->> 'provider', a ->> 'label', NULLIF(a ->> 'railId', '')::uuid, 'operator:owner')
       WHEN 'location_bind_card' THEN fleet_admin_location_bind_card(NULLIF(a ->> 'locationId', '')::uuid, 'operator:owner')
       WHEN 'location_transfer' THEN fleet_admin_location_transfer((a ->> 'fromLocation')::uuid, (a ->> 'toLocation')::uuid, (a ->> 'amountMinor')::bigint, a ->> 'reference', 'operator:owner')
       WHEN 'location_contribution' THEN fleet_admin_location_contribution((a ->> 'txnId')::uuid, 'operator:owner')
+      WHEN 'card_hold_release' THEN fleet_admin_card_hold_release((a ->> 'chargeId')::uuid, a ->> 'evidence', 'operator:owner')
       WHEN 'push_device_add' THEN`],
 ]);
 const OPS_WATCH = restate(V83_SQL, "svc_operations_watch", [
+  [`DECLARE h jsonb := fleet_economy_health(); x jsonb; n integer := 0; o record; c record;`,
+   `DECLARE h jsonb := fleet_economy_health(); x jsonb; n integer := 0; o record; c record; k bigint; rec jsonb;`],
   [`  RETURN jsonb_build_object('ok', true, 'raised', n);`,
    `  -- v86: money locations — stale evidence on an active location, bank transactions nothing explains, balance drift, a
-  -- negative bank balance, a limited or unavailable location.
+  -- negative bank balance, a limited or unavailable location; transfers' provider evidence; card holds still unresolved;
+  -- disputes the bank has not decided; the whole treasury against the books.
+  PERFORM fleet_location_transfers_evidence();
+  PERFORM fleet_location_match_pending(location_id) FROM fleet_money_locations WHERE kind = 'bank' AND status <> 'pending_setup';
+  SELECT count(*) INTO k FROM fleet_card_charges WHERE location_id IS NOT NULL AND status = 'held' AND evidence_status = 'overdue';
+  IF k > 0 AND fleet_notify('AMBER', 'CARD_HOLDS_UNRESOLVED', NULL, k || ' card purchase(s) still have no bank record: their money stays reserved',
+       jsonb_build_object('count', k), 'card-overdue-daily:' || day) THEN n := n + 1; END IF;
+  SELECT count(*) INTO k FROM fleet_card_disputes WHERE state = 'open' AND opened_at < now() - interval '30 days';
+  IF k > 0 AND fleet_notify('AMBER', 'CARD_DISPUTES_OPEN', NULL, k || ' card dispute(s) open for over 30 days', jsonb_build_object('count', k), 'card-disputes:' || day) THEN n := n + 1; END IF;
+  rec := fleet_treasury_reconciliation();
+  IF rec ->> 'state' = 'difference' AND fleet_notify('AMBER', 'TREASURY_UNRECONCILED', NULL,
+       'The money in your accounts differs from the books by ' || (rec ->> 'differenceMinor') || ' (minor units)', rec - 'locations', 'treasury-recon:' || day) THEN n := n + 1; END IF;
   FOR c IN SELECT l.location_id, l.label, l.status, fleet_location_liquidity(l.location_id) AS liq, fleet_location_drift(l.location_id) AS drift,
                   (SELECT count(*) FROM fleet_bank_transactions t WHERE t.location_id = l.location_id AND t.classified IS NULL AND t.first_seen < now() - interval '24 hours') AS unexplained
              FROM fleet_money_locations l WHERE l.kind = 'bank' AND l.status <> 'pending_setup' LOOP
@@ -273,17 +340,45 @@ CREATE TABLE fleet_location_transfers (
   arrived_at    timestamptz,
   recorded_by   text        NOT NULL,
   CHECK (from_location <> to_location),
+  -- What shows it is THIS transfer: the source provider's record of the money leaving, and how its arrival was attributed.
+  source_evidence text       UNIQUE CHECK (length(source_evidence) <= 160),
+  source_seen_at  timestamptz,
+  arrival_basis   text       CHECK (arrival_basis IN ('reference','source_evidence','provider','owner')),
+  arrival_evidence text      UNIQUE CHECK (length(arrival_evidence) <= 160),
   UNIQUE (from_location, reference)
 );
 CREATE TRIGGER fleet_location_transfers_no_delete BEFORE DELETE ON fleet_location_transfers FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
 
 ALTER TABLE fleet_card_charges ADD COLUMN location_id uuid REFERENCES fleet_money_locations(location_id);
-ALTER TABLE fleet_card_charges ADD COLUMN evidence_status text CHECK (evidence_status IN ('awaiting','authorised','settled','declined','reversed','none'));
+ALTER TABLE fleet_card_charges ADD COLUMN evidence_status text CHECK (evidence_status IN ('awaiting','authorised','settled','declined','reversed','none','overdue','released','late'));
 ALTER TABLE fleet_card_charges ADD COLUMN declared_minor bigint CHECK (declared_minor > 0);
 ALTER TABLE fleet_card_charges ADD COLUMN bank_txn_id uuid REFERENCES fleet_bank_transactions(txn_id);
 ALTER TABLE fleet_card_charges ADD COLUMN sca text CHECK (sca IN ('frictionless','challenged','exempt'));
 ALTER TABLE fleet_card_charges ADD COLUMN awaiting_approval_since timestamptz;
 ALTER TABLE fleet_card_charges ADD CONSTRAINT fleet_card_charges_debit_evidence CHECK ((location_id IS NULL) = (evidence_status IS NULL));
+ALTER TABLE fleet_card_charges ADD COLUMN venture_id uuid REFERENCES fleet_ventures(venture_id);
+COMMENT ON COLUMN fleet_card_charges.venture_id IS 'v86: the venture the purchase is for (the merchant account''s venture when the hold was opened)';
+-- A debit charge refunded in full stands at zero (credit-mode charges stay positive: fleet_card_charge_post).
+ALTER TABLE fleet_card_charges DROP CONSTRAINT fleet_card_charges_amount_minor_check;
+ALTER TABLE fleet_card_charges ADD CONSTRAINT fleet_card_charges_amount_minor_check CHECK (amount_minor >= 0 AND (amount_minor > 0 OR location_id IS NOT NULL));
+
+-- Disputes the owner raises with the bank on a debit-card charge. The bank decides; its credit (matched, or attributed by
+-- the owner) reduces the charge. Nothing is booked when a dispute opens.
+CREATE TABLE fleet_card_disputes (
+  dispute_id    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  charge_id     uuid        NOT NULL REFERENCES fleet_card_charges(charge_id),
+  amount_minor  bigint      NOT NULL CHECK (amount_minor > 0),
+  reason        text        NOT NULL CHECK (length(reason) BETWEEN 5 AND 300),
+  state         text        NOT NULL DEFAULT 'open' CHECK (state IN ('open','won','lost','withdrawn')),
+  credit_txn_id uuid        UNIQUE REFERENCES fleet_bank_transactions(txn_id),
+  outcome_note  text        CHECK (length(outcome_note) <= 300),
+  opened_by     text        NOT NULL,
+  opened_at     timestamptz NOT NULL DEFAULT now(),
+  resolved_at   timestamptz,
+  CHECK ((state = 'open') = (resolved_at IS NULL))
+);
+CREATE UNIQUE INDEX fleet_card_disputes_one_open ON fleet_card_disputes (charge_id) WHERE state = 'open';
+CREATE TRIGGER fleet_card_disputes_no_delete BEFORE DELETE ON fleet_card_disputes FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
 
 -- ═══ 2. What a location can spend now, and whether its balance matches its transactions ═══
 CREATE FUNCTION fleet_location_liquidity(p_loc uuid) RETURNS jsonb LANGUAGE plpgsql STABLE
@@ -296,7 +391,7 @@ BEGIN
   SELECT * INTO b FROM fleet_bank_balance_observations WHERE location_id = p_loc ORDER BY observed_at DESC, observation_id DESC LIMIT 1;
   v_at := COALESCE(b.observed_at, '-infinity'::timestamptz);
   -- Fleet holds the bank has not shown yet (an authorised or settled charge is already in the bank's available balance).
-  SELECT COALESCE(sum(reserved_minor), 0) INTO v_holds FROM fleet_card_charges WHERE location_id = p_loc AND status = 'held' AND evidence_status = 'awaiting';
+  SELECT COALESCE(sum(reserved_minor), 0) INTO v_holds FROM fleet_card_charges WHERE location_id = p_loc AND status = 'held' AND bank_txn_id IS NULL;
   -- Money the owner moved out after the reading.
   SELECT COALESCE(sum(amount_minor), 0) INTO v_out FROM fleet_location_transfers WHERE from_location = p_loc AND state <> 'cancelled' AND recorded_at > v_at;
   -- Debits the bank first showed after the reading, authorised or settled (the reading's available balance did not carry them).
@@ -324,25 +419,55 @@ BEGIN
 END $$;
 
 -- ═══ 3. Matching the bank's evidence to the Fleet's records ═══
--- A card debit settles / authorises / declines one held debit-mode charge; a card credit is a refund of one booked charge;
--- an incoming transfer completes one transfer in transit. Ambiguous or unknown items wait for the owner (never guessed).
+-- A card debit settles / authorises / declines one held debit-mode charge (or, presented late, one released after use); a
+-- card credit settles an open dispute or refunds one booked charge; an incoming credit completes a transfer only on evidence
+-- that it is that transfer. Ambiguous or unknown items wait for the owner (never guessed).
+CREATE FUNCTION fleet_norm(p text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT regexp_replace(lower(COALESCE(p, '')), '[^a-z0-9]', '', 'g') $$;
+
+-- The bank line names the transfer's source: its provider (PayPal, Starling …) or, for a statement-only bank, its label.
+CREATE FUNCTION fleet_location_source_named(p_from uuid, p_descriptor text) RETURNS boolean LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT EXISTS (SELECT 1 FROM fleet_money_locations l WHERE l.location_id = p_from
+    AND position(CASE WHEN l.provider IN ('csv','simulated') THEN fleet_norm(l.label) ELSE fleet_norm(l.provider) END IN fleet_norm(p_descriptor)) > 0)
+$$;
+
 CREATE FUNCTION fleet_location_match(p_txn uuid) RETURNS text LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE t fleet_bank_transactions; ch fleet_card_charges; n integer; tr fleet_location_transfers; r jsonb;
+DECLARE t fleet_bank_transactions; ch fleet_card_charges; n integer; tr fleet_location_transfers; r jsonb; dsp fleet_card_disputes; v_at timestamptz;
 BEGIN
   SELECT * INTO t FROM fleet_bank_transactions WHERE txn_id = p_txn FOR UPDATE;
+  v_at := COALESCE(t.authorised_at, t.settled_at, t.first_seen);
   IF t.kind = 'card' AND t.direction = 'out' THEN
     IF t.charge_id IS NULL THEN
       -- Candidates: open debit-mode holds on this location, opened before the bank saw it, that the amount fits.
-      SELECT count(*) INTO n FROM fleet_card_charges c WHERE c.location_id = t.location_id AND c.status = 'held' AND c.evidence_status IN ('awaiting','authorised') AND c.bank_txn_id IS NULL
-         AND c.created_at <= COALESCE(t.authorised_at, t.settled_at, t.first_seen) + interval '1 hour'
+      SELECT count(*) INTO n FROM fleet_card_charges c WHERE c.location_id = t.location_id AND c.status = 'held' AND c.bank_txn_id IS NULL
+         AND c.created_at <= v_at + interval '1 hour'
          AND t.amount_minor * 10000 <= c.hold_max_minor * (10000 + ${DEBIT_MATCH_TOLERANCE_BP})
          AND (c.declared_minor IS NULL OR abs(c.declared_minor - t.amount_minor) * 10000 <= c.declared_minor * ${DEBIT_MATCH_TOLERANCE_BP});
-      IF n <> 1 THEN RETURN CASE WHEN n = 0 THEN 'unmatched' ELSE 'ambiguous' END; END IF;
-      SELECT c.* INTO ch FROM fleet_card_charges c WHERE c.location_id = t.location_id AND c.status = 'held' AND c.evidence_status IN ('awaiting','authorised') AND c.bank_txn_id IS NULL
-         AND c.created_at <= COALESCE(t.authorised_at, t.settled_at, t.first_seen) + interval '1 hour'
-         AND t.amount_minor * 10000 <= c.hold_max_minor * (10000 + ${DEBIT_MATCH_TOLERANCE_BP})
-         AND (c.declared_minor IS NULL OR abs(c.declared_minor - t.amount_minor) * 10000 <= c.declared_minor * ${DEBIT_MATCH_TOLERANCE_BP}) FOR UPDATE;
+      IF n > 1 THEN RETURN 'ambiguous'; END IF;
+      IF n = 1 THEN
+        SELECT c.* INTO ch FROM fleet_card_charges c WHERE c.location_id = t.location_id AND c.status = 'held' AND c.bank_txn_id IS NULL
+           AND c.created_at <= v_at + interval '1 hour'
+           AND t.amount_minor * 10000 <= c.hold_max_minor * (10000 + ${DEBIT_MATCH_TOLERANCE_BP})
+           AND (c.declared_minor IS NULL OR abs(c.declared_minor - t.amount_minor) * 10000 <= c.declared_minor * ${DEBIT_MATCH_TOLERANCE_BP}) FOR UPDATE;
+      ELSE
+        -- Late settlement: a used hold released earlier (by the bank's reversal or the owner's check) that the merchant
+        -- presents after all. It is still booked — the agent bears it — so nothing is spendable twice.
+        SELECT count(*) INTO n FROM fleet_card_charges c WHERE c.location_id = t.location_id AND c.status = 'void' AND c.evidence_status IN ('released','reversed')
+           AND (c.declared_minor IS NOT NULL OR EXISTS (SELECT 1 FROM fleet_identity_uses u WHERE u.charge_id = c.charge_id))
+           AND c.created_at BETWEEN v_at - interval '${LATE_SETTLEMENT_DAYS} days' AND v_at + interval '1 hour' AND c.bank_txn_id IS DISTINCT FROM t.txn_id
+           AND t.amount_minor * 10000 <= c.hold_max_minor * (10000 + ${DEBIT_MATCH_TOLERANCE_BP})
+           AND (c.declared_minor IS NULL OR abs(c.declared_minor - t.amount_minor) * 10000 <= c.declared_minor * ${DEBIT_MATCH_TOLERANCE_BP});
+        IF n <> 1 THEN RETURN CASE WHEN n = 0 THEN 'unmatched' ELSE 'ambiguous' END; END IF;
+        SELECT c.* INTO ch FROM fleet_card_charges c WHERE c.location_id = t.location_id AND c.status = 'void' AND c.evidence_status IN ('released','reversed')
+           AND (c.declared_minor IS NOT NULL OR EXISTS (SELECT 1 FROM fleet_identity_uses u WHERE u.charge_id = c.charge_id))
+           AND c.created_at BETWEEN v_at - interval '${LATE_SETTLEMENT_DAYS} days' AND v_at + interval '1 hour' AND c.bank_txn_id IS DISTINCT FROM t.txn_id
+           AND t.amount_minor * 10000 <= c.hold_max_minor * (10000 + ${DEBIT_MATCH_TOLERANCE_BP})
+           AND (c.declared_minor IS NULL OR abs(c.declared_minor - t.amount_minor) * 10000 <= c.declared_minor * ${DEBIT_MATCH_TOLERANCE_BP}) FOR UPDATE;
+        UPDATE fleet_card_charges SET evidence_status = 'late' WHERE charge_id = ch.charge_id RETURNING * INTO ch;
+        PERFORM fleet_notify('AMBER', 'CARD_LATE_SETTLEMENT', ch.agent_id, 'A card purchase at ' || ch.merchant || ' was charged after its hold was released',
+          jsonb_build_object('chargeId', ch.charge_id, 'amountMinor', t.amount_minor, 'txnId', t.txn_id), 'card-late:' || ch.charge_id || ':' || t.txn_id);
+      END IF;
       UPDATE fleet_bank_transactions SET charge_id = ch.charge_id, classified = 'card_charge', classified_by = 'matcher' WHERE txn_id = t.txn_id RETURNING * INTO t;
       UPDATE fleet_card_charges SET bank_txn_id = t.txn_id WHERE charge_id = ch.charge_id;
     END IF;
@@ -350,13 +475,13 @@ BEGIN
     IF t.status = 'pending' AND ch.status = 'held' THEN
       UPDATE fleet_card_charges SET evidence_status = 'authorised' WHERE charge_id = ch.charge_id;
       RETURN 'authorised';
-    ELSIF t.status = 'settled' AND ch.status = 'held' THEN
+    ELSIF t.status = 'settled' AND (ch.status = 'held' OR (ch.status = 'void' AND ch.evidence_status = 'late')) THEN
       r := fleet_card_charge_post(ch.charge_id, t.amount_minor, 'card:' || ch.charge_id || ':bank', 'controller', 'bank:' || t.txn_id);
-      UPDATE fleet_card_charges SET evidence_status = 'settled' WHERE charge_id = ch.charge_id;
+      UPDATE fleet_card_charges SET evidence_status = 'settled', status = 'booked' WHERE charge_id = ch.charge_id;
       UPDATE fleet_bank_transactions SET journal_id = (r ->> 'journalId')::uuid WHERE txn_id = t.txn_id;
       PERFORM fleet_event('card_charge_booked', ch.agent_id, 'controller', jsonb_build_object('chargeId', ch.charge_id, 'amountMinor', t.amount_minor, 'merchant', ch.merchant,
-        'evidence', 'bank', 'declaredMinor', ch.declared_minor));
-      RETURN 'settled';
+        'evidence', 'bank', 'declaredMinor', ch.declared_minor, 'late', ch.status = 'void'));
+      RETURN CASE WHEN ch.status = 'void' THEN 'late_settled' ELSE 'settled' END;
     ELSIF t.status IN ('declined','reversed') AND ch.status = 'held' THEN
       PERFORM fleet_card_hold_release(ch.charge_id, ch.reserved_minor, 'controller', 'controller');
       UPDATE fleet_card_charges SET status = 'void', evidence_status = t.status WHERE charge_id = ch.charge_id;
@@ -365,29 +490,119 @@ BEGIN
     END IF;
     RETURN 'unchanged';
   ELSIF t.kind = 'card_refund' AND t.direction = 'in' AND t.status = 'settled' AND t.classified IS NULL THEN
-    -- A refund reduces exactly one booked charge at this location that it fits (never more than was charged).
+    -- 1. The bank's decision on an open dispute of exactly this amount at this location.
+    SELECT count(*) INTO n FROM fleet_card_disputes d JOIN fleet_card_charges c ON c.charge_id = d.charge_id
+     WHERE d.state = 'open' AND c.location_id = t.location_id AND d.amount_minor = t.amount_minor AND d.opened_at <= v_at + interval '1 hour';
+    IF n = 1 THEN
+      SELECT d.* INTO dsp FROM fleet_card_disputes d JOIN fleet_card_charges c ON c.charge_id = d.charge_id
+       WHERE d.state = 'open' AND c.location_id = t.location_id AND d.amount_minor = t.amount_minor AND d.opened_at <= v_at + interval '1 hour' FOR UPDATE OF d;
+      RETURN fleet_card_dispute_credit(dsp.dispute_id, t.txn_id, 'matcher');
+    ELSIF n > 1 THEN RETURN 'ambiguous';
+    END IF;
+    -- 2. A merchant refund reduces exactly one booked charge at this location that it fits (never more than was charged).
     SELECT count(*) INTO n FROM fleet_card_charges c WHERE c.location_id = t.location_id AND c.status IN ('booked','confirmed') AND c.amount_minor >= t.amount_minor
        AND (t.descriptor IS NULL OR position(lower(split_part(c.merchant, ' ', 1)) IN lower(t.descriptor)) > 0);
     IF n <> 1 THEN RETURN CASE WHEN n = 0 THEN 'unmatched' ELSE 'ambiguous' END; END IF;
     SELECT c.* INTO ch FROM fleet_card_charges c WHERE c.location_id = t.location_id AND c.status IN ('booked','confirmed') AND c.amount_minor >= t.amount_minor
        AND (t.descriptor IS NULL OR position(lower(split_part(c.merchant, ' ', 1)) IN lower(t.descriptor)) > 0) FOR UPDATE;
-    IF ch.amount_minor = t.amount_minor THEN
-      RETURN 'unmatched'; -- a full refund cannot reduce a charge to zero here: the owner records it (it is visible in the queue)
-    END IF;
     r := fleet_card_charge_post(ch.charge_id, ch.amount_minor - t.amount_minor, 'card:' || ch.charge_id || ':refund:' || t.txn_id, 'controller', 'bank:' || t.txn_id);
     UPDATE fleet_bank_transactions SET charge_id = ch.charge_id, classified = 'card_refund', classified_by = 'matcher', journal_id = (r ->> 'journalId')::uuid WHERE txn_id = t.txn_id;
     RETURN 'refund';
   ELSIF t.kind IN ('transfer','other') AND t.direction = 'in' AND t.status = 'settled' AND t.classified IS NULL THEN
-    -- A credit of exactly the amount of a transfer you recorded to this account before it arrived (a statement export may
-    -- not say "transfer"). Two alike in transit are interchangeable: the oldest arrives first.
-    SELECT * INTO tr FROM fleet_location_transfers WHERE to_location = t.location_id AND state = 'in_transit' AND amount_minor = t.amount_minor
-       AND recorded_at <= COALESCE(t.settled_at, t.first_seen) + interval '1 hour' ORDER BY recorded_at, transfer_id LIMIT 1 FOR UPDATE;
-    IF NOT FOUND THEN RETURN 'unmatched'; END IF;
-    UPDATE fleet_location_transfers SET state = 'arrived', arrived_at = COALESCE(t.settled_at, now()), arrival_txn_id = t.txn_id WHERE transfer_id = tr.transfer_id;
-    UPDATE fleet_bank_transactions SET transfer_id = tr.transfer_id, classified = 'transfer_in', classified_by = 'matcher' WHERE txn_id = t.txn_id;
-    RETURN 'transfer_arrived';
+    -- Only evidence that it is THAT transfer completes one (never the amount alone):
+    --   (a) the transfer's own reference appears in the bank line; or
+    --   (b) the source provider recorded the money leaving (PayPal's withdrawal) and the bank line names that source —
+    --       and exactly one such transfer is in transit.
+    SELECT count(*) INTO n FROM fleet_location_transfers x WHERE x.to_location = t.location_id AND x.state = 'in_transit' AND x.amount_minor = t.amount_minor
+       AND x.currency = t.currency AND x.recorded_at <= v_at + interval '1 hour'
+       AND length(fleet_norm(x.reference)) >= 6 AND position(fleet_norm(x.reference) IN fleet_norm(t.descriptor)) > 0;
+    IF n = 1 THEN
+      SELECT x.* INTO tr FROM fleet_location_transfers x WHERE x.to_location = t.location_id AND x.state = 'in_transit' AND x.amount_minor = t.amount_minor
+         AND x.currency = t.currency AND x.recorded_at <= v_at + interval '1 hour'
+         AND length(fleet_norm(x.reference)) >= 6 AND position(fleet_norm(x.reference) IN fleet_norm(t.descriptor)) > 0 FOR UPDATE;
+      RETURN fleet_location_transfer_arrive(tr.transfer_id, t.txn_id, 'reference');
+    ELSIF n > 1 THEN RETURN 'ambiguous';
+    END IF;
+    SELECT count(*) INTO n FROM fleet_location_transfers x WHERE x.to_location = t.location_id AND x.state = 'in_transit' AND x.amount_minor = t.amount_minor
+       AND x.currency = t.currency AND x.source_evidence IS NOT NULL AND x.source_seen_at <= v_at + interval '1 hour'
+       AND fleet_location_source_named(x.from_location, t.descriptor);
+    IF n <> 1 THEN RETURN CASE WHEN n = 0 THEN 'unmatched' ELSE 'ambiguous' END; END IF;
+    SELECT x.* INTO tr FROM fleet_location_transfers x WHERE x.to_location = t.location_id AND x.state = 'in_transit' AND x.amount_minor = t.amount_minor
+       AND x.currency = t.currency AND x.source_evidence IS NOT NULL AND x.source_seen_at <= v_at + interval '1 hour'
+       AND fleet_location_source_named(x.from_location, t.descriptor) FOR UPDATE;
+    RETURN fleet_location_transfer_arrive(tr.transfer_id, t.txn_id, 'source_evidence');
   END IF;
   RETURN 'unmatched';
+END $$;
+
+-- A transfer arrives (one bank line completes one transfer; the basis is kept).
+CREATE FUNCTION fleet_location_transfer_arrive(p_transfer uuid, p_txn uuid, p_basis text) RETURNS text LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE t fleet_bank_transactions;
+BEGIN
+  SELECT * INTO t FROM fleet_bank_transactions WHERE txn_id = p_txn;
+  UPDATE fleet_location_transfers SET state = 'arrived', arrived_at = COALESCE(t.settled_at, now()), arrival_txn_id = p_txn, arrival_basis = p_basis,
+         arrival_evidence = 'bank:' || p_txn
+   WHERE transfer_id = p_transfer AND state = 'in_transit';
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_INVALID_STATE: that transfer is not in transit'; END IF;
+  UPDATE fleet_bank_transactions SET transfer_id = p_transfer, classified = 'transfer_in', classified_by = CASE WHEN p_basis = 'owner' THEN classified_by ELSE 'matcher' END,
+         updated_at = now() WHERE txn_id = p_txn;
+  PERFORM fleet_event('money_location_transfer_arrived', NULL, 'controller', jsonb_build_object('transferId', p_transfer, 'txnId', p_txn, 'basis', p_basis));
+  RETURN 'transfer_arrived';
+END $$;
+
+-- The provider's own records of the money leaving the source (and, for PayPal as the destination, arriving there):
+-- PayPal's withdrawal (T0400) / funding (T0300) of exactly that amount, completed, not used by another transfer; a bank
+-- source's outgoing line carrying the transfer's reference. Run on every new transfer, every match pass and hourly.
+CREATE FUNCTION fleet_location_transfers_evidence() RETURNS integer LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE x record; v_txn text; v_at timestamptz; n integer := 0; k integer; bt fleet_bank_transactions;
+BEGIN
+  FOR x IN SELECT tr.*, f.kind AS from_kind, f.rail_id AS from_rail, d.kind AS to_kind, d.rail_id AS to_rail
+             FROM fleet_location_transfers tr JOIN fleet_money_locations f ON f.location_id = tr.from_location JOIN fleet_money_locations d ON d.location_id = tr.to_location
+            WHERE tr.state = 'in_transit' ORDER BY tr.recorded_at FOR UPDATE OF tr LOOP
+    IF x.source_evidence IS NULL AND x.from_kind = 'paypal' THEN
+      -- Prefer the PayPal transaction the owner named as the reference; else the one unused withdrawal of that amount.
+      SELECT p.transaction_id, p.initiated_at INTO v_txn, v_at FROM fleet_paypal_transactions p
+       WHERE p.rail_id = x.from_rail AND p.event_code = 'T0400' AND p.status = 'S' AND p.amount_minor = -x.amount_minor AND p.currency = x.currency
+         AND p.initiated_at >= x.recorded_at - interval '${TRANSFER_SOURCE_WINDOW_DAYS} days'
+         AND NOT EXISTS (SELECT 1 FROM fleet_location_transfers o WHERE o.source_evidence = 'paypal:' || p.transaction_id)
+       ORDER BY (p.transaction_id = x.reference) DESC, p.initiated_at LIMIT 1;
+      SELECT count(*) INTO k FROM fleet_paypal_transactions p
+       WHERE p.rail_id = x.from_rail AND p.event_code = 'T0400' AND p.status = 'S' AND p.amount_minor = -x.amount_minor AND p.currency = x.currency
+         AND p.initiated_at >= x.recorded_at - interval '${TRANSFER_SOURCE_WINDOW_DAYS} days'
+         AND NOT EXISTS (SELECT 1 FROM fleet_location_transfers o WHERE o.source_evidence = 'paypal:' || p.transaction_id);
+      IF v_txn IS NOT NULL AND (v_txn = x.reference OR k = 1) THEN
+        UPDATE fleet_location_transfers SET source_evidence = 'paypal:' || v_txn, source_seen_at = v_at WHERE transfer_id = x.transfer_id;
+        n := n + 1;
+      END IF;
+    ELSIF x.source_evidence IS NULL AND x.from_kind = 'bank' THEN
+      SELECT * INTO bt FROM fleet_bank_transactions b WHERE b.location_id = x.from_location AND b.direction = 'out' AND b.status = 'settled' AND b.classified IS NULL
+         AND b.kind IN ('transfer','other') AND b.amount_minor = x.amount_minor AND COALESCE(b.settled_at, b.first_seen) >= x.recorded_at - interval '${TRANSFER_SOURCE_WINDOW_DAYS} days'
+         AND length(fleet_norm(x.reference)) >= 6 AND position(fleet_norm(x.reference) IN fleet_norm(b.descriptor)) > 0
+       ORDER BY b.first_seen LIMIT 1 FOR UPDATE;
+      IF FOUND THEN
+        UPDATE fleet_bank_transactions SET classified = 'transfer_out', classified_by = 'matcher', transfer_id = x.transfer_id, updated_at = now() WHERE txn_id = bt.txn_id;
+        UPDATE fleet_location_transfers SET source_evidence = 'bank:' || bt.txn_id, source_seen_at = COALESCE(bt.settled_at, bt.first_seen) WHERE transfer_id = x.transfer_id;
+        n := n + 1;
+      END IF;
+    END IF;
+    IF x.to_kind = 'paypal' THEN
+      SELECT p.transaction_id, p.initiated_at INTO v_txn, v_at FROM fleet_paypal_transactions p
+       WHERE p.rail_id = x.to_rail AND p.event_code = 'T0300' AND p.status = 'S' AND p.amount_minor = x.amount_minor AND p.currency = x.currency
+         AND p.initiated_at >= x.recorded_at - interval '1 day'
+         AND NOT EXISTS (SELECT 1 FROM fleet_location_transfers o WHERE o.arrival_evidence = 'paypal:' || p.transaction_id)
+       ORDER BY p.initiated_at LIMIT 1;
+      -- PayPal's funding record names no transfer: it completes one only when exactly one of that amount is on its way.
+      SELECT count(*) INTO k FROM fleet_location_transfers o WHERE o.to_location = x.to_location AND o.state = 'in_transit' AND o.amount_minor = x.amount_minor;
+      IF v_txn IS NOT NULL AND k = 1 AND x.source_evidence IS NOT NULL THEN
+        UPDATE fleet_location_transfers SET state = 'arrived', arrived_at = v_at, arrival_basis = 'provider', arrival_evidence = 'paypal:' || v_txn WHERE transfer_id = x.transfer_id;
+        PERFORM fleet_event('money_location_transfer_arrived', NULL, 'controller', jsonb_build_object('transferId', x.transfer_id, 'paypalTxn', v_txn, 'basis', 'provider'));
+        n := n + 1;
+      END IF;
+    END IF;
+  END LOOP;
+  RETURN n;
 END $$;
 
 -- Re-run matching for a location's open items (after a declaration, a new hold, or new evidence).
@@ -395,6 +610,7 @@ CREATE FUNCTION fleet_location_match_pending(p_loc uuid) RETURNS integer LANGUAG
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE t uuid; n integer := 0; r text;
 BEGIN
+  n := fleet_location_transfers_evidence();
   FOR t IN SELECT txn_id FROM fleet_bank_transactions WHERE location_id = p_loc AND (classified IS NULL OR (kind = 'card' AND status IN ('settled','declined','reversed')))
             ORDER BY first_seen LOOP
     r := fleet_location_match(t);
@@ -542,7 +758,7 @@ BEGIN
   INSERT INTO fleet_location_transfers (from_location, to_location, amount_minor, currency, reference, recorded_by)
     VALUES (p_from, p_to, p_amount, f.currency, btrim(p_ref), p_actor) RETURNING transfer_id INTO v;
   PERFORM fleet_event('money_location_transfer', NULL, p_actor, jsonb_build_object('transferId', v, 'from', p_from, 'to', p_to, 'amountMinor', p_amount));
-  PERFORM fleet_location_match_pending(p_to);
+  IF t.kind = 'bank' THEN PERFORM fleet_location_match_pending(p_to); ELSE PERFORM fleet_location_transfers_evidence(); END IF;
   RETURN jsonb_build_object('ok', true, 'transferId', v, 'state', (SELECT state FROM fleet_location_transfers WHERE transfer_id = v),
     'sourceFreeBeforeMinor', liq ->> 'freeMinor',
     'note', 'the same money: no capital or revenue; spendable at the destination once its evidence shows it (in transit meanwhile)');
@@ -586,6 +802,157 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'classified', p_as, 'journalId', v_j);
 END $$;
 
+-- The owner says which transfer an incoming bank line is (when the matcher had no evidence to do it alone).
+CREATE FUNCTION fleet_admin_transfer_arrival(p_txn uuid, p_transfer uuid, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE t fleet_bank_transactions; tr fleet_location_transfers;
+BEGIN
+  PERFORM fleet_require_admin(p_actor, 'fleet_treasury');
+  SELECT * INTO t FROM fleet_bank_transactions WHERE txn_id = p_txn FOR UPDATE;
+  SELECT * INTO tr FROM fleet_location_transfers WHERE transfer_id = p_transfer FOR UPDATE;
+  IF t.txn_id IS NULL OR tr.transfer_id IS NULL THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND'); END IF;
+  IF t.classified IS NOT NULL THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_ALREADY_CLASSIFIED', 'classified', t.classified); END IF;
+  IF t.direction <> 'in' OR t.status <> 'settled' OR tr.state <> 'in_transit' OR tr.to_location <> t.location_id OR tr.amount_minor <> t.amount_minor OR tr.currency <> t.currency THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'a settled credit at the transfer''s destination, of exactly its amount, while it is in transit');
+  END IF;
+  UPDATE fleet_bank_transactions SET classified_by = p_actor WHERE txn_id = p_txn;
+  PERFORM fleet_location_transfer_arrive(p_transfer, p_txn, 'owner');
+  RETURN jsonb_build_object('ok', true, 'transferId', p_transfer, 'basis', 'owner');
+END $$;
+
+-- The owner checked: a used debit hold the bank has not shown will not be charged (the bank app shows nothing pending, or
+-- the merchant confirmed the cancellation). Its reservation comes back; if the merchant presents it after all, it is still
+-- booked (late settlement, the agent bears it). A hold the bank has already shown is released only by the bank's own record.
+CREATE FUNCTION fleet_admin_card_hold_release(p_charge uuid, p_evidence text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE c fleet_card_charges;
+BEGIN
+  PERFORM fleet_require_admin(p_actor, 'fleet_treasury');
+  SELECT * INTO c FROM fleet_card_charges WHERE charge_id = p_charge FOR UPDATE;
+  IF NOT FOUND OR c.location_id IS NULL THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND', 'reason', 'a debit-card hold'); END IF;
+  IF c.status <> 'held' THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_INVALID_STATE', 'status', c.status); END IF;
+  IF c.bank_txn_id IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BANK_SHOWS_IT', 'reason', 'the bank has shown this charge: it is released only when the bank reverses or declines it');
+  END IF;
+  IF length(btrim(COALESCE(p_evidence, ''))) < 10 THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'say what you checked (e.g. "bank app: nothing pending; merchant cancelled order 123")');
+  END IF;
+  PERFORM fleet_card_hold_release(c.charge_id, c.reserved_minor, p_actor, 'owner');
+  UPDATE fleet_card_charges SET status = 'void', evidence_status = 'released' WHERE charge_id = c.charge_id;
+  PERFORM fleet_event('card_hold_released_verified', c.agent_id, p_actor, jsonb_build_object('chargeId', c.charge_id, 'evidence', left(p_evidence, 300)));
+  RETURN jsonb_build_object('ok', true, 'released', c.reserved_minor,
+    'note', 'released; if the merchant charges it after all, it is booked against the agent (late settlement)');
+END $$;
+
+-- Disputes (the owner raises them with the bank; the bank decides).
+CREATE FUNCTION fleet_admin_card_dispute_open(p_charge uuid, p_amount bigint, p_reason text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE c fleet_card_charges; v uuid;
+BEGIN
+  PERFORM fleet_require_admin(p_actor, 'fleet_treasury');
+  SELECT * INTO c FROM fleet_card_charges WHERE charge_id = p_charge FOR UPDATE;
+  IF NOT FOUND OR c.location_id IS NULL OR c.status NOT IN ('booked','confirmed') THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'a booked debit-card charge');
+  END IF;
+  IF p_amount IS NULL OR p_amount <= 0 OR p_amount > c.amount_minor THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'an amount up to what was charged', 'chargedMinor', c.amount_minor);
+  END IF;
+  IF length(btrim(COALESCE(p_reason, ''))) < 5 THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'the reason you gave the bank'); END IF;
+  IF EXISTS (SELECT 1 FROM fleet_card_disputes WHERE charge_id = p_charge AND state = 'open') THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_ALREADY_OPEN');
+  END IF;
+  INSERT INTO fleet_card_disputes (charge_id, amount_minor, reason, opened_by) VALUES (p_charge, p_amount, btrim(p_reason), p_actor) RETURNING dispute_id INTO v;
+  PERFORM fleet_event('card_dispute_opened', c.agent_id, p_actor, jsonb_build_object('disputeId', v, 'chargeId', p_charge, 'amountMinor', p_amount));
+  PERFORM fleet_location_match_pending(c.location_id);
+  RETURN jsonb_build_object('ok', true, 'disputeId', v, 'state', (SELECT state FROM fleet_card_disputes WHERE dispute_id = v),
+    'note', 'nothing is booked now; the bank''s credit, when it comes, reduces the charge');
+END $$;
+
+-- The bank's credit for a dispute: reduces the charge by it (never below zero), once.
+CREATE FUNCTION fleet_card_dispute_credit(p_dispute uuid, p_txn uuid, p_actor text) RETURNS text LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE d fleet_card_disputes; c fleet_card_charges; t fleet_bank_transactions; r jsonb;
+BEGIN
+  SELECT * INTO d FROM fleet_card_disputes WHERE dispute_id = p_dispute FOR UPDATE;
+  SELECT * INTO c FROM fleet_card_charges WHERE charge_id = d.charge_id FOR UPDATE;
+  SELECT * INTO t FROM fleet_bank_transactions WHERE txn_id = p_txn FOR UPDATE;
+  IF d.state <> 'open' OR t.classified IS NOT NULL OR t.direction <> 'in' OR t.status <> 'settled' OR t.location_id <> c.location_id OR t.amount_minor > c.amount_minor THEN
+    RAISE EXCEPTION 'FLEET_INVALID_STATE: an open dispute and a settled credit at its bank, within what was charged';
+  END IF;
+  r := fleet_card_charge_post(c.charge_id, c.amount_minor - t.amount_minor, 'card:' || c.charge_id || ':dispute:' || t.txn_id, 'controller', 'bank:' || t.txn_id);
+  UPDATE fleet_card_disputes SET state = 'won', credit_txn_id = t.txn_id, resolved_at = now(),
+         outcome_note = CASE WHEN t.amount_minor < d.amount_minor THEN 'the bank credited less than disputed' END WHERE dispute_id = d.dispute_id;
+  UPDATE fleet_bank_transactions SET charge_id = c.charge_id, classified = 'card_refund', classified_by = left(p_actor, 128), journal_id = (r ->> 'journalId')::uuid, updated_at = now()
+   WHERE txn_id = t.txn_id;
+  PERFORM fleet_event('card_dispute_resolved', c.agent_id, left(p_actor, 128), jsonb_build_object('disputeId', d.dispute_id, 'state', 'won', 'creditMinor', t.amount_minor));
+  RETURN 'dispute_won';
+END $$;
+
+-- The owner records the bank's decision: won (with its credit line, when the matcher could not tie it), lost or withdrawn.
+CREATE FUNCTION fleet_admin_card_dispute_resolve(p_dispute uuid, p_outcome text, p_txn uuid, p_note text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE d fleet_card_disputes;
+BEGIN
+  PERFORM fleet_require_admin(p_actor, 'fleet_treasury');
+  SELECT * INTO d FROM fleet_card_disputes WHERE dispute_id = p_dispute FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND'); END IF;
+  IF d.state <> 'open' THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_INVALID_STATE', 'state', d.state); END IF;
+  IF p_outcome = 'won' THEN
+    IF p_txn IS NULL THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'won: name the bank''s credit line (txnId)'); END IF;
+    PERFORM fleet_card_dispute_credit(p_dispute, p_txn, p_actor);
+  ELSIF p_outcome IN ('lost','withdrawn') THEN
+    UPDATE fleet_card_disputes SET state = p_outcome, resolved_at = now(), outcome_note = left(p_note, 300) WHERE dispute_id = p_dispute;
+    PERFORM fleet_event('card_dispute_resolved', NULL, p_actor, jsonb_build_object('disputeId', p_dispute, 'state', p_outcome));
+  ELSE
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'won, lost or withdrawn');
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'state', (SELECT state FROM fleet_card_disputes WHERE dispute_id = p_dispute));
+END $$;
+
+-- ═══ Whole-treasury reconciliation ═══
+-- Every location's latest evidence plus money between locations, against what the books say the treasury holds (the books
+-- less capital not yet backed by money: fleet_capital_backing). PayPal counts its total balance; a bank its CLEARED
+-- balance (the books book a card charge when it settles). Incomplete — never "reconciled" — while any location lacks a
+-- fresh reading.
+CREATE FUNCTION fleet_treasury_reconciliation() RETURNS jsonb LANGUAGE plpgsql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE cb jsonb; l record; v_sum bigint := 0; v_transit bigint := 0; v_locs jsonb := '[]'::jsonb; v_stale integer := 0; v_expected bigint; v_bal bigint;
+        v_at timestamptz; v_fresh boolean; v_ccy text;
+BEGIN
+  SELECT accounting_currency INTO v_ccy FROM fleet_economic_model WHERE id = 1;
+  cb := fleet_capital_backing();
+  v_expected := (cb ->> 'booksCashMinor')::bigint - (cb ->> 'unbackedMinor')::bigint;
+  FOR l IN SELECT * FROM fleet_money_locations WHERE status <> 'pending_setup' ORDER BY created_at LOOP
+    IF l.kind = 'paypal' THEN
+      SELECT o.total_minor, o.observed_at INTO v_bal, v_at FROM fleet_paypal_balance_observations o WHERE o.rail_id = l.rail_id AND o.currency = l.currency
+       ORDER BY o.observed_at DESC LIMIT 1;
+    ELSE
+      SELECT COALESCE(o.cleared_minor, o.available_minor), o.observed_at INTO v_bal, v_at FROM fleet_bank_balance_observations o WHERE o.location_id = l.location_id
+       ORDER BY o.observed_at DESC, o.observation_id DESC LIMIT 1;
+    END IF;
+    v_fresh := v_at IS NOT NULL AND v_at >= now() - make_interval(hours => l.evidence_max_age_hours);
+    IF NOT v_fresh THEN v_stale := v_stale + 1; END IF;
+    v_sum := v_sum + COALESCE(v_bal, 0);
+    v_locs := v_locs || jsonb_build_array(jsonb_build_object('locationId', l.location_id, 'label', l.label, 'kind', l.kind, 'balanceMinor', v_bal,
+      'observedAt', v_at, 'fresh', v_fresh));
+    v_bal := NULL; v_at := NULL;
+  END LOOP;
+  -- Money between locations: left the source per its reading, not yet in the destination's.
+  SELECT COALESCE(sum(t.amount_minor), 0) INTO v_transit FROM fleet_location_transfers t
+   WHERE t.state <> 'cancelled'
+     AND t.recorded_at < COALESCE((SELECT max(o.observed_at) FROM fleet_paypal_balance_observations o JOIN fleet_money_locations f ON f.rail_id = o.rail_id WHERE f.location_id = t.from_location),
+                                  (SELECT max(o.observed_at) FROM fleet_bank_balance_observations o WHERE o.location_id = t.from_location), '-infinity')
+     AND (t.state = 'in_transit' OR t.arrived_at > COALESCE((SELECT max(o.observed_at) FROM fleet_paypal_balance_observations o JOIN fleet_money_locations d ON d.rail_id = o.rail_id WHERE d.location_id = t.to_location),
+                                                          (SELECT max(o.observed_at) FROM fleet_bank_balance_observations o WHERE o.location_id = t.to_location), '-infinity'));
+  RETURN jsonb_build_object('currency', v_ccy, 'locations', v_locs, 'locationsMinor', v_sum, 'inTransitMinor', v_transit,
+    'expectedMinor', v_expected, 'booksCashMinor', cb -> 'booksCashMinor', 'unbackedMinor', cb -> 'unbackedMinor',
+    'differenceMinor', v_sum + v_transit - v_expected,
+    'state', CASE WHEN v_stale > 0 THEN 'incomplete'
+                  WHEN abs(v_sum + v_transit - v_expected) <= ${RECONCILE_TOLERANCE_MINOR} THEN 'reconciled' ELSE 'difference' END,
+    'staleLocations', v_stale,
+    'note', 'locations + in transit − (books − unbacked capital); above 0: money the books do not record yet; below 0: money missing');
+END $$;
+
 -- ═══ 6. 3-D Secure: the agent says the bank asked the cardholder; the owner is alerted (never bypassed) ═══
 CREATE FUNCTION fleet_econ_card_awaiting_approval(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
@@ -610,17 +977,24 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
                    'status', l.status, 'statusNote', l.status_note, 'cardDrawn', l.card_drawn, 'liquidity', fleet_location_liquidity(l.location_id),
                    'drift', CASE WHEN l.kind = 'bank' THEN fleet_location_drift(l.location_id) END) ORDER BY l.created_at) FROM fleet_money_locations l), '[]'::jsonb),
     'transfers', COALESCE((SELECT jsonb_agg(jsonb_build_object('transferId', transfer_id, 'from', from_location, 'to', to_location, 'amountMinor', amount_minor, 'state', state,
-                   'reference', reference, 'recordedAt', recorded_at, 'arrivedAt', arrived_at) ORDER BY recorded_at DESC)
+                   'reference', reference, 'recordedAt', recorded_at, 'arrivedAt', arrived_at, 'sourceEvidence', source_evidence, 'arrivalBasis', arrival_basis) ORDER BY recorded_at DESC)
                    FROM (SELECT * FROM fleet_location_transfers ORDER BY recorded_at DESC LIMIT 50) t), '[]'::jsonb),
     'unexplained', COALESCE((SELECT jsonb_agg(jsonb_build_object('txnId', txn_id, 'locationId', location_id, 'status', status, 'direction', direction, 'kind', kind,
                    'amountMinor', amount_minor, 'descriptor', descriptor, 'at', COALESCE(settled_at, authorised_at, first_seen)) ORDER BY first_seen)
                    FROM (SELECT * FROM fleet_bank_transactions WHERE classified IS NULL ORDER BY first_seen LIMIT 100) t), '[]'::jsonb),
     'debitCharges', COALESCE((SELECT jsonb_agg(jsonb_build_object('chargeId', charge_id, 'agentId', agent_id, 'merchant', merchant, 'status', status, 'evidence', evidence_status,
                    'holdMaxMinor', hold_max_minor, 'declaredMinor', declared_minor, 'amountMinor', amount_minor, 'sca', sca, 'awaitingApprovalSince', awaiting_approval_since,
+                   'ventureId', venture_id, 'venture', (SELECT v.venture_key FROM fleet_ventures v WHERE v.venture_id = c.venture_id),
                    'createdAt', created_at) ORDER BY created_at DESC)
-                   FROM (SELECT * FROM fleet_card_charges WHERE location_id IS NOT NULL ORDER BY created_at DESC LIMIT 50) c), '[]'::jsonb))
+                   FROM (SELECT * FROM fleet_card_charges WHERE location_id IS NOT NULL ORDER BY created_at DESC LIMIT 50) c), '[]'::jsonb),
+    'disputes', COALESCE((SELECT jsonb_agg(jsonb_build_object('disputeId', d.dispute_id, 'chargeId', d.charge_id, 'merchant', c.merchant, 'amountMinor', d.amount_minor,
+                   'reason', d.reason, 'state', d.state, 'openedAt', d.opened_at, 'resolvedAt', d.resolved_at, 'outcomeNote', d.outcome_note) ORDER BY d.opened_at DESC)
+                   FROM (SELECT * FROM fleet_card_disputes ORDER BY opened_at DESC LIMIT 50) d JOIN fleet_card_charges c ON c.charge_id = d.charge_id), '[]'::jsonb),
+    'reconciliation', fleet_treasury_reconciliation())
 $$;
 
+${CHARGES_GUARD}
+${CARD_VOID}
 ${CARD_AUTHORIZE}
 ${CARD_DECLARE}
 ${HOLDS_EXPIRE}

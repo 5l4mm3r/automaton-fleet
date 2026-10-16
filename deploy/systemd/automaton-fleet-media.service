@@ -32,7 +32,9 @@ Environment=NODE_ENV=production
 Environment=FLEET_MEDIA_EXPECTED_USER=automaton-fleet-media
 Environment=HOME=/var/lib/automaton-fleet-media
 LoadCredential=search-key:/etc/automaton-fleet/media/search-key
+SetCredential=search-key:
 LoadCredential=image-key:/etc/automaton-fleet/media/image-key
+SetCredential=image-key:
 StateDirectory=automaton-fleet-media
 StateDirectoryMode=0700
 UMask=0077
@@ -68,7 +70,7 @@ LockPersonality=yes
 RemoveIPC=yes
 SystemCallArchitectures=native
 MemoryDenyWriteExecute=false
-InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/browser.env -/etc/automaton-fleet/gumroad.env -/etc/automaton-fleet/channels.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key -/etc/automaton-fleet/push -/etc/automaton-fleet/media
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/browser.env -/etc/automaton-fleet/gumroad.env -/etc/automaton-fleet/channels.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key -/etc/automaton-fleet/push -/etc/automaton-fleet/media -/etc/automaton-fleet/bankfeed
 InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-identity -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-gumroad -/var/lib/automaton-fleet-channels -/var/lib/private/automaton-founders -/var/log/automaton-fleet
 
 [Install]

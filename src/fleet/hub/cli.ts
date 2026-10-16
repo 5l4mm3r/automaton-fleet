@@ -118,6 +118,12 @@
  *                                                                           --balance: what the bank's app shows NOW (never the statement's)
  *   economy-location-contribution <txnId>                                    a deposit into the bank is your funding (posted once)
  *   economy-bank-txn-classify <txnId> <fee|transfer_out|explained> [note…]  explain a bank line (a fee is posted as a Fleet expense)
+ *   economy-transfer-arrival <txnId> <transferId>                           this bank credit is that transfer (when no reference or provider
+ *                                                                           record tied them; the amount alone never does)
+ *   economy-card-hold-release <chargeId> <what you checked…>                a used debit hold the bank never showed: release it on your check
+ *                                                                           (a late charge is still booked against the agent)
+ *   economy-card-dispute-open <chargeId> <amountMinor> <reason…> | economy-card-dispute-resolve <disputeId> won <txnId> | lost | withdrawn [note…]
+ *   hub-treasury-reconciliation                                              every location's evidence + money in transit against the books
  *   hub-treasury-tx [agentId] [--limit n] [--before seq] [--direction in|out|internal]   per-transaction treasury list
  *   economy-paypal-attribute <railId> <txnId> <eventCode> <owner_funding|agent_revenue|not_revenue> [reference]
  *   economy-ai-credits                                                       (v70) AI credit by funding source: lots, prepaid asset, owner payable
@@ -230,7 +236,8 @@ export const HUB_COMMANDS = new Set([
   "economy-card-statement-issue", "economy-card-statement-paid", "economy-card-statement-policy", "economy-paypal-test", "hub-paypal-test",
   "hub-card-requests", "economy-card-request-decide", "economy-card-request-policy", "hub-protection", "economy-protection", "economy-protection-agent",
   "hub-locations", "economy-location-add", "economy-location-status", "economy-location-bind-card", "economy-location-transfer", "economy-location-import",
-  "economy-location-contribution", "economy-bank-txn-classify",
+  "economy-location-contribution", "economy-bank-txn-classify", "economy-transfer-arrival", "economy-card-hold-release", "economy-card-dispute-open",
+  "economy-card-dispute-resolve", "hub-treasury-reconciliation",
 ]);
 
 const flag = (a: string[], name: string): string | null => {
@@ -574,6 +581,17 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.locationContribution(p[0], actor);
     case "economy-bank-txn-classify":
       return h.bankTxnClassify(p[0], p[1], p.slice(2).join(" ") || null, actor);
+    case "economy-transfer-arrival":
+      return h.transferArrival(p[0], p[1], actor);
+    case "economy-card-hold-release":
+      return h.cardHoldRelease(p[0], p.slice(1).join(" "), actor);
+    case "economy-card-dispute-open":
+      return h.cardDisputeOpen(p[0], int(p[1], "amountMinor"), p.slice(2).join(" "), actor);
+    case "economy-card-dispute-resolve":
+      return p[1] === "won" ? h.cardDisputeResolve(p[0], "won", p[2] ?? null, p.slice(3).join(" ") || null, actor)
+        : h.cardDisputeResolve(p[0], p[1], null, p.slice(2).join(" ") || null, actor);
+    case "hub-treasury-reconciliation":
+      return h.treasuryReconciliation();
     case "economy-location-import": {
       const [loc, file] = positional(a, ["--balance", "--cleared"]);
       if (!loc || !file) throw new Error("FLEET_BAD_REQUEST: economy-location-import <locationId> <statement.csv> [--balance <availableMinor>] [--cleared <minor>] [--dry-run]");

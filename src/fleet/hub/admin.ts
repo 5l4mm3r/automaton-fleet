@@ -320,6 +320,15 @@ export class PgHubAdmin {
   bankTxnClassify(txnId: string, as: string, note: string | null, actor: string) {
     return this.one(`SELECT fleet_admin_bank_txn_classify($1, $2, $3, $4) AS r`, [txnId, as, note, actor]);
   }
+  transferArrival(txnId: string, transferId: string, actor: string) { return this.one(`SELECT fleet_admin_transfer_arrival($1, $2, $3) AS r`, [txnId, transferId, actor]); }
+  cardHoldRelease(chargeId: string, evidence: string, actor: string) { return this.one(`SELECT fleet_admin_card_hold_release($1, $2, $3) AS r`, [chargeId, evidence, actor]); }
+  cardDisputeOpen(chargeId: string, amountMinor: number, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_card_dispute_open($1, $2, $3, $4) AS r`, [chargeId, amountMinor, reason, actor]);
+  }
+  cardDisputeResolve(disputeId: string, outcome: string, txnId: string | null, note: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_card_dispute_resolve($1, $2, $3, $4, $5) AS r`, [disputeId, outcome, txnId, note, actor]);
+  }
+  treasuryReconciliation() { return this.one(`SELECT fleet_treasury_reconciliation() AS r`); }
   /** A statement export's lines (and optionally the balance the bank's app shows now), recorded in one transaction. */
   locationImport(locationId: string, lines: unknown[], balance: { availableMinor: number; clearedMinor: number | null } | null, actor: string) {
     return this.one(`SELECT fleet_admin_location_import($1, $2::jsonb, $3::jsonb, $4) AS r`, [locationId, JSON.stringify(lines), balance ? JSON.stringify(balance) : null, actor]);

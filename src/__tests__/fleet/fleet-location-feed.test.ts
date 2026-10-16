@@ -73,3 +73,50 @@ describe("money-location feed (v86; simulated Starling)", () => {
     expect(await none.tick()).toEqual({ locations: 1, recorded: 0, refused: 1 });
   });
 });
+
+describe("bank feed service startup (v86)", () => {
+  it("refuses root, safety switches, another unit's credential, a malformed account map; reads tokens only from the credential directory", async () => {
+    const { feedEnvProblems, parseFeedAccounts, credentialVault } = await import("../../fleet/settlement/location-feed-main.js");
+    const ok = { FLEET_BANKFEED_DATABASE_URL: "postgresql://x", FLEET_LOCATION_FEED_ACCOUNTS: JSON.stringify([{ locationId: LOC, provider: "starling", accountUid: ACCOUNT, categoryUid: CATEGORY }]) };
+    expect(feedEnvProblems(ok, { uid: 1000, username: "u" })).toEqual([]);
+    expect(feedEnvProblems(ok, { uid: 0, username: "root" }).join()).toMatch(/root/);
+    expect(feedEnvProblems({ ...ok, REAL_PAYMENTS_ENABLED: "true" }, { uid: 1000, username: "u" }).join()).toMatch(/REAL_PAYMENTS_ENABLED/);
+    expect(feedEnvProblems({ ...ok, FLEET_CUSTODY_DATABASE_URL: "postgresql://y" }, { uid: 1000, username: "u" }).join()).toMatch(/FLEET_CUSTODY_DATABASE_URL present/);
+    expect(() => parseFeedAccounts(JSON.stringify([{ locationId: LOC, provider: "revolut", accountUid: ACCOUNT, categoryUid: CATEGORY }]))).toThrow(/starling/);
+    expect(() => parseFeedAccounts(JSON.stringify([{ locationId: "x", provider: "starling", accountUid: ACCOUNT, categoryUid: CATEGORY }]))).toThrow(/UUID/);
+    const fs = await import("fs"), os = await import("os"), path = await import("path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bankfeed-cred-"));
+    fs.writeFileSync(path.join(dir, `bank_${LOC}`), "tok-simulated-0123456789abcdef\n");
+    const v = credentialVault(dir);
+    expect(await v.resolve(`cred:${LOC}`)).toBe("tok-simulated-0123456789abcdef");
+    expect(await v.resolve(`cred:../${LOC}`)).toBeNull();
+    expect(await v.resolve("vault:bank/starling")).toBeNull();
+    expect(await credentialVault(undefined).resolve(`cred:${LOC}`)).toBeNull();
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("the real HTTP client reaches the bank's API host only", async () => {
+    const { fetchStarling } = await import("../../fleet/settlement/location-feed-main.js");
+    await expect(fetchStarling("https://evil.example.com/api/v2/identity/token", { headers: {} })).rejects.toThrow(/FLEET_BANKFEED_HOST/);
+    await expect(fetchStarling("https://api.starlingbank.com.evil.example/x", { headers: {} })).rejects.toThrow(/FLEET_BANKFEED_HOST/);
+  });
+});
+
+describe("systemd credentials (push, media, bank feed)", () => {
+  it("no service refuses its OWN credentials directory, and a missing key file never stops a unit (empty SetCredential fallback)", async () => {
+    const fs = await import("fs");
+    const { pushEnvProblems } = await import("../../fleet/push/main.js");
+    const { mediaEnvProblems } = await import("../../fleet/media/main.js");
+    const { feedEnvProblems } = await import("../../fleet/settlement/location-feed-main.js");
+    const cd = { CREDENTIALS_DIRECTORY: "/run/credentials/x.service" };
+    expect(pushEnvProblems({ ...cd, FLEET_PUSH_DATABASE_URL: "postgresql://x", FLEET_PUSH_DASHBOARD_ORIGIN: "https://admin.example.com" }, { uid: 1000, username: "u" })).toEqual([]);
+    expect(mediaEnvProblems({ ...cd, FLEET_MEDIA_DATABASE_URL: "postgresql://x" }, { uid: 1000, username: "u" }).join()).not.toMatch(/CREDENTIALS_DIRECTORY/);
+    expect(feedEnvProblems({ ...cd, FLEET_BANKFEED_DATABASE_URL: "postgresql://x", FLEET_LOCATION_FEED_ACCOUNTS: "[]" }, { uid: 1000, username: "u" })).toEqual([]);
+    for (const unit of ["automaton-fleet-push.service", "automaton-fleet-media.service"]) {
+      const text = fs.readFileSync(`deploy/systemd/${unit}`, "utf8");
+      const ids = [...text.matchAll(/^LoadCredential=([a-z-]+):\/etc\/[^\n]+$/gm)].map((m) => m[1]);
+      expect(ids.length, unit).toBeGreaterThan(0);
+      for (const id of ids) expect(text, `${unit} ${id}`).toMatch(new RegExp(`^SetCredential=${id}:$`, "m"));
+    }
+  });
+});

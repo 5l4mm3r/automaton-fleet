@@ -57,7 +57,7 @@ describe.skipIf(!PG_BIN)("v86 money locations and the debit card (PostgreSQL, si
     rail = await liveRail(R.owner, "fleet", OWNER);
     paypal = await R.one<string>(`(SELECT location_id::text FROM fleet.fleet_money_locations WHERE rail_id = $1)`, [rail.railId]);
     expect((await R.econ(F, "venture.create", { key: "f-shop", model: "digital_product", offer: "templates", state: "selected" })).ok).toBe(true);
-    account = (await R.econ(F, "account.register", { platform: "shop.example.com", kind: "service", origin: SHOP, handle: "f-shop" })).accountId;
+    account = (await R.econ(F, "account.register", { platform: "shop.example.com", kind: "service", origin: SHOP, handle: "f-shop", ventureKey: "f-shop" })).accountId;
     await R.one(`fleet.fleet_admin_owner_identity_class_set('payment_card', 'ovault:payment_card', NULL, 'configured', $1)`, [OWNER]);
     await R.one(`fleet.fleet_admin_identity_autonomy_set(true, ARRAY['legal_name'], true, 100_000, 200_000, '{}', 'agents may act without waiting', $1)`, [OWNER]);
   }, 300_000);
@@ -86,7 +86,7 @@ describe.skipIf(!PG_BIN)("v86 money locations and the debit card (PostgreSQL, si
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
 
-  it("a transfer PayPal → bank is the same money: no journal; PayPal's spendable cash drops at once; the bank's arrives with its own transaction", async () => {
+  it("a transfer PayPal → bank is the same money (no journal) and completes only on evidence that it is THAT transfer — never an equal amount alone", async () => {
     await custody.query(`SELECT fleet.cx_paypal_balance_record('custody-executor', $1, 'GBP', 100000, 100000)`, [rail.railId]);
     const ppBefore = Number((await liq(paypal)).freeMinor);
     const h0 = await head();
@@ -95,21 +95,35 @@ describe.skipIf(!PG_BIN)("v86 money locations and the debit card (PostgreSQL, si
     expect(await head()).toBe(h0); // no journal: the same money
     expect(Number((await liq(paypal)).freeMinor)).toBe(ppBefore - 30_000);
     expect((await liq(bank)).freeMinor).toBe(20_000); // not spendable at the bank until the bank shows it
-    expect(await txn({ externalId: "SB-IN-1", status: "settled", direction: "in", kind: "transfer", amountMinor: 30_000, settledAt: new Date().toISOString() }))
+    // (a) the transfer's reference in the bank line.
+    expect(await txn({ externalId: "SB-IN-1", status: "settled", direction: "in", kind: "transfer", amountMinor: 30_000, descriptor: "PAYPAL · PP-TXN-0001", settledAt: new Date().toISOString() }))
       .toMatchObject({ ok: true, match: "transfer_arrived" });
     await balance(50_000);
     expect((await liq(bank)).freeMinor).toBe(50_000);
-    expect(await R.one(`(SELECT state FROM fleet.fleet_location_transfers WHERE transfer_id = $1)`, [t.transferId])).toBe("arrived");
-    // Two alike, arriving as plain statement lines (no "transfer" type): interchangeable, the oldest first; a credit with no
-    // recorded transfer is never taken for one.
-    const t2 = await R.one<any>(`fleet.fleet_admin_location_transfer($1, $2, 1000, 'PP-TXN-0002', $3)`, [paypal, bank, OWNER]);
-    const t3 = await R.one<any>(`fleet.fleet_admin_location_transfer($1, $2, 1000, 'PP-TXN-0003', $3)`, [paypal, bank, OWNER]);
-    const now = new Date().toISOString();
-    expect(await txn({ externalId: "SB-IN-1b", status: "settled", direction: "in", kind: "other", amountMinor: 1_000, settledAt: now })).toMatchObject({ match: "transfer_arrived" });
-    expect(await R.one(`(SELECT string_agg(state, ',' ORDER BY recorded_at) FROM fleet.fleet_location_transfers WHERE transfer_id IN ($1, $2))`, [t2.transferId, t3.transferId])).toBe("arrived,in_transit");
-    expect(await txn({ externalId: "SB-IN-1c", status: "settled", direction: "in", kind: "other", amountMinor: 1_000, settledAt: now })).toMatchObject({ match: "transfer_arrived" });
-    expect(await txn({ externalId: "SB-IN-1d", status: "settled", direction: "in", kind: "other", amountMinor: 1_000, settledAt: now })).toMatchObject({ match: "unmatched" });
-    await R.q(`SELECT fleet.fleet_admin_bank_txn_classify((SELECT txn_id FROM fleet.fleet_bank_transactions WHERE external_id = 'SB-IN-1d'), 'explained', 'test credit', $1)`, [OWNER]);
+    expect((await R.q(`SELECT state, arrival_basis FROM fleet.fleet_location_transfers WHERE transfer_id = $1`, [t.transferId]))[0]).toEqual({ state: "arrived", arrival_basis: "reference" });
+    // (b) PayPal's own withdrawal record plus a bank line naming PayPal. Before PayPal shows the money leaving, neither an
+    // unrelated credit of the same amount nor a "PAYPAL" credit completes it.
+    const t2 = await R.one<any>(`fleet.fleet_admin_location_transfer($1, $2, 1000, 'second move', $3)`, [paypal, bank, OWNER]);
+    const now = () => new Date().toISOString();
+    expect(await txn({ externalId: "SB-IN-1b", status: "settled", direction: "in", kind: "transfer", amountMinor: 1_000, descriptor: "J SMITH · Birthday", settledAt: now() })).toMatchObject({ match: "unmatched" });
+    expect(await txn({ externalId: "SB-IN-1c", status: "settled", direction: "in", kind: "transfer", amountMinor: 1_000, descriptor: "PAYPAL", settledAt: now() })).toMatchObject({ match: "unmatched" });
+    expect(await R.one(`(SELECT state FROM fleet.fleet_location_transfers WHERE transfer_id = $1)`, [t2.transferId])).toBe("in_transit");
+    await custody.query(`SELECT fleet.cx_paypal_txn_record('custody-executor', $1, $2)`, [rail.railId, JSON.stringify({ transactionId: "WDL0000000002", eventCode: "T0400",
+      initiatedAt: new Date(Date.now() - 60_000).toISOString(), status: "S", currency: "GBP", amountMinor: -1_000, feeMinor: 0 })]);
+    await svc.query(`SELECT fleet.svc_operations_watch()`);
+    expect((await R.q(`SELECT state, arrival_basis, source_evidence FROM fleet.fleet_location_transfers WHERE transfer_id = $1`, [t2.transferId]))[0])
+      .toEqual({ state: "arrived", arrival_basis: "source_evidence", source_evidence: "paypal:WDL0000000002" });
+    const lines = async () => Object.fromEntries((await R.q(`SELECT external_id, COALESCE(classified, '-') AS c FROM fleet.fleet_bank_transactions WHERE external_id LIKE 'SB-IN-1%'`)).map((r: any) => [r.external_id, r.c]));
+    expect(await lines()).toMatchObject({ "SB-IN-1b": "-", "SB-IN-1c": "transfer_in" }); // the unrelated credit never completed it
+    // (c) anything else: the owner says which transfer it is.
+    const t3 = await R.one<any>(`fleet.fleet_admin_location_transfer($1, $2, 1000, 'third move', $3)`, [paypal, bank, OWNER]);
+    const e = await txn({ externalId: "SB-IN-1e", status: "settled", direction: "in", kind: "other", amountMinor: 1_000, descriptor: "FASTER PMT 8812", settledAt: now() });
+    expect(e.match).toBe("unmatched");
+    expect(await R.one<any>(`fleet.fleet_admin_transfer_arrival($1, $2, $3)`, [(await R.one<string>(`(SELECT txn_id::text FROM fleet.fleet_bank_transactions WHERE external_id = 'SB-IN-1b')`)), t3.transferId, OWNER]))
+      .toMatchObject({ ok: true }); // the owner may attribute it (their call, recorded as theirs)…
+    expect((await R.q(`SELECT arrival_basis FROM fleet.fleet_location_transfers WHERE transfer_id = $1`, [t3.transferId]))[0].arrival_basis).toBe("owner");
+    expect(await R.one<any>(`fleet.fleet_admin_transfer_arrival($1, $2, $3)`, [e.txnId, t3.transferId, OWNER])).toMatchObject({ ok: false }); // …once
+    await R.q(`SELECT fleet.fleet_admin_bank_txn_classify($1, 'explained', 'test credit', $2)`, [e.txnId, OWNER]);
     await verify();
   });
 
@@ -177,18 +191,53 @@ describe.skipIf(!PG_BIN)("v86 money locations and the debit card (PostgreSQL, si
     expect(await txn({ externalId: "SB-REF-1", status: "settled", direction: "in", kind: "card_refund", amountMinor: 370, descriptor: "Shop Ltd refund", settledAt: new Date().toISOString() }))
       .toMatchObject({ match: "refund" });
     expect(await R.one(`(SELECT amount_minor FROM fleet.fleet_card_charges WHERE charge_id = $1)`, [booked])).toBe("1500");
-    // A hold the bank never shows: after the agent's 24 h, nothing happens; after 7 days it is released — never booked at maximum.
+    // A hold the card was never used for expires unused at its declaration time (as before).
     const h2 = await hold(900);
     await R.q(`UPDATE fleet.fleet_card_charges SET declare_by = now() - interval '1 hour' WHERE charge_id = $1`, [h2.charge.chargeId]);
     await svc.query(`SELECT fleet.svc_card_holds_expire(50)`);
-    expect(await R.one(`(SELECT status FROM fleet.fleet_card_charges WHERE charge_id = $1)`, [h2.charge.chargeId])).toBe("held");
+    expect(await R.one(`(SELECT status || '/' || evidence_status FROM fleet.fleet_card_charges WHERE charge_id = $1)`, [h2.charge.chargeId])).toBe("void/none");
+    // A USED hold the bank never shows is OVERDUE after 7 days: still reserved (the money may still leave), the owner told,
+    // never booked at its maximum.
+    const h3 = await hold(800);
+    const c3 = h3.charge.chargeId;
+    expect(await R.econ(F, "card.declare", { chargeId: c3, amountMinor: 760 })).toMatchObject({ ok: true, evidence: "awaiting" });
+    expect(await R.econ(F, "card.void", { chargeId: c3 })).toMatchObject({ ok: false, code: "FLEET_CARD_USED" }); // declared: not the agent's to release
+    const cashHeld = await cash();
+    await R.q(`UPDATE fleet.fleet_card_charges SET declare_by = now() - interval '1 hour' WHERE charge_id = $1`, [c3]);
+    await svc.query(`SELECT fleet.svc_card_holds_expire(50)`);
+    expect(await R.one(`(SELECT status || '/' || evidence_status FROM fleet.fleet_card_charges WHERE charge_id = $1)`, [c3])).toBe("held/awaiting");
     // Test-only aging: a charge's creation time is otherwise immutable.
     await R.q(`ALTER TABLE fleet.fleet_card_charges DISABLE TRIGGER fleet_card_charges_guard`);
-    await R.q(`UPDATE fleet.fleet_card_charges SET created_at = now() - interval '8 days' WHERE charge_id = $1`, [h2.charge.chargeId]);
+    await R.q(`UPDATE fleet.fleet_card_charges SET created_at = now() - interval '8 days' WHERE charge_id = $1`, [c3]);
     await R.q(`ALTER TABLE fleet.fleet_card_charges ENABLE TRIGGER fleet_card_charges_guard`);
     await svc.query(`SELECT fleet.svc_card_holds_expire(50)`);
-    expect(await R.one(`(SELECT status || '/' || evidence_status FROM fleet.fleet_card_charges WHERE charge_id = $1)`, [h2.charge.chargeId])).toBe("void/none");
+    expect((await R.q(`SELECT status, evidence_status, reserved_minor FROM fleet.fleet_card_charges WHERE charge_id = $1`, [c3]))[0])
+      .toEqual({ status: "held", evidence_status: "overdue", reserved_minor: "800" });
+    expect(await cash()).toBe(cashHeld);
+    expect(Number((await liq(bank)).committed.holdsAwaitingBankMinor)).toBe(800);
+    expect(await R.q(`SELECT class FROM fleet.fleet_notifications WHERE code = 'CARD_HOLD_UNRESOLVED'`)).toEqual([{ class: "AMBER" }]);
+    // Released only on evidence: the owner's own check (said in words); then the merchant presents it late after all — it is
+    // still booked (the agent bears it), so the money was never spendable twice.
+    expect(await R.one<any>(`fleet.fleet_admin_card_hold_release($1, 'ok', $2)`, [c3, OWNER])).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+    expect(await R.one<any>(`fleet.fleet_admin_card_hold_release($1, 'bank app: nothing pending; merchant says cancelled', $2)`, [c3, OWNER])).toMatchObject({ ok: true, released: 800 });
+    expect(await cash()).toBe(cashHeld + 800);
+    expect(await txn({ externalId: "SB-CARD-3", status: "settled", direction: "out", kind: "card", amountMinor: 760, descriptor: "SHOP LTD", settledAt: new Date().toISOString() }))
+      .toMatchObject({ match: "late_settled" });
+    expect((await R.q(`SELECT status, evidence_status, amount_minor FROM fleet.fleet_card_charges WHERE charge_id = $1`, [c3]))[0])
+      .toEqual({ status: "booked", evidence_status: "settled", amount_minor: "760" });
+    expect(await cash()).toBe(cashHeld + 800 - 760);
+    expect(await R.q(`SELECT class FROM fleet.fleet_notifications WHERE code = 'CARD_LATE_SETTLEMENT'`)).toEqual([{ class: "AMBER" }]);
     expect(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'card_hold_booked_at_maximum')`)).toBe("0");
+    // A dispute the owner raises with the bank: nothing booked when it opens; the bank's credit reduces the charge (to zero).
+    const dsp = await R.one<any>(`fleet.fleet_admin_card_dispute_open($1, 760, 'goods never delivered', $2)`, [c3, OWNER]);
+    expect(dsp).toMatchObject({ ok: true, state: "open" });
+    expect(await txn({ externalId: "SB-DSP-1", status: "settled", direction: "in", kind: "card_refund", amountMinor: 760, descriptor: "CHARGEBACK CREDIT", settledAt: new Date().toISOString() }))
+      .toMatchObject({ match: "dispute_won" });
+    expect((await R.q(`SELECT c.amount_minor, d.state FROM fleet.fleet_card_charges c JOIN fleet.fleet_card_disputes d ON d.charge_id = c.charge_id WHERE c.charge_id = $1`, [c3]))[0])
+      .toEqual({ amount_minor: "0", state: "won" });
+    expect(await cash()).toBe(cashHeld + 800);
+    // Every debit charge carries the venture of the account it was bought on.
+    expect(new Set(((await R.one<any>(`fleet.fleet_locations_json()`)).debitCharges as any[]).map((c) => c.venture))).toEqual(new Set(["f-shop"]));
     await verify();
   });
 
@@ -221,6 +270,14 @@ describe.skipIf(!PG_BIN)("v86 money locations and the debit card (PostgreSQL, si
     await svc.query(`SELECT fleet.svc_operations_watch()`);
     expect((await R.q(`SELECT code FROM fleet.fleet_notifications WHERE code = 'LOCATION_UNAVAILABLE'`)).length).toBeGreaterThan(0);
     await verify();
+    // The whole treasury: every location's evidence plus money between them, against the books; incomplete (never
+    // "reconciled") while a location has no fresh reading.
+    const rec = await R.one<any>(`fleet.fleet_treasury_reconciliation()`);
+    expect(Number(rec.differenceMinor)).toBe(Number(rec.locationsMinor) + Number(rec.inTransitMinor) - Number(rec.expectedMinor));
+    expect(rec.locations.map((l: any) => l.kind).sort()).toEqual(["bank", "paypal"]);
+    const second = (await R.one<any>(`fleet.fleet_admin_location_add('bank', 'revolut', 'Second account', NULL, $1)`, [OWNER])).locationId;
+    await R.q(`SELECT fleet.fleet_admin_location_status($1, 'active', NULL, $2)`, [second, OWNER]);
+    expect(await R.one<any>(`fleet.fleet_treasury_reconciliation()`)).toMatchObject({ state: "incomplete", staleLocations: 1 });
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
 });

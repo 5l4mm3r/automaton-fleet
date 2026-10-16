@@ -23,8 +23,9 @@ import { PgPushGateway, PushSender } from "./sender.js";
 
 const SAFETY_SWITCHES = ["REAL_REPLICATION_ENABLED", "REAL_PAYMENTS_ENABLED", "OWNER_SWEEP_ENABLED", "FLEET_DRY_RUN_CHILD"];
 const on = (v: string | undefined) => v?.trim().toLowerCase() === "true";
+// Its own systemd credentials directory is expected (systemd exposes only this unit's credentials there).
 const FORBIDDEN = [...new Set([...CUSTODY_FORBIDDEN_ENV, "FLEET_CUSTODY_DATABASE_URL", "FLEET_IDENTITY_DATABASE_URL", "FLEET_BROWSER_DATABASE_URL", "FLEET_DASHBOARD_DATABASE_URL",
-  "FLEET_BANKFEED_DATABASE_URL", "FLEET_PROVIDER_DATABASE_URL", "FLEET_CHANNELS_DATABASE_URL", "FLEET_ADMIN_DATABASE_URL"])];
+  "FLEET_BANKFEED_DATABASE_URL", "FLEET_PROVIDER_DATABASE_URL", "FLEET_CHANNELS_DATABASE_URL", "FLEET_ADMIN_DATABASE_URL"])].filter((k) => k !== "CREDENTIALS_DIRECTORY");
 
 export function pushEnvProblems(e: Record<string, string | undefined>, opts: { uid?: number | null; username?: string } = {}): string[] {
   const problems: string[] = [];
