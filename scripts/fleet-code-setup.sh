@@ -115,7 +115,7 @@ for u in "${UNITS[@]}"; do
 done
 run systemctl daemon-reload
 if (( APPLY )); then
-  for u in "${UNITS[@]}"; do systemctl enable "$u" >/dev/null 2>&1; systemctl restart "$u"; done  # restart: a re-run picks up the new unit
+  for u in "${UNITS[@]}"; do systemctl enable "$u" >/dev/null 2>&1; systemctl restart "$u" || true; done  # restart: a re-run picks up the new unit
   sleep 5
   for u in "${UNITS[@]}"; do printf '  %-40s %s\n' "$u" "$(systemctl is-active "$u")"; done
   say "5. proof: inside each unit the configuration directory is empty (its env file and key were read by systemd first)"
