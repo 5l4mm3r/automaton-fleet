@@ -1,0 +1,89 @@
+# Launch readiness — the one checklist (Agent-1 first; Agent-2 stays paused)
+
+State 2026-10-17. Production: f2a1784, schema 90, UI 0.23.0; candidate 8b39928 (v91 + UI 0.24.0) rehearsed, awaiting the
+owner's deploy go (release-8b39928.md). "Blocker" = launch cannot be called ready until it is done. "Limit" = recorded,
+does not block. Optional improvements are listed at the end and never delay the decision.
+
+## 1. Checklist
+| # | Requirement | Evidence so far | Owner / provider action | Status |
+|---|---|---|---|---|
+| 1 | Release installed, identities match, records preserved | f2a1784 deployed 02:02:15Z: ledger head 849 / 723c7ea3… and 812 journals unchanged, 2922 events kept, approved = pinned = Operator API; full baseline dump | deploy go for 8b39928 (v91) | **Blocker** (v91 not yet deployed) |
+| 2 | Agent-1 runtime + tools | f2a1784 (founder-v10, toolset-6, field guide v2.2, inspector fleet-qa-2); agent-tools-2 current (32 wheels, verified); sandbox self-test ok (network denied, state unreadable); state identical; paused, fuse 754 / 20 | — | Done |
+| 3 | Agent-2 preserved | b60e262, paused, fuse 3000 / 60, untouched | — | Done |
+| 4 | Edge (mobile rate-limit fix) | release file differs from live (static allowance, 429 + Retry-After) | run `host-install.sh` | **Blocker** |
+| 5 | Phone push | sender built and tested (simulated Pushover) | host-install; Pushover account + app; `connect.sh push`; add phone; press "I received it" | **Blocker** |
+| 6 | Heartbeat, unit-failure alerts, outside checks | heartbeat + OnFailure tested (fake monitor) | host-install; Healthchecks.io (2 checks → Pushover emergency); `connect.sh heartbeat`; UptimeRobot 2 HTTPS checks; stop the timer 15 min → phone rings | **Blocker** |
+| 7 | Encrypted off-site backup + isolated restore | backup / drill tested (restic, scratch DB, ≤ 40 sample files) | host-install; Backblaze B2 EU bucket, Object Lock 30 d, bucket key; restic password in your password manager + paper; `connect.sh backup` (init, backup, drill into a scratch DB — live data never overwritten); escrow custody, cognition and identity key files | **Blocker** |
+| 8 | Service isolation on the real host | units hide the config dir or list files; files root:<own user> 0640 / 0600 | host-install runs the code-unit hiding proof and `fleet-isolation-check.sh` (every running unit, as itself) | **Blocker** until it passes |
+| 9 | Bank account + feed | feed service built and tested (simulated bank); v91 backing tested | Starling sole trader (eligibility: UK resident 18+, sole trader, Starling's checks); add location in Fleet HQ; read-only token → `connect.sh bank <id>`; who approves 3-D Secure (you, in the Starling app) | **Blocker** for card spending and bank funding; PayPal-only launch possible without it (then card purchases book only by statement import) |
+| 10 | Card for purchases | card slots, holds, fallback OFF by default, tested | add the card to the owner vault (Fleet HQ → Identity → payment card), slot 1 debit on the bank location; fallback stays off | **Blocker** for purchases |
+| 11 | Search + images | gateway built, charging tested (simulated) | Brave Search API key (card on file, $5 free monthly credit); OpenAI project key with prepaid credit (min $5); `connect.sh media search` / `media image` (model gpt-image-2.5-flare: gpt-image-1 shuts down 2026-10-23) | **Blocker** for graphics beyond the bundled tools; one search + one image proof |
+| 12 | Software maintenance | consent, scoped tokens, PR-only, sandboxed build, expiry tested; Python builds tested | GitHub App (id, slug, key) → `connect.sh code`; your own repository as the customer: snapshot, failing then passing build, PR, uninstall | **Blocker** only if software maintenance is offered at launch; else not offered (labelled) |
+| 13 | Legal seller + public site | v81 seller / site / launch checks built | seller facts (legal name, address, contact) and the public site in Fleet HQ → Launch & channels | **Blocker** |
+| 14 | Mail: Proton sending, receiving, per-agent / per-venture routing | Bridge live; 26 messages received; owner notifications sent; mailbox routes built, 0 created yet | none (Agent-1 creates its brand mailbox during the proof) | Proven in proof 5 |
+| 15 | Payment receiving | PayPal rail active, £1 receiving test passed (2026-10-10) | — | Done |
+| 16 | Money out (refunds; later payouts) | custody built; execution OFF | your explicit word: custody activation (Fleet HQ, step-up) before the refund proof | **Blocker** for the refund proof |
+| 17 | Financial invariants | one ledger across locations; transfers never create money; holds only from fresh free cash under lock; shortfall recorded, grants nothing; evidence kept on booking failure; fallback off; media / AI attributed to the agent; Fleet Control allocation; net-profit sweep — all tested (v66, v86, v88, v90, v91) | — | Done (simulated providers; live in proofs 7–8, 10) |
+| 18 | Proofs 1–10 (§3) | none live yet | §2 budget + your go | **Blocker** |
+
+Limits (do not block): `/etc` readable inside builds apart from the Fleet's directory; a running build finishes (≤ 30 min)
+after access ends; Node / npm installed but JavaScript builds are not proven (Python is); graphics without the image
+provider are what the bundled tools make (Pillow, reportlab); AI-cost attribution starts at v90; the PayPal limitation
+signal comes only from PayPal's failure codes; proof purchases are tests, not demand or profitability.
+
+## 2. Bounded budget for the chargeable proofs (prices checked 2026-10-17)
+| Item | Most it can cost | Refundable? |
+|---|---|---|
+| Pushover app (one platform) | $4.99 once (free 30-day trial first) | no |
+| Healthchecks.io Hobbyist, UptimeRobot Free (commercial use allowed) | £0 | — |
+| Backblaze B2 (first 10 GB free; the database is ~12 MB) | £0 | — |
+| Brave Search: one proof search | $0.005 (inside the $5 free monthly credit) | — |
+| OpenAI: minimum prepaid credit | $5 (credit stays usable for a year; credits are non-refundable) | no |
+| One proof image (gateway limit 20 cents) | $0.20 | no |
+| Agent-1 AI during a 3-day proof window (fuse 754 a day in the budget's minor unit: at most £7.54) | £22.62 | no (pre-launch test cost, written off at launch) |
+| Proof purchase (your own order) | £50.00 | yes (refund proof) |
+| PayPal's fee on it (not returned on refund) | about 2.9 % + 30p ≈ £1.75 | no |
+| One separately authorised spend (you name amount and purpose) | proposed £10.00 | merchant's terms |
+| Bank: the matching transfer, one 3-D Secure purchase (the spend above), one decline, one refund | £0 beyond the spend | — |
+| **Total at most** | **≈ £85 + $10.20** (of which £50 comes back) | |
+
+Authorisation needed once for all of it: the purchases above, the resume of **Agent-1 only** for the proof window, and
+custody activation for the refund. Nothing else is opened: no sales to the public, no replication, Agent-2 paused.
+
+## 3. Proof order (the existing list)
+1. Fleet HQ on your phone, including switching to the authenticator app and back. 2. Push: test, "I received it", a real
+alert acknowledged; an unanswered one listed as unresolved. 3. Heartbeat stopped 15 min → phone rings; a failed unit
+reported. 4. Backup + drill (scratch database + sample files; live data untouched). 5. Agent-1: demand research → offer
+→ production and substantive review (checks test the buyer's requested outcome) → private offer → your purchase (≤ £50,
+consent recorded) → delivery → support message + revision → refund. 6. The separate spend, reconciled to the provider's
+evidence. 7. Bank: a transfer matched on evidence, one 3-D Secure purchase, one decline, one refund, the whole treasury
+reconciled with zero difference. 8. One search + one image charged at actual cost; the provider's usage reconciles.
+9. Software maintenance on your own repository (if offered). 10. A card slot filled on a real checkout under its own hold.
+
+## 4. Funding / backing requirement
+Live at 2026-10-17 02:02Z: books cash £200.67; PayPal holds £0.67; **£200.00 of capital (the two £100 wallets) is
+recorded without money**. Recompute (`capital_backing` in Fleet HQ) immediately before depositing; proofs change it.
+Supported destinations: **the PayPal treasury** (then "back the existing capital" on that PayPal transaction — live now)
+or **the bank location** (after v91 and the bank connection: "My deposit" on the settled line — any shortfall first,
+then the capital, the rest new owner funding). Either is one ledger; a bank deposit does not need to pass through PayPal.
+
+## 5. Activation sequence for Agent-1 (after §1 passes)
+1. Recompute and back the capital (§4).
+2. Pre-launch costs: run the test-period write-off once more (v74: proof-window AI costs become the Fleet's, nothing owed).
+3. Record the launch boundary (once, immutable; pausing / resuming never moves it).
+4. Survival: protection is ON fleet-wide (v55). Your rule — death on actual wallet exhaustion, no automatic rescue —
+   applies to Agent-1 by setting **Agent-1 to "live"**; Agent-2 stays protected while paused.
+5. Sweep: turn the net-profit sweep policy ON (bands 10 % – 20 % by population, 45 % for a mature Fleet, never above 70 %;
+   always on net profit). Fleet Control capital allocation is already on (treasury reserve 50 %, a request ≤ 10 % of the
+   treasury, an agent's exposure ≤ 25 %).
+6. Standing authority: identity autonomy ON with the card (uncapped by your 2026-10-11 decision; automated Fleet Control
+   review holds only on credible evidence); card slot 1 debit on the bank; fallback OFF.
+7. Sales: outward release for Agent-1 (public external actions); Agent-1 chooses its channels; a platform's own
+   onboarding blocks only that channel.
+8. Money out stays active for refunds; payouts / fee withdrawals only by your separate decision.
+9. Resume Agent-1 (fuse 754 a day, 20 turns an hour, unless you set others). Agent-2 stays paused.
+
+## 6. Optional later (never delays launch)
+Unit files listing individual secret files could hide the whole directory (isolation is checked on the host either way);
+a dedicated PayPal limitation alert; a PayPal deposit that fills an open shortfall first (bank deposits do); JavaScript
+builds proven; per-provider statement automation.
