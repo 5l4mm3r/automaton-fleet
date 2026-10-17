@@ -190,3 +190,23 @@ UI 0.23.0: ui-0.23.0-f2a1784.tgz  sha256 565a9b262c4a4c86fdfcfd7797cd2820a9fffb3
   token or account exists for any of them.
 - Until the bank feed is connected, debit-card purchases book only when you import a statement.
 - Not installed: the renderer and OCR, the code services, and Node inside builds.
+
+## 8. Deployed 2026-10-17 (owner's go)
+- **Preservation baseline** 02:00:00Z (`~/rlc90/baseline-pre-20261017T020000Z`, read-only; full database dump sha 4fc52264…):
+  schema 81, ledger head 849 / 723c7ea3…, 812 journals, verify true, 2922 events; both agents paused (Agent-1 754 / 20 per
+  hour, Agent-2 3000 / 60), both on b60e262.
+- **Release** `fleet-release.sh … 81 90 0.23.0`: started 02:00:26Z, outage 02:01:18–02:02:04Z (46 s), DEPLOYED 02:02:15Z,
+  `production_deployed` recorded. Reconciliation OK (2922 events preserved). Pre-migration dump
+  `~/automaton_fleet-v81-pre-v90-20261017T020138Z.dump`. After: schema 90, ledger head and journals identical, verify
+  true; approved = pinned = Operator API release = f2a1784 / 5ddf7bb6…; agents unchanged and paused.
+- **agent-tools-2**: lock 8655a172a2ea… installed at `/usr/local/lib/automaton-fleet-tools/8655a172a2ea` (32 wheels, tree
+  e585205d…, verify ok); `current` switched from a2d5c9f11557 (kept; rollback = point `current` back).
+- **Agent-1 runtime upgrade** b60e262 → f2a1784: upgrade 99707948-105a-4829-bfa4-6522e97b7daf, downtime 2.2 s, challenge
+  passed, state identical (26 files), backup `/var/lib/automaton-fleet-upgrades/99707948…`. Still paused, fuse unchanged.
+  Agent-2 not touched (b60e262, paused). The founder upgrade rehearsal was not re-run (owner: no further rehearsals).
+- **Remaining host steps** (edge file, push, heartbeat units, restic + backup units, bank feed, media, code services with
+  the real-host `/etc/automaton-fleet` hiding proof, office renderer + OCR, nodejs + npm): one checked script,
+  `~/rlc90/host-install.sh`, run by the owner (the session's automatic permission check refused host changes made by the
+  assistant). Provider connections: `~/rlc90/connect.sh push|heartbeat|backup|bank|media|code`, run in the owner's terminal.
+- **Fix forward from here:** once real provider data or money is recorded, a restore of the pre-migration dump would
+  discard it; freeze and fix forward instead.

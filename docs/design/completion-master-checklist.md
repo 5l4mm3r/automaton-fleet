@@ -54,11 +54,13 @@ passes against a simulated provider.
 - inside a build `/etc` is readable (toolchains need it): the Fleet's own configuration is hidden by each unit
   (`InaccessiblePaths=-/etc/automaton-fleet`, proven per unit by `fleet-code-setup.sh` at installation), and any other
   secret under `/etc` relies on its file permissions (the build user is in no other group);
-- a build already running when access ends finishes (at most 30 minutes); only queued work is stopped.
+- a build already running when access ends finishes (at most 30 minutes); only queued work is stopped;
+- until the bank feed is connected, debit purchases book only when you import a statement (card spending is not autonomous);
+- "direct" AI cost is the measured cost of calls attributed by their recorded task context, not every second of thought.
 
 **Host installation (each your go; sudo):**
-1. The release (81 → 90 + UI 0.23.0).
-2. Agent toolchain agent-tools-2, then Agent-1's runtime upgrade (paused).
+1. The release (81 → 90 + UI 0.23.0). **Done 2026-10-17 02:02:15Z** (release-f2a1784.md §8).
+2. Agent toolchain agent-tools-2, then Agent-1's runtime upgrade (paused). **Done 02:05Z** (Agent-2 untouched, b60e262).
 3. Edge file.
 4. Push.
 5. Heartbeat and `OnFailure`.
@@ -103,7 +105,7 @@ Also needed:
 
 ## 4. Live proof remaining (nothing is live-proven yet)
 
-1. **Phone:** the dashboard opened and used on your actual phone after the 0.21.1 deploy. Emulation passed, which is not a
+1. **Phone:** the dashboard opened and used on your actual phone on UI 0.23.0 (deployed 2026-10-17). Emulation passed, which is not a
    real-device test.
 2. **Push:** a test pressed "I received it" on your phone. Then a real alert that rang and was cancelled by acknowledgement.
 3. **Outside monitor:** the heartbeat stopped for 15 minutes rings your phone; a failed unit is reported.
