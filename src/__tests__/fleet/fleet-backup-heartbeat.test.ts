@@ -66,6 +66,15 @@ describe.skipIf(!PG_BIN || !RESTIC || !fs.existsSync(RESTIC ?? ""))("backups (re
   const backup = (cmd: string, extra: Record<string, string> = {}) => run(BACKUP, [cmd], { ...env, ...extra });
   const restic = (...a: string[]) => execFileSync(RESTIC!, a, { env: { ...env, RESTIC_PASSWORD_FILE: path.join(dir, "secrets/restic-password") }, encoding: "utf8" });
 
+  it("the database tools never open a staging path themselves: they stream through root (postgres cannot enter the 0700 staging directory)", () => {
+    // Found on the production host 2026-10-17: `pg_dump -f <staging>/…` as postgres → "Permission denied", backup failed.
+    const src = fs.readFileSync(BACKUP, "utf8");
+    expect(src).toMatch(/\$PG_DUMP -Fc -Z0 -d "\$DB" > "\$work\/db\.dump"/);
+    expect(src).toMatch(/\$PG_RESTORE --no-owner --no-privileges -d "\$scratch" < "\$dump"/);
+    expect(src).not.toMatch(/\$PG_DUMP[^\n]* -f /);
+    expect(src).not.toMatch(/chmod 0755 "\$work"/);
+  });
+
   it("a backup needs an initialised repository: run refuses (and tells the monitor) until init; init happens only on request", async () => {
     const r0 = await backup("run");
     expect(r0.status).not.toBe(0);

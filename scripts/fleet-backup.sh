@@ -53,7 +53,8 @@ trap 'die "unexpected failure at line $LINENO"' ERR
 case "$CMD" in
 init)
   if "$RESTIC" cat config >/dev/null 2>&1; then log "repository already initialised (unchanged)"; exit 0; fi
-  "$RESTIC" init >/dev/null && log "repository initialised. Add the owner's second, offline password now: restic key add"
+  "$RESTIC" init >/dev/null || die "restic init"
+  log "repository initialised. Keep an offline copy of this repository's password (your password manager + paper)"
   ;;
 
 run)
@@ -61,10 +62,12 @@ run)
   "$RESTIC" cat config >/dev/null 2>&1 || die "repository not reachable or not initialised"
   install -d -m 0700 "$STAGING"
   work="$(mktemp -d "$STAGING/run.XXXXXX")"; trap 'rm -rf "$work"' EXIT
-  chmod 0755 "$work"   # pg_dump runs as postgres and writes into it; the staging parent stays 0700
+  # Everything stays root-only (0700): the database tools run as postgres and STREAM through root (stdout / stdin), so
+  # postgres never needs to enter the staging directory (found on the production host 2026-10-17: -f into a root-only
+  # directory was "Permission denied").
   ver="$($PSQL -d "$DB" -c "SELECT max(version) FROM fleet.fleet_schema_migrations")" || die "database not reachable"
   [[ "$ver" =~ ^[0-9]+$ ]] || die "no schema version"
-  $PG_DUMP -Fc -Z0 -d "$DB" -f "$work/db.dump" || die "pg_dump"
+  $PG_DUMP -Fc -Z0 -d "$DB" > "$work/db.dump" || die "pg_dump"
   $PG_DUMPALL --globals-only --no-role-passwords > "$work/globals.sql" || die "pg_dumpall globals"
   chmod 0700 "$work"
   { printf 'created=%s\nschema=%s\ndatabase=%s\nhost=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ver" "$DB" "$(hostname)"
@@ -99,10 +102,8 @@ drill)
   [[ -f "$dump" && -f "$man" ]] || die "dump or manifest missing in snapshot $snap"
   (cd "$(dirname "$dump")" && grep ' db.dump$' MANIFEST | sha256sum -c --quiet -) || die "dump checksum mismatch"
   want="$(sed -n 's/^schema=//p' "$man")"
-  chmod 0755 "$work" "$(dirname "$dump")"; chmod 0644 "$dump"
-  find "$work" -type d -exec chmod 0755 {} +
   $PSQL -d postgres -c "CREATE DATABASE $scratch" >/dev/null || die "create scratch database"
-  $PG_RESTORE --no-owner --no-privileges -d "$scratch" "$dump" >/dev/null 2>&1 || die "pg_restore"
+  $PG_RESTORE --no-owner --no-privileges -d "$scratch" < "$dump" >/dev/null 2>&1 || die "pg_restore"
   got="$($PSQL -d "$scratch" -c "SELECT max(version) FROM fleet.fleet_schema_migrations")"
   [[ "$got" == "$want" ]] || die "restored schema $got != manifest $want"
   [[ "$($PSQL -d "$scratch" -c "SELECT (fleet.fleet_ledger_verify() ->> 'ok')")" == true ]] || die "the restored ledger does not verify"
