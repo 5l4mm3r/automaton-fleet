@@ -31,43 +31,59 @@ after access ends; Node / npm installed but JavaScript builds are not proven (Py
 provider are what the bundled tools make (Pillow, reportlab); AI-cost attribution starts at v90; the PayPal limitation
 signal comes only from PayPal's failure codes; proof purchases are tests, not demand or profitability.
 
-## 2. Proof budget: a CEILING, reported as actually used (prices checked 2026-10-17)
-The smallest meaningful set; nothing is spent without your go, each proof stops once it has shown its result.
-| Kind | Item | Expected | Ceiling |
-|---|---|---|---|
-| Refundable principal | your proof purchase (comes back in the refund proof) | £5 | £50 |
-| Fees (consumed) | PayPal's fee on it, not returned on refund (≈ 2.9 % + 30p) | ≈ £0.45 | ≈ £1.75 |
-| Fees (consumed) | Pushover: free 30-day trial during the proofs; $4.99 once per platform to keep it | $0 now | $4.99 |
-| Fees (consumed) | Healthchecks.io Hobbyist, UptimeRobot Free (commercial use allowed), Backblaze B2 (first 10 GB free) | £0 | £0 |
-| AI / tool usage (consumed) | Agent-1's AI in the proof window: what it actually uses, likely part of one day's fuse | a few £ | fuse 754 a day (≤ £7.54) |
-| AI / tool usage (consumed) | one search (inside Brave's $5 free monthly credit) | $0 | $0.005 |
-| AI / tool usage (consumed) | one image (gpt-image-2.5-flare: text input $5, image output $30 per million tokens) | ≈ $0.03–0.13 | $0.20 (gateway limit) |
-| Prepaid credit (mostly unused, stays usable 1 year, non-refundable) | OpenAI minimum top-up | $5 | $5 |
-| Separate spend | one small item you name, with its purpose | your amount | your amount |
+## 2. The controlled proofs: one plan, one authorisation (Agent-1 only; Agent-2 stays paused)
+Live already: proof 1 (phone), 2 (push + alarm drill), 3 (outside monitor), 4 (backup + restore). Bank-rail proofs are
+not needed (owner decision 2026-10-17: no separate bank account). Software maintenance is **not offered at launch**
+unless the GitHub App is set up (then proof 9 is added; until then the capability check refuses quoting it).
 
-Image billing: the gateway only generates from a text prompt (no image input), so input tokens are text ($5) and output
-tokens are image ($30); the first proof image's usage breakdown confirms it. Next build (not this frozen release): refuse
-or flag any job whose usage reports image-input tokens.
+### Proof A — the operating loop (one workflow)
+| Step | Acceptance |
+|---|---|
+| 1. Demand research with web_search (Brave) | sources recorded; a buyer problem with evidence; search cost charged to Agent-1 at its actual price |
+| 2. A brand and one supported product (spreadsheet / document / template / course pack) | the agent's own venture and brand; capability check names the offer and every deliverable ready |
+| 3. Production and substantive review | the inspector passes the exact files (formulas recalculate, no errors, rendered pages checked, spelling, the brief's acceptance criteria); one image from generate_image if the product uses one (actual token cost) |
+| 4. A **private** offer (not public: sales stay closed) | an order page for the owner only |
+| 5. The owner's purchase (PayPal, **£5**) | consent recorded; payment verified from PayPal; revenue attributed to Agent-1 net of PayPal's fee |
+| 6. Delivery | the buyer's mail from the brand's routing address + the order page download; files open and match what was inspected |
+| 7. Support + revision | the owner replies to the delivery mail with one change request; the agent answers from the brand address and delivers a revised file |
+| 8. Refund (full) | executed through PayPal by custody; revenue reversed once; ledger verifies; no duplicate revenue or expense |
 
-One authorisation covers it: these purchases, the resume of **Agent-1 only** for the proof window, and custody
-activation for the refund. Nothing else is opened: no sales to the public, no replication, Agent-2 paused.
+### Proof B — one card purchase (owner-paid card 1)
+A small purchase the agent needs for Proof A's product (e.g. a stock photo, font or icon licence), **at most £5**, on a
+merchant that takes cards: reserved from Agent-1's cash, Fleet Control review, the browser fills card 1, any 3-D Secure
+approval is yours in your bank's app (the agent waits), then the charge is matched on the weekly card statement and owed
+to you. Stop if the merchant needs anything beyond card + email.
 
-## 3. Proof order (the existing list)
-1. Fleet HQ on your phone, including switching to the authenticator app and back. 2. Push: test, "I received it", a real
-alert acknowledged; an unanswered one listed as unresolved. 3. Heartbeat stopped 15 min → phone rings; a failed unit
-reported. 4. Backup + drill (scratch database + sample files; live data untouched). 5. Agent-1: demand research → offer
-→ production and substantive review (checks test the buyer's requested outcome) → private offer → your purchase (≤ £50,
-consent recorded) → delivery → support message + revision → refund. 6. The separate spend, reconciled to the provider's
-evidence. 7. Bank: a transfer matched on evidence, one 3-D Secure purchase, one decline, one refund, the whole treasury
-reconciled with zero difference. 8. One search + one image charged at actual cost; the provider's usage reconciles.
-9. Software maintenance on your own repository (if offered). 10. A card slot filled on a real checkout under its own hold.
+### Authorisation requested (once, for both proofs)
+| Item | Exact setting | Ends |
+|---|---|---|
+| Resume Agent-1 | fuse unchanged (754 a day, 20 turns an hour) | paused again when the proofs end, on a material failure, or after 72 h |
+| Outward release (proof only, not launch) | actions: browser (the purchase merchant's origin only), mail (to the owner's address only), account_register (that merchant) | expires after 72 h |
+| Custody (money out) | max £5.00 per instruction, £5.00 a day, for 72 h — the refund only | expires |
+| Card authority | identity autonomy ON with card, max £5 per charge, £5 a day | reset to the launch setting at activation |
+| Media | Brave key (free monthly credit) and OpenAI $5 prepaid credit, gateway caps 1 ¢ / search and 20 ¢ / image | stay connected |
+
+### Budget (a ceiling, reported as used)
+| Kind | Expected | Ceiling |
+|---|---|---|
+| Refundable principal: your proof purchase | £5.00 (refunded in step 8) | £5.00 |
+| Fees consumed: PayPal's fee on it (not returned) | ≈ £0.45 | ≈ £0.50 |
+| Card purchase (Proof B) | the item's price | £5.00 |
+| AI (Agent-1's own work; pre-launch test cost) | a few £ | fuse: 754 a day (≤ £7.54) × 3 days |
+| Search / images | < $0.30 | gateway caps |
+| Prepaid credit (mostly unused) | OpenAI $5 | $5 |
+| Subscriptions | Pushover $4.99 once (only to keep it after the trial) | — |
+
+Stop conditions: all steps accepted; or a step fails materially (Agent-1 is paused, the defect fixed and re-verified, the
+proof resumed only inside this authorisation); or 72 h pass. Cleanup: the release and custody windows expire by
+themselves; the private offer is withdrawn; the card authority returns to OFF until activation.
 
 ## 4. Funding / backing requirement
 Live at 2026-10-17 02:02Z: books cash £200.67; PayPal holds £0.67; **£200.00 of capital (the two £100 wallets) is
 recorded without money**. Recompute (`capital_backing` in Fleet HQ) immediately before depositing; proofs change it.
-Supported destinations: **the PayPal treasury** (then "back the existing capital" on that PayPal transaction — live now)
-or **the bank location** (after v91 and the bank connection: "My deposit" on the settled line — any shortfall first,
-then the capital, the rest new owner funding). Either is one ledger; a bank deposit does not need to pass through PayPal.
+Supported destination: **the PayPal treasury** (then "back the existing capital" on that PayPal transaction — live now).
+The bank route (v91, "My deposit") stays available if a dedicated bank account is ever added; the owner chose not to
+(2026-10-17). Agent-2's paused £100 wallet stays in the books: the requirement covers both wallets.
 
 ## 5. Activation sequence for Agent-1 (after §1 passes; each numbered step is its own owner instruction)
 1. Recompute and back the capital (§4).
@@ -82,7 +98,7 @@ then the capital, the rest new owner funding). Either is one ledger; a bank depo
 6. Sweep: turn the net-profit sweep policy ON (off today; bands 10 % – 20 % by population, 45 % mature, never above 70 %;
    always on net profit).
 7. Standing authority: identity autonomy ON with the card (uncapped by your 2026-10-11 decision; Fleet Control review
-   holds only on credible evidence); card slot 1 debit on the bank; fallback OFF.
+   holds only on credible evidence); card slot 1 = your owner-paid card (card clearing), fallback OFF.
 8. **Ongoing outward operation = opening sales** (`fleet_admin_sales_set(true)`, a deliberate command-line step). The
    proof's outward release is scoped and expiring and is NOT the launch setting. Opening sales is fleet-wide: Agent-2's
    pause is then what keeps it from acting, so it stays paused. Agent-1 chooses its channels; a platform's own onboarding
