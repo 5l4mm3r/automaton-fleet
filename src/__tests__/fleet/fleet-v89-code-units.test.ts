@@ -108,4 +108,18 @@ describe("v89 code maintenance units", () => {
     expect(b).toMatch(/^IPAddressAllow=localhost$/m);
     expect(b).not.toMatch(/^(LoadCredential|SetCredential)=/m);
   });
+
+  it("every unit that denies loopback but calls the internet can still resolve names — through the resolver stub only", async () => {
+    // Found on the production host 2026-10-17: the host's resolver is systemd-resolved at 127.0.0.53; a unit denying
+    // 127.0.0.0/8 without this exception cannot resolve any name ("fetch failed"). Only the stub is allowed — nothing else local.
+    const fs = await import("fs");
+    for (const name of fs.readdirSync("deploy/systemd").filter((f) => f.endsWith(".service"))) {
+      const t = fs.readFileSync(`deploy/systemd/${name}`, "utf8");
+      if (!/^IPAddressDeny=.*(127\.0\.0\.0\/8|localhost)/m.test(t) || /^IPAddressDeny=any$/m.test(t)) continue; // loopback-only units need no DNS
+      // The research fetcher queries its own public DNS servers by design (it validates and pins every address itself).
+      if (name === "automaton-fleet-fetcher.service") { expect(t).toMatch(/resolves \(its own public DNS/); expect(t).not.toMatch(/^IPAddressAllow=/m); continue; }
+      expect(t, name).toMatch(/^IPAddressAllow=127\.0\.0\.53\/32 127\.0\.0\.54\/32$/m);
+      expect([...t.matchAll(/^IPAddressAllow=(.*)$/gm)].map((m) => m[1]), name).toEqual(["127.0.0.53/32 127.0.0.54/32"]);
+    }
+  });
 });

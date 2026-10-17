@@ -50,6 +50,9 @@ SyslogIdentifier=automaton-fleet-media
 
 IPAddressDeny=127.0.0.0/8 ::1/128 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/4 240.0.0.0/4
 IPAddressDeny=fc00::/7 fe80::/10 ff00::/8
+# DNS: the systemd-resolved stub only (the host's resolver is 127.0.0.53; without this no name resolves). No other
+# local address is reachable — the same exception as automaton-fleet-chatgpt-tunnel.service.
+IPAddressAllow=127.0.0.53/32 127.0.0.54/32
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 NoNewPrivileges=true
