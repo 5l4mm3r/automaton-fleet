@@ -1,13 +1,12 @@
 # Launch readiness — the one checklist (Agent-1 first; Agent-2 stays paused)
 
-State 2026-10-17. Production: f2a1784, schema 90, UI 0.23.0; candidate 8b39928 (v91 + UI 0.24.0) rehearsed, awaiting the
-owner's deploy go (release-8b39928.md). "Blocker" = launch cannot be called ready until it is done. "Limit" = recorded,
+State 2026-10-17. Production: 8b39928, schema 91, UI 0.24.0 (deployed 12:23:38Z; release-8b39928.md). "Blocker" = launch cannot be called ready until it is done. "Limit" = recorded,
 does not block. Optional improvements are listed at the end and never delay the decision.
 
 ## 1. Checklist
 | # | Requirement | Evidence so far | Owner / provider action | Status |
 |---|---|---|---|---|
-| 1 | Release installed, identities match, records preserved | f2a1784 deployed 02:02:15Z: ledger head 849 / 723c7ea3… and 812 journals unchanged, 2922 events kept, approved = pinned = Operator API; full baseline dump | deploy go for 8b39928 (v91) | **Blocker** (v91 not yet deployed) |
+| 1 | Release installed, identities match, records preserved | 8b39928 (schema 91, UI 0.24.0) deployed 12:23:38Z after f2a1784 (02:02:15Z): ledger head 849 / 723c7ea3… and 812 journals unchanged both times, events kept, approved = pinned = Operator API; full baseline dumps | — | Done |
 | 2 | Agent-1 runtime + tools | f2a1784 (founder-v10, toolset-6, field guide v2.2, inspector fleet-qa-2); agent-tools-2 current (32 wheels, verified); sandbox self-test ok (network denied, state unreadable); state identical; paused, fuse 754 / 20 | — | Done |
 | 3 | Agent-2 preserved | b60e262, paused, fuse 3000 / 60, untouched | — | Done |
 | 4 | Edge (mobile rate-limit fix) | release file differs from live (static allowance, 429 + Retry-After) | run `host-install.sh` | **Blocker** |
@@ -31,24 +30,26 @@ after access ends; Node / npm installed but JavaScript builds are not proven (Py
 provider are what the bundled tools make (Pillow, reportlab); AI-cost attribution starts at v90; the PayPal limitation
 signal comes only from PayPal's failure codes; proof purchases are tests, not demand or profitability.
 
-## 2. Bounded budget for the chargeable proofs (prices checked 2026-10-17)
-| Item | Most it can cost | Refundable? |
-|---|---|---|
-| Pushover app (one platform) | $4.99 once (free 30-day trial first) | no |
-| Healthchecks.io Hobbyist, UptimeRobot Free (commercial use allowed) | £0 | — |
-| Backblaze B2 (first 10 GB free; the database is ~12 MB) | £0 | — |
-| Brave Search: one proof search | $0.005 (inside the $5 free monthly credit) | — |
-| OpenAI: minimum prepaid credit | $5 (credit stays usable for a year; credits are non-refundable) | no |
-| One proof image (gateway limit 20 cents) | $0.20 | no |
-| Agent-1 AI during a 3-day proof window (fuse 754 a day in the budget's minor unit: at most £7.54) | £22.62 | no (pre-launch test cost, written off at launch) |
-| Proof purchase (your own order) | £50.00 | yes (refund proof) |
-| PayPal's fee on it (not returned on refund) | about 2.9 % + 30p ≈ £1.75 | no |
-| One separately authorised spend (you name amount and purpose) | proposed £10.00 | merchant's terms |
-| Bank: the matching transfer, one 3-D Secure purchase (the spend above), one decline, one refund | £0 beyond the spend | — |
-| **Total at most** | **≈ £85 + $10.20** (of which £50 comes back) | |
+## 2. Proof budget: a CEILING, reported as actually used (prices checked 2026-10-17)
+The smallest meaningful set; nothing is spent without your go, each proof stops once it has shown its result.
+| Kind | Item | Expected | Ceiling |
+|---|---|---|---|
+| Refundable principal | your proof purchase (comes back in the refund proof) | £5 | £50 |
+| Fees (consumed) | PayPal's fee on it, not returned on refund (≈ 2.9 % + 30p) | ≈ £0.45 | ≈ £1.75 |
+| Fees (consumed) | Pushover: free 30-day trial during the proofs; $4.99 once per platform to keep it | $0 now | $4.99 |
+| Fees (consumed) | Healthchecks.io Hobbyist, UptimeRobot Free (commercial use allowed), Backblaze B2 (first 10 GB free) | £0 | £0 |
+| AI / tool usage (consumed) | Agent-1's AI in the proof window: what it actually uses, likely part of one day's fuse | a few £ | fuse 754 a day (≤ £7.54) |
+| AI / tool usage (consumed) | one search (inside Brave's $5 free monthly credit) | $0 | $0.005 |
+| AI / tool usage (consumed) | one image (gpt-image-2.5-flare: text input $5, image output $30 per million tokens) | ≈ $0.03–0.13 | $0.20 (gateway limit) |
+| Prepaid credit (mostly unused, stays usable 1 year, non-refundable) | OpenAI minimum top-up | $5 | $5 |
+| Separate spend | one small item you name, with its purpose | your amount | your amount |
 
-Authorisation needed once for all of it: the purchases above, the resume of **Agent-1 only** for the proof window, and
-custody activation for the refund. Nothing else is opened: no sales to the public, no replication, Agent-2 paused.
+Image billing: the gateway only generates from a text prompt (no image input), so input tokens are text ($5) and output
+tokens are image ($30); the first proof image's usage breakdown confirms it. Next build (not this frozen release): refuse
+or flag any job whose usage reports image-input tokens.
+
+One authorisation covers it: these purchases, the resume of **Agent-1 only** for the proof window, and custody
+activation for the refund. Nothing else is opened: no sales to the public, no replication, Agent-2 paused.
 
 ## 3. Proof order (the existing list)
 1. Fleet HQ on your phone, including switching to the authenticator app and back. 2. Push: test, "I received it", a real
@@ -67,21 +68,27 @@ Supported destinations: **the PayPal treasury** (then "back the existing capital
 or **the bank location** (after v91 and the bank connection: "My deposit" on the settled line — any shortfall first,
 then the capital, the rest new owner funding). Either is one ledger; a bank deposit does not need to pass through PayPal.
 
-## 5. Activation sequence for Agent-1 (after §1 passes)
+## 5. Activation sequence for Agent-1 (after §1 passes; each numbered step is its own owner instruction)
 1. Recompute and back the capital (§4).
-2. Pre-launch costs: run the test-period write-off once more (v74: proof-window AI costs become the Fleet's, nothing owed).
+2. **Separate financial instruction:** the pre-launch test-cost write-off (v74), run once more only if you instruct it (it
+   posts journals: proof-window AI costs become the Fleet's, nothing owed).
 3. Record the launch boundary (once, immutable; pausing / resuming never moves it).
 4. Survival: protection is ON fleet-wide (v55). Your rule — death on actual wallet exhaustion, no automatic rescue —
    applies to Agent-1 by setting **Agent-1 to "live"**; Agent-2 stays protected while paused.
-5. Sweep: turn the net-profit sweep policy ON (bands 10 % – 20 % by population, 45 % for a mature Fleet, never above 70 %;
-   always on net profit). Fleet Control capital allocation is already on (treasury reserve 50 %, a request ≤ 10 % of the
-   treasury, an agent's exposure ≤ 25 %).
-6. Standing authority: identity autonomy ON with the card (uncapped by your 2026-10-11 decision; automated Fleet Control
-   review holds only on credible evidence); card slot 1 debit on the bank; fallback OFF.
-7. Sales: outward release for Agent-1 (public external actions); Agent-1 chooses its channels; a platform's own
-   onboarding blocks only that channel.
-8. Money out stays active for refunds; payouts / fee withdrawals only by your separate decision.
-9. Resume Agent-1 (fuse 754 a day, 20 turns an hour, unless you set others). Agent-2 stays paused.
+5. Capital: Fleet Control allocation is on (reserve 50 %, a request ≤ 10 % of the treasury, exposure ≤ 25 %); switch
+   sizing from `fixed` (live today) to the agreed **`contextual`**: Fleet Control lends only what the treasury can actually
+   release; the opportunity's evidence still decides.
+6. Sweep: turn the net-profit sweep policy ON (off today; bands 10 % – 20 % by population, 45 % mature, never above 70 %;
+   always on net profit).
+7. Standing authority: identity autonomy ON with the card (uncapped by your 2026-10-11 decision; Fleet Control review
+   holds only on credible evidence); card slot 1 debit on the bank; fallback OFF.
+8. **Ongoing outward operation = opening sales** (`fleet_admin_sales_set(true)`, a deliberate command-line step). The
+   proof's outward release is scoped and expiring and is NOT the launch setting. Opening sales is fleet-wide: Agent-2's
+   pause is then what keeps it from acting, so it stays paused. Agent-1 chooses its channels; a platform's own onboarding
+   blocks only that channel.
+9. Money out stays active for refunds; payouts / fee withdrawals only by your separate decision.
+10. Resume Agent-1 (fuse 754 a day, 20 turns an hour, unless you set others). Agent-2 stays paused (it also needs its own
+    runtime upgrade before any future resume).
 
 ## 6. Optional later (never delays launch)
 Unit files listing individual secret files could hide the whole directory (isolation is checked on the host either way);

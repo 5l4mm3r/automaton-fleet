@@ -47,3 +47,11 @@ The assistant's automatic permission check refused the host steps it attempted (
 scripts `--apply`: no reason given; the founder upgrade rehearsal: no reason given; a tar of the secrets directory:
 "Production Reads"). The release itself and Agent-1's upgrade were permitted and done. Nothing was disguised to get
 around a refusal; the owner runs the reviewed script instead.
+
+## 4. Deployed 2026-10-17 (owner's go)
+- Baseline 12:21:36Z (`~/rlc91/baseline-pre-v91-20261017T122136Z`, full dump sha a99da122…): schema 90, ledger head 849 /
+  723c7ea3…, 812 journals, verify true; both agents paused (754 / 20, 3000 / 60).
+- Release: outage 12:22:42–12:23:27Z (45 s); reconciliation OK (2888 events preserved); DEPLOYED 12:23:38Z, schema 91,
+  root UI 0.24.0, `production_deployed` recorded. Pre-migration dump `~/automaton_fleet-v90-pre-v91-20261017T122302Z.dump`.
+- After: ledger head and journals identical, verify true; approved = pinned = Operator API = 8b39928 / 134172b0…; Agent-1
+  f2a1784 and Agent-2 b60e262 heartbeating, both paused, fuses unchanged.
