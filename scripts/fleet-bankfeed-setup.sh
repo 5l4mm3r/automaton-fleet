@@ -108,7 +108,7 @@ run install -d -m 0700 -o root -g root "$KEYS"
 run install -m 0644 -o root -g root "$SRC_UNIT" "/etc/systemd/system/$UNIT"
 run systemctl daemon-reload
 if (( APPLY )); then
-  since="$(date '+%Y-%m-%d %H:%M:%S')"; systemctl enable --now "$UNIT" >/dev/null 2>&1
+  since="$(date '+%Y-%m-%d %H:%M:%S')"; systemctl enable "$UNIT" >/dev/null 2>&1; systemctl restart "$UNIT"  # restart: a re-run must see a fresh start line
   for _ in $(seq 1 30); do journalctl -u "$UNIT" --since "$since" -o cat --no-pager | grep -q bankfeed_started && break; sleep 1; done
   journalctl -u "$UNIT" --since "$since" -o cat --no-pager | grep -q bankfeed_started || { echo "not started — last lines:" >&2; journalctl -u "$UNIT" --since "$since" -o cat --no-pager | tail -n 15 >&2; exit 1; }
   echo "  bankfeed_started; $(systemctl is-active "$UNIT")"
