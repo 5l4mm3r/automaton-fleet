@@ -75,15 +75,15 @@ function KeySet({ c, client, call }: { c: Row; client: GatewayClient; call: (op:
  * status, and Change. The form appears only when nothing is stored yet or the owner chooses Change; a successful save
  * closes it again. Sealed values are never shown back.
  */
-function SavedOr({ saved, what, encrypted, at, detail, form }: { saved: boolean; what: string; encrypted?: boolean; at?: unknown; detail?: ReactNode;
-  form: (close: () => void) => ReactNode }) {
+function SavedOr({ saved, what, encrypted, at, detail, form, label }: { saved: boolean; what: string; encrypted?: boolean; at?: unknown; detail?: ReactNode;
+  form: (close: () => void) => ReactNode; label?: string | null }) {
   const [edit, setEdit] = useState(false);
   if (!saved || edit) return <>{saved && <button className="mt-2 text-xs text-cyan-300 underline" onClick={() => setEdit(false)}>Keep the saved {what}</button>}{form(() => setEdit(false))}</>;
   return <div className="my-3 rounded-lg border border-emerald-900 bg-emerald-950/30 p-3 text-sm">
-    <p className="text-emerald-300">✓ {what}: {encrypted ? "saved and encrypted" : "saved"}{at ? ` · last updated ${when(at)} UTC` : ""}
+    <p className="text-emerald-300">✓ {what}: {label ? <span className="font-mono">{label}</span> : encrypted ? "saved and encrypted" : "saved"}{at ? ` · last updated ${when(at)} UTC` : ""}
       <button className="ml-3 text-xs text-cyan-300 underline" onClick={() => setEdit(true)}>Change</button></p>
     {detail && <div className="mt-1 text-xs text-slate-300 [overflow-wrap:anywhere]">{detail}</div>}
-    {encrypted && <p className="mt-1 text-xs text-slate-400">Stays saved: enter it again only if it changes. For security it is never shown back.</p>}
+    {encrypted && <p className="mt-1 text-xs text-slate-400">{label ? "Sealed: the full number and security code are encrypted and never shown back. " : ""}Stays saved: enter it again only if it changes.{label ? "" : " For security it is never shown back."}</p>}
   </div>;
 }
 
@@ -478,9 +478,24 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
   const call = async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); auto.reload(); key.reload(); pp.reload(); comms.reload(); return r; };
   const [addKeys, setAddKeys] = useState(false);
   const sent = useRead<Row[]>(client, "mail_feed", { view: "outbox", limit: 1 }, []);
-  const upload = async (cls: string, value: string) => call("owner_vault_upload", await sealOwnerFact(client, cls, value));
+  const upload = async (cls: string, value: string, extra: Record<string, unknown> = {}) => call("owner_vault_upload", { ...(await sealOwnerFact(client, cls, value)), ...extra });
+  // v93: the card is sealed whole; beside it only a masked label (brand, last four, name, expiry) and its expiry date.
+  const [cardSlots, setCardSlots] = useState(1);
+  const uploadCard = async (slot: string, v: Record<string, string>) => {
+    const number = v.number.replace(/[\s-]/g, ""), month = Number(v.expMonth), year = Number(v.expYear.length === 2 ? `20${v.expYear}` : v.expYear);
+    const luhn = (n: string) => n.split("").reverse().reduce((t, d, i) => t + (i % 2 ? ((+d * 2) > 9 ? +d * 2 - 9 : +d * 2) : +d), 0) % 10 === 0;
+    if (!/^[0-9]{12,19}$/.test(number) || !luhn(number)) throw new Error("That card number does not look right: check the digits.");
+    if (!(month >= 1 && month <= 12) || !(year >= 2000 && year <= 2100)) throw new Error("Enter the expiry as month (MM) and year (YYYY).");
+    const expiresAt = new Date(Date.UTC(year, month, 0, 23, 59, 59)).toISOString();   // the last moment of the expiry month
+    if (new Date(expiresAt) < new Date()) throw new Error("That card has expired.");
+    const brand = /^4/.test(number) ? "Visa" : /^(5[1-5]|2[2-7])/.test(number) ? "Mastercard" : /^3[47]/.test(number) ? "Amex" : "Card";
+    const name = v.name.trim().replace(/[^A-Za-z .'-]/g, "").slice(0, 40).toUpperCase();
+    const displayLabel = `${brand} •••• ${number.slice(-4)}${name ? ` · ${name}` : ""} · exp ${String(month).padStart(2, "0")}/${String(year).slice(-2)}`;
+    return upload(slot, JSON.stringify({ number, expMonth: v.expMonth, expYear: v.expYear, cvc: v.cvc, name: v.name, postcode: v.postcode }), { expiresAt, displayLabel });
+  };
   const configured = (cls: string) => auto.data?.configured?.[cls]?.status === "configured";
   const expiry = (cls: string) => auto.data?.configured?.[cls]?.expiresAt ? <>Valid until {when(auto.data.configured[cls].expiresAt)} UTC.</> : undefined;
+  const label = (cls: string) => (auto.data?.configured?.[cls]?.label as string | undefined) ?? null;
   const installed = (name: string) => (comms.data?.uploads as Row[] | undefined)?.find((u) => u.name === name && u.status === "installed");
   const a = auto.data;
   const [classes, setClasses] = useState<string[] | null>(null);
@@ -513,10 +528,13 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
 
     <Panel title="2 · Your card (bypass only)">
       <p className="text-sm text-slate-300">Used where a merchant takes cards. Sealed here to the identity broker; agents never see it; every fill is logged. Before the card can be filled the agent’s own funds (or a Fleet envelope) are reserved for the charge; anything a merchant charges beyond what the agent can cover becomes the agent’s debt to the treasury. You repay the card from the treasury.</p>
-      {/* v90: up to three cards (each credit, or debit on its own bank: Treasury → Money locations → Cards). */}
-      {(["payment_card", "payment_card_2", "payment_card_3"] as const).map((slot, i) => <SavedOr key={slot} saved={configured(slot)} what={`Card ${i + 1}`} encrypted detail={expiry(slot)}
-        form={(close) => <Form title={`Seal and upload card ${i + 1}`} done="Saved and encrypted." clearOnDone after={close} fields={[{ key: "number", label: "Card number" }, { key: "expMonth", label: "Expiry month (MM)" }, { key: "expYear", label: "Expiry year (YYYY)" }, { key: "cvc", label: "CVC", type: "password" }, { key: "name", label: "Name on card" }, { key: "postcode", label: "Billing postcode" }]}
-          submit={(v) => upload(slot, JSON.stringify({ number: v.number.replace(/\s/g, ""), expMonth: v.expMonth, expYear: v.expYear, cvc: v.cvc, name: v.name, postcode: v.postcode }))} />} />)}
+      {/* v90: up to three cards (each credit, or debit on its own bank: Treasury → Money locations → Cards). v93: card 1, then more on request. */}
+      {(["payment_card", "payment_card_2", "payment_card_3"] as const).map((slot, i) => (i === 0 || configured(slot) || i < cardSlots) && <SavedOr key={slot} saved={configured(slot)} what={`Card ${i + 1}`} encrypted label={label(slot)}
+        detail={expiry(slot) ?? (configured(slot) ? <>No expiry recorded: use <em>Change</em> and enter this card again so its expiry and last four digits are shown.</> : undefined)}
+        form={(close) => <Form title={`Seal and upload card ${i + 1}`} done="Sealed: shown above as the card's last four digits, name and expiry." clearOnDone after={close} fields={[{ key: "number", label: "Card number" }, { key: "expMonth", label: "Expiry month (MM)" }, { key: "expYear", label: "Expiry year (YYYY)" }, { key: "cvc", label: "CVC", type: "password" }, { key: "name", label: "Name on card" }, { key: "postcode", label: "Billing postcode" }]}
+          submit={(v) => uploadCard(slot, v)} />} />)}
+      {(() => { const shown = (["payment_card", "payment_card_2", "payment_card_3"] as const).filter((sl, i) => i === 0 || configured(sl) || i < cardSlots).length;
+        return shown < 3 && <button className="mt-3 rounded border border-slate-600 px-3 py-1 text-sm text-cyan-200" onClick={() => setCardSlots(shown + 1)}>Add another card</button>; })()}
     </Panel>
 
     <Panel title="3 · Bank details and identity facts">
