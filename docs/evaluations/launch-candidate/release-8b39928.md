@@ -67,3 +67,14 @@ and a public-pin schema, not ownership). Permissions tightened by the owner: `tl
 drop-in that says 0644 is out of date). Canary test: 4/4 caught, removed. Clean isolation run PASSED (19 units). Health:
 18 services active, 0 failed units, readyz 200, schema 91, ledger head and journals = post-v91 baseline, verify true,
 agents unchanged and paused, safety flags false.
+
+## 6. Providers connected (owner, 2026-10-17)
+- Push (Pushover): keys 13:57Z; test delivered 14:07:31Z, confirmed 14:08:32Z. Outbound units could not resolve names
+  (resolver stub 127.0.0.53 denied by their loopback rule): stub-only drop-in `30-dns-stub.conf` on push, media, bank
+  feed, code, channels (repository 62ba934 puts it in the unit files).
+- Heartbeat (Healthchecks.io → Pushover Emergency): connected 14:17Z; outage drill rang the phone (~15:07Z); restored.
+- Backups (Backblaze B2 + restic): first run failed (pg_dump into the root-only staging dir), `connect.sh` printed a false
+  success. Fixed (9f78fae) and repaired by `~/rlc91/backup-repair.sh`: drop-in `40-fixed-script.conf` points both
+  backup units at `/usr/local/lib/automaton-fleet-backup/fleet-backup.sh` (sha 2d6a21f9…) until the next release;
+  backup.env values quoted (copy `backup.env.pre-quote-…`); backup + restore drill passed; repository, its password and
+  bucket key unchanged.
