@@ -51,6 +51,10 @@ export function PhoneAlerts({ client, highlightTest }: { client: GatewayClient; 
     <p className="mt-2 text-xs text-slate-400">Urgent alerts ring for up to an hour until you acknowledge them here; after that they stay listed above as unresolved. Your lock screen only ever shows the alert’s level, a short code and a link: never the message, customer details or documents. Email alerts continue as before.</p>
     {d.deliveries24h && <p className="mt-2 text-xs text-slate-400">Last 24 hours: {d.deliveries24h.sent} sent · {d.deliveries24h.pending} waiting · {d.deliveries24h.failed} failed</p>}
     {d.lastFailure && <p className="mt-1 text-xs text-amber-200">Last failure {when(d.lastFailure.at)}: {d.lastFailure.error}</p>}
+    {devices.length > 0 && sender?.configured && <div className="mt-3">
+      <button className={button} disabled={busy} onClick={() => { if (window.confirm("Ring your phones now with an urgent alarm drill? It repeats until you acknowledge the drill in the alert feed below (at most an hour). It is a test, not an incident.")) void act("push_alarm_drill", {}, "Alarm drill started: your phones ring until you acknowledge it below."); }}>Run an alarm drill</button>
+      <p className="mt-1 text-xs text-slate-400">Proves the urgent path end to end: the alarm repeats on your phone, and acknowledging the drill here stops it. Leave one unanswered for an hour to see it listed as unresolved.</p>
+    </div>}
     <ul className="mt-4 space-y-3">
       {devices.length === 0 && <li className="text-sm text-slate-300">No phone added yet.</li>}
       {devices.map((x) => {

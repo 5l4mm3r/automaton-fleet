@@ -50,13 +50,19 @@ export class OpenAiImages implements ImageProvider {
       const j = (await r.json().catch(() => ({}))) as { error?: { code?: string } };
       return { ok: false, retryable: r.status === 429 || r.status >= 500, error: `provider ${r.status}${j.error?.code ? " " + clean(j.error.code, 60) : ""}` };
     }
-    const j = (await r.json().catch(() => ({}))) as { data?: Array<{ b64_json?: string }>; usage?: { input_tokens?: unknown; output_tokens?: unknown } };
+    const j = (await r.json().catch(() => ({}))) as { data?: Array<{ b64_json?: string }>;
+      usage?: { input_tokens?: unknown; output_tokens?: unknown; input_tokens_details?: { text_tokens?: unknown; image_tokens?: unknown } } };
     const b64 = j.data?.[0]?.b64_json ?? "";
     if (!/^[A-Za-z0-9+/=]{100,}$/.test(b64) || !Buffer.from(b64.slice(0, 16), "base64").subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) {
       return { ok: false, error: "the provider did not return a PNG" };
     }
     const tok = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 && (v as number) < 10_000_000 ? (v as number) : null);
     const it = tok(j.usage?.input_tokens), ot = tok(j.usage?.output_tokens);
+    // The token prices are TEXT input / IMAGE output (a prompt-only generation). OpenAI prices image INPUT tokens higher;
+    // this gateway never sends an image, so a usage report with image-input tokens is unexpected: no usage is reported and
+    // the job is charged at its limit ("estimate") instead of being under-priced.
+    const imgIn = j.usage?.input_tokens_details?.image_tokens;
+    if (imgIn !== undefined && imgIn !== 0) return { ok: true, value: { pngB64: b64 } };
     return { ok: true, value: { pngB64: b64, ...(it !== null && ot !== null ? { usage: { inputTokens: it, outputTokens: ot } } : {}) } };
   }
 }

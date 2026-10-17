@@ -70,4 +70,6 @@ export const WRITE_OPS: ReadonlySet<string> = new Set([
   "repo_access_revoke",
   // v90: this bank line takes back a dispute credit (when the bank did not name it).
   "card_dispute_reversal",
+  // v92: an alarm drill rings the owner's own phones on the urgent path (a test, not an incident).
+  "push_alarm_drill",
 ]);
