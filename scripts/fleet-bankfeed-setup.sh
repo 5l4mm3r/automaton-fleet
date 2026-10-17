@@ -102,6 +102,9 @@ say "3. grant rx_* to fleet_bankfeed (installed release's admin CLI, as $OPERATO
 (( APPLY )) && { admin grant-bankfeed-role >/dev/null; admin audit-privileges >/dev/null || { echo "fleet:audit-privileges FAILED" >&2; exit 1; }; echo "  granted; audit ok"; } || echo "  grant-bankfeed-role; audit-privileges"
 
 say "4. unit $UNIT (no loopback, no private ranges; enabled, started)"
+# The unit loads its tokens from this directory (LoadCredential=bank:<dir>): systemd refuses to start (243/CREDENTIALS)
+# while it does not exist, so it is created (empty, root 0700) before the first start; set-token adds files to it.
+run install -d -m 0700 -o root -g root "$KEYS"
 run install -m 0644 -o root -g root "$SRC_UNIT" "/etc/systemd/system/$UNIT"
 run systemctl daemon-reload
 if (( APPLY )); then
