@@ -1300,7 +1300,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_control_accrual: new Set(["fleet_control_charge"]),
     fleet_channel_unlocks: new Set(["fleet_channel_unlocked"]),
     // v66: backings of the existing capital only by the owner's backing function.
-    fleet_capital_backings: new Set(["fleet_admin_capital_back"]),
+    fleet_capital_backings: new Set(["fleet_admin_capital_back", "fleet_admin_location_contribution"]), // v91: a bank deposit backs capital
     // v68: lesson supersessions only by Fleet Control's review record.
     fleet_knowledge_supersessions: new Set(["svc_knowledge_review_record"]),
     // v70: AI-credit lots and draws — by the provider-credit event trigger, the draw, the treasury purchase and the settlement.

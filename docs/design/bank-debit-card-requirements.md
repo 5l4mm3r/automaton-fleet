@@ -233,8 +233,9 @@ that route is used.
   across locations.
 - A **transfer** PayPal ↔ bank moves the same money: one location goes down, then (after it is in transit) the other goes
   up. It never creates capital or revenue.
-- Money the **owner pays into the bank directly** is a capital contribution, recorded once with its bank reference, like
-  any other owner funding.
+- Money the **owner pays into the bank directly** is a capital contribution, recorded once with its bank reference. From
+  v91 it first fills an open shortfall, then backs the capital the wallets already record (no second credit, as a PayPal
+  deposit does); only the rest is new owner funding.
 - A location's balance is spendable only when the provider's evidence is fresh and matches the ledger. A held, stale or
   drifting location blocks spending from that location only.
 
@@ -276,7 +277,7 @@ or connected, no token exists.
 |---|---|
 | §8.3 one ledger, several locations | `fleet_money_locations`: the PayPal account (one per rail, automatic) and bank accounts. Treasury cash stays ONE ledger total; a location says where it is, from that provider's own evidence |
 | Transfers are the same money | `location_transfer` records a transfer you made: **no journal**. The source's spendable cash drops at once. The destination's rises only when evidence shows **that** transfer arrived: (a) its reference in the bank line, or (b) PayPal's own withdrawal record (T0400, the same amount, not used by another transfer) **and** the bank line naming PayPal. Bank → PayPal: the bank's outgoing line with the reference, then PayPal's funding record (T0300). **An unrelated credit of the same amount never completes a transfer** (tested). Anything else goes to you: "this credit is transfer X" |
-| Owner deposit into the bank | `location_contribution` on the bank line: owner funding, posted once against that line |
+| Owner deposit into the bank | `location_contribution` ("My deposit") on the bank line, posted once against that line (v91): an open shortfall first, then the capital the wallets already record but no money backs (a backing: no second ledger credit, like the PayPal path), only the rest new owner funding (unallocated) |
 | R1 available-balance evidence | Balance readings (available, cleared, pending) with their age. Older than the location's limit (default 24 h) = stale = **nothing spendable there**. Debits seen after a reading are subtracted until the next reading |
 | R2 reservation before a hold | With the card bound to a bank, a hold must fit that bank's fresh free cash (balance − Fleet holds the bank has not shown − transfers out − later debits), under the location's lock, on top of the agent's wallet check |
 | R3 lifecycle, never booked at maximum | The agent's declaration books **nothing**; the bank's settled line books the bank's amount (FX kept), with **no card payable**. A decline or reversal releases the hold. After declaring, the agent can no longer void the hold |

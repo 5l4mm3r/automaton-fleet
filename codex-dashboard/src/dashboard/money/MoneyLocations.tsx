@@ -85,7 +85,7 @@ export function MoneyLocations({ client, agents }: { client: GatewayClient; agen
         <p>{when(t.at)} · {labelOf(t.locationId)} · <span className="font-mono">{t.direction === "in" ? "+" : "−"}{gbp(t.amountMinor)}</span> · {t.descriptor ?? t.kind} · {t.status}</p>
         {t.matchError && <p className="text-xs text-red-300">Recorded but not booked: {t.matchError} (retried every hour)</p>}
         <div className="mt-1 flex flex-wrap gap-2">
-          {t.direction === "in" && t.status === "settled" && <button className={button} disabled={busy} onClick={() => act("location_contribution", { txnId: t.txnId }, "Recorded as your deposit (owner funding).")}>My deposit</button>}
+          {t.direction === "in" && t.status === "settled" && <button className={button} disabled={busy} onClick={() => act("location_contribution", { txnId: t.txnId }, "Recorded as your deposit: any shortfall first, then the capital still to back, the rest new owner funding.")}>My deposit</button>}
           {t.direction === "in" && t.status === "settled" && inTransit.filter((x) => x.to === t.locationId && Number(x.amountMinor) === Number(t.amountMinor)).map((x) =>
             <button key={x.transferId} className={button} disabled={busy} onClick={() => { if (window.confirm(`This credit is your transfer “${x.reference}” (${gbp(x.amountMinor)} from ${labelOf(x.from)})?`)) void act("transfer_arrival", { txnId: t.txnId, transferId: x.transferId }, "Recorded as the transfer’s arrival."); }}>Transfer “{x.reference}”</button>)}
           {t.direction === "out" && t.status === "settled" && <button className={button} disabled={busy} onClick={() => act("bank_txn_classify", { txnId: t.txnId, as: "fee", note: "bank fee" }, "Recorded as a bank fee (a Fleet expense).")}>Bank fee</button>}

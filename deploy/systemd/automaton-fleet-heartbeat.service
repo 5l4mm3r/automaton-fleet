@@ -24,4 +24,6 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/browser.env -/etc/automaton-fleet/channels.env -/etc/automaton-fleet/push.env -/etc/automaton-fleet/push -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key -/var/lib/automaton-fleet-custody -/var/lib/private
+# v91: the whole configuration directory is hidden (its only secret, the monitor URL, arrives as a systemd credential, read
+# by the manager before the namespace) — a fixed list of files would miss every service added later.
+InaccessiblePaths=-/etc/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/private
