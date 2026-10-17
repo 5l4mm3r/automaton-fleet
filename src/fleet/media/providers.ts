@@ -17,7 +17,7 @@ export interface MediaOutcome<T> { ok: boolean; value?: T; error?: string; retry
 export interface SearchProvider { readonly name: string; search(q: { query: string; count: number }): Promise<MediaOutcome<SearchResult[]>> }
 /** v87: the provider's own usage for the call, when it reports it (OpenAI image tokens): the job's actual cost is computed from it. */
 export interface ImageUsage { inputTokens: number; outputTokens: number }
-export interface ImageProvider { readonly name: string; generate(r: { prompt: string; size: string }): Promise<MediaOutcome<{ pngB64: string; usage?: ImageUsage }>> }
+export interface ImageProvider { readonly name: string; generate(r: { prompt: string; size: string }): Promise<MediaOutcome<{ pngB64: string; usage?: ImageUsage; unexpectedUsage?: true }>> }
 
 const clean = (s: unknown, n: number) => String(s ?? "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim().slice(0, n);
 
@@ -40,7 +40,7 @@ export class BraveSearch implements SearchProvider {
 export class OpenAiImages implements ImageProvider {
   readonly name = "openai";
   constructor(private readonly key: string, private readonly http: MediaHttp, private readonly base = OPENAI_IMAGES_API, private readonly model = "gpt-image-1") {}
-  async generate(req: { prompt: string; size: string }): Promise<MediaOutcome<{ pngB64: string; usage?: ImageUsage }>> {
+  async generate(req: { prompt: string; size: string }): Promise<MediaOutcome<{ pngB64: string; usage?: ImageUsage; unexpectedUsage?: true }>> {
     let r: Awaited<ReturnType<MediaHttp>>;
     try {
       r = await this.http(this.base, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.key}` },
@@ -59,10 +59,11 @@ export class OpenAiImages implements ImageProvider {
     const tok = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 && (v as number) < 10_000_000 ? (v as number) : null);
     const it = tok(j.usage?.input_tokens), ot = tok(j.usage?.output_tokens);
     // The token prices are TEXT input / IMAGE output (a prompt-only generation). OpenAI prices image INPUT tokens higher;
-    // this gateway never sends an image, so a usage report with image-input tokens is unexpected: no usage is reported and
-    // the job is charged at its limit ("estimate") instead of being under-priced.
+    // this gateway never sends an image, so a usage report with image-input tokens is unexpected: it is never priced at the
+    // text rate — the job's cost is left UNKNOWN (its reservation kept, listed and alerted) until the owner resolves it
+    // from the provider's own usage page.
     const imgIn = j.usage?.input_tokens_details?.image_tokens;
-    if (imgIn !== undefined && imgIn !== 0) return { ok: true, value: { pngB64: b64 } };
+    if (imgIn !== undefined && imgIn !== 0) return { ok: true, value: { pngB64: b64, unexpectedUsage: true } };
     return { ok: true, value: { pngB64: b64, ...(it !== null && ot !== null ? { usage: { inputTokens: it, outputTokens: ot } } : {}) } };
   }
 }

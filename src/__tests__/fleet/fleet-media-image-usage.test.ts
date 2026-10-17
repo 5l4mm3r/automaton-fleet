@@ -1,6 +1,6 @@
 /**
  * The image provider's usage report → the job's cost basis. The configured prices are TEXT input and IMAGE output (the
- * gateway only generates from a text prompt); a report with image-INPUT tokens is never priced at the text rate.
+ * gateway only generates from a text prompt); a report with image-INPUT tokens is never priced at all: cost unknown.
  */
 import { describe, it, expect } from "vitest";
 import { OpenAiImages, type MediaHttp } from "../../fleet/media/providers.js";
@@ -19,10 +19,10 @@ describe("image usage → cost basis", () => {
       expect(imageCostCents(r.value!.usage, { input: 5, output: 30 })).toBe(4); // (40×5 + 1056×30) / 1e6 $ = $0.0319 → 4 cents (rounded up)
     }
   });
-  it("image-input tokens are never priced at the text rate: no usage is reported, so the job is charged at its limit", async () => {
+  it("image-input tokens are never priced at the text rate: no usage, and the job is flagged for the cost-unknown path", async () => {
     const r = await gen({ input_tokens: 600, output_tokens: 1_056, input_tokens_details: { text_tokens: 40, image_tokens: 560 } });
     expect(r.ok).toBe(true);
     expect(r.value!.usage).toBeUndefined();
-    expect(imageCostCents(r.value!.usage, { input: 5, output: 30 })).toBeNull(); // the gateway then charges unitCostCents ("estimate")
+    expect(r.value!.unexpectedUsage).toBe(true); // the gateway records it as cost UNKNOWN (reservation kept), never an estimate
   });
 });

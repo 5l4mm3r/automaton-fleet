@@ -8,8 +8,15 @@
  * cancels the alarm at the provider (px_push_cancel_due → px_push_cancelled); left unanswered past the alarm's hour it is
  * listed under "alerts still unresolved" (v84) until acknowledged. It is not an incident: the code has no Fleet Command
  * route (audit only), it touches no agent, money or setting, and only one drill can be open at a time.
+ *
+ * Also: an image job whose provider reported usage the configured prices do not cover (image-INPUT tokens: this gateway
+ * never sends an image) is delivered, but its cost is left UNKNOWN — the v87 path of a gateway stopped mid-run: the
+ * reservation is kept (nothing booked), the job is listed under unknown cost and alerted daily, the owner resolves it once
+ * at the actual cost from the provider's usage page, and a provider statement for its period is refused until then (no
+ * duplicate charge).
  */
 import { V83_SQL } from "./migrations-phase83.js";
+import { V87_SQL } from "./migrations-phase87.js";
 import { V90_SQL } from "./migrations-phase90.js";
 import { restate } from "./migrations-phase42.js";
 
@@ -25,6 +32,17 @@ const DASH_CALL = restate(V90_SQL, "dash_call", [
   [`'repo_access_revoke','card_dispute_reversal');`, `'repo_access_revoke','card_dispute_reversal','push_alarm_drill');`],
   [`      WHEN 'push_test' THEN`, `      WHEN 'push_alarm_drill' THEN fleet_admin_push_alarm_drill('operator:owner')
       WHEN 'push_test' THEN`],
+]);
+
+const MEDIA_RESULT = restate(V87_SQL, "mx_result", [
+  [`  IF p_basis IS NOT NULL AND p_basis NOT IN ('usage','flat','estimate') THEN`, `  IF p_basis IS NOT NULL AND p_basis NOT IN ('usage','flat','estimate','unknown') THEN`],
+  [`  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false); END IF;`, `  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false); END IF;
+  -- v92: delivered, but at a cost the configured prices do not cover: unknown until the owner resolves it (reservation kept).
+  IF p_ok AND p_basis = 'unknown' THEN
+    UPDATE fleet_media_jobs SET cost_state = 'unknown', error = 'cost unknown: the provider reported image-input tokens (resolve it from the provider''s usage page)'
+     WHERE job_id = p_job AND cost_state = 'reserved';
+    RETURN jsonb_build_object('ok', true, 'costState', 'unknown');
+  END IF;`],
 ]);
 
 export const V92_SQL = `
@@ -48,6 +66,8 @@ BEGIN
 END $$;
 
 ${DASH_CALL}
+
+${MEDIA_RESULT}
 
 REVOKE ALL ON ALL TABLES IN SCHEMA @@SCHEMA@@ FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA @@SCHEMA@@ FROM PUBLIC;

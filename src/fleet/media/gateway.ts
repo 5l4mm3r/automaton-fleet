@@ -22,7 +22,7 @@ export class PgMediaGateway {
     return this.one<{ ok: boolean; schemaVersion?: number }>(`SELECT mx_report($1, $2, $3, $4) AS r`, [kind, provider, configured, unitCostCents]);
   }
   claim(kind: "search" | "image", limit: number) { return this.one<Array<{ jobId: string; kind: string; request: Record<string, unknown> }>>(`SELECT mx_claim($1, $2) AS r`, [kind, limit]); }
-  result(jobId: string, ok: boolean, result: unknown, costCents: number, error: string | null, basis: "usage" | "flat" | "estimate" | null = null) {
+  result(jobId: string, ok: boolean, result: unknown, costCents: number, error: string | null, basis: "usage" | "flat" | "estimate" | "unknown" | null = null) {
     return this.one(`SELECT mx_result($1, $2, $3::jsonb, $4, $5, $6) AS r`, [jobId, ok, result === null ? null : JSON.stringify(result), costCents, error, basis]);
   }
   close() { return this.pool.end(); }
@@ -56,6 +56,12 @@ export class MediaWorker {
         const r = await this.cfg.image.provider.generate({ prompt: String(j.request.prompt ?? ""), size: String(j.request.size ?? "1024x1024") });
         if (r.ok) {
           done++;
+          if (r.value!.unexpectedUsage) {
+            // v92: usage the configured prices do not cover — delivered, cost left unknown (reservation kept) for the owner.
+            await this.gw.result(j.jobId, true, { imageB64: r.value!.pngB64 }, 0, null, "unknown");
+            this.log("warn", "media_image_cost_unknown", { jobId: j.jobId, reason: "image-input tokens reported" });
+            continue;
+          }
           const cost = imageCostCents(r.value!.usage, this.cfg.image.tokenPricesUsdPerM ?? null);
           await this.gw.result(j.jobId, true, { imageB64: r.value!.pngB64 }, cost ?? this.cfg.image.unitCostCents, null, cost === null ? "estimate" : "usage");
         }
