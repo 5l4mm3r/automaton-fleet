@@ -53,3 +53,19 @@ root and UI typecheck clean.
 3. Proof 2, second half: Fleet HQ → Notifications → Phone alerts → **Run an alarm drill** → the phone rings repeatedly →
    acknowledge the drill in Fleet HQ → the ringing stops. Optionally a second drill left unanswered for an hour → listed as
    unresolved → acknowledge.
+
+## 4. Deployed 2026-10-17 (owner's go)
+- Baseline 18:30:10Z (`~/rlc90/baseline-pre-v92-20261017T183010Z`, full dump 4999 entries): schema 91, ledger head 849 /
+  723c7ea3…, 812 journals; both agents paused.
+- Release: outage 18:31:18–18:32:04Z (46 s), DEPLOYED 18:32:16Z, schema 92, UI 0.25.0; approved = pinned = Operator API =
+  7f674e0 / 8b9831ac…; ledger, agents, fuses and financial policies = baseline (sweep off, sizing fixed, survival
+  protection on, identity autonomy off, card 1 credit with fallback off, unbacked £200.00).
+- The release's outage made the 18:31:39Z heartbeat report `FAIL controller dashboard operator-api`; Healthchecks paged the
+  owner (correct behaviour); the 18:36:47Z heartbeat was `ok`. Later improvement: pause the heartbeat during a planned
+  cutover.
+- `post-v92.sh` 18:32:53–18:33:49Z: drop-ins folded into the release's unit files (resolver stub from the units; both
+  backup units on the release's script); isolation PASSED (19 units); backup ok (schema 92, 23 MB) and drill ok (snapshot
+  95e8f4f6, ledger verifies, 40 sample files); agents paused.
+- Agent guidance: `fleet-capability-status` v13 loaded by the owner command (`docs/knowledge/fleet-capability-status-v13.json`):
+  renderer + OCR and agent-tools-2 INSTALLED, media / bank feed / code services INSTALLED and NOT CONNECTED, the media
+  cost-unknown path (v12 still said rendering and OCR were not installed).
