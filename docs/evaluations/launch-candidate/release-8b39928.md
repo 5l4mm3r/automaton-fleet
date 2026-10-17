@@ -55,3 +55,15 @@ around a refusal; the owner runs the reviewed script instead.
   root UI 0.24.0, `production_deployed` recorded. Pre-migration dump `~/automaton_fleet-v90-pre-v91-20261017T122302Z.dump`.
 - After: ledger head and journals identical, verify true; approved = pinned = Operator API = 8b39928 / 134172b0…; Agent-1
   f2a1784 and Agent-2 b60e262 heartbeating, both paused, fuses unchanged.
+
+## 5. Host installation (owner-run, 2026-10-17 13:16–13:40Z)
+`~/rlc91/host-install.sh` then `~/rlc91/isolation-finish.sh`: edge file (backup, nginx -t, reload, public checks); push,
+bank feed, media, code + build + egress proxy installed and running not configured; heartbeat and backup units installed,
+timers off; restic 0.16.4; LibreOffice 24.2.7 + Tesseract 5.3.4 (conversion test passed); Node 22.23.3 / npm 10.9.9
+(already present from NodeSource). Found and fixed on the way (repository): the bank feed's credential directory
+(9bb6820), re-runs of the setup scripts (6a27aed, 16e0a77), the isolation check's rules (a4e972c: explicit dependencies
+and a public-pin schema, not ownership). Permissions tightened by the owner: `tls/fleet.crt` and
+`chatgpt-tunnel/tunnel.env` 0600 root (systemd is their only reader; the comment in the controller's `remote.conf`
+drop-in that says 0644 is out of date). Canary test: 4/4 caught, removed. Clean isolation run PASSED (19 units). Health:
+18 services active, 0 failed units, readyz 200, schema 91, ledger head and journals = post-v91 baseline, verify true,
+agents unchanged and paused, safety flags false.
