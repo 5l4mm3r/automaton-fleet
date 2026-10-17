@@ -31,3 +31,8 @@ live check); root and UI typecheck and lint clean.
 `bash ~/rlc93/fleet-release.sh ~/rlc93/pins.txt 92 93 0.26.0 ~/rlc93/ui-0.26.0-1743b33.tgz f1e928025d6ecd2c0a74ea5a21504c7307aa3ed4a1fb3e7cc9ade15431e43c30`
 (no host step after it). Then: Money & identity → Card 1 → Change → enter the card again → it shows its masked label and
 "Valid until …". Expect one heartbeat alert during the ~45 s cutover.
+
+## Deployed 2026-10-17 (owner's go)
+Baseline 19:34:41Z (`~/rlc91/baseline-pre-v93-…`, full dump 5001 entries). Outage 19:35:47–19:36:33Z (46 s); DEPLOYED
+19:36:45Z, schema 93, UI 0.26.0; reconciliation OK (2928 events preserved); ledger, agents, pauses and fuses = baseline.
+Card 1 (saved before v93) shows "No expiry recorded" until the owner enters it again.
