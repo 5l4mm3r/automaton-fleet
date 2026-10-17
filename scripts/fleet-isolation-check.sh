@@ -7,13 +7,17 @@
 #
 #   sudo scripts/fleet-isolation-check.sh          exit 0: every unit reads only its own configuration
 #
-# A unit's own files: the paths its unit file names (EnvironmentFile / LoadCredential are read by systemd, before the
+# A unit's own files: those it owns or reads through its own group; the paths its unit file names (EnvironmentFile / LoadCredential are read by systemd, before the
 # namespace) and the paths its own environment files name (files the service opens itself, e.g. a TLS key). Units that run as root by design (the edge's
 # nginx master, backups) are listed and skipped: root reads by permission everything it can see.
 set -uo pipefail
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 2; }
 CONF=/etc/automaton-fleet; bad=0; n=0
 mapfile -t FILES < <(find "$CONF" -type f 2>/dev/null | sort)
+# Public by design (release pins, safety flags, listen addresses, the public certificate's path — no secret): every
+# unit may read them. Any OTHER world-readable file under the directory fails the check.
+public_ok() { case "${1#$CONF/}" in runtime.env|runtime.env.*|founders/*.runtime.env) return 0 ;; esac; return 1; }
+for f in "${FILES[@]}"; do m=$(stat -c '%a' "$f"); if (( m % 10 >= 4 )) && ! public_ok "$f"; then bad=1; echo "  WORLD-READABLE, NOT PUBLIC: ${f#$CONF/} ($m)"; fi; done
 for u in $(systemctl list-units 'automaton-*.service' --state=running --no-legend --plain | awk '{print $1}'); do
   pid=$(systemctl show -p MainPID --value "$u"); [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
   uid=$(awk '/^Uid:/{print $2}' /proc/$pid/status); gid=$(awk '/^Gid:/{print $2}' /proc/$pid/status)
@@ -33,6 +37,13 @@ for u in $(systemctl list-units 'automaton-*.service' --state=running --no-legen
   for f in "${FILES[@]}"; do
     if as_unit test -r "$f" 2>/dev/null; then
       mine=0; while read -r o; do [[ -n "$o" && ( "$f" == "$o" || "$f" == "$o"/* ) ]] && mine=1; done <<< "$own"
+      # Its own by ownership: the file's owner is the unit's user, or its group is one of the unit's groups
+      # (each service's files are root:<its own user> 0640 — e.g. its own earlier backups).
+      read -r fu fg fm <<< "$(stat -c '%u %g %a' "$f")"
+      [[ "$fu" == "$uid" || "$fg" == "$gid" || ",$groups," == *",$fg,"* ]] && mine=1
+      # World-readable files are public configuration; only the known public ones pass (a secret saved with the
+      # wrong mode is still reported below, in the public-files section).
+      (( fm % 10 >= 4 )) && public_ok "$f" && mine=1
       (( mine )) || readable+=("${f#$CONF/}")
     fi
   done
