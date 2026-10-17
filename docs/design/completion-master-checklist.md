@@ -146,9 +146,11 @@ a712be1, schema 81).
 **05cbe4e (v84 – v87) is frozen and rehearsed, but must NOT be deployed as the money-handling release** (the shortfall
 blocker; release-05cbe4e.md §5).
 
-**Next to freeze: `fleet/final-v2.5` (v84 – v90 + UI 0.23.0; 05cbe4e's UI was 0.22.0):**
+**`fleet/final-v2.5` is frozen as f2a1784 (81 → 90 + UI 0.23.0; release-f2a1784.md).** Rehearsals passed
+2026-10-16 23:25:40Z / 2026-10-17 00:17:01Z, valid until **2026-10-17 23:25Z**. It replaces bbfb24a, f47ee1c and 05cbe4e
+as the one release to deploy (your go). As frozen:
 - **Contents:** everything in 05cbe4e, plus the shortfall fix, agent-attributed media, software maintenance on
   demonstrated scope, several cards, reversed chargebacks, the PayPal limitation signal, unit economics and the systemd
   credential fixes.
-- **Then:** its own rehearsals (81 → 90).
+- **Rehearsals:** passed (above).
 - **Still separate:** the host installations and every live proof. Nothing is connected or funded by deploying it.
