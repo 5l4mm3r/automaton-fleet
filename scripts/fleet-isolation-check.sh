@@ -7,8 +7,8 @@
 #
 #   sudo scripts/fleet-isolation-check.sh          exit 0: every unit reads only its own configuration
 #
-# A unit's own files: the env files and credential directories its unit file names (EnvironmentFile / LoadCredential
-# are read by systemd, before the namespace, and need no access at all). Units that run as root by design (the edge's
+# A unit's own files: the paths its unit file names (EnvironmentFile / LoadCredential are read by systemd, before the
+# namespace) and the paths its own environment files name (files the service opens itself, e.g. a TLS key). Units that run as root by design (the edge's
 # nginx master, backups) are listed and skipped: root reads by permission everything it can see.
 set -uo pipefail
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 2; }
@@ -20,7 +20,11 @@ for u in $(systemctl list-units 'automaton-*.service' --state=running --no-legen
   groups=$(awk '/^Groups:/{for(i=2;i<=NF;i++) printf "%s%s", (i>2?",":""), $i}' /proc/$pid/status)
   n=$((n + 1))
   if [[ "$uid" == 0 ]]; then printf '  %-58s %s\n' "$u" "runs as root (by design) — skipped"; continue; fi
-  own=$(systemctl cat "$u" 2>/dev/null | grep -vE '^\s*#|^InaccessiblePaths' | grep -oE "$CONF/[A-Za-z0-9._/-]+" | sort -u)
+  # Its own: paths its unit file names, plus paths its own environment files name (e.g. the controller's TLS key and
+  # cognition key, set in service.env). Only path names are extracted; no value is printed.
+  envs=$(systemctl show -p EnvironmentFiles --value "$u" | grep -oE "$CONF/[A-Za-z0-9._/-]+")
+  own=$( { systemctl cat "$u" 2>/dev/null | grep -vE '^\s*#|^InaccessiblePaths' | grep -oE "$CONF/[A-Za-z0-9._/-]+"
+           for e in $envs; do [[ -f "$e" ]] && grep -oE "$CONF/[A-Za-z0-9._/-]+" "$e"; done; } | sort -u)
   if [[ -n "$groups" ]]; then G=(--groups="$groups"); else G=(--clear-groups); fi
   as_unit() { nsenter -t "$pid" -m -- setpriv --reuid="$uid" --regid="$gid" "${G[@]}" "$@"; }
   # The probe itself must work, or every "cannot read" below would be meaningless.
