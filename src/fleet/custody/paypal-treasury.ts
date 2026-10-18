@@ -68,7 +68,9 @@ export interface PayPalGatewayPort {
   paypalDisputeRecord?(worker: string, disputeId: string, captureId: string, status: string, outcome: string | null, amountMinor: number, currency: string): Promise<CxResult>;
   /** v59: refunds the Fleet requested (only while money-out is activated), and PayPal's answer to each. */
   paypalRefundWork?(worker: string, limit: number): Promise<Array<{ refundRequestId: string; captureId: string; amountMinor: number; currency: string; note: string;
-    invoiceId: string; railId: string; railMode: "live" | "sandbox"; vaultRef: string }>>;
+    invoiceId: string; railId: string; railMode: "live" | "sandbox"; vaultRef: string; retry?: boolean }>>;
+  /** v95: a refused retry after a lost answer — held for reconciliation (the first request may have refunded the buyer). */
+  paypalRefundUnresolved?(worker: string, requestId: string, issue: string): Promise<CxResult>;
   /** v76: open checkouts due a status read, and what PayPal said (optional: an older registry has no such functions). */
   paypalStatusWork?(worker: string, limit: number): Promise<PayPalStatusItem[]>;
   paypalStatusChecked?(worker: string, checkoutId: string, seen: string): Promise<CxResult>;
@@ -435,6 +437,13 @@ export class PayPalTreasuryWorker {
       }
       // 4xx: PayPal refused it (e.g. REFUND_AMOUNT_EXCEEDED, CAPTURE_FULLY_REFUNDED, REFUND_TIME_LIMIT_EXCEEDED).
       const issue = Array.isArray(res.json?.details) && typeof res.json.details[0]?.issue === "string" ? res.json.details[0].issue : `HTTP_${res.status}`;
+      // v95: on a RETRY (the first answer was lost) a refusal can mean the first request already refunded the buyer
+      // (e.g. CAPTURE_FULLY_REFUNDED): never "failed" — that would release the amount for a second refund. Held instead.
+      if (r.retry && this.gw.paypalRefundUnresolved) {
+        await this.gw.paypalRefundUnresolved(this.worker, r.refundRequestId, String(issue).toUpperCase().replace(/[^A-Z0-9_]/g, "_").slice(0, 64));
+        this.log("warn", "paypal_refund_unresolved", { refundRequestId: r.refundRequestId, issue: String(issue).slice(0, 64) });
+        continue;
+      }
       await this.gw.paypalRefundResult(this.worker, r.refundRequestId, "failed", null, null, null, String(issue).toUpperCase().replace(/[^A-Z0-9_]/g, "_").slice(0, 64));
     }
   }

@@ -17,8 +17,10 @@ describe.skipIf(!PG_BIN)("v92 media: unexpected image usage stays unresolved unt
   let R: EconomyRegistry;
   let F: Founder;
   let gw: PgMediaGateway;
+  const searches: string[] = [];   // v95: every search that reached the provider
   const http: MediaHttp = async (url) => url === "https://api.openai.com/v1/images/generations"
     ? { status: 200, headers: { get: () => null }, json: async () => ({ data: [{ b64_json: PNG }], usage: { input_tokens: 600, output_tokens: 1_056, input_tokens_details: { text_tokens: 40, image_tokens: 560 } } }) }
+    : url.includes("search.brave.com") ? (searches.push(url), { status: 200, headers: { get: () => null }, json: async () => ({ web: { results: [{ title: "UK landlord rules", url: "https://www.gov.uk/renting-out-a-property", description: "Gas, electrical and EPC duties." }] } }) })
     : { status: 404, headers: { get: () => null }, json: async () => ({}) };
   const worker = () => new MediaWorker(gw, { search: { provider: new BraveSearch("k".repeat(32), http), unitCostCents: 1 },
     image: { provider: new OpenAiImages("k".repeat(40), http), unitCostCents: 20, tokenPricesUsdPerM: { input: 5, output: 30 } }, names: { search: "brave", image: "openai" } });
@@ -50,6 +52,31 @@ describe.skipIf(!PG_BIN)("v92 media: unexpected image usage stays unresolved unt
     const today = new Date().toISOString().slice(0, 10);
     expect(await R.one<any>(`fleet.fleet_admin_media_statement('openai', $1::date, $1::date, 10, 'usage page', $2)`, [today, OWNER]))
       .toMatchObject({ ok: false, code: "FLEET_MEDIA_COST_UNKNOWN", count: 1 });
+  });
+
+  it("v95: the same search decided again is the same paid job — the provider is asked and the agent charged once; a fresh search of it names the earlier one", async () => {
+    const c0 = await cash();
+    const q = { kind: "search", query: "UK landlord gas safety  EICR intervals", count: 3, purpose: "research" };
+    const s1 = await R.econ(F, "media.request", { ...q, idempotencyKey: "media:call-1" });
+    expect(s1).toMatchObject({ ok: true, operation: { kind: "media.request", ordinal: 1 } });
+    // Decided again after a restart (a new tool call): the same search, no second reservation.
+    const s1b = await R.econ(F, "media.request", { ...q, idempotencyKey: "media:call-2" });
+    expect(s1b).toMatchObject({ ok: true, replay: true, jobId: s1.jobId });
+    // The same subject written differently (case, spacing) is not silently a new paid job either: it is refused and named.
+    const s1c = await R.econ(F, "media.request", { ...q, query: "uk landlord gas safety EICR intervals", idempotencyKey: "media:call-2b" });
+    expect(s1c).toMatchObject({ ok: false, code: "FLEET_OPERATION_EXISTS" });
+    expect(s1c.reason).toContain(s1.operation.operationId);
+    await worker().tick();
+    await worker().tick();
+    expect(searches).toHaveLength(1);
+    expect(await cash()).toBe(c0 - 1);
+    // A deliberate refresh of the same query: a new paid job, named after the earlier one.
+    const s2 = await R.econ(F, "media.request", { ...q, after: s1.operation.operationId, idempotencyKey: "media:call-3" });
+    expect(s2).toMatchObject({ ok: true, operation: { ordinal: 2 } });
+    expect(s2.jobId).not.toBe(s1.jobId);
+    await worker().tick();
+    expect(searches).toHaveLength(2);
+    expect(await cash()).toBe(c0 - 2);
   });
 
   it("resolved once at the actual cost; the statement then counts it once — no duplicate charge", async () => {

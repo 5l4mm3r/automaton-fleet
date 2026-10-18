@@ -16,7 +16,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import crypto from "crypto";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
@@ -29,7 +29,7 @@ describe.skipIf(!PG_BIN)("v54: card requests — PayPal first, the card last (Po
   let su: pg.Pool;
   let account = "";
   const events = async (type: string) => Number((await R.q(`SELECT count(*) AS n FROM fleet.fleet_events WHERE event_type = $1`, [type]))[0].n);
-  const ask = (args: Record<string, unknown>) => R.econ(F, "card.request", { accountId: account, merchant: "Shop Ltd", paypalUnavailable: "card_only_merchant",
+  const ask = (args: Record<string, unknown>) => econNext(R, F, "card.request", { accountId: account, merchant: "Shop Ltd", paypalUnavailable: "card_only_merchant",
     purpose: "the domain for my storefront", ...args });
   // A request waiting on the owner, as v54–v63 created them above the threshold (v64 no longer creates any).
   const legacyPending = async (amountMinor: number, purpose = "a purchase above the old owner threshold") => {
@@ -97,7 +97,10 @@ describe.skipIf(!PG_BIN)("v54: card requests — PayPal first, the card last (Po
     const used = (await R.econ(F, "card.requests")).requests.find((x: any) => x.requestId === r.requestId);
     expect(used).toMatchObject({ status: "used", chargeId: h.charge.chargeId });
     expect(await R.econ(F, "card.void", { chargeId: h.charge.chargeId })).toMatchObject({ ok: true });
-    expect((await R.econ(F, "card.authorize", { requestId: r.requestId, accountId: account, merchant: "Shop Ltd", maxMinor: 100 })).code).toBe("FLEET_CARD_REQUEST_NOT_APPROVED");
+    // v95: a second hold on this request is refused twice over — the request's one hold is already its operation, and,
+    // asked as a further operation, the request itself is used up.
+    expect((await R.econ(F, "card.authorize", { requestId: r.requestId, accountId: account, merchant: "Shop Ltd", maxMinor: 100 })).code).toBe("FLEET_OPERATION_EXISTS");
+    expect((await econNext(R, F, "card.authorize", { requestId: r.requestId, accountId: account, merchant: "Shop Ltd", maxMinor: 100 })).code).toBe("FLEET_CARD_REQUEST_NOT_APPROVED");
   });
 
   it("a request left with the owner (pre-v64) is decided by the owner — funding the card first; the transfer becomes the charge's repayment once booked", async () => {

@@ -13,7 +13,7 @@ import os from "os";
 import path from "path";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
 import { liveRail, type ArmedCustody } from "./fixtures/custody-signer.js";
 import { PgIdentityGateway } from "../../fleet/identity/gateway.js";
 import { IdentityBroker } from "../../fleet/identity/broker.js";
@@ -99,7 +99,7 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
   it("the preparation hold is the default: no public site and sales closed hold outward actions; reading and rendering continue; the owner releases one agent", async () => {
     expect(await R.one(`fleet.fleet_preparation_hold()`)).toBe(true); // no public site at all
     const held = { ok: false, code: "FLEET_PREPARATION_HOLD" };
-    expect(await R.econ(F, "mail.send", { to: "someone@example.test", subject: "Hi", body: "Hello", idempotencyKey: idem() })).toMatchObject(held);
+    expect(await econNext(R, F, "mail.send", { to: "someone@example.test", subject: "Hi", body: "Hello", idempotencyKey: idem() })).toMatchObject(held);
     expect(await R.econ(F, "account.register", { platform: "example.com", kind: "marketplace", origin: "https://example.com" })).toMatchObject(held);
     const s = await ok(R.econ(F, "browser.open", { url: "https://example.com/" })); // reading is preparation
     expect((await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "goto", url: "https://example.com/a" }, { action: "scroll", to: "bottom" },
@@ -122,7 +122,7 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     const reg = await ok(R.econ(F, "account.register", { platform: "example.com", kind: "marketplace", origin: "https://example.com" }));
     expect(await R.econ(F, "account.register", { platform: "other.example", kind: "marketplace", origin: "https://other.example" })).toMatchObject(held);
     expect(await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "click", text: "Sign up" }] })).toMatchObject(held); // browser not in scope
-    expect(await R.econ(G, "mail.send", { to: "someone@example.test", subject: "Hi", body: "Hello", idempotencyKey: idem() })).toMatchObject(held);
+    expect(await econNext(R, G, "mail.send", { to: "someone@example.test", subject: "Hi", body: "Hello", idempotencyKey: idem() })).toMatchObject(held);
     expect(await R.one(`fleet.fleet_sales_open()`)).toBe(false);
     await R.q(`SELECT fleet.fleet_admin_outward_hold($1, $2)`, [F.id, OWNER]);
     expect(await R.econ(F, "account.register", { platform: "example.com", kind: "marketplace", origin: "https://example.com" })).toMatchObject(held);
@@ -232,11 +232,11 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     await R.q(`SELECT fleet.fleet_admin_public_site_set('https://shop.fleet.test', NULL, $1)`, [OWNER]);
     // While sales are closed every outward action of an unreleased agent waits (the preparation hold) — outreach included.
     await R.q(`SELECT fleet.fleet_admin_sales_set(false, $1)`, [OWNER]);
-    expect((await R.econ(F, "mail.send", { ventureKey: "ledgers", to: "x@studio-nine.test", subject: "s", body: "b", idempotencyKey: idem() })).code).toBe("FLEET_PREPARATION_HOLD");
+    expect((await econNext(R, F, "mail.send", { ventureKey: "ledgers", to: "x@studio-nine.test", subject: "s", body: "b", idempotencyKey: idem() })).code).toBe("FLEET_PREPARATION_HOLD");
     await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
     await ok(R.econ(F, "mailbox.provision", { ventureKey: "ledgers", idempotencyKey: idem() }));
     await broker.tick();
-    const mail = (a: Record<string, unknown>) => R.econ(F, "mail.send", { ventureKey: "ledgers", subject: "A free cash-flow template for your studio", body: "Hello — …", idempotencyKey: idem(), ...a });
+    const mail = (a: Record<string, unknown>) => econNext(R, F, "mail.send", { ventureKey: "ledgers", subject: "A free cash-flow template for your studio", body: "Hello — …", idempotencyKey: idem(), ...a });
     expect((await mail({ to: "owner@studio-nine.test", outreach: true, basis: "b2b_legitimate_interest", recipientType: "business" })).code).toBe("FLEET_OUTREACH_IDENTITY");
     await R.q(`SELECT fleet.fleet_admin_seller_set($1::jsonb, $2)`, [JSON.stringify({ legalForm: "individual", legalName: "Test Owner", postalAddress: "1 Test Street, Testtown" }), OWNER]);
     expect((await mail({ to: "sam@example.test", outreach: true, basis: "b2b_legitimate_interest", recipientType: "individual" })).code).toBe("FLEET_OUTREACH_BASIS");
@@ -253,7 +253,7 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     expect((await mail({ to: "owner@studio-nine.test" })).code).toBe("FLEET_OUTREACH_SUPPRESSED");
     await ok(R.econ(G, "mailbox.provision", { ventureKey: "prints", idempotencyKey: idem() }));
     await broker.tick();
-    expect((await R.econ(G, "mail.send", { to: "owner@studio-nine.test", subject: "Prints", body: "hi", idempotencyKey: idem() })).code).toBe("FLEET_OUTREACH_SUPPRESSED");
+    expect((await econNext(R, G, "mail.send", { to: "owner@studio-nine.test", subject: "Prints", body: "hi", idempotencyKey: idem() })).code).toBe("FLEET_OUTREACH_SUPPRESSED");
     expect(await ok(R.econ(G, "outreach.check", { address: "OWNER@studio-nine.test" }))).toMatchObject({ suppressed: true, contactedByYou: 0 });
     await ok(R.econ(F, "outreach.suppress", { address: "stop@example.test", reason: "requested" }));
     expect((await mail({ to: "stop@example.test" })).code).toBe("FLEET_OUTREACH_SUPPRESSED");

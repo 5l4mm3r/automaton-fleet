@@ -311,8 +311,9 @@ export class FleetApiClient implements FleetBackend {
    * The controller checks custody only (reserved, or rejected with a precise custody category; never an owner
    * route); nothing is executed by this call.
    */
-  async spendOrder(r: { idempotencyKey: string; amountCents: number; category: "expense" | "fee" | "asset_acquisition" | "conway_credits"; destinationId: string; purpose: string; recoverableCents?: number }) {
-    return this.call<{ ok: boolean; code: string | null; custody?: string | null; order: Record<string, unknown> | null; replay: boolean; executed: false }>("POST", "/v1/spend/request", r);
+  async spendOrder(r: { idempotencyKey: string; amountCents: number; category: "expense" | "fee" | "asset_acquisition" | "conway_credits"; destinationId: string; purpose: string; recoverableCents?: number; after?: string }) {
+    return this.call<{ ok: boolean; code: string | null; custody?: string | null; order: Record<string, unknown> | null; replay: boolean; executed: false;
+      operation?: Record<string, unknown> | null; note?: string | null }>("POST", "/v1/spend/request", r);
   }
 
   async cancelSpendOrder(orderId: string) {
@@ -361,7 +362,7 @@ export class FleetApiClient implements FleetBackend {
   }
 
   /** Schema v26 (F2-A): record ONE action that needs a human/legal identity or a constitutional change (blocks only that action). */
-  async ownerRequestCreate(r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string }) {
+  async ownerRequestCreate(r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string; after?: string }) {
     return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/create", r);
   }
 

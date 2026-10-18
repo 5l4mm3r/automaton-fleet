@@ -14,7 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
 import { liveRail } from "./fixtures/custody-signer.js";
 import { generateX25519, sealTo } from "../../fleet/identity/crypto.js";
 import { cardField, factField } from "../../fleet/identity/broker.js";
@@ -62,7 +62,7 @@ describe.skipIf(!PG_BIN)("v49 identity autonomy, card holds, footprint and freez
 
   // v54: the card only under an approved request (PayPal first); small amounts are approved by Fleet Control at once.
   const approved = async (who: Founder, args: Record<string, any>) => {
-    const r = await R.econ(who, "card.request", { accountId: args.accountId, merchant: args.merchant, amountMinor: args.maxMinor, paypalUnavailable: "card_only_merchant",
+    const r = await econNext(R, who, "card.request", { accountId: args.accountId, merchant: args.merchant, amountMinor: args.maxMinor, paypalUnavailable: "card_only_merchant",
       purpose: args.purpose ?? "a purchase the treasury PayPal cannot pay", ...(args.envelopeId ? { envelopeId: args.envelopeId } : {}) });
     expect(r.ok, JSON.stringify(r)).toBe(true);
     expect(r.request.status).toBe("approved");
@@ -255,6 +255,31 @@ describe.skipIf(!PG_BIN)("v49 identity autonomy, card holds, footprint and freez
     const h2 = await R.econ(F, "card.authorize", await approved(F, { accountId: account, merchant: "Card One Shop", maxMinor: 60, purpose: "card one again" }));
     expect(await R.one(`(SELECT card_slot FROM fleet.fleet_card_charges WHERE charge_id = $1)`, [h2.charge.chargeId])).toBe("payment_card");
     expect((await R.econ(F, "card.void", { chargeId: h2.charge.chargeId })).charge.status).toBe("void");
+  });
+
+  it("v95: a card request decided again is the same request; each card field is entered once per hold — a second checkout needs a new hold", async () => {
+    await autonomy({ card: true, max: 5_000, daily: 50_000 });
+    const args = { accountId: account, merchant: "Shop Ltd", amountMinor: 900, paypalUnavailable: "card_only_merchant", purpose: "a font licence for the storefront" };
+    const first = await econNext(R, F, "card.request", args);             // earlier purchases at this site: a further request
+    expect(first).toMatchObject({ ok: true, request: { status: "approved" } });
+    // The same purchase decided again (a restart): the same request, not a second approval.
+    const again = await R.econ(F, "card.request", { ...args, ...(first.operation.after ? { after: first.operation.after } : {}) });
+    expect(again).toMatchObject({ ok: true, replay: true, request: { requestId: first.request.requestId } });
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_card_requests WHERE agent_id = $1 AND purpose = $2`, [F.id, args.purpose]))[0].n).toBe(1);
+    for (const h of await R.q(`SELECT charge_id FROM fleet.fleet_card_charges WHERE agent_id = $1 AND status = 'held' AND origin = $2`, [F.id, SHOP]))
+      await R.econ(F, "card.void", { chargeId: h.charge_id }).then((r) => (r.ok ? r : R.econ(F, "card.declare", { chargeId: h.charge_id, amountMinor: 0 })));
+    const hold = await R.econ(F, "card.authorize", { requestId: first.request.requestId, accountId: account, merchant: "Shop Ltd", maxMinor: 900, purpose: "font licence" });
+    expect(hold, JSON.stringify(hold)).toMatchObject({ ok: true, charge: { status: "held" } });
+    const a1 = await claim();
+    expect(await ask(a1, "owner_card:number")).toMatchObject({ ok: true });
+    expect(await ask(a1, "owner_card:number")).toMatchObject({ ok: false, code: "FLEET_CARD_ALREADY_FILLED" });   // the same field again
+    expect(await ask(a1, "owner_card:cvc")).toMatchObject({ ok: true });                                         // another field: the same checkout
+    await close(a1);
+    const a2 = await claim();                                                                                   // a second checkout on the same hold
+    expect(await ask(a2, "owner_card:number")).toMatchObject({ ok: false, code: "FLEET_CARD_ALREADY_FILLED" });
+    await close(a2);
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_identity_uses WHERE charge_id = $1 AND field = 'number'`, [hold.charge.chargeId]))[0].n).toBe(1);
+    expect(await R.econ(F, "card.declare", { chargeId: hold.charge.chargeId, amountMinor: 900 })).toMatchObject({ ok: true });
   });
 
   it("the audit stays clean; the ledger verifies", async () => {

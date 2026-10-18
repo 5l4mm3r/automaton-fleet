@@ -12,7 +12,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
 import { liveRail, type ArmedCustody } from "./fixtures/custody-signer.js";
 import { PgCustodyGateway } from "../../fleet/custody/gateway.js";
 import { PayPalTreasuryWorker } from "../../fleet/custody/paypal-treasury.js";
@@ -106,16 +106,16 @@ describe.skipIf(!PG_BIN)("v59: refunds initiated by the Fleet (PostgreSQL + cust
     for (const [p, ts] of Object.entries(EVENT_ROUTES_V59)) for (const t of ts) expect(await R.one(`fleet.fleet_event_route($1, '{}'::jsonb)`, [t]), t).toBe(p === "P3_INFO" ? "P3_SUMMARY" : p); // v62: P3_INFO never reached Fleet Command
     const s = await sale(1_000);
     expect(await R.econ(G, "order.refund", { orderId: s.orderId, reason: "not mine", idempotencyKey: idem() })).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
-    expect(await R.econ(F, "order.refund", { orderId: s.orderId, amountMinor: 1_001, reason: "too much", idempotencyKey: idem() }))
+    expect(await econNext(R, F, "order.refund", { orderId: s.orderId, amountMinor: 1_001, reason: "too much", idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_REFUND_EXCEEDS_REFUNDABLE", refundableMinor: 1_000 });
     const sp0 = await spendable();
     const key = idem();
-    const r = await R.econ(F, "order.refund", { orderId: s.orderId, amountMinor: 400, reason: "arrived damaged", idempotencyKey: key });
+    const r = await econNext(R, F, "order.refund", { orderId: s.orderId, amountMinor: 400, reason: "arrived damaged", idempotencyKey: key });
     expect(r).toMatchObject({ ok: true, refund: { status: "requested", amountMinor: 400 }, refundableAfterMinor: 600 });
     expect(r.note).toMatch(/once money-out is activated/);
-    expect(await R.econ(F, "order.refund", { orderId: s.orderId, amountMinor: 400, reason: "arrived damaged", idempotencyKey: key })).toMatchObject({ ok: true, replay: true });
+    expect(await econNext(R, F, "order.refund", { orderId: s.orderId, amountMinor: 400, reason: "arrived damaged", idempotencyKey: key })).toMatchObject({ ok: true, replay: true });
     expect(await spendable()).toBe(sp0 - 400);
-    expect(await R.econ(F, "order.refund", { orderId: s.orderId, amountMinor: 700, reason: "and the rest", idempotencyKey: idem() }))
+    expect(await econNext(R, F, "order.refund", { orderId: s.orderId, amountMinor: 700, reason: "and the rest", idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_REFUND_EXCEEDS_REFUNDABLE", refundableMinor: 600 });
   });
 
@@ -153,14 +153,14 @@ describe.skipIf(!PG_BIN)("v59: refunds initiated by the Fleet (PostgreSQL + cust
     const s = await sale(900);
     const sp0 = await spendable();
     pp.set("refuse");
-    expect((await R.econ(F, "order.refund", { orderId: s.orderId, amountMinor: 300, reason: "late delivery", idempotencyKey: idem() })).ok).toBe(true);
+    expect((await econNext(R, F, "order.refund", { orderId: s.orderId, amountMinor: 300, reason: "late delivery", idempotencyKey: idem() })).ok).toBe(true);
     await worker.tick();
     expect(await request(s.orderId)).toMatchObject({ status: "failed", failure_code: "REFUND_AMOUNT_EXCEEDED" });
     expect(await spendable()).toBe(sp0);
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'order_refund_failed')`))).toBe(1);
     // Unknown, then retried (after the 10-minute wait) with the same PayPal-Request-Id.
     pp.set("error");
-    expect((await R.econ(F, "order.refund", { orderId: s.orderId, reason: "customer asked", idempotencyKey: idem() })).refund.amountMinor).toBe(900);
+    expect((await econNext(R, F, "order.refund", { orderId: s.orderId, reason: "customer asked", idempotencyKey: idem() })).refund.amountMinor).toBe(900);
     await worker.tick();
     expect((await request(s.orderId)).status).toBe("sent");
     pp.set("ok");
@@ -174,7 +174,7 @@ describe.skipIf(!PG_BIN)("v59: refunds initiated by the Fleet (PostgreSQL + cust
     expect((await request(s.orderId)).status).toBe("completed");
     expect(await cash()).toBe(c0 - 900);
     expect(await posted(s.checkoutId)).toBe(900);
-    expect(await R.econ(F, "order.refund", { orderId: s.orderId, amountMinor: 1, reason: "again", idempotencyKey: idem() })).toMatchObject({ code: "FLEET_REFUND_EXCEEDS_REFUNDABLE" });
+    expect(await econNext(R, F, "order.refund", { orderId: s.orderId, amountMinor: 1, reason: "again", idempotencyKey: idem() })).toMatchObject({ code: "FLEET_REFUND_EXCEEDS_REFUNDABLE" });
     // The owner refunds another sale; owner-only.
     const o = await sale(500);
     expect(await R.code(R.q(`SELECT fleet.fleet_admin_order_refund($1, NULL, 'goodwill', 'agent')`, [o.orderId]))).toBe("FLEET_APPROVAL_REQUIRED");

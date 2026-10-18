@@ -77,6 +77,9 @@ export class BrowserWorker {
   private readonly key = generateX25519();
   private readonly hosts: HostResolutionPolicy;
 
+  /** v95: the start-up sweep of actions claimed before this process ran has been done. */
+  private swept = false;
+
   constructor(private readonly gw: BrowserGatewayPort, private readonly o: BrowserWorkerOptions) {
     this.worker = o.worker ?? "browser-worker";
     if (!/^[a-z0-9_.-]{1,64}$/.test(this.worker)) throw new Error("worker name must match ^[a-z0-9_.-]{1,64}$");
@@ -415,6 +418,13 @@ export class BrowserWorker {
 
   async tick(max = 5): Promise<number> {
     let n = 0;
+    // v95: sessions live in this process, so after a (re)start every action still claimed lost its answer; later, any
+    // claimed beyond the lost-answer window. One with an outward step becomes uncertain (never re-run); a read fails.
+    if (this.gw.actionsLost) {
+      const lost = await this.gw.actionsLost(this.worker, !this.swept).catch(() => null);
+      if (lost?.ok) this.swept = true;
+      if (lost && (Number(lost.uncertain) || Number(lost.failed))) this.o.log?.("warn", "browser_actions_lost", { uncertain: lost.uncertain ?? 0, failed: lost.failed ?? 0 });
+    }
     for (let i = 0; i < max; i++) {
       const lease = crypto.randomBytes(32).toString("base64url");
       const c = await this.gw.claim(this.worker, crypto.createHash("sha256").update(lease, "utf8").digest("hex"));

@@ -48,6 +48,8 @@ export interface ProtonBridgeOptions {
   /** Bridge's connection mode: STARTTLS (its default) or implicit TLS. */
   security?: "starttls" | "ssl";
   mailbox?: string;
+  /** v95: the folder Bridge files sent mail in (reconciliation of a lost answer). */
+  sentMailbox?: string;
   /** Messages larger than this are delivered as a notice, not parsed. */
   maxMessageBytes?: number;
   /** Tests: injected clients (the real ones are ImapFlow and a nodemailer SMTP transport). */
@@ -70,6 +72,22 @@ function code(err: unknown, fallback: string): string {
   if (/CERT|TLS|SSL|self.signed|pin/i.test(`${e?.code ?? ""} ${e?.message ?? ""}`)) return "FLEET_MAIL_PROVIDER_TLS";
   if (/ECONNREFUSED|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|ENOTFOUND/.test(`${e?.code ?? ""} ${e?.message ?? ""}`)) return "FLEET_MAIL_PROVIDER_CONNECT";
   return fallback;
+}
+
+/**
+ * v95: whether a failed SMTP send may still have been accepted. A server answer (a response code), a refused login,
+ * envelope or message, or a failure before the transaction (connect, greeting, TLS, authentication) means nothing was
+ * accepted. A timeout or a broken connection during the transaction may have come after the message was handed over:
+ * its outcome is not known, and the job is reconciled against the Sent folder instead of being failed or re-sent.
+ */
+export function smtpOutcomeUnknown(err: unknown): boolean {
+  const e = err as { responseCode?: number; code?: string; command?: string } | null;
+  if (!e || typeof e !== "object") return true;
+  if (typeof e.responseCode === "number") return false;
+  if (["EAUTH", "EENVELOPE", "EMESSAGE", "EDNS", "ETLS"].includes(String(e.code ?? ""))) return false;
+  if (/^(CONN|EHLO|HELO|STARTTLS|AUTH\b.*)$/i.test(String(e.command ?? ""))) return false;
+  if (/ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|CERT|TLS|SSL/.test(String(e.code ?? ""))) return false;
+  return true;
 }
 
 function addresses(a: AddressObject | AddressObject[] | undefined): string[] {
@@ -203,9 +221,29 @@ export class ProtonBridgeMailProvider implements MailProvider {
         envelope: { from: this.address, to: input.to }, disableFileAccess: true, disableUrlAccess: true });
       return { providerMessageId: String(info.messageId ?? messageId), externalMessageId: messageId };
     } catch (err) {
-      throw new Error(code(err, "FLEET_MAIL_PROVIDER_SEND"));
+      throw new Error(smtpOutcomeUnknown(err) ? "FLEET_MAIL_SEND_UNCERTAIN" : code(err, "FLEET_MAIL_PROVIDER_SEND"));
     } finally {
       t.close?.();
+    }
+  }
+
+  /** v95: whether a message with this Message-ID is in the Sent folder (Proton keeps every message sent through Bridge). */
+  async sentByMessageId(messageId: string): Promise<boolean> {
+    if (!/^<[^<>\s]{3,300}>$/.test(messageId)) throw new Error("FLEET_BAD_REQUEST");
+    const c = this.imap();
+    try {
+      await c.connect();
+    } catch (err) {
+      throw new Error(code(err, "FLEET_MAIL_PROVIDER_CONNECT"));
+    }
+    try {
+      await c.mailboxOpen(this.o.sentMailbox ?? "Sent", { readOnly: true });
+      const found = await c.search({ header: { "message-id": messageId } }, { uid: true });
+      return Array.isArray(found) && found.length > 0;
+    } catch (err) {
+      throw new Error(code(err, "FLEET_MAIL_PROVIDER_IMAP"));
+    } finally {
+      await c.logout().catch(() => undefined);
     }
   }
 

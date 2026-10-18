@@ -142,7 +142,7 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
                       FROM fleet.fleet_owner_requests WHERE status <> 'retired' ORDER BY seq`)).toEqual(before.filter((r) => r.request_id !== ids.channel && r.request_id !== ids.spend));
     expect((await store.auditPrivileges()).problems).toEqual([]);
     expect(await q(`SELECT to_regprocedure('fleet.api_owner_request_create(text,text,text,text,text,text,text,boolean)') IS NULL AS old_gone,
-                           to_regprocedure('fleet.api_owner_request_create(text,text,text,text,text,text,text,text)') IS NOT NULL AS new_there,
+                           to_regprocedure('fleet.api_owner_request_create(text,text,text,text,text,text,text,text,uuid)') IS NOT NULL AS new_there, -- v95: + after (default NULL)
                            to_regprocedure('fleet.fleet_owner_request_import(uuid,text,boolean,text,text)') IS NULL AS old_import_gone`)).toEqual([{ old_gone: true, new_there: true, old_import_gone: true }]);
   });
 
@@ -226,7 +226,9 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
       "fleet_admin_agent_thread", "fleet_agent_attention",
       // v94: the owner's supersession of a RESOLVED request (records the current decision once; the request never changes)
       // — a member of the family that gates nothing: an open request is refused (decide it instead).
-      "fleet_admin_owner_request_supersede"]);
+      "fleet_admin_owner_request_supersede",
+      // v95: the founder API's own body, behind its durable-operation wrapper (the same function, renamed).
+      "fleet_owner_request_create_core"]);
     expect(readers.length).toBeGreaterThan(0);
     for (const fn of ["fleet_admin_agent_thread", "fleet_agent_attention"]) {
       expect((await q(`SELECT p.provolatile AS v FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'fleet' AND p.proname = $1`, [fn])).map((r) => r.v), fn)

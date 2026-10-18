@@ -91,6 +91,11 @@ export interface IdentityGatewayPort {
   phoneRecord2(job: string, lease: string, e164: string, provider: string, providerRef: string, monthlyMicro: number | null, currency: string | null): Promise<IxResult>;
   smsCostsPending(worker: string): Promise<Array<{ smsId: string; providerMessageId: string; provider: string }>>;
   smsCost(worker: string, smsId: string, priceMicro: number, currency: string): Promise<IxResult>;
+  // v95 (optional for in-memory test gateways): a lost answer is uncertain, never re-sent blindly; mail is reconciled.
+  jobsLost?(): Promise<IxResult & { uncertain?: number }>;
+  jobUncertain?(job: string, lease: string, note: string): Promise<IxResult>;
+  uncertainMail?(): Promise<Array<{ jobId: string; agentId: string; attempts: number; reconcile: Record<string, unknown> | null }>>;
+  reconcileMail?(job: string, found: "sent" | "absent" | "unknowable", externalId: string | null): Promise<IxResult & { status?: string }>;
   // v51 (optional for in-memory test gateways): provider secrets sealed to the broker from the dashboard.
   providerSecretInbox?(worker: string): Promise<Array<{ uploadId: string; name: string; sealedB64: string }>>;
   providerSecretInstalled?(uploadId: string, worker: string, ok: boolean, error: string | null): Promise<IxResult>;
@@ -173,6 +178,12 @@ export class PgIdentityGateway implements IdentityGatewayPort {
     return this.call<IxResult>("ix_mail_deliver2", [worker, address, sender, subject, body, withheld, providerId]);
   }
   mailSent(job: string, lease: string, providerId: string | null, ok: boolean) { return this.call<IxResult>("ix_mail_sent", [job, lease, providerId, ok]); }
+  jobsLost() { return this.call<IxResult & { uncertain?: number }>("ix_jobs_lost", []); }
+  jobUncertain(job: string, lease: string, note: string) { return this.call<IxResult>("ix_job_uncertain", [job, lease, note]); }
+  uncertainMail() { return this.call<Array<{ jobId: string; agentId: string; attempts: number; reconcile: Record<string, unknown> | null }>>("ix_uncertain_mail", []); }
+  reconcileMail(job: string, found: "sent" | "absent" | "unknowable", externalId: string | null) {
+    return this.call<IxResult & { status?: string }>("ix_reconcile_mail", [job, found, externalId]);
+  }
   phoneRecord(job: string, lease: string, e164: string, provider: string, providerRef: string, monthlyMinor: number | null, currency: string | null) {
     return this.call<IxResult>("ix_phone_record", [job, lease, e164, provider, providerRef, monthlyMinor, currency]);
   }

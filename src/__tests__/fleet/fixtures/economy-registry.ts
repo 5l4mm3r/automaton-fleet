@@ -86,6 +86,26 @@ export async function startEconomyRegistry(pgBin: string, opts: { founders?: num
   };
 }
 
+/**
+ * v95: a further operation on a subject that already has one — as an agent does it: the refusal names the latest
+ * operation on that subject (`after: "<id>"`), and the request is repeated once naming it. For suites whose subject is
+ * not duplicate protection (it is tested in fleet-v95-durable-operations-pg); a replay or any other answer is returned as is.
+ */
+export async function econNext(R: EconomyRegistry, who: Founder, op: string, args: Record<string, unknown> = {}): Promise<Record<string, any>> {
+  const r = await R.econ(who, op, args);
+  if (r.code !== "FLEET_OPERATION_EXISTS") return r;
+  const latest = /after: "([0-9a-f-]{36})"/.exec(String(r.reason))?.[1];
+  return latest ? R.econ(who, op, { ...args, after: latest }) : r;
+}
+
+/** v95: the same for an own-capital order (the positional spend API): a further order to the same payee names the latest. */
+export async function spendNext(R: EconomyRegistry, who: Founder, r: Parameters<PgAgentGateway["spendRequest"]>[2]): Promise<Record<string, any>> {
+  const x = await R.gw.spendRequest(who.id, who.token, r);
+  if (x.code !== "FLEET_OPERATION_EXISTS") return x;
+  const latest = /after: "([0-9a-f-]{36})"/.exec(String(x.reason))?.[1];
+  return latest ? R.gw.spendRequest(who.id, who.token, { ...r, after: latest }) : x;
+}
+
 /** A runtime probe with every deliverable library present (renderer / OCR not installed), as a founder-v10 runtime reports it. */
 export const READY_RUNTIME = Object.freeze({ toolset: "toolset-6", renderer: "", ocr: "", libraries: {
   spreadsheets: ["openpyxl 3.1.5"], documents: ["docx 1.1.2"], presentations: ["pptx 1.0.2"], pdf: ["reportlab 4.2.5"], ebooks: ["ebooklib 0.20"], images: ["PIL 11.0.0"] } });

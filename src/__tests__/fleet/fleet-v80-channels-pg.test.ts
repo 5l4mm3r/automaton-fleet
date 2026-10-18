@@ -188,6 +188,40 @@ describe.skipIf(!PG_BIN)("v80 scoped releases, discovery and the official-API ch
     expect((await R.q(`SELECT count(*)::int n FROM fleet.fleet_channel_jobs WHERE blob IS NOT NULL`))[0].n).toBe(0); // files dropped once done
   });
 
+  it("v95: a listing whose answer was lost is uncertain — never created twice; the same request replays it; a further one waits for the agent's reconciliation", async () => {
+    const args = { title: "Invoice tracker for freelancers", description: "A tested spreadsheet that tracks every invoice and the day it falls due.", priceMinor: 900, taxonomyId: 2078 };
+    const creates = () => fake.calls.filter((x) => x.method === "POST" && /\/shops\/[^/]+\/listings$/.test(x.url)).length;
+    // This channel already has a listing (the test above): a further one names the latest listing operation on it.
+    const subject = `channel:${etsyChannel}:etsy.listing.create`;
+    const latest = (await ok(R.econ(F, "operation.list", { kind: "channel.api", subject }))).operations[0];
+    expect(await R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.listing.create", args, idempotencyKey: idem() })).toMatchObject({ ok: false, code: "FLEET_OPERATION_EXISTS" });
+    const create = await ok(R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.listing.create", args, after: latest.operationId, idempotencyKey: idem() }));
+    expect(create.operation).toMatchObject({ kind: "channel.api", ordinal: 2 });
+    // The gateway claimed it and died before recording Etsy's answer (its lease expired): the listing may exist.
+    await R.q(`UPDATE fleet.fleet_channel_jobs SET status = 'claimed', claimed_by = 'dead-gateway', claimed_at = now() - interval '11 minutes', attempts = 1, lease_sha256 = $2 WHERE job_id = $1`,
+      [create.job.jobId, "b".repeat(64)]);
+    const c0 = creates();
+    await worker.tick();
+    expect(creates()).toBe(c0);                                   // never run again (before v95: re-queued and posted again)
+    expect((await R.q(`SELECT status FROM fleet.fleet_channel_jobs WHERE job_id = $1`, [create.job.jobId]))[0].status).toBe("uncertain");
+    expect((await ok(R.econ(F, "operation.status", { operationId: create.operation.operationId }))).operation.status).toBe("uncertain");
+    // The same listing decided again: the same operation. Another listing on this channel: waits until it is reconciled.
+    expect(await R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.listing.create", args, after: latest.operationId, idempotencyKey: idem() }))
+      .toMatchObject({ ok: true, replay: true, job: { jobId: create.job.jobId } });
+    const next = { ...args, title: "Quote builder for freelancers" };
+    expect(await R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.listing.create", args: next, after: create.operation.operationId, idempotencyKey: idem() }))
+      .toMatchObject({ ok: false, code: "FLEET_OPERATION_UNCERTAIN" });
+    await worker.tick();
+    expect(creates()).toBe(c0);
+    // The agent looks at its shop and records what it saw; a further listing is then a new operation, posted once.
+    await ok(R.econ(F, "operation.resolve", { operationId: create.operation.operationId, outcome: "happened",
+      evidence: "The shop's draft listings show 'Invoice tracker for freelancers' (created just before the gateway stopped)." }));
+    const second = await ok(R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.listing.create", args: next, after: create.operation.operationId, idempotencyKey: idem() }));
+    expect(second.operation.ordinal).toBe(3);
+    await worker.tick();
+    expect(creates()).toBe(c0 + 1);
+  });
+
   it("Etsy evidence: receipts become sale memos, payouts become claims on the owner's chain (once each); tokens refresh in place", async () => {
     store.write("vault:etsy/ledgerline", token("etsy", 60_000)); // expiring: refreshed before use
     now += 31 * 60_000;
@@ -236,7 +270,9 @@ describe.skipIf(!PG_BIN)("v80 scoped releases, discovery and the official-API ch
     expect(await owner(`SELECT fleet.fleet_admin_outward_release($1, $2::jsonb, 'proof', $3) AS r`, [G.id, JSON.stringify({ actions: ["channel_api"], channels: [pinChannel], expiresHours: 1 }), OWNER]))
       .toMatch(/names this agent's channels/);
     expect(await owner(`SELECT fleet.fleet_admin_channel_disconnect($1, $2) AS r`, [pinChannel, OWNER])).toMatchObject({ ok: true, disconnected: true });
-    expect((await R.econ(F, "channel.api", { channelId: pinChannel, op: "pinterest.board.create", args: { name: "x" }, idempotencyKey: idem() })).code).toBe("FLEET_CHANNEL_API_NOT_CONNECTED");
+    // (v95: a further board on this channel names the latest one; without it the request is the existing board's.)
+    expect((await R.econ(F, "channel.api", { channelId: pinChannel, op: "pinterest.board.create", args: { name: "x" }, idempotencyKey: idem() })).code).toBe("FLEET_OPERATION_EXISTS");
+    expect((await R.econ(F, "channel.api", { channelId: pinChannel, op: "pinterest.board.create", args: { name: "x" }, after: b.operation.operationId, idempotencyKey: idem() })).code).toBe("FLEET_CHANNEL_API_NOT_CONNECTED");
   });
 
   it("onboarding: the authorisation URL asks for exactly the required scopes with PKCE; the exchange refuses other scopes and an unknown state", async () => {

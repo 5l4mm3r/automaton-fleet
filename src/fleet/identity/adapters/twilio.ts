@@ -198,8 +198,16 @@ export class TwilioSmsProvider implements SmsProvider {
   }
 
   async send(input: { from: string; to: string; body: string }) {
-    const r = await this.req(this.acct("/Messages.json"), { method: "POST", body: new URLSearchParams({ From: input.from, To: input.to, Body: input.body }),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+    // v95: no answer (a network error) or a server error may come after Twilio accepted the message: its outcome is not
+    // known (uncertain, never re-sent blindly). A 4xx is Twilio's refusal: nothing was sent.
+    let r: { status: number; json: Record<string, any> };
+    try {
+      r = await this.req(this.acct("/Messages.json"), { method: "POST", body: new URLSearchParams({ From: input.from, To: input.to, Body: input.body }),
+        headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+    } catch {
+      throw new Error("FLEET_SMS_SEND_UNCERTAIN");
+    }
+    if (r.status >= 500) throw new Error("FLEET_SMS_SEND_UNCERTAIN");
     if (r.status >= 300) throw new Error(`FLEET_SMS_PROVIDER_${r.json.code ?? r.status}`);
     return { providerMessageId: String(r.json.sid) };
   }

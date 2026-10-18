@@ -220,10 +220,11 @@ export class PgAgentGateway {
   async spendRequest(
     agentId: string,
     token: string,
-    r: { idempotencyKey: string; amountCents: number; category: string; destinationId: string; purpose: string; recoverableCents?: number },
+    r: { idempotencyKey: string; amountCents: number; category: string; destinationId: string; purpose: string; recoverableCents?: number; after?: string | null },
   ): Promise<Record<string, unknown> & { ok: boolean }> {
+    // v95: after = the durable operation this one follows (null: the first on its payee).
     return this.call("api_spend_request", [
-      agentId, token, r.idempotencyKey, r.amountCents, r.category, r.destinationId, r.purpose, r.recoverableCents ?? 0,
+      agentId, token, r.idempotencyKey, r.amountCents, r.category, r.destinationId, r.purpose, r.recoverableCents ?? 0, r.after ?? null,
     ]);
   }
 
@@ -274,8 +275,8 @@ export class PgAgentGateway {
   }
 
   /** Schema v26 (F2-A): action-scoped external dependencies (only identity/legal/constitutional kinds). */
-  async ownerRequestCreate(agentId: string, token: string, r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string }): Promise<Record<string, unknown> & { ok: boolean }> {
-    return this.call("api_owner_request_create", [agentId, token, r.idempotencyKey, r.kind, r.action, r.goalRef, r.title, r.detail]);
+  async ownerRequestCreate(agentId: string, token: string, r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string; after?: string | null }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_owner_request_create", [agentId, token, r.idempotencyKey, r.kind, r.action, r.goalRef, r.title, r.detail, r.after ?? null]);
   }
 
   async ownerRequestWithdraw(agentId: string, token: string, requestId: string): Promise<Record<string, unknown> & { ok: boolean }> {

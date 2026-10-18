@@ -5,6 +5,7 @@
  *      ACTIVE one ends when no installation grants it any more (the customer uninstalled the app or removed the repo);
  *   3. runs snapshot and proposal jobs (each once; a failure is recorded, never retried silently).
  */
+import { PatchError } from "./patch.js";
 import pg from "pg";
 import type { GitHubApp } from "./github.js";
 
@@ -28,7 +29,16 @@ export class PgCodeGateway {
   result(jobId: string, ok: boolean, result: unknown, payload: Buffer | null, error: string | null) {
     return this.one(`SELECT cgx_result($1, $2, $3::jsonb, $4, $5) AS r`, [jobId, ok, result === null ? null : JSON.stringify(result), payload, error]);
   }
+  /** v95: a proposal whose answer was lost: re-run later (idempotently, by its branch), never failed or duplicated. */
+  uncertain(jobId: string, error: string) { return this.one(`SELECT cgx_uncertain($1, $2) AS r`, [jobId, error]); }
   close() { return this.pool.end(); }
+}
+
+/** v95: a failure that proves nothing reached GitHub (a refusal, a bad patch); anything else may have created the PR. */
+export function definitelyNotProposed(e: unknown): boolean {
+  if (e instanceof PatchError) return true;
+  const m = String((e as Error)?.message ?? e);
+  return /^GITHUB_HTTP_(4\d\d) /.test(m) || /the Fleet writes only fleet\/ branches|never the base branch|bad base commit/.test(m);
 }
 
 export class CodeGatewayWorker {
@@ -60,7 +70,10 @@ export class CodeGatewayWorker {
       } catch (e) {
         failed++;
         const msg = String((e as Error).message ?? e).slice(0, 280);
-        await this.gw.result(j.jobId, false, null, null, msg);
+        // v95: a proposal that may have reached GitHub (a timeout, a 5xx, a lost answer) is uncertain: the next run of the
+        // SAME job adopts its branch / pull request instead of creating another.
+        if (j.kind === "propose" && !definitelyNotProposed(e)) await this.gw.uncertain(j.jobId, msg);
+        else await this.gw.result(j.jobId, false, null, null, msg);
         this.log("warn", "code_job_failed", { jobId: j.jobId, kind: j.kind, error: msg });
       }
     }

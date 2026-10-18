@@ -1337,6 +1337,9 @@ export class FleetService {
           this.audit("action_cognition_refused", agentId, { code: boundary.code ?? null, actionClass: boundary.actionClass ?? null, minTier: boundary.minTier ?? null, tier: boundary.tier ?? null });
           throw new HttpError(403, String(boundary.code ?? "FLEET_ACTION_COGNITION_MISSING"), "the cognition behind this action does not meet its minimum tier");
         }
+        // v95: the durable operation this order follows (a further order to the same payee names the latest one).
+        const after = body.after === undefined || body.after === null ? null : String(body.after);
+        if (after !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(after)) throw new HttpError(400, "FLEET_BAD_REQUEST", "after is an operationId");
         const r = await agent.spendRequest(agentId, token, {
           idempotencyKey,
           amountCents: amount,
@@ -1344,9 +1347,11 @@ export class FleetService {
           destinationId,
           purpose: str(body, "purpose", 300),
           recoverableCents: recoverable,
+          after,
         });
-        if (!r.ok && !r.order) throw FleetService.refusal(r, "spend refused");
-        return { ok: r.ok, code: r.code ?? null, custody: r.custody ?? null, order: r.order ?? null, replay: r.replay === true, executed: false };
+        if (!r.ok && !r.order) throw FleetService.refusal(r, typeof r.reason === "string" ? r.reason : "spend refused");
+        return { ok: r.ok, code: r.code ?? null, custody: r.custody ?? null, order: r.order ?? null, replay: r.replay === true, executed: false,
+          operation: r.operation ?? null, note: r.note ?? null };
       }
 
       // ─── Schema v24: the founder's side of the experiment pipeline. Every decision is the registry's; the answer —
@@ -1400,6 +1405,7 @@ export class FleetService {
         const r = await agent.ownerRequestCreate(agentId, token, {
           idempotencyKey: str(body, "idempotencyKey", 128), kind, action: typeof body.action === "string" ? body.action.slice(0, 200) : str(body, "title", 200),
           goalRef: typeof body.goalRef === "string" ? body.goalRef.slice(0, 16) : null, title: str(body, "title", 200), detail: str(body, "detail", 2000),
+          after: typeof body.after === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.after) ? body.after : null,
         });
         if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "owner request refused");
         this.audit("owner_request_create", agentId, { ok: r.ok, code: r.code ?? null });

@@ -101,9 +101,10 @@ import { V91_SQL } from "./migrations-phase91.js";
 import { V92_SQL } from "./migrations-phase92.js";
 import { V93_SQL } from "./migrations-phase93.js";
 import { V94_SQL } from "./migrations-phase94.js";
+import { BROWSER_FUNCTIONS_V95, CODE_FUNCTIONS_V95, IDENTITY_FUNCTIONS_V95, V95_SQL } from "./migrations-phase95.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 94;
+export const FLEET_PG_SCHEMA_VERSION = 95;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1293,6 +1294,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 92, name: "alarm_drill", sql: V92_SQL },
   { version: 93, name: "card_display_label", sql: V93_SQL },
   { version: 94, name: "current_decisions_and_notices", sql: V94_SQL },
+  { version: 95, name: "durable_operations", sql: V95_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1430,7 +1432,8 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_open_session(text, text, text)",
   "api_propose_allocation(text, text, text, text, bigint, bigint, integer)",
   "api_request_spend(text, text, text, text, text, bigint, text, text)",
-  "api_spend_request(text, text, text, bigint, text, text, text, bigint)",
+  // v95: the durable operation it continues (after: an operationId).
+  "api_spend_request(text, text, text, bigint, text, text, text, bigint, uuid)",
   "api_spend_cancel(text, text, uuid)",
   "api_ledger_summary(text, text)",
   "api_capabilities(text, text)",
@@ -1447,7 +1450,7 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_experiment_record(text, text, uuid, text, text, bigint, text, numeric, uuid, text, jsonb)",
   "api_experiment_list(text, text, integer)",
   // v25/v26: action-scoped external dependencies — create, withdraw and list the founder's own (identity/legal exceptions only; nothing waits on them).
-  "api_owner_request_create(text, text, text, text, text, text, text, text)",
+  "api_owner_request_create(text, text, text, text, text, text, text, text, uuid)",
   "api_owner_request_withdraw(text, text, uuid)",
   "api_owner_request_list(text, text)",
   // v28 (F2): the agent's own economic records — opportunities, decisions, ventures, knowledge, performance — through one
@@ -1494,6 +1497,8 @@ export const CUSTODY_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v59: refunds the Fleet initiates (agent or owner), sent under the money-out authority; posted from PayPal's evidence.
   "cx_paypal_refund_work(text, integer)",
   "cx_paypal_refund_result(text, uuid, text, text, bigint, text, text)",
+  // v95: a refused retry after a lost answer is held for reconciliation, never "failed".
+  "cx_paypal_refund_unresolved(text, uuid, text)",
   // v76: the status of open checkouts, read from PayPal when no webhook reported them.
   "cx_paypal_status_work(text, integer)",
   "cx_paypal_status_checked(text, uuid, text)",
@@ -1541,6 +1546,7 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   // v76: a new refund leaves only within available treasury cash; a refund that must wait is noted once.
   cx_paypal_refund_work: { writes: [], calls: ["fleet_treasury_liquidity_wait", "fleet_treasury_lock"] },
   cx_paypal_refund_result: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event", "cx_paypal_clawback_evidence"] },
+  cx_paypal_refund_unresolved: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event"] },
   cx_paypal_dispute_record: { writes: ["fleet_paypal_disputes"], calls: ["fleet_event"] },
   // v76: reading an open checkout's PayPal status (backed off), failing a voided one.
   cx_paypal_status_work: { writes: [], calls: [] },
@@ -1550,6 +1556,8 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
 /** Schema v34: the only functions the identity broker's role may execute (fleet_identity; ix_* protocol). */
 export const IDENTITY_API_FUNCTIONS: readonly string[] = Object.freeze([
   "ix_ping()",
+  // v95: lost answers are uncertain; mail is reconciled against the Sent folder.
+  ...IDENTITY_FUNCTIONS_V95,
   "ix_claim_job(text, text)",
   "ix_pending_jobs(text)",
   "ix_credential_record(uuid, text, text, text)",
@@ -1607,6 +1615,7 @@ export const BROWSER_API_FUNCTIONS: readonly string[] = Object.freeze([
   "bx_ping()",
   "bx_claim_action(text, text)",
   "bx_report_action(uuid, text, boolean, jsonb, text)",
+  ...BROWSER_FUNCTIONS_V95,
   "bx_secret_request(uuid, text, text, text, text, bytea)",
   "bx_secret_take(uuid, uuid, text)",
   "bx_broker_key()",
@@ -1620,7 +1629,7 @@ export const BROWSER_API_FUNCTIONS: readonly string[] = Object.freeze([
 export const MEDIA_API_FUNCTIONS: readonly string[] = Object.freeze([...MEDIA_API_FUNCTIONS_V87]);
 
 /** Schema v89: the code gateway's whole database surface (cgx_*; role fleet_code). */
-export const CODE_API_FUNCTIONS: readonly string[] = Object.freeze([...CODE_API_FUNCTIONS_V89]);
+export const CODE_API_FUNCTIONS: readonly string[] = Object.freeze([...CODE_API_FUNCTIONS_V89, ...CODE_FUNCTIONS_V95]);
 
 /** Schema v89: the build environment's whole database surface (bbx_*; role fleet_build). */
 export const BUILD_API_FUNCTIONS: readonly string[] = Object.freeze([...BUILD_API_FUNCTIONS_V89]);

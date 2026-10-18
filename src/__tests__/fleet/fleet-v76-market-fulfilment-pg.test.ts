@@ -20,7 +20,7 @@ import os from "os";
 import path from "path";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, autoCapabilityChecks, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, autoCapabilityChecks, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
 import { liveRail, type ArmedCustody } from "./fixtures/custody-signer.js";
 import { PgIdentityGateway } from "../../fleet/identity/gateway.js";
 import { IdentityBroker } from "../../fleet/identity/broker.js";
@@ -285,7 +285,7 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     const ord = (await R.econ(F, "order.list", {})).orders.find((x: any) => x.page === p.page);
     expect(ord).toMatchObject({ ownerProof: true, payment: "paid", status: "delivered" });  // delivered to the buyer during the hold
     // The agent can still answer its (proof) buyer on the order thread while outward promotion is held; the buyer's page works.
-    expect((await R.econ(F, "order.message", { orderId: ord.orderId, message: "Thanks — the files are on your order page too." })).ok).toBe(true);
+    expect((await econNext(R, F, "order.message", { orderId: ord.orderId, message: "Thanks — the files are on your order page too." })).ok).toBe(true);
     expect((await pub("svc_order_page", [token])).order).toMatchObject({ payment: "paid", status: "delivered" });
     // Refund of the proof, through the real evidence path: the webhook's refund, then the fee PayPal gave back with it, then the
     // same money again from Transaction Search (T1107 refund, T1108 fee reversal). Owner capital and treasury follow exactly what
@@ -399,7 +399,7 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     const f = await R.econ(F, "enquiry.file", { messageId: fileMsg.messageId, fileNo: 1 });
     expect(Buffer.from(f.contentB64, "base64").equals(ref)).toBe(true);
     // Clarify, then quote.
-    expect((await R.econ(F, "enquiry.reply", { enquiryId, message: "Thanks — how many clients, and do you need VAT columns?" })).ok).toBe(true);
+    expect((await econNext(R, F, "enquiry.reply", { enquiryId, message: "Thanks — how many clients, and do you need VAT columns?" })).ok).toBe(true);
     await broker.tick();
     expect(shared.outbox.at(-1)!.body).toContain("https://shop.fleet.test/enquiry/");
     expect((await pub("svc_customer_message", ["enquiry", e.token, origin, "About 40 clients; yes, VAT at 20%.", []])).ok).toBe(true);
@@ -430,11 +430,11 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     const v1 = Buffer.from("PK invoice tracker v1");
     expect((await R.econ(F, "order.stage_file", { orderId, fileName: "invoice-tracker.xlsx", contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       contentB64: v1.toString("base64") })).ok).toBe(true);
-    expect(await R.econ(F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], idempotencyKey: idem() })).toMatchObject({ ok: false, code: "FLEET_REVIEW_REQUIRED" });
+    expect(await econNext(R, F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], idempotencyKey: idem() })).toMatchObject({ ok: false, code: "FLEET_REVIEW_REQUIRED" });
     const r1 = await review(F, { subject: "order", orderId }, [{ name: "invoice-tracker.xlsx", bytes: v1 }]);
-    expect(await R.econ(F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], reviewId: sr.reviewId, idempotencyKey: idem() }))
+    expect(await econNext(R, F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], reviewId: sr.reviewId, idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_REVIEW_STALE" }); // a sample's review covers other bytes
-    const d1 = await R.econ(F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], reviewId: r1.reviewId, message: "Here is your tracker.", idempotencyKey: idem() });
+    const d1 = await econNext(R, F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], reviewId: r1.reviewId, message: "Here is your tracker.", idempotencyKey: idem() });
     expect(d1, JSON.stringify(d1)).toMatchObject({ ok: true, order: { status: "delivering" } });
     await broker.tick();
     expect((await R.econ(F, "order.list", { orderId })).orders[0].status).toBe("delivered");
@@ -446,12 +446,12 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     const r1again = await review(F, { subject: "order", orderId }, [{ name: "invoice-tracker.xlsx", bytes: v1 }]);
     expect(r1again.ok).toBe(true);
     // The old bytes and a review taken before the message both fail; a fresh review of the revised bytes delivers.
-    expect(await R.econ(F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], reviewId: r1.reviewId, resendReason: "revision: payment date", idempotencyKey: idem() }))
+    expect(await econNext(R, F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], reviewId: r1.reviewId, resendReason: "revision: payment date", idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_REVIEW_STALE" });
     const r2 = await review(F, { subject: "order", orderId }, [{ name: "invoice-tracker.xlsx", bytes: v2 }]);
-    expect(await R.econ(F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], reviewId: r2.reviewId, idempotencyKey: idem() }))
+    expect(await econNext(R, F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], reviewId: r2.reviewId, idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_ALREADY_DELIVERED" });
-    const d2 = await R.econ(F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], reviewId: r2.reviewId, resendReason: "revision: payment date column", idempotencyKey: idem() });
+    const d2 = await econNext(R, F, "order.deliver", { orderId, files: [{ fileName: "invoice-tracker.xlsx" }], reviewId: r2.reviewId, resendReason: "revision: payment date column", idempotencyKey: idem() });
     expect(d2, JSON.stringify(d2)).toMatchObject({ ok: true });
     await broker.tick();
     const page = await pub("svc_order_page", [token]);
@@ -512,7 +512,7 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect((await pub("svc_order_page", [b.token])).seller).toContain("under the brand Coursewise.");
     // The agent's message about that order: same venture, same address, same brand.
     const ord = (await R.econ(F, "order.list", {})).orders.find((x: any) => x.page === `https://shop.fleet.test/order/${b.token}`);
-    expect((await R.econ(F, "order.message", { orderId: ord.orderId, message: "Lesson 3 has an extra worked example now." })).ok).toBe(true);
+    expect((await econNext(R, F, "order.message", { orderId: ord.orderId, message: "Lesson 3 has an extra worked example now." })).ok).toBe(true);
     await broker.tick();
     const msg = shared.outbox.at(-1)!;
     expect(msg).toMatchObject({ to: ["learner@example.test"], replyTo: own.address });

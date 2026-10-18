@@ -98,7 +98,7 @@ describe.skipIf(!PG_BIN)("v42 team projects — adversarial mechanics (PostgreSQ
     const esc0 = await R.balance(acct(A, "agent_project_escrow"));
     const f1 = await ok(R.econ(A, "project.fund", { projectId: p, amountMinor: 1_000, source: "own", idempotencyKey: "fund-replay-1" }));
     const f2 = await ok(R.econ(A, "project.fund", { projectId: p, amountMinor: 1_000, source: "own", idempotencyKey: "fund-replay-1" }));
-    expect(f2.replayed).toBe(true);
+    expect(f2.replay).toBe(true);                 // v95: the same funding is the same operation (answered from its record)
     expect(f1.project.escrowMinor).toBe(1_000);
     expect(await R.balance(acct(A, "agent_project_escrow"))).toBe(esc0 + 1_000);
     const m = (await ok(offer(A, p, C))).memberId;

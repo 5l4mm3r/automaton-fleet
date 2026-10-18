@@ -36,7 +36,7 @@ import { DecisionLedgerError, cognitionDepth, commitmentCheck, depthLine, loadDe
 
 export interface ToolboxPorts {
   ledger(): Promise<unknown>;
-  spendOrder(r: { idempotencyKey: string; amountCents: number; category: "expense" | "fee" | "asset_acquisition" | "conway_credits"; destinationId: string; purpose: string; recoverableCents?: number }): Promise<unknown>;
+  spendOrder(r: { idempotencyKey: string; amountCents: number; category: "expense" | "fee" | "asset_acquisition" | "conway_credits"; destinationId: string; purpose: string; recoverableCents?: number; after?: string }): Promise<unknown>;
   proposeKnowledge(p: { category: string; title: string; content: string }): Promise<unknown>;
   knowledge(after?: number): Promise<unknown>;
   requestIdentityFact(p: { factKey: string; purpose: string; workflow: string }): Promise<unknown>;
@@ -49,7 +49,7 @@ export interface ToolboxPorts {
   experimentRecord?(r: { experimentId: string; idempotencyKey: string; kind: string; amountMinor?: number; metric?: string; value?: number; attemptId?: string; note?: string; detail?: Record<string, unknown> }): Promise<Record<string, unknown>>;
   experimentList?(limit?: number): Promise<Record<string, unknown>>;
   /** Schema v26 (F2-A): record ONE action that needs a human/legal identity or a constitutional change (optional). */
-  ownerRequestCreate?(r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string }): Promise<Record<string, unknown>>;
+  ownerRequestCreate?(r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string; after?: string }): Promise<Record<string, unknown>>;
   ownerRequestWithdraw?(requestId: string): Promise<Record<string, unknown>>;
   /** R41.1: this founder's own dependency records (to return an equivalent pending one instead of asking twice). */
   ownerRequests?(): Promise<unknown>;
@@ -78,6 +78,8 @@ export const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string
   opportunity: { record: "opportunity.record", shortlist: "opportunity.shortlist", status: "opportunity.status", list: "opportunity.list" },
   venture: { create: "venture.create", transition: "venture.transition", status: "venture.status", list: "venture.list", metric: "venture.metric" },
   wallet: { view: "wallet", performance: "performance", plan: "wallet.plan", vendors: "vendor.list",
+    // v95: the durable operation register (reads, and the resolution of an uncertain outcome).
+    operation: "operation.status", operations: "operation.list", resolve_operation: "operation.resolve",
     // v51: the authoritative wallet measure (what keeps you alive, and what does not count).
     survival: "wallet.measure",
     // v48: receiving money through the Fleet's PayPal treasury (custody opens and captures the order).
@@ -737,7 +739,8 @@ export class FounderToolbox {
     const req = isImage ? { kind: "image", prompt: String(a.prompt ?? ""), size: a.size ?? "1024x1024" }
       : { kind: "search", query: String(a.query ?? ""), count: a.count ?? 5, purpose: a.purpose ?? "research" };
     const mission = typeof a.missionId === "string" ? { missionId: a.missionId.slice(0, 40) } : {};
-    const job = await this.o.ports.economy("media.request", { ...req, ...mission, idempotencyKey: `media:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128) }).catch(ownerRefusal) as Record<string, unknown>;
+    const after = typeof a.after === "string" ? { after: a.after.slice(0, 36) } : {};
+    const job = await this.o.ports.economy("media.request", { ...req, ...mission, ...after, idempotencyKey: `media:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128) }).catch(ownerRefusal) as Record<string, unknown>;
     if (job.ok === false) return this.econOut(call, job);
     for (let i = 0; i < 60; i++) {
       const x = await this.o.ports.economy("media.result", { jobId: job.jobId }).catch(ownerRefusal) as Record<string, unknown>;
@@ -1265,10 +1268,12 @@ export class FounderToolbox {
             destinationId: String(a.destinationId ?? ""),
             purpose: String(a.purpose ?? "").slice(0, 300),
             recoverableCents: Number.isSafeInteger(Number(a.recoverableCents)) ? Number(a.recoverableCents) : 0,
+            // v95: a further order to the same payee names the latest operation on it (durable identity, controller-side).
+            ...(typeof a.after === "string" ? { after: a.after } : {}),
           });
           // FleetController (the custody boundary) accepted or refused the order on its own rules; only an accepted order
-          // counts against the founder's own sizing.
-          if (ledger && (r as { ok?: unknown }).ok !== false) {
+          // counts against the founder's own sizing — once (a replay of an earlier order is not a new commitment).
+          if (ledger && (r as { ok?: unknown }).ok !== false && (r as { replay?: unknown }).replay !== true) {
             noteCommitment(ledger, String(a.decisionKey).trim(), amountCents);
             saveDecisions(this.memory, ledger);
           }
@@ -1373,7 +1378,8 @@ export class FounderToolbox {
             return { name: call.name, ok: true, output: `ALREADY REQUESTED: dependency ${same} (${kind}) for this action is pending. Do not request it again or retry the blocked action; `
               + `keep that step as its own goal with blockedBy ${same.slice(0, 8)} and continue your unblocked work.` };
           }
-          const r = await this.o.ports.ownerRequestCreate({ idempotencyKey: `dep:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128), kind, action, goalRef, title, detail })
+          const r = await this.o.ports.ownerRequestCreate({ idempotencyKey: `dep:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128), kind, action, goalRef, title, detail,
+            ...(typeof a.after === "string" ? { after: a.after } : {}) })
             .catch(ownerRefusal);
           if (r.ok === true && goalRef && typeof r.requestId === "string") this.markBlocked(goalRef, r.requestId);
           return { name: call.name, ok: r.ok === true, ...(r.ok === true ? {} : { refused: String(r.code ?? "FLEET_REFUSED") }), output: clip(JSON.stringify(r)) };

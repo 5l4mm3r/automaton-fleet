@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 import { buildScope, emptyPermission, emptySeller, noticePreview, receivingState, sellerFields } from "../../../codex-dashboard/src/dashboard/launch/model";
 
@@ -202,6 +202,9 @@ describe.skipIf(!PG_BIN)("v81: launch & channels in the dashboard (PostgreSQL)",
     // Disconnecting stops it (a plain write); the view says so.
     expect(await call("channel_disconnect", { channelId })).toMatchObject({ ok: true });
     expect((await launch()).channels[0].connection).toMatchObject({ status: "disconnected" });
-    expect((await R.econ(F, "channel.api", { channelId, op: "etsy.listing.create", args: LISTING, idempotencyKey: idem() })).ok).toBe(false);
+    // (v95: the identical listing is the one already made — answered from its record; a new listing is refused.)
+    expect((await R.econ(F, "channel.api", { channelId, op: "etsy.listing.create", args: LISTING, idempotencyKey: idem() }))).toMatchObject({ ok: true, replay: true });
+    expect(await econNext(R, F, "channel.api", { channelId, op: "etsy.listing.create", args: { ...LISTING, title: "Another workbook" }, idempotencyKey: idem() }))
+      .toMatchObject({ ok: false });
   });
 });

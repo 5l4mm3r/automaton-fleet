@@ -35,6 +35,11 @@ export interface MailProvider {
   fetchShared?(cursor: string | null): Promise<{ messages: SharedMailMessage[]; cursor: string | null }>;
   /** v41: a connectivity check for the health view (throws a FLEET_MAIL_PROVIDER_* code). */
   health?(): Promise<void>;
+  /**
+   * v95: after a lost answer, whether a message with this Message-ID was sent (true / false); absent = the provider
+   * cannot be checked (the job stays uncertain). A send whose outcome is not known throws FLEET_MAIL_SEND_UNCERTAIN.
+   */
+  sentByMessageId?(messageId: string): Promise<boolean>;
 }
 
 export interface OutgoingMail {
@@ -405,6 +410,10 @@ export class SimulatedSharedMailProvider implements MailProvider {
   readonly inbox: SharedMailMessage[] = [];
   readonly outbox: Array<OutgoingMail & { providerMessageId: string; externalMessageId: string }> = [];
   down = false;
+  /** v95 tests: the next N sends go out but their answer is lost (the caller sees an uncertain outcome). */
+  loseAnswers = 0;
+  /** v95 tests: every Sent-folder lookup made (the Message-IDs asked about). */
+  readonly sentLookups: string[] = [];
   constructor(readonly address = "fleet@shared.fleet-mail.test") {}
 
   private ours(addr: string): boolean {
@@ -419,11 +428,17 @@ export class SimulatedSharedMailProvider implements MailProvider {
   async fetch(): Promise<MailMessage[]> {
     return [];
   }
+  async sentByMessageId(messageId: string): Promise<boolean> {
+    this.sentLookups.push(messageId);
+    if (this.down) throw new Error("FLEET_MAIL_PROVIDER_CONNECT");
+    return this.outbox.some((m) => m.externalMessageId === messageId);
+  }
   async send(input: OutgoingMail): Promise<{ providerMessageId: string; externalMessageId: string }> {
     if (this.down) throw new Error("FLEET_MAIL_PROVIDER_CONNECT");
     if (input.from.toLowerCase() !== this.address) throw new Error("FLEET_MAIL_FOREIGN_SENDER");
     const externalMessageId = input.messageId ?? `<${crypto.randomUUID()}@${this.address.split("@")[1]}>`;
     this.outbox.push({ ...input, providerMessageId: externalMessageId, externalMessageId });
+    if (this.loseAnswers > 0) { this.loseAnswers--; throw new Error("FLEET_MAIL_SEND_UNCERTAIN"); }
     // Mail to the shared mailbox itself (an agent writing to another agent's routing address) lands in the inbox.
     const local = input.to.filter((t) => this.ours(t));
     if (local.length) this.deliver({ from: input.from, to: local, subject: input.subject, body: input.body, messageId: externalMessageId,

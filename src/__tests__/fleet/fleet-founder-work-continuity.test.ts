@@ -12,6 +12,8 @@
  *     (the controller's events digest) wake it.
  *  4. A superseded approval stays on record and the current decision is in the founder's task.
  *  9. (attempt 2) A waiting founder whose RUNTIME changed wakes once and is told; a restart on the same runtime stays free.
+ * 10. Across that upgrade restart, the carried-turn, manifest and controller protections it exercises still hold (scope
+ *     stated at the test; duplicate protection in general is the controller's v95 operation register).
  */
 import { describe, it, expect } from "vitest";
 import fs from "fs";
@@ -391,7 +393,11 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(fromLegacy.packets[0]).toContain("(an earlier runtime → 32634bf)");
   });
 
-  it("10. an upgrade wake keeps authority: a completed action stays blocked, a non-grantable tool and a controller refusal are still refused", async () => {
+  // Scope (stated, not implied): this proves the three protections it exercises across an upgrade restart — the runtime's
+  // carried record of ONE cut-off turn (a completed publish in it is not repeated), the manifest's per-call decision and
+  // the controller's per-call refusal. It is NOT duplicate protection for every tool or across finished turns: that is the
+  // controller's durable operation register (v95), tested with real dispatch counts in fleet-v95-durable-operations-pg.
+  it("10. across an upgrade restart: a completed action carried from a cut-off turn is not repeated; a non-grantable tool and a controller refusal are still refused", async () => {
     const A = "94dce86f43898d98a596b2457a47fa43335c238f", B = "32634bfe7f9062a6484da713e985612acd80e694";
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "wc-auth-"));
     const tries = () => [c("offer", { op: "publish", args: { offerId: "o1" } }), c("transfer_credits", { to: "x", amount: 1 }), c("offer", { op: "publish", args: { offerId: "o9" } })];

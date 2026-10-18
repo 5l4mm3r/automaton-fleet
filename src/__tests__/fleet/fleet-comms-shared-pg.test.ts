@@ -117,7 +117,7 @@ describe.skipIf(!PG_BIN)("v41 communications: dormant by default, the shared mai
     await b.tick();
     const out = shared.outbox.at(-1)!;
     expect(out).toMatchObject({ from: shared.address, replyTo: ra.address, to: ["sam@customer.test"], subject: "Re: Bulk order" });
-    expect(out.messageId).toMatch(/^<[0-9a-f-]{36}@shared\.fleet-mail\.test>$/);
+    expect(out.messageId).toMatch(/^<fleet-[0-9a-f-]{36}@shared\.fleet-mail\.test>$/); // v95: derived from its job (the same on every attempt)
     expect(out.references).toEqual([order.external_message_id]);
     const sentRow = await mailOf(sent.messageId);
     expect(sentRow).toMatchObject({ agent_id: A.id, send_status: "sent", external_message_id: out.messageId, thread_id: order.thread_id });

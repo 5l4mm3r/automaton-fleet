@@ -17,7 +17,7 @@ import os from "os";
 import path from "path";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
 import { liveRail, type ArmedCustody } from "./fixtures/custody-signer.js";
 import { PgIdentityGateway } from "../../fleet/identity/gateway.js";
 import { IdentityBroker } from "../../fleet/identity/broker.js";
@@ -105,7 +105,7 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
     expect(o).toMatchObject({ payment: "paid", status: "to_fulfil", buyer: { email: "buyer.one@example.test", name: "Ada Buyer", country: "GB" } });
     // Another agent sees nothing and cannot act on it.
     expect((await R.econ(G, "order.list", {})).orders).toEqual([]);
-    expect(await R.econ(G, "order.deliver", { orderId: s.order, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
+    expect(await econNext(R, G, "order.deliver", { orderId: s.order, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
     // v82: the order has a page; the buyer confirms immediate access there (CCR 2013 reg 37) before the files are sent.
     const token = String(o.page).split("/").pop();
@@ -115,15 +115,16 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
     const key = idem();
     const packFiles = [{ fileName: "planner-pack.pdf", contentType: "application/pdf", contentB64: pdf.toString("base64") }];
     // v76: no delivery without a passing review of exactly these files.
-    expect(await R.econ(F, "order.deliver", { orderId: s.order, files: packFiles, idempotencyKey: idem() })).toMatchObject({ ok: false, code: "FLEET_REVIEW_REQUIRED" });
-    const d = await R.econ(F, "order.deliver", { orderId: s.order, files: packFiles, reviewId: await reviewOrderFiles(R, F, s.order, packFiles),
-      message: "Thank you! Your planner pack is attached.", idempotencyKey: key });
+    expect(await econNext(R, F, "order.deliver", { orderId: s.order, files: packFiles, idempotencyKey: idem() })).toMatchObject({ ok: false, code: "FLEET_REVIEW_REQUIRED" });
+    const deliverArgs = { orderId: s.order, files: packFiles, reviewId: await reviewOrderFiles(R, F, s.order, packFiles), message: "Thank you! Your planner pack is attached." };
+    const d = await R.econ(F, "order.deliver", { ...deliverArgs, idempotencyKey: key });
     expect(d, JSON.stringify(d)).toMatchObject({ ok: true, order: { status: "delivering", delivery: { status: "queued", attempts: 1 } } });
     // Not delivered by payment, nor by queuing: only the provider's acceptance.
     expect((await order(F, s.order)).status).toBe("delivering");
-    expect(await R.econ(F, "order.deliver", { orderId: s.order, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
+    expect(await econNext(R, F, "order.deliver", { orderId: s.order, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_DELIVERY_IN_PROGRESS" });
-    expect(await R.econ(F, "order.deliver", { orderId: s.order, idempotencyKey: key })).toMatchObject({ ok: true, replay: true });
+    // v95: the same delivery decided again (any key) is the same delivery.
+    expect(await R.econ(F, "order.deliver", { ...deliverArgs, idempotencyKey: idem() })).toMatchObject({ ok: true, replay: true });
     await broker.tick();
     const sent = shared.outbox.at(-1)!;
     expect(sent).toMatchObject({ from: shared.address, to: ["buyer.one@example.test"], subject: "Your order: Printable planner pack" });
@@ -135,7 +136,7 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
       evidence: { kind: "mail" } });
     // v76: the bytes stay downloadable from the buyer's order page for 30 days (then the offer pass erases them).
     expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_order_delivery_files WHERE blob IS NOT NULL AND retained_until > now() + interval '29 days')`)).toBe(1);
-    expect(await R.econ(F, "order.deliver", { orderId: s.order, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
+    expect(await econNext(R, F, "order.deliver", { orderId: s.order, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_ALREADY_DELIVERED" });
     // The buyer's contact never reaches an event.
     expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_events WHERE detail::text ILIKE '%buyer.one%')`)).toBe(0);
@@ -147,7 +148,7 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
     const s = await sell(F, "planners", 900, "digital_file", "second@example.test");
     shared.down = true;
     const zip = [{ fileName: "pack.zip", contentType: "application/zip", contentB64: Buffer.from("PK zip").toString("base64") }];
-    expect((await R.econ(F, "order.deliver", { orderId: s.order, files: zip, reviewId: await reviewOrderFiles(R, F, s.order, zip), idempotencyKey: idem() })).ok).toBe(true);
+    expect((await econNext(R, F, "order.deliver", { orderId: s.order, files: zip, reviewId: await reviewOrderFiles(R, F, s.order, zip), idempotencyKey: idem() })).ok).toBe(true);
     await broker.tick();
     let o = await order(F, s.order);
     expect(o).toMatchObject({ status: "delivering", delivery: { status: "failed", attempts: 1 } });
@@ -166,13 +167,13 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
   it("nothing is delivered before payment or after a full refund; a service order needs evidence of fulfilment", async () => {
     // Unpaid.
     const c = await R.econ(F, "paypal.checkout", { venture: "planners", amountMinor: 700, description: "Unpaid planner", fulfilment: "digital_file", idempotencyKey: idem() });
-    expect(await R.econ(F, "order.deliver", { orderId: c.order.orderId, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
+    expect(await econNext(R, F, "order.deliver", { orderId: c.order.orderId, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_ORDER_NOT_PAID" });
     // Fully refunded before delivery: cancelled.
     const s = await sell(F, "planners", 800, "digital_file");
     expect((await cx("cx_paypal_refund_record", ["custody-executor", s.captureId, "RFFULL000001", "refund", 800, "GBP"])).ok).toBe(true);
     expect(await order(F, s.order)).toMatchObject({ payment: "refunded", status: "cancelled", refundedMinor: 800 });
-    expect(await R.econ(F, "order.deliver", { orderId: s.order, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
+    expect(await econNext(R, F, "order.deliver", { orderId: s.order, files: [{ fileName: "x.pdf", contentB64: "JVBERg==" }], idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_ORDER_NOT_PAID" });
     // A service order: payment alone never fulfils it; a note or a sent message to the buyer does.
     const v = await sell(G, "consulting", 5_000, "service", "client@example.test");

@@ -17,7 +17,7 @@ import os from "os";
 import path from "path";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
 import { PgIdentityGateway } from "../../fleet/identity/gateway.js";
 import { IdentityBroker } from "../../fleet/identity/broker.js";
 import { SimulatedMailProvider } from "../../fleet/identity/providers.js";
@@ -103,7 +103,8 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
   };
   /** Enqueue a browser op as the agent and run the worker until its page result is back. */
   const browse = async (who: Founder, op: string, args: Record<string, unknown>) => {
-    const q = await R.econ(who, op, args);
+    // v95: a new session's first different submission on a site names the latest operation there (from the refusal).
+    const q = await econNext(R, who, op, args);
     if (!q.ok) return q;
     for (let i = 0; i < 200; i++) {
       await worker.tick(1);
@@ -441,7 +442,7 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
     // Set up an authenticator on the agent's own account: the key shown on the page is captured into the vault.
     const setup = await browse(A, "browser.act", { sessionId, steps: [{ action: "goto", url: `${SITE}/security` }, { action: "capture", selector: "#seed", kind: "totp" },
       { action: "fill", selector: "#code", credential: "totp" }, { action: "click", text: "Enable" }] });
-    expect(setup.result.text, JSON.stringify(setup.result)).toContain("Two-step verification enabled");
+    expect(setup.result?.text, JSON.stringify(setup)).toContain("Two-step verification enabled");
     // The worker restarts (deploy, crash): every in-memory browser session is gone.
     await worker.close();
     worker = new BrowserWorker(bgw, { executablePath: CHROME!, allowLoopback: true, ignoreHttpsErrors: true, brokerPublicKey: async () => (await bgw.brokerKey()).ownerPub });
@@ -492,7 +493,7 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
     expect((await R.econ(B, "browser.open", { url: SITE, accountId })).code).toBe("FLEET_NOT_FOUND");
     const x = await browse(A, "browser.act", { sessionId, steps: [{ action: "goto", url: "http://10.11.12.13/admin" }] });
     expect(x.result.code).toBe("FLEET_BROWSER_URL_BLOCKED");
-    expect((await R.econ(A, "browser.act", { sessionId, steps: [{ action: "fill", selector: "#a", credential: "password", value: "x" }] })).code).toBe("FLEET_BAD_REQUEST");
+    expect((await econNext(R, A, "browser.act", { sessionId, steps: [{ action: "fill", selector: "#a", credential: "password", value: "x" }] })).code).toBe("FLEET_BAD_REQUEST");
     await browse(A, "browser.close", { sessionId });
     expect((await R.econ(A, "browser.observe", { sessionId })).code).toBe("FLEET_BROWSER_CLOSED");
     const bx = new pg.Pool({ connectionString: R.pgc.browserUrl, max: 1 });

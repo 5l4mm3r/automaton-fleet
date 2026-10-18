@@ -35,6 +35,8 @@ export interface BrowserGatewayPort {
   fileTake(actionId: string, lease: string, fileId: string): Promise<{ ok: true; fileName: string; contentType: string; data: Buffer } | { ok: false; code: string }>;
   /** v79: store a file the page produced for the action's agent (download | screenshot | pdf). */
   filePut(actionId: string, lease: string, kind: "download" | "screenshot" | "pdf", fileName: string, contentType: string, data: Buffer): Promise<BxResult>;
+  /** v95 (optional for in-memory test gateways): actions whose answer was lost — outward ones become uncertain, reads fail. */
+  actionsLost?(worker: string, restart: boolean): Promise<BxResult & { uncertain?: number; failed?: number }>;
 }
 
 export class PgBrowserGateway implements BrowserGatewayPort {
@@ -52,6 +54,7 @@ export class PgBrowserGateway implements BrowserGatewayPort {
   }
   ping() { return this.call<{ schemaVersion: number | null; queued: number }>("bx_ping", []); }
   claim(worker: string, leaseSha256: string) { return this.call<{ ok: true; action: BrowserAction | null } | { ok: false; code: string }>("bx_claim_action", [worker, leaseSha256]); }
+  actionsLost(worker: string, restart: boolean) { return this.call<BxResult & { uncertain?: number; failed?: number }>("bx_actions_lost", [worker, restart]); }
   report(actionId: string, lease: string, ok: boolean, result: Record<string, unknown>, url: string | null) {
     return this.call<BxResult>("bx_report_action", [actionId, lease, ok, JSON.stringify(result), url]);
   }

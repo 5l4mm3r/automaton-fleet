@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext, spendNext } from "./fixtures/economy-registry.js";
 
 const PG_BIN = findPgBin();
 const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
@@ -92,7 +92,7 @@ describe.skipIf(!PG_BIN)("F2 v30 capital engine, envelopes, sweeps, cognition de
     expect(await R.balance(acct(F, "agent_envelope_cash"))).toBe(5_000);
     expect(await R.balance(acct(F, "agent_cash"))).toBe(cash0);
     // Envelope capital is restricted: an own-capital order can never reach it.
-    const own = await R.gw.spendRequest(F.id, F.token, { idempotencyKey: `k:${crypto.randomUUID()}`, amountCents: cash0 + 1, category: "expense", destinationId: payF, purpose: "x" });
+    const own = await spendNext(R, F, { idempotencyKey: `k:${crypto.randomUUID()}`, amountCents: cash0 + 1, category: "expense", destinationId: payF, purpose: "x" });
     expect(own).toMatchObject({ ok: false, custody: "INSUFFICIENT_OWN_CAPITAL" });
     // Replay is idempotent.
     const idem = `cr:${crypto.randomUUID()}`;
@@ -124,7 +124,7 @@ describe.skipIf(!PG_BIN)("F2 v30 capital engine, envelopes, sweeps, cognition de
 
   it("envelopes are bounded authority: purpose, single exposure and availability are enforced; a release returns to the envelope", async () => {
     const env = (await R.econ(F, "envelope.list")).envelopes[0];
-    const spend = (amount: number, category = "expense", idem = `k:${crypto.randomUUID()}`) => R.econ(F, "envelope.spend", { envelopeId: env.envelopeId, amountMinor: amount,
+    const spend = (amount: number, category = "expense", idem = `k:${crypto.randomUUID()}`) => econNext(R, F, "envelope.spend", { envelopeId: env.envelopeId, amountMinor: amount,
       category, destinationId: payF, purpose: "print run", idempotencyKey: idem });
     expect(await spend(100, "asset_acquisition")).toMatchObject({ ok: false, code: "FLEET_ENVELOPE_PURPOSE" });
     expect(await spend(5_001)).toMatchObject({ ok: false, code: "FLEET_ENVELOPE_EXHAUSTED" });
@@ -138,7 +138,7 @@ describe.skipIf(!PG_BIN)("F2 v30 capital engine, envelopes, sweeps, cognition de
     expect(await R.balance(acct(F, "agent_cash"))).toBe(cash);
     // Another agent's destination or a held agent: custody refusals.
     const payG = (await R.econ(G, "vendor.register", { vendorName: "G supplier", category: "supplier", reference: "g@supplier.example" })).destinationId;
-    expect(await R.econ(F, "envelope.spend", { envelopeId: env.envelopeId, amountMinor: 10, destinationId: payG, purpose: "x", idempotencyKey: `k:${crypto.randomUUID()}` }))
+    expect(await econNext(R, F, "envelope.spend", { envelopeId: env.envelopeId, amountMinor: 10, destinationId: payG, purpose: "x", idempotencyKey: `k:${crypto.randomUUID()}` }))
       .toMatchObject({ ok: false, custody: "INVALID_DESTINATION" });
   });
 
@@ -147,7 +147,7 @@ describe.skipIf(!PG_BIN)("F2 v30 capital engine, envelopes, sweeps, cognition de
     await R.q(`UPDATE fleet.fleet_capital_policy SET reapply_cooldown_s = 0`);
     const r = await req(F, "planners", 4_000, { downsideMinor: 2_500 });
     const id = r.envelope.envelopeId;
-    const o = await R.econ(F, "envelope.spend", { envelopeId: id, amountMinor: 3_000, destinationId: payF, purpose: "ads", idempotencyKey: `k:${crypto.randomUUID()}` });
+    const o = await econNext(R, F, "envelope.spend", { envelopeId: id, amountMinor: 3_000, destinationId: payF, purpose: "ads", idempotencyKey: `k:${crypto.randomUUID()}` });
     // Settlement (custody executor protocol) is pinned off; record the spend as settled through the owner path used by the ledger tests.
     const sj = (await R.q(`SELECT fleet.fleet_ledger_post('spend_settlement', $1, 'operator:owner', 'test settlement', 'owner', $2, $3::uuid, NULL, $4, NULL, now(),
       jsonb_build_array(jsonb_build_object('account', fleet.fleet_ledger_account($2, 'agent_expense'), 'side', 'D', 'amount', 3000),

@@ -17,7 +17,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext, spendNext } from "./fixtures/economy-registry.js";
 import { loadFleetConfig } from "../../fleet/config.js";
 
 const PG_BIN = findPgBin();
@@ -125,7 +125,7 @@ describe.skipIf(!PG_BIN)("F2 accounting invariants, security boundaries and safe
         await ingest(`orphan-${++n}`, "sale", 300, 0, null); // orphan money
       } else if (p < 0.72) {
         const amount = 1 + Math.floor(r() * 3_000);
-        const o = await R.gw.spendRequest(v.who.id, v.who.token, { idempotencyKey: `s:${crypto.randomUUID()}`, amountCents: amount, category: "expense", destinationId: vendors.get(v.who.id)!, purpose: "op" });
+        const o = await spendNext(R, v.who, { idempotencyKey: `s:${crypto.randomUUID()}`, amountCents: amount, category: "expense", destinationId: vendors.get(v.who.id)!, purpose: "op" });
         if (o.ok) orders.push({ who: v.who, id: (o.order as { orderId: string }).orderId });
       } else if (p < 0.77 && orders.length) {
         const o = orders.splice(Math.floor(r() * orders.length), 1)[0];
@@ -140,7 +140,7 @@ describe.skipIf(!PG_BIN)("F2 accounting invariants, security boundaries and safe
         if (c.envelope) envelopes.push({ who: v.who, id: c.envelope.envelopeId });
       } else if (p < 0.94 && envelopes.length) {
         const e = envelopes[Math.floor(r() * envelopes.length)];
-        await R.econ(e.who, "envelope.spend", { envelopeId: e.id, amountMinor: 1 + Math.floor(r() * 2_000), destinationId: vendors.get(e.who.id)!, purpose: "inside the envelope",
+        await econNext(R, e.who, "envelope.spend", { envelopeId: e.id, amountMinor: 1 + Math.floor(r() * 2_000), destinationId: vendors.get(e.who.id)!, purpose: "inside the envelope",
           idempotencyKey: `e:${crypto.randomUUID()}` });
       } else {
         await svc.query(`SELECT fleet.svc_sweep_run($1)`, [`2026-10-${String(1 + (step % 28)).padStart(2, "0")}`]);
@@ -168,10 +168,10 @@ describe.skipIf(!PG_BIN)("F2 accounting invariants, security boundaries and safe
     // Another founder's envelope, vendor and venture are invisible or refused.
     const envA = (await R.econ(A, "envelope.list")).envelopes[0];
     if (envA) {
-      expect(await R.econ(B, "envelope.spend", { envelopeId: envA.envelopeId, amountMinor: 1, destinationId: vendors.get(B.id)!, purpose: "x", idempotencyKey: `x:${crypto.randomUUID()}` }))
+      expect(await econNext(R, B, "envelope.spend", { envelopeId: envA.envelopeId, amountMinor: 1, destinationId: vendors.get(B.id)!, purpose: "x", idempotencyKey: `x:${crypto.randomUUID()}` }))
         .toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
     }
-    expect(await R.gw.spendRequest(B.id, B.token, { idempotencyKey: `x:${crypto.randomUUID()}`, amountCents: 1, category: "expense", destinationId: vendors.get(A.id)!, purpose: "x" }))
+    expect(await spendNext(R, B, { idempotencyKey: `x:${crypto.randomUUID()}`, amountCents: 1, category: "expense", destinationId: vendors.get(A.id)!, purpose: "x" }))
       .toMatchObject({ ok: false, custody: "INVALID_DESTINATION" });
     expect(await R.econ(B, "venture.status", { key: "venture-0" })).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
     // The agent's own wallet view carries no secret material.

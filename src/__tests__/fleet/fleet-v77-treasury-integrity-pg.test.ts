@@ -10,7 +10,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext, spendNext } from "./fixtures/economy-registry.js";
 import { attest, liveRail, type ArmedCustody } from "./fixtures/custody-signer.js";
 
 const PG_BIN = findPgBin();
@@ -33,7 +33,7 @@ describe.skipIf(!PG_BIN)("v77 treasury liquidity: real outflows fit available Pa
   const status = async (orderId: string) => (await R.q(`SELECT status FROM fleet.fleet_payment_orders WHERE order_id = $1`, [orderId]))[0].status;
   const liquidity = () => R.one<any>(`fleet.fleet_treasury_liquidity($1)`, [rail.railId]);
   const spend = async (who: Founder, amountCents: number) => {
-    const r = await R.gw.spendRequest(who.id, who.token, { idempotencyKey: `s:${crypto.randomUUID()}`, amountCents, category: "expense", destinationId: dest[who.id], purpose: "venture cost" });
+    const r = await spendNext(R, who, { idempotencyKey: `s:${crypto.randomUUID()}`, amountCents, category: "expense", destinationId: dest[who.id], purpose: "venture cost" });
     expect(r.ok, JSON.stringify(r)).toBe(true);
     return (r.order as { orderId: string }).orderId;
   };
@@ -246,7 +246,7 @@ describe.skipIf(!PG_BIN)("v77 envelope spending: the same contextual Fleet Contr
     expect(d, JSON.stringify(d)).toMatchObject({ ok: true, outcome: expect.stringMatching(/^(APPROVE|APPROVE_WITH_LIMITS|PARTIAL_APPROVE)$/) });
     const env = (await R.econ(F, "envelope.list")).envelopes[0];
     const payee = (await R.econ(F, "vendor.register", { vendorName: "Printer", category: "supplier", reference: "printer@supplier.example" })).destinationId;
-    const spend = (amount: number) => R.econ(F, "envelope.spend", { envelopeId: env.envelopeId, amountMinor: amount, category: "expense", destinationId: payee,
+    const spend = (amount: number) => econNext(R, F, "envelope.spend", { envelopeId: env.envelopeId, amountMinor: amount, category: "expense", destinationId: payee,
       purpose: "print run", idempotencyKey: `k:${crypto.randomUUID()}` });
     // Routine (review triggers off): reserved and payable, no review.
     await R.q(`UPDATE fleet.fleet_spend_review_policy SET material_share_bp = 10000, material_aggregate_bp = 100000, low_runway_days = 0, new_payee_hours = 0, duplicate_window_h = 1`);

@@ -253,6 +253,11 @@ export class CustodyExecutor {
       const s = this.signers.get(inst.paymentRailId ?? "");
       const why = this.mismatch(inst, s);
       if (why) return this.finish(inst, lease, { outcome: "failed", failureCode: why });
+      // v95: recorded BEFORE the provider is called. If this process dies after PayPal received the payout but before its
+      // answer is recorded, the restart finds it here and re-checks it with the same PayPal-Request-Id / sender_batch_id
+      // (the instruction id): PayPal returns the original payout, never a second one.
+      this.pending.set(inst.instructionId, { instruction: inst, lease, externalRef: null, since: new Date().toISOString() });
+      this.savePending();
       let out: SignerOutcome;
       try {
         out = await this.withSecret(inst, lease, `${s!.binding.provider}.payout`, (h) => s!.execute(inst, h));

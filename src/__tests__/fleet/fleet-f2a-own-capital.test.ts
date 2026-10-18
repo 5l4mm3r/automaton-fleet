@@ -132,7 +132,7 @@ describe("F2-A v27: the owner spend route and the fixed 100.00 / 50.00 lines are
   it("(1, 2, 5) the registry's spend decision reads no nominal threshold and has no owner branch; nothing in the latest SQL routes spend to the owner", () => {
     expect(FLEET_PG_SCHEMA_VERSION).toBe(FLEET_PG_SCHEMA_VERSION);
     expect(PG_MIGRATIONS.find((m) => m.version === 27)).toMatchObject({ version: 27, name: "f2a_own_capital_custody_circuit_breaker", sql: V27_SQL });
-    const spend = code(fn("api_spend_request"));
+    const spend = code(fn("fleet_spend_request_core"));
     expect(V27_SQL).toContain("CREATE OR REPLACE FUNCTION api_spend_request(");
     expect(spend).not.toMatch(/owner_approval_threshold_cents|agent_daily_spend_cents|awaiting_owner|FLEET_OWNER_APPROVAL_REQUIRED|v_today|interval '1 day'/);
     // The only comparisons of the amount with a number are the request's validity bounds (0 and the 1e11 absolute cap).
@@ -213,9 +213,12 @@ describe("F2-A v27: the founder's economic context — wallet and record are inf
     await t.run("request_spend", { amountCents: 100, category: "expense", destinationId: "dst_forum", purpose: "x", decisionKey: "tracker-ads" });
     expect(Object.keys(t.calls.spend[0]).sort()).toEqual(["amountCents", "category", "destinationId", "idempotencyKey", "purpose", "recoverableCents"]);
     // The registry's spend decision reads no return, ranking, history, experiment or cognition record.
-    const spend = code(fn("api_spend_request")) + code(fn("fleet_spend_custody_check")) + code(fn("fleet_spend_circuit_breaker_check"));
+    const spend = code(fn("fleet_spend_request_core")) + code(fn("fleet_spend_custody_check")) + code(fn("fleet_spend_circuit_breaker_check"));
     expect(spend).not.toMatch(/roi|expected|rank|score|strategy_registry|fleet_experiment|fleet_cognition_log|fleet_decision|track_record|revenue_provenance/i);
-    expect(fn("api_spend_request")).toMatch(/api_spend_request\(p_agent text, p_token text, p_idem text, p_amount_cents bigint, p_category text,\s+p_destination text, p_purpose text, p_recoverable_cents bigint\)/);
+    // v95: the decision body is unchanged behind the durable-operation wrapper (renamed fleet_spend_request_core); the public
+    // entry point authenticates first, records the operation, then runs that body.
+    expect(fn("fleet_spend_request_core")).toMatch(/fleet_spend_request_core\(p_agent text, p_token text, p_idem text, p_amount_cents bigint, p_category text,\s+p_destination text, p_purpose text, p_recoverable_cents bigint\)/);
+    expect(code(fn("api_spend_request"))).toMatch(/fleet_authenticate\(p_agent, p_token, 'spend_request'\)[\s\S]*fleet_op_begin\(p_agent, 'spend\.request'[\s\S]*fleet_spend_request_core\(/);
     // The own-capital line is computed in the founder's runtime: a pure function of its ledger view and its own decisions.
     const a = ownCapitalLine({ cash: 5_000 }, decidedHistory());
     expect(ownCapitalLine({ cash: 5_000 }, decidedHistory())).toBe(a);
@@ -237,7 +240,7 @@ describe("F2-A v27: FleetController is the custodian — precise refusals that r
     // Tax reserves are a protected obligation category; the only obligation categories are ordinary and tax reserve.
     expect(V27_SQL).toContain("ALTER TABLE fleet_obligations ADD CONSTRAINT fleet_obligations_category_check CHECK (category IN ('obligation','tax_reserve'));");
     // Another agent's money is unreachable: the order is the authenticated agent's, and reserving debits only its own cash.
-    expect(code(fn("api_spend_request"))).toMatch(/VALUES \(gen_random_uuid\(\), 'agent_spend', p_agent, p_idem/);
+    expect(code(fn("fleet_spend_request_core"))).toMatch(/VALUES \(gen_random_uuid\(\), 'agent_spend', p_agent, p_idem/);
     const reserve = fn("fleet_order_reserve");
     expect(reserve).toMatch(/IF o\.order_type = 'agent_spend' THEN[\s\S]*fleet_ledger_account\(o\.agent_id, 'agent_reserved'\)[\s\S]*fleet_ledger_account\(o\.agent_id, 'agent_cash'\)[\s\S]*ELSE/);
     expect(reserve.slice(0, reserve.indexOf("ELSE"))).not.toMatch(/fleet:treasury|fleet:custody/);
@@ -276,7 +279,7 @@ describe("F2-A v27: FleetController is the custodian — precise refusals that r
       "INVALID_DESTINATION", "IDEMPOTENCY_CONFLICT", "INFRASTRUCTURE_CIRCUIT_BREAKER", "PAYMENT_RAIL_UNAVAILABLE"]));
     expect(custodyCategory("FLEET_AUTH_FAILED")).toBeNull();
     // Every rejection path of the spend function returns the category with the code.
-    const spend = code(fn("api_spend_request"));
+    const spend = code(fn("fleet_spend_request_core"));
     expect(spend.match(/'custody', fleet_custody_refusal\(/g)!.length).toBeGreaterThanOrEqual(4);
   });
 
@@ -290,7 +293,7 @@ describe("F2-A v27: FleetController is the custodian — precise refusals that r
     // In the registry an own-capital order ends reserved or rejected in the same call; no state waits on a person.
     // v64 (O19): a material or suspicious order is reserved and its REVIEW is pending — an automated Fleet Control review,
     // never an owner queue (fleet-spend-review-v64-pg proves it is decided by the reviewer and never approved by default).
-    const spend = code(fn("api_spend_request"));
+    const spend = code(fn("fleet_spend_request_core"));
     expect(new Set([...spend.matchAll(/(?<!review_)status = '([a-z_]+)'/g)].map((m) => m[1]))).toEqual(new Set(["rejected"]));
     expect(new Set([...spend.matchAll(/review_status = '([a-z_]+)'/g)].map((m) => m[1]))).toEqual(new Set(["pending"]));
     expect(spend).toMatch(/fleet_spend_review_open\('payment_order'/);
@@ -333,7 +336,7 @@ describe("F2-A v27: the infrastructure circuit breaker", () => {
 
   it("(16) the breaker is never visible as a research or spend entitlement", () => {
     // An agent learns only that a signal tripped (its name), never a threshold, a share or a remaining amount.
-    const spend = code(fn("api_spend_request"));
+    const spend = code(fn("fleet_spend_request_core"));
     expect(spend).toMatch(/'infrastructure circuit breaker: ' \|\| v_signal/);
     expect(spend).not.toMatch(/order_wallet_bp|velocity_wallet_bp|velocity_window_s|fleet_spend_circuit_breaker[^_]/);
     expect([...code(fn("fleet_spend_circuit_breaker_check")).matchAll(/RETURN '([a-z_]+)'/g)].map((m) => m[1])).toEqual(["unavailable", "tripped", "order_wallet_share", "velocity_wallet_share", "new_destination_wallet_share"]);
@@ -344,7 +347,7 @@ describe("F2-A v27: the infrastructure circuit breaker", () => {
     expect(custodyRefusalText("FLEET_INFRASTRUCTURE_CIRCUIT_BREAKER", "INFRASTRUCTURE_CIRCUIT_BREAKER"))
       .toMatch(/an infrastructure failsafe against anomalies .* it is not a spending allowance, a target or a judgement of your decision/);
     // No spend or research ration or entitlement in the code that decides an order (v26's research doctrine still holds).
-    for (const f of ["api_spend_request", "fleet_spend_custody_check", "fleet_spend_circuit_breaker_check"]) {
+    for (const f of ["fleet_spend_request_core", "fleet_spend_custody_check", "fleet_spend_circuit_breaker_check"]) {
       expect(code(fn(f)), f).not.toMatch(/allowance|budget|entitle|discovery|min_runway|daily_fraction/i);
     }
     expect(code(V26_SQL)).not.toMatch(/discovery|allowance|min_runway|daily_fraction|budgetCents/);

@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, spendNext } from "./fixtures/economy-registry.js";
 
 const PG_BIN = findPgBin();
 const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
@@ -130,7 +130,7 @@ describe.skipIf(!PG_BIN)("F2 v29 money core: tax, rails, settlement, vendors, wa
     const cash = await R.balance(acct(F, "agent_cash"));
     const tax = await R.balance(acct(F, "agent_tax_reserve"));
     expect(tax).toBeGreaterThan(0);
-    const spend = (who: Founder, amount: number, dst: string) => R.gw.spendRequest(who.id, who.token, { idempotencyKey: `k:${crypto.randomUUID()}`, amountCents: amount, category: "expense", destinationId: dst, purpose: "samples" });
+    const spend = (who: Founder, amount: number, dst: string) => spendNext(R, who, { idempotencyKey: `k:${crypto.randomUUID()}`, amountCents: amount, category: "expense", destinationId: dst, purpose: "samples" });
     expect(await spend(F, cash + 1, v.destinationId)).toMatchObject({ ok: false, code: "FLEET_INSUFFICIENT_ALLOCATION", custody: "INSUFFICIENT_OWN_CAPITAL" });
     expect(await spend(F, cash, v.destinationId)).toMatchObject({ ok: true, order: { status: "reserved" } });
     expect(await R.balance(acct(F, "agent_tax_reserve"))).toBe(tax);
@@ -144,7 +144,7 @@ describe.skipIf(!PG_BIN)("F2 v29 money core: tax, rails, settlement, vendors, wa
 
   it("circuit breaker: the destination-novelty signal is relative, unset by default, and refuses without naming a threshold", async () => {
     const v = await R.econ(G, "vendor.register", { vendorName: "Ads Co", category: "advertising", reference: "https://ads.example/billing" });
-    const spend = (amount: number) => R.gw.spendRequest(G.id, G.token, { idempotencyKey: `k:${crypto.randomUUID()}`, amountCents: amount, category: "expense", destinationId: v.destinationId, purpose: "ads" });
+    const spend = (amount: number) => spendNext(R, G, { idempotencyKey: `k:${crypto.randomUUID()}`, amountCents: amount, category: "expense", destinationId: v.destinationId, purpose: "ads" });
     expect(await spend(3000)).toMatchObject({ ok: true });
     await R.one(`fleet.fleet_admin_spend_circuit_breaker_novelty($1, 86400, 1000)`, [OWNER]);
     try {

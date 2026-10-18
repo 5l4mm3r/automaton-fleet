@@ -250,10 +250,13 @@ describe.skipIf(!PG_BIN)("v89 software maintenance on demonstrated scope (Postgr
       "for p in sys.argv[3:]: print('CONNECT %s %s' % (p, conn(int(p))))",
     ];
     const probePatch = ["--- /dev/null", "+++ b/probe.py", `@@ -0,0 +1,${probe.length} @@`, ...probe.map((l) => "+" + l), ""].join("\n");
+    // v95: the same build again is the same operation (replayed); a deliberate re-run (here: with the proxy) names it.
+    let previous: string | undefined;
     const run = async (proxy: number | null) => {
       const b = await R.econ(F, "code.build", { authorizationId: auth2, snapshotJobId: snap2, patch: probePatch,
-        commands: [`python3 probe.py ${process.pid} ${secretFile} ${proxyPort} ${otherPort}`], idempotencyKey: idem() });
+        commands: [`python3 probe.py ${process.pid} ${secretFile} ${proxyPort} ${otherPort}`], idempotencyKey: idem(), ...(previous ? { after: previous } : {}) });
       expect(b.ok, JSON.stringify(b)).toBe(true);
+      previous = b.operation.operationId;
       expect(await new BuildWorker(bp, { proxyPort: proxy }).tick()).toEqual({ done: 1, failed: 0 });
       const out: string = (await R.econ(F, "code.job", { jobId: b.jobId })).result.steps[0].output;
       return Object.fromEntries(out.trim().split("\n").map((l) => [l.split(" ")[0] + (l.startsWith("CONNECT") ? " " + l.split(" ")[1] : ""), l.split(" ").slice(l.startsWith("CONNECT") ? 2 : 1).join(" ")]));

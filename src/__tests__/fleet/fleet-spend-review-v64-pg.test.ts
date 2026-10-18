@@ -18,7 +18,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 import { SpendReviewer, parseReview, spendReviewPrompt, type SpendReviewJob } from "../../fleet/spend/review.js";
 import { ProviderError } from "../../fleet/cognition/types.js";
@@ -47,8 +47,14 @@ describe.skipIf(!PG_BIN)("v64: autonomous spending with Fleet Control review (Po
     const c = await su.connect();
     try { await c.query("SET session_replication_role = replica"); return (await c.query(sql, params)).rows; } finally { await c.query("RESET session_replication_role"); c.release(); }
   };
-  const spend = async (amount: number, dest = payee, purpose = "hosting for my storefront") =>
-    (await R.q(`SELECT fleet.api_spend_request($1, $2, $3, $4, 'expense', $5, $6, 0) AS r`, [F.id, F.token, `t:${crypto.randomUUID()}`, amount, dest, purpose]))[0].r;
+  // v95: a further order to the same payee names the latest one (as an agent does from the refusal's reason).
+  const spend = async (amount: number, dest = payee, purpose = "hosting for my storefront") => {
+    const call = async (after: string | null) => (await R.q(`SELECT fleet.api_spend_request($1, $2, $3, $4, 'expense', $5, $6, 0, $7) AS r`,
+      [F.id, F.token, `t:${crypto.randomUUID()}`, amount, dest, purpose, after]))[0].r;
+    const r = await call(null);
+    const latest = r.code === "FLEET_OPERATION_EXISTS" ? /after: "([0-9a-f-]{36})"/.exec(String(r.reason))?.[1] : undefined;
+    return latest ? call(latest) : r;
+  };
   const order = async (id: string) => (await R.q(`SELECT status, review_status, decision_code FROM fleet.fleet_payment_orders WHERE order_id = $1`, [id]))[0];
   const review = async (id: string) => (await R.q(`SELECT * FROM fleet.fleet_spend_reviews WHERE review_id = $1`, [id]))[0];
   const events = async (type: string) => Number((await R.q(`SELECT count(*) AS n FROM fleet.fleet_events WHERE event_type = $1`, [type]))[0].n);
@@ -118,7 +124,7 @@ describe.skipIf(!PG_BIN)("v64: autonomous spending with Fleet Control review (Po
     expect(r.note).toBeUndefined();
     expect(Number((await R.q(`SELECT count(*) AS n FROM fleet.fleet_spend_reviews`))[0].n)).toBe(0);
     // Above the retired £100 card gate and still routine for this wallet: Fleet Control approves at once.
-    const c = await R.econ(F, "card.request", { accountId: account, merchant: "Shop Ltd", paypalUnavailable: "card_only_merchant", purpose: "domain and theme", amountMinor: 12_000 });
+    const c = await econNext(R, F, "card.request", { accountId: account, merchant: "Shop Ltd", paypalUnavailable: "card_only_merchant", purpose: "domain and theme", amountMinor: 12_000 });
     expect(c).toMatchObject({ ok: true, request: { status: "approved", decidedBy: "fleet_control" } });
     expect((await R.econ(F, "card.requests")).ownerReviewAboveMinor).toBeUndefined();
   });
@@ -244,11 +250,11 @@ describe.skipIf(!PG_BIN)("v64: autonomous spending with Fleet Control review (Po
   });
 
   it("card: a material request waits for Fleet Control, not the owner; a hold declines only that request", async () => {
-    const big = await R.econ(F, "card.request", { accountId: account, merchant: "Shop Ltd", paypalUnavailable: "card_only_merchant", purpose: "a year of premium tools", amountMinor: (await cash()) + 1 });
+    const big = await econNext(R, F, "card.request", { accountId: account, merchant: "Shop Ltd", paypalUnavailable: "card_only_merchant", purpose: "a year of premium tools", amountMinor: (await cash()) + 1 });
     // (larger than what is available now: integrity first)
     expect(big).toMatchObject({ ok: false, code: "FLEET_INSUFFICIENT_FUNDS" });
     const avail = await cash();
-    const c = await R.econ(F, "card.request", { accountId: account, merchant: "Shop Ltd", paypalUnavailable: "card_only_merchant", purpose: "a year of premium tools",
+    const c = await econNext(R, F, "card.request", { accountId: account, merchant: "Shop Ltd", paypalUnavailable: "card_only_merchant", purpose: "a year of premium tools",
       amountMinor: Math.floor(avail * 0.6) });
     expect(c).toMatchObject({ ok: true, request: { status: "pending_review" } });
     expect((await R.econ(F, "card.authorize", { requestId: c.request.requestId, accountId: account, merchant: "Shop Ltd", maxMinor: 100 })).code).toBe("FLEET_CARD_REQUEST_NOT_APPROVED");

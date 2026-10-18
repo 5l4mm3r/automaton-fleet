@@ -378,6 +378,56 @@ describe("PayPal payout signer (v32, fake PayPal API — no network)", () => {
   });
 });
 
+describe("v95: a payout is recorded before PayPal is called — a crash after PayPal received it is reconciled, never paid twice", () => {
+  it("the executor dies between PayPal's acceptance and its answer: the restart finds the instruction and re-checks it with the same PayPal-Request-Id; one payout, reported once", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cx95-"));
+    const stateFile = path.join(dir, "pending.json");
+    try {
+      // A PayPal that creates each payout once per PayPal-Request-Id. The FIRST call is accepted and then the process dies
+      // (the answer never comes back): modelled as a promise that never settles.
+      const batches = new Map<string, string>();
+      const posts: string[] = [];
+      const onDisk: boolean[] = [];
+      let die = true;
+      const http: HttpPort = async (url, init) => {
+        if (url.endsWith("/v1/oauth2/token")) return { status: 200, json: async () => ({ access_token: "A21AAtoken-xyz-123", expires_in: 300 }) };
+        if (url.endsWith("/v1/payments/payouts") && init.method === "POST") {
+          const rid = init.headers["PayPal-Request-Id"];
+          posts.push(rid);
+          if (!batches.has(rid)) batches.set(rid, `BATCH${batches.size + 1}`);
+          // At the moment of the call the instruction is already on disk (recorded before dispatch); asserted below.
+          onDisk.push(fs.existsSync(stateFile) && JSON.parse(fs.readFileSync(stateFile, "utf8")).some((e: { instruction: { instructionId: string } }) => e.instruction.instructionId === rid));
+          if (die) { die = false; return new Promise<never>(() => {}); }
+          return { status: 201, json: async () => ({ batch_header: { payout_batch_id: batches.get(rid), batch_status: "PENDING" } }) };
+        }
+        const m = /\/v1\/payments\/payouts\/([A-Za-z0-9]+)$/.exec(url);
+        if (m) return { status: 200, json: async () => ({ batch_header: { payout_batch_id: m[1], batch_status: "SUCCESS" },
+          items: [{ transaction_status: "SUCCESS", payout_item: { amount: { value: "7.00", currency: "GBP" } } }] }) };
+        return { status: 404, json: async () => ({}) };
+      };
+      let claims = 0;
+      const reports: string[] = [];
+      const g = fakeGateway({ enabled: true, claim: async () => ({ ok: true, instruction: claims++ === 0 ? inst() : null }),
+        report: async (_i, _l, outcome, ref) => { reports.push(`${outcome}:${ref}`); return { ok: true }; } }).gw;
+      const ex1 = new CustodyExecutor(g, [new PayPalPayoutSigner(BINDING, http)], { log: quiet, vault, stateFile });
+      void ex1.tick();                                         // dies inside the PayPal call (never resolves)
+      for (let i = 0; i < 50 && posts.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(posts).toHaveLength(1);
+      expect(onDisk).toEqual([true]);
+      expect(reports).toEqual([]);
+      // Restart: the instruction is found (it was written before the call) and re-checked with the same request id.
+      const ex2 = new CustodyExecutor(g, [new PayPalPayoutSigner(BINDING, http)], { log: quiet, vault, stateFile });
+      expect(ex2.status().pending).toBe(1);
+      await ex2.tick();
+      expect(new Set(posts).size).toBe(1);                     // every call carried the same PayPal-Request-Id
+      expect(batches.size).toBe(1);                            // PayPal made ONE payout
+      expect(reports).toEqual(["settled:paypal:payout:BATCH1"]);
+      expect(claims).toBe(2);                                  // the restart claimed nothing new for it
+      expect(ex2.status().pending).toBe(0);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
 describe("agent shell guard (Phase E surfaces)", () => {
   it("refuses every ledger, destination and custody surface, and leaves ordinary commands alone", () => {
     for (const c of [

@@ -14,7 +14,11 @@ import { findVerification, isAuthenticationMessage, redactMail, type AccountOutc
   type PlatformConnector, type SmsProvider } from "./providers.js";
 import { OWNER_IDENTITY_CLASSES, type AgentCredentialVault, type OwnerIdentityVault, type OwnerIdentityClass, type ProviderSecretVault } from "./vaults.js";
 
-type JobOutcome = { outcome: "pending" | "succeeded" | "failed" | "human_action_required"; result: Record<string, unknown>; account: Record<string, unknown> };
+type JobOutcome = { outcome: "pending" | "succeeded" | "failed" | "human_action_required" | "uncertain"; result: Record<string, unknown>; account: Record<string, unknown> };
+/** v95: a send's Message-ID is derived from its job: the same on every attempt, so a lost answer can be looked up. */
+export function fleetMessageId(jobId: string, domain: string): string {
+  return `<fleet-${jobId}@${domain}>`;
+}
 
 export interface BrokerOptions {
   worker?: string;
@@ -618,7 +622,7 @@ export class IdentityBroker {
         // v41: a Fleet Message-ID (known before sending, so replies thread back) and, on the shared mailbox, the agent's
         // routing address as Reply-To.
         const domain = (this.mail.address ?? m.from).split("@")[1] ?? "fleet.invalid";
-        const messageId = `<${crypto.randomUUID()}@${domain}>`;
+        const messageId = fleetMessageId(job.jobId, domain);
         try {
           // v56: an order delivery carries its files; all of them, or the send fails (and is retried by the registry).
           let attachments: Array<{ fileName: string; contentType: string; content: Buffer }> | null = null;
@@ -633,6 +637,8 @@ export class IdentityBroker {
           return { outcome: "succeeded", result: { status: "sent", data: { messageId: m.messageId } }, account: {} };
         } catch (err) {
           const code = /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "FLEET_MAIL_SEND_FAILED";
+          // v95: the message may have gone out (its answer was lost): never failed, never re-sent blindly — reconciled.
+          if (code === "FLEET_MAIL_SEND_UNCERTAIN") return { outcome: "uncertain", result: { status: "uncertain", code }, account: {} };
           await this.gw.mailSent2(job.jobId, lease, null, null, false, code);
           if (this.mailChannel) await this.gw.commsHealth(this.worker, this.mailChannel, false, code);
           return failed("FLEET_MAIL_SEND_FAILED", "the mail provider refused or was unavailable; try again later or another channel");
@@ -681,7 +687,8 @@ export class IdentityBroker {
           const r = await this.sms.send({ from: m.from, to: m.to, body: m.body });
           await this.gw.smsSent(job.jobId, lease, r.providerMessageId, true);
           return { outcome: "succeeded", result: { status: "sent", data: { smsId: m.smsId } }, account: {} };
-        } catch {
+        } catch (err) {
+          if (/FLEET_SMS_SEND_UNCERTAIN/.test(err instanceof Error ? err.message : "")) return { outcome: "uncertain", result: { status: "uncertain", code: "FLEET_SMS_SEND_UNCERTAIN" }, account: {} };
           await this.gw.smsSent(job.jobId, lease, null, false);
           return failed("FLEET_SMS_SEND_FAILED", "the SMS provider refused or was unavailable");
         }
@@ -717,10 +724,32 @@ export class IdentityBroker {
     if (out.outcome === "pending") this.leases.set(job.jobId, lease);
     else this.leases.delete(job.jobId);
     this.saveLeases();
+    if (out.outcome === "uncertain") {
+      // v95: recorded as uncertain (reconciled, never reported as failed or sent again); a gateway without it keeps the claim.
+      const u = this.gw.jobUncertain ? await this.gw.jobUncertain(job.jobId, lease, String(out.result.code ?? "outcome unknown")) : { ok: false, code: "FLEET_UNSUPPORTED" };
+      this.log(u.ok ? "warn" : "error", "identity_job_uncertain", { jobId: job.jobId, kind: job.kind, code: u.ok ? null : u.code ?? null });
+      return "uncertain";
+    }
     const r = await this.gw.report(job.jobId, lease, out.outcome, out.result, out.account);
     if (!r.ok) this.log("error", "identity_report_refused", { jobId: job.jobId, code: r.code });
     this.log("info", "identity_job_finished", { jobId: job.jobId, kind: job.kind, outcome: out.outcome, code: out.result.code ?? null });
     return out.outcome;
+  }
+
+  /**
+   * v95: an uncertain send is looked up by its job-derived Message-ID. Found: sent. Absent: the registry requeues it once
+   * it was absent on two checks (the same Message-ID goes out). A provider that cannot be checked: it stays uncertain.
+   */
+  private async reconcileMail(): Promise<void> {
+    if (!this.gw.uncertainMail || !this.gw.reconcileMail) return;
+    for (const j of await this.gw.uncertainMail()) {
+      if (!this.mail?.sentByMessageId || !this.mail.address) { await this.gw.reconcileMail(j.jobId, "unknowable", null); continue; }
+      const id = fleetMessageId(j.jobId, this.mail.address.split("@")[1] ?? "fleet.invalid");
+      let found: boolean;
+      try { found = await this.mail.sentByMessageId(id); } catch { continue; }   // the provider is unreachable: check again later
+      const r = await this.gw.reconcileMail(j.jobId, found ? "sent" : "absent", found ? id : null);
+      this.log("info", "identity_mail_reconciled", { jobId: j.jobId, found, status: r.status ?? null });
+    }
   }
 
   private async pass(name: string, fn: () => Promise<unknown>): Promise<void> {
@@ -747,6 +776,9 @@ export class IdentityBroker {
     await this.pass("vault_uploads", () => this.installVaultUploads());
     await this.pass("reveals", () => this.serveReveals());
     await this.pass("browser_secrets", () => this.serveBrowserSecrets());
+    // v95: jobs whose answer was lost (claimed too long) are uncertain; uncertain mail is looked up in the Sent folder.
+    if (this.gw.jobsLost) await this.pass("lost_jobs", () => this.gw.jobsLost!());
+    await this.pass("mail_reconcile", () => this.reconcileMail());
     for (const job of await this.gw.pending(this.worker)) {
       const lease = this.leases.get(job.jobId);
       if (lease) outcomes.push(await this.run(job, lease));

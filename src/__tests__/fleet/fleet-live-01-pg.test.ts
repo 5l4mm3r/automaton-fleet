@@ -54,6 +54,9 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
     idempotencyKey: `dep:${crypto.randomUUID()}`, kind: "kyc", action: "List the tracker on Gumroad", goalRef: "g1", title: "Gumroad seller account",
     detail: "A Gumroad seller account needs a human identity; selling directly meanwhile.", ...o } as never);
   const idOf = (r: Record<string, unknown>) => (r.request as { requestId: string }).requestId;
+  // v95: a new dependency is a new action (the same request again is the same request, answered from the register).
+  let fresh_n = 0;
+  const fresh = () => ({ action: `List the tracker on marketplace ${++fresh_n}`, title: `Marketplace ${fresh_n} seller account` });
   /** Backdate a record (owner, with its guard off for the test only) to simulate time passing. */
   const age = async (id: string, s: number) => {
     await q(`ALTER TABLE fleet.fleet_owner_requests DISABLE TRIGGER fleet_owner_requests_guard`);
@@ -120,27 +123,37 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
     expect(a).toMatchObject({ ok: true, note: expect.stringMatching(/only this action is unavailable\. Keep working/),
       request: { status: "pending", kind: "kyc", action: "List the tracker on Gumroad", goalRef: "g1", blocksAction: true, blocking: false, stale: false, category: "kyc" } });
     expect((a.request as Record<string, unknown>).staleAfterS).toBeUndefined();
-    expect(await create(F, { idempotencyKey: idem, title: "changed" })).toMatchObject({ ok: true, replayed: true, request: { requestId: idOf(a), title: "Gumroad seller account" } });
+    // v95: the same request decided again (any key) is the same request; the same position with other content is refused.
+    expect(await create(F, { idempotencyKey: `dep:${crypto.randomUUID()}` })).toMatchObject({ ok: true, replay: true, request: { requestId: idOf(a), title: "Gumroad seller account" } });
+    expect(await create(F, { idempotencyKey: idem, title: "changed" })).toMatchObject({ ok: false, code: "FLEET_OPERATION_EXISTS" });
+    // (v95: a malformed request on the subject of an existing one is refused as FLEET_OPERATION_EXISTS first; asked as a
+    // further request, it meets its validation. Either way nothing is stored.)
+    const createNext = async (who: Who, o: Record<string, unknown>) => {
+      const r = await create(who, o);
+      const latest = r.code === "FLEET_OPERATION_EXISTS" ? /after: "([0-9a-f-]{36})"/.exec(String(r.reason))?.[1] : undefined;
+      return latest ? create(who, { ...o, after: latest }) : r;
+    };
     for (const bad of [{ goalRef: "goal-1" }, { title: "" }, { action: "" }, { action: "x".repeat(201) }, { detail: "x".repeat(2001) }]) {
-      expect(await create(F, bad), JSON.stringify(bad)).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+      expect(await createNext(F, bad), JSON.stringify(bad)).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
     }
     const leak = await create(F, { title: "Use postgres://u:secret@host/db", action: "Sign in with postgres://u:secret@host/db", detail: `key 0x${"ab".repeat(32)}` });
     expect(JSON.stringify(leak)).not.toMatch(/secret@|abababab/);
     for (const kind of ["human_identity", "legal_signature", "non_delegable_credential"]) expect(await create(F, { kind })).toMatchObject({ ok: true, request: { kind } });
-    expect(await create(F)).toMatchObject({ ok: false, code: "FLEET_LIMIT_REACHED", reason: expect.stringMatching(/at most 5 open dependencies/) });
+    // (v95: a sixth DIFFERENT request; the same request again would be the first one, replayed.)
+    expect(await create(F, { action: "Open a seller account on marketplace Y", title: "Marketplace Y seller identity" })).toMatchObject({ ok: false, code: "FLEET_LIMIT_REACHED", reason: expect.stringMatching(/at most 5 open dependencies/) });
     const mine = await gw.ownerRequestList(F.id, F.token);
     expect((mine.requests as unknown[]).length).toBe(5);
     expect(await gw.ownerRequestList(G.id, G.token)).toMatchObject({ ok: true, requests: [] });
     expect(await gw.ownerRequestWithdraw(G.id, G.token, idOf(a))).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
-    expect(await create(F, { idempotencyKey: idem })).toMatchObject({ ok: true, replayed: true }); // replay is never limited
+    expect(await create(F, { idempotencyKey: idem })).toMatchObject({ ok: true, replay: true }); // replay is never limited (v95: answered from the register)
     expect((await q(`SELECT detail FROM fleet.fleet_events WHERE event_type = 'external_dependency_recorded' ORDER BY id LIMIT 1`))[0].detail)
       .toMatchObject({ requestId: idOf(a), kind: "kyc", goalRef: "g1" });
     // Clean up for the next tests: the founder withdraws its own (its own decision; no owner involved).
     for (const r of mine.requests as Array<{ requestId: string }>) expect(await gw.ownerRequestWithdraw(F.id, F.token, r.requestId)).toMatchObject({ ok: true, request: { status: "withdrawn" } });
     expect(await gw.ownerRequestWithdraw(F.id, F.token, idOf(a))).toMatchObject({ ok: false, code: "FLEET_INVALID_STATE" });
     // Rate limit: 10 created per day (5 so far + 5 more), the 11th is refused even with nothing open.
-    for (let i = 0; i < 5; i++) { const r = await create(F); await gw.ownerRequestWithdraw(F.id, F.token, idOf(r)); }
-    expect(await create(F)).toMatchObject({ ok: false, code: "FLEET_RATE_LIMITED" });
+    for (let i = 0; i < 5; i++) { const r = await create(F, fresh()); await gw.ownerRequestWithdraw(F.id, F.token, idOf(r)); }
+    expect(await create(F, fresh())).toMatchObject({ ok: false, code: "FLEET_RATE_LIMITED" });
     await q(`ALTER TABLE fleet.fleet_owner_requests DISABLE TRIGGER fleet_owner_requests_guard`);
     await q(`UPDATE fleet.fleet_owner_requests SET created_at = now() - interval '2 days' WHERE agent_id = $1`, [F.id]);
     await q(`ALTER TABLE fleet.fleet_owner_requests ENABLE TRIGGER fleet_owner_requests_guard`);
@@ -149,7 +162,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
   it("only the owner resolves (rare, identity-only); the answer reaches the founder; it is final, immutable and grants nothing", async () => {
     const before = await q(`SELECT (SELECT count(*) FROM fleet.fleet_payment_orders) AS o, (SELECT count(*) FROM fleet.fleet_org_identity_claims) AS c,
                                    (SELECT count(*) FROM fleet.fleet_ledger_journal) AS j, (SELECT to_jsonb(m) FROM fleet.fleet_capability_manifests m WHERE manifest_id = 'founder-v2') AS m`);
-    const r = await create(F);
+    const r = await create(F, fresh());
     const id = idOf(r);
     expect(await code(genesis.decideOwnerRequest(id, "approved", null, "owner"))).toBe("FLEET_APPROVAL_REQUIRED");
     expect(await code(genesis.decideOwnerRequest(id, "answered", "  ", OWNER))).toBe("FLEET_BAD_REQUEST");
@@ -161,7 +174,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
     const seen = (await gw.ownerRequestList(F.id, F.token)).requests as Array<Record<string, unknown>>;
     expect(seen.find((x) => x.requestId === id)).toMatchObject({ status: "declined", response: "No Gumroad identity this month.", stale: false, blocking: false });
     // An approval changes nothing else: no order, claim, journal or manifest change.
-    const r2 = await create(F, { kind: "human_identity" });
+    const r2 = await create(F, { kind: "human_identity", ...fresh() });
     await genesis.decideOwnerRequest(idOf(r2), "approved", null, OWNER);
     expect(await q(`SELECT (SELECT count(*) FROM fleet.fleet_payment_orders) AS o, (SELECT count(*) FROM fleet.fleet_org_identity_claims) AS c,
                            (SELECT count(*) FROM fleet.fleet_ledger_journal) AS j, (SELECT to_jsonb(m) FROM fleet.fleet_capability_manifests m WHERE manifest_id = 'founder-v2') AS m`)).toEqual(before);
@@ -176,7 +189,7 @@ describe.skipIf(!PG_BIN)("F2-A external dependencies (schema v26, PostgreSQL)", 
   });
 
   it("no staleness: an open dependency days old is not stale and never a WARN; only a constitutional item asks the owner to look", async () => {
-    const r = await create(F);
+    const r = await create(F, fresh());
     const id = idOf(r);
     let lines = await doctorLines();
     expect(lines.find((c) => c.name === "external dependencies")).toMatchObject({ status: "pass", detail: expect.stringMatching(/^1 open \(kyc 1\): each makes one action unavailable; no founder is blocked; oldest 0\.0 d$/) });

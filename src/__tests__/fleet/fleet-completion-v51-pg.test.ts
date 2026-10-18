@@ -22,7 +22,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
 import { liveRail, type ArmedCustody } from "./fixtures/custody-signer.js";
 import { generateX25519 } from "../../fleet/identity/crypto.js";
 import { KNOWLEDGE_LIBRARY_V2 } from "../../fleet/postgres/knowledge-library-v2.js";
@@ -88,7 +88,7 @@ describe.skipIf(!PG_BIN)("v51 completion: exhaustion, card reservations, PayPal 
 
   // v54: the card only under an approved request (PayPal first); small amounts are approved by Fleet Control at once.
   const approved = async (who: Founder, args: Record<string, any>) => {
-    const r = await R.econ(who, "card.request", { accountId: args.accountId, merchant: args.merchant, amountMinor: args.maxMinor, paypalUnavailable: "card_only_merchant",
+    const r = await econNext(R, who, "card.request", { accountId: args.accountId, merchant: args.merchant, amountMinor: args.maxMinor, paypalUnavailable: "card_only_merchant",
       purpose: args.purpose ?? "a purchase the treasury PayPal cannot pay", ...(args.envelopeId ? { envelopeId: args.envelopeId } : {}) });
     expect(r.ok, JSON.stringify(r)).toBe(true);
     expect(r.request.status).toBe("approved");
@@ -129,7 +129,7 @@ describe.skipIf(!PG_BIN)("v51 completion: exhaustion, card reservations, PayPal 
 
   it("a card hold reserves first; is refused beyond the agent's own capital; books once and returns the rest", async () => {
     const c0 = await cash(F);
-    expect((await R.econ(F, "card.request", { accountId: account, merchant: "Big Shop", amountMinor: c0 + 1, paypalUnavailable: "card_only_merchant", purpose: "too big" })).code).toBe("FLEET_INSUFFICIENT_FUNDS");
+    expect((await econNext(R, F, "card.request", { accountId: account, merchant: "Big Shop", amountMinor: c0 + 1, paypalUnavailable: "card_only_merchant", purpose: "too big" })).code).toBe("FLEET_INSUFFICIENT_FUNDS");
     const h = await R.econ(F, "card.authorize", await approved(F, { accountId: account, merchant: "Shop Ltd", maxMinor: 4_000, purpose: "a domain and hosting" }));
     expect(h).toMatchObject({ ok: true, charge: { funding: "own", reservedMinor: 4_000, status: "held" } });
     expect(await cash(F)).toBe(c0 - 4_000);
@@ -175,7 +175,7 @@ describe.skipIf(!PG_BIN)("v51 completion: exhaustion, card reservations, PayPal 
     const pos2 = (await R.econ(F, "envelope.list")).envelopes.find((e: any) => e.envelopeId === env).position;
     expect(pos2).toMatchObject({ reservedMinor: 0, spentMinor: 800 });
     // Not one of your envelopes → refused.
-    expect((await R.econ(F, "card.request", { accountId: account, merchant: "Printer Co", amountMinor: 10, envelopeId: crypto.randomUUID(), paypalUnavailable: "card_only_merchant", purpose: "prints" })).code)
+    expect((await econNext(R, F, "card.request", { accountId: account, merchant: "Printer Co", amountMinor: 10, envelopeId: crypto.randomUUID(), paypalUnavailable: "card_only_merchant", purpose: "prints" })).code)
       .toBe("FLEET_ENVELOPE_UNAVAILABLE");
   });
 

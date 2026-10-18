@@ -11,7 +11,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
 import { liveRail, type ArmedCustody } from "./fixtures/custody-signer.js";
 import { businessRefs } from "../../fleet/cognition/routed-gateway.js";
 
@@ -30,7 +30,7 @@ describe.skipIf(!PG_BIN)("v90 several cards, reversed chargebacks, PayPal limita
   const txn = (x: Record<string, unknown>) => rx("rx_location_txn", ["feed", bank, { currency: "GBP", source: "simulated", ...x }]);
   const now = () => new Date().toISOString();
   const hold = async (maxMinor: number, extra: Record<string, unknown> = {}) => {
-    const rq = await R.econ(F, "card.request", { accountId: account, merchant: "Shop Ltd", paypalUnavailable: "card_only_merchant", amountMinor: maxMinor, purpose: `stock assets ${++n}` });
+    const rq = await econNext(R, F, "card.request", { accountId: account, merchant: "Shop Ltd", paypalUnavailable: "card_only_merchant", amountMinor: maxMinor, purpose: `stock assets ${++n}` });
     expect(rq.ok, JSON.stringify(rq)).toBe(true);
     return R.econ(F, "card.authorize", { requestId: rq.request.requestId, accountId: account, merchant: "Shop Ltd", maxMinor, ...extra });
   };

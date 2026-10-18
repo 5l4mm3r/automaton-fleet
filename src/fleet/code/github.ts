@@ -71,15 +71,32 @@ export class GitHubApp {
     return { sha: c.sha, tarball: await r.bytes() };
   }
 
-  /** A proposal: the patch applied to the base commit's files, committed on a NEW fleet/ branch, opened as a pull request. */
+  /**
+   * A proposal: the patch applied to the base commit's files, committed on the job's own fleet/ branch, opened as a pull
+   * request. v95: idempotent per job (its branch name is derived from the job): a pull request already open from that
+   * branch is adopted; a branch an earlier attempt pushed gets its pull request; only what is missing is created.
+   */
   async propose(o: { installationId: number; repo: string; baseBranch: string; baseSha: string; branch: string; patch: string; title: string; body: string }):
-    Promise<{ pullRequestUrl: string; number: number; commitSha: string; branch: string; files: number }> {
+    Promise<{ pullRequestUrl: string; number: number; commitSha: string; branch: string; files: number; adopted?: "pull_request" | "branch" }> {
     if (!o.branch.startsWith("fleet/") || !/^fleet\/[a-z0-9-]{3,60}$/.test(o.branch)) throw new Error("the Fleet writes only fleet/ branches");
     if (o.branch === o.baseBranch) throw new Error("never the base branch");
     if (!SHA.test(o.baseSha)) throw new Error("bad base commit");
     const changes = parsePatch(o.patch);
     const tok = await this.token(o.installationId, o.repo, { contents: "write", pull_requests: "write", metadata: "read" });
     const auth = `token ${tok}`;
+    const notFound = (e: Error) => { if (/GITHUB_HTTP_404/.test(e.message)) return null; throw e; };
+    const owner = o.repo.split("/")[0];
+    const open = await this.call<Array<{ html_url: string; number: number; head?: { sha?: string } }>>("GET",
+      `/repos/${o.repo}/pulls?head=${encodeURIComponent(`${owner}:${o.branch}`)}&state=all`, auth).catch(notFound);
+    if (Array.isArray(open) && open.length && typeof open[0].html_url === "string") {
+      return { pullRequestUrl: open[0].html_url, number: open[0].number, commitSha: String(open[0].head?.sha ?? ""), branch: o.branch, files: changes.length, adopted: "pull_request" };
+    }
+    const pushed = await this.call<{ object?: { sha?: string } }>("GET", `/repos/${o.repo}/git/ref/heads/${o.branch.split("/").map(encodeURIComponent).join("/")}`, auth).catch(notFound);
+    if (pushed?.object?.sha && SHA.test(pushed.object.sha)) {
+      const pr = await this.call<{ html_url: string; number: number }>("POST", `/repos/${o.repo}/pulls`, auth, { title: o.title, head: o.branch, base: o.baseBranch, body: o.body,
+        maintainer_can_modify: false, draft: false });
+      return { pullRequestUrl: pr.html_url, number: pr.number, commitSha: pushed.object.sha, branch: o.branch, files: changes.length, adopted: "branch" };
+    }
     const base = await this.call<{ tree: { sha: string } }>("GET", `/repos/${o.repo}/git/commits/${o.baseSha}`, auth);
     const tree: Array<{ path: string; mode: string; type: string; sha: string | null }> = [];
     for (const ch of changes) {

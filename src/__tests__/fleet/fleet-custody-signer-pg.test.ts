@@ -12,7 +12,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, spendNext } from "./fixtures/economy-registry.js";
 import { attest, liveRail, unpinCustody, type ArmedCustody } from "./fixtures/custody-signer.js";
 import { PgCustodyGateway } from "../../fleet/custody/gateway.js";
 import { CustodyExecutor } from "../../fleet/custody/executor.js";
@@ -62,7 +62,7 @@ describe.skipIf(!PG_BIN)("v32 controller custody signer (PostgreSQL)", () => {
   const issue = (orderId: string) => svc.query(`SELECT fleet.svc_issue_payment_instruction($1) AS r`, [orderId]).then((r) => r.rows[0].r);
   const orderStatus = async (orderId: string) => (await R.q(`SELECT status FROM fleet.fleet_payment_orders WHERE order_id = $1`, [orderId]))[0].status;
   const spend = async (who: Founder, destinationId: string, amountCents: number) => {
-    const r = await R.gw.spendRequest(who.id, who.token, { idempotencyKey: `s:${crypto.randomUUID()}`, amountCents, category: "expense", destinationId, purpose: "venture cost" });
+    const r = await spendNext(R, who, { idempotencyKey: `s:${crypto.randomUUID()}`, amountCents, category: "expense", destinationId, purpose: "venture cost" });
     expect(r.ok, JSON.stringify(r)).toBe(true);
     return (r.order as { orderId: string }).orderId;
   };

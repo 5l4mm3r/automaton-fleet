@@ -946,6 +946,8 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
       "fleet_admin_ai_credit_balance_reconcile"]),
     // v25/v26: dependency records only through the founder API and the owner's resolve/import.
     fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import",
+      // v95: the founder API's body behind its durable-operation wrapper.
+      "fleet_owner_request_create_core",
       // v29: PAYMENT_RAIL_REQUIRED records ONE action-scoped kyc dependency (and answers it when a rail is connected).
       "fleet_rail_resolve",
       // v36: a number provider's account-holder identity step records ONE action-scoped human_identity dependency.
@@ -1139,6 +1141,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_agent_account_credentials: new Set(["fleet_econ_account_password_confirm", "fleet_econ_account_password_discard", "fleet_econ_account_revoke", "ix_credential_record", "ix_browser_credential_record"]),
     fleet_agent_mailboxes: new Set(["ix_mailbox_record", "fleet_estate_assign_internal", "fleet_econ_mailbox_provision"]),
     fleet_identity_jobs: new Set(["fleet_identity_enqueue", "ix_claim_job", "ix_report_job", "fleet_estate_assign_internal", "svc_estate_tick",
+      // v95: a lost answer is uncertain (never re-sent blindly); uncertain mail is reconciled against the Sent folder.
+      "ix_jobs_lost", "ix_job_uncertain", "ix_reconcile_mail",
       // v51: freezing an account stops its queued jobs.
       "fleet_admin_account_freeze"]),
     // v35: the economy engine. Replication state/birth orders only by the controller pass and Admin; missions by their
@@ -1162,7 +1166,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_estate_policy: new Set([]),
     // v36: mail (agent send; broker delivery/status), phones/SMS (agent ops; broker provision/delivery/status), commitments
     // created for a number's monthly fee, owner vault installation, reveal serving/taking, notification email status.
-    fleet_agent_mail: new Set(["ix_mail_deliver", "ix_mail_consumed", "ix_mail_deliver2", "ix_mail_sent", "fleet_econ_mail_send",
+    fleet_agent_mail: new Set(["ix_mail_deliver", "ix_mail_consumed", "ix_mail_deliver2", "ix_mail_sent", "fleet_econ_mail_send", "ix_reconcile_mail",
       // v41: shared-mailbox ingestion (attribution), outbound status, Admin routing of unassigned mail.
       "fleet_mail_store_in", "ix_mail_sent2", "fleet_admin_mail_assign",
       // v63: the owner's dismiss / delete and the retention pass (one delete path, keep rules applied).
@@ -1184,8 +1188,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_identity_broker_keys: new Set(["ix_publish_owner_key"]),
     // v37: the browser operator — sessions/actions by the agent ops and the worker (bx_*); credential requests by the worker,
     // served by the broker; authentication-message blobs by the broker only.
-    fleet_browser_sessions: new Set(["fleet_econ_browser_open", "fleet_econ_browser_close", "fleet_browser_enqueue", "bx_report_action", "fleet_admin_account_freeze"]),
-    fleet_browser_actions: new Set(["fleet_browser_enqueue", "bx_claim_action", "bx_report_action"]),
+    fleet_browser_sessions: new Set(["fleet_econ_browser_open", "fleet_econ_browser_close", "fleet_browser_enqueue", "bx_report_action", "fleet_admin_account_freeze", "bx_actions_lost"]),
+    fleet_browser_actions: new Set(["fleet_browser_enqueue", "bx_claim_action", "bx_report_action", "bx_actions_lost"]),
     fleet_browser_secret_requests: new Set(["bx_secret_request", "bx_secret_take", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
     fleet_auth_message_blobs: new Set(["ix_auth_blob_store", "ix_browser_secrets_pending", "ix_browser_secret_serve", "fleet_admin_mail_assign",
       "fleet_mail_delete_internal"]),
@@ -1421,7 +1425,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_paypal_disputes: new Set(["cx_paypal_dispute_record", "fleet_admin_paypal_dispute_resolve"]),
     fleet_paypal_debit_classifications: new Set(["fleet_admin_paypal_debit_classify"]),
     // v59: refund requests by the one request function (agent or owner), custody's result and PayPal's evidence.
-    fleet_paypal_refund_requests: new Set(["fleet_order_refund_request", "cx_paypal_refund_result", "fleet_refund_request_completed"]),
+    fleet_paypal_refund_requests: new Set(["fleet_order_refund_request", "cx_paypal_refund_result", "fleet_refund_request_completed", "cx_paypal_refund_unresolved"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

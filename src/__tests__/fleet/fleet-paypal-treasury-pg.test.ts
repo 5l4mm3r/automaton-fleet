@@ -16,7 +16,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, spendNext } from "./fixtures/economy-registry.js";
 import { attest, liveRail, unpinCustody, type ArmedCustody } from "./fixtures/custody-signer.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
@@ -37,7 +37,7 @@ describe.skipIf(!PG_BIN)("v48 PayPal treasury, custody activation and card clear
   const cash = (who: Founder) => R.balance(`agent:${who.id}:cash`);
   const events = async (type: string) => Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = $1)`, [type]));
   const spend = async (who: Founder, destinationId: string, amountCents: number) => {
-    const r = await R.gw.spendRequest(who.id, who.token, { idempotencyKey: `s:${crypto.randomUUID()}`, amountCents, category: "expense", destinationId, purpose: "venture cost" });
+    const r = await spendNext(R, who, { idempotencyKey: `s:${crypto.randomUUID()}`, amountCents, category: "expense", destinationId, purpose: "venture cost" });
     expect(r.ok, JSON.stringify(r)).toBe(true);
     return (r.order as { orderId: string }).orderId;
   };
