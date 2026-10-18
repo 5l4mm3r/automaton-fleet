@@ -7,6 +7,8 @@
  *   3. scripts/fleet-rollout.sh cutover: every retry guard runs before runtime.env / `current` change;
  *      scripts/fleet-release-reuse.sh reuses an existing release directory only when it is verified complete against the
  *      staged pinned build, otherwise quarantines it with its evidence.
+ *   4. (2026-10-18) the 32634bf install lost its final lines: `exec > >(tee …)` is not waited for. fleet-rollout.sh,
+ *      fleet-upgrade-rehearsal.sh and fleet-edge.sh log through teelog, which pipes a re-run of the script through tee.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { spawnSync, execFileSync } from "child_process";
@@ -251,5 +253,52 @@ describe("fleet-rollout.sh cutover: every retry guard before the first runtime c
     const restores = src.split("\n").filter((l) => /cp -p \$ENVF\.pre-\$\{C:0:7\} \$ENVF/.test(l));
     expect(restores.length).toBe(4);
     for (const l of restores) expect(l).toMatch(/&& sudo mv \$ENVF\.pre-\$\{C:0:7\} \$ENVF\.pre-\$\{C:0:7\}\.(reverted|aborted)-/);
+  });
+});
+
+describe("teelog: the log is complete when the script returns, with the script's own exit status (2026-10-18)", () => {
+  const LOGGED = ["fleet-rollout.sh", "fleet-upgrade-rehearsal.sh", "fleet-edge.sh"];
+  const helperOf = (f: string) => { const src = fs.readFileSync(path.join(SCRIPTS, f), "utf8"); const m = src.match(/^SELF=\$\(readlink[^\n]*\nteelog\(\) \{[\s\S]*?\n\}\n/m); return m?.[0] ?? null; };
+
+  it("every logged release script uses the same helper and none keeps an unwaited process-substitution tee", () => {
+    const helpers = LOGGED.map(helperOf);
+    expect(helpers.every(Boolean)).toBe(true);
+    expect(new Set(helpers).size).toBe(1);
+    for (const f of LOGGED) expect(fs.readFileSync(path.join(SCRIPTS, f), "utf8"), f).not.toMatch(/exec\s*>\s*>\(tee/);
+  });
+
+  it("runs the work once, returns its exit status, and the report holds the last line as soon as it returns; a child script still logs", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "teelog-"));
+    try {
+      const helper = helperOf("fleet-rollout.sh")!;
+      // A slow tee makes the race deterministic: the old pattern returns before its report holds anything.
+      const realTee = execFileSync("bash", ["-c", "command -v tee"], { encoding: "utf8" }).trim();
+      fs.mkdirSync(path.join(dir, "bin"));
+      fs.writeFileSync(path.join(dir, "bin", "tee"), `#!/bin/sh\nsleep 0.3\nexec ${realTee} "$@"\n`, { mode: 0o755 });
+      const env = { ...process.env, PATH: `${path.join(dir, "bin")}:${process.env.PATH}` };
+      const old = path.join(dir, "old.sh");
+      fs.writeFileSync(old, `#!/usr/bin/env bash\nset -euo pipefail\nexec > >(tee -a "${dir}/old.txt") 2>&1\necho "== FINAL LINE"\nexit 7\n`);
+      // Output not captured through a pipe the caller waits on (as when the SSH session ends): only the script's own exit counts.
+      const detached = { env, stdio: ["ignore", "ignore", "ignore"] as ["ignore", "ignore", "ignore"] };
+      expect(spawnSync("bash", [old], detached).status).toBe(7);
+      expect(fs.existsSync(path.join(dir, "old.txt")) ? fs.readFileSync(path.join(dir, "old.txt"), "utf8") : "").not.toContain("FINAL LINE"); // the defect
+      const child = path.join(dir, "child.sh");
+      fs.writeFileSync(child, `#!/usr/bin/env bash\nset -euo pipefail\n${helper}teelog "${dir}/child.log"\necho "child FLEET_TEELOG=\${FLEET_TEELOG:-unset}"\n`);
+      const script = path.join(dir, "s.sh");
+      fs.writeFileSync(script, `#!/usr/bin/env bash\nset -euo pipefail\n${helper}MODE="\${1:-}"; REPORT="${dir}/report.txt"\nteelog "$REPORT" -a\n`
+        + `echo run >> "${dir}/runs"\necho "mode $MODE"\nbash "${child}"\nfor i in $(seq 1 20000); do echo "line $i"; done\necho "== FINAL LINE" >&2\nexit 7\n`);
+      for (let k = 1; k <= 3; k++) {
+        expect(spawnSync("bash", [script, "cutover"], detached).status).toBe(7); // the script's own status, not tee's
+        const report = fs.readFileSync(path.join(dir, "report.txt"), "utf8");
+        expect(report.trimEnd().endsWith("== FINAL LINE")).toBe(true);           // complete at return, stderr included
+        expect(report.split("== FINAL LINE").length - 1).toBe(k);
+        expect(report).toContain("mode cutover");                                 // the arguments reach the re-run
+      }
+      const shown = spawnSync("bash", [script, "cutover"], { encoding: "utf8", env });
+      expect(shown.status).toBe(7);
+      expect(shown.stdout.trimEnd().endsWith("== FINAL LINE")).toBe(true);       // the terminal sees it all too
+      expect(fs.readFileSync(path.join(dir, "runs"), "utf8").trim().split("\n")).toHaveLength(4); // the work ran once per invocation
+      expect(fs.readFileSync(path.join(dir, "child.log"), "utf8")).toContain("child FLEET_TEELOG=unset"); // the marker is not inherited
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

@@ -27,6 +27,15 @@
 # this does not change). Real payments, owner sweeps, replication and the dry-run child flag are asserted false.
 set -euo pipefail
 export PATH=/opt/automaton-fleet/node/bin:$PATH
+# Log to <report> as well as the terminal, and finish only once the log is complete: teelog re-runs this script with its
+# output piped through tee, and a pipeline waits for tee; an exec redirection into a tee process substitution does not (the
+# 32634bf install lost its final lines when the SSH session closed, 2026-10-18). The exit status is the script's own.
+# Everything before the call is read-only.
+SELF=$(readlink -f "${BASH_SOURCE[0]}"); ARGS=("$@")
+teelog() {  # teelog <report> [tee options]
+  if [[ "${FLEET_TEELOG:-}" == "$SELF" ]]; then unset FLEET_TEELOG; return 0; fi
+  set +e; FLEET_TEELOG="$SELF" bash "$SELF" "${ARGS[@]}" 2>&1 | tee "${@:2}" "$1"; exit "${PIPESTATUS[0]}"
+}
 MODE="${1:-}"; PINS="${2:-}"
 die() { echo "EDGE REFUSED: $*" >&2; exit 2; }
 [[ "$MODE" == rehearse || "$MODE" == cutover || "$MODE" == rollback || "$MODE" == check-cert ]] || die "mode is rehearse, cutover, rollback or check-cert"
@@ -60,7 +69,7 @@ fpid() { systemctl show -p MainPID --value "automaton-fleet-founder@$F.service";
 on443() { sudo ss -Hltnp 'sport = :443' | grep -oE 'users:\(\("[a-z]+",pid=[0-9]+' | sed -E 's/users:\(\("([a-z]+)",pid=([0-9]+)/\1:\2/' | sort -u | tr '\n' ' '; }
 
 if [[ "$MODE" == rollback ]]; then
-  REPORT=~/fleet-edge-rollback-$(date -u +%Y%m%dT%H%M%SZ).txt; exec > >(tee -a "$REPORT") 2>&1
+  REPORT=~/fleet-edge-rollback-$(date -u +%Y%m%dT%H%M%SZ).txt; teelog "$REPORT" -a
   sudo test -f $ENVF.pre-edge || die "no $ENVF.pre-edge to restore"
   echo "== edge rollback $(ts)"
   sudo systemctl disable --now automaton-fleet-edge.service 2>/dev/null || true
@@ -79,7 +88,7 @@ C=$(sed -n 's/^FLEET_RUNTIME_COMMIT=\([0-9a-f]\{40\}\)$/\1/p' "$PINS"); B=$(sed 
 L=$(sed -n 's/^FLEET_RUNTIME_LOCKFILE_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$PINS")
 [[ -n "$C" && -n "$B" && -n "$L" && $(wc -l < "$PINS") -eq 4 ]] || die "pins file must hold exactly the four pins"
 REPORT=~/fleet-edge-${C:0:7}-$MODE.txt
-exec > >(tee -a "$REPORT") 2>&1
+teelog "$REPORT" -a
 echo "== edge $MODE ${C:0:7} start $(ts) (public $PUBIP)"
 flags
 [[ -x /usr/sbin/nginx && -f /usr/lib/nginx/modules/ngx_stream_module.so ]] || die "nginx with the stream module is not installed"

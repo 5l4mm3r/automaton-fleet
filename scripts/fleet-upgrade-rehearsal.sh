@@ -19,6 +19,15 @@
 # Writes ~/upgrade-rehearsal-<commit7>.ok on success. Ports 28787 / 28788 / 28790 must be free.
 set -euo pipefail
 export PATH=/opt/automaton-fleet/node/bin:$PATH
+# Log to <report> as well as the terminal, and finish only once the log is complete: teelog re-runs this script with its
+# output piped through tee, and a pipeline waits for tee; an exec redirection into a tee process substitution does not (the
+# 32634bf install lost its final lines when the SSH session closed, 2026-10-18). The exit status is the script's own.
+# Everything before the call is read-only.
+SELF=$(readlink -f "${BASH_SOURCE[0]}"); ARGS=("$@")
+teelog() {  # teelog <report> [tee options]
+  if [[ "${FLEET_TEELOG:-}" == "$SELF" ]]; then unset FLEET_TEELOG; return 0; fi
+  set +e; FLEET_TEELOG="$SELF" bash "$SELF" "${ARGS[@]}" 2>&1 | tee "${@:2}" "$1"; exit "${PIPESTATUS[0]}"
+}
 PINS="${1:-}"; FROM="${2:-}"; TO="${3:-}"
 die() { echo "UPGRADE REHEARSAL FAILED: $*" >&2; exit 2; }
 [[ -f "$PINS" && ! -L "$PINS" ]] || die "pins file missing"
@@ -35,7 +44,7 @@ OLD=$(sudo sed -n 's/^FLEET_RUNTIME_COMMIT=//p' $ENVF); OLDDIR=/opt/automaton-fl
 UI=$(sudo sed -n 's/^FLEET_DASHBOARD_STATIC_DIR=//p' $ETC/dashboard.env); [[ -d "$UI" ]] || die "dashboard static dir unreadable"
 for p in 28787 28788 28790; do [[ -z "$(ss -Hltn "sport = :$p")" ]] || die "port $p is in use"; done
 REPORT=~/upgrade-rehearsal-${C:0:7}.txt
-exec > >(tee "$REPORT") 2>&1
+teelog "$REPORT"
 ts() { date -u +%FT%TZ; }
 code() { curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$@" || true; }
 UNITS="fleet-upgrade-rh-controller fleet-upgrade-rh-operator fleet-upgrade-rh-dashboard"

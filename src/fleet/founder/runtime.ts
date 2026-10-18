@@ -425,6 +425,8 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
           // work has stalled; a waiting founder is woken only by a change, an owner message or its own review time.
           workContinuity: true,
           hibernationSafetyMs: Number.POSITIVE_INFINITY,
+          // A waiting founder whose runtime changed wakes once and is told (mind.ts upgradeLine).
+          runtimeCommit: ctx.release.commit,
         })
       : null;
   const thinkEvery = Math.max(1, opts.thinkEvery ?? (Number(ctx.env.FLEET_FOUNDER_THINK_EVERY) || 1));

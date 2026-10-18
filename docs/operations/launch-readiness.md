@@ -148,7 +148,24 @@ The bank route (v91, "My deposit") stays available if a dedicated bank account i
   repeated-failure cap (9f02351) is committed for the next release. Until then the attempt watchdog stops on 4 refused
   offer actions.
 
-### 2b. Proposed measured live attempt (after the repair is installed; separately authorised; not started)
+- 2026-10-18 18:59:26Z **measured attempt 2 started** (owner's approval: £1.52, the rest of the £2.00 total; the private
+  publishing test only). Agent-1 made no call for 14 minutes: it was waiting ("wait for sales open or new state"), the
+  start's supersession was a replay of one it had already seen, and nothing told a waiting founder that its runtime had
+  been upgraded. At 19:13Z the owner sent one factual Fleet Control notice ("your runtime was upgraded … a refused action
+  may now be retried"); within 11 s Agent-1 re-checked its offer and inspection, ran the required capability check and
+  **published the private offer at 19:13:34Z** (`uk-landlord-compliance-tracker-england-g-a9ddde`, £5.00, review
+  d06474be pass, automated; no independent review). 6 calls, 22p, 0 searches, no Fleet Control reviews; cumulative 70p
+  of £2.00 (Fleet-recorded, provisional). The watchdog did not stop it (its success rule required an offer CREATED during
+  the run); stopped by hand at 19:14:42Z, no call in between. While sales are closed the page answers 404 to everyone.
+  Proves private publishing only: no payment, delivery, support or refund; not launch readiness.
+  Fixed for the next release: (1) a waiting founder whose runtime changed wakes once and is told (`upgradeLine`, the
+  runtime recorded in mind-continuity.json); (2) the attempt watchdog's success rule uses `published_at`, its terms are
+  `start` arguments (no stale budget), the commit comes from the staged pins, and `status` shows the waiting state;
+  (3) the repeated-failure cap 9f02351 ships with it; (4) fleet-rollout.sh, fleet-upgrade-rehearsal.sh and fleet-edge.sh
+  log through `teelog` (a re-run piped through tee, which a pipeline waits for), so a log is complete when the script
+  returns.
+
+### 2b. Measured live attempt (as planned for attempt 1; attempts 1 and 2 ran — see the proof log)
 | | |
 |---|---|
 | Script | staged as `~/rlc99/attempt.sh` (`start`, `status`, `stop`; the watchdog runs `watch` every 5 min); nothing runs before the owner's approval |

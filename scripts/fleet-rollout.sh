@@ -25,6 +25,15 @@
 # Real payments, owner sweeps, replication and the dry-run child flag are asserted false before and after.
 set -euo pipefail
 export PATH=/opt/automaton-fleet/node/bin:$PATH
+# Log to <report> as well as the terminal, and finish only once the log is complete: teelog re-runs this script with its
+# output piped through tee, and a pipeline waits for tee; an exec redirection into a tee process substitution does not (the
+# 32634bf install lost its final lines when the SSH session closed, 2026-10-18). The exit status is the script's own.
+# Everything before the call is read-only.
+SELF=$(readlink -f "${BASH_SOURCE[0]}"); ARGS=("$@")
+teelog() {  # teelog <report> [tee options]
+  if [[ "${FLEET_TEELOG:-}" == "$SELF" ]]; then unset FLEET_TEELOG; return 0; fi
+  set +e; FLEET_TEELOG="$SELF" bash "$SELF" "${ARGS[@]}" 2>&1 | tee "${@:2}" "$1"; exit "${PIPESTATUS[0]}"
+}
 MODE="${1:-}"; PINS="${2:-}"; FROM="${3:-}"; TO="${4:-}"
 die() { echo "ROLLOUT REFUSED: $*" >&2; exit 2; }
 [[ "$MODE" == rehearse || "$MODE" == cutover || "$MODE" == revert ]] || die "mode is rehearse, cutover or revert"
@@ -40,7 +49,7 @@ OLD=$(sudo sed -n 's/^FLEET_RUNTIME_COMMIT=//p' $ENVF); [[ "$OLD" =~ ^[0-9a-f]{4
 [[ "$MODE" == revert || "$OLD" != "$C" ]] || die "the candidate is already the running release"
 WANT="\"currentVersion\":$FROM,\"resultingVersion\":$TO,\"wouldApply\":\[$(seq -s, $((FROM + 1)) "$TO")\]"
 REPORT=~/rollout-${C:0:7}-$MODE.txt
-exec > >(tee -a "$REPORT") 2>&1
+teelog "$REPORT" -a
 ts() { date -u +%FT%TZ; }
 live() { sudo -u postgres psql -X -At -d "$LIVE" -c "$1"; }
 # Reconciliation snapshot of <db> as JSON (scripts/fleet-reconcile-snapshot.sql from <tree>); <cutJson>: an earlier snapshot whose

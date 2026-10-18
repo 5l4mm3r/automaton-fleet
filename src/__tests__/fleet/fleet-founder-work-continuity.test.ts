@@ -11,6 +11,7 @@
  *     ZERO inference. A Fleet Control notice (its text, once), an owner message, a due review time or a finished job
  *     (the controller's events digest) wake it.
  *  4. A superseded approval stays on record and the current decision is in the founder's task.
+ *  9. (attempt 2) A waiting founder whose RUNTIME changed wakes once and is told; a restart on the same runtime stays free.
  */
 import { describe, it, expect } from "vitest";
 import fs from "fs";
@@ -31,7 +32,7 @@ const hex32 = (n: number) => n.toString(16).padStart(32, "0");
 
 type Step = { calls: ToolCall[]; content?: string };
 /** `script(turn, step, packet)` scripts the model. `world` is the controller's state the test changes. */
-function rig(script: (turn: number, step: number, packet: string) => Step, o: { maxSteps?: number; root?: string } = {}) {
+function rig(script: (turn: number, step: number, packet: string) => Step, o: { maxSteps?: number; root?: string; runtime?: string } = {}) {
   const root = o.root ?? fs.mkdtempSync(path.join(os.tmpdir(), "wc-"));
   const d = { w: path.join(root, "w"), s: path.join(root, "s"), m: path.join(root, "s", "memory") };
   const fresh = !fs.existsSync(d.w);
@@ -81,7 +82,7 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
       return { ok: true, op, args };
     },
   } as never });
-  const mind = new FounderMind({ ports, toolbox, stateDir: d.s, workContinuity: true, hibernationSafetyMs: Number.POSITIVE_INFINITY,
+  const mind = new FounderMind({ ports, toolbox, stateDir: d.s, workContinuity: true, hibernationSafetyMs: Number.POSITIVE_INFINITY, runtimeCommit: o.runtime,
     maxStepsPerTurn: o.maxSteps ?? FOUNDER_STEPS_PER_TURN, routed: { memoryDir: d.m, workspaceDir: d.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
   return { mind, world, packets, outputsSeen, root, d, infers: () => infers, turns: () => turn };
 }
@@ -347,5 +348,43 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     r.world.eventsDigest = hex32(77);                               // the awaited event (e.g. a customer message) arrives
     await beats(r, 2);
     expect(r.infers()).toBeGreaterThan(1);
+  });
+
+  it("9. a waiting founder whose runtime changed wakes once and is told what changed; a restart on the same runtime stays free", async () => {
+    // Attempt 2 (2026-10-18): Agent-1 kept waiting through its 32634bf upgrade — which had fixed the refusal it was waiting
+    // on — until Fleet Control sent a notice by hand. An upgrade is a change: one turn, a factual line, then waiting again.
+    const A = "94dce86f43898d98a596b2457a47fa43335c238f", B = "32634bfe7f9062a6484da713e985612acd80e694";
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "wc-up-"));
+    const wait = (t: number, s: number): Step => (t === 1 && s === 1 && !fs.existsSync(path.join(root, "w", "notes"))
+      ? { calls: [c("write_file", { path: "notes/plan.md", content: "plan v1" }), c("sleep", { reason: "publish refused; waiting", wakeOn: "a change to the refusal" })] }
+      : { calls: [c("sleep", { reason: "waiting", wakeOn: "a customer message" })] });
+    const onA = rig(wait, { root, runtime: A });
+    await onA.mind.turn("hb");
+    expect(onA.infers()).toBe(1);
+    const cont = () => JSON.parse(fs.readFileSync(path.join(root, "s", "mind-continuity.json"), "utf8")) as Record<string, unknown>;
+    expect(cont()).toMatchObject({ waiting: true, runtime: A });
+    // A restart on the SAME runtime: still waiting, no call.
+    const againA = rig(wait, { root, runtime: A });
+    await beats(againA, 10);
+    expect(againA.infers()).toBe(0);
+    // The upgrade: exactly one turn, with the line (a full packet, never the slim "nothing changed" one), then waiting again.
+    const onB = rig(wait, { root, runtime: B });
+    await beats(onB, 10);
+    expect(onB.infers()).toBe(1);
+    expect(onB.packets[0]).toContain("Your runtime was upgraded since your last turn (94dce86 → 32634bf)");
+    expect(onB.packets[0]).toContain("an action refused before may be tried again if it still matters");
+    expect(onB.packets[0]).not.toContain("Nothing has changed since your last turn");
+    expect(cont()).toMatchObject({ waiting: true, runtime: B });
+    const againB = rig(wait, { root, runtime: B });
+    await beats(againB, 10);
+    expect(againB.infers()).toBe(0);
+    expect(againB.packets).toHaveLength(0);
+    // A record written by a runtime that did not record itself (32634bf and older): one wake, named as an earlier runtime.
+    const legacy = cont(); delete legacy.runtime;
+    fs.writeFileSync(path.join(root, "s", "mind-continuity.json"), JSON.stringify(legacy));
+    const fromLegacy = rig(wait, { root, runtime: B });
+    await beats(fromLegacy, 5);
+    expect(fromLegacy.infers()).toBe(1);
+    expect(fromLegacy.packets[0]).toContain("(an earlier runtime → 32634bf)");
   });
 });

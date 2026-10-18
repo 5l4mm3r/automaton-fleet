@@ -237,6 +237,17 @@ export function eventsSinceLine(attention: unknown, since: string | null | undef
  * could act on — its facts and goals (content), its workspace (paths, sizes, mtimes) and the economy fields above. The
  * conversation history and the decision log are not part of it.
  */
+/**
+ * 2026-10-18 (attempt 2): the one line a founder gets on its first turn on a new runtime. Factual, no instruction: what changed
+ * and what no longer carries over (the loop guard's refusals live in the old process). Completed actions stay completed.
+ */
+export function upgradeLine(from: string | null, to: string | undefined): string | null {
+  if (!from || !to) return null;
+  const short = (c: string) => (/^[0-9a-f]{40}$/.test(c) ? c.slice(0, 7) : c);
+  return `Your runtime was upgraded since your last turn (${short(from)} → ${short(to)}). Refusals and duplicate-action blocks from before `
+    + "the upgrade are not carried over: an action refused before may be tried again if it still matters. Actions you completed stay completed.";
+}
+
 export function wakeDigest(memoryDir: string, workspaceDir: string, economics: Record<string, unknown>, signals = ""): string {
   const h = crypto.createHash("sha256");
   for (const f of ["facts.json", "goals.json"]) {
@@ -405,6 +416,8 @@ export class FounderMind {
     /** 2026-10-18 (owner): carry a cut-off turn's work into the next, never repeat a completed external action, recognise
      *  progress by new results, and wait without inference once work has stalled (continuity.ts). The production runtime
      *  sets it; the older behaviour stays for the suites that test it. */ workContinuity?: boolean;
+    /** 2026-10-18 (attempt 2): this runtime's commit. Recorded with each turn's closing note; a founder that was waiting when
+     *  its runtime changed wakes once and is told (an upgrade is a change it may act on: refusals from before are not carried). */ runtimeCommit?: string;
     /** v22: the task class of ordinary steps (sent as a routing request; absent = legacy request body). */ taskClass?: string;
     /** R23: routed mode support (used only while FleetController reports routing active for this founder). */ routed?: RoutedMindOptions }) {}
 
@@ -547,7 +560,7 @@ export class FounderMind {
   // ─────────────────────────────────────────────── R23 routed mode
 
   private continuity(): { at: string; outcome: string; tools: string[]; wakeDigest: string | null; capabilities: { sig: string; tools: string[] } | null; idle: IdleState | null;
-    revenue: number | null; wakeOn: string | null; reviewAt: string | null; waiting: boolean; stalled: number; noticesShown: string[] } | null {
+    revenue: number | null; wakeOn: string | null; reviewAt: string | null; waiting: boolean; stalled: number; noticesShown: string[]; runtime: string | null } | null {
     try {
       const c = JSON.parse(fs.readFileSync(path.join(this.o.stateDir, CONTINUITY_FILE), "utf8"));
       const caps = c?.capabilities && typeof c.capabilities.sig === "string" && Array.isArray(c.capabilities.tools)
@@ -560,7 +573,8 @@ export class FounderMind {
             revenue: Number.isFinite(c.revenue) ? Number(c.revenue) : null, wakeOn: typeof c.wakeOn === "string" ? c.wakeOn.slice(0, 300) : null,
             reviewAt: typeof c.reviewAt === "string" && Number.isFinite(Date.parse(c.reviewAt)) ? c.reviewAt : null,
             waiting: c.waiting === true, stalled: Number.isSafeInteger(c.stalled) ? Number(c.stalled) : 0,
-            noticesShown: Array.isArray(c.noticesShown) ? c.noticesShown.filter((x: unknown): x is string => typeof x === "string").slice(-50) : [] }
+            noticesShown: Array.isArray(c.noticesShown) ? c.noticesShown.filter((x: unknown): x is string => typeof x === "string").slice(-50) : [],
+            runtime: typeof c.runtime === "string" && /^[0-9a-f]{40}$/.test(c.runtime) ? c.runtime : null }
         : null;
     } catch {
       return null;
@@ -575,7 +589,7 @@ export class FounderMind {
       ...(capabilities ? { capabilities } : {}), ...(idle && wake ? { idle } : {}),
       ...(typeof extra.revenue === "number" && Number.isFinite(extra.revenue) ? { revenue: extra.revenue } : {}), ...(extra.wakeOn ? { wakeOn: extra.wakeOn.slice(0, 300) } : {}),
       ...(extra.reviewAt ? { reviewAt: extra.reviewAt } : {}), ...(extra.waiting ? { waiting: true } : {}), ...(extra.stalled ? { stalled: extra.stalled } : {}),
-      ...(extra.noticesShown?.length ? { noticesShown: extra.noticesShown.slice(-50) } : {}) }), { mode: 0o600 });
+      ...(extra.noticesShown?.length ? { noticesShown: extra.noticesShown.slice(-50) } : {}), ...(this.o.runtimeCommit ? { runtime: this.o.runtimeCommit } : {}) }), { mode: 0o600 });
     fs.renameSync(`${f}.tmp`, f);
   }
 
@@ -649,6 +663,7 @@ export class FounderMind {
     const W = this.o.workContinuity === true;
     const carried = W ? loadCarry(this.o.stateDir) : null;
     const notices = noticeLines(status.attention, new Set(prev?.noticesShown ?? []));
+    const upgrade = W ? upgradeLine(this.upgradedFrom(prev), this.o.runtimeCommit) : null;
     // F2-A: the founder's own decision ledger and open goals decide what an idle wake is for; its survival position is
     // FleetController's observation (information for the founder's own strategy, never a permission or a ration).
     let ledger: Decision[] = [];
@@ -691,6 +706,7 @@ export class FounderMind {
            : "No closing note from a previous turn is recorded: rely on your goals, facts and notes below.",
       ...(carried && !owner ? carryLinesWithin(carried, [CARRY_MAX_CHARS, 3_000, 1_500, 1_500, 1_200, 900, 600][Math.min(lvl, 6)]) : []),
       ...(lvl >= 2 ? notices.lines.slice(0, 1) : notices.lines),
+      ...(upgrade ? [upgrade] : []),
       ...(W && !owner && !carried && prev?.stalled === 1 ? [STALL_LINE] : []),
       // A capability CHANGE is current authority: never shortened. Only the first full tool list may be (the capabilities tool lists it).
       ...(lvl >= 3 ? capNote.map((l) => (l.startsWith("Your capabilities changed") ? l : `${l.slice(0, 300)}… (the capabilities tool lists them all)`)) : capNote),
@@ -703,7 +719,7 @@ export class FounderMind {
     // R23.1: a bare wake-up — the previous turn only slept and nothing the founder could act on has changed since — gets the
     // slim packet. Anything else (a first turn, a working turn, any change in memory, workspace, economy, capabilities or
     // dependency status) gets the full one.
-    const unchanged = !!prev && prev.tools.length > 0 && prev.tools.every((t) => t === "sleep") && prev.wakeDigest !== null
+    const unchanged = !upgrade && !!prev && prev.tools.length > 0 && prev.tools.every((t) => t === "sleep") && prev.wakeDigest !== null
       && prev.wakeDigest === wakeDigest(R.memoryDir, R.workspaceDir, economics, signals);
     // F2-A: an idle wake is not a browse. A full packet already carries the next move; an unchanged idle state gets slim
     // wake-ups and is re-checked with one idle push after 4, 8, 16, then every 32 slim wakes (RENUDGE_*). No allowance,
@@ -993,12 +1009,25 @@ export class FounderMind {
   /** v62: a declared hibernation recorded before a restart keeps waiting (no paid wake-up just because the process restarted). */
   private restoredHibernation(): number | null {
     const prev = this.continuity();
+    // 2026-10-18 (attempt 2): a changed runtime IS a change — the founder wakes once and is told (upgradeLine). Agent-1 slept
+    // through its 32634bf upgrade, which had fixed the refusal it was waiting on, until Fleet Control sent a notice by hand.
+    if (this.o.workContinuity && this.upgradedFrom(prev)) {
+      this.o.log?.("founder_event_wake", { reason: "runtime upgraded" });
+      return null;
+    }
     // 2026-10-18: a founder that was waiting for a change keeps waiting across a restart (no paid wake-up).
     if (this.o.workContinuity && prev?.waiting) return prev.reviewAt ? Date.parse(prev.reviewAt) : Infinity;
     if ((this.o.hibernationSafetyMs ?? HIBERNATION_SAFETY_MS) <= 0) return null;
     if (!prev || !prev.tools.length || !prev.tools.every((t) => t === "sleep") || !(prev.wakeOn || prev.reviewAt)) return null;
     const at = Date.parse(prev.at);
     return Math.min(prev.reviewAt ? Date.parse(prev.reviewAt) : Infinity, (Number.isFinite(at) ? at : Date.now()) + (this.o.hibernationSafetyMs ?? HIBERNATION_SAFETY_MS));
+  }
+
+  /** The runtime this founder's last recorded turn ran on, when it differs from this one (null: same runtime, no record, or not known). */
+  private upgradedFrom(prev: ReturnType<FounderMind["continuity"]>): string | null {
+    const now = this.o.runtimeCommit;
+    if (!now || !prev) return null;
+    return prev.runtime === now ? null : prev.runtime ?? "an earlier runtime";
   }
 
   /** routine_task / escalate_question: one more call through FleetController, which decides the tier. */
