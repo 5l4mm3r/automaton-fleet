@@ -144,6 +144,10 @@ The bank route (v91, "My deposit") stays available if a dedicated bank account i
   (a retry after a controller-side change runs; refusals keep their reason; database rules are named) and 32634bf
   (rehearsal: a living previous runtime may append to the journal).
 
+- 2026-10-18 18:41Z **32634bf deployed**; Agent-1 upgraded (92936bfb…, verified); both paused; the verifier passes. The
+  repeated-failure cap (9f02351) is committed for the next release. Until then the attempt watchdog stops on 4 refused
+  offer actions.
+
 ### 2b. Proposed measured live attempt (after the repair is installed; separately authorised; not started)
 | | |
 |---|---|

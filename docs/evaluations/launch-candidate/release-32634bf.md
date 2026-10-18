@@ -1,4 +1,4 @@
-# Release 32634bf (code only: schema 94 → 94; UI 0.26.2 unchanged) — then Agent-1 94dce86 → 32634bf; ends paused
+# Release 32634bf (code only: schema 94 → 94; UI 0.26.2 unchanged) — DEPLOYED 2026-10-18 18:41:06Z; Agent-1 upgraded; both paused
 
 Production before it: 94dce86, schema 94; Agent-1 on 94dce86 (release-94dce86.md).
 
@@ -43,3 +43,17 @@ prefix (nothing restored over it), and the check names every failed condition.
 - Then `ssh -t agentfleet-vps 'bash ~/rlc100/verify-install.sh'`. Read-only; it also checks the loop-guard, refusal-reason
   and rule-naming fixes in the build.
 - The measured attempt again only on the owner's separate approval: `~/rlc100/attempt.sh start` (the same terms).
+
+## Installed (owner-run `~/rlc100/install-fix.sh`, 18:39:18Z)
+- Baseline `~/rlc91/baseline-pre-32634bf-183919-…` (5028 dump entries).
+- Release: outage ≈ 46 s, reconciliation OK (3135 events preserved). **DEPLOYED 18:41:06Z**. Ledger, pauses and fuses
+  = baseline.
+- Founder upgrade rehearsal from 94dce86 on the host: 27/27, pass true, living founders untouched.
+- Preflight ok. **Agent-1 upgrade `92936bfb-5444-4349-bdf2-c2f82d08ea0b`, outcome `verified`**.
+- End state 18:51:51Z: Agent-1 on 32634bf, Agent-2 on b60e262, both paused, no outward release, card authority off,
+  custody off, ledger verifies (914 journals). The read-only verifier passes, including the new loop-guard, refusal-reason
+  and rule-naming checks.
+- **The final "INSTALL DONE" line is missing from the screen and the log.** Every end-state check had passed: they all
+  run before that final `state` block, and any failure stops with "INSTALL NOT COMPLETE". The last line was lost
+  because the output goes through `exec > >(tee …)`: the process-substituted `tee` can be cut off when the script exits
+  and the SSH session closes. Future installers wait for `tee` before exiting.
