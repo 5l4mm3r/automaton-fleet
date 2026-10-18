@@ -23,7 +23,8 @@ Production before it: 85486f5 (schema 94, UI 0.26.2), deployed 2026-10-18 15:57:
 | UI | 0.26.2, unchanged (`ui-0.26.2-316b27b.tgz` sha 77ce19a4…) |
 | **Full founder upgrade rehearsal from f2a1784** (real founder processes, local) | **PASSED: every check**, including upgrade, rollback and re-upgrade, identity / memory / workspace / books, routed tiers and escalation, consequential-action tiers, zero calls in unchanged hibernation, notice wake, v5 tools, rollback after v5 use, no credential in logs |
 | Data rehearsal 94 → 94 | PASSED 2026-10-18 16:30:49Z: wouldApply []; 894 journals; 3077 events preserved; ledger verifies; rollback restores 94 with the same head |
-| Services rehearsal 94 → 94 | (pending) |
+| Services rehearsal 94 → 94 | PASSED 2026-10-18 16:58:18Z: candidate controller, Operator API and dashboard ready on schema 94; ledger verifies, head unchanged, no reservation or birth; the previous release 85486f5 refused on the candidate-approved copy; code-only rollback re-approves 85486f5 without a restore and keeps every candidate-era write; production untouched |
+| Valid until | 2026-10-19 16:30Z (the data rehearsal; cutover requires one under 24 h) |
 | Suites | work continuity 10/10; r41.1, routing, conversation, f2a autonomy, live-01, step budget 99/99 |
 
 ## Diagnosis: every failed rehearsal check and its cause
@@ -63,6 +64,12 @@ No protection was removed:
 So 94dce86 is installed as a code-only release (schema 94 → 94: no migration, no restore) and Agent-1 is upgraded to it.
 
 ## Install (owner): `ssh -t agentfleet-vps 'bash ~/rlc99/install-fix.sh'`
+The installer refuses to run unless the staged pins are 94dce86 / 85289692…, both rehearsals of it passed less than 24 h
+ago, the UI checksum matches, both agents are paused, every proof permission and run budget is closed, the safety flags
+are false, the schema is 94 and Agent-2 is on b60e262. Re-running it after a failure continues from the failed step: the
+release is skipped when current = 94dce86, and the upgrade is skipped when Agent-1 is on 94dce86. Afterwards,
+`bash ~/rlc99/verify-install.sh` checks the wiring read-only, with no model call. It proves installation, not productive
+behaviour.
 The steps: a baseline → the code-only release → a founder upgrade rehearsal from f2a1784 → Agent-1's preflight →
 Agent-1's runtime upgrade (rollback: `fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`) → both agents
 paused. It has no resume step.
