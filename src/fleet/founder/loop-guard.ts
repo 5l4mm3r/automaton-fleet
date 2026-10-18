@@ -22,6 +22,9 @@ export const SCOPED_CONTINUE = "This blocks only this one action — not you, yo
   + "Continue another useful path: product improvement, validation, pricing, copy, assets, documentation, channels that need no new account, launch preparation.";
 const READ_ONLY = new Set(["read_file", "list_files", "recall_facts", "list_goals", "check_ledger", "read_knowledge"]);
 const MUTATING = new Set(["field_journal", "write_file", "remember_fact", "remember_facts", "retract_fact", "record_external_dependency", "withdraw_external_dependency", "open_decision", "resolve_decision", "review_decision", "set_goal", "complete_goal", "exec"]);
+/** 2026-10-18: an identical call that has failed this many times in a row is refused even after other successful calls —
+ *  a retry after a real fix is allowed, an endless "write something, retry the same failing action" loop is not. */
+export const MAX_FAILED_ATTEMPTS = 3;
 /** Refusal codes that describe a transient condition (bounded retry allowed). */
 const TRANSIENT = /^(RESEARCH_(TIMEOUT|UNAVAILABLE|RATE_LIMITED|UPSTREAM)|FLEET_(RATE_LIMITED|RESEARCH_QUOTA|UNAVAILABLE)|FLEET_TOOL_ERROR)/;
 
@@ -71,6 +74,11 @@ export class LoopGuard {
         this.stats.refetchesAvoided++;
         return { name: call.name, ok: true, output: `ALREADY FETCHED (not re-fetched; your saved copy and its provenance are below — use read_file for the full page, or a purpose starting "refresh:" if freshness matters)\n${f.output}` };
       }
+    }
+    if (prev && !prev.ok && prev.attempts >= MAX_FAILED_ATTEMPTS && !(prev.refused && TRANSIENT.test(prev.refused))) {
+      this.stats.duplicateFailuresBlocked++;
+      return { name: call.name, ok: false, refused: "FLEET_REPEATED_FAILURE",
+        output: `NOT RE-RUN FLEET_REPEATED_FAILURE: this identical call has failed ${prev.attempts} times (${prev.refused ?? "error"}), even after other changes. Read the reason, then change the approach (different arguments or another route), or record what blocks it. ${SCOPED_CONTINUE}` };
     }
     if (prev && !prev.ok && prev.stateVersion === this.stateVersion) {
       const transient = !!prev.refused && TRANSIENT.test(prev.refused);

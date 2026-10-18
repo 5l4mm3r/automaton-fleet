@@ -77,4 +77,26 @@ describe("a retry after the missing condition was fixed (measured attempt, 2026-
     g.after(c("capabilities", { offer: "o1" }), { name: "capabilities", ok: true, output: "ok" }, true);
     expect(g.before(x)).toBeNull();
   });
+
+  it("an unrelated successful write between failing publishes cannot loop: after 3 failures of the identical call it is refused until the approach changes", async () => {
+    const publishes: number[] = [];
+    const r = rig(async (op) => {
+      if (op === "offer.publish") { publishes.push(1); throw Object.assign(new Error("a value breaks the rule fleet_offers_title_check"), { code: "FLEET_BAD_REQUEST" }); }
+      return { ok: true };
+    });
+    const publish = () => c("offer", { op: "publish", args: { offerId: "o1", reviewId: "r1" } });
+    const outcomes: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      // A different, successful, unrelated write each time (a new file): it changes state, so the guard alone would allow a retry.
+      expect((await r.toolbox.execute(c("write_file", { path: `notes/attempt-${i}.md`, content: `note ${i}` }))).ok).toBe(true);
+      outcomes.push((await r.toolbox.execute(publish())).refused ?? "ok");
+    }
+    expect(publishes).toHaveLength(3);                               // executed at most 3 times
+    expect(outcomes.slice(0, 3)).toEqual(["FLEET_BAD_REQUEST", "FLEET_BAD_REQUEST", "FLEET_BAD_REQUEST"]);
+    expect(new Set(outcomes.slice(3))).toEqual(new Set(["FLEET_REPEATED_FAILURE"]));
+    // A changed approach (different arguments, e.g. a fixed title) still runs.
+    const fixed = await r.toolbox.execute(c("offer", { op: "publish", args: { offerId: "o1", reviewId: "r2" } }));
+    expect(fixed.refused).toBe("FLEET_BAD_REQUEST");                 // ran (the stub always fails), not blocked
+    expect(publishes).toHaveLength(4);
+  });
 });
