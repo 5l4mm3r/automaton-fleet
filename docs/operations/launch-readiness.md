@@ -43,10 +43,10 @@ unless the GitHub App is set up (then proof 9 is added; until then the capabilit
 | 2. A brand and one supported product (spreadsheet / document / template / course pack) | the agent's own venture and brand; capability check names the offer and every deliverable ready |
 | 3. Production and substantive review | the inspector passes the exact files (formulas recalculate, no errors, rendered pages checked, spelling, the brief's acceptance criteria); no generated image (images not connected) |
 | 4. A **private** offer (not public: sales stay closed) | an order page for the owner only |
-| 5. The owner's purchase (PayPal, **£5**) | consent recorded; payment verified from PayPal; revenue attributed to Agent-1 net of PayPal's fee |
+| 5. The owner's purchase (PayPal, **£5**) | consent recorded; payment verified from PayPal; booked as the owner's own proof purchase (v76 `owner_proof`: owner capital, never Agent-1's revenue — an owner can never buy survival for an agent); the order and delivery path is the same as a customer's |
 | 6. Delivery | the buyer's mail from the brand's routing address + the order page download; files open and match what was inspected |
 | 7. Support + revision | the owner replies to the delivery mail with one change request; the agent answers from the brand address and delivers a revised file |
-| 8. Refund (full) | executed through PayPal by custody; revenue reversed once; ledger verifies; no duplicate revenue or expense |
+| 8. Refund (full) | executed through PayPal by custody; returned once as `owner_proof_return` (owner capital back; PayPal's fee booked there too); ledger verifies; no duplicate entry; Agent-1's revenue untouched |
 
 ### Proof B — one card purchase (owner-paid card 1)
 A small purchase the agent needs for Proof A's product (e.g. a stock photo, font or icon licence), **at most £5**, on a
@@ -72,6 +72,8 @@ to you. Stop if the merchant needs anything beyond card + email.
 | AI (Agent-1's own work; pre-launch test cost) | a few £ | fuse: 754 a day (≤ £7.54) × 3 days |
 | Search | < $0.30 | 1 ¢ / search |
 | Subscriptions | Pushover $4.99 once (only to keep it after the trial) | — |
+
+Run (owner, own terminal; `~/rlc93/proof.sh`, every step logged to `~/rlc93/proof.log`): `start` (custody, card authority, mail release, a 72 h auto-stop timer, then resume Agent-1; guards: release 1743b33, safety flags false, Agent-2 paused, sales closed) → `scope https://<shop>` when Agent-1 names the purchase shop (expiry kept) → `buy <slug>` (≤ £5) → `stop` at the end or on a material failure (pause, release ended, card authority OFF, custody OFF). Revenue attributed to an agent is proven only by a real customer after sales open.
 
 Stop conditions: all steps accepted; or a step fails materially (Agent-1 is paused, the defect fixed and re-verified, the
 proof resumed only inside this authorisation); or 72 h pass. Cleanup: the release and custody windows expire by
