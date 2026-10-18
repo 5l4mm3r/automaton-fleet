@@ -88,10 +88,13 @@ export class LoopGuard {
   }
 
   /** Record what happened. */
-  after(call: ToolCall, out: ToolOutcome): void {
+  after(call: ToolCall, out: ToolOutcome, changedState?: boolean): void {
     const key = callKey(call);
     const prev = this.seen.get(key);
-    if (out.ok && MUTATING.has(call.name)) this.stateVersion++;
+    // 2026-10-18: the toolbox says whether the call changed state — any successful call that is not a read, including
+    // changes recorded on the controller (a capability check, a review, an offer edit). Without that, a retry after a
+    // fixed precondition was refused as "nothing changed". The local-only list remains the fallback.
+    if (changedState ?? (out.ok && MUTATING.has(call.name))) this.stateVersion++;
     this.seen.set(key, { ok: out.ok, refused: out.refused, output: out.output.slice(0, 8_000), stateVersion: this.stateVersion, attempts: (prev && !prev.ok && !out.ok ? prev.attempts : 0) + 1, at: this.now() });
     if (call.name === "web_fetch" && out.ok && typeof call.arguments?.url === "string") this.fetched.set(call.arguments.url.trim(), { at: this.now(), output: out.output.slice(0, 3_000) });
   }

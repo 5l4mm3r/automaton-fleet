@@ -20,7 +20,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import type { ToolCall } from "../cognition/types.js";
-import { ECONOMY_OPS } from "./toolbox.js";
+import { ECONOMY_OPS, READ_MAPPED } from "./toolbox.js";
 
 export const CARRY_FILE = "mind-carry.json";
 export const PROGRESS_FILE = "mind-progress.json";
@@ -34,9 +34,6 @@ const ARGS_CHARS = 240;
 /** Single-purpose tools that act outside the founder's own workspace and memory, or cost money per call. */
 const EXTERNAL_TOOLS = new Set(["web_search", "generate_image", "web_fetch", "code", "deliverable", "independent_review", "reply_to_owner", "request_spend",
   "request_identity_fact", "record_external_dependency", "propose_knowledge", "propose_experiment", "start_experiment"]);
-/** The read-only operations of the multi-operation tools, by the controller operation each maps to (toolbox ECONOMY_OPS).
- *  Anything not matched — including every operation added later — counts as an external action (the safe side). */
-const READ_MAPPED = /(\.list|\.status|\.inbox|\.read|\.requests|\.reviews|\.uses|\.search|\.library|\.checkouts|\.awaiting_approval|\.products|\.sales|\.job|\.files|\.thread|\.performance|\.economics|\.observe|\.check|\.offers|\.talent|\.api_jobs|\.reductions|\.fetch_file)$|^(wallet|performance)$/;
 
 export function compact(v: unknown, max = ARGS_CHARS): string {
   let s: string;

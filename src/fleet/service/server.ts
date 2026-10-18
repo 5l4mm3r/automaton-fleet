@@ -1095,6 +1095,13 @@ export class FleetService {
       } else if (isPgPermissionError(err)) {
         await this.recordDb("db_authorization_failed", null, { path, pgCode: (err as { code?: string }).code, message: (err as Error).message });
         send(500, { ok: false, code: "FLEET_DB_AUTHORIZATION_FAILED", reason: "database refused the operation" });
+      } else if (["23514", "22001", "23502"].includes(String((err as { code?: unknown }).code))) {
+        // 2026-10-18: a value broke a database rule (check, length, required): say which, so the caller can fix it.
+        const e = err as { code?: string; constraint?: string; column?: string; message?: string };
+        const rule = e.code === "22001" ? "a value is longer than its field allows" : e.code === "23502" ? `a required value is missing${e.column ? ` (${e.column})` : ""}`
+          : `a value breaks the rule ${e.constraint ?? "of that record"}`;
+        this.audit("api_error", null, { path, error: String(e.message ?? "").slice(0, 300) });
+        send(400, { ok: false, code: "FLEET_BAD_REQUEST", reason: `${rule} (${String(e.message ?? "").slice(0, 200)})` });
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         this.audit("api_error", null, { path, error: msg });

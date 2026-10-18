@@ -58,6 +58,22 @@ export interface ToolboxPorts {
 }
 
 /** F2 tools → registry operations (the database validates every argument; the toolbox only maps and adds idempotency). */
+/** The read-only operations of the multi-operation tools, by the controller operation each maps to (ECONOMY_OPS).
+ *  Anything not matched — including every operation added later — is treated as changing state (the safe side). */
+export const READ_MAPPED = /(\.list|\.status|\.inbox|\.read|\.requests|\.reviews|\.uses|\.search|\.library|\.checkouts|\.awaiting_approval|\.products|\.sales|\.job|\.files|\.thread|\.performance|\.economics|\.observe|\.check|\.offers|\.talent|\.api_jobs|\.reductions|\.fetch_file)$|^(wallet|performance)$/;
+/** Tools that only read (the founder's own files and memory, the web, knowledge). */
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read_file", "list_files", "recall_facts", "list_goals", "check_ledger", "read_knowledge",
+  "web_fetch", "web_search", "view_image", "field_guide", "list_experiments"]);
+/** 2026-10-18: true when a call only reads. A successful call that is not a read changed something (possibly on the
+ *  controller: a capability check, a review, an offer edit) and may justify retrying an action that failed before it. */
+export function isReadOnlyCall(c: { name: string; arguments?: Record<string, unknown> | null }): boolean {
+  if (READ_ONLY_TOOLS.has(c.name)) return true;
+  const ops = ECONOMY_OPS[c.name];
+  if (!ops) return false;
+  const mapped = ops[String(c.arguments?.op ?? "")];
+  return !!mapped && READ_MAPPED.test(mapped);
+}
+
 export const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
   opportunity: { record: "opportunity.record", shortlist: "opportunity.shortlist", status: "opportunity.status", list: "opportunity.list" },
   venture: { create: "venture.create", transition: "venture.transition", status: "venture.status", list: "venture.list", metric: "venture.metric" },
@@ -270,7 +286,9 @@ export interface MemoryTelemetry {
 /** A controller refusal of an owner-request call, as data the founder can act on (the code is FleetController's). */
 const ownerRefusal = (err: unknown): Record<string, unknown> => {
   const c = (err as { code?: unknown }).code;
-  return { ok: false, code: typeof c === "string" && /^FLEET_[A-Z_]+$/.test(c) ? c : "FLEET_TOOL_ERROR" };
+  // 2026-10-18: keep the controller's reason (e.g. which rule a value broke) — a bare code left the agent guessing.
+  const m = err instanceof Error ? err.message : "";
+  return { ok: false, code: typeof c === "string" && /^FLEET_[A-Z_]+$/.test(c) ? c : "FLEET_TOOL_ERROR", ...(m && m !== c ? { reason: m.slice(0, 300) } : {}) };
 };
 const MEMORY_TOOLS = new Set(["remember_fact", "remember_facts", "retract_fact", "recall_facts"]);
 /** Copy the present, defined fields of `a` under new names (tool argument → registry field). */
@@ -822,7 +840,7 @@ export class FounderToolbox {
     const early = g.before(call);
     if (early) return early;
     const out = await this.run(call);
-    g.after(call, out);
+    g.after(call, out, out.ok && !isReadOnlyCall(call));
     return out;
   }
 
