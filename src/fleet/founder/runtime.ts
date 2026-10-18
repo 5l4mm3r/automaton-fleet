@@ -48,7 +48,7 @@ import { MANIFESTS, NON_GRANTABLE, TOOL_CAPABILITIES, createCapabilityManifestRu
 import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
 import { DRY_RUN_FORBIDDEN_ENV } from "../dry-run/child.js";
 import { FounderToolbox } from "./toolbox.js";
-import { FounderMind } from "./mind.js";
+import { FOUNDER_STEPS_PER_TURN, FounderMind } from "./mind.js";
 import { LoopGuard } from "./loop-guard.js";
 import { sandboxSelfTest, type SandboxSelfTest } from "./exec-sandbox.js";
 import {
@@ -420,6 +420,7 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
             // F1-FRESH-02: counts and codes only (MemoryTelemetry), through the same redacted line logger as every event.
             memoryTelemetry: (m) => log("founder_memory_write", { ...m, runtimeCommit: ctx.release.commit, buildId: ctx.release.buildId }) }),
           routed: { memoryDir, workspaceDir, manifest: ctx.manifest, loopGuard },
+          maxStepsPerTurn: FOUNDER_STEPS_PER_TURN,
         })
       : null;
   const thinkEvery = Math.max(1, opts.thinkEvery ?? (Number(ctx.env.FLEET_FOUNDER_THINK_EVERY) || 1));

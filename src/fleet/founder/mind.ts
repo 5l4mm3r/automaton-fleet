@@ -97,7 +97,16 @@ export interface TurnResult {
   toolCalls: string[];
   refusals: Array<{ tool: string; code: string }>;
   chargedCents: number;
+  /** 2026-10-18: every call of the turn was already made in the previous turn (same tool, same arguments): it rests. */
+  repeated?: boolean;
 }
+
+/**
+ * 2026-10-18 (proof run): the production step budget of one turn. The constructor default (4) left a founder unable to
+ * finish anything: each turn spent its steps re-orienting (status, list, read) and ended without a closing note, so the
+ * next turn re-oriented again — a paid loop with no progress. Tests that rely on the old default still get 4.
+ */
+export const FOUNDER_STEPS_PER_TURN = 16;
 
 const HISTORY_FILE = "mind-history.json";
 const LOG_FILE = "mind-log.jsonl";
@@ -363,6 +372,8 @@ export class FounderMind {
   turns = 0;
   readonly routing: RoutingStats = { routedTurns: 0, steps: { T2: 0, T3: 0 }, routineCalls: 0, escalations: 0, escalationsReused: 0, actionBoundarySteps: 0, thinkingDropped: 0, budgetStops: 0, slimWakeups: 0, idleNudges: { decide: 0, execute: 0, opportunity: 0, hibernate: 0 }, lastRoute: null };
   private restUntil = 0;
+  /** 2026-10-18: the previous routed turn's calls (name + arguments, one per line), to recognise a turn that did nothing new. */
+  private lastTurnSig: string | null = null;
   private idleBackoff = 0;
   private idleSkip = 0;
   /** v62: when a declared hibernation's safety re-check is due (null = not hibernating; undefined = not yet restored). */
@@ -593,7 +604,7 @@ export class FounderMind {
 
   /** Idle backoff shared by both modes: a turn that only slept backs the next wake-up off; anything else resets it. */
   private settle(result: TurnResult): void {
-    const idle = result.toolCalls.length > 0 && result.toolCalls.every((n) => n === "sleep");
+    const idle = result.repeated === true || (result.toolCalls.length > 0 && result.toolCalls.every((n) => n === "sleep"));
     this.idleBackoff = idle ? Math.min(MAX_IDLE_SKIP, Math.max(1, this.idleBackoff * 2)) : 0;
     this.idleSkip = this.idleBackoff;
   }
@@ -731,11 +742,14 @@ export class FounderMind {
     let outcome = "";
     let wakeOn: string | null = null;
     let reviewAt: string | null = null;
+    let finished = false;
+    const sig: string[] = [];
     for (let step = 0; step < maxSteps; step++) {
       // Append-only inside a turn: a conversation that would outgrow its budget ends here instead of being trimmed.
       if (step > 0 && size() > MAX_REQUEST_BYTES) {
         this.routing.budgetStops++;
         this.logDecision({ turn: this.turns, routed: true, step, stopped: "FLEET_TURN_CONTEXT_BUDGET" });
+        finished = true;
         break;
       }
       const cls = classifyTask({ kind: "step", ...(pendingAction ? { actionClass: pendingAction } : {}) }, taskId);
@@ -772,6 +786,7 @@ export class FounderMind {
         toolCalls: r.thinking?.length ? r.toolCalls : r.toolCalls.map((c) => ({ ...c, arguments: compactArgs(c.arguments) })),
         ...(r.thinking?.length ? { thinking: r.thinking, ...(r.blockOrder ? { blockOrder: r.blockOrder } : {}) } : {}),
       });
+      for (const c of r.toolCalls) sig.push(`${c.name}:${JSON.stringify(c.arguments ?? {})}`);
       const outcomes: ToolOutcome[] = [];
       for (const [i, call] of r.toolCalls.entries()) {
         let out: ToolOutcome;
@@ -801,8 +816,18 @@ export class FounderMind {
       if (slept && typeof slept.arguments?.reason === "string" && slept.arguments.reason) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}sleep: ${slept.arguments.reason}`;
       if (slept && typeof slept.arguments?.wakeOn === "string" && slept.arguments.wakeOn.trim()) wakeOn = slept.arguments.wakeOn.trim();
       if (slept && typeof slept.arguments?.reviewAt === "string" && Number.isFinite(Date.parse(slept.arguments.reviewAt))) reviewAt = new Date(Date.parse(slept.arguments.reviewAt)).toISOString();
-      if (r.toolCalls.length === 0 || slept) break;
+      if (r.toolCalls.length === 0 || slept) { finished = true; break; }
     }
+    // 2026-10-18: a turn that used every step says so, so the next turn continues the work instead of re-orienting.
+    if (!finished && result.steps >= maxSteps) {
+      outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn used all ${maxSteps} steps before finishing: continue the same work in the next turn; do not repeat reads you already did)`;
+    }
+    // 2026-10-18: a turn that made no call the previous turn had not already made (same tool, same arguments) did nothing
+    // new — the proof run's loop was exactly this (status, list, read, again each minute) — so it rests like a sleep.
+    const seen = new Set(this.lastTurnSig ? this.lastTurnSig.split("\n") : []);
+    result.repeated = !owner && sig.length > 0 && seen.size > 0 && sig.every((c) => seen.has(c)) && !result.toolCalls.includes("sleep");
+    if (result.repeated) this.o.log?.("founder_repeat_turn", { turn: this.turns, tools: result.toolCalls.length });
+    this.lastTurnSig = sig.join("\n");
     this.settle(result);
     // The next turn's packet carries this closing note (observable output, never reasoning); the transcript is not kept.
     // A sleep-only turn also records the state digest, so the next turn can tell whether anything changed meanwhile.
