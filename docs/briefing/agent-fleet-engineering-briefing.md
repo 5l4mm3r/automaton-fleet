@@ -2,8 +2,8 @@
 
 **For:** an engineer joining the project who needs to understand the whole system.
 **Status as of:** 2026-10-18, 15:30 UTC.
-**Production:** release `1743b33`, database schema v93, Fleet HQ UI 0.26.0.
-**Prepared, not installed:** release `f72a479`, schema v94, UI 0.26.2.
+**Production:** release `94dce86`, database schema v94, Fleet HQ UI 0.26.2 (deployed 2026-10-18 17:21Z). Agent-1 runs
+94dce86 (upgraded 17:39Z).
 
 This briefing contains no secrets, keys, passwords, card details or personal details. Where it gives a fact, it points to
 the file that proves it. Where something is not verified, it says so.
@@ -689,18 +689,15 @@ terminal.
 ## 11. Current state (2026-10-18)
 
 ### 11.1 Production
-- **Release:** `1743b33`, schema 93, UI 0.26.0, deployed 2026-10-17 19:36Z. Approved = pinned = Operator API.
+- **Release:** `94dce86`, schema 94, UI 0.26.2, deployed 2026-10-18 17:21Z (85486f5 at 15:57Z before it). Approved = pinned.
 - **Ledger:** 894 journals; it verifies.
 - **Agents:**
-  - Agent-1: runtime `f2a1784`, PAUSED (since 13:11:15Z).
+  - Agent-1: runtime `94dce86` (upgrade 5a6a3def…, verified), PAUSED.
   - Agent-2: runtime `b60e262`, PAUSED (since 2026-10-10).
 - **Policies:**
   - sales closed; sweep off; sizing fixed; survival protection on; cap 2; replication off; all `REAL_*` flags false.
-- **Permissions still open from the 2026-10-18 proof** (until the owner runs `proof.sh stop`; the auto-stop timer fires
-  2026-10-21 12:26Z):
-  - custody activation (pilot, £5 per instruction, £5 a day);
-  - card authority (card 1, £5 per charge, £5 a day);
-  - mail release to the owner's address.
+- **Permissions:** the 2026-10-18 proof's permissions were closed by the owner (`proof.sh stop`): no outward release,
+  card authority off, custody off, no timer, no open run budget.
 
 ### 11.2 Providers connected
 | Provider | Status |
@@ -745,7 +742,7 @@ turn. It was paused twice. Causes found from the logs (`docs/evaluations/launch-
    Causes 1 and 6 describe largely the same spending (what it was spent on, and why it could continue). Their amounts
    overlap and must not be added.
 
-### 11.5 The prepared repair: release `f72a479` (v94, UI 0.26.2), not installed
+### 11.5 The repair: releases `85486f5` + `94dce86` (v94, UI 0.26.2), INSTALLED 2026-10-18
 - **What it contains:** continuity and carry; progress by kind; zero-call waiting; packet fitting; notices and
   supersessions delivered to the agent; finished jobs as wake events; the run budget; reference codes shown with
   titles.

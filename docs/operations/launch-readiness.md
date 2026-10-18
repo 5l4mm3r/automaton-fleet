@@ -130,9 +130,15 @@ The bank route (v91, "My deposit") stays available if a dedicated bank account i
   `~/rlc95/install-fix.sh` installs it and upgrades Agent-1, then ends with both agents paused; it has no resume step.
   It is not installed yet (a separate owner decision).
 
+- 2026-10-18 17:21Z **94dce86 deployed** (code only, schema 94; after 85486f5 at 15:57Z). 17:39Z **Agent-1 upgraded to
+  94dce86** (upgrade 5a6a3def…, verified; rollback id recorded). Both agents paused; every proof permission closed;
+  ledger = baseline. The read-only verifier passes. Productive behaviour is not yet shown: that is §2b. Records:
+  release-85486f5.md, release-94dce86.md.
+
 ### 2b. Proposed measured live attempt (after the repair is installed; separately authorised; not started)
 | | |
 |---|---|
+| Script | staged as `~/rlc99/attempt.sh` (`start`, `status`, `stop`; the watchdog runs `watch` every 5 min); nothing runs before the owner's approval |
 | Task | Agent-1, without owner coaching: ONE product under its own brand, passed by the inspector, published as a private offer (sales closed). No purchase, refund, card, mail or account work. Stage 2 (the £5 purchase, revision and refund) comes only after this passes |
 | Before it | The owner's existing decision (Gumroad deferred, 10-10) recorded as superseding Agent-1's Gumroad request (`owner-request-supersede`, one command). Fleet Control's notice reaches Agent-1 in its first turn |
 | AI ceiling | **£2.00 for the run alone**, with its own run budget (`cognition-run start <Agent-1> 200 6 …`) and no relation to the day's earlier spending or the daily reset. It covers every model call logged for Agent-1 from the run's start: its own work and any treasury-paid conversation turn. Fleet Control reviews are billed separately; none are expected without spending, and any that occur are reported |

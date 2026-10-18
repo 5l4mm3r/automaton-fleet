@@ -1,4 +1,4 @@
-# Release 94dce86 (code only: schema 94 → 94; UI 0.26.2 unchanged) — then Agent-1's runtime upgrade; ends paused
+# Release 94dce86 (code only: schema 94 → 94; UI 0.26.2 unchanged) — DEPLOYED 2026-10-18 17:21:23Z; Agent-1 upgraded 17:39Z; both paused
 
 Production before it: 85486f5 (schema 94, UI 0.26.2), deployed 2026-10-18 15:57:52Z (release-85486f5.md).
 
@@ -73,3 +73,39 @@ behaviour.
 The steps: a baseline → the code-only release → a founder upgrade rehearsal from f2a1784 → Agent-1's preflight →
 Agent-1's runtime upgrade (rollback: `fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`) → both agents
 paused. It has no resume step.
+
+## Installed (owner-run, two passes of `~/rlc99/install-fix.sh`)
+1. **17:19:28Z.**
+   - Evidence gate, guards and baseline `~/rlc91/baseline-pre-94dce86-171929-…` (5028 dump entries).
+   - Release: outage 17:20:29–17:21:15Z (46 s); reconciliation OK (3076 events preserved); **DEPLOYED 17:21:23Z**.
+   - Ledger = baseline; pauses and fuses = baseline.
+   - The founder upgrade rehearsal ran from the new release's code (17:21–17:33Z) and PASSED: final report `pass: true`,
+     27/27 checks, living founders untouched. "Work continuity: 0 calls over 8 heartbeats of unchanged waiting; woke on
+     the notice."
+   - **The installer's result reader then crashed and stopped the install** (both agents paused, Agent-1 not upgraded).
+     - Expression: `"ok" in o` (installer Python line 6), on log line 390 `            63445`. An indented number from
+       the rehearsal's final multi-line JSON report parsed as the integer 63445; the log holds 16 such ints and 5
+       strings.
+     - A reader failure, not a failed rehearsal.
+     - Fix: `rehearsal-verdict.py` parses only the final report and accepts it only if `pass` is true, the checks list
+       is non-empty and all ok, and living founders are untouched.
+     - Tested on the server against the real log (accepted) and against 8 malformed or failed variants (all rejected):
+       pass false, a failed check, no checks, a non-object check, no pass, a truncated report, no report, founders
+       touched.
+2. **17:39:02Z (continuation).**
+   - Fresh baseline `…-173902-…`.
+   - Release skipped (current = 94dce86); records = baseline.
+   - The passed rehearsal of this installed release was reused after the strict reader re-checked it: 27/27, pass
+     true, untouched.
+   - Preflight ok. **Agent-1 upgrade `5a6a3def-8ef0-428b-800d-2f041b5899dd`, outcome `verified`**. Rollback:
+     `sudo /opt/automaton-fleet/current/scripts/fleet-founders.sh rollback-runtime 01M3F50SH7PNX2E3GST13J52AS 5a6a3def-8ef0-428b-800d-2f041b5899dd <reason>`.
+   - End state: Agent-1 on 94dce86 (registry and unit pin), Agent-2 on b60e262 untouched, **both paused**, no outward
+     release, card authority off, custody off, sales closed, ledger verifies (894 journals).
+3. **Verifier** (`~/rlc99/verify-install.sh`, read-only, no model call): VERIFIED, all checks:
+   - Agent-1's registry entry, unit pin, running process cwd and runtime report;
+   - work continuity, no timed re-check, 16 steps, declared-wait, essentials in packet fitting, packet_unfit fault,
+     notices and carry in the build;
+   - the run budget before any reservation in both request paths; AGENT_CANNOT_THINK; attention notices;
+   - the safety state.
+
+   It proves installation and wiring, not productive behaviour: that is the measured attempt (launch-readiness §2b).
