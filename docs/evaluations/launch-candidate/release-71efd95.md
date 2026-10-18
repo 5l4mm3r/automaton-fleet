@@ -1,4 +1,8 @@
-# Release 71efd95 (schema 93 → 93, code only; UI 0.26.0 → 0.26.1)
+# Release 71efd95 (schema 93 → 93, code only; UI 0.26.0 → 0.26.1) — WITHDRAWN, never deployed
+
+Superseded by 316b27b (release-316b27b.md) after the owner's review (2026-10-18): its "repeat" rule only relabelled a turn
+after it had been paid for, its continuation note carried no results, and its install script resumed Agent-1
+automatically. `~/rlc94/fix-release.sh` was renamed `.withdrawn` without being run.
 
 Production before it: 1743b33, schema 93, UI 0.26.0 (release-1743b33.md). Scope: the defects found in the §2 proof run of
 2026-10-18 (launch-readiness.md, "Proof log"). Nothing else.
