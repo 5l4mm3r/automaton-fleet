@@ -268,7 +268,7 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(p).toContain("Act on the current decision; do not wait on the earlier answer. The request stays on record.");
   });
 
-  it("5. an oversized turn still runs: lower-value lines shrink first; the task, the carried plan, the newest notice and the founder's facts stay", async () => {
+  it("5. an oversized turn still runs: lower-value lines shrink first; the task, the carried plan, the oldest unseen notice and the founder's facts stay", async () => {
     const r = rig(() => ({ calls: [c("sleep", { reason: "read it all" })] }), { maxSteps: 4 });
     // The founder's own memory and workspace at Agent-1's real scale (14 facts ≈ 5.4 KB, 13 research files, 4 notes).
     fs.writeFileSync(path.join(r.d.m, "facts.json"), JSON.stringify(Object.fromEntries(Array.from({ length: 14 }, (_, i) => [`fact-${i}`, `${"landlord compliance detail ".repeat(12)}${i}`]))));
@@ -279,7 +279,8 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     fs.writeFileSync(path.join(r.d.s, CARRY_FILE), JSON.stringify({ at: "2026-10-18T13:00:00Z", turn: 9, steps: 16, plan: "PLAN-KEEP: publish the £5 offer next.",
       calls: Array.from({ length: 16 }, (_, i) => ({ name: "read_file", args: `{"path":"f${i}"}`, ok: true, result: "R".repeat(600), external: false, sig: `read_file:${i}` })),
       done: [{ sig: "offer:o1", name: "offer", args: '{"op":"publish"}', result: "ok" }], notRun: [{ name: "exec", args: '{"cmd":"x"}' }] }));
-    r.world.notices = Array.from({ length: 5 }, (_, i) => ({ id: `n${i}`, at: `2026-10-18T13:0${i}:00Z`, body: `${i === 0 ? "NEWEST-NOTICE " : ""}${"notice text ".repeat(120)}` }));
+    // The controller lists notices newest first; the oldest unseen one (last here) is shown first, in full.
+    r.world.notices = Array.from({ length: 5 }, (_, i) => ({ id: `n${i}`, at: `2026-10-18T13:0${4 - i}:00Z`, body: `${i === 4 ? "OLDEST-NOTICE " : ""}${"notice text ".repeat(120)}` }));
     r.world.requests = Array.from({ length: 5 }, (_, i) => ({ requestId: `0000000${i}-0000-4000-8000-000000000000`, kind: "kyc", action: "a".repeat(200), title: "t", status: "pending", ageS: 60 }));
     await r.mind.turn("x".repeat(2_500));
     expect(r.infers()).toBe(1);                                     // it thought; it was not refused
@@ -287,7 +288,51 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(p.length).toBeLessThanOrEqual(15_000);
     expect(p).toContain("CONTINUE YOUR UNFINISHED WORK");
     expect(p).toContain("PLAN-KEEP: publish the £5 offer next.");
-    expect(p).toContain("NEWEST-NOTICE");
+    expect(p).toContain("OLDEST-NOTICE");
     expect(p).toContain("fact-0");                                  // its remembered facts were not dropped
+  });
+
+  it("6. fitting never drops essentials: every open request stays, unseen notices are queued (shown in full, marked seen only when shown)", async () => {
+    const r = rig(() => ({ calls: [c("sleep", { reason: "read" })] }), { maxSteps: 4 });
+    fs.writeFileSync(path.join(r.d.m, "facts.json"), JSON.stringify(Object.fromEntries(Array.from({ length: 14 }, (_, i) => [`fact-${i}`, `${"landlord compliance detail ".repeat(12)}${i}`]))));
+    for (let i = 0; i < 4; i++) fs.writeFileSync(path.join(r.d.w, `note${i}.md`), "note ".repeat(400));
+    r.world.requests = [
+      ...Array.from({ length: 4 }, (_, i) => ({ requestId: `0000000${i}-0000-4000-8000-000000000000`, kind: "kyc", action: `OPEN-REQUEST-${i} ${"a".repeat(150)}`, title: "t", status: "pending", ageS: 60 })),
+      ...Array.from({ length: 4 }, (_, i) => ({ requestId: `1000000${i}-0000-4000-8000-000000000000`, kind: "kyc", action: `RESOLVED-${i} ${"b".repeat(150)}`, title: "t", status: "answered", response: "r".repeat(300), ageS: 60, decidedAt: new Date().toISOString() })),
+    ];
+    r.world.notices = Array.from({ length: 4 }, (_, i) => ({ id: `n${i}`, at: `2026-10-18T13:0${i}:00Z`, body: `NOTICE-${i}-START ${"policy text ".repeat(110)} NOTICE-${i}-END` }));
+    r.world.notices.reverse();                                    // the controller lists the newest first
+    await r.mind.turn("x".repeat(2_500));
+    expect(r.infers()).toBe(1);
+    const p1 = r.packets[0];
+    for (let i = 0; i < 4; i++) expect(p1).toContain(`OPEN-REQUEST-${i}`);       // all open requests, at any level
+    expect(p1).toContain("NOTICE-0-START"); expect(p1).toContain("NOTICE-0-END");  // the oldest unseen notice, in full
+    // The notices not shown this turn are not lost: each later turn shows the next, in full, until all have been seen.
+    const seen = new Set<string>(["NOTICE-0"]);
+    for (let t = 0; t < 6 && seen.size < 4; t++) {
+      r.world.eventsDigest = hex32(100 + t);                          // something changes: a new working turn
+      await beats(r, 3);
+      for (let i = 0; i < 4; i++) if ((r.packets.at(-1) ?? "").includes(`NOTICE-${i}-START`) && (r.packets.at(-1) ?? "").includes(`NOTICE-${i}-END`)) seen.add(`NOTICE-${i}`);
+    }
+    expect([...seen].sort()).toEqual(["NOTICE-0", "NOTICE-1", "NOTICE-2", "NOTICE-3"]);
+  });
+
+  it("7. when the essentials alone cannot fit, the turn makes no model call and reports the fault (the controller raises AGENT_CANNOT_THINK)", async () => {
+    const r = rig(() => ({ calls: [c("sleep", { reason: "x" })] }), { maxSteps: 4 });
+    // Essentials far beyond the packet: 5 open requests and 5 notices of maximum length, all of which must be kept.
+    r.world.requests = Array.from({ length: 5 }, (_, i) => ({ requestId: `0000000${i}-0000-4000-8000-000000000000`, kind: "kyc", action: "a".repeat(200), title: "t", status: "pending", ageS: 60 }));
+    const huge = { id: "nx", at: "2026-10-18T13:00:00Z", body: "p".repeat(1_500) };
+    r.world.notices = [huge];
+    r.world.ownerPending = 1;                                       // and an owner turn with a very long message
+    const econ = (r.mind as unknown as { o: { ports: { economy: (op: string, a?: Record<string, unknown>) => Promise<Record<string, unknown>> } } }).o.ports;
+    const real = econ.economy; const reports: Array<Record<string, unknown>> = [];
+    econ.economy = async (op: string, a?: Record<string, unknown>) => {
+      if (op === "owner.claim") { r.world.ownerPending = 0; return { ok: true, turnId: "t1", messages: Array.from({ length: 4 }, (_, i) => ({ messageId: `m${i}`, body: "Q".repeat(4_000), files: [] })) }; }
+      if (op === "mind.report") reports.push(a ?? {});
+      return real(op, a);
+    };
+    await r.mind.turn("hb");
+    expect(r.infers()).toBe(0);                                     // nothing was sent half-formed
+    expect(reports.some((x) => x.fault === "packet_unfit")).toBe(true);
   });
 });

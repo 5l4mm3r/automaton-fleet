@@ -144,4 +144,14 @@ describe.skipIf(!PG_BIN)("v94 current decisions, notices and wake signals (Postg
     expect(await R.code(R.one(`fleet.fleet_admin_cognition_run_start($1, 30, 1, 'agent opens its own', 'agent:x')`, [A]))).toBe("FLEET_APPROVAL_REQUIRED");
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
+
+  it("an agent that cannot think raises ONE RED notification a day (AGENT_CANNOT_THINK), not a quiet log line", async () => {
+    const report = () => R.one<any>(`fleet.fleet_econ_mind_report($1, $2::jsonb)`, [A, JSON.stringify({ packet: "full", fault: "packet_unfit", outcome: "STOPPED: essentials do not fit", tools: [] })]);
+    expect(await report()).toMatchObject({ ok: true });
+    expect(await report()).toMatchObject({ ok: true });
+    const n = await R.q(`SELECT class, agent_id FROM fleet.fleet_notifications WHERE code = 'AGENT_CANNOT_THINK'`);
+    expect(n).toEqual([{ class: "RED", agent_id: A }]);             // deduplicated per agent per day
+    await R.one(`fleet.fleet_econ_mind_report($1, $2::jsonb)`, [A, JSON.stringify({ packet: "full", outcome: "an ordinary closing note", tools: [] })]);
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_notifications WHERE code = 'AGENT_CANNOT_THINK'`))[0].n).toBe(1);
+  });
 });

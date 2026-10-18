@@ -33,6 +33,9 @@ Agent-1 had already been looping for 5 minutes when the 20-calls-an-hour limit s
 Day total: 62 calls, $1.8162, £1.36 (agent £1.16, treasury £0.20).
 
 ## What caused the difference (established, quantified)
+**The rows below overlap: do not add them.** "The loop ran longer" (when the money was spent) and "repeated orientation"
+(what it was spent on) describe largely the same $1.19 of periods B and C. The prefix re-cache and the context growth
+are parts of the per-call cost inside those same calls. The only additive totals are the period costs in the table above.
 | Factor | Contribution | Evidence |
 |---|---|---|
 | **The loop ran longer**: the hourly limit raised from 20 to 600 | **All of B and C**: 41 agent calls, $1.1854 (£0.89). With the limit at 20, no call could run between 12:36 and about 13:31. It is not a multiplier on each call; it is how long the loop was allowed to run | turns 10–20 rate-limited; B and C ran only after the change |
@@ -53,7 +56,10 @@ the Fleet are not under that fuse.
 Per agent call today: ≈ 60% uncached input (the packet of about 15 KB plus each step's new tool results; only the fixed
 prefix is cached in tier T2's "prefix" mode), 25–31% cache reads (the 34k prefix), 3–7% output, and the occasional
 prefix re-cache. Context per call has grown from about 5.5k tokens (September, toolset-1/2) to 41k today. About 30k of
-that is the toolset-6 tool definitions; the standing instructions are about 4.2k (measured).
+that is the toolset-6 tool definitions; the standing instructions are about 4.2k (measured). **The tool definitions are
+part of the cached prefix:** on most calls they are paid at the cache-read price ($0.20 per million), not the uncached
+$2.00. Their cost is the 25–31% cache-read share, plus a re-cache ($2.50 per million) after a gap of more than 5 minutes.
+The uncached 60% is the packet and each step's new tool results.
 
 ## Remaining unknowns
 - Matching with Anthropic's usage export (by message id `msg_…`); any unmatched usage stays unresolved until identified.

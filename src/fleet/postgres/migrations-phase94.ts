@@ -21,6 +21,11 @@
  *    estimate. A request that would cross the ceiling, or that comes after the end time, is refused before the provider
  *    (free). It is a pilot control: one run at a time, ended by the owner or by its end time. It is never a standing
  *    limit on the business.
+ * 5. AGENT CANNOT THINK (owner review, 2026-10-18: "if essentials cannot fit, the system should stop with a clear alert";
+ *    Agent-1 was refused 7,278 times between 10-02 and 10-07 without anyone being told). When a turn's essentials do not
+ *    fit the packet even after every lower-value line has been shortened, the runtime reports the fault in its closing
+ *    note. The controller then raises ONE RED notification per agent per day (AGENT_CANNOT_THINK), to Fleet Command and
+ *    the owner's phones.
  */
 import { V22_SQL } from "./migrations-phase22.js";
 import { V26_SQL } from "./migrations-phase26.js";
@@ -84,6 +89,17 @@ const ROUTED_AUTHORIZE = restate(V22_SQL, "svc_cognition_routed_authorize", [
 ]);
 const CONVERSATION_AUTHORIZE = restate(V62_SQL, "svc_cognition_conversation_authorize", [
   [`  -- v62: inside an open owner turn of this Agent`, `${RUN_CHECK}  -- v62: inside an open owner turn of this Agent`],
+]);
+
+export const AGENT_CANNOT_THINK = "AGENT_CANNOT_THINK";
+const MIND_REPORT = restate(V62_SQL, "fleet_econ_mind_report", [
+  [`  RETURN jsonb_build_object('ok', true);`, `  -- v94: a turn the runtime could not even send (its essentials do not fit) is an operational fault, not a quiet log line.
+  IF a ->> 'fault' = 'packet_unfit' THEN
+    PERFORM fleet_notify('RED', '${AGENT_CANNOT_THINK}', p_agent,
+      'An agent cannot think: its essential instructions do not fit, even after everything else was shortened. It makes no model calls until this is fixed.',
+      jsonb_build_object('fault', 'packet_unfit', 'detail', left(fleet_scrub(a ->> 'outcome'), 300)), 'agent-cannot-think:' || p_agent || ':' || to_char(now(), 'YYYY-MM-DD'));
+  END IF;
+  RETURN jsonb_build_object('ok', true);`],
 ]);
 
 export const V94_SQL = `
@@ -213,6 +229,8 @@ BEGIN
 END $$;
 CREATE FUNCTION fleet_admin_cognition_run(p_agent text) RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$ SELECT COALESCE(fleet_cognition_run_json(p_agent), 'null'::jsonb) $$;
+
+${MIND_REPORT}
 
 ${ROUTED_AUTHORIZE}
 

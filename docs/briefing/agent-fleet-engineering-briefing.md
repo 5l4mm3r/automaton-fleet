@@ -479,8 +479,14 @@ This is the repair for the 2026-10-18 proof failure (§11.4). It lives in `found
   time comes. The wake digest covers memory, the workspace, selected ledger fields, capabilities, dependency statuses
   and the controller's events digest (mail, card and spend reviews, notices, lessons, disputes, orders, supersessions,
   finished jobs). The agent's own AI charges do not move it.
-- **Packet fitting.** An oversized packet is rebuilt at reduction levels instead of being refused. Remembered facts are
-  dropped last.
+- **Packet fitting.** An oversized packet is rebuilt at reduction levels instead of being refused.
+  - **Never shortened:** the owner's messages, open and superseded dependencies, unseen Fleet Control notices (shown in
+    full; any not shown this turn are queued for the next), the carried plan, completed actions and calls not yet run,
+    capability changes, the work lines, the events since the last turn, and the policy section.
+  - **Shortened first:** lower-value lines.
+  - **Dropped last:** remembered facts.
+  - If the essentials alone cannot fit, the turn makes **no model call** and the controller raises one RED
+    `AGENT_CANNOT_THINK` alert per agent per day.
 - **Current decisions.** Fleet Control notices are shown once in the next working turn. A superseded approval shows
   the owner's current decision.
 
@@ -731,10 +737,13 @@ turn. It was paused twice. Causes found from the logs (`docs/evaluations/launch-
    agent's task.
 4. **"Packet too large."** Agent-1 could not think at all from 2026-10-02 10:45 to 2026-10-07 (7,278 refused turns),
    and again for three turns on 2026-10-18.
-5. **Cost structure.** About 60% of each call was uncached input: only the fixed 34k-token prefix (standing
-   instructions plus about 30k tokens of tool definitions) is cached in T2. A pause longer than 5 minutes costs a
-   prefix re-cache (about $0.085).
+5. **Cost structure.** About 60% of each call was uncached input: the packet plus each step's new tool results. The
+   fixed 34k-token prefix (standing instructions plus about 30k tokens of tool definitions) is cached in T2. It is paid
+   mostly at the cache-read price, which is 25–31% of each call's cost, plus a re-cache of about $0.085 after a pause
+   longer than 5 minutes.
 6. **The hourly cap.** Raising it from 20 to 600 let the failing loop run longer. It was not a per-call cost multiplier.
+   Causes 1 and 6 describe largely the same spending (what it was spent on, and why it could continue). Their amounts
+   overlap and must not be added.
 
 ### 11.5 The prepared repair: release `f72a479` (v94, UI 0.26.2), not installed
 - **What it contains:** continuity and carry; progress by kind; zero-call waiting; packet fitting; notices and

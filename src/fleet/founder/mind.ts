@@ -676,7 +676,13 @@ export class FounderMind {
     // 2026-10-18: the task is composed at a reduction LEVEL (0 = everything). A packet that does not fit is rebuilt at the next
     // level — lower-value lines shortened or dropped first — instead of the whole turn being refused: Agent-1 lost five days
     // (2026-10-02 → 10-07) and three turns on 2026-10-18 to "packet too large", unable to think at all.
-    const depLines = dependencyLines(deps ?? []);
+    // Essentials are never shortened: open and superseded dependencies, unseen Fleet Control notices (in full; at a reduced
+    // level the oldest unseen one is shown and the rest wait for the next turn), the carried plan, completed actions and
+    // calls not yet run, the owner's messages, the work lines and the events since the last turn.
+    const essentialDeps = (deps ?? []).filter((r) => r.status === "pending" || !!r.supersededBy);
+    const depLines = [...dependencyLines(essentialDeps), ...dependencyLines((deps ?? []).filter((r) => !essentialDeps.includes(r)))];
+    const essentialDepCount = dependencyLines(essentialDeps).length;
+    let fitLevel = 0;
     const decLines = decisionLines(ledger);
     const composeTask = (lvl: number) => [
       ...(owner ? [ownerBlock(owner)] : []),
@@ -684,10 +690,11 @@ export class FounderMind {
       prev ? `Your previous turn (${prev.at}) ended with: ${(prev.outcome || "(no closing note)").slice(0, lvl >= 4 ? 400 : 1_200)}${prev.tools.length && lvl < 5 ? ` [tools used: ${prev.tools.join(", ")}]` : ""}`
            : "No closing note from a previous turn is recorded: rely on your goals, facts and notes below.",
       ...(carried && !owner ? carryLinesWithin(carried, [CARRY_MAX_CHARS, 3_000, 1_500, 1_500, 1_200, 900, 600][Math.min(lvl, 6)]) : []),
-      ...(lvl >= 2 ? notices.lines.slice(-1).map((l) => l.slice(0, 700)) : notices.lines),
+      ...(lvl >= 2 ? notices.lines.slice(0, 1) : notices.lines),
       ...(W && !owner && !carried && prev?.stalled === 1 ? [STALL_LINE] : []),
-      ...(lvl >= 3 ? capNote.map((l) => l.slice(0, 300)) : capNote),
-      ...(lvl >= 5 ? depLines.slice(0, 2) : depLines),
+      // A capability CHANGE is current authority: never shortened. Only the first full tool list may be (the capabilities tool lists it).
+      ...(lvl >= 3 ? capNote.map((l) => (l.startsWith("Your capabilities changed") ? l : `${l.slice(0, 300)}… (the capabilities tool lists them all)`)) : capNote),
+      ...(lvl >= 5 ? depLines.slice(0, essentialDepCount) : depLines),
       ...workLines(work),
       ...(lvl >= 5 ? decLines.slice(0, 3) : decLines),
       ...(ledgerProblem ? [ledgerProblem] : []),
@@ -769,7 +776,7 @@ export class FounderMind {
       };
       let lvl = 0;
       for (;;) {
-        try { text = build(lvl); break; } catch (e) {
+        try { text = build(lvl); fitLevel = lvl; break; } catch (e) {
           if ((e as { code?: string }).code !== "FLEET_TASK_PACKET_INVALID" || lvl >= PACKET_FIT_LEVELS) throw e;
           lvl++;
         }
@@ -781,6 +788,12 @@ export class FounderMind {
       const code = (err as { code?: string }).code ?? "FLEET_TASK_PACKET_INVALID";
       // The reason names packet sections and error kinds only (never packet content).
       this.logDecision({ turn: this.turns, routed: true, stopped: code, detail: (err instanceof Error ? err.message : String(err)).slice(0, 300) });
+      // 2026-10-18: the essentials did not fit even after every lower-value line was shortened: an operational fault the
+      // controller raises to the owner (v94 AGENT_CANNOT_THINK, once a day), never a quiet log line.
+      if (code === "FLEET_TASK_PACKET_INVALID" && W) {
+        void this.o.ports.economy?.("mind.report", { packet: "full", fault: "packet_unfit", tools: [],
+          outcome: "STOPPED: the task's essentials do not fit the packet even after shortening everything else" }).catch(() => undefined);
+      }
       return { ...result, reason: `stopped: ${code}` };
     }
     const messages: ChatMessage[] = [{ role: "user", content: text }];
@@ -918,7 +931,7 @@ export class FounderMind {
       { revenue: Number.isFinite(revenue) ? revenue : null,
         wakeOn: wakeOn ?? (sleptOnly ? prev?.wakeOn ?? null : null),
         reviewAt: reviewAt ?? (sleptOnly && !reviewDue ? prev?.reviewAt ?? null : null),
-        waiting: waitNow, stalled, noticesShown: [...(prev?.noticesShown ?? []), ...(cutOff ? [] : notices.ids)] });
+        waiting: waitNow, stalled, noticesShown: [...(prev?.noticesShown ?? []), ...(cutOff ? [] : notices.ids.slice(0, fitLevel >= 2 ? 1 : notices.ids.length))] });
     // v62: a declared hibernation now waits for an event (or its review / the daily safety re-check), never a timer.
     const effWakeOn = wakeOn ?? (sleptOnly ? prev?.wakeOn ?? null : null);
     const effReview = reviewAt ?? (sleptOnly && !reviewDue ? prev?.reviewAt ?? null : null);
