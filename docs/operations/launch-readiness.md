@@ -114,6 +114,34 @@ The bank route (v91, "My deposit") stays available if a dedicated bank account i
 - 12:48–12:55 **defect: a status-only loop.** Each minute a working turn (storefront + offer status, list_files, exec) that never ends in a plain sleep, so the runtime never backs off: about 6p a minute with no progress. Cause: Agent-1 was still waiting on the Gumroad channel (owner request 62cbe1b7, approved 09-26 as "the owner will open Gumroad"); Gumroad was deferred on 10-10, but Agent-1 was never told its channel is its own Fleet offer page. **Paused 12:55:29Z** (proof.sh pause; windows open). Fix: the owner tells Agent-1 that Gumroad is deferred and the offer page is its channel, then proof.sh resume. Runtime follow-up (founder runtime, after the proof): a turn of only status reads counts as idle for the backoff.
 - Owner, 2026-10-18: **"the agents should be automated — the chat is for emergencies only"**, and **"reference codes must be titled"**. Fix (owner-run `proof.sh unblock`): a Fleet Control notice, not an owner message, tells Agent-1 that Gumroad is deferred and that its offer page is its channel; resolved dependencies are immutable, so the notice is the record. Next release (after the proof): (1) when an owner decision supersedes an approved dependency, Fleet Control tells the agent automatically; (2) Fleet HQ shows every reference with its title, e.g. "List the landlord compliance tracker on Gumroad (62cbe1b7)", in conversations, Fleet Command and notifications; agents are told to name records by title; (3) the status-only turn counts as idle.
 
+- 13:07–13:11 the Fleet Control notice was delivered but not read: notices reached the wake digest, never the agent's
+  task. A second loop ran; Agent-1 was paused at 13:11:15Z. **Cause (log):** every turn was cut off at the runtime's
+  4-step default with an empty closing note, so the next turn re-oriented. 71efd95 (16 steps, a note, a "repeat" rule)
+  was reviewed by the owner and **withdrawn without being deployed**: the repeat rule only relabelled turns that had
+  already been paid for, the note carried no results, and its script resumed Agent-1 automatically.
+- **Costs, Fleet-recorded and PROVISIONAL until matched with Anthropic's usage export.** 2026-10-18: 62 calls, all
+  claude-sonnet-5-5 (tier T2), each with Anthropic's message id: **$1.8162**, charged £1.36. That is 57 calls of
+  Agent-1's own work ($1.5407, £1.16) and 5 owner-conversation calls paid by the treasury ($0.2756, £0.20). Tokens: 534k
+  input, 11k output, 1.90M cache reads, 102k cache writes (the loop resent its context). Fleet Control: 0 review calls.
+  The per-call list is exported for matching. Anything in the Anthropic export that is not on it (by message id) did
+  not come through the Fleet's cognition path. It must be identified from the export itself (key, time, model), not
+  assumed.
+- 316b27b (v94, UI 0.26.2) prepared and pushed against the owner's acceptance conditions (release-316b27b.md).
+  `~/rlc95/install-fix.sh` installs it and upgrades Agent-1, then ends with both agents paused; it has no resume step.
+  It is not installed yet (a separate owner decision).
+
+### 2b. Proposed next live proof (separate authorisation; not started)
+| | |
+|---|---|
+| Goal | ONE finished product file under Agent-1's own brand, inspected, and published as a private offer (sales closed). No purchase, refund, card use or mail: those come in a later stage, approved separately, once this one passes |
+| Before it | the owner records the existing decision (Gumroad deferred, 10-10) as superseding Agent-1's Gumroad request (`owner-request-supersede`, one command); Fleet Control's notice reaches Agent-1 in its first turn |
+| AI-cost ceiling | **£2.00 in total**, enforced by the controller: Agent-1's daily fuse is set to 200 for the run and restored to 754 at the end. Hourly cap 120 |
+| Duration | at most 6 hours |
+| Automatic stop | (1) the runtime itself: after two turns without progress it makes no calls until something changes; (2) a watchdog every 5 minutes pauses Agent-1 and reports when the £2.00 is spent, when it has been waiting 30 minutes with no product, or at 6 hours |
+| Permissions | none beyond resuming Agent-1: no outward release, card authority off, custody off. Agent-2 stays paused |
+| Report | the product file (name, size, inspection result), the offer page, the useful actions (turns with progress, against turns without), the time taken, and the cost: Fleet-recorded per call, plus the export for matching with Anthropic |
+| Pass | a product and an offer that pass inspection, within £2.00 and 6 hours, with no unchanged-state calls after a stall |
+
 ## 6. Optional later (never delays launch)
 Unit files listing individual secret files could hide the whole directory (isolation is checked on the host either way);
 a dedicated PayPal limitation alert; a PayPal deposit that fills an open shortfall first (bank deposits do); JavaScript
