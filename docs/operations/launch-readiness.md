@@ -17,7 +17,7 @@ does not block. Optional improvements are listed at the end and never delay the 
 | 8 | Service isolation on the real host | 2026-10-17 13:40Z: code / build / proxy see `/etc/automaton-fleet` empty; `fleet-isolation-check.sh` (a4e972c: explicit dependencies, public pins against a name / value schema) PASSED for 19 running units after the public certificate and the tunnel id file became 0600; canary test caught all 4 planted cases and removed them; 0 failed units; ledger, agents, registry and safety flags = post-v91 baseline | — | Done |
 | 9 | Bank account + feed | owner decision 2026-10-17: **no separate bank account**; the owner's existing debit card is used as an owner-paid card (card clearing: reserved from the agent's cash, charged to the owner's card, owed to the owner). Bank feed installed, unused. Funding goes to the PayPal treasury (backing live there). Bank-rail proofs (7, 10) are replaced by one card purchase reconciled from the owner's card statement | — | Not needed (owner decision) |
 | 10 | Card for purchases | card slot 1 = owner-paid ("credit" mode, the v48 card-clearing path), fallback OFF; the owner adds the card in Money & identity → Your card (sealed in the browser to the identity broker) | standing card authority at activation; proof purchase under the proof authorisation | Done: card 1 re-saved 2026-10-18 11:47:56Z, installed by the broker 11:48:03Z, shown as a masked label (brand, last four, name, exp 12/27; v93), expiry stored (end of 12/2027). The broker keeps the whole card including the CVC, sealed in its owner vault (0600, its own user), to fill checkouts; never in the database, Fleet HQ, logs or any agent's view. Saving it authorises nothing |
-| 11 | Search + images | gateway installed, running not configured | Brave Search API key (card on file, $5 free monthly credit); OpenAI project key with prepaid credit (min $5); `connect.sh media search` / `media image` (model gpt-image-2.5-flare: gpt-image-1 shuts down 2026-10-23) | **Blocker** for graphics beyond the bundled tools; one search + one image proof |
+| 11 | Search + images | **search: Brave connected 2026-10-18 12:13:55Z** (key root 0600; gateway started `search: brave`, 1 ¢ charged per search; DNS stub allowed); **images: not connected by owner decision 2026-10-18** (Claude is the agents' cognition; OpenAI would only generate images — agents use the bundled graphics tools and are told images are not connected) | first live search in Proof A step 1; images later via `connect.sh media image` if a product needs them | Search done; images not offered |
 | 12 | Software maintenance | code / build / proxy installed and running (not configured); toolchains python3, node 22.23.3, npm 10.9.9 | GitHub App (id, slug, key) → `connect.sh code`; your own repository as the customer: snapshot, failing then passing build, PR, uninstall | **Blocker** only if software maintenance is offered at launch; else not offered (labelled) |
 | 13 | Legal seller + public site | 2026-10-17 18:56–18:57Z: seller = individual (sole trader), legal name and a virtual-office address (geographic, not a PO box) set by the owner; public site `https://api.agentfleet.vip`; sales CLOSED; each page's "sold by" line built from the seller record (v78), agents trade under their own brands | — | Done |
 | 14 | Mail: Proton sending, receiving, per-agent / per-venture routing | Bridge live; 26 messages received; owner notifications sent; mailbox routes built, 0 created yet | none (Agent-1 creates its brand mailbox during the proof) | Proven in proof 5 |
@@ -41,7 +41,7 @@ unless the GitHub App is set up (then proof 9 is added; until then the capabilit
 |---|---|
 | 1. Demand research with web_search (Brave) | sources recorded; a buyer problem with evidence; search cost charged to Agent-1 at its actual price |
 | 2. A brand and one supported product (spreadsheet / document / template / course pack) | the agent's own venture and brand; capability check names the offer and every deliverable ready |
-| 3. Production and substantive review | the inspector passes the exact files (formulas recalculate, no errors, rendered pages checked, spelling, the brief's acceptance criteria); one image from generate_image if the product uses one (actual token cost) |
+| 3. Production and substantive review | the inspector passes the exact files (formulas recalculate, no errors, rendered pages checked, spelling, the brief's acceptance criteria); no generated image (images not connected) |
 | 4. A **private** offer (not public: sales stay closed) | an order page for the owner only |
 | 5. The owner's purchase (PayPal, **£5**) | consent recorded; payment verified from PayPal; revenue attributed to Agent-1 net of PayPal's fee |
 | 6. Delivery | the buyer's mail from the brand's routing address + the order page download; files open and match what was inspected |
@@ -61,7 +61,7 @@ to you. Stop if the merchant needs anything beyond card + email.
 | Outward release (proof only, not launch) | actions: browser (the purchase merchant's origin only), mail (to the owner's address only), account_register (that merchant) | expires after 72 h |
 | Custody (money out) | max £5.00 per instruction, £5.00 a day, for 72 h — the refund only | expires |
 | Card authority | identity autonomy ON with card, max £5 per charge, £5 a day | reset to the launch setting at activation |
-| Media | Brave key (free monthly credit) and OpenAI $5 prepaid credit, gateway caps 1 ¢ / search and 20 ¢ / image | stay connected |
+| Media | Brave only (free monthly credit), 1 ¢ per search charged to Agent-1; images not connected | stays connected |
 
 ### Budget (a ceiling, reported as used)
 | Kind | Expected | Ceiling |
@@ -70,8 +70,7 @@ to you. Stop if the merchant needs anything beyond card + email.
 | Fees consumed: PayPal's fee on it (not returned) | ≈ £0.45 | ≈ £0.50 |
 | Card purchase (Proof B) | the item's price | £5.00 |
 | AI (Agent-1's own work; pre-launch test cost) | a few £ | fuse: 754 a day (≤ £7.54) × 3 days |
-| Search / images | < $0.30 | gateway caps |
-| Prepaid credit (mostly unused) | OpenAI $5 | $5 |
+| Search | < $0.30 | 1 ¢ / search |
 | Subscriptions | Pushover $4.99 once (only to keep it after the trial) | — |
 
 Stop conditions: all steps accepted; or a step fails materially (Agent-1 is paused, the defect fixed and re-verified, the
