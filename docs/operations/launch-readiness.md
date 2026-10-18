@@ -130,17 +130,28 @@ The bank route (v91, "My deposit") stays available if a dedicated bank account i
   `~/rlc95/install-fix.sh` installs it and upgrades Agent-1, then ends with both agents paused; it has no resume step.
   It is not installed yet (a separate owner decision).
 
-### 2b. Proposed next live proof (separate authorisation; not started)
+### 2b. Proposed measured live attempt (after the repair is installed; separately authorised; not started)
 | | |
 |---|---|
-| Goal | ONE finished product file under Agent-1's own brand, inspected, and published as a private offer (sales closed). No purchase, refund, card use or mail: those come in a later stage, approved separately, once this one passes |
-| Before it | the owner records the existing decision (Gumroad deferred, 10-10) as superseding Agent-1's Gumroad request (`owner-request-supersede`, one command); Fleet Control's notice reaches Agent-1 in its first turn |
-| AI-cost ceiling | **£2.00 in total**, enforced by the controller: Agent-1's daily fuse is set to 200 for the run and restored to 754 at the end. Hourly cap 120 |
-| Duration | at most 6 hours |
-| Automatic stop | (1) the runtime itself: after two turns without progress it makes no calls until something changes; (2) a watchdog every 5 minutes pauses Agent-1 and reports when the £2.00 is spent, when it has been waiting 30 minutes with no product, or at 6 hours |
-| Permissions | none beyond resuming Agent-1: no outward release, card authority off, custody off. Agent-2 stays paused |
-| Report | the product file (name, size, inspection result), the offer page, the useful actions (turns with progress, against turns without), the time taken, and the cost: Fleet-recorded per call, plus the export for matching with Anthropic |
-| Pass | a product and an offer that pass inspection, within £2.00 and 6 hours, with no unchanged-state calls after a stall |
+| Task | Agent-1, without owner coaching: ONE product under its own brand, passed by the inspector, published as a private offer (sales closed). No purchase, refund, card, mail or account work. Stage 2 (the £5 purchase, revision and refund) comes only after this passes |
+| Before it | The owner's existing decision (Gumroad deferred, 10-10) recorded as superseding Agent-1's Gumroad request (`owner-request-supersede`, one command). Fleet Control's notice reaches Agent-1 in its first turn |
+| AI ceiling | **£2.00 for the run alone**, with its own run budget (`cognition-run start <Agent-1> 200 6 …`) and no relation to the day's earlier spending or the daily reset. It covers every model call logged for Agent-1 from the run's start: its own work and any treasury-paid conversation turn. Fleet Control reviews are billed separately; none are expected without spending, and any that occur are reported |
+| Enforcement | Before every request: the run's cost + requests in flight + this request's worst case must fit £2.00. A refusal costs nothing. The daily fuse (754p) still applies on top |
+| Time limit | 6 hours (the run's end time; requests after it are refused) |
+| Automatic stop | Primary: the controller's run budget and end time; the runtime's waiting gate (no call after two stalls until something changes). Secondary: a watchdog every 5 minutes pauses Agent-1 when the run is spent or ended, after 3 stalls in a row, or after 30 minutes of waiting with no product |
+| Baseline | The run's start time and Agent-1's call count and cost at that moment, recorded in the report |
+| Report (plain English) | what was produced; the inspector's checks; the useful actions and the repeated ones; elapsed and model time; the provider cost (Fleet-recorded per call, provisional until matched) and the cost per completed task |
+| Pass | an inspected product and a private offer within £2.00 and 6 hours, with no calls in unchanged waiting after a stall. Passing tests or a successful deploy is not success |
+| Pilot only | the run budget and the 6 hours are this trial's limits, not standing business limits |
+
+Cost-efficiency proposals (no production change without its own approval; see cost-comparison-2026-10-18.md):
+1. Cache the conversation inside a tool loop (`prefix+tail`, already in the provider). Today about 60% of each call
+   was uncached input. Measure it with a small scripted A/B of two identical 4-step turns per policy (≈ $0.25).
+2. A 1-hour cache for the fixed 34k-token prefix, only if the A/B shows the re-caching after gaps costs more than it.
+3. A review of the toolset-6 tool definitions (≈ 30k tokens on every call) to remove repeated text, without removing any
+   capability.
+4. Models unchanged: Sonnet 5.5 for ordinary steps, Opus 5.5 for escalated and consequential steps, Haiku 4.5 for
+   routine chores. Check T3's configured cache-read price against Anthropic's Opus price (accounting only).
 
 ## 6. Optional later (never delays launch)
 Unit files listing individual secret files could hide the whole directory (isolation is checked on the host either way);

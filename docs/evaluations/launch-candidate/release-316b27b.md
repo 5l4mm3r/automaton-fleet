@@ -1,4 +1,7 @@
-# Release 316b27b (schema 93 → 94; UI 0.26.0 → 0.26.2) — install ends with both agents paused
+# Release 316b27b (schema 93 → 94; UI 0.26.0 → 0.26.2) — SUPERSEDED by f72a479 before installation
+
+f72a479 (release-f72a479.md) adds: packet fitting (the five-day "packet too large" stall), progress by kind, the v94 run
+budget, and the proof that the agent's own AI postings do not wake it. `~/rlc95/install-fix.sh` was renamed `.superseded` without being run.
 
 Production before it: 1743b33, schema 93, UI 0.26.0. It supersedes 71efd95, which was withdrawn and never deployed.
 Scope: the execution defects of the §2 proof run of 2026-10-18 (launch-readiness.md, "Proof log"), measured against the
