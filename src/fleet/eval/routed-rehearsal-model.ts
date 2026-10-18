@@ -13,7 +13,8 @@
  *   4. re-issue the major spend in the step the controller runs at the critical tier         (T3 action step)
  *   5. record completion, complete the execution goal and sleep                              (back at T2)
  *
- * Afterwards every turn only sleeps; at the first slim wake-up a v5 founder reads its guide, journals the walk and declares
+ * Afterwards every turn only sleeps; at the first slim wake-up (an older runtime) or its reconsideration turn after a stall
+ * (work continuity, 2026-10-18) a v5 founder reads its guide, journals the walk and declares
  * its hibernation (v62: declared hibernation then waits for an event, never a timer). Tool-less requests (the T1 chore, the T3 question) are answered by
  * `routedRehearsalToolless`.
  */
@@ -87,7 +88,9 @@ export class RoutedRehearsalModel extends ScriptedProvider {
     // v62: the bare (slim) wake-up after the founder has rested on the finished walk. A v5 founder consults its guide,
     // journals the walk and DECLARES its hibernation here — within the per-step tool-call limit, so every call runs (a
     // declared sleep that the limit cut off would still end the turn and hibernate, leaving the journal unwritten).
-    if (inTurn === 0 && first.includes("Nothing has changed since your last turn")) {
+    // 2026-10-18 (work continuity): a production founder no longer pays for bare wake-ups on an unchanged state; the moment
+    // to close is its one reconsideration turn after the first stall (STALL_LINE) — or, on an older runtime, the slim wake-up.
+    if (inTurn === 0 && (first.includes("Nothing has changed since your last turn") || first.includes("Your last turn made no progress"))) {
       content = "Hibernating: the routed walk is on record.";
       toolCalls = [...v5Close(), ...rest("routed walk complete")];
     } else if (first.includes(`"${REHEARSAL_DONE_FACT}"`)) {

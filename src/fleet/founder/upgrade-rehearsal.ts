@@ -365,27 +365,6 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
         + `uncached: ${[...t1, ...t2, ...question, ...action].filter((r) => r.cache_policy === "off").length} call(s) (first step, T1, T3)`);
     check("routed: provider protocol holds through real founder loops — signed thinking never crosses a model boundary, nothing is edited mid-loop",
       fake.violations.length === 0 && routed.every((r) => r.outcome === "ok"), fake.violations.length ? fake.violations.slice(0, 3).join("; ") : `0 protocol violations over ${routed.length} routed call(s)`);
-    // R23.1: after the walk the founder only sleeps; its next bare wake-up starts from the slim packet (the exact call is
-    // matched by its request id in the founder's own decision log) and pays no cache write unless reuse is evidenced.
-    const slimLog = () => {
-      try {
-        return fs.readFileSync(path.join(stateNs, "mind-log.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>).filter((e) => e.packet === "slim" && e.requestId);
-      } catch {
-        return [] as Array<Record<string, unknown>>;
-      }
-    };
-    const slimRow = await waitFor(async () => {
-      const ids = new Set(slimLog().map((e) => String(e.requestId)));
-      return (await logRows()).find((r) => ids.has(String(r.request_id))) ?? null;
-    }, timeout * 2, poll);
-    const lastFull = slimRow ? [...(await logRows())].filter((r) => r.tier === "T2" && Number(r.packet_bytes) > 0 && Number(r.seq) < Number(slimRow.seq)
-      && !slimLog().some((e) => String(e.requestId) === String(r.request_id))).at(-1) : undefined;
-    const why = String(slimRow?.reasoning?.cacheReason ?? "");
-    check("routed: a bare wake-up after a sleep-only turn uses the slim packet — still T2, one message, smaller than the full packet of the same state, no cache write without evidenced reuse",
-      Boolean(slimRow) && slimRow!.tier === "T2" && slimRow!.task_class === "agent_step" && Number(slimRow!.packet_bytes) > 0 && Boolean(lastFull)
-        && Number(slimRow!.packet_bytes) < Number(lastFull!.packet_bytes)
-        && (slimRow!.cache_policy === "off" ? Number(slimRow!.cache_write_tokens) === 0 : /within the cache lifetime/.test(why)),
-      slimRow ? `slim packet ${slimRow.packet_bytes} B vs the previous full packet ${lastFull?.packet_bytes ?? "?"} B; cache ${slimRow.cache_policy} (${why}); cost ${slimRow.cost_microcents} µ¢` : "no slim wake-up observed");
     // R41.1: the upgraded founder asks for founder-v5; the controller serves it (its attested release implements it), and the
     // v5 tools dispatch end to end through the real gateway and runtime: guide read, journal written, hibernation declared.
     const journalFile = path.join(stateNs, "memory", "field-journal.jsonl");
@@ -393,6 +372,18 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
     // The v5 close (guide read, journal entry, declared hibernation) runs on the founder's own schedule: wait for it.
     const continuity = () => { try { return JSON.parse(fs.readFileSync(path.join(stateNs, "mind-continuity.json"), "utf8")) as Record<string, unknown>; } catch { return {}; } };
     await waitFor(async () => (countJournal() >= 1 && typeof continuity().wakeOn === "string" ? true : null), timeout, poll);
+    // 2026-10-18 (work continuity; replaces the R23.1 slim wake-up check): a hibernating founder makes NO model call while
+    // nothing it can act on changes — measured over three thinking slots by its own heartbeats — and a Fleet Control notice
+    // (a v94 wake event) wakes it within a slot.
+    const quietFrom = (await logRows()).length;
+    const hbFrom = Number((await rep())?.heartbeats ?? 0);
+    await waitFor(async () => (Number((await rep())?.heartbeats ?? 0) >= hbFrom + 6 ? true : null), timeout * 2, poll);
+    const quietCalls = (await logRows()).length - quietFrom;
+    await owner.query(`SELECT fleet_spend_review_notice($1, $2)`, [a, "Fleet Control: rehearsal notice — something changed that you can act on."]);
+    const wokeOnNotice = await waitFor(async () => ((await logRows()).length > quietFrom + quietCalls ? true : null), timeout, poll);
+    check("work continuity: a hibernating founder makes no model call while nothing changes (three thinking slots), and a Fleet Control notice wakes it",
+      quietCalls === 0 && Boolean(wokeOnNotice),
+      `${quietCalls} call(s) over ${Number((await rep())?.heartbeats ?? 0) - hbFrom} heartbeat(s) of unchanged waiting; ${wokeOnNotice ? "woke on the notice" : "did not wake on the notice"}`);
     const journalLines = countJournal();
     const v5Tools = (() => { try {
       return fs.readFileSync(path.join(stateNs, "mind-log.jsonl"), "utf8").trim().split("\n").flatMap((l) => ((JSON.parse(l) as { tools?: Array<{ name: string; ok: boolean }> }).tools ?? []))

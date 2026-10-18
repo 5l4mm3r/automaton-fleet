@@ -506,7 +506,7 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
         "routed: one question escalated as a Critical Decision Packet (reason code, parent call), then control returned to T2",
         "routed: consequential actions are linked to the cognition that produced them — a small spend at T2, a major spend only from a T3 step",
         "routed: cache only on evidenced reuse — T2 prefix written once inside the tool loop and read back; T1, the T3 question, the T3 action step and a turn's first step write nothing",
-        "routed: a bare wake-up after a sleep-only turn uses the slim packet — still T2, one message, smaller than the full packet of the same state, no cache write without evidenced reuse",
+        "work continuity: a hibernating founder makes no model call while nothing changes (three thinking slots), and a Fleet Control notice wakes it",
         "routed: provider protocol holds through real founder loops — signed thinking never crosses a model boundary, nothing is edited mid-loop",
         // 2026-10-12: the upgraded runtime attests founder-v6 (charter v6 + the v5 tools), proven by name and count.
         "R41.1 / v6: the upgraded founder is served its attested doctrine (founder-v6: charter v6 + the v5 tools) and its tools run end to end — field guide read, field journal written, hibernation declared with a wake condition",
