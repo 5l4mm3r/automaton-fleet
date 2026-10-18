@@ -24,10 +24,11 @@ Two subjects are anchored to the business event the operation acts on, so ordina
   buyer on an order or enquiry answers the buyer's latest message (`…:answering:<message>`). When the buyer writes
   again, the next answer is new by itself; a second answer to the same message is the same operation. A further
   unsolicited message (a follow-up, another scheduled message) names the latest one with `after`.
-- **A browser flow** is many submissions on one site. Within one live session, the next different step continues the
-  sequence by itself and the same step again replays the last. Sessions die with the browser worker, so a worker
-  restart always starts a new session. In a new session, a step without `after` is compared with the latest operation
-  on that account or site: the same step replays it; anything else is refused and names it.
+- **A browser submission** (a click, a key press, an upload, a dialog, an auth link) is compare-and-set on its
+  account or site, within a live session too: a reworded submission is never taken as the next one by itself. The next
+  submission passes `after` = the previous one's operationId, which its result carries, so no extra call is needed.
+  Navigation, reading and typing into a form carry no operation and are never refused. Without `after`, a submission
+  is compared with the latest on that account or site: the same one replays it; anything else is refused and names it.
 
 | The request | What happens |
 |---|---|
@@ -65,19 +66,29 @@ recording). Uncertain operations are never repeated blindly:
 |---|---|---|
 | PayPal payouts (payment orders) | instruction stuck `claimed` forever | after 10 minutes the claim is re-leased and the executor re-POSTs with the same `PayPal-Request-Id` / `sender_batch_id` (= instruction id). PayPal returns the original payout, so this reconciles; it is not a second payment. |
 | PayPal refunds | re-POSTed with the same request id (safe); a 4xx on that retry was recorded as failed | a 4xx on a retry is recorded as unknown (`sent`), never as failed, and reconciled by search, not by a new refund |
-| Mail (identity jobs) | job stuck `claimed` forever; a random Message-ID per attempt | after 10 minutes the job becomes `uncertain`. Its Message-ID is derived from the job, so it is the same on every attempt. Proton Bridge: the broker looks for that Message-ID in the Sent folder. Found: succeeded. Absent on two checks 10 minutes apart: requeued once with the same Message-ID. Other mail providers: stays uncertain until resolved. |
+| Mail (identity jobs) | job stuck `claimed` forever; a random Message-ID per attempt | uncertain after 10 minutes or an ambiguous SMTP error. Its Message-ID is derived from the job. Proton Bridge: the broker looks for it in the Sent folder at most every 10 minutes for 7 days. Found: sent (a late copy still resolves it). Absent: **never resent** — Bridge files the Sent copy after Proton accepted the message, so a crash, queue or slow sync can leave a sent message missing; absence is not proof. After 30 minutes without a copy the owner is asked once to check the mailbox for the Message-ID. Other providers: the same, at once. An uncertain message to an address also blocks every further message to that address (another recipient list or a reply). |
 | SMS | stuck `claimed` | `uncertain` after 10 minutes; no automatic reconciliation (Twilio is not looked up); resolved with evidence |
-| Browser submissions | stuck `claimed`, session lost | after 15 minutes, or when the worker restarts, an action with any outward step becomes `uncertain`. A read-only action (only `goto`, `wait`, `scroll`, `screenshot` …) fails as lost and needs no operation record at all. |
+| Browser submissions | stuck `claimed`, session lost | after 15 minutes, or when the worker restarts, an action with a submission step becomes `uncertain`. One that only navigated, read or typed fails as lost and carries no operation. |
 | Channel API (posts, listings) | re-queued after 10 minutes and run again (up to 3 times): duplicate posts | `uncertain` after 10 minutes; never re-run automatically |
-| Code jobs (pull requests) | lost response → failed; a retry makes a second branch and PR | stale → `uncertain`. The gateway reconciles by the job's fixed branch name: an open PR from that branch means succeeded (adopted); no branch and no PR means safe to run again with the same branch. |
+| Code jobs (pull requests) | lost response → failed; a retry makes a second branch and PR | stale → `uncertain`. Re-run idempotently by the job's fixed branch: an open PR from it means succeeded (adopted); a pushed branch gets its PR. Never failed after a lost answer: after 3 attempts it stays uncertain and the owner is asked to check the branch. |
 | Media jobs (search) | running > 5 minutes → failed, cost unknown, reservation kept | unchanged (never re-sent). It counts as uncertain but does not block a further search: a search has no external effect beyond its cost. |
 | Storefront (Gumroad) | re-claimed after 10 minutes | unchanged. A product create adopts the existing product by its fixed permalink; the other operations set state and are safe to re-run. Gumroad is deferred. |
 
-**Resolving without provider evidence.** For an uncertain operation the system cannot check itself (SMS, a browser
-submission, a channel post, mail through a provider other than Proton), the agent observes the result: it reads the
-page, the listing or its mailbox. It then records `operation resolve {operationId, outcome: happened | not_happened,
-evidence}`. The evidence is kept with the operation and shown in Fleet history. After `not_happened`, a retry is a new
-operation (`after`), never an automatic repeat. No owner step is involved.
+**Resolving an uncertain outcome takes evidence, never an assertion.**
+- *Provider evidence* resolves it by itself: the Proton Sent folder (mail), PayPal's answer to the same request id
+  (payouts, refunds), the job's own branch or pull request (code).
+- *The agent* may record only that it **happened**, and only for a browser submission or a channel job, with a
+  recorded observation: a finished read-only browser action of its own, made after the uncertain one, on the same
+  account (or the same site; for a channel job, the channel's site). It must name a marker of 8 or more characters
+  that the uncertain submission itself carried (a title, a name, a message line) and that the observed page shows. A
+  free-text claim, a page without the marker, an observation from before, another site, or a marker the submission
+  never carried are all refused (`FLEET_OPERATION_EVIDENCE`).
+- **"Did not happen" is never inferred from a page without it.** Only the owner records it, after checking the
+  provider's own account (the mailbox's Sent folder, the shop, the SMS log), stating what they checked:
+  `fleet operation-resolve <operationId> happened|not_happened <what you checked>`; `fleet operations-uncertain`
+  lists each uncertain operation with what to check. Fleet Control then tells the agent. After `not_happened`, doing
+  it now is a new operation (`after`), never an automatic repeat. This is rare and exceptional: it happens only when a
+  worker lost a provider's answer, never for ordinary sequencing.
 
 ## Card fills
 One fill per card field per hold (a unique index on `fleet_identity_uses (charge_id, field)`). A second checkout needs a
@@ -91,23 +102,32 @@ above.
   one: `after: "<latest operationId>"`.
 - `operation status {operationId}` and `operation list {kind?, subject?}` are reads.
 
+## What `after` costs the agent (measured, not estimated)
+- Passing `after` from the previous result costs nothing: every result carries `operation.operationId`.
+- Omitting it costs one refused call and one repeated call in the same turn. The refusal itself makes no model call.
+  The repeat is one more model step. Attempt 2's in-turn steps (Sonnet 5.5, cached tool prefix) cost 2, 1, 3 and 2p
+  (Fleet-recorded, provisional), so about 2p per omission.
+- It arises only for a further operation on a subject that already has one: a second refund on an order, a second
+  order to one payee, the next listing on a channel, an unprompted follow-up to one address, or the next browser
+  submission on a site. Replies, navigation, reading and typing never need it.
+
 ## Coverage, action by action
 | Action | Durable identity (subject) | Provider idempotency | Lost answer | Tests (dispatch counted) | Remaining limits |
 |---|---|---|---|---|---|
 | Own-capital order (`request_spend`) | payee | PayPal payout `PayPal-Request-Id` = `sender_batch_id` = instruction id | executor records the claim before calling PayPal; a restart re-checks with the same id | v95: replay, `after`, 6 concurrent → 1 order and 1 reservation; custody: crash after PayPal accepted → 1 payout, 1 report | an order is a commitment of a destination's payee chain: two different purchases from one vendor need `after` |
-| Envelope spend | payee | as above | as above | covered by the same dispatcher path (not separately) | as above |
+| Envelope spend | payee | as above | as above | custody suite: replay → 1 order; a different spend at the same position refused; 6 concurrent → 1 order; the envelope's reservation moves once per operation; 2 orders → exactly 2 PayPal payouts; ticking again pays nothing more | as above |
 | Card request | merchant (site) | — (internal) | — | card suites: replay → one request; `after` for a further one | — |
 | Card hold | the card request | — | — | v54: a second hold on a used request refused at both layers | — |
 | Card fill | (charge, field) unique | — | — | identity-autonomy: second fill of a field and a second checkout on one hold refused; 1 use recorded | the merchant's own double-submit is a browser submission (below) |
 | Refund (partial or full) | order | PayPal `PayPal-Request-Id` = `refund:<request>` | retried with the same id; a 4xx on a retry is held (pending), never failed | v95: same refund twice → 1; same amount without `after` refused; 2 raced → 1; over-refund refused atomically; 3 refunds → 3 PayPal POSTs with 3 ids; lost answer → 2 POSTs, 1 id, held | a held refund waits for PayPal's webhook / search to settle it |
 | Delivery | order | — | mail path (below) | delivery suites (existing) | a resend names the previous delivery |
-| Mail (`mail.send`) | reply: the message answered; else the recipients | Message-ID derived from the job (stable) | uncertain after 10 min or an ambiguous SMTP error; Proton Sent folder looked up by Message-ID: found → sent; absent twice 10 min apart → requeued once with the same Message-ID | v95: restart → 1 send; reworded refused; `after` → 2nd; 8 concurrent → 1 send; lost-but-sent → reconciled, 1 send; lost-before-send → requeued, 1 send | providers other than Proton Bridge cannot be checked: the job stays uncertain until resolved |
+| Mail (`mail.send`) | reply: the message answered; else the recipients | Message-ID derived from the job (stable) | uncertain after 10 min or an ambiguous SMTP error; Sent folder looked up; never resent on absence; owner asked after 30 min; an uncertain message blocks the address | v95: restart → 1 send; 8 concurrent → 1; lost-but-sent → reconciled, 1 send; Sent copy late → resolved by it, 0 resends; Sent copy missing → uncertain, owner asked once, agent cannot settle it, owner "not sent" → the agent's new send is the only one | an absent copy needs the owner's check |
 | Customer reply / order message | the buyer's message being answered | as mail | as mail | market and conversation suites | a follow-up the buyer did not prompt needs `after` |
 | SMS | recipient | — (Twilio has none) | network error or 5xx → uncertain; a stale claim → uncertain | not separately (SMS is not connected) | no automatic reconciliation: resolved from evidence |
-| Browser submission | account (or site) | — | worker restart / 15 min → uncertain (reads fail as lost) | v95: reads carry no operation; same submission → 1 action; lost → uncertain, blocks, resolve → `after` | within one live session a reworded submission is the next step (sessions end with the worker, so restarts never inherit this) |
+| Browser submission | account (or site); every submission compare-and-set | — | worker restart / 15 min → uncertain | v95: navigation, reading and typing carry no operation; a reworded submission in the same live session is refused (nothing queued), the next one with `after` is accepted in one call; lost → uncertain; `after` naming it or an earlier one cannot pass; agent confirmation only from a later observation showing a carried marker (5 kinds of weak evidence refused); "not happened" only by the owner | a submission that does not carry a recognisable marker can only be settled by the owner |
 | Channel API (listings, pins, boards) | channel + operation (+ listing / board) | — | expired lease → uncertain; never re-run | v80: lost listing → 0 extra Etsy POSTs; replay; blocked; resolve → `after` → 1 POST | resolution is the agent's observation |
 | Storefront product (Gumroad) | venture + product name | Gumroad permalink fixed per product (adopted on a lost answer) | unchanged (re-claimed after 10 min; create adopts) | existing storefront suite | Gumroad is deferred |
-| Pull request (`code.propose`) | repository + patch | branch derived from the job | stale → uncertain, re-run idempotently: adopts the PR, or opens it from the pushed branch | v95 code unit: PR lost → 1 PR; branch pushed, PR lost → 1 commit, 1 PR | — |
+| Pull request (`code.propose`) | repository + patch | branch derived from the job | stale → uncertain, re-run idempotently: adopts the PR, or opens it from the pushed branch; never failed after a lost answer | v95 code unit: PR lost → 1 PR; branch pushed, PR lost → 1 commit, 1 PR | after 3 lost answers the owner checks the branch |
 | Build (`code.build`) | repository + snapshot + patch + commands | — (offline, not charged) | stale → failed (a read) | v89 suite | — |
 | Paid search / image | kind + normalised query / prompt | — | worker stopped → failed, cost unknown, reservation kept (never re-sent) | v92: same search → 1 provider call, 1 charge; reworded refused; `after` → 2nd | a lost search does not block a further one (no external effect beyond its cost) |
 | Project funding | project | — (internal ledger) | — | projects suites | — |

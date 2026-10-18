@@ -240,6 +240,46 @@ describe.skipIf(!PG_BIN)("v32 controller custody signer (PostgreSQL)", () => {
       expect(pp.batches.size).toBe(1); // nothing paid twice
     });
 
+    it("v95: envelope spending — the same spend decided again is one order; six concurrent ones on the same position make one; reservations move once per operation; PayPal pays each order once", async () => {
+      // An envelope from the capital engine (the same decision path as fleet-f2-capital-pg).
+      const e = await R.one(`fleet.fleet_admin_legal_entity_add('Fleet Trading Ltd', 'GB', 'company', true, $1)`, [OWNER]);
+      await R.one(`fleet.fleet_admin_tax_profile_set($1, '[{"taxKind":"profit","rateBp":2000}]'::jsonb, now() - interval '1 second', NULL, $2)`, [e.entity_id, OWNER]);
+      await R.econ(A, "rail.require", { ventureKey: "botanical-posters" });
+      const ev = Array.from({ length: 3 }, (_, i) => ({ kind: "sales", observation: `evidence ${i}`, source: "https://example.test" }));
+      const cap = await R.econ(A, "capital.request", { idempotencyKey: `cr:${crypto.randomUUID()}`, ventureKey: "botanical-posters", purpose: "print stock for the validated posters",
+        amountMinor: 3_000, evidence: ev, expectedRevenueMinor: 9_000, expectedNetMinor: 3_000, expectedPaybackDays: 30, downsideMinor: 3_000, confidenceBp: 7000 });
+      expect(cap, JSON.stringify(cap)).toMatchObject({ ok: true, envelope: { status: "active" } });
+      const envelopeId = cap.envelope.envelopeId as string;
+      const position = async () => (await R.econ(A, "envelope.list")).envelopes.find((x: any) => x.envelopeId === envelopeId).position;
+      const dst = await vendor(A, "botanical-posters", "paypal:prints@poster-press.example");
+      const spend = (k: string, extra: Record<string, unknown> = {}) => R.econ(A, "envelope.spend", { envelopeId, amountMinor: 600, category: "expense", destinationId: dst, purpose: "poster print run", idempotencyKey: k, ...extra });
+      const p0 = await position();
+      const o1 = await spend(`e:${crypto.randomUUID()}`);
+      expect(o1).toMatchObject({ ok: true, operation: { kind: "envelope.spend", subject: `payee:${dst}`, ordinal: 1 } });
+      expect(await spend(`e:${crypto.randomUUID()}`)).toMatchObject({ ok: true, replay: true, order: { orderId: o1.order.orderId } });   // decided again
+      expect(await spend(`e:${crypto.randomUUID()}`, { purpose: "poster print run, second batch" })).toMatchObject({ ok: false, code: "FLEET_OPERATION_EXISTS" });
+      expect((await position()).reservedMinor - p0.reservedMinor).toBe(600);
+      // Six workers ask for the next purchase at once: one order, one reservation.
+      // (a different amount: the existing contextual review would hold a same-amount repeat to one payee as a possible duplicate)
+      const rs = await Promise.all(Array.from({ length: 6 }, () => spend(`e:${crypto.randomUUID()}`, { amountMinor: 450, purpose: "poster print run, second batch", after: o1.operation.operationId })));
+      expect(rs.every((r) => r.ok === true), JSON.stringify(rs)).toBe(true);
+      expect(new Set(rs.map((r) => r.order.orderId)).size).toBe(1);
+      expect(rs.filter((r) => r.replay !== true)).toHaveLength(1);
+      expect((await position()).reservedMinor - p0.reservedMinor).toBe(1_050);
+      expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_payment_orders WHERE agent_id = $1 AND destination_id = $2`, [A.id, dst]))[0].n).toBe(2);
+      // Dispatch: each order is paid once; ticking again (or a replayed request) pays nothing more.
+      const b0 = pp.batches.size;
+      for (const id of [o1.order.orderId, rs[0].order.orderId]) { const r = await issue(id); expect(r.ok, JSON.stringify(r)).toBe(true); }
+      for (let i = 0; i < 4; i++) await exec.tick();
+      expect(pp.batches.size - b0).toBe(2);
+      expect(await orderStatus(o1.order.orderId)).toBe("settled");
+      expect(await orderStatus(rs[0].order.orderId)).toBe("settled");
+      expect(await spend(`e:${crypto.randomUUID()}`)).toMatchObject({ ok: true, replay: true, operation: { status: "succeeded" } });
+      await exec.tick();
+      expect(pp.batches.size - b0).toBe(2);
+      expect((await R.ledger.verify()).ok).toBe(true);
+    });
+
     it("failure isolation: no signer, a revoked credential or a declined payout blocks only that payment; the founder and other ventures carry on", async () => {
       // 1. No fresh attestation: the order waits (still reserved); nothing else is affected.
       await R.q(`UPDATE fleet.fleet_custody_policy SET attestation_ttl_s = 60`);

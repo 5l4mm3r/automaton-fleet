@@ -213,6 +213,9 @@ describe.skipIf(!PG_BIN)("v95 durable operations: the same intended operation is
       .toMatchObject({ ok: false, code: "FLEET_OPERATION_UNCERTAIN" });
     expect(await R.econ(A, "mail.send", { to, subject: "Receipt", body: "Thanks for your order.", idempotencyKey: key() }))
       .toMatchObject({ ok: true, replay: true, operation: { status: "uncertain" } });
+    // Another recipient list that includes the address is not a way around it.
+    expect(await R.econ(A, "mail.send", { to: [to, "accounts@customer.test"], subject: "Receipt", body: "Thanks for your order.", idempotencyKey: key() }))
+      .toMatchObject({ ok: false, code: "FLEET_OPERATION_UNCERTAIN" });
     await broker().tick();                                    // reconciliation: looked up by its job-derived Message-ID
     const id = fleetMessageId(job.job_id, "shared.fleet-mail.test");
     expect(shared.sentLookups).toContain(id);
@@ -222,30 +225,76 @@ describe.skipIf(!PG_BIN)("v95 durable operations: the same intended operation is
     expect(sentTo(to)[0].messageId).toBe(id);
   });
 
-  it("lost answer before the mail went out (the broker died holding the claim): uncertain, absent on two checks 10 minutes apart, then sent ONCE with the same Message-ID", async () => {
-    const to = "ana@customer.test";
-    const m = await R.econ(A, "mail.send", { to, subject: "Welcome", body: "Welcome aboard.", idempotencyKey: key() });
+  // Why absence is not proof: Proton Bridge accepts the message over SMTP, hands it to Proton and files the Sent copy itself;
+  // a Bridge crash, queue or slow sync between those steps leaves a message that WAS sent missing from Sent for a while.
+  // So a missing copy keeps the send uncertain — never resent automatically — and the owner is asked once to look.
+  const lostBeforeAnswer = async (to: string, subject: string) => {
+    const m = await R.econ(A, "mail.send", { to, subject, body: "Welcome aboard.", idempotencyKey: key() });
     const job = await mailJob(m.messageId);
-    // A broker claims it and dies before sending (nothing reaches the provider).
+    // A broker claims it and dies before recording anything (whether it reached Bridge is not known).
     await R.q(`UPDATE fleet.fleet_identity_jobs SET status = 'claimed', claimed_by = 'dead-broker', claimed_at = now() - interval '11 minutes', lease_sha256 = $2 WHERE job_id = $1`,
       [job.job_id, "a".repeat(64)]);
-    await broker().tick();                                    // lost → uncertain → first check: absent
-    expect(sentTo(to)).toHaveLength(0);
+    return { m, job, id: fleetMessageId(job.job_id, "shared.fleet-mail.test") };
+  };
+  const age = (jobId: string, minutes: number) => R.q(`UPDATE fleet.fleet_identity_jobs SET reconcile = reconcile
+      || jsonb_build_object('since', (reconcile ->> 'since')::timestamptz - make_interval(mins => $2),
+                            'checks', (SELECT jsonb_agg(to_jsonb((c #>> '{}')::timestamptz - make_interval(mins => $2))) FROM jsonb_array_elements(reconcile -> 'checks') c))
+     WHERE job_id = $1`, [jobId, minutes]);
+
+  it("Sent evidence late: absent on the first looks (never resent), found later — sent once, by the first attempt", async () => {
+    const to = "ana@customer.test";
+    const { m, job, id } = await lostBeforeAnswer(to, "Welcome");
+    await broker().tick();                                    // lost → uncertain; looked up: absent
+    await broker().tick();                                    // within 10 minutes: not looked up again
+    expect(shared.sentLookups.filter((x) => x === id)).toHaveLength(1);
     let j = await mailJob(m.messageId);
     expect(j.status).toBe("uncertain");
-    expect(j.reconcile.checks).toHaveLength(1);
-    await broker().tick();                                    // a second check too soon: still uncertain, nothing sent
-    j = await mailJob(m.messageId);
-    expect(j.status).toBe("uncertain");
+    await age(job.job_id, 11);
+    await broker().tick();                                    // looked up again: still absent — still nothing sent
+    expect(shared.sentLookups.filter((x) => x === id)).toHaveLength(2);
     expect(sentTo(to)).toHaveLength(0);
-    await R.q(`UPDATE fleet.fleet_identity_jobs SET reconcile = jsonb_set(reconcile, '{checks,0}', to_jsonb(now() - interval '11 minutes')) WHERE job_id = $1`, [job.job_id]);
-    await broker().tick();                                    // absent again, 10+ minutes later: requeued and sent once
+    expect((await mailJob(m.messageId)).status).toBe("uncertain");
+    // The first attempt HAD reached Bridge; its Sent copy is filed late.
+    shared.outbox.push({ from: shared.address, to: [to], subject: "Welcome", body: "Welcome aboard.", messageId: id, providerMessageId: id, externalMessageId: id } as never);
+    await age(job.job_id, 11);
+    await broker().tick();
     j = await mailJob(m.messageId);
-    expect(j).toMatchObject({ status: "succeeded", attempts: 2 });
-    expect(sentTo(to)).toHaveLength(1);
-    expect(sentTo(to)[0].messageId).toBe(fleetMessageId(job.job_id, "shared.fleet-mail.test"));
+    expect(j.status).toBe("succeeded");
+    expect((await R.econ(A, "operation.status", { operationId: m.operation.operationId })).operation.status).toBe("succeeded");
+    expect(sentTo(to)).toHaveLength(1);                       // the late copy itself: the broker sent nothing more
+  });
+
+  it("Sent evidence missing: the send stays uncertain (no resend), the owner is asked once; the agent cannot settle it; after the owner records 'not sent', a new send needs after", async () => {
+    const to = "noor@customer.test";
+    const { m, job, id } = await lostBeforeAnswer(to, "Your download");
+    await broker().tick();
+    for (let i = 0; i < 4; i++) { await age(job.job_id, 11); await broker().tick(); }     // 40+ minutes of looks, all absent
+    expect(sentTo(to)).toHaveLength(0);
+    expect((await mailJob(m.messageId)).status).toBe("uncertain");
+    const asked = await R.q(`SELECT * FROM fleet.fleet_notifications WHERE code = 'OPERATION_UNCERTAIN' AND detail ->> 'jobId' = $1`, [job.job_id]);
+    expect(asked).toHaveLength(1);                            // once
+    expect(asked[0].detail.messageId).toBe(`fleet-${job.job_id}`);
+    // Nothing gets around it: the same send replays as uncertain; a further one is refused; the agent cannot declare it unsent.
+    expect(await R.econ(A, "mail.send", { to, subject: "Your download", body: "Welcome aboard.", idempotencyKey: key() })).toMatchObject({ ok: true, replay: true, operation: { status: "uncertain" } });
+    expect(await R.econ(A, "mail.send", { to, subject: "Your download (resent)", body: "Here it is again.", after: m.operation.operationId, idempotencyKey: key() }))
+      .toMatchObject({ ok: false, code: "FLEET_OPERATION_UNCERTAIN" });
+    expect(await R.econ(A, "operation.resolve", { operationId: m.operation.operationId, outcome: "not_happened", marker: "Welcome aboard" }))
+      .toMatchObject({ ok: false, code: "FLEET_OPERATION_EVIDENCE" });
+    expect(await R.econ(A, "operation.resolve", { operationId: m.operation.operationId, outcome: "happened", marker: "Welcome aboard", observationActionId: crypto.randomUUID() }))
+      .toMatchObject({ ok: false, code: "FLEET_OPERATION_EVIDENCE" });       // mail is settled by the mailbox, not a page
+    const list = await R.one(`fleet.fleet_admin_operations_uncertain()`);
+    expect(list.operations.find((o: any) => o.operationId === m.operation.operationId).check).toContain(`fleet-${job.job_id}`);
+    // The owner looks in Proton and records what they saw; the agent is told; the new send is its own operation.
+    expect(await R.code(R.q(`SELECT fleet.fleet_admin_operation_resolve($1, 'not_happened', 'checked', $2)`, [m.operation.operationId, OWNER]))).toBe("FLEET_BAD_REQUEST");
+    const r = await R.one(`fleet.fleet_admin_operation_resolve($1, 'not_happened', $2, $3)`, [m.operation.operationId, `Proton Sent folder: no message with Message-ID ${id}`, OWNER]);
+    expect(r).toMatchObject({ ok: true, operation: { status: "failed", resolution: { outcome: "not_happened" } } });
+    expect((await R.q(`SELECT body FROM fleet.fleet_agent_messages WHERE agent_id = $1 AND author = 'fleet_control' ORDER BY created_at DESC LIMIT 1`, [A.id]))[0].body)
+      .toContain(`after: "${m.operation.operationId}"`);
+    const again = await R.econ(A, "mail.send", { to, subject: "Your download", body: "Welcome aboard.", after: m.operation.operationId, idempotencyKey: key() });
+    expect(again).toMatchObject({ ok: true, operation: { ordinal: 2 } });
     await broker().tick();
     expect(sentTo(to)).toHaveLength(1);
+    expect((await mailJob(m.messageId)).status).toBe("uncertain");           // the first one is never resent
   });
 
   it("partial refunds: each is its own operation; a retry returns it; concurrent ones on the same position make one; the remaining amount is enforced; PayPal is called once per refund", async () => {
@@ -329,72 +378,92 @@ describe.skipIf(!PG_BIN)("v95 durable operations: the same intended operation is
     expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_payment_orders WHERE agent_id = $1 AND destination_id = $2`, [A.id, vendor]))[0].n).toBe(3);
   });
 
-  it("browser: a read needs no operation; a submission decided again is one action; a lost submission is uncertain — never re-run — until the agent records what it saw", async () => {
+  it("browser: reads and typing carry no operation; a lost submission is uncertain — after cannot get past it; the agent can confirm it happened only from a later observation showing what it carried; 'not happened' is the owner's", async () => {
     await R.store.grantBrowserRole();
     const bgw = new PgBrowserGateway({ connectionString: R.pgc.browserUrl });
-    try {
-      const o = await R.econ(A, "browser.open", { url: "https://shop.example/listing/new" });
-      expect(o.ok, JSON.stringify(o)).toBe(true);
-      const actions = () => R.q(`SELECT * FROM fleet.fleet_browser_actions WHERE agent_id = $1 AND kind = 'act' ORDER BY created_at`, [A.id]);
-      // Reads carry no operation: repeating one is harmless.
-      for (let i = 0; i < 2; i++) expect((await R.econ(A, "browser.act", { sessionId: o.sessionId, steps: [{ action: "screenshot" }] })).operation).toBeUndefined();
-      const steps = [{ action: "fill", selector: "#title", value: "Landlord compliance tracker" }, { action: "click", text: "Publish listing" }];
-      const s1 = await R.econ(A, "browser.act", { sessionId: o.sessionId, steps });
-      expect(s1).toMatchObject({ ok: true, operation: { kind: "browser.act", subject: "browser:site:https://shop.example", ordinal: 1 } });
-      expect(await R.econ(A, "browser.act", { sessionId: o.sessionId, steps })).toMatchObject({ ok: true, replay: true, actionId: s1.actionId });
-      expect(await actions()).toHaveLength(3);                // two reads + ONE submission
-      // The worker runs the session in order (open, the two reads) and dies while running the submission. Its restart
-      // sweep: the submission is uncertain (it may have been posted); nothing is run again.
+    const run = async (until: string | null, page?: { text: string; url: string }) => {   // the worker runs the queue in order; returns at `until`
       for (;;) {
         const lease = crypto.randomBytes(32).toString("base64url");
         const c = await bgw.claim("browser-worker", crypto.createHash("sha256").update(lease, "utf8").digest("hex")) as { action: { actionId: string } | null };
-        expect(c.action).not.toBeNull();
-        if (c.action!.actionId === s1.actionId) break;        // dies holding it
-        await bgw.report(c.action!.actionId, lease, true, {}, null);
+        if (!c.action) return;
+        if (c.action.actionId === until) return;                // dies holding it
+        await bgw.report(c.action.actionId, lease, true, page ?? { text: "ok" }, page?.url ?? null);
       }
+    };
+    try {
+      const o = await R.econ(A, "browser.open", { url: "https://shop.example/listing/new" });
+      expect(o.ok, JSON.stringify(o)).toBe(true);
+      const acts = () => R.q(`SELECT * FROM fleet.fleet_browser_actions WHERE agent_id = $1 AND kind = 'act' AND session_id IN ($2) ORDER BY created_at`, [A.id, o.sessionId]);
+      for (const steps of [[{ action: "screenshot" }], [{ action: "goto", url: "https://shop.example/help" }, { action: "scroll", to: "bottom" }], [{ action: "fill", selector: "#title", value: "draft" }]]) {
+        expect((await R.econ(A, "browser.act", { sessionId: o.sessionId, steps })).operation, JSON.stringify(steps)).toBeUndefined();   // navigation, reading, typing
+      }
+      // A first submission that completes (#1), then the listing submission (#2) whose worker dies.
+      const s0 = await R.econ(A, "browser.act", { sessionId: o.sessionId, steps: [{ action: "click", text: "Accept cookies" }] });
+      expect(s0).toMatchObject({ ok: true, operation: { kind: "browser.act", subject: "browser:site:https://shop.example", ordinal: 1 } });
+      const steps = [{ action: "fill", selector: "#title", value: "Landlord compliance tracker" }, { action: "click", text: "Publish listing" }];
+      const s1 = await R.econ(A, "browser.act", { sessionId: o.sessionId, steps, after: s0.operation.operationId });
+      expect(s1).toMatchObject({ ok: true, operation: { ordinal: 2 } });
+      expect(await R.econ(A, "browser.act", { sessionId: o.sessionId, steps, after: s0.operation.operationId })).toMatchObject({ ok: true, replay: true, actionId: s1.actionId });
+      expect(await acts()).toHaveLength(5);                   // 3 reads / typing + 2 submissions
+      await run(s1.actionId);
       expect(await bgw.actionsLost("browser-worker", true)).toMatchObject({ ok: true, uncertain: 1, failed: 0 });
-      const sub = (await actions()).find((x) => x.action_id === s1.actionId)!;
-      expect(sub.status).toBe("uncertain");
       expect((await R.econ(A, "operation.status", { operationId: s1.operation.operationId })).operation.status).toBe("uncertain");
-      // Fleet Control told the agent; a further submission on this site (even in a new session) waits for reconciliation.
-      expect((await R.q(`SELECT body FROM fleet.fleet_agent_messages WHERE agent_id = $1 AND author = 'fleet_control' ORDER BY created_at DESC LIMIT 1`, [A.id]))[0].body)
-        .toMatch(/outcome of a browser action .* is not known.*operation resolve/s);
+      // after cannot get past it: naming it → refused; naming the earlier one → it IS that position (replay or refusal), never new.
       const o2 = await R.econ(A, "browser.open", { url: "https://shop.example/listing/new" });
-      expect(await R.econ(A, "browser.act", { sessionId: o2.sessionId, steps, after: s1.operation.operationId })).toMatchObject({ ok: false, code: "FLEET_OPERATION_UNCERTAIN" });
-      expect(await R.econ(A, "browser.act", { sessionId: o2.sessionId, steps })).toMatchObject({ ok: true, replay: true, operation: { status: "uncertain" } });
-      expect(await actions()).toHaveLength(3);
-      // The agent looks: no such listing. It records that (with its evidence); THEN a new submission is a new operation.
-      expect(await R.econ(A, "operation.resolve", { operationId: s1.operation.operationId, outcome: "not_happened", evidence: "too short" })).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
-      const res = await R.econ(A, "operation.resolve", { operationId: s1.operation.operationId, outcome: "not_happened",
-        evidence: "Opened https://shop.example/listings: no listing titled 'Landlord compliance tracker' exists; the draft form is empty." });
-      expect(res).toMatchObject({ ok: true, operation: { status: "failed", resolution: { outcome: "not_happened" } } });
-      expect(await R.econ(A, "operation.resolve", { operationId: s1.operation.operationId, outcome: "happened", evidence: "changing my mind about what I saw there" }))
-        .toMatchObject({ ok: false, code: "FLEET_OPERATION_NOT_UNCERTAIN" });
-      const s2 = await R.econ(A, "browser.act", { sessionId: o2.sessionId, steps, after: s1.operation.operationId });
-      expect(s2).toMatchObject({ ok: true, operation: { ordinal: 2 } });
-      expect(await actions()).toHaveLength(4);
+      const reworded = [{ action: "fill", selector: "#title", value: "Landlord compliance tracker (England)" }, { action: "click", text: "Publish listing" }];
+      expect(await R.econ(A, "browser.act", { sessionId: o2.sessionId, steps: reworded, after: s1.operation.operationId })).toMatchObject({ ok: false, code: "FLEET_OPERATION_UNCERTAIN" });
+      expect(await R.econ(A, "browser.act", { sessionId: o2.sessionId, steps: reworded, after: s0.operation.operationId })).toMatchObject({ ok: false, code: "FLEET_OPERATION_EXISTS" });
+      expect(await R.econ(A, "browser.act", { sessionId: o2.sessionId, steps: reworded })).toMatchObject({ ok: false, code: "FLEET_OPERATION_EXISTS" });
+      expect(await R.econ(A, "browser.act", { sessionId: o2.sessionId, steps, after: s0.operation.operationId })).toMatchObject({ ok: true, replay: true, operation: { status: "uncertain" } });
+      expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_browser_actions WHERE agent_id = $1 AND kind = 'act' AND steps::text LIKE '%Publish listing%')`, [A.id]))).toBe(1);
+      // Evidence rules. An assertion is not evidence; neither is a page that lacks the marker, one from before, or text the submission never carried.
+      const marker = "Landlord compliance tracker";
+      const look = async (text: string, url = "https://shop.example/shop/listings") => {
+        const ob = await R.econ(A, "browser.observe", { sessionId: o2.sessionId });
+        expect(ob.ok, JSON.stringify(ob)).toBe(true);
+        await run(null, { text, url });
+        return ob.actionId as string;
+      };
+      expect(await R.econ(A, "operation.resolve", { operationId: s1.operation.operationId, outcome: "not_happened", observationActionId: await look("Your listings: none"), marker }))
+        .toMatchObject({ ok: false, code: "FLEET_OPERATION_EVIDENCE" });
+      expect(await R.econ(A, "operation.resolve", { operationId: s1.operation.operationId, outcome: "happened", marker }))
+        .toMatchObject({ ok: false, code: "FLEET_OPERATION_EVIDENCE" });
+      expect(await R.econ(A, "operation.resolve", { operationId: s1.operation.operationId, outcome: "happened", observationActionId: await look("Your listings: Rent tracker"), marker }))
+        .toMatchObject({ ok: false, code: "FLEET_OPERATION_EVIDENCE" });
+      expect(await R.econ(A, "operation.resolve", { operationId: s1.operation.operationId, outcome: "happened", observationActionId: await look("Your listings: Quote builder for freelancers"), marker: "Quote builder for freelancers" }))
+        .toMatchObject({ ok: false, code: "FLEET_OPERATION_EVIDENCE" });
+      expect(await R.econ(A, "operation.resolve", { operationId: s1.operation.operationId, outcome: "happened", observationActionId: await look(`Your listings: ${marker}`, "https://other.example/listings"), marker }))
+        .toMatchObject({ ok: false, code: "FLEET_OPERATION_EVIDENCE" });
+      const ok = await R.econ(A, "operation.resolve", { operationId: s1.operation.operationId, outcome: "happened", observationActionId: await look(`Your listings: ${marker} — live`), marker });
+      expect(ok).toMatchObject({ ok: true, operation: { status: "succeeded", resolution: { outcome: "happened" } } });
+      expect((await R.q(`SELECT resolution FROM fleet.fleet_operations WHERE operation_id = $1`, [s1.operation.operationId]))[0].resolution.evidence).toMatchObject({ kind: "observation", marker });
+      // Done: a further listing is a new operation, named after it.
+      expect(await R.econ(A, "browser.act", { sessionId: o2.sessionId, steps: reworded, after: s1.operation.operationId })).toMatchObject({ ok: true, operation: { ordinal: 3 } });
     } finally { await bgw.close(); }
   });
 
-  it("browser flows: the steps of one live session continue by themselves; the same step again replays; in a new session a different step names the latest", async () => {
+  it("browser flows: in ONE live session a reworded submission never counts as a new one by itself; navigation and typing are unaffected; the next submission names the previous (no extra call when it does)", async () => {
     const o = await R.econ(A, "browser.open", { url: "https://studio.example/profile" });
-    const fill = [{ action: "fill", selector: "#bio", value: "Spreadsheets for landlords" }];
-    const save = [{ action: "click", text: "Save profile" }];
-    const s1 = await R.econ(A, "browser.act", { sessionId: o.sessionId, steps: fill });
-    const s2 = await R.econ(A, "browser.act", { sessionId: o.sessionId, steps: save });
-    expect([s1.operation.ordinal, s2.operation.ordinal]).toEqual([1, 2]);
-    expect(s2.operation.after).toBe(s1.operation.operationId);
-    expect(await R.econ(A, "browser.act", { sessionId: o.sessionId, steps: save })).toMatchObject({ ok: true, replay: true, actionId: s2.actionId });
-    const n = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_browser_actions WHERE session_id = $1 AND kind = 'act')`, [o.sessionId]));
-    expect(n).toBe(2);
-    // A new session (the worker restarted, or the agent opened another): the same last step replays; a different one names it.
-    const o2 = await R.econ(A, "browser.open", { url: "https://studio.example/profile" });
-    expect(await R.econ(A, "browser.act", { sessionId: o2.sessionId, steps: save })).toMatchObject({ ok: true, replay: true, actionId: s2.actionId });
-    const other = [{ action: "fill", selector: "#bio", value: "Spreadsheets for UK landlords" }];
-    const refused = await R.econ(A, "browser.act", { sessionId: o2.sessionId, steps: other });
-    expect(refused).toMatchObject({ ok: false, code: "FLEET_OPERATION_EXISTS" });
-    expect(refused.reason).toContain(s2.operation.operationId);
-    expect(await R.econ(A, "browser.act", { sessionId: o2.sessionId, steps: other, after: s2.operation.operationId })).toMatchObject({ ok: true, operation: { ordinal: 3 } });
+    const n = () => R.one<number>(`(SELECT count(*)::int FROM fleet.fleet_browser_actions WHERE session_id = $1 AND kind = 'act')`, [o.sessionId]);
+    const save = (bio: string) => [{ action: "fill", selector: "#bio", value: bio }, { action: "click", text: "Save profile" }];
+    const s1 = await R.econ(A, "browser.act", { sessionId: o.sessionId, steps: save("Spreadsheets for landlords") });
+    expect(s1).toMatchObject({ ok: true, operation: { ordinal: 1 } });
+    // The same session, reworded, no after: refused (nothing queued) and the refusal names the operation to continue from.
+    const r = await R.econ(A, "browser.act", { sessionId: o.sessionId, steps: save("Spreadsheets for UK landlords") });
+    expect(r).toMatchObject({ ok: false, code: "FLEET_OPERATION_EXISTS" });
+    expect(r.reason).toContain(`after: "${s1.operation.operationId}"`);
+    expect(await n()).toBe(1);
+    // Navigation, reading and typing in between: no operation, no refusal, queued as usual.
+    for (const steps of [[{ action: "goto", url: "https://studio.example/profile/preview" }], [{ action: "screenshot" }], [{ action: "fill", selector: "#bio", value: "x" }], [{ action: "scroll", to: "bottom" }, { action: "wait_for", selector: "#saved" }]]) {
+      const x = await R.econ(A, "browser.act", { sessionId: o.sessionId, steps });
+      expect(x.ok && x.operation === undefined, JSON.stringify(x)).toBe(true);
+    }
+    expect(await n()).toBe(5);
+    // The deliberate next submission names the previous one (the result it got): accepted in one call.
+    const s2 = await R.econ(A, "browser.act", { sessionId: o.sessionId, steps: save("Spreadsheets for UK landlords"), after: s1.operation.operationId });
+    expect(s2).toMatchObject({ ok: true, operation: { ordinal: 2, after: s1.operation.operationId } });
+    expect(await R.econ(A, "browser.act", { sessionId: o.sessionId, steps: save("Spreadsheets for UK landlords"), after: s1.operation.operationId })).toMatchObject({ ok: true, replay: true, actionId: s2.actionId });
+    expect(await n()).toBe(6);
   });
 
   it("an owner request decided again is the same request", async () => {

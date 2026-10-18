@@ -102,11 +102,11 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     expect(await econNext(R, F, "mail.send", { to: "someone@example.test", subject: "Hi", body: "Hello", idempotencyKey: idem() })).toMatchObject(held);
     expect(await R.econ(F, "account.register", { platform: "example.com", kind: "marketplace", origin: "https://example.com" })).toMatchObject(held);
     const s = await ok(R.econ(F, "browser.open", { url: "https://example.com/" })); // reading is preparation
-    expect((await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "goto", url: "https://example.com/a" }, { action: "scroll", to: "bottom" },
+    expect((await econNext(R, F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "goto", url: "https://example.com/a" }, { action: "scroll", to: "bottom" },
       { action: "screenshot" }, { action: "wait_idle" }] })).ok).toBe(true);
     for (const outward of [[{ action: "click", text: "Sign up" }], [{ action: "fill", selector: "#q", value: "x" }], [{ action: "download", text: "CSV" }],
       [{ action: "goto", url: "https://example.com/" }, { action: "upload_file", selector: "#f", fileId: crypto.randomUUID() }]]) {
-      expect(await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: outward }), JSON.stringify(outward)).toMatchObject(held);
+      expect(await econNext(R, F, "browser.act", { sessionId: s.sessionId, steps: outward }), JSON.stringify(outward)).toMatchObject(held);
     }
     // Internal records are preparation, never held.
     expect((await R.econ(F, "channel.add", { ventureKey: "ledgers", name: "Prep channel", kind: "community" })).ok).toBe(true);
@@ -121,7 +121,7 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     expect(await release({ actions: ["account_register"], origins: ["https://example.com"], expiresHours: 2 })).toMatchObject({ ok: true, salesOpen: false, warning: expect.stringMatching(/EXTERNAL/) });
     const reg = await ok(R.econ(F, "account.register", { platform: "example.com", kind: "marketplace", origin: "https://example.com" }));
     expect(await R.econ(F, "account.register", { platform: "other.example", kind: "marketplace", origin: "https://other.example" })).toMatchObject(held);
-    expect(await R.econ(F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "click", text: "Sign up" }] })).toMatchObject(held); // browser not in scope
+    expect(await econNext(R, F, "browser.act", { sessionId: s.sessionId, steps: [{ action: "click", text: "Sign up" }] })).toMatchObject(held); // browser not in scope
     expect(await econNext(R, G, "mail.send", { to: "someone@example.test", subject: "Hi", body: "Hello", idempotencyKey: idem() })).toMatchObject(held);
     expect(await R.one(`fleet.fleet_sales_open()`)).toBe(false);
     await R.q(`SELECT fleet.fleet_admin_outward_hold($1, $2)`, [F.id, OWNER]);
@@ -142,7 +142,7 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     expect((await R.econ(G, "browser.fetch_file", { fileId: st.fileId })).code).toBe("FLEET_NOT_FOUND");
     expect((await ok(R.econ(F, "browser.files", {}))).files.map((f: any) => f.fileId)).toContain(st.fileId);
     const s = await ok(R.econ(F, "browser.open", { url: "https://example.com/" }));
-    const act = (steps: unknown[]) => R.econ(F, "browser.act", { sessionId: s.sessionId, steps });
+    const act = (steps: unknown[]) => econNext(R, F, "browser.act", { sessionId: s.sessionId, steps });
     expect((await act([{ action: "upload_file", selector: "input[type=file]", fileIds: [st.fileId] }, { action: "screenshot", fullPage: true },
       { action: "set_content", fileId: st.fileId }, { action: "pdf" }, { action: "hover", text: "Menu" }, { action: "scroll", to: "bottom" },
       { action: "click", selector: "#card", frame: "iframe[name=pay]" }, { action: "tab", index: 1 }, { action: "dialog", accept: true }, { action: "wait_idle" },
@@ -154,8 +154,8 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
     // Rendering the agent's own HTML happens only in a session without an account (never beside its logged-in cookies).
     const reg = await ok(R.econ(F, "account.register", { platform: "example.com", kind: "marketplace", origin: "https://example.com" }));
     const s2 = await ok(R.econ(F, "browser.open", { url: "https://example.com/", accountId: reg.accountId }));
-    expect((await R.econ(F, "browser.act", { sessionId: s2.sessionId, steps: [{ action: "set_content", fileId: st.fileId }] })).code).toBe("FLEET_BAD_REQUEST");
-    expect((await R.econ(F, "browser.act", { sessionId: s2.sessionId, steps: [{ action: "fill", selector: "#pw2", credential: "new_password" }] })).ok).toBe(true);
+    expect((await econNext(R, F, "browser.act", { sessionId: s2.sessionId, steps: [{ action: "set_content", fileId: st.fileId }] })).code).toBe("FLEET_BAD_REQUEST");
+    expect((await econNext(R, F, "browser.act", { sessionId: s2.sessionId, steps: [{ action: "fill", selector: "#pw2", credential: "new_password" }] })).ok).toBe(true);
     // A pending password is confirmed or discarded only by the account's own agent.
     expect((await R.econ(F, "account.password_confirm", { accountId: reg.accountId })).code).toBe("FLEET_CREDENTIAL_NONE_PENDING");
     expect((await R.econ(G, "account.password_discard", { accountId: reg.accountId })).code).toBe("FLEET_NOT_FOUND");

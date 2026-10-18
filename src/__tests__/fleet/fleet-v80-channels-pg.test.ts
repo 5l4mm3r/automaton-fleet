@@ -213,9 +213,12 @@ describe.skipIf(!PG_BIN)("v80 scoped releases, discovery and the official-API ch
       .toMatchObject({ ok: false, code: "FLEET_OPERATION_UNCERTAIN" });
     await worker.tick();
     expect(creates()).toBe(c0);
-    // The agent looks at its shop and records what it saw; a further listing is then a new operation, posted once.
-    await ok(R.econ(F, "operation.resolve", { operationId: create.operation.operationId, outcome: "happened",
-      evidence: "The shop's draft listings show 'Invoice tracker for freelancers' (created just before the gateway stopped)." }));
+    // An assertion is not evidence (no recorded observation): refused. The owner checks the shop and records it; a further
+    // listing is then a new operation, posted once.
+    expect(await R.econ(F, "operation.resolve", { operationId: create.operation.operationId, outcome: "happened", marker: "Invoice tracker for freelancers" }))
+      .toMatchObject({ ok: false, code: "FLEET_OPERATION_EVIDENCE" });
+    expect(await R.one(`fleet.fleet_admin_operation_resolve($1, 'happened', $2, $3)`,
+      [create.operation.operationId, "Etsy shop manager: draft listing 'Invoice tracker for freelancers' exists", OWNER])).toMatchObject({ ok: true });
     const second = await ok(R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.listing.create", args: next, after: create.operation.operationId, idempotencyKey: idem() }));
     expect(second.operation.ordinal).toBe(3);
     await worker.tick();

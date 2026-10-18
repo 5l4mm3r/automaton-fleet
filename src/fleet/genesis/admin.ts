@@ -532,6 +532,12 @@ export class GenesisOps {
     return this.one<Record<string, unknown>>(`SELECT fleet_admin_cognition_run_end($1, $2, $3) AS r`, [agentId, reason, actor]);
   }
   cognitionRun(agentId: string) { return this.one<Record<string, unknown>>(`SELECT fleet_admin_cognition_run($1) AS r`, [agentId]); }
+  /** v95: operations whose outcome is not known (a provider answer was lost), and what to check for each. */
+  operationsUncertain() { return this.one<Record<string, unknown>>(`SELECT fleet_admin_operations_uncertain() AS r`, []); }
+  /** v95: the owner records an uncertain outcome after checking the provider's own account (what was checked is kept). */
+  operationResolve(operationId: string, outcome: string, checked: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_admin_operation_resolve($1, $2, $3, $4) AS r`, [operationId, outcome, checked, actor]);
+  }
   /** v94: a resolved request replaced by the owner's current decision (recorded once; the request itself never changes). */
   supersedeOwnerRequest(requestId: string, decision: string, actor: string) {
     return this.one<Record<string, unknown>>(`SELECT fleet_admin_owner_request_supersede($1, $2, $3) AS r`, [requestId, decision, actor]);

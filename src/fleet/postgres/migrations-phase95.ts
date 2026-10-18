@@ -56,6 +56,8 @@ export const CODE_FUNCTIONS_V95 = ["cgx_uncertain(uuid, text)"] as const;
 export const OPERATION_LOST_MINUTES = 10;
 export const BROWSER_LOST_MINUTES = 15;
 export const MAIL_RECONCILE_GAP_MINUTES = 10;
+export const MAIL_RECONCILE_DAYS = 7;
+export const MAIL_OWNER_AFTER_MINUTES = 30;
 export const MAX_DISPATCH_ATTEMPTS = 3;
 
 const q = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(",");
@@ -211,13 +213,26 @@ CREATE FUNCTION fleet_op_summary(a jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE A
               ELSE jsonb_build_object('digest', fleet_op_digest(a), 'keys', (SELECT jsonb_agg(k) FROM jsonb_object_keys(a) k)) END
 $$;
 
+-- A browser step list that can take effect outside the page: it submits (click, key press, upload, dialog, auth link).
+CREATE FUNCTION fleet_browser_steps_submit(p_steps jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_typeof(p_steps) = 'array' AND EXISTS (SELECT 1 FROM jsonb_array_elements(p_steps) e
+    WHERE COALESCE(e ->> 'action', '') IN ('click','press','upload','upload_file','dialog','open_auth_link'))
+$$;
+-- A mail request's recipients, lower-cased.
+CREATE FUNCTION fleet_op_recipients(a jsonb) RETURNS text[] LANGUAGE sql IMMUTABLE AS $$
+  SELECT COALESCE(array_agg(DISTINCT lower(btrim(e))), '{}') FROM jsonb_array_elements_text(CASE jsonb_typeof(a -> 'to') WHEN 'array' THEN a -> 'to'
+    WHEN 'string' THEN jsonb_build_array(a -> 'to') ELSE '[]'::jsonb END) e
+$$;
+
 -- The business object an operation acts on (NULL: not a consequential operation, e.g. a read-only browser action).
 CREATE FUNCTION fleet_op_subject(p_agent text, p_op text, a jsonb) RETURNS text LANGUAGE plpgsql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE v text; s fleet_browser_sessions; acc_origin text; p jsonb := COALESCE(a -> 'args', '{}'::jsonb);
 BEGIN
   IF p_op = 'browser.act' THEN
-    IF fleet_browser_steps_read_only(a -> 'steps') THEN RETURN NULL; END IF;
+    -- Only a SUBMISSION is an operation (a click, a key press, an upload, a dialog, an auth link); navigation, reading
+    -- and typing into a form have no external effect and carry none.
+    IF NOT fleet_browser_steps_submit(a -> 'steps') THEN RETURN NULL; END IF;
     SELECT * INTO s FROM fleet_browser_sessions WHERE session_id = fleet_op_uuid(a ->> 'sessionId') AND agent_id = p_agent;
     IF NOT FOUND THEN RETURN NULL; END IF;   -- the act itself refuses an unknown session
     RETURN 'browser:' || COALESCE('account:' || s.account_id::text, 'site:' || COALESCE(substring(lower(s.url) from '^(https?://[^/?#]+)'), 'unknown'));
@@ -334,7 +349,7 @@ $$;
 -- ── 4. begin / finish ──
 CREATE FUNCTION fleet_op_begin(p_agent text, p_op text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE v_subject text; b fleet_operations; o fleet_operations; e fleet_operations; l fleet_operations; v_digest text; v_ord integer := 1; v_after uuid; v_st text;
+DECLARE v_subject text; b fleet_operations; o fleet_operations; e fleet_operations; l fleet_operations; u fleet_operations; v_digest text; v_ord integer := 1; v_after uuid; v_st text;
 BEGIN
   IF p_op NOT IN (${q(DURABLE_OPS)}, 'spend.request', 'owner.request') THEN RETURN NULL; END IF;
   v_subject := CASE p_op WHEN 'spend.request' THEN 'payee:' || COALESCE(a ->> 'destinationId', '?')
@@ -352,19 +367,22 @@ BEGIN
     v_ord := b.ordinal + 1;
   END IF;
   v_digest := fleet_op_digest(a);
-  -- Browser: a flow is many submissions on one site. Within ONE live session (sessions die with the browser worker, so a
-  -- worker restart always starts a new one) the next different step continues the sequence by itself, and the same
-  -- step again replays the last. In a new session, a step without after is compared with the LATEST operation on that
-  -- account / site (the same one replays it; anything else is refused and names it).
+  -- Browser: every submission on an account / site is compare-and-set, in a live session too — a reworded submission is
+  -- never taken as the next step by itself. Without after it is compared with the LATEST submission there (the same one
+  -- replays it; anything else is refused and names it): the next one passes after = the previous result's operationId.
   IF p_op = 'browser.act' AND v_after IS NULL THEN
     l := fleet_op_latest(p_agent, p_op, v_subject);
-    IF l.operation_id IS NOT NULL THEN
-      IF fleet_op_status(l) <> 'uncertain' AND l.request_sha256 <> v_digest
-         AND (SELECT x.session_id FROM fleet_browser_actions x WHERE x.action_id = l.ref_id) IS NOT DISTINCT FROM fleet_op_uuid(a ->> 'sessionId') THEN
-        b := l; v_after := l.operation_id; v_ord := l.ordinal + 1;
-      ELSE
-        v_ord := l.ordinal; v_after := l.basis;   -- the latest's own position: the insert meets it (replay or refusal)
-      END IF;
+    IF l.operation_id IS NOT NULL THEN v_ord := l.ordinal; v_after := l.basis; END IF;
+  END IF;
+  -- Mail: an uncertain message to an address blocks every further message to that address — another recipient list or
+  -- a reply is not a way around it.
+  IF p_op = 'mail.send' THEN
+    SELECT m.* INTO u FROM fleet_operations m
+     WHERE m.agent_id = p_agent AND m.kind = 'mail.send' AND m.subject <> v_subject AND m.resolution IS NULL
+       AND fleet_op_recipients(m.request) && fleet_op_recipients(a) AND fleet_op_status(m) = 'uncertain'
+     ORDER BY m.created_at DESC LIMIT 1;
+    IF u.operation_id IS NOT NULL THEN
+      RAISE EXCEPTION 'FLEET_OPERATION_UNCERTAIN: the outcome of % (an earlier message to the same address) is not known yet; nothing further is sent to that address until it is reconciled (operation status)', u.operation_id;
     END IF;
   END IF;
   INSERT INTO fleet_operations (agent_id, kind, subject, ordinal, basis, request_sha256, request)
@@ -450,24 +468,101 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
     SELECT * FROM fleet_operations WHERE agent_id = p_agent AND (a ->> 'kind' IS NULL OR kind = a ->> 'kind') AND (a ->> 'subject' IS NULL OR subject = a ->> 'subject')
      ORDER BY created_at DESC LIMIT 20) o), '[]'::jsonb))
 $$;
+-- Resolving an uncertain outcome takes evidence, never an assertion.
+--  * Provider evidence resolves it by itself: the Proton Sent folder (mail), PayPal's answer to the same request id
+--    (payouts, refunds), the job's own branch / pull request (code).
+--  * The agent may confirm only that it HAPPENED, and only with an observation the Fleet recorded: a read-only browser
+--    action of its own, finished AFTER the uncertain one, on the same account / site (for a channel job: the channel's
+--    own site), whose page text contains a marker (8+ characters) that the uncertain submission itself carried (a
+--    title, a name, a message line). Positive evidence only: a page without the marker proves nothing.
+--  * "Did not happen" is never inferred from absence. Only the owner records it (fleet_admin_operation_resolve), saying
+--    what they checked in the provider's own account — or the provider's evidence shows it.
 CREATE FUNCTION fleet_econ_operation_resolve(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE o fleet_operations; v_out text := a ->> 'outcome'; v_ev text := btrim(COALESCE(a ->> 'evidence', ''));
+DECLARE o fleet_operations; v_out text := a ->> 'outcome'; v_marker text := btrim(COALESCE(a ->> 'marker', '')); ob fleet_browser_actions; x fleet_browser_actions;
+        s_un fleet_browser_sessions; s_ob fleet_browser_sessions; j fleet_channel_jobs; v_site text; v_ob_site text; v_carried text; v_after timestamptz;
 BEGIN
   SELECT * INTO o FROM fleet_operations WHERE operation_id = fleet_identity_uuid(a, 'operationId') AND agent_id = p_agent FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_OPERATION_NOT_FOUND: operationId — one of your operations'; END IF;
-  IF v_out IS NULL OR v_out NOT IN ('happened','not_happened') THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: outcome is happened | not_happened'; END IF;
-  IF length(v_ev) NOT BETWEEN 20 AND 2000 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: evidence — what you observed (20..2000 characters): the page, listing or message you checked'; END IF;
   IF fleet_op_status(o) <> 'uncertain' THEN
     RAISE EXCEPTION 'FLEET_OPERATION_NOT_UNCERTAIN: operation % is %; only an outcome that is not known is resolved', o.operation_id, fleet_op_status(o);
   END IF;
-  UPDATE fleet_operations SET resolution = jsonb_build_object('outcome', v_out, 'evidence', left(fleet_scrub(v_ev), 2000), 'by', p_agent, 'at', now())
+  IF v_out IS DISTINCT FROM 'happened' THEN
+    RAISE EXCEPTION 'FLEET_OPERATION_EVIDENCE: you can record only that it happened, with a recorded observation; that it did not happen is not shown by a page without it — Fleet Control asked the owner to check';
+  END IF;
+  IF o.ref_kind NOT IN ('browser_action','channel_job') THEN
+    RAISE EXCEPTION 'FLEET_OPERATION_EVIDENCE: this outcome is settled by the provider''s own evidence or by the owner, not by an observation';
+  END IF;
+  IF NULLIF(a ->> 'observationActionId', '') IS NULL THEN
+    RAISE EXCEPTION 'FLEET_OPERATION_EVIDENCE: no evidence given — observationActionId: a later read-only browser look at the same site that shows what the submission carried';
+  END IF;
+  IF length(v_marker) NOT BETWEEN 8 AND 200 THEN
+    RAISE EXCEPTION 'FLEET_BAD_REQUEST: marker — 8..200 characters the submission itself carried (a title, a name, a message line) that the observed page shows';
+  END IF;
+  SELECT * INTO ob FROM fleet_browser_actions WHERE action_id = fleet_identity_uuid(a, 'observationActionId') AND agent_id = p_agent;
+  IF NOT FOUND OR ob.status <> 'done' OR ob.kind NOT IN ('observe','act') OR (ob.kind = 'act' AND fleet_browser_steps_submit(ob.steps)) THEN
+    RAISE EXCEPTION 'FLEET_OPERATION_EVIDENCE: observationActionId — a finished read-only browser action of yours (browser observe, or act with only reading steps)';
+  END IF;
+  SELECT * INTO s_ob FROM fleet_browser_sessions WHERE session_id = ob.session_id;
+  v_ob_site := substring(lower(COALESCE(ob.result ->> 'url', s_ob.url, '')) from '^(https?://[^/?#]+)');
+  IF o.ref_kind = 'browser_action' THEN
+    SELECT * INTO x FROM fleet_browser_actions WHERE action_id = o.ref_id;
+    SELECT * INTO s_un FROM fleet_browser_sessions WHERE session_id = x.session_id;
+    v_carried := x.steps::text; v_after := x.created_at;
+    IF s_un.account_id IS NOT NULL AND s_ob.account_id IS DISTINCT FROM s_un.account_id THEN
+      RAISE EXCEPTION 'FLEET_OPERATION_EVIDENCE: the observation is not on the same account';
+    END IF;
+    v_site := substring(lower(COALESCE(s_un.url, '')) from '^(https?://[^/?#]+)');
+  ELSE
+    SELECT * INTO j FROM fleet_channel_jobs WHERE job_id = o.ref_id;
+    v_carried := j.payload::text; v_after := j.created_at;
+    v_site := substring(lower(COALESCE((SELECT url FROM fleet_venture_channels WHERE channel_id = j.channel_id), '')) from '^(https?://[^/?#]+)');
+  END IF;
+  IF s_un.account_id IS NULL AND (v_site IS NULL OR v_ob_site IS DISTINCT FROM v_site) THEN
+    RAISE EXCEPTION 'FLEET_OPERATION_EVIDENCE: the observation is not on the same site (%)', COALESCE(v_site, 'unknown');
+  END IF;
+  IF ob.created_at <= v_after THEN RAISE EXCEPTION 'FLEET_OPERATION_EVIDENCE: the observation was made before the uncertain operation'; END IF;
+  IF strpos(lower(v_carried), lower(v_marker)) = 0 THEN RAISE EXCEPTION 'FLEET_OPERATION_EVIDENCE: the marker is not something the uncertain submission carried'; END IF;
+  IF strpos(lower(COALESCE(ob.result ->> 'text', '')), lower(v_marker)) = 0 THEN RAISE EXCEPTION 'FLEET_OPERATION_EVIDENCE: the observed page does not show the marker'; END IF;
+  UPDATE fleet_operations SET resolution = jsonb_build_object('outcome', 'happened', 'by', p_agent, 'at', now(), 'evidence',
+           jsonb_build_object('kind', 'observation', 'observationActionId', ob.action_id, 'url', left(ob.result ->> 'url', 500), 'marker', left(v_marker, 200)))
    WHERE operation_id = o.operation_id RETURNING * INTO o;
-  PERFORM fleet_event('operation_resolved', p_agent, p_agent, jsonb_build_object('operationId', o.operation_id, 'kind', o.kind, 'subject', o.subject, 'outcome', v_out));
-  RETURN jsonb_build_object('ok', true, 'operation', fleet_op_json(o),
-    'note', CASE v_out WHEN 'happened' THEN 'recorded as done; nothing is repeated'
-                       ELSE format('recorded as not done; to do it now, ask again with after: "%s" (a new operation)', o.operation_id) END);
+  PERFORM fleet_event('operation_resolved', p_agent, p_agent, jsonb_build_object('operationId', o.operation_id, 'kind', o.kind, 'outcome', 'happened', 'evidence', 'observation'));
+  RETURN jsonb_build_object('ok', true, 'operation', fleet_op_json(o), 'note', 'recorded as done from your observation; nothing is repeated');
 END $$;
+
+-- The owner records an uncertain outcome after checking the provider's own account (the mailbox's Sent folder, the
+-- shop, the PayPal or GitHub account), saying what they checked. "not_happened" lets the agent do it again as a NEW
+-- operation (after), never an automatic repeat.
+CREATE FUNCTION fleet_admin_operation_resolve(p_op uuid, p_outcome text, p_checked text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE o fleet_operations; v_checked text := btrim(COALESCE(fleet_scrub(p_checked), ''));
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  IF p_outcome NOT IN ('happened','not_happened') THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: outcome is happened | not_happened'; END IF;
+  IF length(v_checked) NOT BETWEEN 10 AND 1000 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: what you checked (10..1000 characters), e.g. "Proton Sent folder: no message with this Message-ID"'; END IF;
+  SELECT * INTO o FROM fleet_operations WHERE operation_id = p_op FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no such operation'; END IF;
+  IF fleet_op_status(o) <> 'uncertain' THEN RAISE EXCEPTION 'FLEET_INVALID_STATE: operation % is %, not uncertain', o.operation_id, fleet_op_status(o); END IF;
+  UPDATE fleet_operations SET resolution = jsonb_build_object('outcome', p_outcome, 'by', p_actor, 'at', now(), 'evidence', jsonb_build_object('kind', 'owner_check', 'checked', left(v_checked, 1000)))
+   WHERE operation_id = o.operation_id RETURNING * INTO o;
+  PERFORM fleet_event('operation_resolved', o.agent_id, p_actor, jsonb_build_object('operationId', o.operation_id, 'kind', o.kind, 'outcome', p_outcome, 'evidence', 'owner_check'));
+  PERFORM fleet_spend_review_notice(o.agent_id, format('Fleet Control: the owner checked operation %s (#%s on %s) — %s. %s', o.operation_id, o.ordinal, o.subject,
+    CASE p_outcome WHEN 'happened' THEN 'it happened' ELSE 'it did not happen' END,
+    CASE p_outcome WHEN 'happened' THEN 'Nothing is repeated.' ELSE format('To do it now, ask again with after: "%s" (a new operation).', o.operation_id) END));
+  RETURN jsonb_build_object('ok', true, 'operation', fleet_op_json(o));
+END $$;
+
+-- The owner's list: every uncertain operation, what it was and what to check.
+CREATE FUNCTION fleet_admin_operations_uncertain() RETURNS jsonb LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT jsonb_build_object('ok', true, 'operations', COALESCE(jsonb_agg(fleet_op_json(o) || jsonb_build_object('agentId', o.agent_id,
+    'check', CASE o.ref_kind WHEN 'mail' THEN 'the mailbox''s Sent folder: Message-ID fleet-' || COALESCE((SELECT x.job_id::text FROM fleet_identity_jobs x WHERE x.kind = 'mail.send' AND x.params ->> 'messageId' = o.ref_id::text ORDER BY x.created_at DESC LIMIT 1), '?')
+      WHEN 'sms' THEN 'the SMS provider''s message log for ' || o.subject WHEN 'browser_action' THEN 'the site, for what the submission carried'
+      WHEN 'channel_job' THEN 'the channel''s shop or board' WHEN 'code_job' THEN 'the repository''s pull requests from the job''s fleet/ branch'
+      ELSE 'the provider''s own record' END) ORDER BY o.created_at), '[]'::jsonb))
+    FROM fleet_operations o WHERE o.resolution IS NULL AND fleet_op_status(o) = 'uncertain'
+$$;
 
 -- ── 6. the dispatcher and the two positional entry points ──
 ${DISPATCH}
@@ -524,8 +619,7 @@ END $$;
 ALTER TABLE fleet_identity_jobs DROP CONSTRAINT fleet_identity_jobs_status_check;
 ALTER TABLE fleet_identity_jobs ADD CONSTRAINT fleet_identity_jobs_status_check
   CHECK (status IN ('queued','claimed','pending','succeeded','failed','human_action_required','uncertain'));
-ALTER TABLE fleet_identity_jobs ADD COLUMN attempts integer NOT NULL DEFAULT 1 CHECK (attempts BETWEEN 1 AND ${MAX_DISPATCH_ATTEMPTS + 1}),
-  ADD COLUMN reconcile jsonb CHECK (reconcile IS NULL OR (jsonb_typeof(reconcile) = 'object' AND length(reconcile::text) <= 2000));
+ALTER TABLE fleet_identity_jobs ADD COLUMN reconcile jsonb CHECK (reconcile IS NULL OR (jsonb_typeof(reconcile) = 'object' AND length(reconcile::text) <= 2000));
 CREATE INDEX fleet_identity_jobs_message ON fleet_identity_jobs ((params ->> 'messageId')) WHERE kind = 'mail.send';
 CREATE INDEX fleet_identity_jobs_sms ON fleet_identity_jobs ((params ->> 'smsId')) WHERE kind = 'sms.send';
 
@@ -554,18 +648,25 @@ BEGIN
   PERFORM fleet_event('identity_job_uncertain', j.agent_id, 'identity-broker', jsonb_build_object('jobId', j.job_id, 'kind', j.kind));
   RETURN jsonb_build_object('ok', true);
 END $$;
--- Uncertain mail the broker can look up (its Message-ID is derived from the job: the same on every attempt).
+-- Uncertain mail the broker looks up (its Message-ID is derived from the job). Looked up at most every
+-- ${MAIL_RECONCILE_GAP_MINUTES} minutes, for ${MAIL_RECONCILE_DAYS} days: a Sent copy that appears late still resolves it.
 CREATE FUNCTION ix_uncertain_mail() RETURNS jsonb LANGUAGE sql SECURITY DEFINER
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-  SELECT COALESCE(jsonb_agg(jsonb_build_object('jobId', j.job_id, 'agentId', j.agent_id, 'attempts', j.attempts, 'reconcile', j.reconcile) ORDER BY j.created_at), '[]'::jsonb)
-    FROM (SELECT * FROM fleet_identity_jobs WHERE status = 'uncertain' AND kind = 'mail.send' AND NOT COALESCE((reconcile ->> 'unresolvable')::boolean, false)
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('jobId', j.job_id, 'agentId', j.agent_id, 'reconcile', j.reconcile) ORDER BY j.created_at), '[]'::jsonb)
+    FROM (SELECT * FROM fleet_identity_jobs WHERE status = 'uncertain' AND kind = 'mail.send'
+            AND COALESCE((reconcile ->> 'since')::timestamptz, created_at) > now() - interval '${MAIL_RECONCILE_DAYS} days'
+            AND (jsonb_array_length(COALESCE(reconcile -> 'checks', '[]'::jsonb)) = 0
+                 OR (reconcile -> 'checks' ->> (jsonb_array_length(reconcile -> 'checks') - 1))::timestamptz <= now() - interval '${MAIL_RECONCILE_GAP_MINUTES} minutes')
            ORDER BY created_at LIMIT 50) j
 $$;
--- p_found: 'sent' (found in the Sent folder: done), 'absent' (not found), 'unknowable' (the provider cannot be checked).
--- Absent on two checks at least ${MAIL_RECONCILE_GAP_MINUTES} minutes apart: requeued with the same Message-ID (at most ${MAX_DISPATCH_ATTEMPTS} attempts).
+-- p_found: 'sent' (the Sent folder has it: done), 'absent' (not there now), 'unknowable' (this provider cannot be checked).
+-- Absence never proves the message was not sent — Bridge files the Sent copy after Proton accepted it, and a crash or a
+-- slow sync can leave a sent message missing for a while — so the job is NEVER resent automatically. It stays uncertain
+-- (still looked up, a late copy resolves it); after ${MAIL_OWNER_AFTER_MINUTES} minutes without a copy (or at once when the
+-- provider cannot be checked) the owner is asked once to look in the mailbox for its Message-ID and record what they saw.
 CREATE FUNCTION ix_reconcile_mail(p_job uuid, p_found text, p_external_id text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE j fleet_identity_jobs; v_checks jsonb; v_first timestamptz;
+DECLARE j fleet_identity_jobs; v_checks jsonb; v_since timestamptz;
 BEGIN
   SELECT * INTO j FROM fleet_identity_jobs WHERE job_id = p_job FOR UPDATE;
   IF NOT FOUND OR j.status <> 'uncertain' OR j.kind <> 'mail.send' THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_INVALID_STATE'); END IF;
@@ -578,25 +679,16 @@ BEGIN
     PERFORM fleet_event('identity_job_reconciled', j.agent_id, 'identity-broker', jsonb_build_object('jobId', j.job_id, 'outcome', 'sent'));
     RETURN jsonb_build_object('ok', true, 'status', 'succeeded');
   END IF;
-  IF p_found = 'unknowable' THEN
-    UPDATE fleet_identity_jobs SET reconcile = reconcile || jsonb_build_object('unresolvable', true, 'at', now()) WHERE job_id = j.job_id;
-    PERFORM fleet_op_lost('mail', fleet_op_uuid(j.params ->> 'messageId'), j.agent_id, 'an email');
-    RETURN jsonb_build_object('ok', true, 'status', 'uncertain');
-  END IF;
   v_checks := COALESCE(j.reconcile -> 'checks', '[]'::jsonb) || to_jsonb(now());
-  v_first := (v_checks ->> 0)::timestamptz;
-  IF jsonb_array_length(v_checks) >= 2 AND v_first <= now() - interval '${MAIL_RECONCILE_GAP_MINUTES} minutes' THEN
-    IF j.attempts >= ${MAX_DISPATCH_ATTEMPTS} THEN
-      UPDATE fleet_identity_jobs SET reconcile = reconcile || jsonb_build_object('checks', v_checks, 'unresolvable', true, 'why', 'attempts exhausted') WHERE job_id = j.job_id;
-      PERFORM fleet_op_lost('mail', fleet_op_uuid(j.params ->> 'messageId'), j.agent_id, 'an email');
-      RETURN jsonb_build_object('ok', true, 'status', 'uncertain');
-    END IF;
-    UPDATE fleet_identity_jobs SET status = 'queued', attempts = attempts + 1, claimed_by = NULL, claimed_at = NULL, lease_sha256 = NULL,
-           reconcile = reconcile || jsonb_build_object('checks', v_checks, 'requeued', now()) WHERE job_id = j.job_id;
-    PERFORM fleet_event('identity_job_reconciled', j.agent_id, 'identity-broker', jsonb_build_object('jobId', j.job_id, 'outcome', 'not sent: requeued with the same Message-ID'));
-    RETURN jsonb_build_object('ok', true, 'status', 'queued');
+  v_since := COALESCE((j.reconcile ->> 'since')::timestamptz, j.created_at);
+  UPDATE fleet_identity_jobs SET reconcile = reconcile || jsonb_build_object('checks', v_checks, 'lastFound', p_found) WHERE job_id = j.job_id;
+  IF NOT COALESCE((j.reconcile ->> 'ownerAsked')::boolean, false) AND (p_found = 'unknowable' OR v_since <= now() - interval '${MAIL_OWNER_AFTER_MINUTES} minutes') THEN
+    UPDATE fleet_identity_jobs SET reconcile = reconcile || jsonb_build_object('ownerAsked', true) WHERE job_id = j.job_id;
+    PERFORM fleet_op_lost('mail', fleet_op_uuid(j.params ->> 'messageId'), j.agent_id, 'an email');
+    PERFORM fleet_notify('AMBER', 'OPERATION_UNCERTAIN', j.agent_id, 'An email''s outcome is unknown: check the mailbox''s Sent folder for its Message-ID',
+      jsonb_build_object('jobId', j.job_id, 'messageId', 'fleet-' || j.job_id, 'checks', jsonb_array_length(v_checks), 'provider', CASE p_found WHEN 'unknowable' THEN 'cannot be checked' ELSE 'Proton Sent folder: not found' END,
+        'resolve', 'fleet operation-resolve <operationId> happened|not_happened <what you checked>'), 'op-uncertain:' || j.job_id);
   END IF;
-  UPDATE fleet_identity_jobs SET reconcile = reconcile || jsonb_build_object('checks', v_checks) WHERE job_id = j.job_id;
   RETURN jsonb_build_object('ok', true, 'status', 'uncertain');
 END $$;
 
@@ -610,7 +702,7 @@ BEGIN
   IF p_worker IS NULL OR p_worker !~ '^[a-z0-9_.-]{1,64}$' THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST'); END IF;
   FOR x IN SELECT * FROM fleet_browser_actions WHERE status = 'claimed' AND (p_restart OR claimed_at < now() - interval '${BROWSER_LOST_MINUTES} minutes')
             ORDER BY created_at FOR UPDATE SKIP LOCKED LOOP
-    IF x.kind = 'act' AND NOT fleet_browser_steps_read_only(x.steps) THEN
+    IF x.kind = 'act' AND fleet_browser_steps_submit(x.steps) THEN
       UPDATE fleet_browser_actions SET status = 'uncertain', finished_at = now(),
              result = jsonb_build_object('ok', false, 'code', 'FLEET_OUTCOME_UNCERTAIN', 'note', 'the browser worker stopped while running it; whether it took effect is not known')
        WHERE action_id = x.action_id;
@@ -641,10 +733,13 @@ CREATE FUNCTION cgx_uncertain(p_job uuid, p_error text) RETURNS jsonb LANGUAGE p
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE j fleet_code_jobs;
 BEGIN
-  UPDATE fleet_code_jobs SET status = CASE WHEN attempts >= ${MAX_DISPATCH_ATTEMPTS} THEN 'failed' ELSE 'uncertain' END,
-         finished_at = CASE WHEN attempts >= ${MAX_DISPATCH_ATTEMPTS} THEN now() END,
-         error = left(CASE WHEN attempts >= ${MAX_DISPATCH_ATTEMPTS} THEN 'attempts exhausted after lost answers: ' ELSE 'answer lost; reconciled by the job''s branch: ' END || COALESCE(p_error, ''), 300)
+  -- Never failed after a lost answer (the pull request may exist): uncertain; re-run idempotently while attempts remain,
+  -- then left for the owner to check on GitHub and record.
+  UPDATE fleet_code_jobs SET status = 'uncertain',
+         error = left(CASE WHEN attempts >= ${MAX_DISPATCH_ATTEMPTS} THEN 'answers lost on every attempt; check the pull requests of branch ' ELSE 'answer lost; reconciled by the job''s branch ' END
+                      || 'fleet/' || left(authorization_id::text, 8) || '-' || left(job_id::text, 8) || ': ' || COALESCE(p_error, ''), 300)
    WHERE job_id = p_job AND status = 'running' AND kind = 'propose' RETURNING * INTO j;
+  IF j.job_id IS NOT NULL AND j.attempts >= ${MAX_DISPATCH_ATTEMPTS} THEN PERFORM fleet_op_lost('code_job', j.job_id, j.agent_id, 'a pull request'); END IF;
   RETURN jsonb_build_object('ok', j.job_id IS NOT NULL, 'status', j.status);
 END $$;
 

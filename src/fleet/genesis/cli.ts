@@ -25,6 +25,8 @@
  *   owner-request-decide <requestId> approved|declined|answered <response…>   resolve an identity/legal/constitutional dependency (records the answer; grants nothing)
  *   cognition-run <agentId> start <ceilingMinor> <hours> <note…> | end <reason…> | status   v94: one bounded run's total AI ceiling
  *   owner-request-supersede <requestId> <decision…>   v94: a resolved request replaced by the owner's current decision (once; Fleet Control tells the agent)
+ *   operations-uncertain                                           v95: operations whose outcome is not known, and what to check for each
+ *   operation-resolve <operationId> happened|not_happened <what you checked…>   v95: record it after checking the provider's own account
  *   owner-request-import <proposalId> <kind> <action…> [--goal gN]   v26: a legacy proposal that is really an identity/legal
  *                                                                  dependency becomes an action-scoped one (decides nothing; blocks only that action)
  *
@@ -82,7 +84,7 @@ import { GENESIS_FOUNDERS, parseFxMicro, type AttestationEvidence, type PgGenesi
 export const GENESIS_COMMANDS = new Set([
   "genesis-policy", "genesis-bootstrap", "genesis-list", "genesis-status", "genesis-dry-run", "genesis-enable", "genesis-disable", "genesis-propose",
   "genesis-approve", "genesis-provision", "genesis-attest", "genesis-fail", "genesis-fund", "genesis-activate", "genesis-abort",
-  "reproduction-eligibility", "knowledge-review", "identity-claim-decide", "owner-queue", "owner-request-decide", "owner-request-supersede", "cognition-run", "owner-request-import",
+  "reproduction-eligibility", "knowledge-review", "identity-claim-decide", "owner-queue", "owner-request-decide", "owner-request-supersede", "operations-uncertain", "operation-resolve", "cognition-run", "owner-request-import",
   "cognition-policy", "cognition-enable", "cognition-disable", "founder-cognition", "cognition-status", "cognition-log", "founders-report",
   "research-policy", "research-enable", "research-disable", "founder-research", "research-log",
   "cognition-routing", "cognition-tier-set", "cognition-tier-verify", "cognition-tier-enable", "cognition-tier-disable",
@@ -393,6 +395,13 @@ export async function runGenesisCommand(
       const ceiling = Number(p[2]), hours = Number(p[3]);
       if (!Number.isSafeInteger(ceiling) || !Number.isFinite(hours) || p.length < 5) throw new Error("usage: cognition-run <agentId> start <ceilingMinor> <hours> <what the run is…>");
       return ok(await g.cognitionRunStart(agentId, ceiling, hours, p.slice(4).join(" "), actor));
+    }
+    case "operations-uncertain": return ok(await g.operationsUncertain());
+    case "operation-resolve": {
+      if (!p[0] || !["happened", "not_happened"].includes(p[1] ?? "") || p.length < 3) {
+        throw new Error("usage: operation-resolve <operationId> happened|not_happened <what you checked…>  (e.g. Proton Sent folder: no message with Message-ID fleet-…)");
+      }
+      return ok(await g.operationResolve(uuid(p[0], "operation-resolve"), p[1], p.slice(2).join(" "), actor));
     }
     case "owner-request-supersede": {
       if (!p[0] || p.length < 2) throw new Error("usage: owner-request-supersede <requestId> <the current decision…>  (an answered request stays on record; the agent is told the current decision)");

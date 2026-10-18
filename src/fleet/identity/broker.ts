@@ -737,8 +737,9 @@ export class IdentityBroker {
   }
 
   /**
-   * v95: an uncertain send is looked up by its job-derived Message-ID. Found: sent. Absent: the registry requeues it once
-   * it was absent on two checks (the same Message-ID goes out). A provider that cannot be checked: it stays uncertain.
+   * v95: an uncertain send is looked up by its job-derived Message-ID (at most every 10 minutes, for 7 days). Found:
+   * sent. Absent proves nothing (a sent message's Sent copy can be late or missing): it stays uncertain, is never resent
+   * automatically, and after 30 minutes the owner is asked once to check the mailbox. Cannot be checked: the same.
    */
   private async reconcileMail(): Promise<void> {
     if (!this.gw.uncertainMail || !this.gw.reconcileMail) return;
