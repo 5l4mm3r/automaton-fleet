@@ -135,6 +135,15 @@ The bank route (v91, "My deposit") stays available if a dedicated bank account i
   ledger = baseline. The read-only verifier passes. Productive behaviour is not yet shown: that is §2b. Records:
   release-85486f5.md, release-94dce86.md.
 
+- 2026-10-18 17:41:51Z **measured attempt 1 started** (owner's approval; £2 run budget, 6 h). By 17:44 Agent-1 had,
+  unprompted, packaged its landlord compliance tracker, passed its own review after fixing an uncovered promise, and
+  created a £5 offer (draft). Publishing was refused once (capability check required); it ran the check, and **every
+  retry was then refused by the loop guard** (only local tools counted as changes). An offer edit that broke the title
+  rule reached it as a bare FLEET_REQUEST_FAILED (the reason was dropped). It then waited at zero cost.
+  **Stopped 17:48:35Z: 48p, 18 calls, 0 searches; blocked by two runtime defects, not by the agent.** Fixed in 0141bca
+  (a retry after a controller-side change runs; refusals keep their reason; database rules are named) and 32634bf
+  (rehearsal: a living previous runtime may append to the journal).
+
 ### 2b. Proposed measured live attempt (after the repair is installed; separately authorised; not started)
 | | |
 |---|---|
