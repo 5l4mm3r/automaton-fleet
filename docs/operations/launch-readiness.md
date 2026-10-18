@@ -108,6 +108,11 @@ The bank route (v91, "My deposit") stays available if a dedicated bank account i
 10. Resume Agent-1 (daily fuse 754; hourly cap 600 — owner 2026-10-18: the 20-an-hour cap blocked every turn, customer replies included, and stalled the proof after 7 minutes; the cap only catches a runaway, the loop guard and the daily fuse do the rest). Agent-2 stays paused (it also needs its own
     runtime upgrade before any future resume).
 
+### Proof log (live)
+- 2026-10-18 12:26Z started (proof.sh). 12:30 first live Brave search (1p, matches). 12:30:54 Agent-1 closed the owner's turn with no reply.
+- 12:36–12:47 stalled at the 20-an-hour cap → owner raised it to 600 (12:47:53Z).
+- 12:48–12:55 **defect: a status-only loop.** Each minute a working turn (storefront + offer status, list_files, exec) that never ends in a plain sleep, so the runtime never backs off: about 6p a minute with no progress. Cause: Agent-1 was still waiting on the Gumroad channel (owner request 62cbe1b7, approved 09-26 as "the owner will open Gumroad"); Gumroad was deferred on 10-10, but Agent-1 was never told its channel is its own Fleet offer page. **Paused 12:55:29Z** (proof.sh pause; windows open). Fix: the owner tells Agent-1 that Gumroad is deferred and the offer page is its channel, then proof.sh resume. Runtime follow-up (founder runtime, after the proof): a turn of only status reads counts as idle for the backoff.
+
 ## 6. Optional later (never delays launch)
 Unit files listing individual secret files could hide the whole directory (isolation is checked on the host either way);
 a dedicated PayPal limitation alert; a PayPal deposit that fills an open shortfall first (bank deposits do); JavaScript
