@@ -402,6 +402,9 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
     // ── 7. Rollback AFTER v5 use (R41.1 amendment): the previous runtime takes over state the v5 runtime wrote — journal,
     // marked goals, declared hibernation — and keeps it; nothing is restored over it. Then the founder is upgraded again.
     const sha5 = fs.existsSync(journalFile) ? sha(journalFile) : null;
+    // 2026-10-18: what the v5 runtime wrote must still be there, byte for byte, at the start of the journal — nothing restored
+    // over it. A previous runtime that is itself alive and v5-capable (94dce86 onwards) may APPEND its own entries afterwards.
+    const journal5 = fs.existsSync(journalFile) ? fs.readFileSync(journalFile, "utf8") : null;
     const goals5 = goals();
     /** Every goal the v5 runtime wrote is still there with its v5 marks (blockedBy / awaiting / reviewAt) intact. */
     const goalsKept = () => { const now = new Map(goals().map((x) => [String(x.id), x])); return goals5.every((x) => same(now.get(String(x.id)), x) || same({ ...now.get(String(x.id)), status: x.status }, x)); };
@@ -413,11 +416,16 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
     await owner.query(`SELECT fleet_spend_review_notice($1, $2)`, [a, "Fleet Control: rehearsal notice after the rollback."]);
     // The previous runtime keeps living on the v5-written state; routed calls it makes carry no doctrine and are served v4.
     const livedOn = await waitFor(async () => ((await turnsOf()) > turnsRb || scripted.doctrineSeen.v4 > v4Before ? true : null), timeout, poll);
+    const journalNow = fs.existsSync(journalFile) ? fs.readFileSync(journalFile, "utf8") : null;
+    const journalKept = journal5 !== null && journalNow !== null && journalNow.startsWith(journal5);
+    const appended = journalKept ? journalNow!.slice(journal5!.length).split("\n").filter(Boolean).length : 0;
+    const conds = { rolledBack: rb5.ok, commit: rb5.health?.commit === o.from.commit, registry: (await registryCommit()) === o.from.commit, durable: rb5.state?.durableLost === 0,
+      identity: same(await identityOf(), id0), kept: kept(), journal: journalKept, goals: goalsKept(), books: (await booksOk()).ok, lived: Boolean(livedOn) };
     check("rollback after v5 use: the previous runtime runs healthy on the v5-written state — journal, marked goals and memory kept byte for byte, nothing restored over them",
-      rb5.ok && rb5.health?.commit === o.from.commit && (await registryCommit()) === o.from.commit && rb5.state?.durableLost === 0 && same(await identityOf(), id0) && kept()
-        && sha5 !== null && fs.existsSync(journalFile) && sha(journalFile) === sha5 && goalsKept() && (await booksOk()).ok && Boolean(livedOn),
-      `${rb5.ok ? "rolled back" : rb5.why}; pid ${rb5.health?.pid} on ${o.from.commit.slice(0, 7)}; journal ${sha5 ? `${String(sha5).slice(0, 12)}… unchanged` : "missing"}; ${goals().length} goal(s); `
-        + `${livedOn ? "kept working" : "no turn observed"} (${scripted.doctrineSeen.v4 - v4Before} v4 step(s) after the rollback)`);
+      Object.values(conds).every(Boolean),
+      `${rb5.ok ? "rolled back" : rb5.why}; pid ${rb5.health?.pid} on ${o.from.commit.slice(0, 7)}; journal ${journalKept ? `${String(sha5).slice(0, 12)}… kept${appended ? ` (+${appended} entr${appended === 1 ? "y" : "ies"} appended by the living runtime)` : ""}` : "CHANGED or missing"}; ${goals().length} goal(s); `
+        + `${livedOn ? "kept working" : "no turn observed"} (${scripted.doctrineSeen.v4 - v4Before} v4 step(s) after the rollback)`
+        + (Object.values(conds).every(Boolean) ? "" : `; failed: ${Object.entries(conds).filter(([, v]) => !v).map(([k]) => k).join(", ")}`));
     const third = await upgrade();
     report.receipts.third = third;
     check("upgrade again after the v5 rollback: verified, same founder, the journal written before the rollback is still there",
