@@ -421,6 +421,10 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
             memoryTelemetry: (m) => log("founder_memory_write", { ...m, runtimeCommit: ctx.release.commit, buildId: ctx.release.buildId }) }),
           routed: { memoryDir, workspaceDir, manifest: ctx.manifest, loopGuard },
           maxStepsPerTurn: FOUNDER_STEPS_PER_TURN,
+          // 2026-10-18 (owner): continuity across cut-off turns, progress by new results, and waiting without inference once
+          // work has stalled; a waiting founder is woken only by a change, an owner message or its own review time.
+          workContinuity: true,
+          hibernationSafetyMs: Number.POSITIVE_INFINITY,
         })
       : null;
   const thinkEvery = Math.max(1, opts.thinkEvery ?? (Number(ctx.env.FLEET_FOUNDER_THINK_EVERY) || 1));

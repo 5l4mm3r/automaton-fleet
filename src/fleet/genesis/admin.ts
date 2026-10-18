@@ -524,6 +524,10 @@ export class GenesisOps {
   decideOwnerRequest(requestId: string, decision: "approved" | "declined" | "answered", response: string | null, actor: string) {
     return this.one<Record<string, unknown>>(`SELECT fleet_owner_request_decide($1, $2, $3, $4) AS r`, [requestId, decision, response, actor]);
   }
+  /** v94: a resolved request replaced by the owner's current decision (recorded once; the request itself never changes). */
+  supersedeOwnerRequest(requestId: string, decision: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_admin_owner_request_supersede($1, $2, $3) AS r`, [requestId, decision, actor]);
+  }
 
   /**
    * Admin migration step: import a legacy knowledge proposal that was really an identity/legal dependency as an

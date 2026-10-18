@@ -176,7 +176,7 @@ describe("F2-A action-scoped dependencies (founder view)", () => {
   it("parses v26 records and R28-era records alike; nothing renders as blocking or stale", () => {
     const [v26] = parseDependencies({ ok: true, requests: [gumroadDep()] })!;
     expect(v26).toEqual({ requestId: GUMROAD, kind: "kyc", action: GUMROAD_ACTION, goalRef: "g1", title: "Owner request: enrol a Gumroad channel for zero-capex digital products",
-      status: "pending", ageS: 5 * 86_400, response: null, sinceDecidedS: null });
+      status: "pending", ageS: 5 * 86_400, response: null, sinceDecidedS: null, supersededBy: null });
     const [legacy] = parseDependencies({ ok: true, staleAfterS: 86_400, requests: [{ requestId: GUMROAD, category: "sales_channel", goalRef: "g1", title: "Enable Gumroad",
       blocking: true, status: "pending", ageS: 9 * 86_400, stale: true, staleAfterS: 86_400, response: null }] })!;
     expect(legacy).toMatchObject({ kind: "sales_channel", action: "Enable Gumroad", status: "pending" });

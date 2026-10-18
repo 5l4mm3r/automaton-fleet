@@ -91,12 +91,13 @@ function RequestCard({ r, call, agent }: { r: Row; call: (op: string, a: Row) =>
   };
   const pending = r.status === "pending";
   return <div className={`my-3 rounded-lg border p-3 text-sm ${pending ? "border-amber-600" : "border-slate-700"}`}>
-    <p className="text-xs uppercase tracking-wider text-amber-200">{pending ? `${agent} is awaiting your reply` : `Request · ${r.status === "answered" ? "answered" : r.status}`}</p>
+    <p className="text-xs uppercase tracking-wider text-amber-200">{pending ? `${agent} is awaiting your reply` : `Request · ${r.status === "answered" ? "answered" : r.status}${r.supersededBy ? " · superseded" : ""}`}</p>
     <p className="mt-1 font-semibold [overflow-wrap:anywhere]">{String(r.title ?? "A request")}</p>
     {r.action && <p className="mt-1 text-slate-300">What it needs from you: {String(r.action)}</p>}
     {r.detail && <details className="mt-1"><summary className="cursor-pointer text-xs text-cyan-300">Details</summary><p className="mt-1 whitespace-pre-wrap text-xs text-slate-300">{String(r.detail)}</p></details>}
     <p className="mt-1 text-xs text-slate-400">Asked {when(r.createdAt ?? r.at)}{r.decidedAt ? ` · you replied ${when(r.decidedAt)}` : ""}</p>
     {r.response && <p className="mt-2 rounded bg-slate-800 p-2 text-slate-200">You: {String(r.response)}</p>}
+    {r.supersededBy && <p className="mt-2 rounded border border-cyan-800 bg-cyan-950/40 p-2 text-cyan-100">Superseded {when(r.supersededBy.at)} by your current decision: {String(r.supersededBy.decision)} <span className="text-xs text-slate-400">(the earlier answer stays on record; {agent} was told)</span></p>}
     {pending && <>
       <textarea className={`${input} mt-2 h-20`} maxLength={2000} placeholder="Your answer (required for Reply; optional for Approve or Decline)" value={text} onChange={(e) => setText(e.target.value)} />
       <div className="mt-2 flex flex-wrap gap-2">

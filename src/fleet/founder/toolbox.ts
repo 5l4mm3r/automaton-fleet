@@ -58,7 +58,7 @@ export interface ToolboxPorts {
 }
 
 /** F2 tools → registry operations (the database validates every argument; the toolbox only maps and adds idempotency). */
-const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
+export const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
   opportunity: { record: "opportunity.record", shortlist: "opportunity.shortlist", status: "opportunity.status", list: "opportunity.list" },
   venture: { create: "venture.create", transition: "venture.transition", status: "venture.status", list: "venture.list", metric: "venture.metric" },
   wallet: { view: "wallet", performance: "performance", plan: "wallet.plan", vendors: "vendor.list",

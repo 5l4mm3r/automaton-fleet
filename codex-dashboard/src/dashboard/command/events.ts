@@ -139,7 +139,7 @@ export function visualFromEvent(e: FleetEvent): VisualEvent | null {
 }
 
 /** Decisions for the Decision Log: FleetController's and the Admin's recorded decisions (stored reasons only). */
-export const DECISION_TYPES = /^(capital_decision|replication_(granted|rejected|birth_ordered)|owner_request_decided|identity_claim_decided|operator_proposal_(approved|rejected|expired)|birth_(authorized|cancelled)|agent_hold_(set|released)|mission_(started|ended)|estate_item_(reassigned|released)|decision_(recorded|corrected)|experiment_relevance_(assessed|overridden)|[a-z_]+_policy_set)$/;
+export const DECISION_TYPES = /^(capital_decision|replication_(granted|rejected|birth_ordered)|owner_request_(decided|superseded)|identity_claim_decided|operator_proposal_(approved|rejected|expired)|birth_(authorized|cancelled)|agent_hold_(set|released)|mission_(started|ended)|estate_item_(reassigned|released)|decision_(recorded|corrected)|experiment_relevance_(assessed|overridden)|[a-z_]+_policy_set)$/;
 export const isDecision = (type: string) => DECISION_TYPES.test(type);
 
 export interface AgentReading {

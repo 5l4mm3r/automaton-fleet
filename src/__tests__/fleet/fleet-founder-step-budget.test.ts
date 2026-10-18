@@ -5,9 +5,8 @@
  * read_file), ended without a closing note, and the next turn re-oriented again — a paid loop with no progress. These
  * tests drive the production FounderMind and FounderToolbox:
  *   - the production budget (FOUNDER_STEPS_PER_TURN) lets a turn orient AND act in one go;
- *   - a turn that uses every step says so in the next turn's packet (continue, do not re-read);
- *   - a turn that made no call the previous turn had not already made rests like a sleep (no paid repeat each minute);
- *     a turn with anything new does not.
+ *   - a turn that uses every step says so in the next turn's packet.
+ * The carried work, the progress test and waiting without inference: fleet-founder-work-continuity.test.ts.
  */
 import { describe, it, expect } from "vitest";
 import fs from "fs";
@@ -70,31 +69,12 @@ describe("the founder's turn budget (proof run 2026-10-18)", () => {
     expect(r.turns()).toBe(1);
   });
 
-  it("a turn that uses every step tells the next turn to continue instead of re-reading", async () => {
+  it("a turn that uses every step says so in the next turn's packet", async () => {
     const r = rig((t, s) => [c("read_file", { path: `product/tracker.csv`, note: `${t}-${s}` })], 4);
     const first = await r.mind.turn("heartbeat 1");
     expect(first.steps).toBe(4);
     await r.mind.turn("heartbeat 2");
     expect(r.packets).toHaveLength(2);
-    expect(r.packets[1]).toContain("this turn used all 4 steps before finishing: continue the same work in the next turn; do not repeat reads you already did");
-  });
-
-  it("a turn that only repeats calls already made in the previous turn rests like a sleep; a turn with anything new does not", async () => {
-    // The loop exactly as it ran: the same status, list and read calls, two steps a turn, every minute.
-    const loop = [[c("storefront", { action: "status" })], [c("list_files", { path: "" })]];
-    const r = rig((t, s) => (t === 4 && s === 1 ? [c("write_file", { path: "product/offer.md", content: "£5 tracker" })] : loop[s - 1] ?? []), FOUNDER_STEPS_PER_TURN);
-    await r.mind.turn("hb 1");                        // turn 1: new calls
-    const second = await r.mind.turn("hb 2");         // turn 2: nothing new → it rests
-    expect(second.repeated).toBe(true);
-    const resting = await r.mind.turn("hb 3");        // the next slot is skipped: no paid inference
-    expect(resting.ran).toBe(false);
-    expect(r.turns()).toBe(2);
-    for (let i = 4; r.turns() < 3 && i < 12; i++) await r.mind.turn(`hb ${i}`);
-    expect(r.turns()).toBe(3);                         // the backoff ends; it thinks again (and repeats again)
-    for (let i = 12; r.turns() < 4 && i < 30; i++) await r.mind.turn(`hb ${i}`);
-    expect(r.turns()).toBe(4);
-    // Turn 4 wrote something new: not a repeat, so the next slot runs at once.
-    const after = await r.mind.turn("hb after");
-    expect(after.ran).toBe(true);
+    expect(r.packets[1]).toContain("(this turn used all 4 steps before finishing)");
   });
 });

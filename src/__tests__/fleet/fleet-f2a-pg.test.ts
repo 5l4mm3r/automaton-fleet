@@ -223,7 +223,10 @@ describe.skipIf(!PG_BIN)("F2-A schemas v26 + v27 on an R28-shaped v25 registry (
       "svc_notify_tick", "fleet_daily_report",
       // v62: the owner's conversation thread shows the agent's requests, and the attention signal digests their statuses so an
       // answered request wakes the agent — read-only observers; they gate nothing (asserted STABLE below).
-      "fleet_admin_agent_thread", "fleet_agent_attention"]);
+      "fleet_admin_agent_thread", "fleet_agent_attention",
+      // v94: the owner's supersession of a RESOLVED request (records the current decision once; the request never changes)
+      // — a member of the family that gates nothing: an open request is refused (decide it instead).
+      "fleet_admin_owner_request_supersede"]);
     expect(readers.length).toBeGreaterThan(0);
     for (const fn of ["fleet_admin_agent_thread", "fleet_agent_attention"]) {
       expect((await q(`SELECT p.provolatile AS v FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'fleet' AND p.proname = $1`, [fn])).map((r) => r.v), fn)
