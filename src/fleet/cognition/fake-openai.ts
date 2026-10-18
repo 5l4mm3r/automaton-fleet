@@ -43,6 +43,9 @@ export async function startFakeOpenAI(o: {
   const sockets = new Set<net.Socket>();
   const server = http.createServer((req, res) => {
     let raw = "";
+    // Decoded as a stream: a multi-byte character split across two chunks stays intact (decoding each chunk alone
+    // corrupted it — a long tool description then reached the model with "—" as replacement characters).
+    req.setEncoding("utf8");
     req.on("data", (d) => (raw += d));
     req.on("end", async () => {
       const send = (status: number, body: unknown, headers: Record<string, string> = {}) => {
