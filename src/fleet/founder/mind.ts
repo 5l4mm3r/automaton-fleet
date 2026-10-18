@@ -45,7 +45,7 @@ import { ASSESS_LINE, BOOTSTRAP_LINE, DECISIONS_FILE, HIBERNATE_LINE, hibernatio
 import { readJournal, readJournalIndex } from "./toolbox.js";
 import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineClass } from "./task-classifier.js";
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
-import { PROGRESS_FILE, ProgressMemory, callSig, carryLines, clearCarry, isExternal, loadCarry, noticeLines, saveCarry } from "./continuity.js";
+import { CARRY_MAX_CHARS, PROGRESS_FILE, ProgressMemory, callSig, carryLinesWithin, clearCarry, isExternal, loadCarry, noticeLines, saveCarry } from "./continuity.js";
 
 export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
@@ -126,6 +126,8 @@ const MAX_ARG_CHARS = 400;
 const CONTINUITY_FILE = "mind-continuity.json";
 /** The controller accepts at most 16,000 characters per message: a rendered packet stays under it. */
 const MAX_PACKET_CHARS = 15_000;
+/** 2026-10-18: reduction levels a task is rebuilt at before a turn is refused as "packet too large" (composeTask). */
+const PACKET_FIT_LEVELS = 6;
 const MAX_ROUTINE_MATERIAL = 12_000;
 const COGNITION_TOOLS = new Set(["routine_task", "escalate_question", "independent_review"]);
 
@@ -195,7 +197,9 @@ export interface OwnerTurn { turnId: string; messages: Array<Record<string, unkn
 /** v62: refusals that leave the owner's messages waiting (shown to the owner) rather than failing them. */
 const OWNER_WAIT_CODES = new Set(["FLEET_COGNITION_PAUSED", "FLEET_TREASURY_INSUFFICIENT", "FLEET_COGNITION_RATE_LIMITED", "FLEET_COGNITION_BUSY",
   "FLEET_COGNITION_PROVIDER_RATE_LIMITED", "FLEET_COGNITION_CREDITS_EXHAUSTED", "FLEET_COGNITION_DISABLED", "FLEET_COGNITION_FOUNDER_DISABLED",
-  "FLEET_AGENT_HELD", "FLEET_FX_UNAVAILABLE", "FLEET_ROUTING_DISABLED"]);
+  "FLEET_AGENT_HELD", "FLEET_FX_UNAVAILABLE", "FLEET_ROUTING_DISABLED",
+  // v94: a bounded run is spent or its time is up — queued messages stay queued; nothing failed.
+  "FLEET_COGNITION_RUN_BUDGET_EXHAUSTED", "FLEET_COGNITION_RUN_ENDED"]);
 /**
  * The doctrine this runtime implements and asks FleetController for: v6 (2026-10-12) = charter v6 + the v5 tool
  * vocabulary + Field Guide v2. (R41.1 runtimes asked for founder-v5.)
@@ -207,7 +211,7 @@ export const FOUNDER_RUNTIME_DOCTRINE = "founder-v10";
  * a contribution). Cash and expense are left out: they move with every inference charge, including the founder's own
  * previous wake-up, and would make every turn look eventful.
  */
-const WAKE_LEDGER_FIELDS = ["reserved", "reservedRecoverable", "assetsRecoverable", "protectedObligations", "externalCustomerRevenue", "realizedInvestmentPnl",
+export const WAKE_LEDGER_FIELDS = ["reserved", "reservedRecoverable", "assetsRecoverable", "protectedObligations", "externalCustomerRevenue", "realizedInvestmentPnl",
   "fees", "lifetimeContribution", "genesisAllocation", "treasuryAllocation", "internalTransfersNet", "survivalEquityExhausted"] as const;
 
 /**
@@ -369,7 +373,7 @@ export function slimWakePacket(p: TaskPacket): TaskPacket {
 }
 
 /** Trim a packet (lowest-value sections first, never the task) until its rendered form fits one controller message. */
-export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS): string {
+export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS, o: { keepKnowledge?: boolean } = {}): string {
   let text = renderTaskPacket(p);
   const shrink: Array<() => boolean> = [
     () => p.notes.length > 0 && (p.notes.pop(), true),
@@ -377,7 +381,8 @@ export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS):
     () => p.institutionalKnowledge.length > 0 && (p.institutionalKnowledge.pop(), true),
     () => p.previousResults.length > 1 && (p.previousResults.shift(), true),
     () => p.evidence.length > 4 && (p.evidence.shift(), true),
-    () => p.knowledge.length > 0 && (p.knowledge.pop(), true),
+    // 2026-10-18: the founder's remembered facts go last, and not at all while the task can still be shortened (composeTask).
+    () => !o.keepKnowledge && p.knowledge.length > 0 && (p.knowledge.pop(), true),
   ];
   for (const step of shrink) {
     while (text.length > maxChars && step()) text = renderTaskPacket(p);
@@ -668,20 +673,26 @@ export class FounderMind {
         capNote.push(`Your available tools (first capability record of this runtime): ${capabilities.tools.join(", ")}.${exp}`);
       }
     }
-    const task = [
+    // 2026-10-18: the task is composed at a reduction LEVEL (0 = everything). A packet that does not fit is rebuilt at the next
+    // level — lower-value lines shortened or dropped first — instead of the whole turn being refused: Agent-1 lost five days
+    // (2026-10-02 → 10-07) and three turns on 2026-10-18 to "packet too large", unable to think at all.
+    const depLines = dependencyLines(deps ?? []);
+    const decLines = decisionLines(ledger);
+    const composeTask = (lvl: number) => [
       ...(owner ? [ownerBlock(owner)] : []),
-      observation.slice(0, MAX_CONTENT),
-      prev ? `Your previous turn (${prev.at}) ended with: ${prev.outcome || "(no closing note)"}${prev.tools.length ? ` [tools used: ${prev.tools.join(", ")}]` : ""}`
+      observation.slice(0, lvl >= 6 ? 300 : MAX_CONTENT),
+      prev ? `Your previous turn (${prev.at}) ended with: ${(prev.outcome || "(no closing note)").slice(0, lvl >= 4 ? 400 : 1_200)}${prev.tools.length && lvl < 5 ? ` [tools used: ${prev.tools.join(", ")}]` : ""}`
            : "No closing note from a previous turn is recorded: rely on your goals, facts and notes below.",
-      ...(carried && !owner ? carryLines(carried) : []),
-      ...notices.lines,
+      ...(carried && !owner ? carryLinesWithin(carried, [CARRY_MAX_CHARS, 3_000, 1_500, 1_500, 1_200, 900, 600][Math.min(lvl, 6)]) : []),
+      ...(lvl >= 2 ? notices.lines.slice(-1).map((l) => l.slice(0, 700)) : notices.lines),
       ...(W && !owner && !carried && prev?.stalled === 1 ? [STALL_LINE] : []),
-      ...capNote,
-      ...dependencyLines(deps ?? []),
+      ...(lvl >= 3 ? capNote.map((l) => l.slice(0, 300)) : capNote),
+      ...(lvl >= 5 ? depLines.slice(0, 2) : depLines),
       ...workLines(work),
-      ...decisionLines(ledger),
+      ...(lvl >= 5 ? decLines.slice(0, 3) : decLines),
       ...(ledgerProblem ? [ledgerProblem] : []),
     ].join("\n");
+    const task = composeTask(0);
     // R23.1: a bare wake-up — the previous turn only slept and nothing the founder could act on has changed since — gets the
     // slim packet. Anything else (a first turn, a working turn, any change in memory, workspace, economy, capabilities or
     // dependency status) gets the full one.
@@ -739,18 +750,31 @@ export class FounderMind {
     const jix = bare ? null : readJournalIndex(R.memoryDir);
     const triggers = (jix?.openTriggers ?? []).slice(-3).map((t) => t.trigger.slice(0, 120));
     const happened = bare ? null : eventsSinceLine(status.attention, prev?.at);
-    const extra = [...(!prev ? [BOOTSTRAP_LINE] : []), ...(sale ? [sale] : []), ...(happened ? [happened] : []), ...(move ? [move] : []), ...(!bare ? [stateLine(econ)] : []),
+    const essential = [...(!prev ? [BOOTSTRAP_LINE] : []), ...(sale ? [sale] : []), ...(happened ? [happened] : []), ...(move ? [move] : []), ...(!bare ? [stateLine(econ)] : [])];
+    const extra = [...essential,
       ...(!bare && survival ? [survivalLine(survival)] : []), ...(own ? [own] : []), ...(brief ? [economyLine(brief)] : []),
       ...(!bare && (journal.length || jix?.lessons.length) ? [`Field journal: ${journal.length} entr${journal.length === 1 ? "y" : "ies"}${jix?.archived ? ` (+${jix.archived} archived)` : ""}`
         + `${jix?.lessons.length ? `, ${jix.lessons.length} consolidated lesson(s) (field_journal op lessons)` : ""}${triggers.length ? `; open next triggers${(jix?.openTriggers.length ?? 0) > 3 ? ` (latest 3 of ${jix!.openTriggers.length})` : ""}: ${triggers.join(" | ")}` : ""}.`] : []),
       ...(bare && declared ? [`You are hibernating; your stated wake condition: ${prev?.wakeOn ?? `review at ${prev?.reviewAt}`}.`] : [])];
     let text: string;
     try {
-      const full = buildTaskPacket({
-        memoryDir: R.memoryDir, workspaceDir: R.workspaceDir, task: extra.length ? `${task}\n${extra.join("\n")}` : task, economics,
-        outputContract: { form: "analysis", mustCite: false, instructions: "Decide and take your next step with your tools. Remember whatever you will need later, then call sleep with a one-line note of where you are." },
-      });
-      text = renderBoundedPacket(bare ? slimWakePacket(full) : full);
+      const build = (lvl: number) => {
+        const t = composeTask(lvl);
+        const x = lvl >= 4 ? [...essential, ...extra.filter((l) => l.startsWith("You are hibernating"))] : extra;
+        const full = buildTaskPacket({
+          memoryDir: R.memoryDir, workspaceDir: R.workspaceDir, task: x.length ? `${t}\n${x.join("\n")}` : t, economics,
+          outputContract: { form: "analysis", mustCite: false, instructions: "Decide and take your next step with your tools. Remember whatever you will need later, then call sleep with a one-line note of where you are." },
+        });
+        return renderBoundedPacket(bare ? slimWakePacket(full) : full, MAX_PACKET_CHARS, { keepKnowledge: lvl < PACKET_FIT_LEVELS });
+      };
+      let lvl = 0;
+      for (;;) {
+        try { text = build(lvl); break; } catch (e) {
+          if ((e as { code?: string }).code !== "FLEET_TASK_PACKET_INVALID" || lvl >= PACKET_FIT_LEVELS) throw e;
+          lvl++;
+        }
+      }
+      if (lvl > 0) this.logDecision({ turn: this.turns, routed: true, packetFit: lvl });
       if (bare) this.routing.slimWakeups++;
       if (nudge) this.routing.idleNudges[kind]++;
     } catch (err) {
@@ -844,7 +868,7 @@ export class FounderMind {
         outcomes.push(out);
         if (W) {
           records.push({ call, ok: out.ok, ...(out.refused ? { refused: out.refused } : {}), output: out.output });
-          if (progressMem!.note(call, out.ok, out.output)) result.progress = true;
+          progressMem!.note(call, out.ok, out.output);
         }
         result.toolCalls.push(call.name);
         if (!out.ok && out.refused) result.refusals.push({ tool: call.name, code: out.refused });
@@ -866,6 +890,7 @@ export class FounderMind {
     if (W) {
       if (cutOff) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: outcome });
       else if (!owner) clearCarry(this.o.stateDir);
+      if (progressMem!.endTurn()) result.progress = true;
       progressMem!.save();
       if (owner && this.o.toolbox.ownerTurnReplied()) result.progress = true;
     }

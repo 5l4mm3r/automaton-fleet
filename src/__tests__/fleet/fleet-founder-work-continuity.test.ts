@@ -117,6 +117,23 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(second.packets.slice(1).some((x) => x.includes("CONTINUE YOUR UNFINISHED WORK"))).toBe(false);
   });
 
+  it("1c. a FAILED external action of the carried turn can be retried as it was", async () => {
+    let fail = true;
+    const r = rig((t, s) => {
+      if (t === 1 && s === 1) return { calls: [c("offer", { op: "publish", args: { offerId: "o1" } })] };
+      if (t === 1) return { calls: [c("list_goals")] };
+      if (t === 2 && s === 1) return { calls: [c("offer", { op: "publish", args: { offerId: "o1" } })] };
+      return { calls: [c("sleep", { reason: "retried" })] };
+    }, { maxSteps: 3 });
+    const tb = (r.mind as unknown as { o: { toolbox: { o: { ports: { economy: (op: string) => Promise<Record<string, unknown>> } } } } }).o.toolbox.o.ports;
+    const real = tb.economy;
+    tb.economy = async (op: string) => { if (op === "offer.publish" && fail) { fail = false; r.world.economyCalls.push(op); return { ok: false, code: "FLEET_UNAVAILABLE" }; } return real(op); };
+    await r.mind.turn("hb 1");
+    await r.mind.turn("hb 2");
+    expect(r.world.economyCalls.filter((x) => x === "offer.publish")).toHaveLength(2);         // the retry ran
+    expect(r.outputsSeen.some((x) => x.includes("FLEET_ALREADY_DONE"))).toBe(false);
+  });
+
   it("1b. a completed external action of the carried turn is not executed again; a different one is", async () => {
     const r = rig((t, s) => {
       if (t === 1 && s === 1) return { calls: [c("offer", { op: "publish", args: { offerId: "o1" } })] };
@@ -138,21 +155,34 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(isExternal(c("read_file", { path: "x" }))).toBe(false);
   });
 
-  it("2. progress is new information: re-reads and unchanged statuses are not; new research, a changed status, a changed file and a write are", async () => {
+  it("2. progress is new information or new work: not re-reads, unchanged statuses, the same result under other arguments, or the same targets rewritten each turn", async () => {
     const m = new ProgressMemory(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "wc-p-")), "p.json"));
+    const turn = (...calls: Array<[ToolCall, boolean, string]>) => { for (const [k, ok, out] of calls) m.note(k, ok, out); return m.endTurn(); };
     const read = c("read_file", { path: "product/tracker.csv" });
-    expect(m.note(read, true, "property,gas_safety_due")).toBe(true);
-    expect(m.note(read, true, "property,gas_safety_due")).toBe(false);                    // re-read: nothing new
-    expect(m.note(read, true, "property,gas_safety_due,eicr_due")).toBe(true);            // the file changed
+    expect(turn([read, true, "property,gas_safety_due"])).toBe(true);
+    expect(turn([read, true, "property,gas_safety_due"])).toBe(false);                                       // re-read
+    expect(turn([read, true, "[unchanged since your identical call earlier]\nproperty,gas_safety_due"])).toBe(false); // the loop guard's repeat
+    expect(turn([read, true, "property,gas_safety_due,eicr_due"])).toBe(true);                               // the file changed
     const status = c("storefront", { op: "products" });
-    expect(m.note(status, true, '{"status":"draft","asOf":"2026-10-18T13:08:43.085Z"}')).toBe(true);
-    expect(m.note(status, true, '{"status":"draft","asOf":"2026-10-18T13:09:49.908Z"}')).toBe(false); // only the clock moved
-    expect(m.note(status, true, '{"status":"published","asOf":"2026-10-18T13:10:58.629Z"}')).toBe(true);
-    expect(m.note(c("web_search", { query: "landlord EICR tracker" }), true, "5 results: …")).toBe(true);
-    expect(m.note(c("web_search", { query: "landlord EICR tracker template price" }), true, "5 other results")).toBe(true);
-    expect(m.note(c("sleep", { reason: "x" }), true, "ok")).toBe(false);
-    expect(m.note(c("read_file", { path: "missing" }), false, "not found")).toBe(false);   // a failure is not progress
-    expect(normalizeResult('{"ageS": 42, "at": "2026-10-18 12:30:54+00", "x": "2026-10-18T12:30:54.111Z"}')).toBe('{"ageS":0, "at": "<t>", "x": "<t>"}'); // PostgreSQL's +00 too
+    expect(turn([status, true, '{"status":"draft","asOf":"2026-10-18T13:08:43.085Z"}'])).toBe(true);
+    expect(turn([status, true, '{"status":"draft","asOf":"2026-10-18 13:09:49+00"}'])).toBe(false);          // only the clock moved
+    expect(turn([c("storefront", { op: "products", page: 2 }), true, '{"status":"draft","asOf":"2026-10-18T13:10:00Z"}'])).toBe(false); // other arguments, same result
+    expect(turn([status, true, '{"status":"published"}'])).toBe(true);                                       // a real change
+    expect(turn([c("web_search", { query: "landlord EICR tracker" }), true, "5 results: certnudge.co.uk …"])).toBe(true);
+    expect(turn([c("web_search", { query: "landlord EICR tracker uk" }), true, "5 results: certnudge.co.uk …"])).toBe(false); // reworded, nothing new
+    // A counter rewritten every turn is not work: the first write is new, the next turn's rewrite of the same target alone is not.
+    expect(turn([c("write_file", { path: "state/counter.txt", content: "1" }), true, "wrote 1 bytes"])).toBe(true);
+    expect(turn([c("write_file", { path: "state/counter.txt", content: "2" }), true, "wrote 1 bytes"])).toBe(false);
+    expect(turn([c("write_file", { path: "state/counter.txt", content: "3" }), true, "wrote 1 bytes"])).toBe(false);
+    // Real iteration: the same product file rewritten WITH new information (a calculation, a review) is progress.
+    expect(turn([c("write_file", { path: "product/tracker.xlsx", content: "v1" }), true, "wrote"])).toBe(true);
+    expect(turn([c("write_file", { path: "product/tracker.xlsx", content: "v2 with EICR column" }), true, "wrote"], [c("exec", { cmd: "python check.py" }), true, "formulas recalculate: 0 errors, 42 rows"])).toBe(true);
+    // Recording a conclusion (a fact, a decision) is intermediate work; recording the same one again is not.
+    expect(turn([c("remember_fact", { key: "price", value: "£5 private offer" }), true, "remembered"])).toBe(true);
+    expect(turn([c("remember_fact", { key: "price", value: "£5 private offer" }), true, "remembered"])).toBe(false);
+    // Failures and sleep are never progress; normalisation ignores timestamps (PostgreSQL's +00 too) and ages.
+    expect(turn([c("read_file", { path: "missing" }), false, "not found"], [c("sleep", { reason: "x" }), true, "ok"])).toBe(false);
+    expect(normalizeResult('{"ageS": 42, "at": "2026-10-18 12:30:54+00", "x": "2026-10-18T12:30:54.111Z"}')).toBe('{"ageS":0, "at": "<t>", "x": "<t>"}');
     // In the mind: the proof run's loop (status, list, read with unchanged results) is a turn without progress.
     const loop = (): Step => ({ calls: [c("storefront", { op: "products" }), c("list_files", { path: "" }), c("read_file", { path: "product/tracker.csv" })] });
     const r = rig((_t, s) => (s === 1 ? loop() : { calls: [c("sleep", { reason: "checked" })] }));
@@ -236,5 +266,28 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(p).toContain("APPROVED earlier, now SUPERSEDED by the owner's current decision");
     expect(p).toContain("Gumroad is deferred until a wallet reaches £500; sell through your own Fleet offer page.");
     expect(p).toContain("Act on the current decision; do not wait on the earlier answer. The request stays on record.");
+  });
+
+  it("5. an oversized turn still runs: lower-value lines shrink first; the task, the carried plan, the newest notice and the founder's facts stay", async () => {
+    const r = rig(() => ({ calls: [c("sleep", { reason: "read it all" })] }), { maxSteps: 4 });
+    // The founder's own memory and workspace at Agent-1's real scale (14 facts ≈ 5.4 KB, 13 research files, 4 notes).
+    fs.writeFileSync(path.join(r.d.m, "facts.json"), JSON.stringify(Object.fromEntries(Array.from({ length: 14 }, (_, i) => [`fact-${i}`, `${"landlord compliance detail ".repeat(12)}${i}`]))));
+    fs.mkdirSync(path.join(r.d.w, "research"), { recursive: true });
+    for (let i = 0; i < 13; i++) fs.writeFileSync(path.join(r.d.w, "research", `r${i}.txt`), `attemptId: a${i}\nurl: https://example.com/${i}\nfetchedAt: 2026-09-26T15:2${i % 10}:00Z\nsha256: ${"0".repeat(64)}\n\n${"evidence text ".repeat(80)}`);
+    for (let i = 0; i < 4; i++) fs.writeFileSync(path.join(r.d.w, `note${i}.md`), "note ".repeat(400));
+    // A large carried record, five long notices, five dependencies.
+    fs.writeFileSync(path.join(r.d.s, CARRY_FILE), JSON.stringify({ at: "2026-10-18T13:00:00Z", turn: 9, steps: 16, plan: "PLAN-KEEP: publish the £5 offer next.",
+      calls: Array.from({ length: 16 }, (_, i) => ({ name: "read_file", args: `{"path":"f${i}"}`, ok: true, result: "R".repeat(600), external: false, sig: `read_file:${i}` })),
+      done: [{ sig: "offer:o1", name: "offer", args: '{"op":"publish"}', result: "ok" }], notRun: [{ name: "exec", args: '{"cmd":"x"}' }] }));
+    r.world.notices = Array.from({ length: 5 }, (_, i) => ({ id: `n${i}`, at: `2026-10-18T13:0${i}:00Z`, body: `${i === 0 ? "NEWEST-NOTICE " : ""}${"notice text ".repeat(120)}` }));
+    r.world.requests = Array.from({ length: 5 }, (_, i) => ({ requestId: `0000000${i}-0000-4000-8000-000000000000`, kind: "kyc", action: "a".repeat(200), title: "t", status: "pending", ageS: 60 }));
+    await r.mind.turn("x".repeat(2_500));
+    expect(r.infers()).toBe(1);                                     // it thought; it was not refused
+    const p = r.packets[0];
+    expect(p.length).toBeLessThanOrEqual(15_000);
+    expect(p).toContain("CONTINUE YOUR UNFINISHED WORK");
+    expect(p).toContain("PLAN-KEEP: publish the £5 offer next.");
+    expect(p).toContain("NEWEST-NOTICE");
+    expect(p).toContain("fact-0");                                  // its remembered facts were not dropped
   });
 });

@@ -64,9 +64,6 @@ export function normalizeResult(s: string): string {
     .replace(/"(ageS|sinceDecidedS|secondsAgo|ms|latencyMs|elapsedMs|durationMs)"\s*:\s*\d+/g, '"$1":0')
     .replace(/\b\d+(\.\d+)?\s*(ms|s|seconds?|minutes?) ago\b/g, "<ago>");
 }
-export function resultHash(c: Pick<ToolCall, "name" | "arguments">, output: string): string {
-  return crypto.createHash("sha256").update(`${callSig(c)}\0${normalizeResult(output)}`).digest("hex").slice(0, 16);
-}
 
 function readJson<T>(file: string, fallback: T): T {
   try { return JSON.parse(fs.readFileSync(file, "utf8")) as T; } catch { return fallback; }
@@ -76,26 +73,76 @@ function writeJson(file: string, value: unknown): void {
   fs.renameSync(`${file}.tmp`, file);
 }
 
-/** The rolling memory of results the founder has already obtained (survives restarts). */
+/** The founder's own-state writes (workspace files, memory, goals, decisions, journal), with the target each writes. */
+const INTERNAL_WRITES: Readonly<Record<string, (a: Record<string, unknown>) => string>> = Object.freeze({
+  write_file: (a) => String(a.path ?? ""), remember_fact: (a) => String(a.key ?? ""), remember_facts: () => "facts", retract_fact: (a) => String(a.key ?? ""),
+  set_goal: (a) => String(a.id ?? a.title ?? ""), create_goal: (a) => String(a.title ?? ""), complete_goal: (a) => String(a.id ?? ""), cancel_goal: (a) => String(a.id ?? ""),
+  complete_task: (a) => String(a.id ?? ""), open_decision: (a) => String(a.title ?? a.question ?? ""), resolve_decision: (a) => String(a.id ?? ""),
+  review_decision: (a) => String(a.id ?? ""), field_journal: () => "journal", record_experiment: (a) => String(a.id ?? ""), add_experiment_evidence: (a) => String(a.id ?? ""),
+});
+export type ProgressKind = "information" | "action" | "write";
+/** Paid or external, but what they produce is information: judged by their result (a reworded search that finds nothing new is not progress). */
+const INFORMATION_TOOLS = new Set(["web_search", "web_fetch"]);
+
+/**
+ * The rolling memory of what the founder has already obtained or produced (survives restarts), and the progress test of
+ * one turn. Progress is NEW: new information from a read, a search, a check or a calculation (the result, whatever the
+ * arguments that produced it); a successful external action with a new result; or new content written. A turn whose only
+ * new results are rewrites of the targets it already rewrote in the previous turn is not progress (a counter or a log
+ * rewritten each turn is not work). Failures and sleep never count; volatile timestamps are ignored.
+ */
 export class ProgressMemory {
   private seen: string[];
   private readonly set: Set<string>;
+  private lastWrites: string[];
+  private turnKinds = new Set<ProgressKind>();
+  private turnWrites = new Set<string>();
   constructor(private readonly file: string) {
-    const v = readJson<{ seen?: unknown }>(file, {});
+    const v = readJson<{ seen?: unknown; lastWrites?: unknown }>(file, {});
     this.seen = Array.isArray(v.seen) ? v.seen.filter((x): x is string => typeof x === "string").slice(-PROGRESS_MEMORY) : [];
     this.set = new Set(this.seen);
+    this.lastWrites = Array.isArray(v.lastWrites) ? v.lastWrites.filter((x): x is string => typeof x === "string").slice(-50) : [];
   }
-  /** Records the result; true when it is new information. */
-  note(c: Pick<ToolCall, "name" | "arguments">, ok: boolean, output: string): boolean {
-    if (!ok || c.name === "sleep" || output.startsWith(UNCHANGED_MARKER)) return false;
-    const h = resultHash(c, output);
+  private fresh(key: string): boolean {
+    const h = crypto.createHash("sha256").update(key).digest("hex").slice(0, 16);
     if (this.set.has(h)) return false;
     this.set.add(h);
     this.seen.push(h);
     if (this.seen.length > PROGRESS_MEMORY) this.set.delete(this.seen.shift()!);
     return true;
   }
-  save(): void { writeJson(this.file, { seen: this.seen }); }
+  /** Records one call of the turn; returns the kind of progress it made, or null. */
+  note(c: Pick<ToolCall, "name" | "arguments">, ok: boolean, output: string): ProgressKind | null {
+    if (!ok || c.name === "sleep" || output.startsWith(UNCHANGED_MARKER)) return null;
+    const a = (c.arguments ?? {}) as Record<string, unknown>;
+    const writeTarget = INTERNAL_WRITES[c.name];
+    let kind: ProgressKind;
+    let key: string;
+    if (writeTarget) {
+      const target = `${c.name}:${writeTarget(a)}`;
+      kind = "write"; key = `w\0${target}\0${normalizeResult(compact(a, 50_000))}`;
+      if (!this.fresh(key)) return null;
+      this.turnWrites.add(target);
+    } else if (isExternal(c) && !INFORMATION_TOOLS.has(c.name)) {
+      kind = "action"; key = `a\0${callSig(c)}\0${normalizeResult(output)}`;
+      if (!this.fresh(key)) return null;
+    } else {
+      // Information: the result counts, not the arguments that produced it.
+      kind = "information"; key = `i\0${c.name}\0${normalizeResult(output)}`;
+      if (!this.fresh(key)) return null;
+    }
+    this.turnKinds.add(kind);
+    return kind;
+  }
+  /** The turn's verdict; resets the turn. */
+  endTurn(): boolean {
+    const onlyRewrites = this.turnKinds.size === 1 && this.turnKinds.has("write") && [...this.turnWrites].every((t) => this.lastWrites.includes(t));
+    const progress = this.turnKinds.size > 0 && !onlyRewrites;
+    this.lastWrites = [...this.turnWrites];
+    this.turnKinds = new Set(); this.turnWrites = new Set();
+    return progress;
+  }
+  save(): void { writeJson(this.file, { seen: this.seen, lastWrites: this.lastWrites }); }
 }
 
 export interface CarryStep { name: string; args: string; ok: boolean; refused?: string; result: string; external: boolean; sig: string }
@@ -144,6 +191,17 @@ export function carryLines(c: Carry): string[] {
   if (c.done.length) out.push(`Already done — do not repeat (an identical repeat is not executed): ${c.done.map((d) => `${d.name} ${d.args}`).join("; ")}.`);
   if (c.notRun.length) out.push(`Requested but not run yet: ${c.notRun.map((d) => `${d.name} ${d.args}`).join("; ")}.`);
   return out;
+}
+
+/** The continuation block bounded to `maxChars`: call results are dropped first (oldest), then calls; the plan, the
+ *  completed external actions and the calls not yet run always stay (each shortened if needed). */
+export function carryLinesWithin(c: Carry, maxChars: number): string[] {
+  const x: Carry = { ...c, calls: c.calls.map((k) => ({ ...k })) };
+  const size = () => carryLines(x).join("\n").length;
+  while (size() > maxChars && x.calls.some((k) => k.result)) x.calls.find((k) => k.result)!.result = "";
+  while (size() > maxChars && x.calls.length) x.calls.shift();
+  if (size() > maxChars) { x.plan = x.plan.slice(0, 300); x.done = x.done.slice(-8); x.notRun = x.notRun.slice(0, 5); }
+  return carryLines(x).map((l) => l.slice(0, maxChars));
 }
 
 /** v94: Fleet Control's notices, newest first in attention.notices; each is shown once (by id). */

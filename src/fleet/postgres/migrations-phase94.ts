@@ -13,8 +13,18 @@
  *    changes `eventsDigest` (v67), which wakes a waiting agent.
  * 3. WAKE. `eventsDigest` also changes when one of the agent's requests is superseded, and when one of its jobs finishes
  *    (code, channel, identity, provider and media jobs). `recentEvents` lists notices, supersessions and finished jobs.
+ * 4. RUN BUDGET (owner, 2026-10-18: "a run-specific total AI ceiling … enforced before requests, accounting for in-flight
+ *    work and retries"; a daily fuse is not a fresh run allowance). The owner opens ONE bounded run for an agent: a
+ *    ceiling in the ledger currency and an end time. Before every routed or conversation request, the controller adds
+ *    what the run has cost so far (every call logged for this agent since the run began, whoever paid: the agent's own
+ *    work and the treasury-paid conversation turns), every request still in flight, and this request's worst-case
+ *    estimate. A request that would cross the ceiling, or that comes after the end time, is refused before the provider
+ *    (free). It is a pilot control: one run at a time, ended by the owner or by its end time. It is never a standing
+ *    limit on the business.
  */
+import { V22_SQL } from "./migrations-phase22.js";
 import { V26_SQL } from "./migrations-phase26.js";
+import { V62_SQL } from "./migrations-phase62.js";
 import { V79_SQL } from "./migrations-phase79.js";
 import { restate as restateRaw } from "./migrations-phase42.js";
 
@@ -62,6 +72,20 @@ const ATTENTION = restate(V79_SQL, "fleet_agent_attention", [
              AND created_at > now() - interval '14 days' ORDER BY created_at DESC LIMIT ${NOTICES_IN_ATTENTION}) m))`],
 ]);
 
+export const RUN_BUDGET_MAX_HOURS = 24;
+const RUN_CHECK = `  -- v94: an open run budget is checked before the provider: the run's cost so far + requests in flight + this one's worst case.
+  r := fleet_cognition_run_refusal(p_agent, p_estimate_usd_cents);
+  IF r IS NOT NULL THEN RETURN r; END IF;
+`;
+const ROUTED_AUTHORIZE = restate(V22_SQL, "svc_cognition_routed_authorize", [
+  [`  -- Every legacy circuit breaker (switches, pause, busy, rate, daily budget, FX, cash, protected capital, provider credit).
+  r := svc_cognition_authorize(p_agent, p_estimate_usd_cents);`, `${RUN_CHECK}  -- Every legacy circuit breaker (switches, pause, busy, rate, daily budget, FX, cash, protected capital, provider credit).
+  r := svc_cognition_authorize(p_agent, p_estimate_usd_cents);`],
+]);
+const CONVERSATION_AUTHORIZE = restate(V62_SQL, "svc_cognition_conversation_authorize", [
+  [`  -- v62: inside an open owner turn of this Agent`, `${RUN_CHECK}  -- v62: inside an open owner turn of this Agent`],
+]);
+
 export const V94_SQL = `
 CREATE TABLE fleet_owner_request_supersessions (
   request_id    uuid        PRIMARY KEY REFERENCES fleet_owner_requests (request_id),
@@ -100,6 +124,99 @@ END $$;
 ${REQUEST_JSON}
 
 ${ATTENTION}
+
+-- ═══ 4. Run budget ═══
+CREATE TABLE fleet_cognition_run_budgets (
+  run_id        uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent_id      text        NOT NULL REFERENCES fleet_agents (agent_id),
+  ceiling_minor bigint      NOT NULL CHECK (ceiling_minor BETWEEN 1 AND 100000),
+  starts_at     timestamptz NOT NULL DEFAULT now(),
+  ends_at       timestamptz NOT NULL,
+  note          text        NOT NULL CHECK (length(note) BETWEEN 3 AND 300),
+  set_by        text        NOT NULL,
+  ended_at      timestamptz,
+  ended_by      text,
+  end_reason    text        CHECK (length(end_reason) <= 300),
+  CHECK (ends_at > starts_at)
+);
+CREATE UNIQUE INDEX fleet_cognition_run_budgets_open ON fleet_cognition_run_budgets (agent_id) WHERE ended_at IS NULL;
+
+-- What the open run of an agent has cost (ledger minor units ×1e6): every logged call of this agent since it began.
+CREATE FUNCTION fleet_cognition_run_json(p_agent text) RETURNS jsonb LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT CASE WHEN b.run_id IS NULL THEN NULL ELSE jsonb_build_object('runId', b.run_id, 'ceilingMinor', b.ceiling_minor, 'startsAt', b.starts_at, 'endsAt', b.ends_at,
+    'note', b.note, 'open', b.ended_at IS NULL AND now() < b.ends_at,
+    'spentMicro', (SELECT COALESCE(sum(COALESCE(l.charged_microcents, l.charged_cents * 1000000)), 0) FROM fleet_cognition_log l WHERE l.agent_id = b.agent_id AND l.at >= b.starts_at
+                    AND (b.ended_at IS NULL OR l.at <= b.ended_at)),
+    'calls', (SELECT count(*) FROM fleet_cognition_log l WHERE l.agent_id = b.agent_id AND l.at >= b.starts_at AND (b.ended_at IS NULL OR l.at <= b.ended_at)),
+    'inflightMicro', (SELECT COALESCE(sum(i.estimate_cents), 0) * 1000000 FROM fleet_cognition_inflight i WHERE i.agent_id = b.agent_id),
+    'endedAt', b.ended_at, 'endReason', b.end_reason) END
+  FROM (SELECT NULL) d LEFT JOIN LATERAL (SELECT * FROM fleet_cognition_run_budgets WHERE agent_id = p_agent ORDER BY starts_at DESC LIMIT 1) b ON true
+$$;
+
+-- Null = no open run or within it; otherwise the refusal (before the provider: nothing is spent).
+CREATE FUNCTION fleet_cognition_run_refusal(p_agent text, p_estimate_usd_cents bigint) RETURNS jsonb LANGUAGE plpgsql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE b fleet_cognition_run_budgets; j jsonb; v_acct text; fx fleet_fx_rates; v_rate bigint := 1000000; v_est_micro bigint;
+BEGIN
+  SELECT * INTO b FROM fleet_cognition_run_budgets WHERE agent_id = p_agent AND ended_at IS NULL;
+  IF NOT FOUND THEN RETURN NULL; END IF;
+  IF now() >= b.ends_at THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_COGNITION_RUN_ENDED', 'reason', 'the run''s time limit has passed'); END IF;
+  SELECT accounting_currency INTO v_acct FROM fleet_economic_model WHERE id = 1;
+  IF v_acct IS DISTINCT FROM 'USD' THEN
+    fx := fleet_fx_latest('USD', v_acct);
+    IF fx.rate_id IS NULL THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_FX_UNAVAILABLE'); END IF;
+    v_rate := fx.rate_micro;
+  END IF;
+  v_est_micro := GREATEST(ceil(GREATEST(COALESCE(p_estimate_usd_cents, 0), 1)::numeric * v_rate / 1000000)::bigint, 1) * 1000000;
+  j := fleet_cognition_run_json(p_agent);
+  IF (j ->> 'spentMicro')::bigint + (j ->> 'inflightMicro')::bigint + v_est_micro > b.ceiling_minor * 1000000 THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_COGNITION_RUN_BUDGET_EXHAUSTED',
+      'reason', format('the run''s ceiling (%s minor units) does not cover this request''s worst case on top of what the run has cost', b.ceiling_minor));
+  END IF;
+  RETURN NULL;
+END $$;
+
+CREATE FUNCTION fleet_admin_cognition_run_start(p_agent text, p_ceiling_minor bigint, p_hours numeric, p_note text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_id uuid;
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  PERFORM fleet_require_operator_approver(substr(p_actor, 10), p_agent);
+  IF NOT EXISTS (SELECT 1 FROM fleet_agents WHERE agent_id = p_agent) THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no such agent'; END IF;
+  IF p_ceiling_minor IS NULL OR p_ceiling_minor NOT BETWEEN 1 AND 100000 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: the ceiling is 1..100000 minor units'; END IF;
+  IF p_hours IS NULL OR p_hours <= 0 OR p_hours > ${RUN_BUDGET_MAX_HOURS} THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: hours is 0..${RUN_BUDGET_MAX_HOURS}'; END IF;
+  IF p_note IS NULL OR length(btrim(p_note)) NOT BETWEEN 3 AND 300 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: say what the run is (3..300 characters)'; END IF;
+  IF EXISTS (SELECT 1 FROM fleet_cognition_run_budgets WHERE agent_id = p_agent AND ended_at IS NULL AND now() < ends_at) THEN
+    RAISE EXCEPTION 'FLEET_INVALID_STATE: a run is already open for this agent: end it first';
+  END IF;
+  UPDATE fleet_cognition_run_budgets SET ended_at = ends_at, ended_by = 'time limit', end_reason = 'the time limit passed'
+   WHERE agent_id = p_agent AND ended_at IS NULL;
+  INSERT INTO fleet_cognition_run_budgets (agent_id, ceiling_minor, ends_at, note, set_by)
+    VALUES (p_agent, p_ceiling_minor, now() + make_interval(secs => p_hours * 3600), btrim(p_note), p_actor) RETURNING run_id INTO v_id;
+  PERFORM fleet_event('cognition_run_started', p_agent, p_actor, jsonb_build_object('runId', v_id, 'ceilingMinor', p_ceiling_minor, 'hours', p_hours));
+  RETURN jsonb_build_object('ok', true, 'run', fleet_cognition_run_json(p_agent),
+    'note', 'every routed and conversation request of this agent is checked against the ceiling before the provider; the run ends at its end time or when you end it');
+END $$;
+
+CREATE FUNCTION fleet_admin_cognition_run_end(p_agent text, p_reason text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE n integer;
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  PERFORM fleet_require_operator_approver(substr(p_actor, 10), p_agent);
+  UPDATE fleet_cognition_run_budgets SET ended_at = LEAST(now(), ends_at), ended_by = p_actor, end_reason = left(COALESCE(NULLIF(btrim(p_reason), ''), 'ended by the owner'), 300)
+   WHERE agent_id = p_agent AND ended_at IS NULL;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  IF n > 0 THEN PERFORM fleet_event('cognition_run_ended', p_agent, p_actor, jsonb_build_object('reason', left(COALESCE(p_reason, ''), 300))); END IF;
+  RETURN jsonb_build_object('ok', true, 'ended', n > 0, 'run', fleet_cognition_run_json(p_agent));
+END $$;
+CREATE FUNCTION fleet_admin_cognition_run(p_agent text) RETURNS jsonb LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$ SELECT COALESCE(fleet_cognition_run_json(p_agent), 'null'::jsonb) $$;
+
+${ROUTED_AUTHORIZE}
+
+${CONVERSATION_AUTHORIZE}
 
 REVOKE ALL ON ALL TABLES IN SCHEMA @@SCHEMA@@ FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA @@SCHEMA@@ FROM PUBLIC;

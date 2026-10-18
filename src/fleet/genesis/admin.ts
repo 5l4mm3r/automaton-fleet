@@ -524,6 +524,14 @@ export class GenesisOps {
   decideOwnerRequest(requestId: string, decision: "approved" | "declined" | "answered", response: string | null, actor: string) {
     return this.one<Record<string, unknown>>(`SELECT fleet_owner_request_decide($1, $2, $3, $4) AS r`, [requestId, decision, response, actor]);
   }
+  /** v94: one bounded run for an agent: a total AI ceiling (ledger minor units) checked before every request, and an end time. */
+  cognitionRunStart(agentId: string, ceilingMinor: number, hours: number, note: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_admin_cognition_run_start($1, $2, $3, $4, $5) AS r`, [agentId, ceilingMinor, hours, note, actor]);
+  }
+  cognitionRunEnd(agentId: string, reason: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_admin_cognition_run_end($1, $2, $3) AS r`, [agentId, reason, actor]);
+  }
+  cognitionRun(agentId: string) { return this.one<Record<string, unknown>>(`SELECT fleet_admin_cognition_run($1) AS r`, [agentId]); }
   /** v94: a resolved request replaced by the owner's current decision (recorded once; the request itself never changes). */
   supersedeOwnerRequest(requestId: string, decision: string, actor: string) {
     return this.one<Record<string, unknown>>(`SELECT fleet_admin_owner_request_supersede($1, $2, $3) AS r`, [requestId, decision, actor]);
