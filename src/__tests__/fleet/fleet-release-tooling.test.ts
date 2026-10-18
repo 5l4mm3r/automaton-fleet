@@ -257,7 +257,7 @@ describe("fleet-rollout.sh cutover: every retry guard before the first runtime c
 });
 
 describe("teelog: the log is complete when the script returns, with the script's own exit status (2026-10-18)", () => {
-  const LOGGED = ["fleet-rollout.sh", "fleet-upgrade-rehearsal.sh", "fleet-edge.sh"];
+  const LOGGED = ["fleet-rollout.sh", "fleet-upgrade-rehearsal.sh", "fleet-edge.sh", "fleet-measured-attempt.sh"];
   const helperOf = (f: string) => { const src = fs.readFileSync(path.join(SCRIPTS, f), "utf8"); const m = src.match(/^SELF=\$\(readlink[^\n]*\nteelog\(\) \{[\s\S]*?\n\}\n/m); return m?.[0] ?? null; };
 
   it("every logged release script uses the same helper and none keeps an unwaited process-substitution tee", () => {

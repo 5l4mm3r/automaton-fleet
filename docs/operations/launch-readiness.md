@@ -159,16 +159,17 @@ The bank route (v91, "My deposit") stays available if a dedicated bank account i
   the run); stopped by hand at 19:14:42Z, no call in between. While sales are closed the page answers 404 to everyone.
   Proves private publishing only: no payment, delivery, support or refund; not launch readiness.
   Fixed for the next release: (1) a waiting founder whose runtime changed wakes once and is told (`upgradeLine`, the
-  runtime recorded in mind-continuity.json); (2) the attempt watchdog's success rule uses `published_at`, its terms are
-  `start` arguments (no stale budget), the commit comes from the staged pins, and `status` shows the waiting state;
-  (3) the repeated-failure cap 9f02351 ships with it; (4) fleet-rollout.sh, fleet-upgrade-rehearsal.sh and fleet-edge.sh
+  runtime recorded in mind-continuity.json); only the previous process's repeat blocks reset — permissions, limits and
+  approvals stay with FleetController on every action, and a carried turn's completed actions stay blocked; (2) the attempt script is versioned as `scripts/fleet-measured-attempt.sh` (run from
+  the installed release; the owner's terms are `start` arguments, so no stale budget; `status` shows the waiting state),
+  and its success is the INTENDED offer, published during the attempt on a passing review of its current files; (3) the repeated-failure cap 9f02351 ships with it; (4) fleet-rollout.sh, fleet-upgrade-rehearsal.sh and fleet-edge.sh
   log through `teelog` (a re-run piped through tee, which a pipeline waits for), so a log is complete when the script
   returns.
 
 ### 2b. Measured live attempt (as planned for attempt 1; attempts 1 and 2 ran — see the proof log)
 | | |
 |---|---|
-| Script | staged as `~/rlc99/attempt.sh` (`start`, `status`, `stop`; the watchdog runs `watch` every 5 min); nothing runs before the owner's approval |
+| Script | `scripts/fleet-measured-attempt.sh`, run from the INSTALLED release only (it refuses a copy): `bash /opt/automaton-fleet/current/scripts/fleet-measured-attempt.sh start <ceilingPence> <priorPence> <totalPence> [<offerSlug>]`, then `status` / `stop [why]`; the watchdog runs `watch` every minute. The owner's approved terms are its arguments (never edited into a file); `<offerSlug>` names the offer the attempt is for. Success = that offer published during the attempt (an `offer_published` event since the start) on a passing review of its current files; without a slug, an offer created during the attempt. Nothing runs before the owner's approval. (Attempts 1 and 2 used hand-staged copies in `~/rlc99/` and `~/rlc100/`.) |
 | Task | Agent-1, without owner coaching: ONE product under its own brand, passed by the inspector, published as a private offer (sales closed). No purchase, refund, card, mail or account work. Stage 2 (the £5 purchase, revision and refund) comes only after this passes |
 | Before it | The owner's existing decision (Gumroad deferred, 10-10) recorded as superseding Agent-1's Gumroad request (`owner-request-supersede`, one command). Fleet Control's notice reaches Agent-1 in its first turn |
 | AI ceiling | **£2.00 for the run alone**, with its own run budget (`cognition-run start <Agent-1> 200 6 …`) and no relation to the day's earlier spending or the daily reset. It covers every model call logged for Agent-1 from the run's start: its own work and any treasury-paid conversation turn. Fleet Control reviews are billed separately; none are expected without spending, and any that occur are reported |

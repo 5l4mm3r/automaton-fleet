@@ -238,14 +238,16 @@ export function eventsSinceLine(attention: unknown, since: string | null | undef
  * conversation history and the decision log are not part of it.
  */
 /**
- * 2026-10-18 (attempt 2): the one line a founder gets on its first turn on a new runtime. Factual, no instruction: what changed
- * and what no longer carries over (the loop guard's refusals live in the old process). Completed actions stay completed.
+ * 2026-10-18 (attempt 2): the one line a founder gets on its first turn on a new runtime. Factual, no instruction. What
+ * resets is only the previous process's in-memory loop guard (as on any restart); authority does not: every permission,
+ * limit and approval is checked by FleetController on each action, and a carried turn's completed actions stay blocked.
  */
 export function upgradeLine(from: string | null, to: string | undefined): string | null {
   if (!from || !to) return null;
   const short = (c: string) => (/^[0-9a-f]{40}$/.test(c) ? c.slice(0, 7) : c);
-  return `Your runtime was upgraded since your last turn (${short(from)} → ${short(to)}). Refusals and duplicate-action blocks from before `
-    + "the upgrade are not carried over: an action refused before may be tried again if it still matters. Actions you completed stay completed.";
+  return `Your runtime was upgraded since your last turn (${short(from)} → ${short(to)}). Repeat blocks held by the previous runtime `
+    + "were reset: an action blocked as a repeat may be tried again if it still matters. Permissions, limits and approvals are unchanged "
+    + "and are checked on every action as before; what you completed is still on record.";
 }
 
 export function wakeDigest(memoryDir: string, workspaceDir: string, economics: Record<string, unknown>, signals = ""): string {

@@ -43,7 +43,7 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
     fs.writeFileSync(path.join(d.m, "goals.json"), JSON.stringify([{ id: "g1", title: "Publish the landlord compliance tracker", status: "open" }]));
   }
   const world = { eventsDigest: hex32(1), notices: [] as Array<{ id: string; at: string; body: string }>, ownerPending: 0, cash: 9_906,
-    requests: [] as unknown[], storefrontStatus: "draft", economyCalls: [] as string[] };
+    requests: [] as unknown[], storefrontStatus: "draft", economyCalls: [] as string[], refuse: {} as Record<string, string> };
   const packets: string[] = [];
   const outputsSeen: string[] = [];
   let infers = 0, turn = 0, step = 0;
@@ -77,6 +77,8 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
     ledger: async () => ({}), ownerRequests: async () => ({ ok: true, requests: world.requests }),
     economy: async (op: string, args?: Record<string, unknown>) => {
       world.economyCalls.push(op);
+      const refusal = world.refuse[`${op}:${String((args?.args as { offerId?: unknown } | undefined)?.offerId ?? args?.offerId ?? "")}`];
+      if (refusal) return { ok: false, code: refusal };                  // the controller refuses (its authority, per call)
       if (op === "storefront.products" || op === "offer.list") return { ok: true, products: [{ id: "p1", status: world.storefrontStatus }] };
       if (op === "owner.reply") return { ok: true };
       return { ok: true, op, args };
@@ -372,7 +374,8 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     await beats(onB, 10);
     expect(onB.infers()).toBe(1);
     expect(onB.packets[0]).toContain("Your runtime was upgraded since your last turn (94dce86 → 32634bf)");
-    expect(onB.packets[0]).toContain("an action refused before may be tried again if it still matters");
+    expect(onB.packets[0]).toContain("an action blocked as a repeat may be tried again if it still matters");
+    expect(onB.packets[0]).toContain("Permissions, limits and approvals are unchanged");
     expect(onB.packets[0]).not.toContain("Nothing has changed since your last turn");
     expect(cont()).toMatchObject({ waiting: true, runtime: B });
     const againB = rig(wait, { root, runtime: B });
@@ -386,5 +389,28 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     await beats(fromLegacy, 5);
     expect(fromLegacy.infers()).toBe(1);
     expect(fromLegacy.packets[0]).toContain("(an earlier runtime → 32634bf)");
+  });
+
+  it("10. an upgrade wake keeps authority: a completed action stays blocked, a non-grantable tool and a controller refusal are still refused", async () => {
+    const A = "94dce86f43898d98a596b2457a47fa43335c238f", B = "32634bfe7f9062a6484da713e985612acd80e694";
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "wc-auth-"));
+    const tries = () => [c("offer", { op: "publish", args: { offerId: "o1" } }), c("transfer_credits", { to: "x", amount: 1 }), c("offer", { op: "publish", args: { offerId: "o9" } })];
+    // On A: o1 is published (a completed external action); a non-grantable tool and a controller-refused publish fail;
+    // the turn is cut off at its step limit, so its record (completed actions included) is carried.
+    const onA = rig((t, s) => (s === 1 ? { calls: tries() } : { calls: [c("list_goals")] }), { root, runtime: A, maxSteps: 2 });
+    onA.world.refuse["offer.publish:o9"] = "FLEET_SALES_CLOSED";
+    await onA.mind.turn("hb");
+    expect(onA.world.economyCalls.filter((x) => x === "offer.publish")).toHaveLength(2);    // o1 done, o9 refused
+    expect(fs.existsSync(path.join(root, "s", CARRY_FILE))).toBe(true);
+    // On B (the upgrade): the same three calls.
+    const onB = rig((t, s) => (s === 1 ? { calls: tries() } : { calls: [c("sleep", { reason: "checked", wakeOn: "sales opening" })] }), { root, runtime: B });
+    onB.world.refuse["offer.publish:o9"] = "FLEET_SALES_CLOSED";
+    await beats(onB, 3);
+    expect(onB.packets[0]).toContain("Your runtime was upgraded since your last turn (94dce86 → 32634bf)");
+    const seen = onB.outputsSeen.join("\n");
+    expect(seen).toContain("NOT EXECUTED FLEET_ALREADY_DONE");                 // o1: the completed publish is not repeated
+    expect(seen).toContain("FLEET_CAPABILITY_NOT_GRANTABLE");                  // the manifest still decides, per call
+    expect(seen).toContain("FLEET_SALES_CLOSED");                              // the controller still decides, per call
+    expect(onB.world.economyCalls.filter((x) => x === "offer.publish")).toHaveLength(1);    // only o9 reached the controller (and was refused)
   });
 });
