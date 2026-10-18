@@ -57,7 +57,7 @@ to you. Stop if the merchant needs anything beyond card + email.
 ### Authorisation requested (once, for both proofs)
 | Item | Exact setting | Ends |
 |---|---|---|
-| Resume Agent-1 | fuse unchanged (754 a day, 20 turns an hour) | paused again when the proofs end, on a material failure, or after 72 h |
+| Resume Agent-1 | daily fuse 754 unchanged; hourly cap 20 → 600 (owner, 2026-10-18, during the proof) | paused again when the proofs end, on a material failure, or after 72 h |
 | Outward release (proof only, not launch) | actions: browser (the purchase merchant's origin only), mail (to the owner's address only), account_register (that merchant) | expires after 72 h |
 | Custody (money out) | max £5.00 per instruction, £5.00 a day, for 72 h — the refund only | expires |
 | Card authority | identity autonomy ON with card, max £5 per charge, £5 a day | reset to the launch setting at activation |
@@ -105,7 +105,7 @@ The bank route (v91, "My deposit") stays available if a dedicated bank account i
    pause is then what keeps it from acting, so it stays paused. Agent-1 chooses its channels; a platform's own onboarding
    blocks only that channel.
 9. Money out stays active for refunds; payouts / fee withdrawals only by your separate decision.
-10. Resume Agent-1 (fuse 754 a day, 20 turns an hour, unless you set others). Agent-2 stays paused (it also needs its own
+10. Resume Agent-1 (daily fuse 754; hourly cap 600 — owner 2026-10-18: the 20-an-hour cap blocked every turn, customer replies included, and stalled the proof after 7 minutes; the cap only catches a runaway, the loop guard and the daily fuse do the rest). Agent-2 stays paused (it also needs its own
     runtime upgrade before any future resume).
 
 ## 6. Optional later (never delays launch)
