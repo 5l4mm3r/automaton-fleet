@@ -916,7 +916,10 @@ export class FounderMind {
     // the founder's own review time comes. An owner turn is news: it ends any stall.
     const declaredNow = sleptOnly && !!((wakeOn ?? prev?.wakeOn) || (reviewAt ?? (!reviewDue ? prev?.reviewAt : null)));
     const stalled = !W || owner || result.progress ? 0 : (prev?.stalled ?? 0) + 1;
-    const waitNow = W && !owner && !result.progress && !cutOff && (stalled >= 2 || declaredNow);
+    // A turn that ENDS by declaring what it waits for (sleep with wakeOn / reviewAt) waits at once, even if it also did work:
+    // the founder said there is nothing more to do until that happens — no extra paid turn to find that out again.
+    const declaredHere = !!(wakeOn || reviewAt);
+    const waitNow = W && !owner && !cutOff && (declaredHere || (!result.progress && (stalled >= 2 || declaredNow)));
     result.waiting = waitNow;
     let digest: string | null = null;
     if (sleptOnly || waitNow) {

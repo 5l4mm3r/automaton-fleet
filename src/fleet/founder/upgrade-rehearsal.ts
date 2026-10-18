@@ -408,6 +408,9 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
     const rb5 = await rollbackFounderRuntime({ agentId: a, host: o.host, registry: genesis, upgradeId: again.upgradeId!, reason: "rehearsal: rollback after founder-v5 use", actor: o.actor, healthTimeoutMs: health, pollMs: poll, log });
     const v4Before = scripted.doctrineSeen.v4;
     const turnsRb = await turnsOf();
+    // 2026-10-18 (work continuity): the state the v5 runtime left may be a DECLARED hibernation, which the previous runtime
+    // also honours (it waits for an event). Give it one — a Fleet Control notice — so "it keeps living" is observable.
+    await owner.query(`SELECT fleet_spend_review_notice($1, $2)`, [a, "Fleet Control: rehearsal notice after the rollback."]);
     // The previous runtime keeps living on the v5-written state; routed calls it makes carry no doctrine and are served v4.
     const livedOn = await waitFor(async () => ((await turnsOf()) > turnsRb || scripted.doctrineSeen.v4 > v4Before ? true : null), timeout, poll);
     check("rollback after v5 use: the previous runtime runs healthy on the v5-written state — journal, marked goals and memory kept byte for byte, nothing restored over them",

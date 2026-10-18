@@ -335,4 +335,17 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(r.infers()).toBe(0);                                     // nothing was sent half-formed
     expect(reports.some((x) => x.fault === "packet_unfit")).toBe(true);
   });
+
+  it("8. a working turn that ends by declaring what it waits for waits at once: no extra paid turn; its wake condition still wakes it", async () => {
+    const r = rig((t, s) => (t === 1 && s === 1
+      ? { calls: [c("write_file", { path: "notes/plan.md", content: "plan v1" }), c("sleep", { reason: "plan written; waiting for the buyer", wakeOn: "a customer message" })] }
+      : { calls: [c("sleep", { reason: "x" })] }));
+    await r.mind.turn("hb 1");
+    expect(r.infers()).toBe(1);
+    await beats(r, 30);
+    expect(r.infers()).toBe(1);                                     // nothing changed: no call at all
+    r.world.eventsDigest = hex32(77);                               // the awaited event (e.g. a customer message) arrives
+    await beats(r, 2);
+    expect(r.infers()).toBeGreaterThan(1);
+  });
 });
