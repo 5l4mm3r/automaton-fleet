@@ -8,7 +8,8 @@
  *  - the refund window (custody money-out + custody's own refund switch) opens only for the one bound refund: this proof
  *    order's, the only one queued in the Fleet; any refund on another order stops the proof and closes it;
  *  - status shows the EFFECTIVE money-out setting (the custody process, not runtime.env) and tells an agent-approved refund
- *    from the owner's override; completion needs the agent's wallet hold released.
+ *    from the owner's override; completion needs THIS proof's refund hold released and the wallet reconciled to the start
+ *    less Agent-1's AI charges since then (± other own-cash postings) — never the starting balance back.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { spawnSync } from "child_process";
@@ -45,6 +46,7 @@ current() { echo "/opt/automaton-fleet/releases/\${CURRENT:-${REL}}"; }
 flag_false() { [[ "$1" != "\${BAD_FLAG:-none}" ]]; }
 switch_effective() { if [[ -f "${dir}/dropin.conf" || -n "\${STALE_ENV:-}" ]]; then echo ON; else echo off; fi; }
 spendable() { echo "\${SPEND:-9758}"; }
+wallet() { echo "\${NOW:-9758} \${HOLD:-0} \${ALL:-\${HOLD:-0}} \${AI:-0} \${OTHERCASH:-0}"; }
 Q() { echo "$1" >> "${dir}/sql.log"
   case "$1" in
     *"paused FROM fleet_founder_cognition WHERE agent_id = '${A1}'"*) if [[ -f "${dir}/paused-1" ]]; then echo t; else echo "\${P1:-t}"; fi;;
@@ -68,6 +70,7 @@ Q() { echo "$1" >> "${dir}/sql.log"
     *"count(*) FROM fleet_paypal_refund_requests WHERE order_id"*) echo "\${REFUNDS:-0}";;
     *"FROM fleet_order_deliveries"*) echo "\${DELIVERIES:-1}";;
     *"fleet_offer_proof_returns"*) echo "\${RETURNS:-0}";;
+    *"->> 'paypalDisputeExposureMinor'"*) echo "\${EXPOSURE:-0}";;
     *"fleet_ledger_verify"*) echo true;;
     *"EXISTS (SELECT 1 FROM fleet_customer_messages b"*) echo "\${UNANSWERED:-f}";;
     *fleet_admin_cognition_run*) echo '{"open":true,"spentMicro":1000000,"inflightMicro":0}';;
@@ -110,6 +113,7 @@ Q() { echo "$1" >> "${dir}/sql.log"
       [["start", "200"], { QUEUED: "1" }, "refunds are already queued"],
       [["start", "200"], { REFUNDABLE: "1" }, "another refundable sale exists"],
       [["start", "200"], { SPEND: "499" }, "cannot bear the £5 refund hold"],
+      [["start", "200"], { EXPOSURE: "1" }, "PayPal already holds some of Agent-1's money"],
       [["start", "200"], { OFFER_OK: "0" }, "is not Agent-1's published product at most £5 on a passing review"],
     ];
     for (const [args, env, why] of cases) {
@@ -167,7 +171,18 @@ Q() { echo "$1" >> "${dir}/sql.log"
   it("watch: completion needs the wallet hold released; duplicates, an unanswered buyer and idle work stop it", () => {
     expect(run(["start", "200"]).code).toBe(0);
     expect(watch({ COMPLETED: "1", RETURNS: "1" }).out).toContain("PROOF COMPLETE");
-    expect(watch({ COMPLETED: "1", RETURNS: "1", SPEND: "9258" }).out).toContain("FAILURE: the refund is recorded but Agent-1's wallet hold is not released");
+    // Agent-1 paid 40p of AI during the proof: the balance is lower than at the start, and that is correct.
+    const ok = watch({ COMPLETED: "1", RETURNS: "1", NOW: "9718", AI: "40" });
+    expect(ok.out).toContain("PROOF COMPLETE: purchase, delivery and refund recorded once; this proof's refund hold released; Agent-1's wallet = start − AI charges 40p;");
+    expect(ok.out).toContain("this proof's refund hold: 0p (none / released)");
+    expect(ok.out).toContain("9758p at start − AI charges 40p (Fleet-recorded, provisional) + other 0p − this hold 0p = 9718p expected; spendable now 9718p (reconciled)");
+    // The £5 hold still on (the refund not yet confirmed), or held elsewhere: not complete.
+    expect(watch({ COMPLETED: "1", RETURNS: "1", NOW: "9218", AI: "40", HOLD: "500" }).out)
+      .toContain("FAILURE: the refund is recorded but this proof's refund hold is not released (500p held; all PayPal holds 500p)");
+    expect(watch({ COMPLETED: "1", RETURNS: "1", ALL: "500" }).out).toContain("this proof's refund hold is not released (0p held; all PayPal holds 500p)");
+    // Released, but money is missing beyond the AI charges: not reconciled.
+    expect(watch({ COMPLETED: "1", RETURNS: "1", NOW: "9700", AI: "40" }).out)
+      .toContain("FAILURE: the hold is released but Agent-1's wallet does not reconcile: spendable 9700p, expected 9718p (9758p − AI 40p + other 0p)");
     expect(watch({ COMPLETED: "1", RETURNS: "0" }).out).not.toContain("PROOF COMPLETE");
     expect(watch({ ORDERS: "2" }).out).toContain("FAILURE: a second proof order");
     expect(watch({ REFUNDS: "2" }).out).toContain("FAILURE: a second refund request");

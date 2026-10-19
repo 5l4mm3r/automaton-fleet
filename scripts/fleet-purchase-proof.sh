@@ -17,8 +17,9 @@
 #                    this proof order's, for at most what was paid: custody money-out (2 h) and custody's refund switch
 #                    (REAL_PAYMENTS_ENABLED=true for the custody unit only; runtime.env is unchanged, so Fleet HQ and the
 #                    Operator API keep showing false — never read that as "money-out is off"). It closes at the stop.
-#                    Stops on: completion (refund recorded once as owner capital, the agent's wallet hold released, ledger
-#                    verified); any refund on another order; a second proof order, refund or PayPal refund; a third
+#                    Stops on: completion (refund recorded once as owner capital; THIS proof's refund hold released and
+#                    Agent-1's wallet reconciled — start minus its AI charges since the start, ± any other own-cash
+#                    posting; the starting balance is NOT expected back; ledger verified); any refund on another order; a second proof order, refund or PayPal refund; a third
 #                    delivery; an uncertain outcome; a buyer message unanswered 30 min; 40 model calls without a new
 #                    customer event; a refund not sent 30 min after the window opened; the AI ceiling; 24 h. Waiting for
 #                    the buyer never stops it.
@@ -57,6 +58,20 @@ switch_effective() {
   if sudo -n cat /proc/$pid/environ 2>/dev/null | tr '\0' '\n' | grep -qx 'REAL_PAYMENTS_ENABLED=true'; then echo ON; else echo off; fi
 }
 spendable() { Q "SELECT (fleet_agent_wallet_measure('$A1') ->> 'spendableMinor')"; }
+# One snapshot of Agent-1's wallet for the proof order $1: "spendable thisHold allHolds aiCharges otherCash". thisHold is
+# PayPal's exposure on the proof checkout (its refund in flight, row 21); allHolds is every PayPal hold on Agent-1's money;
+# aiCharges are its inference and AI-credit charges since the start (Fleet-recorded, provisional); otherCash is every other
+# posting on its cash since the start (+ in, − out).
+wallet() {
+  Q "WITH m AS (SELECT fleet_agent_wallet_measure('$A1') AS m),
+          c AS (SELECT CASE p.side WHEN 'D' THEN p.amount_cents ELSE -p.amount_cents END AS v, j.kind FROM fleet_ledger_postings p
+                  JOIN fleet_ledger_journal j ON j.journal_id = p.journal_id
+                 WHERE p.account_id = fleet_ledger_account('$A1', 'agent_cash') AND j.recorded_at >= '$(START)')
+     SELECT (m ->> 'spendableMinor') || ' ' || COALESCE((SELECT fleet_paypal_sale_exposure(z.checkout_id) FROM fleet_customer_orders z WHERE z.order_id = NULLIF('$1', '')::uuid), 0)
+            || ' ' || COALESCE(m ->> 'paypalDisputeExposureMinor', '?')
+            || ' ' || COALESCE((SELECT -sum(v) FROM c WHERE kind IN ('inference_charge', 'ai_credit_acquisition_cost')), 0)
+            || ' ' || COALESCE((SELECT sum(v) FROM c WHERE kind NOT IN ('inference_charge', 'ai_credit_acquisition_cost')), 0) FROM m"
+}
 START() { cat "$D/proof-start.txt" 2>/dev/null; }
 WINDOW() { cat "$D/refund-window.txt" 2>/dev/null; }
 CEILING=0; SP0=0; [[ -f "$D/proof-terms.txt" ]] && read -r CEILING SP0 < "$D/proof-terms.txt"
@@ -98,8 +113,9 @@ results() {
   esac
   echo "    refund executed: $(Q "SELECT COALESCE(jsonb_agg(jsonb_build_object('status', status, 'amountMinor', amount_minor, 'paypal', paypal_refund_id IS NOT NULL)), '[]') FROM fleet_paypal_refund_requests WHERE order_id = '$o'"); returned as owner capital: $(Q "SELECT COALESCE(jsonb_agg(jsonb_build_object('kind', kind, 'amountMinor', amount_minor)), '[]') FROM fleet_offer_proof_returns r JOIN fleet_customer_orders z ON z.checkout_id = r.checkout_id WHERE z.order_id = '$o'")"
   echo "    PayPal's fee on the capture (actual, from the books): $(Q "SELECT c.amount_minor - COALESCE((SELECT sum(p.amount_cents) FROM fleet_ledger_postings p WHERE p.journal_id = c.journal_id AND p.account_id = 'fleet:owner:capital'), c.amount_minor) FROM fleet_paypal_checkouts c JOIN fleet_customer_orders z ON z.checkout_id = c.checkout_id WHERE z.order_id = '$o' AND c.journal_id IS NOT NULL")p"
-  local now; now=$(spendable)
-  echo "    Agent-1 wallet hold: spendable at start ${SP0}p, now ${now}p ($( [[ "$now" == "$SP0" ]] && echo released || echo HELD))"
+  local now hold all ai oth exp; read -r now hold all ai oth <<< "$(wallet "$o")"; exp=$(( SP0 - ai + oth - hold ))
+  echo "    this proof's refund hold: ${hold}p ($( (( hold == 0 )) && echo 'none / released' || echo HELD)); all PayPal holds on Agent-1's money: ${all}p"
+  echo "    Agent-1 wallet: ${SP0}p at start − AI charges ${ai}p (Fleet-recorded, provisional) $( (( oth < 0 )) && echo "− other ${oth#-}p" || echo "+ other ${oth}p") − this hold ${hold}p = ${exp}p expected; spendable now ${now}p ($( [[ "$now" == "$exp" ]] && echo reconciled || echo "NOT RECONCILED by $(( now - exp ))p"))"
 }
 report() {
   local s o; s=$(START); [[ -n "$s" ]] || { echo "  no proof recorded"; moneyout; return; }; o=$(ORDER)
@@ -154,6 +170,7 @@ start)
   [[ "$(QUEUED)" == 0 ]] || die "refunds are already queued: the window must serve only this proof's refund"
   [[ "$(Q "SELECT count(*) FROM fleet_paypal_checkouts c WHERE c.status = 'captured' AND c.purpose = 'agent_sale' AND fleet_paypal_refundable(c.checkout_id) > 0")" == 0 ]] \
     || die "another refundable sale exists: the window must serve only this proof's refund"
+  [[ "$(Q "SELECT fleet_agent_wallet_measure('$A1') ->> 'paypalDisputeExposureMinor'")" == 0 ]] || die "PayPal already holds some of Agent-1's money: this proof's refund hold could not be told apart"
   sp=$(spendable); [[ "$sp" =~ ^[0-9]+$ ]] && (( sp >= PRICE_MAX )) || die "Agent-1's spendable cash (${sp:-?}p) cannot bear the £5 refund hold (limit 21)"
   [[ "$(Q "SELECT count(*) FROM fleet_offers o JOIN fleet_artifact_reviews r ON r.review_id = o.review_id
           WHERE o.slug = '$SLUG' AND o.agent_id = '$A1' AND o.status = 'published' AND o.kind = 'product' AND o.price_minor <= $PRICE_MAX
@@ -196,8 +213,13 @@ watch)
     if [[ "$(Q "SELECT count(*) FROM fleet_paypal_refund_requests WHERE order_id = '$o' AND status = 'completed'")" == 1 \
           && "$(Q "SELECT count(*) FROM fleet_offer_proof_returns r JOIN fleet_customer_orders z ON z.checkout_id = r.checkout_id WHERE z.order_id = '$o' AND r.kind = 'refund'")" -ge 1 \
           && "$(Q "SELECT fleet_ledger_verify()->>'ok'")" == true ]]; then
-      [[ "$(spendable)" == "$SP0" ]] || { stop_proof "FAILURE: the refund is recorded but Agent-1's wallet hold is not released (spendable $(spendable)p, ${SP0}p at start)"; exit 0; }
-      stop_proof "PROOF COMPLETE: purchase, delivery and refund recorded once; Agent-1's wallet hold released; the ledger verifies"; exit 0
+      # Not "back to the start figure": Agent-1 pays its own AI costs during the proof. This proof's hold must be gone and
+      # what remains must be the start less those charges (± any other posting on its cash), to the penny.
+      read -r now hold all ai oth <<< "$(wallet "$o")"
+      [[ "$hold" == 0 && "$all" == 0 ]] || { stop_proof "FAILURE: the refund is recorded but this proof's refund hold is not released (${hold}p held; all PayPal holds ${all}p)"; exit 0; }
+      [[ "$now" == "$(( SP0 - ai + oth ))" ]] \
+        || { stop_proof "FAILURE: the hold is released but Agent-1's wallet does not reconcile: spendable ${now}p, expected $(( SP0 - ai + oth ))p (${SP0}p − AI ${ai}p + other ${oth}p)"; exit 0; }
+      stop_proof "PROOF COMPLETE: purchase, delivery and refund recorded once; this proof's refund hold released; Agent-1's wallet = start − AI charges ${ai}p$( (( oth != 0 )) && echo " + other ${oth}p"); the ledger verifies"; exit 0
     fi
     # The refund window: only for the one bound refund (this order's, at most what was paid, the only one queued anywhere).
     if [[ -z "$(WINDOW)" && "$(QUEUED)" == 1 \
