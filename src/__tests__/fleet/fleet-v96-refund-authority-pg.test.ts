@@ -111,6 +111,13 @@ describe.skipIf(!PG_BIN)("v96: custody enforces refund authority at dispatch", (
   }, 300_000);
   afterAll(async () => { await gw?.close(); await svc?.end(); await custody?.end(); await R?.close(); });
 
+  it("v96 loads the capability entry agents read, rewritten from verified state (v14)", async () => {
+    const e = (await R.q(`SELECT version, title, facts FROM fleet.fleet_knowledge_library WHERE entry_id = 'fleet-capability-status' AND current`))[0];
+    expect(e).toMatchObject({ version: 14, title: expect.stringContaining("2026-10-19, v14") });
+    const facts = JSON.stringify(e.facts);
+    for (const t of ["Gumroad — DEFERRED", "Image generation — NOT CONNECTED", "Web search — CONNECTED (Brave", "within a live refund authority", "AS THE CUSTOMER SEES THEM"]) expect(facts).toContain(t);
+  });
+
   it("owner-only, fixed grants; an order authority sends that order's refund only, within its per-refund and total maxima; the owner is told once", async () => {
     for (const [p, ts] of Object.entries(EVENT_ROUTES_V96)) for (const t of ts) expect(await R.one(`fleet.fleet_event_route($1, '{}'::jsonb)`, [t]), t).toBe(p);
     const a = await sale(1_000);

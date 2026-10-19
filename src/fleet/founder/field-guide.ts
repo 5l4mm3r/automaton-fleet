@@ -13,7 +13,7 @@
  * seed facts that change: the founder re-verifies them at the source before relying on them.
  */
 
-export const FIELD_GUIDE_VERSION = "survival-field-guide-v2.2";
+export const FIELD_GUIDE_VERSION = "survival-field-guide-v2.3";
 export const FIELD_GUIDE_DATE = "2026-10-15";
 
 export interface GuideSection { id: string; title: string; kind: "design doctrine" | "seed terrain" | "platform notes (dated)" | "pointer"; text: string }
@@ -49,7 +49,7 @@ export const FIELD_GUIDE: readonly GuideSection[] = Object.freeze([
     "ACTIONABLE remains → continue, unless its expected value is lower than its real cost and a better use of capital exists.",
     "BLOCKED by owner/KYC/provider action → one precise request (record_external_dependency), a goal marked blockedBy it, and continue unrelated work.",
     "AWAITING EVIDENCE → define the measurement window and the exact wake trigger (set_goal awaiting + reviewAt). Do not poll expensively when an event or a scheduled review will do.",
-    "Hibernate only when the operating foundation is sufficiently prepared and no immediate action has positive expected value relative to its cost. Wake conditions: sale, customer reply, lead, support request, refund, metric threshold, completed KYC, provider availability, scheduled experiment review, new market signal, new capability.",
+    "Hibernate only when the operating foundation is sufficiently prepared and no immediate action has positive expected value relative to its cost. Wake conditions: sale, customer reply, lead, support request, refund, metric threshold, completed KYC, provider availability, scheduled experiment review, new market signal, a Fleet Control notice (for example a newly connected capability).",
     "On wake, inspect what changed first; do not blindly repeat the previous loop. ACTIVE is not frantic; HIBERNATING is not defeated.",
   ].join("\n") },
   { id: "comfort-and-expansion", title: "Earned comfort and Fleet expansion", kind: "design doctrine", text: [
@@ -63,7 +63,7 @@ export const FIELD_GUIDE: readonly GuideSection[] = Object.freeze([
   ].join("\n") },
   { id: "markets", title: "Customers and markets", kind: "seed terrain", text: [
     "WORLDWIDE: you may sell to customers anywhere. Tax and consumer law follow the customer and are your cost of doing business: know them before you sell into a market.",
-    "EU CONSUMERS buying DIGITAL products: sell to them through a merchant-of-record platform (one that collects and remits EU and UK VAT on digital sales — research which suits the product, e.g. a marketplace or payment platform that states it is merchant of record), not the treasury PayPal checkout. Gumroad is one such platform, reachable only through the Fleet's gateway once your wallet has reached £500 (owner decision); any other merchant of record you can operate yourself through the browser where its terms permit it: check its seller terms and economic_knowledge op library {id: \"fleet-capability-status\"} before planning on it. Its sales are recorded at once but become spendable only when their money reaches the treasury with evidence — not when the marketplace reports a sale. Opening a seller account that needs the owner's identity is a genuine human step (identity).",
+    "EU CONSUMERS buying DIGITAL products: sell to them through a merchant-of-record platform (one that collects and remits EU and UK VAT on digital sales — research which suits the product, e.g. a marketplace or payment platform that states it is merchant of record), not the treasury PayPal checkout. None is connected at launch (the Gumroad storefront is deferred by the owner and not available); a merchant of record you can operate yourself through the browser where its terms permit it: check its seller terms and economic_knowledge op library {id: \"fleet-capability-status\"} before planning on it. Its sales are recorded at once but become spendable only when their money reaches the treasury with evidence — not when the marketplace reports a sale. Opening a seller account that needs the owner's identity is a genuine human step (identity).",
     "ELSEWHERE: UK, US and most other buyers can use the treasury PayPal checkout. Re-verify thresholds and rules for a market before relying on them. Business buyers are often simpler for services (invoices, clear terms, B2B rules).",
   ].join("\n") },
   { id: "selling", title: "Selling in this Fleet", kind: "design doctrine", text: [
@@ -116,7 +116,7 @@ export const FIELD_GUIDE: readonly GuideSection[] = Object.freeze([
     "Etsy: search matches buyer queries against listing information (titles, tags, attributes, descriptions and other signals); Etsy recommends relevant buyer-language keywords and monitoring Shop Stats / search data. Sources: etsy.com seller-handbook (Keywords 101; How Etsy Search Works; Shop Stats).",
     "Shopify: supports selling digital products through digital-delivery apps (courses, ebooks, templates/tools, software-like products, licensed content, memberships); a storefront, not guaranteed discovery — traffic is the seller's job. Source: shopify.com/uk/blog/digital-products.",
     "Gumroad, verified 2026-10-12 (gumroad.com/help articles 10, 13, 70): merchant of record for all EU and UK DIGITAL sales (collects and remits VAT; physical goods are not covered). A UK seller is paid out to a UK bank account in GBP (minimum $100; weekly/monthly; 7-day holding) — not to PayPal — except sales paid with PayPal when the seller's PayPal account is connected, which are credited to that PayPal at the time of sale. Services only once the account is 30 days old; installation/tech support and in-person or prolonged service contracts are prohibited.",
-    "FLEET NOTE: Gumroad is operated only through the Fleet's gateway, which opens to an agent the first time its wallet reaches £500 (owner decision); the storefront is not connected yet (fleet-capability-status). It is one merchant-of-record option for EU consumer digital sales, not the only one. Gumroad sales are recorded at once but are spendable only once their money reaches the treasury with evidence (see markets).",
+    "FLEET NOTE (2026-10-19): the Gumroad storefront is DEFERRED by the owner — not installed, not connected, not part of the launch; do not plan on it (fleet-capability-status). If the owner connects it later, it opens to an agent the first time its wallet reaches £500 and its sales become spendable only once their money reaches the treasury with evidence (see markets).",
     "Opening any seller account, payment rail or storefront that needs a human identity or KYC is a non-delegable dependency: record it once and keep working; never attempt to bypass it.",
   ].join("\n") },
   { id: "boundaries", title: "Boundaries", kind: "design doctrine", text: [

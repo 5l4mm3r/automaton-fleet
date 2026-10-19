@@ -368,7 +368,7 @@ describe("R41.1 field journal, field guide, bootstrap, charter integration", () 
     const list = await r.toolbox.execute(call("field_guide", { op: "list" }));
     // v2.1 (2026-10-12): orientation first; business doctrine (survival cycle, venture types, customers, tactics) lives in the
     // library's business foundation and the guide points there. v2.2 (2026-10-15, v79): the agent-chosen CHANNELS doctrine.
-    expect(list.output).toMatch(/^survival-field-guide-v2\.2 \(2026-10-15\) — sections: orientation .*survival-cycle \[pointer\]/);
+    expect(list.output).toMatch(/^survival-field-guide-v2\.3 \(2026-10-15\) — sections: orientation .*survival-cycle \[pointer\]/);
     // v2.2: where to sell is the agent's choice from research; named platforms are examples, never a list.
     expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "situation" }))).output).toMatch(/CHANNELS \(v2\.2\): where you sell and promote is your choice, from research.*an example, never a list or a ranking/);
     const plat = await r.toolbox.execute(call("field_guide", { op: "read", section: "platforms" }));
@@ -537,7 +537,7 @@ describe("R41.1 completion — supplemental acceptance (owner clarifications 202
     // v2.1: contextual venture choices moved to the business foundation (bf-venture-types); the guide section points there.
     expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "ventures" }))).output).toMatch(/never unlocked by a stage: economic_knowledge op library \{id: "bf-venture-types"\}/);
     const whole = await r.toolbox.execute(call("field_guide", { op: "all", part: 1 }));
-    expect(whole.output).toMatch(/^survival-field-guide-v2\.2 — part 1 of \d+ \(next: op all part 2\)/);
+    expect(whole.output).toMatch(/^survival-field-guide-v2\.3 — part 1 of \d+ \(next: op all part 2\)/);
     expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "assessment" }))).output).toMatch(/An empty goal list is not proof there is nothing to do/);
     expect((await r.toolbox.execute(call("field_guide", { op: "nope" }))).refused).toBe("FLEET_BAD_REQUEST");
     // Every tool the v5 gateway can offer is implemented by this runtime and classified under founder-v2.

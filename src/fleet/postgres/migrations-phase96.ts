@@ -26,6 +26,9 @@
  *    sitemap and search notifications leave it out, and the agent's offer view says why (`saleBlock`). Publishing a
  *    product needs such a review. Work already accepted (paid orders, their delivery and revisions) is unaffected. The
  *    owner can hold one offer (and release it) without closing sales or holding the agent; the agent is told.
+ * 5. GUIDANCE. The dated capability entry agents read (fleet-capability-status v14) is rewritten from verified state:
+ *    search connected, images not offered, Gumroad deferred, refunds under refund authority, the owner-paid card, sales
+ *    closed until launch, the inspector's spreadsheet checks.
  */
 import { V51_SQL } from "./migrations-phase51.js";
 import { V59_SQL } from "./migrations-phase59.js";
@@ -36,6 +39,7 @@ import { V80_SQL } from "./migrations-phase80.js";
 import { V82_SQL } from "./migrations-phase82.js";
 import { V85_SQL, QA_INSPECTOR_VERSIONS_V85 } from "./migrations-phase85.js";
 import { restate as restateRaw } from "./migrations-phase42.js";
+import { CAPABILITY_STATUS_V14 } from "./knowledge-capability-status-v14.js";
 
 const restate = (src: string, name: string, edits: Array<[string, string]>) => restateRaw(src, name, edits.map(([a, b]) => [a, b.replace(/\$/g, "$$$$")] as [string, string]));
 const q = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(",");
@@ -419,7 +423,10 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'saleBlock', fleet_offer_sale_block(o));
 END $$;
 
--- ═══ 5. Status and routing ═══
+-- ═══ 5. What agents are told the Fleet can do, from verified state (2026-10-19) ═══
+SELECT fleet_admin_knowledge_library_load('${JSON.stringify({ entries: CAPABILITY_STATUS_V14.entries }).replace(/'/g, "''")}'::jsonb, 'migration');
+
+-- ═══ 6. Status and routing ═══
 ${CUSTODY_STATUS}
 
 ${EVENT_ROUTE}

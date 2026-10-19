@@ -5,4 +5,4 @@
  * (toolbox.ts), presentations as a deliverable, and inspector fleet-qa-2 (fleet-qa-3 from 2026-10-19: spreadsheets opened as the
  * customer sees them) — on top of everything founder-v9 implements.
  */
-export const FOUNDER_V10_RELEASE = Object.freeze({ doctrine: "founder-v10", fieldGuide: "survival-field-guide-v2.2", toolset: "toolset-6", inspector: "fleet-qa-3" });
+export const FOUNDER_V10_RELEASE = Object.freeze({ doctrine: "founder-v10", fieldGuide: "survival-field-guide-v2.3", toolset: "toolset-6", inspector: "fleet-qa-3" });
