@@ -89,26 +89,31 @@ describe.skipIf(!PG_BIN)("v67: business foundation in the library; wake-up signa
     expect(st.ok).toBe(true);
     expect(st.entry.category).toBe("fleet-status");
     const facts = st.entry.factsThatChange as Array<{ fact: string; lastChecked: string; stale: boolean }>;
-    expect(facts.every((f) => f.lastChecked === "2026-10-16")).toBe(true); // v82: capability status v8
-    // v79 (owner, 2026-10-15: channels are the agent's choice): the EU consumer route is a merchant-of-record platform the
-    // agent operates where its terms permit — no longer an unresolved owner decision; the £500 rule stays Gumroad's gateway's.
-    expect(facts.some((f) => /^EU consumer digital sales — through a merchant-of-record platform/.test(f.fact) && /£500/.test(f.fact))).toBe(true);
+    // v96: capability status v14, every fact dated; those rewritten from verified state on 2026-10-19.
+    expect(facts.every((f) => ["2026-10-16", "2026-10-17", "2026-10-19"].includes(f.lastChecked))).toBe(true);
+    expect(facts.filter((f) => f.lastChecked === "2026-10-19").length).toBeGreaterThanOrEqual(10);
+    // v79 (channels are the agent's choice): the EU consumer route is a merchant-of-record platform the agent operates where
+    // its terms permit; v96: none is connected at launch (Gumroad deferred by the owner).
+    expect(facts.some((f) => /^EU consumer digital sales — through a merchant-of-record platform/.test(f.fact) && /NONE is connected at launch \(Gumroad is deferred\)/.test(f.fact))).toBe(true);
     // v82 (owner, 2026-10-16): built, installed, connected, enabled and live-proven are stated separately, and the entry no
     // longer contradicts itself about API connectors or operating Etsy through the browser.
     expect(st.entry.body).toMatch(/BUILT .*INSTALLED .*CONNECTED .*ENABLED .*LIVE-PROVEN/s);
     const fact = (re: RegExp) => facts.filter((f) => re.test(f.fact));
     expect(fact(/^API channels/)).toHaveLength(1);
     expect(fact(/^API channels/)[0].fact).toMatch(/Etsy.*Pinterest.*BUILT, INSTALLED .*NOT CONNECTED .*NOT LIVE-PROVEN/s);
-    expect(fact(/^Gumroad/)[0].fact).toMatch(/BUILT, NOT INSTALLED on the host, NOT CONNECTED/);
+    expect(fact(/^Gumroad/)[0].fact).toMatch(/DEFERRED by the owner .*built but not installed or connected .*do not plan on it/s);
     expect(fact(/no platform has an API connector apart from Gumroad|Etsy and other marketplaces: no API connector|operate a shop through the browser/i)).toEqual([]);
     expect(fact(/^Production tools/)[0].fact).toMatch(/INSTALLED .*python-pptx/s);
-    // v85: with the founder-v10 runtime a .pptx is deliverable and inspected; rendering and OCR are stated as not installed.
-    expect(fact(/^Production tools/)[0].fact).toMatch(/\.pptx is a deliverable.*Rendering Word and PowerPoint files to images and OCR of scanned pages are NOT INSTALLED/s);
+    // v96: LibreOffice and Tesseract installed on the host; the inspector opens spreadsheets as the customer sees them.
+    expect(fact(/^Production tools/)[0].fact).toMatch(/LibreOffice \(headless\) and Tesseract are installed.*AS THE CUSTOMER SEES THEM.*Excel behaviour is not verified/s);
     expect(fact(/^Capability check — BUILT/)).toHaveLength(1);
-    expect(fact(/^Web search and image generation — BUILT .*NOT CONNECTED/s)).toHaveLength(1);
+    expect(fact(/^Web search — CONNECTED \(Brave, 2026-10-18\).*Image generation — NOT CONNECTED/s)).toHaveLength(1);
     expect(fact(/^Choosing channels — your choice, from research; no platform is required and none is excluded/)).toHaveLength(1);
     expect(fact(/^Platform findings/)[0].fact).toMatch(/re-verify at the source.*provisional.*None of these is a ranking or a list of allowed channels/s);
-    for (const s of ["Paying out", "Card purchases", "Fleet offer pages"]) expect(fact(new RegExp(`^${s}`))[0].fact, s).toMatch(/NOT ENABLED/);
+    // v96: what is not on yet is said plainly — payouts (no signer), the card (until standing authority), public sales.
+    expect(fact(/^Refunds to buyers — BUILT/)[0].fact).toMatch(/within a live refund authority.*payouts — BUILT, NOT ENABLED \(no payout signer\)/s);
+    expect(fact(/^Card purchases/)[0].fact).toMatch(/NOT ENABLED until the owner turns on standing card authority/);
+    expect(fact(/^Fleet offer pages/)[0].fact).toMatch(/sales are CLOSED until the owner opens them at launch/);
     expect(facts.some((f) => /^UNRESOLVED/.test(f.fact))).toBe(false);
     expect(st.entry.body).toMatch(/never treat today's onboarding gaps as permanent/);
   });
