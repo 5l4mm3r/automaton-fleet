@@ -245,6 +245,12 @@ describe.skipIf(!PG_BIN)("v51 completion: exhaustion, card reservations, PayPal 
     expect(m.rule).toMatch(/Exhaustion means death/);
     expect((await R.one(`fleet.fleet_survival_observation($1)`, [H.id])).wallet.exhausted).toBe(false);
     expect(await tick()).toMatchObject({ died: 0 });
+    // v96: prospective money keeps it alive only for a while — a sale's money PayPal still holds after 30 days no longer does
+    // (still shown); held again within the window, it counts again.
+    await asSuper(`UPDATE fleet.fleet_paypal_availability SET captured_at = now() - interval '31 days' WHERE capture_id = $1`, [a.captureId]);
+    expect(await measure(H)).toMatchObject({ exhausted: true, notCounted: { paypalHeldOver30DaysMinor: 1_200 }, ownHeldMinor: { paypalHeldUntilAvailableMinor: 1_200 } });
+    await asSuper(`UPDATE fleet.fleet_paypal_availability SET captured_at = now() WHERE capture_id = $1`, [a.captureId]);
+    expect(await measure(H)).toMatchObject({ exhausted: false, notCounted: { paypalHeldOver30DaysMinor: 0 } });
     // Fully refunded while held: nothing of its own remains; envelope capital would not count either.
     await cx("cx_paypal_refund_record", ["custody-executor", a.captureId, "REF-V51-0002", "refund", 1_200, "GBP"]);
     expect((await measure(H)).exhausted).toBe(true);

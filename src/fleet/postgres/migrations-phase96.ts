@@ -32,6 +32,10 @@
  *    the calls claimed and unanswered plus this call's estimate must fit. Out of budget, nothing is claimed — a spend that
  *    needs a review waits (never approved by default) — and the owner is told once a day. A call's actual cost can differ
  *    from its estimate; the next claim sees what it really cost.
+ * 7. EXHAUSTION. Prospective money keeps an exhausted agent alive only for a while: a capture PayPal has not completed after
+ *    14 days and a sale's money PayPal still holds after 30 days no longer count against exhaustion (still
+ *    shown under notCounted; if the money arrives it is cash again). Disputed money and money paid to the owner's card are
+ *    the agent's own past money, unchanged.
  * 5. GUIDANCE. The dated capability entry agents read (fleet-capability-status v14) is rewritten from verified state:
  *    search connected, images not offered, Gumroad deferred, refunds under refund authority, the owner-paid card, sales
  *    closed until launch, the inspector's spreadsheet checks.
@@ -45,6 +49,7 @@ import { V80_SQL } from "./migrations-phase80.js";
 import { V82_SQL } from "./migrations-phase82.js";
 import { V85_SQL, QA_INSPECTOR_VERSIONS_V85 } from "./migrations-phase85.js";
 import { V31_SQL } from "./migrations-phase31.js";
+import { V57_SQL } from "./migrations-phase57.js";
 import { V64_SQL } from "./migrations-phase64.js";
 import { V68_SQL } from "./migrations-phase68.js";
 import { restate as restateRaw } from "./migrations-phase42.js";
@@ -66,6 +71,9 @@ export const EVENT_ROUTES_V96 = Object.freeze({
 export const QA_INSPECTOR_VERSIONS_V96 = [...QA_INSPECTOR_VERSIONS_V85, "fleet-qa-3"] as const;
 /** v96: Fleet Control's daily AI budget until the owner sets one (minor units of the accounting currency). */
 export const FLEET_CONTROL_AI_DAILY_DEFAULT_MINOR = 200;
+/** v96: how long prospective money (a pending capture; a sale's money PayPal holds) keeps an exhausted agent alive. */
+export const CAPTURE_PENDING_ALIVE_DAYS = 14;
+export const PAYPAL_HELD_ALIVE_DAYS = 30;
 /** v96: the inspectors whose passing review lets a product be sold publicly. */
 export const QA_SALE_INSPECTORS = ["fleet-qa-3"] as const;
 
@@ -134,6 +142,24 @@ const RELEVANCE_PENDING = restate(V31_SQL, "svc_experiment_relevance_pending", [
    `  v_room := CASE WHEN pol.enabled THEN GREATEST(0, (pol.relevance_max_calls_per_hour - v_used) / 2) ELSE 0 END;
   -- v96: and within Fleet Control's daily AI budget (each job is up to two calls at the review estimate).
   v_room := LEAST(v_room, GREATEST(0, ((fleet_control_ai_state() ->> 'roomMinor')::bigint / GREATEST((fleet_control_ai_state() ->> 'estimateMinor')::bigint * 2, 1))::integer));`],
+]);
+
+// ── 7. Exhaustion: prospective money keeps an agent alive only for a while ──
+const MEASURE = restate(V57_SQL, "fleet_agent_wallet_measure", [
+  [`v_orders bigint; v_disp bigint; v_disp_held bigint;`, `v_orders bigint; v_disp bigint; v_disp_held bigint; v_cap_stale bigint; v_pend_stale bigint; v_in_alive bigint;`],
+  [`  v_in := v_pending + v_cap_pending + v_card + v_disp_held;`,
+   `  v_in := v_pending + v_cap_pending + v_card + v_disp_held;
+  -- v96: a capture PayPal has not completed after ${CAPTURE_PENDING_ALIVE_DAYS} days, or a sale's money PayPal still holds after ${PAYPAL_HELD_ALIVE_DAYS} days, no
+  -- longer keeps the agent alive (it stays shown; if it arrives it is cash again).
+  SELECT COALESCE(sum(amount_minor), 0) INTO v_cap_stale FROM fleet_paypal_checkouts
+   WHERE agent_id = p_agent AND status = 'capture_pending' AND COALESCE(approved_at, opened_at, created_at) < now() - interval '${CAPTURE_PENDING_ALIVE_DAYS} days';
+  SELECT COALESCE(sum(remaining_minor), 0) INTO v_pend_stale FROM fleet_paypal_availability
+   WHERE agent_id = p_agent AND status = 'pending' AND captured_at < now() - interval '${PAYPAL_HELD_ALIVE_DAYS} days';
+  v_in_alive := v_in - LEAST(v_cap_stale, v_cap_pending) - LEAST(v_pend_stale, v_pending);`],
+  [`    'notCounted', jsonb_build_object('openCheckoutsMinor', v_open, 'envelopeCapitalMinor', v_env,`,
+   `    'notCounted', jsonb_build_object('openCheckoutsMinor', v_open, 'envelopeCapitalMinor', v_env,
+                    'capturePendingOver${CAPTURE_PENDING_ALIVE_DAYS}DaysMinor', LEAST(v_cap_stale, v_cap_pending), 'paypalHeldOver${PAYPAL_HELD_ALIVE_DAYS}DaysMinor', LEAST(v_pend_stale, v_pending),`],
+  [`    'exhausted', v_own = 0 AND v_in = 0 AND v_orders = 0`, `    'exhausted', v_own = 0 AND v_in_alive <= 0 AND v_orders = 0`],
 ]);
 
 // ── 4. Product quality ──
@@ -504,6 +530,9 @@ ${SPEND_CLAIM}
 ${KNOWLEDGE_CLAIM}
 
 ${RELEVANCE_PENDING}
+
+-- ═══ 7. Exhaustion: prospective money keeps an agent alive only for a while ═══
+${MEASURE}
 
 -- ═══ 5. What agents are told the Fleet can do, from verified state (2026-10-19) ═══
 SELECT fleet_admin_knowledge_library_load('${JSON.stringify({ entries: CAPABILITY_STATUS_V14.entries }).replace(/'/g, "''")}'::jsonb, 'migration');
