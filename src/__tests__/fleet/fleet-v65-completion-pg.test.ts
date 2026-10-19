@@ -10,7 +10,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, spendNext } from "./fixtures/economy-registry.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 import { KnowledgeReviewer, knowledgePrompt, parseKnowledge } from "../../fleet/spend/knowledge-review.js";
 
@@ -40,8 +40,9 @@ describe.skipIf(!PG_BIN)("v65: advertising review, shared-lesson review, Gumroad
     await R.ledger.activateDestination(e.destinationId, e.activationCode, OWNER);
     return e.destinationId as string;
   };
+  // v95: a further order to the same payee names the latest one (spendNext).
   const spend = async (amount: number, dest: string, purpose: string) =>
-    (await R.q(`SELECT fleet.api_spend_request($1, $2, $3, $4, 'expense', $5, $6, 0) AS r`, [F.id, F.token, `t:${crypto.randomUUID()}`, amount, dest, purpose]))[0].r;
+    spendNext(R, F, { idempotencyKey: `t:${crypto.randomUUID()}`, amountCents: amount, category: "expense", destinationId: dest, purpose });
   const propose = async (title: string, content: string) =>
     (await R.q(`SELECT fleet.api_knowledge_propose($1, $2, 'technique', $3, $4) AS r`, [F.id, F.token, title, content]))[0].r;
 

@@ -92,15 +92,15 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     return e.destinationId;
   }
   const fund = async (cents: number) => ledger.recordOwnerFunding(cents, `bank:test-${++fundingN}-${crypto.randomUUID()}`, OWNER);
-  const spend = (a: Agent, amountCents: number, opts: { category?: string; dst?: string; idem?: string; recoverable?: number } = {}) =>
-    gw.spendRequest(a.agentId, a.token, {
-      idempotencyKey: opts.idem ?? key("spend"),
-      amountCents,
-      category: opts.category ?? "expense",
-      destinationId: opts.dst ?? payee,
-      purpose: "test spend",
-      recoverableCents: opts.recoverable ?? 0,
-    });
+  // v95: a further order to the same payee names the latest one (after); a repeat of the same request is answered from the record.
+  const spend = async (a: Agent, amountCents: number, opts: { category?: string; dst?: string; idem?: string; recoverable?: number } = {}) => {
+    const req = { idempotencyKey: opts.idem ?? key("spend"), amountCents, category: opts.category ?? "expense", destinationId: opts.dst ?? payee,
+      purpose: "test spend", recoverableCents: opts.recoverable ?? 0 };
+    const r = await gw.spendRequest(a.agentId, a.token, req);
+    if (r.code !== "FLEET_OPERATION_EXISTS") return r;
+    const latest = /after: "([0-9a-f-]{36})"/.exec(String(r.reason))?.[1];
+    return latest ? gw.spendRequest(a.agentId, a.token, { ...req, after: latest }) : r;
+  };
   const order = (r: Record<string, unknown>) => r.order as Record<string, unknown>;
 
   beforeAll(async () => {
@@ -163,7 +163,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       "cx_paypal_checkout_by_order(text,text)", "cx_paypal_checkout_update(text,uuid,text,text,text,text)",
       "cx_paypal_clawback_evidence(text,text,text,text,text,bigint,text)", "cx_paypal_dispute_record(text,text,text,text,text,bigint,text)", "cx_paypal_inbox(text,integer)",
       "cx_paypal_inbox_result(text,text,text,text)", "cx_paypal_rails(text)", "cx_paypal_refund_record(text,text,text,text,bigint,text)",
-      "cx_paypal_refund_result(text,uuid,text,text,bigint,text,text)", "cx_paypal_refund_work(text,integer)",
+      "cx_paypal_refund_result(text,uuid,text,text,bigint,text,text)", "cx_paypal_refund_unresolved(text,uuid,text)", "cx_paypal_refund_work(text,integer)",
       // v76: payment detection without the webhook — custody reads open checkouts' order status.
       "cx_paypal_status_checked(text,uuid,text)", "cx_paypal_status_work(text,integer)",
       "cx_paypal_txn_counterparty(text,uuid,text,text,text)", "cx_paypal_txn_record(text,uuid,jsonb)", "cx_paypal_work(text,integer)",
@@ -373,7 +373,10 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     const again = await spend(a, 1200, { idem });
     expect(again).toMatchObject({ ok: true, replay: true });
     expect(order(again).orderId).toBe(order(r).orderId);
-    expect(await spend(a, 1300, { idem })).toMatchObject({ ok: false, code: "FLEET_IDEMPOTENCY_CONFLICT" });
+    // v95: a different order to the same payee without naming the latest is refused (FLEET_OPERATION_EXISTS); nothing is reserved.
+    expect(await gw.spendRequest(a.agentId, a.token, { idempotencyKey: idem, amountCents: 1300, category: "expense", destinationId: payee, purpose: "test spend" }))
+      .toMatchObject({ ok: false, code: "FLEET_OPERATION_EXISTS" });
+    expect(await bal(agentAcct(a, "reserved"))).toBe(1200);
     // More than the allocation: rejected, nothing reserved.
     expect(await spend(a, 5000)).toMatchObject({ ok: false, code: "FLEET_INSUFFICIENT_ALLOCATION" });
     // Owner destinations, pending/revoked/unknown destinations and other agents' payees are refused.
@@ -409,10 +412,23 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
   it("concurrent spend requests never over-reserve an allocation", async () => {
     const a = agents[4];
     await ledger.agentCapital({ agentId: a.agentId, amountCents: 1000, mode: "grant", actor: OWNER });
-    const rs = await Promise.all(Array.from({ length: 12 }, () => spend(a, 300)));
-    const ok = rs.filter((r) => r.ok && order(r).status === "reserved");
-    expect(ok.length).toBe(3);
-    expect(rs.filter((r) => !r.ok).every((r) => r.code === "FLEET_INSUFFICIENT_ALLOCATION")).toBe(true);
+    // v95: twelve identical requests at once are ONE operation (the rest wait for it and replay it): one order, reserved once.
+    const rs = await Promise.all(Array.from({ length: 12 }, () => gw.spendRequest(a.agentId, a.token, { idempotencyKey: key("spend"), amountCents: 300,
+      category: "expense", destinationId: payee, purpose: "test spend", recoverableCents: 0 })));
+    expect(new Set(rs.filter((r) => r.ok).map((r) => order(r).orderId)).size).toBe(1);
+    expect(rs.every((r) => r.ok)).toBe(true);
+    expect(await bal(agentAcct(a, "reserved"))).toBe(300);
+    // Further orders name the latest (after); the allocation still bounds them: two more fit, the next is refused.
+    const more: Array<Record<string, any>> = [];
+    let latest = (rs[0].operation as any)?.operationId ?? /after: "([0-9a-f-]{36})"/.exec(String((rs[0] as any).note ?? ""))?.[1];
+    for (let i = 0; i < 3; i++) {
+      const r = await gw.spendRequest(a.agentId, a.token, { idempotencyKey: key("spend"), amountCents: 300, category: "expense", destinationId: payee,
+        purpose: `test spend ${i + 2}`, recoverableCents: 0, after: latest });
+      more.push(r);
+      if (r.ok) latest = (r.operation as any)?.operationId ?? latest;
+    }
+    expect(more.map((r) => r.ok ? order(r).status : r.code), JSON.stringify(more.map((r) => [r.code, (r as any).operation]))).toEqual(["reserved", "reserved", "FLEET_INSUFFICIENT_ALLOCATION"]);
+    expect(new Set(more.filter((r) => r.ok).map((r) => order(r).orderId)).size).toBe(2);
     expect(await bal(agentAcct(a, "cash"))).toBe(100);
     expect(await bal(agentAcct(a, "reserved"))).toBe(900);
   });
@@ -498,7 +514,8 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     // A replay of a refused order reports the same custody reason; nothing was reserved by any refusal.
     const idem = key("refused");
     expect(await spend(a, 3_000, { idem })).toMatchObject({ ok: false, code: "FLEET_TAX_RESERVE" }); // within cash, but only the tax reserve is left
-    expect(await spend(a, 3_000, { idem })).toMatchObject({ ok: false, replay: true, code: "FLEET_TAX_RESERVE", custody: "TAX_RESERVE" });
+    // v95: a refusal leaves no operation, so a repeat is decided again — with the same custody reason.
+    expect(await spend(a, 3_000, { idem })).toMatchObject({ ok: false, code: "FLEET_TAX_RESERVE", custody: "TAX_RESERVE" });
     expect(await bal(agentAcct(a, "reserved"))).toBe(14_000);
     // Only the agent's own cash moved: the Treasury and other agents are untouched; no refusal created anything for anyone to decide.
     // (The Treasury moved only by the explicit 600 grant to `b` above.)
@@ -612,7 +629,9 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       expect(r).toMatchObject({ ok: true, executed: false, replay: false, order: { status: "reserved", amountCents: 700 } });
       expect(await c.spendOrder({ idempotencyKey: idem, amountCents: 700, category: "expense", destinationId: payee, purpose: "api credits" })).toMatchObject({ replay: true });
       expect(await c.ledger()).toMatchObject({ cash: 19_300, protectedPrincipal: 0 });
-      const big = await c.spendOrder({ idempotencyKey: key("http"), amountCents: 12_000, category: "expense", destinationId: payee, purpose: "x" });
+      // v95: a further order to the same payee names the latest one.
+      const big = await c.spendOrder({ idempotencyKey: key("http"), amountCents: 12_000, category: "expense", destinationId: payee, purpose: "x",
+        after: (r as any).operation?.operationId });
       expect(big).toMatchObject({ ok: true, custody: null, order: { status: "reserved", decisionCode: "FLEET_CUSTODY_CLEARED" } }); // v27: own capital, custody only — no owner
       expect(await c.cancelSpendOrder(r.order!.orderId as string)).toMatchObject({ status: "cancelled" });
       await expect(c.cancelSpendOrder(r.order!.orderId as string)).rejects.toMatchObject({ status: 403, code: "FLEET_INVALID_STATE" });
@@ -683,7 +702,8 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       // v76: real outflows fit the PayPal cash actually available — custody has read the treasury's balance.
       expect((await xc.query(`SELECT ${X}.cx_paypal_balance_record('custody-executor', $1, 'GBP', 1000000, 1000000) AS r`, [armed.railId])).rows[0].r.ok).toBe(true);
       const s1 = await xg.spendRequest(a.agentId, a.token, { idempotencyKey: key(), amountCents: 700, category: "expense", destinationId: e.destinationId, purpose: "api" });
-      const s2 = await xg.spendRequest(a.agentId, a.token, { idempotencyKey: key(), amountCents: 400, category: "asset_acquisition", destinationId: e.destinationId, purpose: "domain", recoverableCents: 100 });
+      const s2 = await xg.spendRequest(a.agentId, a.token, { idempotencyKey: key(), amountCents: 400, category: "asset_acquisition", destinationId: e.destinationId, purpose: "domain", recoverableCents: 100,
+        after: (s1 as any).operation?.operationId });   // v95: the next order to the same payee
       const xsvc = new pg.Pool({ connectionString: pgc.serviceUrl, max: 1, options: `-c search_path=${X}` });
       // v32: a root whose runtime holds its own key is never paid by the custody signer; a keyless identity is.
       expect((await xsvc.query(`SELECT ${X}.svc_issue_payment_instruction($1) AS r`, [order(s1).orderId])).rows[0].r).toEqual({ ok: false, code: "FLEET_CUSTODY_AGENT_HELD_KEY" });

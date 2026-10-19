@@ -308,13 +308,18 @@ print("BUILT")
     // Revision: the buyer asks for paid dates; the earlier review is stale for any further delivery.
     expect((await call(svc, "svc_customer_message", ["order", token, sha("buyer-svc"), "Please add the date each invoice was paid.", JSON.stringify([])])).ok).toBe(true);
     await exec(`python3 invoice_tracker.py ${fetched.path} deliver/invoice-tracker.xlsx --paid-date`, "BUILT 4 3420.6");
-    expect(await tool("wallet", { op: "deliver", args: { orderId, paths: ["deliver/invoice-tracker.xlsx"], reviewId: r1.reviewId, resendReason: "revision: paid date" } }))
+    // v95: a second delivery on the order is a new operation: the first try is refused and names the latest one (after).
+    const first = await tool("wallet", { op: "deliver", args: { orderId, paths: ["deliver/invoice-tracker.xlsx"], reviewId: r1.reviewId, resendReason: "revision: paid date" } });
+    expect(first).toMatchObject({ ok: false, refused: "FLEET_OPERATION_EXISTS" });
+    const after = /after: \\?"([0-9a-f-]{36})/.exec(first.output)?.[1];   // the reason, as the tool shows it (JSON)
+    expect(after, first.output).toBeTruthy();
+    expect(await tool("wallet", { op: "deliver", args: { orderId, paths: ["deliver/invoice-tracker.xlsx"], reviewId: r1.reviewId, resendReason: "revision: paid date", after } }))
       .toMatchObject({ ok: false, refused: "FLEET_REVIEW_STALE" });
     const revCases = [{ ...orderCases[0], name: "revision", expect: { ...orderCases[0].expect, G4: "Unpaid", G5: "Paid", G7: "Paid" } }];
     const r2 = await json("deliverable", { op: "review", args: { paths: ["deliver/invoice-tracker.xlsx"], cases: revCases, subject: "order", orderId,
       criteria: [...orderCriteria, { criterion: "Paid date and status per invoice (revision)", met: true, evidence: "case revision: South LLP and the second North Ltd invoice Paid, others Unpaid" }],
       verdict: "pass" } });
-    await json("wallet", { op: "deliver", args: { orderId, paths: ["deliver/invoice-tracker.xlsx"], reviewId: r2.reviewId, resendReason: "revision: paid date column" } });
+    await json("wallet", { op: "deliver", args: { orderId, paths: ["deliver/invoice-tracker.xlsx"], reviewId: r2.reviewId, resendReason: "revision: paid date column", after } });
     await broker.tick();
     const v2 = fs.readFileSync(path.join(ws, "deliver/invoice-tracker.xlsx"));
     expect(sha(v2)).not.toBe(sha(v1));
