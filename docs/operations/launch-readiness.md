@@ -35,7 +35,7 @@ outside this launch. The detailed evidence behind each line is in Appendix A (th
 | # | Decision | State |
 |---|---|---|
 | B1 | Install the consolidated release (A1–A9) and upgrade Agent-1; both agents end paused | DONE 2026-10-19 14:13Z (cb23033; verified) |
-| B2 | Continue the purchase proof on the existing unpaid £5 order (no new order): AI ceiling (the unused 200p allowance), the £5 refundable payment, PayPal's actual fee, custody's refund switch for the proof only, a refund authority for that order only | package after install |
+| B2 | Continue the purchase proof on the existing unpaid £5 order (no new order): AI ceiling (the unused 200p allowance), the £5 refundable payment, PayPal's actual fee, custody's refund switch for the proof only, a refund authority for that order only | IN PROGRESS, PAUSED: paid 18:38:32Z, delivered 18:39Z; the fault report (19:13Z) unanswered (repair A); Agent-1 paused 20:15:32Z with the order, files, message, books and run budget preserved (102.67p of 200p, ends 2026-10-20 14:33:50Z). Continuation after the f010dd4 install: `proof.sh continue`, the same budget and end time (release-f010dd4.md) |
 | B3 | Funding and backing, recomputed from current records | activation package |
 | B4 | Any test-cost write-off — shown separately, never bundled | separate decision |
 | B5 | Launch boundary; Agent-1 survival set to live | activation package |
