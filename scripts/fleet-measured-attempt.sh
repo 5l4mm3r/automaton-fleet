@@ -70,6 +70,16 @@ succeeded() {
         AND EXISTS (SELECT 1 FROM fleet_events e WHERE e.event_type = 'offer_published' AND e.agent_id = '$A1'
                       AND e.created_at >= '$s' AND e.detail ->> 'offerId' = o.offer_id::text)"
 }
+# The intended offer as it already stands (before <ts>): published on a passing review of its current files. A product-creation
+# attempt with it in place has nothing to make, and an agent waiting beside it for customers is not stalled (attempt 3).
+published_offer() {
+  local before=$1 which
+  if [[ "$SLUG" != - ]]; then which="o.slug = '$SLUG'"; else which="true"; fi
+  Q "SELECT o.slug FROM fleet_offers o JOIN fleet_artifact_reviews r ON r.review_id = o.review_id
+      WHERE o.agent_id = '$A1' AND o.status = 'published' AND r.verdict = 'pass' AND $which AND o.published_at < '$before'
+        AND (o.kind <> 'product' OR r.files_digest = fleet_files_digest(fleet_offer_deliverables(o.offer_id)))
+      ORDER BY o.published_at LIMIT 1"
+}
 failed_offer() {
   local s st; s=$(START); st=$(state_dir); [[ $(wc -w <<< "$st") -eq 1 ]] || { echo 0; return; }
   sudo -n cat "$st/mind-log.jsonl" 2>/dev/null | python3 -I -c "
@@ -132,6 +142,8 @@ start)
   for k in REAL_REPLICATION_ENABLED REAL_PAYMENTS_ENABLED OWNER_SWEEP_ENABLED FLEET_DRY_RUN_CHILD; do flag_false $k || die "$k is not false"; done
   [[ "$slug" == - || "$(Q "SELECT count(*) FROM fleet_offers WHERE agent_id='$A1' AND slug='$slug'")" == 1 ]] || die "Agent-1 has no offer $slug"
   [[ $(wc -w <<< "$(state_dir)") -eq 1 ]] || die "Agent-1's state directory is not unique"
+  SLUG=$slug; have=$(published_offer "$(ts)")
+  [[ -z "$have" ]] || die "nothing to create: Agent-1's offer $have is already published on a passing review. A product-creation attempt would only watch it wait (attempt 3, 2026-10-19); the next useful event is a customer order (the owner's proof purchase)"
   CEILING=$2; PRIOR_PENCE=$3; TOTAL_PENCE=$4; SLUG=$slug
   echo "$CEILING $PRIOR_PENCE $TOTAL_PENCE $SLUG" > "$D/attempt-terms.txt"
   ts > "$D/attempt-start.txt"
@@ -160,7 +172,12 @@ watch)
   (( $(failed_offer) >= MAX_FAILED_OFFER )) && { stop_attempt "FAILURE: offer actions refused $MAX_FAILED_OFFER times (repeated failed publication)"; exit 0; }
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code='AGENT_CANNOT_THINK' AND agent_id='$A1' AND created_at >= '$s'") > 0 )) && { stop_attempt "FAILURE: the agent cannot think (packet)"; exit 0; }
   last=$(Q "SELECT COALESCE(max(at), '$s'::timestamptz) FROM fleet_cognition_log WHERE agent_id='$A1' AND at >= '$s'")
-  [[ "$(Q "SELECT '$last'::timestamptz < now() - interval '$STALL_MIN minutes'")" == t ]] && { stop_attempt "STALLED: no model call for $STALL_MIN minutes and no offer (waiting with nothing to act on)"; exit 0; }
+  if [[ "$(Q "SELECT '$last'::timestamptz < now() - interval '$STALL_MIN minutes'")" == t ]]; then
+    have=$(published_offer "$s")
+    [[ -n "$have" && "$(jq -r '.waiting' <<< "$(waiting)")" == true ]] \
+      && { stop_attempt "WAITING, NOT A FAILURE: the intended offer $have was already published; Agent-1 waits for customer work (none while sales are closed) — nothing to create"; exit 0; }
+    stop_attempt "STALLED: no model call for $STALL_MIN minutes and no offer (waiting with nothing to act on)"; exit 0
+  fi
   exit 0 ;;
 *) sed -n 2,22p "$0"; exit 2 ;;
 esac

@@ -5,6 +5,8 @@
  *  - it runs only from the installed release of the pinned commit (never a hand-staged copy);
  *  - the watchdog's success is the INTENDED offer, published during the attempt (an offer_published event since the
  *    start), on a passing review of its current files; another offer's publication never completes it.
+ *  - (2026-10-19, after attempt 3) an intended offer already published is recognised: `start` refuses (nothing to create),
+ *    and an agent waiting beside it for customers is reported as waiting, not as a stall.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { spawnSync } from "child_process";
@@ -34,7 +36,7 @@ pinned() { echo "\${PINNED:-${C}}"; }
 current() { echo "/opt/automaton-fleet/releases/\${CURRENT:-${C}}"; }
 flag_false() { [[ "$1" != "\${BAD_FLAG:-none}" ]]; }
 state_dir() { echo /state/st_1; }
-waiting() { echo '{"waiting":false}'; }
+waiting() { echo "{\\"waiting\\":\${WAITING:-false}}"; }
 failed_offer() { echo "\${FAILED:-0}"; }
 Q() { echo "$1" >> "${dir}/sql.log"
   case "$1" in
@@ -45,6 +47,7 @@ Q() { echo "$1" >> "${dir}/sql.log"
     *fleet_cognition_run_budgets*) echo "\${OPEN_RUNS:-0}";;
     *"AND slug='"*) echo "\${SLUG_EXISTS:-1}";;
     *fleet_admin_cognition_run*) echo '{"open":true,"spentMicro":1000000,"inflightMicro":0,"ceilingMinor":130}';;
+    *"o.published_at < '"*) echo "\${HAVE:-}";;
     *"JOIN fleet_artifact_reviews r ON r.review_id = o.review_id"*) echo "\${SUCCESS:-0}";;
     *"COALESCE(max(at)"*) echo "2026-10-18T19:00:00Z";;
     *"interval '30 minutes'"*) echo "\${STALE:-f}";;
@@ -82,6 +85,7 @@ Q() { echo "$1" >> "${dir}/sql.log"
       [{ OPEN_RUNS: "1" }, "a run budget is already open"],
       [{ BAD_FLAG: "REAL_PAYMENTS_ENABLED" }, "REAL_PAYMENTS_ENABLED is not false"],
       [{ SLUG_EXISTS: "0" }, "Agent-1 has no offer"],
+      [{ HAVE: "uk-landlord-tracker" }, "nothing to create: Agent-1's offer uk-landlord-tracker is already published on a passing review"],
     ];
     for (const [env, why] of cases) {
       const r = run(["start", "130", "70", "200", "uk-landlord-tracker"], env);
@@ -152,5 +156,26 @@ Q() { echo "$1" >> "${dir}/sql.log"
     const odd = run(["watch"], { P1: "f", SUCCESS: "" });
     expect(odd.out).not.toContain("SUCCESS");
     expect(odd.host).toEqual([]);
+  });
+
+  it("start without a named offer refuses when Agent-1 already has one published; idle beside it is waiting, not a stall", () => {
+    const r = run(["start", "130", "70", "200"], { HAVE: "uk-landlord-compliance-tracker-england-g-a9ddde" });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("nothing to create: Agent-1's offer uk-landlord-compliance-tracker-england-g-a9ddde is already published");
+    expect(r.out).toContain("the next useful event is a customer order");
+    expect(r.host).toEqual([]);
+    expect(fs.existsSync(startFile())).toBe(false);
+    // Attempt 3's case: the offer appeared before the attempt (published_at < start); Agent-1 waits for customers.
+    expect(run(["start", "130", "70", "200"]).code).toBe(0);
+    const sql0 = fs.readFileSync(path.join(dir, "sql.log"), "utf8");
+    expect(sql0).toMatch(/o\.published_at < '\d{4}-\d\d-\d\dT[\d:]+Z'/);
+    fs.rmSync(log);
+    const w = run(["watch"], { P1: "f", STALE: "t", HAVE: "uk-landlord-compliance-tracker-england-g-a9ddde", WAITING: "true" });
+    expect(w.out).toContain("WAITING, NOT A FAILURE: the intended offer uk-landlord-compliance-tracker-england-g-a9ddde was already published");
+    expect(w.out).not.toContain("STALLED");
+    expect(w.host[0]).toMatch(new RegExp(`^A founder-cognition ${A1} pause `));        // still paused: nothing to do costs nothing
+    fs.rmSync(path.join(dir, "paused-1"));
+    // Not waiting (or no offer): a stall is a stall.
+    expect(run(["watch"], { P1: "f", STALE: "t", HAVE: "uk-landlord-compliance-tracker-england-g-a9ddde", WAITING: "false" }).out).toContain("STALLED");
   });
 });

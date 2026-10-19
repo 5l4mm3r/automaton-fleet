@@ -1,6 +1,6 @@
 # Launch readiness — the one checklist (Agent-1 first; Agent-2 stays paused)
 
-State 2026-10-17. Production: 8b39928, schema 91, UI 0.24.0 (deployed 12:23:38Z; release-8b39928.md). "Blocker" = launch cannot be called ready until it is done. "Limit" = recorded,
+State 2026-10-19. Production: e1c51e2, schema 95, UI 0.26.2 (deployed 2026-10-19 00:56Z; release-e1c51e2.md). "Blocker" = launch cannot be called ready until it is done. "Limit" = recorded,
 does not block. Optional improvements are listed at the end and never delay the decision.
 
 ## 1. Checklist
@@ -22,10 +22,11 @@ does not block. Optional improvements are listed at the end and never delay the 
 | 13 | Legal seller + public site | 2026-10-17 18:56–18:57Z: seller = individual (sole trader), legal name and a virtual-office address (geographic, not a PO box) set by the owner; public site `https://api.agentfleet.vip`; sales CLOSED; each page's "sold by" line built from the seller record (v78), agents trade under their own brands | — | Done |
 | 14 | Mail: Proton sending, receiving, per-agent / per-venture routing | Bridge live; 26 messages received; owner notifications sent; mailbox routes built, 0 created yet | none (Agent-1 creates its brand mailbox during the proof) | Proven in proof 5 |
 | 15 | Payment receiving | PayPal rail active, £1 receiving test passed (2026-10-10) | — | Done |
-| 16 | Money out (refunds; later payouts) | custody built; execution OFF | your explicit word: custody activation (Fleet HQ, step-up) before the refund proof | **Blocker** for the refund proof |
+| 16 | Money out (refunds; later payouts) | custody built; execution OFF. **Found 2026-10-19:** a live PayPal refund also needs `REAL_PAYMENTS_ENABLED=true` in the custody unit's own process environment — its spend gate reads the process, not runtime.env (`paypal-treasury.ts` → `FLEET_SPEND_GATE`); today it is unset, so a requested refund would stay queued (`paypal_refund_gated`). No payout signer exists (liveSigners 0), so the flag there can release only requested refunds | the purchase proof sets it for custody only and removes it at the end; the launch setting is a separate decision | **Blocker** for the refund proof (in the purchase-proof package) |
 | 17 | Financial invariants | one ledger across locations; transfers never create money; holds only from fresh free cash under lock; shortfall recorded, grants nothing; evidence kept on booking failure; fallback off; media / AI attributed to the agent; Fleet Control allocation; net-profit sweep — all tested (v66, v86, v88, v90, v91) | — | Done (simulated providers; live in proofs 7–8, 10) |
-| 19 | Duplicate protection that survives a founder restart or upgrade | **Repaired in schema v95, not deployed** (docs/design/durable-operations.md). Every consequential operation is recorded before dispatch under a durable identity; a repeat returns its result; a new one names the latest (`after`), never decided by wording, amounts or reasons. **Proven with real dispatch counts:** own-capital orders and envelope spends (concurrency, reservations once, one PayPal payout per order, a crash after PayPal accepted → one payout); card requests, holds and one fill per hold; partial refunds (raced, over-refunded, a lost answer → one request id, a refused retry held); mail (restart, concurrency, lost-but-sent reconciled; a late Sent copy resolves it; a missing one is never resent); browser submissions (a reworded one in the same live session is refused; navigation and typing unaffected); channel listings (a lost one is never re-posted); pull requests (adopted, never duplicated); paid search (charged once). **Contained, not automatic:** a send with no Sent copy, an SMS, a browser or channel submission whose answer was lost stay UNCERTAIN and block their subject until resolved — by provider evidence, by the agent only for "happened" with a recorded observation that shows a marker the submission carried, or by the owner (`fleet operation-resolve`), never by an assertion. **Unavailable at launch (not connected or not offered):** SMS, image generation, the Gumroad storefront, Etsy / Pinterest channels until the owner connects them, software maintenance (row 12) | Deploy the v95 package (separate approval); then the payment / delivery / support / refund proofs | **Blocker until deployed**; repaired and tested in code |
-| 18 | Controlled proofs (§2) | proofs 1–4 LIVE (phone, push + alarm drill, outside monitor, backup + restore); Proof A / B not started | §2 authorisation + your go | **Blocker** |
+| 19 | Duplicate protection that survives a founder restart or upgrade | **Repaired in schema v95; deployed with e1c51e2 2026-10-19 00:56Z and verified** (docs/design/durable-operations.md). Every consequential operation is recorded before dispatch under a durable identity; a repeat returns its result; a new one names the latest (`after`), never decided by wording, amounts or reasons. **Proven with real dispatch counts:** own-capital orders and envelope spends (concurrency, reservations once, one PayPal payout per order, a crash after PayPal accepted → one payout); card requests, holds and one fill per hold; partial refunds (raced, over-refunded, a lost answer → one request id, a refused retry held); mail (restart, concurrency, lost-but-sent reconciled; a late Sent copy resolves it; a missing one is never resent); browser submissions (a reworded one in the same live session is refused; navigation and typing unaffected); channel listings (a lost one is never re-posted); pull requests (adopted, never duplicated); paid search (charged once). **Contained, not automatic:** a send with no Sent copy, an SMS, a browser or channel submission whose answer was lost stay UNCERTAIN and block their subject until resolved — by provider evidence, by the agent only for "happened" with a recorded observation that shows a marker the submission carried, or by the owner (`fleet operation-resolve`), never by an assertion. **Unavailable at launch (not connected or not offered):** SMS, image generation, the Gumroad storefront, Etsy / Pinterest channels until the owner connects them, software maintenance (row 12) | Deploy the v95 package (separate approval); then the payment / delivery / support / refund proofs | **Blocker until deployed**; repaired and tested in code |
+| 18 | Controlled proofs (§2) | proofs 1–4 LIVE (phone, push + alarm drill, outside monitor, backup + restore); private publishing PROVEN (attempt 2); purchase / delivery / support / refund prepared as one package (§2, Purchase proof), not started; card proof (Proof B) not started | approval of the purchase-proof package | **Blocker** |
+| 21 | A proof refund held from the agent while in flight | 2026-10-19 (fleet-refunds-v59-pg, proof test): an agent's or the owner's refund of the owner's proof purchase holds its amount from the agent's spendable cash until PayPal confirms it, as for a sale's refund; nothing is posted to the agent, and the hold ends with the refund (agent cash, spendable and postings then equal the start; owner capital returns, PayPal's fee is the proof's cost) | — | Limit: fixed in the next schema; seconds while custody runs, longer only if a refund is held unresolved |
 
 Limits (do not block): `/etc` readable inside builds apart from the Fleet's directory; a running build finishes (≤ 30 min)
 after access ends; Node / npm installed but JavaScript builds are not proven (Python is); graphics without the image
@@ -166,6 +167,63 @@ The bank route (v91, "My deposit") stays available if a dedicated bank account i
   and its success is the INTENDED offer, published during the attempt on a passing review of its current files; (3) the repeated-failure cap 9f02351 ships with it; (4) fleet-rollout.sh, fleet-upgrade-rehearsal.sh and fleet-edge.sh
   log through `teelog` (a re-run piped through tee, which a pipeline waits for), so a log is complete when the script
   returns.
+
+- 2026-10-19 00:54–01:06Z **e1c51e2 deployed** (schema 94 → 95, UI 0.26.2; owner-run `~/rlc103/install-fix.sh`; outage
+  00:55:16–00:56:01Z; ledger and pauses = baseline; on-host founder rehearsal 27/27). **Agent-1 upgraded to e1c51e2**
+  (upgrade 4b0b5421-c399-4f25-9ac4-0346ff588d88; rollback id recorded). `verify-install.sh`: VERIFIED, no model call.
+  Both agents paused; permissions closed.
+- 2026-10-19 01:23:48Z **measured attempt 3** (owner-approved: 130p ceiling, 70p used before, £2 total). Agent-1 woke once
+  for the runtime-upgrade line: 2 calls, 15p ($0.2012; 51,887 input tokens, none from the cache — the first call after a
+  long pause; 245 out). It noted "Offer live; no orders or enquiries; sales closed fleet-wide. Waiting." and made no
+  further call. The watchdog paused it at 01:54Z with the label "STALLED". **Classification corrected: waiting, not a
+  failure** — the intended offer already existed, and with no customer there was nothing to do; the attempt should not
+  have started. Cumulative 85p of £2 (provisional), £1.15 left. No search, operation, refusal or outward action.
+  Corrected for the next release: `fleet-measured-attempt.sh start` refuses when the intended offer is already published
+  ("nothing to create"), and idle beside it is reported as WAITING, NOT A FAILURE. No further product-creation attempt.
+  The next useful event is a customer order: the purchase proof below.
+
+### Purchase proof (prepared 2026-10-19; not started): purchase, delivery, one support / revision request, refund
+A test of the transaction system with **public sales closed**, not demand, revenue or approval of the product.
+Agent-1 only; Agent-2 stays paused. Script: `scripts/fleet-purchase-proof.sh` (staged as `~/rlc104/proof.sh`, run by the
+owner from their own terminal; every step logged to `~/fleet-proof/proof.log`).
+
+| Step | What happens | Acceptance |
+|---|---|---|
+| 1. `start <aiCeilingPence>` | guards; custody money-out for the refund only; custody's refund switch; Agent-1's run budget; the watchdog; resume Agent-1 | the guards (below) pass; nothing else opens |
+| 2. `buy` | `economy-offer-proof` opens a £5 checkout of the published tracker (owner-only order page; v76 owner proof, works while sales are closed) | one order, `owner_proof` fixed at creation; a repeat returns the same page |
+| 3. You pay in PayPal | from a PayPal account other than the treasury's (as for the £1 receiving test) | capture booked once as `owner_funding` (owner capital, net of PayPal's fee); nothing posted to Agent-1; not in any venture's revenue |
+| 4. Delivery | automatic from the reviewed files; mail from the Fleet's shared address (the brand's routing address as Reply-To) to the PayPal payer's address; the order page download | the files match the inspected tracker.zip (sha 10adb667…) |
+| 5. Support / revision | you post one change request on the order page (e.g. "the due dates show as numbers in Excel") | Agent-1 wakes, answers on the order thread and, if it revises, delivers a re-reviewed file (at most one more delivery) |
+| 6. Refund | you ask on the order page; Agent-1 refunds (`order.refund`) — or, if it declines under its listed terms ("no refunds once delivered unless the file is faulty"), you run `refund` | one refund request, one PayPal refund; owner capital returned (`owner_proof_return`); Agent-1's books end unchanged; the ledger verifies |
+| 7. Automatic stop | the watchdog | stops on completion; see the stop conditions |
+
+**Permissions (exact)**
+| Item | Setting | Ends |
+|---|---|---|
+| Agent-1 | resumed; daily fuse 754 / hourly 600 unchanged; run budget = the AI ceiling for 24 h | paused at the stop |
+| Custody money-out | £5.00 per instruction, £5.00 a day, 24 h, reason "refund of the owner's £5 proof purchase only" | deactivated at the stop (or expires) |
+| Custody refund switch | `REAL_PAYMENTS_ENABLED=true` for `automaton-fleet-custody.service` only (systemd drop-in `60-purchase-proof-refund.conf`, custody restarted). runtime.env keeps all four flags false, so Fleet HQ and the Operator API still show `realPaymentsEnabled: false` | removed at the stop, custody restarted |
+| Public sales, card authority, outward release, payouts, Agent-2 | unchanged: closed / off / none / impossible (no payout signer) / paused | — |
+
+**Budget**
+| Kind | Expected | Ceiling |
+|---|---|---|
+| Purchase principal (yours, refunded) | £5.00 | £5.00 |
+| PayPal's fee (not all returned) | ≈ £0.45 on £5 (UK domestic 2.9 % + 30p); what PayPal gives back on the refund is booked from its records | £0.50 |
+| AI: Agent-1's work | measured so far: a first wake after a long pause 15p (2 calls, attempt 3); 6 calls 22p (attempt 2); packaging and review 48p (attempt 1). Expected 3–4 wakes (payment, revision, refund) and one revision: about 60p–£1.20, more if the revision is substantial | **the AI ceiling you set** (recommended £2.00 = 200); separate from the £2 publishing allowance |
+| Search | only if Agent-1 chooses to research: 1p per search | inside the AI ceiling's run (charged to Agent-1) |
+
+**Stop conditions (the watchdog, every minute):** complete (the refund recorded once as owner capital and the ledger
+verifies); a second proof order, refund request or PayPal refund; a third delivery; an uncertain outcome
+(`OPERATION_UNCERTAIN`); a buyer message unanswered for 30 minutes; 40 model calls without a new customer event; a refund
+not sent to PayPal within 30 minutes; the AI ceiling; 24 h. Waiting for you (to pay, to write, to ask) never stops it.
+Every stop pauses Agent-1, ends the run budget, deactivates custody money-out and removes the refund switch.
+
+**Accounting:** the capture is `owner_funding` ("owner proof purchase of an agent offer … not agent revenue"); the
+refund and any fee PayPal gives back are `owner_proof_return`; venture P&L excludes `owner_proof` orders. Tested:
+fleet-v76-market-fulfilment-pg (checkout during the hold, capture to owner capital net of fee, delivery to the buyer,
+nothing to the agent; refund evidence counted once) and fleet-refunds-v59-pg (the agent's refund of a proof order: one
+PayPal refund, owner capital returned, the agent's books unchanged at the end — with limit 21 while in flight).
 
 ### 2b. Measured live attempt (as planned for attempt 1; attempts 1 and 2 ran — see the proof log)
 | | |

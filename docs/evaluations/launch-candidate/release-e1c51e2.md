@@ -1,4 +1,4 @@
-# Release e1c51e2 (schema 94 → 95; UI 0.26.2 unchanged) — CANDIDATE for approval: built and rehearsed, not deployed
+# Release e1c51e2 (schema 94 → 95; UI 0.26.2 unchanged) — DEPLOYED 2026-10-19 00:56:08Z; Agent-1 upgraded; verified
 
 The consolidated package after measured attempt 2 and launch-readiness blocker #19. It contains 995388c's fixes
 (validated, not deployed on their own by the owner's decision) and the durable-operations repair. No new feature
@@ -62,3 +62,32 @@ scope. Installing it, resuming an agent and any paid run are separate owner deci
   guard, the dispatcher's and the spend API's recording, the card-fill index, the payout write-ahead, mail
   reconciliation and pull-request adoption in the installed build.
 - The rehearsals are valid for 24 h (until 2026-10-19 23:27Z); after that, rehearse again.
+
+## Installed (owner approval 2026-10-19; owner-run)
+| | |
+|---|---|
+| Install | `~/rlc103/install-fix.sh`, 00:54:24–01:06:52Z: evidence gate and guards passed (both rehearsals of e1c51e2 < 24 h; both agents paused; outward releases 0, card authority off, no custody activation; safety flags false); baseline `~/rlc91/baseline-pre-e1c51e2-005424-20261019T005424Z` (5028 dump entries) |
+| Release 94 → 95 | outage 00:55:16–00:56:01Z (45 s); cutover reconciliation OK (3180 events preserved); readyz 200 on schema 95; `production_deployed` recorded; root UI 0.26.2 |
+| Records | ledger = baseline; pauses and fuses = baseline |
+| Agent-1 | founder upgrade rehearsal on the host 27/27 (living founders untouched); preflight ok; runtime 32634bf → e1c51e2, upgrade **4b0b5421-c399-4f25-9ac4-0346ff588d88** (rollback: `sudo /opt/automaton-fleet/current/scripts/fleet-founders.sh rollback-runtime 01M3F50SH7PNX2E3GST13J52AS 4b0b5421-c399-4f25-9ac4-0346ff588d88 <reason>`) |
+| Agent-2 | untouched, b60e262, paused |
+| Verify | `~/rlc103/verify-install.sh` (01:2xZ): VERIFIED — the running process works from releases/e1c51e2; every v95 durable-operation check, the attempt-2 corrections, the run-budget gate; both agents paused; nothing open; ledger verifies (921 journals); no model call |
+| Operator API | approved = pinned = Operator API release = e1c51e2 / 8c6042d9…; schema 95; four safety flags false; cap 2, DEVELOPMENT, replication off |
+
+## Measured attempt 3 (owner-approved 2026-10-19: 130p ceiling, 70p before, £2 total)
+- 01:23:48Z started (`fleet-measured-attempt.sh start 130 70 200`, from the installed release). Agent-1 woke once for the
+  runtime-upgrade line: 2 model calls, **15p** ($0.2012; 51,887 input tokens, 0 from the cache, 245 output). This is
+  this run's measured cold start, not a fixed price: a later wake costs what its model, input size, output and caching
+  make it. The estimate given before the run (a few pence) was wrong: it assumed a cached prefix.
+- 01:24Z its note: "Offer live; no orders or enquiries; sales closed fleet-wide. Waiting." No further call, search,
+  operation, refusal or outward action.
+- 01:54Z the watchdog paused it and ended the run budget with the label "STALLED". **Corrected classification: waiting,
+  not a failure.** The intended offer (uk-landlord-compliance-tracker-england-g-a9ddde) was already published on a passing
+  review; with sales closed there was no customer work, so the attempt had nothing to produce and should not have
+  started. It exposed no work-loop failure.
+- Cumulative 85p of the £2 allowance (provisional until matched with Anthropic usage); £1.15 left. Both agents paused.
+- Script corrected (next release; the installed copy keeps the old label): `start` refuses when the intended offer is
+  already published ("nothing to create … the next useful event is a customer order"); idle beside a published offer while
+  waiting is reported as "WAITING, NOT A FAILURE". Tests: fleet-measured-attempt-script 8/8.
+- Next: no further product-creation attempt. The purchase proof (launch-readiness §2) is prepared for approval.
+

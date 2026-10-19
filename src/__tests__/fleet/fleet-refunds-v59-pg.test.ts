@@ -184,4 +184,50 @@ describe.skipIf(!PG_BIN)("v59: refunds initiated by the Fleet (PostgreSQL + cust
     expect((await R.one(`fleet.fleet_ledger_verify()`)).ok).toBe(true);
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
+
+  it("the owner's proof purchase, refunded by the agent: one PayPal refund, owner capital returned, nothing posted to or held from the agent", async () => {
+    // The proof checkout and order exactly as fleet_admin_offer_proof_buy makes them (v76 proves that function on a published
+    // product; here the refund the 2026-10-19 proof uses: the buyer asks, the agent refunds, custody sends it).
+    const k = await R.one(`fleet.fleet_econ_paypal_checkout($1, $2::jsonb)`, [F.id, JSON.stringify({ venture: "prints", amountMinor: 500,
+      description: "Proof purchase", idempotencyKey: `proof:${crypto.randomBytes(16).toString("hex")}` })]);
+    const checkoutId = k.checkout.checkoutId as string;
+    const orderId = (await R.q(`INSERT INTO fleet.fleet_customer_orders (agent_id, venture_id, checkout_id, item, amount_minor, currency, fulfilment,
+        access_token, origin_hash, owner_proof)
+      SELECT agent_id, venture_id, checkout_id, description, amount_minor, currency, 'digital_file', md5(random()::text) || md5(random()::text),
+        encode(sha256(convert_to('owner-proof:' || $2, 'UTF8')), 'hex'), true FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1 RETURNING order_id`,
+      [checkoutId, OWNER]))[0].order_id as string;
+    const capital = () => R.one(`fleet.fleet_ledger_balance('fleet:owner:capital')`).then((x) => Math.abs(Number(x)));
+    const agentPostings = () => R.one(`(SELECT count(*) FROM fleet.fleet_ledger_postings WHERE account_id LIKE '%' || $1 || '%')`, [F.id]).then(Number);
+    const capital0 = await capital();
+    const order = id("ORD");
+    await cx("cx_paypal_checkout_update", [W, checkoutId, "open", order, `https://www.paypal.com/checkoutnow?token=${order}`, null]);
+    await cx("cx_paypal_checkout_update", [W, checkoutId, "approved", null, null, null]);
+    const captureId = id("CAP");
+    expect(await cx("cx_paypal_capture_record", [W, checkoutId, captureId, "COMPLETED", 500, 45, "GBP", "webhook"])).toMatchObject({ ok: true, ownerProof: true, netMinor: 455 });
+    await cx("cx_paypal_balance_record", [W, rail.railId, "GBP", 100_000_000, 100_000_000]);
+    await svc.query(`SELECT fleet.svc_paypal_availability(100)`);
+    expect(await capital()).toBe(capital0 + 455);                 // owner capital, net of PayPal's fee
+    const [cash0, sp0, agent0, calls0] = [await cash(), await spendable(), await agentPostings(), pp.calls.length];
+    // The agent refunds its (proof) buyer in full; a repeat is answered from the record; nothing is held from the agent's wallet.
+    const key = idem();
+    const r = await econNext(R, F, "order.refund", { orderId, reason: "the buyer asked for a refund", idempotencyKey: key });
+    expect(r, JSON.stringify(r)).toMatchObject({ ok: true, refund: { amountMinor: 500 } });
+    expect(await econNext(R, F, "order.refund", { orderId, reason: "the buyer asked for a refund", idempotencyKey: key })).toMatchObject({ ok: true, replay: true });
+    // KNOWN DEFECT (2026-10-19, launch-readiness §1 row 21): while the refund is in flight its amount is held from the agent's
+    // spendable cash, as for a sale's refund; nothing is posted and the hold ends with the refund. Fixed in the next schema.
+    expect(await spendable()).toBe(sp0 - 500);
+    await worker.tick();
+    await worker.tick();
+    expect(pp.calls.length - calls0).toBe(1);                     // one PayPal refund
+    expect(pp.calls.at(-1)!.body).toMatchObject({ amount: { value: "5.00", currency_code: "GBP" } });
+    expect(await request(orderId)).toMatchObject({ status: "completed" });
+    expect(await capital()).toBe(capital0 + 455 - 500);           // returned as owner capital (PayPal's fee is the proof's cost)
+    expect([await cash(), await spendable(), await agentPostings()]).toEqual([cash0, sp0, agent0]);   // never the agent's books
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_offer_proof_returns WHERE checkout_id = $1)`, [checkoutId]))).toBe(1);
+    // A further refund is refused (nothing left) and sends nothing.
+    expect(await econNext(R, F, "order.refund", { orderId, amountMinor: 1, reason: "again", idempotencyKey: idem() })).toMatchObject({ code: "FLEET_REFUND_EXCEEDS_REFUNDABLE" });
+    await worker.tick();
+    expect(pp.calls.length - calls0).toBe(1);
+    expect((await R.one(`fleet.fleet_ledger_verify()`)).ok).toBe(true);
+  });
 });
