@@ -111,7 +111,7 @@ results() {
     "") echo "    refund handling: none yet";;
     *) echo "    refund handling: requested by $by";;
   esac
-  echo "    refund executed: $(Q "SELECT COALESCE(jsonb_agg(jsonb_build_object('status', status, 'amountMinor', amount_minor, 'paypal', paypal_refund_id IS NOT NULL)), '[]') FROM fleet_paypal_refund_requests WHERE order_id = '$o'"); returned as owner capital: $(Q "SELECT COALESCE(jsonb_agg(jsonb_build_object('kind', kind, 'amountMinor', amount_minor)), '[]') FROM fleet_offer_proof_returns r JOIN fleet_customer_orders z ON z.checkout_id = r.checkout_id WHERE z.order_id = '$o'")"
+  echo "    refund executed: $(Q "SELECT COALESCE(jsonb_agg(jsonb_build_object('status', status, 'amountMinor', amount_minor, 'paypal', paypal_refund_id IS NOT NULL)), '[]') FROM fleet_paypal_refund_requests WHERE order_id = '$o'"); returned as owner capital: $(Q "SELECT COALESCE(jsonb_agg(jsonb_build_object('kind', r.kind, 'amountMinor', r.amount_minor)), '[]') FROM fleet_offer_proof_returns r JOIN fleet_customer_orders z ON z.checkout_id = r.checkout_id WHERE z.order_id = '$o'")"
   echo "    PayPal's fee on the capture (actual, from the books): $(Q "SELECT c.amount_minor - COALESCE((SELECT sum(p.amount_cents) FROM fleet_ledger_postings p WHERE p.journal_id = c.journal_id AND p.account_id = 'fleet:owner:capital'), c.amount_minor) FROM fleet_paypal_checkouts c JOIN fleet_customer_orders z ON z.checkout_id = c.checkout_id WHERE z.order_id = '$o' AND c.journal_id IS NOT NULL")p"
   local now hold all ai oth exp; read -r now hold all ai oth <<< "$(wallet "$o")"; exp=$(( SP0 - ai + oth - hold ))
   echo "    this proof's refund hold: ${hold}p ($( (( hold == 0 )) && echo 'none / released' || echo HELD)); all PayPal holds on Agent-1's money: ${all}p"
