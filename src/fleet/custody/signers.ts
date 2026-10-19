@@ -42,7 +42,9 @@ export interface CustodySigner {
   status(inst: ClaimedInstruction, secret: SecretHandle, externalRef: string | null): Promise<SignerOutcome>;
 }
 
-export type HttpPort = (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; json(): Promise<unknown> }>;
+/** v98: `headers` (optional) lets a caller read a provider's own reference, e.g. PayPal's `paypal-debug-id` — never a secret. */
+export type HttpPort = (url: string, init: { method: string; headers: Record<string, string>; body?: string }) =>
+  Promise<{ status: number; json(): Promise<unknown>; headers?: { get(name: string): string | null } }>;
 
 const CURRENCIES = new Set(["GBP", "USD", "EUR"]); // two-decimal currencies only (exact minor units)
 const decimal = (minor: number) => `${Math.trunc(minor / 100)}.${String(minor % 100).padStart(2, "0")}`;

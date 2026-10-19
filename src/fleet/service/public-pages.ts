@@ -8,6 +8,8 @@
  *   GET  /order/<token>                     the buyer's order (v97: the checkout): what it buys (read from the files), the total,
  *                                           consent, PayPal's payment button, receipt, downloads, seller, support, refund rights
  *   GET  /order/<token>/preview/<n>         v97: the offer's preview image, by the order's access code
+ *   POST /order/<token>/pay                 v98: the buyer is ready to pay → PayPal (a link PayPal confirmed recently) or the page
+ *                                           while custody reuses or replaces the PayPal order
  *   GET  /order/<token>/file/<delivery>/<n> a delivered file (30 days)
  *   POST /order/<token>/message             a buyer message (+ files) about the order
  *   GET  /enquiry/<token>                   the buyer's request: brief, thread, quote → order page
@@ -78,7 +80,8 @@ function needsFor(names: readonly string[]): string[] {
  *  own form POST, which the same-origin check had to refuse — the order page's consent form failed ("cross-site request
  *  refused") in a real browser. Same-origin sends the page's origin to this site only, never to another. */
 function page(res: http.ServerResponse, status: number, title: string, body: string, seller: unknown, o: { nonce?: string; refreshS?: number; head?: string; paypalLogo?: boolean } = {}): void {
-  const csp = `default-src 'none'; img-src 'self'${o.paypalLogo ? ` ${PAYPAL_LOGO_ORIGIN}` : ""}; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
+  // v98: a page with PayPal's button may hand the buyer on to PayPal after its own form (Chrome applies form-action to that redirect).
+  const csp = `default-src 'none'; img-src 'self'${o.paypalLogo ? ` ${PAYPAL_LOGO_ORIGIN}` : ""}; style-src 'unsafe-inline'; form-action 'self'${o.paypalLogo ? " https://www.paypal.com https://www.sandbox.paypal.com" : ""}; base-uri 'none'; frame-ancestors 'none'`
     + (o.nonce ? `; script-src 'nonce-${o.nonce}'; connect-src 'self'` : "");
   res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff",
     "content-security-policy": csp, "referrer-policy": "same-origin", "x-frame-options": "DENY" });
@@ -210,6 +213,7 @@ export class PublicPages {
         if (p.length === 5 && p[2] === "file" && UUID.test(p[3]) && /^([1-9]|10)$/.test(p[4]) && !isPost) return await this.file(res, p[1], p[3], Number(p[4]));
         if (p.length === 3 && p[2] === "message" && isPost) return await this.message(req, res, "order", p[1], origin);
         if (p.length === 3 && p[2] === "consent" && isPost) return await this.consent(req, res, p[1], origin);
+        if (p.length === 3 && p[2] === "pay" && isPost) return await this.payNow(res, p[1], origin);
         if (p.length === 3 && p[2] === "repo-consent" && isPost) return await this.repoConsent(req, res, "order", p[1], origin);
       }
       if (p[0] === "enquiry" && TOKEN.test(p[1] ?? "")) {
@@ -426,13 +430,20 @@ export class PublicPages {
         : `<p>This checkout is no longer open. <strong>No payment was taken.</strong></p>`;
     } else if (paid) {
       action = "";
+    } else if (o.pay === "preparing") {
+      action = `<h3>Step 2 of 2 · Pay</h3><p>Opening a fresh PayPal checkout for you… this page refreshes by itself, usually within a few seconds. Nothing has been charged.</p>`;
+    } else if (o.pay === "link" || o.pay === "button" || o.pay === "retry" || (!o.pay && o.checkout === "open" && o.approvalUrl)) {
+      // v98: a link PayPal confirmed recently goes straight to PayPal; otherwise the button asks for a fresh (or re-confirmed) one first.
+      const mark = `<span>Pay ${total} with</span><img src="${PAYPAL_LOGO}" alt="PayPal" width="85" height="24">`;
+      action = `<h3>Step 2 of 2 · Pay</h3>`
+        + (o.pay === "retry" ? `<p class="warn">PayPal could not open a checkout just now. Nothing has been charged. Please try again in a moment${o.payFailureRef ? ` (PayPal reference ${esc(o.payFailureRef)})` : ""}.</p>` : "")
+        + (o.approvalUrl && o.pay !== "button" && o.pay !== "retry" ? `<a class="pp" href="${esc(o.approvalUrl)}" rel="noreferrer">${mark}</a>`
+          : `<form method="post" action="/order/${esc(token)}/pay" class="noprint" style="margin:0"><button type="submit" class="pp" style="border:0">${mark}</button></form>`)
+        + `<p class="small muted">You pay on PayPal's own website (paypal.com), then PayPal brings you back to this page. This shop never receives your card or bank details.`
+        + (o.payableUntil ?? o.expiresAt ? ` You can pay for this order until ${esc(when(o.payableUntil ?? o.expiresAt))}.` : "") + `</p>`
+        + `<p class="small muted">Paid already? Reload this page to see your receipt.</p>`;
     } else if (o.checkout === "requested") {
       action = `<p>Preparing your PayPal checkout… this page refreshes by itself.</p>`;
-    } else if (o.checkout === "open" && o.approvalUrl) {
-      action = `<h3>Step 2 of 2 · Pay</h3><a class="pp" href="${esc(o.approvalUrl)}" rel="noreferrer"><span>Pay ${total} with</span><img src="${PAYPAL_LOGO}" alt="PayPal" width="85" height="24"></a>`
-        + `<p class="small muted">You pay on PayPal's own website (paypal.com), then PayPal brings you back to this page. This shop never receives your card or bank details.`
-        + (o.expiresAt ? ` This checkout is open until ${esc(when(o.expiresAt))}.` : "") + `</p>`
-        + `<p class="small muted">Paid already? Reload this page to see your receipt.</p>`;
     } else if (confirming) {
       action = `<p>PayPal has your approval and the payment is being confirmed. <strong>Please do not pay again.</strong> This page refreshes by itself.</p>`;
     }
@@ -476,8 +487,8 @@ export class PublicPages {
       + this.rightsCard(off, product)
       + (!askConsent && c.recorded && statements.length ? `<div class="card"><h2>Your confirmation</h2><p class="muted small">Recorded ${esc(when(c.at))}</p><ul>${statements.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : "")
       + (o.paidAt ? `<script nonce="${nonce}">document.getElementById('print').addEventListener('click',function(){window.print()});</script>` : ""),
-      null, { ...(paid || o.paidAt ? { nonce } : {}), paypalLogo: !!(o.checkout === "open" && o.approvalUrl),
-        ...((o.checkout === "requested" || confirming) && !askConsent ? { refreshS: 4 } : {}) });
+      null, { ...(paid || o.paidAt ? { nonce } : {}), paypalLogo: action.includes(PAYPAL_LOGO),
+        ...(o.pay === "preparing" && !askConsent ? { refreshS: 3 } : (o.checkout === "requested" && !o.pay) || confirming ? (askConsent ? {} : { refreshS: 4 }) : {}) });
   }
 
   /** v97: what the order buys — the offer's promises, and what is inside its download, read from the file itself. */
@@ -557,6 +568,15 @@ export class PublicPages {
     const r = await this.port.publicCall("svc_order_sample", [token, "preview", n]);
     if (!r.ok || !/^image\/(png|jpeg)$/.test(String(r.contentType))) { res.writeHead(404).end(); return; }
     this.sendFile(res, String(r.fileName), String(r.contentType), String(r.contentB64), true);
+  }
+
+  /** v98: the buyer is ready to pay — straight to PayPal when the link was confirmed recently, else back to the page, which shows
+   *  "opening a fresh PayPal checkout" until custody has reused or replaced the PayPal order (seconds). */
+  private async payNow(res: http.ServerResponse, token: string, origin: string): Promise<void> {
+    const r = await this.port.publicCall("svc_order_pay", [token, origin]);
+    if (!r.ok && r.code === "FLEET_NOT_FOUND") { page(res, 404, "Not found", "<h1>Not found</h1><p>This order page does not exist.</p>", null); return; }
+    const to = r.ok && typeof r.redirect === "string" && /^https:\/\/www\.(sandbox\.)?paypal\.com\//.test(r.redirect) ? r.redirect : `/order/${token}`;
+    res.writeHead(303, { location: to, "cache-control": "no-store", "referrer-policy": "no-referrer" }).end();
   }
 
   /** v82: the buyer's consent given on the order page (a quoted service, or an order made outside an offer page). */

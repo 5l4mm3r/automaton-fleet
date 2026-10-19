@@ -14,7 +14,7 @@ import pg from "pg";
 import type { Pool } from "pg";
 import { quoteIdent } from "../postgres/migrations.js";
 import { auditPrivileges, DEFAULT_CUSTODY_ROLES, type PrivilegeAuditResult } from "../postgres/privileges.js";
-import type { PayPalGatewayPort, PayPalInboxItem, PayPalRail, PayPalWorkItem, PayPalStatusItem } from "./paypal-treasury.js";
+import type { PayPalGatewayPort, PayPalInboxItem, PayPalRail, PayPalWorkItem, PayPalStatusItem, PayPalPayItem, PayPalOrderClaim, PayPalWatchItem } from "./paypal-treasury.js";
 import type { SealedCredentialPort } from "./sealed-vault.js";
 
 export interface CustodyPing {
@@ -147,6 +147,26 @@ export class PgCustodyGateway implements PayPalGatewayPort, SealedCredentialPort
   // v76: open checkouts due a status read (no webhook reported them) and what PayPal said.
   paypalStatusWork(worker: string, limit: number) { return this.cx<PayPalStatusItem[]>("cx_paypal_status_work", [worker, limit]); }
   paypalStatusChecked(worker: string, checkoutId: string, seen: string) { return this.cx<CxResult>("cx_paypal_status_checked", [worker, checkoutId, seen]); }
+  // ── v98: the PayPal order lifecycle ──
+  paypalPayWork(worker: string, limit: number) { return this.cx<PayPalPayItem[]>("cx_paypal_pay_work", [worker, limit]); }
+  paypalOrderClaim(worker: string, checkoutId: string) { return this.cx<PayPalOrderClaim | { ok: false; code: string }>("cx_paypal_order_claim", [worker, checkoutId]); }
+  paypalOrderCreated(worker: string, providerOrderId: string, paypalOrderId: string, approvalUrl: string, payee: string | null, debugId: string | null) {
+    return this.cx<CxResult>("cx_paypal_order_created", [worker, providerOrderId, paypalOrderId, approvalUrl, payee, debugId]);
+  }
+  paypalOrderNote(worker: string, providerOrderId: string, kind: string, http: number | null, status: string | null, name: string | null, debugId: string | null,
+    detail: Record<string, unknown> | null) {
+    return this.cx<CxResult>("cx_paypal_order_note", [worker, providerOrderId, kind, http, status, name, debugId, detail === null ? null : JSON.stringify(detail)]);
+  }
+  paypalOrderRetire(worker: string, providerOrderId: string, evidence: Record<string, unknown>) {
+    return this.cx<CxResult>("cx_paypal_order_retire", [worker, providerOrderId, JSON.stringify(evidence)]);
+  }
+  paypalOrderWatchWork(worker: string, limit: number) { return this.cx<PayPalWatchItem[]>("cx_paypal_order_watch_work", [worker, limit]); }
+  paypalReconReport(worker: string, providerOrderId: string, kind: string, ref: string, amountMinor: number | null, currency: string | null, detail: Record<string, unknown> | null) {
+    return this.cx<CxResult>("cx_paypal_recon_report", [worker, providerOrderId, kind, ref, amountMinor, currency, detail === null ? null : JSON.stringify(detail)]);
+  }
+  paypalSyncRecord(worker: string, railId: string, kind: string, ok: boolean, http: number | null, name: string | null, debugId: string | null, detail: Record<string, unknown> | null) {
+    return this.cx<CxResult>("cx_paypal_sync_record", [worker, railId, kind, ok, http, name, debugId, detail === null ? null : JSON.stringify(detail)]);
+  }
   paypalRefundResult(worker: string, requestId: string, outcome: string, refundId: string | null, amountMinor: number | null, currency: string | null, failure: string | null) {
     return this.cx<CxResult>("cx_paypal_refund_result", [worker, requestId, outcome, refundId, amountMinor, currency, failure]);
   }

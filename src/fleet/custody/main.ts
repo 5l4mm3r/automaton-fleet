@@ -75,6 +75,8 @@ export interface CustodyStartOptions {
   secretFiles?: string[];
   installSignalHandlers?: boolean;
   pollMs?: number;
+  /** v98: the pay pass interval (a buyer waiting to pay), default 3 s. */
+  payPollMs?: number;
   /** Test seam: the HTTP port the PayPal treasury worker uses (default: real fetch with a timeout). */
   http?: HttpPort;
 }
@@ -111,7 +113,7 @@ export function custodyEnvProblems(
 /** Real HTTP for provider calls (custody executor only), with a timeout; nothing is logged. */
 export const fetchHttp: HttpPort = async (url, init) => {
   const r = await fetch(url, { ...init, signal: AbortSignal.timeout(20_000) });
-  return { status: r.status, json: () => r.json() };
+  return { status: r.status, json: () => r.json(), headers: r.headers };
 };
 
 /** The configured signers (rail-bound) and the vault, or the problems that refuse startup. */
@@ -208,6 +210,9 @@ export async function startCustodyFromEnv(
   let treasury: PayPalTreasuryWorker | null = null;
   let treasuryTimer: NodeJS.Timeout | null = null;
   let treasuryRun: Promise<void> | null = null;
+  // v98: a buyer waiting to pay is served within seconds — the pay pass alone, between the full passes (never during one).
+  let payTimer: NodeJS.Timeout | null = null;
+  let payRun: Promise<void> | null = null;
   if (vault && (rails > 0 || sealed)) {
     treasury = new PayPalTreasuryWorker(gateway, vault, opts.http ?? fetchHttp, {
       worker: "custody-executor", webhookIds,
@@ -224,6 +229,10 @@ export async function startCustodyFromEnv(
     };
     run();
     treasuryTimer = setInterval(run, Math.max(5_000, opts.pollMs ?? 30_000));
+    payTimer = setInterval(() => {
+      if (payRun || treasuryRun) return;
+      payRun = treasury!.payTick().finally(() => (payRun = null));
+    }, Math.max(1_000, opts.payPollMs ?? 3_000));
   }
   const live = await gateway.ping().catch(() => null);
   log("info", "custody_executor_started", { schemaVersion: CUSTODY_SCHEMA_VERSION, signers: signers.map((x) => ({ railId: x.binding.railId, mode: x.binding.mode })),
@@ -231,7 +240,9 @@ export async function startCustodyFromEnv(
     sealedCredentials: sealed?.refs().length ?? 0, custodyKey: sealed?.fingerprint.slice(0, 16) ?? null });
   const close = async () => {
     if (treasuryTimer) clearInterval(treasuryTimer);
+    if (payTimer) clearInterval(payTimer);
     await treasuryRun;
+    await payRun;
     await executor.stop();
     await gateway.close();
   };

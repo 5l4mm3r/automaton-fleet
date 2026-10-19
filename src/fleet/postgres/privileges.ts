@@ -1265,7 +1265,16 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_custody_activations: new Set(["fleet_admin_custody_activate", "fleet_admin_custody_deactivate", "svc_custody_activation_expire"]),
     fleet_agent_wallet_limits: new Set(["fleet_admin_wallet_limits_set"]),
     fleet_paypal_checkouts: new Set(["fleet_admin_paypal_test_checkout", "fleet_econ_paypal_checkout", "fleet_econ_paypal_cancel", "cx_paypal_work", "cx_paypal_checkout_update", "cx_paypal_capture_record",
-      "cx_paypal_status_checked"]),
+      "cx_paypal_status_checked",
+      // v98: the buyer's pay request; custody's order lifecycle (a fresh order, its reads, its retirement); the owner's retirement.
+      "svc_order_pay", "cx_paypal_pay_work", "cx_paypal_order_created", "cx_paypal_order_note", "cx_paypal_order_retire", "fleet_admin_paypal_order_retire"]),
+    // v98: provider orders by custody's lifecycle functions, the checkout follower (every order id a checkout carries) and the owner's
+    // retirement; their history only through the event helper; reconciliation items only by their helper and the owner's resolution.
+    fleet_paypal_provider_orders: new Set(["cx_paypal_order_claim", "cx_paypal_order_created", "cx_paypal_order_note", "cx_paypal_order_retire",
+      "fleet_paypal_checkouts_follow_orders", "fleet_admin_paypal_order_retire"]),
+    fleet_paypal_provider_order_events: new Set(["fleet_paypal_order_event"]),
+    fleet_paypal_reconciliation_items: new Set(["fleet_paypal_recon_add", "fleet_admin_paypal_reconciliation_resolve"]),
+    fleet_paypal_sync_status: new Set(["cx_paypal_sync_record"]),
     fleet_paypal_webhook_inbox: new Set(["svc_paypal_webhook_receive", "cx_paypal_inbox", "cx_paypal_inbox_result"]),
     fleet_paypal_transactions: new Set(["fleet_channel_payout_book", "fleet_admin_channel_payout_transfer", "cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute", "svc_settlement_paypal_match",
       // v66: a deposit backing the existing capital closes its transaction.

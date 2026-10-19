@@ -104,9 +104,10 @@ import { V94_SQL } from "./migrations-phase94.js";
 import { BROWSER_FUNCTIONS_V95, CODE_FUNCTIONS_V95, IDENTITY_FUNCTIONS_V95, V95_SQL } from "./migrations-phase95.js";
 import { V96_SQL } from "./migrations-phase96.js";
 import { V97_SQL } from "./migrations-phase97.js";
+import { V98_SQL } from "./migrations-phase98.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 97;
+export const FLEET_PG_SCHEMA_VERSION = 98;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1299,6 +1300,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 95, name: "durable_operations", sql: V95_SQL },
   { version: 96, name: "custody_refund_authority", sql: V96_SQL },
   { version: 97, name: "order_page_checkout", sql: V97_SQL },
+  { version: 98, name: "paypal_order_lifecycle", sql: V98_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1402,6 +1404,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_order_file(text, uuid, integer)",
   // v97: the order page's preview images and the contents of its small deliverables (what the buyer is buying), by access code.
   "svc_order_sample(text, text, integer)",
+  // v98: the buyer is ready to pay — a fresh or reused PayPal order (custody creates it; the controller only records the request).
+  "svc_order_pay(text, text)",
   // v79: a channel's attribution code carried onto an order / enquiry; the public outreach opt-out page.
   "svc_attribute(text, text, text)",
   "svc_outreach_optout(text, boolean)",
@@ -1515,6 +1519,15 @@ export const CUSTODY_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v76: the status of open checkouts, read from PayPal when no webhook reported them.
   "cx_paypal_status_work(text, integer)",
   "cx_paypal_status_checked(text, uuid, text)",
+  // v98: the PayPal order lifecycle — claimed creation, reads, evidence-based retirement, watching, reconciliation, sync status.
+  "cx_paypal_pay_work(text, integer)",
+  "cx_paypal_order_claim(text, uuid)",
+  "cx_paypal_order_created(text, uuid, text, text, text, text)",
+  "cx_paypal_order_note(text, uuid, text, integer, text, text, text, jsonb)",
+  "cx_paypal_order_retire(text, uuid, jsonb)",
+  "cx_paypal_order_watch_work(text, integer)",
+  "cx_paypal_recon_report(text, uuid, text, text, bigint, text, jsonb)",
+  "cx_paypal_sync_record(text, uuid, text, boolean, integer, text, text, jsonb)",
 ]);
 
 /** Per custody function: the only tables it may write and the only volatile fleet functions it may call. */
@@ -1538,7 +1551,8 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   cx_paypal_capture_record: {
     // v51: a capture's cash is held (fleet_paypal_availability) until PayPal shows it available.
     writes: ["fleet_paypal_checkouts", "fleet_revenue_claims", "fleet_venture_journals", "fleet_paypal_availability"],
-    calls: ["fleet_ledger_post", "fleet_event"],
+    // v98: a second, different capture of a checkout is a reconciliation item.
+    calls: ["fleet_ledger_post", "fleet_event", "fleet_paypal_recon_add"],
   },
   // v56: a refund / reversal also reaches the customer order (fleet_order_refunded).
   cx_paypal_refund_record: { writes: ["fleet_revenue_claims", "fleet_venture_journals", "fleet_paypal_availability", "fleet_paypal_clawback_posts",
@@ -1565,6 +1579,15 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   // v76: reading an open checkout's PayPal status (backed off), failing a voided one.
   cx_paypal_status_work: { writes: [], calls: [] },
   cx_paypal_status_checked: { writes: ["fleet_paypal_checkouts"], calls: ["fleet_event"] },
+  // v98
+  cx_paypal_pay_work: { writes: ["fleet_paypal_checkouts"], calls: [] },
+  cx_paypal_order_claim: { writes: ["fleet_paypal_provider_orders"], calls: ["fleet_paypal_order_event", "fleet_paypal_recon_add"] },
+  cx_paypal_order_created: { writes: ["fleet_paypal_provider_orders", "fleet_paypal_checkouts"], calls: ["fleet_paypal_order_event", "fleet_event"] },
+  cx_paypal_order_note: { writes: ["fleet_paypal_provider_orders", "fleet_paypal_checkouts"], calls: ["fleet_paypal_order_event", "fleet_paypal_recon_add", "fleet_event"] },
+  cx_paypal_order_retire: { writes: ["fleet_paypal_provider_orders", "fleet_paypal_checkouts"], calls: ["fleet_paypal_order_event", "fleet_paypal_recon_add", "fleet_event"] },
+  cx_paypal_order_watch_work: { writes: [], calls: [] },
+  cx_paypal_recon_report: { writes: [], calls: ["fleet_paypal_recon_add"] },
+  cx_paypal_sync_record: { writes: ["fleet_paypal_sync_status"], calls: [] },
 });
 
 /** Schema v34: the only functions the identity broker's role may execute (fleet_identity; ix_* protocol). */

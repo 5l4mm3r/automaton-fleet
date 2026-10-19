@@ -151,6 +151,18 @@ export class PgHubAdmin {
   refundAuthorities() {
     return this.one(`SELECT fleet_refund_authorities_json(false) AS r`);
   }
+  /** v98: PayPal evidence that needs the owner (late approvals / payments on retired orders, duplicates, unverifiable not-found),
+   *  the reconciliation channels' status (Transaction Search, the order audit, the token's scopes) and open checkouts' PayPal orders. */
+  paypalReconciliation(actor: string) {
+    return this.one(`SELECT fleet_admin_paypal_reconciliation($1) AS r`, [actor]);
+  }
+  paypalReconciliationResolve(itemId: string, resolution: string, actor: string) {
+    return this.one(`SELECT fleet_admin_paypal_reconciliation_resolve($1, $2, $3) AS r`, [itemId, resolution, actor]);
+  }
+  /** v98: retire a PayPal order the Fleet could not verify as gone (never one with any sign of approval or payment). */
+  paypalOrderRetire(paypalOrderId: string, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_paypal_order_retire($1, $2, $3) AS r`, [paypalOrderId, reason, actor]);
+  }
   /** v96: Fleet Control's daily AI budget (checked before each of its review calls is claimed) and its state. */
   fleetControlAiBudget(dailyMinor: number, reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_fleet_control_ai_budget($1, $2, $3) AS r`, [dailyMinor, reason, actor]);

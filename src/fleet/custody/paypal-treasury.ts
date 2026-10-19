@@ -13,6 +13,12 @@
  *  3. periodically, Transaction Search (24 h windows with 3 h overlap; PayPal can lag up to 3 h) records PayPal's own
  *     transactions and posts any capture the webhooks missed; the Balances API is observed.
  *
+ * v98: the PayPal order lifecycle — creations are claimed first (one live provider order per checkout; a retry reuses its
+ * PayPal-Request-Id), a buyer ready to pay gets a PayPal order PayPal confirmed payable (reused) or a fresh one after the old one
+ * was retired on verified evidence; retired orders are watched for late approval / payment (reconciled, never captured
+ * automatically); captured orders are audited through the Orders API (captures, refunds); PayPal's debug ids and the outcome of
+ * Transaction Search (and whether the token carries its scope) are recorded. See migrations-phase98.ts.
+ *
  * Contract: PayPal is reached only through its REST API with the owner's app credential (never paypal.com itself); no
  * secret or token is ever returned, stored or logged; an unknown outcome is left for the next pass, never guessed.
  */
@@ -27,6 +33,8 @@ export interface PayPalWorkItem {
   paypalOrderId: string | null; railId: string; railMode: "live" | "sandbox"; credentialId: string; vaultRef: string;
   /** v76: the buyer's order page token (PayPal returns the buyer to that page). */
   returnToken?: string | null;
+  /** v98: the capture's PayPal-Request-Id (the first order of a checkout keeps the legacy `capture:<checkout>`). */
+  captureRequestId?: string | null;
 }
 /** v76: an open checkout whose PayPal order status is due to be read (the webhook may never come). */
 /** v76: PayPal returns a buyer to their own order page (same origin as the configured return page) when the checkout has one.
@@ -37,7 +45,23 @@ export function returnUrlFor(returnUrl: string, token: string | null | undefined
 }
 export interface PayPalStatusItem {
   checkoutId: string; status: "open"; amountMinor: number; currency: string; paypalOrderId: string; railId: string; railMode: "live" | "sandbox";
-  credentialId: string; vaultRef: string;
+  credentialId: string; vaultRef: string; captureRequestId?: string | null; providerOrderId?: string | null;
+}
+/** v98: a checkout whose buyer is waiting to pay, with its live provider order (if any). */
+export interface PayPalPayItem {
+  checkoutId: string; status: "requested" | "open" | "approved"; amountMinor: number; currency: string; railId: string; railMode: "live" | "sandbox"; vaultRef: string;
+  order?: { providerOrderId: string; state: "creating" | "open" | "approved"; paypalOrderId?: string; railMode: "live" | "sandbox"; vaultRef: string;
+    captureRequestId?: string; notFoundReads: number; control?: string } | null;
+}
+/** v98: a claimed creation (a retry carries the same request id). */
+export interface PayPalOrderClaim {
+  ok: true; retry: boolean; providerOrderId: string; attempt: number; requestId: string; checkoutId: string; amountMinor: number; currency: string; description: string;
+  railMode: "live" | "sandbox"; vaultRef: string; returnToken?: string | null;
+}
+/** v98: a provider order due a read — a retired / closed one (watched) or a captured one (audited). */
+export interface PayPalWatchItem {
+  providerOrderId: string; paypalOrderId: string; state: "retired" | "closed" | "captured"; checkoutId: string; checkoutStatus: string; captureId: string | null;
+  amountMinor: number; currency: string; railId: string; railMode: "live" | "sandbox"; vaultRef: string; payee?: string | null;
 }
 export interface PayPalRail { railId: string; railMode: "live" | "sandbox"; credentialId: string; vaultRef: string; lastSyncAt: string | null;
   /** v49: the rail's PayPal webhook id as the owner registered it (non-secret). */
@@ -54,7 +78,7 @@ export interface PayPalGatewayPort {
   paypalCheckoutUpdate(worker: string, checkoutId: string, status: "open" | "approved" | "capture_pending" | "failed", orderId: string | null, approvalUrl: string | null,
     failure: string | null): Promise<CxResult>;
   paypalCaptureRecord(worker: string, checkoutId: string, captureId: string, status: "COMPLETED" | "PENDING", grossMinor: number, feeMinor: number, currency: string,
-    evidence: "capture_response" | "webhook" | "transaction_search"): Promise<CxResult>;
+    evidence: "capture_response" | "webhook" | "transaction_search" | "order_read"): Promise<CxResult>;
   paypalRefundRecord(worker: string, captureId: string, refundId: string, kind: "refund" | "reversal" | "dispute_fee" | "chargeback_fee", amountMinor: number,
     currency: string): Promise<CxResult>;
   paypalTxnRecord(worker: string, railId: string, txn: Record<string, unknown>): Promise<CxResult>;
@@ -77,6 +101,18 @@ export interface PayPalGatewayPort {
   paypalStatusChecked?(worker: string, checkoutId: string, seen: string): Promise<CxResult>;
   paypalRefundResult?(worker: string, requestId: string, outcome: "completed" | "pending" | "failed" | "unknown", refundId: string | null, amountMinor: number | null,
     currency: string | null, failure: string | null): Promise<CxResult>;
+  /** v98: the PayPal order lifecycle (optional: an older registry has none — the worker then behaves as before). */
+  paypalPayWork?(worker: string, limit: number): Promise<PayPalPayItem[]>;
+  paypalOrderClaim?(worker: string, checkoutId: string): Promise<PayPalOrderClaim | { ok: false; code: string }>;
+  paypalOrderCreated?(worker: string, providerOrderId: string, paypalOrderId: string, approvalUrl: string, payee: string | null, debugId: string | null): Promise<CxResult>;
+  paypalOrderNote?(worker: string, providerOrderId: string, kind: "create_failed" | "create_indefinite" | "read" | "capture_failed" | "audit", http: number | null,
+    status: string | null, name: string | null, debugId: string | null, detail: Record<string, unknown> | null): Promise<CxResult>;
+  paypalOrderRetire?(worker: string, providerOrderId: string, evidence: Record<string, unknown>): Promise<CxResult>;
+  paypalOrderWatchWork?(worker: string, limit: number): Promise<PayPalWatchItem[]>;
+  paypalReconReport?(worker: string, providerOrderId: string, kind: "audit_mismatch" | "mapping_mismatch", ref: string, amountMinor: number | null, currency: string | null,
+    detail: Record<string, unknown> | null): Promise<CxResult>;
+  paypalSyncRecord?(worker: string, railId: string, kind: "transaction_search" | "order_audit" | "token_scopes", ok: boolean, http: number | null, name: string | null,
+    debugId: string | null, detail: Record<string, unknown> | null): Promise<CxResult>;
 }
 
 export interface PayPalTreasuryOptions {
@@ -95,6 +131,20 @@ export interface PayPalTreasuryOptions {
 }
 
 const PAYPAL_ID = /^[A-Z0-9]{5,40}$/;
+/** v98: the access token scope that Transaction Search needs (PayPal grants it when the app has the Transaction search feature). */
+export const PAYPAL_SEARCH_SCOPE = "https://uri.paypal.com/services/reporting/search/read";
+type PayPalResponse = { status: number; json: any; debugId: string | null };
+/** PayPal's own reference for a response (header, else the error body) — safe to keep: it names the request, not the caller. */
+function debugIdOf(headers: { get(name: string): string | null } | undefined, json: any): string | null {
+  const v = headers?.get?.("paypal-debug-id") ?? (typeof json?.debug_id === "string" ? json.debug_id : null);
+  return typeof v === "string" && /^[A-Za-z0-9-]{4,64}$/.test(v) ? v : null;
+}
+/** An error's name and first issue, as PayPal's codes (upper-case identifiers only). */
+export function paypalErrorOf(json: any): { name: string | null; issue: string | null } {
+  const code = (v: unknown) => (typeof v === "string" && /^[A-Z0-9_]{2,64}$/.test(v) ? v : null);
+  return { name: code(json?.name), issue: code(Array.isArray(json?.details) ? json.details[0]?.issue : null) };
+}
+const orderStatusOf = (r: PayPalResponse) => (r.status === 200 && typeof r.json?.status === "string" && /^[A-Z_]{2,32}$/.test(r.json.status) ? String(r.json.status) : null);
 
 /** The events the treasury webhook must deliver (README §4.1): orders, captures, refunds / reversals, disputes. */
 export const PAYPAL_REQUIRED_WEBHOOK_EVENTS: readonly string[] = Object.freeze([
@@ -137,7 +187,7 @@ export function checkoutIdOf(customId: unknown, invoiceId: unknown): string | nu
 
 export class PayPalTreasuryWorker {
   private readonly worker: string;
-  private readonly tokens = new Map<string, { token: string; until: number }>();
+  private readonly tokens = new Map<string, { token: string; until: number; scope: string }>();
   private lastReconcile = new Map<string, number>();
   private lastBalance = new Map<string, number>();
   private readonly now: () => number;
@@ -170,23 +220,32 @@ export class PayPalTreasuryWorker {
       body: "grant_type=client_credentials",
     });
     if (res.status !== 200) return null;
-    const j = (await res.json()) as { access_token?: unknown; expires_in?: unknown };
+    const j = (await res.json()) as { access_token?: unknown; expires_in?: unknown; scope?: unknown };
     if (typeof j.access_token !== "string" || j.access_token.length < 10) return null;
     const ttl = typeof j.expires_in === "number" && j.expires_in > 120 ? j.expires_in : 600;
-    this.tokens.set(key, { token: j.access_token, until: this.now() + (ttl - 60) * 1000 });
+    this.tokens.set(key, { token: j.access_token, until: this.now() + (ttl - 60) * 1000, scope: typeof j.scope === "string" ? j.scope.slice(0, 4000) : "" });
     return j.access_token;
   }
 
-  private async call(r: { railMode: string; vaultRef: string }, method: string, path: string, body?: unknown, requestId?: string): Promise<{ status: number; json: any } | null> {
+  private async call(r: { railMode: string; vaultRef: string }, method: string, path: string, body?: unknown, requestId?: string,
+    extra?: Record<string, string>): Promise<PayPalResponse | null> {
     const t = await this.token(r);
     if (!t) return null;
-    const headers: Record<string, string> = { Authorization: `Bearer ${t}`, Accept: "application/json" };
+    const headers: Record<string, string> = { Authorization: `Bearer ${t}`, Accept: "application/json", ...(extra ?? {}) };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (requestId) headers["PayPal-Request-Id"] = requestId;
     const res = await this.http(`${base(r.railMode)}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const json = await res.json().catch(() => ({}));
     if (res.status === 401) this.tokens.delete(`${r.railMode}|${r.vaultRef}`);
-    return { status: res.status, json };
+    return { status: res.status, json, debugId: debugIdOf(res.headers, json) };
+  }
+
+  /** v98: whether the rail's current access token carries Transaction Search's scope (null: no token yet). */
+  private searchScope(r: { railMode: string; vaultRef: string }): { transactionSearch: boolean; scopes: number } | null {
+    const hit = this.tokens.get(`${r.railMode}|${r.vaultRef}`);
+    if (!hit) return null;
+    const scopes = hit.scope.split(/\s+/).filter(Boolean);
+    return { transactionSearch: scopes.includes(PAYPAL_SEARCH_SCOPE), scopes: scopes.length };
   }
 
   /** One pass (never throws). */
@@ -195,7 +254,9 @@ export class PayPalTreasuryWorker {
       const rails = await this.gw.paypalRails(this.worker);
       await this.inbox(rails);
       await this.work();
+      await this.pay();
       await this.statusChecks();
+      await this.watch();
       await this.buyers();
       await this.refunds();
       for (const r of rails) {
@@ -208,6 +269,12 @@ export class PayPalTreasuryWorker {
       this.stats.lastError = err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
       this.log("warn", "paypal_treasury_pass_failed", { error: this.stats.lastError });
     }
+  }
+
+  /** v98: the pay pass alone (a buyer waiting to pay; custody runs it every few seconds between full passes). Never throws. */
+  async payTick(): Promise<void> {
+    try { await this.pay(); }
+    catch (err) { this.stats.errors++; this.log("warn", "paypal_pay_pass_failed", { error: err instanceof Error ? err.message.slice(0, 200) : "error" }); }
   }
 
   // ── 1. Webhooks ──
@@ -258,11 +325,17 @@ export class PayPalTreasuryWorker {
         if (typeof res.id !== "string") return false;
         const c = await this.gw.paypalCheckoutByOrder(this.worker, res.id);
         if (!c.ok) return false;
+        // v98: an approval of an order the Fleet no longer offers (retired / replaced) is never captured: it is reconciled.
+        if ((c as any).current === false && (c as any).providerOrderId && this.gw.paypalOrderNote) {
+          await this.gw.paypalOrderNote(this.worker, String((c as any).providerOrderId), "read", 200, "APPROVED", null, null, { source: "webhook" });
+          return true;
+        }
         const st = String((c as any).status);
         if (st === "open") await this.gw.paypalCheckoutUpdate(this.worker, String((c as any).checkoutId), "approved", null, null, null);
         if (st === "open" || st === "approved") {
           const ok = await this.capture({ checkoutId: String((c as any).checkoutId), paypalOrderId: res.id, railMode: (c as any).railMode, vaultRef: (c as any).vaultRef,
-            amountMinor: Number((c as any).amountMinor), currency: String((c as any).currency) });
+            amountMinor: Number((c as any).amountMinor), currency: String((c as any).currency), captureRequestId: (c as any).captureRequestId ?? null,
+            providerOrderId: (c as any).providerOrderId ?? null });
           return ok ? true : null;
         }
         return true;
@@ -273,6 +346,15 @@ export class PayPalTreasuryWorker {
         const gross = toMinor(res.amount?.value);
         if (!checkoutId || gross === null || typeof res.id !== "string") return false;
         const fee = toMinor(res.seller_receivable_breakdown?.paypal_fee?.value) ?? 0;
+        // v98: money PayPal took on an order the Fleet had retired is reconciled and alerted; it is still booked below when the
+        // checkout has no capture yet (the registry refuses a second, different capture of a checkout).
+        const related = res.supplementary_data?.related_ids?.order_id;
+        if (typeof related === "string" && PAYPAL_ID.test(related) && this.gw.paypalOrderNote) {
+          const c = await this.gw.paypalCheckoutByOrder(this.worker, related);
+          if (c.ok && (c as any).current === false && (c as any).providerOrderId) {
+            await this.gw.paypalOrderNote(this.worker, String((c as any).providerOrderId), "read", 200, "COMPLETED", null, null, { source: "webhook", captureId: res.id });
+          }
+        }
         const r = await this.gw.paypalCaptureRecord(this.worker, checkoutId, res.id, w.eventType.endsWith("COMPLETED") ? "COMPLETED" : "PENDING", gross, Math.abs(fee),
           String(res.amount?.currency_code ?? ""), "webhook");
         if (r.ok) this.stats.captured++;
@@ -335,6 +417,7 @@ export class PayPalTreasuryWorker {
   }
 
   private async open(c: PayPalWorkItem): Promise<void> {
+    if (this.gw.paypalOrderClaim) { await this.createOrder(c.checkoutId); return; }
     const body = {
       intent: "CAPTURE",
       purchase_units: [{ reference_id: c.checkoutId, custom_id: c.checkoutId, invoice_id: `fleet:${c.checkoutId}`, description: c.description.slice(0, 127),
@@ -375,6 +458,10 @@ export class PayPalTreasuryWorker {
       const seen = res.status === 200 && typeof res.json?.status === "string" && /^[A-Z_]{2,32}$/.test(res.json.status) ? String(res.json.status)
         : res.status === 404 ? "NOT_FOUND" : "UNKNOWN";
       await this.gw.paypalStatusChecked(this.worker, c.checkoutId, seen);
+      // v98: the provider order's own history (PayPal's status, or its error name and debug id).
+      if (c.providerOrderId && this.gw.paypalOrderNote) {
+        await this.gw.paypalOrderNote(this.worker, c.providerOrderId, "read", res.status, orderStatusOf(res), paypalErrorOf(res.json).name, res.status >= 400 ? res.debugId : null, null);
+      }
       if (seen === "APPROVED") await this.gw.paypalCheckoutUpdate(this.worker, c.checkoutId, "approved", null, null, null);
       if (seen === "APPROVED" || seen === "COMPLETED") {
         if (await this.capture(c)) this.stats.statusFound++;
@@ -382,10 +469,168 @@ export class PayPalTreasuryWorker {
     }
   }
 
+  // ── v98: creation, the buyer's pay request, watching and the order audit ──
+
+  /** Create the checkout's PayPal order under a claim (a retry after a lost answer reuses the claim's request id → the same order). */
+  private async createOrder(checkoutId: string): Promise<void> {
+    if (!this.gw.paypalOrderClaim || !this.gw.paypalOrderCreated || !this.gw.paypalOrderNote) return;
+    const cl = await this.gw.paypalOrderClaim(this.worker, checkoutId);
+    if (!cl.ok) return;
+    const body = {
+      intent: "CAPTURE",
+      purchase_units: [{ reference_id: cl.checkoutId, custom_id: cl.checkoutId, invoice_id: `fleet:${cl.checkoutId}`, description: cl.description.slice(0, 127),
+        amount: { currency_code: cl.currency, value: decimal(cl.amountMinor) } }],
+      payment_source: { paypal: { experience_context: { shipping_preference: "NO_SHIPPING", user_action: "PAY_NOW",
+        ...(this.opts.returnUrl ? { return_url: returnUrlFor(this.opts.returnUrl, cl.returnToken) } : {}), ...(this.opts.cancelUrl ? { cancel_url: returnUrlFor(this.opts.cancelUrl, cl.returnToken) } : {}) } } },
+    };
+    let res: PayPalResponse | null = null;
+    try { res = await this.call(cl, "POST", "/v2/checkout/orders", body, cl.requestId, { Prefer: "return=representation" }); }
+    catch { res = null; }
+    if (!res) { await this.gw.paypalOrderNote(this.worker, cl.providerOrderId, "create_indefinite", null, null, null, null, { requestId: cl.requestId }); return; }
+    const e = paypalErrorOf(res.json);
+    if (res.status === 200 || res.status === 201) {
+      const id = res.json?.id;
+      const link = (Array.isArray(res.json?.links) ? res.json.links : []).find((l: any) => l?.rel === "payer-action" || l?.rel === "approve");
+      const payee = res.json?.purchase_units?.[0]?.payee?.merchant_id;
+      if (typeof id === "string" && PAYPAL_ID.test(id) && typeof link?.href === "string") {
+        const r = await this.gw.paypalOrderCreated(this.worker, cl.providerOrderId, id, link.href, typeof payee === "string" && PAYPAL_ID.test(payee) ? payee : null, res.debugId);
+        if (r.ok) this.stats.opened++;
+        else this.log("warn", "paypal_order_created_refused", { checkoutId: cl.checkoutId, code: (r as { code: string }).code });
+        return;
+      }
+      await this.gw.paypalOrderNote(this.worker, cl.providerOrderId, "create_indefinite", res.status, null, "MALFORMED_RESPONSE", res.debugId, null);
+      return;
+    }
+    // A definite refusal (4xx except auth / rate limit) ends the claim; anything else is retried with the same request id.
+    const definite = res.status >= 400 && res.status < 500 && res.status !== 401 && res.status !== 429;
+    await this.gw.paypalOrderNote(this.worker, cl.providerOrderId, definite ? "create_failed" : "create_indefinite", res.status, null, e.issue ?? e.name, res.debugId,
+      e.issue && e.name ? { name: e.name } : null);
+  }
+
+  /** The buyers waiting to pay: reuse a PayPal order PayPal confirms payable, capture an approved one, or retire (on verified
+   *  evidence) and create a fresh one. */
+  private async pay(): Promise<void> {
+    if (!this.gw.paypalPayWork || !this.gw.paypalOrderNote) return;
+    for (const it of await this.gw.paypalPayWork(this.worker, 10)) {
+      const o = it.order;
+      if (!o || o.state === "creating") { await this.createOrder(it.checkoutId); continue; }
+      if (!o.paypalOrderId || !PAYPAL_ID.test(o.paypalOrderId)) continue;
+      const target = { checkoutId: it.checkoutId, paypalOrderId: o.paypalOrderId, railMode: o.railMode, vaultRef: o.vaultRef, amountMinor: it.amountMinor, currency: it.currency,
+        captureRequestId: o.captureRequestId ?? null, providerOrderId: o.providerOrderId };
+      if (o.state === "approved") { await this.capture(target); continue; }
+      const res = await this.call(o, "GET", `/v2/checkout/orders/${o.paypalOrderId}`).catch(() => null);
+      if (!res) continue;
+      const e = paypalErrorOf(res.json);
+      const n = await this.gw.paypalOrderNote(this.worker, o.providerOrderId, "read", res.status, orderStatusOf(res), e.name, res.status >= 400 ? res.debugId : null, { payCheck: true });
+      const action = n.ok ? (n as any).action : null;
+      if (action === "capture" || action === "record_capture") { await this.capture(target); continue; }
+      if (action === "replace") { await this.createOrder(it.checkoutId); continue; }
+      if (res.status === 404 && e.name === "RESOURCE_NOT_FOUND" && res.debugId && this.gw.paypalOrderRetire && o.notFoundReads + 1 >= 2) {
+        // The control: the same credential and environment read a captured order of theirs now — so the 404 is about this order.
+        let control: { orderId: string; http: number | null } | null = null;
+        if (o.control && PAYPAL_ID.test(o.control)) {
+          const cr = await this.call(o, "GET", `/v2/checkout/orders/${o.control}`).catch(() => null);
+          control = { orderId: o.control, http: cr?.status ?? null };
+        }
+        const r = await this.gw.paypalOrderRetire(this.worker, o.providerOrderId, { control });
+        if (r.ok) await this.createOrder(it.checkoutId);
+        else this.log("warn", "paypal_order_not_retired", { checkoutId: it.checkoutId, reason: String((r as any).reason ?? (r as any).code).slice(0, 160) });
+      }
+    }
+  }
+
+  /** Retired and closed orders are read for late approval or payment; captured ones are audited (captures, refunds). */
+  private async watch(): Promise<void> {
+    if (!this.gw.paypalOrderWatchWork || !this.gw.paypalOrderNote) return;
+    for (const w of await this.gw.paypalOrderWatchWork(this.worker, 10)) {
+      if (!PAYPAL_ID.test(w.paypalOrderId)) continue;
+      const res = await this.call(w, "GET", `/v2/checkout/orders/${w.paypalOrderId}`).catch(() => null);
+      if (!res) continue;
+      const e = paypalErrorOf(res.json);
+      if (w.state === "captured") { await this.audit(w, res); continue; }
+      const n = await this.gw.paypalOrderNote(this.worker, w.providerOrderId, "read", res.status, orderStatusOf(res), e.name, res.status >= 400 ? res.debugId : null, { source: "watch" });
+      if (n.ok && (n as any).action === "record_capture") await this.recordCaptures(w, res);
+    }
+  }
+
+  /** The order's captures as PayPal reports them, through the same capture record (booked once; a different second capture is
+   *  refused by the registry and reconciled). */
+  private async recordCaptures(w: PayPalWatchItem, res: PayPalResponse): Promise<number> {
+    let n = 0;
+    for (const pu of Array.isArray(res.json?.purchase_units) ? res.json.purchase_units : []) {
+      for (const cap of Array.isArray(pu?.payments?.captures) ? pu.payments.captures : []) {
+        const gross = toMinor(cap?.amount?.value);
+        if (typeof cap?.id !== "string" || !PAYPAL_ID.test(cap.id) || gross === null || !["COMPLETED", "PENDING", "REFUNDED", "PARTIALLY_REFUNDED"].includes(cap.status)) continue;
+        n++;
+        if (w.captureId === cap.id) continue;
+        const fee = Math.abs(toMinor(cap?.seller_receivable_breakdown?.paypal_fee?.value) ?? 0);
+        await this.gw.paypalCaptureRecord(this.worker, w.checkoutId, cap.id, cap.status === "PENDING" ? "PENDING" : "COMPLETED", gross, fee,
+          String(cap.amount?.currency_code ?? ""), "order_read");
+      }
+    }
+    return n;
+  }
+
+  /** The audit of a captured order through the Orders API (no Transaction Search needed): its captures and refunds, by PayPal's
+   *  own ids, through the existing evidence paths — the same refund object as the webhook's, so it is counted once. */
+  private async audit(w: PayPalWatchItem, res: PayPalResponse): Promise<void> {
+    const e = paypalErrorOf(res.json);
+    if (res.status !== 200) {
+      await this.gw.paypalOrderNote!(this.worker, w.providerOrderId, "audit", res.status, null, e.name, res.debugId, null);
+      if (res.status === 404 && this.gw.paypalReconReport) {
+        await this.gw.paypalReconReport(this.worker, w.providerOrderId, "audit_mismatch", `audit:${w.paypalOrderId}`, w.amountMinor, w.currency,
+          { http: 404, note: 'PayPal does not find a captured order of the Fleet' });
+      }
+      if (this.gw.paypalSyncRecord) await this.gw.paypalSyncRecord(this.worker, w.railId, "order_audit", false, res.status, e.name, res.debugId, null);
+      return;
+    }
+    const payee = res.json?.purchase_units?.[0]?.payee?.merchant_id;
+    if (w.payee && typeof payee === "string" && payee !== w.payee && this.gw.paypalReconReport) {
+      await this.gw.paypalReconReport(this.worker, w.providerOrderId, "mapping_mismatch", `payee:${w.paypalOrderId}`, null, null, { recorded: w.payee, reported: payee });
+    }
+    const captures = await this.recordCaptures(w, res);
+    let refunds = 0;
+    for (const pu of Array.isArray(res.json?.purchase_units) ? res.json.purchase_units : []) {
+      const caps = Array.isArray(pu?.payments?.captures) ? pu.payments.captures : [];
+      for (const rf of Array.isArray(pu?.payments?.refunds) ? pu.payments.refunds : []) {
+        const amount = toMinor(rf?.amount?.value);
+        if (typeof rf?.id !== "string" || !PAYPAL_ID.test(rf.id) || amount === null || rf.status !== "COMPLETED") continue;
+        const up = (Array.isArray(rf.links) ? rf.links : []).find((l: any) => l?.rel === "up" && typeof l.href === "string");
+        const captureId = (up ? /\/captures\/([A-Z0-9]+)$/.exec(up.href)?.[1] : undefined) ?? (caps.length === 1 ? caps[0]?.id : undefined);
+        if (typeof captureId !== "string") continue;
+        refunds++;
+        await this.clawback(rf.id, "refund", captureId, amount, String(rf.amount?.currency_code ?? ""));
+        const net = toMinor(rf.seller_payable_breakdown?.net_amount?.value);
+        const back = net !== null ? amount - Math.abs(net) : Math.abs(toMinor(rf.seller_payable_breakdown?.paypal_fee?.value) ?? 0);
+        if (back > 0 && back < amount && this.gw.paypalClawbackEvidence) {
+          await this.gw.paypalClawbackEvidence(this.worker, `FR-${rf.id}`.slice(0, 64), "fee_return", captureId, back, String(rf.amount?.currency_code ?? ""));
+        }
+      }
+    }
+    await this.gw.paypalOrderNote!(this.worker, w.providerOrderId, "audit", 200, orderStatusOf(res), null, null, { captures, refunds });
+    if (this.gw.paypalSyncRecord) await this.gw.paypalSyncRecord(this.worker, w.railId, "order_audit", true, 200, null, null, null);
+  }
+
+  /** Transaction Search's outcome on a rail and whether the token carries its scope (statuses, names and PayPal's references only). */
+  private async syncRecord(r: PayPalRail, res: PayPalResponse | null): Promise<void> {
+    if (!this.gw.paypalSyncRecord) return;
+    const e = res ? paypalErrorOf(res.json) : { name: null, issue: null };
+    await this.gw.paypalSyncRecord(this.worker, r.railId, "transaction_search", res?.status === 200, res?.status ?? null, e.issue ?? e.name, res?.debugId ?? null,
+      res && res.status !== 200 && e.issue && e.name ? { name: e.name } : null).catch(() => undefined);
+    const sc = this.searchScope(r);
+    if (sc) await this.gw.paypalSyncRecord(this.worker, r.railId, "token_scopes", sc.transactionSearch, null, null, null, sc).catch(() => undefined);
+  }
+
   /** Capture an approved order (idempotent by request id; an already-captured order is read back). True when settled either way. */
-  private async capture(c: { checkoutId: string; paypalOrderId: string; railMode: string; vaultRef: string; amountMinor: number; currency: string }): Promise<boolean> {
-    let res = await this.call(c, "POST", `/v2/checkout/orders/${c.paypalOrderId}/capture`, {}, `capture:${c.checkoutId}`).catch(() => null);
+  private async capture(c: { checkoutId: string; paypalOrderId: string; railMode: string; vaultRef: string; amountMinor: number; currency: string;
+    captureRequestId?: string | null; providerOrderId?: string | null }): Promise<boolean> {
+    let res = await this.call(c, "POST", `/v2/checkout/orders/${c.paypalOrderId}/capture`, {}, c.captureRequestId ?? `capture:${c.checkoutId}`).catch(() => null);
     if (!res) return false;
+    // v98: a refused capture is kept with PayPal's own reference; DUPLICATE_INVOICE_ID (a payment of this checkout already exists) is reconciled.
+    if (res.status >= 400 && !(res.status === 422 && /ORDER_ALREADY_CAPTURED/.test(JSON.stringify(res.json))) && c.providerOrderId && this.gw.paypalOrderNote) {
+      const e = paypalErrorOf(res.json);
+      await this.gw.paypalOrderNote(this.worker, c.providerOrderId, "capture_failed", res.status, null, e.issue ?? e.name, res.debugId, e.issue && e.name ? { name: e.name } : null);
+    }
     if (res.status === 422 && /ORDER_ALREADY_CAPTURED/.test(JSON.stringify(res.json))) {
       res = await this.call(c, "GET", `/v2/checkout/orders/${c.paypalOrderId}`).catch(() => null);
       if (!res) return false;
@@ -478,7 +723,8 @@ export class PayPalTreasuryWorker {
         // v71: payer_info too — a debit's counterparty (who the treasury paid) for AI-credit purchase detection.
         fields: "transaction_info,payer_info", page_size: "500", page: String(page) });
       const res = await this.call(r, "GET", `/v1/reporting/transactions?${qs}`).catch(() => null);
-      if (!res || res.status !== 200) return; // retried at the next interval
+      if (page === 1) await this.syncRecord(r, res);
+      if (!res || res.status !== 200) return; // retried at the next interval (the outcome is recorded above)
       for (const d of Array.isArray(res.json?.transaction_details) ? res.json.transaction_details : []) {
         const t = d?.transaction_info ?? {};
         const amount = toMinor(t.transaction_amount?.value);

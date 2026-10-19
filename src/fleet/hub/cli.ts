@@ -96,6 +96,10 @@
  *                                               the same scope ends the previous one
  *   economy-refund-authority-end <authorityId> [reason…]
  *   hub-refund-authorities                                                    (v96) every refund authority, live or ended, with what it has used
+ *   hub-paypal-reconciliation                                                 (v98) PayPal evidence needing the owner, reconciliation status
+ *                                               (Transaction Search / order audit / token scopes) and open checkouts' PayPal orders
+ *   economy-paypal-reconciliation-resolve <itemId> <resolution…>              (v98) record how an item was resolved (once)
+ *   economy-paypal-order-retire <paypalOrderId> <reason…>                     (v98) retire a PayPal order the Fleet could not verify as gone
  *   economy-offer-hold <slug> <reason…>                                       (v96) one offer not sold publicly (accepted work continues; the agent is told)
  *   economy-offer-release <slug> [reason…]
  *   economy-fleet-control-ai-budget <dailyMinor> <reason…>                    (v96) Fleet Control's daily AI budget (its spend / lesson reviews)
@@ -240,7 +244,7 @@ export const HUB_COMMANDS = new Set([
   "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
   "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser", "hub-dashboard-enroll", "hub-dashboard-totp-reset",
   "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
-  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "hub-refund-authorities", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "hub-fleet-control-ai", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
+  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "hub-refund-authorities", "hub-paypal-reconciliation", "economy-paypal-reconciliation-resolve", "economy-paypal-order-retire", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "hub-fleet-control-ai", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
   // v66 – v72 (missing until 2026-10-12: these were unreachable from fleet:admin)
   "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
@@ -383,6 +387,12 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.refundAuthorityEnd(p[0], p.slice(1).join(" ") || null, actor);
     case "hub-refund-authorities":
       return h.refundAuthorities();
+    case "hub-paypal-reconciliation":
+      return h.paypalReconciliation(actor);
+    case "economy-paypal-reconciliation-resolve":
+      return h.paypalReconciliationResolve(p[0], p.slice(1).join(" "), actor);
+    case "economy-paypal-order-retire":
+      return h.paypalOrderRetire(p[0], p.slice(1).join(" "), actor);
     case "economy-offer-hold":
       return h.offerHold(p[0], p.slice(1).join(" "), actor);
     case "economy-offer-release":
