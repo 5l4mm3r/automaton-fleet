@@ -38,6 +38,8 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_buyer_consent_wordings",
     // v87: the deliverable formats a capability check can name (immutable reference rows).
     "fleet_deliverable_formats",
+    // v96: Fleet Control's daily AI budget (a singleton; tests that change it restore it).
+    "fleet_control_ai_budget",
     ...V35_SINGLETONS,
   ]);
   const r = await c.query<{ t: string }>(

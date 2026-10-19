@@ -1431,6 +1431,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_paypal_refund_requests: new Set(["fleet_order_refund_request", "cx_paypal_refund_result", "fleet_refund_request_completed", "cx_paypal_refund_unresolved",
       "cx_paypal_refund_work"]),
     fleet_refund_authorities: new Set(["fleet_admin_refund_authority_grant", "fleet_admin_refund_authority_end"]),
+    fleet_control_ai_budget: new Set(["fleet_admin_fleet_control_ai_budget"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

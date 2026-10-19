@@ -235,6 +235,34 @@ describe.skipIf(!PG_BIN)("v64: autonomous spending with Fleet Control review (Po
     }
   });
 
+  it("v96: Fleet Control's daily AI budget is checked before a review call is claimed; out of budget the review waits, never approved", async () => {
+    const st = await R.one(`fleet.fleet_control_ai_state()`);
+    expect(st).toMatchObject({ ceilingMinor: 200, setBy: "migration" });
+    expect(await R.code(R.q(`SELECT fleet.fleet_admin_fleet_control_ai_budget(500, 'launch budget', 'agent')`))).toBe("FLEET_APPROVAL_REQUIRED");
+    // A budget smaller than what Fleet Control has already spent today plus one call's estimate.
+    await R.one(`fleet.fleet_admin_fleet_control_ai_budget($1, 'test: no room', $2)`, [Math.max(1, st.spentMinor + st.inflightMinor), OWNER]);
+    try {
+      const r = await spend(40_000, payee, "stock again");
+      expect(r.order.reviewStatus).toBe("pending");
+      const n = prompts.length;
+      await reviewer().tick();
+      await reviewer().tick();
+      expect(prompts.length).toBe(n);                                  // no call was made
+      expect(await review(r.order.reviewId)).toMatchObject({ status: "pending", attempts: 0 });   // not a failure: it waits
+      expect((await order(r.order.orderId)).review_status).toBe("pending");
+      expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'fleet_control_ai_budget_reached')`))).toBe(1);   // told once
+      // Room again: the same review is claimed and decided.
+      await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test: room', $1)`, [OWNER]);
+      await reviewer().tick();
+      expect(prompts.length).toBe(n + 1);
+      expect((await review(r.order.reviewId)).status).not.toBe("pending");
+      const after = await R.one(`fleet.fleet_control_ai_state()`);
+      expect(after.spentMinor).toBeGreaterThanOrEqual(st.spentMinor);
+    } finally {
+      await R.one(`fleet.fleet_admin_fleet_control_ai_budget(200, 'back to the default', $1)`, [OWNER]);
+    }
+  });
+
   it("the owner may allow a held action to be resubmitted once; integrity checks run again", async () => {
     const r = await spend(30_000, freshPayee, "a second try with that supplier");
     script = [`{"decision":"hold","category":"risk_outweighs_opportunity","reason":"leaves almost no runway","evidence":["most of the remaining funds"]}`];

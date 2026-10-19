@@ -151,6 +151,13 @@ export class PgHubAdmin {
   refundAuthorities() {
     return this.one(`SELECT fleet_refund_authorities_json(false) AS r`);
   }
+  /** v96: Fleet Control's daily AI budget (checked before each of its review calls is claimed) and its state. */
+  fleetControlAiBudget(dailyMinor: number, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_fleet_control_ai_budget($1, $2, $3) AS r`, [dailyMinor, reason, actor]);
+  }
+  fleetControlAi() {
+    return this.one(`SELECT fleet_control_ai_state() AS r`);
+  }
   /** v96: hold one offer (not sold publicly; accepted work continues) / release it. The agent is told. */
   offerHold(slug: string, reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_offer_hold($1, $2, $3) AS r`, [slug, reason, actor]);

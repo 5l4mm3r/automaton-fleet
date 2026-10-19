@@ -26,6 +26,12 @@
  *    sitemap and search notifications leave it out, and the agent's offer view says why (`saleBlock`). Publishing a
  *    product needs such a review. Work already accepted (paid orders, their delivery and revisions) is unaffected. The
  *    owner can hold one offer (and release it) without closing sales or holding the agent; the agent is told.
+ * 6. FLEET CONTROL'S OWN AI COSTS. Its spend reviews, lesson reviews and evidence-relevance checks are treasury-paid model
+ *    calls; they now have a daily budget (rolling 24 hours, in the accounting currency; the owner sets it, default
+ *    £2.00), checked BEFORE each call is claimed: what its calls cost in the last 24 hours (recorded provider usage) plus
+ *    the calls claimed and unanswered plus this call's estimate must fit. Out of budget, nothing is claimed — a spend that
+ *    needs a review waits (never approved by default) — and the owner is told once a day. A call's actual cost can differ
+ *    from its estimate; the next claim sees what it really cost.
  * 5. GUIDANCE. The dated capability entry agents read (fleet-capability-status v14) is rewritten from verified state:
  *    search connected, images not offered, Gumroad deferred, refunds under refund authority, the owner-paid card, sales
  *    closed until launch, the inspector's spreadsheet checks.
@@ -38,6 +44,9 @@ import { V78_SQL } from "./migrations-phase78.js";
 import { V80_SQL } from "./migrations-phase80.js";
 import { V82_SQL } from "./migrations-phase82.js";
 import { V85_SQL, QA_INSPECTOR_VERSIONS_V85 } from "./migrations-phase85.js";
+import { V31_SQL } from "./migrations-phase31.js";
+import { V64_SQL } from "./migrations-phase64.js";
+import { V68_SQL } from "./migrations-phase68.js";
 import { restate as restateRaw } from "./migrations-phase42.js";
 import { CAPABILITY_STATUS_V14 } from "./knowledge-capability-status-v14.js";
 
@@ -51,10 +60,12 @@ export const ORDER_AUTHORITY_MAX_HOURS = 168;
 export const STANDING_AUTHORITY_MAX_HOURS = 8760;
 export const EVENT_ROUTES_V96 = Object.freeze({
   P1_HIGH: ["refund_awaiting_authority"],
-  P2_IMPORTANT: ["refund_authority_granted", "refund_authority_ended", "offer_held", "offer_released"],
+  P2_IMPORTANT: ["refund_authority_granted", "refund_authority_ended", "offer_held", "offer_released", "fleet_control_ai_budget_reached", "fleet_control_ai_budget_set"],
 } as const);
 /** v96: fleet-qa-3 reviews are accepted (earlier ones stay valid records). */
 export const QA_INSPECTOR_VERSIONS_V96 = [...QA_INSPECTOR_VERSIONS_V85, "fleet-qa-3"] as const;
+/** v96: Fleet Control's daily AI budget until the owner sets one (minor units of the accounting currency). */
+export const FLEET_CONTROL_AI_DAILY_DEFAULT_MINOR = 200;
 /** v96: the inspectors whose passing review lets a product be sold publicly. */
 export const QA_SALE_INSPECTORS = ["fleet-qa-3"] as const;
 
@@ -108,6 +119,22 @@ const EVENT_ROUTE = restate(V80_SQL, "fleet_event_route", [
 ]);
 
 void V77_SQL;
+
+// ── 6. Fleet Control's AI budget, checked before each call is claimed ──
+const BUDGET_GATE = `    IF (fleet_control_ai_state() ->> 'roomMinor')::bigint < v_est THEN PERFORM fleet_control_ai_budget_reached(); EXIT; END IF;
+`;
+const SPEND_CLAIM = restate(V64_SQL, "svc_spend_reviews_claim", [
+  [`    UPDATE fleet_spend_reviews SET attempts = attempts + 1, claimed_by = p_worker,`, `${BUDGET_GATE}    UPDATE fleet_spend_reviews SET attempts = attempts + 1, claimed_by = p_worker,`],
+]);
+const KNOWLEDGE_CLAIM = restate(V68_SQL, "svc_knowledge_proposals_claim", [
+  [`    UPDATE fleet_knowledge_review_state SET attempts = attempts + 1, claimed_by = p_worker,`, `${BUDGET_GATE}    UPDATE fleet_knowledge_review_state SET attempts = attempts + 1, claimed_by = p_worker,`],
+]);
+const RELEVANCE_PENDING = restate(V31_SQL, "svc_experiment_relevance_pending", [
+  [`  v_room := CASE WHEN pol.enabled THEN GREATEST(0, (pol.relevance_max_calls_per_hour - v_used) / 2) ELSE 0 END;`,
+   `  v_room := CASE WHEN pol.enabled THEN GREATEST(0, (pol.relevance_max_calls_per_hour - v_used) / 2) ELSE 0 END;
+  -- v96: and within Fleet Control's daily AI budget (each job is up to two calls at the review estimate).
+  v_room := LEAST(v_room, GREATEST(0, ((fleet_control_ai_state() ->> 'roomMinor')::bigint / GREATEST((fleet_control_ai_state() ->> 'estimateMinor')::bigint * 2, 1))::integer));`],
+]);
 
 // ── 4. Product quality ──
 const REVIEW_RECORD = restate(V85_SQL, "fleet_econ_review_record", [
@@ -422,6 +449,61 @@ BEGIN
     || COALESCE(' It is still not sold publicly: ' || fleet_offer_sale_block(o) || '.', ''));
   RETURN jsonb_build_object('ok', true, 'saleBlock', fleet_offer_sale_block(o));
 END $$;
+
+-- ═══ 6. Fleet Control's own AI costs: a daily budget checked before each call is claimed ═══
+CREATE TABLE fleet_control_ai_budget (
+  id                  integer     PRIMARY KEY CHECK (id = 1),
+  daily_ceiling_minor bigint      NOT NULL CHECK (daily_ceiling_minor > 0),
+  set_by              text        NOT NULL CHECK (set_by = 'migration' OR set_by ~ '^operator:[A-Za-z0-9._-]{1,64}$'),
+  reason              text        NOT NULL CHECK (length(reason) BETWEEN 3 AND 300),
+  set_at              timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO fleet_control_ai_budget (id, daily_ceiling_minor, set_by, reason)
+  VALUES (1, ${FLEET_CONTROL_AI_DAILY_DEFAULT_MINOR}, 'migration', 'the default until the owner sets Fleet Control''s daily AI budget');
+
+-- Spent (its recorded provider usage in the last 24 hours), in flight (claimed, unanswered), one call's estimate, room left.
+CREATE FUNCTION fleet_control_ai_state() RETURNS jsonb LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  WITH fx AS (SELECT COALESCE((SELECT rate_micro FROM fleet_fx_rates WHERE base = 'USD' AND quote = (SELECT accounting_currency FROM fleet_economic_model WHERE id = 1)
+                               ORDER BY observed_on DESC, rate_id DESC LIMIT 1), 1000000) AS rate),
+  b AS (SELECT * FROM fleet_control_ai_budget WHERE id = 1),
+  v AS (SELECT
+    CEIL(COALESCE((SELECT sum(-e.usd_microcents) FROM fleet_provider_credit_events e WHERE e.kind = 'consumption' AND e.recorded_by LIKE 'controller:%'
+                    AND e.at > now() - interval '24 hours'), 0)::numeric * fx.rate / 1000000 / 1000000)::bigint AS spent,
+    CEIL((SELECT estimate_usd_microcents FROM fleet_spend_review_policy WHERE id = 1)::numeric * fx.rate / 1000000 / 1000000)::bigint AS est,
+    (SELECT count(*) FROM fleet_spend_reviews WHERE status = 'pending' AND claimed_until > now())
+      + (SELECT count(*) FROM fleet_knowledge_review_state WHERE claimed_until > now()) AS claimed
+    FROM fx)
+  SELECT jsonb_build_object('ceilingMinor', b.daily_ceiling_minor, 'spentMinor', v.spent, 'inflightMinor', v.claimed * v.est, 'estimateMinor', v.est,
+    'roomMinor', b.daily_ceiling_minor - v.spent - v.claimed * v.est, 'setBy', b.set_by, 'setAt', b.set_at, 'reason', b.reason,
+    'rule', 'checked before each Fleet Control review call is claimed (spent in 24 h + claimed and unanswered + this call''s estimate); a call''s actual cost can differ from its estimate')
+  FROM b, v
+$$;
+
+CREATE FUNCTION fleet_control_ai_budget_reached() RETURNS void LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM fleet_events WHERE event_type = 'fleet_control_ai_budget_reached' AND created_at > now() - interval '24 hours') THEN RETURN; END IF;
+  PERFORM fleet_event('fleet_control_ai_budget_reached', NULL, 'fleet_control', fleet_control_ai_state() || jsonb_build_object(
+    'note', 'Fleet Control''s daily AI budget is used up: spend and lesson reviews wait (nothing is approved by default) until it has room again or the owner raises it'));
+END $$;
+
+CREATE FUNCTION fleet_admin_fleet_control_ai_budget(p_daily_minor bigint, p_reason text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+BEGIN
+  ${OWNER_ACTOR}
+  IF p_daily_minor IS NULL OR p_daily_minor <= 0 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: a positive daily budget (minor units)'; END IF;
+  IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: a reason is required'; END IF;
+  UPDATE fleet_control_ai_budget SET daily_ceiling_minor = p_daily_minor, set_by = p_actor, reason = left(fleet_scrub(trim(p_reason)), 300), set_at = now() WHERE id = 1;
+  PERFORM fleet_event('fleet_control_ai_budget_set', NULL, p_actor, jsonb_build_object('dailyMinor', p_daily_minor));
+  RETURN jsonb_build_object('ok', true) || fleet_control_ai_state();
+END $$;
+
+${SPEND_CLAIM}
+
+${KNOWLEDGE_CLAIM}
+
+${RELEVANCE_PENDING}
 
 -- ═══ 5. What agents are told the Fleet can do, from verified state (2026-10-19) ═══
 SELECT fleet_admin_knowledge_library_load('${JSON.stringify({ entries: CAPABILITY_STATUS_V14.entries }).replace(/'/g, "''")}'::jsonb, 'migration');
