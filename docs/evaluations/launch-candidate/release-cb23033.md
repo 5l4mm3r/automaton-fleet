@@ -17,7 +17,7 @@
    atomically before it is made; unset after install — no paid Fleet Control call until the owner sets it.
 6. **Exhaustion, the authoritative measure** (ef968d5, corrected in the final commit): a pending capture never keeps an
    agent alive; verified PayPal-held money always counts; no age rule.
-7. **The continued purchase proof** (7161a16; staged separately as `~/rlc105/proof.sh`) and the docs (063e8b4).
+7. **The continued purchase proof** (7161a16; staged separately as `~/rlc106/proof.sh`) and the docs (063e8b4).
 8. **Tests** brought up to v95 (69733ed) and to capability status v14 (d5936b6).
 9. **Owner corrections, 2026-10-19** (7bb7612): no invented survival grace periods; Fleet Control's budget a hard ceiling,
    unset by default; the concurrent distinct-requests allocation test restored beside the duplicate one.
