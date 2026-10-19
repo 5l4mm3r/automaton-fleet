@@ -1,4 +1,4 @@
-# Release e78ec63 (schema 94 → 95; UI 0.26.2 unchanged) — CANDIDATE for approval: built and rehearsed, not deployed
+# Release e78ec63 (schema 94 → 95; UI 0.26.2 unchanged) — SUPERSEDED by e1c51e2 (built and rehearsed; never deployed; ~/rlc102 not to be run)
 
 The consolidated package after measured attempt 2 and launch-readiness blocker #19. It contains 995388c's fixes
 (validated, not deployed on their own by the owner's decision) and the durable-operations repair. No new feature
