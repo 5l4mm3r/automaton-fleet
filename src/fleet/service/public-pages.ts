@@ -48,12 +48,15 @@ const money = (minor: unknown, cur: unknown) => `${cur === "GBP" ? "£" : `${esc
 const para = (t: unknown) => esc(t).split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
 const kb = (n: unknown) => (Number(n) >= 1_000_000 ? `${(Number(n) / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(Number(n) / 1000))} kB`);
 
-/** A page: strict CSP (scripts only with this response's nonce), no referrer, no framing. */
+/** A page: strict CSP (scripts only with this response's nonce), no referrer to other sites, no framing.
+ *  Referrer-Policy same-origin (2026-10-19; was no-referrer): with no-referrer a browser sends `Origin: null` on the page's
+ *  own form POST, which the same-origin check had to refuse — the order page's consent form failed ("cross-site request
+ *  refused") in a real browser. Same-origin sends the page's origin to this site only, never to another. */
 function page(res: http.ServerResponse, status: number, title: string, body: string, seller: unknown, o: { nonce?: string; refreshS?: number; head?: string } = {}): void {
   const csp = `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
     + (o.nonce ? `; script-src 'nonce-${o.nonce}'; connect-src 'self'` : "");
   res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff",
-    "content-security-policy": csp, "referrer-policy": "no-referrer", "x-frame-options": "DENY" });
+    "content-security-policy": csp, "referrer-policy": "same-origin", "x-frame-options": "DENY" });
   res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`
     + (o.refreshS ? `<meta http-equiv="refresh" content="${o.refreshS}">` : "") + (o.head ?? "") + `<title>${esc(title)}</title><style>
 body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:44rem;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1d232b;background:#fbfbfa}
@@ -178,11 +181,20 @@ export class PublicPages {
     }
   }
 
+  /** A POST is this site's own when its Origin (or, without one, its Referer) names this host, or — when the browser
+   *  withholds the origin (`Origin: null`, e.g. under a no-referrer policy) — when the browser itself marks the request
+   *  `Sec-Fetch-Site: same-origin` (a header web content cannot set). Cross-site, same-site (another subdomain) and
+   *  unmarked requests are refused. */
   private sameOrigin(req: http.IncomingMessage): boolean {
     const host = req.headers.host;
+    if (!host) return false;
+    const site = req.headers["sec-fetch-site"];
+    if (typeof site === "string" && site !== "same-origin") return false;   // the browser says it is not this site's own
     const o = req.headers.origin ?? req.headers.referer;
-    if (!host || typeof o !== "string") return false;
-    try { return new URL(o).host === host; } catch { return false; }
+    if (typeof o === "string" && o !== "null") {
+      try { return new URL(o).host === host; } catch { return false; }
+    }
+    return site === "same-origin";
   }
 
   private json(res: http.ServerResponse, status: number, body: Record<string, unknown>): void {

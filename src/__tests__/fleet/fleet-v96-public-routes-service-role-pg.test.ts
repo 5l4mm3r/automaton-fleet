@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
+import fs from "fs";
 import http from "http";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
@@ -20,6 +21,7 @@ import { problemsFor } from "../../fleet/postgres/privileges.js";
 import { PublicPages } from "../../fleet/service/public-pages.js";
 
 const PG_BIN = findPgBin();
+const CHROME = ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find((p) => fs.existsSync(p));
 
 describe.skipIf(!PG_BIN)("public order and enquiry routes as the service role, with the controller's own privilege audit (PostgreSQL)", () => {
   let R: EconomyRegistry;
@@ -98,4 +100,28 @@ describe.skipIf(!PG_BIN)("public order and enquiry routes as the service role, w
     }
     expect(await startupProblems()).toEqual([]);
   });
+
+  // 2026-10-19: the live consent form was refused in a real browser ("cross-site request refused": Origin null under the
+  // page's former no-referrer policy). A real Chrome submits it here: ticks both boxes, presses Confirm; the consent is
+  // recorded as the service role and the buyer is back on the order page — never the refusal.
+  it.skipIf(!CHROME)("a real browser submits the order page's consent form: accepted and recorded", async () => {
+    const { chromium } = await import("playwright-core");
+    const b = await chromium.launch({ executablePath: CHROME, headless: true });
+    try {
+      const p = await b.newPage();
+      const posts: Array<{ status: number; origin: string | undefined; site: string | undefined }> = [];
+      p.on("response", async (r) => { if (r.request().method() === "POST") { const h = await r.request().allHeaders(); posts.push({ status: r.status(), origin: h.origin, site: h["sec-fetch-site"] }); } });
+      await p.goto(`${base}/order/${tokens.order}`);
+      const boxes = await p.$$("form[action$='/consent'] input[type=checkbox]");
+      expect(boxes.length).toBe(2);
+      for (const x of boxes) await x.check();
+      await Promise.all([p.waitForURL(`${base}/order/${tokens.order}`), p.click("form[action$='/consent'] button[type=submit]")]);
+      const text = await p.textContent("body");
+      expect(text).not.toContain("cross-site request refused");
+      expect(posts).toEqual([expect.objectContaining({ status: 303, origin: base, site: "same-origin" })]);
+      const o = (await R.q(`SELECT consent_kind, consent_version, consent_at FROM fleet.fleet_customer_orders WHERE access_token = $1`, [tokens.order]))[0];
+      expect(o.consent_at).not.toBeNull();
+      expect(await p.$$("form[action$='/consent']")).toHaveLength(0);   // the consent step is done
+    } finally { await b.close(); }
+  }, 120_000);
 });

@@ -85,4 +85,39 @@ describe("v82 public pages: the buyer's consent to immediate supply", () => {
     expect(html).toContain("Recorded 2026-10-16 12:00 UTC");
     expect(html).not.toContain("Before you pay");
   });
+
+  // 2026-10-19: in a real browser the order page's consent form was refused ("cross-site request refused"): under the page's
+  // former Referrer-Policy no-referrer, Chrome sends `Origin: null`, no Referer and `Sec-Fetch-Site: same-origin`. The page now
+  // sends Referrer-Policy same-origin; the check accepts the browser's own same-origin mark and still refuses every other site.
+  it("the consent POST as a browser sends it is accepted; cross-site, same-site and unmarked ones are refused", async () => {
+    // Its own pages instance with a clock 10 minutes apart per request, so the write rate limit never answers first.
+    let t = Date.now();
+    const own = new PublicPages(port, { now: () => (t += 600_000) });
+    const srv = http.createServer((req, res) => void own.handle(req, res, (req.url ?? "/").split("?")[0], "127.0.0.1"));
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const at = `http://127.0.0.1:${(srv.address() as { port: number }).port}`;
+    const post = (headers: Record<string, string>) => new Promise<number>((resolve, reject) => {
+      const body = new URLSearchParams({ c1: "yes", c2: "yes", consent: BUYER_CONSENT_VERSION }).toString();
+      const u = new URL(`${at}/order/${token}/consent`);
+      const rq = http.request({ host: u.hostname, port: u.port, path: u.pathname, method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", "content-length": Buffer.byteLength(body), ...headers } }, (rs) => { rs.resume(); resolve(rs.statusCode ?? 0); });
+      rq.on("error", reject); rq.end(body);
+    });
+    const pageRes = await fetch(`${base}/order/${token}`);
+    expect(pageRes.headers.get("referrer-policy")).toBe("same-origin");
+    for (const [h, want] of [
+      [{ origin: "null", "sec-fetch-site": "cross-site" }, 403],
+      [{ origin: "null", "sec-fetch-site": "same-site" }, 403],          // another subdomain (e.g. the admin site)
+      [{ origin: "null", "sec-fetch-site": "none" }, 403],
+      [{ origin: "null" }, 403],                                         // no browser mark, no origin: refused
+      [{}, 403],
+      [{ origin: at, "sec-fetch-site": "cross-site" }, 403],             // the browser's mark wins over a claimed origin
+      [{ origin: "https://evil.example", "sec-fetch-site": "same-origin" }, 403],
+      [{ referer: "https://evil.example/x" }, 403],
+    ] as Array<[Record<string, string>, number]>) expect(await post(h), JSON.stringify(h)).toBe(want);
+    // Exactly what Chrome sent from the live order page (2026-10-19), and what it sends under the new policy.
+    expect(await post({ origin: "null", "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate" })).toBe(303);
+    expect(await post({ origin: at, referer: `${at}/order/${token}`, "sec-fetch-site": "same-origin" })).toBe(303);
+    srv.close();
+  });
 });

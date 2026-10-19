@@ -40,7 +40,8 @@ if [[ "${FLEET_TEELOG:-}" != "$SELF" ]]; then set +e; FLEET_TEELOG="$SELF" bash 
 unset FLEET_TEELOG
 
 A1=01M3F50SH7PNX2E3GST13J52AS; A2=01M4C4NXT786Q4E9725N5A15KV
-REL=0000000000000000000000000000000000000000   # set to the installed candidate when staged
+REL=0000000000000000000000000000000000000000   # Agent-1's runtime; set when staged
+CTRL=$REL                                       # the installed controller release (a controller-only fix may follow REL); set when staged
 SLUG=uk-landlord-compliance-tracker-england-g-a9ddde
 HOURS=24; WINDOW_HOURS=2; PRICE_MAX=500; QUIET_MIN=30; MAX_IDLE_CALLS=40; MAX_DELIVERIES=2
 UNIT=fleet-proof-watch; CUSTODY=automaton-fleet-custody.service
@@ -76,7 +77,7 @@ closed() {
      && "$(Q 'SELECT fleet_sales_open()')" == f ]]
 }
 guard() {
-  [[ "$(current)" == */$REL && "$(pinned)" == "$REL" ]] || die "the installed and pinned release is not ${REL:0:7}"
+  [[ "$(current)" == */$CTRL && "$(pinned)" == "$CTRL" ]] || die "the installed and pinned release is not ${CTRL:0:7}"
   [[ "$(Q "SELECT runtime_commit FROM fleet_agents WHERE agent_id='$A1'")" == "$REL" ]] || die "Agent-1 is not on ${REL:0:7}"
   for k in REAL_REPLICATION_ENABLED REAL_PAYMENTS_ENABLED OWNER_SWEEP_ENABLED FLEET_DRY_RUN_CHILD; do flag_false $k || die "$k is not false in runtime.env"; done
   [[ "$(paused $A2)" == t ]] || die "Agent-2 is NOT paused"
