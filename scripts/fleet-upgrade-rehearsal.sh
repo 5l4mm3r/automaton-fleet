@@ -164,16 +164,22 @@ if [[ -n "$(rh "SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.proname
 fi
 if [[ -n "$(rh "SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'fleet' AND p.proname = 'fleet_event_in_history'")" ]]; then
   # v45: no routine copy outlives its 7-day retention; the history read holds no plumbing; the retention pass runs and writes no event.
+  # Retention runs hourly in production, so the copy may hold up to about an hour of copies that have just aged (plus the time
+  # since the dump): none may be older than 7 days 2 hours (retention has stopped otherwise), and after the pass runs on the
+  # copy none may be older than 7 days. (2026-10-19: checking "none past 7 days" before the pass failed by timing alone.)
   HC=$(rh "SELECT jsonb_build_object('events', (SELECT count(*) FROM fleet.fleet_events),
-    'copies', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type, detail) = 7 AND created_at < now() - interval '7 days'),
+    'copies', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type, detail) = 7 AND created_at < now() - interval '7 days 2 hours'),
+    'duePastRetention', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type, detail) = 7 AND created_at < now() - interval '7 days'),
     'history', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_in_history(event_type, detail)),
     'temporary7d', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type, detail) = 7),
     'diagnostics', (SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type, detail) = 30),
     'hiddenPermanent', (SELECT count(*) FROM fleet.fleet_events WHERE NOT fleet.fleet_event_in_history(event_type, detail) AND fleet.fleet_event_retention_days(event_type, detail) IS NULL),
     'feed', (SELECT count(*) FROM fleet.fleet_command_feed), 'notifications', (SELECT count(*) FROM fleet.fleet_notifications))")
   M0=$(rh 'SELECT max(id) FROM fleet.fleet_events'); RET=$(rh 'SELECT fleet.svc_event_retention()'); M1=$(rh 'SELECT max(id) FROM fleet.fleet_events')
-  [[ "$(echo "$HC" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(j.copies===0&&j.hiddenPermanent===0&&j.history+j.temporary7d+j.diagnostics===j.events?"ok":"bad")})')" == ok && "$M0" == "$M1" ]] || die "v45 history check failed: $HC (retention $RET, max id $M0 -> $M1)"
-  echo "3g. Fleet history on the copy: $HC; retention pass $RET, no event written"
+  LEFT=$(rh "SELECT count(*) FROM fleet.fleet_events WHERE fleet.fleet_event_retention_days(event_type, detail) = 7 AND created_at < now() - interval '7 days'")
+  [[ "$(echo "$HC" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(j.copies===0&&j.hiddenPermanent===0&&j.history+j.temporary7d+j.diagnostics===j.events?"ok":"bad")})')" == ok && "$M0" == "$M1" && "$LEFT" == 0 ]] \
+    || die "v45 history check failed: $HC (retention $RET, left past 7 days after the pass $LEFT, max id $M0 -> $M1)"
+  echo "3g. Fleet history on the copy: $HC; retention pass $RET (none past 7 days left), no event written"
 fi
 [[ "$(rh "SELECT (fleet.fleet_ledger_verify() ->> 'ok')")" == true && "$(head_)" == "$H0" ]] || die "ledger changed or failed verification while the candidate ran"
 [[ "$(rh "SELECT count(*) FROM fleet.fleet_agents WHERE status IN ('reserved','provisioning')")" == 0 ]] || die "a reservation appeared"
