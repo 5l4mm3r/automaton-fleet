@@ -182,42 +182,68 @@ The bank route (v91, "My deposit") stays available if a dedicated bank account i
   ("nothing to create"), and idle beside it is reported as WAITING, NOT A FAILURE. No further product-creation attempt.
   The next useful event is a customer order: the purchase proof below.
 
-### Purchase proof (prepared 2026-10-19; not started): purchase, delivery, one support / revision request, refund
+### Purchase proof (prepared 2026-10-19, revised after the owner's four clarifications; not started)
 A test of the transaction system with **public sales closed**, not demand, revenue or approval of the product.
 Agent-1 only; Agent-2 stays paused. Script: `scripts/fleet-purchase-proof.sh` (staged as `~/rlc104/proof.sh`, run by the
-owner from their own terminal; every step logged to `~/fleet-proof/proof.log`).
+owner from their own terminal; every step logged to `~/fleet-proof/proof.log`). Tests: fleet-purchase-proof-script (5).
 
 | Step | What happens | Acceptance |
 |---|---|---|
-| 1. `start <aiCeilingPence>` | guards; custody money-out for the refund only; custody's refund switch; Agent-1's run budget; the watchdog; resume Agent-1 | the guards (below) pass; nothing else opens |
+| 1. `start <aiCeilingPence>` | guards; Agent-1's run budget (24 h); the watchdog; resume Agent-1. **Money-out stays off** | the guards (below) pass; nothing else opens |
 | 2. `buy` | `economy-offer-proof` opens a £5 checkout of the published tracker (owner-only order page; v76 owner proof, works while sales are closed) | one order, `owner_proof` fixed at creation; a repeat returns the same page |
 | 3. You pay in PayPal | from a PayPal account other than the treasury's (as for the £1 receiving test) | capture booked once as `owner_funding` (owner capital, net of PayPal's fee); nothing posted to Agent-1; not in any venture's revenue |
 | 4. Delivery | automatic from the reviewed files; mail from the Fleet's shared address (the brand's routing address as Reply-To) to the PayPal payer's address; the order page download | the files match the inspected tracker.zip (sha 10adb667…) |
-| 5. Support / revision | you post one change request on the order page (e.g. "the due dates show as numbers in Excel") | Agent-1 wakes, answers on the order thread and, if it revises, delivers a re-reviewed file (at most one more delivery) |
-| 6. Refund | you ask on the order page; Agent-1 refunds (`order.refund`) — or, if it declines under its listed terms ("no refunds once delivered unless the file is faulty"), you run `refund` | one refund request, one PayPal refund; owner capital returned (`owner_proof_return`); Agent-1's books end unchanged; the ledger verifies |
-| 7. Automatic stop | the watchdog | stops on completion; see the stop conditions |
+| 5. Support / revision | you post one change request on the order page, worded only from what was observed (below) | Agent-1 wakes, answers on the order thread and, if it revises, delivers a re-reviewed file (at most one more delivery) |
+| 6. Refund | you ask on the order page. Agent-1 may refund (`order.refund`) or decline under its listed terms ("no refunds once delivered unless the file is faulty"). If it declines, record that and, if you choose, run `refund` | the result names who refunded: **AGENT-APPROVED** or **OWNER OVERRIDE**; one refund request, one PayPal refund; owner capital returned (`owner_proof_return`); Agent-1's books unchanged; the ledger verifies |
+| 7. Automatic stop | the watchdog | see the stop conditions |
+
+**The change request, from evidence.** The actual published file was opened in a spreadsheet application on 2026-10-19
+(LibreOffice Calc 24.2.7.2 on the production host, headless, default CSV import and again with formula evaluation on;
+the rendered sheets: docs/evaluations/launch-candidate/tracker-libreoffice-2026-10-19/). The formulas compute (gas OVERDUE, EICR OK, EPC OK), but every
+computed due date displays as a serial number: gas safety due **46266**, EICR due **46905**, the rent log's earliest
+next increase **46143**; the imported dates show as dates. **Not checked in Excel** (no copy available). An honest
+request: "When I open properties.csv in LibreOffice Calc, Gas safety due shows 46266 and EICR due 46905 instead of
+dates, and the rent log's Earliest next increase shows 46143. Could you send a version where these show as dates?"
+Do not describe it as an Excel fault unless it is seen in Excel.
+
+**Refund binding.** The custody activation's £5 maxima do not apply to refunds (`cx_paypal_refund_work` checks only that
+an activation is live and the cash is available), and having no payout signer does not restrict which refunds can run.
+So money-out is never open for the proof in general. `start` refuses if any refund is queued anywhere or any other
+refundable sale exists. The watchdog opens the **refund window** only when exactly one refund is queued in the whole
+Fleet and it is this proof order's, for at most what was paid; it stops the proof (closing the window) on any refund on
+another order. Residual: the binding is the script's checks, not a per-order rule inside custody; with no other
+refundable payment in existence and public sales closed, no other refund can be requested in the window. A per-order rule
+in custody would be new code (not authorised).
 
 **Permissions (exact)**
 | Item | Setting | Ends |
 |---|---|---|
 | Agent-1 | resumed; daily fuse 754 / hourly 600 unchanged; run budget = the AI ceiling for 24 h | paused at the stop |
-| Custody money-out | £5.00 per instruction, £5.00 a day, 24 h, reason "refund of the owner's £5 proof purchase only" | deactivated at the stop (or expires) |
-| Custody refund switch | `REAL_PAYMENTS_ENABLED=true` for `automaton-fleet-custody.service` only (systemd drop-in `60-purchase-proof-refund.conf`, custody restarted). runtime.env keeps all four flags false, so Fleet HQ and the Operator API still show `realPaymentsEnabled: false` | removed at the stop, custody restarted |
+| Refund window: custody money-out | opened by the watchdog for the bound refund only: 2 h, reason naming the refund request | deactivated at the stop (or expires) |
+| Refund window: custody refund switch | `REAL_PAYMENTS_ENABLED=true` for `automaton-fleet-custody.service` only (drop-in `60-purchase-proof-refund.conf`, custody restarted) | removed at the stop, custody restarted; `stop` checks the running process no longer has it |
 | Public sales, card authority, outward release, payouts, Agent-2 | unchanged: closed / off / none / impossible (no payout signer) / paused | — |
 
-**Budget**
-| Kind | Expected | Ceiling |
-|---|---|---|
-| Purchase principal (yours, refunded) | £5.00 | £5.00 |
-| PayPal's fee (not all returned) | ≈ £0.45 on £5 (UK domestic 2.9 % + 30p); what PayPal gives back on the refund is booked from its records | £0.50 |
-| AI: Agent-1's work | measured so far: a first wake after a long pause 15p (2 calls, attempt 3); 6 calls 22p (attempt 2); packaging and review 48p (attempt 1). Expected 3–4 wakes (payment, revision, refund) and one revision: about 60p–£1.20, more if the revision is substantial | **the AI ceiling you set** (recommended £2.00 = 200); separate from the £2 publishing allowance |
-| Search | only if Agent-1 chooses to research: 1p per search | inside the AI ceiling's run (charged to Agent-1) |
+**Effective setting, shown in every status.** `runtime.env` keeps all four flags false, so Fleet HQ and the Operator
+API show `realPaymentsEnabled: false` throughout; **that is not evidence that money-out is off**. The proof's status
+prints an EFFECTIVE MONEY-OUT block: the running custody process's own `REAL_PAYMENTS_ENABLED` (read from the process),
+whether the drop-in exists, the custody activation and its expiry, the refund window (when and for which refund request)
+and the refunds queued in the whole Fleet. The final report shows all of them off.
 
-**Stop conditions (the watchdog, every minute):** complete (the refund recorded once as owner capital and the ledger
-verifies); a second proof order, refund request or PayPal refund; a third delivery; an uncertain outcome
-(`OPERATION_UNCERTAIN`); a buyer message unanswered for 30 minutes; 40 model calls without a new customer event; a refund
-not sent to PayPal within 30 minutes; the AI ceiling; 24 h. Waiting for you (to pay, to write, to ask) never stops it.
-Every stop pauses Agent-1, ends the run budget, deactivates custody money-out and removes the refund switch.
+**Budget**
+| Kind | Expected | Basis |
+|---|---|---|
+| Purchase principal (yours, refunded) | £5.00 | refunded in full in step 6 |
+| PayPal's fee | **an estimate, not a cap**: ≈ 45p on £5 at PayPal's standard UK rate (2.9 % + 30p); PayPal sets it and decides how much it returns on a refund | the actual fee is read from the capture and refund records and reported; nothing here can limit it |
+| AI: Agent-1's work | measured so far: a first wake after a long pause 15p (2 calls, attempt 3); 6 calls 22p (attempt 2); packaging and review 48p (attempt 1). Expected 3–4 wakes and one revision: roughly 60p–£1.20, more if the revision is substantial; the actual cost depends on model, input size, output and caching | **a new AI allowance, a separate spending decision** (the script's ceiling; e.g. £2.00 = 200). It is not a continuation of the £2 publishing allowance (85p used, provisional; its unused £1.15 is not carried over); together they would total up to £4 |
+| Search | only if Agent-1 chooses to research: 1p per search | inside the run budget |
+
+**Stop conditions (the watchdog, every minute):** complete (the refund recorded once as owner capital, **Agent-1's
+wallet hold released** — spendable equal to the start — and the ledger verifies); any refund on another order; a second
+proof order, refund request or PayPal refund; a third delivery; an uncertain outcome (`OPERATION_UNCERTAIN`); a buyer
+message unanswered for 30 minutes; 40 model calls without a new customer event; the refund not completed 30 minutes after
+the window opened; the AI ceiling; 24 h. Waiting for you (to pay, to write, to ask) never stops it. Every stop pauses
+Agent-1, ends the run budget and closes the refund window. `start` also checks that Agent-1's spendable cash can bear the
+£5 hold (9,758p on 2026-10-19).
 
 **Accounting:** the capture is `owner_funding` ("owner proof purchase of an agent offer … not agent revenue"); the
 refund and any fee PayPal gives back are `owner_proof_return`; venture P&L excludes `owner_proof` orders. Tested:
