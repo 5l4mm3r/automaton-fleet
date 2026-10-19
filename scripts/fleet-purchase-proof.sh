@@ -20,9 +20,13 @@
 #                    authority for THIS ORDER ONLY (custody enforces it when it sends: at most £5, £5 in total, 2 h —
 #                    schema v96) and custody's own refund switch (REAL_PAYMENTS_ENABLED=true for the custody unit only;
 #                    runtime.env is unchanged, so Fleet HQ keeps showing false — never read that as "money-out is off").
-#                    Stops on: completion (the refund recorded once, bound to the proof's authority, as owner capital;
-#                    its reservation released; PayPal holds none of Agent-1's money; Agent-1's wallet reconciled journal
-#                    by journal; the ledger verifies); a second proof order, refund request or PayPal refund; a third
+#                    Stops when the refund is done. FULL SUCCESS needs all of: the customer journey — Agent-1 answered
+#                    after the buyer's fault report, a corrected delivery was SENT after it, and the files of that delivery
+#                    passed inspector fleet-qa-3 (verdict pass, automated checks ok) — and the money — the refund recorded
+#                    once, bound to the proof's authority, as owner capital; its reservation released; PayPal holds none
+#                    of Agent-1's money; Agent-1's wallet reconciled journal by journal; the ledger verifies. A refund
+#                    without the journey ends the proof as NOT a full proof (named what is missing).
+#                    Also stops on: a second proof order, refund request or PayPal refund; a third
 #                    delivery; an uncertain outcome; a buyer message unanswered 30 min; 40 model calls without a new
 #                    customer event; a refund not completed 30 min after the window opened; the AI ceiling; 24 h. Waiting
 #                    for the buyer never stops it.
@@ -94,6 +98,16 @@ journals() {
       WHERE p.account_id = fleet_ledger_account('$A1', 'agent_cash') AND j.recorded_at >= '$(START)' GROUP BY j.kind ORDER BY j.kind"
 }
 cash_moved() { journals | awk '{s += $2} END {print s + 0}'; }
+# The customer journey on the order $1: "replied corrected inspected" (t/f each). replied: an Agent-1 message after the
+# buyer's first message; corrected: a delivery SENT after that message; inspected: the latest sent delivery's review is
+# fleet-qa-3, pass, automated checks ok (the review gate already binds it to exactly the delivered files).
+journey() {
+  Q "WITH b AS (SELECT min(created_at) AS at FROM fleet_customer_messages WHERE order_id = '$1' AND author = 'buyer'),
+          d AS (SELECT d.* FROM fleet_order_deliveries d WHERE d.order_id = '$1' AND d.status = 'sent' ORDER BY d.created_at DESC LIMIT 1)
+     SELECT (EXISTS (SELECT 1 FROM fleet_customer_messages m, b WHERE m.order_id = '$1' AND m.author = 'agent' AND m.created_at > b.at))::text || ' '
+         || (EXISTS (SELECT 1 FROM fleet_order_deliveries x, b WHERE x.order_id = '$1' AND x.status = 'sent' AND x.created_at > b.at))::text || ' '
+         || COALESCE((SELECT (r.inspector = 'fleet-qa-3' AND r.verdict = 'pass' AND r.automated_ok)::text FROM d JOIN fleet_artifact_reviews r ON r.review_id = d.review_id), 'false')"
+}
 results() {
   local o=$1 by k
   [[ -n "$o" ]] || { echo "  ACCEPTANCE: no proof order"; return; }
@@ -119,6 +133,8 @@ results() {
   journals | sed 's/^/      /'
   local ai acq now moved; ai=$(journals | awk '$1 == "inference_charge" {print -$2}'); acq=$(journals | awk '$1 == "ai_credit_acquisition_cost" {print -$2}')
   echo "    AI: model usage at the credit's price ${ai:-0}p + the unrecoverable tax / fees on that credit ${acq:-0}p (receipt-based ratio of its lot) — one cost in two parts, never the same cost twice; Fleet-recorded, provisional until reconciled with Anthropic"
+  local jr jc ji; read -r jr jc ji <<< "$(journey "$o")"
+  echo "    CUSTOMER JOURNEY: Agent-1 answered the fault report: ${jr:-false}; corrected delivery sent after it: ${jc:-false}; delivered files passed fleet-qa-3: ${ji:-false}"
   now=$(spendable); moved=$(cash_moved)
   echo "    Agent-1 wallet: ${SP0}p at start $( (( moved < 0 )) && echo "− ${moved#-}p" || echo "+ ${moved}p") (the journals above) = $(( SP0 + moved ))p expected; spendable now ${now}p ($( [[ "$now" == "$(( SP0 + moved ))" ]] && echo reconciled || echo "NOT RECONCILED by $(( now - SP0 - moved ))p"))"
 }
@@ -231,7 +247,11 @@ watch)
       || { stop_proof "FAILURE: PayPal exposure is held from Agent-1's money after the refund"; exit 0; }
     now=$(spendable); moved=$(cash_moved)
     [[ "$now" == "$(( SP0 + moved ))" ]] || { stop_proof "FAILURE: Agent-1's wallet does not reconcile: spendable ${now}p, expected $(( SP0 + moved ))p (${SP0}p + journals ${moved}p)"; exit 0; }
-    stop_proof "PROOF COMPLETE: paid, delivered, refunded once within the proof's own refund authority, as owner capital; its reservation released; Agent-1's wallet = start ${moved}p by its journals; the ledger verifies"; exit 0
+    read -r jr jc ji <<< "$(journey "$o")"
+    if [[ "$jr $jc $ji" == "true true true" ]]; then
+      stop_proof "PROOF COMPLETE (full): Agent-1 answered the fault report and sent a corrected delivery that passed fleet-qa-3; refunded once within the proof's own refund authority, as owner capital; its reservation released; Agent-1's wallet = start ${moved}p by its journals; the ledger verifies"; exit 0
+    fi
+    stop_proof "PROOF ENDED — NOT a full proof: the refund and accounting checks pass, but $( [[ $jr != true ]] && echo 'no Agent-1 answer to the fault report; ')$( [[ $jc != true ]] && echo 'no corrected delivery sent after it; ')$( [[ $ji != true ]] && echo 'the delivered files did not pass fleet-qa-3; ')(Agent-1's wallet = start ${moved}p by its journals; the ledger verifies)"; exit 0
   fi
   # The refund window: when the proof order's refund is requested (custody enforces the order-only authority).
   if [[ -z "$(WINDOW)" && "$(Q "SELECT count(*) FROM fleet_paypal_refund_requests x WHERE x.order_id = '$o' AND x.status = 'requested'")" == 1 ]]; then

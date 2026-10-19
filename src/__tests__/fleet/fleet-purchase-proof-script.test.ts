@@ -49,6 +49,7 @@ flag_false() { [[ "$1" != "\${BAD_FLAG:-none}" ]]; }
 switch_effective() { if [[ -f "${dir}/dropin.conf" || -n "\${STALE_ENV:-}" ]]; then echo ON; else echo off; fi; }
 spendable() { echo "\${NOW:-9758}"; }
 journals() { if [[ -n "\${JOURNALS:-}" ]]; then echo "\${JOURNALS}" | tr ',' '\\n'; fi; }
+journey() { echo "\${JOURNEY:-true true true}"; }
 Q() { echo "$1" >> "${dir}/sql.log"
   case "$1" in
     *"paused FROM fleet_founder_cognition WHERE agent_id = '${A1}'"*) if [[ -f "${dir}/paused-1" ]]; then echo t; else echo "\${P1:-t}"; fi;;
@@ -177,7 +178,12 @@ Q() { echo "$1" >> "${dir}/sql.log"
     fs.writeFileSync(path.join(dir, "state", "refund-authority.txt"), AUTH + "\n");
     const done = { COMPLETED: "1", RETURNS: "1" };
     const ok = watch({ ...done, NOW: "9737", JOURNALS: "ai_credit_acquisition_cost -3 1,inference_charge -18 4" });
-    expect(ok.out).toContain("PROOF COMPLETE: paid, delivered, refunded once within the proof's own refund authority, as owner capital; its reservation released; Agent-1's wallet = start -21p by its journals");
+    expect(ok.out).toContain("PROOF COMPLETE (full): Agent-1 answered the fault report and sent a corrected delivery that passed fleet-qa-3; refunded once within the proof's own refund authority, as owner capital; its reservation released; Agent-1's wallet = start -21p by its journals");
+    expect(ok.out).toContain("CUSTOMER JOURNEY: Agent-1 answered the fault report: true; corrected delivery sent after it: true; delivered files passed fleet-qa-3: true");
+    // The refund alone is not a full proof: what is missing is named.
+    const part = watch({ ...done, JOURNEY: "true false false" });
+    expect(part.out).toContain("PROOF ENDED — NOT a full proof: the refund and accounting checks pass, but no corrected delivery sent after it; the delivered files did not pass fleet-qa-3;");
+    expect(part.out).not.toContain("PROOF COMPLETE");
     expect(ok.out).toContain("AI: model usage at the credit's price 18p + the unrecoverable tax / fees on that credit 3p");
     expect(ok.out).toContain("9758p at start − 21p (the journals above) = 9737p expected; spendable now 9737p (reconciled)");
     expect(watch({ ...done, SET_ASIDE: "1" }).out).toContain("FAILURE: the refund is recorded but its reservation is still set aside");

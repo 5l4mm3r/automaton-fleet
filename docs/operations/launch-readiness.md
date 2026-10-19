@@ -1,6 +1,6 @@
 # Launch readiness — the one checklist (Agent-1 first; Agent-2 stays paused)
 
-State 2026-10-19 (completion pass). Production: e1c51e2, schema 95, UI 0.26.2. Consolidated candidate: schema 96 (§1 A), built and rehearsed before its install package; nothing of it is installed yet. "Blocker" = launch cannot be called ready until it is done. "Limit" = recorded,
+State 2026-10-19 (completion pass). Production: **cb23033, schema 96, UI 0.26.2 (deployed 14:13:04Z; Agent-1 upgraded; verified — release-cb23033.md)**. "Blocker" = launch cannot be called ready until it is done. "Limit" = recorded,
 does not block. Optional improvements are listed at the end and never delay the decision.
 
 ## 1. Launch checklist (frozen 2026-10-19; the owner's completion pass)
@@ -8,7 +8,7 @@ Scope: Agent-1 alone is the launch agent (Agent-2 preserved, paused). The Fleet'
 digital products, the PayPal treasury, Proton routing and the owner-paid card. Additional agents and real replication are
 outside this launch. The detailed evidence behind each line is in Appendix A (the earlier rows, kept as history).
 
-### A. Required implementation repairs — all in the consolidated candidate (schema v96), NOT installed yet
+### A. Required implementation repairs — A1–A9 INSTALLED with cb23033 (schema v96) 2026-10-19; A10 before sales open
 | # | Repair | Evidence (tests on the candidate) | Status |
 |---|---|---|---|
 | A1 | Order and enquiry pages run as the service role (row 23): both v89 functions granted; declared list = startup audit = readiness | fleet-public-page-grants; fleet-v89-code-maintenance-pg (as the service role, no disclosure with a request on file); fleet-v96-public-routes-service-role-pg (real handler over HTTP as fleet_service_login; reproduces "Temporarily unavailable" without the fix; an extra grant is caught) | in candidate |
@@ -20,29 +20,31 @@ outside this launch. The detailed evidence behind each line is in Appendix A (th
 | A7 | Fleet Control's own AI costs: a **hard** daily ceiling. Each paid call (spend review, lesson review, evidence relevance) reserves its bounded maximum before it is made — the prompt's UTF-8 bytes as input tokens (a token is never shorter than a byte) + its full output allowance, at the tier's prices, cache off — under the budget row's lock, against the last 24 h (settled at actual cost; unsettled or unknown at the maximum). **Unset until the owner sets it: no paid Fleet Control call until then** (a spend needing review waits, never approved). Outside it: owner conversation turns (treasury-paid, capped per turn, v62) and agents' own cognition (their fuses and run budgets) | fleet-spend-review-v64-pg (unset → no call; too small → refused; room → reserved max, settled actual ≤ max; two at once → one); r24; v65 | in candidate |
 | A8 | Exhaustion, the authoritative measure with no grace periods: verified sale money PayPal holds counts however long it is held; a capture PayPal reports PENDING is not verified money and, like an open checkout, is shown (notCounted) but keeps no agent alive. Age decides nothing (the earlier 14 / 30-day rule was an implementation choice and is removed) | fleet-completion-v51-pg (held 90 days keeps it alive; a pending capture does not; refunded → dies) | in candidate |
 | A9 | Three suites brought up to v95 (they failed on e1c51e2 too: fleet-ledger 11, v65 1, the v76 e2e service 1) | all pass | in candidate |
+| A10 | **Supported customer geography, enforced**: an owner-held allow-list of buyer countries (proposed launch list: the United Kingdom only — the seller is a UK sole trader on the treasury PayPal checkout; EU consumers need a merchant of record, none is connected; other countries are added one by one once their rules for a foreign seller of digital goods / services are verified). The buyer states their country before payment on the order page; a country outside the list is refused before any payment; after payment PayPal's payer country is compared and a mismatch holds delivery and tells the agent and the owner (the agent refunds within its standing authority). Agents are told the list | to build (v97) | before sales open |
 | — | Carried forward, installed with e1c51e2 and adequately evidenced: durable operations and duplicate protection (v95), uncertain provider outcomes, continuation after interruption, zero-call waiting, notice delivery, upgrade wake, installer logging | release-e1c51e2.md | installed |
 
 ### B. Owner setup and activation decisions (each its own approval; prepared in one package each)
 | # | Decision | State |
 |---|---|---|
-| B1 | Install the consolidated release (A1–A9) and upgrade Agent-1; both agents end paused | package after build + rehearsals |
+| B1 | Install the consolidated release (A1–A9) and upgrade Agent-1; both agents end paused | DONE 2026-10-19 14:13Z (cb23033; verified) |
 | B2 | Continue the purchase proof on the existing unpaid £5 order (no new order): AI ceiling (the unused 200p allowance), the £5 refundable payment, PayPal's actual fee, custody's refund switch for the proof only, a refund authority for that order only | package after install |
 | B3 | Funding and backing, recomputed from current records | activation package |
 | B4 | Any test-cost write-off — shown separately, never bundled | separate decision |
 | B5 | Launch boundary; Agent-1 survival set to live | activation package |
 | B6 | Capital sizing `contextual` (live default is `fixed`); dynamic net-profit sweep ON with its bands | activation package |
-| B7 | Standing refund authority (limits, expiry) and custody's REAL_PAYMENTS_ENABLED kept on for the custody unit (refunds within authority only; no payout signer exists) | activation package |
-| B8 | Standing identity and card authority (card 1 owner-paid, fallback OFF) | activation package |
+| B7 | The intended ongoing **standing refund authority** (per refund, per 24 h, expiry or ongoing) — ordinary customer refunds then leave autonomously within it — and custody's REAL_PAYMENTS_ENABLED kept on for the custody unit (refunds within authority only; no payout signer exists) | activation package |
+| B8 | **Standing identity authority** (which owner identity classes and documents the broker may use, logged and revocable) and **card authority** (card 1 owner-paid, fallback OFF) | activation package; the card proof C7 runs under its own bounded authorisation BEFORE sales open |
 | B9 | Ongoing budgets: Agent-1's AI fuses, Fleet Control's daily AI budget (unset after install: nothing authorised until you set it), search | activation package |
-| B10 | Open sales fleet-wide and resume Agent-1; Agent-2 verified paused | activation package |
-| B11 | Check the legal seller address as shown on order pages ("45 Albemarie Street"; the street is Albemarle Street) | owner check |
+| B11 | Confirm the legal seller address as shown on order pages ("45 Albemarie Street"; the street is Albemarle Street) — BEFORE sales open | owner check |
+| B12 | The supported geography allow-list (A10) | before sales open |
+| B10 | LAST: open sales fleet-wide and resume Agent-1; Agent-2 verified paused — only after B3–B9, B11, B12, C6 and C7 | activation package |
 
 ### C. Live proofs
 | # | Proof | State |
 |---|---|---|
 | C1–C4 | Phone sign-in; push + alarm drill; outside monitor; backup + isolated restore | LIVE (2026-10-17) — reused, not repeated |
 | C5 | Private publishing by Agent-1 | LIVE (attempt 2, 2026-10-18) |
-| C6 | Customer journey: payment → delivery → the customer's fault report → Agent-1's response → corrected delivery → refund → provider and ledger reconciliation | pending B1, B2 (blocked 2026-10-19 by row 23) |
+| C6 | Customer journey on the existing order. **Full success needs all of**: payment; delivery; Agent-1's answer after the buyer's fault report; a corrected delivery SENT after it whose files PASSED fleet-qa-3; the refund once within the order-only authority, as owner capital; its reservation released; no PayPal exposure on Agent-1; the wallet reconciled journal by journal; the ledger verifying. A refund without the corrected, inspected delivery is recorded as NOT a full proof; an owner override proves the refund infrastructure, not Agent-1's judgement | ready for approval (B2) — start before 2026-10-21 11:04Z (the checkout must stay open 24 h) |
 | C7 | One card purchase by Agent-1 under its own bounded authorisation (owner-paid card 1; reservation, Fleet Control review, browser fill, statement match) — the outstanding spending / identity proof | pending; its own package |
 
 ### D. Optional or unavailable capabilities (never block supported work; stay accurately unavailable until connected and proven)

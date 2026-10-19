@@ -1,4 +1,4 @@
-# Release cb23033 (schema 95 → 96; UI 0.26.2 unchanged) — the consolidated launch candidate; NOT INSTALLED
+# Release cb23033 (schema 95 → 96; UI 0.26.2 unchanged) — DEPLOYED 2026-10-19 14:13:04Z; Agent-1 upgraded; verified
 
 ## What it contains (from e1c51e2, the running release; 21 commits)
 1. **Order and enquiry pages for the service role** (row 23): `svc_repo_requests` / `svc_repo_consent` in the declared
@@ -33,6 +33,14 @@
 | Services rehearsal 95 → 96 (VPS) | PASSED 2026-10-19 13:56:32Z (cb23033): e1c51e2 refuses schema 96; the candidate controller (privileges check included), Operator API and dashboard ready on 96; Fleet Command and history checks pass (none past 7 days before or after the retention pass; it writes no event); ledger head unchanged, no reservation or birth; rollback restores schema 95 with an identical head; e1c51e2 runs again. Production untouched |
 | Earlier rehearsal failure | d5936b6's services rehearsal failed 13:10Z on the history check by timing alone (4 routine sign-in copies had just crossed 7 days; production retention is hourly). The check was corrected, not skipped (cb23033). After the failure: no rehearsal unit or database left; production ready, schema 95, both agents paused |
 | Production after all rehearsals | e1c51e2, schema 95, ready; both agents paused; the proof order unpaid, checkout open until 2026-10-22 11:04Z; ledger verifies (924 journals); sales, card authority, payouts off; no run budget |
+
+## Installed (owner approval 2026-10-19: "Approve deployment of cb23033 and the Agent-1 upgrade only")
+| Step | Result |
+|---|---|
+| Install | `~/rlc106/install-fix.sh`, 14:11:16–14:24:52Z (owner-run): evidence gate and guards passed; baseline `~/rlc91/baseline-pre-cb23033-…`; release 95 → 96, outage 14:12:11–14:12:56Z (45 s), `RELEASE cb23033 DEPLOYED 14:13:04Z` (UI 0.26.2 reused); ledger and pauses / fuses = baseline |
+| Agent-1 | founder upgrade rehearsal on the host 27/27 (living founders untouched); preflight ok; e1c51e2 → cb23033, upgrade **572ca078-a6d0-4309-bee7-ea52a5700037** (rollback: `sudo /opt/automaton-fleet/current/scripts/fleet-founders.sh rollback-runtime 01M3F50SH7PNX2E3GST13J52AS 572ca078-a6d0-4309-bee7-ea52a5700037 <reason>`) |
+| Re-run | 14:27:40Z (assistant, the same script): every step detected as done and skipped; only a fresh baseline dump |
+| Verification | `~/rlc106/verify-install.sh` VERIFIED 14:28Z: Agent-1 on cb23033 (registry, unit, process, report); fleet-qa-3, Field Guide v2.3, independent verdict, image tool text in the build; schema 96; both v89 functions granted; privilege audit clean; readyz ready; heartbeat ok; **the proof order page loads through the public site (200)**, an unknown code 404; refunds bound to authorities, none live; owner-proof never holds the agent's cash; the tracker not sold publicly until re-inspected; capability status v14; Fleet Control budget unset with the hard ceiling wired; exhaustion measure without age rules; both agents paused, Agent-2 on b60e262; no release, card off, payouts off, sales closed, no proof drop-in; ledger verifies (924 journals) |
 
 ## Install (owner-run, on approval; ends with BOTH AGENTS PAUSED; no paid work; no refund authority granted)
 `ssh -t agentfleet-vps 'bash ~/rlc106/install-fix.sh'` — evidence gate (both rehearsals of THIS commit < 24 h), guards
