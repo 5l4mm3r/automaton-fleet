@@ -1,0 +1,20 @@
+#!/bin/sh
+# The office renderer inside the Fleet's exec sandbox (src/fleet/founder/exec-sandbox.ts, 2026-10-19).
+# LibreOffice's launcher (oosplash) exits when /proc/version is missing, which the founder unit hides (ProcSubset=pid);
+# the office program itself does not need it, so this starts it directly. Like the launcher, a first start with a new
+# profile (exit 81) is restarted, at most twice.
+P=/usr/lib/libreoffice/program/soffice.bin
+case "${FLEET_OFFICE:-ready}" in
+  ready) ;;
+  not_installed) echo "soffice: the office renderer (LibreOffice) is not installed on this host" >&2; exit 127 ;;
+  no_private_tmp) echo "soffice: the office renderer is unavailable in this sandbox (the Fleet runs it only with a private /tmp; this host's runtime has none)" >&2; exit 126 ;;
+  *) echo "soffice: the office renderer is unavailable in this sandbox ($FLEET_OFFICE)" >&2; exit 126 ;;
+esac
+[ -x "$P" ] || { echo "soffice: the office renderer (LibreOffice) is not installed on this host" >&2; exit 127; }
+n=0
+while :; do
+  "$P" "$@"
+  rc=$?
+  if [ "$rc" -ne 81 ] || [ "$n" -ge 2 ]; then exit "$rc"; fi
+  n=$((n + 1))
+done

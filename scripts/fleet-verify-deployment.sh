@@ -126,6 +126,9 @@ if [[ -f "$FT" ]]; then
     grep -qx "$prop" "$FT" && ok "founder template: $prop" || bad "founder template lacks $prop"
   done
   grep -q -- "-/etc/automaton-fleet/custody.env" "$FT" && grep -q -- "-/etc/automaton-fleet/admin.env" "$FT" && ok "founder template hides fleet secrets" || bad "founder template does not hide fleet secrets"
+  # 2026-10-19: the office renderer in the exec sandbox — its syscalls re-allowed, the private /tmp it needs still set.
+  grep -qx "SystemCallFilter=mbind set_mempolicy get_mempolicy chown fchown fchownat lchown" "$FT" && grep -qx "PrivateTmp=yes" "$FT" && grep -qx "ProcSubset=pid" "$FT" \
+    && ok "founder template: office renderer syscalls, private /tmp, ProcSubset=pid" || bad "founder template lacks the office renderer's syscalls or private /tmp"
   active="$(systemctl list-units --all --plain --no-legend 'automaton-fleet-founder@*' 2>/dev/null | awk '$3 != "inactive" {print $1}' | wc -l)"
   living="$(runuser -u postgres -- psql -X -At -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT count(*) FROM fleet.fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive')" 2>/dev/null || echo "?")"
   [[ "$active" == "$living" ]] && ok "founder runtime units active: $active (living founders: $living)" || bad "founder runtime units active: $active, living founders: $living"

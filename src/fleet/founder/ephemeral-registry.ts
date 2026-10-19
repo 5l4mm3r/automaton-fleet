@@ -24,6 +24,8 @@ export interface EphemeralRegistry {
   serviceUrl: string;
   operatorUrl: string;
   custodyUrl: string;
+  /** Only with `identity: true` (the revision rehearsal's simulated shared mailbox). */
+  identityUrl?: string;
   dir: string;
   port: number;
   stop(): void;
@@ -53,7 +55,7 @@ async function freePort(): Promise<number> {
   });
 }
 
-export async function startEphemeralRegistry(opts: { bin: string; rolesSql: string; runAs?: string; parent?: string }): Promise<EphemeralRegistry> {
+export async function startEphemeralRegistry(opts: { bin: string; rolesSql: string; runAs?: string; parent?: string; identity?: boolean }): Promise<EphemeralRegistry> {
   const runAs = opts.runAs;
   const asUser = (file: string, args: string[], input?: string) =>
     execFileSync(runAs ? "runuser" : file, runAs ? ["-u", runAs, "--", file, ...args] : args, {
@@ -74,6 +76,7 @@ export async function startEphemeralRegistry(opts: { bin: string; rolesSql: stri
   const servicePw = pw();
   const operatorPw = pw();
   const custodyPw = pw();
+  const identityPw = pw();
   const data = path.join(dir, "data");
   const pwfile = path.join(dir, "pw");
   fs.writeFileSync(pwfile, superPw + "\n", { mode: 0o600 });
@@ -108,6 +111,7 @@ export async function startEphemeralRegistry(opts: { bin: string; rolesSql: stri
     psql(
       ["-v", `dbname=${dbname}`, "-v", "owner=fleet_owner", "-f", "-"],
       `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n\\set custody_password ${custodyPw}\n` +
+        (opts.identity ? `\\set identity_password ${identityPw}\n` : "") +
         fs.readFileSync(opts.rolesSql, "utf8"),
     );
     const u = (user: string, p: string) => `postgresql://${user}:${p}@127.0.0.1:${port}/${dbname}`;
@@ -117,6 +121,7 @@ export async function startEphemeralRegistry(opts: { bin: string; rolesSql: stri
       serviceUrl: u("fleet_service_login", servicePw),
       operatorUrl: u("fleet_operator_login", operatorPw),
       custodyUrl: u("fleet_custody_login", custodyPw),
+      ...(opts.identity ? { identityUrl: u("fleet_identity_login", identityPw) } : {}),
       dir,
       port,
       stop,

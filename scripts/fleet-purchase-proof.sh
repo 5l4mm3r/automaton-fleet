@@ -9,6 +9,11 @@
 #       guards (the release, flags, Agent-2, sales / card / releases closed, no payout signer, no standing refund authority,
 #       exactly the one existing proof order, unpaid, its checkout still open) → Agent-1's run budget (24 h) → the watchdog
 #       (every minute) → resume Agent-1. Money-out stays OFF.
+#   bash fleet-purchase-proof.sh continue
+#       (2026-10-19, after the repair release) resumes the SAME proof on its paid order within the run budget it already has —
+#       never a new budget, ceiling or end time: guards → the run is still open with ceiling and time left → the watchdog →
+#       resume Agent-1. The quiet periods the watchdog measures start again at the resume (time Agent-1 was paused by the
+#       owner is not time it left a buyer unanswered).
 #   … buy            prints the EXISTING order's page (no new order, no new payment): pay it with PayPal yourself, from an
 #                    account other than the treasury's
 #   … refund [why]   the owner's override: refund the proof order in full (recorded as an OWNER OVERRIDE, not as the agent's
@@ -67,6 +72,8 @@ switch_effective() {
 }
 spendable() { Q "SELECT (fleet_agent_wallet_measure('$A1') ->> 'spendableMinor')"; }
 START() { cat "$D/proof-start.txt" 2>/dev/null; }
+# When Agent-1 last resumed under this proof (start, or a continue after an owner pause).
+RESUMED() { tail -1 "$D/proof-resumed.txt" 2>/dev/null || START; }
 WINDOW() { cat "$D/refund-window.txt" 2>/dev/null; }
 AUTH() { cat "$D/refund-authority.txt" 2>/dev/null; }
 CEILING=0; SP0=0; [[ -f "$D/proof-terms.txt" ]] && read -r CEILING SP0 < "$D/proof-terms.txt"
@@ -183,6 +190,16 @@ stop_proof() {
   [[ $bad == 0 ]] || die "a stop step failed — Agent-1 paused=$(paused $A1); refund authorities $(authorities); refund switch $(switch_effective); re-run stop"
   echo "== PROOF STOPPED $(ts): $why — Agent-1 paused; run budget ended; no refund authority live; custody refund switch OFF (process and drop-in)"
 }
+# A buyer message on the proof order ($1) with no message from Agent-1 to the buyer after it, unanswered for QUIET_MIN minutes of
+# Agent-1's running time (counted from the later of the message and the last resume, $2). Only a message Agent-1 sent to the
+# buyer answers it (an acknowledgement counts; a refusal, a delivery attempt or model calls do not — 2026-10-19: 23 model calls
+# and no reply had counted as answered). It is "unanswered" in schema v100's fleet_customer_obligations too. Kept as one
+# definition: fleet-v100-obligations-pg.test.ts runs exactly this text.
+unanswered_sql() {
+  echo "SELECT EXISTS (SELECT 1 FROM fleet_customer_messages b WHERE b.order_id = '$1' AND b.author = 'buyer'
+          AND GREATEST(b.created_at, '$2'::timestamptz) < now() - interval '$QUIET_MIN minutes'
+          AND NOT EXISTS (SELECT 1 FROM fleet_customer_messages a WHERE a.order_id = '$1' AND a.author = 'agent' AND a.created_at > b.created_at))"
+}
 if [[ -n "${FLEET_PROOF_STUBS:-}" ]]; then source "$FLEET_PROOF_STUBS"; fi
 [[ $EUID -eq 0 ]] || sudo -v || exit 2
 
@@ -202,7 +219,7 @@ start)
   sp=$(spendable); [[ "$sp" =~ ^[0-9]+$ ]] || die "Agent-1's spendable cash is unknown"
   [[ "$(Q "SELECT count(*) FROM fleet_offers o WHERE o.slug = '$SLUG' AND o.agent_id = '$A1' AND o.status = 'published' AND o.kind = 'product' AND o.price_minor <= $PRICE_MAX")" == 1 ]] \
     || die "the offer $SLUG is not Agent-1's published product at most £5"
-  echo "$2 $sp" > "$D/proof-terms.txt"; CEILING=$2; SP0=$sp; ts > "$D/proof-start.txt"
+  echo "$2 $sp" > "$D/proof-terms.txt"; CEILING=$2; SP0=$sp; ts > "$D/proof-start.txt"; START > "$D/proof-resumed.txt"
   echo "  the existing proof order $o (unpaid) is continued; no new order or payment is made. Money-out stays OFF until its refund is requested"
   echo "  the offer is not sold publicly: $(Q "SELECT COALESCE(fleet_offer_sale_block(o), 'SOLD PUBLICLY (unexpected)') FROM fleet_offers o WHERE o.slug = '$SLUG'")"
   echo "  1. Agent-1's run budget $(printf '£%d.%02d' $((CEILING / 100)) $((CEILING % 100))) for ${HOURS} h (checked before every model request); spendable at start ${SP0}p"
@@ -213,6 +230,28 @@ start)
   echo "  3. resume Agent-1"
   A founder-cognition $A1 resume "purchase proof (owner approval): AI ceiling ${CEILING}p, ${HOURS} h; public sales stay closed" | jq -c '{paused}' || { stop_proof "resume failed"; exit 1; }
   echo "== PROOF STARTED $(START): sales closed; card authority off; no outward release; money-out off; Agent-2 paused. Next: buy (prints the existing order page)"; report ;;
+continue)
+  [[ -n "$(START)" ]] || die "no proof was started here: nothing to continue"
+  guard
+  [[ "$(paused $A1)" == t ]] || die "Agent-1 is already running"
+  [[ "$(authorities)" == "[]" && "$(switch_file)" == absent && "$(switch_effective)" != ON && -z "$(WINDOW)" ]] || die "a refund authority, window or custody's refund switch is on"
+  [[ "$(Q 'SELECT count(*) FROM fleet_customer_orders WHERE owner_proof')" == 1 ]] || die "not exactly one proof order"
+  o=$(ORDER)
+  [[ "$(Q "SELECT payment_status FROM fleet_customer_orders WHERE order_id = '$o'")" == paid ]] || die "the proof order is not paid"
+  [[ "$(Q "SELECT count(*) FROM fleet_paypal_refund_requests WHERE order_id = '$o'")" == 0 ]] || die "the proof order already has a refund request"
+  run=$(Q "SELECT fleet_admin_cognition_run('$A1')")
+  [[ "$(jq -r '.open' <<< "$run")" == true ]] || die "the proof's run budget is not open (ended or expired): continuing needs the owner's revised terms"
+  left=$(jq -r '(.ceilingMinor - (.spentMicro + .inflightMicro) / 1000000) | floor' <<< "$run")
+  (( left > 5 )) || die "the run budget has ${left}p left: continuing needs the owner's revised terms"
+  echo "  the SAME run budget, unchanged: $(jq -c '{ceilingMinor, spentPence: (.spentMicro/1000000), endsAt}' <<< "$run"); ${left}p left. No new budget, ceiling or end time"
+  echo "  buyer requests open on the proof order: $(Q "SELECT COALESCE(jsonb_agg(x - 'id'), '[]') FROM jsonb_array_elements(fleet_customer_obligations('$A1')) x WHERE x ->> 'id' = '$o'")"
+  ts >> "$D/proof-resumed.txt"
+  echo "  1. watchdog every minute (quiet periods from now: $(RESUMED))"
+  sudo -n systemd-run --quiet --unit $UNIT --setenv=FLEET_PROOF_DIR="$D" --on-active=1min --on-unit-active=1min /bin/bash "$SELF" watch \
+    || { stop_proof "watchdog not armed"; exit 1; }
+  echo "  2. resume Agent-1"
+  A founder-cognition $A1 resume "purchase proof continued (owner approval): the same run budget and end time; public sales stay closed" | jq -c '{paused}' || { stop_proof "resume failed"; exit 1; }
+  echo "== PROOF CONTINUED $(RESUMED): the same order and run budget; sales closed; card authority off; no outward release; money-out off; Agent-2 paused"; report ;;
 buy)
   [[ -n "$(START)" && "$(paused $A1)" == f ]] || die "start the proof first"
   guard; o=$(ORDER)
@@ -262,20 +301,17 @@ watch)
         && "$(Q "SELECT count(*) FROM fleet_paypal_refund_requests WHERE order_id = '$o' AND status IN ('requested','sent','pending')")" != 0 ]]; then
     stop_proof "FAILURE: the refund was not completed $QUIET_MIN minutes after the window opened"; exit 0
   fi
-  [[ "$(Q "SELECT EXISTS (SELECT 1 FROM fleet_customer_messages b WHERE b.order_id = '$o' AND b.author = 'buyer' AND b.created_at < now() - interval '$QUIET_MIN minutes'
-           AND NOT EXISTS (SELECT 1 FROM fleet_customer_messages a WHERE a.order_id = '$o' AND a.author = 'agent' AND a.created_at > b.created_at)
-           AND NOT EXISTS (SELECT 1 FROM fleet_cognition_log c WHERE c.agent_id = '$A1' AND c.at > b.created_at))")" == t ]] \
-    && { stop_proof "FAILURE: a buyer message unanswered for $QUIET_MIN minutes"; exit 0; }
+  [[ "$(Q "$(unanswered_sql "$o" "$(RESUMED)")")" == t ]] && { stop_proof "FAILURE: a buyer message unanswered for $QUIET_MIN minutes"; exit 0; }
   run=$(Q "SELECT fleet_admin_cognition_run('$A1')")
   [[ "$(jq -r '.open' <<< "$run")" == true ]] || { stop_proof "the AI ceiling is spent or ${HOURS} h are up"; exit 0; }
   (( $(jq -r '(.spentMicro + .inflightMicro) / 1000000 | floor' <<< "$run") >= CEILING - 5 )) && { stop_proof "the AI ceiling is (nearly) spent"; exit 0; }
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'OPERATION_UNCERTAIN' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) \
     && { stop_proof "an outcome is uncertain: check it and resolve it (fleet operations-uncertain)"; exit 0; }
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'AGENT_CANNOT_THINK' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) && { stop_proof "FAILURE: the agent cannot think (packet)"; exit 0; }
-  last=$(Q "SELECT GREATEST('$s'::timestamptz, COALESCE((SELECT max(created_at) FROM fleet_events WHERE agent_id = '$A1' AND created_at >= '$s'
+  last=$(Q "SELECT GREATEST('$(RESUMED)'::timestamptz, COALESCE((SELECT max(created_at) FROM fleet_events WHERE agent_id = '$A1' AND created_at >= '$s'
             AND event_type IN ('offer_proof_captured','customer_message_received','order_refund_requested')), '$s'::timestamptz))")
   (( $(Q "SELECT count(*) FROM fleet_cognition_log WHERE agent_id = '$A1' AND at > '$last'") > MAX_IDLE_CALLS )) \
     && { stop_proof "FAILURE: $MAX_IDLE_CALLS model calls without a new customer event"; exit 0; }
   exit 0 ;;
-*) sed -n 2,33p "$0"; exit 2 ;;
+*) sed -n 2,39p "$0"; exit 2 ;;
 esac

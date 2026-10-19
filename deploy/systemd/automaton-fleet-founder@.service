@@ -94,6 +94,13 @@ SystemCallFilter=@system-service
 # Phase F.3: the founder's shell sandbox applies Landlock to itself (landlock_*; seccomp can only restrict further).
 SystemCallFilter=@sandbox
 SystemCallFilter=~@privileged @resources
+# 2026-10-19 (Agent-1's workbook could not be inspected or recalculated: the kernel killed the inspector on mbind): the office
+# renderer (LibreOffice) and numpy inside the exec sandbox need the calling process's own NUMA memory policy (mbind,
+# set_mempolicy, get_mempolicy — the rest of @resources stays denied) and chown on their own files. With no capabilities
+# (CapabilityBoundingSet= is empty) chown can only set a group the process already belongs to on a file it owns.
+# LibreOffice's control socket goes in this unit's private /tmp (PrivateTmp=yes above; the exec sandbox grants make-socket
+# and remove there only, after checking mountinfo); /dev/shm stays closed to the sandbox.
+SystemCallFilter=mbind set_mempolicy get_mempolicy chown fchown fchownat lchown
 # Every fleet secret, bridge key and other service's state/logs.
 InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/legacy-env-fleet.bak -/etc/automaton-fleet/chatgpt-adapter.json -/etc/automaton-fleet/chatgpt-tunnel
 InaccessiblePaths=-/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-chatgpt-adapter -/var/lib/automaton-fleet-chatgpt-tunnel -/var/lib/automaton-fleet-operator-api

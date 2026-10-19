@@ -24,6 +24,7 @@ import { decideTool, type CapabilityManifest } from "../capabilities.js";
 import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
 import type { ChatImage, ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
+import type { CustomerObligation } from "./obligations.js";
 import crypto from "crypto";
 import { QA_INSPECTOR_PY, QA_INSPECTOR_VERSION, parseInspectorReport, type QaInspectorReport } from "./qa/inspector.js";
 import type { LoopGuard } from "./loop-guard.js";
@@ -223,8 +224,24 @@ for area, names in mods.items():
             ok.append(n + " MISSING")
     out[area] = ok
 renderer = shutil.which("soffice") or shutil.which("libreoffice") or ""
+problem = None
+if renderer:
+    # 2026-10-19: a renderer counts only when it converts (Agent-1's was "installed" yet could not start in the sandbox).
+    import os, subprocess, tempfile
+    d = tempfile.mkdtemp(prefix="probe-office-", dir=os.environ.get("TMPDIR"))
+    with open(os.path.join(d, "probe.txt"), "w") as f:
+        f.write("Fleet office renderer probe\n")
+    try:
+        p = subprocess.run([renderer, "--headless", "--norestore", "--nolockcheck", "--convert-to", "pdf", "--outdir", d, os.path.join(d, "probe.txt")],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=90,
+                           env={"HOME": d, "TMPDIR": d, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "FLEET_OFFICE": os.environ.get("FLEET_OFFICE", "")})
+        if p.returncode != 0 or not os.path.exists(os.path.join(d, "probe.pdf")):
+            problem = "installed but cannot convert in this sandbox (exit %s): %s" % (p.returncode, p.stderr.decode("utf-8", "replace").strip().splitlines()[-1:][0][:200] if p.stderr.strip() else "no message")
+    except subprocess.TimeoutExpired:
+        problem = "installed but a test conversion took longer than 90 s"
+    shutil.rmtree(d, ignore_errors=True)
 ocr = shutil.which("tesseract") or ""
-print(json.dumps({"python": sys.version.split()[0], "libraries": out, "renderer": renderer, "ocr": ocr}))
+print(json.dumps({"python": sys.version.split()[0], "libraries": out, "renderer": "" if problem else renderer, "rendererProblem": problem, "ocr": ocr}))
 `;
 /** v79: what a workspace file may be staged as for a page (upload) or for rendering (.html / .svg). */
 function stageTypeOf(f: string): string | null {
@@ -555,6 +572,24 @@ export class FounderToolbox {
     }
   }
 
+  /**
+   * 2026-10-19: the buyers' open requests for this turn (FleetController's record, set by the mind; null = an older controller
+   * that reports none). A sleep is refused while one is unanswered and not answered in this turn — unless the controller
+   * refused this turn's answer to it (then nothing the agent can do now would answer it).
+   */
+  private obligations: CustomerObligation[] | null = null;
+  private readonly answered = new Set<string>();
+  private readonly answerRefused = new Set<string>();
+  noteObligations(list: CustomerObligation[] | null): void {
+    this.obligations = list;
+    this.answered.clear();
+    this.answerRefused.clear();
+  }
+  /** The unanswered buyer requests this turn has not answered (or tried to answer and been refused). */
+  owedAnswers(): CustomerObligation[] {
+    return (this.obligations ?? []).filter((o) => o.state === "unanswered" && !this.answered.has(o.id) && !this.answerRefused.has(o.id));
+  }
+
   /** The founder's ledger view for this turn (set by the mind when it reads it; read-only figures for the depth reading). */
   private economics: Record<string, unknown> | null = null;
   noteEconomics(e: Record<string, unknown> | null): void {
@@ -572,11 +607,11 @@ export class FounderToolbox {
 
   // ── v76: deliverable inspection and review ──
   /** Run the inspector (fleet-qa-1) over workspace files inside the sandbox; the report is parsed strictly. */
-  async inspect(paths: string[], cases: unknown[] = []): Promise<{ ok: true; report: QaInspectorReport } | { ok: false; reason: string }> {
-    if (!paths.length || paths.length > 20) return { ok: false, reason: "paths: 1..20 workspace files" };
+  async inspect(paths: string[], cases: unknown[] = []): Promise<{ ok: true; report: QaInspectorReport } | { ok: false; reason: string; code: string }> {
+    if (!paths.length || paths.length > 20) return { ok: false, code: "FLEET_BAD_REQUEST", reason: "paths: 1..20 workspace files" };
     for (const p of paths) {
       const f = this.resolve(p);
-      if (!fs.existsSync(f) || !fs.statSync(f).isFile()) return { ok: false, reason: `not a file in your workspace: ${p}` };
+      if (!fs.existsSync(f) || !fs.statSync(f).isFile()) return { ok: false, code: "FLEET_BAD_REQUEST", reason: `not a file in your workspace: ${p}` };
     }
     const rel = paths.map((p) => path.relative(this.workspace, this.resolve(p)));
     const tmp = path.join(this.workspace, ".tmp");
@@ -586,12 +621,20 @@ export class FounderToolbox {
     fs.writeFileSync(path.join(tmp, `qa-spec-${id}.json`), JSON.stringify({ files: rel, cases, renderDir: `.tmp/qa-render-${id}` }), { mode: 0o600 });
     // -P: the script's directory is not on the import path (a planted module there cannot shadow a library); -s: no user site.
     const r = await runSandboxed(this.workspace, `python3 -P -s .tmp/fleet-qa-${id}.py .tmp/qa-spec-${id}.json`,
-      { timeoutMs: 120_000, maxOutput: 2_000_000, python: this.o.sandboxPython, toolsDir: this.toolsDir });
+      { timeoutMs: 120_000, maxOutput: 2_000_000, python: this.o.sandboxPython, toolsDir: this.toolsDir, office: true });
     for (const f of [`fleet-qa-${id}.py`, `qa-spec-${id}.json`]) fs.rmSync(path.join(tmp, f), { force: true });
-    if (r.sandboxUnavailable) return { ok: false, reason: "the sandbox is unavailable on this host; nothing was inspected" };
-    if (r.timedOut) return { ok: false, reason: "the inspection ran out of time (120 s); inspect fewer or smaller files" };
+    // 2026-10-19: an inspector that could not run is the PLATFORM's fault, never the caller's bad request (Agent-1's was killed
+    // by the unit's system-call filter seven times and each time told "bad request").
+    const fault = (why: string) => ({ ok: false as const, code: "FLEET_PLATFORM_FAULT",
+      reason: `${why}. This is a Fleet platform fault, not your request: your files were not judged; it is reported to Fleet Control with this turn` });
+    if (r.sandboxUnavailable) return fault("the sandbox is unavailable on this host; nothing was inspected");
+    if (r.timedOut) return { ok: false, code: "FLEET_TOOL_TIMEOUT", reason: "the inspection ran out of time (120 s); inspect fewer or smaller files" };
     try { return { ok: true, report: parseInspectorReport(r.output) }; }
-    catch (e) { return { ok: false, reason: `the inspection did not produce a valid report (${(e as Error).message.slice(0, 160)})` }; }
+    catch (e) {
+      const sig = typeof r.code === "number" && r.code > 128 ? r.code - 128 : null;
+      return fault(`the inspector stopped without a valid report (${sig ? `killed by signal ${sig}${sig === 31 ? " — a system call this host's sandbox does not allow" : ""}`
+        : `exit ${r.code}: ${(e as Error).message.slice(0, 120)}`})`);
+    }
   }
 
   /** v76: text of up to 5 workspace files for an independent review (bounded; extracted inside the sandbox). */
@@ -648,13 +691,14 @@ export class FounderToolbox {
     fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
     const id = crypto.randomBytes(6).toString("hex");
     fs.writeFileSync(path.join(tmp, `fleet-probe-${id}.py`), CAPABILITY_PROBE_PY, { mode: 0o600 });
-    const r = await runSandboxed(this.workspace, `python3 -P -s .tmp/fleet-probe-${id}.py`, { timeoutMs: 60_000, maxOutput: 20_000, python: this.o.sandboxPython, toolsDir: this.toolsDir });
+    const r = await runSandboxed(this.workspace, `python3 -P -s .tmp/fleet-probe-${id}.py`, { timeoutMs: 150_000, maxOutput: 20_000, python: this.o.sandboxPython, toolsDir: this.toolsDir, office: true });
     fs.rmSync(path.join(tmp, `fleet-probe-${id}.py`), { force: true });
     let probe: Record<string, unknown> = {};
     try { probe = JSON.parse(r.output.split("\n").reverse().find((l) => l.startsWith("{")) ?? "{}"); } catch { probe = {}; }
     const runtime = { doctrine: FOUNDER_V10_RELEASE.doctrine, toolset: FOUNDER_V10_RELEASE.toolset, inspector: QA_INSPECTOR_VERSION,
       sandbox: r.sandboxUnavailable ? "unavailable" : "ok", execTimeoutS: Math.round((this.o.execTimeoutMs ?? 30_000) / 1000), network: "none inside exec",
       libraries: probe.libraries ?? "unknown (the probe did not run)", renderer: typeof probe.renderer === "string" ? probe.renderer : "",
+      ...(typeof probe.rendererProblem === "string" ? { rendererProblem: probe.rendererProblem.slice(0, 300) } : {}),
       ocr: typeof probe.ocr === "string" ? probe.ocr : "", verification: FounderToolbox.VERIFICATION };
     const forOffer = typeof args.forOffer === "string" ? args.forOffer.slice(0, 200) : undefined;
     // v87: the work the check is for — an offer or an enquiry, and what it delivers (format and what each needs).
@@ -783,7 +827,7 @@ export class FounderToolbox {
     }
     if (a.op === "inspect") {
       const r = await this.inspect(paths, Array.isArray(args.cases) ? args.cases : []);
-      if (!r.ok) return refuse("FLEET_BAD_REQUEST", r.reason);
+      if (!r.ok) return refuse(r.code, r.reason);
       // The model sees each file's verdict and its non-passing checks (passing checks are counted, not listed).
       const view = r.report.files.map((f) => ({ path: f.path, type: f.detectedType, ok: f.ok, sha256: f.sha256.slice(0, 12), passed: f.checks.filter((c) => c.status === "pass").length,
         issues: f.checks.filter((c) => c.status !== "pass").map((c) => `${c.status.toUpperCase()} ${c.id}: ${c.detail}`.slice(0, 400)), facts: f.facts }));
@@ -800,7 +844,7 @@ export class FounderToolbox {
       else delete args.independentVerdict;
       // The automated part is re-run here on the exact bytes being reviewed: the record binds these hashes to this report.
       const r = await this.inspect(paths, Array.isArray(args.cases) ? args.cases : []);
-      if (!r.ok) return refuse("FLEET_BAD_REQUEST", r.reason);
+      if (!r.ok) return refuse(r.code, r.reason);
       const files = r.report.files.map((f) => ({ name: path.basename(f.path), sha256: f.sha256, sizeBytes: f.sizeBytes }));
       const rec: Record<string, unknown> = { ...args, files, automated: { inspector: QA_INSPECTOR_VERSION, ok: r.report.ok, files: r.report.files.map((f) => ({ path: f.path, sha256: f.sha256,
         sizeBytes: f.sizeBytes, detectedType: f.detectedType, ok: f.ok, checks: f.checks })) } };
@@ -813,7 +857,7 @@ export class FounderToolbox {
   }
 
   private async exec(command: string): Promise<{ output: string; unavailable: boolean }> {
-    const r = await runSandboxed(this.workspace, command, { timeoutMs: this.o.execTimeoutMs ?? 30_000, maxOutput: MAX_OUTPUT * 2, python: this.o.sandboxPython, toolsDir: this.toolsDir });
+    const r = await runSandboxed(this.workspace, command, { timeoutMs: this.o.execTimeoutMs ?? 30_000, maxOutput: MAX_OUTPUT * 2, python: this.o.sandboxPython, toolsDir: this.toolsDir, office: true });
     return { output: `exit ${r.code}\n${r.output}${r.timedOut ? "\n[killed: time limit]" : ""}`, unavailable: r.sandboxUnavailable };
   }
 
@@ -1207,6 +1251,11 @@ export class FounderToolbox {
             delete args.path;
           }
           let r = await this.o.ports.economy(op, args).catch(ownerRefusal);
+          // 2026-10-19: an answer to a buyer settles this turn's sleep check for that request (a refused one is not an answer).
+          if (op === "order.message" || op === "enquiry.reply" || op === "enquiry.quote" || op === "enquiry.decline") {
+            const key = String(op === "order.message" ? args.orderId : args.enquiryId);
+            ((r as { ok?: unknown }).ok === false ? this.answerRefused : this.answered).add(key);
+          }
           // v79: a file a page produced (download, screenshot, PDF) is saved into the workspace under browser/ — untrusted data.
           if (op === "browser.fetch_file" && (r as { ok?: unknown }).ok === true && typeof (r as { contentB64?: unknown }).contentB64 === "string") {
             const x = r as { fileName: string; contentB64: string; sizeBytes: number; sha256: string; contentType: string; source: string };
@@ -1296,12 +1345,19 @@ export class FounderToolbox {
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.knowledge(0))) };
         case "request_identity_fact":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.requestIdentityFact({ factKey: String(a.factKey ?? ""), purpose: String(a.purpose ?? ""), workflow: String(a.workflow ?? "") }))) };
-        case "sleep":
+        case "sleep": {
+          const owed = this.owedAnswers();
+          if (owed.length) {
+            return refuse("FLEET_CUSTOMER_UNANSWERED", `a buyer is waiting for an answer: ${owed.map((o) => `${o.kind} ${o.id} (message of ${o.lastBuyerAt.slice(0, 16).replace("T", " ")} UTC)`).join("; ")}. `
+              + `Answer first (customers ${owed[0].kind === "order" ? "order_message" : "reply"}) — an acknowledgement, or an honest update on what is blocking you, counts — then sleep. `
+              + "The request stays on your record until it is resolved.");
+          }
           if (typeof a.reviewAt === "string" && a.reviewAt.trim() && !Number.isFinite(Date.parse(a.reviewAt))) return refuse("FLEET_BAD_REQUEST", "reviewAt is an ISO-8601 date/time");
           if ((typeof a.wakeOn === "string" && a.wakeOn.trim()) || (typeof a.reviewAt === "string" && a.reviewAt.trim())) {
             return { name: call.name, ok: true, output: `hibernating${typeof a.wakeOn === "string" && a.wakeOn.trim() ? `; wake on: ${a.wakeOn.trim().slice(0, 300)}` : ""}${typeof a.reviewAt === "string" && a.reviewAt.trim() ? `; review at ${new Date(Date.parse(a.reviewAt)).toISOString()}` : ""}` };
           }
           return { name: call.name, ok: true, output: "sleeping" };
+        }
         // R41.1: the founder's private field journal (append-only, bounded) and the Survival Field Guide (seed knowledge).
         case "field_journal": {
           const file = path.join(this.memory, JOURNAL_FILE);

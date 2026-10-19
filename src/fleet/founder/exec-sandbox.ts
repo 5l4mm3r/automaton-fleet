@@ -11,7 +11,14 @@
  *     PDF and images); it is on PYTHONPATH and PATH, never writable;
  *   - use /dev/null, /dev/zero and /dev/urandom;
  *   - read, write and delete only inside the founder's own workspace (TMPDIR
- *     is <workspace>/.tmp; /tmp itself is not reachable).
+ *     is <workspace>/.tmp; /tmp itself is not reachable);
+ *   - (2026-10-19, `office`) run the office renderer (LibreOffice): it reads its
+ *     shared extension cache (/var/spool/libreoffice, read-only), starts through
+ *     the release's launcher shim (deploy/sandbox-bin, read-only) and creates its
+ *     one control socket in /tmp — granted as make-socket and remove only (no
+ *     reading, writing or creating files there), and only when /tmp is the
+ *     unit's private one (systemd PrivateTmp, read from mountinfo), never the
+ *     host's.
  * It can NOT:
  *   - read the founder's state directory: its fleet credential, identity,
  *     private memory, goals, decision log or conversation history;
@@ -27,6 +34,8 @@
 
 import { spawn } from "child_process";
 import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 export const EXEC_SANDBOX_UNAVAILABLE = 97;
 
@@ -41,6 +50,9 @@ def fail(msg):
 workspace, command = sys.argv[1], sys.argv[2]
 tools = sys.argv[3] if len(sys.argv) > 3 else ""
 connect_port = int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else 0
+# 2026-10-19: the office renderer — its control-socket directory (make-socket + remove only) and the launcher shim (read-only).
+office_sock = sys.argv[5] if len(sys.argv) > 5 else ""
+office_bin = sys.argv[6] if len(sys.argv) > 6 else ""
 abi = libc.syscall(SYS_CREATE, None, ctypes.c_size_t(0), ctypes.c_uint32(1))
 if abi < 1:
     fail("landlock unavailable (errno %d)" % ctypes.get_errno())
@@ -71,7 +83,7 @@ def allow(path, access):
     finally:
         os.close(fd)
 ro = EXECUTE | READ_FILE | READ_DIR
-for p in ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/proc"):
+for p in ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/proc", "/var/spool/libreoffice"):
     allow(p, ro)
 for p in ("/dev/null", "/dev/zero", "/dev/urandom", "/dev/random"):
     allow(p, READ_FILE | WRITE_FILE)
@@ -80,6 +92,10 @@ if tools:
         fail("tools dir missing: " + tools)
     allow(tools, ro)
 allow(workspace, fs_all)
+if office_sock:
+    allow(office_sock, (1 << 9) | (1 << 5))   # MAKE_SOCK | REMOVE_FILE: LibreOffice's pipe, and a stale one removed
+if office_bin:
+    allow(office_bin, ro)
 # v89 (the build environment only): one TCP port it may connect to — the Fleet's egress proxy. Founders never pass one.
 if connect_port and net_all:
     rule = ctypes.create_string_buffer(struct.pack("=QQ", 2, connect_port), 16)
@@ -94,6 +110,40 @@ os.close(rs)
 os.chdir(workspace)
 os.execv("/bin/sh", ["sh", "-c", command])
 `;
+
+/**
+ * 2026-10-19 (Agent-1's fault report: the workbook could not be recalculated or rendered in the sandbox). LibreOffice's own
+ * launcher (oosplash) exits when /proc/version is missing, which the founder unit hides (ProcSubset=pid); the office program
+ * itself does not need it. The release ships a launcher shim (deploy/sandbox-bin/soffice) that starts the program directly
+ * and, like the launcher, restarts a first start with a new profile (exit 81). Read-only in the domain; first on PATH.
+ */
+export const OFFICE_SHIM_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../deploy/sandbox-bin");
+export const OFFICE_PROGRAM = "/usr/lib/libreoffice/program/soffice.bin";
+
+/**
+ * Whether /tmp is the unit's private one (systemd PrivateTmp): the topmost mount at /tmp in mountinfo is a bind of a
+ * systemd-private-… directory. Anything else (the host's /tmp, a tmpfs of unknown origin) is not private.
+ */
+export function privateTmpOf(mountinfo: string): boolean {
+  let root: string | null = null;
+  for (const line of mountinfo.split("\n")) {
+    const f = line.split(" ");
+    if (f.length > 5 && f[4] === "/tmp") root = f[3];
+  }
+  return !!root && /(^|\/)systemd-private-[0-9a-f]{32}-[^/]+\/tmp$/.test(root);
+}
+
+const executable = (f: string) => { try { fs.accessSync(f, fs.constants.X_OK); return fs.statSync(f).isFile(); } catch { return false; } };
+
+/** Whether the office renderer can run in this process's sandbox, or why not (a wake signal, and the shim's message). */
+export type OfficeState = "ready" | "not_installed" | "no_launcher" | "no_private_tmp";
+export function officeState(program = OFFICE_PROGRAM, shimDir = OFFICE_SHIM_DIR): OfficeState {
+  if (!executable(program)) return "not_installed";
+  if (!executable(path.join(shimDir, "soffice"))) return "no_launcher";
+  let mi = "";
+  try { mi = fs.readFileSync("/proc/self/mountinfo", "utf8"); } catch { mi = ""; }
+  return privateTmpOf(mi) ? "ready" : "no_private_tmp";
+}
 
 export interface SandboxedResult {
   code: number | null;
@@ -127,7 +177,10 @@ function resolveToolsDir(toolsDir: string | undefined, workspace: string): strin
  */
 export function runSandboxed(workspace: string, command: string, opts: { timeoutMs: number; maxOutput: number; python?: string; toolsDir?: string;
   /** v89, the build environment only: the one TCP port the command may connect to (the egress proxy), and its proxy env. */
-  connectPort?: number; extraEnv?: Record<string, string> }): Promise<SandboxedResult> {
+  connectPort?: number; extraEnv?: Record<string, string>;
+  /** 2026-10-19: the office renderer (see OFFICE_SHIM_DIR): the founder's commands, its inspector and its capability probe.
+   *  `sockDir` is for tests only (production: /tmp, granted only when it is the unit's private /tmp). */
+  office?: boolean | { sockDir: string } }): Promise<SandboxedResult> {
   fs.mkdirSync(`${workspace}/.tmp`, { recursive: true, mode: 0o700 });
   const tools = resolveToolsDir(opts.toolsDir, workspace);
   const env: Record<string, string> = { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: workspace, TMPDIR: `${workspace}/.tmp`, LANG: "C.UTF-8" };
@@ -136,10 +189,20 @@ export function runSandboxed(workspace: string, command: string, opts: { timeout
     env.PYTHONPATH = `${tools}/site`;
     env.PYTHONDONTWRITEBYTECODE = "1"; // the toolchain is read-only in the domain anyway; skip the doomed writes
   }
+  let office: { sock: string; bin: string } | null = null;
+  if (opts.office) {
+    const state = typeof opts.office === "object" ? "ready" : officeState();
+    if (state !== "no_launcher") {
+      office = { sock: state === "ready" ? (typeof opts.office === "object" ? opts.office.sockDir : "/tmp") : "", bin: OFFICE_SHIM_DIR };
+      env.PATH = `${OFFICE_SHIM_DIR}:${env.PATH}`;
+    }
+    env.FLEET_OFFICE = state;   // read by the shim, to say why the renderer cannot start
+  }
   for (const [k, v] of Object.entries(opts.extraEnv ?? {})) if (/^[A-Za-z_][A-Za-z0-9_]{0,60}$/.test(k) && !(k in env)) env[k] = v;
   const port = opts.connectPort !== undefined && Number.isInteger(opts.connectPort) && opts.connectPort > 0 && opts.connectPort < 65536 ? String(opts.connectPort) : "";
   return new Promise((resolve) => {
-    const child = spawn(opts.python ?? "/usr/bin/python3", ["-I", "-S", "-c", LANDLOCK_HELPER, workspace, command, ...(tools || port ? [tools ?? ""] : []), ...(port ? [port] : [])], {
+    const child = spawn(opts.python ?? "/usr/bin/python3", ["-I", "-S", "-c", LANDLOCK_HELPER, workspace, command, ...(tools || port || office ? [tools ?? ""] : []),
+      ...(port || office ? [port] : []), ...(office ? [office.sock, office.bin] : [])], {
       cwd: workspace,
       env,
       stdio: ["ignore", "pipe", "pipe"],

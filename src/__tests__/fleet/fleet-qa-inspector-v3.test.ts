@@ -84,4 +84,30 @@ describe("deliverable QA inspector fleet-qa-3 (spreadsheets as displayed)", () =
       }
     } finally { fs.rmSync(ws, { recursive: true, force: true }); }
   }, 240_000);
+
+  // 2026-10-19 (found proving the revision path on the production host): LibreOffice saves =A2+365 under a date format as a
+  // date; the formula engine computes the day number. They are the same value: a recalculated workbook passes.
+  it.skipIf(!HAVE_TOOLS)("a saved date equals the engine's day number: a recalculated date formula passes, a wrong one still fails", async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "qa3-dates-"));
+    try {
+      fs.writeFileSync(path.join(ws, "qa.py"), QA_INSPECTOR_PY);
+      const make = (name: string, offset: number) => execFileSync(path.join(DEV_TOOLS, "bin/fleet-python"), ["-c", String.raw`
+import datetime, sys, xlsxwriter
+wb = xlsxwriter.Workbook(sys.argv[1]); ws = wb.add_worksheet("Tracker"); d = wb.add_format({"num_format": "dd/mm/yyyy"}); b = wb.add_format({"bold": True})
+ws.write_row(0, 0, ["Start", "Renewal"], b)
+start = datetime.date(2026, 1, 5)
+ws.write_datetime(1, 0, datetime.datetime(2026, 1, 5), d)
+serial = (start - datetime.date(1899, 12, 30)).days + 365 + int(sys.argv[2])
+ws.write_formula(1, 1, "=A2+365", d, serial)
+wb.close()`, path.join(ws, name), String(offset)]);
+      make("good.xlsx", 0);
+      make("bad.xlsx", 1);
+      fs.writeFileSync(path.join(ws, "spec.json"), JSON.stringify({ files: ["good.xlsx", "bad.xlsx"], cases: [], renderDir: ".tmp/qa-render" }));
+      const r = await runSandboxed(ws, "python3 qa.py spec.json", { timeoutMs: 180_000, maxOutput: 4_000_000, toolsDir: DEV_TOOLS });
+      const report = parseInspectorReport(r.output.trim().split("\n").at(-1)!);
+      const [good, bad] = report.files;
+      expect(good.checks.find((c) => c.id === "cached_values")).toMatchObject({ status: "pass" });
+      expect(bad.checks.find((c) => c.id === "cached_values")).toMatchObject({ status: "fail", detail: expect.stringContaining("Tracker!B2") });
+    } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+  }, 240_000);
 });

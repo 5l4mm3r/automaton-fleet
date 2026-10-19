@@ -40,7 +40,7 @@
 export const QA_INSPECTOR_VERSION = "fleet-qa-3";
 
 export const QA_INSPECTOR_PY = String.raw`
-import csv, hashlib, io, json, os, re, shutil, signal, stat, subprocess, sys, time, traceback, warnings, zipfile
+import csv, datetime, hashlib, io, json, os, re, shutil, signal, stat, subprocess, sys, time, traceback, warnings, zipfile
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 
@@ -250,6 +250,14 @@ def as_num(v):
         return float(v)
     if isinstance(v, (int, float)):
         return float(v)
+    # 2026-10-19: a saved date is the spreadsheet's day number (1900 system), which is what the formula engine computes; a
+    # workbook recalculated by LibreOffice saves =A2+365 as a date, and comparing it as text failed every date formula.
+    if isinstance(v, datetime.datetime):
+        return (v - datetime.datetime(1899, 12, 30)).total_seconds() / 86400.0
+    if isinstance(v, datetime.date):
+        return float((v - datetime.date(1899, 12, 30)).days)
+    if isinstance(v, datetime.time):
+        return (v.hour * 3600 + v.minute * 60 + v.second + v.microsecond / 1e6) / 86400.0
     if isinstance(v, str):
         try:
             return float(v)
@@ -674,7 +682,21 @@ def ocr_pages(r, rendered, pages):
 
 
 def office_renderer():
+    # 2026-10-19: the Fleet's launcher shim is on PATH whether or not LibreOffice itself is installed (FLEET_OFFICE says).
+    if os.environ.get("FLEET_OFFICE") == "not_installed":
+        return ""
     return shutil.which("soffice") or shutil.which("libreoffice") or ""
+
+
+def office_env(home):
+    return {"HOME": home, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TMPDIR": home, "FLEET_OFFICE": os.environ.get("FLEET_OFFICE", "")}
+
+
+def office_failed(rc):
+    st = os.environ.get("FLEET_OFFICE", "")
+    if st not in ("", "ready"):
+        return " (exit %s): the office renderer is unavailable in this sandbox (%s), a Fleet platform limit, not a fault of the file" % (rc, st)
+    return " (exit %s)" % rc
 
 
 def render_office(r, path, render_dir, tag, label):
@@ -690,13 +712,13 @@ def render_office(r, path, render_dir, tag, label):
     os.makedirs(home, exist_ok=True)
     try:
         p = subprocess.run([exe, "--headless", "--norestore", "--nolockcheck", "--convert-to", "pdf", "--outdir", out_dir, path],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90, env={"HOME": home, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TMPDIR": home})
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90, env=office_env(home))
     except subprocess.TimeoutExpired:
         r.check(label + "_render", "warn", "rendering took longer than 90 s and was stopped")
         return
     pdf = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0] + ".pdf")
     if p.returncode != 0 or not os.path.exists(pdf):
-        r.check(label + "_render", "warn", "the office renderer could not convert the file (exit %s)" % p.returncode)
+        r.check(label + "_render", "warn", "the office renderer could not convert the file" + office_failed(p.returncode))
         return
     pdfium = lib("pypdfium2")
     if pdfium is None:
@@ -1073,13 +1095,13 @@ def sheet_as_displayed(r, path, render_dir, tag, label):
     os.makedirs(home, exist_ok=True)
     try:
         p = subprocess.run([exe, "--headless", "--norestore", "--nolockcheck", "--convert-to", "html", "--outdir", out_dir, path],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90, env={"HOME": home, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TMPDIR": home})
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90, env=office_env(home))
     except subprocess.TimeoutExpired:
         r.check(label + "_as_displayed", "warn", "opening it in the office application took longer than 90 s and was stopped")
         return
     html = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0] + ".html")
     if p.returncode != 0 or not os.path.exists(html):
-        r.check(label + "_as_displayed", "warn", "the office application could not open the file (exit %s)" % p.returncode)
+        r.check(label + "_as_displayed", "warn", "the office application could not open the file" + office_failed(p.returncode))
         return
     with open(html, encoding="utf-8", errors="replace") as f:
         tables = displayed_cells(f.read())

@@ -17,6 +17,7 @@
 #   sudo scripts/fleet-founders.sh upgrade-rehearsal <fromCommit>  # synthetic founder, THROWAWAY registry, fake provider
 #   sudo scripts/fleet-founders.sh upgrade-runtime <agentId> [--health-timeout S]            # OWNER GATE
 #   sudo scripts/fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason...>        # OWNER GATE
+#   sudo scripts/fleet-founders.sh revision-rehearsal   # a buyer's revision end to end: synthetic founder, real unit, THROWAWAY registry
 #
 # F1-FRESH-02 — memory retention health (read-only; counts and status only, never a fact key or value):
 #   sudo scripts/fleet-founders.sh memory-report <agentId>

@@ -11,7 +11,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { runSandboxed, sandboxSelfTest } from "../../fleet/founder/exec-sandbox.js";
+import { OFFICE_SHIM_DIR, officeState, privateTmpOf, runSandboxed, sandboxSelfTest } from "../../fleet/founder/exec-sandbox.js";
 
 const DEV_TOOLS = path.join(os.homedir(), ".cache/automaton-fleet-tools/dev");
 const HAVE_TOOLS = fs.existsSync(path.join(DEV_TOOLS, "site")) && fs.existsSync(path.join(DEV_TOOLS, "bin/fleet-python"));
@@ -73,5 +73,74 @@ describe("exec sandbox", () => {
     expect(r.output).toMatch(/w=[12]/);
     expect(fs.existsSync(path.join(DEV_TOOLS, "site/pwn"))).toBe(false);
     expect(r.output).toContain("NET_DENIED");
+  });
+});
+
+/**
+ * 2026-10-19 (Agent-1's fault report: LibreOffice could not run in the sandbox). The office renderer gets exactly its control
+ * socket in the unit's PRIVATE /tmp (make-socket + remove, nothing else), its read-only extension cache and the release's
+ * launcher shim. Production's sockDir is /tmp, and only when mountinfo shows systemd's PrivateTmp.
+ */
+describe("exec sandbox: the office renderer's allowances", () => {
+  const PT = "systemd-private-0123456789abcdef0123456789abcdef-automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service-AbCdEf";
+  it("/tmp counts as private only when its topmost mount is systemd's PrivateTmp bind", () => {
+    const line = (root: string, mp: string, fs = "ext4") => `40 30 8:1 ${root} ${mp} rw,nosuid,nodev,relatime shared:1 - ${fs} /dev/sda1 rw`;
+    expect(privateTmpOf([line("/", "/"), line(`/tmp/${PT}/tmp`, "/tmp")].join("\n"))).toBe(true);
+    expect(privateTmpOf([line("/", "/"), line(`/${PT}/tmp`, "/tmp", "tmpfs")].join("\n"))).toBe(true);      // host /tmp on its own tmpfs
+    expect(privateTmpOf(line("/", "/"))).toBe(false);                                                    // the host's /tmp (part of /)
+    expect(privateTmpOf([line("/", "/"), line("/", "/tmp", "tmpfs")].join("\n"))).toBe(false);           // a tmpfs of unknown origin
+    expect(privateTmpOf([line(`/tmp/${PT}/tmp`, "/tmp"), line("/", "/tmp", "tmpfs")].join("\n"))).toBe(false); // covered by a later mount
+    expect(privateTmpOf([line(`/tmp/${PT}/tmp`, "/var/tmp")].join("\n"))).toBe(false);
+    expect(privateTmpOf("")).toBe(false);
+  });
+
+  it("the socket directory admits a socket and its removal — no file created, read or written there", async (ctx) => {
+    if (!landlock) ctx.skip();
+    const sock = path.join(root, "office-tmp");
+    fs.mkdirSync(sock);
+    fs.writeFileSync(path.join(sock, "founder-file"), "private");
+    const r = await runSandboxed(ws, [
+      `python3 -I -S -c "import socket; s = socket.socket(socket.AF_UNIX); s.bind('${sock}/OSL_PIPE_test'); print('BOUND')"`,
+      `rm -f ${sock}/OSL_PIPE_test && echo REMOVED`,
+      `cat ${sock}/founder-file 2>/dev/null && echo READ`,
+      `echo x > ${sock}/new 2>/dev/null && echo CREATED`,
+      `echo x >> ${sock}/founder-file 2>/dev/null && echo WROTE`,
+      `ls ${sock} >/dev/null 2>&1 && echo LISTED`,
+      'echo "office=$FLEET_OFFICE path=$PATH"',
+    ].join("; "), { timeoutMs: 20_000, maxOutput: 8_000, office: { sockDir: sock } });
+    expect(r.output).toContain("BOUND");
+    expect(r.output).toContain("REMOVED");
+    expect(fs.existsSync(path.join(sock, "OSL_PIPE_test"))).toBe(false);
+    for (const x of ["READ", "CREATED", "WROTE", "LISTED"]) expect(r.output).not.toContain(x);
+    expect(fs.readFileSync(path.join(sock, "founder-file"), "utf8")).toBe("private");
+    expect(r.output).toContain(`office=ready path=${OFFICE_SHIM_DIR}:/usr/local/bin`);
+  });
+
+  it("without a private /tmp nothing in /tmp is granted; the shim says why the renderer cannot start", async (ctx) => {
+    if (!landlock) ctx.skip();
+    const state = officeState();
+    expect(state).not.toBe("ready");   // a development host: no LibreOffice, or the host's /tmp
+    const probe = path.join(os.tmpdir(), `fleet-office-probe-${process.pid}.sock`);
+    const r = await runSandboxed(ws, [
+      `python3 -I -S -c "import socket; s = socket.socket(socket.AF_UNIX); s.bind('${probe}'); print('BOUND')" 2>/dev/null`,
+      "soffice --headless --version; echo rc=$?", 'echo "office=$FLEET_OFFICE"',
+    ].join("; "), { timeoutMs: 20_000, maxOutput: 8_000, office: true });
+    fs.rmSync(probe, { force: true });
+    expect(r.output).not.toContain("BOUND");
+    expect(r.output).toContain(`office=${state}`);
+    expect(r.output).toMatch(state === "not_installed" ? /not installed on this host[\s\S]*rc=127/ : /unavailable in this sandbox[\s\S]*rc=126/);
+    // Without the option (the build environment), no shim and no office state.
+    const plain = await runSandboxed(ws, 'echo "office=[$FLEET_OFFICE] path=$PATH"', { timeoutMs: 20_000, maxOutput: 8_000 });
+    expect(plain.output).toContain("office=[] path=/usr/local/bin:/usr/bin:/bin");
+  });
+
+  it("the launcher shim and the unit template ship together", () => {
+    expect(fs.statSync(path.join(OFFICE_SHIM_DIR, "soffice")).mode & 0o111).toBeTruthy();
+    expect(fs.readlinkSync(path.join(OFFICE_SHIM_DIR, "libreoffice"))).toBe("soffice");
+    const unit = fs.readFileSync(path.join(OFFICE_SHIM_DIR, "../systemd/automaton-fleet-founder@.service"), "utf8").split("\n");
+    const filters = unit.filter((l) => l.startsWith("SystemCallFilter="));
+    expect(filters).toEqual(["SystemCallFilter=@system-service", "SystemCallFilter=@sandbox", "SystemCallFilter=~@privileged @resources",
+      "SystemCallFilter=mbind set_mempolicy get_mempolicy chown fchown fchownat lchown"]);   // order matters: the last re-allows
+    for (const l of ["PrivateTmp=yes", "ProcSubset=pid", "PrivateDevices=yes", "CapabilityBoundingSet="]) expect(unit).toContain(l);
   });
 });

@@ -22,6 +22,10 @@
  *   rollback-runtime <agentId> <upgradeId> <reason…>    OWNER GATE: return to the runtime recorded by that upgrade
  *   upgrade-rehearsal <fromCommit>           the whole lifecycle + routed cognition on a SYNTHETIC founder created on
  *                                            the installed release <fromCommit>, THROWAWAY registry, fake provider
+ *   revision-rehearsal                       (2026-10-19) a buyer's revision end to end on a SYNTHETIC founder of the pinned
+ *                                            release in a real founder unit: fulfil, the buyer's report while the office
+ *                                            renderer is unavailable (answer, honest blocker, free waiting, a restart),
+ *                                            then recalculation, inspection, review and delivery of exactly those bytes
  *
  * F1-FRESH-02 — memory retention health (read-only; counts and status only, never a fact key or value):
  *   memory-report <agentId>                  founder_memory_write telemetry from the unit's journal + fact-store health
@@ -44,6 +48,8 @@ import { FOUNDER_STATE_ROOT, RELEASES_DIR, SystemdFounderHost, founderPinPaths, 
 import { computeBuildIdentity } from "../attestation.js";
 import { rollbackFounderRuntime, upgradeFounderRuntime } from "./upgrade.js";
 import { runUpgradeRehearsal } from "./upgrade-rehearsal.js";
+import { runRevisionRehearsal } from "./revision-rehearsal.js";
+import { OFFICE_PROGRAM } from "./exec-sandbox.js";
 import { FounderProvisioner } from "./provisioner.js";
 import { FOUNDER_UNREADABLE_PATHS } from "./runtime.js";
 import { findPostgresBin, startEphemeralRegistry } from "./ephemeral-registry.js";
@@ -388,9 +394,51 @@ async function main(argv: string[]): Promise<number> {
       out({ ...report, pass, production: end.production, hostClean: end.hostClean, livingFounders: end.livingFounders });
       return pass ? 0 : 1;
     }
+    case "revision-rehearsal": {
+      const actor = actorOrDie();
+      const release = loadRuntimeRelease(readEnvFile(process.env.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE));
+      if (!release) throw new Error("no pinned runtime release in runtime.env");
+      const releaseDir = runningRuntimeDir(import.meta.url);
+      if (fs.realpathSync(releaseDir) !== fs.realpathSync(path.join(RELEASES_DIR, release.commit))) throw new Error("run the rehearsal from the pinned release (scripts/fleet-founders.sh)");
+      const bin = findPostgresBin();
+      if (!bin) throw new Error("PostgreSQL server binaries not found");
+      const guard = await rehearsalGuard();
+      const reg = await startEphemeralRegistry({ bin, rolesSql: path.join(releaseDir, "scripts/fleet-db-roles.sql"), runAs: "postgres", parent: "/var/tmp", identity: true });
+      const work = fs.mkdtempSync(path.join("/var/tmp", "fleet-revision-rehearsal-"));
+      fs.chmodSync(work, 0o700);
+      // The office renderer switch for ONE throwaway founder's unit: LibreOffice made inaccessible to it (a drop-in removed with
+      // the founder's unit directory at teardown), then the unit restarted. Living founders' units are never touched.
+      const setRenderer = async (agentId: string, available: boolean) => {
+        const f = path.join(path.dirname(founderPinPaths(agentId).dropIn), "90-rehearsal-renderer.conf");
+        if (available) fs.rmSync(f, { force: true });
+        else {
+          fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o755 });
+          fs.writeFileSync(f, "# revision rehearsal (a throwaway founder): the office renderer is unavailable to this founder\n[Service]\nInaccessiblePaths=-/usr/lib/libreoffice\n", { mode: 0o644 });
+        }
+        execFileSync("systemctl", ["daemon-reload"], { stdio: "ignore", timeout: 60_000 });
+        execFileSync("systemctl", ["restart", founderUnit(agentId)], { stdio: "ignore", timeout: 120_000 });
+      };
+      let report;
+      try {
+        report = await runRevisionRehearsal({
+          registry: { ownerUrl: reg.ownerUrl, serviceUrl: reg.serviceUrl, agentUrl: reg.agentUrl, custodyUrl: reg.custodyUrl, identityUrl: reg.identityUrl! },
+          host: new SystemdFounderHost(undefined, undefined, release), release, actor, setRenderer, rendererInstalled: fs.existsSync(OFFICE_PROGRAM),
+          identityDir: path.join(work, "identity"), log,
+          // The shipped unit heartbeats every 30 s and thinks on every 2nd heartbeat (one thinking slot a minute).
+          timeoutMs: 360_000, pollMs: 1_000, quietMs: 180_000,
+        });
+      } finally {
+        reg.stop();
+        fs.rmSync(work, { recursive: true, force: true });
+      }
+      const end = await guard.finish(reg.dir);
+      const pass = report.pass && report.complete && end.productionUnchanged && end.hostClean && end.livingUntouched;
+      out({ ...report, pass, production: end.production, hostClean: end.hostClean, livingFounders: end.livingFounders });
+      return pass ? 0 : 1;
+    }
     default:
       console.error("usage: fleet-founders.sh status | rehearsal | births | birth <orderId> | provision <genesisId> | attest <genesisId> | activate <genesisId> <authSha256> | teardown <genesisId> | pin <agentId>\n"
-        + "       fleet-founders.sh upgrade-status <agentId> | upgrade-preflight <agentId> | upgrade-runtime <agentId> [--health-timeout S] | rollback-runtime <agentId> <upgradeId> <reason…> | upgrade-rehearsal <fromCommit>");
+        + "       fleet-founders.sh upgrade-status <agentId> | upgrade-preflight <agentId> | upgrade-runtime <agentId> [--health-timeout S] | rollback-runtime <agentId> <upgradeId> <reason…> | upgrade-rehearsal <fromCommit> | revision-rehearsal");
       return 2;
   }
 }

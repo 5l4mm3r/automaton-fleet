@@ -77,7 +77,7 @@ Q() { echo "$1" >> "${dir}/sql.log"
     *"->> 'paypalDisputeExposureMinor'"*) echo "\${EXPOSURE:-0}";;
     *"fleet_ledger_verify"*) echo true;;
     *"EXISTS (SELECT 1 FROM fleet_customer_messages b"*) echo "\${UNANSWERED:-f}";;
-    *fleet_admin_cognition_run*) echo '{"open":true,"spentMicro":1000000,"inflightMicro":0}';;
+    *fleet_admin_cognition_run*) if [[ -n "\${RUN:-}" ]]; then echo "\${RUN}"; else echo '{"open":true,"ceilingMinor":200,"spentMicro":102670000,"inflightMicro":0,"endsAt":"2026-10-20T14:33:50Z"}'; fi;;
     *"SELECT GREATEST("*) echo "2026-10-19T03:00:00Z";;
     *"count(*) FROM fleet_cognition_log"*) echo "\${CALLS:-0}";;
     *) echo 0;;
@@ -206,5 +206,44 @@ Q() { echo "$1" >> "${dir}/sql.log"
     expect(rf.code, rf.out).toBe(0);
     expect(rf.host).toEqual([`A economy-order-refund ${ORDER} all purchase proof: OWNER OVERRIDE refund of the proof purchase`]);
     expect(run(["status"], { BY: "operator:owner" }).out).toContain("refund handling: OWNER OVERRIDE (operator:owner) — this proves the refund infrastructure, not Agent-1's refund judgement");
+  });
+
+  // 2026-10-19 (repair release): the SAME proof continues on its paid order within the run budget it already has.
+  it("continue: the same run budget and end time (never a new one); guards first; only the watchdog and the resume", () => {
+    const state = path.join(dir, "state");
+    expect(run(["continue"]).out).toContain("no proof was started here: nothing to continue");
+    expect(run(["start", "200"]).code).toBe(0);
+    fs.writeFileSync(path.join(state, "proof-resumed.txt"), "2026-10-19T14:33:50Z\n");
+    fs.rmSync(log);
+    const refusals: Array<[Record<string, string>, string]> = [
+      [{ P1: "f" }, "Agent-1 is already running"],
+      [{ PAYMENT: "awaiting_payment" }, "the proof order is not paid"],
+      [{ PAYMENT: "paid", REFUNDS: "1" }, "the proof order already has a refund request"],
+      [{ PAYMENT: "paid", RUN: '{"open":false,"ceilingMinor":200,"spentMicro":102670000,"inflightMicro":0}' }, "the proof's run budget is not open (ended or expired): continuing needs the owner's revised terms"],
+      [{ PAYMENT: "paid", RUN: '{"open":true,"ceilingMinor":200,"spentMicro":196000000,"inflightMicro":0}' }, "the run budget has 4p left: continuing needs the owner's revised terms"],
+      [{ PAYMENT: "paid", AGENT: "b".repeat(40) }, `Agent-1 is not on ${REL.slice(0, 7)}`],
+      [{ PAYMENT: "paid", P2: "f" }, "Agent-2 is NOT paused"],
+    ];
+    for (const [env, why] of refusals) {
+      const r = run(["continue"], env);
+      expect(r.code, why).toBe(1);
+      expect(r.out, why).toContain(why);
+      expect(r.host, why).toEqual([]);
+    }
+    expect(fs.readFileSync(path.join(state, "proof-resumed.txt"), "utf8").trim().split("\n")).toHaveLength(1);
+    const ok = run(["continue"], { PAYMENT: "paid" });
+    expect(ok.code, ok.out).toBe(0);
+    expect(ok.host[0]).toMatch(/^sudo -n systemd-run --quiet --unit fleet-proof-watch .* watch$/);
+    expect(ok.host[1]).toMatch(new RegExp(`^A founder-cognition ${A1} resume purchase proof continued`));
+    expect(ok.host.join("\n")).not.toMatch(/cognition-run|refund-authority|dropin|runtime\.env|sales_set/);   // no new budget, no money-out
+    expect(ok.out).toContain('the SAME run budget, unchanged: {"ceilingMinor":200,"spentPence":102.67,"endsAt":"2026-10-20T14:33:50Z"}; 97p left');
+    const resumed = fs.readFileSync(path.join(state, "proof-resumed.txt"), "utf8").trim().split("\n");
+    expect(resumed).toHaveLength(2);
+    // The watchdog measures the quiet period and the idle calls from the resume, not from the proof's start.
+    fs.writeFileSync(path.join(dir, "sql.log"), "");
+    watch({ PAYMENT: "paid" });
+    const sql = fs.readFileSync(path.join(dir, "sql.log"), "utf8");
+    expect(sql).toContain(`AND GREATEST(b.created_at, '${resumed[1]}'::timestamptz) < now() - interval '30 minutes'`);
+    expect(sql).toContain(`SELECT GREATEST('${resumed[1]}'::timestamptz, COALESCE((SELECT max(created_at) FROM fleet_events`);
   });
 });
