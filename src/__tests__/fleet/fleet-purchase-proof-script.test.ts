@@ -1,15 +1,16 @@
 /**
- * scripts/fleet-purchase-proof.sh (2026-10-19): the owner's purchase proof of Agent-1's private offer with public sales
- * closed. Host commands are stubbed (FLEET_PROOF_STUBS); no host access.
+ * scripts/fleet-purchase-proof.sh (continued proof, v96): the owner's purchase proof of Agent-1's private offer on the
+ * EXISTING unpaid proof order, with public sales closed. Host commands are stubbed (FLEET_PROOF_STUBS); no host access.
  *  - `start` refuses bad terms or any failed guard BEFORE any change (release, flags, Agent-2, sales / card / release, a
- *    payout signer, money-out already on, an existing proof, a queued refund or another refundable sale anywhere, a wallet
- *    that cannot bear the £5 refund hold, the offer's review); it opens the run budget, the watchdog and the resume —
- *    money-out stays off;
- *  - the refund window (custody money-out + custody's own refund switch) opens only for the one bound refund: this proof
- *    order's, the only one queued in the Fleet; any refund on another order stops the proof and closes it;
- *  - status shows the EFFECTIVE money-out setting (the custody process, not runtime.env) and tells an agent-approved refund
- *    from the owner's override; completion needs THIS proof's refund hold released and the wallet reconciled to the start
- *    less Agent-1's AI charges since then (± other own-cash postings) — never the starting balance back.
+ *    payout signer, a standing refund authority, a refund authority or the custody switch already on, not exactly one
+ *    proof order, the order paid or its checkout closing, a refund already requested); it opens the run budget, the
+ *    watchdog and the resume only — no refund authority, no money-out;
+ *  - `buy` never makes an order: it prints the existing order's page;
+ *  - the refund window is a refund authority for THE PROOF ORDER ONLY (custody enforces it) plus custody's own switch,
+ *    opened when that order's refund is requested; a refund on another order stops the proof; stop ends the authority and
+ *    removes the switch (verified);
+ *  - completion needs the refund bound to the proof's authority, its reservation released, no PayPal exposure on Agent-1
+ *    and the wallet equal to the start moved by its journals; an agent-approved refund and the owner's override are told apart.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { spawnSync } from "child_process";
@@ -18,11 +19,12 @@ import os from "os";
 import path from "path";
 
 const SRC = path.join(process.cwd(), "scripts", "fleet-purchase-proof.sh");
-const REL = "e1c51e28a70a6d482887f32838524dec1885e71b";
+const REL = /^REL=([0-9a-f]{40})/m.exec(fs.readFileSync(SRC, "utf8"))![1];
 const A1 = "01M3F50SH7PNX2E3GST13J52AS";
 const ORDER = "11111111-1111-1111-1111-111111111111";
+const AUTH = "22222222-2222-2222-2222-222222222222";
 
-describe("fleet-purchase-proof.sh", () => {
+describe("fleet-purchase-proof.sh (continued on the existing order)", () => {
   let dir = ""; let log = "";
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "proof-"));
@@ -33,40 +35,41 @@ sudo() { echo "sudo $*" >> "${log}"
   case "$*" in *"tee ${dir}/dropin.conf"*) cat > "${dir}/dropin.conf";; *"rm -f ${dir}/dropin.conf"*) rm -f "${dir}/dropin.conf";; esac; }
 A() { echo "A $*" >> "${log}"
   case "$1 \${3:-}" in "founder-cognition pause") touch "${dir}/paused-1";; "founder-cognition resume") rm -f "${dir}/paused-1";; esac
-  case "$1" in economy-custody-activate) touch "${dir}/custody-on";; economy-custody-deactivate) rm -f "${dir}/custody-on";; esac
+  case "$1" in economy-refund-authority-grant) touch "${dir}/auth-on"; echo '{"ok":true,"authorityId":"${AUTH}"}'; return;; economy-refund-authority-end) rm -f "${dir}/auth-on";; esac
   case "$1 \${3:-}" in
-    "hub-custody ") if [[ -f "${dir}/custody-on" ]]; then echo "{\\"activation\\":{\\"expiresAt\\":\\"in 2 h\\"},\\"liveSigners\\":\${SIGNERS:-0}}"; else echo "{\\"activation\\":null,\\"liveSigners\\":\${SIGNERS:-0}}"; fi;;
+    "hub-custody ") if [[ -f "${dir}/auth-on" || -n "\${AUTH_LIVE:-}" ]]; then echo "{\\"refundAuthorities\\":[{\\"authorityId\\":\\"${AUTH}\\",\\"scope\\":\\"order\\"}],\\"liveSigners\\":\${SIGNERS:-0}}"; else echo "{\\"refundAuthorities\\":[],\\"liveSigners\\":\${SIGNERS:-0}}"; fi;;
     "cognition-run start") echo '{"run":{"ceilingMinor":'"$4"',"endsAt":"later"}}';;
     "founder-cognition resume") echo '{"paused":false}';;
-    "economy-offer-proof ") echo '{"ok":true,"page":"https://shop/order/abc","amountMinor":500}';;
+    "hub-fleet-control-ai ") echo '{"ceilingMinor":200,"spentMinor":0,"inflightMinor":0}';;
     *) echo '{"ok":true}';;
   esac; }
 pinned() { echo "\${PINNED:-${REL}}"; }
 current() { echo "/opt/automaton-fleet/releases/\${CURRENT:-${REL}}"; }
 flag_false() { [[ "$1" != "\${BAD_FLAG:-none}" ]]; }
 switch_effective() { if [[ -f "${dir}/dropin.conf" || -n "\${STALE_ENV:-}" ]]; then echo ON; else echo off; fi; }
-spendable() { echo "\${SPEND:-9758}"; }
-wallet() { echo "\${NOW:-9758} \${HOLD:-0} \${ALL:-\${HOLD:-0}} \${AI:-0} \${OTHERCASH:-0}"; }
+spendable() { echo "\${NOW:-9758}"; }
+journals() { if [[ -n "\${JOURNALS:-}" ]]; then echo "\${JOURNALS}" | tr ',' '\\n'; fi; }
 Q() { echo "$1" >> "${dir}/sql.log"
   case "$1" in
     *"paused FROM fleet_founder_cognition WHERE agent_id = '${A1}'"*) if [[ -f "${dir}/paused-1" ]]; then echo t; else echo "\${P1:-t}"; fi;;
     *"paused FROM fleet_founder_cognition"*) echo "\${P2:-t}";;
     *"runtime_commit FROM fleet_agents"*) echo "\${AGENT:-${REL}}";;
     *fleet_outward_release*) echo "\${RELEASES:-0}";; *card_enabled*) echo f;; "SELECT fleet_sales_open()") echo "\${SALES:-f}";;
+    *"a.scope = 'standing'"*) echo "\${STANDING:-0}";;
     *fleet_cognition_run_budgets*) echo 0;;
-    "SELECT count(*) FROM fleet_customer_orders WHERE owner_proof") echo "\${PROOFS:-0}";;
-    "SELECT count(*) FROM fleet_paypal_refund_requests WHERE status IN ('requested','sent')") echo "\${QUEUED:-0}";;
-    *"IS DISTINCT FROM"*) echo "\${OTHER:-0}";;
-    *fleet_paypal_refundable*) echo "\${REFUNDABLE:-0}";;
+    "SELECT count(*) FROM fleet_customer_orders WHERE owner_proof") echo "\${PROOFS:-1}";;
+    *"SELECT order_id FROM fleet_customer_orders WHERE owner_proof"*) echo "${ORDER}";;
+    *"payment_status || ' ' || c.status"*) echo "\${ORDER_STATE:-awaiting_payment open true}";;
+    *"SELECT payment_status FROM fleet_customer_orders"*) echo "\${PAYMENT:-awaiting_payment}";;
+    *"fleet_public_url('/order/'"*) echo "https://api.agentfleet.vip/order/abc";;
+    *fleet_offer_sale_block*) echo "its review was made by fleet-qa-2, which no longer qualifies a product for sale";;
     *"o.slug = 'uk-landlord"*) echo "\${OFFER_OK:-1}";;
-    *"SELECT order_id FROM fleet_customer_orders"*) echo "\${ORDER:-}";;
-    *"count(*) FROM fleet_customer_orders WHERE owner_proof AND created_at"*) echo "\${ORDERS:-1}";;
-    *"x.amount_minor <= z.amount_minor"*) echo "\${BOUND:-0}";;
-    *"SELECT request_id FROM"*) echo "rid-1";;
+    *"IS DISTINCT FROM '${ORDER}'::uuid"*) echo "\${OTHER:-0}";;
     *"SELECT requested_by FROM"*) echo "\${BY:-}";;
     *"count(DISTINCT paypal_refund_id)"*) echo "\${PAYPAL_REFUNDS:-0}";;
-    *"status = 'completed'"*) echo "\${COMPLETED:-0}";;
-    *"AND status IN ('requested','sent')"*) echo "\${UNSENT:-0}";;
+    *"status = 'completed' AND authority_id"*) echo "\${COMPLETED:-0}";;
+    *"x.status = 'requested'"*) echo "\${REQUESTED:-0}";;
+    *"status IN ('requested','sent','pending')"*) echo "\${SET_ASIDE:-0}";;
     *"count(*) FROM fleet_paypal_refund_requests WHERE order_id"*) echo "\${REFUNDS:-0}";;
     *"FROM fleet_order_deliveries"*) echo "\${DELIVERIES:-1}";;
     *"fleet_offer_proof_returns"*) echo "\${RETURNS:-0}";;
@@ -85,13 +88,13 @@ Q() { echo "$1" >> "${dir}/sql.log"
   const run = (args: string[], env: Record<string, string> = {}) => {
     const r = spawnSync("bash", [SRC, ...args], { encoding: "utf8",
       env: { PATH: process.env.PATH, HOME: dir, FLEET_PROOF_DIR: path.join(dir, "state"), FLEET_PROOF_STUBS: path.join(dir, "stubs.sh"), ...env } });
-    const host = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter((l) => l && l !== "sudo -v" && !l.startsWith("A hub-custody")) : [];
+    const host = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter((l) => l && l !== "sudo -v" && !l.startsWith("A hub-")) : [];
     return { code: r.status, out: r.stdout + r.stderr, host };
   };
   const startFile = () => path.join(dir, "state", "proof-start.txt");
   const dropin = () => path.join(dir, "dropin.conf");
   const watch = (env: Record<string, string>) => {
-    const r = run(["watch"], { P1: "f", ORDER, ...env });
+    const r = run(["watch"], { P1: "f", ...env });
     fs.rmSync(path.join(dir, "paused-1"), { force: true });
     return r;
   };
@@ -100,21 +103,23 @@ Q() { echo "$1" >> "${dir}/sql.log"
     const cases: Array<[string[], Record<string, string>, string]> = [
       [["start"], {}, "usage: start <aiCeilingPence>"],
       [["start", "0"], {}, "usage"], [["start", "5000"], {}, "usage"],
-      [["start", "200"], { CURRENT: "b".repeat(40) }, "the installed and pinned release is not e1c51e2"],
-      [["start", "200"], { AGENT: "b".repeat(40) }, "Agent-1 is not on e1c51e2"],
+      [["start", "200"], { CURRENT: "b".repeat(40) }, `the installed and pinned release is not ${REL.slice(0, 7)}`],
+      [["start", "200"], { AGENT: "b".repeat(40) }, `Agent-1 is not on ${REL.slice(0, 7)}`],
       [["start", "200"], { BAD_FLAG: "REAL_PAYMENTS_ENABLED" }, "REAL_PAYMENTS_ENABLED is not false in runtime.env"],
       [["start", "200"], { P2: "f" }, "Agent-2 is NOT paused"],
       [["start", "200"], { SALES: "t" }, "sales, card authority or an outward release is open"],
       [["start", "200"], { RELEASES: "1" }, "sales, card authority or an outward release is open"],
       [["start", "200"], { SIGNERS: "1" }, "a payout signer is configured"],
+      [["start", "200"], { STANDING: "1" }, "a standing refund authority is live"],
       [["start", "200"], { P1: "f" }, "Agent-1 is already running"],
-      [["start", "200"], { STALE_ENV: "1" }, "money-out or custody's refund switch is already on"],
-      [["start", "200"], { PROOFS: "1" }, "a proof purchase already exists"],
-      [["start", "200"], { QUEUED: "1" }, "refunds are already queued"],
-      [["start", "200"], { REFUNDABLE: "1" }, "another refundable sale exists"],
-      [["start", "200"], { SPEND: "499" }, "cannot bear the £5 refund hold"],
-      [["start", "200"], { EXPOSURE: "1" }, "PayPal already holds some of Agent-1's money"],
-      [["start", "200"], { OFFER_OK: "0" }, "is not Agent-1's published product at most £5 on a passing review"],
+      [["start", "200"], { STALE_ENV: "1" }, "a refund authority or custody's refund switch is already on"],
+      [["start", "200"], { AUTH_LIVE: "1" }, "a refund authority or custody's refund switch is already on"],
+      [["start", "200"], { PROOFS: "0" }, "not exactly one proof order"],
+      [["start", "200"], { PROOFS: "2" }, "not exactly one proof order"],
+      [["start", "200"], { ORDER_STATE: "paid captured true" }, "the proof order is not unpaid with its checkout open"],
+      [["start", "200"], { ORDER_STATE: "awaiting_payment open false" }, "the proof order is not unpaid with its checkout open"],
+      [["start", "200"], { REFUNDS: "1" }, "the proof order already has a refund request"],
+      [["start", "200"], { OFFER_OK: "0" }, "is not Agent-1's published product at most £5"],
     ];
     for (const [args, env, why] of cases) {
       const r = run(args, env);
@@ -125,66 +130,62 @@ Q() { echo "$1" >> "${dir}/sql.log"
     }
   });
 
-  it("start opens the run budget, the watchdog and the resume only — money-out stays off; status shows the effective setting", () => {
+  it("start opens the run budget, the watchdog and the resume only; buy prints the existing order and makes none", () => {
     const r = run(["start", "200"]);
     expect(r.code, r.out).toBe(0);
     expect(r.host[0]).toMatch(new RegExp(`^A cognition-run ${A1} start 200 24 `));
     expect(r.host[1]).toMatch(/^sudo -n systemd-run --quiet --unit fleet-proof-watch .* watch$/);
     expect(r.host[2]).toMatch(new RegExp(`^A founder-cognition ${A1} resume `));
-    expect(r.host.join("\n")).not.toMatch(/economy-custody-activate|dropin|runtime\.env|sales_set|identity-autonomy|economy-outward/);
-    expect(fs.existsSync(dropin())).toBe(false);
-    expect(r.out).toContain("EFFECTIVE MONEY-OUT (this, not Fleet HQ's realPaymentsEnabled=false");
+    expect(r.host.join("\n")).not.toMatch(/refund-authority|economy-offer-proof|dropin|runtime\.env|sales_set|identity-autonomy|economy-outward/);
+    expect(r.out).toContain(`the existing proof order ${ORDER} (unpaid) is continued; no new order or payment is made`);
+    expect(r.out).toContain("the offer is not sold publicly: its review was made by fleet-qa-2");
     expect(r.out).toContain("custody refund switch: running process off; drop-in absent");
-    expect(r.out).toContain("custody money-out activation: null");
-    expect(r.out).toContain("refund window: not open");
-    expect(fs.readFileSync(path.join(dir, "state", "proof-terms.txt"), "utf8").trim()).toBe("200 9758");
+    expect(r.out).toContain("live refund authorities (custody enforces them when it sends): []");
+    expect(run(["start", "200"]).out).toContain("a proof was already started here");
+    fs.rmSync(log);
+    const b = run(["buy"], { P1: "f" });
+    expect(b.code, b.out).toBe(0);
+    expect(b.out).toContain("the existing order page (no new order, no new payment): https://api.agentfleet.vip/order/abc");
+    expect(b.host.join("\n")).not.toMatch(/economy-offer-proof/);
+    expect(run(["buy"], { P1: "f", PAYMENT: "paid" }).out).toContain("the proof order is no longer awaiting payment");
   });
 
-  it("the refund window opens only for the bound refund; a refund on another order stops the proof and closes it", () => {
+  it("the refund window is an authority for the proof order only plus custody's switch; another order's refund stops it; stop removes both", () => {
     expect(run(["start", "200"]).code).toBe(0);
     fs.rmSync(log);
-    // No refund yet, or one that is not the bound one: nothing opens.
-    expect(watch({}).host).toEqual([]);
-    expect(watch({ QUEUED: "2", BOUND: "1" }).host).toEqual([]);
-    expect(watch({ QUEUED: "1", BOUND: "0" }).host).toEqual([]);
-    // The proof order's refund, the only one queued: custody money-out for 2 h and the custody-only switch.
-    const w = watch({ QUEUED: "1", BOUND: "1" });
-    expect(w.host[0]).toBe("A economy-custody-activate 500 500 2 purchase proof: refund request rid-1 of the owner's £5 proof purchase only");
+    expect(watch({}).host).toEqual([]);                          // no refund requested: nothing opens
+    const w = watch({ REQUESTED: "1" });
+    expect(w.host[0]).toBe(`A economy-refund-authority-grant ${ORDER} 500 500 500 2 purchase proof: the owner's £5 proof order only`);
     expect(w.host.slice(1).join("\n")).toMatch(/mkdir -p[\s\S]*tee .*dropin\.conf[\s\S]*chmod 0644[\s\S]*daemon-reload[\s\S]*restart automaton-fleet-custody\.service/);
     expect(fs.readFileSync(dropin(), "utf8")).toContain("[Service]\nEnvironment=REAL_PAYMENTS_ENABLED=true");
-    expect(fs.readFileSync(path.join(dir, "state", "refund-window.txt"), "utf8")).toMatch(/^opened .* for refund request rid-1 \(order 1111/);
-    const st = run(["status"], { ORDER, BY: "agent" });
+    expect(fs.readFileSync(path.join(dir, "state", "refund-window.txt"), "utf8")).toMatch(new RegExp(`refund authority ${AUTH} for order ${ORDER} only`));
+    const st = run(["status"], { BY: "agent" });
     expect(st.out).toContain("custody refund switch: running process ON; drop-in present");
-    expect(st.out).toContain('custody money-out activation: {"expiresAt":"in 2 h"}');
-    expect(st.out).toMatch(/refund window: opened .* for refund request rid-1/);
+    expect(st.out).toContain(`"authorityId":"${AUTH}"`);
     expect(st.out).toContain("refund handling: AGENT-APPROVED (Agent-1 requested it: order.refund)");
-    // An unrelated refund appears: stopped, money-out off, the switch removed (process and drop-in).
     fs.rmSync(log);
     const x = watch({ OTHER: "1" });
-    expect(x.out).toContain("FAILURE: a refund on another order");
-    expect(x.host.join("\n")).toMatch(/A economy-custody-deactivate[\s\S]*rm -f .*dropin\.conf[\s\S]*restart automaton-fleet-custody\.service/);
+    expect(x.out).toContain("FAILURE: a refund was requested on another order");
+    expect(x.host.join("\n")).toMatch(new RegExp(`A economy-refund-authority-end ${AUTH} [\\s\\S]*rm -f .*dropin\\.conf[\\s\\S]*restart automaton-fleet-custody\\.service`));
     expect(fs.existsSync(dropin())).toBe(false);
-    expect(x.out).toContain("custody refund switch: running process off; drop-in absent");
+    expect(x.out).toContain("live refund authorities (custody enforces them when it sends): []");
     expect(x.out).toContain("== PROOF STOPPED");
   });
 
-  it("watch: completion needs the wallet hold released; duplicates, an unanswered buyer and idle work stop it", () => {
+  it("completion: bound to the proof's authority, reservation released, no exposure, the wallet = start + its journals; failures otherwise", () => {
     expect(run(["start", "200"]).code).toBe(0);
-    expect(watch({ COMPLETED: "1", RETURNS: "1" }).out).toContain("PROOF COMPLETE");
-    // Agent-1 paid 40p of AI during the proof: the balance is lower than at the start, and that is correct.
-    const ok = watch({ COMPLETED: "1", RETURNS: "1", NOW: "9718", AI: "40" });
-    expect(ok.out).toContain("PROOF COMPLETE: purchase, delivery and refund recorded once; this proof's refund hold released; Agent-1's wallet = start − AI charges 40p;");
-    expect(ok.out).toContain("this proof's refund hold: 0p (none / released)");
-    expect(ok.out).toContain("9758p at start − AI charges 40p (Fleet-recorded, provisional) + other 0p − this hold 0p = 9718p expected; spendable now 9718p (reconciled)");
-    // The £5 hold still on (the refund not yet confirmed), or held elsewhere: not complete.
-    expect(watch({ COMPLETED: "1", RETURNS: "1", NOW: "9218", AI: "40", HOLD: "500" }).out)
-      .toContain("FAILURE: the refund is recorded but this proof's refund hold is not released (500p held; all PayPal holds 500p)");
-    expect(watch({ COMPLETED: "1", RETURNS: "1", ALL: "500" }).out).toContain("this proof's refund hold is not released (0p held; all PayPal holds 500p)");
-    // Released, but money is missing beyond the AI charges: not reconciled.
-    expect(watch({ COMPLETED: "1", RETURNS: "1", NOW: "9700", AI: "40" }).out)
-      .toContain("FAILURE: the hold is released but Agent-1's wallet does not reconcile: spendable 9700p, expected 9718p (9758p − AI 40p + other 0p)");
+    fs.writeFileSync(path.join(dir, "state", "refund-authority.txt"), AUTH + "\n");
+    const done = { COMPLETED: "1", RETURNS: "1" };
+    const ok = watch({ ...done, NOW: "9737", JOURNALS: "ai_credit_acquisition_cost -3 1,inference_charge -18 4" });
+    expect(ok.out).toContain("PROOF COMPLETE: paid, delivered, refunded once within the proof's own refund authority, as owner capital; its reservation released; Agent-1's wallet = start -21p by its journals");
+    expect(ok.out).toContain("AI: model usage at the credit's price 18p + the unrecoverable tax / fees on that credit 3p");
+    expect(ok.out).toContain("9758p at start − 21p (the journals above) = 9737p expected; spendable now 9737p (reconciled)");
+    expect(watch({ ...done, SET_ASIDE: "1" }).out).toContain("FAILURE: the refund is recorded but its reservation is still set aside");
+    expect(watch({ ...done, EXPOSURE: "500" }).out).toContain("FAILURE: PayPal exposure is held from Agent-1's money after the refund");
+    expect(watch({ ...done, NOW: "9700", JOURNALS: "inference_charge -18 4" }).out)
+      .toContain("FAILURE: Agent-1's wallet does not reconcile: spendable 9700p, expected 9740p (9758p + journals -18p)");
     expect(watch({ COMPLETED: "1", RETURNS: "0" }).out).not.toContain("PROOF COMPLETE");
-    expect(watch({ ORDERS: "2" }).out).toContain("FAILURE: a second proof order");
+    expect(watch({ PROOFS: "2" }).out).toContain("FAILURE: a second proof order");
     expect(watch({ REFUNDS: "2" }).out).toContain("FAILURE: a second refund request");
     expect(watch({ PAYPAL_REFUNDS: "2" }).out).toContain("FAILURE: a second PayPal refund");
     expect(watch({ DELIVERIES: "3" }).out).toContain("FAILURE: more deliveries than the delivery and one revision");
@@ -192,15 +193,12 @@ Q() { echo "$1" >> "${dir}/sql.log"
     expect(watch({ CALLS: "41" }).out).toContain("FAILURE: 40 model calls without a new customer event");
   });
 
-  it("the owner's refund is recorded and reported as an OWNER OVERRIDE, never as the agent's refund handling", () => {
+  it("the owner's refund is an OWNER OVERRIDE: it proves the refund infrastructure, not Agent-1's judgement", () => {
     expect(run(["start", "200"]).code).toBe(0);
     fs.rmSync(log);
-    const rf = run(["refund"], { P1: "f", ORDER });
+    const rf = run(["refund"], { P1: "f" });
     expect(rf.code, rf.out).toBe(0);
     expect(rf.host).toEqual([`A economy-order-refund ${ORDER} all purchase proof: OWNER OVERRIDE refund of the proof purchase`]);
-    expect(rf.out).toContain("recorded as the owner's, not Agent-1's");
-    const st = run(["status"], { ORDER, BY: "operator:owner" });
-    expect(st.out).toContain("refund handling: OWNER OVERRIDE (operator:owner) — Agent-1's refund handling NOT shown");
-    expect(run(["refund"], { P1: "f" }).out).toContain("no proof order yet");
+    expect(run(["status"], { BY: "operator:owner" }).out).toContain("refund handling: OWNER OVERRIDE (operator:owner) — this proves the refund infrastructure, not Agent-1's refund judgement");
   });
 });
