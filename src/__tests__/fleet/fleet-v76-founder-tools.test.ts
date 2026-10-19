@@ -154,7 +154,7 @@ describe("v76 founder-v7 tools", () => {
     expect(insp.ok).toBe(true);
     expect(JSON.parse(insp.output).inspector).toBe(QA_INSPECTOR_VERSION);
 
-    t.box.noteIndependentReview("req-own-1");
+    t.box.noteIndependentReview("req-own-1", "pass");
     const r = await t.run("deliverable", { op: "review", args: { paths: ["deliver/readme.txt"], cases: [], orderId: "o1", independentRequestId: "req-own-1",
       independentVerdict: "pass", summary: "meets the brief" } });
     expect(r.ok).toBe(true);
@@ -164,6 +164,15 @@ describe("v76 founder-v7 tools", () => {
     expect(rec.files).toEqual([{ name: "readme.txt", sha256: crypto.createHash("sha256").update(body).digest("hex"), sizeBytes: Buffer.byteLength(body) }]);
     expect(rec.automated).toMatchObject({ inspector: QA_INSPECTOR_VERSION });
     expect(rec).toMatchObject({ orderId: "o1", independentRequestId: "req-own-1", independentVerdict: "pass" });
+    // 2026-10-19: the verdict recorded is the reviewer's own (read from its reply by the runtime), never the author's claim.
+    t.box.noteIndependentReview("req-own-2", "fail");
+    t.calls.length = 0;
+    expect((await t.run("deliverable", { op: "review", args: { paths: ["deliver/readme.txt"], cases: [], orderId: "o1", independentRequestId: "req-own-2",
+      independentVerdict: "pass", summary: "meets the brief" } })).ok).toBe(true);
+    expect(t.calls.find((c) => c.op === "review.record")!.args).toMatchObject({ independentRequestId: "req-own-2", independentVerdict: "fail" });
+    t.calls.length = 0;
+    await t.run("deliverable", { op: "review", args: { paths: ["deliver/readme.txt"], cases: [], orderId: "o1", independentVerdict: "pass", summary: "no review cited" } });
+    expect(t.calls.find((c) => c.op === "review.record")!.args).not.toHaveProperty("independentVerdict");
     // No workspace residue from the inspector run.
     expect(fs.readdirSync(path.join(t.dirs.w, ".tmp")).filter((f) => /^(fleet-qa-|qa-spec-)/.test(f))).toEqual([]);
   }, 180_000);

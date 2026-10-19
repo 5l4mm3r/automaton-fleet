@@ -1069,10 +1069,10 @@ export class FounderMind {
         const r = await this.o.ports.infer([{ role: "user", content }], x.waitMs, { ...cls.route, helper: { kind: "review", purpose: "quality_review" } }, FOUNDER_RUNTIME_DOCTRINE);
         x.result.chargedCents += r.chargedCents;
         this.logDecision({ turn: this.turns, routed: true, requestId: r.requestId, taskClass: cls.taskClass, expectedTier: cls.tier, route: r.route ?? null, chargedCents: r.chargedCents, review: true });
-        if (r.requestId) this.o.toolbox.noteIndependentReview(r.requestId);
         const reply = (r.content ?? "").trim();
-        const verdict = /VERDICT:\s*(pass|concerns|fail)\b/i.exec(reply)?.[1]?.toLowerCase() ?? "concerns";
-        out = { name: call.name, ok: true, output: `[independent review — requestId ${r.requestId}; verdict ${verdict}${/VERDICT:/i.test(reply) ? "" : " (no verdict line: treated as concerns)"}; cite them in deliverable review as independentRequestId / independentVerdict]\n${reply.slice(0, 6_000)}` };
+        const verdict = (/VERDICT:\s*(pass|concerns|fail)\b/i.exec(reply)?.[1]?.toLowerCase() ?? "concerns") as "pass" | "concerns" | "fail";
+        if (r.requestId) this.o.toolbox.noteIndependentReview(r.requestId, verdict);
+        out = { name: call.name, ok: true, output: `[independent review — requestId ${r.requestId}; verdict ${verdict}${/VERDICT:/i.test(reply) ? "" : " (no verdict line: treated as concerns)"}; cite its requestId in deliverable review as independentRequestId — the verdict recorded is this one]\n${reply.slice(0, 6_000)}` };
       } else if (call.name === "routine_task") {
         if (!isRoutineClass(a.taskClass)) return refuse("FLEET_ROUTE_UNKNOWN_CLASS", "taskClass must be one of the routine classes");
         // v82: what the chore is for is recorded with the call (never guessed afterwards).

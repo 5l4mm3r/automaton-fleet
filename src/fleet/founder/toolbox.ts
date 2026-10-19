@@ -615,11 +615,13 @@ export class FounderToolbox {
     return { ok: true, text: files.map((f) => `### FILE ${f.path}\n${f.text}`).join("\n\n").slice(0, 40_000) };
   }
 
-  /** v76: request ids of this runtime's independent reviews (only those may be cited as one in a deliverable review). */
-  private readonly independentReviews = new Map<string, number>();
-  noteIndependentReview(requestId: string): void {
-    this.independentReviews.set(requestId, Date.now());
-    for (const [k, at] of this.independentReviews) if (Date.now() - at > 6 * 3_600_000) this.independentReviews.delete(k);
+  /** v76: request ids of this runtime's independent reviews (only those may be cited as one in a deliverable review), with
+   *  the verdict the runtime read from the reviewer's own reply (2026-10-19: the record carries that verdict, never the
+   *  author's account of it). */
+  private readonly independentReviews = new Map<string, { at: number; verdict: "pass" | "concerns" | "fail" }>();
+  noteIndependentReview(requestId: string, verdict: "pass" | "concerns" | "fail" = "concerns"): void {
+    this.independentReviews.set(requestId, { at: Date.now(), verdict });
+    for (const [k, v] of this.independentReviews) if (Date.now() - v.at > 6 * 3_600_000) this.independentReviews.delete(k);
   }
 
   /** v85: how each deliverable type is verified by this runtime's inspector (stated so the agent promises only that). */
@@ -793,6 +795,9 @@ export class FounderToolbox {
       if (typeof args.independentRequestId === "string" && !this.independentReviews.has(args.independentRequestId)) {
         return refuse("FLEET_REVIEW_INDEPENDENT", "independentRequestId is the requestId an independent_review of yours returned (within 6 hours)");
       }
+      // The independent verdict recorded is the one the reviewer gave (read from its reply by this runtime), whatever is claimed.
+      if (typeof args.independentRequestId === "string") args.independentVerdict = this.independentReviews.get(args.independentRequestId)!.verdict;
+      else delete args.independentVerdict;
       // The automated part is re-run here on the exact bytes being reviewed: the record binds these hashes to this report.
       const r = await this.inspect(paths, Array.isArray(args.cases) ? args.cases : []);
       if (!r.ok) return refuse("FLEET_BAD_REQUEST", r.reason);
