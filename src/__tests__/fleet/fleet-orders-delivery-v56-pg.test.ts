@@ -127,7 +127,7 @@ describe.skipIf(!PG_BIN)("v56: customer orders, delivery, truthful account creat
     expect(await R.econ(F, "order.deliver", { ...deliverArgs, idempotencyKey: idem() })).toMatchObject({ ok: true, replay: true });
     await broker.tick();
     const sent = shared.outbox.at(-1)!;
-    expect(sent).toMatchObject({ from: shared.address, to: ["buyer.one@example.test"], subject: "Your order: Printable planner pack" });
+    expect(sent).toMatchObject({ from: shared.address, to: ["buyer.one@example.test"], subject: "Agent-1 - Your order: Printable planner pack" });
     expect(sent.body.startsWith("Thank you! Your planner pack is attached.")).toBe(true);
     expect(sent.body).toContain("Your confirmation (recorded "); // v82: the consent repeated on a durable medium
     expect(sent.attachments?.map((a) => [a.fileName, a.contentType, a.content.equals(pdf)])).toEqual([["planner-pack.pdf", "application/pdf", true]]);

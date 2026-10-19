@@ -214,7 +214,7 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     // The public page: the offer, its files' names, the seller notice; nothing about the agent's books or buyers.
     const page = await pub("svc_offer_page", [p.offer.slug]);
     expect(page).toMatchObject({ ok: true, seller: expect.stringContaining("Automaton Fleet"), offer: { kind: "product", available: true, priceMinor: 1_500, title: "Small business cash-flow workbook",
-      brand: "Ledgerline", about: expect.stringContaining("small businesses"), supportEmail: expect.stringMatching(/^[a-z0-9._-]+\+[0-9a-f]{10}@/) } });
+      brand: "Ledgerline", about: expect.stringContaining("small businesses"), supportEmail: shared.address } });  // v97: the shared address, never a routing tag
     // v78: the legal seller behind the agent's brand, the address and the venture's own support address, then the owner's extra notice.
     expect(page.seller).toContain("Sold by Test Owner under the brand Ledgerline.");
     expect(page.seller).toContain("Address: 1 Test Street, Testtown, TT1 1TT, United Kingdom");
@@ -463,7 +463,7 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect(owner.offers.length).toBe(2);
     expect(owner.reviews.passed).toBeGreaterThanOrEqual(5);
   });
-  it("v78: one agent, two ventures — each offer, order and buyer email carries its own venture's brand and routing address", async () => {
+  it("v78/v97: one agent, two ventures — each offer, order and buyer email carries its own venture's brand; support is the shared address with the agent's name as the subject", async () => {
     await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
     const vid = (key: string) => R.one<string>(`(SELECT venture_id::text FROM fleet.fleet_ventures WHERE venture_key = $1)`, [key]);
     const sheetsAddr = (await R.one<any>(`fleet.fleet_storefront($1::uuid)`, [await vid("sheets")])).supportEmail as string;
@@ -484,14 +484,14 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     const rv = await review(F, { subject: "offer", offerId }, [{ name: "cashflow.xlsx", bytes: wb }, { name: "guide.pdf", bytes: guide }]);
     const p = await R.econ(F, "offer.publish", { offerId, reviewId: rv.reviewId });
     expect(p.ok, JSON.stringify(p)).toBe(true);
-    expect((await pub("svc_offer_page", [p.offer.slug])).offer).toMatchObject({ brand: "Coursewise", supportEmail: general.address });
+    expect((await pub("svc_offer_page", [p.offer.slug])).offer).toMatchObject({ brand: "Coursewise", supportEmail: shared.address });
     expect(general.address).not.toBe(sheetsAddr);
     // Its own routing address takes over; the first venture keeps its own.
     const own = await R.econ(F, "mailbox.provision", { ventureKey: "courses", idempotencyKey: idem() });
     const page = await pub("svc_offer_page", [p.offer.slug]);
-    expect(page.offer).toMatchObject({ brand: "Coursewise", supportEmail: own.address });
+    expect(page.offer).toMatchObject({ brand: "Coursewise", supportEmail: shared.address });
     expect(page.seller).toContain("under the brand Coursewise.");
-    expect(page.seller).toContain(`Customer support: ${own.address}`);
+    expect(page.seller).toContain(`Customer support: ${shared.address} (email subject: "${await R.one<string>(`fleet.fleet_agent_label($1)`, [F.id])} - your question")`);
     expect(page.seller).not.toMatch(/Ledgerline|sheets/);
     const sheetsOffer = (await R.econ(F, "offer.list", {})).offers.find((x: any) => x.title === "Small business cash-flow workbook");
     expect((await pub("svc_offer_page", [sheetsOffer.slug])).offer).toMatchObject({ brand: "Ledgerline", supportEmail: sheetsAddr });
@@ -505,9 +505,11 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     await broker.tick();
     const delivery = shared.outbox.at(-1)!;
     expect(delivery.to).toEqual(["learner@example.test"]);
-    expect(delivery.replyTo).toBe(own.address);
+    expect(delivery.replyTo ?? null).toBeNull();   // v97: no routing-tag Reply-To on mail to a buyer
+    expect(delivery.subject).toMatch(new RegExp(`^${await R.one<string>(`fleet.fleet_agent_label($1)`, [F.id])} - Your order: `));
     expect(delivery.body).toContain("under the brand Coursewise.");
-    expect(delivery.body).toContain(`Customer support: ${own.address}`);
+    expect(delivery.body).toContain(`Customer support: ${shared.address}`);
+    expect(delivery.body).not.toContain(own.address);
     expect(delivery.body).not.toMatch(/Ledgerline/);
     expect((await pub("svc_order_page", [b.token])).seller).toContain("under the brand Coursewise.");
     // The agent's message about that order: same venture, same address, same brand.
@@ -515,11 +517,13 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect((await econNext(R, F, "order.message", { orderId: ord.orderId, message: "Lesson 3 has an extra worked example now." })).ok).toBe(true);
     await broker.tick();
     const msg = shared.outbox.at(-1)!;
-    expect(msg).toMatchObject({ to: ["learner@example.test"], replyTo: own.address });
+    expect(msg).toMatchObject({ to: ["learner@example.test"] });
+    expect(msg.replyTo ?? null).toBeNull();
     expect(msg.body).toContain("under the brand Coursewise.");
     // The first venture's earlier delivery went out under its own brand and address.
     const first = shared.outbox.find((m) => m.to.includes("buyer@example.test") && /Ledgerline/.test(m.body))!;
-    expect(first.replyTo).toBe(sheetsAddr);
+    expect(first.replyTo ?? null).toBeNull();
+    expect(sheetsAddr).toBe(shared.address);
     expect(first.body).not.toMatch(/Coursewise/);
   });
 

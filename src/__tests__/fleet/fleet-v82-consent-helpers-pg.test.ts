@@ -206,7 +206,7 @@ describe.skipIf(!PG_BIN)("v82: buyer consent to immediate supply; the helpers re
     await broker.tick();
     const mail = shared.outbox.at(-1)!;
     expect(mail.to).toEqual(["owner@example.test"]);
-    expect(mail.subject).toBe("Order confirmation — Small business cash-flow workbook");
+    expect(mail.subject).toBe("Agent-1 - Order confirmation — Small business cash-flow workbook")   // v97: the agent's current name opens the subject;
     expect(mail.body).toContain("Your confirmation (recorded ");
     for (const t of BUYER_CONSENT_WORDING.digital_immediate) expect(mail.body).toContain(t);
     expect(mail.body).toContain(`https://shop.fleet.test/order/${token}`);
@@ -236,7 +236,7 @@ describe.skipIf(!PG_BIN)("v82: buyer consent to immediate supply; the helpers re
     await broker.tick();
     const mail = shared.outbox.at(-1)!;
     expect(mail.to).toEqual(["cal@example.test"]);
-    expect(mail.subject).toBe("Order confirmation — Custom invoice tracker");
+    expect(mail.subject).toBe("Agent-1 - Order confirmation — Custom invoice tracker");
     expect(mail.body).toContain("GBP 40.00, paid by PayPal");
     for (const t of BUYER_CONSENT_WORDING.service_start) expect(mail.body).toContain(t);
     expect(mail.body).toContain(`https://shop.fleet.test/order/${token}`);

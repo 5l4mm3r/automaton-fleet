@@ -330,7 +330,7 @@ export class PublicPages {
       + `<div class="card"><h2>Terms</h2>${para(o.terms)}</div>` + (o.kind === "service" ? action : "")
       // v78: the agent's own storefront (its venture identity) and its support address.
       + (o.about || o.supportEmail ? `<div class="card"><h2>About ${esc(o.brand)}</h2>${o.about ? para(o.about) : ""}`
-        + (o.supportEmail ? `<p class="muted">Questions: <a href="mailto:${esc(o.supportEmail)}">${esc(o.supportEmail)}</a></p>` : "") + `</div>` : ""), r.seller,
+        + (o.supportEmail ? `<p class="muted">Questions: <a href="mailto:${esc(o.supportEmail)}${o.supportSubject ? `?subject=${esc(encodeURIComponent(`${o.supportSubject}${o.title}`))}` : ""}">${esc(o.supportEmail)}</a>${o.supportSubject ? ` — start the subject with <strong>${esc(o.supportSubject)}</strong>` : ""}</p>` : "") + `</div>` : ""), r.seller,
       { ...(o.kind === "service" && o.available ? { nonce } : {}), head: discoveryHead(o, previews) });
   }
 
@@ -520,7 +520,10 @@ export class PublicPages {
     if (!seller && !off?.supportEmail) return "";
     return `<div class="card"><h2>Who you're buying from</h2>${seller ? `<p>${esc(seller).replace(/\n/g, "<br>")}</p>` : ""}`
       + (off?.about ? `<p class="muted small">${esc(off.about)}</p>` : "")
-      + (off?.supportEmail ? `<p>Questions? Email <a href="mailto:${esc(off.supportEmail)}?subject=${encodeURIComponent(`Order ${ref}`)}">${esc(off.supportEmail)}</a> and quote order reference <strong>${ref}</strong>${paid ? ", or send a message on this page" : ""}.</p>` : "")
+      + (off?.supportEmail ? (() => {
+        const subject = `${off.supportSubject ?? ""}Order ${ref}`;
+        return `<p>Questions? Email <a href="mailto:${esc(off.supportEmail)}?subject=${esc(encodeURIComponent(subject))}">${esc(off.supportEmail)}</a> with the subject <strong>${esc(subject)}</strong>${paid ? ", or send a message on this page" : ""}.</p>`;
+      })() : "")
       + `</div>`;
   }
 

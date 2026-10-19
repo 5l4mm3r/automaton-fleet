@@ -50,6 +50,8 @@ const OFFER = {
 describe.skipIf(!PG_BIN || !CHROME)("v97: the customer's checkout in a real browser, as the service role (PostgreSQL + Chrome)", { timeout: 300_000 }, () => {
   let R: EconomyRegistry;
   let F: Founder;
+  let G: Founder;
+  let label = "";
   let controller: PgFleetStore;
   let custody: pg.Pool;
   let server: http.Server;
@@ -65,9 +67,9 @@ describe.skipIf(!PG_BIN || !CHROME)("v97: the customer's checkout in a real brow
   const checkoutOf = (token: string) => R.one<string>(`(SELECT checkout_id::text FROM fleet.fleet_customer_orders WHERE access_token = $1)`, [token]);
 
   beforeAll(async () => {
-    R = await startEconomyRegistry(PG_BIN!, { founders: 1, allocationCents: 10_000, simulatedSettlement: false, outwardHeld: true });
+    R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, simulatedSettlement: false, outwardHeld: true });
     autoCapabilityChecks(R);
-    [F] = R.founders;
+    [F, G] = R.founders;
     await R.store.grantServiceRole();
     await R.store.grantCustodyRole();
     controller = new PgFleetStore({ connectionString: R.pgc.serviceUrl, schema: "fleet", applicationName: "test-service" });
@@ -103,6 +105,7 @@ describe.skipIf(!PG_BIN || !CHROME)("v97: the customer's checkout in a real brow
     server = http.createServer((req, res) => void pages.handle(req, res, (req.url ?? "/").split("?")[0], "127.0.0.1"));
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
     base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    label = await R.one<string>(`fleet.fleet_agent_label($1)`, [F.id]);
     if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
   }, 300_000);
   afterAll(async () => {
@@ -145,6 +148,12 @@ describe.skipIf(!PG_BIN || !CHROME)("v97: the customer's checkout in a real brow
         "after PayPal confirms your payment", "30 days", "Who you're buying from", "Sold by A. Seller under the brand LandlordTrack", "Questions? Email",
         "Refunds and your rights", OFFER.terms, "faulty or not as described", "Refunds are paid back through PayPal", "autonomous AI agent"]) expect(text, s).toContain(s);
       expect(text).not.toContain("12 Example St");                 // headings only: no row of the product before payment
+      // Support: the shared address (never a routing tag), with the agent's current name as the subject.
+      expect(text).toContain(`Customer support: ${shared.address} (email subject: "${label} - your question")`);
+      const ref = await R.one<string>(`(SELECT upper(left(replace(order_id::text, '-', ''), 8)) FROM fleet.fleet_customer_orders WHERE access_token = $1)`, [token]);
+      expect(text).toContain(`Questions? Email ${shared.address} with the subject ${label} - Order ${ref}`);
+      expect(await p.$eval("a[href^='mailto:']", (a) => a.getAttribute("href"))).toBe(`mailto:${shared.address}?subject=${encodeURIComponent(`${label} - Order ${ref}`)}`);
+      expect(text).not.toMatch(/\+[0-9a-f]{10}@/);
       expect(await p.$$("a.pp")).toHaveLength(0);
       expect(text).not.toContain(token);
       await shots("1-consent");
@@ -191,7 +200,14 @@ describe.skipIf(!PG_BIN || !CHROME)("v97: the customer's checkout in a real brow
       // 5. The offer pass delivers the reviewed files; the mail goes; the download is on the page.
       expect(await R.one(`fleet.svc_offer_tick(20)`)).toMatchObject({ ok: true, delivered: 1 });
       await broker.tick();
-      expect(shared.outbox.at(-1)!.to).toEqual(["owner@example.test"]);
+      const mail = shared.outbox.at(-1)!;
+      expect(mail.to).toEqual(["owner@example.test"]);
+      // The buyer's email: the agent's name opens the subject; From the shared address, no routing-tag Reply-To.
+      expect(mail.subject).toBe(`${label} - Your order: ${OFFER.title}`);
+      expect(mail.from).toBe(shared.address);
+      expect(mail.replyTo ?? null).toBeNull();
+      expect(mail.body).toContain(`Customer support: ${shared.address} (email subject: "${label} - your question")`);
+      expect(mail.body).not.toMatch(/\+[0-9a-f]{10}@/);
       await p.goto(`${base}/order/${token}`);
       text = await p.innerText("body");
       expect(text).toContain("Paid · ready to download");
@@ -221,4 +237,26 @@ describe.skipIf(!PG_BIN || !CHROME)("v97: the customer's checkout in a real brow
       }
     } finally { await b.close(); }
   }, 240_000);
+
+  it("a buyer's email to the shared address reaches the agent its subject names (current name; renamed → the new name; shared names → owner)", async () => {
+    const routed = async (subject: string) => {
+      // A new sender each time (an established correspondent would route by rule 4 regardless of the subject).
+      shared.deliver({ from: `Buyer <b${crypto.randomBytes(4).toString("hex")}@customer.test>`, to: [shared.address], subject, body: "A question about my order" });
+      await broker.tick();
+      return (await R.q(`SELECT agent_id, routing FROM fleet.fleet_agent_mail WHERE direction = 'in' AND subject = $1 ORDER BY received_at DESC LIMIT 1`, [subject]))[0];
+    };
+    expect(await routed(`${label} - Order 1234ABCD`)).toMatchObject({ agent_id: F.id, routing: "subject" });
+    expect(await routed(`Re: ${label.toUpperCase()}: is the EPC column right?`)).toMatchObject({ agent_id: F.id, routing: "subject" });
+    expect(await routed(`${label}0 - not this agent`)).toMatchObject({ agent_id: null, routing: "unassigned" });
+    expect(await routed("Question about a landlord tracker")).toMatchObject({ agent_id: null, routing: "unassigned" });
+    // Renamed: the pages and emails use the new name at once; the new name routes, the old one no longer does.
+    await R.q(`SELECT fleet.fleet_admin_agent_rename($1, 'Landlord Desk', $2)`, [F.id, OWNER]);
+    expect((await R.q(`SELECT fleet.fleet_storefront(venture_id) AS s FROM fleet.fleet_ventures WHERE venture_key = 'landlords'`))[0].s)
+      .toMatchObject({ supportEmail: shared.address, supportSubject: "Landlord Desk - " });
+    expect(await routed("Landlord Desk - Order 1234ABCD")).toMatchObject({ agent_id: F.id, routing: "subject" });
+    expect(await routed(`${label} - after the rename`)).toMatchObject({ agent_id: null, routing: "unassigned" });
+    // Two living agents with the same name: never guessed.
+    await R.q(`SELECT fleet.fleet_admin_agent_rename($1, 'Landlord Desk', $2)`, [G.id, OWNER]);
+    expect(await routed("Landlord Desk - which of you?")).toMatchObject({ agent_id: null, routing: "unassigned" });
+  });
 });
