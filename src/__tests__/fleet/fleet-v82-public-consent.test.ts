@@ -82,7 +82,7 @@ describe("v82 public pages: the buyer's consent to immediate supply", () => {
     html = await (await fetch(`${base}/order/${token}`)).text();
     expect(html).toContain("paypal.com/checkoutnow");
     expect(html).toContain("Your confirmation");
-    expect(html).toContain("Recorded 2026-10-16 12:00 UTC");
+    expect(html).toContain("Recorded 16 Oct 2026, 12:00 UTC");
     expect(html).not.toContain("Before you pay");
   });
 

@@ -103,9 +103,10 @@ import { V93_SQL } from "./migrations-phase93.js";
 import { V94_SQL } from "./migrations-phase94.js";
 import { BROWSER_FUNCTIONS_V95, CODE_FUNCTIONS_V95, IDENTITY_FUNCTIONS_V95, V95_SQL } from "./migrations-phase95.js";
 import { V96_SQL } from "./migrations-phase96.js";
+import { V97_SQL } from "./migrations-phase97.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 96;
+export const FLEET_PG_SCHEMA_VERSION = 97;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1297,6 +1298,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 94, name: "current_decisions_and_notices", sql: V94_SQL },
   { version: 95, name: "durable_operations", sql: V95_SQL },
   { version: 96, name: "custody_refund_authority", sql: V96_SQL },
+  { version: 97, name: "order_page_checkout", sql: V97_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1398,6 +1400,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_enquiry_page(text)",
   "svc_order_page(text)",
   "svc_order_file(text, uuid, integer)",
+  // v97: the order page's preview images and the contents of its small deliverables (what the buyer is buying), by access code.
+  "svc_order_sample(text, text, integer)",
   // v79: a channel's attribution code carried onto an order / enquiry; the public outreach opt-out page.
   "svc_attribute(text, text, text)",
   "svc_outreach_optout(text, boolean)",

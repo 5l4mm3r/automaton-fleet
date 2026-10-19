@@ -1012,7 +1012,7 @@ export class FleetService {
       const done = path === "/v1/paypal/return";
       const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${done ? "Thank you" : "Payment cancelled"}</title></head>`
         + `<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5"><h1>${done ? "Thank you for your order" : "Payment cancelled"}</h1>`
-        + `<p>${done ? "Your payment is being completed with PayPal. The seller will deliver or be in touch at the e-mail address of your PayPal account." : "No payment was taken. You can close this page."}</p></body></html>`;
+        + `<p>${done ? "Your payment is being completed with PayPal. The seller will deliver or be in touch at the e-mail address of your PayPal account." : "No payment was taken. To pay, go back to your order page — your browser's Back button, or the order page link you were given."}</p></body></html>`;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff",
         "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'", "referrer-policy": "no-referrer" });
       res.end(body);

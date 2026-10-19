@@ -5,7 +5,9 @@
  *   GET  /o/<slug>/preview/<n>              a public sample file of the offer
  *   POST /o/<slug>/buy                      a fresh checkout + order → 303 to the buyer's order page
  *   POST /o/<slug>/enquire                  a service brief (JSON from the page's script) → the buyer's request page
- *   GET  /order/<token>                     the buyer's order: pay link while open, status, downloads, thread, message form
+ *   GET  /order/<token>                     the buyer's order (v97: the checkout): what it buys (read from the files), the total,
+ *                                           consent, PayPal's payment button, receipt, downloads, seller, support, refund rights
+ *   GET  /order/<token>/preview/<n>         v97: the offer's preview image, by the order's access code
  *   GET  /order/<token>/file/<delivery>/<n> a delivered file (30 days)
  *   POST /order/<token>/message             a buyer message (+ files) about the order
  *   GET  /enquiry/<token>                   the buyer's request: brief, thread, quote → order page
@@ -32,6 +34,9 @@ import type http from "http";
 import { RateLimiter } from "./rate-limit.js";
 import type { PublicPageFunction } from "../postgres/store.js";
 import { BUYER_CONSENT_VERSION, BUYER_CONSENT_WORDING } from "../storefront/consent.js";
+import { formatName, readContents, type Contents } from "../storefront/contents.js";
+import { ORDER_CONTENTS_MAX_BYTES } from "../postgres/migrations-phase97.js";
+import { DELIVERY_RETENTION_DAYS } from "../postgres/migrations-phase76.js";
 
 export interface PublicPagesPort {
   publicCall(fn: PublicPageFunction, args: unknown[]): Promise<Record<string, unknown>>;
@@ -41,19 +46,39 @@ const SLUG = /^[a-z0-9][a-z0-9-]{1,48}-[0-9a-f]{6}$/;
 const TOKEN = /^[0-9a-f]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_POST_BYTES = 22_000_000;
+/** PayPal's own hosted logo (its brand asset, served by PayPal) on the order page's payment button. */
+const PAYPAL_LOGO_ORIGIN = "https://www.paypalobjects.com";
+const PAYPAL_LOGO = `${PAYPAL_LOGO_ORIGIN}/paypal-ui/logos/svg/paypal-color.svg`;
 const AI_NOTICE = "This offer is produced and fulfilled by an autonomous AI agent operating within the Automaton Fleet. Payments are handled by PayPal.";
 
 export const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 const money = (minor: unknown, cur: unknown) => `${cur === "GBP" ? "£" : `${esc(cur)} `}${(Number(minor) / 100).toFixed(2)}`;
 const para = (t: unknown) => esc(t).split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
 const kb = (n: unknown) => (Number(n) >= 1_000_000 ? `${(Number(n) / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(Number(n) / 1000))} kB`);
+/** A time as the buyer reads it: "19 Oct 2026, 16:09 UTC". */
+const when = (iso: unknown) => { const d = new Date(String(iso)); return Number.isNaN(d.getTime()) ? String(iso ?? "") : `${d.toLocaleString("en-GB", { timeZone: "UTC", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })} UTC`; };
+const ext = (name: string) => (/\.([A-Za-z0-9]{1,8})$/.exec(name)?.[1] ?? "").toLowerCase();
+const brand = (off: Record<string, any>) => typeof off.brand === "string" && off.brand.trim() !== "";
+/** What a buyer needs to open the files (from the file types; nothing claimed beyond the format). */
+function needsFor(names: readonly string[]): string[] {
+  const e = new Set(names.map(ext));
+  const out: string[] = [];
+  if (e.has("zip")) out.push("A ZIP file: open it with your computer's or phone's file manager to get the files inside.");
+  if (e.has("csv")) out.push("A spreadsheet app that opens CSV files, such as Microsoft Excel, Google Sheets or LibreOffice Calc.");
+  if (e.has("xlsx") || e.has("xls")) out.push("A spreadsheet app that opens Excel workbooks, such as Microsoft Excel, Google Sheets or LibreOffice Calc.");
+  if (e.has("ods")) out.push("A spreadsheet app that opens OpenDocument spreadsheets, such as LibreOffice Calc or Google Sheets.");
+  if (e.has("pdf")) out.push("A PDF reader (built into most web browsers).");
+  if (e.has("docx")) out.push("A word processor that opens Word documents, such as Microsoft Word, Google Docs or LibreOffice Writer.");
+  if (e.has("epub")) out.push("An e-book reader app that opens EPUB files.");
+  return out;
+}
 
 /** A page: strict CSP (scripts only with this response's nonce), no referrer to other sites, no framing.
  *  Referrer-Policy same-origin (2026-10-19; was no-referrer): with no-referrer a browser sends `Origin: null` on the page's
  *  own form POST, which the same-origin check had to refuse — the order page's consent form failed ("cross-site request
  *  refused") in a real browser. Same-origin sends the page's origin to this site only, never to another. */
-function page(res: http.ServerResponse, status: number, title: string, body: string, seller: unknown, o: { nonce?: string; refreshS?: number; head?: string } = {}): void {
-  const csp = `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
+function page(res: http.ServerResponse, status: number, title: string, body: string, seller: unknown, o: { nonce?: string; refreshS?: number; head?: string; paypalLogo?: boolean } = {}): void {
+  const csp = `default-src 'none'; img-src 'self'${o.paypalLogo ? ` ${PAYPAL_LOGO_ORIGIN}` : ""}; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
     + (o.nonce ? `; script-src 'nonce-${o.nonce}'; connect-src 'self'` : "");
   res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff",
     "content-security-policy": csp, "referrer-policy": "same-origin", "x-frame-options": "DENY" });
@@ -61,10 +86,25 @@ function page(res: http.ServerResponse, status: number, title: string, body: str
     + (o.refreshS ? `<meta http-equiv="refresh" content="${o.refreshS}">` : "") + (o.head ?? "") + `<title>${esc(title)}</title><style>
 body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:44rem;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1d232b;background:#fbfbfa}
 h1{font-size:1.6rem;margin-bottom:.2rem}.muted{color:#5d6670}.card{background:#fff;border:1px solid #e3e5e8;border-radius:10px;padding:1rem 1.2rem;margin:1rem 0}
-.price{font-size:1.4rem;font-weight:650}button,.btn{display:inline-block;background:#1f5eff;color:#fff;border:0;border-radius:8px;padding:.65rem 1.1rem;font-size:1rem;text-decoration:none;cursor:pointer}
+.price{font-size:1.4rem;font-weight:650}button,.btn{font:inherit;font-weight:600;display:inline-block;background:#1f5eff;color:#fff;border:0;border-radius:8px;padding:.65rem 1.1rem;font-size:1rem;text-decoration:none;cursor:pointer}
 input,textarea{width:100%;box-sizing:border-box;padding:.55rem;border:1px solid #c9ced4;border-radius:6px;font:inherit}textarea{min-height:9rem}
 .msg{border-left:3px solid #c9ced4;padding:.3rem .8rem;margin:.6rem 0}.msg.agent{border-color:#1f5eff}footer{margin:2rem 0;font-size:.85rem;color:#5d6670}
-ul{padding-left:1.2rem}.ok{color:#126b2f}.warn{color:#8a5a00}</style></head><body>${body}
+ul{padding-left:1.2rem}.ok{color:#126b2f}.warn{color:#8a5a00}
+.top{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:.3rem 1rem;border-bottom:1px solid #e3e5e8;padding-bottom:.7rem;margin-bottom:1.2rem}
+.brand{font-weight:700;font-size:1.15rem}.small{font-size:.88rem}h2{font-size:1.15rem;margin:.2rem 0 .6rem}h3{font-size:1rem;margin:1rem 0 .3rem}
+.steps{display:flex;gap:.5rem;list-style:none;padding:0;margin:1rem 0}.steps li{flex:1;font-size:.85rem;color:#5d6670;border-top:4px solid #e3e5e8;padding-top:.35rem}
+.steps li.done{border-color:#126b2f;color:#126b2f}.steps li.now{border-color:#1d232b;color:#1d232b;font-weight:650}
+.pill{display:inline-block;border-radius:999px;padding:.12rem .7rem;font-size:.85rem;font-weight:650;background:#eef0f3;color:#1d232b}
+.pill.ok{background:#e3f4e8;color:#126b2f}.pill.warn{background:#fff3d6;color:#7a4f00}.pill.bad{background:#fde8e8;color:#9b1c1c}
+.line{display:flex;justify-content:space-between;gap:1rem}.total{display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid #e3e5e8;padding-top:.6rem;margin-top:.6rem}
+.total .price{font-size:1.7rem}.block{display:block;width:100%;box-sizing:border-box;text-align:center;margin-top:.5rem}
+.pp{display:flex;align-items:center;justify-content:center;gap:.5rem;width:100%;box-sizing:border-box;background:#ffc439;color:#111;border-radius:999px;padding:.75rem 1rem;font-size:1.08rem;font-weight:650;text-decoration:none;min-height:3.1rem;margin-top:.4rem}
+.pp:hover{background:#f2ba36}.pp img{height:1.4rem;width:auto;display:block}
+dl.receipt{display:grid;grid-template-columns:max-content 1fr;gap:.35rem 1rem;margin:0}dl.receipt dt{color:#5d6670}dl.receipt dd{margin:0;overflow-wrap:anywhere}
+pre.peek{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f6f7;border-radius:6px;padding:.6rem;font-size:.82rem;margin:.3rem 0}
+.cols{display:flex;flex-wrap:wrap;gap:.3rem;margin:.35rem 0 .2rem;padding:0;list-style:none}.cols li{background:#f0f2f5;border-radius:4px;padding:.1rem .45rem;font-size:.82rem}
+ul.inside>li{margin:.5rem 0}.dl{display:block;text-align:center;background:#126b2f;color:#fff;border-radius:8px;padding:.7rem 1rem;text-decoration:none;font-weight:600;margin:.4rem 0}
+@media print{.noprint,footer form{display:none}body{background:#fff}}</style></head><body>${body}
 <footer><p>${esc(AI_NOTICE)}</p>${seller ? `<p>${esc(seller).replace(/\n/g, "<br>")}</p>` : ""}</footer></body></html>`);
 }
 
@@ -129,6 +169,8 @@ export function discoveryHead(o: Record<string, any>, previews: Array<Record<str
 export class PublicPages {
   private readonly reads: RateLimiter;
   private readonly writes: RateLimiter;
+  /** v97: what is inside each deliverable, by its digest (bounded). */
+  private readonly contentsCache = new Map<string, Contents | null>();
 
   constructor(private readonly port: PublicPagesPort, private readonly opts: { now?: () => number; log?: (event: string, detail: Record<string, unknown>) => void } = {}) {
     this.reads = new RateLimiter({ capacity: 120, refillPerSec: 2 }, opts.now);
@@ -164,6 +206,7 @@ export class PublicPages {
       }
       if (p[0] === "order" && TOKEN.test(p[1] ?? "")) {
         if (p.length === 2 && !isPost) return await this.order(res, p[1]);
+        if (p.length === 4 && p[2] === "preview" && /^[1-4]$/.test(p[3]) && !isPost) return await this.orderPreview(res, p[1], Number(p[3]));
         if (p.length === 5 && p[2] === "file" && UUID.test(p[3]) && /^([1-9]|10)$/.test(p[4]) && !isPost) return await this.file(res, p[1], p[3], Number(p[4]));
         if (p.length === 3 && p[2] === "message" && isPost) return await this.message(req, res, "order", p[1], origin);
         if (p.length === 3 && p[2] === "consent" && isPost) return await this.consent(req, res, p[1], origin);
@@ -341,40 +384,176 @@ export class PublicPages {
     this.json(res, 200, r.ok ? { ok: true } : { ok: false, reason: r.code === "FLEET_BUSY" ? "Too many messages today — please try again tomorrow." : typeof r.reason === "string" ? r.reason : "The message could not be sent." });
   }
 
+  /** v97: the buyer's order page is the checkout — what they buy (from the actual files), the total, the consent the law
+   *  asks for, PayPal's own payment button, then the receipt and the download; the seller, support and refund rights. */
   private async order(res: http.ServerResponse, token: string): Promise<void> {
     const r = await this.port.publicCall("svc_order_page", [token]);
     if (!r.ok) { page(res, 404, "Not found", "<h1>Not found</h1><p>This order page does not exist.</p>", null); return; }
     const o = r.order as Record<string, any>;
+    const off = (o.offer ?? null) as Record<string, any> | null;
     const nonce = crypto.randomBytes(16).toString("base64");
-    const waiting = o.checkout === "requested" || o.checkout === "open" || o.checkout === "approved" || o.checkout === "capture_pending";
-    let pay = "";
-    if (o.checkout === "requested") pay = `<p>Preparing your secure PayPal checkout… this page refreshes automatically.</p>`;
-    else if (o.checkout === "open" && o.approvalUrl) pay = `<p><a class="btn" href="${esc(o.approvalUrl)}" rel="noreferrer">Pay ${money(o.amountMinor, o.currency)} with PayPal</a></p><p class="muted">Already paid? This page updates automatically once PayPal confirms it.</p>`;
-    else if (o.checkout === "approved" || o.checkout === "capture_pending") pay = `<p>Confirming your payment with PayPal…</p>`;
-    else if (o.checkout === "expired" || o.checkout === "cancelled" || o.checkout === "failed") pay = `<p class="warn">This checkout is no longer open; no payment was taken.</p>`;
+    const total = money(o.amountMinor, o.currency);
+    const product = off ? off.kind === "product" : o.kind === "digital_file";
+    const paid = o.payment === "paid" || o.payment === "partially_refunded";
     const downloads = Array.isArray(r.downloads) ? r.downloads as Array<Record<string, unknown>> : [];
-    // v82: the buyer's consent to immediate supply: asked before the payment link and the downloads; repeated once recorded.
     const c = (o.consent ?? {}) as Record<string, any>;
     const statements = Array.isArray(c.statements) ? (c.statements as unknown[]).map(String) : [];
-    const closed = ["refunded", "reversed", "cancelled"].includes(o.payment) || ["expired", "cancelled", "failed"].includes(o.checkout);
+    const closed = ["refunded", "reversed", "cancelled"].includes(o.payment) || (!paid && ["expired", "cancelled", "failed"].includes(o.checkout));
     const askConsent = !c.recorded && !closed && statements.length > 0;
-    if (askConsent) pay = "";
-    const consentCard = askConsent
-      ? `<div class="card"><h2>${o.payment === "paid" || o.payment === "partially_refunded" ? "Before you download" : "Before you pay"}</h2>`
-        + `<form method="post" action="/order/${esc(token)}/consent">${statements.map((t, i) => `<p><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="c${i + 1}" value="yes" required style="width:auto;margin-top:4px"><span>${esc(t)}</span></label></p>`).join("")}`
-        + `<input type="hidden" name="consent" value="${esc(c.version)}"><button type="submit">Confirm</button></form></div>`
-      : c.recorded && statements.length ? `<div class="card"><h2>Your confirmation</h2><p class="muted">Recorded ${esc(String(c.at).slice(0, 16).replace("T", " "))} UTC</p><ul>${statements.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : "";
-    page(res, 200, `Your order — ${o.item}`, `<h1>Your order</h1><p class="muted">${esc(o.item)}</p>`
-      + `<div class="card"><div class="price">${money(o.amountMinor, o.currency)}</div><p><strong>${esc(STATUS_WORDS[o.status] ?? o.status)}</strong>${o.dueAt ? ` · due by ${esc(String(o.dueAt).slice(0, 10))}` : ""}</p>${pay}</div>`
-      + (askConsent ? consentCard : "")
+    const confirming = !paid && (o.checkout === "approved" || o.checkout === "capture_pending");
+    const delivered = downloads.length > 0 || ["delivered", "fulfilled"].includes(o.status);
+    const ref = esc(o.reference ?? "");
+    const brand = off?.brand ? String(off.brand) : "";
+
+    // ── the state, in the buyer's words ──
+    let pill: string;
+    if (o.payment === "refunded") pill = `<span class="pill">Refunded</span>`;
+    else if (o.payment === "reversed") pill = `<span class="pill bad">Payment reversed</span>`;
+    else if (closed) pill = `<span class="pill">Checkout closed</span>`;
+    else if (paid) pill = `<span class="pill ok">${delivered ? (product ? "Paid · ready to download" : "Paid · delivered") : "Paid"}</span>`;
+    else if (confirming) pill = `<span class="pill warn">Confirming your payment</span>`;
+    else pill = `<span class="pill warn">Not paid yet</span>`;
+
+    let action = "";
+    if (askConsent) {
+      action = `<form method="post" action="/order/${esc(token)}/consent" class="noprint"><h3>${paid ? "Before you download" : "Step 1 of 2 · Before you pay"}</h3>`
+        + (product ? `<p class="small">This is a digital download. You normally have 14 days to cancel an online purchase, but for a download that right ends once it is made available to you. To get your files straight after payment, please confirm both statements:</p>`
+          : `<p class="small">You normally have 14 days to cancel an online purchase. For the seller to start your work straight away, please confirm both statements:</p>`)
+        + statements.map((t, i) => `<p><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="c${i + 1}" value="yes" required style="width:auto;margin-top:4px"><span>${esc(t)}</span></label></p>`).join("")
+        + `<input type="hidden" name="consent" value="${esc(c.version)}"><button type="submit" class="block">${paid ? "Confirm and show my download" : "Confirm and continue to payment"}</button></form>`;
+    } else if (closed) {
+      action = o.payment === "refunded" || o.payment === "partially_refunded" || o.payment === "reversed" ? ""
+        : `<p>This checkout is no longer open. <strong>No payment was taken.</strong></p>`;
+    } else if (paid) {
+      action = "";
+    } else if (o.checkout === "requested") {
+      action = `<p>Preparing your PayPal checkout… this page refreshes by itself.</p>`;
+    } else if (o.checkout === "open" && o.approvalUrl) {
+      action = `<h3>Step 2 of 2 · Pay</h3><a class="pp" href="${esc(o.approvalUrl)}" rel="noreferrer"><span>Pay ${total} with</span><img src="${PAYPAL_LOGO}" alt="PayPal" width="85" height="24"></a>`
+        + `<p class="small muted">You pay on PayPal's own website (paypal.com), then PayPal brings you back to this page. This shop never receives your card or bank details.`
+        + (o.expiresAt ? ` This checkout is open until ${esc(when(o.expiresAt))}.` : "") + `</p>`
+        + `<p class="small muted">Paid already? Reload this page to see your receipt.</p>`;
+    } else if (confirming) {
+      action = `<p>PayPal has your approval and the payment is being confirmed. <strong>Please do not pay again.</strong> This page refreshes by itself.</p>`;
+    }
+
+    const stepNames = product ? ["Confirm", "Pay with PayPal", "Download"] : ["Confirm", "Pay with PayPal", "Delivery"];
+    const stepDone = [!statements.length || !!c.recorded, paid, delivered];
+    const now = stepDone.findIndex((d) => !d);
+    const steps = closed ? "" : `<ol class="steps noprint">${stepNames.map((n, i) => `<li class="${stepDone[i] ? "done" : i === now ? "now" : ""}">${i + 1}. ${n}${stepDone[i] ? " ✓" : ""}</li>`).join("")}</ol>`;
+
+    const summary = `<div class="card"><h2>Order summary</h2>`
+      + `<div class="line"><span>${esc(o.item)}</span><span>${total}</span></div>`
+      + `<div class="total"><strong>Total</strong><span class="price">${total}</span></div>`
+      + `<p>${pill}${o.dueAt ? ` <span class="muted small">due by ${esc(String(o.dueAt).slice(0, 10))}</span>` : ""}</p>${action}</div>`;
+
+    // ── the receipt, once PayPal has captured the payment ──
+    const receipt = o.paidAt ? `<div class="card"><h2>Receipt</h2><dl class="receipt">`
+      + `<dt>Order reference</dt><dd>${ref}</dd><dt>Item</dt><dd>${esc(o.item)}</dd><dt>Amount paid</dt><dd>${total}</dd>`
+      + `<dt>Paid on</dt><dd>${esc(when(o.paidAt))}</dd><dt>Paid with</dt><dd>PayPal</dd>`
+      + (o.paypalTransactionId ? `<dt>PayPal transaction ID</dt><dd>${esc(o.paypalTransactionId)}</dd>` : "")
+      + (o.refundedMinor ? `<dt>Refunded</dt><dd>${money(o.refundedMinor, o.currency)} (through PayPal)</dd>` : "")
+      + (brand ? `<dt>Seller</dt><dd>${esc(brand)}</dd>` : "")
+      + `</dl><p class="small muted">The seller's legal name and address are under "Who you're buying from" below.</p>`
+      + `<p class="noprint"><button type="button" id="print">Print or save this receipt</button></p></div>` : "";
+
+    const files = paid && downloads.length
+      ? `<div class="card"><h2>Your download</h2>${downloads.map((f) => `<a class="dl" href="/order/${esc(token)}/file/${esc(f.deliveryId)}/${esc(f.fileNo)}">Download ${esc(f.fileName)} (${kb(f.sizeBytes)})</a>`
+          + (f.until ? `<p class="small muted">Available here until ${esc(String(f.until).slice(0, 10))}.</p>` : "")).join("")}</div>`
+      : paid && product && !askConsent && !delivered
+        ? `<div class="card"><h2>Your download</h2><p>Payment received — your download is being prepared. It appears on this page and is emailed to the address on your PayPal account. Reload this page in a minute or two.</p></div>`
+        : "";
+
+    page(res, 200, `Your order — ${o.item}`, `<div class="top"><span class="brand">${esc(brand || "Your order")}</span><span class="muted small">Order ${ref}</span></div>`
+      + `<h1>${esc(off?.title ?? o.item)}</h1>${off?.summary ? `<p class="muted">${esc(off.summary)}</p>` : ""}`
+      + steps + summary + receipt + files
       + (o.scope ? `<div class="card"><h2>Agreed scope</h2>${para(o.scope)}</div>` : "")
-      + (downloads.length ? `<div class="card"><h2>Your files</h2><ul>${downloads.map((f) => `<li><a href="/order/${esc(token)}/file/${esc(f.deliveryId)}/${esc(f.fileNo)}">${esc(f.fileName)}</a> (${kb(f.sizeBytes)})${f.until ? ` <span class="muted">until ${esc(String(f.until).slice(0, 10))}</span>` : ""}</li>`).join("")}</ul></div>` : "")
+      + (off ? await this.buying(token, off, product, o) : "")
       + await this.repoHtml("order", token)
       + threadHtml(r.thread)
-      + (o.payment === "paid" || o.payment === "partially_refunded" ? messageForm(`/order/${token}/message`, nonce) : "")
-      + (o.offer?.terms ? `<div class="card"><h2>Terms</h2>${para(o.offer.terms)}</div>` : "")
-      + (askConsent ? "" : consentCard),
-      r.seller, { ...(o.payment === "paid" || o.payment === "partially_refunded" ? { nonce } : {}), ...(waiting && !askConsent ? { refreshS: o.checkout === "open" ? 15 : 4 } : {}) });
+      + (paid ? `<div class="noprint">${messageForm(`/order/${token}/message`, nonce)}</div>` : "")
+      + this.sellerCard(r.seller, off, ref, paid)
+      + this.rightsCard(off, product)
+      + (!askConsent && c.recorded && statements.length ? `<div class="card"><h2>Your confirmation</h2><p class="muted small">Recorded ${esc(when(c.at))}</p><ul>${statements.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : "")
+      + (o.paidAt ? `<script nonce="${nonce}">document.getElementById('print').addEventListener('click',function(){window.print()});</script>` : ""),
+      null, { ...(paid || o.paidAt ? { nonce } : {}), paypalLogo: !!(o.checkout === "open" && o.approvalUrl),
+        ...((o.checkout === "requested" || confirming) && !askConsent ? { refreshS: 4 } : {}) });
+  }
+
+  /** v97: what the order buys — the offer's promises, and what is inside its download, read from the file itself. */
+  private async buying(token: string, off: Record<string, any>, product: boolean, o: Record<string, any>): Promise<string> {
+    const files = Array.isArray(off.files) ? off.files as Array<Record<string, any>> : [];
+    const previews = (Array.isArray(off.previews) ? off.previews as Array<Record<string, unknown>> : []).filter((f) => /^image\/(png|jpeg)$/.test(String(f.contentType)));
+    const names: string[] = [];
+    let inside = "";
+    for (const f of files.slice(0, 10)) {
+      names.push(String(f.fileName));
+      const ct = await this.contents(token, f);
+      inside += `<li><strong>${esc(f.fileName)}</strong> — ${esc(formatName(String(f.fileName)))}, ${kb(f.sizeBytes)}`;
+      if (ct && ct.members.length && ext(String(f.fileName)) === "zip") inside += `<p class="small muted" style="margin:.3rem 0">Inside it:</p>`;
+      if (ct) inside += `<ul class="inside">${ct.members.map((m) => {
+        names.push(m.name);
+        const head = ext(String(f.fileName)) === "zip" ? `<strong>${esc(m.name)}</strong> — ${esc(formatName(m.name))}, ${kb(m.sizeBytes)}` : "";
+        if (m.kind === "table") return `<li>${head}${head ? "<br>" : ""}<span class="small">${m.columns.length} columns, ${m.rows} row${m.rows === 1 ? "" : "s"} below the headings. Columns:</span><ul class="cols">${m.columns.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></li>`;
+        if (m.kind === "text") return `<li>${head}<pre class="peek">${esc(m.lines.join("\n"))}${m.more ? "\n…" : ""}</pre></li>`;
+        return `<li>${head}</li>`;
+      }).join("")}${ct.truncated ? `<li class="muted small">…and more files</li>` : ""}</ul>`;
+      inside += `</li>`;
+    }
+    const needs = needsFor(names);
+    return `<div class="card"><h2>What you're buying</h2>`
+      + (brand(off) ? `<p class="muted small" style="margin:0">${esc(off.brand)} · ${esc(off.title)}</p>` : "")
+      + (off.audience ? `<p><strong>For:</strong> ${esc(off.audience)}</p>` : "")
+      + (Array.isArray(off.deliverables) && off.deliverables.length ? `<h3>Included</h3><ul>${(off.deliverables as string[]).map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : "")
+      + (inside ? `<h3>The download</h3><ul class="inside">${inside}</ul>` : "")
+      + (needs.length ? `<h3>What you need</h3><ul>${needs.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : "")
+      + `<h3>Delivery</h3><p>${product
+        ? `A download on this page after PayPal confirms your payment; the seller also emails it to the address on your PayPal account. It stays available here for ${DELIVERY_RETENTION_DAYS} days after delivery.`
+        : o.turnaroundDays ? `Delivered within ${esc(o.turnaroundDays)} days of payment, on this page and by email.` : "On this page and by email, as agreed with the seller."}</p>`
+      + (previews.length ? `<h3>Preview</h3>${previews.map((f) => `<p><img src="/order/${esc(token)}/preview/${esc(f.n)}" alt="${esc(f.fileName)}" style="max-width:100%;border-radius:8px;border:1px solid #e3e5e8"></p>`).join("")}` : "")
+      + (off.description ? `<h3>From the seller</h3>${para(off.description)}` : "")
+      + `</div>`;
+  }
+
+  /** The legal seller (as the owner registered them), the brand's own support address and the AI notice. */
+  private sellerCard(seller: unknown, off: Record<string, any> | null, ref: string, paid: boolean): string {
+    if (!seller && !off?.supportEmail) return "";
+    return `<div class="card"><h2>Who you're buying from</h2>${seller ? `<p>${esc(seller).replace(/\n/g, "<br>")}</p>` : ""}`
+      + (off?.about ? `<p class="muted small">${esc(off.about)}</p>` : "")
+      + (off?.supportEmail ? `<p>Questions? Email <a href="mailto:${esc(off.supportEmail)}?subject=${encodeURIComponent(`Order ${ref}`)}">${esc(off.supportEmail)}</a> and quote order reference <strong>${ref}</strong>${paid ? ", or send a message on this page" : ""}.</p>` : "")
+      + `</div>`;
+  }
+
+  /** The seller's terms and the buyer's statutory rights (UK: Consumer Contracts Regulations 2013, Consumer Rights Act 2015). */
+  private rightsCard(off: Record<string, any> | null, product: boolean): string {
+    return `<div class="card"><h2>Refunds and your rights</h2>`
+      + (off?.terms ? `<p><strong>Seller's terms:</strong> ${esc(off.terms)}</p>` : "")
+      + (product
+        ? `<p>Because this is a digital download, your 14-day right to cancel ends once the download is made available to you — you confirm this before paying.</p>`
+          + `<p>If the download is faulty or not as described, you are entitled to a repair or a replacement, or, if that is not possible, some or all of your money back. Contact the seller with your order reference. Refunds are paid back through PayPal.</p>`
+        : `<p>If the work is not as agreed or not done with reasonable care and skill, you are entitled to have it put right, or, if that is not possible, some or all of your money back. Contact the seller with your order reference. Refunds are paid back through PayPal.</p>`)
+      + `<p class="small muted">These rights are in addition to the seller's terms.</p></div>`;
+  }
+
+  /** The contents of one deliverable (bounded; read once per file digest). */
+  private async contents(token: string, f: Record<string, any>): Promise<Contents | null> {
+    const e = ext(String(f.fileName));
+    if (!["zip", "csv", "txt", "md"].includes(e) || Number(f.sizeBytes) > ORDER_CONTENTS_MAX_BYTES || typeof f.sha256 !== "string") return null;
+    if (this.contentsCache.has(f.sha256)) return this.contentsCache.get(f.sha256)!;
+    const r = await this.port.publicCall("svc_order_sample", [token, "contents", Number(f.n)]);
+    const v = r.ok && r.sha256 === f.sha256 ? readContents(String(r.fileName), Buffer.from(String(r.contentB64), "base64")) : null;
+    if (r.ok) {
+      if (this.contentsCache.size >= 64) this.contentsCache.delete(this.contentsCache.keys().next().value!);
+      this.contentsCache.set(f.sha256, v);
+    }
+    return v;
+  }
+
+  /** v97: an order's preview image (the offer's sample), by the order's access code. */
+  private async orderPreview(res: http.ServerResponse, token: string, n: number): Promise<void> {
+    const r = await this.port.publicCall("svc_order_sample", [token, "preview", n]);
+    if (!r.ok || !/^image\/(png|jpeg)$/.test(String(r.contentType))) { res.writeHead(404).end(); return; }
+    this.sendFile(res, String(r.fileName), String(r.contentType), String(r.contentB64), true);
   }
 
   /** v82: the buyer's consent given on the order page (a quoted service, or an order made outside an offer page). */

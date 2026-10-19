@@ -2411,6 +2411,8 @@ export class PgFleetStore {
 /** v76: the public page functions the controller may call (each is a service-role SECURITY DEFINER function). */
 export const PUBLIC_PAGE_FUNCTIONS = ["svc_offer_page", "svc_offer_preview", "svc_offer_buy", "svc_offer_enquire", "svc_enquiry_page", "svc_order_page",
   "svc_order_file", "svc_customer_message",
+  // v97: the order page's preview images and deliverable contents.
+  "svc_order_sample",
   // v79: a channel's attribution code on the order / enquiry it brought; the outreach opt-out page.
   "svc_attribute", "svc_outreach_optout",
   // v80: search discovery (sitemap, IndexNow key) — read only.

@@ -29,7 +29,8 @@ export interface PayPalWorkItem {
   returnToken?: string | null;
 }
 /** v76: an open checkout whose PayPal order status is due to be read (the webhook may never come). */
-/** v76: PayPal returns a buyer to their own order page (same origin as the configured return page) when the checkout has one. */
+/** v76: PayPal returns a buyer to their own order page (same origin as the configured return page) when the checkout has one.
+ *  v97: a buyer who cancels on PayPal goes back there too (it says nothing was paid and offers the payment again). */
 export function returnUrlFor(returnUrl: string, token: string | null | undefined): string {
   if (!token || !/^[0-9a-f]{64}$/.test(token)) return returnUrl;
   try { return `${new URL(returnUrl).origin}/order/${token}`; } catch { return returnUrl; }
@@ -339,7 +340,7 @@ export class PayPalTreasuryWorker {
       purchase_units: [{ reference_id: c.checkoutId, custom_id: c.checkoutId, invoice_id: `fleet:${c.checkoutId}`, description: c.description.slice(0, 127),
         amount: { currency_code: c.currency, value: decimal(c.amountMinor) } }],
       payment_source: { paypal: { experience_context: { shipping_preference: "NO_SHIPPING", user_action: "PAY_NOW",
-        ...(this.opts.returnUrl ? { return_url: returnUrlFor(this.opts.returnUrl, c.returnToken) } : {}), ...(this.opts.cancelUrl ? { cancel_url: this.opts.cancelUrl } : {}) } } },
+        ...(this.opts.returnUrl ? { return_url: returnUrlFor(this.opts.returnUrl, c.returnToken) } : {}), ...(this.opts.cancelUrl ? { cancel_url: returnUrlFor(this.opts.cancelUrl, c.returnToken) } : {}) } } },
     };
     const res = await this.call(c, "POST", "/v2/checkout/orders", body, `order:${c.checkoutId}`).catch(() => null);
     if (!res) return; // auth or network: next pass (the request id returns the same order if it was created)
