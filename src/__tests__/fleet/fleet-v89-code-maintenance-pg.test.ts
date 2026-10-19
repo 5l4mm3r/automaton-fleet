@@ -125,6 +125,11 @@ describe.skipIf(!PG_BIN)("v89 software maintenance on demonstrated scope (Postgr
     const page = await pub("svc_repo_requests", ["enquiry", token]);
     expect(page.installUrl).toBe("https://github.com/apps/automaton-fleet/installations/new");
     expect((page.requests as any[])[0]).toMatchObject({ repo: REPO, status: "requested", wording: expect.stringContaining("pull request to main") });
+    // With a request on file, any other access code, the wrong page kind or no code reveals nothing (2026-10-19: the
+    // service role's grant of svc_repo_requests, given live for the order page).
+    for (const [kind, tok] of [["enquiry", "0".repeat(64)], ["enquiry", token.slice(0, -1) + (token.endsWith("0") ? "1" : "0")], ["order", token], ["x", token], ["enquiry", null]] as const) {
+      expect(await pub("svc_repo_requests", [kind, tok]), `${kind} ${tok}`).toEqual({ ok: true, requests: [], installUrl: "https://github.com/apps/automaton-fleet/installations/new" });
+    }
     expect(await pub("svc_repo_consent", ["enquiry", token, auth, "acme/calc2", "Ada", "f".repeat(64)])).toMatchObject({ ok: false, code: "FLEET_REPO_MISMATCH" });
     expect(await pub("svc_repo_consent", ["enquiry", "0".repeat(64), auth, REPO, "Ada", "f".repeat(64)])).toMatchObject({ ok: false });
     expect(await pub("svc_repo_consent", ["enquiry", token, auth, REPO, "Ada Customer", "f".repeat(64)])).toMatchObject({ ok: true, status: "consented" });
