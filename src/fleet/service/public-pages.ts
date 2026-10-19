@@ -8,6 +8,7 @@
  *   GET  /order/<token>                     the buyer's order (v97: the checkout): what it buys (read from the files), the total,
  *                                           consent, PayPal's payment button, receipt, downloads, seller, support, refund rights
  *   GET  /order/<token>/preview/<n>         v97: the offer's preview image, by the order's access code
+ *   GET  /order/<token>?token=…&PayerID=…   v99: PayPal's return of an approving buyer → recorded, then the clean page ("processing")
  *   POST /order/<token>/pay                 v98: the buyer is ready to pay → PayPal (a link PayPal confirmed recently) or the page
  *                                           while custody reuses or replaces the PayPal order
  *   GET  /order/<token>/file/<delivery>/<n> a delivered file (30 days)
@@ -208,7 +209,17 @@ export class PublicPages {
         if (p.length === 3 && p[2] === "enquire" && isPost) return await this.enquire(req, res, p[1], origin, ref);
       }
       if (p[0] === "order" && TOKEN.test(p[1] ?? "")) {
-        if (p.length === 2 && !isPost) return await this.order(res, p[1]);
+        if (p.length === 2 && !isPost) {
+          // v99: PayPal returns an approving buyer here with its order id and the payer id: custody is asked to read the order at
+          // once and the clean page says "processing" until it has (the return alone is never payment).
+          const ret = /[?&]token=([A-Z0-9]{5,40})(?:&|$)/.exec(req.url ?? "")?.[1];
+          if (ret && /[?&]PayerID=[A-Za-z0-9]{5,40}(?:&|$)/.test(req.url ?? "")) {
+            await this.port.publicCall("svc_order_returned", [p[1], ret]);
+            res.writeHead(303, { location: `/order/${p[1]}`, "cache-control": "no-store", "referrer-policy": "no-referrer" }).end();
+            return;
+          }
+          return await this.order(res, p[1]);
+        }
         if (p.length === 4 && p[2] === "preview" && /^[1-4]$/.test(p[3]) && !isPost) return await this.orderPreview(res, p[1], Number(p[3]));
         if (p.length === 5 && p[2] === "file" && UUID.test(p[3]) && /^([1-9]|10)$/.test(p[4]) && !isPost) return await this.file(res, p[1], p[3], Number(p[4]));
         if (p.length === 3 && p[2] === "message" && isPost) return await this.message(req, res, "order", p[1], origin);
@@ -404,7 +415,7 @@ export class PublicPages {
     const statements = Array.isArray(c.statements) ? (c.statements as unknown[]).map(String) : [];
     const closed = ["refunded", "reversed", "cancelled"].includes(o.payment) || (!paid && ["expired", "cancelled", "failed"].includes(o.checkout));
     const askConsent = !c.recorded && !closed && statements.length > 0;
-    const confirming = !paid && (o.checkout === "approved" || o.checkout === "capture_pending");
+    const confirming = !paid && (o.checkout === "approved" || o.checkout === "capture_pending" || o.pay === "processing");
     const delivered = downloads.length > 0 || ["delivered", "fulfilled"].includes(o.status);
     const ref = esc(o.reference ?? "");
     const brand = off?.brand ? String(off.brand) : "";
@@ -415,7 +426,7 @@ export class PublicPages {
     else if (o.payment === "reversed") pill = `<span class="pill bad">Payment reversed</span>`;
     else if (closed) pill = `<span class="pill">Checkout closed</span>`;
     else if (paid) pill = `<span class="pill ok">${delivered ? (product ? "Paid · ready to download" : "Paid · delivered") : "Paid"}</span>`;
-    else if (confirming) pill = `<span class="pill warn">Confirming your payment</span>`;
+    else if (confirming) pill = `<span class="pill warn">Processing your payment</span>`;
     else pill = `<span class="pill warn">Not paid yet</span>`;
 
     let action = "";
@@ -430,6 +441,8 @@ export class PublicPages {
         : `<p>This checkout is no longer open. <strong>No payment was taken.</strong></p>`;
     } else if (paid) {
       action = "";
+    } else if (confirming) {
+      action = `<h3>Processing your payment</h3><p>You approved the payment on PayPal and we are confirming it with PayPal now — usually a few seconds. <strong>Please don't pay again.</strong> This page updates by itself.</p>`;
     } else if (o.pay === "preparing") {
       action = `<h3>Step 2 of 2 · Pay</h3><p>Opening a fresh PayPal checkout for you… this page refreshes by itself, usually within a few seconds. Nothing has been charged.</p>`;
     } else if (o.pay === "link" || o.pay === "button" || o.pay === "retry" || (!o.pay && o.checkout === "open" && o.approvalUrl)) {
@@ -444,8 +457,6 @@ export class PublicPages {
         + `<p class="small muted">Paid already? Reload this page to see your receipt.</p>`;
     } else if (o.checkout === "requested") {
       action = `<p>Preparing your PayPal checkout… this page refreshes by itself.</p>`;
-    } else if (confirming) {
-      action = `<p>PayPal has your approval and the payment is being confirmed. <strong>Please do not pay again.</strong> This page refreshes by itself.</p>`;
     }
 
     const stepNames = product ? ["Confirm", "Pay with PayPal", "Download"] : ["Confirm", "Pay with PayPal", "Delivery"];
@@ -488,7 +499,7 @@ export class PublicPages {
       + (!askConsent && c.recorded && statements.length ? `<div class="card"><h2>Your confirmation</h2><p class="muted small">Recorded ${esc(when(c.at))}</p><ul>${statements.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : "")
       + (o.paidAt ? `<script nonce="${nonce}">document.getElementById('print').addEventListener('click',function(){window.print()});</script>` : ""),
       null, { ...(paid || o.paidAt ? { nonce } : {}), paypalLogo: action.includes(PAYPAL_LOGO),
-        ...(o.pay === "preparing" && !askConsent ? { refreshS: 3 } : (o.checkout === "requested" && !o.pay) || confirming ? (askConsent ? {} : { refreshS: 4 }) : {}) });
+        ...((o.pay === "preparing" || o.pay === "processing") && !askConsent ? { refreshS: 3 } : (o.checkout === "requested" && !o.pay) || confirming ? (askConsent ? {} : { refreshS: 4 }) : {}) });
   }
 
   /** v97: what the order buys — the offer's promises, and what is inside its download, read from the file itself. */

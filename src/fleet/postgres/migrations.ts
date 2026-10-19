@@ -105,9 +105,10 @@ import { BROWSER_FUNCTIONS_V95, CODE_FUNCTIONS_V95, IDENTITY_FUNCTIONS_V95, V95_
 import { V96_SQL } from "./migrations-phase96.js";
 import { V97_SQL } from "./migrations-phase97.js";
 import { V98_SQL } from "./migrations-phase98.js";
+import { V99_SQL } from "./migrations-phase99.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 98;
+export const FLEET_PG_SCHEMA_VERSION = 99;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1301,6 +1302,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 96, name: "custody_refund_authority", sql: V96_SQL },
   { version: 97, name: "order_page_checkout", sql: V97_SQL },
   { version: 98, name: "paypal_order_lifecycle", sql: V98_SQL },
+  { version: 99, name: "paypal_return_processing", sql: V99_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1406,6 +1408,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_order_sample(text, text, integer)",
   // v98: the buyer is ready to pay — a fresh or reused PayPal order (custody creates it; the controller only records the request).
   "svc_order_pay(text, text)",
+  // v99: PayPal brought an approving buyer back — custody reads the order at once; the page says "processing".
+  "svc_order_returned(text, text)",
   // v79: a channel's attribution code carried onto an order / enquiry; the public outreach opt-out page.
   "svc_attribute(text, text, text)",
   "svc_outreach_optout(text, boolean)",

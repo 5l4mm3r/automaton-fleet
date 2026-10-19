@@ -8,7 +8,7 @@
  *      the total, the seller, support and refund rights; it asks the consent the law requires before any payment button;
  *   2. consent ticked and confirmed → PayPal's own gold button with PayPal's hosted logo, leading to the genuine
  *      paypal.com approval link (intercepted here: no real PayPal);
- *   3. back from PayPal while the payment is confirmed: "do not pay again", refreshing;
+ *   3. back from PayPal while the payment is confirmed: "processing — please don't pay again", refreshing;
  *   4. captured: the receipt (reference, amount, time, PayPal transaction id, seller); the download being prepared;
  *   5. delivered by the offer pass and the mail: the download button, the file itself;
  *   6. a closed checkout: "no payment was taken".
@@ -180,8 +180,8 @@ describe.skipIf(!PG_BIN || !CHROME)("v97: the customer's checkout in a real brow
       expect((await cx("cx_paypal_checkout_update", ["custody-executor", checkoutId, "approved", null, null, null])).ok).toBe(true);
       await p.goto(`${base}/order/${token}`);
       text = await p.innerText("body");
-      expect(text).toContain("Confirming your payment");
-      expect(text).toContain("Please do not pay again");
+      expect(text).toContain("Processing your payment");          // v99 wording
+      expect(text).toContain("Please don't pay again");
       expect(await p.$$("a.pp")).toHaveLength(0);
       expect(await p.$eval("meta[http-equiv=refresh]", (m) => m.getAttribute("content"))).toBe("4");
       await shots("3-confirming");

@@ -388,6 +388,46 @@ describe.skipIf(!PG_BIN)("v98: the PayPal order lifecycle (PostgreSQL + custody 
     expect(x.status).toBe(403);
   });
 
+  // v99: back from PayPal the buyer sees "processing" (never "not paid yet" or the Pay button); custody reads the order at once.
+  it("v99: PayPal's return → 'processing', captured within a pass; a return without approval goes back to the payment step; a foreign order id changes nothing", async () => {
+    const { checkoutId, token } = await order();
+    await worker.tick();
+    const [p] = await porders(checkoutId);
+    const back = (oid: string) => fetch(`${base}/order/${token}?token=${oid}&PayerID=PAYERBEA0001`, { redirect: "manual" });
+    // An order id that is not this checkout's current one: nothing recorded.
+    let r = await back("OSOMEOTHER0001");
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe(`/order/${token}`);
+    expect((await checkoutRow(checkoutId)).returned_at).toBeNull();
+    // Approved at PayPal, back on the page: processing, no Pay button, refreshing; one pass captures it.
+    pp.approve(p.paypal_order_id);
+    r = await back(p.paypal_order_id);
+    expect(r.status).toBe(303);
+    let html = await (await fetch(`${base}/order/${token}`)).text();
+    expect(html).toContain("Processing your payment");
+    expect(html).toContain("Please don&#39;t pay again".replace("&#39;", "'"));
+    expect(html).not.toContain("Not paid yet");
+    expect(html).not.toContain("/pay\"");
+    expect(html).not.toContain("checkoutnow");
+    expect(html).toContain('http-equiv="refresh" content="3"');
+    await back(p.paypal_order_id);                                  // a reload of PayPal's return URL: still one request
+    await worker.payTick();
+    expect((await checkoutRow(checkoutId)).status).toBe("captured");
+    html = await (await fetch(`${base}/order/${token}`)).text();
+    expect(html).toContain("Receipt");
+    expect(html).not.toContain("Processing your payment");
+    // A return without approval (the buyer did not finish at PayPal): processing, then back to the payment step — never "paid".
+    const second = await order();
+    await worker.tick();
+    const [q] = await porders(second.checkoutId);
+    await fetch(`${base}/order/${second.token}?token=${q.paypal_order_id}&PayerID=PAYERBEA0001`, { redirect: "manual" });
+    expect(await pageOf(second.token)).toMatchObject({ pay: "processing" });
+    await worker.payTick();                                          // PayPal: still CREATED → reused, the step is offered again
+    const pg2 = await pageOf(second.token);
+    expect(pg2).toMatchObject({ pay: "link", payment: "awaiting_payment" });
+    expect(pp.captures.filter((c) => c.order === q.paypal_order_id)).toHaveLength(0);
+  });
+
   // Chrome applies the page's form-action to the redirect after a form POST: the Pay button must reach PayPal in a real browser.
   it.skipIf(!CHROME)("a real browser: Pay on a stale link opens a fresh checkout, then reaches PayPal; a fresh one goes straight there", async () => {
     const { checkoutId, token } = await order();

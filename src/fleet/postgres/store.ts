@@ -2415,6 +2415,8 @@ export const PUBLIC_PAGE_FUNCTIONS = ["svc_offer_page", "svc_offer_preview", "sv
   "svc_order_sample",
   // v98: the buyer is ready to pay.
   "svc_order_pay",
+  // v99: the buyer back from PayPal.
+  "svc_order_returned",
   // v79: a channel's attribution code on the order / enquiry it brought; the outreach opt-out page.
   "svc_attribute", "svc_outreach_optout",
   // v80: search discovery (sitemap, IndexNow key) — read only.
