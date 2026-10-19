@@ -37,6 +37,9 @@ import { runSandboxed } from "../../fleet/founder/exec-sandbox.js";
 import { QA_INSPECTOR_VERSION } from "../../fleet/founder/qa/inspector.js";
 
 const PG_BIN = findPgBin();
+// fleet-qa-3 opens spreadsheets in the office application; on a host without one it says so (two warnings), never a silent pass.
+const RENDERER = ["/usr/bin/soffice", "/usr/bin/libreoffice"].some((p) => fs.existsSync(p));
+const SHEET_ISSUES = RENDERER ? [] : [expect.stringMatching(/^WARN sheet_as_displayed: not opened in an office application/), expect.stringMatching(/^WARN sheet_render: not rendered/)];
 const DEV_TOOLS = path.join(os.homedir(), ".cache/automaton-fleet-tools/dev");
 const HAVE_TOOLS = fs.existsSync(path.join(DEV_TOOLS, "site")) && fs.existsSync(path.join(DEV_TOOLS, "bin/fleet-python"));
 const SALE_READY = path.join(path.dirname(new URL(import.meta.url).pathname), "fixtures", "sale-ready");
@@ -180,7 +183,7 @@ describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: sale-ready prod
       { name: "supplied", file: paths[0], sheet: "Inputs", inputs: {}, expect: { "Forecast!C16": 44500, "Forecast!D16": 44280, "Forecast!F15": 2220, "Forecast!G7": "Below buffer" } },
     ];
     const ok = await json("deliverable", { op: "inspect", args: { paths, cases } });
-    expect(ok, JSON.stringify(ok)).toMatchObject({ ok: true, files: [{ type: "xlsx", ok: true, issues: [] }, { type: "pdf", ok: true, issues: [] }] });
+    expect(ok, JSON.stringify(ok)).toMatchObject({ ok: true, files: [{ type: "xlsx", ok: true, issues: SHEET_ISSUES }, { type: "pdf", ok: true, issues: [] }] });
     const deliverables = ["12-month cash-flow workbook (.xlsx) with a Start here sheet", "Below-buffer warning for every month", "Quick-start guide with a worked example (PDF)"];
     const o = await json("offer", { op: "create", args: { venture: "sheets", kind: "product", title: "12-month cash-flow forecast for sole traders",
       summary: "See your bank balance month by month and get warned before it drops below your buffer.",
@@ -218,7 +221,7 @@ describe.skipIf(!PG_BIN || !HAVE_TOOLS)("v76 e2e demonstrations: sale-ready prod
     const cases = [{ name: "opening-600", file: "course/13-week-forecast.xlsx", sheet: "Forecast", inputs: { I3: 600 },
       expect: { E16: 400, F4: "Below buffer", F5: "OK", F6: "Below buffer", I8: -250 } }];
     const ok = await json("deliverable", { op: "inspect", args: { paths: ["deliver/cash-flow-course.zip", "course/13-week-forecast.xlsx"], cases } });
-    expect(ok, JSON.stringify(ok)).toMatchObject({ ok: true, files: [{ type: "zip", ok: true, issues: [] }, { type: "xlsx", ok: true, issues: [] }] });
+    expect(ok, JSON.stringify(ok)).toMatchObject({ ok: true, files: [{ type: "zip", ok: true, issues: [] }, { type: "xlsx", ok: true, issues: SHEET_ISSUES }] });
     expect(ok.files[0].facts.nested.map((n: any) => n.name)).toEqual(["cash-flow-course/01-why-cash-flow.pdf", "cash-flow-course/02-forecasting.pdf",
       "cash-flow-course/03-acting-early.pdf", "cash-flow-course/13-week-forecast.xlsx"]);
     const deliverables = ["Three illustrated PDF lessons with exercises and answers", "13-week cash-flow forecast workbook (.xlsx)"];

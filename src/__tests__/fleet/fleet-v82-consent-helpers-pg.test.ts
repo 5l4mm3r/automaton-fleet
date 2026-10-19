@@ -29,7 +29,7 @@ const PG_BIN = findPgBin();
 const sha = (b: Buffer | string) => crypto.createHash("sha256").update(b).digest("hex");
 /** A review's automated part and criteria, as in the v76 suite (importing that file would also run its suite). */
 const autoReport = (files: Array<{ name: string; bytes: Buffer }>) => ({
-  inspector: "fleet-qa-1", ok: true,
+  inspector: "fleet-qa-3", ok: true,
   files: files.map((f) => ({ path: f.name, sha256: sha(f.bytes), sizeBytes: f.bytes.length, detectedType: "pdf", ok: true, checks: [{ id: "nonempty", status: "pass", detail: "ok" }] })),
 });
 const criteria = () => [

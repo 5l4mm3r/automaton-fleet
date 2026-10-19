@@ -1,11 +1,13 @@
 /**
- * Deliverable QA inspector (fleet-qa-2; fleet-qa-1 plus presentations, office rendering, OCR, EPUB package checks): a Python program that runs INSIDE the founder's exec sandbox, under the
+ * Deliverable QA inspector (fleet-qa-3: fleet-qa-2 plus spreadsheets opened in the office application — CSV and XLSX cells read as
+ * the customer sees them: error values and date columns showing serial numbers fail, and sheets are rendered to page images;
+ * fleet-qa-2: fleet-qa-1 plus presentations, office rendering, OCR, EPUB package checks): a Python program that runs INSIDE the founder's exec sandbox, under the
  * agent toolchain (scripts/fleet-agent-tools.sh; runSandboxed with `toolsDir`), and checks customer deliverables
  * before they ship — XLSX, DOCX, PDF, images, SVG, ZIP bundles, EPUB, CSV/TXT/MD.
  *
  * Usage inside the sandbox: `python3 <script> <spec.json>`, spec = {"files": ["rel/path", ...], "cases": [...],
  * "renderDir": ".tmp/qa-render"}. It prints ONE JSON line on stdout (library noise is swallowed):
- *   {"inspector":"fleet-qa-2","files":[{path, sha256, sizeBytes, detectedType, extensionMatches, ok,
+ *   {"inspector":"fleet-qa-3","files":[{path, sha256, sizeBytes, detectedType, extensionMatches, ok,
  *     checks:[{id, status: pass|warn|fail, detail}], facts:{...}}], "ok": bool, "error"?: string}
  *
  * What it checks:
@@ -35,13 +37,14 @@
  * placeholder opener; Python spells the backtick as chr(96).
  */
 
-export const QA_INSPECTOR_VERSION = "fleet-qa-2";
+export const QA_INSPECTOR_VERSION = "fleet-qa-3";
 
 export const QA_INSPECTOR_PY = String.raw`
 import csv, hashlib, io, json, os, re, shutil, signal, stat, subprocess, sys, time, traceback, warnings, zipfile
 import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
 
-VERSION = "fleet-qa-2"
+VERSION = "fleet-qa-3"
 MAX_FILES, MAX_BYTES, ZIP_EXTRACT_CAP, NESTED_MAX = 20, 100 * 1024 * 1024, 200 * 1024 * 1024, 20
 BUDGET_S = 100.0
 T0 = time.monotonic()
@@ -992,6 +995,104 @@ def inspect_zip(r, path, render_dir, tag, depth):
             x.pop("failDetails", None)
 
 
+# ---------------------------------------------------------------- spreadsheets as the customer's application shows them (fleet-qa-3)
+# A CSV carries no cell formats: a formula that computes a date (=D2+365) shows the date's serial number (46266) when the
+# customer opens it. An .xlsx shows what its number formats say. Both are opened in the office application and the cells
+# are read as displayed: error values, and date columns showing numbers, fail.
+
+DATE_HEADER = re.compile(r"\b(date|dated|due|expir\w*|renew\w*|deadline|until|issued|earliest|anniversary|(next|last)\s+(\w+\s+)?(increase|review|check|inspection|service|renewal|visit))\b", re.I)
+MONEY_HEADER = re.compile(r"amount|cost|price|fee|rent\b|total|balance|paid|owed|deposit\s+amount|£|\$|€|gbp|usd|eur", re.I)
+SERIAL = re.compile(r"^-?\d{5}(\.\d+)?$")
+SHOWN_ERROR = re.compile(r"^(#REF!|#DIV/0!|#NAME\?|#VALUE!|#N/A|#NUM!|#NULL!|Err:\d{3}|###+)$")
+
+
+class _Cells(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tables, self.row, self.cell, self.span = [], None, None, 1
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self.tables.append([])
+        elif tag == "tr" and self.tables:
+            self.row = []
+            self.tables[-1].append(self.row)
+        elif tag in ("td", "th") and self.row is not None:
+            span = dict(attrs).get("colspan") or "1"
+            self.cell, self.span = [], int(span) if span.isdigit() else 1
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self.cell is not None and self.row is not None:
+            self.row.append(" ".join("".join(self.cell).split()))
+            self.row.extend([""] * (self.span - 1))
+            self.cell = None
+
+    def handle_data(self, data):
+        if self.cell is not None:
+            self.cell.append(data)
+
+
+def displayed_cells(html_text):
+    p = _Cells()
+    p.feed(html_text)
+    return p.tables
+
+
+def displayed_problems(tables):
+    """(error cells, date columns showing numbers) in the tables as displayed."""
+    errors, serials = [], []
+    for ti, rows in enumerate(tables):
+        hi = next((i for i, row in enumerate(rows) if any(c for c in row)), None)
+        if hi is None:
+            continue
+        header = rows[hi]
+        for ri in range(hi + 1, len(rows)):
+            for ci, shown in enumerate(rows[ri]):
+                where = "table %d row %d" % (ti + 1, ri + 1)
+                if SHOWN_ERROR.match(shown):
+                    errors.append("%s column %r shows %s" % (where, header[ci] if ci < len(header) else ci + 1, shown))
+                    continue
+                h = header[ci] if ci < len(header) else ""
+                if h and DATE_HEADER.search(h) and not MONEY_HEADER.search(h) and SERIAL.match(shown) and 20000 <= float(shown) <= 80000:
+                    serials.append("%s column %r shows %s instead of a date" % (where, h, shown))
+    return errors, serials
+
+
+def sheet_as_displayed(r, path, render_dir, tag, label):
+    exe = office_renderer()
+    if not exe:
+        r.facts["displayedChecked"] = False
+        r.check(label + "_as_displayed", "warn", "not opened in an office application (none installed): how dates and errors look to the customer was not checked")
+        return
+    if left() < 20:
+        r.check(label + "_as_displayed", "warn", "inspection time budget too low to open it in the office application")
+        return
+    out_dir = os.path.join(render_dir, tag + "-cells")
+    os.makedirs(out_dir, exist_ok=True)
+    home = os.path.join(render_dir, ".office-home")
+    os.makedirs(home, exist_ok=True)
+    try:
+        p = subprocess.run([exe, "--headless", "--norestore", "--nolockcheck", "--convert-to", "html", "--outdir", out_dir, path],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90, env={"HOME": home, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TMPDIR": home})
+    except subprocess.TimeoutExpired:
+        r.check(label + "_as_displayed", "warn", "opening it in the office application took longer than 90 s and was stopped")
+        return
+    html = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0] + ".html")
+    if p.returncode != 0 or not os.path.exists(html):
+        r.check(label + "_as_displayed", "warn", "the office application could not open the file (exit %s)" % p.returncode)
+        return
+    with open(html, encoding="utf-8", errors="replace") as f:
+        tables = displayed_cells(f.read())
+    errors, serials = displayed_problems(tables)
+    r.facts["displayedChecked"] = True
+    r.facts["displayedTables"] = len(tables)
+    r.check(label + "_displayed_errors", "fail" if errors else "pass",
+            ("error values shown in the office application: " + "; ".join(errors[:10])) if errors else "no error values shown")
+    r.check(label + "_displayed_dates", "fail" if serials else "pass",
+            ("; ".join(serials[:10]) + " — dates shown as numbers in the office application (a CSV formula result has no date format: write the date itself, or ship an .xlsx with date formats)")
+            if serials else "date columns show dates")
+
+
 # ---------------------------------------------------------------- driver
 
 def inspect_file(rel, render_dir, cases, depth=0, label=None):
@@ -1038,6 +1139,8 @@ def inspect_file(rel, render_dir, cases, depth=0, label=None):
     try:
         if kind == "xlsx":
             inspect_xlsx(r, real, cases)
+            sheet_as_displayed(r, real, render_dir, tag, "sheet")
+            render_office(r, real, render_dir, tag, "sheet")
         elif kind == "docx":
             RENDER_DIR_FOR_DOCX[0], TAG_FOR_DOCX[0] = render_dir, tag
             inspect_docx(r, real)
@@ -1057,6 +1160,8 @@ def inspect_file(rel, render_dir, cases, depth=0, label=None):
         elif kind == "text":
             with open(real, "rb") as f:
                 inspect_text(r, real, f.read())
+            if ext == ".csv":
+                sheet_as_displayed(r, real, render_dir, tag, "csv")
         else:
             r.check("content", "warn", "no content checks for %s" % kind)
     except Budget:

@@ -11,7 +11,7 @@ export async function reviewOrderFiles(R: EconomyRegistry, who: Founder, orderId
   const f = files.map((x) => ({ name: x.fileName, bytes: Buffer.from(x.contentB64, "base64") }));
   const r = await R.econ(who, "review.record", { subject: "order", orderId, verdict: "pass",
     files: f.map((x) => ({ name: x.name, sha256: sha(x.bytes), sizeBytes: x.bytes.length })),
-    automated: { inspector: "fleet-qa-1", ok: true, files: f.map((x) => ({ path: x.name, sha256: sha(x.bytes), sizeBytes: x.bytes.length, detectedType: "pdf", ok: true,
+    automated: { inspector: "fleet-qa-3", ok: true, files: f.map((x) => ({ path: x.name, sha256: sha(x.bytes), sizeBytes: x.bytes.length, detectedType: "pdf", ok: true,
       checks: [{ id: "nonempty", status: "pass", detail: "ok" }] })) },
     criteria: [{ criterion: "Matches what the buyer ordered", met: true, evidence: "compared the file with the order" },
       { criterion: "The file opens and is complete", met: true, evidence: "opened it; every section present" },

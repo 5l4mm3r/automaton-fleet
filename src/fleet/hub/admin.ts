@@ -151,6 +151,13 @@ export class PgHubAdmin {
   refundAuthorities() {
     return this.one(`SELECT fleet_refund_authorities_json(false) AS r`);
   }
+  /** v96: hold one offer (not sold publicly; accepted work continues) / release it. The agent is told. */
+  offerHold(slug: string, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_offer_hold($1, $2, $3) AS r`, [slug, reason, actor]);
+  }
+  offerRelease(slug: string, reason: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_offer_release($1, $2, $3) AS r`, [slug, reason, actor]);
+  }
   /** v59: refund a sale's buyer (all that is still refundable when amountMinor is null). */
   orderRefund(orderId: string, amountMinor: number | null, reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_order_refund($1, $2, $3, $4) AS r`, [orderId, amountMinor, reason, actor]);

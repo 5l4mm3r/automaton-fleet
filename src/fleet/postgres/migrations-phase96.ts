@@ -20,11 +20,21 @@
  *    is ever bound beyond a limit.
  * 3. OWNER PROOF. A refund, reversal or fee on the owner's own proof purchase is owner capital (`owner_proof_return`), so
  *    it is no longer held from the agent's spendable cash while in flight (row 21). Ordinary sales are unchanged.
+ * 4. PRODUCT QUALITY. Reviews by inspector fleet-qa-3 (spreadsheets opened in the office application, as the customer sees
+ *    them) are accepted. A product is SOLD PUBLICLY only on a passing review by a current inspector (QA_SALE_INSPECTORS)
+ *    of its current files, and when no owner hold is on it: the offer page shows it unavailable, the buy path refuses, the
+ *    sitemap and search notifications leave it out, and the agent's offer view says why (`saleBlock`). Publishing a
+ *    product needs such a review. Work already accepted (paid orders, their delivery and revisions) is unaffected. The
+ *    owner can hold one offer (and release it) without closing sales or holding the agent; the agent is told.
  */
 import { V51_SQL } from "./migrations-phase51.js";
 import { V59_SQL } from "./migrations-phase59.js";
 import { V77_SQL } from "./migrations-phase77.js";
+import { V76_SQL } from "./migrations-phase76.js";
+import { V78_SQL } from "./migrations-phase78.js";
 import { V80_SQL } from "./migrations-phase80.js";
+import { V82_SQL } from "./migrations-phase82.js";
+import { V85_SQL, QA_INSPECTOR_VERSIONS_V85 } from "./migrations-phase85.js";
 import { restate as restateRaw } from "./migrations-phase42.js";
 
 const restate = (src: string, name: string, edits: Array<[string, string]>) => restateRaw(src, name, edits.map(([a, b]) => [a, b.replace(/\$/g, "$$$$")] as [string, string]));
@@ -37,8 +47,12 @@ export const ORDER_AUTHORITY_MAX_HOURS = 168;
 export const STANDING_AUTHORITY_MAX_HOURS = 8760;
 export const EVENT_ROUTES_V96 = Object.freeze({
   P1_HIGH: ["refund_awaiting_authority"],
-  P2_IMPORTANT: ["refund_authority_granted", "refund_authority_ended"],
+  P2_IMPORTANT: ["refund_authority_granted", "refund_authority_ended", "offer_held", "offer_released"],
 } as const);
+/** v96: fleet-qa-3 reviews are accepted (earlier ones stay valid records). */
+export const QA_INSPECTOR_VERSIONS_V96 = [...QA_INSPECTOR_VERSIONS_V85, "fleet-qa-3"] as const;
+/** v96: the inspectors whose passing review lets a product be sold publicly. */
+export const QA_SALE_INSPECTORS = ["fleet-qa-3"] as const;
 
 const WORKER = `IF p_worker IS NULL OR p_worker !~ '^[a-z0-9-]{3,40}$' THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: worker name'; END IF;`;
 const OWNER_ACTOR = `IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
@@ -90,6 +104,36 @@ const EVENT_ROUTE = restate(V80_SQL, "fleet_event_route", [
 ]);
 
 void V77_SQL;
+
+// ── 4. Product quality ──
+const REVIEW_RECORD = restate(V85_SQL, "fleet_econ_review_record", [
+  [`NOT IN (${q(QA_INSPECTOR_VERSIONS_V85)})`, `NOT IN (${q(QA_INSPECTOR_VERSIONS_V96)})`],
+]);
+const OFFER_BUY = restate(V82_SQL, "svc_offer_buy", [
+  [`  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_OFFER_UNAVAILABLE'); END IF;`,
+   `  IF NOT FOUND OR fleet_offer_sale_block(o) IS NOT NULL THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_OFFER_UNAVAILABLE'); END IF;`],
+]);
+const PUBLIC_JSON = restate(V78_SQL, "fleet_offer_public_json", [
+  [`'available', o.status = 'published' AND`, `'available', o.status = 'published' AND fleet_offer_sale_block(o) IS NULL AND`],
+]);
+const SITEMAP = restate(V80_SQL, "svc_sitemap", [
+  [`FROM fleet_offers WHERE status = 'published'), '[]'::jsonb)`, `FROM fleet_offers o WHERE o.status = 'published' AND fleet_offer_sale_block(o) IS NULL), '[]'::jsonb)`],
+]);
+const INDEXNOW = restate(V80_SQL, "chx_indexnow_due", [
+  [`        WHERE o.status = 'published' AND (p.offer_id IS NULL`, `        WHERE o.status = 'published' AND fleet_offer_sale_block(o) IS NULL AND (p.offer_id IS NULL`],
+]);
+const PUBLISH = restate(V78_SQL, "fleet_econ_offer_publish", [
+  [`    IF r.files_digest <> fleet_files_digest(v_files) THEN RAISE EXCEPTION 'FLEET_REVIEW_STALE: the offer''s files are not the files that review covered; review the current files'; END IF;`,
+   `    IF r.files_digest <> fleet_files_digest(v_files) THEN RAISE EXCEPTION 'FLEET_REVIEW_STALE: the offer''s files are not the files that review covered; review the current files'; END IF;
+    -- v96: a product is sold on a review by a current inspector (it opens spreadsheets as the customer sees them).
+    IF r.inspector NOT IN (${q(QA_SALE_INSPECTORS)}) THEN
+      RAISE EXCEPTION 'FLEET_REVIEW_INSPECTOR: that review was made by %, which no longer qualifies a product for sale; inspect the current files (deliverable inspect), fix what fails, review them again and publish with that review', r.inspector;
+    END IF;`],
+]);
+const OFFER_JSON = restate(V76_SQL, "fleet_offer_json", [
+  [`'filesVersion', o.files_version, 'reviewId', o.review_id,`, `'filesVersion', o.files_version, 'reviewId', o.review_id,
+    'saleBlock', CASE WHEN o.status = 'published' THEN fleet_offer_sale_block(o) END, 'heldAt', o.held_at, 'heldReason', o.held_reason,`],
+]);
 
 export const V96_SQL = `
 -- ═══ 1. Refund authorities ═══
@@ -307,7 +351,75 @@ END $$;
 -- ═══ 3. The owner's proof purchase never holds the agent's cash (row 21) ═══
 ${AGENT_EXPOSURE}
 
--- ═══ 4. Status and routing ═══
+-- ═══ 4. Product quality: sold publicly only on a current inspector's pass of the current files, and not held ═══
+ALTER TABLE fleet_artifact_reviews DROP CONSTRAINT fleet_artifact_reviews_inspector_check;
+ALTER TABLE fleet_artifact_reviews ADD CONSTRAINT fleet_artifact_reviews_inspector_check CHECK (inspector IN (${q(QA_INSPECTOR_VERSIONS_V96)}));
+${REVIEW_RECORD}
+
+ALTER TABLE fleet_offers ADD COLUMN held_at timestamptz;
+ALTER TABLE fleet_offers ADD COLUMN held_by text CHECK (held_by IS NULL OR held_by ~ '^operator:[A-Za-z0-9._-]{1,64}$');
+ALTER TABLE fleet_offers ADD COLUMN held_reason text CHECK (held_reason IS NULL OR length(held_reason) BETWEEN 3 AND 300);
+ALTER TABLE fleet_offers ADD CONSTRAINT fleet_offers_hold CHECK ((held_at IS NULL) = (held_by IS NULL) AND (held_at IS NULL) = (held_reason IS NULL));
+
+-- Why a published offer is not sold publicly now (NULL: it is). Services keep their sample-review rule (v76).
+CREATE FUNCTION fleet_offer_sale_block(o fleet_offers) RETURNS text LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT CASE
+    WHEN o.status <> 'published' THEN 'not published'
+    WHEN o.held_at IS NOT NULL THEN 'held by the owner: ' || o.held_reason
+    WHEN o.kind <> 'product' THEN NULL
+    WHEN r.review_id IS NULL OR r.verdict <> 'pass' THEN 'no passing review'
+    WHEN r.files_digest <> fleet_files_digest(fleet_offer_deliverables(o.offer_id)) THEN 'its files changed since the review'
+    WHEN r.inspector NOT IN (${q(QA_SALE_INSPECTORS)}) THEN 'its review was made by ' || r.inspector || ', which no longer qualifies a product for sale: inspect the current files (deliverable inspect; spreadsheets are now opened as the customer sees them), fix what fails, review again and publish with that review'
+  END
+  FROM (SELECT 1) one LEFT JOIN fleet_artifact_reviews r ON r.review_id = o.review_id
+$$;
+
+${OFFER_BUY}
+
+${PUBLIC_JSON}
+
+${SITEMAP}
+
+${INDEXNOW}
+
+${PUBLISH}
+
+${OFFER_JSON}
+
+-- Owner: hold one offer (not sold publicly; work already accepted continues) and release it. The agent is told.
+CREATE FUNCTION fleet_admin_offer_hold(p_slug text, p_reason text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE o fleet_offers;
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  IF p_reason IS NULL OR length(trim(p_reason)) NOT BETWEEN 3 AND 300 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: a reason (3..300 characters) the agent will read'; END IF;
+  SELECT * INTO o FROM fleet_offers WHERE slug = p_slug FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: offer slug'; END IF;
+  IF o.held_at IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'replay', true, 'heldAt', o.held_at, 'heldReason', o.held_reason); END IF;
+  UPDATE fleet_offers SET held_at = now(), held_by = p_actor, held_reason = left(fleet_scrub(trim(p_reason)), 300) WHERE offer_id = o.offer_id RETURNING * INTO o;
+  PERFORM fleet_event('offer_held', o.agent_id, p_actor, jsonb_build_object('offerId', o.offer_id, 'slug', o.slug, 'reason', o.held_reason));
+  PERFORM fleet_spend_review_notice(o.agent_id, 'The owner has held your offer "' || o.title || '" (' || o.slug || '): it is not sold publicly until released. Reason: '
+    || o.held_reason || '. Orders already paid continue as normal (deliver, support, revise, refund).');
+  RETURN jsonb_build_object('ok', true, 'heldAt', o.held_at, 'saleBlock', fleet_offer_sale_block(o));
+END $$;
+
+CREATE FUNCTION fleet_admin_offer_release(p_slug text, p_reason text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE o fleet_offers;
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  SELECT * INTO o FROM fleet_offers WHERE slug = p_slug FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: offer slug'; END IF;
+  IF o.held_at IS NULL THEN RETURN jsonb_build_object('ok', true, 'replay', true, 'saleBlock', fleet_offer_sale_block(o)); END IF;
+  UPDATE fleet_offers SET held_at = NULL, held_by = NULL, held_reason = NULL WHERE offer_id = o.offer_id RETURNING * INTO o;
+  PERFORM fleet_event('offer_released', o.agent_id, p_actor, jsonb_build_object('offerId', o.offer_id, 'slug', o.slug, 'note', left(COALESCE(p_reason, ''), 300)));
+  PERFORM fleet_spend_review_notice(o.agent_id, 'The owner released the hold on your offer "' || o.title || '" (' || o.slug || ').'
+    || COALESCE(' It is still not sold publicly: ' || fleet_offer_sale_block(o) || '.', ''));
+  RETURN jsonb_build_object('ok', true, 'saleBlock', fleet_offer_sale_block(o));
+END $$;
+
+-- ═══ 5. Status and routing ═══
 ${CUSTODY_STATUS}
 
 ${EVENT_ROUTE}

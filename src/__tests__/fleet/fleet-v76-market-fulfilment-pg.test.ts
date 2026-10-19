@@ -34,7 +34,7 @@ const sha = (b: Buffer | string) => crypto.createHash("sha256").update(b).digest
 
 /** A review's automated part as the runtime's inspector reports it (shape only: the registry validates it, the runtime produces it). */
 export const autoReport = (files: Array<{ name: string; bytes: Buffer }>, fail: string | null = null) => ({
-  inspector: "fleet-qa-1", ok: !fail,
+  inspector: "fleet-qa-3", ok: !fail,
   files: files.map((f, i) => ({ path: f.name, sha256: sha(f.bytes), sizeBytes: f.bytes.length, detectedType: "pdf", ok: !(fail && i === 0),
     checks: [{ id: "nonempty", status: "pass", detail: "ok" }, ...(fail && i === 0 ? [{ id: fail, status: "fail", detail: "found" }] : [])] })),
 });
@@ -521,5 +521,45 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     const first = shared.outbox.find((m) => m.to.includes("buyer@example.test") && /Ledgerline/.test(m.body))!;
     expect(first.replyTo).toBe(sheetsAddr);
     expect(first.body).not.toMatch(/Coursewise/);
+  });
+
+  it("v96: a product is sold publicly only on a current inspector's pass of its current files, and while the owner has not held it", async () => {
+    const off = (await R.econ(F, "offer.list", {})).offers.find((x: any) => x.kind === "product" && x.status === "published");
+    expect(off, "a published product from the earlier tests").toBeTruthy();
+    expect(off.saleBlock).toBeUndefined();
+    expect((await pub("svc_offer_page", [off.slug])).offer.available).toBe(true);
+    // As production on 2026-10-19: published on a review by an inspector that no longer qualifies a product for sale.
+    const deliverables = off.files.filter((f: any) => f.role === "deliverable");
+    const fake = deliverables.map((f: any) => ({ name: f.fileName, sha256: f.sha256, sizeBytes: f.sizeBytes }));
+    const old = await R.econ(F, "review.record", { subject: "offer", offerId: off.offerId, files: fake, criteria: criteria(), verdict: "pass",
+      automated: { inspector: "fleet-qa-2", ok: true, files: fake.map((f: any) => ({ path: f.name, sha256: f.sha256, sizeBytes: f.sizeBytes, detectedType: "pdf", ok: true,
+        checks: [{ id: "nonempty", status: "pass", detail: "ok" }] })) } });
+    expect(old, JSON.stringify(old)).toMatchObject({ ok: true, verdict: "pass" });
+    expect(await R.econ(F, "offer.publish", { offerId: off.offerId, reviewId: old.reviewId })).toMatchObject({ ok: false, code: "FLEET_REVIEW_INSPECTOR" });
+    const current = off.reviewId;
+    await R.q(`UPDATE fleet.fleet_offers SET review_id = $2 WHERE offer_id = $1`, [off.offerId, old.reviewId]);   // a pre-v96 publication
+    const blocked = (await R.econ(F, "offer.list", {})).offers.find((x: any) => x.offerId === off.offerId);
+    expect(blocked).toMatchObject({ status: "published", saleBlock: expect.stringContaining("its review was made by fleet-qa-2") });
+    expect((await pub("svc_offer_page", [off.slug])).offer.available).toBe(false);
+    expect(await pub("svc_offer_buy", [off.slug, sha("buyer-ip-9"), BUYER_CONSENT_VERSION])).toMatchObject({ ok: false, code: "FLEET_OFFER_UNAVAILABLE" });
+    expect((await pub("svc_sitemap", [])).offers.map((x: any) => x.slug)).not.toContain(off.slug);
+    await R.q(`UPDATE fleet.fleet_offers SET review_id = $2 WHERE offer_id = $1`, [off.offerId, current]);
+    expect((await pub("svc_offer_page", [off.slug])).offer.available).toBe(true);
+    // The owner holds this one offer (sales stay open, the agent keeps working); the agent is told; then releases it.
+    const notices = () => R.one(`(SELECT count(*) FROM fleet.fleet_agent_messages WHERE agent_id = $1 AND author = 'fleet_control')`, [F.id]).then(Number);
+    const n0 = await notices();
+    expect(await R.code(R.q(`SELECT fleet.fleet_admin_offer_hold($1, 'dates show as numbers', 'agent')`, [off.slug]))).toBe("FLEET_APPROVAL_REQUIRED");
+    expect(await R.one(`fleet.fleet_admin_offer_hold($1, 'dates show as numbers in LibreOffice', $2)`, [off.slug, OWNER])).toMatchObject({ ok: true,
+      saleBlock: "held by the owner: dates show as numbers in LibreOffice" });
+    expect(await R.one(`fleet.fleet_admin_offer_hold($1, 'again', $2)`, [off.slug, OWNER])).toMatchObject({ ok: true, replay: true });
+    expect(await notices()).toBe(n0 + 1);
+    expect(await events("offer_held")).toBe(1);
+    expect((await pub("svc_offer_page", [off.slug])).offer.available).toBe(false);
+    expect(await pub("svc_offer_buy", [off.slug, sha("buyer-ip-9"), BUYER_CONSENT_VERSION])).toMatchObject({ ok: false, code: "FLEET_OFFER_UNAVAILABLE" });
+    expect((await R.q(`SELECT fleet.fleet_sales_open() AS o`))[0].o).toBe(true);
+    expect(await R.one(`fleet.fleet_admin_offer_release($1, 'fixed', $2)`, [off.slug, OWNER])).toMatchObject({ ok: true });
+    expect(await notices()).toBe(n0 + 2);
+    expect((await pub("svc_offer_page", [off.slug])).offer.available).toBe(true);
+    expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
 });

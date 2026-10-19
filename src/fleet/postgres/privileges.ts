@@ -1383,7 +1383,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // owner nowhere: they are the agent's commercial decisions); enquiries and buyer messages by the public intake and the
     // agent's own replies, quotes and declines (and the reaper's expiry / follow-up).
     fleet_artifact_reviews: new Set(["fleet_econ_review_record"]),
-    fleet_offers: new Set(["fleet_econ_offer_create", "fleet_econ_offer_update", "fleet_econ_offer_file", "fleet_econ_offer_publish", "fleet_econ_offer_status"]),
+    // v96: the owner may hold one offer (and release it); everything else about an offer is the agent's.
+    fleet_offers: new Set(["fleet_econ_offer_create", "fleet_econ_offer_update", "fleet_econ_offer_file", "fleet_econ_offer_publish", "fleet_econ_offer_status",
+      "fleet_admin_offer_hold", "fleet_admin_offer_release"]),
     fleet_offer_files: new Set(["fleet_econ_offer_file"]),
     fleet_offer_enquiries: new Set(["svc_attribute", "svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline", "svc_offer_tick"]),
     fleet_customer_messages: new Set(["svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline",
