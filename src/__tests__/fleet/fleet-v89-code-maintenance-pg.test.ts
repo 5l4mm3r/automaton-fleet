@@ -87,12 +87,17 @@ describe.skipIf(!PG_BIN)("v89 software maintenance on demonstrated scope (Postgr
   const builder = () => new BuildWorker(bp, { proxyPort: null });
   let k = 0;
   const idem = () => `code-k-${String(++k).padStart(4, "0")}`;
-  const pub = async (fn: string, args: unknown[]) => R.store.publicCall(fn as never, args);
+  // As the controller calls them: the SERVICE role (2026-10-19: the v89 functions were never granted to it, so every live
+  // order and enquiry page failed while this test, calling through the owner's pool, passed).
+  let svc: pg.Pool;
+  const pub = async (fn: string, args: unknown[]) =>
+    (await svc.query(`SELECT ${fn}(${args.map((_, i) => `$${i + 1}`).join(", ")}) AS r`, args)).rows[0].r as Record<string, any>;
 
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 1, allocationCents: 10_000 });
     [F] = R.founders;
     await R.store.grantServiceRole();
+    svc = new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 2, options: "-c search_path=fleet" });
     gw = new PgCodeGateway({ connectionString: R.pgc.codeUrl });
     bp = new PgBuildPort({ connectionString: R.pgc.buildUrl });
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), "v89-sb-"));
@@ -109,7 +114,7 @@ describe.skipIf(!PG_BIN)("v89 software maintenance on demonstrated scope (Postgr
     enquiry = (await R.q(`INSERT INTO fleet.fleet_offer_enquiries (offer_id, agent_id, access_token, buyer_name, buyer_email, brief) VALUES ($1, $2, $3, 'Ada Customer', 'ada@example.test',
       'My add function returns the wrong result; please fix it and open a pull request.') RETURNING enquiry_id`, [o.offer.offerId, F.id, token]))[0].enquiry_id;
   }, 300_000);
-  afterAll(async () => { await gw?.close(); await bp?.close(); await R?.close(); });
+  afterAll(async () => { await svc?.end(); await gw?.close(); await bp?.close(); await R?.close(); });
 
   it("the agent asks; the customer consents on their page (exact repository; the wording kept); access is active only when the app is installed on THAT repository", async () => {
     expect(await R.econ(F, "code.request_access", { enquiryId: enquiry, repo: "acme", purpose: "fix the add function" }).catch((e: Error) => ({ ok: false, e: e.message }))).toMatchObject({ ok: false });

@@ -1404,6 +1404,10 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_indexnow_key()",
   "svc_customer_message(text, text, text, text, jsonb)",
   "svc_offer_tick(integer)",
+  // v89: the customer's repository-access requests and consent on their own enquiry / order page (both pages call the
+  // first; missing here until 2026-10-19, so every order and enquiry page failed for the service role).
+  "svc_repo_requests(text, text)",
+  "svc_repo_consent(text, text, uuid, text, text, text)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */
