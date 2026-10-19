@@ -26,16 +26,18 @@
  *    sitemap and search notifications leave it out, and the agent's offer view says why (`saleBlock`). Publishing a
  *    product needs such a review. Work already accepted (paid orders, their delivery and revisions) is unaffected. The
  *    owner can hold one offer (and release it) without closing sales or holding the agent; the agent is told.
- * 6. FLEET CONTROL'S OWN AI COSTS. Its spend reviews, lesson reviews and evidence-relevance checks are treasury-paid model
- *    calls; they now have a daily budget (rolling 24 hours, in the accounting currency; the owner sets it, default
- *    £2.00), checked BEFORE each call is claimed: what its calls cost in the last 24 hours (recorded provider usage) plus
- *    the calls claimed and unanswered plus this call's estimate must fit. Out of budget, nothing is claimed — a spend that
- *    needs a review waits (never approved by default) — and the owner is told once a day. A call's actual cost can differ
- *    from its estimate; the next claim sees what it really cost.
- * 7. EXHAUSTION. Prospective money keeps an exhausted agent alive only for a while: a capture PayPal has not completed after
- *    14 days and a sale's money PayPal still holds after 30 days no longer count against exhaustion (still
- *    shown under notCounted; if the money arrives it is cash again). Disputed money and money paid to the owner's card are
- *    the agent's own past money, unchanged.
+ * 6. FLEET CONTROL'S OWN AI COSTS — a hard daily ceiling. Its spend reviews, lesson reviews and evidence-relevance checks
+ *    are treasury-paid model calls. Each call first RESERVES its bounded maximum cost (the prompt's UTF-8 bytes as input
+ *    tokens — a token is never shorter than a byte — plus the call's full output allowance, at the tier's prices, prompt
+ *    cache off), under the budget row's lock: the reservations of the last 24 hours (settled at their actual cost, unsettled
+ *    or of unknown cost at their maximum) plus this maximum must fit the owner's daily budget, or no call is made. The
+ *    budget is UNSET until the owner sets it: until then Fleet Control makes no paid call (a spend needing review waits,
+ *    never approved by default). The claim-time check is only a pre-filter (at the policy's estimate).
+ * 7. EXHAUSTION — the authoritative measure, no grace periods. Money keeps an agent alive only if it is the agent's own:
+ *    cash; verified sale money PayPal still holds until it is available (a COMPLETED capture: counted however long PayPal
+ *    holds it); own money reserved for a card hold or a payment in progress; disputed money still in the wallet; money paid
+ *    to the owner's card awaiting settlement. A capture PayPal reports PENDING is not verified money (it may never complete)
+ *    and, like an open checkout, is shown under notCounted and never keeps an agent alive. Age decides nothing.
  * 5. GUIDANCE. The dated capability entry agents read (fleet-capability-status v14) is rewritten from verified state:
  *    search connected, images not offered, Gumroad deferred, refunds under refund authority, the owner-paid card, sales
  *    closed until launch, the inspector's spreadsheet checks.
@@ -64,16 +66,11 @@ export const ORDER_AUTHORITY_MAX_HOURS = 168;
 /** A standing authority, when it expires at all, lasts at most this long. */
 export const STANDING_AUTHORITY_MAX_HOURS = 8760;
 export const EVENT_ROUTES_V96 = Object.freeze({
-  P1_HIGH: ["refund_awaiting_authority"],
+  P1_HIGH: ["refund_awaiting_authority", "fleet_control_ai_bound_exceeded"],
   P2_IMPORTANT: ["refund_authority_granted", "refund_authority_ended", "offer_held", "offer_released", "fleet_control_ai_budget_reached", "fleet_control_ai_budget_set"],
 } as const);
 /** v96: fleet-qa-3 reviews are accepted (earlier ones stay valid records). */
 export const QA_INSPECTOR_VERSIONS_V96 = [...QA_INSPECTOR_VERSIONS_V85, "fleet-qa-3"] as const;
-/** v96: Fleet Control's daily AI budget until the owner sets one (minor units of the accounting currency). */
-export const FLEET_CONTROL_AI_DAILY_DEFAULT_MINOR = 200;
-/** v96: how long prospective money (a pending capture; a sale's money PayPal holds) keeps an exhausted agent alive. */
-export const CAPTURE_PENDING_ALIVE_DAYS = 14;
-export const PAYPAL_HELD_ALIVE_DAYS = 30;
 /** v96: the inspectors whose passing review lets a product be sold publicly. */
 export const QA_SALE_INSPECTORS = ["fleet-qa-3"] as const;
 
@@ -144,22 +141,18 @@ const RELEVANCE_PENDING = restate(V31_SQL, "svc_experiment_relevance_pending", [
   v_room := LEAST(v_room, GREATEST(0, ((fleet_control_ai_state() ->> 'roomMinor')::bigint / GREATEST((fleet_control_ai_state() ->> 'estimateMinor')::bigint * 2, 1))::integer));`],
 ]);
 
-// ── 7. Exhaustion: prospective money keeps an agent alive only for a while ──
+// ── 7. Exhaustion: a pending capture is not the agent's money (verified held money always is; no age rule) ──
 const MEASURE = restate(V57_SQL, "fleet_agent_wallet_measure", [
-  [`v_orders bigint; v_disp bigint; v_disp_held bigint;`, `v_orders bigint; v_disp bigint; v_disp_held bigint; v_cap_stale bigint; v_pend_stale bigint; v_in_alive bigint;`],
   [`  v_in := v_pending + v_cap_pending + v_card + v_disp_held;`,
-   `  v_in := v_pending + v_cap_pending + v_card + v_disp_held;
-  -- v96: a capture PayPal has not completed after ${CAPTURE_PENDING_ALIVE_DAYS} days, or a sale's money PayPal still holds after ${PAYPAL_HELD_ALIVE_DAYS} days, no
-  -- longer keeps the agent alive (it stays shown; if it arrives it is cash again).
-  SELECT COALESCE(sum(amount_minor), 0) INTO v_cap_stale FROM fleet_paypal_checkouts
-   WHERE agent_id = p_agent AND status = 'capture_pending' AND COALESCE(approved_at, opened_at, created_at) < now() - interval '${CAPTURE_PENDING_ALIVE_DAYS} days';
-  SELECT COALESCE(sum(remaining_minor), 0) INTO v_pend_stale FROM fleet_paypal_availability
-   WHERE agent_id = p_agent AND status = 'pending' AND captured_at < now() - interval '${PAYPAL_HELD_ALIVE_DAYS} days';
-  v_in_alive := v_in - LEAST(v_cap_stale, v_cap_pending) - LEAST(v_pend_stale, v_pending);`],
+   `  -- v96: a capture PayPal reports PENDING is not verified money (it may never complete): like an open checkout it is shown
+  -- (notCounted) but keeps no agent alive. Verified sale money PayPal holds (v_pending) counts however long it is held.
+  v_in := v_pending + v_card + v_disp_held;`],
   [`    'notCounted', jsonb_build_object('openCheckoutsMinor', v_open, 'envelopeCapitalMinor', v_env,`,
-   `    'notCounted', jsonb_build_object('openCheckoutsMinor', v_open, 'envelopeCapitalMinor', v_env,
-                    'capturePendingOver${CAPTURE_PENDING_ALIVE_DAYS}DaysMinor', LEAST(v_cap_stale, v_cap_pending), 'paypalHeldOver${PAYPAL_HELD_ALIVE_DAYS}DaysMinor', LEAST(v_pend_stale, v_pending),`],
-  [`    'exhausted', v_own = 0 AND v_in = 0 AND v_orders = 0`, `    'exhausted', v_own = 0 AND v_in_alive <= 0 AND v_orders = 0`],
+   `    'notCounted', jsonb_build_object('openCheckoutsMinor', v_open, 'paypalCapturePendingMinor', v_cap_pending, 'envelopeCapitalMinor', v_env,`],
+  [`'paypalCapturePendingMinor', v_cap_pending, 'paidToOwnerCardMinor', v_card, 'paypalDisputedMinor', v_disp_held),`,
+   `'paidToOwnerCardMinor', v_card, 'paypalDisputedMinor', v_disp_held),`],
+  [`|| 'and none is owed back to you, Fleet Control ends this agent at its next lifecycle pass and its estate is settled. Open checkouts, provider sales not yet '`,
+   `|| 'and none is owed back to you, Fleet Control ends this agent at its next lifecycle pass and its estate is settled. Open checkouts, captures PayPal reports pending, provider sales not yet '`],
 ]);
 
 // ── 4. Product quality ──
@@ -479,39 +472,94 @@ END $$;
 -- ═══ 6. Fleet Control's own AI costs: a daily budget checked before each call is claimed ═══
 CREATE TABLE fleet_control_ai_budget (
   id                  integer     PRIMARY KEY CHECK (id = 1),
-  daily_ceiling_minor bigint      NOT NULL CHECK (daily_ceiling_minor > 0),
+  daily_ceiling_minor bigint      CHECK (daily_ceiling_minor IS NULL OR daily_ceiling_minor > 0),   -- NULL: not set — no paid call
   set_by              text        NOT NULL CHECK (set_by = 'migration' OR set_by ~ '^operator:[A-Za-z0-9._-]{1,64}$'),
   reason              text        NOT NULL CHECK (length(reason) BETWEEN 3 AND 300),
   set_at              timestamptz NOT NULL DEFAULT now()
 );
 INSERT INTO fleet_control_ai_budget (id, daily_ceiling_minor, set_by, reason)
-  VALUES (1, ${FLEET_CONTROL_AI_DAILY_DEFAULT_MINOR}, 'migration', 'the default until the owner sets Fleet Control''s daily AI budget');
+  VALUES (1, NULL, 'migration', 'not set: Fleet Control makes no paid call until the owner sets its daily AI budget');
 
--- Spent (its recorded provider usage in the last 24 hours), in flight (claimed, unanswered), one call's estimate, room left.
+-- Each paid call's reservation: its bounded maximum before the call, its actual cost after (NULL: unknown — the maximum counts).
+CREATE TABLE fleet_control_ai_reservations (
+  reservation_id uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind           text        NOT NULL CHECK (kind IN ('spend_review','knowledge_review','evidence_relevance')),
+  ref            text        NOT NULL CHECK (length(ref) BETWEEN 1 AND 100),
+  max_minor      bigint      NOT NULL CHECK (max_minor > 0),
+  actual_minor   bigint      CHECK (actual_minor IS NULL OR actual_minor >= 0),
+  reserved_at    timestamptz NOT NULL DEFAULT now(),
+  settled_at     timestamptz
+);
+CREATE INDEX fleet_control_ai_reservations_recent ON fleet_control_ai_reservations (reserved_at);
+CREATE TRIGGER fleet_control_ai_reservations_no_delete BEFORE DELETE ON fleet_control_ai_reservations FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+
+CREATE FUNCTION fleet_usd_microcents_minor(p bigint) RETURNS bigint LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT CEIL(GREATEST(p, 0)::numeric * COALESCE((SELECT rate_micro FROM fleet_fx_rates WHERE base = 'USD' AND quote = (SELECT accounting_currency FROM fleet_economic_model WHERE id = 1)
+                ORDER BY observed_on DESC, rate_id DESC LIMIT 1), 1000000) / 1000000 / 1000000)::bigint
+$$;
+
+-- Settled (actual cost of calls in the last 24 hours), in flight (reserved at their maximum: unanswered or of unknown cost),
+-- the policy's per-call estimate (the claim pre-filter), room left (0 while the budget is unset).
 CREATE FUNCTION fleet_control_ai_state() RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-  WITH fx AS (SELECT COALESCE((SELECT rate_micro FROM fleet_fx_rates WHERE base = 'USD' AND quote = (SELECT accounting_currency FROM fleet_economic_model WHERE id = 1)
-                               ORDER BY observed_on DESC, rate_id DESC LIMIT 1), 1000000) AS rate),
-  b AS (SELECT * FROM fleet_control_ai_budget WHERE id = 1),
-  v AS (SELECT
-    CEIL(COALESCE((SELECT sum(-e.usd_microcents) FROM fleet_provider_credit_events e WHERE e.kind = 'consumption' AND e.recorded_by LIKE 'controller:%'
-                    AND e.at > now() - interval '24 hours'), 0)::numeric * fx.rate / 1000000 / 1000000)::bigint AS spent,
-    CEIL((SELECT estimate_usd_microcents FROM fleet_spend_review_policy WHERE id = 1)::numeric * fx.rate / 1000000 / 1000000)::bigint AS est,
-    (SELECT count(*) FROM fleet_spend_reviews WHERE status = 'pending' AND claimed_until > now())
-      + (SELECT count(*) FROM fleet_knowledge_review_state WHERE claimed_until > now()) AS claimed
-    FROM fx)
-  SELECT jsonb_build_object('ceilingMinor', b.daily_ceiling_minor, 'spentMinor', v.spent, 'inflightMinor', v.claimed * v.est, 'estimateMinor', v.est,
-    'roomMinor', b.daily_ceiling_minor - v.spent - v.claimed * v.est, 'setBy', b.set_by, 'setAt', b.set_at, 'reason', b.reason,
-    'rule', 'checked before each Fleet Control review call is claimed (spent in 24 h + claimed and unanswered + this call''s estimate); a call''s actual cost can differ from its estimate')
-  FROM b, v
+  WITH b AS (SELECT * FROM fleet_control_ai_budget WHERE id = 1),
+  r AS (SELECT COALESCE(sum(actual_minor) FILTER (WHERE actual_minor IS NOT NULL), 0) AS settled,
+               COALESCE(sum(max_minor) FILTER (WHERE actual_minor IS NULL), 0) AS inflight
+          FROM fleet_control_ai_reservations WHERE reserved_at > now() - interval '24 hours')
+  SELECT jsonb_build_object('ceilingMinor', b.daily_ceiling_minor, 'set', b.daily_ceiling_minor IS NOT NULL, 'spentMinor', r.settled, 'inflightMinor', r.inflight,
+    'estimateMinor', fleet_usd_microcents_minor((SELECT estimate_usd_microcents FROM fleet_spend_review_policy WHERE id = 1)),
+    'roomMinor', GREATEST(COALESCE(b.daily_ceiling_minor, 0) - r.settled - r.inflight, 0), 'setBy', b.set_by, 'setAt', b.set_at, 'reason', b.reason,
+    'rule', 'a hard ceiling: each Fleet Control call reserves its bounded maximum (prompt bytes as input tokens + its full output allowance) before it is made, under one lock, against the last 24 hours (actual costs, or the maximum while unknown); unset = no paid call')
+  FROM b, r
 $$;
+
+-- The hard check, before every paid call: lock the budget, then the last 24 hours + this call's bounded maximum must fit.
+CREATE FUNCTION svc_fleet_control_ai_reserve(p_kind text, p_ref text, p_max_usd_microcents bigint) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE b fleet_control_ai_budget; v_max bigint; v_used bigint; x fleet_control_ai_reservations;
+BEGIN
+  IF p_kind NOT IN ('spend_review','knowledge_review','evidence_relevance') OR p_ref IS NULL OR p_max_usd_microcents IS NULL OR p_max_usd_microcents <= 0 THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST');
+  END IF;
+  SELECT * INTO b FROM fleet_control_ai_budget WHERE id = 1 FOR UPDATE;
+  IF b.daily_ceiling_minor IS NULL THEN
+    PERFORM fleet_control_ai_budget_reached();
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_CONTROL_AI_BUDGET_UNSET', 'reason', 'the owner has not set Fleet Control''s daily AI budget');
+  END IF;
+  v_max := GREATEST(fleet_usd_microcents_minor(p_max_usd_microcents), 1);
+  SELECT COALESCE(sum(COALESCE(actual_minor, max_minor)), 0) INTO v_used FROM fleet_control_ai_reservations WHERE reserved_at > now() - interval '24 hours';
+  IF v_used + v_max > b.daily_ceiling_minor THEN
+    PERFORM fleet_control_ai_budget_reached();
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_CONTROL_AI_BUDGET', 'reason', 'Fleet Control''s daily AI budget has no room for this call',
+      'usedMinor', v_used, 'maxMinor', v_max, 'ceilingMinor', b.daily_ceiling_minor);
+  END IF;
+  INSERT INTO fleet_control_ai_reservations (kind, ref, max_minor) VALUES (p_kind, left(p_ref, 100), v_max) RETURNING * INTO x;
+  RETURN jsonb_build_object('ok', true, 'reservationId', x.reservation_id, 'maxMinor', v_max);
+END $$;
+
+-- After the call: its actual cost (NULL: unknown — the maximum keeps counting). Settled once.
+CREATE FUNCTION svc_fleet_control_ai_settle(p_reservation uuid, p_actual_usd_microcents bigint) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE x fleet_control_ai_reservations;
+BEGIN
+  IF p_actual_usd_microcents IS NULL THEN RETURN jsonb_build_object('ok', true, 'kept', 'maximum'); END IF;
+  UPDATE fleet_control_ai_reservations SET actual_minor = fleet_usd_microcents_minor(p_actual_usd_microcents), settled_at = now()
+   WHERE reservation_id = p_reservation AND settled_at IS NULL RETURNING * INTO x;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', true, 'replay', true); END IF;
+  IF x.actual_minor > x.max_minor THEN
+    PERFORM fleet_event('fleet_control_ai_bound_exceeded', NULL, 'fleet_control', jsonb_build_object('reservationId', x.reservation_id, 'kind', x.kind,
+      'maxMinor', x.max_minor, 'actualMinor', x.actual_minor, 'note', 'a Fleet Control call cost more than its computed maximum: the bound is wrong and must be fixed'));
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'actualMinor', x.actual_minor, 'maxMinor', x.max_minor);
+END $$;
 
 CREATE FUNCTION fleet_control_ai_budget_reached() RETURNS void LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 BEGIN
   IF EXISTS (SELECT 1 FROM fleet_events WHERE event_type = 'fleet_control_ai_budget_reached' AND created_at > now() - interval '24 hours') THEN RETURN; END IF;
   PERFORM fleet_event('fleet_control_ai_budget_reached', NULL, 'fleet_control', fleet_control_ai_state() || jsonb_build_object(
-    'note', 'Fleet Control''s daily AI budget is used up: spend and lesson reviews wait (nothing is approved by default) until it has room again or the owner raises it'));
+    'note', 'Fleet Control''s daily AI budget is unset or has no room: spend and lesson reviews wait (nothing is approved by default) until it has room or the owner sets / raises it'));
 END $$;
 
 CREATE FUNCTION fleet_admin_fleet_control_ai_budget(p_daily_minor bigint, p_reason text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
@@ -531,7 +579,7 @@ ${KNOWLEDGE_CLAIM}
 
 ${RELEVANCE_PENDING}
 
--- ═══ 7. Exhaustion: prospective money keeps an agent alive only for a while ═══
+-- ═══ 7. Exhaustion: the authoritative measure — a pending capture is not the agent's money; no age rule ═══
 ${MEASURE}
 
 -- ═══ 5. What agents are told the Fleet can do, from verified state (2026-10-19) ═══

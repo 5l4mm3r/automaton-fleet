@@ -345,7 +345,7 @@ export class FleetService {
     this.relevance = opts.cognitionProviderFactory
       ? new RelevanceAssessor({
         ports: { relevancePending: (n) => opts.admin.relevancePending(n), relevanceRecord: (...a) => opts.admin.relevanceRecord(...a),
-          relevanceCallFailed: (...a) => opts.admin.relevanceCallFailed(...a) },
+          relevanceCallFailed: (...a) => opts.admin.relevanceCallFailed(...a), controlAiReserve: (...a) => opts.admin.controlAiReserve(...a), controlAiSettle: (...a) => opts.admin.controlAiSettle(...a), },
         providerFactory: opts.cognitionProviderFactory,
         audit: (event, detail) => this.audit(event, null, detail),
         deadlineMs: this.cognitionDeadlineMs(),
@@ -354,7 +354,7 @@ export class FleetService {
     this.spendReviewer = opts.cognitionProviderFactory && typeof opts.admin.spendReviewsClaim === "function"
       ? new SpendReviewer({
         ports: { spendReviewsClaim: (n, w) => opts.admin.spendReviewsClaim(n, w), spendReviewRecord: (...a) => opts.admin.spendReviewRecord(...a),
-          spendReviewFailed: (...a) => opts.admin.spendReviewFailed(...a) },
+          spendReviewFailed: (...a) => opts.admin.spendReviewFailed(...a), controlAiReserve: (...a) => opts.admin.controlAiReserve(...a), controlAiSettle: (...a) => opts.admin.controlAiSettle(...a), },
         providerFactory: opts.cognitionProviderFactory,
         audit: (event, detail) => this.audit(event, null, detail),
         deadlineMs: this.cognitionDeadlineMs(),
@@ -363,7 +363,7 @@ export class FleetService {
     this.knowledgeReviewer = opts.cognitionProviderFactory && typeof opts.admin.knowledgeProposalsClaim === "function"
       ? new KnowledgeReviewer({
         ports: { knowledgeProposalsClaim: (n, w) => opts.admin.knowledgeProposalsClaim(n, w), knowledgeReviewRecord: (...a) => opts.admin.knowledgeReviewRecord(...a),
-          knowledgeReviewFailed: (...a) => opts.admin.knowledgeReviewFailed(...a) },
+          knowledgeReviewFailed: (...a) => opts.admin.knowledgeReviewFailed(...a), controlAiReserve: (...a) => opts.admin.controlAiReserve(...a), controlAiSettle: (...a) => opts.admin.controlAiSettle(...a), },
         providerFactory: opts.cognitionProviderFactory,
         audit: (event, detail) => this.audit(event, null, detail),
         deadlineMs: this.cognitionDeadlineMs(),

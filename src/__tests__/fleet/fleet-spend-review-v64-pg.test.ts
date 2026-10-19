@@ -30,7 +30,7 @@ describe.skipIf(!PG_BIN)("v64: autonomous spending with Fleet Control review (Po
   let R: EconomyRegistry;
   let F: Founder;
   let su: pg.Pool;
-  let svcStore: { spendReviewsClaim: any; spendReviewRecord: any; spendReviewFailed: any };
+  let svcStore: { spendReviewsClaim: any; spendReviewRecord: any; spendReviewFailed: any; controlAiReserve: any; controlAiSettle: any };
   let payee = "", freshPayee = "", account = "";
   let script: Array<string | Error> = [];
   const prompts: string[] = [];
@@ -79,6 +79,8 @@ describe.skipIf(!PG_BIN)("v64: autonomous spending with Fleet Control review (Po
       await R.genesis.cognitionTierVerify(t, m, "test: models api 200", OWNER);
       await R.genesis.cognitionTierEnable(t, true, OWNER);
     }
+    // v96: Fleet Control makes no paid call until the owner sets its daily AI budget (a test budget here).
+    await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
     payee = await enrol("hosting co", 30);
     freshPayee = await enrol("brand new seller", 0);
     expect((await R.econ(F, "venture.create", { key: "f-shop", model: "digital_product", offer: "templates", state: "selected" })).ok).toBe(true);
@@ -235,31 +237,39 @@ describe.skipIf(!PG_BIN)("v64: autonomous spending with Fleet Control review (Po
     }
   });
 
-  it("v96: Fleet Control's daily AI budget is checked before a review call is claimed; out of budget the review waits, never approved", async () => {
-    const st = await R.one(`fleet.fleet_control_ai_state()`);
-    expect(st).toMatchObject({ ceilingMinor: 200, setBy: "migration" });
+  it("v96: Fleet Control's AI budget is a hard ceiling: unset or without room for a call's bounded maximum, no call is made; reservations are atomic", async () => {
+    const reservations = () => R.q(`SELECT kind, max_minor, actual_minor FROM fleet.fleet_control_ai_reservations ORDER BY reserved_at`);
     expect(await R.code(R.q(`SELECT fleet.fleet_admin_fleet_control_ai_budget(500, 'launch budget', 'agent')`))).toBe("FLEET_APPROVAL_REQUIRED");
-    // A budget smaller than what Fleet Control has already spent today plus one call's estimate.
-    await R.one(`fleet.fleet_admin_fleet_control_ai_budget($1, 'test: no room', $2)`, [Math.max(1, st.spentMinor + st.inflightMinor), OWNER]);
+    // Unset (as after the migration): no paid call at all; the review waits, never approved.
+    await asSuper(`UPDATE fleet.fleet_control_ai_budget SET daily_ceiling_minor = NULL WHERE id = 1`);
     try {
+      expect(await R.one(`fleet.fleet_control_ai_state()`)).toMatchObject({ set: false, roomMinor: 0 });
       const r = await spend(40_000, payee, "stock again");
       expect(r.order.reviewStatus).toBe("pending");
-      const n = prompts.length;
-      await reviewer().tick();
-      await reviewer().tick();
+      const n = prompts.length, n0 = (await reservations()).length;
+      await reviewer().tick(); await reviewer().tick();
       expect(prompts.length).toBe(n);                                  // no call was made
-      expect(await review(r.order.reviewId)).toMatchObject({ status: "pending", attempts: 0 });   // not a failure: it waits
+      expect((await reservations()).length).toBe(n0);                  // nothing reserved
       expect((await order(r.order.orderId)).review_status).toBe("pending");
       expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'fleet_control_ai_budget_reached')`))).toBe(1);   // told once
-      // Room again: the same review is claimed and decided.
-      await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test: room', $1)`, [OWNER]);
+      // Set, but smaller than one call's bounded maximum: the reservation is refused; no call.
+      await R.one(`fleet.fleet_admin_fleet_control_ai_budget(1, 'test: too small for one call', $1)`, [OWNER]);
+      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('spend_review', 'probe', 5000000000)`)).toMatchObject({ ok: false, code: "FLEET_CONTROL_AI_BUDGET" });
+      // Room: the review call reserves its maximum first and settles at its actual cost (never above the maximum).
+      await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
       await reviewer().tick();
       expect(prompts.length).toBe(n + 1);
       expect((await review(r.order.reviewId)).status).not.toBe("pending");
-      const after = await R.one(`fleet.fleet_control_ai_state()`);
-      expect(after.spentMinor).toBeGreaterThanOrEqual(st.spentMinor);
+      const last = (await reservations()).at(-1);
+      expect(last).toMatchObject({ kind: "spend_review" });
+      expect(Number(last.actual_minor)).toBeLessThanOrEqual(Number(last.max_minor));
+      // Two reservations at once against room for only one maximum: exactly one is made (the budget row's lock).
+      const st = await R.one(`fleet.fleet_control_ai_state()`);
+      await R.one(`fleet.fleet_admin_fleet_control_ai_budget($1, 'test: room for one', $2)`, [st.spentMinor + st.inflightMinor + 60, OWNER]);
+      const [a, b] = await Promise.all([1, 2].map((i) => svcStore.controlAiReserve("spend_review", `race-${i}`, 40_000_000))); // 40 US cents (≈ 32p) each: one fits in 60p, two do not
+      expect([a, b].filter((x: any) => x.ok).length).toBe(1);
     } finally {
-      await R.one(`fleet.fleet_admin_fleet_control_ai_budget(200, 'back to the default', $1)`, [OWNER]);
+      await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
     }
   });
 

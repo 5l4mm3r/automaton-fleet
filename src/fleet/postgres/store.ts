@@ -2140,6 +2140,15 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_operations_watch() AS r")).rows[0].r);
   }
 
+  /** v96: Fleet Control's hard daily AI ceiling — reserve a paid call's bounded maximum (USD microcents) before it is made. */
+  async controlAiReserve(kind: "spend_review" | "knowledge_review" | "evidence_relevance", ref: string, maxUsdMicrocents: number): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_fleet_control_ai_reserve($1, $2, $3) AS r", [kind, ref, Math.ceil(maxUsdMicrocents)])).rows[0].r);
+  }
+  /** v96: settle a reservation at the call's actual cost (null: unknown — the maximum keeps counting). */
+  async controlAiSettle(reservationId: string, actualUsdMicrocents: number | null): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_fleet_control_ai_settle($1, $2) AS r", [reservationId, actualUsdMicrocents === null ? null : Math.ceil(actualUsdMicrocents)])).rows[0].r);
+  }
+
   async eventRetention(): Promise<{ eventsExpired: number; suppressionExpired: number; mailCleared?: number; mailFreedBytes?: number }> {
     return this.tx(async (c) => (await c.query("SELECT svc_event_retention() AS r")).rows[0].r);
   }

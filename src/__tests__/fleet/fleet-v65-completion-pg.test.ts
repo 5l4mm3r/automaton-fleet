@@ -52,6 +52,8 @@ describe.skipIf(!PG_BIN)("v65: advertising review, shared-lesson review, Gumroad
     await R.store.grantServiceRole();
     const { PgFleetStore } = await import("../../fleet/postgres/store.js");
     svc = new PgFleetStore({ connectionString: R.pgc.serviceUrl });
+    // v96: Fleet Control makes no paid call until the owner sets its daily AI budget (a test budget here).
+    await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
     su = new pg.Pool({ connectionString: R.pgc.superUrl.replace(/\/postgres$/, `/${R.pgc.dbname}`), max: 1 });
     for (const [t, m] of [["T2", "claude-sonnet-5-5"], ["T3", "claude-opus-5-5"]]) {
       await R.genesis.cognitionTierVerify(t, m, "test: models api 200", OWNER);

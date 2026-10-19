@@ -13,13 +13,14 @@ import { candidateFor, type TierCandidate } from "../cognition/router.js";
 import type { ProviderFactory } from "../cognition/routed-gateway.js";
 import { ProviderError } from "../cognition/types.js";
 import type { ReviewCall } from "./review.js";
+import { maxCallUsdMicrocents, reserveControlAi, settleControlAi, type ControlBudgetPort } from "./control-budget.js";
 
 export interface KnowledgeJob {
   proposalId: string; category: string; title: string; content: string; agentId: string; submittedAt: string;
   existing: Array<{ entryId?: string; category: string; title: string }>; library: string[];
 }
 export interface KnowledgeAnswer { decision: "promote" | "reject"; reason: string; supersedes?: string[] }
-export interface KnowledgeReviewPorts {
+export interface KnowledgeReviewPorts extends ControlBudgetPort {
   knowledgeProposalsClaim(limit: number, worker: string): Promise<Record<string, unknown>>;
   knowledgeReviewRecord(proposalId: string, worker: string, result: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }>;
   knowledgeReviewFailed(proposalId: string, worker: string, error: string, calls: ReviewCall[]): Promise<Record<string, unknown> & { ok: boolean }>;
@@ -99,15 +100,22 @@ export class KnowledgeReviewer {
     const costOf = (u: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }) => Math.max(0, Math.round(
       u.inputTokens * c.prices.inputMicrocentsPerToken + u.outputTokens * c.prices.outputMicrocentsPerToken
       + (u.cacheReadTokens ?? 0) * c.prices.cacheReadMicrocentsPerToken + (u.cacheWriteTokens ?? 0) * c.prices.cacheWriteMicrocentsPerToken));
+    const prompt = knowledgePrompt(job);
+    const maxTokens = Math.min(c.maxOutputTokens, 800);
+    // v96: the call's bounded maximum is reserved against Fleet Control's daily ceiling first; no room, no call.
+    const budget = await reserveControlAi(this.o.ports, "knowledge_review", job.proposalId, maxCallUsdMicrocents(c, KNOWLEDGE_REVIEW_SYSTEM, [prompt], maxTokens));
+    if (!budget.ok) return { error: budget.reason, calls: [] };
     try {
       const res = await this.o.providerFactory(c, null, "off").chat({ agentId: "controller", system: KNOWLEDGE_REVIEW_SYSTEM,
-        messages: [{ role: "user", content: knowledgePrompt(job) }], tools: [], maxTokens: Math.min(c.maxOutputTokens, 800), deadlineAt: Date.now() + (this.o.deadlineMs ?? 90_000) });
+        messages: [{ role: "user", content: prompt }], tools: [], maxTokens, deadlineAt: Date.now() + (this.o.deadlineMs ?? 90_000) });
       const calls: ReviewCall[] = [{ requestId, provider: c.provider, tier: c.tier, model: c.model, inputTokens: res.usage.inputTokens, outputTokens: res.usage.outputTokens, usdMicrocents: costOf(res.usage) }];
+      await settleControlAi(this.o.ports, budget.reservationId, calls[0].usdMicrocents);
       const parsed = parseKnowledge(res.content);
       return parsed ? { answer: parsed, calls } : { error: "FLEET_REVIEW_UNUSABLE: no clear decision", calls };
     } catch (err) {
       const pe = err instanceof ProviderError ? err : null;
       const usage = pe?.info.charge === "usage" ? pe.info.usage : undefined;
+      await settleControlAi(this.o.ports, budget.reservationId, usage ? costOf(usage) : pe?.info.charge === "none" ? 0 : null);
       return { error: `FLEET_REVIEW_PROVIDER_ERROR: ${pe ? pe.code : err instanceof Error ? err.message.slice(0, 120) : "error"}`,
         calls: usage ? [{ requestId, provider: c.provider, tier: c.tier, model: c.model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, usdMicrocents: costOf(usage) }] : [] };
     }

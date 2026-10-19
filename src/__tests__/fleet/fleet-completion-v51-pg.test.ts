@@ -245,12 +245,14 @@ describe.skipIf(!PG_BIN)("v51 completion: exhaustion, card reservations, PayPal 
     expect(m.rule).toMatch(/Exhaustion means death/);
     expect((await R.one(`fleet.fleet_survival_observation($1)`, [H.id])).wallet.exhausted).toBe(false);
     expect(await tick()).toMatchObject({ died: 0 });
-    // v96: prospective money keeps it alive only for a while — a sale's money PayPal still holds after 30 days no longer does
-    // (still shown); held again within the window, it counts again.
-    await asSuper(`UPDATE fleet.fleet_paypal_availability SET captured_at = now() - interval '31 days' WHERE capture_id = $1`, [a.captureId]);
-    expect(await measure(H)).toMatchObject({ exhausted: true, notCounted: { paypalHeldOver30DaysMinor: 1_200 }, ownHeldMinor: { paypalHeldUntilAvailableMinor: 1_200 } });
+    // v96 (authoritative measure, no grace periods): verified sale money PayPal holds counts however long it is held …
+    await asSuper(`UPDATE fleet.fleet_paypal_availability SET captured_at = now() - interval '90 days' WHERE capture_id = $1`, [a.captureId]);
+    expect(await measure(H)).toMatchObject({ exhausted: false, ownHeldMinor: { paypalHeldUntilAvailableMinor: 1_200 } });
     await asSuper(`UPDATE fleet.fleet_paypal_availability SET captured_at = now() WHERE capture_id = $1`, [a.captureId]);
-    expect(await measure(H)).toMatchObject({ exhausted: false, notCounted: { paypalHeldOver30DaysMinor: 0 } });
+    // … while a capture PayPal reports PENDING is not verified money: shown, never keeping the agent alive, at any age.
+    const k = await R.econ(H, "paypal.checkout", { venture: "h-guides", amountMinor: 800, description: "pending capture", fulfilment: "service", idempotencyKey: `pc-${crypto.randomUUID()}` });
+    await asSuper(`UPDATE fleet.fleet_paypal_checkouts SET status = 'capture_pending', approved_at = now() WHERE checkout_id = $1`, [k.checkout.checkoutId]);
+    expect(await measure(H)).toMatchObject({ exhausted: false, notCounted: { paypalCapturePendingMinor: 800 } });   // the held 1,200 keeps it alive
     // Fully refunded while held: nothing of its own remains; envelope capital would not count either.
     await cx("cx_paypal_refund_record", ["custody-executor", a.captureId, "REF-V51-0002", "refund", 1_200, "GBP"]);
     expect((await measure(H)).exhausted).toBe(true);

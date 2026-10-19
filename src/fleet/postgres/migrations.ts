@@ -1410,6 +1410,9 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   // first; missing here until 2026-10-19, so every order and enquiry page failed for the service role).
   "svc_repo_requests(text, text)",
   "svc_repo_consent(text, text, uuid, text, text, text)",
+  // v96: Fleet Control's hard daily AI ceiling — every paid review call reserves its bounded maximum first, then settles.
+  "svc_fleet_control_ai_reserve(text, text, bigint)",
+  "svc_fleet_control_ai_settle(uuid, bigint)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */

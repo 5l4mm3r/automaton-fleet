@@ -19,6 +19,7 @@ import crypto from "crypto";
 import { candidateFor, type TierCandidate } from "../cognition/router.js";
 import type { ProviderFactory } from "../cognition/routed-gateway.js";
 import { ProviderError } from "../cognition/types.js";
+import { maxCallUsdMicrocents, reserveControlAi, settleControlAi, type ControlBudgetPort } from "./control-budget.js";
 
 export const SPEND_HOLD_CATEGORIES = ["risk_outweighs_opportunity", "fraud", "invalid_payment", "insufficient_funds"] as const;
 
@@ -38,7 +39,7 @@ export interface SpendReviewJob {
 export interface ReviewCall { requestId: string; provider: string; tier: string; model: string; inputTokens?: number; outputTokens?: number; usdMicrocents: number }
 export interface ReviewAnswer { decision: "approve" | "hold"; category: string | null; reason: string; evidence: string[] }
 
-export interface SpendReviewPorts {
+export interface SpendReviewPorts extends ControlBudgetPort {
   spendReviewsClaim(limit: number, worker: string): Promise<Record<string, unknown>>;
   spendReviewRecord(reviewId: string, worker: string, result: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }>;
   spendReviewFailed(reviewId: string, worker: string, error: string, calls: ReviewCall[]): Promise<Record<string, unknown> & { ok: boolean }>;
@@ -161,6 +162,10 @@ export class SpendReviewer {
     }
     const requestId = crypto.randomUUID();
     const prompt = spendReviewPrompt(job);
+    const maxTokens = Math.min(c.maxOutputTokens, 1_500);
+    // v96: the call's bounded maximum is reserved against Fleet Control's daily ceiling first; no room, no call.
+    const budget = await reserveControlAi(this.o.ports, "spend_review", job.reviewId, maxCallUsdMicrocents(c, SPEND_REVIEW_SYSTEM, [prompt], maxTokens));
+    if (!budget.ok) return { error: budget.reason, calls: [] };
     const costOf = (u: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }) => Math.max(0, Math.round(
       u.inputTokens * c.prices.inputMicrocentsPerToken + u.outputTokens * c.prices.outputMicrocentsPerToken
       + (u.cacheReadTokens ?? 0) * c.prices.cacheReadMicrocentsPerToken + (u.cacheWriteTokens ?? 0) * c.prices.cacheWriteMicrocentsPerToken));
@@ -171,11 +176,12 @@ export class SpendReviewer {
         system: SPEND_REVIEW_SYSTEM,
         messages: [{ role: "user", content: prompt }],
         tools: [],
-        maxTokens: Math.min(c.maxOutputTokens, 1_500),
+        maxTokens,
         deadlineAt: Date.now() + (this.o.deadlineMs ?? 90_000),
       });
       const call: ReviewCall = { requestId, provider: c.provider, tier: c.tier, model: c.model, inputTokens: res.usage.inputTokens, outputTokens: res.usage.outputTokens,
         usdMicrocents: costOf(res.usage) };
+      await settleControlAi(this.o.ports, budget.reservationId, call.usdMicrocents);
       const parsed = parseReview(res.content);
       // An unusable answer is not evidence: the registry records it as cleared (uncertainty never blocks).
       return { answer: parsed ?? { decision: "approve", category: null, reason: "the review answer was not usable; no evidence to hold", evidence: [] }, calls: [call] };
@@ -184,6 +190,7 @@ export class SpendReviewer {
       const usage = pe?.info.charge === "usage" ? pe.info.usage : undefined;
       const calls: ReviewCall[] = usage ? [{ requestId, provider: c.provider, tier: c.tier, model: c.model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
         usdMicrocents: costOf(usage) }] : [];
+      await settleControlAi(this.o.ports, budget.reservationId, usage ? costOf(usage) : pe?.info.charge === "none" ? 0 : null);
       return { error: `FLEET_REVIEW_PROVIDER_ERROR: ${pe ? pe.code : err instanceof Error ? err.message.slice(0, 120) : "error"}`, calls };
     }
   }

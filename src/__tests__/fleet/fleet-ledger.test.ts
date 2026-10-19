@@ -111,7 +111,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     await store.migrate();
     await store.setApprovedRuntime(PIN, "test", BUILD);
     await store.setMaxAgents(20, "test");
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 9; i++) {   // agents[8]: the concurrent distinct-requests test
       const reg = await store.registerRoot({ walletAddress: `0x${crypto.randomBytes(20).toString("hex")}`, name: `root-${i}` });
       if (!reg.ok) throw new Error(reg.reason);
       const cred = await store.issueCredential(reg.agent.agentId, "test");
@@ -409,7 +409,22 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(s.economics).toMatchObject({ cash: 2900, reserved: 100, protectedPrincipal: 0 });
   });
 
-  it("concurrent spend requests never over-reserve an allocation", async () => {
+  it("concurrent DISTINCT spend requests (twelve payees at once) never over-reserve an allocation", async () => {
+    const a = agents[8];
+    await ledger.agentCapital({ agentId: a.agentId, amountCents: 1000, mode: "grant", actor: OWNER });
+    // Twelve different orders (each its own payee: twelve operations, none a duplicate of another) compete at once.
+    const payees = await Promise.all(Array.from({ length: 12 }, () => activeDestination("payee")));
+    const rs = await Promise.all(payees.map((dst, i) => gw.spendRequest(a.agentId, a.token, { idempotencyKey: key("spend"), amountCents: 300,
+      category: "expense", destinationId: dst, purpose: `distinct order ${i}`, recoverableCents: 0 })));
+    const ok = rs.filter((r) => r.ok && order(r).status === "reserved");
+    expect(ok.length).toBe(3);
+    expect(new Set(ok.map((r) => order(r).orderId)).size).toBe(3);
+    expect(rs.filter((r) => !r.ok).map((r) => r.code)).toEqual(Array(9).fill("FLEET_INSUFFICIENT_ALLOCATION"));
+    expect(await bal(agentAcct(a, "cash"))).toBe(100);
+    expect(await bal(agentAcct(a, "reserved"))).toBe(900);
+  });
+
+  it("concurrent DUPLICATE spend requests are one operation; further orders still fit the allocation", async () => {
     const a = agents[4];
     await ledger.agentCapital({ agentId: a.agentId, amountCents: 1000, mode: "grant", actor: OWNER });
     // v95: twelve identical requests at once are ONE operation (the rest wait for it and replay it): one order, reserved once.

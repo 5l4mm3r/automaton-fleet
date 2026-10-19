@@ -140,7 +140,8 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
   });
   let assessor: RelevanceAssessor;
   const relevancePorts = () => ({ relevancePending: (n: number) => svc.relevancePending(n), relevanceRecord: (...a: Parameters<PgFleetStore["relevanceRecord"]>) => svc.relevanceRecord(...a),
-    relevanceCallFailed: (...a: Parameters<PgFleetStore["relevanceCallFailed"]>) => svc.relevanceCallFailed(...a) });
+    relevanceCallFailed: (...a: Parameters<PgFleetStore["relevanceCallFailed"]>) => svc.relevanceCallFailed(...a),
+    controlAiReserve: (...a: Parameters<PgFleetStore["controlAiReserve"]>) => svc.controlAiReserve(...a), controlAiSettle: (...a: Parameters<PgFleetStore["controlAiSettle"]>) => svc.controlAiSettle(...a) });
   /** One pass of the controller's independent relevance assessor (the reaper and the request path run the same pass). */
   const settle = () => assessor.runOnce(50);
   const expJson = async (id: string) => (await q(`SELECT fleet.fleet_experiment_json(e) AS j FROM fleet.fleet_experiments e WHERE experiment_id = $1`, [id]))[0].j as Record<string, any>;
@@ -208,6 +209,9 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     agentRaw = new pg.Pool({ connectionString: pgc.agentUrl, max: 2 });
     store = new PgFleetStore({ connectionString: pgc.ownerUrl });
     await store.migrate();
+    // v96: Fleet Control makes no paid call until its daily AI budget is set (a test budget here; the owner's command is
+    // fleet_admin_fleet_control_ai_budget, tested in fleet-spend-review-v64-pg).
+    await owner.query(`UPDATE fleet.fleet_control_ai_budget SET daily_ceiling_minor = 100000, set_by = 'operator:test', reason = 'test budget' WHERE id = 1`);
     svc = new PgFleetStore({ connectionString: pgc.serviceUrl });
     gw = new PgAgentGateway({ connectionString: pgc.agentUrl });
     ledger = new PgLedgerAdmin({ connectionString: pgc.ownerUrl });
