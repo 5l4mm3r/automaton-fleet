@@ -102,9 +102,10 @@ import { V92_SQL } from "./migrations-phase92.js";
 import { V93_SQL } from "./migrations-phase93.js";
 import { V94_SQL } from "./migrations-phase94.js";
 import { BROWSER_FUNCTIONS_V95, CODE_FUNCTIONS_V95, IDENTITY_FUNCTIONS_V95, V95_SQL } from "./migrations-phase95.js";
+import { V96_SQL } from "./migrations-phase96.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 95;
+export const FLEET_PG_SCHEMA_VERSION = 96;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1295,6 +1296,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 93, name: "card_display_label", sql: V93_SQL },
   { version: 94, name: "current_decisions_and_notices", sql: V94_SQL },
   { version: 95, name: "durable_operations", sql: V95_SQL },
+  { version: 96, name: "custody_refund_authority", sql: V96_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1548,7 +1550,8 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   cx_paypal_buyer_record: { writes: ["fleet_customer_orders"], calls: ["fleet_event"] },
   cx_paypal_clawback_evidence: { writes: ["fleet_paypal_clawback_evidence"], calls: ["fleet_event", "fleet_paypal_clawback_reconcile", "cx_paypal_refund_record", "fleet_refund_request_completed"] },
   // v76: a new refund leaves only within available treasury cash; a refund that must wait is noted once.
-  cx_paypal_refund_work: { writes: [], calls: ["fleet_treasury_liquidity_wait", "fleet_treasury_lock"] },
+  // v96: binds each refund it hands out to the refund authority that covers it (under that authority's lock).
+  cx_paypal_refund_work: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_treasury_liquidity_wait", "fleet_treasury_lock", "fleet_refund_authority_cover", "fleet_refund_authority_wait"] },
   cx_paypal_refund_result: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event", "cx_paypal_clawback_evidence"] },
   cx_paypal_refund_unresolved: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event"] },
   cx_paypal_dispute_record: { writes: ["fleet_paypal_disputes"], calls: ["fleet_event"] },

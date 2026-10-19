@@ -88,7 +88,14 @@
  *                                               (v58) a return with a swept share needs --sweep-to: treasury (you transfer the full amount)
  *                                               or owner (you keep the share: an owner withdrawal); applied to the card balance it stays in the treasury
  *   economy-card-credit-return <amountMinor> <transferReference>                (v58) card credit moved back to the treasury PayPal
- *   economy-order-refund <orderId> <amountMinor|all> <reason…>                  (v59) refund a sale's buyer through PayPal (custody sends it)
+ *   economy-order-refund <orderId> <amountMinor|all> <reason…>                  (v59) refund a sale's buyer through PayPal (custody sends it
+ *                                               within a live refund authority, v96)
+ *   economy-refund-authority-grant standing|<orderId> <maxRefundMinor> <maxDailyMinor> <maxTotalMinor|-> <hours|ongoing> <reason…>
+ *                                               (v96) the authority custody enforces when it sends a refund: standing (ordinary customer
+ *                                               refunds, autonomous within it) or one order only (≤ 168 h, a total required); a new grant of
+ *                                               the same scope ends the previous one
+ *   economy-refund-authority-end <authorityId> [reason…]
+ *   hub-refund-authorities                                                    (v96) every refund authority, live or ended, with what it has used
  *   hub-paypal-disputes                                                       (v57) disputes, unclassified PayPal debits, exposure per agent
  *   economy-paypal-dispute-resolve <disputeId> won|lost [note…]               (v57) a dispute PayPal left without a plain outcome
  *   economy-paypal-debit-classify <refId> refund|reversal|fee|not_this_sale [note…]
@@ -229,7 +236,7 @@ export const HUB_COMMANDS = new Set([
   "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
   "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser", "hub-dashboard-enroll", "hub-dashboard-totp-reset",
   "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
-  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
+  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "hub-refund-authorities", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
   // v66 – v72 (missing until 2026-10-12: these were unreachable from fleet:admin)
   "economy-capital-backing", "economy-capital-back", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
@@ -365,6 +372,13 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     }
     case "economy-order-refund":
       return h.orderRefund(p[0], p[1] === "all" ? null : int(p[1], "amountMinor"), p.slice(2).join(" "), actor);
+    case "economy-refund-authority-grant":
+      return h.refundAuthorityGrant(p[0] === "standing" ? "standing" : "order", p[0] === "standing" ? null : p[0], int(p[1], "maxRefundMinor"), int(p[2], "maxDailyMinor"),
+        p[3] === "-" ? null : int(p[3], "maxTotalMinor"), p[4] === "ongoing" ? null : int(p[4], "hours"), p.slice(5).join(" "), actor);
+    case "economy-refund-authority-end":
+      return h.refundAuthorityEnd(p[0], p.slice(1).join(" ") || null, actor);
+    case "hub-refund-authorities":
+      return h.refundAuthorities();
     case "economy-card-credit-return":
       return h.cardCreditReturn(int(p[0], "amountMinor"), p[1], actor);
     case "hub-paypal-disputes":

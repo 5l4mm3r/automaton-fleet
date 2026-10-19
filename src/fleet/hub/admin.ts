@@ -140,6 +140,17 @@ export class PgHubAdmin {
   cardSettle(receiptId: string, resolution: string, method: string, sweepMinor: number | null, reference: string | null, actor: string, sweepTo: "treasury" | "owner" | null = null) {
     return this.one(`SELECT fleet_admin_card_receipt_settle($1, $2, $3, $4, $5, $6, $7) AS r`, [receiptId, resolution, method, sweepMinor, reference, actor, sweepTo]);
   }
+  /** v96: a refund authority custody enforces at dispatch — standing (orderId null; hours null = ongoing) or one order only. */
+  refundAuthorityGrant(scope: string, orderId: string | null, maxRefundMinor: number, maxDailyMinor: number, maxTotalMinor: number | null, hours: number | null,
+    reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_refund_authority_grant($1, $2, $3, $4, $5, $6, $7, $8) AS r`, [scope, orderId, maxRefundMinor, maxDailyMinor, maxTotalMinor, hours, reason, actor]);
+  }
+  refundAuthorityEnd(authorityId: string, reason: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_refund_authority_end($1, $2, $3) AS r`, [authorityId, reason, actor]);
+  }
+  refundAuthorities() {
+    return this.one(`SELECT fleet_refund_authorities_json(false) AS r`);
+  }
   /** v59: refund a sale's buyer (all that is still refundable when amountMinor is null). */
   orderRefund(orderId: string, amountMinor: number | null, reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_order_refund($1, $2, $3, $4) AS r`, [orderId, amountMinor, reason, actor]);

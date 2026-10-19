@@ -1425,7 +1425,10 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_paypal_disputes: new Set(["cx_paypal_dispute_record", "fleet_admin_paypal_dispute_resolve"]),
     fleet_paypal_debit_classifications: new Set(["fleet_admin_paypal_debit_classify"]),
     // v59: refund requests by the one request function (agent or owner), custody's result and PayPal's evidence.
-    fleet_paypal_refund_requests: new Set(["fleet_order_refund_request", "cx_paypal_refund_result", "fleet_refund_request_completed", "cx_paypal_refund_unresolved"]),
+    // v96: custody's dispatch binds a refund to the refund authority that covers it; authorities only by the owner.
+    fleet_paypal_refund_requests: new Set(["fleet_order_refund_request", "cx_paypal_refund_result", "fleet_refund_request_completed", "cx_paypal_refund_unresolved",
+      "cx_paypal_refund_work"]),
+    fleet_refund_authorities: new Set(["fleet_admin_refund_authority_grant", "fleet_admin_refund_authority_end"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

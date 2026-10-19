@@ -2,8 +2,8 @@
  * Schema v59 — refunds the Fleet initiates. PostgreSQL + the custody PayPal worker against a fake Payments v2 refund API.
  *
  * Proven here: an agent refunds only its own sale, within what is refundable (paid, less refunds / reversals posted or in
- * flight), once per idempotency key; the amount stops being spendable at once; nothing is sent while money-out is not
- * activated, nor on a live rail while the spend gate is closed; once sent (PayPal-Request-Id per request) the refund is
+ * flight), once per idempotency key; the amount stops being spendable at once; nothing is sent without a refund authority
+ * (v96: the payouts activation alone no longer sends refunds), nor on a live rail while the spend gate is closed; once sent (PayPal-Request-Id per request) the refund is
  * posted exactly once from PayPal's answer, and PayPal's own REFUNDED webhook and Transaction Search row for it post
  * nothing more; a refusal releases the reserve; an unknown outcome is retried with the same request id (one refund); the
  * owner can refund too.
@@ -112,18 +112,23 @@ describe.skipIf(!PG_BIN)("v59: refunds initiated by the Fleet (PostgreSQL + cust
     const key = idem();
     const r = await econNext(R, F, "order.refund", { orderId: s.orderId, amountMinor: 400, reason: "arrived damaged", idempotencyKey: key });
     expect(r).toMatchObject({ ok: true, refund: { status: "requested", amountMinor: 400 }, refundableAfterMinor: 600 });
-    expect(r.note).toMatch(/once money-out is activated/);
+    expect(r.note).toMatch(/it waits — no live refund authority covers this order/);   // v96
+    expect(r.authority).toMatchObject({ covered: false });
     expect(await econNext(R, F, "order.refund", { orderId: s.orderId, amountMinor: 400, reason: "arrived damaged", idempotencyKey: key })).toMatchObject({ ok: true, replay: true });
     expect(await spendable()).toBe(sp0 - 400);
     expect(await econNext(R, F, "order.refund", { orderId: s.orderId, amountMinor: 700, reason: "and the rest", idempotencyKey: idem() }))
       .toMatchObject({ ok: false, code: "FLEET_REFUND_EXCEEDS_REFUNDABLE", refundableMinor: 600 });
   });
 
-  it("nothing is sent before money-out is activated, nor while the live spend gate is closed; then one refund, posted once", async () => {
+  it("nothing is sent without a refund authority (the payouts activation is not one), nor while the live spend gate is closed; then one refund, posted once", async () => {
     const s = (await R.q(`SELECT o.order_id, c.checkout_id FROM fleet.fleet_customer_orders o JOIN fleet.fleet_paypal_checkouts c USING (checkout_id) WHERE o.agent_id = $1`, [F.id]))[0];
     await worker.tick();
     expect(pp.calls).toHaveLength(0);
-    await R.one(`fleet.fleet_admin_custody_activate(5_000, 20_000, NULL, 'refunds and payouts', $1)`, [OWNER]);
+    await R.one(`fleet.fleet_admin_custody_activate(5_000, 20_000, NULL, 'payouts', $1)`, [OWNER]);
+    await worker.tick();
+    expect(pp.calls).toHaveLength(0);                             // v96: money-out activation governs payouts only
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'refund_awaiting_authority')`))).toBe(1);   // told once
+    await R.one(`fleet.fleet_admin_refund_authority_grant('standing', NULL, 5_000, 20_000, NULL, NULL, 'ordinary customer refunds', $1)`, [OWNER]);
     gateOpen = false;
     await worker.tick();
     expect(pp.calls).toHaveLength(0);
@@ -213,9 +218,10 @@ describe.skipIf(!PG_BIN)("v59: refunds initiated by the Fleet (PostgreSQL + cust
     const r = await econNext(R, F, "order.refund", { orderId, reason: "the buyer asked for a refund", idempotencyKey: key });
     expect(r, JSON.stringify(r)).toMatchObject({ ok: true, refund: { amountMinor: 500 } });
     expect(await econNext(R, F, "order.refund", { orderId, reason: "the buyer asked for a refund", idempotencyKey: key })).toMatchObject({ ok: true, replay: true });
-    // KNOWN DEFECT (2026-10-19, launch-readiness §1 row 21): while the refund is in flight its amount is held from the agent's
-    // spendable cash, as for a sale's refund; nothing is posted and the hold ends with the refund. Fixed in the next schema.
-    expect(await spendable()).toBe(sp0 - 500);
+    // v96 (launch-readiness §1 row 21, fixed): the owner's proof purchase is owner capital — its refund in flight is not held
+    // from the agent's spendable cash (before v96 it was, until PayPal confirmed it).
+    expect(await spendable()).toBe(sp0);
+    expect((await R.one(`fleet.fleet_agent_wallet_measure($1)`, [F.id])).ownHeldMinor.paypalDisputedMinor).toBe(0);
     await worker.tick();
     await worker.tick();
     expect(pp.calls.length - calls0).toBe(1);                     // one PayPal refund

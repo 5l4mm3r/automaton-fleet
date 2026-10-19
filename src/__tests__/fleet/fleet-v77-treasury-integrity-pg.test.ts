@@ -53,6 +53,8 @@ describe.skipIf(!PG_BIN)("v77 treasury liquidity: real outflows fit available Pa
     rail = await liveRail(R.owner, "fleet", OWNER, { capabilities: ["payouts", "receive_payments", "refunds"] });
     // The ongoing mode: an owner activation with NO maxima (v64 / O19) — liquidity, not a fixed cap, bounds real cash.
     expect((await R.q(`SELECT fleet.fleet_admin_custody_activate(NULL, NULL, 24, 'ongoing mode test', $1) AS r`, [OWNER]))[0].r).toMatchObject({ ok: true });
+    // v96: refunds leave under a refund authority (the activation governs payouts).
+    await R.one(`fleet.fleet_admin_refund_authority_grant('standing', NULL, 100_000, 1_000_000, NULL, NULL, 'ordinary customer refunds', $1)`, [OWNER]);
     expect((await attest(custody, "fleet", rail)).ok).toBe(true);
     for (const [who, key] of [[F, "prints"], [G, "cv-templates"]] as const) {
       dest[who.id] = (await R.econ(who, "vendor.register", { vendorName: `Supplier of ${key}`, category: "manufacturer", provider: "paypal",

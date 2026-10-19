@@ -121,6 +121,8 @@ describe.skipIf(!PG_BIN)("v95 durable operations: the same intended operation is
     cgw = new PgCustodyGateway({ connectionString: R.pgc.custodyUrl });
     pp = fakeRefunds();
     await R.one(`fleet.fleet_admin_custody_activate(5_000, 20_000, NULL, 'refunds and payouts', $1)`, [OWNER]);
+    // v96: refunds leave under a refund authority (the activation governs payouts).
+    await R.one(`fleet.fleet_admin_refund_authority_grant('standing', NULL, 5_000, 20_000, NULL, NULL, 'ordinary customer refunds', $1)`, [OWNER]);
   }, 300_000);
   afterAll(async () => {
     await igw?.close(); await cgw?.close(); await svc?.end(); await custody?.end(); await R?.close();
