@@ -12,8 +12,10 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import pg from "pg";
+import { PgHubAdmin } from "../../fleet/hub/admin.js";
+import { PgLedgerAdmin } from "../../fleet/treasury/ledger.js";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder, econNext, spendNext } from "./fixtures/economy-registry.js";
 import { liveRail, type ArmedCustody } from "./fixtures/custody-signer.js";
 import { PgCustodyGateway } from "../../fleet/custody/gateway.js";
 import { PayPalTreasuryWorker } from "../../fleet/custody/paypal-treasury.js";
@@ -262,5 +264,49 @@ describe.skipIf(!PG_BIN)("v96: custody enforces refund authority at dispatch", (
     const after = await attention();
     expect(after.eventsDigest).not.toBe(d0);                                 // PayPal's outcome is
     expect(after.recentEvents).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "refund", id: r.refund.refundRequestId, status: "completed", tool: "wallet orders" })]));
+  });
+
+  it("2026-10-20 rerun combination: the spend circuit breaker tripped — a purchase is rejected before any reservation — while the order-only £5 refund is still sent and completed", async () => {
+    const s = await sale(500);
+    const g = await grant(s.orderId, 500, 500, 500, 2);                                    // the rerun's window: this order, £5, £5 total, 2 h
+    const hub = new PgHubAdmin({ connectionString: R.pgc.ownerUrl });
+    try {
+      expect(await hub.spendBreaker(true, "purchase proof rerun: purchases are excluded from this run", OWNER)).toMatchObject({ tripped: true });
+      const vendor = await R.econ(F, "vendor.register", { vendorName: "Print partner", category: "manufacturer", reference: "billing@printpartner.example", ventureKey: "prints" });
+      expect(vendor.ok, JSON.stringify(vendor)).toBe(true);
+      const cash0 = await R.one<number>(`fleet.fleet_ledger_balance(fleet.fleet_ledger_account($1, 'agent_cash'))::int`, [F.id]);
+      const buy = await spendNext(R, F, { idempotencyKey: `s:${crypto.randomUUID()}`, amountCents: 100, category: "expense", destinationId: vendor.destinationId, purpose: "a purchase in an excluded run" });
+      expect(buy).toMatchObject({ ok: false, code: "FLEET_INFRASTRUCTURE_CIRCUIT_BREAKER", order: { status: "rejected" } });
+      expect(await R.one<number>(`fleet.fleet_ledger_balance(fleet.fleet_ledger_account($1, 'agent_cash'))::int`, [F.id])).toBe(cash0);   // nothing reserved
+      // The agent's own refund of that order, under its order-only authority, while the breaker stays tripped.
+      const r = await econNext(R, F, "order.refund", { orderId: s.orderId, amountMinor: 500, reason: "the buyer asked for a full refund", idempotencyKey: idem() });
+      expect(r.ok, JSON.stringify(r)).toBe(true);
+      await worker.tick();
+      expect(await req(r.refund.refundRequestId)).toMatchObject({ status: "completed", authority_id: g.authorityId, requested_by: "agent" });
+      expect(sentFor(s.captureId)).toHaveLength(1);
+      expect((await R.one<any>(`(SELECT to_jsonb(b) FROM fleet.fleet_spend_circuit_breaker b WHERE id = 1)`)).tripped).toBe(true);
+    } finally {
+      await hub.spendBreaker(false, null, OWNER);
+      await hub.close();
+    }
+  });
+
+  it("2026-10-20 test funding: a deposit on PayPal's own record is recorded as owner funding of exactly its net, then attributed (counted once)", async () => {
+    const txn = id("DEP");
+    await cx("cx_paypal_txn_record", [W, rail.railId, JSON.stringify({ transactionId: txn, eventCode: "T0300", initiatedAt: new Date().toISOString(), status: "S", currency: "GBP", amountMinor: 1100, feeMinor: -27 })]);
+    const row = (await R.q(`SELECT amount_minor, fee_minor, status, attributed_at FROM fleet.fleet_paypal_transactions WHERE transaction_id = $1`, [txn]))[0];
+    expect(row).toMatchObject({ status: "S", attributed_at: null });
+    const net = Number(row.amount_minor) + Number(row.fee_minor);
+    expect(net).toBe(1073);
+    const capital0 = await R.one<number>(`fleet.fleet_ledger_balance('fleet:owner:capital')::int`);
+    const ledger = new PgLedgerAdmin({ connectionString: R.pgc.ownerUrl });
+    const hub = new PgHubAdmin({ connectionString: R.pgc.ownerUrl });
+    try {
+      await ledger.recordOwnerFunding(net, `paypal:deposit:${txn}`, OWNER);
+      expect(await hub.paypalAttribute(rail.railId, txn, "T0300", "owner_funding", `paypal:deposit:${txn}`, OWNER)).toMatchObject({ ok: true, rows: 1 });
+      expect(await R.one<number>(`fleet.fleet_ledger_balance('fleet:owner:capital')::int`)).toBe(capital0 + 1073);     // once, exactly the net
+      await expect(ledger.recordOwnerFunding(net, `paypal:deposit:${txn}`, OWNER)).rejects.toThrow(/ALREADY_CLAIMED|duplicate key/i);   // never twice (the reference is unique)
+      await expect(hub.paypalAttribute(rail.railId, txn, "T0300", "owner_funding", `paypal:deposit:${txn}`, OWNER)).rejects.toThrow(/NOT_FOUND/);
+    } finally { await ledger.close?.(); await hub.close(); }
   });
 });

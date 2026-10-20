@@ -1319,7 +1319,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v94: request supersessions only by the owner's supersede (the request itself never changes).
     fleet_owner_request_supersessions: new Set(["fleet_admin_owner_request_supersede"]),
     // v94: a run budget only by the owner's start / end.
-    fleet_cognition_run_budgets: new Set(["fleet_admin_cognition_run_start", "fleet_admin_cognition_run_end"]),
+    fleet_cognition_run_budgets: new Set(["fleet_admin_cognition_run_start", "fleet_admin_cognition_run_end",
+      // v104: a run whose next request cannot be reserved ends now (its end time brought forward; never extended or reopened).
+      "fleet_cognition_run_end_unfit"]),
     // v70: AI-credit lots and draws — by the provider-credit event trigger, the draw, the treasury purchase and the settlement.
     fleet_ai_credit_lots: new Set(["fleet_ai_credit_draw", "fleet_ai_credit_events_trigger", "fleet_admin_ai_credit_treasury_purchase", "svc_ai_credit_settle",
       // v71: a confirmed purchase (matched pair or the owner's confirmation) creates its lot.

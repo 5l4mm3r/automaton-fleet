@@ -145,6 +145,36 @@ describe.skipIf(!PG_BIN)("v94 current decisions, notices and wake signals (Postg
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
 
+  it("v104: when the next request's reservation does not fit, the refusal says what it needed and what was left, and the run ends now — still capping every later request", async () => {
+    await R.one(`fleet.fleet_admin_cognition_run_end($1, 'between tests', $2)`, [A, OWNER]).catch(() => null);
+    await R.one(`fleet.fleet_admin_cognition_run_start($1, 30, 6, 'v104: the next request must fit', $2)`, [A, OWNER]);
+    const rate = Number((await R.q(`SELECT rate_micro FROM fleet.fleet_fx_rates ORDER BY rate_id DESC LIMIT 1`))[0]?.rate_micro ?? 1_000_000);
+    const usdFor = (minor: number) => Math.floor((minor * 1_000_000) / rate);
+    const route = { tier: "T3", provider: "anthropic", model: "claude-opus-5-5", taskClass: "founder_work", source: "class_minimum", scope: "task_step" };
+    const authorize = (usd: number) => R.one<any>(`fleet.svc_cognition_routed_authorize($1, $2, $3::jsonb, $4)`, [A, usd, JSON.stringify(route), "a".repeat(64)]);
+    // Routing on for this agent and the critical tier verified (test registry only; restored below).
+    await asSuper(`UPDATE fleet.fleet_cognition_routing SET routing_enabled = true`);
+    await asSuper(`INSERT INTO fleet.fleet_founder_routing (agent_id, enabled, updated_by) VALUES ($1, true, 'test') ON CONFLICT (agent_id) DO UPDATE SET enabled = true`, [A]);
+    await asSuper(`UPDATE fleet.fleet_cognition_tiers SET enabled = true, verified_at = now(), verified_ref = 'test' WHERE tier = 'T3'`);
+    try {
+    const big = await authorize(usdFor(31));                                         // a reservation larger than the whole ceiling
+    expect(big).toMatchObject({ ok: false, code: "FLEET_COGNITION_RUN_BUDGET_EXHAUSTED" });
+    expect(big.requiredMicro).toBeGreaterThan(30_000_000);
+    expect(big.leftMicro).toBe(30_000_000);
+    expect(big.reason).toMatch(/^the next request reserves up to [0-9.]+ minor units \(a bound of its cost\); the run's ceiling of 30 has 30\.0000 left \(spent 0\.0000, in flight 0\.0000\)$/);
+    const run = await R.one<any>(`fleet.fleet_admin_cognition_run($1)`, [A]);
+    expect(run).toMatchObject({ open: false, endedAt: null });                       // ended by its end time — not "ended", which would cap nothing
+    expect(run.endReason).toBe(big.reason);
+    expect((await authorize(1))).toMatchObject({ ok: false, code: "FLEET_COGNITION_RUN_ENDED" });   // even a tiny request: still capped
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_events WHERE event_type = 'cognition_run_ended' AND actor = 'controller' AND agent_id = $1`, [A]))[0].n).toBe(1);
+    expect((await R.store.auditPrivileges()).problems).toEqual([]);              // the run is written only by its named functions
+    } finally {
+      await asSuper(`UPDATE fleet.fleet_cognition_routing SET routing_enabled = false`);
+      await asSuper(`UPDATE fleet.fleet_founder_routing SET enabled = false WHERE agent_id = $1`, [A]);
+      await asSuper(`UPDATE fleet.fleet_cognition_tiers SET enabled = false, verified_at = NULL, verified_ref = NULL WHERE tier = 'T3'`);
+    }
+  });
+
   it("an agent that cannot think raises ONE RED notification a day (AGENT_CANNOT_THINK), not a quiet log line", async () => {
     const report = () => R.one<any>(`fleet.fleet_econ_mind_report($1, $2::jsonb)`, [A, JSON.stringify({ packet: "full", fault: "packet_unfit", outcome: "STOPPED: essentials do not fit", tools: [] })]);
     expect(await report()).toMatchObject({ ok: true });

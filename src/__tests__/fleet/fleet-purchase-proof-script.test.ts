@@ -54,9 +54,13 @@ journey() { echo "\${JOURNEY:-true true true}"; }
 media_active() { echo "\${MEDIA:-inactive}"; }
 acq_max() { echo "\${ACQ:-101}"; }
 treasury_free() { echo "\${FREE:-2000}"; }
+economics() { echo "\${ECON:-3 15000000 15000000 0 0}"; }
 breaker_tripped() { if [[ -f "${dir}/breaker" ]]; then echo t; else echo "\${BREAKER:-f}"; fi; }
 Q() { echo "$1" >> "${dir}/sql.log"
   case "$1" in
+    *"fleet_routing_active("*) echo "\${ROUTED:-t}";;
+    *"SELECT rail_id FROM fleet_payment_rails"*) echo "b71b3f3c-901c-4f22-818b-3e1b1269f420";;
+    *"FROM fleet_paypal_transactions WHERE rail_id"*) echo "\${TXN:-}";;
     *"m.created_at > (SELECT max(updated_at)"*) echo "\${CONFIRMED:-f}";;
     *"status = 'completed') < now()"*) echo "\${CONFIRM_LATE:-f}";;
     *"code = 'AGENT_TOOL_FAULT'"*) echo "\${TOOLFAULT:-0}";;
@@ -349,11 +353,11 @@ Q() { echo "$1" >> "${dir}/sql.log"
     expect(ok.out).toContain("at most 100p of the AI credit's acquisition tax/fee on top (its receipts' ratio): ALL-INCLUSIVE MAXIMUM 599p (approved: 600p)");
     expect(ok.out).toContain("the treasury's free cash 1099p covers the refund after the run (needed 1099p = 500p refund + 599p)");
     expect(ok.host[0]).toMatch(new RegExp(`^A cognition-run ${A1} start 499 6 `));   // the ceiling enforced is the one displayed
-    expect(ok.out).toContain("the run stops when less than 125p is left, so at least 374p of usage is available");
-    // The watchdog stops the rerun once a further Opus step could not be reserved.
-    expect(watch({ DELIVERIES: "2", RUN: '{"open":true,"ceilingMinor":499,"spentMicro":374000000,"inflightMicro":0}' }).out).not.toContain("PROOF STOPPED");
-    expect(watch({ DELIVERIES: "2", RUN: '{"open":true,"ceilingMinor":499,"spentMicro":375000000,"inflightMicro":0}' }).out)
-      .toContain("the remaining AI allowance is below one Opus step's reservation (125p)");
+    expect(ok.out).toContain("when the NEXT request's reservation does not fit what is left, the controller ends the run at once and records what it needed and what was left (no fixed threshold)");
+    // No fixed threshold: a run with 1p left keeps going until the controller ends it; then the watchdog reports its reason.
+    expect(watch({ DELIVERIES: "2", RUN: '{"open":true,"ceilingMinor":499,"spentMicro":490000000,"inflightMicro":0}' }).out).not.toContain("PROOF STOPPED");
+    expect(watch({ DELIVERIES: "2", RUN: '{"open":false,"ceilingMinor":499,"spentMicro":420000000,"inflightMicro":0,"endReason":"the next request reserves up to 92.1234 minor units (a bound of its cost); the run\'s ceiling of 499 has 79.0000 left (spent 420.0000, in flight 0.0000)"}' }).out)
+      .toContain("the run ended: the next request reserves up to 92.1234 minor units (a bound of its cost); the run's ceiling of 499 has 79.0000 left");
   });
 
   it("the funding guard uses the same figures: 1098p free is refused for 499p", () => {
@@ -378,6 +382,40 @@ Q() { echo "$1" >> "${dir}/sql.log"
     expect(kept.out).toContain("already tripped (kept; not reset by this run)");
     expect(kept.host.join("\n")).not.toContain("economy-spend-breaker");
     expect(run(["stop"], { BREAKER: "t" }).host.join("\n")).not.toContain("economy-spend-breaker reset");
+  });
+
+  it("a call that cost more than it reserved stops the run and stays on record (the charge is never presented as the economic cost)", () => {
+    expect(run(["start", "200"]).code).toBe(0);
+    const x = watch({ ECON: "62 193782200 192133200 4 1649000" });
+    expect(x.out).toContain("FAILURE: 4 call(s) cost more than they reserved (+1.6490p, kept on record): the economic ceiling is not guaranteed");
+    expect(x.out).toContain("economic cost of the run: credit drawn 193.7822p; charged 192.1332p; calls that cost more than they reserved: 4 (+1.6490p) — THE ECONOMIC CEILING IS NOT GUARANTEED");
+    expect(watch({ ECON: "5 25000000 25000000 0 0" }).out).not.toContain("FAILURE");
+  });
+
+  it("a rerun needs Agent-1's requests routed (only they carry the bounded reservation and the run check) and stops if they stop being routed", () => {
+    expect(run(["start", "200"]).code).toBe(0);
+    expect(run(["rerun", "499", "6", "600"], { PAYMENT: "paid", ROUTED: "f" }).out).toContain("Agent-1's requests are not routed: the run's ceiling would not apply");
+    expect(run(["rerun", "499", "6", "600"], { PAYMENT: "paid", DELIVERIES: "2", ACQ: "100" }).code).toBe(0);
+    expect(watch({ DELIVERIES: "2", ROUTED: "f" }).out).toContain("FAILURE: Agent-1's requests stopped being routed");
+  });
+
+  it("test-funding records exactly the verified net of the owner's deposit as owner funding, from PayPal's own record — never a fixed figure", () => {
+    expect(run(["start", "200"]).code).toBe(0);
+    fs.rmSync(log);
+    expect(run(["test-funding", "8XY12345AB678901C"]).out).toContain("PayPal's transaction record does not show 8XY12345AB678901C yet");
+    expect(run(["test-funding", "8XY12345AB678901C"], { TXN: "T0300 P GBP 1100 0 true" }).out).toContain("not completed: nothing was recorded");
+    expect(run(["test-funding", "8XY12345AB678901C"], { TXN: "T0300 S EUR 1100 0 true" }).out).toContain("the deposit is in EUR, not GBP");
+    expect(run(["test-funding", "8XY12345AB678901C"], { TXN: "T0300 S GBP 1100 0 false" }).out).toContain("already accounted for");
+    expect(fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "").not.toMatch(/ledger-record-funding|economy-paypal-attribute/);
+    // £11.00 received, a 27p PayPal fee: exactly 1073p is recorded — whatever the net is, that is what is recorded.
+    const r = run(["test-funding", "8XY12345AB678901C"], { TXN: "T0300 S GBP 1100 -27 true" });
+    expect(r.code, r.out).toBe(0);
+    expect(r.host).toEqual(["A ledger-record-funding 1073 paypal:deposit:8XY12345AB678901C",
+      "A economy-paypal-attribute b71b3f3c-901c-4f22-818b-3e1b1269f420 8XY12345AB678901C T0300 owner_funding paypal:deposit:8XY12345AB678901C",
+      "A economy-capital-backing"]);                                                   // then a read: books vs PayPal
+    expect(r.out).toContain("recorded as OWNER FUNDING of exactly 1073p (not backing for the agents' capital)");
+    fs.rmSync(log);
+    expect(run(["test-funding", "8XY12345AB678901D"], { TXN: "T0300 S GBP 1200 0 true" }).host[0]).toBe("A ledger-record-funding 1200 paypal:deposit:8XY12345AB678901D");
   });
 
   it("a rerun stops if the media gateway (paid search) is started during it", () => {

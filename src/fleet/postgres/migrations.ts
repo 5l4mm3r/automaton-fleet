@@ -110,9 +110,10 @@ import { V100_SQL } from "./migrations-phase100.js";
 import { V101_SQL } from "./migrations-phase101.js";
 import { V102_SQL } from "./migrations-phase102.js";
 import { V103_SQL } from "./migrations-phase103.js";
+import { V104_SQL } from "./migrations-phase104.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 103;
+export const FLEET_PG_SCHEMA_VERSION = 104;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1311,6 +1312,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 101, name: "own_sends_do_not_wake", sql: V101_SQL },
   { version: 102, name: "premium_work_room_operation_hint", sql: V102_SQL },
   { version: 103, name: "refund_outcome_wakes_agent", sql: V103_SQL },
+  { version: 104, name: "run_ends_when_next_request_cannot_fit", sql: V104_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

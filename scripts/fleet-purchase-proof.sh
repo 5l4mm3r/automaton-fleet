@@ -29,6 +29,10 @@
 #   … owner-refund [why]  SEPARATE from any agent run (Agent-1 paused, no run open): the owner's own full refund of the
 #                    proof order — request it, open the refund window for it (the same order-only authority and switch),
 #                    wait for PayPal (≤ 30 min, no AI), verify the money, close the window. Recorded as the owner's.
+#   … test-funding <paypalTransactionId>   SEPARATE, owner-run: records a deposit the owner made into the treasury PayPal for
+#                    this test as OWNER FUNDING of exactly its verified net (PayPal's own transaction record: completed, GBP,
+#                    received, not yet claimed; amount less PayPal's fee) and attributes the transaction to it. It is not
+#                    backing for the agents' capital and does not make the Fleet launch-ready.
 #   … buy            prints the EXISTING order's page (no new order, no new payment): pay it with PayPal yourself, from an
 #                    account other than the treasury's
 #   … refund [why]   the owner's override: refund the proof order in full (recorded as an OWNER OVERRIDE, not as the agent's
@@ -107,10 +111,6 @@ CEILING=0; SP0=0; T_MAXDEL=""; T_MAXIDLE=""; MODE=""; T_HOURS=""
 # A rerun's own terms (2026-10-20): one more delivery than it started with, its idle-call allowance, its hours.
 MAX_DELIVERIES=${T_MAXDEL:-$MAX_DELIVERIES}; MAX_IDLE_CALLS=${T_MAXIDLE:-$MAX_IDLE_CALLS}; MODE=${MODE:-proof}; HOURS=${T_HOURS:-$HOURS}
 MAX_REPEATED_REFUSALS=8
-# 2026-10-20: a call reserves a true upper bound of its cost (every request byte as a token, the full output allowance);
-# an Opus step of Agent-1's prompts (≈ 53,000 tokens) reserves ≈ 105p. Below this headroom a rerun's requests are refused
-# (free) before the provider, so the run stops instead of idling to its end time.
-MIN_STEP_RESERVE=125
 # The one proof order there is (opened 2026-10-19 11:04:57Z); never a new one.
 ORDER() { Q "SELECT order_id FROM fleet_customer_orders WHERE owner_proof AND agent_id = '$A1' ORDER BY created_at LIMIT 1"; }
 closed() {
@@ -140,6 +140,15 @@ journals() {
       WHERE p.account_id = fleet_ledger_account('$A1', 'agent_cash') AND j.recorded_at >= '$(START)' GROUP BY j.kind ORDER BY j.kind"
 }
 cash_moved() { journals | awk '{s += $2} END {print s + 0}'; }
+# The run's economic cost, kept separate from its charges (µp, GBP): "calls drawn charged exceededCalls exceededBy" — drawn is
+# the provider cost at the call's exchange rate (what the AI credit pays and what the tax/fee is computed on); a call is
+# charged at most its reservation, so a call that cost more than it reserved shows here and is never hidden by the charge.
+economics() {
+  Q "SELECT count(*) || ' ' || COALESCE(sum(drawn), 0) || ' ' || COALESCE(sum(charged), 0) || ' ' || count(*) FILTER (WHERE drawn > charged + 1000) || ' '
+         || COALESCE(sum(drawn - charged) FILTER (WHERE drawn > charged + 1000), 0)
+       FROM (SELECT ceil(cost_microcents::numeric * COALESCE(fx_rate_micro, 1000000) / 1000000)::bigint AS drawn, COALESCE(charged_microcents, charged_cents * 1000000) AS charged
+               FROM fleet_cognition_log WHERE agent_id = '$A1' AND at >= '$(START)') x"
+}
 # The customer journey on the order $1: "replied corrected inspected" (t/f each). replied: an Agent-1 message after the
 # buyer's first message; corrected: a delivery SENT after that message; inspected: the latest sent delivery's review is
 # fleet-qa-3, pass, automated checks ok (the review gate already binds it to exactly the delivered files).
@@ -200,6 +209,8 @@ report() {
   moneyout
   echo "  run budget: $(Q "SELECT fleet_admin_cognition_run('$A1')" | jq -c '{ceilingMinor, spentPence: (.spentMicro/1000000), inflightPence: (.inflightMicro/1000000), calls, open, endsAt, endReason}')"
   echo "  model calls since start: $(Q "SELECT count(*)||' ('||COALESCE(sum(input_tokens),0)||' in, '||COALESCE(sum(cache_read_tokens),0)||' cache-read, '||COALESCE(sum(output_tokens),0)||' out), provider \$'||round(COALESCE(sum(provider_usd_microcents),0)/1e8,4)||', charged '||COALESCE(sum(charged_cents),0)||'p (Fleet-recorded, provisional)' FROM fleet_cognition_log WHERE agent_id='$A1' AND at >= '$s'")"
+  local n drawn charged xc xb; read -r n drawn charged xc xb <<< "$(economics)"
+  echo "  economic cost of the run: credit drawn $(awk -v x="${drawn:-0}" 'BEGIN{printf "%.4f", x/1e6}')p; charged $(awk -v x="${charged:-0}" 'BEGIN{printf "%.4f", x/1e6}')p; calls that cost more than they reserved: ${xc:-0} (+$(awk -v x="${xb:-0}" 'BEGIN{printf "%.4f", x/1e6}')p)$( (( ${xc:-0} > 0 )) && echo " — THE ECONOMIC CEILING IS NOT GUARANTEED")"
   echo "  Fleet Control's own AI (treasury-paid, its own budget): $(A hub-fleet-control-ai 2>/dev/null | jq -c '{ceilingMinor, spentMinor, inflightMinor}')"
   results "$o"
   echo "  uncertain outcomes: $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'OPERATION_UNCERTAIN' AND agent_id = '$A1' AND created_at >= '$s'"); AGENT_CANNOT_THINK: $(Q "SELECT count(*) FROM fleet_notifications WHERE code='AGENT_CANNOT_THINK' AND agent_id='$A1' AND created_at >= '$s'")"
@@ -322,6 +333,8 @@ rerun)
   [[ "$(Q "SELECT count(*) FROM fleet_media_providers WHERE configured AND last_seen_at > now() - interval '11 minutes'")" == 0 ]] \
     || die "a media provider was seen in the last 11 minutes: a paid request could still be accepted; wait and rerun"
   [[ "$(Q 'SELECT count(*) FROM fleet_custody_activation_live()')" == 0 ]] || die "a custody payout activation is live: purchases could be paid"
+  # Only routed requests carry the cost-bounded reservation and the run check (the unrouted path has neither).
+  [[ "$(Q "SELECT fleet_routing_active('$A1')")" == t ]] || die "Agent-1's requests are not routed: the run's ceiling would not apply"
   # The refund must be payable after the run: the treasury's free cash covers the refund plus what the run's AI can add to
   # what is owed to the owner (the AI credit is owner-funded: usage and its tax/fee become owner payable).
   acq=$(acq_max "$2"); free=$(treasury_free); need=$(( PRICE_MAX + $2 + acq ))
@@ -336,7 +349,7 @@ rerun)
   echo "     at most ${acq}p of the AI credit's acquisition tax/fee on top (its receipts' ratio): ALL-INCLUSIVE MAXIMUM ${allin}p$( (( ${4:-0} > 0 )) && echo " (approved: ${4}p)")"
   echo "     the treasury's free cash ${free}p covers the refund after the run (needed ${need}p = ${PRICE_MAX}p refund + ${allin}p)"
   echo "     paid tools: no web search or images (media gateway stopped), no phone or SMS (no provider), no purchase (the spend circuit breaker rejects it before any reservation; no payout activation or signer, no card authority)"
-  echo "     each request reserves a true upper bound of its cost (≈ 105p for an Opus step); the run stops when less than ${MIN_STEP_RESERVE}p is left, so at least $(( $2 - MIN_STEP_RESERVE ))p of usage is available"
+  echo "     each request reserves a true upper bound of its cost; when the NEXT request's reservation does not fit what is left, the controller ends the run at once and records what it needed and what was left (no fixed threshold)"
   A cognition-run $A1 start $2 $3 "purchase proof rerun (owner's revised terms): the outstanding correction, then the buyer's refund; AI ceiling ${2}p" | jq -c '.run | {ceilingMinor, endsAt}' \
     || die "run budget not opened (nothing else changed)"
   P="$D/phase-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$P"
@@ -379,6 +392,25 @@ owner-refund)
     || { report; die "the owner's refund is $st: not verified complete (window closed; see status)"; }
   report
   echo "== OWNER REFUND COMPLETE $(ts): PayPal confirmed; owner capital; reservation released; the window closed (no refund authority live, custody's switch off)" ;;
+test-funding)
+  [[ "${2:-}" =~ ^[A-Za-z0-9-]{5,64}$ ]] || die "usage: test-funding <paypalTransactionId> (from hub-treasury-tx --direction in)"
+  rail=$(Q "SELECT rail_id FROM fleet_payment_rails WHERE provider = 'paypal' AND status = 'active' ORDER BY created_at LIMIT 1"); [[ -n "$rail" ]] || die "no active PayPal rail"
+  row=$(Q "SELECT event_code || ' ' || status || ' ' || currency || ' ' || amount_minor || ' ' || COALESCE(fee_minor, 0) || ' ' || (checkout_id IS NULL AND attributed_at IS NULL)::text
+             FROM fleet_paypal_transactions WHERE rail_id = '$rail' AND transaction_id = '$2' ORDER BY initiated_at DESC LIMIT 1")
+  [[ -n "$row" ]] || die "PayPal's transaction record does not show $2 yet (Transaction Search can take a few hours); nothing was recorded"
+  read -r code st ccy amt fee free_tx <<< "$row"
+  net=$(( amt + fee ))                                                                  # PayPal reports its fee as a negative amount
+  [[ "$st" == S ]] || die "PayPal shows $2 as $st, not completed: nothing was recorded"
+  [[ "$ccy" == GBP ]] || die "the deposit is in $ccy, not GBP: nothing was recorded"
+  [[ "$free_tx" == true ]] || die "$2 is already accounted for (a checkout or an earlier record): nothing was recorded"
+  (( amt > 0 && net > 0 )) || die "$2 is not money received into the treasury: nothing was recorded"
+  ref="paypal:deposit:$2"
+  echo "  the owner's test funding: PayPal $2 ($code) ${amt}p received, PayPal fee ${fee#-}p, net ${net}p — recorded as OWNER FUNDING of exactly ${net}p (not backing for the agents' capital)"
+  A ledger-record-funding "$net" "$ref" | jq -c '{journalId}' || die "the owner funding could not be recorded (nothing else changed)"
+  A economy-paypal-attribute "$rail" "$2" "$code" owner_funding "$ref" | jq -c '{ok, rows}' || die "recorded, but the transaction could not be attributed: run economy-paypal-attribute $rail $2 $code owner_funding $ref"
+  echo "  books vs PayPal (capital backing reconciliation): $(A economy-capital-backing 2>/dev/null | jq -c '{differenceMinor, unbackedMinor, paypal: .paypal.totalMinor}')"
+  echo "  the treasury's free cash now: $(treasury_free)p"
+  echo "== TEST FUNDING RECORDED $(ts): ${net}p owner funding for this test (PayPal $2)" ;;
 buy)
   [[ -n "$(START)" && "$(paused $A1)" == f ]] || die "start the proof first"
   guard; o=$(ORDER)
@@ -448,15 +480,18 @@ watch)
   fi
   [[ "$(Q "$(unanswered_sql "$o" "$(RESUMED)")")" == t ]] && { stop_proof "FAILURE: a buyer message unanswered for $QUIET_MIN minutes"; exit 0; }
   run=$(Q "SELECT fleet_admin_cognition_run('$A1')")
-  [[ "$(jq -r '.open' <<< "$run")" == true ]] || { stop_proof "the AI ceiling is spent or ${HOURS} h are up"; exit 0; }
+  # v104: the controller ends the run the moment its next request's reservation does not fit, and says what it needed.
+  [[ "$(jq -r '.open' <<< "$run")" == true ]] || { stop_proof "the run ended: $(jq -r '.endReason // "its end time passed"' <<< "$run")"; exit 0; }
   (( $(jq -r '(.spentMicro + .inflightMicro) / 1000000 | floor' <<< "$run") >= CEILING - 5 )) && { stop_proof "the AI ceiling is (nearly) spent"; exit 0; }
-  [[ "$MODE" == rerun ]] && (( $(jq -r '(.spentMicro + .inflightMicro) / 1000000 | floor' <<< "$run") > CEILING - MIN_STEP_RESERVE )) \
-    && { stop_proof "the remaining AI allowance is below one Opus step's reservation (${MIN_STEP_RESERVE}p): no further request could be made"; exit 0; }
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'OPERATION_UNCERTAIN' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) \
     && { stop_proof "an outcome is uncertain: check it and resolve it (fleet operations-uncertain)"; exit 0; }
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'AGENT_CANNOT_THINK' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) && { stop_proof "FAILURE: the agent cannot think (packet)"; exit 0; }
   [[ "$MODE" == rerun && "$(media_active)" == active ]] && { stop_proof "FAILURE: the media gateway (paid web search) was started during the run"; exit 0; }
   [[ "$MODE" == rerun && "$(breaker_tripped)" != t ]] && { stop_proof "FAILURE: the spend circuit breaker was reset during the run (purchases are excluded)"; exit 0; }
+  [[ "$MODE" == rerun && "$(Q "SELECT fleet_routing_active('$A1')")" != t ]] && { stop_proof "FAILURE: Agent-1's requests stopped being routed (the run's ceiling would not apply)"; exit 0; }
+  # 2026-10-20: a call that cost more than it reserved breaks the economic bound: stop, and keep the difference on record.
+  read -r _n _d _c xc xb <<< "$(economics)"
+  (( ${xc:-0} > 0 )) && { stop_proof "FAILURE: ${xc} call(s) cost more than they reserved (+$(awk -v x="${xb:-0}" 'BEGIN{printf "%.4f", x/1e6}')p, kept on record): the economic ceiling is not guaranteed"; exit 0; }
   # 2026-10-20: a platform fault is not the agent's to fix; a cost outside the AI ceiling ends a bounded run; so does a loop.
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'AGENT_TOOL_FAULT' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) \
     && { stop_proof "FAILURE: an unresolved platform fault (AGENT_TOOL_FAULT) — reported to Fleet Control; fix it before any further run"; exit 0; }
@@ -469,5 +504,5 @@ watch)
   (( $(Q "SELECT count(*) FROM fleet_cognition_log WHERE agent_id = '$A1' AND at > '$last'") > MAX_IDLE_CALLS )) \
     && { stop_proof "FAILURE: $MAX_IDLE_CALLS model calls without a new customer event"; exit 0; }
   exit 0 ;;
-*) sed -n 2,57p "$0"; exit 2 ;;
+*) sed -n 2,61p "$0"; exit 2 ;;
 esac
