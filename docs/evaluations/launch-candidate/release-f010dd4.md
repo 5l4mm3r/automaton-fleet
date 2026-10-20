@@ -1,4 +1,4 @@
-# Release f010dd4 (schema 99 → 100; UI 0.26.2 unchanged) + Agent-1 runtime cb23033 → f010dd4 — repair A; NOT INSTALLED
+# Release f010dd4 (schema 99 → 100; UI 0.26.2 unchanged) + Agent-1 runtime cb23033 → f010dd4 — repair A; CONTROLLER DEPLOYED, AGENT-1 NOT UPGRADED (revision rehearsal failed) — superseded by release-785ffb0.md
 
 **Why (owner, 2026-10-19, after the purchase proof):** the owner's fault report on the paid £5 order (19:13:09Z) was never
 answered. Agent-1 was paused at 20:15:32Z with the order, its files, the message, the books and the run budget preserved.
@@ -61,3 +61,11 @@ and refunds identical to before the install.
 watchdog counts 30 minutes from the resume. The proof's calls so far averaged ≈ 3.4p (max ≈ 8.3p): 97p is ≈ 28 average calls.
 An answer, the revision and the refund need an estimated 15–25. If the ceiling or the end time is reached first, the proof
 stops (paused, budget ended, no money-out) and reports what was done; it never restarts itself.
+
+## Outcome (2026-10-20)
+Owner-run install 2026-10-19 23:37–00:10Z: release deployed 23:38:54Z (schema 100, outage 45 s, reconciliation OK), the
+founder template installed (no unit restarted), the founder upgrade rehearsal from cb23033 passed (27/27). The revision
+rehearsal in real founder units FAILED (10 of 14): phase 3 — one paid wake after the answer (its own e-mails finishing);
+phase 4 — LibreOffice exit 77 in the unit (no passwd entry for the DynamicUser inside the sandbox), and the stuck founder
+then took a paid turn a minute. The install stopped as designed before Agent-1: both agents paused, Agent-1 on cb23033,
+the proof unchanged. Corrected in 785ffb0 (release-785ffb0.md).
