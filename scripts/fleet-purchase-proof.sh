@@ -160,13 +160,15 @@ economics() {
 # The customer journey on the order $1: "replied corrected inspected" (t/f each). replied: an Agent-1 message after the
 # buyer's first message; corrected: a delivery SENT after that message; inspected: the latest sent delivery's review is
 # fleet-qa-3, pass, automated checks ok (the review gate already binds it to exactly the delivered files).
-# Both counted from the later of the buyer's first message and this run's start (a rerun's start is after it). In a rerun the
+# Both counted from the buyer's first message on the order (2026-10-20, owner: "adjust the proof's acceptance logic to the
+# evidenced sequence … without demanding an unnecessary duplicate delivery": a correction already delivered after the
+# report counts, whichever run made it; it is judged by its own inspection record, never by being delivered or resolved). In a rerun the
 # files must also show what the buyer sees: at least one spreadsheet delivered as its own file, and every such spreadsheet's
 # saved values, displayed dates and rendering pass (the review keeps these per delivered file; a zip's members are
 # inspected, but their display checks are not kept in the review record, so they cannot count here).
 journey() {
   local strict=false; [[ "$MODE" == rerun ]] && strict=true
-  Q "WITH b AS (SELECT GREATEST(min(created_at), '$(START)'::timestamptz) AS at FROM fleet_customer_messages WHERE order_id = '$1' AND author = 'buyer'),
+  Q "WITH b AS (SELECT min(created_at) AS at FROM fleet_customer_messages WHERE order_id = '$1' AND author = 'buyer'),
           d AS (SELECT d.* FROM fleet_order_deliveries d WHERE d.order_id = '$1' AND d.status = 'sent' ORDER BY d.created_at DESC LIMIT 1),
           f AS (SELECT x FROM d JOIN fleet_artifact_reviews r ON r.review_id = d.review_id, jsonb_array_elements(r.automated -> 'files') x WHERE x ->> 'detectedType' = 'xlsx')
      SELECT (EXISTS (SELECT 1 FROM fleet_customer_messages m, b WHERE m.order_id = '$1' AND m.author = 'agent' AND m.created_at > b.at))::text || ' '
@@ -203,8 +205,9 @@ results() {
   echo "    AI: model usage at the credit's price ${ai:-0}p + the unrecoverable tax / fees on that credit ${acq:-0}p (receipt-based ratio of its lot) — one cost in two parts, never the same cost twice; Fleet-recorded, provisional until reconciled with Anthropic"
   local jr jc ji; read -r jr jc ji <<< "$(journey "$o")"
   if [[ "$MODE" == rerun ]]; then
-    echo "    CUSTOMER JOURNEY (this run, since $(START)): Agent-1 answered the buyer: ${jr:-false}; corrected delivery sent: ${jc:-false}; its files passed fleet-qa-3 with saved values, displayed dates and rendering: ${ji:-false}"
-    echo "    the corrected delivery's files: $(Q "SELECT COALESCE(string_agg(f.file_name || ' ' || left(f.content_sha256, 16), '; '), 'none') FROM fleet_order_delivery_files f JOIN fleet_order_deliveries d ON d.delivery_id = f.delivery_id WHERE d.order_id = '$o' AND d.created_at >= '$(START)'")"
+    echo "    CUSTOMER JOURNEY (since the buyer's report): Agent-1 answered the buyer: ${jr:-false}; corrected delivery sent after the report: ${jc:-false}; its files passed fleet-qa-3 with saved values, displayed dates and rendering: ${ji:-false}"
+    echo "    the corrected delivery's files: $(Q "SELECT COALESCE(string_agg(to_char(d.created_at, 'MM-DD HH24:MI') || ' ' || f.file_name || ' ' || left(f.content_sha256, 16), '; '), 'none') FROM fleet_order_delivery_files f JOIN fleet_order_deliveries d ON d.delivery_id = f.delivery_id WHERE d.order_id = '$o' AND d.status = 'sent' AND d.created_at > (SELECT min(created_at) FROM fleet_customer_messages WHERE order_id = '$o' AND author = 'buyer')")"
+    echo "    its spreadsheet checks (from its inspection record): $(Q "SELECT COALESCE(string_agg(c ->> 'id' || ' ' || (c ->> 'status'), '; ' ORDER BY c ->> 'id'), 'none') FROM (SELECT d.review_id FROM fleet_order_deliveries d WHERE d.order_id = '$o' AND d.status = 'sent' ORDER BY d.created_at DESC LIMIT 1) d JOIN fleet_artifact_reviews r ON r.review_id = d.review_id, jsonb_array_elements(r.automated -> 'files') x, jsonb_array_elements(x -> 'checks') c WHERE x ->> 'detectedType' = 'xlsx' AND c ->> 'id' IN ('cached_values','sheet_displayed_dates','sheet_render')")"
   else
     echo "    CUSTOMER JOURNEY: Agent-1 answered the fault report: ${jr:-false}; corrected delivery sent after it: ${jc:-false}; delivered files passed fleet-qa-3: ${ji:-false}"
   fi
@@ -495,7 +498,7 @@ watch)
     elif [[ "$jr $jc $ji" == "true true true" ]]; then
       stop_proof "PROOF COMPLETE (full): Agent-1 answered the fault report and sent a corrected delivery that passed fleet-qa-3; refunded once within the proof's own refund authority, as owner capital; its reservation released; Agent-1's wallet = start ${moved}p by its journals; the ledger verifies"; exit 0
     else
-      stop_proof "PROOF ENDED — NOT a full proof: the refund and accounting checks pass, but $( [[ $jr != true ]] && echo 'no Agent-1 answer to the fault report; ')$( [[ $jc != true ]] && echo 'no corrected delivery sent after it; ')$( [[ $ji != true ]] && echo 'the delivered files did not pass fleet-qa-3; ')(Agent-1's wallet = start ${moved}p by its journals; the ledger verifies)"; exit 0
+      stop_proof "PROOF ENDED — NOT a full proof: the refund and accounting checks pass, but $( [[ $jr != true ]] && echo 'no Agent-1 answer to the fault report; ')$( [[ $jc != true ]] && echo 'no corrected delivery sent after it; ')$( [[ $ji != true ]] && echo "the delivered files did not pass fleet-qa-3$( [[ "$MODE" == rerun ]] && echo ' with saved values, displayed dates and rendering (its spreadsheet checks are in the results)'); ")(Agent-1's wallet = start ${moved}p by its journals; the ledger verifies)"; exit 0
     fi
   fi
   if [[ "$MODE" == rerun && ! -f "$D/correction-delivered.txt" ]]; then

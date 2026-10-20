@@ -329,7 +329,7 @@ Q() { echo "$1" >> "${dir}/sql.log"
     expect(watch({ ...done, CONFIRM_LATE: "t" }).out).toContain("PayPal completed the refund but Agent-1 did not confirm it to the buyer within 30 minutes");
     const full = watch({ ...done, CONFIRMED: "t" });
     expect(full.out).toContain("PROOF COMPLETE (full, rerun): Agent-1 answered the buyer and sent a corrected delivery whose files passed fleet-qa-3 (saved values, displayed dates, rendering); it initiated the refund itself, PayPal confirmed it, and Agent-1 confirmed it to the buyer after that");
-    expect(full.out).toContain("CUSTOMER JOURNEY (this run, since");
+    expect(full.out).toContain("CUSTOMER JOURNEY (since the buyer's report)");
     expect(full.out).toContain("== PROOF STOPPED");
     expect(fs.existsSync(dropin())).toBe(false);
     // (journey() is stubbed here; its SQL is checked against PostgreSQL in the release record's evidence.)
