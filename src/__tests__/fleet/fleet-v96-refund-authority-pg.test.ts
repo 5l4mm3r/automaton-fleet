@@ -245,4 +245,22 @@ describe.skipIf(!PG_BIN)("v96: custody enforces refund authority at dispatch", (
     expect((await R.one(`fleet.fleet_ledger_verify()`)).ok).toBe(true);
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
+
+  it("v103: PayPal's outcome for the agent's refund wakes it and is listed; its own request does not; the request's note is true", async () => {
+    // Owner, 2026-10-20: the agent confirms a refund to the buyer only after PayPal verifies it — so PayPal's answer must reach it.
+    const s = await sale(1_000);
+    await grant(s.orderId, 1_000, 1_000, 1_000, 2);
+    const attention = async () => (await R.one<any>(`fleet.fleet_agent_attention($1)`, [F.id])) as { eventsDigest: string; recentEvents: Array<Record<string, unknown>> };
+    const d0 = (await attention()).eventsDigest;
+    const r = await econNext(R, F, "order.refund", { orderId: s.orderId, amountMinor: 1_000, reason: "the buyer asked for a full refund", idempotencyKey: idem() });
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    expect(r.note).toMatch(/under a refund authority the owner grants.*You are woken when PayPal completes or fails it.*tell the buyer it is complete only then/s);
+    expect(r.note).not.toMatch(/money-out is activated/);
+    expect((await attention()).eventsDigest).toBe(d0);                       // its own request is not news
+    await worker.tick();
+    expect(await req(r.refund.refundRequestId)).toMatchObject({ status: "completed" });
+    const after = await attention();
+    expect(after.eventsDigest).not.toBe(d0);                                 // PayPal's outcome is
+    expect(after.recentEvents).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "refund", id: r.refund.refundRequestId, status: "completed", tool: "wallet orders" })]));
+  });
 });

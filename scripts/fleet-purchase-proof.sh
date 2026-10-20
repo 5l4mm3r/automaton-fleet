@@ -14,6 +14,18 @@
 #       never a new budget, ceiling or end time: guards → the run is still open with ceiling and time left → the watchdog →
 #       resume Agent-1. The quiet periods the watchdog measures start again at the resume (time Agent-1 was paused by the
 #       owner is not time it left a buyer unanswered).
+#   bash fleet-purchase-proof.sh rerun <aiCeilingPence> <hours>
+#       (2026-10-20, owner's revised terms after the ended run) a NEW bounded run of Agent-1 on the SAME paid order: guards →
+#       a new run budget (the ceiling and hours approved; checked before every model request, in-flight calls included) →
+#       the earlier run's records archived (state/phase-<time>/) → the watchdog → resume Agent-1. No buyer message is sent;
+#       nothing is repaired by hand. Success: Agent-1's response to the buyer in this run, a corrected delivery SENT in this
+#       run whose files passed fleet-qa-3 (verdict pass, automated checks ok; every spreadsheet's saved values, displayed
+#       dates and rendering pass), then — when the owner asks for the refund on the order page — Agent-1's own full refund,
+#       PayPal's confirmation, Agent-1's confirmation to the buyer after it, and the money checks below. Never raises the
+#       ceiling or the time; never restarts itself.
+#   … owner-refund [why]  SEPARATE from any agent run (Agent-1 paused, no run open): the owner's own full refund of the
+#                    proof order — request it, open the refund window for it (the same order-only authority and switch),
+#                    wait for PayPal (≤ 30 min, no AI), verify the money, close the window. Recorded as the owner's.
 #   … buy            prints the EXISTING order's page (no new order, no new payment): pay it with PayPal yourself, from an
 #                    account other than the treasury's
 #   … refund [why]   the owner's override: refund the proof order in full (recorded as an OWNER OVERRIDE, not as the agent's
@@ -34,7 +46,10 @@
 #                    Also stops on: a second proof order, refund request or PayPal refund; a third
 #                    delivery; an uncertain outcome; a buyer message unanswered 30 min; 40 model calls without a new
 #                    customer event; a refund not completed 30 min after the window opened; the AI ceiling; 24 h. Waiting
-#                    for the buyer never stops it.
+#                    for the buyer never stops it. 2026-10-20: also on an unresolved platform fault (AGENT_TOOL_FAULT), a
+#                    cost to Agent-1's cash outside the AI ceiling (anything but its model usage and that credit's tax/fee),
+#                    the same refusal 8 times in the run, and (rerun) a completed refund Agent-1 has not confirmed to the
+#                    buyer within 30 min.
 # Never: public sales, card authority, an outward release, payouts, a standing refund authority, Agent-2, sweep, sizing,
 # the cap, the fuses, runtime.env. The exit status is the real one; the log is complete when the script returns.
 set -uo pipefail
@@ -76,7 +91,11 @@ START() { cat "$D/proof-start.txt" 2>/dev/null; }
 RESUMED() { tail -1 "$D/proof-resumed.txt" 2>/dev/null || START; }
 WINDOW() { cat "$D/refund-window.txt" 2>/dev/null; }
 AUTH() { cat "$D/refund-authority.txt" 2>/dev/null; }
-CEILING=0; SP0=0; [[ -f "$D/proof-terms.txt" ]] && read -r CEILING SP0 < "$D/proof-terms.txt"
+CEILING=0; SP0=0; T_MAXDEL=""; T_MAXIDLE=""; MODE=""; T_HOURS=""
+[[ -f "$D/proof-terms.txt" ]] && read -r CEILING SP0 T_MAXDEL T_MAXIDLE MODE T_HOURS < "$D/proof-terms.txt"
+# A rerun's own terms (2026-10-20): one more delivery than it started with, its idle-call allowance, its hours.
+MAX_DELIVERIES=${T_MAXDEL:-$MAX_DELIVERIES}; MAX_IDLE_CALLS=${T_MAXIDLE:-$MAX_IDLE_CALLS}; MODE=${MODE:-proof}; HOURS=${T_HOURS:-$HOURS}
+MAX_REPEATED_REFUSALS=8
 # The one proof order there is (opened 2026-10-19 11:04:57Z); never a new one.
 ORDER() { Q "SELECT order_id FROM fleet_customer_orders WHERE owner_proof AND agent_id = '$A1' ORDER BY created_at LIMIT 1"; }
 closed() {
@@ -109,12 +128,21 @@ cash_moved() { journals | awk '{s += $2} END {print s + 0}'; }
 # The customer journey on the order $1: "replied corrected inspected" (t/f each). replied: an Agent-1 message after the
 # buyer's first message; corrected: a delivery SENT after that message; inspected: the latest sent delivery's review is
 # fleet-qa-3, pass, automated checks ok (the review gate already binds it to exactly the delivered files).
+# Both counted from the later of the buyer's first message and this run's start (a rerun's start is after it). In a rerun the
+# files must also show what the buyer sees: at least one spreadsheet delivered as its own file, and every such spreadsheet's
+# saved values, displayed dates and rendering pass (the review keeps these per delivered file; a zip's members are
+# inspected, but their display checks are not kept in the review record, so they cannot count here).
 journey() {
-  Q "WITH b AS (SELECT min(created_at) AS at FROM fleet_customer_messages WHERE order_id = '$1' AND author = 'buyer'),
-          d AS (SELECT d.* FROM fleet_order_deliveries d WHERE d.order_id = '$1' AND d.status = 'sent' ORDER BY d.created_at DESC LIMIT 1)
+  local strict=false; [[ "$MODE" == rerun ]] && strict=true
+  Q "WITH b AS (SELECT GREATEST(min(created_at), '$(START)'::timestamptz) AS at FROM fleet_customer_messages WHERE order_id = '$1' AND author = 'buyer'),
+          d AS (SELECT d.* FROM fleet_order_deliveries d WHERE d.order_id = '$1' AND d.status = 'sent' ORDER BY d.created_at DESC LIMIT 1),
+          f AS (SELECT x FROM d JOIN fleet_artifact_reviews r ON r.review_id = d.review_id, jsonb_array_elements(r.automated -> 'files') x WHERE x ->> 'detectedType' = 'xlsx')
      SELECT (EXISTS (SELECT 1 FROM fleet_customer_messages m, b WHERE m.order_id = '$1' AND m.author = 'agent' AND m.created_at > b.at))::text || ' '
          || (EXISTS (SELECT 1 FROM fleet_order_deliveries x, b WHERE x.order_id = '$1' AND x.status = 'sent' AND x.created_at > b.at))::text || ' '
-         || COALESCE((SELECT (r.inspector = 'fleet-qa-3' AND r.verdict = 'pass' AND r.automated_ok)::text FROM d JOIN fleet_artifact_reviews r ON r.review_id = d.review_id), 'false')"
+         || COALESCE((SELECT (r.inspector = 'fleet-qa-3' AND r.verdict = 'pass' AND r.automated_ok
+               AND (NOT $strict OR ((SELECT count(*) FROM f) >= 1 AND (SELECT count(*) FROM f, jsonb_array_elements(f.x -> 'checks') c
+                     WHERE c ->> 'id' IN ('cached_values','sheet_displayed_dates','sheet_render') AND c ->> 'status' = 'pass') = 3 * (SELECT count(*) FROM f))))::text
+             FROM d JOIN fleet_artifact_reviews r ON r.review_id = d.review_id), 'false')"
 }
 results() {
   local o=$1 by k
@@ -142,7 +170,12 @@ results() {
   local ai acq now moved; ai=$(journals | awk '$1 == "inference_charge" {print -$2}'); acq=$(journals | awk '$1 == "ai_credit_acquisition_cost" {print -$2}')
   echo "    AI: model usage at the credit's price ${ai:-0}p + the unrecoverable tax / fees on that credit ${acq:-0}p (receipt-based ratio of its lot) — one cost in two parts, never the same cost twice; Fleet-recorded, provisional until reconciled with Anthropic"
   local jr jc ji; read -r jr jc ji <<< "$(journey "$o")"
-  echo "    CUSTOMER JOURNEY: Agent-1 answered the fault report: ${jr:-false}; corrected delivery sent after it: ${jc:-false}; delivered files passed fleet-qa-3: ${ji:-false}"
+  if [[ "$MODE" == rerun ]]; then
+    echo "    CUSTOMER JOURNEY (this run, since $(START)): Agent-1 answered the buyer: ${jr:-false}; corrected delivery sent: ${jc:-false}; its files passed fleet-qa-3 with saved values, displayed dates and rendering: ${ji:-false}"
+    echo "    the corrected delivery's files: $(Q "SELECT COALESCE(string_agg(f.file_name || ' ' || left(f.content_sha256, 16), '; '), 'none') FROM fleet_order_delivery_files f JOIN fleet_order_deliveries d ON d.delivery_id = f.delivery_id WHERE d.order_id = '$o' AND d.created_at >= '$(START)'")"
+  else
+    echo "    CUSTOMER JOURNEY: Agent-1 answered the fault report: ${jr:-false}; corrected delivery sent after it: ${jc:-false}; delivered files passed fleet-qa-3: ${ji:-false}"
+  fi
   now=$(spendable); moved=$(cash_moved)
   echo "    Agent-1 wallet: ${SP0}p at start $( (( moved < 0 )) && echo "− ${moved#-}p" || echo "+ ${moved}p") (the journals above) = $(( SP0 + moved ))p expected; spendable now ${now}p ($( [[ "$now" == "$(( SP0 + moved ))" ]] && echo reconciled || echo "NOT RECONCILED by $(( now - SP0 - moved ))p"))"
 }
@@ -252,6 +285,60 @@ continue)
   echo "  2. resume Agent-1"
   A founder-cognition $A1 resume "purchase proof continued (owner approval): the same run budget and end time; public sales stay closed" | jq -c '{paused}' || { stop_proof "resume failed"; exit 1; }
   echo "== PROOF CONTINUED $(RESUMED): the same order and run budget; sales closed; card authority off; no outward release; money-out off; Agent-2 paused"; report ;;
+rerun)
+  [[ "${2:-}" =~ ^[0-9]+$ && "${3:-}" =~ ^[0-9]+$ ]] && (( $2 >= 1 && $2 <= 1000 && $3 >= 1 && $3 <= 24 )) \
+    || die "usage: rerun <aiCeilingPence 1..1000> <hours 1..24> (the owner's approved terms)"
+  [[ -n "$(START)" ]] || die "no proof was started here: a rerun continues the existing proof order"
+  guard
+  [[ "$(paused $A1)" == t ]] || die "Agent-1 is already running"
+  [[ "$(authorities)" == "[]" && "$(switch_file)" == absent && "$(switch_effective)" != ON && -z "$(WINDOW)" ]] || die "a refund authority, window or custody's refund switch is on"
+  [[ "$(Q 'SELECT count(*) FROM fleet_cognition_run_budgets WHERE ended_at IS NULL AND now() < ends_at')" == 0 ]] || die "a run budget is open: end it first (stop)"
+  [[ "$(Q 'SELECT count(*) FROM fleet_customer_orders WHERE owner_proof')" == 1 ]] || die "not exactly one proof order"
+  o=$(ORDER)
+  [[ "$(Q "SELECT payment_status FROM fleet_customer_orders WHERE order_id = '$o'")" == paid ]] || die "the proof order is not paid"
+  [[ "$(Q "SELECT count(*) FROM fleet_paypal_refund_requests WHERE order_id = '$o'")" == 0 ]] || die "the proof order already has a refund request"
+  sp=$(spendable); [[ "$sp" =~ ^[0-9]+$ ]] || die "Agent-1's spendable cash is unknown"
+  base=$(Q "SELECT count(*) FROM fleet_order_deliveries WHERE order_id = '$o'"); [[ "$base" =~ ^[0-9]+$ ]] || die "the order's deliveries are unknown"
+  echo "  the SAME paid proof order $o: no new order, no buyer message, no repair by hand; Agent-1 works from its own record and files"
+  echo "  1. a NEW run budget: $(printf '£%d.%02d' $(($2 / 100)) $(($2 % 100))) of AI for $3 h (checked before every model request, in-flight calls included); never raised, never restarted"
+  A cognition-run $A1 start $2 $3 "purchase proof rerun (owner's revised terms): the outstanding correction, then the buyer's refund; AI ceiling ${2}p" | jq -c '.run | {ceilingMinor, endsAt}' \
+    || die "run budget not opened (nothing else changed)"
+  P="$D/phase-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$P"
+  for f in proof-start.txt proof-terms.txt proof-resumed.txt refund-authority.txt correction-delivered.txt; do [[ -f "$D/$f" ]] && mv "$D/$f" "$P/"; done
+  echo "$2 $sp $((base + 1)) 60 rerun $3" > "$D/proof-terms.txt"; ts > "$D/proof-start.txt"; START > "$D/proof-resumed.txt"
+  CEILING=$2; SP0=$sp; MODE=rerun; HOURS=$3
+  echo "     the earlier run's records: $P; spendable at this start ${SP0}p; deliveries so far ${base} (this run: one corrected delivery)"
+  echo "  2. watchdog every minute"
+  sudo -n systemd-run --quiet --unit $UNIT --setenv=FLEET_PROOF_DIR="$D" --on-active=1min --on-unit-active=1min /bin/bash "$SELF" watch \
+    || { stop_proof "watchdog not armed"; exit 1; }
+  echo "  3. resume Agent-1"
+  A founder-cognition $A1 resume "purchase proof rerun (owner approval): AI ceiling ${2}p, $3 h; public sales stay closed" | jq -c '{paused}' || { stop_proof "resume failed"; exit 1; }
+  echo "== PROOF RERUN STARTED $(START): the same order; sales closed; card authority off; no outward release; money-out off until Agent-1 requests the refund; Agent-2 paused"; report ;;
+owner-refund)
+  [[ -n "$(START)" ]] || die "no proof was started here"
+  guard
+  [[ "$(paused $A1)" == t ]] || die "Agent-1 is running: the owner's refund is separate from an agent run (stop it first)"
+  [[ "$(Q 'SELECT count(*) FROM fleet_cognition_run_budgets WHERE ended_at IS NULL AND now() < ends_at')" == 0 ]] || die "a run budget is open: stop it first"
+  [[ "$(authorities)" == "[]" && "$(switch_file)" == absent && "$(switch_effective)" != ON && -z "$(WINDOW)" ]] || die "a refund authority, window or custody's refund switch is on"
+  o=$(ORDER); [[ -n "$o" ]] || die "no proof order"
+  [[ "$(Q "SELECT payment_status FROM fleet_customer_orders WHERE order_id = '$o'")" == paid ]] || die "the proof order is not paid"
+  [[ "$(Q "SELECT count(*) FROM fleet_paypal_refund_requests WHERE order_id = '$o'")" == 0 ]] || die "the proof order already has a refund request"
+  why=${2:-"purchase proof: the owner's own refund of the proof purchase"}
+  r=$(A economy-order-refund "$o" all "$why" 2>&1); echo "$r" | jq -c '{ok, replay, refund, code, reason}' 2>/dev/null || echo "$r" | head -5
+  [[ "$(jq -r '.ok' <<< "$r" 2>/dev/null)" == true ]] || die "the refund could not be requested (nothing else changed)"
+  window_open "$o" || { window_close; die "the refund window could not be opened: the request stays set aside, nothing was sent"; }
+  echo "  refund window: $(WINDOW)"
+  for i in $(seq 1 "${OWNER_REFUND_POLLS:-90}"); do
+    [[ "$(Q "SELECT count(*) FROM fleet_paypal_refund_requests WHERE order_id = '$o' AND status IN ('completed','failed')")" == 1 ]] && break
+    sleep "${OWNER_REFUND_POLL_S:-20}"
+  done
+  st=$(Q "SELECT status FROM fleet_paypal_refund_requests WHERE order_id = '$o'")
+  window_close || die "the refund window could not be closed: re-run stop"
+  [[ "$st" == completed && "$(Q "SELECT count(*) FROM fleet_offer_proof_returns r JOIN fleet_customer_orders z ON z.checkout_id = r.checkout_id WHERE z.order_id = '$o' AND r.kind = 'refund'")" -ge 1 \
+     && "$(Q "SELECT count(*) FROM fleet_paypal_refund_requests WHERE order_id = '$o' AND status IN ('requested','sent','pending')")" == 0 && "$(Q "SELECT fleet_ledger_verify()->>'ok'")" == true ]] \
+    || { report; die "the owner's refund is $st: not verified complete (window closed; see status)"; }
+  report
+  echo "== OWNER REFUND COMPLETE $(ts): PayPal confirmed; owner capital; reservation released; the window closed (no refund authority live, custody's switch off)" ;;
 buy)
   [[ -n "$(START)" && "$(paused $A1)" == f ]] || die "start the proof first"
   guard; o=$(ORDER)
@@ -275,7 +362,7 @@ watch)
     && { stop_proof "FAILURE: a refund was requested on another order (custody would not send it: no authority covers it)"; exit 0; }
   (( $(Q "SELECT count(*) FROM fleet_paypal_refund_requests WHERE order_id = '$o'") > 1 )) && { stop_proof "FAILURE: a second refund request on the proof order"; exit 0; }
   (( $(Q "SELECT count(DISTINCT paypal_refund_id) FROM fleet_paypal_refund_requests WHERE order_id = '$o'") > 1 )) && { stop_proof "FAILURE: a second PayPal refund"; exit 0; }
-  (( $(Q "SELECT count(*) FROM fleet_order_deliveries WHERE order_id = '$o'") > MAX_DELIVERIES )) && { stop_proof "FAILURE: more deliveries than the delivery and one revision"; exit 0; }
+  (( $(Q "SELECT count(*) FROM fleet_order_deliveries WHERE order_id = '$o'") > MAX_DELIVERIES )) && { stop_proof "FAILURE: more deliveries than $( [[ "$MODE" == rerun ]] && echo "this run's one corrected delivery" || echo "the delivery and one revision")"; exit 0; }
   if [[ "$(Q "SELECT count(*) FROM fleet_paypal_refund_requests WHERE order_id = '$o' AND status = 'completed' AND authority_id IS NOT DISTINCT FROM NULLIF('$(AUTH)', '')::uuid")" == 1 \
         && "$(Q "SELECT count(*) FROM fleet_offer_proof_returns r JOIN fleet_customer_orders z ON z.checkout_id = r.checkout_id WHERE z.order_id = '$o' AND r.kind = 'refund'")" -ge 1 \
         && "$(Q "SELECT fleet_ledger_verify()->>'ok'")" == true ]]; then
@@ -288,10 +375,28 @@ watch)
     now=$(spendable); moved=$(cash_moved)
     [[ "$now" == "$(( SP0 + moved ))" ]] || { stop_proof "FAILURE: Agent-1's wallet does not reconcile: spendable ${now}p, expected $(( SP0 + moved ))p (${SP0}p + journals ${moved}p)"; exit 0; }
     read -r jr jc ji <<< "$(journey "$o")"
-    if [[ "$jr $jc $ji" == "true true true" ]]; then
-      stop_proof "PROOF COMPLETE (full): Agent-1 answered the fault report and sent a corrected delivery that passed fleet-qa-3; refunded once within the proof's own refund authority, as owner capital; its reservation released; Agent-1's wallet = start ${moved}p by its journals; the ledger verifies"; exit 0
+    if [[ "$MODE" == rerun ]]; then
+      # Agent-1's own refund, and its confirmation to the buyer AFTER PayPal's (an earlier "done" is not a confirmation).
+      by=$(Q "SELECT requested_by FROM fleet_paypal_refund_requests WHERE order_id = '$o' ORDER BY created_at LIMIT 1")
+      [[ "$by" == agent ]] || { stop_proof "PROOF ENDED — NOT a full proof: the refund was requested by $by, not initiated by Agent-1"; exit 0; }
+      if [[ "$(Q "SELECT EXISTS (SELECT 1 FROM fleet_customer_messages m WHERE m.order_id = '$o' AND m.author = 'agent' AND m.created_at > (SELECT max(updated_at) FROM fleet_paypal_refund_requests WHERE order_id = '$o' AND status = 'completed'))")" != t ]]; then
+        [[ "$(Q "SELECT (SELECT max(updated_at) FROM fleet_paypal_refund_requests WHERE order_id = '$o' AND status = 'completed') < now() - interval '$QUIET_MIN minutes'")" == t ]] \
+          && { stop_proof "PROOF ENDED — NOT a full proof: PayPal completed the refund but Agent-1 did not confirm it to the buyer within $QUIET_MIN minutes"; exit 0; }
+        CONFIRM_PENDING=1
+      fi
     fi
-    stop_proof "PROOF ENDED — NOT a full proof: the refund and accounting checks pass, but $( [[ $jr != true ]] && echo 'no Agent-1 answer to the fault report; ')$( [[ $jc != true ]] && echo 'no corrected delivery sent after it; ')$( [[ $ji != true ]] && echo 'the delivered files did not pass fleet-qa-3; ')(Agent-1's wallet = start ${moved}p by its journals; the ledger verifies)"; exit 0
+    if [[ -n "${CONFIRM_PENDING:-}" ]]; then :   # PayPal has confirmed; Agent-1's confirmation to the buyer is awaited
+    elif [[ "$jr $jc $ji" == "true true true" && "$MODE" == rerun ]]; then
+      stop_proof "PROOF COMPLETE (full, rerun): Agent-1 answered the buyer and sent a corrected delivery whose files passed fleet-qa-3 (saved values, displayed dates, rendering); it initiated the refund itself, PayPal confirmed it, and Agent-1 confirmed it to the buyer after that; refunded once within the order-only refund authority, as owner capital; its reservation released; Agent-1's wallet = start ${moved}p by its journals; the ledger verifies"; exit 0
+    elif [[ "$jr $jc $ji" == "true true true" ]]; then
+      stop_proof "PROOF COMPLETE (full): Agent-1 answered the fault report and sent a corrected delivery that passed fleet-qa-3; refunded once within the proof's own refund authority, as owner capital; its reservation released; Agent-1's wallet = start ${moved}p by its journals; the ledger verifies"; exit 0
+    else
+      stop_proof "PROOF ENDED — NOT a full proof: the refund and accounting checks pass, but $( [[ $jr != true ]] && echo 'no Agent-1 answer to the fault report; ')$( [[ $jc != true ]] && echo 'no corrected delivery sent after it; ')$( [[ $ji != true ]] && echo 'the delivered files did not pass fleet-qa-3; ')(Agent-1's wallet = start ${moved}p by its journals; the ledger verifies)"; exit 0
+    fi
+  fi
+  if [[ "$MODE" == rerun && ! -f "$D/correction-delivered.txt" ]]; then
+    read -r jr jc ji <<< "$(journey "$o")"
+    [[ "$jr $jc $ji" == "true true true" ]] && echo "$(ts): Agent-1 answered and sent a corrected delivery whose files passed fleet-qa-3 (saved values, displayed dates, rendering); the run continues for the refund" > "$D/correction-delivered.txt"
   fi
   # The refund window: when the proof order's refund is requested (custody enforces the order-only authority).
   if [[ -z "$(WINDOW)" && "$(Q "SELECT count(*) FROM fleet_paypal_refund_requests x WHERE x.order_id = '$o' AND x.status = 'requested'")" == 1 ]]; then
@@ -308,10 +413,17 @@ watch)
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'OPERATION_UNCERTAIN' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) \
     && { stop_proof "an outcome is uncertain: check it and resolve it (fleet operations-uncertain)"; exit 0; }
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'AGENT_CANNOT_THINK' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) && { stop_proof "FAILURE: the agent cannot think (packet)"; exit 0; }
+  # 2026-10-20: a platform fault is not the agent's to fix; a cost outside the AI ceiling ends a bounded run; so does a loop.
+  (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'AGENT_TOOL_FAULT' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) \
+    && { stop_proof "FAILURE: an unresolved platform fault (AGENT_TOOL_FAULT) — reported to Fleet Control; fix it before any further run"; exit 0; }
+  outside=$(journals | awk '$1 != "inference_charge" && $1 != "ai_credit_acquisition_cost" && $2 < 0 {printf "%s %sp; ", $1, $2}')
+  [[ -z "$outside" ]] || { stop_proof "FAILURE: Agent-1's cash moved outside the run's AI ceiling: ${outside}"; exit 0; }
+  (( $(Q "SELECT COALESCE(max(n), 0) FROM (SELECT x ->> 'code' AS code, count(*) AS n FROM fleet_agent_mind_reports r, jsonb_array_elements(r.refusals) x WHERE r.agent_id = '$A1' AND r.at >= '$s' GROUP BY 1) y") >= MAX_REPEATED_REFUSALS )) \
+    && { stop_proof "FAILURE: the same refusal $MAX_REPEATED_REFUSALS times in this run (repeated failure)"; exit 0; }
   last=$(Q "SELECT GREATEST('$(RESUMED)'::timestamptz, COALESCE((SELECT max(created_at) FROM fleet_events WHERE agent_id = '$A1' AND created_at >= '$s'
             AND event_type IN ('offer_proof_captured','customer_message_received','order_refund_requested')), '$s'::timestamptz))")
   (( $(Q "SELECT count(*) FROM fleet_cognition_log WHERE agent_id = '$A1' AND at > '$last'") > MAX_IDLE_CALLS )) \
     && { stop_proof "FAILURE: $MAX_IDLE_CALLS model calls without a new customer event"; exit 0; }
   exit 0 ;;
-*) sed -n 2,39p "$0"; exit 2 ;;
+*) sed -n 2,54p "$0"; exit 2 ;;
 esac

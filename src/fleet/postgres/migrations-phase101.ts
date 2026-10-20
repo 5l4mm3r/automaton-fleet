@@ -20,7 +20,7 @@ export const OWN_SEND_KINDS = ["mail.send", "sms.send"] as const;
 
 const IDENTITY = "SELECT job_id, status, finished_at, 'identity' AS tool FROM fleet_identity_jobs WHERE agent_id = p_agent AND finished_at > now() - interval '14 days'";
 if (finishedJobs.split(IDENTITY).length !== 2) throw new Error("v101: the identity jobs line of the v94 wake digest changed");
-const wakeJobs = finishedJobs.replace(IDENTITY, `${IDENTITY}
+export const wakeJobs = finishedJobs.replace(IDENTITY, `${IDENTITY}
              AND NOT (kind IN (${OWN_SEND_KINDS.map((k) => `'${k}'`).join(", ")}) AND status = 'succeeded')`);
 
 const ATTENTION = restate(V100_SQL, "fleet_agent_attention", [

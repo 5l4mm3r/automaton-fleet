@@ -52,6 +52,12 @@ journals() { if [[ -n "\${JOURNALS:-}" ]]; then echo "\${JOURNALS}" | tr ',' '\\
 journey() { echo "\${JOURNEY:-true true true}"; }
 Q() { echo "$1" >> "${dir}/sql.log"
   case "$1" in
+    *"m.created_at > (SELECT max(updated_at)"*) echo "\${CONFIRMED:-f}";;
+    *"status = 'completed') < now()"*) echo "\${CONFIRM_LATE:-f}";;
+    *"code = 'AGENT_TOOL_FAULT'"*) echo "\${TOOLFAULT:-0}";;
+    *"jsonb_array_elements(r.refusals)"*) echo "\${REPEATS:-0}";;
+    *"SELECT status FROM fleet_paypal_refund_requests"*) echo "\${RSTATUS:-completed}";;
+    *"status IN ('completed','failed')"*) echo "\${DONE:-1}";;
     *"paused FROM fleet_founder_cognition WHERE agent_id = '${A1}'"*) if [[ -f "${dir}/paused-1" ]]; then echo t; else echo "\${P1:-t}"; fi;;
     *"paused FROM fleet_founder_cognition"*) echo "\${P2:-t}";;
     *"runtime_commit FROM fleet_agents"*) echo "\${AGENT:-${REL}}";;
@@ -245,5 +251,95 @@ Q() { echo "$1" >> "${dir}/sql.log"
     const sql = fs.readFileSync(path.join(dir, "sql.log"), "utf8");
     expect(sql).toContain(`AND GREATEST(b.created_at, '${resumed[1]}'::timestamptz) < now() - interval '30 minutes'`);
     expect(sql).toContain(`SELECT GREATEST('${resumed[1]}'::timestamptz, COALESCE((SELECT max(created_at) FROM fleet_events`);
+  });
+
+  // 2026-10-20 (owner's revised terms): a NEW bounded run on the SAME paid order — the outstanding correction, then Agent-1's
+  // own refund of the buyer, confirmed only after PayPal; and the owner's own refund kept separate.
+  it("rerun: guards first; a new run budget with the approved ceiling and hours; the earlier records archived; no buyer message, no money-out", () => {
+    const state = path.join(dir, "state");
+    expect(run(["rerun", "600", "6"]).out).toContain("no proof was started here: a rerun continues the existing proof order");
+    expect(run(["start", "200"]).code).toBe(0);
+    fs.rmSync(log);
+    const refusals: Array<[string[], Record<string, string>, string]> = [
+      [["rerun"], {}, "usage: rerun <aiCeilingPence 1..1000> <hours 1..24>"],
+      [["rerun", "600"], {}, "usage: rerun"], [["rerun", "2000", "6"], {}, "usage: rerun"], [["rerun", "600", "48"], {}, "usage: rerun"],
+      [["rerun", "600", "6"], { P1: "f" }, "Agent-1 is already running"],
+      [["rerun", "600", "6"], { PAYMENT: "awaiting_payment" }, "the proof order is not paid"],
+      [["rerun", "600", "6"], { PAYMENT: "paid", REFUNDS: "1" }, "the proof order already has a refund request"],
+      [["rerun", "600", "6"], { PAYMENT: "paid", STALE_ENV: "1" }, "a refund authority, window or custody's refund switch is on"],
+      [["rerun", "600", "6"], { PAYMENT: "paid", P2: "f" }, "Agent-2 is NOT paused"],
+      [["rerun", "600", "6"], { PAYMENT: "paid", SALES: "t" }, "sales, card authority or an outward release is open"],
+    ];
+    for (const [args, env, why] of refusals) {
+      const r = run(args, env);
+      expect(r.code, why).toBe(1);
+      expect(r.out, why).toContain(why);
+      expect(r.host, why).toEqual([]);
+    }
+    const start1 = fs.readFileSync(path.join(state, "proof-start.txt"), "utf8");
+    const ok = run(["rerun", "600", "6"], { PAYMENT: "paid", DELIVERIES: "2" });
+    expect(ok.code, ok.out).toBe(0);
+    expect(ok.host[0]).toMatch(new RegExp(`^A cognition-run ${A1} start 600 6 purchase proof rerun`));
+    expect(ok.host[1]).toMatch(/^sudo -n systemd-run --quiet --unit fleet-proof-watch .* watch$/);
+    expect(ok.host[2]).toMatch(new RegExp(`^A founder-cognition ${A1} resume purchase proof rerun`));
+    expect(ok.host.join("\n")).not.toMatch(/refund-authority|economy-order-refund|dropin|runtime\.env|sales_set|customer_message/);
+    expect(fs.readFileSync(path.join(state, "proof-terms.txt"), "utf8").trim()).toBe("600 9758 3 60 rerun 6");
+    const phase = fs.readdirSync(state).filter((f) => f.startsWith("phase-"));
+    expect(phase).toHaveLength(1);
+    expect(fs.readFileSync(path.join(state, phase[0], "proof-start.txt"), "utf8")).toBe(start1);
+    expect(ok.out).toContain("no new order, no buyer message, no repair by hand");
+    expect(ok.out).toContain("£6.00 of AI for 6 h (checked before every model request, in-flight calls included); never raised, never restarted");
+  });
+
+  it("rerun watch: one corrected delivery allowed; the correction is recorded and the run continues; success needs Agent-1's own refund and its confirmation after PayPal", () => {
+    expect(run(["start", "200"]).code).toBe(0);
+    expect(run(["rerun", "600", "6"], { PAYMENT: "paid", DELIVERIES: "2" }).code).toBe(0);
+    const state = path.join(dir, "state");
+    fs.writeFileSync(path.join(state, "refund-authority.txt"), AUTH + "\n");
+    expect(watch({ DELIVERIES: "3" }).out).not.toContain("FAILURE");
+    expect(watch({ DELIVERIES: "4" }).out).toContain("FAILURE: more deliveries than this run's one corrected delivery");
+    // The corrected delivery is recorded once (the run goes on for the refund).
+    expect(watch({ DELIVERIES: "3" }).out).not.toContain("PROOF");
+    expect(fs.readFileSync(path.join(state, "correction-delivered.txt"), "utf8")).toMatch(/passed fleet-qa-3 \(saved values, displayed dates, rendering\); the run continues for the refund/);
+    const done = { DELIVERIES: "3", COMPLETED: "1", RETURNS: "1", BY: "agent" };
+    expect(watch({ ...done, BY: "operator:owner" }).out).toContain("NOT a full proof: the refund was requested by operator:owner, not initiated by Agent-1");
+    const waiting = watch(done);                                       // PayPal confirmed; Agent-1 has not yet told the buyer
+    expect(waiting.out).not.toContain("PROOF");
+    expect(watch({ ...done, CONFIRM_LATE: "t" }).out).toContain("PayPal completed the refund but Agent-1 did not confirm it to the buyer within 30 minutes");
+    const full = watch({ ...done, CONFIRMED: "t" });
+    expect(full.out).toContain("PROOF COMPLETE (full, rerun): Agent-1 answered the buyer and sent a corrected delivery whose files passed fleet-qa-3 (saved values, displayed dates, rendering); it initiated the refund itself, PayPal confirmed it, and Agent-1 confirmed it to the buyer after that");
+    expect(full.out).toContain("CUSTOMER JOURNEY (this run, since");
+    expect(full.out).toContain("== PROOF STOPPED");
+    expect(fs.existsSync(dropin())).toBe(false);
+    // (journey() is stubbed here; its SQL is checked against PostgreSQL in the release record's evidence.)
+  });
+
+  it("every run stops on an unresolved platform fault, a cost outside the AI ceiling, or the same refusal 8 times", () => {
+    expect(run(["start", "200"]).code).toBe(0);
+    expect(watch({ TOOLFAULT: "1" }).out).toContain("FAILURE: an unresolved platform fault (AGENT_TOOL_FAULT)");
+    expect(watch({ JOURNALS: "inference_charge -18 4,media_charge -40 1" }).out).toContain("FAILURE: Agent-1's cash moved outside the run's AI ceiling: media_charge -40p;");
+    expect(watch({ JOURNALS: "ai_credit_acquisition_cost -3 1,inference_charge -18 4" }).out).not.toContain("FAILURE");
+    expect(watch({ REPEATS: "8" }).out).toContain("FAILURE: the same refusal 8 times in this run (repeated failure)");
+    expect(watch({ REPEATS: "7" }).out).not.toContain("FAILURE");
+  });
+
+  it("owner-refund: separate from any agent run; requests the full refund, opens the order-only window, waits for PayPal, verifies the money, closes the window", () => {
+    expect(run(["start", "200"]).code).toBe(0);
+    fs.rmSync(log);
+    expect(run(["owner-refund"], { P1: "f" }).out).toContain("Agent-1 is running: the owner's refund is separate from an agent run");
+    expect(run(["owner-refund"], { PAYMENT: "paid", REFUNDS: "1" }).out).toContain("the proof order already has a refund request");
+    expect(run(["owner-refund"], { PAYMENT: "awaiting_payment" }).out).toContain("the proof order is not paid");
+    const r = run(["owner-refund"], { PAYMENT: "paid", RETURNS: "1", OWNER_REFUND_POLL_S: "0" });
+    expect(r.code, r.out).toBe(0);
+    const host = r.host.join("\n");
+    expect(r.host[0]).toBe(`A economy-order-refund ${ORDER} all purchase proof: the owner's own refund of the proof purchase`);
+    expect(r.host[1]).toBe(`A economy-refund-authority-grant ${ORDER} 500 500 500 2 purchase proof: the owner's £5 proof order only`);
+    expect(host).toMatch(new RegExp(`tee .*dropin\\.conf[\\s\\S]*A economy-refund-authority-end ${AUTH} [\\s\\S]*rm -f .*dropin\\.conf`));
+    expect(fs.existsSync(dropin())).toBe(false);
+    expect(r.out).toContain("== OWNER REFUND COMPLETE");
+    const bad = run(["owner-refund"], { PAYMENT: "paid", RSTATUS: "failed", DONE: "1", OWNER_REFUND_POLL_S: "0" });
+    expect(bad.code).toBe(1);
+    expect(bad.out).toContain("the owner's refund is failed: not verified complete (window closed; see status)");
+    expect(fs.existsSync(dropin())).toBe(false);
   });
 });
