@@ -1,4 +1,4 @@
-# Release 785ffb0 (schema 100 → 101; UI 0.26.2 unchanged) + Agent-1 runtime cb23033 → 785ffb0 — repair A completed; NOT INSTALLED
+# Release 785ffb0 (schema 100 → 101; UI 0.26.2 unchanged) + Agent-1 runtime cb23033 → 785ffb0 — CONTROLLER DEPLOYED 2026-10-20 01:55Z, AGENT-1 NOT UPGRADED (revision rehearsal: the corrected delivery refused) — superseded by release-d2a2e7a.md
 
 **Why:** f010dd4 (repair A, release-f010dd4.md) is deployed, but its revision rehearsal in real founder units failed, so
 its install stopped before Agent-1 (2026-10-20 00:10Z; both agents paused; the purchase proof unchanged).
@@ -39,3 +39,12 @@ upgrade; unit checks + the shim; the proof script pinned; end state with the pro
 ## Continuation on the existing paid order (a separate approval after the install)
 `bash ~/rlc106/proof.sh continue` — the SAME run budget (97.33p left of 200p, ends 2026-10-20 14:33:50Z). If the ceiling
 or the end time is reached first, the proof stops (paused, no money-out) and reports what was done; it never restarts.
+
+## Outcome (2026-10-20)
+Install 01:53–02:27Z (run at the owner's request): release deployed 01:55:24Z (schema 101, outage 46 s, reconciliation OK);
+template unchanged; founder upgrade rehearsal from cb23033 passed (27/27). Revision rehearsal 11 of 14: phases 1–3 PASSED
+(answer, honest blocker, no model call while waiting or across a restart — the v101 and stall fixes held); in phase 4 the
+founder recalculated in the unit (LibreOffice rc 0) and inspected and reviewed the corrected file (dates and render pass),
+but its delivery was refused FLEET_OPERATION_EXISTS: a further delivery on a delivered order names the earlier one
+(`after`, v95), which the deliver description did not say; the scripted model also recalculated again in later turns,
+replacing the reviewed bytes. The install stopped before Agent-1. Corrected in d2a2e7a.
