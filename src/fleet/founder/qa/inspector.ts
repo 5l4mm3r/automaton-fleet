@@ -451,7 +451,7 @@ def inspect_xlsx(r, path, cases):
         # A wrong saved number is a broken deliverable: previewers, phones and mail clients show it as the answer.
         r.check("cached_values", "fail", "%d cell(s) whose saved value differs from the recalculated one (previewers, phones and mail clients show the saved, wrong value): %s — save the computed values (XlsxWriter: pass value= to write_formula)" % (len(mismatch), "; ".join(mismatch[:50])))
     elif missing_cache:
-        r.check("cached_values", "warn", "%d formula cell(s) saved without a value (previewers show them blank): %s" % (len(missing_cache), ", ".join(missing_cache[:50])))
+        r.check("cached_values", "warn", "%d formula cell(s) saved without a value (previewers show them blank): %s — save the computed values: recalculate and save it with the office application (soffice --headless --convert-to xlsx --outdir <another folder> <file>), or pass value= to XlsxWriter's write_formula; then inspect the saved file" % (len(missing_cache), ", ".join(missing_cache[:50])))
     else:
         r.check("cached_values", "pass", "saved values match the recalculation")
     for i, cs in enumerate(cases):

@@ -6,7 +6,8 @@
  * opportunity count or any other commercial history: cognition is routed by task, capital is allocated by proposal
  * (a separate system). Tier semantics are stable; which model serves a tier is policy data (fleet_cognition_tiers).
  *
- *   T0 deterministic software (no inference)   T1 routine   T2 standard autonomous work   T3 critical
+ *   T0 deterministic software (no inference)   T1 routine   T2 standard autonomous work   T3 critical — and every step of a
+ *   founder's own work (founder_work, 2026-10-20)
  *
  * Rules:
  *   - every task class has a deterministic [minTier, maxTier]; T0 classes are never sent to a model;
@@ -66,6 +67,10 @@ export const TASK_CLASSES: Readonly<Record<string, TaskClassSpec>> = Object.free
   strategy_preparation: { minTier: "T2", maxTier: "T3", description: "strategy preparation" },
   capital_request_preparation: { minTier: "T2", maxTier: "T3", description: "capital-request preparation" },
   // T3 — critical.
+  // 2026-10-20 (owner): a founder's own work is what its customers receive — the products it builds, revises and checks,
+  // its offers, deliveries and replies. Every step of it runs on the most capable tier with deep reasoning: work done on a
+  // lesser model comes back as a refund. (Before: agent_step, T2; Opus only for one escalated question, which stays so.)
+  founder_work: { minTier: "T3", maxTier: "T3", deep: true, description: "a founder's own multistep work (what its customers receive)" },
   evidence_conflict_resolution: { minTier: "T3", maxTier: "T3", deep: true, description: "conflicting high-quality evidence" },
   failure_diagnosis: { minTier: "T3", maxTier: "T3", deep: true, description: "difficult failure diagnosis" },
   strategic_pivot: { minTier: "T3", maxTier: "T3", description: "materially consequential strategic pivot" },

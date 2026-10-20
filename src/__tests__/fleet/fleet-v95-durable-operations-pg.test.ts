@@ -165,6 +165,23 @@ describe.skipIf(!PG_BIN)("v95 durable operations: the same intended operation is
     expect(await R.econ(B, "mail.send", { to, subject: "Hello from B", body: "Hi", idempotencyKey: key() })).toMatchObject({ ok: true, operation: { ordinal: 1 } });
   });
 
+  it("v102: an after that names no operation of the agent's (a message id) is refused with what after takes and the latest operation to name", async () => {
+    // Agent-1, 2026-10-20: it passed its message's id as after four times while resending its corrected file.
+    const to = "nia@customer.test";
+    const first = await R.econ(A, "mail.send", { to, subject: "Your file", body: "Attached.", idempotencyKey: key() });
+    expect(first.ok, JSON.stringify(first)).toBe(true);
+    const wrong = await R.econ(A, "mail.send", { to, subject: "Your file (corrected)", body: "Corrected.", after: first.messageId, idempotencyKey: key() });
+    expect(wrong).toMatchObject({ ok: false, code: "FLEET_OPERATION_NOT_FOUND" });
+    expect(wrong.reason).toMatch(/takes an operationId .*not a message, delivery or order id/);
+    expect(wrong.reason).toContain(`repeat with after: "${first.operation.operationId}"`);
+    // Nothing earlier on that subject: the refusal says to omit after.
+    const none = await R.econ(A, "mail.send", { to: "new@customer.test", subject: "Hello", body: "Hi.", after: first.messageId, idempotencyKey: key() });
+    expect(none).toMatchObject({ ok: false, code: "FLEET_OPERATION_NOT_FOUND" });
+    expect(none.reason).toMatch(/There is no earlier mail\.send on to:new@customer\.test: omit after/);
+    // The critical tier has room for deep reasoning and a finished product in one step.
+    expect((await R.one<any>(`(SELECT max_output_tokens FROM fleet.fleet_cognition_tiers WHERE tier = 'T3')`, []))).toBe(16000);
+  });
+
   it("replies: a reply is the answer to the message it replies to — a second answer to the same message is the same operation; the customer's next message gets its own answer without after", async () => {
     const routing = (await R.q(`SELECT address FROM fleet.fleet_agent_mailboxes WHERE agent_id = $1 AND status = 'active' LIMIT 1`, [A.id]))[0].address as string;
     const inbound = async (subject: string) => {

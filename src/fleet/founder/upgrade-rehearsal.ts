@@ -331,27 +331,28 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
       costMicrocents: Number(r.cost_microcents), outcome: r.outcome, tools: (r.tool_calls as Array<{ name: string }>).map((t) => t.name) }));
     const ok = routed.filter((r) => r.outcome === "ok");
     const t1 = ok.filter((r) => r.tier === "T1");
-    const t2 = ok.filter((r) => r.tier === "T2");
+    // 2026-10-20 (owner): every step of the founder's own work runs on the critical tier (founder_work, Opus).
+    const t2 = ok.filter((r) => r.task_class === "founder_work");
     const question = ok.filter((r) => r.tier === "T3" && r.router_decision?.scope === "question");
     const action = ok.filter((r) => r.tier === "T3" && r.router_decision?.source === "action_boundary");
-    check("routed: the opted-in founder's calls are routed by task — T1 routine chore (Haiku), T2 ordinary steps (Sonnet), T3 critical (Opus)",
+    check("routed: the opted-in founder's calls are routed by task — T1 routine chore (Haiku), its own work and a critical question on the most capable tier (Opus)",
       Boolean(walked) && all.slice(before).filter((r) => r.tier === null).length <= 1 && t1.length >= 1 && t1.every((r) => r.model === HAIKU && r.task_class === "extraction")
-        && t2.length >= 3 && t2.every((r) => r.model === SONNET && r.task_class === "agent_step") && [...question, ...action].every((r) => r.model === OPUS),
-      `${t1.length} T1, ${t2.length} T2, ${question.length + action.length} T3 call(s) after opt-in${walked ? "" : `; the routed walk did not complete — last stops: ${mindStops().join(", ") || "none"}; agent loop ${JSON.stringify((await rep())?.agentLoop?.last ?? null)}`}`);
+        && t2.length >= 3 && t2.every((r) => r.model === OPUS && r.tier === "T3") && !ok.some((r) => r.model === SONNET) && [...question, ...action].every((r) => r.model === OPUS),
+      `${t1.length} T1, ${t2.length} founder_work (T3), ${question.length} question(s) after opt-in${walked ? "" : `; the routed walk did not complete — last stops: ${mindStops().join(", ") || "none"}; agent loop ${JSON.stringify((await rep())?.agentLoop?.last ?? null)}`}`);
     const parent = question[0] ? t2.find((r) => r.request_id === question[0].parent_request_id) : null;
     const afterQuestion = question[0] ? ok.find((r) => Number(r.seq) > Number(question[0].seq)) : null;
-    check("routed: one question escalated as a Critical Decision Packet (reason code, parent call), then control returned to T2",
+    check("routed: one question escalated as a Critical Decision Packet in a fresh context (reason code, parent call), then the founder's own work continued",
       question.length === 1 && question[0].escalation_reason === "HIGH_CONSEQUENCE" && question[0].requested_tier === "T3" && Number(question[0].packet_bytes) > 0 && Boolean(parent)
-        && afterQuestion?.tier === "T2" && Object.keys(facts()).some((k) => k.startsWith("decision:")),
-      question[0] ? `reason ${question[0].escalation_reason}, packet ${question[0].packet_bytes} B, parent ${String(question[0].parent_request_id).slice(0, 8)} (T2); next call ${afterQuestion?.tier}` : "no escalation recorded");
+        && afterQuestion?.task_class === "founder_work" && Object.keys(facts()).some((k) => k.startsWith("decision:")),
+      question[0] ? `reason ${question[0].escalation_reason}, packet ${question[0].packet_bytes} B, parent ${String(question[0].parent_request_id).slice(0, 8)}; next call ${afterQuestion?.task_class}` : "no escalation recorded");
     const links = (await owner.query(`SELECT action_class, tier FROM fleet_action_cognition_links WHERE agent_id = $1 ORDER BY linked_at`, [a])).rows as Array<{ action_class: string; tier: string }>;
     const refusedTier = audit.filter((e) => e.type === "action_cognition_refused" || e.event === "action_cognition_refused").length
       || (await owner.query(`SELECT count(*)::int AS n FROM fleet_events WHERE agent_id = $1 AND event_type = 'action_cognition_refused'`, [a]).then((r) => r.rows[0].n as number, () => 0));
     const afterAction = action[0] ? ok.find((r) => Number(r.seq) > Number(action[0].seq)) : null;
-    check("routed: consequential actions are linked to the cognition that produced them — a small spend at T2, a major spend only from a T3 step",
-      links.some((l) => l.action_class === "spend_request" && l.tier === "T2") && links.some((l) => l.action_class === "major_spend_request" && l.tier === "T3")
-        && !links.some((l) => l.action_class === "major_spend_request" && l.tier !== "T3") && action.length >= 1 && action[0].router_decision?.actionClass === "major_spend_request" && afterAction?.tier === "T2",
-      `links ${links.map((l) => `${l.action_class}@${l.tier}`).join(", ") || "none"}; ${refusedTier} tier refusal(s) audited; T3 action step then ${afterAction?.tier}`);
+    check("routed: consequential actions are linked to the cognition that produced them — a small and a major spend, both from the founder's critical-tier steps",
+      links.some((l) => l.action_class === "spend_request" && l.tier === "T3") && links.some((l) => l.action_class === "major_spend_request" && l.tier === "T3")
+        && !links.some((l) => l.action_class === "major_spend_request" && l.tier !== "T3"),
+      `links ${links.map((l) => `${l.action_class}@${l.tier}`).join(", ") || "none"}; ${refusedTier} tier refusal(s) audited; next after an action step ${afterAction?.task_class ?? "—"}`);
     const saving = t2.reduce((n, r) => n + Number(r.cache_saving_microcents ?? 0), 0);
     // R23.1: the prefix is cached only on evidenced reuse — inside the tool loop on the same model — never on a turn's
     // first step after a gap, a T1 chore, the T3 question or the T3 action step; uncached rows carry no cache tokens.

@@ -43,7 +43,7 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "f-r23-"));
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 describe("R23 task classification (explicit, from the task only)", () => {
-  it("tools are T0 software; a delegated chore is T1; an ordinary step is T2; a question or a consequential action is T3", () => {
+  it("tools are T0 software; a delegated chore is T1; a step of the founder's own work, a question and a consequential action are T3", () => {
     for (const tool of Object.keys(DETERMINISTIC_TOOLS)) {
       const c = classifyTask({ kind: "tool", tool });
       expect(c).toMatchObject({ tier: "T0", kind: "deterministic" });
@@ -57,13 +57,16 @@ describe("R23 task classification (explicit, from the task only)", () => {
       expect(c).toMatchObject({ tier: "T1", kind: "inference", route: { taskClass, taskId: "turn-1" } });
       expect(route(c.route!)).toMatchObject({ tier: "T1", scope: "task_step" });
     }
+    // 2026-10-20 (owner): every step of a founder's own work — what its customers receive — on the most capable tier, deep.
     const step = classifyTask({ kind: "step" }, "turn-1");
-    expect(step).toMatchObject({ tier: "T2", route: { taskClass: "agent_step", taskId: "turn-1" } });
-    expect(route(step.route!)).toMatchObject({ tier: "T2", source: "class_minimum", scope: "task_step" });
+    expect(step).toMatchObject({ tier: "T3", route: { taskClass: "founder_work", taskId: "turn-1" } });
+    expect(route(step.route!)).toMatchObject({ tier: "T3", source: "class_minimum", scope: "task_step", effort: "high" });
     const major = classifyTask({ kind: "step", actionClass: "major_spend_request" });
     expect(major.tier).toBe("T3");
-    expect(route(major.route!)).toMatchObject({ tier: "T3", source: "action_boundary", scope: "task_step" });
-    expect(classifyTask({ kind: "step", actionClass: "spend_request" }).tier).toBe("T2");
+    expect(route(major.route!)).toMatchObject({ tier: "T3", scope: "task_step" });
+    expect(classifyTask({ kind: "step", actionClass: "spend_request" }).tier).toBe("T3");
+    // The standard class keeps its own minimum (escalated questions are sent under it).
+    expect(route({ taskClass: "agent_step" })).toMatchObject({ tier: "T2" });
     const q = classifyTask({ kind: "question", reasonCode: "EVIDENCE_CONFLICT", parentRequestId: uuid(1) });
     expect(q.tier).toBe("T3");
     // Question-scoped: one call; effort high because the reason itself warrants deeper reasoning.
@@ -279,7 +282,7 @@ function mindRig(o: { routing?: boolean; replies: Array<Reply | ((call: { messag
       if (r.fail) throw Object.assign(new Error(r.fail), { code: r.fail });
       const esc = (route as { escalation?: unknown } | undefined)?.escalation;
       const cls = String((route as { taskClass?: string } | undefined)?.taskClass ?? "");
-      const tier = r.tier ?? (esc || (route as { actionClass?: string } | undefined)?.actionClass === "major_spend_request" ? "T3" : ROUTINE_TASK_CLASSES.includes(cls) ? "T1" : "T2");
+      const tier = r.tier ?? (esc || cls === "founder_work" || (route as { actionClass?: string } | undefined)?.actionClass === "major_spend_request" ? "T3" : ROUTINE_TASK_CLASSES.includes(cls) ? "T1" : "T2");
       return {
         content: r.content ?? "", toolCalls: r.toolCalls ?? [], usage: { inputTokens: 10, outputTokens: 5 }, chargedCents: 1, requestId: uuid(n),
         ...(route ? { route: { tier, model: r.model ?? (tier === "T3" ? OPUS : tier === "T1" ? HAIKU : SONNET), taskClass: cls, scope: r.scope ?? (esc ? "question" : "task_step") } } : {}),
@@ -319,7 +322,7 @@ describe("R23 founder mind: routed mode", () => {
     expect(body.knowledge).toEqual([{ key: "pricing plan", value: "List the £12 template for 21 days.", source: "facts.json" }]);
     expect(body.economics).toEqual({ cash: 9_000, genesisAllocation: 10_000 }); // T0: exact software output
     expect(firstText(c0).length).toBeLessThanOrEqual(15_000);
-    expect(c0.route).toEqual({ taskClass: "agent_step", taskId: expect.stringMatching(/^turn-/) });
+    expect(c0.route).toEqual({ taskClass: "founder_work", taskId: expect.stringMatching(/^turn-/) });
     // Inside the turn the conversation is append-only: step 2 = packet + assistant + tool result.
     expect(rig.calls[1].messages.map((m) => m.role)).toEqual(["user", "assistant", "tool"]);
     expect(rig.calls[1].messages[0]).toEqual(c0.messages[0]);
@@ -332,7 +335,7 @@ describe("R23 founder mind: routed mode", () => {
     const b2 = JSON.parse(firstText(next).split("\n").slice(3).join("\n"));
     expect(b2.task).toMatch(/Your previous turn .* ended with: .*sleep:/);
     expect(b2.objective.map((g: { title: string }) => g.title)).toEqual(["Validate the £12 template"]);
-    expect(rig.mind.routing).toMatchObject({ steps: { T2: expect.any(Number), T3: 0 }, routineCalls: 0, escalations: 0 });
+    expect(rig.mind.routing).toMatchObject({ steps: { T2: 0, T3: expect.any(Number) }, routineCalls: 0, escalations: 0 });
   });
 
   it("with routing inactive the same runtime runs the legacy turn: its history, no packet, no routing request", async () => {
@@ -345,7 +348,7 @@ describe("R23 founder mind: routed mode", () => {
     expect(fs.existsSync(path.join(rig.dirs.s, "mind-continuity.json"))).toBe(false);
   });
 
-  it("routine_task hands one bounded chore to T1 (inline material or a workspace file) and the step continues at T2", async () => {
+  it("routine_task hands one bounded chore to T1 (inline material or a workspace file) and the founder's step continues at T3", async () => {
     const rig = mindRig({ replies: [
       { content: "Triage the saved page.", toolCalls: [call("toolu_a", "routine_task", { taskClass: "page_interpretation", purpose: "research", instructions: "List the prices as JSON.", path: "research/page.txt" })] },
       { content: "T1-RESULT: [12, 15]" },
@@ -362,11 +365,11 @@ describe("R23 founder mind: routed mode", () => {
     expect(String(chore.messages[0].content)).toMatch(/^ROUTINE TASK \(page_interpretation\)\.\nInstructions: List the prices as JSON\.\n---BEGIN MATERIAL/);
     expect(String(chore.messages[0].content)).toContain("Template A £12");
     expect(String(chore.messages[0].content)).not.toContain("TASK PACKET"); // the chore never carries the founder's context
-    // Control returns to T2 with only the result.
-    expect(rig.calls[2].route).toMatchObject({ taskClass: "agent_step" });
+    // Control returns to the founder's own step with only the result.
+    expect(rig.calls[2].route).toMatchObject({ taskClass: "founder_work" });
     expect(String(rig.calls[2].messages.at(-1)!.content)).toContain("T1-RESULT: [12, 15]");
     expect(rig.calls[3].route).toMatchObject({ taskClass: "classification", helper: { kind: "routine", purpose: "customer_support" } });
-    expect(rig.mind.routing).toMatchObject({ routineCalls: 2, steps: { T2: 2, T3: 0 } });
+    expect(rig.mind.routing).toMatchObject({ routineCalls: 2, steps: { T2: 0, T3: 2 } });
   });
 
   it("v82: a routine chore must say what it is for; without a purpose nothing is sent", async () => {
@@ -376,7 +379,7 @@ describe("R23 founder mind: routed mode", () => {
     ] });
     const t = await rig.mind.turn("Heartbeat 2.");
     expect(t.refusals).toEqual([{ tool: "routine_task", code: "FLEET_BAD_REQUEST" }, { tool: "routine_task", code: "FLEET_BAD_REQUEST" }]);
-    expect(rig.calls.map((c) => (c.route as { taskClass: string }).taskClass)).toEqual(["agent_step"]); // no T1 request was made
+    expect(rig.calls.map((c) => (c.route as { taskClass: string }).taskClass)).toEqual(["founder_work"]); // no T1 request was made
   });
 
   it("routine_task fails closed: unknown class, path escape, per-turn limit and an unavailable T1 are refused — never run at a higher tier", async () => {
@@ -393,7 +396,7 @@ describe("R23 founder mind: routed mode", () => {
       { tool: "routine_task", code: "FLEET_DUPLICATE_FAILED_ACTION" }, // the identical chore is not retried unchanged
     ]);
     // Exactly one T1 request was made (and refused by the controller); nothing was re-sent under another class.
-    expect(rig.calls.map((c) => (c.route as { taskClass: string }).taskClass)).toEqual(["agent_step", "extraction", "agent_step", "agent_step"]);
+    expect(rig.calls.map((c) => (c.route as { taskClass: string }).taskClass)).toEqual(["founder_work", "extraction", "founder_work", "founder_work"]);
     const limit = mindRig({ replies: [{ toolCalls: [1, 2, 3, 4, 5].map((i) => chore(`toolu_${i}`, { taskClass: "extraction", material: `m${i}` })) }, ...[1, 2, 3, 4, 5].map(() => ({ content: "r" })),
       { toolCalls: [6, 7].map((i) => chore(`toolu_${i}`, { taskClass: "extraction", material: `m${i}` })) }, { content: "r" }] });
     const t2 = await limit.mind.turn("Heartbeat 2.");
@@ -401,7 +404,7 @@ describe("R23 founder mind: routed mode", () => {
     expect(limit.mind.routing.routineCalls).toBe(6);
   });
 
-  it("escalate_question sends ONE Critical Decision Packet to T3, persists the answer, and the next step returns to T2", async () => {
+  it("escalate_question sends ONE Critical Decision Packet in a fresh context, persists the answer, and the founder's own step continues", async () => {
     const q = { question: "Is the fee rise material to the £12 listing test?", reasonCode: "EVIDENCE_CONFLICT", hypothesis: "Run it unchanged.", state: "validation not started", economicConsequence: "£0.20, reversible", conflict: ["6.5% vs 9%"] };
     const rig = mindRig({ facts: { "fees current": "transaction fee 9% (was 6.5%)", "unrelated note": "PRIVATE-UNRELATED" }, replies: [
       { content: "Conflicting fee evidence.", thinking: true, toolCalls: [call("toolu_a", "escalate_question", q)] },
@@ -411,7 +414,7 @@ describe("R23 founder mind: routed mode", () => {
     const t = await rig.mind.turn("Heartbeat 2.");
     expect(t).toMatchObject({ steps: 2, toolCalls: ["escalate_question", "escalate_question", "sleep"], refusals: [] });
     const [step1, esc, step2] = rig.calls;
-    expect(step1.route).toEqual({ taskClass: "agent_step", taskId: expect.any(String) });
+    expect(step1.route).toEqual({ taskClass: "founder_work", taskId: expect.any(String) });
     // The escalation: a fresh single-message conversation — a decision packet, a structured request, no transcript, no thinking.
     expect(esc.messages).toHaveLength(1);
     expect(String(esc.messages[0].content)).toMatch(/^CRITICAL DECISION PACKET \(fleet-decision-v1\)/);
@@ -419,19 +422,19 @@ describe("R23 founder mind: routed mode", () => {
     expect(esc.route).toEqual({ taskClass: "agent_step", taskId: expect.any(String), escalation: { reasonCode: "EVIDENCE_CONFLICT", requestedTier: "T3", parentRequestId: uuid(1) },
       helper: { kind: "escalation", purpose: "decision" } }); // v82: recorded with the call
     expect(route(esc.route as never)).toMatchObject({ tier: "T3", scope: "question" });
-    // Back down: the next step is an ordinary T2 step again, carrying only the observable answer.
-    expect(step2.route).toEqual({ taskClass: "agent_step", taskId: expect.any(String) });
+    // Back to the founder's own step, carrying only the observable answer.
+    expect(step2.route).toEqual({ taskClass: "founder_work", taskId: expect.any(String) });
     expect(String(step2.messages.at(-1)!.content)).toContain("CRITICAL-TIER ANSWER");
     expect(String(step2.messages.at(-1)!.content)).toContain("Decision: still run it");
-    expect(JSON.stringify(step2.messages)).not.toContain("sig-T3"); // Opus's thinking never reaches the T2 conversation
-    expect(JSON.stringify(step2.messages)).toContain("sig-T2-1"); // the loop's own T2 thinking is still its own
+    expect(JSON.stringify(step2.messages)).not.toContain("sig-T3-2"); // the question's own thinking never enters the founder's conversation
+    expect(JSON.stringify(step2.messages)).toContain("sig-T3-1"); // the loop's own thinking is still its own
     // The answer is persistent, observable state.
     const facts = JSON.parse(fs.readFileSync(path.join(rig.dirs.m, "facts.json"), "utf8"));
     const key = Object.keys(facts).find((k) => k.startsWith("decision:"))!;
     expect(JSON.parse(facts[key])).toMatchObject({ reason: "EVIDENCE_CONFLICT", answer: "Decision: still run it; net £10.24 per sale.", tier: "T3", model: OPUS });
     // Duplicate guard: asking the same question again is answered from the record — no second T3 call.
     expect(rig.calls).toHaveLength(3);
-    expect(rig.mind.routing).toMatchObject({ escalations: 1, escalationsReused: 1, steps: { T2: 2, T3: 0 } });
+    expect(rig.mind.routing).toMatchObject({ escalations: 1, escalationsReused: 1, steps: { T2: 0, T3: 2 } });
     expect(priorDecision(rig.dirs.m, "  is the FEE rise material to the £12 listing test? ")).toMatchObject({ factKey: key });
     expect(priorDecision(rig.dirs.m, q.question, 1_000, () => Date.now() + 60_000)).toBeNull(); // stale decisions are asked again
   });
@@ -449,7 +452,7 @@ describe("R23 founder mind: routed mode", () => {
     expect(rig.calls.filter((c) => (c.route as { escalation?: unknown }).escalation)).toHaveLength(1);
   });
 
-  it("consequential-action linkage: a spend refused for its cognition tier makes exactly the next step run at T3, then control returns to T2; thinking never crosses", async () => {
+  it("consequential-action linkage: a spend refused for its cognition tier names the action's minimum on exactly the next step; a founder's step is already at the critical tier, so its own thinking stays", async () => {
     const spend = { amountCents: 5_000, category: "expense", destinationId: "dst_01ZZZZZZZZZZZZZZZZZZZZZZZZ", purpose: "stock" };
     let attempt = 0;
     const rig = mindRig({
@@ -463,21 +466,21 @@ describe("R23 founder mind: routed mode", () => {
     const t = await rig.mind.turn("Heartbeat 2.");
     expect(t).toMatchObject({ steps: 3, toolCalls: ["request_spend", "request_spend", "sleep"], refusals: [{ tool: "request_spend", code: "FLEET_ACTION_COGNITION_TIER" }] });
     const [s1, s2, s3] = rig.calls;
-    expect(s1.route).toEqual({ taskClass: "agent_step", taskId: expect.any(String) });
-    // Exactly the next step asks for the action's minimum tier…
-    expect(s2.route).toEqual({ taskClass: "agent_step", taskId: expect.any(String), actionClass: "major_spend_request" });
-    expect(route(s2.route as never)).toMatchObject({ tier: "T3", source: "action_boundary" });
-    expect(JSON.stringify(s2.messages)).not.toContain("sig-T2"); // Sonnet's thinking is dropped before the T3 step
+    expect(s1.route).toEqual({ taskClass: "founder_work", taskId: expect.any(String) });
+    // Exactly the next step names the action's minimum tier (already met by the founder's own class)…
+    expect(s2.route).toEqual({ taskClass: "founder_work", taskId: expect.any(String), actionClass: "major_spend_request" });
+    expect(route(s2.route as never)).toMatchObject({ tier: "T3" });
+    expect(JSON.stringify(s2.messages)).toContain("sig-T3-1"); // the same model: its own thinking is kept
     expect(String(s2.messages.at(-1)!.content)).toMatch(/must be decided at the critical tier/);
     // …the identical spend call is allowed again there (the loop guard saw the tier change)…
     expect(rig.spends).toHaveLength(2);
     // …each attempt is linked to the cognition call that produced it by its own tool-call id…
     expect(rig.spends.map((x) => String(x.idempotencyKey).split(":")[1])).toEqual(["toolu_s1", "toolu_s2"]);
-    // …and control returns to T2, without Opus's thinking.
-    expect(s3.route).toEqual({ taskClass: "agent_step", taskId: expect.any(String) });
-    expect(JSON.stringify(s3.messages)).not.toMatch(/sig-T3|sig-T2/);
-    expect(rig.mind.routing).toMatchObject({ actionBoundarySteps: 1, steps: { T2: 2, T3: 1 } });
-    expect(rig.mind.routing.thinkingDropped).toBeGreaterThanOrEqual(2);
+    // …and the next step is the founder's own class again.
+    expect(s3.route).toEqual({ taskClass: "founder_work", taskId: expect.any(String) });
+    expect(JSON.stringify(s3.messages)).not.toMatch(/sig-T2/);
+    expect(rig.mind.routing).toMatchObject({ actionBoundarySteps: 1, steps: { T2: 0, T3: 3 } });
+    expect(rig.mind.routing.thinkingDropped).toBe(0);
   });
 
   it("loop and budget guards: identical failed calls are not re-run, and a turn that outgrows its context budget ends instead of editing its history", async () => {
@@ -586,7 +589,7 @@ describe("R23.1 slim bare-wake-up packet (founder runtime)", () => {
     expect(slim.b.outputContract).toEqual(full.b.outputContract);
     expect(slim.b.task).toMatch(/Nothing has changed since your last turn.*12 remembered fact\(s\) \(keys: fact 0, fact 1/s);
     expect(slim.bytes).toBeLessThan(full.bytes / 3);
-    expect(slim.c.route).toEqual({ taskClass: "agent_step", taskId: expect.any(String) }); // classification unchanged: T2
+    expect(slim.c.route).toEqual({ taskClass: "founder_work", taskId: expect.any(String) }); // classification unchanged
     expect(rig.mind.routing.slimWakeups).toBe(1);
     // Something changes (an owner note lands in the workspace): the next wake gets the full packet at once.
     await rig.mind.turn("Heartbeat 8."); // resting

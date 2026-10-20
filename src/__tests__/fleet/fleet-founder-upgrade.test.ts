@@ -503,8 +503,8 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
         "upgrade: state was byte-identical when the target runtime started; afterwards no memory or workspace file was lost",
         "rollback: the same founder is back on the previous pinned runtime, healthy, with nothing lost",
         "upgrade again after the rollback: verified, same founder",
-        "routed: one question escalated as a Critical Decision Packet (reason code, parent call), then control returned to T2",
-        "routed: consequential actions are linked to the cognition that produced them — a small spend at T2, a major spend only from a T3 step",
+        "routed: one question escalated as a Critical Decision Packet in a fresh context (reason code, parent call), then the founder's own work continued",
+        "routed: consequential actions are linked to the cognition that produced them — a small and a major spend, both from the founder's critical-tier steps",
         "routed: cache only on evidenced reuse — T2 prefix written once inside the tool loop and read back; T1, the T3 question, the T3 action step and a turn's first step write nothing",
         "work continuity: a hibernating founder makes no model call while nothing changes (three thinking slots), and a Fleet Control notice wakes it",
         "routed: provider protocol holds through real founder loops — signed thinking never crosses a model boundary, nothing is edited mid-loop",
@@ -519,7 +519,10 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
       expect(r.receipts.upgrade!.steps.map((s) => s.step)).toEqual(["preflight", "quiesce", "stop", "snapshot", "prepare", "backup", "recheck", "commit", "pin", "prestart", "start", "prove", "compare", "verify"]);
       expect(r.receipts.failedStart!.steps.filter((s) => !s.ok).map((s) => s.step)).toEqual(["prove"]);
       expect(r.receipts.failedStart!.steps.map((s) => s.step).slice(-6)).toEqual(["rollback:stop", "rollback:registry", "rollback:pin", "rollback:start", "rollback:prove", "rollback:verify"]);
-      expect(r.routed.map((x) => x.tier)).toEqual(expect.arrayContaining(["T1", "T2", "T3"]));
+      // 2026-10-20 (owner): the founder's own work on the critical tier; a routine chore still at T1; no standard-tier step.
+      expect(r.routed.map((x) => x.tier)).toEqual(expect.arrayContaining(["T1", "T3"]));
+      expect(r.routed.filter((x) => x.taskClass === "founder_work").every((x) => x.tier === "T3")).toBe(true);
+      expect(r.routed.some((x) => x.tier === "T2")).toBe(false);
     } finally {
       reg.stop();
     }

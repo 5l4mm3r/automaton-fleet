@@ -7,9 +7,8 @@
  *
  *   T0  deterministic   a tool answers it exactly (ledger, goals, facts, files, policy checks): no inference is bought
  *   T1  routine         one bounded chore over provided material (extract / classify / summarise / triage / format)
- *   T2  standard        an ordinary step of the founder's own autonomous work (the default)
- *   T3  critical        one escalated question, or a step whose output is a consequential action (major spend,
- *                       reproduction request) — forced by the action boundary, whatever the founder would prefer
+ *   T3  critical        every step of the founder's own work (founder_work, 2026-10-20: what it makes reaches customers),
+ *                       one escalated question, and a step whose output is a consequential action
  *
  * The classification is only a REQUEST: FleetController's router decides the tier from the same task properties and
  * its record — not this label — is what the consequential-action boundary trusts. `expectedTier` is what the
@@ -30,8 +29,10 @@ export const DETERMINISTIC_TOOLS: Readonly<Record<string, string>> = Object.free
   sleep: "state_transition",
 });
 
-/** The ordinary step class of a founder's own multistep work. */
+/** The step class an escalated question is sent under (the router grants one question-scoped call above it). */
 export const DEFAULT_STEP_CLASS = "agent_step";
+/** 2026-10-20 (owner): every step of a founder's own work — the most capable tier, deep reasoning (router: founder_work). */
+export const FOUNDER_STEP_CLASS = "founder_work";
 
 export type TaskDescriptor =
   | { kind: "tool"; tool: string }
@@ -78,15 +79,15 @@ export function classifyTask(t: TaskDescriptor, taskId?: string): TaskClassifica
       return { tier: "T1", kind: "inference", taskClass: t.taskClass, route: { taskClass: t.taskClass, ...id }, why: "one bounded routine chore over provided material" };
     }
     case "step": {
-      const spec = TASK_CLASSES[DEFAULT_STEP_CLASS];
+      const spec = TASK_CLASSES[FOUNDER_STEP_CLASS];
       if (t.actionClass !== undefined && !Object.prototype.hasOwnProperty.call(ACTION_MIN_TIER, t.actionClass)) {
         throw new TaskClassificationError("FLEET_ROUTE_INVALID", "unknown action class");
       }
       const tier = t.actionClass ? maxTier(spec.minTier, ACTION_MIN_TIER[t.actionClass]) : spec.minTier;
       return {
-        tier, kind: "inference", taskClass: DEFAULT_STEP_CLASS,
-        route: { taskClass: DEFAULT_STEP_CLASS, ...id, ...(t.actionClass ? { actionClass: t.actionClass } : {}) },
-        why: t.actionClass ? `the step's output is a ${t.actionClass}: minimum ${ACTION_MIN_TIER[t.actionClass]}` : "ordinary autonomous step",
+        tier, kind: "inference", taskClass: FOUNDER_STEP_CLASS,
+        route: { taskClass: FOUNDER_STEP_CLASS, ...id, ...(t.actionClass ? { actionClass: t.actionClass } : {}) },
+        why: t.actionClass ? `the step's output is a ${t.actionClass}: minimum ${maxTier(spec.minTier, ACTION_MIN_TIER[t.actionClass])}` : "a step of the founder's own work: the most capable tier",
       };
     }
     case "question": {
