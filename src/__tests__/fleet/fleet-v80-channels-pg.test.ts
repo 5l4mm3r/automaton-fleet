@@ -136,10 +136,11 @@ describe.skipIf(!PG_BIN)("v80 scoped releases, discovery and the official-API ch
       while (c.action && c.action.sessionId !== s.sessionId) c = await claim();
       expect(c.action.outwardOrigins).toEqual(["https://shop.example"]);
     } finally { await bx.end(); }
-    // Mail is not in this release any more (the latest release replaces the previous one); card requests are never released.
+    // Mail is not in this release any more (the latest release replaces the previous one); a card request needs a release that
+    // names it (v108: one purchase at one merchant — owner, 2026-10-20), which this one does not.
     expect(await R.econ(F, "mail.send", { to: "owner@studio-nine.test", subject: "Hi", body: "Hello", idempotencyKey: idem() })).toMatchObject(held);
     expect((await R.econ(F, "card.request", { accountId: reg.accountId, merchant: "Shop", amountMinor: 500, purpose: "listing fee", paypalUnavailable: "card_only_merchant" })).reason)
-      .toMatch(/never part of a controlled-proof release/);
+      .toMatch(/needs the owner's card-proof release naming the merchant/);
     // Another agent is untouched; the release expires on its own.
     expect(await R.econ(G, "account.register", { platform: "shop.example", kind: "marketplace", origin: "https://shop.example" })).toMatchObject(held);
     await R.q(`UPDATE fleet.fleet_outward_release SET expires_at = now() - interval '1 second' WHERE agent_id = $1`, [F.id]);

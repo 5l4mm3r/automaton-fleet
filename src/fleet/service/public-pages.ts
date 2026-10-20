@@ -148,8 +148,7 @@ const COUNTRY_OPTIONS = (() => {
 })();
 function countrySelect(): string {
   return `<p><label>Your country<select name="country" required><option value="">Choose your country…</option>`
-    + COUNTRY_OPTIONS.map(([c, n]) => `<option value="${c}">${esc(n)}</option>`).join("") + `</select></label></p>`
-    + `<p class="small muted">Digital products from this shop are not yet available to buyers in the European Union.</p>`;
+    + COUNTRY_OPTIONS.map(([c, n]) => `<option value="${c}">${esc(n)}</option>`).join("") + `</select></label></p>`;
 }
 const countryOf = (b: Record<string, unknown> | null): string | null => (b && typeof b.country === "string" && /^[A-Z]{2}$/.test(b.country) ? b.country : null);
 const COUNTRY_REFUSED = (c: string) => `<h1>Not available in your country yet</h1><p>This shop cannot sell digital products to buyers in ${esc(REGION.of(c) ?? c)} yet. <strong>No payment was taken.</strong></p>`;

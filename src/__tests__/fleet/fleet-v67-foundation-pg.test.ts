@@ -90,11 +90,13 @@ describe.skipIf(!PG_BIN)("v67: business foundation in the library; wake-up signa
     expect(st.entry.category).toBe("fleet-status");
     const facts = st.entry.factsThatChange as Array<{ fact: string; lastChecked: string; stale: boolean }>;
     // v96: capability status v14, every fact dated; those rewritten from verified state on 2026-10-19.
-    expect(facts.every((f) => ["2026-10-16", "2026-10-17", "2026-10-19"].includes(f.lastChecked))).toBe(true);
+    expect(facts.every((f) => ["2026-10-16", "2026-10-17", "2026-10-19", "2026-10-20"].includes(f.lastChecked))).toBe(true);
     expect(facts.filter((f) => f.lastChecked === "2026-10-19").length).toBeGreaterThanOrEqual(10);
     // v79 (channels are the agent's choice): the EU consumer route is a merchant-of-record platform the agent operates where
     // its terms permit; v96: none is connected at launch (Gumroad deferred by the owner).
-    expect(facts.some((f) => /^EU consumer digital sales — through a merchant-of-record platform/.test(f.fact) && /NONE is connected at launch \(Gumroad is deferred\)/.test(f.fact))).toBe(true);
+    // v108 (owner, 2026-10-20: "Worldwide, no exclusions"): the treasury checkout sells worldwide, EU consumers included.
+    expect(facts.some((f) => /^EU consumer digital sales/.test(f.fact))).toBe(false);
+    expect(facts.some((f) => /^Customer geography — the owner's decision \(2026-10-20\): the treasury checkout sells WORLDWIDE, EU consumers included/.test(f.fact))).toBe(true);
     // v82 (owner, 2026-10-16): built, installed, connected, enabled and live-proven are stated separately, and the entry no
     // longer contradicts itself about API connectors or operating Etsy through the browser.
     expect(st.entry.body).toMatch(/BUILT .*INSTALLED .*CONNECTED .*ENABLED .*LIVE-PROVEN/s);

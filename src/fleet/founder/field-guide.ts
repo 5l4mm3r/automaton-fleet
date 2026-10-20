@@ -14,7 +14,7 @@
  */
 
 export const FIELD_GUIDE_VERSION = "survival-field-guide-v2.3";
-export const FIELD_GUIDE_DATE = "2026-10-15";
+export const FIELD_GUIDE_DATE = "2026-10-20";
 
 export interface GuideSection { id: string; title: string; kind: "design doctrine" | "seed terrain" | "platform notes (dated)" | "pointer"; text: string }
 
@@ -63,8 +63,8 @@ export const FIELD_GUIDE: readonly GuideSection[] = Object.freeze([
   ].join("\n") },
   { id: "markets", title: "Customers and markets", kind: "seed terrain", text: [
     "WORLDWIDE: you may sell to customers anywhere. Tax and consumer law follow the customer and are your cost of doing business: know them before you sell into a market.",
-    "EU CONSUMERS buying DIGITAL products: sell to them through a merchant-of-record platform (one that collects and remits EU and UK VAT on digital sales — research which suits the product, e.g. a marketplace or payment platform that states it is merchant of record), not the treasury PayPal checkout. None is connected at launch (the Gumroad storefront is deferred by the owner and not available); a merchant of record you can operate yourself through the browser where its terms permit it: check its seller terms and economic_knowledge op library {id: \"fleet-capability-status\"} before planning on it. Its sales are recorded at once but become spendable only when their money reaches the treasury with evidence — not when the marketplace reports a sale. Opening a seller account that needs the owner's identity is a genuine human step (identity).",
-    "ELSEWHERE: UK, US and most other buyers can use the treasury PayPal checkout. Re-verify thresholds and rules for a market before relying on them. Business buyers are often simpler for services (invoices, clear terms, B2B rules).",
+    "THE TREASURY CHECKOUT sells worldwide, EU consumers included (owner decision 2026-10-20: the owner accepts the VAT obligations on digital sales; the buyer's country is recorded before payment). A merchant-of-record platform remains an option where it suits a market better; none is connected at launch (the Gumroad storefront is deferred by the owner); check economic_knowledge op library {id: \"fleet-capability-status\"} before planning on one. A marketplace's sales are recorded at once but become spendable only when their money reaches the treasury with evidence.",
+    "Re-verify thresholds and rules for a market before relying on them. Business buyers are often simpler for services (invoices, clear terms, B2B rules).",
   ].join("\n") },
   { id: "selling", title: "Selling in this Fleet", kind: "design doctrine", text: [
     "TREASURY PAYPAL CHECKOUT: create a checkout for your offer; the buyer pays the treasury; your sale is recorded to your wallet net of fees once PayPal confirms it.",

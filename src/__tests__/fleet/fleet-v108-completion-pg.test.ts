@@ -22,7 +22,7 @@ import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, autoCapabilityChecks, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
 import { liveRail } from "./fixtures/custody-signer.js";
 import { BUYER_CONSENT_VERSION } from "../../fleet/storefront/consent.js";
-import { EU_27 } from "../../fleet/postgres/migrations-phase108.js";
+import { V108_SQL } from "../../fleet/postgres/migrations-phase108.js";
 
 const PG_BIN = findPgBin();
 const ORIGIN = crypto.createHash("sha256").update("buyer-browser").digest("hex");
@@ -70,31 +70,39 @@ describe.skipIf(!PG_BIN)("v108 launch completion (PostgreSQL)", { timeout: 300_0
   }, 300_000);
   afterAll(async () => { await su?.end(); await igw?.close(); await R?.close(); if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
 
-  it("geography: the owner's policy (EU-27 not sold to on the treasury checkout); the buyer's country before payment; holds after payment", async () => {
-    expect((await su.query(`SELECT unsupported FROM fleet_sales_geography WHERE id = 1`)).rows[0].unsupported).toEqual([...EU_27]);
+  it("geography: the owner's decision (worldwide, no exclusions); the buyer's country recorded before payment; only a listed country refused or held", async () => {
+    expect((await su.query(`SELECT unsupported FROM fleet_sales_geography WHERE id = 1`)).rows[0].unsupported).toEqual([]);
     const { id, token } = await newOrder();
     expect(await svc("svc_order_consent", [token, ORIGIN, BUYER_CONSENT_VERSION])).toMatchObject({ ok: true });
-    // No country stated: no payment step.
+    // The country is recorded before the payment step (the owner's "the country step still records it").
     expect(await svc("svc_order_pay", [token, ORIGIN])).toMatchObject({ ok: false, code: "FLEET_COUNTRY_REQUIRED" });
-    expect(await svc("svc_order_country", [token, ORIGIN, "DE"])).toMatchObject({ ok: false, code: "FLEET_COUNTRY_UNSUPPORTED", country: "DE" });
     expect(await svc("svc_order_country", [token, ORIGIN, "zz1"])).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
-    expect(await svc("svc_order_pay", [token, ORIGIN])).toMatchObject({ ok: false, code: "FLEET_COUNTRY_REQUIRED" });
-    expect(await svc("svc_order_country", [token, ORIGIN, "gb"])).toMatchObject({ ok: true, stated: "GB" });
+    expect(await svc("svc_order_country", [token, ORIGIN, "de"])).toMatchObject({ ok: true, stated: "DE" });       // EU included
     expect((await svc("svc_order_pay", [token, ORIGIN])).ok).toBe(true);
-    expect((await svc("svc_order_page", [token])).order.country).toMatchObject({ stated: "GB" });
-    // After payment: PayPal's payer country decides whether delivery may go ahead.
+    expect((await svc("svc_order_page", [token])).order.country).toMatchObject({ stated: "DE", unsupported: [] });
     const hold = (patch: Record<string, unknown>) => R.one<string | null>(`(SELECT fleet.fleet_order_country_hold(jsonb_populate_record(o, $2::jsonb)) FROM fleet.fleet_customer_orders o WHERE o.order_id = $1)`,
       [id, JSON.stringify(patch)]);
-    expect(await hold({ buyer_country: "GB" })).toBeNull();
-    expect(await hold({ buyer_country: "FR" })).toMatch(/PayPal shows the buyer in FR, where the treasury checkout does not sell/);
-    expect(await hold({ buyer_country: "US" })).toMatch(/the buyer stated GB but PayPal shows US/);
-    expect(await hold({ buyer_country: null })).toBeNull();
-    // The owner changes the policy (owner only); orders made before v108 state no country and are judged by PayPal's alone.
+    // No list: no hold, whatever PayPal shows (a different payer country is evidence, not a reason to hold).
+    for (const c of ["DE", "FR", "US", null]) expect(await hold({ buyer_country: c })).toBeNull();
+    // The owner may list a country later (owner only): then it is refused before payment and a paid order from it is held.
     await expect(R.q(`SELECT fleet.fleet_admin_sales_geography(ARRAY['FR'], 'test', 'founder:x')`)).rejects.toThrow(/owner actor required/);
-    expect(await R.one(`fleet.fleet_admin_sales_geography(ARRAY['fr','de','FR'], 'test: a narrower list', $1)`, [OWNER])).toMatchObject({ ok: true, unsupported: ["DE", "FR"] });
-    expect(await hold({ buyer_country: "IT", buyer_stated_country: null })).toBeNull();
-    await R.one(`fleet.fleet_admin_sales_geography($1::text[], 'restore the owner policy', $2)`, [[...EU_27], OWNER]);
+    expect(await R.one(`fleet.fleet_admin_sales_geography(ARRAY['fr','FR'], 'test: one listed country', $1)`, [OWNER])).toMatchObject({ ok: true, unsupported: ["FR"] });
+    expect(await hold({ buyer_country: "FR" })).toMatch(/PayPal shows the buyer in FR, where the treasury checkout does not sell/);
+    expect(await hold({ buyer_country: "US", buyer_stated_country: "FR" })).toMatch(/the buyer stated FR, where the treasury checkout does not sell/);
+    expect(await hold({ buyer_country: "US" })).toBeNull();
+    const b = await newOrder();
+    expect(await svc("svc_order_country", [b.token, ORIGIN, "FR"])).toMatchObject({ ok: false, code: "FLEET_COUNTRY_UNSUPPORTED" });
+    await R.one(`fleet.fleet_admin_sales_geography('{}'::text[], 'back to the owner decision: no exclusions', $1)`, [OWNER]);
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
+  });
+
+  it("agents read the owner's decision (fleet-capability-status v15): worldwide, the country step, conversations, email, saved values", async () => {
+    // The test registry's wipe clears loaded knowledge, so the migration's own load is checked (production loads it once).
+    const body = V108_SQL.slice(V108_SQL.indexOf("fleet_admin_knowledge_library_load"));
+    expect(body).toContain("WORLDWIDE, EU consumers included");
+    expect(body).not.toContain("Do not sell digital products to EU consumers through the treasury checkout");
+    expect(body).toContain("Order conversations");
+    expect(body).toContain("Buyer email");
   });
 
   it("conversations close at 10 buyer messages (and after a full refund, or 7 days after resolution); requests already made stay owed", async () => {
@@ -152,6 +160,45 @@ describe.skipIf(!PG_BIN)("v108 launch completion (PostgreSQL)", { timeout: 300_0
     await R.q(`UPDATE fleet.fleet_customer_orders SET payment_status = 'refunded', refunded_minor = amount_minor WHERE order_id = $1`, [id]);
     await ingest("ada@example.test", "Can you also make me a rent tracker?");
     expect(await buyerMessages()).toHaveLength(1);
+  });
+
+  it("one pre-launch card purchase: only under the owner's card-proof release, at its merchant, within its amount, once; sales stay closed", async () => {
+    const acct = crypto.randomUUID(), other = crypto.randomUUID();
+    for (const [id, origin] of [[acct, "https://www.fontshop.example"], [other, "https://www.other.example"]]) {
+      await R.q(`INSERT INTO fleet.fleet_agent_accounts (account_id, agent_id, account_kind, platform, status, origins) VALUES ($1, $2, 'marketplace', 'shop', 'active', ARRAY[$3])`, [id, F.id, origin]);
+    }
+    const refusal = (args: Record<string, unknown>) => R.one<string | null>(`fleet.fleet_outward_refusal($1, 'card.request', $2::jsonb)`, [F.id, JSON.stringify(args)]);
+    const buy = { accountId: acct, origin: "https://www.fontshop.example", amountMinor: 450, merchant: "Font shop" };
+    const wasOpen = await R.one<boolean>(`fleet.fleet_sales_open()`);
+    await R.one(`fleet.fleet_admin_sales_set(false, $1)`, [OWNER]);                         // as production: sales closed
+    expect(await R.one(`fleet.fleet_sales_open()`)).toBe(false);
+    expect(await refusal(buy)).toMatch(/needs the owner's card-proof release naming the merchant/);
+    const release = (scope: Record<string, unknown>) => R.one<any>(`fleet.fleet_admin_outward_release($1, $2::jsonb, 'card proof: one font licence for the tracker', $3)`, [F.id, JSON.stringify(scope), OWNER]);
+    const card = { actions: ["browser", "card"], accounts: [acct], origins: ["https://www.fontshop.example"], cardMerchant: "Font shop", cardMaxMinor: 500, expiresHours: 6 };
+    // The release names one merchant, at most 500 minor units, at most 24 h, with the browser fill.
+    for (const bad of [{ ...card, cardMaxMinor: 501 }, { ...card, expiresHours: 25 }, { ...card, actions: ["card"] }, { ...card, origins: [...card.origins, "https://www.other.example"] },
+      { ...card, cardMerchant: undefined }, { actions: ["mail"], mailTo: ["owner@example.test"], cardMaxMinor: 100, expiresHours: 2 }]) {
+      await expect(release(bad)).rejects.toThrow(/FLEET_BAD_REQUEST/);
+    }
+    expect(await release(card)).toMatchObject({ ok: true, salesOpen: false });
+    expect(await refusal(buy)).toBeNull();                                                   // the one purchase it names
+    expect(await refusal({ ...buy, amountMinor: 501 })).toMatch(/at most 500 minor units/);
+    expect(await refusal({ ...buy, accountId: other, origin: "https://www.other.example" })).toMatch(/one purchase at Font shop/);
+    expect(await refusal({ ...buy, origin: "https://www.evil.example" })).toMatch(/covers https:\/\/www\.fontshop\.example only/);
+    // Once a card request exists under it, no second one.
+    await R.q(`INSERT INTO fleet.fleet_card_requests (agent_id, account_id, origin, merchant, amount_minor, paypal_unavailable, purpose, status, expires_at)
+      VALUES ($1, $2, 'https://www.fontshop.example', 'Font shop', 450, (SELECT paypal_unavailable FROM fleet.fleet_card_requests LIMIT 0), 'a font licence', 'approved', now() + interval '1 hour')`, [F.id, acct]).catch(async () => {
+      const reason = (await su.query(`SELECT pg_get_constraintdef(oid) AS d FROM pg_constraint WHERE conname LIKE 'fleet_card_requests%paypal_unavailable%' LIMIT 1`)).rows[0]?.d ?? "";
+      const v = /'([a-z_]+)'/.exec(reason)?.[1] ?? "merchant_card_only";
+      await R.q(`INSERT INTO fleet.fleet_card_requests (agent_id, account_id, origin, merchant, amount_minor, paypal_unavailable, purpose, status, expires_at)
+        VALUES ($1, $2, 'https://www.fontshop.example', 'Font shop', 450, $3, 'a font licence', 'approved', now() + interval '1 hour')`, [F.id, acct, v]);
+    });
+    expect(await refusal(buy)).toMatch(/covers one purchase, and it has been requested/);
+    // The release ends (expiry or hold): spending waits for launch again; sales never opened.
+    await R.one(`fleet.fleet_admin_outward_hold($1, $2)`, [F.id, OWNER]);
+    expect(await refusal(buy)).toMatch(/needs the owner's card-proof release/);
+    expect(await R.one(`fleet.fleet_sales_open()`)).toBe(false);
+    if (wasOpen) await R.one(`fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
   });
 
   it("a product is not sold publicly while a spreadsheet in its passing review saves formulas without their values", async () => {

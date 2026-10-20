@@ -117,7 +117,8 @@ describe.skipIf(!PG_BIN)("v79 the autonomous business operator (PostgreSQL)", { 
       .then((r) => r[0].r, (e: Error) => e.message);
     expect(await release({ actions: ["browser"], expiresHours: 2 })).toMatch(/name their origins/);
     expect(await release({ actions: ["account_register"], origins: ["https://example.com"], expiresHours: 200 })).toMatch(/expiresHours/);
-    expect(await release({ actions: ["card"], origins: ["https://example.com"], expiresHours: 2 })).toMatch(/never released/);
+    // v108: card is released only as one named purchase (with browser, one origin and account, merchant, ≤ 500, ≤ 24 h).
+    expect(await release({ actions: ["card"], origins: ["https://example.com"], expiresHours: 2 })).toMatch(/card is one purchase/);
     expect(await release({ actions: ["account_register"], origins: ["https://example.com"], expiresHours: 2 })).toMatchObject({ ok: true, salesOpen: false, warning: expect.stringMatching(/EXTERNAL/) });
     const reg = await ok(R.econ(F, "account.register", { platform: "example.com", kind: "marketplace", origin: "https://example.com" }));
     expect(await R.econ(F, "account.register", { platform: "other.example", kind: "marketplace", origin: "https://other.example" })).toMatchObject(held);

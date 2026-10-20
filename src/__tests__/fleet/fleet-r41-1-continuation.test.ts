@@ -368,7 +368,7 @@ describe("R41.1 field journal, field guide, bootstrap, charter integration", () 
     const list = await r.toolbox.execute(call("field_guide", { op: "list" }));
     // v2.1 (2026-10-12): orientation first; business doctrine (survival cycle, venture types, customers, tactics) lives in the
     // library's business foundation and the guide points there. v2.2 (2026-10-15, v79): the agent-chosen CHANNELS doctrine.
-    expect(list.output).toMatch(/^survival-field-guide-v2\.3 \(2026-10-15\) — sections: orientation .*survival-cycle \[pointer\]/);
+    expect(list.output).toMatch(/^survival-field-guide-v2\.3 \(2026-10-20\) — sections: orientation .*survival-cycle \[pointer\]/);
     // v2.2: where to sell is the agent's choice from research; named platforms are examples, never a list.
     expect((await r.toolbox.execute(call("field_guide", { op: "read", section: "situation" }))).output).toMatch(/CHANNELS \(v2\.2\): where you sell and promote is your choice, from research.*an example, never a list or a ranking/);
     const plat = await r.toolbox.execute(call("field_guide", { op: "read", section: "platforms" }));

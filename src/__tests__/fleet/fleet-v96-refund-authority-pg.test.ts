@@ -115,7 +115,8 @@ describe.skipIf(!PG_BIN)("v96: custody enforces refund authority at dispatch", (
 
   it("v96 loads the capability entry agents read, rewritten from verified state (v14)", async () => {
     const e = (await R.q(`SELECT version, title, facts FROM fleet.fleet_knowledge_library WHERE entry_id = 'fleet-capability-status' AND current`))[0];
-    expect(e).toMatchObject({ version: 14, title: expect.stringContaining("2026-10-19, v14") });
+    // v108 reloads it as v15 (the owner's geography decision); v96's verified facts are kept.
+    expect(e).toMatchObject({ version: 15, title: expect.stringContaining("2026-10-20, v15") });
     const facts = JSON.stringify(e.facts);
     for (const t of ["Gumroad — DEFERRED", "Image generation — NOT CONNECTED", "Web search — CONNECTED (Brave", "within a live refund authority", "AS THE CUSTOMER SEES THEM"]) expect(facts).toContain(t);
   });

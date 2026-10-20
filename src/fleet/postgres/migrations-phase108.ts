@@ -1,14 +1,13 @@
 /**
  * Schema v108 — the launch completion package (owner, 2026-10-20).
  *
- * 1. SUPPORTED CUSTOMER GEOGRAPHY (owner policy, playbook decisions / Field Guide v2: "Worldwide"; "EU consumer digital
- *    sales go through a merchant-of-record marketplace"; 2026-10-19: "Explain and enforce the supported customer geography").
- *    `fleet_sales_geography` is the owner's list of countries the treasury checkout does not sell to — seeded with the EU-27
- *    (no merchant of record is connected); the owner changes it (`fleet_admin_sales_geography`). The buyer states their country
- *    before paying (`svc_order_country`, on the offer page and on the order page); `svc_order_pay` refuses an order without a
- *    stated country or with a listed one, before any payment. After payment, a PayPal payer country that is listed, or that
- *    differs from the stated one, HOLDS delivery (automatic and `order.deliver`) and tells the agent and the owner
- *    (`order_needs_attention`): the agent refunds within its refund authority, or the owner decides.
+ * 1. SUPPORTED CUSTOMER GEOGRAPHY (owner decision, 2026-10-20: "Worldwide, no exclusions" — the treasury checkout sells
+ *    everywhere, EU included; the owner accepts the VAT obligations on digital sales; "the country step still records it").
+ *    The buyer states their country before paying (`svc_order_country`, offer page and order page) — with PayPal's payer
+ *    country, the two pieces of location evidence kept with every order. `fleet_sales_geography` is the owner's list of
+ *    countries the checkout does not sell to: EMPTY by the owner's decision; the owner may add one later
+ *    (`economy-sales-geography`), and only then is a listed country refused before payment, or a paid order from one held.
+ *    Agents are told (fleet-capability-status v15).
  * 2. ORDER CONVERSATIONS CLOSE (owner, 2026-10-20: "the ai needs to log off after customer satisfaction is met so it doesnt
  *    double down as a free ai chat!"; chosen: "Refund or 7 days"): an order's conversation is closed to new buyer messages at
  *    a full refund, 7 days after the agent resolved the buyer's request (a sent delivery or a resolving reply) with nothing new
@@ -19,12 +18,20 @@
  *    the buyer's own address, mail routed to the agent of exactly one open order of that buyer — joins the order's thread as a
  *    buyer message (the same obligation, wake and limits as one sent on the page; quoted history removed). Only from the
  *    order's buyer address; never for a closed conversation.
+ * 5. ONE PRE-LAUNCH CARD PURCHASE (owner, 2026-10-20: "Keep public sales closed … identify the exact gate refusing pre-launch
+ *    card requests … If they cannot [be reused], include the smallest necessary change"). The gate: fleet_outward_refusal (v80)
+ *    refuses every card.request while sales are closed, and a release may never name spending. Now a release may name
+ *    action `card` with exactly one merchant origin and account, the merchant's name and cardMaxMinor ≤ 500, for ≤ 24 h, and
+ *    with `browser` (the fill): under it ONE card.request at that merchant, at most that amount, is not held. Everything else
+ *    is the existing card path — the owner's card authority and caps, Fleet Control's review, the reservation against the
+ *    agent's own cash, the statement match (fleet-purchase-proof.sh card-* switches authority on and off).
  * 4. A PRODUCT IS SOLD PUBLICLY ONLY WITH ITS SPREADSHEETS' VALUES SAVED (owner, 2026-10-20: "resolve the saved-formula-values
  *    issue before selling that workbook publicly"): `fleet_offer_sale_block` also requires each delivered spreadsheet's
  *    cached_values check to pass (formulas saved with their values: previewers, phones and mail clients show them).
  */
 import { V41_SQL } from "./migrations-phase41.js";
 import { V76_SQL } from "./migrations-phase76.js";
+import { V80_SQL, RELEASE_ACTIONS } from "./migrations-phase80.js";
 import { V82_SQL } from "./migrations-phase82.js";
 import { V96_SQL } from "./migrations-phase96.js";
 import { V97_SQL } from "./migrations-phase97.js";
@@ -32,15 +39,20 @@ import { V98_SQL } from "./migrations-phase98.js";
 import { V99_SQL } from "./migrations-phase99.js";
 import { V106_SQL } from "./migrations-phase106.js";
 import { restate as restateRaw } from "./migrations-phase42.js";
+import { CAPABILITY_STATUS_V14 } from "./knowledge-capability-status-v14.js";
 
 const restate = (src: string, name: string, edits: Array<[string, string]>) => restateRaw(src, name, edits.map(([a, b]) => [a, b.replace(/\$/g, "$$$$")] as [string, string]));
 const q = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(",");
 
 /** The EU-27: consumer digital sales need a merchant of record (none connected). */
+/** The EU-27 (kept for reference: the owner decided on 2026-10-20 not to exclude them). */
 export const EU_27 = ["AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MT", "NL", "PL", "PT", "RO", "SE", "SI", "SK"] as const;
 export const ORDER_CONVERSATION_DAYS = 7;
 export const ORDER_BUYER_MESSAGES_MAX = 10;
 export const SUPPORT_ADDRESS = "fleet.treasury@proton.me";
+/** The most one pre-launch card-proof release can cover (minor units). */
+export const CARD_PROOF_MAX_MINOR = 500;
+const RELEASE_ACTIONS_V108 = [...RELEASE_ACTIONS, "card"] as const;
 
 const OWNER_ACTOR = `IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
   PERFORM fleet_require_operator_approver(substr(p_actor, 10), 'fleet_treasury');`;
@@ -104,6 +116,48 @@ const EVENT_ROUTE = restate(V106_SQL, "fleet_event_route", [
   ["    WHEN p_type = 'spend_circuit_breaker_set' THEN", `    WHEN p_type = 'sales_geography_set' THEN 'P2_IMPORTANT'\n    WHEN p_type = 'spend_circuit_breaker_set' THEN`],
 ]);
 
+// ── 5. one pre-launch card purchase under a release that names it ──
+const RELEASE = restate(V80_SQL, "fleet_admin_outward_release", [
+  [`IF x NOT IN ('actions','accounts','origins','mailTo','channels','apiOps','expiresHours') THEN`, `IF x NOT IN ('actions','accounts','origins','mailTo','channels','apiOps','expiresHours','cardMaxMinor','cardMerchant') THEN`],
+  [`WHERE e NOT IN (${q(RELEASE_ACTIONS)})) THEN
+    RAISE EXCEPTION 'FLEET_BAD_REQUEST: actions is a non-empty list of ${RELEASE_ACTIONS.join("|")} (spending is never released)';
+  END IF;`, `WHERE e NOT IN (${q(RELEASE_ACTIONS_V108)})) THEN
+    RAISE EXCEPTION 'FLEET_BAD_REQUEST: actions is a non-empty list of ${RELEASE_ACTIONS_V108.join("|")}';
+  END IF;
+  -- v108: card names one merchant (origin, account, name), at most ${CARD_PROOF_MAX_MINOR} minor units, ≤ 24 h, with the browser fill.
+  IF v_acts ? 'card' AND (NOT v_acts ? 'browser' OR jsonb_array_length(COALESCE(p_scope -> 'origins', '[]'::jsonb)) <> 1
+      OR jsonb_array_length(COALESCE(p_scope -> 'accounts', '[]'::jsonb)) <> 1 OR jsonb_typeof(p_scope -> 'cardMaxMinor') IS DISTINCT FROM 'number'
+      OR (p_scope ->> 'cardMaxMinor')::numeric NOT BETWEEN 1 AND ${CARD_PROOF_MAX_MINOR} OR (p_scope ->> 'cardMaxMinor')::numeric <> trunc((p_scope ->> 'cardMaxMinor')::numeric)
+      OR length(btrim(COALESCE(p_scope ->> 'cardMerchant', ''))) NOT BETWEEN 3 AND 120 OR v_hours > 24) THEN
+    RAISE EXCEPTION 'FLEET_BAD_REQUEST: card is one purchase: with browser, exactly one origin and one account, cardMerchant (3..120) and cardMaxMinor 1..${CARD_PROOF_MAX_MINOR}, for at most 24 hours';
+  END IF;
+  IF NOT v_acts ? 'card' AND (p_scope ? 'cardMaxMinor' OR p_scope ? 'cardMerchant') THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: cardMaxMinor / cardMerchant only with card'; END IF;`],
+]);
+const REFUSAL = restate(V80_SQL, "fleet_outward_refusal", [
+  [`  IF p_op = 'card.request' AND NOT fleet_sales_open() THEN
+    RETURN 'spending waits for launch: a card request is never part of a controlled-proof release';
+  END IF;`, `  IF p_op = 'card.request' AND NOT fleet_sales_open() THEN
+    -- v108: one card request under the owner's card-proof release, at its merchant, within its amount.
+    SELECT * INTO r FROM fleet_outward_release WHERE agent_id = p_agent AND expires_at > now();
+    IF NOT FOUND OR NOT (r.scope -> 'actions') ? 'card' THEN
+      RETURN 'spending waits for launch: before sales open a card request needs the owner''s card-proof release naming the merchant';
+    END IF;
+    IF NOT COALESCE(r.scope -> 'accounts', '[]'::jsonb) ? COALESCE(a ->> 'accountId', '') THEN
+      RETURN format('the card-proof release covers one purchase at %s (its account) only', r.scope ->> 'cardMerchant');
+    END IF;
+    IF lower(COALESCE(a ->> 'origin', (SELECT c.origins[1] FROM fleet_agent_accounts c WHERE c.account_id::text = a ->> 'accountId'), '')) <> (r.scope -> 'origins') ->> 0 THEN
+      RETURN format('the card-proof release covers %s only', (r.scope -> 'origins') ->> 0);
+    END IF;
+    IF jsonb_typeof(a -> 'amountMinor') IS DISTINCT FROM 'number' OR (a ->> 'amountMinor')::numeric > (r.scope ->> 'cardMaxMinor')::numeric THEN
+      RETURN format('the card-proof release covers at most %s minor units', r.scope ->> 'cardMaxMinor');
+    END IF;
+    IF EXISTS (SELECT 1 FROM fleet_card_requests q WHERE q.agent_id = p_agent AND q.created_at >= r.released_at) THEN
+      RETURN 'the card-proof release covers one purchase, and it has been requested';
+    END IF;
+    RETURN NULL;
+  END IF;`],
+]);
+
 // ── 4. spreadsheets' values saved before public sale ──
 const SALE_BLOCK = restate(V96_SQL, "fleet_offer_sale_block", [
   [`    WHEN r.inspector NOT IN (`, `    WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.automated -> 'files') = 'array' THEN r.automated -> 'files' ELSE '[]'::jsonb END) f,
@@ -112,6 +166,18 @@ const SALE_BLOCK = restate(V96_SQL, "fleet_offer_sale_block", [
       THEN 'a spreadsheet in it saves formulas without their values (previewers, phones and mail clients show those cells blank or wrong): save the computed values (recalculate and save it with the office application, or pass value= to XlsxWriter''s write_formula), inspect again, review and publish with that review'
     WHEN r.inspector NOT IN (`],
 ]);
+
+// fleet-capability-status v15: the owner's geography decision and v108's buyer-facing behaviour (what agents read).
+const V15_FACTS = [
+  { fact: "Customer geography — the owner's decision (2026-10-20): the treasury checkout sells WORLDWIDE, EU consumers included; the owner accepts the VAT obligations on digital sales. The buyer states their country on your offer page or order page before paying, and PayPal's payer country is recorded too (the location evidence for tax). A country is refused only if the owner lists it (none is listed). bf-tax-worldwide explains the obligations", verifyAt: [], confidence: "verified-official", lastChecked: "2026-10-20", staleAfterDays: 14 },
+  { fact: "Order conversations — BUILT (v108): a paid order takes buyer messages until it is fully refunded, 7 days after you resolved the buyer's request (a sent delivery or a resolving reply) with nothing new since, or 10 buyer messages; then the order page shows the receipt and downloads and names the support address. A request already made is still yours to answer", verifyAt: [], confidence: "verified-official", lastChecked: "2026-10-20", staleAfterDays: 14 },
+  { fact: "Buyer email — BUILT (v108): a buyer's emailed reply to your order message, delivery or confirmation joins that order's thread (as if sent on the order page), from the buyer's own address only; you answer with customers order_message (emailed). NOT LIVE-PROVEN", verifyAt: [], confidence: "verified-official", lastChecked: "2026-10-20", staleAfterDays: 14 },
+  { fact: "Spreadsheets sold publicly — a product is sold publicly only when each spreadsheet in its passing review saves its formulas WITH their values (the inspector's cached_values check passes): previewers, phones and mail clients show the saved values, not a recalculation. Your offer list's saleBlock says so when it applies", verifyAt: [], confidence: "verified-official", lastChecked: "2026-10-20", staleAfterDays: 14 },
+] as const;
+const V15 = CAPABILITY_STATUS_V14.entries.map((e) => ({
+  ...e, version: 15, lastReviewed: "2026-10-20", title: "Fleet capability status (dated 2026-10-20, v15) — what works today",
+  factsThatChange: [...e.factsThatChange.filter((f) => !f.fact.startsWith("EU consumer digital sales")), ...V15_FACTS],
+}));
 
 export const V108_SQL = `
 -- ═══ 1. Supported customer geography ═══
@@ -122,8 +188,8 @@ CREATE TABLE fleet_sales_geography (
   set_by      text        NOT NULL,
   set_at      timestamptz NOT NULL DEFAULT now()
 );
-INSERT INTO fleet_sales_geography (id, unsupported, reason, set_by) VALUES (1, ARRAY[${q(EU_27)}],
-  'owner policy (playbook decisions, Field Guide v2): worldwide; EU consumer digital sales only through a merchant of record — none is connected, so the treasury checkout does not sell to the EU-27',
+INSERT INTO fleet_sales_geography (id, unsupported, reason, set_by) VALUES (1, '{}',
+  'owner decision 2026-10-20: worldwide, no exclusions (EU included; the owner accepts the VAT obligations on digital sales); the buyer''s country is recorded',
   'migration:v108');
 ALTER TABLE fleet_customer_orders ADD COLUMN buyer_stated_country text CHECK (buyer_stated_country ~ '^[A-Z]{2}$'), ADD COLUMN country_stated_at timestamptz;
 
@@ -132,14 +198,15 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT p IS NULL OR p !~ '^[A-Z]{2}$' OR EXISTS (SELECT 1 FROM fleet_sales_geography g WHERE g.id = 1 AND p = ANY (g.unsupported))
 $$;
 
--- Why delivery of a paid order is held for its buyer's country (NULL: it is not). Orders made before v108 state no country.
+-- Why delivery of a paid order is held for its buyer's country (NULL: it is not): only a country on the owner's list (empty
+-- by the owner's decision). A stated country that differs from PayPal's is kept as evidence, never a hold.
 CREATE FUNCTION fleet_order_country_hold(o fleet_customer_orders) RETURNS text LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT CASE
     WHEN o.buyer_country IS NOT NULL AND fleet_country_unsupported(o.buyer_country)
       THEN 'PayPal shows the buyer in ' || o.buyer_country || ', where the treasury checkout does not sell (the owner''s supported geography)'
-    WHEN o.buyer_country IS NOT NULL AND o.buyer_stated_country IS NOT NULL AND o.buyer_country <> o.buyer_stated_country
-      THEN 'the buyer stated ' || o.buyer_stated_country || ' but PayPal shows ' || o.buyer_country
+    WHEN o.buyer_stated_country IS NOT NULL AND fleet_country_unsupported(o.buyer_stated_country)
+      THEN 'the buyer stated ' || o.buyer_stated_country || ', where the treasury checkout does not sell (the owner''s supported geography)'
   END
 $$;
 
@@ -249,7 +316,26 @@ ${STORE_IN}
 -- ═══ 4. Spreadsheets' values saved before public sale ═══
 ${SALE_BLOCK}
 
+-- ═══ 5. One pre-launch card purchase ═══
+${RELEASE}
+
+${REFUSAL}
+
 ${EVENT_ROUTE}
+
+-- ═══ 5. What agents read: fleet-capability-status v15 ═══
+SELECT fleet_admin_knowledge_library_load('${JSON.stringify({ entries: V15 }).replace(/'/g, "''")}'::jsonb, 'migration');
+
+-- A published product that is not sold publicly because of v108 (unsaved spreadsheet values): its agent is told once, by
+-- Fleet Control's notice (the platform's reason only).
+DO $$ DECLARE o fleet_offers; v text; BEGIN
+  FOR o IN SELECT * FROM fleet_offers WHERE status = 'published' AND kind = 'product' LOOP
+    v := fleet_offer_sale_block(o);
+    IF v LIKE 'a spreadsheet in it saves formulas%' THEN
+      PERFORM fleet_spend_review_notice(o.agent_id, 'Fleet Control: your offer "' || o.title || '" (' || o.slug || ') will not be sold publicly when sales open: ' || v || '.');
+    END IF;
+  END LOOP;
+END $$;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA @@SCHEMA@@ FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA @@SCHEMA@@ FROM PUBLIC;
