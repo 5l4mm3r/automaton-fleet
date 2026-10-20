@@ -33,7 +33,7 @@ import { custodyCategory, custodyRefusalText } from "../custody-refusals.js";
 import { FIELD_GUIDE_VERSION, guideList, guideSection, libraryList, guidePart } from "./field-guide.js";
 import { SCOPED_CONTINUE } from "./loop-guard.js";
 import { FOUNDER_V10_RELEASE } from "./doctrine-v10.js";
-import { minorAmounts, moneyProblems, moneyRefusal } from "./money.js";
+import { DEFAULT_CURRENCIES, hasAmount, minorAmounts, moneyProblems, moneyRefusal, type Currency, type Figure } from "./money.js";
 import { DecisionLedgerError, cognitionDepth, commitmentCheck, depthLine, loadDecisions, noteCommitment, noteResearch, openDecision, researchCheck, resolveDecision, reviewDecision, saveDecisions, type Decision } from "./decisions.js";
 
 export interface ToolboxPorts {
@@ -62,7 +62,7 @@ export interface ToolboxPorts {
 /** F2 tools → registry operations (the database validates every argument; the toolbox only maps and adds idempotency). */
 /** The read-only operations of the multi-operation tools, by the controller operation each maps to (ECONOMY_OPS).
  *  Anything not matched — including every operation added later — is treated as changing state (the safe side). */
-export const READ_MAPPED = /(\.list|\.status|\.inbox|\.read|\.requests|\.reviews|\.uses|\.search|\.library|\.checkouts|\.awaiting_approval|\.products|\.sales|\.job|\.files|\.thread|\.performance|\.economics|\.observe|\.check|\.offers|\.talent|\.api_jobs|\.reductions|\.fetch_file)$|^(wallet|performance)$/;
+export const READ_MAPPED = /(\.list|\.status|\.inbox|\.read|\.requests|\.reviews|\.uses|\.search|\.library|\.checkouts|\.awaiting_approval|\.products|\.sales|\.job|\.files|\.thread|\.performance|\.economics|\.observe|\.check|\.offers|\.talent|\.api_jobs|\.reductions|\.fetch_file|\.invoice|\.currencies|\.price)$|^(wallet|performance)$/;
 /** Tools that only read (the founder's own files and memory, the web, knowledge). */
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read_file", "list_files", "recall_facts", "list_goals", "check_ledger", "read_knowledge",
   "web_fetch", "web_search", "view_image", "field_guide", "list_experiments"]);
@@ -89,7 +89,9 @@ export const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string
     // v56: the orders behind checkouts (buyer contact, payment, fulfilment): a file delivered by mail, a service recorded.
     orders: "order.list", deliver: "order.deliver", fulfil: "order.fulfil",
     // v59: refund the buyer of one of your sales (custody sends it to PayPal; posted when PayPal confirms it).
-    refund: "order.refund" },
+    refund: "order.refund",
+    // v105: an invoice calculated from the order's record (written to invoices/ as text and PDF); the currencies of the records.
+    invoice: "order.invoice", currencies: "money.currencies" },
   fleet_capital: { register_vendor: "vendor.register", revoke_vendor: "vendor.revoke", require_rail: "rail.require", request: "capital.request", list: "capital.list",
     envelopes: "envelope.list", envelope_spend: "envelope.spend",
     // v49: the owner's card as a bypass (hold → fill → declare / void); v50: temporary sweep reductions.
@@ -142,7 +144,9 @@ export const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string
     // v80 (founder-v9): official-API channel publishing through the channel gateway.
     api: "channel.api", api_jobs: "channel.api_jobs" },
   customers: { enquiries: "enquiry.list", read: "enquiry.read", fetch_file: "enquiry.file", reply: "enquiry.reply", quote: "enquiry.quote", decline: "enquiry.decline",
-    order_thread: "order.thread", order_message: "order.message" },
+    order_thread: "order.thread", order_message: "order.message",
+    // v105: a price calculated by the platform from line items (what quote with items will charge), without quoting.
+    price: "money.price" },
 });
 /** v76: the agent toolchain the exec sandbox exposes (Python wheels for XLSX, DOCX, PDF, images; scripts/fleet-agent-tools.sh). */
 export const DEFAULT_AGENT_TOOLS_DIR = "/usr/local/lib/automaton-fleet-tools/current";
@@ -152,6 +156,7 @@ import json, sys, zipfile, csv, io
 out = []
 for p in json.load(open(sys.argv[1]))["files"]:
     t = ""
+    lim = []
     try:
         low = p.lower()
         if low.endswith((".txt", ".md", ".csv")):
@@ -160,7 +165,9 @@ for p in json.load(open(sys.argv[1]))["files"]:
             import docx
             d = docx.Document(p)
             t = "\n".join(x.text for x in d.paragraphs) + "\n" + "\n".join(" | ".join(c.text for c in r.cells) for tb in d.tables for r in tb.rows)
+            lim.append("body paragraphs and tables only (headers, footers, text boxes, footnotes and embedded objects are not read)")
         elif low.endswith(".xlsx"):
+            lim.append("cells listed one by one (the inspector recalculates formulas; rows are not read as lines)")
             import openpyxl
             wf = openpyxl.load_workbook(p, data_only=False)
             wv = openpyxl.load_workbook(p, data_only=True)
@@ -175,7 +182,12 @@ for p in json.load(open(sys.argv[1]))["files"]:
             t = "\n".join(parts)
         elif low.endswith(".pdf"):
             import pypdf
-            t = "\n".join((pg.extract_text() or "") for pg in pypdf.PdfReader(p).pages[:40])
+            pages = pypdf.PdfReader(p).pages
+            t = "\n".join((pg.extract_text() or "") for pg in pages[:40])
+            if len(pages) > 40:
+                lim.append("first 40 of %d pages" % len(pages))
+            if not t.strip():
+                lim.append("no text layer (scanned or drawn text is not read: no OCR)")
         elif low.endswith(".pptx"):
             import pptx
             prs = pptx.Presentation(p)
@@ -193,12 +205,35 @@ for p in json.load(open(sys.argv[1]))["files"]:
         elif low.endswith(".zip"):
             z = zipfile.ZipFile(p)
             t = "archive: " + ", ".join(i.filename + " (" + str(i.file_size) + " bytes)" for i in z.infolist()[:200])
+            lim.append("an archive: only its file names are read")
         else:
             t = "(binary file: no text to extract)"
+            lim.append("no text extracted (an image or binary file: no OCR)")
     except Exception as e:
         t = "(could not extract: " + type(e).__name__ + ")"
-    out.append({"path": p, "text": t[:14000]})
+        lim.append("could not be read (" + type(e).__name__ + ")")
+    if len(t) > 14000:
+        lim.append("first 14000 of %d characters" % len(t))
+    out.append({"path": p, "text": t[:14000], "limits": lim})
 print(json.dumps({"files": out}))
+`;
+/** v105: an invoice's text rendered as it is to a PDF (reportlab, A4; Helvetica covers £ € ×). */
+const INVOICE_PDF_PY = String.raw`
+import sys
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+lines = open(sys.argv[1], encoding="utf-8").read().splitlines()
+c = canvas.Canvas(sys.argv[2], pagesize=A4)
+c.setTitle(lines[0] if lines else "Invoice")
+w, h = A4
+y = h - 56
+for i, ln in enumerate(lines):
+    if y < 56:
+        c.showPage(); y = h - 56
+    c.setFont("Helvetica-Bold" if i == 0 or ln.startswith("Total:") else "Helvetica", 14 if i == 0 else 10)
+    c.drawString(56, y, ln)
+    y -= 22 if i == 0 else 15
+c.save()
 `;
 /** v56: a delivered file's content type from its extension (the registry accepts the storefront's file types). */
 function contentTypeOf(f: string): string | null {
@@ -618,33 +653,95 @@ export class FounderToolbox {
   /**
    * 2026-10-20 (owner: "do not rely on model-generated arithmetic for monetary totals"). The customer-facing text of a
    * message, quote, delivery, refund, offer or e-mail is checked before it is sent (money.ts): written calculations must be
-   * right, itemised totals must add up, and a labelled total must be one of the record's amounts — the order's amount,
-   * what was refunded and what is still refundable, the quote's or offer's price (integer minor units from the database).
-   * Returns the refusal, or null. Only text is checked here; a file's contents are the inspector's.
+   * right, itemised totals must add up, a labelled total must be one of the record's amounts in the record's currency — the
+   * order's amount, what was refunded and what is still refundable, the quote's or offer's price, a priced quote's lines —
+   * and an amount in a claim must have an identified currency and its minor unit (the currencies: money.currencies).
+   * v105: a delivery's documents are checked too, from their extracted text (calculations, itemised totals, currency and
+   * precision — not the order's figures: a document's totals are the customer's subject, not this sale); what extraction
+   * could not read is stated in the delivery's result. Returns the refusal (null: nothing found) and that note.
    */
-  private async moneyCheck(op: string, args: Record<string, unknown>): Promise<string | null> {
+  private currencyList: { at: number; list: readonly Currency[] } | null = null;
+  private async currencies(): Promise<readonly Currency[]> {
+    if (this.currencyList && Date.now() - this.currencyList.at < 600_000) return this.currencyList.list;
+    const r = await this.o.ports.economy?.("money.currencies", {}).catch(() => null) as { currencies?: Array<{ code?: unknown; exponent?: unknown; payments?: unknown }> } | null;
+    const got = (r?.currencies ?? []).filter((c) => typeof c.code === "string" && Number.isSafeInteger(c.exponent))
+      .sort((a, b) => Number(b.payments === true) - Number(a.payments === true)).map((c) => ({ code: c.code as string, exponent: c.exponent as number }));
+    const list = got.length ? got : DEFAULT_CURRENCIES;
+    this.currencyList = { at: Date.now(), list };
+    return list;
+  }
+
+  private async moneyCheck(op: string, args: Record<string, unknown>): Promise<{ refusal: string | null; documents?: Array<{ path: string; checked: boolean; limits: string[] }> }> {
     const fields = MONEY_TEXT_FIELDS[op];
-    if (!fields) return null;
+    if (!fields) return { refusal: null };
     const text = fields.map((f) => args[f]).flatMap((v) => (Array.isArray(v) ? v : [v])).filter((v): v is string => typeof v === "string").join("\n");
-    if (!text.includes("£")) return null;
-    const auth = minorAmounts(args);
-    // The record's figures: the order (its amount, what was refunded, what is still refundable) or the enquiry.
-    if (typeof args.orderId === "string" && this.o.ports.economy) {
-      const r = await this.o.ports.economy("order.list", { orderId: args.orderId }).catch(() => null) as { orders?: Array<Record<string, unknown>> } | null;
-      const o = r?.orders?.[0];
-      if (o) {
-        minorAmounts(o, auth);
-        if (Number.isSafeInteger(o.amountMinor) && Number.isSafeInteger(o.refundedMinor)) auth.add(Math.max(0, (o.amountMinor as number) - (o.refundedMinor as number)));
+    const docs = op === "order.deliver" && Array.isArray(args.paths) && args.paths.length <= 10 && args.paths.every((p) => typeof p === "string") ? args.paths as string[] : [];
+    if (!hasAmount(text) && !docs.length) return { refusal: null };
+    const currencies = await this.currencies();
+    const auth = new Set<string>();
+    const add = (minor: unknown, ccy: unknown) => { if (Number.isSafeInteger(minor) && (minor as number) >= 0) auth.add(`${typeof ccy === "string" ? ccy : currencies[0].code}:${minor}`); };
+    let recordCcy = currencies[0].code;
+    if (hasAmount(text)) {
+      for (const m of minorAmounts(args)) add(m, args.currency);
+      // The record's figures: the order (its amount, what was refunded, what is still refundable) or the enquiry.
+      if (typeof args.orderId === "string" && this.o.ports.economy) {
+        const r = await this.o.ports.economy("order.list", { orderId: args.orderId }).catch(() => null) as { orders?: Array<Record<string, unknown>> } | null;
+        const o = r?.orders?.[0];
+        if (o) {
+          if (typeof o.currency === "string") recordCcy = o.currency;
+          for (const m of minorAmounts(o)) add(m, recordCcy);
+          if (Number.isSafeInteger(o.amountMinor) && Number.isSafeInteger(o.refundedMinor)) add(Math.max(0, (o.amountMinor as number) - (o.refundedMinor as number)), recordCcy);
+        }
+      }
+      if (typeof args.enquiryId === "string" && this.o.ports.economy) {
+        const r = await this.o.ports.economy("enquiry.read", { enquiryId: args.enquiryId }).catch(() => null) as Record<string, unknown> | null;
+        if (r) for (const m of minorAmounts(r)) add(m, recordCcy);
+      }
+      // v105: a quote with line items states the platform's calculation (its lines, subtotal, fees, tax and total).
+      if (op === "enquiry.quote" && Array.isArray(args.items) && this.o.ports.economy) {
+        const r = await this.o.ports.economy("money.price", { items: args.items, fees: args.fees, tax: args.tax }).catch(() => null) as { pricing?: Record<string, unknown> } | null;
+        if (r?.pricing) for (const m of minorAmounts(r.pricing)) add(m, r.pricing.currency ?? recordCcy);
       }
     }
-    if (typeof args.enquiryId === "string" && this.o.ports.economy) {
-      const r = await this.o.ports.economy("enquiry.read", { enquiryId: args.enquiryId }).catch(() => null);
-      if (r) minorAmounts(r, auth);
+    // An e-mail has no record to compare with: its calculations, itemised totals and currencies are still checked.
+    const figures: Figure[] = op === "mail.send" ? [] : [...auth].map((k) => ({ currency: k.slice(0, k.indexOf(":")), minor: Number(k.slice(k.indexOf(":") + 1)) }));
+    const opts = { currencies, currency: recordCcy };
+    const problems = text ? moneyProblems(text, figures, opts) : [];
+    if (problems.length) return { refusal: moneyRefusal(problems, figures, opts) };
+    if (!docs.length) return { refusal: null };
+    // The delivered documents' own financial claims (not compared with this order: a document's totals are its subject's).
+    const x = await this.extractFiles(docs).catch(() => null);
+    if (!x || !x.ok) return { refusal: null, documents: docs.map((p) => ({ path: p, checked: false, limits: ["could not be read for the money check"] })) };
+    const found: string[] = [];
+    for (const f of x.files) {
+      const p = moneyProblems(f.text, [], opts);
+      if (p.length) found.push(`in ${f.path}: ${moneyRefusal(p, [], opts).replace(/^the financial claims in this text do not hold: /, "").replace(/ Nothing was sent\..*$/s, "")}`);
     }
-    // An e-mail has no record to compare with: its calculations and itemised totals are still checked.
-    const figures = op === "mail.send" ? [] : [...auth];
-    const problems = moneyProblems(text, figures);
-    return problems.length ? moneyRefusal(problems, figures) : null;
+    if (found.length) {
+      return { refusal: `the financial claims in the files to deliver do not hold — ${found.join(" | ")}. Nothing was delivered. `
+        + "Correct the calculation in the file (compute money with exec: Python Decimal in minor units, explicit rounding; or take it from the record), re-inspect it, then deliver." };
+    }
+    return { refusal: null, documents: x.files.map((f) => ({ path: f.path, checked: !f.limits.some((l) => /^(?:no text|could not|an archive)/.test(l)), limits: f.limits })) };
+  }
+
+  /** v105: the record's invoice as invoices/<number>.txt and, when the toolchain has reportlab, invoices/<number>.pdf. */
+  private async writeInvoice(r: { invoice: { number: string; text: string } } & Record<string, unknown>): Promise<Record<string, unknown>> {
+    const no = String(r.invoice.number).replace(/[^A-Za-z0-9-]/g, "").slice(0, 40) || "invoice";
+    fs.mkdirSync(path.dirname(this.resolve(`invoices/${no}.txt`)), { recursive: true });
+    // Resolved for writing after the directory exists: a symlinked directory or file can never redirect the write.
+    fs.writeFileSync(this.resolve(`invoices/${no}.txt`, true), `${r.invoice.text}\n`, { mode: 0o600 });
+    const tmp = path.join(this.workspace, ".tmp");
+    fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
+    const id = crypto.randomBytes(6).toString("hex");
+    fs.writeFileSync(path.join(tmp, `fleet-invoice-${id}.py`), INVOICE_PDF_PY, { mode: 0o600 });
+    const pdf = this.resolve(`invoices/${no}.pdf`, true);
+    fs.rmSync(pdf, { force: true });
+    const x = await runSandboxed(this.workspace, `python3 -P -s .tmp/fleet-invoice-${id}.py invoices/${no}.txt invoices/${no}.pdf`,
+      { timeoutMs: 60_000, maxOutput: 4_000, python: this.o.sandboxPython, toolsDir: this.toolsDir }).catch((e: Error) => ({ code: 1, output: e.message }));
+    fs.rmSync(path.join(tmp, `fleet-invoice-${id}.py`), { force: true });
+    const made = fs.existsSync(pdf) && fs.statSync(pdf).size > 0;
+    return { ...r, paths: [`invoices/${no}.txt`, ...(made ? [`invoices/${no}.pdf`] : [])],
+      ...(made ? {} : { pdfNote: `the PDF could not be rendered (${String(x.output).slice(0, 200)}); the text invoice is complete` }) };
   }
 
   async inspect(paths: string[], cases: unknown[] = []): Promise<{ ok: true; report: QaInspectorReport } | { ok: false; reason: string; code: string }> {
@@ -679,6 +776,13 @@ export class FounderToolbox {
 
   /** v76: text of up to 5 workspace files for an independent review (bounded; extracted inside the sandbox). */
   async extractForReview(paths: string[]): Promise<{ ok: true; text: string } | { ok: false; reason: string }> {
+    const x = await this.extractFiles(paths);
+    if (!x.ok) return x;
+    return { ok: true, text: x.files.map((f) => `### FILE ${f.path}\n${f.text}`).join("\n\n").slice(0, 40_000) };
+  }
+
+  /** Each workspace file's extracted text and what the extraction could not read (inside the sandbox). */
+  async extractFiles(paths: string[]): Promise<{ ok: true; files: Array<{ path: string; text: string; limits: string[] }> } | { ok: false; reason: string }> {
     for (const p of paths) {
       const f = this.resolve(p);
       if (!fs.existsSync(f) || !fs.statSync(f).isFile()) return { ok: false, reason: `not a file in your workspace: ${p}` };
@@ -694,8 +798,8 @@ export class FounderToolbox {
     for (const f of [`fleet-extract-${id}.py`, `extract-${id}.json`]) fs.rmSync(path.join(tmp, f), { force: true });
     const line = r.output.split("\n").reverse().find((l) => l.startsWith('{"files"'));
     if (!line) return { ok: false, reason: "could not extract the files' content" };
-    const files = (JSON.parse(line).files ?? []) as Array<{ path: string; text: string }>;
-    return { ok: true, text: files.map((f) => `### FILE ${f.path}\n${f.text}`).join("\n\n").slice(0, 40_000) };
+    const files = (JSON.parse(line).files ?? []) as Array<{ path: string; text: string; limits?: string[] }>;
+    return { ok: true, files: files.map((f) => ({ path: f.path, text: f.text, limits: f.limits ?? [] })) };
   }
 
   /** v76: request ids of this runtime's independent reviews (only those may be cited as one in a deliverable review), with
@@ -1227,7 +1331,7 @@ export class FounderToolbox {
           if (IDEMPOTENT_OPS.has(op) && typeof args.idempotencyKey !== "string") args.idempotencyKey = `econ:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128).padEnd(8, "_");
           // 2026-10-20: money in customer-facing text is checked before it is sent (exact arithmetic; the record's figures).
           const money = await this.moneyCheck(op, args);
-          if (money) return refuse("FLEET_AMOUNT_MISMATCH", money);
+          if (money.refusal) return refuse("FLEET_AMOUNT_MISMATCH", money.refusal);
           // v52: a storefront file comes from the founder's own workspace (resolved strictly inside it; at most 15 MB).
           if (op === "storefront.file" && typeof args.path === "string") {
             const f = this.resolve(args.path);
@@ -1294,6 +1398,13 @@ export class FounderToolbox {
             delete args.path;
           }
           let r = await this.o.ports.economy(op, args).catch(ownerRefusal);
+          // v105: what the money check read in the delivered documents, and what it could not.
+          if (op === "order.deliver" && money.documents && (r as { ok?: unknown }).ok !== false) {
+            r = { ...(r as Record<string, unknown>), moneyCheck: { documents: money.documents,
+              note: "calculations, itemised totals, currencies and precision in the extracted text were checked; claims the extraction could not read (listed per file), formulas and figures without a currency are not" } };
+          }
+          // v105: an invoice is written to the workspace from the record (text and PDF) — deliver those files as they are.
+          if (op === "order.invoice" && (r as { ok?: unknown }).ok === true) r = await this.writeInvoice(r as { invoice: { number: string; text: string } } & Record<string, unknown>);
           // 2026-10-19: an answer to a buyer settles this turn's sleep check for that request (a refused one is not an answer).
           if (op === "order.message" || op === "enquiry.reply" || op === "enquiry.quote" || op === "enquiry.decline") {
             const key = String(op === "order.message" ? args.orderId : args.enquiryId);

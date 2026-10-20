@@ -94,7 +94,9 @@ describe("v76 founder-v7 tools", () => {
     // order.deliver is the wallet tool's "deliver" op (v56); the staging is v76.
     const d = await t.run("wallet", { op: "deliver", args: { orderId: "ord-1", paths: ["out/a.txt", "out/b.csv"], reviewId: "rv" } });
     expect(d.ok).toBe(true);
-    expect(t.calls.map((c) => c.op)).toEqual(["order.stage_file", "order.stage_file", "order.deliver"]);
+    // v105: the money check first reads the records' currencies (the files' text is checked before anything is staged).
+    expect(t.calls.map((c) => c.op)).toEqual(["money.currencies", "order.stage_file", "order.stage_file", "order.deliver"]);
+    t.calls.shift();
     expect(t.calls[0].args).toMatchObject({ orderId: "ord-1", fileName: "a.txt", contentType: "text/plain" });
     expect(Buffer.from(String(t.calls[0].args.contentB64), "base64").toString()).toBe("alpha");
     expect(t.calls[2].args.files).toEqual([{ fileName: "a.txt" }, { fileName: "b.csv" }]);
@@ -108,7 +110,7 @@ describe("v76 founder-v7 tools", () => {
     s.put("b.txt", "b");
     const refused = await s.run("wallet", { op: "deliver", args: { orderId: "o", paths: ["a.txt", "b.txt"] } });
     expect(refused).toMatchObject({ ok: false, refused: "FLEET_ORDER_STAGE_LIMIT" });
-    expect(s.calls.map((c) => c.op)).toEqual(["order.stage_file"]);
+    expect(s.calls.map((c) => c.op)).toEqual(["money.currencies", "order.stage_file"]);
   });
 
   it("a buyer's file is saved into the workspace under a safe name; the model gets the path, never the bytes", async () => {

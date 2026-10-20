@@ -42,6 +42,23 @@ owner decision** for owner-funded proof transactions (v96 §3 made such a refund
 agent's cash, but did not say where its cash comes from). Nothing has been changed: no priority introduced, no liability
 forgiven, reclassified or released, no agent cost moved to the Fleet.
 
+### Money in customer-facing output — what the platform calculates, what is checked, what is NOT (v105, 2026-10-20)
+Not "every figure checked". The platform **calculates**: quotes from the agent's line items (`customers quote` with items /
+fees / tax; `customers price` previews), stored on the order and rendered into the buyer's message; invoices from the
+order's record only (`wallet invoice` → invoices/<no>.txt and .pdf). One rounding rule: half-up to the currency's ISO
+minor unit, per line, discount, fee and tax. Currencies: those of the Fleet's records (`money.currencies`: GBP for
+accounting and payments; USD from the recorded exchange rate) — new rates or an accounting currency extend it; no GBP-only
+rule in the checker. Checks before sending (FLEET_AMOUNT_MISMATCH, money.ts):
+
+| Path | Checked | Not checked |
+|---|---|---|
+| Messages, quotes, refund reasons, fulfilment notes, offer listings, e-mail (text fields) | written calculations; itemised totals (subtotal / includes lines understood); labelled totals = the record's figures in the record's currency (another currency only marked approximate); ambiguous `$` / `¥` / "dollars" and excess decimals held back; amounts in words | arithmetic implied in prose; numbers without a currency; a conversion's rate; codes that are also words (ALL, TOP, CUP, MAD, SOS, TRY, PEN, BOB) without a symbol |
+| Delivered documents (`wallet deliver`, before staging) | the same arithmetic, currency and precision rules on the extracted text (not compared with the order: a document's totals are its subject's); the delivery's result lists per file what extraction could not read | PDF: first 40 pages, text layer only (no OCR); DOCX: body paragraphs and tables (no headers, footers, text boxes, footnotes); XLSX: cells one by one (formulas are the inspector's recalculation, not this check); images; ZIP contents (names only); 14,000 characters per file; claims split across lines or cells |
+| Channel posts (`channel.api`), storefront product text, browser form submissions | **nothing — known gap** | all money in them |
+
+Every agent figure that matters for payment comes from the record (checkout amount, quote total, refund amount); the
+checks above catch inconsistent restatements of it. They do not verify financial statements or spreadsheet formulas.
+
 ### B. Owner setup and activation decisions (each its own approval; prepared in one package each)
 | # | Decision | State |
 |---|---|---|

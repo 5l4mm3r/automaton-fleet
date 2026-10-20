@@ -28,6 +28,7 @@ import { initIdentityState, openIdentityState, openProviderVault } from "../../f
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, autoCapabilityChecks, OWNER, econNext, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
 import { liveRail } from "./fixtures/custody-signer.js";
+import { moneyProblems } from "../../fleet/founder/money.js";
 
 const PG_BIN = findPgBin();
 const SCRIPT = fs.readFileSync(path.join(process.cwd(), "scripts/fleet-purchase-proof.sh"), "utf8");
@@ -173,5 +174,71 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     // A report without refusals is unchanged (an empty list).
     expect(await R.econ(F, "mind.report", { packet: "slim", outcome: "resting", tools: ["sleep"] })).toMatchObject({ ok: true });
     expect((await R.q(`SELECT refusals FROM fleet.fleet_agent_mind_reports WHERE agent_id = $1 ORDER BY at DESC LIMIT 1`, [F.id]))[0].refusals).toEqual([]);
+  });
+
+  // ── v105: platform-calculated pricing, quotes and invoices ────────────────────────────────────────────────────────
+  const price = (items: unknown, fees: unknown = null, tax: unknown = null, ccy = "GBP") =>
+    R.one<any>(`fleet.fleet_price_lines($1, $2::jsonb, $3::jsonb, $4::jsonb)`, [ccy, JSON.stringify(items), fees === null ? null : JSON.stringify(fees), tax === null ? null : JSON.stringify(tax)]);
+
+  it("v105 pricing: quantities, discounts, fixed and percentage fees, exclusive and inclusive tax — one rounding rule (half-up to the minor unit)", async () => {
+    // 500p + 101p = 601p, as two lines.
+    expect(await price([{ description: "Usage", quantity: 1, unitMinor: 500 }, { description: "Tax and fees on the credit", quantity: 1, unitMinor: 101 }]))
+      .toMatchObject({ currency: "GBP", exponent: 2, subtotalMinor: 601, totalMinor: 601 });
+    // 3 × £2.50 less 10% = £6.75; 1.5 × £3.33 = 4.995 → £5.00 (half-up); a 2.9% fee of the subtotal (£11.75 → 34.075 → 34p) + 30p fixed.
+    const p1 = await price([{ description: "Tracker set-up", quantity: 3, unitMinor: 250, discountBp: 1000 }, { description: "Extra hours", quantity: 1.5, unitMinor: 333 }],
+      [{ label: "Card fee", bp: 290 }, { label: "Handling", minor: 30 }]);
+    expect(p1.lines.map((l: any) => [l.grossMinor, l.discountMinor, l.lineMinor])).toEqual([[750, 75, 675], [500, 0, 500]]);
+    expect(p1).toMatchObject({ subtotalMinor: 1175, feesMinor: 64, totalMinor: 1239 });
+    expect(p1.fees.map((f: any) => f.minor)).toEqual([34, 30]);
+    expect(p1.text).toBe(["- Tracker set-up: 3 × £2.50 = £7.50, less 10% discount (£0.75) = £6.75", "- Extra hours: 1.5 × £3.33 = £5.00", "Subtotal: £11.75",
+      "Card fee (2.9% of the subtotal): £0.34", "Handling: £0.30", "Total: £12.39"].join("\n"));
+    // The pre-send checker (money.ts) agrees with the platform's own rendering, line by line.
+    expect(moneyProblems(p1.text, [p1.totalMinor])).toEqual([]);
+    const taxed = await price([{ description: "Workbook", quantity: 2, unitMinor: 1999, discountBp: 1500 }], [{ label: "Card fee", bp: 290 }], { label: "VAT", bp: 2000 });
+    expect(moneyProblems(taxed.text, [taxed.totalMinor]), taxed.text).toEqual([]);
+    const incl = await price([{ description: "Workbook", quantity: 1, unitMinor: 1000 }], null, { label: "VAT", bp: 2000, inclusive: true });
+    expect(moneyProblems(incl.text, [incl.totalMinor]), incl.text).toEqual([]);
+    // VAT 20% added (exclusive), and included (shown, not added): £10.00 incl. VAT → £1.67.
+    expect(await price([{ description: "Workbook", quantity: 1, unitMinor: 1000 }], null, { label: "VAT", bp: 2000 })).toMatchObject({ totalMinor: 1200, tax: { minor: 200, inclusive: false } });
+    expect(await price([{ description: "Workbook", quantity: 1, unitMinor: 1000 }], null, { label: "VAT", bp: 2000, inclusive: true })).toMatchObject({ totalMinor: 1000, tax: { minor: 167, inclusive: true } });
+    // Currencies: only those the records use (GBP accounting; USD from the exchange rates); USD has 2 decimals.
+    const cur = (await R.one<any>(`fleet.fleet_supported_currencies()`)) as Array<{ code: string; exponent: number; payments: boolean }>;
+    expect(cur).toEqual(expect.arrayContaining([{ code: "GBP", exponent: 2, payments: true }]));
+    expect(await R.one(`fleet.fleet_currency_exponent('JPY')`)).toBe(0);
+    expect(await R.one(`fleet.fleet_currency_exponent('KWD')`)).toBe(3);
+    expect(await R.one(`fleet.fleet_money_text(123456, 'GBP')`)).toBe("£1,234.56");
+    expect(await R.code(price([{ description: "x", quantity: 1, unitMinor: 1 }], null, null, "INR"))).toBe("FLEET_BAD_REQUEST");          // not a currency of the records
+    // Malformed input fails closed.
+    for (const bad of [[{ description: "x", unitMinor: 100 }], [{ description: "x", quantity: "2", unitMinor: 100 }], [{ description: "x", quantity: 1, unitMinor: 1.5 }],
+      [{ description: "x", quantity: 1.2345, unitMinor: 100 }], [{ description: "", quantity: 1, unitMinor: 100 }], [{ description: "x", quantity: 1, unitMinor: 100, discountBp: 10001 }], []]) {
+      expect(await R.code(price(bad)), JSON.stringify(bad)).toBe("FLEET_BAD_REQUEST");
+    }
+    expect(await R.code(price([{ description: "x", quantity: 1, unitMinor: 100 }], [{ label: "fee", minor: 10, bp: 100 }]))).toBe("FLEET_BAD_REQUEST");   // one of minor or bp
+  });
+
+  it("v105 quote: the platform calculates the price from the agent's line items, records it on the order and renders it to the buyer; a typed price that differs is refused", async () => {
+    const enq = (await R.q(`INSERT INTO fleet.fleet_offer_enquiries (offer_id, agent_id, access_token, buyer_name, buyer_email, brief)
+      SELECT offer_id, agent_id, $2, 'Ada', 'ada@example.test', 'Two trackers and an hour of set-up, please.' FROM fleet.fleet_offer_enquiries WHERE enquiry_id = $1 RETURNING enquiry_id`,
+      [enquiryId, crypto.randomBytes(32).toString("hex")]))[0].enquiry_id as string;
+    const items = [{ description: "Landlord tracker", quantity: 2, unitMinor: 250 }, { description: "Set-up call", quantity: 1, unitMinor: 300, discountBp: 5000 }];
+    const wrong = await R.econ(F, "enquiry.quote", { enquiryId: enq, scope: "Two trackers and a set-up call", items, priceMinor: 700, turnaroundDays: 2 });
+    expect(wrong).toMatchObject({ ok: false, code: "FLEET_PRICE_MISMATCH", computedMinor: 650 });
+    expect(wrong.reason).toContain("the line items come to £6.50, not £7.00");
+    const q = await R.econ(F, "enquiry.quote", { enquiryId: enq, scope: "Two trackers and a set-up call", items, turnaroundDays: 2 });
+    expect(q, JSON.stringify(q)).toMatchObject({ ok: true, order: { amountMinor: 650 } });
+    expect((await R.q(`SELECT pricing ->> 'totalMinor' AS t FROM fleet.fleet_customer_orders WHERE order_id = $1`, [q.order.orderId]))[0].t).toBe("650");
+    const body = (await R.q(`SELECT body FROM fleet.fleet_customer_messages WHERE enquiry_id = $1 AND author = 'agent' ORDER BY created_at DESC LIMIT 1`, [enq]))[0].body as string;
+    expect(body).toContain("- Landlord tracker: 2 × £2.50 = £5.00\n- Set-up call: 1 × £3.00 = £3.00, less 50% discount (£1.50) = £1.50\nSubtotal: £6.50\nTotal: £6.50");
+    // The invoice is the record's: the same lines and total; nothing paid yet.
+    const inv = await R.econ(F, "order.invoice", { orderId: q.order.orderId });
+    expect(inv).toMatchObject({ ok: true, invoice: { amountMinor: 650, paidMinor: 0, refundedMinor: 0, currency: "GBP" } });
+    expect(inv.invoice.text).toMatch(/^INVOICE INV-[0-9A-F]{10}\nIssued: .*\nSeller: .*\nBilled to: Ada\n/);
+    expect(inv.invoice.text).toContain("Total: £6.50\n\nPaid: £0.00 (awaiting payment)");
+    expect(moneyProblems(body, [650]), body).toEqual([]);
+    expect(moneyProblems(inv.invoice.text, [650, 0]), inv.invoice.text).toEqual([]);
+    // money.price: the same calculation without quoting.
+    expect(await R.econ(F, "money.price", { items })).toMatchObject({ ok: true, pricing: { totalMinor: 650, subtotalMinor: 650 } });
+    expect(await R.econ(F, "money.currencies", {})).toMatchObject({ ok: true, currencies: expect.arrayContaining([expect.objectContaining({ code: "GBP", payments: true })]) });
+    expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
 });
