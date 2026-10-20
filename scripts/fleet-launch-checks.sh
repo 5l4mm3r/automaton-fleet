@@ -12,13 +12,15 @@
 #         may mail that address only (an outward release for mail to it, expiring with the run). Success = the owner's mail
 #         routed to Agent-1 and Agent-1's reply SENT to that address after it.
 #       Purchases excluded (the spend circuit breaker is tripped; stop resets it); no paid search (the media gateway stopped).
-#   bash fleet-launch-checks.sh card <aiCeilingPence> <hours> <maxPence ≤ 500> <accountId> <origin> <merchant…>
+#   bash fleet-launch-checks.sh card <aiCeilingPence> <hours> <maxPence ≤ 500> <accountId|register> <origin> <merchant…>
 #       ONE card purchase by Agent-1 on owner-paid card 1, at the agreed merchant, at most <maxPence>: the owner's card
 #       authority switched on with that cap (per charge and per day) and a card-proof release naming the merchant (v108:
 #       one card request, that origin and account, ≤ 24 h, with the browser fill); the reservation comes from Agent-1's own
 #       cash; Fleet Control reviews it. Stops at its first outcome (the card used or declined, the request expired, the hold
 #       voided), the release's expiry or the run's end — and then switches card authority OFF and ends the release.
 #       The statement match follows when the owner records the card statement (economy-card-charge … once).
+#       `register` (v109): Agent-1 has no account at the merchant yet — the release also allows registering one there, and only
+#       the account it registers under this release may be used for the fill and the one purchase.
 #   bash fleet-launch-checks.sh status | stop [why]
 #   (watch)  every minute while a check runs; stops it at its outcome or the run's end.
 # Never: public sales, payouts, refunds, Agent-2, sweeps, runtime.env.
@@ -133,19 +135,22 @@ checks)
   A founder-cognition $A1 resume "launch checks (owner approval): AI ceiling ${2}p, $3 h; public sales stay closed" | jq -c '{paused}' || { stop_check "resume failed"; exit 1; }
   echo "== CHECKS STARTED $s: now write to fleet.treasury@proton.me from $4 with the subject \"Agent-1 - …\" (your own question)"; report ;;
 card)
-  [[ "${2:-}" =~ ^[0-9]+$ && "${3:-}" =~ ^[0-9]+$ && "${4:-}" =~ ^[0-9]+$ && "${5:-}" =~ ^[0-9a-f-]{36}$ && "${6:-}" =~ ^https://[a-z0-9.-]+(:[0-9]+)?$ && -n "${7:-}" ]] \
+  [[ "${2:-}" =~ ^[0-9]+$ && "${3:-}" =~ ^[0-9]+$ && "${4:-}" =~ ^[0-9]+$ && "${5:-}" =~ ^([0-9a-f-]{36}|register)$ && "${6:-}" =~ ^https://[a-z0-9.-]+(:[0-9]+)?$ && -n "${7:-}" ]] \
     && (( $2 >= 1 && $2 <= 1000 && $3 >= 1 && $3 <= 24 && $4 >= 1 && $4 <= CARD_MAX )) \
-    || die "usage: card <aiCeilingPence 1..1000> <hours 1..24> <maxPence 1..$CARD_MAX> <accountId> <https://merchant-origin> <merchant name…>"
+    || die "usage: card <aiCeilingPence 1..1000> <hours 1..24> <maxPence 1..$CARD_MAX> <accountId|register> <https://merchant-origin> <merchant name…>"
   guard
   [[ "$(breaker_tripped)" == f ]] || die "the spend circuit breaker is tripped: a card purchase could not be reserved"
-  [[ "$(Q "SELECT count(*) FROM fleet_agent_accounts WHERE account_id = '$5' AND agent_id = '$A1' AND '$6' = ANY (origins) AND status NOT IN ('frozen','closed','banned')")" == 1 ]] \
-    || die "account $5 is not one of Agent-1's usable accounts with origin $6"
+  if [[ "$5" != register ]]; then
+    [[ "$(Q "SELECT count(*) FROM fleet_agent_accounts WHERE account_id = '$5' AND agent_id = '$A1' AND '$6' = ANY (origins) AND status NOT IN ('frozen','closed','banned')")" == 1 ]] \
+      || die "account $5 is not one of Agent-1's usable accounts with origin $6"
+  fi
   [[ "$(Q "SELECT count(*) FROM fleet_owner_identity_classes WHERE class_key = 'payment_card' AND status = 'configured' AND (expires_at IS NULL OR expires_at > now())")" == 1 ]] || die "card 1 is not on file"
   merchant="${*:7}"
   s=$(ts); echo "$s" > "$D/start.txt"; echo "card -" > "$D/terms.txt"; MODE=card
   A owner-identity-autonomy on --card on --card-max $4 --card-daily $4 "card proof: one purchase at $merchant, at most ${4}p (switched off at the end)" | jq -c '{cardEnabled, cardMaxChargeMinor, cardMaxDailyMinor}' \
     || { stop_check "card authority not set"; exit 1; }
-  A economy-outward $A1 release "{\"actions\":[\"browser\",\"card\"],\"accounts\":[\"$5\"],\"origins\":[\"$6\"],\"cardMerchant\":$(jq -Rn --arg m "$merchant" '$m'),\"cardMaxMinor\":$4,\"expiresHours\":$3}" \
+  if [[ "$5" == register ]]; then acts='"browser","card","account_register"'; accts=''; else acts='"browser","card"'; accts="\"accounts\":[\"$5\"],"; fi
+  A economy-outward $A1 release "{\"actions\":[$acts],$accts\"origins\":[\"$6\"],\"cardMerchant\":$(jq -Rn --arg m "$merchant" '$m'),\"cardMaxMinor\":$4,\"expiresHours\":$3}" \
     "card proof: one purchase at $merchant, at most ${4}p" | jq -c '{ok, expiresAt}' || { stop_check "the card-proof release was not recorded"; exit 1; }
   A cognition-run $A1 start $2 $3 "card proof: one purchase at $merchant, at most ${4}p; AI ceiling ${2}p" | jq -c '.run | {ceilingMinor, endsAt}' || { stop_check "run budget not opened"; exit 1; }
   watchdog_on

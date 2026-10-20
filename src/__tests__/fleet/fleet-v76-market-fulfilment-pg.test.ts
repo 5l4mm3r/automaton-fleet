@@ -121,8 +121,8 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     const all: string[] = [];
     for (let i = 1; i <= Number(part1.parts); i++) all.push(...(await R.econ(F, "knowledge.library", { path: "foundation", part: i })).entries.map((e: any) => e.id));
     for (const id of ["bf-initial-focus", "bf-capability-evidence", "bf-offer-portfolio", "bf-quality-procedures", "bf-fulfilment-loop", "bf-channels", "fleet-capability-status"]) expect(all).toContain(id);
-    // v108 loads the dated capability status v15 (v76 loaded v5 … v89 v12, v96 v14).
-    expect((await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entries?.[0]?.version ?? (await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entry?.version).toBe(15);
+    // v109 loads the dated capability status v16 (v76 loaded v5 … v89 v12, v96 v14, v108 v15).
+    expect((await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entries?.[0]?.version ?? (await R.econ(F, "knowledge.library", { id: "fleet-capability-status" })).entry?.version).toBe(16);
   });
 
   it("custody reads open checkouts' status: APPROVED is captured, COMPLETED read back, VOIDED fails; backed off", async () => {

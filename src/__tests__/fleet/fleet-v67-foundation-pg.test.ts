@@ -90,7 +90,7 @@ describe.skipIf(!PG_BIN)("v67: business foundation in the library; wake-up signa
     expect(st.entry.category).toBe("fleet-status");
     const facts = st.entry.factsThatChange as Array<{ fact: string; lastChecked: string; stale: boolean }>;
     // v96: capability status v14, every fact dated; those rewritten from verified state on 2026-10-19.
-    expect(facts.every((f) => ["2026-10-16", "2026-10-17", "2026-10-19", "2026-10-20"].includes(f.lastChecked))).toBe(true);
+    expect(facts.every((f) => ["2026-10-16", "2026-10-17", "2026-10-19", "2026-10-20", "2026-10-21"].includes(f.lastChecked))).toBe(true);
     expect(facts.filter((f) => f.lastChecked === "2026-10-19").length).toBeGreaterThanOrEqual(10);
     // v79 (channels are the agent's choice): the EU consumer route is a merchant-of-record platform the agent operates where
     // its terms permit; v96: none is connected at launch (Gumroad deferred by the owner).

@@ -115,6 +115,13 @@ Q() { case "$1" in
       for (const f of ["card", "release", "run"]) expect(fs.existsSync(path.join(dir, f)), f).toBe(false);
       expect(fs.existsSync(path.join(dir, "paused"))).toBe(true);
     }
+    // v109: no merchant account yet — the release allows registering one there (no account named).
+    fs.rmSync(path.join(dir, "state"), { recursive: true, force: true }); fs.rmSync(log, { force: true });
+    for (const f of ["card", "release", "run", "paused"]) fs.rmSync(path.join(dir, f), { force: true });
+    const reg = run(["card", "200", "6", "450", "register", "https://www.fontshop.example", "Font", "shop"]);
+    expect(reg.code, reg.out).toBe(0);
+    const regRel = /release (\{.*\}) card proof/.exec(reg.host.find((l) => l.includes("economy-outward"))!)!;
+    expect(JSON.parse(regRel[1])).toEqual({ actions: ["browser", "card", "account_register"], origins: ["https://www.fontshop.example"], cardMerchant: "Font shop", cardMaxMinor: 450, expiresHours: 6 });
     // Still waiting (a hold placed, not yet charged): the watchdog changes nothing.
     fs.rmSync(path.join(dir, "state"), { recursive: true, force: true });
     for (const f of ["card", "release", "run", "paused"]) fs.rmSync(path.join(dir, f), { force: true });

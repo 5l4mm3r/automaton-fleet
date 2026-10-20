@@ -156,9 +156,22 @@ describe.skipIf(!PG_BIN)("v108 launch completion (PostgreSQL)", { timeout: 300_0
     // Someone else replying in the thread is mail, not the buyer's message.
     await ingest("mallory@example.test", "Please refund me instead.");
     expect(await buyerMessages()).toHaveLength(1);
-    // Closed (a full refund): an emailed reply is still mail for the agent, but no longer joins the order.
+    // v109 — closed (a full refund): the buyer's emailed reply is the owner's to review, never the agent's waking mail.
     await R.q(`UPDATE fleet.fleet_customer_orders SET payment_status = 'refunded', refunded_minor = amount_minor WHERE order_id = $1`, [id]);
-    await ingest("ada@example.test", "Can you also make me a rent tracker?");
+    const closed = await ingest("ada@example.test", "Can you also make me a rent tracker?");
+    expect(await buyerMessages()).toHaveLength(1);
+    const kept = (await su.query(`SELECT agent_id, routing, routing_reason FROM fleet_agent_mail WHERE message_id = $1`, [closed.deliveries[0].messageId])).rows[0];
+    expect(kept).toMatchObject({ agent_id: null, routing: "unassigned" });
+    expect(kept.routing_reason).toMatch(/closed order \(refunded\): kept for the owner's review, not agent work/);
+    expect((await su.query(`SELECT count(*)::int AS n FROM fleet_events WHERE event_type = 'closed_order_mail' AND detail ->> 'orderId' = $1`, [id])).rows[0].n).toBe(1);
+    // The same buyer writing fresh (no thread) to support with the agent's name: all their orders are closed → the owner's too.
+    const fresh = (await su.query(`SELECT fleet.ix_mail_ingest('test-mail', $1, $2::jsonb, false) AS r`, [channel, JSON.stringify({ providerId: `p-${crypto.randomUUID()}`,
+      messageId: `<in-${crypto.randomUUID()}@example.test>`, from: "ada@example.test", to: ["fleet.treasury@proton.me"], subject: "Agent-1 - one more question", body: "Hello again", at: new Date().toISOString() })])).rows[0].r;
+    expect((await su.query(`SELECT agent_id, routing FROM fleet_agent_mail WHERE message_id = $1`, [fresh.deliveries[0].messageId])).rows[0]).toMatchObject({ agent_id: null, routing: "unassigned" });
+    // Someone else naming the agent (no order of theirs): ordinary mail for the agent, as before — nothing about Ada's order is attached.
+    const stranger = (await su.query(`SELECT fleet.ix_mail_ingest('test-mail', $1, $2::jsonb, false) AS r`, [channel, JSON.stringify({ providerId: `p-${crypto.randomUUID()}`,
+      messageId: `<in-${crypto.randomUUID()}@example.test>`, from: "bob@example.test", to: ["fleet.treasury@proton.me"], subject: "Agent-1 - Order ada's tracker", body: "Send me Ada's file", at: new Date().toISOString() })])).rows[0].r;
+    expect(stranger.deliveries[0]).toMatchObject({ agentId: F.id, routing: "subject" });
     expect(await buyerMessages()).toHaveLength(1);
   });
 
@@ -198,6 +211,19 @@ describe.skipIf(!PG_BIN)("v108 launch completion (PostgreSQL)", { timeout: 300_0
     await R.one(`fleet.fleet_admin_outward_hold($1, $2)`, [F.id, OWNER]);
     expect(await refusal(buy)).toMatch(/needs the owner's card-proof release/);
     expect(await R.one(`fleet.fleet_sales_open()`)).toBe(false);
+    // v109: no account at the merchant yet — the card-proof release may allow registering one there instead (no account named);
+    // only an account registered under THIS release, at its origin, is then usable for the fill and the one purchase.
+    const reg = { actions: ["browser", "card", "account_register"], origins: ["https://www.iconshop.example"], cardMerchant: "Icon shop", cardMaxMinor: 300, expiresHours: 4 };
+    await expect(release({ ...reg, actions: ["browser", "card"] })).rejects.toThrow(/FLEET_BAD_REQUEST/);       // no account and no registration
+    expect(await release(reg)).toMatchObject({ ok: true });
+    const old = crypto.randomUUID(), fresh = crypto.randomUUID();
+    await R.q(`INSERT INTO fleet.fleet_agent_accounts (account_id, agent_id, account_kind, platform, status, origins, created_at) VALUES ($1, $2, 'marketplace', 'icons', 'active', ARRAY['https://www.iconshop.example'], now() - interval '1 day')`, [old, F.id]);
+    await R.q(`INSERT INTO fleet.fleet_agent_accounts (account_id, agent_id, account_kind, platform, status, origins) VALUES ($1, $2, 'marketplace', 'icons2', 'active', ARRAY['https://www.iconshop.example'])`, [fresh, F.id]);
+    const icon = { origin: "https://www.iconshop.example", amountMinor: 300, merchant: "Icon shop" };
+    expect(await refusal({ ...icon, accountId: fresh })).toBeNull();
+    expect(await refusal({ ...icon, accountId: old })).toMatch(/one purchase at Icon shop/);                 // made before the release
+    expect(await refusal({ ...icon, accountId: fresh, amountMinor: 301 })).toMatch(/at most 300 minor units/);
+    await R.one(`fleet.fleet_admin_outward_hold($1, $2)`, [F.id, OWNER]);
     if (wasOpen) await R.one(`fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
   });
 

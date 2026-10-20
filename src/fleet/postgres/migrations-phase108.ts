@@ -174,7 +174,7 @@ const V15_FACTS = [
   { fact: "Buyer email — BUILT (v108): a buyer's emailed reply to your order message, delivery or confirmation joins that order's thread (as if sent on the order page), from the buyer's own address only; you answer with customers order_message (emailed). NOT LIVE-PROVEN", verifyAt: [], confidence: "verified-official", lastChecked: "2026-10-20", staleAfterDays: 14 },
   { fact: "Spreadsheets sold publicly — a product is sold publicly only when each spreadsheet in its passing review saves its formulas WITH their values (the inspector's cached_values check passes): previewers, phones and mail clients show the saved values, not a recalculation. Your offer list's saleBlock says so when it applies", verifyAt: [], confidence: "verified-official", lastChecked: "2026-10-20", staleAfterDays: 14 },
 ] as const;
-const V15 = CAPABILITY_STATUS_V14.entries.map((e) => ({
+export const V15_ENTRIES = CAPABILITY_STATUS_V14.entries.map((e) => ({
   ...e, version: 15, lastReviewed: "2026-10-20", title: "Fleet capability status (dated 2026-10-20, v15) — what works today",
   factsThatChange: [...e.factsThatChange.filter((f) => !f.fact.startsWith("EU consumer digital sales")), ...V15_FACTS],
 }));
@@ -324,7 +324,7 @@ ${REFUSAL}
 ${EVENT_ROUTE}
 
 -- ═══ 5. What agents read: fleet-capability-status v15 ═══
-SELECT fleet_admin_knowledge_library_load('${JSON.stringify({ entries: V15 }).replace(/'/g, "''")}'::jsonb, 'migration');
+SELECT fleet_admin_knowledge_library_load('${JSON.stringify({ entries: V15_ENTRIES }).replace(/'/g, "''")}'::jsonb, 'migration');
 
 -- A published product that is not sold publicly because of v108 (unsaved spreadsheet values): its agent is told once, by
 -- Fleet Control's notice (the platform's reason only).

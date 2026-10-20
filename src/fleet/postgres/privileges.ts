@@ -1166,7 +1166,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_estate_policy: new Set([]),
     // v36: mail (agent send; broker delivery/status), phones/SMS (agent ops; broker provision/delivery/status), commitments
     // created for a number's monthly fee, owner vault installation, reveal serving/taking, notification email status.
-    fleet_agent_mail: new Set(["ix_mail_deliver", "ix_mail_consumed", "ix_mail_deliver2", "ix_mail_sent", "fleet_econ_mail_send", "ix_reconcile_mail",
+    fleet_agent_mail: new Set(["fleet_mail_to_order", "ix_mail_deliver", "ix_mail_consumed", "ix_mail_deliver2", "ix_mail_sent", "fleet_econ_mail_send", "ix_reconcile_mail",
       // v41: shared-mailbox ingestion (attribution), outbound status, Admin routing of unassigned mail.
       "fleet_mail_store_in", "ix_mail_sent2", "fleet_admin_mail_assign",
       // v63: the owner's dismiss / delete and the retention pass (one delete path, keep rules applied).
