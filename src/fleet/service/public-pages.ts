@@ -9,6 +9,7 @@
  *                                           consent, PayPal's payment button, receipt, downloads, seller, support, refund rights
  *   GET  /order/<token>/preview/<n>         v97: the offer's preview image, by the order's access code
  *   GET  /order/<token>?token=…&PayerID=…   v99: PayPal's return of an approving buyer → recorded, then the clean page ("processing")
+ *   POST /order/<token>/country             v108: the buyer's country before payment (the owner's supported geography)
  *   POST /order/<token>/pay                 v98: the buyer is ready to pay → PayPal (a link PayPal confirmed recently) or the page
  *                                           while custody reuses or replaces the PayPal order
  *   GET  /order/<token>/file/<delivery>/<n> a delivered file (30 days)
@@ -133,6 +134,26 @@ function consentBoxes(statements: readonly string[]): string {
   return statements.map((t, i) => `<p><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="c${i + 1}" value="yes" required style="width:auto;margin-top:4px"><span>${esc(t)}</span></label></p>`).join("")
     + `<input type="hidden" name="consent" value="${esc(BUYER_CONSENT_VERSION)}">`;
 }
+/** v108: the buyer's country (ISO 3166-1 alpha-2), chosen before paying — the owner's supported geography is checked by the database. */
+const COUNTRY_CODES = ("AD AE AF AG AI AL AM AO AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ "
+  + "DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GT GU GW GY HK HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP "
+  + "KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ "
+  + "OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TG TH TJ TK TL TM TN TO TR TT TV TW TZ "
+  + "UA UG US UY UZ VA VC VE VG VI VN VU WF WS XK YE YT ZA ZM ZW").split(" ");
+const REGION = new Intl.DisplayNames(["en-GB"], { type: "region" });
+const COUNTRY_OPTIONS = (() => {
+  const named = COUNTRY_CODES.map((c) => [c, REGION.of(c) ?? c] as const).sort((a, b) => a[1].localeCompare(b[1], "en-GB"));
+  const top = ["GB", "US"].map((c) => named.find((x) => x[0] === c)!);
+  return [...top, ...named.filter((x) => !["GB", "US"].includes(x[0]))];
+})();
+function countrySelect(): string {
+  return `<p><label>Your country<select name="country" required><option value="">Choose your country…</option>`
+    + COUNTRY_OPTIONS.map(([c, n]) => `<option value="${c}">${esc(n)}</option>`).join("") + `</select></label></p>`
+    + `<p class="small muted">Digital products from this shop are not yet available to buyers in the European Union.</p>`;
+}
+const countryOf = (b: Record<string, unknown> | null): string | null => (b && typeof b.country === "string" && /^[A-Z]{2}$/.test(b.country) ? b.country : null);
+const COUNTRY_REFUSED = (c: string) => `<h1>Not available in your country yet</h1><p>This shop cannot sell digital products to buyers in ${esc(REGION.of(c) ?? c)} yet. <strong>No payment was taken.</strong></p>`;
+
 /** Both boxes ticked and the current wording's version: the version to record, or null. */
 function consentGiven(b: Record<string, unknown> | null, n: number): string | null {
   if (!b) return null;
@@ -225,6 +246,7 @@ export class PublicPages {
         if (p.length === 3 && p[2] === "message" && isPost) return await this.message(req, res, "order", p[1], origin);
         if (p.length === 3 && p[2] === "consent" && isPost) return await this.consent(req, res, p[1], origin);
         if (p.length === 3 && p[2] === "pay" && isPost) return await this.payNow(res, p[1], origin);
+        if (p.length === 3 && p[2] === "country" && isPost) return await this.country(req, res, p[1], origin);
         if (p.length === 3 && p[2] === "repo-consent" && isPost) return await this.repoConsent(req, res, "order", p[1], origin);
       }
       if (p[0] === "enquiry" && TOKEN.test(p[1] ?? "")) {
@@ -330,7 +352,7 @@ export class PublicPages {
     let action = "";
     const q = ref ? `?ref=${ref}` : "";
     if (!o.available) action = `<p class="warn">${o.atCapacity ? "Fully booked right now — please check back soon." : "Not available right now."}</p>`;
-    else if (o.kind === "product") action = `<form method="post" action="/o/${esc(o.slug)}/buy${q}">${consentBoxes(BUYER_CONSENT_WORDING.digital_immediate)}<button type="submit">Buy with PayPal — ${money(o.priceMinor, o.currency)}</button></form>`;
+    else if (o.kind === "product") action = `<form method="post" action="/o/${esc(o.slug)}/buy${q}">${countrySelect()}${consentBoxes(BUYER_CONSENT_WORDING.digital_immediate)}<button type="submit">Buy with PayPal — ${money(o.priceMinor, o.currency)}</button></form>`;
     else action = `<p class="muted">Send your brief first: the seller confirms the scope, price and delivery date before you pay.</p>${messageForm(`/o/${o.slug}/enquire${q}`, nonce, { brief: true })}`;
     page(res, 200, o.title, `<p class="muted">${esc(o.brand)}</p><h1>${esc(o.title)}</h1><p>${esc(o.summary)}</p>`
       + `<div class="card"><div class="price">${o.kind === "service" ? "From " : ""}${money(o.priceMinor, o.currency)}</div><p class="muted">${facts.join(" · ")}</p>${o.kind === "product" ? action : ""}</div>`
@@ -363,9 +385,15 @@ export class PublicPages {
   }
 
   private async buy(req: http.IncomingMessage, res: http.ServerResponse, slug: string, origin: string, ref: string | null = null): Promise<void> {
-    const consent = consentGiven(await this.body(req), BUYER_CONSENT_WORDING.digital_immediate.length);
+    const body = await this.body(req);
+    const consent = consentGiven(body, BUYER_CONSENT_WORDING.digital_immediate.length);
     if (!consent) {
       page(res, 400, "Please confirm", `<h1>Please confirm before buying</h1><p>To get your download straight away, tick both boxes on the offer page: that you want immediate access, and that you understand you lose the 14-day right to cancel once the download is made available.</p><p><a href="/o/${esc(slug)}">Back to the offer</a></p>`, null);
+      return;
+    }
+    const country = countryOf(body);
+    if (!country) {
+      page(res, 400, "Please choose your country", `<h1>Please choose your country</h1><p>Choose your country on the offer page before buying.</p><p><a href="/o/${esc(slug)}">Back to the offer</a></p>`, null);
       return;
     }
     const r = await this.port.publicCall("svc_offer_buy", [slug, origin, consent]);
@@ -374,6 +402,9 @@ export class PublicPages {
       return;
     }
     if (ref) await this.port.publicCall("svc_attribute", ["order", String(r.token), ref]).catch(() => undefined);
+    // v108: the buyer's country is recorded with the order before any payment (refused where the shop does not sell).
+    const cr = await this.port.publicCall("svc_order_country", [String(r.token), origin, country]);
+    if (!cr.ok && cr.code === "FLEET_COUNTRY_UNSUPPORTED") { page(res, 409, "Not available", COUNTRY_REFUSED(country) + `<p><a href="/o/${esc(slug)}">Back to the offer</a></p>`, null); return; }
     res.writeHead(303, { location: `/order/${r.token}`, "cache-control": "no-store", "referrer-policy": "no-referrer" }).end();
   }
 
@@ -415,6 +446,8 @@ export class PublicPages {
     const statements = Array.isArray(c.statements) ? (c.statements as unknown[]).map(String) : [];
     const closed = ["refunded", "reversed", "cancelled"].includes(o.payment) || (!paid && ["expired", "cancelled", "failed"].includes(o.checkout));
     const askConsent = !c.recorded && !closed && statements.length > 0;
+    const country = (o.country ?? {}) as { stated?: string | null };
+    const conversation = (o.conversation ?? { open: true }) as { open?: boolean; note?: string };
     const confirming = !paid && (o.checkout === "approved" || o.checkout === "capture_pending" || o.pay === "processing");
     const delivered = downloads.length > 0 || ["delivered", "fulfilled"].includes(o.status);
     const ref = esc(o.reference ?? "");
@@ -435,12 +468,16 @@ export class PublicPages {
         + (product ? `<p class="small">This is a digital download. You normally have 14 days to cancel an online purchase, but for a download that right ends once it is made available to you. To get your files straight after payment, please confirm both statements:</p>`
           : `<p class="small">You normally have 14 days to cancel an online purchase. For the seller to start your work straight away, please confirm both statements:</p>`)
         + statements.map((t, i) => `<p><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="c${i + 1}" value="yes" required style="width:auto;margin-top:4px"><span>${esc(t)}</span></label></p>`).join("")
+        + (!paid && !country.stated ? countrySelect() : "")
         + `<input type="hidden" name="consent" value="${esc(c.version)}"><button type="submit" class="block">${paid ? "Confirm and show my download" : "Confirm and continue to payment"}</button></form>`;
     } else if (closed) {
       action = o.payment === "refunded" || o.payment === "partially_refunded" || o.payment === "reversed" ? ""
         : `<p>This checkout is no longer open. <strong>No payment was taken.</strong></p>`;
     } else if (paid) {
       action = "";
+    } else if (!country.stated && !confirming) {
+      // v108: the buyer's country before payment (the owner's supported geography).
+      action = `<form method="post" action="/order/${esc(token)}/country" class="noprint"><h3>Step 1 of 2 · Your country</h3>${countrySelect()}<button type="submit" class="block">Continue to payment</button></form>`;
     } else if (confirming) {
       action = `<h3>Processing your payment</h3><p>You approved the payment on PayPal and we are confirming it with PayPal now — usually a few seconds. <strong>Please don't pay again.</strong> This page updates by itself.</p>`;
     } else if (o.pay === "preparing") {
@@ -493,7 +530,8 @@ export class PublicPages {
       + (off ? await this.buying(token, off, product, o) : "")
       + await this.repoHtml("order", token)
       + threadHtml(r.thread)
-      + (paid ? `<div class="noprint">${messageForm(`/order/${token}/message`, nonce)}</div>` : "")
+      + (paid && conversation.open !== false ? `<div class="noprint">${messageForm(`/order/${token}/message`, nonce)}</div>` : "")
+      + (paid && conversation.open === false ? `<div class="card noprint"><p class="muted">${esc(String(conversation.note ?? "This order's conversation is closed."))}</p></div>` : "")
       + this.sellerCard(r.seller, off, ref, paid)
       + this.rightsCard(off, product)
       + (!askConsent && c.recorded && statements.length ? `<div class="card"><h2>Your confirmation</h2><p class="muted small">Recorded ${esc(when(c.at))}</p><ul>${statements.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : "")
@@ -590,6 +628,16 @@ export class PublicPages {
     res.writeHead(303, { location: to, "cache-control": "no-store", "referrer-policy": "no-referrer" }).end();
   }
 
+  /** v108: the buyer's country, chosen on the order page before payment. */
+  private async country(req: http.IncomingMessage, res: http.ServerResponse, token: string, origin: string): Promise<void> {
+    const c = countryOf(await this.body(req));
+    if (!c) { page(res, 400, "Please choose your country", `<h1>Please choose your country</h1><p><a href="/order/${esc(token)}">Back to your order</a></p>`, null); return; }
+    const r = await this.port.publicCall("svc_order_country", [token, origin, c]);
+    if (!r.ok && r.code === "FLEET_COUNTRY_UNSUPPORTED") { page(res, 409, "Not available", COUNTRY_REFUSED(c) + `<p><a href="/order/${esc(token)}">Back to your order</a></p>`, null); return; }
+    if (!r.ok && r.code === "FLEET_NOT_FOUND") { page(res, 404, "Not found", "<h1>Not found</h1><p>This order page does not exist.</p>", null); return; }
+    res.writeHead(303, { location: `/order/${token}`, "cache-control": "no-store", "referrer-policy": "no-referrer" }).end();
+  }
+
   /** v82: the buyer's consent given on the order page (a quoted service, or an order made outside an offer page). */
   private async consent(req: http.IncomingMessage, res: http.ServerResponse, token: string, origin: string): Promise<void> {
     const b = await this.body(req);
@@ -597,6 +645,11 @@ export class PublicPages {
     if (!version) {
       page(res, 400, "Please confirm", `<h1>Please tick both boxes</h1><p>Both statements need your confirmation before we can continue.</p><p><a href="/order/${esc(token)}">Back to your order</a></p>`, null);
       return;
+    }
+    const country = countryOf(b);
+    if (country) {
+      const cr = await this.port.publicCall("svc_order_country", [token, origin, country]);
+      if (!cr.ok && cr.code === "FLEET_COUNTRY_UNSUPPORTED") { page(res, 409, "Not available", COUNTRY_REFUSED(country) + `<p><a href="/order/${esc(token)}">Back to your order</a></p>`, null); return; }
     }
     const r = await this.port.publicCall("svc_order_consent", [token, origin, version]);
     if (!r.ok) {

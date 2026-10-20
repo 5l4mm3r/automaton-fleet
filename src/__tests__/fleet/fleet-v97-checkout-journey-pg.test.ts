@@ -160,6 +160,7 @@ describe.skipIf(!PG_BIN || !CHROME)("v97: the customer's checkout in a real brow
 
       // 2. Consent → PayPal's own button, to the genuine approval link.
       for (const x of await p.$$("form[action$='/consent'] input[type=checkbox]")) await x.check();
+      await p.selectOption("form[action$='/consent'] select[name=country]", "GB");          // v108: the buyer's country with the consent
       await Promise.all([p.waitForURL(`${base}/order/${token}`), p.click("form[action$='/consent'] button[type=submit]")]);
       text = await p.innerText("body");
       expect(text).toContain("Step 2 of 2");

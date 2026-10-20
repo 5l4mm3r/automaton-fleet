@@ -20,6 +20,7 @@ describe("v79 public pages: attribution, image samples, opt-out", () => {
       if (fn === "svc_offer_buy") return { ok: true, token: "a".repeat(64) };
       if (fn === "svc_offer_enquire") return { ok: true, token: "b".repeat(64) };
       if (fn === "svc_attribute") return { ok: true };
+      if (fn === "svc_order_country") return { ok: true, stated: args[2] };                    // v108
       if (fn === "svc_outreach_optout") { if (args[1] === true) optedOut = true; return { ok: true, brand: "Ledgerline", optedOut }; }
       return { ok: false };
     },
@@ -45,7 +46,7 @@ describe("v79 public pages: attribution, image samples, opt-out", () => {
     expect(await (await fetch(`${base}/o/${slug}?ref=<script>`)).text()).not.toContain("?ref=");
     // v82: the buyer's two consent ticks travel with the purchase (refused without them: fleet-v82-public-consent.test.ts).
     const buy = await fetch(`${base}/o/${slug}/buy?ref=0123456789ab`, { method: "POST", redirect: "manual", headers: { origin: base, "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ c1: "yes", c2: "yes", consent: BUYER_CONSENT_VERSION }).toString() });
+      body: new URLSearchParams({ c1: "yes", c2: "yes", consent: BUYER_CONSENT_VERSION, country: "GB" }).toString() });
     expect(buy.status).toBe(303);
     expect(calls.find((c) => c.fn === "svc_attribute")?.args).toEqual(["order", "a".repeat(64), "0123456789ab"]);
     const enq = await fetch(`${base}/o/svc-brief-abc123/enquire?ref=0123456789ab`, { method: "POST", headers: { origin: base, "content-type": "application/json" },

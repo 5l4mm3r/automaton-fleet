@@ -2424,5 +2424,7 @@ export const PUBLIC_PAGE_FUNCTIONS = ["svc_offer_page", "svc_offer_preview", "sv
   // v82: the buyer's consent to immediate supply, given on the order page.
   "svc_order_consent",
   // v89: the customer's consent to repository access, on their own enquiry / order page.
-  "svc_repo_requests", "svc_repo_consent"] as const;
+  "svc_repo_requests", "svc_repo_consent",
+  // v108: the buyer's country, before paying.
+  "svc_order_country"] as const;
 export type PublicPageFunction = (typeof PUBLIC_PAGE_FUNCTIONS)[number];

@@ -1378,7 +1378,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v56: customer orders by the checkout wrapper, the checkout-state follower, the refund recorder, custody's buyer record and the
     // agent's own delivery / fulfilment; deliveries and their files by delivery, the mail-outcome follower and the reaper's retry;
     // the broker's connector list only by the broker.
-    fleet_customer_orders: new Set(["svc_attribute", "fleet_econ_paypal_checkout_order", "fleet_customer_orders_follow", "fleet_order_refunded", "cx_paypal_buyer_record", "fleet_paypal_clawback_return",
+    fleet_customer_orders: new Set(["svc_order_country", "svc_attribute", "fleet_econ_paypal_checkout_order", "fleet_customer_orders_follow", "fleet_order_refunded", "cx_paypal_buyer_record", "fleet_paypal_clawback_return",
       "fleet_econ_order_deliver", "fleet_econ_order_fulfil", "fleet_order_delivery_follow", "svc_order_deliveries_retry",
       // v76: orders from an offer page (svc_offer_buy) or a quote (fleet_econ_enquiry_quote); a delivery's dispatch.
       "svc_offer_buy", "fleet_econ_enquiry_quote", "fleet_order_delivery_dispatch",
@@ -1399,7 +1399,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       "fleet_admin_offer_hold", "fleet_admin_offer_release"]),
     fleet_offer_files: new Set(["fleet_econ_offer_file"]),
     fleet_offer_enquiries: new Set(["svc_attribute", "svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline", "svc_offer_tick"]),
-    fleet_customer_messages: new Set(["svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline",
+    fleet_customer_messages: new Set(["fleet_mail_to_order", "svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline",
       "fleet_econ_order_message"]),
     fleet_customer_files: new Set(["fleet_customer_files_add", "svc_offer_tick"]),
     fleet_order_staged_files: new Set(["fleet_econ_order_stage_file", "fleet_econ_order_deliver", "svc_offer_tick"]),
@@ -1444,6 +1444,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_refund_authorities: new Set(["fleet_admin_refund_authority_grant", "fleet_admin_refund_authority_end"]),
     // v106: the owner lets their own claim wait behind the refund of their own proof order (owner only).
     fleet_owner_claim_waits: new Set(["fleet_admin_owner_claim_wait", "fleet_admin_owner_claim_wait_end"]),
+    // v108: the owner's supported customer geography (owner only).
+    fleet_sales_geography: new Set(["fleet_admin_sales_geography"]),
     fleet_control_ai_budget: new Set(["fleet_admin_fleet_control_ai_budget"]),
     fleet_control_ai_reservations: new Set(["svc_fleet_control_ai_reserve", "svc_fleet_control_ai_settle"]),
   };

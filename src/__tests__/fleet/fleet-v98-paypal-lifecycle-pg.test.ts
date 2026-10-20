@@ -139,6 +139,7 @@ describe.skipIf(!PG_BIN)("v98: the PayPal order lifecycle (PostgreSQL + custody 
     const checkoutId = r.checkout.checkoutId as string;
     const token = await one<string>(`(SELECT access_token FROM fleet.fleet_customer_orders WHERE checkout_id = $1)`, [checkoutId]);
     expect(await pub("svc_order_consent", [token, origin, BUYER_CONSENT_VERSION])).toMatchObject({ ok: true });
+    expect(await pub("svc_order_country", [token, origin, "GB"])).toMatchObject({ ok: true, stated: "GB" });   // v108: a supported country first
     return { checkoutId, token };
   };
   const stale = (checkoutId: string) => R.q(`UPDATE fleet.fleet_paypal_provider_orders SET opened_at = now() - interval '2 hours', confirmed_at = now() - interval '2 hours'

@@ -115,6 +115,7 @@ describe.skipIf(!PG_BIN)("public order and enquiry routes as the service role, w
       const boxes = await p.$$("form[action$='/consent'] input[type=checkbox]");
       expect(boxes.length).toBe(2);
       for (const x of boxes) await x.check();
+      await p.selectOption("form[action$='/consent'] select[name=country]", "GB");          // v108: the buyer's country with the consent
       await Promise.all([p.waitForURL(`${base}/order/${tokens.order}`), p.click("form[action$='/consent'] button[type=submit]")]);
       const text = await p.textContent("body");
       expect(text).not.toContain("cross-site request refused");

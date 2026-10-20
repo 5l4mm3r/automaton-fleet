@@ -1,3 +1,4 @@
+import { EU_27 } from "../../../fleet/postgres/migrations-phase108.js";
 import type { PoolClient } from "pg";
 
 /**
@@ -144,6 +145,11 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   }
   for (const t of V35_SINGLETONS) {
     if (r.rows.some((x) => x.t === t)) await c.query(`DELETE FROM "${schema}".${t}; INSERT INTO "${schema}".${t} (id) VALUES (1)`);
+  }
+  // v108: the owner's supported geography back to its migration seed (the EU-27 not sold to on the treasury checkout).
+  if (r.rows.some((x) => x.t === "fleet_sales_geography")) {
+    await c.query(`INSERT INTO "${schema}".fleet_sales_geography (id, unsupported, reason, set_by) VALUES (1, $1::text[], 'migration seed (test fixture)', 'migration:v108')
+      ON CONFLICT (id) DO UPDATE SET unsupported = EXCLUDED.unsupported, reason = EXCLUDED.reason, set_by = EXCLUDED.set_by`, [[...EU_27]]);
   }
   for (const t of all) await c.query(`ALTER TABLE ${t} ENABLE TRIGGER USER`);
   // v21 fixtures: an identity USD→GBP rate (so historical accounting expectations keep their numbers) and generous

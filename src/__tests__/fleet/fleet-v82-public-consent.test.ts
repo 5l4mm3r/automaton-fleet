@@ -14,6 +14,7 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 describe("v82 public pages: the buyer's consent to immediate supply", () => {
   const calls: Array<{ fn: string; args: unknown[] }> = [];
   let recorded = false;
+  let stated: string | null = null;
   const token = "a".repeat(64);
   const port: PublicPagesPort = {
     async publicCall(fn, args) {
@@ -22,9 +23,10 @@ describe("v82 public pages: the buyer's consent to immediate supply", () => {
         summary: "A workbook", brand: "Ledgerline", priceMinor: 1200, currency: "GBP", deliverables: ["Workbook"], description: "d", terms: "t", previews: [] } };
       if (fn === "svc_offer_buy") return args[2] === BUYER_CONSENT_VERSION ? { ok: true, token } : { ok: false, code: "FLEET_CONSENT_REQUIRED" };
       if (fn === "svc_order_page") return { ok: true, seller: "Sold by Test Owner.", order: { item: "Cash-flow workbook", amountMinor: 1200, currency: "GBP", kind: "digital_file",
-        payment: "awaiting_payment", status: "awaiting_payment", checkout: "open", ...(recorded ? { approvalUrl: "https://www.paypal.com/checkoutnow?token=ORD1" } : {}),
+        payment: "awaiting_payment", status: "awaiting_payment", checkout: "open", country: { stated }, ...(recorded && stated ? { approvalUrl: "https://www.paypal.com/checkoutnow?token=ORD1" } : {}),
         consent: { kind: "digital_immediate", recorded, version: BUYER_CONSENT_VERSION, statements: [...BUYER_CONSENT_WORDING.digital_immediate], ...(recorded ? { at: "2026-10-16T12:00:00Z" } : {}) } } };
       if (fn === "svc_order_consent") { recorded = true; return { ok: true }; }
+      if (fn === "svc_order_country") { stated = String(args[2]); return { ok: true, stated }; }       // v108
       return { ok: false };
     },
   };
@@ -59,8 +61,15 @@ describe("v82 public pages: the buyer's consent to immediate supply", () => {
       expect(await r.text()).toContain("Please confirm before buying");
     }
     expect(calls.filter((c) => c.fn === "svc_offer_buy")).toEqual([]);
-    const ok = await fetch(`${base}/o/${slug}/buy`, form({ c1: "yes", c2: "yes", consent: BUYER_CONSENT_VERSION }));
+    // v108: the buyer's country is required too (and recorded with the order before any payment).
+    const noCountry = await fetch(`${base}/o/${slug}/buy`, form({ c1: "yes", c2: "yes", consent: BUYER_CONSENT_VERSION }));
+    expect(noCountry.status).toBe(400);
+    expect(await noCountry.text()).toContain("Please choose your country");
+    expect(calls.filter((c) => c.fn === "svc_offer_buy")).toEqual([]);
+    const ok = await fetch(`${base}/o/${slug}/buy`, form({ c1: "yes", c2: "yes", consent: BUYER_CONSENT_VERSION, country: "GB" }));
     expect(ok.status).toBe(303);
+    expect(calls.find((c) => c.fn === "svc_order_country")?.args).toEqual([token, expect.stringMatching(/^[0-9a-f]{64}$/), "GB"]);
+    stated = null;
     expect(ok.headers.get("location")).toBe(`/order/${token}`);
     expect(calls.find((c) => c.fn === "svc_offer_buy")?.args).toEqual([slug, expect.stringMatching(/^[0-9a-f]{64}$/), BUYER_CONSENT_VERSION]);
   });
@@ -76,7 +85,8 @@ describe("v82 public pages: the buyer's consent to immediate supply", () => {
     // A cross-site POST is refused.
     expect((await fetch(`${base}/order/${token}/consent`, { ...form({ c1: "yes", c2: "yes", consent: BUYER_CONSENT_VERSION }), headers: { origin: "https://evil.example", "content-type": "application/x-www-form-urlencoded" } })).status).toBe(403);
     expect(recorded).toBe(false);
-    const r = await fetch(`${base}/order/${token}/consent`, form({ c1: "yes", c2: "yes", consent: BUYER_CONSENT_VERSION }));
+    expect(html).toContain('name="country"');                                          // v108: the country is asked with the consent
+    const r = await fetch(`${base}/order/${token}/consent`, form({ c1: "yes", c2: "yes", consent: BUYER_CONSENT_VERSION, country: "GB" }));
     expect(r.status).toBe(303);
     expect(calls.find((c) => c.fn === "svc_order_consent")?.args).toEqual([token, expect.stringMatching(/^[0-9a-f]{64}$/), BUYER_CONSENT_VERSION]);
     html = await (await fetch(`${base}/order/${token}`)).text();

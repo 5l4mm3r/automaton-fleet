@@ -114,9 +114,10 @@ import { V104_SQL } from "./migrations-phase104.js";
 import { V105_SQL } from "./migrations-phase105.js";
 import { V106_SQL } from "./migrations-phase106.js";
 import { V107_SQL } from "./migrations-phase107.js";
+import { V108_SQL } from "./migrations-phase108.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 107;
+export const FLEET_PG_SCHEMA_VERSION = 108;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1319,6 +1320,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 105, name: "platform_calculated_quotes_invoices", sql: V105_SQL },
   { version: 106, name: "owner_claim_waits_for_proof_refund", sql: V106_SQL },
   { version: 107, name: "proof_refund_booked_from_owner_held_cash", sql: V107_SQL },
+  { version: 108, name: "launch_completion_geography_conversations_email_sale_values", sql: V108_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1426,6 +1428,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_order_pay(text, text)",
   // v99: PayPal brought an approving buyer back — custody reads the order at once; the page says "processing".
   "svc_order_returned(text, text)",
+  // v108: the buyer states their country before paying (the owner's supported geography).
+  "svc_order_country(text, text, text)",
   // v79: a channel's attribution code carried onto an order / enquiry; the public outreach opt-out page.
   "svc_attribute(text, text, text)",
   "svc_outreach_optout(text, boolean)",
