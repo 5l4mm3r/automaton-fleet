@@ -50,6 +50,9 @@ switch_effective() { if [[ -f "${dir}/dropin.conf" || -n "\${STALE_ENV:-}" ]]; t
 spendable() { echo "\${NOW:-9758}"; }
 journals() { if [[ -n "\${JOURNALS:-}" ]]; then echo "\${JOURNALS}" | tr ',' '\\n'; fi; }
 journey() { echo "\${JOURNEY:-true true true}"; }
+media_active() { echo "\${MEDIA:-inactive}"; }
+acq_max() { echo "\${ACQ:-101}"; }
+treasury_free() { echo "\${FREE:-2000}"; }
 Q() { echo "$1" >> "${dir}/sql.log"
   case "$1" in
     *"m.created_at > (SELECT max(updated_at)"*) echo "\${CONFIRMED:-f}";;
@@ -269,6 +272,10 @@ Q() { echo "$1" >> "${dir}/sql.log"
       [["rerun", "600", "6"], { PAYMENT: "paid", STALE_ENV: "1" }, "a refund authority, window or custody's refund switch is on"],
       [["rerun", "600", "6"], { PAYMENT: "paid", P2: "f" }, "Agent-2 is NOT paused"],
       [["rerun", "600", "6"], { PAYMENT: "paid", SALES: "t" }, "sales, card authority or an outward release is open"],
+      // Paid tools cannot execute under the run; the refund must be payable after it.
+      [["rerun", "500", "6"], { PAYMENT: "paid", MEDIA: "active" }, "the media gateway (paid web search) is running: stop it first"],
+      [["rerun", "500", "6"], { PAYMENT: "paid", SIGNERS: "1" }, "a payout signer is configured"],
+      [["rerun", "500", "6"], { PAYMENT: "paid", FREE: "26" }, "the treasury cannot pay the refund after this run: free 26p, needed 1101p (the 500p refund + up to 500p of AI usage + up to 101p of its tax/fee, both owed to the owner)"],
     ];
     for (const [args, env, why] of refusals) {
       const r = run(args, env);
@@ -289,6 +296,8 @@ Q() { echo "$1" >> "${dir}/sql.log"
     expect(fs.readFileSync(path.join(state, phase[0], "proof-start.txt"), "utf8")).toBe(start1);
     expect(ok.out).toContain("no new order, no buyer message, no repair by hand");
     expect(ok.out).toContain("£6.00 of AI for 6 h (checked before every model request, in-flight calls included); never raised, never restarted");
+    expect(ok.out).toContain("at most 101p of the AI credit's acquisition tax/fee on top (its receipts' ratio)");
+    expect(ok.out).toContain("paid tools: no web search or images (media gateway stopped), no purchase (no payout activation or signer, no card authority)");
   });
 
   it("rerun watch: one corrected delivery allowed; the correction is recorded and the run continues; success needs Agent-1's own refund and its confirmation after PayPal", () => {
@@ -321,6 +330,12 @@ Q() { echo "$1" >> "${dir}/sql.log"
     expect(watch({ JOURNALS: "ai_credit_acquisition_cost -3 1,inference_charge -18 4" }).out).not.toContain("FAILURE");
     expect(watch({ REPEATS: "8" }).out).toContain("FAILURE: the same refusal 8 times in this run (repeated failure)");
     expect(watch({ REPEATS: "7" }).out).not.toContain("FAILURE");
+  });
+
+  it("a rerun stops if the media gateway (paid search) is started during it", () => {
+    expect(run(["start", "200"]).code).toBe(0);
+    expect(run(["rerun", "500", "6"], { PAYMENT: "paid", DELIVERIES: "2" }).code).toBe(0);
+    expect(watch({ DELIVERIES: "2", MEDIA: "active" }).out).toContain("FAILURE: the media gateway (paid web search) was started during the run");
   });
 
   it("owner-refund: separate from any agent run; requests the full refund, opens the order-only window, waits for PayPal, verifies the money, closes the window", () => {

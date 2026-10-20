@@ -21,6 +21,8 @@
 #       nothing is repaired by hand. Success: Agent-1's response to the buyer in this run, a corrected delivery SENT in this
 #       run whose files passed fleet-qa-3 (verdict pass, automated checks ok; every spreadsheet's saved values, displayed
 #       dates and rendering pass), then — when the owner asks for the refund on the order page — Agent-1's own full refund,
+#       Starts only when no paid search, image or purchase can execute (the media gateway stopped, no payout activation or
+#       signer, no card authority) and the treasury's free cash covers the refund after the run's AI costs (owed to the owner).
 #       PayPal's confirmation, Agent-1's confirmation to the buyer after it, and the money checks below. Never raises the
 #       ceiling or the time; never restarts itself.
 #   … owner-refund [why]  SEPARATE from any agent run (Agent-1 paused, no run open): the owner's own full refund of the
@@ -86,6 +88,13 @@ switch_effective() {
   if sudo -n cat /proc/$pid/environ 2>/dev/null | tr '\0' '\n' | grep -qx 'REAL_PAYMENTS_ENABLED=true'; then echo ON; else echo off; fi
 }
 spendable() { Q "SELECT (fleet_agent_wallet_measure('$A1') ->> 'spendableMinor')"; }
+# 2026-10-20 (rerun): paid search and images run only through the media gateway; a request is refused before any reservation
+# once its provider has not been seen for 10 minutes (fleet_econ_media_request).
+media_active() { systemctl is-active automaton-fleet-media.service 2>/dev/null; }
+# The most acquisition tax/fee a run of $1p of AI usage can add: its ceiling at the highest receipt-based ratio of the open
+# credit lots it can draw from (a lot without receipt evidence adds nothing), rounded up to a whole penny.
+acq_max() { Q "SELECT COALESCE(ceil($1 * max((acq_total_usd_cents * 1000000.0 - usd_purchased) / usd_purchased)), 0)::bigint FROM fleet_ai_credit_lots WHERE usd_remaining > 0 AND acq_total_usd_cents IS NOT NULL"; }
+treasury_free() { Q "SELECT (fleet_treasury_liquidity(r.rail_id) ->> 'freeMinor') FROM fleet_payment_rails r WHERE r.provider = 'paypal' AND r.status = 'active' ORDER BY r.created_at LIMIT 1"; }
 START() { cat "$D/proof-start.txt" 2>/dev/null; }
 # When Agent-1 last resumed under this proof (start, or a continue after an owner pause).
 RESUMED() { tail -1 "$D/proof-resumed.txt" 2>/dev/null || START; }
@@ -299,8 +308,21 @@ rerun)
   [[ "$(Q "SELECT count(*) FROM fleet_paypal_refund_requests WHERE order_id = '$o'")" == 0 ]] || die "the proof order already has a refund request"
   sp=$(spendable); [[ "$sp" =~ ^[0-9]+$ ]] || die "Agent-1's spendable cash is unknown"
   base=$(Q "SELECT count(*) FROM fleet_order_deliveries WHERE order_id = '$o'"); [[ "$base" =~ ^[0-9]+$ ]] || die "the order's deliveries are unknown"
+  # Paid tools cannot execute under this run: no paid search or image (the media gateway stopped, its providers unseen for
+  # over 10 minutes), no purchase (no custody payout activation, no payout signer — guard — and no card authority — guard).
+  [[ "$(media_active)" != active ]] || die "the media gateway (paid web search) is running: stop it first (sudo systemctl stop automaton-fleet-media), wait 11 minutes, then rerun"
+  [[ "$(Q "SELECT count(*) FROM fleet_media_providers WHERE configured AND last_seen_at > now() - interval '11 minutes'")" == 0 ]] \
+    || die "a media provider was seen in the last 11 minutes: a paid request could still be accepted; wait and rerun"
+  [[ "$(Q 'SELECT count(*) FROM fleet_custody_activation_live()')" == 0 ]] || die "a custody payout activation is live: purchases could be paid"
+  # The refund must be payable after the run: the treasury's free cash covers the refund plus what the run's AI can add to
+  # what is owed to the owner (the AI credit is owner-funded: usage and its tax/fee become owner payable).
+  acq=$(acq_max "$2"); free=$(treasury_free); need=$(( PRICE_MAX + $2 + acq ))
+  [[ "$acq" =~ ^[0-9]+$ && "$free" =~ ^-?[0-9]+$ ]] || die "the AI credit's acquisition cost or the treasury's free cash is unknown"
+  (( free >= need )) || die "the treasury cannot pay the refund after this run: free ${free}p, needed ${need}p (the ${PRICE_MAX}p refund + up to ${2}p of AI usage + up to ${acq}p of its tax/fee, both owed to the owner)"
   echo "  the SAME paid proof order $o: no new order, no buyer message, no repair by hand; Agent-1 works from its own record and files"
   echo "  1. a NEW run budget: $(printf '£%d.%02d' $(($2 / 100)) $(($2 % 100))) of AI for $3 h (checked before every model request, in-flight calls included); never raised, never restarted"
+  echo "     at most ${acq}p of the AI credit's acquisition tax/fee on top (its receipts' ratio); the treasury's free cash ${free}p covers the refund after the run (${need}p)"
+  echo "     paid tools: no web search or images (media gateway stopped), no purchase (no payout activation or signer, no card authority)"
   A cognition-run $A1 start $2 $3 "purchase proof rerun (owner's revised terms): the outstanding correction, then the buyer's refund; AI ceiling ${2}p" | jq -c '.run | {ceilingMinor, endsAt}' \
     || die "run budget not opened (nothing else changed)"
   P="$D/phase-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$P"
@@ -413,6 +435,7 @@ watch)
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'OPERATION_UNCERTAIN' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) \
     && { stop_proof "an outcome is uncertain: check it and resolve it (fleet operations-uncertain)"; exit 0; }
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'AGENT_CANNOT_THINK' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) && { stop_proof "FAILURE: the agent cannot think (packet)"; exit 0; }
+  [[ "$MODE" == rerun && "$(media_active)" == active ]] && { stop_proof "FAILURE: the media gateway (paid web search) was started during the run"; exit 0; }
   # 2026-10-20: a platform fault is not the agent's to fix; a cost outside the AI ceiling ends a bounded run; so does a loop.
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'AGENT_TOOL_FAULT' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) \
     && { stop_proof "FAILURE: an unresolved platform fault (AGENT_TOOL_FAULT) — reported to Fleet Control; fix it before any further run"; exit 0; }
@@ -425,5 +448,5 @@ watch)
   (( $(Q "SELECT count(*) FROM fleet_cognition_log WHERE agent_id = '$A1' AND at > '$last'") > MAX_IDLE_CALLS )) \
     && { stop_proof "FAILURE: $MAX_IDLE_CALLS model calls without a new customer event"; exit 0; }
   exit 0 ;;
-*) sed -n 2,54p "$0"; exit 2 ;;
+*) sed -n 2,56p "$0"; exit 2 ;;
 esac
