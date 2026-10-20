@@ -1,4 +1,4 @@
-# Release d2a2e7a (schema 101, code only; UI 0.26.2 unchanged) + Agent-1 runtime cb23033 → d2a2e7a — repair A completed; NOT INSTALLED
+# Release d2a2e7a (schema 101, code only; UI 0.26.2 unchanged) + Agent-1 runtime cb23033 → d2a2e7a — repair A completed; INSTALLED 2026-10-20 03:05Z (Agent-1 upgraded, both paused)
 
 **Why:** 785ffb0 (release-785ffb0.md) is deployed; its revision rehearsal in real founder units passed phases 1–3 and
 recalculated, inspected and rendered the corrected workbook inside the unit, but the corrected delivery was refused
@@ -24,3 +24,14 @@ FLEET_OPERATION_EXISTS, so the install stopped before Agent-1.
 `ssh -t agentfleet-vps 'bash ~/rlc116/install.sh'` then `bash ~/rlc116/verify.sh`. Ends with both agents paused and the
 purchase proof unchanged. Continuation (separate approval): `bash ~/rlc106/proof.sh continue` — the same run budget
 (97.33p left), ends 2026-10-20 14:33:50Z.
+
+## Outcome (2026-10-20, install run at the owner's request)
+02:42–03:05Z: release deployed 02:44:15Z (schema 101, code only; reconciliation OK); template unchanged; founder upgrade
+rehearsal from cb23033 27/27; **revision rehearsal 14/14 in real founder units** (fulfil; the buyer's report with the
+renderer unavailable — plain sleep refused, acknowledgement, honest blocker, no model call while waiting or across a
+restart; renderer back — one free wake, recalculation by LibreOffice in the unit, inspection, review, delivery of exactly
+the inspected bytes, the request resolved). Agent-1 cb23033 → d2a2e7a, upgrade 95a15892-2167-4929-876c-8cc4554f4779
+(rollback: `fleet-founders.sh rollback-runtime 01M3F50SH7PNX2E3GST13J52AS 95a15892-… <reason>`). verify.sh VERIFIED
+03:05:57Z (two of its checks were corrected first — an SQL quoting error and systemd's property order; the facts they
+check were confirmed directly). Both agents paused; the purchase proof unchanged (97.33p left, ends 14:33:50Z).
+A synthetic rehearsal, not the live order: A5 / B2 close only on the proof's continuation.
