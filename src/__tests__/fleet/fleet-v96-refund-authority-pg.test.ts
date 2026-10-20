@@ -339,7 +339,20 @@ describe.skipIf(!PG_BIN)("v96: custody enforces refund authority at dispatch", (
       const w = await hub.ownerClaimWait(proofOrder, "owner, 2026-10-20: my AI-credit claim waits behind my own proof refund", OWNER);
       expect(w).toMatchObject({ ok: true, orderId: proofOrder });
       expect(await hub.ownerClaimWait(proofOrder, "again", OWNER)).toMatchObject({ ok: true, already: true, waitId: w.waitId });
+      // v107 (live 2026-10-20): the books' unallocated treasury cash is 2p short of the refund (498p; the rest is held for the
+      // owner in owner_reimbursable). The booking takes the 2p from the cash held for the owner; the claim is unchanged.
+      const bal = (a: string) => R.one<number>(`fleet.fleet_ledger_balance($1)::int`, [a]);
+      const drain = (await bal("fleet:treasury:unallocated")) - 498;
+      await R.q(`SELECT fleet.fleet_ledger_post('genesis_allocation', 'v107-drain', $1, 'test: unallocated down to 498p', 'owner', $2, NULL, NULL, NULL, NULL, now(),
+        jsonb_build_array(jsonb_build_object('account', fleet.fleet_ledger_account($2, 'agent_cash'), 'side', 'D', 'amount', $3::bigint),
+                          jsonb_build_object('account', 'fleet:treasury:unallocated', 'side', 'C', 'amount', $3::bigint)))`, [OWNER, F.id, drain]);
+      expect(await bal("fleet:treasury:unallocated")).toBe(498);
+      const payable0 = await bal("fleet:owner:payable");
+      const held0 = await bal("fleet:treasury:owner_reimbursable");
       await worker.tick();
+      expect(await bal("fleet:treasury:unallocated")).toBe(0);
+      expect(await bal("fleet:treasury:owner_reimbursable")).toBe(held0 - 2);
+      expect(await bal("fleet:owner:payable")).toBe(payable0);                       // what is owed to the owner is unchanged
       // The proof refund is sent and completed under its order-only authority; the ordinary refund still waits.
       expect(await req(proofRefund.refund.refundRequestId)).toMatchObject({ status: "completed", requested_by: "agent" });
       expect(sentFor(proofCapture)).toHaveLength(1);
