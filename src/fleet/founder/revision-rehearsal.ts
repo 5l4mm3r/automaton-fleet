@@ -101,7 +101,7 @@ export async function runRevisionRehearsal(o: RevisionRehearsalOptions): Promise
   const model = new RevisionRehearsalModel(REVISION_REHEARSAL_MODEL);
   const check = (name: string, ok: boolean, detail: string) => {
     // A failed phase carries its diagnosis: the model's last steps (calls and the results they answered).
-    const d = ok ? detail : `${detail} | last steps: ${model.trace.slice(-8).join(" || ")}`;
+    const d = ok ? detail : `${detail} | last steps: ${model.trace.slice(-8).join(" || ")}${model.execs.length ? ` | last commands: ${model.execs.join(" || ")}` : ""}`;
     checks.push({ name, ok, detail: d }); log("revision_rehearsal_check", { name, ok, detail: d }); return ok;
   };
   const timeout = o.timeoutMs ?? 180_000;
@@ -235,7 +235,9 @@ export async function runRevisionRehearsal(o: RevisionRehearsalOptions): Promise
     const agentMsgs = async () => q<{ body: string; created_at: Date }>(`SELECT body, created_at FROM fleet_customer_messages WHERE order_id = $1 AND author = 'agent' ORDER BY created_at`, [orderId]);
     const blocked = await waitFor(async () => ((await agentMsgs()).some((m) => m.body === REVISION_BLOCKER) ? true : null), timeout * 2, poll);
     const turn2 = model.packets.find((p) => p.includes("is UNANSWERED")) ?? "";
-    const refusedSleep = (await q(`SELECT refusals FROM fleet_agent_mind_reports WHERE agent_id = $1 ORDER BY at`, [a])).some((r) => JSON.stringify(r.refusals).includes("FLEET_CUSTOMER_UNANSWERED"));
+    // The turn's closing report is written after its last step (the blocker message is sent before it): wait for it.
+    const refusedSleep = Boolean(await waitFor(async () => ((await q(`SELECT refusals FROM fleet_agent_mind_reports WHERE agent_id = $1 ORDER BY at`, [a]))
+      .some((r) => JSON.stringify(r.refusals).includes("FLEET_CUSTOMER_UNANSWERED")) ? true : null), timeout, poll));
     const msgs2 = await agentMsgs();
     check("2a. the buyer's message (order page, service role) reaches the founder as an UNANSWERED request in its packet", sent.ok === true && Boolean(backUnavailable) && turn2.includes(orderId),
       `svc_customer_message ${JSON.stringify(sent)}; renderer off and founder restarted: ${Boolean(backUnavailable)}`);

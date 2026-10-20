@@ -261,6 +261,28 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(r.infers()).toBeGreaterThan(declared);              // the review time came
   });
 
+  it("3b. a founder cut off at its step budget turn after turn, learning nothing new, waits after its assessment turn: zero inference until a change", async () => {
+    // The revision rehearsal of 2026-10-20: every call refused, every step used, one paid turn a minute.
+    const r = rig(() => ({ calls: [c("list_files", { path: "" }), c("read_file", { path: "product/missing.xlsx" })] }), { maxSteps: 3 });
+    await r.mind.turn("hb 1");                                  // first results: progress (cut off)
+    await r.mind.turn("hb 2");                                  // nothing new, cut off: stalled once
+    const stalledOnce = r.infers();
+    await beats(r, 3);                                          // the one assessment turn (its carried record shows the refusals)
+    expect(r.infers()).toBeGreaterThan(stalledOnce);
+    const waiting = r.infers();
+    await beats(r, 30);
+    expect(r.infers()).toBe(waiting);                           // stalled twice: waiting, though no turn ever finished
+    // A restart while waiting → still zero.
+    const again = rig(() => ({ calls: [c("list_files", { path: "" })] }), { root: r.root, maxSteps: 3 });
+    Object.assign(again.world, r.world);
+    await beats(again, 10);
+    expect(again.infers()).toBe(0);
+    // A change it may act on (the controller's events digest) wakes it, with its carried working record.
+    r.world.eventsDigest = hex32(9);
+    await beats(r, 1);
+    expect(r.infers()).toBeGreaterThan(waiting);
+  });
+
   it("4. a superseded approval stays on record and the founder's task carries the current decision", async () => {
     const r = rig(() => ({ calls: [c("sleep", { reason: "read" })] }));
     r.world.requests = [{ requestId: "62cbe1b7-0d0e-4f4a-9c55-8f3c2a1b0e11", kind: "kyc", action: "List the landlord compliance tracker on Gumroad", title: "Owner request: enrol a Gumroad channel",

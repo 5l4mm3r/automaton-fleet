@@ -965,7 +965,10 @@ export class FounderMind {
     // A turn that ENDS by declaring what it waits for (sleep with wakeOn / reviewAt) waits at once, even if it also did work:
     // the founder said there is nothing more to do until that happens — no extra paid turn to find that out again.
     const declaredHere = !!(wakeOn || reviewAt);
-    const waitNow = W && !owner && !cutOff && (declaredHere || (!result.progress && (stalled >= 2 || declaredNow)));
+    // 2026-10-20 (the revision rehearsal: a founder whose every call was refused used all its steps, turn after turn, one
+    // paid turn a minute): a cut-off turn is mid-work, but one that learned nothing new after the assessment turn is
+    // stalled like any other — it waits too, its working record carried for when something changes.
+    const waitNow = W && !owner && ((!cutOff && (declaredHere || (!result.progress && declaredNow))) || (!result.progress && stalled >= 2));
     result.waiting = waitNow;
     let digest: string | null = null;
     if (sleptOnly || waitNow) {

@@ -3,6 +3,10 @@
 # LibreOffice's launcher (oosplash) exits when /proc/version is missing, which the founder unit hides (ProcSubset=pid);
 # the office program itself does not need it, so this starts it directly. Like the launcher, a first start with a new
 # profile (exit 81) is restarted, at most twice.
+# 2026-10-20: the founder unit's user is a systemd DynamicUser, which has no passwd entry inside the sandbox (Landlock
+# denies /run/systemd/userdb). LibreOffice derives its default profile ($SYSUSERCONFIG) from that entry and stops with
+# "User installation could not be completed" (exit 77). Unless the caller names one, the profile is given explicitly:
+# where LibreOffice would put it for this HOME. No grant is added for the user database.
 P=/usr/lib/libreoffice/program/soffice.bin
 case "${FLEET_OFFICE:-ready}" in
   ready) ;;
@@ -11,6 +15,20 @@ case "${FLEET_OFFICE:-ready}" in
   *) echo "soffice: the office renderer is unavailable in this sandbox ($FLEET_OFFICE)" >&2; exit 126 ;;
 esac
 [ -x "$P" ] || { echo "soffice: the office renderer (LibreOffice) is not installed on this host" >&2; exit 127; }
+named=
+for a in "$@"; do
+  case "$a" in -env:UserInstallation=*) named=1 ;; esac
+done
+if [ -z "$named" ]; then
+  case "$HOME" in
+    /*) ;;
+    *) echo "soffice: HOME must be an absolute path (the office profile is kept under it)" >&2; exit 126 ;;
+  esac
+  case "$HOME" in
+    *[!A-Za-z0-9._/@-]*) echo "soffice: HOME has characters a profile URL cannot carry; name one with -env:UserInstallation=file:///…" >&2; exit 126 ;;
+  esac
+  set -- "-env:UserInstallation=file://$HOME/.config/libreoffice/4" "$@"
+fi
 n=0
 while :; do
   "$P" "$@"

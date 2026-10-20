@@ -107,9 +107,10 @@ import { V97_SQL } from "./migrations-phase97.js";
 import { V98_SQL } from "./migrations-phase98.js";
 import { V99_SQL } from "./migrations-phase99.js";
 import { V100_SQL } from "./migrations-phase100.js";
+import { V101_SQL } from "./migrations-phase101.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 100;
+export const FLEET_PG_SCHEMA_VERSION = 101;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1305,6 +1306,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 98, name: "paypal_order_lifecycle", sql: V98_SQL },
   { version: 99, name: "paypal_return_processing", sql: V99_SQL },
   { version: 100, name: "customer_obligations_refusal_reasons", sql: V100_SQL },
+  { version: 101, name: "own_sends_do_not_wake", sql: V101_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

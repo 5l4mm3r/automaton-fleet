@@ -11,6 +11,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { spawnSync } from "child_process";
 import { OFFICE_SHIM_DIR, officeState, privateTmpOf, runSandboxed, sandboxSelfTest } from "../../fleet/founder/exec-sandbox.js";
 
 const DEV_TOOLS = path.join(os.homedir(), ".cache/automaton-fleet-tools/dev");
@@ -132,6 +133,28 @@ describe("exec sandbox: the office renderer's allowances", () => {
     // Without the option (the build environment), no shim and no office state.
     const plain = await runSandboxed(ws, 'echo "office=[$FLEET_OFFICE] path=$PATH"', { timeoutMs: 20_000, maxOutput: 8_000 });
     expect(plain.output).toContain("office=[] path=/usr/local/bin:/usr/bin:/bin");
+  });
+
+  it("the shim names LibreOffice's profile under HOME (a DynamicUser has no passwd entry in the sandbox: exit 77 otherwise)", () => {
+    // The shim's own text, with the office program replaced by one that prints its arguments.
+    const dir = fs.mkdtempSync(path.join(root, "shim-"));
+    fs.writeFileSync(path.join(dir, "office.sh"), '#!/bin/sh\nfor a in "$@"; do echo "ARG $a"; done\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, "soffice"), fs.readFileSync(path.join(OFFICE_SHIM_DIR, "soffice"), "utf8")
+      .replace("P=/usr/lib/libreoffice/program/soffice.bin", `P=${dir}/office.sh`), { mode: 0o755 });
+    const run = (home: string, ...args: string[]) => spawnSync(path.join(dir, "soffice"), args, { env: { PATH: "/usr/bin:/bin", HOME: home, FLEET_OFFICE: "ready" }, encoding: "utf8" });
+    const a = run("/var/lib/automaton-founders/01M3F50SH7PNX2E3GST13J52AS/workspace/ws_01", "--headless", "--convert-to", "xlsx", "t.xlsx");
+    expect(a.status).toBe(0);
+    expect(a.stdout.trim().split("\n")).toEqual(["ARG -env:UserInstallation=file:///var/lib/automaton-founders/01M3F50SH7PNX2E3GST13J52AS/workspace/ws_01/.config/libreoffice/4",
+      "ARG --headless", "ARG --convert-to", "ARG xlsx", "ARG t.xlsx"]);
+    // A profile the caller names is kept as given (the capability probe and the inspector name none; an agent may).
+    const b = run("/w", "-env:UserInstallation=file:///w/.tmp/lop", "--version");
+    expect(b.stdout.trim().split("\n")).toEqual(["ARG -env:UserInstallation=file:///w/.tmp/lop", "ARG --version"]);
+    // A HOME a file URL cannot carry as-is is refused with the reason, never passed on half-encoded.
+    for (const h of ["relative/home", "/w/with space", "/w/50%"]) {
+      const c = run(h, "--version");
+      expect(c.status).toBe(126);
+      expect(c.stderr).toMatch(/HOME/);
+    }
   });
 
   it("the launcher shim and the unit template ship together", () => {

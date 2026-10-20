@@ -54,6 +54,8 @@ export class RevisionRehearsalModel extends ScriptedProvider {
   steps = 0;
   /** Per step: the calls made and the result they answered (bounded; the rehearsal's diagnosis when a phase fails). */
   readonly trace: string[] = [];
+  /** 2026-10-20: the last commands' results in full (bounded) — a failed phase keeps the evidence of why. */
+  readonly execs: string[] = [];
 
   override async chat(req: ChatRequest): Promise<ChatResult> {
     const first = req.messages[0]?.content ?? "";
@@ -132,6 +134,11 @@ export class RevisionRehearsalModel extends ScriptedProvider {
     } else {
       content = "Nothing to do until an order or a buyer message arrives.";
       toolCalls = [sleep("waiting for an order or a buyer message", "a paid order or a buyer message")];
+    }
+    const prevCall = made.at(-1);
+    if (prevCall?.name === "exec" && last && this.execs.at(-1) !== last) {
+      this.execs.push(`${String(prevCall.arguments.command).slice(0, 160)} -> ${last.replace(/\s+/g, " ").slice(0, 1200)}`);
+      if (this.execs.length > 4) this.execs.shift();
     }
     this.trace.push(`${inTurn}: ${toolCalls.map((c) => `${c.name}${c.arguments.op ? ` ${String(c.arguments.op)}` : ""}`).join(", ")} <- ${last.replace(/\s+/g, " ").slice(0, 400)}`);
     if (this.trace.length > 60) this.trace.shift();

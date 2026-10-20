@@ -40,7 +40,7 @@ export const NOTICES_IN_ATTENTION = 5;
 /** Jobs whose completion wakes the agent, and the tool that reads each. */
 export const WAKE_JOB_TABLES = Object.freeze({ fleet_code_jobs: "code", fleet_channel_jobs: "business", fleet_identity_jobs: "identity", fleet_provider_jobs: "storefront", fleet_media_jobs: "web_search / generate_image" } as const);
 
-const finishedJobs = Object.entries(WAKE_JOB_TABLES).map(([t, tool]) =>
+export const finishedJobs = Object.entries(WAKE_JOB_TABLES).map(([t, tool]) =>
   `SELECT job_id, status, finished_at, '${tool}' AS tool FROM ${t} WHERE agent_id = p_agent AND finished_at > now() - interval '14 days'`).join("\n          UNION ALL ");
 
 const REQUEST_JSON = restate(V26_SQL, "fleet_owner_request_json", [

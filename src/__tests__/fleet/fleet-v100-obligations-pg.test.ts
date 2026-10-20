@@ -39,6 +39,7 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
   let su: pg.Pool;
   let orderId = "", enquiryId = "", dir = "";
   let igw: PgIdentityGateway;
+  let broker: IdentityBroker;
   const obligations = async () => (await R.one<any>(`fleet.fleet_agent_attention($1)`, [F.id])).customerObligations as Array<Record<string, any>>;
   const digest = async () => (await R.one<any>(`fleet.fleet_agent_attention($1)`, [F.id])).eventsDigest as string;
   const buyer = async (minutesAgo: number, body = "The renewal dates show as numbers") =>
@@ -65,7 +66,7 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     initIdentityState(dir);
     igw = new PgIdentityGateway({ connectionString: R.pgc.identityUrl });
     const { vault, ownerVault } = openIdentityState(dir);
-    const broker = new IdentityBroker(igw, vault, { mail: new SimulatedSharedMailProvider("fleet@shared.fleet-mail.test"), ownerVault, providerVault: openProviderVault(dir),
+    broker = new IdentityBroker(igw, vault, { mail: new SimulatedSharedMailProvider("fleet@shared.fleet-mail.test"), ownerVault, providerVault: openProviderVault(dir),
       stateFile: path.join(dir, "pending.json") });
     await broker.tick();
     const mbx = await R.econ(F, "mailbox.provision", { ventureKey: "landlord", idempotencyKey: `mbx:${crypto.randomUUID()}` });
@@ -134,6 +135,22 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     expect(await obligations()).toEqual([expect.objectContaining({ kind: "enquiry", id: enquiryId, state: "unanswered" })]);
     expect((await econNext(R, F, "enquiry.reply", { enquiryId, message: "Yes: one row per room." })).ok).toBe(true);
     expect(await obligations()).toEqual([]);
+  });
+
+  it("v101: the e-mail carrying the agent's answer finishes sending without waking it; a send that fails does wake it", async () => {
+    await buyer(0, "Is this the final version?");
+    const before = await digest();                                   // the buyer's message is news: it changed the digest already
+    const r = await econNext(R, F, "order.message", { orderId, message: "Yes — this is the final, corrected version." });
+    expect(r, JSON.stringify(r)).toMatchObject({ ok: true });
+    const job = async () => (await R.q(`SELECT j.job_id, j.status FROM fleet.fleet_identity_jobs j JOIN fleet.fleet_customer_messages c ON j.kind = 'mail.send'
+      AND j.params ->> 'messageId' = c.mail_message_id::text WHERE c.message_id = $1`, [r.messageId]))[0] as { job_id: string; status: string } | undefined;
+    for (let i = 0; i < 10 && (await job())?.status !== "succeeded"; i++) await broker.tick();
+    expect((await job())?.status).toBe("succeeded");                 // the e-mail went out …
+    expect(await digest()).toBe(before);                             // … and that is the agent's own action, not news
+    await R.q(`UPDATE fleet.fleet_identity_jobs SET status = 'failed' WHERE job_id = $1`, [(await job())!.job_id]);
+    expect(await digest()).not.toBe(before);                         // a message that did not go out is news
+    const ev = (await R.one<any>(`fleet.fleet_agent_attention($1)`, [F.id])).recentEvents as Array<Record<string, unknown>>;
+    expect(ev).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "job_finished", status: "failed", tool: "identity" })]));
   });
 
   it("mind.report keeps the turn's refusals with scrubbed, bounded reasons; a platform fault tells the owner once a day", async () => {
