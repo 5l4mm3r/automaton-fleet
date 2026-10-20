@@ -14,7 +14,7 @@
 #       never a new budget, ceiling or end time: guards → the run is still open with ceiling and time left → the watchdog →
 #       resume Agent-1. The quiet periods the watchdog measures start again at the resume (time Agent-1 was paused by the
 #       owner is not time it left a buyer unanswered).
-#   bash fleet-purchase-proof.sh rerun <aiCeilingPence> <hours>
+#   bash fleet-purchase-proof.sh rerun <aiCeilingPence> <hours> [allInMaxPence]
 #       (2026-10-20, owner's revised terms after the ended run) a NEW bounded run of Agent-1 on the SAME paid order: guards →
 #       a new run budget (the ceiling and hours approved; checked before every model request, in-flight calls included) →
 #       the earlier run's records archived (state/phase-<time>/) → the watchdog → resume Agent-1. No buyer message is sent;
@@ -22,7 +22,8 @@
 #       run whose files passed fleet-qa-3 (verdict pass, automated checks ok; every spreadsheet's saved values, displayed
 #       dates and rendering pass), then — when the owner asks for the refund on the order page — Agent-1's own full refund,
 #       Starts only when no paid search, image or purchase can execute (the media gateway stopped, no payout activation or
-#       signer, no card authority) and the treasury's free cash covers the refund after the run's AI costs (owed to the owner).
+#       signer, no card authority; it trips the spend circuit breaker, so a purchase is rejected before any reservation, and
+#       stop resets it) and the treasury's free cash covers the refund after the run's AI costs (owed to the owner).
 #       PayPal's confirmation, Agent-1's confirmation to the buyer after it, and the money checks below. Never raises the
 #       ceiling or the time; never restarts itself.
 #   … owner-refund [why]  SEPARATE from any agent run (Agent-1 paused, no run open): the owner's own full refund of the
@@ -94,6 +95,7 @@ media_active() { systemctl is-active automaton-fleet-media.service 2>/dev/null; 
 # The most acquisition tax/fee a run of $1p of AI usage can add: its ceiling at the highest receipt-based ratio of the open
 # credit lots it can draw from (a lot without receipt evidence adds nothing), rounded up to a whole penny.
 acq_max() { Q "SELECT COALESCE(ceil($1 * max((acq_total_usd_cents * 1000000.0 - usd_purchased) / usd_purchased)), 0)::bigint FROM fleet_ai_credit_lots WHERE usd_remaining > 0 AND acq_total_usd_cents IS NOT NULL"; }
+breaker_tripped() { Q "SELECT tripped FROM fleet_spend_circuit_breaker WHERE id = 1"; }
 treasury_free() { Q "SELECT (fleet_treasury_liquidity(r.rail_id) ->> 'freeMinor') FROM fleet_payment_rails r WHERE r.provider = 'paypal' AND r.status = 'active' ORDER BY r.created_at LIMIT 1"; }
 START() { cat "$D/proof-start.txt" 2>/dev/null; }
 # When Agent-1 last resumed under this proof (start, or a continue after an owner pause).
@@ -105,6 +107,10 @@ CEILING=0; SP0=0; T_MAXDEL=""; T_MAXIDLE=""; MODE=""; T_HOURS=""
 # A rerun's own terms (2026-10-20): one more delivery than it started with, its idle-call allowance, its hours.
 MAX_DELIVERIES=${T_MAXDEL:-$MAX_DELIVERIES}; MAX_IDLE_CALLS=${T_MAXIDLE:-$MAX_IDLE_CALLS}; MODE=${MODE:-proof}; HOURS=${T_HOURS:-$HOURS}
 MAX_REPEATED_REFUSALS=8
+# 2026-10-20: a call reserves a true upper bound of its cost (every request byte as a token, the full output allowance);
+# an Opus step of Agent-1's prompts (≈ 53,000 tokens) reserves ≈ 105p. Below this headroom a rerun's requests are refused
+# (free) before the provider, so the run stops instead of idling to its end time.
+MIN_STEP_RESERVE=125
 # The one proof order there is (opened 2026-10-19 11:04:57Z); never a new one.
 ORDER() { Q "SELECT order_id FROM fleet_customer_orders WHERE owner_proof AND agent_id = '$A1' ORDER BY created_at LIMIT 1"; }
 closed() {
@@ -224,6 +230,8 @@ stop_proof() {
   A founder-cognition $A1 pause "purchase proof stopped: $why" >/dev/null 2>&1 || bad=1
   A cognition-run $A1 end "$why" >/dev/null 2>&1 || true
   window_close || bad=1
+  # A rerun's spend circuit breaker (purchases rejected before any reservation) is reset only if that run tripped it.
+  if [[ -f "$D/breaker-tripped.txt" ]]; then A economy-spend-breaker reset >/dev/null 2>&1 && rm -f "$D/breaker-tripped.txt" || bad=1; fi
   sudo -n systemctl stop $UNIT.timer $UNIT.service >/dev/null 2>&1 || true
   [[ "$(paused $A1)" == t ]] || bad=1
   [[ "$(authorities)" == "[]" ]] || bad=1
@@ -295,8 +303,8 @@ continue)
   A founder-cognition $A1 resume "purchase proof continued (owner approval): the same run budget and end time; public sales stay closed" | jq -c '{paused}' || { stop_proof "resume failed"; exit 1; }
   echo "== PROOF CONTINUED $(RESUMED): the same order and run budget; sales closed; card authority off; no outward release; money-out off; Agent-2 paused"; report ;;
 rerun)
-  [[ "${2:-}" =~ ^[0-9]+$ && "${3:-}" =~ ^[0-9]+$ ]] && (( $2 >= 1 && $2 <= 1000 && $3 >= 1 && $3 <= 24 )) \
-    || die "usage: rerun <aiCeilingPence 1..1000> <hours 1..24> (the owner's approved terms)"
+  [[ "${2:-}" =~ ^[0-9]+$ && "${3:-}" =~ ^[0-9]+$ && "${4:-0}" =~ ^[0-9]+$ ]] && (( $2 >= 1 && $2 <= 1000 && $3 >= 1 && $3 <= 24 )) \
+    || die "usage: rerun <aiCeilingPence 1..1000> <hours 1..24> [allInMaxPence] (the owner's approved terms)"
   [[ -n "$(START)" ]] || die "no proof was started here: a rerun continues the existing proof order"
   guard
   [[ "$(paused $A1)" == t ]] || die "Agent-1 is already running"
@@ -318,11 +326,17 @@ rerun)
   # what is owed to the owner (the AI credit is owner-funded: usage and its tax/fee become owner payable).
   acq=$(acq_max "$2"); free=$(treasury_free); need=$(( PRICE_MAX + $2 + acq ))
   [[ "$acq" =~ ^[0-9]+$ && "$free" =~ ^-?[0-9]+$ ]] || die "the AI credit's acquisition cost or the treasury's free cash is unknown"
+  # The all-inclusive maximum: the usage ceiling (a hard cap: every request is charged at most its reservation, a true
+  # upper bound of its cost) + the most tax/fee that usage can post in whole pence. The same figures as the funding guard.
+  allin=$(( $2 + acq ))
+  (( ${4:-0} == 0 || allin <= ${4:-0} )) || die "the all-inclusive maximum would be ${allin}p (${2}p usage + up to ${acq}p tax/fee), over the approved ${4}p"
   (( free >= need )) || die "the treasury cannot pay the refund after this run: free ${free}p, needed ${need}p (the ${PRICE_MAX}p refund + up to ${2}p of AI usage + up to ${acq}p of its tax/fee, both owed to the owner)"
   echo "  the SAME paid proof order $o: no new order, no buyer message, no repair by hand; Agent-1 works from its own record and files"
   echo "  1. a NEW run budget: $(printf '£%d.%02d' $(($2 / 100)) $(($2 % 100))) of AI for $3 h (checked before every model request, in-flight calls included); never raised, never restarted"
-  echo "     at most ${acq}p of the AI credit's acquisition tax/fee on top (its receipts' ratio); the treasury's free cash ${free}p covers the refund after the run (${need}p)"
-  echo "     paid tools: no web search or images (media gateway stopped), no purchase (no payout activation or signer, no card authority)"
+  echo "     at most ${acq}p of the AI credit's acquisition tax/fee on top (its receipts' ratio): ALL-INCLUSIVE MAXIMUM ${allin}p$( (( ${4:-0} > 0 )) && echo " (approved: ${4}p)")"
+  echo "     the treasury's free cash ${free}p covers the refund after the run (needed ${need}p = ${PRICE_MAX}p refund + ${allin}p)"
+  echo "     paid tools: no web search or images (media gateway stopped), no phone or SMS (no provider), no purchase (the spend circuit breaker rejects it before any reservation; no payout activation or signer, no card authority)"
+  echo "     each request reserves a true upper bound of its cost (≈ 105p for an Opus step); the run stops when less than ${MIN_STEP_RESERVE}p is left, so at least $(( $2 - MIN_STEP_RESERVE ))p of usage is available"
   A cognition-run $A1 start $2 $3 "purchase proof rerun (owner's revised terms): the outstanding correction, then the buyer's refund; AI ceiling ${2}p" | jq -c '.run | {ceilingMinor, endsAt}' \
     || die "run budget not opened (nothing else changed)"
   P="$D/phase-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$P"
@@ -330,10 +344,14 @@ rerun)
   echo "$2 $sp $((base + 1)) 60 rerun $3" > "$D/proof-terms.txt"; ts > "$D/proof-start.txt"; START > "$D/proof-resumed.txt"
   CEILING=$2; SP0=$sp; MODE=rerun; HOURS=$3
   echo "     the earlier run's records: $P; spendable at this start ${SP0}p; deliveries so far ${base} (this run: one corrected delivery)"
-  echo "  2. watchdog every minute"
+  echo "  2. the spend circuit breaker: every new payment order and envelope spend is rejected before anything is reserved"
+  if [[ "$(breaker_tripped)" == t ]]; then echo "     already tripped (kept; not reset by this run)"
+  else A economy-spend-breaker trip "purchase proof rerun: purchases are excluded from this run" >/dev/null || { stop_proof "the spend circuit breaker could not be tripped"; exit 1; }
+       ts > "$D/breaker-tripped.txt"; [[ "$(breaker_tripped)" == t ]] || { stop_proof "the spend circuit breaker is not tripped"; exit 1; }; fi
+  echo "  3. watchdog every minute"
   sudo -n systemd-run --quiet --unit $UNIT --setenv=FLEET_PROOF_DIR="$D" --on-active=1min --on-unit-active=1min /bin/bash "$SELF" watch \
     || { stop_proof "watchdog not armed"; exit 1; }
-  echo "  3. resume Agent-1"
+  echo "  4. resume Agent-1"
   A founder-cognition $A1 resume "purchase proof rerun (owner approval): AI ceiling ${2}p, $3 h; public sales stay closed" | jq -c '{paused}' || { stop_proof "resume failed"; exit 1; }
   echo "== PROOF RERUN STARTED $(START): the same order; sales closed; card authority off; no outward release; money-out off until Agent-1 requests the refund; Agent-2 paused"; report ;;
 owner-refund)
@@ -432,10 +450,13 @@ watch)
   run=$(Q "SELECT fleet_admin_cognition_run('$A1')")
   [[ "$(jq -r '.open' <<< "$run")" == true ]] || { stop_proof "the AI ceiling is spent or ${HOURS} h are up"; exit 0; }
   (( $(jq -r '(.spentMicro + .inflightMicro) / 1000000 | floor' <<< "$run") >= CEILING - 5 )) && { stop_proof "the AI ceiling is (nearly) spent"; exit 0; }
+  [[ "$MODE" == rerun ]] && (( $(jq -r '(.spentMicro + .inflightMicro) / 1000000 | floor' <<< "$run") > CEILING - MIN_STEP_RESERVE )) \
+    && { stop_proof "the remaining AI allowance is below one Opus step's reservation (${MIN_STEP_RESERVE}p): no further request could be made"; exit 0; }
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'OPERATION_UNCERTAIN' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) \
     && { stop_proof "an outcome is uncertain: check it and resolve it (fleet operations-uncertain)"; exit 0; }
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'AGENT_CANNOT_THINK' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) && { stop_proof "FAILURE: the agent cannot think (packet)"; exit 0; }
   [[ "$MODE" == rerun && "$(media_active)" == active ]] && { stop_proof "FAILURE: the media gateway (paid web search) was started during the run"; exit 0; }
+  [[ "$MODE" == rerun && "$(breaker_tripped)" != t ]] && { stop_proof "FAILURE: the spend circuit breaker was reset during the run (purchases are excluded)"; exit 0; }
   # 2026-10-20: a platform fault is not the agent's to fix; a cost outside the AI ceiling ends a bounded run; so does a loop.
   (( $(Q "SELECT count(*) FROM fleet_notifications WHERE code = 'AGENT_TOOL_FAULT' AND agent_id = '$A1' AND created_at >= '$s'") > 0 )) \
     && { stop_proof "FAILURE: an unresolved platform fault (AGENT_TOOL_FAULT) — reported to Fleet Control; fix it before any further run"; exit 0; }
@@ -448,5 +469,5 @@ watch)
   (( $(Q "SELECT count(*) FROM fleet_cognition_log WHERE agent_id = '$A1' AND at > '$last'") > MAX_IDLE_CALLS )) \
     && { stop_proof "FAILURE: $MAX_IDLE_CALLS model calls without a new customer event"; exit 0; }
   exit 0 ;;
-*) sed -n 2,56p "$0"; exit 2 ;;
+*) sed -n 2,57p "$0"; exit 2 ;;
 esac

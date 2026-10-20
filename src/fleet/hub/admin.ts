@@ -287,6 +287,11 @@ export class PgHubAdmin {
   }
   enquiries(agentId: string | null) { return this.one(`SELECT fleet_enquiries_admin_json($1) AS r`, [agentId]); }
   aiCreditOpening(actor: string) { return this.one(`SELECT fleet_admin_ai_credit_opening($1) AS r`, [actor]); }
+  /** 2026-10-20: trip or reset the infrastructure spend circuit breaker; the owner's anomaly thresholds are kept as they are. */
+  spendBreaker(tripped: boolean, reason: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_spend_circuit_breaker($1, $2, $3, b.order_wallet_bp, b.velocity_window_s, b.velocity_wallet_bp) AS r
+      FROM fleet_spend_circuit_breaker b WHERE b.id = 1`, [actor, tripped, reason]);
+  }
   capitalBack(railId: string, txnId: string, eventCode: string, actor: string) {
     return this.one(`SELECT fleet_admin_capital_back($1, $2, $3, $4) AS r`, [railId, txnId, eventCode, actor]);
   }

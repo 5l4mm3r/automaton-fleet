@@ -25,6 +25,7 @@ import { PgAgentGateway } from "../../fleet/postgres/agent-gateway.js";
 import { auditPrivileges, ledgerSurfaceProblems } from "../../fleet/postgres/privileges.js";
 import { PgLedgerAdmin, sha256Hex } from "../../fleet/treasury/ledger.js";
 import { PgOperatorAdmin } from "../../fleet/operator/admin.js";
+import { PgHubAdmin } from "../../fleet/hub/admin.js";
 import { rawPublicKey } from "../../fleet/operator/canonical.js";
 import { unpinCustody, liveRail, attest, makeKeyless } from "./fixtures/custody-signer.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
@@ -573,6 +574,14 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       expect(JSON.stringify(t)).not.toMatch(/provider anomaly/);
       expect(await pgCode(owner.query(`SELECT fleet.fleet_admin_spend_circuit_breaker($1, true, NULL, NULL, NULL, NULL)`, [OWNER]))).toMatch(/check constraint/); // a trip needs a reason
       expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_events WHERE event_type = 'spend_circuit_breaker_set' AND actor = $1`, [OWNER]))[0].n).toBeGreaterThanOrEqual(2);
+      // 2026-10-20: the owner command (economy-spend-breaker) trips and resets it and keeps the owner's thresholds as they are.
+      const hub = new PgHubAdmin({ connectionString: pgc.ownerUrl });
+      try {
+        await q(`SELECT fleet.fleet_admin_spend_circuit_breaker($1, false, NULL, 5000, NULL, NULL)`, [OWNER]);
+        expect(await hub.spendBreaker(true, "purchase proof rerun: purchases are excluded from this run", OWNER)).toMatchObject({ tripped: true, order_wallet_bp: 5000 });
+        expect(await spend(a, 1)).toMatchObject({ ok: false, code: "FLEET_INFRASTRUCTURE_CIRCUIT_BREAKER", order: { status: "rejected" } });   // nothing reserved
+        expect(await hub.spendBreaker(false, null, OWNER)).toMatchObject({ tripped: false, trip_reason: null, order_wallet_bp: 5000 });
+      } finally { await hub.close(); }
     } finally {
       await q(`SELECT fleet.fleet_admin_spend_circuit_breaker($1, false, NULL, NULL, NULL, NULL)`, [OWNER]);
     }

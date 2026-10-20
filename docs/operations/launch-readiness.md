@@ -31,6 +31,17 @@ outside this launch. The detailed evidence behind each line is in Appendix A (th
 | R3 | A buyer's request is an obligation until resolved (state, not "news since your last turn"): in every packet, slim ones too; a sleep is refused while a buyer waits for an answer; the agent's own answer never wakes it again, a new buyer message does; waiting on a dependency (the renderer's availability is a free wake signal) makes no model call, across restarts | fleet-v100-customer-obligations (1–5), fleet-v100-obligations-pg, fleet-v100-revision-rehearsal (phases 1–3, real founder process). **f010dd4's rehearsal in real units: one paid wake after the answer (its own e-mails finished sending) and, once stuck, a paid turn a minute (cut-off turns never waited).** 785ffb0: v101 (a succeeded send is not news; fleet-v100-obligations-pg v101 test fails without it) and stalled cut-off turns wait (fleet-founder-work-continuity 3b: 105 calls → 15 without/with) | f010dd4 deployed but insufficient; fix in 785ffb0 candidate |
 | R4 | The proof watchdog: only a message to the buyer answers (23 model calls had counted); quiet periods and idle calls count from the resume; `continue` resumes the SAME order and run budget (never a new one) | fleet-v100-obligations-pg (the script's own SQL), fleet-purchase-proof-script (continue) | in candidate |
 
+### Open owner decision — the order in which treasury cash pays the owner's claims (recorded 2026-10-20; NOT decided)
+The treasury's free cash for a new refund or payment is its verified PayPal balance less what it has committed
+(`fleet_treasury_liquidity`, v76/v77): the owner's card to repay, **what is owed to the owner for AI credit the owner's card
+paid for (`fleet:owner:payable`, v69)**, refunds requested or sent, and payments in flight; custody sends a new refund only
+when free cash covers it (`cx_paypal_refund_work`, v76). So a refund of the owner's own proof purchase waits behind the
+owner's AI-credit reimbursement (2026-10-20: PayPal 522p, owed to the owner 496p, free 26p, the proof's refund 500p). This
+priority follows from the general rule that a customer refund may not spend money owed elsewhere; **it is not a documented
+owner decision** for owner-funded proof transactions (v96 §3 made such a refund owner capital, so it is not held from the
+agent's cash, but did not say where its cash comes from). Nothing has been changed: no priority introduced, no liability
+forgiven, reclassified or released, no agent cost moved to the Fleet.
+
 ### B. Owner setup and activation decisions (each its own approval; prepared in one package each)
 | # | Decision | State |
 |---|---|---|

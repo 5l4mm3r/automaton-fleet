@@ -36,6 +36,7 @@ sudo() { echo "sudo $*" >> "${log}"
 A() { echo "A $*" >> "${log}"
   case "$1 \${3:-}" in "founder-cognition pause") touch "${dir}/paused-1";; "founder-cognition resume") rm -f "${dir}/paused-1";; esac
   case "$1" in economy-refund-authority-grant) touch "${dir}/auth-on"; echo '{"ok":true,"authorityId":"${AUTH}"}'; return;; economy-refund-authority-end) rm -f "${dir}/auth-on";; esac
+  case "$1 \${2:-}" in "economy-spend-breaker trip") touch "${dir}/breaker";; "economy-spend-breaker reset") rm -f "${dir}/breaker";; esac
   case "$1 \${3:-}" in
     "hub-custody ") if [[ -f "${dir}/auth-on" || -n "\${AUTH_LIVE:-}" ]]; then echo "{\\"refundAuthorities\\":[{\\"authorityId\\":\\"${AUTH}\\",\\"scope\\":\\"order\\"}],\\"liveSigners\\":\${SIGNERS:-0}}"; else echo "{\\"refundAuthorities\\":[],\\"liveSigners\\":\${SIGNERS:-0}}"; fi;;
     "cognition-run start") echo '{"run":{"ceilingMinor":'"$4"',"endsAt":"later"}}';;
@@ -53,6 +54,7 @@ journey() { echo "\${JOURNEY:-true true true}"; }
 media_active() { echo "\${MEDIA:-inactive}"; }
 acq_max() { echo "\${ACQ:-101}"; }
 treasury_free() { echo "\${FREE:-2000}"; }
+breaker_tripped() { if [[ -f "${dir}/breaker" ]]; then echo t; else echo "\${BREAKER:-f}"; fi; }
 Q() { echo "$1" >> "${dir}/sql.log"
   case "$1" in
     *"m.created_at > (SELECT max(updated_at)"*) echo "\${CONFIRMED:-f}";;
@@ -104,6 +106,8 @@ Q() { echo "$1" >> "${dir}/sql.log"
   const startFile = () => path.join(dir, "state", "proof-start.txt");
   const dropin = () => path.join(dir, "dropin.conf");
   const watch = (env: Record<string, string>) => {
+    // A running rerun has tripped the spend circuit breaker (a test that removes it says so with BREAKER_GONE).
+    if (env.BREAKER_GONE !== "1") fs.writeFileSync(path.join(dir, "breaker"), "");
     const r = run(["watch"], { P1: "f", ...env });
     fs.rmSync(path.join(dir, "paused-1"), { force: true });
     return r;
@@ -287,8 +291,9 @@ Q() { echo "$1" >> "${dir}/sql.log"
     const ok = run(["rerun", "600", "6"], { PAYMENT: "paid", DELIVERIES: "2" });
     expect(ok.code, ok.out).toBe(0);
     expect(ok.host[0]).toMatch(new RegExp(`^A cognition-run ${A1} start 600 6 purchase proof rerun`));
-    expect(ok.host[1]).toMatch(/^sudo -n systemd-run --quiet --unit fleet-proof-watch .* watch$/);
-    expect(ok.host[2]).toMatch(new RegExp(`^A founder-cognition ${A1} resume purchase proof rerun`));
+    expect(ok.host[1]).toBe("A economy-spend-breaker trip purchase proof rerun: purchases are excluded from this run");   // before Agent-1 runs
+    expect(ok.host[2]).toMatch(/^sudo -n systemd-run --quiet --unit fleet-proof-watch .* watch$/);
+    expect(ok.host[3]).toMatch(new RegExp(`^A founder-cognition ${A1} resume purchase proof rerun`));
     expect(ok.host.join("\n")).not.toMatch(/refund-authority|economy-order-refund|dropin|runtime\.env|sales_set|customer_message/);
     expect(fs.readFileSync(path.join(state, "proof-terms.txt"), "utf8").trim()).toBe("600 9758 3 60 rerun 6");
     const phase = fs.readdirSync(state).filter((f) => f.startsWith("phase-"));
@@ -297,7 +302,7 @@ Q() { echo "$1" >> "${dir}/sql.log"
     expect(ok.out).toContain("no new order, no buyer message, no repair by hand");
     expect(ok.out).toContain("£6.00 of AI for 6 h (checked before every model request, in-flight calls included); never raised, never restarted");
     expect(ok.out).toContain("at most 101p of the AI credit's acquisition tax/fee on top (its receipts' ratio)");
-    expect(ok.out).toContain("paid tools: no web search or images (media gateway stopped), no purchase (no payout activation or signer, no card authority)");
+    expect(ok.out).toContain("paid tools: no web search or images (media gateway stopped), no phone or SMS (no provider), no purchase (the spend circuit breaker rejects it before any reservation; no payout activation or signer, no card authority)");
   });
 
   it("rerun watch: one corrected delivery allowed; the correction is recorded and the run continues; success needs Agent-1's own refund and its confirmation after PayPal", () => {
@@ -330,6 +335,49 @@ Q() { echo "$1" >> "${dir}/sql.log"
     expect(watch({ JOURNALS: "ai_credit_acquisition_cost -3 1,inference_charge -18 4" }).out).not.toContain("FAILURE");
     expect(watch({ REPEATS: "8" }).out).toContain("FAILURE: the same refusal 8 times in this run (repeated failure)");
     expect(watch({ REPEATS: "7" }).out).not.toContain("FAILURE");
+  });
+
+  it("the displayed all-inclusive maximum is what the start guard enforces: 499p + 100p = 599p fits 600p; 500p + 101p = 601p does not", () => {
+    expect(run(["start", "200"]).code).toBe(0);
+    fs.rmSync(log);
+    const over = run(["rerun", "500", "6", "600"], { PAYMENT: "paid", ACQ: "101" });
+    expect(over.code).toBe(1);
+    expect(over.out).toContain("the all-inclusive maximum would be 601p (500p usage + up to 101p tax/fee), over the approved 600p");
+    expect(over.host).toEqual([]);                                             // refused before any change
+    const ok = run(["rerun", "499", "6", "600"], { PAYMENT: "paid", ACQ: "100", FREE: "1099", DELIVERIES: "2" });
+    expect(ok.code, ok.out).toBe(0);
+    expect(ok.out).toContain("at most 100p of the AI credit's acquisition tax/fee on top (its receipts' ratio): ALL-INCLUSIVE MAXIMUM 599p (approved: 600p)");
+    expect(ok.out).toContain("the treasury's free cash 1099p covers the refund after the run (needed 1099p = 500p refund + 599p)");
+    expect(ok.host[0]).toMatch(new RegExp(`^A cognition-run ${A1} start 499 6 `));   // the ceiling enforced is the one displayed
+    expect(ok.out).toContain("the run stops when less than 125p is left, so at least 374p of usage is available");
+    // The watchdog stops the rerun once a further Opus step could not be reserved.
+    expect(watch({ DELIVERIES: "2", RUN: '{"open":true,"ceilingMinor":499,"spentMicro":374000000,"inflightMicro":0}' }).out).not.toContain("PROOF STOPPED");
+    expect(watch({ DELIVERIES: "2", RUN: '{"open":true,"ceilingMinor":499,"spentMicro":375000000,"inflightMicro":0}' }).out)
+      .toContain("the remaining AI allowance is below one Opus step's reservation (125p)");
+  });
+
+  it("the funding guard uses the same figures: 1098p free is refused for 499p", () => {
+    expect(run(["start", "200"]).code).toBe(0);
+    expect(run(["rerun", "499", "6", "600"], { PAYMENT: "paid", ACQ: "100", FREE: "1098" }).out)
+      .toContain("the treasury cannot pay the refund after this run: free 1098p, needed 1099p (the 500p refund + up to 499p of AI usage + up to 100p of its tax/fee, both owed to the owner)");
+  });
+
+  it("a rerun rejects purchases before any reservation (spend circuit breaker), stops if it is reset, and its stop resets only its own trip", () => {
+    expect(run(["start", "200"]).code).toBe(0);
+    expect(run(["rerun", "499", "6"], { PAYMENT: "paid", DELIVERIES: "2" }).code).toBe(0);
+    expect(fs.existsSync(path.join(dir, "breaker"))).toBe(true);
+    expect(watch({ DELIVERIES: "2" }).out).not.toContain("PROOF STOPPED");
+    fs.rmSync(path.join(dir, "breaker"));
+    const x = watch({ DELIVERIES: "2", BREAKER_GONE: "1" });
+    expect(x.out).toContain("FAILURE: the spend circuit breaker was reset during the run (purchases are excluded)");
+    // A breaker the owner had already tripped is kept, and not reset by the run's stop.
+    fs.rmSync(path.join(dir, "state"), { recursive: true, force: true });
+    expect(run(["start", "200"]).code).toBe(0);
+    fs.rmSync(log);
+    const kept = run(["rerun", "499", "6"], { PAYMENT: "paid", DELIVERIES: "2", BREAKER: "t" });
+    expect(kept.out).toContain("already tripped (kept; not reset by this run)");
+    expect(kept.host.join("\n")).not.toContain("economy-spend-breaker");
+    expect(run(["stop"], { BREAKER: "t" }).host.join("\n")).not.toContain("economy-spend-breaker reset");
   });
 
   it("a rerun stops if the media gateway (paid search) is started during it", () => {

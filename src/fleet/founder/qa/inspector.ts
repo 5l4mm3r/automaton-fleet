@@ -489,6 +489,11 @@ def inspect_xlsx(r, path, cases):
         except Exception as e:
             signal.alarm(0)
             r.check(cid, "fail", "%s: %s" % (type(e).__name__, str(e)[:300]))
+    # 2026-10-20: a recalculation shows the formulas agree with themselves, not that they compute what the customer needs.
+    if formulas_at and not cases:
+        r.check("expected_results", "warn", "%d formula(s), but no acceptance case compared a result with an independently calculated "
+                "expected value: compute expected results with exec (Python, Decimal for money) and inspect again with cases "
+                "[{sheet, inputs, expect, tolerance: 0 for money}]" % len(formulas_at))
 
 
 # ---------------------------------------------------------------- docx

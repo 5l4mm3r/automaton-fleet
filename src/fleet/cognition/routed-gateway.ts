@@ -20,7 +20,7 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTINE_CHARTER, ProviderError, charterFor, parseDoctrine, toolsetForDoctrine, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
+import { FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTINE_CHARTER, IMAGE_TOKEN_ESTIMATE, ProviderError, charterFor, parseDoctrine, toolsetForDoctrine, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
 import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, MAX_COGNITION_DEADLINE_MS, promptMaterial, validateMessages } from "./gateway.js";
 import { founderStepTools } from "./capability-signature.js";
 import { RouteError, actionDigest, candidateFor, parseRouteRequest, route, type RouteDecision, type TierCandidate } from "./router.js";
@@ -76,6 +76,25 @@ export function cachePolicy(d: Pick<RouteDecision, "tier" | "scope">, c: Pick<Ti
   if (loop.continuing === true) return { mode: configured, reason: `${d.tier} tool loop: reuse expected` };
   if (warm) return { mode: configured, reason: `${d.tier} same model within the cache lifetime` };
   return { mode: "off", reason: `${d.tier} no evidenced reuse` };
+}
+
+/** Tokens the provider adds around a request (its tool-use instructions and message framing): an allowance, not a measure. */
+export const PROVIDER_FRAMING_TOKENS = 2_000;
+
+/**
+ * 2026-10-20: a call's reservation is a true upper bound of what it can cost (owner: the run's all-inclusive maximum must
+ * hold through the enforcement and posting code). A call is charged min(reservation, actual cost); before, the reservation
+ * counted the prompt at ~4 characters a token and the tools by name only, so a call could cost more than it reserved —
+ * the credit drawn (and the tax/fee on it) exceeded the charge. Now: every UTF-8 byte of the request — the prompt and the
+ * full tool definitions — as a token (a token is never shorter than a byte), each image at the provider's own maximum,
+ * the provider's framing, all at the dearer of the input and cache-write prices; plus the whole output allowance (thinking
+ * included) at the output price.
+ */
+export function costBoundMicro(promptText: string, tools: readonly unknown[], images: number, maxTokens: number,
+  p: { inputMicrocentsPerToken: number; outputMicrocentsPerToken: number; cacheWriteMicrocentsPerToken?: number | null }): number {
+  const inputTokens = Buffer.byteLength(promptText, "utf8") + Buffer.byteLength(JSON.stringify(tools), "utf8") + images * IMAGE_TOKEN_ESTIMATE + PROVIDER_FRAMING_TOKENS;
+  const inputPrice = Math.max(p.inputMicrocentsPerToken, p.cacheWriteMicrocentsPerToken ?? p.outputMicrocentsPerToken);
+  return inputTokens * inputPrice + maxTokens * p.outputMicrocentsPerToken;
 }
 
 const sha = (s: string) => crypto.createHash("sha256").update(s, "utf8").digest("hex");
@@ -187,7 +206,7 @@ export async function inferRouted(
   const prompt = promptMaterial(system, messages, tools.map((t) => t.name));
   const promptText = prompt.text;
   const promptSha = sha(promptText);
-  const estimateMicro = prompt.tokens * candidate.prices.inputMicrocentsPerToken + maxTokens * candidate.prices.outputMicrocentsPerToken;
+  const estimateMicro = costBoundMicro(promptText, tools, messages.reduce((n, m) => n + (m.images?.length ?? 0), 0), maxTokens, candidate.prices);
   const req = parseRouteRequest(body.route ?? { taskClass: "agent_step" });
   const snapshot = {
     tier: decision.tier, provider: candidate.provider, model: candidate.model, taskClass: decision.taskClass, ...(req.taskId ? { taskId: req.taskId } : {}),

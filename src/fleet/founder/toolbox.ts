@@ -33,6 +33,7 @@ import { custodyCategory, custodyRefusalText } from "../custody-refusals.js";
 import { FIELD_GUIDE_VERSION, guideList, guideSection, libraryList, guidePart } from "./field-guide.js";
 import { SCOPED_CONTINUE } from "./loop-guard.js";
 import { FOUNDER_V10_RELEASE } from "./doctrine-v10.js";
+import { minorAmounts, moneyProblems, moneyRefusal } from "./money.js";
 import { DecisionLedgerError, cognitionDepth, commitmentCheck, depthLine, loadDecisions, noteCommitment, noteResearch, openDecision, researchCheck, resolveDecision, reviewDecision, saveDecisions, type Decision } from "./decisions.js";
 
 export interface ToolboxPorts {
@@ -256,6 +257,13 @@ function stageTypeOf(f: string): string | null {
 const VIEW_TYPES: Record<string, ChatImage["mediaType"]> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" };
 export const VIEW_IMAGE_MAX_BYTES = 1_400_000;
 /** Registry ops that move or commit money get a deterministic idempotency key from the tool call (a retry never doubles). */
+/** 2026-10-20: the customer-facing text fields whose money is checked before an operation is sent (money.ts). */
+const MONEY_TEXT_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "order.message": ["message"], "enquiry.reply": ["message"], "enquiry.quote": ["scope", "message"], "enquiry.decline": ["reason", "message"],
+  "order.deliver": ["subject", "message"], "order.refund": ["reason"], "order.fulfil": ["note"],
+  "offer.create": ["title", "summary", "description", "deliverables", "terms"], "offer.update": ["title", "summary", "description", "deliverables", "terms"],
+  "mail.send": ["subject", "body"],
+});
 const IDEMPOTENT_OPS = new Set(["capital.request", "envelope.spend", "mailbox.provision", "account.create", "account.operate", "account.verify_identity",
   "account.recover", "account.rotate", "account.revoke", "account.close", "commitment.add", "mail.send", "phone.quote", "phone.provision", "phone.release", "sms.send",
   // v42: a retried proposal or funding never doubles.
@@ -607,6 +615,38 @@ export class FounderToolbox {
 
   // ── v76: deliverable inspection and review ──
   /** Run the inspector (fleet-qa-1) over workspace files inside the sandbox; the report is parsed strictly. */
+  /**
+   * 2026-10-20 (owner: "do not rely on model-generated arithmetic for monetary totals"). The customer-facing text of a
+   * message, quote, delivery, refund, offer or e-mail is checked before it is sent (money.ts): written calculations must be
+   * right, itemised totals must add up, and a labelled total must be one of the record's amounts — the order's amount,
+   * what was refunded and what is still refundable, the quote's or offer's price (integer minor units from the database).
+   * Returns the refusal, or null. Only text is checked here; a file's contents are the inspector's.
+   */
+  private async moneyCheck(op: string, args: Record<string, unknown>): Promise<string | null> {
+    const fields = MONEY_TEXT_FIELDS[op];
+    if (!fields) return null;
+    const text = fields.map((f) => args[f]).flatMap((v) => (Array.isArray(v) ? v : [v])).filter((v): v is string => typeof v === "string").join("\n");
+    if (!text.includes("£")) return null;
+    const auth = minorAmounts(args);
+    // The record's figures: the order (its amount, what was refunded, what is still refundable) or the enquiry.
+    if (typeof args.orderId === "string" && this.o.ports.economy) {
+      const r = await this.o.ports.economy("order.list", { orderId: args.orderId }).catch(() => null) as { orders?: Array<Record<string, unknown>> } | null;
+      const o = r?.orders?.[0];
+      if (o) {
+        minorAmounts(o, auth);
+        if (Number.isSafeInteger(o.amountMinor) && Number.isSafeInteger(o.refundedMinor)) auth.add(Math.max(0, (o.amountMinor as number) - (o.refundedMinor as number)));
+      }
+    }
+    if (typeof args.enquiryId === "string" && this.o.ports.economy) {
+      const r = await this.o.ports.economy("enquiry.read", { enquiryId: args.enquiryId }).catch(() => null);
+      if (r) minorAmounts(r, auth);
+    }
+    // An e-mail has no record to compare with: its calculations and itemised totals are still checked.
+    const figures = op === "mail.send" ? [] : [...auth];
+    const problems = moneyProblems(text, figures);
+    return problems.length ? moneyRefusal(problems, figures) : null;
+  }
+
   async inspect(paths: string[], cases: unknown[] = []): Promise<{ ok: true; report: QaInspectorReport } | { ok: false; reason: string; code: string }> {
     if (!paths.length || paths.length > 20) return { ok: false, code: "FLEET_BAD_REQUEST", reason: "paths: 1..20 workspace files" };
     for (const p of paths) {
@@ -1185,6 +1225,9 @@ export class FounderToolbox {
           if (!op) return refuse("FLEET_BAD_REQUEST", `op is one of ${Object.keys(ECONOMY_OPS[call.name]).join(", ")}`);
           const args: Record<string, unknown> = a.args && typeof a.args === "object" && !Array.isArray(a.args) ? { ...(a.args as Record<string, unknown>) } : {};
           if (IDEMPOTENT_OPS.has(op) && typeof args.idempotencyKey !== "string") args.idempotencyKey = `econ:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128).padEnd(8, "_");
+          // 2026-10-20: money in customer-facing text is checked before it is sent (exact arithmetic; the record's figures).
+          const money = await this.moneyCheck(op, args);
+          if (money) return refuse("FLEET_AMOUNT_MISMATCH", money);
           // v52: a storefront file comes from the founder's own workspace (resolved strictly inside it; at most 15 MB).
           if (op === "storefront.file" && typeof args.path === "string") {
             const f = this.resolve(args.path);
