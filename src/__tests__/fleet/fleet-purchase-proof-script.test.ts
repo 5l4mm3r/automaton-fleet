@@ -54,11 +54,14 @@ journey() { echo "\${JOURNEY:-true true true}"; }
 media_active() { echo "\${MEDIA:-inactive}"; }
 acq_max() { echo "\${ACQ:-101}"; }
 treasury_free() { echo "\${FREE:-2000}"; }
+owed_owner() { echo "\${OWED:-496}"; }
+claim_waits() { echo "\${WAITS:-0}"; }
 economics() { echo "\${ECON:-3 15000000 15000000 0 0}"; }
 breaker_tripped() { if [[ -f "${dir}/breaker" ]]; then echo t; else echo "\${BREAKER:-f}"; fi; }
 Q() { echo "$1" >> "${dir}/sql.log"
   case "$1" in
     *"fleet_routing_active("*) echo "\${ROUTED:-t}";;
+    *"SELECT owner_proof FROM fleet_customer_orders"*) echo "\${IS_PROOF:-t}";;
     *"SELECT rail_id FROM fleet_payment_rails"*) echo "b71b3f3c-901c-4f22-818b-3e1b1269f420";;
     *"FROM fleet_paypal_transactions WHERE rail_id"*) echo "\${TXN:-}";;
     *"m.created_at > (SELECT max(updated_at)"*) echo "\${CONFIRMED:-f}";;
@@ -364,6 +367,33 @@ Q() { echo "$1" >> "${dir}/sql.log"
     expect(run(["start", "200"]).code).toBe(0);
     expect(run(["rerun", "499", "6", "600"], { PAYMENT: "paid", ACQ: "100", FREE: "1098" }).out)
       .toContain("the treasury cannot pay the refund after this run: free 1098p, needed 1099p (the 500p refund + up to 499p of AI usage + up to 100p of its tax/fee, both owed to the owner)");
+  });
+
+  it("v106: with the owner's claim waiting, the rerun needs only the refund covered (free 26p + owed 496p = 522p ≥ 500p); without it, a deposit or the decision", () => {
+    expect(run(["start", "200"]).code).toBe(0);
+    fs.rmSync(log);
+    const no = run(["rerun", "499", "6", "600"], { PAYMENT: "paid", ACQ: "100", FREE: "26" });
+    expect(no.code).toBe(1);
+    expect(no.out).toContain("free 26p, needed 1099p");
+    expect(no.out).toContain("Deposit and record it (test-funding), or record that your claim waits (owner-claim-waits)");
+    expect(no.host).toEqual([]);
+    const tight = run(["rerun", "499", "6", "600"], { PAYMENT: "paid", ACQ: "100", FREE: "3", OWED: "496", WAITS: "1" });
+    expect(tight.code).toBe(1);
+    expect(tight.out).toContain("free 3p + owed to the owner 496p = 499p, needed 500p");
+    const ok = run(["rerun", "499", "6", "600"], { PAYMENT: "paid", ACQ: "100", FREE: "26", OWED: "496", WAITS: "1", DELIVERIES: "2" });
+    expect(ok.code, ok.out).toBe(0);
+    expect(ok.out).toContain("your claim waits behind this refund (v106, recorded): free cash 26p + owed to you 496p = 522p covers the 500p refund; the run's AI costs (≤ 599p) add to what is owed to you");
+    expect(ok.out).toContain("ALL-INCLUSIVE MAXIMUM 599p (approved: 600p)");                  // the run's terms are unchanged
+  });
+
+  it("owner-claim-waits records the owner's decision for the proof order only (no deposit, no refund, no run)", () => {
+    fs.rmSync(log, { force: true });
+    const r = run(["owner-claim-waits"], { WAITS: "1" });
+    expect(r.code, r.out).toBe(0);
+    expect(r.host).toEqual([expect.stringMatching(new RegExp(`^A economy-owner-claim-wait ${ORDER} owner, 2026-10-20: my AI-credit claim waits`))]);
+    expect(r.out).toContain("OWNER CLAIM WAITS");
+    expect(run(["owner-claim-waits"], { WAITS: "0" }).out).toContain("the decision is not live");
+    expect(run(["owner-claim-waits"], { IS_PROOF: "f" }).out).toContain("the order is not the owner's proof order");
   });
 
   it("a rerun rejects purchases before any reservation (spend circuit breaker), stops if it is reset, and its stop resets only its own trip", () => {

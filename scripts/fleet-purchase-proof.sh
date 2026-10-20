@@ -33,6 +33,11 @@
 #                    this test as OWNER FUNDING of exactly its verified net (PayPal's own transaction record: completed, GBP,
 #                    received, not yet claimed; amount less PayPal's fee) and attributes the transaction to it. It is not
 #                    backing for the agents' capital and does not make the Fleet launch-ready.
+#   … owner-claim-waits [why]   SEPARATE, owner-run (v106; owner, 2026-10-20: "my claim waits"): records the owner's decision
+#                    that what is owed to them for AI credit waits behind the refund of THIS proof order — custody may then
+#                    send that refund from cash otherwise committed to the owner's claim. The claim is not forgiven, reduced
+#                    or paid; no other refund or payment changes. With it, rerun needs free cash + the owner's claim to
+#                    cover the refund (the run's AI costs only add to that claim); without it, a deposit (test-funding).
 #   … buy            prints the EXISTING order's page (no new order, no new payment): pay it with PayPal yourself, from an
 #                    account other than the treasury's
 #   … refund [why]   the owner's override: refund the proof order in full (recorded as an OWNER OVERRIDE, not as the agent's
@@ -101,6 +106,9 @@ media_active() { systemctl is-active automaton-fleet-media.service 2>/dev/null; 
 acq_max() { Q "SELECT COALESCE(ceil($1 * max((acq_total_usd_cents * 1000000.0 - usd_purchased) / usd_purchased)), 0)::bigint FROM fleet_ai_credit_lots WHERE usd_remaining > 0 AND acq_total_usd_cents IS NOT NULL"; }
 breaker_tripped() { Q "SELECT tripped FROM fleet_spend_circuit_breaker WHERE id = 1"; }
 treasury_free() { Q "SELECT (fleet_treasury_liquidity(r.rail_id) ->> 'freeMinor') FROM fleet_payment_rails r WHERE r.provider = 'paypal' AND r.status = 'active' ORDER BY r.created_at LIMIT 1"; }
+# v106: what is owed to the owner (AI credit their card paid), and whether the owner let that claim wait behind the proof's refund.
+owed_owner() { Q "SELECT (fleet_treasury_liquidity(r.rail_id) #>> '{committed,owedToOwnerMinor}') FROM fleet_payment_rails r WHERE r.provider = 'paypal' AND r.status = 'active' ORDER BY r.created_at LIMIT 1"; }
+claim_waits() { Q "SELECT count(*) FROM fleet_owner_claim_waits w JOIN fleet_customer_orders o USING (order_id) WHERE o.owner_proof AND w.ended_at IS NULL" 2>/dev/null || echo 0; }
 START() { cat "$D/proof-start.txt" 2>/dev/null; }
 # When Agent-1 last resumed under this proof (start, or a continue after an owner pause).
 RESUMED() { tail -1 "$D/proof-resumed.txt" 2>/dev/null || START; }
@@ -339,15 +347,30 @@ rerun)
   # what is owed to the owner (the AI credit is owner-funded: usage and its tax/fee become owner payable).
   acq=$(acq_max "$2"); free=$(treasury_free); need=$(( PRICE_MAX + $2 + acq ))
   [[ "$acq" =~ ^[0-9]+$ && "$free" =~ ^-?[0-9]+$ ]] || die "the AI credit's acquisition cost or the treasury's free cash is unknown"
+  # v106: when the owner let their own claim wait behind this refund, the refund's cover is free cash + that claim, and the
+  # run's AI costs only add to the claim (they wait too): the refund alone must be covered.
+  cover=$free; waits=$(claim_waits)
+  if [[ "$waits" == 1 ]]; then
+    owed=$(owed_owner); [[ "$owed" =~ ^[0-9]+$ ]] || die "what is owed to the owner is unknown"
+    cover=$(( free + owed )); need=$PRICE_MAX
+  fi
   # The all-inclusive maximum: the usage ceiling (a hard cap: every request is charged at most its reservation, a true
   # upper bound of its cost) + the most tax/fee that usage can post in whole pence. The same figures as the funding guard.
   allin=$(( $2 + acq ))
   (( ${4:-0} == 0 || allin <= ${4:-0} )) || die "the all-inclusive maximum would be ${allin}p (${2}p usage + up to ${acq}p tax/fee), over the approved ${4}p"
-  (( free >= need )) || die "the treasury cannot pay the refund after this run: free ${free}p, needed ${need}p (the ${PRICE_MAX}p refund + up to ${2}p of AI usage + up to ${acq}p of its tax/fee, both owed to the owner)"
+  if [[ "$waits" == 1 ]]; then
+    (( cover >= need )) || die "the treasury cannot pay the refund even with the owner's claim waiting: free ${free}p + owed to the owner ${owed}p = ${cover}p, needed ${need}p"
+  else
+    (( free >= need )) || die "the treasury cannot pay the refund after this run: free ${free}p, needed ${need}p (the ${PRICE_MAX}p refund + up to ${2}p of AI usage + up to ${acq}p of its tax/fee, both owed to the owner). Deposit and record it (test-funding), or record that your claim waits (owner-claim-waits)"
+  fi
   echo "  the SAME paid proof order $o: no new order, no buyer message, no repair by hand; Agent-1 works from its own record and files"
   echo "  1. a NEW run budget: $(printf '£%d.%02d' $(($2 / 100)) $(($2 % 100))) of AI for $3 h (checked before every model request, in-flight calls included); never raised, never restarted"
   echo "     at most ${acq}p of the AI credit's acquisition tax/fee on top (its receipts' ratio): ALL-INCLUSIVE MAXIMUM ${allin}p$( (( ${4:-0} > 0 )) && echo " (approved: ${4}p)")"
-  echo "     the treasury's free cash ${free}p covers the refund after the run (needed ${need}p = ${PRICE_MAX}p refund + ${allin}p)"
+  if [[ "$waits" == 1 ]]; then
+    echo "     your claim waits behind this refund (v106, recorded): free cash ${free}p + owed to you ${owed}p = ${cover}p covers the ${PRICE_MAX}p refund; the run's AI costs (≤ ${allin}p) add to what is owed to you"
+  else
+    echo "     the treasury's free cash ${free}p covers the refund after the run (needed ${need}p = ${PRICE_MAX}p refund + ${allin}p)"
+  fi
   echo "     paid tools: no web search or images (media gateway stopped), no phone or SMS (no provider), no purchase (the spend circuit breaker rejects it before any reservation; no payout activation or signer, no card authority)"
   echo "     each request reserves a true upper bound of its cost; when the NEXT request's reservation does not fit what is left, the controller ends the run at once and records what it needed and what was left (no fixed threshold)"
   A cognition-run $A1 start $2 $3 "purchase proof rerun (owner's revised terms): the outstanding correction, then the buyer's refund; AI ceiling ${2}p" | jq -c '.run | {ceilingMinor, endsAt}' \
@@ -411,6 +434,15 @@ test-funding)
   echo "  books vs PayPal (capital backing reconciliation): $(A economy-capital-backing 2>/dev/null | jq -c '{differenceMinor, unbackedMinor, paypal: .paypal.totalMinor}')"
   echo "  the treasury's free cash now: $(treasury_free)p"
   echo "== TEST FUNDING RECORDED $(ts): ${net}p owner funding for this test (PayPal $2)" ;;
+owner-claim-waits)
+  o=$(ORDER); [[ -n "$o" ]] || die "no proof order"
+  [[ "$(Q "SELECT owner_proof FROM fleet_customer_orders WHERE order_id = '$o'")" == t ]] || die "the order is not the owner's proof order"
+  why=${2:-"owner, 2026-10-20: my AI-credit claim waits behind the refund of my own proof order (no deposit)"}
+  echo "  before: free cash $(treasury_free)p; owed to the owner $(owed_owner)p"
+  A economy-owner-claim-wait "$o" "$why" | jq -c '{ok, waitId, already, note}' || die "the decision could not be recorded (nothing changed)"
+  [[ "$(claim_waits)" == 1 ]] || die "the decision is not live"
+  echo "  the claim is unchanged (still owed in full): owed to the owner $(owed_owner)p; nothing else changed"
+  echo "== OWNER CLAIM WAITS $(ts): the refund of proof order $o may use the cash committed to the owner's claim" ;;
 buy)
   [[ -n "$(START)" && "$(paused $A1)" == f ]] || die "start the proof first"
   guard; o=$(ORDER)
@@ -504,5 +536,5 @@ watch)
   (( $(Q "SELECT count(*) FROM fleet_cognition_log WHERE agent_id = '$A1' AND at > '$last'") > MAX_IDLE_CALLS )) \
     && { stop_proof "FAILURE: $MAX_IDLE_CALLS model calls without a new customer event"; exit 0; }
   exit 0 ;;
-*) sed -n 2,61p "$0"; exit 2 ;;
+*) sed -n 2,66p "$0"; exit 2 ;;
 esac

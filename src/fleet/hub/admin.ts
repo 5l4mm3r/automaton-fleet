@@ -148,6 +148,13 @@ export class PgHubAdmin {
   refundAuthorityEnd(authorityId: string, reason: string | null, actor: string) {
     return this.one(`SELECT fleet_admin_refund_authority_end($1, $2, $3) AS r`, [authorityId, reason, actor]);
   }
+  /** v106: the owner's own claim (AI credit owed to the owner) waits behind the refund of the owner's own proof order. */
+  ownerClaimWait(orderId: string, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_owner_claim_wait($1, $2, $3) AS r`, [orderId, reason, actor]);
+  }
+  ownerClaimWaitEnd(orderId: string, reason: string | null, actor: string) {
+    return this.one(`SELECT fleet_admin_owner_claim_wait_end($1, $2, $3) AS r`, [orderId, reason, actor]);
+  }
   refundAuthorities() {
     return this.one(`SELECT fleet_refund_authorities_json(false) AS r`);
   }

@@ -291,6 +291,71 @@ describe.skipIf(!PG_BIN)("v96: custody enforces refund authority at dispatch", (
     }
   });
 
+  it("v106: the owner's claim waits behind the refund of the owner's own proof order only — without a deposit; the claim stays owed; every other refund still waits", async () => {
+    const liquidity = () => R.one<any>(`fleet.fleet_treasury_liquidity($1)`, [rail.railId]);
+    // An ordinary sale (its refund must keep waiting) and the owner's proof purchase (as fleet_admin_offer_proof_buy makes it).
+    const normal = await sale(300);
+    await grant(normal.orderId, 300, 300, 300, 2);
+    const k = await R.one(`fleet.fleet_econ_paypal_checkout($1, $2::jsonb)`, [F.id, JSON.stringify({ venture: "prints", amountMinor: 500,
+      description: "Proof purchase", idempotencyKey: `proof:${crypto.randomBytes(16).toString("hex")}` })]);
+    const checkoutId = k.checkout.checkoutId as string;
+    const proofOrder = (await R.q(`INSERT INTO fleet.fleet_customer_orders (agent_id, venture_id, checkout_id, item, amount_minor, currency, fulfilment,
+        access_token, origin_hash, owner_proof)
+      SELECT agent_id, venture_id, checkout_id, description, amount_minor, currency, 'digital_file', md5(random()::text) || md5(random()::text),
+        encode(sha256(convert_to('owner-proof:' || $2, 'UTF8')), 'hex'), true FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1 RETURNING order_id`,
+      [checkoutId, OWNER]))[0].order_id as string;
+    const tok = id("ORD");
+    await cx("cx_paypal_checkout_update", [W, checkoutId, "open", tok, `https://www.paypal.com/checkoutnow?token=${tok}`, null]);
+    await cx("cx_paypal_checkout_update", [W, checkoutId, "approved", null, null, null]);
+    const proofCapture = id("CAP");
+    expect(await cx("cx_paypal_capture_record", [W, checkoutId, proofCapture, "COMPLETED", 500, 45, "GBP", "webhook"])).toMatchObject({ ok: true, ownerProof: true });
+    // Production's position on 2026-10-20: owed to the owner 496p for AI credit; free cash 26p.
+    const owed0 = (await liquidity()).committed.owedToOwnerMinor as number;
+    await R.q(`SELECT fleet.fleet_ledger_post('ai_credit_owner_payable_opening', 'v106-owed', $1, 'test: owed to the owner', 'owner', NULL, NULL, NULL, NULL, NULL, now(),
+      jsonb_build_array(jsonb_build_object('account', 'fleet:treasury:owner_reimbursable', 'side', 'D', 'amount', 496),
+                        jsonb_build_object('account', 'fleet:owner:payable', 'side', 'C', 'amount', 496)))`, [OWNER]);
+    await cx("cx_paypal_balance_record", [W, rail.railId, "GBP", 100_000_000, 100_000_000]);
+    // Custody's cash for new refunds = free + the refunds already requested (they are its candidates; earlier tests leave some).
+    const forRefunds = (l: any) => (l.freeMinor as number) + (l.committed.refundsRequestedMinor as number);
+    const committed = 100_000_000 - forRefunds(await liquidity());
+    await cx("cx_paypal_balance_record", [W, rail.railId, "GBP", 26 + committed, 26 + committed]);
+    expect(forRefunds(await liquidity())).toBe(26);                       // as production, before any refund is requested
+    const normalRefund = await refund(normal.orderId, 300);
+    const proofRefund = await econNext(R, F, "order.refund", { orderId: proofOrder, reason: "the buyer asked for a full refund", idempotencyKey: idem() });
+    expect(proofRefund.ok, JSON.stringify(proofRefund)).toBe(true);
+    await grant(proofOrder, 500, 500, 500, 2);
+    const l0 = await liquidity();
+    expect(forRefunds(l0)).toBe(26);                                       // the two new requests are candidates, not cash
+    expect(l0.committed.owedToOwnerMinor).toBe(owed0 + 496);
+    // Without the owner's decision: neither leaves (26p free for new refunds; the owner's claim is committed).
+    await worker.tick();
+    expect((await req(proofRefund.refund.refundRequestId)).status).toBe("requested");
+    expect(sentFor(proofCapture)).toHaveLength(0);
+    const hub = new PgHubAdmin({ connectionString: R.pgc.ownerUrl });
+    try {
+      // Only the owner's own proof order can be put ahead of the owner's claim; only the owner decides it.
+      await expect(hub.ownerClaimWait(normal.orderId, "not a proof order", OWNER)).rejects.toThrow(/only the refund of the owner's own proof order/);
+      await expect(svc.query(`SELECT fleet.fleet_admin_owner_claim_wait($1, 'agent tries', $2)`, [proofOrder, OWNER])).rejects.toThrow(/permission denied/);
+      const w = await hub.ownerClaimWait(proofOrder, "owner, 2026-10-20: my AI-credit claim waits behind my own proof refund", OWNER);
+      expect(w).toMatchObject({ ok: true, orderId: proofOrder });
+      expect(await hub.ownerClaimWait(proofOrder, "again", OWNER)).toMatchObject({ ok: true, already: true, waitId: w.waitId });
+      await worker.tick();
+      // The proof refund is sent and completed under its order-only authority; the ordinary refund still waits.
+      expect(await req(proofRefund.refund.refundRequestId)).toMatchObject({ status: "completed", requested_by: "agent" });
+      expect(sentFor(proofCapture)).toHaveLength(1);
+      expect((await req(normalRefund)).status).toBe("requested");
+      expect(sentFor(normal.captureId)).toHaveLength(0);
+      // The owner's claim is unchanged: still owed in full, still committed; nothing was forgiven or paid.
+      expect((await liquidity()).committed.owedToOwnerMinor).toBe(owed0 + 496);
+      expect(await R.q(`SELECT event_type FROM fleet.fleet_events WHERE event_type = 'owner_claim_waits' AND detail ->> 'orderId' = $1`, [proofOrder])).toHaveLength(1);
+      expect(await hub.ownerClaimWaitEnd(proofOrder, "test done", OWNER)).toMatchObject({ ok: true, ended: true });
+      expect((await R.one(`fleet.fleet_ledger_verify()`)).ok).toBe(true);
+      expect((await R.store.auditPrivileges()).problems).toEqual([]);
+    } finally { await hub.close(); }
+    // Leave the suite's PayPal reading generous again for the tests after this one.
+    await cx("cx_paypal_balance_record", [W, rail.railId, "GBP", 100_000_000, 100_000_000]);
+  });
+
   it("2026-10-20 test funding: a deposit on PayPal's own record is recorded as owner funding of exactly its net, then attributed (counted once)", async () => {
     const txn = id("DEP");
     await cx("cx_paypal_txn_record", [W, rail.railId, JSON.stringify({ transactionId: txn, eventCode: "T0300", initiatedAt: new Date().toISOString(), status: "S", currency: "GBP", amountMinor: 1100, feeMinor: -27 })]);

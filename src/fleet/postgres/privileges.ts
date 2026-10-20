@@ -1442,6 +1442,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_paypal_refund_requests: new Set(["fleet_order_refund_request", "cx_paypal_refund_result", "fleet_refund_request_completed", "cx_paypal_refund_unresolved",
       "cx_paypal_refund_work"]),
     fleet_refund_authorities: new Set(["fleet_admin_refund_authority_grant", "fleet_admin_refund_authority_end"]),
+    // v106: the owner lets their own claim wait behind the refund of their own proof order (owner only).
+    fleet_owner_claim_waits: new Set(["fleet_admin_owner_claim_wait", "fleet_admin_owner_claim_wait_end"]),
     fleet_control_ai_budget: new Set(["fleet_admin_fleet_control_ai_budget"]),
     fleet_control_ai_reservations: new Set(["svc_fleet_control_ai_reserve", "svc_fleet_control_ai_settle"]),
   };

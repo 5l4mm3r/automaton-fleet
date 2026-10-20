@@ -95,6 +95,8 @@
  *                                               refunds, autonomous within it) or one order only (≤ 168 h, a total required); a new grant of
  *                                               the same scope ends the previous one
  *   economy-refund-authority-end <authorityId> [reason…]
+ *   economy-owner-claim-wait <orderId> <reason…>   (v106: the owner's own claim waits behind the refund of the owner's proof order)
+ *   economy-owner-claim-wait-end <orderId> [reason…]
  *   hub-refund-authorities                                                    (v96) every refund authority, live or ended, with what it has used
  *   hub-paypal-reconciliation                                                 (v98) PayPal evidence needing the owner, reconciliation status
  *                                               (Transaction Search / order audit / token scopes) and open checkouts' PayPal orders
@@ -246,7 +248,7 @@ export const HUB_COMMANDS = new Set([
   "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
   "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser", "hub-dashboard-enroll", "hub-dashboard-totp-reset",
   "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
-  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "hub-refund-authorities", "hub-paypal-reconciliation", "economy-paypal-reconciliation-resolve", "economy-paypal-order-retire", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "hub-fleet-control-ai", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
+  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "economy-owner-claim-wait", "economy-owner-claim-wait-end", "hub-refund-authorities", "hub-paypal-reconciliation", "economy-paypal-reconciliation-resolve", "economy-paypal-order-retire", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "hub-fleet-control-ai", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
   // v66 – v72 (missing until 2026-10-12: these were unreachable from fleet:admin)
   "economy-capital-backing", "economy-capital-back", "economy-spend-breaker", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
@@ -385,6 +387,10 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-refund-authority-grant":
       return h.refundAuthorityGrant(p[0] === "standing" ? "standing" : "order", p[0] === "standing" ? null : p[0], int(p[1], "maxRefundMinor"), int(p[2], "maxDailyMinor"),
         p[3] === "-" ? null : int(p[3], "maxTotalMinor"), p[4] === "ongoing" ? null : int(p[4], "hours"), p.slice(5).join(" "), actor);
+    case "economy-owner-claim-wait":
+      return h.ownerClaimWait(p[0], p.slice(1).join(" "), actor);
+    case "economy-owner-claim-wait-end":
+      return h.ownerClaimWaitEnd(p[0], p.slice(1).join(" ") || null, actor);
     case "economy-refund-authority-end":
       return h.refundAuthorityEnd(p[0], p.slice(1).join(" ") || null, actor);
     case "hub-refund-authorities":
