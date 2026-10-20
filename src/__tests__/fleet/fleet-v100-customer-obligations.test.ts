@@ -24,7 +24,7 @@ import { LoopGuard } from "../../fleet/founder/loop-guard.js";
 import { FOUNDER_MANIFEST_V2, manifestSha256 } from "../../fleet/capabilities.js";
 import { capabilityView } from "../../fleet/cognition/capability-signature.js";
 import { obligationLines, parseObligations, refusalReason } from "../../fleet/founder/obligations.js";
-import type { ToolCall } from "../../fleet/cognition/types.js";
+import { FOUNDER_TOOLS, type ToolCall } from "../../fleet/cognition/types.js";
 
 const CAPS = { ok: true, origin: "reseed_founder", manifestId: "founder-v2", manifestSha256: manifestSha256(FOUNDER_MANIFEST_V2),
   allowed: [...FOUNDER_MANIFEST_V2.allowed], reproductionExecutable: false, paymentExecutable: false, experimentsEnabled: false, ownerRequests: true };
@@ -212,5 +212,13 @@ describe("v100: a buyer's request is an obligation until it is resolved", () => 
     expect(out.output).toContain("not your request: your files were not judged");
     const bad = await tb.execute(c("deliverable", { op: "inspect", args: { paths: ["product/missing.xlsx"] } }));
     expect(bad).toMatchObject({ ok: false, refused: "FLEET_BAD_REQUEST" });   // a genuine bad request stays one
+  });
+
+  it("the deliver tool says how to send a corrected file on a delivered order: resendReason with after (the earlier delivery's operation)", () => {
+    // 2026-10-20 (the revision rehearsal in real units): "resendReason (only to send a delivered order again)" alone is
+    // refused FLEET_OPERATION_EXISTS by the v95 operation register; the description must name `after`.
+    const wallet = FOUNDER_TOOLS.find((t) => t.name === "wallet")!.description;
+    const deliver = wallet.slice(wallet.indexOf("op deliver:"), wallet.indexOf("op fulfil:"));
+    expect(deliver).toMatch(/resendReason\? \(only to send a delivered order again — with after: the operationId of the order's latest delivery/);
   });
 });

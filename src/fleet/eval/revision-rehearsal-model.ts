@@ -37,7 +37,10 @@ for c in "ABCDE": s[c + "1"].font = openpyxl.styles.Font(bold=True)
 import os; os.makedirs("product", exist_ok=True); wb.save("product/landlord-tracker.xlsx"); print("built")
 PY`;
 /** The revision: the same workbook recalculated and saved by LibreOffice, so every formula's value is in the file. */
-const RECALC = "mkdir -p revised && cd product && soffice --headless --convert-to xlsx --outdir ../revised landlord-tracker.xlsx; echo rc=$?; ls -l ../revised";
+// A later turn does not recalculate again: that would replace the bytes it inspected and reviewed (the review then no
+// longer covers them) — the founder looks at its workspace first.
+const RECALC = "if [ -s revised/landlord-tracker.xlsx ]; then echo 'rc=0 (recalculated earlier: revised/landlord-tracker.xlsx)'; "
+  + "else mkdir -p revised && cd product && soffice --headless --convert-to xlsx --outdir ../revised landlord-tracker.xlsx; echo rc=$?; ls -l ../revised; fi";
 
 const criteria = (what: string) => [
   { criterion: "Every renewal date is a real date in the file, shown as a date", met: true, evidence: `${what}: the inspection's displayed-dates and saved-values checks` },
@@ -89,9 +92,10 @@ export class RevisionRehearsalModel extends ScriptedProvider {
         content = "A buyer is waiting: read the thread and acknowledge.";
         toolCalls = [call("customers", { op: "order_thread", args: { orderId: open } }), call("customers", { op: "order_message", args: { orderId: open, message: REVISION_ACK } })];
       } else if (after) {
-        const again = [...made].reverse().find((c) => c.name === "customers" && c.arguments.op === "order_message");
-        content = "The platform asks me to name the earlier message: send it as a further one.";
-        toolCalls = [call("customers", { op: "order_message", args: { ...(again?.arguments.args as Record<string, unknown>), after } })];
+        // The refused call (a further message, or the corrected file as a further delivery) names the latest operation.
+        const again = [...made].reverse().find((c) => (c.name === "customers" && c.arguments.op === "order_message") || (c.name === "wallet" && c.arguments.op === "deliver"));
+        content = "The platform asks me to name the earlier operation: send this as a further one.";
+        toolCalls = again ? [call(again.name, { op: again.arguments.op, args: { ...(again.arguments.args as Record<string, unknown>), after } })] : [sleep("an unexpected refusal; waiting", "a new buyer message")];
       } else if (!all.includes("rc=")) {
         content = "Recalculate the tracker so every value is saved.";
         toolCalls = [call("exec", { command: RECALC })];
