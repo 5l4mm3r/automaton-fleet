@@ -5,7 +5,8 @@
  * 1. Every founder step now runs on the critical tier (router: founder_work, T3, effort high). Its output room grows from
  *    8,000 to 16,000 tokens: deep reasoning and a finished product's build script in one step must not be cut off. Same
  *    model, same prices; the tier stays enabled and verified (fleet_cognition_tier_set would void the model's
- *    verification, which a change of output room does not need). Recorded as cognition_tier_set.
+ *    verification, which a change of output room does not need). Recorded by the migration itself (updated_by
+ *    migration:v102); a rollout appends no events but role grants.
  * 2. `after` naming no operation of the agent's (Agent-1 passed its message's id four times while resending its corrected
  *    file): the refusal now says that `after` takes an operationId and names the latest operation on that subject — or
  *    that there is none and `after` is omitted.
@@ -30,8 +31,6 @@ const OP_BEGIN = restate(V95_SQL, "fleet_op_begin", [
 
 export const V102_SQL = `
 UPDATE fleet_cognition_tiers SET max_output_tokens = ${T3_MAX_OUTPUT_TOKENS_V102}, updated_at = now(), updated_by = 'migration:v102' WHERE tier = 'T3';
-SELECT fleet_event('cognition_tier_set', NULL, 'migration:v102', jsonb_build_object('tier', 'T3', 'maxOutputTokens', ${T3_MAX_OUTPUT_TOKENS_V102},
-  'why', 'owner 2026-10-20: every founder step on the critical tier; room for deep reasoning and a finished product in one step'));
 
 ${OP_BEGIN}
 
