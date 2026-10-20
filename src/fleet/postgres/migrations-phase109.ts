@@ -14,8 +14,14 @@
  * merchant origin; the account the agent registers there under that release is then the one its browser fill and its ONE
  * card request may use. Nothing else changes: one origin, one purchase, ≤ 500p, ≤ 24 h. Agents are told how to propose a
  * purchase (fleet-capability-status v16: capabilities op request) — the owner decides the release.
+ *
+ * And — material spreadsheet defects are never a clean pass (owner, 2026-10-21: "material defects cannot be presented as a
+ * clean quality pass"): a review records automated_ok only when every delivered spreadsheet's cached_values check PASSES
+ * (formulas saved with their values), so a "pass" review — and with it a delivery or a publication — needs the values saved,
+ * not only public sale (v108). The refusal names the check and how to fix it.
  */
 import { V108_SQL } from "./migrations-phase108.js";
+import { V96_SQL } from "./migrations-phase96.js";
 import { restate as restateRaw } from "./migrations-phase42.js";
 import { CAPABILITY_STATUS_V14 } from "./knowledge-capability-status-v14.js";
 import { V15_ENTRIES } from "./migrations-phase108.js";
@@ -70,6 +76,18 @@ const V16 = V15_ENTRIES.map((e) => ({ ...e, version: 16, lastReviewed: "2026-10-
   factsThatChange: [...e.factsThatChange, ...V16_FACTS] }));
 void CAPABILITY_STATUS_V14;
 
+const REVIEW_RECORD = restate(V96_SQL, "fleet_econ_review_record", [
+  [`     WHERE k ->> 'status' = 'fail' OR k ->> 'id' = 'tool_unavailable');   -- a check that could not run never passes`,
+   `     WHERE k ->> 'status' = 'fail' OR k ->> 'id' = 'tool_unavailable'      -- a check that could not run never passes
+        OR (k ->> 'id' = 'cached_values' AND k ->> 'status' <> 'pass'));    -- v109: a spreadsheet's formulas saved without their values`],
+  [`    RAISE EXCEPTION 'FLEET_REVIEW_AUTOMATED_FAILED: the automated checks found failures; fix the files (or record verdict fail)';`,
+   `    RAISE EXCEPTION 'FLEET_REVIEW_AUTOMATED_FAILED: the automated checks found failures%; fix the files (or record verdict fail)',
+      CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(v_auto -> 'files') f, jsonb_array_elements(COALESCE(f -> 'checks', '[]'::jsonb)) k
+                         WHERE k ->> 'id' = 'cached_values' AND k ->> 'status' <> 'pass')
+           THEN ' (a spreadsheet saves formulas without their values: previewers, phones and mail clients show them blank — recalculate and save it with the office application, or pass value= to XlsxWriter''s write_formula, then inspect again)'
+           ELSE '' END;`],
+]);
+
 export const EVENT_ROUTES_V109 = Object.freeze({ P2_IMPORTANT: ["closed_order_mail"] } as const);
 
 export const V109_SQL = `
@@ -86,6 +104,8 @@ $$;
 ${RELEASE}
 
 ${REFUSAL}
+
+${REVIEW_RECORD}
 
 SELECT fleet_admin_knowledge_library_load('${JSON.stringify({ entries: V16 }).replace(/'/g, "''")}'::jsonb, 'migration');
 

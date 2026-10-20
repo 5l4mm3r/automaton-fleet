@@ -1,5 +1,8 @@
 # Automaton Fleet — Master Launch Specification (revision 3)
 
+> 2026-10-21: deployment and live-verification status here is historical (revision 3, 2026-10-08). Current status:
+> docs/operations/completion-matrix.md and the release records under docs/evaluations/launch-candidate/.
+
 Status: AUTHORITATIVE for the launch candidate (2026-10-08). It supersedes revision 1 (commit f4695f6) and earlier design
 notes where they conflict. The Gumroad design (`gumroad-revenue-integration.md`) remains the detailed reference for the
 storefront and settlement; its G3/G4 stages are now built (v52).

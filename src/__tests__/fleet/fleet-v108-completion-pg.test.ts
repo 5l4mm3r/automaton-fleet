@@ -227,6 +227,22 @@ describe.skipIf(!PG_BIN)("v108 launch completion (PostgreSQL)", { timeout: 300_0
     if (wasOpen) await R.one(`fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
   });
 
+  it("v109: a review with a spreadsheet whose formulas are saved without values is not a pass (and says how to fix it)", async () => {
+    const bytes = Buffer.from("PK workbook bytes for the test");
+    const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+    const record = (cached: string) => R.econ(F, "review.record", { subject: "offer", offerId, files: [{ name: "tracker.xlsx", sha256, sizeBytes: bytes.length }],
+      automated: { inspector: "fleet-qa-3", ok: true, files: [{ path: "tracker.xlsx", sha256, sizeBytes: bytes.length, detectedType: "xlsx", ok: true,
+        checks: [{ id: "recalc", status: "pass", detail: "1200 formulas" }, { id: "cached_values", status: cached, detail: "1194 formula cell(s) saved without a value" }] }] },
+      criteria: [{ criterion: "A tracker workbook", met: true, evidence: "the workbook opened and checked" }, { criterion: "Dates readable", met: true, evidence: "dd/mm/yyyy" }, { criterion: "No errors", met: true, evidence: "recalc" }],
+      verdict: "pass" });
+    const warn = await record("warn");
+    expect(warn.ok).toBe(false);
+    expect(warn.reason ?? warn.code).toMatch(/FLEET_REVIEW_AUTOMATED_FAILED|saves formulas without their values/);
+    expect(JSON.stringify(warn)).toMatch(/saves formulas without their values: previewers, phones and mail clients show them blank/);
+    const ok = await record("pass");
+    expect(ok, JSON.stringify(ok)).toMatchObject({ ok: true, verdict: "pass", automatedOk: true });
+  });
+
   it("a product is not sold publicly while a spreadsheet in its passing review saves formulas without their values", async () => {
     const digest = await R.one<string>(`fleet.fleet_files_digest(fleet.fleet_offer_deliverables($1))`, [offerId]);
     const review = async (cachedStatus: string) => (await R.q(`INSERT INTO fleet.fleet_artifact_reviews (agent_id, subject, offer_id, files, files_digest, inspector, automated, automated_ok, criteria, verdict)
