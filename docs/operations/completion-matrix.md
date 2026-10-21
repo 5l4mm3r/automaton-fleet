@@ -46,7 +46,7 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 | Requirement | Decided by | Where / evidence | Status | Remaining action |
 |---|---|---|---|---|
 | Model reservations = true cost bound (full request + output); overruns visible; run ends at the next unfit request | OWNER 2026-10-20 | costBoundMicro; v104 | done | — |
-| Fleet Control spends nothing until its budget is set | IMPL (owner sets value) | A7, fleet-spend-review-v64-pg; budget unset | done | set at D6 |
+| Fleet Control spends nothing until its budget is set; a triggered review then BLOCKS (pending, never approved) | IMPL (owner sets value) | A7, fleet-spend-review-v64-pg; budget unset; v110 adds clear | done | card proof: a bounded review budget set and cleared by launch-checks; launch value at D6 |
 | Paid search charged to the agent, reserved first | IMPL | media gateway (stopped) | done | restart at D6 |
 | Purchases: reservation + contextual review (no caps) | OWNER O19 | v64/v77/v88 | done | — |
 | Card proof: authorisation prevents (caps, one-purchase release), watchdog only cleans up | OWNER 2026-10-20 | v108 card release; launch-checks tests | done | live B3 |
@@ -58,8 +58,8 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 | Offer/order pages as service role; official PayPal checkout; consent; states | OWNER 2026-10-16 (consent) | v96–v99 tests, browser journeys; live C6 | done | — |
 | Replacing unusable PayPal orders without double capture | IMPL | v98 lifecycle (10) | done | — |
 | Reviewed bytes = delivered bytes | IMPL | review gate; C6 checksum f45c3d00… matched | done | — |
-| Buyer email joins the right order; obligations; replies by email | OWNER 2026-10-19/20 | v108 (fleet-v108-completion-pg) | done (tests) | **live** B1+B2 — from an address that never bought from Agent-1 (a closed-order buyer's mail goes to the owner by v109) |
-| Closed conversations (refund / 7 days / 10 msgs) on page AND email; closed-order mail kept for the owner | OWNER 2026-10-20 "Refund or 7 days"; 2026-10-21 "preserve them for owner review" | page: v108; email: v109 (installed 00:51Z) | done | — |
+| Buyer email joins the right order; obligations; replies by email | OWNER 2026-10-19/20 | v108 (fleet-v108-completion-pg) | done (tests) | **live** B1+B2 after v110 |
+| Closed conversations (refund / 7 days / 10 msgs) on page AND email; closed-order mail kept for the owner, per conversation | OWNER 2026-10-20 "Refund or 7 days"; 2026-10-21 "preserve them for owner review"; 2026-10-21 "Closing one order should not prevent that customer from contacting Agent-1 about a new enquiry" | page: v108; email: v109 (address-wide: a defect) → v110 e151095 (thread-linked or ambiguous → owner; new enquiry → agent; tests) | done (repo; rehearsed) | install v110 |
 | No cross-customer disclosure via subject / agent name / thread | IMPL | v108/v109 tests (other sender, stranger naming the agent) | done | — |
 | Geography: worldwide, no exclusions; country recorded | OWNER 2026-10-20 | v108; capability status v15, Field Guide | done | tax: see dependencies |
 | Seller legal details from verified records | OWNER | stored address "Albemarie" (owner, 10-17) | owner | re-save in HQ (C1) |
@@ -91,7 +91,7 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 | Local freeze ≠ provider cancellation | OWNER O5 | v49 | done | — |
 | Deploy/rollback preserves history (fix forward) | IMPL | rollout reconciliation; rehearsals every release | done | — |
 | Backup + restore, monitoring, alerts | IMPL | LIVE 2026-10-17; the heartbeat flagged disk ≥ 90 % from 2026-10-20 and failed at 100 % (alerted) | done | — |
-| Release retention (2026-10-21 incident: 84 releases filled the 72 GB disk; v109's first cutover failed "No space left on device", rolled itself back, nothing changed) | IMPL | 78 old releases + 79 stage copies deleted with the owner's approval (49 GB free); fleet-release.sh now refuses below 4 GB free; scripts/fleet-release-prune.sh (dry run default; keeps current, pinned, newest N — fleet-release-script, fleet-release-prune tests + rollback targets (controller OLD=, agents' latest upgrade from_commit), fail-closed --apply | done (repo; staged ~/fleet-release-prune.sh; production dry run: 0 to prune) | owner step after each release: dry run, check keep list, --apply. Agent-2's rollback target 973e0c1 was deleted in the cleanup (rebuild from git before using it) |
+| Release retention (2026-10-21 incident: 84 releases filled the 72 GB disk; v109's first cutover failed "No space left on device", rolled itself back, nothing changed) | IMPL | 78 old releases + 79 stage copies deleted with the owner's approval (49 GB free); fleet-release.sh now refuses below 4 GB free; scripts/fleet-release-prune.sh (dry run default; keeps current, pinned, newest N — fleet-release-script, fleet-release-prune tests + rollback targets (controller OLD=, agents' latest upgrade from_commit), fail-closed --apply | done (repo; staged ~/fleet-release-prune.sh; production dry run: 0 to prune) | owner step after each release: dry run, check keep list, --apply. Agent-2's rollback build 973e0c1 deleted in the cleanup — restored and verified 2026-10-21 |
 
 ## External dependencies (named, with evidence)
 - **PayPal reporting lag** (resolved 00:50Z): the balance and Transaction Search lagged the refund by ~3.5 h; reconciliation

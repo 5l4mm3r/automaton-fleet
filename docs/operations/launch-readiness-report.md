@@ -16,9 +16,12 @@ the current release, agent and unit pins, **the rollback targets** (the controll
 a0bbf4e — and each living agent's latest upgrade from_commit — Agent-1 2b7b490, Agent-2 973e0c1) and the newest 3; --apply
 refuses if a rollback target or the agents' records cannot be read. Not scheduled: after each release the owner runs the dry
 run, checks the keep list, then --apply. Disclosure: the 2026-10-21 cleanup kept "current + pinned + newest 3" and so deleted
-973e0c1, Agent-2's recorded rollback target (Agent-1's 2b7b490 and the controller's a0bbf4e were kept). Agent-2 is paused on
-b60e262; that rollback needs 973e0c1 rebuilt from git first (the rollback verifies the build on disk). The new dry run on
-production prunes nothing and flags it.
+973e0c1, Agent-2's recorded rollback target (Agent-1's 2b7b490 and the controller's a0bbf4e were kept). **Restored
+2026-10-21 04:39:40Z**: rebuilt from the exact recorded commit with the frozen lockfile, verified against upgrade b4548dbd's
+recorded build 77284506a0d3… and lockfile 1df54e35…, installed root-owned and read-only beside the others without
+switching `current`; fleet-release-reuse.sh: VERIFIED identical to the staged build; nothing non-root or writable.
+Agent-2 untouched (same unit PID, runtime b60e262, paused, upgrade record unchanged). The prune dry run: 0 to prune, no
+missing rollback target.
 
 ## Modules
 | Module | State | Remaining |
@@ -29,15 +32,16 @@ production prunes nothing and flags it.
 | D. Purchase, fulfilment, support | done (checkout, consent, country step, delivery, closed conversations on page and email, buyer email joins the order) | live email check; seller address re-save |
 | E. Quality | done (real-unit inspection; unsaved values never pass) | Agent-1 fixes its own tracker (live check) |
 | F. Card and identity | done in code (pre-launch exception installed, PG-tested, migration-rehearsed) | Agent-1's merchant proposal → card check |
-| G. Lifecycle, visibility, recovery | done (backups, restore, monitoring; disk alert fired); pruning keeps rollback targets | prune after each release (owner step); Agent-2's rollback target 973e0c1 was deleted in the cleanup — rebuild from git before relying on it |
+| G. Lifecycle, visibility, recovery | done (backups, restore, monitoring; disk alert fired); pruning keeps rollback targets | prune after each release (owner step); Agent-2's rollback build 973e0c1 restored and verified 2026-10-21 |
 
 ## Proposed: the workbook + email check (NOT approved by this report)
 `bash ~/launch-checks.sh checks 300 6 <your email>` — one run of Agent-1, sales closed:
-- **Your sending address.** Not your Gmail: it is the buyer on the refunded £5 order, and the v109 closed-order rule keeps
-  a closed-order buyer's mail for your review (HQ Mail, unassigned) instead of Agent-1 — a new email from it would never
-  reach Agent-1 (fleet_mail_to_order falls back to the buyer's address). Send from an address that never bought from
-  Agent-1 (e.g. your Proton address); the mail release names only that address. Recorded limit: a returning customer whose
-  orders are all closed reaches the owner, not the agent, even on a new topic.
+- **Your sending address: any, including your Gmail (v110).** v109 diverted ALL mail from a buyer whose orders were all
+  closed — a returning customer could never reach Agent-1 again (a defect, found before the check). v110 scopes closure to
+  the closed order's conversation: replies in its thread, and headerless mail that quotes its page link or reference or
+  repeats the subject of Agent-1's mail about it, are kept for your review; a new enquiry from the same address reaches
+  Agent-1 as ordinary mail. For the check: write a new question with a new subject (not a reply to the £5 order's mails).
+  The check waits for v110's install.
 - **Scope.** Agent-1's offer is **paused** (since 2026-10-20 21:03Z: it changed the files; its passing review d06474be… no
   longer covers them; the current Landlord_Compliance_Tracker.xlsx f45c3d00… saves 1,194 formulas without values). Agent-1
   works on it on its own; success needs ITS new review to pass (cached_values, displayed dates, rendering pass — v109 refuses
@@ -60,17 +64,24 @@ The database enforces the one purchase, merchant, amount and expiry; the card ca
 comes from Agent-1's own cash.
 
 **Review at the actual ceiling (corrected 2026-10-21: the earlier text used 450p).** Computed by the live
-fleet_spend_review_assess, read-only, 2026-10-21 ~03:35Z: at **500p** the purchase is 542 bp (5.4 %) of Agent-1's 9,213p available,
-runway afterwards 108 days, no open commitments → **routine, no Fleet Control review** (thresholds: 2,500 bp share, 5,000 bp
-aggregate, 14 days' runway). One difference from 450p (488 bp): the brand-new-merchant signal's threshold is 500 bp, so at
-500p it WOULD flag if Agent-1 had already made a card request at that merchant in the previous 24 h (the card path passes
-the first earlier request there as "payee since"; a first request passes none). If any review is triggered, Fleet Control's
-AI budget is unset, so it spends nothing and the request waits for your decision — no added cost. Agent-1's cash after the
-workbook/email check (≤ 361p) is re-checked when the proposal arrives. Maximum unchanged: 200p usage + 41p tax/fee + ≤ 500p
-card = **741p** all-inclusive.
+fleet_spend_review_assess, read-only, 2026-10-21 ~03:35Z: at **500p** the purchase is 542 bp (5.4 %) of Agent-1's 9,213p
+available, runway afterwards 108 days, no open commitments → **routine: no review expected** (thresholds 2,500 bp share,
+5,000 bp aggregate, 14 days' runway). One difference from 450p (488 bp): the brand-new-merchant signal's threshold is 500 bp,
+so at 500p it WOULD flag if Agent-1 had already made a card request at that merchant in the previous 24 h. Agent-1's cash
+after the workbook/email check is re-checked when its proposal arrives.
+
+**Fleet Control's AI budget is a potential BLOCKING dependency** (corrected: not "a free review", and never an automatic
+fallback to the owner). It is unset; a triggered review then makes no call and stays pending — never approved — so the
+card request waits until it or the release expires and the proof ends without a purchase. Resolution (v110, with the
+install): `launch-checks.sh card` takes a `reviewBudgetPence`; > 0 sets Fleet Control's daily AI budget for the proof (only
+when unset; your owner-only authority, approver fleet_treasury) and clears it at the first outcome
+(fleet_admin_fleet_control_ai_budget_clear, new: v96 could set but never unset). The value is sized in the concrete proof
+package by code from the review call's bound (prompt bytes + 1,500 output tokens at T2's prices, up to 5 attempts) and added
+to the all-inclusive maximum: 200p usage + 41p tax/fee + ≤ 500p card + the review budget.
 
 ## Remaining blockers and owner decisions
-1. The workbook + email check (approval; 361p).
+0. Install e151095 (v110: closure per conversation; budget clear) — prepared, rehearsals passed; awaiting your approval.
+1. The workbook + email check (approved; 361p, 6 h; starts after v110 is installed and verified).
 2. Agent-1's merchant proposal, then the card check (approval; 741p).
 3. Seller address: re-save "Albemarle Street" in Fleet HQ → Seller (step-up).
 4. Funding: PayPal 22p, owed to you 811p → free cash −789p (every ordinary refund would wait).
