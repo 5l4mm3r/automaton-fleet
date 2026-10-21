@@ -116,7 +116,10 @@ stop_check() {
   if [[ "$MODE" == card && "$(card_on)" == t ]]; then A owner-identity-autonomy off "card proof ended: $why" >/dev/null 2>&1 || bad=1; fi
   if [[ -f "$D/review-budget-set.txt" && "$(fc_set)" == true ]]; then A economy-fleet-control-ai-budget off "card proof ended: $why" >/dev/null 2>&1 || bad=1; fi
   if [[ -f "$D/breaker-tripped.txt" && "$(breaker_tripped)" == t ]]; then A economy-spend-breaker reset >/dev/null 2>&1 || bad=1; fi
-  sudo -n systemctl stop $UNIT.timer $UNIT.service >/dev/null 2>&1 || true
+  # From the watchdog's own unit: stop only its timer — stopping the running service would kill this script before the
+  # stop is confirmed, reported and filed (2026-10-21 11:02Z: the cleanup ran, its record did not). The service ends on exit.
+  if [[ -n "${IN_WATCH:-}" ]]; then sudo -n systemctl stop $UNIT.timer >/dev/null 2>&1 || true
+  else sudo -n systemctl stop $UNIT.timer $UNIT.service >/dev/null 2>&1 || true; fi
   [[ "$(paused $A1)" == t && "$(release_live)" == 0 && "$(card_on)" == f ]] || bad=1
   [[ -f "$D/review-budget-set.txt" && "$(fc_set)" != false ]] && bad=1
   echo "== CHECK STOPPED $(ts): $why — Agent-1 paused; run ended; release ended; card authority $( [[ "$(card_on)" == f ]] && echo OFF || echo 'STILL ON')$( (( bad )) && echo ' — VERIFY: a step did not confirm')"
@@ -170,6 +173,7 @@ card)
   A founder-cognition $A1 resume "card proof (owner approval): one purchase at $merchant, at most ${4}p; AI ceiling ${2}p, $3 h; sales stay closed" | jq -c '{paused}' || { stop_check "resume failed"; exit 1; }
   echo "== CARD PROOF STARTED $s: Agent-1 may make ONE purchase at $merchant ($6), at most ${4}p, on card 1; approve any 3-D Secure prompt in your bank's app"; report ;;
 watch)
+  IN_WATCH=1
   [[ -n "$(START)" && "$(paused $A1)" == f ]] || { sudo -n systemctl stop $UNIT.timer >/dev/null 2>&1; exit 0; }
   [[ "$(run_open)" == 0 ]] && { stop_check "the run ended ($(Q "SELECT fleet_admin_cognition_run('$A1')" | jq -r '.endReason // "its time or ceiling"'))"; exit 0; }
   if [[ "$MODE" == checks ]]; then

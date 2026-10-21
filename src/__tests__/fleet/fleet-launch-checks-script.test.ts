@@ -120,6 +120,10 @@ Q() { case "$1" in
       expect(w.out).toContain("card authority OFF");
       for (const f of ["card", "release", "run", "fc"]) expect(fs.existsSync(path.join(dir, f)), f).toBe(false);   // the review budget it set: cleared
       expect(fs.existsSync(path.join(dir, "paused"))).toBe(true);
+      // From its own unit the watchdog stops only its timer: stopping the running service would kill it mid-stop.
+      const stops = w.host.filter((l) => /systemctl stop/.test(l));
+      expect(stops).toEqual(["sudo -n systemctl stop fleet-checks-watch.timer"]);
+      expect(w.out).not.toContain("VERIFY");
     }
     // v109: no merchant account yet — the release allows registering one there (no account named).
     fs.rmSync(path.join(dir, "state"), { recursive: true, force: true }); fs.rmSync(log, { force: true });
@@ -151,5 +155,12 @@ Q() { case "$1" in
     expect(done.out).toContain("CHECKS COMPLETE");
     expect(fs.existsSync(path.join(dir, "breaker"))).toBe(false);                                 // the breaker it tripped is reset
     expect(fs.existsSync(path.join(dir, "release"))).toBe(false);
+    expect(fs.readdirSync(path.join(dir, "state")).filter((f) => f === "start.txt")).toEqual([]);   // filed: a new check may start
+    // The owner's stop (outside the unit) also stops a watch that may be running.
+    fs.rmSync(log, { force: true });
+    expect(run(["checks", "300", "6", "owner@example.test"]).code).toBe(0);
+    const st = run(["stop", "owner stopped"]);
+    expect(st.out).toContain("CHECK STOPPED");
+    expect(st.host.filter((l) => /systemctl stop/.test(l))).toEqual(["sudo -n systemctl stop fleet-checks-watch.timer fleet-checks-watch.service"]);
   });
 });
