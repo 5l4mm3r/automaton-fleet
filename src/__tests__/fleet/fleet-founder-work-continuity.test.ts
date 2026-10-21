@@ -122,6 +122,29 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(second.packets.slice(1).some((x) => x.includes("CONTINUE YOUR UNFINISHED WORK"))).toBe(false);
   });
 
+  // 2026-10-21 (launch check): seven turns each ended at the request-size budget after 5-7 steps; they were taken as
+  // finished, so each lost its working record and the next re-oriented from scratch (8 identical inspections, 270p).
+  it("1d. a turn that reaches its size limit mid-work is carried like a cut-off one: its results and plan reach the next turn", async () => {
+    const r = rig((t, s) => {
+      if (t === 1 && s === 1) return { content: "Plan: recalculate the tracker, inspect the saved file, then review and publish it.", calls: Array.from({ length: 5 }, (_, i) => c("read_file", { path: `product/big${i}.txt` })) };
+      if (t === 1) return { calls: Array.from({ length: 5 }, (_, i) => c("read_file", { path: `product/big${(s - 1) * 5 + i}.txt` })) };
+      return { calls: [c("sleep", { reason: "continued from the carried record" })] };
+    });
+    for (let i = 0; i < 30; i++) fs.writeFileSync(path.join(r.d.w, "product", `big${i}.txt`), `RESULT-MARK-${i} ` + "x".repeat(5_000));
+    const first = await r.mind.turn("hb");
+    expect(first.steps).toBeLessThan(FOUNDER_STEPS_PER_TURN);                        // stopped by size, not by its steps
+    const log = fs.readFileSync(path.join(r.d.s, "mind-log.jsonl"), "utf8");
+    expect(log).toContain("FLEET_TURN_CONTEXT_BUDGET");
+    expect(fs.existsSync(path.join(r.d.s, CARRY_FILE))).toBe(true);                  // kept for the next turn
+    await r.mind.turn("hb 2");
+    const p = r.packets[1];
+    expect(p).toContain("CONTINUE YOUR UNFINISHED WORK");
+    expect(p).toContain("reached the turn's size limit");
+    expect(p).toContain("Plan: recalculate the tracker, inspect the saved file, then review and publish it.");
+    expect(p).toMatch(/RESULT-MARK-\d+/);                                          // an actual result of the carried turn
+    expect(fs.existsSync(path.join(r.d.s, CARRY_FILE))).toBe(false);                 // the finished turn consumed it
+  });
+
   it("1c. a FAILED external action of the carried turn can be retried as it was", async () => {
     let fail = true;
     const r = rig((t, s) => {

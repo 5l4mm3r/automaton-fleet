@@ -110,4 +110,47 @@ wb.close()`, path.join(ws, name), String(offset)]);
       expect(bad.checks.find((c) => c.id === "cached_values")).toMatchObject({ status: "fail", detail: expect.stringContaining("Tracker!B2") });
     } finally { fs.rmSync(ws, { recursive: true, force: true }); }
   }, 240_000);
+
+  // 2026-10-21 (launch check): Agent-1's tracker saved 1,194 template-row formulas such as =IF(D3="","",EDATE(D3,12)) with an
+  // empty value; every one recalculates to empty text, so previewers show what they should — blank. The check called them
+  // "saved without a value", and the office application's own recalculation (empty text results, t="str") failed it too.
+  it.skipIf(!HAVE_TOOLS)("a formula whose result is blank, saved blank, is saved correctly; a formula that should show something still is not", async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "qa3-blank-"));
+    try {
+      fs.writeFileSync(path.join(ws, "qa.py"), QA_INSPECTOR_PY);
+      execFileSync(path.join(DEV_TOOLS, "bin/fleet-python"), ["-c", String.raw`
+import sys, zipfile, xlsxwriter
+def make(name, office):
+    wb = xlsxwriter.Workbook(name); ws = wb.add_worksheet("Tracker")
+    ws.write_row(0, 0, ["Start", "Renewal", "Status"])
+    ws.write_number(1, 0, 5)
+    ws.write_formula(1, 1, '=IF(A2="","",A2*2)', None, 10)          # data row: saved value
+    ws.write_formula(2, 1, '=IF(A3="","",A3*2)', None, "")          # template row: blank result, saved blank
+    ws.write_formula(2, 2, '=IF(A3="","","OK")', None, "")
+    wb.close()
+    if office:  # as the office application saves an empty text result
+        z = zipfile.ZipFile(name); parts = {n: z.read(n) for n in z.namelist()}; z.close()
+        x = parts["xl/worksheets/sheet1.xml"].decode()
+        x = x.replace('<c r="B3">', '<c r="B3" t="str">').replace('<c r="C3">', '<c r="C3" t="str">')
+        parts["xl/worksheets/sheet1.xml"] = x.encode()
+        with zipfile.ZipFile(name, "w") as z:
+            for n, b in parts.items(): z.writestr(n, b)
+def unsaved(name):
+    wb = xlsxwriter.Workbook(name); ws = wb.add_worksheet("Tracker")
+    ws.write_number(1, 0, 5)
+    ws.write_formula(1, 1, "=A2*2", None, "")                          # should show 10: saved blank
+    ws.write_formula(1, 2, '=IF(A2="","","OK")', None, "")       # should show OK: saved blank
+    wb.close()
+make("xlsxwriter.xlsx", False); make("office.xlsx", True); unsaved("unsaved.xlsx")`], { cwd: ws });
+      fs.writeFileSync(path.join(ws, "spec.json"), JSON.stringify({ files: ["xlsxwriter.xlsx", "office.xlsx", "unsaved.xlsx"], cases: [], renderDir: ".tmp/qa-render" }));
+      const r = await runSandboxed(ws, "python3 qa.py spec.json", { timeoutMs: 180_000, maxOutput: 4_000_000, toolsDir: DEV_TOOLS });
+      const report = parseInspectorReport(r.output.trim().split("\n").at(-1)!);
+      const check = (i: number) => report.files[i].checks.find((c) => c.id === "cached_values");
+      expect(check(0)).toMatchObject({ status: "pass" });
+      expect(check(1)).toMatchObject({ status: "pass" });
+      expect(check(2)).toMatchObject({ status: "warn", detail: expect.stringContaining("2 formula cell(s) saved without a value") });
+      expect(check(2)!.detail).toContain("Tracker!B2");
+      expect(check(2)!.detail).toContain("Tracker!C2");
+    } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+  }, 240_000);
 });

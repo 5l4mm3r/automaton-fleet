@@ -426,6 +426,10 @@ def inspect_xlsx(r, path, cases):
             continue
         cv = wbv[sh][addr].value
         if cv is None:
+            # 2026-10-21: a formula whose result is empty text, saved with an empty value (XlsxWriter value="", or the office
+            # application's own recalculation), shows exactly its result — blank. Only a cell that should show something is unsaved.
+            if v == "":
+                continue
             missing_cache.append(where)
             continue
         a, b = as_num(v), as_num(cv)

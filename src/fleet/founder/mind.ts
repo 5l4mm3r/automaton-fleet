@@ -848,6 +848,8 @@ export class FounderMind {
     let wakeOn: string | null = null;
     let reviewAt: string | null = null;
     let finished = false;
+    // 2026-10-21: the turn reached its request-size budget mid-work (not a finish): carried like a turn that used all its steps.
+    let sizeStop = false;
     // 2026-10-18 (work continuity): every call of this turn with its result, the progress test and the carried record.
     const records: Array<{ call: ToolCall; ok: boolean; refused?: string; output: string }> = [];
     // 2026-10-19: this turn's refusals with bounded, redacted reasons (the mind log and the closing note).
@@ -859,7 +861,7 @@ export class FounderMind {
       if (step > 0 && size() > MAX_REQUEST_BYTES) {
         this.routing.budgetStops++;
         this.logDecision({ turn: this.turns, routed: true, step, stopped: "FLEET_TURN_CONTEXT_BUDGET" });
-        finished = true;
+        sizeStop = true;
         break;
       }
       const cls = classifyTask({ kind: "step", ...(pendingAction ? { actionClass: pendingAction } : {}) }, taskId);
@@ -942,12 +944,14 @@ export class FounderMind {
       if (slept && typeof slept.arguments?.reviewAt === "string" && Number.isFinite(Date.parse(slept.arguments.reviewAt))) reviewAt = new Date(Date.parse(slept.arguments.reviewAt)).toISOString();
       if (r.toolCalls.length === 0 || slept) { finished = true; break; }
     }
-    const cutOff = !finished && result.steps >= maxSteps;
-    if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn used all ${maxSteps} steps before finishing)`;
+    // 2026-10-21 (launch check: seven turns each ended at the size budget after 5-7 steps, were taken as finished, lost their
+    // working record and re-oriented from scratch): a size stop is cut off too — its record, plan and calls reach the next turn.
+    const cutOff = !finished && (sizeStop || result.steps >= maxSteps);
+    if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
     // 2026-10-18 (work continuity): a cut-off turn leaves its working record for the next turn (and a restart); a finished
     // working turn has consumed it. The progress memory survives restarts.
     if (W) {
-      if (cutOff) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: outcome });
+      if (cutOff) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: outcome, sizeStop });
       else if (!owner) clearCarry(this.o.stateDir);
       if (progressMem!.endTurn()) result.progress = true;
       progressMem!.save();
