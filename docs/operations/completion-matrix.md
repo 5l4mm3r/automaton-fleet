@@ -4,8 +4,8 @@ Built from the master specification (MLS), the R41.1 acceptance matrix (AM), the
 package (LCP), reconciled with production and the latest candidate. Where they conflict, the owner's latest explicit decision
 wins (conflicts resolved at the end). **OWNER** = the owner's decision (quoted, dated); **IMPL** = an implementation choice.
 
-Production: a0bbf4e (schema 108) being installed 2026-10-20 23:19Z (Agent-1 2b7b490 → a0bbf4e). Next candidate: v109 (local,
-618406d+). Agent-2 b60e262 paused throughout. Completed live evidence reused, never repeated: C1–C5 (phone sign-in, alarm
+Production (2026-10-21 00:51Z, verified): controller **7ab848d, schema 109**; Agent-1 pinned to **a0bbf4e** (installed 2026-10-20
+23:43Z, upgrade 667cf5b9…); UI 0.26.2; sales CLOSED; card authority off; no release or refund authority live. Agent-2 b60e262 paused throughout. Completed live evidence reused, never repeated: C1–C5 (phone sign-in, alarm
 drill, outside monitor, backup + isolated restore, private publishing) and the C6 refund leg (Agent-1 refunded the owner's
 £5 itself; the booking needed the human-approved v107 repair — disclosed).
 
@@ -35,8 +35,8 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 | Liquidity gate on every real outflow | IMPL | v77 | done | — |
 | AI cost = usage + credit acquisition tax/fee; owner-funded credit reimbursable | OWNER 2026-10-12 | v69–v73; live journals | done | — |
 | Proof refund booked as owner capital, once | IMPL | C6 + v107 regression (fleet-v96 refund suite) | done | — |
-| Refund reconciled with fresh PayPal evidence | owner record | refund API COMPLETED + webhook 500p; balance 522p at 22:29Z (reporting lag); Search no row | **ext** | re-check PayPal; owner checks the account |
-| Funding / refund cash (free cash negative while owed 811p) | **owner** | LCP C3 | owner | decide after reconciliation |
+| Refund reconciled with fresh PayPal evidence | owner record | capture 6JF13918S8462694B (T0006 +500p); refund 841606975U696002C: API COMPLETED, webhook 500p, Search T1107 −500p (fee 0); balance 522p → **22p** (00:50:36Z, after a reporting lag); one refund journal; capital-backing difference **0** | **done** | owner may confirm in PayPal Activity (refund details / funding source) |
+| Funding / refund cash: PayPal 22p, owed to the owner 811p → free cash −789p (every ordinary refund would wait) | **owner** | treasury liquidity, 00:50Z | owner | activation: reimburse, add funding, or a standing rule |
 | Capital backing (£200 unbacked) | OWNER 2026-10-17 | economy-capital-backing | owner | activation D1 |
 | Contextual capital; new agents need no history; partial funding; temporary sweep reductions | OWNER O8 / agreed | fleet-v77 sizing tests | done (live default fixed) | activation D3 |
 | Net-profit sweep, adaptive bands | OWNER O10 | implemented, disabled | owner | activation D3 |
@@ -59,7 +59,7 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 | Replacing unusable PayPal orders without double capture | IMPL | v98 lifecycle (10) | done | — |
 | Reviewed bytes = delivered bytes | IMPL | review gate; C6 checksum f45c3d00… matched | done | — |
 | Buyer email joins the right order; obligations; replies by email | OWNER 2026-10-19/20 | v108 (fleet-v108-completion-pg) | done (tests) | **live** B1+B2 |
-| Closed conversations (refund / 7 days / 10 msgs) on page AND email; closed-order mail kept for the owner | OWNER 2026-10-20 "Refund or 7 days"; 2026-10-21 "preserve them for owner review" | page: v108; email: **v109** | gap → fixed in v109 | install v109 |
+| Closed conversations (refund / 7 days / 10 msgs) on page AND email; closed-order mail kept for the owner | OWNER 2026-10-20 "Refund or 7 days"; 2026-10-21 "preserve them for owner review" | page: v108; email: v109 (installed 00:51Z) | done | — |
 | No cross-customer disclosure via subject / agent name / thread | IMPL | v108/v109 tests (other sender, stranger naming the agent) | done | — |
 | Geography: worldwide, no exclusions; country recorded | OWNER 2026-10-20 | v108; capability status v15, Field Guide | done | tax: see dependencies |
 | Seller legal details from verified records | OWNER | stored address "Albemarie" (owner, 10-17) | owner | re-save in HQ (C1) |
@@ -68,10 +68,10 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 | Requirement | Decided by | Where / evidence | Status | Remaining action |
 |---|---|---|---|---|
 | Inspector in the real unit (LibreOffice, recalculation, displayed dates, rendering) | OWNER Repair A | R1, revision rehearsal 14/14 | done | — |
-| Saved formula values: not a clean pass (any delivery or publication) | OWNER 2026-10-21 | public sale: v108; every review: **v109** | gap → fixed in v109 | install v109 |
+| Saved formula values: not a clean pass (any delivery or publication) | OWNER 2026-10-21 | public sale: v108; every review: v109 (installed) | done | — |
 | Money acceptance cases with independent expected results | IMPL | expected_results warning; money checks | done | — |
 | Inspected checksum = published = delivered bytes | IMPL | review gate | done | — |
-| The tracker's own defect fixed by Agent-1 | OWNER 2026-10-20 | sale block + notice | **live** | B1 |
+| The tracker's own defect fixed by Agent-1 | OWNER 2026-10-20 | offer PAUSED since 2026-10-20 21:03Z (Agent-1 changed its files; review d06474be… no longer covers them; current xlsx f45c3d00… has unsaved values) | **live** | workbook/email check (361p) |
 
 ## F. Card and protected identity
 | Requirement | Decided by | Where / evidence | Status | Remaining action |
@@ -79,7 +79,7 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 | Card = payment bypass, owner-paid card 1, reserved from agent cash, clearing liability, statement match once | OWNER O2/O16/O17/O19 | v48–v58, v88 | done (simulated) | **live** B3 |
 | Receipts: return-or-withdrawal choice each time | OWNER 2026-10-08 | v58 | done | — |
 | Fills never disclosure; no decrypted values to models/logs | OWNER O4 | broker vault | done | — |
-| One pre-launch purchase (merchant, ≤ £5, expiry, cleanup); merchant account path; agent proposal path | OWNER 2026-10-20/21 | v108 release; **v109** account_register + capability status v16 | done in v109 | install v109; B3 |
+| One pre-launch purchase (merchant, ≤ £5, expiry, cleanup); merchant account path; agent proposal path | OWNER 2026-10-20/21 | v108 release action `card`; v109 account_register + capability status v16 (installed; PG-tested, migration-rehearsed, not yet exercised live) | done (code) | Agent-1's merchant proposal, then the card check (741p) |
 | Standing identity + card authority at launch | OWNER O4/O11; 2026-10-11 "uncapped" | settings | owner | activation D5 |
 
 ## G. Lifecycle, visibility, recovery
@@ -90,10 +90,12 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 | Owner visibility: accounts, credentials, actions, liabilities, faults, uncertain ops | OWNER | HQ pages, events | done | — |
 | Local freeze ≠ provider cancellation | OWNER O5 | v49 | done | — |
 | Deploy/rollback preserves history (fix forward) | IMPL | rollout reconciliation; rehearsals every release | done | — |
-| Backup + restore, monitoring, alerts | IMPL | LIVE 2026-10-17 | done | — |
+| Backup + restore, monitoring, alerts | IMPL | LIVE 2026-10-17; the heartbeat flagged disk ≥ 90 % from 2026-10-20 and failed at 100 % (alerted) | done | — |
+| Release retention (2026-10-21 incident: 84 releases filled the 72 GB disk; v109's first cutover failed "No space left on device", rolled itself back, nothing changed) | IMPL | 78 old releases + 79 stage copies deleted with the owner's approval (49 GB free); fleet-release.sh now refuses below 4 GB free; scripts/fleet-release-prune.sh (dry run default; keeps current, pinned, newest N) — fleet-release-script, fleet-release-prune tests | done (repo; ships with the next kit) | prune after each release |
 
 ## External dependencies (named, with evidence)
-- **PayPal reporting lag** on the refund (balance 522p at 22:29Z; Search no row) — re-check; the owner's own PayPal activity view.
+- **PayPal reporting lag** (resolved 00:50Z): the balance and Transaction Search lagged the refund by ~3.5 h; reconciliation
+  waits for them by design.
 - **EU/UK VAT on digital sales** — the owner accepted the obligations (2026-10-20); recording the buyer's country is
   evidence, not compliance: registration/filing (e.g. EU OSS) is the owner's, outside the Fleet.
 - **PayPal webhook** for refunds was observed live (500p on 841606…); webhook for payments: not relied on (status polling).

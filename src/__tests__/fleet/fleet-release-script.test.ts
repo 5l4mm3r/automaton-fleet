@@ -47,6 +47,7 @@ sed -i "s#^FLEET_DASHBOARD_STATIC_DIR=.*#FLEET_DASHBOARD_STATIC_DIR=${dir}/ui/0.
 systemctl() { echo "systemctl $*" >> "${log}"; }
 ENVD="${dir}/dashboard.env"
 record() { echo "event $1" >> "${log}"; }
+free_mb() { echo "\${FREE_MB:-99999}"; }
 verify_root() { [[ "\${VERIFY_OK:-1}" == 1 ]] || { echo "root / is not the new UI"; return 1; }; }
 # the dashboard serves whatever dashboard.env names
 served_sha() { sha256sum "$(sed -n 's/^FLEET_DASHBOARD_STATIC_DIR=//p' "$ENVD")/index.html" | cut -c1-64; }
@@ -67,6 +68,14 @@ served_sha() { sha256sum "$(sed -n 's/^FLEET_DASHBOARD_STATIC_DIR=//p' "$ENVD")/
     const r = run();
     expect(r.code).toBe(0);
     expect(r.steps).toEqual(["uideploy --check", "rollout cutover defer=1", "uideploy 0.8.3", "event production_deployed"]);
+  });
+
+  it("2026-10-21: too little free disk refuses the release before anything changes (no UI check, no cutover, no event)", () => {
+    const r = run({ FREE_MB: "380" });
+    expect(r.code).toBe(2);
+    expect(r.out).toContain("only 380 MB free on /opt/automaton-fleet (needs 4096 MB): prune old releases first");
+    expect(r.steps).toEqual([]);
+    expect(run({ FREE_MB: "5000", FLEET_RELEASE_MIN_FREE_MB: "4096" }).code).toBe(0);
   });
 
   it("the backend cutover fails: it rolls itself back (one rolled_back); the UI is never touched; never 'deployed'", () => {

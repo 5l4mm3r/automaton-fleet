@@ -3,7 +3,8 @@
 #
 #   bash scripts/fleet-release.sh <pinsFile> <fromSchema> <toSchema> <uiName> <ui.tgz> <uiSha256>
 #
-#   0. preflight, before anything changes: the UI step's own checks (fleet-ui-deploy.sh --check: an unchanged UI that is
+#   0. preflight, before anything changes: enough free disk for the release (FLEET_RELEASE_MIN_FREE_MB, default 4096 —
+#      2026-10-21 a cutover failed with "No space left on device": prune old releases with fleet-release-prune.sh), the UI step's own checks (fleet-ui-deploy.sh --check: an unchanged UI that is
 #      already served or present byte-identical is a success; a served directory that differs is refused), then a
 #      snapshot of dashboard.env exactly as it is live now (dashboard.env.before-release-<commit7>-<stamp>).
 #   1. backend: scripts/fleet-rollout.sh cutover (fresh verified dump, migrate, re-run, reconciliation, approval,
@@ -32,6 +33,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROLLOUT="${FLEET_RELEASE_ROLLOUT:-$HERE/fleet-rollout.sh}"; UIDEPLOY="${FLEET_RELEASE_UIDEPLOY:-$HERE/fleet-ui-deploy.sh}"
 UIDIR=/opt/automaton-fleet/ui/$UINAME; ENVD=/etc/automaton-fleet/dashboard.env; ORIGIN=https://admin.agentfleet.vip
 ts() { date -u +%FT%TZ; }
+free_mb() { df -Pm /opt/automaton-fleet | awk 'NR == 2 {print $4}'; }
 record() { sudo -u postgres psql -X -At -d automaton_fleet -c "SELECT fleet.fleet_event('$1', NULL, 'operator:release', jsonb_build_object('commit', '${C:0:12}', 'fromSchema', $FROM, 'toSchema', $TO, 'ui', '$UINAME'$2))" > /dev/null; }
 edge_sha() { curl -s --max-time 10 --resolve admin.agentfleet.vip:443:127.0.0.1 "$ORIGIN$1" | sha256sum | cut -c1-64; }
 verify_root() {
@@ -55,6 +57,8 @@ if [[ -n "${FLEET_RELEASE_STUBS:-}" ]]; then source "$FLEET_RELEASE_STUBS"; fi
 
 echo "== RELEASE ${C:0:7} (schema $FROM -> $TO, UI $UINAME) start $(ts)"
 # 0. Preflight (nothing changes if refused), then the snapshot of the UI live now.
+MINFREE="${FLEET_RELEASE_MIN_FREE_MB:-4096}"; FREE="$(free_mb)"
+[[ "$FREE" =~ ^[0-9]+$ ]] && (( FREE >= MINFREE )) || die "only ${FREE:-?} MB free on /opt/automaton-fleet (needs $MINFREE MB): prune old releases first (scripts/fleet-release-prune.sh); nothing was changed"
 sudo bash "$UIDEPLOY" --check "$UINAME" "$UITGZ" "$UISHA" || die "the UI step would refuse (nothing was changed)"
 UI_BEFORE=$(sudo sed -n 's/^FLEET_DASHBOARD_STATIC_DIR=//p' "$ENVD"); [[ -n "$UI_BEFORE" ]] || die "the live UI directory is unreadable"
 ENV_BEFORE="$ENVD.before-release-${C:0:7}-$(date -u +%Y%m%dT%H%M%SZ)"; sudo test ! -e "$ENV_BEFORE" || die "$ENV_BEFORE exists"
