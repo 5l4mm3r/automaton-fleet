@@ -947,11 +947,12 @@ export class FounderMind {
     // 2026-10-21 (launch check: seven turns each ended at the size budget after 5-7 steps, were taken as finished, lost their
     // working record and re-oriented from scratch): a size stop is cut off too — its record, plan and calls reach the next turn.
     const cutOff = !finished && (sizeStop || result.steps >= maxSteps);
+    const planText = outcome;   // what the founder itself wrote (the carried plan); the note below is the platform's
     if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
     // 2026-10-18 (work continuity): a cut-off turn leaves its working record for the next turn (and a restart); a finished
     // working turn has consumed it. The progress memory survives restarts.
     if (W) {
-      if (cutOff) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: outcome, sizeStop });
+      if (cutOff) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: planText, sizeStop });
       else if (!owner) clearCarry(this.o.stateDir);
       if (progressMem!.endTurn()) result.progress = true;
       progressMem!.save();

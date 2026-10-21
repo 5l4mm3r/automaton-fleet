@@ -140,6 +140,7 @@ def unsaved(name):
     ws.write_number(1, 0, 5)
     ws.write_formula(1, 1, "=A2*2", None, "")                          # should show 10: saved blank
     ws.write_formula(1, 2, '=IF(A2="","","OK")', None, "")       # should show OK: saved blank
+    ws.write_formula(1, 3, "=A2/0", None, "")                          # an error value: still a failure
     wb.close()
 make("xlsxwriter.xlsx", False); make("office.xlsx", True); unsaved("unsaved.xlsx")`], { cwd: ws });
       fs.writeFileSync(path.join(ws, "spec.json"), JSON.stringify({ files: ["xlsxwriter.xlsx", "office.xlsx", "unsaved.xlsx"], cases: [], renderDir: ".tmp/qa-render" }));
@@ -151,6 +152,8 @@ make("xlsxwriter.xlsx", False); make("office.xlsx", True); unsaved("unsaved.xlsx
       expect(check(2)).toMatchObject({ status: "warn", detail: expect.stringContaining("2 formula cell(s) saved without a value") });
       expect(check(2)!.detail).toContain("Tracker!B2");
       expect(check(2)!.detail).toContain("Tracker!C2");
+      expect(report.files[2].checks.find((c) => c.id === "formula_errors")).toMatchObject({ status: "fail", detail: expect.stringContaining("Tracker!D2") });
+      expect(report.files[0].checks.find((c) => c.id === "formula_errors")).toMatchObject({ status: "pass" });
     } finally { fs.rmSync(ws, { recursive: true, force: true }); }
   }, 240_000);
 });

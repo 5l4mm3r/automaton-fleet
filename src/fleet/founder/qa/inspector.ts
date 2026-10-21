@@ -37,6 +37,8 @@
  * placeholder opener; Python spells the backtick as chr(96).
  */
 
+import { createHash } from "crypto";
+
 export const QA_INSPECTOR_VERSION = "fleet-qa-3";
 
 export const QA_INSPECTOR_PY = String.raw`
@@ -1241,6 +1243,8 @@ def main():
 
 main()
 `;
+/** 2026-10-21: the exact inspector program (its label can stay fleet-qa-3 across fixes): recorded with every review it makes. */
+export const QA_INSPECTOR_SHA256 = createHash("sha256").update(QA_INSPECTOR_PY, "utf8").digest("hex");
 
 export type QaCheckStatus = "pass" | "warn" | "fail";
 

@@ -26,7 +26,7 @@ import type { ChatImage, ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
 import type { CustomerObligation } from "./obligations.js";
 import crypto from "crypto";
-import { QA_INSPECTOR_PY, QA_INSPECTOR_VERSION, parseInspectorReport, type QaInspectorReport } from "./qa/inspector.js";
+import { QA_INSPECTOR_PY, QA_INSPECTOR_SHA256, QA_INSPECTOR_VERSION, parseInspectorReport, type QaInspectorReport } from "./qa/inspector.js";
 import type { LoopGuard } from "./loop-guard.js";
 import { recallFacts, rememberFact, rememberFacts, retractFact, sourceLabel, type FactRecord, type FactResult } from "./facts.js";
 import { custodyCategory, custodyRefusalText } from "../custody-refusals.js";
@@ -539,6 +539,7 @@ export class FounderToolbox {
   ownerTurnReplied(): boolean { return this.ownerReplied; }
 
   constructor(private readonly o: { manifest: CapabilityManifest; workspaceDir: string; memoryDir: string; ports: ToolboxPorts; execTimeoutMs?: number; /** tests only */ sandboxPython?: string; /** v76: the agent toolchain (default FLEET_AGENT_TOOLS_DIR or /usr/local/lib/automaton-fleet-tools/current) */ toolsDir?: string;
+    /** 2026-10-21: the pinned runtime this toolbox runs from, recorded with each review (traceability of the inspector). */ runtime?: { commit: string; buildId: string };
     /** v22 phase: loop/duplication economics (absent = unchanged behaviour). */ loopGuard?: LoopGuard;
     /** F1-FRESH-02 observability: one metadata-only record per memory write (and per failed recall); absent = none. */
     memoryTelemetry?: (record: MemoryTelemetry) => void;
@@ -990,7 +991,8 @@ export class FounderToolbox {
       const r = await this.inspect(paths, Array.isArray(args.cases) ? args.cases : []);
       if (!r.ok) return refuse(r.code, r.reason);
       const files = r.report.files.map((f) => ({ name: path.basename(f.path), sha256: f.sha256, sizeBytes: f.sizeBytes }));
-      const rec: Record<string, unknown> = { ...args, files, automated: { inspector: QA_INSPECTOR_VERSION, ok: r.report.ok, files: r.report.files.map((f) => ({ path: f.path, sha256: f.sha256,
+      const rec: Record<string, unknown> = { ...args, files, automated: { inspector: QA_INSPECTOR_VERSION, inspectorSha256: QA_INSPECTOR_SHA256,
+        ...(this.o.runtime ? { runtimeCommit: this.o.runtime.commit, buildId: this.o.runtime.buildId } : {}), ok: r.report.ok, files: r.report.files.map((f) => ({ path: f.path, sha256: f.sha256,
         sizeBytes: f.sizeBytes, detectedType: f.detectedType, ok: f.ok, checks: f.checks })) } };
       delete rec.paths; delete rec.cases;
       const out = await this.o.ports.economy("review.record", rec).catch(ownerRefusal);

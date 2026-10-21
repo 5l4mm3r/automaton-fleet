@@ -17,7 +17,7 @@ import { LoopGuard } from "../../fleet/founder/loop-guard.js";
 import { FOUNDER_MANIFEST_V2, decideTool } from "../../fleet/capabilities.js";
 import { FOUNDER_V7_TOOLS, toolsForDoctrine } from "../../fleet/cognition/types.js";
 import { runSandboxed } from "../../fleet/founder/exec-sandbox.js";
-import { QA_INSPECTOR_VERSION } from "../../fleet/founder/qa/inspector.js";
+import { QA_INSPECTOR_PY, QA_INSPECTOR_SHA256, QA_INSPECTOR_VERSION } from "../../fleet/founder/qa/inspector.js";
 
 const DEV_TOOLS = path.join(os.homedir(), ".cache/automaton-fleet-tools/dev");
 const HAVE_TOOLS = fs.existsSync(path.join(DEV_TOOLS, "site")) && fs.existsSync(path.join(DEV_TOOLS, "bin/fleet-python"));
@@ -28,7 +28,8 @@ function rig(o: { economy?: (op: string, args: Record<string, unknown>) => Promi
   const dirs = { w: path.join(root, "w"), m: path.join(root, "m") };
   for (const d of Object.values(dirs)) fs.mkdirSync(d, { recursive: true });
   const calls: Array<{ op: string; args: Record<string, unknown> }> = [];
-  const box = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: dirs.w, memoryDir: dirs.m, loopGuard: new LoopGuard(), selfGovernance: true, toolsDir: DEV_TOOLS, ports: {
+  const box = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: dirs.w, memoryDir: dirs.m, loopGuard: new LoopGuard(), selfGovernance: true, toolsDir: DEV_TOOLS,
+    runtime: { commit: "c".repeat(40), buildId: "b".repeat(64) }, ports: {
     ledger: async () => ({ cash: 10_000, expensePurchasingCapacity: 10_000 }),
     spendOrder: async () => ({ ok: true }), proposeKnowledge: async () => ({}), knowledge: async () => [], requestIdentityFact: async () => ({}),
     economy: async (op: string, args: Record<string, unknown>) => { calls.push({ op, args }); return o.economy ? o.economy(op, args) : { ok: true, op }; },
@@ -164,7 +165,10 @@ describe("v76 founder-v7 tools", () => {
     expect(rec).not.toHaveProperty("paths");
     expect(rec).not.toHaveProperty("cases");
     expect(rec.files).toEqual([{ name: "readme.txt", sha256: crypto.createHash("sha256").update(body).digest("hex"), sizeBytes: Buffer.byteLength(body) }]);
-    expect(rec.automated).toMatchObject({ inspector: QA_INSPECTOR_VERSION });
+    // 2026-10-21: the exact inspector program and the runtime it ran in are recorded (its label may stay fleet-qa-3 across fixes).
+    expect(rec.automated).toMatchObject({ inspector: QA_INSPECTOR_VERSION, runtimeCommit: "c".repeat(40), buildId: "b".repeat(64),
+      inspectorSha256: crypto.createHash("sha256").update(QA_INSPECTOR_PY, "utf8").digest("hex") });
+    expect(QA_INSPECTOR_SHA256).toMatch(/^[0-9a-f]{64}$/);
     expect(rec).toMatchObject({ orderId: "o1", independentRequestId: "req-own-1", independentVerdict: "pass" });
     // 2026-10-19: the verdict recorded is the reviewer's own (read from its reply by the runtime), never the author's claim.
     t.box.noteIndependentReview("req-own-2", "fail");

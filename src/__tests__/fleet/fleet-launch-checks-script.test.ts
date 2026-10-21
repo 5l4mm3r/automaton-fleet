@@ -9,7 +9,9 @@
  *  - `checks` trips the spend breaker (no purchases), releases mail to the owner's address only, and completes when Agent-1's
  *    own corrected workbook passes inspection and it has answered the owner's email; stop resets the breaker it tripped.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
+import pg from "pg";
+import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { spawnSync } from "child_process";
 import fs from "fs";
 import os from "os";
@@ -56,6 +58,7 @@ Q() { case "$1" in
     *"FROM fleet_offers WHERE slug"*) echo 1;;
     *"fleet_offer_sale_block(o) IS NULL AND"*) echo "\${WORKBOOK:-false}";;
     *"json_build_object('saleBlock'"*) echo '{"saleBlock":"a spreadsheet in it saves formulas without their values"}';;
+    *"o.in_reply_to = i.message_id"*) echo "\${MAIL_REPLY:-}";;
     *"direction = 'in'"*) if [[ -n "\${MAIL_SINCE_REQ:-}" && "$1" != *"received_at >= '\${MAIL_SINCE_REQ}'"* ]]; then echo ""; else echo "\${MAIL_IN:-}"; fi;; *"direction = 'out'"*) echo "\${MAIL_OUT:-}";;
     *"FROM fleet_card_requests"*) echo "\${CARD_REQ:-}";;
     *"FROM fleet_card_charges"*) echo "\${CHARGE_STATE:-held 450 awaiting}";;
@@ -151,7 +154,9 @@ Q() { case "$1" in
     expect(host.some((l) => /owner-identity-autonomy/.test(l))).toBe(false);                    // no card authority in this run
     // Not yet: the workbook passes but no reply after the owner's mail.
     expect(run(["watch"], { RUNNING: "1", WORKBOOK: "true", MAIL_IN: "2026-10-21 09:00:00+00", MAIL_OUT: "" }).out).not.toContain("CHECK STOPPED");
-    const done = run(["watch"], { RUNNING: "1", WORKBOOK: "true", MAIL_IN: "2026-10-21 09:00:00+00", MAIL_OUT: "2026-10-21 09:05:00+00" });
+    // A mail to the owner that is not a reply to their message does not complete it.
+    expect(run(["watch"], { RUNNING: "1", WORKBOOK: "true", MAIL_IN: "2026-10-21 09:00:00+00", MAIL_OUT: "2026-10-21 09:05:00+00" }).out).not.toContain("CHECK STOPPED");
+    const done = run(["watch"], { RUNNING: "1", WORKBOOK: "true", MAIL_IN: "2026-10-21 09:00:00+00", MAIL_OUT: "2026-10-21 09:05:00+00", MAIL_REPLY: "2026-10-21 09:05:00+00" });
     expect(done.out).toContain("CHECKS COMPLETE");
     expect(fs.existsSync(path.join(dir, "breaker"))).toBe(false);                                 // the breaker it tripped is reset
     expect(fs.existsSync(path.join(dir, "release"))).toBe(false);
@@ -177,6 +182,76 @@ Q() { case "$1" in
     const env = { RUNNING: "1", WORKBOOK: "true", MAIL_SINCE_REQ: since, MAIL_IN: "2026-10-21 11:01:06+00" };
     expect(run(["status"], env).out).toContain(`the owner's mail to Agent-1 (since ${since}) at 2026-10-21 11:01:06+00`);
     expect(run(["watch"], { ...env, MAIL_OUT: "" }).out).not.toContain("CHECK STOPPED");          // no reply yet
-    expect(run(["watch"], { ...env, MAIL_OUT: "2026-10-21 12:10:00+00" }).out).toContain("CHECKS COMPLETE");
+    expect(run(["watch"], { ...env, MAIL_OUT: "2026-10-21 12:10:00+00" }).out).not.toContain("CHECK STOPPED"); // a mail, not a reply to it
+    expect(run(["watch"], { ...env, MAIL_OUT: "2026-10-21 12:10:00+00", MAIL_REPLY: "2026-10-21 12:10:00+00" }).out).toContain("CHECKS COMPLETE");
   });
+});
+
+// 2026-10-21: the email leg's success query, run as written against PostgreSQL (the other host queries stay stubbed): the
+// owner's mail already received counts; a historical reply, or a new mail that does not answer it, never completes the check.
+describe.skipIf(!findPgBin())("fleet-launch-checks.sh — the reply query in PostgreSQL", () => {
+  let pgdb: EphemeralPg | null = null; let dir = "";
+  beforeAll(async () => {
+    pgdb = await startEphemeralPg(findPgBin()!);
+    const c = new pg.Client({ connectionString: pgdb.superUrl }); await c.connect();
+    await c.query(`CREATE SCHEMA IF NOT EXISTS fleet; CREATE TABLE fleet.fleet_agent_mail (message_id uuid PRIMARY KEY, agent_id text, direction text, sender_address text,
+      recipients text[], send_status text, in_reply_to uuid, thread_id uuid, received_at timestamptz)`);
+    await c.end();
+  }, 120_000);
+  afterAll(() => { pgdb?.stop(); if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it("counts the mail already received, and only a reply to it sent during the run", async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "checks-pg-"));
+    const log = path.join(dir, "host.log"); const psql = path.join(findPgBin()!, "psql");
+    fs.writeFileSync(path.join(dir, "stubs.sh"), `
+sudo() { echo "sudo $*" >> "${log}"; }
+current() { echo "/opt/automaton-fleet/releases/$CTRL"; }
+pinned() { echo "$CTRL"; }
+flag_false() { return 0; }
+media_active() { echo inactive; }
+A() { echo "A $*" >> "${log}"; case "$1" in founder-cognition) echo '{"paused":false}';; economy-spend-breaker) echo '{"tripped":true}';; cognition-run) echo '{"run":{"ceilingMinor":300,"endsAt":"later"}}';; *) echo '{"ok":true}';; esac; }
+Q() { case "$1" in
+    *"FROM fleet_agent_mail"*) "${psql}" "${pgdb!.superUrl}" -X -q -At -c "SET TimeZone = 'UTC'; SET search_path=fleet; $1";;
+    *"paused FROM fleet_founder_cognition WHERE agent_id = '${A1}'"*) [[ -n "\${RUNNING:-}" ]] && echo f || echo t;;
+    *"paused FROM fleet_founder_cognition"*) echo t;;
+    *"runtime_commit FROM fleet_agents"*) echo "$REL";;
+    *"fleet_sales_open()"*) echo f;;
+    *"FROM fleet_cognition_run_budgets"*) [[ -n "\${RUNNING:-}" ]] && echo 1 || echo 0;;
+    *"FROM fleet_offers WHERE slug"*) echo 1;;
+    *"fleet_offer_sale_block(o) IS NULL AND"*) echo true;;
+    *"enabled AND card_enabled"*) echo f;; *"tripped FROM"*) echo f;; *"fleet_control_ai_state"*) echo false;;
+    *"FROM fleet_outward_release"*) echo 0;; *"fleet_custody_activation_live"*) echo 0;; *"fleet_refund_authority_live"*) echo 0;;
+    *"fleet_admin_cognition_run"*) echo '{"open":true}';; *"fleet_ledger_verify"*) echo true;;
+    *) echo "";;
+  esac; }
+`);
+    const run = (args: string[], env: Record<string, string> = {}) => {
+      const r = spawnSync("bash", [SRC, ...args], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir, FLEET_CHECKS_DIR: path.join(dir, "state"),
+        FLEET_CHECKS_STUBS: path.join(dir, "stubs.sh"), ...env } });
+      return { code: r.status, out: r.stdout + r.stderr };
+    };
+    const owner = "owner@example.test";
+    const c = new pg.Client({ connectionString: pgdb!.superUrl }); await c.connect();
+    try {
+    const ins = (id: string, dirn: string, at: string, o: { reply?: string; thread?: string } = {}) => c.query(
+      `INSERT INTO fleet.fleet_agent_mail VALUES ($1, $2, $3, $4, $5, 'sent', $6, $7, $8)`,
+      [id, A1, dirn, dirn === "in" ? owner : "fleet@example.test", dirn === "in" ? ["fleet@example.test"] : [owner], o.reply ?? null, o.thread ?? id, at]);
+    const IN = "11111111-1111-4111-8111-111111111111";
+    await ins(IN, "in", "2026-10-21T11:01:06Z");                                                              // the mail already received
+    await ins("22222222-2222-4222-8222-222222222222", "out", "2026-10-21T11:30:00Z", { reply: IN, thread: IN }); // a reply BEFORE this run
+    expect(run(["checks", "300", "6", owner, "2026-10-21T11:00:00Z"]).code).toBe(0);
+    const start = fs.readFileSync(path.join(dir, "state", "start.txt"), "utf8").trim();
+    expect(start > "2026-10-21T11:30:00Z").toBe(true);
+    const st = run(["status"]).out;
+    expect(st).toContain("the owner's mail to Agent-1 (since 2026-10-21T11:00:00Z) at 2026-10-21 11:01:06+00");
+    expect(st).toContain("Agent-1's reply to it sent at ;");                                                // the historical reply does not count
+    expect(run(["watch"], { RUNNING: "1" }).out).not.toContain("CHECK STOPPED");
+    const later = new Date(Date.now() + 60_000).toISOString();
+    await ins("33333333-3333-4333-8333-333333333333", "out", later);                                         // new mail to the owner, not a reply
+    expect(run(["status"]).out).toMatch(/reply to it sent at ; any mail from Agent-1 to the owner since the start: \d{4}-/);
+    expect(run(["watch"], { RUNNING: "1" }).out).not.toContain("CHECK STOPPED");
+    await ins("44444444-4444-4444-8444-444444444444", "out", later, { reply: IN, thread: IN });             // the reply, during the run
+    expect(run(["watch"], { RUNNING: "1" }).out).toContain("CHECKS COMPLETE");
+    } finally { await c.end(); }
+  }, 120_000);
 });

@@ -10,7 +10,8 @@
 #         files with cached_values, displayed dates and rendering passing, and no sale block;
 #       - the CUSTOMER EMAIL: the owner writes to fleet.treasury@proton.me (subject "Agent-1 - …") from <ownerEmail>; Agent-1
 #         may mail that address only (an outward release for mail to it, expiring with the run). Success = the owner's mail
-#         routed to Agent-1 and Agent-1's reply SENT to that address after it. [mailSince] (UTC, e.g. 2026-10-21T11:00:00Z,
+#         routed to Agent-1 and Agent-1's REPLY to it SENT during the run (in its thread or in reply to it; a historical reply
+#         or an unrelated mail to the owner does not count). [mailSince] (UTC, e.g. 2026-10-21T11:00:00Z,
 #         not in the future): the owner's mail already received since then counts — a continuation answers the mail
 #         already sent instead of asking the owner to write again. The reply must still be sent during this run.
 #       Purchases excluded (the spend circuit breaker is tripped; stop resets it); no paid search (the media gateway stopped).
@@ -93,7 +94,13 @@ workbook_done() {
 }
 mail_in() { Q "SELECT max(received_at) FROM fleet_agent_mail WHERE agent_id = '$A1' AND direction = 'in' AND lower(sender_address) = lower('$EMAIL') AND received_at >= '${MAILSINCE:-$(START)}'"; }
 mail_out() { Q "SELECT max(received_at) FROM fleet_agent_mail WHERE agent_id = '$A1' AND direction = 'out' AND send_status = 'sent' AND lower('$EMAIL') = ANY (recipients) AND received_at >= '$(START)'"; }
-email_done() { local i o; i=$(mail_in); o=$(mail_out); [[ -n "$i" && -n "$o" && "$o" > "$i" ]]; }
+# 2026-10-21: success is a REPLY to the owner's counted mail — sent during this run, after that mail, and linked to it (its
+# thread or in-reply-to) — never a historical reply, and never an unrelated mail to the owner (shown, but not counted).
+mail_reply() { Q "WITH i AS (SELECT message_id, COALESCE(thread_id, message_id) AS t, received_at FROM fleet_agent_mail WHERE agent_id = '$A1' AND direction = 'in'
+      AND lower(sender_address) = lower('$EMAIL') AND received_at >= '${MAILSINCE:-$(START)}')
+    SELECT max(o.received_at) FROM fleet_agent_mail o JOIN i ON (o.in_reply_to = i.message_id OR o.thread_id = i.t) AND o.received_at > i.received_at
+     WHERE o.agent_id = '$A1' AND o.direction = 'out' AND o.send_status = 'sent' AND lower('$EMAIL') = ANY (o.recipients) AND o.received_at >= '$(START)'"; }
+email_done() { [[ -n "$(mail_in)" && -n "$(mail_reply)" ]]; }
 card_req() { Q "SELECT request_id || ' ' || status || ' ' || amount_minor || ' ' || COALESCE(charge_id::text, '-') FROM fleet_card_requests WHERE agent_id = '$A1' AND created_at >= '$(START)' ORDER BY created_at DESC LIMIT 1"; }
 card_charge() { Q "SELECT status || ' ' || COALESCE(amount_minor, hold_max_minor) || ' ' || COALESCE(evidence_status, '-') FROM fleet_card_charges WHERE charge_id = '$1'"; }
 
@@ -102,7 +109,7 @@ report() {
   echo "  run budget: $(Q "SELECT fleet_admin_cognition_run('$A1')" | jq -c '{ceilingMinor, spentMicro, inflightMicro, calls, open, endsAt, endReason}' 2>/dev/null)"
   echo "  release live: $(release_live); card authority on: $(card_on); spend breaker tripped: $(breaker_tripped); media: $(media_active); Fleet Control AI budget set: $(fc_set)"
   echo "  workbook (Agent-1's offer): $(offer_state)"
-  [[ "$MODE" == checks ]] && echo "  email: the owner's mail to Agent-1 (since ${MAILSINCE:-the start}) at $(mail_in); Agent-1's reply sent at $(mail_out)"
+  [[ "$MODE" == checks ]] && echo "  email: the owner's mail to Agent-1 (since ${MAILSINCE:-the start}) at $(mail_in); Agent-1's reply to it sent at $(mail_reply); any mail from Agent-1 to the owner since the start: $(mail_out)"
   if [[ "$MODE" == card ]]; then
     local r; r=$(card_req); echo "  card request: ${r:-none}"
     [[ -n "$r" && "$(awk '{print $4}' <<< "$r")" != - ]] && echo "  card charge: $(card_charge "$(awk '{print $4}' <<< "$r")")"

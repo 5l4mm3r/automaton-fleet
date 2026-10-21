@@ -33,7 +33,7 @@ describe.skipIf(!PG_BIN || !fs.existsSync(path.join(DEV_TOOLS, "site")))("revisi
     if (root) fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("phases 1–3: fulfil; the buyer's report is answered honestly while the renderer is unavailable; waiting is free across a restart", async () => {
+  it("phases 1–3 and 5: fulfil; the buyer's report is answered honestly while the renderer is unavailable; waiting is free across a restart; continuity across repeated size stops", async () => {
     const id = treeIdentity(process.cwd());
     expect(id.commit && id.buildId, id.error).toBeTruthy();
     const release = { repo: REPO_URL, commit: id.commit!, buildId: id.buildId!, lockfileSha256: id.lockfileSha256! };
@@ -55,7 +55,8 @@ describe.skipIf(!PG_BIN || !fs.existsSync(path.join(DEV_TOOLS, "site")))("revisi
     });
     for (const c of r.checks) expect(c.ok, `${c.name}: ${c.detail}`).toBe(true);
     expect(r.complete).toBe(false);
-    expect(r.checks.map((c) => c.name.split(" ")[0])).toEqual(expect.arrayContaining(["1.", "2a.", "2b.", "2c.", "2d.", "3.", "4."]));
+    expect(r.checks.map((c) => c.name.split(" ")[0])).toEqual(expect.arrayContaining(["1.", "2a.", "2b.", "2c.", "2d.", "3.", "4.", "5a.", "5b.", "5c.", "5d."]));
+    for (const c of r.checks.filter((x) => x.name.startsWith("5"))) console.log(`${c.name.split(" ")[0]} ${c.detail}`);
     expect(restarts[0]).toBe("off");
   }, 600_000);
 });

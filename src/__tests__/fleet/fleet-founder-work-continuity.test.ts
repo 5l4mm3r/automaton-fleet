@@ -124,24 +124,39 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
 
   // 2026-10-21 (launch check): seven turns each ended at the request-size budget after 5-7 steps; they were taken as
   // finished, so each lost its working record and the next re-oriented from scratch (8 identical inspections, 270p).
-  it("1d. a turn that reaches its size limit mid-work is carried like a cut-off one: its results and plan reach the next turn", async () => {
+  it("1d. turns that reach their size limit mid-work again and again carry their results, the platform's refusal reasons and the plan forward", async () => {
+    const big = (from: number) => Array.from({ length: 5 }, (_, i) => c("read_file", { path: `product/big${from + i}.txt` }));
     const r = rig((t, s) => {
-      if (t === 1 && s === 1) return { content: "Plan: recalculate the tracker, inspect the saved file, then review and publish it.", calls: Array.from({ length: 5 }, (_, i) => c("read_file", { path: `product/big${i}.txt` })) };
-      if (t === 1) return { calls: Array.from({ length: 5 }, (_, i) => c("read_file", { path: `product/big${(s - 1) * 5 + i}.txt` })) };
+      // Turn 1: a plan, a call the platform refuses, then large results until the size limit.
+      if (t === 1 && s === 1) return { content: "Plan: recalculate the tracker, inspect the saved file, then review and publish it.",
+        calls: [c("offer", { op: "publish", args: { offerId: "o9" } })] };
+      if (t === 1) return { calls: big((s - 2) * 5) };
+      // Turn 2: it writes nothing (as Agent-1's real turns did) and stops at the size limit again.
+      if (t === 2) return { calls: big(40 + (s - 1) * 5) };
       return { calls: [c("sleep", { reason: "continued from the carried record" })] };
     });
-    for (let i = 0; i < 30; i++) fs.writeFileSync(path.join(r.d.w, "product", `big${i}.txt`), `RESULT-MARK-${i} ` + "x".repeat(5_000));
-    const first = await r.mind.turn("hb");
-    expect(first.steps).toBeLessThan(FOUNDER_STEPS_PER_TURN);                        // stopped by size, not by its steps
+    r.world.refuse["offer.publish:o9"] = "FLEET_REVIEW_AUTOMATED_FAILED";
+    for (let i = 0; i < 80; i++) fs.writeFileSync(path.join(r.d.w, "product", `big${i}.txt`), `RESULT-MARK-${i} ` + "x".repeat(5_000));
+    const t1 = await r.mind.turn("hb");
+    expect(t1.steps).toBeLessThan(FOUNDER_STEPS_PER_TURN);                           // stopped by size, not by its steps
+    expect(fs.existsSync(path.join(r.d.s, CARRY_FILE))).toBe(true);
+    const t2 = await r.mind.turn("hb 2");
+    expect(t2.steps).toBeLessThan(FOUNDER_STEPS_PER_TURN);
+    const p2 = r.packets[1];
+    expect(p2).toContain("CONTINUE YOUR UNFINISHED WORK");
+    expect(p2).toContain("reached the turn's size limit");
+    expect(p2).toContain("FLEET_REVIEW_AUTOMATED_FAILED");                            // the refusal and its reason
+    expect(p2).toMatch(/RESULT-MARK-([0-9]|[1-3][0-9])\b/);                          // an actual result of turn 1
+    await r.mind.turn("hb 3");
+    const p3 = r.packets[2];
     const log = fs.readFileSync(path.join(r.d.s, "mind-log.jsonl"), "utf8");
-    expect(log).toContain("FLEET_TURN_CONTEXT_BUDGET");
-    expect(fs.existsSync(path.join(r.d.s, CARRY_FILE))).toBe(true);                  // kept for the next turn
-    await r.mind.turn("hb 2");
-    const p = r.packets[1];
-    expect(p).toContain("CONTINUE YOUR UNFINISHED WORK");
-    expect(p).toContain("reached the turn's size limit");
-    expect(p).toContain("Plan: recalculate the tracker, inspect the saved file, then review and publish it.");
-    expect(p).toMatch(/RESULT-MARK-\d+/);                                          // an actual result of the carried turn
+    expect(log.match(/FLEET_TURN_CONTEXT_BUDGET/g)).toHaveLength(2);                  // two size stops in a row
+    expect(p3).toContain("the last of 2 turns in a row that stopped unfinished");
+    expect(p3).toContain("Plan: recalculate the tracker, inspect the saved file, then review and publish it."); // turn 1's plan: turn 2 wrote none
+    expect(p3).toContain("Refused by the platform");
+    expect(p3).toContain("offer {\\\"op\\\":\\\"publish\\\"");                // turn 1's refusal survives a turn that did not repeat it
+    expect(p3).toContain("FLEET_REVIEW_AUTOMATED_FAILED");
+    expect(p3).toMatch(/RESULT-MARK-(4[0-9]|[5-7][0-9])\b/);                         // an actual result of turn 2
     expect(fs.existsSync(path.join(r.d.s, CARRY_FILE))).toBe(false);                 // the finished turn consumed it
   });
 

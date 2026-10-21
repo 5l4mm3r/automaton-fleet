@@ -19,8 +19,12 @@
  *   4. the renderer is available again and the founder restarted: it wakes once, the packet still shows the open request,
  *      it recalculates in the sandbox, inspects (rendered; saved values match), reviews and delivers EXACTLY those bytes;
  *      the request is resolved and the delivery reaches the buyer.
- * Without a renderer on the host (`rendererInstalled: false`, e.g. a development machine) the rehearsal stops after 3 and
- * says so; it is complete only when 4 ran.
+ * Without a renderer on the host (`rendererInstalled: false`, e.g. a development machine) phase 4 does not run and the
+ * rehearsal says so; it is complete only when 4 ran.
+ *   5. (2026-10-21) continuity across REPEATED size stops in the real unit: a Fleet Control notice names a task; turn A
+ *      writes a plan, is refused once by the platform and gathers large results until the 40 KB request budget stops it;
+ *      turn B writes nothing and is stopped again; turn C must be shown turn A's plan and refusal reason and turn B's
+ *      results, and ends the work — the record is consumed and the founder waits.
  */
 
 import crypto from "crypto";
@@ -41,7 +45,8 @@ import { PgIdentityGateway } from "../identity/gateway.js";
 import { IdentityBroker } from "../identity/broker.js";
 import { SimulatedSharedMailProvider } from "../identity/providers.js";
 import { initIdentityState, openIdentityState, openProviderVault } from "../identity/main.js";
-import { REVISION_ACK, REVISION_BLOCKER, REVISION_V2, RevisionRehearsalModel } from "../eval/revision-rehearsal-model.js";
+import { CONTINUITY_PLAN, CONTINUITY_TASK, REVISION_ACK, REVISION_BLOCKER, REVISION_V2, RevisionRehearsalModel } from "../eval/revision-rehearsal-model.js";
+import { CARRY_FILE } from "./continuity.js";
 import type { RuntimeRelease } from "../runtime.js";
 import { FOUNDER_CREDENTIAL_FILE, FOUNDER_IDENTITY_FILE, type FounderIdentityFile } from "./evidence.js";
 import type { FounderUpgradeHost } from "./host.js";
@@ -291,6 +296,37 @@ export async function runRevisionRehearsal(o: RevisionRehearsalOptions): Promise
       check("4d. the buyer's request is resolved by the delivery, and the corrected file reached the buyer", obl4.length === 0 && toBuyer().length >= 4,
         `open requests ${obl4.length}; ${toBuyer().length} mail(s) to the buyer`);
       report.complete = true;
+    }
+    // ── 5. Continuity across repeated size stops: what the next turns are actually shown ────────────────────────
+    {
+      const mindLog = path.join(stateNs, "mind-log.jsonl");
+      const sizeStops = () => (fs.existsSync(mindLog) ? fs.readFileSync(mindLog, "utf8") : "").split("\n").filter((l) => l.includes("FLEET_TURN_CONTEXT_BUDGET")).length;
+      const stops0 = sizeStops();
+      const p0 = model.packets.length;
+      model.continuity = true;
+      await fn(owner, "fleet_spend_review_notice", [a, `${CONTINUITY_TASK}: gather the five records in your workspace and report what they show (a rehearsal task).`]);
+      const pC = await waitFor(async () => model.packets.slice(p0).find((p) => p.includes("the last of 2 turns in a row that stopped unfinished")) ?? null, timeout * 3, poll);
+      const ps = model.packets.slice(p0);
+      const pB = ps.find((p) => p.includes("CONTINUE YOUR UNFINISHED WORK") && !p.includes("turns in a row that stopped unfinished")) ?? "";
+      const refusal = model.continuityRefusal ?? "";
+      const code = /"code":\s*"([A-Z_]+)"/.exec(refusal)?.[1] ?? /\b(FLEET_[A-Z_]+)/.exec(refusal)?.[1] ?? "";
+      // Words of the refusal's reason (punctuation and quoting differ once the packet renders it).
+      const reasonWords = (/"(?:reason|error)":\s*"([^"]{8,})/.exec(refusal)?.[1] ?? "").replace(/[^A-Za-z0-9 ]+/g, " ").trim().split(/\s+/).slice(0, 4).join(" ");
+      const has = (p: string | null | undefined, x: string) => Boolean(p && x && p.replace(/[^A-Za-z0-9 ]+/g, " ").replace(/\s+/g, " ").includes(x));
+      check("5a. two turns in a row were stopped by the request-size budget in the real unit (not by their steps)", sizeStops() - stops0 >= 2 && ps.length >= 3,
+        `${sizeStops() - stops0} size stop(s); ${ps.length} packet(s) since the notice`);
+      check("5b. the turn after the first stop was shown its plan, the platform's refusal with its reason, and its actual results",
+        pB.includes("reached the turn's size limit") && pB.includes("CONT-PLAN-7") && Boolean(code) && pB.includes(code) && has(pB, reasonWords) && /CONT-A-\d+/.test(pB),
+        `refusal ${code || "(none)"} "${reasonWords}"; plan ${pB.includes("CONT-PLAN-7")}; results ${/CONT-A-\d+/.test(pB)}`);
+      check("5c. after the second stop: turn A's plan and refusal (turn B wrote no plan and did not repeat the call) and turn B's results",
+        Boolean(pC) && pC!.includes(CONTINUITY_PLAN.slice(0, 18)) && pC!.includes(code) && has(pC, reasonWords) && /CONT-B-\d+/.test(pC!),
+        pC ? `plan ${pC.includes("CONT-PLAN-7")}; refusal ${pC.includes(code)}; turn B results ${/CONT-B-\d+/.test(pC)}` : "no packet after a second stop");
+      const finished = await waitFor(async () => (!fs.existsSync(path.join(stateNs, CARRY_FILE)) && model.packets.length > p0 + 2 ? true : null), timeout, poll);
+      const q0 = model.steps;
+      await sleep(Math.min(quiet, 60_000));
+      check("5d. the continued turn finished the work: the carried record is consumed and the founder waits (no further model call)",
+        Boolean(finished) && model.steps === q0, `record consumed ${Boolean(finished)}; ${model.steps - q0} step(s) while it waits`);
+      model.continuity = false;
     }
     const faults = await q(`SELECT count(*)::int AS n FROM fleet_notifications WHERE code = 'AGENT_TOOL_FAULT' AND agent_id = $1`, [a]);
     check("no platform fault was reported by the founder's tools", faults[0].n === 0, `${faults[0].n} AGENT_TOOL_FAULT notification(s)`);

@@ -4,13 +4,18 @@
  * platform shows it — the task packet's lines and its tools' results — so the rehearsal proves that the platform tells an
  * agent enough to answer and fix the order, not that a script knows the answers:
  *
- *   fulfil   a paid order to fulfil → build the tracker (formulas, no saved values) with exec → inspect → review → deliver;
+ *   fulfil   a paid order to fulfil → build the tracker (formulas with their saved values: since v109 a review refuses a
+ *            spreadsheet whose formulas are saved without them) with exec → inspect → review → deliver;
  *   answer   the packet shows a buyer's message UNANSWERED → first a plain sleep, as Agent-1 did (the platform must refuse
  *            it) → read the thread → acknowledge;
  *   revise   recalculate the tracker with LibreOffice in the sandbox → inspect the recalculated copy → review exactly it →
  *            deliver exactly it (resendReason) → sleep until the buyer writes;
  *   blocked  the recalculation cannot start (the office renderer is unavailable) → tell the buyer honestly what blocks the
- *            revision → sleep until the renderer is available (no paid polling while it waits).
+ *            revision → sleep until the renderer is available (no paid polling while it waits);
+ *   continue (2026-10-21, after the launch check whose turns each stopped at the size limit and started over) — a Fleet
+ *            Control notice names the task: turn A writes a plan, makes a call the platform refuses and gathers large
+ *            results until the turn's size limit stops it; turn B writes nothing and is stopped by size again; turn C is
+ *            what the platform carried over — it ends the work. The rehearsal checks what turns B and C were shown.
  */
 
 import { ScriptedProvider } from "../cognition/providers.js";
@@ -25,17 +30,26 @@ export const REVISION_ACK = "Thank you for the report — I can see the renewal 
 export const REVISION_BLOCKER = "An update on your corrected tracker: the spreadsheet application I use to recalculate and check it is unavailable at the moment, so I cannot send a verified file yet. Your request stays open; I will send the corrected file as soon as it is back.";
 const approx = (s: string) => Math.ceil(s.length / 4);
 
-/** The tracker as first built: real dates and formulas, but no saved values (openpyxl) — previewers show blanks. */
+/** The tracker as first built: real dates and formulas with their saved values (XlsxWriter value=; v109 refuses a review
+ *  of formulas saved without them). */
 const BUILD_V1 = String.raw`python3 -P -s - <<'PY'
-import datetime, openpyxl
-wb = openpyxl.Workbook(); s = wb.active; s.title = "Tracker"
-s.append(["Property", "Gas safety (last)", "Gas safety (due)", "EICR (last)", "EICR (due)"])
-for i, (p, gas, eicr) in enumerate([("12 High Street", datetime.date(2026, 3, 4), datetime.date(2022, 6, 1)), ("Flat 2, 9 Mill Lane", datetime.date(2025, 11, 20), datetime.date(2021, 9, 14))], start=2):
-    s.append([p, gas, "=B%d+365" % i, eicr, "=D%d+1826" % i])
-    for c in "BCDE": s["%s%d" % (c, i)].number_format = "dd/mm/yyyy"
-for c in "ABCDE": s[c + "1"].font = openpyxl.styles.Font(bold=True)
-import os; os.makedirs("product", exist_ok=True); wb.save("product/landlord-tracker.xlsx"); print("built")
+import datetime, os, xlsxwriter
+os.makedirs("product", exist_ok=True)
+wb = xlsxwriter.Workbook("product/landlord-tracker.xlsx"); s = wb.add_worksheet("Tracker")
+b = wb.add_format({"bold": True}); d = wb.add_format({"num_format": "dd/mm/yyyy"})
+s.write_row(0, 0, ["Property", "Gas safety (last)", "Gas safety (due)", "EICR (last)", "EICR (due)"], b)
+serial = lambda x: (x - datetime.date(1899, 12, 30)).days
+for i, (p, gas, eicr) in enumerate([("12 High Street", datetime.date(2026, 3, 4), datetime.date(2022, 6, 1)), ("Flat 2, 9 Mill Lane", datetime.date(2025, 11, 20), datetime.date(2021, 9, 14))], start=1):
+    s.write(i, 0, p)
+    s.write_datetime(i, 1, datetime.datetime.combine(gas, datetime.time()), d); s.write_formula(i, 2, "=B%d+365" % (i + 1), d, serial(gas) + 365)
+    s.write_datetime(i, 3, datetime.datetime.combine(eicr, datetime.time()), d); s.write_formula(i, 4, "=D%d+1826" % (i + 1), d, serial(eicr) + 1826)
+wb.close(); print("built")
 PY`;
+
+/** The continuity task (phase 5): the notice's marker, the plan turn A writes, an offer that does not exist (refused). */
+export const CONTINUITY_TASK = "CONTINUITY-REHEARSAL-TASK";
+export const CONTINUITY_PLAN = "Plan: CONT-PLAN-7 - gather the five records, then report what they show.";
+export const CONTINUITY_MISSING_OFFER = "00000000-0000-4000-8000-00000000c0de";
 /** The revision: the same workbook recalculated and saved by LibreOffice, so every formula's value is in the file. */
 // A later turn does not recalculate again: that would replace the bytes it inspected and reviewed (the review then no
 // longer covers them) — the founder looks at its workspace first.
@@ -59,6 +73,10 @@ export class RevisionRehearsalModel extends ScriptedProvider {
   readonly trace: string[] = [];
   /** 2026-10-20: the last commands' results in full (bounded) — a failed phase keeps the evidence of why. */
   readonly execs: string[] = [];
+  /** 2026-10-21 (phase 5): set by the rehearsal; the platform's refusal turn A received (its evidence of what to look for). */
+  continuity = false;
+  continuityRefusal: string | null = null;
+  private seq = 0;
 
   override async chat(req: ChatRequest): Promise<ChatResult> {
     const first = req.messages[0]?.content ?? "";
@@ -69,7 +87,7 @@ export class RevisionRehearsalModel extends ScriptedProvider {
     const tools = req.messages.filter((m) => m.role === "tool").map((m) => m.content);
     const all = tools.join("\n");
     const last = tools.at(-1) ?? "";
-    const call = (name: string, args: Record<string, unknown>): ToolCall => ({ id: `rv${inTurn}-${name}-${tools.length}`, name, arguments: args });
+    const call = (name: string, args: Record<string, unknown>): ToolCall => ({ id: `rv${inTurn}-${name}-${tools.length}-${++this.seq}`, name, arguments: args });
     const sleep = (reason: string, wakeOn: string) => call("sleep", { reason, wakeOn });
     const owed = /order ([0-9a-f-]{36}): the buyer's message of [^;]*? is UNANSWERED/.exec(first)?.[1] ?? null;
     const open = owed ?? /order ([0-9a-f-]{36}): answered [^;]*?, not yet resolved/.exec(first)?.[1] ?? null;
@@ -82,8 +100,27 @@ export class RevisionRehearsalModel extends ScriptedProvider {
     const after = /FLEET_OPERATION_EXISTS[\s\S]*?after: \\?"([0-9a-f-]{36})\\?"/.exec(last)?.[1] ?? null;
     let content = "";
     let toolCalls: ToolCall[] = [];
+    // Large results: five commands per step, each printing ~2.9 KB with its own marker (the step's size grows ~15 KB).
+    const large = (tag: string) => Array.from({ length: 5 }, (_, i) =>
+      call("exec", { command: `python3 -P -s -c "print('${tag}-${tools.length + i} ' + 'r' * 2900)"` }));
+    const carriedOver = first.includes("CONTINUE YOUR UNFINISHED WORK");
+    const secondCarry = first.includes("turns in a row that stopped unfinished");
 
-    if (open) {
+    if (this.continuity && first.includes(CONTINUITY_TASK) && !carriedOver) {
+      // Turn A: a plan, a call the platform refuses, then results until the size limit stops the turn.
+      if (inTurn === 0) {
+        content = CONTINUITY_PLAN;
+        toolCalls = [call("offer", { op: "publish", args: { offerId: CONTINUITY_MISSING_OFFER } })];
+      } else {
+        if (inTurn === 1) this.continuityRefusal = last;
+        toolCalls = large("CONT-A");
+      }
+    } else if (this.continuity && carriedOver && !secondCarry) {
+      toolCalls = large("CONT-B");                                                     // turn B writes nothing, as Agent-1's did
+    } else if (this.continuity && secondCarry) {
+      content = "The carried record has what turns A and B gathered: the continuity task is done.";
+      toolCalls = [sleep("the continuity task is done", "a new buyer message")];
+    } else if (open) {
       const answered = all.includes('"messageId"');
       if (owed && inTurn === 0) {
         content = "Nothing actionable.";                                              // what Agent-1 concluded on 2026-10-19
