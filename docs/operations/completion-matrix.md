@@ -58,7 +58,7 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 | Offer/order pages as service role; official PayPal checkout; consent; states | OWNER 2026-10-16 (consent) | v96–v99 tests, browser journeys; live C6 | done | — |
 | Replacing unusable PayPal orders without double capture | IMPL | v98 lifecycle (10) | done | — |
 | Reviewed bytes = delivered bytes | IMPL | review gate; C6 checksum f45c3d00… matched | done | — |
-| Buyer email joins the right order; obligations; replies by email | OWNER 2026-10-19/20 | v108 (fleet-v108-completion-pg) | done (tests) | **live** B1+B2 |
+| Buyer email joins the right order; obligations; replies by email | OWNER 2026-10-19/20 | v108 (fleet-v108-completion-pg) | done (tests) | **live** B1+B2 — from an address that never bought from Agent-1 (a closed-order buyer's mail goes to the owner by v109) |
 | Closed conversations (refund / 7 days / 10 msgs) on page AND email; closed-order mail kept for the owner | OWNER 2026-10-20 "Refund or 7 days"; 2026-10-21 "preserve them for owner review" | page: v108; email: v109 (installed 00:51Z) | done | — |
 | No cross-customer disclosure via subject / agent name / thread | IMPL | v108/v109 tests (other sender, stranger naming the agent) | done | — |
 | Geography: worldwide, no exclusions; country recorded | OWNER 2026-10-20 | v108; capability status v15, Field Guide | done | tax: see dependencies |
@@ -79,7 +79,7 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 | Card = payment bypass, owner-paid card 1, reserved from agent cash, clearing liability, statement match once | OWNER O2/O16/O17/O19 | v48–v58, v88 | done (simulated) | **live** B3 |
 | Receipts: return-or-withdrawal choice each time | OWNER 2026-10-08 | v58 | done | — |
 | Fills never disclosure; no decrypted values to models/logs | OWNER O4 | broker vault | done | — |
-| One pre-launch purchase (merchant, ≤ £5, expiry, cleanup); merchant account path; agent proposal path | OWNER 2026-10-20/21 | v108 release action `card`; v109 account_register + capability status v16 (installed; PG-tested, migration-rehearsed, not yet exercised live) | done (code) | Agent-1's merchant proposal, then the card check (741p) |
+| One pre-launch purchase (merchant, ≤ £5, expiry, cleanup); merchant account path; agent proposal path | OWNER 2026-10-20/21 | v108 release action `card`; v109 account_register + capability status v16 (installed; PG-tested, migration-rehearsed, not yet exercised live) | done (code) | Agent-1's merchant proposal, then the card check (741p; at the 500p ceiling: 542 bp share → routine, no review) |
 | Standing identity + card authority at launch | OWNER O4/O11; 2026-10-11 "uncapped" | settings | owner | activation D5 |
 
 ## G. Lifecycle, visibility, recovery
@@ -91,7 +91,7 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 | Local freeze ≠ provider cancellation | OWNER O5 | v49 | done | — |
 | Deploy/rollback preserves history (fix forward) | IMPL | rollout reconciliation; rehearsals every release | done | — |
 | Backup + restore, monitoring, alerts | IMPL | LIVE 2026-10-17; the heartbeat flagged disk ≥ 90 % from 2026-10-20 and failed at 100 % (alerted) | done | — |
-| Release retention (2026-10-21 incident: 84 releases filled the 72 GB disk; v109's first cutover failed "No space left on device", rolled itself back, nothing changed) | IMPL | 78 old releases + 79 stage copies deleted with the owner's approval (49 GB free); fleet-release.sh now refuses below 4 GB free; scripts/fleet-release-prune.sh (dry run default; keeps current, pinned, newest N) — fleet-release-script, fleet-release-prune tests | done (repo; ships with the next kit) | prune after each release |
+| Release retention (2026-10-21 incident: 84 releases filled the 72 GB disk; v109's first cutover failed "No space left on device", rolled itself back, nothing changed) | IMPL | 78 old releases + 79 stage copies deleted with the owner's approval (49 GB free); fleet-release.sh now refuses below 4 GB free; scripts/fleet-release-prune.sh (dry run default; keeps current, pinned, newest N — fleet-release-script, fleet-release-prune tests + rollback targets (controller OLD=, agents' latest upgrade from_commit), fail-closed --apply | done (repo; staged ~/fleet-release-prune.sh; production dry run: 0 to prune) | owner step after each release: dry run, check keep list, --apply. Agent-2's rollback target 973e0c1 was deleted in the cleanup (rebuild from git before using it) |
 
 ## External dependencies (named, with evidence)
 - **PayPal reporting lag** (resolved 00:50Z): the balance and Transaction Search lagged the refund by ~3.5 h; reconciliation

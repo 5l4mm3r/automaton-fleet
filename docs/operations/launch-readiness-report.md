@@ -11,7 +11,14 @@ not tripped · paid search (media gateway) stopped · ledger verifies · privile
 Incident 2026-10-21 00:37Z: the first v109 cutover failed with "No space left on device" (84 retained releases filled the
 72 GB disk) and rolled itself back before any outage. With the owner's approval 78 releases and 79 stage copies were
 deleted (kept: a0bbf4e, b60e262, 597acc1, 2b7b490, 98d46c6, 7ab848d); 49 GB free; the retry installed cleanly. Prevention:
-fleet-release.sh refuses below 4 GB free; fleet-release-prune.sh (repo, next kit).
+fleet-release.sh refuses below 4 GB free; fleet-release-prune.sh (repo, next kit; staged at ~/fleet-release-prune.sh) keeps
+the current release, agent and unit pins, **the rollback targets** (the controller release the current one replaced —
+a0bbf4e — and each living agent's latest upgrade from_commit — Agent-1 2b7b490, Agent-2 973e0c1) and the newest 3; --apply
+refuses if a rollback target or the agents' records cannot be read. Not scheduled: after each release the owner runs the dry
+run, checks the keep list, then --apply. Disclosure: the 2026-10-21 cleanup kept "current + pinned + newest 3" and so deleted
+973e0c1, Agent-2's recorded rollback target (Agent-1's 2b7b490 and the controller's a0bbf4e were kept). Agent-2 is paused on
+b60e262; that rollback needs 973e0c1 rebuilt from git first (the rollback verifies the build on disk). The new dry run on
+production prunes nothing and flags it.
 
 ## Modules
 | Module | State | Remaining |
@@ -22,10 +29,15 @@ fleet-release.sh refuses below 4 GB free; fleet-release-prune.sh (repo, next kit
 | D. Purchase, fulfilment, support | done (checkout, consent, country step, delivery, closed conversations on page and email, buyer email joins the order) | live email check; seller address re-save |
 | E. Quality | done (real-unit inspection; unsaved values never pass) | Agent-1 fixes its own tracker (live check) |
 | F. Card and identity | done in code (pre-launch exception installed, PG-tested, migration-rehearsed) | Agent-1's merchant proposal → card check |
-| G. Lifecycle, visibility, recovery | done (backups, restore, monitoring; disk alert fired) | prune after releases |
+| G. Lifecycle, visibility, recovery | done (backups, restore, monitoring; disk alert fired); pruning keeps rollback targets | prune after each release (owner step); Agent-2's rollback target 973e0c1 was deleted in the cleanup — rebuild from git before relying on it |
 
 ## Proposed: the workbook + email check (NOT approved by this report)
 `bash ~/launch-checks.sh checks 300 6 <your email>` — one run of Agent-1, sales closed:
+- **Your sending address.** Not your Gmail: it is the buyer on the refunded £5 order, and the v109 closed-order rule keeps
+  a closed-order buyer's mail for your review (HQ Mail, unassigned) instead of Agent-1 — a new email from it would never
+  reach Agent-1 (fleet_mail_to_order falls back to the buyer's address). Send from an address that never bought from
+  Agent-1 (e.g. your Proton address); the mail release names only that address. Recorded limit: a returning customer whose
+  orders are all closed reaches the owner, not the agent, even on a new topic.
 - **Scope.** Agent-1's offer is **paused** (since 2026-10-20 21:03Z: it changed the files; its passing review d06474be… no
   longer covers them; the current Landlord_Compliance_Tracker.xlsx f45c3d00… saves 1,194 formulas without values). Agent-1
   works on it on its own; success needs ITS new review to pass (cached_values, displayed dates, rendering pass — v109 refuses
@@ -45,8 +57,17 @@ verified in production, tested in PostgreSQL and in the disposable migration reh
 + account or registration there, ≤ £5, ≤ 24 h) plus your standing card authority switched on with the same cap
 (owner-identity-autonomy) — both set by `launch-checks.sh card` on your approval and switched off at its first outcome.
 The database enforces the one purchase, merchant, amount and expiry; the card caps enforce per-charge/day; the reservation
-comes from Agent-1's own cash (9,213p; 450p = 4.9 % < the 25 % review threshold, so no Fleet Control AI review is
-expected). Maximum: 200p usage + 41p tax/fee + ≤ 500p card = **741p**.
+comes from Agent-1's own cash.
+
+**Review at the actual ceiling (corrected 2026-10-21: the earlier text used 450p).** Computed by the live
+fleet_spend_review_assess, read-only, 2026-10-21 ~03:35Z: at **500p** the purchase is 542 bp (5.4 %) of Agent-1's 9,213p available,
+runway afterwards 108 days, no open commitments → **routine, no Fleet Control review** (thresholds: 2,500 bp share, 5,000 bp
+aggregate, 14 days' runway). One difference from 450p (488 bp): the brand-new-merchant signal's threshold is 500 bp, so at
+500p it WOULD flag if Agent-1 had already made a card request at that merchant in the previous 24 h (the card path passes
+the first earlier request there as "payee since"; a first request passes none). If any review is triggered, Fleet Control's
+AI budget is unset, so it spends nothing and the request waits for your decision — no added cost. Agent-1's cash after the
+workbook/email check (≤ 361p) is re-checked when the proposal arrives. Maximum unchanged: 200p usage + 41p tax/fee + ≤ 500p
+card = **741p** all-inclusive.
 
 ## Remaining blockers and owner decisions
 1. The workbook + email check (approval; 361p).

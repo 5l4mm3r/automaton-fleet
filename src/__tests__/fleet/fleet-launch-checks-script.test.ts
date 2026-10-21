@@ -52,6 +52,7 @@ Q() { case "$1" in
     *"FROM fleet_agent_accounts"*) echo "\${ACCOUNT_OK:-1}";;
     *"class_key = 'payment_card'"*) echo 1;;
     *"FROM fleet_offers WHERE slug"*) echo 1;;
+    *"FROM fleet_customer_orders z"*) echo "\${CLOSED_BUYER:-0}";;
     *"fleet_offer_sale_block(o) IS NULL AND"*) echo "\${WORKBOOK:-false}";;
     *"json_build_object('saleBlock'"*) echo '{"saleBlock":"a spreadsheet in it saves formulas without their values"}';;
     *"direction = 'in'"*) echo "\${MAIL_IN:-}";; *"direction = 'out'"*) echo "\${MAIL_OUT:-}";;
@@ -83,6 +84,7 @@ Q() { case "$1" in
       [card, { MEDIA: "active" }, "paid search) is running"],
       [card, { ACCOUNT_OK: "0" }, "is not one of Agent-1's usable accounts"],
       [["checks", "200", "6", "Owner@Example.test"], {}, "usage: checks"],
+      [["checks", "300", "6", "owner@example.test"], { CLOSED_BUYER: "1" }, "that order is closed: its mail goes to you, not Agent-1"],
     ] as Array<[string[], Record<string, string>, string]>) {
       const r = run(args, env);
       expect(r.code, r.out).toBe(1);

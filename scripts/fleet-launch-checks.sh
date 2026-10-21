@@ -124,6 +124,9 @@ checks)
     || die "usage: checks <aiCeilingPence 1..1000> <hours 1..12> <ownerEmail (lower case)>"
   guard
   [[ "$(Q "SELECT count(*) FROM fleet_offers WHERE slug = '$SLUG' AND agent_id = '$A1'")" == 1 ]] || die "Agent-1's offer $SLUG is not found"
+  # v109: a buyer whose orders with Agent-1 are all closed reaches the owner (HQ Mail), never Agent-1 — the email leg could not pass.
+  [[ "$(Q "SELECT count(*) FROM fleet_customer_orders z WHERE z.agent_id = '$A1' AND lower(z.buyer_email) = '$4' AND NOT (fleet_order_conversation(z) ->> 'open')::boolean")" == 0 ]] \
+    || die "$4 bought from Agent-1 and that order is closed: its mail goes to you, not Agent-1 (v109) — send from an address that never bought from Agent-1"
   s=$(ts); echo "$s" > "$D/start.txt"; echo "checks $4" > "$D/terms.txt"; MODE=checks; EMAIL=$4
   echo "  the workbook now: $(offer_state)"
   A economy-spend-breaker trip "launch checks: purchases are excluded from this run" | jq -c '{tripped}' || { stop_check "breaker not tripped"; exit 1; }
