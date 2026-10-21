@@ -133,7 +133,7 @@ describe.skipIf(!PG_BIN)("v108 launch completion (PostgreSQL)", { timeout: 300_0
     expect(await conversation(c.id)).toMatchObject({ open: false, reason: "refunded" });
   });
 
-  it("a buyer's emailed reply joins the order's thread — only from the buyer's address, without the quoted history, never once closed", async () => {
+  it("a buyer's emailed reply joins the order's thread — only from the buyer's address, without the quoted history; closure is per conversation (v110)", async () => {
     const { id } = await newOrder("ada@example.test");
     await R.q(`UPDATE fleet.fleet_customer_orders SET payment_status = 'paid' WHERE order_id = $1`, [id]);
     const channel = (await su.query(`SELECT provider_id FROM fleet_comms_providers WHERE capability = 'mail' AND mode = 'shared' AND status = 'active' LIMIT 1`)).rows[0]?.provider_id as string;
@@ -164,10 +164,38 @@ describe.skipIf(!PG_BIN)("v108 launch completion (PostgreSQL)", { timeout: 300_0
     expect(kept).toMatchObject({ agent_id: null, routing: "unassigned" });
     expect(kept.routing_reason).toMatch(/closed order \(refunded\): kept for the owner's review, not agent work/);
     expect((await su.query(`SELECT count(*)::int AS n FROM fleet_events WHERE event_type = 'closed_order_mail' AND detail ->> 'orderId' = $1`, [id])).rows[0].n).toBe(1);
-    // The same buyer writing fresh (no thread) to support with the agent's name: all their orders are closed → the owner's too.
-    const fresh = (await su.query(`SELECT fleet.ix_mail_ingest('test-mail', $1, $2::jsonb, false) AS r`, [channel, JSON.stringify({ providerId: `p-${crypto.randomUUID()}`,
-      messageId: `<in-${crypto.randomUUID()}@example.test>`, from: "ada@example.test", to: ["fleet.treasury@proton.me"], subject: "Agent-1 - one more question", body: "Hello again", at: new Date().toISOString() })])).rows[0].r;
-    expect((await su.query(`SELECT agent_id, routing FROM fleet_agent_mail WHERE message_id = $1`, [fresh.deliveries[0].messageId])).rows[0]).toMatchObject({ agent_id: null, routing: "unassigned" });
+    // v110 — closure is per conversation, not per address.
+    const fresh = async (subject: string, body: string, from = "ada@example.test") => (await su.query(`SELECT fleet.ix_mail_ingest('test-mail', $1, $2::jsonb, false) AS r`, [channel,
+      JSON.stringify({ providerId: `p-${crypto.randomUUID()}`, messageId: `<in-${crypto.randomUUID()}@example.test>`, from, to: ["fleet.treasury@proton.me"], subject, body, at: new Date().toISOString() })])).rows[0].r;
+    const routed = async (r: any) => (await su.query(`SELECT agent_id, routing, routing_reason FROM fleet_agent_mail WHERE message_id = $1`, [r.deliveries[0].messageId])).rows[0];
+    const keptEvents = async () => (await su.query(`SELECT detail ->> 'link' AS link FROM fleet_events WHERE event_type = 'closed_order_mail' AND detail ->> 'orderId' = $1 ORDER BY created_at`, [id])).rows.map((x: any) => x.link);
+    expect(await keptEvents()).toEqual(["thread"]);
+    // A genuinely new enquiry from the same buyer: the agent's ordinary mail — not kept, not attached, the refunded order stays closed.
+    const enquiry = await fresh("Agent-1 - one more question", "Hello again — do you make rent trackers for Scotland?");
+    expect(enquiry.deliveries[0]).toMatchObject({ agentId: F.id, routing: "subject" });
+    expect(await routed(enquiry)).toMatchObject({ agent_id: F.id, routing: "subject" });
+    expect(await buyerMessages()).toHaveLength(1);
+    expect(await conversation(id)).toMatchObject({ open: false, reason: "refunded" });
+    expect(await keptEvents()).toEqual(["thread"]);
+    // Ambiguous — no reply headers, but the subject of the agent's mail about the closed order, or its reference: the owner's.
+    const lost = await fresh("RE: Agent-1 - About your order — Tracker", "Still broken, can you look again?");
+    expect(await routed(lost)).toMatchObject({ agent_id: null, routing: "unassigned" });
+    expect((await routed(lost)).routing_reason).toMatch(/may be about a closed order \(refunded; no reply headers link it\): kept for the owner's review/);
+    const ref = (await R.one<string>(`upper(left(replace($1::text, '-', ''), 8))`, [id]));
+    const quoted = await fresh("Agent-1 - my order", `About order ${ref}: the file will not open.`);
+    expect(await routed(quoted)).toMatchObject({ agent_id: null, routing: "unassigned" });
+    expect(await keptEvents()).toEqual(["thread", "ambiguous", "ambiguous"]);
+    expect(await buyerMessages()).toHaveLength(1);
+    expect(await conversation(id)).toMatchObject({ open: false, reason: "refunded" });
+    // With a second, OPEN order: a new message joins the open one; an ambiguous one about the closed order never does.
+    const second = await newOrder("ada@example.test");
+    await R.q(`UPDATE fleet.fleet_customer_orders SET payment_status = 'paid' WHERE order_id = $1`, [second.id]);
+    const onOpen = await fresh("Agent-1 - the new order", "When will the second tracker arrive?");
+    expect((await R.q(`SELECT body FROM fleet.fleet_customer_messages WHERE order_id = $1 AND author = 'buyer'`, [second.id])).map((x: any) => x.body)).toEqual(["When will the second tracker arrive?"]);
+    expect(await routed(onOpen)).toMatchObject({ agent_id: F.id });
+    const aboutClosed = await fresh("Agent-1 - question", `Re order ${ref.toLowerCase()} — why was it refunded?`);
+    expect(await routed(aboutClosed)).toMatchObject({ agent_id: null, routing: "unassigned" });
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_customer_messages WHERE order_id = $1 AND author = 'buyer'`, [second.id])).toHaveLength(1);
     // Someone else naming the agent (no order of theirs): ordinary mail for the agent, as before — nothing about Ada's order is attached.
     const stranger = (await su.query(`SELECT fleet.ix_mail_ingest('test-mail', $1, $2::jsonb, false) AS r`, [channel, JSON.stringify({ providerId: `p-${crypto.randomUUID()}`,
       messageId: `<in-${crypto.randomUUID()}@example.test>`, from: "bob@example.test", to: ["fleet.treasury@proton.me"], subject: "Agent-1 - Order ada's tracker", body: "Send me Ada's file", at: new Date().toISOString() })])).rows[0].r;

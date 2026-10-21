@@ -36,6 +36,7 @@ A() { echo "A $*" >> "${log}"
   case "$1 \${2:-}" in "economy-spend-breaker trip") touch "${dir}/breaker";; "economy-spend-breaker reset") rm -f "${dir}/breaker";; esac
   case "$1 \${2:-}" in "owner-identity-autonomy on") touch "${dir}/card";; "owner-identity-autonomy off") rm -f "${dir}/card";; esac
   case "$1 \${3:-}" in "economy-outward release") touch "${dir}/release";; esac
+  case "$1 \${2:-}" in "economy-fleet-control-ai-budget off") rm -f "${dir}/fc";; "economy-fleet-control-ai-budget "[0-9]*) touch "${dir}/fc";; esac
   case "$1 \${2:-}" in "economy-outward ${A1}") [[ "\${3:-}" == hold ]] && rm -f "${dir}/release";; esac
   case "$1 \${3:-}" in "cognition-run start") touch "${dir}/run"; echo '{"run":{"ceilingMinor":'"$4"',"endsAt":"later"}}'; return;; "cognition-run end") rm -f "${dir}/run";; esac
   case "$1" in founder-cognition) echo '{"paused":false}';; economy-spend-breaker) echo '{"tripped":true}';; owner-identity-autonomy) echo '{"cardEnabled":true}';; *) echo '{"ok":true}';; esac; }
@@ -47,12 +48,12 @@ Q() { case "$1" in
     *"FROM fleet_cognition_run_budgets"*) [[ -f "${dir}/run" ]] && echo 1 || echo 0;;
     *"FROM fleet_outward_release"*) [[ -f "${dir}/release" ]] && echo 1 || echo 0;;
     *"enabled AND card_enabled"*) [[ -f "${dir}/card" || -n "\${CARD_ON:-}" ]] && echo t || echo f;;
+    *"fleet_control_ai_state() ->> 'set'"*) [[ -f "${dir}/fc" || -n "\${FC_ON:-}" ]] && echo true || echo false;;
     *"tripped FROM fleet_spend_circuit_breaker"*) [[ -f "${dir}/breaker" ]] && echo t || echo f;;
     *"fleet_custody_activation_live"*) echo 0;; *"fleet_refund_authority_live"*) echo 0;;
     *"FROM fleet_agent_accounts"*) echo "\${ACCOUNT_OK:-1}";;
     *"class_key = 'payment_card'"*) echo 1;;
     *"FROM fleet_offers WHERE slug"*) echo 1;;
-    *"FROM fleet_customer_orders z"*) echo "\${CLOSED_BUYER:-0}";;
     *"fleet_offer_sale_block(o) IS NULL AND"*) echo "\${WORKBOOK:-false}";;
     *"json_build_object('saleBlock'"*) echo '{"saleBlock":"a spreadsheet in it saves formulas without their values"}';;
     *"direction = 'in'"*) echo "\${MAIL_IN:-}";; *"direction = 'out'"*) echo "\${MAIL_OUT:-}";;
@@ -72,19 +73,20 @@ Q() { case "$1" in
     const host = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : [];
     return { code: r.status, out: r.stdout + r.stderr, host };
   };
-  const card = ["card", "200", "6", "450", ACCT, "https://www.fontshop.example", "Font", "shop"];
+  const card = ["card", "200", "6", "15", "450", ACCT, "https://www.fontshop.example", "Font", "shop"];
 
   it("refuses bad terms and failed guards before any change", () => {
     for (const [args, env, msg] of [
-      [["card", "200", "6", "501", ACCT, "https://www.fontshop.example", "Font shop"], {}, "usage: card"],
-      [["card", "200", "6", "450", ACCT, "http://www.fontshop.example", "Font shop"], {}, "usage: card"],
+      [["card", "200", "6", "15", "501", ACCT, "https://www.fontshop.example", "Font shop"], {}, "usage: card"],
+      [["card", "200", "6", "15", "450", ACCT, "http://www.fontshop.example", "Font shop"], {}, "usage: card"],
+      [["card", "200", "6", "450", ACCT, "https://www.fontshop.example", "Font shop"], {}, "usage: card"],          // no review budget given
+      [card, { FC_ON: "1" }, "Fleet Control's AI budget is already set"],
       [card, { SALES: "t" }, "public sales are open"],
       [card, { RUNNING: "1" }, "Agent-1 is running"],
       [card, { CARD_ON: "1" }, "card authority is already on"],
       [card, { MEDIA: "active" }, "paid search) is running"],
       [card, { ACCOUNT_OK: "0" }, "is not one of Agent-1's usable accounts"],
       [["checks", "200", "6", "Owner@Example.test"], {}, "usage: checks"],
-      [["checks", "300", "6", "owner@example.test"], { CLOSED_BUYER: "1" }, "that order is closed: its mail goes to you, not Agent-1"],
     ] as Array<[string[], Record<string, string>, string]>) {
       const r = run(args, env);
       expect(r.code, r.out).toBe(1);
@@ -97,11 +99,12 @@ Q() { case "$1" in
     const r = run(card);
     expect(r.code, r.out).toBe(0);
     const host = r.host.filter((l) => l.startsWith("A "));
-    expect(host[0]).toMatch(/^A owner-identity-autonomy on --card on --card-max 450 --card-daily 450 card proof: one purchase at Font shop, at most 450p/);
-    const rel = /^A economy-outward 01M3F50SH7PNX2E3GST13J52AS release (\{.*\}) card proof/.exec(host[1])!;
+    expect(host[0]).toMatch(/^A economy-fleet-control-ai-budget 15 card proof: a review of the one purchase/);
+    expect(host[1]).toMatch(/^A owner-identity-autonomy on --card on --card-max 450 --card-daily 450 card proof: one purchase at Font shop, at most 450p/);
+    const rel = /^A economy-outward 01M3F50SH7PNX2E3GST13J52AS release (\{.*\}) card proof/.exec(host[2])!;
     expect(JSON.parse(rel[1])).toEqual({ actions: ["browser", "card"], accounts: [ACCT], origins: ["https://www.fontshop.example"], cardMerchant: "Font shop", cardMaxMinor: 450, expiresHours: 6 });
-    expect(host[2]).toMatch(/^A cognition-run 01M3F50SH7PNX2E3GST13J52AS start 200 6 /);
-    expect(host[3]).toMatch(/^A founder-cognition 01M3F50SH7PNX2E3GST13J52AS resume /);
+    expect(host[3]).toMatch(/^A cognition-run 01M3F50SH7PNX2E3GST13J52AS start 200 6 /);
+    expect(host[4]).toMatch(/^A founder-cognition 01M3F50SH7PNX2E3GST13J52AS resume /);
     expect(host.some((l) => /economy-spend-breaker trip/.test(l))).toBe(false);                 // a card proof needs its reservation
     for (const [env, outcome] of [
       [{ CARD_REQ: `r1 declined 450 -` }, "the card request was declined"],
@@ -109,18 +112,20 @@ Q() { case "$1" in
       [{ CARD_REQ: `r1 used 450 ${CHARGE}`, CHARGE_STATE: "void 450 released" }, "the card hold was voided"],
     ] as Array<[Record<string, string>, string]>) {
       fs.rmSync(path.join(dir, "state"), { recursive: true, force: true }); fs.rmSync(log, { force: true });
-      for (const f of ["card", "release", "run", "paused"]) fs.rmSync(path.join(dir, f), { force: true });
+      for (const f of ["card", "release", "run", "paused", "fc"]) fs.rmSync(path.join(dir, f), { force: true });
       expect(run(card).code).toBe(0);
+      expect(fs.existsSync(path.join(dir, "fc"))).toBe(true);
       const w = run(["watch"], { RUNNING: "1", ...env });
       expect(w.out).toContain(outcome);
       expect(w.out).toContain("card authority OFF");
-      for (const f of ["card", "release", "run"]) expect(fs.existsSync(path.join(dir, f)), f).toBe(false);
+      for (const f of ["card", "release", "run", "fc"]) expect(fs.existsSync(path.join(dir, f)), f).toBe(false);   // the review budget it set: cleared
       expect(fs.existsSync(path.join(dir, "paused"))).toBe(true);
     }
     // v109: no merchant account yet — the release allows registering one there (no account named).
     fs.rmSync(path.join(dir, "state"), { recursive: true, force: true }); fs.rmSync(log, { force: true });
     for (const f of ["card", "release", "run", "paused"]) fs.rmSync(path.join(dir, f), { force: true });
-    const reg = run(["card", "200", "6", "450", "register", "https://www.fontshop.example", "Font", "shop"]);
+    const reg = run(["card", "200", "6", "0", "450", "register", "https://www.fontshop.example", "Font", "shop"]);   // 0: no review budget
+    expect(reg.host.some((l) => /economy-fleet-control-ai-budget/.test(l))).toBe(false);
     expect(reg.code, reg.out).toBe(0);
     const regRel = /release (\{.*\}) card proof/.exec(reg.host.find((l) => l.includes("economy-outward"))!)!;
     expect(JSON.parse(regRel[1])).toEqual({ actions: ["browser", "card", "account_register"], origins: ["https://www.fontshop.example"], cardMerchant: "Font shop", cardMaxMinor: 450, expiresHours: 6 });

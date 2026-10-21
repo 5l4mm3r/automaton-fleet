@@ -268,6 +268,11 @@ describe.skipIf(!PG_BIN)("v64: autonomous spending with Fleet Control review (Po
       await R.one(`fleet.fleet_admin_fleet_control_ai_budget($1, 'test: room for one', $2)`, [st.spentMinor + st.inflightMinor + 60, OWNER]);
       const [a, b] = await Promise.all([1, 2].map((i) => svcStore.controlAiReserve("spend_review", `race-${i}`, 40_000_000))); // 40 US cents (≈ 32p) each: one fits in 60p, two do not
       expect([a, b].filter((x: any) => x.ok).length).toBe(1);
+      // v110: the owner clears it again (e.g. after a bounded proof) — unset: no paid call; owner only, with a reason.
+      expect(await R.code(R.q(`SELECT fleet.fleet_admin_fleet_control_ai_budget_clear('proof ended', 'agent')`))).toBe("FLEET_APPROVAL_REQUIRED");
+      expect(await R.code(R.q(`SELECT fleet.fleet_admin_fleet_control_ai_budget_clear('', $1)`, [OWNER]))).toBe("FLEET_BAD_REQUEST");
+      expect(await R.one(`fleet.fleet_admin_fleet_control_ai_budget_clear('card proof ended', $1)`, [OWNER])).toMatchObject({ ok: true, set: false, roomMinor: 0 });
+      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('spend_review', 'after-clear', 1000)`)).toMatchObject({ ok: false, code: "FLEET_CONTROL_AI_BUDGET_UNSET" });
     } finally {
       await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
     }

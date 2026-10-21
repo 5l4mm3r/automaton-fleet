@@ -105,7 +105,7 @@
  *   economy-paypal-order-retire <paypalOrderId> <reason…>                     (v98) retire a PayPal order the Fleet could not verify as gone
  *   economy-offer-hold <slug> <reason…>                                       (v96) one offer not sold publicly (accepted work continues; the agent is told)
  *   economy-offer-release <slug> [reason…]
- *   economy-fleet-control-ai-budget <dailyMinor> <reason…>                    (v96) Fleet Control's daily AI budget (its spend / lesson reviews)
+ *   economy-fleet-control-ai-budget <dailyMinor|off> <reason…>                (v96) Fleet Control's daily AI budget (its spend / lesson reviews); off (v110) clears it
  *   hub-fleet-control-ai                                                      (v96) its budget, spent in 24 h, in flight and room
  *   hub-paypal-disputes                                                       (v57) disputes, unclassified PayPal debits, exposure per agent
  *   economy-paypal-dispute-resolve <disputeId> won|lost [note…]               (v57) a dispute PayPal left without a plain outcome
@@ -409,7 +409,7 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-offer-release":
       return h.offerRelease(p[0], p.slice(1).join(" ") || null, actor);
     case "economy-fleet-control-ai-budget":
-      return h.fleetControlAiBudget(int(p[0], "dailyMinor"), p.slice(1).join(" "), actor);
+      return p[0] === "off" ? h.fleetControlAiBudgetClear(p.slice(1).join(" "), actor) : h.fleetControlAiBudget(int(p[0], "dailyMinor"), p.slice(1).join(" "), actor);
     case "hub-fleet-control-ai":
       return h.fleetControlAi();
     case "economy-card-credit-return":

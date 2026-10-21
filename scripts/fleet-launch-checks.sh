@@ -12,12 +12,15 @@
 #         may mail that address only (an outward release for mail to it, expiring with the run). Success = the owner's mail
 #         routed to Agent-1 and Agent-1's reply SENT to that address after it.
 #       Purchases excluded (the spend circuit breaker is tripped; stop resets it); no paid search (the media gateway stopped).
-#   bash fleet-launch-checks.sh card <aiCeilingPence> <hours> <maxPence ≤ 500> <accountId|register> <origin> <merchant…>
+#   bash fleet-launch-checks.sh card <aiCeilingPence> <hours> <reviewBudgetPence> <maxPence ≤ 500> <accountId|register> <origin> <merchant…>
 #       ONE card purchase by Agent-1 on owner-paid card 1, at the agreed merchant, at most <maxPence>: the owner's card
 #       authority switched on with that cap (per charge and per day) and a card-proof release naming the merchant (v108:
 #       one card request, that origin and account, ≤ 24 h, with the browser fill); the reservation comes from Agent-1's own
-#       cash; Fleet Control reviews it. Stops at its first outcome (the card used or declined, the request expired, the hold
-#       voided), the release's expiry or the run's end — and then switches card authority OFF and ends the release.
+#       cash; Fleet Control reviews it only if its contextual signals call for it — and a review needs Fleet Control's AI
+#       budget: <reviewBudgetPence> > 0 sets that daily budget for the proof (only when none is set) and clears it at the end
+#       (v110); 0 sets none, so a triggered review waits (no call, never approved) and the purchase cannot go ahead. Stops at its first outcome (the card used or declined, the request expired, the hold
+#       voided), the release's expiry or the run's end — and then switches card authority OFF, ends the release and clears the
+#       review budget it set.
 #       The statement match follows when the owner records the card statement (economy-card-charge … once).
 #       `register` (v109): Agent-1 has no account at the merchant yet — the release also allows registering one there, and only
 #       the account it registers under this release may be used for the fill and the one purchase.
@@ -51,6 +54,7 @@ card_on() { Q "SELECT enabled AND card_enabled FROM fleet_identity_autonomy WHER
 release_live() { Q "SELECT count(*) FROM fleet_outward_release WHERE agent_id = '$A1' AND expires_at > now()"; }
 run_open() { Q "SELECT count(*) FROM fleet_cognition_run_budgets WHERE agent_id = '$A1' AND ended_at IS NULL AND ends_at > now()"; }
 START() { cat "$D/start.txt" 2>/dev/null; }
+fc_set() { Q "SELECT fleet_control_ai_state() ->> 'set'"; }
 MODE=""; EMAIL=""; [[ -f "$D/terms.txt" ]] && read -r MODE EMAIL < "$D/terms.txt"
 [[ -n "${FLEET_CHECKS_STUBS:-}" ]] && source "$FLEET_CHECKS_STUBS"
 
@@ -94,7 +98,7 @@ card_charge() { Q "SELECT status || ' ' || COALESCE(amount_minor, hold_max_minor
 report() {
   echo "  started $(START); now $(ts); mode ${MODE:-none}; Agent-1 paused=$(paused $A1); Agent-2 paused=$(paused $A2); sales open=$(Q 'SELECT fleet_sales_open()')"
   echo "  run budget: $(Q "SELECT fleet_admin_cognition_run('$A1')" | jq -c '{ceilingMinor, spentMicro, inflightMicro, calls, open, endsAt, endReason}' 2>/dev/null)"
-  echo "  release live: $(release_live); card authority on: $(card_on); spend breaker tripped: $(breaker_tripped); media: $(media_active)"
+  echo "  release live: $(release_live); card authority on: $(card_on); spend breaker tripped: $(breaker_tripped); media: $(media_active); Fleet Control AI budget set: $(fc_set)"
   echo "  workbook (Agent-1's offer): $(offer_state)"
   [[ "$MODE" == checks ]] && echo "  email: the owner's mail to Agent-1 at $(mail_in); Agent-1's reply sent at $(mail_out)"
   if [[ "$MODE" == card ]]; then
@@ -110,12 +114,14 @@ stop_check() {
   A cognition-run $A1 end "$why" >/dev/null 2>&1 || true
   [[ "$(release_live)" != 0 ]] && { A economy-outward $A1 hold >/dev/null 2>&1 || bad=1; }
   if [[ "$MODE" == card && "$(card_on)" == t ]]; then A owner-identity-autonomy off "card proof ended: $why" >/dev/null 2>&1 || bad=1; fi
+  if [[ -f "$D/review-budget-set.txt" && "$(fc_set)" == true ]]; then A economy-fleet-control-ai-budget off "card proof ended: $why" >/dev/null 2>&1 || bad=1; fi
   if [[ -f "$D/breaker-tripped.txt" && "$(breaker_tripped)" == t ]]; then A economy-spend-breaker reset >/dev/null 2>&1 || bad=1; fi
   sudo -n systemctl stop $UNIT.timer $UNIT.service >/dev/null 2>&1 || true
   [[ "$(paused $A1)" == t && "$(release_live)" == 0 && "$(card_on)" == f ]] || bad=1
+  [[ -f "$D/review-budget-set.txt" && "$(fc_set)" != false ]] && bad=1
   echo "== CHECK STOPPED $(ts): $why — Agent-1 paused; run ended; release ended; card authority $( [[ "$(card_on)" == f ]] && echo OFF || echo 'STILL ON')$( (( bad )) && echo ' — VERIFY: a step did not confirm')"
   report
-  mkdir -p "$D/done-$(date -u +%Y%m%dT%H%M%SZ)" && mv -f "$D/start.txt" "$D/terms.txt" "$D/breaker-tripped.txt" "$D"/done-*/ 2>/dev/null || true
+  mkdir -p "$D/done-$(date -u +%Y%m%dT%H%M%SZ)" && mv -f "$D/start.txt" "$D/terms.txt" "$D/breaker-tripped.txt" "$D/review-budget-set.txt" "$D"/done-*/ 2>/dev/null || true
 }
 
 case "${1:-}" in
@@ -124,9 +130,6 @@ checks)
     || die "usage: checks <aiCeilingPence 1..1000> <hours 1..12> <ownerEmail (lower case)>"
   guard
   [[ "$(Q "SELECT count(*) FROM fleet_offers WHERE slug = '$SLUG' AND agent_id = '$A1'")" == 1 ]] || die "Agent-1's offer $SLUG is not found"
-  # v109: a buyer whose orders with Agent-1 are all closed reaches the owner (HQ Mail), never Agent-1 — the email leg could not pass.
-  [[ "$(Q "SELECT count(*) FROM fleet_customer_orders z WHERE z.agent_id = '$A1' AND lower(z.buyer_email) = '$4' AND NOT (fleet_order_conversation(z) ->> 'open')::boolean")" == 0 ]] \
-    || die "$4 bought from Agent-1 and that order is closed: its mail goes to you, not Agent-1 (v109) — send from an address that never bought from Agent-1"
   s=$(ts); echo "$s" > "$D/start.txt"; echo "checks $4" > "$D/terms.txt"; MODE=checks; EMAIL=$4
   echo "  the workbook now: $(offer_state)"
   A economy-spend-breaker trip "launch checks: purchases are excluded from this run" | jq -c '{tripped}' || { stop_check "breaker not tripped"; exit 1; }
@@ -138,10 +141,12 @@ checks)
   A founder-cognition $A1 resume "launch checks (owner approval): AI ceiling ${2}p, $3 h; public sales stay closed" | jq -c '{paused}' || { stop_check "resume failed"; exit 1; }
   echo "== CHECKS STARTED $s: now write to fleet.treasury@proton.me from $4 with the subject \"Agent-1 - …\" (your own question)"; report ;;
 card)
-  [[ "${2:-}" =~ ^[0-9]+$ && "${3:-}" =~ ^[0-9]+$ && "${4:-}" =~ ^[0-9]+$ && "${5:-}" =~ ^([0-9a-f-]{36}|register)$ && "${6:-}" =~ ^https://[a-z0-9.-]+(:[0-9]+)?$ && -n "${7:-}" ]] \
-    && (( $2 >= 1 && $2 <= 1000 && $3 >= 1 && $3 <= 24 && $4 >= 1 && $4 <= CARD_MAX )) \
-    || die "usage: card <aiCeilingPence 1..1000> <hours 1..24> <maxPence 1..$CARD_MAX> <accountId|register> <https://merchant-origin> <merchant name…>"
+  [[ "${2:-}" =~ ^[0-9]+$ && "${3:-}" =~ ^[0-9]+$ && "${4:-}" =~ ^[0-9]+$ && "${5:-}" =~ ^[0-9]+$ && "${6:-}" =~ ^([0-9a-f-]{36}|register)$ && "${7:-}" =~ ^https://[a-z0-9.-]+(:[0-9]+)?$ && -n "${8:-}" ]] \
+    && (( $2 >= 1 && $2 <= 1000 && $3 >= 1 && $3 <= 24 && $4 <= 100 && $5 >= 1 && $5 <= CARD_MAX )) \
+    || die "usage: card <aiCeilingPence 1..1000> <hours 1..24> <reviewBudgetPence 0..100> <maxPence 1..$CARD_MAX> <accountId|register> <https://merchant-origin> <merchant name…>"
   guard
+  RB=$4; set -- "${@:1:3}" "${@:5}"   # the rest as before: $4 max, $5 account, $6 origin, $7… merchant
+  (( RB == 0 )) || [[ "$(fc_set)" == false ]] || die "Fleet Control's AI budget is already set: run with reviewBudgetPence 0 (it is left as it is)"
   [[ "$(breaker_tripped)" == f ]] || die "the spend circuit breaker is tripped: a card purchase could not be reserved"
   if [[ "$5" != register ]]; then
     [[ "$(Q "SELECT count(*) FROM fleet_agent_accounts WHERE account_id = '$5' AND agent_id = '$A1' AND '$6' = ANY (origins) AND status NOT IN ('frozen','closed','banned')")" == 1 ]] \
@@ -150,6 +155,11 @@ card)
   [[ "$(Q "SELECT count(*) FROM fleet_owner_identity_classes WHERE class_key = 'payment_card' AND status = 'configured' AND (expires_at IS NULL OR expires_at > now())")" == 1 ]] || die "card 1 is not on file"
   merchant="${*:7}"
   s=$(ts); echo "$s" > "$D/start.txt"; echo "card -" > "$D/terms.txt"; MODE=card
+  if (( RB > 0 )); then
+    A economy-fleet-control-ai-budget $RB "card proof: a review of the one purchase, if its signals call for one (cleared at the end)" | jq -c '{ok, ceilingMinor}' \
+      || { stop_check "the review budget was not set"; exit 1; }
+    echo "$s" > "$D/review-budget-set.txt"
+  fi
   A owner-identity-autonomy on --card on --card-max $4 --card-daily $4 "card proof: one purchase at $merchant, at most ${4}p (switched off at the end)" | jq -c '{cardEnabled, cardMaxChargeMinor, cardMaxDailyMinor}' \
     || { stop_check "card authority not set"; exit 1; }
   if [[ "$5" == register ]]; then acts='"browser","card","account_register"'; accts=''; else acts='"browser","card"'; accts="\"accounts\":[\"$5\"],"; fi

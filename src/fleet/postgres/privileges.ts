@@ -1166,7 +1166,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_estate_policy: new Set([]),
     // v36: mail (agent send; broker delivery/status), phones/SMS (agent ops; broker provision/delivery/status), commitments
     // created for a number's monthly fee, owner vault installation, reveal serving/taking, notification email status.
-    fleet_agent_mail: new Set(["fleet_mail_to_order", "ix_mail_deliver", "ix_mail_consumed", "ix_mail_deliver2", "ix_mail_sent", "fleet_econ_mail_send", "ix_reconcile_mail",
+    fleet_agent_mail: new Set(["fleet_mail_to_order", "fleet_mail_keep_for_owner", "ix_mail_deliver", "ix_mail_consumed", "ix_mail_deliver2", "ix_mail_sent", "fleet_econ_mail_send", "ix_reconcile_mail",
       // v41: shared-mailbox ingestion (attribution), outbound status, Admin routing of unassigned mail.
       "fleet_mail_store_in", "ix_mail_sent2", "fleet_admin_mail_assign",
       // v63: the owner's dismiss / delete and the retention pass (one delete path, keep rules applied).
@@ -1446,7 +1446,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_owner_claim_waits: new Set(["fleet_admin_owner_claim_wait", "fleet_admin_owner_claim_wait_end"]),
     // v108: the owner's supported customer geography (owner only).
     fleet_sales_geography: new Set(["fleet_admin_sales_geography"]),
-    fleet_control_ai_budget: new Set(["fleet_admin_fleet_control_ai_budget"]),
+    fleet_control_ai_budget: new Set(["fleet_admin_fleet_control_ai_budget", "fleet_admin_fleet_control_ai_budget_clear"]),
     fleet_control_ai_reservations: new Set(["svc_fleet_control_ai_reserve", "svc_fleet_control_ai_settle"]),
   };
   const fns = await db.query<{ name: string; src: string }>(

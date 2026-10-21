@@ -178,6 +178,10 @@ export class PgHubAdmin {
   fleetControlAiBudget(dailyMinor: number, reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_fleet_control_ai_budget($1, $2, $3) AS r`, [dailyMinor, reason, actor]);
   }
+  /** v110: clear it again (unset = no paid Fleet Control call). */
+  fleetControlAiBudgetClear(reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_fleet_control_ai_budget_clear($1, $2) AS r`, [reason, actor]);
+  }
   fleetControlAi() {
     return this.one(`SELECT fleet_control_ai_state() AS r`);
   }
