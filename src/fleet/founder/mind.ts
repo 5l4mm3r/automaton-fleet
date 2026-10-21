@@ -226,7 +226,8 @@ export function eventsSinceLine(attention: unknown, since: string | null | undef
   const t0 = since ? Date.parse(since) : NaN;
   const SAFE = /^[A-Za-z0-9 :_.-]{1,80}$/;
   const items = list.filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
-    .filter((e) => typeof e.at === "string" && (!Number.isFinite(t0) || Date.parse(e.at) > t0))
+    // At or after: an event stamped in the very millisecond the previous attention was read may not have been in it.
+    .filter((e) => typeof e.at === "string" && (!Number.isFinite(t0) || Date.parse(e.at) >= t0))
     .filter((e) => typeof e.kind === "string" && SAFE.test(e.kind) && typeof e.id === "string" && /^[A-Za-z0-9-]{3,64}$/.test(e.id))   // uuids and provider ids (e.g. PayPal disputes)
     .slice(0, 8)
     .map((e) => `${e.kind} ${String(e.id)}${typeof e.status === "string" && SAFE.test(e.status) ? ` ${e.status}` : ""}`
@@ -410,6 +411,8 @@ export class FounderMind {
   turns = 0;
   readonly routing: RoutingStats = { routedTurns: 0, steps: { T2: 0, T3: 0 }, routineCalls: 0, escalations: 0, escalationsReused: 0, actionBoundarySteps: 0, thinkingDropped: 0, budgetStops: 0, slimWakeups: 0, idleNudges: { decide: 0, execute: 0, opportunity: 0, hibernate: 0 }, lastRoute: null };
   private restUntil = 0;
+  /** 2026-10-21: when this turn's attention was read (its packet shows events up to here); the next packet counts from it. */
+  private statusReadAt: string | null = null;
   private idleBackoff = 0;
   private idleSkip = 0;
   /** v62: when a declared hibernation's safety re-check is due (null = not hibernating; undefined = not yet restored). */
@@ -451,6 +454,7 @@ export class FounderMind {
     const result: TurnResult = { ran: false, steps: 0, toolCalls: [], refusals: [], chargedCents: 0 };
     let status: Record<string, unknown>;
     try {
+      this.statusReadAt = new Date().toISOString();   // taken BEFORE the read: an event arriving during it is shown next time
       status = await this.o.ports.cognitionStatus();
     } catch (err) {
       return { ...result, reason: `status unavailable (${(err as { code?: string }).code ?? "error"})` };
@@ -564,7 +568,7 @@ export class FounderMind {
   // ─────────────────────────────────────────────── R23 routed mode
 
   private continuity(): { at: string; outcome: string; tools: string[]; wakeDigest: string | null; capabilities: { sig: string; tools: string[] } | null; idle: IdleState | null;
-    revenue: number | null; wakeOn: string | null; reviewAt: string | null; waiting: boolean; stalled: number; noticesShown: string[]; runtime: string | null } | null {
+    revenue: number | null; wakeOn: string | null; reviewAt: string | null; waiting: boolean; stalled: number; noticesShown: string[]; runtime: string | null; eventsSeenAt: string | null } | null {
     try {
       const c = JSON.parse(fs.readFileSync(path.join(this.o.stateDir, CONTINUITY_FILE), "utf8"));
       const caps = c?.capabilities && typeof c.capabilities.sig === "string" && Array.isArray(c.capabilities.tools)
@@ -578,7 +582,8 @@ export class FounderMind {
             reviewAt: typeof c.reviewAt === "string" && Number.isFinite(Date.parse(c.reviewAt)) ? c.reviewAt : null,
             waiting: c.waiting === true, stalled: Number.isSafeInteger(c.stalled) ? Number(c.stalled) : 0,
             noticesShown: Array.isArray(c.noticesShown) ? c.noticesShown.filter((x: unknown): x is string => typeof x === "string").slice(-50) : [],
-            runtime: typeof c.runtime === "string" && /^[0-9a-f]{40}$/.test(c.runtime) ? c.runtime : null }
+            runtime: typeof c.runtime === "string" && /^[0-9a-f]{40}$/.test(c.runtime) ? c.runtime : null,
+            eventsSeenAt: typeof c.eventsSeenAt === "string" && Number.isFinite(Date.parse(c.eventsSeenAt)) ? c.eventsSeenAt : null }
         : null;
     } catch {
       return null;
@@ -588,12 +593,14 @@ export class FounderMind {
   /** `wakeDigest`: the state digest at the END of a sleep-only turn (absent otherwise), for the next bare-wake-up test. */
   private saveContinuity(outcome: string, tools: string[], wake: string | null = null, capabilities: { sig: string; tools: string[] } | null = null, idle: IdleState | null = null,
     extra: { revenue?: number | null; wakeOn?: string | null; reviewAt?: string | null; waiting?: boolean; stalled?: number; noticesShown?: string[] } = {}): void {
+    // The attention this turn was shown was read at statusReadAt (absent only before any status read).
     const f = path.join(this.o.stateDir, CONTINUITY_FILE);
     fs.writeFileSync(`${f}.tmp`, JSON.stringify({ at: new Date().toISOString(), turn: this.turns, outcome: outcome.slice(0, 1_200), tools: tools.slice(-20), ...(wake ? { wakeDigest: wake } : {}),
       ...(capabilities ? { capabilities } : {}), ...(idle && wake ? { idle } : {}),
       ...(typeof extra.revenue === "number" && Number.isFinite(extra.revenue) ? { revenue: extra.revenue } : {}), ...(extra.wakeOn ? { wakeOn: extra.wakeOn.slice(0, 300) } : {}),
       ...(extra.reviewAt ? { reviewAt: extra.reviewAt } : {}), ...(extra.waiting ? { waiting: true } : {}), ...(extra.stalled ? { stalled: extra.stalled } : {}),
-      ...(extra.noticesShown?.length ? { noticesShown: extra.noticesShown.slice(-50) } : {}), ...(this.o.runtimeCommit ? { runtime: this.o.runtimeCommit } : {}) }), { mode: 0o600 });
+      ...(extra.noticesShown?.length ? { noticesShown: extra.noticesShown.slice(-50) } : {}), ...(this.o.runtimeCommit ? { runtime: this.o.runtimeCommit } : {}),
+      ...(this.statusReadAt ? { eventsSeenAt: this.statusReadAt } : {}) }), { mode: 0o600 });
     fs.renameSync(`${f}.tmp`, f);
   }
 
@@ -795,7 +802,10 @@ export class FounderMind {
     // Open triggers come from the durable index (they outlive the 500-entry working window until resolved).
     const jix = bare ? null : readJournalIndex(R.memoryDir);
     const triggers = (jix?.openTriggers ?? []).slice(-3).map((t) => t.trigger.slice(0, 120));
-    const happened = bare ? null : eventsSinceLine(status.attention, prev?.at);
+    // 2026-10-21 (launch check: the owner's mail arrived during Agent-1's turn, after its packet was built, and was never
+    // listed — "since" was the END of that turn): events count from when the last turn's attention was read. A record from
+    // before this field looks back 30 minutes from its end (an event shown twice is harmless; one never shown is not).
+    const happened = bare ? null : eventsSinceLine(status.attention, prev?.eventsSeenAt ?? (prev?.at ? new Date(Date.parse(prev.at) - 30 * 60_000).toISOString() : null));
     const essential = [...(!prev ? [BOOTSTRAP_LINE] : []), ...obligationLines(obligations ?? []), ...(sale ? [sale] : []), ...(happened ? [happened] : []), ...(move ? [move] : []), ...(!bare ? [stateLine(econ)] : [])];
     const extra = [...essential,
       ...(!bare && survival ? [survivalLine(survival)] : []), ...(own ? [own] : []), ...(brief ? [economyLine(brief)] : []),

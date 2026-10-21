@@ -24,7 +24,8 @@
  *   5. (2026-10-21) continuity across REPEATED size stops in the real unit: a Fleet Control notice names a task; turn A
  *      writes a plan, is refused once by the platform and gathers large results until the 40 KB request budget stops it;
  *      turn B writes nothing and is stopped again; turn C must be shown turn A's plan and refusal reason and turn B's
- *      results, and ends the work — the record is consumed and the founder waits.
+ *      results, and ends the work — the record is consumed and the founder waits. A second Fleet Control note posted DURING
+ *      turn A (after its packet was built, before the turn ended) must be listed in turn B's "since your last turn".
  */
 
 import crypto from "crypto";
@@ -304,7 +305,13 @@ export async function runRevisionRehearsal(o: RevisionRehearsalOptions): Promise
       const stops0 = sizeStops();
       const p0 = model.packets.length;
       model.continuity = true;
+      const stepsBefore = model.steps;
       await fn(owner, "fleet_spend_review_notice", [a, `${CONTINUITY_TASK}: gather the five records in your workspace and report what they show (a rehearsal task).`]);
+      // 2026-10-21: an event while turn A works — after its packet was built (its first step answered), before it ends.
+      await waitFor(async () => (model.packets.length > p0 && model.steps > stepsBefore ? true : null), timeout, 100);
+      await fn(owner, "fleet_spend_review_notice", [a, "A second Fleet Control note, posted while your turn was working (a rehearsal event)."]);
+      const mid = (await q<{ message_id: string; created_at: Date }>(`SELECT message_id, created_at FROM fleet_agent_messages WHERE agent_id = $1 AND author = 'fleet_control'
+        ORDER BY created_at DESC LIMIT 1`, [a]))[0];
       const pC = await waitFor(async () => model.packets.slice(p0).find((p) => p.includes("the last of 2 turns in a row that stopped unfinished")) ?? null, timeout * 3, poll);
       const ps = model.packets.slice(p0);
       const pB = ps.find((p) => p.includes("CONTINUE YOUR UNFINISHED WORK") && !p.includes("turns in a row that stopped unfinished")) ?? "";
@@ -324,6 +331,12 @@ export async function runRevisionRehearsal(o: RevisionRehearsalOptions): Promise
       const finished = await waitFor(async () => (!fs.existsSync(path.join(stateNs, CARRY_FILE)) && model.packets.length > p0 + 2 ? true : null), timeout, poll);
       const q0 = model.steps;
       await sleep(Math.min(quiet, 60_000));
+      const stopA = (fs.existsSync(mindLog) ? fs.readFileSync(mindLog, "utf8") : "").split("\n").filter((l) => l.includes("FLEET_TURN_CONTEXT_BUDGET")).slice(stops0)[0];
+      const stopAAt = stopA ? Date.parse(String((JSON.parse(stopA) as { at?: string }).at)) : NaN;
+      const during = Boolean(mid) && Number.isFinite(stopAAt) && mid!.created_at.getTime() < stopAAt;
+      check("5e. an event posted during turn A (after its packet, before its end) is listed in turn B's packet",
+        during && !String(ps[0] ?? "").includes(mid!.message_id) && pB.includes(`fleet_notice ${mid!.message_id}`),
+        mid ? `note ${mid.message_id.slice(0, 8)} at ${mid.created_at.toISOString().slice(11, 23)}; turn A stopped ${Number.isFinite(stopAAt) ? new Date(stopAAt).toISOString().slice(11, 23) : "?"}; in turn A's packet ${String(ps[0] ?? "").includes(mid.message_id)}; in turn B's ${pB.includes(`fleet_notice ${mid.message_id}`)}` : "no note");
       check("5d. the continued turn finished the work: the carried record is consumed and the founder waits (no further model call)",
         Boolean(finished) && model.steps === q0, `record consumed ${Boolean(finished)}; ${model.steps - q0} step(s) while it waits`);
       model.continuity = false;

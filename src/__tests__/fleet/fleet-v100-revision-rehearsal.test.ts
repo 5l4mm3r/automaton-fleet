@@ -55,7 +55,7 @@ describe.skipIf(!PG_BIN || !fs.existsSync(path.join(DEV_TOOLS, "site")))("revisi
     });
     for (const c of r.checks) expect(c.ok, `${c.name}: ${c.detail}`).toBe(true);
     expect(r.complete).toBe(false);
-    expect(r.checks.map((c) => c.name.split(" ")[0])).toEqual(expect.arrayContaining(["1.", "2a.", "2b.", "2c.", "2d.", "3.", "4.", "5a.", "5b.", "5c.", "5d."]));
+    expect(r.checks.map((c) => c.name.split(" ")[0])).toEqual(expect.arrayContaining(["1.", "2a.", "2b.", "2c.", "2d.", "3.", "4.", "5a.", "5b.", "5c.", "5d.", "5e."]));
     for (const c of r.checks.filter((x) => x.name.startsWith("5"))) console.log(`${c.name.split(" ")[0]} ${c.detail}`);
     expect(restarts[0]).toBe("off");
   }, 600_000);

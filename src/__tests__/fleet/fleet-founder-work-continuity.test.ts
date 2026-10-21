@@ -45,14 +45,15 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
     fs.writeFileSync(path.join(d.m, "goals.json"), JSON.stringify([{ id: "g1", title: "Publish the landlord compliance tracker", status: "open" }]));
   }
   const world = { eventsDigest: hex32(1), notices: [] as Array<{ id: string; at: string; body: string }>, ownerPending: 0, cash: 9_906,
-    requests: [] as unknown[], storefrontStatus: "draft", economyCalls: [] as string[], refuse: {} as Record<string, string> };
+    requests: [] as unknown[], storefrontStatus: "draft", economyCalls: [] as string[], refuse: {} as Record<string, string>,
+    recentEvents: [] as Array<{ kind: string; id: string; at: string; tool?: string }> };
   const packets: string[] = [];
   const outputsSeen: string[] = [];
   let infers = 0, turn = 0, step = 0;
   const ports: MindPorts = {
     cognitionStatus: async () => ({ policyEnabled: true, provider: "anthropic", founderEnabled: true, paused: false, routing: { active: true },
       capabilities: { ...capabilityView(CAPS, true), reproductionExecutable: false },
-      attention: { ownerPending: world.ownerPending, eventsDigest: world.eventsDigest, notices: world.notices, recentEvents: [] },
+      attention: { ownerPending: world.ownerPending, eventsDigest: world.eventsDigest, notices: world.notices, recentEvents: world.recentEvents },
       survival: { survivalEquityCents: world.cash, inferenceTodayCents: 80, burnPerDayCents: 40, runwayDays: 240 } }),
     ledger: async () => ({ cash: world.cash, survivalEquity: world.cash, genesisAllocation: 10_000, externalCustomerRevenue: 0 }),
     ownerRequests: async () => ({ ok: true, requests: world.requests }),
@@ -158,6 +159,36 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(p3).toContain("FLEET_REVIEW_AUTOMATED_FAILED");
     expect(p3).toMatch(/RESULT-MARK-(4[0-9]|[5-7][0-9])\b/);                         // an actual result of turn 2
     expect(fs.existsSync(path.join(r.d.s, CARRY_FILE))).toBe(false);                 // the finished turn consumed it
+  });
+
+  // 2026-10-21 (launch check): the owner's mail arrived during Agent-1's turn, after its packet was built; "since your last
+  // turn" counted from the END of that turn, so the mail was never listed in any packet.
+  it("1e. an event that arrives during a turn (after its packet was built) is listed in the next packet; an older record looks back", async () => {
+    const MAIL = "063f6ed3-99a3-4b69-a865-33ef5123449f";
+    const r = rig((t, s) => {
+      if (t === 1 && s === 1) {
+        // The owner's mail arrives while this turn works (the controller records it and its digest changes).
+        r.world.recentEvents.unshift({ kind: "mail", id: MAIL, at: new Date().toISOString(), tool: "identity read_mail (inbox lists it)" });
+        r.world.eventsDigest = hex32(7);
+        return { calls: [c("read_file", { path: "product/tracker.csv" })] };
+      }
+      if (t === 1) return { content: "Done for now.", calls: [c("sleep", { reason: "the tracker is up to date" })] };
+      return { calls: [c("sleep", { reason: "read" })] };
+    });
+    await r.mind.turn("hb");
+    await r.mind.turn("hb 2");
+    expect(r.packets[0]).not.toContain(MAIL);                                          // it arrived after this packet was built
+    expect(r.packets[1]).toContain(`Since your last turn`);
+    expect(r.packets[1]).toContain(`mail ${MAIL}`);
+    // A record written before eventsSeenAt (Agent-1's own, saved at 11:01:45Z for a turn whose packet was built at 11:01:02Z):
+    // the next packet looks back from its end and still lists the mail of 11:01:06Z.
+    const r2 = rig(() => ({ calls: [c("sleep", { reason: "read" })] }));
+    const end = new Date(Date.now() - 60_000);
+    fs.writeFileSync(path.join(r2.d.s, "mind-continuity.json"), JSON.stringify({ at: end.toISOString(), turn: 8, outcome: "(turn stopped: FLEET_COGNITION_RUN_BUDGET_EXHAUSTED)", tools: ["exec"] }));
+    r2.world.recentEvents.push({ kind: "mail", id: MAIL, at: new Date(end.getTime() - 39_000).toISOString(), tool: "identity read_mail (inbox lists it)" });
+    r2.world.eventsDigest = hex32(8);
+    await r2.mind.turn("hb after the upgrade");
+    expect(r2.packets[0]).toContain(`mail ${MAIL}`);
   });
 
   it("1c. a FAILED external action of the carried turn can be retried as it was", async () => {
