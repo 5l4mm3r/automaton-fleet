@@ -3,14 +3,16 @@
 # CLOSED; Agent-2 stays paused; each command starts only on the owner's approval of its terms. Nothing here repairs an
 # agent's work or tells it what to do: Agent-1 sees the platform's own notices and its record.
 #
-#   bash fleet-launch-checks.sh checks <aiCeilingPence> <hours> <ownerEmail>
+#   bash fleet-launch-checks.sh checks <aiCeilingPence> <hours> <ownerEmail> [mailSince]
 #       ONE bounded run of Agent-1 for two checks:
 #       - the WORKBOOK: its offer is not sold publicly while a spreadsheet saves formulas without their values (v108 sale
 #         block; Fleet Control told Agent-1 at the install). Success = Agent-1's own new passing review of its offer's current
 #         files with cached_values, displayed dates and rendering passing, and no sale block;
 #       - the CUSTOMER EMAIL: the owner writes to fleet.treasury@proton.me (subject "Agent-1 - …") from <ownerEmail>; Agent-1
 #         may mail that address only (an outward release for mail to it, expiring with the run). Success = the owner's mail
-#         routed to Agent-1 and Agent-1's reply SENT to that address after it.
+#         routed to Agent-1 and Agent-1's reply SENT to that address after it. [mailSince] (UTC, e.g. 2026-10-21T11:00:00Z,
+#         not in the future): the owner's mail already received since then counts — a continuation answers the mail
+#         already sent instead of asking the owner to write again. The reply must still be sent during this run.
 #       Purchases excluded (the spend circuit breaker is tripped; stop resets it); no paid search (the media gateway stopped).
 #   bash fleet-launch-checks.sh card <aiCeilingPence> <hours> <reviewBudgetPence> <maxPence ≤ 500> <accountId|register> <origin> <merchant…>
 #       ONE card purchase by Agent-1 on owner-paid card 1, at the agreed merchant, at most <maxPence>: the owner's card
@@ -55,7 +57,7 @@ release_live() { Q "SELECT count(*) FROM fleet_outward_release WHERE agent_id = 
 run_open() { Q "SELECT count(*) FROM fleet_cognition_run_budgets WHERE agent_id = '$A1' AND ended_at IS NULL AND ends_at > now()"; }
 START() { cat "$D/start.txt" 2>/dev/null; }
 fc_set() { Q "SELECT fleet_control_ai_state() ->> 'set'"; }
-MODE=""; EMAIL=""; [[ -f "$D/terms.txt" ]] && read -r MODE EMAIL < "$D/terms.txt"
+MODE=""; EMAIL=""; MAILSINCE=""; [[ -f "$D/terms.txt" ]] && read -r MODE EMAIL MAILSINCE < "$D/terms.txt"
 [[ -n "${FLEET_CHECKS_STUBS:-}" ]] && source "$FLEET_CHECKS_STUBS"
 
 guard() {
@@ -89,7 +91,7 @@ workbook_done() {
              WHERE f ->> 'detectedType' = 'xlsx' AND c ->> 'id' IN ('cached_values','sheet_displayed_dates','sheet_render') AND c ->> 'status' = 'pass') >= 3)::text
        FROM fleet_offers o JOIN fleet_artifact_reviews r ON r.review_id = o.review_id WHERE o.slug = '$SLUG'")" == true ]]
 }
-mail_in() { Q "SELECT max(received_at) FROM fleet_agent_mail WHERE agent_id = '$A1' AND direction = 'in' AND lower(sender_address) = lower('$EMAIL') AND received_at >= '$(START)'"; }
+mail_in() { Q "SELECT max(received_at) FROM fleet_agent_mail WHERE agent_id = '$A1' AND direction = 'in' AND lower(sender_address) = lower('$EMAIL') AND received_at >= '${MAILSINCE:-$(START)}'"; }
 mail_out() { Q "SELECT max(received_at) FROM fleet_agent_mail WHERE agent_id = '$A1' AND direction = 'out' AND send_status = 'sent' AND lower('$EMAIL') = ANY (recipients) AND received_at >= '$(START)'"; }
 email_done() { local i o; i=$(mail_in); o=$(mail_out); [[ -n "$i" && -n "$o" && "$o" > "$i" ]]; }
 card_req() { Q "SELECT request_id || ' ' || status || ' ' || amount_minor || ' ' || COALESCE(charge_id::text, '-') FROM fleet_card_requests WHERE agent_id = '$A1' AND created_at >= '$(START)' ORDER BY created_at DESC LIMIT 1"; }
@@ -100,7 +102,7 @@ report() {
   echo "  run budget: $(Q "SELECT fleet_admin_cognition_run('$A1')" | jq -c '{ceilingMinor, spentMicro, inflightMicro, calls, open, endsAt, endReason}' 2>/dev/null)"
   echo "  release live: $(release_live); card authority on: $(card_on); spend breaker tripped: $(breaker_tripped); media: $(media_active); Fleet Control AI budget set: $(fc_set)"
   echo "  workbook (Agent-1's offer): $(offer_state)"
-  [[ "$MODE" == checks ]] && echo "  email: the owner's mail to Agent-1 at $(mail_in); Agent-1's reply sent at $(mail_out)"
+  [[ "$MODE" == checks ]] && echo "  email: the owner's mail to Agent-1 (since ${MAILSINCE:-the start}) at $(mail_in); Agent-1's reply sent at $(mail_out)"
   if [[ "$MODE" == card ]]; then
     local r; r=$(card_req); echo "  card request: ${r:-none}"
     [[ -n "$r" && "$(awk '{print $4}' <<< "$r")" != - ]] && echo "  card charge: $(card_charge "$(awk '{print $4}' <<< "$r")")"
@@ -130,10 +132,11 @@ stop_check() {
 case "${1:-}" in
 checks)
   [[ "${2:-}" =~ ^[0-9]+$ && "${3:-}" =~ ^[0-9]+$ && "${4:-}" =~ ^[^@[:space:]]{1,64}@[a-z0-9.-]{3,190}$ ]] && (( $2 >= 1 && $2 <= 1000 && $3 >= 1 && $3 <= 12 )) \
-    || die "usage: checks <aiCeilingPence 1..1000> <hours 1..12> <ownerEmail (lower case)>"
+    && [[ -z "${5:-}" || ( "$5" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ && ! "$5" > "$(ts)" ) ]] \
+    || die "usage: checks <aiCeilingPence 1..1000> <hours 1..12> <ownerEmail (lower case)> [mailSince YYYY-MM-DDTHH:MM:SSZ, not in the future]"
   guard
   [[ "$(Q "SELECT count(*) FROM fleet_offers WHERE slug = '$SLUG' AND agent_id = '$A1'")" == 1 ]] || die "Agent-1's offer $SLUG is not found"
-  s=$(ts); echo "$s" > "$D/start.txt"; echo "checks $4" > "$D/terms.txt"; MODE=checks; EMAIL=$4
+  s=$(ts); echo "$s" > "$D/start.txt"; echo "checks $4 ${5:-}" > "$D/terms.txt"; MODE=checks; EMAIL=$4; MAILSINCE=${5:-}
   echo "  the workbook now: $(offer_state)"
   A economy-spend-breaker trip "launch checks: purchases are excluded from this run" | jq -c '{tripped}' || { stop_check "breaker not tripped"; exit 1; }
   echo "$s" > "$D/breaker-tripped.txt"

@@ -56,7 +56,7 @@ Q() { case "$1" in
     *"FROM fleet_offers WHERE slug"*) echo 1;;
     *"fleet_offer_sale_block(o) IS NULL AND"*) echo "\${WORKBOOK:-false}";;
     *"json_build_object('saleBlock'"*) echo '{"saleBlock":"a spreadsheet in it saves formulas without their values"}';;
-    *"direction = 'in'"*) echo "\${MAIL_IN:-}";; *"direction = 'out'"*) echo "\${MAIL_OUT:-}";;
+    *"direction = 'in'"*) if [[ -n "\${MAIL_SINCE_REQ:-}" && "$1" != *"received_at >= '\${MAIL_SINCE_REQ}'"* ]]; then echo ""; else echo "\${MAIL_IN:-}"; fi;; *"direction = 'out'"*) echo "\${MAIL_OUT:-}";;
     *"FROM fleet_card_requests"*) echo "\${CARD_REQ:-}";;
     *"FROM fleet_card_charges"*) echo "\${CHARGE_STATE:-held 450 awaiting}";;
     *"fleet_admin_cognition_run"*) echo '{"open":true,"endReason":null}';;
@@ -162,5 +162,21 @@ Q() { case "$1" in
     const st = run(["stop", "owner stopped"]);
     expect(st.out).toContain("CHECK STOPPED");
     expect(st.host.filter((l) => /systemctl stop/.test(l))).toEqual(["sudo -n systemctl stop fleet-checks-watch.timer fleet-checks-watch.service"]);
+  });
+
+  it("checks [mailSince]: a continuation counts the owner's mail already received; the reply must still come in this run", () => {
+    for (const bad of ["2026-10-21 11:00:00", "2999-01-01T00:00:00Z"]) {
+      const r = run(["checks", "300", "6", "owner@example.test", bad]);
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("usage: checks");
+      expect(r.host.some((l) => l.startsWith("A "))).toBe(false);                               // refused before any change
+    }
+    const since = "2026-10-21T11:00:00Z";
+    expect(run(["checks", "300", "6", "owner@example.test", since]).code).toBe(0);
+    expect(fs.readFileSync(path.join(dir, "state", "terms.txt"), "utf8").trim()).toBe(`checks owner@example.test ${since}`);
+    const env = { RUNNING: "1", WORKBOOK: "true", MAIL_SINCE_REQ: since, MAIL_IN: "2026-10-21 11:01:06+00" };
+    expect(run(["status"], env).out).toContain(`the owner's mail to Agent-1 (since ${since}) at 2026-10-21 11:01:06+00`);
+    expect(run(["watch"], { ...env, MAIL_OUT: "" }).out).not.toContain("CHECK STOPPED");          // no reply yet
+    expect(run(["watch"], { ...env, MAIL_OUT: "2026-10-21 12:10:00+00" }).out).toContain("CHECKS COMPLETE");
   });
 });
