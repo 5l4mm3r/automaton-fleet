@@ -144,9 +144,59 @@ describe.skipIf(!PG_BIN)("v111 cognition settlement integrity (PostgreSQL)", { t
     } finally { await hub.close(); }
   });
 
+  const usdFor = async (minor: number) => {
+    const rate = Number((await R.q(`SELECT rate_micro FROM fleet.fleet_fx_rates ORDER BY rate_id DESC LIMIT 1`))[0]?.rate_micro ?? 1_000_000);
+    return Math.floor((minor * 1_000_000) / rate);                                          // a USD-cent estimate converting to at most `minor`
+  };
+
+  it("an unresolved hold is held against the agent's cash; releasing it frees exactly that amount and charges nothing", async () => {
+    const c = await cash();
+    const h = await authorize(await usdFor(c - 50));                                         // reserve nearly all of the cash …
+    expect(h).toMatchObject({ ok: true });
+    await expire(String(h.requestId));                                                       // … and its result never comes
+    expect(await authorize(await usdFor(100))).toMatchObject({ ok: false, code: "FLEET_INSUFFICIENT_ALLOCATION" });   // held, not free
+    await R.one(`fleet.fleet_admin_cognition_reservation_resolve($1, 'not_billed', 'provider usage shows no request then', $2)`, [String(h.requestId), OWNER]);
+    expect(await cash()).toBe(c);                                                            // nothing charged
+    const ok = await authorize(await usdFor(100));
+    expect(ok).toMatchObject({ ok: true });                                                  // the hold is gone
+    await record(String(ok.requestId), { inputTokens: 1, outputTokens: 1 });
+  });
+
+  it("concurrent settlements of one request (two late results and the owner's resolution) charge it exactly once", async () => {
+    const a = await authorize(40); const id = String(a.requestId);
+    await expire(id);
+    const live = await authorize(10);                                                        // a newer call is active meanwhile
+    const before = await cash();
+    const [r1, r2, r3] = await Promise.allSettled([record(id), record(id),
+      R.one(`fleet.fleet_admin_cognition_reservation_resolve($1, 'billed', 'provider shows it billed', $2)`, [id, OWNER])]);
+    const oks = [r1, r2, r3].filter((r) => r.status === "fulfilled" && (r.value as any)?.ok === true);
+    expect(oks).toHaveLength(1);
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_cognition_log WHERE request_id = $1`, [id]))[0].n).toBe(1);
+    const [log] = await R.q(`SELECT charged_cents FROM fleet.fleet_cognition_log WHERE request_id = $1`, [id]);
+    expect(before - (await cash())).toBe(Number(log.charged_cents));                         // one charge
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_cognition_inflight WHERE request_id = $1`, [String(live.requestId)])).toHaveLength(1);   // the newer call untouched
+    expect(await authorize(10)).toMatchObject({ ok: false, code: "FLEET_COGNITION_BUSY" });   // and still the one live call
+    await record(String(live.requestId), { inputTokens: 1, outputTokens: 1 });
+  });
+
   it("exceptions are append-only and written only by their functions; the privilege audit is clean", async () => {
     expect(await R.code(R.q(`DELETE FROM fleet.fleet_cognition_cost_exceptions`))).toMatch(/FLEET_HISTORY_IMMUTABLE|permission denied/);
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
     expect(Number(await R.one(`(SELECT (fleet.fleet_ledger_verify() ->> 'ok')::boolean::int)`))).toBe(1);
+  });
+
+  it("LAST (the agent dies): an unsettled call keeps the agent from counting as exhausted and its estate from settling; the late charge lands, then the estate settles", async () => {
+    const a = await authorize(30); const id = String(a.requestId);
+    await expire(id);
+    const m = await R.one<any>(`fleet.fleet_agent_wallet_measure($1)`, [A]);
+    expect(m.ownHeldMinor.modelCallsUnsettledMinor).toBe(Number(a.estimateCents));
+    await R.one(`fleet.fleet_mark_dead($1, 'test: ended by the owner', $2, 'killed')`, [A, OWNER]).catch(async () =>
+      R.one(`fleet.fleet_mark_dead($1, 'test: ended by the owner', $2)`, [A, OWNER]));
+    expect(await R.code(R.one(`fleet.fleet_estate_settle($1, $2)`, [A, OWNER]))).toBe("FLEET_ESTATE_PENDING");
+    const before = await cash();
+    const late = await record(id);                                                           // the bill arrives after death
+    expect(late).toMatchObject({ ok: true, late: true });
+    expect(before - (await cash())).toBe(Number(late.chargedCents));                          // charged to the dead agent's estate cash
+    expect(await R.code(R.one(`fleet.fleet_estate_settle($1, $2)`, [A, OWNER]))).not.toBe("FLEET_ESTATE_PENDING");
   });
 });

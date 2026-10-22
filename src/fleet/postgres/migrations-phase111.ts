@@ -25,10 +25,13 @@
  * Allocation is the owner's decision; this migration books nothing for an exception until the owner chooses.
  */
 import { restate as restateRaw } from "./migrations-phase42.js";
+import { V13_SQL } from "./migrations-phase13.js";
 import { V21_SQL } from "./migrations-phase21.js";
 import { V62_SQL } from "./migrations-phase62.js";
 import { V69_SQL, OWNER_PAYABLE_ACCOUNT, REIMBURSABLE_ACCOUNT } from "./migrations-phase69.js";
 import { V109_SQL } from "./migrations-phase109.js";
+import { V96_SQL } from "./migrations-phase96.js";
+import { V56_SQL } from "./migrations-phase56.js";
 
 const restate = (src: string, name: string, edits: Array<[string, string]>) => restateRaw(src, name, edits.map(([a, b]) => [a, b.replace(/\$/g, "$$$$")] as [string, string]));
 
@@ -126,6 +129,33 @@ const LEGACY_RECORD = restate(V69_SQL, "svc_cognition_record", [
    `  DELETE FROM fleet_cognition_inflight WHERE agent_id = p_agent AND request_id = p_request;`],
 ]);
 
+// An agent-paid model call not yet settled (live or an unresolved hold) is a bill of the agent's still open: the agent is
+// not exhausted while it is (its cash has not been charged yet), and its estate is not settled until it is.
+const UNSETTLED = `(SELECT COALESCE(sum(estimate_cents), 0) FROM fleet_cognition_inflight WHERE agent_id = p_agent AND payer IS DISTINCT FROM 'treasury')`;
+const MEASURE = restate(V96_SQL, "fleet_agent_wallet_measure", [
+  [`        v_spend bigint; v_own bigint; v_in bigint; v_open bigint; v_env bigint; m jsonb; v_orders bigint; v_disp bigint; v_disp_held bigint;`,
+   `        v_spend bigint; v_own bigint; v_in bigint; v_open bigint; v_env bigint; m jsonb; v_orders bigint; v_disp bigint; v_disp_held bigint; v_cog bigint := ${UNSETTLED};`],
+  [`'paidToOwnerCardMinor', v_card, 'paypalDisputedMinor', v_disp_held),`,
+   `'paidToOwnerCardMinor', v_card, 'paypalDisputedMinor', v_disp_held, 'modelCallsUnsettledMinor', v_cog),`],
+  [`    'exhausted', v_own = 0 AND v_in = 0 AND v_orders = 0`,
+   `    'exhausted', v_own = 0 AND v_in = 0 AND v_orders = 0 AND v_cog = 0`],
+]);
+const ESTATE_SETTLE = restate(V56_SQL, "fleet_estate_settle_internal", [
+  [`    RAISE EXCEPTION 'FLEET_ESTATE_PENDING: reconcile pending orders first';
+  END IF;`,
+   `    RAISE EXCEPTION 'FLEET_ESTATE_PENDING: reconcile pending orders first';
+  END IF;
+  -- v111: a model call of the agent's not yet settled (in flight, or an unresolved hold) is settled first.
+  IF ${UNSETTLED} > 0 THEN RAISE EXCEPTION 'FLEET_ESTATE_PENDING: settle the agent''s unsettled model calls first'; END IF;`],
+]);
+
+// v13 deleted every reservation of an agent at its end: a bill arriving after death was lost and the estate settled without
+// it. The reservations now stop being live (no new work) but stay as holds until their results or the owner settle them.
+const COGNITION_STOP = restate(V13_SQL, "fleet_agents_cognition_stop", [
+  [`    DELETE FROM fleet_cognition_inflight WHERE agent_id = NEW.agent_id;`,
+   `    UPDATE fleet_cognition_inflight SET expired_at = COALESCE(expired_at, now()) WHERE agent_id = NEW.agent_id;`],
+]);
+
 const OWNER = `  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
   PERFORM fleet_require_operator_approver(substr(p_actor, 10), 'fleet_treasury');
   IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: a reason (the evidence) is required'; END IF;`;
@@ -172,6 +202,12 @@ ${AUTHORIZE_TREASURY}
 ${RECORD}
 
 ${LEGACY_RECORD}
+
+${MEASURE}
+
+${ESTATE_SETTLE}
+
+${COGNITION_STOP}
 
 -- The owner resolves a reservation whose result never came, from provider evidence (the provider's usage for that time):
 -- 'billed' settles it at its reservation (recorded as an estimate, exactly once); 'not_billed' releases it.

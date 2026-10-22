@@ -155,4 +155,14 @@ owner's: per-row rounding up = 5p; aggregate rounding up = 2p; or record as flee
 No open reservations and no helper job ended without a result: no purged late result is visible in the database; non-helper
 calls can only be checked against the provider console (not done).
 
-Open: estate settlement / insolvency tick do not yet wait for unresolved holds; the death measure is still the owner's decision.
+Added 2026-10-23 (review: "resolve outstanding holds before enabling death"):
+- An agent-paid model call not yet settled (live or an unresolved hold) counts as the agent's own money still held
+  (`modelCallsUnsettledMinor`): the agent is not exhausted while it is open; its estate refuses to settle (FLEET_ESTATE_PENDING).
+- **Third leak found by the new death test:** v13's `fleet_agents_cognition_stop` DELETED every reservation of an agent at
+  its end, so a bill arriving after death was lost and the estate settled without it (reproduced: estate settled, 10,000
+  minor units of cash to the treasury, the hold gone). Now the reservations stop being live but stay as holds.
+- New tests (asserting amounts): a hold blocks exactly its amount and its release charges nothing; two late results and the
+  owner's resolution in parallel → one log row, one charge, the newer live call untouched; a late charge after death lands on
+  the estate's cash, then the estate settles. v111 suite 8/8; 14 lifecycle/estate/cognition suites, 138 tests pass.
+Open: automatic reconciliation from provider evidence (owner resolution is the fallback, not the routine); the death measure
+is still the owner's decision.
