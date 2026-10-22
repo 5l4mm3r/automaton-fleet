@@ -61,7 +61,7 @@ describe.skipIf(!PG_BIN || !fs.existsSync(path.join(DEV_TOOLS, "site")))("scenar
       newRegistry: async () => { const pgc = await startEphemeralPg(PG_BIN!); regs.push(() => void pgc.stop?.()); return { ownerUrl: pgc.ownerUrl, serviceUrl: pgc.serviceUrl,
         agentUrl: pgc.agentUrl, custodyUrl: pgc.custodyUrl, identityUrl: pgc.identityUrl, stop: () => void pgc.stop?.() }; },
       provider: { baseUrl: fake.url, apiKey: KEY },
-      setRenderer: async () => undefined, killHard: async (a) => { await host.stop(a); }, rendererInstalled: false,
+      setRenderer: async () => undefined, setEvalEnv: async () => undefined, killHard: async (a) => { await host.stop(a); }, rendererInstalled: false,
       only, pollMs: 250,
     });
     for (const r of report.results) console.log(`${r.id}: ${r.verdict} — ${r.reason}; calls ${r.cost.calls}, refused ${r.cost.refused}, all-in µ ${r.cost.allInMicro}`);

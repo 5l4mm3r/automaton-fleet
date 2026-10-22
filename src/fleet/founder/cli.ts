@@ -500,6 +500,18 @@ async function main(argv: string[]): Promise<number> {
           },
           provider: { baseUrl: process.env.FLEET_COGNITION_BASE_URL?.trim() || "https://api.anthropic.com/v1", apiKey },
           setRenderer,
+          // The contradiction case: one evaluation variable on a THROWAWAY founder's unit (a drop-in removed with its unit).
+          setEvalEnv: async (agentId, name, value) => {
+            const f = path.join(path.dirname(founderPinPaths(agentId).dropIn), "91-scenario-eval.conf");
+            if (value === null) fs.rmSync(f, { force: true });
+            else {
+              if (!/^[a-z_]{3,40}$/.test(value)) throw new Error("evaluation value must be a check id");
+              fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o755 });
+              fs.writeFileSync(f, `# scenario suite (a throwaway founder): evaluation only\n[Service]\nEnvironment=${name}=${value}\n`, { mode: 0o644 });
+            }
+            execFileSync("systemctl", ["daemon-reload"], { stdio: "ignore", timeout: 60_000 });
+            execFileSync("systemctl", ["restart", founderUnit(agentId)], { stdio: "ignore", timeout: 120_000 });
+          },
           killHard: async (agentId) => { execFileSync("systemctl", ["kill", "-s", "SIGKILL", founderUnit(agentId)], { stdio: "ignore", timeout: 60_000 });
             execFileSync("systemctl", ["stop", founderUnit(agentId)], { stdio: "ignore", timeout: 60_000 }); },
           workbookFixture: flag("--workbook"), log,

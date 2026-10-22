@@ -119,3 +119,20 @@ describe("the run's production credit hold", () => {
     expect(Number(hold) / 1e8).toBeCloseTo(13.38, 2);                                 // $13.38 for plan B
   });
 });
+
+describe("the evaluation-only contradiction switch (scenario 3B)", () => {
+  it("is inert when unset; when set, it fails the named check of spreadsheets only, and the report is no longer ok", async () => {
+    const { evalContradiction } = await import("../../fleet/founder/toolbox.js");
+    const file = (detectedType: string) => ({ path: `p.${detectedType}`, sha256: "a".repeat(64), sizeBytes: 10, detectedType, extensionMatches: true, ok: true,
+      checks: [{ id: "cached_values", status: "pass", detail: "saved values match" }, { id: "recalc", status: "pass", detail: "ok" }], facts: {} });
+    const rep = { inspector: "fleet-qa-3", files: [file("xlsx"), file("pdf")], ok: true } as never;
+    expect(evalContradiction(rep, {})).toBe(rep);                                              // production: untouched
+    const c = evalContradiction(rep, { FLEET_EVAL_QA_CONTRADICT: "cached_values" }) as any;
+    expect(c.ok).toBe(false);
+    expect(c.files[0]).toMatchObject({ ok: false });
+    expect(c.files[0].checks.find((x: any) => x.id === "cached_values")).toMatchObject({ status: "fail" });
+    expect(c.files[0].checks.find((x: any) => x.id === "recalc")).toMatchObject({ status: "pass" });
+    expect(c.files[1]).toMatchObject({ ok: true });                                            // a PDF is not touched
+    expect(evalContradiction(rep, { FLEET_EVAL_QA_CONTRADICT: "rm -rf /" })).toBe(rep);        // only a check id
+  });
+});
