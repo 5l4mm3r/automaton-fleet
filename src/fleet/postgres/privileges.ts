@@ -938,7 +938,7 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_founder_research: new Set(["fleet_founder_research_set"]),
     // v21: rates only through the validated insert; provider credit only through the owner recorder and inference recording.
     fleet_fx_rates: new Set(["fleet_fx_insert"]),
-    fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile",
+    fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "fleet_admin_engineering_calls_import", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile",
       "fleet_spend_review_charge", "fleet_control_charge",
       // v70: a treasury-funded AI-credit purchase records its USD purchase.
       "fleet_admin_ai_credit_treasury_purchase",
@@ -1452,6 +1452,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_control_ai_reservations: new Set(["svc_fleet_control_ai_reserve", "svc_fleet_control_ai_settle"]),
     // v111: cost exceptions only by the routed record (overrun / uncollectable) and the owner's allocation.
     fleet_cognition_cost_exceptions: new Set(["svc_cognition_routed_record", "fleet_admin_cognition_exception_allocate"]),
+    fleet_engineering_cognition_calls: new Set(["fleet_admin_engineering_calls_import"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

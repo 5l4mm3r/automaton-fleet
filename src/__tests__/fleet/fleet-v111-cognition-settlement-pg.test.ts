@@ -185,6 +185,30 @@ describe.skipIf(!PG_BIN)("v111 cognition settlement integrity (PostgreSQL)", { t
     expect(Number(await R.one(`(SELECT (fleet.fleet_ledger_verify() ->> 'ok')::boolean::int)`))).toBe(1);
   });
 
+  it("engineering calls (the scenario harness's evidence) are imported once, as controller consumption of the owner's credit; no agent wallet is touched", async () => {
+    const { CostMeter } = await import("../../fleet/eval/cost-meter.js");
+    const m = new CostMeter({ runId: "eval-run-1", ceilingLedgerMicro: 300_000_000n, fxRateMicro: 747_613n, acquisition: { totalUsdCents: 8_400n, usdPurchasedMicro: 7_000_000_000n },
+      prices: { "claude-opus-5-5": { inputMicrocentsPerToken: 400, outputMicrocentsPerToken: 2_000, cacheWriteMicrocentsPerToken: 500, cacheReadMicrocentsPerToken: 20 } } });
+    m.scenario = "s1-interrupted";
+    const p = m.wrap({ id: "anthropic", model: "claude-opus-5-5", chat: async () => ({ content: "", toolCalls: [], usage: { inputTokens: 9_000, outputTokens: 250 }, usageSource: "provider", attempts: 1, providerRequestId: "req_eng_1" }) });
+    for (let i = 0; i < 3; i++) await p.chat({ agentId: "x", system: "s", messages: [{ role: "user", content: "hello" }], tools: [], maxTokens: 2_000 });
+    const rows = JSON.parse(JSON.stringify(m.rows));
+    const cash0 = await cash();
+    const credit0 = Number(await R.one(`fleet.fleet_provider_credit_balance('anthropic')`));
+    const r = await R.one<any>(`fleet.fleet_admin_engineering_calls_import('eval-run-1', 'anthropic', $1::jsonb, $2)`, [JSON.stringify(rows), OWNER]);
+    const usd = rows.reduce((t: bigint, x: any) => t + BigInt(x.usdMicro), 0n);
+    expect(r).toMatchObject({ ok: true, recorded: 3, alreadyRecorded: 0, usdMicro: Number(usd) });
+    expect(BigInt(credit0) - BigInt(await R.one(`fleet.fleet_provider_credit_balance('anthropic')`))).toBe(usd);   // the provider credit, exactly
+    expect(await cash()).toBe(cash0);                                                                                     // no agent pays
+    const ev = await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_provider_credit_events WHERE recorded_by = 'controller:engineering:eval-run-1' AND kind = 'consumption'`);
+    expect(ev[0].n).toBe(3);
+    expect(await R.one<any>(`fleet.fleet_admin_engineering_calls_import('eval-run-1', 'anthropic', $1::jsonb, $2)`, [JSON.stringify(rows), OWNER])).toMatchObject({ recorded: 0, alreadyRecorded: 3 });
+    expect(BigInt(credit0) - BigInt(await R.one(`fleet.fleet_provider_credit_balance('anthropic')`))).toBe(usd);   // a replay draws nothing more
+    expect(await R.code(R.one(`fleet.fleet_admin_engineering_calls_import('other-run', 'anthropic', $1::jsonb, $2)`, [JSON.stringify(rows), OWNER]))).toBe("FLEET_BAD_REQUEST");
+    expect(await R.code(R.one(`fleet.fleet_admin_engineering_calls_import('eval-run-1', 'anthropic', '[]'::jsonb, 'agent:x')`))).toBe("FLEET_APPROVAL_REQUIRED");
+    expect((await R.store.auditPrivileges()).problems).toEqual([]);
+  });
+
   it("LAST (the agent dies): an unsettled call keeps the agent from counting as exhausted and its estate from settling; the late charge lands, then the estate settles", async () => {
     const a = await authorize(30); const id = String(a.requestId);
     await expire(id);

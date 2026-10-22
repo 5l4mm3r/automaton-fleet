@@ -194,6 +194,10 @@ export class PgHubAdmin {
   cognitionExceptionAllocate(exceptionId: string, to: string, reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_cognition_exception_allocate($1, $2, $3, $4) AS r`, [exceptionId, to, reason, actor]);
   }
+  /** v111: import a scenario harness run's per-call evidence (eval/cost-meter.ts rows) as engineering consumption. */
+  engineeringCallsImport(runId: string, provider: string, rows: unknown[], actor: string) {
+    return this.one(`SELECT fleet_admin_engineering_calls_import($1, $2, $3::jsonb, $4) AS r`, [runId, provider, JSON.stringify(rows), actor]);
+  }
   fleetControlAi() {
     return this.one(`SELECT fleet_control_ai_state() AS r`);
   }

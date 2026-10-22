@@ -38,7 +38,7 @@ const restate = (src: string, name: string, edits: Array<[string, string]>) => r
 
 export const EVENT_ROUTES_V111 = Object.freeze({
   P1_HIGH: ["cognition_reservation_unresolved", "cognition_cost_exception"],
-  P3_SUMMARY: ["cognition_reservation_settled_late", "cognition_reservation_resolved", "cognition_cost_exception_allocated"],
+  P3_SUMMARY: ["cognition_reservation_settled_late", "cognition_reservation_resolved", "cognition_cost_exception_allocated", "engineering_cognition_recorded"],
 });
 /** Minutes after which a reservation no longer blocks the agent's next call (unchanged since v13). */
 export const RESERVATION_EXPIRY_MINUTES = 5;
@@ -289,6 +289,68 @@ ${OWNER}
    WHERE exception_id = p_exception;
   PERFORM fleet_event('cognition_cost_exception_allocated', x.agent_id, p_actor, jsonb_build_object('exceptionId', p_exception, 'to', p_to, 'minor', v_amount));
   RETURN jsonb_build_object('ok', true, 'exceptionId', p_exception, 'allocatedTo', p_to, 'minor', v_amount, 'journalId', v_j);
+END $$;
+
+-- Engineering model calls (the real-model scenario harness: a throwaway registry, the production provider key). The harness
+-- never holds production database credentials: it writes one evidence row per call (eval/cost-meter.ts) and the owner imports
+-- them after the run. Each call is recorded once (its call id) and becomes a provider-credit consumption by the controller
+-- (recorded_by controller:engineering:<run>): the credit lots are drawn (v70) and the acquisition cost is Fleet overhead
+-- (v72, as for Fleet Control's own calls). No agent wallet is touched.
+CREATE TABLE fleet_engineering_cognition_calls (
+  call_id              uuid        PRIMARY KEY,
+  run_id               text        NOT NULL CHECK (run_id ~ '^[A-Za-z0-9._:-]{3,64}$'),
+  scenario             text        NOT NULL CHECK (scenario ~ '^[A-Za-z0-9._:-]{1,64}$'),
+  provider             text        NOT NULL,
+  model                text        NOT NULL,
+  provider_request_id  text,
+  outcome              text        NOT NULL CHECK (outcome IN ('ok','error','refused_ceiling')),
+  charge               text        NOT NULL CHECK (charge IN ('usage','worst_case','none')),
+  input_tokens         bigint      NOT NULL DEFAULT 0, output_tokens bigint NOT NULL DEFAULT 0,
+  cache_read_tokens    bigint      NOT NULL DEFAULT 0, cache_write_tokens bigint NOT NULL DEFAULT 0,
+  usd_microcents       bigint      NOT NULL CHECK (usd_microcents >= 0),
+  ledger_microcents    bigint      NOT NULL CHECK (ledger_microcents >= 0),
+  all_in_microcents    bigint      NOT NULL CHECK (all_in_microcents >= 0),
+  called_at            timestamptz NOT NULL,
+  imported_by          text        NOT NULL,
+  imported_at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX fleet_engineering_cognition_calls_run ON fleet_engineering_cognition_calls (run_id, scenario);
+CREATE TRIGGER fleet_engineering_cognition_calls_no_change BEFORE UPDATE OR DELETE ON fleet_engineering_cognition_calls
+  FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+CREATE TRIGGER fleet_engineering_cognition_calls_no_truncate BEFORE TRUNCATE ON fleet_engineering_cognition_calls
+  FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
+
+CREATE FUNCTION fleet_admin_engineering_calls_import(p_run text, p_provider text, p_rows jsonb, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE x jsonb; v_new integer := 0; v_dup integer := 0; v_usd bigint := 0; v_all bigint := 0; v_id uuid;
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
+  PERFORM fleet_require_operator_approver(substr(p_actor, 10), 'fleet_treasury');
+  IF p_provider IS NULL OR p_provider !~ '^[a-z_]{2,32}$' THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: provider'; END IF;
+  IF jsonb_typeof(p_rows) <> 'array' OR jsonb_array_length(p_rows) > 5000 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: rows must be an array of at most 5000'; END IF;
+  FOR x IN SELECT * FROM jsonb_array_elements(p_rows) LOOP
+    IF x ->> 'runId' IS DISTINCT FROM p_run THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: a row of another run (%)', x ->> 'runId'; END IF;
+    INSERT INTO fleet_engineering_cognition_calls (call_id, run_id, scenario, provider, model, provider_request_id, outcome, charge,
+        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, usd_microcents, ledger_microcents, all_in_microcents, called_at, imported_by)
+      VALUES ((x ->> 'callId')::uuid, p_run, left(x ->> 'scenario', 64), p_provider, left(x ->> 'model', 120),
+        CASE WHEN x ->> 'providerRequestId' ~ '^[A-Za-z0-9_.:-]{1,128}$' THEN x ->> 'providerRequestId' END, x ->> 'outcome', x ->> 'charge',
+        COALESCE((x -> 'usage' ->> 'inputTokens')::bigint, 0), COALESCE((x -> 'usage' ->> 'outputTokens')::bigint, 0),
+        COALESCE((x -> 'usage' ->> 'cacheReadTokens')::bigint, 0), COALESCE((x -> 'usage' ->> 'cacheWriteTokens')::bigint, 0),
+        (x ->> 'usdMicro')::bigint, (x ->> 'ledgerMicro')::bigint, (x ->> 'allInMicro')::bigint, (x ->> 'at')::timestamptz, p_actor)
+      ON CONFLICT (call_id) DO NOTHING RETURNING call_id INTO v_id;
+    IF v_id IS NULL THEN v_dup := v_dup + 1; CONTINUE; END IF;
+    v_new := v_new + 1; v_usd := v_usd + (x ->> 'usdMicro')::bigint; v_all := v_all + (x ->> 'allInMicro')::bigint;
+    IF (x ->> 'usdMicro')::bigint > 0 THEN
+      INSERT INTO fleet_provider_credit_events (provider, kind, usd_microcents, request_id, recorded_by)
+        VALUES (p_provider, 'consumption', -(x ->> 'usdMicro')::bigint, v_id, 'controller:engineering:' || p_run);
+    END IF;
+    v_id := NULL;
+  END LOOP;
+  PERFORM fleet_event('engineering_cognition_recorded', NULL, p_actor, jsonb_build_object('runId', p_run, 'calls', v_new, 'duplicates', v_dup,
+    'usdMicro', v_usd, 'allInMicro', v_all));
+  RETURN jsonb_build_object('ok', true, 'runId', p_run, 'recorded', v_new, 'alreadyRecorded', v_dup, 'usdMicro', v_usd, 'allInMicro', v_all,
+    'run', (SELECT jsonb_build_object('calls', count(*), 'usdMicro', COALESCE(sum(usd_microcents), 0), 'allInMicro', COALESCE(sum(all_in_microcents), 0))
+              FROM fleet_engineering_cognition_calls WHERE run_id = p_run));
 END $$;
 
 -- The owner's view: unresolved reservations and cost exceptions.
