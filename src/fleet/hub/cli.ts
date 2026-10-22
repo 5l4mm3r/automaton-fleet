@@ -106,6 +106,9 @@
  *   economy-offer-hold <slug> <reason…>                                       (v96) one offer not sold publicly (accepted work continues; the agent is told)
  *   economy-offer-release <slug> [reason…]
  *   economy-fleet-control-ai-budget <dailyMinor|off> <reason…>                (v96) Fleet Control's daily AI budget (its spend / lesson reviews); off (v110) clears it
+ *   hub-cognition-settlement                                                  (v111) model-call reservations without a result past their time, and cost exceptions
+ *   economy-cognition-resolve <requestId> <billed|not_billed> <evidence…>     (v111) resolve a call that never reported back, from provider evidence
+ *   economy-cognition-exception-allocate <exceptionId> <agent|treasury> <reason…>  (v111) allocate a cost exception (the owner's decision)
  *   hub-fleet-control-ai                                                      (v96) its budget, spent in 24 h, in flight and room
  *   hub-paypal-disputes                                                       (v57) disputes, unclassified PayPal debits, exposure per agent
  *   economy-paypal-dispute-resolve <disputeId> won|lost [note…]               (v57) a dispute PayPal left without a plain outcome
@@ -249,7 +252,7 @@ export const HUB_COMMANDS = new Set([
   "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
   "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser", "hub-dashboard-enroll", "hub-dashboard-totp-reset",
   "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
-  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "economy-owner-claim-wait", "economy-owner-claim-wait-end", "economy-sales-geography", "hub-refund-authorities", "hub-paypal-reconciliation", "economy-paypal-reconciliation-resolve", "economy-paypal-order-retire", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "hub-fleet-control-ai", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
+  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "economy-owner-claim-wait", "economy-owner-claim-wait-end", "economy-sales-geography", "hub-refund-authorities", "hub-paypal-reconciliation", "economy-paypal-reconciliation-resolve", "economy-paypal-order-retire", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "hub-fleet-control-ai", "hub-cognition-settlement", "economy-cognition-resolve", "economy-cognition-exception-allocate", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
   // v66 – v72 (missing until 2026-10-12: these were unreachable from fleet:admin)
   "economy-capital-backing", "economy-capital-back", "economy-spend-breaker", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
@@ -412,6 +415,12 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return p[0] === "off" ? h.fleetControlAiBudgetClear(p.slice(1).join(" "), actor) : h.fleetControlAiBudget(int(p[0], "dailyMinor"), p.slice(1).join(" "), actor);
     case "hub-fleet-control-ai":
       return h.fleetControlAi();
+    case "hub-cognition-settlement":
+      return h.cognitionSettlement();
+    case "economy-cognition-resolve":
+      return h.cognitionReservationResolve(p[0], p[1], p.slice(2).join(" "), actor);
+    case "economy-cognition-exception-allocate":
+      return h.cognitionExceptionAllocate(p[0], p[1], p.slice(2).join(" "), actor);
     case "economy-card-credit-return":
       return h.cardCreditReturn(int(p[0], "amountMinor"), p[1], actor);
     case "hub-paypal-disputes":

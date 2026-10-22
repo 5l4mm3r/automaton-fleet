@@ -787,6 +787,8 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     "fleet_founder_cognition:fleet_founder_cognition_no_delete",
     "fleet_agents:fleet_agents_cognition_stop",
     "fleet_cognition_accrual:fleet_cognition_accrual_no_delete",
+    "fleet_cognition_cost_exceptions:fleet_cognition_cost_exceptions_no_delete",
+    "fleet_cognition_cost_exceptions:fleet_cognition_cost_exceptions_no_truncate",
     "fleet_research_attempts:fleet_research_attempts_no_change",
     "fleet_research_attempts:fleet_research_attempts_no_truncate",
     "fleet_research_results:fleet_research_results_no_change",
@@ -1448,6 +1450,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_sales_geography: new Set(["fleet_admin_sales_geography"]),
     fleet_control_ai_budget: new Set(["fleet_admin_fleet_control_ai_budget", "fleet_admin_fleet_control_ai_budget_clear"]),
     fleet_control_ai_reservations: new Set(["svc_fleet_control_ai_reserve", "svc_fleet_control_ai_settle"]),
+    // v111: cost exceptions only by the routed record (overrun / uncollectable) and the owner's allocation.
+    fleet_cognition_cost_exceptions: new Set(["svc_cognition_routed_record", "fleet_admin_cognition_exception_allocate"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

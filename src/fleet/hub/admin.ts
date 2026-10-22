@@ -182,6 +182,18 @@ export class PgHubAdmin {
   fleetControlAiBudgetClear(reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_fleet_control_ai_budget_clear($1, $2) AS r`, [reason, actor]);
   }
+  /** v111: model-call reservations with no result past their time, and cost exceptions (overrun / uncollectable). */
+  cognitionSettlement() {
+    return this.one(`SELECT fleet_admin_cognition_settlement_state() AS r`);
+  }
+  /** v111: resolve a reservation whose result never came, from provider evidence: billed (at its reservation) or not_billed. */
+  cognitionReservationResolve(requestId: string, outcome: string, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_cognition_reservation_resolve($1, $2, $3, $4) AS r`, [requestId, outcome, reason, actor]);
+  }
+  /** v111: allocate a cost exception to the agent or to the treasury (the owner's decision). */
+  cognitionExceptionAllocate(exceptionId: string, to: string, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_cognition_exception_allocate($1, $2, $3, $4) AS r`, [exceptionId, to, reason, actor]);
+  }
   fleetControlAi() {
     return this.one(`SELECT fleet_control_ai_state() AS r`);
   }

@@ -132,3 +132,27 @@ Open, needing owner decisions (economic policy — not implemented): exact walle
 cognition reservations purged after 5 min leave late usage unbooked and charges are capped at the reservation; customer
 obligations of a dead agent have no formal hand-over; journal lessons tagged candidate_fleet are not harvested at death;
 unset Fleet Control budget leaves lesson proposals waiting with no notice to the proposer.
+
+## 2026-10-22 — v111 cognition settlement integrity (repo only; NOT built, rehearsed or installed)
+Launch review 2026-10-22 §1 ("Five minutes may expire permission to start work; it cannot make already incurred costs disappear").
+
+| Defect | Reproduced on v110 (43790e2, ephemeral PG) | v111 | Proof |
+|---|---|---|---|
+| Reservation > 5 min old DELETED by the next authorisation; the late result → FLEET_COGNITION_NOT_AUTHORIZED: no log row, no charge, no provider-credit consumption | yes (cash unchanged, consumption 0, no log row) | kept as an unresolved hold (`expired_at`): held against the agent's cash/equity and provider credit, P1 `cognition_reservation_unresolved`; the late result settles it by request id exactly once | fleet-v111-cognition-settlement-pg 1 |
+| Recording any call deleted EVERY reservation of the agent | yes | only that request's reservation; table re-keyed by request_id; one LIVE reservation per agent enforced by a partial unique index | v111 1 |
+| Cost above the reservation charged only up to it; excess booked to no one | yes: 16,000,000 ledger-µ cost, 1,000,000 charged, 15,000,000 unbooked | excess recorded as a cost exception (P1); that agent's further paid calls refused (`FLEET_COGNITION_COST_EXCEPTION`) until the owner allocates it (agent or treasury; one journal, rounded up) | v111 2 |
+| A result that never comes | — | owner resolves from provider evidence: `economy-cognition-resolve <req> billed|not_billed <evidence>`; billed = settled at the reservation as an estimate, once | v111 3, 4 |
+| Late settlement after the agent's cash moved would fail the write (non-negative cash) and lose the record | — | charged as far as cash allows; the rest is an `uncollectable` exception | code path; not yet a dedicated test |
+| v62's treasury-paid copy (`fleet_cognition_authorize_treasury`) had the same purge | — | same expiry rule | v111 suite + conversations-v62-pg |
+
+Regression: 10 cognition / AI-credit / conversation suites, 109 tests pass; privilege audit clean; tsc clean.
+
+**Production history (read-only query, 2026-10-22 ~23:5xZ, schema 110):** 5 overruns, all Agent-1, all T2, all reserved at a flat
+8p before v104's true cost bound (applied 2026-10-20 17:15Z); none in the 119 provider-priced calls since. Excess (SQL):
+fdf03fc6 299,847 · 34135575 339,329 · a9af7460 452,562 · a23949ec 393,321 · d9121ac0 463,735 ledger-µ (GBP; FX 0.749889)
+= **1,948,794 ledger-µ ≈ 1.95p**, absorbed by owner-funded provider credit with no owner-payable leg. Allocation is the
+owner's: per-row rounding up = 5p; aggregate rounding up = 2p; or record as fleet expense. Nothing posted.
+No open reservations and no helper job ended without a result: no purged late result is visible in the database; non-helper
+calls can only be checked against the provider console (not done).
+
+Open: estate settlement / insolvency tick do not yet wait for unresolved holds; the death measure is still the owner's decision.
