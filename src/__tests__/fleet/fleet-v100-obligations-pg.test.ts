@@ -241,4 +241,19 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     expect(await R.econ(F, "money.currencies", {})).toMatchObject({ ok: true, currencies: expect.arrayContaining([expect.objectContaining({ code: "GBP", payments: true })]) });
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
+
+  it("v111: none is hidden — 11 older unanswered enquiries and a paid order's newer message: the order comes first and all 12 are listed", async () => {
+    for (let i = 0; i < 11; i++) {
+      const e = (await R.q(`INSERT INTO fleet.fleet_offer_enquiries (offer_id, agent_id, access_token, buyer_name, buyer_email, brief)
+        SELECT offer_id, agent_id, $2, 'Bo', 'bo@example.test', 'Is the tracker still available this month?' FROM fleet.fleet_offer_enquiries WHERE enquiry_id = $1 RETURNING enquiry_id`,
+        [enquiryId, crypto.randomBytes(32).toString("hex")]))[0].enquiry_id;
+      await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, enquiry_id, author, body, created_at) VALUES ($1, $2, 'buyer', 'Is it still available?', now() - make_interval(hours => $3))`,
+        [F.id, e, 30 + i]);
+    }
+    await buyer(0, "The PDF export is blank — please fix it");                       // the paid order's newest message (after every reply)
+    const list = await obligations();
+    const unanswered = list.filter((o) => o.state === "unanswered");
+    expect(unanswered.length).toBeGreaterThanOrEqual(12);                              // v100 returned 10: the order was cut
+    expect(list[0]).toMatchObject({ kind: "order", id: orderId, state: "unanswered" }); // most urgent first
+  });
 });

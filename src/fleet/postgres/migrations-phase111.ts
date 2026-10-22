@@ -32,6 +32,7 @@ import { V69_SQL, OWNER_PAYABLE_ACCOUNT, REIMBURSABLE_ACCOUNT } from "./migratio
 import { V109_SQL } from "./migrations-phase109.js";
 import { V96_SQL } from "./migrations-phase96.js";
 import { V56_SQL } from "./migrations-phase56.js";
+import { V100_SQL, OBLIGATIONS_MAX } from "./migrations-phase100.js";
 
 const restate = (src: string, name: string, edits: Array<[string, string]>) => restateRaw(src, name, edits.map(([a, b]) => [a, b.replace(/\$/g, "$$$$")] as [string, string]));
 
@@ -156,6 +157,18 @@ const COGNITION_STOP = restate(V13_SQL, "fleet_agents_cognition_stop", [
    `    UPDATE fleet_cognition_inflight SET expired_at = COALESCE(expired_at, now()) WHERE agent_id = NEW.agent_id;`],
 ]);
 
+// v100 returned the 10 OLDEST obligations: an 11th — say a paid order's newest message behind 10 old enquiries — was neither
+// shown nor stopped the agent's sleep. Up to OBLIGATIONS_LIMIT_V111 now, most urgent first: unanswered before answered,
+// paid orders before enquiries, then oldest. The packet shows the first ones and counts the rest (founder/obligations.ts).
+export const OBLIGATIONS_LIMIT_V111 = 50;
+const PRIORITY = `CASE WHEN replied IS NULL OR replied < last_buyer THEN 0 ELSE 1 END, CASE WHEN kind = 'order' THEN 0 ELSE 1 END, since`;
+const OBLIGATIONS = restate(V100_SQL, "fleet_customer_obligations", [
+  [`'delivering', CASE WHEN delivering THEN true END)) ORDER BY since), '[]'::jsonb)
+    FROM (SELECT * FROM ob ORDER BY since LIMIT ${OBLIGATIONS_MAX}) y`,
+   `'delivering', CASE WHEN delivering THEN true END)) ORDER BY ${PRIORITY}), '[]'::jsonb)
+    FROM (SELECT * FROM ob ORDER BY ${PRIORITY} LIMIT ${OBLIGATIONS_LIMIT_V111}) y`],
+]);
+
 const OWNER = `  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
   PERFORM fleet_require_operator_approver(substr(p_actor, 10), 'fleet_treasury');
   IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: a reason (the evidence) is required'; END IF;`;
@@ -208,6 +221,8 @@ ${MEASURE}
 ${ESTATE_SETTLE}
 
 ${COGNITION_STOP}
+
+${OBLIGATIONS}
 
 -- The owner resolves a reservation whose result never came, from provider evidence (the provider's usage for that time):
 -- 'billed' settles it at its reservation (recorded as an estimate, exactly once); 'not_billed' releases it.

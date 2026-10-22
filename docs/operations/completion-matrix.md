@@ -176,3 +176,11 @@ is still the owner's decision.
 - Automatic reconciliation of a model call whose result never came: no provider evidence is connected (Anthropic exposes
   usage per time bucket through its Admin API, not per request; no admin key is configured). Until then the owner resolves
   from the console (P1 alert). Dependency recorded, not built speculatively.
+
+## 2026-10-23 — customer obligations: none hidden (repo only)
+- Obligations come from the business record (fleet_customer_obligations), not from the 20-event window: they survive any
+  event backlog, pause or restart (v100). Defect found: v100 returned the 10 OLDEST; an 11th (a paid order's newest message
+  behind 10 old enquiries) was neither shown nor blocked the agent's sleep. v111: up to 50, most urgent first (unanswered,
+  then paid orders, then oldest); the packet spells out 10 and counts the rest; every unanswered one blocks sleep.
+  Proof: v100-obligations-pg "v111: none is hidden" (12 open: the order first); v111-obligations-priority unit.
+- Not changed (stated): an enquiry counts as answered by any agent reply (no separate resolved state as orders have).

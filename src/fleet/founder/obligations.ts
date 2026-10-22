@@ -19,6 +19,9 @@ export interface CustomerObligation {
   delivering: boolean;
 }
 
+/** Obligations read from the controller (v111 returns up to 50, most urgent first) and spelled out in the packet. */
+export const OBLIGATIONS_PARSED = 50;
+export const OBLIGATIONS_SHOWN = 10;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const at = (s: unknown): string | null => (typeof s === "string" && Number.isFinite(Date.parse(s)) ? new Date(Date.parse(s)).toISOString() : null);
 
@@ -27,7 +30,7 @@ export function parseObligations(attention: unknown): CustomerObligation[] | nul
   const list = (attention as { customerObligations?: unknown } | undefined)?.customerObligations;
   if (!Array.isArray(list)) return null;
   const out: CustomerObligation[] = [];
-  for (const x of list.slice(0, 10)) {
+  for (const x of list.slice(0, OBLIGATIONS_PARSED)) {
     if (!x || typeof x !== "object") continue;
     const o = x as Record<string, unknown>;
     const since = at(o.since), last = at(o.lastBuyerAt);
@@ -47,7 +50,10 @@ const utc = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
  */
 export function obligationLines(list: CustomerObligation[]): string[] {
   if (!list.length) return [];
-  const items = list.map((o) => {
+  // 2026-10-23: the controller lists them most urgent first (v111); the first OBLIGATIONS_SHOWN are spelled out, the rest
+  // counted — every one still blocks sleep while unanswered (owedAnswers reads the whole parsed list).
+  const rest = list.slice(OBLIGATIONS_SHOWN);
+  const items = list.slice(0, OBLIGATIONS_SHOWN).map((o) => {
     const n = o.buyerMessages > 1 ? ` (${o.buyerMessages} buyer messages since ${utc(o.since)})` : "";
     if (o.kind === "enquiry") return `enquiry ${o.id}: the buyer's message of ${utc(o.lastBuyerAt)} is UNANSWERED${n} — read it with customers read, answer with customers reply`;
     if (o.state === "unanswered") {
@@ -58,7 +64,9 @@ export function obligationLines(list: CustomerObligation[]): string[] {
       + "resolved by delivering the revised files (wallet deliver, with resendReason) or by customers order_message with resolved: true once nothing more is owed";
   });
   const owed = list.some((o) => o.state === "unanswered");
-  return [`Your customers' open requests (FleetController's record; each stays here until it is resolved${owed ? "; you cannot sleep while a buyer waits for an answer" : ""}): ${items.join("; ")}.`];
+  const unansweredRest = rest.filter((o) => o.state === "unanswered").length;
+  const more = rest.length ? `; …and ${rest.length} more open request${rest.length > 1 ? "s" : ""} (${unansweredRest} unanswered): list enquiries with customers enquiries, an order's with customers order_thread` : "";
+  return [`Your customers' open requests (FleetController's record, most urgent first; each stays here until it is resolved${owed ? "; you cannot sleep while a buyer waits for an answer" : ""}): ${items.join("; ")}${more}.`];
 }
 
 /** The wake-digest part of the obligations: their ids, states and newest buyer messages (not reply times). */
