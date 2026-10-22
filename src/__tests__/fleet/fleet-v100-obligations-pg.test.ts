@@ -26,7 +26,7 @@ import { IdentityBroker } from "../../fleet/identity/broker.js";
 import { SimulatedSharedMailProvider } from "../../fleet/identity/providers.js";
 import { initIdentityState, openIdentityState, openProviderVault } from "../../fleet/identity/main.js";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
-import { startEconomyRegistry, autoCapabilityChecks, OWNER, econNext, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
+import { startEconomyRegistry, autoCapabilityChecks, OWNER, econNext, READY_RUNTIME, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
 import { liveRail } from "./fixtures/custody-signer.js";
 import { moneyProblems } from "../../fleet/founder/money.js";
 
@@ -267,5 +267,27 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     }
     expect(seen).toEqual(list.map((o) => `${o.kind}:${o.id}`));
     expect(new Set(seen).size).toBe(seen.length);
+  });
+
+  it("v111: a listing, pin or storefront product that sells elsewhere names a published offer whose capability check still covers it", async () => {
+    const offerId = String((await R.q(`SELECT offer_id FROM fleet.fleet_offer_enquiries WHERE enquiry_id = $1`, [enquiryId]))[0].offer_id);
+    const listing = (extra: Record<string, unknown>) => R.econ(F, "channel.api", { channelId: crypto.randomUUID(), op: "etsy.listing.create", idempotencyKey: `l-${crypto.randomUUID()}`,
+      args: { title: "Landlord compliance tracker", description: "A spreadsheet that tracks every renewal for UK landlords.", priceMinor: 900, taxonomyId: 1 }, ...extra })
+      .catch((e: Error) => ({ ok: false, code: /FLEET_[A-Z_]+/.exec(e.message)?.[0] }));
+    expect(await listing({})).toMatchObject({ ok: false, code: "FLEET_CAPABILITY_CHECK_REQUIRED" });              // no offer named
+    const draft = (await R.q(`INSERT INTO fleet.fleet_offers (agent_id, venture_id, slug, kind, title, summary, description, deliverables, price_minor, currency, terms, turnaround_days)
+      SELECT agent_id, venture_id, 'draft-' || substr(md5(random()::text), 1, 6) || '-abcdef', kind, title, summary, description, deliverables, price_minor, currency, terms, COALESCE(turnaround_days, 5)
+        FROM fleet.fleet_offers WHERE offer_id = $1 RETURNING offer_id`, [offerId]))[0].offer_id;
+    expect(await listing({ offerId: draft })).toMatchObject({ ok: false, code: "FLEET_CAPABILITY_CHECK_REQUIRED" });  // not published
+    // A published offer (fixture: marked published in this throwaway database) without a check covering it: refused.
+    const c = await su.connect();
+    try { await c.query("SET default_transaction_read_only = off"); await c.query("SET session_replication_role = replica");
+      await c.query(`UPDATE fleet.fleet_offers SET status = 'published', review_id = gen_random_uuid() WHERE offer_id = $1`, [offerId]); }
+    finally { await c.query("RESET session_replication_role"); await c.query("RESET default_transaction_read_only"); c.release(); }
+    expect(await listing({ offerId })).toMatchObject({ ok: false, code: "FLEET_CAPABILITY_CHECK_REQUIRED" });
+    // Its capability check (through the agent's own API): the gate passes; the next refusal is the channel's own (none connected).
+    await R.econ(F, "capabilities.check", { runtime: READY_RUNTIME, offerId, deliverables: [{ format: "pdf" }] });
+    expect(await listing({ offerId })).toMatchObject({ ok: false, code: "FLEET_NOT_FOUND" });
+    expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
 });

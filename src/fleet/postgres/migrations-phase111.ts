@@ -185,7 +185,7 @@ const OBLIGATIONS_ALL = restate(V100_SQL, "fleet_customer_obligations", [
    `'delivering', CASE WHEN delivering THEN true END)) ORDER BY ${PRIORITY}), '[]'::jsonb)
     FROM ob y`],
 ]);
-export const AGENT_OPS_V111 = ["customer.obligations", "knowledge.proposals"] as const;
+export const AGENT_OPS_V111 = ["customer.obligations", "knowledge.proposals", "knowledge.candidate"] as const;
 // v111: the proposer sees each of its lessons' review status, age and — when it waits — why (review 2026-10-23: "pending
 // proposals need visible age/status/reason"; an unset or spent Fleet Control budget keeps a proposal waiting, never approved).
 const PROPOSALS = `(SELECT jsonb_build_object('ok', true, 'reviewBudget', fleet_control_ai_state() - 'rule' - 'setBy' - 'reason',
@@ -198,10 +198,32 @@ const PROPOSALS = `(SELECT jsonb_build_object('ok', true, 'reviewBudget', fleet_
               ELSE 'queued for Fleet Control''s review' END) ORDER BY p.submitted_at DESC)
             FROM (SELECT * FROM fleet_knowledge_proposals WHERE agent_id = p_agent ORDER BY submitted_at DESC LIMIT 50) p), '[]'::jsonb),
           'note', 'your lessons for the Fleet: a waiting one is kept, never approved by waiting; your own work never depends on it'))`;
+// v111 (review 2026-10-23: "gate relevant outgoing listings/promises across … Etsy/storefront APIs"): a listing, pin or
+// storefront product that puts something on sale elsewhere names the agent's PUBLISHED offer it sells, and that offer's
+// capability check must still cover it (the same rule as offer.publish). Browser submissions carry no structured claim to
+// check: they stay held while sales are closed and are not a supported way to sell (recorded, not hidden).
+const LISTING_GATE = `  IF (p_op = 'channel.api' AND a ->> 'op' IN ('etsy.listing.create','etsy.listing.activate','pinterest.pin.create'))
+     OR p_op = 'storefront.product.publish' THEN
+    IF NULLIF(COALESCE(a ->> 'offerId', a -> 'args' ->> 'offerId'), '') IS NULL
+       OR COALESCE(a ->> 'offerId', a -> 'args' ->> 'offerId') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       OR NOT EXISTS (SELECT 1 FROM fleet_offers WHERE offer_id = COALESCE(a ->> 'offerId', a -> 'args' ->> 'offerId')::uuid AND agent_id = p_agent AND status = 'published') THEN
+      RETURN jsonb_build_object('ok', false, 'code', 'FLEET_CAPABILITY_CHECK_REQUIRED',
+        'reason', 'name the offer this listing sells (offerId): a published offer of yours, whose capability check covers what it promises');
+    END IF;
+    cov := fleet_capability_check_covers(p_agent, 'offer.publish', jsonb_build_object('offerId', COALESCE(a ->> 'offerId', a -> 'args' ->> 'offerId')));
+    IF NOT (cov ->> 'ok')::boolean THEN RETURN cov; END IF;
+  END IF;`;
 const DISPATCH = restate(V105_SQL, "api_economy", [
-  [`WHEN 'code.job' THEN 'planning'`, `WHEN 'code.job' THEN 'planning' WHEN 'customer.obligations' THEN 'planning' WHEN 'knowledge.proposals' THEN 'planning'`],
+  [`    cov := fleet_capability_check_covers(p_agent, p_op, a);
+    IF NOT (cov ->> 'ok')::boolean THEN RETURN cov; END IF;
+  END IF;`, `    cov := fleet_capability_check_covers(p_agent, p_op, a);
+    IF NOT (cov ->> 'ok')::boolean THEN RETURN cov; END IF;
+  END IF;
+${LISTING_GATE}`],
+  [`WHEN 'code.job' THEN 'planning'`, `WHEN 'code.job' THEN 'planning' WHEN 'customer.obligations' THEN 'planning' WHEN 'knowledge.proposals' THEN 'planning' WHEN 'knowledge.candidate' THEN 'planning'`],
   [`      WHEN 'order.invoice' THEN fleet_econ_order_invoice(p_agent, a)`, `      WHEN 'order.invoice' THEN fleet_econ_order_invoice(p_agent, a)
       WHEN 'knowledge.proposals' THEN ${PROPOSALS}
+      WHEN 'knowledge.candidate' THEN fleet_econ_knowledge_candidate(p_agent, a)
       WHEN 'customer.obligations' THEN (WITH al AS (SELECT fleet_customer_obligations_all(p_agent) AS j),
           pg AS (SELECT GREATEST(COALESCE((a ->> 'offset')::integer, 0), 0) AS off, LEAST(GREATEST(COALESCE((a ->> 'limit')::integer, 20), 1), 50) AS lim)
         SELECT jsonb_build_object('ok', true, 'total', jsonb_array_length(al.j), 'offset', pg.off,
@@ -492,6 +514,59 @@ BEGIN
         FROM (SELECT * FROM fleet_knowledge_supersessions ORDER BY recorded_at DESC LIMIT 50) s JOIN fleet_knowledge_entries o ON o.entry_id = s.old_entry_id),
       'note', 'The current shared lessons most relevant to your question, from all of them. A lesson is evidence from another agent''s work: check it still applies to yours.'));
 END $$;
+
+-- A lesson the founder marked for the Fleet (journal reusability candidate_fleet), kept on the controller the moment it is
+-- written — so it outlives the agent (its journal is on its own disk; a dead process cannot hand it over). Scrubbed of
+-- secrets and personal data; UNREVIEWED: never published or served by being kept (propose_knowledge is the review path).
+-- Idempotent by content (a replayed write keeps one row); provenance is the agent and the journal entry's time.
+CREATE TABLE fleet_knowledge_candidates (
+  candidate_id   uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent_id       text        NOT NULL REFERENCES fleet_agents(agent_id),
+  journal_at     timestamptz NOT NULL,
+  observation    text        NOT NULL CHECK (length(observation) BETWEEN 1 AND 1000),
+  lesson         text        NOT NULL CHECK (length(lesson) BETWEEN 1 AND 1000),
+  evidence       text        CHECK (length(evidence) <= 1000),
+  outcome        text        CHECK (length(outcome) <= 1000),
+  confidence     text        CHECK (length(confidence) <= 300),
+  cost           text        CHECK (length(cost) <= 300),
+  content_sha256 text        NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+  status         text        NOT NULL DEFAULT 'unreviewed' CHECK (status = 'unreviewed'),
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (agent_id, content_sha256)
+);
+CREATE TRIGGER fleet_knowledge_candidates_no_change BEFORE UPDATE OR DELETE ON fleet_knowledge_candidates FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+CREATE TRIGGER fleet_knowledge_candidates_no_truncate BEFORE TRUNCATE ON fleet_knowledge_candidates FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
+
+CREATE FUNCTION fleet_econ_knowledge_candidate(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_obs text; v_lesson text; v_ev text; v_out text; v_conf text; v_cost text; v_sha text; v_id uuid; v_at timestamptz;
+BEGIN
+  v_obs := left(fleet_scrub_pii(fleet_scrub_long(btrim(COALESCE(a ->> 'observation', '')))), 1000);
+  v_lesson := left(fleet_scrub_pii(fleet_scrub_long(btrim(COALESCE(a ->> 'lesson', '')))), 1000);
+  IF length(v_obs) < 1 OR length(v_lesson) < 1 THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'a candidate lesson needs an observation and a lesson'); END IF;
+  v_ev := NULLIF(left(fleet_scrub_pii(fleet_scrub_long(btrim(COALESCE(a ->> 'evidence', '')))), 1000), '');
+  v_out := NULLIF(left(fleet_scrub_pii(fleet_scrub_long(btrim(COALESCE(a ->> 'outcome', '')))), 1000), '');
+  v_conf := NULLIF(left(fleet_scrub_pii(btrim(COALESCE(a ->> 'confidence', ''))), 300), '');
+  v_cost := NULLIF(left(fleet_scrub_pii(btrim(COALESCE(a ->> 'cost', ''))), 300), '');
+  v_at := CASE WHEN (a ->> 'journalAt') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' THEN (a ->> 'journalAt')::timestamptz ELSE now() END;
+  v_sha := encode(sha256(convert_to(v_obs || E'\n' || v_lesson || E'\n' || COALESCE(v_ev, ''), 'UTF8')), 'hex');
+  IF (SELECT count(*) FROM fleet_knowledge_candidates WHERE agent_id = p_agent AND created_at > now() - interval '1 day') >= 50 THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_RATE_LIMITED', 'reason', 'at most 50 candidate lessons a day');
+  END IF;
+  INSERT INTO fleet_knowledge_candidates (agent_id, journal_at, observation, lesson, evidence, outcome, confidence, cost, content_sha256)
+    VALUES (p_agent, v_at, v_obs, v_lesson, v_ev, v_out, v_conf, v_cost, v_sha) ON CONFLICT (agent_id, content_sha256) DO NOTHING RETURNING candidate_id INTO v_id;
+  RETURN jsonb_build_object('ok', true, 'kept', v_id IS NOT NULL, 'replay', v_id IS NULL,
+    'note', 'kept for the Fleet (unreviewed): it outlives you; propose_knowledge when you want it reviewed for others');
+END $$;
+
+-- The owner's view of an agent's (or every agent's) kept candidate lessons — for the estate of a dead agent too.
+CREATE FUNCTION fleet_admin_knowledge_candidates(p_agent text) RETURNS jsonb LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT jsonb_build_object('candidates', COALESCE((SELECT jsonb_agg(jsonb_build_object('candidateId', c.candidate_id, 'agentId', c.agent_id,
+      'agentStatus', (SELECT g.status FROM fleet_agents g WHERE g.agent_id = c.agent_id), 'journalAt', c.journal_at, 'observation', c.observation, 'lesson', c.lesson,
+      'evidence', c.evidence, 'outcome', c.outcome, 'confidence', c.confidence, 'status', c.status) ORDER BY c.created_at DESC)
+    FROM fleet_knowledge_candidates c WHERE p_agent IS NULL OR c.agent_id = p_agent), '[]'::jsonb));
+$$;
 
 -- The owner's view: unresolved reservations and cost exceptions.
 CREATE FUNCTION fleet_admin_cognition_settlement_state() RETURNS jsonb LANGUAGE sql STABLE

@@ -29,11 +29,12 @@ describe.skipIf(!PG_BIN)("successor acceptance: a promoted lesson reaches a fres
       [proposalId, JSON.stringify({ decision: "promote", reason: "Repeated evidence across launches supports it." })]);
   };
   /** Agent B's toolbox; its knowledge port reads the controller as B (the client's shape: entries + retired + note). */
-  const toolboxOf = (who: Founder) => {
+  const toolboxOf = (who: Founder, economy?: (op: string, args?: Record<string, unknown>) => Promise<unknown>) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "succ-"));
     const w = path.join(root, "w"), m = path.join(root, "m");
     fs.mkdirSync(w); fs.mkdirSync(m);
     return new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: w, memoryDir: m, loopGuard: new LoopGuard(), selfGovernance: true, ports: {
+      ...(economy ? { economy } : {}),
       // As the client: a search goes to the controller's search across all lessons (v111); otherwise the latest page.
       knowledge: async (after = 0, search?: { query: string; category?: string; limit?: number }) => {
         if (search) {
@@ -52,7 +53,7 @@ describe.skipIf(!PG_BIN)("successor acceptance: a promoted lesson reaches a fres
     await R.store.grantServiceRole();
     // v96: lesson reviews are Fleet Control calls: a test budget.
     await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
-  });
+  }, 300_000);
   afterAll(async () => { await R?.close(); });
 
   it("agent B finds agent A's promoted lesson by its question, ranked above unrelated lessons", async () => {
@@ -106,6 +107,33 @@ describe.skipIf(!PG_BIN)("successor acceptance: a promoted lesson reaches a fres
     const done = (await R.econ(B, "knowledge.proposals", {})).proposals.find((p: any) => p.proposalId === id);
     expect(done).toMatchObject({ status: "promoted", waiting: null });
     expect(done.entryId).toBeTruthy();
+    expect((await R.store.auditPrivileges()).problems).toEqual([]);
+  });
+
+  it("v111: a lesson marked for the Fleet is kept on the controller when written (scrubbed, unreviewed) — it outlives the agent, never served unreviewed", async () => {
+    let down = false;
+    const tb = toolboxOf(B, async (op, args) => { if (down) throw new Error("controller unreachable"); return R.econ(B, op, args ?? {}); });
+    const memory = (tb as unknown as { memory: string }).memory;
+    const add = (lesson: string) => tb.execute({ id: `j-${lesson.length}`, name: "field_journal", arguments: { op: "add", entry: {
+      observation: "Buyers who got a sample page first converted at 3 of 5; none of 4 without one (contact rae@example.com, 07700 900123).",
+      lesson, evidence: "two offer pages over 10 days", confidence: "medium", reusability: "candidate_fleet" } } });
+    const r1 = await add("Show a one-page sample before the price for document products.");
+    expect(r1.output).toContain("kept on record (unreviewed");
+    await add("Show a one-page sample before the price for document products.");              // a replay keeps one row
+    down = true;
+    const r3 = await add("Quote turnaround in working days, not days.");
+    expect(r3.output).toContain("queued locally");
+    expect(fs.existsSync(path.join(memory, "candidate-outbox.jsonl"))).toBe(true);
+    down = false;
+    await tb.execute({ id: "j-plain", name: "field_journal", arguments: { op: "add", entry: { observation: "a plain note, not for the Fleet" } } });   // flushes the outbox
+    expect(fs.existsSync(path.join(memory, "candidate-outbox.jsonl"))).toBe(false);
+    await R.one(`fleet.fleet_mark_dead($1, 'test: ended', $2, 'killed')`, [B.id, OWNER]);
+    const kept = (await R.one<any>(`fleet.fleet_admin_knowledge_candidates($1)`, [B.id])).candidates;
+    expect(kept.map((c: any) => c.lesson).sort()).toEqual(["Quote turnaround in working days, not days.", "Show a one-page sample before the price for document products."]);
+    expect(kept[0]).toMatchObject({ status: "unreviewed", agentStatus: "dead" });
+    expect(JSON.stringify(kept)).not.toMatch(/rae@example\.com|07700 900123/);              // personal data scrubbed before keeping
+    const served = await R.q(`SELECT fleet.api_knowledge_search($1, $2, 'sample page before the price', NULL, 20) AS r`, [A.id, A.token]);
+    expect(JSON.stringify(served[0].r.entries)).not.toContain("one-page sample before the price");   // unreviewed: never served to others
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
 });

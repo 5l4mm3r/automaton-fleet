@@ -789,6 +789,23 @@ export class FounderToolbox {
       ...(made ? {} : { pdfNote: `the PDF could not be rendered (${String(x.output).slice(0, 200)}); the text invoice is complete` }) };
   }
 
+  /** v111: candidate lessons for the Fleet, kept on the controller (outbox first, then this one); returns a note for the output. */
+  private async keepCandidates(entry: Record<string, unknown> | null): Promise<string> {
+    const outbox = path.join(this.memory, "candidate-outbox.jsonl");
+    const pending = fs.existsSync(outbox) ? fs.readFileSync(outbox, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>) : [];
+    if (entry) pending.push({ journalAt: entry.at, observation: entry.observation, lesson: entry.lesson, evidence: entry.evidence, outcome: entry.outcome,
+      confidence: entry.confidence, cost: entry.cost });
+    if (!pending.length) return "";
+    const left: Array<Record<string, unknown>> = [];
+    for (const c of pending) {
+      const r = this.o.ports.economy ? await this.o.ports.economy("knowledge.candidate", c).catch(() => null) as { ok?: boolean; code?: string } | null : null;
+      if (!r || (r.ok === false && r.code !== "FLEET_BAD_REQUEST")) left.push(c);   // unreachable or rate-limited: kept for the next write
+    }
+    if (left.length) fs.writeFileSync(outbox, left.map((c) => JSON.stringify(c)).join("\n") + "\n", { mode: 0o600 });
+    else fs.rmSync(outbox, { force: true });
+    return entry ? (left.length ? "; your lesson for the Fleet is queued locally (the controller was unreachable) and will be kept on your next journal entry" : "; your lesson for the Fleet is kept on record (unreviewed; it outlives you)") : "";
+  }
+
   async inspect(paths: string[], cases: unknown[] = []): Promise<{ ok: true; report: QaInspectorReport } | { ok: false; reason: string; code: string }> {
     if (!paths.length || paths.length > 20) return { ok: false, code: "FLEET_BAD_REQUEST", reason: "paths: 1..20 workspace files" };
     for (const p of paths) {
@@ -1586,7 +1603,10 @@ export class FounderToolbox {
             if (evicted.length) archiveJournal(this.memory, evicted);
             fs.writeFileSync(`${file}.tmp`, lines.slice(-JOURNAL_MAX).join("\n") + "\n", { mode: 0o600 });
             fs.renameSync(`${file}.tmp`, file);
-            return { name: call.name, ok: true, output: `journal entry recorded (${Math.min(lines.length, JOURNAL_MAX)} in the working window${evicted.length ? `; ${evicted.length} older entr${evicted.length === 1 ? "y" : "ies"} archived` : ""})` };
+            // v111: a lesson marked for the Fleet is kept on the controller now (it outlives this agent); an unreachable
+            // controller leaves it in a local outbox, sent with the next journal write.
+            const kept = await this.keepCandidates(entry.reusability === "candidate_fleet" && entry.lesson ? entry : null);
+            return { name: call.name, ok: true, output: `journal entry recorded (${Math.min(lines.length, JOURNAL_MAX)} in the working window${evicted.length ? `; ${evicted.length} older entr${evicted.length === 1 ? "y" : "ies"} archived` : ""})${kept}` };
           }
           if (a.op === "list") {
             const n = Math.max(1, Math.min(50, Number(a.limit) || 10));

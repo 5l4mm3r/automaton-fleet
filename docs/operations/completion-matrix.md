@@ -208,9 +208,28 @@ each exactly once.
 Pre-existing failure found and fixed (disclosed): fleet-f2-static-audit failed since v108/v109 (7ab848d) on 3 unclassified
 lines (the owner's geography decision record; the temporary card-proof release); classified with reasons.
 
-Remaining finite checklist (status, no new audit):
-- Knowledge retrieval across ALL lessons (ranking is within the latest 50 current): open.
-- Death-time harvest of candidate_fleet journal lessons: open.
-- Promotion status visible to the proposer (a review waiting on Fleet Control's unset budget is silent): open.
-- Capability checks on listings (Etsy API, storefront, browser submissions): open; offer.publish and enquiry.quote are gated.
-- Automatic reconciliation of a call with no result: needs a provider Admin API key (owner); owner resolution meanwhile.
+Remaining finite checklist — CLOSED 2026-10-23 (repo; see the section below), except the last:
+- Knowledge retrieval across ALL lessons: done (api_knowledge_search).
+- Death-time harvest of candidate_fleet journal lessons: done (kept on the controller when written).
+- Promotion status visible to the proposer: done (economic_knowledge op proposals).
+- Capability checks on listings: done for Etsy listing create/activate, Pinterest pins and storefront publish; browser
+  submissions explicitly unsupported for sale claims (held while sales are closed; no structured claim to check).
+- A model call with no result: settled automatically where evidence supports it (a late result settles it exactly once);
+  otherwise escalated to the owner (P1) with the hold kept. An Anthropic Admin API key would add aggregated usage evidence,
+  not per-request resolution: not a presumed solution, and nothing else waits for it.
+
+## 2026-10-23 — the four known items, scenario corrections, credit hold (repo only; NOT built, rehearsed or installed)
+| Item | Change | Proof |
+|---|---|---|
+| Lessons searched across all of them | api_knowledge_search (title ×2, category/content ×1; relevance then recency; superseded never served); the knowledge route uses it when a query is sent; an older controller ignores the query (the runtime ranks its latest page, as before; Agent-2's runtime sends none) | knowledge-successor-pg: an old relevant lesson behind 55 newer distractors found first; a question nothing answers finds nothing; the old whole-page read (50 lessons) overflows the 8,000-character tool output |
+| Promotion status for the proposer | economic_knowledge op proposals: status, age, entry, why it waits (review budget unset / spent) — kept, never approved by waiting | knowledge-successor-pg (unset → waiting reason; set → queued; promoted → entry) |
+| Lessons outlive the agent | a journal entry marked candidate_fleet with a lesson is kept on the controller when written (scrubbed of personal data and secrets, unreviewed, idempotent, 50/day); an unreachable controller leaves it in a local outbox flushed on the next journal write; the owner sees an agent's kept lessons (fleet_admin_knowledge_candidates), the dead agent's too; never served as a lesson unreviewed | knowledge-successor-pg (scrubbed email/phone; replay keeps one; outbox; dead agent; not served) |
+| Listings name a covered offer | channel api etsy.listing.create / etsy.listing.activate / pinterest.pin.create and storefront publish name a PUBLISHED offer of the agent's whose capability check still covers it (the offer.publish rule) | v100-obligations-pg (no offer / draft / published without a check refused; with its check the gate passes) |
+| Credit during an evaluation | fleet_admin_engineering_credit_hold before a run (its maximum USD credit), release after import; every authorisation subtracts open holds; the suite refuses to start unless the operator repeats the exact hold (plan B $13.38) | v111-cognition-settlement-pg (held credit unspendable, released, owner only); cost-meter (hold covers the ceiling) |
+| S3 restored | A valid blanks; B a CONTRADICTORY inspection (evaluation-only FLEET_EVAL_QA_CONTRADICT on the suite's throwaway units; inert in production); C an inspection that cannot run | cost-meter (switch inert unset; spreadsheets only; check id only) |
+| S5 restored | current evidence AND an identifiable outdated single-anecdote claim, both visible: the agent must weigh them | — (judged in the real run) |
+| S6 labelled | judgment against supplied evidence only; independent demand research is left to the connected Agent-1 canary | stated in every S6 result |
+| Budget-ended scenarios | stay incomplete with cost and stop reason (the cap), never counted as poor judgment | dry suite: s5 at a 1p cap → incomplete, "cap was reached" |
+
+Regression: 12 suites, 129 tests (one suite re-run alone after a hook timeout under parallel load: 4/4); dry scenario suite
+passes; tsc clean.
