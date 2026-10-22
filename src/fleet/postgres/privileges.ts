@@ -1453,6 +1453,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v111: cost exceptions only by the routed record (overrun / uncollectable) and the owner's allocation.
     fleet_cognition_cost_exceptions: new Set(["svc_cognition_routed_record", "fleet_admin_cognition_exception_allocate"]),
     fleet_engineering_cognition_calls: new Set(["fleet_admin_engineering_calls_import"]),
+    fleet_provider_credit_holds: new Set(["fleet_admin_engineering_credit_hold", "fleet_admin_engineering_credit_release"]),
   };
   const fns = await db.query<{ name: string; src: string }>(
     `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);

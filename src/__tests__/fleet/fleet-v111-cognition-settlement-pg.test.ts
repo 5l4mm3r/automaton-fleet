@@ -209,6 +209,26 @@ describe.skipIf(!PG_BIN)("v111 cognition settlement integrity (PostgreSQL)", { t
     expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
 
+  it("an engineering run's credit is held in production until its calls are imported: no other call can spend it meanwhile", async () => {
+    const balance = BigInt(await R.one(`fleet.fleet_provider_credit_balance('anthropic')`));
+    const hold = balance - 30_000_000n;                                                    // leaves 30 US cents free
+    expect(await R.code(R.one(`fleet.fleet_admin_engineering_credit_hold('eval-hold-1', 'anthropic', $1, 'too much', $2)`, [String(balance + 1n), OWNER]))).toBe("FLEET_COGNITION_CREDITS_EXHAUSTED");
+    expect(await R.one<any>(`fleet.fleet_admin_engineering_credit_hold('eval-hold-1', 'anthropic', $1, 'scenario run plan B', $2)`, [String(hold), OWNER])).toMatchObject({ ok: true });
+    expect(await R.one<any>(`fleet.fleet_admin_engineering_credit_hold('eval-hold-1', 'anthropic', $1, 'again', $2)`, [String(hold), OWNER])).toMatchObject({ ok: true, replay: true });
+    expect(await authorize(50)).toMatchObject({ ok: false, code: "FLEET_COGNITION_CREDITS_EXHAUSTED" });   // 50¢ does not fit the 30¢ left
+    const small = await authorize(10);
+    expect(small).toMatchObject({ ok: true });
+    await record(String(small.requestId), { inputTokens: 1, outputTokens: 1 });
+    const st = await R.one<any>(`fleet.fleet_admin_cognition_settlement_state()`);
+    expect(st.engineeringHolds).toEqual([expect.objectContaining({ runId: "eval-hold-1", status: "open", usdMicro: Number(hold) })]);
+    expect(await R.code(R.one(`fleet.fleet_admin_engineering_credit_release('eval-hold-1', 'imported', 'agent:x')`))).toBe("FLEET_APPROVAL_REQUIRED");
+    expect(await R.one<any>(`fleet.fleet_admin_engineering_credit_release('eval-hold-1', 'calls imported', $1)`, [OWNER])).toMatchObject({ ok: true, heldUsdMicro: Number(hold), importedUsdMicro: 0 });
+    const big = await authorize(50);
+    expect(big).toMatchObject({ ok: true });                                                 // the credit is free again
+    await record(String(big.requestId), { inputTokens: 1, outputTokens: 1 });
+    expect((await R.store.auditPrivileges()).problems).toEqual([]);
+  });
+
   it("LAST (the agent dies): an unsettled call keeps the agent from counting as exhausted and its estate from settling; the late charge lands, then the estate settles", async () => {
     const a = await authorize(30); const id = String(a.requestId);
     await expire(id);

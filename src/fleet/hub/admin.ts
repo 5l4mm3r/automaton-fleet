@@ -198,6 +198,13 @@ export class PgHubAdmin {
   engineeringCallsImport(runId: string, provider: string, rows: unknown[], actor: string) {
     return this.one(`SELECT fleet_admin_engineering_calls_import($1, $2, $3::jsonb, $4) AS r`, [runId, provider, JSON.stringify(rows), actor]);
   }
+  /** v111: set aside provider credit for an engineering run before it starts; release it after its calls are imported. */
+  engineeringCreditHold(runId: string, provider: string, usdMicro: bigint, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_engineering_credit_hold($1, $2, $3, $4, $5) AS r`, [runId, provider, usdMicro.toString(), reason, actor]);
+  }
+  engineeringCreditRelease(runId: string, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_engineering_credit_release($1, $2, $3) AS r`, [runId, reason, actor]);
+  }
   fleetControlAi() {
     return this.one(`SELECT fleet_control_ai_state() AS r`);
   }

@@ -105,3 +105,17 @@ describe("engineering cost meter", () => {
     } finally { await fake.close(); }
   });
 });
+
+describe("the run's production credit hold", () => {
+  it("covers every USD microcent the meter can let through for the terms' ceiling, and not much more", async () => {
+    const { creditHoldUsdMicro, ceilingPence } = await import("../../fleet/eval/scenario-suite.js");
+    const t = { capsPence: { "s1-order-and-correction": 300, "s2-interrupted-twice": 250, "s3-valid-blanks-and-blocked-inspection": 200, "s4-economical-sleep": 100,
+      "s5-lesson-application": 150, "s6-opportunity-choice": 200 }, fxRateMicro: "747613", acquisition: { totalUsdCents: "4955", usdPurchasedMicro: "4129000000", lot: "x" } } as never;
+    const hold = creditHoldUsdMicro(t);
+    expect(ceilingPence(t)).toBe(1_200);
+    const m = new CostMeter({ runId: "h", ceilingLedgerMicro: 1_200_000_000n, fxRateMicro: 747_613n, acquisition: { totalUsdCents: 4_955n, usdPurchasedMicro: 4_129_000_000n }, prices: {} });
+    expect(m.allIn(hold).allIn).toBeGreaterThanOrEqual(1_200_000_000n);              // the hold's worth of usage reaches the ceiling …
+    expect(m.allIn(hold - 2_000n).allIn).toBeLessThanOrEqual(1_200_000_000n);        // … and barely beyond it
+    expect(Number(hold) / 1e8).toBeCloseTo(13.38, 2);                                 // $13.38 for plan B
+  });
+});

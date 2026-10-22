@@ -39,7 +39,7 @@ const restate = (src: string, name: string, edits: Array<[string, string]>) => r
 
 export const EVENT_ROUTES_V111 = Object.freeze({
   P1_HIGH: ["cognition_reservation_unresolved", "cognition_cost_exception"],
-  P3_SUMMARY: ["cognition_reservation_settled_late", "cognition_reservation_resolved", "cognition_cost_exception_allocated", "engineering_cognition_recorded"],
+  P3_SUMMARY: ["cognition_reservation_settled_late", "cognition_reservation_resolved", "cognition_cost_exception_allocated", "engineering_cognition_recorded", "engineering_credit_held", "engineering_credit_released"],
 });
 /** Minutes after which a reservation no longer blocks the agent's next call (unchanged since v13). */
 export const RESERVATION_EXPIRY_MINUTES = 5;
@@ -62,7 +62,12 @@ const BUSY = `  IF EXISTS (SELECT 1 FROM fleet_cognition_inflight WHERE agent_id
 const BUSY_LIVE = `  IF EXISTS (SELECT 1 FROM fleet_cognition_inflight WHERE agent_id = p_agent AND expired_at IS NULL) THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_COGNITION_BUSY'); END IF;`;
 const DECL = `DECLARE a fleet_agents; s jsonb; e jsonb; v_id uuid := gen_random_uuid();`;
 
+// Provider credit an engineering run (the scenario suite) is spending outside this registry: held until its calls are imported.
+const CREDIT = `  v_credits := fleet_provider_credit_balance(s ->> 'provider');`;
+const CREDIT_HELD = `  -- v111: less what open engineering holds have set aside (a scenario run spends the same credit before its import).
+  v_credits := fleet_provider_credit_balance(s ->> 'provider') - fleet_provider_credit_held(s ->> 'provider');`;
 const AUTHORIZE = restate(V21_SQL, "svc_cognition_authorize", [
+  [CREDIT, CREDIT_HELD],
   [DECL, `${DECL} v_expired integer; v_held bigint;`],
   [PURGE, EXPIRE],
   [BUSY, BUSY_LIVE],
@@ -75,6 +80,7 @@ const AUTHORIZE = restate(V21_SQL, "svc_cognition_authorize", [
 ]);
 // v62's treasury-paid copy (owner conversation turns) had the same purge: it would have deleted the agent's unresolved holds.
 const AUTHORIZE_TREASURY = restate(V62_SQL, "fleet_cognition_authorize_treasury", [
+  [CREDIT, CREDIT_HELD],
   [DECL, `${DECL} v_expired integer;`],
   [PURGE, EXPIRE],
   [BUSY, BUSY_LIVE],
@@ -231,6 +237,31 @@ CREATE TRIGGER fleet_cognition_cost_exceptions_no_delete BEFORE DELETE ON fleet_
 CREATE TRIGGER fleet_cognition_cost_exceptions_no_truncate BEFORE TRUNCATE ON fleet_cognition_cost_exceptions
   FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
 
+-- Provider credit set aside for an engineering run that spends it outside this registry (review 2026-10-23: "keep the
+-- evaluation spend visibly outstanding and prevent other work from spending that same credit"). Placed by the owner before
+-- the run (its maximum USD credit), released by the owner after the run's calls are imported (they then appear as recorded
+-- consumption). Every cognition authorisation subtracts open holds from the credit available.
+CREATE TABLE fleet_provider_credit_holds (
+  hold_id        uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider       text        NOT NULL,
+  run_id         text        NOT NULL UNIQUE CHECK (run_id ~ '^[A-Za-z0-9._:-]{3,64}$'),
+  usd_microcents bigint      NOT NULL CHECK (usd_microcents > 0),
+  reason         text        NOT NULL,
+  status         text        NOT NULL DEFAULT 'open' CHECK (status IN ('open','released')),
+  created_by     text        NOT NULL,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  released_by    text,
+  released_at    timestamptz,
+  released_note  text,
+  CHECK ((status = 'released') = (released_at IS NOT NULL))
+);
+CREATE TRIGGER fleet_provider_credit_holds_no_delete BEFORE DELETE ON fleet_provider_credit_holds FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+CREATE TRIGGER fleet_provider_credit_holds_no_truncate BEFORE TRUNCATE ON fleet_provider_credit_holds FOR EACH STATEMENT EXECUTE FUNCTION fleet_history_immutable();
+CREATE FUNCTION fleet_provider_credit_held(p_provider text) RETURNS bigint LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT COALESCE(sum(usd_microcents), 0)::bigint FROM fleet_provider_credit_holds WHERE provider = p_provider AND status = 'open';
+$$;
+
 ${AUTHORIZE}
 
 ${AUTHORIZE_TREASURY}
@@ -380,6 +411,43 @@ BEGIN
               FROM fleet_engineering_cognition_calls WHERE run_id = p_run));
 END $$;
 
+CREATE FUNCTION fleet_admin_engineering_credit_hold(p_run text, p_provider text, p_usd_microcents bigint, p_reason text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE h fleet_provider_credit_holds; v_free bigint;
+BEGIN
+${OWNER}
+  IF p_usd_microcents IS NULL OR p_usd_microcents <= 0 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: the hold is a positive USD microcent amount'; END IF;
+  SELECT * INTO h FROM fleet_provider_credit_holds WHERE run_id = p_run;
+  IF FOUND THEN
+    IF h.usd_microcents = p_usd_microcents AND h.provider = p_provider THEN RETURN jsonb_build_object('ok', true, 'replay', true, 'holdId', h.hold_id, 'status', h.status); END IF;
+    RAISE EXCEPTION 'FLEET_CONFLICT: run % already has a hold of % µ¢', p_run, h.usd_microcents;
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('fleet_provider_credits:' || p_provider));
+  v_free := fleet_provider_credit_balance(p_provider) - fleet_provider_credit_held(p_provider)
+            - COALESCE((SELECT sum(COALESCE(estimate_usd_cents, 0)) FROM fleet_cognition_inflight), 0) * 1000000;
+  IF v_free < p_usd_microcents THEN RAISE EXCEPTION 'FLEET_COGNITION_CREDITS_EXHAUSTED: % µ¢ of credit free, % asked', v_free, p_usd_microcents; END IF;
+  INSERT INTO fleet_provider_credit_holds (provider, run_id, usd_microcents, reason, created_by)
+    VALUES (p_provider, p_run, p_usd_microcents, left(fleet_scrub(trim(p_reason)), 300), p_actor) RETURNING * INTO h;
+  PERFORM fleet_event('engineering_credit_held', NULL, p_actor, jsonb_build_object('runId', p_run, 'usdMicro', p_usd_microcents));
+  RETURN jsonb_build_object('ok', true, 'holdId', h.hold_id, 'usdMicro', p_usd_microcents, 'freeAfterMicro', v_free - p_usd_microcents);
+END $$;
+
+-- Released once the run's calls are imported: the hold's amount stops being set aside; what was spent is recorded consumption.
+CREATE FUNCTION fleet_admin_engineering_credit_release(p_run text, p_reason text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE h fleet_provider_credit_holds; v_imported bigint;
+BEGIN
+${OWNER}
+  SELECT * INTO h FROM fleet_provider_credit_holds WHERE run_id = p_run FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no hold for run %', p_run; END IF;
+  IF h.status = 'released' THEN RETURN jsonb_build_object('ok', true, 'replay', true); END IF;
+  SELECT COALESCE(sum(usd_microcents), 0) INTO v_imported FROM fleet_engineering_cognition_calls WHERE run_id = p_run;
+  UPDATE fleet_provider_credit_holds SET status = 'released', released_by = p_actor, released_at = now(), released_note = left(fleet_scrub(trim(p_reason)), 300) WHERE hold_id = h.hold_id;
+  PERFORM fleet_event('engineering_credit_released', NULL, p_actor, jsonb_build_object('runId', p_run, 'heldUsdMicro', h.usd_microcents, 'importedUsdMicro', v_imported));
+  RETURN jsonb_build_object('ok', true, 'heldUsdMicro', h.usd_microcents, 'importedUsdMicro', v_imported,
+    'note', CASE WHEN v_imported > h.usd_microcents THEN 'the imported spend exceeds the hold: check the run''s evidence' ELSE 'released' END);
+END $$;
+
 -- The owner's view: unresolved reservations and cost exceptions.
 CREATE FUNCTION fleet_admin_cognition_settlement_state() RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
@@ -390,7 +458,10 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
         WHERE expired_at IS NOT NULL OR started_at <= now() - interval '${RESERVATION_EXPIRY_MINUTES} minutes'), '[]'::jsonb),
     'exceptions', COALESCE((SELECT jsonb_agg(jsonb_build_object('exceptionId', exception_id, 'requestId', request_id, 'agentId', agent_id, 'kind', kind,
         'payer', payer, 'usdMicro', usd_microcents, 'ledgerMicro', ledger_microcents, 'currency', currency, 'status', status, 'allocatedTo', allocated_to,
-        'allocatedMinor', allocated_minor, 'createdAt', created_at) ORDER BY created_at) FROM fleet_cognition_cost_exceptions), '[]'::jsonb));
+        'allocatedMinor', allocated_minor, 'createdAt', created_at) ORDER BY created_at) FROM fleet_cognition_cost_exceptions), '[]'::jsonb),
+    'engineeringHolds', COALESCE((SELECT jsonb_agg(jsonb_build_object('runId', h.run_id, 'provider', h.provider, 'usdMicro', h.usd_microcents, 'status', h.status,
+        'importedUsdMicro', (SELECT COALESCE(sum(c.usd_microcents), 0) FROM fleet_engineering_cognition_calls c WHERE c.run_id = h.run_id), 'createdAt', h.created_at)
+        ORDER BY h.created_at) FROM fleet_provider_credit_holds h), '[]'::jsonb));
 $$;
 
 ${restateRaw(V109_SQL, "fleet_event_route", [["    WHEN p_type = 'spend_circuit_breaker_set' THEN",

@@ -26,7 +26,7 @@
  *                                            release in a real founder unit: fulfil, the buyer's report while the office
  *                                            renderer is unavailable (answer, honest blocker, free waiting, a restart),
  *                                            then recalculation, inspection, review and delivery of exactly those bytes
- *   scenario-suite <terms.json> <ceilingPence> --key-file <path> [--workbook <xlsx>] [--only s1,s2…]
+ *   scenario-suite <terms.json> <ceilingPence> --credit-hold <usdMicro> --key-file <path> [--workbook <xlsx>] [--only s1,s2…]
  *                                            (2026-10-23) the Stage-1 scenario suite with the REAL model (spends real
  *                                            provider credit, up to the frozen terms' ceiling — which must be repeated on
  *                                            the command line): one throwaway registry and newborn founder per scenario,
@@ -56,7 +56,7 @@ import { computeBuildIdentity } from "../attestation.js";
 import { rollbackFounderRuntime, upgradeFounderRuntime } from "./upgrade.js";
 import { runUpgradeRehearsal } from "./upgrade-rehearsal.js";
 import { runRevisionRehearsal } from "./revision-rehearsal.js";
-import { runScenarioSuite, ceilingPence, SCENARIO_IDS, type ScenarioId, type SuiteTerms } from "../eval/scenario-suite.js";
+import { runScenarioSuite, ceilingPence, creditHoldUsdMicro, SCENARIO_IDS, type ScenarioId, type SuiteTerms } from "../eval/scenario-suite.js";
 import { readCognitionKey } from "../service/main.js";
 import { OFFICE_PROGRAM } from "./exec-sandbox.js";
 import { FounderProvisioner } from "./provisioner.js";
@@ -457,6 +457,9 @@ async function main(argv: string[]): Promise<number> {
       // The operator repeats the approved ceiling: a terms file changed after approval does not run.
       if (Number(ceilingArg) !== ceiling) throw new Error(`the terms' ceiling is ${ceiling}p, not ${ceilingArg}p: refusing`);
       if (!/^[A-Za-z0-9._:-]{3,64}$/.test(terms.runId)) throw new Error("terms.runId must match [A-Za-z0-9._:-]{3,64}");
+      // The production credit hold for this run (placed first with hub economy-engineering-credit-hold), repeated here.
+      const hold = creditHoldUsdMicro(terms, only);
+      if (flag("--credit-hold") !== hold.toString()) throw new Error(`place the credit hold first (hub economy-engineering-credit-hold ${terms.runId} anthropic ${hold} <reason>) and repeat it: --credit-hold ${hold}`);
       const keyFile = flag("--key-file");
       if (!keyFile) throw new Error("--key-file <the controller's provider key file> is required");
       // Strict secret-file validation, and owned by the user the controller unit runs as; held by this process only.

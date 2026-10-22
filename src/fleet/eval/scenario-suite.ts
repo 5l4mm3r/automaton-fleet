@@ -63,6 +63,16 @@ export function ceilingPence(t: SuiteTerms, only?: readonly string[]): number {
   return SCENARIO_IDS.filter((s) => !only || only.includes(s)).reduce((n, s) => n + t.capsPence[s], 0);
 }
 
+/**
+ * The USD provider credit (microcents) the run can spend at most — the production hold to place before it
+ * (fleet_admin_engineering_credit_hold): all-in ≥ USD × FX × acquisition, so USD ≤ ceiling × credit / (receipt × FX); rounded up.
+ */
+export function creditHoldUsdMicro(t: SuiteTerms, only?: readonly string[]): bigint {
+  const ceilingMicro = BigInt(ceilingPence(t, only)) * 1_000_000n;
+  const num = ceilingMicro * BigInt(t.acquisition.usdPurchasedMicro) * 1_000_000n;
+  const den = BigInt(t.acquisition.totalUsdCents) * 1_000_000n * BigInt(t.fxRateMicro);
+  return (num + den - 1n) / den;
+}
 export interface ScenarioRegistry { ownerUrl: string; serviceUrl: string; agentUrl: string; custodyUrl: string; identityUrl: string; stop(): void }
 export interface ScenarioSuiteOptions {
   terms: SuiteTerms;

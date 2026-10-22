@@ -110,6 +110,8 @@
  *   economy-cognition-resolve <requestId> <billed|not_billed> <evidence…>     (v111) resolve a call that never reported back, from provider evidence
  *   economy-cognition-exception-allocate <exceptionId> <agent|treasury> <reason…>  (v111) allocate a cost exception (the owner's decision)
  *   economy-engineering-calls-import <runId> <provider> <calls.jsonl>        (v111) record a scenario harness run's model calls (once each) as engineering consumption
+ *   economy-engineering-credit-hold <runId> <provider> <usdMicro> <reason…>  (v111) before a scenario run: set its maximum provider credit aside
+ *   economy-engineering-credit-release <runId> <reason…>                     (v111) after its calls are imported: release the hold
  *   hub-fleet-control-ai                                                      (v96) its budget, spent in 24 h, in flight and room
  *   hub-paypal-disputes                                                       (v57) disputes, unclassified PayPal debits, exposure per agent
  *   economy-paypal-dispute-resolve <disputeId> won|lost [note…]               (v57) a dispute PayPal left without a plain outcome
@@ -253,7 +255,7 @@ export const HUB_COMMANDS = new Set([
   "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
   "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser", "hub-dashboard-enroll", "hub-dashboard-totp-reset",
   "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
-  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "economy-owner-claim-wait", "economy-owner-claim-wait-end", "economy-sales-geography", "hub-refund-authorities", "hub-paypal-reconciliation", "economy-paypal-reconciliation-resolve", "economy-paypal-order-retire", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "hub-fleet-control-ai", "hub-cognition-settlement", "economy-cognition-resolve", "economy-cognition-exception-allocate", "economy-engineering-calls-import", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
+  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "economy-owner-claim-wait", "economy-owner-claim-wait-end", "economy-sales-geography", "hub-refund-authorities", "hub-paypal-reconciliation", "economy-paypal-reconciliation-resolve", "economy-paypal-order-retire", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "hub-fleet-control-ai", "hub-cognition-settlement", "economy-cognition-resolve", "economy-cognition-exception-allocate", "economy-engineering-calls-import", "economy-engineering-credit-hold", "economy-engineering-credit-release", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
   // v66 – v72 (missing until 2026-10-12: these were unreachable from fleet:admin)
   "economy-capital-backing", "economy-capital-back", "economy-spend-breaker", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
@@ -422,6 +424,11 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.cognitionReservationResolve(p[0], p[1], p.slice(2).join(" "), actor);
     case "economy-cognition-exception-allocate":
       return h.cognitionExceptionAllocate(p[0], p[1], p.slice(2).join(" "), actor);
+    case "economy-engineering-credit-hold":
+      if (!/^[1-9][0-9]{0,15}$/.test(p[2] ?? "")) throw new Error("usdMicro must be a positive integer");
+      return h.engineeringCreditHold(p[0], p[1], BigInt(p[2]), p.slice(3).join(" "), actor);
+    case "economy-engineering-credit-release":
+      return h.engineeringCreditRelease(p[0], p.slice(1).join(" "), actor);
     case "economy-engineering-calls-import": {
       const rows = fs.readFileSync(p[2], "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as unknown);
       return h.engineeringCallsImport(p[0], p[1], rows, actor);
