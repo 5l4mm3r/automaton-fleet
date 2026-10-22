@@ -422,10 +422,13 @@ export class FleetApiClient implements FleetBackend {
     return this.call<{ proposalId: string; status: string }>("POST", "/v1/knowledge/propose", p);
   }
 
-  async knowledge(after = 0) {
+  async knowledge(after = 0, search?: { query: string; category?: string; limit?: number }) {
     // v68: the current lessons, plus (from a v68 controller) the retired ones with their replacement — so a copied lesson
     // that was corrected is visible as such. An older controller returns entries only.
-    const r = await this.call<{ entries: Array<Record<string, unknown>>; retired?: Array<Record<string, unknown>>; note?: string }>("POST", "/v1/knowledge/list", { after });
+    // v111: with a search, the most relevant of all current lessons (`searched` present); an older controller ignores it.
+    const r = await this.call<{ entries: Array<Record<string, unknown>>; retired?: Array<Record<string, unknown>>; note?: string; searched?: number; matched?: number }>(
+      "POST", "/v1/knowledge/list", { after, ...(search ? { query: search.query, ...(search.category ? { category: search.category } : {}), ...(search.limit ? { limit: search.limit } : {}) } : {}) });
+    if (typeof r.searched === "number") return { entries: r.entries, retired: r.retired ?? [], note: r.note, searched: r.searched, matched: r.matched, query: search?.query };
     return r.retired !== undefined ? { entries: r.entries, retired: r.retired, ...(r.note ? { note: r.note } : {}) } : r.entries;
   }
 

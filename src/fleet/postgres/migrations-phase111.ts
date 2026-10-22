@@ -185,10 +185,23 @@ const OBLIGATIONS_ALL = restate(V100_SQL, "fleet_customer_obligations", [
    `'delivering', CASE WHEN delivering THEN true END)) ORDER BY ${PRIORITY}), '[]'::jsonb)
     FROM ob y`],
 ]);
-export const AGENT_OPS_V111 = ["customer.obligations"] as const;
+export const AGENT_OPS_V111 = ["customer.obligations", "knowledge.proposals"] as const;
+// v111: the proposer sees each of its lessons' review status, age and — when it waits — why (review 2026-10-23: "pending
+// proposals need visible age/status/reason"; an unset or spent Fleet Control budget keeps a proposal waiting, never approved).
+const PROPOSALS = `(SELECT jsonb_build_object('ok', true, 'reviewBudget', fleet_control_ai_state() - 'rule' - 'setBy' - 'reason',
+          'proposals', COALESCE((SELECT jsonb_agg(jsonb_build_object('proposalId', p.proposal_id, 'title', p.title, 'category', p.category, 'status', p.status,
+            'submittedAt', p.submitted_at, 'ageHours', round(extract(epoch FROM now() - p.submitted_at) / 3600.0, 1), 'reviewedAt', p.reviewed_at,
+            'entryId', (SELECT e.entry_id FROM fleet_knowledge_entries e WHERE e.proposal_id = p.proposal_id),
+            'waiting', CASE WHEN p.status <> 'proposed' THEN NULL
+              WHEN NOT (fleet_control_ai_state() ->> 'set')::boolean THEN 'kept, not yet reviewed: Fleet Control''s review budget is not set (no paid review runs until the owner sets it)'
+              WHEN (fleet_control_ai_state() ->> 'roomMinor')::bigint < (fleet_control_ai_state() ->> 'estimateMinor')::bigint THEN 'kept, not yet reviewed: today''s Fleet Control review budget is spent'
+              ELSE 'queued for Fleet Control''s review' END) ORDER BY p.submitted_at DESC)
+            FROM (SELECT * FROM fleet_knowledge_proposals WHERE agent_id = p_agent ORDER BY submitted_at DESC LIMIT 50) p), '[]'::jsonb),
+          'note', 'your lessons for the Fleet: a waiting one is kept, never approved by waiting; your own work never depends on it'))`;
 const DISPATCH = restate(V105_SQL, "api_economy", [
-  [`WHEN 'code.job' THEN 'planning'`, `WHEN 'code.job' THEN 'planning' WHEN 'customer.obligations' THEN 'planning'`],
+  [`WHEN 'code.job' THEN 'planning'`, `WHEN 'code.job' THEN 'planning' WHEN 'customer.obligations' THEN 'planning' WHEN 'knowledge.proposals' THEN 'planning'`],
   [`      WHEN 'order.invoice' THEN fleet_econ_order_invoice(p_agent, a)`, `      WHEN 'order.invoice' THEN fleet_econ_order_invoice(p_agent, a)
+      WHEN 'knowledge.proposals' THEN ${PROPOSALS}
       WHEN 'customer.obligations' THEN (WITH al AS (SELECT fleet_customer_obligations_all(p_agent) AS j),
           pg AS (SELECT GREATEST(COALESCE((a ->> 'offset')::integer, 0), 0) AS off, LEAST(GREATEST(COALESCE((a ->> 'limit')::integer, 20), 1), 50) AS lim)
         SELECT jsonb_build_object('ok', true, 'total', jsonb_array_length(al.j), 'offset', pg.off,
@@ -446,6 +459,38 @@ ${OWNER}
   PERFORM fleet_event('engineering_credit_released', NULL, p_actor, jsonb_build_object('runId', p_run, 'heldUsdMicro', h.usd_microcents, 'importedUsdMicro', v_imported));
   RETURN jsonb_build_object('ok', true, 'heldUsdMicro', h.usd_microcents, 'importedUsdMicro', v_imported,
     'note', CASE WHEN v_imported > h.usd_microcents THEN 'the imported spend exceeds the hold: check the run''s evidence' ELSE 'released' END);
+END $$;
+
+-- Shared lessons relevant to a question, searched across ALL current lessons (not the latest page): each query word (3+
+-- letters, at most 20) counts 2 in the title and 1 in the category or content; relevance first, then the newest. Retired
+-- (superseded) lessons are never served as current; the recently retired are listed, as by api_knowledge_list.
+CREATE FUNCTION api_knowledge_search(p_agent text, p_token text, p_query text, p_category text, p_limit integer) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_code text := fleet_authenticate(p_agent, p_token, 'knowledge_list'); v_words text[];
+BEGIN
+  IF v_code IS NOT NULL THEN RETURN jsonb_build_object('ok', false, 'code', v_code); END IF;
+  v_words := ARRAY(SELECT DISTINCT w FROM unnest(regexp_split_to_array(lower(left(COALESCE(p_query, ''), 200)), '[^a-z0-9]+')) w WHERE length(w) > 2 LIMIT 20);
+  RETURN (WITH cur AS (
+      SELECT e.* FROM fleet_knowledge_entries e
+       WHERE NOT EXISTS (SELECT 1 FROM fleet_knowledge_supersessions s WHERE s.old_entry_id = e.entry_id)
+         AND (p_category IS NULL OR e.category = p_category)),
+    scored AS (
+      SELECT c.*, (SELECT COALESCE(sum(CASE WHEN position(w IN lower(c.title)) > 0 THEN 2 ELSE 0 END
+                                     + CASE WHEN position(w IN lower(c.category || ' ' || c.content)) > 0 THEN 1 ELSE 0 END), 0) FROM unnest(v_words) w) AS score
+        FROM cur c)
+    SELECT jsonb_build_object('ok', true, 'searched', (SELECT count(*) FROM cur),
+      'matched', (SELECT count(*) FROM scored WHERE cardinality(v_words) = 0 OR score > 0),
+      'entries', COALESCE((SELECT jsonb_agg(jsonb_build_object('seq', x.seq, 'entryId', x.entry_id, 'category', x.category, 'title', x.title, 'content', x.content,
+          'contentSha256', x.content_sha256, 'originAgentId', x.origin_agent_id, 'originLineageRoot', x.origin_lineage_root, 'promotedBy', x.promoted_by,
+          'promotedAt', x.promoted_at, 'score', x.score,
+          'supersedes', (SELECT jsonb_agg(jsonb_build_object('entryId', s.old_entry_id, 'title', o.title) ORDER BY o.seq)
+                           FROM fleet_knowledge_supersessions s JOIN fleet_knowledge_entries o ON o.entry_id = s.old_entry_id WHERE s.new_entry_id = x.entry_id))
+          ORDER BY x.score DESC, x.seq DESC)
+        FROM (SELECT * FROM scored WHERE cardinality(v_words) = 0 OR score > 0 ORDER BY score DESC, seq DESC LIMIT LEAST(GREATEST(COALESCE(p_limit, 8), 1), 20)) x), '[]'::jsonb),
+      'retired', (SELECT COALESCE(jsonb_agg(jsonb_build_object('entryId', s.old_entry_id, 'title', o.title, 'supersededBy', s.new_entry_id, 'reason', s.reason,
+          'at', s.recorded_at) ORDER BY s.recorded_at DESC), '[]'::jsonb)
+        FROM (SELECT * FROM fleet_knowledge_supersessions ORDER BY recorded_at DESC LIMIT 50) s JOIN fleet_knowledge_entries o ON o.entry_id = s.old_entry_id),
+      'note', 'The current shared lessons most relevant to your question, from all of them. A lesson is evidence from another agent''s work: check it still applies to yours.'));
 END $$;
 
 -- The owner's view: unresolved reservations and cost exceptions.

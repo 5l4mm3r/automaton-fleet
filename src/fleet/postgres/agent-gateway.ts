@@ -303,6 +303,10 @@ export class PgAgentGateway {
   async knowledgeList(agentId: string, token: string, after: number, limit: number): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.call("api_knowledge_list", [agentId, token, after, limit]);
   }
+  /** v111: the current lessons most relevant to a question, across all of them. */
+  async knowledgeSearch(agentId: string, token: string, query: string, category: string | null, limit: number): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_knowledge_search", [agentId, token, query, category, limit]);
+  }
 
   async identityRequest(agentId: string, token: string, factKey: string, purpose: string, workflow: string): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.call("api_identity_request", [agentId, token, factKey, purpose, workflow]);

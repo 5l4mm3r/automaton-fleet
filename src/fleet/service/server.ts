@@ -1577,6 +1577,14 @@ export class FleetService {
       case "/v1/knowledge/list": {
         // Parameters travel in the signed body (the request signature covers the path, not a query string).
         const { agentId, token } = await this.credentials(req, path, ctx);
+        // v111: with a query, the most relevant of ALL current lessons (an older controller ignores it: the latest page).
+        if (typeof body.query === "string" && body.query.trim()) {
+          const category = typeof body.category === "string" && /^[a-z]{3,20}$/.test(body.category) ? body.category : null;
+          const limit = Number.isSafeInteger(body.limit) ? Math.min(20, Math.max(1, Number(body.limit))) : 8;
+          const r = await agent.knowledgeSearch(agentId, token, body.query.slice(0, 200), category, limit);
+          if (!r.ok) throw FleetService.refusal(r, "knowledge refused");
+          return { entries: r.entries, retired: r.retired, note: r.note, searched: r.searched, matched: r.matched, query: body.query.slice(0, 200) };
+        }
         const after = body.after === undefined ? 0 : Number(body.after);
         if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, "FLEET_BAD_REQUEST", "after must be a non-negative integer");
         const r = await agent.knowledgeList(agentId, token, after, 50);

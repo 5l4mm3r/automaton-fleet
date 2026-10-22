@@ -18,7 +18,7 @@ const PG_BIN = findPgBin();
 
 describe.skipIf(!PG_BIN)("successor acceptance: a promoted lesson reaches a fresh agent through read_knowledge (PostgreSQL)", { timeout: 300_000 }, () => {
   let R: EconomyRegistry;
-  let A: Founder, B: Founder;
+  let A: Founder, B: Founder, C: Founder, D: Founder;
   const propose = async (who: Founder, category: string, title: string, content: string) => {
     const r = (await R.q(`SELECT fleet.api_knowledge_propose($1, $2, $3, $4, $5) AS r`, [who.id, who.token, category, title, content]))[0].r;
     return String(r.proposalId ?? r.proposal_id);
@@ -34,7 +34,12 @@ describe.skipIf(!PG_BIN)("successor acceptance: a promoted lesson reaches a fres
     const w = path.join(root, "w"), m = path.join(root, "m");
     fs.mkdirSync(w); fs.mkdirSync(m);
     return new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: w, memoryDir: m, loopGuard: new LoopGuard(), selfGovernance: true, ports: {
-      knowledge: async (after = 0) => {
+      // As the client: a search goes to the controller's search across all lessons (v111); otherwise the latest page.
+      knowledge: async (after = 0, search?: { query: string; category?: string; limit?: number }) => {
+        if (search) {
+          const r = (await R.q(`SELECT fleet.api_knowledge_search($1, $2, $3, $4, $5) AS r`, [who.id, who.token, search.query, search.category ?? null, search.limit ?? 8]))[0].r;
+          return { entries: r.entries, retired: r.retired, note: r.note, searched: r.searched, matched: r.matched, query: search.query };
+        }
         const r = (await R.q(`SELECT fleet.api_knowledge_list($1, $2, $3, 50) AS r`, [who.id, who.token, after]))[0].r;
         return { entries: r.entries, retired: r.retired, ...(r.note ? { note: r.note } : {}) };
       },
@@ -42,8 +47,8 @@ describe.skipIf(!PG_BIN)("successor acceptance: a promoted lesson reaches a fres
   };
 
   beforeAll(async () => {
-    R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, treasuryCents: 100_000, simulatedSettlement: false });
-    [A, B] = R.founders;
+    R = await startEconomyRegistry(PG_BIN!, { founders: 4, allocationCents: 10_000, treasuryCents: 100_000, simulatedSettlement: false });
+    [A, B, C, D] = R.founders;
     await R.store.grantServiceRole();
     // v96: lesson reviews are Fleet Control calls: a test budget.
     await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
@@ -69,5 +74,38 @@ describe.skipIf(!PG_BIN)("successor acceptance: a promoted lesson reaches a fres
     // Without a question the latest page comes back unchanged (older behaviour).
     const all = JSON.parse((await tb.execute({ id: "k2", name: "read_knowledge", arguments: {} })).output);
     expect(all.entries.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("v111: an OLD relevant lesson behind 55 newer distractors (outside the latest page of 50) is found; a question nothing answers finds nothing", async () => {
+    // Newer distractors from three proposers (each within the 20-a-day proposal limit).
+    for (let i = 0; i < 55; i++) {
+      const who = i < 15 ? A : i < 35 ? C : D;
+      await promote(await propose(who, "market", `Seasonal demand note ${i}`, `Footfall observation number ${i} for high-street cafés in winter.`));
+    }
+    const tb = toolboxOf(B);
+    // The old whole-page read cannot see it (and 50 lessons overflow the tool output: the model gets a cut page).
+    const latest = (await tb.execute({ id: "k3", name: "read_knowledge", arguments: {} })).output;
+    expect(latest).not.toContain("Ebook pricing: anchor a short practical guide");
+    const r = JSON.parse((await tb.execute({ id: "k4", name: "read_knowledge", arguments: { query: "ebook pricing for a practical guide" } })).output);
+    expect(r.searched).toBeGreaterThanOrEqual(59);
+    expect(r.entries[0].title).toBe("Ebook pricing: anchor a short practical guide at £7–£12");
+    const none = JSON.parse((await tb.execute({ id: "k5", name: "read_knowledge", arguments: { query: "quantum chromodynamics lattice" } })).output);
+    expect(none).toMatchObject({ matched: 0, entries: [] });
+  });
+
+  it("v111: the proposer sees its lesson's status, age and why it waits (an unset review budget keeps it waiting, never approves it)", async () => {
+    await R.one(`fleet.fleet_admin_fleet_control_ai_budget_clear('test: unset', $1)`, [OWNER]);
+    const id = await propose(B, "technique", "Answer refunds within the hour", "Refund questions answered within an hour avoided every dispute across two launches.");
+    const waiting = (await R.econ(B, "knowledge.proposals", {})).proposals.find((p: any) => p.proposalId === id);
+    expect(waiting).toMatchObject({ status: "proposed" });
+    expect(waiting.waiting).toMatch(/review budget is not set/);
+    expect(typeof waiting.ageHours).toBe("number");
+    await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
+    expect((await R.econ(B, "knowledge.proposals", {})).proposals.find((p: any) => p.proposalId === id).waiting).toMatch(/queued/);
+    await promote(id);
+    const done = (await R.econ(B, "knowledge.proposals", {})).proposals.find((p: any) => p.proposalId === id);
+    expect(done).toMatchObject({ status: "promoted", waiting: null });
+    expect(done.entryId).toBeTruthy();
+    expect((await R.store.auditPrivileges()).problems).toEqual([]);
   });
 });

@@ -40,7 +40,7 @@ export interface ToolboxPorts {
   ledger(): Promise<unknown>;
   spendOrder(r: { idempotencyKey: string; amountCents: number; category: "expense" | "fee" | "asset_acquisition" | "conway_credits"; destinationId: string; purpose: string; recoverableCents?: number; after?: string }): Promise<unknown>;
   proposeKnowledge(p: { category: string; title: string; content: string }): Promise<unknown>;
-  knowledge(after?: number): Promise<unknown>;
+  knowledge(after?: number, search?: { query: string; category?: string; limit?: number }): Promise<unknown>;
   requestIdentityFact(p: { factKey: string; purpose: string; workflow: string }): Promise<unknown>;
   /** Schema v18: public web research through FleetController (optional: absent → the tool is unavailable). */
   researchFetch?(p: { url: string; purpose: string }): Promise<Record<string, unknown>>;
@@ -62,7 +62,7 @@ export interface ToolboxPorts {
 /** F2 tools → registry operations (the database validates every argument; the toolbox only maps and adds idempotency). */
 /** The read-only operations of the multi-operation tools, by the controller operation each maps to (ECONOMY_OPS).
  *  Anything not matched — including every operation added later — is treated as changing state (the safe side). */
-export const READ_MAPPED = /(\.list|\.status|\.inbox|\.read|\.requests|\.reviews|\.uses|\.search|\.library|\.checkouts|\.awaiting_approval|\.products|\.sales|\.job|\.files|\.thread|\.performance|\.economics|\.observe|\.check|\.offers|\.talent|\.api_jobs|\.reductions|\.fetch_file|\.invoice|\.currencies|\.price|\.obligations)$|^(wallet|performance)$/;
+export const READ_MAPPED = /(\.list|\.status|\.inbox|\.read|\.requests|\.reviews|\.uses|\.search|\.library|\.checkouts|\.awaiting_approval|\.products|\.sales|\.job|\.files|\.thread|\.performance|\.economics|\.observe|\.check|\.offers|\.talent|\.api_jobs|\.reductions|\.fetch_file|\.invoice|\.currencies|\.price|\.obligations|\.proposals)$|^(wallet|performance)$/;
 /** Tools that only read (the founder's own files and memory, the web, knowledge). */
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read_file", "list_files", "recall_facts", "list_goals", "check_ledger", "read_knowledge",
   "web_fetch", "web_search", "view_image", "field_guide", "list_experiments"]);
@@ -99,7 +99,9 @@ export const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string
     card_request: "card.request", card_requests: "card.requests", spend_reviews: "spend.reviews",
     card_authorize: "card.authorize", card_declare: "card.declare", card_void: "card.void", card_awaiting_approval: "card.awaiting_approval", cards: "card.list", identity_uses: "identity.uses",
     sweep_reductions: "sweep.reductions", sweep_reduction_request: "sweep.reduction_request" },
-  economic_knowledge: { search: "knowledge.search", record: "knowledge.record", library: "knowledge.library" },
+  economic_knowledge: { search: "knowledge.search", record: "knowledge.record", library: "knowledge.library",
+    // v111: your proposed lessons' review status, age and why one waits.
+    proposals: "knowledge.proposals" },
   // v34: the agent's own operational identity and accounts (asynchronous broker jobs; statuses only).
   identity: { create_persona: "identity.create", update_persona: "identity.update", list: "identity.list", provision_mailbox: "mailbox.provision",
     inbox: "mail.inbox", create_account: "account.create", operate: "account.operate", status: "account.status", verify_identity: "account.verify_identity",
@@ -1540,12 +1542,15 @@ export class FounderToolbox {
         case "propose_knowledge":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.proposeKnowledge({ category: String(a.category), title: String(a.title ?? "").slice(0, 200), content: String(a.content ?? "").slice(0, 8000) }))) };
         case "read_knowledge": {
-          const r = await this.o.ports.knowledge(0);
           const query = typeof a.query === "string" ? a.query.trim().slice(0, 200) : "";
           const category = typeof a.category === "string" ? a.category : "";
-          if (!query && !category) return { name: call.name, ok: true, output: clip(JSON.stringify(r)) };
-          // 2026-10-22: just-in-time retrieval — the lessons that answer the founder's question first, not the whole page.
-          return { name: call.name, ok: true, output: clip(JSON.stringify(rankKnowledge(r, query, category, Number.isInteger(a.limit) ? Number(a.limit) : 8))) };
+          const limit = Number.isInteger(a.limit) ? Number(a.limit) : 8;
+          if (!query && !category) return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.knowledge(0))) };
+          // 2026-10-22/23: just-in-time retrieval — the controller searches ALL current lessons (v111); an older controller
+          // returns its latest page, ranked here.
+          const r = await this.o.ports.knowledge(0, { query: query || category, ...(category ? { category } : {}), limit });
+          if (r && typeof r === "object" && typeof (r as { searched?: unknown }).searched === "number") return { name: call.name, ok: true, output: clip(JSON.stringify(r)) };
+          return { name: call.name, ok: true, output: clip(JSON.stringify(rankKnowledge(r, query, category, limit))) };
         }
         case "request_identity_fact":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.requestIdentityFact({ factKey: String(a.factKey ?? ""), purpose: String(a.purpose ?? ""), workflow: String(a.workflow ?? "") }))) };

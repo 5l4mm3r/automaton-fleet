@@ -1486,6 +1486,7 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_capabilities(text, text)",
   "api_knowledge_propose(text, text, text, text, text)",
   "api_knowledge_list(text, text, bigint, integer)",
+  "api_knowledge_search(text, text, text, text, integer)",
   "api_identity_request(text, text, text, text, text)",
   "api_identity_fact(text, text, uuid)",
   "api_cognition_status(text, text)",
