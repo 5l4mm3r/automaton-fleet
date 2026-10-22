@@ -166,3 +166,13 @@ Added 2026-10-23 (review: "resolve outstanding holds before enabling death"):
   the estate's cash, then the estate settles. v111 suite 8/8; 14 lifecycle/estate/cognition suites, 138 tests pass.
 Open: automatic reconciliation from provider evidence (owner resolution is the fallback, not the routine); the death measure
 is still the owner's decision.
+
+## 2026-10-23 — hard-kill recovery (repo only)
+- External effects: already durable on the controller since v95 (operation recorded before dispatch; a lost answer is
+  `uncertain` and reconciled, never re-run blindly — docs/design/durable-operations.md, coverage table and stated limits).
+- Founder side (new): after every step a provisional working record (carried base + this turn's calls so far,
+  stopCode FLEET_RUNTIME_INTERRUPTED) is rewritten; a finished turn clears it. A process killed mid-call restarts from it and
+  a completed external action in it is not executed again (FLEET_ALREADY_DONE). work-continuity 1j fails on bff4e2e, passes now.
+- Automatic reconciliation of a model call whose result never came: no provider evidence is connected (Anthropic exposes
+  usage per time bucket through its Admin API, not per request; no admin key is configured). Until then the owner resolves
+  from the console (P1 alert). Dependency recorded, not built speculatively.

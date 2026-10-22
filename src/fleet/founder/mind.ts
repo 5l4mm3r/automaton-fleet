@@ -995,6 +995,11 @@ export class FounderMind {
         messages.push({ role: "tool", toolCallId: call.id, isError: !out.ok, content: toolContent(again, out.output),
           ...(out.images?.length ? { images: out.images } : {}) });
       }
+      // 2026-10-23 (hard kill): after every step, a provisional working record — the turn's carried base plus this turn's
+      // calls so far — so a process killed mid-turn (SIGKILL, OOM, host loss) leaves what it already did for its restart.
+      // Rewritten whole each step (never appended twice); replaced or cleared when the turn ends. External effects are
+      // protected on the controller (durable operations, v95); this record is the founder's own memory of them.
+      if (W && !owner) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: outcome, stopCode: "FLEET_RUNTIME_INTERRUPTED" });
       this.logDecision({ turn: this.turns, routed: true, step, packet: packetKind, requestId: r.requestId, taskClass: cls.taskClass, expectedTier: cls.tier, route: r.route ?? null,
         content: (r.content ?? "").slice(0, 500), tools: outcomes.map((o) => ({ name: o.name, ok: o.ok, refused: o.refused, ...(o.refused ? { reason: refusalReason(o.output) } : {}) })), chargedCents: r.chargedCents });
       // 2026-10-19: only a sleep that was accepted ends the turn (one refused because a buyer waits leaves the turn running).

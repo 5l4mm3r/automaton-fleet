@@ -229,6 +229,33 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(JSON.stringify(carry.calls)).toContain("Flat 1");
   });
 
+  // 2026-10-23 (review: "hard-kill recovery must cover external actions"): a process killed mid-turn — here it never comes back
+  // from its second model call, as after SIGKILL — leaves its record; the restarted process continues from it and does not
+  // repeat the external action it completed (the controller's durable operation also protects it: v95).
+  it("1j. a process killed mid-turn leaves its record after every step; its restart continues and does not repeat a completed external action", async () => {
+    let reached2 = false;
+    const r1 = rig((t, s) => {
+      if (s === 1) return { content: "Plan: publish the offer, then tell the owner.", calls: [c("offer", { op: "publish", args: { offerId: "o1" } }), c("read_file", { path: "product/tracker.csv" })] };
+      reached2 = true;
+      return new Promise<never>(() => {}) as never;                                   // never returns: the process is killed here
+    });
+    void r1.mind.turn("hb");                                                          // not awaited: it never finishes
+    for (let i = 0; i < 100 && !reached2; i++) await new Promise((res) => setTimeout(res, 10));
+    expect(reached2).toBe(true);
+    expect(r1.world.economyCalls.filter((o) => o === "offer.publish")).toHaveLength(1);
+    // A new process on the same state (systemd restarts the unit).
+    const r2 = rig((t, s) => s === 1 ? { calls: [c("offer", { op: "publish", args: { offerId: "o1" } })] } : { calls: [c("sleep", { reason: "published" })] }, { root: r1.root });
+    await r2.mind.turn("hb after restart");
+    const p = r2.packets[0];
+    expect(p).toContain("CONTINUE YOUR UNFINISHED WORK");
+    expect(p).toContain("FLEET_RUNTIME_INTERRUPTED");
+    expect(p).toContain("Flat 1");                                                    // the completed read's result survived
+    expect(p).toContain("Plan: publish the offer, then tell the owner.");
+    expect(r2.outputsSeen.some((o) => o.includes("FLEET_ALREADY_DONE"))).toBe(true);  // the repeat was not executed
+    expect(r2.world.economyCalls.filter((o) => o === "offer.publish")).toHaveLength(0);
+    expect(fs.existsSync(path.join(r2.d.s, CARRY_FILE))).toBe(false);                 // the finished turn consumed it
+  });
+
   it("1h. the same result obtained again and again (across turns) gets a platform note to change tactic", async () => {
     const r = rig((t, s) => {
       if (s === 1) return { calls: [c("list_goals")] };
