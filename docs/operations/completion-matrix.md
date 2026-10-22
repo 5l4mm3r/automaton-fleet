@@ -184,3 +184,33 @@ is still the owner's decision.
   then paid orders, then oldest); the packet spells out 10 and counts the rest; every unanswered one blocks sleep.
   Proof: v100-obligations-pg "v111: none is hidden" (12 open: the order first); v111-obligations-priority unit.
 - Not changed (stated): an enquiry counts as answered by any agent reply (no separate resolved state as orders have).
+
+## 2026-10-23 — real-model scenario suite: BUILT, dry-run proven, NOT run (needs the owner's spending approval)
+Correction recorded: the founder-upgrade and revision rehearsals use a scripted fake Messages API — no model spend.
+
+| Piece | Where | Proof |
+|---|---|---|
+| Cost meter: worst case reserved before each call (the controller's bound), refused unsent when it does not fit; all-in = USD × FX (ceil) × lot acquisition cost (ceil); usage → exact, ambiguous → worst case, certain failure → 0; one JSONL row per call, never the key | src/fleet/eval/cost-meter.ts | fleet-eval-cost-meter (6, scripted; 400-call random run never over the ceiling) |
+| Production record of engineering calls: owner imports a run's rows once each as controller consumption (credit lots drawn; acquisition cost = Fleet overhead as for Fleet Control); no agent wallet; the harness has no production DB access | v111 fleet_admin_engineering_calls_import; hub economy-engineering-calls-import | v111-cognition-settlement-pg |
+| Six scenarios, one throwaway registry + newborn founder each, simulated buyer/payments/mail, no research/browser/card/channel workers; verdicts completed / correctly_blocked / poor_decision / infrastructure / incomplete; evidence kept before teardown | src/fleet/eval/scenario-suite.ts; fleet-founders.sh scenario-suite (refuses unless the operator repeats the terms' ceiling; one attempt per run id; rehearsalGuard: production unchanged, living founders untouched; key file strict + owned by the controller's user) | fleet-eval-scenario-suite (dry: fake provider, real founder process, ephemeral PG): s1 ran 68 metered calls → poor_decision (fake model does no work); s5 with a 1p cap → 29 calls refused unsent, 0 spent, "cap was reached" |
+| Frozen terms from production, read-only | scripts/fleet-scenario-terms.sh <runId> <A\|B> | drafted 2026-10-22 23:14Z: FX 747613; lot 05f4cb13 (owner, receipt $49.55 / credit $41.29); T1/T2/T3 = haiku 4.5 / sonnet 5.5 / opus 5.5 at production prices; credit left $29.25 |
+
+Plans (computed by code): A = 1,750p all-in ≤ $19.51 of credit (leaves $9.74); B = 1,200p ≤ $13.38 (leaves $15.87). A T3 call's
+worst-case reservation is 38.6–47.6p all-in, so the last ~48p of each cap cannot be used; average real T3 call 6.23p all-in.
+Scenario 5 tests shared-library knowledge (versioned; v1 £19 retired by v2 £7–£12), not a named earlier agent's lesson
+(one founder per registry): that path is proven at retrieval level only (knowledge-successor-pg).
+Not built: S3 part B uses "inspection cannot run" (renderer removed), not a contradictory inspection result.
+
+Obligations: every open request is retrievable beyond the packet's list — customers op obligations {offset, limit} pages the
+whole set in the same order (record id tie-break; v95 reserves `after` for operations). v100-obligations-pg pages 12 in 5s:
+each exactly once.
+
+Pre-existing failure found and fixed (disclosed): fleet-f2-static-audit failed since v108/v109 (7ab848d) on 3 unclassified
+lines (the owner's geography decision record; the temporary card-proof release); classified with reasons.
+
+Remaining finite checklist (status, no new audit):
+- Knowledge retrieval across ALL lessons (ranking is within the latest 50 current): open.
+- Death-time harvest of candidate_fleet journal lessons: open.
+- Promotion status visible to the proposer (a review waiting on Fleet Control's unset budget is silent): open.
+- Capability checks on listings (Etsy API, storefront, browser submissions): open; offer.publish and enquiry.quote are gated.
+- Automatic reconciliation of a call with no result: needs a provider Admin API key (owner); owner resolution meanwhile.

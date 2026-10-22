@@ -60,6 +60,11 @@ const RULES: Rule[] = [
   // reconciliation of the owner's bank account, like v79's attribution; no agent's purchase or business action waits for it.
   { cls: "legal/security", file: /src\/fleet\/postgres\/migrations-phase86\.ts$/, line: /Ambiguous or unknown items wait for the owner/,
     why: "v86: unexplained bank lines are reconciled by the owner (treasury evidence), not an ordinary business approval" },
+  // 2026-10-23: matches present since v108/v109 (7ab848d) and unclassified until now (this suite was failing on them).
+  { cls: "legal/security", file: /src\/fleet\/postgres\/migrations-phase108\.ts$/, line: /the owner decided on 2026-10-20 not to exclude them/,
+    why: "v108: a record of the owner's geography decision (worldwide), not an approval gate" },
+  { cls: "legal/security", file: /src\/fleet\/postgres\/migrations-phase109\.ts$/, line: /the owner decides the release|unless the owner grants a card-proof release/,
+    why: "v108/v109: the ONE pre-launch card proof purchase while sales are closed (owner 2026-10-20, temporary); standing card authority at launch is separate" },
   { cls: "retirement", file: /src\/fleet\/postgres\/migrations-phase48\.ts$/, line: /^\s*\["'payment_order_cancelled','payment_order_awaiting_owner','payment_instruction_issued'", "'payment_order_cancelled','payment_instruction_issued'"\],$/,
     why: "the v48 asserted edit that REMOVES the retired type from the live routing function" },
 ];

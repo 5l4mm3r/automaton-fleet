@@ -65,7 +65,7 @@ export function obligationLines(list: CustomerObligation[]): string[] {
   });
   const owed = list.some((o) => o.state === "unanswered");
   const unansweredRest = rest.filter((o) => o.state === "unanswered").length;
-  const more = rest.length ? `; …and ${rest.length} more open request${rest.length > 1 ? "s" : ""} (${unansweredRest} unanswered): list enquiries with customers enquiries, an order's with customers order_thread` : "";
+  const more = rest.length ? `; …and ${rest.length} more open request${rest.length > 1 ? "s" : ""} (${unansweredRest} unanswered): list them all with customers obligations (page with offset)` : "";
   return [`Your customers' open requests (FleetController's record, most urgent first; each stays here until it is resolved${owed ? "; you cannot sleep while a buyer waits for an answer" : ""}): ${items.join("; ")}${more}.`];
 }
 

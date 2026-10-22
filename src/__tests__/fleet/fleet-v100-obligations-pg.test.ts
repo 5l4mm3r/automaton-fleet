@@ -255,5 +255,17 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     const unanswered = list.filter((o) => o.state === "unanswered");
     expect(unanswered.length).toBeGreaterThanOrEqual(12);                              // v100 returned 10: the order was cut
     expect(list[0]).toMatchObject({ kind: "order", id: orderId, state: "unanswered" }); // most urgent first
+    // Every open request is retrievable by the agent beyond any list: paged, each exactly once, in the same order.
+    const seen: string[] = [];
+    let offset: number | null = 0;
+    for (let i = 0; i < 10 && offset !== null; i++) {
+      const page = await R.econ(F, "customer.obligations", { offset, limit: 5 });
+      expect(page.ok).toBe(true);
+      seen.push(...(page.obligations as Array<{ kind: string; id: string }>).map((o) => `${o.kind}:${o.id}`));
+      offset = page.next ?? null;
+      if (i === 0) expect(page.total).toBe(list.length);
+    }
+    expect(seen).toEqual(list.map((o) => `${o.kind}:${o.id}`));
+    expect(new Set(seen).size).toBe(seen.length);
   });
 });

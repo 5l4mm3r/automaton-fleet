@@ -33,6 +33,7 @@ import { V109_SQL } from "./migrations-phase109.js";
 import { V96_SQL } from "./migrations-phase96.js";
 import { V56_SQL } from "./migrations-phase56.js";
 import { V100_SQL, OBLIGATIONS_MAX } from "./migrations-phase100.js";
+import { V105_SQL } from "./migrations-phase105.js";
 
 const restate = (src: string, name: string, edits: Array<[string, string]>) => restateRaw(src, name, edits.map(([a, b]) => [a, b.replace(/\$/g, "$$$$")] as [string, string]));
 
@@ -161,12 +162,34 @@ const COGNITION_STOP = restate(V13_SQL, "fleet_agents_cognition_stop", [
 // shown nor stopped the agent's sleep. Up to OBLIGATIONS_LIMIT_V111 now, most urgent first: unanswered before answered,
 // paid orders before enquiries, then oldest. The packet shows the first ones and counts the rest (founder/obligations.ts).
 export const OBLIGATIONS_LIMIT_V111 = 50;
-const PRIORITY = `CASE WHEN replied IS NULL OR replied < last_buyer THEN 0 ELSE 1 END, CASE WHEN kind = 'order' THEN 0 ELSE 1 END, since`;
+// The record id breaks ties: requests of the same moment keep a stable order (a page never skips or repeats one).
+const PRIORITY = `CASE WHEN replied IS NULL OR replied < last_buyer THEN 0 ELSE 1 END, CASE WHEN kind = 'order' THEN 0 ELSE 1 END, since, id`;
 const OBLIGATIONS = restate(V100_SQL, "fleet_customer_obligations", [
   [`'delivering', CASE WHEN delivering THEN true END)) ORDER BY since), '[]'::jsonb)
     FROM (SELECT * FROM ob ORDER BY since LIMIT ${OBLIGATIONS_MAX}) y`,
    `'delivering', CASE WHEN delivering THEN true END)) ORDER BY ${PRIORITY}), '[]'::jsonb)
     FROM (SELECT * FROM ob ORDER BY ${PRIORITY} LIMIT ${OBLIGATIONS_LIMIT_V111}) y`],
+]);
+// Every open request, in the same order, for paging beyond the packet's list (review 2026-10-23: "require pagination or
+// another durable retrieval path beyond 50 … every unresolved obligation must remain recoverable").
+const OBLIGATIONS_ALL = restate(V100_SQL, "fleet_customer_obligations", [
+  [`CREATE OR REPLACE FUNCTION fleet_customer_obligations(p_agent text)`, `CREATE OR REPLACE FUNCTION fleet_customer_obligations_all(p_agent text)`],
+  [`'delivering', CASE WHEN delivering THEN true END)) ORDER BY since), '[]'::jsonb)
+    FROM (SELECT * FROM ob ORDER BY since LIMIT ${OBLIGATIONS_MAX}) y`,
+   `'delivering', CASE WHEN delivering THEN true END)) ORDER BY ${PRIORITY}), '[]'::jsonb)
+    FROM ob y`],
+]);
+export const AGENT_OPS_V111 = ["customer.obligations"] as const;
+const DISPATCH = restate(V105_SQL, "api_economy", [
+  [`WHEN 'code.job' THEN 'planning'`, `WHEN 'code.job' THEN 'planning' WHEN 'customer.obligations' THEN 'planning'`],
+  [`      WHEN 'order.invoice' THEN fleet_econ_order_invoice(p_agent, a)`, `      WHEN 'order.invoice' THEN fleet_econ_order_invoice(p_agent, a)
+      WHEN 'customer.obligations' THEN (WITH al AS (SELECT fleet_customer_obligations_all(p_agent) AS j),
+          pg AS (SELECT GREATEST(COALESCE((a ->> 'offset')::integer, 0), 0) AS off, LEAST(GREATEST(COALESCE((a ->> 'limit')::integer, 20), 1), 50) AS lim)
+        SELECT jsonb_build_object('ok', true, 'total', jsonb_array_length(al.j), 'offset', pg.off,
+          'obligations', COALESCE((SELECT jsonb_agg(x ORDER BY n) FROM jsonb_array_elements(al.j) WITH ORDINALITY e(x, n) WHERE n > pg.off AND n <= pg.off + pg.lim), '[]'::jsonb),
+          'next', CASE WHEN jsonb_array_length(al.j) > pg.off + pg.lim THEN pg.off + pg.lim END,
+          'note', 'every open customer request, most urgent first (unanswered, then paid orders, then oldest); page with offset = next')
+          FROM al, pg)`],
 ]);
 
 const OWNER = `  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
@@ -223,6 +246,10 @@ ${ESTATE_SETTLE}
 ${COGNITION_STOP}
 
 ${OBLIGATIONS}
+
+${OBLIGATIONS_ALL}
+
+${DISPATCH}
 
 -- The owner resolves a reservation whose result never came, from provider evidence (the provider's usage for that time):
 -- 'billed' settles it at its reservation (recorded as an estimate, exactly once); 'not_billed' releases it.

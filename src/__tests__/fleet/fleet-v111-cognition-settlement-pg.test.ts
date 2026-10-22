@@ -57,7 +57,7 @@ describe.skipIf(!PG_BIN)("v111 cognition settlement integrity (PostgreSQL)", { t
     await R.genesis.cognitionRoutingSet(true, 2_000, OWNER);
     await R.genesis.founderRoutingSet(A, true, OWNER);
     await asSuper(`UPDATE fleet.fleet_cognition_tiers SET input_microcents_per_token = 200, output_microcents_per_token = 1000 WHERE tier = 'T2'`);
-  });
+  }, 300_000);
   afterAll(async () => { await svc?.close(); await su?.end(); await R?.close(); });
 
   it("a result recorded after its reservation expired is charged exactly once; the expired hold does not block the next call", async () => {

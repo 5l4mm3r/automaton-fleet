@@ -62,7 +62,7 @@ export interface ToolboxPorts {
 /** F2 tools → registry operations (the database validates every argument; the toolbox only maps and adds idempotency). */
 /** The read-only operations of the multi-operation tools, by the controller operation each maps to (ECONOMY_OPS).
  *  Anything not matched — including every operation added later — is treated as changing state (the safe side). */
-export const READ_MAPPED = /(\.list|\.status|\.inbox|\.read|\.requests|\.reviews|\.uses|\.search|\.library|\.checkouts|\.awaiting_approval|\.products|\.sales|\.job|\.files|\.thread|\.performance|\.economics|\.observe|\.check|\.offers|\.talent|\.api_jobs|\.reductions|\.fetch_file|\.invoice|\.currencies|\.price)$|^(wallet|performance)$/;
+export const READ_MAPPED = /(\.list|\.status|\.inbox|\.read|\.requests|\.reviews|\.uses|\.search|\.library|\.checkouts|\.awaiting_approval|\.products|\.sales|\.job|\.files|\.thread|\.performance|\.economics|\.observe|\.check|\.offers|\.talent|\.api_jobs|\.reductions|\.fetch_file|\.invoice|\.currencies|\.price|\.obligations)$|^(wallet|performance)$/;
 /** Tools that only read (the founder's own files and memory, the web, knowledge). */
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read_file", "list_files", "recall_facts", "list_goals", "check_ledger", "read_knowledge",
   "web_fetch", "web_search", "view_image", "field_guide", "list_experiments"]);
@@ -145,6 +145,8 @@ export const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string
     api: "channel.api", api_jobs: "channel.api_jobs" },
   customers: { enquiries: "enquiry.list", read: "enquiry.read", fetch_file: "enquiry.file", reply: "enquiry.reply", quote: "enquiry.quote", decline: "enquiry.decline",
     order_thread: "order.thread", order_message: "order.message",
+    // v111: every open customer request, most urgent first, paged (beyond the packet's list).
+    obligations: "customer.obligations",
     // v105: a price calculated by the platform from line items (what quote with items will charge), without quoting.
     price: "money.price" },
 });
