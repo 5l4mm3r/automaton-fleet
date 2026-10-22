@@ -110,3 +110,25 @@ Status: **done** (implemented + test or live evidence) · **gap** (implementatio
 3. Card "uncapped" (LR §5) is the standing authority at launch; the pre-launch proof is one purchase ≤ £5 (temporary).
 4. Production identity: the LR §1 A header (cb23033, v96) is history; current state is this file's header.
 5. The MLS "nothing deployed" banner (rev 3, 2026-10-08) is superseded by the release records.
+
+## 2026-10-22 — runtime reliability pass (repo only; uncommitted; NOT built, rehearsed or installed)
+Against the launch handoff of 2026-10-22 (§6B, §10). Production unchanged: 3387596 still NOT installed (its rehearsals are
+> 24 h old; re-rehearsing makes paid model calls and needs the owner's approval). These changes stack on 3387596 and would
+replace it as the next Agent-1 runtime candidate.
+
+| Requirement (handoff) | Change | Proof (fails on a1fd2c8, passes now) | Status |
+|---|---|---|---|
+| §6B every exit path keeps working state | a turn stopped by a refused/failed model call (run budget, run ended, provider error) carries its record (`stopCode`), progress memory, wake declaration and stall count | work-continuity 1f | done (repo) |
+| §6B restart/deploy | SIGTERM reaches the turn; it stops between steps with its record carried (`FLEET_RUNTIME_STOPPING`) | work-continuity 1g | done (repo); a step already in a model call can still be killed by TimeoutStopSec=20s |
+| §6B events not lost | the events cursor does not advance past events shown to a turn that died; past 8 unseen events the rest are counted by kind; a full list says older ones may exist | work-continuity 1f; events-overflow (5) | done (repo); a per-event acknowledgement table is NOT built |
+| §6B repeated semantic actions | temporary paths and pids no longer make a result "new" (checksums still do); the 3rd identical result (across turns, persisted) gets a platform change-tactic note | work-continuity 1h, 1i | done (repo) |
+| §6B bounded output | a cut tool result says how much was cut and how to read the rest | events-overflow (cut) | done (repo) |
+| §10 just-in-time retrieval | `read_knowledge` takes query / category / limit (deterministic ranking within the latest 50 current lessons) | knowledge-successor-pg | done (repo) |
+| §10 successor acceptance | a fresh agent B finds agent A's promoted lesson by its own question through its toolbox and the real controller function | knowledge-successor-pg | done (repo) |
+| v68 suite failing since v96 | test setup sets Fleet Control's test budget (the code was right) | v68-wake-lessons-pg 7/7 | done |
+
+Open, needing owner decisions (economic policy — not implemented): exact wallet-zero death measure; survival protection
+(on by default: exhaustion is indefinite dormancy today); treasury-paid owner conversation turns for an exhausted agent;
+cognition reservations purged after 5 min leave late usage unbooked and charges are capped at the reservation; customer
+obligations of a dead agent have no formal hand-over; journal lessons tagged candidate_fleet are not harvested at death;
+unset Fleet Control budget leaves lesson proposals waiting with no notice to the proposer.

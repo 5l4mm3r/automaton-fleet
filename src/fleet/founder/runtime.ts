@@ -425,6 +425,8 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
           // 2026-10-18 (owner): continuity across cut-off turns, progress by new results, and waiting without inference once
           // work has stalled; a waiting founder is woken only by a change, an owner message or its own review time.
           workContinuity: true,
+          // 2026-10-22: a stop (deploy, restart) ends a turn between steps with its working record saved.
+          ...(opts.signal ? { stopSignal: opts.signal } : {}),
           hibernationSafetyMs: Number.POSITIVE_INFINITY,
           // A waiting founder whose runtime changed wakes once and is told (mind.ts upgradeLine).
           runtimeCommit: ctx.release.commit,

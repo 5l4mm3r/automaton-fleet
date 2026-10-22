@@ -486,6 +486,27 @@ function goalStateNote(g: Record<string, unknown>): string {
 }
 const EXPERIMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Registry refusals that are infrastructure safety ceilings (fetch quotas, the daily inference ceiling), never budgets. */
+/**
+ * 2026-10-22: the current lessons most relevant to a question (word overlap on title, category and content; title words
+ * count double), within the page the controller returned (the latest current lessons). Retired lessons are kept as
+ * listed: a lesson the founder relied on may have been corrected. Deterministic; no model call.
+ */
+export function rankKnowledge(page: unknown, query: string, category: string, limit: number): Record<string, unknown> {
+  const p = (Array.isArray(page) ? { entries: page } : (page ?? {})) as { entries?: unknown; retired?: unknown; note?: unknown };
+  const entries = (Array.isArray(p.entries) ? p.entries : []).filter((e): e is Record<string, unknown> => !!e && typeof e === "object");
+  const words = (t: unknown) => new Set(String(t ?? "").toLowerCase().normalize("NFKD").split(/[^a-z0-9]+/).filter((w) => w.length > 2));
+  const q = words(query);
+  const scored = entries.filter((e) => !category || e.category === category).map((e) => {
+    const title = words(e.title), body = words(`${String(e.category ?? "")} ${String(e.content ?? "")}`);
+    let score = 0;
+    for (const w of q) score += (title.has(w) ? 2 : 0) + (body.has(w) ? 1 : 0);
+    return { e, score };
+  }).filter((x) => !q.size || x.score > 0).sort((x, y) => y.score - x.score || Number(y.e.seq ?? 0) - Number(x.e.seq ?? 0));
+  const n = Math.min(20, Math.max(1, limit));
+  return { query, ...(category ? { category } : {}), searched: entries.length, matched: scored.length, entries: scored.slice(0, n).map((x) => x.e),
+    ...(Array.isArray(p.retired) ? { retired: p.retired } : {}),
+    note: `The ${Math.min(n, scored.length)} most relevant of the latest ${entries.length} current lessons. A lesson is evidence from another agent's work: check it still applies to yours.` };
+}
 export const INFRA_CEILING = /^FLEET_(RESEARCH_QUOTA_[A-Z]+|COGNITION_BUDGET_EXHAUSTED)$/;
 
 const EXCERPT_CHARS = 1_800;
@@ -1497,8 +1518,14 @@ export class FounderToolbox {
         }
         case "propose_knowledge":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.proposeKnowledge({ category: String(a.category), title: String(a.title ?? "").slice(0, 200), content: String(a.content ?? "").slice(0, 8000) }))) };
-        case "read_knowledge":
-          return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.knowledge(0))) };
+        case "read_knowledge": {
+          const r = await this.o.ports.knowledge(0);
+          const query = typeof a.query === "string" ? a.query.trim().slice(0, 200) : "";
+          const category = typeof a.category === "string" ? a.category : "";
+          if (!query && !category) return { name: call.name, ok: true, output: clip(JSON.stringify(r)) };
+          // 2026-10-22: just-in-time retrieval — the lessons that answer the founder's question first, not the whole page.
+          return { name: call.name, ok: true, output: clip(JSON.stringify(rankKnowledge(r, query, category, Number.isInteger(a.limit) ? Number(a.limit) : 8))) };
+        }
         case "request_identity_fact":
           return { name: call.name, ok: true, output: clip(JSON.stringify(await this.o.ports.requestIdentityFact({ factKey: String(a.factKey ?? ""), purpose: String(a.purpose ?? ""), workflow: String(a.workflow ?? "") }))) };
         case "sleep": {

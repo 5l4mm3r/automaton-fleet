@@ -177,7 +177,10 @@ export const FOUNDER_TOOLS: readonly ToolSpec[] = Object.freeze([
     }, ["amountCents", "category", "destinationId", "purpose", "decisionKey"]),
   },
   { name: "propose_knowledge", capability: "knowledge.propose", description: "Propose a lesson for the fleet's institutional knowledge (reviewed for the fleet; it never blocks your own work).", parameters: obj({ category: { type: "string", enum: ["market", "customer", "supplier", "technique", "failure", "policy", "other"] }, title: str("Title", 200), content: str("Content", 8000) }, ["category", "title", "content"]) },
-  { name: "read_knowledge", capability: "knowledge.read", description: "Read promoted fleet knowledge.", parameters: obj({}, []) },
+  { name: "read_knowledge", capability: "knowledge.read", description: "Read promoted fleet knowledge (lessons other agents proved). With query (and optionally category), the current lessons most relevant to your question come first; without, the latest ones. Retired lessons are listed with their replacement.",
+    parameters: obj({ query: str("What you need to know, in a few words (e.g. 'ebook pricing', 'refund before delivery')", 200),
+      category: { type: "string", enum: ["market", "customer", "supplier", "technique", "failure", "policy", "other"] },
+      limit: { type: "integer", minimum: 1, maximum: 20, description: "Lessons to return with a query (default 8)" } }, []) },
   { name: "request_identity_fact", capability: "identity.claim_request", description: "Request ONE approved organisation fact (a legal name, registration, address or bank detail) for a named workflow: a human-identity exception, released per approved claim. It affects only that workflow; your other work continues. Never invent legal names, registrations, tax ids, addresses or bank details.", parameters: obj({ factKey: str("Fact key", 40), purpose: str("Purpose", 300), workflow: str("Workflow name", 64) }, ["factKey", "purpose", "workflow"]) },
   {
     name: "web_fetch",

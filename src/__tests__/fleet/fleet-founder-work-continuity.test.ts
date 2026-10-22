@@ -22,7 +22,7 @@ import path from "path";
 import { FounderMind, FOUNDER_STEPS_PER_TURN, STALL_LINE, type MindPorts } from "../../fleet/founder/mind.js";
 import { FounderToolbox } from "../../fleet/founder/toolbox.js";
 import { LoopGuard } from "../../fleet/founder/loop-guard.js";
-import { CARRY_FILE, ProgressMemory, isExternal, normalizeResult } from "../../fleet/founder/continuity.js";
+import { CARRY_FILE, PROGRESS_FILE, ProgressMemory, REPEAT_NOTE_AT, isExternal, normalizeResult } from "../../fleet/founder/continuity.js";
 import { FOUNDER_MANIFEST_V2, manifestSha256 } from "../../fleet/capabilities.js";
 import { capabilityView } from "../../fleet/cognition/capability-signature.js";
 import type { ToolCall } from "../../fleet/cognition/types.js";
@@ -34,7 +34,7 @@ const hex32 = (n: number) => n.toString(16).padStart(32, "0");
 
 type Step = { calls: ToolCall[]; content?: string };
 /** `script(turn, step, packet)` scripts the model. `world` is the controller's state the test changes. */
-function rig(script: (turn: number, step: number, packet: string) => Step, o: { maxSteps?: number; root?: string; runtime?: string } = {}) {
+function rig(script: (turn: number, step: number, packet: string) => Step, o: { maxSteps?: number; root?: string; runtime?: string; stopSignal?: AbortSignal } = {}) {
   const root = o.root ?? fs.mkdtempSync(path.join(os.tmpdir(), "wc-"));
   const d = { w: path.join(root, "w"), s: path.join(root, "s"), m: path.join(root, "s", "memory") };
   const fresh = !fs.existsSync(d.w);
@@ -87,7 +87,7 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
       return { ok: true, op, args };
     },
   } as never });
-  const mind = new FounderMind({ ports, toolbox, stateDir: d.s, workContinuity: true, hibernationSafetyMs: Number.POSITIVE_INFINITY, runtimeCommit: o.runtime,
+  const mind = new FounderMind({ ports, toolbox, stateDir: d.s, workContinuity: true, hibernationSafetyMs: Number.POSITIVE_INFINITY, runtimeCommit: o.runtime, stopSignal: o.stopSignal,
     maxStepsPerTurn: o.maxSteps ?? FOUNDER_STEPS_PER_TURN, routed: { memoryDir: d.m, workspaceDir: d.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
   return { mind, world, packets, outputsSeen, root, d, infers: () => infers, turns: () => turn };
 }
@@ -189,6 +189,74 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     r2.world.eventsDigest = hex32(8);
     await r2.mind.turn("hb after the upgrade");
     expect(r2.packets[0]).toContain(`mail ${MAIL}`);
+  });
+
+  // 2026-10-22: a turn stopped mid-work because its next model call was refused (run budget spent, run ended, provider
+  // error) used to save only a closing note: its results were lost, its wake declaration and stall count reset, and the
+  // events cursor moved past what it was shown but never acted on.
+  it("1f. a turn stopped by a refused model call keeps its working record; the events it was shown are shown again", async () => {
+    const MAIL = "5d7f2a10-0b4e-4c55-9d1e-7f00a1b2c3d4";
+    const r = rig((t, s) => {
+      if (t === 1 && s === 1) return { content: "Plan: read the tracker, then answer the mail.", calls: [c("read_file", { path: "product/tracker.csv" })] };
+      if (t === 1) throw Object.assign(new Error("run budget spent"), { code: "FLEET_COGNITION_RUN_BUDGET_EXHAUSTED" });
+      return { calls: [c("sleep", { reason: "continued" })] };
+    });
+    r.world.recentEvents.push({ kind: "mail", id: MAIL, at: new Date(Date.now() - 5_000).toISOString(), tool: "identity read_mail (inbox lists it)" });
+    const t1 = await r.mind.turn("hb");
+    expect(t1.reason).toBe("stopped: FLEET_COGNITION_RUN_BUDGET_EXHAUSTED");
+    expect(fs.existsSync(path.join(r.d.s, CARRY_FILE))).toBe(true);
+    await r.mind.turn("hb 2");
+    const p2 = r.packets[1];
+    expect(p2).toContain("CONTINUE YOUR UNFINISHED WORK");
+    expect(p2).toContain("FLEET_COGNITION_RUN_BUDGET_EXHAUSTED");
+    expect(p2).toContain("Flat 1");                                                   // turn 1's actual result
+    expect(p2).toContain("Plan: read the tracker, then answer the mail.");
+    expect(p2).toContain(`mail ${MAIL}`);                                              // shown again: turn 1 never acted on it
+  });
+
+  it("1g. a stop (SIGTERM: deploy, restart) ends the turn between steps with its working record saved", async () => {
+    const ac = new AbortController();
+    const r = rig((t, s) => {
+      if (t === 1 && s === 1) { ac.abort(); return { content: "Plan: inspect, then publish.", calls: [c("read_file", { path: "product/tracker.csv" })] }; }
+      if (t === 1) return { calls: [c("read_file", { path: "product/never.csv" })] };
+      return { calls: [c("sleep", { reason: "continued" })] };
+    }, { stopSignal: ac.signal });
+    const t1 = await r.mind.turn("hb");
+    expect(t1.steps).toBe(1);                                                          // no second step after the stop
+    expect(fs.readFileSync(path.join(r.d.s, "mind-log.jsonl"), "utf8")).toContain("FLEET_RUNTIME_STOPPING");
+    const carry = JSON.parse(fs.readFileSync(path.join(r.d.s, CARRY_FILE), "utf8"));
+    expect(carry.stopCode).toBe("FLEET_RUNTIME_STOPPING");
+    expect(JSON.stringify(carry.calls)).toContain("Flat 1");
+  });
+
+  it("1h. the same result obtained again and again (across turns) gets a platform note to change tactic", async () => {
+    const r = rig((t, s) => {
+      if (s === 1) return { calls: [c("list_goals")] };
+      if (s === 2) return { calls: [c("write_file", { path: `notes/n${t}.md`, content: `note ${t}` })] };   // changes state: the read runs again
+      return { calls: [c("sleep", { reason: "later" })] };
+    });
+    await beats(r, REPEAT_NOTE_AT + 1);
+    const notes = r.outputsSeen.filter((o) => o.startsWith("[platform note: you have now obtained this identical result"));
+    expect(notes.length).toBeGreaterThan(0);
+    expect(notes[0]).toContain(`${REPEAT_NOTE_AT} times`);
+    // the note is outside the untrusted tool output
+    expect(notes[0].indexOf("[platform note")).toBeLessThan(notes[0].indexOf("[untrusted tool output"));
+  });
+
+  it("1i. temporary paths and process ids do not make a result new; a changed checksum does", () => {
+    const run = (tmp: string, pid: number, sha: string) => `wrote ${tmp}/recalc.xlsx (pid ${pid}); sha256 ${sha}; 1194 blank formulas`;
+    expect(normalizeResult(run("/tmp/tmpa8f3k2", 101, "f45c3d00"))).toBe(normalizeResult(run("/tmp/tmpzz91qq", 202, "f45c3d00")));
+    expect(normalizeResult(run("/tmp/tmpa8f3k2", 101, "f45c3d00"))).not.toBe(normalizeResult(run("/tmp/tmpa8f3k2", 101, "9be07a11")));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pm-"));
+    const exec = (cmd: string) => ({ name: "exec", arguments: { command: cmd } });
+    let pm = new ProgressMemory(path.join(dir, PROGRESS_FILE));
+    expect(pm.note(exec("python3 inspect.py"), true, run("/tmp/tmp111111", 1, "f45c3d00"))).toBe("information");
+    expect(pm.note(exec("python3 inspect.py --again"), true, run("/tmp/tmp222222", 2, "f45c3d00"))).toBeNull();
+    expect(pm.lastTimes).toBe(2);
+    pm.save();
+    pm = new ProgressMemory(path.join(dir, PROGRESS_FILE));                                // a restart keeps the count
+    expect(pm.note(exec("python3 inspect.py"), true, run("/tmp/tmp333333", 3, "f45c3d00"))).toBeNull();
+    expect(pm.lastTimes).toBe(3);
   });
 
   it("1c. a FAILED external action of the carried turn can be retried as it was", async () => {

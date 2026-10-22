@@ -75,6 +75,9 @@ describe.skipIf(!PG_BIN)("v68: real events wake and inform the agent; promoted l
     [F] = R.founders;
     await R.store.grantServiceRole();
     await R.store.grantCustodyRole();
+    // v96: Fleet Control makes no paid call (lesson reviews included) until the owner sets its daily AI budget: a test
+    // budget here. Without it the claims below get no jobs (this suite failed from v96 until 2026-10-22).
+    await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
     su = new pg.Pool({ connectionString: R.pgc.superUrl.replace(/\/postgres$/, `/${R.pgc.dbname}`), max: 1 });
     svc = new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 2, options: "-c search_path=fleet" });
     custody = new pg.Pool({ connectionString: R.pgc.custodyUrl, max: 2, options: "-c search_path=fleet" });
