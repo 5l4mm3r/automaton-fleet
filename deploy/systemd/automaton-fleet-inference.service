@@ -14,8 +14,10 @@ User=automaton-fleet-inference
 Group=automaton-fleet-inference
 EnvironmentFile=/etc/automaton-fleet/inference.env
 WorkingDirectory=/opt/automaton-fleet/inference
+# $FLEET_INFERENCE_EXTRA is unbraced on purpose: systemd splits it into zero or more arguments (an empty ${…} would
+# pass one empty argument, which llama-server rejects as "invalid argument").
 ExecStart=/opt/automaton-fleet/inference/bin/llama-server -m ${FLEET_INFERENCE_MODEL} --mmproj ${FLEET_INFERENCE_MMPROJ} --alias ${FLEET_INFERENCE_ALIAS} \
-  --host 127.0.0.1 --port 8090 -c ${FLEET_INFERENCE_CTX} -ngl ${FLEET_INFERENCE_GPU_LAYERS} -np 1 --jinja --no-webui ${FLEET_INFERENCE_EXTRA}
+  --host 127.0.0.1 --port 8090 -c ${FLEET_INFERENCE_CTX} -ngl ${FLEET_INFERENCE_GPU_LAYERS} -np 1 --jinja --no-webui $FLEET_INFERENCE_EXTRA
 Environment=LD_LIBRARY_PATH=/opt/automaton-fleet/inference/bin
 Restart=on-failure
 RestartSec=5
