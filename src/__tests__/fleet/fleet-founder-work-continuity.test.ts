@@ -79,7 +79,7 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
       return { content: s.content ?? "", toolCalls: s.calls, usage: { inputTokens: 1, outputTokens: 1 }, chargedCents: 1, requestId: `r${turn}-${step}` };
     },
   };
-  const loopGuard = new LoopGuard({ stateDir: d.s });
+  const loopGuard = new LoopGuard({ stateDir: d.s, workspaceDir: d.w });
   const toolbox = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: d.w, memoryDir: d.m, loopGuard, selfGovernance: true, ports: {
     ledger: async () => ({}), ownerRequests: async () => ({ ok: true, requests: world.requests }),
     economy: async (op: string, args?: Record<string, unknown>) => {
@@ -279,25 +279,26 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     const again = rig(same, { root: r.root });                   // a restart: a new process, the same state on disk
     for (let i = 0; i < 4; i++) await again.mind.turn(`after restart ${i}`);
     expect(again.infers()).toBe(0);                              // still waiting: nothing changed
-    again.world.eventsDigest = hex32(77);                        // something relevant changes: it wakes once
+    again.world.eventsDigest = hex32(77);                        // something changes that the call does not depend on: it wakes once
     await again.mind.turn("changed");
-    // The packet names the remembered call before any step. A restart may follow a fix, so the identical call may run ONCE
-    // more; repeated again unchanged it is not executed, and three such steps end the turn — no fresh retry series.
+    // The packet names the remembered call before any step. A restart is no fix: the identical call is not executed again,
+    // and three such steps end the turn — no fresh retry series.
     expect(again.packets[0]).toContain("Already tried 3+ times without success — do not repeat these unchanged");
     expect(again.packets[0]).toContain("write_file path=/etc/checklist.txt");
-    expect(again.infers()).toBe(4);
     const executed = (seen: string[]) => new Set(seen.filter((o) => !o.includes("NOT RE-RUN"))).size;   // each step re-sends earlier results
-    expect(executed(again.outputsSeen)).toBe(1);
-    // A third executed failure (across restarts) makes it refused outright: the next restart and change run it zero times.
-    const third = rig(same, { root: r.root });
-    third.world.eventsDigest = hex32(78);
-    await third.mind.turn("changed again");
-    const fourth = rig(same, { root: r.root });
-    fourth.world.eventsDigest = hex32(79);
-    await fourth.mind.turn("changed once more");
-    expect(executed(third.outputsSeen)).toBe(1);
-    expect(executed(fourth.outputsSeen)).toBe(0);
-    expect(fourth.outputsSeen.some((o) => o.includes("FLEET_REPEATED_FAILURE"))).toBe(true);
+    expect(again.infers()).toBe(3);
+    expect(executed(again.outputsSeen)).toBe(0);
+    // A genuine fix — here a runtime upgrade — releases it: the call runs once more, and its failures count afresh.
+    const upgraded = rig(same, { root: r.root, runtime: "b".repeat(40) });
+    upgraded.world.eventsDigest = hex32(78);
+    await upgraded.mind.turn("upgraded");
+    expect(executed(upgraded.outputsSeen)).toBe(1);
+    // Restarted again on that runtime with nothing changed: zero executions.
+    const after = rig(same, { root: r.root, runtime: "b".repeat(40) });
+    after.world.eventsDigest = hex32(79);
+    await after.mind.turn("restart, nothing changed");
+    expect(executed(after.outputsSeen)).toBe(0);
+    expect(after.outputsSeen.some((o) => o.includes("FLEET_DUPLICATE_FAILED_ACTION") || o.includes("FLEET_REPEATED_FAILURE"))).toBe(true);
   });
 
   it("1o. a delivery that went through keeps its method as a procedure; the next owed order's packet points to it", async () => {

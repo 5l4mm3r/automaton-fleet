@@ -85,12 +85,21 @@ database is restored or changed by either step.
   The agent no longer has to discover what was purchased.
 - **Refusals remembered across wakes and restarts.** The loop guard keeps failed calls in the agent's state directory
   (`loop-guard-failures.json`: 200 entries, 24 h, 0600). The packet names every call already tried 3+ times without success,
-  before the model spends a step on it. After a restart an identical call may run once more, since a restart can follow a
-  fix. A call with three executed failures is refused outright. A turn of only repeats ends after 3 steps, and a founder that
-  makes no progress waits for a relevant change (no inference meanwhile).
+  before the model spends a step on it. Each record holds a fingerprint of what the call depends on: the workspace files it
+  names (size and modification time, or absent), the runtime commit, the agent's effective capabilities, its dependencies'
+  statuses and the office renderer. A genuine fix (the file created or corrected, a capability connected, a dependency
+  answered, a runtime upgrade) releases the record: the call runs again and its failures count afresh. A restart alone
+  changes none of these, so it neither erases the history nor grants a retry. A call with three executed failures and an
+  unchanged fingerprint is refused outright. A failing build that rewrites its own output is still a repeat: only a change
+  between attempts counts. A turn of only repeats ends after 3 steps, and a founder that makes no progress waits for a
+  relevant change (no inference meanwhile).
 - **Procedures from what worked.** When `wallet deliver` succeeds, the runtime writes the method to `procedures/<kind>.md` in
   the agent's workspace (for example `deliver-pdf.md`): the successful build commands, copies of the scripts they ran (under
-  `procedures/scripts/`), the inspection and review steps, and the delivery call. The agent may edit, improve or delete it.
+  `procedures/scripts/`), the inspection and review steps, and the delivery call. It is a recipe, not a replay: the earlier
+  order's id (full and short), its review id, the item bought, buyer email addresses and phone numbers, and other record ids
+  become `<ORDER_ID>`, `<REVIEW_ID>`, `<ITEM>`, `<BUYER_EMAIL>`, `<PHONE>` and `<ID>`, in the procedure and in the copied
+  scripts. The file says to take each value from the new order and the agent's own new review, and never to re-send an
+  earlier delivery call. A buyer's name is not known to the runtime, so it is not replaced. The agent may edit, improve or delete it.
   Each rewrite first keeps the previous version in `procedures/.history/` and carries the agent's own `## Notes` forward. While
   a delivery is owed, the packet lists the saved procedures. Links planted in the workspace cannot redirect any of this (every
   path is resolved inside the workspace; writes refuse links).

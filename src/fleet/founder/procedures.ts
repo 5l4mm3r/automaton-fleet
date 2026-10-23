@@ -56,13 +56,41 @@ function scriptsNamed(command: string, workspace: string): string[] {
   return [...new Set(out)];
 }
 
+const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Review 2026-10-23 (a procedure is a reusable recipe, never a replay): the values of the order it came from — its id, the
+ * review id, the item bought, the buyer's address or phone, any other record id — become named parameters.
+ */
+export function parameterize(text: string, values: Record<string, string | undefined>): string {
+  let t = text;
+  for (const [name, v] of Object.entries(values).sort((a, b) => (b[1]?.length ?? 0) - (a[1]?.length ?? 0))) {
+    if (!v || v.trim().length < 4) continue;
+    t = t.replace(new RegExp(esc(v.trim()), "gi"), `<${name}>`);
+    if (name === "ORDER_ID" && /^[0-9a-f]{8}-/i.test(v)) t = t.replace(new RegExp(esc(v.slice(0, 8)), "gi"), "<ORDER_ID>");   // the short form
+  }
+  return t.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "<BUYER_EMAIL>")
+    .replace(/\+[1-9]\d{7,14}\b/g, "<PHONE>")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "<ID>")
+    .replace(/\b[0-9A-HJKMNP-TV-Z]{26}\b/g, "<ID>");
+}
+
+const PARAMETERS = [
+  "## Parameters (values of the earlier order, removed — never replay them)",
+  "",
+  "- <ORDER_ID>: the NEW order's id (wallet orders); <ITEM>: what that order bought; <BUYER_EMAIL> / <PHONE>: that buyer's, from its order record;",
+  "  <REVIEW_ID>: the id of YOUR passing review of the NEW files; <ID>: another record id of the earlier order.",
+  "- Build the new files from that order's own requirements, inspect and review them, then deliver. Never re-send an earlier delivery call.",
+];
+
 /**
  * Keep the method of a successful delivery. `calls` are this turn's (and the carried turn's) calls in order; `deliver` is
  * the successful wallet deliver. Returns the procedure's workspace path, or null when nothing worth keeping was found.
  */
-export function recordProcedure(workspaceDir: string, calls: ProcedureCall[], deliver: ToolCall, now = new Date()): string | null {
+export function recordProcedure(workspaceDir: string, calls: ProcedureCall[], deliver: ToolCall, now = new Date(), specifics: { item?: string } = {}): string | null {
   const workspace = fs.realpathSync(workspaceDir);
   const d = argsOf(deliver);
+  const values = { ORDER_ID: typeof d.orderId === "string" ? d.orderId : undefined, REVIEW_ID: typeof d.reviewId === "string" ? d.reviewId : undefined, ITEM: specifics.item };
+  const P = (t: string) => parameterize(t, values);
   const paths = Array.isArray(d.paths) ? d.paths.filter((p): p is string => typeof p === "string").slice(0, 20) : [];
   if (!paths.length) return null;
   const ok = calls.filter((c) => c.ok);
@@ -81,33 +109,35 @@ export function recordProcedure(workspaceDir: string, calls: ProcedureCall[], de
     if (!fs.existsSync(src) || fs.lstatSync(src).isSymbolicLink() || !inside(workspace, src) || !fs.statSync(src).isFile() || fs.statSync(src).size > PROCEDURE_SCRIPT_MAX) continue;
     const dest = path.join(dir, "scripts", path.basename(rel));
     if (path.resolve(dest) === src) continue;
-    try { writeNoFollow(dest, fs.readFileSync(src)); } catch { continue; }
+    try { writeNoFollow(dest, P(fs.readFileSync(src, "utf8"))); } catch { continue; }
     kept.push(path.relative(workspace, dest));
   }
 
   let prev = "";
   try { if (!fs.lstatSync(file).isSymbolicLink()) prev = fs.readFileSync(file, "utf8"); else return null; } catch { /* first time */ }
   const times = (Number(/worked (\d+) time/.exec(prev)?.[1] ?? 0) || 0) + 1;
-  const notes = prev.includes(NOTES) ? prev.slice(prev.indexOf(NOTES) + NOTES.length).trim() : "";
+  const notes = prev.includes(NOTES) ? P(prev.slice(prev.indexOf(NOTES) + NOTES.length).trim()) : "";
   try {
     if (prev) writeNoFollow(path.join(dir, ".history", `${kind}.${now.toISOString().replace(/[:.]/g, "-")}.md`), prev);
   } catch { return null; }
 
   const body = [
-    `# Procedure: ${kind} (worked ${times} time${times > 1 ? "s" : ""}; last ${now.toISOString().slice(0, 16)}Z, order ${String(d.orderId ?? "?").slice(0, 36)})`,
+    `# Procedure: ${kind} (worked ${times} time${times > 1 ? "s" : ""}; last ${now.toISOString().slice(0, 16)}Z)`,
     "",
-    "What produced a delivery that passed its review — start the next similar task from here, and adapt it to that order's requirements.",
+    "A recipe from a delivery that passed its review — start the next similar task from here, and adapt it to that order's requirements.",
+    "",
+    ...PARAMETERS,
     "",
     "## Build",
-    ...(execs.length ? execs.map((e) => `- exec: \`${oneLine(e, 400)}\``) : ["- (no exec command recorded: the files were written directly)"]),
+    ...(execs.length ? execs.map((e) => `- exec: \`${P(oneLine(e, 400))}\``) : ["- (no exec command recorded: the files were written directly)"]),
     ...(kept.length ? [`- scripts kept: ${kept.join(", ")} (copies; run or adapt them)`] : []),
     "",
     "## Inspect and review",
-    ...(checks.length ? checks.map((c) => `- deliverable ${String(c.op ?? "?")}${Array.isArray(c.paths) ? ` paths=${JSON.stringify(c.paths).slice(0, 200)}` : ""}`
+    ...(checks.length ? checks.map((c) => `- deliverable ${String(c.op ?? "?")}${Array.isArray(c.paths) ? ` paths=${P(JSON.stringify(c.paths).slice(0, 200))}` : ""}`
       + `${Array.isArray(c.criteria) ? ` (${c.criteria.length} criteria${c.verdict ? `, verdict ${String(c.verdict)}` : ""})` : ""}`) : ["- (none recorded in this turn)"]),
     "",
     "## Deliver",
-    `- wallet deliver {orderId, paths: ${JSON.stringify(paths).slice(0, 200)}, reviewId}`,
+    `- wallet deliver {orderId: <ORDER_ID>, paths: ${P(JSON.stringify(paths).slice(0, 200))} (the NEW files), reviewId: <REVIEW_ID>}`,
     "",
     NOTES,
     ...(notes ? ["", notes] : []),

@@ -717,6 +717,9 @@ export class FounderMind {
     this.routing.routedTurns++;
     // T0: the economic position is exact software output, read once per turn — never reasoned about.
     const { economics, view, capabilities, deps, signals } = await this.wakeSignals(status);
+    // Review 2026-10-23: what a remembered refusal depends on beyond its files — a runtime upgrade, a capability or
+    // dependency change, the office renderer becoming available releases it (a restart alone does not).
+    R.loopGuard?.setContext([this.o.runtimeCommit ?? "", capabilities?.sig ?? "", ...(deps ?? []).map((r) => `${r.requestId}:${r.status}`).sort(), officeState()].join("|"));
     this.o.toolbox.noteEconomics(economics);
     const prev = this.continuity();
     // 2026-10-19: the buyers' open requests — in every packet until resolved; the toolbox refuses a sleep while one is unanswered.
@@ -1010,7 +1013,8 @@ export class FounderMind {
         if (W && out.ok && call.name === "wallet" && call.arguments?.op === "deliver") {
           try {
             const earlier = (carried?.calls ?? []).flatMap((x) => { try { return [{ call: { id: "carried", name: x.name, arguments: JSON.parse(x.args) as Record<string, unknown> }, ok: x.ok }]; } catch { return []; } });
-            const saved = recordProcedure(R.workspaceDir, [...earlier, ...records.map((x) => ({ call: x.call, ok: x.ok }))], call);
+            const item = (obligations ?? []).find((o) => o.id === call.arguments?.orderId)?.bought?.item;
+            const saved = recordProcedure(R.workspaceDir, [...earlier, ...records.map((x) => ({ call: x.call, ok: x.ok }))], call, new Date(), { item });
             if (saved) out = { ...out, output: `${out.output}\n(The method that produced this delivery was kept as ${saved} — yours to edit or improve; earlier versions in procedures/.history/.)` };
           } catch { /* the delivery stands; only the record of its method is missing */ }
         }

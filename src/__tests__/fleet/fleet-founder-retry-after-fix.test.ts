@@ -99,4 +99,63 @@ describe("a retry after the missing condition was fixed (measured attempt, 2026-
     expect(fixed.refused).toBe("FLEET_BAD_REQUEST");                 // ran (the stub always fails), not blocked
     expect(publishes).toHaveLength(4);
   });
+
+  // Review 2026-10-23: a genuine fix must permit recovery; a restart alone must not.
+  describe("a refusal record depends on what the call depends on", () => {
+    const dirs = () => { const root = fs.mkdtempSync(path.join(os.tmpdir(), "lg-")); const w = path.join(root, "w"), s = path.join(root, "s");
+      fs.mkdirSync(w); fs.mkdirSync(s); return { w, s }; };
+    const fail = (g: LoopGuard, call: ToolCall, code = "FLEET_NOT_FOUND") => { expect(g.before(call)).toBeNull(); g.after(call, { name: call.name, ok: false, refused: code, output: `NOT DONE ${code}` }); g.noteContextChange(); };
+    const failThrice = (g: LoopGuard, call: ToolCall, code?: string) => { for (let i = 0; i < 3; i++) fail(g, call, code); };
+
+    it("three failures lock the call — across a restart too — until a file it names changes; then it runs again", () => {
+      const { w, s } = dirs();
+      const read = c("read_file", { path: "order/notes.txt" });
+      const g = new LoopGuard({ stateDir: s, workspaceDir: w });
+      failThrice(g, read);
+      expect(g.before(read)?.refused).toBe("FLEET_REPEATED_FAILURE");
+      const restarted = new LoopGuard({ stateDir: s, workspaceDir: w });          // a restart alone: still refused, still named
+      expect(restarted.before(read)?.refused).toBe("FLEET_REPEATED_FAILURE");
+      expect(restarted.blocked().map((b) => b.label)).toEqual(["read_file path=order/notes.txt"]);
+      fs.mkdirSync(path.join(w, "order")); fs.writeFileSync(path.join(w, "order", "notes.txt"), "fixed");   // the genuine fix
+      expect(restarted.blocked()).toEqual([]);                                     // no longer reported as blocked
+      expect(restarted.before(read)).toBeNull();                                   // it runs
+      restarted.after(read, { name: "read_file", ok: false, refused: "FLEET_NOT_FOUND", output: "still failing" });
+      restarted.noteContextChange();
+      expect(restarted.before(read)).toBeNull();                                   // attempts counted afresh after the fix (1 of 3)
+    });
+
+    it("a capability or runtime change releases it; a restart with nothing changed gives no free retry", () => {
+      const { w, s } = dirs();
+      const search = c("web_search", { query: "landlord gas safety", purpose: "research" });
+      const g = new LoopGuard({ stateDir: s, workspaceDir: w });
+      g.setContext("commit-a|caps-1|office:ready");
+      failThrice(g, search, "FLEET_CAPABILITY_NOT_CONFIGURED");
+      const same = new LoopGuard({ stateDir: s, workspaceDir: w }); same.setContext("commit-a|caps-1|office:ready");
+      expect(same.before(search)?.refused).toBe("FLEET_REPEATED_FAILURE");
+      const connected = new LoopGuard({ stateDir: s, workspaceDir: w }); connected.setContext("commit-a|caps-2|office:ready");   // a provider connected
+      expect(connected.before(search)).toBeNull();
+      const upgraded = new LoopGuard({ stateDir: s, workspaceDir: w }); upgraded.setContext("commit-b|caps-1|office:ready");     // a runtime fix deployed
+      expect(upgraded.before(search)).toBeNull();
+      // One failure, then a restart with nothing changed: the identical call is a duplicate, not a fresh attempt.
+      const once = c("read_file", { path: "missing.txt" });
+      const g2 = new LoopGuard({ stateDir: s, workspaceDir: w }); g2.setContext("commit-a|caps-1|office:ready");
+      fail(g2, once);
+      const r2 = new LoopGuard({ stateDir: s, workspaceDir: w }); r2.setContext("commit-a|caps-1|office:ready");
+      expect(r2.before(once)?.refused).toBe("FLEET_DUPLICATE_FAILED_ACTION");
+    });
+
+    it("a failing build that rewrites its own output file is still a repeat (only a change between attempts counts)", () => {
+      const { w, s } = dirs();
+      const build = c("exec", { command: "python3 make_pdf.py --out checklist.pdf" });
+      const g = new LoopGuard({ stateDir: s, workspaceDir: w });
+      fs.writeFileSync(path.join(w, "make_pdf.py"), "raise SystemExit(1)");
+      expect(g.before(build)).toBeNull();
+      fs.writeFileSync(path.join(w, "checklist.pdf"), "partial");                  // the failing run's own partial output
+      g.after(build, { name: "exec", ok: false, refused: "FLEET_EXEC_FAILED", output: "exit 1" });
+      expect(g.before(build)?.refused).toBe("FLEET_DUPLICATE_FAILED_ACTION");
+      fs.writeFileSync(path.join(w, "make_pdf.py"), "print('fixed')\n");           // the script is fixed
+      expect(g.before(build)).toBeNull();
+    });
+  });
 });
+

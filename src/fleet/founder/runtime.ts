@@ -407,7 +407,7 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
   // question-scoped escalation, action linkage) is used only while FleetController reports routing active for this
   // founder — until then the mind runs its legacy turn with its existing history, exactly as before.
   const memoryDir = path.join(stateNsDir, "memory");
-  const loopGuard = new LoopGuard({ stateDir: stateNsDir });   // failed calls remembered across restarts (bounded, 24 h)
+  const loopGuard = new LoopGuard({ stateDir: stateNsDir, workspaceDir });   // failed calls remembered across restarts (bounded, 24 h)
   const mind =
     ctx.env.FLEET_FOUNDER_AGENT_LOOP === "controller"
       ? new FounderMind({
