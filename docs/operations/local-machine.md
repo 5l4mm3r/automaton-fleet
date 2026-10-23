@@ -78,6 +78,23 @@ database is restored or changed by either step.
   records each local call's tokens and latency; **the local-compute policy is "unpriced" until the owner chooses one** (no
   hidden per-token tax or subsidy is invented).
 
+## What the agent's workspace carries between tasks (review 2026-10-23)
+
+- **The order's requirement in the first packet.** An owed order states what was bought: the order record's item text,
+  fulfilment type and amount, plus the offer's promised deliverables, quoted as data. The wake brief's objective names the item.
+  The agent no longer has to discover what was purchased.
+- **Refusals remembered across wakes and restarts.** The loop guard keeps failed calls in the agent's state directory
+  (`loop-guard-failures.json`: 200 entries, 24 h, 0600). The packet names every call already tried 3+ times without success,
+  before the model spends a step on it. After a restart an identical call may run once more, since a restart can follow a
+  fix. A call with three executed failures is refused outright. A turn of only repeats ends after 3 steps, and a founder that
+  makes no progress waits for a relevant change (no inference meanwhile).
+- **Procedures from what worked.** When `wallet deliver` succeeds, the runtime writes the method to `procedures/<kind>.md` in
+  the agent's workspace (for example `deliver-pdf.md`): the successful build commands, copies of the scripts they ran (under
+  `procedures/scripts/`), the inspection and review steps, and the delivery call. The agent may edit, improve or delete it.
+  Each rewrite first keeps the previous version in `procedures/.history/` and carries the agent's own `## Notes` forward. While
+  a delivery is owed, the packet lists the saved procedures. Links planted in the workspace cannot redirect any of this (every
+  path is resolved inside the workspace; writes refuse links).
+
 ## The first GPU demonstration (next milestone: competent fulfilment)
 
 On the RTX 5080 desktop, after the install above. Readiness first:
@@ -101,7 +118,9 @@ python3 -I scripts/fleet-local-metrics.py $HOME/local-demo/s1-order-and-correcti
 The metrics script reads only the captured evidence. It reports completion (delivered or not, minutes to first delivery,
 still owed), malformed calls, repetition (duplicates blocked, turns ended repeating), step latency (median / p90 / max,
 provider errors) and recovery (stops, continued turns). Record GPU memory and power with `nvidia-smi` during the run. Pass
-means the order was delivered after a passing review, with no turn ended for repetition. Packaging and venture autonomy come
+means the order was delivered after a passing review, with no turn ended for repetition, and a `procedures/deliver-pdf.md`
+was written. After a pass: the same workflow with one buyer correction, then one restart mid-task (the procedure and the
+remembered refusals must carry over). Packaging and venture autonomy come
 after this passes.
 
 ## Containment on the VPS (23 October 2026, 14:26Z)

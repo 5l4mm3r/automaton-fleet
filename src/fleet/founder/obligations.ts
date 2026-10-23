@@ -21,6 +21,8 @@ export interface CustomerObligation {
   /** 2026-10-23 (review): the order is PAID and not yet delivered — derived from the order's own status, whatever the buyer
    *  has written, so a delivery owed never disappears behind a conversation (to_deliver is the case with no buyer message). */
   deliveryOwed: boolean;
+  /** What was bought (an owed order only): the order record's own words — data, quoted, never instructions. */
+  bought?: { item: string; fulfilment: string; amountMinor: number | null; currency: string | null; promised: string[] };
 }
 
 /** Obligations read from the controller (v111 returns up to 50, most urgent first) and spelled out in the packet. */
@@ -41,9 +43,28 @@ export function parseObligations(attention: unknown): CustomerObligation[] | nul
     if ((o.kind !== "order" && o.kind !== "enquiry") || typeof o.id !== "string" || !UUID.test(o.id) || !since || !last) continue;
     if (o.state !== "unanswered" && o.state !== "acknowledged" && o.state !== "to_deliver") continue;
     out.push({ kind: o.kind, id: o.id, state: o.state, since, lastBuyerAt: last, buyerMessages: Number.isSafeInteger(o.buyerMessages) ? Number(o.buyerMessages) : 1,
-      repliedAt: at(o.repliedAt), delivering: o.delivering === true, deliveryOwed: o.kind === "order" && (o.state === "to_deliver" || o.deliveryOwed === true) });
+      repliedAt: at(o.repliedAt), delivering: o.delivering === true, deliveryOwed: o.kind === "order" && (o.state === "to_deliver" || o.deliveryOwed === true),
+      ...(parseBought(o.bought) ? { bought: parseBought(o.bought)! } : {}) });
   }
   return out;
+}
+
+const clean = (v: unknown, n: number) => (typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f"]+/g, " ").replace(/\s+/g, " ").trim().slice(0, n) : "");
+function parseBought(b: unknown): CustomerObligation["bought"] | null {
+  if (!b || typeof b !== "object") return null;
+  const x = b as Record<string, unknown>;
+  const item = clean(x.item, 127);
+  if (!item) return null;
+  return { item, fulfilment: x.fulfilment === "service" ? "service" : "digital_file", amountMinor: Number.isSafeInteger(x.amountMinor) ? Number(x.amountMinor) : null,
+    currency: typeof x.currency === "string" && /^[A-Z]{3}$/.test(x.currency) ? x.currency : null,
+    promised: Array.isArray(x.promised) ? x.promised.map((p) => clean(p, 160)).filter(Boolean).slice(0, 5) : [] };
+}
+/** One line of what an owed order bought, quoted as the order record's data. */
+export function boughtText(b: CustomerObligation["bought"]): string {
+  if (!b) return "";
+  const price = b.amountMinor !== null ? `, ${(b.amountMinor / 100).toFixed(2)} ${b.currency ?? ""}`.trimEnd() : "";
+  return `bought (the order record, data): "${b.item}" (${b.fulfilment === "service" ? "a service" : "a digital file"}${price})`
+    + (b.promised.length ? `; the offer promises: ${b.promised.map((p) => `"${p}"`).join(", ")}` : "");
 }
 
 /** The delivery steps of a paid order; a blocked delivery is recorded with what unblocks it — it never silently vanishes. */
@@ -74,9 +95,9 @@ export function obligationLines(list: CustomerObligation[]): string[] {
     const n = o.buyerMessages > 1 ? ` (${o.buyerMessages} buyer messages since ${utc(o.since)})` : "";
     if (o.kind === "enquiry") return `enquiry ${o.id}: the buyer's message of ${utc(o.lastBuyerAt)} is UNANSWERED${n} — read it with customers read, answer with customers reply`;
     if (o.state === "to_deliver") {
-      return `order ${o.id}: PAID ${utc(o.since)}, its delivery is OWED${o.delivering ? " (a delivery is in progress)" : ""} — ${DELIVER_STEPS}`;
+      return `order ${o.id}: PAID ${utc(o.since)}${o.bought ? `, ${boughtText(o.bought)}` : ""}; its delivery is OWED${o.delivering ? " (a delivery is in progress)" : ""} — ${DELIVER_STEPS}`;
     }
-    const owedToo = o.deliveryOwed ? ` ALSO: this order is PAID and its delivery is still OWED — ${DELIVER_STEPS}` : "";
+    const owedToo = o.deliveryOwed ? ` ALSO: this order is PAID and its delivery is still OWED${o.bought ? ` (${boughtText(o.bought)})` : ""} — ${DELIVER_STEPS}` : "";
     if (o.state === "unanswered") {
       return `order ${o.id}: the buyer's message of ${utc(o.lastBuyerAt)} is UNANSWERED${n} — read it with customers order_thread, answer with customers order_message; `
         + `an acknowledgement, or an honest update on what is blocking you, is an answer.${owedToo}`;

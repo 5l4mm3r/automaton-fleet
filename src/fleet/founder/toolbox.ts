@@ -1147,7 +1147,7 @@ export class FounderToolbox {
     const g = this.o.loopGuard;
     if (!g) return this.run(call);
     const early = g.before(call);
-    if (early) return early;
+    if (early) { if (!early.ok) g.noteBlocked(call); return early; }
     const out = await this.run(call);
     g.after(call, out, out.ok && !isReadOnlyCall(call));
     return out;

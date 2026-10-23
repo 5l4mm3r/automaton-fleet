@@ -269,7 +269,7 @@ export interface WakeBriefInputs {
   goals: Array<{ id: string; title: string; blockedBy?: string; awaiting?: string }>;
   carried: Carry | null;
   previousOutcome: string | null;
-  obligations: Array<{ kind: string; id: string; state: string; deliveryOwed?: boolean }>;
+  obligations: Array<{ kind: string; id: string; state: string; deliveryOwed?: boolean; bought?: { item: string } }>;
   economics: Record<string, unknown>;
 }
 export const WAKE_BRIEF_MAX = 900;
@@ -288,7 +288,7 @@ export function wakeBrief(i: WakeBriefInputs): string {
   // separately and after it — never in the objective's place while a delivery is owed.
   const owedFirst = i.obligations.filter((o) => o.state === "to_deliver" || o.deliveryOwed);
   if (owedFirst.length) {
-    lines.push(`objective: DELIVER the paid order${owedFirst.length > 1 ? "s" : ""} ${owedFirst.slice(0, 3).map((o) => o.id.slice(0, 8)).join(", ")} (owed to a customer: before any research, new venture or offer work)`);
+    lines.push(`objective: DELIVER the paid order${owedFirst.length > 1 ? "s" : ""} ${owedFirst.slice(0, 3).map((o) => `${o.id.slice(0, 8)}${o.bought ? ` ("${cut(o.bought.item, 90)}")` : ""}`).join(", ")} (owed to a customer: before any research, new venture or offer work)`);
     lines.push(goalText ? `your own goal, after that: ${goalText}` : "your own goal: none open");
   } else lines.push(goalText ? `objective: ${goalText}` : "objective: no open goal — assess what is worth doing (or sleep with a wake condition if nothing is)");
   if (i.carried) {

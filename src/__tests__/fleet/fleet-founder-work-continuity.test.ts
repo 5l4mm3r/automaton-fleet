@@ -79,7 +79,7 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
       return { content: s.content ?? "", toolCalls: s.calls, usage: { inputTokens: 1, outputTokens: 1 }, chargedCents: 1, requestId: `r${turn}-${step}` };
     },
   };
-  const loopGuard = new LoopGuard();
+  const loopGuard = new LoopGuard({ stateDir: d.s });
   const toolbox = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: d.w, memoryDir: d.m, loopGuard, selfGovernance: true, ports: {
     ledger: async () => ({}), ownerRequests: async () => ({ ok: true, requests: world.requests }),
     economy: async (op: string, args?: Record<string, unknown>) => {
@@ -268,6 +268,55 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     await r.mind.turn("hb 2");
     expect(r.packets[1]).toContain("only repeated actions already refused");
     expect(r.packets[1]).toContain("paths are relative to your workspace");
+  });
+
+  it("1n. a repeated refusal is remembered across wakes and a restart: no fresh three retries each wake — the founder waits for a change", async () => {
+    const same = () => ({ calls: [c("write_file", { path: "/etc/checklist.txt", content: "x" })] });
+    const r = rig(same);
+    for (let i = 0; i < 6; i++) await r.mind.turn(`hb ${i}`);
+    const first = r.infers();
+    expect(first).toBeLessThanOrEqual(8);                       // the cut-off turn (4) + its one assessment turn; then it waits
+    const again = rig(same, { root: r.root });                   // a restart: a new process, the same state on disk
+    for (let i = 0; i < 4; i++) await again.mind.turn(`after restart ${i}`);
+    expect(again.infers()).toBe(0);                              // still waiting: nothing changed
+    again.world.eventsDigest = hex32(77);                        // something relevant changes: it wakes once
+    await again.mind.turn("changed");
+    // The packet names the remembered call before any step. A restart may follow a fix, so the identical call may run ONCE
+    // more; repeated again unchanged it is not executed, and three such steps end the turn — no fresh retry series.
+    expect(again.packets[0]).toContain("Already tried 3+ times without success — do not repeat these unchanged");
+    expect(again.packets[0]).toContain("write_file path=/etc/checklist.txt");
+    expect(again.infers()).toBe(4);
+    const executed = (seen: string[]) => new Set(seen.filter((o) => !o.includes("NOT RE-RUN"))).size;   // each step re-sends earlier results
+    expect(executed(again.outputsSeen)).toBe(1);
+    // A third executed failure (across restarts) makes it refused outright: the next restart and change run it zero times.
+    const third = rig(same, { root: r.root });
+    third.world.eventsDigest = hex32(78);
+    await third.mind.turn("changed again");
+    const fourth = rig(same, { root: r.root });
+    fourth.world.eventsDigest = hex32(79);
+    await fourth.mind.turn("changed once more");
+    expect(executed(third.outputsSeen)).toBe(1);
+    expect(executed(fourth.outputsSeen)).toBe(0);
+    expect(fourth.outputsSeen.some((o) => o.includes("FLEET_REPEATED_FAILURE"))).toBe(true);
+  });
+
+  it("1o. a delivery that went through keeps its method as a procedure; the next owed order's packet points to it", async () => {
+    const ORDER = "6ac71280-60d2-41d1-b2a4-38f21caa4b07";
+    const r = rig((t, s) => t === 1
+      ? [{ calls: [c("write_file", { path: "/workspace/order/make.py", content: "print(1)" })] },
+         { calls: [c("wallet", { op: "deliver", orderId: ORDER, paths: ["order/checklist.pdf"], reviewId: "r1" })] },
+         { calls: [c("sleep", { reason: "delivered" })] }][s - 1] ?? { calls: [c("sleep", { reason: "done" })] }
+      : { calls: [c("sleep", { reason: "next" })] });
+    await r.mind.turn("hb");
+    expect(fs.existsSync(path.join(r.d.w, "procedures", "deliver-pdf.md"))).toBe(true);
+    expect(fs.readFileSync(path.join(r.d.w, "procedures", "scripts", "make.py"), "utf8")).toBe("print(1)");
+    expect(r.outputsSeen.join("\n")).toContain("was kept as procedures/deliver-pdf.md");
+    const at = new Date().toISOString();
+    r.world.obligations = [{ kind: "order", id: "7bc71280-60d2-41d1-b2a4-38f21caa4b07", state: "to_deliver", since: at, lastBuyerAt: at, buyerMessages: 0 }];
+    r.world.eventsDigest = hex32(91);
+    await r.mind.turn("hb 2");
+    expect(r.packets.at(-1)).toContain("Your saved procedures (methods that worked before");
+    expect(r.packets.at(-1)).toContain("procedures/deliver-pdf.md");
   });
 
   it("1g. a stop (SIGTERM: deploy, restart) ends the turn between steps with its working record saved", async () => {

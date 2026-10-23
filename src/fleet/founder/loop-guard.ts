@@ -11,6 +11,8 @@
  */
 
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import type { ToolCall } from "../cognition/types.js";
 import type { ToolOutcome } from "./toolbox.js";
 
@@ -38,7 +40,18 @@ export function callKey(call: ToolCall): string {
   return `${call.name}:${crypto.createHash("sha256").update(JSON.stringify(canonical(call.arguments ?? {}))).digest("hex")}`;
 }
 
-interface Seen { ok: boolean; refused?: string; output: string; stateVersion: number; attempts: number; at: number }
+interface Seen { ok: boolean; refused?: string; output: string; stateVersion: number; attempts: number; at: number; label?: string; repeats?: number }
+
+/** Review 2026-10-23: failed calls are remembered across wakes AND restarts (the founder's own state dir), bounded. */
+export const FAILURES_FILE = "loop-guard-failures.json";
+export const FAILURES_KEPT = 200;
+export const FAILURES_TTL_MS = 24 * 3_600_000;
+/** A short, redacted label of a call for the packet: name + its first arguments, never long content. */
+export function callLabel(call: ToolCall): string {
+  const a = call.arguments ?? {};
+  const parts = Object.keys(a).filter((k) => k !== "content" && typeof a[k] !== "object").slice(0, 3).map((k) => `${k}=${String(a[k]).slice(0, 60)}`);
+  return `${call.name}${parts.length ? ` ${parts.join(" ")}` : ""}`;
+}
 
 export class LoopGuard {
   /** Bumped whenever the founder's persistent state changes (a successful mutating call). */
@@ -47,7 +60,38 @@ export class LoopGuard {
   private readonly fetched = new Map<string, { at: number; output: string }>();
   readonly stats = { duplicateFailuresBlocked: 0, refetchesAvoided: 0, readOnlyReused: 0 };
 
-  constructor(private readonly o: { fetchFreshMs?: number; transientRetries?: number; now?: () => number } = {}) {}
+  constructor(private readonly o: { fetchFreshMs?: number; transientRetries?: number; now?: () => number; stateDir?: string } = {}) {
+    // Remembered failures load with no state version of this process: an identical call is not "unchanged state" (a
+    // restart may follow a fix), but one that already failed MAX_FAILED_ATTEMPTS times stays refused until it is older
+    // than FAILURES_TTL_MS.
+    if (!o.stateDir) return;
+    try {
+      const rows = JSON.parse(fs.readFileSync(path.join(o.stateDir, FAILURES_FILE), "utf8")) as Array<{ key: string } & Seen>;
+      for (const r of Array.isArray(rows) ? rows : []) {
+        if (typeof r?.key !== "string" || this.now() - Number(r.at) > FAILURES_TTL_MS) continue;
+        this.seen.set(r.key, { ok: false, refused: typeof r.refused === "string" ? r.refused : undefined, output: String(r.output ?? "").slice(0, 300),
+          stateVersion: -1, attempts: Number.isSafeInteger(r.attempts) ? r.attempts : 1, at: Number(r.at), label: typeof r.label === "string" ? r.label : undefined,
+          repeats: Number.isSafeInteger(r.repeats) ? r.repeats : 0 });
+      }
+    } catch { /* none yet, or unreadable: start empty */ }
+  }
+
+  /** The calls tried MAX_FAILED_ATTEMPTS+ times without success (executed or repeated): for the packet, newest first. */
+  blocked(limit = 5): Array<{ label: string; refused: string; reason: string }> {
+    return [...this.seen.values()].filter((v) => !v.ok && v.attempts + (v.repeats ?? 0) >= MAX_FAILED_ATTEMPTS && v.label && !(v.refused && TRANSIENT.test(v.refused)))
+      .sort((a, b) => b.at - a.at).slice(0, limit).map((v) => ({ label: v.label!, refused: v.refused ?? "error", reason: v.output.replace(/\s+/g, " ").slice(0, 160) }));
+  }
+
+  private persist(): void {
+    if (!this.o.stateDir) return;
+    const rows = [...this.seen.entries()].filter(([, v]) => !v.ok).sort((a, b) => b[1].at - a[1].at).slice(0, FAILURES_KEPT)
+      .map(([key, v]) => ({ key, refused: v.refused, output: v.output.slice(0, 300), attempts: v.attempts, at: v.at, label: v.label, repeats: v.repeats }));
+    try {
+      const f = path.join(this.o.stateDir, FAILURES_FILE);
+      fs.writeFileSync(`${f}.tmp`, JSON.stringify(rows), { mode: 0o600 });
+      fs.renameSync(`${f}.tmp`, f);
+    } catch { /* best effort: the in-process guard still holds */ }
+  }
 
   private now(): number {
     return (this.o.now ?? Date.now)();
@@ -95,6 +139,15 @@ export class LoopGuard {
     return null;
   }
 
+  /** A repeat refused by before(): counted (and remembered) apart from executed failures — it names the call in the
+   *  packet; only executed failures reach FLEET_REPEATED_FAILURE, so one retry after a real change stays possible. */
+  noteBlocked(call: ToolCall): void {
+    const prev = this.seen.get(callKey(call));
+    if (!prev || prev.ok) return;
+    prev.repeats = (prev.repeats ?? 0) + 1; prev.at = this.now(); prev.label ??= callLabel(call);
+    this.persist();
+  }
+
   /** Record what happened. */
   after(call: ToolCall, out: ToolOutcome, changedState?: boolean): void {
     const key = callKey(call);
@@ -103,7 +156,9 @@ export class LoopGuard {
     // changes recorded on the controller (a capability check, a review, an offer edit). Without that, a retry after a
     // fixed precondition was refused as "nothing changed". The local-only list remains the fallback.
     if (changedState ?? (out.ok && MUTATING.has(call.name))) this.stateVersion++;
-    this.seen.set(key, { ok: out.ok, refused: out.refused, output: out.output.slice(0, 8_000), stateVersion: this.stateVersion, attempts: (prev && !prev.ok && !out.ok ? prev.attempts : 0) + 1, at: this.now() });
+    this.seen.set(key, { ok: out.ok, refused: out.refused, output: out.output.slice(0, 8_000), stateVersion: this.stateVersion, attempts: (prev && !prev.ok && !out.ok ? prev.attempts : 0) + 1, at: this.now(),
+      ...(!out.ok ? { label: callLabel(call), repeats: prev && !prev.ok ? prev.repeats ?? 0 : 0 } : {}) });
+    if (!out.ok || (prev && !prev.ok)) this.persist();
     if (call.name === "web_fetch" && out.ok && typeof call.arguments?.url === "string") this.fetched.set(call.arguments.url.trim(), { at: this.now(), output: out.output.slice(0, 3_000) });
   }
 }

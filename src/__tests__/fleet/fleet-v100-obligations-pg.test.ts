@@ -283,6 +283,8 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     expect(ob.slice(0, mine).every((x) => x.state === "unanswered" || x.state === "to_deliver")).toBe(true);
     expect((await R.econ(F, "customer.obligations", {})).obligations.some((x: any) => x.id === paid && x.state === "to_deliver")).toBe(true);
     expect(ob[mine].deliveryOwed).toBe(true);
+    // The first packet holds the requirement: what was bought, from the order record.
+    expect(ob[mine].bought).toMatchObject({ item: "Gas checklist PDF", fulfilment: "digital_file", amountMinor: 700 });
     // Review 2026-10-23: the buyer writes — the conversation state changes, the owed delivery does not disappear; an answer
     // (even one marked resolved) without a delivery leaves it owed.
     await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'buyer', 'Any news on my PDF?')`, [F.id, paid]);

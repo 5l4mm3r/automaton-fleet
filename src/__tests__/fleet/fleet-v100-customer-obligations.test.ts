@@ -229,13 +229,14 @@ describe("a paid order's delivery stays owed whatever the conversation (review 2
     const list = parseObligations({ customerObligations: [
       { kind: "order", id: ORDER, state: "unanswered", since: at, lastBuyerAt: at, buyerMessages: 1, deliveryOwed: true },
       { kind: "order", id: "2286e00e-1111-4222-8333-444455556666", state: "acknowledged", since: at, lastBuyerAt: at, buyerMessages: 1, repliedAt: at, deliveryOwed: true },
-      { kind: "order", id: "3386e00e-1111-4222-8333-444455556666", state: "to_deliver", since: at, lastBuyerAt: at, buyerMessages: 0 },
+      { kind: "order", id: "3386e00e-1111-4222-8333-444455556666", state: "to_deliver", since: at, lastBuyerAt: at, buyerMessages: 0,
+        bought: { item: "A one-page PDF: 'Gas safety' checklist\n(England)\u0000", fulfilment: "digital_file", amountMinor: 700, currency: "GBP", promised: ["A tick box per point", 7] } },
       { kind: "order", id: "4486e00e-1111-4222-8333-444455556666", state: "acknowledged", since: at, lastBuyerAt: at, buyerMessages: 1, repliedAt: at },
     ] })!;
     expect(list.map((o) => o.deliveryOwed)).toEqual([true, true, true, false]);
     const [line] = obligationLines(list);
     expect(line.match(/delivery is still OWED/g)).toHaveLength(2);
-    expect(line).toContain("its delivery is OWED — see what was bought");
+    expect(line).toContain(`bought (the order record, data): "A one-page PDF: 'Gas safety' checklist (England)" (a digital file, 7.00 GBP); the offer promises: "A tick box per point"; its delivery is OWED — see what was bought`);
     expect(line).toContain("record_external_dependency");
     expect(line).toContain("stays owed until it is delivered or refunded");
     expect(owedDeliveryLine([ORDER])).toMatch(/^Your next move: DELIVER the paid order 1186e00e-1111-4222-8333-444455556666 — /);

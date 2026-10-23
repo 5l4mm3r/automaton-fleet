@@ -43,6 +43,8 @@ import { escalateQuestion, priorDecision } from "./escalation.js";
 import { ASSESS_LINE, BOOTSTRAP_LINE, DECISIONS_FILE, HIBERNATE_LINE, hibernationRecheck, classifyWork, decisionLines, economicState, nextMoveLine, idleTask, loadDecisions, ownCapitalLine, parseSurvival, saleLine, stateLine,
   survivalLine, workKind, workLines, type Decision, type GoalView, type WorkKind } from "./decisions.js";
 import { PATH_RULE, readJournal, readJournalIndex } from "./toolbox.js";
+import { MAX_FAILED_ATTEMPTS } from "./loop-guard.js";
+import { procedureLine, recordProcedure } from "./procedures.js";
 import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineClass } from "./task-classifier.js";
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
 import { newestBuyerMessage, obligationLines, owedDeliveryLine, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
@@ -846,7 +848,13 @@ export class FounderMind {
     // listed — "since" was the END of that turn): events count from when the last turn's attention was read. A record from
     // before this field looks back 30 minutes from its end (an event shown twice is harmless; one never shown is not).
     const happened = bare ? null : eventsSinceLine(status.attention, prev?.eventsSeenAt ?? (prev?.at ? new Date(Date.parse(prev.at) - 30 * 60_000).toISOString() : null));
-    const essential = [...(!prev ? [BOOTSTRAP_LINE] : []), ...obligationLines(obligations ?? []), ...(sale ? [sale] : []), ...(happened ? [happened] : []), ...(move ? [move] : []), ...(!bare ? [stateLine(econ)] : [])];
+    // Review 2026-10-23: calls that failed repeatedly stay refused across wakes and restarts — named here, before the
+    // founder spends a step on them again.
+    const blockedCalls = R.loopGuard?.blocked() ?? [];
+    const blockedLine = blockedCalls.length ? `Already tried ${MAX_FAILED_ATTEMPTS}+ times without success — do not repeat these unchanged (change the approach or record the blocker): `
+      + blockedCalls.map((b) => `${b.label} → ${b.refused}: ${b.reason}`).join(" | ") : null;
+    const procLine = W && owedOrders.length ? procedureLine(R.workspaceDir) : null;
+    const essential = [...(!prev ? [BOOTSTRAP_LINE] : []), ...obligationLines(obligations ?? []), ...(procLine ? [procLine] : []), ...(blockedLine ? [blockedLine] : []), ...(sale ? [sale] : []), ...(happened ? [happened] : []), ...(move ? [move] : []), ...(!bare ? [stateLine(econ)] : [])];
     const extra = [...essential,
       ...(!bare && survival ? [survivalLine(survival)] : []), ...(own ? [own] : []), ...(brief ? [economyLine(brief)] : []),
       ...(!bare && (journal.length || jix?.lessons.length) ? [`Field journal: ${journal.length} entr${journal.length === 1 ? "y" : "ies"}${jix?.archived ? ` (+${jix.archived} archived)` : ""}`
@@ -997,6 +1005,15 @@ export class FounderMind {
           }
         }
         outcomes.push(out);
+        // Review 2026-10-23: a delivery that went through keeps its method (build, inspection, review, delivery) as an
+        // editable procedure in the founder's workspace, for the next similar task. Never fails the turn.
+        if (W && out.ok && call.name === "wallet" && call.arguments?.op === "deliver") {
+          try {
+            const earlier = (carried?.calls ?? []).flatMap((x) => { try { return [{ call: { id: "carried", name: x.name, arguments: JSON.parse(x.args) as Record<string, unknown> }, ok: x.ok }]; } catch { return []; } });
+            const saved = recordProcedure(R.workspaceDir, [...earlier, ...records.map((x) => ({ call: x.call, ok: x.ok }))], call);
+            if (saved) out = { ...out, output: `${out.output}\n(The method that produced this delivery was kept as ${saved} — yours to edit or improve; earlier versions in procedures/.history/.)` };
+          } catch { /* the delivery stands; only the record of its method is missing */ }
+        }
         if (W) {
           records.push({ call, ok: out.ok, ...(out.refused ? { refused: out.refused } : {}), output: out.output });
           progressMem!.note(call, out.ok, out.output);

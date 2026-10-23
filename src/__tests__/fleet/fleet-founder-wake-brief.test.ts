@@ -30,6 +30,9 @@ describe("the wake brief", () => {
   });
   it("a PAID order owed is the objective; the founder's own goal is shown separately, after it — also once the buyer has written", () => {
     const order = "6ac71280-60d2-41d1-b2a4-38f21caa4b07";
+    const withItem = wakeBrief({ reason: "Heartbeat 2", goals: [], carried: null, previousOutcome: null, economics: {},
+      obligations: [{ kind: "order", id: order, state: "to_deliver", bought: { item: "A one-page PDF: 'Gas safety: the landlord's annual 10-point checklist' (England)" } }] });
+    expect(withItem).toContain(`objective: DELIVER the paid order 6ac71280 ("A one-page PDF: 'Gas safety: the landlord's annual 10-point checklist' (England)")`);
     for (const ob of [{ kind: "order", id: order, state: "to_deliver" }, { kind: "order", id: order, state: "unanswered", deliveryOwed: true }, { kind: "order", id: order, state: "acknowledged", deliveryOwed: true }]) {
       const b = wakeBrief({ reason: "Heartbeat 2", goals: [{ id: "g1", title: "Execute find_opportunity: build MVP and launch" }], carried: null, previousOutcome: null,
         obligations: [ob], economics: { cash: 10000, survivalEquity: 10000 } });
