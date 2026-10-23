@@ -87,6 +87,17 @@ describe("founder toolbox (unit)", () => {
     expect(fs.readFileSync(path.join(root, "outside.txt"), "utf8")).toBe("secret-outside");
     expect(fs.existsSync(path.join(root, "pwn.txt"))).toBe(false);
     expect(await call("list_files", { path: "escape" })).toMatchObject({ ok: false, refused: "FLEET_PATH_OUTSIDE_WORKSPACE" });
+    // 2026-10-23: "/workspace/…" and the workspace's own absolute path name the workspace; the escape checks still apply
+    // to what follows, and a refusal says which form works.
+    expect(await call("write_file", { path: "/workspace/order/check.txt", content: "ok" })).toMatchObject({ ok: true });
+    expect(fs.readFileSync(path.join(ws, "order", "check.txt"), "utf8")).toBe("ok");
+    expect(await call("read_file", { path: path.join(fs.realpathSync(ws), "order", "check.txt") })).toMatchObject({ ok: true, output: "ok" });
+    expect(await call("list_files", { path: "/workspace" })).toMatchObject({ ok: true });
+    for (const p of ["/workspace/../outside.txt", "/workspace/escape/outside.txt", "/workspace/link.txt", "/workspacex/a", "/etc/passwd"]) {
+      const r = await call("read_file", { path: p });
+      expect(r, p).toMatchObject({ ok: false, refused: "FLEET_PATH_OUTSIDE_WORKSPACE" });
+      expect(r.output, p).toContain("paths are relative to your workspace");
+    }
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -507,6 +518,9 @@ describe.skipIf(!PG_BIN)("Phase F.2 founder cognition (schema v13, HTTP + Postgr
     gw = new PgAgentGateway({ connectionString: pgc.agentUrl });
     ledger = new PgLedgerAdmin({ connectionString: pgc.ownerUrl });
     genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
+    // v112: this cloud-era suite runs its scripted provider under the owner's explicit cloud_allowed profile (the local_only
+    // default and its refusals are proven in fleet-v112-local-inference-pg).
+    await genesis.inferenceProfileSet("cloud_allowed", "test fixture: cloud-era cognition gates", OWNER);
     service = new FleetService({
       admin: svcStore,
       agent: gw,

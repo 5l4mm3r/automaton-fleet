@@ -42,12 +42,12 @@ import type { LoopGuard } from "./loop-guard.js";
 import { escalateQuestion, priorDecision } from "./escalation.js";
 import { ASSESS_LINE, BOOTSTRAP_LINE, DECISIONS_FILE, HIBERNATE_LINE, hibernationRecheck, classifyWork, decisionLines, economicState, nextMoveLine, idleTask, loadDecisions, ownCapitalLine, parseSurvival, saleLine, stateLine,
   survivalLine, workKind, workLines, type Decision, type GoalView, type WorkKind } from "./decisions.js";
-import { readJournal, readJournalIndex } from "./toolbox.js";
+import { PATH_RULE, readJournal, readJournalIndex } from "./toolbox.js";
 import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineClass } from "./task-classifier.js";
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
-import { newestBuyerMessage, obligationLines, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
+import { newestBuyerMessage, obligationLines, owedDeliveryLine, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
 import { officeState } from "./exec-sandbox.js";
-import { CARRY_MAX_CHARS, PROGRESS_FILE, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
+import { CARRY_MAX_CHARS, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
 
 export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
@@ -813,7 +813,12 @@ export class FounderMind {
       : { digest: nowDigest, slim: (idlePrev?.slim ?? 0) + 1, after: Math.min(cap, idlePrev?.after ?? RENUDGE_FIRST), assessed: true, rests };
     const executableGoals = [...work.due, ...work.executable];
     const kindMove = kind === "hibernate" ? HIBERNATE_LINE : idleTask(kind, ledger, executableGoals);
+    // Review 2026-10-23 (local run S1b: the paid order was in every packet, yet the next-move line still said "no execution path,
+    // run an opportunity cycle" and the model researched instead): while a paid order's delivery is owed, that delivery is the
+    // next move — the opportunity / venture push waits until it is delivered or its blocker is recorded.
+    const owedOrders = (obligations ?? []).filter((o) => o.deliveryOwed);
     const move = bare ? null
+      : owedOrders.length ? owedDeliveryLine(owedOrders.map((o) => o.id))
       : challenge ? `${ASSESS_LINE}\n${kindMove}`
       : nudge ? (declared ? `${hibernationRecheck(prev?.outcome ?? "", prev?.wakeOn ?? null, prev?.reviewAt ?? null)}\n${kindMove}`
         : `${ASSESS_LINE} (You have now rested ${rests} time(s) in this state without declaring hibernation.)\n${kindMove}`)
@@ -907,6 +912,7 @@ export class FounderMind {
     let notRun: ToolCall[] = [];
     const progressMem = W ? new ProgressMemory(path.join(this.o.stateDir, PROGRESS_FILE)) : null;
     let stopCode: string | undefined;
+    let repeating = 0;
     for (let step = 0; step < maxSteps; step++) {
       // 2026-10-22: the process is stopping: end the turn between steps; its record is carried like a cut-off turn's.
       if (step > 0 && this.o.stopSignal?.aborted) {
@@ -1020,12 +1026,19 @@ export class FounderMind {
       if (slept && typeof slept.arguments?.wakeOn === "string" && slept.arguments.wakeOn.trim()) wakeOn = slept.arguments.wakeOn.trim();
       if (slept && typeof slept.arguments?.reviewAt === "string" && Number.isFinite(Date.parse(slept.arguments.reviewAt))) reviewAt = new Date(Date.parse(slept.arguments.reviewAt)).toISOString();
       if (r.toolCalls.length === 0 || slept) { finished = true; break; }
+      // Review 2026-10-23: bounded repetition — steps that only repeat already-refused actions end the turn.
+      repeating = outcomes.length && outcomes.every((o) => o.refused === "FLEET_DUPLICATE_FAILED_ACTION" || o.refused === "FLEET_REPEATED_FAILURE") ? repeating + 1 : 0;
+      if (repeating >= REPEATING_STEPS && step + 1 < maxSteps) {
+        stopCode = REPEATING_STOP;
+        this.logDecision({ turn: this.turns, routed: true, step, stopped: stopCode });
+        break;
+      }
     }
     // 2026-10-21 (launch check: seven turns each ended at the size budget after 5-7 steps, were taken as finished, lost their
     // working record and re-oriented from scratch): a size stop is cut off too — its record, plan and calls reach the next turn.
     const cutOff = !finished && (sizeStop || !!stopCode || result.steps >= maxSteps);
     const planText = outcome;   // what the founder itself wrote (the carried plan); the note below is the platform's
-    if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${stopCode ? `was stopped by a runtime restart after ${result.steps} steps` : sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
+    if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${stopCode === REPEATING_STOP ? `was ended after ${result.steps} steps that only repeated refused actions` : stopCode ? `was stopped by a runtime restart after ${result.steps} steps` : sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
     // 2026-10-18 (work continuity): a cut-off turn leaves its working record for the next turn (and a restart); a finished
     // working turn has consumed it. The progress memory survives restarts.
     if (W) {
@@ -1242,7 +1255,7 @@ export class FounderMind {
     } catch (err) {
       const code = err instanceof TaskClassificationError ? err.code : ((err as { code?: string }).code ?? "");
       const msg = err instanceof Error ? err.message : String(err);
-      out = /^FLEET_[A-Z_]+$/.test(msg) ? refuse(msg, "path must stay inside your workspace")
+      out = /^FLEET_[A-Z_]+$/.test(msg) ? refuse(msg, msg === "FLEET_PATH_OUTSIDE_WORKSPACE" ? PATH_RULE : "refused")
         : refuse(/^FLEET_[A-Z_]+$/.test(code) ? code : "FLEET_TOOL_ERROR", "that tier is not available for this request right now; do not retry it unchanged");
     }
     R.loopGuard?.after(call, out);

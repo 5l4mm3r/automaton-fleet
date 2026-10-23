@@ -282,6 +282,15 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     // Most urgent group (owed, no reply yet): only other owed requests — older first — may come before it.
     expect(ob.slice(0, mine).every((x) => x.state === "unanswered" || x.state === "to_deliver")).toBe(true);
     expect((await R.econ(F, "customer.obligations", {})).obligations.some((x: any) => x.id === paid && x.state === "to_deliver")).toBe(true);
+    expect(ob[mine].deliveryOwed).toBe(true);
+    // Review 2026-10-23: the buyer writes — the conversation state changes, the owed delivery does not disappear; an answer
+    // (even one marked resolved) without a delivery leaves it owed.
+    await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'buyer', 'Any news on my PDF?')`, [F.id, paid]);
+    expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ state: "unanswered", buyerMessages: 1, deliveryOwed: true });
+    await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'agent', 'Working on it today.')`, [F.id, paid]);
+    expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ state: "acknowledged", deliveryOwed: true });
+    await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body, resolves) VALUES ($1, $2, 'agent', 'Closing this thread.', true)`, [F.id, paid]);
+    expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ state: "to_deliver", deliveryOwed: true });
     await R.q(`INSERT INTO fleet.fleet_order_deliveries (order_id, agent_id, idempotency_key, subject, body, status, created_at, sent_at)
       VALUES ($1, $2, $3, 'Your PDF', 'Attached.', 'sent', now(), now())`, [paid, F.id, `d:${crypto.randomUUID()}`]);
     await R.q(`UPDATE fleet.fleet_customer_orders SET status = 'delivered', fulfilled_at = now(), fulfilment_evidence = '{"delivery":"sent"}' WHERE order_id = $1`, [paid]);

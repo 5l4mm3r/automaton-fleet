@@ -1,0 +1,12 @@
+[
+  {
+    "id": "g1",
+    "title": "Execute find_opportunity: build MVP and launch",
+    "rationale": "Selected \"digital course on AI tools and automation\". Expected: Revenue £3,000-5,000 in 45 days, profit £2,000-3,000 net",
+    "status": "complete",
+    "at": "2026-10-23T15:49:22.390Z",
+    "decision": "find_opportunity",
+    "outcome": "Digital course on AI tools and automation - MVP: course content, pricing, delivery, onboarding. Risk: £100,000 total capital at risk, 0 committed.",
+    "completedAt": "2026-10-23T15:50:23.900Z"
+  }
+]

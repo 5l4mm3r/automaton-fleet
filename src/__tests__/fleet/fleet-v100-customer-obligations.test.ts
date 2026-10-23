@@ -23,7 +23,7 @@ import { FounderToolbox } from "../../fleet/founder/toolbox.js";
 import { LoopGuard } from "../../fleet/founder/loop-guard.js";
 import { FOUNDER_MANIFEST_V2, manifestSha256 } from "../../fleet/capabilities.js";
 import { capabilityView } from "../../fleet/cognition/capability-signature.js";
-import { obligationLines, parseObligations, refusalReason } from "../../fleet/founder/obligations.js";
+import { obligationLines, owedDeliveryLine, parseObligations, refusalReason } from "../../fleet/founder/obligations.js";
 import { FOUNDER_TOOLS, type ToolCall } from "../../fleet/cognition/types.js";
 
 const CAPS = { ok: true, origin: "reseed_founder", manifestId: "founder-v2", manifestSha256: manifestSha256(FOUNDER_MANIFEST_V2),
@@ -220,5 +220,24 @@ describe("v100: a buyer's request is an obligation until it is resolved", () => 
     const wallet = FOUNDER_TOOLS.find((t) => t.name === "wallet")!.description;
     const deliver = wallet.slice(wallet.indexOf("op deliver:"), wallet.indexOf("op fulfil:"));
     expect(deliver).toMatch(/resendReason\? \(only to send a delivered order again — with after: the operationId of the order's latest delivery/);
+  });
+});
+
+describe("a paid order's delivery stays owed whatever the conversation (review 2026-10-23)", () => {
+  it("deliveryOwed is parsed for every order; the line says the delivery is still owed after the buyer wrote and after an answer", () => {
+    const at = "2026-10-23T15:46:10.000Z";
+    const list = parseObligations({ customerObligations: [
+      { kind: "order", id: ORDER, state: "unanswered", since: at, lastBuyerAt: at, buyerMessages: 1, deliveryOwed: true },
+      { kind: "order", id: "2286e00e-1111-4222-8333-444455556666", state: "acknowledged", since: at, lastBuyerAt: at, buyerMessages: 1, repliedAt: at, deliveryOwed: true },
+      { kind: "order", id: "3386e00e-1111-4222-8333-444455556666", state: "to_deliver", since: at, lastBuyerAt: at, buyerMessages: 0 },
+      { kind: "order", id: "4486e00e-1111-4222-8333-444455556666", state: "acknowledged", since: at, lastBuyerAt: at, buyerMessages: 1, repliedAt: at },
+    ] })!;
+    expect(list.map((o) => o.deliveryOwed)).toEqual([true, true, true, false]);
+    const [line] = obligationLines(list);
+    expect(line.match(/delivery is still OWED/g)).toHaveLength(2);
+    expect(line).toContain("its delivery is OWED — see what was bought");
+    expect(line).toContain("record_external_dependency");
+    expect(line).toContain("stays owed until it is delivered or refunded");
+    expect(owedDeliveryLine([ORDER])).toMatch(/^Your next move: DELIVER the paid order 1186e00e-1111-4222-8333-444455556666 — /);
   });
 });

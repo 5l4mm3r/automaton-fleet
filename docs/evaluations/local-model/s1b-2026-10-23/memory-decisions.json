@@ -1,0 +1,66 @@
+[
+  {
+    "key": "find_opportunity",
+    "purpose": "find_opportunity",
+    "objective": "Identify a viable digital product opportunity with proven demand and quick revenue potential",
+    "question": "What specific digital product or service can I create or sell within 30 days using £10,000 capital to achieve revenue in 45 days, starting with minimum viable product testing, and what is the minimum viable product that solves a specific buyer problem with low barrier to entry?",
+    "hypothesis": "I should create a digital course or e-book on a high-demand skill (AI tools, marketing automation, or productivity) targeting a specific pain point, using a low-cost platform like Gumroad or Gumroad, with pricing at £29-£49 for a single purchase",
+    "options": [],
+    "stop": {
+      "maxFetches": 1,
+      "when": "after"
+    },
+    "status": "decided",
+    "openedAt": "2026-10-23T15:47:36.029Z",
+    "research": [],
+    "outcome": {
+      "capitalAtRiskPence": 100000,
+      "downside": "One failed product with £10000 capital is acceptable risk; digital products have proven fast iteration and low barrier to entry",
+      "invalidatedBy": "market research showing strong demand for AI tools",
+      "committedPence": 0,
+      "selected": "digital course on AI tools and automation",
+      "ranking": [],
+      "rejected": [],
+      "rationale": "Digital products have established demand with proven economics. £29-£49 pricing is standard. Market is saturated with demand, so a focused product solving a specific pain point (AI tools for marketers) will have strong ROI.",
+      "expectedOutcome": "Revenue £3,000-5,000 in 45 days, profit £2,000-3,000 net",
+      "nextAction": "build MVP and launch",
+      "goalId": "g1",
+      "decidedAt": "2026-10-23T15:49:22.390Z"
+    },
+    "reviews": []
+  },
+  {
+    "key": "ai_course_mvp",
+    "purpose": "find_opportunity",
+    "objective": "Build MVP and launch digital course on AI tools and automation for £300-500",
+    "question": "What is the most urgent, high-demand skill gap I can fill with a digital course on AI tools and automation that sells for £300-500 in 60 days, requires no technical expertise to build, and can use my existing £10,000 capital?",
+    "hypothesis": "Digital courses on AI tools and automation have proven fast iteration and low barrier to entry. A focused course on \"AI Tools for Freelancers and Small Businesses\" targeting the £100,000 at risk capital scenario is viable. I can build MVP quickly using existing templates and templates, then launch on my own offer pages with a £100,000 at risk, £0 committed setup.",
+    "options": [],
+    "stop": {
+      "maxFetches": 3,
+      "when": "has_enough_evidence"
+    },
+    "status": "open",
+    "openedAt": "2026-10-23T15:58:04.298Z",
+    "research": [],
+    "outcome": null,
+    "reviews": []
+  },
+  {
+    "key": "deliver_order_6ac71280",
+    "purpose": "find_opportunity",
+    "objective": "Deliver the pending customer order 6ac71280 for £700",
+    "question": "What files and steps are needed to deliver order 6ac71280, including the PDF checklist for landlord Rae Landlord?",
+    "hypothesis": "The order is a digital file (PDF checklist) that can be created and delivered. I have £9,999 cash and £9,999 survival equity, so I can deliver this at a loss (£1,000 expense).",
+    "options": [],
+    "stop": {
+      "maxFetches": 1,
+      "when": "enough_evidence"
+    },
+    "status": "open",
+    "openedAt": "2026-10-23T16:05:01.581Z",
+    "research": [],
+    "outcome": null,
+    "reviews": []
+  }
+]

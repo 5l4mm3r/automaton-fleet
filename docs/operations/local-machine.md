@@ -64,8 +64,10 @@ database is restored or changed by either step.
 
 - **Measured (CPU diagnostic, 12-vCPU VM, Qwen3.5-2B Q6_K):** prompt ~110–125 tokens/s, output ~15 tokens/s; a tool call in
   ~6 s; an image question in ~12 s; a founder's first step (~12.8k-token prompt) ~100 s, later steps of the same turn ~3 s
-  (prompt cache). Correct tool calls and correct reading of a rendered page were observed; quality on the full workflow is
-  being measured (`fleet-eval-local-model`).
+  (prompt cache). Correct tool calls and correct reading of a rendered page were observed. On the full workflow (S1b, 37.5 min,
+  108 calls, £0, 0 egress attempts) the 2B did **not** deliver the paid order. Four platform defects were found and repaired,
+  and the model's own weaknesses are recorded: [docs/evaluations/local-model/s1b-2026-10-23.md](../evaluations/local-model/s1b-2026-10-23.md).
+  No further long 2B runs; the next demonstration is one paid order on the 9B on the GPU.
 - **RTX 5080 (gpu16):** not yet measured — the setup and readiness scripts print the real figures on first run. Expect a
   9B model at Q6_K on a 16 GB GPU to be many times faster than the CPU figures above; this is an expectation, not a result.
 - **Quality:** a 9B open model is far below a frontier cloud model. The machine is built so that useful work completes with

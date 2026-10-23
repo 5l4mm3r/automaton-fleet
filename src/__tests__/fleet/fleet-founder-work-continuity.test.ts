@@ -46,7 +46,7 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
   }
   const world = { eventsDigest: hex32(1), notices: [] as Array<{ id: string; at: string; body: string }>, ownerPending: 0, cash: 9_906,
     requests: [] as unknown[], storefrontStatus: "draft", economyCalls: [] as string[], refuse: {} as Record<string, string>,
-    recentEvents: [] as Array<{ kind: string; id: string; at: string; tool?: string }> };
+    recentEvents: [] as Array<{ kind: string; id: string; at: string; tool?: string }>, obligations: undefined as unknown[] | undefined };
   const packets: string[] = [];
   const outputsSeen: string[] = [];
   const imagesSeen: Array<{ turn: number; step: number; images: number }> = [];
@@ -54,7 +54,8 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
   const ports: MindPorts = {
     cognitionStatus: async () => ({ policyEnabled: true, provider: "anthropic", founderEnabled: true, paused: false, routing: { active: true },
       capabilities: { ...capabilityView(CAPS, true), reproductionExecutable: false },
-      attention: { ownerPending: world.ownerPending, eventsDigest: world.eventsDigest, notices: world.notices, recentEvents: world.recentEvents },
+      attention: { ownerPending: world.ownerPending, eventsDigest: world.eventsDigest, notices: world.notices, recentEvents: world.recentEvents,
+        ...(world.obligations ? { customerObligations: world.obligations } : {}) },
       survival: { survivalEquityCents: world.cash, inferenceTodayCents: 80, burnPerDayCents: 40, runwayDays: 240 } }),
     ledger: async () => ({ cash: world.cash, survivalEquity: world.cash, genesisAllocation: 10_000, externalCustomerRevenue: 0 }),
     ownerRequests: async () => ({ ok: true, requests: world.requests }),
@@ -240,6 +241,33 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(p2).toContain("Flat 1");                                                   // turn 1's actual result
     expect(p2).toContain("Plan: read the tracker, then answer the mail.");
     expect(p2).toContain(`mail ${MAIL}`);                                              // shown again: turn 1 never acted on it
+  });
+
+  it("1l. a PAID order owed is the packet's objective and next move — not the opportunity or venture push — also after the buyer writes", async () => {
+    const ORDER = "6ac71280-60d2-41d1-b2a4-38f21caa4b07";
+    const at = new Date(Date.now() - 60_000).toISOString();
+    const r = rig(() => ({ calls: [c("sleep", { reason: "checked" })] }));
+    for (const [i, ob] of [{ state: "to_deliver", buyerMessages: 0 }, { state: "unanswered", buyerMessages: 1, deliveryOwed: true }].entries()) {
+      r.world.obligations = [{ kind: "order", id: ORDER, since: at, lastBuyerAt: at, ...ob }];
+      r.world.eventsDigest = hex32(10 + i);
+      await r.mind.turn(`hb ${i}`);
+      const p = r.packets.at(-1)!;
+      expect(p, ob.state).toContain("objective: DELIVER the paid order 6ac71280");
+      expect(p, ob.state).toContain('your own goal, after that: g1 \\"Publish the landlord compliance tracker\\"');
+      expect(p, ob.state).toContain(`Your next move: DELIVER the paid order ${ORDER}`);
+      expect(p, ob.state).toContain("record_external_dependency");
+      expect(p, ob.state).not.toContain("Your open goals are your execution path");
+      expect(p, ob.state).not.toContain("opportunity-identification cycle");
+    }
+  });
+
+  it("1m. bounded repetition: steps that only repeat an already-refused action end the turn; the next wake is told why", async () => {
+    const r = rig((t) => t === 1 ? { calls: [c("write_file", { path: "/etc/checklist.txt", content: "x" })] } : { calls: [c("sleep", { reason: "changed approach" })] });
+    await r.mind.turn("hb");
+    expect(r.infers()).toBe(4);                 // one refusal, then three steps of the identical refused call: ended there
+    await r.mind.turn("hb 2");
+    expect(r.packets[1]).toContain("only repeated actions already refused");
+    expect(r.packets[1]).toContain("paths are relative to your workspace");
   });
 
   it("1g. a stop (SIGTERM: deploy, restart) ends the turn between steps with its working record saved", async () => {

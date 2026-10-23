@@ -18,6 +18,9 @@ export interface CustomerObligation {
   buyerMessages: number;
   repliedAt: string | null;
   delivering: boolean;
+  /** 2026-10-23 (review): the order is PAID and not yet delivered — derived from the order's own status, whatever the buyer
+   *  has written, so a delivery owed never disappears behind a conversation (to_deliver is the case with no buyer message). */
+  deliveryOwed: boolean;
 }
 
 /** Obligations read from the controller (v111 returns up to 50, most urgent first) and spelled out in the packet. */
@@ -38,9 +41,22 @@ export function parseObligations(attention: unknown): CustomerObligation[] | nul
     if ((o.kind !== "order" && o.kind !== "enquiry") || typeof o.id !== "string" || !UUID.test(o.id) || !since || !last) continue;
     if (o.state !== "unanswered" && o.state !== "acknowledged" && o.state !== "to_deliver") continue;
     out.push({ kind: o.kind, id: o.id, state: o.state, since, lastBuyerAt: last, buyerMessages: Number.isSafeInteger(o.buyerMessages) ? Number(o.buyerMessages) : 1,
-      repliedAt: at(o.repliedAt), delivering: o.delivering === true });
+      repliedAt: at(o.repliedAt), delivering: o.delivering === true, deliveryOwed: o.kind === "order" && (o.state === "to_deliver" || o.deliveryOwed === true) });
   }
   return out;
+}
+
+/** The delivery steps of a paid order; a blocked delivery is recorded with what unblocks it — it never silently vanishes. */
+export const DELIVER_STEPS = "see what was bought with wallet orders, build the files in your workspace (paths are relative, e.g. order/checklist.pdf), "
+  + "inspect and review them (deliverable), then deliver with wallet deliver; if something blocks it, record the blocker and what would unblock it "
+  + "(record_external_dependency) and tell the buyer why (customers order_message) — the order stays owed until it is delivered or refunded";
+
+/** The next-move line while a paid order's delivery is owed (replaces the opportunity / venture push for that wake). */
+export function owedDeliveryLine(ids: string[]): string {
+  return `Your next move: DELIVER the paid order${ids.length > 1 ? "s" : ""} ${ids.slice(0, 3).join(", ")} — a customer has paid and is owed the files. `
+    + "Do this before any opportunity research, new venture or offer: read the order (wallet orders), write the files in your workspace, "
+    + "inspect and review them (deliverable), deliver (wallet deliver). If a specific thing blocks it, record that blocker and the condition that "
+    + "unblocks it (record_external_dependency), tell the buyer (customers order_message), then continue other work.";
 }
 
 const utc = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
@@ -58,15 +74,15 @@ export function obligationLines(list: CustomerObligation[]): string[] {
     const n = o.buyerMessages > 1 ? ` (${o.buyerMessages} buyer messages since ${utc(o.since)})` : "";
     if (o.kind === "enquiry") return `enquiry ${o.id}: the buyer's message of ${utc(o.lastBuyerAt)} is UNANSWERED${n} — read it with customers read, answer with customers reply`;
     if (o.state === "to_deliver") {
-      return `order ${o.id}: PAID ${utc(o.since)}, its delivery is OWED${o.delivering ? " (a delivery is in progress)" : ""} — see what was bought with wallet orders, `
-        + "build the files, inspect and review them (deliverable), then deliver with wallet deliver; if you cannot, tell the buyer why (customers order_message)";
+      return `order ${o.id}: PAID ${utc(o.since)}, its delivery is OWED${o.delivering ? " (a delivery is in progress)" : ""} — ${DELIVER_STEPS}`;
     }
+    const owedToo = o.deliveryOwed ? ` ALSO: this order is PAID and its delivery is still OWED — ${DELIVER_STEPS}` : "";
     if (o.state === "unanswered") {
       return `order ${o.id}: the buyer's message of ${utc(o.lastBuyerAt)} is UNANSWERED${n} — read it with customers order_thread, answer with customers order_message; `
-        + "an acknowledgement, or an honest update on what is blocking you, is an answer";
+        + `an acknowledgement, or an honest update on what is blocking you, is an answer.${owedToo}`;
     }
     return `order ${o.id}: answered ${utc(o.repliedAt ?? o.lastBuyerAt)}, not yet resolved (the buyer's request of ${utc(o.since)})${o.delivering ? "; a delivery is in progress" : ""} — `
-      + "resolved by delivering the revised files (wallet deliver, with resendReason) or by customers order_message with resolved: true once nothing more is owed";
+      + `resolved by delivering the revised files (wallet deliver, with resendReason) or by customers order_message with resolved: true once nothing more is owed.${owedToo}`;
   });
   const owed = list.some((o) => o.state === "unanswered");
   const unansweredRest = rest.filter((o) => o.state === "unanswered").length;

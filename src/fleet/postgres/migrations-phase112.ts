@@ -30,6 +30,9 @@ const AUTHORIZE = restate(V111_SQL, "svc_cognition_authorize", [[CREDIT_HELD, CR
 // once the buyer wrote; a cloud model found the order by checking, a smaller model never did): a paid order that still
 // awaits its delivery (to_fulfil, or a failed delivery) is an obligation too, state to_deliver, at the top with the
 // unanswered ones. It never blocks a sleep (owner: no new blocks); it is shown until the order is delivered or fulfilled.
+// Review 2026-10-23: "delivery obligations must derive from paid/undelivered status, regardless of whether the buyer has sent
+// messages" — every order obligation carries deliveryOwed from the order's own status; a buyer's message changes the
+// conversation state (unanswered / acknowledged), never whether the delivery is owed.
 const PAID_OB = [
   [`  ob AS (SELECT * FROM order_ob UNION ALL SELECT * FROM enquiry_ob)`,
    `  paid_ob AS (
@@ -38,9 +41,12 @@ const PAID_OB = [
       FROM fleet_customer_orders o
      WHERE o.agent_id = p_agent AND o.payment_status = 'paid' AND o.status IN ('to_fulfil','delivery_failed')
        AND NOT EXISTS (SELECT 1 FROM order_ob x WHERE x.id = o.order_id::text)),
-  ob AS (SELECT * FROM order_ob UNION ALL SELECT * FROM enquiry_ob UNION ALL SELECT * FROM paid_ob)`],
+  ob AS (SELECT u.*, (u.kind = 'order' AND EXISTS (SELECT 1 FROM fleet_customer_orders o WHERE o.order_id::text = u.id AND o.agent_id = p_agent
+                 AND o.payment_status = 'paid' AND o.status IN ('to_fulfil','delivery_failed'))) AS owed
+          FROM (SELECT * FROM order_ob UNION ALL SELECT * FROM enquiry_ob UNION ALL SELECT * FROM paid_ob) u)`],
   [`'state', CASE WHEN replied IS NULL OR replied < last_buyer THEN 'unanswered' ELSE 'acknowledged' END,`,
-   `'state', CASE WHEN messages = 0 THEN 'to_deliver' WHEN replied IS NULL OR replied < last_buyer THEN 'unanswered' ELSE 'acknowledged' END,`],
+   `'state', CASE WHEN messages = 0 THEN 'to_deliver' WHEN replied IS NULL OR replied < last_buyer THEN 'unanswered' ELSE 'acknowledged' END,
+           'deliveryOwed', CASE WHEN owed THEN true END,`],
 ] as Array<[string, string]>;
 const OBLIGATIONS = restate(V111_SQL, "fleet_customer_obligations", PAID_OB);
 const OBLIGATIONS_ALL = restate(V111_SQL, "fleet_customer_obligations_all", PAID_OB);

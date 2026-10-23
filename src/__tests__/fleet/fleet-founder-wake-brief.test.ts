@@ -28,6 +28,17 @@ describe("the wake brief", () => {
     expect(b).toContain("money: cash 9906p, survival equity 9906p");
     expect(b.length).toBeLessThanOrEqual(WAKE_BRIEF_MAX);
   });
+  it("a PAID order owed is the objective; the founder's own goal is shown separately, after it — also once the buyer has written", () => {
+    const order = "6ac71280-60d2-41d1-b2a4-38f21caa4b07";
+    for (const ob of [{ kind: "order", id: order, state: "to_deliver" }, { kind: "order", id: order, state: "unanswered", deliveryOwed: true }, { kind: "order", id: order, state: "acknowledged", deliveryOwed: true }]) {
+      const b = wakeBrief({ reason: "Heartbeat 2", goals: [{ id: "g1", title: "Execute find_opportunity: build MVP and launch" }], carried: null, previousOutcome: null,
+        obligations: [ob], economics: { cash: 10000, survivalEquity: 10000 } });
+      expect(b, ob.state).toContain("objective: DELIVER the paid order 6ac71280 (owed to a customer: before any research, new venture or offer work)");
+      expect(b, ob.state).toContain('your own goal, after that: g1 "Execute find_opportunity: build MVP and launch"');
+      expect(b, ob.state).toContain("1 PAID ORDER(S) TO DELIVER (order 6ac71280)");
+      expect(b.length).toBeLessThanOrEqual(WAKE_BRIEF_MAX);
+    }
+  });
   it("with nothing carried and no goal it asks for an assessment, not activity", () => {
     const b = wakeBrief({ reason: "", goals: [], carried: null, previousOutcome: "Slept: nothing changed.", obligations: [], economics: {} });
     expect(b).toContain("why now: a scheduled wake");

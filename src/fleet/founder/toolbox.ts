@@ -153,6 +153,9 @@ export const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string
     price: "money.price" },
 });
 /** v76: the agent toolchain the exec sandbox exposes (Python wheels for XLSX, DOCX, PDF, images; scripts/fleet-agent-tools.sh). */
+/** What a refused workspace path is told (2026-10-23): the form that works, not only that it failed. */
+export const PATH_RULE = "paths are relative to your workspace — e.g. checklist.pdf or order/checklist.pdf (\"/workspace/…\" also works); "
+  + "no other absolute path, no \"..\", no link out of it. list_files with no path lists your workspace";
 export const DEFAULT_AGENT_TOOLS_DIR = "/usr/local/lib/automaton-fleet-tools/current";
 /** v76: a stdlib-first text extractor for an independent review (the toolchain's libraries when present). */
 const REVIEW_EXTRACT_PY = String.raw`
@@ -627,7 +630,15 @@ export class FounderToolbox {
 
   /** Resolve a model-supplied path strictly inside the workspace (no absolute, no .., no symlink escape). */
   resolve(p: unknown, forWrite = false): string {
-    const rel = typeof p === "string" ? p : ".";
+    let rel = typeof p === "string" ? p : ".";
+    // 2026-10-23 (local run S1b: every write_file / list_files of the paid order's files used "/workspace/…" — the common
+    // convention — and was refused 7 times, and 5 more blocked as duplicates, with no hint): the workspace root's own absolute path and the "/workspace" alias
+    // mean the workspace. Only that prefix is rewritten; every check below (no other absolute path, no .., no symlink escape)
+    // still applies to what remains.
+    for (const root of [this.workspace, "/workspace"]) {
+      if (rel === root) { rel = "."; break; }
+      if (rel.startsWith(root + "/")) { rel = rel.slice(root.length + 1) || "."; break; }
+    }
     if (rel.includes("\0") || path.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) throw new Error("FLEET_PATH_OUTSIDE_WORKSPACE");
     const abs = path.resolve(this.workspace, rel);
     if (abs !== this.workspace && !abs.startsWith(this.workspace + path.sep)) throw new Error("FLEET_PATH_OUTSIDE_WORKSPACE");
@@ -849,7 +860,7 @@ export class FounderToolbox {
     if (!paths.length || paths.length > 20) return { ok: false, code: "FLEET_BAD_REQUEST", reason: "paths: 1..20 workspace files" };
     for (const p of paths) {
       const f = this.resolve(p);
-      if (!fs.existsSync(f) || !fs.statSync(f).isFile()) return { ok: false, code: "FLEET_BAD_REQUEST", reason: `not a file in your workspace: ${p}` };
+      if (!fs.existsSync(f) || !fs.statSync(f).isFile()) return { ok: false, code: "FLEET_BAD_REQUEST", reason: `not a file in your workspace: ${p} — create it first (write_file, or exec for a PDF / spreadsheet), then give its workspace path, e.g. order/checklist.pdf` };
     }
     const rel = paths.map((p) => path.relative(this.workspace, this.resolve(p)));
     const tmp = path.join(this.workspace, ".tmp");
@@ -1782,7 +1793,7 @@ export class FounderToolbox {
       const cat = call.name === "request_spend" && this.o.selfGovernance ? custodyCategory(code) : null;
       if (cat) return { name: call.name, ok: false, refused: code as string, output: `ERROR ${code} — ${custodyRefusalText(code as string, cat)}` };
       // The workspace resolver throws bare codes; a controller refusal carries its own code and is reported as such.
-      if (/^FLEET_[A-Z_]+$/.test(msg) && code === undefined) return refuse(msg, "path must stay inside your workspace");
+      if (/^FLEET_[A-Z_]+$/.test(msg) && code === undefined) return refuse(msg, msg === "FLEET_PATH_OUTSIDE_WORKSPACE" ? PATH_RULE : "refused");
       return { name: call.name, ok: false, refused: typeof code === "string" && /^(FLEET|RESEARCH)_[A-Z_]+$/.test(code) ? code : "FLEET_TOOL_ERROR", output: `ERROR ${code ?? ""} ${msg.slice(0, 300)}` };
     }
     return refuse("FLEET_TOOL_NOT_AVAILABLE", "unknown");
