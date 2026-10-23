@@ -1,0 +1,58 @@
+# Automaton Fleet LOCAL inference (owner directive 2026-10-23): the model server the controller's local provider uses.
+# llama.cpp llama-server, pinned build and weights (local-machine/inference.lock.json, installed by
+# scripts/fleet-local-inference-setup.sh). Loopback only; NO network egress at all (it never needs one: the weights are on
+# disk); no credential of any kind. Its own system user; the weights are read-only to it.
+# The GPU (NVIDIA) is the one device it may open; the CPU-diagnostic profile needs none.
+[Unit]
+Description=Automaton Fleet local inference (llama.cpp server, loopback only, no egress)
+After=network.target
+Before=automaton-fleet.service
+
+[Service]
+Type=simple
+User=automaton-fleet-inference
+Group=automaton-fleet-inference
+EnvironmentFile=/etc/automaton-fleet/inference.env
+WorkingDirectory=/opt/automaton-fleet/inference
+ExecStart=/opt/automaton-fleet/inference/bin/llama-server -m ${FLEET_INFERENCE_MODEL} --mmproj ${FLEET_INFERENCE_MMPROJ} --alias ${FLEET_INFERENCE_ALIAS} \
+  --host 127.0.0.1 --port 8090 -c ${FLEET_INFERENCE_CTX} -ngl ${FLEET_INFERENCE_GPU_LAYERS} -np 1 --jinja --no-webui ${FLEET_INFERENCE_EXTRA}
+Environment=LD_LIBRARY_PATH=/opt/automaton-fleet/inference/bin
+Restart=on-failure
+RestartSec=5
+UMask=0077
+LimitCORE=0
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/opt/automaton-fleet/inference
+PrivateTmp=yes
+PrivateIPC=yes
+# The NVIDIA device nodes (a CPU-only profile simply never opens them).
+DevicePolicy=closed
+DeviceAllow=/dev/nvidiactl rw
+DeviceAllow=/dev/nvidia-uvm rw
+DeviceAllow=/dev/nvidia-uvm-tools rw
+DeviceAllow=/dev/nvidia0 rw
+DeviceAllow=/dev/dxg rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Loopback only, both ways: it answers the controller on 127.0.0.1:8090 and can reach nothing else.
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

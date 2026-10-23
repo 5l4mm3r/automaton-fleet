@@ -94,6 +94,8 @@ describe.skipIf(!PG_BIN)("L13 sub-cent inference accounting (schema v17, Postgre
     svc = new PgFleetStore({ connectionString: pgc.serviceUrl });
     ledger = new PgLedgerAdmin({ connectionString: pgc.ownerUrl });
     genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
+    // v112: this suite exercises the cloud-era cognition paths (the owner's explicit choice; new registries are local_only).
+    await genesis.inferenceProfileSet("cloud_allowed", "test: cloud-era cognition paths", "operator:owner");
     agentRaw = new pg.Pool({ connectionString: pgc.agentUrl, max: 2 });
     svcRaw = new pg.Pool({ connectionString: pgc.serviceUrl, max: 2 });
   }, 180_000);

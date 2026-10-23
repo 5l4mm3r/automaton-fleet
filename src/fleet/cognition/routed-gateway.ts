@@ -20,7 +20,7 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTINE_CHARTER, ProviderError, imageTokens, charterFor, parseDoctrine, toolsetForDoctrine, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
+import { FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTINE_CHARTER, ProviderError, compactTools, imageTokens, charterFor, parseDoctrine, toolsetForDoctrine, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
 import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, MAX_COGNITION_DEADLINE_MS, promptMaterial, validateMessages } from "./gateway.js";
 import { founderStepTools } from "./capability-signature.js";
 import { RouteError, actionDigest, candidateFor, parseRouteRequest, route, type RouteDecision, type TierCandidate } from "./router.js";
@@ -202,7 +202,9 @@ export async function inferRouted(
   const provider = providerFor(candidate, decision.effort, cache.mode);
   // Ordinary routed steps also get the cognition tools (delegate a routine chore, escalate one question); R24: the
   // experiment tools only while the owner has the pipeline on. One function builds this list and the capability signature.
-  const tools = routine || question ? [] : founderStepTools(caps, true, doctrine, toolsetForDoctrine(doctrine));
+  const fullTools = routine || question ? [] : founderStepTools(caps, true, doctrine, toolsetForDoctrine(doctrine));
+  // 2026-10-23: a local model gets the compact tool list (full docs through tool_help); a cloud tier keeps the full one.
+  const tools = candidate.provider === "local" && fullTools.length ? compactTools(fullTools) : fullTools;
   const maxTokens = candidate.maxOutputTokens;
   const prompt = promptMaterial(system, messages, tools.map((t) => t.name));
   const promptText = prompt.text;

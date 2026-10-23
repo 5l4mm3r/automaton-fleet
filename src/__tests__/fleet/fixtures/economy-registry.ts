@@ -43,7 +43,8 @@ export interface EconomyRegistry {
  * production behaviour.
  */
 export async function startEconomyRegistry(pgBin: string, opts: { founders?: number; allocationCents?: number; treasuryCents?: number; simulatedSettlement?: boolean;
-  /** v79/v80: keep the production default — no public site, sales closed, outward actions held (default: launched). */ outwardHeld?: boolean } = {}): Promise<EconomyRegistry> {
+  /** v79/v80: keep the production default — no public site, sales closed, outward actions held (default: launched). */ outwardHeld?: boolean;
+  /** v112: keep the production default inference profile, local_only (default here: cloud_allowed, for the cloud-era accounting suites). */ localOnly?: boolean } = {}): Promise<EconomyRegistry> {
   const n = opts.founders ?? 2;
   const pgc = await startEphemeralPg(pgBin);
   const owner = new pg.Pool({ connectionString: pgc.ownerUrl, max: 4 });
@@ -56,6 +57,8 @@ export async function startEconomyRegistry(pgBin: string, opts: { founders?: num
   const gw = new PgAgentGateway({ connectionString: pgc.agentUrl });
   const q = async (sql: string, params: unknown[] = []) => (await owner.query(sql, params)).rows;
   if (opts.simulatedSettlement !== false) await q(`SELECT fleet.fleet_admin_simulated_settlement_set(true, $1)`, [OWNER]);
+  // v112: these suites exercise the cloud-era cognition accounting (historical records keep those paths); the owner's explicit choice.
+  if (opts.localOnly !== true) await genesis.inferenceProfileSet("cloud_allowed", "test fixture: cloud-era cognition accounting", OWNER);
   await q(`UPDATE fleet.fleet_state SET max_agents = $5, runtime_repo = $1, runtime_commit = $2, runtime_build_id = $3, runtime_lockfile_sha256 = $4`,
     ["https://github.com/5l4mm3r/automaton-fleet", "c".repeat(40), "d".repeat(64), "e".repeat(64), Math.max(2, n)]);
   await genesis.setEnabled(true, OWNER, "test");

@@ -184,6 +184,8 @@ describe.skipIf(!PG_BIN)("schema v23 runtime-upgrade registry guarantees (Postgr
     svc = new PgFleetStore({ connectionString: pgc.serviceUrl });
     ledger = new PgLedgerAdmin({ connectionString: pgc.ownerUrl });
     genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
+    // v112: this suite exercises the cloud-era cognition paths (the owner's explicit choice; new registries are local_only).
+    await genesis.inferenceProfileSet("cloud_allowed", "test: cloud-era cognition paths", "operator:owner");
   }, 180_000);
 
   afterAll(async () => {

@@ -242,7 +242,7 @@ export function route(req: RouteRequest): RouteDecision {
 /** A tier's configured candidate (a row of fleet_cognition_tiers). */
 export interface TierCandidate {
   tier: Tier;
-  provider: "anthropic";
+  provider: "anthropic" | "local";
   model: string;
   thinking: "adaptive" | null;
   effort: "low" | "medium" | "high" | "max" | null;

@@ -35,6 +35,7 @@ import { IdentityBroker } from "../identity/broker.js";
 import { SimulatedSharedMailProvider } from "../identity/providers.js";
 import { initIdentityState, openIdentityState, openProviderVault } from "../identity/main.js";
 import { AnthropicProvider } from "../cognition/anthropic.js";
+import { LocalProvider } from "../cognition/local.js";
 import type { ProviderFactory } from "../cognition/routed-gateway.js";
 import type { RuntimeRelease } from "../runtime.js";
 import { FOUNDER_CREDENTIAL_FILE, FOUNDER_IDENTITY_FILE, type FounderIdentityFile } from "../founder/evidence.js";
@@ -52,6 +53,12 @@ export interface SuiteTerms {
   runId: string;
   /** Per scenario, the all-in cap in whole pence (ledger minor units). The run's ceiling is their sum. */
   capsPence: Record<ScenarioId, number>;
+  /**
+   * 2026-10-23 (owner directive: local inference only): run on a LOCAL model server on this machine. Every tier of the
+   * throwaway registry maps to it at zero provider price; no provider key is used. Absent: the Messages API protocol
+   * (the dry runs' fake, or — only with cloud explicitly allowed — a real provider).
+   */
+  inference?: { provider: "local"; baseUrl: string; model: string; maxOutputTokens: number };
   timeoutMinutes: Record<ScenarioId, number>;
   fxRateMicro: string;
   acquisition: { totalUsdCents: string; usdPurchasedMicro: string; lot: string };
@@ -176,7 +183,8 @@ export async function runScenarioSuite(o: ScenarioSuiteOptions): Promise<SuiteRe
     report.callsFiles.push(callsFile);
     const meter = new CostMeter({ runId: o.terms.runId, ceilingLedgerMicro: BigInt(o.terms.capsPence[id]) * 1_000_000n, fxRateMicro: BigInt(o.terms.fxRateMicro),
       acquisition: { totalUsdCents: BigInt(o.terms.acquisition.totalUsdCents), usdPurchasedMicro: BigInt(o.terms.acquisition.usdPurchasedMicro) },
-      prices: Object.fromEntries(o.terms.tiers.map((t) => [t.model, t.prices])) }, jsonlSink(callsFile));
+      prices: { ...Object.fromEntries(o.terms.tiers.map((t) => [t.model, t.prices])),
+        ...(o.terms.inference ? { [o.terms.inference.model]: { inputMicrocentsPerToken: 0, outputMicrocentsPerToken: 0, cacheWriteMicrocentsPerToken: 0, cacheReadMicrocentsPerToken: 0 } } : {}) } }, jsonlSink(callsFile));
     meter.scenario = id;
     const startedAt = new Date().toISOString();
     log("scenario_start", { id, capPence: o.terms.capsPence[id] });
@@ -240,11 +248,13 @@ async function withWorld(o: ScenarioSuiteOptions, id: ScenarioId, meter: CostMet
   const fn = async (pool: keyof typeof pools, name: string, args: unknown[]) =>
     (await pools[pool].query(`SELECT ${name}(${args.map((_, i) => `$${i + 1}`).join(", ")}) AS r`, args)).rows[0].r as Record<string, any>;
   const t3 = o.terms.tiers.find((t) => t.tier === "T3")!;
-  const base = meter.wrap(new AnthropicProvider({ baseUrl: o.provider.baseUrl, apiKey: o.provider.apiKey, model: t3.model, attemptTimeoutMs: 180_000, maxAttempts: 2, backoffMs: 2_000,
+  const local = o.terms.inference?.provider === "local" ? new LocalProvider({ baseUrl: o.terms.inference.baseUrl, model: o.terms.inference.model, attemptTimeoutMs: 240_000 }) : null;
+  const base = local ? meter.wrap(local) : meter.wrap(new AnthropicProvider({ baseUrl: o.provider.baseUrl, apiKey: o.provider.apiKey, model: t3.model, attemptTimeoutMs: 180_000, maxAttempts: 2, backoffMs: 2_000,
     ...(o.provider.extraHeaders ? { extraHeaders: o.provider.extraHeaders } : {}) }));
   const raw = new AnthropicProvider({ baseUrl: o.provider.baseUrl, apiKey: o.provider.apiKey, model: t3.model, attemptTimeoutMs: 180_000, maxAttempts: 2, backoffMs: 2_000,
     ...(o.provider.extraHeaders ? { extraHeaders: o.provider.extraHeaders } : {}) });
   const factory: ProviderFactory = (c, effort, promptCache) => {
+    if (local) return Object.assign(meter.wrap(local), { promptCache: "off" as const });
     const p = raw.with({ model: c.model, thinking: c.thinking === "adaptive" ? { type: "adaptive" } : undefined, effort: effort ?? c.effort ?? undefined, promptCache });
     return Object.assign(meter.wrap(p), { promptCache: p.settings.promptCache });
   };
@@ -274,12 +284,23 @@ async function withWorld(o: ScenarioSuiteOptions, id: ScenarioId, meter: CostMet
       terminator: new UnsupportedSandboxTerminator(), cognitionProvider: base, cognitionProviderFactory: factory, cognitionDeadlineMs: 240_000 });
     const apiUrl = (await service.listen(0, "127.0.0.1")).url;
     // Cognition: production's tiers and prices, its FX; provider credit here is synthetic (the meter holds the real ceiling).
+    // v112: a new registry is local_only. The Messages-API path (the dry runs' fake) is a cloud protocol: allowed explicitly here.
+    if (!local) await genesis.inferenceProfileSet("cloud_allowed", "scenario harness: Messages API protocol (fake or explicitly allowed provider)", o.actor);
     const today = new Date().toISOString().slice(0, 10);
     if (acct !== "USD") await ledger.recordFxRate("USD", acct, Number(o.terms.fxRateMicro), "production snapshot (scenario terms)", today, o.actor);
     await ledger.recordProviderCredits("anthropic", "purchase", 1_000_000, `scenario:synthetic-${crypto.randomUUID()}`, o.actor);
-    await genesis.setCognitionPolicy({ enabled: true, provider: "anthropic", model: t3.model, inputMicrocents: t3.prices.inputMicrocentsPerToken, outputMicrocents: t3.prices.outputMicrocentsPerToken,
+    if (local) {
+      const inf = o.terms.inference!;
+      await genesis.setCognitionPolicy({ enabled: true, provider: "local", model: inf.model, inputMicrocents: 0, outputMicrocents: 0, cacheWriteMicrocents: 0, cacheReadMicrocents: 0,
+        maxOutputTokens: inf.maxOutputTokens, actor: o.actor });
+      for (const t of ["T1", "T2", "T3"]) {
+        await genesis.cognitionTierSetLocal(t, inf.model, t === "T1" ? Math.min(2_000, inf.maxOutputTokens) : inf.maxOutputTokens, o.actor);
+        await genesis.cognitionTierVerify(t, inf.model, `local server ${inf.baseUrl} serves ${inf.model}`, o.actor);
+        await genesis.cognitionTierEnable(t, true, o.actor);
+      }
+    } else await genesis.setCognitionPolicy({ enabled: true, provider: "anthropic", model: t3.model, inputMicrocents: t3.prices.inputMicrocentsPerToken, outputMicrocents: t3.prices.outputMicrocentsPerToken,
       cacheWriteMicrocents: t3.prices.cacheWriteMicrocentsPerToken, cacheReadMicrocents: t3.prices.cacheReadMicrocentsPerToken, maxOutputTokens: t3.maxOutputTokens, actor: o.actor });
-    for (const t of o.terms.tiers) {
+    for (const t of local ? [] : o.terms.tiers) {
       await genesis.cognitionTierVerify(t.tier, t.model, "scenario: production tier mapping (throwaway registry)", o.actor);
       await q(`UPDATE fleet_cognition_tiers SET input_microcents_per_token = $2, output_microcents_per_token = $3, cache_write_microcents_per_token = $4,
         cache_read_microcents_per_token = $5, max_output_tokens = $6 WHERE tier = $1`, [t.tier, t.prices.inputMicrocentsPerToken, t.prices.outputMicrocentsPerToken,
@@ -390,7 +411,7 @@ async function keepEvidence(w: World, dir: string, o: ScenarioSuiteOptions): Pro
   const put = (name: string, v: unknown) => fs.writeFileSync(path.join(dir, name), typeof v === "string" ? v : JSON.stringify(v, null, 2), { mode: 0o600 });
   const mindLog = path.join(w.stateNs, "mind-log.jsonl");
   if (fs.existsSync(mindLog)) put("mind-log.jsonl", fs.readFileSync(mindLog, "utf8"));
-  for (const f of ["mind-continuity.json", "mind-carry.json"]) if (fs.existsSync(path.join(w.stateNs, f))) put(f, fs.readFileSync(path.join(w.stateNs, f), "utf8"));
+  for (const f of ["mind-continuity.json", "mind-carry.json", "mind-packets.jsonl"]) if (fs.existsSync(path.join(w.stateNs, f))) put(f, fs.readFileSync(path.join(w.stateNs, f), "utf8"));
   for (const f of ["facts.json", "goals.json", "decisions.json", "field-journal.jsonl"]) if (fs.existsSync(path.join(w.memoryDir, f))) put(`memory-${f}`, fs.readFileSync(path.join(w.memoryDir, f), "utf8"));
   const files: Array<{ path: string; bytes: number; sha256: string }> = [];
   const walk = (d: string) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (e.isFile() && files.length < 500) { const b = fs.readFileSync(p); files.push({ path: path.relative(w.ws, p), bytes: b.length, sha256: sha(b) }); } } };

@@ -181,6 +181,20 @@ export class GenesisOps {
     return this.one<Record<string, unknown>>(`SELECT fleet_cognition_tier_verify($1, $2, $3, $4) AS r`, [tier, model, ref, actor]);
   }
 
+  /** v112: map a tier to the LOCAL model (zero provider prices; verification voided until re-verified). */
+  cognitionTierSetLocal(tier: string, model: string, maxOutputTokens: number, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_tier_set_local($1, $2, $3, $4) AS r`, [tier, model, maxOutputTokens, actor]);
+  }
+
+  /** v112: the registry's inference profile — local_only (default) or cloud_allowed (the owner's explicit choice). */
+  inferenceProfileSet(profile: "local_only" | "cloud_allowed", reason: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_admin_inference_profile_set($1, $2, $3) AS r`, [profile, reason, actor]);
+  }
+
+  inferenceProfileState() {
+    return this.one<Record<string, unknown>>(`SELECT fleet_inference_profile_state() AS r`);
+  }
+
   cognitionTierEnable(tier: string, enabled: boolean, actor: string) {
     return this.one<Record<string, unknown>>(`SELECT fleet_cognition_tier_enable($1, $2, $3) AS r`, [tier, enabled, actor]);
   }

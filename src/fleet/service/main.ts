@@ -40,6 +40,7 @@
  * registry-approved runtime.
  */
 
+import { LocalProvider } from "../cognition/local.js";
 import crypto from "crypto";
 import fs from "fs";
 import { RELEASES_DIR } from "../founder/host.js";
@@ -241,6 +242,11 @@ export function readCognitionKey(file: string, uid: number | null = process.getu
  * model/thinking/effort the owner's verified mapping names (T1: no thinking, no effort). Used by the controller and
  * by the routing verification runner, so both exercise the same code.
  */
+/** Every routed tier, the relevance scorer and the spend reviewer use the one local model (no tier settings apply). */
+export function localProviderFactory(base: LocalProvider): ProviderFactory {
+  return () => Object.assign(base.with(), { promptCache: "off" as const });
+}
+
 export function routedProviderFactory(base: AnthropicProvider): ProviderFactory {
   // Schema v23: the prompt-cache mode is decided per routed call (tier policy × scope × evidenced reuse), never taken
   // from this controller's FLEET_COGNITION_PROMPT_CACHE, which governs the legacy single-model path only.
@@ -250,12 +256,37 @@ export function routedProviderFactory(base: AnthropicProvider): ProviderFactory 
   };
 }
 
+/**
+ * 2026-10-23 (owner directive: a self-contained machine): the inference profile. "local_only" (the default) admits only
+ * none, scripted (tests) or local (a model server on this machine); a cloud provider needs FLEET_INFERENCE_PROFILE=cloud_allowed
+ * set explicitly — nothing falls back to one. The registry keeps its own profile too (v112).
+ */
+export function inferenceProfile(e: Record<string, string | undefined>): "local_only" | "cloud_allowed" {
+  const p = e.FLEET_INFERENCE_PROFILE?.trim() || "local_only";
+  if (p !== "local_only" && p !== "cloud_allowed") throw new Error(`FLEET_INFERENCE_PROFILE must be local_only or cloud_allowed (got ${p}).`);
+  return p;
+}
+
 export function loadCognitionProvider(e: Record<string, string | undefined>, uid: number | null = process.getuid?.() ?? null): CognitionConfig {
   const id = e.FLEET_COGNITION_PROVIDER?.trim() || "none";
   const deadlineMs = boundedInt(e, "FLEET_COGNITION_DEADLINE_MS", 10_000, 240_000, 120_000);
+  const profile = inferenceProfile(e);
   if (id === "none") return { provider: null, deadlineMs };
   if (id === "scripted") return { provider: new ScriptedProvider(e.FLEET_COGNITION_MODEL?.trim() || undefined), deadlineMs };
-  if (id !== "openai_compatible" && id !== "anthropic") throw new Error(`FLEET_COGNITION_PROVIDER must be none, scripted, openai_compatible or anthropic (got ${id}).`);
+  if (id === "local") {
+    const model = e.FLEET_COGNITION_MODEL?.trim() ?? "";
+    const baseUrl = e.FLEET_COGNITION_BASE_URL?.trim() || "http://127.0.0.1:8090/v1";
+    if (!model) throw new Error("FLEET_COGNITION_PROVIDER=local requires FLEET_COGNITION_MODEL (the local server's model alias).");
+    const keyFile = e.FLEET_COGNITION_API_KEY_FILE?.trim();
+    return {
+      provider: new LocalProvider({ baseUrl, model, ...(keyFile ? { apiKey: readCognitionKey(keyFile, uid) } : {}),
+        attemptTimeoutMs: boundedInt(e, "FLEET_COGNITION_ATTEMPT_TIMEOUT_MS", 5_000, 240_000, 240_000), maxAttempts: boundedInt(e, "FLEET_COGNITION_MAX_ATTEMPTS", 1, 3, 2),
+        thinking: e.FLEET_LOCAL_THINKING?.trim() === "on" }),
+      deadlineMs,
+    };
+  }
+  if (id !== "openai_compatible" && id !== "anthropic") throw new Error(`FLEET_COGNITION_PROVIDER must be none, scripted, local, openai_compatible or anthropic (got ${id}).`);
+  if (profile === "local_only") throw new Error(`FLEET_COGNITION_PROVIDER=${id} is a cloud provider: the inference profile is local_only (set FLEET_INFERENCE_PROFILE=cloud_allowed explicitly to permit it).`);
   const baseUrl = e.FLEET_COGNITION_BASE_URL?.trim() || (id === "anthropic" ? "https://api.anthropic.com/v1" : "");
   const model = e.FLEET_COGNITION_MODEL?.trim() ?? "";
   const keyFile = e.FLEET_COGNITION_API_KEY_FILE?.trim() ?? "";
@@ -400,7 +431,9 @@ export async function startFleetServiceFromEnv(
     const research = researchConfig(e);
     // Schema v22: routed tiers reuse this controller's credential and settings; only model/thinking/effort differ, and
     // only as the owner's verified mapping says. Inert unless the owner enables routing (global and per founder).
-    const cognitionProviderFactory: ProviderFactory | null = cognitionProvider instanceof AnthropicProvider ? routedProviderFactory(cognitionProvider) : null;
+    // 2026-10-23: a local provider serves every routed tier itself (one local model; nothing routes elsewhere).
+    const cognitionProviderFactory: ProviderFactory | null = cognitionProvider instanceof AnthropicProvider ? routedProviderFactory(cognitionProvider)
+      : cognitionProvider instanceof LocalProvider ? localProviderFactory(cognitionProvider) : null;
     const service = new FleetService({
       cognitionProvider,
       cognitionProviderFactory,

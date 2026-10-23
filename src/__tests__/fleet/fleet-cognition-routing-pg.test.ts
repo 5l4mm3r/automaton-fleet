@@ -86,6 +86,8 @@ describe.skipIf(!PG_BIN)("schema v22 neutral cognition routing (PostgreSQL)", ()
     svcRaw = new pg.Pool({ connectionString: pgc.serviceUrl, max: 2 });
     ledger = new PgLedgerAdmin({ connectionString: pgc.ownerUrl });
     genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
+    // v112: this suite exercises the cloud-era cognition paths (the owner's explicit choice; new registries are local_only).
+    await genesis.inferenceProfileSet("cloud_allowed", "test: cloud-era cognition paths", "operator:owner");
   }, 180_000);
 
   afterAll(async () => {

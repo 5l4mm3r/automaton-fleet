@@ -47,7 +47,7 @@ import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineCla
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
 import { newestBuyerMessage, obligationLines, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
 import { officeState } from "./exec-sandbox.js";
-import { CARRY_MAX_CHARS, PROGRESS_FILE, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, repeatNote, saveCarry } from "./continuity.js";
+import { CARRY_MAX_CHARS, PROGRESS_FILE, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
 
 export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
@@ -760,7 +760,11 @@ export class FounderMind {
     const essentialDepCount = dependencyLines(essentialDeps).length;
     let fitLevel = 0;
     const decLines = decisionLines(ledger);
+    // 2026-10-23: the wake brief (a short view over the records below; essential, never shortened beyond its own bound).
+    const brief0 = W && !owner ? wakeBrief({ reason: observation, goals: openGoals, carried, previousOutcome: prev?.outcome ?? null,
+      obligations: obligations ?? [], economics }) : null;
     const composeTask = (lvl: number) => [
+      ...(brief0 ? [brief0] : []),
       ...(owner ? [ownerBlock(owner)] : []),
       observation.slice(0, lvl >= 6 ? 300 : MAX_CONTENT),
       prev ? `Your previous turn (${prev.at}) ended with: ${(prev.outcome || "(no closing note)").slice(0, lvl >= 4 ? 400 : 1_200)}${prev.tools.length && lvl < 5 ? ` [tools used: ${prev.tools.join(", ")}]` : ""}`
@@ -878,6 +882,8 @@ export class FounderMind {
     }
     const messages: ChatMessage[] = [{ role: "user", content: text }];
     const packetKind = owner ? "owner" : bare ? "slim" : nudge ? `idle-${kind}` : "full";
+    // 2026-10-23: what the founder received at this wake, kept (bounded) in its own state — the evidence of its brief.
+    if (W) savePacket(this.o.stateDir, { at: new Date().toISOString(), turn: this.turns, kind: packetKind, chars: text.length, text });
     // 2026-10-23 (run scen-89d7c21-b1: 10 of S1's 11 cut turns ended on the view_image result itself — its base64 was counted
     // as text, so the model never saw one image): an image counts as its input-token bound in bytes (IMAGE_TEXT_BYTES a token).
     const size = () => Buffer.byteLength(JSON.stringify({ messages: messages.map((m) => (m.images ? { ...m, images: m.images.length } : m)) }), "utf8")

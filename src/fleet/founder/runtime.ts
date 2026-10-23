@@ -443,6 +443,9 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
   }
   const interval = Math.min(60_000, Math.max(1_000, Number(ctx.env.FLEET_FOUNDER_INTERVAL_MS) || 30_000));
   const target = opts.heartbeats ?? 0;
+  /** While a turn runs, a keep-alive heartbeat at most this often (and never more often than the configured interval). */
+  const KEEPALIVE_MIN_MS = 15_000;
+  let keepalives = 0;
   log("founder_started", { agentId: ctx.agentId, instanceId: ctx.instanceId, commit: ctx.release.commit, manifest: ctx.manifest.manifestId });
   while (!opts.signal?.aborted && (target === 0 || result.heartbeats < target)) {
     const before = client.lastChallenge;
@@ -462,7 +465,22 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
     result.heartbeats++;
     if (client.lastChallenge && client.lastChallenge !== before && client.lastChallenge.passed) result.challengesPassed++;
     if (mind && result.heartbeats % thinkEvery === 0) {
-      const t = await mind.turn(`Heartbeat ${result.heartbeats} (thinking slot ${result.heartbeats / thinkEvery}) at ${new Date().toISOString()}. Decide your next step.`);
+      // 2026-10-23 (local inference: a turn can take minutes on local hardware): the founder reports itself active before it
+      // thinks, and keeps heartbeating while a turn runs — a slow model is never mistaken for a dead founder.
+      report({ mode: "active", heartbeats: result.heartbeats, challengesPassed: result.challengesPassed, thinking: true });
+      const keepalive = setInterval(() => {
+        const b = client.lastChallenge;
+        void client.heartbeat(cred.agentId).then((ok) => {
+          if (!ok) return;
+          keepalives++;                                                        // not a heartbeat slot: the thinking cadence is unchanged
+          if (client.lastChallenge && client.lastChallenge !== b && client.lastChallenge.passed) result.challengesPassed++;
+        }).catch(() => undefined);
+      }, Math.max(interval, KEEPALIVE_MIN_MS));
+      keepalive.unref?.();
+      let t: Awaited<ReturnType<typeof mind.turn>>;
+      try {
+        t = await mind.turn(`Heartbeat ${result.heartbeats} (thinking slot ${result.heartbeats / thinkEvery}) at ${new Date().toISOString()}. Decide your next step.`);
+      } finally { clearInterval(keepalive); }
       if (t.ran) result.mindTurns!++;
       result.mindRefusals! += t.refusals.length;
       lastMind = { ran: t.ran, reason: t.reason ?? null, steps: t.steps, tools: t.toolCalls, refusals: t.refusals, chargedCents: t.chargedCents };
@@ -474,6 +492,7 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
       challengesPassed: result.challengesPassed,
       capabilities: { manifestSha256: caps.manifestSha256, matchesCompiled: true, reproductionExecutable: caps.reproductionExecutable, paymentExecutable: caps.paymentExecutable },
       ledger: ledger ? { cash: ledger.cash, genesisAllocation: ledger.genesisAllocation, externalCustomerRevenue: ledger.externalCustomerRevenue, lifetimeContribution: ledger.lifetimeContribution } : null,
+      keepalives,
       agentLoop: mind ? { mode: "controller", turns: result.mindTurns, refusals: result.mindRefusals, last: lastMind, execSandbox, routing: mind.routing, loopGuard: loopGuard.stats } : "disabled",
       home: os.homedir() === ctx.stateDir,
     });

@@ -22,7 +22,7 @@ import fs from "fs";
 import path from "path";
 import { decideTool, type CapabilityManifest } from "../capabilities.js";
 import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
-import { imageHeaderProblem, type ChatImage, type ToolCall } from "../cognition/types.js";
+import { fullToolSpec, imageHeaderProblem, type ChatImage, type ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
 import type { CustomerObligation } from "./obligations.js";
 import crypto from "crypto";
@@ -64,7 +64,7 @@ export interface ToolboxPorts {
  *  Anything not matched — including every operation added later — is treated as changing state (the safe side). */
 export const READ_MAPPED = /(\.list|\.status|\.inbox|\.read|\.requests|\.reviews|\.uses|\.search|\.library|\.checkouts|\.awaiting_approval|\.products|\.sales|\.job|\.files|\.thread|\.performance|\.economics|\.observe|\.check|\.offers|\.talent|\.api_jobs|\.reductions|\.fetch_file|\.invoice|\.currencies|\.price|\.obligations|\.proposals)$|^(wallet|performance)$/;
 /** Tools that only read (the founder's own files and memory, the web, knowledge). */
-export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read_file", "list_files", "recall_facts", "list_goals", "check_ledger", "read_knowledge",
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["tool_help", "read_file", "list_files", "recall_facts", "list_goals", "check_ledger", "read_knowledge",
   "web_fetch", "web_search", "view_image", "field_guide", "list_experiments"]);
 /** 2026-10-18: true when a call only reads. A successful call that is not a read changed something (possibly on the
  *  controller: a capability check, a review, an offer edit) and may justify retrying an action that failed before it. */
@@ -374,6 +374,7 @@ function memoryRecord(call: ToolCall, out: ToolOutcome, r: FactResult | null): M
   };
 }
 const IMPLEMENTED = new Set([
+  "tool_help",
   "read_file", "list_files", "write_file", "exec", "remember_fact", "remember_facts", "retract_fact", "record_external_dependency", "withdraw_external_dependency", "reply_to_owner", "recall_facts", "set_goal", "complete_goal", "list_goals",
   "open_decision", "resolve_decision", "review_decision",
   "check_ledger", "request_spend", "propose_knowledge", "read_knowledge", "request_identity_fact", "sleep", "web_fetch",
@@ -1314,6 +1315,12 @@ export class FounderToolbox {
           g.completedAt = new Date().toISOString(); // F1-FRESH-01: lets a packet flag facts observed while the goal was open
           this.writeJson("goals.json", goals);
           return { name: call.name, ok: true, output: `goal ${String(g.id)} complete` };
+        }
+        case "tool_help": {
+          // 2026-10-23: the full documentation of a tool a compact list described in one line (read-only, no model call).
+          const spec = fullToolSpec(String(a.name ?? ""));
+          if (!spec || spec.name === "tool_help") return refuse("FLEET_BAD_REQUEST", "name one of your tools");
+          return { name: call.name, ok: true, output: clip(JSON.stringify({ name: spec.name, description: spec.description, parameters: spec.parameters })) };
         }
         case "list_goals":
           return { name: call.name, ok: true, output: clip(JSON.stringify(this.readJson("goals.json", []))) };

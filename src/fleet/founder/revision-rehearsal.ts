@@ -211,6 +211,8 @@ export async function runRevisionRehearsal(o: RevisionRehearsalOptions): Promise
     const today = new Date().toISOString().slice(0, 10);
     if (acct !== "USD") await ledger.recordFxRate("USD", acct, 750_000, "synthetic rehearsal rate (throwaway registry)", today, o.actor);
     await ledger.recordProviderCredits("anthropic", "purchase", 5_000, `rehearsal:synthetic-${crypto.randomUUID()}`, o.actor);
+    // v112: a new registry is local_only; this throwaway one speaks the Messages API to the FAKE provider (no real one): allowed explicitly.
+    await genesis.inferenceProfileSet("cloud_allowed", "revision rehearsal: fake Messages API, throwaway registry", o.actor);
     await genesis.setCognitionPolicy({ enabled: true, provider: "anthropic", model: REVISION_REHEARSAL_MODEL, inputMicrocents: 1_000, outputMicrocents: 4_000, maxOutputTokens: 4_000, actor: o.actor });
     await genesis.setFounderCognition(a, { enabled: true, maxTurnsPerHour: 2_000, dailyBudgetCents: 5_000, reason: "rehearsal registry only", actor: o.actor });
     for (const [tier, m] of MODELS) {

@@ -906,12 +906,14 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
   );
   const writers: Record<string, Set<string>> = {
     fleet_cognition_log: new Set(["svc_cognition_record", "svc_cognition_routed_record"]),
-    fleet_cognition_policy: new Set(["fleet_cognition_set_policy"]),
+    // v112: the inference profile returning to local_only disables cloud policy and tiers.
+    fleet_cognition_policy: new Set(["fleet_cognition_set_policy", "fleet_admin_inference_profile_set"]),
     fleet_founder_cognition: new Set(["fleet_founder_cognition_set", "fleet_agents_cognition_stop"]),
     fleet_cognition_accrual: new Set(["svc_cognition_record", "svc_cognition_routed_record"]),
     // v22 routing: policy data only through the owner functions; action links only through the boundary check.
     fleet_cognition_routing: new Set(["fleet_cognition_routing_set"]),
-    fleet_cognition_tiers: new Set(["fleet_cognition_tier_set", "fleet_cognition_tier_verify", "fleet_cognition_tier_enable", "fleet_cognition_tier_cache_set"]),
+    fleet_cognition_tiers: new Set(["fleet_cognition_tier_set", "fleet_cognition_tier_verify", "fleet_cognition_tier_enable", "fleet_cognition_tier_cache_set",
+      "fleet_cognition_tier_set_local", "fleet_admin_inference_profile_set"]),
     // v23: a living founder's runtime-upgrade history only through the lifecycle functions.
     // v24: experiments change only through the experiment functions (founder API, controller reaper, owner decisions).
     fleet_experiments: new Set(["api_experiment_propose", "api_experiment_add_evidence", "api_experiment_start", "api_experiment_record", "svc_experiment_reap",

@@ -243,7 +243,12 @@ describe("L14 provider compatibility probe", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "probekey-"));
     const key = path.join(dir, "k");
     fs.writeFileSync(key, "super-secret-probe-key\n", { mode: 0o644 });
-    const r = run({ FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_COGNITION_BASE_URL: "https://api.example.com/v1", FLEET_COGNITION_MODEL: MODEL, FLEET_COGNITION_API_KEY_FILE: key });
+    // v112 / 2026-10-23: a cloud provider is not even loaded under the default local_only profile …
+    const local = run({ FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_COGNITION_BASE_URL: "https://api.example.com/v1", FLEET_COGNITION_MODEL: MODEL, FLEET_COGNITION_API_KEY_FILE: key });
+    expect(local.status).toBe(2);
+    expect(local.stderr).toMatch(/inference profile is local_only/);
+    // … and with cloud explicitly allowed, the key file is still strictly validated.
+    const r = run({ FLEET_INFERENCE_PROFILE: "cloud_allowed", FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_COGNITION_BASE_URL: "https://api.example.com/v1", FLEET_COGNITION_MODEL: MODEL, FLEET_COGNITION_API_KEY_FILE: key });
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/Refusing the inference credential/);
     expect(r.stdout + r.stderr).not.toContain("super-secret-probe-key");
@@ -320,6 +325,8 @@ describe.skipIf(!PG_BIN)("v15 outcome charging through FleetController (HTTP + P
     gw = new PgAgentGateway({ connectionString: pgc.agentUrl });
     ledger = new PgLedgerAdmin({ connectionString: pgc.ownerUrl });
     genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
+    // v112: this suite exercises the cloud-era cognition paths (the owner's explicit choice; new registries are local_only).
+    await genesis.inferenceProfileSet("cloud_allowed", "test: cloud-era cognition paths", "operator:owner");
     fake = await startFakeOpenAI({ apiKey: KEY, model: MODEL, fault: (agent, n) => faults.get(agent)?.[n] ?? null });
     service = new FleetService({
       admin: svcStore, agent: gw, realReplicationEnabled: false, reaperIntervalMs: 0, release: { ...PIN, ...BUILD }, audit: () => {},

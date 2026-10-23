@@ -257,3 +257,55 @@ export function noticeLines(attention: unknown, shown: ReadonlySet<string>): { l
     && typeof (n as { body?: unknown }).body === "string" && !shown.has((n as { id: string }).id)).slice(0, 5).reverse();
   return { lines: fresh.map((n) => `Fleet Control notice (${n.at}; from the Fleet's own control system, current policy): ${n.body.slice(0, 1_500)}`), ids: fresh.map((n) => n.id) };
 }
+
+/**
+ * 2026-10-23 (owner directive: the compact, evolving agent workspace) — the WAKE BRIEF: one short block at the top of a
+ * working packet that says, from the founder's own records only, why it woke, what it is working towards, what it already
+ * did, what it planned next, which open requests and blockers stand, and its money position. A view over existing state
+ * (goals, the carried record, obligations, the ledger) — not a second memory: every line points at the record it came from.
+ */
+export interface WakeBriefInputs {
+  reason: string;
+  goals: Array<{ id: string; title: string; blockedBy?: string; awaiting?: string }>;
+  carried: Carry | null;
+  previousOutcome: string | null;
+  obligations: Array<{ kind: string; id: string; state: string }>;
+  economics: Record<string, unknown>;
+}
+export const WAKE_BRIEF_MAX = 900;
+export function wakeBrief(i: WakeBriefInputs): string {
+  const cut = (s: string, n: number) => { const t = s.replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
+  const lines: string[] = [];
+  lines.push(`why now: ${cut(i.reason, 140) || "a scheduled wake"}`);
+  const g = i.goals[0];
+  lines.push(g ? `objective: ${g.id} "${cut(g.title, 120)}"${g.blockedBy || g.awaiting ? ` (waiting: ${cut(g.blockedBy ?? g.awaiting ?? "", 60)})` : ""}${i.goals.length > 1 ? ` (+${i.goals.length - 1} more open goal${i.goals.length > 2 ? "s" : ""})` : ""}`
+    : "objective: no open goal — assess what is worth doing (or sleep with a wake condition if nothing is)");
+  if (i.carried) {
+    const done = i.carried.done.map((d) => d.name);
+    lines.push(`already done (unfinished turn, ${i.carried.at.slice(11, 16)} UTC): ${i.carried.steps} step(s)${done.length ? `; completed actions: ${[...new Set(done)].slice(0, 5).join(", ")} — do not repeat them` : ""}`);
+    if (i.carried.plan) lines.push(`your plan then: ${cut(i.carried.plan, 160)}`);
+    if (i.carried.notRun.length) lines.push(`next, not run yet: ${i.carried.notRun.slice(0, 3).map((c) => c.name).join(", ")}`);
+    const refused = [...new Set((i.carried.refusals ?? []).map((r) => r.code))];
+    if (refused.length) lines.push(`blocked by: ${refused.slice(0, 4).join(", ")} (reasons in the carried record below)`);
+  } else if (i.previousOutcome) lines.push(`last turn ended: ${cut(i.previousOutcome, 160)}`);
+  const open = i.obligations.filter((o) => o.state === "unanswered");
+  if (i.obligations.length) lines.push(`customers: ${i.obligations.length} open request(s)${open.length ? `, ${open.length} UNANSWERED (${open.slice(0, 3).map((o) => `${o.kind} ${o.id.slice(0, 8)}`).join(", ")})` : ""}`);
+  const cash = i.economics.cash, eq = i.economics.survivalEquity;
+  if (typeof cash === "number" || typeof eq === "number") lines.push(`money: cash ${typeof cash === "number" ? `${cash}p` : "?"}, survival equity ${typeof eq === "number" ? `${eq}p` : "?"}`);
+  return cut(`WAKE BRIEF (from your own records): ${lines.join(" | ")}`, WAKE_BRIEF_MAX);
+}
+
+/** 2026-10-23: the packets the founder received (newest last), bounded: the evidence of what each wake gave it. */
+export const PACKETS_FILE = "mind-packets.jsonl";
+export const PACKETS_KEPT = 30;
+const PACKET_TEXT_MAX = 40_000;
+export function savePacket(stateDir: string, p: { at: string; turn: number; kind: string; chars: number; text: string }): void {
+  try {
+    const f = path.join(stateDir, PACKETS_FILE);
+    const prev = fs.existsSync(f) ? fs.readFileSync(f, "utf8").split("\n").filter(Boolean) : [];
+    const line = JSON.stringify({ ...p, text: p.text.slice(0, PACKET_TEXT_MAX) });
+    const keep = [...prev.slice(-(PACKETS_KEPT - 1)), line];
+    fs.writeFileSync(`${f}.tmp`, `${keep.join("\n")}\n`, { mode: 0o600 });
+    fs.renameSync(`${f}.tmp`, f);
+  } catch { /* evidence only: never affects the turn */ }
+}

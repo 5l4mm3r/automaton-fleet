@@ -70,6 +70,8 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   cancel_goal: "planning",
   complete_task: "planning",
   list_goals: "planning",
+  // 2026-10-23: a tool's full documentation (local models get compact tool lists).
+  tool_help: "planning",
   record_external_dependency: "planning",
   reply_to_owner: "planning",
   withdraw_external_dependency: "planning",

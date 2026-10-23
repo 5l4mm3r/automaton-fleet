@@ -314,12 +314,15 @@ describe("cognition gateway, providers and egress (unit)", () => {
     expect(() => loadCognitionProvider({ FLEET_COGNITION_DEADLINE_MS: "999999" })).toThrow(/between 10000 and 240000/);
     expect(loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "scripted" }).provider?.id).toBe("scripted");
     expect(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "magic" })).toThrow(/must be none/);
-    expect(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "openai_compatible" })).toThrow(/requires/);
+    // 2026-10-23: local_only is the default profile — a cloud provider is refused unless cloud_allowed is set explicitly.
+    expect(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "openai_compatible" })).toThrow(/inference profile is local_only/);
+    expect(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_INFERENCE_PROFILE: "cloud_allowed" })).toThrow(/requires/);
+    expect(() => loadCognitionProvider({ FLEET_INFERENCE_PROFILE: "anything" })).toThrow(/local_only or cloud_allowed/);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cogkey-"));
     const key = path.join(dir, "key");
     const secret = "k-secret-value-123";
     fs.writeFileSync(key, `${secret}\n`, { mode: 0o644 });
-    const env = { FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_COGNITION_BASE_URL: "https://api.example.com/v1", FLEET_COGNITION_MODEL: "m", FLEET_COGNITION_API_KEY_FILE: key };
+    const env = { FLEET_INFERENCE_PROFILE: "cloud_allowed", FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_COGNITION_BASE_URL: "https://api.example.com/v1", FLEET_COGNITION_MODEL: "m", FLEET_COGNITION_API_KEY_FILE: key };
     const errText = (f: () => unknown) => {
       try {
         f();

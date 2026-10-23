@@ -32,7 +32,7 @@
  *
  * Schema v13 founder cognition (owner controls; never run by an AI operator):
  *   cognition-policy                                                  show the global policy
- *   cognition-enable <scripted|openai_compatible|anthropic> <model> [--max-output N] [--in-microcents N] [--out-microcents N]
+ *   cognition-enable <local|scripted|openai_compatible|anthropic> <model> [--max-output N] [--in-microcents N] [--out-microcents N]
  *                    [--cache-write-microcents N] [--cache-read-microcents N] [--daily-budget N] [--turns-per-hour N]   OWNER GATE
  *   cognition-disable                                                 global kill switch (immediate)
  *   founder-cognition <agentId> enable|disable|pause|resume [--daily-budget N] [--turns-per-hour N] <reason…>
@@ -53,6 +53,9 @@
  *   cognition-routing                                                 routing switch, thresholds and tier mappings
  *   cognition-tier-set <T1|T2|T3> <model> --max-output N --in-microcents N --out-microcents N --cache-write-microcents N
  *                      --cache-read-microcents N [--thinking adaptive] [--effort low|medium|high|max]   (voids verification)
+ *   cognition-tier-set-local <T1|T2|T3> <alias> --max-output N         (v112) map a tier to the LOCAL model (zero provider prices; voids verification)
+ *   inference-profile                                                 (v112) the registry's inference profile, tiers and policy
+ *   inference-profile-set <local_only|cloud_allowed> <reason…>        (v112) OWNER GATE: cloud only by this explicit, recorded choice
  *   cognition-tier-verify <tier> <model> <verification reference…>    after checking the model on the provider account
  *   cognition-tier-enable <tier> | cognition-tier-disable <tier>      a tier can only be enabled once verified
  *   cognition-tier-cache <T2|T3> <off|prefix|prefix+tail>             v23 prompt-cache policy of a tier (T1 is always off; a
@@ -87,7 +90,7 @@ export const GENESIS_COMMANDS = new Set([
   "reproduction-eligibility", "knowledge-review", "identity-claim-decide", "owner-queue", "owner-request-decide", "owner-request-supersede", "operations-uncertain", "operation-resolve", "cognition-run", "owner-request-import",
   "cognition-policy", "cognition-enable", "cognition-disable", "founder-cognition", "cognition-status", "cognition-log", "founders-report",
   "research-policy", "research-enable", "research-disable", "founder-research", "research-log",
-  "cognition-routing", "cognition-tier-set", "cognition-tier-verify", "cognition-tier-enable", "cognition-tier-disable",
+  "cognition-routing", "cognition-tier-set", "cognition-tier-set-local", "inference-profile", "inference-profile-set", "cognition-tier-verify", "cognition-tier-enable", "cognition-tier-disable",
   "cognition-routing-enable", "cognition-routing-disable", "founder-routing", "cognition-report", "cognition-tier-cache",
   "experiment-policy", "experiment-enable", "experiment-disable", "evidence-ladder-set", "experiment-list", "experiment-show", "strategy-registry",
   "experiment-decide", "experiment-relevance", "experiment-attribute-revenue", "experiment-observe", "experiment-stop", "experiment-conclude", "relevance-calls", "relevance-reconcile",
@@ -169,7 +172,7 @@ export async function runGenesisCommand(
     case "cognition-policy":
       return ok(await g.cognitionPolicy());
     case "cognition-enable": {
-      if (p[0] !== "scripted" && p[0] !== "openai_compatible" && p[0] !== "anthropic") throw new Error("usage: cognition-enable <scripted|openai_compatible|anthropic> <model> [...]");
+      if (p[0] !== "scripted" && p[0] !== "openai_compatible" && p[0] !== "anthropic" && p[0] !== "local") throw new Error("usage: cognition-enable <local|scripted|openai_compatible|anthropic> <model> [...]");
       if (!p[1]) throw new Error("usage: cognition-enable <provider> <model> [...]");
       return ok(await g.setCognitionPolicy({
         enabled: true, provider: p[0], model: p[1], maxOutputTokens: optInt("--max-output", 16), inputMicrocents: optInt("--in-microcents"),
@@ -224,6 +227,20 @@ export async function runGenesisCommand(
       if (!/^T[123]$/.test(tier ?? "") || !model) throw new Error("usage: cognition-tier-set <T1|T2|T3> <model> --max-output N --in-microcents N --out-microcents N --cache-write-microcents N --cache-read-microcents N [--thinking adaptive] [--effort …]");
       return ok(await g.cognitionTierSet({ tier, model, thinking, effort, maxOutputTokens: need("--max-output"), inputMicrocents: need("--in-microcents"),
         outputMicrocents: need("--out-microcents"), cacheWriteMicrocents: need("--cache-write-microcents"), cacheReadMicrocents: need("--cache-read-microcents"), actor }));
+    }
+    case "cognition-tier-set-local": {
+      const [tier, model] = p;
+      const max = optInt("--max-output");
+      if (!/^T[123]$/.test(tier ?? "") || !model || !max) throw new Error("usage: cognition-tier-set-local <T1|T2|T3> <alias> --max-output N");
+      return ok(await g.cognitionTierSetLocal(tier, model, max, actor));
+    }
+    case "inference-profile":
+      return ok(await g.inferenceProfileState());
+    case "inference-profile-set": {
+      const [profile] = p;
+      const reason = p.slice(1).join(" ");
+      if ((profile !== "local_only" && profile !== "cloud_allowed") || reason.length < 3) throw new Error("usage: inference-profile-set <local_only|cloud_allowed> <reason…>");
+      return ok(await g.inferenceProfileSet(profile, reason, actor));
     }
     case "cognition-tier-verify": {
       const [tier, model] = p;

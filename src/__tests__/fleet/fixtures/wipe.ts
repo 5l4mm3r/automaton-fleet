@@ -19,7 +19,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
     "fleet_state", "fleet_schema_migrations", "fleet_treasury_policy",
     "fleet_economic_model", "fleet_ledger_classes", "fleet_ledger_kinds", "fleet_ledger_rules", "fleet_ledger_head", "fleet_legacy_economics",
     "fleet_capability_classes", "fleet_capability_manifests", "fleet_genesis_policy", "fleet_reproduction_policy",
-    "fleet_operator_state", "fleet_operator_routes", "fleet_cognition_policy", "fleet_research_policy",
+    "fleet_operator_state", "fleet_operator_routes", "fleet_cognition_policy", "fleet_inference_profile", "fleet_research_policy",
     "fleet_cognition_routing", "fleet_cognition_tiers", "fleet_action_min_tier",
     "fleet_experiment_policy", "fleet_evidence_ladder", "fleet_spend_circuit_breaker",
     "fleet_economy_policy", "fleet_venture_transition_rules", "fleet_tax_policy", "fleet_transfer_policy",
