@@ -14,6 +14,8 @@ REPO=$(cd "$(dirname "$0")/.." && pwd); LOCK="$REPO/local-machine/inference.lock
 DEST=/opt/automaton-fleet/inference; ENVF=/etc/automaton-fleet/inference.env; UNIT=/etc/systemd/system/automaton-fleet-inference.service
 CACHE=${FLEET_INFERENCE_DOWNLOADS:-/var/cache/automaton-fleet-inference}
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 2; }
+# WSL2: the Windows NVIDIA driver provides nvidia-smi and libcuda in /usr/lib/wsl/lib, which sudo's PATH leaves out.
+[[ -d /usr/lib/wsl/lib ]] && PATH="$PATH:/usr/lib/wsl/lib"
 [[ -f "$LOCK" ]] || { echo "missing $LOCK" >&2; exit 2; }
 J() { python3 -I -c "import json,sys; d=json.load(open(sys.argv[1])); p=d['profiles'][sys.argv[2]]; e=d['engine']['assets'][p['engine']]; exec(sys.argv[3])" "$LOCK" "$PROFILE" "$1"; }
 J "pass" || { echo "unknown profile $PROFILE" >&2; exit 2; }
@@ -57,7 +59,8 @@ run install -d -m 755 -o root -g root "$DEST" "$DEST/bin" "$DEST/models"
 if [[ "$APPLY" == --apply ]]; then
   T=$(mktemp -d); for line in "${FILES[@]}"; do read -r f _ _ kind <<<"$line"; [[ $kind == engine ]] && tar -xzf "$CACHE/$f" -C "$T"; done
   # The archives unpack into a llama-b<build>/ directory: its binaries and shared libraries go to bin/.
-  find "$T" -maxdepth 2 -type f \( -name 'llama-server' -o -name '*.so*' \) -exec cp -a {} "$DEST/bin/" \;
+  # The libraries' versioned names (libllama.so.0 -> libllama.so.0.7.0) are symlinks: copy them too, as links.
+  find "$T" -maxdepth 2 \( -type f -o -type l \) \( -name 'llama-server' -o -name '*.so*' \) -exec cp -a {} "$DEST/bin/" \;
   rm -rf "$T"
   for line in "${FILES[@]}"; do read -r f _ _ kind <<<"$line"; [[ $kind != engine ]] && install -m 444 -o root -g root "$CACHE/$f" "$DEST/models/$f"; done
   chmod 755 "$DEST/bin/llama-server"; chown -R root:root "$DEST"
