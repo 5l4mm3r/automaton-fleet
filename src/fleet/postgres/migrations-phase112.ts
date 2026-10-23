@@ -34,6 +34,9 @@ const AUTHORIZE = restate(V111_SQL, "svc_cognition_authorize", [[CREDIT_HELD, CR
 // messages" — every order obligation carries deliveryOwed from the order's own status; a buyer's message changes the
 // conversation state (unanswered / acknowledged), never whether the delivery is owed. An owed order also says what was bought
 // (the order's item, fulfilment, amount and the offer's promised deliverables), so the first packet holds the requirement.
+// Desktop run 2026-10-23 (9B on the RTX 5080: delivered in 1.8 min, then the buyer asked for a change; the agent answered and
+// slept, the revision never came): a buyer's request made AFTER the order's latest sent delivery, still unresolved, is owed
+// work too — revisionOwed — until a later delivery or the agent marks the request resolved.
 const PAID_OB = [
   [`  ob AS (SELECT * FROM order_ob UNION ALL SELECT * FROM enquiry_ob)`,
    `  paid_ob AS (
@@ -43,13 +46,16 @@ const PAID_OB = [
      WHERE o.agent_id = p_agent AND o.payment_status = 'paid' AND o.status IN ('to_fulfil','delivery_failed')
        AND NOT EXISTS (SELECT 1 FROM order_ob x WHERE x.id = o.order_id::text)),
   ob AS (SELECT u.*, o.order_id IS NOT NULL AS owed, o.item AS owed_item, o.fulfilment AS owed_fulfilment, o.amount_minor AS owed_amount,
-                o.currency AS owed_currency, (SELECT f.deliverables[1:5] FROM fleet_offers f WHERE f.offer_id = o.offer_id) AS owed_promised
+                o.currency AS owed_currency, (SELECT f.deliverables[1:5] FROM fleet_offers f WHERE f.offer_id = o.offer_id) AS owed_promised,
+                COALESCE(u.kind = 'order' AND o.order_id IS NULL AND u.messages > 0 AND u.last_buyer > (SELECT max(d.created_at) FROM fleet_order_deliveries d
+                  WHERE d.order_id::text = u.id AND d.status = 'sent'), false) AS revision_owed
           FROM (SELECT * FROM order_ob UNION ALL SELECT * FROM enquiry_ob UNION ALL SELECT * FROM paid_ob) u
           LEFT JOIN fleet_customer_orders o ON u.kind = 'order' AND o.order_id::text = u.id AND o.agent_id = p_agent
                 AND o.payment_status = 'paid' AND o.status IN ('to_fulfil','delivery_failed'))`],
   [`'state', CASE WHEN replied IS NULL OR replied < last_buyer THEN 'unanswered' ELSE 'acknowledged' END,`,
    `'state', CASE WHEN messages = 0 THEN 'to_deliver' WHEN replied IS NULL OR replied < last_buyer THEN 'unanswered' ELSE 'acknowledged' END,
            'deliveryOwed', CASE WHEN owed THEN true END,
+           'revisionOwed', CASE WHEN revision_owed THEN true END,
            'bought', CASE WHEN owed THEN jsonb_build_object('item', owed_item, 'fulfilment', owed_fulfilment, 'amountMinor', owed_amount,
              'currency', owed_currency, 'promised', to_jsonb(owed_promised)) END,`],
 ] as Array<[string, string]>;

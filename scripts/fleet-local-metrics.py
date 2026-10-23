@@ -37,7 +37,7 @@ turns = sorted({e.get("turn") for e in log if e.get("turn") is not None})
 gaps = sorted((ts(b["at"]) - ts(a["at"])).total_seconds() for a, b in zip(log, log[1:]) if a.get("turn") == b.get("turn"))
 start = ts(result["startedAt"]) if result.get("startedAt") else (ts(log[0]["at"]) if log else None)
 first_tool = lambda name, op=None: next((e["at"] for e in steps for t in e["tools"] if t["name"] == name and t.get("ok")), None)
-delivered_at = next((x.get("sentAt") or x.get("createdAt") or x.get("at") for x in deliveries if isinstance(x, dict)), None)
+delivered_at = next((x.get("sentAt") or x.get("createdAt") or x.get("created_at") or x.get("at") for x in deliveries if isinstance(x, dict)), None)
 q = lambda xs, f: xs[min(len(xs) - 1, int(len(xs) * f))] if xs else None
 
 m = {

@@ -84,7 +84,9 @@ describe.skipIf(!PG_BIN || !fs.existsSync(path.join(DEV_TOOLS, "site")))("scenar
     for (const sc of ["s1-order-and-correction", "s5-lesson-application"]) {
       const d = path.join(evidenceDir, sc);
       for (const f of ["calls.jsonl", "result.json"]) expect(fs.existsSync(path.join(d, f)), `${sc}/${f}`).toBe(true);
-      const all = fs.readdirSync(d).map((f) => fs.readFileSync(path.join(d, f), "utf8")).join("\n");
+      // Every kept file, the workspace copies included (2026-10-23: the evidence now keeps the delivered files themselves).
+      const all = (fs.readdirSync(d, { recursive: true }) as string[]).filter((f) => fs.statSync(path.join(d, f)).isFile())
+        .map((f) => fs.readFileSync(path.join(d, f), "utf8")).join("\n");
       expect(all).not.toContain(KEY);
     }
     expect(fs.existsSync(path.join(evidenceDir, "s1-order-and-correction", "mind-log.jsonl"))).toBe(true);

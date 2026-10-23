@@ -33,6 +33,8 @@ function writeNoFollow(file: string, data: string | Buffer): void {
 }
 
 const argsOf = (c: ToolCall) => (c.arguments ?? {}) as Record<string, unknown>;
+/** A call's arguments with an economy tool's nested `args` (wallet deliver: {op, args: {orderId, paths, reviewId}}) lifted. */
+const flatArgs = (c: ToolCall) => { const a = argsOf(c); return { ...a, ...(a.args && typeof a.args === "object" && !Array.isArray(a.args) ? a.args as Record<string, unknown> : {}) }; };
 const oneLine = (s: string, n: number) => { const t = s.replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 
 /** The procedure's kind, from the delivered files: deliver-pdf, deliver-xlsx, … (deliver-file when mixed or unknown). */
@@ -88,7 +90,7 @@ const PARAMETERS = [
  */
 export function recordProcedure(workspaceDir: string, calls: ProcedureCall[], deliver: ToolCall, now = new Date(), specifics: { item?: string } = {}): string | null {
   const workspace = fs.realpathSync(workspaceDir);
-  const d = argsOf(deliver);
+  const d = flatArgs(deliver);
   const values = { ORDER_ID: typeof d.orderId === "string" ? d.orderId : undefined, REVIEW_ID: typeof d.reviewId === "string" ? d.reviewId : undefined, ITEM: specifics.item };
   const P = (t: string) => parameterize(t, values);
   const paths = Array.isArray(d.paths) ? d.paths.filter((p): p is string => typeof p === "string").slice(0, 20) : [];

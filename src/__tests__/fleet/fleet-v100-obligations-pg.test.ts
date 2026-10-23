@@ -92,7 +92,7 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     expect(await obligations()).toEqual([]);
     await buyer(50);                                                // … then the fault report (19:13)
     const [ob] = await obligations();
-    expect(ob).toMatchObject({ kind: "order", id: orderId, state: "unanswered", buyerMessages: 1 });
+    expect(ob).toMatchObject({ kind: "order", id: orderId, state: "unanswered", buyerMessages: 1, revisionOwed: true });   // after the delivery
     expect(ob.repliedAt).toBeUndefined();
     expect((await obligations())[0]).toEqual(ob);                   // state, not news: the same on the next read
     // The watchdog: 50 minutes unanswered while running → stop; resumed 10 minutes ago (after an owner pause) → not yet.
@@ -108,7 +108,7 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     const before = await digest();
     const r = await econNext(R, F, "order.message", { orderId, message: "Thank you — I have your report and am correcting the dates now." });
     expect(r, JSON.stringify(r)).toMatchObject({ ok: true, resolves: false, obligation: { state: "acknowledged" } });
-    expect((await obligations())[0]).toMatchObject({ state: "acknowledged", repliedAt: expect.any(String) });
+    expect((await obligations())[0]).toMatchObject({ state: "acknowledged", repliedAt: expect.any(String), revisionOwed: true });   // answered is not delivered
     expect(await digest()).toBe(before);
     expect(await watchdog(new Date(Date.now() - 120 * 60_000).toISOString())).toBe(false);
     await buyer(0, "Any news?");                                     // after the answer (each statement its own now())
@@ -123,7 +123,7 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     await R.q(`UPDATE fleet.fleet_order_deliveries SET status = 'sent', sent_at = now() WHERE delivery_id = $1`, [d.delivery_id]);
     expect(await obligations()).toEqual([]);
     await buyer(0, "One more question: does it cover Wales?");
-    expect((await obligations())[0]).toMatchObject({ state: "unanswered", buyerMessages: 1 });
+    expect((await obligations())[0]).toMatchObject({ state: "unanswered", buyerMessages: 1, revisionOwed: true });
     expect(await econNext(R, F, "order.message", { orderId, message: "It covers England only; Wales has different rules.", resolved: true }))
       .toMatchObject({ ok: true, resolves: true, obligation: null });
     expect(await obligations()).toEqual([]);
@@ -297,6 +297,17 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
       VALUES ($1, $2, $3, 'Your PDF', 'Attached.', 'sent', now(), now())`, [paid, F.id, `d:${crypto.randomUUID()}`]);
     await R.q(`UPDATE fleet.fleet_customer_orders SET status = 'delivered', fulfilled_at = now(), fulfilment_evidence = '{"delivery":"sent"}' WHERE order_id = $1`, [paid]);
     expect((await obligations()).some((x) => x.id === paid)).toBe(false);
+    // Desktop run 2026-10-23 (9B, RTX 5080): delivered, then the buyer asked for a change; the agent answered and slept. The
+    // revision is owed work until a later delivery is sent (or the request is resolved) — an answer alone does not end it.
+    await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'buyer', 'Point 7 needs a date line. Could you add it?')`, [F.id, paid]);
+    const asked = (await obligations()).find((x) => x.id === paid)!;
+    expect(asked).toMatchObject({ state: "unanswered", revisionOwed: true });
+    expect(asked.deliveryOwed).toBeUndefined();                                         // the first delivery was made
+    await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'agent', 'Updated — see the revised PDF.')`, [F.id, paid]);
+    expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ state: "acknowledged", revisionOwed: true });
+    await R.q(`INSERT INTO fleet.fleet_order_deliveries (order_id, agent_id, idempotency_key, subject, body, status, created_at, sent_at)
+      VALUES ($1, $2, $3, 'Your revised PDF', 'Attached.', 'sent', now(), now())`, [paid, F.id, `d:${crypto.randomUUID()}`]);
+    expect((await obligations()).some((x) => x.id === paid)).toBe(false);                // the revision was delivered
   });
 
   it("v111: a listing, pin or storefront product that sells elsewhere names a published offer whose capability check still covers it", async () => {

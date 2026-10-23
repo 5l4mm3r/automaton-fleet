@@ -304,8 +304,8 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
   it("1o. a delivery that went through keeps its method as a procedure; the next owed order's packet points to it", async () => {
     const ORDER = "6ac71280-60d2-41d1-b2a4-38f21caa4b07";
     const r = rig((t, s) => t === 1
-      ? [{ calls: [c("write_file", { path: "/workspace/order/make.py", content: "print(1)" })] },
-         { calls: [c("wallet", { op: "deliver", orderId: ORDER, paths: ["order/checklist.pdf"], reviewId: "r1" })] },
+      ? [{ calls: [c("write_file", { path: "/workspace/order/make.py", content: "print(1)" }), c("write_file", { path: "order/checklist.pdf", content: "%PDF-1.4 x" })] },
+         { calls: [c("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.pdf"], reviewId: "r1" } })] },
          { calls: [c("sleep", { reason: "delivered" })] }][s - 1] ?? { calls: [c("sleep", { reason: "done" })] }
       : { calls: [c("sleep", { reason: "next" })] });
     await r.mind.turn("hb");
@@ -318,6 +318,37 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     await r.mind.turn("hb 2");
     expect(r.packets.at(-1)).toContain("Your saved procedures (methods that worked before");
     expect(r.packets.at(-1)).toContain("procedures/deliver-pdf.md");
+  });
+
+  // Desktop run 2026-10-23 (9B on the RTX 5080): the revised PDF's review was answered FLEET_ALREADY_DONE with the ORIGINAL
+  // review's result (same arguments, changed file), so the redelivery carried a stale review and was refused.
+  it("1p. a completed action of the carried turn is not repeated — unless the files it names changed since", async () => {
+    const D = c("wallet", { op: "deliver", args: { orderId: "6ac71280-60d2-41d1-b2a4-38f21caa4b07", paths: ["order/x.pdf"], reviewId: "r1" } });
+    const r = rig((t, s) => t === 1
+      ? [{ calls: [c("write_file", { path: "order/x.pdf", content: "%PDF v1" })] }, { calls: [D] }, { calls: [c("read_file", { path: "product/tracker.csv" })] }][s - 1]!
+      : t === 2 ? [{ calls: [D] }, { calls: [c("write_file", { path: "order/x.pdf", content: "%PDF v2 with the date line" })] }, { calls: [D] }][s - 1]!
+      : { calls: [c("sleep", { reason: "done" })] }, { maxSteps: 3 });
+    await r.mind.turn("hb");
+    await r.mind.turn("hb 2");
+    expect(r.outputsSeen.some((o) => o.includes("FLEET_ALREADY_DONE"))).toBe(true);   // unchanged file: not repeated
+    expect(r.world.economyCalls.filter((op) => op === "order.deliver")).toHaveLength(2);   // changed file: it ran again
+  });
+
+  it("1q. a buyer's request after delivery is owed work: the objective and next move, and a sleep is looked at again", async () => {
+    const ORDER = "6ac71280-60d2-41d1-b2a4-38f21caa4b07";
+    const at = new Date(Date.now() - 60_000).toISOString();
+    const r = rig(() => ({ calls: [c("sleep", { reason: "answered the buyer", wakeOn: "a new message" })] }));
+    r.world.obligations = [{ kind: "order", id: ORDER, state: "acknowledged", since: at, lastBuyerAt: at, repliedAt: at, buyerMessages: 1, revisionOwed: true }];
+    const t0 = Date.now();
+    await r.mind.turn("hb");
+    const p = r.packets[0];
+    expect(p).toContain("objective: RESOLVE the buyer's request after delivery on order 6ac71280");
+    expect(p).toContain(`Your next move: RESOLVE the buyer's request after delivery on order ${ORDER}`);
+    expect(p).toContain("a NEW deliverable review of the new bytes");
+    expect(p).toContain("tell the buyer it is done only after that delivery");
+    const reviewAt = Date.parse(JSON.parse(fs.readFileSync(path.join(r.d.s, "mind-continuity.json"), "utf8")).reviewAt);
+    expect(reviewAt - t0).toBeGreaterThanOrEqual(14 * 60_000);
+    expect(reviewAt - t0).toBeLessThanOrEqual(16 * 60_000);
   });
 
   it("1g. a stop (SIGTERM: deploy, restart) ends the turn between steps with its working record saved", async () => {

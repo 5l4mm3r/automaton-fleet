@@ -68,8 +68,10 @@ database is restored or changed by either step.
   108 calls, £0, 0 egress attempts) the 2B did **not** deliver the paid order. Four platform defects were found and repaired,
   and the model's own weaknesses are recorded: [docs/evaluations/local-model/s1b-2026-10-23.md](../evaluations/local-model/s1b-2026-10-23.md).
   No further long 2B runs; the next demonstration is one paid order on the 9B on the GPU.
-- **RTX 5080 (gpu16):** not yet measured — the setup and readiness scripts print the real figures on first run. Expect a
-  9B model at Q6_K on a 16 GB GPU to be many times faster than the CPU figures above; this is an expectation, not a result.
+- **RTX 5080 (gpu16), measured 2026-10-23 (WSL2):** 10.6 GB of 16 GB VRAM in use, peak 266 W, idle ~43 W; a founder step
+  median 1.9 s (p90 7.2 s, max 9.2 s) with prompts up to ~20k tokens. The first paid order was delivered with a passing review
+  1.8 minutes after it was placed; its correction was not delivered (platform defects since repaired):
+  [docs/evaluations/local-model/gpu-2026-10-23.md](../evaluations/local-model/gpu-2026-10-23.md).
 - **Quality:** a 9B open model is far below a frontier cloud model. The machine is built so that useful work completes with
   it (compact tool lists, full docs on demand, cached inspections, carried working records); judgment-heavy work must be
   evaluated, not assumed. A larger model can be pinned later in the same lock file if the hardware allows.
@@ -114,6 +116,13 @@ sudo scripts/fleet-local-inference-setup.sh gpu16            # dry run: prerequi
 sudo scripts/fleet-local-inference-setup.sh gpu16 --apply
 sudo scripts/fleet-local-readiness.sh --offline              # with the network unplugged: every line PASS
 ```
+
+On a fresh Ubuntu (including WSL2 on Windows: `systemd=true` in `/etc/wsl.conf`; the Windows NVIDIA driver provides the GPU,
+never a Linux driver inside WSL), the demonstration also needs, measured on the owner's desktop 2026-10-23:
+`sudo apt install -y libgomp1 postgresql poppler-utils` (then `sudo systemctl disable --now postgresql`: the test starts its
+own database), `corepack pnpm install --frozen-lockfile`, `npx tsc` (the runtime runs from `dist/`), and
+`scripts/fleet-agent-tools.sh install ~/.cache/automaton-fleet-tools/dev`. First result:
+[docs/evaluations/local-model/gpu-2026-10-23.md](../evaluations/local-model/gpu-2026-10-23.md).
 
 Then ONE paid-order fixture on the 9B (time only; no money; the egress tripwire is armed), from a repository checkout:
 

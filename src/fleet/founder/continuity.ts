@@ -173,7 +173,7 @@ export class ProgressMemory {
   save(): void { writeJson(this.file, { seen: this.seen, lastWrites: this.lastWrites, repeats: this.repeats }); }
 }
 
-export interface CarryStep { name: string; args: string; ok: boolean; refused?: string; result: string; external: boolean; sig: string }
+export interface CarryStep { name: string; args: string; ok: boolean; refused?: string; result: string; external: boolean; sig: string; fp?: string }
 export interface Carry {
   at: string;
   turn: number;
@@ -181,7 +181,7 @@ export interface Carry {
   /** Calls made in the cut-off turn(s), oldest first (bounded). */
   calls: CarryStep[];
   /** Completed external or paid calls of the carried turns: an identical repeat is not executed. */
-  done: Array<{ sig: string; name: string; args: string; result: string }>;
+  done: Array<{ sig: string; name: string; args: string; result: string; fp?: string }>;
   /** Requested in the last step but not run (the per-step call limit). */
   notRun: Array<{ name: string; args: string }>;
   plan: string;
@@ -207,15 +207,15 @@ const NOT_A_REFUSAL = new Set(["FLEET_TOOL_CALL_LIMIT", "FLEET_ALREADY_DONE"]);
 /** A new carry from a cut-off turn, keeping what earlier carried turns completed. 2026-10-21 (repeated size stops): it also
  *  keeps the earlier carried calls (oldest results dropped first by the bound), every refusal's reason, and the last plan
  *  the founder wrote when this turn wrote none. */
-export function saveCarry(stateDir: string, prev: Carry | null, x: { turn: number; steps: number; calls: Array<{ call: ToolCall; ok: boolean; refused?: string; output: string }>;
+export function saveCarry(stateDir: string, prev: Carry | null, x: { turn: number; steps: number; calls: Array<{ call: ToolCall; ok: boolean; refused?: string; output: string; fp?: string }>;
   notRun: ToolCall[]; plan: string; sizeStop?: boolean; stopCode?: string }): Carry {
-  const fresh: CarryStep[] = x.calls.map(({ call, ok, refused, output }) => ({ name: call.name, args: compact(call.arguments), ok, ...(refused ? { refused } : {}),
-    result: output.slice(0, STEP_RESULT_CHARS), external: isExternal(call), sig: callSig(call) }));
+  const fresh: CarryStep[] = x.calls.map(({ call, ok, refused, output, fp }) => ({ name: call.name, args: compact(call.arguments), ok, ...(refused ? { refused } : {}),
+    result: output.slice(0, STEP_RESULT_CHARS), external: isExternal(call), sig: callSig(call), ...(fp ? { fp } : {}) }));
   const calls: CarryStep[] = [...(prev?.calls ?? []), ...fresh];
   const refusals = [...(prev?.refusals ?? []), ...fresh.filter((s) => !s.ok && s.refused && !NOT_A_REFUSAL.has(s.refused))
     .map((s) => ({ name: s.name, args: s.args.slice(0, 160), code: s.refused!, reason: s.result.replace(/\s+/g, " ").slice(0, 300) }))].slice(-8);
   const done = [...(prev?.done ?? [])];
-  for (const s of calls) if (s.ok && s.external && !done.some((d) => d.sig === s.sig)) done.push({ sig: s.sig, name: s.name, args: s.args, result: s.result.slice(0, 200) });
+  for (const s of calls) if (s.ok && s.external && !done.some((d) => d.sig === s.sig)) done.push({ sig: s.sig, name: s.name, args: s.args, result: s.result.slice(0, 200), ...(s.fp ? { fp: s.fp } : {}) });
   const carry: Carry = { at: new Date().toISOString(), turn: x.turn, steps: x.steps, calls, done: done.slice(-30),
     notRun: x.notRun.map((c) => ({ name: c.name, args: compact(c.arguments) })), plan: (x.plan.trim() ? x.plan : prev?.plan ?? "").slice(0, 800),
     ...(x.sizeStop ? { sizeStop: true } : {}), ...(x.stopCode ? { stopCode: x.stopCode.slice(0, 80) } : {}), turns: (prev?.turns ?? (prev ? 1 : 0)) + 1, ...(refusals.length ? { refusals } : {}) };
@@ -269,7 +269,7 @@ export interface WakeBriefInputs {
   goals: Array<{ id: string; title: string; blockedBy?: string; awaiting?: string }>;
   carried: Carry | null;
   previousOutcome: string | null;
-  obligations: Array<{ kind: string; id: string; state: string; deliveryOwed?: boolean; bought?: { item: string } }>;
+  obligations: Array<{ kind: string; id: string; state: string; deliveryOwed?: boolean; revisionOwed?: boolean; bought?: { item: string } }>;
   economics: Record<string, unknown>;
 }
 export const WAKE_BRIEF_MAX = 900;
@@ -289,6 +289,9 @@ export function wakeBrief(i: WakeBriefInputs): string {
   const owedFirst = i.obligations.filter((o) => o.state === "to_deliver" || o.deliveryOwed);
   if (owedFirst.length) {
     lines.push(`objective: DELIVER the paid order${owedFirst.length > 1 ? "s" : ""} ${owedFirst.slice(0, 3).map((o) => `${o.id.slice(0, 8)}${o.bought ? ` ("${cut(o.bought.item, 90)}")` : ""}`).join(", ")} (owed to a customer: before any research, new venture or offer work)`);
+    lines.push(goalText ? `your own goal, after that: ${goalText}` : "your own goal: none open");
+  } else if (i.obligations.some((o) => o.revisionOwed)) {
+    lines.push(`objective: RESOLVE the buyer's request after delivery on order ${i.obligations.filter((o) => o.revisionOwed).slice(0, 3).map((o) => o.id.slice(0, 8)).join(", ")} (a revision if they asked for a change; owed to a customer: before any research, new venture or offer work)`);
     lines.push(goalText ? `your own goal, after that: ${goalText}` : "your own goal: none open");
   } else lines.push(goalText ? `objective: ${goalText}` : "objective: no open goal — assess what is worth doing (or sleep with a wake condition if nothing is)");
   if (i.carried) {

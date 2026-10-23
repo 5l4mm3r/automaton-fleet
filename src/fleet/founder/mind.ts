@@ -43,11 +43,11 @@ import { escalateQuestion, priorDecision } from "./escalation.js";
 import { ASSESS_LINE, BOOTSTRAP_LINE, DECISIONS_FILE, HIBERNATE_LINE, hibernationRecheck, classifyWork, decisionLines, economicState, nextMoveLine, idleTask, loadDecisions, ownCapitalLine, parseSurvival, saleLine, stateLine,
   survivalLine, workKind, workLines, type Decision, type GoalView, type WorkKind } from "./decisions.js";
 import { PATH_RULE, readJournal, readJournalIndex } from "./toolbox.js";
-import { MAX_FAILED_ATTEMPTS } from "./loop-guard.js";
+import { MAX_FAILED_ATTEMPTS, filesState } from "./loop-guard.js";
 import { procedureLine, recordProcedure } from "./procedures.js";
 import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineClass } from "./task-classifier.js";
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
-import { newestBuyerMessage, obligationLines, owedDeliveryLine, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
+import { OWED_RECHECK_MS, newestBuyerMessage, obligationLines, owedDeliveryLine, owedRevisionLine, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
 import { officeState } from "./exec-sandbox.js";
 import { CARRY_MAX_CHARS, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
 
@@ -821,9 +821,11 @@ export class FounderMind {
     // Review 2026-10-23 (local run S1b: the paid order was in every packet, yet the next-move line still said "no execution path,
     // run an opportunity cycle" and the model researched instead): while a paid order's delivery is owed, that delivery is the
     // next move — the opportunity / venture push waits until it is delivered or its blocker is recorded.
-    const owedOrders = (obligations ?? []).filter((o) => o.deliveryOwed);
+    const owedOrders = (obligations ?? []).filter((o) => o.deliveryOwed || o.revisionOwed);
+    const owedDeliveries = owedOrders.filter((o) => o.deliveryOwed);
     const move = bare ? null
-      : owedOrders.length ? owedDeliveryLine(owedOrders.map((o) => o.id))
+      : owedDeliveries.length ? owedDeliveryLine(owedDeliveries.map((o) => o.id))
+      : owedOrders.length ? owedRevisionLine(owedOrders.map((o) => o.id))
       : challenge ? `${ASSESS_LINE}\n${kindMove}`
       : nudge ? (declared ? `${hibernationRecheck(prev?.outcome ?? "", prev?.wakeOn ?? null, prev?.reviewAt ?? null)}\n${kindMove}`
         : `${ASSESS_LINE} (You have now rested ${rests} time(s) in this state without declaring hibernation.)\n${kindMove}`)
@@ -917,7 +919,7 @@ export class FounderMind {
     // 2026-10-21: the turn reached its request-size budget mid-work (not a finish): carried like a turn that used all its steps.
     let sizeStop = false;
     // 2026-10-18 (work continuity): every call of this turn with its result, the progress test and the carried record.
-    const records: Array<{ call: ToolCall; ok: boolean; refused?: string; output: string }> = [];
+    const records: Array<{ call: ToolCall; ok: boolean; refused?: string; output: string; fp?: string }> = [];
     // 2026-10-19: this turn's refusals with bounded, redacted reasons (the mind log and the closing note).
     const refusals: Array<{ tool: string; code: string; reason: string }> = [];
     let notRun: ToolCall[] = [];
@@ -988,7 +990,9 @@ export class FounderMind {
       notRun = [];
       for (const [i, call] of r.toolCalls.entries()) {
         let out: ToolOutcome;
-        const already = W && carried && isExternal(call) ? carried.done.find((d) => d.sig === callSig(call)) : undefined;
+        // Desktop run 2026-10-23: a review of a REVISED file is not the review already done — the done record keeps the state of
+        // the files a call named, and a call on changed files runs again (the stale review it returned blocked the redelivery).
+        const already = W && carried && isExternal(call) ? carried.done.find((d) => d.sig === callSig(call) && (!d.fp || d.fp === filesState(R.workspaceDir, call))) : undefined;
         if (i >= MAX_TOOL_CALLS_EXECUTED) {
           out = this.o.toolbox.noteNotExecuted(call, { name: call.name, ok: false, refused: "FLEET_TOOL_CALL_LIMIT", output: `NOT EXECUTED FLEET_TOOL_CALL_LIMIT: at most ${MAX_TOOL_CALLS_EXECUTED} tool calls run per step; request it again in a later step if still needed.` });
           notRun.push(call);
@@ -1013,13 +1017,15 @@ export class FounderMind {
         if (W && out.ok && call.name === "wallet" && call.arguments?.op === "deliver") {
           try {
             const earlier = (carried?.calls ?? []).flatMap((x) => { try { return [{ call: { id: "carried", name: x.name, arguments: JSON.parse(x.args) as Record<string, unknown> }, ok: x.ok }]; } catch { return []; } });
-            const item = (obligations ?? []).find((o) => o.id === call.arguments?.orderId)?.bought?.item;
+            const orderId = (call.arguments?.args as { orderId?: unknown } | undefined)?.orderId ?? call.arguments?.orderId;
+            const item = (obligations ?? []).find((o) => o.id === orderId)?.bought?.item;
             const saved = recordProcedure(R.workspaceDir, [...earlier, ...records.map((x) => ({ call: x.call, ok: x.ok }))], call, new Date(), { item });
             if (saved) out = { ...out, output: `${out.output}\n(The method that produced this delivery was kept as ${saved} — yours to edit or improve; earlier versions in procedures/.history/.)` };
           } catch { /* the delivery stands; only the record of its method is missing */ }
         }
         if (W) {
-          records.push({ call, ok: out.ok, ...(out.refused ? { refused: out.refused } : {}), output: out.output });
+          const fp = out.ok && isExternal(call) ? filesState(R.workspaceDir, call) : "";
+          records.push({ call, ok: out.ok, ...(out.refused ? { refused: out.refused } : {}), output: out.output, ...(fp ? { fp } : {}) });
           progressMem!.note(call, out.ok, out.output);
         }
         // 2026-10-22: a result obtained again and again (an unchanged file inspected turn after turn) gets a platform
@@ -1058,6 +1064,9 @@ export class FounderMind {
     // 2026-10-21 (launch check: seven turns each ended at the size budget after 5-7 steps, were taken as finished, lost their
     // working record and re-oriented from scratch): a size stop is cut off too — its record, plan and calls reach the next turn.
     const cutOff = !finished && (sizeStop || !!stopCode || result.steps >= maxSteps);
+    // Desktop run 2026-10-23: a turn that ends asleep while a delivery or revision is owed gets a review time, so the owed work is
+    // looked at again (the agent answered the buyer, slept, and nothing woke it for the remaining 41 minutes).
+    if (W && !owner && finished && owedOrders.length && !reviewAt) reviewAt = new Date(Date.now() + OWED_RECHECK_MS).toISOString();
     const planText = outcome;   // what the founder itself wrote (the carried plan); the note below is the platform's
     if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${stopCode === REPEATING_STOP ? `was ended after ${result.steps} steps that only repeated refused actions` : stopCode ? `was stopped by a runtime restart after ${result.steps} steps` : sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
     // 2026-10-18 (work continuity): a cut-off turn leaves its working record for the next turn (and a restart); a finished

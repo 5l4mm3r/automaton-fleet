@@ -45,7 +45,8 @@ interface Seen { ok: boolean; refused?: string; output: string; stateVersion: nu
 /** Review 2026-10-23 (a genuine fix must permit recovery): the workspace files a call names — its path / paths, and the
  *  file-like words of an exec command — whose state is part of what a refusal depends on. Bounded; never outside. */
 export function callDeps(call: ToolCall): string[] {
-  const a = (call.arguments ?? {}) as Record<string, unknown>;
+  const top = (call.arguments ?? {}) as Record<string, unknown>;
+  const a = { ...top, ...(top.args && typeof top.args === "object" && !Array.isArray(top.args) ? top.args as Record<string, unknown> : {}) };
   const words = [typeof a.path === "string" ? a.path : "", ...(Array.isArray(a.paths) ? a.paths.filter((x): x is string => typeof x === "string") : []),
     ...(call.name === "exec" && typeof a.command === "string" ? a.command.split(/[\s'"`;|&<>()=]+/).filter((w) => /^[\w./-]+\.[A-Za-z0-9]{1,8}$/.test(w)) : [])];
   return [...new Set(words.map((w) => w.trim().replace(/^\/workspace\/?/, "").replace(/^\.\//, ""))
@@ -61,6 +62,14 @@ export function callLabel(call: ToolCall): string {
   const a = call.arguments ?? {};
   const parts = Object.keys(a).filter((k) => k !== "content" && typeof a[k] !== "object").slice(0, 3).map((k) => `${k}=${String(a[k]).slice(0, 60)}`);
   return `${call.name}${parts.length ? ` ${parts.join(" ")}` : ""}`;
+}
+
+/** The state of the workspace files a call names (size and modification time, or absent); "" when it names none. */
+export function filesState(workspaceDir: string | undefined, call: ToolCall): string {
+  return callDeps(call).map((rel) => {
+    if (!workspaceDir) return `${rel}=?`;
+    try { const st = fs.lstatSync(path.join(workspaceDir, rel)); return `${rel}=${st.size}:${st.mtimeMs}`; } catch { return `${rel}=absent`; }
+  }).join("\n");
 }
 
 export class LoopGuard {

@@ -418,6 +418,17 @@ async function keepEvidence(w: World, dir: string, o: ScenarioSuiteOptions): Pro
   const walk = (d: string) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (e.isFile() && files.length < 500) { const b = fs.readFileSync(p); files.push({ path: path.relative(w.ws, p), bytes: b.length, sha256: sha(b) }); } } };
   if (fs.existsSync(w.ws)) walk(w.ws);
   put("workspace-files.json", files);
+  // Desktop run 2026-10-23: the files themselves (the delivered document, its build script, a kept procedure), so the work can
+  // be judged after the run — not only their hashes. Synthetic scenario data; regular files only, bounded; never .tmp renders.
+  let kept = 0;
+  for (const f of files) {
+    if (kept >= 60 || f.path.startsWith(".tmp/") || f.bytes > 5_000_000) continue;
+    const src = path.join(w.ws, f.path);
+    if (fs.lstatSync(src).isSymbolicLink()) continue;
+    fs.mkdirSync(path.dirname(path.join(dir, "workspace", f.path)), { recursive: true, mode: 0o700 });
+    fs.copyFileSync(src, path.join(dir, "workspace", f.path));
+    kept++;
+  }
   put("customer-messages.json", await w.q(`SELECT author, order_id, enquiry_id, body, created_at FROM fleet_customer_messages WHERE agent_id = $1 ORDER BY created_at`, [w.a]));
   put("deliveries.json", await w.q(`SELECT d.delivery_id, d.order_id, d.status, d.resend_reason, d.created_at, f.file_name, f.content_sha256, r.verdict, r.automated_ok
     FROM fleet_order_deliveries d LEFT JOIN fleet_order_delivery_files f ON f.delivery_id = d.delivery_id LEFT JOIN fleet_artifact_reviews r ON r.review_id = d.review_id

@@ -13,7 +13,8 @@ import type { ToolCall } from "../../fleet/cognition/types.js";
 const c = (name: string, args: Record<string, unknown>): ToolCall => ({ id: name, name, arguments: args });
 const ws = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "proc-")));
 const ORDER = "6ac71280-60d2-41d1-b2a4-38f21caa4b07";
-const deliver = c("wallet", { op: "deliver", orderId: ORDER, paths: ["order/checklist.pdf"], reviewId: "r1" });
+// The wallet tool's real shape (desktop run 2026-10-23: the procedure read top-level arguments and was never written).
+const deliver = c("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.pdf"], reviewId: "r1" } });
 
 describe("procedures kept from a successful delivery", () => {
   it("records the build commands, the scripts they ran (copied), the inspection and review, and the delivery", () => {
@@ -79,7 +80,7 @@ describe("procedures kept from a successful delivery", () => {
     fs.mkdirSync(path.join(w, "orders", "6ac71280"));
     fs.writeFileSync(path.join(w, "orders", "6ac71280", "make.py"),
       `ORDER = "${ORDER}"\nTITLE = "Gas safety: the landlord's annual 10-point checklist"\nTO = "jo.buyer@example.com"\n`);
-    const d2 = c("wallet", { op: "deliver", orderId: ORDER, paths: ["orders/6ac71280/checklist.pdf"], reviewId: "rev-5d1e0c" });
+    const d2 = c("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["orders/6ac71280/checklist.pdf"], reviewId: "rev-5d1e0c" } });
     const calls = [
       { call: c("exec", { command: `python3 orders/6ac71280/make.py --order ${ORDER} --mail jo.buyer@example.com --sms +447700900123 --ref 01M3F50SH7PNX2E3GST13J52AS` }), ok: true },
       { call: c("deliverable", { op: "review", paths: ["orders/6ac71280/checklist.pdf"], criteria: [1], verdict: "pass" }), ok: true },
