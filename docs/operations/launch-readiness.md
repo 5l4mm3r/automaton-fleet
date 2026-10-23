@@ -1,5 +1,6 @@
 # Launch readiness — the one checklist (Agent-1 first; Agent-2 stays paused)
 
+> 2026-10-23: **local inference only** (owner directive) — see docs/operations/local-machine.md and the matrix's first table.
 > 2026-10-21: the authoritative current baseline is **docs/operations/completion-matrix.md** (reconciled with the master
 > specification and the acceptance matrix); this file keeps the history and evidence.
 

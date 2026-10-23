@@ -5,12 +5,12 @@
 # (gpg, AES-256), with a manifest of checksums, per-table row counts, the ledger head and the schema version that the import
 # (scripts/fleet-owner-import.sh) checks before it reports success. Nothing is deleted, stopped or changed here.
 #
-#   sudo scripts/fleet-owner-export.sh <outDir> <passphraseFile>
+#   sudo scripts/fleet-owner-export.sh <outDir> <passphraseFile> [--no-secrets]   (--no-secrets: a restore test elsewhere)
 #
 # The passphrase file is the owner's (0600, never printed, never copied into the export). The generic installer package
 # never contains this export: it is the owner's instance, moved by the owner.
 set -euo pipefail
-OUT=${1:?output directory}; PASS=${2:?passphrase file (0600)}
+OUT=${1:?output directory}; PASS=${2:?passphrase file (0600)}; NOSECRETS=$([[ "${3:-}" == --no-secrets ]] && echo yes || echo no)
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 2; }
 [[ -f "$PASS" && "$(stat -c %a "$PASS")" == 600 ]] || { echo "the passphrase file must exist with mode 0600" >&2; exit 2; }
 command -v gpg >/dev/null || { echo "gpg is required" >&2; exit 2; }
@@ -36,8 +36,8 @@ echo "  founders $(du -h "$W/founders.tgz" | cut -f1); evaluations $(du -h "$W/e
 echo "== 3. secret material (separate archive: vaults and custody key; never in the generic package)"
 SECRETS=()
 for d in /var/lib/automaton-fleet-identity /var/lib/automaton-fleet-custody /etc/automaton-fleet/recovery; do [[ -e "$d" ]] && SECRETS+=("${d#/}"); done
-tar -C / -czf "$W/secrets.tgz" "${SECRETS[@]}"
-echo "  ${#SECRETS[@]} locations (contents not listed)"
+if [[ $NOSECRETS == yes ]]; then echo "  skipped (--no-secrets)"; else
+  tar -C / -czf "$W/secrets.tgz" "${SECRETS[@]}"; echo "  ${#SECRETS[@]} locations (contents not listed)"; fi
 
 echo "== 4. encrypt (AES-256, the owner's passphrase) and manifest"
 for f in registry.dump founders.tgz evaluations.tgz secrets.tgz; do

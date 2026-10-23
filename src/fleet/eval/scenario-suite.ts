@@ -321,7 +321,8 @@ async function withWorld(o: ScenarioSuiteOptions, id: ScenarioId, meter: CostMet
     if (!at.ok) throw new Error(`the founder was not attested: ${at.why}`);
     await genesis.fund(g.genesisId, o.actor);
     await prov.activateGenesis(g.genesisId, g.authSha256);
-    await genesis.setFounderCognition(agent, { enabled: true, maxTurnsPerHour: 120, dailyBudgetCents: 100_000, reason: "scenario registry only", actor: o.actor });
+    // Local inference: the cap protects this machine's compute, not money (a small model takes many short steps).
+    await genesis.setFounderCognition(agent, { enabled: true, maxTurnsPerHour: local ? 600 : 120, dailyBudgetCents: 100_000, reason: "scenario registry only", actor: o.actor });
     await genesis.founderRoutingSet(agent, true, o.actor);
     const healthy = async () => { const r = (await o.host.readReport(agent)) as Record<string, any> | null; return Boolean(r && r.mode === "active" && Number(r.heartbeats) >= 1); };
     if (!(await waitFor(async () => (await healthy()) || null, 300_000, poll))) throw new Error("the founder did not become active");

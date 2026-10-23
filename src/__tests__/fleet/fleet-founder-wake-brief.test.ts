@@ -24,7 +24,7 @@ describe("the wake brief", () => {
     expect(b).toContain("your plan then: Add the point-7 date line");
     expect(b).toContain("next, not run yet: deliverable");
     expect(b).toContain("blocked by: FLEET_PUBLIC_SITE_SELLER_UNSET");
-    expect(b).toContain("customers: 1 open request(s), 1 UNANSWERED (order 9648c4ba)");
+    expect(b).toContain("customers: 1 open, 1 UNANSWERED (order 9648c4ba)");
     expect(b).toContain("money: cash 9906p, survival equity 9906p");
     expect(b.length).toBeLessThanOrEqual(WAKE_BRIEF_MAX);
   });

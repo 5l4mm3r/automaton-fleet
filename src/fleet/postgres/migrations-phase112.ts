@@ -26,6 +26,24 @@ const CREDIT_LOCAL = `  -- v112: a local model call needs no provider credit (no
   ELSE v_credits := fleet_provider_credit_balance(s ->> 'provider') - fleet_provider_credit_held(s ->> 'provider');
   END IF;`;
 const AUTHORIZE = restate(V111_SQL, "svc_cognition_authorize", [[CREDIT_HELD, CREDIT_LOCAL]]);
+// 2026-10-23 (the first real local-model run: a PAID order with no buyer message was in no packet — an obligation existed only
+// once the buyer wrote; a cloud model found the order by checking, a smaller model never did): a paid order that still
+// awaits its delivery (to_fulfil, or a failed delivery) is an obligation too, state to_deliver, at the top with the
+// unanswered ones. It never blocks a sleep (owner: no new blocks); it is shown until the order is delivered or fulfilled.
+const PAID_OB = [
+  [`  ob AS (SELECT * FROM order_ob UNION ALL SELECT * FROM enquiry_ob)`,
+   `  paid_ob AS (
+    SELECT 'order' AS kind, o.order_id::text AS id, o.created_at AS since, o.created_at AS last_buyer, 0::bigint AS messages,
+           NULL::timestamptz AS replied, EXISTS (SELECT 1 FROM fleet_order_deliveries d WHERE d.order_id = o.order_id AND d.status = 'queued') AS delivering
+      FROM fleet_customer_orders o
+     WHERE o.agent_id = p_agent AND o.payment_status = 'paid' AND o.status IN ('to_fulfil','delivery_failed')
+       AND NOT EXISTS (SELECT 1 FROM order_ob x WHERE x.id = o.order_id::text)),
+  ob AS (SELECT * FROM order_ob UNION ALL SELECT * FROM enquiry_ob UNION ALL SELECT * FROM paid_ob)`],
+  [`'state', CASE WHEN replied IS NULL OR replied < last_buyer THEN 'unanswered' ELSE 'acknowledged' END,`,
+   `'state', CASE WHEN messages = 0 THEN 'to_deliver' WHEN replied IS NULL OR replied < last_buyer THEN 'unanswered' ELSE 'acknowledged' END,`],
+] as Array<[string, string]>;
+const OBLIGATIONS = restate(V111_SQL, "fleet_customer_obligations", PAID_OB);
+const OBLIGATIONS_ALL = restate(V111_SQL, "fleet_customer_obligations_all", PAID_OB);
 const AUTHORIZE_TREASURY = restate(V111_SQL, "fleet_cognition_authorize_treasury", [[CREDIT_HELD, CREDIT_LOCAL]]);
 
 export const V112_SQL = String.raw`
@@ -121,6 +139,10 @@ $$;
 ${AUTHORIZE}
 
 ${AUTHORIZE_TREASURY}
+
+${OBLIGATIONS}
+
+${OBLIGATIONS_ALL}
 
 REVOKE ALL ON FUNCTION fleet_cognition_tier_set_local(text, text, integer, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fleet_admin_inference_profile_set(text, text, text) FROM PUBLIC;

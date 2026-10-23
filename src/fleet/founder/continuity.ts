@@ -289,7 +289,9 @@ export function wakeBrief(i: WakeBriefInputs): string {
     if (refused.length) lines.push(`blocked by: ${refused.slice(0, 4).join(", ")} (reasons in the carried record below)`);
   } else if (i.previousOutcome) lines.push(`last turn ended: ${cut(i.previousOutcome, 160)}`);
   const open = i.obligations.filter((o) => o.state === "unanswered");
-  if (i.obligations.length) lines.push(`customers: ${i.obligations.length} open request(s)${open.length ? `, ${open.length} UNANSWERED (${open.slice(0, 3).map((o) => `${o.kind} ${o.id.slice(0, 8)}`).join(", ")})` : ""}`);
+  const owed = i.obligations.filter((o) => o.state === "to_deliver");
+  if (i.obligations.length) lines.push(`customers: ${i.obligations.length} open${owed.length ? `, ${owed.length} PAID ORDER(S) TO DELIVER (${owed.slice(0, 3).map((o) => `order ${o.id.slice(0, 8)}`).join(", ")})` : ""}`
+    + `${open.length ? `, ${open.length} UNANSWERED (${open.slice(0, 3).map((o) => `${o.kind} ${o.id.slice(0, 8)}`).join(", ")})` : ""}`);
   const cash = i.economics.cash, eq = i.economics.survivalEquity;
   if (typeof cash === "number" || typeof eq === "number") lines.push(`money: cash ${typeof cash === "number" ? `${cash}p` : "?"}, survival equity ${typeof eq === "number" ? `${eq}p` : "?"}`);
   return cut(`WAKE BRIEF (from your own records): ${lines.join(" | ")}`, WAKE_BRIEF_MAX);

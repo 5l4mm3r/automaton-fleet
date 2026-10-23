@@ -9,6 +9,24 @@ Production (2026-10-21 00:51Z, verified): controller **7ab848d, schema 109**; Ag
 drill, outside monitor, backup + isolated restore, private publishing) and the C6 refund leg (Agent-1 refunded the owner's
 £5 itself; the booking needed the human-approved v107 repair — disclosed).
 
+> **OWNER 2026-10-23 — local inference only (supersedes cloud inference, Opus evaluations and paid model runs).** The Fleet
+> becomes a self-contained machine with its own local model; no third-party AI API credit for its reasoning; no cloud
+> fallback. Containment done 14:26Z (VPS: cognition disabled, provider none, key moved to a root-only recovery folder).
+> Implementation 17019f2 (local): v112 inference profile (local_only, trigger-enforced), LocalProvider (llama.cpp, loopback),
+> compact tools + tool_help, wake brief, the local-machine package and owner export/import — target, guards, hardware,
+> costs and limits in **docs/operations/local-machine.md**. Every "Opus"/"premium on Opus" requirement below now reads "the
+> local model"; their behaviour must be re-proven on it (cloud-model evidence does not transfer).
+
+| Local-only requirement (OWNER 2026-10-23) | Where / evidence | Status | Remaining action |
+|---|---|---|---|
+| No paid Fleet inference; no cloud fallback | containment 14:26Z; FLEET_INFERENCE_PROFILE; v112 trigger; fleet-cognition-local, fleet-v112-local-inference-pg | done | — |
+| Local model through the existing gateway (tools, images, errors, timeouts, restart) | local.ts; fleet-cognition-local; real llama-server: tool call + image read correctly | done | gpu16 on the owner's machine |
+| Proof with external AI access absent | fleet-eval-local-model + egress tripwire (0 attempts) | done (VM CPU, 2B) | network-off run on the target (fleet-local-readiness --offline) |
+| Data preserved and importable | owner export (read-only) → restore test: 325 tables equal, ledger head equal, 111→112, verify true | done | the owner's move |
+| Compact evolving workspace (brief, knowledge beside the decision, tool_help, carried records) | wake brief, packets kept; S5 knowledge block; compact tools | done | measure on the 9B |
+| Portable installer, honest hardware | local-machine/inference.lock.json, fleet-local-inference-setup.sh, readiness | done (scripts) | first install on the RTX 5080 machine (owner access) |
+| Local-compute cost policy | v112 local_compute_policy "unpriced" | owner | owner chooses a policy (or keeps unpriced) |
+
 Status: **done** (implemented + test or live evidence) · **gap** (implementation missing) · **ext** (external dependency) ·
 **owner** (owner decision or action) · **live** (needs live evidence after install).
 

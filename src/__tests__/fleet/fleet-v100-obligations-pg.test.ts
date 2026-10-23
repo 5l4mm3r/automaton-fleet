@@ -269,6 +269,25 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     expect(new Set(seen).size).toBe(seen.length);
   });
 
+  it("v112: a PAID order awaiting delivery is an obligation with no buyer message (to_deliver), among the most urgent; it ends when the delivery is sent", async () => {
+    // The first real local-model run (2026-10-23): a paid order the buyer never wrote about was in no packet.
+    const k = await R.one(`fleet.fleet_econ_paypal_checkout($1, $2::jsonb)`, [F.id, JSON.stringify({ venture: "landlord", amountMinor: 700, description: "Gas checklist PDF",
+      idempotencyKey: `t:${crypto.randomBytes(8).toString("hex")}` })]);
+    const paid = (await R.q(`INSERT INTO fleet.fleet_customer_orders (agent_id, venture_id, checkout_id, item, amount_minor, currency, fulfilment, access_token, origin_hash, buyer_email, payment_status, status)
+      SELECT agent_id, venture_id, checkout_id, description, amount_minor, currency, 'digital_file', $2, encode(sha256('buyer2'::bytea), 'hex'), 'rae@example.test', 'paid', 'to_fulfil'
+        FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1 RETURNING order_id`, [k.checkout.checkoutId, crypto.randomBytes(32).toString("hex")]))[0].order_id;
+    const ob = await obligations();
+    const mine = ob.findIndex((x) => x.id === paid);
+    expect(ob[mine]).toMatchObject({ kind: "order", id: paid, state: "to_deliver", buyerMessages: 0 });
+    // Most urgent group (owed, no reply yet): only other owed requests — older first — may come before it.
+    expect(ob.slice(0, mine).every((x) => x.state === "unanswered" || x.state === "to_deliver")).toBe(true);
+    expect((await R.econ(F, "customer.obligations", {})).obligations.some((x: any) => x.id === paid && x.state === "to_deliver")).toBe(true);
+    await R.q(`INSERT INTO fleet.fleet_order_deliveries (order_id, agent_id, idempotency_key, subject, body, status, created_at, sent_at)
+      VALUES ($1, $2, $3, 'Your PDF', 'Attached.', 'sent', now(), now())`, [paid, F.id, `d:${crypto.randomUUID()}`]);
+    await R.q(`UPDATE fleet.fleet_customer_orders SET status = 'delivered', fulfilled_at = now(), fulfilment_evidence = '{"delivery":"sent"}' WHERE order_id = $1`, [paid]);
+    expect((await obligations()).some((x) => x.id === paid)).toBe(false);
+  });
+
   it("v111: a listing, pin or storefront product that sells elsewhere names a published offer whose capability check still covers it", async () => {
     const offerId = String((await R.q(`SELECT offer_id FROM fleet.fleet_offer_enquiries WHERE enquiry_id = $1`, [enquiryId]))[0].offer_id);
     const listing = (extra: Record<string, unknown>) => R.econ(F, "channel.api", { channelId: crypto.randomUUID(), op: "etsy.listing.create", idempotencyKey: `l-${crypto.randomUUID()}`,

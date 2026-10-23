@@ -11,7 +11,8 @@ import crypto from "crypto";
 export interface CustomerObligation {
   kind: "order" | "enquiry";
   id: string;
-  state: "unanswered" | "acknowledged";
+  /** 2026-10-23 (v112): to_deliver — a PAID order whose delivery is still owed (no buyer message needed). */
+  state: "unanswered" | "acknowledged" | "to_deliver";
   since: string;
   lastBuyerAt: string;
   buyerMessages: number;
@@ -35,7 +36,7 @@ export function parseObligations(attention: unknown): CustomerObligation[] | nul
     const o = x as Record<string, unknown>;
     const since = at(o.since), last = at(o.lastBuyerAt);
     if ((o.kind !== "order" && o.kind !== "enquiry") || typeof o.id !== "string" || !UUID.test(o.id) || !since || !last) continue;
-    if (o.state !== "unanswered" && o.state !== "acknowledged") continue;
+    if (o.state !== "unanswered" && o.state !== "acknowledged" && o.state !== "to_deliver") continue;
     out.push({ kind: o.kind, id: o.id, state: o.state, since, lastBuyerAt: last, buyerMessages: Number.isSafeInteger(o.buyerMessages) ? Number(o.buyerMessages) : 1,
       repliedAt: at(o.repliedAt), delivering: o.delivering === true });
   }
@@ -56,6 +57,10 @@ export function obligationLines(list: CustomerObligation[]): string[] {
   const items = list.slice(0, OBLIGATIONS_SHOWN).map((o) => {
     const n = o.buyerMessages > 1 ? ` (${o.buyerMessages} buyer messages since ${utc(o.since)})` : "";
     if (o.kind === "enquiry") return `enquiry ${o.id}: the buyer's message of ${utc(o.lastBuyerAt)} is UNANSWERED${n} — read it with customers read, answer with customers reply`;
+    if (o.state === "to_deliver") {
+      return `order ${o.id}: PAID ${utc(o.since)}, its delivery is OWED${o.delivering ? " (a delivery is in progress)" : ""} — see what was bought with wallet orders, `
+        + "build the files, inspect and review them (deliverable), then deliver with wallet deliver; if you cannot, tell the buyer why (customers order_message)";
+    }
     if (o.state === "unanswered") {
       return `order ${o.id}: the buyer's message of ${utc(o.lastBuyerAt)} is UNANSWERED${n} — read it with customers order_thread, answer with customers order_message; `
         + "an acknowledgement, or an honest update on what is blocking you, is an answer";
