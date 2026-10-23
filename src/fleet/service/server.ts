@@ -199,8 +199,8 @@ export interface FleetServiceOptions {
   audit?: (entry: AuditEntry) => void;
   maxBodyBytes?: number;
   /**
-   * The body limit for POST /v1/economy from a session the database has already accepted (a storefront file or an order
-   * delivery carries a workspace file, base64). Every other request, and any unproven session, keeps maxBodyBytes.
+   * The body limit for POST /v1/economy and /v1/cognition/infer from a session the database has already accepted (a
+   * storefront file or an order delivery carries a workspace file, base64; a cognition step the images it shows). Every other request, and any unproven session, keeps maxBodyBytes.
    */
   maxEconomyBodyBytes?: number;
   /**
@@ -786,7 +786,9 @@ export class FleetService {
   }
 
   private async readRaw(req: http.IncomingMessage, path: string): Promise<Buffer> {
-    const max = req.method === "POST" && path === "/v1/economy" && this.provenSession(req)
+    // 2026-10-23: a cognition step carries the images view_image returned (≤ 5 tool results × 2 images, each ≤ ~1.9 MB of
+    // base64; validateMessages bounds them) — at 64 KB no image could reach the model. Proven sessions only, as for the economy.
+    const max = req.method === "POST" && (path === "/v1/economy" || path === "/v1/cognition/infer") && this.provenSession(req)
       ? this.opts.maxEconomyBodyBytes ?? 21 * 1024 * 1024 : this.opts.maxBodyBytes ?? 64 * 1024;
     const chunks: Buffer[] = [];
     let size = 0;

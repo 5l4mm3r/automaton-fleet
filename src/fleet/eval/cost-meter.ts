@@ -13,6 +13,10 @@
  *  - After the call: usage reported → its exact cost; an ambiguous outcome (the provider may have billed) → the worst case;
  *    a certain non-processing error → nothing. The provider's own retries are only of failures it certainly did not
  *    process (providers.ts), so a retry is never billed twice.
+ *  - 2026-10-23 (run scen-89d7c21-b1: 113 refusals, the founder retrying an unchanged refusal every minute): the meter
+ *    reports itself EXHAUSTED once no further call can be expected to fit — two refusals in a row with nothing sent between
+ *    (a fresh turn's smallest request did not fit either), or a refusal leaving less than the smallest worst case this
+ *    scenario has produced. The suite then ends the scenario as incomplete instead of letting it retry until its time limit.
  *  - One evidence row per call (JSONL): run, scenario, a call id, the provider's request id, model, usage, prices, USD and
  *    ledger cost, all-in cost, the reserved worst case, outcome. Never the key, prompts, responses or thinking.
  * The rows are the record the owner imports into production after the run (fleet_admin_engineering_calls_import, v111):
@@ -21,7 +25,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import { costBoundMicro } from "../cognition/routed-gateway.js";
-import { ProviderError, type ChatRequest, type ChatResult, type CognitionProvider, type Usage } from "../cognition/types.js";
+import { ProviderError, imageTokens, type ChatRequest, type ChatResult, type CognitionProvider, type Usage } from "../cognition/types.js";
 
 export interface MeterPrices { inputMicrocentsPerToken: number; outputMicrocentsPerToken: number; cacheWriteMicrocentsPerToken: number; cacheReadMicrocentsPerToken: number }
 export interface MeterTerms {
@@ -48,6 +52,10 @@ export class CostMeter {
   private reserved = 0n;
   readonly rows: MeterRow[] = [];
   scenario = "-";
+  /** Set once no further call can be expected to fit (see above); never cleared. */
+  exhausted: { at: string; leftAllInMicro: string; smallestWorstAllInMicro: string; refusedInARow: number } | null = null;
+  private refusedInARow = 0;
+  private smallestWorst: bigint | null = null;
   constructor(readonly terms: MeterTerms, private readonly sink?: (row: MeterRow) => void) {
     if (terms.acquisition.usdPurchasedMicro <= 0n || terms.acquisition.totalUsdCents * 1_000_000n < terms.acquisition.usdPurchasedMicro) throw new Error("cost meter: acquisition total below the credit bought");
     if (terms.ceilingLedgerMicro <= 0n || terms.fxRateMicro <= 0n) throw new Error("cost meter: ceiling and FX must be positive");
@@ -76,15 +84,22 @@ export class CostMeter {
       const callId = crypto.randomUUID();
       const base = { runId: meter.terms.runId, scenario: meter.scenario, callId, at: new Date().toISOString(), model };
       if (!prices) throw new ProviderError("PROVIDER_CONFIG_INVALID", { charge: "none", attempts: 0, detail: "HARNESS_MODEL_NOT_PRICED" });
-      const promptText = `${req.system}\n${JSON.stringify(req.messages)}`;
-      const images = req.messages.reduce((n, m) => n + ((m as { images?: unknown[] }).images?.length ?? 0), 0);
-      const worstUsd = BigInt(costBoundMicro(promptText, req.tools, images, req.maxTokens, prices));
+      // 2026-10-23: an image counts by its own token bound (as the controller's reservation does), never its base64 as text.
+      const promptText = `${req.system}\n${JSON.stringify(req.messages.map((m) => (m.images?.length ? { ...m, images: m.images.map((i) => i.mediaType) } : m)))}`;
+      const worstUsd = BigInt(costBoundMicro(promptText, req.tools, imageTokens(req.messages), req.maxTokens, prices));
       const worst = meter.allIn(worstUsd).allIn;
+      if (meter.smallestWorst === null || worst < meter.smallestWorst) meter.smallestWorst = worst;
       if (worst > meter.leftAllInMicro) {
         meter.emit({ ...base, providerRequestId: null, outcome: "refused_ceiling", charge: "none", usage: null, prices, usdMicro: "0", ledgerMicro: "0", allInMicro: "0",
           worstAllInMicro: String(worst), spentAllInMicro: String(meter.spent) });
+        meter.refusedInARow++;
+        const left = meter.leftAllInMicro;
+        if (!meter.exhausted && meter.reserved === 0n && (meter.refusedInARow >= 2 || left < meter.smallestWorst)) {
+          meter.exhausted = { at: new Date().toISOString(), leftAllInMicro: String(left), smallestWorstAllInMicro: String(meter.smallestWorst), refusedInARow: meter.refusedInARow };
+        }
         throw new ProviderError("PROVIDER_BILLING", { charge: "none", attempts: 0, detail: "HARNESS_CEILING" });
       }
+      meter.refusedInARow = 0;
       meter.reserved += worst;
       let usd = 0n, charge: MeterRow["charge"] = "none", outcome: MeterRow["outcome"] = "ok", code: string | undefined, usage: Usage | null = null, rid: string | null = null;
       try {

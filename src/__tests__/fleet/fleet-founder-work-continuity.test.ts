@@ -34,7 +34,7 @@ const hex32 = (n: number) => n.toString(16).padStart(32, "0");
 
 type Step = { calls: ToolCall[]; content?: string };
 /** `script(turn, step, packet)` scripts the model. `world` is the controller's state the test changes. */
-function rig(script: (turn: number, step: number, packet: string) => Step, o: { maxSteps?: number; root?: string; runtime?: string; stopSignal?: AbortSignal } = {}) {
+function rig(script: (turn: number, step: number, packet: string) => Step, o: { maxSteps?: number; root?: string; runtime?: string; stopSignal?: AbortSignal; toolbox?: (tb: FounderToolbox) => void } = {}) {
   const root = o.root ?? fs.mkdtempSync(path.join(os.tmpdir(), "wc-"));
   const d = { w: path.join(root, "w"), s: path.join(root, "s"), m: path.join(root, "s", "memory") };
   const fresh = !fs.existsSync(d.w);
@@ -49,6 +49,7 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
     recentEvents: [] as Array<{ kind: string; id: string; at: string; tool?: string }> };
   const packets: string[] = [];
   const outputsSeen: string[] = [];
+  const imagesSeen: Array<{ turn: number; step: number; images: number }> = [];
   let infers = 0, turn = 0, step = 0;
   const ports: MindPorts = {
     cognitionStatus: async () => ({ policyEnabled: true, provider: "anthropic", founderEnabled: true, paused: false, routing: { active: true },
@@ -71,6 +72,8 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
       if (ms.length === 1) { turn++; step = 0; packets.push(String(ms[0].content)); }
       for (const m of ms) if (m.role === "tool") outputsSeen.push(m.content);
       step++; infers++;
+      const imgs = (messages as Array<{ images?: unknown[] }>).reduce((n, m) => n + (m.images?.length ?? 0), 0);
+      if (imgs) imagesSeen.push({ turn, step, images: imgs });
       const s = script(turn, step, packets.at(-1)!);
       return { content: s.content ?? "", toolCalls: s.calls, usage: { inputTokens: 1, outputTokens: 1 }, chargedCents: 1, requestId: `r${turn}-${step}` };
     },
@@ -87,9 +90,10 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
       return { ok: true, op, args };
     },
   } as never });
+  o.toolbox?.(toolbox);
   const mind = new FounderMind({ ports, toolbox, stateDir: d.s, workContinuity: true, hibernationSafetyMs: Number.POSITIVE_INFINITY, runtimeCommit: o.runtime, stopSignal: o.stopSignal,
     maxStepsPerTurn: o.maxSteps ?? FOUNDER_STEPS_PER_TURN, routed: { memoryDir: d.m, workspaceDir: d.w, manifest: FOUNDER_MANIFEST_V2, loopGuard } });
-  return { mind, world, packets, outputsSeen, root, d, infers: () => infers, turns: () => turn };
+  return { mind, world, packets, outputsSeen, imagesSeen, root, d, infers: () => infers, turns: () => turn };
 }
 const beats = async (r: ReturnType<typeof rig>, n: number) => { for (let i = 0; i < n; i++) await r.mind.turn(`heartbeat ${i}`); };
 
@@ -121,6 +125,30 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     await beats(second, 3);
     expect(second.packets.length).toBeGreaterThan(1);
     expect(second.packets.slice(1).some((x) => x.includes("CONTINUE YOUR UNFINISHED WORK"))).toBe(false);
+  });
+
+  // 2026-10-23 (run scen-89d7c21-b1, S1): 10 of 11 cut turns ended on the view_image result itself — the image's base64 was
+  // counted as conversation text against the 40 KB turn budget — so the model never saw one of its 10 images and re-rendered
+  // each turn. An image now counts as its token bound: the model sees it in the next step, and the turn goes on.
+  it("1k. a large image a tool returned is seen in the next step: it does not end the turn by its base64 size", async () => {
+    const ihdr = Buffer.alloc(24); Buffer.from("89504e470d0a1a0a", "hex").copy(ihdr); ihdr.writeUInt32BE(1240, 16); ihdr.writeUInt32BE(1754, 20);
+    const png = Buffer.concat([ihdr, Buffer.alloc(300_000, 7)]);                       // an A4 page render: 300 KB, base64 ~400 KB
+    const r = rig((t, s) => {
+      if (t === 1 && s === 1) return { calls: [c("exec", { command: "render page 1" })] };
+      if (t === 1 && s === 2) return { calls: [c("view_image", { path: "product/page1.png" })] };
+      if (t === 1 && s === 3) return { content: "The page looks right.", calls: [c("list_goals")] };
+      return { calls: [c("sleep", { reason: "checked the render" })] };
+    }, { toolbox: (tb) => {
+      const real = tb.execute.bind(tb);
+      tb.execute = (async (call: ToolCall) => call.name === "view_image"
+        ? { name: call.name, ok: true, output: "image product/page1.png is shown to you below", images: [{ mediaType: "image/png", dataB64: png.toString("base64") }] }
+        : call.name === "exec" ? { name: call.name, ok: true, output: "rendered" } : real(call)) as typeof tb.execute;
+    } });
+    await r.mind.turn("hb");
+    expect(r.imagesSeen).toEqual([{ turn: 1, step: 3, images: 1 }]);                  // the step after view_image carried the image
+    const log = fs.readFileSync(path.join(r.d.s, "mind-log.jsonl"), "utf8");
+    expect(log).not.toContain("FLEET_TURN_CONTEXT_BUDGET");
+    expect(r.infers()).toBeGreaterThanOrEqual(4);                                     // the turn went on past the image
   });
 
   // 2026-10-21 (launch check): seven turns each ended at the request-size budget after 5-7 steps; they were taken as

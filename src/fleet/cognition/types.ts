@@ -44,6 +44,57 @@ export const MAX_IMAGE_B64_CHARS = 2_000_000;
 /** v79: the input-token estimate per image used for the pre-authorization bound (Anthropic: about w·h/750, ≤ ~1,600 at 1.15 MP). */
 export const IMAGE_TOKEN_ESTIMATE = 1_600;
 
+const PNG_SIG = "89504e470d0a1a0a";
+/** 2026-10-23: an image's format and pixel size from its header (PNG, GIF, WebP, JPEG), or null when the header is not readable. */
+export function imageDimensions(img: ChatImage): { w: number; h: number; type: ChatImage["mediaType"] } | null {
+  let b: Buffer;
+  try { b = Buffer.from(img.dataB64.slice(0, 349_528), "base64"); } catch { return null; }   // a JPEG's frame header may follow ~256 KB of metadata
+  if (b.length >= 24 && b.subarray(0, 8).toString("hex") === PNG_SIG) return { w: b.readUInt32BE(16), h: b.readUInt32BE(20), type: "image/png" };
+  if (b.length >= 10 && b.subarray(0, 4).toString("latin1") === "GIF8") return { w: b.readUInt16LE(6), h: b.readUInt16LE(8), type: "image/gif" };
+  if (b.length >= 30 && b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP") {
+    const kind = b.subarray(12, 16).toString("latin1");
+    if (kind === "VP8 ") return { w: b.readUInt16LE(26) & 0x3fff, h: b.readUInt16LE(28) & 0x3fff, type: "image/webp" };
+    if (kind === "VP8L") return { w: 1 + (((b[22] & 0x3f) << 8) | b[21]), h: 1 + (((b[24] & 0x0f) << 10) | (b[23] << 2) | ((b[22] & 0xc0) >> 6)), type: "image/webp" };
+    if (kind === "VP8X") return { w: 1 + b.readUIntLE(24, 3), h: 1 + b.readUIntLE(27, 3), type: "image/webp" };
+    return null;
+  }
+  if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8) {
+    for (let i = 2; i + 9 < b.length;) {
+      if (b[i] !== 0xff) return null;
+      const m = b[i + 1];
+      if (m === 0xff) { i++; continue; }
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { w: b.readUInt16BE(i + 7), h: b.readUInt16BE(i + 5), type: "image/jpeg" };
+      i += 2 + b.readUInt16BE(i + 2);
+    }
+  }
+  return null;
+}
+
+/** The largest image side the Messages API accepts (pixels); its square bounds an image whose size is unknown. */
+export const IMAGE_MAX_SIDE_PX = 8_000;
+/** An image whose header is readable and of the type it claims (the controller refuses any other: validateMessages). */
+export function imageHeaderProblem(img: ChatImage): string | null {
+  const d = imageDimensions(img);
+  if (!d || d.w < 1 || d.h < 1) return "its header is not a readable PNG, JPEG, WebP or GIF";
+  if (d.type !== img.mediaType) return `its header is ${d.type}, not the ${img.mediaType} it is labelled`;
+  return null;
+}
+
+/**
+ * 2026-10-23: an image's input-token bound — Anthropic's published w·h/750, never below the 1.15 MP estimate (a provider
+ * that scales an image down charges less, one that keeps it at full size charges w·h/750). An image whose size cannot be
+ * read never reaches a provider (validateMessages refuses it); were one to, it is bounded as the largest image the API takes.
+ */
+export function imageTokenBound(img: ChatImage): number {
+  const d = imageDimensions(img);
+  return d && d.w > 0 && d.h > 0 ? Math.max(IMAGE_TOKEN_ESTIMATE, Math.ceil((d.w * d.h) / 750)) : Math.ceil((IMAGE_MAX_SIDE_PX * IMAGE_MAX_SIDE_PX) / 750);
+}
+
+/** The input-token bound of every image in a conversation. */
+export function imageTokens(messages: readonly { images?: readonly ChatImage[] }[]): number {
+  return messages.reduce((n, m) => n + (m.images ?? []).reduce((k, i) => k + imageTokenBound(i), 0), 0);
+}
+
 export interface ChatMessage {
   role: "user" | "assistant" | "tool";
   content: string;

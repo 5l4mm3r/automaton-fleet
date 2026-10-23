@@ -58,6 +58,7 @@ import { runUpgradeRehearsal } from "./upgrade-rehearsal.js";
 import { runRevisionRehearsal } from "./revision-rehearsal.js";
 import { runScenarioSuite, ceilingPence, creditHoldUsdMicro, SCENARIO_IDS, type ScenarioId, type SuiteTerms } from "../eval/scenario-suite.js";
 import { readCognitionKey } from "../service/main.js";
+import { killMainProcess, procAlive } from "../eval/kill.js";
 import { OFFICE_PROGRAM } from "./exec-sandbox.js";
 import { FounderProvisioner } from "./provisioner.js";
 import { FOUNDER_UNREADABLE_PATHS } from "./runtime.js";
@@ -512,8 +513,9 @@ async function main(argv: string[]): Promise<number> {
             execFileSync("systemctl", ["daemon-reload"], { stdio: "ignore", timeout: 60_000 });
             execFileSync("systemctl", ["restart", founderUnit(agentId)], { stdio: "ignore", timeout: 120_000 });
           },
-          killHard: async (agentId) => { execFileSync("systemctl", ["kill", "-s", "SIGKILL", founderUnit(agentId)], { stdio: "ignore", timeout: 60_000 });
-            execFileSync("systemctl", ["stop", founderUnit(agentId)], { stdio: "ignore", timeout: 60_000 }); },
+          killHard: (agentId) => killMainProcess(founderUnit(agentId), {
+            systemctl: (args) => execFileSync("systemctl", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 }),
+            alive: procAlive, sleep: (ms) => new Promise((r) => setTimeout(r, ms)) }),
           workbookFixture: flag("--workbook"), log,
         });
       } finally {

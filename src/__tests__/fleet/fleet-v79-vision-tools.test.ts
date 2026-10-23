@@ -43,6 +43,15 @@ describe("v79 vision and the founder-v8 tool set (units)", () => {
       expect(x.ok, p).toBe(false);
       expect(x.images, p).toBeUndefined();
     }
+    // 2026-10-23: a file whose header is not the image its extension names is refused with the fix (its size is unknown).
+    fs.writeFileSync(path.join(root, "w", "renamed.jpg"), PNG);
+    fs.writeFileSync(path.join(root, "w", "junk.png"), Buffer.alloc(500, 65));
+    for (const [p, why] of [["renamed.jpg", /header is image\/png, not the image\/jpeg/], ["junk.png", /not a readable PNG/]] as const) {
+      const x = await tb.execute({ id: `c-${p}`, name: "view_image", arguments: { path: p } });
+      expect(x.ok, p).toBe(false);
+      expect(x.output).toMatch(why);
+      expect(x.images).toBeUndefined();
+    }
   });
 
   it("the gateway bounds images on tool results and estimates them as image tokens; Anthropic gets image blocks", () => {
@@ -54,10 +63,17 @@ describe("v79 vision and the founder-v8 tool set (units)", () => {
       [{ mediaType: "image/png", dataB64: "A".repeat(2_000_004) }]]) {
       expect(() => validateMessages([{ role: "tool", toolCallId: "t", content: "x", images: bad }])).toThrow(/image/);
     }
-    const big = { mediaType: "image/png" as const, dataB64: "A".repeat(1_000_000) };
+    // 2026-10-23: an image is sent only when its header shows its pixel size (its cost bound) and matches its label.
+    const unreadable = { mediaType: "image/png" as const, dataB64: "A".repeat(1_000_000) };
+    expect(() => validateMessages([{ role: "tool", toolCallId: "t", content: "x", images: [unreadable] }])).toThrow(/not a readable PNG/);
+    expect(() => validateMessages([{ role: "tool", toolCallId: "t", content: "x", images: [{ mediaType: "image/jpeg", dataB64: img.dataB64 }] }])).toThrow(/header is image\/png, not the image\/jpeg/);
+    expect(promptMaterial("sys", [{ role: "tool", toolCallId: "t", content: "x", images: [unreadable] }], []).tokens).toBeGreaterThanOrEqual(85_334);  // were one to pass: the API's largest
+    const ihdr = Buffer.from(PNG); ihdr.writeUInt32BE(1240, 16); ihdr.writeUInt32BE(1754, 20);
+    const big = { mediaType: "image/png" as const, dataB64: Buffer.concat([ihdr, Buffer.alloc(700_000, 1)]).toString("base64") };
     const est = promptMaterial("sys", [{ role: "tool", toolCallId: "t", content: "x", images: [big] }], []);
-    expect(est.text).not.toContain("AAAA");
-    expect(est.tokens).toBeLessThan(IMAGE_TOKEN_ESTIMATE + 200);
+    expect(est.text).not.toContain(big.dataB64.slice(-40));
+    expect(est.tokens).toBeGreaterThanOrEqual(Math.ceil((1240 * 1754) / 750));
+    expect(est.tokens).toBeLessThan(Math.ceil((1240 * 1754) / 750) + 200);
     expect(est.tokens).toBeGreaterThanOrEqual(IMAGE_TOKEN_ESTIMATE);
     const a = toAnthropicMessages(msgs);
     const tr = a[1 + 1].content[0] as { type: string; content: Array<Record<string, unknown>> };

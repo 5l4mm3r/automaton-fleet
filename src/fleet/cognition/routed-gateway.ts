@@ -20,7 +20,7 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTINE_CHARTER, IMAGE_TOKEN_ESTIMATE, ProviderError, charterFor, parseDoctrine, toolsetForDoctrine, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
+import { FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTINE_CHARTER, ProviderError, imageTokens, charterFor, parseDoctrine, toolsetForDoctrine, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
 import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, MAX_COGNITION_DEADLINE_MS, promptMaterial, validateMessages } from "./gateway.js";
 import { founderStepTools } from "./capability-signature.js";
 import { RouteError, actionDigest, candidateFor, parseRouteRequest, route, type RouteDecision, type TierCandidate } from "./router.js";
@@ -90,9 +90,10 @@ export const PROVIDER_FRAMING_TOKENS = 2_000;
  * the provider's framing, all at the dearer of the input and cache-write prices; plus the whole output allowance (thinking
  * included) at the output price.
  */
-export function costBoundMicro(promptText: string, tools: readonly unknown[], images: number, maxTokens: number,
+export function costBoundMicro(promptText: string, tools: readonly unknown[], imageTokenCount: number, maxTokens: number,
   p: { inputMicrocentsPerToken: number; outputMicrocentsPerToken: number; cacheWriteMicrocentsPerToken?: number | null }): number {
-  const inputTokens = Buffer.byteLength(promptText, "utf8") + Buffer.byteLength(JSON.stringify(tools), "utf8") + images * IMAGE_TOKEN_ESTIMATE + PROVIDER_FRAMING_TOKENS;
+  // 2026-10-23: images by their own bound (imageTokens: w·h/750, at least IMAGE_TOKEN_ESTIMATE each), not a flat estimate.
+  const inputTokens = Buffer.byteLength(promptText, "utf8") + Buffer.byteLength(JSON.stringify(tools), "utf8") + imageTokenCount + PROVIDER_FRAMING_TOKENS;
   const inputPrice = Math.max(p.inputMicrocentsPerToken, p.cacheWriteMicrocentsPerToken ?? p.outputMicrocentsPerToken);
   return inputTokens * inputPrice + maxTokens * p.outputMicrocentsPerToken;
 }
@@ -206,7 +207,7 @@ export async function inferRouted(
   const prompt = promptMaterial(system, messages, tools.map((t) => t.name));
   const promptText = prompt.text;
   const promptSha = sha(promptText);
-  const estimateMicro = costBoundMicro(promptText, tools, messages.reduce((n, m) => n + (m.images?.length ?? 0), 0), maxTokens, candidate.prices);
+  const estimateMicro = costBoundMicro(promptText, tools, imageTokens(messages), maxTokens, candidate.prices);
   const req = parseRouteRequest(body.route ?? { taskClass: "agent_step" });
   const snapshot = {
     tier: decision.tier, provider: candidate.provider, model: candidate.model, taskClass: decision.taskClass, ...(req.taskId ? { taskId: req.taskId } : {}),

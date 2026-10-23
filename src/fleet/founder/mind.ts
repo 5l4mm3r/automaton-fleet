@@ -32,7 +32,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { MAX_TOOL_CALLS_EXECUTED, type ChatMessage, type ThinkingBlock, type ToolCall } from "../cognition/types.js";
+import { MAX_TOOL_CALLS_EXECUTED, imageTokens, type ChatMessage, type ThinkingBlock, type ToolCall } from "../cognition/types.js";
 import { PACKET_LIMITS, buildTaskPacket, renderTaskPacket, type TaskPacket } from "../cognition/task-packet.js";
 import type { Tier } from "../cognition/router.js";
 import { ROUTINE_PURPOSES } from "../cognition/router.js";
@@ -135,6 +135,8 @@ export function toolContent(prefix: string, output: string): string {
 }
 /** Well under the controller's 64 KB request limit. */
 const MAX_REQUEST_BYTES = 40_000;
+/** The text bytes an image token stands for in that budget (approxTokens: ~4 characters a token). */
+export const IMAGE_TEXT_BYTES = 4;
 const MAX_ARG_CHARS = 400;
 const CONTINUITY_FILE = "mind-continuity.json";
 /** The controller accepts at most 16,000 characters per message: a rendered packet stays under it. */
@@ -876,7 +878,10 @@ export class FounderMind {
     }
     const messages: ChatMessage[] = [{ role: "user", content: text }];
     const packetKind = owner ? "owner" : bare ? "slim" : nudge ? `idle-${kind}` : "full";
-    const size = () => Buffer.byteLength(JSON.stringify({ messages }), "utf8");
+    // 2026-10-23 (run scen-89d7c21-b1: 10 of S1's 11 cut turns ended on the view_image result itself — its base64 was counted
+    // as text, so the model never saw one image): an image counts as its input-token bound in bytes (IMAGE_TEXT_BYTES a token).
+    const size = () => Buffer.byteLength(JSON.stringify({ messages: messages.map((m) => (m.images ? { ...m, images: m.images.length } : m)) }), "utf8")
+      + imageTokens(messages) * IMAGE_TEXT_BYTES;
     const maxSteps = this.o.maxStepsPerTurn ?? 4;
     const counters = { routine: 0, escalations: 0, reviews: 0 };
     /** The consequential action the NEXT step's output is expected to be (set by a tier refusal; consumed by one step). */

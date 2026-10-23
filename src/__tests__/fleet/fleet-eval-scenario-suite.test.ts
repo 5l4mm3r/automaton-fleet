@@ -78,7 +78,8 @@ describe.skipIf(!PG_BIN || !fs.existsSync(path.join(DEV_TOOLS, "site")))("scenar
     expect(s5.cost.calls).toBe(0);
     expect(s5.cost.refused).toBeGreaterThan(0);
     expect(s5.cost.allInMicro).toBe("0");
-    expect(s5.reason).toMatch(/cap was reached/);
+    expect(s5.reason).toMatch(/^budget: no further call fits/);                          // ended at once, not retried to its time limit
+    expect(s5.verdict).toBe("incomplete");
     // Evidence kept per scenario; one JSONL row per call; no key anywhere in it.
     for (const sc of ["s1-order-and-correction", "s5-lesson-application"]) {
       const d = path.join(evidenceDir, sc);

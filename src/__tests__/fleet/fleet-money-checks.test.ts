@@ -247,7 +247,7 @@ doc("budget-ok.docx", "£800.00")
     const prices = { inputMicrocentsPerToken: 400, outputMicrocentsPerToken: 2000, cacheWriteMicrocentsPerToken: 500, cacheReadMicrocentsPerToken: 20 };
     const prompt = JSON.stringify({ system: "charter ".repeat(2000), messages: [{ role: "user", content: "TASK PACKET ".repeat(5000) }] });
     const tools = [{ name: "exec", description: "run a command ".repeat(300), parameters: { type: "object" } }];
-    const bound = costBoundMicro(prompt, tools, 1, 16_000, prices);
+    const bound = costBoundMicro(prompt, tools, 1_600, 16_000, prices);            // one image at its bound
     const bytes = Buffer.byteLength(prompt) + Buffer.byteLength(JSON.stringify(tools)) + 1_600 + PROVIDER_FRAMING_TOKENS;
     // The dearest split of those input tokens (all cache writes) and the whole output allowance.
     expect(costMicrocents({ inputTokens: 0, cacheWriteTokens: bytes, cacheReadTokens: 0, outputTokens: 16_000 }, prices)).toBe(bound);

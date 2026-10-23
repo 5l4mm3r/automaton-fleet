@@ -12,7 +12,7 @@
  */
 
 import crypto from "crypto";
-import { DEFAULT_RUNTIME_TOOLSET, FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_TOOLS, IMAGE_TOKEN_ESTIMATE, MAX_IMAGES_PER_MESSAGE, MAX_IMAGE_B64_CHARS, MAX_TOOL_CALLS_PER_RESPONSE, applyToolset, ProviderError, type ChatImage, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock, type ToolSpec } from "./types.js";
+import { DEFAULT_RUNTIME_TOOLSET, FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_TOOLS, imageHeaderProblem, imageTokens, MAX_IMAGES_PER_MESSAGE, MAX_IMAGE_B64_CHARS, MAX_TOOL_CALLS_PER_RESPONSE, applyToolset, ProviderError, type ChatImage, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock, type ToolSpec } from "./types.js";
 import type { CognitionRecord } from "../postgres/store.js";
 
 export class CognitionError extends Error {
@@ -50,18 +50,16 @@ const approxTokens = (s: string) => Math.ceil(s.length / 4);
 
 /**
  * v79: the prompt as hashed and estimated — images are represented by their digest (never their base64 counted as text)
- * and each adds IMAGE_TOKEN_ESTIMATE input tokens to the pre-authorization bound. The provider's own usage is what is
+ * and each adds its imageTokenBound (w·h/750, at least IMAGE_TOKEN_ESTIMATE) to the pre-authorization bound. The provider's own usage is what is
  * charged; this bounds the authorization.
  */
 export function promptMaterial(system: string, messages: ChatMessage[], toolNames: string[]): { text: string; tokens: number } {
-  let images = 0;
   const shown = messages.map((m) => {
     if (!m.images?.length) return m;
-    images += m.images.length;
     return { ...m, images: m.images.map((i) => ({ mediaType: i.mediaType, sha256: sha(i.dataB64) })) };
   });
   const text = JSON.stringify({ system, messages: shown, tools: toolNames });
-  return { text, tokens: approxTokens(text) + images * IMAGE_TOKEN_ESTIMATE };
+  return { text, tokens: approxTokens(text) + imageTokens(messages) };
 }
 
 export function validateMessages(raw: unknown): ChatMessage[] {
@@ -86,7 +84,11 @@ export function validateMessages(raw: unknown): ChatMessage[] {
               || i.dataB64.length < 8 || i.dataB64.length > MAX_IMAGE_B64_CHARS || !/^[A-Za-z0-9+/]+={0,2}$/.test(i.dataB64)) {
             throw new CognitionError(400, "FLEET_BAD_REQUEST", "an image is png, jpeg, webp or gif base64 of bounded size");
           }
-          return { mediaType: i.mediaType as ChatImage["mediaType"], dataB64: i.dataB64 };
+          const img = { mediaType: i.mediaType as ChatImage["mediaType"], dataB64: i.dataB64 };
+          // 2026-10-23: only an image whose pixel size is known is sent — its cost bound never rests on the provider refusing it.
+          const bad = imageHeaderProblem(img);
+          if (bad) throw new CognitionError(400, "FLEET_BAD_REQUEST", `an image is refused: ${bad}`);
+          return img;
         });
       }
     }

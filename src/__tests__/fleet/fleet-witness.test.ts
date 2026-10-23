@@ -530,6 +530,23 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
     expect(r.status).toBe(401);
   });
 
+  // 2026-10-23 (run scen-89d7c21-b1): a cognition step carrying a view_image image is larger than 64 KB. A session the
+  // database accepted may send one (the economy's limit); without one the 64 KB limit stands.
+  it("a cognition step with an image is read in full from an accepted session, refused at 64 KB without one", async () => {
+    await reset(2);
+    const w = await enrollWitness();
+    const s = await openSession(w.token);
+    const big = { messages: [{ role: "user", content: "look" }, { role: "assistant", content: "", toolCalls: [{ id: "t1", name: "view_image", arguments: { path: "p.png" } }] },
+      { role: "tool", toolCallId: "t1", content: "shown", images: [{ mediaType: "image/png", dataB64: "A".repeat(400_000) }] }] };
+    // Refused unread: a 413, or the connection cut while the client is still sending (the server stops reading at the limit).
+    const refusedUnread = (p: Promise<{ status: number }>) => p.then((r) => r.status, (e: Error & { cause?: { code?: string } }) => (e.cause?.code === "ECONNRESET" || e.cause?.code === "EPIPE" ? 413 : Promise.reject(e)));
+    expect((await call(s, "POST", "/v1/heartbeat", {})).status).toBe(200);                                     // accepted (a founder heartbeats first)
+    expect(await call(s, "POST", "/v1/cognition/infer", big)).toMatchObject({ status: 403, json: { code: "FLEET_SCOPE_DENIED" } });   // read, then the witness's scope
+    const s2 = await openSession(w.token);
+    expect(await refusedUnread(call(s2, "POST", "/v1/cognition/infer", big))).toBe(413);                 // a session not yet accepted by the database
+    expect(await refusedUnread(fetch(`${url}/v1/cognition/infer`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(big) }))).toBe(413);
+  });
+
   // 9, 18, 19, 20, 25: every other route is denied before any side effect
   it("every other authenticated /v1 route is denied for the witness (403 FLEET_SCOPE_DENIED), with no side effect and an audit event without secrets", async () => {
     await reset(2);

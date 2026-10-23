@@ -18,7 +18,8 @@
 import http from "http";
 import net from "net";
 import { ScriptedProvider } from "./providers.js";
-import type { ChatMessage, ToolSpec } from "./types.js";
+import crypto from "crypto";
+import { imageDimensions, type ChatMessage, type ToolSpec } from "./types.js";
 import { REHEARSAL_AGENT_HEADER, type FakeFault } from "./fake-openai.js";
 
 /** Structural key of a conversation prefix: roles, block types and tool ids — thinking blocks excluded (they may be stripped). */
@@ -43,6 +44,8 @@ export interface FakeAnthropic {
   /** Protocol violations the fake refused (should stay empty in a correct client). */
   violations: string[];
   lastBody: Record<string, unknown> | null;
+  /** 2026-10-23: every image block received in a tool result (as the real API checks them), per agent and request number. */
+  images: Array<{ agent: string; n: number; mediaType: string; w: number | null; h: number | null; sha256: string; b64Chars: number }>;
   close(): Promise<void>;
 }
 
@@ -68,6 +71,7 @@ export async function startFakeAnthropic(o: {
   const script = o.script ?? new ScriptedProvider(o.model);
   const requests = new Map<string, number>();
   const violations: string[] = [];
+  const images: FakeAnthropic["images"] = [];
   /** Signature/data of each issued thinking block → the structural conversation prefix it was generated for. */
   const boundPrefix = new Map<string, string>();
   const issued = new Map<string, { thinking: string; model: string }>(); // tool_use id → the thinking blocks issued with it, and by which model
@@ -144,6 +148,18 @@ export async function startFakeAnthropic(o: {
           const prevUses = i > 0 ? blocks(msgs[i - 1]).filter((x) => x.type === "tool_use").map((x) => String(x.id)) : [];
           const results = b.filter((x) => x.type === "tool_result").map((x) => String(x.tool_use_id));
           if (JSON.stringify([...results].sort()) !== JSON.stringify([...prevUses].sort())) return invalid("each tool_use must be answered by exactly one tool_result in the next user turn");
+          // Image blocks inside a tool result: base64 source of an accepted type, as the real API requires.
+          for (const r of b.filter((x) => x.type === "tool_result" && Array.isArray(x.content))) {
+            for (const c of r.content as Block[]) {
+              if (c.type !== "image") continue;
+              const src = c.source as Record<string, unknown> | undefined;
+              if (!src || src.type !== "base64" || !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(String(src.media_type))
+                  || typeof src.data !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(src.data)) return invalid("image source: base64 of image/png, jpeg, webp or gif required");
+              const d = imageDimensions({ mediaType: src.media_type as "image/png", dataB64: src.data });
+              if (!d || d.type !== src.media_type) return invalid("Could not process image");
+              images.push({ agent, n, mediaType: String(src.media_type), w: d.w, h: d.h, sha256: crypto.createHash("sha256").update(src.data).digest("hex"), b64Chars: src.data.length });
+            }
+          }
         }
       }
       // As the real API (proven 2026-09-26): a signed thinking block is bound to the conversation it was generated in.
@@ -191,7 +207,11 @@ export async function startFakeAnthropic(o: {
       for (const m of msgs) {
         const b = blocks(m);
         if (m.role === "user") {
-          for (const x of b.filter((y) => y.type === "tool_result")) conv.push({ role: "tool", toolCallId: String(x.tool_use_id), content: typeof x.content === "string" ? x.content : JSON.stringify(x.content ?? "") });
+          // A tool result's text, with each image shown to the scripted model as a marker (never its base64).
+          const resultText = (c: unknown) => (typeof c === "string" ? c : Array.isArray(c)
+            ? (c as Block[]).map((y) => (y.type === "text" ? String(y.text) : y.type === "image" ? `[image ${String((y.source as Block)?.media_type)} sha256:${crypto.createHash("sha256").update(String((y.source as Block)?.data ?? "")).digest("hex").slice(0, 16)}]` : "")).join("\n")
+            : JSON.stringify(c ?? ""));
+          for (const x of b.filter((y) => y.type === "tool_result")) conv.push({ role: "tool", toolCallId: String(x.tool_use_id), content: resultText(x.content) });
           const text = b.filter((y) => y.type === "text").map((y) => String(y.text)).join("\n");
           if (text) conv.push({ role: "user", content: text });
         } else {
@@ -257,6 +277,7 @@ export async function startFakeAnthropic(o: {
   return {
     url: `http://127.0.0.1:${port}/v1`,
     requests,
+    images,
     violations,
     get lastBody() {
       return state.lastBody;
