@@ -78,6 +78,32 @@ database is restored or changed by either step.
   records each local call's tokens and latency; **the local-compute policy is "unpriced" until the owner chooses one** (no
   hidden per-token tax or subsidy is invented).
 
+## The first GPU demonstration (next milestone: competent fulfilment)
+
+On the RTX 5080 desktop, after the install above. Readiness first:
+
+```
+nvidia-smi                                                    # driver >= 570, 16 GB visible
+sudo scripts/fleet-local-inference-setup.sh gpu16            # dry run: prerequisites, pinned files, what would be written
+sudo scripts/fleet-local-inference-setup.sh gpu16 --apply
+sudo scripts/fleet-local-readiness.sh --offline              # with the network unplugged: every line PASS
+```
+
+Then ONE paid-order fixture on the 9B (time only; no money; the egress tripwire is armed), from a repository checkout:
+
+```
+FLEET_LOCAL_MODEL_URL=http://127.0.0.1:8090/v1 FLEET_LOCAL_MODEL=qwen3.5-9b FLEET_LOCAL_SCENARIOS=s1-order-and-correction \
+FLEET_LOCAL_MINUTES=45 FLEET_LOCAL_EVIDENCE=$HOME/local-demo NODE_OPTIONS="--import $PWD/src/__tests__/fleet/fixtures/egress-tripwire.mjs" \
+FLEET_EGRESS_LOG=$HOME/local-demo-egress.log npx vitest run src/__tests__/fleet/fleet-eval-local-model.test.ts
+python3 -I scripts/fleet-local-metrics.py $HOME/local-demo/s1-order-and-correction
+```
+
+The metrics script reads only the captured evidence. It reports completion (delivered or not, minutes to first delivery,
+still owed), malformed calls, repetition (duplicates blocked, turns ended repeating), step latency (median / p90 / max,
+provider errors) and recovery (stops, continued turns). Record GPU memory and power with `nvidia-smi` during the run. Pass
+means the order was delivered after a passing review, with no turn ended for repetition. Packaging and venture autonomy come
+after this passes.
+
 ## Containment on the VPS (23 October 2026, 14:26Z)
 
 Cognition policy disabled; the controller runs with `FLEET_COGNITION_PROVIDER=none`; the Anthropic key moved to a root-only
