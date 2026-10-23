@@ -22,3 +22,20 @@ and the services rehearsal's exact cutover rollback (DROP + restore → identica
 Plan B frozen terms: ~/rlc130/terms-planB.json (sha256 77eed3283e3869fccf25234bb71cbcea0db5c09edcf1f6bc2d5f6fcafeaeb947), run
 scen-89d7c21-b1, ceiling 1,200p all-in, credit hold 1,337,536,449 µ¢ ($13.38) — NOT placed.
 Open before launch: outbox lessons of a DEAD agent are not harvested (teardown deletes the state without reading the outbox).
+
+## INSTALLED 2026-10-23T01:35:34Z (owner approval: install, both agents paused; option 2 — no automatic database restore)
+- Kit ~/rlc130/install.sh (made from rlc129's by counted edits) ran fleet-release.sh with FLEET_ROLLOUT_NO_AUTO_RESTORE=1 and the
+  kit's fleet-rollout.sh (+17 lines, nothing removed): past the migration point a failure stops the controller-side units and
+  restores NOTHING (no DROP/pg_restore, no re-point to b576ae0, nothing started); `revert` refuses and stops the units. Stub
+  tests before the run: rollback (migrated, flag) → exit 2, only `systemctl stop`; without the flag the restore is attempted
+  (sensitivity); before the migration point the original path (no data restore); the real script's revert → exit 3, only the
+  stop + one read; no trap or other restore in fleet-release.sh, fleet-ui-deploy.sh or install.sh (`pg_restore -l` lists only).
+- Outage 01:34:41–01:35:26Z (45 s); reconciliation OK (3,899 events preserved); production_deployed recorded; UI 0.26.2 reused.
+- Agent-1 b576ae0 → 89d7c21, upgradeId 4bc9e5f2-3d08-4413-99a9-166266562f0d (rollback:
+  sudo /opt/automaton-fleet/current/scripts/fleet-founders.sh rollback-runtime 01M3F50SH7PNX2E3GST13J52AS 4bc9e5f2-3d08-4413-99a9-166266562f0d <reason>).
+- verify.sh: VERIFIED 01:36:00Z, 69 checks. State (installed-state.txt): current 89d7c21, schema 111, Agent-1 89d7c21 paused
+  (pid 1866135), Agent-2 b60e262 paused (pid 866408, unchanged), ledger verifies, provider credit 2,924,782,970 µ¢, held 0, the four
+  flags false. No credit hold, engineering call, cost exception or unresolved reservation.
+- Plan B terms refreshed 01:36:11Z (terms-planB.json sha256 d5d60c10…): FX 747613, lot 05f4cb13 (4955 / 4129000000), credit
+  unchanged → ceiling 1,200p, hold 1,337,536,449 µ¢ ($13.38). Hold NOT placed; the paid run awaits the owner's explicit approval.
+- Open before launch: teardown must not delete a dead agent's unharvested candidate-lesson outbox (to be fixed in the next build).
