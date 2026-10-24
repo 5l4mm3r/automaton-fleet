@@ -283,6 +283,20 @@ runtime code is unchanged. `fleet-founder-work-continuity` gives **31/31, runner
   Nothing changed today touches the provider or deadline path, so it is recorded as a **timing-sensitive test, not a
   regression**. It needs a quiet machine for release evidence.
 
+**Release evidence for the v115 candidate: one clean run** (quiet machine, sequential, deadlines unchanged), on **084585d**
+(the frozen head adds only this record): 22 focused files, covering obligations and v115, the founder runtime and tools,
+privileges, migration paths v8/v24 → **115**, v112, the review refusal, the message checker, Fleet Control (spend and
+knowledge reviews, reservation), AI-credit reimbursement and capital backing, release tooling.
+- **21/22 files, 232/233 tests passed; runner exit 1; no unhandled errors.**
+- **The one failure: `fleet-cognition-hardening` L2**, a timing test, which also failed once at c6d4699 (before v115) and
+  passed in the other runs and alone.
+- **Mechanism:** the fixture's fake provider hangs **600 ms** against a per-attempt provider timeout of **800 ms**. A
+  timed-out attempt is never retried, correctly, because the provider may have processed and billed it. So scheduling
+  delay over 200 ms late in a long run fails the test. Production code and deadlines are not involved.
+- **Not changed:** widening that fixture's margin (for example a 450 ms hang, still slower than the client's 300 ms
+  timeout the test is about) would stop the flake without touching any production deadline. It needs the owner's word,
+  because it changes a test's timing.
+
 **Release evidence: the clean run (quiet machine, load ≈ 0.4, no other test process), on 8475471 (code identical to
 c6d4699):** the same 14 files, sequential: **14/14 files, 166/166 tests, runner exit 0, no unhandled errors.** That
 includes `fleet-cognition-hardening` L2 with its deadline unchanged.
