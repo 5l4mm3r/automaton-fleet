@@ -82,6 +82,8 @@ class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** The controller's Retry-After (seconds, 1..3600) when it says when a refused call becomes eligible. */
+    readonly retryAfterS?: number,
   ) {
     super(message);
   }
@@ -210,7 +212,8 @@ export class FleetApiClient implements FleetBackend {
     if (!res.ok || json.ok !== true) {
       const code = typeof json.code === "string" ? json.code : "FLEET_REQUEST_FAILED";
       if (res.status === 503) throw new FleetRegistryUnavailableError(`Fleet service: ${code}`);
-      throw new ApiError(res.status, code, typeof json.reason === "string" ? json.reason : code);
+      const ra = Number(res.headers.get("retry-after"));
+      throw new ApiError(res.status, code, typeof json.reason === "string" ? json.reason : code, Number.isInteger(ra) && ra >= 1 && ra <= 3600 ? ra : undefined);
     }
     return json as T;
   }

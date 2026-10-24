@@ -3,10 +3,18 @@
  * with a locally running AI model … Routine reasoning … must not consume third-party AI API credit. There must be no
  * automatic cloud fallback.")
  *
- *  - The registry's INFERENCE PROFILE (one row): local_only (the default, for new and existing registries) or cloud_allowed
- *    (the owner's explicit choice, recorded with a reason). Under local_only a tier or the global policy cannot be enabled
- *    for any provider but the local one — checked by trigger, so no code path (routing, Fleet Control review, relevance
- *    scoring, an owner conversation) can authorise a cloud call. Existing cloud tiers are disabled by this migration.
+ *  - The registry's INFERENCE PROFILE (one row): local_only or cloud_allowed (the owner's explicit choice, recorded with a
+ *    reason). Under local_only a tier or the global policy cannot be enabled for any provider but the local one — checked by
+ *    trigger, so no code path (routing, Fleet Control review, relevance scoring, an owner conversation) can authorise a
+ *    cloud call.
+ *  - AMENDED 2026-10-24, before v112 was first applied to any persistent registry (production is v111; v112 had run only in
+ *    throwaway test and scenario registries). Owner, 2026-10-24: "Anthropic API for reasoning … preventing v112 from
+ *    unexpectedly switching the candidate to local_only." As first written, this migration made every registry local_only
+ *    and disabled its enabled cloud tiers and policy on the spot — a silent provider change on upgrade. Now it changes no
+ *    provider: a registry that has an enabled cloud tier or an enabled cloud policy when v112 runs is recorded cloud_allowed
+ *    (its configuration kept as it is); any other registry (a new one, or one with no cloud inference enabled, like the
+ *    contained production registry) is local_only, and cloud becomes possible only by the owner's recorded
+ *    inference-profile-set. Returning to local_only (the owner function) still disables cloud tiers and policy.
  *  - A tier can be mapped to the LOCAL model (provider local): zero provider prices — a local call is no provider invoice
  *    and draws no AI-credit lot (consumption is drawn only when negative, v70). The prices stay exactly as before for the
  *    historical cloud records (nothing here rewrites a past charge).
@@ -25,7 +33,16 @@ const CREDIT_LOCAL = `  -- v112: a local model call needs no provider credit (no
   IF s ->> 'provider' = 'local' THEN v_credits := 4611686018427387903;
   ELSE v_credits := fleet_provider_credit_balance(s ->> 'provider') - fleet_provider_credit_held(s ->> 'provider');
   END IF;`;
-const AUTHORIZE = restate(V111_SQL, "svc_cognition_authorize", [[CREDIT_HELD, CREDIT_LOCAL]]);
+// Amended 2026-10-24 (desktop run 2: the hourly call bound was reached in 3.5 min, then the founder retried every second for
+// 40 min): the controller is the authority on when the next call is eligible — the moment enough of the last hour's calls
+// leave the window — and says so with the refusal (retryAfterS, 1..3600 s); the founder rests until then.
+const RATE_OLD = `  IF (s ->> 'turnsLastHour')::integer >= (s ->> 'maxTurnsPerHour')::integer THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_COGNITION_RATE_LIMITED'); END IF;`;
+const RATE_NEW = `  IF (s ->> 'turnsLastHour')::integer >= (s ->> 'maxTurnsPerHour')::integer THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_COGNITION_RATE_LIMITED', 'retryAfterS', GREATEST(1, LEAST(3600, COALESCE(ceil(extract(epoch FROM
+      (SELECT l.at FROM fleet_cognition_log l WHERE l.agent_id = p_agent AND l.at > now() - interval '1 hour' ORDER BY l.at
+        OFFSET GREATEST(0, (s ->> 'turnsLastHour')::integer - (s ->> 'maxTurnsPerHour')::integer) LIMIT 1) + interval '1 hour' - now()))::integer, 3600))));
+  END IF;`;
+const AUTHORIZE = restate(V111_SQL, "svc_cognition_authorize", [[CREDIT_HELD, CREDIT_LOCAL], [RATE_OLD, RATE_NEW]]);
 // 2026-10-23 (the first real local-model run: a PAID order with no buyer message was in no packet — an obligation existed only
 // once the buyer wrote; a cloud model found the order by checking, a smaller model never did): a paid order that still
 // awaits its delivery (to_fulfil, or a failed delivery) is an obligation too, state to_deliver, at the top with the
@@ -80,8 +97,15 @@ CREATE TABLE fleet_inference_profile (
   set_by                text        NOT NULL,
   set_at                timestamptz NOT NULL DEFAULT now()
 );
+-- The registry's profile from what it already uses (amended 2026-10-24: v112 changes no provider; see the header).
 INSERT INTO fleet_inference_profile (id, profile, reason, set_by)
-  VALUES (1, 'local_only', 'owner directive 2026-10-23: local inference only; no automatic cloud fallback', 'migration');
+  SELECT 1, 'cloud_allowed', 'v112: cloud inference was already enabled on this registry, kept as configured (no provider change on upgrade)', 'migration'
+   WHERE EXISTS (SELECT 1 FROM fleet_cognition_tiers WHERE enabled AND provider <> 'local')
+      OR EXISTS (SELECT 1 FROM fleet_cognition_policy WHERE cognition_enabled AND provider NOT IN ('local','scripted'))
+  UNION ALL
+  SELECT 1, 'local_only', 'v112: no cloud inference enabled on this registry, cloud only by the owner''s recorded inference-profile-set', 'migration'
+   WHERE NOT EXISTS (SELECT 1 FROM fleet_cognition_tiers WHERE enabled AND provider <> 'local')
+     AND NOT EXISTS (SELECT 1 FROM fleet_cognition_policy WHERE cognition_enabled AND provider NOT IN ('local','scripted'));
 
 CREATE FUNCTION fleet_inference_local_only() RETURNS boolean LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
@@ -109,9 +133,7 @@ BEGIN
 END $$;
 CREATE TRIGGER fleet_cognition_policy_local_only BEFORE INSERT OR UPDATE ON fleet_cognition_policy FOR EACH ROW EXECUTE FUNCTION fleet_inference_policy_guard();
 
--- Existing cloud tiers and an enabled cloud policy stop here (the directive's containment, made durable).
-UPDATE fleet_cognition_tiers SET enabled = false, updated_at = now(), updated_by = 'migration' WHERE enabled AND provider <> 'local';
-UPDATE fleet_cognition_policy SET cognition_enabled = false, updated_at = now(), updated_by = 'migration' WHERE cognition_enabled AND provider NOT IN ('local','scripted');
+-- (Amended 2026-10-24: no tier or policy is disabled here; the profile above records what the registry already uses.)
 
 -- Map a tier to the local model (zero provider prices; verification voided, as for any mapping change).
 CREATE FUNCTION fleet_cognition_tier_set_local(p_tier text, p_model text, p_max_output_tokens integer, p_actor text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER

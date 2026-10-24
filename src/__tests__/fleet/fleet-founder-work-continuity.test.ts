@@ -15,7 +15,7 @@
  * 10. Across that upgrade restart, the carried-turn, manifest and controller protections it exercises still hold (scope
  *     stated at the test; duplicate protection in general is the controller's v95 operation register).
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -349,6 +349,22 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     const reviewAt = Date.parse(JSON.parse(fs.readFileSync(path.join(r.d.s, "mind-continuity.json"), "utf8")).reviewAt);
     expect(reviewAt - t0).toBeGreaterThanOrEqual(14 * 60_000);
     expect(reviewAt - t0).toBeLessThanOrEqual(16 * 60_000);
+  });
+
+  it("1s. the rest lasts until the controller's eligibility time (Retry-After), not a fixed minute (2026-10-24)", async () => {
+    const real = Date.now; let t = real();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => t);
+    try {
+      const r = rig(() => { throw Object.assign(new Error("limit"), { code: "FLEET_COGNITION_RATE_LIMITED", retryAfterS: 600 }); });
+      await r.mind.turn("hb");
+      const tried = r.infers();
+      t += 120_000;                                                                   // past the old fixed minute: still resting
+      expect((await r.mind.turn("hb 2")).reason).toMatch(/resting/);
+      expect(r.infers()).toBe(tried);
+      t += 481_000;                                                                   // 601 s: eligible again — one call
+      await r.mind.turn("hb 3");
+      expect(r.infers()).toBeGreaterThan(tried);
+    } finally { clock.mockRestore(); }
   });
 
   it("1r. a call-rate refusal rests the founder a minute — no retry every second (desktop run: 1,000 refused turns)", async () => {

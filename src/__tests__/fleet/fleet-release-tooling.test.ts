@@ -302,3 +302,26 @@ describe("teelog: the log is complete when the script returns, with the script's
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe("fleet-rollout.sh: no automatic production database restore without the owner's explicit approval (directive 2026-10-23)", () => {
+  const src = fs.readFileSync(path.join(SCRIPTS, "fleet-rollout.sh"), "utf8");
+  const body = (fn: string) => src.slice(src.indexOf(fn)).split("\n");
+  it("rollback past the migration point stops the units and restores nothing unless FLEET_ROLLOUT_AUTO_RESTORE=1", () => {
+    const lines = body("rollback() {");
+    const guard = lines.findIndex((l) => /MIGRATED == 1 && "\$\{FLEET_ROLLOUT_AUTO_RESTORE:-\}" != 1/.test(l));
+    const drop = lines.findIndex((l) => /DROP SCHEMA fleet CASCADE/.test(l));
+    expect(guard).toBeGreaterThan(0);
+    expect(drop).toBeGreaterThan(guard);
+    expect(lines.slice(guard, drop).some((l) => /^\s*exit 2$/.test(l))).toBe(true);
+    expect(lines.slice(guard, drop).join("\n")).not.toMatch(/pg_restore|DROP|ln -sfn|systemctl start/);
+  });
+  it("revert refuses (units stopped, exit 3) before reading the cutover state or restoring the dump, unless approved", () => {
+    const lines = body('if [[ "$MODE" == revert ]]; then');
+    const guard = lines.findIndex((l) => /"\$\{FLEET_ROLLOUT_AUTO_RESTORE:-\}" != 1/.test(l));
+    const state = lines.findIndex((l) => /^\s*ST=~\/rollout-/.test(l));
+    expect(guard).toBeGreaterThan(0);
+    expect(state).toBeGreaterThan(guard);
+    expect(lines.slice(guard, state).some((l) => /^\s*exit 3$/.test(l))).toBe(true);
+    expect(lines.slice(guard, state).join("\n")).not.toMatch(/pg_restore|DROP|systemctl start/);
+  });
+});

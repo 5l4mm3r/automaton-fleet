@@ -225,7 +225,8 @@ export async function inferRouted(
   if (!auth.ok) {
     const code = String(auth.code);
     throw new CognitionError(code === "FLEET_COGNITION_BUSY" || code === "FLEET_COGNITION_RATE_LIMITED" ? 429 : code === "FLEET_COGNITION_DUPLICATE_FAILURE" ? 409 : 403, code,
-      code === "FLEET_TREASURY_INSUFFICIENT" ? `the treasury cannot pay for this owner conversation turn (available ${auth.availableMinor ?? "?"}, needed ${auth.neededMinor ?? "?"})` : "inference not authorized");
+      code === "FLEET_TREASURY_INSUFFICIENT" ? `the treasury cannot pay for this owner conversation turn (available ${auth.availableMinor ?? "?"}, needed ${auth.neededMinor ?? "?"})` : "inference not authorized",
+      typeof auth.retryAfterS === "number" ? auth.retryAfterS : undefined);
   }
   const requestId = String(auth.requestId);
   const deadlineMs = Math.min(MAX_COGNITION_DEADLINE_MS, Math.max(1_000, opts.deadlineMs ?? DEFAULT_COGNITION_DEADLINE_MS));

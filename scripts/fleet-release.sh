@@ -20,7 +20,8 @@
 # If step 2 or 3 fails after the backend succeeded: the UI that was live immediately before this release (the step-0
 # snapshot — never an older dashboard.env.pre-<name> from an earlier deployment) is restored and verified, then the
 # backend is reverted with the rehearsed restore (fleet-rollout.sh revert: the cutover's verified pre-migration dump, the previous runtime.env and
-# release), and only after that completes ONE production_rolled_back event is recorded (P0). Fleet Command sees exactly
+# release), and only after that completes ONE production_rolled_back event is recorded (P0). Since 2026-10-24 that restore runs only with
+# the owner's explicit FLEET_ROLLOUT_AUTO_RESTORE=1; otherwise the revert refuses, the controller-side units are stopped and the owner decides. Fleet Command sees exactly
 # one outcome per release.
 set -euo pipefail
 PINS="${1:-}"; FROM="${2:-}"; TO="${3:-}"; UINAME="${4:-}"; UITGZ="${5:-}"; UISHA="${6:-}"

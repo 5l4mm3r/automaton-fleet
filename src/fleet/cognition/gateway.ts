@@ -182,7 +182,8 @@ export async function infer(
   const inTok = prompt.tokens;
   const estimateMicro = inTok * Number(status.inputMicrocentsPerToken ?? 0) + maxTokens * Number(status.outputMicrocentsPerToken ?? 0);
   const auth = await ports.authorize(agentId, Math.max(1, Math.ceil(estimateMicro / 1_000_000)));
-  if (!auth.ok) throw new CognitionError(auth.code === "FLEET_COGNITION_BUSY" || auth.code === "FLEET_COGNITION_RATE_LIMITED" ? 429 : 403, String(auth.code), "inference not authorized");
+  if (!auth.ok) throw new CognitionError(auth.code === "FLEET_COGNITION_BUSY" || auth.code === "FLEET_COGNITION_RATE_LIMITED" ? 429 : 403, String(auth.code), "inference not authorized",
+    typeof auth.retryAfterS === "number" ? auth.retryAfterS : undefined);
   const requestId = String(auth.requestId);
   const deadlineMs = Math.min(MAX_COGNITION_DEADLINE_MS, Math.max(1_000, opts.deadlineMs ?? DEFAULT_COGNITION_DEADLINE_MS));
   const started = now();

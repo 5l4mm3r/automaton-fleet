@@ -10,13 +10,18 @@
 #   scripts/fleet-rollout.sh cutover <pinsFile> <fromSchema> <toSchema>
 #       refuses unless a successful rehearsal of the SAME commit exists from the last 24 h; then stage + install the
 #       release, stop controller-side units, pre-migration dump, fail-closed migrate-check, migrate, audit, approve,
-#       verify-runtime, start, readyz. ANY failure after the dump rolls back automatically: previous runtime.env and
-#       release, the pre-migration dump restored into the live database, units restarted — and reports it.
+#       verify-runtime, start, readyz. A failure BEFORE the migration restores the previous runtime.env and release and
+#       restarts the units. A failure AFTER it restores NOTHING (owner directive 2026-10-23: no automatic production
+#       database restore): the controller-side units are stopped, the database, the pre-migration dump, runtime.env and
+#       the logs are left as they are, and the owner decides. The old automatic restore (pre-migration dump into the live
+#       database, previous release, units restarted) runs only with FLEET_ROLLOUT_AUTO_RESTORE=1, the owner's explicit
+#       approval for that one run.
 #
 #   scripts/fleet-rollout.sh revert <pinsFile> <fromSchema> <toSchema> <reason…>
-#       undo a SUCCESSFUL cutover of the same pins (scripts/fleet-release.sh, when a later release step fails): exactly the
-#       automatic rollback — controller-side units stopped, the cutover's verified pre-migration dump restored into the
-#       live database, the previous runtime.env and release, units started — then ONE production_rolled_back event.
+#       undo a SUCCESSFUL cutover of the same pins (scripts/fleet-release.sh, when a later release step fails). Without
+#       FLEET_ROLLOUT_AUTO_RESTORE=1 it refuses: the controller-side units are stopped, nothing else changes (exit 3).
+#       With it (the owner's explicit approval): the cutover's verified pre-migration dump restored into the live
+#       database, the previous runtime.env and release, units started — then ONE production_rolled_back event.
 #   FLEET_ROLLOUT_DEFER_EVENT=1 (cutover): do not record production_deployed (the release script records the outcome
 #       of the whole release); the cutover still records production_rolled_back if it rolls itself back.
 #
@@ -64,6 +69,14 @@ flags
 
 if [[ "$MODE" == revert ]]; then
   REASON=$(echo "${*:5}" | tr -cd 'A-Za-z0-9 .:_/-' | cut -c1-200); [[ -n "$REASON" ]] || die "revert needs a reason"
+  # Owner directive 2026-10-23 (first applied by hand in the 89d7c21 kit, ~/rlc130): no automatic database restore. Without
+  # the owner's explicit FLEET_ROLLOUT_AUTO_RESTORE=1 the controller-side units are stopped and nothing else changes.
+  if [[ "${FLEET_ROLLOUT_AUTO_RESTORE:-}" != 1 ]]; then
+    echo "!! REVERT REFUSED $(ts): automatic database restoration needs the owner's explicit FLEET_ROLLOUT_AUTO_RESTORE=1 ($REASON)"
+    sudo systemctl stop automaton-fleet-operator-api.service automaton-fleet-chatgpt-adapter.socket automaton-fleet-chatgpt-adapter.service automaton-fleet-custody.service automaton-fleet-fetcher.socket automaton-fleet-fetcher.service automaton-fleet.service || true
+    echo "== REVERT NOT PERFORMED $(ts): controller-side units STOPPED; schema $(live 'SELECT max(version) FROM fleet.fleet_schema_migrations' 2>/dev/null || echo unknown), current $(readlink /opt/automaton-fleet/current) left as they are"
+    exit 3
+  fi
   ST=~/rollout-${C:0:7}-cutover.state; [[ -f "$ST" && ! -L "$ST" ]] || die "no cutover state for ${C:0:7} ($ST)"
   get() { sed -n "s/^$1=//p" "$ST" | head -1; }
   SD=$(get DUMP); SOLD=$(get OLD); LATE=$(get LATE)
@@ -264,6 +277,15 @@ MIGRATED=0
 rollback() {
   echo "!! FAILURE: $1 — automatic rollback $(ts)"
   sudo systemctl stop $UNITS || true
+  # Owner directive 2026-10-23 (first applied by hand in the 89d7c21 kit, ~/rlc130): past the migration point nothing is
+  # restored unless the owner explicitly set FLEET_ROLLOUT_AUTO_RESTORE=1 — the previous release is not re-pointed or
+  # started (never old code on a newer schema), and the controller-side units stay stopped.
+  if [[ $MIGRATED == 1 && "${FLEET_ROLLOUT_AUTO_RESTORE:-}" != 1 ]]; then
+    echo "!! AUTOMATIC RESTORE NOT APPROVED: NOTHING restored; controller-side units STOPPED ($UNITS)"
+    echo "state $(ts): schema $(psqlq 'SELECT max(version) FROM fleet.fleet_schema_migrations' 2>/dev/null || echo unknown); current $(readlink /opt/automaton-fleet/current); runtime.env pins ${C:0:7} (previous kept: $ENVF.pre-${C:0:7}); pre-migration dump $D ($(cut -c1-16 "$D.sha256" 2>/dev/null)); logs ~/rollout-*.log"
+    echo "== ROLLOUT ${C:0:7} STOPPED, NOT ROLLED BACK $(ts): the owner decides (no restore without explicit approval)"
+    exit 2
+  fi
   if [[ $MIGRATED == 1 ]]; then
     test "$LIVE" = automaton_fleet
     sudo -u postgres psql -X -q -d $LIVE -c "DROP SCHEMA fleet CASCADE"
