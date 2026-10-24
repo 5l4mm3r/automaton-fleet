@@ -443,6 +443,8 @@ export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS, 
 }
 
 const HOUR_MS = 3_600_000;
+/** How often, at most, a running turn re-reads the controller's attention for newly owed work (between steps). */
+export const NEW_WORK_CHECK_MS = 10_000;
 
 export class FounderMind {
   turns = 0;
@@ -970,12 +972,29 @@ export class FounderMind {
     const progressMem = W ? new ProgressMemory(path.join(this.o.stateDir, PROGRESS_FILE)) : null;
     let stopCode: string | undefined;
     let repeating = 0;
+    // Run 6 (2026-10-24): a paid order created 2–3 s after the turn's packet was built stayed unseen for the whole turn (15
+    // steps, 6.5 minutes of research). Between steps — every tool of the step finished and recorded, nothing in flight — the
+    // controller's attention is read again (free; at most every 10 s); a delivery or revision owed that the turn did not
+    // start with ends the turn here. Its record is carried like a cut-off turn's (completed actions are never repeated) and
+    // the next turn's packet is built afresh with the new work as its objective. An owner conversation is not interrupted.
+    const owedAtStart = new Set((obligations ?? []).filter((o) => o.deliveryOwed || o.revisionOwed).map((o) => o.id));
+    let attentionReadAt = Date.now();
     for (let step = 0; step < maxSteps; step++) {
       // 2026-10-22: the process is stopping: end the turn between steps; its record is carried like a cut-off turn's.
       if (step > 0 && this.o.stopSignal?.aborted) {
         stopCode = "FLEET_RUNTIME_STOPPING";
         this.logDecision({ turn: this.turns, routed: true, step, stopped: stopCode });
         break;
+      }
+      if (step > 0 && !owner && Date.now() - attentionReadAt >= NEW_WORK_CHECK_MS) {
+        attentionReadAt = Date.now();
+        const fresh = parseObligations((await this.o.ports.cognitionStatus().catch(() => null) as Record<string, unknown> | null)?.attention);
+        const arrived = (fresh ?? []).filter((o) => (o.deliveryOwed || o.revisionOwed) && !owedAtStart.has(o.id));
+        if (arrived.length) {
+          stopCode = "FLEET_NEW_PRIORITY";
+          this.logDecision({ turn: this.turns, routed: true, step, stopped: stopCode, newWork: arrived.map((o) => `${o.id.slice(0, 8)}:${o.deliveryOwed ? "delivery" : "revision"}`) });
+          break;
+        }
       }
       // Append-only inside a turn: a conversation that would outgrow its budget ends here instead of being trimmed.
       if (step > 0 && size() > MAX_REQUEST_BYTES) {
@@ -1116,7 +1135,7 @@ export class FounderMind {
     // looked at again (the agent answered the buyer, slept, and nothing woke it for the remaining 41 minutes).
     if (W && !owner && finished && owedOrders.length && !reviewAt) reviewAt = new Date(Date.now() + OWED_RECHECK_MS).toISOString();
     const planText = outcome;   // what the founder itself wrote (the carried plan); the note below is the platform's
-    if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${stopCode === REPEATING_STOP ? `was ended after ${result.steps} steps that only repeated refused actions` : stopCode ? `was stopped by a runtime restart after ${result.steps} steps` : sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
+    if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${stopCode === REPEATING_STOP ? `was ended after ${result.steps} steps that only repeated refused actions` : stopCode === "FLEET_NEW_PRIORITY" ? `was paused after ${result.steps} steps because new customer work arrived — it comes first` : stopCode ? `was stopped by a runtime restart after ${result.steps} steps` : sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
     // 2026-10-18 (work continuity): a cut-off turn leaves its working record for the next turn (and a restart); a finished
     // working turn has consumed it. The progress memory survives restarts.
     if (W) {

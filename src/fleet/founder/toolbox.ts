@@ -938,13 +938,17 @@ export class FounderToolbox {
   private async orderState(orderId: string): Promise<{ delivery?: { status?: unknown; sentAt?: unknown; files?: Array<{ sha256?: unknown }> }; buyerSince: boolean; lastBuyer: string } | null> {
     if (!this.o.ports.economy) return null;
     const t = (await this.o.ports.economy("order.thread", { orderId }).catch(() => null)) as
-      { ok?: unknown; order?: { delivery?: { status?: unknown; sentAt?: unknown; files?: Array<{ sha256?: unknown }> } }; thread?: Array<{ author?: unknown; at?: unknown; body?: unknown }> } | null;
+      { ok?: unknown; revisionOwed?: unknown; order?: { delivery?: { status?: unknown; sentAt?: unknown; files?: Array<{ sha256?: unknown }> } }; thread?: Array<{ author?: unknown; at?: unknown; body?: unknown }> } | null;
     if (!t || t.ok === false) return null;
     const d = t.order?.delivery;
     if (d?.status === "sent") this.sentSeen.add(orderId);
     const sentAt = d?.status === "sent" ? Date.parse(String(d.sentAt ?? "")) : NaN;
     const since = (t.thread ?? []).filter((m) => m.author === "buyer" && Number.isFinite(sentAt) && Date.parse(String(m.at ?? "")) > sentAt);
-    return { delivery: d, buyerSince: since.length > 0, lastBuyer: String(since.at(-1)?.body ?? "").replace(/\s+/g, " ").slice(0, 200) };
+    // v113: FleetController says whether the buyer's request is still owed — a resend of the same files (even one the agent
+    // marked unchanged) does not answer it. An older controller does not say: then any sent delivery after the request counts.
+    const owed = typeof t.revisionOwed === "boolean" ? t.revisionOwed : since.length > 0;
+    const lastBuyer = [...(t.thread ?? [])].reverse().find((m) => m.author === "buyer");
+    return { delivery: d, buyerSince: owed, lastBuyer: String(lastBuyer?.body ?? "").replace(/\s+/g, " ").slice(0, 200) };
   }
   private async deliveryClaimRefusal(orderId: string, message: string): Promise<string | null> {
     if (!DELIVERY_CLAIM.test(message) || !this.o.ports.economy) return null;
@@ -1772,6 +1776,8 @@ export class FounderToolbox {
             // A failed or queued latest delivery is not "sent": resending it is recovery and is not affected.
             const unchanged = args.unchanged === true;
             delete args.unchanged;
+            // (unchanged: true sends the same file again — recovery, or on the buyer's request — and resolves nothing: v113 keeps the
+            // buyer's requested change owed until a changed file whose review showed the change is delivered.)
             // (A first delivery has no resendReason; FleetController refuses a re-delivery without one — every revision carries it.)
             const st = typeof args.orderId === "string" && (typeof args.resendReason === "string" || unchanged) ? await this.orderState(args.orderId) : null;
             if (st?.buyerSince && !unchanged) {

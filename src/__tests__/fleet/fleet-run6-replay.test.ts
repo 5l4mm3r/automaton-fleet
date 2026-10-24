@@ -45,23 +45,37 @@ function world() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "run6-")));
   const ws = path.join(root, "w");
   fs.mkdirSync(ws, { recursive: true }); fs.mkdirSync(path.join(root, "m"));
-  const deliveries: Array<{ deliveryId: string; status: string; sentAt?: string; files: Array<{ fileName: string; sha256: string }> }> = [];
+  const deliveries: Array<{ deliveryId: string; status: string; sentAt?: string; files: Array<{ fileName: string; sha256: string }>; reviewId: string; createdAt: string }> = [];
   const thread: Array<{ author: string; body: string; at: string }> = [];
   const calls: Array<{ op: string; args: Record<string, unknown> }> = [];
   let clock = Date.parse("2026-10-24T11:39:00Z");
   const tick = () => new Date((clock += 1_000)).toISOString();
   let reviews = 0;
+  // As v113: a request is answered only by an EFFECTIVE sent delivery — the first, or changed files on a review whose
+  // automated report passed required_content; the same files again answer nothing.
+  const verified = new Set<string>();
+  const effectiveAt = () => {
+    const sentOnes = deliveries.filter((d) => d.status === "sent");
+    const ok = sentOnes.filter((d, i) => i === 0 || (JSON.stringify(d.files.map((f) => f.sha256)) !== JSON.stringify(sentOnes[i - 1].files.map((f) => f.sha256)) && verified.has(d.reviewId)));
+    return ok.length ? ok.at(-1)!.createdAt : null;
+  };
+  const revisionOwed = () => { const at = effectiveAt(); return at !== null && thread.some((m) => m.author === "buyer" && m.at > at); };
   const staged = new Map<string, string>();
   const box = new FounderToolbox({ manifest: FOUNDER_MANIFEST_V2, workspaceDir: ws, memoryDir: path.join(root, "m"), loopGuard: new LoopGuard(), selfGovernance: true, toolsDir: DEV_TOOLS,
     ports: { ledger: async () => ({}), economy: async (op: string, args: Record<string, unknown>) => {
       calls.push({ op, args });
-      if (op === "order.thread") return { ok: true, order: { orderId: ORDER, ...(deliveries.length ? { delivery: deliveries.at(-1) } : {}) }, thread };
-      if (op === "review.record") return { ok: true, reviewId: `rv-${++reviews}`, verdict: args.verdict, automatedOk: (args.automated as { ok?: boolean }).ok };
+      if (op === "order.thread") return { ok: true, order: { orderId: ORDER, ...(deliveries.length ? { delivery: deliveries.at(-1) } : {}) }, thread, revisionOwed: revisionOwed() };
+      if (op === "review.record") {
+        const reviewId = `rv-${++reviews}`;
+        const auto = args.automated as { ok?: boolean; files?: Array<{ checks?: Array<{ id: string; status: string }> }> };
+        if (auto.ok && (auto.files ?? []).some((f) => (f.checks ?? []).some((c) => c.id === "required_content" && c.status === "pass"))) verified.add(reviewId);
+        return { ok: true, reviewId, verdict: args.verdict, automatedOk: auto.ok };
+      }
       // As FleetController: staged bytes by name; a delivery takes the staged files (their names) with their hashes.
       if (op === "order.stage_file") { staged.set(String(args.fileName), sha(Buffer.from(String(args.contentB64), "base64"))); return { ok: true }; }
       if (op === "order.deliver") {
         const files = (args.files as Array<{ fileName: string }>).map((f) => ({ fileName: f.fileName, sha256: staged.get(f.fileName)! }));
-        const d = { deliveryId: `d${deliveries.length + 1}`, status: "queued", files };
+        const d = { deliveryId: `d${deliveries.length + 1}`, status: "queued", files, reviewId: String(args.reviewId ?? ""), createdAt: tick() };
         deliveries.push(d); tick();
         return { ok: true, order: { orderId: ORDER, status: "delivering", delivery: d } };
       }
@@ -172,5 +186,34 @@ describe.skipIf(!HAVE_TOOLS)("run 6 replayed: edit → render → inspect → re
     const again = await w.run("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.pdf"], reviewId: "rv-0", resendReason: "resend on request", after: "op2", unchanged: true } });
     expect(again.ok).toBe(true);
     expect(w.calls.filter((c) => c.op === "order.deliver").at(-1)!.args).not.toHaveProperty("unchanged");
+  }, 120_000);
+
+  it("an explicit unchanged resend does not resolve a pending correction: it stays owed until the change is delivered and shown on the page", async () => {
+    const w = world();
+    if ((await runSandboxed(w.ws, "echo up", { timeoutMs: 15_000, maxOutput: 1_000 })).sandboxUnavailable) return;
+    await w.run("deliverable", { op: "render", args: { source: "order/checklist.json", out: "order/checklist.pdf", content: original() } });
+    await w.run("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.pdf"], reviewId: "rv-0" } });
+    w.sent();
+    w.buyer(BUYER);                                                                    // the correction is requested
+    // The agent re-sends the old file and declares it unchanged: it goes out (the buyer gets it again) …
+    expect((await w.run("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.pdf"], reviewId: "rv-0", resendReason: "resend", after: "op1", unchanged: true } })).ok).toBe(true);
+    w.sent();
+    // … but the correction is still owed: FleetController's rule (v113) and therefore the runtime's checks agree.
+    const owedNow = await w.run("customers", { op: "order_message", args: { orderId: ORDER, message: "Point 7 has been updated and sent." } });
+    expect(owedNow.refused).toBe("FLEET_CLAIM_UNSUPPORTED");
+    expect(owedNow.output).toContain("their request is not delivered by it");
+    expect((await w.run("deliverable", { op: "review", args: { subject: "order", orderId: ORDER, paths: ["order/checklist.pdf"], criteria, verdict: "pass" } })).refused)
+      .toBe("FLEET_REVIEW_REQUIRE_CHANGE");
+    expect((await w.run("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.pdf"], reviewId: "rv-0", resendReason: "again", after: "op2" } })).refused)
+      .toBe("FLEET_REVISION_UNCHANGED");
+    // The change made, shown on the page and delivered: now it is answered.
+    const fixed = JSON.parse(EDITED); delete fixed.description;
+    fs.writeFileSync(path.join(w.ws, "order/checklist.json"), JSON.stringify(fixed));
+    await w.run("deliverable", { op: "render", args: { source: "order/checklist.json", out: "order/checklist.pdf" } });
+    const rev = JSON.parse((await w.run("deliverable", { op: "review", args: { subject: "order", orderId: ORDER, paths: ["order/checklist.pdf"], criteria, verdict: "pass",
+      require: ["Next annual check date"] } })).output);
+    expect((await w.run("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.pdf"], reviewId: rev.reviewId, resendReason: "point 7", after: "op3" } })).ok).toBe(true);
+    w.sent();
+    expect((await w.run("customers", { op: "order_message", args: { orderId: ORDER, message: "Point 7 has been updated and sent." } })).ok).toBe(true);
   }, 120_000);
 });
