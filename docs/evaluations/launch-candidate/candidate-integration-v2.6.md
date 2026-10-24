@@ -113,6 +113,13 @@ commit at deployment Group A, and its pins come from that build's output.
 
 ## Correction obligation: acknowledging and fulfilling separated (v114, implemented)
 
+> **Temporary limitation; not the finished policy, and not to be installed in production (owner, 24 Oct).** v114 treats
+> every post-delivery buyer message as correction work, which moves routine customer handling ("thanks") onto the owner.
+> The replacement, separating unread messages, conversation and established corrections with acceptance criteria, is
+> designed in [`docs/design/customer-message-handling.md`](../../design/customer-message-handling.md) and awaits approval.
+> It would be a migration on top of v114, so pushed history is never edited, and production would go 111 → that version in
+> one install.
+
 **The bypass is closed.** Until v113, `order_message {resolved:true}` after a buyer's request ended the owed revision and
 closed the conversation 7 days later with no new file. v114 (`migrations-phase114.ts`, restating v113's functions and v108's
 closure):
@@ -251,6 +258,10 @@ runtime code is unchanged. `fleet-founder-work-continuity` gives **31/31, runner
   Nothing changed today touches the provider or deadline path, so it is recorded as a **timing-sensitive test, not a
   regression**. It needs a quiet machine for release evidence.
 
+**Release evidence: the clean run (quiet machine, load ≈ 0.4, no other test process), on 8475471 (code identical to
+c6d4699):** the same 14 files, sequential: **14/14 files, 166/166 tests, runner exit 0, no unhandled errors.** That
+includes `fleet-cognition-hardening` L2 with its deadline unchanged.
+
 **Earlier today, before v114:** the combined merge ran 26 files and 296 tests, all passing. Its runner exit 1 came from
 the 1j unhandled rejection, now fixed.
 
@@ -263,23 +274,30 @@ never approved. The new case records a pass on an `ok: true` report carrying onl
 The scenario grader's "completed" is not a review. It never read the documents (runs 3–6), and its verdict is not
 evidence of fulfilment.
 
-## Deployment proposal: one package, three approval groups
+## Deployment proposal: four approval groups
 
-**Package:** the final commit on `fleet/integration-v2.6` (named in "Final candidate" below). Schema **111 → 114**
-(v112 amended, v113 desktop, v114 correction obligation). UI unchanged (the current UI is reused).
+| Group | Exactly what | Live effect | Needs first | Spend |
+|---|---|---|---|---|
+| **A: candidate, side-build, non-billable rehearsals** | Push c6d4699 (+ docs commits). On the VPS: `fleet-build-runtime.sh` → pins (from its output). `fleet-rollout.sh rehearse <pins> 111 114`: a fresh read-only dump restored into a **throwaway** database; it never writes to the live one. The free rehearsals (services, founder upgrade, revision) in throwaway registries with the **fake** provider. A read-only snapshot of policy, tiers, routing, budgets, lots and holds. | none | your approval of A only | no additional model/API spend (no provider key is used or present in any rehearsal); VPS build time and disk only |
+| **B: production install/configuration, agents paused** | **B1:** `fleet-release.sh <pins> 111 <to> <current UI>`, with automatic database restore **off** (the default since 4c9c1a3); verify identity, schema and the snapshot. Cognition stays contained (provider none). **B2:** key from recovery to its credential, `FLEET_INFERENCE_PROFILE=cloud_allowed`, `FLEET_COGNITION_PROVIDER=anthropic`, profile set if needed, policy re-enabled with the snapshot's values, controller restart. | B1: controller outage ≈ 45 s. B2: one controller restart. | B1: the customer-message design implemented (or your explicit choice to install v114 with its limitation). B2: **the key check** (funded organisation) | no additional model/API spend (agents paused, Fleet Control ceiling unchanged); a brief outage |
+| **C: named runtime upgrades, agents paused** | **Agent-1 (founder-1, 01M3F50SH7PNX2E3GST13J52AS) only**: `fleet-founders.sh` upgrade from 89d7c21 to the installed release; record the upgrade ID. **Agent-2 (01M4C4NXT786Q4E9725N5A15KV) stays on b60e262** unless you explicitly approve its upgrade. | Agent-1's process restarts, still paused | B1 | no additional model/API spend |
+| **D: paid evaluation (separate approval)** | S1 from the side-installed release in a throwaway registry, on terms frozen by `fleet-scenario-terms.sh`, hold placed, import once. | none on production agents | B2; **the credit figures** (the hold is placed against the recorded balance) | S1 cap 360p; hold **$4.01 provisional**: computed from plan C's terms of 23 Oct, recomputed from current terms before approval |
 
-| Group | What happens | Live effect | Cost |
-|---|---|---|---|
-| **A: prepare** (nothing live changes) | Push the branch. On the VPS: `fleet-build-runtime.sh` → pins (from its output, never placeholders). `fleet-rollout.sh rehearse <pins> 111 114` on a **fresh read-only dump of production** (the historical test clusters are not inputs). The free rehearsals (services, founder upgrade, revision; fake provider). A read-only snapshot of the cognition policy, tiers, routing, budgets, AI-credit lots and holds. | none | £0 (no inference; build time only) |
-| **B: install and Anthropic** (agents paused) | `fleet-release.sh <pins> 111 114 <current UI>`, automatic restore off (default). Verify: runtime identity, schema 114, policy/tiers/routing/budgets equal the snapshot, flags false, cap 2. Then, **only after the key check confirms the funded organisation**: key from recovery to its credential; runtime.env `FLEET_INFERENCE_PROFILE=cloud_allowed`, `FLEET_COGNITION_PROVIDER=anthropic`; `inference-profile-set cloud_allowed "<reason>"` if the profile reads `local_only`; policy re-enabled with the snapshot's values; restart only `automaton-fleet.service`. | controller outage ≈ 45 s (the 89d7c21 install took 45 s) | £0 (agents paused, so no model call) |
-| **C: agents and evaluation** | `fleet-founders.sh` runtime upgrade, one agent at a time, still paused. The **reconciliation report** computed (nothing posted). Then the paid S1 evaluation on frozen terms, imported once. | founder processes restart; still paused | S1 cap **360p**; hold **401,260,935 µ¢ ($4.01)** at plan C terms, re-frozen at approval (plan C's actual S1: 278.50p) |
+**What needs the key, credit figures or charging decision:**
+- **Key organisation:** only B2 (installing the key makes provider calls possible) and anything after it.
+- **Credit figures:** only D's frozen terms and the read-only reconciliation report.
+- **Internal agent charge:** none of A–D (D charges a throwaway scenario registry and imports as engineering expense).
+  It is needed only before agents resume real work on promotional credit.
 
-Resuming the agents' own work stays a separate word from the owner. Credit postings follow only the owner's decision on
-the reconciliation proposal.
+A, the key check and the reconciliation can therefore proceed independently. The key check and reconciliation stay
+read-only. No internal agent charge is approved.
+
+**Kept throughout:** no automatic production database restore; agents paused; resuming them is a separate word from the
+owner.
 
 ## Rollback
 
-- **Group A:** nothing live changed; delete nothing.
+- **Group A:** nothing live changed (the rehearsal database is throwaway); delete nothing.
 - **Group B, the install fails after the migration:** the rollout stops the controller-side units and **restores nothing** (the
   database, the pre-migration dump, runtime.env and logs are kept). The owner chooses fix forward (preferred) or
   `FLEET_ROLLOUT_AUTO_RESTORE=1 scripts/fleet-rollout.sh revert <pins> 111 <to> <reason>`. That is an explicit restore of
@@ -292,13 +310,13 @@ the reconciliation proposal.
   - restart the controller.
 
   Optionally `inference-profile-set local_only`, which disables cloud tiers and policy. No database restore.
-- **Group C, the runtimes:** `scripts/fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`.
+- **Group C, Agent-1's runtime:** `scripts/fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`.
 - Once real money or provider data exists after Group B: freeze and fix forward (README §3).
 
-## Proposed bounded evaluation (paid; separate approval)
+## Proposed bounded evaluation (Group D; paid; separate approval; figures PROVISIONAL)
 
 Scenario S1 only (paid order, then a correction, on the approved Opus routing), cap **360p**, which bounds the run.
-- Derived by code at plan C's frozen terms (1150p ↔ 1,281,805,763 µ¢): hold **401,260,935 µ¢ ($4.01)**.
+- **Provisional:** derived by code from plan C's terms of 23 Oct (1150p ↔ 1,281,805,763 µ¢), hold **401,260,935 µ¢ ($4.01)**. It is recomputed from current terms before any approval.
 - Plan C's actual S1: 278.50p.
 - Optional S1 + S2 (two hard kills): cap **610p**, hold **679,914,362 µ¢ ($6.80)**; plan C actual 392.11p.
 
@@ -310,12 +328,13 @@ review. The delivered files are still checked by hand before any pass is claimed
 
 ## Remaining before approval
 
-1. **Owner checks:** the key check above (four characters on the VPS, then the Console), and the Console figures for the
-   reconciliation (G, Rp, Rb, Uc).
-2. **Owner decisions:** the internal agent charge for promotional-funded calls (none, or list price shown separately),
-   and how the reconciliation is posted. Nothing is posted until then.
-3. **Not blocking:**
-   - the later proposal archive: documentation to transfer when convenient;
-   - the desktop's cluster inventory: those clusters are historical and excluded.
-4. **Known and recorded:** the 8 failures the desktop recorded in `fleet-cognition-anthropic`, `r24-experiments`,
+1. **For A:** your approval of Group A only. Nothing else blocks it.
+2. **For B1:** your decision on the customer-message design ([design](../../design/customer-message-handling.md)), then
+   its implementation and tests. Or your explicit choice to install v114 with its documented limitation.
+3. **For B2:** the key check (four characters on the VPS, then the Console). Read-only.
+4. **For D:** the Console figures for the reconciliation (G, Rp, Rb, Uc) and recomputed terms. Read-only; nothing is
+   posted.
+5. **Not needed for A–D:** an internal agent charge decision (none is approved), the later proposal archive, the desktop's
+   cluster inventory.
+6. **Known and recorded:** the 8 failures the desktop recorded in `fleet-cognition-anthropic`, `r24-experiments`,
    `research` and `storefront-gateway-pg` (present before this work; not in the release evidence set).
