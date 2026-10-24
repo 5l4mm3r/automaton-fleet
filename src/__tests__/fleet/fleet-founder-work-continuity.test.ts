@@ -316,7 +316,7 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     r.world.obligations = [{ kind: "order", id: "7bc71280-60d2-41d1-b2a4-38f21caa4b07", state: "to_deliver", since: at, lastBuyerAt: at, buyerMessages: 0 }];
     r.world.eventsDigest = hex32(91);
     await r.mind.turn("hb 2");
-    expect(r.packets.at(-1)).toContain("Your saved procedures (methods that worked before");
+    expect(r.packets.at(-1)).toContain("Your saved procedures (methods behind earlier deliveries");
     expect(r.packets.at(-1)).toContain("procedures/deliver-pdf.md");
   });
 

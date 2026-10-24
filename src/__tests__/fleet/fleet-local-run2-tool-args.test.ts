@@ -182,8 +182,10 @@ describe("desktop run 2: no false delivery claim to a buyer", () => {
       expect(r.output, s).toContain("the buyer wrote after the latest delivery was sent");
     }
     expect((await c.msg("The original was sent earlier; the revision is in progress.")).ok).toBe(true);
-    // The revision delivered: queued first (refused), then sent (true).
-    await c.deliver({ resendReason: "point 7 date line", after: "op1" });
+    // The revision delivered: queued first (refused), then sent (true). (Its content is not this test's subject — a revision's
+    // acceptance is replayed in fleet-run6-replay; here the resend is let through as an explicit unchanged one.)
+    expect((await c.deliver({ resendReason: "point 7 date line", after: "op1" })).refused).toBe("FLEET_REVISION_UNREVIEWED");
+    expect((await c.deliver({ resendReason: "point 7 date line", after: "op1", unchanged: true })).ok).toBe(true);
     const q = await c.msg("Point 7 has been updated and sent.");
     expect(q.output).toContain("the latest delivery is queued");
     expect((await c.msg("The original was sent earlier; the revision is queued and on its way.")).ok).toBe(true);

@@ -252,7 +252,7 @@ c.save()
 /** One shell word (single-quoted) for a workspace path handed to a sandboxed command. */
 const shellQuote = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`;
 const RENDER_DOCUMENT_PY = String.raw`
-import json, sys
+import json, re, sys
 from xml.sax.saxutils import escape
 from reportlab.lib.pagesizes import A4, letter
 from reportlab.lib.units import mm
@@ -287,6 +287,10 @@ def txt(v, where):
         fail("%s must be text (a string)" % where)
     return escape(check_chars(v, where)).replace("\n", "<br/>")
 
+KINDS = ("heading", "text", "bullets", "checklist", "lines", "table")
+extra = [k for k in spec if k not in ("title", "subtitle", "pageSize", "blocks", "footer")]
+if extra:
+    fail("unknown field(s) %s: the content has title, subtitle, pageSize, blocks and footer — put other text in a block, e.g. {\"text\": \"...\"}" % ", ".join(extra[:5]))
 size = {"a4": A4, "letter": letter}.get(str(spec.get("pageSize", "A4")).lower())
 if size is None:
     fail("pageSize is A4 or letter")
@@ -317,6 +321,7 @@ class Box(Flowable):
 class WriteIn(Flowable):
     """A label followed by a ruled line to write on; a long label goes above its line."""
     def __init__(self, label, width):
+        label = re.sub(r"[\s_]+$", "", label)        # the line is drawn: typed underscores after the label are dropped
         Flowable.__init__(self); self.label = label; self.width = width
         self.lw = stringWidth(label, FONT, 9.5)
         self.two = self.lw > width * 0.55
@@ -352,58 +357,64 @@ for bi, b in enumerate(blocks, 1):
     where = "block %d" % bi
     if not isinstance(b, dict) or len(b) == 0:
         fail("%s must be an object such as {\"text\": \"...\"}" % where)
-    kind = next((k for k in ("heading", "text", "bullets", "checklist", "lines", "table") if k in b), None)
-    if kind is None:
-        fail("%s: use one of heading, text, bullets, checklist, lines, table (got %s)" % (where, ", ".join(list(b)[:5])))
-    v = b[kind]
-    if kind == "heading":
-        story.append(Paragraph(txt(v, where + " heading"), st["heading"]))
-    elif kind == "text":
-        story.append(Paragraph(txt(v, where + " text"), st["body"]))
-    elif kind == "bullets":
-        if not isinstance(v, list) or not v: fail("%s bullets: a list of strings" % where)
-        for i, t in enumerate(v, 1):
-            story.append(Paragraph(txt(t, "%s bullet %d" % (where, i)), st["body"], bulletText="•"))
-    elif kind == "lines":
-        if not isinstance(v, list) or not v: fail("%s lines: a list of labels, e.g. [\"Name\", \"Date\"]" % where)
-        for i, t in enumerate(v, 1):
-            story.append(WriteIn(check_chars(str(t) if isinstance(t, str) else fail("%s line %d must be text" % (where, i)), where), W))
-            story.append(Spacer(1, 4))
-    elif kind == "checklist":
-        if not isinstance(v, list) or not v: fail("%s checklist: a list of items (strings or {\"text\", \"lines\"})" % where)
-        numbered = b.get("numbered", True) is not False
-        for i, it in enumerate(v, 1):
-            w2 = "%s item %d" % (where, i)
-            if isinstance(it, str):
-                text, lines = it, []
-            elif isinstance(it, dict) and isinstance(it.get("text"), str):
-                text, lines = it["text"], it.get("lines", [])
-                if not isinstance(lines, list) or not all(isinstance(x, str) for x in lines):
-                    fail("%s lines: a list of labels" % w2)
-            else:
-                fail("%s: a string, or {\"text\": \"...\", \"lines\": [\"label\"]}" % w2)
-            label = ("%d. " % i if numbered else "") + text
-            cells = [[Box(), Paragraph(txt(label, w2), st["item"])]]
-            for ln in lines:
-                cells.append(["", WriteIn(check_chars(ln, w2), W - 22)])
-            t = Table(cells, colWidths=[22, W - 22])
-            t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                                   ("TOPPADDING", (0, 0), (-1, -1), 1), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
-            story.append(KeepTogether([t, Spacer(1, 5)]))
-            items += 1
-    elif kind == "table":
-        if not isinstance(v, dict) or not isinstance(v.get("columns"), list) or not isinstance(v.get("rows"), list) or not v["columns"]:
-            fail("%s table: {\"columns\": [\"...\"], \"rows\": [[\"...\"]]}" % where)
-        n = len(v["columns"])
-        data = [[Paragraph(txt(c, where + " column"), st["cellh"]) for c in v["columns"]]]
-        for ri, row in enumerate(v["rows"], 1):
-            if not isinstance(row, list) or len(row) != n:
-                fail("%s row %d: %d cells, like the columns" % (where, ri, n))
-            data.append([Paragraph(txt(str(c), "%s row %d" % (where, ri)), st["cell"]) for c in row])
-        t = Table(data, colWidths=[W / n] * n, repeatRows=1)
-        t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#888888")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eeeeee")),
-                               ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4)]))
-        story.append(t); story.append(Spacer(1, 8))
+    # Run 6: a block holding a heading AND its text lost the text. Every part of a block is rendered, in the order written;
+    # a key the renderer does not know is refused with the reason (never dropped).
+    kinds = [k for k in b if k != "numbered"]
+    unknown = [k for k in kinds if k not in KINDS]
+    if unknown or not kinds:
+        fail("%s: %s — a block holds heading, text, bullets, checklist, lines or table (several render in the order written)"
+             % (where, ("unknown part(s) " + ", ".join(unknown[:5])) if unknown else "nothing to render"))
+    for kind in kinds:
+        v = b[kind]
+        if kind == "heading":
+            story.append(Paragraph(txt(v, where + " heading"), st["heading"]))
+        elif kind == "text":
+            story.append(Paragraph(txt(v, where + " text"), st["body"]))
+        elif kind == "bullets":
+            if not isinstance(v, list) or not v: fail("%s bullets: a list of strings" % where)
+            for i, t in enumerate(v, 1):
+                story.append(Paragraph(txt(t, "%s bullet %d" % (where, i)), st["body"], bulletText="•"))
+        elif kind == "lines":
+            if not isinstance(v, list) or not v: fail("%s lines: a list of labels, e.g. [\"Name\", \"Date\"]" % where)
+            for i, t in enumerate(v, 1):
+                story.append(WriteIn(check_chars(str(t) if isinstance(t, str) else fail("%s line %d must be text" % (where, i)), where), W))
+                story.append(Spacer(1, 4))
+        elif kind == "checklist":
+            if not isinstance(v, list) or not v: fail("%s checklist: a list of items (strings or {\"text\", \"lines\"})" % where)
+            numbered = b.get("numbered", True) is not False
+            for i, it in enumerate(v, 1):
+                w2 = "%s item %d" % (where, i)
+                if isinstance(it, str):
+                    text, lines = it, []
+                elif isinstance(it, dict) and isinstance(it.get("text"), str):
+                    text, lines = it["text"], it.get("lines", [])
+                    if not isinstance(lines, list) or not all(isinstance(x, str) for x in lines):
+                        fail("%s lines: a list of labels" % w2)
+                else:
+                    fail("%s: a string, or {\"text\": \"...\", \"lines\": [\"label\"]}" % w2)
+                    # Run 6: "1. 1." — an item the author numbered already is not numbered again.
+                label = ("%d. " % i if numbered and not re.match(r"\s*\d+[.)]\s", text) else "") + text
+                cells = [[Box(), Paragraph(txt(label, w2), st["item"])]]
+                for ln in lines:
+                    cells.append(["", WriteIn(check_chars(ln, w2), W - 22)])
+                t = Table(cells, colWidths=[22, W - 22])
+                t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                                       ("TOPPADDING", (0, 0), (-1, -1), 1), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
+                story.append(KeepTogether([t, Spacer(1, 5)]))
+                items += 1
+        elif kind == "table":
+            if not isinstance(v, dict) or not isinstance(v.get("columns"), list) or not isinstance(v.get("rows"), list) or not v["columns"]:
+                fail("%s table: {\"columns\": [\"...\"], \"rows\": [[\"...\"]]}" % where)
+            n = len(v["columns"])
+            data = [[Paragraph(txt(c, where + " column"), st["cellh"]) for c in v["columns"]]]
+            for ri, row in enumerate(v["rows"], 1):
+                if not isinstance(row, list) or len(row) != n:
+                    fail("%s row %d: %d cells, like the columns" % (where, ri, n))
+                data.append([Paragraph(txt(str(c), "%s row %d" % (where, ri)), st["cell"]) for c in row])
+            t = Table(data, colWidths=[W / n] * n, repeatRows=1)
+            t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#888888")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eeeeee")),
+                                   ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4)]))
+            story.append(t); story.append(Spacer(1, 8))
 if spec.get("footer"):
     story.append(Paragraph(txt(spec["footer"], "footer"), st["footer"]))
 
@@ -918,13 +929,28 @@ export class FounderToolbox {
    * Null = the message may go as written.
    */
   private readonly sentSeen = new Set<string>();
-  private async deliveryClaimRefusal(orderId: string, message: string): Promise<string | null> {
-    if (!DELIVERY_CLAIM.test(message) || !this.o.ports.economy) return null;
+  /** Run 6: reviews of a revision that stated the change's visible text (require), by reviewId — a revision is delivered on one. */
+  private readonly revisionReviews = new Set<string>();
+  /**
+   * An order's delivery state read from FleetController NOW (order.thread): the latest delivery (status, when sent, its files)
+   * and whether the buyer has written since it was sent — a request it does not deliver. Null when it cannot be read.
+   */
+  private async orderState(orderId: string): Promise<{ delivery?: { status?: unknown; sentAt?: unknown; files?: Array<{ sha256?: unknown }> }; buyerSince: boolean; lastBuyer: string } | null> {
+    if (!this.o.ports.economy) return null;
     const t = (await this.o.ports.economy("order.thread", { orderId }).catch(() => null)) as
-      { ok?: unknown; order?: { delivery?: { status?: unknown; sentAt?: unknown } }; thread?: Array<{ author?: unknown; at?: unknown }> } | null;
-    if (!t || t.ok === false) return "this message says the file was delivered, but the order's delivery state could not be read now: say what is happening without stating it was delivered, or try again";
+      { ok?: unknown; order?: { delivery?: { status?: unknown; sentAt?: unknown; files?: Array<{ sha256?: unknown }> } }; thread?: Array<{ author?: unknown; at?: unknown; body?: unknown }> } | null;
+    if (!t || t.ok === false) return null;
     const d = t.order?.delivery;
     if (d?.status === "sent") this.sentSeen.add(orderId);
+    const sentAt = d?.status === "sent" ? Date.parse(String(d.sentAt ?? "")) : NaN;
+    const since = (t.thread ?? []).filter((m) => m.author === "buyer" && Number.isFinite(sentAt) && Date.parse(String(m.at ?? "")) > sentAt);
+    return { delivery: d, buyerSince: since.length > 0, lastBuyer: String(since.at(-1)?.body ?? "").replace(/\s+/g, " ").slice(0, 200) };
+  }
+  private async deliveryClaimRefusal(orderId: string, message: string): Promise<string | null> {
+    if (!DELIVERY_CLAIM.test(message) || !this.o.ports.economy) return null;
+    const st = await this.orderState(orderId);
+    if (!st) return "this message says the file was delivered, but the order's delivery state could not be read now: say what is happening without stating it was delivered, or try again";
+    const d = st.delivery;
     // Was anything delivered to this buyer before the latest delivery? FleetController's obligations at the turn's start (an
     // order no longer owing its first delivery, or not listed at all, was delivered), or a sent delivery read here earlier.
     const ob = (this.obligations ?? []).find((o) => o.id === orderId);
@@ -935,9 +961,7 @@ export class FounderToolbox {
         + `it has not reached the buyer. ${d?.status === "queued" ? "Say it is queued and on its way — not that it was delivered" : "Deliver it first (wallet deliver)"}`
         + `${earlier ? "; a sentence about the earlier delivery may say so (\"the original was sent earlier; the revision is queued\")" : ""}`;
     }
-    const sentAt = Date.parse(String(d.sentAt ?? ""));
-    const buyerSince = (t.thread ?? []).some((m) => m.author === "buyer" && Date.parse(String(m.at ?? "")) > sentAt);
-    if (!buyerSince || !falseDeliveryClaim(message, true)) return null;
+    if (!st.buyerSince || !falseDeliveryClaim(message, true)) return null;
     return "this message says the file was delivered, but the buyer wrote after the latest delivery was sent (FleetController's record now): their request is not "
       + "delivered by it. Deliver the change first (wallet deliver with resendReason), or say what is happening; a sentence about the earlier delivery may say so "
       + "(\"the original was sent earlier; the revision is in progress\")";
@@ -1362,6 +1386,14 @@ export class FounderToolbox {
     }
     if (a.op === "review") {
       if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
+      // Run 6: the revision's review passed the unchanged file on the agent's own "met: true". When the buyer has asked for a
+      // change since the latest sent delivery, the review states the change's visible text (require) and the inspector checks
+      // it on the page; a review without it is refused, never silently weaker.
+      const revisionOf = args.subject === "order" && typeof args.orderId === "string" ? await this.orderState(args.orderId) : null;
+      if (revisionOf?.buyerSince && !require.length) {
+        return refuse("FLEET_REVIEW_REQUIRE_CHANGE", `the buyer asked for a change after the latest delivery ("${revisionOf.lastBuyer}"): a review of the revision `
+          + "needs require: [the exact visible text that carries the change, e.g. the new line's label] — it is checked on the page; your criteria's met is not proof");
+      }
       if (typeof args.independentRequestId === "string" && !this.independentReviews.has(args.independentRequestId)) {
         return refuse("FLEET_REVIEW_INDEPENDENT", "independentRequestId is the requestId an independent_review of yours returned (within 6 hours)");
       }
@@ -1378,6 +1410,8 @@ export class FounderToolbox {
       delete rec.paths; delete rec.cases; delete rec.require;
       const out = await this.o.ports.economy("review.record", rec).catch(ownerRefusal);
       if ((out as { ok?: unknown }).ok === false) return { name: call.name, ok: false, refused: String((out as { code?: unknown }).code ?? "FLEET_TOOL_ERROR"), output: `REFUSED ${clip(JSON.stringify(out))}` };
+      const reviewId = (out as { reviewId?: unknown }).reviewId;
+      if (revisionOf?.buyerSince && require.length && r.report.ok && typeof reviewId === "string") this.revisionReviews.add(reviewId);
       return { name: call.name, ok: true, output: clip(JSON.stringify(out)) };
     }
     return refuse("FLEET_BAD_REQUEST", "op is render, inspect, review or reviews");
@@ -1731,6 +1765,27 @@ export class FounderToolbox {
             if (!Array.isArray(args.paths)) {
               return refuse("FLEET_BAD_REQUEST", "deliver needs args {orderId, paths: [\"order/checklist.pdf\"] (your workspace files), reviewId (a passing deliverable "
                 + "review of exactly these files)} — this is about the call's arguments, not an external block; the files are staged for the order by this call");
+            }
+            // Run 6: the "revision" re-sent the very file the buyer already had. While the buyer's request since the latest SENT
+            // delivery is open, a delivery of the same bytes is not the revision (unless it is explicitly the same file again:
+            // unchanged: true, e.g. the buyer could not open it), and the revision goes out on a review that stated the change.
+            // A failed or queued latest delivery is not "sent": resending it is recovery and is not affected.
+            const unchanged = args.unchanged === true;
+            delete args.unchanged;
+            // (A first delivery has no resendReason; FleetController refuses a re-delivery without one — every revision carries it.)
+            const st = typeof args.orderId === "string" && (typeof args.resendReason === "string" || unchanged) ? await this.orderState(args.orderId) : null;
+            if (st?.buyerSince && !unchanged) {
+              const sha = (p: unknown) => { try { return crypto.createHash("sha256").update(fs.readFileSync(this.resolve(String(p)))).digest("hex"); } catch { return ""; } };
+              const now = (args.paths as unknown[]).map(sha).sort().join(",");
+              const before = (st.delivery?.files ?? []).map((f) => String(f.sha256 ?? "")).sort().join(",");
+              if (now && now === before) {
+                return refuse("FLEET_REVISION_UNCHANGED", `these are the same files the buyer already has (the latest sent delivery), but they asked for a change after it ("${st.lastBuyer}"): `
+                  + "make the change (edit your source, render or build again), inspect and review the NEW file with require, then deliver it; if the buyer only needs the same file again, pass unchanged: true");
+              }
+              if (typeof args.reviewId !== "string" || !this.revisionReviews.has(args.reviewId)) {
+                return refuse("FLEET_REVISION_UNREVIEWED", `the buyer asked for a change after the latest delivery ("${st.lastBuyer}"): deliver the revision on a review of the new files `
+                  + "that states the change's visible text (deliverable review with require: [...]) — that review's id as reviewId");
+              }
             }
           }
           // Desktop runs 1 and 2 (9B): the buyer was told the file was delivered (or "see the revised PDF") before it was. A message

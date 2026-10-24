@@ -71,8 +71,24 @@ describe.skipIf(!HAVE_TOOLS)("deliverable render: a reusable document renderer (
     expect(glyph.output).toContain("tick boxes are drawn for you");
     expect((await t.run("deliverable", { op: "render", args: { source: "b.json", out: "b.pdf", content: { blocks: [{ text: "x" }] } } })).output).toContain("\"title\"");
     expect((await t.run("deliverable", { op: "render", args: { source: "c.json", out: "c.pdf", content: { title: "T", blocks: [{ grid: [] }] } } })).output)
-      .toContain("use one of heading, text, bullets, checklist, lines, table");
+      .toContain("unknown part(s) grid — a block holds heading, text, bullets, checklist, lines or table");
     expect((await t.run("deliverable", { op: "render", args: { out: "d.pdf" } })).output).toContain("render needs args {source");
+  });
+
+  it("run 6: a heading with its text renders both; an item already numbered is not numbered again; an unknown field or part is refused", async () => {
+    const t = rig();
+    if ((await runSandboxed(t.dirs.w, "echo up", { timeoutMs: 15_000, maxOutput: 1_000 })).sandboxUnavailable) return;
+    const content = { title: "Bike service record", blocks: [{ heading: "Before you ride", text: "Check these every month and keep the sheet with the bike." },
+      { checklist: ["1. Pump the tyres to the pressure on the sidewall", { text: "Check the brake pads", lines: ["Pads replaced on: ________"] }] }] };
+    const r = JSON.parse((await t.run("deliverable", { op: "render", args: { source: "b.json", out: "b.pdf", content,
+      require: ["Check these every month", "1. Pump the tyres", "2. Check the brake pads", "Pads replaced on"] } })).output);
+    expect(r.inspection.ok, JSON.stringify(r.inspection)).toBe(true);               // the text under the heading is on the page
+    const negative = JSON.parse((await t.run("deliverable", { op: "render", args: { source: "b.json", out: "b2.pdf", require: ["1. 1."] } })).output);
+    expect(negative.inspection.files[0].issues.join(" ")).toContain("required_content");     // no "1. 1."
+    for (const [c, msg] of [[{ title: "T", description: "x", blocks: [{ text: "y" }] }, "unknown field(s) description"],
+      [{ title: "T", blocks: [{ heading: "H", body: "y" }] }, "unknown part(s) body"]] as const) {
+      expect((await t.run("deliverable", { op: "render", args: { source: "c.json", out: "c.pdf", content: c } })).output).toContain(msg);
+    }
   });
 
   it("a required phrase that is not on the page fails inspection with what is missing", async () => {

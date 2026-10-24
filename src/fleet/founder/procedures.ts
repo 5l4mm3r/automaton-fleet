@@ -133,16 +133,18 @@ export function recordProcedure(workspaceDir: string, calls: ProcedureCall[], de
 
   let prev = "";
   try { if (!fs.lstatSync(file).isSymbolicLink()) prev = fs.readFileSync(file, "utf8"); else return null; } catch { /* first time */ }
-  const times = (Number(/worked (\d+) time/.exec(prev)?.[1] ?? 0) || 0) + 1;
+  // Run 6: a dispatch (a passing review and a delivery sent) is not a verified fulfilment — the count says what it is.
+  const times = (Number(/(?:worked|dispatched) (\d+) time/.exec(prev)?.[1] ?? 0) || 0) + 1;
   const notes = prev.includes(NOTES) ? P(prev.slice(prev.indexOf(NOTES) + NOTES.length).trim()) : "";
   try {
     if (prev) writeNoFollow(path.join(dir, ".history", `${kind}.${now.toISOString().replace(/[:.]/g, "-")}.md`), prev);
   } catch { return null; }
 
   const body = [
-    `# Procedure: ${kind} (worked ${times} time${times > 1 ? "s" : ""}; last ${now.toISOString().slice(0, 16)}Z)`,
+    `# Procedure: ${kind} (dispatched ${times} time${times > 1 ? "s" : ""}; last ${now.toISOString().slice(0, 16)}Z)`,
     "",
-    "A recipe from a delivery that passed its review — start the next similar task from here, and adapt it to that order's requirements.",
+    "A recipe from a delivery that passed its review and was sent — start the next similar task from here, and adapt it to that order's requirements.",
+    "Dispatched means reviewed and sent, not that the buyer's request was met: check the result against the order and the buyer's messages every time.",
     "",
     ...PARAMETERS,
     "",
@@ -177,6 +179,6 @@ export function procedureLine(workspace: string, max = 3): string | null {
   if (!files.length) return null;
   const items = files.map((f) => { const p = path.join(dir, f); return { f, at: fs.statSync(p).mtimeMs, head: oneLine(fs.readFileSync(p, "utf8").split("\n")[0].replace(/^#\s*/, ""), 140) }; })
     .sort((a, b) => b.at - a.at).slice(0, max);
-  return `Your saved procedures (methods that worked before — read_file ${PROCEDURES_DIR}/<name>; yours to edit, improve or delete): `
+  return `Your saved procedures (methods behind earlier deliveries — read_file ${PROCEDURES_DIR}/<name>; yours to edit, improve or delete): `
     + items.map((i) => `${PROCEDURES_DIR}/${i.f} — ${i.head}`).join(" | ");
 }

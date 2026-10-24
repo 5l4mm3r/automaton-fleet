@@ -47,7 +47,10 @@ interface Seen { ok: boolean; refused?: string; output: string; stateVersion: nu
 export function callDeps(call: ToolCall): string[] {
   const top = (call.arguments ?? {}) as Record<string, unknown>;
   const a = { ...top, ...(top.args && typeof top.args === "object" && !Array.isArray(top.args) ? top.args as Record<string, unknown> : {}) };
+  // Run 6: a render reads its content file (source) and writes the PDF (out). Only the INPUT decides whether it is the same
+  // call again: an edited source renders again; touching or replacing the output alone does not make it new.
   const words = [typeof a.path === "string" ? a.path : "", ...(Array.isArray(a.paths) ? a.paths.filter((x): x is string => typeof x === "string") : []),
+    ...(call.name === "deliverable" && a.op === "render" && typeof a.source === "string" ? [a.source] : []),
     ...(call.name === "exec" && typeof a.command === "string" ? a.command.split(/[\s'"`;|&<>()=]+/).filter((w) => /^[\w./-]+\.[A-Za-z0-9]{1,8}$/.test(w)) : [])];
   return [...new Set(words.map((w) => w.trim().replace(/^\/workspace\/?/, "").replace(/^\.\//, ""))
     .filter((w) => w && w.length <= 200 && !path.isAbsolute(w) && !w.split("/").includes("..")))].slice(0, 10);
