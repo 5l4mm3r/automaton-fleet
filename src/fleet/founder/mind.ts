@@ -212,6 +212,9 @@ export function ownerBlock(turn: { messages: Array<Record<string, unknown>>; fil
 /** v62: the owner turn the mind is answering. */
 export interface OwnerTurn { turnId: string; messages: Array<Record<string, unknown>>; files: Record<string, string> }
 /** v62: refusals that leave the owner's messages waiting (shown to the owner) rather than failing them. */
+/** Desktop run 2026-10-24 (9B, RTX 5080): the hourly call limit was reached in 3.5 minutes; the founder then retried every
+ *  second for 40 minutes (1,000 refused turns, no inference). A refusal by any call-rate limit rests the founder a minute. */
+const REST_CODES = new Set(["FLEET_COGNITION_PROVIDER_RATE_LIMITED", "FLEET_COGNITION_RATE_LIMITED", "FLEET_RATE_LIMITED"]);
 const OWNER_WAIT_CODES = new Set(["FLEET_COGNITION_PAUSED", "FLEET_TREASURY_INSUFFICIENT", "FLEET_COGNITION_RATE_LIMITED", "FLEET_COGNITION_BUSY",
   "FLEET_COGNITION_PROVIDER_RATE_LIMITED", "FLEET_COGNITION_CREDITS_EXHAUSTED", "FLEET_COGNITION_DISABLED", "FLEET_COGNITION_FOUNDER_DISABLED",
   "FLEET_AGENT_HELD", "FLEET_FX_UNAVAILABLE", "FLEET_ROUTING_DISABLED",
@@ -553,7 +556,7 @@ export class FounderMind {
         r = this.o.taskClass ? await this.o.ports.infer(fit(messages), waitMs, { taskClass: this.o.taskClass }) : await this.o.ports.infer(fit(messages), waitMs);
       } catch (err) {
         const code = (err as { code?: string }).code ?? "FLEET_COGNITION_ERROR";
-        if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED") this.restUntil = Date.now() + 60_000;
+        if (REST_CODES.has(code)) this.restUntil = Date.now() + 60_000;
         this.logDecision({ turn: this.turns, step, stopped: code });
         // A conversation the controller refuses as malformed is not kept: the next turn starts clean.
         // So is one the provider rejected as invalid (e.g. a thinking-continuity mismatch): no founder stays wedged.
@@ -953,7 +956,7 @@ export class FounderMind {
         r = await this.o.ports.infer(onlyLatestImages(onlyLatestThinking(messages)), waitMs, cls.route, FOUNDER_RUNTIME_DOCTRINE, owner ? { conversationTurn: owner.turnId } : undefined);
       } catch (err) {
         const code = (err as { code?: string }).code ?? "FLEET_COGNITION_ERROR";
-        if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED") this.restUntil = Date.now() + 60_000;
+        if (REST_CODES.has(code)) this.restUntil = Date.now() + 60_000;
         this.logDecision({ turn: this.turns, routed: true, step, taskClass: cls.taskClass, expectedTier: cls.tier, stopped: code });
         if (result.steps > 0) {
           // 2026-10-22: a turn stopped mid-work by a refused or failed model call (provider error, run budget spent, run

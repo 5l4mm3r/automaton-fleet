@@ -351,6 +351,16 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(reviewAt - t0).toBeLessThanOrEqual(16 * 60_000);
   });
 
+  it("1r. a call-rate refusal rests the founder a minute — no retry every second (desktop run: 1,000 refused turns)", async () => {
+    for (const code of ["FLEET_COGNITION_RATE_LIMITED", "FLEET_RATE_LIMITED"]) {
+      const r = rig(() => { throw Object.assign(new Error("limit"), { code }); });
+      await r.mind.turn("hb");
+      const tried = r.infers();
+      for (let i = 0; i < 5; i++) expect((await r.mind.turn(`hb ${i}`)).reason, code).toMatch(/resting/);
+      expect(r.infers(), code).toBe(tried);                                          // no model call while resting
+    }
+  });
+
   it("1g. a stop (SIGTERM: deploy, restart) ends the turn between steps with its working record saved", async () => {
     const ac = new AbortController();
     const r = rig((t, s) => {
