@@ -5,11 +5,23 @@ runtime, the Anthropic API for reasoning (the owner's Max-included API credits),
 storage and execution. No subscription-authentication adapter, no further Qwen-specific launch work. This record covers
 local integration and preparation only. Nothing has been pushed, deployed, restored, or paid for.
 
-## Final candidate
+## Final candidate (frozen 24 Oct; awaiting Group A confirmation for this exact code)
 
-**Frozen candidate: the head of `fleet/integration-v2.6`** (local, not pushed): v115 on top of c6d4699, the merge 11126f0
-(VM 2992394 + desktop c6e3d85) and the earlier integration commits. Schema 111 → **115**. The exact hash is given in the
-Group A approval request; Group A pushes and builds exactly that commit, and its pins come from that build's output.
+**Code: 03ba290** on `fleet/integration-v2.6`. The frozen head is the docs-only commit on top of it, which adds this record.
+Schema 111 → **115**. Release evidence on 03ba290: 22 focused files, **22/22, 234/234 tests, runner exit 0, no unhandled
+errors**, sequential, quiet machine, deadlines unchanged.
+
+How it got here, after the owner's authorisation of Group A for "the candidate frozen after the L2 repair":
+- **0d76e35:** the L2 fixture repair. It passed the release checks cleanly (22/22, 233/233, exit 0). Group A was
+  authorised for it.
+- **Found before running Group A:** the VPS revision rehearsal would fail on 0d76e35 by design. Its scripted founder
+  never classifies the buyer's report (v115), and its check 4d expects the redelivery to settle the request. Under v113,
+  a delivery answered a request only with a passing visible-phrase check, so a phrase-free correction could never settle
+  it. That contradicts the owner's refinement that phrase matching is one verification method, not the only one.
+- **03ba290:** a delivery that fulfils an established correction also answers the request (v115). The rehearsal's
+  founder classifies the report as a correction, and check 4a expects v115's wording. Regression added.
+- **So Group A was not started.** The candidate changed after the authorisation, and that needs the owner's word for
+  03ba290.
 
 ## Production baseline (read 2026-10-24 12:51Z, read-only)
 
@@ -183,6 +195,23 @@ review (budget deferral is not an attempt; 3 provider failures then stalled with
 accounting (the same legs as a knowledge review, its own reservation kind, consumption booked as Fleet Control's). The
 earlier v100/v112/v113 tests now follow the v115 flow. Plus `fleet-message-check` (checker unit, 5) and the brief's
 wording (`fleet-v100-customer-obligations`, 2 new).
+
+## Fleet Control's state in production (read-only, 24 Oct)
+
+- **Daily AI budget not set:** ceiling empty, room 0, "Fleet Control makes no paid call until the owner sets its daily AI
+  budget". Review tier T2 (claude-sonnet-5-5); per-call estimate 3p (the claim gate).
+- **Consequence under v115 until a budget is set:** every "conversation" classification waits for its check (deferred:
+  not the agent's work, nothing asked of the buyer). Fleet Control records `fleet_control_ai_budget_reached` once a day.
+  So while the budget is unset, a change wrongly classified as conversation is **not** caught. The independent check is
+  the only guard on that path. Established corrections are unaffected.
+- **Not changed or enabled automatically.** Setting a budget is the owner's decision (`fleet_admin_fleet_control_ai_budget`).
+- **Tiers T1/T2/T3 enabled (Anthropic); cognition policy disabled** (the 23 Oct containment). The amended v112 therefore
+  records `cloud_allowed` and changes nothing.
+
+**Limits that stay visible:**
+- A review listing every outcome as "met" does not by itself prove the document's quality. The S1 evaluation must still
+  inspect the actual delivered original and correction.
+- Confidence thresholds (0.7 / 0.8) are routing rules, not guarantees of correctness.
 
 ## Item 5: confirm the runtime key belongs to the funded organisation (owner-side; nothing exposed)
 
