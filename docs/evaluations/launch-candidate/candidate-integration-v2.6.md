@@ -252,6 +252,68 @@ Kit `~/rlc132` on the VPS.
   temporary `session_opened` event that retention purges. One landed 4 s after the 14:58:53Z baseline. The canonical
   (non-expiring) history did not change.
 
+## Group A continuation on 8f6862e (24 Oct): revision rehearsal FAILED again — runtime cause found; stopped
+
+- **Candidate:** 8f6862e = 482c5d6 + the harness repair (b1eb904) + failure evidence + docs. The diff touches the record,
+  the harness test, `src/fleet/eval/revision-rehearsal-model.ts` and `src/fleet/founder/revision-rehearsal.ts` only, with
+  zero lines in runtime, schema, dependencies, scripts, deployment or configuration. So the three passed rehearsals
+  (data, services, founder upgrade) carry forward.
+- **Pushed** (fast-forward 482c5d6..8f6862e); built 1f593e96…; staged; installed beside production at
+  `/opt/automaton-fleet/releases/8f6862e…`. `current` stayed 89d7c21. Kit `~/rlc133`.
+- **Revision rehearsal: 17/19, 4c and 4d failed again.** Complete evidence was kept at
+  `/var/tmp/fleet-revision-rehearsal-evidence-8f6862e-20261024T162100Z` (root-only): checks, the full model trace, packets,
+  commands, the founder's service log and its state files.
+- **Decisive step (16:29:44Z):** the review of the corrected workbook was refused with `FLEET_REVIEW_REQUIRE_CHANGE`
+  ("a review of the revision needs require: [the exact visible text that carries the change] … your criteria's met is not
+  proof"). That rule is in the founder's tool layer (`toolbox.ts` review, from the desktop's run-6 fixes). It demands a
+  visible phrase for every revision after a buyer's message, which conflicts with the owner's refinement (outcome criteria;
+  phrases optional) and with v115's fulfilment rule. Without a review, the scripted founder slept and never redelivered.
+  The harness repair was real (the founder now recognised the open order and reached the review) but not sufficient.
+- **Proposed runtime change (not made; needs the owner's approval):** at review time, if the buyer's message since the
+  last delivery is an established correction, require phrases only where that correction declared `mustShow`; otherwise
+  accept the review and let FleetController's v115 fulfilment rule (every outcome listed as met, changed files) decide.
+  If the message is still unclassified, refuse with "classify it first (customers order_classify)".
+- **Closing comparison** (read-only, 16:45Z against 16:19Z): schema, ledger head and verification, agents (paused;
+  Agent-2 on b60e262), founder cognition, PIDs, unit files and units, packages and tools identical. **Canonical events 329,
+  same digest** (total 3,902 → 3,896 is the session-renewal churn). All settings groups identical; only the live database
+  (plus the `postgres` maintenance database) exists; `current` 89d7c21.
+
+## Efficiency proposal (evidence from saved calls; nothing changed)
+
+**Measured, from production's saved calls (1,070 successful calls, 26 Sep – 21 Oct):**
+
+| Calls | Average input (uncached / cache read / cache write) | Output p50 / p95 / max | Average cost a call | Share of input from cache |
+|---|---|---|---|---|
+| T3 `founder_work`, 94 (20–21 Oct, current policy) | 11,929 / 35,570 / 1,654 | 241 / 688 / **894** | $0.069 | 72% |
+| T2 `agent_step` (agent), 563 | 14,872 / 10,257 / 849 | 109 / 307 / 2,119 | $0.035 | 40% |
+| legacy (pre-routing), 408 | 5,170 / 0 / 0 | 108 / 322 / 1,129 | $0.024 | 0% |
+
+- **No call ever stopped at its output limit** (`max_tokens`: 0 of 1,070).
+- **Steps that only went to sleep:** T2 era 391 of 568 ($14.22 of $20.10); legacy 292 of 408 ($6.56); current T3 era 2 of
+  94 ($0.11). That's consistent with the event-driven wakes having closed most of it, but two days is thin evidence.
+- **Exact assembled step (corrects the earlier $0.53):** 48 tool definitions = 88,138 bytes and a system prompt of 17,992
+  bytes on every step. The true worst-case reservation is **$1.06 on T3** (input $0.74, output $0.32) and **$0.45 on T2**.
+  This uses the V2 capability set; the production agents' exact manifests may differ slightly.
+- **Average T3 step cost split:** uncached input 69%, cache writes 12%, cache reads 10%, output 9%.
+
+**Proposals (each separately approvable; Opus stays where its judgement is needed):**
+1. **Output caps for bounded tasks.** Founder steps 4,000 tokens on T3 (4.5× the observed maximum) and 4,000 on T2 (1.9×
+   the maximum). The worst-case reservation falls $1.06 → $0.82 (T3) and $0.45 → $0.41 (T2). Actual cost is unchanged,
+   because no call has come near these. It frees reservation headroom (plan B's starvation). `stop_reason = max_tokens`
+   is watched, and any hit is reported. Fleet Control caps stay (300 / 800 / 1,500 / 4,000).
+2. **Local execution, no model:** already T0 for every deterministic tool. Keep event-driven hibernation and measure
+   sleep-only steps over the S1 evaluation. Target: under 5% of steps.
+3. **Caching:** uncached input is 69% of a T3 step's cost. If half of it were read from cache, an average step would fall
+   from $0.069 to about $0.047, before the cache-write premium (500 vs 400 µ¢). Proposed: measure `prefix+tail` on T3
+   during the S1 evaluation before configuring it.
+4. **Fleet Control daily ceiling:** propose **100p a day**. That's at least 27 worst-case or about 236 typical message
+   checks on T2, plus the occasional spend or knowledge review. **When exhausted:** no call is made; every review is
+   deferred, never approved or decided; one `fleet_control_ai_budget_reached` event a day (Fleet Command); agent work
+   continues; spends needing review wait; message checks defer without counting as attempts. The owner raises or keeps
+   the ceiling; nothing raises it automatically.
+5. **Cheaper-model routing (separate approval):** message checks on T1 Haiku halve them (worst 1.82p, typical 0.21p, against
+   3.63p / 0.42p on T2). Founder steps stay on Opus (owner policy, 20 Oct).
+
 ## Task routing as wired today (read-only, from code; production prices from the 24 Oct snapshot)
 
 Prices in µ¢ per token (input / output / cache write): T1 claude-haiku-4-5 100/500/125, max output 2,000, cache off; T2
