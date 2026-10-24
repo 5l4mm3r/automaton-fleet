@@ -77,6 +77,10 @@ export interface RevisionRehearsalOptions {
   /** How long a waiting founder is watched for model calls (production cadence: one thinking slot a minute). */
   quietMs?: number;
   log?: (event: string, detail?: Record<string, unknown>) => void;
+  /** Group A (24 Oct): where the complete evidence of a FAILED rehearsal is written before teardown (outside everything the
+   *  teardown removes): every check in full, the model's full trace, its packets and commands, the founder's service log and
+   *  its non-secret state files. Absent: FLEET_REHEARSAL_EVIDENCE_DIR, else nothing is written. */
+  evidenceDir?: string;
 }
 
 export interface RevisionRehearsalReport {
@@ -352,6 +356,32 @@ export async function runRevisionRehearsal(o: RevisionRehearsalOptions): Promise
     check("revision rehearsal completed", false, err instanceof Error ? err.message : String(err));
   } finally {
     if (mailer) clearInterval(mailer);
+    const evidenceDir = o.evidenceDir ?? (process.env.FLEET_REHEARSAL_EVIDENCE_DIR?.trim() || undefined);
+    if (evidenceDir && checks.some((c) => !c.ok)) {
+      try {
+        const ev = evidenceDir;
+        fs.mkdirSync(ev, { recursive: true, mode: 0o700 });
+        const put = (name: string, data: string) => fs.writeFileSync(path.join(ev, name), data, { mode: 0o600 });
+        put("checks.json", JSON.stringify(checks, null, 1));
+        put("model-trace.json", JSON.stringify(model.fullTrace, null, 1));
+        put("model-packets.json", JSON.stringify(model.packets, null, 1));
+        put("model-commands.json", JSON.stringify(model.execs, null, 1));
+        if (id) {
+          put("founder-service.log", await o.host.logText(id).catch((e) => `unavailable: ${String(e).slice(0, 200)}`));
+          // Named, non-secret state files only (never the founder's credential or attestation files).
+          const ns = path.join(o.host.stateDir(id), "state");
+          for (const sub of fs.existsSync(ns) ? fs.readdirSync(ns) : []) {
+            for (const f of ["mind-log.jsonl", "mind-carry.json", "mind-continuity.json", "mind-packets.jsonl", "mind-reports.json"]) {
+              const src = path.join(ns, sub, f);
+              if (fs.existsSync(src) && fs.lstatSync(src).isFile()) put(`state-${f}`, fs.readFileSync(src, "utf8"));
+            }
+          }
+        }
+        log("revision_rehearsal_evidence", { dir: ev });
+      } catch (err) {
+        log("revision_rehearsal_evidence_failed", { error: err instanceof Error ? err.message.slice(0, 200) : "error" });
+      }
+    }
     if (id) {
       await o.setRenderer(id, true).catch(() => undefined);
       await store.markDead(id, "rehearsal teardown", "rehearsal", "reported").catch(() => undefined);

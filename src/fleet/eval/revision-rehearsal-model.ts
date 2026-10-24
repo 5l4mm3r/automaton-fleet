@@ -89,6 +89,9 @@ export class RevisionRehearsalModel extends ScriptedProvider {
   steps = 0;
   /** Per step: the calls made and the result they answered (bounded; the rehearsal's diagnosis when a phase fails). */
   readonly trace: string[] = [];
+  /** Group A (24 Oct): the complete trace for the failure evidence — every call with its arguments and the full result it
+   *  answered (bounded: the last 300 steps, 20,000 characters per result). The short `trace` stays the check's summary. */
+  readonly fullTrace: Array<{ at: string; inTurn: number; calls: Array<{ name: string; arguments: Record<string, unknown> }>; answered: string }> = [];
   /** 2026-10-20: the last commands' results in full (bounded) — a failed phase keeps the evidence of why. */
   readonly execs: string[] = [];
   /** 2026-10-21 (phase 5): set by the rehearsal; the platform's refusal turn A received (its evidence of what to look for). */
@@ -206,6 +209,8 @@ export class RevisionRehearsalModel extends ScriptedProvider {
       if (this.execs.length > 4) this.execs.shift();
     }
     this.trace.push(`${inTurn}: ${toolCalls.map((c) => `${c.name}${c.arguments.op ? ` ${String(c.arguments.op)}` : ""}`).join(", ")} <- ${last.replace(/\s+/g, " ").slice(0, 400)}`);
+    this.fullTrace.push({ at: new Date().toISOString(), inTurn, calls: toolCalls.map((c) => ({ name: c.name, arguments: c.arguments })), answered: last.slice(0, 20_000) });
+    if (this.fullTrace.length > 300) this.fullTrace.shift();
     if (this.trace.length > 60) this.trace.shift();
     const input = approx(req.system) + req.messages.reduce((n, m) => n + approx(m.content), 0);
     return { content, toolCalls, usage: { inputTokens: input, outputTokens: Math.min(approx(content) + approx(JSON.stringify(toolCalls)), req.maxTokens) },

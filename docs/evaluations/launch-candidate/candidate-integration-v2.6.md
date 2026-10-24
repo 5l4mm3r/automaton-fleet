@@ -234,6 +234,11 @@ Kit `~/rlc132` on the VPS.
   of … is still OWED". After the renderer returned it saw no open order and never delivered. The runtime's part passed
   (4b: recalculated, inspected, reviewed). The check's diagnosis was capped at 500 characters and the throwaway founder's
   logs were removed by the clean teardown, so the decisive step was found from the code, not the trace.
+- **Evidence on failure (owner, before the rerun):** the rehearsal now keeps a complete evidence bundle when any check
+  fails, written before teardown to a root-only directory (`FLEET_REHEARSAL_EVIDENCE_DIR`, outside everything the
+  teardown removes). It holds every check in full, the model's full trace (calls with arguments and full results, last 300
+  steps), its packets and commands, the founder's service log, and its non-secret state files (mind log, carried record,
+  packets; never its credentials).
 - **Fixed locally, not pushed:** b1eb904. `openOrderOf` accepts both wordings, and a test ties it to `obligationLines`'
   real output; 44 related tests pass. This is a new candidate: rerunning the revision rehearsal on it needs the owner's
   word.
