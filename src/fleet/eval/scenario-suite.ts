@@ -429,6 +429,15 @@ async function keepEvidence(w: World, dir: string, o: ScenarioSuiteOptions): Pro
     fs.copyFileSync(src, path.join(dir, "workspace", f.path));
     kept++;
   }
+  // Desktop run 4 (2026-10-24): a revision overwrote the first delivered file in the workspace, so the first delivery could
+  // not be judged afterwards. Every delivered file as sent (the registry keeps its bytes for the retention period).
+  const sent = await w.q(`SELECT d.delivery_id, f.file_no, f.file_name, f.content_sha256, f.blob FROM fleet_order_deliveries d
+    JOIN fleet_order_delivery_files f ON f.delivery_id = d.delivery_id WHERE d.agent_id = $1 AND f.blob IS NOT NULL ORDER BY d.created_at, f.file_no LIMIT 40`, [w.a]) as Array<{ delivery_id: string; file_no: number; file_name: string; content_sha256: string; blob: Buffer }>;
+  if (sent.length) fs.mkdirSync(path.join(dir, "delivered"), { recursive: true, mode: 0o700 });
+  for (const [i, f] of sent.entries()) {
+    if (sha(f.blob) !== f.content_sha256) continue;                                    // only the bytes the record names
+    fs.writeFileSync(path.join(dir, "delivered", `${i + 1}-${f.delivery_id.slice(0, 8)}-${f.file_name.replace(/[^A-Za-z0-9._-]/g, "_")}`), f.blob, { mode: 0o600 });
+  }
   put("customer-messages.json", await w.q(`SELECT author, order_id, enquiry_id, body, created_at FROM fleet_customer_messages WHERE agent_id = $1 ORDER BY created_at`, [w.a]));
   put("deliveries.json", await w.q(`SELECT d.delivery_id, d.order_id, d.status, d.resend_reason, d.created_at, f.file_name, f.content_sha256, r.verdict, r.automated_ok
     FROM fleet_order_deliveries d LEFT JOIN fleet_order_delivery_files f ON f.delivery_id = d.delivery_id LEFT JOIN fleet_artifact_reviews r ON r.review_id = d.review_id

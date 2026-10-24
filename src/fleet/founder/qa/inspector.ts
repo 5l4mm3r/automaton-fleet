@@ -22,7 +22,7 @@
  *   - docx: outline, counts, empty headings, consecutive duplicates, hyperlinks, spelling (advisory warn);
  *   - pdf: encrypted → fail, pages without text → warn, non-embedded fonts other than the standard 14 → warn,
  *     first ≤3 pages rendered (pypdfium2, 72 dpi) into renderDir, a visually blank page → fail, text beyond the page's
- *     crop box (first 50 pages) → fail;
+ *     crop box or text drawn over other text (first 50 pages) → fail;
  *   - images: Pillow verify, format/size/mode/dpi/alpha, blank or near-uniform → fail; svg: DOCTYPE/ENTITY → fail
  *     (parsed only after that guard), script → warn;
  *   - zip: zip-slip / absolute members → fail, CRC test, size; supported members (one level, ≤200 MB extracted
@@ -655,26 +655,58 @@ def inspect_pdf(r, path, render_dir, tag):
         # Desktop run 3 (2026-10-24, 9B): both delivered checklists passed with text cut off by the page edge (8 of 10 points
         # past the right margin; a clipped title). Visible characters whose box lies outside the page's crop box are not seen
         # by the buyer: a failure, named by page and with an excerpt of the lost text.
-        off = []
+        off, overlap = [], []
         for i in range(min(len(doc), 50)):
             if left() < 15:
                 break
             page = doc[i]
             cl, cb, cr, ct = page.get_cropbox()
             tp = page.get_textpage()
-            lost = []
+            lost, boxes = [], []
             for k in range(tp.count_chars()):
-                if not tp.get_text_range(k, 1).strip():
+                ch = tp.get_text_range(k, 1)
+                if not ch.strip():
                     continue
                 l, b, rr, t = tp.get_charbox(k)
                 if rr > cr + 1 or l < cl - 1 or t > ct + 1 or b < cb - 1:
                     lost.append(k)
+                if rr - l > 0.5 and t - b > 0.5 and len(boxes) < 6000:
+                    boxes.append((k, ch, l, b, rr, t))
             if lost:
                 seen = " ".join(tp.get_text_range(lost[0], 40).split())
                 off.append("p%d: %d character(s) beyond the page edge (from \"%s\")" % (i + 1, len(lost), seen))
+            # Desktop run 4: table rows longer than their cells were drawn over the next column and the row number. Two
+            # characters from different places in the text (not neighbours, not the same glyph drawn twice) whose boxes
+            # mostly cover each other, over nearly their whole height, are text over text: illegible to the buyer (at least
+            # 4 such characters on a page).
+            grid, hit = {}, set()
+            for bx in boxes:
+                for gx in range(int(bx[2] // 12), int(bx[4] // 12) + 1):
+                    for gy in range(int(bx[3] // 12), int(bx[5] // 12) + 1):
+                        grid.setdefault((gx, gy), []).append(bx)
+            for cell in grid.values():
+                for x in range(len(cell)):
+                    for y in range(x + 1, len(cell)):
+                        p1, p2 = cell[x], cell[y]
+                        if abs(p1[0] - p2[0]) <= 2 or (p1[1] == p2[1] and abs(p1[2] - p2[2]) < 0.6 and abs(p1[3] - p2[3]) < 0.6):
+                            continue
+                        w_ = min(p1[4], p2[4]) - max(p1[2], p2[2])
+                        h_ = min(p1[5], p2[5]) - max(p1[3], p2[3])
+                        if w_ <= 0 or h_ <= 0:
+                            continue
+                        small = min((p1[4] - p1[2]) * (p1[5] - p1[3]), (p2[4] - p2[2]) * (p2[5] - p2[3]))
+                        # Same-line text over text covers (nearly) the glyph's whole height; a superscript grazing the line
+                        # above does not, and stays legible.
+                        if w_ * h_ >= 0.4 * small and h_ >= 0.8 * min(p1[5] - p1[3], p2[5] - p2[3]):
+                            hit.add(p1[0]); hit.add(p2[0])
+            if len(hit) >= 4:
+                first = min(hit)
+                overlap.append("p%d: %d character(s) drawn over other text (from \"%s\")" % (i + 1, len(hit), " ".join(tp.get_text_range(first, 40).split())))
         doc.close()
         r.check("text_off_page", "fail" if off else "pass", ("text runs off the page, unseen by the buyer: " + "; ".join(off[:5])
             + " — wrap long lines or use a smaller font, then inspect again") if off else "all text lies within the page")
+        r.check("text_overlap", "fail" if overlap else "pass", ("text is drawn over other text: " + "; ".join(overlap[:5])
+            + " — give long text more room (wrap it inside its cell or column), then inspect again") if overlap else "no text drawn over other text")
         r.facts["renders"] = rendered
         ocr_pages(r, rendered, empty_pages_of(r))
         r.check("blank_pages", "fail" if blank else "pass", ("visually blank page(s): %s" % blank) if blank else "%d page(s) rendered, none blank" % n)
