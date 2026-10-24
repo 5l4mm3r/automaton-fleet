@@ -20,7 +20,8 @@
  *     plain headers, constants typed inside formulas) → advisory warn; spec "cases" ({file?, name?,
  *     sheet, inputs, expect, tolerance}) set inputs, recalculate and compare — each a pass/fail check "case:<name>";
  *   - docx: outline, counts, empty headings, consecutive duplicates, hyperlinks, spelling (advisory warn);
- *   - pdf: encrypted → fail, pages without text → warn, non-embedded fonts other than the standard 14 → warn,
+ *   - pdf: encrypted → fail, a page whose content cannot be read (damaged stream) → fail, pages without text → warn,
+ *     non-embedded fonts other than the standard 14 → warn,
  *     first ≤3 pages rendered (pypdfium2, 72 dpi) into renderDir, a visually blank page → fail, text beyond the page's
  *     crop box or text drawn over other text (first 50 pages) → fail;
  *   - images: Pillow verify, format/size/mode/dpi/alpha, blank or near-uniform → fail; svg: DOCTYPE/ENTITY → fail
@@ -586,17 +587,20 @@ def inspect_pdf(r, path, render_dir, tag):
             r.check("encrypted", "fail", "the PDF is encrypted; customers may not be able to open or print it")
             return
         r.check("pdf_load", "pass", "%d page(s)" % len(rd.pages))
-        chars, empty, fonts, text = [], [], {}, []
+        chars, empty, fonts, text, damaged = [], [], {}, [], []
         for i, page in enumerate(rd.pages):
             if i >= 200 or left() < 20:
                 break
             try:
                 t = page.extract_text() or ""
-            except Exception:
+            except Exception as e:
+                # Desktop run 5 (2026-10-24): a hand-written PDF whose content stream had no valid length or 'endstream'.
+                # Viewers showed its title and none of its ten points; this was read as "no text layer" and passed.
                 t = ""
+                damaged.append("p%d (%s: %s)" % (i + 1, type(e).__name__, str(e)[:120]))
             chars.append(len(t.strip()))
             text.append(t)
-            if not t.strip():
+            if not t.strip() and not any(d.startswith("p%d " % (i + 1)) for d in damaged):
                 empty.append(i + 1)
             try:
                 res = page.get("/Resources")
@@ -622,6 +626,9 @@ def inspect_pdf(r, path, render_dir, tag):
         except Exception:
             pass
         r.facts.update({"pages": len(rd.pages), "charsPerPage": chars[:200], "fonts": [{"name": k, "embedded": v} for k, v in sorted(fonts.items())][:50], "title": meta})
+        r.check("pdf_content", "fail" if damaged else "pass", ("the page content cannot be read — the file is damaged and viewers show part of it or "
+            "nothing: " + "; ".join(damaged[:5]) + " — build the PDF with a library (e.g. reportlab), never by writing PDF syntax by hand")
+            if damaged else "every page's content is readable")
         r.check("pages_without_text", "warn" if empty else "pass", ("no extractable text on page(s) %s (scanned image? needs OCR to be searchable)" % empty[:30]) if empty else "every page has text")
         notemb = [k for k, v in fonts.items() if not v]
         odd = [k for k in notemb if k.split("+")[-1] not in STD14]

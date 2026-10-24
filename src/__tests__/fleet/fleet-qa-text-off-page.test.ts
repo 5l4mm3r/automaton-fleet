@@ -3,7 +3,8 @@
  * cut off by the page edge — the first showed 2 of its 10 points (the rest ran past the right margin), the revision a
  * clipped title. Inspector fleet-qa-3 now fails a PDF with visible text outside the page's crop box, naming the page and
  * where the lost text starts. Run 4 (same day): a revision's table rows ran over the next column and the row number — text
- * over text now fails too. Pages whose text fits, superscripts grazing the line above, a heading drawn three times for
+ * over text now fails too. Run 5: a PDF written by hand whose content stream was damaged showed only its title in a viewer
+ * and passed as "no text layer" — a page whose content cannot be read now fails. Pages whose text fits, superscripts grazing the line above, a heading drawn three times for
  * bold and underscores pass. Needs the pinned agent tools (pypdfium2, reportlab).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -45,6 +46,12 @@ c.save()
 from reportlab.platypus import SimpleDocTemplate, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 SimpleDocTemplate("superscript.pdf", pagesize=A4).build([Paragraph("E = mc<super>2</super>, H<sub>2</sub>O, 1<super>st</super> floor, x<super>2</super>+y<super>2</super> " * 20, getSampleStyleSheet()["Normal"])])
+# Run 5's shape: PDF syntax written by hand — a /Length past the stream, no 'endstream', a wrong startxref.
+body = (b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+    b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n"
+    b"4 0 obj\n<< /Length 2000 >>\nstream\nBT\n/F1 18 Tf\n50 750 Td\n(Gas Safety Checklist) Tj\nET\n1. Gas Safety Certificate held\n[ ] Yes [ ] No\n"
+    b"endobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
+open("hand-written.pdf", "wb").write(body + b"xref\n0 6\n0000000000 65535 f \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n9999\n%%EOF\n")
 c = canvas.Canvas("fits.pdf", pagesize=A4)
 c.setFont("Helvetica-Bold", 16)
 c.drawString(50, 780, "Gas safety: the landlord's annual checklist")
@@ -53,13 +60,13 @@ for i in range(10): c.drawString(60, 740 - i * 30, "[ ] %d. A point that fits on
 c.save()
 `;
 
-describe.skipIf(!fs.existsSync(PY))("inspector: text beyond the page edge", () => {
+describe.skipIf(!fs.existsSync(PY))("inspector: what a PDF viewer actually shows (desktop runs 3–5)", () => {
   let dir = "";
   beforeAll(() => {
     dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "qa-off-")));
     execFileSync(PY, ["-c", MAKE], { cwd: dir });
     fs.writeFileSync(path.join(dir, "insp.py"), QA_INSPECTOR_PY);
-    fs.writeFileSync(path.join(dir, "spec.json"), JSON.stringify({ files: ["runs-off.pdf", "clipped-title.pdf", "overlaps.pdf", "hard-but-fine.pdf", "superscript.pdf", "fits.pdf"], cases: [], renderDir: ".r" }));
+    fs.writeFileSync(path.join(dir, "spec.json"), JSON.stringify({ files: ["runs-off.pdf", "clipped-title.pdf", "overlaps.pdf", "hard-but-fine.pdf", "superscript.pdf", "hand-written.pdf", "fits.pdf"], cases: [], renderDir: ".r" }));
   });
   afterAll(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
 
@@ -83,5 +90,19 @@ describe.skipIf(!fs.existsSync(PY))("inspector: text beyond the page edge", () =
     expect(check("overlaps.pdf").detail).toContain("wrap it inside its cell or column");
     for (const f of ["hard-but-fine.pdf", "superscript.pdf", "fits.pdf", "runs-off.pdf"]) expect(check(f).status, f).toBe("pass");
     for (const f of ["hard-but-fine.pdf", "superscript.pdf"]) expect(report.files.find((x) => x.path === f)!.ok, f).toBe(true);
+  });
+
+  it("fails a page whose content cannot be read (a damaged stream), instead of calling it a page without a text layer", () => {
+    const report = parseInspectorReport(execFileSync(PY, ["-P", "-s", "insp.py", "spec.json"], { cwd: dir, encoding: "utf8" }));
+    const file = report.files.find((x) => x.path === "hand-written.pdf")!;
+    const check = (id: string) => file.checks.find((c) => c.id === id)!;
+    expect(check("pdf_content").status).toBe("fail");
+    expect(check("pdf_content").detail).toMatch(/^the page content cannot be read — the file is damaged .*: p1 \(/);
+    expect(check("pdf_content").detail).toContain("never by writing PDF syntax by hand");
+    expect(check("pages_without_text").status).toBe("pass");                       // not mistaken for a scan
+    expect(file.ok).toBe(false);
+    for (const f of ["fits.pdf", "hard-but-fine.pdf", "superscript.pdf", "runs-off.pdf"]) {
+      expect(report.files.find((x) => x.path === f)!.checks.find((c) => c.id === "pdf_content")!.status, f).toBe("pass");
+    }
   });
 });
