@@ -213,6 +213,87 @@ wording (`fleet-v100-customer-obligations`, 2 new).
   inspect the actual delivered original and correction.
 - Confidence thresholds (0.7 / 0.8) are routing rules, not guarantees of correctness.
 
+## Group A on 482c5d6 (24 Oct): three rehearsals passed, the revision rehearsal FAILED — stopped
+
+Kit `~/rlc132` on the VPS.
+- **Done:**
+  - **pushed** `fleet/integration-v2.6` = 482c5d6 (new branch, no force);
+  - **built:** pins commit 482c5d6, build e0b424c6…a78, lockfile 1df54e35… (unchanged);
+  - **staged** and **installed beside** at `/opt/automaton-fleet/releases/482c5d6…` (root-owned, read-only, identity
+    re-verified); `current` stayed 89d7c21.
+
+| Rehearsal (throwaway, fake provider, no credentials) | Result |
+|---|---|
+| data, `fleet-rollout.sh rehearse 111 → 115` | **PASSED**: migration, reconciliation (1,117 journals), re-run applies nothing, rollback restore proved; live untouched |
+| services, `fleet-upgrade-rehearsal.sh 111 → 115` | **PASSED**: every service on the copy. **89d7c21 refuses schema 115**, so a post-install rollback is class B: a database restore, owner-approved only |
+| founder upgrade (89d7c21 → 482c5d6) | **PASSED**: 27/27, host clean, living founders untouched |
+| revision | **FAILED**: 17/19; 4c and 4d failed (no redelivery) |
+
+- **Why the revision rehearsal failed:** the harness, not the runtime. Its scripted founder found the open order with the
+  pre-v114 wording ("answered …, not yet resolved"). Since v114 an owed correction reads "answered …; the buyer's request
+  of … is still OWED". After the renderer returned it saw no open order and never delivered. The runtime's part passed
+  (4b: recalculated, inspected, reviewed). The check's diagnosis was capped at 500 characters and the throwaway founder's
+  logs were removed by the clean teardown, so the decisive step was found from the code, not the trace.
+- **Fixed locally, not pushed:** b1eb904. `openOrderOf` accepts both wordings, and a test ties it to `obligationLines`'
+  real output; 44 related tests pass. This is a new candidate: rerunning the revision rehearsal on it needs the owner's
+  word.
+- **Closing comparison** (read-only, 15:58Z against 14:58Z): identical release (89d7c21), schema 111, ledger head 1176 and
+  verification, agents (paused; Agent-2 on b60e262), founder cognition settings, service PIDs, unit files and units,
+  packages and tools. **Canonical events 329, same digest.** All settings groups identical (policy, tiers, routing,
+  founder budgets, Fleet Control budget, review policy, credit lots, balance 1,676,179,930 µ¢, holds). Only the live
+  database exists (the throwaway copies were dropped). No temporary units remain.
+- **Event counts:** the 3,898 / 3,899 / 3,892 readings are the same scope (`count(*)` of `fleet_events`) at different
+  moments. The paused agents' runtimes renew their controller sessions every ~10 minutes, and each renewal writes a
+  temporary `session_opened` event that retention purges. One landed 4 s after the 14:58:53Z baseline. The canonical
+  (non-expiring) history did not change.
+
+## Task routing as wired today (read-only, from code; production prices from the 24 Oct snapshot)
+
+Prices in µ¢ per token (input / output / cache write): T1 claude-haiku-4-5 100/500/125, max output 2,000, cache off; T2
+claude-sonnet-5-5 200/1,000/250, max output 8,000, cache prefix; T3 claude-opus-5-5 400/2,000/500, max output 16,000,
+cache prefix.
+
+| Task | Served by | Payer | Limits | Budget / reservation | Retry / fallback |
+|---|---|---|---|---|---|
+| Founder agent step (every step) | `founder_work` → **T3 Opus, deep** (owner 2026-10-20) | the agent (inference_charge) | packet ≤ 15,000 chars; request ≤ 40,000 bytes (trimmed); output = tier max 16,000; ≤ 4 steps a turn; ≤ 5 tool calls executed a step | `svc_cognition_routed_authorize`: per-founder daily budget (Agent-1 754p, Agent-2 3,000p), turns per hour (600 / 60), provider credit minus holds, one call in flight. Reservation = `costBoundMicro`: every byte as a token at the dearer of input and cache-write prices, plus tool definitions, 2,000 framing tokens and the full output allowance. **Worst case ≥ $0.53 a step on T3** (excluding tool definitions; $0.32 of it is the output allowance) | provider: 429/5xx/529 retried, ≤ 3 attempts within the deadline; unsent connection retried; **timeouts never retried**. Hourly cap: controller eligibility time, then the founder rests. **No provider or tier fallback** |
+| Routine chore (`routine_task`) | T1 Haiku (routine classes) | agent | T1 output ≤ 2,000; cache off | as above | as above |
+| Escalated question (`escalate_question`) | T3, one question; cache off | agent | T3 | as above | as above |
+| Independent review (`independent_review`) | review helper (tier not verified here) | agent (not verified) | — | as above | as above |
+| Owner conversation turn | routed founder step (T3) | treasury inside an open turn, else the agent | as a step | `svc_cognition_conversation_authorize` | as above |
+| Deterministic tools: wallet, ledger, FX, hashes, time, quotas, policy, state, lookups, dedupe, filters, health, and every acting tool | **T0: no model** | — | — | — | — |
+| Fleet Control spend review | T2 Sonnet | treasury (`spend_review_charge`) | output ≤ 1,500 | `svc_fleet_control_ai_reserve` vs the daily ceiling (**unset: none run**); claim pre-filter 3p (an estimate, not a cap) | ≤ 5 attempts, 60 s base backoff |
+| Fleet Control knowledge review | T2 | treasury (`knowledge_review_charge`) | output ≤ 800 | same ceiling | bounded attempts, then stalled |
+| Evidence relevance | `evidence_relevance` (T2–T3) | Fleet Control (payer not re-verified here) | output ≤ 4,000 | same ceiling + hourly relevance cap | failed call recorded; bounded |
+| **Message check (v115)** | T2 | treasury (`message_check_charge`) | output ≤ 300; input clipped (message 4,000, 6 × 600 earlier, 10 × 300 criteria) | same ceiling. **Worst case 4,861,400 µ¢ ≈ 3.63p; typical "thanks" 565,600 µ¢ ≈ 0.42p** (by code) | budget refusal: 15-min deferral, not an attempt; 3 attempts (5 / 30 min), then stalled |
+| Local model | `provider: local` only (profile local) | none (zero price) | compact tool list (local only) | founder budget/turn caps still apply | **no cloud fallback** |
+| Scenario suite (evaluation) | routed as founders, side-installed release | engineering (imported once) | per-scenario caps | credit hold placed before the run | as founder steps |
+
+**Efficiency measures:**
+- **Implemented and active:**
+  - T0 deterministic classification (tools never buy inference);
+  - event-driven wakes, hibernation and idle backoff (free signals);
+  - packet and request bounds; images bounded by pixels;
+  - one call in flight; duplicate-failure refusal;
+  - hourly-cap eligibility time (v112) with the founder's rest;
+  - owed-recheck backoff (v114);
+  - one message check per message (v115);
+  - true-maximum reservations.
+- **Implemented and configured:** prompt caching `prefix` on T2/T3, applied only when a tool loop continues or the same
+  model was used within the cache lifetime. It is off for T1 and one-off escalations, and `prefix+tail` is not configured.
+- **Implemented but disabled or not configured:**
+  - Fleet Control (daily budget unset: spend, knowledge, relevance and message checks do not run);
+  - the cognition policy (contained since 23 Oct);
+  - the local provider and compact tools (local profile only).
+- **Configured choice that drives cost:** every founder step on T3 Opus with deep reasoning (owner 2026-10-20). Routine T1
+  exists, but only when the founder explicitly delegates with `routine_task`.
+- **Gaps (proposed only, nothing built):**
+  - founder steps reserve the tier's full output allowance (16,000 on T3), so reservations are large (plan B's
+    starvation) and a per-task output cap is missing;
+  - Fleet Control checks use T2 where a T1 check may suffice for messages;
+  - no batch pricing for non-urgent reviews;
+  - `prefix+tail` caching is unused;
+  - routine work inside T3 steps is not routed down automatically.
+
 ## Item 5: confirm the runtime key belongs to the funded organisation (owner-side; nothing exposed)
 
 1. **VPS (owner, sudo).** Print only the key's last four characters, which the Console shows anyway:
