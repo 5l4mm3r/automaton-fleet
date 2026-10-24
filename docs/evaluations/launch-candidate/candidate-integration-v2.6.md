@@ -7,9 +7,9 @@ local integration and preparation only. Nothing has been pushed, deployed, resto
 
 ## Final candidate
 
-**c6d4699** on `fleet/integration-v2.6` (local, not pushed). Its parents are the merge 11126f0 (VM 2992394 + desktop
-c6e3d85). Schema 111 → 114. This record is updated by a docs-only commit on top. The build is made from the pushed
-commit at deployment Group A, and its pins come from that build's output.
+**Frozen candidate: the head of `fleet/integration-v2.6`** (local, not pushed): v115 on top of c6d4699, the merge 11126f0
+(VM 2992394 + desktop c6e3d85) and the earlier integration commits. Schema 111 → **115**. The exact hash is given in the
+Group A approval request; Group A pushes and builds exactly that commit, and its pins come from that build's output.
 
 ## Production baseline (read 2026-10-24 12:51Z, read-only)
 
@@ -113,6 +113,7 @@ commit at deployment Group A, and its pins come from that build's output.
 
 ## Correction obligation: acknowledging and fulfilling separated (v114, implemented)
 
+> **Superseded by v115 (implemented 24 Oct, owner-approved design with refinements; see the next section).** Kept for the record:
 > **Temporary limitation; not the finished policy, and not to be installed in production (owner, 24 Oct).** v114 treats
 > every post-delivery buyer message as correction work, which moves routine customer handling ("thanks") onto the owner.
 > The replacement, separating unread messages, conversation and established corrections with acceptance criteria, is
@@ -158,6 +159,30 @@ in Fleet Command's events.
 - The two earlier tests that asserted the bypass now assert the separation (marked v114).
 - `work-continuity` 1t (recheck backoff and reset; first delivery never backed off) and 1u (the "ACKNOWLEDGED, NOT
   FULFILLED" reply and the brief's wording).
+
+## Customer messages: conversation and correction separated (v115, implemented)
+
+Owner-approved design ([`docs/design/customer-message-handling.md`](../../design/customer-message-handling.md)), with the
+three refinements:
+- **The agent classifies** each post-delivery buyer message (`customers order_classify`): conversation, correction (with
+  outcome criteria), or unclear (ask the buyer). Each decision is recorded immutably with its source message and reason.
+- **Fleet Control checks** a "conversation" once (`MessageChecker`, the controller's worker), recording verdict,
+  confidence and evidence. It runs within the existing daily ceiling. When the review is unavailable, the message is
+  checkpointed and deferred.
+- **An established correction** is owed until a delivery of changed files whose passing review lists every outcome as met,
+  a refund or cancellation, a Fleet Control-confirmed buyer withdrawal (`withdraw_correction`), or the owner's override.
+  `resolved:true` never closes it.
+- **A genuine "thanks"** completes without owner action: classified conversation → answered with `resolved:true` →
+  Fleet Control confirms "no_change". An unconfirmed or uncertain check returns the message to the agent.
+
+**Focused regression** (`fleet-v100-obligations-pg`, 7 v115 cases): thanks and a question with no owner action and no
+repeated check; an explicit layout correction with no phrase, which `resolved:true` cannot close, fulfilled by a review
+listing its outcome; an ambiguous request leading to one clarifying question and the reply classified afresh; a
+disputed and a low-confidence check; withdrawal at high and low confidence (not on the request itself); an unavailable
+review (budget deferral is not an attempt; 3 provider failures then stalled with one event; nothing sent to the buyer);
+accounting (the same legs as a knowledge review, its own reservation kind, consumption booked as Fleet Control's). The
+earlier v100/v112/v113 tests now follow the v115 flow. Plus `fleet-message-check` (checker unit, 5) and the brief's
+wording (`fleet-v100-customer-obligations`, 2 new).
 
 ## Item 5: confirm the runtime key belongs to the funded organisation (owner-side; nothing exposed)
 
@@ -278,8 +303,8 @@ evidence of fulfilment.
 
 | Group | Exactly what | Live effect | Needs first | Spend |
 |---|---|---|---|---|
-| **A: candidate, side-build, non-billable rehearsals** | Push c6d4699 (+ docs commits). On the VPS: `fleet-build-runtime.sh` → pins (from its output). `fleet-rollout.sh rehearse <pins> 111 114`: a fresh read-only dump restored into a **throwaway** database; it never writes to the live one. The free rehearsals (services, founder upgrade, revision) in throwaway registries with the **fake** provider. A read-only snapshot of policy, tiers, routing, budgets, lots and holds. | none | your approval of A only | no additional model/API spend (no provider key is used or present in any rehearsal); VPS build time and disk only |
-| **B: production install/configuration, agents paused** | **B1:** `fleet-release.sh <pins> 111 <to> <current UI>`, with automatic database restore **off** (the default since 4c9c1a3); verify identity, schema and the snapshot. Cognition stays contained (provider none). **B2:** key from recovery to its credential, `FLEET_INFERENCE_PROFILE=cloud_allowed`, `FLEET_COGNITION_PROVIDER=anthropic`, profile set if needed, policy re-enabled with the snapshot's values, controller restart. | B1: controller outage ≈ 45 s. B2: one controller restart. | B1: the customer-message design implemented (or your explicit choice to install v114 with its limitation). B2: **the key check** (funded organisation) | no additional model/API spend (agents paused, Fleet Control ceiling unchanged); a brief outage |
+| **A: candidate, side-build, non-billable rehearsals** | Push the frozen candidate (the branch head named in the Group A request). On the VPS: `fleet-build-runtime.sh` → pins (from its output). `fleet-rollout.sh rehearse <pins> 111 115`: a fresh read-only dump restored into a **throwaway** database; it never writes to the live one. The free rehearsals (services, founder upgrade, revision) in throwaway registries with the **fake** provider. A read-only snapshot of policy, tiers, routing, budgets, lots and holds. | none | your approval of A only | no additional model/API spend (no provider key is used or present in any rehearsal); VPS build time and disk only |
+| **B: production install/configuration, agents paused** | **B1:** `fleet-release.sh <pins> 111 <to> <current UI>`, with automatic database restore **off** (the default since 4c9c1a3); verify identity, schema and the snapshot. Cognition stays contained (provider none). **B2:** key from recovery to its credential, `FLEET_INFERENCE_PROFILE=cloud_allowed`, `FLEET_COGNITION_PROVIDER=anthropic`, profile set if needed, policy re-enabled with the snapshot's values, controller restart. | B1: controller outage ≈ 45 s. B2: one controller restart. | B1: your B approval (and Group A's results). B2: **the key check** (funded organisation) | no additional model/API spend (agents paused, Fleet Control ceiling unchanged); a brief outage |
 | **C: named runtime upgrades, agents paused** | **Agent-1 (founder-1, 01M3F50SH7PNX2E3GST13J52AS) only**: `fleet-founders.sh` upgrade from 89d7c21 to the installed release; record the upgrade ID. **Agent-2 (01M4C4NXT786Q4E9725N5A15KV) stays on b60e262** unless you explicitly approve its upgrade. | Agent-1's process restarts, still paused | B1 | no additional model/API spend |
 | **D: paid evaluation (separate approval)** | S1 from the side-installed release in a throwaway registry, on terms frozen by `fleet-scenario-terms.sh`, hold placed, import once. | none on production agents | B2; **the credit figures** (the hold is placed against the recorded balance) | S1 cap 360p; hold **$4.01 provisional**: computed from plan C's terms of 23 Oct, recomputed from current terms before approval |
 
@@ -329,8 +354,7 @@ review. The delivered files are still checked by hand before any pass is claimed
 ## Remaining before approval
 
 1. **For A:** your approval of Group A only. Nothing else blocks it.
-2. **For B1:** your decision on the customer-message design ([design](../../design/customer-message-handling.md)), then
-   its implementation and tests. Or your explicit choice to install v114 with its documented limitation.
+2. **For B1:** your B approval, after Group A's rehearsals pass (the customer-message design is implemented as v115).
 3. **For B2:** the key check (four characters on the VPS, then the Console). Read-only.
 4. **For D:** the Console figures for the reconciliation (G, Rp, Rb, Uc) and recomputed terms. Read-only; nothing is
    posted.

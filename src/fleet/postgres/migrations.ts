@@ -121,9 +121,10 @@ import { V111_SQL } from "./migrations-phase111.js";
 import { V112_SQL } from "./migrations-phase112.js";
 import { V113_SQL } from "./migrations-phase113.js";
 import { V114_SQL } from "./migrations-phase114.js";
+import { V115_SQL } from "./migrations-phase115.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 114;
+export const FLEET_PG_SCHEMA_VERSION = 115;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1333,6 +1334,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 112, name: "local_inference_only", sql: V112_SQL },
   { version: 113, name: "revision_needs_effective_delivery", sql: V113_SQL },
   { version: 114, name: "correction_obligation_separate", sql: V114_SQL },
+  { version: 115, name: "customer_message_classification", sql: V115_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1385,6 +1387,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_spend_reviews_claim(integer, text)", "svc_spend_review_record(uuid, text, jsonb)", "svc_spend_review_failed(uuid, text, text, jsonb)",
   // v65: Fleet Control review of shared lessons.
   "svc_knowledge_proposals_claim(integer, text)", "svc_knowledge_review_record(uuid, text, jsonb)", "svc_knowledge_review_failed(uuid, text, text, jsonb)",
+  // v115: Fleet Control's independent check of a customer message's classification or withdrawal.
+  "svc_message_checks_claim(integer, text)", "svc_message_check_record(uuid, text, jsonb)", "svc_message_check_failed(uuid, text, text, jsonb)",
   "svc_relevance_call_failed(uuid, uuid, jsonb)",
   // v29 (F2): the rail adapter reports external transactions (settled idempotently into the attributed venture) and the
   // credential broker audits every use of a credential reference (never the secret).

@@ -147,6 +147,8 @@ export const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string
     api: "channel.api", api_jobs: "channel.api_jobs" },
   customers: { enquiries: "enquiry.list", read: "enquiry.read", fetch_file: "enquiry.file", reply: "enquiry.reply", quote: "enquiry.quote", decline: "enquiry.decline",
     order_thread: "order.thread", order_message: "order.message",
+    // v115: after a delivery, the agent classifies a buyer's message (conversation / correction / unclear); a withdrawal is checked.
+    order_classify: "order.classify", withdraw_correction: "order.withdraw_correction",
     // v111: every open customer request, most urgent first, paged (beyond the packet's list).
     obligations: "customer.obligations",
     // v105: a price calculated by the platform from line items (what quote with items will charge), without quoting.

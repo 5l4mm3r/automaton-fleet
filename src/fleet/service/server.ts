@@ -61,6 +61,7 @@ import { inferRouted, type ProviderFactory } from "../cognition/routed-gateway.j
 import { RelevanceAssessor } from "../experiments/relevance.js";
 import { SpendReviewer } from "../spend/review.js";
 import { KnowledgeReviewer } from "../spend/knowledge-review.js";
+import { MessageChecker } from "../spend/message-check.js";
 import { actionDigest } from "../cognition/router.js";
 import { ResearchError, research as researchFetch } from "../research/gateway.js";
 import type { FetcherPort } from "../research/client.js";
@@ -320,6 +321,8 @@ export class FleetService {
   readonly spendReviewer: SpendReviewer | null;
   /** v65: Fleet Control's shared-lesson reviewer (promotion rule; bounded; treasury-paid). */
   readonly knowledgeReviewer: KnowledgeReviewer | null;
+  /** v115: Fleet Control's independent check of customer messages (classification / withdrawal). */
+  readonly messageChecker: MessageChecker | null;
   private lastReapOkAt: number | null = null;
   private lastReapError: string | null = null;
   private inFlight = 0;
@@ -364,6 +367,15 @@ export class FleetService {
       ? new KnowledgeReviewer({
         ports: { knowledgeProposalsClaim: (n, w) => opts.admin.knowledgeProposalsClaim(n, w), knowledgeReviewRecord: (...a) => opts.admin.knowledgeReviewRecord(...a),
           knowledgeReviewFailed: (...a) => opts.admin.knowledgeReviewFailed(...a), controlAiReserve: (...a) => opts.admin.controlAiReserve(...a), controlAiSettle: (...a) => opts.admin.controlAiSettle(...a), },
+        providerFactory: opts.cognitionProviderFactory,
+        audit: (event, detail) => this.audit(event, null, detail),
+        deadlineMs: this.cognitionDeadlineMs(),
+      })
+      : null;
+    this.messageChecker = opts.cognitionProviderFactory && typeof opts.admin.messageChecksClaim === "function"
+      ? new MessageChecker({
+        ports: { messageChecksClaim: (n, w) => opts.admin.messageChecksClaim(n, w), messageCheckRecord: (...a) => opts.admin.messageCheckRecord(...a),
+          messageCheckFailed: (...a) => opts.admin.messageCheckFailed(...a), controlAiReserve: (...a) => opts.admin.controlAiReserve(...a), controlAiSettle: (...a) => opts.admin.controlAiSettle(...a), },
         providerFactory: opts.cognitionProviderFactory,
         audit: (event, detail) => this.audit(event, null, detail),
         deadlineMs: this.cognitionDeadlineMs(),
@@ -553,6 +565,10 @@ export class FleetService {
         });
         if (this.knowledgeReviewer) void this.knowledgeReviewer.tick(2).then((r) => {
           if (r.reviewed || r.failed) this.audit("knowledge_review_pass", null, { ...r });
+        });
+        // v115: customer-message checks (single-flight; within Fleet Control's ceiling; no room defers, never decides).
+        if (this.messageChecker) void this.messageChecker.tick(3).then((r) => {
+          if (r.checked || r.failed) this.audit("message_check_pass", null, { ...r });
         });
         await this.processTerminations();
         this.lastReapOkAt = Date.now();

@@ -1,11 +1,23 @@
 # Customer messages after delivery: conversation versus correction (design for approval, 24 Oct 2026)
 
-**Status:** design only. Nothing here is implemented. It would replace v114's temporary rule.
+**Status: approved by the owner (24 Oct 2026) with three refinements, and IMPLEMENTED as schema v115**
+(`migrations-phase115.ts`, `spend/message-check.ts`). v114's temporary rule (every post-delivery message is owed correction
+work) is superseded by v115. v114's owner-recorded withdrawal stays as an override, never the routine path.
 
-**The temporary limitation (v114, in candidate c6d4699, not to be deployed as the finished policy):** every buyer message
-after a delivery is treated as owed correction work. Only a redelivery, a refund or cancellation, or the owner recording
-the buyer's withdrawal ends it. That stops false completion, but a plain "thanks" needs the owner. This design moves
-routine handling back to the agent, while an established correction still cannot be erased.
+**The owner's refinements, as built:**
+1. **Acceptance criteria describe outcomes.** Each criterion has an `outcome` and a `kind` (add, remove, change, layout,
+   calculation, other). Visible phrases (`mustShow`) are optional: one verification method, never proof alone. A
+   correction is fulfilled by a later delivery of **changed** files whose **passing review lists every outcome, word for
+   word, as met**. Where phrases were declared, the inspector's `required_content` check must also pass.
+2. **The independent check is evidence, not certainty.** Each check records its verdict, a **confidence** (0–1) and a
+   one-sentence **evidence** note. "no_change" completes a conversation only at confidence ≥ 0.7; a withdrawal closes a
+   correction only at ≥ 0.8. **One check per message and purpose, ever** (a unique key), so an unchanged message is never
+   re-reviewed. It runs under **Fleet Control's existing daily ceiling**: its own reservation kind, treasury-paid overhead
+   with exactly a knowledge review's ledger legs.
+3. **Unavailable review: checkpoint and defer.** No room in the budget means no call and a 15-minute deferral, and it does
+   not count as an attempt. Provider failures are bounded (3 attempts: 5 minutes, then 30), then *stalled* with one
+   owner-visible event. A deferred or stalled message is not the agent's work and **the buyer is never asked because of
+   it**. The buyer is asked only when the agent classifies their request as genuinely unclear.
 
 ## Three things kept apart
 

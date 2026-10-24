@@ -2106,6 +2106,21 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_knowledge_review_failed($1, $2, $3, $4) AS r", [proposalId, worker, error, JSON.stringify(calls)])).rows[0].r);
   }
 
+  /** Schema v115: customer-message checks due for Fleet Control (claimed for this worker; none while its budget has no room). */
+  async messageChecksClaim(limit: number, worker: string): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_message_checks_claim($1, $2) AS r", [limit, worker])).rows[0].r);
+  }
+
+  /** Schema v115: Fleet Control's verdict on a customer message (evidence and confidence) and its call cost. */
+  async messageCheckRecord(checkId: string, worker: string, result: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_message_check_record($1, $2, $3) AS r", [checkId, worker, JSON.stringify(result)])).rows[0].r);
+  }
+
+  /** Schema v115: a failed check attempt (a budget refusal defers; other failures are bounded attempts, then stalled). */
+  async messageCheckFailed(checkId: string, worker: string, error: string, calls: unknown[]): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_message_check_failed($1, $2, $3, $4) AS r", [checkId, worker, error, JSON.stringify(calls)])).rows[0].r);
+  }
+
   /** Schema v64: a failed review attempt (bounded retry with backoff; never an approval). */
   async spendReviewFailed(reviewId: string, worker: string, error: string, calls: unknown[]): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.tx(async (c) => (await c.query("SELECT svc_spend_review_failed($1, $2, $3, $4) AS r", [reviewId, worker, error, JSON.stringify(calls)])).rows[0].r);
@@ -2141,7 +2156,7 @@ export class PgFleetStore {
   }
 
   /** v96: Fleet Control's hard daily AI ceiling — reserve a paid call's bounded maximum (USD microcents) before it is made. */
-  async controlAiReserve(kind: "spend_review" | "knowledge_review" | "evidence_relevance", ref: string, maxUsdMicrocents: number): Promise<Record<string, unknown>> {
+  async controlAiReserve(kind: "spend_review" | "knowledge_review" | "evidence_relevance" | "message_check", ref: string, maxUsdMicrocents: number): Promise<Record<string, unknown>> {
     return this.tx(async (c) => (await c.query("SELECT svc_fleet_control_ai_reserve($1, $2, $3) AS r", [kind, ref, Math.ceil(maxUsdMicrocents)])).rows[0].r);
   }
   /** v96: settle a reservation at the call's actual cost (null: unknown — the maximum keeps counting). */

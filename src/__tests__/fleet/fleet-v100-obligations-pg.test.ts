@@ -52,11 +52,20 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
   };
   // v113: what a delivery carries — its files (by hash) and the review it went out on. A revision answers the buyer only when its
   // files changed and its review showed the required change on the page (a passing required_content check).
-  const review = async (order: string, requiredContent: "pass" | "fail" | null) => (await R.q(`INSERT INTO fleet.fleet_artifact_reviews (agent_id, subject, order_id, files,
+  const review = async (order: string, requiredContent: "pass" | "fail" | null, met: string[] = []) => (await R.q(`INSERT INTO fleet.fleet_artifact_reviews (agent_id, subject, order_id, files,
       files_digest, inspector, automated, automated_ok, criteria, verdict)
-    VALUES ($1, 'order', $2, '[{"name":"tracker.pdf"}]', repeat('d', 64), 'fleet-qa-3', $3::jsonb, $4, '[{"c":1},{"c":2},{"c":3}]', $5) RETURNING review_id`,
+    VALUES ($1, 'order', $2, '[{"name":"tracker.pdf"}]', repeat('d', 64), 'fleet-qa-3', $3::jsonb, $4, $6::jsonb, $5) RETURNING review_id`,
     [F.id, order, JSON.stringify({ ok: requiredContent !== "fail", files: [{ path: "tracker.pdf", checks: requiredContent ? [{ id: "required_content", status: requiredContent }] : [] }] }),
-      requiredContent !== "fail", requiredContent !== "fail" ? "pass" : "fail"]))[0].review_id as string;
+      requiredContent !== "fail", requiredContent !== "fail" ? "pass" : "fail",
+      JSON.stringify([...met.map((m) => ({ criterion: m, met: true, evidence: "checked on the delivered page" })), { c: 1 }, { c: 2 }, { c: 3 }])]))[0].review_id as string;
+  // v115: the agent classifies a post-delivery buyer message; Fleet Control's verdict is recorded by the controller's worker.
+  const classify = (order: string, messageId: string, classification: string, extra: Record<string, unknown> = {}) =>
+    R.econ(F, "order.classify", { orderId: order, messageId, classification, reason: "test classification", ...extra });
+  const checkVerdict = async (messageId: string, verdict: string, confidence: number, purpose = "conversation") => {
+    const [k] = await R.q(`SELECT check_id FROM fleet.fleet_message_checks WHERE message_id = $1 AND purpose = $2`, [messageId, purpose]);
+    return R.one(`fleet.svc_message_check_record($1, 'test-worker', $2::jsonb)`, [k.check_id, JSON.stringify({ verdict, confidence, evidence: "test", calls: [] })]);
+  };
+  const lastBuyerId = async (order: string) => (await R.q(`SELECT message_id FROM fleet.fleet_customer_messages WHERE order_id = $1 AND author = 'buyer' ORDER BY created_at DESC LIMIT 1`, [order]))[0].message_id as string;
   const delivery = async (status: string, minutesAgo: number, x: { order?: string; file?: string; reviewId?: string } = {}) => {
     const rows = await R.q(`INSERT INTO fleet.fleet_order_deliveries (order_id, agent_id, idempotency_key, subject, body, status, created_at, sent_at, review_id)
       VALUES ($1, $2, $3, 'Your corrected tracker', 'Attached.', $4, now() - make_interval(mins => $5), CASE WHEN $4 = 'sent' THEN now() END, $6) RETURNING delivery_id`,
@@ -129,27 +138,28 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     expect(await econNext(R, F, "order.message", { orderId, message: "Working on it.", resolved: "yes" })).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
   });
 
-  it("resolved by a delivery made after the request once it is sent (in progress while queued), or by a resolving answer", async () => {
-    const [d] = await delivery("queued", 0, { file: "corrected tracker", reviewId: await review(orderId, "pass") });
-    expect((await obligations())[0]).toMatchObject({ state: "unanswered", delivering: true });
+  it("v115: a fault report becomes an established correction, fulfilled by a delivery whose review lists its outcome; a question completes once checked", async () => {
+    // The fault report ("The renewal dates show as numbers") and "Any news?" (earlier tests) are unclassified: owed work.
+    const [fault, news] = (await R.q(`SELECT message_id FROM fleet.fleet_customer_messages WHERE order_id = $1 AND author = 'buyer' ORDER BY created_at`, [orderId])).map((m) => m.message_id);
+    expect((await obligations())[0]).toMatchObject({ revisionOwed: true, work: { classify: [fault, news] } });
+    const OUTCOME = "The renewal dates show as dates, not numbers";
+    expect(await classify(orderId, fault, "correction", { criteria: [{ outcome: OUTCOME, kind: "change" }] })).toMatchObject({ ok: true, classification: "correction" });
+    expect(await classify(orderId, news, "conversation")).toMatchObject({ ok: true, classification: "conversation" });
+    const [d] = await delivery("queued", 0, { file: "corrected tracker", reviewId: await review(orderId, "pass", [OUTCOME]) });
+    expect((await obligations())[0]).toMatchObject({ delivering: true, work: { corrections: [expect.objectContaining({ criteria: [{ outcome: OUTCOME, kind: "change" }] })] } });
     await R.q(`UPDATE fleet.fleet_order_deliveries SET status = 'sent', sent_at = now() WHERE delivery_id = $1`, [d.delivery_id]);
+    expect(await obligations()).toEqual([]);                                           // fulfilled; "Any news?" waits for its check (deferred, not owed)
+    await checkVerdict(news, "no_change", 0.95);
     expect(await obligations()).toEqual([]);
+    // A question: the agent classifies it a conversation and answers; resolved: true completes it once Fleet Control confirms.
     await buyer(0, "One more question: does it cover Wales?");
-    expect((await obligations())[0]).toMatchObject({ state: "unanswered", buyerMessages: 1, revisionOwed: true });
-    // v114 (owner 2026-10-24): resolved: true ACKNOWLEDGES the conversation; the buyer's request after delivery stays owed.
+    const q = await lastBuyerId(orderId);
+    expect((await obligations())[0]).toMatchObject({ state: "unanswered", revisionOwed: true, work: { classify: [q] } });
+    await classify(orderId, q, "conversation");
     expect(await econNext(R, F, "order.message", { orderId, message: "It covers England only; Wales has different rules.", resolved: true }))
       .toMatchObject({ ok: true, resolves: true });
-    expect((await obligations())[0]).toMatchObject({ id: orderId, state: "acknowledged", revisionOwed: true });
-    // The buyer's own reply withdraws it; the owner records that (an agent cannot), and the request is no longer owed.
-    const [w] = await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'buyer', 'England only is fine, nothing to change.')
-      RETURNING message_id`, [F.id, orderId]);
-    expect(await R.one(`fleet.fleet_admin_order_correction_withdrawn($1, $2, $3, $4)`, [orderId, w.message_id, "the buyer: nothing to change", OWNER]))
-      .toMatchObject({ ok: true, revisionOwed: false });
-    // No correction is owed now; the buyer's message itself still deserves a reply — and once nothing is owed, resolved: true closes it.
-    const after = (await obligations())[0];
-    expect(after).toMatchObject({ id: orderId, state: "unanswered" });
-    expect(after.revisionOwed).toBeUndefined();
-    await econNext(R, F, "order.message", { orderId, message: "Thank you — glad it suits.", resolved: true });
+    expect(await obligations()).toEqual([]);                                           // check pending: deferred, nothing owed, nothing asked
+    await checkVerdict(q, "no_change", 0.9);
     expect(await obligations()).toEqual([]);
     await expect(R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body, resolves) VALUES ($1, $2, 'buyer', 'x', true)`, [F.id, orderId]))
       .rejects.toThrow(/fleet_customer_messages_resolves_agent/);
@@ -328,6 +338,10 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     expect(asked.deliveryOwed).toBeUndefined();                                         // the first delivery was made
     await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'agent', 'Updated — see the revised PDF.')`, [F.id, paid]);
     expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ state: "acknowledged", revisionOwed: true });
+    // v115: the agent establishes the correction — its outcome, with the phrase that must be visible.
+    const point7 = await lastBuyerId(paid);
+    const OUTCOME7 = "Point 7 has a line for the date of the next annual check";
+    expect(await classify(paid, point7, "correction", { criteria: [{ outcome: OUTCOME7, kind: "add", mustShow: ["next annual check"] }] })).toMatchObject({ ok: true });
     // Run 6 (v113): the same file again — even when the agent calls it an unchanged resend — goes to the buyer but answers
     // nothing: the request stays owed (and order.thread says so, for the runtime's checks).
     const thread = async () => (await R.econ(F, "order.thread", { orderId: paid })) as Record<string, any>;
@@ -335,24 +349,27 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     await delivery("sent", 0, { order: paid, file: "checklist v1" });
     expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ revisionOwed: true });
     expect((await thread()).revisionOwed).toBe(true);
-    // Changed files whose review did not show the change on the page (no passing required_content): still owed.
-    await delivery("sent", 0, { order: paid, file: "checklist v2", reviewId: await review(paid, null) });
+    // Changed files whose review lists the outcome but did not show the declared phrase (no passing required_content): still owed.
+    await delivery("sent", 0, { order: paid, file: "checklist v2", reviewId: await review(paid, null, [OUTCOME7]) });
     expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ revisionOwed: true });
-    // Changed files whose review showed the required change: the request is answered.
-    await delivery("sent", 0, { order: paid, file: "checklist v3", reviewId: await review(paid, "pass") });
+    // Changed files with the phrase visible but a review that does not list the outcome as met: still owed.
+    await delivery("sent", 0, { order: paid, file: "checklist v2b", reviewId: await review(paid, "pass") });
+    expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ revisionOwed: true });
+    // Changed files, the outcome met and the phrase visible: the correction is fulfilled.
+    await delivery("sent", 0, { order: paid, file: "checklist v3", reviewId: await review(paid, "pass", [OUTCOME7]) });
     expect((await obligations()).some((x) => x.id === paid)).toBe(false);                // the revision was delivered
     expect((await thread()).revisionOwed).toBe(false);
-    // v114 (owner 2026-10-24): a new message, then the agent's resolving answer: ACKNOWLEDGED, still owed (the bypass closed).
-    // Only a later effective delivery, the order's refund or cancellation, or the buyer's withdrawal (recorded by the owner) ends it.
+    // v115 (owner 2026-10-24): a genuine "thanks" completes WITHOUT the owner: classified a conversation, answered, confirmed.
     const [thanks] = await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'buyer', 'Thanks, that is perfect.')
       RETURNING message_id`, [F.id, paid]);
-    expect((await thread()).revisionOwed).toBe(true);
+    expect((await thread()).revisionOwed).toBe(true);                                 // unclassified: the agent must look at it
+    await classify(paid, thanks.message_id, "conversation");
     await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body, resolves) VALUES ($1, $2, 'agent', 'Glad it helps.', true)`, [F.id, paid]);
-    expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ state: "acknowledged", revisionOwed: true });
-    expect((await thread()).revisionOwed).toBe(true);
-    await R.one(`fleet.fleet_admin_order_correction_withdrawn($1, $2, $3, $4)`, [paid, thanks.message_id, "the buyer is satisfied: no change asked", OWNER]);
+    expect((await obligations()).some((x) => x.id === paid)).toBe(false);            // waiting for Fleet Control: deferred, not owed
+    await checkVerdict(thanks.message_id, "no_change", 0.97);
     expect((await obligations()).some((x) => x.id === paid)).toBe(false);
     expect((await thread()).revisionOwed).toBe(false);
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_order_correction_withdrawals WHERE order_id = $1`, [paid]))[0].n).toBe(0);   // no owner action
   });
 
   it("v114: resolved: true acknowledges but cannot erase an owed correction; only fulfilment, refund/cancellation or the buyer's withdrawal (owner-recorded) end it", async () => {
@@ -403,6 +420,145 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     await R.q(`UPDATE fleet.fleet_customer_orders SET payment_status = 'refunded', refunded_minor = amount_minor WHERE order_id = $1`, [o]);
     expect((await owed())?.revisionOwed).toBeUndefined();                 // refunded: no correction owed (a reply may still be)
     expect((await R.econ(F, "order.thread", { orderId: o })).revisionOwed).toBe(false);
+  });
+
+  describe("v115: conversation and correction are separate (owner-approved design, 2026-10-24)", () => {
+    const newDeliveredOrder = async (item: string) => {
+      const k = await R.one(`fleet.fleet_econ_paypal_checkout($1, $2::jsonb)`, [F.id, JSON.stringify({ venture: "landlord", amountMinor: 800, description: item,
+        idempotencyKey: `t:${crypto.randomBytes(8).toString("hex")}` })]);
+      const o = (await R.q(`INSERT INTO fleet.fleet_customer_orders (agent_id, venture_id, checkout_id, item, amount_minor, currency, fulfilment, access_token, origin_hash, buyer_email,
+          payment_status, status, fulfilled_at, fulfilment_evidence)
+        SELECT agent_id, venture_id, checkout_id, description, amount_minor, currency, 'digital_file', $2, encode(sha256($3::bytea), 'hex'), 'kim@example.test', 'paid', 'delivered',
+          now() - interval '1 hour', '{"delivery":"sent"}'::jsonb FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1 RETURNING order_id`,
+        [k.checkout.checkoutId, crypto.randomBytes(32).toString("hex"), crypto.randomBytes(8).toString("hex")]))[0].order_id as string;
+      await delivery("sent", 60, { order: o, file: `${item} v1` });
+      return o;
+    };
+    const say = async (o: string, body: string) => (await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'buyer', $3) RETURNING message_id`,
+      [F.id, o, body]))[0].message_id as string;
+    const answer = (o: string, message: string, resolved = false) => econNext(R, F, "order.message", { orderId: o, message, ...(resolved ? { resolved: true } : {}) });
+    const owed = async (o: string) => (await obligations()).find((x) => x.id === o);
+    const checks = async (m: string) => R.q(`SELECT purpose, status, attempts, verdict, confidence, next_attempt_at > now() + interval '14 minutes' AS deferred15
+      FROM fleet.fleet_message_checks WHERE message_id = $1`, [m]);
+    const agentMessages = async (o: string) => (await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_customer_messages WHERE order_id = $1 AND author = 'agent'`, [o]))[0].n as number;
+
+    it("thanks and a question complete without the owner; one paid check per message, never repeated", async () => {
+      const o = await newDeliveredOrder("Thanks order");
+      const thanks = await say(o, "Thanks, that's perfect!");
+      expect(await owed(o)).toMatchObject({ revisionOwed: true, work: { classify: [thanks] } });
+      await classify(o, thanks, "conversation");
+      await answer(o, "Glad it helps!", true);
+      expect(await owed(o)).toBeUndefined();                                            // deferred while Fleet Control checks
+      expect(await classify(o, thanks, "conversation")).toMatchObject({ ok: false, code: "FLEET_ORDER_ALREADY_CLASSIFIED" });
+      expect((await checks(thanks)).length).toBe(1);                                    // one check, not another paid review
+      await checkVerdict(thanks, "no_change", 0.96);
+      expect(await owed(o)).toBeUndefined();
+      expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_order_correction_withdrawals WHERE order_id = $1`, [o]))[0].n).toBe(0);
+      const question = await say(o, "Can I print it in A5?");
+      await classify(o, question, "conversation");
+      await answer(o, "Yes — choose 'fit to page' when printing.", true);
+      await checkVerdict(question, "no_change", 0.88);
+      expect(await owed(o)).toBeUndefined();
+    });
+
+    it("an explicit correction is established with outcome criteria (no phrase needed); resolved: true cannot close it; a delivery whose review lists the outcome does", async () => {
+      const o = await newDeliveredOrder("Layout order");
+      const ask = await say(o, "Could you put the checklist in two columns so it fits on one page?");
+      const LAYOUT = "The checklist is laid out in two columns and fits on one page";
+      expect(await classify(o, ask, "correction", { criteria: [{ outcome: LAYOUT, kind: "layout" }] })).toMatchObject({ ok: true, revisionOwed: true });
+      await answer(o, "Noted — I will send it today.", true);
+      expect(await owed(o)).toMatchObject({ state: "acknowledged", revisionOwed: true, work: { corrections: [expect.objectContaining({ sourceMessageId: ask })] } });
+      expect(await classify(o, ask, "conversation")).toMatchObject({ ok: false, code: "FLEET_INVALID_STATE" });   // an established correction stands
+      await delivery("sent", 0, { order: o, file: "Layout order v1" });                // the same file again: answers nothing
+      expect(await owed(o)).toMatchObject({ revisionOwed: true });
+      await delivery("sent", 0, { order: o, file: "Layout order v2", reviewId: await review(o, null, [LAYOUT]) });
+      expect(await owed(o)).toBeUndefined();                                            // outcome met in a passing review of changed files
+      await expect(classify(o, ask, "correction", { criteria: [] })).resolves.toMatchObject({ ok: false });
+    });
+
+    it("an ambiguous request: the agent asks one clarifying question; the buyer's reply is classified afresh — no redelivery, no owner", async () => {
+      const o = await newDeliveredOrder("Ambiguous order");
+      const vague = await say(o, "Could it be landscape? Not sure it matters.");
+      await classify(o, vague, "unclear");
+      const before = await agentMessages(o);
+      await answer(o, "Would you like a landscape version, or keep portrait?");
+      expect(await agentMessages(o)).toBe(before + 1);
+      expect(await owed(o)).toMatchObject({ state: "acknowledged" });                  // answered with a question: a conversation, not work
+      expect((await owed(o))!.revisionOwed).toBeUndefined();                           // no correction, nothing owed
+      expect((await checks(vague)).length).toBe(0);                                     // no paid check for an unclear message
+      const reply = await say(o, "Landscape please.");
+      expect(await owed(o)).toMatchObject({ revisionOwed: true, work: { classify: [reply] } });
+    });
+
+    it("Fleet Control does not confirm 'conversation' (change requested, or uncertain): back to the agent, who establishes the correction", async () => {
+      const o = await newDeliveredOrder("Disputed order");
+      const msg = await say(o, "Thanks! Though the title should say England and Wales.");
+      await classify(o, msg, "conversation");
+      await answer(o, "Thank you!", true);
+      await checkVerdict(msg, "change_requested", 0.86);
+      expect(await owed(o)).toMatchObject({ revisionOwed: true, work: { classify: [msg], disputed: [msg] } });
+      expect(await classify(o, msg, "correction", { criteria: [{ outcome: "The title says England and Wales", kind: "change", mustShow: ["England and Wales"] }] }))
+        .toMatchObject({ ok: true });
+      expect((await owed(o))?.work?.corrections?.[0]?.sourceMessageId).toBe(msg);
+      const unsure = await say(o, "Also, maybe bigger text?");
+      await classify(o, unsure, "conversation");
+      await checkVerdict(unsure, "no_change", 0.55);                                   // low confidence is not confirmation
+      expect((await owed(o))?.work?.disputed).toContain(unsure);
+    });
+
+    it("withdrawal: confirmed by Fleet Control from the buyer's later message (confidence ≥ 0.8); the agent's word alone never closes it", async () => {
+      const o = await newDeliveredOrder("Withdrawal order");
+      const ask = await say(o, "Please add the boiler service date to point 2.");
+      const [c] = [(await classify(o, ask, "correction", { criteria: [{ outcome: "Point 2 has the boiler service date", kind: "add" }] })).correctionId as string];
+      await expect(R.econ(F, "order.withdraw_correction", { orderId: o, correctionId: c, messageId: ask, reason: "x x" })).resolves.toMatchObject({ ok: false });   // not a LATER message
+      const unsure = await say(o, "Hmm, maybe leave it.");
+      expect(await R.econ(F, "order.withdraw_correction", { orderId: o, correctionId: c, messageId: unsure, reason: "the buyer may not want it" })).toMatchObject({ ok: true, status: "pending" });
+      expect(await owed(o)).toMatchObject({ revisionOwed: true });                      // pending: still owed
+      await checkVerdict(unsure, "withdrawn", 0.6, "withdrawal");
+      expect((await owed(o))?.work?.corrections?.length).toBe(1);                       // low confidence: still owed
+      const clear = await say(o, "No need for the boiler date after all — leave point 2 as it is.");
+      await classify(o, unsure, "conversation");                                        // the agent answers the other messages as conversation
+      await classify(o, clear, "conversation");
+      await R.econ(F, "order.withdraw_correction", { orderId: o, correctionId: c, messageId: clear, reason: "the buyer withdrew it" });
+      await checkVerdict(clear, "withdrawn", 0.93, "withdrawal");
+      expect((await owed(o))?.work?.corrections).toBeUndefined();                       // the correction is closed
+    });
+
+    it("an unavailable review checkpoints and defers: no room in Fleet Control's budget is not an attempt; provider failures are bounded, then stalled — the buyer is never asked", async () => {
+      const o = await newDeliveredOrder("Deferred order");
+      const thanks = await say(o, "Great, thank you.");
+      await classify(o, thanks, "conversation");
+      await answer(o, "You're welcome!", true);
+      const asked = await agentMessages(o);
+      // Fleet Control's daily budget is unset in this registry: the claim hands out no job (deferred).
+      expect((await R.one<any>(`fleet.svc_message_checks_claim(5, 'test-worker')`)).jobs).toEqual([]);
+      const [k] = await R.q(`SELECT check_id FROM fleet.fleet_message_checks WHERE message_id = $1`, [thanks]);
+      expect(await R.one(`fleet.svc_message_check_failed($1, 'test-worker', 'FLEET_CONTROL_AI_BUDGET: no room', '[]'::jsonb)`, [k.check_id])).toMatchObject({ status: "deferred" });
+      expect((await checks(thanks))[0]).toMatchObject({ status: "pending", attempts: 0, deferred15: true });
+      for (let i = 1; i <= 3; i++) await R.one(`fleet.svc_message_check_failed($1, 'test-worker', 'FLEET_REVIEW_PROVIDER_ERROR: overloaded', '[]'::jsonb)`, [k.check_id]);
+      expect((await checks(thanks))[0]).toMatchObject({ status: "stalled", attempts: 3 });
+      expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_events WHERE event_type = 'message_check_stalled' AND detail->>'checkId' = $1`, [k.check_id]))[0].n).toBe(1);
+      expect(await owed(o)).toBeUndefined();                                            // deferred: not the agent's work
+      expect(await agentMessages(o)).toBe(asked);                                       // and nothing was sent to the buyer
+    });
+
+    it("Fleet Control's check is treasury overhead with exactly a knowledge review's ledger legs, within its own reservation kind", async () => {
+      const legs = async (kind: string) => (await R.q(`SELECT class, side FROM fleet.fleet_ledger_rules WHERE kind = $1 ORDER BY class, side`, [kind])).map((r) => `${r.class}:${r.side}`);
+      expect(await legs("message_check_charge")).toEqual(await legs("knowledge_review_charge"));
+      expect((await legs("message_check_charge")).length).toBeGreaterThan(0);
+      expect((await R.q(`SELECT 1 FROM fleet.fleet_control_accrual WHERE kind = 'message_check_charge'`)).length).toBe(1);
+      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('message_check', 'x', 100)`)).toMatchObject({ ok: false, code: "FLEET_CONTROL_AI_BUDGET_UNSET" });   // a known kind; no budget set
+      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('mystery', 'x', 100)`)).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+      // A recorded check's provider consumption is booked as Fleet Control's, never the agent's.
+      const o = await newDeliveredOrder("Charged order");
+      const m = await say(o, "Thanks!");
+      await classify(o, m, "conversation");
+      const [k] = await R.q(`SELECT check_id FROM fleet.fleet_message_checks WHERE message_id = $1`, [m]);
+      const requestId = crypto.randomUUID();
+      await R.one(`fleet.svc_message_check_record($1, 'test-worker', $2::jsonb)`, [k.check_id, JSON.stringify({ verdict: "no_change", confidence: 0.9, evidence: "thanks only",
+        calls: [{ requestId, provider: "anthropic", tier: "T2", model: "claude-sonnet-5-5", inputTokens: 300, outputTokens: 40, usdMicrocents: 2_500_000 }] })]);
+      expect((await R.q(`SELECT recorded_by FROM fleet.fleet_provider_credit_events WHERE request_id = $1`, [requestId]))[0].recorded_by).toBe("controller:message_check_charge");
+    });
   });
 
   it("v111: a listing, pin or storefront product that sells elsewhere names a published offer whose capability check still covers it", async () => {

@@ -9,7 +9,7 @@
 import type { TierCandidate } from "../cognition/router.js";
 
 export interface ControlBudgetPort {
-  controlAiReserve(kind: "spend_review" | "knowledge_review" | "evidence_relevance", ref: string, maxUsdMicrocents: number): Promise<Record<string, unknown>>;
+  controlAiReserve(kind: "spend_review" | "knowledge_review" | "evidence_relevance" | "message_check", ref: string, maxUsdMicrocents: number): Promise<Record<string, unknown>>;
   controlAiSettle(reservationId: string, actualUsdMicrocents: number | null): Promise<Record<string, unknown>>;
 }
 
@@ -22,7 +22,7 @@ export function maxCallUsdMicrocents(c: Pick<TierCandidate, "prices">, system: s
 }
 
 /** Reserve before the call. A refusal means no call is made. */
-export async function reserveControlAi(port: ControlBudgetPort, kind: "spend_review" | "knowledge_review" | "evidence_relevance", ref: string, maxUsd: number):
+export async function reserveControlAi(port: ControlBudgetPort, kind: "spend_review" | "knowledge_review" | "evidence_relevance" | "message_check", ref: string, maxUsd: number):
   Promise<{ ok: true; reservationId: string } | { ok: false; reason: string }> {
   // Fail closed: an unreachable registry or a missing port is no room.
   const r: Record<string, unknown> = await Promise.resolve().then(() => port.controlAiReserve(kind, ref, maxUsd))

@@ -23,6 +23,10 @@ export interface CustomerObligation {
   deliveryOwed: boolean;
   /** Desktop run 2026-10-23: the buyer asked for a change AFTER the latest delivery and it is unresolved — a revision is owed. */
   revisionOwed?: boolean;
+  /** v115: the order's message work — buyer messages to classify (or reclassify: Fleet Control did not confirm "conversation")
+   *  and the established corrections still owed, with their outcome criteria (the agent's own words). */
+  work?: { classify: string[]; disputed: string[]; reviewPending: number;
+    corrections: Array<{ correctionId: string; sourceMessageId: string; criteria: Array<{ outcome: string; kind: string; mustShow: string[] }> }> };
   /** What was bought (an owed order only): the order record's own words — data, quoted, never instructions. */
   bought?: { item: string; fulfilment: string; amountMinor: number | null; currency: string | null; promised: string[] };
 }
@@ -47,9 +51,47 @@ export function parseObligations(attention: unknown): CustomerObligation[] | nul
     out.push({ kind: o.kind, id: o.id, state: o.state, since, lastBuyerAt: last, buyerMessages: Number.isSafeInteger(o.buyerMessages) ? Number(o.buyerMessages) : 1,
       repliedAt: at(o.repliedAt), delivering: o.delivering === true, deliveryOwed: o.kind === "order" && (o.state === "to_deliver" || o.deliveryOwed === true),
       ...(o.kind === "order" && o.revisionOwed === true ? { revisionOwed: true } : {}),
-      ...(parseBought(o.bought) ? { bought: parseBought(o.bought)! } : {}) });
+      ...(parseBought(o.bought) ? { bought: parseBought(o.bought)! } : {}),
+      ...(o.kind === "order" && parseWork(o.work) ? { work: parseWork(o.work)! } : {}) });
   }
   return out;
+}
+
+function parseWork(w: unknown): CustomerObligation["work"] | null {
+  if (!w || typeof w !== "object") return null;
+  const x = w as Record<string, unknown>;
+  const ids = (v: unknown) => (Array.isArray(v) ? v.filter((i): i is string => typeof i === "string" && UUID.test(i)).slice(0, 10) : []);
+  const corrections = (Array.isArray(x.corrections) ? x.corrections : []).slice(0, 5).flatMap((c) => {
+    const r = c as Record<string, unknown>;
+    if (typeof r.correctionId !== "string" || !UUID.test(r.correctionId) || typeof r.sourceMessageId !== "string" || !UUID.test(r.sourceMessageId)) return [];
+    const criteria = (Array.isArray(r.criteria) ? r.criteria : []).slice(0, 10).map((k) => {
+      const q = k as Record<string, unknown>;
+      return { outcome: clean(q.outcome, 300), kind: clean(q.kind, 20), mustShow: (Array.isArray(q.mustShow) ? q.mustShow : []).slice(0, 5).map((p) => clean(p, 120)).filter(Boolean) };
+    }).filter((k) => k.outcome);
+    return [{ correctionId: r.correctionId, sourceMessageId: r.sourceMessageId, criteria }];
+  });
+  const out = { classify: ids(x.classify), disputed: ids(x.disputed), reviewPending: Number.isSafeInteger(x.reviewPending) ? Number(x.reviewPending) : 0, corrections };
+  return out.classify.length || out.corrections.length || out.reviewPending ? out : null;
+}
+
+/** v115: the order's message work as instructions (classify; deliver each established correction's outcomes). */
+export function workLines(o: CustomerObligation): string {
+  const w = o.work;
+  if (!w) return "";
+  const parts: string[] = [];
+  if (w.classify.length) {
+    parts.push(`CLASSIFY the buyer's message${w.classify.length > 1 ? "s" : ""} ${w.classify.join(", ")} (customers order_classify, after reading them with order_thread): `
+      + "conversation (thanks, an acknowledgement, a question: answer it; resolved: true then completes it once Fleet Control has checked it), "
+      + "correction (they want the delivered work changed: the criteria describe each requested OUTCOME), or unclear (ask them ONE clarifying question)"
+      + (w.disputed.length ? `; Fleet Control did not confirm "conversation" for ${w.disputed.join(", ")}: classify it as a correction or unclear` : ""));
+  }
+  for (const c of w.corrections) {
+    parts.push(`OWED correction ${c.correctionId} (the buyer's message ${c.sourceMessageId}): ${c.criteria.map((k) => `"${k.outcome}"${k.mustShow.length ? ` (must show: ${k.mustShow.map((p) => `"${p}"`).join(", ")})` : ""}`).join("; ")} — `
+      + "change the files, inspect them (deliverable inspect; pass any must-show phrases as required), review them listing EACH outcome word for word as a met "
+      + "criterion with your evidence, then wallet deliver with resendReason and after; resolved: true does not close it");
+  }
+  if (w.reviewPending) parts.push(`${w.reviewPending} message(s) wait for Fleet Control's check: nothing to do for them`);
+  return ` ${parts.join(". ")}.`;
 }
 
 const clean = (v: unknown, n: number) => (typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f"]+/g, " ").replace(/\s+/g, " ").trim().slice(0, n) : "");
@@ -120,7 +162,7 @@ export function obligationLines(list: CustomerObligation[]): string[] {
       return `order ${o.id}: PAID ${utc(o.since)}${o.bought ? `, ${boughtText(o.bought)}` : ""}; its delivery is OWED${o.delivering ? " (a delivery is in progress)" : ""} — ${DELIVER_STEPS}`;
     }
     let owedToo = o.deliveryOwed ? ` ALSO: this order is PAID and its delivery is still OWED${o.bought ? ` (${boughtText(o.bought)})` : ""} — ${DELIVER_STEPS}` : "";
-    if (o.revisionOwed) owedToo += ` ALSO: ${REVISE_STEPS}`;
+    if (o.revisionOwed) owedToo += o.work ? workLines(o) : ` ALSO: ${REVISE_STEPS}`;
     if (o.state === "unanswered") {
       return `order ${o.id}: the buyer's message of ${utc(o.lastBuyerAt)} is UNANSWERED${n} — read it with customers order_thread, answer with customers order_message; `
         + `an acknowledgement, or an honest update on what is blocking you, is an answer.${owedToo}`;

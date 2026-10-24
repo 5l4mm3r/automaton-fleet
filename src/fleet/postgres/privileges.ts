@@ -1458,6 +1458,10 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_provider_credit_holds: new Set(["fleet_admin_engineering_credit_hold", "fleet_admin_engineering_credit_release"]),
     // v114: a buyer's withdrawal of a correction is recorded by the owner only.
     fleet_order_correction_withdrawals: new Set(["fleet_admin_order_correction_withdrawn"]),
+    // v115: the agent's classification decisions and corrections (its own orders only); Fleet Control's checks.
+    fleet_customer_message_decisions: new Set(["fleet_econ_order_classify"]),
+    fleet_order_corrections: new Set(["fleet_econ_order_classify"]),
+    fleet_message_checks: new Set(["fleet_econ_order_classify", "fleet_econ_order_withdraw_correction", "svc_message_checks_claim", "svc_message_check_record", "svc_message_check_failed"]),
     fleet_knowledge_candidates: new Set(["fleet_econ_knowledge_candidate"]),
   };
   const fns = await db.query<{ name: string; src: string }>(

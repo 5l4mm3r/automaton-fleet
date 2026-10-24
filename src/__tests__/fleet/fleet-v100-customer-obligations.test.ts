@@ -242,3 +242,29 @@ describe("a paid order's delivery stays owed whatever the conversation (review 2
     expect(owedDeliveryLine([ORDER])).toMatch(/^Your next move: DELIVER the paid order 1186e00e-1111-4222-8333-444455556666 — /);
   });
 });
+
+describe("v115: the brief spells out the order's message work", async () => {
+  const { parseObligations, obligationLines } = await import("../../fleet/founder/obligations.js");
+  const ORDER = "6ac71280-60d2-41d1-b2a4-38f21caa4b07", M1 = "11111111-1111-4111-8111-111111111111", M2 = "22222222-2222-4222-8222-222222222222";
+  const C = "33333333-3333-4333-8333-333333333333";
+  const at = new Date().toISOString();
+  it("messages to classify, a disputed one, and an owed correction's outcomes; nothing for messages awaiting Fleet Control", () => {
+    const list = parseObligations({ customerObligations: [{ kind: "order", id: ORDER, state: "acknowledged", since: at, lastBuyerAt: at, repliedAt: at, buyerMessages: 2, revisionOwed: true,
+      work: { classify: [M1, M2], disputed: [M2], reviewPending: 1, corrections: [{ correctionId: C, sourceMessageId: M1,
+        criteria: [{ outcome: "The checklist is laid out in two columns", kind: "layout" }, { outcome: "Point 7 has a next-check date line", kind: "add", mustShow: ["next annual check"] }] }] } }] })!;
+    expect(list[0].work).toMatchObject({ classify: [M1, M2], disputed: [M2], reviewPending: 1 });
+    const text = obligationLines(list).join("\n");
+    expect(text).toContain(`CLASSIFY the buyer's messages ${M1}, ${M2}`);
+    expect(text).toContain(`Fleet Control did not confirm "conversation" for ${M2}`);
+    expect(text).toContain(`OWED correction ${C}`);
+    expect(text).toContain('"The checklist is laid out in two columns"');
+    expect(text).toContain('(must show: "next annual check")');
+    expect(text).toContain("listing EACH outcome word for word as a met criterion");
+    expect(text).toContain("1 message(s) wait for Fleet Control's check: nothing to do for them");
+  });
+  it("work with nothing in it is dropped (an older controller, or nothing owed)", () => {
+    const list = parseObligations({ customerObligations: [{ kind: "order", id: ORDER, state: "acknowledged", since: at, lastBuyerAt: at, buyerMessages: 1, revisionOwed: true,
+      work: { classify: ["not-a-uuid"], corrections: [] } }] })!;
+    expect(list[0].work).toBeUndefined();
+  });
+});
