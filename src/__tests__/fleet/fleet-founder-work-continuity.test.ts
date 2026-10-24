@@ -75,7 +75,10 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
       step++; infers++;
       const imgs = (messages as Array<{ images?: unknown[] }>).reduce((n, m) => n + (m.images?.length ?? 0), 0);
       if (imgs) imagesSeen.push({ turn, step, images: imgs });
-      const s = script(turn, step, packets.at(-1)!);
+      const out = script(turn, step, packets.at(-1)!);
+      // 1j simulates a process killed mid-call with a promise that never settles: the call must never return. (It used to be
+      // answered at once with no toolCalls, so the abandoned turn failed later as an unhandled rejection.)
+      const s = typeof (out as { then?: unknown } | undefined)?.then === "function" ? await (out as unknown as Promise<Step>) : out;
       return { content: s.content ?? "", toolCalls: s.calls, usage: { inputTokens: 1, outputTokens: 1 }, chargedCents: 1, requestId: `r${turn}-${step}` };
     },
   };
@@ -349,6 +352,46 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     const reviewAt = Date.parse(JSON.parse(fs.readFileSync(path.join(r.d.s, "mind-continuity.json"), "utf8")).reviewAt);
     expect(reviewAt - t0).toBeGreaterThanOrEqual(14 * 60_000);
     expect(reviewAt - t0).toBeLessThanOrEqual(16 * 60_000);
+  });
+
+  it("1t. v114: an acknowledged, unchanged correction is rechecked with backoff (15, 30, 60 min …); any change resets to 15 min", async () => {
+    const ORDER = "6ac71280-60d2-41d1-b2a4-38f21caa4b07";
+    const real = Date.now; let t = real();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => t);
+    try {
+      const at = new Date(t - 60_000).toISOString();
+      const r = rig(() => ({ calls: [c("sleep", { reason: "answered; nothing new", wakeOn: "a new message" })] }));
+      r.world.obligations = [{ kind: "order", id: ORDER, state: "acknowledged", since: at, lastBuyerAt: at, repliedAt: at, buyerMessages: 1, revisionOwed: true }];
+      const gap = async () => {
+        const t0 = t;
+        await r.mind.turn("hb");
+        const due = Date.parse(JSON.parse(fs.readFileSync(path.join(r.d.s, "mind-continuity.json"), "utf8")).reviewAt);
+        t = due + 1_000;                                                                     // the review time comes
+        return Math.round((due - t0) / 60_000);
+      };
+      expect([await gap(), await gap(), await gap()]).toEqual([15, 30, 60]);
+      // The buyer writes again: the owed set changed — back to 15 minutes. The obligation itself never leaves the packet.
+      const later = new Date(t - 1_000).toISOString();
+      r.world.obligations = [{ kind: "order", id: ORDER, state: "acknowledged", since: at, lastBuyerAt: later, repliedAt: later, buyerMessages: 2, revisionOwed: true }];
+      expect(await gap()).toBe(15);
+      expect(r.packets.at(-1)).toContain(`order ${ORDER}`);
+      expect(r.packets.at(-1)).toContain("is still OWED");
+      // A first delivery still owed is never backed off.
+      r.world.obligations = [{ kind: "order", id: ORDER, state: "acknowledged", since: at, lastBuyerAt: later, repliedAt: later, buyerMessages: 2, deliveryOwed: true }];
+      expect([await gap(), await gap()]).toEqual([15, 15]);
+    } finally { clock.mockRestore(); }
+  });
+
+  it("1u. v114: resolved: true while a correction is owed is answered ACKNOWLEDGED, NOT FULFILLED; the brief says resolved only acknowledges", async () => {
+    const ORDER = "6ac71280-60d2-41d1-b2a4-38f21caa4b07";
+    const at = new Date(Date.now() - 60_000).toISOString();
+    const r = rig((t, s) => s === 1 ? { calls: [c("customers", { op: "order_message", args: { orderId: ORDER, message: "Noted.", resolved: true } })] }
+      : { calls: [c("sleep", { reason: "done" })] });
+    r.world.obligations = [{ kind: "order", id: ORDER, state: "acknowledged", since: at, lastBuyerAt: at, repliedAt: at, buyerMessages: 1, revisionOwed: true }];
+    await r.mind.turn("hb");
+    expect(r.packets[0]).toContain("resolved: true on customers order_message only ACKNOWLEDGES the conversation");
+    expect(r.packets[0]).not.toContain("mark the request resolved (customers order_message, resolved: true) if nothing more is owed");
+    expect(r.outputsSeen.some((o) => o.includes("ACKNOWLEDGED, NOT FULFILLED"))).toBe(true);
   });
 
   it("1s. the rest lasts until the controller's eligibility time (Retry-After), not a fixed minute (2026-10-24)", async () => {

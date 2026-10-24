@@ -136,8 +136,20 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     expect(await obligations()).toEqual([]);
     await buyer(0, "One more question: does it cover Wales?");
     expect((await obligations())[0]).toMatchObject({ state: "unanswered", buyerMessages: 1, revisionOwed: true });
+    // v114 (owner 2026-10-24): resolved: true ACKNOWLEDGES the conversation; the buyer's request after delivery stays owed.
     expect(await econNext(R, F, "order.message", { orderId, message: "It covers England only; Wales has different rules.", resolved: true }))
-      .toMatchObject({ ok: true, resolves: true, obligation: null });
+      .toMatchObject({ ok: true, resolves: true });
+    expect((await obligations())[0]).toMatchObject({ id: orderId, state: "acknowledged", revisionOwed: true });
+    // The buyer's own reply withdraws it; the owner records that (an agent cannot), and the request is no longer owed.
+    const [w] = await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'buyer', 'England only is fine, nothing to change.')
+      RETURNING message_id`, [F.id, orderId]);
+    expect(await R.one(`fleet.fleet_admin_order_correction_withdrawn($1, $2, $3, $4)`, [orderId, w.message_id, "the buyer: nothing to change", OWNER]))
+      .toMatchObject({ ok: true, revisionOwed: false });
+    // No correction is owed now; the buyer's message itself still deserves a reply — and once nothing is owed, resolved: true closes it.
+    const after = (await obligations())[0];
+    expect(after).toMatchObject({ id: orderId, state: "unanswered" });
+    expect(after.revisionOwed).toBeUndefined();
+    await econNext(R, F, "order.message", { orderId, message: "Thank you — glad it suits.", resolved: true });
     expect(await obligations()).toEqual([]);
     await expect(R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body, resolves) VALUES ($1, $2, 'buyer', 'x', true)`, [F.id, orderId]))
       .rejects.toThrow(/fleet_customer_messages_resolves_agent/);
@@ -330,12 +342,67 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     await delivery("sent", 0, { order: paid, file: "checklist v3", reviewId: await review(paid, "pass") });
     expect((await obligations()).some((x) => x.id === paid)).toBe(false);                // the revision was delivered
     expect((await thread()).revisionOwed).toBe(false);
-    // A new request, then the agent's own resolving answer (its judgement that nothing more is owed) still closes it, as before.
-    await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'buyer', 'Thanks, that is perfect.')`, [F.id, paid]);
+    // v114 (owner 2026-10-24): a new message, then the agent's resolving answer: ACKNOWLEDGED, still owed (the bypass closed).
+    // Only a later effective delivery, the order's refund or cancellation, or the buyer's withdrawal (recorded by the owner) ends it.
+    const [thanks] = await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'buyer', 'Thanks, that is perfect.')
+      RETURNING message_id`, [F.id, paid]);
     expect((await thread()).revisionOwed).toBe(true);
     await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body, resolves) VALUES ($1, $2, 'agent', 'Glad it helps.', true)`, [F.id, paid]);
+    expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ state: "acknowledged", revisionOwed: true });
+    expect((await thread()).revisionOwed).toBe(true);
+    await R.one(`fleet.fleet_admin_order_correction_withdrawn($1, $2, $3, $4)`, [paid, thanks.message_id, "the buyer is satisfied: no change asked", OWNER]);
     expect((await obligations()).some((x) => x.id === paid)).toBe(false);
     expect((await thread()).revisionOwed).toBe(false);
+  });
+
+  it("v114: resolved: true acknowledges but cannot erase an owed correction; only fulfilment, refund/cancellation or the buyer's withdrawal (owner-recorded) end it", async () => {
+    const k = await R.one(`fleet.fleet_econ_paypal_checkout($1, $2::jsonb)`, [F.id, JSON.stringify({ venture: "landlord", amountMinor: 900, description: "Fire safety checklist PDF",
+      idempotencyKey: `t:${crypto.randomBytes(8).toString("hex")}` })]);
+    const o = (await R.q(`INSERT INTO fleet.fleet_customer_orders (agent_id, venture_id, checkout_id, item, amount_minor, currency, fulfilment, access_token, origin_hash, buyer_email, payment_status, status,
+        fulfilled_at, fulfilment_evidence)
+      SELECT agent_id, venture_id, checkout_id, description, amount_minor, currency, 'digital_file', $2, encode(sha256('buyer3'::bytea), 'hex'), 'sam@example.test', 'paid', 'delivered',
+        now() - interval '10 days', '{"delivery":"sent"}'::jsonb
+        FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1 RETURNING order_id`, [k.checkout.checkoutId, crypto.randomBytes(32).toString("hex")]))[0].order_id;
+    const msg = async (author: "buyer" | "agent", body: string, daysAgo: number, resolves = false) => (await R.q(`INSERT INTO fleet.fleet_customer_messages
+      (agent_id, order_id, author, body, resolves, created_at) VALUES ($1, $2, $3, $4, $5, now() - make_interval(secs => $6 * 86400)) RETURNING message_id`,
+      [F.id, o, author, body, resolves, daysAgo]))[0].message_id as string;
+    const owed = async () => (await obligations()).find((x) => x.id === o);
+    const conversation = async () => (await R.q(`SELECT fleet.fleet_order_conversation(o) AS c FROM fleet.fleet_customer_orders o WHERE o.order_id = $1`, [o]))[0].c;
+    await delivery("sent", 10 * 1440, { order: o, file: "fire checklist v1" });                     // delivered 10 days ago
+    const request = await msg("buyer", "Please add the alarm test dates to point 4.", 9);
+    // THE BYPASS: the agent answers with resolved: true and delivers nothing. Before v114 the request vanished and the
+    // conversation closed 7 days later. Now it is acknowledged, still owed, and the conversation stays open.
+    await msg("agent", "Noted, all done.", 8, true);
+    expect(await owed()).toMatchObject({ state: "acknowledged", revisionOwed: true });
+    expect((await R.econ(F, "order.thread", { orderId: o })).revisionOwed).toBe(true);
+    expect(await conversation()).toMatchObject({ open: true });
+    // An agent cannot record a withdrawal: the function is the owner's (an operator actor; the agent role cannot run it).
+    const agentDb = new pg.Pool({ connectionString: R.pgc.agentUrl, max: 1 });
+    try {
+      await expect(agentDb.query(`SELECT fleet.fleet_admin_order_correction_withdrawn($1, $2, 'x', 'operator:agent')`, [o, request])).rejects.toThrow(/permission denied/);
+    } finally { await agentDb.end(); }
+    await expect(R.one(`fleet.fleet_admin_order_correction_withdrawn($1, $2, $3, $4)`, [o, request, "agent says so", `agent:${F.id}`])).rejects.toThrow(/FLEET_APPROVAL_REQUIRED/);
+    // Only the buyer's own message on this order, written since the request began, can be the withdrawal.
+    const agentText = await msg("agent", "The buyer withdrew it.", 7);
+    await expect(R.one(`fleet.fleet_admin_order_correction_withdrawn($1, $2, $3, $4)`, [o, agentText, "agent-quoted", OWNER])).rejects.toThrow(/buyer's own message/);
+    expect(await owed()).toMatchObject({ revisionOwed: true });
+    // A genuine withdrawal: the buyer's message, recorded by the owner, with a permanent event. The request is no longer owed.
+    const withdrawal = await msg("buyer", "Actually, leave point 4 as it is.", 6);
+    expect(await R.one(`fleet.fleet_admin_order_correction_withdrawn($1, $2, $3, $4)`, [o, withdrawal, "the buyer withdrew the change", OWNER])).toMatchObject({ ok: true, revisionOwed: false });
+    const replyOwed = await owed();                                    // no correction owed; the buyer's message still deserves a reply
+    expect(replyOwed).toMatchObject({ state: "unanswered" });
+    expect(replyOwed!.revisionOwed).toBeUndefined();
+    await msg("agent", "Understood, point 4 stays as it is.", 5, true);   // once nothing is owed, resolved: true closes the conversation
+    expect(await owed()).toBeUndefined();
+    expect((await R.q(`SELECT detail->>'buyerMessageId' AS m FROM fleet.fleet_events WHERE event_type = 'order_correction_withdrawn' AND detail->>'orderId' = $1`, [o]))
+      .map((e) => e.m)).toEqual([withdrawal]);
+    await expect(R.q(`DELETE FROM fleet.fleet_order_correction_withdrawals WHERE order_id = $1`, [o])).rejects.toThrow();   // history is immutable
+    // A later buyer message is a new request; refund ends it (as does cancellation; fulfilment is v113's effective delivery).
+    await msg("buyer", "Sorry — one more: add the fire door checks.", 0);
+    expect(await owed()).toMatchObject({ revisionOwed: true });
+    await R.q(`UPDATE fleet.fleet_customer_orders SET payment_status = 'refunded', refunded_minor = amount_minor WHERE order_id = $1`, [o]);
+    expect((await owed())?.revisionOwed).toBeUndefined();                 // refunded: no correction owed (a reply may still be)
+    expect((await R.econ(F, "order.thread", { orderId: o })).revisionOwed).toBe(false);
   });
 
   it("v111: a listing, pin or storefront product that sells elsewhere names a published offer whose capability check still covers it", async () => {

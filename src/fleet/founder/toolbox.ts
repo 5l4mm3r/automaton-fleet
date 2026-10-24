@@ -1878,6 +1878,12 @@ export class FounderToolbox {
           }
           // v105: an invoice is written to the workspace from the record (text and PDF) — deliver those files as they are.
           if (op === "order.invoice" && (r as { ok?: unknown }).ok === true) r = await this.writeInvoice(r as { invoice: { number: string; text: string } } & Record<string, unknown>);
+          // v114 (2026-10-24): resolved: true acknowledges the conversation; it does not fulfil an owed correction. Said plainly.
+          if (op === "order.message" && args.resolved === true && (r as { ok?: unknown }).ok !== false
+            && (this.obligations ?? []).some((o) => o.id === args.orderId && o.revisionOwed)) {
+            r = { ...(r as Record<string, unknown>), correction: "ACKNOWLEDGED, NOT FULFILLED: the buyer's requested correction is still owed — deliver the "
+              + "revised files (a NEW review, wallet deliver with resendReason), or the order is refunded or cancelled, or the buyer withdraws it (the owner records that)" };
+          }
           // 2026-10-19: an answer to a buyer settles this turn's sleep check for that request (a refused one is not an answer).
           if (op === "order.message" || op === "enquiry.reply" || op === "enquiry.quote" || op === "enquiry.decline") {
             const key = String(op === "order.message" ? args.orderId : args.enquiryId);

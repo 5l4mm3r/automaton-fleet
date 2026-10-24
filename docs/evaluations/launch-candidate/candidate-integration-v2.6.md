@@ -50,6 +50,10 @@ local integration and preparation only. Nothing has been pushed, deployed, resto
      **`-pceRV5` v112 with the original's `local_only`** (started 23 Oct 15:47).
    - **Missing:** the desktop's inventory (`/tmp/fleet-pg-*` and any system cluster with its versions). It is not in the
      package, so the desktop may hold similar clusters.
+   - **Historical, excluded:** every cluster that ran the original v112 is a **historical test environment**. Each is
+     preserved as it is, never upgraded, and **excluded from deployment and rehearsal inputs**. The production rehearsal
+     (`fleet-rollout.sh rehearse`) uses a fresh read-only dump of the live database, so it is production-equivalent and
+     independent of those clusters. The missing desktop inventory does not block it.
    - **Decision and evidence:** production is at v111 (operator API, read 24 Oct) and has never applied v112. No
      registry that ran the original is a registry of value: each is a throwaway test or scenario database, created per
      run with fake or local providers. So production receives the **amended** v112, then v113. Because the runner
@@ -101,103 +105,105 @@ local integration and preparation only. Nothing has been pushed, deployed, resto
    - restoring needs the owner's explicit `FLEET_ROLLOUT_AUTO_RESTORE=1` for that run;
    - a failure before the migration still restores runtime.env and the release, with no database touched.
 
-## The `resolved:true` correction bypass: proposed repair (for approval; not implemented)
+## Correction obligation: acknowledging and fulfilling separated (v114, implemented)
 
-**Status: OPEN.** v113 (desktop) makes byte-identical resends answer nothing, but keeps an agent message with
-`resolved:true` as a resolution, so the bypass remains in this combined candidate. The repair below is proposed, not built.
+**The bypass is closed.** Until v113, `order_message {resolved:true}` after a buyer's request ended the owed revision and
+closed the conversation 7 days later with no new file. v114 (`migrations-phase114.ts`, restating v113's functions and v108's
+closure):
+- `resolved:true` **acknowledges** the conversation: no reply is owed, and the state is `acknowledged`.
+- A buyer's request after the order's latest effective delivery (v113) stays **owed** until one of:
+  - **verified fulfilment:** a later effective delivery, meaning changed files whose review passed `required_content`
+    (v113);
+  - **the order's end:** refunded, reversed or cancelled;
+  - **a genuine buyer withdrawal:** the buyer's **own message** on that order, written since the request began, recorded
+    by the **owner** (`fleet_admin_order_correction_withdrawn`, CLI `economy-order-correction-withdrawn <orderId>
+    <buyerMessageId> <reason>`). An operator actor is required, the agent role cannot execute it, an agent's message is
+    refused, and each withdrawal is an immutable row plus a permanent `order_correction_withdrawn` event. There is no
+    agent-quoted withdrawal.
+- A buyer message after a withdrawal is a new request.
+- While a correction is owed, the order conversation does not close as "resolved".
+- **Agent-facing:** the brief now says `resolved:true` only acknowledges. A `resolved:true` answer while a correction is
+  owed returns "ACKNOWLEDGED, NOT FULFILLED".
+- **Cost bound** (`mind.ts`): an owed item re-wakes the agent for a recheck. While the only owed work is acknowledged,
+  unchanged corrections, the recheck backs off (15, 30, 60 minutes … at most 24 hours), so one unanswered "thanks!" no
+  longer means a paid wake every 15 minutes until the owner acts. A new buyer message, an unanswered message or a first
+  delivery owed keeps or resets 15 minutes. The obligation never leaves the packet.
 
-**Defect.** `fleet_customer_obligations` (v100, restated in v112) closes an order conversation at the later of its last sent
-delivery and its last agent message with `resolves`. `revisionOwed` exists only while the conversation is open. So
-`order_message {resolved:true}` after a buyer's change request erases the owed revision with no new file. `deliveryOwed`
-(the first delivery) is not affected: it follows the order's status. An owner alert alone would not close this.
+**Policy consequence for the owner.** FleetController does not classify a buyer's words. Every buyer message after a
+delivery (a question, a "thanks!") is treated as a request. It ends only by redelivery, refund or cancellation, or the
+owner recording the buyer's withdrawal. So "thanks"-type messages need the owner's one-line withdrawal, which is visible
+in Fleet Command's events.
 
-**Proposed behaviour.** This changes the obligation policy, so it waits for approval.
-- `resolved:true` keeps one meaning: the conversation is **acknowledged**. No reply is owed, and the state is no longer
-  `unanswered`.
-- A **change request**, meaning a buyer message after the order's latest sent delivery, stays owed (`revisionOwed`)
-  whatever `resolves` says, until one of these three things happens:
-  1. **Completion evidence:** a later sent delivery of that order whose review passed. This rule exists today.
-  2. **Explicit withdrawal:** the agent records `withdraw_change {orderId, quote}`, where `quote` (3–300 characters) is
-     verbatim text from a buyer message on that order at or after the request. FleetController checks the quote against
-     the record and refuses otherwise. Each withdrawal is a permanent event in Fleet Command with the quote, so "Thanks,
-     that's perfect" and "never mind" close honestly, and the owner can see what was relied on.
-  3. **The order ends:** a refund or cancellation, under today's rules.
-- A buyer message after a withdrawal opens a new change request.
-- The founder tool says it plainly: `resolved:true` while a change is owed answers "acknowledged; the change is still owed
-  — deliver it, or withdraw_change quoting the buyer".
+**Focused regression:**
+- `fleet-v100-obligations-pg`, the new v114 test:
+  - the bypass: `resolved:true` with no delivery leaves the request acknowledged and owed, `order.thread` reports it,
+    and the conversation stays open past 7 days;
+  - the agent role is denied the owner function, and a non-operator actor is refused;
+  - an agent's message is refused as a withdrawal;
+  - a genuine withdrawal clears it, with its event and immutable history;
+  - a new buyer message reopens it, and a refund ends it.
+- The two earlier tests that asserted the bypass now assert the separation (marked v114).
+- `work-continuity` 1t (recheck backoff and reset; first delivery never backed off) and 1u (the "ACKNOWLEDGED, NOT
+  FULFILLED" reply and the brief's wording).
 
-**Residual risk.** An agent could quote the change request itself as the withdrawal. That is visible and auditable, not
-prevented. The stricter alternative, where only a buyer message after the agent's reply can withdraw, would keep a plain
-"thanks!" owed until the 7-day close. With the 15-minute owed recheck, that means up to 4 wakes an hour for 7 days of paid
-inference, so I don't recommend it.
+## Item 5: confirm the runtime key belongs to the funded organisation (owner-side; nothing exposed)
 
-**Focused regression (written with the repair):**
-- PostgreSQL, the v100-obligations style:
-  - (1) a change request answered `resolved:true` with no delivery: still `revisionOwed`, state acknowledged;
-  - (2) then a passing redelivery clears it;
-  - (3) a "Thanks!" withdrawn with a verbatim quote clears it, and the event carries the quote;
-  - (4) a quote found in no qualifying buyer message is refused and the obligation stays;
-  - (5) a new buyer message after a withdrawal reopens it;
-  - (6) a refund clears it;
-  - (7) `deliveryOwed` is unchanged by `resolves`.
-- Toolbox: (8) the acknowledgement wording, and `withdraw_change` refusals.
+1. **VPS (owner, sudo).** Print only the key's last four characters, which the Console shows anyway:
+   `sudo sh -c 'f=$(ls /etc/automaton-fleet/recovery/ | head -1); tr -d "\n" < "/etc/automaton-fleet/recovery/$f" | tail -c 4; echo'`
+   (`sudo ls -l` the folder first if it holds more than one file).
+2. **Console.** Switch to the organisation whose **Billing** page shows the Max-included promotional credit (the funded
+   organisation). Open its **API Keys** page and find the key whose displayed hint ends in those four characters.
+   - **Found there:** the runtime key belongs to the funded organisation. Note the key's workspace and its last-used date;
+     23 Oct 2026 is expected (the last paid runs ended 13:44Z, the key was contained at 14:26Z).
+   - **Not found there:** the key belongs elsewhere and cannot spend the grant. The fix is a new key created in the funded
+     organisation and installed by the owner. Fleet makes no provider change.
 
-It would be **v114**, restating v113's `fleet_customer_obligations(_all)` and order thread. It complements v113:
-v113 decides which delivery can answer a request, and this repair stops `resolved:true` from answering it.
+The check sends no request to the API, and no response header is relied on.
 
-## Item 5: which organisation owns the VPS runtime key, by metadata and the Console (owner-side; not yet done)
+## Credit reconciliation: proposal (for approval; nothing posted, no wallet charged)
 
-I can't read the key: `/etc/automaton-fleet/recovery/` is root-only and this work has no sudo on the VPS. These
-checks use no inference and never show the key. None of them depends on a response header.
-1. **Key hint.** On the VPS (owner, sudo), print only the last four characters, which the Console also shows:
-   `sudo sh -c 'f=$(ls /etc/automaton-fleet/recovery/ | head -1); tr -d "\n" < "/etc/automaton-fleet/recovery/$f" | tail -c 4; echo'`.
-   If the folder holds more than one file, list it with `sudo ls -l` first and choose the key file by name.
-2. **Console → Settings → API keys**, in each organisation the owner can open: the key whose hint ends in those four
-   characters. Note its organisation and workspace, and its **last used** date. It should be 23 Oct 2026: the last paid runs
-   ended 13:44Z and the key was put away at 14:26Z.
-3. **Cross-check with recorded spend:**
-   - Console → Usage/Cost for 23 Oct 2026 in that workspace should show the two engineering runs, scen-89d7c21-b1 ($5.27)
-     and scen-cf86ab8-c1 ($7.213194);
-   - Billing (invoice history) should show the purchase receipted as $49.55 (lot 05f4cb13).
-4. **The credits.** Console → Billing of the **same** organisation should show the Max-included credit grant. If the grant
-   is in another organisation, the runtime key cannot spend it. The fix is then a new key created in the grant's
-   organisation and installed by the owner, never a provider change made by Fleet.
+No recommendation is made on charging agents. An internal agent charge is a transfer inside the Fleet, not a provider
+expense, and it is shown separately below for the owner to decide.
 
-## Credit reconciliation: proposed treatment (for approval; nothing posted)
+**Inputs.** Each comes from a named source and is never estimated. Usage outside Fleet is never attributed to an agent.
 
-**What exists.** Provider credit is held as lots (v70–v73). The one purchased lot, 05f4cb13 (owner card, receipt $49.55
-for $41.29 of credit), has 1,676,179,930 µ¢ ($16.76) remaining on Fleet's books. Lot sources are `owner` (reimbursable to
-the owner) and `treasury` (a prepaid asset). Every AI charge is booked to the agent or treasury that made the call, at
-provider prices; acquisition cost (tax/fees) is allocated per draw.
+| # | Figure | Source |
+|---|---|---|
+| G | promotional grant: amount (USD), date granted, **expiry**, grant identifier | Console → Billing of the organisation confirmed by the key check |
+| Rp | promotional remaining balance | Console → Billing (same page) |
+| Rb | purchased remaining balance | Console → Billing (purchased or prepaid credit, as the Console separates it) |
+| Lb | Fleet's recorded purchased remainder: lot 05f4cb13, **1,676,179,930 µ¢ ($16.76)** | Fleet ledger (v70 lots); read at deployment Group A |
+| Uf | Fleet's own provider consumption since 2026-10-23 14:26Z | Fleet cognition log; **0 expected** (cognition contained, agents paused) |
+| Uc | the provider's usage/cost for the same period, by date | Console → Usage / Cost |
 
-**Figures to read from the Console**, in the organisation confirmed in item 5. They are real figures, never estimates:
-- (a) the promotional grant: its amount, the date granted, its **expiry**, and any grant identifier;
-- (b) the remaining **total** balance, and how the Console splits it between promotional and purchased credit;
-- (c) the order in which the provider applies promotional versus purchased credit, if shown;
-- (d) usage since 23 Oct 14:26Z. Fleet made no calls in that time, so any usage there is not Fleet's.
+**Reconciliation**, computed by code (Decimal, in µ¢) and shown before anything is posted:
+- **Promotional consumption** = G − Rp. Fleet's share is only Fleet's own calls (Uf, by request ID). Anything else is
+  consumption outside Fleet, recorded as an observation.
+- **Purchased consumption** = Lb − Rb. If Uf = 0 and this is not 0, the difference is purchased credit used outside Fleet
+  (or by a draw order the Console shows). It is recorded as an observation with both figures. It is never deducted from
+  an agent and never posted to the GBP books without the owner's word.
+- **No overwrite and no double count:** lot 05f4cb13 stays as recorded, and its remainder changes only by a recorded,
+  explained event. The grant is entered once, as its own lot and never added to the purchased lot.
+- **Draw order:** taken from the Console (which balance falls when Fleet calls), confirmed on the first Fleet calls after
+  enabling inference. It is not assumed.
 
-**Proposed treatment.** It needs one migration, numbered after the v112/v113 decision.
-- A new lot source, **`promotional`**:
-  - `usd_purchased` = the grant amount, `usd_remaining` = the Console's remaining grant balance;
-  - `expires_at` = the expiry, `external_ref` = the grant identifier;
-  - acquisition cost **0** (no tax, no fee), no GBP cost.
-  - Its provider-credit event is a new kind, **`grant`**, never `purchase`. It creates **no owner payable and no treasury
-    asset**: nobody paid for it.
-- **Lot 05f4cb13 is untouched.** The $16.76 is neither overwritten nor re-entered. If the Console's purchased remainder
-  differs from $16.76, the difference is recorded as a reconciliation **observation** with both figures and the reason
-  (for example, the org's own usage outside Fleet). It is posted only on the owner's word, never charged to an agent.
-- **No double counting.** Fleet's available credit = the purchased lots' remainder + the promotional remainder − holds.
-  The grant is entered once, from the Console figure, and usage outside Fleet (d) is never charged to an agent wallet.
-- **Draw order:** the provider's actual order from (c). If the Console doesn't show it, the owner states it; Fleet does not
-  assume it.
-- **Agents' charges for grant-funded calls. Owner choice:**
-  - **(A, recommended)** Agents pay the provider price as today. The amount drawn from the grant is booked as Fleet's
-    *promotional AI credit income*, not owed to anyone, instead of the owner payable. Agent prices and budgets don't jump
-    when the grant ends, and every charge is a real call at a real price.
-  - **(B)** Grant-funded calls cost agents nothing. That is cheaper for agents now, but their measured costs and budgets
-    understate real costs and change when the grant expires.
-- **Expiry:** at the expiry, any unused grant goes to zero by an `expiry` event. There is no GBP posting and no effect on
-  any agent.
+**Proposed records** (a migration after v114; none written yet):
+- lot source **`promotional`**: G, Rp, expiry, grant identifier, acquisition cost 0;
+- provider-credit event kind **`grant`**, never `purchase`;
+- **consumption events tagged by source**, so promotional and purchased consumption are reported separately;
+- an `expiry` event at the grant's expiry.
+
+A promotional draw creates no owner payable (nobody paid for it) and no treasury asset.
+
+**Provider expense versus internal charge**, kept apart in every report:
+- *Provider expense*, actual: purchased consumption at its acquisition cost (owner-funded, owed to the owner as today,
+  v69–v72). Promotional consumption has **no cash cost**.
+- *Internal agent charge*, **proposed only and shown separately**: what agents would be charged for promotional-funded
+  calls. Options for the owner:
+  - none;
+  - the provider list price, with the matching amount shown as a separate internal line.
+
+  The report shows the figure under each option. **No wallet charge or entry is authorised by this proposal.**
 
 ## The saved defective PDFs against the merged inspector (24 Oct)
 
@@ -220,27 +226,27 @@ Run 6 is the limit of file inspection: a readable PDF that does not contain the 
 requested change visible on the page; it is not the inspector. Doubled numbering ("1. 1.") is not detected by any check.
 It is a content-quality limit.
 
-## Tests (combined candidate; non-billable, no inference call, loopback only)
+## Tests (final candidate; non-billable, no inference call, loopback only)
 
-`npx tsc --noEmit` is clean. One sequential run of 26 focused files (`--no-file-parallelism`, 24 Oct):
+`npx tsc --noEmit` is clean.
 
-**26 files and 296 tests passed. Runner exit status 1**, because of **1 unhandled error**. It is the known `work-continuity`
-1j rejection: the test's mock provider returns no `toolCalls` (`mind.ts:1064`, `r.toolCalls.map`). It has been present
-since 51a1f82, and the desktop had it too. It is recorded, not hidden, and not fixed here.
+**Continuity test 1j: fixed narrowly.** The test rig answered a script that returns a never-settling promise (1j's
+simulated kill) at once with `toolCalls: undefined`. The abandoned turn then failed later as an unhandled rejection. The
+rig now awaits a script's promise, so the "killed" call never returns, as the test intends. Nothing is suppressed, and
+runtime code is unchanged. `fleet-founder-work-continuity` gives **31/31, runner exit 0, no unhandled errors**.
 
-| Area | Files (tests) |
-|---|---|
-| Privileges / least privilege | fleet-phase4 (53), fleet-cognition-hardening (16) |
-| Cognition, routing, accounting, local provider | fleet-cognition (23), -routing (26), -routing-pg (8), -accounting (11), -local (7) |
-| Migrations | fleet-v112-local-inference-pg (5: profile seed on upgrade, eligibility time), fleet-f2-migration-paths-pg (2: v8/v24 → v113, clean audit) |
-| Obligations (v113) | fleet-v100-obligations-pg (11) |
-| Hourly limit, all three implementations | work-continuity (29: 1r 8077f6c, 1s eligibility), fleet-founder-hourly-bound (3: f9db421), fleet-client-retry-after (2), fleet-founder-retry-after-fix (7) |
-| Desktop fixes | fleet-local-run2-tool-args (12), fleet-run6-replay (4), fleet-document-render (5), fleet-founder-new-work-midturn (2), fleet-founder-procedures (7), fleet-v76-founder-tools (7) |
-| Inspector | fleet-qa-inspector (10), -v2 (5), -v3 (6), fleet-qa-text-off-page (4) |
-| Release tooling | fleet-release-tooling (22: no automatic restore), fleet-release-script (9) |
+**Affected checks, one sequential run (14 files):**
+- 13 files and 165 tests passed: the v114 regression, obligations (unit and PostgreSQL), the founder runtime and tools,
+  the privilege audits (phase4, including v114's registered writer), the migration paths v8/v24 → **v114**, v112, and
+  the review refusal case.
+- **1 failure:** `fleet-cognition-hardening` L2. A fake provider hangs 600 ms against a 2.5 s controller deadline, and
+  that deadline was exceeded once under VM load. Runner exit 1; no unhandled errors.
+- **Rerun of that file alone, twice: 16/16, exit 0 both times.** It also passed 16/16 in both earlier runs today.
+  Nothing changed today touches the provider or deadline path, so it is recorded as a **timing-sensitive test, not a
+  regression**. It needs a quiet machine for release evidence.
 
-After the run, `fleet-v76-market-fulfilment-pg` (10/10, no errors) ran once, with the one new missing-dependency case
-below.
+**Earlier today, before v114:** the combined merge ran 26 files and 296 tests, all passing. Its runner exit 1 came from
+the 1j unhandled rejection, now fixed.
 
 **Missing PDF dependencies cannot yield a pass.** When a library is not importable, the inspector reports a
 `tool_unavailable` warn, and the file can still say `ok`. FleetController does not trust that.
@@ -251,41 +257,19 @@ never approved. The new case records a pass on an `ok: true` report carrying onl
 The scenario grader's "completed" is not a review. It never read the documents (runs 3–6), and its verdict is not
 evidence of fulfilment.
 
-## Staged deployment proposal (three approval groups)
+## Deployment proposal: one package, three approval groups
 
-**Group 0, before any approval:** the transfer and import (below); reconcile the hourly-limit implementations and v112/v113;
-rerun the focused suites plus the inspector on the saved defective PDFs; then this record names the final combined commit.
+**Package:** the final commit on `fleet/integration-v2.6` (named in "Final candidate" below). Schema **111 → 114**
+(v112 amended, v113 desktop, v114 correction obligation). UI unchanged (the current UI is reused).
 
-**Group A: preparation, nothing live changes.**
-- push the combined branch to `fleet-origin`;
-- on the VPS: `scripts/fleet-build-runtime.sh` → pins (never placeholders);
-- `scripts/fleet-rollout.sh rehearse <pins> 111 <to>`, a throwaway copy of the live data;
-- the free rehearsals (services, founder upgrade, revision; fake provider, £0);
-- a read-only snapshot of the cognition policy, tiers, routing, per-founder budgets and limits, AI-credit lots and holds.
+| Group | What happens | Live effect | Cost |
+|---|---|---|---|
+| **A: prepare** (nothing live changes) | Push the branch. On the VPS: `fleet-build-runtime.sh` → pins (from its output, never placeholders). `fleet-rollout.sh rehearse <pins> 111 114` on a **fresh read-only dump of production** (the historical test clusters are not inputs). The free rehearsals (services, founder upgrade, revision; fake provider). A read-only snapshot of the cognition policy, tiers, routing, budgets, AI-credit lots and holds. | none | £0 (no inference; build time only) |
+| **B: install and Anthropic** (agents paused) | `fleet-release.sh <pins> 111 114 <current UI>`, automatic restore off (default). Verify: runtime identity, schema 114, policy/tiers/routing/budgets equal the snapshot, flags false, cap 2. Then, **only after the key check confirms the funded organisation**: key from recovery to its credential; runtime.env `FLEET_INFERENCE_PROFILE=cloud_allowed`, `FLEET_COGNITION_PROVIDER=anthropic`; `inference-profile-set cloud_allowed "<reason>"` if the profile reads `local_only`; policy re-enabled with the snapshot's values; restart only `automaton-fleet.service`. | controller outage ≈ 45 s (the 89d7c21 install took 45 s) | £0 (agents paused, so no model call) |
+| **C: agents and evaluation** | `fleet-founders.sh` runtime upgrade, one agent at a time, still paused. The **reconciliation report** computed (nothing posted). Then the paid S1 evaluation on frozen terms, imported once. | founder processes restart; still paused | S1 cap **360p**; hold **401,260,935 µ¢ ($4.01)** at plan C terms, re-frozen at approval (plan C's actual S1: 278.50p) |
 
-Stop if anything differs from expectations.
-
-**Group B: install and Anthropic, agents stay paused, no model call.**
-- `scripts/fleet-release.sh <pins> 111 <to> <current UI> …`. Automatic restore is off by default; do not set
-  `FLEET_ROLLOUT_AUTO_RESTORE`.
-- Verify:
-  - the runtime identity matches;
-  - the schema is `<to>`;
-  - policy, tiers, routing and budgets equal the snapshot;
-  - flags false, cap 2, agents paused.
-- Then, **only if item 5 confirmed the organisation:**
-  - move the key back from the recovery folder to its controller credential;
-  - runtime.env: `FLEET_INFERENCE_PROFILE=cloud_allowed` and `FLEET_COGNITION_PROVIDER=anthropic`;
-  - `inference-profile-set cloud_allowed "<owner reason>"` if the profile is local_only;
-  - re-enable the policy with the snapshot's exact values;
-  - restart only `automaton-fleet.service`; `/v1/cognition/status` should show anthropic.
-- Post the **approved** credit reconciliation, if its treatment was approved, from the Console figures.
-
-**Group C: agents and the bounded evaluation.**
-- `scripts/fleet-founders.sh` runtime upgrade, one agent at a time, still paused; record the upgrade IDs;
-- the paid S1 evaluation on terms frozen by `fleet-scenario-terms.sh` (figures below, re-frozen); import once.
-
-Resuming the agents' own work stays the owner's separate word.
+Resuming the agents' own work stays a separate word from the owner. Credit postings follow only the owner's decision on
+the reconciliation proposal.
 
 ## Rollback
 
@@ -320,18 +304,12 @@ review. The delivered files are still checked by hand before any pass is claimed
 
 ## Remaining before approval
 
-1. **Still missing from the transfer:**
-   - the **later proposal archive** and its checksum (no `/mnt/fleetproposal` is mounted);
-   - the desktop's **listing of retained or leftover registries**: `find /tmp -maxdepth 1 -name 'fleet-pg-*'` and, if a
-     system cluster exists, `psql -l` plus `SELECT max(version) FROM fleet.fleet_schema_migrations` per database.
-     It is not in the package.
-
-   Nothing else in this candidate depends on them.
-   - **Retained test clusters on this VM** (5, from 22–23 Oct; one at the original v112): stopping or deleting them is
-     the owner's call; nothing was touched.
-2. **Key organisation (owner, item 5):** the Console and metadata checks in the item 5 section above.
-3. **Credit treatment:** approve (A) or (B) and the promotional lot design in the credit section; read the Console figures listed there.
-4. **Correction obligation:** approve the proposed repair, or the stricter alternative, before it is implemented.
-5. **Pre-existing failures:** 8 pre-existing failures (desktop: `fleet-cognition-anthropic`, `r24-experiments`, `research`,
-   `storefront-gateway-pg`), 2 flaky tests (unnamed), and 1j's unhandled rejection. All are recorded and not hidden; none
-   blocks this candidate.
+1. **Owner checks:** the key check above (four characters on the VPS, then the Console), and the Console figures for the
+   reconciliation (G, Rp, Rb, Uc).
+2. **Owner decisions:** the internal agent charge for promotional-funded calls (none, or list price shown separately),
+   and how the reconciliation is posted. Nothing is posted until then.
+3. **Not blocking:**
+   - the later proposal archive: documentation to transfer when convenient;
+   - the desktop's cluster inventory: those clusters are historical and excluded.
+4. **Known and recorded:** the 8 failures the desktop recorded in `fleet-cognition-anthropic`, `r24-experiments`,
+   `research` and `storefront-gateway-pg` (present before this work; not in the release evidence set).

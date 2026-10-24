@@ -155,6 +155,10 @@ export class PgHubAdmin {
   ownerClaimWaitEnd(orderId: string, reason: string | null, actor: string) {
     return this.one(`SELECT fleet_admin_owner_claim_wait_end($1, $2, $3) AS r`, [orderId, reason, actor]);
   }
+  /** v114: the owner records a buyer's genuine withdrawal of a requested correction (the buyer's own message on that order). */
+  orderCorrectionWithdrawn(orderId: string, buyerMessageId: string, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_order_correction_withdrawn($1, $2, $3, $4) AS r`, [orderId, buyerMessageId, reason, actor]);
+  }
   /** v108: the countries the treasury checkout does not sell to (the owner's supported geography). */
   salesGeography(unsupported: string[], reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_sales_geography($1::text[], $2, $3) AS r`, [unsupported, reason, actor]);

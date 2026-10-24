@@ -79,8 +79,9 @@ export const DELIVER_STEPS = "see what was bought with wallet orders, build the 
 export const REVISE_STEPS = "the buyer wrote AFTER your delivery: if they asked for a change, the REVISION is OWED — change the files in your workspace, review the "
   + "revised files again (a NEW deliverable review of the new bytes), then wallet deliver {orderId, paths, reviewId: that new review, resendReason, "
   + "after: the operationId of the order's latest delivery (wallet operations, or the refusal)}; tell the buyer it is done only after that delivery "
-  + "succeeded, or mark the request resolved (customers order_message, resolved: true) if nothing more is owed; if something blocks it, record the "
-  + "blocker and what unblocks it (record_external_dependency) and tell the buyer";
+  + "succeeded. resolved: true on customers order_message only ACKNOWLEDGES the conversation: the correction stays owed until the revised "
+  + "files are delivered, the order is refunded or cancelled, or the buyer withdraws the request (the owner records a buyer's withdrawal; "
+  + "you cannot). If something blocks it, record the blocker and what unblocks it (record_external_dependency) and tell the buyer";
 
 /** The next-move line while a paid order's delivery is owed (replaces the opportunity / venture push for that wake). */
 export function owedDeliveryLine(ids: string[]): string {
@@ -98,6 +99,8 @@ export function owedRevisionLine(ids: string[]): string {
 /** Desktop run 2026-10-23: a turn that ends asleep while a delivery or revision is owed is looked at again after this long
  *  (one turn, then waiting again): owed work never waits for an unrelated change that may never come. Not a block. */
 export const OWED_RECHECK_MS = 15 * 60_000;
+/** v114 (2026-10-24): the longest owed recheck while only unchanged, acknowledged corrections are owed (doubling from 15 min). */
+export const OWED_RECHECK_MAX_MS = 24 * 3_600_000;
 
 const utc = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
 
@@ -122,6 +125,8 @@ export function obligationLines(list: CustomerObligation[]): string[] {
       return `order ${o.id}: the buyer's message of ${utc(o.lastBuyerAt)} is UNANSWERED${n} — read it with customers order_thread, answer with customers order_message; `
         + `an acknowledgement, or an honest update on what is blocking you, is an answer.${owedToo}`;
     }
+    // v114 (2026-10-24): an acknowledged correction is still owed — resolved: true acknowledges, it does not fulfil.
+    if (o.revisionOwed) return `order ${o.id}: answered ${utc(o.repliedAt ?? o.lastBuyerAt)}; the buyer's request of ${utc(o.since)} is still OWED${o.delivering ? " (a delivery is in progress)" : ""}.${owedToo}`;
     return `order ${o.id}: answered ${utc(o.repliedAt ?? o.lastBuyerAt)}, not yet resolved (the buyer's request of ${utc(o.since)})${o.delivering ? "; a delivery is in progress" : ""} — `
       + `resolved by delivering the revised files (wallet deliver, with resendReason) or by customers order_message with resolved: true once nothing more is owed.${owedToo}`;
   });

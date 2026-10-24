@@ -1456,6 +1456,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_cognition_cost_exceptions: new Set(["svc_cognition_routed_record", "fleet_admin_cognition_exception_allocate"]),
     fleet_engineering_cognition_calls: new Set(["fleet_admin_engineering_calls_import"]),
     fleet_provider_credit_holds: new Set(["fleet_admin_engineering_credit_hold", "fleet_admin_engineering_credit_release"]),
+    // v114: a buyer's withdrawal of a correction is recorded by the owner only.
+    fleet_order_correction_withdrawals: new Set(["fleet_admin_order_correction_withdrawn"]),
     fleet_knowledge_candidates: new Set(["fleet_econ_knowledge_candidate"]),
   };
   const fns = await db.query<{ name: string; src: string }>(

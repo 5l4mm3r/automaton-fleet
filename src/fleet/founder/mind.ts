@@ -47,7 +47,7 @@ import { MAX_FAILED_ATTEMPTS, filesState } from "./loop-guard.js";
 import { procedureLine, recordProcedure } from "./procedures.js";
 import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineClass } from "./task-classifier.js";
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
-import { OWED_RECHECK_MS, newestBuyerMessage, obligationLines, owedDeliveryLine, owedRevisionLine, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
+import { OWED_RECHECK_MAX_MS, OWED_RECHECK_MS, newestBuyerMessage, obligationLines, owedDeliveryLine, owedRevisionLine, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
 import { officeState } from "./exec-sandbox.js";
 import { CARRY_MAX_CHARS, compact, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
 
@@ -460,12 +460,28 @@ export class FounderMind {
    *  founder's model calls were made (the controller counts them over a rolling hour) and how often the bound refused in a row. */
   private readonly callTimes: number[] = [];
   private hourlyRefusals = 0;
+  /** v114: the owed set at the last owed recheck and how many rechecks in a row found it unchanged. */
+  private owedRecheck: { sig: string; streak: number } | null = null;
   /** 2026-10-21: when this turn's attention was read (its packet shows events up to here); the next packet counts from it. */
   private statusReadAt: string | null = null;
   private idleBackoff = 0;
   private idleSkip = 0;
   /** v62: when a declared hibernation's safety re-check is due (null = not hibernating; undefined = not yet restored). */
   private hibernateUntil: number | null | undefined = undefined;
+
+  /**
+   * v114 (2026-10-24): resolved: true no longer clears a correction, which stays owed until a redelivery, a refund or
+   * cancellation, or a buyer's withdrawal the owner records. While the only owed work is acknowledged corrections and nothing
+   * about them changed since the last recheck, the recheck backs off (15 min, 30, 60 … at most 24 h) instead of a paid wake
+   * every 15 minutes. A first delivery still owed, an unanswered message, or any change (a new buyer message, a new order)
+   * keeps or resets 15 minutes. The obligation itself is unchanged and stays in every packet.
+   */
+  private owedRecheckMs(owed: CustomerObligation[]): number {
+    const quiet = owed.every((o) => !o.deliveryOwed && o.revisionOwed === true && o.state === "acknowledged");
+    const sig = owed.map((o) => `${o.id}:${o.state}:${o.lastBuyerAt}:${o.buyerMessages}`).sort().join("|");
+    this.owedRecheck = quiet && this.owedRecheck?.sig === sig ? { sig, streak: this.owedRecheck.streak + 1 } : { sig, streak: 0 };
+    return quiet ? Math.min(OWED_RECHECK_MAX_MS, OWED_RECHECK_MS * 2 ** Math.min(this.owedRecheck.streak, 7)) : OWED_RECHECK_MS;
+  }
 
   /** One model call made (the controller logged it). */
   private noteCall(): void {
@@ -1146,7 +1162,7 @@ export class FounderMind {
     const cutOff = !finished && (sizeStop || !!stopCode || result.steps >= maxSteps);
     // Desktop run 2026-10-23: a turn that ends asleep while a delivery or revision is owed gets a review time, so the owed work is
     // looked at again (the agent answered the buyer, slept, and nothing woke it for the remaining 41 minutes).
-    if (W && !owner && finished && owedOrders.length && !reviewAt) reviewAt = new Date(Date.now() + OWED_RECHECK_MS).toISOString();
+    if (W && !owner && finished && owedOrders.length && !reviewAt) reviewAt = new Date(Date.now() + this.owedRecheckMs(owedOrders)).toISOString();
     const planText = outcome;   // what the founder itself wrote (the carried plan); the note below is the platform's
     if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${stopCode === REPEATING_STOP ? `was ended after ${result.steps} steps that only repeated refused actions` : stopCode === "FLEET_NEW_PRIORITY" ? `was paused after ${result.steps} steps because new customer work arrived — it comes first` : stopCode ? `was stopped by a runtime restart after ${result.steps} steps` : sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
     // 2026-10-18 (work continuity): a cut-off turn leaves its working record for the next turn (and a restart); a finished
