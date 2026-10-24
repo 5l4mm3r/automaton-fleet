@@ -56,6 +56,15 @@ export const CONTINUITY_MISSING_OFFER = "00000000-0000-4000-8000-00000000c0de";
 const RECALC = "if [ -s revised/landlord-tracker.xlsx ]; then echo 'rc=0 (recalculated earlier: revised/landlord-tracker.xlsx)'; "
   + "else mkdir -p revised && cd product && soffice --headless --convert-to xlsx --outdir ../revised landlord-tracker.xlsx; echo rc=$?; ls -l ../revised; fi";
 
+/**
+ * The order whose request is answered but still open, as the packet's obligation line states it — before v114 "answered …,
+ * not yet resolved", since v114 "answered …; the buyer's request of … is still OWED" (Group A, 24 Oct: the harness kept the
+ * old wording, never saw the open order after the renderer returned, and never delivered — checks 4c/4d).
+ */
+export const openOrderOf = (packet: string): string | null =>
+  /order ([0-9a-f-]{36}): answered [^;]*?, not yet resolved/.exec(packet)?.[1]
+  ?? /order ([0-9a-f-]{36}): answered [^;]*?; the buyer's request of [^;]*? is still OWED/.exec(packet)?.[1] ?? null;
+
 /** v115: the buyer message to classify — named in the packet's work line, or the latest buyer message in the thread read this turn. */
 const toClassify = (packet: string, outputs: string): string | null => {
   const named = /CLASSIFY the buyer's messages? ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(packet);
@@ -99,7 +108,7 @@ export class RevisionRehearsalModel extends ScriptedProvider {
     const call = (name: string, args: Record<string, unknown>): ToolCall => ({ id: `rv${inTurn}-${name}-${tools.length}-${++this.seq}`, name, arguments: args });
     const sleep = (reason: string, wakeOn: string) => call("sleep", { reason, wakeOn });
     const owed = /order ([0-9a-f-]{36}): the buyer's message of [^;]*? is UNANSWERED/.exec(first)?.[1] ?? null;
-    const open = owed ?? /order ([0-9a-f-]{36}): answered [^;]*?, not yet resolved/.exec(first)?.[1] ?? null;
+    const open = owed ?? openOrderOf(first);
     const reviewId = (text: string) => /"reviewId":"([0-9a-f-]{36})"/.exec(text)?.[1] ?? null;
     // Its own calls so far in this turn (what it has already said to the buyer).
     const made = req.messages.filter((m) => m.role === "assistant").flatMap((m) => (m as { toolCalls?: ToolCall[] }).toolCalls ?? []);
