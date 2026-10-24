@@ -442,16 +442,47 @@ export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS, 
   return text;
 }
 
+const HOUR_MS = 3_600_000;
+
 export class FounderMind {
   turns = 0;
   readonly routing: RoutingStats = { routedTurns: 0, steps: { T2: 0, T3: 0 }, routineCalls: 0, escalations: 0, escalationsReused: 0, actionBoundarySteps: 0, thinkingDropped: 0, budgetStops: 0, slimWakeups: 0, idleNudges: { decide: 0, execute: 0, opportunity: 0, hibernate: 0 }, lastRoute: null };
   private restUntil = 0;
+  private restReason = "provider rate limit";
+  /** Desktop runs 2–3: at the hourly call bound the founder retried every heartbeat (~1 s) until the run ended. When this
+   *  founder's model calls were made (the controller counts them over a rolling hour) and how often the bound refused in a row. */
+  private readonly callTimes: number[] = [];
+  private hourlyRefusals = 0;
   /** 2026-10-21: when this turn's attention was read (its packet shows events up to here); the next packet counts from it. */
   private statusReadAt: string | null = null;
   private idleBackoff = 0;
   private idleSkip = 0;
   /** v62: when a declared hibernation's safety re-check is due (null = not hibernating; undefined = not yet restored). */
   private hibernateUntil: number | null | undefined = undefined;
+
+  /** One model call made (the controller logged it). */
+  private noteCall(): void {
+    const now = Date.now();
+    this.callTimes.push(now);
+    while (this.callTimes.length && this.callTimes[0] <= now - HOUR_MS) this.callTimes.shift();
+    this.hourlyRefusals = 0;
+  }
+  /**
+   * The hourly call bound refused (or the controller's count shows it reached): rest until the oldest call that keeps the
+   * count at the bound leaves the rolling hour — known from this runtime's own calls — and otherwise (after a restart, or
+   * when the controller counts calls this runtime did not see) back off 60 s, doubling. Never longer than 10 minutes at a
+   * time, never shorter than 30 s; the heartbeat loop keeps running (shutdown and deadlines are unaffected) and makes no call
+   * while resting. The bound itself is FleetController's and is unchanged.
+   */
+  private restForHourlyBound(max: number): void {
+    const now = Date.now();
+    const recent = this.callTimes.filter((t) => t > now - HOUR_MS);
+    const known = max > 0 && recent.length >= max ? recent[recent.length - max] + HOUR_MS + 2_000 : null;
+    const backoff = now + Math.min(600_000, 60_000 * 2 ** Math.min(this.hourlyRefusals, 4));
+    this.hourlyRefusals++;
+    this.restUntil = Math.min(now + 600_000, Math.max(now + 30_000, known ?? backoff));
+    this.restReason = `hourly call limit${max > 0 ? ` (${max})` : ""} reached, next call from ${new Date(this.restUntil).toISOString()}`;
+  }
 
   constructor(private readonly o: { ports: MindPorts; toolbox: FounderToolbox; stateDir: string; maxStepsPerTurn?: number; log?: (event: string, detail?: Record<string, unknown>) => void;
     /** v62: the declared-hibernation safety re-check interval (default HIBERNATION_SAFETY_MS). 0 turns event-driven hibernation off (the timer backoff only): tests of slim-packet mechanics. */ hibernationSafetyMs?: number;
@@ -505,7 +536,12 @@ export class FounderMind {
       return { ...result, reason: owner };
     }
     // The provider asked us to slow down: rest (no inference) until the advertised time.
-    if (Date.now() < this.restUntil) return { ...result, reason: "resting: provider rate limit" };
+    if (Date.now() < this.restUntil) return { ...result, reason: `resting: ${this.restReason}` };
+    // The hourly call bound is reached (FleetController's count): rest until a call can be made, no call to be refused.
+    if (Number.isFinite(Number(status.turnsLastHour)) && Number(status.maxTurnsPerHour) > 0 && Number(status.turnsLastHour) >= Number(status.maxTurnsPerHour)) {
+      this.restForHourlyBound(Number(status.maxTurnsPerHour));
+      return { ...result, reason: `resting: ${this.restReason}` };
+    }
     const routedNow = !!this.o.routed && (status.routing as { active?: unknown } | undefined)?.active === true;
     // v62: the owner's dashboard messages interrupt any rest or hibernation (the explicit pause above still holds them).
     const attention = status.attention as { ownerPending?: unknown; openTurn?: unknown } | undefined;
@@ -559,7 +595,8 @@ export class FounderMind {
         r = this.o.taskClass ? await this.o.ports.infer(fit(messages), waitMs, { taskClass: this.o.taskClass }) : await this.o.ports.infer(fit(messages), waitMs);
       } catch (err) {
         const code = (err as { code?: string }).code ?? "FLEET_COGNITION_ERROR";
-        if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED") this.restUntil = Date.now() + 60_000;
+        if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED" || code === "FLEET_RATE_LIMITED") { this.restUntil = Date.now() + 60_000; this.restReason = "rate limit"; }
+        if (code === "FLEET_COGNITION_RATE_LIMITED") this.restForHourlyBound(Number(status.maxTurnsPerHour) || 0);
         this.logDecision({ turn: this.turns, step, stopped: code });
         // A conversation the controller refuses as malformed is not kept: the next turn starts clean.
         // So is one the provider rejected as invalid (e.g. a thinking-continuity mismatch): no founder stays wedged.
@@ -567,6 +604,7 @@ export class FounderMind {
         return { ...result, ran: result.steps > 0, reason: `stopped: ${code}` };
       }
       result.ran = true;
+      this.noteCall();
       result.steps++;
       result.chargedCents += r.chargedCents;
       // Every requested call is kept and answered (the controller already refused more than MAX_TOOL_CALLS_PER_RESPONSE).
@@ -959,7 +997,8 @@ export class FounderMind {
         r = await this.o.ports.infer(onlyLatestImages(onlyLatestThinking(messages)), waitMs, cls.route, FOUNDER_RUNTIME_DOCTRINE, owner ? { conversationTurn: owner.turnId } : undefined);
       } catch (err) {
         const code = (err as { code?: string }).code ?? "FLEET_COGNITION_ERROR";
-        if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED") this.restUntil = Date.now() + 60_000;
+        if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED" || code === "FLEET_RATE_LIMITED") { this.restUntil = Date.now() + 60_000; this.restReason = "rate limit"; }
+        if (code === "FLEET_COGNITION_RATE_LIMITED") this.restForHourlyBound(Number(status.maxTurnsPerHour) || 0);
         this.logDecision({ turn: this.turns, routed: true, step, taskClass: cls.taskClass, expectedTier: cls.tier, stopped: code });
         if (result.steps > 0) {
           // 2026-10-22: a turn stopped mid-work by a refused or failed model call (provider error, run budget spent, run
@@ -979,6 +1018,7 @@ export class FounderMind {
         return { ...result, ran: result.steps > 0, reason: `stopped: ${code}` };
       }
       result.ran = true;
+      this.noteCall();
       result.steps++;
       result.chargedCents += r.chargedCents;
       const tier = (r.route?.tier === "T3" ? "T3" : "T2") as "T2" | "T3";
