@@ -423,6 +423,48 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## INSTALLED: 5ee36d4 in production (Groups B and C, Agent-1 only), 24 Oct 20:57–20:59Z
+
+Approved by the owner (Groups B and C for commit 5ee36d4 / build 09d77dac…). Run: `bash ~/rlc134/install.sh`.
+- **Before mutation:**
+  - **Script:** the staged script matched the reviewed one in full: SHA-256
+    `fe51ad15e0162cba530f4a6bc70a170a0dbc594f010c98f0316b63deafa7e4ee` (staged copy, repo file and commit b01433f).
+  - **Pins:** commit, build and lockfile matched; the installed release's own build identity was `09d77dac…` / `1df54e35…`;
+    the UI package sha256 was `77ce19a4…`.
+  - **Production:** schema 111 on 89d7c21; both agents paused; policy off; provider none; four flags false;
+    `FLEET_ROLLOUT_AUTO_RESTORE` unset. The script's own gate passed.
+  - **Baseline:** `~/rlc134/baseline-pre-install-5ee36d4-20261024T205709Z`, full dump with 5,342 TOC entries. Kept;
+    never restored.
+- **Release:** `RELEASE 5ee36d4 DEPLOYED 20:59:08Z`, schema 115, root UI 0.26.2. **Outage 20:58:12–20:58:59Z (47 s).**
+  Cutover reconciliation OK (3,810 events preserved, none purged). `runtime_approved` and `production_deployed` recorded.
+- **Agent-1:** 89d7c21 → 5ee36d4, outcome **verified** (prepared 20:59:12Z, committed and verified 20:59:14Z).
+  - **Upgrade ID:** `e193e75a-2185-4452-860b-f9045645c94e`.
+  - **Rollback handle**, the same ID, owner gate:
+    `sudo /opt/automaton-fleet/current/scripts/fleet-founders.sh rollback-runtime 01M3F50SH7PNX2E3GST13J52AS e193e75a-2185-4452-860b-f9045645c94e <reason>`.
+    No rollback ID exists, because no rollback has been made.
+  - **Status:** registered and pinned to 5ee36d4 / 09d77dac…; new PID 2004178; paused.
+- **Agent-2:** runtime b60e262, **PID 866408 before and after**, unit untouched, paused. It heartbeats to the new controller
+  (last heartbeat 17 s old at 21:00:25Z).
+- **Verification (script and by hand):**
+  - readyz 200; `current` is 5ee36d4; schema 115; ledger verify true and **ledger head 1176 unchanged**;
+  - **inference off**: policy `cognition_enabled` false, `FLEET_COGNITION_PROVIDER=none`, Fleet Control ceiling unset;
+  - **tiers byte-identical** (T1 Haiku 2,000; T2 Sonnet adaptive 8,000; T3 Opus adaptive 16,000, all enabled);
+  - inference profile `cloud_allowed`, set by the migration ("kept as configured");
+  - `REAL_REPLICATION_ENABLED`, `REAL_PAYMENTS_ENABLED`, `OWNER_SWEEP_ENABLED` and `FLEET_DRY_RUN_CHILD` all false;
+  - permissions closed; the release carries the 4,000 cap and the v115 review;
+  - runtime.env pins: 5ee36d4 / 09d77dac….
+- **Settings:** every group identical before and after: cognition policy, tiers, routing, founder cognition, Fleet Control
+  AI, review policy, AI-credit lots, credit balance and holds. They are also identical to the Group A capture of 18:51Z.
+- **History:** the 329 permanent events up to the pre-install boundary (id 10374) have the same digest
+  (`6ea8ca6f…`). Two permanent events were added (the release and Agent-1's upgrade record).
+- **Expected differences only:**
+  - controller-side PIDs (controller, Operator API, custody, fetcher, dashboard, identity, browser) and Agent-1's PID;
+  - registry runtime 5ee36d4; schema 115;
+  - two `api_auth_failed` at 20:59:05Z: founders' loopback heartbeats during the restart, as usual (48 in 7 days);
+  - the outside-monitor heartbeat failed once, at 20:58:33Z, during the outage (`FAIL controller dashboard operator-api`); its next run at 21:03:49Z reported `ok`, and the unit is no longer failed.
+- **Not done:** no key used, no inference call, no credit entry, no model or budget change, no agent resumed, no database
+  restored.
+
 ## B/C approval package for 5ee36d4 (prepared 24 Oct ~20Z; nothing installed, activated or posted)
 
 Group A is complete and the candidate is frozen. `count_tokens` is deferred; the retired key in
