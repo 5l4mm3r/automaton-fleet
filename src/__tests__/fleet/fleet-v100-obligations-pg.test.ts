@@ -145,6 +145,10 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     const OUTCOME = "The renewal dates show as dates, not numbers";
     expect(await classify(orderId, fault, "correction", { criteria: [{ outcome: OUTCOME, kind: "change" }] })).toMatchObject({ ok: true, classification: "correction" });
     expect(await classify(orderId, news, "conversation")).toMatchObject({ ok: true, classification: "conversation" });
+    // The agent's own read (customers obligations) carries the same work: the runtime's revision review reads the correction
+    // and its criteria from it at review time (owner, 24 Oct: phrases only where a correction declared them).
+    expect((await R.econ(F, "customer.obligations", {})).obligations.find((x: any) => x.id === orderId))
+      .toMatchObject({ work: { corrections: [expect.objectContaining({ sourceMessageId: fault, criteria: [{ outcome: OUTCOME, kind: "change" }] })] } });
     const [d] = await delivery("queued", 0, { file: "corrected tracker", reviewId: await review(orderId, "pass", [OUTCOME]) });
     expect((await obligations())[0]).toMatchObject({ delivering: true, work: { corrections: [expect.objectContaining({ criteria: [{ outcome: OUTCOME, kind: "change" }] })] } });
     await R.q(`UPDATE fleet.fleet_order_deliveries SET status = 'sent', sent_at = now() WHERE delivery_id = $1`, [d.delivery_id]);

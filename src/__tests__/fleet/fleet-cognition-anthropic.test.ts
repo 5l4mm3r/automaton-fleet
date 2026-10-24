@@ -88,9 +88,12 @@ describe("Anthropic protocol mapping and strict parsing (unit)", () => {
     expect(parseAnthropicMessage(msg({ usage: undefined }))).toMatchObject({ usage: null });
     expect(parseAnthropicMessage(msg({ usage: { input_tokens: 3 } }))).toMatchObject({ usage: null });
     expect(parseAnthropicMessage(msg({ usage: { input_tokens: 3, output_tokens: 1, cache_read_input_tokens: null } }))).toMatchObject({ usage: { inputTokens: 3, outputTokens: 1 } });
+    // A max_tokens stop may have truncated its tool call: it is never returned for execution (owner, 24 Oct: dropped and
+    // counted, the text kept, instead of refusing the whole response).
+    expect(parseAnthropicMessage(msg({ stop_reason: "max_tokens", content: [{ type: "tool_use", id: "toolu_1", name: "exec", input: {} }] })))
+      .toMatchObject({ toolCalls: [], stopReason: "max_tokens", cutToolCalls: 1 });
     const unsafe = [
       "{ nope", "[]", msg({ type: "error" }), msg({ stop_reason: "mystery" }),
-      msg({ stop_reason: "max_tokens", content: [{ type: "tool_use", id: "toolu_1", name: "exec", input: {} }] }), // possibly truncated
       msg({ stop_reason: "end_turn", content: [{ type: "tool_use", id: "toolu_1", name: "exec", input: {} }] }),
       msg({ stop_reason: "tool_use", content: [{ type: "text", text: "no calls" }] }),
       msg({ stop_reason: "tool_use", content: [{ type: "tool_use", id: "toolu_1", name: "exec", input: "ls" }] }), // malformed input
@@ -229,12 +232,18 @@ describe("native Anthropic provider over HTTP (protocol-enforcing fake)", () => 
     expect(fake.requests.get("probe")).toBe(1);
     const tools = [{ name: "list_goals", capability: "planning" as const, description: "", parameters: { type: "object", properties: {} } }];
     const withTools = { ...REQ, tools, messages: [{ role: "user" as const, content: "Heartbeat 1" }] };
-    for (const [kind, charge] of [["malformed_json", "estimate"], ["unknown_block", "usage"], ["max_tokens_tool", "usage"], ["too_many_calls", "usage"], ["bad_tool_args", "usage"]] as const) {
+    for (const [kind, charge] of [["malformed_json", "estimate"], ["unknown_block", "usage"], ["too_many_calls", "usage"], ["bad_tool_args", "usage"]] as const) {
       fresh({ 1: { kind } as FakeAnthropicFault });
       const e = await fail(prov().chat(withTools));
       expect(e.code, kind).toBe("PROVIDER_MALFORMED_RESPONSE");
       expect(e.info.charge, kind).toBe(charge);
     }
+    // Owner, 24 Oct (4,000-token founder default): a reply cut off at the output limit is not an error, but its tool calls
+    // (possibly incomplete) are dropped and counted — never returned for execution. It is charged on the provider's usage.
+    fresh({ 1: { kind: "max_tokens_tool" } });
+    const cut = await prov().chat(withTools);
+    expect(cut).toMatchObject({ toolCalls: [], stopReason: "max_tokens", usageSource: "provider" });
+    expect(cut.cutToolCalls).toBeGreaterThanOrEqual(1);
     fresh({ 1: { kind: "no_usage" } });
     expect(await prov().chat(REQ)).toMatchObject({ usageSource: "estimate" });
     fresh({ 1: { kind: "partial_usage" } });

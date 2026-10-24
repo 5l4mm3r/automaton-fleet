@@ -82,6 +82,20 @@ export function cachePolicy(d: Pick<RouteDecision, "tier" | "scope">, c: Pick<Ti
 export const PROVIDER_FRAMING_TOKENS = 2_000;
 
 /**
+ * Efficiency proposal (owner, 24 Oct 2026): the output allowance of a founder step (T2/T3, tool loop or question) is 4,000
+ * tokens, not the tier's 8,000 / 16,000. Saved production calls: none above 2,119 output tokens and none at the limit. It
+ * reduces each step's reserved worst case, not its actual cost. A thinking budget ("enabled:N") keeps 1,024 tokens above it.
+ * A step cut off at the limit executes none of its tool calls (the parsers drop them) and the agent is told; there is NO
+ * automatic retry at a higher limit (a higher-limit route is a separate owner decision). T1 chores keep the tier's value.
+ */
+export const FOUNDER_STEP_MAX_OUTPUT_TOKENS = 4_000;
+export function founderStepMaxTokens(c: Pick<TierCandidate, "maxOutputTokens" | "thinking">): number {
+  const budget = /^enabled:(\d{4,6})$/.exec(String(c.thinking ?? ""));
+  return Math.min(c.maxOutputTokens, Math.max(FOUNDER_STEP_MAX_OUTPUT_TOKENS, budget ? Number(budget[1]) + 1_024 : 0));
+}
+const OUTPUT_LIMIT_STOPS = new Set(["max_tokens", "length"]);
+
+/**
  * 2026-10-20: a call's reservation is a true upper bound of what it can cost (owner: the run's all-inclusive maximum must
  * hold through the enforcement and posting code). A call is charged min(reservation, actual cost); before, the reservation
  * counted the prompt at ~4 characters a token and the tools by name only, so a call could cost more than it reserved —
@@ -205,7 +219,7 @@ export async function inferRouted(
   const fullTools = routine || question ? [] : founderStepTools(caps, true, doctrine, toolsetForDoctrine(doctrine));
   // 2026-10-23: a local model gets the compact tool list (full docs through tool_help); a cloud tier keeps the full one.
   const tools = candidate.provider === "local" && fullTools.length ? compactTools(fullTools) : fullTools;
-  const maxTokens = candidate.maxOutputTokens;
+  const maxTokens = routine ? candidate.maxOutputTokens : founderStepMaxTokens(candidate);
   const prompt = promptMaterial(system, messages, tools.map((t) => t.name));
   const promptText = prompt.text;
   const promptSha = sha(promptText);
@@ -257,6 +271,9 @@ export async function inferRouted(
     throw new CognitionError(502, "FLEET_COGNITION_PROVIDER_ERROR", `the inference provider failed (${failure.code})`);
   }
   obs.thinkingTokens = result.usage.thinkingTokens ?? null;
+  // A reply cut off at the output limit never carries a tool call onward (defence in depth over the parsers).
+  const cutOff = OUTPUT_LIMIT_STOPS.has(String(result.stopReason ?? ""));
+  if (cutOff && result.toolCalls.length) result = { ...result, toolCalls: [], cutToolCalls: (result.cutToolCalls ?? 0) + result.toolCalls.length };
   // Per tool call: id + argument digest + (for consequential actions) the canonical action digest the boundary checks.
   const loggedCalls = result.toolCalls.slice(0, 10).map((t) => {
     const a = actionDigest(t.name, t.arguments);
@@ -275,6 +292,7 @@ export async function inferRouted(
     content: result.content, toolCalls: result.toolCalls, usage: result.usage, usageSource: String(rec.usageSource ?? result.usageSource),
     chargedCents: Number(rec.chargedCents ?? 0), chargedMicrocents: Number(rec.chargedMicrocents ?? 0), requestId,
     route: { tier: decision.tier, model: candidate.model, taskClass: decision.taskClass, scope: decision.scope, source: decision.source, promptCache: cache.mode },
+    ...(cutOff ? { outputLimit: { maxTokens, cutToolCalls: result.cutToolCalls ?? 0 } } : {}),
     ...(result.thinking?.length ? { thinking: result.thinking, ...(result.blockOrder ? { blockOrder: result.blockOrder } : {}) } : {}),
   };
 }

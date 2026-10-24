@@ -142,6 +142,8 @@ export interface ChatResult {
   toolCalls: ToolCall[];
   usage: Usage;
   stopReason?: string | null;
+  /** The reply hit the output limit (stop max_tokens / length): this many tool calls in it were dropped, never executed. */
+  cutToolCalls?: number;
   /** Provider's id for this response (invoice/log reconciliation). */
   providerRequestId?: string | null;
   thinking?: ThinkingBlock[];
@@ -808,11 +810,11 @@ export const COMPACT_ESSENTIALS: Readonly<Record<string, string>> = Object.freez
     + "[{heading} | {text} | {bullets: [..]} | {checklist: [text | {text, lines: [\"label\"]}]} | {lines: [\"label\"]} | {table: {columns, rows}}]}, "
     + "require?: [phrases]} → a PDF with wrapped text and drawn tick boxes, inspected (edit source, render again); op inspect: {paths: [\"order/checklist.pdf\"], "
     + "require?: [phrases the buyer asked for]}; op review: {subject: \"order\", orderId, paths, "
-    + "criteria: [{criterion, met: true|false, evidence}] (3..30), verdict: \"pass\"|\"fail\", require (REQUIRED for a revision: the visible text "
-    + "of the buyer's change, checked on the page)} → reviewId; op reviews: {orderId?}.",
+    + "criteria: [{criterion, met: true|false, evidence}] (3..30), verdict: \"pass\"|\"fail\", require (for a correction: the visible phrases it declared as "
+    + "mustShow, checked on the page; list EACH of its outcomes word for word as a criterion)} → reviewId; op reviews: {orderId?}.",
   wallet: "Fields go inside args. op orders: {orderId?}; op deliver: {orderId, paths: [\"order/checklist.pdf\"] (your workspace files), "
     + "reviewId (a passing deliverable review of exactly these files), message?; a resend also needs resendReason and after (the latest "
-    + "delivery's operationId); a revision is NEW files on a review with require — the same files again only with unchanged: true}; op operations: {kind?}.",
+    + "delivery's operationId); a revision is NEW files on a review of the open correction — the same files again only with unchanged: true}; op operations: {kind?}.",
   customers: "Fields go inside args. op order_thread: {orderId}; op order_classify: {orderId, messageId, classification: conversation|correction|unclear, reason, "
     + "criteria? (correction: [{outcome, kind}])}; op order_message: {orderId, message, resolved?} — say a file is "
     + "delivered only after wallet deliver succeeded and the delivery is sent (order_thread: order.delivery.status \"sent\"; \"queued\" = say it is on its way).",

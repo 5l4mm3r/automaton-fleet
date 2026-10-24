@@ -63,7 +63,7 @@ export function repairArguments(raw: string): Record<string, unknown> | null {
 
 /** Parse a local server's response. Malformed envelopes fail closed; a malformed tool argument becomes an invalid call. */
 export function parseLocalCompletion(raw: string):
-  | { content: string; toolCalls: ToolCall[]; usage: Usage | null; responseModel: string | null; providerRequestId: string | null; stopReason: string | null; local: LocalTimings }
+  | { content: string; toolCalls: ToolCall[]; usage: Usage | null; responseModel: string | null; providerRequestId: string | null; stopReason: string | null; local: LocalTimings; cutToolCalls?: number }
   | { malformed: true; usage: Usage | null; responseModel: string | null; providerRequestId?: string | null } {
   let j: Record<string, unknown>;
   try {
@@ -83,6 +83,13 @@ export function parseLocalCompletion(raw: string):
   if (!msg || typeof msg !== "object") return { malformed: true, usage, responseModel, providerRequestId };
   if (msg.content !== undefined && msg.content !== null && typeof msg.content !== "string") return { malformed: true, usage, responseModel, providerRequestId };
   const calls: ToolCall[] = [];
+  // Output-limit stop: a cut-off call is never "repaired" into something executable — counted and dropped.
+  if (choice?.finish_reason === "length") {
+    const cut = Array.isArray(msg.tool_calls) ? msg.tool_calls.length : 0;
+    const tm0 = j.timings as Record<string, unknown> | undefined;
+    return { content: String(msg.content ?? "").slice(0, 16_000), toolCalls: [], usage, responseModel, providerRequestId, stopReason: "length", ...(cut ? { cutToolCalls: cut } : {}),
+      local: { promptTokens: int(tm0?.prompt_n), promptMs: num(tm0?.prompt_ms), predictedTokens: int(tm0?.predicted_n), predictedMs: num(tm0?.predicted_ms) } };
+  }
   const list = Array.isArray(msg.tool_calls) ? (msg.tool_calls as Array<Record<string, unknown>>) : [];
   if (msg.tool_calls !== undefined && msg.tool_calls !== null && !Array.isArray(msg.tool_calls)) return { malformed: true, usage, responseModel, providerRequestId };
   for (const [i, t] of list.slice(0, MAX_TOOL_CALLS_PER_RESPONSE).entries()) {

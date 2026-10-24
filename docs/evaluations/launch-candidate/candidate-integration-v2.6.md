@@ -314,6 +314,115 @@ Kit `~/rlc132` on the VPS.
 5. **Cheaper-model routing (separate approval):** message checks on T1 Haiku halve them (worst 1.82p, typical 0.21p, against
    3.63p / 0.42p on T2). Founder steps stay on Opus (owner policy, 20 Oct).
 
+## Owner's approval (24 Oct, evening): review-rule repair and efficiency preparation — local, not pushed
+
+**Owner's decisions recorded:** approve the narrow runtime review-rule repair; prepare a 4,000-token founder output default
+with safe cut-off handling (any higher-limit retry is a proposal, never silent); read-only analysis of the tool definitions
+and uncached context. Opus stays for founder work. **Not activated:** the 100p/day Fleet Control ceiling (deferred until the
+complete evaluation budget includes it; the owner notes it is shared by every review type, so it cannot guarantee a number
+of message checks, and an exhausted ceiling can hold customer work), stronger caching (measure first), Haiku message checks
+(deferred until quality is shown). No push, side-install, deployment, inference, credit posting or paid evaluation.
+
+### 1. Review-rule repair (runtime, `src/fleet/founder/toolbox.ts`)
+
+When the buyer has written since the latest sent delivery and FleetController reports v115 message work for the order
+(`customer.obligations`, read at review time and again at delivery time):
+- **Unclassified (or disputed) message:** the review is refused `FLEET_REVIEW_CLASSIFY_FIRST`, naming the message(s) and
+  saying what to do (order_thread, then order_classify: correction with outcome criteria, conversation or unclear).
+- **Established correction:** the review must list **each outcome word for word** as a criterion (`FLEET_REVIEW_OUTCOMES`
+  otherwise). Visible phrases are required **only where the correction declared `mustShow`**: those phrases are added to
+  the inspector's `require` whether or not the review repeats them, so they are checked on the page; none are invented
+  for a layout, removal or calculation change. FleetController's v115 fulfilment rule (changed files, passing review,
+  every outcome met, `required_content` where phrases were declared) is unchanged and still decides.
+- **Not readable now:** refused `FLEET_REVIEW_STATE_UNKNOWN` (fail closed).
+- **Delivery stays bound** to the review: the same files as the latest sent delivery are still `FLEET_REVISION_UNCHANGED`;
+  a review not recorded as a revision review is `FLEET_REVISION_UNREVIEWED`; **other bytes** than the review inspected are
+  `FLEET_REVISION_STALE_FILES`; a **new buyer message** since is `FLEET_REVISION_CLASSIFY_FIRST`; a **correction established
+  after the review** is `FLEET_REVISION_STALE_REVIEW`.
+- **Older controller** (no v115 work reported): the run-6 rule (`require` mandatory) applies unchanged.
+- No SQL changed: durable correction obligations, v113's effective delivery and v114's owner withdrawal are untouched.
+  The agent's tool text (`COMPACT_ESSENTIALS`) now says phrases come from the correction.
+
+### 2. Founder output default 4,000 tokens, with safe cut-off handling
+
+- **Controller (`routed-gateway.ts`):** every founder step (T2/T3, tool loop or question) asks for at most **4,000** output
+  tokens (`FOUNDER_STEP_MAX_OUTPUT_TOKENS`); a smaller tier value stays; a `enabled:N` thinking budget keeps N + 1,024.
+  T1 chores keep the tier's own value. The reservation uses the same figure, so the T3 worst case falls by 12,000 × 2,000 µ¢
+  = **$0.24** a step ($1.06 → $0.82 on the 24 Oct measurement). Tier settings in the database are unchanged.
+- **Cut-off reply (stop `max_tokens` / `length`): never executes a tool call.** The Anthropic parser keeps the text and
+  drops (counts) every tool call and any possibly unsigned thinking, instead of failing the call. The OpenAI-compatible and
+  local parsers do the same; the local parser previously could "repair" a truncated argument string into an executable
+  call, and no longer can on a cut-off. The gateway drops any call that still reaches it and returns `outputLimit
+  {maxTokens, cutToolCalls}`. Provider probe P8 now counts a cut-off with no tool call as contained.
+- **Founder runtime (`mind.ts`):** the agent is told its reply was cut off and that nothing in it ran, and continues in
+  smaller pieces, **at most twice in a row**; a third cut-off ends the turn `FLEET_OUTPUT_LIMIT`, carried like any cut-off
+  turn. A runtime without this code sees a reply with no tool calls and ends its turn (still nothing executed).
+- **Higher limit: proposed, not enabled.** If cut-offs are seen in S1, option: one retry of the same step at the tier's
+  own limit (8,000 / 16,000), at most once a turn, recorded with its reason. It needs the owner's approval.
+
+### 3. Tool definitions and uncached context (read-only analysis)
+
+**Measured on the assembled definitions** (each tool serialised as sent: name, description, input schema):
+
+| | Tools | Tool bytes | Descriptions | Schemas | System prompt |
+|---|---|---|---|---|---|
+| Candidate (doctrine founder-v10) | 48 | 86,922 | 61,410 | 22,809 | 17,991 |
+| Production agents (founder-v6) | 38 | 58,822 | 37,612 | 19,062 | 11,880 |
+
+(The earlier figure, 88,138, came from a different serialisation; this per-tool sum is 1.4% smaller.) The seven
+largest (business, identity, wallet, fleet_capital, browser, project, customers) are 35,971 bytes, 41%.
+
+**Tools actually called in production's 1,070 saved calls** (names per call, by task class):
+- T3 `founder_work` (94 calls, the customer work) used **13 tools**: exec 45, offer 20, deliverable 20, customers 11,
+  field_journal 11, wallet 8, capabilities 3, then remember_fact, sleep, list_files (2 each), economic_knowledge,
+  list_goals, view_image (1 each). They are 22,524 bytes of the candidate's 86,922 (26%).
+- Across all classes, 30 tools were called at least once (53,470 bytes). **18 were never called** (33,452 bytes; the
+  largest: business 6,728, project 4,115, request_spend 2,907, generate_image 2,556, code 2,552). The agents were paused or
+  pre-sales for most of this period, so a tool never called is **not evidence that it is unneeded**. No tool is removed.
+
+**Where a T3 step's money goes (90 cached T3 calls, by code):** uncached input **65.2%**, cache writes 13.5%, cache reads
+11.6%, output 9.7%; $0.064 a call. The stable prefix (tools and system prompt) was read from cache at **exactly 38,879
+tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost little once cached; what costs is:
+- **The uncached part of each step:** median 10,119 tokens (the wake packet, about 14.9 KB, plus the turn's growing tool
+  results). Option: tail caching (a cache point on the conversation, not only the prefix). Measure in S1 (earlier estimate
+  $0.069 → $0.047 a step before the write premium).
+- **The first step of a turn runs with the cache off** (reuse is evidenced only from step 2): 4 such calls cost $0.186 each
+  (45.5k uncached tokens), then step 2 writes the prefix (38,879 × 500 µ¢). Together they were $0.74 of $6.51 (11.4%).
+  Option: write the prefix on step 1 of a turn expected to continue. Stronger caching: measure first, not enabled.
+- **Removing 1,000 tokens from the prefix** would have saved $0.054 over these 94 calls (90 warm reads at 20 µ¢, 4 writes at
+  500, 4 cold steps at 400), about 0.8% of their cost, and lowers each step's reserved worst case by $0.005 (input is
+  reserved at the dearer 500 µ¢).
+
+**Redundant or reducible material (options, nothing changed):**
+1. **One 945-byte paragraph is repeated in 13 tools** (operations recorded once, `after`, uncertain outcomes): 11,364
+   redundant bytes, 13% of the tool bytes. Stating it once (the system prompt or one tool) and referring to it is the
+   safest cut.
+2. **The compact tool list already exists** (used for local models): 26,370 bytes for the same 48 tools plus tool_help,
+   70% smaller, full text on demand. Using it on Opus needs a quality comparison (real model, Group D), not assumed.
+3. **Per-task subsets** (the T3 work used 13 tools): not proposed blind. The tool-call names above are the evidence base;
+   a subset would need a fallback (tool_help or a "more tools" request) and a rehearsal.
+4. **Byte → token ratio is not measured.** An exact token count of the definitions needs one `count_tokens` request
+   (no charge, but it sends the definitions to Anthropic with the key): owner's call.
+
+### Candidate, tests and proposed rehearsal scope
+
+- **Candidate:** the local commit that adds this section (hash in the report; not pushed). Changed: `toolbox.ts`,
+  `obligations.ts` (export only), `cognition/types.ts` (tool text, `cutToolCalls`), `anthropic.ts`, `providers.ts`,
+  `local.ts`, `routed-gateway.ts`, `probe.ts`, `mind.ts`, `service/client.ts` (type), tests, this record. **No schema,
+  migration, dependency, lockfile, script, unit or configuration change.**
+- **Tests (targeted, local, no inference):** new `fleet-v115-revision-review` (5, sandboxed real inspector: unclassified,
+  phrase-free removal, phrase-required, stale files / new message / later correction, unreadable state) and
+  `fleet-output-limit` (8: three parsers, the 4,000 cap and its reservation, the gateway drop, the mind's bounded
+  continuation); `fleet-v100-obligations-pg` +1 assertion (the agent's own obligations read carries the correction) — 20/20;
+  run6 replay 4/4 and local-run2 12/12 (older-controller path unchanged); cognition-anthropic 13/17, routing, local, step
+  budget, message check, revision model all pass. **4 `cognition-anthropic` PostgreSQL tests fail identically on unchanged
+  2e07e70** (`FLEET_INFERENCE_LOCAL_ONLY`: the test controller's default inference profile is `local_only`): pre-existing,
+  not hidden, not caused here.
+- **Proposed rehearsal scope (Group A, needs approval):** the diff touches the controller and the founder runtime, so the
+  earlier passes do not all carry forward. **Data rehearsal: carry forward** (no migration or SQL line changed).
+  **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
+  the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
+
 ## Task routing as wired today (read-only, from code; production prices from the 24 Oct snapshot)
 
 Prices in µ¢ per token (input / output / cache write): T1 claude-haiku-4-5 100/500/125, max output 2,000, cache off; T2

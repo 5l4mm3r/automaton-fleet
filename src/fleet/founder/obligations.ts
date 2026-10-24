@@ -57,7 +57,7 @@ export function parseObligations(attention: unknown): CustomerObligation[] | nul
   return out;
 }
 
-function parseWork(w: unknown): CustomerObligation["work"] | null {
+export function parseWork(w: unknown): CustomerObligation["work"] | null {
   if (!w || typeof w !== "object") return null;
   const x = w as Record<string, unknown>;
   const ids = (v: unknown) => (Array.isArray(v) ? v.filter((i): i is string => typeof i === "string" && UUID.test(i)).slice(0, 10) : []);

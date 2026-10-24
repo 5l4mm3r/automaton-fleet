@@ -56,7 +56,8 @@ const PROBE_TOOL: ToolSpec = {
 const describe = (err: unknown): string =>
   err instanceof ProviderError ? `${err.code}${err.info.status ? ` (HTTP ${err.info.status})` : ""}, ${err.info.attempts} attempt(s), charge ${err.info.charge}` : "unexpected error";
 
-/** Canned malformed responses per protocol; the deployed parser must refuse every one. */
+/** Canned malformed responses per protocol; the deployed parser must contain every one: refuse it, or (a reply cut off at the
+ *  output limit, 24 Oct) return it with NO tool call — a possibly truncated call is never handed on for execution. */
 const MALFORMED: Record<"openai_compatible" | "anthropic", string[]> = {
   openai_compatible: [
     "{ not json", "{}", JSON.stringify({ choices: [{ message: { content: 5 } }] }),
@@ -188,8 +189,9 @@ export async function runProviderProbe(provider: ProbeableProvider, o: { attempt
   // P8
   const bad = MALFORMED[provider.id];
   const parse = isAnthropic ? parseAnthropicMessage : parseChatCompletion;
-  const refused = bad.filter((b) => "malformed" in parse(b)).length;
-  add("P8", "malformed-response containment", refused === bad.length ? "PASS" : "FAIL", `${refused}/${bad.length} canned malformed responses refused by the deployed parser`);
+  const contained = (r: ReturnType<typeof parse>) => "malformed" in r || ((r.stopReason === "max_tokens" || r.stopReason === "length") && r.toolCalls.length === 0);
+  const refused = bad.filter((b) => contained(parse(b))).length;
+  add("P8", "malformed-response containment", refused === bad.length ? "PASS" : "FAIL", `${refused}/${bad.length} canned malformed responses contained by the deployed parser (refused, or cut off with no tool call)`);
   // P9
   try {
     await (provider as { with: (x: Record<string, unknown>) => ProbeableProvider }).with({ model: "fleet-probe-nonexistent-model", maxAttempts: 1 })

@@ -55,7 +55,9 @@ export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
   /** v22: `route` is the task's routing request (omitted by legacy runtimes; FleetController decides the tier). */
   infer(messages: unknown[], waitMs?: number, route?: Record<string, unknown>, doctrine?: string, opts?: { conversationTurn?: string | null }): Promise<{ content: string; toolCalls: ToolCall[]; usage: { inputTokens: number; outputTokens: number }; chargedCents: number; requestId: string; thinking?: ThinkingBlock[]; blockOrder?: string[];
-    /** Routed path only: what FleetController decided for this call. */ route?: { tier: string; model: string; taskClass: string; scope: string } }>;
+    /** Routed path only: what FleetController decided for this call. */ route?: { tier: string; model: string; taskClass: string; scope: string };
+    /** The reply was cut off at the output limit: its tool calls (cutToolCalls) were dropped by FleetController, never executed. */
+    outputLimit?: { maxTokens: number; cutToolCalls: number } }>;
   /** R23 routed mode: the founder's own economic position for the task packet (exact software output: T0). */
   ledger?(): Promise<unknown>;
   /** F2-A: this founder's own external dependencies (kind, the unavailable action, status; T0). Absent = not offered by this controller. */
@@ -451,6 +453,15 @@ const HOUR_MS = 3_600_000;
 /** How often, at most, a running turn re-reads the controller's attention for newly owed work (between steps). */
 export const NEW_WORK_CHECK_MS = 10_000;
 
+
+/** A step cut off at the output limit: how many in a row are answered with a note before the turn ends (FLEET_OUTPUT_LIMIT). */
+export const OUTPUT_LIMIT_CONTINUES = 2;
+export const OUTPUT_LIMIT_STOP = "FLEET_OUTPUT_LIMIT";
+export function outputLimitNote(o: { maxTokens: number; cutToolCalls: number }): string {
+  return `[platform] Your last reply reached the output limit (${o.maxTokens} tokens) and was cut off. `
+    + (o.cutToolCalls ? `${o.cutToolCalls} tool call(s) in it were NOT executed (their arguments may be incomplete). ` : "")
+    + "Continue in smaller pieces: one or two tool calls per reply, and large content split across several smaller files or steps rather than one call.";
+}
 export class FounderMind {
   turns = 0;
   readonly routing: RoutingStats = { routedTurns: 0, steps: { T2: 0, T3: 0 }, routineCalls: 0, escalations: 0, escalationsReused: 0, actionBoundarySteps: 0, thinkingDropped: 0, budgetStops: 0, slimWakeups: 0, idleNudges: { decide: 0, execute: 0, opportunity: 0, hibernate: 0 }, lastRoute: null };
@@ -1001,6 +1012,7 @@ export class FounderMind {
     const progressMem = W ? new ProgressMemory(path.join(this.o.stateDir, PROGRESS_FILE)) : null;
     let stopCode: string | undefined;
     let repeating = 0;
+    let cutOffs = 0;
     // Run 6 (2026-10-24): a paid order created 2–3 s after the turn's packet was built stayed unseen for the whole turn (15
     // steps, 6.5 minutes of research). Between steps — every tool of the step finished and recorded, nothing in flight — the
     // controller's attention is read again (free; at most every 10 s); a delivery or revision owed that the turn did not
@@ -1076,7 +1088,7 @@ export class FounderMind {
       if (r.content) outcome = r.content;
       messages.push({
         role: "assistant",
-        content: r.thinking?.length ? (r.content ?? "") : (r.content ?? "").slice(0, MAX_CONTENT),
+        content: r.outputLimit && !r.content ? "(reply cut off at the output limit)" : r.thinking?.length ? (r.content ?? "") : (r.content ?? "").slice(0, MAX_CONTENT),
         toolCalls: r.thinking?.length ? r.toolCalls : r.toolCalls.map((c) => ({ ...c, arguments: compactArgs(c.arguments) })),
         ...(r.thinking?.length ? { thinking: r.thinking, ...(r.blockOrder ? { blockOrder: r.blockOrder } : {}) } : {}),
       });
@@ -1148,6 +1160,19 @@ export class FounderMind {
       if (slept && typeof slept.arguments?.reason === "string" && slept.arguments.reason) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}sleep: ${slept.arguments.reason}`;
       if (slept && typeof slept.arguments?.wakeOn === "string" && slept.arguments.wakeOn.trim()) wakeOn = slept.arguments.wakeOn.trim();
       if (slept && typeof slept.arguments?.reviewAt === "string" && Number.isFinite(Date.parse(slept.arguments.reviewAt))) reviewAt = new Date(Date.parse(slept.arguments.reviewAt)).toISOString();
+      // Efficiency proposal (owner, 24 Oct): a reply cut off at the output limit ran none of its tool calls. The agent is told
+      // and continues in smaller pieces — at most OUTPUT_LIMIT_CONTINUES times in a row, then the turn ends cut off (its
+      // record carried). Never retried at a higher limit.
+      if (r.outputLimit && r.toolCalls.length === 0) {
+        if (++cutOffs <= OUTPUT_LIMIT_CONTINUES && step + 1 < maxSteps) {
+          messages.push({ role: "user", content: outputLimitNote(r.outputLimit) });
+          continue;
+        }
+        stopCode = OUTPUT_LIMIT_STOP;
+        this.logDecision({ turn: this.turns, routed: true, step, stopped: stopCode });
+        break;
+      }
+      cutOffs = 0;
       if (r.toolCalls.length === 0 || slept) { finished = true; break; }
       // Review 2026-10-23: bounded repetition — steps that only repeat already-refused actions end the turn.
       repeating = outcomes.length && outcomes.every((o) => o.refused === "FLEET_DUPLICATE_FAILED_ACTION" || o.refused === "FLEET_REPEATED_FAILURE") ? repeating + 1 : 0;
@@ -1164,7 +1189,7 @@ export class FounderMind {
     // looked at again (the agent answered the buyer, slept, and nothing woke it for the remaining 41 minutes).
     if (W && !owner && finished && owedOrders.length && !reviewAt) reviewAt = new Date(Date.now() + this.owedRecheckMs(owedOrders)).toISOString();
     const planText = outcome;   // what the founder itself wrote (the carried plan); the note below is the platform's
-    if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${stopCode === REPEATING_STOP ? `was ended after ${result.steps} steps that only repeated refused actions` : stopCode === "FLEET_NEW_PRIORITY" ? `was paused after ${result.steps} steps because new customer work arrived — it comes first` : stopCode ? `was stopped by a runtime restart after ${result.steps} steps` : sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
+    if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${stopCode === REPEATING_STOP ? `was ended after ${result.steps} steps that only repeated refused actions` : stopCode === "FLEET_NEW_PRIORITY" ? `was paused after ${result.steps} steps because new customer work arrived — it comes first` : stopCode === OUTPUT_LIMIT_STOP ? `was ended after ${result.steps} steps: replies kept reaching the output limit (nothing in them ran) — split large content into smaller pieces` : stopCode ? `was stopped by a runtime restart after ${result.steps} steps` : sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
     // 2026-10-18 (work continuity): a cut-off turn leaves its working record for the next turn (and a restart); a finished
     // working turn has consumed it. The progress memory survives restarts.
     if (W) {

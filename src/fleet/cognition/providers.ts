@@ -147,7 +147,8 @@ export const stopReasonOf = (v: unknown): string | null => (typeof v === "string
 
 /** A strictly parsed 200 response, or a fail-closed refusal that keeps whatever usage evidence it had. */
 export type ParsedResponse =
-  | { content: string; toolCalls: ToolCall[]; usage: Usage | null; responseModel: string | null; providerRequestId: string | null; stopReason: string | null; thinking?: ThinkingBlock[]; blockOrder?: string[] }
+  | { content: string; toolCalls: ToolCall[]; usage: Usage | null; responseModel: string | null; providerRequestId: string | null; stopReason: string | null; thinking?: ThinkingBlock[]; blockOrder?: string[];
+      /** The reply hit the output limit: this many tool calls were in it and were dropped (never executed). */ cutToolCalls?: number }
   | { malformed: true; usage: Usage | null; responseModel: string | null; providerRequestId?: string | null };
 
 function openAIUsage(u: unknown): Usage | null {
@@ -184,6 +185,11 @@ export function parseChatCompletion(raw: string): ParsedResponse {
   if (!msg || typeof msg !== "object") return bad;
   if (msg.content !== undefined && msg.content !== null && typeof msg.content !== "string") return bad;
   const calls: ToolCall[] = [];
+  // Output-limit stop: tool calls in a cut-off reply may be incomplete — counted and dropped, never executed.
+  if (choice?.finish_reason === "length") {
+    const cut = Array.isArray(msg.tool_calls) ? msg.tool_calls.length : 0;
+    return { content: String(msg.content ?? "").slice(0, 16_000), toolCalls: [], usage, responseModel, providerRequestId, stopReason: "length", ...(cut ? { cutToolCalls: cut } : {}) };
+  }
   if (msg.tool_calls !== undefined && msg.tool_calls !== null) {
     if (!Array.isArray(msg.tool_calls) || msg.tool_calls.length > MAX_TOOL_CALLS_PER_RESPONSE) return bad;
     for (const [i, t] of (msg.tool_calls as Array<Record<string, unknown>>).entries()) {
@@ -342,6 +348,7 @@ export async function postWithRetries(
       responseModel: parsed.responseModel,
       providerRequestId: parsed.providerRequestId ?? headerId,
       stopReason: parsed.stopReason,
+      ...(parsed.cutToolCalls ? { cutToolCalls: parsed.cutToolCalls } : {}),
       ...(parsed.thinking?.length ? { thinking: parsed.thinking, ...(parsed.blockOrder ? { blockOrder: parsed.blockOrder } : {}) } : {}),
     };
   }

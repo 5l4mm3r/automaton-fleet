@@ -24,7 +24,7 @@ import { decideTool, type CapabilityManifest } from "../capabilities.js";
 import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
 import { fullToolSpec, imageHeaderProblem, type ChatImage, type ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
-import type { CustomerObligation } from "./obligations.js";
+import { parseWork, type CustomerObligation } from "./obligations.js";
 import crypto from "crypto";
 import { QA_INSPECTOR_PY, QA_INSPECTOR_SHA256, QA_INSPECTOR_VERSION, parseInspectorReport, type QaInspectorReport } from "./qa/inspector.js";
 import type { LoopGuard } from "./loop-guard.js";
@@ -931,8 +931,27 @@ export class FounderToolbox {
    * Null = the message may go as written.
    */
   private readonly sentSeen = new Set<string>();
-  /** Run 6: reviews of a revision that stated the change's visible text (require), by reviewId — a revision is delivered on one. */
-  private readonly revisionReviews = new Set<string>();
+  /** Reviews of a revision, by reviewId — a revision is delivered on one: the open corrections it covered (v115; null on an older
+   *  controller, where it stated the change's visible text) and the exact files it reviewed (their hashes, sorted). */
+  private readonly revisionReviews = new Map<string, { corrections: string[] | null; files: string }>();
+  /**
+   * v115 (owner, 24 Oct): an order's message work read from FleetController NOW — the buyer messages still to classify and the
+   * established corrections still owed, with their criteria. "legacy" when the controller does not report it (before v115:
+   * the run-6 rule applies); null when it cannot be read.
+   */
+  private async orderWork(orderId: string): Promise<NonNullable<CustomerObligation["work"]> | "legacy" | null> {
+    if (!this.o.ports.economy) return null;
+    for (let offset = 0; offset < 200;) {
+      const r = (await this.o.ports.economy("customer.obligations", { offset, limit: 50 }).catch(() => null)) as { ok?: unknown; obligations?: unknown; next?: unknown } | null;
+      if (!r || r.ok === false) return null;
+      if (!Array.isArray(r.obligations)) return "legacy";
+      const row = (r.obligations as Array<Record<string, unknown>>).find((x) => x && x.kind === "order" && x.id === orderId);
+      if (row) return "work" in row ? parseWork(row.work) ?? { classify: [], disputed: [], reviewPending: 0, corrections: [] } : "legacy";
+      if (typeof r.next !== "number" || r.next <= offset) break;
+      offset = r.next;
+    }
+    return "legacy";
+  }
   /**
    * An order's delivery state read from FleetController NOW (order.thread): the latest delivery (status, when sent, its files)
    * and whether the buyer has written since it was sent — a request it does not deliver. Null when it cannot be read.
@@ -1392,13 +1411,42 @@ export class FounderToolbox {
     }
     if (a.op === "review") {
       if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
-      // Run 6: the revision's review passed the unchanged file on the agent's own "met: true". When the buyer has asked for a
-      // change since the latest sent delivery, the review states the change's visible text (require) and the inspector checks
-      // it on the page; a review without it is refused, never silently weaker.
+      // Run 6: the revision's review passed the unchanged file on the agent's own "met: true". v115 (owner, 24 Oct): a buyer's
+      // message after delivery is classified first; an established correction is reviewed against ITS criteria — each outcome
+      // listed word for word, and its declared visible phrases (mustShow, only where it declared them) checked on the page.
+      // A layout, removal or calculation change without phrases is proved by its outcomes and FleetController's fulfilment
+      // rule (changed files, a passing review with every outcome met). An older controller keeps the run-6 rule (require).
       const revisionOf = args.subject === "order" && typeof args.orderId === "string" ? await this.orderState(args.orderId) : null;
-      if (revisionOf?.buyerSince && !require.length) {
-        return refuse("FLEET_REVIEW_REQUIRE_CHANGE", `the buyer asked for a change after the latest delivery ("${revisionOf.lastBuyer}"): a review of the revision `
-          + "needs require: [the exact visible text that carries the change, e.g. the new line's label] — it is checked on the page; your criteria's met is not proof");
+      let need = require;
+      let covers: string[] | null = null;
+      if (revisionOf?.buyerSince) {
+        const work = await this.orderWork(String(args.orderId));
+        if (work === null) return refuse("FLEET_REVIEW_STATE_UNKNOWN", "the order's open correction could not be read from FleetController now: try the review again");
+        if (work === "legacy") {
+          if (!require.length) {
+            return refuse("FLEET_REVIEW_REQUIRE_CHANGE", `the buyer asked for a change after the latest delivery ("${revisionOf.lastBuyer}"): a review of the revision `
+              + "needs require: [the exact visible text that carries the change, e.g. the new line's label] — it is checked on the page; your criteria's met is not proof");
+          }
+        } else {
+          if (work.classify.length) {
+            return refuse("FLEET_REVIEW_CLASSIFY_FIRST", `the buyer's message${work.classify.length > 1 ? "s" : ""} ${work.classify.join(", ")} after the delivery `
+              + `${work.classify.length > 1 ? "are" : "is"} not classified${work.disputed.length ? " (Fleet Control did not confirm \"conversation\" for " + work.disputed.join(", ") + ")" : ""}: `
+              + "read it with customers order_thread, then customers order_classify — correction with criteria (each requested outcome; mustShow only for "
+              + "text that must appear), conversation, or unclear — and review the revision against the correction");
+          }
+          const listed = new Set((Array.isArray(args.criteria) ? args.criteria : []).map((c) => String((c as { criterion?: unknown })?.criterion ?? "")));
+          const missing = work.corrections.flatMap((c) => c.criteria.filter((k) => !listed.has(k.outcome)).map((k) => `"${k.outcome}" (correction ${c.correctionId})`));
+          if (missing.length) {
+            return refuse("FLEET_REVIEW_OUTCOMES", `the review must list each outcome of the open correction word for word as a criterion (met true|false, with your evidence); `
+              + `missing: ${missing.join("; ")}`);
+          }
+          // Phrases the correction declared are checked on the page whether or not the review repeats them; none are invented.
+          const norm = (q: string) => q.replace(/\s+/g, " ").trim().toLowerCase();
+          const have = new Set(require.map(norm));
+          const declared = work.corrections.flatMap((c) => c.criteria.flatMap((k) => k.mustShow)).filter((q) => !have.has(norm(q)) && (have.add(norm(q)), true));
+          need = [...require, ...declared].slice(0, 40);
+          covers = work.corrections.map((c) => c.correctionId);
+        }
       }
       if (typeof args.independentRequestId === "string" && !this.independentReviews.has(args.independentRequestId)) {
         return refuse("FLEET_REVIEW_INDEPENDENT", "independentRequestId is the requestId an independent_review of yours returned (within 6 hours)");
@@ -1407,7 +1455,7 @@ export class FounderToolbox {
       if (typeof args.independentRequestId === "string") args.independentVerdict = this.independentReviews.get(args.independentRequestId)!.verdict;
       else delete args.independentVerdict;
       // The automated part is re-run here on the exact bytes being reviewed: the record binds these hashes to this report.
-      const r = await this.inspect(paths, Array.isArray(args.cases) ? args.cases : [], require);
+      const r = await this.inspect(paths, Array.isArray(args.cases) ? args.cases : [], need);
       if (!r.ok) return refuse(r.code, r.reason);
       const files = r.report.files.map((f) => ({ name: path.basename(f.path), sha256: f.sha256, sizeBytes: f.sizeBytes }));
       const rec: Record<string, unknown> = { ...args, files, automated: { inspector: QA_INSPECTOR_VERSION, inspectorSha256: QA_INSPECTOR_SHA256,
@@ -1417,7 +1465,9 @@ export class FounderToolbox {
       const out = await this.o.ports.economy("review.record", rec).catch(ownerRefusal);
       if ((out as { ok?: unknown }).ok === false) return { name: call.name, ok: false, refused: String((out as { code?: unknown }).code ?? "FLEET_TOOL_ERROR"), output: `REFUSED ${clip(JSON.stringify(out))}` };
       const reviewId = (out as { reviewId?: unknown }).reviewId;
-      if (revisionOf?.buyerSince && require.length && r.report.ok && typeof reviewId === "string") this.revisionReviews.add(reviewId);
+      if (revisionOf?.buyerSince && (covers || require.length) && r.report.ok && typeof reviewId === "string") {
+        this.revisionReviews.set(reviewId, { corrections: covers, files: r.report.files.map((f) => f.sha256).sort().join(",") });
+      }
       return { name: call.name, ok: true, output: clip(JSON.stringify(out)) };
     }
     return refuse("FLEET_BAD_REQUEST", "op is render, inspect, review or reviews");
@@ -1788,11 +1838,27 @@ export class FounderToolbox {
               const before = (st.delivery?.files ?? []).map((f) => String(f.sha256 ?? "")).sort().join(",");
               if (now && now === before) {
                 return refuse("FLEET_REVISION_UNCHANGED", `these are the same files the buyer already has (the latest sent delivery), but they asked for a change after it ("${st.lastBuyer}"): `
-                  + "make the change (edit your source, render or build again), inspect and review the NEW file with require, then deliver it; if the buyer only needs the same file again, pass unchanged: true");
+                  + "make the change (edit your source, render or build again), inspect and review the NEW file against the open correction, then deliver it; if the buyer only needs the same file again, pass unchanged: true");
               }
-              if (typeof args.reviewId !== "string" || !this.revisionReviews.has(args.reviewId)) {
-                return refuse("FLEET_REVISION_UNREVIEWED", `the buyer asked for a change after the latest delivery ("${st.lastBuyer}"): deliver the revision on a review of the new files `
-                  + "that states the change's visible text (deliverable review with require: [...]) — that review's id as reviewId");
+              const rv = typeof args.reviewId === "string" ? this.revisionReviews.get(args.reviewId) : undefined;
+              if (!rv) {
+                return refuse("FLEET_REVISION_UNREVIEWED", `the buyer asked for a change after the latest delivery ("${st.lastBuyer}"): deliver the revision on a passing review of the new files `
+                  + "made since — against the open correction (each outcome listed; its declared phrases checked), or on an older controller with require: [...] — that review's id as reviewId");
+              }
+              // The review is bound to what it saw: these exact files, and (v115) the corrections open when it was made.
+              if (now !== rv.files) {
+                return refuse("FLEET_REVISION_STALE_FILES", "these files are not the ones that review inspected (they changed since, or are different files): review the files you deliver, then deliver them");
+              }
+              if (rv.corrections) {
+                const work = await this.orderWork(String(args.orderId));
+                if (work === null) return refuse("FLEET_REVISION_STATE_UNKNOWN", "the order's open correction could not be read from FleetController now: try the delivery again");
+                if (work !== "legacy" && work.classify.length) {
+                  return refuse("FLEET_REVISION_CLASSIFY_FIRST", `the buyer wrote again since that review (${work.classify.join(", ")} not classified): classify it with customers order_classify, then review against the open correction`);
+                }
+                const uncovered = work === "legacy" ? [] : work.corrections.filter((c) => !rv.corrections!.includes(c.correctionId)).map((c) => c.correctionId);
+                if (uncovered.length) {
+                  return refuse("FLEET_REVISION_STALE_REVIEW", `correction ${uncovered.join(", ")} was established after that review: review the files again listing its outcomes, then deliver on the new review`);
+                }
               }
             }
           }

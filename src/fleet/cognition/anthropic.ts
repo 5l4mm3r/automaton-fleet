@@ -118,6 +118,21 @@ export function parseAnthropicMessage(raw: string): ParsedResponse {
   if (j.type !== "message" || j.role !== "assistant" || !Array.isArray(j.content)) return bad;
   const stop = typeof j.stop_reason === "string" ? j.stop_reason : null;
   if (!stop || !STOP_REASONS.has(stop)) return bad;
+  // Output-limit stop (efficiency proposal, owner 24 Oct): the reply was cut off. Its tool calls may carry incomplete
+  // arguments and are NEVER executed: they are counted and dropped, with any (possibly unsigned) thinking; the text is kept
+  // so the caller can tell the agent what happened. Nothing is retried at a higher limit here.
+  if (stop === "max_tokens") {
+    const kept: string[] = [];
+    let cut = 0;
+    for (const b of j.content as Array<Record<string, unknown>>) {
+      if (!b || typeof b !== "object") return bad;
+      if (b.type === "text") { if (typeof b.text !== "string") return bad; kept.push(b.text); }
+      else if (b.type === "tool_use") cut++;
+      else if (b.type !== "thinking" && b.type !== "redacted_thinking") return bad;
+    }
+    if (cut > MAX_TOOL_CALLS_PER_RESPONSE) return bad;
+    return { content: kept.join("\n").slice(0, 16_000), toolCalls: [], usage, responseModel, providerRequestId, stopReason: "max_tokens", ...(cut ? { cutToolCalls: cut } : {}) };
+  }
   const texts: string[] = [];
   const calls: ToolCall[] = [];
   const thinking: ThinkingBlock[] = [];
