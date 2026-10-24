@@ -798,10 +798,25 @@ function stripNested(v: unknown, depth: number): unknown {
   }
   return out;
 }
+/**
+ * Desktop run 2 (2026-10-23, 9B): the delivery path's tools reached the model as `{op, args: object}` and a first sentence
+ * that named no argument — 33 malformed calls (review without subject / verdict / criteria, deliver without paths). The
+ * arguments of the ops a paid order needs are kept in the compact description (the rest stays one tool_help away).
+ */
+export const COMPACT_ESSENTIALS: Readonly<Record<string, string>> = Object.freeze({
+  deliverable: "Fields go inside args. op inspect: {paths: [\"order/checklist.pdf\"]}; op review: {subject: \"order\", orderId, paths, "
+    + "criteria: [{criterion, met: true|false, evidence}] (3..30), verdict: \"pass\"|\"fail\"} → reviewId; op reviews: {orderId?}.",
+  wallet: "Fields go inside args. op orders: {orderId?}; op deliver: {orderId, paths: [\"order/checklist.pdf\"] (your workspace files), "
+    + "reviewId (a passing deliverable review of exactly these files), message?; a resend also needs resendReason and after (the latest "
+    + "delivery's operationId)}; op operations: {kind?}.",
+  customers: "Fields go inside args. op order_thread: {orderId}; op order_message: {orderId, message, resolved?} — say a file is "
+    + "delivered only after wallet deliver succeeded.",
+});
 export function compactToolSpec(t: ToolSpec): ToolSpec {
   const first = t.description.split(/(?<=[.!?])\s|\s—\s| op [a-z_]+:/)[0].trim();
   const d = first.length > COMPACT_DESCRIPTION_CHARS ? `${first.slice(0, COMPACT_DESCRIPTION_CHARS - 1)}…` : first;
-  return { ...t, description: `${d} (tool_help for every op and argument)`, parameters: stripNested(t.parameters, 1) as ToolSpec["parameters"] };
+  const essentials = COMPACT_ESSENTIALS[t.name];
+  return { ...t, description: `${d}${essentials ? ` ${essentials}` : ""} (tool_help for every op and argument)`, parameters: stripNested(t.parameters, 1) as ToolSpec["parameters"] };
 }
 export function compactTools(tools: readonly ToolSpec[]): ToolSpec[] {
   return [...tools.map(compactToolSpec), TOOL_HELP_SPEC];

@@ -49,7 +49,7 @@ import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineCla
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
 import { OWED_RECHECK_MS, newestBuyerMessage, obligationLines, owedDeliveryLine, owedRevisionLine, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
 import { officeState } from "./exec-sandbox.js";
-import { CARRY_MAX_CHARS, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
+import { CARRY_MAX_CHARS, compact, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
 
 export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
@@ -149,6 +149,12 @@ const MAX_ROUTINE_MATERIAL = 12_000;
 const COGNITION_TOOLS = new Set(["routine_task", "escalate_question", "independent_review"]);
 
 /** Tool-call arguments as remembered in history: long strings (e.g. file contents) are elided. */
+/** A step's tools for the mind log; a refused call keeps its (clipped) arguments, so a malformed call can be read afterwards. */
+function toolLog(calls: readonly ToolCall[], outcomes: readonly ToolOutcome[]): Array<Record<string, unknown>> {
+  return outcomes.map((o, i) => ({ name: o.name, ok: o.ok, refused: o.refused, ...(o.refused ? { reason: refusalReason(o.output),
+    ...(calls[i]?.name === o.name ? { args: compact(calls[i].arguments, 600) } : {}) } : {}) }));
+}
+
 function compactArgs(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(args ?? {})) {
@@ -583,7 +589,7 @@ export class FounderMind {
         messages.push({ role: "tool", toolCallId: call.id, isError: !out.ok, content: toolContent("", out.output),
           ...(out.images?.length ? { images: out.images } : {}) });
       }
-      this.logDecision({ turn: this.turns, step, requestId: r.requestId, content: (r.content ?? "").slice(0, 500), tools: outcomes.map((o) => ({ name: o.name, ok: o.ok, refused: o.refused, ...(o.refused ? { reason: refusalReason(o.output) } : {}) })), chargedCents: r.chargedCents });
+      this.logDecision({ turn: this.turns, step, requestId: r.requestId, content: (r.content ?? "").slice(0, 500), tools: toolLog(r.toolCalls, outcomes), chargedCents: r.chargedCents });
       if (r.toolCalls.length === 0 || r.toolCalls.some((c) => c.name === "sleep")) break;
     }
     // A turn that only slept backs the next wake-up off exponentially (1, 2, 4 … MAX_IDLE_SKIP thinking slots);
@@ -1045,7 +1051,7 @@ export class FounderMind {
       // protected on the controller (durable operations, v95); this record is the founder's own memory of them.
       if (W && !owner) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: outcome, stopCode: "FLEET_RUNTIME_INTERRUPTED" });
       this.logDecision({ turn: this.turns, routed: true, step, packet: packetKind, requestId: r.requestId, taskClass: cls.taskClass, expectedTier: cls.tier, route: r.route ?? null,
-        content: (r.content ?? "").slice(0, 500), tools: outcomes.map((o) => ({ name: o.name, ok: o.ok, refused: o.refused, ...(o.refused ? { reason: refusalReason(o.output) } : {}) })), chargedCents: r.chargedCents });
+        content: (r.content ?? "").slice(0, 500), tools: toolLog(r.toolCalls, outcomes), chargedCents: r.chargedCents });
       // 2026-10-19: only a sleep that was accepted ends the turn (one refused because a buyer waits leaves the turn running).
       const sleepAt = r.toolCalls.findIndex((c) => c.name === "sleep");
       const slept = sleepAt >= 0 && outcomes[sleepAt]?.ok ? r.toolCalls[sleepAt] : undefined;

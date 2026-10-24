@@ -359,6 +359,22 @@ const ownerRefusal = (err: unknown): Record<string, unknown> => {
   const m = err instanceof Error ? err.message : "";
   return { ok: false, code: typeof c === "string" && /^FLEET_[A-Z_]+$/.test(c) ? c : "FLEET_TOOL_ERROR", ...(m && m !== c ? { reason: m.slice(0, 300) } : {}) };
 };
+/**
+ * The fields of an {op, args} tool call. Desktop run 2 (9B): fields were also given beside op instead of inside args. The
+ * schema has only op and args, so a field beside them can mean only the op's own field: it is used (args wins on a clash).
+ * Nothing else is guessed.
+ */
+export function opArgs(a: Record<string, unknown>): Record<string, unknown> {
+  const inner = a.args && typeof a.args === "object" && !Array.isArray(a.args) ? (a.args as Record<string, unknown>) : {};
+  const beside = Object.fromEntries(Object.entries(a).filter(([k]) => k !== "op" && k !== "args"));
+  return { ...beside, ...inner };
+}
+/** A statement that a file was delivered or sent (not a promise: "will be delivered" does not match). */
+export const DELIVERY_CLAIM = /\b(?:has|have|had|was|were|is|are)\s+(?:now\s+|just\s+|successfully\s+|already\s+)?(?:been\s+)?(?:delivered|sent|e-?mailed|uploaded)\b|\b(?:I'?ve|I have|we'?ve|we have)\s+(?:now\s+|just\s+|already\s+)?(?:delivered|sent|e-?mailed|attached|uploaded)\b|\bplease (?:see|find|download|open) (?:the )?(?:attached|revised|updated|corrected|new)\b/i;
+/** For an op that takes `paths` (a list of workspace files) only: one `path` given instead means that one file. */
+function onePath(args: Record<string, unknown>): void {
+  if (args.paths === undefined && typeof args.path === "string") { args.paths = [args.path]; delete args.path; }
+}
 const MEMORY_TOOLS = new Set(["remember_fact", "remember_facts", "retract_fact", "recall_facts"]);
 /** Copy the present, defined fields of `a` under new names (tool argument → registry field). */
 const pick = (a: Record<string, unknown>, map: Record<string, string>): Record<string, unknown> =>
@@ -704,10 +720,13 @@ export class FounderToolbox {
   private obligations: CustomerObligation[] | null = null;
   private readonly answered = new Set<string>();
   private readonly answerRefused = new Set<string>();
+  /** Orders a wallet deliver of this turn succeeded for (the obligations are read at the start of the turn). */
+  private readonly deliveredThisTurn = new Set<string>();
   noteObligations(list: CustomerObligation[] | null): void {
     this.obligations = list;
     this.answered.clear();
     this.answerRefused.clear();
+    this.deliveredThisTurn.clear();
   }
   /** The unanswered buyer requests this turn has not answered (or tried to answer and been refused). */
   owedAnswers(): CustomerObligation[] {
@@ -1074,7 +1093,10 @@ export class FounderToolbox {
 
   private async deliverable(call: ToolCall, a: Record<string, unknown>): Promise<ToolOutcome> {
     const refuse = (code: string, why: string): ToolOutcome => ({ name: call.name, ok: false, refused: code, output: `NOT DONE ${code}: ${why}` });
-    const args: Record<string, unknown> = a.args && typeof a.args === "object" && !Array.isArray(a.args) ? { ...(a.args as Record<string, unknown>) } : {};
+    const args = opArgs(a);
+    onePath(args);
+    // A review of an order names only the order: its subject can only be "order" (offer / enquiry reviews name those).
+    if (a.op === "review" && args.subject === undefined && typeof args.orderId === "string" && args.offerId === undefined && args.enquiryId === undefined) args.subject = "order";
     const paths = Array.isArray(args.paths) ? (args.paths as unknown[]).filter((p): p is string => typeof p === "string") : [];
     if (a.op === "reviews") {
       if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
@@ -1239,6 +1261,9 @@ export class FounderToolbox {
           return { name: call.name, ok: true, output: `wrote ${content.length} bytes` };
         }
         case "exec": {
+          if (typeof a.command === "string" && a.command.length > 2000) {
+            return refuse("FLEET_BAD_REQUEST", `command is at most 2000 characters (this one is ${a.command.length}): write the script with write_file (e.g. order/build.py), then exec \"python3 order/build.py\"`);
+          }
           const command = str(a.command, 2000);
           if (!command) return refuse("FLEET_BAD_REQUEST", "command required");
           const m = getForbiddenCommandMatch(command);
@@ -1450,7 +1475,24 @@ export class FounderToolbox {
           if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
           const op = ECONOMY_OPS[call.name][String(a.op)];
           if (!op) return refuse("FLEET_BAD_REQUEST", `op is one of ${Object.keys(ECONOMY_OPS[call.name]).join(", ")}`);
-          const args: Record<string, unknown> = a.args && typeof a.args === "object" && !Array.isArray(a.args) ? { ...(a.args as Record<string, unknown>) } : {};
+          const args = opArgs(a);
+          if (op === "order.deliver") {
+            onePath(args);
+            // `files` here is the controller's list of staged names; workspace paths as plain strings there mean the paths.
+            if (args.paths === undefined && Array.isArray(args.files) && args.files.length && args.files.every((p) => typeof p === "string")) { args.paths = args.files; delete args.files; }
+            if (!Array.isArray(args.paths)) {
+              return refuse("FLEET_BAD_REQUEST", "deliver needs args {orderId, paths: [\"order/checklist.pdf\"] (your workspace files), reviewId (a passing deliverable "
+                + "review of exactly these files)} — this is about the call's arguments, not an external block; the files are staged for the order by this call");
+            }
+          }
+          // Desktop runs 1 and 2 (9B): the buyer was told the file was delivered (or "see the revised PDF") while its delivery was
+          // still owed. A message that states a delivery happened, while FleetController's record says it is owed and no
+          // delivery of this turn succeeded, is refused with the reason; an honest update is sent as written.
+          if (op === "order.message" && typeof args.orderId === "string" && typeof args.message === "string" && !this.deliveredThisTurn.has(args.orderId)
+            && (this.obligations ?? []).some((o) => o.id === args.orderId && (o.deliveryOwed || o.revisionOwed)) && DELIVERY_CLAIM.test(args.message)) {
+            return refuse("FLEET_CLAIM_UNSUPPORTED", "this message says the file was delivered, but its delivery is still owed (FleetController's record) and no wallet deliver "
+              + "succeeded in this turn: deliver first (wallet deliver), or tell the buyer what is actually happening");
+          }
           if (IDEMPOTENT_OPS.has(op) && typeof args.idempotencyKey !== "string") args.idempotencyKey = `econ:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128).padEnd(8, "_");
           // 2026-10-20: money in customer-facing text is checked before it is sent (exact arithmetic; the record's figures).
           const money = await this.moneyCheck(op, args);
@@ -1526,6 +1568,7 @@ export class FounderToolbox {
             r = { ...(r as Record<string, unknown>), moneyCheck: { documents: money.documents,
               note: "calculations, itemised totals, currencies and precision in the extracted text were checked; claims the extraction could not read (listed per file), formulas and figures without a currency are not" } };
           }
+          if (op === "order.deliver" && typeof args.orderId === "string" && (r as { ok?: unknown }).ok !== false) this.deliveredThisTurn.add(args.orderId);
           // v105: an invoice is written to the workspace from the record (text and PDF) — deliver those files as they are.
           if (op === "order.invoice" && (r as { ok?: unknown }).ok === true) r = await this.writeInvoice(r as { invoice: { number: string; text: string } } & Record<string, unknown>);
           // 2026-10-19: an answer to a buyer settles this turn's sleep check for that request (a refused one is not an answer).
