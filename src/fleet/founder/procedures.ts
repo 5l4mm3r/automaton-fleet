@@ -17,7 +17,17 @@ export const PROCEDURE_SCRIPT_MAX = 64 * 1024;
 const SCRIPT_EXT = /\.(py|sh|js|mjs|ts|html|css|svg|md|tex|json)$/i;
 const NOTES = "## Notes (yours: edit, improve or delete this procedure; earlier versions are in procedures/.history/)";
 
-export interface ProcedureCall { call: ToolCall; ok: boolean }
+export interface ProcedureCall { call: ToolCall; ok: boolean; output?: string }
+
+/**
+ * Desktop run 3 (2026-10-24): the build kept every exec of the turn — `pwd`, `ls`, a command whose script failed (exec
+ * itself succeeds whatever the exit code), the sandbox's absolute workspace path. A build step is a command that exited 0
+ * (when its output is known) and is not only a look around; the workspace's absolute paths become relative.
+ */
+const LOOK_ONLY = /^\s*(?:pwd|ls|cat|head|tail|echo|which|whoami|find|file|wc|stat|tree|du|df|env|printenv)\b(?:(?!&&|;|\|\||>).)*$/;
+const exitedNonZero = (out: string | undefined) => typeof out === "string" && /^exit (?!0\b)-?\d+/.test(out);
+const relativeWorkspace = (cmd: string, workspace: string) =>
+  cmd.split(workspace).join(".").replace(/(?:\/[\w.-]+)*\/workspace\/ws_[A-Za-z0-9]+/g, ".");
 
 /** Inside the workspace after resolving every link (the founder can create links with exec). */
 const inside = (workspace: string, p: string) => { try { const r = fs.realpathSync(p); return r === workspace || r.startsWith(workspace + path.sep); } catch { return false; } };
@@ -96,9 +106,15 @@ export function recordProcedure(workspaceDir: string, calls: ProcedureCall[], de
   const paths = Array.isArray(d.paths) ? d.paths.filter((p): p is string => typeof p === "string").slice(0, 20) : [];
   if (!paths.length) return null;
   const ok = calls.filter((c) => c.ok);
-  const execs = ok.filter((c) => c.call.name === "exec").map((c) => String(argsOf(c.call).command ?? "")).filter(Boolean).slice(-8);
+  const execs = [...new Set(ok.filter((c) => c.call.name === "exec" && !exitedNonZero(c.output)).map((c) => relativeWorkspace(String(argsOf(c.call).command ?? ""), workspace))
+    .filter((e) => e && !LOOK_ONLY.test(e)))].slice(-8);
   const written = ok.filter((c) => c.call.name === "write_file").map((c) => String(argsOf(c.call).path ?? "")).filter((p) => SCRIPT_EXT.test(p));
-  const checks = ok.filter((c) => c.call.name === "deliverable").map((c) => argsOf(c.call)).slice(-4);
+  // Review of run 5: a render (deliverable render: the content file and the PDF it made) is a build step; its content file is
+  // kept like a script — a template for the next document. The tool nests op fields under args (read both shapes).
+  const deliverables = ok.filter((c) => c.call.name === "deliverable").map((c) => flatArgs(c.call));
+  const renders = [...new Map(deliverables.filter((c) => c.op === "render" && typeof c.source === "string" && typeof c.out === "string")
+    .map((c) => [`${c.source}>${c.out}`, { source: String(c.source), out: String(c.out) }])).values()].slice(-4);
+  const checks = deliverables.filter((c) => c.op !== "render").slice(-4);
   const kind = procedureKind(paths);
   const dir = path.join(workspace, PROCEDURES_DIR);
   const file = path.join(dir, `${kind}.md`);
@@ -106,7 +122,7 @@ export function recordProcedure(workspaceDir: string, calls: ProcedureCall[], de
 
   // The scripts the build ran (or wrote), copied so the method survives the order folder being cleaned up.
   const kept: string[] = [];
-  for (const rel of [...new Set([...execs.flatMap((e) => scriptsNamed(e, workspace)), ...written.filter((p) => !p.startsWith(`${PROCEDURES_DIR}/`))])]) {
+  for (const rel of [...new Set([...execs.flatMap((e) => scriptsNamed(e, workspace)), ...renders.map((x) => x.source), ...written.filter((p) => !p.startsWith(`${PROCEDURES_DIR}/`))])]) {
     const src = path.resolve(workspace, rel.replace(/^\/workspace\//, ""));
     if (!fs.existsSync(src) || fs.lstatSync(src).isSymbolicLink() || !inside(workspace, src) || !fs.statSync(src).isFile() || fs.statSync(src).size > PROCEDURE_SCRIPT_MAX) continue;
     const dest = path.join(dir, "scripts", path.basename(rel));
@@ -117,22 +133,25 @@ export function recordProcedure(workspaceDir: string, calls: ProcedureCall[], de
 
   let prev = "";
   try { if (!fs.lstatSync(file).isSymbolicLink()) prev = fs.readFileSync(file, "utf8"); else return null; } catch { /* first time */ }
-  const times = (Number(/worked (\d+) time/.exec(prev)?.[1] ?? 0) || 0) + 1;
+  // Run 6: a dispatch (a passing review and a delivery sent) is not a verified fulfilment — the count says what it is.
+  const times = (Number(/(?:worked|dispatched) (\d+) time/.exec(prev)?.[1] ?? 0) || 0) + 1;
   const notes = prev.includes(NOTES) ? P(prev.slice(prev.indexOf(NOTES) + NOTES.length).trim()) : "";
   try {
     if (prev) writeNoFollow(path.join(dir, ".history", `${kind}.${now.toISOString().replace(/[:.]/g, "-")}.md`), prev);
   } catch { return null; }
 
   const body = [
-    `# Procedure: ${kind} (worked ${times} time${times > 1 ? "s" : ""}; last ${now.toISOString().slice(0, 16)}Z)`,
+    `# Procedure: ${kind} (dispatched ${times} time${times > 1 ? "s" : ""}; last ${now.toISOString().slice(0, 16)}Z)`,
     "",
-    "A recipe from a delivery that passed its review — start the next similar task from here, and adapt it to that order's requirements.",
+    "A recipe from a delivery that passed its review and was sent — start the next similar task from here, and adapt it to that order's requirements.",
+    "Dispatched means reviewed and sent, not that the buyer's request was met: check the result against the order and the buyer's messages every time.",
     "",
     ...PARAMETERS,
     "",
     "## Build",
-    ...(execs.length ? execs.map((e) => `- exec: \`${P(oneLine(e, 400))}\``) : ["- (no exec command recorded: the files were written directly)"]),
-    ...(kept.length ? [`- scripts kept: ${kept.join(", ")} (copies; run or adapt them)`] : []),
+    ...renders.map((x) => `- deliverable render {source: ${P(JSON.stringify(x.source))}, out: ${P(JSON.stringify(x.out))}} (the content is the JSON file: edit it, render again)`),
+    ...(execs.length ? execs.map((e) => `- exec: \`${P(oneLine(e, 400))}\``) : renders.length ? [] : ["- (no exec command recorded: the files were written directly)"]),
+    ...(kept.length ? [`- scripts kept: ${[...new Set(kept)].join(", ")} (copies; run or adapt them)`] : []),
     "",
     "## Inspect and review",
     ...(checks.length ? checks.map((c) => `- deliverable ${String(c.op ?? "?")}${Array.isArray(c.paths) ? ` paths=${P(JSON.stringify(c.paths).slice(0, 200))}` : ""}`
@@ -160,6 +179,6 @@ export function procedureLine(workspace: string, max = 3): string | null {
   if (!files.length) return null;
   const items = files.map((f) => { const p = path.join(dir, f); return { f, at: fs.statSync(p).mtimeMs, head: oneLine(fs.readFileSync(p, "utf8").split("\n")[0].replace(/^#\s*/, ""), 140) }; })
     .sort((a, b) => b.at - a.at).slice(0, max);
-  return `Your saved procedures (methods that worked before — read_file ${PROCEDURES_DIR}/<name>; yours to edit, improve or delete): `
+  return `Your saved procedures (methods behind earlier deliveries — read_file ${PROCEDURES_DIR}/<name>; yours to edit, improve or delete): `
     + items.map((i) => `${PROCEDURES_DIR}/${i.f} — ${i.head}`).join(" | ");
 }

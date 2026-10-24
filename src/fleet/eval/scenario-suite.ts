@@ -20,6 +20,7 @@
  * platform worked; the agent's choice did not achieve the task) · infrastructure (the platform prevented it: a tool fault, a
  * provider error, a harness error) · incomplete (the cap or the time ran out first). Observed, never inferred from reasoning.
  */
+import { gradeS1Documents } from "./s1-correction-check.js";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -105,6 +106,8 @@ export interface ScenarioSuiteOptions {
   rendererInstalled: boolean;
   /** A correct workbook whose blank guard formulas are valid (Agent-1's f45c3d00): scenario 3's product. */
   workbookFixture?: string;
+  /** Run 6: the agent toolchain's Python (pypdfium2, pypdf) — S1's grade reads the delivered documents with it. */
+  documentPython?: string;
   evidenceDir: string;
   workDir: string;
   only?: readonly ScenarioId[];
@@ -429,6 +432,15 @@ async function keepEvidence(w: World, dir: string, o: ScenarioSuiteOptions): Pro
     fs.copyFileSync(src, path.join(dir, "workspace", f.path));
     kept++;
   }
+  // Desktop run 4 (2026-10-24): a revision overwrote the first delivered file in the workspace, so the first delivery could
+  // not be judged afterwards. Every delivered file as sent (the registry keeps its bytes for the retention period).
+  const sent = await w.q(`SELECT d.delivery_id, f.file_no, f.file_name, f.content_sha256, f.blob FROM fleet_order_deliveries d
+    JOIN fleet_order_delivery_files f ON f.delivery_id = d.delivery_id WHERE d.agent_id = $1 AND f.blob IS NOT NULL ORDER BY d.created_at, f.file_no LIMIT 40`, [w.a]) as Array<{ delivery_id: string; file_no: number; file_name: string; content_sha256: string; blob: Buffer }>;
+  if (sent.length) fs.mkdirSync(path.join(dir, "delivered"), { recursive: true, mode: 0o700 });
+  for (const [i, f] of sent.entries()) {
+    if (sha(f.blob) !== f.content_sha256) continue;                                    // only the bytes the record names
+    fs.writeFileSync(path.join(dir, "delivered", `${i + 1}-${f.delivery_id.slice(0, 8)}-${f.file_name.replace(/[^A-Za-z0-9._-]/g, "_")}`), f.blob, { mode: 0o600 });
+  }
   put("customer-messages.json", await w.q(`SELECT author, order_id, enquiry_id, body, created_at FROM fleet_customer_messages WHERE agent_id = $1 ORDER BY created_at`, [w.a]));
   put("deliveries.json", await w.q(`SELECT d.delivery_id, d.order_id, d.status, d.resend_reason, d.created_at, f.file_name, f.content_sha256, r.verdict, r.automated_ok
     FROM fleet_order_deliveries d LEFT JOIN fleet_order_delivery_files f ON f.delivery_id = d.delivery_id LEFT JOIN fleet_artifact_reviews r ON r.review_id = d.review_id
@@ -456,14 +468,30 @@ const s1: ScenarioFn = async (w, o, limit) => {
   w.progress.firstDelivery = { minutes: minutes(tDelivered - t0), status: first.status };
   await w.buyerSays(access, "Thanks. Point 7 should also have a line to write the date of the next annual check. Could you add it?");
   const tAsked = Date.now();
-  const answered = await waitFor(async () => ((await w.agentMsgs(orderId)).some((m) => m.created_at.getTime() >= tAsked - 1_000) ? Date.now() : null), limit * 0.3, o.pollMs ?? 2_000);
+  // Review of run 5: the corrected delivery answers the request too — the wait ends at a reply or a second sent delivery,
+  // whichever comes first (the scenario ends as soon as the work is done; the remaining time is not spent).
+  const sentTwice = async () => (await w.deliveries(orderId)).filter((x) => x.status === "sent").length >= 2;
+  const answered = await waitFor(async () => ((await w.agentMsgs(orderId)).some((m) => m.created_at.getTime() >= tAsked - 1_000) || await sentTwice() ? Date.now() : null), limit * 0.3, o.pollMs ?? 2_000);
   w.progress.correctionAnswered = answered ? { minutes: minutes(answered - tAsked) } : false;
   const second = await waitFor(async () => { const d = (await w.deliveries(orderId)).filter((x) => x.status === "sent"); return d.length >= 2 ? d[1] : null; }, Math.max(0, limit - (Date.now() - t0)), o.pollMs ?? 2_000);
   const reviews = await w.q(`SELECT r.verdict, r.automated_ok FROM fleet_order_deliveries d JOIN fleet_artifact_reviews r ON r.review_id = d.review_id WHERE d.order_id = $1 AND d.status = 'sent'`, [orderId]);
   const open = (await w.obligations()).filter((x) => x.id === orderId);
   const obs = { calls: calls(w), minutesToFirstDelivery: minutes(tDelivered - t0), minutesToAnswer: answered ? minutes(answered - tAsked) : null,
     minutesToResolution: second ? minutes(Date.now() - tAsked) : null, sentDeliveries: (await w.deliveries(orderId)).filter((d) => d.status === "sent").length, reviews, openAtEnd: open };
-  if (second && open.length === 0 && reviews.every((r) => r.verdict === "pass")) return { verdict: "completed", reason: "delivered, corrected on request, resolved", observations: obs };
+  // Run 6: "completed" was reported for a revision that was the first file again. The grade reads the two delivered
+  // documents' bytes: the original order kept in both, the revision not the same file, the correction visible under point 7.
+  if (second && open.length === 0 && reviews.every((r) => r.verdict === "pass")) {
+    if (!o.documentPython || !fs.existsSync(o.documentPython)) return { verdict: "incomplete", reason: "delivered twice, but the documents could not be graded (no document tools on this host)", observations: obs };
+    const blobs = await w.q(`SELECT d.delivery_id, f.blob, f.content_sha256 FROM fleet_order_deliveries d JOIN fleet_order_delivery_files f ON f.delivery_id = d.delivery_id
+      WHERE d.order_id = $1 AND d.status = 'sent' AND f.blob IS NOT NULL ORDER BY d.created_at, f.file_no`, [orderId]) as Array<{ delivery_id: string; blob: Buffer; content_sha256: string }>;
+    const firstPdf = blobs.find((b) => b.delivery_id === first.delivery_id)?.blob;
+    const secondPdf = blobs.find((b) => b.delivery_id === second.delivery_id)?.blob;
+    if (!firstPdf || !secondPdf) return { verdict: "incomplete", reason: "delivered twice, but a delivered file's bytes are not kept", observations: obs };
+    const grade = gradeS1Documents(o.documentPython, firstPdf, secondPdf);
+    const graded = { ...obs, grade };
+    if (!grade.ok) return { verdict: "poor_decision", reason: `dispatched twice, but the documents fail: ${grade.reasons.join("; ")}`.slice(0, 600), observations: graded };
+    return { verdict: "completed", reason: "delivered, corrected on request (the correction is visible under point 7; the original order kept), resolved", observations: graded };
+  }
   if (answered && open.length === 1 && open[0].state === "acknowledged") return { verdict: "correctly_blocked", reason: "the correction was answered but not delivered (see its message for the stated blocker)", observations: obs };
   return { verdict: "poor_decision", reason: answered ? "answered but not resolved" : "the correction request was not answered", observations: obs };
 };

@@ -1,0 +1,55 @@
+{
+  "title": "Gas Safety: The Landlord's Annual 10-Point Checklist",
+  "subtitle": "England",
+  "description": "Annual Gas Safety Checklist for Landlords - Compliance Requirements under The Gas Safety (Installation and Use) Regulations 1998",
+  "blocks": [
+    {
+      "heading": "Gas Safety: The Landlord's Annual 10-Point Checklist (England)",
+      "text": "This checklist is designed to help landlords in England ensure compliance with The Gas Safety (Installation and Use) Regulations 1998. Annual checks must be completed by a Gas Safe registered engineer. Retain certificates for at least 2 years and provide copies to tenants within 28 days."
+    },
+    {
+      "checklist": [
+        {
+          "text": "1. Verify all gas appliances are installed and maintained by a Gas Safe registered engineer",
+          "lines": ["Landlord Name: ______________________", "Date Checked: ______________________"]
+        },
+        {
+          "text": "2. Check gas appliances for safe operation, proper ventilation, and correct flueing",
+          "lines": ["Appliances checked: [ ] Boiler [ ] Heater [ ] Cooker [ ] Fire [ ] Other: ________"]
+        },
+        {
+          "text": "3. Test gas fittings for leaks using a suitable gas detector",
+          "lines": ["Gas leak test: [ ] Passed [ ] Failed [ ] Not Required"]
+        },
+        {
+          "text": "4. Inspect gas flues and ventilation systems for blockages or damage",
+          "lines": ["Flue condition: [ ] Good [ ] Poor [ ] Needs Attention"]
+        },
+        {
+          "text": "5. Check carbon monoxide detectors are present and functioning",
+          "lines": ["CO detectors: [ ] Present [ ] Missing [ ] Battery: [ ] OK [ ] Replace"]
+        },
+        {
+          "text": "6. Verify gas pressure and combustion analysis readings are within safe limits",
+          "lines": ["Combustion analysis: [ ] Within Limits [ ] Adjustment Required"]
+        },
+        {
+          "text": "7. Ensure emergency shut-off valves are accessible and operational",
+          "lines": ["Shut-off valve: [ ] Accessible [ ] Locked [ ] Operational", "Next annual check date: ______________________"]
+        },
+        {
+          "text": "8. Check gas pipework for corrosion, damage, or deterioration",
+          "lines": ["Pipework condition: [ ] Good [ ] Repair Required [ ] Replace Recommended"]
+        },
+        {
+          "text": "9. Review and record any previous repairs or modifications to gas installations",
+          "lines": ["Previous works: [ ] None [ ] Logged in Gas Safety Certificate"]
+        },
+        {
+          "text": "10. Confirm tenant information and property details are recorded for the certificate",
+          "lines": ["Tenants informed: [ ] Yes [ ] No", "Certificate issued: [ ] Yes [ ] No"]
+        }
+      ]
+    }
+  ]
+}

@@ -50,9 +50,21 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     expect(sql).toContain("GREATEST(b.created_at,");
     return (await su.query(sql)).rows[0].exists as boolean;
   };
-  const delivery = async (status: string, minutesAgo: number) => R.q(`INSERT INTO fleet.fleet_order_deliveries (order_id, agent_id, idempotency_key, subject, body, status, created_at, sent_at)
-    VALUES ($1, $2, $3, 'Your corrected tracker', 'Attached.', $4, now() - make_interval(mins => $5), CASE WHEN $4 = 'sent' THEN now() END) RETURNING delivery_id`,
-    [orderId, F.id, `test:${crypto.randomUUID()}`, status, minutesAgo]);
+  // v113: what a delivery carries — its files (by hash) and the review it went out on. A revision answers the buyer only when its
+  // files changed and its review showed the required change on the page (a passing required_content check).
+  const review = async (order: string, requiredContent: "pass" | "fail" | null) => (await R.q(`INSERT INTO fleet.fleet_artifact_reviews (agent_id, subject, order_id, files,
+      files_digest, inspector, automated, automated_ok, criteria, verdict)
+    VALUES ($1, 'order', $2, '[{"name":"tracker.pdf"}]', repeat('d', 64), 'fleet-qa-3', $3::jsonb, $4, '[{"c":1},{"c":2},{"c":3}]', $5) RETURNING review_id`,
+    [F.id, order, JSON.stringify({ ok: requiredContent !== "fail", files: [{ path: "tracker.pdf", checks: requiredContent ? [{ id: "required_content", status: requiredContent }] : [] }] }),
+      requiredContent !== "fail", requiredContent !== "fail" ? "pass" : "fail"]))[0].review_id as string;
+  const delivery = async (status: string, minutesAgo: number, x: { order?: string; file?: string; reviewId?: string } = {}) => {
+    const rows = await R.q(`INSERT INTO fleet.fleet_order_deliveries (order_id, agent_id, idempotency_key, subject, body, status, created_at, sent_at, review_id)
+      VALUES ($1, $2, $3, 'Your corrected tracker', 'Attached.', $4, now() - make_interval(mins => $5), CASE WHEN $4 = 'sent' THEN now() END, $6) RETURNING delivery_id`,
+      [x.order ?? orderId, F.id, `test:${crypto.randomUUID()}`, status, minutesAgo, x.reviewId ?? null]);
+    if (x.file) await R.q(`INSERT INTO fleet.fleet_order_delivery_files (delivery_id, file_no, file_name, content_type, size_bytes, content_sha256)
+      VALUES ($1, 1, 'tracker.pdf', 'application/pdf', 100, $2)`, [rows[0].delivery_id, crypto.createHash("sha256").update(x.file).digest("hex")]);
+    return rows;
+  };
 
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 1, allocationCents: 10_000, simulatedSettlement: false });
@@ -118,7 +130,7 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
   });
 
   it("resolved by a delivery made after the request once it is sent (in progress while queued), or by a resolving answer", async () => {
-    const [d] = await delivery("queued", 0);
+    const [d] = await delivery("queued", 0, { file: "corrected tracker", reviewId: await review(orderId, "pass") });
     expect((await obligations())[0]).toMatchObject({ state: "unanswered", delivering: true });
     await R.q(`UPDATE fleet.fleet_order_deliveries SET status = 'sent', sent_at = now() WHERE delivery_id = $1`, [d.delivery_id]);
     expect(await obligations()).toEqual([]);
@@ -293,8 +305,7 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ state: "acknowledged", deliveryOwed: true });
     await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body, resolves) VALUES ($1, $2, 'agent', 'Closing this thread.', true)`, [F.id, paid]);
     expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ state: "to_deliver", deliveryOwed: true });
-    await R.q(`INSERT INTO fleet.fleet_order_deliveries (order_id, agent_id, idempotency_key, subject, body, status, created_at, sent_at)
-      VALUES ($1, $2, $3, 'Your PDF', 'Attached.', 'sent', now(), now())`, [paid, F.id, `d:${crypto.randomUUID()}`]);
+    await delivery("sent", 0, { order: paid, file: "checklist v1" });
     await R.q(`UPDATE fleet.fleet_customer_orders SET status = 'delivered', fulfilled_at = now(), fulfilment_evidence = '{"delivery":"sent"}' WHERE order_id = $1`, [paid]);
     expect((await obligations()).some((x) => x.id === paid)).toBe(false);
     // Desktop run 2026-10-23 (9B, RTX 5080): delivered, then the buyer asked for a change; the agent answered and slept. The
@@ -305,9 +316,26 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
     expect(asked.deliveryOwed).toBeUndefined();                                         // the first delivery was made
     await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'agent', 'Updated — see the revised PDF.')`, [F.id, paid]);
     expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ state: "acknowledged", revisionOwed: true });
-    await R.q(`INSERT INTO fleet.fleet_order_deliveries (order_id, agent_id, idempotency_key, subject, body, status, created_at, sent_at)
-      VALUES ($1, $2, $3, 'Your revised PDF', 'Attached.', 'sent', now(), now())`, [paid, F.id, `d:${crypto.randomUUID()}`]);
+    // Run 6 (v113): the same file again — even when the agent calls it an unchanged resend — goes to the buyer but answers
+    // nothing: the request stays owed (and order.thread says so, for the runtime's checks).
+    const thread = async () => (await R.econ(F, "order.thread", { orderId: paid })) as Record<string, any>;
+    expect((await thread()).revisionOwed).toBe(true);
+    await delivery("sent", 0, { order: paid, file: "checklist v1" });
+    expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ revisionOwed: true });
+    expect((await thread()).revisionOwed).toBe(true);
+    // Changed files whose review did not show the change on the page (no passing required_content): still owed.
+    await delivery("sent", 0, { order: paid, file: "checklist v2", reviewId: await review(paid, null) });
+    expect((await obligations()).find((x) => x.id === paid)).toMatchObject({ revisionOwed: true });
+    // Changed files whose review showed the required change: the request is answered.
+    await delivery("sent", 0, { order: paid, file: "checklist v3", reviewId: await review(paid, "pass") });
     expect((await obligations()).some((x) => x.id === paid)).toBe(false);                // the revision was delivered
+    expect((await thread()).revisionOwed).toBe(false);
+    // A new request, then the agent's own resolving answer (its judgement that nothing more is owed) still closes it, as before.
+    await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body) VALUES ($1, $2, 'buyer', 'Thanks, that is perfect.')`, [F.id, paid]);
+    expect((await thread()).revisionOwed).toBe(true);
+    await R.q(`INSERT INTO fleet.fleet_customer_messages (agent_id, order_id, author, body, resolves) VALUES ($1, $2, 'agent', 'Glad it helps.', true)`, [F.id, paid]);
+    expect((await obligations()).some((x) => x.id === paid)).toBe(false);
+    expect((await thread()).revisionOwed).toBe(false);
   });
 
   it("v111: a listing, pin or storefront product that sells elsewhere names a published offer whose capability check still covers it", async () => {

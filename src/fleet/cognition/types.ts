@@ -701,8 +701,8 @@ export const FOUNDER_V7_TOOLS: readonly ToolSpec[] = Object.freeze([
   {
     name: "deliverable",
     capability: "planning",
-    description: "Check your actual work before it reaches a buyer. op inspect: {paths: [workspace files], cases?: [{file?, sheet, inputs: {cell: value}, expect: {cell: value}, tolerance? (default 0.01; 0 for money)}]} — expected values computed independently (exec), never by reasoning → the automated inspection (recalculated spreadsheets with your test cases, rendered PDF pages, documents, images, archives; errors, placeholders, spelling) — fix every failure; op review: {subject (offer|order|enquiry|sample), offerId|orderId|enquiryId, paths (exactly the files you will publish or deliver), criteria: [{criterion (what the buyer asked for or you promised), met: true|false, evidence (what you actually checked and found)}] (3..30), independentRequestId? + independentVerdict? (pass|concerns|fail) + independentSummary? (from independent_review), verdict (pass|fail), notes?} → a reviewId (it re-inspects the files itself; a pass needs no automated failure and every criterion met; it covers exactly these bytes and, for an order, the requirements as they stand now); op reviews: {orderId?, offerId?}. Deliver with wallet deliver {orderId, paths, reviewId}; publish with offer publish {offerId, reviewId}.",
-    parameters: obj({ op: { type: "string", enum: ["inspect", "review", "reviews"] }, args: { type: "object", description: "Fields for the op (see description)" } }, ["op"]),
+    description: "Check your actual work before it reaches a buyer. op render: {source: a workspace .json file (the content, kept editable), out: a .pdf path, content?: (saved to source first) {title, subtitle?, pageSize? (A4|letter), blocks: [{heading: text} | {text: paragraph} | {bullets: [text]} | {checklist: [text | {text, lines?: [labels of lines to write on under the item]}], numbered?: false} | {lines: [labels, e.g. \"Signed\", \"Date\"]} | {table: {columns: [text], rows: [[text]]}}] (a block may hold several of these: they render in the order written), footer?} — checklist items are numbered for you and get a drawn tick box (do not type numbers, boxes or underscores; the write-in line is drawn); any other field is refused, require?} — lays out a PDF with margins, wrapped text, drawn empty tick boxes and write-in lines, then inspects it; to change the document, edit source and render again (works for any order); op inspect: {paths: [workspace files], require?: [phrases the buyer asked for that must be VISIBLE in a PDF], cases?: [{file?, sheet, inputs: {cell: value}, expect: {cell: value}, tolerance? (default 0.01; 0 for money)}]} — expected values computed independently (exec), never by reasoning → the automated inspection (recalculated spreadsheets with your test cases, rendered PDF pages, documents, images, archives; errors, placeholders, spelling) — fix every failure; op review: {subject (offer|order|enquiry|sample), offerId|orderId|enquiryId, paths (exactly the files you will publish or deliver), criteria: [{criterion (what the buyer asked for or you promised), met: true|false, evidence (what you actually checked and found)}] (3..30), independentRequestId? + independentVerdict? (pass|concerns|fail) + independentSummary? (from independent_review), verdict (pass|fail), notes?} → a reviewId (it re-inspects the files itself; a pass needs no automated failure and every criterion met; it covers exactly these bytes and, for an order, the requirements as they stand now); op reviews: {orderId?, offerId?}. Deliver with wallet deliver {orderId, paths, reviewId}; publish with offer publish {offerId, reviewId}.",
+    parameters: obj({ op: { type: "string", enum: ["render", "inspect", "review", "reviews"] }, args: { type: "object", description: "Fields for the op (see description)" } }, ["op"]),
   },
   {
     name: "independent_review",
@@ -798,10 +798,29 @@ function stripNested(v: unknown, depth: number): unknown {
   }
   return out;
 }
+/**
+ * Desktop run 2 (2026-10-23, 9B): the delivery path's tools reached the model as `{op, args: object}` and a first sentence
+ * that named no argument — 33 malformed calls (review without subject / verdict / criteria, deliver without paths). The
+ * arguments of the ops a paid order needs are kept in the compact description (the rest stays one tool_help away).
+ */
+export const COMPACT_ESSENTIALS: Readonly<Record<string, string>> = Object.freeze({
+  deliverable: "Fields go inside args. op render: {source: \"order/checklist.json\", out: \"order/checklist.pdf\", content: {title, blocks: "
+    + "[{heading} | {text} | {bullets: [..]} | {checklist: [text | {text, lines: [\"label\"]}]} | {lines: [\"label\"]} | {table: {columns, rows}}]}, "
+    + "require?: [phrases]} → a PDF with wrapped text and drawn tick boxes, inspected (edit source, render again); op inspect: {paths: [\"order/checklist.pdf\"], "
+    + "require?: [phrases the buyer asked for]}; op review: {subject: \"order\", orderId, paths, "
+    + "criteria: [{criterion, met: true|false, evidence}] (3..30), verdict: \"pass\"|\"fail\", require (REQUIRED for a revision: the visible text "
+    + "of the buyer's change, checked on the page)} → reviewId; op reviews: {orderId?}.",
+  wallet: "Fields go inside args. op orders: {orderId?}; op deliver: {orderId, paths: [\"order/checklist.pdf\"] (your workspace files), "
+    + "reviewId (a passing deliverable review of exactly these files), message?; a resend also needs resendReason and after (the latest "
+    + "delivery's operationId); a revision is NEW files on a review with require — the same files again only with unchanged: true}; op operations: {kind?}.",
+  customers: "Fields go inside args. op order_thread: {orderId}; op order_message: {orderId, message, resolved?} — say a file is "
+    + "delivered only after wallet deliver succeeded and the delivery is sent (order_thread: order.delivery.status \"sent\"; \"queued\" = say it is on its way).",
+});
 export function compactToolSpec(t: ToolSpec): ToolSpec {
   const first = t.description.split(/(?<=[.!?])\s|\s—\s| op [a-z_]+:/)[0].trim();
   const d = first.length > COMPACT_DESCRIPTION_CHARS ? `${first.slice(0, COMPACT_DESCRIPTION_CHARS - 1)}…` : first;
-  return { ...t, description: `${d} (tool_help for every op and argument)`, parameters: stripNested(t.parameters, 1) as ToolSpec["parameters"] };
+  const essentials = COMPACT_ESSENTIALS[t.name];
+  return { ...t, description: `${d}${essentials ? ` ${essentials}` : ""} (tool_help for every op and argument)`, parameters: stripNested(t.parameters, 1) as ToolSpec["parameters"] };
 }
 export function compactTools(tools: readonly ToolSpec[]): ToolSpec[] {
   return [...tools.map(compactToolSpec), TOOL_HELP_SPEC];

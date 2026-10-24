@@ -30,7 +30,7 @@ describe("procedures kept from a successful delivery", () => {
     ];
     expect(recordProcedure(w, calls, deliver)).toBe(`${PROCEDURES_DIR}/deliver-pdf.md`);
     const md = fs.readFileSync(path.join(w, PROCEDURES_DIR, "deliver-pdf.md"), "utf8");
-    expect(md).toContain("# Procedure: deliver-pdf (worked 1 time;");
+    expect(md).toContain("# Procedure: deliver-pdf (dispatched 1 time;");
     expect(md).toContain("- exec: `cd order && python3 make_pdf.py --out checklist.pdf`");
     expect(md).not.toContain("broken.py");                                       // a failed command is not a method
     expect(md).toContain("scripts kept: procedures/scripts/make_pdf.py");
@@ -39,7 +39,35 @@ describe("procedures kept from a successful delivery", () => {
     expect(md).toContain("- deliverable review paths=[\"order/checklist.pdf\"] (3 criteria, verdict pass)");
     expect(md).toContain("- wallet deliver {orderId: <ORDER_ID>, paths: [\"order/checklist.pdf\"] (the NEW files), reviewId: <REVIEW_ID>}");
     expect(md).toContain("Never re-send an earlier delivery call");
-    expect(procedureLine(w)).toContain("procedures/deliver-pdf.md — Procedure: deliver-pdf (worked 1 time;");
+    expect(procedureLine(w)).toContain("procedures/deliver-pdf.md — Procedure: deliver-pdf (dispatched 1 time;");
+  });
+
+  it("keeps only real build steps: no command that exited non-zero, no look-around, no repeat, no absolute workspace path (desktop run 3)", () => {
+    const w = ws();
+    fs.mkdirSync(path.join(w, "order"));
+    fs.writeFileSync(path.join(w, "order", "create_pdf.py"), "print('pdf')\n");
+    const calls = [
+      { call: c("exec", { command: "pwd" }), ok: true, output: "exit 0\n/workspace/ws_01M5NMABBS1KX51KV1N53QXFG7" },
+      { call: c("exec", { command: "ls -la order/" }), ok: true, output: "exit 0\ncreate_pdf.py" },
+      { call: c("exec", { command: "cd order && python create_pdf.py" }), ok: true, output: "exit 127\npython: not found" },
+      { call: c("exec", { command: "cd order && python3 create_pdf.py" }), ok: true, output: "exit 0\n" },
+      { call: c("exec", { command: "cd order && python3 create_pdf.py" }), ok: true, output: "exit 0\n" },
+      { call: c("exec", { command: `cd ${w}/order && python3 create_pdf.py --final` }), ok: true, output: "exit 0\n" },
+      { call: c("exec", { command: "cd /workspace/ws_01M5NMABBS1KX51KV1N53QXFG7 && python3 order/create_pdf.py" }), ok: true, output: "exit 0\n" },
+      { call: c("exec", { command: "echo done > order/log.txt" }), ok: true, output: "exit 0\n" },
+    ];
+    expect(recordProcedure(w, calls, deliver)).toBe(`${PROCEDURES_DIR}/deliver-pdf.md`);
+    const md = fs.readFileSync(path.join(w, PROCEDURES_DIR, "deliver-pdf.md"), "utf8");
+    const build = md.slice(md.indexOf("## Build"), md.indexOf("## Inspect")).split("\n").filter((l) => l.startsWith("- exec"));
+    expect(build).toEqual([
+      "- exec: `cd order && python3 create_pdf.py`",
+      "- exec: `cd ./order && python3 create_pdf.py --final`",
+      "- exec: `cd . && python3 order/create_pdf.py`",
+      "- exec: `echo done > order/log.txt`",                                        // writes a file: not only a look around
+    ]);
+    expect(md).not.toContain(w);
+    expect(md).not.toContain("ws_01M5");
+    expect((md.match(/procedures\/scripts\/create_pdf\.py/g) ?? []).length).toBe(1);
   });
 
   it("is editable and reversible: a rewrite keeps the previous version and carries the founder's own notes", () => {
@@ -49,11 +77,21 @@ describe("procedures kept from a successful delivery", () => {
     fs.writeFileSync(f, `${fs.readFileSync(f, "utf8")}\nUse A4 and 11pt; the buyer wanted tick boxes.\n`);   // the founder's own edit
     recordProcedure(w, [], deliver, new Date("2026-10-24T10:00:00Z"));
     const md = fs.readFileSync(f, "utf8");
-    expect(md).toContain("worked 2 times");
+    expect(md).toContain("dispatched 2 times");
     expect(md).toContain("Use A4 and 11pt; the buyer wanted tick boxes.");
     const hist = fs.readdirSync(path.join(w, PROCEDURES_DIR, ".history"));
     expect(hist).toHaveLength(1);
     expect(fs.readFileSync(path.join(w, PROCEDURES_DIR, ".history", hist[0]), "utf8")).toContain("Use A4 and 11pt");
+  });
+
+  it("run 6: the count says dispatched (reviewed and sent), not verified; an older 'worked' record keeps counting", () => {
+    const w = ws();
+    recordProcedure(w, [], deliver);
+    const f = path.join(w, PROCEDURES_DIR, "deliver-pdf.md");
+    expect(fs.readFileSync(f, "utf8")).toContain("Dispatched means reviewed and sent, not that the buyer's request was met");
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("dispatched 1 time", "worked 3 times"));   // a record written before
+    recordProcedure(w, [], deliver);
+    expect(fs.readFileSync(f, "utf8")).toContain("(dispatched 4 times;");
   });
 
   it("links planted in the workspace never make it read from or write to outside", () => {

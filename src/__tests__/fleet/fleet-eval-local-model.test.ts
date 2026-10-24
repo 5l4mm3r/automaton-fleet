@@ -66,7 +66,7 @@ describe.skipIf(!PG_BIN || !URL_ || !MODEL || !fs.existsSync(path.join(DEV_TOOLS
       killHard: async (a) => { const pid = await host.pid(a);
         return killMainProcess(`founder ${a}`, { systemctl: (args) => (args[0] === "show" ? String(pid ?? 0) : args[0] === "kill" ? (process.kill(pid!, "SIGKILL"), "") : ""),
           alive: procAlive, sleep: (ms) => new Promise((r) => setTimeout(r, ms)) }); },
-      workbookFixture: process.env.FLEET_LOCAL_WORKBOOK, only, pollMs: 2_000,
+      workbookFixture: process.env.FLEET_LOCAL_WORKBOOK, documentPython: path.join(DEV_TOOLS, "bin/fleet-python"), only, pollMs: 2_000,
     });
     if (process.env.FLEET_LOCAL_EVIDENCE) fs.cpSync(evidenceDir, process.env.FLEET_LOCAL_EVIDENCE, { recursive: true });
     for (const r of report.results) console.log(JSON.stringify({ id: r.id, verdict: r.verdict, reason: r.reason, calls: r.cost.calls, observations: r.observations }).slice(0, 2_000));

@@ -49,7 +49,7 @@ import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineCla
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
 import { OWED_RECHECK_MS, newestBuyerMessage, obligationLines, owedDeliveryLine, owedRevisionLine, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
 import { officeState } from "./exec-sandbox.js";
-import { CARRY_MAX_CHARS, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
+import { CARRY_MAX_CHARS, compact, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
 
 export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
@@ -149,6 +149,12 @@ const MAX_ROUTINE_MATERIAL = 12_000;
 const COGNITION_TOOLS = new Set(["routine_task", "escalate_question", "independent_review"]);
 
 /** Tool-call arguments as remembered in history: long strings (e.g. file contents) are elided. */
+/** A step's tools for the mind log; a refused call keeps its (clipped) arguments, so a malformed call can be read afterwards. */
+function toolLog(calls: readonly ToolCall[], outcomes: readonly ToolOutcome[]): Array<Record<string, unknown>> {
+  return outcomes.map((o, i) => ({ name: o.name, ok: o.ok, refused: o.refused, ...(o.refused ? { reason: refusalReason(o.output),
+    ...(calls[i]?.name === o.name ? { args: compact(calls[i].arguments, 600) } : {}) } : {}) }));
+}
+
 function compactArgs(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(args ?? {})) {
@@ -212,11 +218,11 @@ export function ownerBlock(turn: { messages: Array<Record<string, unknown>>; fil
 /** v62: the owner turn the mind is answering. */
 export interface OwnerTurn { turnId: string; messages: Array<Record<string, unknown>>; files: Record<string, string> }
 /** v62: refusals that leave the owner's messages waiting (shown to the owner) rather than failing them. */
-/** Desktop run 2026-10-24 (9B, RTX 5080): the hourly call limit was reached in 3.5 minutes; the founder then retried every
- *  second for 40 minutes (1,000 refused turns, no inference). A refusal by any call-rate limit rests the founder a minute. */
-const REST_CODES = new Set(["FLEET_COGNITION_PROVIDER_RATE_LIMITED", "FLEET_COGNITION_RATE_LIMITED", "FLEET_RATE_LIMITED"]);
-/** 2026-10-24: the rest lasts until the controller says the next call is eligible (its Retry-After), else a minute. */
-const restMs = (err: unknown): number => { const s = (err as { retryAfterS?: unknown }).retryAfterS; return typeof s === "number" && s >= 1 && s <= 3600 ? s * 1000 : 60_000; };
+/** 2026-10-24 (integration of 8077f6c, f9db421 and the controller's eligibility time): FleetController's Retry-After on a
+ *  refused call — for the hourly bound, the moment enough of the last hour's calls leave the window (v112) — in seconds. */
+const retryAfterS = (err: unknown): number | undefined => { const s = (err as { retryAfterS?: unknown }).retryAfterS; return typeof s === "number" && s >= 1 && s <= 3600 ? s : undefined; };
+/** A provider or service rate limit rests until the controller's Retry-After, else a minute. */
+const restMs = (err: unknown): number => (retryAfterS(err) ?? 60) * 1000;
 const OWNER_WAIT_CODES = new Set(["FLEET_COGNITION_PAUSED", "FLEET_TREASURY_INSUFFICIENT", "FLEET_COGNITION_RATE_LIMITED", "FLEET_COGNITION_BUSY",
   "FLEET_COGNITION_PROVIDER_RATE_LIMITED", "FLEET_COGNITION_CREDITS_EXHAUSTED", "FLEET_COGNITION_DISABLED", "FLEET_COGNITION_FOUNDER_DISABLED",
   "FLEET_AGENT_HELD", "FLEET_FX_UNAVAILABLE", "FLEET_ROUTING_DISABLED",
@@ -441,16 +447,57 @@ export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS, 
   return text;
 }
 
+const HOUR_MS = 3_600_000;
+/** How often, at most, a running turn re-reads the controller's attention for newly owed work (between steps). */
+export const NEW_WORK_CHECK_MS = 10_000;
+
 export class FounderMind {
   turns = 0;
   readonly routing: RoutingStats = { routedTurns: 0, steps: { T2: 0, T3: 0 }, routineCalls: 0, escalations: 0, escalationsReused: 0, actionBoundarySteps: 0, thinkingDropped: 0, budgetStops: 0, slimWakeups: 0, idleNudges: { decide: 0, execute: 0, opportunity: 0, hibernate: 0 }, lastRoute: null };
   private restUntil = 0;
+  private restReason = "provider rate limit";
+  /** Desktop runs 2–3: at the hourly call bound the founder retried every heartbeat (~1 s) until the run ended. When this
+   *  founder's model calls were made (the controller counts them over a rolling hour) and how often the bound refused in a row. */
+  private readonly callTimes: number[] = [];
+  private hourlyRefusals = 0;
   /** 2026-10-21: when this turn's attention was read (its packet shows events up to here); the next packet counts from it. */
   private statusReadAt: string | null = null;
   private idleBackoff = 0;
   private idleSkip = 0;
   /** v62: when a declared hibernation's safety re-check is due (null = not hibernating; undefined = not yet restored). */
   private hibernateUntil: number | null | undefined = undefined;
+
+  /** One model call made (the controller logged it). */
+  private noteCall(): void {
+    const now = Date.now();
+    this.callTimes.push(now);
+    while (this.callTimes.length && this.callTimes[0] <= now - HOUR_MS) this.callTimes.shift();
+    this.hourlyRefusals = 0;
+  }
+  /**
+   * The hourly call bound refused (or the controller's count shows it reached): rest until the oldest call that keeps the
+   * count at the bound leaves the rolling hour — known from this runtime's own calls — and otherwise (after a restart, or
+   * when the controller counts calls this runtime did not see) back off 60 s, doubling. Never longer than 10 minutes at a
+   * time, never shorter than 30 s; the heartbeat loop keeps running (shutdown and deadlines are unaffected) and makes no call
+   * while resting. The bound itself is FleetController's and is unchanged.
+   */
+  private restForHourlyBound(max: number, controllerS?: number): void {
+    const now = Date.now();
+    this.hourlyRefusals++;
+    // Integration 2026-10-24: FleetController's own eligibility time (it counts every call, including ones this runtime did
+    // not see, and survives restarts) is used as given, one rest of at most 10 minutes at a time (the status is read again
+    // after it); without it, this runtime's estimate from its own calls, else the doubling backoff (f9db421).
+    if (controllerS !== undefined) {
+      this.restUntil = now + Math.min(600_000, controllerS * 1000);
+      this.restReason = `hourly call limit${max > 0 ? ` (${max})` : ""} reached, next call from ${new Date(now + controllerS * 1000).toISOString()} (FleetController)`;
+      return;
+    }
+    const recent = this.callTimes.filter((t) => t > now - HOUR_MS);
+    const known = max > 0 && recent.length >= max ? recent[recent.length - max] + HOUR_MS + 2_000 : null;
+    const backoff = now + Math.min(600_000, 60_000 * 2 ** Math.min(this.hourlyRefusals - 1, 4));
+    this.restUntil = Math.min(now + 600_000, Math.max(now + 30_000, known ?? backoff));
+    this.restReason = `hourly call limit${max > 0 ? ` (${max})` : ""} reached, next call from ${new Date(this.restUntil).toISOString()}`;
+  }
 
   constructor(private readonly o: { ports: MindPorts; toolbox: FounderToolbox; stateDir: string; maxStepsPerTurn?: number; log?: (event: string, detail?: Record<string, unknown>) => void;
     /** v62: the declared-hibernation safety re-check interval (default HIBERNATION_SAFETY_MS). 0 turns event-driven hibernation off (the timer backoff only): tests of slim-packet mechanics. */ hibernationSafetyMs?: number;
@@ -504,7 +551,12 @@ export class FounderMind {
       return { ...result, reason: owner };
     }
     // The provider asked us to slow down: rest (no inference) until the advertised time.
-    if (Date.now() < this.restUntil) return { ...result, reason: "resting: provider rate limit" };
+    if (Date.now() < this.restUntil) return { ...result, reason: `resting: ${this.restReason}` };
+    // The hourly call bound is reached (FleetController's count): rest until a call can be made, no call to be refused.
+    if (Number.isFinite(Number(status.turnsLastHour)) && Number(status.maxTurnsPerHour) > 0 && Number(status.turnsLastHour) >= Number(status.maxTurnsPerHour)) {
+      this.restForHourlyBound(Number(status.maxTurnsPerHour));
+      return { ...result, reason: `resting: ${this.restReason}` };
+    }
     const routedNow = !!this.o.routed && (status.routing as { active?: unknown } | undefined)?.active === true;
     // v62: the owner's dashboard messages interrupt any rest or hibernation (the explicit pause above still holds them).
     const attention = status.attention as { ownerPending?: unknown; openTurn?: unknown } | undefined;
@@ -558,7 +610,8 @@ export class FounderMind {
         r = this.o.taskClass ? await this.o.ports.infer(fit(messages), waitMs, { taskClass: this.o.taskClass }) : await this.o.ports.infer(fit(messages), waitMs);
       } catch (err) {
         const code = (err as { code?: string }).code ?? "FLEET_COGNITION_ERROR";
-        if (REST_CODES.has(code)) this.restUntil = Date.now() + restMs(err);
+        if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED" || code === "FLEET_RATE_LIMITED") { this.restUntil = Date.now() + restMs(err); this.restReason = "rate limit"; }
+        if (code === "FLEET_COGNITION_RATE_LIMITED") this.restForHourlyBound(Number(status.maxTurnsPerHour) || 0, retryAfterS(err));
         this.logDecision({ turn: this.turns, step, stopped: code });
         // A conversation the controller refuses as malformed is not kept: the next turn starts clean.
         // So is one the provider rejected as invalid (e.g. a thinking-continuity mismatch): no founder stays wedged.
@@ -566,6 +619,7 @@ export class FounderMind {
         return { ...result, ran: result.steps > 0, reason: `stopped: ${code}` };
       }
       result.ran = true;
+      this.noteCall();
       result.steps++;
       result.chargedCents += r.chargedCents;
       // Every requested call is kept and answered (the controller already refused more than MAX_TOOL_CALLS_PER_RESPONSE).
@@ -588,7 +642,7 @@ export class FounderMind {
         messages.push({ role: "tool", toolCallId: call.id, isError: !out.ok, content: toolContent("", out.output),
           ...(out.images?.length ? { images: out.images } : {}) });
       }
-      this.logDecision({ turn: this.turns, step, requestId: r.requestId, content: (r.content ?? "").slice(0, 500), tools: outcomes.map((o) => ({ name: o.name, ok: o.ok, refused: o.refused, ...(o.refused ? { reason: refusalReason(o.output) } : {}) })), chargedCents: r.chargedCents });
+      this.logDecision({ turn: this.turns, step, requestId: r.requestId, content: (r.content ?? "").slice(0, 500), tools: toolLog(r.toolCalls, outcomes), chargedCents: r.chargedCents });
       if (r.toolCalls.length === 0 || r.toolCalls.some((c) => c.name === "sleep")) break;
     }
     // A turn that only slept backs the next wake-up off exponentially (1, 2, 4 … MAX_IDLE_SKIP thinking slots);
@@ -931,12 +985,29 @@ export class FounderMind {
     const progressMem = W ? new ProgressMemory(path.join(this.o.stateDir, PROGRESS_FILE)) : null;
     let stopCode: string | undefined;
     let repeating = 0;
+    // Run 6 (2026-10-24): a paid order created 2–3 s after the turn's packet was built stayed unseen for the whole turn (15
+    // steps, 6.5 minutes of research). Between steps — every tool of the step finished and recorded, nothing in flight — the
+    // controller's attention is read again (free; at most every 10 s); a delivery or revision owed that the turn did not
+    // start with ends the turn here. Its record is carried like a cut-off turn's (completed actions are never repeated) and
+    // the next turn's packet is built afresh with the new work as its objective. An owner conversation is not interrupted.
+    const owedAtStart = new Set((obligations ?? []).filter((o) => o.deliveryOwed || o.revisionOwed).map((o) => o.id));
+    let attentionReadAt = Date.now();
     for (let step = 0; step < maxSteps; step++) {
       // 2026-10-22: the process is stopping: end the turn between steps; its record is carried like a cut-off turn's.
       if (step > 0 && this.o.stopSignal?.aborted) {
         stopCode = "FLEET_RUNTIME_STOPPING";
         this.logDecision({ turn: this.turns, routed: true, step, stopped: stopCode });
         break;
+      }
+      if (step > 0 && !owner && Date.now() - attentionReadAt >= NEW_WORK_CHECK_MS) {
+        attentionReadAt = Date.now();
+        const fresh = parseObligations((await this.o.ports.cognitionStatus().catch(() => null) as Record<string, unknown> | null)?.attention);
+        const arrived = (fresh ?? []).filter((o) => (o.deliveryOwed || o.revisionOwed) && !owedAtStart.has(o.id));
+        if (arrived.length) {
+          stopCode = "FLEET_NEW_PRIORITY";
+          this.logDecision({ turn: this.turns, routed: true, step, stopped: stopCode, newWork: arrived.map((o) => `${o.id.slice(0, 8)}:${o.deliveryOwed ? "delivery" : "revision"}`) });
+          break;
+        }
       }
       // Append-only inside a turn: a conversation that would outgrow its budget ends here instead of being trimmed.
       if (step > 0 && size() > MAX_REQUEST_BYTES) {
@@ -958,7 +1029,8 @@ export class FounderMind {
         r = await this.o.ports.infer(onlyLatestImages(onlyLatestThinking(messages)), waitMs, cls.route, FOUNDER_RUNTIME_DOCTRINE, owner ? { conversationTurn: owner.turnId } : undefined);
       } catch (err) {
         const code = (err as { code?: string }).code ?? "FLEET_COGNITION_ERROR";
-        if (REST_CODES.has(code)) this.restUntil = Date.now() + restMs(err);
+        if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED" || code === "FLEET_RATE_LIMITED") { this.restUntil = Date.now() + restMs(err); this.restReason = "rate limit"; }
+        if (code === "FLEET_COGNITION_RATE_LIMITED") this.restForHourlyBound(Number(status.maxTurnsPerHour) || 0, retryAfterS(err));
         this.logDecision({ turn: this.turns, routed: true, step, taskClass: cls.taskClass, expectedTier: cls.tier, stopped: code });
         if (result.steps > 0) {
           // 2026-10-22: a turn stopped mid-work by a refused or failed model call (provider error, run budget spent, run
@@ -978,6 +1050,7 @@ export class FounderMind {
         return { ...result, ran: result.steps > 0, reason: `stopped: ${code}` };
       }
       result.ran = true;
+      this.noteCall();
       result.steps++;
       result.chargedCents += r.chargedCents;
       const tier = (r.route?.tier === "T3" ? "T3" : "T2") as "T2" | "T3";
@@ -1019,12 +1092,14 @@ export class FounderMind {
         outcomes.push(out);
         // Review 2026-10-23: a delivery that went through keeps its method (build, inspection, review, delivery) as an
         // editable procedure in the founder's workspace, for the next similar task. Never fails the turn.
-        if (W && out.ok && call.name === "wallet" && call.arguments?.op === "deliver") {
+        // Run 6: the same file sent again (unchanged: true) is not a new method that worked; it is not recorded.
+        const sameFileAgain = (call.arguments?.args as { unchanged?: unknown } | undefined)?.unchanged === true || call.arguments?.unchanged === true;
+        if (W && out.ok && call.name === "wallet" && call.arguments?.op === "deliver" && !sameFileAgain) {
           try {
             const earlier = (carried?.calls ?? []).flatMap((x) => { try { return [{ call: { id: "carried", name: x.name, arguments: JSON.parse(x.args) as Record<string, unknown> }, ok: x.ok }]; } catch { return []; } });
             const orderId = (call.arguments?.args as { orderId?: unknown } | undefined)?.orderId ?? call.arguments?.orderId;
             const item = (obligations ?? []).find((o) => o.id === orderId)?.bought?.item;
-            const saved = recordProcedure(R.workspaceDir, [...earlier, ...records.map((x) => ({ call: x.call, ok: x.ok }))], call, new Date(), { item });
+            const saved = recordProcedure(R.workspaceDir, [...earlier, ...records.map((x) => ({ call: x.call, ok: x.ok, output: x.output }))], call, new Date(), { item });
             if (saved) out = { ...out, output: `${out.output}\n(The method that produced this delivery was kept as ${saved} — yours to edit or improve; earlier versions in procedures/.history/.)` };
           } catch { /* the delivery stands; only the record of its method is missing */ }
         }
@@ -1050,7 +1125,7 @@ export class FounderMind {
       // protected on the controller (durable operations, v95); this record is the founder's own memory of them.
       if (W && !owner) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: outcome, stopCode: "FLEET_RUNTIME_INTERRUPTED" });
       this.logDecision({ turn: this.turns, routed: true, step, packet: packetKind, requestId: r.requestId, taskClass: cls.taskClass, expectedTier: cls.tier, route: r.route ?? null,
-        content: (r.content ?? "").slice(0, 500), tools: outcomes.map((o) => ({ name: o.name, ok: o.ok, refused: o.refused, ...(o.refused ? { reason: refusalReason(o.output) } : {}) })), chargedCents: r.chargedCents });
+        content: (r.content ?? "").slice(0, 500), tools: toolLog(r.toolCalls, outcomes), chargedCents: r.chargedCents });
       // 2026-10-19: only a sleep that was accepted ends the turn (one refused because a buyer waits leaves the turn running).
       const sleepAt = r.toolCalls.findIndex((c) => c.name === "sleep");
       const slept = sleepAt >= 0 && outcomes[sleepAt]?.ok ? r.toolCalls[sleepAt] : undefined;
@@ -1073,7 +1148,7 @@ export class FounderMind {
     // looked at again (the agent answered the buyer, slept, and nothing woke it for the remaining 41 minutes).
     if (W && !owner && finished && owedOrders.length && !reviewAt) reviewAt = new Date(Date.now() + OWED_RECHECK_MS).toISOString();
     const planText = outcome;   // what the founder itself wrote (the carried plan); the note below is the platform's
-    if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${stopCode === REPEATING_STOP ? `was ended after ${result.steps} steps that only repeated refused actions` : stopCode ? `was stopped by a runtime restart after ${result.steps} steps` : sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
+    if (cutOff) outcome = `${outcome ? `${outcome.slice(0, 800)} — ` : ""}(this turn ${stopCode === REPEATING_STOP ? `was ended after ${result.steps} steps that only repeated refused actions` : stopCode === "FLEET_NEW_PRIORITY" ? `was paused after ${result.steps} steps because new customer work arrived — it comes first` : stopCode ? `was stopped by a runtime restart after ${result.steps} steps` : sizeStop ? `reached its size limit after ${result.steps} steps` : `used all ${maxSteps} steps`} before finishing)`;
     // 2026-10-18 (work continuity): a cut-off turn leaves its working record for the next turn (and a restart); a finished
     // working turn has consumed it. The progress memory survives restarts.
     if (W) {

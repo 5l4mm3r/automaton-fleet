@@ -6,7 +6,7 @@
  * before they ship — XLSX, DOCX, PDF, images, SVG, ZIP bundles, EPUB, CSV/TXT/MD.
  *
  * Usage inside the sandbox: `python3 <script> <spec.json>`, spec = {"files": ["rel/path", ...], "cases": [...],
- * "renderDir": ".tmp/qa-render"}. It prints ONE JSON line on stdout (library noise is swallowed):
+ * "require"?: ["phrase", {file?, text}, ...], "renderDir": ".tmp/qa-render"}. It prints ONE JSON line on stdout (library noise is swallowed):
  *   {"inspector":"fleet-qa-3","files":[{path, sha256, sizeBytes, detectedType, extensionMatches, ok,
  *     checks:[{id, status: pass|warn|fail, detail}], facts:{...}}], "ok": bool, "error"?: string}
  *
@@ -20,8 +20,12 @@
  *     plain headers, constants typed inside formulas) → advisory warn; spec "cases" ({file?, name?,
  *     sheet, inputs, expect, tolerance}) set inputs, recalculate and compare — each a pass/fail check "case:<name>";
  *   - docx: outline, counts, empty headings, consecutive duplicates, hyperlinks, spelling (advisory warn);
- *   - pdf: encrypted → fail, pages without text → warn, non-embedded fonts other than the standard 14 → warn,
- *     first ≤3 pages rendered (pypdfium2, 72 dpi) into renderDir, a visually blank page → fail;
+ *   - pdf: encrypted → fail, a page whose content cannot be read (damaged stream) → fail, pages without text → warn,
+ *     non-embedded fonts other than the standard 14 → warn,
+ *     first ≤3 pages rendered (pypdfium2, 72 dpi) into renderDir, a visually blank page → fail, text beyond the page's
+ *     crop box or text drawn over other text (first 50 pages) → fail; each spec "require" phrase must be visible
+ *     (inside the crop box; case, punctuation and spacing ignored) → fail "required_content" otherwise; required
+ *     phrases in other file types are not checked (warn);
  *   - images: Pillow verify, format/size/mode/dpi/alpha, blank or near-uniform → fail; svg: DOCTYPE/ENTITY → fail
  *     (parsed only after that guard), script → warn;
  *   - zip: zip-slip / absolute members → fail, CRC test, size; supported members (one level, ≤200 MB extracted
@@ -585,17 +589,20 @@ def inspect_pdf(r, path, render_dir, tag):
             r.check("encrypted", "fail", "the PDF is encrypted; customers may not be able to open or print it")
             return
         r.check("pdf_load", "pass", "%d page(s)" % len(rd.pages))
-        chars, empty, fonts, text = [], [], {}, []
+        chars, empty, fonts, text, damaged = [], [], {}, [], []
         for i, page in enumerate(rd.pages):
             if i >= 200 or left() < 20:
                 break
             try:
                 t = page.extract_text() or ""
-            except Exception:
+            except Exception as e:
+                # Desktop run 5 (2026-10-24): a hand-written PDF whose content stream had no valid length or 'endstream'.
+                # Viewers showed its title and none of its ten points; this was read as "no text layer" and passed.
                 t = ""
+                damaged.append("p%d (%s: %s)" % (i + 1, type(e).__name__, str(e)[:120]))
             chars.append(len(t.strip()))
             text.append(t)
-            if not t.strip():
+            if not t.strip() and not any(d.startswith("p%d " % (i + 1)) for d in damaged):
                 empty.append(i + 1)
             try:
                 res = page.get("/Resources")
@@ -621,6 +628,9 @@ def inspect_pdf(r, path, render_dir, tag):
         except Exception:
             pass
         r.facts.update({"pages": len(rd.pages), "charsPerPage": chars[:200], "fonts": [{"name": k, "embedded": v} for k, v in sorted(fonts.items())][:50], "title": meta})
+        r.check("pdf_content", "fail" if damaged else "pass", ("the page content cannot be read — the file is damaged and viewers show part of it or "
+            "nothing: " + "; ".join(damaged[:5]) + " — build the PDF with a library (e.g. reportlab), never by writing PDF syntax by hand")
+            if damaged else "every page's content is readable")
         r.check("pages_without_text", "warn" if empty else "pass", ("no extractable text on page(s) %s (scanned image? needs OCR to be searchable)" % empty[:30]) if empty else "every page has text")
         notemb = [k for k, v in fonts.items() if not v]
         odd = [k for k in notemb if k.split("+")[-1] not in STD14]
@@ -651,7 +661,75 @@ def inspect_pdf(r, path, render_dir, tag):
                 box = g.point(lambda v: 255 if v < 250 else 0).getbbox()
                 if box and (box[3] - box[1]) < 0.25 * g.size[1]:
                     sparse.append("p%d %d%%" % (i + 1, round(100.0 * (box[3] - box[1]) / g.size[1])))
+        # Desktop run 3 (2026-10-24, 9B): both delivered checklists passed with text cut off by the page edge (8 of 10 points
+        # past the right margin; a clipped title). Visible characters whose box lies outside the page's crop box are not seen
+        # by the buyer: a failure, named by page and with an excerpt of the lost text.
+        off, overlap, visible, read_all = [], [], [], len(doc) <= 50
+        for i in range(min(len(doc), 50)):
+            if left() < 15:
+                read_all = False
+                break
+            page = doc[i]
+            cl, cb, cr, ct = page.get_cropbox()
+            tp = page.get_textpage()
+            visible.append(tp.get_text_bounded(left=cl, bottom=cb, right=cr, top=ct))
+            lost, boxes = [], []
+            for k in range(tp.count_chars()):
+                ch = tp.get_text_range(k, 1)
+                if not ch.strip():
+                    continue
+                l, b, rr, t = tp.get_charbox(k)
+                if rr > cr + 1 or l < cl - 1 or t > ct + 1 or b < cb - 1:
+                    lost.append(k)
+                if rr - l > 0.5 and t - b > 0.5 and len(boxes) < 6000:
+                    boxes.append((k, ch, l, b, rr, t))
+            if lost:
+                seen = " ".join(tp.get_text_range(lost[0], 40).split())
+                off.append("p%d: %d character(s) beyond the page edge (from \"%s\")" % (i + 1, len(lost), seen))
+            # Desktop run 4: table rows longer than their cells were drawn over the next column and the row number. Two
+            # characters from different places in the text (not neighbours, not the same glyph drawn twice) whose boxes
+            # mostly cover each other, over nearly their whole height, are text over text: illegible to the buyer (at least
+            # 4 such characters on a page).
+            grid, hit = {}, set()
+            for bx in boxes:
+                for gx in range(int(bx[2] // 12), int(bx[4] // 12) + 1):
+                    for gy in range(int(bx[3] // 12), int(bx[5] // 12) + 1):
+                        grid.setdefault((gx, gy), []).append(bx)
+            for cell in grid.values():
+                for x in range(len(cell)):
+                    for y in range(x + 1, len(cell)):
+                        p1, p2 = cell[x], cell[y]
+                        if abs(p1[0] - p2[0]) <= 2 or (p1[1] == p2[1] and abs(p1[2] - p2[2]) < 0.6 and abs(p1[3] - p2[3]) < 0.6):
+                            continue
+                        w_ = min(p1[4], p2[4]) - max(p1[2], p2[2])
+                        h_ = min(p1[5], p2[5]) - max(p1[3], p2[3])
+                        if w_ <= 0 or h_ <= 0:
+                            continue
+                        small = min((p1[4] - p1[2]) * (p1[5] - p1[3]), (p2[4] - p2[2]) * (p2[5] - p2[3]))
+                        # Same-line text over text covers (nearly) the glyph's whole height; a superscript grazing the line
+                        # above does not, and stays legible.
+                        if w_ * h_ >= 0.4 * small and h_ >= 0.8 * min(p1[5] - p1[3], p2[5] - p2[3]):
+                            hit.add(p1[0]); hit.add(p2[0])
+            if len(hit) >= 4:
+                first = min(hit)
+                overlap.append("p%d: %d character(s) drawn over other text (from \"%s\")" % (i + 1, len(hit), " ".join(tp.get_text_range(first, 40).split())))
         doc.close()
+        r.check("text_off_page", "fail" if off else "pass", ("text runs off the page, unseen by the buyer: " + "; ".join(off[:5])
+            + " — wrap long lines or use a smaller font, then inspect again") if off else "all text lies within the page")
+        r.check("text_overlap", "fail" if overlap else "pass", ("text is drawn over other text: " + "; ".join(overlap[:5])
+            + " — give long text more room (wrap it inside its cell or column), then inspect again") if overlap else "no text drawn over other text")
+        # Review of run 5: content the buyer asked for (the agent's required phrases, from the brief and the buyer's messages)
+        # must be VISIBLE — inside the page, in the text a viewer shows — not merely somewhere in the file.
+        if REQUIRED[0]:
+            seen = norm_text(" ".join(visible))
+            missing = [q for q in REQUIRED[0] if norm_text(q) not in seen]
+            if missing:
+                r.check("required_content", "fail", "required content not visible on the page(s): " + "; ".join("\"%s\"" % q[:80] for q in missing[:8])
+                        + " — add it (inside the page, not over other text), then inspect again")
+            elif not read_all:
+                r.check("required_content", "warn", "all %d required phrase(s) found in the pages read, but not every page was read" % len(REQUIRED[0]))
+            else:
+                r.check("required_content", "pass", "all %d required phrase(s) visible" % len(REQUIRED[0]))
         r.facts["renders"] = rendered
         ocr_pages(r, rendered, empty_pages_of(r))
         r.check("blank_pages", "fail" if blank else "pass", ("visually blank page(s): %s" % blank) if blank else "%d page(s) rendered, none blank" % n)
@@ -659,6 +737,13 @@ def inspect_pdf(r, path, render_dir, tag):
         r.check("sparse_pages", "warn" if sparse else "pass", ("content fills under a quarter of the page height: " + ", ".join(sparse)) if sparse else "pages carry substantial content")
     except Exception as e:
         r.check("render", "warn", "rendering failed: %s: %s" % (type(e).__name__, e))
+
+
+REQUIRED = [[]]   # the phrases the current file must show (spec "require")
+
+
+def norm_text(t):
+    return " ".join(re.sub(r"[^0-9a-z]+", " ", t.casefold()).split())
 
 
 def empty_pages_of(r):
@@ -1197,6 +1282,9 @@ def inspect_file(rel, render_dir, cases, depth=0, label=None):
                 sheet_as_displayed(r, real, render_dir, tag, "csv")
         else:
             r.check("content", "warn", "no content checks for %s" % kind)
+        if REQUIRED[0] and not any(c["id"] == "required_content" for c in r.d["checks"]):
+            r.check("required_content", "warn", "the required phrases were not checked in this file (%s; checked in PDFs whose pages render): "
+                    "confirm them yourself" % kind)
     except Budget:
         r.check("time_budget", "warn", "inspection time budget exhausted mid-file")
     except Exception as e:
@@ -1221,6 +1309,9 @@ def main():
         cases = spec.get("cases") or []
         if not isinstance(cases, list) or not all(isinstance(c, dict) for c in cases):
             raise ValueError("spec.cases must be a list of objects")
+        require = [q if isinstance(q, dict) else {"text": q} for q in (spec.get("require") or [])]
+        if not all(isinstance(q.get("text"), str) for q in require) or len(require) > 40:
+            raise ValueError("spec.require must be at most 40 phrases (strings, or {file?, text})")
         rd = spec.get("renderDir") or ".tmp/qa-render"
         render_dir = safe_rel(rd) if isinstance(rd, str) else None
         if render_dir is None:
@@ -1232,6 +1323,7 @@ def main():
                 report["files"].append(r.done())
                 continue
             mine = [c for c in cases if c.get("file") in (None, rel)]
+            REQUIRED[0] = [q["text"] for q in require if q.get("file") in (None, rel) and norm_text(q["text"])]
             report["files"].append(inspect_file(rel, render_dir, mine))
         report["ok"] = bool(report["files"]) and all(x["ok"] for x in report["files"])
     except Exception as e:

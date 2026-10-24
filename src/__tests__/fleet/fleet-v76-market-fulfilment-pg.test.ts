@@ -162,6 +162,13 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     expect(await R.econ(F, "review.record", { subject: "offer", offerId, files: files.map((f) => ({ name: f.name, sha256: sha(f.bytes) })),
       automated: autoReport([files[0]]), criteria: criteria(), verdict: "pass" })).toMatchObject({ ok: false, code: "FLEET_REVIEW_MISMATCH" });
     expect(await review(F, { subject: "offer", offerId }, files, { fail: "formula_errors" })).toMatchObject({ ok: false, code: "FLEET_REVIEW_AUTOMATED_FAILED" });
+    // 2026-10-24 (a PDF library missing from the tools): the inspector says ok with only a tool_unavailable WARN — a check
+    // that could not run never passes, so no passing review (and so no delivery or publication) can rest on it.
+    const unchecked = autoReport(files);
+    unchecked.files[1].checks.push({ id: "tool_unavailable", status: "warn", detail: "pypdf is not importable; its checks did not run" });
+    expect(unchecked.ok).toBe(true);
+    expect(await R.econ(F, "review.record", { subject: "offer", offerId, files: files.map((f) => ({ name: f.name, sha256: sha(f.bytes), sizeBytes: f.bytes.length })),
+      automated: unchecked, criteria: criteria(), verdict: "pass" })).toMatchObject({ ok: false, code: "FLEET_REVIEW_AUTOMATED_FAILED" });
     expect(await review(F, { subject: "offer", offerId }, files, { met: false })).toMatchObject({ ok: false, code: "FLEET_REVIEW_CRITERIA_UNMET" });
     expect(await R.econ(F, "review.record", { subject: "offer", offerId, files: files.map((f) => ({ name: f.name, sha256: sha(f.bytes) })), automated: autoReport(files),
       criteria: criteria(), independentRequestId: crypto.randomUUID(), independentVerdict: "pass", verdict: "pass" })).toMatchObject({ ok: false, code: "FLEET_REVIEW_INDEPENDENT" });
