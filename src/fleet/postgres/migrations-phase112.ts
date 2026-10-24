@@ -7,8 +7,9 @@
  *    reason). Under local_only a tier or the global policy cannot be enabled for any provider but the local one — checked by
  *    trigger, so no code path (routing, Fleet Control review, relevance scoring, an owner conversation) can authorise a
  *    cloud call.
- *  - AMENDED 2026-10-24, before v112 was first applied to any persistent registry (production is v111; v112 had run only in
- *    throwaway test and scenario registries). Owner, 2026-10-24: "Anthropic API for reasoning … preventing v112 from
+ *  - AMENDED 2026-10-24 (DRAFT, not final): production is v111 and has never applied v112. The original v112 WAS applied in
+ *    the desktop's test environments; whether any of those registries is retained, and how this amendment combines with
+ *    the desktop's v113, is decided from the transferred evidence before this candidate is final. Owner, 2026-10-24: "Anthropic API for reasoning … preventing v112 from
  *    unexpectedly switching the candidate to local_only." As first written, this migration made every registry local_only
  *    and disabled its enabled cloud tiers and policy on the spot — a silent provider change on upgrade. Now it changes no
  *    provider: a registry that has an enabled cloud tier or an enabled cloud policy when v112 runs is recorded cloud_allowed

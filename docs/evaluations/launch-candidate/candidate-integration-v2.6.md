@@ -22,15 +22,20 @@ local integration and preparation only. Nothing has been pushed, deployed, resto
 - VM, not pushed: **8077f6c**: a call-rate refusal rests the founder 60 s.
 - Desktop (WSL, RTX 5080), not pushed and **not yet on the VM**: 9409e8a, 26769cb, 75e68c6, c7df423, 90b5782, built on
   51a1f82 and without 8077f6c. They hold the tool-argument repairs, the false-delivery guard, the inspector checks
-  (`text_off_page`, `text_overlap`, `pdf_content`), procedure cleanup and full delivery evidence. No desktop commit touches
-  a migration, so migration numbering is unaffected: production v111, this candidate v112, nothing above it.
+  (`text_off_page`, `text_overlap`, `pdf_content`), procedure cleanup and full delivery evidence.
+- **Correction (owner, 24 Oct):** the desktop also has its own hourly-limit implementation, **f9db421**, and a **v113**
+  migration, and it applied the original v112 in its test environments. An earlier draft of this record wrongly said the
+  desktop had no rate-limit change and no migration. None of those commits is on the VM yet, so the reconciliation of
+  the three hourly-limit implementations (8077f6c, f9db421, this branch's eligibility time) and of v112/v113 is
+  **pending the transfer**. Production's history is unaffected either way: v111 applied, nothing later.
 - This branch: `fleet/integration-v2.6` from 8077f6c. The desktop commits will be **merged** in, so neither history is
   rewritten (see "Remaining before approval").
 
 ## Changes in this candidate
 
-1. **v112 no longer changes a provider on upgrade** (amended before its first application on any persistent registry; the
-   runner records versions without checksums). As first written, v112 made every registry `local_only` and disabled its
+1. **v112 no longer changes a provider on upgrade** (DRAFT: production has never applied v112, but the original was applied
+   in desktop test environments. Whether this amendment stands, or v112 stays as applied and the change moves to a later
+   migration, is decided from the desktop's retained registries and its v113.) As first written, v112 made every registry `local_only` and disabled its
    enabled cloud tiers and policy as it ran. Now:
    - a registry with an enabled cloud tier or cloud policy is recorded `cloud_allowed`, and its configuration is kept;
    - any other registry is `local_only`, and cloud requires the owner's recorded `inference-profile-set`. That includes
@@ -65,25 +70,99 @@ local integration and preparation only. Nothing has been pushed, deployed, resto
    - restoring needs the owner's explicit `FLEET_ROLLOUT_AUTO_RESTORE=1` for that run;
    - a failure before the migration still restores runtime.env and the release, with no database touched.
 
-## Identified, not changed: the `resolved:true` correction bypass
+## The `resolved:true` correction bypass: proposed repair (for approval; not implemented)
 
-`fleet_customer_obligations` (v100, restated in v112) ends an order conversation at the latest of its last sent delivery
-or its last agent message with `resolves` (an `order_message` sent with `resolved:true`). `revisionOwed` exists only while
-the conversation is open. So an agent can answer a buyer's change request with `resolved:true` and no new delivery, and
-the revision stops being owed. The first delivery cannot be bypassed this way: `deliveryOwed` follows the order's status.
+**Defect.** `fleet_customer_obligations` (v100, restated in v112) closes an order conversation at the later of its last sent
+delivery and its last agent message with `resolves`. `revisionOwed` exists only while the conversation is open. So
+`order_message {resolved:true}` after a buyer's change request erases the owed revision with no new file. `deliveryOwed`
+(the first delivery) is not affected: it follows the order's status. An owner alert alone would not close this.
 
-The controller cannot tell from text whether a buyer's message asked for a change. A "thanks!" also opens `revisionOwed`,
-and `resolved` is its legitimate close.
+**Proposed behaviour.** This changes the obligation policy, so it waits for approval.
+- `resolved:true` keeps one meaning: the conversation is **acknowledged**. No reply is owed, and the state is no longer
+  `unanswered`.
+- A **change request**, meaning a buyer message after the order's latest sent delivery, stays owed (`revisionOwed`)
+  whatever `resolves` says, until one of these three things happens:
+  1. **Completion evidence:** a later sent delivery of that order whose review passed. This rule exists today.
+  2. **Explicit withdrawal:** the agent records `withdraw_change {orderId, quote}`, where `quote` (3–300 characters) is
+     verbatim text from a buyer message on that order at or after the request. FleetController checks the quote against
+     the record and refuses otherwise. Each withdrawal is a permanent event in Fleet Command with the quote, so "Thanks,
+     that's perfect" and "never mind" close honestly, and the owner can see what was relied on.
+  3. **The order ends:** a refund or cancellation, under today's rules.
+- A buyer message after a withdrawal opens a new change request.
+- The founder tool says it plainly: `resolved:true` while a change is owed answers "acknowledged; the change is still owed
+  — deliver it, or withdraw_change quoting the buyer".
 
-Proposed for the owner's decision, not built: when an agent resolves an order conversation without a later delivery,
-FleetController records `revision_resolved_without_delivery`. It would appear in Fleet Command, and the buyer's next
-message reopens the conversation as today.
+**Residual risk.** An agent could quote the change request itself as the withdrawal. That is visible and auditable, not
+prevented. The stricter alternative, where only a buyer message after the agent's reply can withdraw, would keep a plain
+"thanks!" owed until the 7-day close. With the 15-minute owed recheck, that means up to 4 wakes an hour for 7 days of paid
+inference, so I don't recommend it.
 
-## Item 5: which organisation owns the VPS runtime key
+**Focused regression (written with the repair):**
+- PostgreSQL, the v100-obligations style:
+  - (1) a change request answered `resolved:true` with no delivery: still `revisionOwed`, state acknowledged;
+  - (2) then a passing redelivery clears it;
+  - (3) a "Thanks!" withdrawn with a verbatim quote clears it, and the event carries the quote;
+  - (4) a quote found in no qualifying buyer message is refused and the obligation stays;
+  - (5) a new buyer message after a withdrawal reopens it;
+  - (6) a refund clears it;
+  - (7) `deliveryOwed` is unchanged by `resolves`.
+- Toolbox: (8) the acknowledgement wording, and `withdraw_change` refusals.
 
-**Not established.** The key is in a root-only directory, and reading it needs sudo on the VPS, which this preparation
-does not have. No recorded document names the key's organisation or workspace. The owner-side check is in "Remaining
-before approval".
+The migration number follows the v112/v113 decision.
+
+## Item 5: which organisation owns the VPS runtime key, by metadata and the Console (owner-side; not yet done)
+
+I can't read the key: `/etc/automaton-fleet/recovery/` is root-only and this work has no sudo on the VPS. These
+checks use no inference and never show the key. None of them depends on a response header.
+1. **Key hint.** On the VPS (owner, sudo), print only the last four characters, which the Console also shows:
+   `sudo sh -c 'f=$(ls /etc/automaton-fleet/recovery/ | head -1); tr -d "\n" < "/etc/automaton-fleet/recovery/$f" | tail -c 4; echo'`.
+   If the folder holds more than one file, list it with `sudo ls -l` first and choose the key file by name.
+2. **Console → Settings → API keys**, in each organisation the owner can open: the key whose hint ends in those four
+   characters. Note its organisation and workspace, and its **last used** date. It should be 23 Oct 2026: the last paid runs
+   ended 13:44Z and the key was put away at 14:26Z.
+3. **Cross-check with recorded spend:**
+   - Console → Usage/Cost for 23 Oct 2026 in that workspace should show the two engineering runs, scen-89d7c21-b1 ($5.27)
+     and scen-cf86ab8-c1 ($7.213194);
+   - Billing (invoice history) should show the purchase receipted as $49.55 (lot 05f4cb13).
+4. **The credits.** Console → Billing of the **same** organisation should show the Max-included credit grant. If the grant
+   is in another organisation, the runtime key cannot spend it. The fix is then a new key created in the grant's
+   organisation and installed by the owner, never a provider change made by Fleet.
+
+## Credit reconciliation: proposed treatment (for approval; nothing posted)
+
+**What exists.** Provider credit is held as lots (v70–v73). The one purchased lot, 05f4cb13 (owner card, receipt $49.55
+for $41.29 of credit), has 1,676,179,930 µ¢ ($16.76) remaining on Fleet's books. Lot sources are `owner` (reimbursable to
+the owner) and `treasury` (a prepaid asset). Every AI charge is booked to the agent or treasury that made the call, at
+provider prices; acquisition cost (tax/fees) is allocated per draw.
+
+**Figures to read from the Console**, in the organisation confirmed in item 5. They are real figures, never estimates:
+- (a) the promotional grant: its amount, the date granted, its **expiry**, and any grant identifier;
+- (b) the remaining **total** balance, and how the Console splits it between promotional and purchased credit;
+- (c) the order in which the provider applies promotional versus purchased credit, if shown;
+- (d) usage since 23 Oct 14:26Z. Fleet made no calls in that time, so any usage there is not Fleet's.
+
+**Proposed treatment.** It needs one migration, numbered after the v112/v113 decision.
+- A new lot source, **`promotional`**:
+  - `usd_purchased` = the grant amount, `usd_remaining` = the Console's remaining grant balance;
+  - `expires_at` = the expiry, `external_ref` = the grant identifier;
+  - acquisition cost **0** (no tax, no fee), no GBP cost.
+  - Its provider-credit event is a new kind, **`grant`**, never `purchase`. It creates **no owner payable and no treasury
+    asset**: nobody paid for it.
+- **Lot 05f4cb13 is untouched.** The $16.76 is neither overwritten nor re-entered. If the Console's purchased remainder
+  differs from $16.76, the difference is recorded as a reconciliation **observation** with both figures and the reason
+  (for example, the org's own usage outside Fleet). It is posted only on the owner's word, never charged to an agent.
+- **No double counting.** Fleet's available credit = the purchased lots' remainder + the promotional remainder − holds.
+  The grant is entered once, from the Console figure, and usage outside Fleet (d) is never charged to an agent wallet.
+- **Draw order:** the provider's actual order from (c). If the Console doesn't show it, the owner states it; Fleet does not
+  assume it.
+- **Agents' charges for grant-funded calls. Owner choice:**
+  - **(A, recommended)** Agents pay the provider price as today. The amount drawn from the grant is booked as Fleet's
+    *promotional AI credit income*, not owed to anyone, instead of the owner payable. Agent prices and budgets don't jump
+    when the grant ends, and every charge is a real call at a real price.
+  - **(B)** Grant-funded calls cost agents nothing. That is cheaper for agents now, but their measured costs and budgets
+    understate real costs and change when the grant expires.
+- **Expiry:** at the expiry, any unused grant goes to zero by an `expiry` event. There is no GBP posting and no effect on
+  any agent.
 
 ## Tests (non-billable; no inference call, no network beyond loopback)
 
@@ -102,48 +181,59 @@ before approval".
 **Not yet run here:** the saved defective PDFs from desktop runs 3–5 against the inspector. They are on the desktop with its
 commits, and run once the bundle arrives.
 
-## Deployment (each numbered group needs the owner's explicit approval)
+## Staged deployment proposal (three approval groups)
 
-0. **Before approval:** merge the desktop bundle (below), rerun the focused suites plus the inspector on the saved
-   defective PDFs, then rebuild. The candidate commit becomes that merge.
-1. **Push** `fleet/integration-v2.6` to `fleet-origin` (approval 1).
-2. **On the VPS, nothing live changes** (approval 2):
-   - `scripts/fleet-build-runtime.sh` gives the pins (commit, build ID, lockfile; never placeholders);
-   - `scripts/fleet-rollout.sh rehearse <pins> 111 112`, a throwaway copy of the live data;
-   - the free rehearsals (services, founder upgrade, revision; fake provider, £0);
-   - a read-only snapshot of the cognition policy, tiers, routing, per-founder budgets and limits, AI-credit lots and holds.
-3. **Install** (approval 3): `scripts/fleet-release.sh <pins> 111 112 <current UI> …` (UI reused).
-   - Automatic restore is now OFF by default, so do not set `FLEET_ROLLOUT_AUTO_RESTORE`.
-   - Then verify: `fleet_runtime_verification` all match; schema 112; `fleet_inference_profile_state` recorded;
-     policy, tiers, routing and budgets identical to the snapshot; flags false; cap 2; agents paused.
-   - Cognition is still contained (provider none), so no inference is possible.
-4. **Anthropic** (approval 4, after item 5 confirms the organisation):
-   - move the key from `/etc/automaton-fleet/recovery/` back to the controller credential it was moved from;
-   - runtime.env: `FLEET_INFERENCE_PROFILE=cloud_allowed`, `FLEET_COGNITION_PROVIDER=anthropic`;
-   - if the profile is `local_only`, `fleet:admin inference-profile-set cloud_allowed "<owner reason>"`;
-   - re-enable the policy with exactly the snapshot's values; restart only `automaton-fleet.service`;
-   - `/v1/cognition/status` shows anthropic. Agents stay paused, so no call is made.
-5. **Founder runtimes** (approval 5, agents paused): `scripts/fleet-founders.sh` upgrade, one agent at a time; record each
-   upgrade ID.
-6. **Paid evaluation** (approval 6): the terms below, frozen by `scripts/fleet-scenario-terms.sh`, hold placed, import once.
+**Group 0, before any approval:** the transfer and import (below); reconcile the hourly-limit implementations and v112/v113;
+rerun the focused suites plus the inspector on the saved defective PDFs; then this record names the final combined commit.
+
+**Group A: preparation, nothing live changes.**
+- push the combined branch to `fleet-origin`;
+- on the VPS: `scripts/fleet-build-runtime.sh` → pins (never placeholders);
+- `scripts/fleet-rollout.sh rehearse <pins> 111 <to>`, a throwaway copy of the live data;
+- the free rehearsals (services, founder upgrade, revision; fake provider, £0);
+- a read-only snapshot of the cognition policy, tiers, routing, per-founder budgets and limits, AI-credit lots and holds.
+
+Stop if anything differs from expectations.
+
+**Group B: install and Anthropic, agents stay paused, no model call.**
+- `scripts/fleet-release.sh <pins> 111 <to> <current UI> …`. Automatic restore is off by default; do not set
+  `FLEET_ROLLOUT_AUTO_RESTORE`.
+- Verify:
+  - the runtime identity matches;
+  - the schema is `<to>`;
+  - policy, tiers, routing and budgets equal the snapshot;
+  - flags false, cap 2, agents paused.
+- Then, **only if item 5 confirmed the organisation:**
+  - move the key back from the recovery folder to its controller credential;
+  - runtime.env: `FLEET_INFERENCE_PROFILE=cloud_allowed` and `FLEET_COGNITION_PROVIDER=anthropic`;
+  - `inference-profile-set cloud_allowed "<owner reason>"` if the profile is local_only;
+  - re-enable the policy with the snapshot's exact values;
+  - restart only `automaton-fleet.service`; `/v1/cognition/status` should show anthropic.
+- Post the **approved** credit reconciliation, if its treatment was approved, from the Console figures.
+
+**Group C: agents and the bounded evaluation.**
+- `scripts/fleet-founders.sh` runtime upgrade, one agent at a time, still paused; record the upgrade IDs;
+- the paid S1 evaluation on terms frozen by `fleet-scenario-terms.sh` (figures below, re-frozen); import once.
+
+Resuming the agents' own work stays the owner's separate word.
 
 ## Rollback
 
-- **Steps 1–2:** nothing live changed; delete nothing.
-- **Step 3 fails after the migration:** the rollout stops the controller-side units and **restores nothing** (the
+- **Group A:** nothing live changed; delete nothing.
+- **Group B, the install fails after the migration:** the rollout stops the controller-side units and **restores nothing** (the
   database, the pre-migration dump, runtime.env and logs are kept). The owner chooses fix forward (preferred) or
-  `FLEET_ROLLOUT_AUTO_RESTORE=1 scripts/fleet-rollout.sh revert <pins> 111 112 <reason>`. That is an explicit restore of
+  `FLEET_ROLLOUT_AUTO_RESTORE=1 scripts/fleet-rollout.sh revert <pins> 111 <to> <reason>`. That is an explicit restore of
   the verified pre-migration dump and loses everything recorded after it, so it is acceptable only before agents or
-  cognition resume. 89d7c21 never runs on schema 112.
-- **Step 4:** the 23 October containment again:
+  cognition resume. 89d7c21 never runs on a newer schema.
+- **Group B, the Anthropic part:** the 23 October containment again:
   - policy disabled;
   - `FLEET_COGNITION_PROVIDER=none`;
   - key back to the recovery folder;
   - restart the controller.
 
   Optionally `inference-profile-set local_only`, which disables cloud tiers and policy. No database restore.
-- **Step 5:** `scripts/fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`.
-- Once real money or provider data exists after step 4: freeze and fix forward (README §3).
+- **Group C, the runtimes:** `scripts/fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`.
+- Once real money or provider data exists after Group B: freeze and fix forward (README §3).
 
 ## Proposed bounded evaluation (paid; separate approval)
 
@@ -160,40 +250,38 @@ review. The delivered files are still checked by hand before any pass is claimed
 
 ## Remaining before approval
 
-1. **The desktop bundle (owner).** On the desktop, in Ubuntu:
+1. **Transfer (owner).** Use the existing, verified package `C:\Users\o\Documents\fleet-desktop-preserve-20261024\`;
+   it is not recreated. From it the VM needs:
+   - the git bundle (all refs, including f9db421, v113, 9409e8a…90b5782 and any later commit);
+   - its checksum manifest;
+   - the evidence archive: the `local-demo` runs, including runs 3–5's delivered defective PDFs and any later run;
+   - the record of which desktop registries were retained, and their `fleet_schema_migrations` versions, if the package
+     has it.
+
+   Separately, the **later proposal files** in their own transfer archive, with that archive's checksum.
+
+   If the package has no registry listing, the desktop session produces it read-only and adds it to the proposal archive:
+   `sudo -u postgres psql -Atc "SELECT datname FROM pg_database WHERE NOT datistemplate"`, then per database
+   `SELECT max(version) FROM fleet.fleet_schema_migrations`. Also list leftover test clusters:
+   `find /tmp -maxdepth 3 -name PG_VERSION`.
+
+   VirtualBox: Devices → Shared Folders. Add the package folder as `fleetpreserve`, and the proposal archive's folder as
+   `fleetproposal`, both with **Read-only** ticked and Make Permanent. On the VM (owner):
 
    ```
-   mkdir -p /mnt/c/FleetBackup && cd ~/automaton-fleet
-   git bundle create /mnt/c/FleetBackup/desktop-all.bundle --all && git bundle verify /mnt/c/FleetBackup/desktop-all.bundle
-   cp docs/evaluations/local-model/desktop-runs-2026-10-24.md /mnt/c/FleetBackup/
-   tar -C ~ -czf /mnt/c/FleetBackup/desktop-local-demo.tgz local-demo
-   cd /mnt/c/FleetBackup && sha256sum desktop-all.bundle desktop-local-demo.tgz desktop-runs-2026-10-24.md > desktop.sha256
+   sudo mkdir -p /mnt/fleetpreserve /mnt/fleetproposal
+   sudo mount -t vboxsf -o ro,uid=$(id -u),gid=$(id -g) fleetpreserve /mnt/fleetpreserve
+   sudo mount -t vboxsf -o ro,uid=$(id -u),gid=$(id -g) fleetproposal /mnt/fleetproposal
    ```
 
-   Then, in VirtualBox: Devices → Shared Folders → add `C:\FleetBackup` as `fleetbackup` (Make Permanent). On the VM
-   (owner, sudo): `sudo mkdir -p /mnt/fleetbackup && sudo mount -t vboxsf -o uid=$(id -u),gid=$(id -g) fleetbackup
-   /mnt/fleetbackup`. Claude then:
-   - verifies the checksums;
-   - fetches the bundle into `refs/desktop/*`, with no reset and nothing overwritten;
-   - merges into `fleet/integration-v2.6`, keeping the database-authoritative hourly limit (the desktop has no rate-limit
-     change);
-   - reruns the suites and the inspector on the saved PDFs.
-2. **Key organisation (owner, item 5).** On the VPS:
-
-   ```
-   sudo ls -l /etc/automaton-fleet/recovery/
-   sudo bash -c 'K=$(cat /etc/automaton-fleet/recovery/<keyfile>); curl -sS -o /dev/null -D - https://api.anthropic.com/v1/models \
-     -H "x-api-key: $K" -H "anthropic-version: 2023-06-01" | grep -iE "^(HTTP|anthropic-organization-id)"; echo "key ends ...${K: -4}"'
-   ```
-
-   Listing models is not inference. Compare the organisation ID with Console → Settings → Organization, for the
-   organisation whose Billing shows the Max-included credits. Find the key ending in those 4 characters under Console →
-   API keys, and note its workspace. If the response has no `anthropic-organization-id` header, the Console check alone
-   decides.
-3. **Credit accounting (owner decision).** Fleet's ledger authorises against its recorded AI-credit lots
-   (1,676,179,930 µ¢). How the Max-included credits are recorded, as a new lot or not at all, is an owner economic-policy
-   decision. It is not made here.
-4. **Decide on the `resolved:true` bypass** (above).
+   Claude then:
+   - verifies every checksum against the package's own manifest;
+   - copies the files into a VM evidence folder;
+   - fetches the bundle into `refs/desktop/*`, with no reset and no overwrite;
+   - compares and merges onto `fleet/integration-v2.6`.
+2. **Key organisation (owner, item 5):** the Console and metadata checks in the item 5 section above.
+3. **Credit treatment:** approve (A) or (B) and the promotional lot design in the credit section; read the Console figures listed there.
+4. **Correction obligation:** approve the proposed repair, or the stricter alternative, before it is implemented.
 5. **Pre-existing failures:** 8 pre-existing failures (desktop: `fleet-cognition-anthropic`, `r24-experiments`, `research`,
    `storefront-gateway-pg`), 2 flaky tests (unnamed), and 1j's unhandled rejection. All are recorded and not hidden; none
    blocks this candidate.
