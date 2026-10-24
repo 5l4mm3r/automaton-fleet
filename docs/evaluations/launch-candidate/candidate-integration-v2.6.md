@@ -423,6 +423,129 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## B/C approval package for 5ee36d4 (prepared 24 Oct ~20Z; nothing installed, activated or posted)
+
+Group A is complete and the candidate is frozen. `count_tokens` is deferred; the retired key in
+`/etc/automaton-fleet/recovery/` is untouched. **This package asks for Group B (install the controller release) and Group C
+for Agent-1 only (runtime 89d7c21 → 5ee36d4).** It activates nothing.
+
+### 1. Production Opus: thinking, output limit, reservation (computed by code, production prices of 24 Oct)
+
+Production's T3 tier: `claude-opus-5-5`, **adaptive thinking**, effort medium, tier `max_output_tokens` 16,000; prices
+400 / 2,000 / 500 / 20 µ¢ a token (input / output / cache write / cache read). Adaptive thinking is counted inside
+`max_tokens`. **The 7,024 exception does not apply in production**: it arises only with a fixed `enabled:N` thinking
+budget (N + 1,024 for N = 6,000), and no production tier has one. It is shown for completeness.
+
+**Maximum reservation of one founder step** (`costBoundMicro`: every input byte counted as a token at the dearer of the
+input and cache-write prices, plus the whole output allowance). Input at the runtime's 40,000-byte request budget, with the
+system prompt, the full tool list and 2,000 framing tokens:
+
+| Runtime (doctrine) | Tier | Output limit sent and reserved | Input bound (tokens) | Reserved maximum |
+|---|---|---|---|---|
+| Agent-1 after upgrade (founder-v10, 48 tools) | T3 Opus | today 16,000 → **4,000** | 148,905 | **$1.065 (107¢) → $0.825 (83¢)** |
+| same | T2 Sonnet | 8,000 → 4,000 | 148,905 | $0.452 (46¢) → $0.412 (42¢) |
+| (only with `enabled:6000`, not configured) | T3 | 7,024 | 148,905 | $0.885 (89¢) |
+| Agent-2 on b60e262 (founder-v6, 38 tools; stays paused) | T2 Sonnet | 8,000 → 4,000 | 114,317 | $0.366 (37¢) → $0.326 (33¢) |
+| same, if a step reached T3 | T3 Opus | 16,000 → 4,000 | 114,317 | $0.892 (90¢) → $0.652 (66¢) |
+
+Reserved amounts are rounded up to whole US cents, as authorised; the controller converts to GBP.
+
+**Typical actual cost is far below the reserved maximum** (production's saved calls, 20–21 Oct): a T3 founder step cost
+**$0.064** on average when its prefix was cached (90 calls) and **$0.186** on a turn's first, uncached step (4 calls), $0.069
+overall; output p50 241, p95 688, max 894 tokens. T2 steps averaged $0.035. The reservation is a ceiling held while the
+call runs, then settled to the provider's actual usage. **The 4,000 cap lowers the ceiling ($0.24 a T3 step), not the
+typical bill.**
+
+### 2. Order: both agents paused throughout; Agent-2 untouched; nothing activated
+
+Owner-run: `ssh -t agentfleet-vps 'bash ~/rlc134/install.sh'` (script: `install-5ee36d4.sh` beside this record; staged copy
+sha256 `fe51ad15e0162cba530f4a6bc70a170a0dbc594f010c98f0316b63deafa7e4ee`). Re-running after a failure continues; it never
+restores anything.
+0. **Gate (changes nothing):**
+   - the four rehearsal logs of this build passed and are **under 24 h old**. The oldest is 18:54Z, so the install must
+     start **before 25 Oct 18:54Z**, or the rehearsals must be run again (owner approval);
+   - pins, UI package checksum and the release directory present;
+   - **both agents paused**; Agent-2 on b60e262, Agent-1 on 89d7c21;
+   - **inference off**: policy disabled, `FLEET_COGNITION_PROVIDER=none`, Fleet Control ceiling unset;
+   - permissions closed; the four safety flags false; schema 111 with 89d7c21;
+   - the founder unit template identical to the release's;
+   - `FLEET_ROLLOUT_AUTO_RESTORE` **unset**;
+   - Agent-2's PID, the tiers and all settings recorded; a fresh baseline with a full dump (TOC checked).
+1. **Group B: release 89d7c21 → 5ee36d4, schema 111 → 115** (`fleet-release.sh`; UI 0.26.2 reused). The cutover takes a
+   fresh verified dump, migrates, reconciles, approves the runtime and restarts the controller-side units. **No founder
+   unit restarts.** v112 records the registry's existing cloud configuration as kept (`cloud_allowed`: production's tiers
+   are enabled while the policy stays disabled), and **changes no tier, model or policy**.
+2. **Group C, Agent-1 only:** `fleet-founders.sh upgrade-preflight`, then `upgrade-runtime 01M3F50SH7PNX2E3GST13J52AS` from
+   the new release. Agent-1's unit restarts on 5ee36d4 and stays **paused**; its `upgradeId` is recorded for rollback.
+   **Agent-2 (01M4C4NXT786Q4E9725N5A15KV): runtime b60e262, unit and process unchanged** (PID checked after each step).
+3. **Verification:** controller ready; both paused; Agent-2's runtime and PID unchanged; inference still off; tiers
+   byte-identical to before; profile `cloud_allowed` by migration; the release carries the 4,000 cap and the v115 review;
+   flags false; permissions closed; ledger verified; settings captured after.
+
+**Not done by this package:** resuming either agent, enabling cognition, reinstating the key, setting Fleet Control's
+budget, posting credit, any paid run.
+
+**Compatibility while paused:** Agent-2 (b60e262) keeps heartbeating to the new controller, as it did across earlier
+releases. **No rehearsal from b60e262 was run for this candidate** (the founder rehearsal starts from 89d7c21). Agent-2 makes
+no model call while paused, so its old handling of a cut-off reply does not arise. Before Agent-2 is ever resumed: either a
+non-billable `upgrade-rehearsal b60e262…` (needs approval), or its own runtime upgrade (Group C for Agent-2, separately).
+
+### 3. Pins, verification, outage, rollback
+
+| | Value |
+|---|---|
+| Release commit | `5ee36d450646402837f36562d7719a01f3a8c86f` (branch fleet/integration-v2.6) |
+| Build ID | `09d77dac1bc35b0ae58ece38968ed69b1447728e82c3c2eb5f936f6bbb7fdcee` (VPS build; staged and side-installed identical) |
+| Lockfile SHA-256 | `1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1` (unchanged) |
+| Schema | 111 → 115 (v112 amended, v113, v114, v115) |
+| UI | 0.26.2, `ui-0.26.2-316b27b.tgz` sha256 `77ce19a4e06814b93705b5ae96c705185c91271ce335e95f1341b854f9f0585d` (unchanged, reused) |
+| Agent-1 runtime | 89d7c21 → 5ee36d4 |
+| Agent-2 runtime | b60e262 (unchanged) |
+
+**Verification commands** (read-only; also run by the script):
+- `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/readyz` → 200;
+- `readlink /opt/automaton-fleet/current` → `releases/5ee36d4…`;
+- `SELECT max(version) FROM fleet.fleet_schema_migrations` → 115;
+- `sudo /opt/automaton-fleet/current/scripts/fleet-founders.sh upgrade-status 01M3F50SH7PNX2E3GST13J52AS` → registered and
+  pinned 5ee36d4, paused;
+- `systemctl show -p MainPID --value automaton-fleet-founder@01M4C4NXT786Q4E9725N5A15KV.service` → the PID recorded at step 0;
+- `SELECT cognition_enabled FROM fleet.fleet_cognition_policy` → f; `grep FLEET_COGNITION_PROVIDER /etc/automaton-fleet/service.env` → none;
+- `SELECT fleet.fleet_control_ai_state() ->> 'ceilingMinor'` → empty (no paid Fleet Control call);
+- tiers unchanged (T1 Haiku 2,000; T2 Sonnet adaptive 8,000; T3 Opus adaptive 16,000, all enabled);
+- `SELECT fleet.fleet_ledger_verify() ->> 'ok'` → true; `bash ~/rlc134/baseline.sh after nodump` and `settings.sql`
+  compared with the step-0 captures.
+
+**Expected outage:** about **45 s** of controller, Operator API, custody, fetcher and dashboard restart. Measured on
+recent releases: 43–46 s. The four migrations ran in seconds on the rehearsal copy. Founder units do not restart in step 1;
+Agent-1's unit restarts once in step 2 (paused, no model call).
+
+**Rollback, and its limits:**
+- **Database:** 89d7c21 refuses schema 115, so once v115 is applied, **a code-only rollback is impossible**. Going back
+  needs the cutover's verified pre-migration dump restored. That is **never automatic**: `FLEET_ROLLOUT_AUTO_RESTORE` stays
+  unset, so if the cutover fails its revert refuses, the controller-side units are stopped (**the outage continues**) and
+  **you decide**. No database is restored without your explicit approval. Once the release is up and records written after
+  it exist, fix forward is the expected path (a restore would discard them).
+- **Agent-1's runtime:** `sudo /opt/automaton-fleet/current/scripts/fleet-founders.sh rollback-runtime
+  01M3F50SH7PNX2E3GST13J52AS <upgradeId> <reason>` puts it back on 89d7c21 with its state, and no database restore. The
+  founder rehearsal proved 89d7c21 runs against the 5ee36d4 controller, and the rollback and re-upgrade.
+- **UI:** unchanged (0.26.2); the release snapshots `dashboard.env` and restores it itself if its UI step fails.
+- **Agent-2:** nothing to roll back (not touched).
+
+### 4. Before inference activation (separate, after B/C; none is done or authorised)
+
+1. **Key organisation verification** (owner-side, Item 5 above). Confirm in the Console that the recovery key's last four
+   characters belong to the organisation whose Billing shows the Max-included promotional credit. If not, a new key from
+   that organisation, installed by the owner. Reinstating any key into service is itself an owner action.
+2. **Promotional-credit reconciliation** (proposal above). Read G, Rp, Rb and Uc from the Console; reconcile against lot
+   05f4cb13 ($16.76) and Fleet's own consumption (0 expected) by code. **The promotional lot and grant records need a
+   migration not in 5ee36d4.** No posting without your word; the internal agent charge is your separate decision.
+3. **Fleet Control budget:** currently unset (no paid Fleet Control call: message checks defer, reviews wait). The 100p/day
+   proposal is deferred until it is part of the complete evaluation budget; the ceiling is shared by every review type, and
+   exhaustion can hold customer work.
+4. **Approved spending terms:** the evaluation's terms (scope, ceiling, holds), the agents' AI fuses (Agent-1 754p/20h,
+   Agent-2 3000p/60h: unchanged), the inference profile and provider switch, and which agent may resume.
+5. **Also outstanding:** `count_tokens` (deferred); the cap's compatibility with Agent-2 before it is resumed (above).
+
 ## Group A on 5ee36d4 (24 Oct, 18:51–19:30Z): all rehearsals PASSED; production unchanged
 
 - **Pushed** fast-forward 8f6862e..5ee36d4 (fleet/integration-v2.6). **Built** on the VPS: build
