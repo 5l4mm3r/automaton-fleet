@@ -6,7 +6,7 @@
  * before they ship — XLSX, DOCX, PDF, images, SVG, ZIP bundles, EPUB, CSV/TXT/MD.
  *
  * Usage inside the sandbox: `python3 <script> <spec.json>`, spec = {"files": ["rel/path", ...], "cases": [...],
- * "renderDir": ".tmp/qa-render"}. It prints ONE JSON line on stdout (library noise is swallowed):
+ * "require"?: ["phrase", {file?, text}, ...], "renderDir": ".tmp/qa-render"}. It prints ONE JSON line on stdout (library noise is swallowed):
  *   {"inspector":"fleet-qa-3","files":[{path, sha256, sizeBytes, detectedType, extensionMatches, ok,
  *     checks:[{id, status: pass|warn|fail, detail}], facts:{...}}], "ok": bool, "error"?: string}
  *
@@ -23,7 +23,9 @@
  *   - pdf: encrypted → fail, a page whose content cannot be read (damaged stream) → fail, pages without text → warn,
  *     non-embedded fonts other than the standard 14 → warn,
  *     first ≤3 pages rendered (pypdfium2, 72 dpi) into renderDir, a visually blank page → fail, text beyond the page's
- *     crop box or text drawn over other text (first 50 pages) → fail;
+ *     crop box or text drawn over other text (first 50 pages) → fail; each spec "require" phrase must be visible
+ *     (inside the crop box; case, punctuation and spacing ignored) → fail "required_content" otherwise; required
+ *     phrases in other file types are not checked (warn);
  *   - images: Pillow verify, format/size/mode/dpi/alpha, blank or near-uniform → fail; svg: DOCTYPE/ENTITY → fail
  *     (parsed only after that guard), script → warn;
  *   - zip: zip-slip / absolute members → fail, CRC test, size; supported members (one level, ≤200 MB extracted
@@ -662,13 +664,15 @@ def inspect_pdf(r, path, render_dir, tag):
         # Desktop run 3 (2026-10-24, 9B): both delivered checklists passed with text cut off by the page edge (8 of 10 points
         # past the right margin; a clipped title). Visible characters whose box lies outside the page's crop box are not seen
         # by the buyer: a failure, named by page and with an excerpt of the lost text.
-        off, overlap = [], []
+        off, overlap, visible, read_all = [], [], [], len(doc) <= 50
         for i in range(min(len(doc), 50)):
             if left() < 15:
+                read_all = False
                 break
             page = doc[i]
             cl, cb, cr, ct = page.get_cropbox()
             tp = page.get_textpage()
+            visible.append(tp.get_text_bounded(left=cl, bottom=cb, right=cr, top=ct))
             lost, boxes = [], []
             for k in range(tp.count_chars()):
                 ch = tp.get_text_range(k, 1)
@@ -714,6 +718,18 @@ def inspect_pdf(r, path, render_dir, tag):
             + " — wrap long lines or use a smaller font, then inspect again") if off else "all text lies within the page")
         r.check("text_overlap", "fail" if overlap else "pass", ("text is drawn over other text: " + "; ".join(overlap[:5])
             + " — give long text more room (wrap it inside its cell or column), then inspect again") if overlap else "no text drawn over other text")
+        # Review of run 5: content the buyer asked for (the agent's required phrases, from the brief and the buyer's messages)
+        # must be VISIBLE — inside the page, in the text a viewer shows — not merely somewhere in the file.
+        if REQUIRED[0]:
+            seen = norm_text(" ".join(visible))
+            missing = [q for q in REQUIRED[0] if norm_text(q) not in seen]
+            if missing:
+                r.check("required_content", "fail", "required content not visible on the page(s): " + "; ".join("\"%s\"" % q[:80] for q in missing[:8])
+                        + " — add it (inside the page, not over other text), then inspect again")
+            elif not read_all:
+                r.check("required_content", "warn", "all %d required phrase(s) found in the pages read, but not every page was read" % len(REQUIRED[0]))
+            else:
+                r.check("required_content", "pass", "all %d required phrase(s) visible" % len(REQUIRED[0]))
         r.facts["renders"] = rendered
         ocr_pages(r, rendered, empty_pages_of(r))
         r.check("blank_pages", "fail" if blank else "pass", ("visually blank page(s): %s" % blank) if blank else "%d page(s) rendered, none blank" % n)
@@ -721,6 +737,13 @@ def inspect_pdf(r, path, render_dir, tag):
         r.check("sparse_pages", "warn" if sparse else "pass", ("content fills under a quarter of the page height: " + ", ".join(sparse)) if sparse else "pages carry substantial content")
     except Exception as e:
         r.check("render", "warn", "rendering failed: %s: %s" % (type(e).__name__, e))
+
+
+REQUIRED = [[]]   # the phrases the current file must show (spec "require")
+
+
+def norm_text(t):
+    return " ".join(re.sub(r"[^0-9a-z]+", " ", t.casefold()).split())
 
 
 def empty_pages_of(r):
@@ -1259,6 +1282,9 @@ def inspect_file(rel, render_dir, cases, depth=0, label=None):
                 sheet_as_displayed(r, real, render_dir, tag, "csv")
         else:
             r.check("content", "warn", "no content checks for %s" % kind)
+        if REQUIRED[0] and not any(c["id"] == "required_content" for c in r.d["checks"]):
+            r.check("required_content", "warn", "the required phrases were not checked in this file (%s; checked in PDFs whose pages render): "
+                    "confirm them yourself" % kind)
     except Budget:
         r.check("time_budget", "warn", "inspection time budget exhausted mid-file")
     except Exception as e:
@@ -1283,6 +1309,9 @@ def main():
         cases = spec.get("cases") or []
         if not isinstance(cases, list) or not all(isinstance(c, dict) for c in cases):
             raise ValueError("spec.cases must be a list of objects")
+        require = [q if isinstance(q, dict) else {"text": q} for q in (spec.get("require") or [])]
+        if not all(isinstance(q.get("text"), str) for q in require) or len(require) > 40:
+            raise ValueError("spec.require must be at most 40 phrases (strings, or {file?, text})")
         rd = spec.get("renderDir") or ".tmp/qa-render"
         render_dir = safe_rel(rd) if isinstance(rd, str) else None
         if render_dir is None:
@@ -1294,6 +1323,7 @@ def main():
                 report["files"].append(r.done())
                 continue
             mine = [c for c in cases if c.get("file") in (None, rel)]
+            REQUIRED[0] = [q["text"] for q in require if q.get("file") in (None, rel) and norm_text(q["text"])]
             report["files"].append(inspect_file(rel, render_dir, mine))
         report["ok"] = bool(report["files"]) and all(x["ok"] for x in report["files"])
     except Exception as e:

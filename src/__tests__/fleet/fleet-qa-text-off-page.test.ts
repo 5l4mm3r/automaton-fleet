@@ -105,4 +105,16 @@ describe.skipIf(!fs.existsSync(PY))("inspector: what a PDF viewer actually shows
       expect(report.files.find((x) => x.path === f)!.checks.find((c) => c.id === "pdf_content")!.status, f).toBe("pass");
     }
   });
+
+  it("required content must be visible: a phrase past the page edge is missing; one on the page passes; without phrases there is no such check (review of run 5)", () => {
+    fs.writeFileSync(path.join(dir, "spec-req.json"), JSON.stringify({ files: ["runs-off.pdf", "fits.pdf", "clipped-title.pdf"], cases: [], renderDir: ".r2",
+      require: [{ file: "runs-off.pdf", text: "Gas safety: the landlord's annual" }, { file: "runs-off.pdf", text: "10. Gas safety check completed" },
+        { file: "fits.pdf", text: "a point that fits ON the page" }] }));
+    const report = parseInspectorReport(execFileSync(PY, ["-P", "-s", "insp.py", "spec-req.json"], { cwd: dir, encoding: "utf8" }));
+    const check = (f: string) => report.files.find((x) => x.path === f)!.checks.find((c) => c.id === "required_content");
+    expect(check("runs-off.pdf")!.status).toBe("fail");
+    expect(check("runs-off.pdf")!.detail).toBe("required content not visible on the page(s): \"10. Gas safety check completed\" — add it (inside the page, not over other text), then inspect again");
+    expect(check("fits.pdf")!.status).toBe("pass");                              // case and punctuation ignored
+    expect(check("clipped-title.pdf")).toBeUndefined();
+  });
 });

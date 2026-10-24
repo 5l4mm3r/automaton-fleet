@@ -34,8 +34,6 @@ function rig(o: { economy?: (op: string, args: Record<string, unknown>) => Promi
   const put = (rel: string, content: string) => { const f = path.join(dirs.w, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, content); };
   return { run, calls, box, put };
 }
-// FleetController's answer to a successful wallet deliver: the order with its delivery's record.
-const RECORD = { ok: true, order: { orderId: ORDER, status: "delivering", delivery: { deliveryId: "d-1", status: "queued" } } };
 const owed = (x: Partial<CustomerObligation> = {}): CustomerObligation => ({ kind: "order", id: ORDER, state: "to_deliver", since: "2026-10-23T23:13:32.761Z",
   lastBuyerAt: "2026-10-23T23:13:32.761Z", buyerMessages: 0, repliedAt: null, delivering: false, deliveryOwed: true, ...x });
 
@@ -115,68 +113,89 @@ describe("desktop run 2: no false delivery claim to a buyer", () => {
     for (const s of ["Your file is ready. It has been delivered to your account.", "I've sent the checklist.", "The revised PDF was emailed to you.",
       "Please see the revised PDF.", "We have delivered your order.", "Point 7 has been updated and sent.", "I've corrected and sent the checklist."]) expect(DELIVERY_CLAIM.test(s), s).toBe(true);
     for (const s of ["The file is ready and will be delivered as soon as the review passes.", "It has not been delivered yet: I am fixing the file.",
-      "Thank you for your order — I am working on it now.", "I'll update point 7 and send the revised PDF shortly."]) expect(DELIVERY_CLAIM.test(s), s).toBe(false);
-  });
-
-  it("is refused while the delivery is owed; sent after a delivery of this turn succeeded, or when nothing is owed", async () => {
-    const t = rig({ economy: async (op) => op === "order.deliver" ? RECORD : { ok: true } });
-    t.put("order/checklist.txt", "checklist");
-    t.box.noteObligations([owed()]);
-    const claim = { op: "order_message", args: { orderId: ORDER, message: "Your file is ready. It has been delivered to your account." } };
-    const r = await t.run("customers", claim);
-    expect(r).toMatchObject({ ok: false, refused: "FLEET_CLAIM_UNSUPPORTED" });
-    expect(t.calls).toHaveLength(0);
-    // an honest update goes out as written
-    expect((await t.run("customers", { op: "order_message", args: { orderId: ORDER, message: "I am building your checklist now; it will be delivered within the hour." } })).ok).toBe(true);
-    // a revision owed counts too
-    t.box.noteObligations([owed({ state: "acknowledged", deliveryOwed: false, revisionOwed: true })]);
-    expect((await t.run("customers", { op: "order_message", args: { orderId: ORDER, message: "Please see the revised PDF." } })).refused).toBe("FLEET_CLAIM_UNSUPPORTED");
-    // after a successful delivery in this turn
-    expect((await t.run("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.txt"], reviewId: "rv", resendReason: "point 7", after: "op1" } })).ok).toBe(true);
-    expect((await t.run("customers", claim)).ok).toBe(true);
-    // nothing owed for this order
-    t.box.noteObligations([]);
-    expect((await t.run("customers", { ...claim, args: { ...claim.args, message: "It has been delivered — let me know if anything else is needed." } })).ok).toBe(true);
-  });
-
-  it("while only a revision is owed, a sentence about the original delivery is honest; a claim about the revision is not (review of run 5)", async () => {
-    for (const s of ["The original was sent earlier; the revision is in progress.", "Your first PDF was delivered yesterday, but the corrected one is still being checked.",
-      "Thanks — the earlier file was sent before your note. I am adding the date line to point 7 now."]) expect(falseDeliveryClaim(s, true), s).toBe(false);
+      "Thank you for your order — I am working on it now.", "I'll update point 7 and send the revised PDF shortly.", "Your checklist is queued and on its way."]) expect(DELIVERY_CLAIM.test(s), s).toBe(false);
+    // Which delivery a sentence is about, when an earlier one reached the buyer.
+    for (const s of ["The original was sent earlier; the revision is in progress.", "Your first PDF was delivered yesterday, but the corrected one is still being checked."]) expect(falseDeliveryClaim(s, true), s).toBe(false);
     for (const s of ["Please see the revised PDF.", "It has been delivered.", "I've sent the updated checklist.", "The original was sent and I have now sent the new one too.",
       "Point 7 has been updated and sent."]) expect(falseDeliveryClaim(s, true), s).toBe(true);
-    expect(falseDeliveryClaim("The original was sent earlier; the revision is in progress.", false)).toBe(true);   // nothing delivered yet: no "original"
-    const t = rig();
-    t.box.noteObligations([owed({ state: "acknowledged", deliveryOwed: false, revisionOwed: true })]);
-    expect((await t.run("customers", { op: "order_message", args: { orderId: ORDER, message: "The original was sent earlier; the revision is in progress." } })).ok).toBe(true);
-    expect((await t.run("customers", { op: "order_message", args: { orderId: ORDER, message: "I've sent the updated checklist." } })).refused).toBe("FLEET_CLAIM_UNSUPPORTED");
-    t.box.noteObligations([owed()]);
-    expect((await t.run("customers", { op: "order_message", args: { orderId: ORDER, message: "The original was sent earlier; the revision is in progress." } })).refused).toBe("FLEET_CLAIM_UNSUPPORTED");
+    expect(falseDeliveryClaim("The original was sent earlier; the revision is in progress.", false)).toBe(true);   // nothing delivered before: no "original"
   });
 
-  it("a first delivery does not license saying the correction was delivered; only the controller's record of a delivery licenses a claim (review of run 5)", async () => {
-    const t = rig({ economy: async (op) => op === "order.deliver" ? RECORD : { ok: true } });
-    t.put("order/checklist.txt", "checklist");
-    t.box.noteObligations([owed()]);
+  /**
+   * Review of run 5: FleetController's record, read at the moment of the claim. The fixture showed a delivery "queued" and the
+   * order "delivering" right after wallet deliver: not yet delivered. The buyer can reach a delivery once it is SENT (email,
+   * and the order page lists only sent files). A buyer's message after the latest sent delivery is a request it does not deliver.
+   */
+  function controller() {
+    const deliveries: Array<{ deliveryId: string; status: string; sentAt?: string }> = [];
+    const thread: Array<{ author: string; body: string; at: string }> = [];
+    let clock = Date.parse("2026-10-24T00:49:00Z");
+    const tick = () => new Date((clock += 1_000)).toISOString();
+    const t = rig({ economy: async (op, args) => {
+      if (op === "order.deliver") { const d = { deliveryId: `d${deliveries.length + 1}`, status: "queued" }; deliveries.push(d); tick();
+        return { ok: true, order: { orderId: ORDER, status: "delivering", delivery: d } }; }
+      if (op === "order.thread") return { ok: true, order: { orderId: ORDER, status: deliveries.at(-1)?.status === "sent" ? "delivered" : "delivering", ...(deliveries.length ? { delivery: deliveries.at(-1) } : {}) }, thread };
+      if (op === "order.message") { thread.push({ author: "agent", body: String(args.message), at: tick() }); return { ok: true }; }
+      return { ok: true };
+    } });
+    t.put("order/checklist.pdf", "%PDF-1.4 checklist");
+    const sent = () => { const d = deliveries.at(-1)!; d.status = "sent"; d.sentAt = tick(); };
+    const buyer = (body: string) => thread.push({ author: "buyer", body, at: tick() });
     const msg = (message: string) => t.run("customers", { op: "order_message", args: { orderId: ORDER, message } });
-    expect((await t.run("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.txt"], reviewId: "rv" } })).ok).toBe(true);
-    expect((await msg("Your new checklist has been delivered.")).ok).toBe(true);                       // the first delivery: true
-    for (const s of ["Point 7 has been updated and sent.", "The corrected PDF has been sent.", "Please see the revised PDF."]) expect((await msg(s)).refused, s).toBe("FLEET_CLAIM_UNSUPPORTED");
-    // the revision delivered (a second delivery of the order): now true
-    expect((await t.run("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.txt"], reviewId: "rv2", resendReason: "point 7 date line" } })).ok).toBe(true);
-    expect((await msg("Point 7 has been updated and sent.")).ok).toBe(true);
-    // ok without the controller's delivery record licenses nothing
-    const u = rig({ economy: async () => ({ ok: true }) });
-    u.put("order/checklist.txt", "checklist");
-    u.box.noteObligations([owed()]);
-    expect((await u.run("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.txt"], reviewId: "rv" } })).ok).toBe(true);
-    expect((await u.run("customers", { op: "order_message", args: { orderId: ORDER, message: "It has been delivered." } })).refused).toBe("FLEET_CLAIM_UNSUPPORTED");
+    const deliver = (x: Record<string, unknown> = {}) => t.run("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.pdf"], reviewId: "rv", ...x } });
+    return { t, sent, buyer, msg, deliver };
+  }
+
+  it("nothing delivered yet: a delivery claim is refused, an honest update goes out; nothing reaches the controller for the refused one", async () => {
+    const c = controller();
+    c.t.box.noteObligations([owed()]);
+    const r = await c.msg("Your file is ready. It has been delivered to your account.");
+    expect(r).toMatchObject({ ok: false, refused: "FLEET_CLAIM_UNSUPPORTED" });
+    expect(r.output).toContain("the latest delivery is not made");
+    expect(c.t.calls.filter((x) => x.op === "order.message")).toHaveLength(0);
+    expect((await c.msg("I am building your checklist now; it will be delivered within the hour.")).ok).toBe(true);
   });
 
-  it("a failed delivery does not license the claim", async () => {
-    const t = rig({ economy: async (op) => op === "order.deliver" ? { ok: false, code: "FLEET_REVIEW_STALE" } : { ok: true } });
-    t.put("order/checklist.txt", "checklist");
-    t.box.noteObligations([owed()]);
-    expect((await t.run("wallet", { op: "deliver", args: { orderId: ORDER, paths: ["order/checklist.txt"], reviewId: "rv" } })).ok).toBe(false);
-    expect((await t.run("customers", { op: "order_message", args: { orderId: ORDER, message: "It has been delivered." } })).refused).toBe("FLEET_CLAIM_UNSUPPORTED");
+  it("queued is not delivered: say it is queued; once sent, the claim is true", async () => {
+    const c = controller();
+    c.t.box.noteObligations([owed()]);
+    expect((await c.deliver()).ok).toBe(true);
+    const q = await c.msg("Your checklist has been sent.");
+    expect(q.refused).toBe("FLEET_CLAIM_UNSUPPORTED");
+    expect(q.output).toContain("the latest delivery is queued");
+    expect(q.output).toContain("Say it is queued and on its way");
+    expect((await c.msg("Your checklist is queued and on its way to you.")).ok).toBe(true);
+    c.sent();
+    expect((await c.msg("Your checklist has been sent.")).ok).toBe(true);
+  });
+
+  it("a correction arriving mid-turn (after the turn's snapshot) is seen: the first delivery does not deliver it", async () => {
+    const c = controller();
+    c.t.box.noteObligations([owed()]);                                              // the turn started with the first delivery owed
+    await c.deliver();
+    c.sent();
+    expect((await c.msg("Your checklist has been delivered.")).ok).toBe(true);
+    c.buyer("Thanks. Point 7 should also have a line to write the date of the next annual check.");   // mid-turn
+    for (const s of ["Point 7 has been updated and sent.", "The corrected PDF has been sent.", "Please see the revised PDF.", "It has been delivered."]) {
+      const r = await c.msg(s);
+      expect(r.refused, s).toBe("FLEET_CLAIM_UNSUPPORTED");
+      expect(r.output, s).toContain("the buyer wrote after the latest delivery was sent");
+    }
+    expect((await c.msg("The original was sent earlier; the revision is in progress.")).ok).toBe(true);
+    // The revision delivered: queued first (refused), then sent (true).
+    await c.deliver({ resendReason: "point 7 date line", after: "op1" });
+    const q = await c.msg("Point 7 has been updated and sent.");
+    expect(q.output).toContain("the latest delivery is queued");
+    expect((await c.msg("The original was sent earlier; the revision is queued and on its way.")).ok).toBe(true);
+    c.sent();
+    expect((await c.msg("Point 7 has been updated and sent.")).ok).toBe(true);
+  });
+
+  it("a failed delivery is not delivered; an unreadable record refuses the claim (fails closed)", async () => {
+    const t2 = rig({ economy: async (op) => op === "order.thread" ? { ok: true, order: { orderId: ORDER, delivery: { deliveryId: "d1", status: "failed" } }, thread: [] } : { ok: true } });
+    t2.box.noteObligations([owed()]);
+    expect((await t2.run("customers", { op: "order_message", args: { orderId: ORDER, message: "It has been delivered." } })).output).toContain("the latest delivery is failed");
+    const t3 = rig({ economy: async (op) => op === "order.thread" ? { ok: false, code: "FLEET_UNAVAILABLE" } : { ok: true } });
+    expect((await t3.run("customers", { op: "order_message", args: { orderId: ORDER, message: "It has been delivered." } })).output).toContain("could not be read now");
   });
 });

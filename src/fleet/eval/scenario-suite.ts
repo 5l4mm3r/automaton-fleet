@@ -465,7 +465,10 @@ const s1: ScenarioFn = async (w, o, limit) => {
   w.progress.firstDelivery = { minutes: minutes(tDelivered - t0), status: first.status };
   await w.buyerSays(access, "Thanks. Point 7 should also have a line to write the date of the next annual check. Could you add it?");
   const tAsked = Date.now();
-  const answered = await waitFor(async () => ((await w.agentMsgs(orderId)).some((m) => m.created_at.getTime() >= tAsked - 1_000) ? Date.now() : null), limit * 0.3, o.pollMs ?? 2_000);
+  // Review of run 5: the corrected delivery answers the request too — the wait ends at a reply or a second sent delivery,
+  // whichever comes first (the scenario ends as soon as the work is done; the remaining time is not spent).
+  const sentTwice = async () => (await w.deliveries(orderId)).filter((x) => x.status === "sent").length >= 2;
+  const answered = await waitFor(async () => ((await w.agentMsgs(orderId)).some((m) => m.created_at.getTime() >= tAsked - 1_000) || await sentTwice() ? Date.now() : null), limit * 0.3, o.pollMs ?? 2_000);
   w.progress.correctionAnswered = answered ? { minutes: minutes(answered - tAsked) } : false;
   const second = await waitFor(async () => { const d = (await w.deliveries(orderId)).filter((x) => x.status === "sent"); return d.length >= 2 ? d[1] : null; }, Math.max(0, limit - (Date.now() - t0)), o.pollMs ?? 2_000);
   const reviews = await w.q(`SELECT r.verdict, r.automated_ok FROM fleet_order_deliveries d JOIN fleet_artifact_reviews r ON r.review_id = d.review_id WHERE d.order_id = $1 AND d.status = 'sent'`, [orderId]);

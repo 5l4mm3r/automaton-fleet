@@ -242,6 +242,181 @@ for i, ln in enumerate(lines):
     y -= 22 if i == 0 else 15
 c.save()
 `;
+/**
+ * Review of run 5 (desktop runs 3–5: the 9B wrote PDF syntax by hand twice, ran lines off the page, overflowed a table and
+ * typed filled squares as tick boxes): a document renderer the agent can reuse for any order. The content is a JSON file
+ * in the workspace (title, subtitle?, pageSize?, blocks: heading | text | bullets | checklist | lines | table, footer?), so
+ * it stays editable; reportlab lays it out with margins, wrapping and spacing, and draws empty tick boxes and write-in
+ * lines. Text the standard fonts cannot draw is refused with the reason, never printed as a black box.
+ */
+/** One shell word (single-quoted) for a workspace path handed to a sandboxed command. */
+const shellQuote = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`;
+const RENDER_DOCUMENT_PY = String.raw`
+import json, sys
+from xml.sax.saxutils import escape
+from reportlab.lib.pagesizes import A4, letter
+from reportlab.lib.units import mm
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, Flowable
+from reportlab.pdfbase.pdfmetrics import stringWidth
+
+def fail(msg):
+    print(json.dumps({"ok": False, "error": msg}, ensure_ascii=False)); sys.exit(2)
+
+src, out = sys.argv[1], sys.argv[2]
+try:
+    spec = json.load(open(src, encoding="utf-8"))
+except Exception as e:
+    fail("the content file is not valid JSON: %s" % e)
+if not isinstance(spec, dict) or not isinstance(spec.get("title"), str) or not spec["title"].strip():
+    fail("the content needs a non-empty \"title\" (a string)")
+blocks = spec.get("blocks", [])
+if not isinstance(blocks, list) or not blocks:
+    fail("the content needs \"blocks\": a list such as [{\"text\": \"...\"}, {\"checklist\": [\"...\"]}]")
+
+# The standard fonts draw Latin-1 / Windows-1252 only; anything else would print as a black box.
+def check_chars(s, where):
+    bad = sorted({ch for ch in s if ord(ch) > 255 and ch not in "–—‘’“”•…€™"})
+    if bad:
+        fail("%s uses characters this font cannot draw: %s — write them in plain text (tick boxes are drawn for you: never type ☐, ☑ or ■)" % (where, " ".join(bad[:10])))
+    return s
+
+def txt(v, where):
+    if not isinstance(v, str):
+        fail("%s must be text (a string)" % where)
+    return escape(check_chars(v, where)).replace("\n", "<br/>")
+
+size = {"a4": A4, "letter": letter}.get(str(spec.get("pageSize", "A4")).lower())
+if size is None:
+    fail("pageSize is A4 or letter")
+M = 18 * mm
+W = size[0] - 2 * M
+FONT, BOLD = "Helvetica", "Helvetica-Bold"
+st = {
+    "title": ParagraphStyle("t", fontName=BOLD, fontSize=17, leading=21, spaceAfter=4),
+    "subtitle": ParagraphStyle("s", fontName=FONT, fontSize=10.5, leading=14, textColor=colors.HexColor("#444444"), spaceAfter=8),
+    "heading": ParagraphStyle("h", fontName=BOLD, fontSize=12.5, leading=16, spaceBefore=8, spaceAfter=4),
+    "body": ParagraphStyle("b", fontName=FONT, fontSize=10.5, leading=14, spaceAfter=6),
+    "item": ParagraphStyle("i", fontName=FONT, fontSize=10.5, leading=14),
+    "cell": ParagraphStyle("c", fontName=FONT, fontSize=9.5, leading=12),
+    "cellh": ParagraphStyle("ch", fontName=BOLD, fontSize=9.5, leading=12),
+    "footer": ParagraphStyle("f", fontName=FONT, fontSize=8.5, leading=11, textColor=colors.HexColor("#555555"), spaceBefore=10),
+}
+
+class Box(Flowable):
+    """An empty tick box, drawn as a square outline (never a glyph)."""
+    def __init__(self, s=10.5):
+        Flowable.__init__(self); self.s = s
+    def wrap(self, aw, ah):
+        return self.s, self.s + 2
+    def draw(self):
+        self.canv.setLineWidth(0.9); self.canv.setStrokeColor(colors.black)
+        self.canv.rect(0, 2.5, self.s, self.s, stroke=1, fill=0)
+
+class WriteIn(Flowable):
+    """A label followed by a ruled line to write on; a long label goes above its line."""
+    def __init__(self, label, width):
+        Flowable.__init__(self); self.label = label; self.width = width
+        self.lw = stringWidth(label, FONT, 9.5)
+        self.two = self.lw > width * 0.55
+        self.lines = []
+        if self.two:   # wrap the label by words to the width
+            cur = ""
+            for w in label.split():
+                t = (cur + " " + w).strip()
+                if stringWidth(t, FONT, 9.5) > width and cur:
+                    self.lines.append(cur); cur = w
+                else:
+                    cur = t
+            self.lines.append(cur)
+    def wrap(self, aw, ah):
+        return self.width, (len(self.lines) * 12 + 20) if self.two else 20
+    def draw(self):
+        c = self.canv; c.setFont(FONT, 9.5); c.setLineWidth(0.6)
+        if self.two:
+            y = len(self.lines) * 12 + 8
+            for ln in self.lines:
+                c.drawString(0, y, ln); y -= 12
+            c.line(0, 4, self.width, 4)
+        else:
+            c.drawString(0, 6, self.label)
+            c.line(self.lw + 6, 4, self.width, 4)
+
+story = [Paragraph(txt(spec["title"], "title"), st["title"])]
+if spec.get("subtitle"):
+    story.append(Paragraph(txt(spec["subtitle"], "subtitle"), st["subtitle"]))
+story.append(Spacer(1, 4))
+items = 0
+for bi, b in enumerate(blocks, 1):
+    where = "block %d" % bi
+    if not isinstance(b, dict) or len(b) == 0:
+        fail("%s must be an object such as {\"text\": \"...\"}" % where)
+    kind = next((k for k in ("heading", "text", "bullets", "checklist", "lines", "table") if k in b), None)
+    if kind is None:
+        fail("%s: use one of heading, text, bullets, checklist, lines, table (got %s)" % (where, ", ".join(list(b)[:5])))
+    v = b[kind]
+    if kind == "heading":
+        story.append(Paragraph(txt(v, where + " heading"), st["heading"]))
+    elif kind == "text":
+        story.append(Paragraph(txt(v, where + " text"), st["body"]))
+    elif kind == "bullets":
+        if not isinstance(v, list) or not v: fail("%s bullets: a list of strings" % where)
+        for i, t in enumerate(v, 1):
+            story.append(Paragraph(txt(t, "%s bullet %d" % (where, i)), st["body"], bulletText="•"))
+    elif kind == "lines":
+        if not isinstance(v, list) or not v: fail("%s lines: a list of labels, e.g. [\"Name\", \"Date\"]" % where)
+        for i, t in enumerate(v, 1):
+            story.append(WriteIn(check_chars(str(t) if isinstance(t, str) else fail("%s line %d must be text" % (where, i)), where), W))
+            story.append(Spacer(1, 4))
+    elif kind == "checklist":
+        if not isinstance(v, list) or not v: fail("%s checklist: a list of items (strings or {\"text\", \"lines\"})" % where)
+        numbered = b.get("numbered", True) is not False
+        for i, it in enumerate(v, 1):
+            w2 = "%s item %d" % (where, i)
+            if isinstance(it, str):
+                text, lines = it, []
+            elif isinstance(it, dict) and isinstance(it.get("text"), str):
+                text, lines = it["text"], it.get("lines", [])
+                if not isinstance(lines, list) or not all(isinstance(x, str) for x in lines):
+                    fail("%s lines: a list of labels" % w2)
+            else:
+                fail("%s: a string, or {\"text\": \"...\", \"lines\": [\"label\"]}" % w2)
+            label = ("%d. " % i if numbered else "") + text
+            cells = [[Box(), Paragraph(txt(label, w2), st["item"])]]
+            for ln in lines:
+                cells.append(["", WriteIn(check_chars(ln, w2), W - 22)])
+            t = Table(cells, colWidths=[22, W - 22])
+            t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                                   ("TOPPADDING", (0, 0), (-1, -1), 1), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
+            story.append(KeepTogether([t, Spacer(1, 5)]))
+            items += 1
+    elif kind == "table":
+        if not isinstance(v, dict) or not isinstance(v.get("columns"), list) or not isinstance(v.get("rows"), list) or not v["columns"]:
+            fail("%s table: {\"columns\": [\"...\"], \"rows\": [[\"...\"]]}" % where)
+        n = len(v["columns"])
+        data = [[Paragraph(txt(c, where + " column"), st["cellh"]) for c in v["columns"]]]
+        for ri, row in enumerate(v["rows"], 1):
+            if not isinstance(row, list) or len(row) != n:
+                fail("%s row %d: %d cells, like the columns" % (where, ri, n))
+            data.append([Paragraph(txt(str(c), "%s row %d" % (where, ri)), st["cell"]) for c in row])
+        t = Table(data, colWidths=[W / n] * n, repeatRows=1)
+        t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#888888")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eeeeee")),
+                               ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4)]))
+        story.append(t); story.append(Spacer(1, 8))
+if spec.get("footer"):
+    story.append(Paragraph(txt(spec["footer"], "footer"), st["footer"]))
+
+pages = [0]
+def count(canvas, doc):
+    pages[0] = canvas.getPageNumber()
+doc = SimpleDocTemplate(out, pagesize=size, leftMargin=M, rightMargin=M, topMargin=M, bottomMargin=M, title=spec["title"])
+try:
+    doc.build(story, onFirstPage=count, onLaterPages=count)
+except Exception as e:
+    fail("could not lay out the document: %s" % str(e)[:300])
+print(json.dumps({"ok": True, "out": out, "pages": pages[0], "checklistItems": items}))
+`;
 /** v56: a delivered file's content type from its extension (the registry accepts the storefront's file types). */
 function contentTypeOf(f: string): string | null {
   const ext = path.extname(f).toLowerCase();
@@ -376,10 +551,6 @@ export const DELIVERY_CLAIM = /\b(?:has|have|had|was|were|is|are)\s+(?:now\s+|ju
 const EARLIER_DELIVERY = /\b(?:original|first|earlier|previous|initial|old)\b|\b(?:yesterday|before|last time)\b/i;
 const REVISION_WORD = /\b(?:revis\w*|updat\w*|correct\w*|amend\w*|fix\w*|new|changes?|changed|point\s*\d+)\b/i;
 /** After a first delivery of this turn: a sentence claiming a delivery that names the revision is not yet true. */
-const REVISED = /\b(?:revis\w*|updat\w*|correct\w*|amend\w*|fix\w*|changes?|changed|point\s*\d+)\b/i;   // not "new": "your new checklist" is the first file
-export function revisionDeliveryClaim(message: string): boolean {
-  return message.split(/[.;!?\n\u2014\u2013]+|,?\s+but\s+/i).some((c) => DELIVERY_CLAIM.test(c) && REVISED.test(c));
-}
 export function falseDeliveryClaim(message: string, revisionOnly: boolean): boolean {
   if (!revisionOnly) return DELIVERY_CLAIM.test(message);
   return message.split(/[.;!?\n\u2014\u2013]+|,?\s+but\s+/i)
@@ -734,14 +905,42 @@ export class FounderToolbox {
   private obligations: CustomerObligation[] | null = null;
   private readonly answered = new Set<string>();
   private readonly answerRefused = new Set<string>();
-  /** Orders a wallet deliver of this turn succeeded for — FleetController returned the delivery's record — and whether one of
-   *  them was a re-delivery (the order already delivered before it: the revision). The obligations are read at the start of the turn. */
-  private readonly deliveredThisTurn = new Map<string, { revision: boolean }>();
   noteObligations(list: CustomerObligation[] | null): void {
     this.obligations = list;
     this.answered.clear();
     this.answerRefused.clear();
-    this.deliveredThisTurn.clear();
+  }
+  /**
+   * Review of run 5: whether a message to a buyer claims a delivery the buyer cannot have yet. The buyer can reach a delivery
+   * only once it is SENT (the mail provider accepted it; the order page lists only sent files), so a queued or failed one is
+   * not delivered — say it is queued. A buyer's message after the latest sent delivery (a correction) is not delivered by it:
+   * only a sentence about the earlier delivery may say it was sent. Read from FleetController at the moment of the claim.
+   * Null = the message may go as written.
+   */
+  private readonly sentSeen = new Set<string>();
+  private async deliveryClaimRefusal(orderId: string, message: string): Promise<string | null> {
+    if (!DELIVERY_CLAIM.test(message) || !this.o.ports.economy) return null;
+    const t = (await this.o.ports.economy("order.thread", { orderId }).catch(() => null)) as
+      { ok?: unknown; order?: { delivery?: { status?: unknown; sentAt?: unknown } }; thread?: Array<{ author?: unknown; at?: unknown }> } | null;
+    if (!t || t.ok === false) return "this message says the file was delivered, but the order's delivery state could not be read now: say what is happening without stating it was delivered, or try again";
+    const d = t.order?.delivery;
+    if (d?.status === "sent") this.sentSeen.add(orderId);
+    // Was anything delivered to this buyer before the latest delivery? FleetController's obligations at the turn's start (an
+    // order no longer owing its first delivery, or not listed at all, was delivered), or a sent delivery read here earlier.
+    const ob = (this.obligations ?? []).find((o) => o.id === orderId);
+    const earlier = !ob || !ob.deliveryOwed || this.sentSeen.has(orderId);
+    if (d?.status !== "sent") {
+      if (!falseDeliveryClaim(message, earlier && d !== undefined)) return null;
+      return `this message says the file was delivered, but the latest delivery is ${typeof d?.status === "string" ? d.status : "not made"} (FleetController's record now): `
+        + `it has not reached the buyer. ${d?.status === "queued" ? "Say it is queued and on its way — not that it was delivered" : "Deliver it first (wallet deliver)"}`
+        + `${earlier ? "; a sentence about the earlier delivery may say so (\"the original was sent earlier; the revision is queued\")" : ""}`;
+    }
+    const sentAt = Date.parse(String(d.sentAt ?? ""));
+    const buyerSince = (t.thread ?? []).some((m) => m.author === "buyer" && Date.parse(String(m.at ?? "")) > sentAt);
+    if (!buyerSince || !falseDeliveryClaim(message, true)) return null;
+    return "this message says the file was delivered, but the buyer wrote after the latest delivery was sent (FleetController's record now): their request is not "
+      + "delivered by it. Deliver the change first (wallet deliver with resendReason), or say what is happening; a sentence about the earlier delivery may say so "
+      + "(\"the original was sent earlier; the revision is in progress\")";
   }
   /** The unanswered buyer requests this turn has not answered (or tried to answer and been refused). */
   owedAnswers(): CustomerObligation[] {
@@ -890,7 +1089,7 @@ export class FounderToolbox {
     return entry ? (left.length ? "; your lesson for the Fleet is queued locally (the controller was unreachable) and will be kept on your next journal entry" : "; your lesson for the Fleet is kept on record (unreviewed; it outlives you)") : "";
   }
 
-  async inspect(paths: string[], cases: unknown[] = []): Promise<{ ok: true; report: QaInspectorReport } | { ok: false; reason: string; code: string }> {
+  async inspect(paths: string[], cases: unknown[] = [], require: unknown[] = []): Promise<{ ok: true; report: QaInspectorReport } | { ok: false; reason: string; code: string }> {
     if (!paths.length || paths.length > 20) return { ok: false, code: "FLEET_BAD_REQUEST", reason: "paths: 1..20 workspace files" };
     for (const p of paths) {
       const f = this.resolve(p);
@@ -901,7 +1100,7 @@ export class FounderToolbox {
     fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
     const id = crypto.randomBytes(6).toString("hex");
     fs.writeFileSync(path.join(tmp, `fleet-qa-${id}.py`), QA_INSPECTOR_PY, { mode: 0o600 });
-    fs.writeFileSync(path.join(tmp, `qa-spec-${id}.json`), JSON.stringify({ files: rel, cases, renderDir: `.tmp/qa-render-${id}` }), { mode: 0o600 });
+    fs.writeFileSync(path.join(tmp, `qa-spec-${id}.json`), JSON.stringify({ files: rel, cases, ...(require.length ? { require } : {}), renderDir: `.tmp/qa-render-${id}` }), { mode: 0o600 });
     // -P: the script's directory is not on the import path (a planted module there cannot shadow a library); -s: no user site.
     const r = await runSandboxed(this.workspace, `python3 -P -s .tmp/fleet-qa-${id}.py .tmp/qa-spec-${id}.json`,
       { timeoutMs: 120_000, maxOutput: 2_000_000, python: this.o.sandboxPython, toolsDir: this.toolsDir, office: true });
@@ -1118,14 +1317,48 @@ export class FounderToolbox {
       const r = await this.o.ports.economy("review.list", args).catch(ownerRefusal);
       return { name: call.name, ok: (r as { ok?: unknown }).ok !== false, output: clip(JSON.stringify(r)) };
     }
+    // Phrases the buyer asked for that must be visible in the document (from the brief and the buyer's messages).
+    const require = Array.isArray(args.require) ? (args.require as unknown[]).filter((q) => typeof q === "string" && q.trim()).map((q) => String(q).slice(0, 200)).slice(0, 40) : [];
+    // The model sees each file's verdict and its non-passing checks (passing checks are counted, not listed).
+    const inspection = (report: QaInspectorReport) => ({ inspector: report.inspector, ok: report.ok, ...(report.error ? { error: report.error } : {}),
+      files: report.files.map((f) => ({ path: f.path, type: f.detectedType, ok: f.ok, sha256: f.sha256.slice(0, 12), passed: f.checks.filter((c) => c.status === "pass").length,
+        issues: f.checks.filter((c) => c.status !== "pass").map((c) => `${c.status.toUpperCase()} ${c.id}: ${c.detail}`.slice(0, 400)), facts: f.facts })),
+      note: report.ok ? "no automated failure (warnings are yours to judge); now review it against the brief: deliverable review" : "fix every FAIL, then inspect again" });
     if (a.op === "inspect") {
-      const r = await this.inspect(paths, Array.isArray(args.cases) ? args.cases : []);
+      const r = await this.inspect(paths, Array.isArray(args.cases) ? args.cases : [], require);
       if (!r.ok) return refuse(r.code, r.reason);
-      // The model sees each file's verdict and its non-passing checks (passing checks are counted, not listed).
-      const view = r.report.files.map((f) => ({ path: f.path, type: f.detectedType, ok: f.ok, sha256: f.sha256.slice(0, 12), passed: f.checks.filter((c) => c.status === "pass").length,
-        issues: f.checks.filter((c) => c.status !== "pass").map((c) => `${c.status.toUpperCase()} ${c.id}: ${c.detail}`.slice(0, 400)), facts: f.facts }));
-      return { name: call.name, ok: true, output: clip(JSON.stringify({ inspector: r.report.inspector, ok: r.report.ok, ...(r.report.error ? { error: r.report.error } : {}), files: view,
-        note: r.report.ok ? "no automated failure (warnings are yours to judge); now review it against the brief: deliverable review" : "fix every FAIL, then inspect again" })) };
+      return { name: call.name, ok: true, output: clip(JSON.stringify(inspection(r.report))) };
+    }
+    if (a.op === "render") {
+      const source = typeof args.source === "string" ? args.source : "";
+      const out = typeof args.out === "string" ? args.out : "";
+      if (!/\.json$/i.test(source) || !/\.pdf$/i.test(out)) {
+        return refuse("FLEET_BAD_REQUEST", "render needs args {source: \"order/checklist.json\" (the content, a workspace JSON file), out: \"order/checklist.pdf\", content?: {...}} — "
+          + "content (when given) is saved to source first; edit source and render again to change the document");
+      }
+      if (args.content !== undefined) {
+        if (typeof args.content !== "object" || args.content === null || Array.isArray(args.content)) return refuse("FLEET_BAD_REQUEST", "content is an object: {title, subtitle?, blocks: [...], footer?}");
+        fs.mkdirSync(path.dirname(this.resolve(source)), { recursive: true });
+        fs.writeFileSync(this.resolve(source, true), `${JSON.stringify(args.content, null, 2)}\n`, { mode: 0o600 });
+      }
+      const src = this.resolve(source);
+      if (!fs.existsSync(src) || !fs.statSync(src).isFile()) return refuse("FLEET_BAD_REQUEST", `not a file in your workspace: ${source} — write it (write_file) or pass content`);
+      fs.mkdirSync(path.dirname(this.resolve(out)), { recursive: true });
+      const pdf = this.resolve(out, true);
+      const tmp = path.join(this.workspace, ".tmp");
+      fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
+      const id = crypto.randomBytes(6).toString("hex");
+      fs.writeFileSync(path.join(tmp, `fleet-render-${id}.py`), RENDER_DOCUMENT_PY, { mode: 0o600 });
+      const x = await runSandboxed(this.workspace, `python3 -P -s .tmp/fleet-render-${id}.py ${shellQuote(path.relative(this.workspace, src))} ${shellQuote(path.relative(this.workspace, pdf))}`,
+        { timeoutMs: 60_000, maxOutput: 8_000, python: this.o.sandboxPython, toolsDir: this.toolsDir }).catch((e: Error) => ({ code: 1, output: e.message }));
+      fs.rmSync(path.join(tmp, `fleet-render-${id}.py`), { force: true });
+      const line = String(x.output).split("\n").map((l) => l.trim()).filter((l) => l.startsWith("{")).pop();
+      let res: { ok?: boolean; error?: string; pages?: number; checklistItems?: number } = {};
+      try { res = line ? JSON.parse(line) : {}; } catch { /* reported below */ }
+      if (res.ok !== true) return refuse("FLEET_BAD_REQUEST", `the document was not rendered: ${res.error ?? String(x.output).slice(-300)} — fix ${source} and render again`);
+      const r = await this.inspect([out], [], require);
+      return { name: call.name, ok: true, output: clip(JSON.stringify({ rendered: { source, out, pages: res.pages, checklistItems: res.checklistItems },
+        inspection: r.ok ? inspection(r.report) : { notRun: r.reason } })) };
     }
     if (a.op === "review") {
       if (!this.o.ports.economy) return refuse("FLEET_TOOL_NOT_AVAILABLE", "the economy is not available to this runtime");
@@ -1136,18 +1369,18 @@ export class FounderToolbox {
       if (typeof args.independentRequestId === "string") args.independentVerdict = this.independentReviews.get(args.independentRequestId)!.verdict;
       else delete args.independentVerdict;
       // The automated part is re-run here on the exact bytes being reviewed: the record binds these hashes to this report.
-      const r = await this.inspect(paths, Array.isArray(args.cases) ? args.cases : []);
+      const r = await this.inspect(paths, Array.isArray(args.cases) ? args.cases : [], require);
       if (!r.ok) return refuse(r.code, r.reason);
       const files = r.report.files.map((f) => ({ name: path.basename(f.path), sha256: f.sha256, sizeBytes: f.sizeBytes }));
       const rec: Record<string, unknown> = { ...args, files, automated: { inspector: QA_INSPECTOR_VERSION, inspectorSha256: QA_INSPECTOR_SHA256,
         ...(this.o.runtime ? { runtimeCommit: this.o.runtime.commit, buildId: this.o.runtime.buildId } : {}), ok: r.report.ok, files: r.report.files.map((f) => ({ path: f.path, sha256: f.sha256,
         sizeBytes: f.sizeBytes, detectedType: f.detectedType, ok: f.ok, checks: f.checks })) } };
-      delete rec.paths; delete rec.cases;
+      delete rec.paths; delete rec.cases; delete rec.require;
       const out = await this.o.ports.economy("review.record", rec).catch(ownerRefusal);
       if ((out as { ok?: unknown }).ok === false) return { name: call.name, ok: false, refused: String((out as { code?: unknown }).code ?? "FLEET_TOOL_ERROR"), output: `REFUSED ${clip(JSON.stringify(out))}` };
       return { name: call.name, ok: true, output: clip(JSON.stringify(out)) };
     }
-    return refuse("FLEET_BAD_REQUEST", "op is inspect, review or reviews");
+    return refuse("FLEET_BAD_REQUEST", "op is render, inspect, review or reviews");
   }
 
   private async exec(command: string): Promise<{ output: string; unavailable: boolean }> {
@@ -1500,17 +1733,12 @@ export class FounderToolbox {
                 + "review of exactly these files)} — this is about the call's arguments, not an external block; the files are staged for the order by this call");
             }
           }
-          // Desktop runs 1 and 2 (9B): the buyer was told the file was delivered (or "see the revised PDF") while its delivery was
-          // still owed. A message that states a delivery happened, while FleetController's record says it is owed and no
-          // delivery of this turn succeeded, is refused with the reason; an honest update is sent as written — while only a
-          // revision is owed, that includes a sentence about the original delivery.
-          const sent = typeof args.orderId === "string" ? this.deliveredThisTurn.get(args.orderId) : undefined;
-          if (op === "order.message" && typeof args.orderId === "string" && typeof args.message === "string" && !sent?.revision
-            && (this.obligations ?? []).some((o) => o.id === args.orderId && (o.deliveryOwed || o.revisionOwed || sent)
-              && (sent ? revisionDeliveryClaim(args.message as string) : falseDeliveryClaim(args.message as string, !o.deliveryOwed)))) {
-            return refuse("FLEET_CLAIM_UNSUPPORTED", "this message says the file was delivered, but its delivery is still owed (FleetController's record) and no wallet deliver "
-              + "succeeded in this turn: deliver first (wallet deliver), or tell the buyer what is actually happening (while a revision is owed, a sentence about "
-              + "the earlier delivery may say so: \"the original was sent earlier; the revision is in progress\"; a first delivery does not deliver a correction)");
+          // Desktop runs 1 and 2 (9B): the buyer was told the file was delivered (or "see the revised PDF") before it was. A message
+          // that states a delivery happened is checked against FleetController's record read NOW (not the turn's start: a correction
+          // can arrive mid-turn): refused while the latest delivery has not reached the buyer, or while the buyer has written since.
+          if (op === "order.message" && typeof args.orderId === "string" && typeof args.message === "string") {
+            const why = await this.deliveryClaimRefusal(args.orderId, args.message);
+            if (why) return refuse("FLEET_CLAIM_UNSUPPORTED", why);
           }
           if (IDEMPOTENT_OPS.has(op) && typeof args.idempotencyKey !== "string") args.idempotencyKey = `econ:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128).padEnd(8, "_");
           // 2026-10-20: money in customer-facing text is checked before it is sent (exact arithmetic; the record's figures).
@@ -1586,13 +1814,6 @@ export class FounderToolbox {
           if (op === "order.deliver" && money.documents && (r as { ok?: unknown }).ok !== false) {
             r = { ...(r as Record<string, unknown>), moneyCheck: { documents: money.documents,
               note: "calculations, itemised totals, currencies and precision in the extracted text were checked; claims the extraction could not read (listed per file), formulas and figures without a currency are not" } };
-          }
-          // Review of run 5: only FleetController's record of the delivery licenses saying it happened, and a first delivery never
-          // licenses saying the correction was delivered — a delivery is the revision when the order was already delivered before it.
-          const deliveryRecord = (r as { order?: { delivery?: { deliveryId?: unknown } } }).order?.delivery?.deliveryId;
-          if (op === "order.deliver" && typeof args.orderId === "string" && (r as { ok?: unknown }).ok === true && typeof deliveryRecord === "string") {
-            const ob = (this.obligations ?? []).find((o) => o.id === args.orderId);
-            this.deliveredThisTurn.set(args.orderId, { revision: this.deliveredThisTurn.has(args.orderId) || (!!ob && !ob.deliveryOwed) });
           }
           // v105: an invoice is written to the workspace from the record (text and PDF) — deliver those files as they are.
           if (op === "order.invoice" && (r as { ok?: unknown }).ok === true) r = await this.writeInvoice(r as { invoice: { number: string; text: string } } & Record<string, unknown>);
