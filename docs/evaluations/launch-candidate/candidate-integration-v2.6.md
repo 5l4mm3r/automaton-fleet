@@ -5,6 +5,12 @@ runtime, the Anthropic API for reasoning (the owner's Max-included API credits),
 storage and execution. No subscription-authentication adapter, no further Qwen-specific launch work. This record covers
 local integration and preparation only. Nothing has been pushed, deployed, restored, or paid for.
 
+## Final candidate
+
+**c6d4699** on `fleet/integration-v2.6` (local, not pushed). Its parents are the merge 11126f0 (VM 2992394 + desktop
+c6e3d85). Schema 111 → 114. This record is updated by a docs-only commit on top. The build is made from the pushed
+commit at deployment Group A, and its pins come from that build's output.
+
 ## Production baseline (read 2026-10-24 12:51Z, read-only)
 
 | Item | Value | Source |
