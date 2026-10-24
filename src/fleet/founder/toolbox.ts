@@ -371,6 +371,15 @@ export function opArgs(a: Record<string, unknown>): Record<string, unknown> {
 }
 /** A statement that a file was delivered or sent (not a promise: "will be delivered" does not match). */
 export const DELIVERY_CLAIM = /\b(?:has|have|had|was|were|is|are)\s+(?:now\s+|just\s+|successfully\s+|already\s+)?(?:been\s+)?(?:delivered|sent|e-?mailed|uploaded)\b|\b(?:I'?ve|I have|we'?ve|we have)\s+(?:now\s+|just\s+|already\s+)?(?:delivered|sent|e-?mailed|attached|uploaded)\b|\bplease (?:see|find|download|open) (?:the )?(?:attached|revised|updated|corrected|new)\b/i;
+// While only a revision is owed the original was delivered: a sentence that says so ("the original was sent earlier; the
+// revision is in progress") is true. A sentence that claims a delivery and names the revision, or does not say which, is not.
+const EARLIER_DELIVERY = /\b(?:original|first|earlier|previous|initial|old)\b|\b(?:yesterday|before|last time)\b/i;
+const REVISION_WORD = /\b(?:revis\w*|updat\w*|correct\w*|amend\w*|fix\w*|new|changes?|changed|point\s*\d+)\b/i;
+export function falseDeliveryClaim(message: string, revisionOnly: boolean): boolean {
+  if (!revisionOnly) return DELIVERY_CLAIM.test(message);
+  return message.split(/[.;!?\n\u2014\u2013]+|,?\s+but\s+/i)
+    .some((c) => DELIVERY_CLAIM.test(c) && (!EARLIER_DELIVERY.test(c) || REVISION_WORD.test(c)));
+}
 /** For an op that takes `paths` (a list of workspace files) only: one `path` given instead means that one file. */
 function onePath(args: Record<string, unknown>): void {
   if (args.paths === undefined && typeof args.path === "string") { args.paths = [args.path]; delete args.path; }
@@ -1487,11 +1496,14 @@ export class FounderToolbox {
           }
           // Desktop runs 1 and 2 (9B): the buyer was told the file was delivered (or "see the revised PDF") while its delivery was
           // still owed. A message that states a delivery happened, while FleetController's record says it is owed and no
-          // delivery of this turn succeeded, is refused with the reason; an honest update is sent as written.
+          // delivery of this turn succeeded, is refused with the reason; an honest update is sent as written — while only a
+          // revision is owed, that includes a sentence about the original delivery.
           if (op === "order.message" && typeof args.orderId === "string" && typeof args.message === "string" && !this.deliveredThisTurn.has(args.orderId)
-            && (this.obligations ?? []).some((o) => o.id === args.orderId && (o.deliveryOwed || o.revisionOwed)) && DELIVERY_CLAIM.test(args.message)) {
+            && (this.obligations ?? []).some((o) => o.id === args.orderId && (o.deliveryOwed || o.revisionOwed)
+              && falseDeliveryClaim(args.message as string, !o.deliveryOwed))) {
             return refuse("FLEET_CLAIM_UNSUPPORTED", "this message says the file was delivered, but its delivery is still owed (FleetController's record) and no wallet deliver "
-              + "succeeded in this turn: deliver first (wallet deliver), or tell the buyer what is actually happening");
+              + "succeeded in this turn: deliver first (wallet deliver), or tell the buyer what is actually happening (while a revision is owed, a sentence about "
+              + "the earlier delivery may say so: \"the original was sent earlier; the revision is in progress\")");
           }
           if (IDEMPOTENT_OPS.has(op) && typeof args.idempotencyKey !== "string") args.idempotencyKey = `econ:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128).padEnd(8, "_");
           // 2026-10-20: money in customer-facing text is checked before it is sent (exact arithmetic; the record's figures).

@@ -9,7 +9,7 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { FounderToolbox, DELIVERY_CLAIM, opArgs } from "../../fleet/founder/toolbox.js";
+import { FounderToolbox, DELIVERY_CLAIM, falseDeliveryClaim, opArgs } from "../../fleet/founder/toolbox.js";
 import { LoopGuard } from "../../fleet/founder/loop-guard.js";
 import { FOUNDER_MANIFEST_V2 } from "../../fleet/capabilities.js";
 import { compactToolSpec, fullToolSpec } from "../../fleet/cognition/types.js";
@@ -135,6 +135,20 @@ describe("desktop run 2: no false delivery claim to a buyer", () => {
     // nothing owed for this order
     t.box.noteObligations([]);
     expect((await t.run("customers", { ...claim, args: { ...claim.args, message: "It has been delivered — let me know if anything else is needed." } })).ok).toBe(true);
+  });
+
+  it("while only a revision is owed, a sentence about the original delivery is honest; a claim about the revision is not (review of run 5)", async () => {
+    for (const s of ["The original was sent earlier; the revision is in progress.", "Your first PDF was delivered yesterday, but the corrected one is still being checked.",
+      "Thanks — the earlier file was sent before your note. I am adding the date line to point 7 now."]) expect(falseDeliveryClaim(s, true), s).toBe(false);
+    for (const s of ["Please see the revised PDF.", "It has been delivered.", "I've sent the updated checklist.", "The original was sent and I have now sent the new one too.",
+      "The corrected PDF has been sent; point 7 now has the date line."]) expect(falseDeliveryClaim(s, true), s).toBe(true);
+    expect(falseDeliveryClaim("The original was sent earlier; the revision is in progress.", false)).toBe(true);   // nothing delivered yet: no "original"
+    const t = rig();
+    t.box.noteObligations([owed({ state: "acknowledged", deliveryOwed: false, revisionOwed: true })]);
+    expect((await t.run("customers", { op: "order_message", args: { orderId: ORDER, message: "The original was sent earlier; the revision is in progress." } })).ok).toBe(true);
+    expect((await t.run("customers", { op: "order_message", args: { orderId: ORDER, message: "I've sent the updated checklist." } })).refused).toBe("FLEET_CLAIM_UNSUPPORTED");
+    t.box.noteObligations([owed()]);
+    expect((await t.run("customers", { op: "order_message", args: { orderId: ORDER, message: "The original was sent earlier; the revision is in progress." } })).refused).toBe("FLEET_CLAIM_UNSUPPORTED");
   });
 
   it("a failed delivery does not license the claim", async () => {
