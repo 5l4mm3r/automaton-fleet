@@ -263,6 +263,14 @@ export class PgHubAdmin {
   aiCreditLotCost(lotId: string, creditUsdCents: number, totalUsdCents: number, evidence: string, actor: string) {
     return this.one(`SELECT fleet_admin_ai_credit_lot_cost($1, $2, $3, $4, $5) AS r`, [lotId, creditUsdCents, totalUsdCents, evidence, actor]);
   }
+  // v116: a promotional grant from the console (once); which credit the provider draws first.
+  aiCreditPromotionalGrant(provider: string, grantRef: string, grantUsdCents: number, remainingUsdCents: number, grantedAt: string, expiresAt: string, evidence: string, actor: string) {
+    return this.one(`SELECT fleet_admin_ai_credit_promotional_grant($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, $7, $8) AS r`,
+      [provider, grantRef, grantUsdCents, remainingUsdCents, grantedAt, expiresAt, evidence, actor]);
+  }
+  aiCreditDrawOrder(provider: string, order: string, evidence: string, actor: string) {
+    return this.one(`SELECT fleet_admin_ai_credit_draw_order($1, $2, $3, $4) AS r`, [provider, order, evidence, actor]);
+  }
   aiCreditReject(receiptId: string, reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_ai_credit_reject($1, $2, $3) AS r`, [receiptId, reason, actor]);
   }

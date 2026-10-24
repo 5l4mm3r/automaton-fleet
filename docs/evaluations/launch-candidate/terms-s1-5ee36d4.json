@@ -1,0 +1,65 @@
+{
+    "runId": "scen-5ee36d4-s1",
+    "tiers": [
+        {
+            "tier": "T1",
+            "model": "claude-haiku-4-5-20251001",
+            "prices": {
+                "inputMicrocentsPerToken": 100,
+                "outputMicrocentsPerToken": 500,
+                "cacheReadMicrocentsPerToken": 10,
+                "cacheWriteMicrocentsPerToken": 125
+            },
+            "maxOutputTokens": 2000
+        },
+        {
+            "tier": "T2",
+            "model": "claude-sonnet-5-5",
+            "prices": {
+                "inputMicrocentsPerToken": 200,
+                "outputMicrocentsPerToken": 1000,
+                "cacheReadMicrocentsPerToken": 20,
+                "cacheWriteMicrocentsPerToken": 250
+            },
+            "maxOutputTokens": 8000
+        },
+        {
+            "tier": "T3",
+            "model": "claude-opus-5-5",
+            "prices": {
+                "inputMicrocentsPerToken": 400,
+                "outputMicrocentsPerToken": 2000,
+                "cacheReadMicrocentsPerToken": 20,
+                "cacheWriteMicrocentsPerToken": 500
+            },
+            "maxOutputTokens": 16000
+        }
+    ],
+    "source": "production read-only 2026-10-24T22:37:33Z; credit left (USD µ¢) 1676179930",
+    "s3Parts": [
+        "B",
+        "C"
+    ],
+    "capsPence": {
+        "s4-economical-sleep": 170,
+        "s2-interrupted-twice": 250,
+        "s5-lesson-application": 150,
+        "s6-opportunity-choice": 0,
+        "s1-order-and-correction": 360,
+        "s3-valid-blanks-and-blocked-inspection": 220
+    },
+    "acquisition": {
+        "lot": "05f4cb13-a5df-483a-b274-fdb950ddc153",
+        "totalUsdCents": "4955",
+        "usdPurchasedMicro": "4129000000"
+    },
+    "fxRateMicro": "748039",
+    "timeoutMinutes": {
+        "s4-economical-sleep": 45,
+        "s2-interrupted-twice": 45,
+        "s5-lesson-application": 30,
+        "s6-opportunity-choice": 30,
+        "s1-order-and-correction": 45,
+        "s3-valid-blanks-and-blocked-inspection": 45
+    }
+}

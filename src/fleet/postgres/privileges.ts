@@ -947,7 +947,9 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
       // v71: a confirmed purchase records its USD purchase (observations never do).
       "fleet_ai_credit_promote",
       // v72: the owner's console reconciliation records its adjustment.
-      "fleet_admin_ai_credit_balance_reconcile"]),
+      "fleet_admin_ai_credit_balance_reconcile",
+      // v116: a promotional grant (and what the console shows used of it) and its expiry.
+      "fleet_admin_ai_credit_promotional_grant", "fleet_ai_credit_promotional_expire"]),
     // v25/v26: dependency records only through the founder API and the owner's resolve/import.
     fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import",
       // v95: the founder API's body behind its durable-operation wrapper.
@@ -1331,7 +1333,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       // v71: a confirmed purchase (matched pair or the owner's confirmation) creates its lot.
       "fleet_ai_credit_promote",
       // v72: acquisition cost from evidence; over-recorded usage restored.
-      "fleet_admin_ai_credit_lot_cost", "fleet_ai_credit_restore"]),
+      "fleet_admin_ai_credit_lot_cost", "fleet_ai_credit_restore",
+      // v116: a promotional grant's lot; its expiry.
+      "fleet_admin_ai_credit_promotional_grant", "fleet_ai_credit_promotional_expire"]),
     fleet_ai_credit_receipts: new Set(["fleet_ai_credit_receipt_trigger", "fleet_ai_credit_promote", "fleet_ai_credit_match", "fleet_admin_ai_credit_reject"]),
     fleet_ai_credit_absorptions: new Set(["fleet_ai_credit_promote"]),
     fleet_ai_credit_debit_notices: new Set(["fleet_ai_credit_match"]),
@@ -1350,9 +1354,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v74: the launch boundary, recorded once by the owner (independent of any agent's pause or resume).
     fleet_launch_boundary: new Set(["fleet_admin_launch_boundary_record"]),
     fleet_ai_credit_reconciliations: new Set(["fleet_admin_ai_credit_balance_reconcile"]),
-    fleet_ai_credit_policy: new Set(["fleet_admin_ai_credit_policy_set"]),
-    fleet_ai_credit_policy_history: new Set(["fleet_admin_ai_credit_policy_set"]),
-    fleet_ai_credit_draws: new Set(["fleet_ai_credit_draw"]),
+    fleet_ai_credit_policy: new Set(["fleet_admin_ai_credit_policy_set", "fleet_admin_ai_credit_draw_order"]),
+    fleet_ai_credit_policy_history: new Set(["fleet_admin_ai_credit_policy_set", "fleet_admin_ai_credit_draw_order"]),
+    fleet_ai_credit_draws: new Set(["fleet_ai_credit_draw", "fleet_admin_ai_credit_promotional_grant", "fleet_ai_credit_promotional_expire"]),
     fleet_card_request_policy: new Set(["fleet_admin_card_request_policy_set"]),
     // v55: the owner's survival protection switch, only by the owner.
     fleet_survival_protection: new Set(["fleet_admin_survival_protection_set"]),

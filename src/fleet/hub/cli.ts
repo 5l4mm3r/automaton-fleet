@@ -164,6 +164,9 @@
  *   economy-ai-credit-reconcile <provider> <consoleBalanceUsdCents>           (v72) reconcile with the console; over-recorded usage restored, never assigned
  *   economy-ai-credit-lot-cost <lotId> <creditUsdCents> <totalChargedUsdCents> <evidence…>  (v72) a lot's tax / fees from its receipts
  *   economy-ai-credit-reject <receiptId> <reason…>                             (v71) an observation that is not a purchase
+ *   economy-ai-credit-promotional-grant <provider> <grantRef> <grantUsdCents> <remainingUsdCents> <grantedAt> <expiresAt> <evidence…>
+ *                                                                            (v116) a promotional grant from the console, once (no cash cost; nothing posted)
+ *   economy-ai-credit-draw-order <provider> oldest_first|promotional_first <evidence…>  (v116) which credit the provider draws first, as the console shows
  *   economy-ai-credit-opening                                                (v69) once after the cutover: AI costs charged before v69 become owed to the owner
  *   economy-ai-credit-historical-preview <provider> <credit> <total>        (v73) read-only: the tax share of AI charges made before the lots, by payer; unattributed ones
  *   economy-ai-credit-historical-cost <provider> <credit> <total> <evidence…>  (v73) once: post it (agent / treasury as originally attributed; owed to the owner)
@@ -259,7 +262,7 @@ export const HUB_COMMANDS = new Set([
   "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "economy-owner-claim-wait", "economy-owner-claim-wait-end", "economy-sales-geography", "economy-order-correction-withdrawn", "hub-refund-authorities", "hub-paypal-reconciliation", "economy-paypal-reconciliation-resolve", "economy-paypal-order-retire", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "hub-fleet-control-ai", "hub-cognition-settlement", "economy-cognition-resolve", "economy-cognition-exception-allocate", "economy-engineering-calls-import", "economy-engineering-credit-hold", "economy-engineering-credit-release", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
   // v66 – v72 (missing until 2026-10-12: these were unreachable from fleet:admin)
   "economy-capital-backing", "economy-capital-back", "economy-spend-breaker", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
-  "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-opening",
+  "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-promotional-grant", "economy-ai-credit-draw-order", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
   "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide", "economy-channel-payout-bank", "economy-channel-payout-transfer", "economy-outward", "economy-channel-connect", "economy-channel-disconnect", "hub-channel-api",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
@@ -482,6 +485,15 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-ai-credit-lot-cost":
       if (p.length < 4 || !/^\d{1,9}$/.test(p[1]) || !/^\d{1,9}$/.test(p[2])) throw new Error("usage: economy-ai-credit-lot-cost <lotId> <creditUsdCents> <totalChargedUsdCents> <evidence…>");
       return h.aiCreditLotCost(p[0], Number(p[1]), Number(p[2]), p.slice(3).join(" "), actor);
+    case "economy-ai-credit-promotional-grant": {
+      const iso = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?Z)?$/;
+      if (p.length < 7 || !/^\d{1,8}$/.test(p[2]) || !/^\d{1,8}$/.test(p[3]) || !iso.test(p[4]) || !iso.test(p[5]))
+        throw new Error("usage: economy-ai-credit-promotional-grant <provider> <grantRef> <grantUsdCents> <remainingUsdCents> <grantedAt> <expiresAt> <evidence…> (dates YYYY-MM-DD or …THH:MMZ, UTC)");
+      return h.aiCreditPromotionalGrant(p[0], p[1], Number(p[2]), Number(p[3]), p[4], p[5], p.slice(6).join(" "), actor);
+    }
+    case "economy-ai-credit-draw-order":
+      if (p.length < 3) throw new Error("usage: economy-ai-credit-draw-order <provider> oldest_first|promotional_first <evidence…>");
+      return h.aiCreditDrawOrder(p[0], p[1], p.slice(2).join(" "), actor);
     case "economy-ai-credit-reject":
       if (p.length < 2) throw new Error("usage: economy-ai-credit-reject <receiptId> <reason…>");
       return h.aiCreditReject(p[0], p.slice(1).join(" "), actor);
