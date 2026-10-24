@@ -439,9 +439,14 @@ describe.skipIf(!PG_BIN)("v15 outcome charging through FleetController (HTTP + P
   it("L2: the founder waits for a slow reply the controller will charge (its own default timeout does not apply)", async () => {
     const [a] = await setup();
     const impatient = new FleetApiClient({ baseUrl: apiUrl, agentId: a.agentId, token: (a.client as unknown as { token: string }).token, timeoutMs: 300 });
-    faults.set(a.agentId, { 1: { kind: "hang", ms: 600 } });
+    // 2026-10-24: 450 ms (was 600): still slower than this client's own 300 ms default, so the default cannot be what let
+    // the reply through; the slack to the provider's 800 ms per-attempt timeout (whose timeout / no-retry behaviour L2 above
+    // covers with a 3 s hang) grows from 200 to 350 ms — late in long sequential runs, 200 ms of scheduling delay failed it.
+    faults.set(a.agentId, { 1: { kind: "hang", ms: 450 } });
     const st = await impatient.cognitionStatus();
+    const t0 = Date.now();
     const r = await impatient.infer([{ role: "user", content: "slow" }], Number(st.founderWaitMs));
+    expect(Date.now() - t0).toBeGreaterThan(300);                                  // the reply took longer than the client's default
     expect(r.chargedCents).toBeGreaterThan(0);
     const [row] = await logOf(a.agentId);
     expect(row).toMatchObject({ outcome: "ok", request_id: r.requestId });
