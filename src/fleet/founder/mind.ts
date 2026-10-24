@@ -1025,7 +1025,7 @@ export class FounderMind {
             const earlier = (carried?.calls ?? []).flatMap((x) => { try { return [{ call: { id: "carried", name: x.name, arguments: JSON.parse(x.args) as Record<string, unknown> }, ok: x.ok }]; } catch { return []; } });
             const orderId = (call.arguments?.args as { orderId?: unknown } | undefined)?.orderId ?? call.arguments?.orderId;
             const item = (obligations ?? []).find((o) => o.id === orderId)?.bought?.item;
-            const saved = recordProcedure(R.workspaceDir, [...earlier, ...records.map((x) => ({ call: x.call, ok: x.ok }))], call, new Date(), { item });
+            const saved = recordProcedure(R.workspaceDir, [...earlier, ...records.map((x) => ({ call: x.call, ok: x.ok, output: x.output }))], call, new Date(), { item });
             if (saved) out = { ...out, output: `${out.output}\n(The method that produced this delivery was kept as ${saved} — yours to edit or improve; earlier versions in procedures/.history/.)` };
           } catch { /* the delivery stands; only the record of its method is missing */ }
         }

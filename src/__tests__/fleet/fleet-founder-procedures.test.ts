@@ -42,6 +42,34 @@ describe("procedures kept from a successful delivery", () => {
     expect(procedureLine(w)).toContain("procedures/deliver-pdf.md — Procedure: deliver-pdf (worked 1 time;");
   });
 
+  it("keeps only real build steps: no command that exited non-zero, no look-around, no repeat, no absolute workspace path (desktop run 3)", () => {
+    const w = ws();
+    fs.mkdirSync(path.join(w, "order"));
+    fs.writeFileSync(path.join(w, "order", "create_pdf.py"), "print('pdf')\n");
+    const calls = [
+      { call: c("exec", { command: "pwd" }), ok: true, output: "exit 0\n/workspace/ws_01M5NMABBS1KX51KV1N53QXFG7" },
+      { call: c("exec", { command: "ls -la order/" }), ok: true, output: "exit 0\ncreate_pdf.py" },
+      { call: c("exec", { command: "cd order && python create_pdf.py" }), ok: true, output: "exit 127\npython: not found" },
+      { call: c("exec", { command: "cd order && python3 create_pdf.py" }), ok: true, output: "exit 0\n" },
+      { call: c("exec", { command: "cd order && python3 create_pdf.py" }), ok: true, output: "exit 0\n" },
+      { call: c("exec", { command: `cd ${w}/order && python3 create_pdf.py --final` }), ok: true, output: "exit 0\n" },
+      { call: c("exec", { command: "cd /workspace/ws_01M5NMABBS1KX51KV1N53QXFG7 && python3 order/create_pdf.py" }), ok: true, output: "exit 0\n" },
+      { call: c("exec", { command: "echo done > order/log.txt" }), ok: true, output: "exit 0\n" },
+    ];
+    expect(recordProcedure(w, calls, deliver)).toBe(`${PROCEDURES_DIR}/deliver-pdf.md`);
+    const md = fs.readFileSync(path.join(w, PROCEDURES_DIR, "deliver-pdf.md"), "utf8");
+    const build = md.slice(md.indexOf("## Build"), md.indexOf("## Inspect")).split("\n").filter((l) => l.startsWith("- exec"));
+    expect(build).toEqual([
+      "- exec: `cd order && python3 create_pdf.py`",
+      "- exec: `cd ./order && python3 create_pdf.py --final`",
+      "- exec: `cd . && python3 order/create_pdf.py`",
+      "- exec: `echo done > order/log.txt`",                                        // writes a file: not only a look around
+    ]);
+    expect(md).not.toContain(w);
+    expect(md).not.toContain("ws_01M5");
+    expect((md.match(/procedures\/scripts\/create_pdf\.py/g) ?? []).length).toBe(1);
+  });
+
   it("is editable and reversible: a rewrite keeps the previous version and carries the founder's own notes", () => {
     const w = ws();
     recordProcedure(w, [], deliver, new Date("2026-10-23T10:00:00Z"));

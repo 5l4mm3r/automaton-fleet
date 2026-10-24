@@ -21,7 +21,8 @@
  *     sheet, inputs, expect, tolerance}) set inputs, recalculate and compare — each a pass/fail check "case:<name>";
  *   - docx: outline, counts, empty headings, consecutive duplicates, hyperlinks, spelling (advisory warn);
  *   - pdf: encrypted → fail, pages without text → warn, non-embedded fonts other than the standard 14 → warn,
- *     first ≤3 pages rendered (pypdfium2, 72 dpi) into renderDir, a visually blank page → fail;
+ *     first ≤3 pages rendered (pypdfium2, 72 dpi) into renderDir, a visually blank page → fail, text beyond the page's
+ *     crop box (first 50 pages) → fail;
  *   - images: Pillow verify, format/size/mode/dpi/alpha, blank or near-uniform → fail; svg: DOCTYPE/ENTITY → fail
  *     (parsed only after that guard), script → warn;
  *   - zip: zip-slip / absolute members → fail, CRC test, size; supported members (one level, ≤200 MB extracted
@@ -651,7 +652,29 @@ def inspect_pdf(r, path, render_dir, tag):
                 box = g.point(lambda v: 255 if v < 250 else 0).getbbox()
                 if box and (box[3] - box[1]) < 0.25 * g.size[1]:
                     sparse.append("p%d %d%%" % (i + 1, round(100.0 * (box[3] - box[1]) / g.size[1])))
+        # Desktop run 3 (2026-10-24, 9B): both delivered checklists passed with text cut off by the page edge (8 of 10 points
+        # past the right margin; a clipped title). Visible characters whose box lies outside the page's crop box are not seen
+        # by the buyer: a failure, named by page and with an excerpt of the lost text.
+        off = []
+        for i in range(min(len(doc), 50)):
+            if left() < 15:
+                break
+            page = doc[i]
+            cl, cb, cr, ct = page.get_cropbox()
+            tp = page.get_textpage()
+            lost = []
+            for k in range(tp.count_chars()):
+                if not tp.get_text_range(k, 1).strip():
+                    continue
+                l, b, rr, t = tp.get_charbox(k)
+                if rr > cr + 1 or l < cl - 1 or t > ct + 1 or b < cb - 1:
+                    lost.append(k)
+            if lost:
+                seen = " ".join(tp.get_text_range(lost[0], 40).split())
+                off.append("p%d: %d character(s) beyond the page edge (from \"%s\")" % (i + 1, len(lost), seen))
         doc.close()
+        r.check("text_off_page", "fail" if off else "pass", ("text runs off the page, unseen by the buyer: " + "; ".join(off[:5])
+            + " — wrap long lines or use a smaller font, then inspect again") if off else "all text lies within the page")
         r.facts["renders"] = rendered
         ocr_pages(r, rendered, empty_pages_of(r))
         r.check("blank_pages", "fail" if blank else "pass", ("visually blank page(s): %s" % blank) if blank else "%d page(s) rendered, none blank" % n)

@@ -17,7 +17,17 @@ export const PROCEDURE_SCRIPT_MAX = 64 * 1024;
 const SCRIPT_EXT = /\.(py|sh|js|mjs|ts|html|css|svg|md|tex|json)$/i;
 const NOTES = "## Notes (yours: edit, improve or delete this procedure; earlier versions are in procedures/.history/)";
 
-export interface ProcedureCall { call: ToolCall; ok: boolean }
+export interface ProcedureCall { call: ToolCall; ok: boolean; output?: string }
+
+/**
+ * Desktop run 3 (2026-10-24): the build kept every exec of the turn — `pwd`, `ls`, a command whose script failed (exec
+ * itself succeeds whatever the exit code), the sandbox's absolute workspace path. A build step is a command that exited 0
+ * (when its output is known) and is not only a look around; the workspace's absolute paths become relative.
+ */
+const LOOK_ONLY = /^\s*(?:pwd|ls|cat|head|tail|echo|which|whoami|find|file|wc|stat|tree|du|df|env|printenv)\b(?:(?!&&|;|\|\||>).)*$/;
+const exitedNonZero = (out: string | undefined) => typeof out === "string" && /^exit (?!0\b)-?\d+/.test(out);
+const relativeWorkspace = (cmd: string, workspace: string) =>
+  cmd.split(workspace).join(".").replace(/(?:\/[\w.-]+)*\/workspace\/ws_[A-Za-z0-9]+/g, ".");
 
 /** Inside the workspace after resolving every link (the founder can create links with exec). */
 const inside = (workspace: string, p: string) => { try { const r = fs.realpathSync(p); return r === workspace || r.startsWith(workspace + path.sep); } catch { return false; } };
@@ -96,7 +106,8 @@ export function recordProcedure(workspaceDir: string, calls: ProcedureCall[], de
   const paths = Array.isArray(d.paths) ? d.paths.filter((p): p is string => typeof p === "string").slice(0, 20) : [];
   if (!paths.length) return null;
   const ok = calls.filter((c) => c.ok);
-  const execs = ok.filter((c) => c.call.name === "exec").map((c) => String(argsOf(c.call).command ?? "")).filter(Boolean).slice(-8);
+  const execs = [...new Set(ok.filter((c) => c.call.name === "exec" && !exitedNonZero(c.output)).map((c) => relativeWorkspace(String(argsOf(c.call).command ?? ""), workspace))
+    .filter((e) => e && !LOOK_ONLY.test(e)))].slice(-8);
   const written = ok.filter((c) => c.call.name === "write_file").map((c) => String(argsOf(c.call).path ?? "")).filter((p) => SCRIPT_EXT.test(p));
   const checks = ok.filter((c) => c.call.name === "deliverable").map((c) => argsOf(c.call)).slice(-4);
   const kind = procedureKind(paths);
@@ -132,7 +143,7 @@ export function recordProcedure(workspaceDir: string, calls: ProcedureCall[], de
     "",
     "## Build",
     ...(execs.length ? execs.map((e) => `- exec: \`${P(oneLine(e, 400))}\``) : ["- (no exec command recorded: the files were written directly)"]),
-    ...(kept.length ? [`- scripts kept: ${kept.join(", ")} (copies; run or adapt them)`] : []),
+    ...(kept.length ? [`- scripts kept: ${[...new Set(kept)].join(", ")} (copies; run or adapt them)`] : []),
     "",
     "## Inspect and review",
     ...(checks.length ? checks.map((c) => `- deliverable ${String(c.op ?? "?")}${Array.isArray(c.paths) ? ` paths=${P(JSON.stringify(c.paths).slice(0, 200))}` : ""}`
