@@ -124,13 +124,14 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT max(m.created_at) FROM fleet_order_correction_withdrawals w JOIN fleet_customer_messages m ON m.message_id = w.buyer_message_id WHERE w.order_id = p_order
 $$;
 
--- A correction is fulfilled by a later sent delivery of CHANGED files whose passing review records every criterion's outcome
--- as met; where the agent declared visible phrases (mustShow), the inspector's required_content check must have passed too.
-CREATE FUNCTION fleet_order_correction_fulfilled(c fleet_order_corrections) RETURNS boolean LANGUAGE sql STABLE
+-- Whether one sent delivery fulfils an established correction: made after it, CHANGED files (not the delivery before
+-- re-sent), a passing review that records every criterion's outcome as met, and — only where the agent declared visible
+-- phrases (mustShow) — the inspector's required_content check passed (one verification method, never the only one).
+CREATE FUNCTION fleet_delivery_fulfils_correction(p_delivery uuid, c fleet_order_corrections) RETURNS boolean LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT EXISTS (
     SELECT 1 FROM fleet_order_deliveries d JOIN fleet_artifact_reviews r ON r.review_id = d.review_id
-     WHERE d.order_id = c.order_id AND d.status = 'sent' AND d.created_at > c.created_at
+     WHERE d.delivery_id = p_delivery AND d.order_id = c.order_id AND d.status = 'sent' AND d.created_at > c.created_at
        AND r.verdict = 'pass' AND r.automated_ok
        AND fleet_order_delivery_digest(d.delivery_id) IS DISTINCT FROM
              (SELECT fleet_order_delivery_digest(e.delivery_id) FROM fleet_order_deliveries e
@@ -140,6 +141,26 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
                                            WHERE x ->> 'criterion' = k ->> 'outcome' AND x ->> 'met' = 'true'))
        AND (NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.criteria) k WHERE jsonb_array_length(COALESCE(k -> 'mustShow', '[]'::jsonb)) > 0)
             OR jsonb_path_exists(r.automated, '$.files[*].checks[*] ? (@.id == "required_content" && @.status == "pass")')))
+$$;
+
+CREATE FUNCTION fleet_order_correction_fulfilled(c fleet_order_corrections) RETURNS boolean LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT EXISTS (SELECT 1 FROM fleet_order_deliveries d WHERE d.order_id = c.order_id AND d.status = 'sent' AND fleet_delivery_fulfils_correction(d.delivery_id, c))
+$$;
+
+-- v113's effective delivery, widened (owner's refinement: phrase matching is one method, not the only proof): a delivery
+-- that fulfils an established correction also answers the buyer's request, with or without visible phrases.
+CREATE OR REPLACE FUNCTION fleet_order_effective_delivery_at(p_order uuid) RETURNS timestamptz LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT max(d.created_at) FROM fleet_order_deliveries d
+   WHERE d.order_id = p_order AND d.status = 'sent'
+     AND (NOT EXISTS (SELECT 1 FROM fleet_order_deliveries e WHERE e.order_id = p_order AND e.status = 'sent' AND e.created_at < d.created_at)
+          OR (fleet_order_delivery_digest(d.delivery_id) IS DISTINCT FROM
+                (SELECT fleet_order_delivery_digest(e.delivery_id) FROM fleet_order_deliveries e
+                  WHERE e.order_id = p_order AND e.status = 'sent' AND e.created_at < d.created_at ORDER BY e.created_at DESC LIMIT 1)
+              AND EXISTS (SELECT 1 FROM fleet_artifact_reviews r WHERE r.review_id = d.review_id AND r.automated_ok
+                            AND jsonb_path_exists(r.automated, '$.files[*].checks[*] ? (@.id == "required_content" && @.status == "pass")')))
+          OR EXISTS (SELECT 1 FROM fleet_order_corrections c WHERE c.order_id = p_order AND fleet_delivery_fulfils_correction(d.delivery_id, c)))
 $$;
 
 CREATE FUNCTION fleet_order_correction_open(c fleet_order_corrections) RETURNS boolean LANGUAGE sql STABLE
@@ -380,7 +401,9 @@ END $$;
 REVOKE ALL ON FUNCTION fleet_order_live(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fleet_order_first_delivery_at(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fleet_order_owner_withdrawn_at(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION fleet_delivery_fulfils_correction(uuid, fleet_order_corrections) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fleet_order_correction_fulfilled(fleet_order_corrections) FROM PUBLIC;
+REVOKE ALL ON FUNCTION fleet_order_effective_delivery_at(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fleet_order_correction_open(fleet_order_corrections) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fleet_order_message_state(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fleet_order_message_work(uuid) FROM PUBLIC;

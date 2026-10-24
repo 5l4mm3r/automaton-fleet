@@ -476,6 +476,17 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
       await expect(classify(o, ask, "correction", { criteria: [] })).resolves.toMatchObject({ ok: false });
     });
 
+    it("a delivery that fulfils a phrase-free correction also answers the buyer's request (no resolved: true needed) — the revision rehearsal's case", async () => {
+      const o = await newDeliveredOrder("Dates order");
+      const report = await say(o, "The renewal dates show as blank in my preview.");
+      const OUT = "Every renewal date is a real date in the file, shown as a date";
+      await classify(o, report, "correction", { criteria: [{ outcome: OUT, kind: "change" }] });
+      await answer(o, "Thanks — I am fixing the saved dates now.");                    // acknowledged, NOT resolved
+      expect(await owed(o)).toMatchObject({ state: "acknowledged", revisionOwed: true });
+      await delivery("sent", 0, { order: o, file: "Dates order v2", reviewId: await review(o, null, [OUT]) });   // no phrase check at all
+      expect(await owed(o)).toBeUndefined();                                            // correction fulfilled and the request answered
+    });
+
     it("an ambiguous request: the agent asks one clarifying question; the buyer's reply is classified afresh — no redelivery, no owner", async () => {
       const o = await newDeliveredOrder("Ambiguous order");
       const vague = await say(o, "Could it be landscape? Not sure it matters.");

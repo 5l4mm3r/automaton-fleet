@@ -56,6 +56,15 @@ export const CONTINUITY_MISSING_OFFER = "00000000-0000-4000-8000-00000000c0de";
 const RECALC = "if [ -s revised/landlord-tracker.xlsx ]; then echo 'rc=0 (recalculated earlier: revised/landlord-tracker.xlsx)'; "
   + "else mkdir -p revised && cd product && soffice --headless --convert-to xlsx --outdir ../revised landlord-tracker.xlsx; echo rc=$?; ls -l ../revised; fi";
 
+/** v115: the buyer message to classify — named in the packet's work line, or the latest buyer message in the thread read this turn. */
+const toClassify = (packet: string, outputs: string): string | null => {
+  const named = /CLASSIFY the buyer's messages? ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(packet);
+  if (named) return named[1];
+  // A thread object (JSONB orders its keys): any flat object naming the buyer as its author, then its messageId.
+  const ids = [...outputs.matchAll(/\{[^{}]*\}/g)].map((x) => x[0]).filter((o) => /"author":\s*"buyer"/.test(o))
+    .map((o) => /"messageId":\s*"([0-9a-f-]{36})"/.exec(o)?.[1]).filter((x): x is string => Boolean(x));
+  return ids.at(-1) ?? null;
+};
 const criteria = (what: string) => [
   { criterion: "Every renewal date is a real date in the file, shown as a date", met: true, evidence: `${what}: the inspection's displayed-dates and saved-values checks` },
   { criterion: "The gas safety and EICR due dates follow from the last check (1 and 5 years)", met: true, evidence: "the formulas =B+365 and =D+1826, recalculated by the inspector" },
@@ -128,6 +137,12 @@ export class RevisionRehearsalModel extends ScriptedProvider {
       } else if (owed && !answered) {
         content = "A buyer is waiting: read the thread and acknowledge.";
         toolCalls = [call("customers", { op: "order_thread", args: { orderId: open } }), call("customers", { op: "order_message", args: { orderId: open, message: REVISION_ACK } })];
+      } else if (!first.includes("OWED correction") && !all.includes('"classification":"correction"') && toClassify(first, all)) {
+        // v115: the buyer's report after delivery is established as a correction, its outcome stated exactly as the
+        // review below will record it as met (the platform then knows what fulfils it).
+        content = "The buyer reports the dates are missing: an established correction.";
+        toolCalls = [call("customers", { op: "order_classify", args: { orderId: open, messageId: toClassify(first, all), classification: "correction",
+          reason: "the buyer reports the renewal dates do not show: the delivered file must change", criteria: [{ outcome: criteria("").at(0)!.criterion, kind: "change" }] } })];
       } else if (after) {
         // The refused call (a further message, or the corrected file as a further delivery) names the latest operation.
         const again = [...made].reverse().find((c) => (c.name === "customers" && c.arguments.op === "order_message") || (c.name === "wallet" && c.arguments.op === "deliver"));

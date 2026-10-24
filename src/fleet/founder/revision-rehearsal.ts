@@ -282,7 +282,8 @@ export async function runRevisionRehearsal(o: RevisionRehearsalOptions): Promise
       const second = await waitFor(async () => { const d = await deliveries(); return d.length >= 2 && d[1].status === "sent" ? d[1] : null; }, timeout * 2, poll);
       const resumed = model.packets.slice(packetsBefore);
       check("4a. the renderer's return wakes the founder (free signal) and its packet still carries the open request after the restart",
-        resumed.length >= 1 && resumed[0].includes(`order ${orderId}: answered`) && resumed[0].includes("not yet resolved"), `${resumed.length} packet(s) after the restart`);
+        resumed.length >= 1 && resumed[0].includes(`order ${orderId}: answered`) && resumed[0].includes("still OWED") && resumed[0].includes("OWED correction"),
+        `${resumed.length} packet(s) after the restart`);                              // v115: the established correction is spelled out
       const review = (await q(`SELECT r.review_id, r.inspector, r.verdict, r.automated_ok, r.automated, r.files FROM fleet_artifact_reviews r
           JOIN fleet_order_deliveries d ON d.review_id = r.review_id WHERE d.order_id = $1 ORDER BY d.created_at DESC LIMIT 1`, [orderId]))[0] as Record<string, any> | undefined;
       const delivered = second ? await q<{ file_name: string; content_sha256: string }>(`SELECT file_name, content_sha256 FROM fleet_order_delivery_files WHERE delivery_id = $1`, [second.delivery_id]) : [];
